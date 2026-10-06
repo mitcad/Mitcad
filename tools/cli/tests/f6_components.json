@@ -1,0 +1,64 @@
+[
+  {"comment": "Components made by features (F6). Sketch1 F1: 30 x 20 (d1, d2); Extrude1 F2: 10 mm up (d3), Body1 in the root."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 30, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+
+  {"comment": "Extrude2 F3, 4 mm down (d4) as a new component: Component1 placed in the root holds Body2."},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": -4}, "operation": "new_component"}},
+  {"expect": {"bodies": 2, "instances": 2, "world_volume": 8400}},
+  {"expect": {"query": {"query": "bodies"}, "result": [{"uid": "F2.b0", "name": "Body1"},
+    {"uid": "F3.b0", "name": "Body2", "component": "C1"}]}},
+  {"expect": {"query": {"query": "components"}, "result": {
+    "components": [{"uid": "C0"}, {"uid": "C1", "name": "Component1", "created_by": "F3", "bodies": ["F3.b0"]}],
+    "occurrences": [{"uid": "O1", "name": "Component1:1", "component": "C1"}]}}},
+
+  {"comment": "Fillet1 F4 (r 1, d5) on a vertical edge of Body2 belongs to Component1: (1 - pi/4) x 4 mm3 less. From the root it fails."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F3.b0",
+    "edges": ["E{F3:side(c1[c4,c2])|F3:side(c2[c1,c3])}"], "radius": 1}},
+  {"expect": {"feature": "Fillet1", "status": "error", "error_contains": "belongs to Component1"}},
+  {"cmd": "undo"},
+  {"cmd": "add_feature", "component": "Component1", "def": {"type": "fillet", "body": "F3.b0",
+    "edges": ["E{F3:side(c1[c4,c2])|F3:side(c2[c1,c3])}"], "radius": 1}},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body2", "volume": 2399.1415926535898}},
+
+  {"comment": "Component1 moved 10 mm down (its own placement: nothing in the timeline places it)."},
+  {"cmd": "set_occurrence_transform", "occurrence": "Component1:1", "transform": {"translation": [0, 0, -10]}},
+  {"expect": {"occurrence": "Component1:1", "body": "Body2", "bbox": {"min": [0, 0, -14], "max": [30, 20, -10]}, "tolerance": 1e-6}},
+
+  {"comment": "Create Components from Bodies: Body1 moves into a component named after it (ComponentFromBodies1 F5), where it is."},
+  {"cmd": "components_from_bodies", "bodies": ["F2.b0"]},
+  {"expect": {"feature": "ComponentFromBodies1", "status": "ok", "bodies": 2, "instances": 2}},
+  {"expect": {"occurrence": "Body1:1", "body": "Body1", "volume": 6000,
+    "bbox": {"min": [0, 0, 0], "max": [30, 20, 10]}, "tolerance": 1e-6}},
+  {"expect": {"query": {"query": "bodies"}, "result": [{"uid": "F2.b0", "name": "Body1", "component": "C2"},
+    {"uid": "F3.b0", "name": "Body2", "component": "C1"}]}},
+
+  {"comment": "Paste New of Component1 100 mm along X: Component1 (1) with copies of Extrude2 (F6, made in the root) and Fillet1 (F7)."},
+  {"cmd": "paste_new", "occurrence": "Component1:1", "transform": {"translation": [100, 0, 0]}},
+  {"expect": {"bodies": 3, "instances": 3, "world_volume": 10798.28318530718}},
+  {"expect": {"feature": "F7", "status": "ok"}},
+  {"expect": {"occurrence": "Component1 (1):1", "body": "Body3", "volume": 2399.1415926535898,
+    "bbox": {"min": [100, 0, -4], "max": [130, 20, 0]}, "tolerance": 1e-6}},
+  {"expect": {"query": {"query": "components"}, "result": {
+    "components": [{"uid": "C0"}, {"uid": "C1"}, {"uid": "C2", "name": "Body1"},
+                   {"uid": "C3", "name": "Component1 (1)", "created_by": "F6", "features": ["F7"]}]}}},
+
+  {"comment": "The copy is independent: the original 6 mm thick (d4), the copy stays 4 mm."},
+  {"cmd": "set_parameter", "name": "d4", "value": -6},
+  {"expect": {"occurrence": "Component1:1", "body": "Body2", "volume": 3598.7123889803848}},
+  {"expect": {"occurrence": "Component1 (1):1", "body": "Body3", "volume": 2399.1415926535898}},
+
+  {"comment": "Deleting the last occurrence of the copy deletes it with its features; deleting Body1:1 gives Body1 back to the root."},
+  {"cmd": "delete_occurrence", "occurrence": "Component1 (1):1"},
+  {"expect": {"bodies": 2, "instances": 2}},
+  {"cmd": "delete_occurrence", "occurrence": "Body1:1"},
+  {"expect": {"bodies": 2, "instances": 2}},
+  {"expect": {"query": {"query": "bodies"}, "result": [{"uid": "F2.b0", "name": "Body1"},
+    {"uid": "F3.b0", "name": "Body2", "component": "C1"}]}},
+  {"expect": {"query": {"query": "document"}, "result": {"features": 4, "components": 1, "occurrences": 1}}}
+]

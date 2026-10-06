@@ -1,0 +1,89 @@
+[
+  {"comment": "Lofts with end conditions and rails (P2), with Mitcad's rules for them (commands.md, loft; the reference models loft_*). The volumes come from the interpolation's polynomials over the span t from the conditioned section to the free one: a direction weight w is the takeoff's length per millimetre between the sections' centres, a tangent one per millimetre between their corresponding vertices; the free end reaches its section with 2 c - (c.d) d (c the chord between corresponding points, d the unit takeoff). Sketch1 (F1): a 40 mm circle on XY; Plane1 (F2) 30 mm up; Sketch2 (F3) on it: a 20 mm circle."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F1", "center": [0, 0], "diameter": 40},
+  {"cmd": "add_feature", "def": {"type": "construction_plane", "definition": {"type": "offset", "plane": "xy", "distance": 30}}},
+  {"cmd": "sketch.create", "plane": "F2"},
+  {"cmd": "sketch.add_circle", "sketch": "F3", "center": [0, 0], "diameter": 20},
+
+  {"comment": "Direction (0 deg, weight 1) at the large circle (Loft1, F4): z = 30 t, r = 20 - 10 t^2, V = 8600 pi. Above weight 1 z'(1) = 30 - (w - 1)(30 - |c| / w), |c| = sqrt(1000) the corresponding vertices' distance (loft_direction_w15, _w2, _w3). Weight 2: z'(0) = 60, z'(1) = |c| / 2 = 5 sqrt(10), V = pi (10200 - 3200 sqrt(10) / 21). Weight 3: z'(0) = 90, z'(1) = -30 + 2 |c| / 3, V = pi (11800 - 12800 sqrt(10) / 63)."},
+  {"cmd": "add_feature", "def": {"type": "loft", "sections": [
+    {"type": "profile", "sketch": "F1", "region": "r{c1}"}, {"type": "profile", "sketch": "F3", "region": "r{c1}"}],
+    "start_condition": {"type": "direction", "angle": 0, "weight": 1}, "operation": "new_body"}},
+  {"expect": {"feature": "Loft1", "status": "ok", "body": "F4.b0", "volume": 27017.69682087222, "tolerance": 1e-6,
+    "faces": 3, "has_face": "F4:side(c1)"}},
+  {"cmd": "edit_feature", "uid": "F4", "def": {"type": "loft", "sections": [
+    {"type": "profile", "sketch": "F1", "region": "r{c1}"}, {"type": "profile", "sketch": "F3", "region": "r{c1}"}],
+    "start_condition": {"type": "direction", "angle": 0, "weight": 2}, "operation": "new_body"}},
+  {"expect": {"feature": "Loft1", "status": "ok", "body": "F4.b0", "volume": 30530.40304516125, "tolerance": 1e-6}},
+  {"cmd": "edit_feature", "uid": "F4", "def": {"type": "loft", "sections": [
+    {"type": "profile", "sketch": "F1", "region": "r{c1}"}, {"type": "profile", "sketch": "F3", "region": "r{c1}"}],
+    "start_condition": {"type": "direction", "angle": 0, "weight": 3}, "operation": "new_body"}},
+  {"expect": {"feature": "Loft1", "status": "ok", "body": "F4.b0", "volume": 35052.33728375337, "tolerance": 1e-6}},
+
+  {"comment": "Tangent to the walls of a 40 x 40 x 20 block (Sketch3 F5, Extrude1 F6) from its top to a 20 mm square at z = 50 (Plane2 F7, Sketch4 F8), joined (Loft2, F9; the reference model loft_tangent_face): the takeoff M = sqrt(1100), the corners' distance; the half width 20 - 10 t^2, 32000 + (640 M + 221600) / 7. Smooth (loft_smooth_face): quintic, 20 - 30 t^3 + 30 t^4 - 10 t^5, 32000 + (270700 M + 3244760 * 30) / 3003."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F5", "corner": [-20, -20], "width": 40, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F5", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "construction_plane", "definition": {"type": "offset", "plane": "xy", "distance": 50}}},
+  {"cmd": "sketch.create", "plane": "F7"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F8", "corner": [-10, -10], "width": 20, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "loft", "sections": [
+    {"type": "face", "body": "F6.b0", "face": "F6:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"},
+    {"type": "profile", "sketch": "F8", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "start_condition": {"type": "tangent", "weight": 1}, "operation": "join", "participants": ["F6.b0"]}},
+  {"expect": {"feature": "Loft2", "status": "ok", "body": "F6.b0", "volume": 66689.4855226107, "tolerance": 1e-6,
+    "has_face": "F9:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}},
+  {"cmd": "edit_feature", "uid": "F9", "def": {"type": "loft", "sections": [
+    {"type": "face", "body": "F6.b0", "face": "F6:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"},
+    {"type": "profile", "sketch": "F8", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "start_condition": {"type": "smooth", "weight": 1}, "operation": "join", "participants": ["F6.b0"]}},
+  {"expect": {"feature": "Loft2", "status": "ok", "body": "F6.b0", "volume": 67404.8962062911, "tolerance": 1e-6}},
+  {"comment": "The block 25 high: the smooth loft follows its top, now 25 below the square, M = sqrt(825): 40000 + (270700 M + 3244760 * 25) / 3003."},
+  {"cmd": "edit_feature", "uid": "F6", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F5", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 25}, "operation": "new_body"}},
+  {"expect": {"feature": "Loft2", "status": "ok", "body": "F6.b0", "volume": 69601.8200273357, "tolerance": 1e-6,
+    "has_face": "F9:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}},
+
+  {"comment": "Rails: the 40 mm square of Sketch3 and a 20 mm one 30 mm up (Sketch5 F10 on Plane1) through four straight rails at the corners: the frustum of loft_two_squares with its faces and names (Loft3, F11)."},
+  {"cmd": "sketch.create", "plane": "F2"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F10", "corner": [-10, -10], "width": 20, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "loft", "sections": [
+    {"type": "profile", "sketch": "F5", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"},
+    {"type": "profile", "sketch": "F10", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "rails": [{"start": [-20, -20, 0], "end": [-10, -10, 30]}, {"start": [20, -20, 0], "end": [10, -10, 30]},
+              {"start": [20, 20, 0], "end": [10, 10, 30]}, {"start": [-20, 20, 0], "end": [-10, 10, 30]}],
+    "operation": "new_body"}},
+  {"expect": {"feature": "Loft3", "status": "ok", "body": "F11.b0", "volume": 28000, "tolerance": 1e-6, "faces": 6,
+    "has_face": "F11:side(c1[c4,c2])"}},
+
+  {"comment": "Sketch6 (F12) on XZ: an arc from (10, 0, 0) through (13, 0, 20) to (10, 0, 40). Sketch7 (F13) a 20 mm circle on XY, Plane3 (F14) 40 mm up, Sketch8 (F15) a 20 mm circle on it. The circles through the arc as a rail (the reference model loft_rail_circle_one): one rail moves the circles along it, the cylinder shifted, 4000 pi (Loft4, F16; its bent faces integrate to about 1e-4); through two straight rails on their cylinder: the cylinder in two halves (Loft5, F17)."},
+  {"cmd": "sketch.create", "plane": "xz"},
+  {"cmd": "sketch.arc", "sketch": "F12", "mode": "three_point", "start": [10, 0], "through": [13, -20], "end": [10, -40]},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F13", "center": [0, 0], "diameter": 20},
+  {"cmd": "add_feature", "def": {"type": "construction_plane", "definition": {"type": "offset", "plane": "xy", "distance": 40}}},
+  {"cmd": "sketch.create", "plane": "F14"},
+  {"cmd": "sketch.add_circle", "sketch": "F15", "center": [0, 0], "diameter": 20},
+  {"cmd": "add_feature", "def": {"type": "loft", "sections": [
+    {"type": "profile", "sketch": "F13", "region": "r{c1}"}, {"type": "profile", "sketch": "F15", "region": "r{c1}"}],
+    "rails": [{"sketch": "F12", "curves": ["c1"]}], "operation": "new_body"}},
+  {"expect": {"feature": "Loft4", "status": "ok", "body": "F16.b0", "volume": 12566.370614359172, "tolerance": 1e-3,
+    "faces": 3, "has_face": "F16:side(c1)"}},
+  {"cmd": "add_feature", "def": {"type": "loft", "sections": [
+    {"type": "profile", "sketch": "F13", "region": "r{c1}"}, {"type": "profile", "sketch": "F15", "region": "r{c1}"}],
+    "rails": [{"start": [10, 0, 0], "end": [10, 0, 40]}, {"start": [-10, 0, 0], "end": [-10, 0, 40]}],
+    "operation": "new_body"}},
+  {"expect": {"feature": "Loft5", "status": "ok", "body": "F17.b0", "volume": 12566.370614359172, "tolerance": 1e-6,
+    "faces": 4, "has_face": "F17:side(c1)#1"}},
+
+  {"comment": "A rounded tip (Loft6, F18; the reference model loft_point_tangent): the 20 mm circle of Sketch7 up to a point 20 mm above, the tip leaving each point by its distance from the axis per the span: r = 10 (1 - t), z = 20 - 20 (1 - t)^2, the paraboloid, V = 1000 pi."},
+  {"cmd": "add_feature", "def": {"type": "loft", "sections": [
+    {"type": "profile", "sketch": "F13", "region": "r{c1}"}, {"type": "point", "point": {"point": [0, 0, 20]}}],
+    "end_condition": {"type": "point_tangent", "weight": 1}, "operation": "new_body"}},
+  {"expect": {"feature": "Loft6", "status": "ok", "body": "F18.b0", "volume": 3141.592653589793, "tolerance": 1e-6,
+    "faces": 2}}
+]

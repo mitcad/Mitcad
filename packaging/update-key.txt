@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# The public Ed25519 key of Mitcad's releases: a line of 64 hex digits,
+# which `mitcad-release public-key` prints for the release key
+# (docs/updates.md); two lines while the key changes. Mitcad verifies
+# every update manifest and download with them; the build reads them from
+# here (CMake: MITCAD_UPDATE_KEY_FILE).
+32747b4657788add18c157ff5db1010f5882d5f056fd05b829e7041c102c7aa9

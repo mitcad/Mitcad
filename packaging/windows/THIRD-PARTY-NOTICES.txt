@@ -1,0 +1,27 @@
+Mitcad is released under the MIT licence (see LICENSE). The Windows
+distribution also contains the following third-party components.
+
+Qt 6 (Qt6*.dll, plugins in bin)
+  Licence: GNU LGPL version 3 (https://www.gnu.org/licenses/lgpl-3.0.html).
+  Mitcad links Qt dynamically; the Qt libraries in bin can be replaced with
+  other builds of the same Qt version. Qt's source code is available from
+  https://download.qt.io/ and https://www.qt.io/ .
+
+Open CASCADE Technology (TK*.dll in bin)
+  Licence: GNU LGPL version 2.1 with the Open CASCADE exception. Linked
+  dynamically; source code at https://dev.opencascade.org/ .
+
+Other libraries from vcpkg (for example FreeType, libpng, zlib, bzip2,
+Brotli)
+  Their licence texts are in licenses\vcpkg\<library>\copyright.
+
+Droid Sans (bundled font for sketch text)
+  Apache License 2.0; see licenses\droid-sans\LICENSE.txt.
+
+Visual C++ runtime (vcruntime*.dll, msvcp*.dll)
+  Microsoft Visual C++ Redistributable, redistributed under the terms of
+  the Visual Studio licence.
+
+Rust libraries compiled into mitcad.exe and mitcad-cli.exe
+  Permissive licences (MIT, Apache-2.0, BSD and similar), checked by
+  cargo-deny against core/deny.toml.

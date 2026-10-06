@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: MIT
+# The workflow test's second script (see workflow.mitcad-ui), the counterpart
+# of the middle of tools/ui-windows-workflow-test.ps1:
+#   5. Recovery: the application, started again after the first script ended
+#      it with `kill`, offers the design; Restore brings it back, and the new
+#      session takes over its files.
+#   6. Save As (Ctrl+Shift+S) through Qt's file dialog, which removes the
+#      autosaved files; New (Ctrl+N); Open (Ctrl+O) the file again: the body
+#      recomputed with the saved volume (Physical Properties), so the
+#      recovered design was the filleted one.
+#   7. Export a STEP file through the Export dialog; New; Import it: a base
+#      feature of the same volume; undo (Ctrl+Z).
+# The test sets MITCAD_TEST_WORK (a folder for its files), MITCAD_TEST_SESSION
+# (the killed session) and MITCAD_TEST_FILLETED (the volume the first script
+# measured), and starts the application with Qt's own file dialogs and
+# without --no-recovery.
+
+expect-ever 'View area'
+sleep 1500
+
+# --- Recovery after a crash
+expect-ever 'Recovery: 1 document\(s\) found'
+expect-ever 'Recoverable Untitled: never saved, autosaved '
+focus-dialog '^Recover Unsaved Work$'
+mark
+key Return
+focus-main
+expect-log 'Recovered Untitled from autosave of ' 20
+expect-log 'Bodies shown: F2\.b0' 20
+expect-log 'Recovered session ${MITCAD_TEST_SESSION:re} removed'
+# This session wrote its own files and removed the killed one's.
+expect-files "${MITCAD_AUTOSAVE_DIR}" '*.json' 1
+expect-files "${MITCAD_AUTOSAVE_DIR}" "${MITCAD_TEST_SESSION}.*" 0
+
+# --- Save, new, open
+mark
+key ctrl+shift+s
+focus-dialog '^Save As$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/block.mitcad"
+sleep 300
+key Return
+focus-main
+expect-log 'Saved ${MITCAD_TEST_WORK:re}/block\.mitcad'
+expect-file "${MITCAD_TEST_WORK}/block.mitcad"
+expect-log 'Autosave removed for Untitled'
+# Only the lock of the session is left.
+expect-files "${MITCAD_AUTOSAVE_DIR}" '*' 1
+expect-files "${MITCAD_AUTOSAVE_DIR}" '*.lock' 1
+key ctrl+n
+expect-log 'New document'
+mark
+key ctrl+o
+focus-dialog '^Open$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/block.mitcad"
+sleep 300
+key Return
+focus-main
+expect-log 'Opened ${MITCAD_TEST_WORK:re}/block\.mitcad' 20
+expect-log 'Bodies shown: F2\.b0' 20
+mark
+command inspect.properties
+expect-log 'Physical properties: Body1 volume'
+capture reopened 'Physical properties: Body1 volume ([0-9.]+)'
+expect-near ${reopened} ${MITCAD_TEST_FILLETED} 0 0.001
+focus-dialog '^Properties$'
+key Escape
+focus-main
+
+# --- Export and import STEP
+mark
+command file.export
+focus-dialog '^Export$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/block.step"
+sleep 300
+key Return
+focus-main
+expect-log 'Exported ${MITCAD_TEST_WORK:re}/block\.step: step, 1 body\(ies\)' 20
+expect-file "${MITCAD_TEST_WORK}/block.step"
+key ctrl+n
+expect-log 'New document'
+mark
+command file.import
+focus-dialog '^Import$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/block.step"
+sleep 300
+key Return
+focus-main
+expect-log 'Imported block\.step as' 20
+capture imported 'New body \S+ \(F\d+\.b0\): volume ([0-9.]+) mm3' 30
+expect-near ${imported} ${MITCAD_TEST_FILLETED} 1e-6 0
+key ctrl+z
+expect-log 'Undo: Import block\.step'

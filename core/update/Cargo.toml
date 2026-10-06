@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-update"
+description = "Mitcad's automatic updates: the signed release manifest, versions and downloads"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mitcad_update"
+
+# Signs a release's downloads and writes its manifest (docs/updates.md).
+[[bin]]
+name = "mitcad-release"
+path = "src/bin/mitcad-release.rs"
+
+[dependencies]
+# Verification and, for the release tool, signing; the default features
+# (precomputed tables, zeroized secret keys) without random key generation.
+ed25519-dalek = "2.2.0"
+semver = "1.0.28"
+serde.workspace = true
+# raw_value: the manifest's signature covers its exact bytes in the file.
+serde_json = { workspace = true, features = ["raw_value"] }
+sha2 = "0.10.9"

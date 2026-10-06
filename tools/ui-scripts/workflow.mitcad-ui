@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: MIT
+# The workflow test's first script, run in the application by the in-process
+# test driver (app/framework/TestDriver.hpp: MITCAD_TEST_INPUT=<script>), the
+# counterpart of the first half of tools/ui-windows-workflow-test.ps1 with the
+# same assertions. tools/ui-macos-workflow-test.sh runs it, and then the
+# scripts workflow-recovery and workflow-versions that continue with the files
+# it leaves (one script cannot start the application again).
+#   1. Create Sketch on XY (a click on the plane), a 40 x 25 mm rectangle (a
+#      click at the origin, the sizes typed), Finish Sketch (Ctrl+Enter).
+#   2. Extrude (E) 20 mm: a 20000 mm3 body.
+#   3. Fillet (F) the edges of the top face (a click on it), 2 mm.
+#   4. Autosave, every 2 s for the test (MITCAD_TEST_AUTOSAVE_SECONDS): the
+#      changed design is in the recovery folder. The script ends with `kill`:
+#      the application is gone as if it had been killed, and leaves its
+#      autosaved files and the lock of its session for the next script.
+
+expect-ever 'View area'
+sleep 1500
+
+# --- Sketch, extrude, fillet
+mark
+command sketch.create
+expect-log 'Create Sketch: select a plane'
+sleep 500
+click-logged 'Datum xy'
+expect-log 'Sketch started on xy'
+key r
+sketch-click 0 0
+type 40
+key Tab
+type 25
+key Return
+expect-log 'Added rectangle 40 x 25 mm at \(0, 0\)'
+key ctrl+Return
+expect-log 'Sketch finished'
+
+mark
+key e
+expect-log 'Command Extrude started'
+type 20
+key Return
+expect-log 'Added extrude \(New Body\), distance 20' 20
+capture extruded 'New body \S+ \(F2\.b0\): volume ([0-9.]+) mm3' 30
+expect-near ${extruded} 20000
+
+mark
+key F6
+key f
+expect-log 'Pick places:'
+click-pick 'face F2\.b0/F2:end\('
+expect-log 'Fillet Edges: 1 face'
+key Return
+expect-log 'Added fillet on 4 edge\(s\)' 20
+expect-log 'Body Body1 \(F2\.b0\): volume 20000\.000 -> '
+# Four edges of 2 * 40 + 2 * 25 mm lose (1 - pi/4) r^2 each per length; where
+# two meet, the removed corners overlap by r^3 (5/3 - pi/2); r = 2 mm:
+# 20000 - (1 - pi/4) * 4 * 130 + 4 * 8 * (5/3 - pi/2).
+capture filleted 'Body Body1 \(F2\.b0\): volume 20000\.000 -> ([0-9.]+) mm3' 30
+expect-near ${filleted} 19891.47489584257
+
+# --- Autosave: the last change is written (an interval more), then the end.
+# The autosave of the fillet can come before this point (a change is written
+# within the interval, and the steps above take a while), so the log cannot
+# say it is new; the test checks the autosaved project file for the fillet.
+sleep 4500
+kill

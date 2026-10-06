@@ -1,0 +1,175 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!--
+ SPDX-License-Identifier: MIT
+ A small Document.xml in the form FreeCAD 0.21 writes, made by hand for the
+ reader's tests: a box, a body with a pad, a part with a cylinder, a link
+ and a link array.
+-->
+<Document SchemaVersion="4" ProgramVersion="0.21R33771 (Git)" FileVersion="1">
+    <Properties Count="3" TransientCount="1">
+        <_Property name="FileName" type="App::PropertyString" status="50331649"/>
+        <Property name="Label" type="App::PropertyString" status="1">
+            <String value="sample &amp; test"/>
+        </Property>
+        <Property name="Material" type="App::PropertyMap">
+            <Map count="1">
+                <Item key="Density" value="7.85"/>
+            </Map>
+        </Property>
+    </Properties>
+    <Objects Count="7" Dependencies="1">
+        <ObjectDeps Name="Box" Count="0"/>
+        <ObjectDeps Name="Body" Count="1">
+            <Dep Name="Pad"/>
+        </ObjectDeps>
+        <Object type="Part::Box" name="Box" id="12" />
+        <Object type="PartDesign::Body" name="Body" id="13" />
+        <Object type="PartDesign::Pad" name="Pad" id="14" Touched="1" />
+        <Object type="App::Part" name="Part" id="15" />
+        <Object type="Part::Cylinder" name="Cylinder" id="16" Invalid="1" Error="Cylinder: radius is zero" />
+        <Object type="App::Link" name="Link" id="17" />
+        <Object type="App::Link" name="Array" id="18" />
+    </Objects>
+    <ObjectData Count="7">
+        <Object name="Box" Extensions="True">
+            <Extensions Count="1">
+                <Extension type="Part::AttachExtension" name="AttachExtension">
+                </Extension>
+            </Extensions>
+            <Properties Count="7" TransientCount="0">
+                <Property name="AttacherEngine" type="App::PropertyEnumeration">
+                    <Integer value="1" CustomEnum="true"/>
+                    <CustomEnumList count="2">
+                        <Enum value="Engine 3D"/>
+                        <Enum value="Engine Plane"/>
+                    </CustomEnumList>
+                </Property>
+                <Property name="Height" type="App::PropertyLength">
+                    <Float value="30.0000000000000000"/>
+                </Property>
+                <Property name="Label" type="App::PropertyString" status="134217728">
+                    <String value="Red box"/>
+                </Property>
+                <Property name="MapMode" type="App::PropertyEnumeration">
+                    <Integer value="5"/>
+                </Property>
+                <Property name="Placement" type="App::PropertyPlacement" status="8388608">
+                    <PropertyPlacement Px="1.0000000000000000" Py="2.0000000000000000" Pz="3.0000000000000000" Q0="0.0000000000000000" Q1="0.0000000000000000" Q2="0.7071067811865475" Q3="0.7071067811865476" A="1.5707963267948966" Ox="0.0000000000000000" Oy="0.0000000000000000" Oz="1.0000000000000000"/>
+                </Property>
+                <Property name="Shape" type="Part::PropertyPartShape">
+                    <Part file="PartShape.brp"/>
+                </Property>
+                <Property name="Visibility" type="App::PropertyBool" status="648">
+                    <Bool value="true"/>
+                </Property>
+            </Properties>
+        </Object>
+        <Object name="Body" Extensions="True">
+            <Extensions Count="1">
+                <Extension type="App::OriginGroupExtension" name="OriginGroupExtension">
+                </Extension>
+            </Extensions>
+            <Properties Count="5" TransientCount="1">
+                <_Property name="_GroupTouched" type="App::PropertyBool" status="100663424"/>
+                <Property name="BaseFeature" type="App::PropertyLink">
+                    <Link value=""/>
+                </Property>
+                <Property name="Group" type="App::PropertyLinkList">
+                    <LinkList count="1">
+                        <Link value="Pad"/>
+                    </LinkList>
+                </Property>
+                <Property name="Shape" type="Part::PropertyPartShape">
+                    <Part file="PartShape1.brp"/>
+                </Property>
+                <Property name="Tip" type="App::PropertyLink">
+                    <Link value="Pad"/>
+                </Property>
+                <Property name="Visibility" type="App::PropertyBool" status="648">
+                    <Bool value="false"/>
+                </Property>
+            </Properties>
+        </Object>
+        <Object name="Pad">
+            <Properties Count="4" TransientCount="0">
+                <Property name="Length" type="App::PropertyLength">
+                    <Float value="5.0000000000000000"/>
+                </Property>
+                <Property name="Profile" type="App::PropertyLinkSub">
+                    <LinkSub value="Sketch" count="1">
+                        <Sub value="Face1"/>
+                    </LinkSub>
+                </Property>
+                <Property name="Type" type="App::PropertyEnumeration">
+                    <Integer value="1"/>
+                </Property>
+                <Property name="ExpressionEngine" type="App::PropertyExpressionEngine" status="67108864">
+                    <ExpressionEngine count="1">
+                        <Expression path="Length" expression="Spreadsheet.depth * 2"/>
+                    </ExpressionEngine>
+                </Property>
+            </Properties>
+        </Object>
+        <Object name="Part" Extensions="True">
+            <Properties Count="2" TransientCount="0">
+                <Property name="Group" type="App::PropertyLinkList">
+                    <LinkList count="1">
+                        <Link value="Cylinder"/>
+                    </LinkList>
+                </Property>
+                <Property name="Placement" type="App::PropertyPlacement">
+                    <PropertyPlacement Px="0.0" Py="100.0" Pz="0.0" Q0="0.0" Q1="0.0" Q2="0.0" Q3="1.0" A="0.0" Ox="0.0" Oy="0.0" Oz="1.0"/>
+                </Property>
+            </Properties>
+        </Object>
+        <Object name="Cylinder">
+            <Properties Count="2" TransientCount="0">
+                <Property name="Shape" type="Part::PropertyPartShape">
+                    <Part file=""/>
+                </Property>
+                <Property name="Support" type="App::PropertyLinkSubList">
+                    <LinkSubList count="3">
+                        <Link obj="Box" sub="Face1"/>
+                        <Link obj="Box" sub="Face3"/>
+                        <Link obj="Pad" sub="Edge2"/>
+                    </LinkSubList>
+                </Property>
+            </Properties>
+        </Object>
+        <Object name="Link" Extensions="True">
+            <Properties Count="4" TransientCount="0">
+                <Property name="LinkTransform" type="App::PropertyBool">
+                    <Bool value="false"/>
+                </Property>
+                <Property name="LinkedObject" type="App::PropertyXLink">
+                    <XLink file="" stamp="" name="Body"/>
+                </Property>
+                <Property name="Placement" type="App::PropertyPlacement">
+                    <PropertyPlacement Px="0.0" Py="0.0" Pz="40.0" Q0="0.0" Q1="0.0" Q2="0.0" Q3="1.0" A="0.0" Ox="0.0" Oy="0.0" Oz="1.0"/>
+                </Property>
+                <Property name="ScaleVector" type="App::PropertyVector">
+                    <PropertyVector valueX="1.0" valueY="1.0" valueZ="2.0"/>
+                </Property>
+            </Properties>
+        </Object>
+        <Object name="Array" Extensions="True">
+            <Properties Count="5" TransientCount="0">
+                <Property name="ElementCount" type="App::PropertyIntegerConstraint">
+                    <Integer value="3"/>
+                </Property>
+                <Property name="LinkedObject" type="App::PropertyXLink">
+                    <XLink file="other part.FCStd" stamp="2026-10-05T16:10:48Z" name="Box"/>
+                </Property>
+                <Property name="PlacementList" type="App::PropertyPlacementList">
+                    <PlacementList file="PlacementList"/>
+                </Property>
+                <Property name="ScaleList" type="App::PropertyVectorList">
+                    <VectorList file="ScaleList"/>
+                </Property>
+                <Property name="VisibilityList" type="App::PropertyBoolList">
+                    <BoolList value="011"/>
+                </Property>
+            </Properties>
+        </Object>
+    </ObjectData>
+</Document>

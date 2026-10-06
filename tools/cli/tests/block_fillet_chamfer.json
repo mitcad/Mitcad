@@ -1,0 +1,47 @@
+[
+  {"comment": "A 60 x 40 x 20 block: Sketch1 (F1) with lines c1..c4, Extrude1 (F2), Body1 (F2.b0)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 48000, "area": 8800, "faces": 6, "edges": 12}},
+
+  {"comment": "Round the vertical edge at corner (60, 0), where lines c1 and c2 meet: 20 mm of r = 3."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+    "edges": ["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"], "radius": 3}},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body1", "volume": 47961.371669412,
+    "faces": 7, "has_face": "F3:fillet(E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])})",
+    "no_edge": "E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"}},
+
+  {"comment": "Bevel the top edge of line c3 (the back) by 2 mm: 2 x 2 / 2 x 60 mm."},
+  {"cmd": "add_feature", "def": {"type": "chamfer", "body": "F2.b0",
+    "edges": ["E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c3[c2,c4])}"],
+    "size": {"type": "equal_distance", "distance": 2}}},
+  {"expect": {"feature": "Chamfer1", "status": "ok", "body": "Body1", "volume": 47841.371669412,
+    "faces": 8,
+    "has_face": "F4:chamfer(E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c3[c2,c4])})"}},
+
+  {"comment": "A second fillet on edges the first one made: the top of the rounding and the top front edge."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0", "edges": [
+    "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F3:fillet(E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])})}",
+    "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}"], "radius": 1}},
+  {"expect": {"feature": "Fillet2", "status": "ok", "bodies": 1,
+    "body": "Body1", "has_face": "F5:fillet(E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])})"}},
+
+  {"comment": "A 20 x 20 x 20 block (Sketch2 F6, Extrude2 F7, Body2) with the other chamfer types on its top front and back edges: 1 x 3 / 2 and 2 x 2 tan(30 deg) / 2, both 20 mm long."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F6", "corner": [100, 0], "width": 20, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F6", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "chamfer", "body": "F7.b0",
+    "edges": ["E{F7:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F7:side(c1[c4,c2])}"],
+    "size": {"type": "two_distances", "distance1": 1, "distance2": 3}}},
+  {"cmd": "add_feature", "def": {"type": "chamfer", "body": "F7.b0",
+    "edges": ["E{F7:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F7:side(c3[c2,c4])}"],
+    "size": {"type": "distance_angle", "distance": 2, "angle": 0.5235987755982988}, "flip": true}},
+  {"expect": {"feature": "Chamfer2", "status": "ok"}},
+  {"expect": {"feature": "Chamfer3", "status": "ok", "bodies": 2, "body": "Body2",
+    "volume": 7946.9059892324, "faces": 8}}
+]

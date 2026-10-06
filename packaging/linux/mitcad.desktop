@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+[Desktop Entry]
+Type=Application
+Name=Mitcad
+GenericName=Parametric CAD
+Comment=Parametric 3D CAD with a design history
+Exec=mitcad
+Icon=mitcad
+StartupWMClass=Mitcad
+Terminal=false
+Categories=Graphics;3DGraphics;Engineering;
+Keywords=CAD;3D;model;parametric;sketch;

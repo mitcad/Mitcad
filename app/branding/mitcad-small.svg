@@ -1,0 +1,20 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Mitcad application icon below 64 px: mitcad.svg without construction
+     lines and glints, with a larger, thicker C so that it stays legible. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#25384f"/>
+      <stop offset="1" stop-color="#0c1521"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="248" height="248" rx="44" fill="url(#tile)"/>
+  <!-- Outer radius 104, inner 46. -->
+  <g>
+    <polygon points="128,24 37.9,76 88.2,105 128,82" fill="#8cc6fa"/>
+    <polygon points="37.9,76 37.9,180 88.2,151 88.2,105" fill="#5fa8f3"/>
+    <polygon points="37.9,180 128,232 128,174 88.2,151" fill="#3b8bea"/>
+    <polygon points="128,232 218.1,180 167.8,151 128,174" fill="#1f6fe0"/>
+    <polygon points="128,24 218.1,76 167.8,105 128,82" fill="#eef3f8"/>
+  </g>
+</svg>

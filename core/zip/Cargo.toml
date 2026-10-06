@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-zip"
+description = "Minimal zip reader and writer for the .f3d and .FCStd containers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mitcad_zip"
+
+[dependencies]
+# Pure-Rust decompressors (deflate and zstd); deflate also compresses.
+miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }
+ruzstd = { version = "0.8.1", default-features = false, features = ["std"] }

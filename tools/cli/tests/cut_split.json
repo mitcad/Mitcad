@@ -1,0 +1,35 @@
+[
+  {"comment": "A 60 x 40 x 20 block (F1, F2) and a slot 10 mm wide across it (Sketch2 F3), cut through all by Extrude2 (F4)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [25, -5], "width": 10, "height": 50},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "through_all"}, "operation": "cut"}},
+
+  {"comment": "Two bodies: the left piece keeps Body1, the right one is Body2 (F4.b0). The split faces are numbered #0 and #1 from left to right."},
+  {"expect": {"feature": "Extrude2", "status": "ok", "bodies": 2}},
+  {"expect": {"body": "Body1", "volume": 20000, "faces": 6,
+    "has_face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})#0"}},
+  {"expect": {"body": "F4.b0", "volume": 20000, "faces": 6,
+    "has_face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})#1"}},
+  {"expect": {"body": "Body1", "has_face": "F4:side(c4[c3,c1])"}},
+  {"expect": {"body": "Body2", "has_face": "F4:side(c2[c1,c3])"}},
+
+  {"comment": "Round the right body's corner (60, 0); its front face is piece #1 of the block's front."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F4.b0",
+    "edges": ["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"], "radius": 2}},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body2", "volume": 19982.831853072,
+    "has_edge": "E{F2:side(c1[c4,c2])#1|F5:fillet(E{F2:side(c1[c4,c2])#1|F2:side(c2[c1,c3])})}"}},
+
+  {"comment": "A shorter slot no longer splits the block: Body2 is gone and its fillet fails."},
+  {"cmd": "set_parameter", "name": "d5", "value": 20},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 45000}},
+  {"expect": {"feature": "Fillet1", "status": "error", "error_contains": "body F4.b0"}},
+  {"cmd": "undo"},
+  {"expect": {"bodies": 2, "feature": "Fillet1", "status": "ok"}}
+]

@@ -1,0 +1,28 @@
+[
+  {"comment": "External components (F6), run where f6_assembly.json saved plate.mitcad: two plates with pins, 13051.327 mm3 in all."},
+  {"comment": "Linked, 100 mm up: component 'plate' holds the file's four placed bodies as Base1 (F1), read only."},
+  {"cmd": "insert_component", "path": "plate.mitcad", "transform": {"translation": [0, 0, 100]}},
+  {"expect": {"bodies": 4, "instances": 4, "world_volume": 13051.327412287183}},
+  {"expect": {"occurrence": "plate:1", "body": "Body1", "volume": 6400,
+    "bbox": {"min": [80, 0, 100], "max": [100, 40, 108]}, "tolerance": 1e-6}},
+  {"expect": {"query": {"query": "components"}, "result": {
+    "components": [{"uid": "C0"}, {"uid": "C1", "name": "plate", "link": "plate.mitcad", "features": ["F1"]}]}}},
+
+  {"comment": "A copy, 200 mm along Y: 'Plate copy' with the file's history (its plate, pin, move and captured position), editable."},
+  {"cmd": "insert_component", "path": "plate.mitcad", "link": false, "name": "Plate copy",
+    "transform": {"translation": [0, 200, 0]}},
+  {"expect": {"bodies": 6, "instances": 8, "world_volume": 26102.654824574366}},
+  {"expect": {"query": {"query": "components"}, "result": {
+    "components": [{"uid": "C0"}, {"uid": "C1"}, {"uid": "C2", "name": "Plate copy"},
+                   {"uid": "C3", "name": "Plate"}, {"uid": "C4", "name": "Pin"}]}}},
+  {"expect": {"occurrence": "Plate copy:1/Plate:2", "body": "Body5", "volume": 6400,
+    "bbox": {"min": [0, 150, 0], "max": [40, 170, 8]}, "tolerance": 1e-6}},
+  {"expect": {"occurrence": "Plate copy:1/Plate:1/Pin:1", "body": "Body6", "center": [90, 210, 10], "tolerance": 1e-6}},
+  {"expect": {"feature": "Move1", "status": "ok"}},
+  {"expect": {"feature": "Position1", "status": "ok"}},
+
+  {"comment": "The copy's plate 2 mm thinner (its copied parameters are d1 ... d8, d3 the plate's distance): only the copy changes."},
+  {"cmd": "set_parameter", "name": "d3", "value": 6},
+  {"expect": {"occurrence": "Plate copy:1/Plate:2", "body": "Body5", "volume": 4800}},
+  {"expect": {"occurrence": "plate:1", "body": "Body1", "volume": 6400}}
+]

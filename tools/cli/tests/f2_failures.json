@@ -1,0 +1,76 @@
+[
+  {"comment": "Failures of the face features: the feature records the error, the body passes it by, and options the geometry kernel lacks start with 'unsupported:' for the importer's fallback. A 60 x 40 x 20 block: Sketch1 F1, Extrude1 F2, Body1."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+
+  {"comment": "Fillet1 F3: G2 fillets of the three edges that meet at (60, 0, 20): G2 chains that meet at a corner are not built."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0", "sets": [
+    {"edges": ["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}",
+               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}",
+               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c2[c1,c3])}"],
+     "size": {"type": "constant", "radius": 2}, "continuity": "curvature"}]}},
+  {"expect": {"feature": "Fillet1", "status": "error",
+    "error_contains": "unsupported: asymmetric and curvature continuous fillets that meet other rounded edges at a corner",
+    "body": "Body1", "volume": 48000}},
+
+  {"comment": "Fillet2 F4: a setback corner where three edges rounded 14 mm meet at (60, 0, 20): the setback (21 mm) is longer than the 20 mm vertical edge."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0", "sets": [
+    {"edges": ["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}",
+               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}",
+               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c2[c1,c3])}"],
+     "size": {"type": "constant", "radius": 14}}], "rolling_ball_corners": false}},
+  {"expect": {"feature": "Fillet2", "status": "error", "error_contains": "unsupported: a setback corner"}},
+
+  {"comment": "Fillet3 F5: a radius too large for the block."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+    "edges": ["E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}"], "radius": 30}},
+  {"expect": {"feature": "Fillet3", "status": "error", "error_contains": "fillet failed"}},
+
+  {"comment": "DeleteFace1 F6: two opposite sides leave a gap nothing closes."},
+  {"cmd": "add_feature", "def": {"type": "delete_face", "body": "F2.b0",
+    "faces": ["F2:side(c1[c4,c2])", "F2:side(c3[c2,c4])"]}},
+  {"expect": {"feature": "DeleteFace1", "status": "error", "error_contains": "cannot be deleted"}},
+
+  {"comment": "SplitBody1 F7: a plane beside the block does not divide it."},
+  {"cmd": "add_feature", "def": {"type": "split_body", "bodies": ["F2.b0"],
+    "tool": {"type": "origin_plane", "plane": "yz", "offset": 80}}},
+  {"expect": {"feature": "SplitBody1", "status": "error", "error_contains": "does not divide", "bodies": 1}},
+
+  {"comment": "ReplaceFace1 F8: a target perpendicular to the face."},
+  {"cmd": "add_feature", "def": {"type": "replace_face", "body": "F2.b0",
+    "faces": ["F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"],
+    "target": {"type": "origin_plane", "plane": "yz"}}},
+  {"expect": {"feature": "ReplaceFace1", "status": "error", "error_contains": "perpendicular"}},
+
+  {"comment": "Shell1 F9: a wall thicker than half the block."},
+  {"cmd": "add_feature", "def": {"type": "shell", "body": "F2.b0", "inside": 25}},
+  {"expect": {"feature": "Shell1", "status": "error", "error_contains": "shell"}},
+
+  {"comment": "Draft1 F10: a fixed plane parallel to the drafted face does not cross it."},
+  {"cmd": "add_feature", "def": {"type": "draft", "body": "F2.b0", "faces": ["F2:side(c1[c4,c2])"],
+    "plane": {"type": "face", "face": "F2:side(c3[c2,c4])"}, "angle": 0.1}},
+  {"expect": {"feature": "Draft1", "status": "error", "error_contains": "draft"}},
+
+  {"comment": "A face that an edit removes: Fillet4 F11 rounds the front top edge, DeleteFace2 F12 deletes the rounding; suppressing Fillet4 explains the missing face."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+    "edges": ["E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}"], "radius": 3}},
+  {"cmd": "add_feature", "def": {"type": "delete_face", "body": "F2.b0",
+    "faces": ["F11:fillet(E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])})"]}},
+  {"expect": {"feature": "DeleteFace2", "status": "ok", "body": "Body1", "volume": 48000}},
+  {"cmd": "suppress_feature", "uid": "F11"},
+  {"expect": {"feature": "DeleteFace2", "status": "error",
+    "error_contains": "does not exist because Fillet4 is suppressed"}},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 48000}},
+
+  {"comment": "ReplaceFace2 F14: a cylinder beside the block (Cylinder1 F13, along X at y = 200) never comes over the top."},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": {"origin": [-10, 0, 0], "normal": [1, 0, 0]},
+    "center": [200, 0], "diameter": 60, "height": 80, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "replace_face", "body": "F2.b0",
+    "faces": ["F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"],
+    "target": {"body": "F13.b0", "face": "F13:side0"}}},
+  {"expect": {"feature": "ReplaceFace2", "status": "error", "error_contains": "the target does not meet the body"}},
+  {"expect": {"bodies": 2, "body": "Body1", "volume": 48000}}
+]

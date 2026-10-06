@@ -1,0 +1,7 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Mitcad icon: 24 x 24, dark outline, blue solids, orange actions. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2b3a4a" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
+  <path d="M2 12 Q12 3 22 12 Q12 21 2 12 Z" fill="#eeeeee" stroke="#9aa3ad"/>
+  <circle cx="12" cy="12" r="3.6" fill="#c8ced5" stroke="#9aa3ad"/>
+  <path d="M4 20 L20 4" stroke="#9aa3ad" stroke-width="1.8"/>
+</svg>

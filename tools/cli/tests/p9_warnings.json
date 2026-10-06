@@ -1,0 +1,31 @@
+[
+  {"comment": "Model warnings (P9): a rib 2 mm wide, 40 long and 20 high (F2.b0). Rounding both long top edges by 1 mm (a full round) or bevelling them by 1 mm takes the top face away, which OCCT cannot build: the geometry builds them 0.1 % smaller, and the feature succeeds with a warning (yellow in the timeline)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 2, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"expect": {"feature": "Extrude1", "status": "ok", "body": "Body1", "volume": 1600}},
+
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+    "edges": ["E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c2[c1,c3])}",
+              "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c4[c3,c1])}"], "radius": 1}},
+  {"comment": "A full round: two quarter circles of r = 1 take 2 (1 - pi/4) x 40 mm3."},
+  {"expect": {"feature": "Fillet1", "status": "warning", "error_contains": "0.1 % smaller",
+    "body": "Body1", "volume": 1582.831853072, "tolerance": 1e-4}},
+
+  {"comment": "Half the radius builds exactly: no warning."},
+  {"cmd": "set_parameter", "name": "d4", "value": 0.5},
+  {"expect": {"feature": "Fillet1", "status": "ok"}},
+  {"cmd": "undo"},
+  {"expect": {"feature": "Fillet1", "status": "warning"}},
+
+  {"comment": "A chamfer as wide as the rib: also a warning."},
+  {"cmd": "suppress_feature", "uid": "F3", "suppressed": true},
+  {"cmd": "add_feature", "def": {"type": "chamfer", "body": "F2.b0",
+    "edges": ["E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c2[c1,c3])}",
+              "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c4[c3,c1])}"],
+    "size": {"type": "equal_distance", "distance": 1}}},
+  {"expect": {"feature": "Chamfer1", "status": "warning", "error_contains": "the chamfer is built 0.1 % smaller",
+    "body": "Body1", "volume": 1560, "tolerance": 1e-4}}
+]

@@ -1,0 +1,15 @@
+[
+  {"comment": "mitcad-geomtool's holed-block: 50 x 30 x 20 mm with a 12 mm hole through (25, 15), for compare-step: both profiles extruded, the circle then cut."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 50, "height": 30},
+  {"cmd": "sketch.add_circle", "sketch": "F1", "center": [25, 15], "diameter": 12},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}, {"sketch": "F1", "region": "r{c9}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c9}"}],
+    "extent": {"type": "through_all"}, "operation": "cut"}},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 27738.05328941535}},
+  {"comment": "The bodies query with volumes only (what the application logs after a command)."},
+  {"expect": {"query": {"query": "bodies", "volumes": true},
+    "result": [{"uid": "F2.b0", "name": "Body1", "volume": 27738.05328941535}]}}
+]

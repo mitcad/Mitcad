@@ -1,0 +1,43 @@
+[
+  {"comment": "A 60 x 40 x 20 block (d1, d2, d3) with its corner (60, 0) rounded (Fillet1 F3, d4 = 2)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+    "edges": ["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"], "radius": 2}},
+  {"expect": {"body": "Body1", "volume": 47982.831853072}},
+
+  {"comment": "Wider and taller: the fillet follows the corner, now at (80, 0) and 35 mm high."},
+  {"cmd": "set_parameter", "name": "d1", "value": 80},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body1", "volume": 63982.831853072}},
+  {"cmd": "set_parameter", "name": "d3", "value": 35},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body1", "volume": 111969.955742876}},
+
+  {"comment": "A zero width fails the sketch and everything after it; a valid one brings it all back."},
+  {"cmd": "set_parameter", "name": "d1", "value": 0},
+  {"expect": {"bodies": 0, "feature": "Sketch1", "status": "error", "error_contains": "d1 must be greater than zero"}},
+  {"expect": {"feature": "Fillet1", "status": "error"}},
+  {"cmd": "set_parameter", "name": "d1", "value": 60},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 83969.955742876}},
+  {"cmd": "undo"},
+  {"expect": {"bodies": 0, "parameter": "d1", "value": 0}},
+  {"cmd": "redo"},
+  {"expect": {"bodies": 1, "parameter": "d1", "value": 60}},
+
+  {"comment": "Editing the fillet with a number sets its own radius parameter."},
+  {"cmd": "edit_feature", "uid": "F3", "def": {"type": "fillet", "body": "F2.b0",
+    "edges": ["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"], "radius": 3}},
+  {"expect": {"parameter": "d4", "value": 3, "body": "Body1", "volume": 83932.400421471}},
+
+  {"comment": "Suppressed, the fillet is skipped; the timeline marker rolls it back too."},
+  {"cmd": "suppress_feature", "uid": "F3"},
+  {"expect": {"feature": "Fillet1", "status": "suppressed", "body": "Body1", "volume": 84000}},
+  {"cmd": "suppress_feature", "uid": "F3", "suppressed": false},
+  {"cmd": "set_marker", "position": 2},
+  {"expect": {"feature": "Fillet1", "status": "rolled_back", "body": "Body1", "volume": 84000}},
+  {"cmd": "set_marker", "position": 3},
+  {"cmd": "rename_body", "uid": "F2.b0", "name": "Base"},
+  {"expect": {"body": "Base", "volume": 83932.400421471}}
+]

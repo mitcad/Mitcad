@@ -1,0 +1,126 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QT_ROOT_DIR}",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "linux",
+      "hidden": true,
+      "inherits": "base",
+      "cacheVariables": { "VCPKG_TARGET_TRIPLET": "x64-linux-dynamic" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug",
+      "inherits": "linux",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux Release",
+      "inherits": "linux",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    },
+    {
+      "name": "macos",
+      "hidden": true,
+      "inherits": "base",
+      "description": "Apple Silicon. OCCT is LGPL, so vcpkg builds it as dylibs; triplets/arm64-osx-dynamic.cmake pins the deployment target.",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "arm64-osx-dynamic",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "14.4"
+      },
+      "environment": { "MACOSX_DEPLOYMENT_TARGET": "14.4" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" }
+    },
+    {
+      "name": "macos-debug",
+      "displayName": "macOS Debug",
+      "inherits": "macos",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "macos-release",
+      "displayName": "macOS Release",
+      "inherits": "macos",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    },
+    {
+      "name": "windows",
+      "hidden": true,
+      "inherits": "base",
+      "description": "Needs the MSVC environment, e.g. tools\\dev-env\\msvc.cmd cmake --preset ...",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows Debug",
+      "inherits": "windows",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows Release",
+      "inherits": "windows",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "linux-debug", "configurePreset": "linux-debug" },
+    { "name": "linux-release", "configurePreset": "linux-release" },
+    { "name": "macos-debug", "configurePreset": "macos-debug" },
+    { "name": "macos-release", "configurePreset": "macos-release" },
+    { "name": "windows-debug", "configurePreset": "windows-debug" },
+    { "name": "windows-release", "configurePreset": "windows-release" }
+  ],
+  "testPresets": [
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "macos-debug",
+      "configurePreset": "macos-debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "macos-release",
+      "configurePreset": "macos-release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "mitcad-dev-mesa",
+  "version-string": "0",
+  "description": "Mesa's software OpenGL (llvmpipe) for running Mitcad in a Windows VM without a GPU. Development and testing only; built by tools/dev-env/setup-mesa-windows.ps1.",
+  "license": "MIT",
+  "dependencies": [
+    {
+      "name": "mesa",
+      "default-features": false,
+      "features": ["llvm"]
+    },
+    {
+      "name": "llvm",
+      "default-features": false
+    }
+  ],
+  "builtin-baseline": "3aea538b2bb21a586502c67b00eb474fdd2e3098"
+}

@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+[workspace]
+resolver = "3"
+members = ["model", "ffi", "solver", "f3d", "dxf", "import", "vcs", "zip", "freecad", "3mf", "update"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.88"
+publish = false
+
+[workspace.dependencies]
+cxx = "1.0.202"
+mitcad-model = { path = "model" }
+serde = { version = "1.0.229", features = ["derive"] }
+# float_roundtrip: parsed numbers equal the saved ones exactly.
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+
+# The dev profile (the CMake Debug build and cargo test) optimises, so that
+# the tests run faster: the dependencies fully, Mitcad's own crates a
+# little. Debug information and debug assertions stay.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2

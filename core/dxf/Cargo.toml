@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-dxf"
+description = "DXF reader and writer for Mitcad's 2D sketches"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# No dependencies: the reader and writer are plain Rust.
+[dependencies]

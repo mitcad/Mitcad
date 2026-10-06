@@ -1,0 +1,26 @@
+# Build output
+/build/
+/out/
+target/
+
+# vcpkg (manifest mode)
+vcpkg_installed/
+
+# Local development settings
+CMakeUserPresets.json
+.vs/
+.vscode/
+*.user
+
+# Office and LibreOffice lock files
+~$*
+.~lock.*#
+
+# Tool logs
+*.log
+
+# Claude Code (agent worktrees, local settings)
+.claude/
+
+# Maintainers' private repository, cloned into the working tree
+/private/

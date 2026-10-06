@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: MIT
+# The workflow test's third script (see workflow.mitcad-ui), the counterpart
+# of the end of tools/ui-windows-workflow-test.ps1; the application is started
+# with the saved design opened and d3 changed (--open ... --set d3=25):
+#   8. Version history (P12d): Start Version History makes the design's folder
+#      a project (the author asked, as git's configuration is the test's own,
+#      without a user), Ctrl+S records a second version.
+#   9. Version History (P12e, Ctrl+Shift+H): the two versions with what the
+#      second changed, compared; Restore of the first records it as a third
+#      version and opens it. (Restore is the dialog's button: macOS has no
+#      Alt+R mnemonics.) The test checks git's log afterwards.
+# The test sets MITCAD_TEST_WORK and starts the application as said above.
+
+expect-ever 'View area'
+sleep 1500
+expect-ever 'Opened ${MITCAD_TEST_WORK:re}/block\.mitcad'
+expect-ever 'Version status: none'
+
+# --- The folder made a project, two saves, two versions
+mark
+command file.start_history
+expect-log 'Start Version History dialog: ${MITCAD_TEST_WORK:re}'
+focus-dialog '^Start Version History$|is in no project'
+key Return
+expect-log 'Version author dialog: git has none'
+focus-dialog '^Version Author$'
+type 'macOS Tester'
+key Tab
+type 'macos@example.invalid'
+key Return
+focus-main
+expect-log 'Version author: macOS Tester <macos@example\.invalid> \(settings\)'
+expect-log 'Version history started in ${MITCAD_TEST_WORK:re}: version ' 20
+expect-log 'Version recorded: block\.mitcad ' 20
+expect-log 'Version status: files, main, v1'
+expect-log 'Version preview saved: ' 20
+expect-files "${MITCAD_THUMBNAIL_DIR}" '*.png' 1
+mark
+key ctrl+z
+key ctrl+s
+expect-log 'Version recorded: block\.mitcad ' 20
+expect-log 'Version status: files, main, v2'
+
+# --- The two versions compared, the first restored
+mark
+key ctrl+shift+h
+expect-log 'Version History: 2 versions of block\.mitcad: v2 ' 20
+expect-log 'Version History changes: v2 d3 25 mm -> 20 mm'
+expect-log 'Version History selected v2 \('
+expect-log 'Version History compare v2 with v1: '
+expect-log 'd3 \(Extrude1 distance\): 25 mm -> 20 mm'
+focus-dialog '^Version History - block\.mitcad$'
+mark
+key Down
+expect-log 'Version History selected v1 \('
+button '^Restore$'
+expect-log 'Restore dialog: v1 \('
+focus-dialog '^Restore Version$|^Restore v1 \(.*\) of block\.mitcad\?$'
+key Return
+focus-main
+expect-log 'Version restored: block\.mitcad v1 \(' 20
+expect-log 'Opened ${MITCAD_TEST_WORK:re}/block\.mitcad' 20
+expect-log 'Version status: files, main, v3'

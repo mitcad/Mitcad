@@ -1,0 +1,4 @@
+// SPDX-License-Identifier: MIT
+// Windows resources of mitcad.exe: the application icon (Explorer, taskbar,
+// installer shortcuts). The window's own icon is set in main.cpp.
+IDI_ICON1 ICON "mitcad.ico"

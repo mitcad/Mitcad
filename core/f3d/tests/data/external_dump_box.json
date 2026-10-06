@@ -1,0 +1,1582 @@
+{
+ "schema": "mitcad-f3d-dump",
+ "schema_version": 2,
+ "generator": {
+  "addin": "dump-writer",
+  "addin_version": "0.2.0",
+  "app_version": "2.0.99999",
+  "python": "3.12.3",
+  "os": "Linux",
+  "created_utc": "2026-10-03T00:00:00.000+00:00"
+ },
+ "units": {
+  "length": "cm",
+  "angle": "rad",
+  "area": "cm^2",
+  "volume": "cm^3",
+  "mass": "kg",
+  "density": "kg/cm^3",
+  "moment_of_inertia": "kg*cm^2"
+ },
+ "source": {
+  "mode": "test"
+ },
+ "options": {
+  "per_step": true,
+  "max_steps": null,
+  "time_budget_s": 1800.0,
+  "accuracy": "high",
+  "tight_bbox": true,
+  "max_faces": 500,
+  "max_output_faces": 50,
+  "max_items": 50,
+  "max_detail_items": 1000,
+  "reflect_depth": 2,
+  "selection_topology": true,
+  "face_loops": "caps",
+  "max_pattern_elements": 500,
+  "pattern_element_faces": false,
+  "do_events": true,
+  "export_f3d": false,
+  "export_step": false,
+  "export_smt": false,
+  "body_formats": [],
+  "open_visible": true
+ },
+ "warnings": [],
+ "document": {
+  "name": "Box",
+  "isModified": false,
+  "app_version": "2.0.99999",
+  "design_type": "ParametricDesignType",
+  "default_length_units": "mm",
+  "distance_display_units": "MillimeterDistanceUnits",
+  "root_component": "Root",
+  "component_count": 2,
+  "data_file": null
+ },
+ "parameters": {
+  "user": [
+   {
+    "name": "width",
+    "expression": "20 mm",
+    "value": 2.0,
+    "unit": "mm",
+    "comment": "overall width",
+    "isFavorite": true,
+    "dependents": [
+     "d1"
+    ]
+   }
+  ],
+  "model": [
+   {
+    "name": "d1",
+    "expression": "20 mm",
+    "value": 2.0,
+    "unit": "mm",
+    "comment": "",
+    "isFavorite": false,
+    "role": "",
+    "createdBy": {
+     "kind": "sketch_dimension",
+     "objectType": "SketchLinearDimension",
+     "sketch": "Sketch1",
+     "sketch_timeline_index": 0,
+     "id": "d0"
+    },
+    "dependents": [],
+    "component": "Root"
+   },
+   {
+    "name": "d2",
+    "expression": "10 mm",
+    "value": 1.0,
+    "unit": "mm",
+    "comment": "height",
+    "isFavorite": true,
+    "role": "AlongDistance",
+    "createdBy": {
+     "kind": "feature",
+     "objectType": "ExtrudeFeature",
+     "name": "Extrude1",
+     "timeline_index": 1
+    },
+    "dependents": [],
+    "component": "Root"
+   },
+   {
+    "name": "d3",
+    "expression": "0 deg",
+    "value": 0.0,
+    "unit": "deg",
+    "comment": "",
+    "isFavorite": false,
+    "role": "TaperAngle",
+    "createdBy": {
+     "kind": "feature",
+     "objectType": "ExtrudeFeature",
+     "name": "Extrude1",
+     "timeline_index": 1
+    },
+    "dependents": [],
+    "component": "Root"
+   }
+  ]
+ },
+ "components": [
+  {
+   "name": "Root",
+   "id": "comp-root",
+   "partNumber": "Root",
+   "description": "",
+   "is_root": true,
+   "bodies": [
+    {
+     "name": "Body1",
+     "isSolid": true,
+     "isVisible": true,
+     "entityToken": "tok-body-Body1"
+    }
+   ],
+   "sketches": [
+    "Sketch1"
+   ],
+   "occurrence_count": 1,
+   "feature_count": 1
+  },
+  {
+   "name": "Part",
+   "id": "comp-part",
+   "partNumber": "Part",
+   "description": "",
+   "is_root": false,
+   "bodies": [
+    {
+     "name": "Pin",
+     "isSolid": true,
+     "isVisible": true,
+     "entityToken": "tok-body-Pin"
+    }
+   ],
+   "sketches": [],
+   "occurrence_count": 0,
+   "feature_count": 0
+  }
+ ],
+ "occurrences": [
+  {
+   "name": "Part:1",
+   "fullPathName": "Part:1",
+   "component": "Part",
+   "transform": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     5.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "transform2": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     5.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "isGrounded": false,
+   "isVisible": true,
+   "isLightBulbOn": true,
+   "isReferencedComponent": false,
+   "entityToken": "tok-occ1",
+   "children": []
+  }
+ ],
+ "final": {
+  "marker_position": 3,
+  "bodies": [
+   {
+    "occurrence": "",
+    "component": "Root",
+    "name": "Body1",
+    "isSolid": true,
+    "isVisible": true,
+    "entityToken": "tok-body-Body1",
+    "volume": 2.0,
+    "area": 10.0,
+    "mass": 0.0157,
+    "density": 0.00785,
+    "center_of_mass": [
+     1.0,
+     0.5,
+     0.5
+    ],
+    "moments_xyz": {
+     "xx": 1.0,
+     "yy": 2.0,
+     "zz": 3.0,
+     "xy": 0.0,
+     "yz": 0.0,
+     "xz": 0.0
+    },
+    "bbox": {
+     "min": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "max": [
+      2.0,
+      1.0,
+      1.0
+     ]
+    },
+    "bbox_tight": {
+     "min": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "max": [
+      2.0,
+      1.0,
+      1.0
+     ]
+    },
+    "face_count": 2,
+    "edge_count": 1,
+    "vertex_count": 0,
+    "lump_count": 1,
+    "shell_count": 1,
+    "faces": [
+     {
+      "kind": "face",
+      "objectType": "BRepFace",
+      "entityToken": "tok-face-top",
+      "tempId": 1,
+      "body": "Body1",
+      "component": "Root",
+      "occurrence": null,
+      "geometry": {
+       "type": "Plane",
+       "origin": [
+        0.0,
+        0.0,
+        1.0
+       ],
+       "normal": [
+        0.0,
+        0.0,
+        1.0
+       ],
+       "uDirection": [
+        1.0,
+        0.0,
+        0.0
+       ],
+       "vDirection": [
+        0.0,
+        1.0,
+        0.0
+       ]
+      },
+      "area": 2.0,
+      "isParamReversed": false,
+      "point_on_face": [
+       1.0,
+       0.5,
+       1.0
+      ],
+      "normal_at_point": [
+       0.0,
+       0.0,
+       1.0
+      ],
+      "bbox": {
+       "min": [
+        0.0,
+        0.0,
+        1.0
+       ],
+       "max": [
+        2.0,
+        1.0,
+        1.0
+       ]
+      },
+      "edge_count": 0,
+      "loop_count": 0
+     },
+     {
+      "kind": "face",
+      "objectType": "BRepFace",
+      "entityToken": "tok-face-hole",
+      "tempId": 2,
+      "body": "Body1",
+      "component": "Root",
+      "occurrence": null,
+      "geometry": {
+       "type": "Cylinder",
+       "origin": [
+        0.0,
+        0.0,
+        0.0
+       ],
+       "axis": [
+        0.0,
+        0.0,
+        1.0
+       ],
+       "radius": 0.25
+      },
+      "area": 1.57,
+      "isParamReversed": true,
+      "point_on_face": [
+       0.25,
+       0.0,
+       0.5
+      ],
+      "normal_at_point": [
+       -1.0,
+       0.0,
+       0.0
+      ],
+      "bbox": {
+       "min": [
+        -0.25,
+        -0.25,
+        0.0
+       ],
+       "max": [
+        0.25,
+        0.25,
+        1.0
+       ]
+      },
+      "edge_count": 0,
+      "loop_count": 0
+     }
+    ],
+    "faces_truncated": false
+   },
+   {
+    "occurrence": "Part:1",
+    "component": "Part",
+    "name": "Pin",
+    "isSolid": true,
+    "isVisible": true,
+    "entityToken": "tok-body-Pin",
+    "volume": 0.75,
+    "area": 10.0,
+    "mass": 0.0058874999999999995,
+    "density": 0.00785,
+    "center_of_mass": [
+     5.25,
+     0.25,
+     1.5
+    ],
+    "moments_xyz": {
+     "xx": 1.0,
+     "yy": 2.0,
+     "zz": 3.0,
+     "xy": 0.0,
+     "yz": 0.0,
+     "xz": 0.0
+    },
+    "bbox": {
+     "min": [
+      5.0,
+      0.0,
+      0.0
+     ],
+     "max": [
+      5.5,
+      0.5,
+      3.0
+     ]
+    },
+    "bbox_tight": {
+     "min": [
+      5.0,
+      0.0,
+      0.0
+     ],
+     "max": [
+      5.5,
+      0.5,
+      3.0
+     ]
+    },
+    "face_count": 0,
+    "edge_count": 0,
+    "vertex_count": 0,
+    "lump_count": 1,
+    "shell_count": 1,
+    "faces": [],
+    "faces_truncated": false
+   }
+  ]
+ },
+ "steps": {
+  "enabled": true,
+  "accuracy": "high",
+  "complete": true,
+  "stop_reason": null,
+  "items": [
+   {
+    "timeline_index": 0,
+    "name": "Sketch1",
+    "objectType": "Sketch",
+    "marker_position": 1,
+    "error": null,
+    "bodies": [
+     {
+      "occurrence": "Part:1",
+      "component": "Part",
+      "name": "Pin",
+      "isSolid": true,
+      "isVisible": true,
+      "volume": 0.75,
+      "area": 10.0,
+      "mass": 0.0058874999999999995,
+      "density": 0.00785,
+      "center_of_mass": [
+       5.25,
+       0.25,
+       1.5
+      ],
+      "moments_xyz": {
+       "xx": 1.0,
+       "yy": 2.0,
+       "zz": 3.0,
+       "xy": 0.0,
+       "yz": 0.0,
+       "xz": 0.0
+      },
+      "bbox": {
+       "min": [
+        5.0,
+        0.0,
+        0.0
+       ],
+       "max": [
+        5.5,
+        0.5,
+        3.0
+       ]
+      },
+      "bbox_tight": {
+       "min": [
+        5.0,
+        0.0,
+        0.0
+       ],
+       "max": [
+        5.5,
+        0.5,
+        3.0
+       ]
+      },
+      "face_count": 0,
+      "edge_count": 0,
+      "vertex_count": 0,
+      "lump_count": 1,
+      "shell_count": 1
+     }
+    ],
+    "elapsed_s": 0.005
+   },
+   {
+    "timeline_index": 1,
+    "name": "Extrude1",
+    "objectType": "ExtrudeFeature",
+    "marker_position": 2,
+    "error": null,
+    "bodies": [
+     {
+      "occurrence": "",
+      "component": "Root",
+      "name": "Body1",
+      "isSolid": true,
+      "isVisible": true,
+      "volume": 2.0,
+      "area": 10.0,
+      "mass": 0.0157,
+      "density": 0.00785,
+      "center_of_mass": [
+       1.0,
+       0.5,
+       0.5
+      ],
+      "moments_xyz": {
+       "xx": 1.0,
+       "yy": 2.0,
+       "zz": 3.0,
+       "xy": 0.0,
+       "yz": 0.0,
+       "xz": 0.0
+      },
+      "bbox": {
+       "min": [
+        0.0,
+        0.0,
+        0.0
+       ],
+       "max": [
+        2.0,
+        1.0,
+        1.0
+       ]
+      },
+      "bbox_tight": {
+       "min": [
+        0.0,
+        0.0,
+        0.0
+       ],
+       "max": [
+        2.0,
+        1.0,
+        1.0
+       ]
+      },
+      "face_count": 2,
+      "edge_count": 1,
+      "vertex_count": 0,
+      "lump_count": 1,
+      "shell_count": 1
+     },
+     {
+      "occurrence": "Part:1",
+      "component": "Part",
+      "name": "Pin",
+      "isSolid": true,
+      "isVisible": true,
+      "volume": 0.75,
+      "area": 10.0,
+      "mass": 0.0058874999999999995,
+      "density": 0.00785,
+      "center_of_mass": [
+       5.25,
+       0.25,
+       1.5
+      ],
+      "moments_xyz": {
+       "xx": 1.0,
+       "yy": 2.0,
+       "zz": 3.0,
+       "xy": 0.0,
+       "yz": 0.0,
+       "xz": 0.0
+      },
+      "bbox": {
+       "min": [
+        5.0,
+        0.0,
+        0.0
+       ],
+       "max": [
+        5.5,
+        0.5,
+        3.0
+       ]
+      },
+      "bbox_tight": {
+       "min": [
+        5.0,
+        0.0,
+        0.0
+       ],
+       "max": [
+        5.5,
+        0.5,
+        3.0
+       ]
+      },
+      "face_count": 0,
+      "edge_count": 0,
+      "vertex_count": 0,
+      "lump_count": 1,
+      "shell_count": 1
+     }
+    ],
+    "elapsed_s": 0.005
+   },
+   {
+    "timeline_index": 2,
+    "name": "Plane1",
+    "objectType": "ConstructionPlane",
+    "marker_position": 3,
+    "error": null,
+    "bodies": [
+     {
+      "occurrence": "",
+      "component": "Root",
+      "name": "Body1",
+      "isSolid": true,
+      "isVisible": true,
+      "volume": 2.0,
+      "area": 10.0,
+      "mass": 0.0157,
+      "density": 0.00785,
+      "center_of_mass": [
+       1.0,
+       0.5,
+       0.5
+      ],
+      "moments_xyz": {
+       "xx": 1.0,
+       "yy": 2.0,
+       "zz": 3.0,
+       "xy": 0.0,
+       "yz": 0.0,
+       "xz": 0.0
+      },
+      "bbox": {
+       "min": [
+        0.0,
+        0.0,
+        0.0
+       ],
+       "max": [
+        2.0,
+        1.0,
+        1.0
+       ]
+      },
+      "bbox_tight": {
+       "min": [
+        0.0,
+        0.0,
+        0.0
+       ],
+       "max": [
+        2.0,
+        1.0,
+        1.0
+       ]
+      },
+      "face_count": 2,
+      "edge_count": 1,
+      "vertex_count": 0,
+      "lump_count": 1,
+      "shell_count": 1
+     },
+     {
+      "occurrence": "Part:1",
+      "component": "Part",
+      "name": "Pin",
+      "isSolid": true,
+      "isVisible": true,
+      "volume": 0.75,
+      "area": 10.0,
+      "mass": 0.0058874999999999995,
+      "density": 0.00785,
+      "center_of_mass": [
+       5.25,
+       0.25,
+       1.5
+      ],
+      "moments_xyz": {
+       "xx": 1.0,
+       "yy": 2.0,
+       "zz": 3.0,
+       "xy": 0.0,
+       "yz": 0.0,
+       "xz": 0.0
+      },
+      "bbox": {
+       "min": [
+        5.0,
+        0.0,
+        0.0
+       ],
+       "max": [
+        5.5,
+        0.5,
+        3.0
+       ]
+      },
+      "bbox_tight": {
+       "min": [
+        5.0,
+        0.0,
+        0.0
+       ],
+       "max": [
+        5.5,
+        0.5,
+        3.0
+       ]
+      },
+      "face_count": 0,
+      "edge_count": 0,
+      "vertex_count": 0,
+      "lump_count": 1,
+      "shell_count": 1
+     }
+    ],
+    "elapsed_s": 0.005
+   }
+  ]
+ },
+ "timeline": {
+  "available": true,
+  "count": 3,
+  "original_marker_position": 3,
+  "restored_marker_position": 3,
+  "groups": [
+   {
+    "name": "Group1",
+    "index": 1,
+    "isCollapsed": true,
+    "isSuppressed": false,
+    "count": 1
+   }
+  ],
+  "items": [
+   {
+    "index": 0,
+    "group": null,
+    "name": "Sketch1",
+    "isRolledBack": false,
+    "objectType": "Sketch",
+    "entityToken": "tok-sketch1",
+    "component": "Root",
+    "isSuppressed": false,
+    "healthState": "HealthyFeatureHealthState",
+    "errorOrWarningMessage": "",
+    "detail_marker": 1,
+    "detail": {
+     "name": "Sketch1",
+     "component": "Root",
+     "isVisible": true,
+     "referencePlane": {
+      "kind": "construction_plane",
+      "name": "XY",
+      "origin": "XY",
+      "timeline_index": null,
+      "component": "Root",
+      "geometry": {
+       "type": "Plane",
+       "origin": [
+        0.0,
+        0.0,
+        0.0
+       ],
+       "normal": [
+        0.0,
+        0.0,
+        1.0
+       ],
+       "uDirection": [
+        1.0,
+        0.0,
+        0.0
+       ],
+       "vDirection": [
+        0.0,
+        1.0,
+        0.0
+       ]
+      }
+     },
+     "transform": [
+      [
+       1.0,
+       0.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       1.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.0,
+       1.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ]
+     ],
+     "origin": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "xDirection": [
+      1.0,
+      0.0,
+      0.0
+     ],
+     "yDirection": [
+      0.0,
+      1.0,
+      0.0
+     ],
+     "model_frame": {
+      "origin": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "x_axis": [
+       1.0,
+       0.0,
+       0.0
+      ],
+      "y_axis": [
+       0.0,
+       1.0,
+       0.0
+      ],
+      "z_axis": [
+       0.0,
+       0.0,
+       1.0
+      ],
+      "sketch_to_model": [
+       [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+       ],
+       [
+        0.0,
+        1.0,
+        0.0,
+        0.0
+       ],
+       [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+       ],
+       [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+       ]
+      ],
+      "transform_matches": [
+       "sketch_to_model",
+       "model_to_sketch"
+      ]
+     },
+     "counts": {
+      "points": 4,
+      "curves": 5,
+      "texts": 0,
+      "constraints": 2,
+      "dimensions": 1,
+      "profiles": 1
+     },
+     "points": [
+      {
+       "id": "p0",
+       "xyz": [
+        0.0,
+        0.0,
+        0.0
+       ],
+       "isFixed": false,
+       "isReference": false,
+       "connected": [
+        "c3",
+        "c0"
+       ]
+      },
+      {
+       "id": "p1",
+       "xyz": [
+        2.0,
+        0.0,
+        0.0
+       ],
+       "isFixed": false,
+       "isReference": false,
+       "connected": [
+        "c0",
+        "c1"
+       ]
+      },
+      {
+       "id": "p2",
+       "xyz": [
+        2.0,
+        1.0,
+        0.0
+       ],
+       "isFixed": false,
+       "isReference": false,
+       "connected": [
+        "c1",
+        "c2"
+       ]
+      },
+      {
+       "id": "p3",
+       "xyz": [
+        0.0,
+        1.0,
+        0.0
+       ],
+       "isFixed": false,
+       "isReference": false,
+       "connected": [
+        "c2",
+        "c3"
+       ]
+      }
+     ],
+     "curves": [
+      {
+       "id": "c0",
+       "type": "SketchLine",
+       "isConstruction": false,
+       "isFixed": false,
+       "isReference": false,
+       "isCenterLine": false,
+       "startSketchPoint": "p0",
+       "endSketchPoint": "p1",
+       "length": 2.0,
+       "geometry": {
+        "type": "Line3D",
+        "startPoint": [
+         0.0,
+         0.0,
+         0.0
+        ],
+        "endPoint": [
+         2.0,
+         0.0,
+         0.0
+        ]
+       }
+      },
+      {
+       "id": "c1",
+       "type": "SketchLine",
+       "isConstruction": false,
+       "isFixed": false,
+       "isReference": false,
+       "isCenterLine": false,
+       "startSketchPoint": "p1",
+       "endSketchPoint": "p2",
+       "length": 1.0,
+       "geometry": {
+        "type": "Line3D",
+        "startPoint": [
+         2.0,
+         0.0,
+         0.0
+        ],
+        "endPoint": [
+         2.0,
+         1.0,
+         0.0
+        ]
+       }
+      },
+      {
+       "id": "c2",
+       "type": "SketchLine",
+       "isConstruction": false,
+       "isFixed": false,
+       "isReference": false,
+       "isCenterLine": false,
+       "startSketchPoint": "p2",
+       "endSketchPoint": "p3",
+       "length": 2.0,
+       "geometry": {
+        "type": "Line3D",
+        "startPoint": [
+         2.0,
+         1.0,
+         0.0
+        ],
+        "endPoint": [
+         0.0,
+         1.0,
+         0.0
+        ]
+       }
+      },
+      {
+       "id": "c3",
+       "type": "SketchLine",
+       "isConstruction": false,
+       "isFixed": false,
+       "isReference": false,
+       "isCenterLine": false,
+       "startSketchPoint": "p3",
+       "endSketchPoint": "p0",
+       "length": 1.0,
+       "geometry": {
+        "type": "Line3D",
+        "startPoint": [
+         0.0,
+         1.0,
+         0.0
+        ],
+        "endPoint": [
+         0.0,
+         0.0,
+         0.0
+        ]
+       }
+      },
+      {
+       "id": "c4",
+       "type": "SketchCircle",
+       "isConstruction": true,
+       "isFixed": false,
+       "isReference": false,
+       "centerSketchPoint": "p0",
+       "radius": 0.25,
+       "geometry": {
+        "type": "Circle3D",
+        "center": [
+         0.0,
+         0.0,
+         0.0
+        ],
+        "normal": [
+         0.0,
+         0.0,
+         1.0
+        ],
+        "radius": 0.25
+       }
+      }
+     ],
+     "constraints": [
+      {
+       "id": "k0",
+       "type": "CoincidentConstraint",
+       "refs": {
+        "entity": "c4",
+        "point": "p0"
+       },
+       "props": {}
+      },
+      {
+       "id": "k1",
+       "type": "HorizontalConstraint",
+       "refs": {
+        "line": "c0"
+       },
+       "props": {}
+      }
+     ],
+     "dimensions": [
+      {
+       "id": "d0",
+       "type": "SketchLinearDimension",
+       "parameter": {
+        "kind": "parameter",
+        "name": "d1",
+        "expression": "20 mm",
+        "value": 2.0,
+        "unit": "mm"
+       },
+       "isDriving": true,
+       "textPosition": [
+        1.0,
+        -0.5,
+        0.0
+       ],
+       "refs": {
+        "entityOne": "p0",
+        "entityTwo": "p1"
+       },
+       "props": {
+        "orientation": "HorizontalDimensionOrientation"
+       }
+      }
+     ],
+     "texts": [],
+     "profiles": [
+      {
+       "index": 0,
+       "loops": [
+        {
+         "isOuter": true,
+         "curves": [
+          {
+           "curve": "c0",
+           "geometry": {
+            "type": "Line3D",
+            "startPoint": [
+             0.0,
+             0.0,
+             0.0
+            ],
+            "endPoint": [
+             2.0,
+             0.0,
+             0.0
+            ]
+           }
+          },
+          {
+           "curve": "c1",
+           "geometry": {
+            "type": "Line3D",
+            "startPoint": [
+             2.0,
+             0.0,
+             0.0
+            ],
+            "endPoint": [
+             2.0,
+             1.0,
+             0.0
+            ]
+           }
+          },
+          {
+           "curve": "c2",
+           "geometry": {
+            "type": "Line3D",
+            "startPoint": [
+             2.0,
+             1.0,
+             0.0
+            ],
+            "endPoint": [
+             0.0,
+             1.0,
+             0.0
+            ]
+           }
+          },
+          {
+           "curve": "c3",
+           "geometry": {
+            "type": "Line3D",
+            "startPoint": [
+             0.0,
+             1.0,
+             0.0
+            ],
+            "endPoint": [
+             0.0,
+             0.0,
+             0.0
+            ]
+           }
+          }
+         ]
+        }
+       ],
+       "area": 2.0,
+       "centroid": [
+        1.0,
+        0.5,
+        0.0
+       ],
+       "perimeter": 6.0,
+       "bbox": {
+        "min": [
+         0.0,
+         0.0,
+         0.0
+        ],
+        "max": [
+         2.0,
+         1.0,
+         0.0
+        ]
+       }
+      }
+     ]
+    },
+    "props": {}
+   },
+   {
+    "index": 1,
+    "group": {
+     "name": "Group1",
+     "index": 1
+    },
+    "name": "Extrude1",
+    "isRolledBack": false,
+    "objectType": "ExtrudeFeature",
+    "entityToken": "tok-extrude1",
+    "component": "Root",
+    "isSuppressed": false,
+    "healthState": "HealthyFeatureHealthState",
+    "errorOrWarningMessage": "",
+    "detail_marker": 1,
+    "detail": {
+     "operation": "NewBodyFeatureOperation",
+     "profile": {
+      "kind": "profile",
+      "sketch": "Sketch1",
+      "sketch_timeline_index": 0,
+      "profile_index": 0,
+      "loops": [
+       {
+        "isOuter": true,
+        "curves": [
+         "c0",
+         "c1",
+         "c2",
+         "c3"
+        ]
+       }
+      ],
+      "area": 2.0,
+      "centroid": [
+       1.0,
+       0.5,
+       0.0
+      ]
+     },
+     "extentType": "OneSideFeatureExtentType",
+     "extentOne": {
+      "_type": "DistanceExtentDefinition",
+      "distance": {
+       "kind": "parameter",
+       "name": "d2",
+       "expression": "10 mm",
+       "value": 1.0,
+       "unit": "mm"
+      }
+     },
+     "extentTwo": {
+      "_error": "RuntimeError: 3 : no second side"
+     },
+     "startExtent": {
+      "_type": "ProfilePlaneStartDefinition"
+     },
+     "taperAngleOne": {
+      "kind": "parameter",
+      "name": "d3",
+      "expression": "0 deg",
+      "value": 0.0,
+      "unit": "deg"
+     },
+     "participantBodies": [],
+     "isSolid": true
+    },
+    "props": {
+     "healthState": "HealthyFeatureHealthState",
+     "parentComponent": {
+      "kind": "component",
+      "name": "Root",
+      "id": "comp-root"
+     }
+    },
+    "outputs": {
+     "bodies": [
+      {
+       "kind": "body",
+       "objectType": "BRepBody",
+       "entityToken": "tok-body-Body1",
+       "component": "Root",
+       "occurrence": null,
+       "name": "Body1",
+       "isSolid": true,
+       "volume": 2.0,
+       "area": 10.0,
+       "bbox": {
+        "min": [
+         0.0,
+         0.0,
+         0.0
+        ],
+        "max": [
+         2.0,
+         1.0,
+         1.0
+        ]
+       },
+       "face_count": 2,
+       "edge_count": 1,
+       "vertex_count": 0
+      }
+     ],
+     "faces_count": 2,
+     "faces": [
+      {
+       "kind": "face",
+       "objectType": "BRepFace",
+       "entityToken": "tok-face-top",
+       "tempId": 1,
+       "body": "Body1",
+       "component": "Root",
+       "occurrence": null,
+       "geometry": {
+        "type": "Plane",
+        "origin": [
+         0.0,
+         0.0,
+         1.0
+        ],
+        "normal": [
+         0.0,
+         0.0,
+         1.0
+        ],
+        "uDirection": [
+         1.0,
+         0.0,
+         0.0
+        ],
+        "vDirection": [
+         0.0,
+         1.0,
+         0.0
+        ]
+       },
+       "area": 2.0,
+       "isParamReversed": false,
+       "point_on_face": [
+        1.0,
+        0.5,
+        1.0
+       ],
+       "normal_at_point": [
+        0.0,
+        0.0,
+        1.0
+       ],
+       "bbox": {
+        "min": [
+         0.0,
+         0.0,
+         1.0
+        ],
+        "max": [
+         2.0,
+         1.0,
+         1.0
+        ]
+       },
+       "edge_count": 0,
+       "loop_count": 0
+      },
+      {
+       "kind": "face",
+       "objectType": "BRepFace",
+       "entityToken": "tok-face-hole",
+       "tempId": 2,
+       "body": "Body1",
+       "component": "Root",
+       "occurrence": null,
+       "geometry": {
+        "type": "Cylinder",
+        "origin": [
+         0.0,
+         0.0,
+         0.0
+        ],
+        "axis": [
+         0.0,
+         0.0,
+         1.0
+        ],
+        "radius": 0.25
+       },
+       "area": 1.57,
+       "isParamReversed": true,
+       "point_on_face": [
+        0.25,
+        0.0,
+        0.5
+       ],
+       "normal_at_point": [
+        -1.0,
+        0.0,
+        0.0
+       ],
+       "bbox": {
+        "min": [
+         -0.25,
+         -0.25,
+         0.0
+        ],
+        "max": [
+         0.25,
+         0.25,
+         1.0
+        ]
+       },
+       "edge_count": 0,
+       "loop_count": 0
+      }
+     ],
+     "startFaces_count": 0,
+     "startFaces": [],
+     "endFaces_count": 1,
+     "endFaces": [
+      {
+       "kind": "face",
+       "objectType": "BRepFace",
+       "entityToken": "tok-face-top",
+       "tempId": 1,
+       "body": "Body1",
+       "component": "Root",
+       "occurrence": null,
+       "geometry": {
+        "type": "Plane",
+        "origin": [
+         0.0,
+         0.0,
+         1.0
+        ],
+        "normal": [
+         0.0,
+         0.0,
+         1.0
+        ],
+        "uDirection": [
+         1.0,
+         0.0,
+         0.0
+        ],
+        "vDirection": [
+         0.0,
+         1.0,
+         0.0
+        ]
+       },
+       "area": 2.0,
+       "isParamReversed": false,
+       "point_on_face": [
+        1.0,
+        0.5,
+        1.0
+       ],
+       "normal_at_point": [
+        0.0,
+        0.0,
+        1.0
+       ],
+       "bbox": {
+        "min": [
+         0.0,
+         0.0,
+         1.0
+        ],
+        "max": [
+         2.0,
+         1.0,
+         1.0
+        ]
+       },
+       "edge_count": 0,
+       "loop_count": 0,
+       "loops": []
+      }
+     ],
+     "sideFaces_count": 0,
+     "sideFaces": []
+    }
+   },
+   {
+    "index": 2,
+    "group": null,
+    "name": "Plane1",
+    "isRolledBack": false,
+    "objectType": "ConstructionPlane",
+    "entityToken": "tok-plane1",
+    "component": "Root",
+    "isSuppressed": false,
+    "healthState": "HealthyFeatureHealthState",
+    "errorOrWarningMessage": "",
+    "detail_marker": 3,
+    "detail": {
+     "definition": {
+      "_error": "RuntimeError: definition not available"
+     },
+     "geometry": {
+      "type": "Plane",
+      "origin": [
+       0.0,
+       0.0,
+       3.0
+      ],
+      "normal": [
+       0.0,
+       0.0,
+       1.0
+      ],
+      "uDirection": [
+       1.0,
+       0.0,
+       0.0
+      ],
+      "vDirection": [
+       0.0,
+       1.0,
+       0.0
+      ]
+     }
+    },
+    "props": {
+     "component": {
+      "kind": "component",
+      "name": "Root",
+      "id": "comp-root"
+     }
+    },
+    "outputs": {}
+   }
+  ]
+ },
+ "errors": [],
+ "timing": {
+  "total_s": 0.005
+ }
+}

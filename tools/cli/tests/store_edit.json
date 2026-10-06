@@ -1,0 +1,6 @@
+[
+  {"comment": "The result store (P7d): the perf model's last feature edited (Fillet2 F12, radius 1.5), so that opening the copy with the store takes every feature before it from the store (cli.store_edit)."},
+  {"cmd": "edit_feature", "uid": "F12", "def": {"type": "fillet", "body": "F2.b0", "radius": 1.5, "edges": [
+    "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}"]}},
+  {"expect": {"feature": "Fillet2", "status": "ok", "bodies": 5, "body": "Body1"}}
+]

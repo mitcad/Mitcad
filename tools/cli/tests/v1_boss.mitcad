@@ -1,0 +1,34 @@
+{
+  "format": "mitcad",
+  "version": 1,
+  "parameters": [
+    { "name": "d1", "value": 60.0, "comment": "Sketch1 width" },
+    { "name": "d2", "value": 40.0, "comment": "Sketch1 height" },
+    { "name": "d3", "value": 20.0, "comment": "Extrude1 distance" },
+    { "name": "d4", "value": 20.0, "comment": "Sketch2 width" },
+    { "name": "d5", "value": 10.0, "comment": "Sketch2 height" },
+    { "name": "d6", "value": 10.0, "comment": "Sketch2 diameter" },
+    { "name": "d7", "value": 30.0, "comment": "Extrude2 distance" },
+    { "name": "d8", "value": 30.0, "comment": "Extrude3 distance" },
+    { "name": "d9", "value": 2.0, "comment": "Fillet1 radius" }
+  ],
+  "features": [
+    { "type": "sketch", "name": "Sketch1", "shapes": [
+      { "type": "rectangle", "corner": [0.0, 0.0], "width": "d1", "height": "d2" }
+    ] },
+    { "type": "extrude", "name": "Extrude1", "sketch": "Sketch1", "profile": 0,
+      "distance": "d3", "operation": "new_body" },
+    { "type": "sketch", "name": "Sketch2", "shapes": [
+      { "type": "rectangle", "corner": [10.0, 10.0], "width": "d4", "height": "d5" },
+      { "type": "circle", "center": [45.0, 20.0], "diameter": "d6" }
+    ] },
+    { "type": "extrude", "name": "Extrude2", "sketch": "Sketch2", "profile": 0,
+      "distance": "d7", "operation": "join", "body": "Extrude1" },
+    { "type": "extrude", "name": "Extrude3", "sketch": "Sketch2", "profile": 1,
+      "distance": "d8", "operation": "cut", "body": "Extrude1" },
+    { "type": "fillet", "name": "Fillet1", "body": "Extrude1", "edges": [
+      { "extrude": "Extrude1", "role": "side", "index": 1 },
+      { "extrude": "Extrude2", "role": "side", "index": 1 }
+    ], "radius": "d9" }
+  ]
+}

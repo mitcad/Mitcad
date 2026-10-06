@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-3mf"
+description = "3MF (3D Manufacturing Format) writer and reader for Mitcad's meshes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mitcad_3mf"
+
+[dependencies]
+# The package is a zip archive (OPC); the model part is XML.
+mitcad-zip = { path = "../zip" }
+roxmltree = "0.20.0"

@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-vcs"
+description = "Local version history of Mitcad projects (git repositories, gitoxide)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Exact version: gix is 0.x and breaks its API about monthly; an update is a
+# task of its own (tests, cargo deny). Objects, trees, commits, references,
+# the revision walk and the index are all P12 needs. The default features
+# are not allowed: one of them pulls in an MPL-2.0 crate (cargo deny).
+gix = { version = "=0.88.0", default-features = false, features = ["sha1", "index"] }
+mitcad-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# setsid() and kill() for the git program (remote/cli.rs): git runs without
+# the terminal Mitcad was started from, and a cancel ends its children too.
+libc = "0.2.190"
+
+[dev-dependencies]
+# The mock geometry kernel for documents read from older versions.
+mitcad-model = { workspace = true, features = ["testing"] }

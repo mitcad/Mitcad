@@ -1,0 +1,359 @@
+// SPDX-License-Identifier: MIT
+//! The file's components and occurrences as Mitcad's (F6).
+//!
+//! The dump's components become Mitcad components placed by its occurrence
+//! tree before the timeline is replayed. Top-level occurrences of the
+//! stream decoder carry their `transform` (relative to the root), nested
+//! ones `_f3d.local_transform` (relative to their parent component, T2);
+//! an external dump's `transform2` places a full path in the design, which is
+//! made relative to the parent occurrence. Occurrences of components that
+//! live in other documents (`isReferencedComponent`) are left out: their
+//! bodies are not in the file.
+//!
+//! Every timeline item then goes into its component (the file has a single
+//! timeline): an external dump names it (`component`); for the stream
+//! decoder the ASM history tells whose bodies the item's operation changed
+//! (each component keeps its bodies in its own blob, in its own
+//! coordinates), sketches and construction geometry follow the first
+//! feature that uses them, and items with neither follow the next item
+//! that has a component (else the one before).
+
+use std::collections::{BTreeMap, HashMap};
+
+use mitcad_f3d::design::ir::{Dump, Mat4, OccurrenceNode};
+use mitcad_model::assembly::{from_rows, inverse};
+use mitcad_model::{ComponentUid, Document, Kernel, Transform};
+use serde::Serialize;
+use serde_json::Value;
+
+use crate::history::Oracle;
+
+/// What the import made of the file's components.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ComponentReport {
+    /// Components made (the root excluded).
+    pub components: usize,
+    /// Occurrences placed.
+    pub occurrences: usize,
+    /// Occurrences of components in other documents, left out.
+    pub external: usize,
+    /// Timeline items by the component they went into (the file's names).
+    pub items: BTreeMap<String, usize>,
+}
+
+/// The file's components and the items in them, in Mitcad's terms.
+#[derive(Debug, Default)]
+pub(crate) struct Components {
+    /// By the component's object id in the file (`_f3d.object_id`).
+    by_object: HashMap<u64, ComponentUid>,
+    /// By the component's name.
+    by_name: HashMap<String, ComponentUid>,
+    /// Timeline item index → its component.
+    items: HashMap<i64, ComponentUid>,
+    /// Items whose component the dump or the history gives (not inferred
+    /// from their neighbours).
+    known: std::collections::HashSet<i64>,
+}
+
+impl Components {
+    /// The component of a body of the history (by its component's object
+    /// id); the root when unknown.
+    pub fn of_body(&self, component: Option<u64>) -> ComponentUid {
+        component
+            .and_then(|c| self.by_object.get(&c))
+            .copied()
+            .unwrap_or(ComponentUid::ROOT)
+    }
+
+    /// The component of a timeline item.
+    pub fn of_item(&self, index: i64) -> ComponentUid {
+        self.items
+            .get(&index)
+            .copied()
+            .unwrap_or(ComponentUid::ROOT)
+    }
+
+    /// Whether the dump or the history gives the item's component.
+    pub fn is_known(&self, index: i64) -> bool {
+        self.known.contains(&index)
+    }
+}
+
+/// A matrix of the dump (cm) as a rigid transform in millimetres; None when it
+/// is not a rotation and a translation.
+fn transform(m: &Mat4) -> Option<Transform> {
+    let rows: Vec<Vec<f64>> = (0..3)
+        .map(|r| vec![m[r][0], m[r][1], m[r][2], m[r][3] * 10.0])
+        .collect();
+    from_rows(&rows).ok()
+}
+
+/// Makes the dump's components and occurrences in the document.
+pub(crate) fn import_components<K: Kernel>(
+    doc: &mut Document<K>,
+    dump: &Dump,
+    names: &HashMap<u64, String>,
+    report: &mut ComponentReport,
+    warnings: &mut Vec<String>,
+) -> Components {
+    let mut out = Components::default();
+    let root_name = dump
+        .document
+        .as_ref()
+        .and_then(|d| d.root_component.clone());
+    // The root takes the design's name.
+    if let Some(name) = root_name.as_deref().filter(|n| !n.trim().is_empty())
+        && let Err(e) = doc.rename_component(ComponentUid::ROOT, name)
+    {
+        warnings.push(format!("root component name: {e}"));
+    }
+    // The root: flagged, or named as the document's root component.
+    for c in dump.components.iter().flatten() {
+        let name = c.name.clone().flatten();
+        let object = c.f3d.as_ref().and_then(|f| f.object_id);
+        let root =
+            c.is_root == Some(true) || (name.is_some() && name == root_name && c.is_root.is_none());
+        if root {
+            if let Some(o) = object {
+                out.by_object.insert(o, ComponentUid::ROOT);
+            }
+            if let Some(n) = name {
+                out.by_name.insert(n, ComponentUid::ROOT);
+            }
+        }
+    }
+    // Names of the file's components by object id, for occurrences that
+    // only name theirs (external dumps).
+    let mut objects: HashMap<String, u64> = names.iter().map(|(o, n)| (n.clone(), *o)).collect();
+    for c in dump.components.iter().flatten() {
+        if let (Some(n), Some(o)) = (
+            c.name.clone().flatten(),
+            c.f3d.as_ref().and_then(|f| f.object_id),
+        ) {
+            objects.insert(n, o);
+        }
+    }
+    let mut placer = Placer {
+        doc,
+        out: &mut out,
+        objects: &objects,
+        report,
+        warnings,
+    };
+    for node in dump.occurrences.iter().flatten() {
+        placer.place(node, ComponentUid::ROOT, Transform::IDENTITY, 0);
+    }
+    out
+}
+
+struct Placer<'a, K: Kernel> {
+    doc: &'a mut Document<K>,
+    out: &'a mut Components,
+    objects: &'a HashMap<String, u64>,
+    report: &'a mut ComponentReport,
+    warnings: &'a mut Vec<String>,
+}
+
+impl<K: Kernel> Placer<'_, K> {
+    /// Places an occurrence node in `parent` (whose placement in the design
+    /// is `parent_world`), then its children in its component.
+    fn place(
+        &mut self,
+        node: &OccurrenceNode,
+        parent: ComponentUid,
+        parent_world: Transform,
+        depth: usize,
+    ) {
+        if depth > 32 {
+            return;
+        }
+        let f3d = node.f3d.as_ref();
+        if node.is_referenced_component == Some(true) {
+            self.report.external += 1;
+            return;
+        }
+        let name = node.component.clone().flatten();
+        let object = f3d
+            .and_then(|f| f.component_object)
+            .or_else(|| name.as_ref().and_then(|n| self.objects.get(n).copied()));
+        // Its placement in the parent: an external dump's full path made
+        // relative, or the decoder's own transform.
+        let world_given = node.transform2.as_ref().and_then(transform);
+        let local = match world_given {
+            Some(world) => inverse(&parent_world).after(&world),
+            None => {
+                let matrix = if depth == 0 {
+                    node.transform
+                } else {
+                    f3d.and_then(|f| f.local_transform)
+                };
+                match matrix {
+                    Some(m) => transform(&m).unwrap_or_else(|| {
+                        self.warnings.push(format!(
+                            "occurrence of {}: its transform is not rigid; placed at the origin",
+                            name.as_deref().unwrap_or("?")
+                        ));
+                        Transform::IDENTITY
+                    }),
+                    None => Transform::IDENTITY,
+                }
+            }
+        };
+        let world = parent_world.after(&local);
+        let known = object
+            .and_then(|o| self.out.by_object.get(&o))
+            .or_else(|| name.as_ref().and_then(|n| self.out.by_name.get(n)))
+            .copied();
+        let made = match known {
+            Some(c) if c.is_root() => return,
+            Some(c) => self.doc.add_occurrence(c, parent, local).map(|o| (c, o)),
+            None => self.doc.add_component(name.as_deref(), parent, local),
+        };
+        let (component, occurrence) = match made {
+            Ok(made) => made,
+            Err(e) => {
+                self.warnings.push(format!(
+                    "occurrence of {}: {e}",
+                    name.as_deref().unwrap_or("?")
+                ));
+                return;
+            }
+        };
+        if known.is_none() {
+            self.report.components += 1;
+            if let Some(o) = object {
+                self.out.by_object.insert(o, component);
+            }
+            if let Some(n) = &name {
+                self.out.by_name.entry(n.clone()).or_insert(component);
+            }
+        }
+        self.report.occurrences += 1;
+        if node.is_grounded == Some(true) {
+            let _ = self.doc.set_occurrence_grounded(occurrence, true);
+        }
+        if node.is_light_bulb_on.or(node.is_visible) == Some(false) {
+            let _ = self.doc.set_occurrence_visible(occurrence, false);
+        }
+        // A component placed again keeps the children it already has.
+        if known.is_some() {
+            return;
+        }
+        for child in node.children.iter().flatten() {
+            self.place(child, component, world, depth + 1);
+        }
+    }
+}
+
+/// The earlier items an item refers to (`timeline_index`,
+/// `sketch_timeline_index` anywhere in it).
+pub(crate) fn references(value: &Value, out: &mut Vec<i64>) {
+    match value {
+        Value::Object(map) => {
+            for (key, v) in map {
+                if matches!(key.as_str(), "timeline_index" | "sketch_timeline_index")
+                    && let Some(i) = v.as_i64()
+                {
+                    out.push(i);
+                } else {
+                    references(v, out);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for v in items {
+                references(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Puts every timeline item into a component (see the module docs).
+pub(crate) fn assign_items<S: Clone>(
+    dump: &Dump,
+    oracle: &mut Oracle<'_, S>,
+    components: &mut Components,
+    report: &mut ComponentReport,
+) {
+    let items = dump.timeline_items();
+    let index_of = |position: usize| items[position].index.unwrap_or(position as i64);
+    // Known from the item itself: its name (external dumps) or the bodies its
+    // operation changed (history).
+    let mut known: HashMap<i64, ComponentUid> = HashMap::new();
+    for (position, item) in items.iter().enumerate() {
+        let index = index_of(position);
+        let named = item
+            .component
+            .clone()
+            .flatten()
+            .and_then(|n| components.by_name.get(&n).copied());
+        let from_history = || {
+            let changed: Vec<ComponentUid> = oracle
+                .item_components(index)?
+                .into_iter()
+                .map(|o| components.of_body(Some(o)))
+                .collect();
+            let first = *changed.first()?;
+            changed.iter().all(|c| *c == first).then_some(first)
+        };
+        if let Some(c) = named.or_else(from_history) {
+            known.insert(index, c);
+        }
+        if crate::tracing() {
+            eprintln!(
+                "import: item {index} {}: changed components {:?}, component {:?}",
+                item.name().unwrap_or("?"),
+                oracle.item_components(index),
+                known.get(&index)
+            );
+        }
+    }
+    components.known = known.keys().copied().collect();
+    // Sketches and construction geometry follow the first item that uses
+    // them.
+    let mut used: HashMap<i64, ComponentUid> = HashMap::new();
+    for position in (0..items.len()).rev() {
+        let index = index_of(position);
+        let Some(c) = known.get(&index).or_else(|| used.get(&index)).copied() else {
+            continue;
+        };
+        let Ok(value) = serde_json::to_value(&items[position]) else {
+            continue;
+        };
+        let mut referenced = Vec::new();
+        references(&value, &mut referenced);
+        for r in referenced.into_iter().filter(|r| *r < index) {
+            if !known.contains_key(&r) {
+                used.insert(r, c);
+            }
+        }
+    }
+    // The rest follow the next item with a component, else the one before.
+    let mut next: Option<ComponentUid> = None;
+    let mut assigned: Vec<Option<ComponentUid>> = vec![None; items.len()];
+    for position in (0..items.len()).rev() {
+        let index = index_of(position);
+        let own = known.get(&index).or_else(|| used.get(&index)).copied();
+        if own.is_some() {
+            next = own;
+        }
+        assigned[position] = own.or(next);
+    }
+    let mut previous = ComponentUid::ROOT;
+    for (position, a) in assigned.iter().enumerate() {
+        let c = a.unwrap_or(previous);
+        previous = c;
+        components.items.insert(index_of(position), c);
+    }
+    // The report counts items by the file's component names.
+    let names: HashMap<ComponentUid, String> = components
+        .by_name
+        .iter()
+        .map(|(n, c)| (*c, n.clone()))
+        .collect();
+    for c in components.items.values() {
+        let name = names.get(c).cloned().unwrap_or_else(|| c.to_string());
+        *report.items.entry(name).or_default() += 1;
+    }
+}

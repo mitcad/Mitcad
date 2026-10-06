@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-ffi"
+description = "C++ bridge between the Mitcad model and the Qt/OCCT application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mitcad_ffi"
+crate-type = ["staticlib"]
+# The bridge needs the C++ geometry library to link, so it is tested through
+# the application build (ctest) instead of `cargo test`.
+test = false
+doctest = false
+
+[dependencies]
+cxx.workspace = true
+mitcad-model.workspace = true
+mitcad-f3d = { path = "../f3d" }
+# The .f3d import with the timeline (T1).
+mitcad-import = { path = "../import" }
+# Version history (P12b).
+mitcad-vcs = { path = "../vcs" }
+serde.workspace = true
+serde_json.workspace = true
+# Automatic updates (mitcad#9).
+mitcad-update = { path = "../update" }

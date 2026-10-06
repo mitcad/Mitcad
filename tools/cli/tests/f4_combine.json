@@ -1,0 +1,43 @@
+[
+  {"comment": "The reference models comb_* (group diff_combine_operation): A 40 x 20 x 20 at x 0..40 (Sketch1 F1, Extrude1 F2) and B at x 20..60 (Sketch2 F3, Extrude2 F4), overlapping in a 20 mm cube."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [20, 0], "width": 40, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"expect": {"bodies": 2, "total_volume": 32000}},
+
+  {"comment": "comb_join: one 60 x 20 x 20 body (24000 mm3); B's far end keeps its name, the flush faces merged."},
+  {"cmd": "add_feature", "def": {"type": "combine", "target": "F2.b0", "tools": ["F4.b0"], "operation": "join"}},
+  {"expect": {"feature": "Combine1", "status": "ok", "bodies": 1}},
+  {"expect": {"body": "Body1", "volume": 24000, "faces": 6, "has_face": "F4:side(c2[c1,c3])",
+    "bbox": {"min": [0, 0, 0], "max": [60, 20, 20]}}},
+
+  {"comment": "comb_cut: A loses the overlap (8000 mm3) and B is consumed; the cut face is B's left side."},
+  {"cmd": "edit_feature", "uid": "F5", "def": {"type": "combine", "target": "F2.b0", "tools": ["F4.b0"], "operation": "cut"}},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 8000, "has_face": "F4:side(c4[c3,c1])",
+    "bbox": {"min": [0, 0, 0], "max": [20, 20, 20]}}},
+
+  {"comment": "comb_cut_keep_tools: B stays (8000 + 16000 mm3)."},
+  {"cmd": "edit_feature", "uid": "F5", "def": {"type": "combine", "target": "F2.b0", "tools": ["F4.b0"], "operation": "cut", "keep_tools": true}},
+  {"expect": {"bodies": 2, "total_volume": 24000, "body": "Body2", "volume": 16000}},
+
+  {"comment": "comb_intersect: the common 20 mm cube."},
+  {"cmd": "edit_feature", "uid": "F5", "def": {"type": "combine", "target": "F2.b0", "tools": ["F4.b0"], "operation": "intersect"}},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 8000,
+    "bbox": {"min": [20, 0, 0], "max": [40, 20, 20]}}},
+
+  {"comment": "B moved away first (Move1, inserted before the combine): a join of bodies that do not touch is one body of two solids (experiment K48); an intersection fails."},
+  {"cmd": "set_marker", "position": 4},
+  {"cmd": "add_feature", "def": {"type": "move", "bodies": ["F4.b0"],
+    "transform": {"type": "translate_xyz", "x": 100, "y": 0, "z": 0}}},
+  {"cmd": "set_marker", "position": 6},
+  {"expect": {"feature": "Combine1", "status": "error", "error_contains": "do not intersect", "bodies": 2}},
+  {"cmd": "edit_feature", "uid": "F5", "def": {"type": "combine", "target": "F2.b0", "tools": ["F4.b0"], "operation": "join"}},
+  {"expect": {"feature": "Combine1", "status": "ok", "bodies": 1, "body": "Body1", "volume": 32000, "faces": 12}}
+]

@@ -1,0 +1,5 @@
+[
+  {"comment": "Run on plate.mitcad (f6_assembly.json's result): the plates 10 mm thick, so the components linked to the file change when their projects open."},
+  {"cmd": "set_parameter", "name": "d3", "value": 10},
+  {"expect": {"instances": 4, "world_volume": 16251.327412287183}}
+]

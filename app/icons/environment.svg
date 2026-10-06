@@ -1,0 +1,13 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Mitcad icon: 24 x 24, dark outline, blue solids, orange actions. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2b3a4a" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f6f9"/>
+      <stop offset="1" stop-color="#9aa6b6"/>
+    </linearGradient>
+  </defs>
+  <rect x="3" y="4" width="18" height="16" fill="url(#sky)"/>
+  <circle cx="16" cy="9" r="2.2" fill="#f3c48a" stroke="#e07b1a"/>
+  <path d="M3 17 L9 12 L13 15 L21 11" />
+</svg>

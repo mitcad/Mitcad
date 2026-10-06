@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<!--
+  Hardened-runtime entitlements for the Developer ID signature
+  (tools/package-macos.sh with MITCAD_SIGN_IDENTITY; ad-hoc builds use none).
+
+  Mitcad needs no exception from the hardened runtime: it has no JIT and
+  writes no executable memory (com.apple.security.cs.allow-jit is absent),
+  loads no unsigned or third-party plug-ins, and OpenGL needs no
+  entitlement. com.apple.security.cs.disable-library-validation is absent on
+  purpose: every dylib, framework and Qt plug-in in the bundle (Qt, OCCT,
+  FreeType) is signed with the same Developer ID as the application, so
+  library validation passes and stays on, which keeps a foreign dylib from
+  being injected. Add it only if a component that is signed by someone else
+  is ever loaded, and note the reason here.
+
+  The app is not sandboxed (it opens files anywhere and starts its own
+  executable for the .f3d import worker), so there is no
+  com.apple.security.app-sandbox either.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+</dict>
+</plist>

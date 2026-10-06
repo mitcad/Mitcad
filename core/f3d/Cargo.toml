@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-f3d"
+description = "Reader for .f3d files: container, ASM B-rep geometry and its neutral B-rep model; the design streams as the dump IR"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+# Python helper scripts, not part of the crate.
+exclude = ["tools/"]
+
+[lib]
+name = "mitcad_f3d"
+
+[[bin]]
+name = "mitcad-f3d-inspect"
+path = "src/bin/mitcad-f3d-inspect.rs"
+
+[dependencies]
+# The zip container (shared with the .FCStd reader).
+mitcad-zip = { path = "../zip" }
+# The design dump IR (core/import/SCHEMA.md) is JSON.
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# Corpus test: parameter expressions evaluated against the stored values.
+mitcad-model.workspace = true

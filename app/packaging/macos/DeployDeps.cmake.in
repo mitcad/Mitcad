@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: MIT
+# Install-time step of the macOS bundle (macOS only). app/packaging/macos/Bundle.cmake
+# fills the placeholders between at signs and runs this script with
+# install(SCRIPT) after the bundle is installed and before Qt's deploy script.
+#
+# Copies the non-Qt shared libraries of mitcad (OCCT, FreeType and what they
+# link, all from vcpkg) into Contents/Frameworks. Qt's macdeployqt handles Qt
+# alone: the installed binary's rpath is only @executable_path/../Frameworks,
+# so it could not find vcpkg's libraries by itself. Doing the copy here works
+# the same whatever macdeployqt does with libraries it does not know, and
+# needs nothing but file(GET_RUNTIME_DEPENDENCIES) (CMake 3.16, otool).
+#
+# The dependencies are those of the executable in the BUILD tree
+# (MITCAD_BUILD_EXECUTABLE, set by an install(CODE) before this script), not
+# of the installed one: on macOS, file(GET_RUNTIME_DEPENDENCIES) resolves an
+# @rpath/ reference only by the rpaths of the file and of the libraries that
+# refer to it, and DIRECTORIES does not apply to it. The installed binary's
+# only rpath is @executable_path/../Frameworks, which is still empty here, so
+# every library of vcpkg was "not found"; the build tree's executable has
+# vcpkg's library directory (Release or Debug) as its rpath.
+
+set(mitcad_bundle "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/@MITCAD_BUNDLE_DIR@")
+set(mitcad_frameworks "${mitcad_bundle}/Contents/Frameworks")
+
+# vcpkg keeps the Debug libraries apart in debug/lib.
+set(mitcad_dep_dirs "@MITCAD_DEPS_LIB_DIR@")
+if(CMAKE_INSTALL_CONFIG_NAME MATCHES "^[Dd]ebug$" AND IS_DIRECTORY "@MITCAD_DEPS_DEBUG_LIB_DIR@")
+  set(mitcad_dep_dirs "@MITCAD_DEPS_DEBUG_LIB_DIR@")
+endif()
+
+if(NOT EXISTS "${MITCAD_BUILD_EXECUTABLE}")
+  message(FATAL_ERROR "The built executable '${MITCAD_BUILD_EXECUTABLE}' is missing; build mitcad first")
+endif()
+
+file(GET_RUNTIME_DEPENDENCIES
+  EXECUTABLES "${MITCAD_BUILD_EXECUTABLE}"
+  RESOLVED_DEPENDENCIES_VAR mitcad_resolved
+  UNRESOLVED_DEPENDENCIES_VAR mitcad_unresolved
+  DIRECTORIES ${mitcad_dep_dirs}
+  # Qt (frameworks, by their names in the load commands) is macdeployqt's job;
+  # the system's libraries and frameworks are never bundled.
+  PRE_EXCLUDE_REGEXES "^@rpath/Qt[^/]*\\.framework/" "^@rpath/libQt" "^/System/Library/" "^/usr/lib/"
+  POST_EXCLUDE_REGEXES "^/System/Library/" "^/usr/lib/" "\\.framework/")
+
+foreach(mitcad_dep IN LISTS mitcad_resolved)
+  message(STATUS "Bundling ${mitcad_dep}")
+  file(INSTALL DESTINATION "${mitcad_frameworks}" TYPE SHARED_LIBRARY FOLLOW_SYMLINK_CHAIN
+    FILES "${mitcad_dep}")
+endforeach()
+
+# Not fatal here: tools/check-bundle-macos.sh checks that every library the
+# bundle refers to is in it.
+foreach(mitcad_dep IN LISTS mitcad_unresolved)
+  message(WARNING "Not found, not bundled: ${mitcad_dep}")
+endforeach()

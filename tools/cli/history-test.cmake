@@ -1,0 +1,190 @@
+# SPDX-License-Identifier: MIT
+# Version history (P12b) through mitcad-cli: a project with history, three
+# versions of a project file with base features (the first, a parameter
+# changed, a base feature deleted with its B-rep data), the first version
+# opened with the same bodies and restored, and, where git is installed,
+# the repository as the system's git sees it.
+#
+# cmake -DCLI=<mitcad-cli> -DSOURCE=<file.mitcad with base features F4 and d3>
+#       -DWORK=<folder> [-DGIT=<git>] -P history-test.cmake
+
+foreach(var CLI SOURCE WORK)
+  if(NOT DEFINED ${var})
+    message(FATAL_ERROR "history-test.cmake needs -D${var}=...")
+  endif()
+endforeach()
+
+set(project "${WORK}/project")
+set(part "${project}/part.mitcad")
+set(author "Mitcad Test <test@example.invalid>")
+
+function(cli expect)
+  execute_process(COMMAND "${CLI}" ${ARGN} RESULT_VARIABLE status OUTPUT_VARIABLE out ERROR_VARIABLE err)
+  if(expect STREQUAL "ok" AND NOT status EQUAL 0)
+    message(FATAL_ERROR "mitcad-cli ${ARGN} failed (${status}):\n${out}${err}")
+  elseif(expect STREQUAL "fail" AND status EQUAL 0)
+    message(FATAL_ERROR "mitcad-cli ${ARGN} should fail:\n${out}${err}")
+  endif()
+  set(out "${out}${err}" PARENT_SCOPE)
+endfunction()
+
+function(git)
+  execute_process(COMMAND "${GIT}" -C "${project}" ${ARGN} RESULT_VARIABLE status OUTPUT_VARIABLE out
+                  ERROR_VARIABLE err)
+  if(NOT status EQUAL 0)
+    message(FATAL_ERROR "git ${ARGN} failed (${status}):\n${out}${err}")
+  endif()
+  set(out "${out}" PARENT_SCOPE)
+endfunction()
+
+# The number of different B-rep data the project file refers to.
+function(references result)
+  file(READ "${part}" text)
+  string(REGEX MATCHALL "\"sha256\": \"[0-9a-f]+\"" found "${text}")
+  list(REMOVE_DUPLICATES found)
+  list(LENGTH found count)
+  set(${result} ${count} PARENT_SCOPE)
+endfunction()
+
+# The project's store keeps exactly what the project file refers to.
+function(check_store when)
+  references(count)
+  file(GLOB_RECURSE files "${project}/.mitcad/brep/*")
+  list(LENGTH files stored)
+  if(NOT stored EQUAL count)
+    message(FATAL_ERROR "${when}: the store has ${stored} files for ${count} B-rep data")
+  endif()
+endfunction()
+
+file(REMOVE_RECURSE "${WORK}")
+file(MAKE_DIRECTORY "${WORK}")
+
+cli(ok project init "${project}" --author "${author}")
+if(NOT out MATCHES "\"branch\":\"main\"" OR NOT out MATCHES "\"commit\":\"[0-9a-f]+\"")
+  message(FATAL_ERROR "project init made no first version: ${out}")
+endif()
+cli(fail history "${SOURCE}")
+if(NOT out MATCHES "is not in a Mitcad project")
+  message(FATAL_ERROR "history of a file outside projects: ${out}")
+endif()
+
+# The first version: the file and its B-rep data.
+cli(ok convert "${SOURCE}" "${part}" --format v3)
+references(first_count)
+cli(ok version save "${part}" -m "First version" --author "${author}")
+math(EXPR written "${first_count} + 1")
+if(NOT out MATCHES "^Recorded version [0-9a-f]+ of part.mitcad: ${written} file\\(s\\) written, 0 removed")
+  message(FATAL_ERROR "version save: ${out}")
+endif()
+cli(ok version save "${part}" --author "${author}")
+if(NOT out MATCHES "^No changes since the latest version of part.mitcad")
+  message(FATAL_ERROR "a save without changes: ${out}")
+endif()
+
+# A parameter changes.
+file(WRITE "${WORK}/d3.json" "[{\"cmd\": \"set_parameter\", \"name\": \"d3\", \"value\": 25}]")
+cli(ok run "${WORK}/d3.json" --open "${part}" --save "${part}")
+cli(ok version save "${part}" -m "d3 = 25 mm" --author "${author}")
+if(NOT out MATCHES ": 1 file\\(s\\) written, 0 removed")
+  message(FATAL_ERROR "version save after a parameter change: ${out}")
+endif()
+
+# A base feature goes, and its B-rep data with it.
+file(WRITE "${WORK}/delete.json" "[{\"cmd\": \"delete_feature\", \"uid\": \"F4\"}]")
+cli(ok run "${WORK}/delete.json" --open "${part}" --save "${part}")
+references(after)
+math(EXPR gone "${first_count} - ${after}")
+cli(ok version save "${part}" -m "Delete Base1" --author "${author}")
+if(gone EQUAL 0 OR NOT out MATCHES ": 1 file\\(s\\) written, ${gone} removed")
+  message(FATAL_ERROR "version save after deleting a base feature (${gone} data less): ${out}")
+endif()
+check_store("after deleting a base feature")
+
+# Three versions, newest first.
+cli(ok history "${part}" --json)
+string(REGEX MATCHALL "\"id\":\"[0-9a-f]+\"" ids "${out}")
+list(LENGTH ids count)
+if(NOT count EQUAL 3)
+  message(FATAL_ERROR "history: ${count} versions:\n${out}")
+endif()
+list(GET ids 2 first)
+string(REGEX REPLACE ".*\"([0-9a-f]+)\"" "\\1" first "${first}")
+cli(ok history "${part}")
+if(NOT out MATCHES "^Versions of part.mitcad \\(3\\), newest first:\n  v3 .*Delete Base1\n.*  v1 .*First version\n")
+  message(FATAL_ERROR "history as text:\n${out}")
+endif()
+
+# The first version opens with the bodies of the file it came from, and
+# written out it is that file.
+cli(ok info "${SOURCE}")
+set(source_report "${out}")
+cli(ok version show "${part}" "${first}" --save "${WORK}/first.mitcad")
+if(NOT out STREQUAL source_report)
+  message(FATAL_ERROR "the first version opens differently:\n${out}\nthe file:\n${source_report}")
+endif()
+file(READ "${SOURCE}" source_text)
+file(READ "${WORK}/first.mitcad" first_text)
+if(NOT first_text STREQUAL source_text)
+  message(FATAL_ERROR "the first version written as one file differs from the file")
+endif()
+string(SUBSTRING "${first}" 0 8 short)
+cli(ok version show "${part}" HEAD~2)
+if(NOT out STREQUAL source_report)
+  message(FATAL_ERROR "HEAD~2 opens differently:\n${out}")
+endif()
+cli(fail version show "${part}" 0000000)
+if(NOT out MATCHES "there is no version '0000000'")
+  message(FATAL_ERROR "a version that is not there: ${out}")
+endif()
+
+# What differs between versions.
+cli(ok version changes "${part}" "${short}" HEAD~1)
+if(NOT out STREQUAL "M part.mitcad\n")
+  message(FATAL_ERROR "changes of the parameter: ${out}")
+endif()
+cli(ok version changes "${project}" HEAD~1)
+if(NOT out MATCHES "^(D \\.mitcad/brep/[0-9a-f/]+\\.brep\\.zlib\n)+M part.mitcad\n$")
+  message(FATAL_ERROR "changes of the deletion: ${out}")
+endif()
+
+# The first version restored: a new version with its bodies and data.
+cli(ok version restore "${part}" "${short}" --author "${author}")
+math(EXPR written "${gone} + 1")
+if(NOT out MATCHES "^Recorded version [0-9a-f]+ of part.mitcad: ${written} file\\(s\\) written, 0 removed")
+  message(FATAL_ERROR "version restore: ${out}")
+endif()
+check_store("after the restore")
+cli(ok info "${part}")
+if(NOT out STREQUAL source_report)
+  message(FATAL_ERROR "the restored file opens differently:\n${out}")
+endif()
+cli(ok version changes "${part}" "${first}")
+if(NOT out STREQUAL "No changes\n")
+  message(FATAL_ERROR "the restored version differs from the first: ${out}")
+endif()
+
+# The repository as the system's git sees it.
+if(GIT)
+  git(fsck --strict --no-progress)
+  git(status --porcelain)
+  if(NOT out STREQUAL "")
+    message(FATAL_ERROR "git status is not clean:\n${out}")
+  endif()
+  git(log --first-parent --format=%H -- part.mitcad)
+  string(REGEX MATCHALL "[0-9a-f]+" logged "${out}")
+  cli(ok history "${part}" --json)
+  string(REGEX MATCHALL "\"id\":\"[0-9a-f]+\"" ids "${out}")
+  string(REGEX REPLACE "\"id\":\"([0-9a-f]+)\"" "\\1" ids "${ids}")
+  if(NOT logged STREQUAL ids)
+    message(FATAL_ERROR "git log differs from the history:\n${logged}\n${ids}")
+  endif()
+  git(show "${first}:part.mitcad")
+  file(READ "${part}" restored)
+  if(NOT out STREQUAL restored)
+    message(FATAL_ERROR "git show of the first version differs from the restored file")
+  endif()
+  set(checked "checked with git")
+else()
+  set(checked "git not found, not checked with it")
+endif()
+message(STATUS "version history: 4 versions, ${gone} B-rep data removed and restored; ${checked}")

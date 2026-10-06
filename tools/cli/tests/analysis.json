@@ -1,0 +1,44 @@
+[
+  {"comment": "Two overlapping bodies: Body1 60 x 40 x 20 at the origin (F2) and Body2 20 x 20 x 20 at (50, 30) (F4); they share 10 x 10 x 20 mm."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [50, 30], "width": 20, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"expect": {"bodies": 2}},
+  {"expect": {"query": {"query": "interference"},
+    "result": {"bodies": 2, "pairs": [{"a": "F2.b0", "b": "F4.b0", "volume": 2000, "names": ["Body1", "Body2"]}]}}},
+
+  {"comment": "Sections at z = 10, by an explicit plane and by a construction plane."},
+  {"expect": {"query": {"query": "section", "plane": {"origin": [0, 0, 10], "normal": [0, 0, 1]}},
+    "result": {"area": 2800, "length": 280,
+      "bodies": [{"uid": "F2.b0", "faces": 1, "edges": 4, "area": 2400}, {"uid": "F4.b0", "faces": 1, "area": 400}]}}},
+  {"cmd": "add_feature", "def": {"type": "construction_plane", "definition": {"type": "offset", "plane": "xy", "distance": 10}}},
+  {"expect": {"query": {"query": "section", "plane": "F5", "bodies": ["F4.b0"]},
+    "result": {"plane": {"origin": [0, 0, 10], "normal": [0, 0, 1]}, "area": 400}}},
+
+  {"comment": "Physical properties: steel by default, aluminium for Body2."},
+  {"cmd": "set_body_material", "uid": "F4.b0", "material": "aluminum"},
+  {"expect": {"query": {"query": "properties"}, "result": {
+    "bodies": [
+      {"uid": "F2.b0", "material": "steel", "density": 7.85, "volume": 48000, "mass": 0.3768,
+       "center_of_mass": [30, 20, 10], "inertia": [[62.8, 0, 0], [0, 125.6, 0], [0, 0, 163.28]]},
+      {"uid": "F4.b0", "material": "aluminum", "density": 2.7, "volume": 8000, "mass": 0.0216,
+       "center_of_mass": [60, 40, 10]}],
+    "total": {"mass": 0.3984, "volume": 56000}}}},
+  {"expect": {"query": {"query": "properties", "bodies": ["F2.b0"], "densities": {"F2.b0": 1}},
+    "result": {"bodies": [{"material": null, "mass": 0.048}]}}},
+
+  {"comment": "Hiding a body is an attribute; the analysis still sees it."},
+  {"cmd": "set_body_visible", "uid": "F2.b0", "visible": false},
+  {"expect": {"query": {"query": "bodies"}, "result": [
+    {"uid": "F2.b0", "name": "Body1", "visible": false},
+    {"uid": "F4.b0", "name": "Body2", "material": "aluminum"}]}},
+  {"expect": {"query": {"query": "measure", "a": "origin", "b": "Body2"},
+    "result": {"a": {"kind": "vertex", "point": [0, 0, 0]}, "between": {"distance": 58.309518948453004}}}}
+]

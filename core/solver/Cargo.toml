@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-solver"
+description = "2D sketch constraint solver for Mitcad"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# No dependencies: the linear algebra (sparse LDL^T with a minimum degree
+# ordering) and the automatic differentiation are part of the crate.
+[dependencies]

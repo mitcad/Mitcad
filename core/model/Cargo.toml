@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-model"
+description = "Parametric model, feature history and recompute logic for Mitcad"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+mitcad-solver = { path = "../solver" }
+serde.workspace = true
+serde_json.workspace = true
+# Imported bodies and sketch export (data exchange).
+miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }
+mitcad-dxf = { path = "../dxf" }
+# 3MF export for slicers (mitcad#13).
+mitcad-3mf = { path = "../3mf" }
+
+[features]
+# The mock geometry kernel (`mitcad_model::testing`) for other crates' tests.
+testing = []

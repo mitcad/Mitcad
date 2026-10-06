@@ -1,0 +1,42 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!--
+ SPDX-License-Identifier: MIT
+ A small GuiDocument.xml in the forms FreeCAD writes (0.21's ShapeColor and
+ DiffuseColor, 1.0's ShapeAppearance), made by hand for the reader's tests.
+-->
+<Document SchemaVersion="1" HasExpansion="1">
+    <Expand />
+    <ViewProviderData Count="3">
+        <ViewProvider name="Box" expanded="0">
+            <Properties Count="3" TransientCount="0">
+                <Property name="DiffuseColor" type="App::PropertyColorList" status="1">
+                    <ColorList file="DiffuseColor"/>
+                </Property>
+                <Property name="ShapeColor" type="App::PropertyColor" status="1">
+                    <PropertyColor value="4278190080"/>
+                </Property>
+                <Property name="Visibility" type="App::PropertyBool" status="1">
+                    <Bool value="true"/>
+                </Property>
+            </Properties>
+        </ViewProvider>
+        <ViewProvider name="Body" expanded="0">
+            <Properties Count="2" TransientCount="0">
+                <Property name="ShapeAppearance" type="App::PropertyMaterialList" status="1">
+                    <MaterialList file="ShapeAppearance" version="3"/>
+                </Property>
+                <Property name="Visibility" type="App::PropertyBool" status="1">
+                    <Bool value="false"/>
+                </Property>
+            </Properties>
+        </ViewProvider>
+        <ViewProvider name="Part" expanded="1">
+            <Properties Count="1" TransientCount="0">
+                <Property name="LineMaterial" type="App::PropertyMaterial" status="1">
+                    <PropertyMaterial ambientColor="858993408" diffuseColor="421075200" specularColor="0" emissiveColor="0" shininess="1.0000000000000000" transparency="0.0000000000000000" image="" imagePath="" uuid=""/>
+                </Property>
+            </Properties>
+        </ViewProvider>
+    </ViewProviderData>
+    <Camera settings=""/>
+</Document>

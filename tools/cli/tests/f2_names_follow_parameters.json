@@ -1,0 +1,41 @@
+[
+  {"comment": "Names of shell, fillet and split faces stay put when dimensions change. A 60 x 40 x 20 block (Sketch1 F1: d1, d2; Extrude1 F2: d3), shelled 2 mm inside with the top open (Shell1 F3: d4)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "shell", "body": "F2.b0",
+    "faces": ["F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"], "inside": 2}},
+  {"expect": {"parameter": "d4", "value": 2, "body": "Body1", "volume": 11712}},
+
+  {"comment": "Round the inner corner between the inner walls of c1 and c2 (Fillet1 F4, d5 = 1): a concave edge 18 mm long gains (1 - pi/4) mm2 along it."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+    "edges": ["E{F3:offset(F2:side(c1[c4,c2]))|F3:offset(F2:side(c2[c1,c3]))}"], "radius": 1}},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body1", "volume": 11715.862833058845,
+    "has_face": "F4:fillet(E{F3:offset(F2:side(c1[c4,c2]))|F3:offset(F2:side(c2[c1,c3]))})"}},
+
+  {"comment": "Wider: the fillet follows the inner corner, now at x = 78."},
+  {"cmd": "set_parameter", "name": "d1", "value": 80},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body1", "volume": 14755.862833058845,
+    "has_face": "F4:fillet(E{F3:offset(F2:side(c1[c4,c2]))|F3:offset(F2:side(c2[c1,c3]))})"}},
+
+  {"comment": "A thicker wall (3 mm): the cavity is 74 x 34 x 17 and the corner 17 mm high."},
+  {"cmd": "set_parameter", "name": "d4", "value": 3},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body1", "volume": 21231.648231222243}},
+
+  {"comment": "Split the shell across x = 30 (SplitBody1 F5, offset d6 = 30); the fillet stays on the piece at x > 30, a new body (Body2)."},
+  {"cmd": "add_feature", "def": {"type": "split_body", "bodies": ["F2.b0"],
+    "tool": {"type": "origin_plane", "plane": "yz", "offset": 30}}},
+  {"expect": {"feature": "SplitBody1", "status": "ok", "bodies": 2, "body": "Body2", "has_face": "F5:split",
+    "has_edge": "E{F3:offset(F2:side(c1[c4,c2]))|F4:fillet(E{F3:offset(F2:side(c1[c4,c2]))|F3:offset(F2:side(c2[c1,c3]))})}"}},
+
+  {"comment": "Moving the cut keeps both bodies and their names; the volumes add up."},
+  {"cmd": "set_parameter", "name": "d6", "value": 50},
+  {"expect": {"feature": "SplitBody1", "status": "ok", "bodies": 2, "body": "Body2", "has_face": "F5:split"}},
+  {"expect": {"body": "Body2", "has_face": "F4:fillet(E{F3:offset(F2:side(c1[c4,c2]))|F3:offset(F2:side(c2[c1,c3]))})"}},
+  {"expect": {"body": "Body1", "has_face": "F5:split", "no_edge": "E{F3:offset(F2:side(c1[c4,c2]))|F3:offset(F2:side(c2[c1,c3]))}"}},
+  {"cmd": "undo"},
+  {"cmd": "undo"},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 21231.648231222243}}
+]

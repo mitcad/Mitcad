@@ -1,0 +1,63 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Mitcad application icon (own drawing, MIT): an isometric block with a chamfered
+     front edge and an orange sketch profile on its top face. 1024 x 1024 canvas; the
+     rounded square follows Apple's macOS icon grid (824 body, 100 margin, radius 185).
+     Only plain shapes, gradients and dashes, so that Qt SVG renders it faithfully
+     (app/packaging/icon/make_iconset.cpp turns it into the macOS .icns). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3f5688"/>
+      <stop offset="1" stop-color="#151d30"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.2"/>
+      <stop offset="0.35" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="top" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7faff"/>
+      <stop offset="1" stop-color="#cddffc"/>
+    </linearGradient>
+    <linearGradient id="left" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7ea5f2"/>
+      <stop offset="1" stop-color="#4b74d6"/>
+    </linearGradient>
+    <linearGradient id="right" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3f68cf"/>
+      <stop offset="1" stop-color="#27449b"/>
+    </linearGradient>
+    <linearGradient id="chamfer" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d6e4ff"/>
+      <stop offset="1" stop-color="#8fb0f5"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background: macOS-style rounded square. -->
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#sheen)"/>
+
+  <!-- Soft ground shadow of the block. -->
+  <polygon points="295.5,640 512,765 728.5,640 512,515" fill="#000000" opacity="0.22"/>
+
+  <!-- The block in isometric view: left face, right face, chamfer, top face. -->
+  <g stroke-linejoin="round">
+    <polygon points="295.5,410 473,512.5 473,722.5 295.5,620" fill="url(#left)"/>
+    <polygon points="551,512.5 728.5,410 728.5,620 551,722.5" fill="url(#right)"/>
+    <polygon points="473,512.5 551,512.5 551,722.5 473,722.5" fill="url(#chamfer)"/>
+    <polygon points="512,285 728.5,410 551,512.5 473,512.5 295.5,410" fill="url(#top)"/>
+    <!-- Edge highlights. -->
+    <polyline points="295.5,410 473,512.5 473,722.5" fill="none" stroke="#ffffff" stroke-opacity="0.45" stroke-width="3"/>
+    <polyline points="551,512.5 728.5,410" fill="none" stroke="#ffffff" stroke-opacity="0.3" stroke-width="3"/>
+  </g>
+
+  <!-- Sketch profile on the top face: dashed outline with corner points. -->
+  <polygon points="512,335 631.1,403.75 522.8,466.25 403.75,397.5"
+           fill="#ff9a3c" fill-opacity="0.18" stroke="#f57c00" stroke-width="8"
+           stroke-dasharray="20 12" stroke-linejoin="round"/>
+  <g fill="#f57c00">
+    <circle cx="512" cy="335" r="11"/>
+    <circle cx="631.1" cy="403.75" r="11"/>
+    <circle cx="522.8" cy="466.25" r="11"/>
+    <circle cx="403.75" cy="397.5" r="11"/>
+  </g>
+</svg>

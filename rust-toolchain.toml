@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# The Rust toolchain of Mitcad, the same in WSL and on the Windows VM. The
+# setup scripts (tools/dev-env/setup-user.sh, setup-windows.ps1) read the
+# version from here and install it beforehand, so nothing is downloaded
+# during a build or a test. To move to a newer Rust, change the version here
+# and run the setup scripts again.
+#
+# rust-src is not needed. Dependencies such as cxx, proc-macro2 and quote ship
+# a rust-toolchain.toml asking for it, and rustup installs it whenever its
+# proxy runs in their source directories; the CMake tests therefore run cargo
+# with RUSTUP_TOOLCHAIN set (core/CMakeLists.txt).
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

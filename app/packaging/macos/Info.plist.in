@@ -1,0 +1,322 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<!--
+  Info.plist of the macOS bundle. app/packaging/macos/Bundle.cmake fills the
+  placeholders between at signs (configure_file with @ONLY) and gives the
+  result to the target as MACOSX_BUNDLE_INFO_PLIST.
+
+  File types: .mitcad is Mitcad's own project format, a single JSON text file
+  (core/model/src/file), so its UTI conforms to public.json. Every format
+  that app/files/FileFormats.cpp can import is offered as a Viewer with
+  Alternate rank: Mitcad shows up in "Open With" but never takes over the
+  files of other programs. macOS has no system types for .f3d, STEP, IGES,
+  BRep and DXF, so they are declared as imported types, which an exporting
+  program's own declaration overrides. The identifiers are guesses, and
+  .f3d and DXF have ids of Mitcad's own (@MITCAD_BUNDLE_ID@.f3d, .dxf);
+  other CAD programs declare their own ids per extension, so the document
+  types also list the extensions. All of this is unverified on a release build. STL and OBJ have
+  system types (public.standard-tesselated-geometry-format and
+  public.geometry-definition-format; yes, with that spelling).
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>@MITCAD_BUNDLE_EXECUTABLE@</string>
+  <key>CFBundleIconFile</key>
+  <string>@MITCAD_BUNDLE_ICON_FILE@</string>
+  <key>CFBundleIdentifier</key>
+  <string>@MITCAD_BUNDLE_ID@</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>Mitcad</string>
+  <key>CFBundleDisplayName</key>
+  <string>Mitcad</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@PROJECT_VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@PROJECT_VERSION@</string>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright (c) Mitcad contributors. MIT licence.</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>@MITCAD_MACOS_MIN_VERSION@</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.graphics-design</string>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Mitcad Project</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>@MITCAD_BUNDLE_ID@.project</string>
+      </array>
+      <key>CFBundleTypeIconFile</key>
+      <string>@MITCAD_BUNDLE_ICON_FILE@</string>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>F3D Design</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>@MITCAD_BUNDLE_ID@.f3d</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>f3d</string>
+        <string>f3z</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>STEP Model</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>org.iso.step</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>step</string>
+        <string>stp</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>IGES Model</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>gov.nist.iges</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>iges</string>
+        <string>igs</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>BRep Model</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>org.opencascade.brep</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>brep</string>
+        <string>brp</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>STL Mesh</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.standard-tesselated-geometry-format</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>stl</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>OBJ Mesh</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.geometry-definition-format</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>obj</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>DXF Drawing</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>@MITCAD_BUNDLE_ID@.dxf</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>dxf</string>
+      </array>
+    </dict>
+  </array>
+
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>@MITCAD_BUNDLE_ID@.project</string>
+      <key>UTTypeDescription</key>
+      <string>Mitcad Project</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.json</string>
+      </array>
+      <key>UTTypeIconFile</key>
+      <string>@MITCAD_BUNDLE_ICON_FILE@</string>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>mitcad</string>
+        </array>
+      </dict>
+    </dict>
+  </array>
+
+  <key>UTImportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>@MITCAD_BUNDLE_ID@.f3d</string>
+      <key>UTTypeDescription</key>
+      <string>F3D Design</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>f3d</string>
+          <string>f3z</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.iso.step</string>
+      <key>UTTypeDescription</key>
+      <string>STEP Model</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.3d-content</string>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>step</string>
+          <string>stp</string>
+        </array>
+        <key>public.mime-type</key>
+        <array>
+          <string>model/step</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>gov.nist.iges</string>
+      <key>UTTypeDescription</key>
+      <string>IGES Model</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.3d-content</string>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>iges</string>
+          <string>igs</string>
+        </array>
+        <key>public.mime-type</key>
+        <array>
+          <string>model/iges</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.opencascade.brep</string>
+      <key>UTTypeDescription</key>
+      <string>BRep Model</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.3d-content</string>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>brep</string>
+          <string>brp</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>@MITCAD_BUNDLE_ID@.dxf</string>
+      <key>UTTypeDescription</key>
+      <string>DXF Drawing</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>dxf</string>
+        </array>
+        <key>public.mime-type</key>
+        <array>
+          <string>image/vnd.dxf</string>
+        </array>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>

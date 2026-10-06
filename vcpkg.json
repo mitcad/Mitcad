@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "mitcad",
+  "version": "0.1.0",
+  "description": "Open source parametric desktop CAD",
+  "license": "MIT",
+  "builtin-baseline": "3aea538b2bb21a586502c67b00eb474fdd2e3098",
+  "dependencies": [
+    "opencascade"
+  ],
+  "overrides": [
+    { "name": "opencascade", "version": "8.0.1" }
+  ]
+}

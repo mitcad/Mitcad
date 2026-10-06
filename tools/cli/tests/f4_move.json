@@ -1,0 +1,44 @@
+[
+  {"comment": "The reference models move_*: a 60 x 40 x 20 block (Sketch1 F1, Extrude1 F2) moved by Move1 (F3)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+
+  {"comment": "move_translate: by (10, 5, 0); the body keeps its id and its faces their names."},
+  {"cmd": "add_feature", "def": {"type": "move", "bodies": ["F2.b0"],
+    "transform": {"type": "translate_xyz", "x": 10, "y": 5, "z": 0}}},
+  {"expect": {"feature": "Move1", "status": "ok", "bodies": 1, "body": "Body1", "volume": 48000,
+    "bbox": {"min": [10, 5, 0], "max": [70, 45, 20]},
+    "has_edge": "E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"}},
+
+  {"comment": "move_rotate: 45 degrees about the Z axis, x -28.3..42.4 (experiment K51)."},
+  {"cmd": "edit_feature", "uid": "F3", "def": {"type": "move", "bodies": ["F2.b0"],
+    "transform": {"type": "rotate", "axis": {"type": "origin", "axis": "z"}, "angle": 0.7853981633974483}}},
+  {"expect": {"body": "Body1", "volume": 48000,
+    "bbox": {"min": [-28.284271247461902, 0, 0], "max": [42.42640687119285, 70.71067811865476, 20]}}},
+  {"comment": "About the block's vertical edge at (60, 0) instead, which runs upwards (from its start to its end)."},
+  {"cmd": "edit_feature", "uid": "F3", "def": {"type": "move", "bodies": ["F2.b0"],
+    "transform": {"type": "rotate", "axis": {"type": "edge", "body": "F2.b0", "edge": "E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"},
+      "angle": 1.5707963267948966}}},
+  {"expect": {"body": "Body1", "volume": 48000, "bbox": {"min": [20, -60, 0], "max": [60, 0, 20]}}},
+
+  {"comment": "move_free: a rotation of 90 degrees about Z and a translation of (100, 0, 0): x 60..100, y 0..60."},
+  {"cmd": "edit_feature", "uid": "F3", "def": {"type": "move", "bodies": ["F2.b0"],
+    "transform": {"type": "free", "matrix": [[0, -1, 0, 100], [1, 0, 0, 0], [0, 0, 1, 0]]}}},
+  {"expect": {"body": "Body1", "volume": 48000, "bbox": {"min": [60, 0, 0], "max": [100, 60, 20]}}},
+
+  {"comment": "copy_paste_body: a copy (Move2, F4) moved 50 mm along Y, two blocks; the copy's faces are inst1 of the originals."},
+  {"cmd": "add_feature", "def": {"type": "move", "bodies": ["F2.b0"], "copy": true,
+    "transform": {"type": "translate_xyz", "x": 0, "y": 50, "z": 0}}},
+  {"expect": {"bodies": 2, "total_volume": 96000, "body": "Body2", "volume": 48000,
+    "bbox": {"min": [60, 50, 0], "max": [100, 110, 20]},
+    "has_face": "F4:inst1(F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}))"}},
+  {"expect": {"body": "Body1", "bbox": {"min": [60, 0, 0], "max": [100, 60, 20]}}},
+
+  {"comment": "Along an axis (Move3, F5): the copy 5 mm up the Z axis."},
+  {"cmd": "add_feature", "def": {"type": "move", "bodies": ["F4.b0"],
+    "transform": {"type": "translate_along", "axis": {"type": "origin", "axis": "z"}, "distance": 5}}},
+  {"expect": {"body": "Body2", "bbox": {"min": [60, 50, 5], "max": [100, 110, 25]}}}
+]

@@ -1,0 +1,70 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!--
+ SPDX-License-Identifier: MIT
+ A small Document.xml in the form FreeCAD 1.0 writes, made by hand for the
+ reader's tests: the string table, shape files named after their objects,
+ mapped names in links, a document enumeration.
+-->
+<Document SchemaVersion="4" ProgramVersion="1.0R39319 (Git)" FileVersion="1" StringHasher="1">
+    <StringHasher saveall="0" threshold="0" count="0" new="1"/>
+    <StringHasher2  file="StringHasher.Table.txt"/>
+    <Properties Count="2" TransientCount="0">
+        <Property name="Label" type="App::PropertyString" status="1">
+            <String value="one"/>
+        </Property>
+        <Property name="UnitSystem" type="App::PropertyEnumeration" status="1">
+            <Integer value="2"/>
+        </Property>
+    </Properties>
+    <Objects Count="2" Dependencies="1">
+        <Object type="Part::Box" name="Box" id="3733" Freeze="1"/>
+        <Object type="PartDesign::Fillet" name="Fillet" id="3734"/>
+    </Objects>
+    <ObjectData Count="2">
+        <Object name="Box">
+            <Properties Count="2" TransientCount="0">
+                <Property name="Shape" type="Part::PropertyPartShape">
+                    <Part ElementMap="0.4" file="Box.Shape.brp"/>
+                </Property>
+                <Property name="Comment" type="App::PropertyString" group="Notes" doc="Added by hand">
+                    <String value="dynamic"/>
+                </Property>
+            </Properties>
+        </Object>
+        <Object name="Fillet">
+            <Properties Count="3" TransientCount="0">
+                <Property name="Base" type="App::PropertyLinkSub">
+                    <LinkSub value="Box" count="2">
+                        <Sub value="Edge3" shadowed=";#7:1;:G;XTR;:H4a:7,E.Edge3"/>
+                        <Sub value="Edge7"/>
+                    </LinkSub>
+                </Property>
+                <Property name="Values" type="App::PropertyFloatList">
+                    <FloatList count="2">
+                        <F v="1.5"/>
+                        <F v="2.5"/>
+                    </FloatList>
+                </Property>
+                <Property name="Names" type="App::PropertyStringList">
+                    <StringList count="2">
+                        <String value="a"/>
+                        <String value="b"/>
+                    </StringList>
+                </Property>
+                <Property name="Indices" type="App::PropertyIntegerList">
+                    <IntegerList count="2">
+                        <I v="4"/>
+                        <I v="-1"/>
+                    </IntegerList>
+                </Property>
+                <Property name="Geometry" type="Part::PropertyGeometryList">
+                    <GeometryList count="1">
+                        <Geometry type="Part::GeomLineSegment">
+                            <LineSegment StartX="0" StartY="0" StartZ="0" EndX="1" EndY="0" EndZ="0"/>
+                        </Geometry>
+                    </GeometryList>
+                </Property>
+            </Properties>
+        </Object>
+    </ObjectData>
+</Document>

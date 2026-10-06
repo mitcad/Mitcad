@@ -1,0 +1,4 @@
+[
+  {"comment": "An expectation that does not hold makes mitcad-cli fail."},
+  {"expect": {"bodies": 1}}
+]
