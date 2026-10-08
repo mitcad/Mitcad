@@ -1,5 +1,5 @@
 {
-  "about": "Screw thread sizes for Mitcad's hole and thread features. Mitcad's own data (MIT licence): the nominal diameters and pitches of the ISO metric general purpose series (ISO 261) and of the Unified series (ASME B1.1), of the Whitworth series (BSW, BSF; BS 84) and the parallel pipe threads G (ISO 228-1, their major diameters), and of the taper pipe threads NPT (ASME B1.20.1, the pipes' outside diameters), which are size designations only. Every other dimension is computed from the basic profile: ISO 68-1's 60-degree one for ISO metric and Unified threads, H = 0.866025 P, D1 = D - 1.082532 P, D2 = D - 0.649519 P; the 55-degree Whitworth one, h = 0.640327 P, D1 = D - 2 h, D2 = D - h; the taper pipe one, h = 0.8 P, D1 = D - 2 h, D2 = D - h (its 1:16 taper is not kept). Tolerance classes are labels; no tolerance values are listed.",
+  "about": "Screw thread sizes for Mitcad's hole and thread features. Mitcad's own data (MIT licence): the nominal diameters and pitches of the ISO metric general purpose series (ISO 261) and of the Unified series (ASME B1.1), of the Whitworth series (BSW, BSF; BS 84) and the parallel pipe threads G (ISO 228-1, their major diameters), of the taper pipe threads NPT (ASME B1.20.1, the pipes' outside diameters), which are size designations only, and of the tyre valve threads (ISO 4570, their major diameters). Every other dimension is computed from the basic profile: ISO 68-1's 60-degree one for ISO metric and Unified threads, H = 0.866025 P, D1 = D - 1.082532 P, D2 = D - 0.649519 P; the 55-degree Whitworth one, h = 0.640327 P, D1 = D - 2 h, D2 = D - h; the taper pipe one, h = 0.8 P, D1 = D - 2 h, D2 = D - h (its 1:16 taper is not kept); tyre valve threads take ISO 68-1's. Tolerance classes are labels; no tolerance values are listed.",
   "iso_metric": {
     "classes_external": ["3h4h", "4g", "4h", "5g6g", "5h6h", "6e", "6f", "6g", "6h", "7e6e", "7g6g", "7h6h", "8g"],
     "classes_internal": ["4H", "5G", "5H", "6G", "6H", "7G", "7H"],
@@ -170,6 +170,31 @@
       {"size": "8", "d_in": 8.625, "tpi": 8},
       {"size": "10", "d_in": 10.75, "tpi": 8},
       {"size": "12", "d_in": 12.75, "tpi": 8}
+    ]
+  },
+  "tyre_valve": {
+    "classes_external": ["Standard"],
+    "classes_internal": ["Standard"],
+    "sizes": [
+      {"size": "5V1", "d": 5.334, "pitch": 0.705},
+      {"size": "5V2", "d": 5.370, "pitch": 1.058},
+      {"size": "6V1", "d": 6.160, "pitch": 0.800},
+      {"size": "8V1", "d": 7.798, "pitch": 0.794},
+      {"size": "8V2", "d": 7.938, "pitch": 1.058},
+      {"size": "9V1", "d": 9.525, "pitch": 0.794},
+      {"size": "10V1", "d": 9.800, "pitch": 1.000},
+      {"size": "10V2", "d": 10.414, "pitch": 0.907},
+      {"size": "11V1", "d": 11.113, "pitch": 1.270},
+      {"size": "12V1", "d": 12.319, "pitch": 0.977},
+      {"size": "13V1", "d": 12.700, "pitch": 1.270},
+      {"size": "13V2", "d": 12.700, "pitch": 0.794},
+      {"size": "15V1", "d": 15.137, "pitch": 1.000},
+      {"size": "16V1", "d": 15.875, "pitch": 0.941},
+      {"size": "17V1", "d": 17.137, "pitch": 1.000},
+      {"size": "17V2", "d": 17.463, "pitch": 1.058},
+      {"size": "17V3", "d": 17.463, "pitch": 1.588},
+      {"size": "19V1", "d": 19.050, "pitch": 1.588},
+      {"size": "20V1", "d": 20.642, "pitch": 1.000}
     ]
   }
 }

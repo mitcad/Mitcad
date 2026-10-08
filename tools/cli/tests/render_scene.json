@@ -1,0 +1,13 @@
+[
+  {"comment": "mitcad-cli render (mitcad#48): a red box and a chrome sphere with a named view."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [-30, -20],
+    "length": 60, "width": 40, "height": 20, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "sphere", "plane": "xy", "center": [50, 0],
+    "diameter": 30, "operation": "new_body"}},
+  {"cmd": "set_body_appearance", "uid": "F1.b0", "appearance": "paint_red"},
+  {"cmd": "set_body_appearance", "uid": "F2.b0", "appearance": "chrome"},
+  {"cmd": "add_named_view", "name": "Corner", "eye": [200, -250, 180], "target": [10, 0, 10],
+    "up": [0, 0, 1], "height": 140, "perspective": true},
+  {"cmd": "set_render_settings", "output": {"samples": 4, "width": 320, "height": 240, "aspect": "fixed"}},
+  {"expect": {"bodies": 2}}
+]

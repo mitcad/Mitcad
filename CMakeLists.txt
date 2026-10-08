@@ -7,8 +7,17 @@ if(POLICY CMP0141)
   cmake_policy(SET CMP0141 NEW)
 endif()
 
+# The Cycles render worker (View > Rendered, docs/rendering.md): off by
+# default. It needs the libraries of vcpkg.json's "render" feature, which
+# the toolchain installs when this is on (so before project()), and Cycles
+# and Open Image Denoise from tools/dev-env/build-cycles.sh.
+option(MITCAD_RENDER "Build the Cycles render worker (run tools/dev-env/build-cycles.sh first)" OFF)
+if(MITCAD_RENDER)
+  list(APPEND VCPKG_MANIFEST_FEATURES render)
+endif()
+
 project(Mitcad
-  VERSION 0.1.0
+  VERSION 0.2.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 

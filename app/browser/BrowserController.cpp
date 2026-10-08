@@ -2,6 +2,7 @@
 #include "BrowserController.hpp"
 
 #include <functional>
+#include <tuple>
 #include <utility>
 
 #include <QInputDialog>
@@ -20,6 +21,7 @@
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 #include "DocumentHost.hpp"
+#include "AppearanceDialog.hpp"
 #include "ParametersDialog.hpp"
 #include "TimelineWidget.hpp"
 
@@ -143,6 +145,9 @@ void BrowserController::refresh(const DocumentSnapshot& snapshot) {
   if (m_parameters && m_parameters->isVisible()) {
     m_parameters->refresh();
   }
+  if (m_appearances && m_appearances->isVisible()) {
+    m_appearances->refresh();
+  }
 }
 
 void BrowserController::showSelection(const Selection& items) { m_browser->showSelection(items); }
@@ -196,6 +201,25 @@ void BrowserController::updateFailures() {
   if (dof != m_loggedDof) {
     m_loggedDof = dof;
     qDebug().noquote() << QStringLiteral("Browser sketch DOF: %1").arg(dof.isEmpty() ? QStringLiteral("none") : dof);
+  }
+  // The joints (mitcad#55): each one's state, and the degrees of freedom of
+  // each component with joints.
+  QStringList joints;
+  for (const QJsonValue& value : m_snapshot.joints.value(QStringLiteral("joints")).toArray()) {
+    const QJsonObject joint = value.toObject();
+    joints << QStringLiteral("%1 %2").arg(joint.value(QStringLiteral("name")).toString(),
+                                          joint.value(QStringLiteral("state")).toString());
+  }
+  for (const QJsonValue& value : m_snapshot.joints.value(QStringLiteral("dof")).toArray()) {
+    const QJsonObject component = value.toObject();
+    joints << QStringLiteral("DOF %1 %2")
+                  .arg(m_snapshot.componentName(component.value(QStringLiteral("component")).toString()))
+                  .arg(component.value(QStringLiteral("total")).toInt());
+  }
+  const QString jointLog = joints.join(QStringLiteral(", "));
+  if (jointLog != m_loggedJoints) {
+    m_loggedJoints = jointLog;
+    qDebug().noquote() << QStringLiteral("Browser joints: %1").arg(jointLog.isEmpty() ? QStringLiteral("none") : jointLog);
   }
 }
 
@@ -301,6 +325,11 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
     done = m_host.runModelCommands(commands, (show ? tr("Show %1") : tr("Hide %1")).arg(what));
     break;
   }
+  case BrowserNode::Type::Analysis:
+    // Showing it hides the others: one section at a time (mitcad#41).
+    done = m_host.runModelCommand(cmd("set_analysis_visible", {{QStringLiteral("name"), node.uid},
+                                                               {QStringLiteral("visible"), show}}));
+    break;
   default:
     return;
   }
@@ -336,11 +365,15 @@ void BrowserController::rename(const BrowserNode& node, const QString& name) {
     break;
   case BrowserNode::Type::Sketch:
   case BrowserNode::Type::Datum:
+  case BrowserNode::Type::Joint:
     command = cmd("rename_feature", {{QStringLiteral("uid"), node.uid}, {QStringLiteral("name"), name}});
     break;
   case BrowserNode::Type::NamedView:
     command = cmd("rename_named_view",
                   {{QStringLiteral("name"), node.uid.mid(6)}, {QStringLiteral("new_name"), name}});
+    break;
+  case BrowserNode::Type::Analysis:
+    command = cmd("rename_analysis", {{QStringLiteral("name"), node.uid}, {QStringLiteral("new_name"), name}});
     break;
   default:
     return;
@@ -367,6 +400,7 @@ void BrowserController::browserDoubleClicked(const BrowserNode& node) {
   switch (node.type) {
   case BrowserNode::Type::Sketch:
   case BrowserNode::Type::Datum:
+  case BrowserNode::Type::Joint:
     m_host.editFeature(node.uid);
     break;
   case BrowserNode::Type::Body:
@@ -381,6 +415,9 @@ void BrowserController::browserDoubleClicked(const BrowserNode& node) {
   case BrowserNode::Type::NamedView:
     m_host.showNamedView(node.uid);
     break;
+  case BrowserNode::Type::Analysis:
+    m_host.editAnalysis(node.uid);
+    break;
   default:
     break;
   }
@@ -394,6 +431,7 @@ void BrowserController::deleteNode(const BrowserNode& node) {
     break;
   case BrowserNode::Type::Sketch:
   case BrowserNode::Type::Datum:
+  case BrowserNode::Type::Joint:
     deleteFeature(node.uid);
     break;
   case BrowserNode::Type::Component:
@@ -409,6 +447,11 @@ void BrowserController::deleteNode(const BrowserNode& node) {
     if (node.uid.startsWith(QStringLiteral("named:")) && canChange() &&
         m_host.runModelCommand(cmd("delete_named_view", {{QStringLiteral("name"), node.uid.mid(6)}}))) {
       qDebug().noquote() << QStringLiteral("Deleted named view %1").arg(node.name);
+    }
+    break;
+  case BrowserNode::Type::Analysis:
+    if (canChange() && m_host.runModelCommand(cmd("delete_analysis", {{QStringLiteral("name"), node.uid}}))) {
+      qDebug().noquote() << QStringLiteral("Deleted analysis %1").arg(node.name);
     }
     break;
   default:
@@ -626,6 +669,9 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
         qDebug().noquote() << QStringLiteral("Component from %1").arg(node.name);
       }
     });
+    menu.add(QStringLiteral("appearance"), tr("Appearance..."), [this, node] {
+      openAppearances({SelectionItem{SelectKind::Body, node.uid, QString(), QString()}});
+    });
     menu.separator();
     renameEntry();
     menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
@@ -696,6 +742,64 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       renameEntry();
       menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
     }
+    break;
+  case BrowserNode::Type::Analyses:
+    menu.add(QStringLiteral("section-analysis"), tr("New Section Analysis"), [this] {
+      if (canChange()) {
+        m_host.startCommand(QStringLiteral("inspect.section"), {}, nullptr);
+      }
+    });
+    break;
+  case BrowserNode::Type::Joints:
+    // Joints (mitcad#55): in the component the folder is in, when active.
+    for (const auto& [id, icon, text] : {std::tuple{"assemble.joint", "joint", tr("New Joint")},
+                                         std::tuple{"assemble.as_built_joint", "as-built-joint", tr("New As-Built Joint")},
+                                         std::tuple{"assemble.rigid_group", "rigid-group", tr("New Rigid Group")}}) {
+      const QString command = QString::fromLatin1(id);
+      menu.add(QString::fromLatin1(icon), text, [this, command] {
+        if (canChange()) {
+          m_host.startCommand(command, {}, nullptr);
+        }
+      });
+    }
+    break;
+  case BrowserNode::Type::Joint: {
+    const DocumentSnapshot::Feature* feature = m_snapshot.feature(node.uid);
+    menu.add(QStringLiteral("edit"), tr("Edit %1").arg(node.name), [this, node] { m_host.editFeature(node.uid); });
+    if (!m_snapshot.joint(node.uid).value(QStringLiteral("motions")).toArray().isEmpty()) {
+      menu.add(QStringLiteral("drive-joint"), tr("Drive %1").arg(node.name), [this, item] {
+        if (canChange()) {
+          m_host.startCommand(QStringLiteral("assemble.drive_joint"), {item}, nullptr);
+        }
+      });
+      menu.add(QStringLiteral("drive-joint"), tr("Animate %1").arg(node.name), [this, node] {
+        if (canChange()) {
+          m_host.animateJoint(node.uid);
+        }
+      });
+    }
+    const bool suppressed = feature != nullptr && feature->suppressed;
+    menu.add(QStringLiteral("suppress"), suppressed ? tr("Unsuppress") : tr("Suppress"), [this, node, suppressed] {
+      if (canChange() &&
+          m_host.runModelCommand(cmd("suppress_feature", {{QStringLiteral("uid"), node.uid},
+                                                          {QStringLiteral("suppressed"), !suppressed}}))) {
+        qDebug().noquote() << QStringLiteral("%1 %2").arg(suppressed ? QStringLiteral("Unsuppressed")
+                                                                     : QStringLiteral("Suppressed"),
+                                                          node.name);
+      }
+    });
+    menu.separator();
+    renameEntry();
+    menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
+    findInTimeline(node.uid);
+    break;
+  }
+  case BrowserNode::Type::Analysis:
+    menu.add(QStringLiteral("edit"), tr("Edit Section Analysis"), [this, node] { m_host.editAnalysis(node.uid); });
+    menu.separator();
+    visibility();
+    renameEntry();
+    menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
     break;
   default:
     break;
@@ -970,6 +1074,18 @@ void BrowserController::openParameters() {
   m_parameters->activateWindow();
   qDebug().noquote() << "Parameters dialog opened";
   m_parameters->refresh();
+}
+
+void BrowserController::openAppearances(const Selection& targets) {
+  if (!m_appearances) {
+    m_appearances = new AppearanceDialog(m_host, m_window);
+  }
+  m_appearances->show();
+  m_appearances->raise();
+  m_appearances->activateWindow();
+  qDebug().noquote() << "Appearances dialog opened";
+  m_appearances->refresh();
+  m_appearances->setTargets(targets);
 }
 
 } // namespace mitcad

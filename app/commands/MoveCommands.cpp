@@ -8,8 +8,10 @@
 #include <cmath>
 #include <functional>
 
+#include <QHash>
 #include <QJsonArray>
 #include <QKeySequence>
+#include <QStringList>
 
 #include <gp_Ax1.hxx>
 #include <gp_Trsf.hxx>
@@ -642,39 +644,69 @@ CommandDef attributeCommand(const CommandContext& context, bool material) {
   def.keywords = material ? QStringList{QStringLiteral("density"), QStringLiteral("mass")}
                           : QStringList{QStringLiteral("colour"), QStringLiteral("color"), QStringLiteral("paint")};
   def.modelCommand = true;
-  Choices choices;
-  if (material) {
-    choices = physicalMaterials();
-  } else {
-    choices.append({QString(), QObject::tr("Default")});
-    for (const Appearance& appearance : appearances()) {
-      choices.append({appearance.id, appearance.name});
-    }
+  InputDef value = material ? choiceInput(QStringLiteral("value"), QObject::tr("Material"), physicalMaterials(),
+                                          QStringLiteral("steel"))
+                            : choiceInput(QStringLiteral("value"), QObject::tr("Appearance"), {},
+                                          QStringLiteral("steel_satin"));
+  if (!material) {
+    // The library's appearances and the document's own (mitcad#46).
+    value.withChoices([&context](const CommandState&) {
+      Choices choices{{QString(), QObject::tr("Default")}};
+      for (const Appearance& appearance : appearancesOf(context.queryArray(QStringLiteral("appearances")))) {
+        choices.append({appearance.id, appearance.name});
+      }
+      return choices;
+    });
   }
-  def.inputs = {
-      selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies"), SelectKind::Body, 1, 0),
-      choiceInput(QStringLiteral("value"), material ? QObject::tr("Material") : QObject::tr("Appearance"), choices,
-                  choices.isEmpty() ? QString() : choices.at(material ? 0 : 1).first),
-  };
+  // Appearances also go to single faces (mitcad#53), overriding their
+  // body's; Default takes a face's own away.
+  if (material) {
+    def.inputs = {selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies"), SelectKind::Body, 1, 0), value};
+  } else {
+    def.inputs = {selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies"), SelectKind::Body, 0, 0),
+                  selectionInput(QStringLiteral("faces"), QObject::tr("Faces"), SelectKind::Face, 0, 0), value};
+  }
   def.enabled = [&context] { return hasBodies(context); };
   def.build = [material, name = def.name](const CommandState& state, const CommandContext&) {
     Built result;
     const QString value = state.choice(QStringLiteral("value"));
+    const QJsonValue id =
+        value.isEmpty() || (material && value == QStringLiteral("steel")) ? QJsonValue() : QJsonValue(value);
     QJsonArray commands;
-    for (const SelectionItem& body : state.items(QStringLiteral("bodies"))) {
+    QStringList owners;
+    QHash<QString, QJsonArray> faces;
+    if (!material) {
+      for (const SelectionItem& item : state.items(QStringLiteral("faces"))) {
+        if (!owners.contains(item.owner)) {
+          owners << item.owner;
+        }
+        faces[item.owner].append(item.name);
+      }
+      if (owners.isEmpty() && state.items(QStringLiteral("bodies")).isEmpty()) {
+        return Built::failure(QObject::tr("Select bodies or faces"), QStringLiteral("bodies"));
+      }
+    }
+    for (const SelectionItem& item : state.items(QStringLiteral("bodies"))) {
       commands.append(QJsonObject{
           {QStringLiteral("cmd"), material ? QStringLiteral("set_body_material") : QStringLiteral("set_body_appearance")},
-          {QStringLiteral("uid"), body.owner},
-          {material ? QStringLiteral("material") : QStringLiteral("appearance"),
-           value.isEmpty() || (material && value == QStringLiteral("steel")) ? QJsonValue() : QJsonValue(value)}});
+          {QStringLiteral("uid"), item.owner},
+          {material ? QStringLiteral("material") : QStringLiteral("appearance"), id}});
+    }
+    for (const QString& owner : std::as_const(owners)) {
+      commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("set_face_appearance")},
+                                  {QStringLiteral("uid"), owner},
+                                  {QStringLiteral("faces"), faces.value(owner)},
+                                  {QStringLiteral("appearance"), id}});
     }
     result.def = {{QStringLiteral("commands"), commands}, {QStringLiteral("label"), name}};
     return result;
   };
   def.describe = [material](const CommandState& state, const CommandContext&) {
-    return QStringLiteral("%1 %2 for %3 body(ies)")
+    const auto faces = material ? 0 : state.items(QStringLiteral("faces")).size();
+    return QStringLiteral("%1 %2 for %3 body(ies)%4")
         .arg(material ? QStringLiteral("Material") : QStringLiteral("Appearance"), state.choice(QStringLiteral("value")))
-        .arg(state.items(QStringLiteral("bodies")).size());
+        .arg(state.items(QStringLiteral("bodies")).size())
+        .arg(faces > 0 ? QStringLiteral(", %1 face(s)").arg(faces) : QString());
   };
   return def;
 }

@@ -629,9 +629,64 @@ fn helices_turn_their_profiles_about_an_axis() {
         answer["def"].clone()
     };
     assert_eq!(feature_def(&b.doc)["flip"], true);
+    // A growth widens it (mitcad#59): passed with the direction's flip, by
+    // Mitcad's construction, which a command without one means and the
+    // stored definition then names (mitcad#83).
+    b.doc
+        .edit_feature(uid, &def(helix(json!({"flip": true, "growth": 1.5}))))
+        .unwrap();
+    assert_eq!(
+        last_spec(&b.doc),
+        "helix F5 axis [0.0, 0.0, 0.0] [-0.0, -1.0, -0.0] pitch 5 revolutions 3 left false \
+         growth 1.5 flip true"
+    );
+    assert!(feature_def(&b.doc).get("growth").is_some());
+    assert_eq!(feature_def(&b.doc)["construction"], "mitcad");
+    // FreeCAD's construction (the FreeCAD import's) is kept by an edit
+    // without one, and by saving and opening.
+    b.doc
+        .edit_feature(
+            uid,
+            &def(helix(json!({"growth": 1.5, "construction": "freecad"}))),
+        )
+        .unwrap();
+    assert!(last_spec(&b.doc).ends_with("growth 1.5 flip false freecad"));
+    b.doc
+        .edit_feature(uid, &def(helix(json!({"growth": 2}))))
+        .unwrap();
+    assert!(last_spec(&b.doc).ends_with("growth 2 flip false freecad"));
+    assert_eq!(feature_def(&b.doc)["construction"], "freecad");
+    let reopened = Document::from_json(&b.doc.to_json(), MockKernel::default()).unwrap();
+    assert_eq!(feature_def(&reopened)["construction"], "freecad");
+    b.doc
+        .edit_feature(
+            uid,
+            &def(helix(json!({"growth": 2, "construction": "mitcad"}))),
+        )
+        .unwrap();
+    assert!(last_spec(&b.doc).ends_with("growth 2 flip false"));
+    let reopened = Document::from_json(&b.doc.to_json(), MockKernel::default()).unwrap();
+    assert_eq!(feature_def(&reopened)["construction"], "mitcad");
+    // A growing helix of a file written before the construction existed
+    // came from the FreeCAD import: it keeps FreeCAD's construction.
+    let mut file: Value = serde_json::from_str(&b.doc.to_json()).unwrap();
+    for feature in file["features"].as_array_mut().unwrap() {
+        if feature["type"] == "helix" {
+            feature.as_object_mut().unwrap().remove("construction");
+        }
+    }
+    let older = Document::from_json(&file.to_string(), MockKernel::default()).unwrap();
+    assert_eq!(feature_def(&older)["construction"], "freecad");
+    let error = serde_json::from_value::<crate::features::FeatureDef<String>>(helix(
+        json!({"growth": 1, "construction": "other"}),
+    ))
+    .unwrap_err();
+    assert!(error.to_string().contains("unknown variant"), "{error}");
     // Defaults are left out of the definition; values are checked.
     b.doc.edit_feature(uid, &def(helix(json!({})))).unwrap();
     assert!(feature_def(&b.doc).get("flip").is_none());
+    assert!(feature_def(&b.doc).get("growth").is_none());
+    assert!(feature_def(&b.doc).get("construction").is_none());
     let message = add(&mut b.doc, helix(json!({"pitch": 0})))
         .unwrap_err()
         .to_string();

@@ -72,6 +72,12 @@ public:
   virtual void saveNamedView(const QString& name, bool replace) = 0;
   // Save As DXF: a sketch's curves to a DXF file the user chooses (U6).
   virtual void exportSketch(const QString& sketch) = 0;
+  // Opens an analysis kept in the document in its command's panel
+  // (mitcad#41: Section Analysis with its plane, offset and flip).
+  virtual void editAnalysis(const QString& name) = 0;
+  // Shows a joint's first free motion through its range in the view, then
+  // the design as it is (mitcad#55: previews, nothing changes).
+  virtual void animateJoint(const QString& uid) = 0;
 
   // Isolate: only these bodies and components are shown (none: all).
   virtual void setIsolation(const Selection& items) = 0;
@@ -79,6 +85,9 @@ public:
   // The origin planes, axes and point (the root's Origin folder).
   virtual void setOriginShown(bool shown) = 0;
   virtual bool originShown() const = 0;
+  // The folder of the document's file (relative image paths are in it);
+  // empty while it is not saved.
+  virtual QString documentFolder() const = 0;
 };
 
 } // namespace mitcad

@@ -27,6 +27,8 @@
 #include <algorithm>
 #include <cmath>
 #include <initializer_list>
+#include <limits>
+#include <map>
 #include <tuple>
 
 #include <QGuiApplication>
@@ -45,6 +47,7 @@
 #include <QtMath>
 
 #include <AIS_AnimationCamera.hxx>
+#include <AIS_ColoredShape.hxx>
 #include <Aspect_DisplayConnection.hxx>
 #include <Aspect_NeutralWindow.hxx>
 #include <Aspect_ScrollDelta.hxx>
@@ -52,11 +55,20 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepTools.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <Bnd_Box.hxx>
+#include <Graphic3d_ArrayOfTriangles.hxx>
+#include <Graphic3d_AspectFillArea3d.hxx>
+#include <Graphic3d_Group.hxx>
+#include <Prs3d_Presentation.hxx>
+#include <gp_Pnt2d.hxx>
+#include <Graphic3d_TextureParams.hxx>
 #include <Graphic3d_TransformPers.hxx>
+#include <Image_PixMap.hxx>
 #include <Graphic3d_ZLayerSettings.hxx>
 #include <NCollection_IndexedMap.hxx>
 #include <Poly_Triangulation.hxx>
@@ -104,6 +116,7 @@ const Quantity_Color kAxisColor(0.85, 0.45, 0.10, Quantity_TOC_RGB);
 const Quantity_Color kHiddenEdgeColor(0.45, 0.48, 0.54, Quantity_TOC_RGB);
 // Section Analysis' caps: a colour bodies seldom have.
 const Quantity_Color kCapColor(0.95, 0.62, 0.10, Quantity_TOC_RGB);
+const Quantity_Color kCapHatchColor(0.55, 0.30, 0.02, Quantity_TOC_RGB);
 // Cosmetic threads' rings: darker than the body, lighter than its edges.
 const Quantity_Color kThreadColor(0.30, 0.33, 0.40, Quantity_TOC_RGB);
 
@@ -363,15 +376,58 @@ Quantity_Color wireColor(const QColor& color) {
   return color.isValid() ? occtColor(color.darker(170)) : kEdgeColor;
 }
 
-occ::handle<AIS_Shape> makeBody(const TopoDS_Shape& shape, BodyDisplay::Style style,
-                                const QColor& color, VisualStyle visual, const QColor& paper) {
-  occ::handle<AIS_Shape> body = new AIS_Shape(shape);
+// Whether the bodies are drawn with their faces' colours.
+bool shadedFaces(VisualStyle visual) {
+  return visual == VisualStyle::Shaded || visual == VisualStyle::ShadedVisibleEdges ||
+         visual == VisualStyle::ShadedHiddenEdges;
+}
+
+// The same faces in the same colours.
+bool sameFaceColors(const std::vector<BodyDisplay::FaceLook>& a, const std::vector<BodyDisplay::FaceLook>& b) {
+  return std::equal(a.begin(), a.end(), b.begin(), b.end(),
+                    [](const BodyDisplay::FaceLook& x, const BodyDisplay::FaceLook& y) {
+                      return x.faces == y.faces && x.color == y.color;
+                    });
+}
+
+// The same faces with the same look in the rendered view.
+bool sameFaceLooks(const std::vector<BodyDisplay::FaceLook>& a, const std::vector<BodyDisplay::FaceLook>& b) {
+  return std::equal(a.begin(), a.end(), b.begin(), b.end(),
+                    [](const BodyDisplay::FaceLook& x, const BodyDisplay::FaceLook& y) {
+                      return x.faces == y.faces && x.appearance.sameLook(y.appearance);
+                    });
+}
+
+occ::handle<AIS_Shape> makeBody(const geometry::Shape& named, BodyDisplay::Style style, const QColor& color,
+                                const std::vector<BodyDisplay::FaceLook>& faceLooks, VisualStyle visual,
+                                const QColor& paper) {
+  const TopoDS_Shape& shape = named.occt();
   if (style == BodyDisplay::Style::New) {
+    occ::handle<AIS_Shape> body = new AIS_Shape(shape);
     body->SetColor(kPreviewColor);
     body->SetTransparency(0.5);
     return body;
   }
+  // Faces with appearances of their own (mitcad#53) in their colours, in
+  // the shaded styles.
+  const bool faceColors = !faceLooks.empty() && shadedFaces(visual);
+  occ::handle<AIS_ColoredShape> colored = faceColors ? new AIS_ColoredShape(shape) : nullptr;
+  occ::handle<AIS_Shape> body = faceColors ? occ::handle<AIS_Shape>(colored) : new AIS_Shape(shape);
   body->SetColor(color.isValid() ? occtColor(color) : kBodyColor);
+  if (faceColors) {
+    for (const BodyDisplay::FaceLook& look : faceLooks) {
+      for (const int face : look.faces) {
+        if (face >= 0 && face < named.face_count()) {
+          colored->SetCustomColor(named.face(face), look.color.isValid() ? occtColor(look.color) : kBodyColor);
+          // Their edges stay the body's.
+          if (visual == VisualStyle::ShadedVisibleEdges) {
+            colored->CustomAspects(named.face(face))
+                ->SetFaceBoundaryAspect(new Prs3d_LineAspect(kEdgeColor, Aspect_TOL_SOLID, 1.0));
+          }
+        }
+      }
+    }
+  }
   const occ::handle<Prs3d_Drawer>& drawer = body->Attributes();
   switch (visual) {
   case VisualStyle::ShadedVisibleEdges:
@@ -402,6 +458,65 @@ occ::handle<AIS_Shape> makeBody(const TopoDS_Shape& shape, BodyDisplay::Style st
   }
   return body;
 }
+
+} // namespace
+
+// The rendered view's image as a rectangle over the whole view (2D
+// persistence, in device pixels from the lower left corner), unlit and
+// textured with the image.
+class OcctViewer::RenderedImageQuad : public AIS_InteractiveObject {
+public:
+  RenderedImageQuad() {
+    SetTransformPersistence(new Graphic3d_TransformPers(Graphic3d_TMF_2d, Aspect_TOTP_LEFT_LOWER));
+    SetInfiniteState(true);
+  }
+
+  // True when the size changed (the rectangle must be computed again).
+  bool setImage(const occ::handle<Graphic3d_Texture2D>& texture, int width, int height) {
+    const bool resized = width != m_width || height != m_height || texture != m_texture;
+    m_texture = texture;
+    m_width = width;
+    m_height = height;
+    return resized;
+  }
+
+  bool AcceptDisplayMode(const int mode) const override { return mode == 0; }
+
+protected:
+  void Compute(const occ::handle<PrsMgr_PresentationManager>&, const occ::handle<Prs3d_Presentation>& presentation,
+               const int) override {
+    if (m_texture.IsNull() || m_width <= 0 || m_height <= 0) {
+      return;
+    }
+    const auto w = static_cast<double>(m_width);
+    const auto h = static_cast<double>(m_height);
+    occ::handle<Graphic3d_ArrayOfTriangles> quad = new Graphic3d_ArrayOfTriangles(4, 6, Graphic3d_ArrayFlags_VertexTexel);
+    quad->AddVertex(gp_Pnt(0, 0, 0), gp_Pnt2d(0, 0));
+    quad->AddVertex(gp_Pnt(w, 0, 0), gp_Pnt2d(1, 0));
+    quad->AddVertex(gp_Pnt(w, h, 0), gp_Pnt2d(1, 1));
+    quad->AddVertex(gp_Pnt(0, h, 0), gp_Pnt2d(0, 1));
+    quad->AddEdges(1, 2, 3);
+    quad->AddEdges(1, 3, 4);
+    occ::handle<Graphic3d_AspectFillArea3d> aspect = new Graphic3d_AspectFillArea3d();
+    aspect->SetInteriorStyle(Aspect_IS_SOLID);
+    aspect->SetShadingModel(Graphic3d_TypeOfShadingModel_Unlit);
+    aspect->SetInteriorColor(Quantity_Color(Quantity_NOC_WHITE));
+    aspect->SetFaceCulling(Graphic3d_TypeOfBackfacingModel_DoubleSided);
+    aspect->SetTextureMap(m_texture);
+    aspect->SetTextureMapOn();
+    const occ::handle<Graphic3d_Group> group = presentation->NewGroup();
+    group->SetGroupPrimitivesAspect(aspect);
+    group->AddPrimitiveArray(quad);
+  }
+  void ComputeSelection(const occ::handle<SelectMgr_Selection>&, const int) override {}
+
+private:
+  occ::handle<Graphic3d_Texture2D> m_texture;
+  int m_width = 0;
+  int m_height = 0;
+};
+
+namespace {
 
 bool drawsHiddenEdges(VisualStyle style) {
   return style == VisualStyle::ShadedHiddenEdges || style == VisualStyle::WireframeHiddenEdges;
@@ -457,6 +572,98 @@ QString cubeName(V3d_TypeOfOrientation orientation) {
     parts << QStringLiteral("bottom");
   }
   return parts.join(QLatin1Char('-'));
+}
+
+// A hatch over the section caps: lines at 45 degrees to the plane's x axis,
+// about 40 across the caps, lifted a little off them on the normal side
+// (the side the cut took away) so that they are drawn over the caps' fill.
+TopoDS_Shape hatchOf(const TopoDS_Shape& caps, const gp_Ax3& plane) {
+  Bnd_Box box;
+  BRepBndLib::Add(caps, box, false);
+  if (box.IsVoid()) {
+    return TopoDS_Shape();
+  }
+  const double size = std::sqrt(box.SquareExtent());
+  const double spacing = size / 40.0;
+  const gp_Vec x(plane.XDirection());
+  const gp_Vec y(plane.YDirection());
+  const gp_Vec along = (x + y) / std::sqrt(2.0);
+  const gp_Vec across = (x - y) / std::sqrt(2.0);
+  const gp_Pnt origin = plane.Location();
+  // Per line k at (k + 0.5) * spacing across: its pieces along, from every
+  // triangle of the caps it crosses.
+  std::map<long, std::vector<std::pair<double, double>>> pieces;
+  for (TopExp_Explorer faces(caps, TopAbs_FACE); faces.More(); faces.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(faces.Current());
+    TopLoc_Location location;
+    occ::handle<Poly_Triangulation> mesh = BRep_Tool::Triangulation(face, location);
+    if (mesh.IsNull()) {
+      BRepMesh_IncrementalMesh(face, size * 1e-3, false, 0.5);
+      mesh = BRep_Tool::Triangulation(face, location);
+      if (mesh.IsNull()) {
+        continue;
+      }
+    }
+    const gp_Trsf toModel = location.Transformation();
+    for (int t = 1; t <= mesh->NbTriangles(); ++t) {
+      int nodes[3];
+      mesh->Triangle(t).Get(nodes[0], nodes[1], nodes[2]);
+      double s[3];
+      double u[3];
+      for (int i = 0; i < 3; ++i) {
+        const gp_Vec p(origin, mesh->Node(nodes[i]).Transformed(toModel));
+        s[i] = p.Dot(across) / spacing - 0.5;
+        u[i] = p.Dot(along);
+      }
+      const auto first = static_cast<long>(std::ceil(std::min({s[0], s[1], s[2]})));
+      const auto last = static_cast<long>(std::floor(std::max({s[0], s[1], s[2]})));
+      for (long k = first; k <= last; ++k) {
+        double low = std::numeric_limits<double>::max();
+        double high = -low;
+        for (int i = 0; i < 3; ++i) {
+          const int j = (i + 1) % 3;
+          const double a = s[i] - static_cast<double>(k);
+          const double b = s[j] - static_cast<double>(k);
+          if ((a < 0.0 && b < 0.0) || (a > 0.0 && b > 0.0) || a == b) {
+            continue;
+          }
+          const double at = u[i] + (u[j] - u[i]) * a / (a - b);
+          low = std::min(low, at);
+          high = std::max(high, at);
+        }
+        if (high > low) {
+          pieces[k].emplace_back(low, high);
+        }
+      }
+    }
+  }
+  // Each line's pieces joined where they meet (neighbouring triangles).
+  const gp_Vec lift = gp_Vec(plane.Direction()) * (size * 1e-4);
+  TopoDS_Compound lines;
+  BRep_Builder builder;
+  builder.MakeCompound(lines);
+  bool any = false;
+  for (auto& [k, spans] : pieces) {
+    std::sort(spans.begin(), spans.end());
+    const gp_Pnt base = origin.Translated(across * ((static_cast<double>(k) + 0.5) * spacing) + lift);
+    const double gap = size * 1e-9;
+    for (std::size_t i = 0; i < spans.size();) {
+      double end = spans[i].second;
+      std::size_t next = i + 1;
+      while (next < spans.size() && spans[next].first <= end + gap) {
+        end = std::max(end, spans[next].second);
+        ++next;
+      }
+      if (end - spans[i].first > gap) {
+        builder.Add(lines, BRepBuilderAPI_MakeEdge(base.Translated(along * spans[i].first),
+                                                   base.Translated(along * end))
+                               .Edge());
+        any = true;
+      }
+      i = next;
+    }
+  }
+  return any ? TopoDS_Shape(lines) : TopoDS_Shape();
 }
 
 occ::handle<AIS_Shape> makeProfile(const TopoDS_Shape& face) {
@@ -543,6 +750,22 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   inSight.SetName("visible edges");
   inSight.SetClearDepth(false);
   m_viewer->InsertLayerAfter(m_edgeLayer, inSight, m_hiddenLayer);
+  // The rendered view (docs/rendering.md, "Overlays in depth"): the bodies
+  // in a layer of their own, then the rendered image over the whole view
+  // without depth (it covers their colour, their depth stays), then the
+  // default layer's sketches, datums and previews, which the bodies' depth
+  // hides as in the shaded view.
+  Graphic3d_ZLayerSettings renderedBodies;
+  renderedBodies.SetName("rendered bodies");
+  renderedBodies.SetClearDepth(false);
+  m_viewer->InsertLayerBefore(m_renderedBodyLayer, renderedBodies, Graphic3d_ZLayerId_Default);
+  Graphic3d_ZLayerSettings renderedImage;
+  renderedImage.SetName("rendered image");
+  renderedImage.SetEnableDepthTest(false);
+  renderedImage.SetEnableDepthWrite(false);
+  renderedImage.SetClearDepth(false);
+  m_viewer->InsertLayerBefore(m_renderedImageLayer, renderedImage, Graphic3d_ZLayerId_Default);
+  m_renderedQuad = new RenderedImageQuad();
 
   m_context = makePickContext(m_viewer);
   m_context->SetPixelTolerance(qRound(kPickTolerance * devicePixelRatioF()));
@@ -795,6 +1018,9 @@ void OcctViewer::activateAllPicking() {
 void OcctViewer::setBodies(const std::vector<BodyDisplay>& bodies) {
   ScopedTiming timing("display");
   int shown = 0;
+  // Bodies kept as they are drawn whose other parameters changed (what the
+  // rendered view shows, mitcad#46).
+  int restyled = 0;
   const bool wasEmpty = m_bodies.empty();
   std::map<std::string, BodyEntry> kept;
   for (const BodyDisplay& body : bodies) {
@@ -810,9 +1036,14 @@ void OcctViewer::setBodies(const std::vector<BodyDisplay>& bodies) {
     if (existing != m_bodies.end() && existing->second.style == body.style &&
         existing->second.object->Shape().IsEqual(shape) &&
         sameTransformation(existing->second.placement.Transformation(), body.placement.Transformation()) &&
-        existing->second.color == body.color) {
+        existing->second.color == body.color && sameFaceColors(existing->second.faceLooks, body.faceLooks)) {
       BodyEntry entry = existing->second;
       entry.shape = body.shape; // the same geometry may come with new names
+      if (!entry.appearance.sameLook(body.appearance) || !sameFaceLooks(entry.faceLooks, body.faceLooks)) {
+        ++restyled;
+      }
+      entry.appearance = body.appearance;
+      entry.faceLooks = body.faceLooks;
       const auto info = m_pickInfo.find(entry.object.get());
       if (info != m_pickInfo.end()) {
         info->second.body = body.shape;
@@ -832,6 +1063,8 @@ void OcctViewer::setBodies(const std::vector<BodyDisplay>& bodies) {
     entry.style = body.style;
     entry.placement = body.placement;
     entry.color = body.color;
+    entry.appearance = body.appearance;
+    entry.faceLooks = body.faceLooks;
     showBody(entry);
     ++shown;
     kept.emplace(key, entry);
@@ -840,16 +1073,135 @@ void OcctViewer::setBodies(const std::vector<BodyDisplay>& bodies) {
   for (auto& [uid, entry] : m_bodies) {
     removeBody(entry);
   }
+  const bool changed = shown > 0 || restyled > 0 || !m_bodies.empty();
   m_bodies = std::move(kept);
   if (wasEmpty && !m_bodies.empty()) {
     m_fitPending = true;
   }
   sceneChanged();
+  if (changed) {
+    emit bodiesChanged();
+  }
+}
+
+std::vector<BodyDisplay> OcctViewer::shownBodies() const {
+  std::vector<BodyDisplay> bodies;
+  for (const auto& [key, entry] : m_bodies) {
+    if (entry.style != BodyDisplay::Style::Normal) {
+      continue;
+    }
+    BodyDisplay body;
+    body.uid = entry.uid;
+    body.shape = entry.shape;
+    body.placement = entry.placement;
+    body.occurrence = entry.occurrence;
+    body.color = entry.color;
+    body.appearance = entry.appearance;
+    body.faceLooks = entry.faceLooks;
+    bodies.push_back(body);
+  }
+  return bodies;
+}
+
+void OcctViewer::applyRenderedVisibility(BodyEntry& entry) {
+  // The bodies stay drawn (their depth hides the overlays behind them); in
+  // the rendered mode they are in a layer of their own under the image.
+  if (!entry.object.IsNull() && entry.style == BodyDisplay::Style::Normal) {
+    const Graphic3d_ZLayerId layer = m_renderedMode ? m_renderedBodyLayer : Graphic3d_ZLayerId_Default;
+    if (entry.object->ZLayer() != layer) {
+      m_context->SetZLayer(entry.object, layer);
+    }
+  }
+  // Their edges are in layers above the image: hidden under one.
+  const bool visible = m_renderedImage.isNull();
+  for (const occ::handle<AIS_Shape>* object : {&entry.hiddenEdges, &entry.visibleEdges}) {
+    if (!object->IsNull()) {
+      m_context->SetViewAffinity(*object, m_view, visible);
+    }
+  }
+}
+
+void OcctViewer::setRenderedMode(bool on) {
+  if (on == m_renderedMode) {
+    return;
+  }
+  m_renderedMode = on;
+  if (!on) {
+    setRenderedImage(QImage());
+  }
+  for (auto& [key, entry] : m_bodies) {
+    applyRenderedVisibility(entry);
+  }
+  m_view->Invalidate();
+  requestFrame();
+}
+
+void OcctViewer::setRenderedImage(const QImage& image) {
+  const bool was = !m_renderedImage.isNull();
+  if (image.isNull()) {
+    if (!was) {
+      return;
+    }
+    m_renderedImage = QImage();
+    m_context->Erase(m_renderedQuad, false);
+    m_renderedTexture.Nullify();
+    m_renderedPixels.Nullify();
+  } else {
+    // OCCT reads the pixels when it draws: the image stays here meanwhile.
+    m_renderedImage = image.convertToFormat(QImage::Format_RGB32);
+    m_renderedPixels = new Image_PixMap();
+    m_renderedPixels->InitWrapper(Image_Format_BGR32, m_renderedImage.bits(),
+                                  static_cast<size_t>(m_renderedImage.width()),
+                                  static_cast<size_t>(m_renderedImage.height()),
+                                  static_cast<size_t>(m_renderedImage.bytesPerLine()));
+    m_renderedPixels->SetTopDown(true);
+    // A new texture for each frame: OCCT uploads a texture of an aspect
+    // once (a new revision of the same one is not uploaded again).
+    // Repeated, not clamped: with clamping OCCT samples only its corner.
+    m_renderedTexture = new Graphic3d_Texture2D(m_renderedPixels);
+    m_renderedTexture->GetParams()->SetFilter(Graphic3d_TOTF_BILINEAR);
+    m_renderedTexture->GetParams()->SetModulate(false);
+    // The image over the whole view (stretched: a refining frame is
+    // smaller), in its layer between the bodies and the overlays.
+    int width = 0;
+    int height = 0;
+    m_view->Window()->Size(width, height);
+    if (m_renderedQuad->setImage(m_renderedTexture, width, height) || !was) {
+      m_context->Redisplay(m_renderedQuad, false);
+    }
+    if (!was) {
+      m_context->Display(m_renderedQuad, 0, -1, false);
+      m_context->SetZLayer(m_renderedQuad, m_renderedImageLayer);
+    }
+  }
+  if (was != !m_renderedImage.isNull()) {
+    for (auto& [key, entry] : m_bodies) {
+      applyRenderedVisibility(entry);
+    }
+    updateGrid(true);
+  }
+  m_view->Invalidate();
+  requestFrame();
+}
+
+void OcctViewer::backgroundColors(QColor& top, QColor& bottom) const {
+  top = m_backgroundTop;
+  bottom = m_backgroundGradient ? m_backgroundBottom : m_backgroundTop;
+}
+
+void OcctViewer::applyBackground() {
+  if (m_backgroundGradient) {
+    m_view->SetBgGradientColors(occtColor(m_backgroundTop), occtColor(m_backgroundBottom),
+                                Aspect_GradientFillMethod_Vertical);
+  } else {
+    m_view->SetBgGradientStyle(Aspect_GradientFillMethod_None);
+    m_view->SetBackgroundColor(occtColor(m_backgroundTop));
+  }
 }
 
 void OcctViewer::showBody(BodyEntry& entry) {
   const TopoDS_Shape& shape = entry.shape->occt();
-  entry.object = makeBody(shape, entry.style, entry.color, m_visualStyle, m_paper);
+  entry.object = makeBody(*entry.shape, entry.style, entry.color, entry.faceLooks, m_visualStyle, m_paper);
   const bool placed = !entry.placement.IsIdentity();
   if (placed) {
     entry.object->SetLocalTransformation(entry.placement.Transformation());
@@ -864,6 +1216,9 @@ void OcctViewer::showBody(BodyEntry& entry) {
   entry.hiddenEdges.Nullify();
   entry.visibleEdges.Nullify();
   if (!normal || !drawsHiddenEdges(m_visualStyle)) {
+    if (normal) {
+      applyRenderedVisibility(entry);
+    }
     return;
   }
   const TopoDS_Shape edges = edgesOf(shape);
@@ -881,6 +1236,7 @@ void OcctViewer::showBody(BodyEntry& entry) {
     m_context->SetZLayer(object, layer);
     m_context->Display(object, AIS_WireFrame, -1, false);
   }
+  applyRenderedVisibility(entry);
 }
 
 void OcctViewer::removeBody(BodyEntry& entry) {
@@ -1905,12 +2261,10 @@ void OcctViewer::setBackground(const QColor& top, const QColor& bottom, bool gra
       }
     }
   }
-  if (gradient) {
-    m_view->SetBgGradientColors(occtColor(top), occtColor(bottom), Aspect_GradientFillMethod_Vertical);
-  } else {
-    m_view->SetBgGradientStyle(Aspect_GradientFillMethod_None);
-    m_view->SetBackgroundColor(occtColor(top));
-  }
+  m_backgroundTop = top;
+  m_backgroundBottom = bottom;
+  m_backgroundGradient = gradient;
+  applyBackground();
   setGridColors(*m_grid, paper);
   updateGrid(true);
   sceneChanged();
@@ -1941,7 +2295,7 @@ double OcctViewer::gridStep() const {
 }
 
 void OcctViewer::updateGrid(bool force) {
-  if (!m_gridShown || m_view->Window().IsNull()) {
+  if (!m_gridShown || m_view->Window().IsNull() || !m_renderedImage.isNull()) {
     if (m_context->IsDisplayed(m_grid)) {
       m_context->Erase(m_grid, false);
     }
@@ -1983,21 +2337,30 @@ void OcctViewer::updateGrid(bool force) {
   m_view->Invalidate();
 }
 
-void OcctViewer::setSectionCaps(const TopoDS_Shape& caps) {
-  if (!m_sectionCaps.IsNull()) {
-    m_context->Remove(m_sectionCaps, false);
-    m_sectionCaps.Nullify();
+void OcctViewer::setSectionCaps(const TopoDS_Shape& caps, const gp_Ax3& plane) {
+  for (occ::handle<AIS_Shape>* object : {&m_sectionCaps, &m_sectionHatch}) {
+    if (!object->IsNull()) {
+      m_context->Remove(*object, false);
+      object->Nullify();
+    }
   }
   if (!caps.IsNull()) {
     m_sectionCaps = new AIS_Shape(caps);
     m_sectionCaps->SetColor(kCapColor);
-    // Over the clipped body's own face on the plane.
+    // Over the clipped body's own face on the plane (the same triangles),
+    // under a sketch's profiles on it (Hide Above Sketch).
     m_sectionCaps->Attributes()->ShadingAspect()->Aspect()->SetPolygonOffsets(Aspect_POM_Fill, -1.0f,
-                                                                              -3.0f);
+                                                                              -1.0f);
     const occ::handle<Prs3d_Drawer>& drawer = m_sectionCaps->Attributes();
     drawer->SetFaceBoundaryDraw(true);
     drawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(kEdgeColor, Aspect_TOL_SOLID, 1.5));
     m_context->Display(m_sectionCaps, AIS_Shaded, -1, false);
+    const TopoDS_Shape hatch = hatchOf(caps, plane);
+    if (!hatch.IsNull()) {
+      m_sectionHatch = new AIS_Shape(hatch);
+      setEdgeStyle(m_sectionHatch, kCapHatchColor, 1.0);
+      m_context->Display(m_sectionHatch, AIS_WireFrame, -1, false);
+    }
   }
   sceneChanged();
 }
@@ -2171,6 +2534,9 @@ void OcctViewer::initializeGL() {
     updateGrid(true);
     const auto* renderer =
         reinterpret_cast<const char*>(context()->functions()->glGetString(GL_RENDERER));
+    // The driver's version, for error reports (mitcad#61).
+    const auto* version = reinterpret_cast<const char*>(context()->functions()->glGetString(GL_VERSION));
+    m_glVersion = QString::fromLatin1(version != nullptr ? version : "");
     emit glInitialized(QString::fromLatin1(renderer != nullptr ? renderer : "unknown"));
   }
 }
@@ -2390,6 +2756,9 @@ bool OcctViewer::event(QEvent* event) {
     m_cubePress = false;
     m_cubeClick = false;
     m_orbitKey = false;
+    if (m_dragItem) {
+      endOccurrenceDrag(QPointF(), true);
+    }
   }
   const bool handled = QOpenGLWidget::event(event);
   if (event->type() == QEvent::DevicePixelRatioChange) {
@@ -2429,11 +2798,63 @@ void OcctViewer::mousePressEvent(QMouseEvent* event) {
     if (m_cubePress && !m_cubeClick) {
       m_cubeClick = true; // F4: an orbit, not a pick
     }
+    // A press on a component the joints move may drag it (mitcad#55): the
+    // button is not the view's then, so no window selection starts; a
+    // release without a drag is passed on as a click.
+    if (!m_cubePress && !m_cubeClick && event->modifiers() == Qt::NoModifier && m_occurrenceDrag.accepts) {
+      const occ::handle<SelectMgr_EntityOwner> owner = m_context->DetectedOwner();
+      const auto item = itemFor(owner);
+      const auto grabbed = pickedWorldPoint(owner);
+      if (item && grabbed && m_occurrenceDrag.accepts(*item)) {
+        m_dragItem = item;
+        m_dragGrab = *grabbed;
+        m_dragging = false;
+        return;
+      }
+    }
   }
   if (UpdateMouseButtons(toDevicePixels(event->position()), viewButtons(event->buttons()),
                          viewFlags(event->modifiers()), false)) {
     requestFrame();
   }
+}
+
+std::optional<gp_Pnt> OcctViewer::pickedWorldPoint(const occ::handle<SelectMgr_EntityOwner>& owner) const {
+  if (owner.IsNull()) {
+    return std::nullopt;
+  }
+  const occ::handle<StdSelect_ViewerSelector3d>& selector = m_context->MainSelector();
+  for (int rank = 1; rank <= selector->NbPicked(); ++rank) {
+    if (selector->Picked(rank) == owner) {
+      return selector->PickedPoint(rank);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<gp_Pnt> OcctViewer::viewPlanePoint(const QPointF& position, const gp_Pnt& through) const {
+  const NCollection_Vec2<int> pixel = toDevicePixels(position);
+  double x = 0, y = 0, z = 0, dx = 0, dy = 0, dz = 0;
+  m_view->ConvertWithProj(pixel.x(), pixel.y(), x, y, z, dx, dy, dz);
+  const gp_XYZ from(x, y, z);
+  const gp_XYZ direction(dx, dy, dz);
+  const gp_XYZ normal = m_view->Camera()->Direction().XYZ();
+  const double along = direction.Dot(normal);
+  if (std::abs(along) < 1e-12) {
+    return std::nullopt;
+  }
+  return gp_Pnt(from + direction * ((through.XYZ() - from).Dot(normal) / along));
+}
+
+void OcctViewer::endOccurrenceDrag(const QPointF& position, bool cancelled) {
+  const bool dragging = m_dragging;
+  m_dragItem.reset();
+  m_dragging = false;
+  if (!dragging || !m_occurrenceDrag.finished) {
+    return;
+  }
+  const auto target = cancelled ? std::nullopt : viewPlanePoint(position, m_dragGrab);
+  m_occurrenceDrag.finished(target.value_or(m_dragGrab), !target);
 }
 
 void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
@@ -2456,6 +2877,21 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
   }
   const bool cube = m_cubePress && event->button() == Qt::LeftButton;
   if (m_sketchInput && event->button() == Qt::LeftButton && !cube) {
+    return;
+  }
+  if (m_dragItem && event->button() == Qt::LeftButton) {
+    if (m_dragging) {
+      endOccurrenceDrag(event->position(), false);
+      return;
+    }
+    // No drag: the press and its release reach the view as a click.
+    m_dragItem.reset();
+    m_windowPick = false;
+    const Aspect_VKeyFlags flags = viewFlags(m_pressModifiers);
+    UpdateMouseButtons(toDevicePixels(m_pressPosition), Aspect_VKeyMouse_LeftButton, flags, false);
+    if (UpdateMouseButtons(toDevicePixels(m_pressPosition), Aspect_VKeyMouse_NONE, flags, false)) {
+      requestFrame();
+    }
     return;
   }
   if (event->button() == Qt::LeftButton) {
@@ -2481,6 +2917,23 @@ void OcctViewer::mouseMoveEvent(QMouseEvent* event) {
   QOpenGLWidget::mouseMoveEvent(event);
   if (m_scrollDragging) {
     endScrollDrag();
+  }
+  if (m_dragItem) {
+    // A component dragged (mitcad#55): the owner moves it, the view only
+    // follows.
+    const QPointF moved = event->position() - m_pressPosition;
+    if (!m_dragging && std::hypot(moved.x(), moved.y()) > kDragPixels) {
+      m_dragging = true;
+      if (m_occurrenceDrag.started) {
+        m_occurrenceDrag.started(*m_dragItem, m_dragGrab);
+      }
+    }
+    if (m_dragging && m_occurrenceDrag.moved) {
+      if (const auto target = viewPlanePoint(event->position(), m_dragGrab)) {
+        m_occurrenceDrag.moved(*target);
+      }
+    }
+    return;
   }
   if (UpdateMousePosition(toDevicePixels(event->position()), viewButtons(event->buttons()),
                           viewFlags(event->modifiers()), false)) {

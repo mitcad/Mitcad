@@ -52,6 +52,13 @@ RemoteTask* RemoteTask::clone(const QString& url, const QString& folder, QObject
       parent);
 }
 
+RemoteTask* RemoteTask::library(const QJsonObject& command, QObject* parent) {
+  const QByteArray json = compactJson(command);
+  return new RemoteTask(
+      command.value(QStringLiteral("cmd")).toString(),
+      [json](const SyncControl& control) { return parseObject(library_command(rustStr(json), control)); }, parent);
+}
+
 RemoteTask::RemoteTask(QString name, Run run, QObject* parent)
     : QObject(parent), m_name(std::move(name)), m_run(std::move(run)), m_control(new_sync_control()) {
   m_poll = new QTimer(this);

@@ -7,8 +7,11 @@
 //! ones `_f3d.local_transform` (relative to their parent component, T2);
 //! an external dump's `transform2` places a full path in the design, which is
 //! made relative to the parent occurrence. Occurrences of components that
-//! live in other documents (`isReferencedComponent`) are left out: their
-//! bodies are not in the file.
+//! live in other documents (`isReferencedComponent`: inserted parts,
+//! fasteners) are placed as occurrences of empty components, one per
+//! component of another document, named after the item that inserted it:
+//! their bodies are not in the file, but joints and captured positions
+//! name them (mitcad#75).
 //!
 //! Every timeline item then goes into its component (the file has a single
 //! timeline): an external dump names it (`component`); for the stream
@@ -20,9 +23,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use mitcad_f3d::design::ir::{Dump, Mat4, OccurrenceNode};
-use mitcad_model::assembly::{from_rows, inverse};
-use mitcad_model::{ComponentUid, Document, Kernel, Transform};
+use mitcad_f3d::design::ir::{Dump, Mat4, OccurrenceNode, TimelineItem};
+use mitcad_model::assembly::{Assembly, Occurrence, from_rows, inverse};
+use mitcad_model::{ComponentUid, Document, Kernel, OccurrenceUid, Transform};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -35,7 +38,8 @@ pub struct ComponentReport {
     pub components: usize,
     /// Occurrences placed.
     pub occurrences: usize,
-    /// Occurrences of components in other documents, left out.
+    /// Occurrences of components in other documents, placed as
+    /// occurrences of empty components (not counted above).
     pub external: usize,
     /// Timeline items by the component they went into (the file's names).
     pub items: BTreeMap<String, usize>,
@@ -53,6 +57,14 @@ pub(crate) struct Components {
     /// Items whose component the dump or the history gives (not inferred
     /// from their neighbours).
     known: std::collections::HashSet<i64>,
+    /// Items whose owning component the decoder gives (mitcad#37).
+    owned: std::collections::HashSet<i64>,
+    /// Occurrences by their object id in the file (`_f3d.object_id` of the
+    /// occurrence tree; joint paths name them, mitcad#55).
+    occurrences: HashMap<u64, OccurrenceUid>,
+    /// The empty components standing for components of other documents,
+    /// by document key and component object.
+    inserted: HashMap<(String, u64), ComponentUid>,
 }
 
 impl Components {
@@ -63,6 +75,12 @@ impl Components {
             .and_then(|c| self.by_object.get(&c))
             .copied()
             .unwrap_or(ComponentUid::ROOT)
+    }
+
+    /// The component of a body of the history, when its component's object
+    /// id is one of the file's components.
+    pub fn known_body(&self, component: Option<u64>) -> Option<ComponentUid> {
+        component.and_then(|c| self.by_object.get(&c)).copied()
     }
 
     /// The component of a timeline item.
@@ -77,11 +95,32 @@ impl Components {
     pub fn is_known(&self, index: i64) -> bool {
         self.known.contains(&index)
     }
+
+    /// Whether the decoder gives the component that owns the item, so that
+    /// its component is not a guess.
+    pub fn is_owned(&self, index: i64) -> bool {
+        self.owned.contains(&index)
+    }
+
+    /// The component of the file's component object `object`.
+    pub fn of_object(&self, object: u64) -> Option<ComponentUid> {
+        self.by_object.get(&object).copied()
+    }
+
+    /// The occurrence the file's occurrence object `object` became.
+    pub fn occurrence(&self, object: u64) -> Option<OccurrenceUid> {
+        self.occurrences.get(&object).copied()
+    }
+
+    /// Whether `component` stands for a component of another document.
+    pub fn is_inserted(&self, component: ComponentUid) -> bool {
+        self.inserted.values().any(|c| *c == component)
+    }
 }
 
 /// A matrix of the dump (cm) as a rigid transform in millimetres; None when it
 /// is not a rotation and a translation.
-fn transform(m: &Mat4) -> Option<Transform> {
+pub(crate) fn transform(m: &Mat4) -> Option<Transform> {
     let rows: Vec<Vec<f64>> = (0..3)
         .map(|r| vec![m[r][0], m[r][1], m[r][2], m[r][3] * 10.0])
         .collect();
@@ -133,10 +172,33 @@ pub(crate) fn import_components<K: Kernel>(
             objects.insert(n, o);
         }
     }
+    // The items that made occurrences (inserts, fasteners, pastes), by
+    // occurrence object: they name the components of other documents.
+    let mut makers: HashMap<u64, String> = HashMap::new();
+    for item in dump.timeline_items() {
+        let Some(name) = item.name().filter(|n| !n.trim().is_empty()) else {
+            continue;
+        };
+        let detail = item
+            .detail
+            .as_ref()
+            .and_then(|d| serde_json::to_value(d).ok());
+        if let Some([Value::Number(o)]) = detail
+            .as_ref()
+            .and_then(|d| d.pointer("/occurrence/_f3d/path"))
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            && let Some(o) = o.as_u64()
+            && item.object_type() != Some("GroundOccurrence")
+        {
+            makers.entry(o).or_insert_with(|| name.to_owned());
+        }
+    }
     let mut placer = Placer {
         doc,
         out: &mut out,
         objects: &objects,
+        makers: &makers,
         report,
         warnings,
     };
@@ -150,9 +212,15 @@ struct Placer<'a, K: Kernel> {
     doc: &'a mut Document<K>,
     out: &'a mut Components,
     objects: &'a HashMap<String, u64>,
+    /// The name of the item that made each occurrence object.
+    makers: &'a HashMap<u64, String>,
     report: &'a mut ComponentReport,
     warnings: &'a mut Vec<String>,
 }
+
+/// The name of an empty component standing for a component of another
+/// document when no item names it.
+const INSERTED: &str = "Inserted component";
 
 impl<K: Kernel> Placer<'_, K> {
     /// Places an occurrence node in `parent` (whose placement in the design
@@ -168,11 +236,13 @@ impl<K: Kernel> Placer<'_, K> {
             return;
         }
         let f3d = node.f3d.as_ref();
-        if node.is_referenced_component == Some(true) {
-            self.report.external += 1;
-            return;
-        }
-        let name = node.component.clone().flatten();
+        let occurrence_object = f3d.and_then(|f| f.object_id);
+        let external = node.is_referenced_component == Some(true);
+        let name = if external {
+            occurrence_object.and_then(|o| self.makers.get(&o).cloned())
+        } else {
+            node.component.clone().flatten()
+        };
         let object = f3d
             .and_then(|f| f.component_object)
             .or_else(|| name.as_ref().and_then(|n| self.objects.get(n).copied()));
@@ -199,6 +269,10 @@ impl<K: Kernel> Placer<'_, K> {
                 }
             }
         };
+        if external {
+            self.place_inserted(node, name.as_deref(), parent, local);
+            return;
+        }
         let world = parent_world.after(&local);
         let known = object
             .and_then(|o| self.out.by_object.get(&o))
@@ -229,12 +303,7 @@ impl<K: Kernel> Placer<'_, K> {
             }
         }
         self.report.occurrences += 1;
-        if node.is_grounded == Some(true) {
-            let _ = self.doc.set_occurrence_grounded(occurrence, true);
-        }
-        if node.is_light_bulb_on.or(node.is_visible) == Some(false) {
-            let _ = self.doc.set_occurrence_visible(occurrence, false);
-        }
+        self.placed(node, occurrence);
         // A component placed again keeps the children it already has.
         if known.is_some() {
             return;
@@ -242,6 +311,58 @@ impl<K: Kernel> Placer<'_, K> {
         for child in node.children.iter().flatten() {
             self.place(child, component, world, depth + 1);
         }
+    }
+
+    /// What every placed occurrence takes from its node: its object id
+    /// (joint paths name it), its ground flag and its light bulb.
+    fn placed(&mut self, node: &OccurrenceNode, occurrence: OccurrenceUid) {
+        if let Some(o) = node.f3d.as_ref().and_then(|f| f.object_id) {
+            self.out.occurrences.entry(o).or_insert(occurrence);
+        }
+        if node.is_grounded == Some(true) {
+            let _ = self.doc.set_occurrence_grounded(occurrence, true);
+        }
+        if node.is_light_bulb_on.or(node.is_visible) == Some(false) {
+            let _ = self.doc.set_occurrence_visible(occurrence, false);
+        }
+    }
+
+    /// Places an occurrence of a component of another document as an
+    /// occurrence of the empty component standing for it (one per
+    /// component of each document), named after the item that inserted
+    /// it (`name`).
+    fn place_inserted(
+        &mut self,
+        node: &OccurrenceNode,
+        name: Option<&str>,
+        parent: ComponentUid,
+        local: Transform,
+    ) {
+        let f3d = node.f3d.as_ref();
+        let key = (
+            f3d.and_then(|f| f.external_key.clone()).unwrap_or_default(),
+            f3d.and_then(|f| f.component_object).unwrap_or_default(),
+        );
+        let known = self.out.inserted.get(&key).copied();
+        let made = match known {
+            Some(c) => self.doc.add_occurrence(c, parent, local).map(|o| (c, o)),
+            None => self
+                .doc
+                .add_component(Some(name.unwrap_or(INSERTED)), parent, local),
+        };
+        let (component, occurrence) = match made {
+            Ok(made) => made,
+            Err(e) => {
+                self.warnings.push(format!(
+                    "occurrence of a component of another document ({}): {e}",
+                    name.unwrap_or(INSERTED)
+                ));
+                return;
+            }
+        };
+        self.out.inserted.entry(key).or_insert(component);
+        self.report.external += 1;
+        self.placed(node, occurrence);
     }
 }
 
@@ -269,9 +390,39 @@ pub(crate) fn references(value: &Value, out: &mut Vec<i64>) {
     }
 }
 
+/// Where a component is placed in the design, when it is placed once (the
+/// root: as it is), each occurrence on its path placed in its parent by
+/// `place`.
+pub(crate) fn placement(
+    assembly: &Assembly,
+    component: ComponentUid,
+    place: impl Fn(&Occurrence) -> Transform,
+) -> Option<Transform> {
+    let paths = assembly.paths_to(component);
+    let [path] = paths.as_slice() else {
+        return None;
+    };
+    let mut placed = Transform::IDENTITY;
+    for o in path {
+        placed = placed.after(&place(assembly.occurrence(*o)?));
+    }
+    Some(placed)
+}
+
+/// Sketches and construction geometry, which follow the features that use
+/// them.
+fn follows_users(item: &TimelineItem) -> bool {
+    item.object_type()
+        .is_some_and(|t| t == "Sketch" || t.starts_with("Construction"))
+}
+
 /// Puts every timeline item into a component (see the module docs).
+/// `place` places an occurrence in its parent at an item of the timeline
+/// (the file's captured positions, mitcad#86).
 pub(crate) fn assign_items<S: Clone>(
     dump: &Dump,
+    assembly: &Assembly,
+    place: &dyn Fn(&Occurrence, i64) -> Transform,
     oracle: &mut Oracle<'_, S>,
     components: &mut Components,
     report: &mut ComponentReport,
@@ -281,14 +432,26 @@ pub(crate) fn assign_items<S: Clone>(
     // Known from the item itself: its name (external dumps) or the bodies its
     // operation changed (history).
     let mut known: HashMap<i64, ComponentUid> = HashMap::new();
+    // The component that owns each item, from the decoder (mitcad#37).
+    let mut owners: HashMap<i64, ComponentUid> = HashMap::new();
+    // Only components whose bodies the history keeps apart own items: the
+    // fallbacks put the bodies of the others where their blobs are, and
+    // the items go where the bodies are, as without an owner.
+    let with_history = oracle.history_components();
     for (position, item) in items.iter().enumerate() {
         let index = index_of(position);
+        let decoded = item.f3d.as_ref().and_then(|f| f.component);
+        let owner = decoded
+            .filter(|o| with_history.as_ref().is_none_or(|h| h.contains(o)))
+            .and_then(|o| components.by_object.get(&o).copied());
+        // (The decoder's name of the owner is no more than its object id.)
         let named = item
             .component
             .clone()
             .flatten()
+            .filter(|_| decoded.is_none())
             .and_then(|n| components.by_name.get(&n).copied());
-        let from_history = || {
+        let mut from_history = || {
             let changed: Vec<ComponentUid> = oracle
                 .item_components(index)?
                 .into_iter()
@@ -297,7 +460,18 @@ pub(crate) fn assign_items<S: Clone>(
             let first = *changed.first()?;
             changed.iter().all(|c| *c == first).then_some(first)
         };
-        if let Some(c) = named.or_else(from_history) {
+        // The decoder's owner comes after the history: a feature of one
+        // component may change another's bodies (the file's assembly
+        // context), and goes where they are.
+        let component = match owner {
+            Some(o) => {
+                owners.insert(index, o);
+                // (Sketches and construction geometry: below.)
+                from_history().or((!follows_users(item)).then_some(o))
+            }
+            None => named.or_else(from_history),
+        };
+        if let Some(c) = component {
             known.insert(index, c);
         }
         if crate::tracing() {
@@ -310,9 +484,12 @@ pub(crate) fn assign_items<S: Clone>(
         }
     }
     components.known = known.keys().copied().collect();
+    components.owned = owners.keys().copied().collect();
     // Sketches and construction geometry follow the first item that uses
     // them.
     let mut used: HashMap<i64, ComponentUid> = HashMap::new();
+    // The index of each such item's first user.
+    let mut first_use: HashMap<i64, i64> = HashMap::new();
     for position in (0..items.len()).rev() {
         let index = index_of(position);
         let Some(c) = known.get(&index).or_else(|| used.get(&index)).copied() else {
@@ -326,6 +503,34 @@ pub(crate) fn assign_items<S: Clone>(
         for r in referenced.into_iter().filter(|r| *r < index) {
             if !known.contains_key(&r) {
                 used.insert(r, c);
+                first_use.insert(r, index);
+            }
+        }
+    }
+    // A sketch or construction item whose owner the decoder gives (its
+    // geometry is in the owner's coordinates) goes there when no feature
+    // uses it, or when its first user's component is placed elsewhere than
+    // its owner where the user is in the timeline (the user then gets a
+    // copy moved by the two placements); else it follows its user, as
+    // without an owner.
+    for position in 0..items.len() {
+        let index = index_of(position);
+        let Some(&owner) = owners.get(&index) else {
+            continue;
+        };
+        if known.contains_key(&index) {
+            continue;
+        }
+        let at = first_use.get(&index).copied().unwrap_or(index);
+        let placed = |c: ComponentUid| placement(assembly, c, |o| place(o, at));
+        let elsewhere = |user: ComponentUid| match (placed(owner), placed(user)) {
+            (Some(o), Some(u)) => !inverse(&u).after(&o).is_identity(),
+            _ => false,
+        };
+        match used.get(&index) {
+            Some(&user) if user == owner || !elsewhere(user) => {}
+            _ => {
+                used.insert(index, owner);
             }
         }
     }

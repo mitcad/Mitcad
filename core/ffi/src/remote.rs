@@ -27,6 +27,11 @@ pub fn new_sync_control() -> Box<SyncControl> {
 }
 
 impl SyncControl {
+    /// The control for `mitcad_vcs` (the libraries' commands).
+    pub(crate) fn control(&self) -> &Control {
+        &self.0
+    }
+
     pub fn cancel(&self) {
         self.0.cancel();
     }

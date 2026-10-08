@@ -24,3 +24,5 @@ CMakeUserPresets.json
 
 # Maintainers' private repository, cloned into the working tree
 /private/
+__pycache__/
+*.pyc

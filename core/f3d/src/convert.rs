@@ -857,6 +857,108 @@ fn is_identity(t: &Transform) -> bool {
         && t.t.iter().all(|v| v.abs() < 1e-12)
 }
 
+/// The curve of one edge of a body and its parameter range in the neutral
+/// model, at a history state (`view`, as for [`convert_body_at`]), with the
+/// body's transform. Fails for edges without a curve.
+pub fn edge_curve(
+    file: &AsmFile,
+    body: usize,
+    edge: usize,
+    options: &Options,
+    view: Option<&HashMap<usize, Option<usize>>>,
+) -> Result<(Curve, [f64; 2], Option<Transform>), GeomError> {
+    let mut ctx = Ctx {
+        file,
+        view,
+        opt: *options,
+        body: Body::default(),
+        issues: Vec::new(),
+        vertex_map: HashMap::new(),
+        edge_map: HashMap::new(),
+        degenerate_edges: 0,
+        surface_map: HashMap::new(),
+    };
+    let mut c = ctx.cursor(body)?;
+    c.ptr()?; // lump
+    c.ptr()?; // wire
+    let transform = match ptr_index(file, c.ptr()?) {
+        Some(t) => Some(ctx.transform(t)?).filter(|t| !is_identity(t)),
+        None => None,
+    };
+    match ctx.edge(edge)? {
+        EdgeRef::Edge(e, _) => {
+            let e = &ctx.body.edges[e];
+            Ok((ctx.body.curves[e.curve].clone(), e.t, transform))
+        }
+        EdgeRef::Degenerate(_) => Err(GeomError("the edge has no curve".into())),
+    }
+}
+
+/// One face of a body in the neutral model, as [`face_surface`] gives it.
+#[derive(Clone, Debug)]
+pub struct FaceSurface {
+    pub surface: Surface,
+    /// The face's normal runs against the surface's natural normal (for a
+    /// cone or cylinder: towards the axis).
+    pub reversed: bool,
+    /// Points along the face's edges, `samples` per edge.
+    pub boundary: Vec<P3>,
+    /// The body's transform (not applied to the above).
+    pub transform: Option<Transform>,
+}
+
+/// The surface of one face of a body at a history state (`view`, as for
+/// [`convert_body_at`]), with points along its edges. Fails for faces whose
+/// surface is not supported.
+pub fn face_surface(
+    file: &AsmFile,
+    body: usize,
+    face: usize,
+    options: &Options,
+    view: Option<&HashMap<usize, Option<usize>>>,
+    samples: usize,
+) -> Result<FaceSurface, GeomError> {
+    let mut ctx = Ctx {
+        file,
+        view,
+        opt: *options,
+        body: Body::default(),
+        issues: Vec::new(),
+        vertex_map: HashMap::new(),
+        edge_map: HashMap::new(),
+        degenerate_edges: 0,
+        surface_map: HashMap::new(),
+    };
+    let mut c = ctx.cursor(body)?;
+    c.ptr()?; // lump
+    c.ptr()?; // wire
+    let transform = match ptr_index(file, c.ptr()?) {
+        Some(t) => Some(ctx.transform(t)?).filter(|t| !is_identity(t)),
+        None => None,
+    };
+    let f = ctx
+        .face(face)?
+        .ok_or_else(|| GeomError("the face's surface is not supported".into()))?;
+    let f = &ctx.body.faces[f];
+    let n = samples.max(2);
+    let boundary = f
+        .loops
+        .iter()
+        .flatten()
+        .flat_map(|ce| {
+            let e = &ctx.body.edges[ce.edge];
+            let curve = &ctx.body.curves[e.curve];
+            (0..n).map(move |i| curve.eval(e.t[0] + (e.t[1] - e.t[0]) * i as f64 / (n - 1) as f64))
+        })
+        .collect();
+    Ok(FaceSurface {
+        surface: ctx.body.surfaces[f.surface].clone(),
+        reversed: f.reversed,
+        boundary,
+        transform,
+    })
+}
+
 /// Converts one `body` record.
 pub fn convert_body(file: &AsmFile, record: usize, options: &Options) -> ConvertedBody {
     convert_body_at(file, record, options, None)

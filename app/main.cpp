@@ -23,10 +23,24 @@
 #include "framework/Numbers.hpp"
 #include "framework/TestDriver.hpp"
 #include "framework/TestSync.hpp"
+#include "mitcad/geometry/guard.hpp"
+#include "report/CrashHandler.hpp"
+#include "report/ReportCenter.hpp"
 
 int main(int argc, char* argv[]) {
-  // An .f3d or .FCStd import in a process of its own, without windows (U6).
-  if (mitcad::isImportWorker(argc, argv)) {
+  // Crash reports (mitcad#62), in the application and its import worker.
+  const bool importWorker = mitcad::isImportWorker(argc, argv);
+  mitcad::crash::install(importWorker ? "import-worker" : "app", MITCAD_VERSION);
+  // An .f3d, .FCStd or .ipt import in a process of its own, without
+  // windows (U6).
+  if (importWorker) {
+    if (mitcad::crash::testCrashRequested("import-worker")) {
+      // For tests: a crash where OCCT's handlers are installed, outside an
+      // operation of theirs, as an import's could be.
+      mitcad::geometry::catch_occt_crashes();
+      mitcad::crash::crashNow();
+    }
+    mitcad::ReportCenter::notePanics();
     return mitcad::runImportWorker(argc, argv);
   }
 
@@ -90,6 +104,8 @@ int main(int argc, char* argv[]) {
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDir);
   }
+  // Where crash reports go, also the workers' (mitcad#62).
+  mitcad::ReportCenter::prepareCrashReports();
 
   // UI tests: MITCAD_TEST_INPUT=<script> runs the script in this process with
   // synthesised events (framework/TestDriver.hpp); inert without it. Before
@@ -112,7 +128,8 @@ int main(int argc, char* argv[]) {
   const QCommandLineOption openOption(
       QStringLiteral("open"),
       QStringLiteral("Open <file> at start-up: a project (.mitcad), an .f3d or .f3z design, "
-                     "a FreeCAD document (.FCStd), STEP, IGES, BRep, STL, OBJ or DXF as a new document."),
+                     "a FreeCAD document (.FCStd), an .ipt part, STEP, IGES, BRep, STL, OBJ or DXF as a "
+                     "new document."),
       QStringLiteral("file"));
   const QCommandLineOption qtDialogsOption(
       QStringLiteral("no-native-dialogs"),
@@ -182,6 +199,8 @@ int main(int argc, char* argv[]) {
   mitcad::FileOpenFilter fileOpenFilter;
   app.installEventFilter(&fileOpenFilter);
 
+  // A screenshot run offers no crash reports either (mitcad#62).
+  mitcad::ReportCenter::setOfferEarlierCrashes(!parser.isSet(screenshotOption));
   mitcad::MainWindow window(parser.isSet(demoOption));
   window.resize(1280, 800);
   if (hasStartFile) {

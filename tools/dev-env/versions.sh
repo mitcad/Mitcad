@@ -28,3 +28,34 @@ PYTHON_MAC_SHA256=316a463172740e71d8dca1f2730784e325f3f720941137b5d674d5801a6322
 # hash Homebrew's formula records for the same archive.
 PKGCONF_VERSION=3.0.7
 PKGCONF_SHA256=c926ff491cbd9a331a589160811bd97ab1749b4d5198a519338f2cdfabe6940a
+
+# The Cycles render worker (MITCAD_RENDER, tools/dev-env/build-cycles.sh):
+# the sources that vcpkg has no port for. Cycles is fetched by tag and
+# checked against the tag's commit; Open Image Denoise's source archive and
+# ISPC's release (a build tool for Open Image Denoise, not linked) against
+# the SHA-256 digests GitHub lists for the release assets.
+CYCLES_VERSION=5.2.0
+CYCLES_COMMIT=3b97e190c5ff1a2ed2160d879ad5bf95bea7b8ba
+OIDN_VERSION=2.5.1
+OIDN_SRC_SHA256=e71fd043a70f1cc80e301d1b90df6c1f536098c4dd94baa612742f6db3369c36
+ISPC_VERSION=1.31.0
+ISPC_LINUX_SHA256=d74089c835e10fd7e2c4b9225ced38b87d1fb53d35c7ceabd48cdf035da11b11
+# Cycles' GPU devices (build-cycles.sh --cuda, mitcad#50). The CUDA
+# compiler's components come from NVIDIA's redistributable archives
+# (https://developer.download.nvidia.com/compute/cuda/redist/), checked
+# against the SHA-256 digests of redistrib_<CUDA_VERSION>.json there; only
+# a build tool, nothing of it is linked or shipped. CUDA 12 is the last
+# that compiles for Maxwell, Pascal and Volta (sm_5x, sm_6x, sm_70); it
+# takes host compilers up to GCC 14 (CUDA_MAX_GCC).
+CUDA_VERSION=12.9.1
+CUDA_NVCC_VERSION=12.9.86
+CUDA_NVCC_SHA256=7a1a5b652e5ef85c82b721d10672fc9a2dbaab44e9bd3c65a69517bf53998c35
+CUDA_CUDART_VERSION=12.9.79
+CUDA_CUDART_SHA256=1f6ad42d4f530b24bfa35894ccf6b7209d2354f59101fd62ec4a6192a184ce99
+CUDA_CCCL_VERSION=12.9.27
+CUDA_CCCL_SHA256=8b1a5095669e94f2f9afd7715533314d418179e9452be61e2fde4c82a3e542aa
+CUDA_MAX_GCC=14
+# The kernels: a cubin per architecture (a GPU runs the one of its major
+# version with the highest minor not above its own) and PTX for compute
+# 7.5, which the driver compiles for newer GPUs (sm_80, sm_90, ...).
+CUDA_ARCHITECTURES="sm_50;sm_52;sm_60;sm_61;sm_70;sm_75;sm_86;sm_89;sm_120;compute_75"

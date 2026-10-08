@@ -362,7 +362,11 @@ struct CommandDef {
   // Inspections (U4: Measure, Interference, Section Analysis): the panel
   // shows the answer while the inputs change, OK closes it.
   std::function<Inspection(const CommandState&, const CommandContext&)> inspect;
-  // Whether OK keeps an inspection's section shown (Section Analysis).
+  // Whether OK keeps an inspection's section shown (Section Analysis). With
+  // `build` it is kept in the document (mitcad#41): `build` gives the
+  // analysis' definition, OK adds it (`add_analysis`) or changes the one
+  // edited (`edit_analysis`), and `load` fills the inputs from an entry of
+  // the `analyses` query to edit it.
   bool keepsSection = false;
   QVector<InputDef> inputs;
   // Defaults that depend on the model (the newest profile, ...), after the

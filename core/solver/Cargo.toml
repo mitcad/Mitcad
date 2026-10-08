@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 [package]
 name = "mitcad-solver"
-description = "2D sketch constraint solver for Mitcad"
+description = "2D sketch constraint solver and assembly joint solver for Mitcad"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

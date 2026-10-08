@@ -217,7 +217,10 @@ millimetres, angles radians. Build sketches with the
   true` and only measures. `text`: where the value is shown.
 - `projections`: linked projections, `{"source": "<edge, face or
   vertex>", "body": "F2.b0", "entities": ["c7", "p8", …]}`; the entities
-  follow the source when the model changes (`sketch.project`).
+  follow the source when the model changes (`sketch.project`). The stored
+  positions are those of the last edit of the sketch; the evaluation moves
+  them (in steps, so that geometry constrained to them keeps its side), the
+  `sketch` query shows them moved and the next edit stores them.
 - `texts`: `{"id": "t9", "text": "…", "at": [x, y], "height": h,
   "angle": a, "font": "…", "bold": false, "italic": false}`, optional
   `align` (`left`, `center`, `right`), `valign` (`baseline`, `bottom`,
@@ -268,7 +271,8 @@ Evaluation solves the sketch (an over- or inconsistently constrained
 sketch fails with the conflicting constraint ids) and cuts the
 non-construction curves into profile regions: the faces of the planar
 arrangement, with islands as holes; overlapping shapes split into
-separate regions. A region reference whose key no longer exists means the
+separate regions, and curves on each other (a circle drawn twice) bound
+them once, the one with the lower id. A region reference whose key no longer exists means the
 region with the most curves in common. Older files' `shapes` (rectangles
 and circles) are read as entities, constraints and dimensions with the
 same curve ids and parameters.
@@ -407,8 +411,8 @@ extrusion's; a full turn has no caps.
   "offset": o}` (the cylinder ends where each axis first meets the
   object, the point beyond).
 - `thread` (a tapped hole): `standard` (`iso_metric` default, `unified`,
-  `whitworth`, `npt`), `designation`, `class`, `right_handed` (default
-  true), `modeled` (ISO metric and Unified only), and `length`, `offset`
+  `whitworth`, `npt`, `tyre_valve`), `designation`, `class`, `right_handed` (default
+  true), `modeled` (ISO metric, Unified and tyre valve only), and `length`, `offset`
   from the hole's start (the whole wall when left out); as for the
   [thread](#thread) feature.
   The bore is the size's basic minor diameter; `diameter` is then ignored.
@@ -430,24 +434,46 @@ numbers the positions from 0.
 
 - `faces`: cylindrical faces, all internal (hole walls) or all external.
 - `thread`: `standard` (`iso_metric` default, `unified`, `whitworth`,
-  `npt`), `designation` (`M10x1.5`, `M10` for the coarse pitch, `1/4-20
-  UNC`; Whitworth `1/4-20 BSW`, `1/4-26 BSF`, the parallel pipe threads
-  `G 1/4`; NPT `1/4-18 NPT`), `class` (`6g` external, `6H` internal;
-  Whitworth `Close`, `Medium`, `Free`, `A`, `B` external, `Medium`,
-  `Normal` internal; NPT `Standard`; checked against the face),
+  `npt`, `tyre_valve`), `designation` (`M10x1.5`, `M10` for the coarse
+  pitch, `1/4-20 UNC`; Whitworth `1/4-20 BSW`, `1/4-26 BSF`, the parallel
+  pipe threads `G 1/4`; NPT `1/4-18 NPT`; the tyre valve threads of ISO
+  4570 `5V1`, `8V1`, … on the 60-degree profile, mitcad#59), `class` (`6g`
+  external, `6H` internal; Whitworth `Close`, `Medium`, `Free`, `A`, `B`
+  external, `Medium`, `Normal` internal; NPT and tyre valve `Standard`;
+  checked against the face),
   `right_handed`. Sizes: `core/model/data/threads.json` (the
   `thread_sizes` query). An NPT size is listed at its pipe's outside
   diameter; its 1:16 taper is not kept.
-- `modeled`: cut the basic 60° profile into the faces (an external crest
-  on the cylinder, an internal one at the bore; ISO metric and Unified
-  only, the others are cosmetic only); otherwise cosmetic: no geometry,
-  listed by the `threads` query.
+- `modeled`: build the 60° profile on the faces (ISO metric, Unified and
+  tyre valve only, the others are cosmetic only); otherwise cosmetic: no geometry,
+  listed by the `threads` query. The profile is ISO 68-1's: flanks at
+  30° to the radius, half a pitch wide at the pitch diameter, flat crests
+  and roots on the major and minor diameters. Along the threaded part the
+  material becomes the thread: removed beyond the profile, and added up
+  to the crest where the face lies inside it (a shaft thinner than the
+  major diameter, a bore wider than the minor one). The part ends in
+  planes across the axis, and runs out through ends of the face with no
+  material beyond them (a shaft's free end, a hole's mouth).
+- `diameters` (modelled only): `{"major": D, "minor": D1, "pitch": D2}`,
+  the profile's diameters, e.g. a tolerance class's (the middles of its
+  tolerances, as `.f3d` designs store them: M10x1.5 6g is 9.85, 8.141,
+  8.928); the size's basic diameters (D, D1 = D − 5H/4, D2 = D − 3H/4)
+  when left out.
+- `angle` (modelled only): the thread turned about its axis (right-hand
+  rule), 0 when left out. At angle 0, with the axis pointing up (+Z; axes
+  across Z towards +Y, the X axis towards +X), from the face's end at the
+  low end of that axis and at the reference direction (the X axis
+  projected across the axis; Y for axes within about 25° of X), an
+  external thread's groove spans the first half pitch at the pitch
+  diameter, an internal thread's tooth the same half pitch (a bolt and a
+  nut threaded from the same plane mate).
 - `length` and `offset`: part of each face, from the end its cylinder's
   axis points to (`location`: `high_end`, default) or from the other
-  (`low_end`); the whole face when left out, running out through both
-  ends.
+  (`low_end`); the whole face when left out.
 
-A modelled thread's groove faces are `thread(<face>)`.
+A modelled thread's new faces (flanks, crests and roots) are
+`thread(<face>)`. The work is local: only the body's faces near the
+thread take part, so a large body does not slow it down.
 
 ### fillet
 
@@ -682,7 +708,9 @@ revolutions and loft weights are unitless values. Examples:
 - `path`: a [path](#paths).
 - `orientation`: `perpendicular` (default; the profile keeps its angle to
   the path, without twisting about it) or `parallel` (it keeps its
-  direction and only moves).
+  direction and only moves; where the path turns back through the
+  profile's plane, the copies passing over each other are fused into one
+  body).
 - `twist_angle`: the profile's turn about the path over the swept length
   (right hand about the path's direction). `taper_angle`: positive
   widens; the profile point farthest from the path moves out by `s
@@ -705,13 +733,21 @@ revolutions and loft weights are unitless values. Examples:
 Twists, tapers and rails sweep copies of the profile placed along the
 path through a smooth loft: the path must be smooth, the orientation
 perpendicular and the sweep not round a whole closed path (otherwise
-`unsupported: …`). Sharp corners of a plain sweep are mitred.
+`unsupported: …`). Sharp corners of a plain sweep are mitred; a corner
+whose mitre does not build (a slight kink between path curves) is
+rounded, or else the profile turns through it. A profile within the
+modelling tolerance (1e-7 mm) of an end of the path is at that end:
+`fraction` 0 with the whole `fraction2` sweeps only backwards from it,
+and an extent that covers none of the path is an error.
 
 Faces: `side(<segment>)` from each profile segment, `#k` pieces where the
 path has several curves; `start(<region>)` and `end(<region>)`: with the
 profile at an end of the swept part `start` is at the profile, otherwise
 `start` ends side one (beyond the profile) and `end` side two, as for
-extrusions. A sweep round a whole closed path has no caps.
+extrusions. A sweep round a whole closed path has no caps. With the
+`parallel` orientation, where the path turns back through the profile's
+plane the copy there is a face of its own, `turn(<region>)` (`#k` when it
+turns back several times).
 
 ### loft
 
@@ -888,6 +924,36 @@ coil's sections are instead fixed shapes at right angles to its helix).
 A height is given as a ratio: `"<height> / <pitch>"` for `revolutions` or
 `"<height> / <revolutions>"` for `pitch` (as the FreeCAD import and the
 application write it). `operation` and `participants` as for extrude.
+
+`growth` (a length, optional; mitcad#59) widens the helix: the profiles
+move that far out from the axis per turn (negative: in); a cone's angle
+is the growth `pitch * tan(angle)`. `construction` (mitcad#83) says how a
+growth is built:
+
+- `"mitcad"` (the default for commands): the screw motion, the profiles
+  also moved out along the direction from the axis towards their centre
+  (across their plane's normal when the centre is on the axis) in
+  proportion to the turn. Every section in a plane through the axis is
+  the profile turned there and moved out, the same for every profile
+  position, growth sign and direction, so the volume of a profile in a
+  plane through the axis is its area times `2 pi revolutions` times its
+  centre's mean distance from the axis. A narrowing that would take the
+  profiles to the axis fails.
+- `"freecad"` (what the FreeCAD import writes): as FreeCAD builds its
+  conical and growing helices, so that they import exactly. The profiles
+  follow the Frenet frame of a spiral of the same pitch and growth a
+  hundred times as far from the axis, which FreeCAD raises along the axis
+  by ten thousand times the profiles' height above the axis' origin when
+  the growth is not positive (otherwise by that much of the origin's
+  height); the profiles stay nearly in planes through the axis, and a
+  narrowing helix whose profiles sit at the axis' origin runs the other
+  way, as in FreeCAD.
+
+A growing helix always stores its construction. A command without one
+gives Mitcad's, or keeps the construction of the helix it edits; in files
+written before the field (by the FreeCAD import, mitcad#59) a growing
+helix without one is FreeCAD's, so it keeps its shape. Without a growth
+both are the screw motion and the field is left out unless given.
 Faces: `side(<segment>)`, `start(<region>)` at the profile and
 `end(<region>)` (`geometry/src/path_sweep.cpp`).
 
@@ -946,8 +1012,10 @@ Patterns, mirrors, combine, moves and primitives: modules `pattern.rs`,
   features among the `features` (a pattern of patterns) stands for its
   originals at each of its elements (the original's too, not the
   suppressed ones): the copies go to every product of the inner and the
-  outer elements, the inner one applied first. Patterns of bodies or
-  faces cannot be patterned again.
+  outer elements, the inner one applied first. A feature that the
+  `features` reach at the same place more than once (a mirror of a
+  feature and of a mirror or pattern whose original it is) is copied once
+  there. Patterns of bodies or faces cannot be patterned again.
 - Quantities include the original. `distance_type`: `spacing` between
   neighbours or `extent` from the first element to the last. A negative
   distance or angle goes the other way. A full turn spaces a circular
@@ -956,6 +1024,11 @@ Patterns, mirrors, combine, moves and primitives: modules `pattern.rs`,
   original. Path distances are arc lengths along the path; `start` (0…1)
   is where the original sits on the path; `along_path` turns the copies
   with the path.
+- `scale` (optional, a factor; mitcad#59): the copies grow (or shrink)
+  element by element up to that factor: element e of n is scaled by
+  1 + (scale − 1) · e / (n − 1) about the centre of mass of the first
+  object (a feature's tool, the first body; not for faces) carried to the
+  element (FreeCAD's Scaled transformation after a pattern).
 - Elements: element 0 is the original. Along a direction the positions
   are 0, 1, …, q − 1, then −1, …, −(q − 1) when symmetric; a rectangular
   pattern numbers direction 1 first, element = k1 + n1 · k2.
@@ -967,6 +1040,12 @@ Patterns, mirrors, combine, moves and primitives: modules `pattern.rs`,
   split apart); `identical` and `optimized` move the feature's tool to
   every element and combine all at once. The pattern fails if no copy
   reaches a body.
+- `original_bodies` (features; default false, mitcad#74): the copies of a
+  feature without participants of its own act only on the bodies that
+  feature changed (still there), as in `.f3d` designs, where a pattern of
+  a hole leaves another body its copies reach alone; by default they act
+  on the feature's participants, every body without them. The `.f3d`
+  import sets it for patterns and mirrors of features.
 - Names: copied faces are `<pattern>:inst<element>(<original face>)`,
   e.g. `F5:inst4(F4:side(c1))`; their edges follow. A pattern of a
   pattern names its copies of the inner copies around the inner names
@@ -985,7 +1064,18 @@ Patterns, mirrors, combine, moves and primitives: modules `pattern.rs`,
 A pattern of one copy, element 1 (`<mirror>:inst1(<face>)`). Mirrored
 bodies are new bodies; `combine` joins each to its original when they
 touch. Mirrored features reflect their finished tool (never a rebuilt
-one).
+one); `original_bodies` as for patterns.
+
+The mirror image of a nearly symmetric body lies on the body almost
+everywhere, nearly but not exactly, and a boolean of the whole shapes
+intersects every such pair of faces (minutes for free-form faces, often
+with a wrong result). `combine` therefore joins an image that differs
+from its body in at most half of the faces of each only where they
+differ by more than 0.1 mm (`Kernel::join_near_copy`, mitcad#88):
+material of the image within 0.1 mm of the body's faces is left out, and
+an image that differs nowhere by more gives the body unchanged. Any other
+image is joined whole. `MITCAD_NO_NEAR_COPIES=1` joins every image whole
+(for comparisons).
 
 ### combine
 
@@ -1243,7 +1333,7 @@ command: it is skipped, and the `timeline` query shows its error.
 | `set_feature_visible` | `uid` (a sketch or a construction plane, axis or point), `visible` | undo step `Show Sketch1` / `Hide Plane1` unless nothing changes; nothing recomputed |
 | `set_body_visible` | `uid`, `visible` | |
 | `set_body_material` | `uid`, `material` (an id below, or null for the default, steel) | |
-| `set_body_appearance` | `uid`, `appearance` (an id, or null) | |
+| `set_body_appearance` | `uid`, `appearance` (an id of the library or the document, see [Appearances](#appearances), or null for the default look) | |
 | `set_origin_visible` | `visible` | the root's Origin folder shown; undo step `Show Origin` / `Hide Origin` unless nothing changes; nothing recomputed |
 | `set_isolation` | `items`: `{"body": "F3.b0", "occurrence": "O1"}` (a body, in the occurrence that places it, none for the root's) or `{"occurrence": "O1/O4"}` (an occurrence by its path); none: unisolate | undo step `Isolate 2 item(s)` / `Unisolate`; an occurrence that is not there is refused |
 
@@ -1288,6 +1378,260 @@ Named views change no geometry and recompute nothing; they are saved in
 the project file (`"views"`, left out when there are none). The view
 named `Home` is the document's home view.
 
+### Analyses
+
+Section analyses kept in the document (mitcad#41,
+`core/model/src/document/analyses.rs`): the browser's Analysis folder.
+
+| Command | Fields | Result |
+|---|---|---|
+| `add_analysis` | `def`, `name` (the next free `Section<n>` when left out) | `name`; undo step `Add Section1`. It is shown and the others are hidden |
+| `edit_analysis` | `name`, `def`, `visible` (optional: true shows it and hides the others, false hides it; as it was when left out) | undo step `Edit Section1` unless nothing changes |
+| `set_analysis_visible` | `name`, `visible` | undo step `Show Section1` / `Hide Section1` unless nothing changes; showing hides the others |
+| `rename_analysis` | `name`, `new_name` | undo step `Rename Section1` |
+| `delete_analysis` | `name` | undo step `Delete Section1` |
+
+A `def` is `{"type": "section", "plane": <plane reference>, "offset": mm,
+"flip": bool}` (`offset` default 0, `flip` default false): the bodies cut
+at `plane` moved by `offset` along its normal, the side the normal points
+to cut away; `flip` reverses the normal. The plane is a [plane
+reference](#references-to-geometry) (origin plane, construction plane,
+planar face, fixed plane); `add_analysis` and `edit_analysis` refuse one
+that is no plane at the marker, and other fields than these.
+
+The `analyses` query lists them in the order added: `name`, `type`,
+`visible`, the `def`'s fields, and `section`: {`origin`, `normal`} (the
+plane in design coordinates at the marker, offset and flip applied; the
+origin is the plane's origin, see [References to
+geometry](#references-to-geometry)), or `error` when the plane cannot be
+found there (a face of a body that is gone or rolled back). A face
+reference follows the model by its topological name, as features' do.
+
+- At most one analysis is shown at a time: one section cuts the bodies.
+  Showing one hides the others, also in a file read with several shown
+  (the first shown stays).
+- Analyses change no geometry and recompute nothing. They are saved in
+  the project file (`"analyses": [{"name", "visible" (only when false),
+  "type", "plane", "offset", "flip"}]`, left out when there are none;
+  files without it have none), and the comparison of versions lists them
+  by name.
+
+### Appearances
+
+How bodies look (mitcad#46, `core/model/src/appearance.rs`,
+`core/model/src/document/appearances.rs`): a physically based parameter
+set, a subset of OpenPBR's and the Principled BSDF's. Mitcad's library is
+built in and read-only; a document keeps appearances of its own, saved in
+the project file. A body names its appearance by id
+(`set_body_appearance`), and single faces can have their own
+([Appearances of faces](#appearances-of-faces), mitcad#53).
+
+| Parameter | Range | Default | |
+|---|---|---|---|
+| `base_color` | sRGB [r, g, b], 0–1 | [0.8, 0.8, 0.8] | a dielectric's diffuse colour, a metal's reflection, the tint of transmitted light |
+| `metalness` | 0–1 | 0 | 1 for metals |
+| `roughness` | 0–1 | 0.5 | 0 a mirror finish |
+| `specular` | 0–1 | 1 | the weight of a dielectric's specular reflection |
+| `transmission` | 0–1 | 0 | light going through (glass, clear plastic) |
+| `ior` | 1–5 | 1.5 | index of refraction |
+| `coat`, `coat_roughness` | 0–1 | 0, 0.03 | a clear coat over the base (lacquer, car paint) |
+| `emission`, `emission_color` | 0–1000, sRGB | 0, [1, 1, 1] | emitted light: 1 is the colour's own radiance |
+| `opacity` | 0–1 | 1 | a cut-out (glass transmits instead) |
+| `texture` | `{"path", "size": [w, h] mm (default 100 x 100), "rotation" rad, "projection": "box" (default) or "planar", "data"}` | none | an image for the base colour (PNG or JPEG), projected in the body's coordinates: `planar` along Z, `box` from the axis each point of the surface faces most; one repeat of the image is `size`, turned by `rotation` about the projection's axis. `path` is relative to the project file's folder or absolute; `data` (base64 of the image file, at most 32 MB) embeds the image in the project file ([Textures](#textures)). The rendered view draws it, the shaded view shows the base colour |
+
+| Command | Fields | Result |
+|---|---|---|
+| `create_appearance` | `id` (letters, digits, `_`, `-`; the next free `custom<n>` when left out), `name` (`Appearance<n>` when left out), `based_on` (a library or document appearance whose parameters it starts from; the defaults above without it), any parameters | `id`; undo step `Create Appearance Red` |
+| `edit_appearance` | `id`, `name` and any parameters (`"texture": null` removes the texture) | undo step `Edit Appearance Red` unless nothing changes; the library's are refused (copy one with `based_on`) |
+| `delete_appearance` | `id` | `bodies`: those that used it, which get the default look, and `faces` (`{"body", "face"}`) that used it, which get their body's, in the same undo step `Delete Appearance Red` |
+
+- Ids are unique among the library's and the document's appearances, and
+  names too; parameters out of range and unknown fields are refused.
+- The `appearances` query lists the library's appearances in the
+  application's order, then the document's: `id`, `name`, the
+  parameters, `library` (true for the built-in ones), `display_color`
+  (sRGB: the colour of the shaded view and exports; the base colour),
+  `bodies` (the uids of bodies that use it, also those not at the marker)
+  and `faces` (`{"body", "face"}` of faces that use it).
+- Library: `steel_satin`, `aluminum_anodized`, `brass_polished`, `copper`,
+  `cast_iron`, `paint_red`, `paint_blue`, `paint_green`, `paint_yellow`,
+  `paint_black`, `paint_white`, `plastic_black`, `plastic_orange`,
+  `rubber`, `glass`, `wood_oak` (their colours as before mitcad#46),
+  `chrome`, `gold_polished`, `steel_polished`, `plastic_red`,
+  `plastic_white`, `plastic_blue`, `plastic_clear`, `glass_clear`,
+  `glass_frosted`, `wood_walnut`, `wood_maple`, `emissive_white`.
+- A body without an appearance, or with an id in neither list (an
+  imported one), has the default look; a body's physical material does
+  not choose its appearance.
+- The commands change no geometry and recompute nothing. The project file
+  keeps the document's appearances as `"appearances": [{"id", "name",
+  parameters...}]` (left out when there are none; parameters left out of
+  a file are the defaults; files without it have none), and the
+  comparison of versions lists them by id.
+
+### Appearances of faces
+
+Faces of a body can have appearances of their own, which override the
+body's (mitcad#53, `core/model/src/document/bodies.rs`): a label area, a
+painted face, a rubber pad.
+
+| Command | Fields | Result |
+|---|---|---|
+| `set_face_appearance` | `uid` (body), `faces` (topological names of faces of the body at the marker, `F2:side(c1[c4,c2])`), `appearance` (an id, or null: the faces show the body's again) | undo step `Set Appearance of Face of Body1` / `Set Appearance of 2 Faces of Body1` / `Clear Appearance of Face of Body1` unless nothing changes; faces that are not there and names that are no face names are refused |
+| `clear_face_appearances` | `uid` | undo step `Clear Face Appearances of Body1` unless the body has none |
+
+- A face appearance names its face as assigned (the canonical text of
+  the name) and follows it as features' face references do: a later
+  feature that changes the face keeps the name, all pieces of a split
+  face (`#k`) keep it. When a change renames the face (a sketch edit after
+  which a side face's segment ends on another curve: `F2:side(c1[c4,c2])`
+  becomes `F2:side(c1[c4,c5])`), the name finds the face of the same
+  feature and role whose key has the most curves in common with it (for a
+  side face: the same curve), as a profile's region key does; the name
+  kept is still the one assigned. A face that is gone finds nothing and
+  its appearance is kept for when it comes back (undo).
+- The `bodies` query lists them per body as `face_appearances`: `[{"face"
+  (as assigned), "appearance", "faces" (a name of each face it finds at
+  the marker; empty when the face is gone)}]`, left out when there are
+  none.
+- They recompute nothing. The project file keeps them with the body's
+  other attributes: `"face_appearances": {"F2:side(c1[c4,c2])":
+  "paint_red"}` (left out when there are none; files without them have
+  none); copied designs rename the feature ids in the names. The
+  comparison of versions lists them with the body.
+
+### Textures
+
+An appearance's texture is an image file or an image embedded in the
+project file (mitcad#53).
+
+- `"data"` in a `create_appearance` or `edit_appearance` texture embeds the
+  image: base64 of a PNG or JPEG file (checked by its first bytes; at most
+  32 MB). `path` then names the file it came from. The `appearances` query
+  lists an embedded texture with `"embedded": true` and `"image_sha256"`
+  (the digest of the image file) instead of its data; that form sent back
+  keeps the embedded image (`"embedded": true` without `data` keeps the
+  image the appearance has, or that of `based_on` for a new one; refused
+  when there is none), so the application changes a texture's size or
+  rotation without sending the image again. A texture without `data` and
+  `embedded` reads its file again.
+- The `appearance_image` query (`id`) gives an embedded image: `data`
+  (base64), `format` (`png`, `jpeg`) and `sha256`.
+- The project file keeps the image in the texture's `data`; the
+  comparison of versions shows `sha256 <digest>` for it.
+
+### Render settings
+
+How the rendered view (`docs/rendering.md`) lights and shows the design
+(mitcad#47, `core/model/src/render_settings.rs`), kept per document so a
+design keeps its look. Sections of fields with defaults: the four below
+and `output`, the final render's ([Render output](#render-output),
+mitcad#48); later sections are added the same way, and files without a
+section have its defaults. The user's lights are a list beside them
+([Render lights](#render-lights), mitcad#54).
+
+| Field | Values | Default | |
+|---|---|---|---|
+| `environment.preset` | `studio`, `studio_white`, `studio_dark`, `outdoor`, `image` | `studio` | built-in light setups (procedural, no image files): `studio` soft key, fill and top lights in light grey surroundings; `studio_white` bright white surroundings, very soft light; `studio_dark` dark surroundings, a key and two rim lights; `outdoor` a clear sky and the sun; `image` an HDR image all around |
+| `environment.strength` | 0–100 | 1 | a factor on all of the environment's light |
+| `environment.rotation` | rad, within two turns | 0 | turns the studio's lights or the image about Z (counter-clockwise from above) |
+| `environment.sun_elevation` | 0–pi/2 rad | pi/4 | `outdoor`: the sun's height above the horizon |
+| `environment.sun_azimuth` | rad, within two turns | 5/4 pi | `outdoor`: where the sun is, counter-clockwise from X seen from above (5/4 pi: front left) |
+| `environment.image` | a path | none | `image`: an equirectangular `.hdr` or `.exr` file, relative to the project file's folder or absolute; kept when another preset is chosen |
+| `background.mode` | `view`, `color`, `environment` | `view` | behind the bodies: the view's own background (View > Environment), `background.color`, or the environment itself |
+| `background.color` | sRGB [r, g, b], 0–1 | [1, 1, 1] | |
+| `ground.shadows` | bool | true | a ground that shows only the bodies' shadows (a shadow catcher); without it there is no ground |
+| `ground.reflections` | bool | false | the ground is glossy and catches the bodies' reflections too (with `shadows`) |
+| `ground.height` | mm | none | the ground's Z; none: under the lowest body |
+| `film.exposure` | -10–10 stops | 0 | each stop doubles the light |
+| `film.view_transform` | `standard`, `filmic`, `neutral` | `standard` | from light to screen colours: `standard` sRGB, brighter than white clips; `filmic` a filmic curve (soft highlights, contrast in the darks); `neutral` base colours stay as they are under white light, only highlights are compressed |
+
+| Command | Fields | Result |
+|---|---|---|
+| `set_render_settings` | per section (`environment`, `background`, `ground`, `film`, `output`) an object of the fields that change; `null` gives a field its default (none for `image` and `height`) | `changed`; undo step `Change Render Settings` unless nothing changes |
+| `reset_render_settings` | | `changed`; the defaults, undo step `Reset Render Settings` unless they are already |
+
+- Values out of range, unknown fields and sections are refused with the
+  section's name (``ground: unknown field `depth` ``); nothing changes then.
+- The commands change no geometry and recompute nothing.
+- The `render_settings` query gives every section with every field (`image`
+  and `height` only when set), and `lights`.
+- The project file keeps them as `"render": {"environment": {...},
+  "background": {...}, "ground": {...}, "film": {...}}` when they are not
+  the defaults (fields left out of a file are the defaults); the
+  comparison of versions lists each changed field as a document change
+  (`render.environment.preset studio -> outdoor`).
+
+### Render lights
+
+Lights of the user's own (mitcad#54), besides the environment's: the
+render settings' `lights`, a list in the `render_settings` query (`[]`
+without any), saved with the other sections (files without it have no
+lights) and changed by commands of their own. Lengths in mm, angles in
+radians, Z up. Every light keeps every field; those of other kinds are
+ignored.
+
+| Field | Values | Default | |
+|---|---|---|---|
+| `id` | letters, digits, `_`, `-` | `light<n>` | what the commands name it by; cannot change |
+| `name` | text | `Light<n>` | |
+| `type` | `point`, `spot`, `area`, `sun` | `point` | a point (or small ball) shining all around; a point light in a cone; a glowing rectangle or disc (soft light); parallel light from far away (no position) |
+| `enabled` | bool | true | off: kept, lights nothing |
+| `space` | `world`, `camera` | `world` | `camera`: `position` and `direction` are relative to the camera (x to the right, y up, z toward the viewer, from the eye): the light follows the view |
+| `position` | [x, y, z] mm, within 10⁷ | [0, 0, 200] | where it is (not for `sun`) |
+| `direction` | [x, y, z], not zero | [0, 0, -1] | where it shines (spot, area, sun); kept as a unit vector |
+| `color` | sRGB [r, g, b], 0–1 | [1, 1, 1] | |
+| `power` | 0–10⁶ | 5 (sun 2) | point, spot, area: watts (a 5 W point light 300 mm away gives 4.4 W/m² where it falls straight, about the default studio's key light); sun: its irradiance in W/m² |
+| `size` | 0–10⁶ mm | 20 | point, spot: the ball's diameter (0: hard shadows); area: the width, or the disc's diameter |
+| `size_y` | 0–10⁶ mm | 20 | area: the rectangle's height |
+| `shape` | `rectangle`, `disc` | `rectangle` | area |
+| `spot_angle` | more than 0, at most pi | pi/4 | spot: the cone's full angle |
+| `spot_blend` | 0–1 | 0.15 | spot: how softly the cone's edge fades |
+| `angle` | 0–pi/2 | 0.02 | sun: its disc's angular diameter (0: hard shadows) |
+
+| Command | Fields | Result |
+|---|---|---|
+| `add_render_light` | the light's fields (`type` sets the default `power`), all optional; `id` when not the next free `light<n>` | `id`; undo step `Add Light <name>` |
+| `edit_render_light` | `id`, the fields that change (`null`: the field's default) | `changed`; undo step `Change Light <name>` unless nothing changes |
+| `delete_render_light` | `id` | undo step `Delete Light <name>` |
+
+- At most 64 lights; ids are unique. Values out of range, unknown fields
+  or kinds and unknown ids are refused with the light's place
+  (``lights.light1.power must be between 0 and 1000000, got -1``);
+  nothing changes then. `set_render_settings` has no `lights`;
+  `reset_render_settings` removes them with the other settings.
+- The comparison of versions lists a light added or removed
+  (`render.lights.light1 (none) -> Light1 (area)`) and its changed fields
+  (`render.lights.light1.power 40 -> 60`).
+- The model only keeps the lights; the rendered view and the final
+  render light the design with them (`docs/rendering.md`, "Lights").
+
+### Render output
+
+The final render to an image file (mitcad#48; File > Render Image and
+`mitcad-cli render`, `docs/rendering.md` "Final render"): the render
+settings' fifth section, `output`, with the same rules as the others
+(`set_render_settings` with `"output": {...}`, null for a field's
+default; saved when not the defaults, so files of mitcad#47 open with
+them; compared field by field, `render.output.format png -> exr`).
+
+| Field | Values | Default | |
+|---|---|---|---|
+| `output.width` | 16–16384 px | 1920 | the image's width |
+| `output.height` | 16–16384 px | 1080 | the image's height with `aspect` `fixed` |
+| `output.aspect` | `view`, `fixed` | `view` | `view`: as high as the view is in proportion (the command line, without a view, takes width x height); `fixed`: width x height, and the view shows the image's frame |
+| `output.samples` | 1–65536 | 128 | samples per pixel (adaptive sampling can stop converged pixels earlier) |
+| `output.time_limit` | 0–86400 s | 0 | stop after this long even before the samples are done; 0: no limit |
+| `output.denoise` | bool | true | denoise once the samples are done |
+| `output.transparent` | bool | false | an alpha channel instead of the background: only the bodies and their shadows (not for JPEG) |
+| `output.format` | `png`, `png16`, `jpeg`, `exr` | `png` | PNG (8 or 16 bits) and JPEG as the view shows the render (exposure and view transform, sRGB); OpenEXR (half floats) the render's linear light without exposure and view transform, alpha premultiplied |
+| `output.quality` | 1–100 | 90 | JPEG's quality |
+
+- Width, height, samples, time limit and quality out of range are refused
+  with the field (``output.samples must be between 1 and 65536, got 0``).
+- The model only keeps these settings; the application and `mitcad-cli`
+  render with them.
+
 ## Queries
 
 `{"query": "<name>", …}`; the result is JSON. Bodies are those at the
@@ -1300,7 +1644,10 @@ timeline marker.
 | `feature` | `uid` | `uid`, `name`, `type`, `suppressed`, `status`, `error`, `visible`, `visible_set`, `warnings` (when any), `def` (parameters by name) |
 | `parameters` | | `name`, `expression`, `unit` (`""` for unitless), `value` (mm or rad), `text` (the value in its unit, `"12.5 mm"`), `comment`, `kind` (`user`, `model`), `owner` (the feature of a model parameter), `dependencies` (names its expression uses), `favorite` |
 | `evaluate` | `expression`, `kind`: `length` (default), `angle` or `unitless` | `value` (mm or rad), `text` (in the document's unit, `"40 mm"`), `references` (parameter names used), `expression` (with decimal points: `"d1 * 1,5"` gives `"d1 * 1.5"`) |
-| `bodies` | `properties`, `volumes` | `uid`, `name`, `component` (when not the root's), `visible`, `material`, `appearance` (when set); with `"properties": true` also `kind` (`solid`, `sheet`: faces or open shells, `mesh`, `empty`), `volume`, `area`, `center`, `bbox` {`min`, `max`} (in the component's coordinates), `faces`, `edges` (counts); with `"volumes": true` only `volume` (cheaper) |
+| `appearances` | | the library's and the document's appearances with their parameters ([Appearances](#appearances)) |
+| `appearance_image` | `id` | an appearance's embedded texture image: `data` (base64), `format`, `sha256` ([Textures](#textures)) |
+| `render_settings` | | the document's render settings, every section and field ([Render settings](#render-settings)) |
+| `bodies` | `properties`, `volumes` | `uid`, `name`, `component` (when not the root's), `visible`, `material`, `appearance`, `face_appearances` ([Appearances of faces](#appearances-of-faces)) (when set); with `"properties": true` also `kind` (`solid`, `sheet`: faces or open shells, `mesh`, `empty`), `volume`, `area`, `center`, `bbox` {`min`, `max`} (in the component's coordinates), `faces`, `edges` (counts); with `"volumes": true` only `volume` (cheaper) |
 | `profiles` | `hashes` | `sketch`, `sketch_name`, `region`, `consumed` (an extrude uses it); with `"hashes": true` also `hash` (16 hex digits of the region's geometry and sketch frame: the same while the profile's face would be the same) |
 | `faces` | `body` | per face: `names`, `surface` (`plane`, `cylinder`, …), `area` |
 | `edges` | `body` | per edge: `name`, `curve` (`line`, `circle`, …), `length` |
@@ -1308,7 +1655,7 @@ timeline marker.
 | `can_reorder` | `uid`, `index` | `ok`, and `error` (the reason `reorder_feature` would give) when not |
 | `sketch` | `uid` | see [Sketch commands](#sketch-commands) |
 | `threads` | | threads on the bodies (thread features and tapped holes): `feature`, `name`, `body`, `face`, `standard`, `designation`, `class`, `right_handed`, `modeled`, `major_diameter`, `minor_diameter`, `pitch`, and from the face `internal`, `radius`, `start`, `end` (points on the axis where the thread begins and ends) |
-| `thread_sizes` | `standard` (`iso_metric`, `unified`, `whitworth` or `npt`; all when left out) | `standards`, ISO metric first, then Unified, Whitworth (bolt sizes, then the pipe sizes `G 1/4`) and NPT: `standard`, `title` (the thread type's name), `default` (true for ISO metric), `sizes` (smallest first: `size` as the table names it, `10`, `1/4`, `#10`; `major_diameter` mm; `designations`, the coarse pitch or UNC first, each one `thread` and `hole` accept), `classes_external`, `classes_internal`, `default_class_external` (6g, 2A, Medium, Standard), `default_class_internal` (6H, 2B, Medium, Standard) |
+| `thread_sizes` | `standard` (`iso_metric`, `unified`, `whitworth`, `npt` or `tyre_valve`; all when left out) | `standards`, ISO metric first, then Unified, Whitworth (bolt sizes, then the pipe sizes `G 1/4`), NPT and tyre valve threads: `standard`, `title` (the thread type's name), `default` (true for ISO metric), `sizes` (smallest first: `size` as the table names it, `10`, `1/4`, `#10`; `major_diameter` mm; `designations`, the coarse pitch or UNC first, each one `thread` and `hole` accept), `classes_external`, `classes_internal`, `default_class_external` (6g, 2A, Medium, Standard), `default_class_internal` (6H, 2B, Medium, Standard) |
 | `named_views` | | in the order added: `name`, `eye`, `target`, `up`, `perspective` (when true), `height` |
 | `recompute_times` | | the features the last recompute evaluated (cache hits left out), in timeline order: `uid`, `name`, `type`, `ms` (wall time of its evaluation); and `ms`, their sum |
 | `changes_since_saved` | | `known` (the state last marked saved is on the undo or redo stack, or is this one), `steps`: oldest first, the labels of the undo steps made since (`Change d3`), or `Undo <label>` for those undone since, leaving out those that changed only the display state; empty when nothing else changed or not known (never saved, a step dropped by a new command after undo) |
@@ -1383,6 +1730,11 @@ it on a copy of the document without committing it. The result:
 - A pattern adds `elements`: every element's transform as 3 rows of 4 by
   element number, suppressed ones too. A construction feature adds its
   `datum`.
+- A command that places occurrences elsewhere (a joint, a
+  `move_occurrence`; mitcad#55) adds `placements`: each occurrence whose
+  placement in the design changes, `path` (uids from the root, `O1/O4`;
+  an occurrence inside a moved one is listed too) and `transform` (4x4,
+  in the design), so a preview can show the bodies where it puts them.
 - `preview_body_shape(uid)` returns a body as the command leaves it and
   `preview_tool_shape()` the extrusion before its boolean.
 - The next command or `clear_preview` drops the preview; committing the
@@ -1477,7 +1829,9 @@ The `sketch` query (`{"query": "sketch", "uid": "F1"}`) returns:
 - `uid`, `name`, `plane`, `frame` (`origin`, `x_axis`, `y_axis`, `normal`
   in model coordinates, or null when the sketch did not evaluate),
   `solved`, `error`;
-- `entities`: the definition's, with solved `at` for points, `geometry`
+- `entities`: the definition's (linked projections, and what is
+  constrained to them, where the last evaluation put them: their sources'
+  current geometry), with solved `at` for points, `geometry`
   for curves (line `start`, `end`; circle `center`, `radius`; arc also
   `start_angle`, `end_angle`, `start`, `end`; ellipse `major_radius`,
   `minor_radius`, `rotation`; splines `degree`, `control`, `weights`,
@@ -1577,12 +1931,12 @@ Examples: `tools/cli/tests/f6_*.json`.
 | `copy_occurrence` | `occurrence`, `transform` (optional) | `occurrence`, `name` |
 | `paste_new` | `occurrence`, `transform` (optional) | `component`, `occurrence`, `name` |
 | `delete_occurrence` | `occurrence` | `deleted`: features |
-| `insert_component` | `path`, `link` (default true), `transform`, `name`, `base` (directory of relative paths) | `component`, `occurrence`, `name` |
+| `insert_component` | `path` or `library` ([Component libraries](#library-parts)), `link` (default true), `transform`, `name`, `base` (directory of relative paths) | `component`, `occurrence`, `name` |
 | `update_links` | `base` (optional) | `messages` |
 
 | Query | Fields | Result |
 |---|---|---|
-| `components` | | `active`; `components` (the root first): `uid`, `name`, `created_by`, `link` (path), `features`, `bodies`, `occurrences` (count); `occurrences`: the tree from the root, each `uid`, `name`, `path`, `component`, `transform` (rows, in the parent, at the marker), `world` (4x4 into the design), `grounded`, `visible`, `children` |
+| `components` | | `active`; `components` (the root first): `uid`, `name`, `created_by`, `link` (path), `library` (a library part's record, or null), `features`, `bodies`, `occurrences` (count); `occurrences`: the tree from the root, each `uid`, `name`, `path`, `component`, `transform` (rows, in the parent, at the marker), `world` (4x4 into the design), `grounded`, `visible`, `children` |
 | `instances` | `properties`, `hidden` (default false) | the bodies as placed: `path` (occurrence uids), `occurrence` (path name, empty for the root's), `component`, `component_name`, `body`, `name`, `visible`, `transform` (4x4); with `properties` the placed body's `volume`, `area`, `center`, `bbox` |
 
 - An occurrence is given by its uid (`O3`), its name (`Plate:2`) or its
@@ -1603,6 +1957,253 @@ Examples: `tools/cli/tests/f6_*.json`.
   `"visible": false`), `active_component`, and a feature's `component`
   when it is not the root. Files without them load with every feature in
   the root component.
+
+## Joints
+
+Joints connect occurrences and say how they may move against each other
+(mitcad#55). They are timeline features of the component they are added
+in (the active one, or `component`), recomputed in order like
+`move_occurrence` and `capture_position`, and edited, suppressed,
+reordered and deleted like other features (`edit_feature` takes the `def`
+the `feature` query gives). Code: `core/model/src/joints.rs` (kinds,
+frames, what recompute does), `features/joint.rs` (definitions),
+`document/joints.rs` and `api/joints.rs`, the joint solver
+`core/solver/src/rigid.rs` ([README](../../../solver/README.md#joints-rigid-bodies));
+tests `joint_tests.rs`, `joint_solver_tests.rs`, `core/solver/tests/rigid.rs`,
+`tools/cli/tests/joints.json`.
+
+Joints are stored, checked, reported and solved (below), the
+application's ASSEMBLE group adds, edits, drives, drags and animates them
+([app/COMMANDS.md](../../../../app/COMMANDS.md), "Joints"), and the
+`.f3d` import brings the file's joints in as these features
+([.f3d import with the timeline](#f3d-import-with-the-timeline), *From
+the dump IR*).
+
+### Kinds and frames
+
+A joint joins origin `a` to origin `b`. Each origin resolves to a frame
+(an origin and x, y, z axes) on geometry of an occurrence's component,
+moved into the joint's component by the occurrences' placements. The joint
+holds when
+
+`frame_a = frame_b · motion(values) · Rz(angle) · Tz(offset) · flip`
+
+`motion` is the kind's free motions at some values, along and about frame
+`b`'s axes, composed in the order listed; `flip` turns frame `a` over
+(half a turn about its x axis). Without `flip` the two z axes point the
+same way: to put a face on a face (both outward normals), flip.
+
+| Kind | Free motions | Values |
+|---|---|---|
+| `rigid` | none | |
+| `revolute` | turns about z | `rz` |
+| `slider` | slides along `slide_axis` (`x`, `y` or `z`, default `z`) | `tx`, `ty` or `tz` |
+| `cylindrical` | slides along z, turns about it | `tz`, `rz` |
+| `pin_slot` | slides along x, turns about z | `tx`, `rz` |
+| `planar` | slides along x and y, turns about z | `tx`, `ty`, `rz` |
+| `ball` | turns about z, y and x | `rz`, `ry`, `rx` |
+
+Slides are millimetres, turns radians (right-handed).
+
+**Origins.** `{"occurrence": "O1/O4", "geometry": <reference>,
+"frame_override": {...}}`. `occurrence` is a path of occurrences from the
+joint's component (uids in definitions; `add_joint` also takes names,
+`Arm:1/Pin:2`), empty or left out for the component's own geometry (which
+never moves). `geometry` is a [reference](#references-to-geometry) to
+geometry of the component the path ends in, resolved there:
+
+| Geometry | Origin | z axis |
+|---|---|---|
+| planar face | its middle (`Kernel::face_plane`) | the outward normal |
+| cylindrical or conical face | the axis point nearest to the face's middle | the axis (along its largest component) |
+| toroidal face | the centre | the axis |
+| spherical face | the centre | the component's z |
+| circular edge | the centre | the axis (along its largest component) |
+| straight edge | the middle | along the edge |
+| vertex, sketch point, construction point, the origin, a fixed point | the point | the component's z |
+| sketch circle or arc | the centre | the sketch's normal |
+| sketch line, construction or origin axis, fixed axis | the start or the axis's origin | along it |
+| origin plane, construction plane, joint origin, fixed plane | its origin | its normal (its x axis kept) |
+
+Other x axes are the model X projected across z (Y when z is along X).
+`frame_override` replaces parts of the frame, in the component's
+coordinates: `origin` [x, y, z], `z_axis`, `x_axis` (projected across z).
+A body is no origin. A sketch or construction geometry of another
+component than the path's is refused when the joint is added
+(``a: Sketch1 is in Plate, not in Pin``); a body of another component
+fails the joint at recompute (`body F2.b0 is not in Pin at this point of
+the timeline`).
+
+### Feature definitions
+
+```json
+{"type": "joint", "kind": "revolute",
+ "a": {"occurrence": "O2", "geometry": {"body": "F4.b0", "face": "F4:start(r{…})"}},
+ "b": {"occurrence": "O1", "geometry": {"body": "F2.b0", "face": "F2:end(r{…})"}},
+ "offset": 0, "angle": 0, "flip": true,
+ "limits": {"rz": {"min": "-90 deg", "max": "90 deg", "rest": "30 deg"}},
+ "position": {"rz": "45 deg"}}
+{"type": "as_built_joint", "kind": "revolute", "a": "O2", "b": "O1",
+ "origin": {"occurrence": "O2", "geometry": "F9"},
+ "relative": [[1, 0, 0, 100], [0, 1, 0, 0], [0, 0, 1, 0]], "limits": {}}
+{"type": "joint_origin", "geometry": {"body": "F2.b0", "face": "F2:end(r{…})"},
+ "frame_override": {"origin": [5, 5, 10]}, "offset": 0, "angle": 0, "flip": false}
+{"type": "rigid_group", "occurrences": ["O2", "O3"]}
+```
+
+- `joint` (named `Joint<n>`): `kind`, `slide_axis` (sliders only), `a`,
+  `b`, `offset` (along z, a length), `angle` (about z), `flip`, `limits`,
+  `position`; `offset`, `angle` and `flip` default to 0 and false. The
+  two origins must be on different occurrences, and at most one may be
+  the component's own geometry.
+- `limits`: per free motion of the kind, `{"min", "max", "rest"}`, each
+  optional and a [value](#values) (parameters and expressions: a turn's
+  slots are angles, `limits.rz.min_angle`, a slide's lengths,
+  `limits.tz.min`). min ≤ rest ≤ max is checked when the joint is added or
+  edited, and a parameter change that breaks it fails the joint.
+- `position`: per free motion of the kind, the value it is driven to (a
+  [value](#values): `position.rz.position_angle`, `position.tz.position`),
+  within its limits (checked like `rest`). `drive_joint` and
+  `drag_occurrence` set it.
+- A free motion is **driven** (held at a value) by its `position`, else
+  by its `rest` value; without either it is **free**: it moves as the
+  joints need, stays within its limits, and otherwise stays where it is.
+  Driven values say where a motion is, not whether it can move: degrees
+  of freedom leave them out.
+- `as_built_joint` (`AsBuiltJoint<n>`): two occurrence paths `a` and `b`
+  joined where they are: `relative` is `a`'s placement in `b`'s
+  coordinates when it was made (rows of a rotation and a translation;
+  `add_as_built_joint` records it; without it the joint takes the
+  placements as they are at its point of the timeline). `origin` (optional,
+  an origin as above) is the frame of the free motions, `b`'s coordinates
+  without it; an origin on `a`'s side is taken where the recorded
+  relation puts it. The joint holds when `a`'s displacement from where
+  the recorded relation puts it is the kind's motions in that frame
+  (values 0 at the recorded relation). Same kinds, limits and position.
+- `joint_origin` (`JointOrigin<n>`): construction geometry of its
+  component, a frame on `geometry` (as an origin's) with `frame_override`,
+  then moved by `angle` about and `offset` along its z axis and turned
+  over by `flip`. Its datum is a plane with that frame (the `datums`
+  query; a sketch can be placed on it); joints use it as `"F9"`. It has a
+  light bulb like construction geometry.
+- `rigid_group` (`RigidGroup<n>`): two or more occurrences placed in the
+  feature's component that move as one from its point of the timeline:
+  the joints after it move them together, and a `move_occurrence` of one
+  member moves the others by the same motion (`capture_position` sets
+  each occurrence it lists). A group with a grounded member stays where
+  it is: a move of a member fails (`Base:1 is grounded`).
+- Joint features recompute nothing of the bodies and are never written
+  to the result store.
+
+### What recompute does
+
+A **unit** is a top-level occurrence of the joint's component (the one
+its path starts with) with those its rigid groups join to it; it moves
+as one rigid body. A unit is fixed when a member is grounded; the
+component's own geometry (an empty path) is fixed too.
+
+At its point of the timeline, a joint resolves its frames (in the
+components its paths end in, with that point's bodies, sketches and
+construction geometry) and the joint solver solves it together with the
+joints in effect before it in the same component that share moving units
+with it, directly or through each other, from where the occurrences are
+at that point:
+
+- What needs no iteration is placed first, in timeline order: a joint
+  between a side that is fixed (or joined to something fixed by the
+  joints before it) and one that is not moves the free side, with every
+  unit joined to it so far, so that the joint holds at its driven values
+  and, for free motions, at the values nearest to where it is; between
+  two free sides side `a` moves onto side `b`. An open chain needs
+  nothing else.
+- Joints that close a loop are iterated: the units move as little as
+  possible (turns weighed by the size of the joints' layout) until every
+  joint holds, driven motions at their values and free motions within
+  their limits.
+- The units that moved get placement changes of the joint feature (each
+  occurrence's placement set), applied as `move_occurrence`'s are; the
+  occurrences' own placements stay the starting ones (`state` `placed`,
+  `moved`; `satisfied` when nothing had to move). Placements set by
+  joints are not cached: grounding, ungrounding and moving an occurrence
+  recompute them.
+- Joints whose sides cannot move (both fixed, or both in one unit) only
+  hold or fail: `both sides are fixed (Pin:1 and Plate:1) and the joint
+  does not hold`, `both sides move with Pin:1, Pin:2 and the joint does not hold`, or `… is not
+  at its position`.
+- Joints that contradict each other fail the joint feature, which moves
+  nothing: `over-constrained: Joint1 (at its rz position), Joint2 and
+  Joint4 cannot all hold` (the rank analysis of the joints' equations,
+  newest last; `at its … position` names driven values in the
+  contradiction). A loop that cannot close from where the occurrences are
+  (lengths or limits keep it apart) fails with `the joints cannot all
+  hold (Joint1, Joint2, Joint3 and Joint4) from where the occurrences
+  are: …`. The joints after it are solved without it.
+- A path below a top-level occurrence only locates geometry: the joint
+  moves the top-level occurrence (the whole sub-assembly), never an
+  occurrence inside it; joints inside a sub-assembly are the
+  sub-component's own features, solved in its coordinates.
+- At the marker each joint reports its frames and values where the
+  occurrences are; a later feature that moved a side (a
+  `move_occurrence`) leaves `values` null and `solved` false.
+
+A joint whose origins cannot be resolved (an occurrence that is gone, a
+face that is no longer there, a body of another component) fails like any
+feature and moves nothing.
+
+### Commands and queries
+
+| Command | Fields | Result |
+|---|---|---|
+| `add_joint` | `kind`, `slide_axis`, `a`, `b` (origins; `occurrence` by uids or names from the component), `offset`, `angle`, `flip`, `limits`, `position`, `name`, `component` (the active one when left out) | `uid`, `name`, `parameters` (created), `state`, `solved` |
+| `add_as_built_joint` | `kind`, `slide_axis`, `a`, `b` (occurrence paths), `origin`, `limits`, `position`, `name`, `component` | the same; `relative` recorded from the placements at the marker |
+| `add_rigid_group` | `occurrences` (two or more, placed in the component), `name`, `component` | `uid`, `name` |
+| `drive_joint` | `joint` (uid or name), `values` (per motion a [value](#values), or null to take the position away) | `uid`, `parameters` (created), `state`, `values`; one undo step `Drive Joint1` |
+| `drag_occurrence` | `occurrence` (uid, name or path), `point` (in the parent component's coordinates, moving with the occurrence; its origin when left out), `target` | as `joint_drag`; one undo step `Drag Pin:1` |
+
+```json
+{"cmd": "drive_joint", "joint": "Joint1", "values": {"rz": "crank_angle", "tz": null}}
+{"cmd": "drag_occurrence", "occurrence": "Rocker:1", "point": [130, 0, 0], "target": [140, -10, 0]}
+```
+
+- `drive_joint` edits the joint's `position`: a parameter (`crank_angle`)
+  makes the mechanism follow the parameter.
+- `drag_occurrence` keeps where `joint_drag` puts the occurrences: their
+  own placements become the dragged ones (refused for an occurrence a
+  `move_occurrence` or `capture_position` before the marker places:
+  `capture the position instead`), and every driven motion that moved is
+  driven to its new value (its `position` becomes the number). The
+  joints before the marker then reproduce the dragged placements.
+
+| Query | Fields | Result |
+|---|---|---|
+| `joints` | | `joints`: every joint and as-built joint in timeline order: `uid`, `name`, `type`, `kind`, `slide_axis` (sliders), `component`, `a` and `b` {`occurrence` (path name), `path` (uids)}, `motions`, `limits` (per motion `min`, `max`, `rest` as values), `position` (per driven motion its value), `status` and `error` (the feature's), `state` (`placed`, `satisfied`, or the status: `failed`, `suppressed`, `rolled_back`), `solved` (it holds at the marker), `message` (why not), `moved` (occurrences placed), `values` (per free motion, at the marker; null when the joint does not hold there), `within_limits`, `beyond_limits`, `frames` {`a`, `b`: `origin`, `x_axis`, `y_axis`, `z_axis` in the joint's component, at the marker; an as-built joint's motion frame as each side carries it}; `rigid_groups`: `uid`, `name`, `component`, `occurrences`, `names`, `active`, `status`, `error`; `dof`: per component with joint features, `component`, `total`, `overconstrained`, `redundant` and `conflicting` (joint uids), `units` (`occurrences` moving as one, `names`, `grounded`, `dof`, `joints`) |
+| `joint_dof` | `occurrence` (uid, name or path) | in its parent component: `occurrence`, `name`, `component`, `grounded`, `group` (the occurrences moving with it), `dof`, `motions` (none when grounded, all six without joints, its joint's with one, null with more), `joints` (`uid`, `name`, `kind`, `other`, `motions`) |
+| `joint_drag` | `occurrence`, `point`, `target` (as `drag_occurrence`) | `placements` (the occurrences that would move: `occurrence`, `name`, `transform` rows in the parent component), `values` (per joint uid of the parent component, its motions' values); changes nothing |
+| `joint_frame` | `occurrence` (a path from `component`, uids or names; empty: its own geometry), `geometry`, `frame_override`, `component` (the root when left out) | the frame the origin gives at the marker, placed by the path into `component`'s coordinates: `origin`, `x_axis`, `y_axis`, `z_axis`; `component` (the one the path ends in) and `local` (the frame in its coordinates); refused for geometry of another component than the path's |
+
+- Degrees of freedom are exact: the rank of the joints' equations where
+  the occurrences are (the joint solver's analysis; driven values left
+  out). `total` is what all units can do together (6 per unit that is not
+  grounded less the rank); a unit's `dof` is what it can do with the
+  other units held where they are, 0 when grounded. A four-bar linkage
+  has `total` 1 while each link alone has 0. `redundant` lists joints
+  whose equations repeat earlier ones (they hold: two hinges on one axis,
+  the closing joint of a planar loop), `conflicting` those that
+  contradict earlier ones where the occurrences are; `overconstrained`
+  when either is not empty. Only joints that recomputed count.
+- `joint_drag` pulls `point` toward `target` while every joint in effect
+  at the marker in the occurrence's parent component holds (driven
+  motions follow like free ones, limits hold), moving the other units as
+  little as possible: as near as the joints let it. A grounded
+  occurrence does not drag (`Crank:1 is grounded`). For a UI's drag
+  preview: call it per pointer position, then `drag_occurrence` on
+  release.
+- `delete_occurrence` deletes the joints, as-built joints and rigid groups
+  that name an occurrence that is gone, with what depends on them; they
+  are in its `deleted`. Copies of components (`paste_new`, an inserted
+  copy) take their joints along, naming the copies' occurrences.
+- Joint features are saved as features (project file round trip); files
+  without them have none.
 
 ## Import and export
 
@@ -1751,8 +2352,13 @@ their expressions, sketches, construction geometry and features, each
 checked against the file's ASM history; an item that cannot be replayed
 becomes a base feature holding the file's bodies after it. The design's
 components and occurrences come in as Mitcad's and every item goes into
-its component (the design's new-component operations are new bodies
-there). One undo step (`Import part.f3d`). The bridge handles the command
+its component: the one whose bodies it changes, else the one that owns it
+(the design's new-component operations are new bodies there). Occurrences
+take the placements the file gives them at the end of its timeline; the
+file's joints, as-built joints, joint origins, rigid groups and ground
+items come in as [joint features](#joints) where they hold there (else as
+as-built joints, with a warning), other assembly relationships are
+skipped. One undo step (`Import part.f3d`). The bridge handles the command
 (`core/ffi/src/f3d_import.rs`), not the model, because it needs the
 file's bodies built with OCCT.
 
@@ -1764,10 +2370,11 @@ file's bodies built with OCCT.
 | `no_fallback` | leave items that cannot be replayed out instead of using the file's bodies |
 | `no_compare` | compare the final bodies by volume only, not by surface deviation |
 | `time_limit` | seconds; after them the remaining items take the file's bodies without trying definitions |
-| `hang_limit` | seconds without progress after which the import is taken to hang in the geometry kernel (a new document only): the import runs on a thread of its own and is run again with the item it hung on taking the file's bodies (hung comparing the final bodies: by volume only; elsewhere: the stored bodies without the timeline); the report warns. The thread left behind keeps running until the program ends |
+| `hang_limit` | seconds without progress after which the import is taken to hang in the geometry kernel (a new document only; the import makes progress between kernel calls, also in its own long loops, so only a kernel call that does not return counts, mitcad#82): the import runs on a thread of its own and is run again with the item it hung on taking the file's bodies (hung comparing the final bodies: by volume only; elsewhere: the stored bodies without the timeline); the report warns. The try given up stops once its kernel call returns (before its next item or definition; a definition's long kernel operations stop inside) and its result is dropped (mitcad#71) |
 | `text` | `import_f3d_timeline` returns a readable report |
 | `report_path` | also write the JSON report to this file |
 | `list` | `import_f3d_timeline` only lists the designs: `{"designs": [{"label", "items"}]}` |
+| `memory_limit` | MiB the import may take besides the process's own limits (mitcad#80): low on memory (85 % of the tightest limit, always watched), the import cuts the definition being tried short and tries no more until the memory recovers; those items take the file's bodies, and the report's `low_memory` (`item`, `name`, `memory`, `items`) and a warning say so (`core/import/README.md`, *Memory*) |
 
 The result: `file`, `design`, `items` (timeline items), `counts` (items
 per outcome: `parametric`, `partial`, `fallback`, `skipped`) and
@@ -1776,10 +2383,18 @@ skipped, mismatched), `items` (`index`, `name`, `type`, `outcome`,
 `features`, `verified`, `note`, `component` when not the root),
 `history` (`states`, `built`, `matched`, `reached_end`), `bodies` (each
 of the file's stored solids with `file_volume`, the replayed body it
-matched, `volume_difference`, `max_deviation`, `relative_difference`),
+matched, `volume_difference`, `max_deviation`, `relative_difference`;
+the last is missing when the boolean differences did not finish in
+time, were left out because every sample lay within 0.01 mm, or gave
+more than the deviations allow),
 `extra_bodies`, `warnings`, `components` (`components` made,
-`occurrences` placed, `external` occurrences of other documents left
-out, `items` per component) and `stopped` when the import was stopped.
+`occurrences` placed, `external` occurrences of other documents placed
+as occurrences of empty components, `items` per component), `joints`
+(`joints` that came in as joints, their `fixed_sides` and
+`inserted_sides` (on components of other documents), joints
+`kept_as_built`, `as_built` joints, joint `origins`, `grounded`
+occurrences, captured `positions`, `skipped` items), `stopped` when
+the import was stopped and `low_memory` when it ran low on memory.
 
 Stopping: the import is not undone as a whole, so a job does not cancel
 it. Run under a job (`attach_job`, [Progress and
@@ -1804,7 +2419,10 @@ names before the feature. A `Path` is dumped as its `PathEntity` items:
 sketch curves (`sketch_entity`, the curve's imported id) →
 `{"sketch", "curves"}`, edge fingerprints resolved against the replay →
 `{"body", "edges"}` (a path mixing sketches or bodies is unsupported).
-"Fallback": the item takes the file's bodies.
+"Fallback": the item takes the file's bodies. Where the stream decoder
+gives a combine's target and tools, a hole's points or a pattern's or
+mirror's objects (mitcad#67), the definitions built from them are tried
+first, then those the file's history suggests without them.
 
 | IR `objectType` | Mitcad | Fields |
 |---|---|---|
@@ -1818,8 +2436,8 @@ sketch curves (`sketch_entity`, the curve's imported id) →
 | `SplitBodyFeature` | `split_body` | `splitBodies` → `bodies`, `splittingTool` → plane / face / body / sketch, `isSplittingToolExtended` → `extend`; IR body names after the step name the pieces |
 | `SplitFaceFeature` | | not translated (fallback) |
 | `CombineFeature` | `combine` | `targetBody` → `target`, `toolBodies` → `tools`, `operation` (Join/Cut/IntersectFeatureOperation), `isKeepToolBodies` → `keep_tools`; `isNewComponent`: the combine goes into the component the import puts the item in |
-| `MirrorFeature` | `mirror` | `patternEntityType` + `inputEntities` → `objects` (Faces → faces of one body, Features, Bodies; not Occurrences), `mirrorPlane` (origin `XY`/`XZ`/`YZ` → origin plane; other construction planes → a fixed plane from `geometry`; face fingerprint → face), `isCombine` → `combine`, `patternComputeOption` → `compute` |
-| `RectangularPatternFeature` | `rectangular_pattern` | `directionOne/TwoEntity` → axes (origin X/Y/Z, edge, fixed from `directionOne/Two` when the entity is null or a sketch line), `quantityOne/Two`, `distanceOne/Two`, `isSymmetricInDirectionOne/Two`, `patternDistanceType` (Extent/Spacing), `patternComputeOption`, `suppressedElementsIds` → `suppressed_elements` matched by `outputs.patternElements[].transform` |
+| `MirrorFeature` | `mirror` | `patternEntityType` + `inputEntities` → `objects` (Faces → faces of one body, Features, Bodies; not Occurrences), `mirrorPlane` (origin `XY`/`XZ`/`YZ` → origin plane; other construction planes → a fixed plane from `geometry`; face fingerprint → face), `isCombine` → `combine` (not given, as from the stream decoder: separate copies, then joined), `patternComputeOption` → `compute` |
+| `RectangularPatternFeature` | `rectangular_pattern` | `directionOne/TwoEntity` → axes (origin X/Y/Z, edge, fixed from `directionOne/Two` when the entity is null or a sketch line), `quantityOne/Two`, `distanceOne/Two`, `isSymmetricInDirectionOne/Two`, `patternDistanceType` (Extent/Spacing), `patternComputeOption`, `suppressedElementsIds` → `suppressed_elements` matched by `outputs.patternElements[].transform`; without directions (the oldest item version, mitcad#74) the history checks guesses: direction one along an origin axis, two across it at 90°, 60° or 120°, both symmetric or not (`core/import/README.md`) |
 | `CircularPatternFeature` | `circular_pattern` | `axis`, `quantity`, `totalAngle` → `angle`, `isSymmetric`, `patternComputeOption`, `suppressedElementsIds` |
 | `PathPatternFeature` | `path_pattern` | `path` (a sketch line, arc or circle → `{"sketch", "curve"}`; else a fixed line), `quantity`, `distance`, `patternDistanceType`, `startPoint` → `start`, `isFlipDirection` → `flip`, `isOrientationAlongPath` → `along_path`, `isSymmetric` |
 | `MoveFeature` | `move` | bodies of `inputEntities`; `transform` (rigid, cm) → `free` matrix, or `moveFeatureDefinition` (`TranslateXYZ`, `TranslateAlongEntity`, `Rotate`, `PointToPoint`, `PointToPosition`) to keep it editable; moves of faces are unsupported |
@@ -1827,11 +2445,21 @@ sketch curves (`sketch_entity`, the curve's imported id) →
 | Align (not in the API) | `move` (`free`) or `align` | |
 | `ScaleFeature` | `scale` | `inputEntities` (bodies), `point` (origin point → origin, vertex, else fixed), `isUniform`, `scaleFactor`, `xScale`, `yScale`, `zScale` |
 | `Box/Cylinder/Sphere/TorusFeature` | `box`, `cylinder`, `sphere`, `torus` | sizes from `parameters.model` by `createdBy`; the placement (not in the API) from the body: a fixed plane |
-| `SweepFeature` | `sweep` | `profile` → `profiles` (as for extrude), `path` → `path`, `guideRail` → `guide_rail`, `orientation` (Perpendicular/ParallelOrientationType), `twistAngle` → `twist_angle`, `taperAngle` → `taper_angle`, `profileScaling` (SweepProfileScale/Stretch/NoScalingOption) → `profile_scaling`, `distanceOne`/`distanceTwo` → `extent` `partial` unless both 1, `isDirectionFlipped` → `flip`, `operation`, `participantBodies`; `guideSurfaces`, `extent` FullExtents and `isSolid` false → fallback |
-| `LoftFeature` | `loft` | `loftSections[]` by `index`: `entity` a profile → `profile`, a face → `face`, a path of a body's edges (`PathEntity` items of `BRepEdge`s, or one edge; the section of tangent and smooth conditions) → `face`, the face of that body the edges go round (each of them borders it and it has no others), a sketch point, a construction point or a vertex → `point`; first and last `endCondition`: `LoftFreeEndCondition` → none, `LoftPointSharpEndCondition` → `point_sharp`, `LoftDirectionEndCondition` → `direction` (`angle`, `weight`), `LoftTangentEndCondition` → `tangent`, `LoftSmoothEndCondition` → `smooth`, `LoftPointTangentEndCondition` → `point_tangent` (`weight`); `centerLineOrRails` with `isCenterLine` → `centerline`, else `rails`; `isClosed` → `closed`; `operation`, `participantBodies` (the IR has no ruled loft). A loft with end conditions or rails is kept when it matches the history within 0.5 % (see [loft](#loft)) |
-| `PipeFeature` | `pipe` | `path`, `sectionType` (Circular/Square/TriangularPipeSectionType) → `section`, `sectionSize` → `size`, `isHollow` with `sectionThickness` → `thickness`, `distanceOne`/`distanceTwo` → `extent`, `operation`, `participantBodies` |
-| `CoilFeature` | `coil` | no API inputs: `parameters.model` with `createdBy` the coil gives diameter, revolutions, height, pitch, angle and section size by `role`; the coil type, section and placement come from the body |
-| `RibFeature`, `WebFeature` | `rib`, `web` | no API inputs: thickness and depth from `parameters.model` by `role`; the curves are the sketch before the item |
+| `SweepFeature` | `sweep` | `profile` → `profiles` (as for extrude), `path` → `path`, `guideRail` → `guide_rail`, `orientation` (Perpendicular/ParallelOrientationType), `twistAngle` → `twist_angle`, `taperAngle` → `taper_angle`, `profileScaling` (SweepProfileScale/Stretch/NoScalingOption) → `profile_scaling`, `distanceOne`/`distanceTwo` → `extent` `partial` unless both 1, `isDirectionFlipped` → `flip` (with a guide rail the other way first; then the other direction where a partial extent or a rail makes it differ), `operation`, `participantBodies`; `guideSurfaces`, `extent` FullExtents and `isSolid` false → fallback. From the stream decoder, which gives a profile's sketch only and neither `orientation`, `profileScaling` nor `isDirectionFlipped`, the history picks among the sketch's regions, `distanceTwo` 0 as none or as given, both directions, perpendicular then parallel (scale, then stretch and none with a rail) |
+| `LoftFeature` | `loft` | `loftSections[]` by `index`: `entity` a profile → `profile`, a face → `face`, a path of a body's edges (`PathEntity` items of `BRepEdge`s, or one edge; the section of tangent and smooth conditions) → `face`, the face of that body the edges go round (each of them borders it and it has no others), a sketch point, a construction point or a vertex → `point`; first and last `endCondition`: `LoftFreeEndCondition` → none, `LoftPointSharpEndCondition` → `point_sharp`, `LoftDirectionEndCondition` → `direction` (`angle`, `weight`), `LoftTangentEndCondition` → `tangent`, `LoftSmoothEndCondition` → `smooth`, `LoftPointTangentEndCondition` → `point_tangent` (`weight`); `centerLineOrRails` with `isCenterLine` → `centerline`, else `rails`; `isClosed` → `closed`; `operation`, `participantBodies` (the IR has no ruled loft). A loft with end conditions or rails is kept when it matches the history within 0.5 % (see [loft](#loft)). A profile without its area (the stream decoder gives its sketch only) is each of the sketch's regions in turn, the history picking, at most twelve choices of all sections |
+| `PipeFeature` | `pipe` | `path`, `sectionType` (Circular/Square/TriangularPipeSectionType) → `section`, `sectionSize` → `size`, `isHollow` with `sectionThickness` → `thickness`, `distanceOne`/`distanceTwo` → `extent`, `operation`, `participantBodies`. Without `sectionType` and `isHollow` (the stream decoder): a solid circle first, then hollow with `sectionThickness`, square and triangular, the history picking |
+| `CoilFeature` | | not translated (fallback): the sizes are known (`parameters.model` by `role`), not the coil type, section, direction and placement ([README](../../../import/README.md), *Limits*) |
+| `RibFeature`, `WebFeature` | | not translated (fallback): no inputs are recorded besides thickness and depth |
+| `ThreadFeature` | `thread` | `inputCylindricalFaces` (resolved through `point_on_face`) → `faces`; `threadInfo`: `threadType` ISO Metric profile and other metric `M` sizes → `iso_metric`, ANSI Unified → `unified`, BSP Pipe Threads → `whitworth` with `G <size>-<tpi>` → `G <size>`, others fallback; `threadDesignation` → `designation`, `threadClass` → `class` when Mitcad lists it for the face's side (else left out), `isRightHanded` → `right_handed`; `isModeled` true → `modeled` with `diameters` from `majorDiameter`, `minorDiameter` and `pitchDiameter` and the `angle` the next history state shows on each face (one `thread` per face; Whitworth and NPT fall back), tried first without sizing the faces; `isFullLength` false → `length` (`threadLength`), `offset` (`threadOffset`) and `location` (`threadLocation`, swapped where Mitcad's cylinder axis runs against the face's `geometry.axis`). First with an `offset_face` of each face to the thread's major (external) or minor (internal) diameter, as the file sizes threaded faces, then with a tube between the two radii (`cylinder`s and `combine`s) cut from or joined to the body, then without |
+| `HoleFeature` tapped (`holeTapType` Tapped) | `hole` + `thread` | the hole with its diameter (then `tappedHoleInfo.minorDiameter`), and a `thread` on `hole<i>.wall` with the size of `tappedHoleInfo` (as for `ThreadFeature`; for `thread.isModeled` modelled with its diameters, angle 0), and for `thread.isFullLength` false `length` and `offset` from the hole's start (`low_end`); then the hole without the thread |
+| `HoleFeature` | `hole` | `position` (the stream decoder: every point of `_f3d_positions`) on the planar face named by `holePositionDefinition` or through the point, `holeType` Simple/Counterbore/Countersink with `counterboreDiameter`/`Depth` or `countersinkDiameter`/`Angle`, `holeDiameter`, `tipAngle` (180° → `flat`), `extentDefinition` `DistanceExtentDefinition` → `distance`, `ThroughAllExtentDefinition` or `AllExtentDefinition` → `through_all` (others fall back), `isDefaultDirection` false → `flip`; without a position, the holes the history shows |
+| `Joint` | `joint` | in the component its occurrence paths start in (`_f3d.context_component`); `occurrenceOne` → `a`, `occurrenceTwo` → `b` (`_f3d.path` of occurrence objects → occurrence uids, occurrences of components of other documents included: they are occurrences of empty components; a level inside one leaves the joint out); each side's stored frame (`_f3d.frames`, else `geometryOrOrigin*`) on geometry of the side's component that gives it (a joint origin, construction geometry, a circular edge, a planar face or a face of revolution, with a `frame_override` for the rest; on a component of another document its `"origin"`), else a fixed plane; `jointMotion` → `kind` (`slide_axis` by the motion's slot), the values the motions have where the file places the occurrences (from the frames, mitcad#87: a joint that cannot hold there is not added), `rotationLimits` → `rz`'s and `slideLimits` → the slide's `limits` where they hold those values (else left out), the values → `position` where the rest value is another; `_f3d.opposed` → `flip`, `angle` → `angle`, `offset` → `offset` (an offset the file stores rounded takes the placements' value, mitcad#81), `offsetX`/`offsetY` move `b`'s origin. Kept only where every occurrence stays where it was or goes where the file places it after the item or at the end of its timeline (the occurrences' `_f3d.placements`, else its last captured position, else its stored transform); else an `as_built_joint` of the placements with a warning ([core/import/README.md](../../../import/README.md#joints)) |
+| `AsBuiltJoint` | `as_built_joint` | `occurrenceOne`/`Two` → `a`/`b`, `relative` from the placements at its point of the timeline (`_f3d.placements` checked against them, a warning where they differ), `jointMotion` → `kind`, its motion frame `origin` the recorded frame (on geometry of `b`'s component, else of `a`'s, else fixed on `b`), its limits where the recorded placement is the file's and they hold 0 (a rest value other than 0 → `position` 0) |
+| `RigidGroup` (an as-built joint of motion type 11) | `rigid_group` | `occurrences` → the occurrences of its component they are or are in (members below the top level and inside components of other documents move with them); with the component's own geometry among them, rigid `as_built_joint`s of each to it |
+| `JointOrigin` | `joint_origin` | in the owning component: `geometry` → geometry that gives the frame before `angle` and `offsetZ` (`"origin"` for the component's origin point, a face or edge, else a fixed plane), `angle` → `angle`, `offsetZ` → `offset`; checked against the file's frame, else that frame fixed |
+| `GroundOccurrence` | | `occurrence` → the occurrence is grounded |
+| `Snapshot` (captured position) | `capture_position` | one per component whose occurrences it places: `positions[]` (`occurrence` paths from the item's component, `transform` there; for a captured position of joints' values, the occurrences whose `_f3d.placements` name it) → each occurrence at its placement in its parent; positions inside components of other documents and of grounded occurrences are left out (`partial`) |
+| Items the stream decoder names by their class only (`ComponentInsert`, `GeometricRelationship`, `Group`, `FlangeFeature`, ...) | | those without geometry are skipped with what they are, the others are not translated (fallback) with the reason ([core/import/README.md](../../../import/README.md#items-without-a-translation)) |
 
 ### FreeCAD import (.FCStd)
 
@@ -1930,24 +2558,24 @@ What the document gets:
 | Revolution, Groove | `revolve` join / cut; the axis: a sketch's H or V axis (its axis line), `Axis<n>` (its n-th construction line), `Edge<n>` (that line), an origin axis, a datum line, a straight edge; 360° → `full`, Midplane → `symmetric` (half each way), TwoAngles → `two_sides`, UpToFace, UpToShape (one face, a plane, a body) and UpToFirst → `to_object` | the angle's sign; up to an object also about FreeCAD's axis (`Base`, `Axis`) either way |
 | Fillet | `fillet`, constant radius, on the edges and faces (`UseAllEdges`: every edge) | |
 | Chamfer | `chamfer` `equal_distance`, `two_distances` (Size, Size2), `distance_angle` (Size, Angle) | `flip` both ways |
-| Hole | `hole` at the profile sketch's circles' and arcs' centres (`sketch_points`), Diameter, depth (DrillForDepth taken off) or through all, flat or angled point, counterbore, countersink, counterdrill, Tapered → `taper` (90° less TaperedAngle; FreeCAD's drill point is as high as the straight hole's: the tip angle from the wall's end that gives it); a cosmetic ISO metric, Unified (UNC, UNF, UNEF: `1/4-20 UNC`), Whitworth (BSW, BSF: `1/4-20 BSW`; BSP: `G 1/4`) or NPT (`1/4-18 NPT`) thread over the hole's depth → a cosmetic `thread` on the walls (the size from the version's list for the thread type, `ThreadSize[ISOMetricProfile]` in `data/enums.json`; the hole keeps FreeCAD's diameter), other threads left out (`partial`); a modelled ISO metric or Unified thread → a modelled `thread` (Mitcad's basic profile cut from FreeCAD's bore, which the check finds 1e-2 off FreeCAD's thread, so these fall back; Whitworth and NPT ones and those FreeCAD did not model fall back at once) | `flip` both ways |
+| Hole | `hole` at the profile sketch's circles' and arcs' centres (`sketch_points`), Diameter, depth (DrillForDepth taken off) or through all, flat or angled point, counterbore, countersink, counterdrill, Tapered → `taper` (90° less TaperedAngle; FreeCAD's drill point is as high as the straight hole's: the tip angle from the wall's end that gives it); a cosmetic ISO metric, Unified (UNC, UNF, UNEF: `1/4-20 UNC`), Whitworth (BSW, BSF: `1/4-20 BSW`; BSP: `G 1/4`), NPT (`1/4-18 NPT`) or tyre valve (ISOTyre, `5V1`) thread over the hole's depth → a cosmetic `thread` on the walls (the size from the version's list for the thread type, `ThreadSize[ISOMetricProfile]` in `data/enums.json`; the hole keeps FreeCAD's diameter), other threads left out (`partial`); a modelled ISO metric or Unified thread → first as FreeCAD cuts it: per hole a fixed `construction_plane` through the axis, a `sketch` of the groove's section (60° flanks, the root P/8 wide at the major diameter plus the class's clearance; 1.1's quadrilateral, the older hexagon) and a `helix` cutting it from a pitch above the top as deep as FreeCAD's thread runs (through all: two pitches past the body), then the `hole`; then a modelled `thread` (Mitcad's basic profile cut from FreeCAD's bore); both stay 1.3e-6 to 2e-6 (the groove) off FreeCAD's thread, so these fall back; Whitworth and NPT ones and those FreeCAD did not model fall back at once, tyre valve ones (FreeCAD rounds their crests) after the thread is tried | `flip` both ways |
 | Mirrored, LinearPattern, PolarPattern | `mirror`, `rectangular_pattern` (1.1's second direction too), `circular_pattern` of the originals' Mitcad features (`identical`), or of the body (TransformMode whole shape: `combine` for the mirror); planes and axes as above (a sketch's V axis as a mirror plane: the plane through it along the normal); extent or spacing | the distance's or angle's sign |
-| MultiTransform | of the originals' features: one transformation as that feature; two LinearPatterns → one `rectangular_pattern` of two directions; two Mirrored → both `mirror`s, a `construction_axis` where their planes meet (`two_planes`) and a `circular_pattern` of 2 about it (the half turn); otherwise (any sequence of Mirrored, LinearPattern and PolarPattern) each transformation a `mirror` or pattern of the one before (patterns of patterns); its transformations are no features of their own; Scaled and the whole body fall back | the signs of the directions |
+| MultiTransform | of the originals' features: one transformation as that feature; two LinearPatterns → one `rectangular_pattern` of two directions; two Mirrored → both `mirror`s, a `construction_axis` where their planes meet (`two_planes`) and a `circular_pattern` of 2 about it (the half turn); otherwise (any sequence of Mirrored, LinearPattern and PolarPattern) each transformation a `mirror` or pattern of the one before (patterns of patterns); a LinearPattern or PolarPattern and then a Scaled of as many occurrences → that pattern with `scale` (Factor); its transformations are no features of their own; other Scaled ones and the whole body fall back | the signs of the directions |
 | Boolean | `combine` join / cut / intersect of the Body's body with the other Bodies' bodies | |
 | Draft | `draft` of the faces about the neutral plane (a pull direction taken as its normal) | `flip`, the angle's sign |
 | Thickness | `shell` (Skin; Pipe and RectoVerso as Skin, which FreeCAD's solids give) | inside or outside, rounded |
 | AdditiveLoft, SubtractiveLoft | `loft` of the profile and section sketches' regions, Ruled, Closed | |
 | AdditivePipe, SubtractivePipe | `sweep` along the spine sketch's edges, Standard / Frenet → `perpendicular`, Fixed → `parallel`; with sections (Transformation Multisection) → `loft` of the profile and the sections with the spine as its `centerline`; auxiliary spines fall back | |
-| AdditiveHelix, SubtractiveHelix | `helix` of the profile's regions about the reference axis: the pitch and the turns as the Mode gives them (Height / Pitch, Height / Turns), LeftHanded → `left_handed`, Reversed → `flip`; a cone's angle, a growth and a subtraction outside fall back | the hand and the direction both ways |
+| AdditiveHelix, SubtractiveHelix | `helix` of the profile's regions about the reference axis: the pitch and the turns as the Mode gives them (Height / Pitch, Height / Turns), LeftHanded → `left_handed`, Reversed → `flip`; a cone's angle → `growth` `Pitch * tan(Angle)`, height-turns-growth's Growth → `growth`, both with `"construction": "freecad"`; a subtraction outside the profile (Outside) → `intersect` | the hand and the direction both ways |
 | Additive / Subtractive Box, Cylinder, Sphere, Torus, Cone, Prism, Wedge, Ellipsoid | `box`, `cylinder`, `sphere`, `torus` on a fixed plane at the placement; a cone and parts of a turn (Cylinder's and Cone's Angle, Sphere's latitudes and Angle3, Torus's section sector and Angle3): a section in a fixed plane through the axis turned about it (a construction plane, a sketch and a `revolve`); a prism: its polygon `extrude`d from a sketch on a fixed plane; skewed (FirstAngle, SecondAngle; a cylinder too) → `sweep` along the skew, `parallel`; a wedge: a ruled `loft` from its rectangle at Ymin to the one at Ymax (or a point); an ellipsoid: a `sphere` of Radius2 at the origin (a part of one: its section in the XZ plane turned about the z axis, Angle1 to Angle2 and Angle3 round), `scale` non-uniform (Radius3 / Radius2, Radius1 / Radius2), `move` to the placement and `combine` with the Body's body | |
-| Plane, Line, Point (datums) | `construction_plane` (`offset` from an origin plane or a planar face when attached flat with only a normal offset; attached flat to an origin plane and turned a quarter or not at all, `offset` from the origin plane parallel to it by the offset's coordinate along its normal; turned about its support's x or y axis by a bound angle, `angle` from the support; else `fixed`), `construction_axis`, `construction_point` (`fixed` at the placement); coordinate systems are skipped | |
+| Plane, Line, Point (datums) | `construction_plane` (`offset` from an origin plane or a planar face when attached flat with only a normal offset; attached flat to an origin plane and turned a quarter or not at all, `offset` from the origin plane parallel to it by the offset's coordinate along its normal; turned about a line in its support's plane through its origin (its x or y axis or between) by a bound angle, `angle` from the support about that line; else `fixed`), `construction_axis`, `construction_point` (`fixed` at the placement); coordinate systems are skipped | |
 | Part Box, Cylinder, Sphere, Torus, Cone, Prism, Wedge, Ellipsoid | the primitives as above, new bodies | |
 | Part Extrusion of a sketch | `extrude` new body: LengthFwd (else the direction's length), LengthRev → `two_sides`, Symmetric, Reversed, TaperAngle(Rev); along the normal or a custom direction along it; a custom direction or an edge's (DirMode Custom, Edge: `Dir`) off the normal → `sweep` along a fixed line, `parallel` (no taper) | the direction, the taper's sign |
 | Part Revolution of a sketch | `revolve` new body about a fixed axis (Base, Axis); 360° → `full`, Symmetric | the angle's sign |
 | Part Cut, Fuse, MultiFuse, Common, MultiCommon | `combine` (the first operand the target) | |
 | Part Fillet, Chamfer | `fillet` / `chamfer` of the edge list (constant sizes; unequal chamfer sizes `two_distances`) | `flip` both ways |
 | Part Mirroring | `mirror` of the source's body (plane Base, Normal or 1.0's MirrorPlane), then a base feature without bodies that removes the source's body | |
-| others (Scaled, binders, Draft objects, plain shapes, …) | a base feature of the stored shape | |
+| others (binders, Draft objects, plain shapes, …) | a base feature of the stored shape | |
 
 - An operand of the Part workbench that a later object uses too is
   copied (`move` with `copy`) for each earlier use.
@@ -2054,6 +2682,83 @@ Tests: `core/freecad/tests/parse.rs`, `core/freecad/tests/sketch_corpus.rs`,
 (`tools/cli/fcstd-test.cmake`), `freecad.corpus` (`MITCAD_FCSTD_CORPUS`;
 [core/import/README.md](../../../import/README.md#tests)) and
 `tools/ui-import-test.sh`.
+
+### .ipt import
+
+`{"cmd": "import_ipt", "path": "part.ipt", …}` (C++ `Document::command`,
+or `Document::import_ipt(path, json)` for the report alone) imports an
+`.ipt` part file (mitcad#60; `core/ffi/src/ipt_import.rs`, the reader is
+[core/ipt](../../../ipt/README.md)):
+
+- **With its history** (the default when the file's definitions segment
+  has features or parameters; stages 2 and 3): the part's parameters with
+  their expressions, its sketches, work planes and features, decoded into
+  the import's dump IR (`mitcad_ipt::design`) and replayed by the same
+  importer as the `.f3d` import ([.f3d import with the
+  timeline](#f3d-import-with-the-timeline)): each feature is checked
+  against the state of the ASM history stored in the B-rep record that its
+  operation made, and comes in as the bodies of that state where it
+  cannot be replayed (`fallback`); the final bodies are compared with the
+  stored ones. The report adds `history` (true), `parameters` (the
+  definitions segment's parameter records: `records`, `model`, `user`,
+  `outside` (not the part's: annotations, reference dimensions, features'
+  own tables), `internal` (`RDxVar<n>`), `unread`), `expressions`
+  (`translated`, `agree`: evaluated to the stored value, `differ`,
+  `not_translated`, each `name: why`), `features` (items with a history
+  state), `features_with_states` (of them, those whose state the history
+  has), `counts` (items per outcome), `design` (the importer's report:
+  `items`, `parameters`, `history`, `bodies`, `warnings`, as for
+  `import_f3d`), `design_text` (its text) and `seconds` {`read`,
+  `import`}; `imported` lists the document's bodies after the replay
+  (`feature` is the feature that made the body).
+- **Bodies only** (`bodies_only`, and files without definitions; stage
+  1): one base feature per body (solids and sheet bodies), built from the
+  file's B-rep record with OCCT.
+
+Either way the document's length unit becomes the part's when the
+document has no features yet (else a warning says so), and the bodies get
+the part's material when Mitcad's library has one of that name or id (case
+does not matter). One undo step (`Import part.ipt`). A job does not cancel
+it.
+
+| Field | Meaning |
+|---|---|
+| `text` | `import_ipt` returns a readable report |
+| `report_path` | also write the JSON report to this file |
+| `reference` | a STEP file of the same part: each of its solids is matched with the imported solid of the closest volume and their volumes and areas compared |
+| `max_relative` | the largest relative difference of a volume or area that passes (default 1e-6) |
+| `deviation` | with `reference`, also the sampled surface deviation (as `compare_step`) |
+| `bodies_only` | the bodies only, as base features (stage 1) |
+| `no_verify`, `no_fallback`, `no_compare` | as for `import_f3d`: do not check the replay against the history; leave out features that cannot be replayed; compare the final bodies by volume only |
+| `time_limit` | seconds after which the remaining features take the file's bodies |
+| `dump_path` | also write the decoded design (the dump IR, `core/import/SCHEMA.md`) to this file |
+| `design_path` | replay this dump (as `dump_path` writes it) instead of the decoded design |
+
+The command's result: `file`, `design` (the part number), `bodies` (the
+number imported) and `report`: `format` (`ipt`), `part_number`,
+`material`, `mitcad_material` (the material set, or null), `release` (the
+release that saved the file, as it says), `units` (the document's new
+length unit, or null) and `unit_code`; `records` (each B-rep record:
+`source`, `asm_version`, `bodies`, `history_states` (the states of the
+ASM history the record carries), `truncated`); `imported`
+(each body: `source` `<segment>#<record>/<body>`, `solid`, `valid`
+(OCCT's checker), `volume`, `area`, `faces`, `issues`, `feature`,
+`bodies` with `uid`, `name`, `kind`); `skipped` (bodies not built:
+`source`, `error`); `warnings`; `seconds` {`read`, `build`}; and with
+`reference`, `reference`: `file`, `step_solids`, `solids` (pairs:
+`step_body`, `step_volume`, `step_area`, `body`, `name`, `volume`,
+`area`, `volume_difference`, `area_difference`), `unmatched_step`,
+`unmatched_bodies`, `max_difference`, `max_relative`, `valid`, with
+`deviation` `max_deviation`, and `pass` (every STEP solid and every
+imported solid matched, all within `max_relative`, every imported solid
+valid).
+
+Tests: `core/ipt` (`core.ipt`, no OCCT; with the design replayed on the
+mock kernel, `tests/design_import.rs`), `core.exchange`
+(`core/tests/test_exchange.cpp`), `cli.import_ipt*`, `cli.ipt_design_file`,
+`ipt.corpus`
+(`MITCAD_IPT_CORPUS`, [core/import/README.md](../../../import/README.md#ipt-import))
+and `tools/ui-import-test.sh`.
 
 ## Files and version history
 
@@ -2215,7 +2920,7 @@ whole documents; nothing is computed unless the geometry is asked for.
   "after", "end"}`), `active_component`.
 - **Components**, **occurrences** (placements as `moved by [x, y, z] mm
   and turned a deg`), **bodies** (names, visibility, material,
-  appearance), **timeline groups** and **named views**.
+  appearance), **timeline groups**, **named views** and **analyses**.
 - **Geometry** (optional): the volume and area of each body at the
   marker of the two computed documents, and their sums.
 - The display state is not compared (it is per user).
@@ -2226,7 +2931,7 @@ whole documents; nothing is computed unless the geometry is asked for.
 | `document` | field changes: `field`, `from`, `to` (null: not there), `text` |
 | `parameters` | `kind` (`added`, `deleted`, `modified`), `name`, `renamed_from`, `owner`, `owner_name`, `from` and `to` (`expression`, `unit`, `value`, `text`, `comment`, `kind`, `owner`, `favorite`), `fields` (what differs), `text` |
 | `features` | in `to`'s order, deleted ones where they were: `kind` (also `moved`), `uid`, `name`, `type`, `from_index`, `to_index`, `moved`, `fields` (field changes), `values` (`slot`, `label`, `from_parameter`, `to_parameter`, `from`, `to` in mm or rad, `from_text`, `to_text`, `text`), `sketch` (`entities`, `constraints`, `dimensions`: `from`, `to` counts and `added`, `deleted`, `modified` ids; `moved`), `text` |
-| `components`, `occurrences`, `bodies`, `groups`, `views` | `kind`, `uid` (not for groups and views), `name`, `fields`, `text` |
+| `components`, `occurrences`, `bodies`, `groups`, `views`, `analyses` | `kind`, `uid` (not for groups, views and analyses), `name`, `fields`, `text` |
 | `geometry` | with the geometry: `bodies` (those that differ: `kind`, `uid`, `name`, `volume` and `area` as `from`, `to`, `change`, `relative`, `text`), `volume`, `area` (sums), `errors` |
 
 Texts use `->` and ASCII units (`mm^3`). Entry points:
@@ -2428,6 +3133,127 @@ meanwhile, a merge made with git, cancellation, files too large, backups,
 the JSON options, `incoming`, a remote's version compared by its id;
 after each `git fsck`, a clean `git status` and `git log
 --first-parent` of each file as its history) and ctest `cli.remote`.
+
+## Component libraries
+
+Component libraries and the community library (mitcad#64, mitcad#63) are
+git repositories of Mitcad designs with a manifest; their format is in
+[docs/libraries.md](../../../../docs/libraries.md). The model knows no
+git: it reads a library's component at a version through a
+`LinkResolver` (`core/model/src/library.rs`), which `mitcad-vcs`
+implements over the cache of fetched libraries
+(`core/vcs/src/library/`). The bridge's `configure_libraries(json)` sets
+the cache (`{"root"}`, default `MITCAD_LIBRARIES_DIR`, else the user's
+data folder) and installs the resolver for every document; Rust code can
+give a document its own (`Document::set_link_resolver`).
+
+### Configuration tables
+
+A design's table of sizes (`configurations` in the project file, left out
+when empty): `selectors` (the cascaded choices, may be empty),
+`parameters` (names of the design's parameters the rows set), `default`
+(a row's name; the first row when left out) and `rows`: `name` (unique),
+`select` ({selector: value}, a unique combination), `values` ({parameter:
+expression}; a parameter left out keeps its own) and an optional
+`designation`.
+
+| Command | Fields | Result |
+|---|---|---|
+| `set_configurations` | `configurations` (the table; null or an empty table removes it) | `rows`; refused with the first problem; undo step `Edit Configurations`, nothing recomputed |
+| `apply_configuration` | `name` | `changed` (parameters whose values changed); undo step `Apply M5x16` |
+
+| Query | Result |
+|---|---|
+| `configurations` | `configurations` (the table or null), `selector_values` ({selector: values in natural order: `M2.5`, `M3`, `M10`}), `current` (the row whose expressions the parameters have, or null), `problems` |
+
+Problems: a parameter that does not exist or is listed twice, a row
+without a name, a value for a selector or parameter not in the table, a
+missing selector value, two rows with the same name or the same
+selection, a value its parameter refuses (unit, cycle, syntax), a default
+that is no row. Opening a file with such a table fails with the first.
+
+### Library parts
+
+`insert_component` with `library` instead of `path` inserts a library's
+component: `{"id": "<library id>", "url": "<where it was fetched
+from>", "rev": "<commit or tag>", "component": "<component id>",
+"config": "<row>"}` (`config` left out: the table's default), with
+`link`, `transform` and `name` as for files. The design is read at that
+version, the row applied to a copy of its parameters, and:
+
+- linked (default): its visible bodies in a base feature of a new,
+  read-only component (one body is named after the designation), its link
+  `path` the design's path in the library;
+- a copy (`"link": false`): the design with its history in the row (the
+  table is not copied), editable.
+
+Either way the component records `library` (in the project file too):
+`library` (id), `url`, `rev` (the commit, also for a tag), `label` (the
+commit's tag), `component`, `path`, `config`, `license`, `authors` and
+`designation` (`ISO 4762 M5x16`). The component is named after the
+designation unless `name` is given; the undo step is `Insert <name>`.
+
+- **Versions stay.** `update_links` (when a design opens) reads every
+  linked library part at its recorded commit and takes new bodies only
+  when that design or row differs from what was saved; a library or
+  version that is not on this computer keeps the saved bodies with a
+  message (`... library mitcad-fasteners v1.0.0 (3f9a2c1) (url) cannot
+  be read (...); it keeps the bodies saved with the design`). Nothing
+  follows a library's newest version on its own.
+- **Updates are explicit.** `update_library_parts` with `changes`:
+  [{`component` (uid or name), `rev` (another version), `config`
+  (another row)}] changes linked parts as one undo step (`Update <name>
+  to v1.1.0, M5x20` or `Update Library Parts`) and returns `changes`
+  (`ISO 4762 M5x16: version v1.0.0 (3f9a2c1) -> v1.1.0 (7d0e5b2)`, `...
+  size M5x16 -> M6x20`). A part named after its designation, and its
+  body, take the new designation. A copied part is refused (it does not
+  follow its library).
+- The comparison of versions (`diff`) shows a part's changes field by
+  field (`library.rev`, `library.config`, ...) and a table's changes row
+  by row (`configuration M5x16: dk 8.5 mm -> 8.7 mm`).
+
+| Query | Result |
+|---|---|
+| `library_parts` | `parts`: `component`, `name`, `linked`, `occurrences`, `library` (as recorded), `version` (`v1.0.0 (3f9a2c1)`) |
+| `parts_list` | `rows`, one per component other than the root in the order they were made: `component`, `name`, `designation` (a library part's, else the name), `quantity` (how many times the design places it, through every occurrence of the components it is in), `linked`, `library`, `version`, `config`, `license`, `authors`, `url` |
+
+### Library commands
+
+Commands of the cache of libraries, not of a document: the bridge's
+`library_command(json, control)` (a fetch reports its progress to the
+`SyncControl` and stops when it is cancelled) and `describe_library` (the
+answer as text); `mitcad-cli library`. A fetch's failure is an answer
+with `error` (`class`, `message`, `detail`, as the remote commands') and
+`log`; other failures are errors.
+
+| Command | Fields | Result |
+|---|---|---|
+| `library_fetch` | `url` (https, ssh, a file:// URL or a folder; never with credentials) | `kind` (`library`, `index`), `id`, `name`, `url`, `dir`, `cloned`, `head`, `versions`, `problems` (`errors`, `warnings`), `error`, `log`: a bare clone into the cache (`git clone --bare`), or new branches and tags fetched into it; a repository that is neither, or larger than 200 MB, is refused and leaves nothing |
+| `library_list` | | `root`, `libraries`: `dir`, `url`, `kind`, `versions`, and a library's `id`, `name`, `description`, `license`, `authors`, `components` (count), `problems`, an index's `name`, `entries` |
+| `library_show` | `url` or `id`, `rev` (default: the newest version) | `dir`, `url`, `rev`, `labels`, `versions`; a library's `manifest`, `problems` and `components` (`id`, `name`, `path`, `category`, `standard`, `description`, `keywords`, `license`, `license_note`, `preview`, `designation`, `configurations`: `selectors`, `selector_values`, `default`, `rows` with `name` and `select`); an index's `name`, `description`, `entries` |
+| `library_search` | `text` (words that must all match name, id, standard, description, category, keywords, the library), `licenses` (SPDX ids an item may have; left out: any), `unlicensed` (default false: items without a licence are hidden), `category`, `libraries` (ids or URLs) | `components` (of fetched libraries at their newest versions: as `library_show`'s with `library`, `library_name`, `url`, `rev`, `version`, `authors`), `libraries` (index entries with `index`, `index_url`, `fetched`, `license_note`), `hidden` (left out for their licence) |
+| `library_preview` | `url` or `id`, `rev`, `component` | `png` (base64) or null |
+| `library_diff` | `id`, `url`, `from`, `to`, `parts` ([{`component`, `config`}]) | `from`, `to` (commits), `from_labels`, `to_labels`, `library` (licence and version changes), `parts`: `changed`, `missing` (the component or row is not in `to`), `lines` (the row's value changes), `text`, `design` (the comparison of the design without its table) |
+| `library_check` | `dir` (a library folder) | `id`, `components`, `ok`, `errors`, `warnings`: the manifest, the files it names (there, no symbolic links, designs that open and link no other files, PNG previews of at most 512 KB), a licence file |
+| `library_init` | `dir`, `id`, `name`, `description`, `license`, `authors`, `homepage` | `dir`, `id`, `written`: the manifest, a `LICENSE` note naming the licence, a README, and a Mitcad project with a git repository (no version yet) |
+| `library_add` | `dir`, `text` (a design as a single project file), `id`, `name`, `category`, `category_name`, `standard`, `description`, `keywords`, `license`, `designation`, `preview` (a PNG, base64), `path` (default `<category>/<id>.mitcad`) | `component`, `written`, `errors`, `warnings` (a check of the folder); a component of the same id is replaced |
+| `index_entry` | `dir`, `url` (where the library is published), `rev` (default HEAD) | `path` (`libraries/<id>.json`), `rev`, `labels`, `entry`, `text` |
+| `licenses` | | `licenses`: the SPDX ids a community index accepts with a `note` for users |
+
+`mitcad-cli library fetch|list|show|search|diff|init|add|check|index-entry`
+and `mitcad-cli parts <file>` (the parts list); inserting and updating
+parts are the commands above in a script (`run --open --save`). The
+metric fastener library is made by
+`tools/libraries/make-fastener-library.py`.
+
+Tests: `core/model/src/library_tests.rs` (tables, parts with a resolver
+in memory: versions kept, explicit updates, copies, the parts list),
+`core/model/src/configurations.rs`, `core/vcs/src/tests/library.rs`
+(libraries made, tagged and fetched from folders and file:// URLs,
+versions, the resolver, comparisons, checks, an index; skipped without
+git), ctest `cli.library` (`tools/cli/library-test.cmake`: the generator,
+fetch, insert, parts list, diff, update; needs git and Python) and
+`tools/ui-library-test.sh`.
 
 ## Progress and cancellation
 

@@ -802,6 +802,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 Err(why) => notes.push(format!("its cosmetic thread is left out: {why}")),
             }
         }
+        // A modelled thread as FreeCAD makes it: its groove cut along a
+        // helix (tried before Mitcad's thread on the walls).
+        let groove = match &thread {
+            Some(t) if modeled => Some(self.thread_groove(o, t, &fc_sketch, &sketch, target)),
+            _ => None,
+        };
         o.f64("Diameter").ok_or("no diameter")?;
         let diameter = self.prop(o, "Diameter", Kind::Length, 0.0);
         let depth = self.prop(o, "Depth", Kind::Length, 0.0);
@@ -881,7 +887,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
             if let Some(t) = &taper {
                 def["taper"] = t.json();
             }
+            if let Some(Ok(g)) = &groove {
+                out.push(g.candidate(def.clone(), flip, current));
+            }
             let mut candidate = Candidate::new(def);
+            if let Some(Err(why)) = &groove {
+                candidate =
+                    candidate.note(format!("FreeCAD's thread groove is not rebuilt: {why}"));
+            }
             if let Some(thread) = &thread {
                 let faces: Vec<Value> = (0..points.len())
                     .map(|i| json!({"body": current.to_string(), "face": format!("$0:hole{i}.wall")}))
@@ -899,9 +912,30 @@ impl<K: Kernel> Importer<'_, '_, K> {
         Ok(out)
     }
 
+    /// A hole's enumeration whose values depend on its thread type
+    /// (`ThreadSize`, `ThreadClass`): from the file's list, else the
+    /// version's for the type.
+    fn hole_listed(&self, o: &Object, property: &str, kind: &str) -> Option<String> {
+        let FcValue::Enumeration(e) = o.value(property)? else {
+            return None;
+        };
+        let index = usize::try_from(e.index).ok()?;
+        match &e.custom {
+            Some(list) => list.get(index).cloned(),
+            None => mitcad_freecad::version::enum_values(
+                &self.sources[0].file.document.version(),
+                "PartDesign::Hole",
+                &format!("{property}[{kind}]"),
+            )?
+            .get(index)
+            .cloned(),
+        }
+    }
+
     /// A hole's thread as a Mitcad thread definition (ISO metric, a Unified
-    /// UNC, UNF or UNEF, a Whitworth BSW, BSF or pipe (BSP, Mitcad's `G`)
-    /// or an NPT size Mitcad's table has): its size from the version's list
+    /// UNC, UNF or UNEF, a Whitworth BSW, BSF or pipe (BSP, Mitcad's `G`),
+    /// an NPT or a tyre valve (ISOTyre) size Mitcad's table has): its size
+    /// from the version's list
     /// for its thread type, its class and hand. The whole wall is threaded
     /// (a thread depth of the hole's). `modeled`: one Mitcad can cut.
     fn hole_thread(&self, o: &Object, modeled: bool) -> Result<Value, String> {
@@ -912,32 +946,18 @@ impl<K: Kernel> Importer<'_, '_, K> {
             "UNC" | "UNF" | "UNEF" => ThreadStandard::Unified,
             "BSW" | "BSF" | "BSP" => ThreadStandard::Whitworth,
             "NPT" => ThreadStandard::Npt,
+            "ISOTyre" => ThreadStandard::TyreValve,
             _ => {
                 return Err(format!(
-                    "a {kind} thread (Mitcad has ISO metric, Unified, Whitworth and NPT ones)"
+                    "a {kind} thread (Mitcad has ISO metric, Unified, Whitworth, NPT and tyre \
+                     valve ones)"
                 ));
             }
         };
         if modeled {
             standard.check_modeled()?;
         }
-        let version = self.sources[0].file.document.version();
-        let listed = |property: &str| -> Option<String> {
-            let FcValue::Enumeration(e) = o.value(property)? else {
-                return None;
-            };
-            let index = usize::try_from(e.index).ok()?;
-            match &e.custom {
-                Some(list) => list.get(index).cloned(),
-                None => mitcad_freecad::version::enum_values(
-                    &version,
-                    "PartDesign::Hole",
-                    &format!("{property}[{kind}]"),
-                )?
-                .get(index)
-                .cloned(),
-            }
-        };
+        let listed = |property: &str| self.hole_listed(o, property, &kind);
         let size = listed("ThreadSize").ok_or("its size is not known")?;
         let depth_type = self
             .enum_text(o, "ThreadDepthType")
@@ -955,6 +975,11 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let missing = || format!("{size} {kind} is not in Mitcad's thread table");
         let designation = match (standard, kind.as_str()) {
             (ThreadStandard::IsoMetric, _) => size,
+            (ThreadStandard::TyreValve, _) => {
+                thread_table::lookup(standard, &size)
+                    .map_err(|_| missing())?
+                    .designation
+            }
             (ThreadStandard::Whitworth, "BSP") => {
                 let g = format!("G {size}");
                 thread_table::lookup(standard, &g).map_err(|_| missing())?;
@@ -988,6 +1013,165 @@ impl<K: Kernel> Importer<'_, '_, K> {
             thread["class"] = json!(class);
         }
         Ok(thread)
+    }
+
+    /// A hole's modelled ISO metric or Unified thread as FreeCAD builds it
+    /// (its Hole's `makeThread`): the groove's section in a plane through
+    /// the axis (60° flanks, a flat root P/8 wide at the major diameter
+    /// plus the class's clearance, reaching into the bore), swept along a
+    /// helix into the material from a pitch above the top face, as deep as
+    /// the thread depth and a little more (P/8 for the hole's depth, P/2 for
+    /// a given depth, 2P through all). Before 1.1 the section is a hexagon
+    /// whose flanks start at the basic minor diameter; beyond the bore both
+    /// are the same.
+    fn thread_groove(
+        &self,
+        o: &Object,
+        thread: &Value,
+        fc_sketch: &fc::Sketch,
+        sketch: &SketchMade,
+        target: &Target,
+    ) -> Result<ThreadGroove, String> {
+        use mitcad_model::features::thread_table::{self, ThreadStandard};
+        let kind = self.enum_text(o, "ThreadType").unwrap_or_default();
+        let standard = match kind.as_str() {
+            "ISOMetricProfile" | "ISOMetricFineProfile" => ThreadStandard::IsoMetric,
+            "UNC" | "UNF" | "UNEF" => ThreadStandard::Unified,
+            other => return Err(format!("a modelled {other} thread")),
+        };
+        if o.bool("Tapered") == Some(true) {
+            return Err("a tapered hole".to_owned());
+        }
+        let designation = thread["designation"].as_str().ok_or("no designation")?;
+        let data = thread_table::lookup(standard, designation)?;
+        let pitch = data.pitch;
+        let rmaj = data.major / 2.0;
+        // The class's clearance on the diameter (FreeCAD's table for the
+        // ISO classes G), or the custom one.
+        let clearance = if o.bool("UseCustomThreadClearance") == Some(true) {
+            o.f64("CustomThreadClearance").unwrap_or(0.0)
+        } else if self
+            .hole_listed(o, "ThreadClass", &kind)
+            .is_some_and(|c| c.as_bytes().get(1) == Some(&b'G'))
+        {
+            const G: [(f64, f64); 25] = [
+                (0.2, 0.017),
+                (0.25, 0.018),
+                (0.3, 0.018),
+                (0.35, 0.019),
+                (0.4, 0.019),
+                (0.45, 0.020),
+                (0.5, 0.020),
+                (0.6, 0.021),
+                (0.7, 0.022),
+                (0.75, 0.022),
+                (0.8, 0.024),
+                (1.0, 0.026),
+                (1.25, 0.028),
+                (1.5, 0.032),
+                (1.75, 0.034),
+                (2.0, 0.038),
+                (2.5, 0.042),
+                (3.0, 0.048),
+                (3.5, 0.053),
+                (4.0, 0.060),
+                (4.5, 0.063),
+                (5.0, 0.071),
+                (5.5, 0.075),
+                (6.0, 0.080),
+                (8.0, 0.100),
+            ];
+            G.iter().find(|(p, _)| pitch <= *p).map_or(0.0, |(_, c)| *c)
+        } else {
+            0.0
+        };
+        // How far the groove runs (FreeCAD keeps the thread depth it used).
+        let depth = o.f64("Depth").ok_or("no depth")?;
+        let thread_depth = o.f64("ThreadDepth").ok_or("no thread depth")?;
+        let depth_type = self.enum_text(o, "DepthType").unwrap_or_default();
+        let length = match self.enum_text(o, "ThreadDepthType").as_deref() {
+            Some("Dimension")
+                if depth_type == "Dimension" && thread_depth > depth - pitch / 2.0 =>
+            {
+                depth + pitch / 8.0
+            }
+            Some("Dimension") => thread_depth + pitch / 2.0,
+            _ if depth_type == "ThroughAll" => thread_depth + 2.0 * pitch,
+            Some("Tapped (DIN76)") => thread_depth + pitch / 2.0,
+            _ => thread_depth + pitch / 8.0,
+        };
+        let h = 3f64.sqrt() / 2.0 * pitch;
+        let section: Vec<[f64; 2]> = if self.sources[0].file.document.version().at_least(1, 1) {
+            let major = rmaj + clearance / 2.0;
+            let (margin_z, margin_x) = (0.001, 60f64.to_radians().tan() * 0.001);
+            let base = major - 7.0 * h / 8.0 + margin_x;
+            vec![
+                [base, margin_z],
+                [major, 7.0 * pitch / 16.0],
+                [major, 9.0 * pitch / 16.0],
+                [base, pitch - margin_z],
+            ]
+        } else {
+            let minor = rmaj - 5.0 * h / 8.0;
+            let (lo, hi) = (minor + clearance / 2.0, rmaj + clearance / 2.0);
+            vec![
+                [lo, pitch / 8.0],
+                [hi, 7.0 * pitch / 16.0],
+                [hi, 9.0 * pitch / 16.0],
+                [lo, 7.0 * pitch / 8.0],
+                [0.9 * minor, 7.0 * pitch / 8.0],
+                [0.9 * minor, pitch / 8.0],
+            ]
+        };
+        let frame = &sketch.frame;
+        let centers: Vec<[f64; 3]> = fc_sketch
+            .geometry
+            .iter()
+            .filter(|g| !g.construction)
+            .filter_map(|g| match g.curve {
+                Curve::Circle { center, .. } | Curve::Arc { center, .. } => Some(add(
+                    frame.origin,
+                    add(
+                        scale(frame.x_axis, center[0]),
+                        scale(frame.y_axis, center[1]),
+                    ),
+                )),
+                _ => None,
+            })
+            .collect();
+        if centers.is_empty() {
+            return Err("no circles to thread".to_owned());
+        }
+        let normal = unit(cross(frame.x_axis, frame.y_axis)).ok_or("the sketch has no normal")?;
+        // Through all, FreeCAD's groove runs on far past the body: it is cut
+        // only as far as two pitches beyond the body's farthest corner from
+        // the sketch plane (the same result, a shorter helix).
+        let mut length = length;
+        if depth_type == "ThroughAll"
+            && let Ok(body) = self.body(target)
+            && let Some(shape) = self.doc.body_shape(body)
+            && let Ok(Some(b)) = self.doc.kernel().bounding_box(shape)
+        {
+            let reach = (0..8)
+                .map(|k| {
+                    let corner = [
+                        if k & 1 == 0 { b.min[0] } else { b.max[0] },
+                        if k & 2 == 0 { b.min[1] } else { b.max[1] },
+                        if k & 4 == 0 { b.min[2] } else { b.max[2] },
+                    ];
+                    dot(sub(corner, frame.origin), normal).abs()
+                })
+                .fold(0.0, f64::max);
+            length = length.min(reach + 2.0 * pitch);
+        }
+        Ok(ThreadGroove {
+            centers,
+            normal,
+            section,
+            pitch,
+            revolutions: length / pitch,
+            left_handed: self.enum_text(o, "ThreadDirection").as_deref() == Some("Left"),
+        })
     }
 
     // Transformations.
@@ -1052,7 +1236,8 @@ impl<K: Kernel> Importer<'_, '_, K> {
     /// both mirrors and the half turn about their planes' intersection;
     /// then, for any sequence of mirrors and linear and polar patterns,
     /// each transformation as a pattern or mirror of the one before
-    /// (patterns of patterns). Scaled copies are not translated.
+    /// (patterns of patterns); a pattern and a Scaled transformation as a
+    /// pattern scaling its copies.
     fn multi_candidates(&mut self, o: &Object, target: &Target) -> Result<Vec<Candidate>, String> {
         let objects = self.transformed(o, target)?;
         if objects["type"] != "features" {
@@ -1068,13 +1253,8 @@ impl<K: Kernel> Importer<'_, '_, K> {
             .iter()
             .map(|s| s.type_name.trim_start_matches("PartDesign::"))
             .collect();
-        if kinds.contains(&"Scaled") {
-            return Err(
-                "a Scaled transformation: Mitcad's patterns and mirrors copy a feature by rigid \
-                 motions and reflections, and it has no scaled copies of a feature (its scale \
-                 feature scales whole bodies)"
-                    .to_owned(),
-            );
+        if let Some(at) = kinds.iter().position(|k| *k == "Scaled") {
+            return self.scaled_candidates(&steps, at, &objects, component);
         }
         let candidates = |defs: Vec<Value>| defs.into_iter().map(Candidate::new).collect();
         let mut out = Vec::new();
@@ -1135,6 +1315,60 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
         out.extend(self.chained_candidates(&steps, &objects, component)?);
         Ok(out)
+    }
+
+    /// A MultiTransform ending in a Scaled transformation: FreeCAD scales
+    /// the copies of the transformation before it (as many as the Scaled
+    /// one's occurrences, element by element) about the first original's
+    /// centre of mass carried with each copy, from 1 to its factor: a
+    /// linear or polar pattern with Mitcad's `scale`.
+    fn scaled_candidates(
+        &mut self,
+        steps: &[Object],
+        at: usize,
+        objects: &Value,
+        component: ComponentUid,
+    ) -> Result<Vec<Candidate>, String> {
+        let scaled = &steps[at];
+        if at != 1 || steps.len() != 2 {
+            return Err(
+                "a Scaled transformation other than after one linear or polar pattern (Mitcad \
+                 scales the copies of a single pattern)"
+                    .to_owned(),
+            );
+        }
+        let pattern = &steps[0];
+        let occurrences = scaled.i64("Occurrences").unwrap_or(0);
+        if pattern.i64("Occurrences") != Some(occurrences)
+            || pattern.i64("Occurrences2").unwrap_or(1) > 1
+        {
+            return Err(
+                "a Scaled transformation whose occurrences are not the pattern's (FreeCAD then \
+                 scales groups of copies alike)"
+                    .to_owned(),
+            );
+        }
+        let defs = match pattern.type_name.trim_start_matches("PartDesign::") {
+            "LinearPattern" => self.linear_defs(pattern, objects, component)?,
+            "PolarPattern" => self.polar_defs(pattern, objects, component)?,
+            other => {
+                return Err(format!(
+                    "a Scaled transformation after a {other} (Mitcad scales the copies of a \
+                     linear or polar pattern)"
+                ));
+            }
+        };
+        let factor = self.prop(scaled, "Factor", Kind::Number, 1.0);
+        Ok(defs
+            .into_iter()
+            .map(|mut def| {
+                def["scale"] = factor.json();
+                Candidate::new(def).note(
+                    "a MultiTransform of a pattern and a Scaled transformation: a pattern \
+                     scaling its copies",
+                )
+            })
+            .collect())
     }
 
     /// A MultiTransform's transformations as a chain: the first a pattern
@@ -1607,38 +1841,24 @@ impl<K: Kernel> Importer<'_, '_, K> {
     /// the reference axis as it rises (FreeCAD sweeps it along a helix
     /// whose frame turns with it, a screw motion). The pitch and the turns
     /// as the mode gives them (pitch and height, pitch and turns, height
-    /// and turns); a cone's angle, a growth or a subtraction outside the
-    /// helix is not translated.
+    /// and turns); a cone's angle or a growth as the helix's growth per
+    /// turn; a subtraction outside the profile as an intersection.
     fn helix_candidates(&mut self, o: &Object, target: &Target) -> Result<Vec<Candidate>, String> {
         let component = target.place.component;
         let additive = o.type_name.contains("Additive");
-        // FreeCAD widens a conical or growing helix keeping the profile in
-        // planes through the axis; Mitcad's helix is a screw motion, and
-        // the geometry kernel's sweeps along a widening helix turn the
-        // profile out of those planes (5e-5 to 7e-5 of the volume off
-        // FreeCAD's shapes, whose own motion lags 2e-6 to 3e-6 behind).
+        // FreeCAD widens a conical or growing helix keeping the profile
+        // (nearly) in planes through the axis: Mitcad's helix with a
+        // growth per turn and FreeCAD's construction (mitcad#83).
         let growing = self
             .enum_text(o, "Mode")
             .is_some_and(|m| m.contains("growth"));
-        if !growing && o.f64("Angle").is_some_and(|a| a.abs() > 1e-9) {
-            return Err(
-                "a conical helix: FreeCAD widens it keeping the profile in planes through the \
-                 axis, which Mitcad's helix (a screw motion) does not"
-                    .to_owned(),
-            );
-        }
-        if growing && o.f64("Growth").is_some_and(|g| g.abs() > 1e-9) {
-            return Err(
-                "a growing helix: FreeCAD widens it keeping the profile in planes through the \
-                 axis, which Mitcad's helix (a screw motion) does not"
-                    .to_owned(),
-            );
-        }
-        if !additive && o.bool("Outside") == Some(true) {
-            return Err("a helix cut outside is not translated".to_owned());
-        }
         let profile = self.profile(o, "Profile", component)?;
-        let (operation, participants) = self.operation(target, additive)?;
+        let (mut operation, participants) = self.operation(target, additive)?;
+        // A subtraction outside the profile keeps what the helix sweeps
+        // through (FreeCAD's common of the two).
+        if !additive && o.bool("Outside") == Some(true) {
+            operation = json!("intersect");
+        }
         let link = o.link("ReferenceAxis").ok_or("no axis")?.clone();
         let axis = self.axis_ref(&link, component)?;
         let mode = self
@@ -1663,6 +1883,22 @@ impl<K: Kernel> Importer<'_, '_, K> {
         if !(pitch.value > 0.0 && revolutions.value > 0.0) {
             return Err("a helix without pitch or turns".to_owned());
         }
+        // Outwards per turn: the growth, or the pitch times the tangent of
+        // the cone's angle.
+        let growth = if growing {
+            Some(self.prop(o, "Growth", Kind::Length, 0.0))
+        } else if o.f64("Angle").is_some_and(|a| a.abs() > 1e-9) {
+            let angle = self.prop(o, "Angle", Kind::Angle, 0.0);
+            Some(Q::combine(
+                &[&pitch, &angle],
+                pitch.value * angle.value.tan(),
+                Kind::Length,
+                |t| format!("{} * tan({})", t[0], t[1]),
+            ))
+        } else {
+            None
+        }
+        .filter(|g| g.value.abs() > 1e-12);
         let left = o.bool("LeftHanded").unwrap_or(false);
         let reversed = o.bool("Reversed").unwrap_or(false);
         let regions: Vec<Vec<String>> = std::iter::once(profile.regions.clone())
@@ -1685,6 +1921,10 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 let mut def = json!({"type": "helix", "profiles": profiles, "axis": axis,
                     "pitch": pitch.json(), "revolutions": revolutions.json(),
                     "left_handed": left_handed, "flip": flip, "operation": operation});
+                if let Some(g) = &growth {
+                    def["growth"] = g.json();
+                    def["construction"] = json!("freecad");
+                }
                 if participants.as_array().is_some_and(|p| !p.is_empty()) {
                     def["participants"] = participants.clone();
                 }
@@ -1948,4 +2188,74 @@ fn in_polygon(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
         }
     }
     inside
+}
+
+/// A modelled thread's groove as FreeCAD cuts it (`thread_groove`).
+struct ThreadGroove {
+    /// The holes' centres on the sketch plane.
+    centers: Vec<[f64; 3]>,
+    /// The sketch's normal.
+    normal: [f64; 3],
+    /// The groove's section: (distance from the axis, height above the top
+    /// face) at the start.
+    section: Vec<[f64; 2]>,
+    pitch: f64,
+    revolutions: f64,
+    left_handed: bool,
+}
+
+impl ThreadGroove {
+    /// For each centre a fixed plane through the axis, the groove's section
+    /// on it and a helix cutting it into the material, then the hole `hole`
+    /// (drilling along the sketch normal's reverse unless `flip`).
+    fn candidate(&self, hole: Value, flip: bool, body: BodyUid) -> Candidate {
+        // FreeCAD's direction out of the material and its perpendicular.
+        let z = if flip {
+            scale(self.normal, -1.0)
+        } else {
+            self.normal
+        };
+        let x = if (z[2] - z[0]).abs() > 1e-7 {
+            [z[2], 0.0, -z[0]]
+        } else if (z[2] - z[1]).abs() > 1e-7 {
+            [z[1], -z[0], 0.0]
+        } else {
+            [0.0, -z[2], z[1]]
+        };
+        let x = unit(x).unwrap_or([1.0, 0.0, 0.0]);
+        // The grooves first, then the hole: cutting a groove that runs out
+        // of the body at both ends from the drilled body can fail in the
+        // geometry kernel, from the solid body it does not.
+        let mut defs: Vec<(Value, &'static str)> = Vec::new();
+        for center in &self.centers {
+            let at = defs.len();
+            let plane = json!({"type": "construction_plane", "definition": {"type": "fixed",
+                "origin": center, "x_axis": x, "y_axis": z}});
+            let n = self.section.len();
+            let mut entities: Vec<Value> = self
+                .section
+                .iter()
+                .enumerate()
+                .map(|(k, p)| json!({"id": format!("p{}", k + 1), "type": "point", "at": p}))
+                .collect();
+            for k in 0..n {
+                entities.push(json!({"id": format!("c{}", n + k + 1), "type": "line",
+                    "start": format!("p{}", k + 1), "end": format!("p{}", (k + 1) % n + 1)}));
+            }
+            let section =
+                json!({"type": "sketch", "plane": format!("${at}"), "entities": entities});
+            let helix = json!({"type": "helix",
+                "profiles": [{"sketch": format!("${}", at + 1), "region": format!("${}:region", at + 1)}],
+                "axis": {"origin": center, "direction": z}, "pitch": self.pitch,
+                "revolutions": self.revolutions, "left_handed": self.left_handed, "flip": true,
+                "operation": "cut", "participants": [body.to_string()]});
+            defs.push((plane, " (thread plane)"));
+            defs.push((section, " (thread section)"));
+            defs.push((helix, " (thread)"));
+        }
+        defs.push((hole, ""));
+        Candidate::several(defs).note(
+            "its modelled thread as FreeCAD cuts it: the groove's section swept along a helix",
+        )
+    }
 }

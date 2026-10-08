@@ -14,17 +14,27 @@ thread_local const CancelSource* t_source = nullptr;
 
 // A progress indicator that shows nothing: OCCT's algorithms ask its user
 // break as they go (from their own worker threads too) and stop when the
-// source says so.
+// source says so; their progress, each ten-thousandth of it, goes to the
+// source (CancelSource::progressed).
 class Breaker final : public Message_ProgressIndicator {
 public:
   explicit Breaker(const CancelSource& source) : m_source(source) {}
 
 protected:
   bool UserBreak() override { return m_source.cancel_requested(); }
-  void Show(const Message_ProgressScope&, const bool) override {}
+  void Show(const Message_ProgressScope&, const bool) override {
+    // (Called under the indicator's lock, never at once.)
+    const double position = GetPosition();
+    if (position >= m_shown + kStep) {
+      m_shown = position;
+      m_source.progressed();
+    }
+  }
 
 private:
+  static constexpr double kStep = 1e-4;
   const CancelSource& m_source;
+  double m_shown = 0.0;
 };
 
 } // namespace

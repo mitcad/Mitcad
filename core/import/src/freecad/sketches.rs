@@ -45,7 +45,7 @@ use super::history::SketchMade;
 use super::report::{ObjectOutcome, ShapeCheck, SketchReport};
 use super::sketch::{self, ExternalMap, Kind, Translated};
 use super::{Importer, Key, placement_of, transform};
-use crate::geom::{self, cross, dot, norm, sub};
+use crate::geom::{self, add, cross, dot, norm, scale, sub};
 
 /// The largest error of solved sketch points accepted, mm.
 const SKETCH_TOLERANCE: f64 = 1e-4;
@@ -523,7 +523,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         frame: &SketchFrame,
         component: ComponentUid,
         label: &str,
-        tilt: &(usize, super::params::Q),
+        tilt: &([f64; 2], super::params::Q),
     ) -> Result<(Value, SketchFrame, Vec<String>, String), String> {
         let name = format!("{label} plane");
         let mut last = "the turned plane is not the sketch's".to_owned();
@@ -573,14 +573,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
     }
 
     /// The definitions of a construction plane turned from the object's
-    /// support (an origin plane, a datum plane) about the support's x or y
-    /// axis by its attachment offset's turn, `tilt`: the angle one way
+    /// support (an origin plane, a datum plane) about a line in it through
+    /// its origin by its attachment offset's turn, `tilt`: the angle one way
     /// round, then the other (which is the object's plane is to be seen).
     pub(super) fn tilted_defs(
         &mut self,
         object: &Object,
         component: ComponentUid,
-        tilt: &(usize, super::params::Q),
+        tilt: &([f64; 2], super::params::Q),
     ) -> Result<Vec<Value>, String> {
         let doc = &self.sources[0].file.document;
         let mode = doc.enum_text(object, "MapMode").unwrap_or_default();
@@ -617,12 +617,8 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 None => return Err(format!("its support {target} is no plane of the import")),
             },
         };
-        let (which, angle) = tilt;
-        let direction = if *which == 0 {
-            base.x_axis
-        } else {
-            base.y_axis
-        };
+        let (along, angle) = tilt;
+        let direction = add(scale(base.x_axis, along[0]), scale(base.y_axis, along[1]));
         // An origin axis when the line is one (the angle about its
         // direction), else a fixed axis.
         let mut line = json!({"origin": base.origin, "direction": direction});

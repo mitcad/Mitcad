@@ -9,7 +9,10 @@ Qt 6 (Qt6*.dll, plugins in bin)
 
 Open CASCADE Technology (TK*.dll in bin)
   Licence: GNU LGPL version 2.1 with the Open CASCADE exception. Linked
-  dynamically; source code at https://dev.opencascade.org/ .
+  dynamically; source code at https://dev.opencascade.org/ . Version 8.0.1
+  with four changes of Mitcad's that speed up booleans, the face merge after
+  them and the shape checker on faces with many edges; the patches are in
+  Mitcad's source code (third_party/vcpkg-ports/opencascade).
 
 Other libraries from vcpkg (for example FreeType, libpng, zlib, bzip2,
 Brotli)

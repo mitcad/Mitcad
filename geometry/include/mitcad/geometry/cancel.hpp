@@ -21,6 +21,11 @@ class CancelSource {
 public:
   virtual ~CancelSource() = default;
   virtual bool cancel_requested() const noexcept = 0;
+  // The progress of an OCCT algorithm stopped by this source advanced
+  // (each ten-thousandth of it; from its worker threads too): the
+  // operation is not stuck, for a caller watching for hangs (the .f3d
+  // import's watchdog, mitcad#82). Nothing by default.
+  virtual void progressed() const noexcept {}
 
 protected:
   CancelSource() = default;

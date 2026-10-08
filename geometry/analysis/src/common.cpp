@@ -2,8 +2,11 @@
 #include "mitcad/analysis/common.hpp"
 
 #include <array>
+#include <exception>
 #include <map>
+#include <optional>
 #include <utility>
+#include <vector>
 
 #include <BRepAdaptor_Curve2d.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -19,6 +22,7 @@
 #include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
 #include <NCollection_Map.hxx>
+#include <OSD_Parallel.hxx>
 #include <Poly_Triangulation.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
@@ -187,10 +191,10 @@ gp_Pnt reference_point(const TopoDS_Shape& shape) {
 
 enum class Integral { Volume, Surface };
 
-// Adds a face's integral about `at`: over its triangles for a mesh face,
-// with fixed or adaptive Gauss points for a surface.
+// A face's integral about `at`: over its triangles for a mesh face, with
+// fixed or adaptive Gauss points for a surface.
 template <class Inert>
-void add_surface_face(GProp_GProps& total, const TopoDS_Face& face, const gp_Pnt& at) {
+GProp_GProps surface_face(const TopoDS_Face& face, const gp_Pnt& at) {
   BRepGProp_Face surface(face);
   Inert props;
   props.SetLocation(at);
@@ -210,26 +214,56 @@ void add_surface_face(GProp_GProps& total, const TopoDS_Face& face, const gp_Pnt
   } else {
     props.Perform(surface, domain, kIntegrationTolerance);
   }
-  total.Add(props);
+  return props;
 }
 
-void add_face(GProp_GProps& total, const TopoDS_Face& face, const gp_Pnt& at, Integral integral) {
+std::optional<GProp_GProps> face_integral(const TopoDS_Face& face, const gp_Pnt& at, Integral integral) {
   TopLoc_Location location;
   if (BRep_Tool::Surface(face, location).IsNull()) {
     const occ::handle<Poly_Triangulation>& mesh = BRep_Tool::Triangulation(face, location);
     if (mesh.IsNull() || mesh->NbNodes() == 0 || mesh->NbTriangles() == 0) {
-      return;
+      return std::nullopt;
     }
     BRepGProp_MeshProps props(integral == Integral::Volume ? BRepGProp_MeshProps::Vinert
                                                            : BRepGProp_MeshProps::Sinert);
     props.SetLocation(at);
     props.Perform(mesh, location, face.Orientation());
-    total.Add(props);
-  } else if (integral == Integral::Volume) {
-    add_surface_face<BRepGProp_Vinert>(total, face, at);
-  } else {
-    add_surface_face<BRepGProp_Sinert>(total, face, at);
+    return props;
   }
+  if (integral == Integral::Volume) {
+    return surface_face<BRepGProp_Vinert>(face, at);
+  }
+  return surface_face<BRepGProp_Sinert>(face, at);
+}
+
+// The sum of the faces' integrals. The faces are integrated on all cores
+// and added in their order, so the sum is the same as one face after
+// another: the import measures every body of hundreds of stored states,
+// which took half of a large design's time on one core.
+GProp_GProps sum_of_faces(const std::vector<TopoDS_Face>& faces, const gp_Pnt& at, Integral integral) {
+  std::vector<std::optional<GProp_GProps>> parts(faces.size());
+  std::vector<std::exception_ptr> errors(faces.size());
+  OSD_Parallel::For(
+      0, static_cast<int>(faces.size()),
+      [&](int i) {
+        const auto k = static_cast<std::size_t>(i);
+        try {
+          parts[k] = face_integral(faces[k], at, integral);
+        } catch (...) {
+          errors[k] = std::current_exception();
+        }
+      },
+      faces.size() < 8);
+  GProp_GProps total(gp::Origin());
+  for (std::size_t k = 0; k < faces.size(); ++k) {
+    if (errors[k]) {
+      std::rethrow_exception(errors[k]);
+    }
+    if (parts[k]) {
+      total.Add(*parts[k]);
+    }
+  }
+  return total;
 }
 
 using ShapeSet = NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>;
@@ -237,11 +271,11 @@ using ShapeSet = NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>;
 } // namespace
 
 GProp_GProps volume_properties(const TopoDS_Shape& shape, bool only_closed, bool skip_shared) {
-  GProp_GProps total(gp::Origin());
   const gp_Pnt at = reference_point(shape);
   // A volume integral counts the faces that bound material.
   ShapeSet forward;
   ShapeSet reversed;
+  std::vector<TopoDS_Face> faces;
   const auto add_faces = [&](const TopoDS_Shape& part) {
     for (TopExp_Explorer it(part, TopAbs_FACE); it.More(); it.Next()) {
       const TopoDS_Face& face = TopoDS::Face(it.Current());
@@ -252,32 +286,32 @@ GProp_GProps volume_properties(const TopoDS_Shape& shape, bool only_closed, bool
       if (skip_shared && !(orientation == TopAbs_FORWARD ? forward : reversed).Add(face)) {
         continue;
       }
-      add_face(total, face, at, Integral::Volume);
+      faces.push_back(face);
     }
   };
   if (!only_closed) {
     add_faces(shape);
-    return total;
-  }
-  ShapeSet shells;
-  for (TopExp_Explorer it(shape, TopAbs_SHELL); it.More(); it.Next()) {
-    if ((!skip_shared || shells.Add(it.Current())) && BRep_Tool::IsClosed(it.Current())) {
-      add_faces(it.Current());
+  } else {
+    ShapeSet shells;
+    for (TopExp_Explorer it(shape, TopAbs_SHELL); it.More(); it.Next()) {
+      if ((!skip_shared || shells.Add(it.Current())) && BRep_Tool::IsClosed(it.Current())) {
+        add_faces(it.Current());
+      }
     }
   }
-  return total;
+  return sum_of_faces(faces, at, Integral::Volume);
 }
 
 GProp_GProps surface_properties(const TopoDS_Shape& shape, bool skip_shared) {
-  GProp_GProps total(gp::Origin());
   const gp_Pnt at = reference_point(shape);
   ShapeSet seen;
+  std::vector<TopoDS_Face> faces;
   for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
     if (!skip_shared || seen.Add(it.Current())) {
-      add_face(total, TopoDS::Face(it.Current()), at, Integral::Surface);
+      faces.push_back(TopoDS::Face(it.Current()));
     }
   }
-  return total;
+  return sum_of_faces(faces, at, Integral::Surface);
 }
 
 TopoDS_Shape oriented_solids(const TopoDS_Shape& shape) {

@@ -17,15 +17,17 @@ namespace mitcad {
 class ImportProgress;
 
 // An .f3d design (.f3d, .f3z) imported with its history (U6, the model's
-// import_f3d), or a FreeCAD document (.FCStd) with its stored bodies
-// (import_fcstd), in a process of its own: the application runs itself
-// with --import-worker, and a crash of the geometry kernel cannot take the
+// import_f3d), a FreeCAD document (.FCStd) with its stored bodies
+// (import_fcstd), or an .ipt part's stored bodies (import_ipt, mitcad#60),
+// in a process of its own: the application runs itself with
+// --import-worker, and a crash of the geometry kernel cannot take the
 // window with it. The import runs to its end; a progress dialog shows the
 // timeline item being replayed and offers two ways to end it early (T1e):
 // Stop and Keep What Is Imported asks the worker to stop (the remaining
 // items take the file's bodies, and the report says where it stopped; not
-// for a FreeCAD document, which has no timeline to replay yet), and
-// Cancel Import stops the process, leaving the open document as it is.
+// for a FreeCAD document or a part file, which have no timeline to replay
+// yet), and Cancel Import stops the process, leaving the open document as
+// it is.
 class F3dImport : public QObject {
   Q_OBJECT
 

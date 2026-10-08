@@ -16,7 +16,10 @@
 #     the axis times its area): one made as the FreeCAD import writes a
 #     helix of a height and turns (a pitch "h / t") opens with them and
 #     takes other turns; a new one, 3 turns of 10, edited to a height of 25
-#     at pitch 5, left-handed, opens again as that.
+#     at pitch 5, left-handed, narrowing 2 a turn (mitcad#83: Mitcad's
+#     construction, so the square's mean distance from the axis counts),
+#     opens again as that; a helix that the FreeCAD import made widening
+#     keeps FreeCAD's construction when it is edited.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sweep-test.sh [screenshot.png]
@@ -28,6 +31,14 @@ CLI=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}
 WORK=$(mktemp -d /tmp/mitcad-ui-sweep.XXXXXX)
 trap 'ui_cleanup; rm -rf "$WORK"' EXIT
 RECT='r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}'
+# expect_file file 'python expression of doc' expected what
+expect_file() {
+  local actual
+  actual=$(python3 -c 'import json, sys; doc = json.load(open(sys.argv[1])); print(eval(sys.argv[2]))' \
+    "$1" "$2") || ui_fail "$4: cannot read $1"
+  [ "$actual" = "$3" ] || ui_fail "$4: $2 is '$actual', expected '$3'"
+  echo "ok   $4"
+}
 PI=3.14159265358979
 
 # Sketch1 (F1): the path, (0, 0)-(50, 0); Sketch2 (F2) on YZ: a 10 mm
@@ -94,7 +105,19 @@ cat > "$WORK/helix.json" << EOF
   {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [-32, 0], "width": 2, "height": 2}
 ]
 EOF
-for model in sweeps bracket helix; do
+# A 2 mm square on XZ 50 mm from the Z axis turned 3 turns of 5 about Z,
+# widening 1 a turn, built as FreeCAD builds it (as the FreeCAD import
+# writes it).
+cat > "$WORK/freecad.json" << EOF
+[
+  {"cmd": "sketch.create", "plane": "xz"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [50, 0], "width": 2, "height": 2},
+  {"cmd": "add_feature", "def": {"type": "helix", "profiles": [{"sketch": "F1", "region": "$RECT"}],
+    "axis": "z", "pitch": 5, "revolutions": 3, "growth": 1, "construction": "freecad",
+    "operation": "new_body"}}
+]
+EOF
+for model in sweeps bracket helix freecad; do
   "$CLI" run "$WORK/$model.json" --save "$WORK/$model.mitcad" > "$WORK/cli.log" 2>&1 ||
     { cat "$WORK/cli.log"; ui_fail "mitcad-cli $model"; }
 done
@@ -287,11 +310,14 @@ ui_step "pitch 5"                          ui_type_in "Panel Helix input pitch" 
 ui_expect_new "Manipulator Helix height at" "the height has an arrow"
 ui_step "Left Hand"                        ui_choose "Panel Helix input hand" 1
 ui_expect_new "Helix: Handedness = Left Hand" "left-handed"
+ui_step "growth -2"                        ui_type_in "Panel Helix input growth" "-2"
+ui_expect_new "Helix Growth: -2 = -2 mm" "narrowing 2 a turn"
 ui_expect_new "Preview Helix: ok" "previewed"
 ui_step "OK (Enter)"                       ui_key Return
 ui_expect_new "Edited F4" "Helix2 edited"
 ui_expect_new "Body Body2 (F4.b0): volume" "the helix measured"
-ui_expect_volume "Body Body2 (F4.b0): volume [0-9.]* -> \([0-9.]*\) mm3" "$(helix 5 31)" "five turns" 1e-5
+# From 31 to 21 mm from the axis: a mean of 26.
+ui_expect_volume "Body Body2 (F4.b0): volume [0-9.]* -> \([0-9.]*\) mm3" "$(helix 5 26)" "five turns, narrowing" 1e-5
 
 echo "--- Helix2 opens as it was made"
 ui_mark
@@ -300,7 +326,34 @@ ui_expect_new "Panel Helix choices: type=height_and_pitch, hand=left, operation=
   "height and pitch, left-handed"
 ui_expect_new "Helix Height: 25 mm" "the height of 25"
 ui_expect_new "Helix Pitch: 5 mm" "the pitch of 5"
+ui_expect_new "Helix Growth: -2 mm" "the growth of -2"
 ui_step "cancel (Esc)"                     ui_key Escape
 ui_expect_new "Command Helix cancelled" "nothing changed"
+ui_mark
+ui_key ctrl+s
+ui_expect_new "Saved $WORK/helix.mitcad" "saved"
+expect_file "$WORK/helix.mitcad" '[f.get("construction") for f in doc["features"] if f["type"] == "helix"]' \
+  "[None, 'mitcad']" "Helix2 is Mitcad's growing helix"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+ui_stop_app
+
+echo "--- A helix of FreeCAD's construction edited: 2 turns"
+ui_start_app --open "$WORK/freecad.mitcad"
+ui_step "fit (F6)"                         ui_key F6
+ui_expect_log "Timeline Helix1 at" "the helix on the timeline"
+ui_mark
+ui_step "double-click Helix1"              ui_double_click_logged "Timeline Helix1"
+ui_expect_new "Editing F2 with Helix" "editing Helix1"
+ui_expect_new "Helix Growth: 1 mm" "the growth of 1"
+ui_step "2 turns"                          ui_type_in "Panel Helix input revolutions" "2"
+ui_expect_new "Preview Helix: ok" "previewed"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Edited F2" "Helix1 edited"
+ui_mark
+ui_key ctrl+s
+ui_expect_new "Saved $WORK/freecad.mitcad" "saved"
+expect_file "$WORK/freecad.mitcad" \
+  '[([p["value"] for p in doc["parameters"] if p["name"] == f["revolutions"]], f.get("construction")) for f in doc["features"] if f["type"] == "helix"]' \
+  "[([2.0], 'freecad')]" "still FreeCAD's construction, 2 turns"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_finish "UI sweep test"

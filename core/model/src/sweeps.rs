@@ -65,7 +65,9 @@ pub struct SweepGuide<'a> {
 /// the path has several curves), caps `start(<region>)` and
 /// `end(<region>)`: with the profile at an end of the swept part `start` is
 /// at the profile, otherwise `start` ends side one and `end` side two, as
-/// for extrusions. A sweep around a whole closed path has no caps.
+/// for extrusions. A sweep around a whole closed path has no caps. A
+/// parallel sweep whose path turns back through the profile's plane has
+/// the copy there as a face `turn(<region>)`.
 #[derive(Debug, Clone, Copy)]
 pub struct SweepSpec<'a> {
     pub feature: FeatureUid,
@@ -302,4 +304,12 @@ pub struct HelixSpec<'a> {
     pub pitch: f64,
     pub revolutions: f64,
     pub left_handed: bool,
+    /// Outwards per turn (0: a screw motion; mitcad#59).
+    pub growth: f64,
+    /// `direction` is against the helix's axis (FreeCAD's widening
+    /// construction depends on it).
+    pub flip: bool,
+    /// A growth is built as FreeCAD builds it (mitcad#83), not by Mitcad's
+    /// own construction.
+    pub freecad: bool,
 }

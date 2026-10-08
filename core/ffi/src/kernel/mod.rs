@@ -65,7 +65,16 @@ use mitcad_model::RecomputeMonitor;
 pub use shape::ffi::Shape;
 
 fn failed(error: cxx::Exception) -> KernelError {
-    KernelError::Failed(error.what().to_owned())
+    match error.what() {
+        // A C++ allocation that failed outside the geometry's operations,
+        // which say so themselves (mitcad#80): std::bad_alloc's message of
+        // libstdc++ and libc++, and of MSVC's library.
+        "std::bad_alloc" | "bad allocation" => KernelError::Failed(format!(
+            "the geometry kernel: {}",
+            KernelError::OUT_OF_MEMORY
+        )),
+        what => KernelError::Failed(what.to_owned()),
+    }
 }
 
 fn occt(shape: &SharedPtr<Shape>) -> Result<&Shape, KernelError> {
@@ -1017,6 +1026,8 @@ impl Kernel for OcctKernel {
             &*shape_list(b)?,
             options.samples,
             options.fuzzy,
+            options.seconds.unwrap_or(0.0),
+            options.booleans_above,
         )
         .map(analysis::comparison)
         .map_err(failed)
@@ -1105,6 +1116,94 @@ impl Kernel for OcctKernel {
 
     fn helix(&self, spec: &mitcad_model::HelixSpec<'_>) -> Result<Self::Shape, KernelError> {
         sweeps::helix(spec)
+    }
+
+    // Segment crossings (the .f3d import's thread angles, mitcad#68;
+    // analysis.rs).
+
+    fn segment_crossings(
+        &self,
+        shape: &Self::Shape,
+        from: Vec3,
+        to: Vec3,
+    ) -> Result<Vec<(f64, bool)>, KernelError> {
+        let segment = [from[0], from[1], from[2], to[0], to[1], to[2]];
+        let flat =
+            analysis::ffi::analysis_segment_crossings(occt(shape)?, &segment).map_err(failed)?;
+        Ok(flat
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|[t, side]| (*t, *side < 0.0))
+            .collect())
+    }
+
+    // Removed material (boolean.rs, mitcad#85).
+
+    fn removed_material(
+        &self,
+        before: &Self::Shape,
+        after: &Self::Shape,
+        slack: f64,
+    ) -> Result<Vec<Self::Shape>, KernelError> {
+        let result =
+            boolean::ffi::removed_material(occt(before)?, occt(after)?, slack).map_err(failed)?;
+        Ok((0..result.piece_count()).map(|i| result.piece(i)).collect())
+    }
+
+    // Near copies joined (boolean.rs, mitcad#88).
+
+    fn join_near_copy(
+        &self,
+        body: &Self::Shape,
+        copy: &Self::Shape,
+        slack: f64,
+    ) -> Result<Option<BooleanOutput<Self::Shape>>, KernelError> {
+        let result =
+            boolean::ffi::join_near_copy(occt(body)?, occt(copy)?, slack).map_err(failed)?;
+        // Not a near copy: no piece and the body not touched.
+        if !result.touched(0) {
+            return Ok(None);
+        }
+        Ok(Some(BooleanOutput {
+            pieces: (0..result.piece_count())
+                .map(|i| BooleanPiece {
+                    shape: result.piece(i),
+                    sources: result.piece_sources(i),
+                })
+                .collect(),
+            touched: vec![true],
+        }))
+    }
+
+    // Every face's and edge's geometry at once (the .f3d import's joint
+    // sides, mitcad#87; datum.rs).
+
+    fn face_geometries(
+        &self,
+        shape: &Self::Shape,
+    ) -> Result<Vec<(Vec<String>, SurfaceGeometry)>, KernelError> {
+        let faces = datum::ffi::datum_face_geometries(occt(shape)?).map_err(failed)?;
+        Ok(faces
+            .into_iter()
+            .map(|f| (f.names, datum::surface(f.surface)))
+            .collect())
+    }
+
+    fn edge_geometries(
+        &self,
+        shape: &Self::Shape,
+    ) -> Result<Vec<(Option<String>, CurveGeometry)>, KernelError> {
+        let edges = datum::ffi::datum_edge_geometries(occt(shape)?).map_err(failed)?;
+        Ok(edges
+            .into_iter()
+            .map(|e| {
+                (
+                    (!e.name.is_empty()).then_some(e.name),
+                    datum::curve(e.curve),
+                )
+            })
+            .collect())
     }
 }
 

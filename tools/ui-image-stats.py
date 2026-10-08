@@ -5,6 +5,8 @@ tests that check what the view draws without comparing to stored images.
 
 Usage: ui-image-stats.py dump.xwd x y width height [other.xwd]
        ui-image-stats.py --shot screenshot.png
+       ui-image-stats.py --silhouettes a.xwd b.xwd x y width height
+       ui-image-stats.py --image-silhouette shot.xwd x y width height image.png fx fy fwidth fheight
 
 Prints JSON with pixel counts in the region:
   pixels   all of them
@@ -16,6 +18,7 @@ Prints JSON with pixel counts in the region:
            and lines; also the darkest shading)
   warm     red clearly above green and blue (a red body)
   yellow   strong red and green, little blue (Section Analysis' caps)
+  blue     blue clearly above red and green (sketch curves)
   changed  differ from the same pixel of other.xwd, when given
 Only the standard library is used.
 
@@ -37,6 +40,24 @@ tools/ui-windows-test.ps1) and prints JSON:
   colors          distinct colours (5 bits per channel): 1 for a blank image
 A Retina screenshot (twice the window's 1280 pixels) is analysed with
 every second pixel and twice the distances.
+
+--silhouettes compares what two dumps show in the region (the shaded and
+the rendered view, tools/ui-render-test.sh): a pixel is the object's when
+it differs from its row's background as for "object" above. Prints JSON:
+  a, b      the object pixels of each
+  both      those of both
+  iou       both / those of either (1: the same silhouette)
+  box_a, box_b  their bounding boxes in the region, [x0, y0, x1, y1]
+
+--image-silhouette compares what a dump shows in the region with a
+rendered image file with an alpha channel (File > Render Image's
+transparent PNG, tools/ui-render-image-test.sh) that shows the frame fx,
+fy, fwidth, fheight of the screen (the image's frame in the view, around
+the region): the dump's object pixels as for "object" above, and the
+image's pixels whose alpha is above one half, taken where each region
+pixel falls in the frame, scaled to the image. Prints the same JSON as
+--silhouettes (a: the dump, b: the image), plus the image's width and
+height.
 """
 
 import json
@@ -204,7 +225,73 @@ def shot_stats(path):
             "side_ratio": side_ratio, "colors": len(colors)}
 
 
+def object_mask(rows):
+    """The pixels that differ from their row's background (its first ones)."""
+    mask = set()
+    for y, row in enumerate(rows):
+        background = Counter(row[:8]).most_common(1)[0][0]
+        for x, (r, g, b) in enumerate(row):
+            if max(abs(r - background[0]), abs(g - background[1]), abs(b - background[2])) > 24:
+                mask.add((x, y))
+    return mask
+
+
+def silhouettes(a_path, b_path, region):
+    a = object_mask(region_rows(a_path, *region))
+    b = object_mask(region_rows(b_path, *region))
+
+    def box(mask):
+        if not mask:
+            return None
+        xs = [x for x, _ in mask]
+        ys = [y for _, y in mask]
+        return [min(xs), min(ys), max(xs), max(ys)]
+
+    both = len(a & b)
+    either = len(a | b)
+    return {"a": len(a), "b": len(b), "both": both, "iou": both / either if either else 0.0,
+            "box_a": box(a), "box_b": box(b)}
+
+
+def image_silhouette(shot_path, region, image_path, frame):
+    a = object_mask(region_rows(shot_path, *region))
+    width, height, bpp, rows = read_png(image_path)
+    if bpp != 4:
+        raise SystemExit("the image has no alpha channel: " + image_path)
+    rx, ry, rw, rh = region
+    fx, fy, fw, fh = frame
+    b = set()
+    for y in range(rh):
+        iy = (ry + y - fy) * height // fh
+        if not 0 <= iy < height:
+            continue
+        row = rows[iy]
+        for x in range(rw):
+            ix = (rx + x - fx) * width // fw
+            if 0 <= ix < width and row[ix * 4 + 3] > 127:
+                b.add((x, y))
+
+    def box(mask):
+        if not mask:
+            return None
+        xs = [x for x, _ in mask]
+        ys = [y for _, y in mask]
+        return [min(xs), min(ys), max(xs), max(ys)]
+
+    both = len(a & b)
+    either = len(a | b)
+    return {"a": len(a), "b": len(b), "both": both, "iou": both / either if either else 0.0,
+            "box_a": box(a), "box_b": box(b), "width": width, "height": height}
+
+
 def main():
+    if len(sys.argv) == 12 and sys.argv[1] == "--image-silhouette":
+        print(json.dumps(image_silhouette(sys.argv[2], [int(v) for v in sys.argv[3:7]], sys.argv[7],
+                                          [int(v) for v in sys.argv[8:12]])))
+        return
+    if len(sys.argv) == 8 and sys.argv[1] == "--silhouettes":
+        print(json.dumps(silhouettes(sys.argv[2], sys.argv[3], [int(v) for v in sys.argv[4:8]])))
+        return
     if len(sys.argv) == 3 and sys.argv[1] == "--shot":
         print(json.dumps(shot_stats(sys.argv[2])))
         return
@@ -213,7 +300,7 @@ def main():
     region = [int(v) for v in sys.argv[2:6]]
     rows = region_rows(sys.argv[1], *region)
     other = region_rows(sys.argv[6], *region) if len(sys.argv) == 7 else None
-    stats = {"pixels": 0, "object": 0, "dark": 0, "light": 0, "grey": 0, "warm": 0, "yellow": 0}
+    stats = {"pixels": 0, "object": 0, "dark": 0, "light": 0, "grey": 0, "warm": 0, "yellow": 0, "blue": 0}
     if other is not None:
         stats["changed"] = 0
     for y, row in enumerate(rows):
@@ -233,6 +320,8 @@ def main():
                 stats["warm"] += 1
             if r > 150 and g > 110 and b < g - 60:
                 stats["yellow"] += 1
+            if b > r + 80 and b > g + 30:
+                stats["blue"] += 1
             if other is not None:
                 o = other[y][x]
                 if max(abs(r - o[0]), abs(g - o[1]), abs(b - o[2])) > 40:

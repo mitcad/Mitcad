@@ -4,7 +4,8 @@
 #   cmake --build --preset dev --target appimage
 # makes Mitcad-<version>-x86_64.AppImage in the build directory: one
 # executable file with Mitcad, mitcad-cli, the Qt and OCCT libraries, Qt's
-# plugins, the icon and a desktop file, which runs on a Linux desktop
+# plugins, the icon and a desktop file (and with MITCAD_RENDER the render
+# worker mitcad-render with its libraries), which runs on a Linux desktop
 # without anything else installed (packaging/linux/make-appimage.sh, with
 # the tools of tools/dev-env/install-appimage-tools.sh).
 # docs/development.md#linux-appimage describes it, tools/appimage-test.sh
@@ -19,6 +20,18 @@ include(GNUInstallDirs)
 # --- Files ---------------------------------------------------------------
 
 install(TARGETS mitcad mitcad-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# The render worker (MITCAD_RENDER, docs/rendering.md) next to mitcad, which
+# offers View > Rendered when it is there; make-appimage.sh adds its
+# libraries.
+if(TARGET mitcad-render)
+  install(TARGETS mitcad-render RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  # The GPU devices' kernels (mitcad#50) where the worker looks for them:
+  # lib/mitcad/cycles/lib beside its bin folder (RenderWorker.cpp).
+  get_property(mitcad_cycles_kernels GLOBAL PROPERTY MITCAD_CYCLES_KERNELS)
+  if(mitcad_cycles_kernels)
+    install(FILES ${mitcad_cycles_kernels} DESTINATION lib/mitcad/cycles/lib)
+  endif()
+endif()
 install(FILES "${PROJECT_SOURCE_DIR}/packaging/linux/mitcad.desktop"
   DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 foreach(size 16 24 32 48 64 96 128 256)
@@ -42,6 +55,20 @@ foreach(copyright IN LISTS mitcad_vcpkg_copyrights)
   install(FILES "${mitcad_vcpkg_share}/${copyright}" DESTINATION ${mitcad_doc_dir}/licenses/vcpkg/${port})
 endforeach()
 
+# The licences of the render worker's libraries that do not come from
+# vcpkg (tools/dev-env/build-cycles.sh's prefix): Cycles with the licence
+# texts of the code it bundles, and Open Image Denoise.
+if(TARGET mitcad-render)
+  set(mitcad_render_install "${MITCAD_RENDER_DEPS}/install")
+  install(FILES "${mitcad_render_install}/cycles/LICENSE" DESTINATION ${mitcad_doc_dir}/licenses/cycles)
+  if(EXISTS "${mitcad_render_install}/cycles/licenses")
+    install(DIRECTORY "${mitcad_render_install}/cycles/licenses/" DESTINATION ${mitcad_doc_dir}/licenses/cycles)
+  endif()
+  install(FILES "${mitcad_render_install}/oidn/share/doc/OpenImageDenoise/LICENSE.txt"
+                "${mitcad_render_install}/oidn/share/doc/OpenImageDenoise/third-party-programs.txt"
+    DESTINATION ${mitcad_doc_dir}/licenses/openimagedenoise)
+endif()
+
 # --- AppImage ------------------------------------------------------------
 
 set(MITCAD_APPIMAGE_TOOLS "$ENV{HOME}/appimage-tools" CACHE PATH
@@ -59,6 +86,9 @@ add_custom_target(appimage
   VERBATIM
   USES_TERMINAL)
 add_dependencies(appimage mitcad mitcad-cli)
+if(TARGET mitcad-render)
+  add_dependencies(appimage mitcad-render)
+endif()
 
 # The AppImage as a user runs it, in ctest: tools/appimage-test.sh checks
 # what it bundles, runs it with a clean environment on a hidden display and

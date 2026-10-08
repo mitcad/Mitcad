@@ -12,13 +12,16 @@
 use std::collections::BTreeSet;
 
 use mitcad_f3d::design::ir::{
-    ChamferDetail, Definition, Detail, EdgeSet, ExtrudeDetail, FilletDetail, Fingerprint,
-    Reference, RevolveDetail, SketchDetail, TimelineItem,
+    ChamferDetail, Definition, Detail, EdgeSet, ExtrudeDetail, ExtrudeF3d, FilletDetail,
+    Fingerprint, Reference, RevolveDetail, SketchDetail, TimelineItem,
 };
+use mitcad_model::assembly::inverse;
 use mitcad_model::datum::Datum;
 use mitcad_model::features::SketchPlane;
 use mitcad_model::sketch::regions::Region;
-use mitcad_model::{BodyUid, FaceName, FeatureUid, Kernel, SketchFrame, TopoName, Transform};
+use mitcad_model::{
+    BodyUid, ComponentUid, FaceName, FeatureUid, Kernel, SketchFrame, TopoName, Transform,
+};
 use serde_json::{Value, json};
 
 use crate::geom::{self, mm, mm3};
@@ -26,7 +29,7 @@ use crate::history::{Sig, StoredBody};
 use crate::refs::Section;
 use crate::report::Outcome;
 use crate::sketch::{self, position_error};
-use crate::{Candidate, Importer, SketchInfo, refs};
+use crate::{Candidate, Guesses, Importer, SketchInfo, refs};
 
 /// Items whose candidates depend on the bodies before them (edges found
 /// against the replay, faces extruded), so a fallback before them may make
@@ -34,6 +37,8 @@ use crate::{Candidate, Importer, SketchInfo, refs};
 pub fn depends_on_bodies(item: &TimelineItem) -> bool {
     match item.object_type() {
         Some("FilletFeature" | "ChamferFeature" | "CombineFeature" | "ReplaceFaceFeature") => true,
+        // Paths, rails or sections of edges (mitcad#34).
+        Some("SweepFeature" | "PipeFeature" | "LoftFeature") => crate::sweeps::uses_edges(item),
         // An extrusion of a face (no profile decoded).
         Some("ExtrudeFeature") => match &item.detail {
             Some(Detail::Extrude(d)) => profiles_of(&d.profile, &d.other).is_empty(),
@@ -48,6 +53,32 @@ const SKETCH_TOLERANCE: f64 = 1e-4;
 
 fn param(r: &Option<Reference>) -> Option<&mitcad_f3d::design::ir::ParameterRef> {
     r.as_ref().and_then(Reference::parameter)
+}
+
+/// Why items of a type that changes bodies are not translated
+/// (mitcad#43); the history's states stand in for them.
+fn not_translated(object_type: &str) -> Option<&'static str> {
+    Some(match object_type {
+        "FlangeFeature" => "a sheet metal flange: not translated (Mitcad has no sheet metal)",
+        "EmbossFeature" => "an emboss: not translated (Mitcad has no emboss feature)",
+        "PCBFeature" => "an electronics board: not translated",
+        "MoveFaceFeature" => "moved faces: not translated (its faces and motion are not decoded)",
+        "DraftFeature" => "a draft: not translated (its faces and plane are not decoded)",
+        "CylinderFeature" | "SphereFeature" => {
+            "a primitive: not translated (the face or plane it is placed on is not decoded)"
+        }
+        "MirrorComponent" => {
+            "mirrors a component into a new one: not translated (the stored bodies stand in)"
+        }
+        "DerivedContext" => {
+            "brings in bodies of another design: not translated (the stored bodies stand in)"
+        }
+        "ComponentFromBodies" => {
+            "moves bodies into a new component: not translated (the stored bodies stand in)"
+        }
+        "CopyPasteBodies" => "copies or moves bodies: not translated (the stored bodies stand in)",
+        _ => return None,
+    })
 }
 
 impl<K: Kernel> Importer<'_, K> {
@@ -92,11 +123,14 @@ impl<K: Kernel> Importer<'_, K> {
         };
         let frame = sketch_frame(detail).ok_or("the sketch's placement was not decoded")?;
         let frame = copy.map_or(frame, |t| t.apply_frame(&frame));
-        let parts = sketch::translate(detail, &self.params);
+        let mut parts = sketch::translate(detail, &self.params);
         let name = item.name();
         let start = self.doc.undo_depth();
-        let (plane, plane_frame, mut notes) = self.sketch_plane(detail, &frame, name, copy)?;
+        let owned = self.components.is_owned(index);
+        let (plane, plane_frame, mut notes) =
+            self.sketch_plane(detail, &frame, name, copy, owned)?;
         let frame_def = geom::relative_frame(&plane_frame, &frame);
+        let made_params = self.offset_params(&mut parts);
         let levels: [(&[Value], &[Value], &str); 3] = [
             (&parts.constraints, &parts.dimensions, ""),
             (
@@ -115,6 +149,11 @@ impl<K: Kernel> Importer<'_, K> {
             let mut def = json!({"type": "sketch", "plane": plane, "entities": parts.entities,
                                  "constraints": constraints, "dimensions": dimensions,
                                  "texts": parts.texts});
+            // Patterns and offsets go with the constraints.
+            if level < 2 {
+                def["patterns"] = json!(parts.patterns);
+                def["offsets"] = json!(parts.offsets);
+            }
             if let Some(f) = &frame_def {
                 def["frame"] = serde_json::to_value(f).expect("serializes");
             }
@@ -138,6 +177,9 @@ impl<K: Kernel> Importer<'_, K> {
                         },
                     );
                     self.adopt(index, uid);
+                    if !made_params.is_empty() {
+                        let _ = self.doc.adopt_parameters(uid, &made_params);
+                    }
                     if level > 0 {
                         notes.push((*what).to_owned());
                     }
@@ -160,21 +202,65 @@ impl<K: Kernel> Importer<'_, K> {
         Err(last)
     }
 
+    /// Creates the parameters a sketch's offsets need (the magnitude of a
+    /// negative distance parameter, shared by the offset's dimensions and
+    /// record) and puts their names in place of the placeholders. Returns
+    /// their names, for the sketch to adopt.
+    fn offset_params(&mut self, parts: &mut sketch::SketchParts) -> Vec<String> {
+        let mut made = Vec::new();
+        for (placeholder, suggested, expression) in std::mem::take(&mut parts.new_params) {
+            let name = (0..)
+                .map(|i| {
+                    if i == 0 {
+                        suggested.clone()
+                    } else {
+                        format!("{suggested}_{i}")
+                    }
+                })
+                .find(|n| self.doc.parameters().find(n).is_none())
+                .expect("a free name");
+            let comment = format!("offset distance, {expression}");
+            let text = match self
+                .doc
+                .add_parameter_expression(&name, &expression, None, &comment)
+            {
+                Ok(()) => {
+                    made.push(name.clone());
+                    name
+                }
+                // Each value its own expression.
+                Err(_) => expression,
+            };
+            for v in parts
+                .dimensions
+                .iter_mut()
+                .chain(parts.offsets.iter_mut())
+                .chain(parts.patterns.iter_mut())
+            {
+                replace_text(v, &placeholder, &text);
+            }
+        }
+        made
+    }
+
     /// The plane of a sketch as the definition's `plane`, with that plane's
     /// frame: an origin plane, an imported construction plane, a planar
     /// face of the replay, or a fixed construction plane made for it. A
     /// copy in another component's coordinates takes planes of that
     /// component only: one of its faces, else a fixed plane (its origin
-    /// planes when it is placed as the sketch's own component).
+    /// planes when it is placed as the sketch's own component). So does a
+    /// sketch whose component the decoder gives (`owned`, mitcad#37): the
+    /// faces of other components are in their own coordinates.
     fn sketch_plane(
         &mut self,
         detail: &SketchDetail,
         frame: &SketchFrame,
         name: Option<&str>,
         copy: Option<&Transform>,
+        owned: bool,
     ) -> Result<(Value, SketchFrame, Vec<String>), String> {
         let moved = copy.is_some_and(|t| !t.is_identity());
-        let component = copy.map(|_| self.component);
+        let component = (copy.is_some() || owned).then_some(self.component);
         if let Some(Reference::ConstructionPlane(c)) = &detail.reference_plane
             && !moved
         {
@@ -380,6 +466,9 @@ impl<K: Kernel> Importer<'_, K> {
         let Some(object_type) = item.object_type() else {
             return Err("unknown timeline item (type not decoded)".to_owned());
         };
+        if let Some(reason) = not_translated(object_type) {
+            return Err(reason.to_owned());
+        }
         match (&item.detail, object_type) {
             (Some(Detail::Extrude(d)), _) => self.extrude(index, item, d),
             (Some(Detail::Revolve(d)), _) => self.revolve(index, d),
@@ -387,7 +476,7 @@ impl<K: Kernel> Importer<'_, K> {
             (Some(Detail::Chamfer(d)), _) => self.chamfer(d),
             // Sweeps, pipes and lofts (F3).
             (Some(Detail::Sweep(d)), _) => self.sweep(index, d),
-            (Some(Detail::Pipe(d)), _) => self.pipe(d),
+            (Some(Detail::Pipe(d)), _) => self.pipe(index, d),
             (Some(_), "LoftFeature") => self.loft(item),
             (_, "BaseFeature") => Err("a base feature: the file's bodies as they are".to_owned()),
             (
@@ -513,20 +602,27 @@ impl<K: Kernel> Importer<'_, K> {
                         .iter()
                         .map(|&i| (order[i].centroid, order[i].area))
                         .collect(),
+                    probe: None,
                 };
-                if !probed.iter().any(|p| p.keys == set.keys) {
+                if !probed.iter().any(|p| same_keys(&p.keys, &set.keys)) {
                     probed.push(set);
                 }
             }
         }
-        let all = RegionSet {
+        let mut all = RegionSet {
             keys: order.iter().map(|r| key(r)).collect(),
             guess: false,
             area: order.iter().map(|r| r.area).sum(),
             parts: order.iter().map(|r| (r.centroid, r.area)).collect(),
+            probe: None,
         };
+        // (A probe that finds every region keeps what it found.)
+        all.probe = probed
+            .iter()
+            .find(|p| same_keys(&p.keys, &all.keys))
+            .and_then(|p| p.probe);
         if n >= regions.len() {
-            probed.retain(|p| p.keys != all.keys);
+            probed.retain(|p| !same_keys(&p.keys, &all.keys));
             probed.insert(0, all);
             return Ok(probed);
         }
@@ -540,10 +636,11 @@ impl<K: Kernel> Importer<'_, K> {
                     .iter()
                     .map(|&i| (order[i].centroid, order[i].area))
                     .collect(),
+                probe: None,
             });
         });
         sets.push(RegionSet { guess: true, ..all });
-        sets.retain(|s| !probed.iter().any(|p| p.keys == s.keys));
+        sets.retain(|s| !probed.iter().any(|p| same_keys(&p.keys, &s.keys)));
         probed.extend(sets);
         Ok(probed)
     }
@@ -583,6 +680,13 @@ impl<K: Kernel> Importer<'_, K> {
             .iter()
             .map(|b| (b.shape.clone(), Sig::of(kernel, b.shape)))
             .collect();
+        let now: f64 = current
+            .iter()
+            .filter_map(|(_, s)| s.map(|s| s.volume))
+            .sum();
+        let volume = |state: &[(StoredBody<K::Shape>, Sig)]| -> f64 {
+            state.iter().map(|(_, s)| s.volume).sum()
+        };
         let mut sets: Vec<RegionSet> = Vec::new();
         for q in self.lookahead(3) {
             let Ok(state) = self.oracle.state(kernel, q) else {
@@ -643,6 +747,7 @@ impl<K: Kernel> Importer<'_, K> {
                     guess: true,
                     area: chosen.iter().map(|r| r.area).sum(),
                     parts: chosen.iter().map(|r| (r.centroid, r.area)).collect(),
+                    probe: Some((side, volume(state) - now)),
                 };
                 if !sets.iter().any(|s| s.keys == set.keys) {
                     sets.push(set);
@@ -843,10 +948,16 @@ impl<K: Kernel> Importer<'_, K> {
         };
         let kind = d.extent_type.as_deref().unwrap_or("");
         let one = d.extent_one.clone().unwrap_or_default();
+        let raw = item.f3d.as_ref().and_then(|f| f.extrude.as_ref());
+        // The stream's extent codes: 1 one side, 2 two sides, 3 symmetric;
+        // for one side 2 a distance, 1 up to an object, 0 through all.
+        let raw_extent = raw.map(|r| (r.extent_a, r.extent_b));
+        let symmetric = kind.starts_with("Symmetric")
+            || d.symmetric_extent.is_some()
+            || raw_extent.is_some_and(|(a, _)| a == Some(3));
         // The profile area the history's change asks for: the change over
         // the length swept by a distance extent (a prism's volume).
         let target_area = if self.oracle.enabled && d.is_thin_extrude != Some(true) {
-            let symmetric = kind.starts_with("Symmetric") || d.symmetric_extent.is_some();
             let swept = if symmetric {
                 let s = d.symmetric_extent.as_ref().unwrap_or(&one);
                 length(s).map(|l| {
@@ -878,7 +989,6 @@ impl<K: Kernel> Importer<'_, K> {
         };
         let sets = self.region_sets(&profiles, sketch, probe, target_area)?;
         let sketch_uid = self.sketches[&sketch].uid.to_string();
-        let raw = item.f3d.as_ref().and_then(|f| f.extrude.as_ref());
         let operation = Self::operation(
             d.operation
                 .as_deref()
@@ -890,7 +1000,7 @@ impl<K: Kernel> Importer<'_, K> {
             operation,
             self.sketches[&sketch].uid,
         );
-        let decoded_flip = raw.and_then(|r| r.direction.flatten()).map(|v| v < 0.0);
+        let decoded_flip = self.decoded_flip(raw, self.sketches[&sketch].uid);
         // A join whose tool touches no body makes a new body (the .f3d rule):
         // when the history's state has more bodies, that too.
         let join_as_new = operation == "join" && self.oracle.enabled && {
@@ -905,32 +1015,59 @@ impl<K: Kernel> Importer<'_, K> {
 
         // Extents: (extent, flip, guess, length swept in mm when known).
         let mut extents: Vec<(Value, bool, bool, Option<f64>)> = Vec::new();
-        if kind.starts_with("Symmetric") || d.symmetric_extent.is_some() {
+        if symmetric && d.symmetric_extent.is_none() && one.distance.is_none() {
+            // Symmetric through all (no distance).
+            extents.push((
+                json!({"type": "through_all", "both_sides": true}),
+                false,
+                false,
+                None,
+            ));
+        } else if symmetric {
             let s = d.symmetric_extent.as_ref().unwrap_or(&one);
-            let full = s.is_full_length == Some(true);
-            let mut v = json!({"type": "symmetric", "distance": self.value_or(&s.distance, "distance")?,
-                               "full_length": full});
-            let taper = s.taper_angle.clone().or(d.taper_angle_one.clone());
-            if !Self::is_zero(&taper) {
-                v["taper"] = self.value_or(&taper, "taper")?;
+            // The stream decoder does not tell a whole length from a half:
+            // a half each way first.
+            let fulls = match s.is_full_length {
+                Some(full) => vec![(full, false)],
+                None => vec![(false, false), (true, true)],
+            };
+            for (full, guess) in fulls {
+                let mut v = json!({"type": "symmetric", "distance": self.value_or(&s.distance, "distance")?,
+                                   "full_length": full});
+                let taper = s.taper_angle.clone().or(d.taper_angle_one.clone());
+                if !Self::is_zero(&taper) {
+                    v["taper"] = self.value_or(&taper, "taper")?;
+                }
+                let swept = length(s).map(|l| if full { l } else { 2.0 * l });
+                extents.push((v, false, guess, swept));
             }
-            let swept = length(s).map(|l| if full { l } else { 2.0 * l });
-            extents.push((v, false, false, swept));
         } else if kind.starts_with("TwoSides") || d.has_two_extents == Some(true) {
             let two = d.extent_two.clone().unwrap_or_default();
-            let (s1, _) = self
-                .side(&one, &d.taper_angle_one)?
-                .ok_or("side one not decoded")?;
-            let (s2, _) = self
-                .side(&two, &d.taper_angle_two)?
-                .ok_or("side two not decoded")?;
+            // A side without a distance or an object in the stream is
+            // through all (its code there is 4).
+            let through_all = |def: &Definition, taper: &Option<Reference>| {
+                let mut v = json!({"type": "through_all"});
+                if !Self::is_zero(taper)
+                    && let Some(t) = self.value(taper)
+                {
+                    v["taper"] = t;
+                }
+                (raw.is_some() && def.definition_type.is_none()).then_some((v, None))
+            };
+            let (s1, _) = match self.side(&one, &d.taper_angle_one)? {
+                Some(s) => s,
+                None => through_all(&one, &d.taper_angle_one).ok_or("side one not decoded")?,
+            };
+            let (s2, _) = match self.side(&two, &d.taper_angle_two)? {
+                Some(s) => s,
+                None => through_all(&two, &d.taper_angle_two).ok_or("side two not decoded")?,
+            };
             let swept = length(&one).zip(length(&two)).map(|(a, b)| a + b);
-            extents.push((
-                json!({"type": "two_sides", "side1": s1, "side2": s2}),
-                false,
-                false,
-                swept,
-            ));
+            // Side one goes along the decoded direction.
+            let flip = decoded_flip.unwrap_or(false);
+            let v = json!({"type": "two_sides", "side1": s1, "side2": s2});
+            extents.push((v.clone(), flip, false, swept));
+            extents.push((v, !flip, true, swept));
         } else if one.definition_type.as_deref() == Some("ToEntityExtentDefinition")
             && self.extent_object(&one.entity, &one).is_none()
         {
@@ -945,15 +1082,36 @@ impl<K: Kernel> Importer<'_, K> {
                 .map(|o| o.frame)
                 .ok_or("its sketch did not evaluate")?;
             let normal = geom::normal(&frame);
+            // Faces of the sketch's component as they are; those of other
+            // components (the file's assembly context: a cut up to another
+            // part) as fixed planes where their occurrences place them in
+            // the sketch's component, which the extrusion can work in, at
+            // this point of the timeline (mitcad#86).
+            let own = self
+                .doc
+                .feature(self.sketches[&sketch].uid)
+                .map(|f| f.component);
+            let into_own = |c: ComponentUid| {
+                let own = own?;
+                Some(inverse(&self.placement_at(own, index)?).after(&self.placement_at(c, index)?))
+            };
             let mut faces: Vec<(f64, Value)> = refs::planar_faces(self.doc)
                 .into_iter()
-                .filter(|(_, _, p)| geom::norm(geom::cross(p.normal, normal)) < 1e-9)
-                .map(|(body, face, p)| {
-                    let s = geom::dot(geom::sub(p.origin, frame.origin), normal);
-                    (
-                        s,
-                        json!({"type": "face", "body": body.to_string(), "face": face.to_string()}),
-                    )
+                .filter_map(|(body, face, p)| {
+                    let c = self.doc.body_component(body)?;
+                    if Some(c) == own {
+                        let object = json!({"type": "face", "body": body.to_string(),
+                                            "face": face.to_string()});
+                        return Some((p.origin, p.normal, object));
+                    }
+                    let t = into_own(c)?;
+                    let (origin, n) = (t.apply_point(p.origin), t.apply_vector(p.normal));
+                    let object = json!({"type": "plane", "plane": {"origin": origin, "normal": n}});
+                    Some((origin, n, object))
+                })
+                .filter(|(_, n, _)| geom::norm(geom::cross(*n, normal)) < 1e-9)
+                .map(|(origin, _, object)| {
+                    (geom::dot(geom::sub(origin, frame.origin), normal), object)
                 })
                 .filter(|(s, _)| s.abs() > 1e-6)
                 .collect();
@@ -990,12 +1148,15 @@ impl<K: Kernel> Importer<'_, K> {
                 }
                 None => {
                     // Not a distance (the decoder leaves the extent out):
-                    // through all is the likeliest.
-                    for flip in [
-                        decoded_flip.unwrap_or(false),
-                        !decoded_flip.unwrap_or(false),
+                    // through all is the likeliest, and certain with the
+                    // stream's extent code for it and a decoded direction.
+                    let through_all = raw_extent == Some((Some(1), Some(0)));
+                    let flip = decoded_flip.unwrap_or(false);
+                    for (flip, guess) in [
+                        (flip, !(through_all && decoded_flip.is_some())),
+                        (!flip, true),
                     ] {
-                        extents.push((json!({"type": "through_all"}), flip, true, None));
+                        extents.push((json!({"type": "through_all"}), flip, guess, None));
                     }
                     extents.push((
                         json!({"type": "through_all", "both_sides": true}),
@@ -1043,6 +1204,20 @@ impl<K: Kernel> Importer<'_, K> {
         } else {
             None
         };
+        // The side of the sketch plane a one-sided extent goes to (±1 along
+        // its normal); None for both sides.
+        let distance_sign = param(&one.distance)
+            .and_then(|p| p.value)
+            .map_or(1.0, |v| if v < 0.0 { -1.0 } else { 1.0 });
+        let side_of = |extent: &Value, flip: bool| -> Option<f64> {
+            let along = if flip { -1.0 } else { 1.0 };
+            match extent["type"].as_str() {
+                Some("distance") => Some(along * distance_sign),
+                Some("to_object") => Some(along),
+                Some("through_all") if extent["both_sides"] != true => Some(along),
+                _ => None,
+            }
+        };
         let mut candidates = Vec::new();
         // Profile sets outside, extents inside: the likeliest extent of
         // each set is tried before the next set.
@@ -1062,8 +1237,16 @@ impl<K: Kernel> Importer<'_, K> {
                     def["thin"] = t.clone();
                 }
                 let mut c = Candidate::new(def);
-                // Without tapers, a prism's volume (overlaps aside).
-                c.predicted = sign.zip(*swept).map(|(s, l)| s * l * set.area);
+                // Without tapers, a prism's volume (overlaps aside); regions
+                // a history state changes on the extrusion's side, the
+                // state's change (a cut deeper than the body removes less
+                // than its prism), so that they are tried first.
+                c.predicted = match set.probe {
+                    Some((side, change)) if side_of(extent, *flip).is_none_or(|s| s == side) => {
+                        Some(change)
+                    }
+                    _ => sign.zip(*swept).map(|(s, l)| s * l * set.area),
+                };
                 let mut notes = Vec::new();
                 if last_sketch {
                     notes.push("the sketch is the last one before it".to_owned());
@@ -1091,6 +1274,29 @@ impl<K: Kernel> Importer<'_, K> {
         let mut all = faces;
         all.extend(candidates);
         Ok(all)
+    }
+
+    /// Whether the extrusion goes against its sketch's normal: by the
+    /// decoded direction vector when there is one (it is stored in the
+    /// component's coordinates, so it tells for sketches on any plane),
+    /// else by the sign the stream decoder found (axis-aligned directions).
+    fn decoded_flip(&self, raw: Option<&ExtrudeF3d>, sketch: FeatureUid) -> Option<bool> {
+        let raw = raw?;
+        // One side through all: the stored vector points away from the
+        // extrusion (every such extrusion the history settled went the
+        // other way).
+        let away = raw.extent_a == Some(1) && raw.extent_b == Some(0);
+        let normal = self
+            .doc
+            .sketch_output(sketch)
+            .map(|o| geom::normal(&o.frame));
+        if let (Some(v), Some(n)) = (raw.direction_vector, normal) {
+            let along = geom::dot(v, n);
+            if along.abs() > 1e-6 {
+                return Some((along < 0.0) != away);
+            }
+        }
+        raw.direction.flatten().map(|v| (v < 0.0) != away)
     }
 
     /// Extrusions of a planar face of a body (.f3d designs extrude faces too;
@@ -1172,6 +1378,8 @@ impl<K: Kernel> Importer<'_, K> {
             if self.doc.body_component(body.uid) != Some(self.component) {
                 continue;
             }
+            // (A kernel call per body, mitcad#82.)
+            crate::tick();
             let Ok(list) = kernel.faces(body.shape) else {
                 continue;
             };
@@ -1597,13 +1805,14 @@ impl<K: Kernel> Importer<'_, K> {
             json!({"type": "fillet", "body": body, "sets": sets, "rolling_ball_corners": rolling})
         };
         let mut candidates = self.dressup(&sets, &sections, &make)?;
-        // Asymmetric: which face takes which offset is not settled (K88).
+        // Asymmetric: which face takes which offset is not settled (K88),
+        // the other reading next to each definition (as for chamfers).
         if sizes.iter().any(|s| s["type"] == "asymmetric") {
-            let flipped: Vec<Candidate> = candidates
-                .iter()
-                .map(|c| {
-                    let mut c = c.clone();
-                    for def in &mut c.defs {
+            candidates = candidates
+                .into_iter()
+                .flat_map(|c| {
+                    let mut flipped = c.clone();
+                    for def in &mut flipped.defs {
                         for set in def["sets"].as_array_mut().into_iter().flatten() {
                             if set["size"]["type"] == "asymmetric" {
                                 let f = set["size"]["flip"].as_bool().unwrap_or(false);
@@ -1611,11 +1820,10 @@ impl<K: Kernel> Importer<'_, K> {
                             }
                         }
                     }
-                    c.guess = true;
-                    c
+                    flipped.guess = true;
+                    [c, flipped]
                 })
                 .collect();
-            candidates.extend(flipped);
         }
         Ok(candidates)
     }
@@ -1695,35 +1903,60 @@ impl<K: Kernel> Importer<'_, K> {
             json!({"type": "chamfer", "body": body, "sets": sets, "corner": corner})
         };
         let mut candidates = self.dressup(&sets, &sections, &make)?;
-        // Two distances: which face takes which is not decoded.
+        // Two distances: which face takes which is not decoded. Each
+        // definition with the other reading next to it: the wrong one can
+        // come within the tolerance, and the right one is tried before
+        // other edges.
         if sizes.iter().any(|(s, _, _)| s["type"] == "two_distances") {
-            let flipped: Vec<Candidate> = candidates
-                .iter()
-                .map(|c| {
-                    let mut c = c.clone();
-                    for def in &mut c.defs {
+            candidates = candidates
+                .into_iter()
+                .flat_map(|c| {
+                    let mut flipped = c.clone();
+                    for def in &mut flipped.defs {
                         for set in def["sets"].as_array_mut().into_iter().flatten() {
                             let f = set["flip"].as_bool().unwrap_or(false);
                             set["flip"] = json!(!f);
                         }
                     }
-                    c.guess = true;
-                    c
+                    flipped.guess = true;
+                    [c, flipped]
                 })
                 .collect();
-            candidates.extend(flipped);
         }
         Ok(candidates)
     }
 
     /// Fillet or chamfer candidates: edges from the fingerprints (external
-    /// dumps), else the edges the history's next states no longer have.
+    /// dumps), else the edges the history's next states no longer have;
+    /// with [`Importer::guesses`] set, the next part of them (the edges
+    /// found by their names, then one state's guesses at a time).
     fn dressup(
         &mut self,
         sets: &[EdgeSet],
         sections: &[Vec<Section>],
         make: &dyn Fn(&str, &[SetEdges]) -> Value,
     ) -> Result<Vec<Candidate>, String> {
+        let mut lazy = self.guesses.take();
+        let result = self.dressup_part(sets, sections, make, lazy.as_mut());
+        self.guesses = lazy;
+        result
+    }
+
+    /// [`Importer::dressup`]: all candidates, or with `lazy` the next part.
+    fn dressup_part(
+        &mut self,
+        sets: &[EdgeSet],
+        sections: &[Vec<Section>],
+        make: &dyn Fn(&str, &[SetEdges]) -> Value,
+        mut lazy: Option<&mut Guesses>,
+    ) -> Result<Vec<Candidate>, String> {
+        if lazy.as_ref().is_some_and(|g| g.done) {
+            return Ok(Vec::new());
+        }
+        let named_first = lazy.as_ref().is_none_or(|g| !g.named);
+        if let Some(g) = lazy.as_deref_mut() {
+            g.named = true;
+        }
         let fingerprints: Vec<Vec<&Fingerprint>> = sets
             .iter()
             .map(|s| {
@@ -1737,37 +1970,52 @@ impl<K: Kernel> Importer<'_, K> {
                     .collect()
             })
             .collect();
-        if fingerprints.iter().any(|f| !f.is_empty()) {
-            // By body: set i's edges.
-            let mut by_body: Vec<(BodyUid, Vec<SetEdges>)> = Vec::new();
-            for (i, fps) in fingerprints.iter().enumerate() {
-                for fp in fps {
-                    let (body, edge) = refs::resolve_edge(self.doc, fp)
-                        .ok_or("an edge was not found in the replay")?;
-                    let entry = match by_body.iter_mut().position(|(b, _)| *b == body) {
-                        Some(k) => &mut by_body[k].1,
-                        None => {
-                            by_body
-                                .push((body, (0..sets.len()).map(|i| (i, Vec::new())).collect()));
-                            &mut by_body.last_mut().expect("pushed").1
-                        }
-                    };
-                    entry[i].1.push(edge.to_string());
+        // Edges the stream decoder found by their names (`_f3d`) come first,
+        // then what the history suggests; an external dump's edges are
+        // taken as they are.
+        let mut first = Vec::new();
+        if named_first && fingerprints.iter().any(|f| !f.is_empty()) {
+            let named = fingerprints.iter().flatten().any(|fp| fp.f3d.is_some());
+            let result = self.dressup_by_fingerprints(&fingerprints, make);
+            if !named && let Some(g) = lazy.as_deref_mut() {
+                g.done = true;
+            }
+            match result {
+                Ok(c) if !named => return Ok(vec![c]),
+                Err(e) if !named => return Err(e),
+                Ok(mut c) => {
+                    c.note = Some("edges found by their names in the file".to_owned());
+                    first.push(c);
+                }
+                Err(e) => {
+                    if crate::tracing() {
+                        eprintln!("import: edges by their names: {e}");
+                    }
                 }
             }
-            let defs = by_body
-                .iter()
-                .map(|(body, edges)| make(&body.to_string(), edges))
-                .collect();
-            return Ok(vec![Candidate {
-                defs,
-                note: None,
-                guess: false,
-                predicted: None,
-            }]);
         }
         if !self.oracle.enabled {
+            if let Some(g) = lazy.as_deref_mut() {
+                g.done = true;
+            }
+            if !first.is_empty() {
+                return Ok(first);
+            }
             return Err("its edges were not decoded (no history to find them)".to_owned());
+        }
+        // (The edges found by their names are not tried twice.)
+        let mut seen: BTreeSet<Vec<String>> = first.iter().map(|c| dressup_key(&c.defs)).collect();
+        // One part at a time: the edges found by their names before the
+        // states' guesses.
+        let mut skip = 0;
+        if let Some(g) = lazy.as_deref_mut() {
+            if !first.is_empty() {
+                g.seen = seen;
+                g.given = true;
+                return Ok(first);
+            }
+            seen = std::mem::take(&mut g.seen);
+            skip = g.states;
         }
         // The edges the next states lost.
         let kernel = self.doc.kernel();
@@ -1778,9 +2026,18 @@ impl<K: Kernel> Importer<'_, K> {
             .map(|b| (b.uid, b.shape.clone(), Sig::of(kernel, b.shape)))
             .collect();
         let mut candidates = Vec::new();
-        let mut seen: BTreeSet<Vec<String>> = BTreeSet::new();
         let mut last_error = None;
-        for q in self.lookahead(4) {
+        let states = self.lookahead(4);
+        let count = states.len();
+        for q in states.skip(skip) {
+            // One state's guesses at a time: the next ones when these give
+            // no state.
+            if let Some(g) = lazy.as_deref_mut() {
+                if !candidates.is_empty() {
+                    break;
+                }
+                g.states += 1;
+            }
             let kernel = self.doc.kernel();
             let state: Vec<(StoredBody<K::Shape>, Sig)> = match self.oracle.state(kernel, q) {
                 Ok(s) => s.to_vec(),
@@ -1816,6 +2073,7 @@ impl<K: Kernel> Importer<'_, K> {
             // leaves the distance the edge's midpoint has from the state.
             let mut found: Vec<(BodyUid, Vec<SetGone>)> = Vec::new();
             for (uid, shape) in changed {
+                let clock = std::time::Instant::now();
                 let consumed = match refs::consumed_edges(kernel, shape, &after) {
                     Ok(c) => c,
                     Err(e) => {
@@ -1860,6 +2118,11 @@ impl<K: Kernel> Importer<'_, K> {
                     })
                     .collect();
                 if crate::tracing() {
+                    eprintln!(
+                        "import: state {q} {uid}: {} gone edges in {:.2} s",
+                        consumed.len(),
+                        clock.elapsed().as_secs_f64()
+                    );
                     for (gone, e) in consumed.iter().zip(&edges) {
                         eprintln!(
                             "import: state {q} {uid}: gone {} length {:.3} distance {:.4} wedge {:.1} {} set {} off {:.3} fit {:.4}",
@@ -1926,7 +2189,7 @@ impl<K: Kernel> Importer<'_, K> {
                 if variant == 1 && defs.len() < 2 {
                     continue;
                 }
-                if !defs.is_empty() && seen.insert(defs.iter().map(Value::to_string).collect()) {
+                if !defs.is_empty() && seen.insert(dressup_key(&defs)) {
                     let note = match variant {
                         0 => format!("edges whose dressup ASM history state {q} has"),
                         1 => format!(
@@ -1943,13 +2206,56 @@ impl<K: Kernel> Importer<'_, K> {
                 }
             }
         }
-        if candidates.is_empty() {
+        if let Some(g) = lazy {
+            g.done = g.states >= count;
+            g.seen = seen;
+            if g.given {
+                return Ok(candidates);
+            }
+            g.given = !candidates.is_empty();
+        }
+        first.extend(candidates);
+        if first.is_empty() {
             return Err(last_error.unwrap_or_else(|| {
                 "its edges were not decoded, and no edge of the replay is gone in the next history states"
                     .to_owned()
             }));
         }
-        Ok(candidates)
+        Ok(first)
+    }
+
+    /// The dressup of edges given by fingerprints (every set's), by body.
+    fn dressup_by_fingerprints(
+        &self,
+        fingerprints: &[Vec<&Fingerprint>],
+        make: &dyn Fn(&str, &[SetEdges]) -> Value,
+    ) -> Result<Candidate, String> {
+        let mut by_body: Vec<(BodyUid, Vec<SetEdges>)> = Vec::new();
+        for (i, fps) in fingerprints.iter().enumerate() {
+            for fp in fps {
+                let (body, edge) = refs::resolve_edge(self.doc, fp)
+                    .ok_or("an edge was not found in the replay")?;
+                let entry = match by_body.iter_mut().position(|(b, _)| *b == body) {
+                    Some(k) => &mut by_body[k].1,
+                    None => {
+                        let sets = (0..fingerprints.len()).map(|i| (i, Vec::new())).collect();
+                        by_body.push((body, sets));
+                        &mut by_body.last_mut().expect("pushed").1
+                    }
+                };
+                entry[i].1.push(edge.to_string());
+            }
+        }
+        let defs = by_body
+            .iter()
+            .map(|(body, edges)| make(&body.to_string(), edges))
+            .collect();
+        Ok(Candidate {
+            defs,
+            note: None,
+            guess: false,
+            predicted: None,
+        })
     }
 }
 
@@ -2096,6 +2402,22 @@ fn tangent_chains<K: Kernel>(kernel: &K, shape: &K::Shape, names: &[String]) -> 
     out.into_iter().map(|(_, list)| list).collect()
 }
 
+/// What tells fillet or chamfer definitions apart: each with its sets'
+/// edges sorted.
+fn dressup_key(defs: &[Value]) -> Vec<String> {
+    defs.iter()
+        .map(|d| {
+            let mut d = d.clone();
+            for set in d["sets"].as_array_mut().into_iter().flatten() {
+                if let Some(edges) = set["edges"].as_array_mut() {
+                    edges.sort_by_key(Value::to_string);
+                }
+            }
+            d.to_string()
+        })
+        .collect()
+}
+
 /// The largest group of edges at one distance (within 3 %) from the state
 /// after a rounding.
 fn largest_group<'a>(edges: &[&'a SetGone]) -> Vec<&'a SetGone> {
@@ -2179,7 +2501,7 @@ fn area_subsets(areas: &[f64], target: f64, k: usize) -> Vec<Vec<usize>> {
 
 /// A feature's profile references: a list, or one profile (external dumps
 /// may write `ExtrudeFeature.profile` as a single reference).
-fn profiles_of(
+pub(crate) fn profiles_of(
     list: &Option<Vec<Reference>>,
     other: &serde_json::Map<String, Value>,
 ) -> Vec<Reference> {
@@ -2192,6 +2514,17 @@ fn profiles_of(
     }
 }
 
+/// Whether two lists of region keys name the same regions.
+fn same_keys(a: &[String], b: &[String]) -> bool {
+    a.len() == b.len() && {
+        let mut a: Vec<&String> = a.iter().collect();
+        let mut b: Vec<&String> = b.iter().collect();
+        a.sort();
+        b.sort();
+        a == b
+    }
+}
+
 /// Profile regions of one sketch to try together.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RegionSet {
@@ -2201,6 +2534,10 @@ pub(crate) struct RegionSet {
     area: f64,
     /// Each region's centroid (sketch mm) and area.
     parts: Vec<([f64; 2], f64)>,
+    /// Regions found by probing a history state: the side of the sketch
+    /// plane (±1 along its normal) where the state changes their material,
+    /// and the state's volume change (mm³).
+    probe: Option<(f64, f64)>,
 }
 
 impl RegionSet {
@@ -2214,6 +2551,16 @@ impl RegionSet {
                 area * r * angle.abs()
             })
             .sum()
+    }
+}
+
+/// Replaces every string `from` in a JSON value by `to`.
+fn replace_text(v: &mut Value, from: &str, to: &str) {
+    match v {
+        Value::String(s) if s == from => *s = to.to_owned(),
+        Value::Array(a) => a.iter_mut().for_each(|x| replace_text(x, from, to)),
+        Value::Object(m) => m.values_mut().for_each(|x| replace_text(x, from, to)),
+        _ => {}
     }
 }
 

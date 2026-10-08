@@ -110,6 +110,39 @@ void test_join_of_many_copies_finds_what_they_touch() {
   CHECK((sources == std::vector<std::size_t>{0, 1}));
 }
 
+void test_join_with_a_plate_of_many_holes() {
+  // A 60 x 40 plate 2 mm thick with 40 x 26 holes: the faces near a tool
+  // have over a thousand edges, so the tool's vertices are tried before the
+  // faces are measured.
+  Region plate = rectangle(1, 0, 0, 60, 40);
+  int curve = 5;
+  for (int i = 0; i < 40; ++i) {
+    for (int j = 0; j < 26; ++j) {
+      plate.loops.push_back(circle(curve++, 0.75 + 1.5 * i, 0.75 + 1.5 * j, 0.4).loops.at(0));
+    }
+  }
+  const ShapePtr holed = extrude("F2", {plate}, 0, 2);
+  // A small block above the plate between two posts on it, touching neither.
+  const ShapePtr above = extrude("F3", {rectangle(1045, 2.8, 1.3, 0.4, 0.4)}, 3, 4);
+  const auto posts = [](double from) {
+    return extrude("F4", {rectangle(1049, 1.3, 1.3, 0.4, 0.4), rectangle(1053, 4.3, 1.3, 0.4, 0.4)},
+                   from, 5);
+  };
+  // Standing on the plate between its holes: joined to it.
+  const BooleanResult standing = run(BooleanOp::Join, {holed, above}, posts(2));
+  CHECK((standing.touched == std::vector<bool>{true, false}));
+  CHECK(standing.pieces.size() == 1);
+  if (standing.pieces.size() == 1) {
+    CHECK((standing.pieces[0].sources == std::vector<std::size_t>{0}));
+    CHECK(near(volume(*standing.pieces[0].shape), volume(*holed) + 2 * 0.4 * 0.4 * 3));
+  }
+  // Sunk into the plate: joined too.
+  CHECK((run(BooleanOp::Join, {holed, above}, posts(1)).touched == std::vector<bool>{true, false}));
+  // A thousandth of a millimetre above it: nothing touched.
+  const BooleanResult hovering = run(BooleanOp::Join, {holed, above}, posts(2.001));
+  CHECK((hovering.touched == std::vector<bool>{false, false}) && hovering.pieces.empty());
+}
+
 void test_cut_hole_names_the_walls() {
   const ShapePtr drill = extrude("F4", {circle(5, 30, 20, 5)}, 0, 30);
   const BooleanResult result = run(BooleanOp::Cut, {block()}, drill);
@@ -217,6 +250,7 @@ void boolean_tests() {
   test_join_merges_flush_faces();
   test_join_with_several_participants();
   test_join_of_many_copies_finds_what_they_touch();
+  test_join_with_a_plate_of_many_holes();
   test_cut_hole_names_the_walls();
   test_cut_splitting_a_face_numbers_the_pieces();
   test_cut_splitting_the_body();

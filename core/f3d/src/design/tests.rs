@@ -274,8 +274,10 @@ fn sample() -> Doc {
             &u32b(4),
             &u32b(1),
             &u32b(2),
-            &[0],
-            &f64s(&[1.0]),
+            &[0, 1],
+            &u32b(0),
+            &f64s(&[0.0, 0.0, 1.0]),
+            &[0, 0],
             &r(70),
             &r(71),
             &r(30),
@@ -572,6 +574,7 @@ fn parameters_timeline_and_tails() {
         (Some("NewBody"), 1, 2)
     );
     assert_eq!(f.direction, Some(1.0));
+    assert_eq!(f.vector, Some([0.0, 0.0, 1.0]));
 
     assert_eq!(dec.components.len(), 2);
     assert_eq!(dec.components[0].name.as_deref(), Some("Bracket"));
@@ -582,6 +585,146 @@ fn parameters_timeline_and_tails() {
     assert_eq!(cv.objects, seg.objects.len() as u64);
     assert_eq!(cv.root_part_ok, cv.objects);
     assert!(cv.decoded_bytes > 0 && cv.token_bytes > cv.framing_bytes);
+}
+
+/// A class-version-8 parameter (2026 writers): `00 00 | 00 | u32 6 | 00 |
+/// str16 comment | number | holder | expr | 10 flag bytes | role | "" |
+/// unit | name | value | 00 ref list`.
+#[allow(clippy::too_many_arguments)]
+fn parameter_v8(
+    number: u32,
+    holder: Option<u64>,
+    expr: &str,
+    role: &str,
+    comment: &str,
+    unit: &str,
+    name: &str,
+    value: f64,
+) -> Vec<u8> {
+    let user = u8::from(holder.is_none());
+    cat(&[
+        &[0, 0],
+        &[0],
+        &u32b(6),
+        &[0],
+        &s16(comment),
+        &u32b(number),
+        &holder.map_or(vec![0], r),
+        &s16(expr),
+        &[0, 0, 0, 0, 0, 0, 0, 0, 0, user],
+        &s16(role),
+        &s16(""),
+        &s16(unit),
+        &s16(name),
+        &f64s(&[value]),
+        &[0],
+        &r(32),
+    ])
+}
+
+#[test]
+fn parameters_of_class_version_8() {
+    let mut d = Doc::default();
+    d.class(ROOT, "", 0);
+    d.class(PARAMETER, ROOT, 8);
+    d.class(PARAMETER_LIST, ROOT, 4);
+    d.class(PARAMETER_HOLDER, ROOT, 0);
+    d.obj(30, PARAMETER_HOLDER, vec![0, 0]);
+    d.obj(32, PARAMETER_LIST, vec![0, 0]);
+    let p = parameter_v8(1, Some(30), "5 mm", "Radius", "", "mm", "d1", 0.5);
+    d.obj(40, PARAMETER, p);
+    let p = parameter_v8(
+        2,
+        None,
+        "60 mm",
+        "User Parameter",
+        "block width",
+        "mm",
+        "width",
+        6.0,
+    );
+    d.obj(41, PARAMETER, p);
+    // A driven dimension's: the flag 4 bytes before the role.
+    let expr = "1.500001 mm";
+    let mut p = parameter_v8(
+        3,
+        Some(30),
+        expr,
+        "Linear Dimension-2",
+        "",
+        "mm",
+        "d3",
+        0.15,
+    );
+    let at = 2 + 6 + 4 + 4 + 11 + 4 + 2 * expr.len() + 6;
+    p[at] = 1;
+    d.obj(42, PARAMETER, p);
+    let dec = decode::decode(&d.segment());
+    let driven: Vec<bool> = dec.parameters.iter().map(|p| p.is_driven()).collect();
+    assert_eq!(driven, [false, false, true]);
+    let dec = decode::Decoded {
+        parameters: dec.parameters[..2].to_vec(),
+        ..dec
+    };
+    assert_eq!(dec.parameter_failures, 0);
+    let p: Vec<_> = dec
+        .parameters
+        .iter()
+        .map(|p| {
+            (
+                p.number,
+                p.holder,
+                p.expression.as_str(),
+                p.role.as_str(),
+                p.comment.as_deref(),
+                p.name.as_str(),
+                p.value,
+                p.list,
+            )
+        })
+        .collect();
+    assert_eq!(
+        p,
+        [
+            (1, Some(30), "5 mm", "Radius", Some(""), "d1", 0.5, Some(32)),
+            (
+                2,
+                None,
+                "60 mm",
+                "User Parameter",
+                Some("block width"),
+                "width",
+                6.0,
+                Some(32)
+            ),
+        ]
+    );
+    assert!(dec.parameters[1].is_user());
+}
+
+#[test]
+fn curve_kinds() {
+    let seg = sample().segment();
+    // The end of a curve's sketch-curve part: flags, the two f32 1.0 and
+    // the sketch reference; the kind 22 bytes before the pair.
+    let curve = |kind: u8| {
+        let mut d = vec![7u8; 30];
+        d.extend([0, 0, 0, 0, 0, 0, kind, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+        d.extend([0; 12]);
+        d.extend([0, 0, 0x80, 0x3f, 0, 0, 0x80, 0x3f]);
+        d.extend([0; 6]);
+        d
+    };
+    assert_eq!(sketch::curve_kind(&seg, &curve(0)), Some(0));
+    assert_eq!(sketch::curve_kind(&seg, &curve(1)), Some(1));
+    assert_eq!(sketch::curve_kind(&seg, &curve(2)), Some(2));
+    assert_eq!(sketch::curve_kind(&seg, &curve(9)), None);
+    // A reference where the flags would be: another layout.
+    let mut d = curve(1);
+    let at = d.len() - 6 - 8 - 24;
+    d.splice(at..at + 11, r(32));
+    assert_eq!(sketch::curve_kind(&seg, &d), None);
+    assert_eq!(sketch::curve_kind(&seg, &[0; 40]), None);
 }
 
 #[test]
@@ -819,6 +962,291 @@ fn direct_design_without_timeline() {
     assert_eq!(v["occurrences"], json!([]));
 }
 
+/// Timeline items beyond the reference decoder (mitcad#43): an
+/// occurrence item named after its occurrence's component, a group by its
+/// own name, a known assembly class by its type; an unknown class stays
+/// without a type.
+#[test]
+fn occurrence_items_groups_and_assembly_items_are_named() {
+    const RELATIONSHIP: &str = "D0F69AAA-7BA0-4C9C-8A6D-7D01ADB39593";
+    const UNKNOWN: &str = "0000BBBB-0000-0000-0000-000000000002";
+    let mut d = sample();
+    for (g, v) in [
+        (OCCURRENCE_ITEM, 2),
+        (OCCURRENCE_REF, 0),
+        (GROUP, 1),
+        (RELATIONSHIP, 1),
+        (UNKNOWN, 0),
+    ] {
+        d.class(g, ROOT, v);
+    }
+    d.objects.retain(|o| o.0 != 3);
+    d.obj(
+        3,
+        TIMELINE,
+        cat(&[
+            &[0, 0],
+            &r(1),
+            &u32b(6),
+            &r(10),
+            &r(20),
+            &r(110),
+            &r(100),
+            &r(120),
+            &r(130),
+        ]),
+    );
+    // The occurrence item refers to occurrence 80 of component Pin.
+    d.obj(
+        100,
+        OCCURRENCE_ITEM,
+        cat(&[&[0, 0], &r(101), &tail(-1, "", 1, "", [0, 0, 0], 102)]),
+    );
+    d.obj(101, OCCURRENCE_REF, cat(&[&[0, 0], &r(80), &r(100)]));
+    d.obj(102, HEALTH, vec![0, 0]);
+    d.obj(
+        110,
+        GROUP,
+        cat(&[&[0, 0, 0, 0], &u32b(2), &r(100), &r(120), &s16("Fixings")]),
+    );
+    d.obj(
+        120,
+        RELATIONSHIP,
+        cat(&[
+            &[0, 0],
+            &tail(-1, "GeometricRelationship", 1, "", [0, 0, 0], 121),
+        ]),
+    );
+    d.obj(121, HEALTH, vec![0, 0]);
+    d.obj(
+        130,
+        UNKNOWN,
+        cat(&[&[0, 0], &tail(-1, "Mystery", 2, "", [0, 0, 0], 131)]),
+    );
+    d.obj(131, HEALTH, vec![0, 0]);
+    let (m, b) = d.streams();
+    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    let items = v["timeline"]["items"].as_array().unwrap();
+    let got: Vec<(&str, Option<&str>)> = items[2..]
+        .iter()
+        .map(|i| (i["name"].as_str().unwrap(), i["objectType"].as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("Fixings", Some("Group")),
+            ("Pin", Some("Occurrence")),
+            ("GeometricRelationship1", Some("GeometricRelationship")),
+            ("Mystery2", None),
+        ]
+    );
+    // The occurrence the occurrence item made (mitcad#75).
+    assert_eq!(
+        items[3]["detail"]["occurrence"]["_f3d"]["path"],
+        json!([80])
+    );
+}
+
+/// A sweep's and a loft's inputs (mitcad#34): the operation, the profile
+/// of the profile source, a path of a sketch curve named by its ids, and a
+/// loft's sections (a profile and a sketch point), end conditions and
+/// centre line.
+#[test]
+fn sweep_and_loft_inputs() {
+    const SWEEP: &str = "FCBB1707-4450-46B3-9E65-0F61682EA8CA";
+    let mut d = sample();
+    for (g, v) in [
+        (SWEEP, 6),
+        (BODY_INPUT, 1),
+        (SKETCH_CURVE_ID, 0),
+        (SKETCH_POINT_ID, 0),
+        (LOFT, 9),
+        (LOFT_SECTION, 1),
+    ] {
+        d.class(g, ROOT, v);
+    }
+    d.objects.retain(|o| ![3, 50, 51, 52].contains(&o.0));
+    d.obj(
+        3,
+        TIMELINE,
+        cat(&[&[0, 0], &r(1), &u32b(4), &r(10), &r(20), &r(100), &r(200)]),
+    );
+    // The sketch's entities with the ids inputs name them by.
+    let tag =
+        |key: &str, v: u64| cat(&[&s8(key), &s8("IntrinsicMetaTypeuint64"), &v.to_le_bytes()]);
+    for (id, x, t) in [(50, 0.0, 7), (51, 2.0, 8)] {
+        d.obj(
+            id,
+            SKETCH_POINT,
+            cat(&[
+                &[0, 1],
+                &u32b(1),
+                &tag("pt_tag", t),
+                &r(53),
+                &[0, 0, 0, 0, 1, 0, 1, 0],
+                &f64s(&[x, 0.0, 0.0]),
+                &r(40),
+            ]),
+        );
+    }
+    d.obj(
+        52,
+        SKETCH_LINE,
+        cat(&[
+            &[0, 1],
+            &u32b(2),
+            &tag("crv_primary_id", 103),
+            &tag("crv_secondary_id", 0),
+            &f64s(&[0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0]),
+            &r(51),
+            &r(50),
+            &r(40),
+        ]),
+    );
+    // The sweep: operation, header, the parameter holders, no guide
+    // surfaces, the path, no rail, the profile input, taper and twist.
+    d.obj(
+        100,
+        SWEEP,
+        cat(&[
+            &[0, 0],
+            &u32b(4),
+            &[1],
+            &u32b(3),
+            &[0, 0, 1, 1, 1],
+            &f64s(&[1.0, 0.0, 0.0]),
+            &r(101),
+            &r(102),
+            &r(103),
+            &r(104),
+            &[0],
+            &r(110),
+            &[0],
+            &r(105),
+            &r(106),
+            &r(107),
+            &u32b(2),
+            &r(111),
+            &r(110),
+            &tail(5, "Sweep", 1, "", [0, 0, 0], 108),
+        ]),
+    );
+    for h in [101, 102, 103, 104, 106, 107] {
+        d.obj(h, PARAMETER_HOLDER, cat(&[&[1], &u32b(1), &r(100), &[0]]));
+    }
+    d.obj(105, PROFILE_ID, vec![0, 0]);
+    d.obj(108, HEALTH, vec![0, 0]);
+    let p = parameter(10, Some(103), "1", "AlongDistance", "", "", "d10", 1.0);
+    d.obj(109, PARAMETER, p);
+    d.obj(110, BODY_INPUT, cat(&[&[0, 0], &u32b(1), &r(112)]));
+    d.obj(111, PROFILE_SOURCE, cat(&[&[0, 0], &s16("40"), &r(114)]));
+    d.obj(112, ENTITY_REF, cat(&[&[0, 0], &r(113)]));
+    d.obj(
+        113,
+        SKETCH_CURVE_ID,
+        cat(&[
+            &[0, 0],
+            &0u64.to_le_bytes(),
+            &40u64.to_le_bytes(),
+            &103u64.to_le_bytes(),
+        ]),
+    );
+    d.obj(114, PROFILE_ID, vec![0, 0]);
+    // The loft: flags, a join, the centre line, the last section's tangent
+    // point condition, no rails, the sections, the first one's free end.
+    d.obj(
+        200,
+        LOFT,
+        cat(&[
+            &[0, 0],
+            &[1, 1, 1, 1],
+            &u32b(1),
+            &r(110),
+            &(-1i32).to_le_bytes(),
+            &0u64.to_le_bytes(),
+            &[0],
+            &u32b(5),
+            &r(206),
+            &u32b(0),
+            &[0],
+            &u32b(1),
+            &[0],
+            &r(105),
+            &u32b(2),
+            &r(220),
+            &r(221),
+            &(-1i32).to_le_bytes(),
+            &0u64.to_le_bytes(),
+            &[0],
+            &u32b(0),
+            &[0],
+            &u32b(0),
+            &u32b(0),
+            &tail(6, "Loft", 1, "", [0, 0, 0], 207),
+        ]),
+    );
+    d.obj(206, PARAMETER_HOLDER, cat(&[&[1], &u32b(1), &r(200), &[0]]));
+    d.obj(207, HEALTH, vec![0, 0]);
+    let p = parameter(11, Some(206), "1.5", "End Weight", "", "", "d11", 1.5);
+    d.obj(208, PARAMETER, p);
+    for (s, list, kind) in [(220, 222, 2), (221, 223, 4)] {
+        d.obj(
+            s,
+            LOFT_SECTION,
+            cat(&[&[0, 0], &0u64.to_le_bytes(), &r(200), &r(list), &u32b(kind)]),
+        );
+    }
+    d.obj(222, BODY_INPUT, cat(&[&[0, 0], &u32b(1), &r(111)]));
+    d.obj(223, BODY_INPUT, cat(&[&[0, 0], &u32b(1), &r(224)]));
+    d.obj(224, ENTITY_REF, cat(&[&[0, 0], &r(225)]));
+    d.obj(
+        225,
+        SKETCH_POINT_ID,
+        cat(&[&[0, 0], &40u64.to_le_bytes(), &8u64.to_le_bytes()]),
+    );
+    let (m, b) = d.streams();
+    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    let items = v["timeline"]["items"].as_array().unwrap();
+    let curve = json!({"kind": "sketch_entity", "objectType": "SketchLine", "sketch": "Sketch1",
+                       "sketch_timeline_index": 0, "id": "c0"});
+    let profile = json!({"kind": "profile", "sketch": "Sketch1", "sketch_timeline_index": 0});
+    let sweep = &items[2]["detail"];
+    assert_eq!(items[2]["objectType"], "SweepFeature");
+    assert_eq!(sweep["operation"], "NewBodyFeatureOperation");
+    assert_eq!(sweep["profile"], json!([profile]));
+    assert_eq!(
+        sweep["path"],
+        json!([{"_type": "PathEntity", "entity": curve}])
+    );
+    assert_eq!(sweep["distanceOne"]["name"], "d10");
+    assert!(sweep.get("guideRail").is_none() && sweep.get("guideSurfaces").is_none());
+    let loft = &items[3]["detail"];
+    assert_eq!(items[3]["objectType"], "LoftFeature");
+    assert_eq!(loft["operation"], "JoinFeatureOperation");
+    assert_eq!(
+        loft["centerLineOrRails"],
+        json!([[{"_type": "PathEntity", "entity": curve}]])
+    );
+    assert_eq!(loft["centerLineOrRails.isCenterLine"], true);
+    let sections = loft["loftSections"].as_array().unwrap();
+    assert_eq!(sections.len(), 2);
+    assert_eq!(sections[0]["entity"], profile);
+    assert_eq!(
+        sections[0]["endCondition"],
+        json!({"_type": "LoftFreeEndCondition"})
+    );
+    assert_eq!(
+        sections[1]["entity"],
+        json!({"kind": "sketch_entity", "objectType": "SketchPoint", "sketch": "Sketch1",
+               "sketch_timeline_index": 0, "id": "p1"})
+    );
+    assert_eq!(
+        sections[1]["endCondition"]["_type"],
+        "LoftPointTangentEndCondition"
+    );
+    assert_eq!(sections[1]["endCondition"]["weight"]["value"], 1.5);
+}
+
 #[test]
 fn file_level_api() {
     let (m, b) = sample().streams();
@@ -867,4 +1295,543 @@ fn external_dump_reads_and_round_trips() {
             (t, d) => panic!("unexpected detail for {t:?}: {d:?}"),
         }
     }
+}
+
+/// A face recipe naming one face by a tag and its operations.
+fn face_recipe(tag: &str, ops: &[i32]) -> Vec<u8> {
+    let mut d = cat(&[
+        &[0, 0],
+        &u32b(1),
+        &u32b(3),
+        &u32b(1),
+        &u32b(1),
+        &s8(tag),
+        &u32b(0),
+    ]);
+    d.extend(u32b(ops.len() as u32));
+    for o in ops {
+        d.extend(o.to_le_bytes());
+    }
+    d.extend(cat(&[&u32b(0), &u32b(0), &s8("face_recipe_data")]));
+    d
+}
+
+/// A level of an occurrence path: the occurrence's, its document's and its
+/// component's GUIDs, then the document and component it sits in.
+fn context_level(occurrence: &str, component: &str, context: &str) -> Vec<u8> {
+    const DOC: &str = "dddddddd-0000-0000-0000-000000000000";
+    cat(&[
+        &[0, 0],
+        &u32b(1),
+        &s16(occurrence),
+        &s16(DOC),
+        &s16(component),
+        &[2, 0, 0, 0, 0, 0, 0, 0],
+        &s16(DOC),
+        &s16(context),
+        &u32b(2),
+    ])
+}
+
+/// Joints (mitcad#66): a joint between two occurrences, side one a frame
+/// built on a face, side two a frame without a stored matrix, with its
+/// alignment parameters, a revolute motion with rotation limits, the
+/// occurrence of each side by its path, and a ground item.
+#[test]
+fn joints_and_ground_items() {
+    const RECIPE: &str = "7ACC2A03-0261-4879-A14A-A93D661A5BDC";
+    const ROOT_GUID: &str = "22222222-0000-0000-0000-000000000002";
+    const PIN_GUID: &str = "55555555-0000-0000-0000-000000000005";
+    const OCC_A: &str = "a0a0a0a0-0000-0000-0000-000000000080";
+    const OCC_B: &str = "b0b0b0b0-0000-0000-0000-000000000083";
+    let mut d = sample();
+    for (g, v) in [
+        (JOINT, 4),
+        (GROUND_OCCURRENCE, 1),
+        (JOINT_STATE, 5),
+        (PLACEMENT, 5),
+        (CONTEXT_PATH, 1),
+        (CONTEXT_LEVEL, 4),
+        (FRAME_INPUT, 9),
+        (KEY_POINT, 3),
+        (DIRECTION_INPUT, 2),
+        (FACE_REF, 2),
+        (RECIPE, 1),
+    ] {
+        d.class(g, ROOT, v);
+    }
+    d.objects.retain(|o| ![2, 3, 5, 80, 82].contains(&o.0));
+    d.obj(
+        2,
+        COMPONENT,
+        cat(&[&[0, 0], &s16(ROOT_GUID), &s16("Bracket")]),
+    );
+    d.obj(5, COMPONENT, cat(&[&[0, 0], &s16(PIN_GUID), &s16("Pin")]));
+    let t = [
+        1.0, 0.0, 0.0, 10.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    for (id, guid) in [(80, OCC_A), (83, OCC_B)] {
+        d.obj(
+            id,
+            OCCURRENCE,
+            cat(&[
+                &[0, 0],
+                &r(5),
+                &[0],
+                &f64s(&t),
+                &u32b(0),
+                &r(81),
+                &s16(guid),
+            ]),
+        );
+    }
+    d.obj(82, OCCURRENCE, cat(&[&[0, 0], &r(2), &[1]]));
+    d.obj(
+        3,
+        TIMELINE,
+        cat(&[&[0, 0], &r(1), &u32b(4), &r(10), &r(20), &r(300), &r(400)]),
+    );
+    // Side one: a frame on a face, at (1, 2, 3) with z down.
+    let m1 = [
+        1.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 2.0, 0.0, 0.0, -1.0, 3.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    d.obj(
+        310,
+        FRAME_INPUT,
+        cat(&[&[0, 0], &[0; 8], &f64s(&m1), &[0; 4], &r(311), &r(313)]),
+    );
+    d.obj(
+        311,
+        KEY_POINT,
+        cat(&[
+            &[0, 0],
+            &[0; 21],
+            &f64s(&[1.0, 2.0, 3.0]),
+            &u32b(11),
+            &r(312),
+        ]),
+    );
+    d.obj(312, FACE_REF, cat(&[&[0, 0], &r(314)]));
+    d.obj(
+        313,
+        DIRECTION_INPUT,
+        cat(&[
+            &[0, 0],
+            &u32b(1),
+            &f64s(&[1.0, 2.0, 3.0, 0.0, 0.0, -1.0, 0.0, 0.0]),
+            &u32b(6),
+            &r(312),
+        ]),
+    );
+    d.obj(314, RECIPE, face_recipe("3", &[5]));
+    d.obj(320, FRAME_INPUT, cat(&[&[0, 0], &[0; 8]]));
+    // The placements: side one aligned, side two; their paths.
+    for (id, path, level, guid) in [(330, 331, 332, OCC_A), (335, 336, 337, OCC_B)] {
+        d.obj(
+            id,
+            PLACEMENT,
+            cat(&[&[0, 0], &[0; 4], &[0], &f64s(&m1), &[0], &r(300), &r(path)]),
+        );
+        d.obj(
+            path,
+            CONTEXT_PATH,
+            cat(&[&[0, 0], &[1], &u32b(1), &r(level)]),
+        );
+        d.obj(
+            level,
+            CONTEXT_LEVEL,
+            context_level(guid, PIN_GUID, ROOT_GUID),
+        );
+    }
+    // The state: two occurrences, one free rotation at 0.5, revolute.
+    let mut value = vec![0u8; 51];
+    value[23..31].copy_from_slice(&0.5f64.to_le_bytes());
+    value[47] = 2;
+    d.obj(
+        340,
+        JOINT_STATE,
+        cat(&[
+            &[1],
+            &u32b(2),
+            &r(80),
+            &u32b(1),
+            &r(83),
+            &u32b(0),
+            &[0],
+            &[0; 8],
+            &u32b(1),
+            &value,
+            &[0; 12],
+            &u32b(1),
+            &u32b(1),
+            &[0],
+            &u32b(2),
+            &[0],
+        ]),
+    );
+    // Parameters: the alignment and the rotation limits.
+    let roles = [
+        ("alignAngle", "180 deg", std::f64::consts::PI, "deg"),
+        ("alignOffsetZ", "2 mm", 0.2, "mm"),
+        ("alignOffsetX", "0 mm", 0.0, "mm"),
+        ("alignOffsetY", "0 mm", 0.0, "mm"),
+        ("RotateMinimum", "0 deg", 0.0, "deg"),
+        (
+            "RotateMaximum",
+            "90 deg",
+            std::f64::consts::FRAC_PI_2,
+            "deg",
+        ),
+    ];
+    for (k, (role, expr, value, unit)) in roles.iter().enumerate() {
+        let h = 350 + 2 * k as u64;
+        d.obj(h, PARAMETER_HOLDER, cat(&[&[1], &u32b(1), &r(300), &[0]]));
+        let name = format!("d{}", 10 + k);
+        d.obj(
+            h + 1,
+            PARAMETER,
+            parameter(10 + k as u32, Some(h), expr, role, "", unit, &name, *value),
+        );
+    }
+    let holders: Vec<u8> = (0..4).flat_map(|k| r(350 + 2 * k)).collect();
+    d.obj(
+        300,
+        JOINT,
+        cat(&[
+            &[0, 0],
+            &[1],
+            &[0; 10],
+            &r(310),
+            &[0; 6],
+            &[0],
+            &f64s(&m1),
+            &r(320),
+            &[0; 6],
+            &[1],
+            &s16("cccccccc-0000-0000-0000-000000000000"),
+            &u32b(0),
+            &holders,
+            &[0; 6],
+            &u32b(2),
+            &r(330),
+            &r(335),
+            &r(340),
+            &tail(-1, "Assemble", 1, "", [0, 0, 0], 301),
+        ]),
+    );
+    d.obj(301, HEALTH, vec![0, 0]);
+    // A ground item naming occurrence 83.
+    d.obj(410, PLACEMENT, cat(&[&[0, 0], &[1], &r(400), &r(336)]));
+    d.obj(
+        400,
+        GROUND_OCCURRENCE,
+        cat(&[
+            &[0, 0],
+            &[1],
+            &r(410),
+            &tail(-1, "", 1, "Pin1", [0, 0, 0], 401),
+        ]),
+    );
+    d.obj(401, HEALTH, vec![0, 0]);
+
+    let (m, b) = d.streams();
+    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    let items = v["timeline"]["items"].as_array().unwrap();
+    let joint = &items[2];
+    assert_eq!(joint["objectType"], "Joint");
+    let j = &joint["detail"];
+    assert_eq!(j["isFlipped"], true);
+    assert_eq!(j["_f3d"]["opposed"], 1);
+    assert_eq!(j["angle"]["name"], "d10");
+    assert_eq!(j["offset"]["value"], 0.2);
+    let one = &j["geometryOrOriginOne"];
+    assert_eq!(one["_type"], "JointGeometry");
+    assert_eq!(one["origin"], json!([1.0, 2.0, 3.0]));
+    assert_eq!(one["thirdAxisVector"], json!([0.0, 0.0, -1.0]));
+    assert_eq!(one["entityOne"]["kind"], "face");
+    assert_eq!(one["entityOne"]["_f3d"]["entities"][0][0]["tag"], "3");
+    assert_eq!(
+        one["_f3d"]["key_points"][0]["point"],
+        json!([1.0, 2.0, 3.0])
+    );
+    assert_eq!(
+        one["_f3d"]["directions"][0]["direction"],
+        json!([0.0, 0.0, -1.0])
+    );
+    // Side two stores no matrix: the identity of its component.
+    assert_eq!(j["geometryOrOriginTwo"]["origin"], json!([0.0, 0.0, 0.0]));
+    assert_eq!(j["_f3d"]["frames"][1][0], json!([1.0, 0.0, 0.0, 0.0]));
+    assert_eq!(j["_f3d"]["frames"][0][1], json!([0.0, -1.0, 0.0, 2.0]));
+    assert_eq!(j["occurrenceOne"]["_f3d"]["path"], json!([80]));
+    assert_eq!(j["occurrenceTwo"]["_f3d"]["path"], json!([83]));
+    assert_eq!(j["occurrenceTwo"]["_f3d"]["context_component"], 2);
+    assert_eq!(j["occurrenceTwo"]["component"], "Pin");
+    let motion = &j["jointMotion"];
+    assert_eq!(motion["_type"], "RevoluteJointMotion");
+    assert_eq!(motion["_f3d"]["motions"][0]["motion"], "rz");
+    assert_eq!(motion["_f3d"]["motions"][0]["limits"][0], 0.5);
+    assert_eq!(motion["rotationLimits"]["maximumValue"]["name"], "d15");
+    assert_eq!(motion["rotationLimits"]["isMinimumValueEnabled"], true);
+    assert!(motion["slideLimits"].is_null());
+    // The ground item grounds occurrence 83 only.
+    let ground = &items[3];
+    assert_eq!(ground["objectType"], "GroundOccurrence");
+    assert_eq!(ground["detail"]["occurrence"]["_f3d"]["path"], json!([83]));
+    let grounded: Vec<(u64, bool)> = v["occurrences"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| {
+            (
+                n["_f3d"]["object_id"].as_u64().unwrap(),
+                n["isGrounded"] == true,
+            )
+        })
+        .collect();
+    assert!(grounded.contains(&(83, true)) && grounded.contains(&(80, false)));
+    // A motion whose free motions do not fit its type is left out.
+    assert!(super::build::tests_support::kind_fits(1, 1));
+    assert!(!super::build::tests_support::kind_fits(0, 1));
+}
+
+const OCC_A: &str = "a0a0a0a0-0000-0000-0000-000000000080";
+const INSIDE: &str = "e0e0e0e0-0000-0000-0000-0000000000e0";
+
+/// Captured positions (mitcad#75), class versions 6 and 5: a snapshot puts
+/// occurrence 80 at a matrix and an occurrence inside a component of
+/// another document at the identity; the second one's path level names
+/// two occurrences, the one in the file and one inside the other
+/// document.
+#[test]
+fn captured_positions() {
+    for (version, gap) in [(6, 8), (5, 4)] {
+        let v = captured_position_design(version, gap);
+        let snapshot = &v["timeline"]["items"][2];
+        assert_eq!(snapshot["objectType"], "Snapshot");
+        let positions = snapshot["detail"]["positions"].as_array().unwrap();
+        assert_eq!(positions.len(), 2, "version {version}");
+        let one = &positions[0];
+        assert_eq!(one["occurrence"]["_f3d"]["path"], json!([80]));
+        assert_eq!(one["occurrence"]["_f3d"]["context_component"], 2);
+        assert_eq!(one["transform"][0], json!([0.0, -1.0, 0.0, 0.0]));
+        assert_eq!(one["transform"][2], json!([0.0, 0.0, 1.0, 2.0]));
+        let two = &positions[1];
+        assert_eq!(two["occurrence"]["_f3d"]["path"], json!([80, null]));
+        assert_eq!(
+            two["occurrence"]["_f3d"]["path_guids"],
+            json!([OCC_A, INSIDE])
+        );
+        assert_eq!(two["transform"][0], json!([1.0, 0.0, 0.0, 0.0]));
+    }
+}
+
+/// The design of [`captured_positions`]: the snapshot's class `version`,
+/// `gap` bytes between its root part and its count.
+fn captured_position_design(version: u32, gap: usize) -> Value {
+    const ROOT_GUID: &str = "22222222-0000-0000-0000-000000000002";
+    const PIN_GUID: &str = "55555555-0000-0000-0000-000000000005";
+    const DOC: &str = "dddddddd-0000-0000-0000-000000000000";
+    let mut d = sample();
+    for (g, v) in [
+        (SNAPSHOT, version),
+        (PLACEMENT, 5),
+        (CONTEXT_PATH, 1),
+        (CONTEXT_LEVEL, 4),
+    ] {
+        d.class(g, ROOT, v);
+    }
+    d.objects.retain(|o| ![2, 3, 80].contains(&o.0));
+    d.obj(
+        2,
+        COMPONENT,
+        cat(&[&[0, 0], &s16(ROOT_GUID), &s16("Bracket")]),
+    );
+    let t = [
+        1.0, 0.0, 0.0, 10.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    d.obj(
+        80,
+        OCCURRENCE,
+        cat(&[
+            &[0, 0],
+            &r(5),
+            &[0],
+            &f64s(&t),
+            &u32b(0),
+            &r(81),
+            &s16(OCC_A),
+        ]),
+    );
+    d.obj(
+        3,
+        TIMELINE,
+        cat(&[&[0, 0], &r(1), &u32b(3), &r(10), &r(20), &r(500)]),
+    );
+    // Turned a quarter about z, 2 cm up.
+    let m = [
+        0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    d.obj(
+        500,
+        SNAPSHOT,
+        cat(&[
+            &[0, 0],
+            &vec![0; gap],
+            &u32b(2),
+            &[0],
+            &r(510),
+            &[0],
+            &f64s(&m),
+            &[0],
+            &r(520),
+            &[1],
+            &u32b(0),
+            &tail(-1, "Position", 1, "", [0, 0, 0], 501),
+        ]),
+    );
+    d.obj(501, HEALTH, vec![0, 0]);
+    for (placement, path) in [(510, 511), (520, 521)] {
+        d.obj(
+            placement,
+            PLACEMENT,
+            cat(&[&[0, 0], &[1], &r(500), &r(path)]),
+        );
+        d.obj(
+            path,
+            CONTEXT_PATH,
+            cat(&[&[0, 0], &[1], &u32b(1), &r(path + 1)]),
+        );
+    }
+    d.obj(
+        512,
+        CONTEXT_LEVEL,
+        context_level(OCC_A, PIN_GUID, ROOT_GUID),
+    );
+    d.obj(
+        522,
+        CONTEXT_LEVEL,
+        cat(&[
+            &[0, 0],
+            &u32b(2),
+            &s16(OCC_A),
+            &s16(INSIDE),
+            &s16(DOC),
+            &s16(PIN_GUID),
+            &[2, 0, 0, 0, 0, 0, 0, 0],
+            &s16(DOC),
+            &s16(ROOT_GUID),
+            &u32b(2),
+        ]),
+    );
+    let (mb, b) = d.streams();
+    serde_json::to_value(Design::parse(&mb, b).unwrap().dump("x", "Design1")).unwrap()
+}
+
+/// A combine's operation, kept tools, target and tools, and a hole's
+/// points, type and extent through all (mitcad#67).
+#[test]
+fn combine_and_hole_selections() {
+    const RECIPE: &str = "7ACC2A03-0261-4879-A14A-A93D661A5BDC";
+    const COMBINE: &str = "2A94257F-2020-4B19-9A68-103A2672F1B7";
+    const HOLE: &str = "1C037A07-4A15-43F6-ABFC-BBF61B9038D4";
+    let mut d = sample();
+    for (g, v) in [
+        (COMBINE, 1),
+        (HOLE, 7),
+        (BODY_INPUT, 1),
+        (BODY_REF, 1),
+        (BODY_RECORD, 2),
+        (PLACEMENT, 5),
+        (KEY_POINT, 3),
+        (RECIPE, 1),
+    ] {
+        d.class(g, ROOT, v);
+    }
+    d.objects.retain(|o| o.0 != 3);
+    d.obj(
+        3,
+        TIMELINE,
+        cat(&[&[0, 0], &r(1), &u32b(4), &r(10), &r(20), &r(500), &r(600)]),
+    );
+    let body = |tag: &str| {
+        let mut b = face_recipe(tag, &[3]);
+        let n = b.len();
+        b.truncate(n - 20);
+        b.extend(s8("body_recipe_data"));
+        b
+    };
+    for (input, refer, recipe, tag) in [(510, 511, 512, "1"), (520, 521, 522, "2")] {
+        d.obj(input, BODY_INPUT, cat(&[&[0, 0], &u32b(1), &r(refer)]));
+        d.obj(refer, BODY_REF, cat(&[&[0, 0], &r(recipe)]));
+        d.obj(recipe, RECIPE, body(tag));
+    }
+    d.obj(530, BODY_RECORD, vec![0, 0]);
+    d.obj(531, PLACEMENT, vec![0, 0]);
+    // Cut, tools not kept: tools [510], consumed [530], target 520.
+    d.obj(
+        500,
+        COMBINE,
+        cat(&[
+            &[0, 0],
+            &u32b(1),
+            &u32b(0),
+            &[0, 0],
+            &u32b(1),
+            &r(531),
+            &u32b(0x132),
+            &u32b(0),
+            &u32b(1),
+            &r(510),
+            &[0; 8],
+            &u32b(1),
+            &r(530),
+            &u32b(1),
+            &r(520),
+            &u32b(4),
+            &r(510),
+            &r(511),
+            &r(520),
+            &r(521),
+            &tail(5, "Combine", 1, "", [0, 0, 0], 501),
+        ]),
+    );
+    d.obj(501, HEALTH, vec![0, 0]);
+    // A hole through all at two points.
+    for (id, x) in [(610, 1.0), (611, 5.0)] {
+        d.obj(
+            id,
+            KEY_POINT,
+            cat(&[&[0, 0], &[0; 21], &f64s(&[x, 1.0, 1.0]), &u32b(11)]),
+        );
+    }
+    d.obj(
+        600,
+        HOLE,
+        cat(&[
+            &[0, 0],
+            &u32b(0),
+            &[1, 1, 1, 0],
+            &u32b(2),
+            &r(610),
+            &r(611),
+            &tail(6, "Hole", 1, "", [0, 0, 0], 601),
+        ]),
+    );
+    d.obj(601, HEALTH, vec![0, 0]);
+    let (m, b) = d.streams();
+    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    let items = v["timeline"]["items"].as_array().unwrap();
+    let c = &items[2]["detail"];
+    assert_eq!(c["operation"], "CutFeatureOperation");
+    assert_eq!(c["isKeepToolBodies"], false);
+    assert_eq!(c["targetBody"]["_f3d"]["entities"][0][0]["tag"], "2");
+    assert_eq!(c["toolBodies"][0]["_f3d"]["entities"][0][0]["tag"], "1");
+    let h = &items[3]["detail"];
+    assert_eq!(h["holeType"], "SimpleHoleType");
+    assert_eq!(h["position"], json!([1.0, 1.0, 1.0]));
+    assert_eq!(
+        h["_f3d_positions"],
+        json!([[1.0, 1.0, 1.0], [5.0, 1.0, 1.0]])
+    );
+    assert_eq!(h["extentDefinition"]["_type"], "AllExtentDefinition");
 }

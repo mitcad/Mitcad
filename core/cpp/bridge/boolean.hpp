@@ -29,5 +29,11 @@ std::unique_ptr<BooleanResult> boolean_join(const ShapeList& targets, const geom
 std::unique_ptr<BooleanResult> boolean_cut(const ShapeList& targets, const geometry::Shape& tool);
 std::unique_ptr<BooleanResult> boolean_intersect(const ShapeList& targets,
                                                  const geometry::Shape& tool);
+std::unique_ptr<BooleanResult> removed_material(const geometry::Shape& before, const geometry::Shape& after,
+                                                double slack);
+// The join of a body with a near copy; not touching the body when the copy
+// is not a near copy (mitcad#88).
+std::unique_ptr<BooleanResult> join_near_copy(const geometry::Shape& body, const geometry::Shape& copy,
+                                              double slack);
 
 } // namespace mitcad::bridge

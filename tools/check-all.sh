@@ -13,20 +13,33 @@
 # status is 0 only if every step passed.
 #
 # Usage: tools/check-all.sh [--ui-jobs N] [--ctest-jobs N]
-#          [--corpus auto|always|never] [--memory SIZE] [--fresh]
-#          [--only STEP,...]
+#          [--corpus auto|always|never] [--corpus-tests N] [--corpus-jobs N]
+#          [--memory SIZE] [--fresh] [--only STEP,...]
 #   --ui-jobs N     UI tests at once (default 4). The longest ones start
 #                   first, by their last times in the history.
 #   --ctest-jobs N  ctest's parallel tests (default: the cores / 4).
 #   --corpus MODE   the corpus group: f3d.corpus*, f3d.models_loft (the
-#                   reference models replayed) and freecad.corpus, run one
-#                   at a time after ctest's other tests. "always", "never",
+#                   reference models replayed), freecad.corpus and
+#                   ipt.corpus, after
+#                   ctest's other tests, several at once, each importing
+#                   several files at once in child processes (mitcad#70).
+#                   "always", "never",
 #                   or "auto" (default): only when the files they depend on
 #                   (CORPUS_SOURCES below: the import, the readers, the
 #                   geometry, the bridge and how they are built) or the
 #                   corpora differ from every corpus run that passed on
 #                   this machine, which are kept in
 #                   ~/.cache/mitcad/corpus-passed.
+#   --corpus-tests N, --corpus-jobs N
+#                   corpus tests at once (ctest -j) and the files each
+#                   imports at once (MITCAD_CORPUS_JOBS). By default the
+#                   children of all of them together are as many as the
+#                   memory limit allows, CORPUS_MEMORY (1536M) each
+#                   (MITCAD_CORPUS_MEMORY: the memory a child may commit),
+#                   with 1G left for the rest, and at most the cores / the
+#                   test slots; about the square root of that many tests
+#                   run at once. A child runs at most CORPUS_TIMEOUT (300 s,
+#                   MITCAD_CORPUS_TIMEOUT).
 #   --memory SIZE   the memory the whole run may use (default
 #                   $MITCAD_CHECK_MEMORY, else 12G; "none": no limit), in a
 #                   systemd scope of its own (MemoryMax, no swap): what
@@ -58,16 +71,22 @@ LOCK=${MITCAD_TEST_LOCK:-$HOME/.mitcad-test.lock}
 SLOTS=${MITCAD_TEST_SLOTS:-2}
 UI_TIMEOUT=${UI_TIMEOUT:-1800}
 # The corpus group's tests, and what they depend on besides the corpora.
-CORPUS_TESTS='^(f3d\.corpus|f3d\.models_loft$|freecad\.corpus$)'
+CORPUS_TESTS='^(f3d\.corpus|f3d\.models_loft$|freecad\.corpus$|ipt\.corpus$)'
 CORPUS_SOURCES=(core/f3d core/import core/freecad core/zip core/ffi core/cpp core/tests
   core/CMakeLists.txt core/Cargo.toml core/Cargo.lock geometry tools/cli/main.cpp
-  tools/cli/CMakeLists.txt tools/cli/fcstd-corpus.cmake CMakeLists.txt rust-toolchain.toml vcpkg.json)
+  tools/cli/CMakeLists.txt tools/cli/fcstd-corpus.cmake CMakeLists.txt rust-toolchain.toml vcpkg.json
+  core/ipt tools/cli/ipt-corpus.cmake third_party/vcpkg-ports)
 CORPUS_PASSED=${XDG_CACHE_HOME:-$HOME/.cache}/mitcad/corpus-passed
+# The memory a corpus test's child may commit, and its time.
+CORPUS_MEMORY=${MITCAD_CORPUS_MEMORY:-1536M}
+CORPUS_TIMEOUT=${MITCAD_CORPUS_TIMEOUT:-300}
 
 UI_JOBS=4
 CTEST_JOBS=$(($(nproc) / 4))
 [ "$CTEST_JOBS" -ge 1 ] || CTEST_JOBS=1
 CORPUS=auto
+CORPUS_TESTS_AT_ONCE=""
+CORPUS_JOBS=""
 MEMORY=${MITCAD_CHECK_MEMORY:-12G}
 FRESH=()
 ONLY=""
@@ -77,6 +96,8 @@ while [ $# -gt 0 ]; do
     --ui-jobs) UI_JOBS=$2; shift 2 ;;
     --ctest-jobs) CTEST_JOBS=$2; shift 2 ;;
     --corpus) CORPUS=$2; shift 2 ;;
+    --corpus-tests) CORPUS_TESTS_AT_ONCE=$2; shift 2 ;;
+    --corpus-jobs) CORPUS_JOBS=$2; shift 2 ;;
     --memory) MEMORY=$2; shift 2 ;;
     --fresh) FRESH=(--fresh); shift ;;
     --only) ONLY=$2; shift 2 ;;
@@ -150,12 +171,14 @@ step() {
   [ "$result" = ok ]
 }
 
-# ctest_rows log: the tests of a ctest log that took 10 s or more, as rows
-# "ctest:<name>" (not counted in the result: the step's row is).
+# ctest_rows log [seconds]: the tests of a ctest log that took 10 s (or
+# the seconds given) or more, as rows "ctest:<name>" (not counted in the
+# result: the step's row is).
 ctest_rows() {
+  local least=${2:-10}
   sed -nE 's/^ *[0-9]+\/[0-9]+ +Test +#[0-9]+: +([^ ]+) [ .]*(\**[A-Za-z ]+[a-z]) +([0-9.]+) sec$/\1\t\3\t\2/p' "$1" |
     while IFS=$'\t' read -r name seconds result; do
-      if [ "${seconds%.*}" -ge 10 ]; then
+      if [ "${seconds%.*}" -ge "$least" ]; then
         case $result in Passed) result=ok ;; *Skipped*) result=skipped ;; *) result=${result//\*/} ;; esac
         printf '  ctest:%s\t%s\t%s\n' "$name" "$seconds" "$result" >> "$TIMINGS"
       fi
@@ -190,9 +213,49 @@ take_lock() {
   record "wait for a test slot" "$(seconds_since "$start")" -
 }
 
+# mib size: a size such as 12G, 1536M or 800K (MemoryMax's, bytes without
+# a unit) in MiB.
+mib() {
+  local n=${1%[KkMmGgTt]}
+  case $1 in
+    *[Kk]) echo $((n / 1024)) ;;
+    *[Mm]) echo "$n" ;;
+    *[Gg]) echo $((n * 1024)) ;;
+    *[Tt]) echo $((n * 1024 * 1024)) ;;
+    *) echo $((n / 1024 / 1024)) ;;
+  esac
+}
+
+# corpus_plan: CORPUS_TESTS_AT_ONCE and CORPUS_JOBS unless given. All the
+# children together within the run's memory (its scope's limit, else what
+# the machine has available) less 1G for ctest, the tests themselves and
+# the binaries, and within the cores of a test slot.
+corpus_plan() {
+  local budget children cores
+  if [ -n "${MITCAD_CHECK_SCOPE:-}" ]; then
+    budget=$(mib "$MITCAD_CHECK_SCOPE")
+  else
+    budget=$(($(sed -n 's/^MemAvailable: *\([0-9]*\) kB/\1/p' /proc/meminfo) / 1024))
+  fi
+  children=$(((budget - 1024) / $(mib "$CORPUS_MEMORY")))
+  cores=$(($(nproc) / SLOTS))
+  [ "$children" -le "$cores" ] || children=$cores
+  [ "$children" -ge 1 ] || children=1
+  if [ -z "$CORPUS_TESTS_AT_ONCE" ]; then
+    CORPUS_TESTS_AT_ONCE=1
+    while [ $(((CORPUS_TESTS_AT_ONCE + 1) * (CORPUS_TESTS_AT_ONCE + 1))) -le "$children" ]; do
+      CORPUS_TESTS_AT_ONCE=$((CORPUS_TESTS_AT_ONCE + 1))
+    done
+  fi
+  if [ -z "$CORPUS_JOBS" ]; then
+    CORPUS_JOBS=$((children / CORPUS_TESTS_AT_ONCE))
+    [ "$CORPUS_JOBS" -ge 1 ] || CORPUS_JOBS=1
+  fi
+}
+
 corpus_fingerprint() {
   local dir dirs=()
-  IFS=: read -ra dirs <<< "${MITCAD_FCSTD_CORPUS:-}"
+  IFS=: read -ra dirs <<< "${MITCAD_FCSTD_CORPUS:-}:${MITCAD_IPT_CORPUS:-}"
   dirs+=("${MITCAD_F3D_CORPUS:-$HOME/f3d-corpus}" "${MITCAD_F3D_MODELS:-$HOME/f3d-models}")
   {
     find "${CORPUS_SOURCES[@]}" -type f -print0 2> /dev/null | sort -z | xargs -0 md5sum
@@ -246,11 +309,14 @@ if wanted corpus; then
   else
     take_lock
     [ -n "$fingerprint" ] || fingerprint=$(corpus_fingerprint)
-    if step corpus ctest --preset dev -j 1 -R "$CORPUS_TESTS"; then
+    corpus_plan
+    echo "== corpus: $CORPUS_TESTS_AT_ONCE tests at once, $CORPUS_JOBS files each at once, $CORPUS_MEMORY each"
+    if step corpus env MITCAD_CORPUS_JOBS="$CORPUS_JOBS" MITCAD_CORPUS_MEMORY="$CORPUS_MEMORY" \
+      MITCAD_CORPUS_TIMEOUT="$CORPUS_TIMEOUT" ctest --preset dev -j "$CORPUS_TESTS_AT_ONCE" -R "$CORPUS_TESTS"; then
       mkdir -p "$(dirname "$CORPUS_PASSED")"
       echo "$fingerprint" >> "$CORPUS_PASSED"
     fi
-    ctest_rows "$LOGS/corpus.log"
+    ctest_rows "$LOGS/corpus.log" 0
   fi
 fi
 
@@ -270,7 +336,9 @@ reap_ui() {
   local pid="" name status seconds result=ok
   wait -n -p pid
   [ -n "$pid" ] || return
-  name=${UI_PIDS[$pid]}
+  # Another background job of this script (not a UI test) may end first.
+  name=${UI_PIDS[$pid]:-}
+  [ -n "$name" ] || return
   unset "UI_PIDS[$pid]"
   UI_RUNNING=$((UI_RUNNING - 1))
   read -r status seconds < "$LOGS/ui-$name.status"

@@ -37,6 +37,12 @@ unset MITCAD_RESULT_STORE_MIN_MS
 export GIT_CONFIG_GLOBAL=$UI_CONFIG/gitconfig
 export GIT_CONFIG_NOSYSTEM=1
 unset EMAIL GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+# No desktop of the caller's: run from a GNOME or KDE session, Qt would take
+# that desktop's platform theme (on GNOME, Return presses the focused check
+# box instead of the dialog's default button), and through the session bus
+# its portal's colour scheme and file dialogs instead of the test's.
+unset XDG_CURRENT_DESKTOP GNOME_DESKTOP_SESSION_ID DESKTOP_SESSION KDE_FULL_SESSION WAYLAND_DISPLAY
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/mitcad-ui-test-bus
 # Where faces, edges and vertices can be clicked, logged when a command's
 # input takes them ("Pick face F2.b0/F2:end(...) at x,y"; ui_click_pick).
 export MITCAD_LOG_PICKS=1
@@ -55,6 +61,10 @@ fi
 # No update checks (mitcad#9): the tests make no network requests;
 # tools/ui-update-test.sh checks against a local server of its own.
 export MITCAD_NO_UPDATE_CHECK=1
+# No browser either: an address the app would open (a report's issue form,
+# mitcad#61) is logged instead ("Open URL (test, not opened): <url>").
+export MITCAD_TEST_LOG_URLS=1
+unset MITCAD_TEST_CRASH MITCAD_CRASH_DIR MITCAD_CRASH_PARENT
 unset MITCAD_UPDATE_URL MITCAD_UPDATE_RELEASES_URL MITCAD_UPDATE_TEST_KEY MITCAD_UPDATE_TEST_CA MITCAD_TEST_VERSION
 
 for tool in xdotool Xvfb; do
@@ -94,6 +104,22 @@ trap ui_cleanup EXIT
 # creates atomically (link()) for its display number before it starts.
 ui_lock_owner() { tr -dc 0-9 2> /dev/null < "/tmp/.X$1-lock"; }
 
+# ui_plain_function_keys: makes F1 to F12 plain keys of one level on the
+# test display. In newer xkeyboard-config data (2.46, for one) their key
+# type maps Alt and Control to the first level explicitly, and xdotool
+# (3.20160805) then presses Alt with them: "xdotool key F6" sends Alt+F6,
+# which no shortcut takes. The server's keymap is read, the function keys'
+# type replaced (their other levels only switch consoles) and loaded
+# back; the server keeps it (-noreset). Older keymaps change nothing that
+# a test notices.
+ui_plain_function_keys() {
+  local keymap
+  keymap=$(xkbcomp -xkb "$DISPLAY" - 2> /dev/null) || return 0
+  sed -E '/^ *key <FK[0-9]+> \{/,/\};/{s/type= "[^"]*"/type= "ONE_LEVEL"/;s/(symbols\[Group1\]= \[ *[A-Za-z0-9_]+),[^]]*\]/\1 ]/}' \
+    <<< "$keymap" | xkbcomp -w 0 - "$DISPLAY" > /dev/null 2>&1 ||
+    echo "note: the function keys' keymap was not changed"
+}
+
 ui_start_display() {
   if [ "${MITCAD_UI_VISIBLE:-0}" = 1 ]; then
     return
@@ -121,6 +147,7 @@ ui_start_display() {
         export DISPLAY=":$display"
         # The GPU passthrough settings only work with WSLg's own display.
         unset GALLIUM_DRIVER MESA_D3D12_DEFAULT_ADAPTER_NAME
+        ui_plain_function_keys
         return
       fi
       sleep 0.1

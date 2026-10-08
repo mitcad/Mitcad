@@ -3,17 +3,26 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepTools.hxx>
+#include <GeomAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
+#include <BRepGProp_Face.hxx>
+#include <IntCurvesFace_Intersector.hxx>
+#include <gp_Lin.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRep_Builder.hxx>
 #include <Bnd_Box.hxx>
@@ -42,6 +51,11 @@ namespace {
 
 // A point this near a face is on the boundary (boundary_distances).
 constexpr double kOnBoundary = 1.0e-6;
+
+// A point this near a face has its distance to that face, though another
+// may be nearer still (boundary_distances): the import tells points on
+// the boundary from others by 1e-4 mm and more.
+constexpr double kNearBoundary = 1.0e-5;
 
 std::array<double, 3> xyz(const analysis::Vec3& v) { return {v.x, v.y, v.z}; }
 
@@ -136,6 +150,126 @@ bool is_index(const std::string& text) {
   return !text.empty() && text.size() < 10 &&
          std::all_of(text.begin(), text.end(), [](char c) { return c >= '0' && c <= '9'; });
 }
+
+// The points of a free-form surface's grid at most, and per direction.
+constexpr std::size_t kGridPoints = 40000;
+constexpr int kGridSide = 400;
+
+// What boundary_distances keeps of a shape between calls: its faces with
+// their boxes, each face's projection and classifier once a point near it
+// asks for them, and the distance query with the faces loaded. Used under
+// its lock: OCCT's projections keep state of their own.
+struct BoundaryIndex {
+  // A point on the boundary (most points asked about are) is found on a
+  // face whose box holds it: projected onto its surface and classified in
+  // its parameter space, without measuring the other faces.
+  struct Probe {
+    TopoDS_Face face;
+    Bnd_Box box;
+    // Planes, cylinders, cones, spheres and tori project directly; they
+    // are asked first.
+    bool analytic = false;
+    Handle(ShapeAnalysis_Surface) surface;
+    std::unique_ptr<BRepTopAdaptor_FClass2d> inside;
+    // Other surfaces: points over the face's parameter range (with their
+    // parameters), from the nearest of which a point is projected (the
+    // general projection searches the whole surface for every point:
+    // ten milliseconds and more on a stored thread's splines), and how far
+    // a point of the surface can be from the nearest of them.
+    std::vector<gp_Pnt> grid;
+    std::vector<gp_Pnt2d> grid_uv;
+    double reach = 0.0;
+  };
+
+  explicit BoundaryIndex(const TopoDS_Shape& shape) {
+    // The faces only, so that a point inside a solid has its distance to
+    // the boundary, not zero.
+    BRep_Builder builder;
+    TopoDS_Compound faces;
+    builder.MakeCompound(faces);
+    for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+      builder.Add(faces, it.Current());
+      Probe probe;
+      probe.face = TopoDS::Face(it.Current());
+      BRepBndLib::Add(probe.face, probe.box);
+      probe.box.Enlarge(kNearBoundary);
+      switch (BRepAdaptor_Surface(probe.face, false).GetType()) {
+      case GeomAbs_Plane:
+      case GeomAbs_Cylinder:
+      case GeomAbs_Cone:
+      case GeomAbs_Sphere:
+      case GeomAbs_Torus:
+        probe.analytic = true;
+        break;
+      default:
+        break;
+      }
+      probes.push_back(std::move(probe));
+    }
+    std::stable_partition(probes.begin(), probes.end(),
+                          [](const Probe& probe) { return probe.analytic; });
+    distance.LoadS2(faces);
+  }
+
+  // The face's projection, classifier and (not analytic) grid.
+  static void prepare(Probe& probe) {
+    probe.surface = new ShapeAnalysis_Surface(BRep_Tool::Surface(probe.face));
+    probe.inside = std::make_unique<BRepTopAdaptor_FClass2d>(probe.face, kOnBoundary);
+    if (probe.analytic) {
+      return;
+    }
+    double u0 = 0.0;
+    double u1 = 0.0;
+    double v0 = 0.0;
+    double v1 = 0.0;
+    BRepTools::UVBounds(probe.face, u0, u1, v0, v1);
+    const GeomAdaptor_Surface& surface = *probe.surface->Adaptor3d();
+    // A spline's knot spans, each sampled by its degree; else a fixed grid.
+    int nu = 32;
+    int nv = 32;
+    if (surface.GetType() == GeomAbs_BSplineSurface) {
+      nu = std::clamp((surface.NbUKnots() - 1) * (surface.UDegree() + 1) + 1, 9, kGridSide);
+      nv = std::clamp((surface.NbVKnots() - 1) * (surface.VDegree() + 1) + 1, 9, kGridSide);
+    }
+    while (static_cast<std::size_t>(nu) * static_cast<std::size_t>(nv) > kGridPoints) {
+      if (nu >= nv) {
+        nu = std::max(9, nu * 3 / 4);
+      } else {
+        nv = std::max(9, nv * 3 / 4);
+      }
+    }
+    probe.grid.reserve(static_cast<std::size_t>(nu) * static_cast<std::size_t>(nv));
+    for (int i = 0; i < nu; ++i) {
+      for (int j = 0; j < nv; ++j) {
+        const double u = u0 + (u1 - u0) * static_cast<double>(i) / static_cast<double>(nu - 1);
+        const double v = v0 + (v1 - v0) * static_cast<double>(j) / static_cast<double>(nv - 1);
+        probe.grid_uv.emplace_back(u, v);
+        probe.grid.push_back(surface.Value(u, v));
+      }
+    }
+    // A point of a cell is about as near one of its corners as its
+    // diagonals are long (half again, for its curvature).
+    const auto at = [&](int i, int j) -> const gp_Pnt& {
+      return probe.grid[static_cast<std::size_t>(i) * static_cast<std::size_t>(nv) +
+                        static_cast<std::size_t>(j)];
+    };
+    double diagonal = 0.0;
+    for (int i = 0; i + 1 < nu; ++i) {
+      for (int j = 0; j + 1 < nv; ++j) {
+        diagonal = std::max({diagonal, at(i, j).Distance(at(i + 1, j + 1)),
+                             at(i + 1, j).Distance(at(i, j + 1))});
+      }
+    }
+    probe.reach = 1.5 * diagonal + kNearBoundary;
+  }
+
+  std::mutex mutex;
+  std::vector<Probe> probes;
+  BRepExtrema_DistShapeShape distance;
+  // The distances found, by point: the import asks about the same points
+  // (the edges of a body it did not change) for several items.
+  std::map<std::array<double, 3>, double> known;
+};
 
 AnalysisDeviation deviation(const analysis::Deviation& d) {
   AnalysisDeviation result;
@@ -313,7 +447,8 @@ AnalysisComparison analysis_compare_step(const ShapeList& bodies, rust::Str path
 // .f3d import (T1).
 
 AnalysisComparison analysis_compare_shapes(const ShapeList& a, const ShapeList& b,
-                                           std::size_t samples, double fuzzy) {
+                                           std::size_t samples, double fuzzy, double seconds,
+                                           double booleans_above) {
   const geometry::CheckedOperation check("comparison");
   const std::vector<TopoDS_Shape> mine = occt(a);
   const std::vector<TopoDS_Shape> theirs = occt(b);
@@ -323,6 +458,8 @@ AnalysisComparison analysis_compare_shapes(const ShapeList& a, const ShapeList& 
   analysis::CompareOptions options;
   options.samples = samples;
   options.fuzzy = fuzzy;
+  options.seconds = seconds;
+  options.booleans_above = booleans_above;
   const analysis::Comparison c = analysis::compare(compound(mine), compound(theirs), options);
   AnalysisComparison result{};
   result.volume_a = c.volume_a;
@@ -344,55 +481,87 @@ rust::Vec<double> analysis_boundary_distances(const geometry::Shape& shape,
   if (points.size() % 3 != 0) {
     throw std::invalid_argument("points come as x, y, z triples");
   }
-  // The faces only, so that a point inside a solid has its distance to
-  // the boundary, not zero.
-  BRep_Builder builder;
-  TopoDS_Compound faces;
-  builder.MakeCompound(faces);
-  // A point on the boundary (most points asked about are) is found on a
-  // face whose box holds it: projected onto its surface and classified in
-  // its parameter space, without measuring the other faces.
-  struct Probe {
-    TopoDS_Face face;
-    Bnd_Box box;
-    Handle(ShapeAnalysis_Surface) surface;
-    std::unique_ptr<BRepTopAdaptor_FClass2d> inside;
-  };
-  std::vector<Probe> probes;
-  for (TopExp_Explorer it(shape.occt(), TopAbs_FACE); it.More(); it.Next()) {
-    builder.Add(faces, it.Current());
-    Probe probe;
-    probe.face = TopoDS::Face(it.Current());
-    BRepBndLib::Add(probe.face, probe.box);
-    probe.box.Enlarge(kOnBoundary);
-    probes.push_back(std::move(probe));
+  // The shape's boundary index, made by the first call and kept with the
+  // shape (it never changes): the import asks about the same history
+  // states for item after item, and setting up the faces' projections
+  // takes most of the time.
+  std::shared_ptr<BoundaryIndex> index =
+      std::static_pointer_cast<BoundaryIndex>(shape.boundary_index());
+  if (!index) {
+    index = std::make_shared<BoundaryIndex>(shape.occt());
+    shape.set_boundary_index(index);
   }
-  const auto on_boundary = [](Probe& probe, const gp_Pnt& p) {
+  const std::lock_guard<std::mutex> lock(index->mutex);
+  std::vector<BoundaryIndex::Probe>& probes = index->probes;
+  BRepExtrema_DistShapeShape& distance = index->distance;
+  // The point's distance from the face's surface where it projects inside
+  // the face, else none (also when it is far from a free-form surface's
+  // grid, or the projection from the nearest grid point finds no nearer
+  // point: the distance query then measures it).
+  const auto gap = [](BoundaryIndex::Probe& probe, const gp_Pnt& p) -> std::optional<double> {
     if (probe.surface.IsNull()) {
-      probe.surface = new ShapeAnalysis_Surface(BRep_Tool::Surface(probe.face));
-      probe.inside = std::make_unique<BRepTopAdaptor_FClass2d>(probe.face, kOnBoundary);
+      BoundaryIndex::prepare(probe);
     }
-    const gp_Pnt2d uv = probe.surface->ValueOfUV(p, kOnBoundary);
-    return probe.surface->Gap() <= kOnBoundary && probe.inside->Perform(uv) != TopAbs_OUT;
+    gp_Pnt2d uv;
+    if (probe.analytic) {
+      uv = probe.surface->ValueOfUV(p, kOnBoundary);
+    } else {
+      std::size_t nearest = 0;
+      double best = std::numeric_limits<double>::infinity();
+      for (std::size_t k = 0; k < probe.grid.size(); ++k) {
+        const double d = p.SquareDistance(probe.grid[k]);
+        if (d < best) {
+          best = d;
+          nearest = k;
+        }
+      }
+      if (probe.grid.empty() || std::sqrt(best) > probe.reach) {
+        return std::nullopt;
+      }
+      uv = probe.surface->NextValueOfUV(probe.grid_uv[nearest], p, kOnBoundary, -1.0);
+    }
+    const double g = p.Distance(probe.surface->Value(uv));
+    if (g > kNearBoundary || probe.inside->Perform(uv) == TopAbs_OUT) {
+      return std::nullopt;
+    }
+    return g;
+  };
+  const auto measure = [&](const gp_Pnt& p) {
+    // On a face: zero. Else near one (a stored surface that the replay's
+    // approximates), or measured.
+    double near = std::numeric_limits<double>::infinity();
+    for (BoundaryIndex::Probe& probe : probes) {
+      if (probe.box.IsOut(p)) {
+        continue;
+      }
+      const std::optional<double> g = gap(probe, p);
+      if (!g) {
+        continue;
+      }
+      if (*g <= kOnBoundary) {
+        return 0.0;
+      }
+      near = std::min(near, *g);
+    }
+    if (near <= kNearBoundary) {
+      return near;
+    }
+    distance.LoadS1(BRepBuilderAPI_MakeVertex(p).Vertex());
+    distance.Perform();
+    return distance.IsDone() && distance.NbSolution() > 0 ? distance.Value()
+                                                          : std::numeric_limits<double>::infinity();
   };
   rust::Vec<double> out;
-  BRepExtrema_DistShapeShape distance;
-  distance.LoadS2(faces);
   for (std::size_t i = 0; i < points.size(); i += 3) {
-    const gp_Pnt p(points[i], points[i + 1], points[i + 2]);
-    const bool on = std::any_of(probes.begin(), probes.end(), [&](Probe& probe) {
-      return !probe.box.IsOut(p) && on_boundary(probe, p);
-    });
-    if (on) {
-      out.push_back(0.0);
+    const std::array<double, 3> key{points[i], points[i + 1], points[i + 2]};
+    const auto known = index->known.find(key);
+    if (known != index->known.end()) {
+      out.push_back(known->second);
       continue;
     }
-    const TopoDS_Vertex vertex = BRepBuilderAPI_MakeVertex(p).Vertex();
-    distance.LoadS1(vertex);
-    distance.Perform();
-    out.push_back(distance.IsDone() && distance.NbSolution() > 0
-                      ? distance.Value()
-                      : std::numeric_limits<double>::infinity());
+    const double d = measure(gp_Pnt(key[0], key[1], key[2]));
+    index->known.emplace(key, d);
+    out.push_back(d);
   }
   return out;
 }
@@ -427,6 +596,64 @@ rust::Vec<bool> analysis_points_inside(const geometry::Shape& shape, rust::Slice
   rust::Vec<bool> out;
   for (const bool in : inside) {
     out.push_back(in);
+  }
+  return out;
+}
+
+rust::Vec<double> analysis_segment_crossings(const geometry::Shape& shape, rust::Slice<const double> segment) {
+  const geometry::CheckedOperation check("segment crossings");
+  if (segment.size() != 6) {
+    throw std::invalid_argument("a segment comes as two x, y, z triples");
+  }
+  const gp_Pnt from(segment[0], segment[1], segment[2]);
+  const gp_Pnt to(segment[3], segment[4], segment[5]);
+  const double length = from.Distance(to);
+  if (length < Precision::Confusion()) {
+    throw std::invalid_argument("the segment has no length");
+  }
+  const gp_Lin line(from, gp_Dir(gp_Vec(from, to)));
+  Bnd_Box reach;
+  reach.Add(from);
+  reach.Add(to);
+  reach.Enlarge(1e-6);
+  // Only the faces whose boxes the segment reaches are intersected: their
+  // set-up is the expensive part, and a classifier sets up every face (a
+  // modelled thread's stored body has hundreds of spline faces).
+  std::vector<std::pair<double, double>> found;
+  for (TopExp_Explorer it(shape.occt(), TopAbs_FACE); it.More(); it.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(it.Current());
+    Bnd_Box box;
+    BRepBndLib::Add(face, box);
+    if (box.IsOut(reach)) {
+      continue;
+    }
+    IntCurvesFace_Intersector intersector(face, 1e-7);
+    intersector.Perform(line, -1e-9, length + 1e-9);
+    if (!intersector.IsDone()) {
+      continue;
+    }
+    const BRepGProp_Face oriented(face);
+    for (int i = 1; i <= intersector.NbPnt(); ++i) {
+      gp_Pnt point;
+      gp_Vec normal;
+      // The normal points out of the material (the face's orientation).
+      oriented.Normal(intersector.UParameter(i), intersector.VParameter(i), point, normal);
+      const double along = normal.Dot(gp_Vec(line.Direction()));
+      if (std::abs(along) <= 1e-9 * normal.Magnitude()) {
+        continue; // touches the face without crossing it
+      }
+      found.emplace_back(intersector.WParameter(i) / length, along < 0.0 ? -1.0 : 1.0);
+    }
+  }
+  std::sort(found.begin(), found.end());
+  rust::Vec<double> out;
+  for (std::size_t i = 0; i < found.size(); ++i) {
+    // A crossing on an edge is found on each of its faces.
+    if (i > 0 && std::abs(found[i].first - found[i - 1].first) < 1e-9 && found[i].second == found[i - 1].second) {
+      continue;
+    }
+    out.push_back(found[i].first);
+    out.push_back(found[i].second);
   }
   return out;
 }

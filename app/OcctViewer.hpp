@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <QColor>
+#include <QImage>
 #include <QMargins>
 #include <QOpenGLWidget>
 #include <QPoint>
@@ -24,6 +25,7 @@
 #include <AIS_ViewController.hxx>
 #include <AIS_ViewCube.hxx>
 #include <Graphic3d_Camera.hxx>
+#include <Graphic3d_Texture2D.hxx>
 #include <Graphic3d_ZLayerId.hxx>
 #include <SelectMgr_EntityOwner.hxx>
 #include <SelectMgr_Filter.hxx>
@@ -37,6 +39,7 @@
 #include <gp_Trsf.hxx>
 
 #include "LayoutGrid.hpp"
+#include "framework/Appearances.hpp"
 #include "framework/Selection.hpp"
 #include "mitcad/geometry/shape.hpp"
 
@@ -80,6 +83,17 @@ struct BodyDisplay {
   std::string occurrence;
   // Its appearance's colour (U4); the default grey when invalid.
   QColor color = QColor();
+  // Its appearance's parameters for the rendered view (mitcad#46); an
+  // empty id for the default look.
+  Appearance appearance = Appearance();
+  // Faces with appearances of their own (mitcad#53): their indices in the
+  // shape (geometry::Shape's order), their colour and appearance.
+  struct FaceLook {
+    std::vector<int> faces;
+    QColor color;
+    Appearance appearance;
+  };
+  std::vector<FaceLook> faceLooks = {};
 };
 
 // A sketch curve or point in model space.
@@ -151,6 +165,19 @@ struct NavigationSettings {
   bool animate = true;         // view changes (standard views, named views) move smoothly
 };
 
+// Dragging components in the view (mitcad#55): a left drag without keys
+// that starts on a body `accepts` takes is the owner's instead of a window
+// selection (a click there still picks). Points are in the design's
+// coordinates: where the press hit the body, and where the pointer is on
+// the plane through it that faces the viewer.
+struct OccurrenceDrag {
+  std::function<bool(const SelectionItem&)> accepts;
+  std::function<void(const SelectionItem&, const gp_Pnt&)> started;
+  std::function<void(const gp_Pnt&)> moved;
+  // `cancelled`: a dialog took the mouse (P7), or the pointer left the plane.
+  std::function<void(const gp_Pnt&, bool cancelled)> finished;
+};
+
 // A camera that can be saved (named views): in design coordinates, mm.
 struct CameraState {
   gp_Pnt eye;
@@ -200,9 +227,10 @@ public:
   void setGridPlane(const gp_Ax3& plane);
   // The grid's minor step now (mm), shown or not: what sketch points snap to.
   double gridStep() const;
-  // The faces where Section Analysis cuts the bodies (caps), drawn over
-  // the cut; null clears them.
-  void setSectionCaps(const TopoDS_Shape& caps);
+  // The faces where Section Analysis or Hide Above Sketch cuts the bodies
+  // (caps), drawn over the cut and hatched along `plane`'s axes; null
+  // clears them.
+  void setSectionCaps(const TopoDS_Shape& caps, const gp_Ax3& plane);
   // Cosmetic threads: rings on the threaded faces, drawn over the bodies
   // and not pickable; null clears them.
   void setThreads(const TopoDS_Shape& rings);
@@ -254,6 +282,24 @@ public:
 
   // Replaces the bodies, keyed by their uids (F2.b0).
   void setBodies(const std::vector<BodyDisplay>& bodies);
+  // The bodies shown (setBodies), without command previews.
+  std::vector<BodyDisplay> shownBodies() const;
+
+  // The rendered view (docs/rendering.md): the image fills the view
+  // (stretched; a frame that refines is smaller) over the bodies, which
+  // keep their depth and stay pickable; their edges and the layout grid
+  // are not drawn; the orientation cube, sketches, datums, highlights and
+  // previews are drawn over it, hidden by the bodies as in the shaded view.
+  // A null image draws the bodies again. While the rendered mode is on
+  // (setRenderedMode), the bodies are in a layer of their own under the
+  // image's.
+  void setRenderedImage(const QImage& image);
+  void setRenderedMode(bool on);
+  bool showsRenderedImage() const { return !m_renderedImage.isNull(); }
+  // The camera the view draws with, for the renderer to follow.
+  const occ::handle<Graphic3d_Camera>& viewCamera() const { return m_view->Camera(); }
+  // The background's colours, top and bottom (the same for one colour).
+  void backgroundColors(QColor& top, QColor& bottom) const;
   // Replaces the visible sketch profiles (planar faces, placed already);
   // `occurrences` are those that place the sketches of components.
   void setProfiles(const std::vector<std::pair<ProfileKey, TopoDS_Shape>>& profiles,
@@ -268,6 +314,11 @@ public:
 
   // What can be picked: kinds, and optionally a finer test.
   void setPickFilter(SelectFilter filter, std::function<bool(const SelectionItem&)> test = {});
+  // Dragging components (mitcad#55).
+  void setOccurrenceDrag(OccurrenceDrag drag) { m_occurrenceDrag = std::move(drag); }
+  // The point under a widget position on the plane through `through` that
+  // faces the viewer; none when the view looks along it.
+  std::optional<gp_Pnt> viewPlanePoint(const QPointF& position, const gp_Pnt& through) const;
   SelectFilter pickFilter() const { return m_filter; }
   // Colour of the highlight under the mouse.
   void setHoverColor(const QColor& color);
@@ -315,6 +366,9 @@ public:
   // edge or vertex of the shown bodies that the filter takes (only those
   // a click there would pick).
   std::vector<std::pair<SelectionItem, QPoint>> pickPoints(SelectFilter kinds);
+  // The OpenGL version string (with the driver's version), once the view
+  // is initialised; for error reports (mitcad#61).
+  QString glVersion() const { return m_glVersion; }
 
 signals:
   void badgeWidthChanged();
@@ -335,6 +389,8 @@ signals:
   // The application's palette changed (a dark or light mode): what depends
   // on it outside the view follows.
   void themeChanged();
+  // setBodies() changed what is shown.
+  void bodiesChanged();
 
 protected:
   // A modal dialog that opens meanwhile (a long computation's progress, P7)
@@ -374,6 +430,8 @@ private:
     BodyDisplay::Style style;
     TopLoc_Location placement;
     QColor color;
+    Appearance appearance;
+    std::vector<BodyDisplay::FaceLook> faceLooks;
     // The hidden-edge styles' edges: dashed through faces, solid in sight.
     occ::handle<AIS_Shape> hiddenEdges;
     occ::handle<AIS_Shape> visibleEdges;
@@ -388,6 +446,11 @@ private:
   // Shows a body in the visual style; the entry's objects are made here.
   void showBody(BodyEntry& entry);
   void removeBody(BodyEntry& entry);
+  // The rendered mode's layer for a body, and its edges hidden under a
+  // rendered image.
+  void applyRenderedVisibility(BodyEntry& entry);
+  // The background colours again (after a rendered image).
+  void applyBackground();
   void bindGestures();
   // Starts a smooth camera move to `end` (or jumps when not animating).
   void moveCamera(const occ::handle<Graphic3d_Camera>& end);
@@ -428,6 +491,10 @@ private:
   std::optional<SelectionItem> itemFor(const occ::handle<SelectMgr_EntityOwner>& owner) const;
   // Where the last click hit an owner, in its object's own coordinates.
   std::optional<std::array<double, 3>> pickedPoint(const occ::handle<SelectMgr_EntityOwner>& owner) const;
+  // The same in the design's coordinates.
+  std::optional<gp_Pnt> pickedWorldPoint(const occ::handle<SelectMgr_EntityOwner>& owner) const;
+  // Ends a drag of a component (mitcad#55), cancelled or where it is.
+  void endOccurrenceDrag(const QPointF& position, bool cancelled);
   bool accepts(const occ::handle<SelectMgr_EntityOwner>& owner) const;
   void sceneChanged();
   // Asks for a frame (update()). The view handles its events (picks,
@@ -483,6 +550,7 @@ private:
   bool m_fitPending = false;
   bool m_directFrameQueued = false; // requestFrame() in an unexposed window
   bool m_painting = false;          // in paintGL()
+  QString m_glVersion;              // GL_VERSION (glVersion())
   // The left press that starts a pick, and whether its release was a drag.
   QPointF m_pressPosition;
   Qt::KeyboardModifiers m_pressModifiers;
@@ -491,6 +559,12 @@ private:
   bool m_cubePress = false; // the left button went down on the cube
   QPointF m_rightPressPosition;
   bool m_orbitKey = false; // F4 held (MiddlePanF4: the left button orbits)
+  // Dragging components (mitcad#55): the body pressed on, where, and
+  // whether the pointer has moved far enough to drag.
+  OccurrenceDrag m_occurrenceDrag;
+  std::optional<SelectionItem> m_dragItem;
+  gp_Pnt m_dragGrab;
+  bool m_dragging = false;
   // What the scrolling of a trackpad does until it pauses; a pan or an orbit
   // is a drag of the left button that is passed to the view in steps, so
   // that it goes the way of a mouse drag (m_scrollPoint: device pixels).
@@ -506,6 +580,7 @@ private:
   Graphic3d_ZLayerId m_hiddenLayer = Graphic3d_ZLayerId_UNKNOWN;
   Graphic3d_ZLayerId m_edgeLayer = Graphic3d_ZLayerId_UNKNOWN;
   occ::handle<AIS_Shape> m_sectionCaps;
+  occ::handle<AIS_Shape> m_sectionHatch;
   occ::handle<AIS_Shape> m_threads;
   QColor m_paper = QColor(0xd8, 0xdc, 0xe2); // the hidden-line style's faces
   bool m_gridShown = true;
@@ -516,6 +591,19 @@ private:
   std::optional<CameraState> m_home;
   QToolButton* m_homeButton = nullptr;
   bool m_backgroundDark = false; // the view's background is dark
+  QColor m_backgroundTop = QColor(237, 240, 245);
+  QColor m_backgroundBottom = QColor(189, 196, 209);
+  bool m_backgroundGradient = true;
+  // The rendered view: the image, the pixels OCCT reads from it, and the
+  // background texture that shows them.
+  QImage m_renderedImage;
+  occ::handle<Image_PixMap> m_renderedPixels;
+  occ::handle<Graphic3d_Texture2D> m_renderedTexture;
+  bool m_renderedMode = false;
+  class RenderedImageQuad;
+  occ::handle<RenderedImageQuad> m_renderedQuad;
+  Graphic3d_ZLayerId m_renderedBodyLayer = Graphic3d_ZLayerId_UNKNOWN;
+  Graphic3d_ZLayerId m_renderedImageLayer = Graphic3d_ZLayerId_UNKNOWN;
   QMargins m_overlayInsets;
   int m_badgeWidth = 0;
   std::vector<QRect> m_covered;

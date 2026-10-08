@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <functional>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -36,6 +37,8 @@
 #include <Geom_SurfaceOfLinearExtrusion.hxx>
 #include <Geom_SurfaceOfRevolution.hxx>
 #include <Geom_ToroidalSurface.hxx>
+#include <Message_ProgressIndicator.hxx>
+#include <Message_ProgressScope.hxx>
 #include <NCollection_Array1.hxx>
 #include <NCollection_Array2.hxx>
 #include <NCollection_HArray1.hxx>
@@ -741,6 +744,29 @@ TopoDS_Shape orient_solids(const TopoDS_Shape& shape) {
   return out;
 }
 
+// OCCT's progress of the build passed on to BuildOptions::progress, each
+// time it has advanced by a ten-thousandth of the work (ShapeFix advances
+// face by face). It never asks to stop.
+class Advance final : public Message_ProgressIndicator {
+public:
+  explicit Advance(const std::function<void()>& progress) : m_progress(progress) {}
+
+protected:
+  void Show(const Message_ProgressScope&, const bool) override {
+    // (Called under the indicator's lock, never at once.)
+    const double position = GetPosition();
+    if (position >= m_shown + kStep) {
+      m_shown = position;
+      m_progress();
+    }
+  }
+
+private:
+  static constexpr double kStep = 1e-4;
+  const std::function<void()>& m_progress;
+  double m_shown = 0.0;
+};
+
 } // namespace
 
 BuildResult build_body(const Body& body, const BuildOptions& options) {
@@ -760,7 +786,11 @@ BuildResult build_body(const Body& body, const BuildOptions& options) {
       fix->FixShellTool()->FixOrientationMode() = 0;
       fix->FixSolidTool()->FixShellOrientationMode() = 0;
       fix->FixSolidTool()->CreateOpenSolidMode() = false;
-      fix->Perform();
+      occ::handle<Message_ProgressIndicator> advance;
+      if (options.progress) {
+        advance = new Advance(options.progress);
+      }
+      fix->Perform(Message_ProgressIndicator::Start(advance));
       shape = fix->Shape();
     }
     report.solid = all_solid && count_of(shape, TopAbs_SOLID) > 0;

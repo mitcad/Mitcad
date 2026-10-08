@@ -39,6 +39,12 @@ struct DocumentSnapshot {
 
     bool isSketch() const { return type == QStringLiteral("sketch"); }
     bool isConstruction() const { return type.startsWith(QStringLiteral("construction_")); }
+    // Joints, as-built joints, joint origins and rigid groups (mitcad#55):
+    // the browser's Joints folder.
+    bool isJoint() const {
+      return type == QStringLiteral("joint") || type == QStringLiteral("as_built_joint") ||
+             type == QStringLiteral("joint_origin") || type == QStringLiteral("rigid_group");
+    }
     // Evaluated without an error (perhaps with warnings).
     bool succeeded() const { return status == QStringLiteral("ok") || status == QStringLiteral("warning"); }
     // Before the marker and not suppressed: its result exists.
@@ -87,6 +93,13 @@ struct DocumentSnapshot {
   QHash<QString, bool> featureShown;
   // The document's named views (U5): the `named_views` query's entries.
   QJsonArray namedViews;
+  // Analyses kept in the document (mitcad#41): the `analyses` query's
+  // entries (name, type, visible, the definition, and the section's plane
+  // at the marker or why it cannot be found).
+  QJsonArray analyses;
+  // Joints between occurrences (mitcad#55): the `joints` query's answer
+  // (joints, rigid groups, degrees of freedom per component).
+  QJsonObject joints;
   // Saved in the document (P9): the root's Origin folder shown, and what
   // the view is isolated to (bodies and occurrences; none: everything).
   bool originShown = false;
@@ -106,6 +119,19 @@ struct DocumentSnapshot {
   bool isShown(const QString& feature) const { return featureShown.value(feature, false); }
   // Failed features before the marker.
   QVector<const Feature*> failures() const;
+  // The analysis shown (one at a time), or an empty object.
+  QJsonObject shownAnalysis() const;
+  // An analysis by name, or an empty object.
+  QJsonObject analysis(const QString& name) const;
+  // A joint or as-built joint as the `joints` query has it, or an empty
+  // object.
+  QJsonObject joint(const QString& uid) const;
+  // The degrees of freedom of a component with joints (the `joints`
+  // query's `dof` entry), or an empty object.
+  QJsonObject jointDof(const QString& component) const;
+  // The degrees of freedom of an occurrence placed in a component with
+  // joints (what it can do with the others held), or -1.
+  int occurrenceDof(const QString& uid) const;
 };
 
 // The icon (app/icons) of a feature type in the timeline and the browser.

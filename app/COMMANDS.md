@@ -88,7 +88,8 @@ Modifiers:
   drop-down is refilled when they change, and a value they lack stays as
   an extra entry. `withOnChange(call)`: called after the user changed a
   choice, to set dependent inputs (a new size takes its coarse
-  designation).
+  designation); shown values it leaves NaN (`state.setValue(id, NaN)`)
+  are evaluated again (Drive Joint's value of another motion).
 - `withConvert(form)`: the form a pick is kept in (Pattern's Features
   keeps the feature that made a face; Move/Copy's Components the
   occurrence that places a body).
@@ -173,10 +174,15 @@ Two other kinds of panels:
   text, a log line, a shape drawn over the view, red for a problem, a
   section plane) computed while inputs change; OK closes the panel
   (Measure, Interference, Section Analysis). With `keepsSection` the
-  section stays after OK (`CommandHost::showSection`, kept in
-  `MainWindow::m_section`) until Remove Section Analysis or a new
-  document. Inspections draw with `setPreview`, so a command started
-  during one ends it.
+  section stays after OK; with `build` too, OK keeps it in the document
+  as an analysis (mitcad#41): `add_analysis` with `build`'s definition,
+  or `edit_analysis` (shown) when the panel edits one
+  (`CommandSession::editAnalysis`, its inputs filled by `load` from the
+  `analyses` query's entry). While an inspection's panel is open it shows
+  its own section (`CommandHost::showSection`); otherwise
+  `MainWindow::m_section` follows the model's shown analysis
+  (`MainWindow::followAnalyses` in `refreshScene`). Inspections draw with
+  `setPreview`, so a command started during one ends it.
 
 References (`commands/CommandSupport`):
 
@@ -325,7 +331,8 @@ when an input changes, OK keeps it as one undo step, Cancel undoes it.
 Their selection inputs take `SelectKind::SketchCurve`/`SketchPoint` of
 the edited sketch (`ofSketch`, `linesOf` in `SketchCommands.cpp`; not
 texts). While a panel is open, sketch mode's mouse handling pauses
-(`SketchController::setPaused`).
+(`SketchController::setPaused`). Drive Joint (outside sketches) runs its
+`drive_joint` the same way.
 
 Texts, patterns and offsets stay editable:
 
@@ -394,10 +401,120 @@ only when the answers changed). They only show and emit;
   line come from the palette and are repainted on a palette or style
   change (`TimelineWidget::changeEvent`). Test: `tools/ui-theme-test.sh`
   (the scheme switched with `MITCAD_TEST_COLOR_SCHEME`).
+- **Analysis folder** (mitcad#41): the analyses kept in the document (the
+  `analyses` query, `DocumentSnapshot::analyses`), after the root's other
+  rows. Light bulb: `set_analysis_visible`; showing one hides the others,
+  as one section cuts the bodies at a time. Double-click and Edit Section
+  Analysis open its panel with its plane, offset and flip
+  (`DocumentHost::editAnalysis`); Rename, Delete (`rename_analysis`,
+  `delete_analysis`); the folder's menu starts a new Section Analysis. An
+  analysis whose plane cannot be found at the marker is red with the
+  reason in its tooltip, and cuts nothing. Remove Section Analysis hides
+  the shown analysis (it stays in the folder); Flip Section Analysis edits
+  it with `flip` toggled.
+- **Edit Appearances** (`solid.appearances`, mitcad#46; also Appearance...
+  in a body's browser menu and in the view's menu of bodies, faces, edges
+  and vertices): the `appearances` query's library and the design's own
+  appearances with swatches, the selected one's preview and parameters
+  (`AppearanceDialog`, modeless, refreshed with the browser). The
+  library's are read-only; New is `create_appearance` with `based_on` the
+  selected one (named "<name> Copy"), each field change one
+  `edit_appearance` undo step (colours as `#rrggbb` or from a colour
+  dialog), Delete `delete_appearance`, Assign `set_body_appearance` for the
+  bodies it was opened for (the selection's) as one undo step, and
+  `set_face_appearance` for its faces (mitcad#53: the dialog opened on
+  selected faces assigns to them; on edges and vertices, to their
+  bodies). The texture (mitcad#53): Image (typed, or Choose... with a file
+  dialog; made relative to the design's folder when it is saved), Size,
+  Rotation (degrees), Projection (Box, Planar), Embed the image in the
+  design (reads the file into `data`; off again needs the file at its
+  path), Remove; each one `edit_appearance` with the texture as the
+  `appearances` query lists it, so an embedded image stays; a line says
+  when the image is missing. "Faces with their own appearance" lists the
+  face appearances of the bodies it was opened for (`bodies` query's
+  `face_appearances`; a face not found is marked), and Clear gives the
+  selected ones their body's again (`set_face_appearance` with null, one
+  undo step). The Appearance panel (`solid.appearance`) lists the same
+  appearances (`withChoices`) and has a Faces input besides Bodies
+  (Default clears a face's own). The view colours each body with the
+  appearance's `display_color` and faces with theirs
+  (`MainWindow::modelBodies`, `BodyDisplay::faceLooks`, an
+  `AIS_ColoredShape` in the shaded styles); `BodyDisplay::appearance`
+  carries the parameters to the rendered view, and a change of them alone
+  emits `bodiesChanged` without redrawing the shaded body.
 - **Change Parameters** (`solid.parameters`): each cell change is one
   model command and undo step; a bare number gets the parameter's unit;
   refusals stay in the cell in red with the reason. Favourites are
   `set_parameter` `favorite`. `--set name=value` sets a value the same way.
+
+## Joints
+
+The ASSEMBLE group of the SOLID tab (mitcad#55, `commands/JointCommands.cpp`;
+the model's side in commands.md, "Joints"). A joint goes into the active
+component; an edit keeps the joint's own (a hidden `component` input). Its
+origins are geometry of occurrences inside that component: picks carry
+paths from the root (`O1/O4`), which `build` makes paths from the
+component, and `load` makes them paths from the root again through the
+component's first occurrence. A pick outside the component fails the
+build with a message.
+
+- **Joint** (`assemble.joint`, J): Origin A and Origin B (faces with a
+  plane, axis or centre; straight and circular edges and sketch curves;
+  points, axes and planes: `givesFrame`), Type, Slide Along (sliders),
+  Offset, Angle, Flip, and per free motion of the type a Limits check
+  (Minimum, Maximum) and a Rest check (Rest Value). The origin inputs
+  leave the origin's planes hidden (`showsOrigin = false`), as they would
+  cover the components. Offset's arrow and Angle's ring stand on the frame
+  the model resolves origin B to (else A): the `joint_frame` query, so a
+  pick shows where its origin snaps. A driven `position` is kept through
+  an edit (hidden input) for the motions the type still has; limits with
+  a minimum but no maximum cannot be edited (`canEdit`).
+- **As-Built Joint** (`assemble.as_built_joint`): Component A and B (in the
+  browser, or bodies they place), Type, Motion Origin (optional), limits.
+  `relative` is recorded from the `components` query's placements (B's
+  inverse times A's); an edit keeps the recorded one while A and B stay.
+- **Joint Origin** (`assemble.joint_origin`): geometry of the active
+  component itself, Offset, Angle, Flip; a `frame_override` is kept.
+- **Rigid Group** (`assemble.rigid_group`): two or more components; a pick
+  inside a sub-assembly stands for the occurrence placed in the component.
+- **Drive Joint** (`assemble.drive_joint`): a joint (a feature: the
+  timeline, the Joints folder, or the newest drivable one), its Motion and
+  the value (Angle or Distance, with a ring or an arrow on the joint's
+  frame B). It runs `drive_joint` while the inputs change, as sketch
+  commands do (`sketchCommand`), and OK keeps it: one undo step `Drive
+  Joint1`. Choosing another motion or joint takes its value where it is
+  (a choice's `onChange` may set values; those it leaves NaN are evaluated
+  again).
+- **Animate Joint** (`assemble.animate_joint`, `MainWindowJoints.cpp`): the
+  joint selected in the timeline, else the newest with free motions, its
+  first motion through its limits (from where it is to one end, the other
+  and back) or once round without limits (a slide ±25 mm): 36 frames, each
+  the `preview` of an `edit_feature` with the joint's `position` there,
+  shown through the preview's `placements`; the preview is cleared at the
+  end and nothing changes. Starting a command stops it.
+- **Previews of placements:** a feature command's preview shows the
+  bodies of the occurrences it places elsewhere where the preview's
+  `placements` put them (joints, Move/Copy of components; `Preview <name>
+  moves O2`).
+- **Dragging components** (`OcctViewer::setOccurrenceDrag`,
+  `MainWindowJoints.cpp`): in idle mode, a left drag without keys that
+  starts on a body moves the innermost occurrence of its path whose parent
+  component has joints and whose unit is not grounded
+  (`dragOccurrenceOf`); elsewhere a drag still selects with a window, and
+  a click on such a body still picks. The pointer's point is on the plane
+  through the grabbed point facing the viewer; per move the `joint_drag`
+  query gives the occurrences' placements, which move the shown bodies;
+  the release runs `drag_occurrence` (one undo step `Drag Pin:1`, after
+  the mouse event: `whenIdle`). A dialog that takes the mouse cancels it.
+- **Browser:** each component's **Joints** folder lists its joints,
+  as-built joints, rigid groups and joint origins before the marker
+  (joint origins are datum rows with light bulbs; their datum is a plane).
+  A joint's tooltip has its kind, state and values, the folder's the
+  component's degrees of freedom (the `joints` query's `dof`), an
+  occurrence's what its joints leave it. A joint's menu: Edit, Drive,
+  Animate, Suppress, Rename, Delete, Find in Timeline; the folder's: New
+  Joint, New As-Built Joint, New Rigid Group. A joint row stands for its
+  feature (`SelectKind::Feature`), which Drive Joint takes.
 
 ## The view
 
@@ -442,12 +559,101 @@ settings in the user's settings (`ViewSettings`, group `view`);
   window fits 1366 × 768; each page is also a command
   `tools.preferences.<page>` that the search finds by its settings. OK
   saves every page. On macOS the pages are the panes of `SettingsWindow`
-  (Settings, Cmd+,), whose changes apply as they are made.
+  (Settings, Cmd+,), whose changes apply as they are made. In builds with
+  the render worker, Display also has the **render device** (mitcad#50,
+  the setting `render/device`: Automatic, the CPU or a GPU the worker
+  lists with `mitcad-render --list-devices`; a device of an earlier choice
+  that is not there stays as "Not found"): a change starts a running
+  rendered view's worker again on it, and Render Image renders on it.
 - **Named views** are the document's (`add_named_view` and friends); a
   view named `Home` is the document's home.
-- **Section Analysis:** the cut faces are drawn as caps
-  (`MainWindow::showSectionCaps`: the clipped bodies' faces in the plane);
-  the clip is the model's `analysis_shape {"shape": "clip"}`.
+- **Section Analysis** and **Hide Above Sketch:** the cut faces are drawn
+  as caps (`MainWindow::showSectionCaps`: the clipped bodies' faces in the
+  plane, without those the whole body has there, as under a sketch on a
+  body's face), hatched at 45 degrees to the plane's x axis (the sketch's
+  in Hide Above Sketch; `OcctViewer::setSectionCaps`, the lines lifted off
+  the caps toward the removed side so that they are drawn over them); the
+  clip is the model's `analysis_shape {"shape": "clip"}`.
+
+- **Rendered** (`view.rendered`, in View > Visual Style; only in builds
+  with `MITCAD_RENDER` and only when the render worker `mitcad-render` is
+  next to the application, [docs/rendering.md](../docs/rendering.md)): a
+  toggle beside the visual styles, an ordinary entry, not a developer
+  setting. `RenderMode` (`render/`) starts the render worker, sends it the shown bodies as a scene update whenever
+  `OcctViewer::bodiesChanged` (once the model is idle: every body with
+  its mesh's content hash, placement and material, and only the meshes
+  the worker does not hold) and the camera and size whenever a frame was
+  drawn with another one, and hands its frames to
+  `OcctViewer::setRenderedImage`: the frame covers the view in a layer
+  over the bodies (which stay drawn, for their depth, and pickable) and
+  under the overlays, so sketches and other overlays behind a body are
+  hidden as in the shaded view (`OcctViewer::setRenderedMode`). A
+  render's first frame is denoised. Until the first frame of a new camera
+  comes, the bodies are drawn shaded. If the
+  worker dies, a message over the view says so and the mode turns off; a
+  worker of another protocol version is stopped with a message too.
+- **Render Environment...** (`view.render_environment`, in View > Visual
+  Style after Rendered and in View > Environment; with the render worker
+  only; mitcad#47): a non-modal dialog (`render/RenderEnvironmentDialog`)
+  beside the main window, with the document's render settings (the
+  model's `render_settings`, [commands.md](../core/model/src/api/commands.md#render-settings)):
+  light (Studio, White Studio, Dark Studio, Outdoor, HDR Image with its
+  path and Browse...), strength, rotation, the sun's elevation and
+  direction (degrees), background (View Background, Colour, Environment)
+  and its colour, ground shadows, reflections, under the lowest body or at
+  a height, exposure and view transform on the Environment page, a
+  Rendered view check box, Reset and Close. Fields that the light or the
+  ground does not use are disabled. The Lights page (mitcad#54) lists the
+  document's lights (the chosen one's fields below): Add adds a light of
+  the kind beside it (Point, Spot, Area, Sun) at the camera, shining where
+  it looks (`add_render_light`); Delete deletes the chosen one
+  (`delete_render_light`); its name, kind, On, Follows the camera (the
+  numbers change so that the light stays where it is), position and
+  direction (x, y, z), colour, power (W, a sun's W/m²), size, an area
+  light's height and shape, a spot's cone and blend and a sun's size each
+  change it (`edit_render_light`, an undo step); Aim at Face takes the
+  next click on a body's face in the view (`render::surfaceAt`: the
+  bodies' display triangles under the mouse) and puts the light the
+  distance beside it out along the face's normal, shining at the point
+  (a sun only turns; Esc cancels); At Camera puts it at the camera,
+  shining where it looks. While the dialog is open the lights are drawn
+  as glyphs over the view (`render::RenderLightsOverlay`, a child widget
+  of the view that takes no input: a point light a dot with rays, a spot
+  its cone, an area light its outline, a sun an arrow toward the view's
+  middle; the chosen one orange, those off grey). Each change is one `set_render_settings` (Reset:
+  `reset_render_settings`), an undo step; not while a command panel or a
+  sketch is open. `MainWindow::refreshScene` hands the settings to
+  `ViewController::setRenderSettings` after every change (also undo, redo
+  and opening), which passes them to `RenderMode` and refreshes the
+  dialog. `RenderMode` sends the worker an `environment` command when the
+  environment, the background's visibility or the ground changed, with a
+  new view, so the render starts again; the exposure, the view transform
+  and a background colour re-display the last frame, as a change of the
+  view's background does.
+- **Render Image...** (`file.render_image`, in the File menu after 3D
+  Print and in View > Visual Style after Render Environment; with the
+  render worker only; mitcad#48): a non-modal dialog
+  (`render/RenderImageDialog`) beside the main window with the render
+  settings' `output` section (Camera: Current View or a named view; Size
+  presets, which fix the aspect; Width, Height, Aspect From the View or
+  Fixed; Samples, Time limit, Denoise; Format PNG, PNG 16 bits, JPEG,
+  OpenEXR; JPEG quality; Transparent background), a preview, a progress
+  bar and Render, Cancel, Save... and Close. Settings change as in Render
+  Environment (one `set_render_settings` each, an undo step; Height only
+  with a fixed aspect, JPEG quality only for JPEG, transparency not for
+  JPEG). Render waits until the model is idle (`DocumentHost::whenIdle`),
+  writes the shown bodies as a scene and the job (`render/RenderBatch`,
+  shared with `mitcad-cli render`) into a temporary folder and runs
+  `mitcad-render --batch <job> --control` (`render::FinalRender`); the
+  window stays usable meanwhile. Cancel (and Close or Escape during a
+  render) writes `stop` to the worker and ends it after two seconds;
+  Save... copies the finished image through a file dialog filtered to
+  its format, named after the design. With a fixed aspect and the
+  current view, the view shows the image's frame (a child widget that
+  dims the rest and takes no input) while the dialog is shown.
+  `ViewController::setRenderSettings` refreshes the dialog after every
+  change of the model, and the main window gives it the design's folder
+  and name.
 
 **What the view keeps between refreshes.** `refreshScene` runs after every
 model change; the view keeps what did not change: bodies with the same
@@ -525,7 +731,7 @@ UI thread.
 | `AboutDialog.*` | Help > About Mitcad: version, licence, third-party credits (OCCT and Qt versions) |
 | `framework/ModelShapes.*` | display shapes of datums and sketch geometry from JSON |
 | `framework/ManipulatorOverlay.*` | handles a command draws over the view: distance arrows, angle rings |
-| `framework/Appearances.*` | the appearance library (colours of `set_body_appearance` ids, `appearanceColor`) and the physical materials |
+| `framework/Appearances.*` | appearances as the model's `appearances` query lists them (`Appearance`: the physically based parameters and the display colour), a preview swatch (`appearanceSwatch`), and the physical materials |
 | `framework/Cursors.*`, `framework/Icons.*`, `framework/Numbers.*` | the sketch tools' pointer; icons from `app/icons`; numbers with decimal commas |
 | `framework/AppSettings.*` | general settings (autosave) |
 | `framework/DesktopEntry.*` | the Linux desktop file and icons an AppImage installs for itself |
@@ -546,6 +752,8 @@ UI thread.
 | `commands/MoveCommands.cpp` | Scale, Combine, Move/Copy, Align, Physical Material, Appearance |
 | `commands/ConstructCommands.cpp` | `registerConstructCommands`: every construction plane, axis and point, from a table |
 | `commands/InspectCommands.cpp` | `registerInspectCommands`: Measure, Interference, Section Analysis, Physical Properties |
+| `commands/JointCommands.cpp` | `registerAssembleCommands`: the ASSEMBLE group: Joint, As-Built Joint, Joint Origin, Rigid Group, Drive Joint (mitcad#55) |
+| `MainWindowJoints.cpp` | dragging components the joints move, Animate Joint |
 | `commands/SketchCommands.cpp` | the SKETCH tab: drawing tools, Sketch Dimension, constraints, Offset, Mirror, patterns, Project, sketch Fillet and Chamfer, Move/Copy, Trim, Extend, Construction, Delete |
 | `sketch/SketchController.*` | sketch mode: mouse and keys, typed values, drags, `SketchOp` |
 | `sketch/SketchTool.hpp`, `DrawTools.cpp`, `EditTools.cpp` | the tools (`SketchTool`) and their factories |
@@ -556,19 +764,22 @@ UI thread.
 | `browser/BrowserPanel.*` | the browser (model tree) |
 | `browser/TimelineWidget.*` | the timeline with the marker and playback buttons |
 | `browser/ParametersDialog.*` | Change Parameters |
+| `browser/AppearanceDialog.*` | Edit Appearances |
 | `browser/BrowserController.*` | what the browser, timeline, parameters dialog and failed-features summary do |
 | `browser/DocumentHost.hpp` | what they ask of the main window |
 | `view/ViewController.*` | the View menu: standard views, Look At, camera, visual styles, grid and snaps, environment, named views, the cube's menu, Preferences, the keyboard and mouse overview; `ViewSettings` |
+| `render/` | `MITCAD_RENDER` only ([docs/rendering.md](../docs/rendering.md)): View > Rendered (`RenderMode`, `RenderClient`, `FrameMemory`), Render Environment, Render Image (`RenderImageDialog`, `RenderBatch`: the final render's scene, camera, job and worker process); the worker `mitcad-render` (`RenderWorker`, `CyclesRenderer`, `RenderOutput`) |
 | `LayoutGrid.*` | the layout grid |
 | `files/MainWindowFiles.cpp` | the File menu: open, recent files, close, import, export, Insert Component, drops |
 | `files/FileFormats.*`, `files/FileDialogs.*` | file kinds by extension and dialog filters; Export, Insert DXF, Insert Mesh, linked or copy, the import report |
-| `files/F3dImport.*` | `.f3d` and FreeCAD import in a worker process behind a progress dialog |
+| `files/F3dImport.*` | `.f3d`, FreeCAD and `.ipt` import in a worker process behind a progress dialog |
 | `files/Autosave.*`, `files/Recovery.*`, `files/MainWindowAutosave.cpp` | autosave and recovery |
 | `files/MainWindowVersions.cpp`, `files/VersionDialogs.*` | saving versions: Save and Save Version in a versioned project, New Project, Start Version History, the author, changes and renames made outside Mitcad, the status bar's version |
 | `files/VersionHistory.*` | the Version History window |
 | `files/Remote*.*` | remote repositories: connect, open from remote, sync, check for newer versions, settings; `RemoteTask` runs one operation on a thread of its own |
 | `files/Print3d.*`, `files/MainWindowPrint.cpp` | 3D Print: slicers found, settings, file names, the dialog and Preferences group; the command |
 | `update/` | automatic updates ([docs/updates.md](../docs/updates.md)) |
+| `report/` | feedback and error reports ([below](#feedback-and-error-reports)): `ReportCenter` (Help › Send Feedback, the offers, the delivery), `ReportDialogs` (the form, the screenshot's crop, the preview), `ReportText` (masking, crash files, duplicate keys, the issue form's address; Qt Core, `app.unit`), `CrashHandler` (the signal and exception handlers, plain C++, also in `mitcad-render`) |
 | `MainWindow.*` | the host: document, modes (idle, picking a sketch plane, sketch, command), selection, context menu, actions |
 | `OcctViewer.*` | the 3D view: bodies in the visual style, previews, highlights, picking, camera, orientation cube, navigation |
 | `icons/*.svg` | own icons (see [Icons](#icons)) |
@@ -582,6 +793,7 @@ same ways without questions (mm, the XY plane, linked).
 |---|---|
 | `.f3d`, `.f3z` | a new document with the design's history (worker process, below) |
 | `.FCStd` | a new document with the bodies and PartDesign/Part history (`import_fcstd`, same worker; commands.md, "FreeCAD import (.FCStd)"); no Stop |
+| `.ipt` | a new document with the part's stored bodies, one base feature each (`import_ipt`, same worker; commands.md, ".ipt import"); no Stop; the report lists the bodies, part number, material and units |
 | STEP, IGES, BRep | a base feature (`import_file`, one undo step `Import part.step`) |
 | STL, OBJ | mesh bodies, after asking the unit (Insert Mesh) |
 | DXF | a new sketch on a plane (`sketch.create` + `sketch.import_dxf`, one undo step `Insert drawing.dxf`), or into the edited sketch; the dialog uses the `dxf_info` query (origin placement, layers) |
@@ -593,7 +805,10 @@ window; `main.cpp`), which runs `import_f3d` with `hang_limit` 90 s and
 no time limit on a new document under a job (`attach_job`) and writes the
 project file and result; it also gets `--result-store` and
 `--persist-min-ms` and stores the design's results. A kernel crash or
-hang ends only the worker. Progress: the worker runs with
+hang ends only the worker. While import threads the hang watchdog gave
+up still run, the worker ends with `std::_Exit` after writing its result
+(`abandoned_imports()`), without the static destructors that would crash
+under them (mitcad#82). Progress: the worker runs with
 `MITCAD_IMPORT_TRACE`, and its per-item lines (`import: [t] item <n>:
 <name>` when an item starts, `import: [t] <item>: <outcome> in <s> s`
 when done; core/import) are counted against the timeline's length
@@ -810,6 +1025,92 @@ automatic push and the status bar. The model's side: commands.md,
 
 Tests: `tools/ui-sync-test.sh` and the Windows workflow test.
 
+### Feedback and error reports
+
+`report/` (mitcad#61, mitcad#62; the user's side in
+[docs/user-guide.md](../docs/user-guide.md#feedback-and-error-reports),
+the design in [docs/architecture.md](../docs/architecture.md)).
+
+- **Help › Send Feedback** (`help.send_feedback`, an action in the Help
+  menu and the command search): `FeedbackDialog` with the window grabbed
+  before it shows; Preview builds a `report::Report` (sections
+  description, contact, the recent actions for a bug, diagnostics) and
+  shows `ReportPreviewDialog` over the form, which closes once Send is
+  done.
+- **Every report** goes through `ReportCenter::previewAndSend`: the title
+  and the sections marked `masked` are masked (`report::mask`; the contact
+  address is not), the preview edits them, and `deliver` builds the
+  Markdown (`report::reportBody`) and the address
+  (`report::issueLink`, at most 8000 characters: longer, the body is cut
+  at a line with a note and the whole goes to the clipboard), saves a
+  screenshot under `reports` in the local app data and opens the address
+  (`openExternalUrl`). Nothing goes over the network from Mitcad.
+- **The tracker:** `MITCAD_ISSUE_URL` (CMake cache variable, default
+  `https://github.com/mitcad/Mitcad/issues` from README.md), overridden
+  by the setting `reports/issueUrl`: an issue list's address (`/new` and
+  `title`, `body` added) or a template with `{title}` and `{body}`.
+- **Crashes:** `crash::install` at the start of `main` (the application
+  and the import worker; `mitcad-render`'s `main` too) and
+  `ReportCenter::prepareCrashReports` once the settings are known: the
+  folder (`crashes` in the local app data, `MITCAD_CRASH_DIR`), the
+  workers' environment (`MITCAD_CRASH_DIR`, `MITCAD_CRASH_PARENT`) and the
+  Rust panic hook (`mitcad_set_panic_sink`, `core/ffi/src/panic_note.rs`).
+  `ReportCenter::startUp` watches the folder: a report of this process's
+  worker is offered at once, the others' at the next start (the newest,
+  counting the rest); offered ones become `*.crash.offered` (20 kept).
+- **Internal errors:** `MainWindow::showError` passes every message to
+  `ReportCenter::errorShown`, which offers the kernel's converted crashes
+  (`report::isKernelCrashMessage`); `runCommand` offers an exception that
+  is not the model's (`internalError`). Once per message and run.
+- **Recent actions:** `MainWindow::trigger` (`command <id>`) and
+  `runCommand` (`model <cmd>`), the last 32, also in the crash handler's
+  buffer; never arguments or names from the design.
+- Offers wait for a free window (`offerNext`: no modal dialog or popup,
+  no job, no import); `reports/offerErrors` false turns them off.
+
+Test switches: `MITCAD_TEST_LOG_URLS=1` (set by `tools/ui-test-lib.sh`)
+logs an address instead of opening it; `MITCAD_TEST_CRASH=app`,
+`model-worker` (once the window shows), `import-worker`, `render-worker`
+(at the worker's start) crash there; `MITCAD_TEST_OCCT_CRASH=<operation>`
+makes a kernel crash for an internal error. `tools/ui-report-test.sh`.
+
+### Component libraries
+
+`files/MainWindowLibraries.cpp`, `files/LibraryDialogs.cpp`,
+`files/Libraries.cpp` (mitcad#64, mitcad#63; the formats in
+[docs/libraries.md](../docs/libraries.md), the model's side in
+commands.md, "Component libraries"). The commands are in Tools ›
+Libraries and the command search; Insert from Library is also in the
+SOLID tab's INSERT group.
+
+| Command | What it does | Model command / bridge |
+|---|---|---|
+| `insert.library_component` Insert from Library | `LibraryBrowser`: search (words, a licence filter, items without a licence only when asked), previews, details with the licence and the attribution, the version (newest first) and the size (cascaded combo boxes per selector, `SizeChooser`), linked or a copy | `library_search`, `library_show`, `library_preview`; then `insert_component` with `library` |
+| `tools.library_parts` Library Parts... | `LibraryPartsDialog`: each part's recorded version and size, another version or size, Show Changes, Update; Check for Newer Versions and Get Missing Libraries fetch (the latter after showing the addresses, which come from the design); the Parts List tab (Copy as CSV) | `library_parts`, `parts_list`, `library_show`, `library_diff`, `library_fetch`; then `update_library_parts` |
+| `tools.libraries` Libraries... | `LibrariesDialog`: the sources (settings `libraries/sources`: URL or folder, on or off; the defaults are Mitcad's fastener library and the community index), Add URL, Add Folder, Remove, Fetch Selected, Fetch All | `library_list`, `library_fetch` |
+| `tools.community_library` Community Library... | the browser with the indexes' libraries first; Get Library adds a library an index lists to the sources and fetches it after a question with its address and licence | as Insert from Library |
+| `tools.publish_library` Publish to Library... | `PublishLibraryDialog`: the open design (a single file) added to a library folder of one's own (made when new), an image of the view as its preview, recorded as a version of the folder's project, pushed (`connect` with a remote URL, else `push`), and the index entry (copied) | `library_init`, `library_add`, the project's `commit`, `connect`/`push`, `index_entry` |
+
+- Where fetched libraries are kept: `MITCAD_LIBRARIES_DIR`, else
+  `libraries` in the local app data; `configureLibraries()` tells the
+  bridge at start (`configure_libraries`).
+- Fetches run as `RemoteTask::library` on a thread of their own with a
+  progress dialog whose Cancel ends git; only when the user asks
+  (nothing checks for newer versions on its own). The other library
+  commands are local and run at once.
+
+Logs: `Library fetched: <kind> <name> (<id>) from <url>; versions ...`,
+`Library fetch failed: <url>: ...`, `Library source <url> (on|off):
+<what>; versions ...`, `Library source added|removed: <url>`, `Library
+search '<text>': <n> components, <m> libraries, <k> hidden by the
+licence`, `Library browser selected <library>/<component>: version ...,
+size ..., licence ...` (or `selected library <id> (<url>), licence ...,
+fetched|not fetched`), `Library size <row>`, `Inserted component <name>
+(linked|copy) from <library> <version>, licence <spdx|none>`, `Library
+part <name>: <library> <version>, size <row>, <status>`, `Library changes:
+...`, `Updated library parts: ...`, `Parts list row: <qty> x <part>
+(...)`, `Publish: ...`. Test: `tools/ui-library-test.sh`.
+
 ## Selection
 
 `OcctViewer` names picks through the bodies' `geometry::Shape`
@@ -837,8 +1138,11 @@ SVG at several sizes (`themeIcon`).
   <revolutions>", each operand in parentheses unless it is a name, a
   number with its unit or a call (as the FreeCAD import writes it).
   `load` reads the type back from that form; a ratio in another form
-  opens as Revolution and Pitch with the expression as is. A fixed axis
-  (the importer's) is not editable.
+  opens as Revolution and Pitch with the expression as is. Growth goes in
+  as `growth` unless it is a plain zero; a new helix is of Mitcad's
+  construction, and an edited one keeps its `construction` (FreeCAD's for
+  the FreeCAD import's growing helices, mitcad#83). A fixed axis (the
+  importer's) is not editable.
 - **Hole**: Counterdrill is `kind` `counterdrill` with `cd_diameter`,
   `cd_depth`, `cd_angle` (the cone's full angle); Taper Angle is `taper`
   (the wall's angle to the axis), left out when 0 and hidden for tapped
@@ -871,7 +1175,7 @@ SVG at several sizes (`themeIcon`).
 | `Ribbon SOLID/CREATE at x,y` | group menus (`ui_click_logged`) |
 | `Panel <command> input <id> at x,y [(hidden)]`, `Panel <command> OK at x,y` | a panel opened |
 | `Datum xy at x,y`, `Sketch entity F1/c4 at x,y` | an input that takes them became active |
-| `Command <name> started`, `Editing F2 with <name>`, `Command <name> cancelled` | |
+| `Command <name> started`, `Editing F2 with <name>`, `Editing analysis Section1 with <name>`, `Command <name> cancelled` | |
 | `<command> <input>: 2 edges [edge E{…} of F2.b0; …]` | a selection input changed |
 | `<command> <input>: d1*2 = 120 mm`, `… is invalid: <reason>` | a value was evaluated |
 | `<command>: <input> = <choice>` / `= on` | a choice or check changed |
@@ -904,6 +1208,9 @@ SVG at several sizes (`themeIcon`).
 | `Failed features: Fillet2: <error>` / `none`, `Failures button at x,y`, `Revealed Fillet2` | the status bar's summary |
 | `Feature warnings: Fillet1: <warning>` / `none`, `Preview Fillet: ok, warning: <warning>` | features that succeeded with warnings, when they change; a preview's warning |
 | `Browser sketch DOF: Sketch1 0, Sketch2 4` | the sketches' degrees of freedom the browser shows, when they change |
+| `Browser joints: Joint1 placed, AsBuiltJoint1 satisfied, DOF Root 1` | the joints' states and each component's degrees of freedom (mitcad#55), when they change |
+| `Added joint Joint1 (revolute): placed, rz 30 deg, moved O2; DOF 7` (a failure: `failed: <error>`), `Added as-built joint …`, `Added joint origin JointOrigin1: origin (5, 5, 10), normal (0, 0, 1)`, `Added rigid group RigidGroup1: Pin:1, Cap:1`, `Drove joint Joint1 (revolute): placed, rz 45 deg, …`, `Preview Joint moves O2` | the ASSEMBLE group's commands (mitcad#55; the joint as the `joints` query has it after OK) and a preview that places occurrences elsewhere |
+| `Drag of Pin:1 started at (x, y, z)`, `Dragged Pin:1 to (x, y, z): Joint1 rz 63.2 deg`, `Drag of Pin:1 cancelled`, `Animating Joint1 rz: 36 frames from 45 deg to 45 deg`, `Animated Joint1: 36 frames`, `Animation of Joint1 stopped: <why>` | dragging a component the joints move (points in its parent's coordinates) and Animate Joint |
 | `Parameters favorites: width` / `none`, `Parameters width favorite at x,y`, `Parameter width favorite: on = 30 mm` | favourites |
 | `Parameters dialog opened`, `Parameters: d1 = width + 5 mm (35 mm); …`, `Parameters d1 expression at x,y` (name, unit, expression, comment), `Parameters add/delete/OK at x,y`, `Added parameter width = 30 mm`, `Parameter d1 expression: width + 5 mm = 35 mm`, `Parameter width expression: d2 / 2 refused: <reason>`, `Delete parameter w refused: <reason>` | Change Parameters (places in the main window's coordinates) |
 | `Panel Fillet input sets.1.radius at x,y`, `Panel Fillet input add sets at x,y`, `… input remove sets.1 at x,y`, `… input up_sections.2 at x,y`, `… input down_sections.0 at x,y` | a list's rows and buttons, an ordered selection's buttons |
@@ -911,6 +1218,7 @@ SVG at several sizes (`themeIcon`).
 | `Manipulator <command> <input> at x,y`, `Manipulator <command> <input> dragged to <value>` | a handle's knob, a drag ended |
 | `Manipulator Circular Pattern suppressed.2 at x,y` (`… (off) at` when suppressed), `Manipulator Circular Pattern suppressed.2 toggled`, `Circular Pattern Suppressed: 2` | a pattern's instance dots |
 | `Inspect <command>: <log>`, `Closed <command>` | an inspection's result (Measure: `area 2400, distance 45, angle 90 deg`; Interference: `Body1 x Body2: <volume>` or `none`; Section Analysis: `area …, length …`) |
+| `Kept Section Analysis as Section1`, `Edited analysis Section1`, `Deleted analysis Section1`, `Section analysis at {"plane":{"normal":[1,0,0],"origin":[10,0,0]}}`, `Section analysis off` | Section Analysis kept in the document (mitcad#41); the plane the bodies are cut at changed |
 | `Physical properties: Body1 volume … mass … center (…)` | the Properties dialog opened |
 | `Done <command>` | a model command panel's OK |
 | `Camera direction -0.577 0.577 -0.577 up … (orthographic)` | the camera came to rest after it moved (direction from the eye to the model) |
@@ -920,8 +1228,9 @@ SVG at several sizes (`themeIcon`).
 | `Orientation cube arrow up at x,y` (up, down, left, right, cw, ccw), `Orientation cube arrow cw`, `Orientation cube arrows hidden` | the cube's arrows: where they are when the view comes to rest face on, a click |
 | `Visual style Shaded with Hidden Edges`, `Camera perspective`, `Background #525761 #1f2126`, `Layout grid off`, `Snap to grid on`, `Grid spacing 10 mm` | display settings |
 | `Saved named view NamedView1`, `View NamedView1`, `Deleted named view …` | named views |
+| `Rendered view on`/`off`, `No render worker (mitcad-render) next to the application: no rendered view`, `Render worker started (pid <n>): <path of mitcad-render>`, `Render frame memory 1: 910 x 735` (debug; the frame memory's id and capacity), `Render worker ready: Cycles 5.3.0 on <CPU>`, `Render scene 1: 2 bodies, 1 meshes sent (F4.b0), 1 meshed, 0 released`, `Render scene 1 applied in 2.1 ms: received F4.b0; added -; changed F4.b0; moved -; removed -; kept 1; meshes 3; instanced 0`, `Render view 3: orthographic 728 x 588` (debug), `Render view 3: first frame (145 x 117) after 26 ms`, `Render view 3: first denoised frame (145 x 117, 1 samples) after 60 ms`, `Render frame view 3 728x588 samples 4 denoised covers x0,y0 x1,y1` (debug; what the frame's alpha covers, in view pixels; `denoised` for a denoised frame), `Render view 3: 64 samples in 2.91 s`, `Render worker stopped: <reason>`, `View message: <text>`, `Render worker ended` | View > Rendered (`MITCAD_RENDER` builds; `tools/ui-render-test.sh`) |
 | `Preferences opened: General, 640 x 330` (the page shown and the size the window asks for), `Preferences: navigation middle-orbit, zoom to cursor on, …, autosave every 5 min` (or `…, autosave off`), `Shortcut overview: 23 command shortcuts` | the dialogs |
-| `Section caps: 2 face(s) at {"normal":[1,0,0],"origin":[30,…]}` | the section's caps drawn (when they change) |
+| `Section caps: 2 face(s) at {"normal":[1,0,0],"origin":[30,…]}` | the caps of Section Analysis or Hide Above Sketch drawn (when they change) |
 | `Hide Above Sketch on`/`off`, `In front of the sketch plane: F2.b0 5.0, F5.b0 10.0` | the sketch palette's option; in sketch mode, how far each shown body reaches in front of the sketch plane (mm, when it changes; 0 or less once cut, a body cut away entirely is left out) |
 | `Export dialog: STEP AP214 (*.step) to <path>`, `Exported <path>: step, 1 body(ies), mm` (with occurrences `…, mm, design coordinates` or `component coordinates`), `Exported <path>: dxf, 4 entities` | export |
 | `3D Print dialog: 3 visible: Plate, Cube, Pin; format stl, refinement high, slicer Fake slicer (/path <files>); slicers None: … \| …`, `3D Print: left out Surface1 (a surface body)`, `3D Print: 3 bodies as stl (high) to <folder>: Plate.stl, Cube.stl, Pin.stl` (a body shown twice: `Pin (Pin_1).stl, Pin (Pin_2).stl`; 3MF: `parts.3mf`… per body `Plate 12 triangles, 1000.000 mm3`), `3D Print: started <program> <arguments>`, `3D Print: <slicer> did not start`, `3D Print: opened <folder>`, `3D Print cancelled`, `Preferences: slicer <slicer>` (or `automatic`) | 3D Print |
@@ -940,6 +1249,11 @@ SVG at several sizes (`themeIcon`).
 | `Diagnostics: memory 307830 of 8101298176 bytes (11 results), disk 11238 bytes (4 files), process 355545088 bytes; last recompute 5 evaluated, 0 from the store, 1 cached`, `Diagnostics: cleared memory: 7 results, 120000 bytes`, `Diagnostics: cleared disk: 4 files, 11238 bytes`, `Diagnostics report written to <path>` | Help › Diagnostics: shown or refreshed, Clear Memory, Clear Disk, Export Report |
 | `Version recorded: part.mitcad abc1234 v3: <summary>`, `Version unchanged: part.mitcad (v3)`, `Version not recorded: <why>`, `Version failed: <error>`, `Version warning: <warning>`, `Version status: bracket, main, v3` (`…, no version`; `none` outside projects with history; when it changes), `Version author: Name <email> (git)` (or `(settings)`), `Version author dialog: git's Name <email>` (`the settings' (git has …)`, `git has none`), `Version author dialog cancelled`, `Save Version dialog: <automatic message's summary>`, `Save Version cancelled`, `Save Version: no version history for part.mitcad`, `Save conflict: <path> changed outside Mitcad (the file)` (or `(a newer version)`), `Save conflict: compare: <the diff's lines joined by " \| ">`, `Save conflict: new version` (`save as`, `cancelled`), `Renamed from a.mitcad: its display state moved along` | saving versions: a commit and what it did, the status bar's label, the author, Save Version, a change outside Mitcad before Save, a rename followed at opening |
 | `Version History dialog: part.mitcad, reading its versions`, `Version History: 3 versions of part.mitcad: v3 abc1234 <summary> \| v2 … (renamed from a.mitcad)` (at most 30), `Version History changes: v3 <changes> \| v2 … \| v1 first version`, `Version History selected v2 (abc1234): preview` (or `no preview`), `Version History compare v2 with v1: <heading and text joined by " \| ">` (`with the open design`), `Version History geometry v2 with v1: computing`, `…: <text>`, `…: cancelled`, `Version History open v2 (abc1234)`, `Version History restore v2 (abc1234)`, `Version History save copy v2 (abc1234)`, `Version History closed`, `Version History failed: <error>`, `Version History: no version history for part.mitcad`, `Restore dialog: v2 (abc1234) of part.mitcad` (` (unsaved changes)`), `Restore cancelled`, `Restore: the unsaved changes dropped`, `Version restored: part.mitcad v2 (abc1234) as v4 (def5678)`, `Opened version v2 (abc1234) of part.mitcad as part v2`, `Save Copy As dialog: part v2.mitcad`, `Save Copy As cancelled`, `Saved a copy of part.mitcad v2 (abc1234) as <path>`, `Version preview saved: <blob's 7 digits> (256 x 160)` | Version History: the list, the changes, the selection and its comparison, the geometry, the choice; Restore, Open and Save Copy As; a version's preview |
+| `Appearances dialog opened`, `Appearances for bodies: F1.b0 (custom1)` (the bodies' shared appearance; `none` without bodies), `Appearances item chrome at x,y` (the list's rows in sight), `Appearances field roughness at x,y` (also `name`, `base_color`, `emission_color`: their text fields), `Appearances new at x,y` (`delete`, `assign`, `close`), `Appearance selected: chrome`, `Created appearance custom1 (Chrome Copy) from chrome`, `Appearance custom1 roughness = 0.35` (`base_color = #d02020`; `… refused: <why>`), `Assigned appearance custom1 to F1.b0` (faces: `F1.b0 F1:top`), `Deleted appearance custom1`; mitcad#53: `Appearances for faces: F1.b0 F1:top (paint_red)`, `Appearances field texture_path at x,y` (also `texture_width`, `texture_height`, `texture_rotation`, `texture_projection`, `texture_embed`, `texture_remove`), `Appearances face F1.b0 F1:top paint_red at x,y` (the listed face appearances), `Appearances clear_faces at x,y`, `Cleared face appearances of F1.b0 F1:top`, `Appearance checker texture embedded` (`not embedded`, `removed`, `path <path>`, `size [...]`), `Appearance lost texture missing: <why>` | Edit Appearances (`tools/ui-appearance-test.sh`, `tools/ui-render-faces-test.sh`); places in the main window's coordinates |
+| `Render body F1.b0: appearance plastic_red` (`default`; with faces of their own `…, 1 faces paint_red`), `Render textures not drawn: <appearance>: <why>` | the rendered view's scene: each body's appearance and its faces' (`tools/ui-render-materials-test.sh`, `tools/ui-render-faces-test.sh`) |
+| `Render image dialog opened`, `Render image field output.width at x,y` (every output field; also `camera`, `size`, `render`, `cancel`, `save`, `close`), `Render setting output.width = 320` (`output.size = 3840 x 2160` for a preset), `Render image camera Front` (`current view`), `Render image frame x y w h` (the image's frame in the view, main window coordinates; `Render image frame hidden`), `Render image started: 320 x 240, 8 samples, png, current view, 1 bodies (pid <n>)`, `Render image progress 4/8` (debug), `Render image preview (4 samples)` (debug), `Render image done: 320 x 240, 8 samples in 0.21 s`, `Render image cancelled`, `Render image failed: <reason>`, `Render image saved <path>` | File > Render Image (`tools/ui-render-image-test.sh`) |
+| `Render environment studio_dark, background view, ground shadows` (`environment`; `none`, `shadows and reflections`), `Render worker: environment studio_dark, 1 lights` (debug), `Render environment dialog opened`, `Render settings field film.exposure at x,y` (every field by its section and name, also `environment.image`, `background.color`, `ground.lowest`; a check box at its box), `Render settings rendered at x,y` (`reset`, `close`, `page environment`, `page lights`), `Render settings page lights` (the page shown; the places are logged again), `Render setting environment.preset = studio_dark` (`… refused: <why>`), `Render settings reset`, `Render light field power at x,y` (`list`, `new`, `add`, `delete`, `name`, `type`, `enabled`, `camera`, `position.0`…`direction.2`, `color`, `size`, `size_y`, `shape`, `spot_angle`, `spot_blend`, `angle`, `distance`, `aim`, `from_camera`), `Render light light1 added (point)`, `Render light light1 power = 25` (`… refused: <why>`; `space = camera`, `placed at the camera`, `aimed at a face`), `Render light light1: click a face to aim at`, `Render light light1 aimed at x, y, z (normal x, y, z)`, `Render light aim: no face there`, `Render light light1 deleted`, `Render light glyph light1 at x,y` (`tools/ui-render-lights-test.sh`), the environment's ending `, 1 lights` (`, 2 lights (1 off)`), `View message: Rendering: cannot read the environment image <path>: <why>; the studio lights the scene instead.` | the render settings: an environment sent to the worker, Render Environment's places (main window coordinates) and changes, an image the worker cannot read (`tools/ui-render-environment-test.sh`) |
+| `Send Feedback: the form shows`, `Feedback screenshot 1280x800`, `Feedback screenshot image at x,y`, `Feedback screenshot image size w h`, `Report screenshot cropped to 568x402`, `Feedback form: kind bug, summary '<s>', description 42 characters, contact given, diagnostics on, screenshot 568x402`, `Send Feedback cancelled`, `Report preview: <title>`, `Report section <id>: <text, lines joined by " \| ">`, `Report section <id> at x,y` (its check box), `Report text <id> at x,y` (its text), `Report key: mitcad-<key>`, `Report section <id> included` (`left out`), `Report not sent: the preview was cancelled`, `Report sent: '<title>', sections description, contact; link 812 characters`, `Report on the clipboard: <n> characters (too long for the link)`, `Report screenshot saved: <path> 568x402`, `Open URL (test, not opened): <url>`; `Internal error (<context>): <masked message>; key mitcad-<key>`, `Crash report of this application's import-worker: SIGSEGV <file>`, `Crash reports of earlier runs: 1, the newest SIGSEGV of the app`, `Error report offered (crash): <message>; key mitcad-<key>` (`worker-crash`, `error`), `Error report no more offers at x,y`, `Error reports: no more offers`, `Error report declined`, `Error report not offered (turned off): <message>`, `Crashing for a test (MITCAD_TEST_CRASH=app)`; on standard error of a crashed process `Mitcad crashed: SIGSEGV; crash report: <file>` | feedback and error reports (`tools/ui-report-test.sh`); places in the main window's coordinates |
 | `Sync 12` | with `MITCAD_TEST_SYNC=1` (the Linux UI tests): the answer to the Pause key (`ui_sync`), once the input before it is handled, at least 20 ms after it and when no watched timer runs (`framework/TestSync.hpp`) |
 | `New Project dialog: <folder offered>`, `New Project cancelled`, `New project inside the git repository <root>`, `Version history started in <root>: version abc1234 on main`, `New project <folder>`, `Start Version History dialog: <folder>` (` (a repository)`, ` (inside <root>)`; `: the project <root>`), `Start Version History: part.mitcad has version history already`, `Start Version History cancelled`, `Moved <path> to <path>`, `Preferences: versions by git's user, else Name <email>` (or `Name <email>`, `nobody`) | New Project, Start Version History, Preferences' author |
 | `Updates: Mitcad 0.0.0 for linux-x64, the AppImage <path>` (`installed in <folder>`, `announce only: <why>`), `Automatic update checks are off`, `Update checks are turned off by the administrator`, `Update check: the last was at <time>`, `Update check: manifest at <url>` (`releases at <url>`), `Update request redirected to https://<host>`, `Update manifest: Mitcad 0.1.0 of 2026-10-06 (available), 214 bytes for linux-x64`, `Update check: Mitcad 0.0.1 is up to date`, `Update notice (offer): <text> [Release Notes, Install, Skip This Version, Later]` (`(progress)`, `(message)`, `(error)`), `Update notice closed`, `Update: skipping Mitcad 0.1.0`, `Update download: <url> (<n> bytes) to <path>`, `Update verified: <path>`, `Update rejected: <reason> (deleted <path>)`, `Update staged: 0.0.0 -> 0.1.0, <program> when Mitcad has quit`, `Update: replaced <AppImage>`, `Update: started <program> (process <pid>)`, `Update installed: 0.0.0 -> 0.1.0` (`Update not installed: …`), `Update failed: <reason>`, `Preferences: update checks on, channel stable` | automatic updates ([docs/updates.md](../docs/updates.md); `tools/ui-update-test.sh`) |

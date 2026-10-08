@@ -12,6 +12,7 @@
 #include <TopoDS_Shape.hxx>
 #include <gp_Ax3.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
 #include "../OcctViewer.hpp"
@@ -21,6 +22,10 @@ namespace mitcad {
 
 gp_Pnt pointOf(const QJsonValue& xyz);
 gp_Vec vectorOf(const QJsonValue& xyz);
+
+// A placement of the model's queries: 3 or 4 rows of 4 numbers.
+gp_Trsf trsfOf(const QJsonArray& rows);
+bool isIdentity(const QJsonArray& rows);
 
 // A datum of the `datums` query: a plane as a square of `size`, an axis as a
 // line of `size` through its origin, a point as a vertex.

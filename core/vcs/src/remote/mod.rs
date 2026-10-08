@@ -480,7 +480,7 @@ fn log_line(args: &[&str], result: &Result<GitOutput, RemoteError>) -> String {
 }
 
 /// Runs git, logging the command, and fails with `what` when git fails.
-fn run_logged(
+pub(crate) fn run_logged(
     git: &GitCli,
     dir: &Path,
     args: &[&str],
@@ -679,6 +679,10 @@ impl ProjectRepo {
                 .parent()
                 .map_or_else(|| self.root.clone(), Path::to_path_buf);
             for component in design["components"].as_array().into_iter().flatten() {
+                // Library parts are read from their libraries (mitcad#64).
+                if !component["library"].is_null() {
+                    continue;
+                }
                 let Some(path) = component["link"]["path"].as_str() else {
                     continue;
                 };

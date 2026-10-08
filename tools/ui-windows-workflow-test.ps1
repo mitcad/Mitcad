@@ -39,6 +39,10 @@
 #      rule; a counterdrilled, tapered hole as the FreeCAD import writes
 #      one opens from the timeline (a double-click), and a typed taper keeps
 #      its counterdrill.
+#  13. Joints (mitcad#55) on a design mitcad-cli makes: a pin on a revolute
+#      joint dragged in the view turns about its joint (one undo step); Joint
+#      (J) puts a cap's top face onto a plate's, flipped, the preview showing
+#      the cap where it goes.
 # Commands without a default shortcut get one in the test's settings
 # (popups such as the command search close at once in session 0).
 # Mitcad runs with Mesa's software OpenGL (MITCAD_MESA_DIR) in session 0
@@ -461,5 +465,74 @@ $rb = 3.3 - 20 * $lean
 $hole = [Math]::PI * (5.5 * 5.5 * 3 + ($cone - 3) / 3 * (5.5 * 5.5 + 5.5 * $rc + $rc * $rc) +
   (20 - $cone) / 3 * ($rc * $rc + $rc * $rb + $rb * $rb))
 Ui-ExpectVolume 'Body \S+ \(F2\.b0\): volume [0-9.]+ -> ([0-9.]+) mm3' (48000 - $hole) 'still counterdrilled, tapered 1 degree'
+
+Write-Host '--- Joints (mitcad#55): a drag in the view, a joint from its panel'
+# The design: Plate:1 (a 40 x 40 x 10 block, grounded), Pin:1 (10 x 10 x 20)
+# on a revolute joint on the plate's top at rest 30 degrees (Joint1 F7),
+# Cap:1 (10 x 10 x 5) at y = 100.
+$jointsScript = Join-Path $work 'joints.json'
+$joints = Join-Path $work 'joints.mitcad'
+Set-Content -Encoding ascii $jointsScript (@'
+[
+  {"cmd": "create_component", "name": "Plate"},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "RECT"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "create_component", "name": "Pin", "transform": {"translation": [100, 0, 0]}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [0, 0], "width": 10, "height": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F3", "region": "RECT"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "create_component", "name": "Cap", "transform": {"translation": [0, 100, 0]}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F5", "corner": [0, 0], "width": 10, "height": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F5", "region": "RECT"}],
+    "extent": {"type": "distance", "distance": 5}, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "ground_occurrence", "occurrence": "Plate:1"},
+  {"cmd": "add_joint", "kind": "revolute", "flip": true,
+    "a": {"occurrence": "Pin:1", "geometry": {"body": "F4.b0", "face": "F4:end(RECT)"}},
+    "b": {"occurrence": "Plate:1", "geometry": {"body": "F2.b0", "face": "F2:end(RECT)"}},
+    "limits": {"rz": {"min": "-90 deg", "max": "90 deg", "rest": "30 deg"}}}
+]
+'@ -creplace 'RECT', 'r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}')
+$made = & $cli run $jointsScript --save $joints
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $joints)) { Ui-Fail "mitcad-cli: $($made -join ' / ')" }
+Ui-StartApp 'joints' @('--open', $joints)
+Ui-ExpectLog "Opened $workLogged/joints.mitcad" 'the design opened'
+Ui-ExpectLog 'Browser joints: Joint1 placed' 'the browser lists the joint'
+Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
+Ui-ExpectLog 'Body F4.b0 in O2 at' 'the pin is shown'
+Ui-Mark
+$pin = Ui-LoggedAt 'Body F4.b0 in O2'
+Ui-Step 'drag the pin sideways'          { Ui-Drag $pin[0] $pin[1] ($pin[0] + 80) $pin[1] }
+Ui-ExpectNew 'Drag of Pin:1 started' 'the drag takes the pin'
+Ui-ExpectNew 'Dragged Pin:1 to (' 'the drag kept'
+$turn = Ui-LastMatch 'Dragged Pin:1 to \([^)]*\): Joint1 rz ([-0-9.]+) deg'
+if ($null -eq $turn) { Ui-Fail 'the drag did not turn Joint1' }
+$turn = [double]::Parse($turn, $invariant)
+if ([Math]::Abs($turn - 30) -lt 1 -or $turn -lt -90 -or $turn -gt 90) { Ui-Fail "the drag left Joint1 at $turn degrees" }
+Write-Host "ok   Joint1 turned to $turn degrees, within its limits"
+Ui-Mark
+Ui-Step 'undo the drag (Ctrl+Z)'         { Ui-Key 'ctrl+z' }
+Ui-ExpectNew 'Undo: Drag Pin:1' 'the drag is one undo step'
+Ui-Mark
+Ui-Step 'joint (J)'                      { Ui-Key 'j' }
+Ui-ExpectNew 'Command Joint started' 'Joint started'
+Ui-ExpectNew 'Pick places:' 'Joint logs where its picks are'
+Ui-Step "pick the cap's top face"        { Ui-ClickPick 'face F6.b0/F6:end(' }
+Ui-ExpectLog 'Joint Origin A: 1 face [face F6:end(' "origin A on the cap"
+Ui-Step "pick the plate's top face"      { Ui-ClickPick 'face F2.b0/F2:end(' }
+Ui-ExpectLog 'Joint Origin B: 1 face [face F2:end(' "origin B on the plate"
+Ui-Step 'flip'                           { Ui-ClickLogged 'Panel Joint input flip' }
+Ui-ExpectLog 'Joint: Flip = on' 'flipped: the faces meet'
+Ui-ExpectLog 'Preview Joint moves O3' 'the preview shows the cap where the joint puts it'
+Ui-Mark
+Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
+Ui-ExpectNew 'Added joint Joint2 (rigid): placed, moved O3' 'the cap placed by the joint'
+Ui-ExpectNew 'Browser joints: Joint1 placed, Joint2 placed' 'the browser lists both joints'
 
 Ui-Finish 'UI Windows workflow test'

@@ -96,10 +96,161 @@ fn current_names(reference: &Value) -> Value {
 
 /// Fields this decoder writes beyond the reference decoder: the light
 /// bulbs of sketches and construction planes (mitcad#6), checked against
-/// the dumps of the reference models instead (`design_models.rs`).
+/// the dumps of the reference models instead (`design_models.rs`), and an
+/// extrusion's direction vector.
 const DECODER_ONLY: &[&str] = &[
     ".timeline.items[].props",
     ".timeline.items[]._f3d.light_bulb",
+    // Fillet and chamfer edges by their names (mitcad#33), checked against
+    // the reference models' dumps (`design_models.rs`).
+    ".timeline.items[].detail.edgeSets[].edges",
+    // Construction and centre lines (mitcad#33), likewise.
+    ".timeline.items[].detail.curves[].isConstruction",
+    ".timeline.items[].detail.curves[].isCenterLine",
+    // Driven sketch dimensions (mitcad#33).
+    ".timeline.items[].detail.dimensions[].isDriving",
+    // Bodies of moves, splits, patterns and mirrors, a move's transform and
+    // a split's plane (mitcad#33).
+    ".timeline.items[].detail.inputEntities",
+    ".timeline.items[].detail.transform",
+    ".timeline.items[].detail.splitBodies",
+    ".timeline.items[].detail.splittingTool",
+    // An extrusion's direction vector (mitcad#42).
+    ".timeline.items[]._f3d.extrude.direction_vector",
+    // Offset and pattern constraints' values and curves (mitcad#36).
+    ".timeline.items[].detail.constraints[].props",
+    // Threads, their faces and tapped holes' threads (mitcad#35).
+    ".timeline.items[].detail.threadInfo",
+    ".timeline.items[].detail.isModeled",
+    ".timeline.items[].detail.isFullLength",
+    ".timeline.items[].detail.inputCylindricalFaces",
+    ".timeline.items[].detail.threadLocation",
+    ".timeline.items[].detail.holeTapType",
+    ".timeline.items[].detail.tappedHoleInfo",
+    ".timeline.items[].detail.thread",
+    // Types of the timeline items the reference decoder does not know, and
+    // the names of timeline groups (mitcad#43).
+    ".timeline.items[].objectType",
+    ".parameters.model[].createdBy.objectType",
+    ".timeline.items[].name",
+    // The component that owns each item (mitcad#37), checked against the
+    // reference models' dumps (`design_models.rs`).
+    ".timeline.items[].component",
+    ".timeline.items[]._f3d.component",
+    // Inputs of sweeps, pipes and lofts (mitcad#34), checked against the
+    // reference models' dumps (`design_models.rs`).
+    ".timeline.items[].detail.operation",
+    ".timeline.items[].detail.profile",
+    ".timeline.items[].detail.path",
+    ".timeline.items[].detail.guideRail",
+    ".timeline.items[].detail.guideSurfaces",
+    ".timeline.items[].detail.loftSections",
+    ".timeline.items[].detail.centerLineOrRails",
+    ".timeline.items[].detail.centerLineOrRails.isCenterLine",
+    // What joints, as-built joints, joint origins and ground items say
+    // (mitcad#66); the reference models have no joints.
+    ".timeline.items[].detail._f3d",
+    ".timeline.items[].detail.geometryOrOriginOne",
+    ".timeline.items[].detail.geometryOrOriginTwo",
+    ".timeline.items[].detail.geometry",
+    ".timeline.items[].detail.occurrenceOne",
+    ".timeline.items[].detail.occurrenceTwo",
+    ".timeline.items[].detail.occurrence",
+    ".timeline.items[].detail.jointMotion",
+    ".timeline.items[].detail.angle",
+    ".timeline.items[].detail.offset",
+    ".timeline.items[].detail.offsetX",
+    ".timeline.items[].detail.offsetY",
+    ".timeline.items[].detail.isFlipped",
+    ".occurrences[].isGrounded",
+    // Combines, splits, patterns, mirrors and holes (mitcad#67), checked
+    // against the reference models' dumps (`design_models.rs`).
+    ".timeline.items[].detail.targetBody",
+    ".timeline.items[].detail.toolBodies",
+    ".timeline.items[].detail.isKeepToolBodies",
+    ".timeline.items[].detail.isSplittingToolExtended",
+    ".timeline.items[].detail.patternEntityType",
+    ".timeline.items[].detail.mirrorPlane",
+    ".timeline.items[].detail.axis",
+    ".timeline.items[].detail.directionOneEntity",
+    ".timeline.items[].detail.directionTwoEntity",
+    ".timeline.items[].detail.directionOne",
+    ".timeline.items[].detail.directionTwo",
+    ".timeline.items[].detail.holeType",
+    ".timeline.items[].detail.position",
+    ".timeline.items[].detail._f3d_positions",
+    ".timeline.items[].detail.counterboreDiameter",
+    ".timeline.items[].detail.counterboreDepth",
+    ".timeline.items[].detail.extentDefinition",
+    // Captured positions and the occurrences that occurrence items made
+    // (mitcad#75; `.detail.occurrence` is above).
+    ".timeline.items[].detail.positions",
+    // Where the timeline's items put each occurrence, and rigid groups'
+    // members (mitcad#81), checked against the joint test model's dump
+    // (`design_models.rs`).
+    ".occurrences[]._f3d.placements",
+    ".occurrences[].children[]._f3d.placements",
+    ".occurrences[].children[].children[]._f3d.placements",
+    ".occurrences[].children[].children[].children[]._f3d.placements",
+    ".timeline.items[].detail.occurrences",
+];
+
+/// Fields this decoder fills where the reference decoder has an empty
+/// text: the names of occurrence items, after their component
+/// (mitcad#43).
+const NAMED: &[&str] = &[".timeline.items[].name"];
+
+/// Values this decoder gives where the reference decoder has none:
+/// (field, this decoder's value). Offset dimensions (mitcad#36), which
+/// refer to one curve.
+const ADDED: &[(&str, &str)] = &[
+    (
+        ".timeline.items[].detail.dimensions[].type",
+        "SketchOffsetCurvesDimension",
+    ),
+    (
+        ".parameters.model[].createdBy.objectType",
+        "SketchOffsetCurvesDimension",
+    ),
+];
+
+/// Values this decoder tells apart where the reference decoder does not:
+/// (field, this decoder's value, the reference's). Offset dimensions that
+/// measure a diameter about a line (mitcad#33).
+const REFINED: &[(&str, &str, &str)] = &[
+    // Rigid groups, which the file stores as as-built joints (mitcad#81).
+    (".timeline.items[].objectType", "RigidGroup", "AsBuiltJoint"),
+    (
+        ".timeline.items[].detail.dimensions[].type",
+        "SketchLinearDiameterDimension",
+        "SketchOffsetDimension",
+    ),
+    (
+        ".parameters.model[].createdBy.objectType",
+        "SketchLinearDiameterDimension",
+        "SketchOffsetDimension",
+    ),
+    // The distances of offsets (mitcad#36).
+    (
+        ".timeline.items[].detail.dimensions[].type",
+        "SketchOffsetCurvesDimension",
+        "SketchOffsetDimension",
+    ),
+    (
+        ".parameters.model[].createdBy.objectType",
+        "SketchOffsetCurvesDimension",
+        "SketchOffsetDimension",
+    ),
+    (
+        ".timeline.items[].detail.dimensions[].type",
+        "SketchOffsetCurvesDimension",
+        "SketchConcentricCircleDimension",
+    ),
+    (
+        ".parameters.model[].createdBy.objectType",
+        "SketchOffsetCurvesDimension",
+        "SketchConcentricCircleDimension",
+    ),
 ];
 
 fn leaves(v: &Value) -> usize {
@@ -143,6 +294,8 @@ impl Agreement {
                             self.note(&f, false, n, || format!("{label}: {p} missing: {y}"));
                         }
                         (Some(_), None) if DECODER_ONLY.contains(&f.as_str()) => {}
+                        (Some(x), None)
+                            if ADDED.iter().any(|(field, v)| *field == f && x == *v) => {}
                         (Some(x), None) => {
                             let n = leaves(x);
                             self.extra += n;
@@ -177,7 +330,13 @@ impl Agreement {
                 }
             }
             (x, y) => {
-                let ok = x == y;
+                let refined = REFINED
+                    .iter()
+                    .any(|(f, r, reference)| *f == field && x == *r && y == *reference);
+                let named = NAMED.contains(&field)
+                    && y.as_str() == Some("")
+                    && x.as_str().is_some_and(|n| !n.is_empty());
+                let ok = x == y || refined || named;
                 if ok {
                     self.equal += 1;
                 } else {

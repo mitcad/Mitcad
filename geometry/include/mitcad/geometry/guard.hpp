@@ -16,8 +16,10 @@ namespace mitcad::geometry {
 // Installs OCCT's handlers for the process (OSD::SetSignal without
 // floating point traps; Ctrl+C keeps its default); later calls do nothing.
 // On Windows the handler is per thread: call it from the thread that runs
-// the operations. On Linux it is the process's: a crash on another thread
-// then becomes an exception there, where it is not always caught.
+// the operations. On Linux and macOS the handlers are the process's: a crash
+// outside an operation that catches it (OCC_CATCH_SIGNALS, on any thread)
+// goes to the handler installed before the first call (the application's
+// crash report, mitcad#62), or crashes as without OCCT's.
 void catch_occt_crashes();
 
 } // namespace mitcad::geometry

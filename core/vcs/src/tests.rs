@@ -18,6 +18,8 @@ use super::*;
 mod remote;
 // Sync and conflicts.
 mod sync;
+// Component libraries and the community library (mitcad#64, mitcad#63).
+mod library;
 
 /// A fresh folder in the temporary directory, removed afterwards.
 struct Scratch(PathBuf);

@@ -6,7 +6,9 @@
 //! Mitcad's bodies should equal one of the next states (volume, area and
 //! centre of every solid). That picks profiles and edges the stream decoder
 //! does not identify, and when a feature cannot be replayed, the state
-//! after it is the body its fallback base feature holds.
+//! after it is the body its fallback base feature holds. A state's sheets
+//! (surface bodies) are kept apart: they take no part in the matching and
+//! come in with the fallbacks ([`Oracle::sheets`]).
 
 use mitcad_model::{BodyKind, Kernel};
 
@@ -54,6 +56,17 @@ pub trait StoredGeometry<S> {
     fn component_names(&mut self) -> std::collections::HashMap<u64, String> {
         std::collections::HashMap::new()
     }
+    /// The components (object ids) whose bodies a history blob of their
+    /// own holds; None when every component's are (or it is not known).
+    fn history_components(&mut self) -> Option<std::collections::HashSet<u64>> {
+        None
+    }
+    /// Drops what was built for the states before `state` alone, to be
+    /// built again if they are asked for (mitcad#80: the process runs low
+    /// on memory, and the import has gone past them).
+    fn release_before(&mut self, state: usize) {
+        let _ = state;
+    }
 }
 
 /// No bodies: an external dump without its `.f3d`.
@@ -95,7 +108,11 @@ pub(crate) const CONVENTIONS: f64 = 5e-3;
 
 impl Sig {
     /// The signature of a solid; None for sheets, meshes and empty shapes.
+    /// (Kernel calls: the import's loops over many bodies measure them, a
+    /// minute and more for large states, so it ticks the watchdog,
+    /// mitcad#82.)
     pub fn of<K: Kernel>(kernel: &K, shape: &K::Shape) -> Option<Sig> {
+        crate::tick();
         match kernel.body_kind(shape) {
             Ok(BodyKind::Solid) | Err(_) => {}
             Ok(_) => return None,
@@ -130,6 +147,41 @@ impl Sig {
 
     pub fn matches(&self, other: &Sig) -> bool {
         self.distance(other) <= RELATIVE
+    }
+}
+
+/// What identifies a sheet (a surface body, `isSolid` false): its area
+/// (mm²) and centre. Sheets take no part in matching the replay with the
+/// history; they come in as stored bodies (see `Importer::replace_bodies`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SheetSig {
+    pub area: f64,
+    pub center: [f64; 3],
+}
+
+impl SheetSig {
+    /// The signature of a sheet; None for solids, meshes and empty shapes.
+    /// (Ticks the watchdog, as [`Sig::of`] does.)
+    pub fn of<K: Kernel>(kernel: &K, shape: &K::Shape) -> Option<SheetSig> {
+        crate::tick();
+        if kernel.body_kind(shape).ok()? != BodyKind::Sheet {
+            return None;
+        }
+        let m = kernel.mass_properties(shape).ok()?;
+        (m.area.is_finite() && m.area > 1e-9).then_some(SheetSig {
+            area: m.area,
+            center: m.center,
+        })
+    }
+
+    /// The same sheet: area and centre within [`EXACT`].
+    pub fn same(&self, other: &SheetSig) -> bool {
+        let size = self.area.max(other.area).sqrt().max(1e-3);
+        let d = (0..3)
+            .map(|i| (self.center[i] - other.center[i]).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        (self.area - other.area).abs() <= EXACT * self.area.max(other.area) && d <= EXACT * size
     }
 }
 
@@ -193,28 +245,42 @@ pub fn same_bodies(a: &[Sig], b: &[Sig]) -> bool {
 /// built twice. Looser ones (up to [`RELATIVE`]) are approximations, such
 /// as fillets that ASM stores as splines; a small fillet changes a body's
 /// measures less than that, but not its faces.
-const EXACT: f64 = 1e-5;
+pub(crate) const EXACT: f64 = 1e-5;
 
 /// The solids of a state with their signatures.
 type Measured<S> = Vec<(StoredBody<S>, Sig)>;
+
+/// The sheets of a state with their signatures.
+pub type Sheets<S> = Vec<(StoredBody<S>, SheetSig)>;
 
 /// The history states with their signatures, built as they are needed.
 pub struct Oracle<'g, S> {
     geometry: &'g mut dyn StoredGeometry<S>,
     states: Vec<Option<Measured<S>>>,
+    /// The sheets of the states built (mitcad#35).
+    sheets: Vec<Sheets<S>>,
     /// Signatures by body id (None: not a solid).
     measured: std::collections::HashMap<u64, Option<Sig>>,
+    /// Sheet signatures by body id (None: not a sheet).
+    measured_sheets: std::collections::HashMap<u64, Option<SheetSig>>,
     /// The state the replay matches now; None before the first match.
     pub cursor: Option<usize>,
     /// States built so far.
     pub built: usize,
     /// How many states ahead of the cursor a search looks.
     pub window: usize,
+    /// The first state a search does not look at (exclusive): set while an
+    /// item without a state of its own is replayed, to the state of the
+    /// next item that has one, which that item made (mitcad#37).
+    pub limit: Option<usize>,
     /// Off when there is no history or it turned out not to fit the
     /// timeline.
     pub enabled: bool,
     /// States that could not be built, with the reason.
     broken: std::collections::HashMap<usize, String>,
+    /// States whose bodies were dropped ([`Oracle::release_behind`]): built
+    /// again, they do not count as built once more.
+    released: std::collections::HashSet<usize>,
 }
 
 impl<'g, S: Clone> Oracle<'g, S> {
@@ -223,12 +289,16 @@ impl<'g, S: Clone> Oracle<'g, S> {
         Self {
             geometry,
             states: (0..count).map(|_| None).collect(),
+            sheets: (0..count).map(|_| Vec::new()).collect(),
             measured: std::collections::HashMap::new(),
+            measured_sheets: std::collections::HashMap::new(),
             cursor: None,
             built: 0,
             window: 32,
+            limit: None,
             enabled: count > 0,
             broken: std::collections::HashMap::new(),
+            released: std::collections::HashSet::new(),
         }
     }
 
@@ -246,6 +316,32 @@ impl<'g, S: Clone> Oracle<'g, S> {
     /// How many states asked for could not be built.
     pub fn unbuilt(&self) -> usize {
         self.broken.len()
+    }
+
+    /// How many states' bodies are kept (built, not released).
+    pub fn kept(&self) -> usize {
+        self.states.iter().filter(|s| s.is_some()).count()
+    }
+
+    /// Drops the bodies of the states before the replay's (the cursor's),
+    /// and what the stored geometry built for them alone; their signatures
+    /// stay, and their bodies are built again if they are asked for
+    /// (mitcad#80: the process runs low on memory). The number of states
+    /// whose bodies were dropped.
+    pub fn release_behind(&mut self) -> usize {
+        let Some(cursor) = self.cursor else {
+            return 0;
+        };
+        let mut dropped = 0;
+        for i in 0..cursor.min(self.states.len()) {
+            if self.states[i].take().is_some() {
+                self.released.insert(i);
+                dropped += 1;
+            }
+            self.sheets[i] = Vec::new();
+        }
+        self.geometry.release_before(cursor);
+        dropped
     }
 
     /// The state the timeline item `index` made, if known and not behind
@@ -275,23 +371,48 @@ impl<'g, S: Clone> Oracle<'g, S> {
                     return Err(e);
                 }
             };
-            self.built += 1;
+            if !self.released.remove(&index) {
+                self.built += 1;
+            }
             let measured = &mut self.measured;
-            let solids = bodies
-                .into_iter()
-                .filter_map(|b| {
-                    let sig = match b.id {
-                        Some(id) => *measured
-                            .entry(id)
-                            .or_insert_with(|| Sig::of(kernel, &b.shape)),
-                        None => Sig::of(kernel, &b.shape),
-                    };
-                    sig.map(|s| (b, s))
-                })
-                .collect();
+            let measured_sheets = &mut self.measured_sheets;
+            let mut solids = Vec::new();
+            let mut sheets = Vec::new();
+            for b in bodies {
+                let sig = match b.id {
+                    Some(id) => *measured
+                        .entry(id)
+                        .or_insert_with(|| Sig::of(kernel, &b.shape)),
+                    None => Sig::of(kernel, &b.shape),
+                };
+                if let Some(s) = sig {
+                    solids.push((b, s));
+                    continue;
+                }
+                let sheet = match b.id {
+                    Some(id) => *measured_sheets
+                        .entry(id)
+                        .or_insert_with(|| SheetSig::of(kernel, &b.shape)),
+                    None => SheetSig::of(kernel, &b.shape),
+                };
+                if let Some(s) = sheet {
+                    sheets.push((b, s));
+                }
+            }
             self.states[index] = Some(solids);
+            self.sheets[index] = sheets;
         }
         Ok(self.states[index].as_deref().expect("built"))
+    }
+
+    /// The sheets of a state (built as [`Oracle::state`] builds it).
+    pub fn sheets<K: Kernel<Shape = S>>(
+        &mut self,
+        kernel: &K,
+        index: usize,
+    ) -> Result<&[(StoredBody<S>, SheetSig)], String> {
+        self.state(kernel, index)?;
+        Ok(&self.sheets[index])
     }
 
     /// The signatures of a state's solids; none when it cannot be built.
@@ -343,9 +464,14 @@ impl<'g, S: Clone> Oracle<'g, S> {
         exact: bool,
         tolerance: f64,
     ) -> Option<(usize, f64)> {
-        let end = self.states.len().min(from.saturating_add(self.window));
+        let end = self
+            .states
+            .len()
+            .min(from.saturating_add(self.window))
+            .min(self.limit.unwrap_or(usize::MAX));
         let mut best: Option<(f64, usize)> = None;
         for i in from..end {
+            crate::tick();
             let Some(state) = self.try_sigs(kernel, i) else {
                 continue;
             };
@@ -373,7 +499,11 @@ impl<'g, S: Clone> Oracle<'g, S> {
         span: usize,
         current: &[Sig],
     ) -> Option<usize> {
-        let end = self.states.len().min(from.saturating_add(span));
+        let end = self
+            .states
+            .len()
+            .min(from.saturating_add(span))
+            .min(self.limit.unwrap_or(usize::MAX));
         for i in from..end {
             let state = self.sigs(kernel, i);
             if state.len() > current.len() && contains_all(&state, current) {
@@ -400,6 +530,11 @@ impl<'g, S: Clone> Oracle<'g, S> {
     /// See [`StoredGeometry::item_components`].
     pub fn item_components(&mut self, index: i64) -> Option<Vec<u64>> {
         self.geometry.item_components(index)
+    }
+
+    /// See [`StoredGeometry::history_components`].
+    pub fn history_components(&mut self) -> Option<std::collections::HashSet<u64>> {
+        self.geometry.history_components()
     }
 
     /// See [`StoredGeometry::component_names`].

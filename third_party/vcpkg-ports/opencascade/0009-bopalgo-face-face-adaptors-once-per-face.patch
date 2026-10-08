@@ -1,0 +1,103 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+BOPAlgo_PaveFiller::PerformFF: each face/face pair is intersected in an
+IntTools_Context of its own, which built the surface adaptors of both faces
+(IntTools_Context::SurfaceAdaptor, restricted to the UV bounds of the face,
+BRepTools::UVBounds, which goes through all edges of the face) for every
+pair: a face with thousands of edges paired with many faces took seconds to
+minutes. The adaptor of each face is built once and the context of each
+pair gets a shallow copy of it (the new IntTools_Context::SetSurfaceAdaptor);
+the copies are what the contexts built before, so the result is unchanged.
+diff --git a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx
+index ac522f5..8611aaa 100644
+--- a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx
++++ b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx
+@@ -361,6 +361,11 @@ void BOPAlgo_PaveFiller::PerformFF(const Message_ProgressRange& theRange)
+ 
+   // Prepare the pairs of faces for intersection
+   BOPAlgo_VectorOfFaceFace aVFaceFace;
++  // Each pair is intersected in a context of its own. The surface adaptors of
++  // the faces (restricted to their UV bounds, which go through all edges of a
++  // face) are built once per face here and copied into the contexts of its
++  // pairs, instead of once per pair: never evaluated, only copied.
++  NCollection_DataMap<int, occ::handle<BRepAdaptor_Surface>> aMFaceAdaptor;
+   myIterator->Initialize(TopAbs_FACE, TopAbs_FACE);
+   for (; myIterator->More(); myIterator->Next())
+   {
+@@ -505,6 +510,25 @@ void BOPAlgo_PaveFiller::PerformFF(const Message_ProgressRange& theRange)
+       //
+       aFaceFace.SetParameters(bApprox, bCompC2D1, bCompC2D2, anApproxTol);
+       aFaceFace.SetFuzzyValue(myFuzzyValue);
++      //
++      // The pair's own context, with the adaptors of its faces (a face moved
++      // above gets its adaptor built there, as before).
++      occ::handle<IntTools_Context> aPairContext = new IntTools_Context;
++      for (const int nF : {nF1, nF2})
++      {
++        const TopoDS_Face& aF = (*(TopoDS_Face*)(&myDS->Shape(nF)));
++        if (!(nF == nF1 ? aFShifted1 : aFShifted2).IsEqual(aF))
++        {
++          continue;
++        }
++        occ::handle<BRepAdaptor_Surface>* pAdaptor = aMFaceAdaptor.ChangeSeek(nF);
++        if (pAdaptor == nullptr)
++        {
++          pAdaptor = aMFaceAdaptor.Bound(nF, new BRepAdaptor_Surface(aF, true));
++        }
++        aPairContext->SetSurfaceAdaptor(aF, **pAdaptor);
++      }
++      aFaceFace.SetContext(aPairContext);
+     }
+     else
+     {
+diff --git a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.cxx b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.cxx
+index ad2f8e1..e53ec8d 100644
+--- a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.cxx
++++ b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.cxx
+@@ -340,6 +340,25 @@ BRepAdaptor_Surface& IntTools_Context::SurfaceAdaptor(const TopoDS_Face& theFace
+ 
+ //=================================================================================================
+ 
++void IntTools_Context::SetSurfaceAdaptor(const TopoDS_Face&         theFace,
++                                         const BRepAdaptor_Surface& theAdaptor)
++{
++  if (mySurfAdaptorMap.IsBound(theFace))
++  {
++    return;
++  }
++  const occ::handle<BRepAdaptor_Surface> aCopy =
++    occ::down_cast<BRepAdaptor_Surface>(theAdaptor.ShallowCopy());
++  //
++  BRepAdaptor_Surface* pBAS =
++    (BRepAdaptor_Surface*)myAllocator->Allocate(sizeof(BRepAdaptor_Surface));
++  new (pBAS) BRepAdaptor_Surface(*aCopy);
++  //
++  mySurfAdaptorMap.Bind(theFace, pBAS);
++}
++
++//=================================================================================================
++
+ Geom2dHatch_Hatcher& IntTools_Context::Hatcher(const TopoDS_Face& aF)
+ {
+   Geom2dHatch_Hatcher* pHatcher = nullptr;
+diff --git a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.hxx b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.hxx
+index 300aa8e..1c78357 100644
+--- a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.hxx
++++ b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.hxx
+@@ -86,6 +86,15 @@ public:
+   //! Returns a reference to surface adaptor for given face
+   Standard_EXPORT BRepAdaptor_Surface& SurfaceAdaptor(const TopoDS_Face& theFace);
+ 
++  //! Stores a shallow copy of theAdaptor as the surface adaptor of the face,
++  //! unless the face has one already. theAdaptor must be the adaptor
++  //! SurfaceAdaptor() would build, BRepAdaptor_Surface(theFace, true), and
++  //! not evaluated yet (no evaluation caches to share). Lets contexts made
++  //! for the same face share the computation of its UV bounds, which goes
++  //! through all edges of the face.
++  Standard_EXPORT void SetSurfaceAdaptor(const TopoDS_Face&         theFace,
++                                         const BRepAdaptor_Surface& theAdaptor);
++
+   //! Builds and stores an Oriented Bounding Box for the shape.
+   //! Returns a reference to OBB.
+   Standard_EXPORT Bnd_OBB& OBB(const TopoDS_Shape& theShape,

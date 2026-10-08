@@ -822,7 +822,7 @@ impl Segment {
 }
 
 /// One root-part attribute: `str8 key, str8 type, value`.
-fn attribute_at(d: &[u8], p: usize) -> Option<(Attribute, usize)> {
+pub(crate) fn attribute_at(d: &[u8], p: usize) -> Option<(Attribute, usize)> {
     let ln = u32_at(d, p)? as usize;
     let key = latin1(slice(d, p + 4, p + 4 + ln));
     let p = p + 4 + ln;

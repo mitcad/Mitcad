@@ -245,6 +245,8 @@ function Ui-StartApp([string]$Name, [string[]]$Arguments = @(), [switch]$Recover
   if ($Updates) { Remove-Item Env:MITCAD_NO_UPDATE_CHECK -ErrorAction SilentlyContinue }
   else { $env:MITCAD_NO_UPDATE_CHECK = '1' }
   $env:MITCAD_AUTOSAVE_DIR = $script:UiAutosave
+  # Crash reports of the test's own (mitcad#62): none offered from the user's.
+  $env:MITCAD_CRASH_DIR = Join-Path $script:UiOut 'crashes'
   $env:MITCAD_THUMBNAIL_DIR = $script:UiThumbnails
   # The store of computed results (P7d) is off unless a test turns it on
   # (Ui-ResultStore), as in the Linux tests.

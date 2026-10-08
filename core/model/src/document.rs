@@ -31,27 +31,42 @@ mod views;
 mod display;
 // Timeline groups (P9).
 mod groups;
+// Analyses kept in the document (mitcad#41).
+mod analyses;
+// Appearances kept in the document (mitcad#46).
+mod appearances;
+// Render settings of the document (mitcad#47).
+mod render_settings;
+// Joints between occurrences (mitcad#55).
+mod joints;
+// Library components and configuration tables (mitcad#64).
+mod library_parts;
+pub use library_parts::{LibraryChange, LibraryPart, PartsListRow};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub use bodies::BodyAttributes;
+pub use analyses::{Analysis, AnalysisDef, SectionAnalysis, SectionPlane};
+pub use appearances::DeletedAppearance;
+pub use bodies::{BodyAttributes, FaceAppearance};
 pub use components::{InsertOptions, InstanceView};
 pub use datums::DatumView;
 pub use display::{DisplayState, Isolated};
 pub use groups::TimelineGroup;
 pub use views::NamedView;
 
+use crate::appearance::Appearance;
 use crate::assembly::Assembly;
 use crate::expr::{
     LengthUnit, ParamSpec, Unit, is_valid_name, value_to_expression, with_decimal_points,
 };
 use crate::features::{
-    CheckContext, FeatureDef, FeatureEntry, SketchDef, SketchPlane, ValueInput, slot_label,
+    CheckContext, FeatureDef, FeatureEntry, HelixConstruction, SketchDef, SketchPlane, ValueInput,
+    slot_label,
 };
-use crate::ids::{BodyUid, ComponentUid, EntityUid, FeatureUid};
+use crate::ids::{BodyUid, ComponentUid, EntityUid, FeatureUid, OccurrenceUid};
 use crate::kernel::Kernel;
 use crate::monitor::{Cancelled, RecomputeMonitor};
 use crate::parameters::{
@@ -59,6 +74,7 @@ use crate::parameters::{
 };
 use crate::profile::{ProfileRegion, SketchFrame};
 use crate::recompute::{Cache, FeatureStatus, Recomputed, def_fingerprint, recompute};
+use crate::render_settings::RenderSettings;
 use crate::sketch::edit::{EditReport, SketchEdit};
 use crate::store::{self, PersistReport, ResultStore};
 use crate::topo::RegionKey;
@@ -148,6 +164,16 @@ pub struct DocState {
     pub(crate) favorites: BTreeSet<ParamId>,
     /// Timeline groups (P9), in the order they were made.
     pub(crate) groups: Vec<TimelineGroup>,
+    /// Analyses kept in the document (mitcad#41), in the order they were
+    /// added.
+    pub(crate) analyses: Vec<Analysis>,
+    /// The document's own appearances (mitcad#46), in the order they were
+    /// made; the library's are not listed.
+    pub(crate) appearances: Vec<Appearance>,
+    /// How the rendered view lights and shows the design (mitcad#47).
+    pub(crate) render: RenderSettings,
+    /// The configuration table (mitcad#64): sizes of the design.
+    pub(crate) configurations: crate::configurations::Configurations,
 }
 
 impl Default for DocState {
@@ -165,6 +191,10 @@ impl Default for DocState {
             display: DisplayState::default(),
             favorites: BTreeSet::new(),
             groups: Vec::new(),
+            analyses: Vec::new(),
+            appearances: Vec::new(),
+            render: RenderSettings::default(),
+            configurations: Default::default(),
         }
     }
 }
@@ -274,13 +304,22 @@ impl DocState {
         }
         let mut created = Vec::new();
         let params = &mut self.parameters;
-        let resolved = def.map_params(&mut |slot, value| -> Result<ParamId, ModelError> {
+        let mut resolved = def.map_params(&mut |slot, value| -> Result<ParamId, ModelError> {
             let comment = format!("{owner_name} {}", slot_label(slot));
             let (id, new) =
                 resolve_value(params, slot, value, owner, &comment, old_slots.get(slot))?;
             created.extend(new);
             Ok(id)
         })?;
+        // A growing helix without a construction keeps the one it had, else
+        // it is Mitcad's (mitcad#83).
+        if let FeatureDef::Helix(helix) = &mut resolved {
+            let had = match old {
+                Some(FeatureDef::Helix(old)) => old.construction,
+                _ => None,
+            };
+            helix.settle_construction(had.unwrap_or(HelixConstruction::Mitcad));
+        }
         Ok((resolved, created))
     }
 
@@ -526,7 +565,8 @@ impl DocState {
 }
 
 /// Sketches and construction geometry are in their component's
-/// coordinates, so a feature uses only those of its own component (F6).
+/// coordinates, so a feature uses only those of its own component (F6);
+/// a joint's origins use those of the components they are on.
 pub(crate) fn check_components(
     assembly: &Assembly,
     features: &[Arc<FeatureEntry>],
@@ -535,17 +575,16 @@ pub(crate) fn check_components(
     if !assembly.exists(entry.component) {
         return Err(format!("component {} does not exist", entry.component));
     }
+    // Joints use geometry of the components their occurrences place
+    // (mitcad#55).
+    if let Some(result) = crate::joints::check_components(assembly, features, entry) {
+        return result;
+    }
     for uid in entry.def.info().references().features {
         let Some(other) = features.iter().find(|f| f.uid == uid) else {
             continue;
         };
-        let placed = matches!(
-            other.def,
-            FeatureDef::Sketch(_)
-                | FeatureDef::ConstructionPlane(_)
-                | FeatureDef::ConstructionAxis(_)
-                | FeatureDef::ConstructionPoint(_)
-        );
+        let placed = crate::joints::placed_geometry(&other.def);
         if placed && other.component != entry.component {
             return Err(format!(
                 "{} is in {}; a feature of {} cannot use it",
@@ -736,6 +775,11 @@ pub struct PreviewReport {
     /// Bodies the command removed.
     pub removed: Vec<BodyUid>,
     pub tool: bool,
+    /// Occurrences the command places elsewhere in the design (joints,
+    /// moves of occurrences; mitcad#55): each path from the root with its
+    /// new placement in the design. An occurrence inside a moved one is
+    /// listed too.
+    pub placements: Vec<(Vec<OccurrenceUid>, crate::transform::Transform)>,
 }
 
 struct Preview<S> {
@@ -779,6 +823,8 @@ pub struct Document<K: Kernel> {
     warnings: Vec<String>,
     /// Where recomputes report progress and find cancel requests (P7).
     monitor: Option<Arc<RecomputeMonitor>>,
+    /// Reads library components (mitcad#64); the process's when None.
+    resolver: Option<Arc<dyn crate::library::LinkResolver>>,
 }
 
 impl<K: Kernel> Document<K> {
@@ -808,6 +854,7 @@ impl<K: Kernel> Document<K> {
             preview: None,
             warnings: Vec::new(),
             monitor: None,
+            resolver: None,
         }
     }
 
@@ -889,6 +936,18 @@ impl<K: Kernel> Document<K> {
 
     pub fn monitor(&self) -> Option<&Arc<RecomputeMonitor>> {
         self.monitor.as_ref()
+    }
+
+    /// Reads this document's library components with `resolver` instead
+    /// of the process's ([`crate::library::set_link_resolver`]).
+    pub fn set_link_resolver(&mut self, resolver: Option<Arc<dyn crate::library::LinkResolver>>) {
+        self.resolver = resolver;
+    }
+
+    /// The resolver of library components: the document's, else the
+    /// process's.
+    pub(crate) fn link_resolver(&self) -> Option<Arc<dyn crate::library::LinkResolver>> {
+        self.resolver.clone().or_else(crate::library::link_resolver)
     }
 
     /// The number of recomputes so far.
@@ -1073,6 +1132,13 @@ impl<K: Kernel> Document<K> {
         self.result.bodies.get(&uid).map(|b| &b.value)
     }
 
+    /// The identity of a body's shape at the marker (its version, P7d):
+    /// the same as long as the shape is, e.g. to keep what was measured
+    /// on it.
+    pub fn body_version(&self, uid: BodyUid) -> Option<u128> {
+        self.result.bodies.get(&uid).map(|b| b.version)
+    }
+
     /// The display name of a body (stored, or the default it would get).
     pub fn body_name(&self, uid: BodyUid) -> String {
         display_names(&self.state, &self.result)
@@ -1124,6 +1190,14 @@ impl<K: Kernel> Document<K> {
     /// and regions (None when it failed or is not evaluated).
     pub fn sketch_output(&self, sketch: FeatureUid) -> Option<&crate::features::SketchOutput> {
         self.result.sketches.get(&sketch).map(|o| &*o.value)
+    }
+
+    /// A sketch's definition as it last evaluated, when that differs from
+    /// `def`, its stored one: linked projections where their sources were
+    /// (the stored definition keeps them where the last edit left them).
+    pub fn followed_sketch(&self, sketch: FeatureUid, def: &SketchDef) -> Option<SketchDef> {
+        let output = self.sketch_output(sketch)?;
+        crate::sketch::project::with_moved(def, &output.moved)
     }
 
     // Commands.
@@ -1554,6 +1628,9 @@ impl<K: Kernel> Document<K> {
         if let Some(entry) = self.state.entry(sketch) {
             self.state.editable(entry.component)?;
         }
+        // Edits start from the sketch as it evaluated: linked projections
+        // where their sources are now (mitcad#40).
+        let moved = self.sketch_output(sketch).map(|o| o.moved.clone());
         self.apply(|state| {
             let position = state.require(sketch)?;
             let entry = state.features[position].clone();
@@ -1563,9 +1640,11 @@ impl<K: Kernel> Document<K> {
                     entry.name
                 )));
             };
+            let def = moved
+                .and_then(|m| crate::sketch::project::with_moved(def, &m))
+                .unwrap_or_else(|| def.clone());
             let (value, def, report) = {
-                let mut editor =
-                    SketchEdit::new(def.clone(), &mut state.parameters, sketch, &entry.name);
+                let mut editor = SketchEdit::new(def, &mut state.parameters, sketch, &entry.name);
                 let value = edit(&mut editor).map_err(invalid)?;
                 let (def, report) = editor.finish().map_err(invalid)?;
                 (value, def, report)
@@ -1998,9 +2077,67 @@ impl<K: Kernel> Document<K> {
                 .result(uid)
                 .and_then(|r| r.output.as_ref())
                 .is_some_and(|o| o.tool.is_some()),
+            placements: self.moved_occurrences(&state, &result),
         };
         self.preview = Some(Preview { uid, state, result });
         Ok(report)
+    }
+
+    /// The occurrences a previewed state places elsewhere in the design
+    /// than the document does now: each path from the root with its new
+    /// placement in the design. Occurrences the preview adds are left out.
+    fn moved_occurrences(
+        &self,
+        state: &DocState,
+        result: &Recomputed<K::Shape>,
+    ) -> Vec<(Vec<OccurrenceUid>, crate::transform::Transform)> {
+        use crate::transform::Transform;
+        struct Walk<'a, K: Kernel> {
+            doc: &'a Document<K>,
+            state: &'a DocState,
+            placements: &'a BTreeMap<OccurrenceUid, Transform>,
+            path: Vec<OccurrenceUid>,
+            out: Vec<(Vec<OccurrenceUid>, Transform)>,
+        }
+        impl<K: Kernel> Walk<'_, K> {
+            /// `now` and `before`: where the parent component is placed in
+            /// the preview and in the document (none when it is new).
+            fn visit(&mut self, parent: ComponentUid, now: Transform, before: Option<Transform>) {
+                if self.path.len() > 64 {
+                    return;
+                }
+                let children: Vec<_> = self.state.assembly.children(parent).cloned().collect();
+                for o in children {
+                    let placed = self.placements.get(&o.uid).copied().unwrap_or(o.transform);
+                    let world = now.after(&placed);
+                    let old = before.and_then(|b| {
+                        let current = self.doc.state.assembly.occurrence(o.uid)?;
+                        (current.parent == parent).then(|| {
+                            b.after(&self.doc.placement(o.uid).unwrap_or(current.transform))
+                        })
+                    });
+                    self.path.push(o.uid);
+                    if old.is_some_and(|old| !same_placement(&old, &world)) {
+                        self.out.push((self.path.clone(), world));
+                    }
+                    self.visit(o.component, world, old);
+                    self.path.pop();
+                }
+            }
+        }
+        let mut walk = Walk {
+            doc: self,
+            state,
+            placements: &result.placements,
+            path: Vec::new(),
+            out: Vec::new(),
+        };
+        walk.visit(
+            ComponentUid::ROOT,
+            Transform::IDENTITY,
+            Some(Transform::IDENTITY),
+        );
+        walk.out
     }
 
     pub fn clear_preview(&mut self) {
@@ -2035,6 +2172,17 @@ impl<K: Kernel> Document<K> {
         let preview = self.preview.as_ref()?;
         preview.state.entry(preview.uid)
     }
+}
+
+/// Whether two placements are the same within rounding.
+fn same_placement(a: &crate::transform::Transform, b: &crate::transform::Transform) -> bool {
+    let scale = a
+        .translation
+        .iter()
+        .chain(&b.translation)
+        .fold(1.0_f64, |m, v| m.max(v.abs()));
+    (0..3).all(|r| (0..3).all(|c| (a.linear[r][c] - b.linear[r][c]).abs() <= 1e-9))
+        && (0..3).all(|i| (a.translation[i] - b.translation[i]).abs() <= 1e-9 * scale)
 }
 
 /// Whether two definition states differ in the display state only (the

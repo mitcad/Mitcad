@@ -18,6 +18,9 @@ pub fn planar_faces<K: Kernel>(doc: &Document<K>) -> Vec<(BodyUid, FaceName, Pla
     let kernel = doc.kernel();
     let mut out = Vec::new();
     for body in doc.bodies() {
+        // Large bodies have thousands of faces, a kernel call each
+        // (mitcad#82: the watchdog's progress).
+        crate::tick();
         let Ok(faces) = kernel.faces(body.shape) else {
             continue;
         };
@@ -25,6 +28,7 @@ pub fn planar_faces<K: Kernel>(doc: &Document<K>) -> Vec<(BodyUid, FaceName, Pla
             let Some(name) = face.names.first().and_then(|n| n.parse::<FaceName>().ok()) else {
                 continue;
             };
+            crate::tick();
             if let Ok(plane) = kernel.face_plane(body.shape, &name) {
                 out.push((body.uid, name, plane));
             }
@@ -36,7 +40,9 @@ pub fn planar_faces<K: Kernel>(doc: &Document<K>) -> Vec<(BodyUid, FaceName, Pla
 /// A body by its fingerprint: volume, area and box (the replay should hold
 /// the same body before the feature that refers to it).
 pub fn resolve_body<K: Kernel>(doc: &Document<K>, fp: &Fingerprint) -> Option<BodyUid> {
-    let volume = fp.volume? * 1000.0;
+    let Some(volume) = fp.volume.map(|v| v * 1000.0) else {
+        return resolve_body_by_points(doc, fp);
+    };
     let kernel = doc.kernel();
     // Among bodies of the same volume, the one of the same name.
     let mut best: Option<((bool, f64), BodyUid)> = None;
@@ -54,6 +60,65 @@ pub fn resolve_body<K: Kernel>(doc: &Document<K>, fp: &Fingerprint) -> Option<Bo
     best.map(|(_, uid)| uid)
 }
 
+/// A body the stream decoder found by its names (no volume): the only body
+/// with an edge through each of the points it gives (`_f3d.edge_points`,
+/// middle points of some of the body's edges, cm).
+fn resolve_body_by_points<K: Kernel>(doc: &Document<K>, fp: &Fingerprint) -> Option<BodyUid> {
+    let points: Vec<Vec3> = fp
+        .f3d
+        .as_ref()?
+        .edge_points
+        .as_ref()?
+        .iter()
+        .map(|&p| mm3(p))
+        .collect();
+    if points.is_empty() {
+        return None;
+    }
+    let kernel = doc.kernel();
+    let fits: Vec<BodyUid> = doc
+        .bodies()
+        .iter()
+        .filter(|body| {
+            crate::tick();
+            let middles = edge_midpoints(kernel, body.shape);
+            points.iter().all(|p| {
+                middles
+                    .iter()
+                    .any(|(_, m, _)| geom::distance(*m, *p) <= 1e-3)
+            })
+        })
+        .map(|body| body.uid)
+        .collect();
+    match fits[..] {
+        [uid] => Some(uid),
+        [] => resolve_body_by_boundary(doc, &points),
+        _ => None,
+    }
+}
+
+/// The only body whose faces pass through each of the points: a body a
+/// replayed feature made (a sweep, a pipe) has the file's surfaces but not
+/// necessarily its edges (seams and splits elsewhere).
+fn resolve_body_by_boundary<K: Kernel>(doc: &Document<K>, points: &[Vec3]) -> Option<BodyUid> {
+    let kernel = doc.kernel();
+    let fits: Vec<BodyUid> = doc
+        .bodies()
+        .iter()
+        .filter(|body| {
+            crate::tick();
+            kernel
+                .boundary_distances(body.shape, points)
+                .is_ok_and(|d| d.iter().all(|&d| d <= 1e-3))
+        })
+        .map(|body| body.uid)
+        .collect();
+    match fits[..] {
+        [uid] => Some(uid),
+        _ => None,
+    }
+}
+
 /// A face by its fingerprint: the face with the same surface type through
 /// `point_on_face`, preferring the area that is closest.
 pub fn resolve_face<K: Kernel>(doc: &Document<K>, fp: &Fingerprint) -> Option<(BodyUid, FaceName)> {
@@ -67,6 +132,7 @@ pub fn resolve_face<K: Kernel>(doc: &Document<K>, fp: &Fingerprint) -> Option<(B
     let kernel = doc.kernel();
     let mut best: Option<(f64, BodyUid, FaceName)> = None;
     for body in doc.bodies() {
+        crate::tick();
         let Ok(faces) = kernel.faces(body.shape) else {
             continue;
         };
@@ -77,6 +143,7 @@ pub fn resolve_face<K: Kernel>(doc: &Document<K>, fp: &Fingerprint) -> Option<(B
             let Some(name) = face.names.first().and_then(|n| n.parse::<FaceName>().ok()) else {
                 continue;
             };
+            crate::tick();
             let Ok(near) = kernel.face_point_normal(body.shape, &name, point) else {
                 continue;
             };
@@ -134,6 +201,7 @@ pub fn resolve_edge<K: Kernel>(doc: &Document<K>, fp: &Fingerprint) -> Option<(B
     let kernel = doc.kernel();
     let mut best: Option<(f64, BodyUid, EdgeName)> = None;
     for body in doc.bodies() {
+        crate::tick();
         for (name, at, len) in edge_midpoints(kernel, body.shape) {
             let d = geom::distance(at, mid);
             let dl = length.map_or(0.0, |l| (len - l).abs());
@@ -204,6 +272,7 @@ pub fn consumed_edges<K: Kernel>(
         .zip(nearest)
         .filter(|((_, _, _, len), d)| *d > 1e-4 * len.max(1.0) && d.is_finite())
         .map(|((name, mid, tangent, length), distance)| {
+            crate::tick();
             let [a, b] = name.faces();
             let normal = |face| {
                 kernel
@@ -238,11 +307,43 @@ pub fn consumed_edges<K: Kernel>(
         })
         .collect();
     if !probes.is_empty() {
-        let points: Vec<Vec3> = probes.iter().map(|(_, p)| *p).collect();
-        let inside = kernel
-            .points_inside(shape, &points)
-            .map_err(|e| e.to_string())?;
+        // Which side of the nearer of the edge's two faces the point is
+        // on; the solid classifier only where that does not tell (it casts
+        // rays through every face, about 0.1 s a point on stored bodies of
+        // splines, and fillets ask about the same edges state after state).
+        let mut inside: Vec<Option<bool>> = probes
+            .iter()
+            .map(|(i, p)| {
+                let (edge, frame) = &gone[*i];
+                let (_, [n1, n2]) = (*frame)?;
+                if geom::norm(geom::sub(n1, n2)) < 1e-6 {
+                    return None;
+                }
+                crate::tick();
+                let side = |face| {
+                    let near = kernel.face_point_normal(shape, face, *p).ok()?;
+                    let normal = geom::unit(near.normal)?;
+                    let off = geom::sub(*p, near.point);
+                    Some((geom::norm(off), geom::dot(off, normal)))
+                };
+                let [a, b] = edge.name.faces();
+                let ((da, sa), (db, sb)) = (side(a)?, side(b)?);
+                let s = if da <= db { sa } else { sb };
+                (s.abs() > 1e-9).then_some(s < 0.0)
+            })
+            .collect();
+        let unknown: Vec<usize> = (0..probes.len()).filter(|&k| inside[k].is_none()).collect();
+        if !unknown.is_empty() {
+            let points: Vec<Vec3> = unknown.iter().map(|&k| probes[k].1).collect();
+            let classified = kernel
+                .points_inside(shape, &points)
+                .map_err(|e| e.to_string())?;
+            for (k, c) in unknown.into_iter().zip(classified) {
+                inside[k] = Some(c);
+            }
+        }
         for ((i, _), inside) in probes.into_iter().zip(inside) {
+            let inside = inside.unwrap_or(false);
             let (edge, frame) = &mut gone[i];
             let Some((t, normal)) = *frame else {
                 continue;
@@ -328,6 +429,7 @@ pub fn resolve_sheet<K: Kernel>(doc: &Document<K>, fp: &Fingerprint) -> Option<B
     bodies
         .iter()
         .filter_map(|b| {
+            crate::tick();
             let m = kernel.mass_properties(b.shape).ok()?;
             let da = (m.area - area).abs() / area.abs().max(1e-9);
             (da < 1e-3).then_some((da, b.uid))
@@ -343,12 +445,42 @@ pub fn nearest_boundary<K: Kernel>(
     points: &[Vec3],
 ) -> Result<Vec<f64>, String> {
     let mut nearest = vec![f64::INFINITY; points.len()];
-    for body in shapes {
+    // The bodies whose boxes hold the most points first, and each body
+    // only for the points not on a face yet: most points asked about are
+    // on one body's faces, and measuring a point far from a body is what
+    // takes long (a stored thread's thousand edges against another body:
+    // 45 s).
+    let slack = 1e-3;
+    let mut order: Vec<(usize, usize)> = shapes
+        .iter()
+        .enumerate()
+        .map(|(k, body)| {
+            crate::tick();
+            let held = match kernel.bounding_box(body) {
+                Ok(Some(b)) => points
+                    .iter()
+                    .filter(|p| {
+                        (0..3).all(|i| p[i] >= b.min[i] - slack && p[i] <= b.max[i] + slack)
+                    })
+                    .count(),
+                _ => 0,
+            };
+            (k, held)
+        })
+        .collect();
+    order.sort_by_key(|&(k, held)| (std::cmp::Reverse(held), k));
+    for (k, _) in order {
+        let open: Vec<usize> = (0..points.len()).filter(|&i| nearest[i] > 0.0).collect();
+        if open.is_empty() {
+            break;
+        }
+        let asked: Vec<Vec3> = open.iter().map(|&i| points[i]).collect();
+        crate::tick();
         let d = kernel
-            .boundary_distances(body, points)
+            .boundary_distances(shapes[k], &asked)
             .map_err(|e| e.to_string())?;
-        for (n, d) in nearest.iter_mut().zip(d) {
-            *n = n.min(d);
+        for (&i, d) in open.iter().zip(d) {
+            nearest[i] = nearest[i].min(d);
         }
     }
     Ok(nearest)
@@ -468,10 +600,20 @@ pub fn chamfer_distance(d1: f64, d2: f64, wedge: f64) -> f64 {
 /// How long the geometric comparisons of the final bodies may take, s.
 const COMPARE_SECONDS: f64 = 60.0;
 
+/// How long the comparison of one body may take, s.
+const BODY_COMPARE_SECONDS: f64 = 10.0;
+
+/// Bodies whose sampled surfaces lie within this of each other (mm) are
+/// not compared by boolean differences (mitcad#69): of nearly coincident
+/// bodies those rarely finish in their time, and when they do they can
+/// take the bodies as apart; the deviation says enough. (The stored
+/// geometry's own approximations, spline fits, lie within it.)
+const BOOLEANS_ABOVE: f64 = 0.01;
+
 /// The file's stored bodies against the replay: each matched to the Mitcad
 /// body with the same signature, else the nearest one of similar volume.
-/// `tick` is called before each geometric comparison (the import's
-/// progress, for its watchdog).
+/// `tick` is called between its kernel calls (the import's progress, for
+/// its watchdog).
 pub fn compare_bodies<K: Kernel>(
     doc: &Document<K>,
     finals: &[(StoredBody<K::Shape>, Sig)],
@@ -526,6 +668,7 @@ pub fn compare_bodies<K: Kernel>(
     let mut compared = 0;
     let started = std::time::Instant::now();
     for ((body, sig), pair) in finals.iter().zip(pairs) {
+        tick();
         let file = body.name.clone().unwrap_or_else(|| body.source.clone());
         let mut report = BodyReport {
             file,
@@ -557,8 +700,15 @@ pub fn compare_bodies<K: Kernel>(
                 && small(&body.shape)
             {
                 compared += 1;
+                // Each for ten seconds at most, within what is left of the
+                // minute: one boolean of nearly coincident bodies alone can
+                // take many minutes. The deviations come first (about a
+                // second); the booleans get the rest of the time.
+                let left = COMPARE_SECONDS - started.elapsed().as_secs_f64();
                 let options = CompareOptions {
                     samples: 600,
+                    seconds: Some(left.clamp(1.0, BODY_COMPARE_SECONDS)),
+                    booleans_above: BOOLEANS_ABOVE,
                     ..CompareOptions::default()
                 };
                 if crate::tracing() {
@@ -568,9 +718,16 @@ pub fn compare_bodies<K: Kernel>(
                     );
                 }
                 tick();
+                let clock = std::time::Instant::now();
                 if let Ok(c) = kernel.compare_shapes(&[shape], &[&body.shape], &options) {
-                    report.max_deviation = Some(c.max_deviation);
+                    // (No samples measured in time: no deviation.)
+                    if c.a_to_b.samples + c.b_to_a.samples > 0 {
+                        report.max_deviation = Some(c.max_deviation);
+                    }
                     report.relative_difference = c.relative_difference;
+                }
+                if crate::tracing() {
+                    eprintln!("import: compared in {:.2} s", clock.elapsed().as_secs_f64());
                 }
             }
         }

@@ -18,7 +18,7 @@ use crate::kernel::{
 };
 use crate::kernel::{
     BooleanOp, BooleanOutput, BooleanPiece, BoundingBox, Chamfer, ChamferCorner, ExtrudeSpec,
-    Kernel, KernelError,
+    Kernel, KernelError, MassProperties,
 };
 use crate::kernel::{DraftSpec, FilletSet, FilletSize, ShellSpec, ToolInput};
 use crate::kernel::{FontGlyphs, FontRequest, Glyph};
@@ -83,10 +83,15 @@ impl MockShape {
 
 #[derive(Default)]
 pub struct MockKernel {
+    /// Measures shapes (`mass_properties` of their bounding boxes; scaled
+    /// patterns, mitcad#59); otherwise it measures nothing.
+    pub measures: Cell<bool>,
     /// Operation name -> number of calls.
     pub calls: RefCell<BTreeMap<&'static str, usize>>,
     /// Operations that fail: "extrude", "join", "cut", "intersect", "fillet", "chamfer".
     pub fail: RefCell<BTreeSet<&'static str>>,
+    /// Operations that fail as one whose allocation failed does (mitcad#80).
+    pub out_of_memory: RefCell<BTreeSet<&'static str>>,
     /// Which targets a boolean touches, by index; all when None.
     pub touch: RefCell<Option<Vec<bool>>>,
     /// Pieces a cut or intersection leaves of each touched target: 1 unless
@@ -133,6 +138,10 @@ pub struct MockKernel {
     pub stop_on_cancel: Cell<bool>,
     /// 3MF export (mitcad#13): the tolerances `triangle_mesh` was asked for.
     pub mesh_tolerances: RefCell<Vec<crate::exchange::MeshTolerance>>,
+    /// Joints (mitcad#55): what `edge_geometry` returns by edge name
+    /// (lines otherwise), and `vertex_point` by vertex name.
+    pub edge_curves: RefCell<BTreeMap<String, CurveGeometry>>,
+    pub vertex_points: RefCell<BTreeMap<String, crate::datum::Vec3>>,
 }
 
 impl MockShape {
@@ -175,7 +184,12 @@ impl MockKernel {
                 "{op}: the operation was cancelled"
             )));
         }
-        if self.fail.borrow().contains(op) {
+        if self.out_of_memory.borrow().contains(op) {
+            Err(KernelError::failed(format!(
+                "{op}: {}",
+                KernelError::OUT_OF_MEMORY
+            )))
+        } else if self.fail.borrow().contains(op) {
             Err(KernelError::failed(format!("{op} failed")))
         } else {
             Ok(())
@@ -597,8 +611,36 @@ impl Kernel for MockKernel {
         Ok(usize::from(shape.has_face(face)))
     }
 
+    fn faces(&self, shape: &MockShape) -> Result<Vec<crate::kernel::FaceInfo>, KernelError> {
+        Ok(shape
+            .faces
+            .iter()
+            .map(|face| crate::kernel::FaceInfo {
+                names: vec![face.to_string()],
+                surface: "plane".to_owned(),
+                area: 0.0,
+            })
+            .collect())
+    }
+
     fn bounding_box(&self, shape: &MockShape) -> Result<Option<BoundingBox>, KernelError> {
         Ok(shape.bounds)
+    }
+
+    /// The bounding box's volume and centre, when [`MockKernel::measures`].
+    fn mass_properties(&self, shape: &MockShape) -> Result<MassProperties, KernelError> {
+        if !self.measures.get() {
+            return Err(KernelError::Unsupported("mass properties"));
+        }
+        let b = shape
+            .bounds
+            .ok_or(KernelError::Unsupported("mass properties without bounds"))?;
+        let size: [f64; 3] = std::array::from_fn(|i| b.max[i] - b.min[i]);
+        Ok(MassProperties {
+            volume: size[0] * size[1] * size[2],
+            area: 2.0 * (size[0] * size[1] + size[1] * size[2] + size[2] * size[0]),
+            center: std::array::from_fn(|i| (b.min[i] + b.max[i]) / 2.0),
+        })
     }
 
     fn curves_of(
@@ -992,14 +1034,17 @@ impl Kernel for MockKernel {
     ) -> Result<MockShape, KernelError> {
         self.call("thread")?;
         self.specs.borrow_mut().push(format!(
-            "thread {} pitch {} depth {:.6} right {} part {:?}",
+            "thread {} pitch {} diameters {:.4}/{:.4}/{:.4} angle {:.6} right {} part {:?}",
             spec.faces
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(","),
             number(spec.pitch),
-            spec.depth,
+            spec.major,
+            spec.minor,
+            spec.pitch_diameter,
+            spec.angle,
             spec.right_handed,
             spec.part
         ));
@@ -1325,7 +1370,21 @@ impl Kernel for MockKernel {
         })
     }
 
-    /// Every edge is a line along x from the bounds' low corner.
+    /// The points set in `vertex_points` (mitcad#55).
+    fn vertex_point(
+        &self,
+        _shape: &MockShape,
+        vertex: &crate::topo::VertexName,
+    ) -> Result<crate::datum::Vec3, KernelError> {
+        self.vertex_points
+            .borrow()
+            .get(&vertex.to_string())
+            .copied()
+            .ok_or_else(|| KernelError::failed(format!("the body has no vertex {vertex}")))
+    }
+
+    /// Every edge is a line along x from the bounds' low corner, unless
+    /// `edge_curves` says otherwise.
     fn edge_geometry(
         &self,
         shape: &MockShape,
@@ -1333,6 +1392,9 @@ impl Kernel for MockKernel {
     ) -> Result<CurveGeometry, KernelError> {
         if shape.matching_edges(edge).is_empty() {
             return Err(KernelError::failed(format!("the body has no edge {edge}")));
+        }
+        if let Some(curve) = self.edge_curves.borrow().get(&edge.to_string()) {
+            return Ok(curve.clone());
         }
         let start = shape.bounds.map_or([0.0; 3], |b| b.min);
         Ok(CurveGeometry::Line {
@@ -1482,8 +1544,18 @@ impl Kernel for MockKernel {
 
     fn helix(&self, spec: &crate::sweeps::HelixSpec<'_>) -> Result<MockShape, KernelError> {
         self.call("helix")?;
+        let growth = if spec.growth == 0.0 {
+            String::new()
+        } else {
+            let freecad = if spec.freecad { " freecad" } else { "" };
+            format!(
+                " growth {} flip {}{freecad}",
+                number(spec.growth),
+                spec.flip
+            )
+        };
         self.specs.borrow_mut().push(format!(
-            "helix {} axis {:?} {:?} pitch {} revolutions {} left {}",
+            "helix {} axis {:?} {:?} pitch {} revolutions {} left {}{growth}",
             spec.feature,
             spec.origin,
             spec.direction,

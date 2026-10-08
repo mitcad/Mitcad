@@ -5,6 +5,7 @@
 #include <QPoint>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 
 #include "BrowserPanel.hpp"
 #include "DocumentSnapshot.hpp"
@@ -14,6 +15,7 @@ class QWidget;
 
 namespace mitcad {
 
+class AppearanceDialog;
 class DocumentHost;
 class ParametersDialog;
 class TimelineWidget;
@@ -41,6 +43,9 @@ public:
   bool cancelEditing();
   // Change Parameters.
   void openParameters();
+  // Edit Appearances (mitcad#46); Assign gives the targets (bodies, and
+  // faces: mitcad#53) the selected appearance.
+  void openAppearances(const Selection& targets);
   // Find in Browser for an item picked in the view (a face finds its body).
   void findInBrowser(const SelectionItem& item);
 
@@ -87,6 +92,7 @@ private:
   TimelineWidget* m_timeline = nullptr;
   QToolButton* m_failures = nullptr;
   QPointer<ParametersDialog> m_parameters;
+  QPointer<AppearanceDialog> m_appearances;
   DocumentSnapshot m_snapshot;
   bool m_shown = false;      // something was shown
   bool m_originShown = false; // as the browser shows it
@@ -97,6 +103,7 @@ private:
   QString m_loggedFailures;
   QString m_loggedWarnings;
   QString m_loggedDof;
+  QString m_loggedJoints;
 };
 
 } // namespace mitcad

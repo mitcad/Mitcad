@@ -30,6 +30,12 @@ pub struct MirrorDef<P = ParamId> {
     pub combine: bool,
     #[serde(default, skip_serializing_if = "is_adjust")]
     pub compute: ComputeOption,
+    /// Copies of features act only on the bodies each feature changed
+    /// where the feature has no participants of its own (the `.f3d`
+    /// import's mirrors, mitcad#74); by default on the feature's
+    /// participants, every body without them.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub original_bodies: bool,
     #[serde(skip)]
     pub marker: PhantomData<P>,
 }
@@ -51,6 +57,7 @@ impl<P> MirrorDef<P> {
             plane: self.plane.clone(),
             combine: self.combine,
             compute: self.compute,
+            original_bodies: self.original_bodies,
             marker: PhantomData,
         })
     }
@@ -89,6 +96,13 @@ impl<K: Kernel> Evaluate<K> for MirrorDef {
         };
         // Its elements, for patterns of it (patterns of patterns).
         ctx.elements = vec![Transform::IDENTITY, transform];
-        repeat(ctx, &self.objects, self.compute, &[element], self.combine)
+        repeat(
+            ctx,
+            &self.objects,
+            self.compute,
+            self.original_bodies,
+            &[element],
+            self.combine,
+        )
     }
 }

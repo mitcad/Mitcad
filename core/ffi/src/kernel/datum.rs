@@ -35,6 +35,19 @@ pub mod ffi {
         direction: [f64; 3],
     }
 
+    /// A face's names and surface ([`datum_face_geometries`]).
+    struct DatumFaceEntry {
+        names: Vec<String>,
+        surface: DatumSurface,
+    }
+
+    /// An edge's name (empty: unnamed) and curve
+    /// ([`datum_edge_geometries`]).
+    struct DatumEdgeEntry {
+        name: String,
+        curve: DatumCurve,
+    }
+
     unsafe extern "C++" {
         include!("bridge/datum.hpp");
 
@@ -66,6 +79,9 @@ pub mod ffi {
             size: f64,
         ) -> Result<SharedPtr<Shape>>;
         fn datum_point_shape(point: &DatumVec) -> Result<SharedPtr<Shape>>;
+        /// Every face's and edge's geometry in one pass (mitcad#87).
+        fn datum_face_geometries(shape: &Shape) -> Result<Vec<DatumFaceEntry>>;
+        fn datum_edge_geometries(shape: &Shape) -> Result<Vec<DatumEdgeEntry>>;
     }
 }
 

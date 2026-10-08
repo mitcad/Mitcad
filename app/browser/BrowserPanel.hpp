@@ -33,6 +33,10 @@ struct BrowserNode {
     Body,   // uid: the body
     Sketch, // uid: the sketch feature
     Datum,  // uid: the construction feature
+    Analyses, // the Analysis folder (mitcad#41)
+    Analysis, // uid: its name
+    Joints,   // a component's joints (mitcad#55); joint origins are Datum rows in it
+    Joint,    // uid: a joint, as-built joint or rigid group
   };
 
   Type type = Type::None;
@@ -48,7 +52,7 @@ struct BrowserNode {
   bool isValid() const { return type != Type::None; }
   bool isFolder() const {
     return type == Type::Bodies || type == Type::Sketches || type == Type::Construction ||
-           type == Type::Origin;
+           type == Type::Origin || type == Type::Analyses || type == Type::Joints;
   }
   // The selection item the row stands for; invalid for folders and settings.
   SelectionItem item() const;
@@ -56,7 +60,8 @@ struct BrowserNode {
 
 // The browser, docked on the left: the document settings, named
 // views, the origin and the component tree with each occurrence's bodies,
-// sketches and construction geometry. A row reads: expand arrow, light
+// sketches, construction geometry and joints, and the analyses kept in the
+// document. A row reads: expand arrow, light
 // bulb (an eye; shows and hides), icon, name and, for a component, the
 // radio button that activates it. Selecting rows selects in the view and
 // the other way round; what the rows do is the BrowserController's.

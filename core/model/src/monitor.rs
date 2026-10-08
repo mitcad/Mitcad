@@ -11,12 +11,17 @@
 //! ends after the request is dropped. The kernel may ask the monitor too,
 //! and stop its long operations inside an evaluation (P7e,
 //! `Kernel::interruptible`).
+//!
+//! A monitor can also be part of others ([`RecomputeMonitor::within`]):
+//! it is cancelled once one of them is, or once its deadline passes (the
+//! `.f3d` import gives each definition it tries the time left of the
+//! item's, mitcad#69).
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Progress of a recompute and a request to stop it; shared between the
 /// thread that computes and the one that shows the progress.
@@ -41,6 +46,10 @@ pub struct RecomputeMonitor {
     delay_ms: AtomicU32,
     /// Test hook: cancel once this many evaluations were kept.
     cancel_after: AtomicUsize,
+    /// Cancelled with any of these ([`RecomputeMonitor::within`]).
+    parents: Vec<Arc<RecomputeMonitor>>,
+    /// Cancelled once this passes.
+    deadline: Option<Instant>,
 }
 
 /// A recompute stopped on request; nothing it was part of took effect.
@@ -88,6 +97,8 @@ impl Default for RecomputeMonitor {
             feature: Mutex::new(String::new()),
             delay_ms: AtomicU32::new(0),
             cancel_after: AtomicUsize::new(usize::MAX),
+            parents: Vec::new(),
+            deadline: None,
         }
     }
 }
@@ -95,6 +106,29 @@ impl Default for RecomputeMonitor {
 impl RecomputeMonitor {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A monitor for part of the work of others: cancelled once one of
+    /// `parents` is, or once `deadline` passes (and when cancelled itself).
+    /// It counts its own evaluations, and slows them down by the longest
+    /// test delay of its parents.
+    pub fn within(parents: Vec<Arc<RecomputeMonitor>>, deadline: Option<Instant>) -> Self {
+        let delay = parents
+            .iter()
+            .map(|p| p.delay_ms.load(Ordering::Relaxed))
+            .max()
+            .unwrap_or(0);
+        Self {
+            delay_ms: AtomicU32::new(delay),
+            parents,
+            deadline,
+            ..Self::default()
+        }
+    }
+
+    /// Whether its deadline passed ([`RecomputeMonitor::within`]).
+    pub fn past_deadline(&self) -> bool {
+        self.deadline.is_some_and(|d| Instant::now() >= d)
     }
 
     /// Asks the recompute to stop: it does before the next feature, or
@@ -105,8 +139,12 @@ impl RecomputeMonitor {
         self.cancel.store(true, Ordering::Relaxed);
     }
 
+    /// Whether it was cancelled, one of its parents was, or its deadline
+    /// passed ([`RecomputeMonitor::within`]). Once true it stays so.
     pub fn is_cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
+            || self.past_deadline()
+            || self.parents.iter().any(|p| p.is_cancelled())
     }
 
     pub fn progress(&self) -> Progress {

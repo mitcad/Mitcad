@@ -506,9 +506,46 @@ bool isFreeCadImport(const QJsonObject& result) {
   return result.value(QStringLiteral("report")).toObject().contains(QStringLiteral("program_version"));
 }
 
+// An import_ipt result (an .ipt part's stored bodies, mitcad#60).
+bool isIptImport(const QJsonObject& result) {
+  return result.value(QStringLiteral("report")).toObject().value(QStringLiteral("format")).toString() ==
+         QLatin1String("ipt");
+}
+
+// The bodies an import_ipt result reports: solids, valid ones, sheets.
+QString iptCounts(const QJsonObject& report) {
+  int solids = 0;
+  int valid = 0;
+  const QJsonArray imported = report.value(QStringLiteral("imported")).toArray();
+  for (const QJsonValue& value : imported) {
+    const QJsonObject body = value.toObject();
+    solids += body.value(QStringLiteral("solid")).toBool() ? 1 : 0;
+    valid += body.value(QStringLiteral("valid")).toBool() ? 1 : 0;
+  }
+  return QStringLiteral("%1 solids, %2 valid, %3 sheets, %4 not built")
+      .arg(solids)
+      .arg(valid)
+      .arg(imported.size() - solids)
+      .arg(report.value(QStringLiteral("skipped")).toArray().size());
+}
+
+// The outcomes of an .ipt part's features and sketches replayed with the
+// history (`counts` of the import_ipt report).
+QString iptFeatureCounts(const QJsonObject& report) {
+  const QJsonObject counts = report.value(QStringLiteral("counts")).toObject();
+  QStringList parts;
+  for (const char* outcome : {"parametric", "partial", "fallback", "skipped"}) {
+    parts << QStringLiteral("%1 %2").arg(counts.value(QLatin1String(outcome)).toInt()).arg(QLatin1String(outcome));
+  }
+  return parts.join(QStringLiteral(", "));
+}
+
 } // namespace
 
 QString importCounts(const QJsonObject& result) {
+  if (isIptImport(result)) {
+    return iptCounts(result.value(QStringLiteral("report")).toObject());
+  }
   const QJsonObject counts = result.value(QStringLiteral("counts")).toObject();
   QStringList parts;
   const std::initializer_list<const char*> f3d = {"parametric", "partial", "fallback", "skipped"};
@@ -526,7 +563,7 @@ namespace {
 // import_fcstd's report itself (its items and warnings have the same form).
 QJsonObject importedDesign(const QJsonObject& result) {
   const QJsonObject report = result.value(QStringLiteral("report")).toObject();
-  if (isFreeCadImport(result)) {
+  if (isFreeCadImport(result) || isIptImport(result)) {
     return report;
   }
   const QJsonArray designs = report.value(QStringLiteral("designs")).toArray();
@@ -671,8 +708,41 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
   QDialog dialog(parent);
   dialog.setWindowTitle(QObject::tr("Import Report"));
   auto* layout = new QVBoxLayout(&dialog);
+  const auto field = [&design](const char* key, const QString& otherwise) {
+    const QString value = design.value(QLatin1String(key)).toString();
+    return (value.isEmpty() ? otherwise : value).toHtmlEscaped();
+  };
+  // An .ipt part replayed with its features (mitcad#60, stages 2 and 3):
+  // the replay's report is nested in the import's.
+  const bool iptHistory = isIptImport(result) && design.value(QStringLiteral("history")).toBool();
+  const QJsonObject replay = design.value(QStringLiteral("design")).toObject();
+  const QString iptMaterial =
+      design.value(QStringLiteral("mitcad_material")).isString()
+          ? QObject::tr("%1 (Mitcad's %2)").arg(field("material", QString()), field("mitcad_material", QString()))
+          : QObject::tr("%1 (not in Mitcad's library: the bodies keep the default)")
+                .arg(field("material", QObject::tr("none")));
   QString summary =
-      isFreeCadImport(result)
+      iptHistory
+          ? QObject::tr("<b>%1</b> (part number %2)<br>%3 features and sketches: %4.<br>%5 parameters, %6 of %7 "
+                        "expressions as the file evaluates them.<br>%8 bodies: %9.<br>Material: %10. Units: %11. "
+                        "Saved by release %12.")
+                .arg(file.toHtmlEscaped(), field("part_number", QObject::tr("none")))
+                .arg(replay.value(QStringLiteral("items")).toArray().size())
+                .arg(iptFeatureCounts(design))
+                .arg(replay.value(QStringLiteral("parameters")).toObject().value(QStringLiteral("imported")).toInt())
+                .arg(design.value(QStringLiteral("expressions")).toObject().value(QStringLiteral("agree")).toInt())
+                .arg(design.value(QStringLiteral("expressions")).toObject().value(QStringLiteral("translated")).toInt())
+                .arg(bodies)
+                .arg(importCounts(result), iptMaterial, field("units", QStringLiteral("mm")),
+                     field("release", QObject::tr("unknown")))
+      : isIptImport(result)
+          ? QObject::tr("<b>%1</b> (part number %2)<br>%3 bodies stored in the file, each a base feature: %4.<br>"
+                        "Material: %5. Units: %6. Saved by release %7.")
+                .arg(file.toHtmlEscaped(), field("part_number", QObject::tr("none")))
+                .arg(bodies)
+                .arg(importCounts(result), iptMaterial, field("units", QStringLiteral("mm")),
+                     field("release", QObject::tr("unknown")))
+      : isFreeCadImport(result)
           ? QObject::tr("<b>%1</b> (FreeCAD %2)<br>%3 objects: %4.<br>%5")
                 .arg(file.toHtmlEscaped(),
                      design.value(QStringLiteral("program_version")).toString().toHtmlEscaped())
@@ -713,7 +783,26 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
                           QObject::tr("Note")});
   items->setRootIsDecorated(false);
   items->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
-  for (const QJsonValue& value : design.value(QStringLiteral("items")).toArray()) {
+  // An .ipt part's bodies: one base feature each, or the replay's.
+  int bodyIndex = 0;
+  for (const QJsonValue& value : design.value(QStringLiteral("imported")).toArray()) {
+    const QJsonObject body = value.toObject();
+    const QJsonArray madeBodies = body.value(QStringLiteral("bodies")).toArray();
+    const QJsonObject made = madeBodies.isEmpty() ? QJsonObject() : madeBodies.first().toObject();
+    const QString note = QObject::tr("%1, %2 faces, from %3")
+                             .arg(body.value(QStringLiteral("valid")).toBool() ? QObject::tr("valid")
+                                                                                : QObject::tr("not valid"))
+                             .arg(body.value(QStringLiteral("faces")).toInt())
+                             .arg(body.value(QStringLiteral("source")).toString());
+    auto* item = new QTreeWidgetItem(
+        items, {QString::number(++bodyIndex), made.value(QStringLiteral("name")).toString(),
+                body.value(QStringLiteral("solid")).toBool() ? QObject::tr("solid") : QObject::tr("sheet"),
+                (iptHistory ? QObject::tr("body of %1") : QObject::tr("base feature %1"))
+                    .arg(body.value(QStringLiteral("feature")).toString()),
+                note});
+    item->setToolTip(4, note);
+  }
+  for (const QJsonValue& value : (iptHistory ? replay : design).value(QStringLiteral("items")).toArray()) {
     const QJsonObject item = value.toObject();
     auto* row = new QTreeWidgetItem(
         items, {QString::number(item.value(QStringLiteral("index")).toInt()), item.value(QStringLiteral("name")).toString(),
@@ -736,6 +825,9 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
   for (const QJsonValue& warning : design.value(QStringLiteral("warnings")).toArray()) {
     warnings << warning.toString().toHtmlEscaped();
   }
+  for (const QJsonValue& warning : replay.value(QStringLiteral("warnings")).toArray()) {
+    warnings << warning.toString().toHtmlEscaped();
+  }
   if (!warnings.isEmpty()) {
     auto* text = new QLabel(QObject::tr("<b>Warnings</b><br>%1").arg(warnings.join(QStringLiteral("<br>"))));
     text->setWordWrap(true);
@@ -747,14 +839,22 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
   buttons->button(QDialogButtonBox::Close)->setDefault(true);
   layout->addWidget(buttons);
   dialog.resize(720, 520);
-  qDebug().noquote() << QStringLiteral("Import report: %1: %2 items (%3), %4 bodies, %5 of the file's %6 solids match%7")
-                            .arg(file)
-                            .arg(result.value(QStringLiteral("items")).toInt())
-                            .arg(importCounts(result))
-                            .arg(bodies)
-                            .arg(matched)
-                            .arg(fileBodies.size())
-                            .arg(stop.isEmpty() ? QString() : QStringLiteral(", stopped %1").arg(stop));
+  if (isIptImport(result)) {
+    qDebug().noquote()
+        << QStringLiteral("Import report: %1: %2 bodies (%3)").arg(file).arg(bodies).arg(importCounts(result));
+    if (iptHistory) {
+      qDebug().noquote() << QStringLiteral("Import report features: %1: %2").arg(file, iptFeatureCounts(design));
+    }
+  } else {
+    qDebug().noquote() << QStringLiteral("Import report: %1: %2 items (%3), %4 bodies, %5 of the file's %6 solids match%7")
+                              .arg(file)
+                              .arg(result.value(QStringLiteral("items")).toInt())
+                              .arg(importCounts(result))
+                              .arg(bodies)
+                              .arg(matched)
+                              .arg(fileBodies.size())
+                              .arg(stop.isEmpty() ? QString() : QStringLiteral(", stopped %1").arg(stop));
+  }
   qDebug().noquote() << QStringLiteral("Import report summary: %1")
                             .arg(QTextDocumentFragment::fromHtml(summary).toPlainText().simplified());
   for (const QString& line : kept) {

@@ -125,7 +125,9 @@ gp_Dir canonical(const gp_Dir& axis) {
   return largest < 0.0 ? axis.Reversed() : axis;
 }
 
-SurfaceDescription describe(const TopoDS_Face& face) {
+// A face's surface; without `planar_splines`, a face on another surface
+// than the analytic ones gets only its type.
+SurfaceDescription describe(const TopoDS_Face& face, bool planar_splines = true) {
   SurfaceDescription result;
   const BRepAdaptor_Surface surface(face);
   std::optional<gp_Pln> plane;
@@ -170,6 +172,10 @@ SurfaceDescription describe(const TopoDS_Face& face) {
     return result;
   }
   default: {
+    if (!planar_splines) {
+      result.type = surface_type_name(surface.GetType());
+      return result;
+    }
     // Imported faces may be planes stored as splines.
     GeomLib_IsPlanarSurface planar(BRep_Tool::Surface(face), kLinear);
     if (planar.IsPlanar()) {
@@ -242,6 +248,30 @@ TopoDS_Edge forward(const TopoDS_Edge& edge) {
     throw std::runtime_error("the edge is degenerate");
   }
   return TopoDS::Edge(edge.Oriented(TopAbs_FORWARD));
+}
+
+// The curve of an edge, in the direction of its parameter.
+CurveDescription describe_edge(const TopoDS_Edge& forward_edge) {
+  const BRepAdaptor_Curve curve(forward_edge);
+  CurveDescription result;
+  result.start = curve.Value(curve.FirstParameter());
+  result.end = curve.Value(curve.LastParameter());
+  switch (curve.GetType()) {
+  case GeomAbs_Line:
+    result.type = "line";
+    break;
+  case GeomAbs_Circle: {
+    const gp_Circ circle = curve.Circle();
+    result.type = "circle";
+    result.center = circle.Location();
+    result.normal = circle.Axis().Direction();
+    result.radius = circle.Radius();
+    break;
+  }
+  default:
+    result.type = curve_type_name(curve.GetType());
+  }
+  return result;
 }
 
 // An edge of a path, run forwards or backwards.
@@ -323,26 +353,34 @@ SurfaceDescription face_geometry(const Shape& shape, const std::string& face) {
 }
 
 CurveDescription edge_geometry(const Shape& shape, const std::string& edge) {
-  return detail::run("edge geometry", [&] {
-    const TopoDS_Edge forward_edge = forward(require_edge(shape, edge));
-    const BRepAdaptor_Curve curve(forward_edge);
-    CurveDescription result;
-    result.start = curve.Value(curve.FirstParameter());
-    result.end = curve.Value(curve.LastParameter());
-    switch (curve.GetType()) {
-    case GeomAbs_Line:
-      result.type = "line";
-      break;
-    case GeomAbs_Circle: {
-      const gp_Circ circle = curve.Circle();
-      result.type = "circle";
-      result.center = circle.Location();
-      result.normal = circle.Axis().Direction();
-      result.radius = circle.Radius();
-      break;
+  return detail::run("edge geometry",
+                     [&] { return describe_edge(forward(require_edge(shape, edge))); });
+}
+
+std::vector<SurfaceDescription> face_geometries(const Shape& shape) {
+  return detail::run("face geometries", [&] {
+    std::vector<SurfaceDescription> result;
+    result.reserve(static_cast<std::size_t>(shape.face_count()));
+    for (int i = 0; i < shape.face_count(); ++i) {
+      result.push_back(describe(shape.face(i), false));
     }
-    default:
-      result.type = curve_type_name(curve.GetType());
+    return result;
+  });
+}
+
+std::vector<CurveDescription> edge_geometries(const Shape& shape) {
+  return detail::run("edge geometries", [&] {
+    std::vector<CurveDescription> result;
+    result.reserve(static_cast<std::size_t>(shape.edge_count()));
+    for (int i = 0; i < shape.edge_count(); ++i) {
+      const TopoDS_Edge& edge = shape.edge(i);
+      if (BRep_Tool::Degenerated(edge)) {
+        CurveDescription degenerate;
+        degenerate.type = "degenerate";
+        result.push_back(degenerate);
+      } else {
+        result.push_back(describe_edge(TopoDS::Edge(edge.Oriented(TopAbs_FORWARD))));
+      }
     }
     return result;
   });

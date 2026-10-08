@@ -40,6 +40,12 @@ rust::Vec<F3dBody> f3d_bodies(rust::Str path, bool history, bool owners, ShapeLi
 
 // .f3d import (T1).
 std::shared_ptr<geometry::Shape> f3d_build_body(const f3d::BrepBodyData& data);
+std::shared_ptr<geometry::Shape> f3d_read_body(rust::Slice<const std::uint8_t> data);
 void catch_occt_crashes();
+
+// Bodies built from their neutral B-rep data with a build report (the
+// .ipt import).
+F3dBody build_brep_body(const f3d::BrepBodyData& data, ShapeList& shapes);
+bool shape_is_valid(const geometry::Shape& shape);
 
 } // namespace mitcad::bridge

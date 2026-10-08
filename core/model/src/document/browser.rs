@@ -19,15 +19,9 @@ use crate::ids::FeatureUid;
 use crate::kernel::Kernel;
 
 /// Whether a feature has a light bulb of its own: sketches and
-/// construction planes, axes and points.
+/// construction planes, axes, points and joint origins.
 fn has_visibility(def: &FeatureDef) -> bool {
-    matches!(
-        def,
-        FeatureDef::Sketch(_)
-            | FeatureDef::ConstructionPlane(_)
-            | FeatureDef::ConstructionAxis(_)
-            | FeatureDef::ConstructionPoint(_)
-    )
+    crate::joints::placed_geometry(def)
 }
 
 impl DocState {

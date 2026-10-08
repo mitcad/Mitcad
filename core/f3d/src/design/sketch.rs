@@ -13,7 +13,7 @@ use super::ir::{
     SketchPoint, Vec3,
 };
 use super::stream::{
-    Object, Segment, f64s_at, header_end, hex, py_sum, slice, str16_at, u32_at, u64_at,
+    Object, Segment, f64_at, f64s_at, header_end, hex, py_sum, slice, str16_at, u32_at, u64_at,
 };
 use super::unicode;
 
@@ -167,6 +167,23 @@ pub fn lines(seg: &Segment) -> HashMap<u64, LineGeom> {
         );
     }
     out
+}
+
+/// A sketch curve's kind (mitcad#33): 0 normal, 1 construction, 2 centre
+/// line. Every curve class ends its sketch-curve part with two `f32` 1.0;
+/// the kind is the byte 22 bytes before the last such pair *(verified on
+/// the reference models' lines, arcs, circles, splines and ellipses
+/// against their dumps' `isConstruction` and `isCenterLine`)*. Where
+/// a reference starts 24 bytes before the pair (curves linked to other
+/// geometry) the layout differs: `None`, as for any other value.
+pub fn curve_kind(seg: &Segment, d: &[u8]) -> Option<u8> {
+    const PAIR: [u8; 8] = [0, 0, 0x80, 0x3f, 0, 0, 0x80, 0x3f];
+    let p = d.windows(8).rposition(|w| w == PAIR)?;
+    let at = p.checked_sub(24)?;
+    if seg.ref_at(d, at).is_some() {
+        return None;
+    }
+    d.get(p - 22).copied().filter(|&k| k <= 2)
 }
 
 /// Arcs and circles by object id.
@@ -354,6 +371,9 @@ pub struct ConstraintRaw {
     pub entities: Vec<u64>,
     /// The root list: (entity, role).
     pub roles: Vec<(u64, u32)>,
+    /// The subclass part between the root part's attributes and the
+    /// sketch reference (pattern constraints keep their values there).
+    pub tail: Option<(usize, usize)>,
 }
 
 pub fn parse_constraint(seg: &Segment, o: &Object) -> Option<ConstraintRaw> {
@@ -372,6 +392,7 @@ pub fn parse_constraint(seg: &Segment, o: &Object) -> Option<ConstraintRaw> {
     } else {
         p += 1;
     }
+    let tail_start = attributes_end(d, p);
     for q in p..d.len().min(p + 200) {
         let Some(r) = seg.ref_at(d, q) else { continue };
         if seg.guid_of(r.id) != Some(SKETCH) {
@@ -391,9 +412,201 @@ pub fn parse_constraint(seg: &Segment, o: &Object) -> Option<ConstraintRaw> {
             mask,
             entities,
             roles,
+            tail: tail_start.filter(|s| *s <= q).map(|s| (s, q)),
         });
     }
     None
+}
+
+/// Where the root part's attributes (`u8 has_attrs [u32 n, n ×
+/// attribute]`) starting at `p` end.
+fn attributes_end(d: &[u8], p: usize) -> Option<usize> {
+    match *d.get(p)? {
+        0 => Some(p + 1),
+        1 => {
+            let n = u32_at(d, p + 1)?;
+            let mut q = p + 5;
+            for _ in 0..n.min(1000) {
+                q = super::stream::attribute_at(d, q)?.1;
+            }
+            Some(q)
+        }
+        _ => None,
+    }
+}
+
+/// A circular pattern constraint's part (class `8269E861`, mitcad#36):
+/// `ref angle holder | ref quantity holder | f64 angle | u32 quantity`,
+/// then bytes not decoded (zero in every file seen).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CircularPatternRaw {
+    /// Total angle, radians.
+    pub angle: f64,
+    pub angle_holder: u64,
+    pub quantity: u32,
+    pub quantity_holder: u64,
+}
+
+pub fn circular_pattern(
+    seg: &Segment,
+    d: &[u8],
+    tail: (usize, usize),
+) -> Option<CircularPatternRaw> {
+    let a = seg.ref_at(d, tail.0)?;
+    let q = seg.ref_at(d, a.end)?;
+    if seg.guid_of(a.id) != Some(PARAMETER_HOLDER) || seg.guid_of(q.id) != Some(INT_HOLDER) {
+        return None;
+    }
+    Some(CircularPatternRaw {
+        angle: f64_at(d, q.end)?,
+        angle_holder: a.id,
+        quantity: u32_at(d, q.end + 8)?,
+        quantity_holder: q.id,
+    })
+}
+
+/// One direction of a rectangular pattern: `u32 quantity | ref quantity
+/// holder | f64 direction[3] | f64 distance | ref distance holder`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PatternDirectionRaw {
+    pub quantity: u32,
+    pub quantity_holder: u64,
+    /// Unit vector, sketch space.
+    pub direction: Vec3,
+    /// Signed, along `direction`, cm.
+    pub distance: f64,
+    pub distance_holder: u64,
+}
+
+/// A rectangular pattern constraint's part (class `40800FB9`, mitcad#36):
+/// `u8 flags[3] | u32 n, ref[n]` (the first direction's sketch line, if
+/// any), eight bytes, then the two directions ([`PatternDirectionRaw`]).
+/// The second direction is the first turned a quarter counter-clockwise
+/// in every file seen. `flags[1]` is 1 where the instances lie on both
+/// sides of the originals along the first direction *(1 of 34 patterns
+/// seen; the other flags are open)*.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RectangularPatternRaw {
+    pub flags: [u8; 3],
+    pub direction_entity: Option<u64>,
+    pub directions: [PatternDirectionRaw; 2],
+}
+
+pub fn rectangular_pattern(
+    seg: &Segment,
+    d: &[u8],
+    tail: (usize, usize),
+) -> Option<RectangularPatternRaw> {
+    let (start, end) = tail;
+    let refs = seg.refs_in(d, start + 3, end);
+    let first = refs
+        .iter()
+        .position(|(_, r)| seg.guid_of(r.id) == Some(INT_HOLDER))?;
+    let direction_entity = refs[..first]
+        .iter()
+        .map(|(_, r)| r.id)
+        .find(|&id| seg.is_kind_of(id, SKETCH_CURVE));
+    let direction = |at: usize| -> Option<(PatternDirectionRaw, usize)> {
+        let q = seg.ref_at(d, at)?;
+        if seg.guid_of(q.id) != Some(INT_HOLDER) {
+            return None;
+        }
+        let v = f64s_at(d, q.end, 4)?;
+        let h = seg.ref_at(d, q.end + 32)?;
+        if seg.guid_of(h.id) != Some(PARAMETER_HOLDER) {
+            return None;
+        }
+        Some((
+            PatternDirectionRaw {
+                quantity: u32_at(d, at.checked_sub(4)?)?,
+                quantity_holder: q.id,
+                direction: vec3(&v[0..3]),
+                distance: v[3],
+                distance_holder: h.id,
+            },
+            h.end,
+        ))
+    };
+    let (one, after) = direction(refs[first].0)?;
+    let (two, _) = direction(after + 4)?;
+    let mut flags = [0u8; 3];
+    flags.copy_from_slice(d.get(start..start + 3)?);
+    Some(RectangularPatternRaw {
+        flags,
+        direction_entity,
+        directions: [one, two],
+    })
+}
+
+/// The object of an offset (class `AFC07C10`, mitcad#36) that holds an
+/// offset constraint's curves: its root list refers to the curve offset,
+/// the parent and the child chains (class `04E598FF`, each a root list
+/// of curves in chain order), the offset dimension and the constraint;
+/// the object ends with the signed distance (f64, cm).
+#[derive(Clone, Debug, PartialEq)]
+pub struct OffsetRaw {
+    pub parents: Vec<u64>,
+    pub children: Vec<u64>,
+    pub dimension: Option<u64>,
+    /// Signed, cm; its sign is the side.
+    pub distance: Option<f64>,
+}
+
+/// Offset constraint id -> what its offset object holds.
+pub fn offsets(seg: &Segment) -> HashMap<u64, OffsetRaw> {
+    let mut out = HashMap::new();
+    for o in seg.objects_of(OFFSET) {
+        let d = seg.data(o);
+        let Some(start) = header_end(d) else { continue };
+        let refs: Vec<u64> = seg
+            .refs_in(d, start, d.len())
+            .into_iter()
+            .map(|(_, r)| r.id)
+            .collect();
+        let Some(constraint) = refs
+            .iter()
+            .copied()
+            .find(|&r| seg.is_kind_of(r, SKETCH_CONSTRAINT))
+        else {
+            continue;
+        };
+        let mut chains = Vec::new();
+        for &r in &refs {
+            if seg.guid_of(r) == Some(OFFSET_CHAIN) && !chains.contains(&r) {
+                chains.push(r);
+            }
+        }
+        let chain = |id: Option<&u64>| -> Vec<u64> {
+            let Some(&id) = id else { return Vec::new() };
+            let cd = seg.data_of(id);
+            let Some(s) = header_end(cd) else {
+                return Vec::new();
+            };
+            seg.refs_in(cd, s, cd.len())
+                .into_iter()
+                .map(|(_, r)| r.id)
+                .take_while(|&r| seg.is_kind_of(r, SKETCH_CURVE))
+                .collect()
+        };
+        let distance = d
+            .len()
+            .checked_sub(8)
+            .and_then(|p| f64_at(d, p))
+            .filter(|v| v.is_finite() && *v != 0.0);
+        out.insert(
+            constraint,
+            OffsetRaw {
+                parents: chain(chains.first()),
+                children: chain(chains.get(1)),
+                dimension: refs
+                    .iter()
+                    .copied()
+                    .find(|&r| seg.is_kind_of(r, SKETCH_DIMENSION)),
+                distance,
+            },
+        );
+    }
+    out
 }
 
 /// A sketch dimension (classes under `855F0A64`, section 10.5): its tail
@@ -520,6 +733,16 @@ pub struct SketchInfo {
     pub detail: SketchDetail,
     /// Parameter holder of each dimension (`None`: not parsed).
     pub holders: Vec<Option<u64>>,
+    /// Parameters of constraints (patterns): (constraint index, property,
+    /// holder). The property holds the stored value until the builder
+    /// puts the parameter there.
+    pub constraint_holders: Vec<(usize, &'static str, u64)>,
+}
+
+/// A value as a parameter reference without a parameter (the builder
+/// replaces it with the parameter its holder names).
+fn value_ref(value: f64, unit: &str) -> serde_json::Value {
+    serde_json::json!({"kind": "parameter", "value": value, "unit": unit})
 }
 
 /// All sketches' details, and object id -> (sketch id, local id) for every
@@ -529,6 +752,9 @@ pub fn sketch_details(seg: &Segment) -> (Vec<SketchInfo>, HashMap<u64, (u64, Str
     let lns = lines(seg);
     let arcs = arcs(seg);
     let tfs = transforms(seg);
+    let offsets = offsets(seg);
+    let offset_dimensions: std::collections::HashSet<u64> =
+        offsets.values().filter_map(|o| o.dimension).collect();
     let mut local_ids = HashMap::new();
     let mut out = Vec::new();
     for s in seg.objects_of(SKETCH) {
@@ -632,6 +858,11 @@ pub fn sketch_details(seg: &Segment) -> (Vec<SketchInfo>, HashMap<u64, (u64, Str
             } else {
                 rec.f3d_class = seg.guid_of(e).map(str::to_string);
             }
+            match curve_kind(seg, seg.data_of(e)) {
+                Some(1) => rec.is_construction = Some(true),
+                Some(2) => rec.is_center_line = Some(true),
+                _ => {}
+            }
             curves.push(rec);
         }
 
@@ -646,6 +877,7 @@ pub fn sketch_details(seg: &Segment) -> (Vec<SketchInfo>, HashMap<u64, (u64, Str
             .collect();
 
         let mut constraints = Vec::new();
+        let mut constraint_holders = Vec::new();
         for &c in &cons {
             let mut rec = SketchConstraint {
                 id: kid.get(c).cloned(),
@@ -671,6 +903,15 @@ pub fn sketch_details(seg: &Segment) -> (Vec<SketchInfo>, HashMap<u64, (u64, Str
                     mask: Some(pc.mask),
                     ..ConstraintF3d::default()
                 });
+                let props = constraint_props(seg, c, &pc, &offsets, &|e| {
+                    [&pid, &cid, &did].iter().find_map(|t| t.get(e)).cloned()
+                });
+                for (name, holder) in props.holders {
+                    constraint_holders.push((constraints.len(), name, holder));
+                }
+                if !props.values.is_empty() {
+                    rec.props = Some(props.values);
+                }
             }
             constraints.push(rec);
         }
@@ -713,9 +954,22 @@ pub fn sketch_details(seg: &Segment) -> (Vec<SketchInfo>, HashMap<u64, (u64, Str
                     // value = distance between parallel lines / point and
                     // line (354/366 in the corpus, section 10.5)
                     typ = Some("SketchOffsetDimension");
+                    // Byte 4 of the last 8 flag bytes is 2 where the value
+                    // is twice the distance, a diameter about the line
+                    // (mitcad#33: 13 of 13 such dimensions in the corpus,
+                    // and in 2026 designs; never on the 361 others).
+                    let flags = pd.flags.as_deref().unwrap_or_default();
+                    if flags.len() >= 8 && flags[flags.len() - 4] == 2 {
+                        typ = Some("SketchLinearDiameterDimension");
+                    }
                 } else if linear && kinds == "AA" {
                     // concentric circles, value = radius difference (38/38)
                     typ = Some("SketchConcentricCircleDimension");
+                }
+                if offset_dimensions.contains(&x) {
+                    // The distance of an offset (its offset object names
+                    // it, mitcad#36); it refers to one curve of the offset.
+                    typ = Some("SketchOffsetCurvesDimension");
                 }
                 let mut props = serde_json::Map::new();
                 if linear && kinds == "PP" {
@@ -788,9 +1042,117 @@ pub fn sketch_details(seg: &Segment) -> (Vec<SketchInfo>, HashMap<u64, (u64, Str
             id: s.id,
             detail,
             holders,
+            constraint_holders,
         });
     }
     (out, local_ids)
+}
+
+/// What a constraint adds to its entities (mitcad#36), under the API's
+/// property names: an offset's `distance` (cm, signed), `dimension`,
+/// `parentCurves` and `childCurves`; a pattern's `createdEntities` (the
+/// copies, after the originals in the entity list), a circular pattern's
+/// `centerPoint` (its last entity), `quantity` and `totalAngle`, a
+/// rectangular one's `quantityOne`/`Two`, `distanceOne`/`Two`,
+/// `directionOne`/`Two`, `directionOneEntity` and its undecoded `flags`.
+/// Parameter values are references, completed by the builder (`holders`).
+#[derive(Default)]
+struct ConstraintProps {
+    values: serde_json::Map<String, serde_json::Value>,
+    holders: Vec<(&'static str, u64)>,
+}
+
+fn constraint_props(
+    seg: &Segment,
+    id: u64,
+    c: &ConstraintRaw,
+    offsets: &HashMap<u64, OffsetRaw>,
+    local: &dyn Fn(u64) -> Option<String>,
+) -> ConstraintProps {
+    use serde_json::json;
+    let mut out = ConstraintProps::default();
+    let ids = |list: &[u64]| -> serde_json::Value {
+        list.iter()
+            .map(|&e| local(e).map_or(serde_json::Value::Null, serde_json::Value::from))
+            .collect()
+    };
+    // The originals come first, then their copies (instance by instance),
+    // then a circular pattern's centre: the copies are all but the first
+    // n / instances entities.
+    let created = |entities: &[u64], instances: u32| -> Option<serde_json::Value> {
+        let n = entities.len();
+        let instances = instances as usize;
+        if instances < 2 || !n.is_multiple_of(instances) {
+            return None;
+        }
+        Some(ids(&entities[n / instances..]))
+    };
+    let d = seg.data_of(id);
+    let v = &mut out.values;
+    match c.mask {
+        0x20_0000_0000 => {
+            let Some(o) = offsets.get(&id) else {
+                return out;
+            };
+            if let Some(dist) = o.distance {
+                v.insert("distance".into(), json!(dist));
+            }
+            if let Some(dim) = o.dimension.and_then(local) {
+                v.insert("dimension".into(), json!(dim));
+            }
+            v.insert("parentCurves".into(), ids(&o.parents));
+            v.insert("childCurves".into(), ids(&o.children));
+        }
+        0x1000_0000 => {
+            let Some(p) = c.tail.and_then(|t| circular_pattern(seg, d, t)) else {
+                return out;
+            };
+            if let Some((&center, rest)) = c
+                .entities
+                .split_last()
+                .filter(|(e, _)| classes::is_point_class(seg.guid_of(**e)))
+            {
+                if let Some(center) = local(center) {
+                    v.insert("centerPoint".into(), json!(center));
+                }
+                if let Some(made) = created(rest, p.quantity) {
+                    v.insert("createdEntities".into(), made);
+                }
+            }
+            v.insert("quantity".into(), value_ref(f64::from(p.quantity), ""));
+            v.insert("totalAngle".into(), value_ref(p.angle, "rad"));
+            out.holders.push(("quantity", p.quantity_holder));
+            out.holders.push(("totalAngle", p.angle_holder));
+        }
+        0x2000_0000 => {
+            let Some(p) = c.tail.and_then(|t| rectangular_pattern(seg, d, t)) else {
+                return out;
+            };
+            let instances = p.directions[0]
+                .quantity
+                .saturating_mul(p.directions[1].quantity);
+            if let Some(made) = created(&c.entities, instances) {
+                v.insert("createdEntities".into(), made);
+            }
+            if let Some(e) = p.direction_entity.and_then(local) {
+                v.insert("directionOneEntity".into(), json!(e));
+            }
+            let names = [
+                ("quantityOne", "distanceOne", "directionOne"),
+                ("quantityTwo", "distanceTwo", "directionTwo"),
+            ];
+            for (dir, (q, dist, along)) in p.directions.iter().zip(names) {
+                v.insert(q.into(), value_ref(f64::from(dir.quantity), ""));
+                v.insert(dist.into(), value_ref(dir.distance, "cm"));
+                v.insert(along.into(), json!(dir.direction));
+                out.holders.push((q, dir.quantity_holder));
+                out.holders.push((dist, dir.distance_holder));
+            }
+            v.insert("flags".into(), json!(p.flags));
+        }
+        _ => {}
+    }
+    out
 }
 
 fn entities_refs(items: impl Iterator<Item = RefValue>) -> BTreeMap<String, RefValue> {

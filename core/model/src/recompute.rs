@@ -33,7 +33,7 @@ use crate::features::{
 };
 use crate::fingerprint::Fingerprint;
 use crate::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
-use crate::kernel::Kernel;
+use crate::kernel::{Kernel, KernelError};
 use crate::monitor::{Cancelled, RecomputeMonitor};
 use crate::parameters::{ParamId, Parameters};
 use crate::store::ResultStore;
@@ -548,6 +548,8 @@ pub(crate) struct Recomputed<S> {
     /// and how long reading each took.
     pub restored: Vec<FeatureUid>,
     pub restore_times: Vec<Duration>,
+    /// Joints and rigid groups before the marker (mitcad#55).
+    pub joints: crate::joints::JointsState,
 }
 
 impl<S> Default for Recomputed<S> {
@@ -563,6 +565,7 @@ impl<S> Default for Recomputed<S> {
             times: Vec::new(),
             restored: Vec::new(),
             restore_times: Vec::new(),
+            joints: crate::joints::JointsState::default(),
         }
     }
 }
@@ -651,7 +654,11 @@ pub(crate) fn recompute<K: Kernel>(
                         monitor.evaluation_done()?;
                     }
                     done.times.push(output.time);
-                    cache.insert(kernel, entry, output.clone());
+                    // Nor is a failure for lack of memory: the feature may
+                    // build once memory is free again (mitcad#80).
+                    if !matches!(&output.result, Err(m) if KernelError::is_out_of_memory(m)) {
+                        cache.insert(kernel, entry, output.clone());
+                    }
                     if let Some(monitor) = monitor {
                         monitor.kept();
                     }
@@ -667,8 +674,23 @@ pub(crate) fn recompute<K: Kernel>(
         };
         // Placements depend on the assembly's flags, which the cache does
         // not key on: they are applied here.
+        // A move takes the occurrences rigid groups join to the moved one
+        // along (mitcad#55).
+        let placements = if done.joints.groups.is_empty() {
+            output.placements.clone()
+        } else {
+            crate::joints::with_groups(&done.joints.groups, entry.component, &output.placements)
+        };
         if status.is_ok()
-            && let Err(message) = place(state, entry, &output.placements, &mut done.placements)
+            && let Err(message) = place(state, entry, &placements, &mut done.placements)
+        {
+            status = FeatureStatus::Failed(message);
+        }
+        // Joints and rigid groups (mitcad#55) read the placements and the
+        // other components' bodies at this point: applied here too.
+        if status.is_ok()
+            && crate::joints::applies(&entry.def)
+            && let Err(message) = crate::joints::apply(kernel, state, entry, &components, &mut done)
         {
             status = FeatureStatus::Failed(message);
         }
@@ -714,6 +736,9 @@ pub(crate) fn recompute<K: Kernel>(
         all.extend(bodies.iter().map(|(uid, b)| (*uid, b.clone())));
     }
     done.bodies = Arc::new(all);
+    // The joints' frames and values where the occurrences are at the
+    // marker.
+    crate::joints::finish(&mut done.joints, &done.placements);
     if let Some(monitor) = monitor {
         monitor.finish(total);
     }
@@ -722,7 +747,7 @@ pub(crate) fn recompute<K: Kernel>(
 
 /// Applies a feature's placement changes: each occurrence must be placed
 /// in the feature's component and not be grounded.
-fn place(
+pub(crate) fn place(
     state: &DocState,
     entry: &FeatureEntry,
     changes: &[PlacementChange],

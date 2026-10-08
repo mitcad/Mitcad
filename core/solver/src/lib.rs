@@ -9,6 +9,10 @@
 //! they hold, and [`System::analyze`] reports degrees of freedom, fully
 //! constrained geometry and redundant or conflicting constraints.
 //!
+//! [`RigidSystem`] solves the joints of assemblies with the same methods:
+//! rigid bodies joined by joints with free motions, limits and driven
+//! values.
+//!
 //! The solver is our own implementation (MIT) of well-known methods; see
 //! `README.md` for the formulation. It has no dependencies.
 //!
@@ -47,6 +51,7 @@ mod analysis;
 mod direction;
 mod equations;
 mod prepare;
+mod rigid;
 mod scalar;
 mod solve;
 mod sparse;
@@ -54,6 +59,10 @@ mod spline;
 mod system;
 mod types;
 
+pub use rigid::{
+    BodyId, Freedom, JointId, JointMotion, Pose, RigidAnalysis, RigidDependency, RigidError,
+    RigidJoint, RigidOptions, RigidResult, RigidSystem, motion_pose,
+};
 pub use system::{SplineGeometry, System};
 pub use types::{
     Analysis, Constraint, ConstraintId, Dependency, DragGoal, EntityId, EntityKind, Error, PointId,

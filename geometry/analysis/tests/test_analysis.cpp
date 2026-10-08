@@ -420,6 +420,24 @@ void test_compare() {
   one_way.samples = 100;
   const auto quick = compare(a, fillet.Shape(), one_way);
   CHECK(quick.b_to_a.samples == 0 && quick.a_to_b.samples > 100);
+
+  // Nearly coincident shapes: the booleans are left out when no sample
+  // lies farther than asked (mitcad#69), not otherwise.
+  mitcad::analysis::CompareOptions close;
+  close.booleans_above = 1e-3;
+  const auto near_same = compare(a, BRepBuilderAPI_Copy(a).Shape(), close);
+  CHECK(!near_same.a_minus_b && !near_same.b_minus_a && !near_same.relative_difference);
+  CHECK(near_same.max_deviation < 1e-7 && near_same.b_to_a.samples > 1000);
+  const auto apart = compare(a, moved(a, shift), close);
+  CHECK(apart.relative_difference && near(*apart.relative_difference, 0.02, 1e-6));
+  // Booleans that took nearly coincident shapes as apart are unknown; the
+  // shift's and the rounding's differences are within what their
+  // deviations allow.
+  using mitcad::analysis::plausible_differences;
+  const double area = 2.0 * 2.0 * (200.0 + 300.0 + 600.0);
+  CHECK(plausible_differences(120.0, 0.1, area, 1e-4));
+  CHECK(plausible_differences(*rounded.a_minus_b, rounded.max_deviation, area, 1e-4));
+  CHECK(!plausible_differences(12000.0, 1e-5, area, 1e-4));
 }
 
 } // namespace

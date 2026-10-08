@@ -606,7 +606,7 @@ fn tapped_holes_take_the_thread_size_and_list_their_threads() {
     assert_eq!(b.doc.kernel().count("thread"), 1);
     assert!(
         last_spec(&b.doc).starts_with(
-            "thread F3:hole0.wall pitch 1 depth 0.541266 right true part Some((8.0, 1.0, true))"
+            "thread F3:hole0.wall pitch 1 diameters 6.0000/4.9175/5.3505 angle 0.000000 right true part Some((8.0, 1.0, true))"
         ),
         "{}",
         last_spec(&b.doc)
@@ -680,9 +680,10 @@ fn cosmetic_threads_are_data_and_modelled_ones_geometry() {
     let modeled = thread_def("F2:side(c1)", json!({"modeled": true}));
     doc.edit_feature(uid, &modeled).unwrap();
     assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    // The basic profile: D, D1 and D2.
     assert_eq!(
         last_spec(&doc),
-        "thread F2:side(c1) pitch 1.5 depth 0.811899 right true part None"
+        "thread F2:side(c1) pitch 1.5 diameters 10.0000/8.3762/9.0257 angle 0.000000 right true part None"
     );
     assert_eq!(
         doc.body_shape(BodyUid::new(FeatureUid(2), 0))
@@ -690,6 +691,29 @@ fn cosmetic_threads_are_data_and_modelled_ones_geometry() {
             .history,
         "thread(prism(F2:0..20),1.5)"
     );
+    // The class's diameters, turned.
+    let class = thread_def(
+        "F2:side(c1)",
+        json!({"modeled": true, "diameters": {"major": 9.85, "minor": 8.141, "pitch": 8.928},
+               "angle": "30 deg"}),
+    );
+    doc.edit_feature(uid, &class).unwrap();
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&doc),
+        "thread F2:side(c1) pitch 1.5 diameters 9.8500/8.1410/8.9280 angle 0.523599 right true part None"
+    );
+    // Diameters out of order; diameters and an angle on a cosmetic thread.
+    let wrong = thread_def(
+        "F2:side(c1)",
+        json!({"modeled": true, "diameters": {"major": 9.85, "minor": 8.928, "pitch": 8.141}}),
+    );
+    let error = doc.edit_feature(uid, &wrong).unwrap_err().to_string();
+    assert!(error.contains("must grow from the minor"), "{error}");
+    let cosmetic = thread_def("F2:side(c1)", json!({"angle": 0.5}));
+    let error = doc.edit_feature(uid, &cosmetic).unwrap_err().to_string();
+    assert!(error.contains("only a modelled thread"), "{error}");
+    doc.edit_feature(uid, &modeled).unwrap();
 
     // Not a cylinder; an internal class on an external face.
     doc.edit_feature(uid, &thread_def("F2:end(r{c1})", json!({})))

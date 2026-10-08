@@ -240,6 +240,9 @@ std::shared_ptr<geometry::Shape> helix_solid(rust::Str feature, const Frame& fra
   spec.pitch = input.pitch;
   spec.revolutions = input.revolutions;
   spec.left_handed = input.left_handed;
+  spec.growth = input.growth;
+  spec.flip = input.flip;
+  spec.freecad = input.freecad;
   return geometry::helix_sweep(spec);
 }
 

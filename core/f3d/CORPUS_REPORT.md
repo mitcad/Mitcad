@@ -20,8 +20,10 @@ mitcad-f3d-inspect meshes <file>
 mitcad-f3d-inspect history <file>
 # OCCT build of every body (use an optimised build: about 70 s for the
 # corpus, 8-9 min in the debug preset); --history adds the rolled-back
-# .smbh bodies (about 30 min), --save DIR writes invalid bodies as .brep:
-test_brep_import --corpus [dir] [-v] [--history]
+# .smbh bodies (about 30 min), --save DIR writes invalid bodies as .brep;
+# each file is built in a child process of its own, --jobs N at a time
+# (docs/development.md, ".f3d corpus tests"; --jobs 1: one process):
+test_brep_import --corpus [dir] [-v] [--history] [--jobs N]
 # Display meshes against the built bodies (volume tolerance in %):
 test_brep_import --corpus --meshes 1
 # Per-file table; comparison of .smbh bodies (and their earlier states)

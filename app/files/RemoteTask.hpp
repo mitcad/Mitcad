@@ -34,6 +34,9 @@ public:
   static RemoteTask* command(const QString& path, const QJsonObject& command, QObject* parent);
   // The project at `url` opened into `folder` (git clone); name() "clone".
   static RemoteTask* clone(const QString& url, const QString& folder, QObject* parent);
+  // A library command (mitcad#64, commands.md "Component libraries":
+  // library_fetch, ...); name() is the command's name.
+  static RemoteTask* library(const QJsonObject& command, QObject* parent);
   // A task still running is cancelled and waited for.
   ~RemoteTask() override;
 

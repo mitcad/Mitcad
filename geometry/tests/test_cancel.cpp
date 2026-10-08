@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Long operations stopped on request (P7e): a modelled thread (OCCT's
 // sweeps and boolean cut; seconds in a debug build) asks its source as it
-// goes, stops inside when the source says so or another thread cancels,
+// goes and reports its progress to it (mitcad#82), stops inside when the
+// source says so or another thread cancels,
 // and throws Cancelled; the scope restores the source before it, and a
 // source that never says yes changes nothing.
 
@@ -35,12 +36,17 @@ public:
     return true;
   }
 
+  // The algorithms' progress (mitcad#82).
+  void progressed() const noexcept override { ++m_progressed; }
+
   long asked() const { return m_asked.load(); }
+  long progressed_count() const { return m_progressed.load(); }
   Clock::time_point first_yes() const { return Clock::time_point(Clock::duration(m_first_yes.load())); }
 
 private:
   long m_yes_from;
   mutable std::atomic<long> m_asked{0};
+  mutable std::atomic<long> m_progressed{0};
   mutable std::atomic<long long> m_first_yes{0};
 };
 
@@ -52,7 +58,10 @@ ThreadSpec m10() {
   spec.feature = "F3";
   spec.faces = {"F2:side(c1)"};
   spec.pitch = 1.5;
-  spec.depth = 0.625 * 0.8660254037844386 * 1.5;
+  // The basic profile: D, D1 = D - 5H/4, D2 = D - 3H/4.
+  spec.major = 10.0;
+  spec.minor = 10.0 - 1.25 * 0.8660254037844386 * 1.5;
+  spec.pitch_diameter = 10.0 - 0.75 * 0.8660254037844386 * 1.5;
   return spec;
 }
 
@@ -106,9 +115,13 @@ void test_asked_inside() {
   CHECK(near(asked_volume, plain, 1e-9));
   // Twice per sweep and per cut between the steps; far more inside.
   const long total = never.asked();
-  std::printf("cancel: a 6 mm modelled thread asks its source %ld times (%.0f ms; %.0f ms without)\n",
-              total, ms(Clock::now() - middle), ms(middle - start));
+  std::printf("cancel: a 6 mm modelled thread asks its source %ld times (%.0f ms; %.0f ms without), "
+              "reports progress %ld times\n",
+              total, ms(Clock::now() - middle), ms(middle - start), never.progressed_count());
   CHECK(total > 100);
+  // Its progress goes to the source as it advances: a watchdog sees that
+  // the operation is not stuck (mitcad#82).
+  CHECK(never.progressed_count() > 0);
 
   // Yes halfway through: it stops there.
   CountingSource halfway(total / 2);

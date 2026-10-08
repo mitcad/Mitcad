@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Holes with modelled threads, one per Body, each in a 30 x 20 x 15 block
-# from a sketch on its top face. Mitcad cuts its basic profile from
-# FreeCAD's bore, which is not FreeCAD's thread, so these take FreeCAD's
-# stored shapes (fallbacks; the report gives the difference):
+# from a sketch on its top face. Mitcad replays FreeCAD's construction (the
+# groove's section swept along a helix, then the hole), which comes within
+# 1.3e-6 to 2e-6 of FreeCAD's stored shapes, just above the import's 1e-6
+# check (FreeCAD sweeps the section by the Frenet frame along a helix
+# approximated turn by turn, Mitcad's helix keeps the axis as its
+# binormal), so these still take FreeCAD's stored shapes; 1.0 does not
+# model the metric one (the hole is invalid):
 #
 # - Metric: an M6 hole, 12 mm deep, flat bottomed, its thread modelled.
 # - Unified: a 1/4 UNC hole through all, its thread modelled.

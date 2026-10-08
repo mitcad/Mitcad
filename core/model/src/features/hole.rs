@@ -762,8 +762,11 @@ impl<K: Kernel> Evaluate<K> for HoleDef {
                 feature: ctx.uid,
                 faces: &faces,
                 pitch: data.pitch,
-                depth: data.depth,
+                major: data.major,
+                minor: data.minor,
+                pitch_diameter: data.pitch_diameter,
                 right_handed: thread.right_handed,
+                angle: 0.0,
                 part,
             };
             *shape = ctx

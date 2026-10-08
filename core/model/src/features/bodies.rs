@@ -10,7 +10,7 @@ use std::sync::Arc;
 use super::{BodyChange, EvalContext, FeatureEntry, Operation};
 use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::{BooleanOp, Kernel};
-use crate::recompute::{FeatureStatus, Read};
+use crate::recompute::{Change, FeatureStatus, Read};
 
 /// The bodies as a feature changes them; [`BodySet::changes`] gives the
 /// feature's output.
@@ -44,6 +44,19 @@ impl<S: Clone> BodySet<S> {
 
     pub fn remove(&mut self, uid: BodyUid) {
         self.current.remove(&uid);
+    }
+
+    /// The shapes of the participants an operation works on ([`apply_tool`]:
+    /// empty means all bodies); bodies that do not exist are left out.
+    pub fn participants(&self, participants: &[BodyUid]) -> Vec<&S> {
+        if participants.is_empty() {
+            self.current.values().collect()
+        } else {
+            participants
+                .iter()
+                .filter_map(|uid| self.get(*uid))
+                .collect()
+        }
     }
 
     /// Sets of the bodies the feature changed or created, in order, then
@@ -214,6 +227,31 @@ impl<K: Kernel> EvalContext<'_, K> {
                 .tool
                 .clone()
                 .ok_or_else(|| format!("{name} has no tool body")),
+            _ => Err(format!("{name} has no result")),
+        }
+    }
+
+    /// The bodies an earlier feature's result set or removed. The read
+    /// covers the feature's whole result.
+    pub(crate) fn feature_changed_bodies(
+        &mut self,
+        uid: FeatureUid,
+    ) -> Result<Vec<BodyUid>, String> {
+        let result = self.env.history.iter().find(|r| r.uid == uid);
+        let output = result.and_then(|r| r.output.as_ref());
+        self.reads
+            .push(Read::Output(uid, output.map(|o| o.version)));
+        let name = self.feature_name(uid);
+        match (result.map(|r| &r.status), output) {
+            (Some(FeatureStatus::Suppressed), _) => Err(format!("{name} is suppressed")),
+            (Some(FeatureStatus::Failed(_)), _) => Err(format!("{name} failed")),
+            (_, Some(output)) => Ok(output
+                .changes
+                .iter()
+                .map(|change| match change {
+                    Change::Set(body, _) | Change::Remove(body) => *body,
+                })
+                .collect()),
             _ => Err(format!("{name} has no result")),
         }
     }

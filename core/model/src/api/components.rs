@@ -111,7 +111,11 @@ pub(crate) enum ComponentCommand {
         occurrence: String,
     },
     InsertComponent {
-        path: String,
+        /// A project file; or `library` (mitcad#64).
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        library: Option<super::libraries::LibraryInput>,
         #[serde(default = "yes")]
         link: bool,
         #[serde(default)]
@@ -295,6 +299,7 @@ impl<K: Kernel> Document<K> {
             }
             ComponentCommand::InsertComponent {
                 path,
+                library,
                 link,
                 transform,
                 name,
@@ -306,7 +311,17 @@ impl<K: Kernel> Document<K> {
                     name,
                     base: base.map(PathBuf::from),
                 };
-                let (component, occurrence) = self.insert_component(&path, &options)?;
+                let (component, occurrence) = match (path, library) {
+                    (Some(path), None) => self.insert_component(&path, &options)?,
+                    (None, Some(library)) => {
+                        self.insert_library_component(&library.part(), &options)?
+                    }
+                    _ => {
+                        return Err(ApiError(
+                            "insert_component needs a path or a library part, not both".to_owned(),
+                        ));
+                    }
+                };
                 json!({"component": component, "occurrence": occurrence,
                        "name": self.assembly().name(component)})
             }
@@ -335,6 +350,7 @@ impl<K: Kernel> Document<K> {
                 "name": a.name(uid),
                 "created_by": def.and_then(|d| d.created_by),
                 "link": def.and_then(|d| d.link.as_ref()).map(|l| l.path.clone()),
+                "library": def.and_then(|d| d.library.as_ref()),
                 "features": features,
                 "bodies": bodies,
                 "occurrences": a.occurrences_of(uid).count(),

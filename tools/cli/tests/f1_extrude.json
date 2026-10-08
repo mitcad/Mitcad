@@ -146,5 +146,16 @@
   {"cmd": "add_feature", "def": {"type": "extrude",
     "profiles": [{"sketch": "F18", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
     "extent": {"type": "distance", "distance": 20}, "operation": "new_component"}},
-  {"expect": {"body": "F19.b0", "volume": 48000}}
+  {"expect": {"body": "F19.b0", "volume": 48000}},
+
+  {"comment": "A ring whose inner circle is there twice (imported sketches, mitcad#93): one hole, not two on each other (intersecting wires). Sketch10 F20, Extrude10 F21."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F20", "center": [0, 300], "diameter": 12},
+  {"cmd": "sketch.add_circle", "sketch": "F20", "center": [0, 300], "diameter": 8},
+  {"cmd": "sketch.add_circle", "sketch": "F20", "center": [0, 300], "diameter": 8},
+  {"expect": {"sketch": "F20", "regions": ["r{c1}", "r{c3}"]}},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F20", "region": "r{c1}"}],
+    "extent": {"type": "distance", "distance": 5}, "operation": "new_body"}},
+  {"expect": {"body": "F21.b0", "volume": 314.1592653589793, "faces": 4}}
 ]

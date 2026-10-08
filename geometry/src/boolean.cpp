@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -24,7 +25,9 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_XYZ.hxx>
 
+#include "far_features.hpp"
 #include "history.hpp"
 #include "mitcad/analysis/common.hpp"
 #include "mitcad/geometry/query.hpp"
@@ -57,6 +60,8 @@ Bnd_Box box_of(const Shape& shape) {
 // A shape's faces with their boxes (enlarged by kContact).
 struct FaceBoxes {
   std::vector<std::pair<TopoDS_Shape, Bnd_Box>> faces;
+  // The edges of each face (as its wires use them).
+  std::vector<int> edges;
 
   explicit FaceBoxes(const TopoDS_Shape& shape) {
     for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
@@ -64,7 +69,21 @@ struct FaceBoxes {
       BRepBndLib::Add(it.Current(), box);
       box.Enlarge(kContact);
       faces.emplace_back(it.Current(), box);
+      int count = 0;
+      for (TopExp_Explorer edge(it.Current(), TopAbs_EDGE); edge.More(); edge.Next()) {
+        ++count;
+      }
+      edges.push_back(count);
     }
+  }
+
+  // The edges of the marked faces.
+  int edges_of(const std::vector<bool>& marks) const {
+    int count = 0;
+    for (std::size_t i = 0; i < faces.size(); ++i) {
+      count += marks[i] ? edges[i] : 0;
+    }
+    return count;
   }
 
   // The faces (of those marked in `among`, else of all) that come within
@@ -197,19 +216,28 @@ class Inside {
 public:
   explicit Inside(const TopoDS_Shape& shape) : m_shape(shape) {}
 
-  bool operator()(const gp_Pnt& point) {
+  bool operator()(const gp_Pnt& point) { return state(point) == TopAbs_IN; }
+
+  // IN when the point is inside a solid, else ON when it is on the boundary
+  // of one (within kContact, or within the tolerance of a vertex or edge
+  // there), else OUT.
+  TopAbs_State state(const gp_Pnt& point) {
     if (m_classifiers.empty()) {
       for (TopExp_Explorer solid(m_shape, TopAbs_SOLID); solid.More(); solid.Next()) {
         m_classifiers.push_back(std::make_unique<BRepClass3d_SolidClassifier>(solid.Current()));
       }
     }
+    TopAbs_State found = TopAbs_OUT;
     for (const auto& classifier : m_classifiers) {
       classifier->Perform(point, kContact);
       if (classifier->State() == TopAbs_IN) {
-        return true;
+        return TopAbs_IN;
+      }
+      if (classifier->State() == TopAbs_ON) {
+        found = TopAbs_ON;
       }
     }
-    return false;
+    return found;
   }
 
 private:
@@ -217,10 +245,59 @@ private:
   std::vector<std::unique_ptr<BRepClass3d_SolidClassifier>> m_classifiers;
 };
 
+// Vertices of a tool part tried by vertex_touches.
+constexpr int kProbedVertices = 32;
+// Edges of the faces near a tool part from which its vertices are tried
+// first (vertex_touches): below it measuring faces is as quick.
+constexpr int kManyEdges = 1000;
+
+// Whether a vertex of `part` shows that it touches the shape `a` (its
+// classifier `inside_a`, its faces `faces_a`): a vertex inside a solid of
+// it, or on its boundary within kContact (measured: the classifier also
+// says ON within the tolerances of the shape's vertices and edges). Either
+// means the distance faces_touch measures is within kContact, or the part
+// lies inside `a`, so touches gives true without measuring faces: on a
+// body with thousands of faces (a plate with a large pattern of holes),
+// whose large faces come near every face of a tool, measuring took
+// minutes. False says nothing. Only the first kProbedVertices vertices in
+// `a`'s box are tried.
+bool vertex_touches(const TopoDS_Shape& part, const Bnd_Box& box_a, Inside& inside_a,
+                    const FaceBoxes& faces_a) {
+  ShapeMap seen;
+  int probed = 0;
+  for (TopExp_Explorer it(part, TopAbs_VERTEX); it.More() && probed < kProbedVertices; it.Next()) {
+    const int before = seen.Extent();
+    if (seen.Add(it.Current()) <= before) {
+      continue;
+    }
+    const gp_Pnt point = BRep_Tool::Pnt(TopoDS::Vertex(it.Current()));
+    if (box_a.IsOut(point)) {
+      continue;
+    }
+    ++probed;
+    const TopAbs_State state = inside_a.state(point);
+    if (state == TopAbs_IN) {
+      return true;
+    }
+    if (state == TopAbs_ON) {
+      Bnd_Box around;
+      around.Add(point);
+      around.Enlarge(kContact);
+      const std::vector<bool> near = faces_a.near(around);
+      if (any_marked(near) && within(it.Current(), faces_a.compound(near), kContact)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Whether the shapes touch or overlap: a solid inside the other counts.
 // Each solid of `b` (a tool may be many copies) is measured against only
 // the faces of `a` near it (faces_touch): the distance of a large body to
-// a pattern's tool as a whole took over a minute.
+// a pattern's tool as a whole took over a minute. When those faces have
+// kManyEdges edges or more, the solid's vertices are tried first
+// (vertex_touches).
 bool touches(const Shape& a, const Shape& b) {
   Bnd_Box box_a = box_of(a);
   box_a.Enlarge(kContact);
@@ -243,7 +320,9 @@ bool touches(const Shape& a, const Shape& b) {
     if (!faces_a) {
       faces_a.emplace(a.occt());
     }
-    if (faces_touch(*faces_a, part, box, box_a)) {
+    const bool crowded = faces_a->edges_of(faces_a->near(box)) >= kManyEdges;
+    if ((crowded && vertex_touches(part, box_a, inside_a, *faces_a)) ||
+        faces_touch(*faces_a, part, box, box_a)) {
       return true;
     }
     // Apart at their boundaries: one inside the other, or apart.
@@ -342,17 +421,25 @@ std::unique_ptr<BRepAlgoAPI_BooleanOperation> make_operation(BooleanOp op) {
 // shares where it kept them.
 detail::FaceNamer run_operation(BooleanOp op, const std::vector<std::pair<const Shape*, int>>& targets,
                                 const Shape& tool, int tool_tag, bool simplify = true,
-                                std::vector<TopoDS_Shape>* seen = nullptr) {
+                                std::vector<TopoDS_Shape>* seen = nullptr, bool reduce = true,
+                                bool* split = nullptr) {
   std::vector<TopoDS_Shape> inputs;
   for (const auto& target : targets) {
     inputs.push_back(target.first->occt());
   }
   inputs.push_back(tool.occt());
   const detail::InputCopy copy(inputs);
+  // A single target's holes away from the tool sit out the operation
+  // (far_features.hpp): on a perforated body it then works on the faces
+  // near the tool with only their nearby holes.
+  std::optional<detail::FarFeatures> far;
+  if (reduce && targets.size() == 1 && op != BooleanOp::Intersect) {
+    far = detail::FarFeatures::split(copy.shape(0), box_of(tool), targets.front().first->unified());
+  }
   const auto operation = make_operation(op);
   NCollection_List<TopoDS_Shape> arguments;
   for (std::size_t i = 0; i < targets.size(); ++i) {
-    arguments.Append(copy.shape(i));
+    arguments.Append(far ? far->reduced() : copy.shape(i));
   }
   NCollection_List<TopoDS_Shape> tools;
   tools.Append(copy.shape(targets.size()));
@@ -360,6 +447,11 @@ detail::FaceNamer run_operation(BooleanOp op, const std::vector<std::pair<const 
   operation->SetTools(tools);
   // As before T0e: OCCT copies the sub-shapes whose tolerances it widens.
   operation->SetNonDestructive(true);
+  // The face and edge pairs are intersected on all cores: booleans were
+  // most of the import's time on large designs, on one core. (Oriented
+  // boxes, SetUseOBB, changed a corpus result: a hole cut left an extra
+  // edge, and the hole no longer matched the stored history.)
+  operation->SetRunParallel(true);
   detail::build(*operation);
   if (!operation->IsDone() || operation->HasErrors()) {
     throw std::runtime_error("the boolean operation failed");
@@ -371,16 +463,42 @@ detail::FaceNamer run_operation(BooleanOp op, const std::vector<std::pair<const 
   }
   detail::FaceNamer namer(operation->Shape());
   for (const auto& [target, tag] : targets) {
-    namer.carry(*operation, *target, copy, tag);
+    if (far) {
+      namer.carry(*operation, *target, [&](const TopoDS_Shape& face) { return far->stand_in(copy.of(face)); },
+                  tag);
+    } else {
+      namer.carry(*operation, *target, copy, tag);
+    }
   }
   namer.carry(*operation, tool, copy, tool_tag);
-  namer.finish();
+  if (!far) {
+    namer.finish();
+  }
   if (simplify && !detail::is_valid(namer.result())) {
     // The merge can break a result the operation made valid (a join of a
     // corpus design: its merged faces made a shell that cannot be
     // oriented); then the result keeps the faces as the operation left
     // them.
-    return run_operation(op, targets, tool, tool_tag, false, seen);
+    return run_operation(op, targets, tool, tool_tag, false, seen, reduce, split);
+  }
+  if (!simplify) {
+    detail::require_valid(namer.result(), "the boolean operation");
+  }
+  if (split != nullptr) {
+    // Whether a face of a target became several.
+    *split = false;
+    for (const auto& [target, tag] : targets) {
+      for (int i = 0; i < target->face_count() && !*split; ++i) {
+        const TopoDS_Shape face = far ? far->stand_in(copy.of(target->face(i))) : copy.of(target->face(i));
+        int images = 0;
+        if (!face.IsNull()) {
+          for (const TopoDS_Shape& image : operation->Modified(face)) {
+            images += namer.contains(image) ? 1 : 0;
+          }
+        }
+        *split = images > 1;
+      }
+    }
   }
   if (seen != nullptr) {
     seen->clear();
@@ -388,10 +506,159 @@ detail::FaceNamer run_operation(BooleanOp op, const std::vector<std::pair<const 
       seen->push_back(copy.shape(i));
     }
   }
-  if (!simplify) {
-    detail::require_valid(namer.result(), "the boolean operation");
+  namer.set_unified(simplify);
+  if (!far) {
+    return namer;
   }
-  return namer;
+  // The holes back in the faces that took their faces' place: the checker
+  // saw the result without them, and they are as they were (apart from the
+  // tool, and from the faces it changed).
+  const std::optional<detail::FarFeatures::Restored> restored = far->restore(operation->Shape(), *operation);
+  if (!restored) {
+    return run_operation(op, targets, tool, tool_tag, simplify, seen, false, split);
+  }
+  ShapeMap replaced;
+  for (const auto& entry : restored->replaced) {
+    replaced.Add(entry.first);
+  }
+  detail::FaceNamer whole(restored->shape);
+  whole.adopt(namer, [&](const TopoDS_Shape& face) {
+    const int index = replaced.FindIndex(face);
+    return index > 0 ? restored->replaced[static_cast<std::size_t>(index - 1)].second : TopoDS_Shape();
+  });
+  const auto& [target, tag] = targets.front();
+  for (int i = 0; i < target->face_count(); ++i) {
+    const TopoDS_Shape face = copy.of(target->face(i));
+    if (far->stand_in(face).IsNull()) {
+      whole.add(face, target->face_names(i), tag);
+    }
+  }
+  whole.finish();
+  whole.set_unified(simplify);
+  return whole;
+}
+
+
+// Tools of at least twice this many solids are cut tile by tile, about
+// this many solids at a time (tiled_cut): smaller tiles make more cuts,
+// each redoing the work that grows with the body's size; larger ones
+// bring back the quadratic work. Measured on one loaded machine: a plate
+// with 4900 holes 41 s in one cut, 20 s by 150, 18 s by 300, 12 s by 600;
+// the wall of a tube with 1225 holes (curved faces, where the parallel
+// intersections dominate) 26 s in one cut, 14 s by 76, 12 s by 300, 17 s
+// by 600.
+constexpr std::size_t kTile = 300;
+constexpr std::size_t kTiled = 2 * kTile;
+
+// The tool's solids in groups of nearby ones: split at the median of the
+// longer side of their boxes until a group has at most `size`.
+void group_solids(std::vector<std::pair<gp_Pnt, int>>& solids, std::size_t begin, std::size_t end,
+                  std::size_t size, std::vector<std::vector<int>>& groups) {
+  if (end - begin <= size) {
+    groups.emplace_back();
+    for (std::size_t i = begin; i < end; ++i) {
+      groups.back().push_back(solids[i].second);
+    }
+    return;
+  }
+  Bnd_Box box;
+  for (std::size_t i = begin; i < end; ++i) {
+    box.Add(solids[i].first);
+  }
+  double xmin = 0, ymin = 0, zmin = 0, xmax = 0, ymax = 0, zmax = 0;
+  box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+  const double extent[3] = {xmax - xmin, ymax - ymin, zmax - zmin};
+  const int axis = extent[0] >= extent[1] ? (extent[0] >= extent[2] ? 0 : 2) : (extent[1] >= extent[2] ? 1 : 2);
+  const std::size_t middle = begin + (end - begin) / 2;
+  std::nth_element(solids.begin() + static_cast<std::ptrdiff_t>(begin),
+                   solids.begin() + static_cast<std::ptrdiff_t>(middle),
+                   solids.begin() + static_cast<std::ptrdiff_t>(end),
+                   [axis](const auto& a, const auto& b) { return a.first.Coord(axis + 1) < b.first.Coord(axis + 1); });
+  group_solids(solids, begin, middle, size, groups);
+  group_solids(solids, middle, end, size, groups);
+}
+
+// A cut with a tool of many solids apart from each other (a pattern's
+// copies) as several cuts, each with the solids of one region: OCCT's
+// boolean and checker take time quadratic in the holes of a face, and each
+// region's cut sees only the holes near it (far_features.hpp). The same
+// result as one cut, as long as no face of the target splits into pieces
+// (their numbers would follow the order of the cuts) and the target stays
+// one solid; otherwise none (the caller cuts at once). Its solid, and
+// whether the target changed (`changed`). A cancel request stops it
+// between the cuts too.
+std::optional<std::vector<detail::FaceNamer::Piece>> tiled_cut(const Shape& target, int tag, const Shape& tool,
+                                                               int tool_tag, bool& changed) {
+  std::vector<TopoDS_Shape> parts;
+  for (TopExp_Explorer it(tool.occt(), TopAbs_SOLID); it.More(); it.Next()) {
+    parts.push_back(it.Current());
+  }
+  if (parts.size() < kTiled || !detail::far_features_enabled()) {
+    return std::nullopt;
+  }
+  int target_solids = 0;
+  for (TopExp_Explorer it(target.occt(), TopAbs_SOLID); it.More(); it.Next()) {
+    ++target_solids;
+  }
+  if (target_solids != 1) {
+    return std::nullopt;
+  }
+  // The solids must be apart: boxes sorted along x, each against those
+  // that start before it ends.
+  std::vector<std::pair<Bnd_Box, int>> boxes;
+  for (std::size_t i = 0; i < parts.size(); ++i) {
+    Bnd_Box box;
+    BRepBndLib::Add(parts[i], box);
+    box.Enlarge(kContact);
+    if (box.IsVoid()) {
+      return std::nullopt;
+    }
+    boxes.emplace_back(box, static_cast<int>(i));
+  }
+  std::sort(boxes.begin(), boxes.end(),
+            [](const auto& a, const auto& b) { return a.first.CornerMin().X() < b.first.CornerMin().X(); });
+  for (std::size_t i = 0; i < boxes.size(); ++i) {
+    const double end = boxes[i].first.CornerMax().X();
+    for (std::size_t j = i + 1; j < boxes.size() && boxes[j].first.CornerMin().X() <= end; ++j) {
+      if (!boxes[i].first.IsOut(boxes[j].first)) {
+        return std::nullopt;
+      }
+    }
+  }
+  std::vector<std::pair<gp_Pnt, int>> centres;
+  for (const auto& [box, i] : boxes) {
+    centres.emplace_back(gp_Pnt((box.CornerMin().XYZ() + box.CornerMax().XYZ()) / 2.0), i);
+  }
+  std::vector<std::vector<int>> groups;
+  group_solids(centres, 0, centres.size(), kTile, groups);
+
+  changed = false;
+  std::vector<detail::FaceNamer::Piece> current;
+  BRep_Builder builder;
+  for (const std::vector<int>& group : groups) {
+    throw_if_cancelled();
+    TopoDS_Compound compound;
+    builder.MakeCompound(compound);
+    std::vector<Shape::NamedFace> names;
+    for (int i : group) {
+      builder.Add(compound, parts[static_cast<std::size_t>(i)]);
+      for (TopExp_Explorer f(parts[static_cast<std::size_t>(i)], TopAbs_FACE); f.More(); f.Next()) {
+        names.push_back({f.Current(), tool.names_of_face(f.Current())});
+      }
+    }
+    const Shape tile(compound, names);
+    const Shape& from = current.empty() ? target : *current.front().shape;
+    std::vector<TopoDS_Shape> seen;
+    bool split = false;
+    std::vector<detail::FaceNamer::Piece> solids =
+        run_operation(BooleanOp::Cut, {{&from, tag}}, tile, tool_tag, true, &seen, true, &split).pieces();
+    if (split || solids.size() != 1) {
+      return std::nullopt;
+    }
+    changed = changed || volume_changed(from, seen.front(), *solids.front().shape);
+    current = std::move(solids);
+  }
+  return current;
 }
 
 } // namespace
@@ -485,6 +752,18 @@ BooleanResult boolean(BooleanOp op, const std::vector<const Shape*>& targets, co
     for (std::size_t i = 0; i < targets.size(); ++i) {
       if (tool_box.IsOut(box_of(*targets[i]))) {
         continue;
+      }
+      if (op == BooleanOp::Cut) {
+        bool changed = false;
+        if (const auto tiled = tiled_cut(*targets[i], static_cast<int>(i), tool, tool_tag, changed)) {
+          if (changed) {
+            result.touched[i] = true;
+            for (const detail::FaceNamer::Piece& piece : *tiled) {
+              result.pieces.push_back({piece.shape, {i}});
+            }
+          }
+          continue;
+        }
       }
       std::vector<TopoDS_Shape> seen;
       const detail::FaceNamer namer =

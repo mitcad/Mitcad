@@ -364,3 +364,41 @@ fn a_cancel_from_another_thread_cuts_the_delay_short() {
     b.doc.set_parameter("d3", 35.0).unwrap();
     assert_eq!(b.doc.stats().evaluated, vec![b.extrude]);
 }
+
+#[test]
+fn a_monitor_within_others_stops_with_them_or_at_its_deadline() {
+    let job = Arc::new(RecomputeMonitor::new());
+    let other = Arc::new(RecomputeMonitor::new());
+    let part = RecomputeMonitor::within(vec![job.clone(), other.clone()], None);
+    assert!(!part.is_cancelled());
+    other.cancel();
+    assert!(part.is_cancelled());
+    assert!(!job.is_cancelled());
+    // A deadline that passed cancels it, not its parents.
+    let late = RecomputeMonitor::within(vec![job.clone()], Some(Instant::now()));
+    assert!(late.is_cancelled() && late.past_deadline() && late.progress().cancelled);
+    assert!(!job.is_cancelled());
+    let early =
+        RecomputeMonitor::within(Vec::new(), Some(Instant::now() + Duration::from_secs(60)));
+    assert!(!early.is_cancelled() && !early.past_deadline());
+
+    // A kernel operation of an evaluation stops once the deadline passes.
+    let (mut b, _) = joined();
+    b.doc.kernel().stop_on_cancel.set(true);
+    let part = Arc::new(RecomputeMonitor::within(
+        vec![job.clone()],
+        Some(Instant::now()),
+    ));
+    b.doc.set_monitor(Some(part));
+    let before = snapshot(&b.doc);
+    assert_eq!(b.doc.set_parameter("d3", 35.0), Err(ModelError::Cancelled));
+    assert_eq!(snapshot(&b.doc), before);
+    // It takes the test delay of its parents.
+    job.set_test_delay(30);
+    let part = Arc::new(RecomputeMonitor::within(vec![job.clone()], None));
+    b.doc.set_monitor(Some(part));
+    let start = Instant::now();
+    b.doc.set_parameter("d3", 35.0).unwrap();
+    assert!(start.elapsed() >= Duration::from_millis(30));
+    assert_eq!(value(&b.doc, "d3"), 35.0);
+}

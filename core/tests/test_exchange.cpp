@@ -8,6 +8,13 @@
 //                                       the bodies of a small .f3d file and
 //                                       3MF meshes for slicers
 //   test_exchange --write-f3d <file>    writes that .f3d file (CLI tests)
+//   test_exchange --write-ipt <file>    writes a small .ipt part file
+//                                       (mitcad_ipt::testdata; CLI and UI
+//                                       tests)
+//   test_exchange --write-ipt-design <file>
+//                                       writes a small .ipt part file with
+//                                       a design (a parameter, a sketch and
+//                                       an extrusion; CLI tests)
 //   test_exchange --corpus [dir]        imports every .f3d/.f3z under dir
 //                                       (default MITCAD_F3D_CORPUS, else
 //                                       ~/f3d-corpus) bodies only; exits 77
@@ -15,6 +22,9 @@
 //   --every N                           only every Nth file (quick runs)
 //   --min-valid P                       fail when fewer than P % of the
 //                                       imported solids are valid
+//   --jobs N, --memory SIZE,            each file in a child process of its
+//   --file-timeout S                    own, N at a time (parallel_runs.hpp;
+//                                       --jobs 1: all in this process)
 //
 // The corpus run checks per file that every body A4's reader finds is
 // imported or reported as not built, that each imported body has the
@@ -30,6 +40,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -39,6 +50,7 @@
 #include "mitcad_bridge/brep_import.h"
 #include "mitcad_bridge/kernel/exchange.h"
 #include "mitcad_bridge/lib.h"
+#include "parallel_runs.hpp"
 #include "rust/cxx.h"
 
 namespace {
@@ -288,6 +300,88 @@ void test_base_features_from_shapes(const fs::path& dir) {
   CHECK(throws_with([&] { imported->import_f3d(f3d.string(), R"({"timeline": true})"); }, "unknown field"));
 }
 
+// The bodies stored in an .ipt part file (mitcad#60): Mitcad's own test
+// part (a cube and a cylinder in B-rep records of their own, inches,
+// aluminium), compared with a STEP file of its bodies, and files that are
+// not part files.
+void test_ipt_import(const fs::path& dir) {
+  const fs::path ipt = dir / "part.ipt";
+  mitcad::bridge::ipt_write_test_file(ipt.string());
+  auto document = mitcad::new_document();
+  const std::string text(document->import_ipt(ipt.string(), R"({"text": true})"));
+  CHECK(contains(text, "Imported 2 bodies of part.ipt (2 solids, 2 valid; 0 not built)"));
+  CHECK(contains(text, "part number: MITCAD-TEST-1; material: Aluminum (Mitcad's aluminum); units: in"));
+  CHECK(contains(text, "F1 Body1 (F1.b0): valid solid, volume 1000.000 mm3, area 600.000 mm2, 6 faces from "
+                       "PmBRepSegment#1/1"));
+  CHECK(contains(text, "F2 Body2 (F2.b0): valid solid, volume 6283.185 mm3"));
+  CHECK(near(volume(*document, "F1.b0"), 1000.0, 1e-9));
+  CHECK(near(volume(*document, "F2.b0"), kPi * 100.0 * 20.0, 1e-6));
+  const std::string state(document->query(R"({"query": "document"})"));
+  CHECK(contains(state, R"("length":"in")"));
+  CHECK(contains(state, R"("undo":"Import part.ipt")"));
+  CHECK(contains(std::string(document->query(R"({"query": "bodies"})")), R"("material":"aluminum")"));
+  // One undo step takes it all back: the bodies, the units.
+  run(*document, R"({"cmd": "undo"})");
+  CHECK(document->body_shape("F1.b0") == nullptr);
+  CHECK(contains(std::string(document->query(R"({"query": "document"})")), R"("length":"mm")"));
+
+  // The bodies written to STEP are the reference: they match.
+  run(*document, R"({"cmd": "redo"})");
+  const fs::path step = dir / "part.step";
+  run(*document, R"({"cmd": "export", "path": )" + json_path(step) + "}");
+  auto checked = mitcad::new_document();
+  const std::string report(checked->import_ipt(ipt.string(), R"({"reference": )" + json_path(step) + "}"));
+  CHECK(contains(report, R"("pass": true)"));
+  CHECK(contains(report, R"("step_solids": 2)"));
+  CHECK(contains(report, R"("format": "ipt")"));
+  // Against the cube alone, the cylinder has no counterpart.
+  const fs::path cube = dir / "part-cube.step";
+  run(*document, R"({"cmd": "export", "path": )" + json_path(cube) + R"(, "bodies": ["F1.b0"]})");
+  auto partial = mitcad::new_document();
+  const std::string missing(
+      partial->import_ipt(ipt.string(), R"({"text": true, "reference": )" + json_path(cube) + "}"));
+  CHECK(contains(missing, "reference part-cube.step: 1 STEP solids"));
+  CHECK(contains(missing, ": FAILED\n"));
+  CHECK(contains(missing, "Body2 (F2.b0) has no STEP solid"));
+
+  // As a document command (the application's import process).
+  auto command = mitcad::new_document();
+  const std::string result(command->command(R"({"cmd": "import_ipt", "path": )" + json_path(ipt) + "}"));
+  CHECK(contains(result, R"("bodies":2)"));
+  CHECK(contains(result, R"("design":"MITCAD-TEST-1")"));
+
+  // Into a document with features: its units stay.
+  auto existing = block();
+  const std::string into(existing->import_ipt(ipt.string(), R"({"text": true})"));
+  CHECK(contains(into, "warning: the part's length unit (in) is not applied to a document that has features"));
+  CHECK(contains(std::string(existing->query(R"({"query": "document"})")), R"("length":"mm")"));
+  CHECK(near(volume(*existing, "F4.b0"), 1000.0, 1e-9));
+
+  // Not part files.
+  const fs::path f3d = dir / "bodies.f3d";
+  mitcad::bridge::f3d_write_test_file(f3d.string());
+  CHECK(throws_with([&] { command->import_ipt(f3d.string(), "{}"); }, "bodies.f3d: not a compound file"));
+  CHECK(throws_with([&] { command->import_ipt((dir / "none.ipt").string(), "{}"); }, "none.ipt"));
+  CHECK(throws_with([&] { command->import_ipt(ipt.string(), R"({"timeline": true})"); }, "unknown field"));
+
+  // A part with a design (mitcad#60, stages 2 and 3): its parameters, the
+  // sketch and the extrusion come in parametric and make the stored cube.
+  const fs::path designed = dir / "designed.ipt";
+  mitcad::bridge::ipt_write_test_design_file(designed.string());
+  auto history = mitcad::new_document();
+  const std::string replayed(history->import_ipt(designed.string(), R"({"text": true})"));
+  CHECK(contains(replayed, "2 timeline items: 2 parametric, 0 partial, 0 fallback, 0 skipped"));
+  CHECK(contains(replayed, "expressions: 5 translated, 5 agree with the stored values"));
+  CHECK(contains(replayed, "parameters: 5 imported, 0 as values"));
+  CHECK(contains(replayed, "Imported 1 bodies of designed.ipt (1 solids, 1 valid; 0 not built)"));
+  CHECK(near(volume(*history, "F2.b0"), 1000.0, 1e-9));
+  CHECK(contains(std::string(history->query(R"({"query": "parameters"})")), R"("name":"Side")"));
+  // The bodies only, as before.
+  auto bodies = mitcad::new_document();
+  const std::string plain(bodies->import_ipt(designed.string(), R"({"text": true, "bodies_only": true})"));
+  CHECK(contains(plain, "F1 Body1 (F1.b0): valid solid, volume 1000.000 mm3"));
+}
+
 // The number after "<key>": in a JSON text from `from` on.
 double json_number(const std::string& text, const std::string& key, std::size_t from = 0) {
   const std::size_t at = text.find("\"" + key + "\":", from);
@@ -491,7 +585,28 @@ fs::path default_corpus() {
   return home.empty() ? fs::path() : fs::path(home) / "f3d-corpus";
 }
 
-int corpus(const fs::path& dir, int every, double min_valid) {
+// The totals as totals lines (parallel_runs.hpp) and back.
+std::map<std::string, double> totals_of(const Totals& t) {
+  return {{"files", t.files},   {"failed", t.failed},           {"bodies", t.bodies}, {"not_built", t.not_built},
+          {"solids", t.solids}, {"valid_solids", t.valid_solids}, {"sheets", t.sheets}};
+}
+
+void add_totals(const std::map<std::string, double>& in, Totals& t) {
+  const auto get = [&](const char* key) {
+    const auto at = in.find(key);
+    return at == in.end() ? 0 : static_cast<int>(at->second);
+  };
+  t.files += get("files");
+  t.failed += get("failed");
+  t.bodies += get("bodies");
+  t.not_built += get("not_built");
+  t.solids += get("solids");
+  t.valid_solids += get("valid_solids");
+  t.sheets += get("sheets");
+}
+
+int corpus(const fs::path& dir, int every, double min_valid, const mitcad::runs::Settings& parallel,
+           const std::string& self) {
   std::error_code ec;
   if (dir.empty() || !fs::is_directory(dir, ec)) {
     std::printf("corpus not found; skipped\n");
@@ -506,10 +621,35 @@ int corpus(const fs::path& dir, int every, double min_valid) {
   }
   std::sort(files.begin(), files.end());
   Totals totals;
+  std::vector<std::string> ids;
+  std::vector<mitcad::runs::Command> commands;
+  std::vector<double> weights;
   for (std::size_t i = 0; i < files.size(); i += static_cast<std::size_t>(every)) {
     const std::string number = std::to_string(i + 1);
-    import_corpus_file((number.size() < 2 ? "f0" : "f") + number, files[i], totals);
+    const std::string id = (number.size() < 2 ? "f0" : "f") + number;
+    if (parallel.jobs <= 1) {
+      import_corpus_file(id, files[i], totals);
+    } else {
+      // Each file in a child process of its own (mitcad#70).
+      ids.push_back(id);
+      weights.push_back(mitcad::runs::file_weight(files[i]));
+      commands.push_back({self, "--corpus-file", files[i], id});
+    }
   }
+  mitcad::runs::run_all(commands, parallel, [&](std::size_t i, const mitcad::runs::Outcome& outcome) {
+    std::string text;
+    std::map<std::string, double> child;
+    const bool finished = mitcad::runs::split_totals(outcome.output, text, child);
+    std::fputs(text.c_str(), stdout);
+    std::fputs(mitcad::runs::describe_failure(ids[i], outcome, finished).c_str(), stdout);
+    if (finished) {
+      add_totals(child, totals);
+    } else {
+      ++totals.files;
+      ++totals.failed;
+    }
+    std::fflush(stdout);
+  }, weights);
   std::printf("files %d (failed %d), bodies imported %d (not built %d): solids %d (valid %d), sheets %d\n",
               totals.files, totals.failed, totals.bodies, totals.not_built, totals.solids, totals.valid_solids,
               totals.sheets);
@@ -531,6 +671,25 @@ int main(int argc, char** argv) {
       mitcad::bridge::f3d_write_test_file(args[1]);
       return 0;
     }
+    if (args.size() == 2 && args[0] == "--write-ipt") {
+      mitcad::bridge::ipt_write_test_file(args[1]);
+      return 0;
+    }
+    if (args.size() == 2 && args[0] == "--write-ipt-design") {
+      mitcad::bridge::ipt_write_test_design_file(args[1]);
+      return 0;
+    }
+    if (args.size() == 3 && args[0] == "--corpus-file") {
+      // A child of a parallel run (mitcad#70): one file, then its totals.
+      Totals totals;
+      import_corpus_file(args[2], args[1], totals);
+      mitcad::runs::print_totals(totals_of(totals));
+      return 0;
+    }
+    std::string jobs;
+    std::string memory;
+    std::string timeout;
+    mitcad::runs::take_options(args, jobs, memory, timeout);
     if (!args.empty() && args[0] == "--corpus") {
       fs::path dir;
       int every = 1;
@@ -544,10 +703,13 @@ int main(int argc, char** argv) {
           dir = args[i];
         }
       }
-      return corpus(dir.empty() ? default_corpus() : dir, every, min_valid);
+      return corpus(dir.empty() ? default_corpus() : dir, every, min_valid,
+                    mitcad::runs::settings(jobs, memory, timeout), mitcad::runs::executable_path(argv[0]));
     }
     if (args.size() != 1) {
-      std::fprintf(stderr, "usage: test_exchange <dir> | --write-f3d <file> | --corpus [dir] [--every N]\n");
+      std::fprintf(stderr, "usage: test_exchange <dir> | --write-f3d <file> | --write-ipt <file> | "
+                           "--corpus [dir] [--every N] "
+                           "[--min-valid P] [--jobs N] [--memory SIZE] [--file-timeout S]\n");
       return 2;
     }
     const fs::path dir = args[0];
@@ -557,6 +719,7 @@ int main(int argc, char** argv) {
     test_base_features_from_shapes(dir);
     test_sketch_export(dir);
     test_3mf_export(dir);
+    test_ipt_import(dir);
   } catch (const std::exception& e) {
     std::fprintf(stderr, "test_exchange: %s\n", e.what());
     return 2;

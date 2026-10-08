@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 
 use crate::direction;
 use crate::prepare::{Component, Prepared};
-use crate::solve::{Work, evaluate};
+use crate::solve::{Equations, SketchEquations, Work};
 use crate::sparse::{Factor, GramPlan};
 use crate::system::System;
 use crate::types::*;
@@ -36,7 +36,7 @@ const DET_TOL: f64 = 1e-8;
 const COEFF_TOL: f64 = 1e-7;
 /// Inconsistency (millimetres, relative to the sketch size) above which a
 /// dependent set is a conflict.
-const CONFLICT_TOL: f64 = 1e-6;
+pub(crate) const CONFLICT_TOL: f64 = 1e-6;
 
 pub(crate) struct DepRow {
     /// Component-local row.
@@ -55,7 +55,7 @@ pub(crate) struct CompAnalysis {
 }
 
 pub(crate) fn component_dependencies(
-    prep: &Prepared,
+    eqs: &dyn Equations,
     comp: &Component,
     params: &[f64],
     scale: f64,
@@ -65,7 +65,7 @@ pub(crate) fn component_dependencies(
     let m = comp.eqs.len();
     let n = comp.vars.len();
     let mut f = std::mem::take(&mut work.f);
-    evaluate(prep, comp, params, scale, &mut f, Some(&mut work.jac));
+    eqs.evaluate(comp, params, scale, &mut f, Some(&mut work.jac));
     work.f = f;
     let jac = &work.jac;
     let plan = comp.analysis_plan.get_or_init(|| {
@@ -243,9 +243,13 @@ impl System {
         let mut determined = vec![false; self.params.len()];
         let mut conflicts = dir_conflicts;
         let mut redundant = dir_redundant;
+        let eqs = SketchEquations {
+            prep: &prep,
+            pkind: &self.pkind,
+        };
         for comp in &prep.comps {
             let mut work = Work::new(comp);
-            let a = component_dependencies(&prep, comp, &self.params, scale, &mut work, true);
+            let a = component_dependencies(&eqs, comp, &self.params, scale, &mut work, true);
             dof += comp.vars.len() - a.rank;
             if let Some(det) = &a.determined {
                 for (k, &g) in comp.vars.iter().enumerate() {

@@ -36,6 +36,7 @@
 #include <QSettings>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -56,6 +57,14 @@
 #include "../update/UpdatePreferences.hpp"
 // Remote repositories' git program (P12 remote).
 #include "../files/RemotePreferences.hpp"
+// View > Rendered (mitcad#32).
+#ifdef MITCAD_RENDER
+#include "../render/RenderClient.hpp"
+#include "../render/RenderDevice.hpp"
+#include "../render/RenderEnvironmentDialog.hpp"
+#include "../render/RenderImageDialog.hpp"
+#include "../render/RenderMode.hpp"
+#endif
 
 namespace mitcad {
 namespace {
@@ -183,7 +192,8 @@ struct PreferencePage {
 const PreferencePage kPreferencePages[] = {
     {"general", QT_TRANSLATE_NOOP("View", "General"), "autosave recovery author email name"},
     {"navigation", QT_TRANSLATE_NOOP("View", "Navigation"), "mouse orbit pan zoom scheme"},
-    {"display", QT_TRANSLATE_NOOP("View", "Display"), "camera perspective orthographic background environment"},
+    {"display", QT_TRANSLATE_NOOP("View", "Display"),
+     "camera perspective orthographic background environment render device gpu cuda"},
     {"cache", QT_TRANSLATE_NOOP("View", "Cache"), "results memory disk diagnostics"},
     {"version_control", QT_TRANSLATE_NOOP("View", "Version Control"), "git remote sync push fetch"},
     {"updates", QT_TRANSLATE_NOOP("View", "Updates"), "release channel pre-release"},
@@ -363,6 +373,19 @@ ViewController::ViewController(OcctViewer& viewer, CommandRegistry& registry, Do
                                std::function<void()> lookAt, QWidget* window)
     : QObject(window), m_viewer(viewer), m_registry(registry), m_host(host),
       m_lookAt(std::move(lookAt)), m_window(window), m_settings(ViewSettings::load()) {
+#ifdef MITCAD_RENDER
+  // Offered when the render worker is installed next to the application
+  // (a package without it has no rendered view).
+  if (!render::RenderClient::workerPath().isEmpty()) {
+    m_render = new RenderMode(
+        m_viewer, [this](QObject* context, std::function<void()> call) { m_host.whenIdle(context, std::move(call)); },
+        this);
+    connect(m_render, &RenderMode::stopped, this, [this] { syncChecks(); });
+  } else {
+    qInfo().noquote() << QStringLiteral("No render worker (%1) next to the application: no rendered view")
+                             .arg(QString::fromLatin1(render::kWorkerName));
+  }
+#endif
   // The automatic background follows the system's light and dark modes.
   connect(&m_viewer, &OcctViewer::themeChanged, this, [this] {
     if (m_settings.background != ViewSettings::Background::Automatic) {
@@ -373,6 +396,11 @@ ViewController::ViewController(OcctViewer& viewer, CommandRegistry& registry, Do
     bool gradient = true;
     m_settings.colors(top, bottom, gradient);
     m_viewer.setBackground(top, bottom, gradient);
+#ifdef MITCAD_RENDER
+    if (m_render != nullptr) {
+      m_render->redisplay();
+    }
+#endif
     qDebug().noquote() << QStringLiteral("Background %1 %2").arg(top.name(), bottom.name());
   });
 }
@@ -420,6 +448,23 @@ void ViewController::registerCommands() {
     add(entry.id, QCoreApplication::translate("View", entry.name), "visual-style",
         [this, style] { setStyle(style); }, {QStringLiteral("visual style"), QStringLiteral("display")});
   }
+#ifdef MITCAD_RENDER
+  if (m_render != nullptr) {
+    add("view.rendered", tr("Rendered"), "visual-style", [this] { setRendered(!m_render->isEnabled()); },
+        {QStringLiteral("render"), QStringLiteral("path tracing"), QStringLiteral("cycles"), QStringLiteral("visual style")},
+        tr("Shows the visible bodies path traced (a preview of rendering)"));
+    // The document's render settings (mitcad#47).
+    add("view.render_environment", tr("Render Environment..."), "environment", [this] { showRenderEnvironment(); },
+        {QStringLiteral("render"), QStringLiteral("lighting"), QStringLiteral("light"), QStringLiteral("studio"),
+         QStringLiteral("hdr"), QStringLiteral("exposure"), QStringLiteral("ground"), QStringLiteral("shadow")},
+        tr("The rendered view's light, background, ground and exposure, kept in the design"));
+    // The final render to an image file (mitcad#48): the File menu too.
+    add("file.render_image", tr("Render Image..."), "render-image", [this] { showRenderImage(); },
+        {QStringLiteral("render"), QStringLiteral("image"), QStringLiteral("picture"), QStringLiteral("png"),
+         QStringLiteral("jpeg"), QStringLiteral("exr"), QStringLiteral("photo"), QStringLiteral("cycles")},
+        tr("Renders the view or a named view to an image file at a chosen size and quality"));
+  }
+#endif
   add("view.grid", tr("Layout Grid"), "grid", [this] { setGridShown(!m_settings.gridShown); },
       {QStringLiteral("grid")}, tr("Shows the grid on the ground or sketch plane"));
   add("view.snap_grid", tr("Snap to Grid"), "grid", [this] { setSnapToGrid(!m_settings.snapToGrid); },
@@ -513,10 +558,20 @@ void ViewController::createMenus(QMenu* view, QMenu* tools, QMenu* help) {
   for (const StyleEntry& entry : kStyles) {
     styles->addAction(checkable(QString::fromLatin1(entry.id), styleGroup));
   }
+  if (m_render != nullptr) {
+    styles->addSeparator();
+    styles->addAction(checkable(QStringLiteral("view.rendered")));
+    styles->addAction(action(QStringLiteral("view.render_environment")));
+    styles->addAction(action(QStringLiteral("file.render_image")));
+  }
   QMenu* environment = view->addMenu(themeIcon(QStringLiteral("environment")), tr("Environment"));
   auto* backgrounds = new QActionGroup(this);
   for (const BackgroundEntry& entry : kBackgrounds) {
     environment->addAction(checkable(QString::fromLatin1(entry.id), backgrounds));
+  }
+  if (m_render != nullptr) {
+    environment->addSeparator();
+    environment->addAction(action(QStringLiteral("view.render_environment")));
   }
   QMenu* grid = view->addMenu(themeIcon(QStringLiteral("grid")), tr("Grid and Snaps"));
   grid->addAction(checkable(QStringLiteral("view.grid")));
@@ -571,6 +626,14 @@ void ViewController::syncChecks() {
   check(QStringLiteral("view.perspective"), m_settings.perspective);
   check(QStringLiteral("view.grid"), m_settings.gridShown);
   check(QStringLiteral("view.snap_grid"), m_settings.snapToGrid);
+#ifdef MITCAD_RENDER
+  if (m_render != nullptr) {
+    check(QStringLiteral("view.rendered"), m_render->isEnabled());
+    if (m_renderEnvironment) {
+      m_renderEnvironment->setRenderedShown(m_render->isEnabled());
+    }
+  }
+#endif
 }
 
 void ViewController::setStyle(VisualStyle style) {
@@ -598,8 +661,78 @@ void ViewController::setBackground(ViewSettings::Background background) {
   bool gradient = true;
   m_settings.colors(top, bottom, gradient);
   m_viewer.setBackground(top, bottom, gradient);
+#ifdef MITCAD_RENDER
+  // A rendered frame over the view's background is shown over the new one.
+  if (m_render != nullptr) {
+    m_render->redisplay();
+  }
+#endif
   syncChecks();
   qDebug().noquote() << QStringLiteral("Background %1 %2").arg(top.name(), bottom.name());
+}
+
+void ViewController::setRendered([[maybe_unused]] bool on) {
+#ifdef MITCAD_RENDER
+  if (m_render != nullptr) {
+    m_render->setEnabled(on);
+  }
+#endif
+  syncChecks();
+}
+
+void ViewController::setRenderSettings([[maybe_unused]] const QJsonObject& settings,
+                                       [[maybe_unused]] const QString& documentFolder) {
+#ifdef MITCAD_RENDER
+  if (m_render == nullptr) {
+    return;
+  }
+  m_render->setSettings(settings, documentFolder);
+  if (m_renderEnvironment && m_renderEnvironment->isVisible()) {
+    m_renderEnvironment->refresh();
+  }
+  m_documentFolder = documentFolder;
+  if (m_renderImage) {
+    m_renderImage->setDocument(m_documentFolder, m_documentName);
+    if (m_renderImage->isVisible()) {
+      m_renderImage->refresh();
+    }
+  }
+#endif
+}
+
+void ViewController::showRenderImage() {
+#ifdef MITCAD_RENDER
+  if (m_render == nullptr) {
+    return;
+  }
+  if (!m_renderImage) {
+    m_renderImage = new RenderImageDialog(m_host, m_viewer, m_window);
+  }
+  m_renderImage->setDocument(m_documentFolder, m_documentName);
+  m_renderImage->show();
+  m_renderImage->raise();
+  m_renderImage->activateWindow();
+  m_renderImage->refresh();
+  qDebug().noquote() << "Render image dialog opened";
+#endif
+}
+
+void ViewController::showRenderEnvironment() {
+#ifdef MITCAD_RENDER
+  if (m_render == nullptr) {
+    return;
+  }
+  if (!m_renderEnvironment) {
+    m_renderEnvironment =
+        new RenderEnvironmentDialog(m_host, m_viewer, [this](bool on) { setRendered(on); }, m_window);
+  }
+  m_renderEnvironment->show();
+  m_renderEnvironment->raise();
+  m_renderEnvironment->activateWindow();
+  m_renderEnvironment->setRenderedShown(m_render->isEnabled());
+  m_renderEnvironment->refresh();
+  qDebug().noquote() << "Render environment dialog opened";
+#endif
 }
 
 void ViewController::setGridShown(bool shown) {
@@ -938,11 +1071,51 @@ void ViewController::showPreferences(const QString& page) {
   };
   enableCustom();
   connect(background, &QComboBox::currentIndexChanged, host, enableCustom);
+  // The render device (mitcad#50): a setting of this machine, not of the
+  // design. The worker lists its devices; GPUs come after the automatic
+  // choice and the CPU.
+  QComboBox* renderDevice = nullptr;
+#ifdef MITCAD_RENDER
+  if (m_render != nullptr) {
+    renderDevice = new QComboBox;
+    renderDevice->setObjectName(QStringLiteral("renderDevice"));
+    renderDevice->addItem(tr("Automatic (the best GPU, else the CPU)"), QStringLiteral("auto"));
+    QString error;
+    const QList<render::RenderDevice> devices = render::renderDevices(render::RenderClient::workerPath(), error);
+    for (const render::RenderDevice& device : devices) {
+      renderDevice->addItem(device.type == QLatin1String("CPU") ? tr("CPU: %1").arg(device.label()) : device.label(),
+                            device.type == QLatin1String("CPU") ? QStringLiteral("cpu") : device.id);
+      renderDevice->setItemData(renderDevice->count() - 1,
+                                device.denoisesOnDevice ? tr("Renders and denoises on this device")
+                                                        : tr("Renders on this device; denoises on the CPU"),
+                                Qt::ToolTipRole);
+    }
+    if (devices.isEmpty()) {
+      renderDevice->addItem(tr("CPU"), QStringLiteral("cpu"));
+      qWarning().noquote() << QStringLiteral("Render devices not listed: %1").arg(error);
+    }
+    const QString chosen = render::renderDeviceChoice();
+    if (renderDevice->findData(chosen) < 0) {
+      // A device of an earlier run that is not there now: kept until another
+      // is chosen (the worker renders on the CPU meanwhile).
+      renderDevice->addItem(tr("Not found: %1").arg(chosen), chosen);
+    }
+    renderDevice->setCurrentIndex(renderDevice->findData(chosen));
+    renderDevice->setToolTip(tr("Where the rendered view and Render Image render; the CPU takes over when a "
+                                "GPU fails"));
+    display->addRow(tr("Render device:"), renderDevice);
+    QStringList labels;
+    for (int i = 0; i < renderDevice->count(); ++i) {
+      labels << renderDevice->itemData(i).toString();
+    }
+    qDebug().noquote() << QStringLiteral("Preferences: render devices %1").arg(labels.join(QStringLiteral(", ")));
+  }
+#endif
   groups.insert(QStringLiteral("display"), displayBox);
 
   *commit = [this, general, versions, top, bottom, scheme, zoomToCursor, reverseZoom, constrained, animate, camera,
              background, autosave, minutes, useGit, authorName, authorEmail, cacheBox, updatesBox, slicerBox,
-             remoteBox] {
+             remoteBox, renderDevice] {
     m_settings.navigation.scheme = static_cast<NavigationScheme>(scheme->currentData().toInt());
     m_settings.navigation.zoomToCursor = zoomToCursor->isChecked();
     m_settings.navigation.reverseZoom = reverseZoom->isChecked();
@@ -994,6 +1167,17 @@ void ViewController::showPreferences(const QString& page) {
                                    remote.checkMinutes > 0 ? QStringLiteral("every %1 min").arg(remote.checkMinutes)
                                                            : QStringLiteral("never"),
                                    onOff(remote.autoPush));
+#ifdef MITCAD_RENDER
+    if (renderDevice != nullptr && renderDevice->currentData().toString() != render::renderDeviceChoice()) {
+      render::setRenderDeviceChoice(renderDevice->currentData().toString());
+      qDebug().noquote() << QStringLiteral("Preferences: render device %1").arg(render::renderDeviceChoice());
+      if (m_render != nullptr) {
+        m_render->deviceChanged();
+      }
+    }
+#else
+    (void)renderDevice;
+#endif
     apply();
     if (generalChanged) {
       generalChanged();
@@ -1057,6 +1241,9 @@ void ViewController::showPreferences(const QString& page) {
     connect(scheme, &QComboBox::currentIndexChanged, host, changed);
     connect(camera, &QComboBox::currentIndexChanged, host, changed);
     connect(background, &QComboBox::currentIndexChanged, host, changed);
+    if (renderDevice != nullptr) {
+      connect(renderDevice, &QComboBox::currentIndexChanged, host, changed);
+    }
     for (QCheckBox* box : {zoomToCursor, reverseZoom, constrained, animate, autosave, useGit}) {
       connect(box, &QCheckBox::toggled, host, changed);
     }
@@ -1127,6 +1314,18 @@ void ViewController::showPreferences(const QString& page) {
                             .arg(pages->currentItem()->text())
                             .arg(size.width())
                             .arg(size.height());
+#ifdef MITCAD_RENDER
+  if (renderDevice != nullptr) {
+    // Where the render device's list is once the dialog shows (UI tests).
+    QTimer::singleShot(0, renderDevice, [this, renderDevice] {
+      if (renderDevice->isVisible()) {
+        const QPoint at =
+            renderDevice->mapToGlobal(renderDevice->rect().center()) - m_window->mapToGlobal(QPoint(0, 0));
+        qDebug().noquote() << QStringLiteral("Preferences render device at %1,%2").arg(at.x()).arg(at.y());
+      }
+    });
+  }
+#endif
   if (dialog->exec() != QDialog::Accepted) {
     return;
   }

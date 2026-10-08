@@ -1335,7 +1335,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-3mf"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mitcad-zip",
  "roxmltree",
@@ -1343,11 +1343,11 @@ dependencies = [
 
 [[package]]
 name = "mitcad-dxf"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "mitcad-f3d"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mitcad-model",
  "mitcad-zip",
@@ -1357,11 +1357,12 @@ dependencies = [
 
 [[package]]
 name = "mitcad-ffi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cxx",
  "mitcad-f3d",
  "mitcad-import",
+ "mitcad-ipt",
  "mitcad-model",
  "mitcad-update",
  "mitcad-vcs",
@@ -1371,7 +1372,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-freecad"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mitcad-zip",
  "roxmltree",
@@ -1381,7 +1382,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-import"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mitcad-f3d",
  "mitcad-freecad",
@@ -1392,8 +1393,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mitcad-ipt"
+version = "0.2.0"
+dependencies = [
+ "miniz_oxide",
+ "mitcad-f3d",
+ "mitcad-import",
+ "mitcad-model",
+ "ruzstd",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mitcad-model"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "miniz_oxide",
  "mitcad-3mf",
@@ -1405,11 +1419,11 @@ dependencies = [
 
 [[package]]
 name = "mitcad-solver"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "mitcad-update"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ed25519-dalek",
  "semver",
@@ -1420,7 +1434,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-vcs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "gix",
  "libc",
@@ -1431,7 +1445,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-zip"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "miniz_oxide",
  "ruzstd",

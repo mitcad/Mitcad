@@ -165,7 +165,7 @@ fn thread_tables_list_iso_metric_first() {
     let doc = Document::new(MockKernel::default());
     let table = query(&doc, json!({"query": "thread_sizes"}));
     let standards = table["standards"].as_array().unwrap();
-    assert_eq!(standards.len(), 4);
+    assert_eq!(standards.len(), 5);
     assert_eq!(standards[0]["standard"], "iso_metric");
     assert_eq!(standards[0]["title"], "ISO Metric profile");
     assert_eq!(standards[0]["default"], true);
@@ -174,6 +174,8 @@ fn thread_tables_list_iso_metric_first() {
     // Whitworth and NPT (mitcad#4) after them.
     assert_eq!(standards[2]["standard"], "whitworth");
     assert_eq!(standards[3]["standard"], "npt");
+    // Tyre valve threads (mitcad#59) last.
+    assert_eq!(standards[4]["standard"], "tyre_valve");
     assert_eq!(standards[0]["default_class_internal"], "6H");
     assert_eq!(standards[0]["default_class_external"], "6g");
     let m10 = standards[0]["sizes"]

@@ -44,25 +44,31 @@ mod ops;
 mod refs;
 // Sweeps, pipes and lofts (F3).
 mod sweeps;
+// Joints, as-built joints, joint origins and ground items (mitcad#55).
+mod joints;
+// Captured positions (mitcad#75).
+mod captures;
+// The material a history state removed (mitcad#85).
+mod removed;
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
-use mitcad_f3d::design::ir::{Dump, TimelineItem};
+use mitcad_f3d::design::ir::{Detail, Dump, TimelineItem};
 use mitcad_model::assembly::inverse;
 use mitcad_model::features::{FeatureDef, ValueInput};
 use mitcad_model::{
-    BaseInput, BodyUid, ComponentUid, Document, FeatureUid, ImportBody, Kernel, RecomputeMonitor,
-    SketchFrame, Transform,
+    BaseInput, BodyUid, ComponentUid, Document, FeatureUid, ImportBody, Kernel, KernelError,
+    RecomputeMonitor, SketchFrame, Transform,
 };
 use serde_json::Value;
 
-pub use history::{NoGeometry, Oracle, Sig, StoredBody, StoredGeometry};
+pub use history::{NoGeometry, Oracle, SheetSig, Sig, StoredBody, StoredGeometry};
 pub use report::{
-    BodyReport, ComponentReport, DesignReport, ImportReport, ItemReport, LightBulbReport, Outcome,
-    StopReport,
+    BodyReport, ComponentReport, DesignReport, ImportReport, ItemReport, JointReport,
+    LightBulbReport, LowMemoryReport, Outcome, StopReport,
 };
 
 use params::ParamMap;
@@ -109,6 +115,13 @@ pub struct Options {
     /// in it, `mitcad-ffi`): it and the modelling items after it take
     /// the file's bodies as after a stop.
     pub stop_at: Option<i64>,
+    /// Modelling items whose definitions an earlier try found no state for,
+    /// with why ([`Progress::failed_items`]; run again after the kernel
+    /// hung on a later item, `mitcad-ffi`): the items before the hung one
+    /// replay as before, so these take the file's bodies again at once,
+    /// with the same reason, without trying their definitions a second time
+    /// (a pattern of a thousand copies can take minutes a try).
+    pub failed_items: Vec<(i64, String)>,
 }
 
 impl Default for Options {
@@ -127,6 +140,7 @@ impl Default for Options {
             progress: None,
             stop: None,
             stop_at: None,
+            failed_items: Vec::new(),
         }
     }
 }
@@ -148,6 +162,32 @@ pub struct Progress {
     /// ([`Options::stop`]), [`Progress::NOT_STOPPED`] before; a try run
     /// again stops there ([`Options::stop_at`]).
     pub stopped: AtomicI64,
+    /// The modelling items whose definitions gave no state, with why
+    /// ([`Options::failed_items`] of a try run again).
+    failed: std::sync::Mutex<Vec<(i64, String)>>,
+    /// Cancelled when the watchdog gives the try up
+    /// ([`Progress::abandon`]).
+    abandoned: Arc<RecomputeMonitor>,
+    /// The memory of the process (mitcad#80): see [`Progress::low_memory`].
+    memory: std::sync::Mutex<Memory>,
+    /// Set when the import is to drop what it can do without
+    /// ([`Progress::tight_on_memory`]).
+    memory_tight: std::sync::atomic::AtomicBool,
+}
+
+/// What the memory guard told an import (mitcad#80).
+#[derive(Debug)]
+struct Memory {
+    /// Cancelled while the process is low on memory; a new one once it has
+    /// recovered.
+    low: Arc<RecomputeMonitor>,
+    /// How many times it ran low.
+    lows: u64,
+    /// The memory in use as last measured.
+    last: String,
+    /// When it first ran low: the memory in use, and where the import was
+    /// (as [`Progress::item`]).
+    first_low: Option<(String, i64)>,
 }
 
 impl Progress {
@@ -160,7 +200,116 @@ impl Progress {
             step: AtomicU64::new(0),
             item: AtomicI64::new(Self::STARTING),
             stopped: AtomicI64::new(Self::NOT_STOPPED),
+            failed: std::sync::Mutex::new(Vec::new()),
+            abandoned: Arc::new(RecomputeMonitor::new()),
+            memory: std::sync::Mutex::new(Memory {
+                low: Arc::new(RecomputeMonitor::new()),
+                lows: 0,
+                last: String::new(),
+                first_low: None,
+            }),
+            memory_tight: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Memory is getting tight (mitcad#80; `mitcad-ffi`'s memory guard,
+    /// before it is low): before its next item the import drops the cached
+    /// results of the definitions it tried and the bodies of the history
+    /// states behind it, which it builds again if it needs them; what it
+    /// imports stays the same.
+    pub fn tight_on_memory(&self) {
+        self.memory_tight.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether the import is asked to drop what it can do without
+    /// ([`Progress::tight_on_memory`]); the request is taken.
+    fn take_tight(&self) -> bool {
+        self.memory_tight.swap(false, Ordering::Relaxed)
+    }
+
+    /// The process is low on memory (mitcad#80; `mitcad-ffi`'s memory
+    /// guard, or a kernel operation that failed for lack of it): an
+    /// allocation that fails would end the process. The definition being
+    /// evaluated is cut short (P7e) and its item takes the file's bodies,
+    /// as do the modelling items after it until the memory has recovered
+    /// ([`Progress::memory_recovered`]); the import drops the results and
+    /// history states it can do without, and compares the final bodies by
+    /// volume only if the memory is still low then. `memory` says how much
+    /// is in use, for the report.
+    pub fn low_memory(&self, memory: &str) {
+        let item = self.item.load(Ordering::Relaxed);
+        if let Ok(mut m) = self.memory.lock()
+            && !m.low.is_cancelled()
+        {
+            m.lows += 1;
+            if m.first_low.is_none() {
+                m.first_low = Some((memory.to_owned(), item));
+            }
+            m.low.cancel();
+        }
+    }
+
+    /// The memory has recovered from being low ([`Progress::low_memory`]):
+    /// the modelling items from the next one on are replayed again.
+    pub fn memory_recovered(&self) {
+        if let Ok(mut m) = self.memory.lock()
+            && m.low.is_cancelled()
+        {
+            m.low = Arc::new(RecomputeMonitor::new());
+        }
+    }
+
+    /// Whether the process is low on memory ([`Progress::low_memory`]).
+    pub fn is_memory_low(&self) -> bool {
+        self.memory.lock().is_ok_and(|m| m.low.is_cancelled())
+    }
+
+    /// How many times the process ran low on memory.
+    pub fn memory_lows(&self) -> u64 {
+        self.memory.lock().map_or(0, |m| m.lows)
+    }
+
+    /// When the process first ran low on memory: how much was in use, and
+    /// where the import was (the item being replayed,
+    /// [`Progress::STARTING`] or [`Progress::FINISHING`]).
+    pub fn first_low_memory(&self) -> Option<(String, i64)> {
+        self.memory.lock().ok().and_then(|m| m.first_low.clone())
+    }
+
+    /// Cancelled once the process is low on memory, for the definitions
+    /// evaluated from now on.
+    fn memory_monitor(&self) -> Option<Arc<RecomputeMonitor>> {
+        self.memory.lock().ok().map(|m| Arc::clone(&m.low))
+    }
+
+    /// The memory in use as last measured (e.g. "7.1 GiB of 11.4 GiB
+    /// (address-space limit)"), for traces.
+    pub fn set_memory(&self, memory: &str) {
+        if let Ok(mut m) = self.memory.lock() {
+            memory.clone_into(&mut m.last);
+        }
+    }
+
+    /// The memory last measured ([`Progress::set_memory`]); empty before.
+    pub fn memory(&self) -> String {
+        self.memory
+            .lock()
+            .map(|m| m.last.clone())
+            .unwrap_or_default()
+    }
+
+    /// The watchdog gave this try up (mitcad#71): the import stops at its
+    /// next check, before the next item or definition, and the kernel's
+    /// long operations of a definition being tried stop inside (P7e). What
+    /// it made is not used: it reports nothing more and leaves its
+    /// document as it is.
+    pub fn abandon(&self) {
+        self.abandoned.cancel();
+    }
+
+    /// Whether the watchdog gave this try up ([`Progress::abandon`]).
+    pub fn abandoned(&self) -> bool {
+        self.abandoned.is_cancelled()
     }
 
     /// The item the import stopped at, once it did.
@@ -169,7 +318,26 @@ impl Progress {
         (at != Self::NOT_STOPPED).then_some(at)
     }
 
-    fn tick(&self) {
+    /// The modelling items so far whose definitions were tried and gave no
+    /// state, with why (not those that took the file's bodies without
+    /// trying: hung, stopped, out of time, or failed in an earlier try).
+    pub fn failed_items(&self) -> Vec<(i64, String)> {
+        self.failed.lock().map(|f| f.clone()).unwrap_or_default()
+    }
+
+    fn failed(&self, item: i64, reason: &str) {
+        if let Ok(mut f) = self.failed.lock() {
+            f.push((item, reason.to_owned()));
+        }
+    }
+
+    /// The import moved on: a kernel call returned. Long loops of the
+    /// import's own (building and measuring a history state's bodies,
+    /// finding faces and edges by their fingerprints, comparing bodies)
+    /// tick after each kernel call, so that the watchdog takes only a
+    /// kernel call that does not return for a hang (mitcad#82); see
+    /// [`tick`].
+    pub fn tick(&self) {
         self.step.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -182,6 +350,59 @@ impl Progress {
 impl Default for Progress {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+thread_local! {
+    /// The progress of the import running on this thread
+    /// ([`import_design`]), for [`tick`].
+    static TICKING: std::cell::RefCell<Option<Arc<Progress>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Ticks the progress of the import running on this thread, if any
+/// ([`Progress::tick`]): for loops deep in the import, and in the stored
+/// geometry that builds a state's bodies (`mitcad-ffi`), that run many
+/// kernel calls in a row (mitcad#82: building and measuring the first
+/// history state of a large design took 110 s, which the watchdog took for
+/// a hang). Call it between kernel calls only: a call that does not return
+/// must still look like one.
+pub fn tick() {
+    TICKING.with(|t| {
+        if let Some(p) = t.borrow().as_ref() {
+            p.tick();
+        }
+    });
+}
+
+/// The progress of the import running on this thread, if any: for the
+/// geometry kernel's long operations, whose progress (reported from their
+/// worker threads too) is the import's (`mitcad-ffi`, mitcad#82).
+pub fn current_progress() -> Option<Arc<Progress>> {
+    TICKING.with(|t| t.borrow().clone())
+}
+
+/// Whether the import running on this thread was given up by the
+/// watchdog ([`Progress::abandon`]): long loops may stop early, as what
+/// the try makes is dropped.
+pub fn abandoned() -> bool {
+    TICKING.with(|t| t.borrow().as_ref().is_some_and(|p| p.abandoned()))
+}
+
+/// While it lives, [`tick`] ticks `progress` on this thread; the import
+/// before it (none, usually) afterwards.
+struct Ticking(Option<Arc<Progress>>);
+
+impl Ticking {
+    fn new(progress: Option<Arc<Progress>>) -> Self {
+        Self(TICKING.with(|t| t.replace(progress)))
+    }
+}
+
+impl Drop for Ticking {
+    fn drop(&mut self) {
+        let before = self.0.take();
+        TICKING.with(|t| *t.borrow_mut() = before);
     }
 }
 
@@ -309,13 +530,53 @@ pub(crate) struct Importer<'a, K: Kernel> {
     component: ComponentUid,
     /// Sketches imported again into another component than the first
     /// (the file's new-component features use their parent's sketches), by
-    /// sketch index and component.
-    sketch_copies: HashMap<(i64, ComponentUid), SketchInfo>,
+    /// sketch index and component, with the transform that moved them.
+    sketch_copies: HashMap<(i64, ComponentUid), (Transform, SketchInfo)>,
     /// The modelling item the import stopped at ([`Options::stop`]).
     stopped_at: Cell<Option<i64>>,
     /// A modelling item's definitions are being tried: the stop request
     /// is the document's monitor ([`Importer::try_candidate`]).
     trying: bool,
+    /// Other definitions of extrusions that gave their states exactly, by
+    /// feature, for later patterns and mirrors of them.
+    alternatives: HashMap<FeatureUid, Alternatives>,
+    /// Set while [`Importer::try_state`] translates a fillet or chamfer:
+    /// its edge guesses come one history state at a time.
+    guesses: Option<Guesses>,
+    /// When the time of the item being replayed (or of the part of it
+    /// being tried) is over: the definitions being tried stop there, also
+    /// inside the kernel's long operations ([`Importer::interruptible`],
+    /// mitcad#69).
+    deadline: Option<std::time::Instant>,
+    /// The file's captured positions, and where they leave the
+    /// occurrences (mitcad#75).
+    captures: captures::Captures,
+    /// The times the process had run low on memory when the import last
+    /// released what it could ([`Importer::release_memory`]).
+    memory_released: u64,
+    /// The circular edges and faces of each body that can give a joint's
+    /// side its frame, with the body's version (mitcad#87).
+    frame_entities: std::cell::RefCell<joints::FrameEntities>,
+}
+
+/// Where the edge guesses of a fillet or chamfer go on from, when they come
+/// one history state at a time ([`Importer::try_state`]): finding the edges
+/// a state lost takes seconds on large bodies, and the item's own state (or
+/// the edges found by their names) usually gives it, so the next states'
+/// are found only when the definitions before gave no state. The
+/// definitions come in the same order as all at once.
+#[derive(Debug, Default)]
+pub(crate) struct Guesses {
+    /// The edges found by their names were tried (they come first).
+    pub named: bool,
+    /// How many of the next history states were looked at.
+    pub states: usize,
+    /// No more states to look at.
+    pub done: bool,
+    /// Definitions given already (so that none comes twice).
+    pub seen: BTreeSet<Vec<String>>,
+    /// Definitions were given already.
+    pub given: bool,
 }
 
 /// Imports a design into the document (normally a new one). The report
@@ -327,6 +588,11 @@ pub fn import_design<K: Kernel>(
     options: &Options,
 ) -> DesignReport {
     let depth = doc.undo_depth();
+    // Loops deep in the import tick the watchdog (mitcad#82).
+    let _ticking = Ticking::new(options.progress.clone());
+    // Running low on memory limits the result cache for the rest of the
+    // import (Importer::release_memory); the document's own budget after.
+    let budget = doc.memory_budget();
     let report = DesignReport {
         label: dump
             .source
@@ -358,6 +624,12 @@ pub fn import_design<K: Kernel>(
         sketch_copies: HashMap::new(),
         stopped_at: Cell::new(None),
         trying: false,
+        alternatives: HashMap::new(),
+        guesses: None,
+        deadline: None,
+        captures: captures::Captures::default(),
+        memory_released: 0,
+        frame_entities: Default::default(),
     };
     if !options.verify {
         importer.oracle.enabled = false;
@@ -368,6 +640,7 @@ pub fn import_design<K: Kernel>(
     if let Some(label) = &options.undo_label {
         doc.merge_undo(depth, label);
     }
+    doc.set_memory_budget(budget);
     report
 }
 
@@ -376,8 +649,48 @@ const HUNG: &str =
     "the geometry kernel did not finish a definition of it (given up by the import's watchdog)";
 
 /// The note of a modelling item not replayed because the import was
-/// stopped ([`Options::stop`]).
+/// stopped ([`Options::stop`]); also why a try the watchdog gave up stops
+/// trying definitions ([`Progress::abandon`]: its report is not used).
 const STOPPED: &str = "the import was stopped";
+
+/// The note of a modelling item not replayed because the process ran low on
+/// memory ([`Progress::low_memory`], mitcad#80).
+const LOW_MEMORY: &str = "the import ran low on memory";
+
+/// The most memory (estimated) the document's cached results may take for
+/// the rest of an import once the process ran low on memory (mitcad#80).
+const CACHE_AFTER_LOW_MEMORY: u64 = 256 << 20;
+
+/// Whether two placements are the same within rounding.
+fn same_placement(a: &Transform, b: &Transform) -> bool {
+    (0..3).all(|r| {
+        (0..3).all(|c| (a.linear[r][c] - b.linear[r][c]).abs() <= 1e-12)
+            && (a.translation[r] - b.translation[r]).abs() <= 1e-9
+    })
+}
+
+/// Whether a definition's error ends the item's tries: the import was
+/// stopped (or given up), or ran low on memory.
+fn halts(error: &str) -> bool {
+    error == STOPPED || error == LOW_MEMORY
+}
+
+/// Why a definition failed that was cut short when the item's time was
+/// over ([`Importer::deadline`]).
+const OUT_OF_TIME: &str = "the item's time was over before its definition was evaluated";
+
+/// Why a definition failed that was cut short at the end of the time it
+/// is given ([`candidate_seconds`]).
+const CANDIDATE_OUT_OF_TIME: &str = "its definition was not evaluated in the time it is given";
+
+/// Why a definition failed that was cut short at the end of its share of
+/// the item's time ([`Turns`]): it gives way to the next ones.
+const GAVE_WAY: &str = "its definition was not evaluated in its share of the item's time";
+
+/// A time in seconds (negative as none, huge as a day).
+fn seconds(s: f64) -> std::time::Duration {
+    std::time::Duration::from_secs_f64(s.clamp(0.0, 86_400.0))
+}
 
 /// Whether `MITCAD_IMPORT_TRACE` asks for the replay's attempts on
 /// standard error.
@@ -408,16 +721,20 @@ fn item_name(item: &TimelineItem) -> String {
 }
 
 /// Replaces the strings `"$k"` in a definition by the uid of the k-th
-/// feature added before it ([`Importer::add_all`]).
+/// feature added before it ([`Importer::add_all`]), also as the prefix of
+/// a face or body name (`"$0:hole0.wall"`, `"$1.b0"`).
 fn substitute(def: &mut Value, uids: &[FeatureUid]) {
     match def {
         Value::String(s) => {
-            if let Some(uid) = s
-                .strip_prefix('$')
-                .and_then(|k| k.parse::<usize>().ok())
-                .and_then(|k| uids.get(k))
-            {
-                *s = uid.to_string();
+            if let Some(rest) = s.strip_prefix('$') {
+                let digits = rest
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(rest.len());
+                let (k, tail) = rest.split_at(digits);
+                let fits = tail.is_empty() || tail.starts_with([':', '.']);
+                if fits && let Some(uid) = k.parse::<usize>().ok().and_then(|k| uids.get(k)) {
+                    *s = format!("{uid}{tail}");
+                }
             }
         }
         Value::Array(items) => items.iter_mut().for_each(|v| substitute(v, uids)),
@@ -453,6 +770,295 @@ fn bounded(c: &Candidate) -> bool {
 /// regions' areas come from sampled outlines: 5 % of slack.
 fn can_change(bound: f64, change: f64) -> bool {
     bound * change <= 0.0 || bound.abs() >= 0.95 * change.abs()
+}
+
+/// How many more definitions are tried for an extrusion whose result
+/// matched its state only approximately (see [`Importer::verified_at`]).
+const LOOSE_RETRIES: usize = 8;
+
+/// Whether a candidate's feature (its last definition) is an extrusion.
+fn is_extrusion(c: &Candidate) -> bool {
+    c.defs.last().is_some_and(|d| d["type"] == "extrude")
+}
+
+/// Whether a candidate whose result matched its state only approximately
+/// looks for a closer definition: an extrusion (a set of regions next to
+/// the right one), a fillet or chamfer (which face takes which distance
+/// or offset is not decoded, and the history's edge guesses differ: the
+/// wrong reading can come within the tolerance too).
+fn seeks_closer(c: &Candidate) -> bool {
+    is_extrusion(c) || is_dressup(c)
+}
+
+/// How long a thread on faces sized by offsets may take (`ops.rs`,
+/// threads), s: offsetting a face of a large or stored body can take long
+/// or not build, where the tube tried next takes a second (mitcad#68).
+const SIZING_OFFSET_SECONDS: f64 = 2.0;
+
+/// The seconds a candidate is given of its item's time, when fewer.
+fn candidate_seconds(c: &Candidate) -> Option<f64> {
+    let sizing = c.defs.last().is_some_and(|d| d["type"] == "thread")
+        && c.defs.iter().any(|d| d["type"] == "offset_face");
+    sizing.then_some(SIZING_OFFSET_SECONDS)
+}
+
+/// The part of an item's time a definition is given in the first round
+/// ([`Turns`], mitcad#78). Definitions that give a state take a second or
+/// two (up to about 15 s on bodies of thousands of faces); one still
+/// running after a third of the item's time is mostly a wrong guess whose
+/// boolean is slow (a minute or more), which would keep the definitions
+/// ranked after it from being tried. Each one cut short at its share and
+/// tried again costs that share, so it is not smaller.
+const SHARE: f64 = 1.0 / 3.0;
+
+/// The order in which an item's definitions are tried against the
+/// history, so that one slow definition does not use up the item's time
+/// (mitcad#78): in the first round each is given a share of the time
+/// ([`SHARE`]; the last the rest), and one cut short at its share gives
+/// way to those after it (the same definition limited to participants
+/// waits behind it untried). Those that gave way are tried again, by rank,
+/// with the rest of the item's time, each only while more time is left
+/// than it ran (it cannot finish in less). A definition that would have
+/// given the state within the item's time still does when those after it
+/// are quick.
+#[derive(Debug, Default)]
+struct Turns {
+    /// Definitions that gave way, by rank, with the seconds they ran.
+    waiting: std::collections::VecDeque<(usize, f64)>,
+    /// The definitions cut short (at their share or at the end of the
+    /// item's time), with the seconds they ran.
+    cut: Vec<(usize, f64)>,
+}
+
+impl Turns {
+    /// The seconds the next definition is given: a share of `budget` in
+    /// the first round, unless it is the last one (`last`) and none waits;
+    /// None in the second round (`again`).
+    fn share(&self, budget: f64, last: bool, again: bool) -> Option<f64> {
+        let rest = again || (last && self.waiting.is_empty());
+        (!rest).then_some(SHARE * budget)
+    }
+
+    /// Definition `k` was cut short after `seconds`; it waits for a second
+    /// round when it gave way at its share.
+    fn cut_short(&mut self, k: usize, seconds: f64, gave_way: bool) {
+        if gave_way {
+            self.waiting.push_back((k, seconds));
+        }
+        self.cut.push((k, seconds));
+    }
+
+    /// Whether definition `k` of `candidates` waits without being tried:
+    /// the same definition without participants gave way (the boolean on
+    /// fewer bodies takes as long), so it waits behind that one, as if it
+    /// had run as long.
+    fn waits_behind(&mut self, candidates: &[Candidate], k: usize) -> bool {
+        let Some((free, _)) = participants_of(&candidates[k]) else {
+            return false;
+        };
+        let ran = self
+            .waiting
+            .iter()
+            .find(|(j, _)| matches!(candidates[*j].defs.as_slice(), [d] if *d == free))
+            .map(|(_, ran)| *ran);
+        if let Some(ran) = ran {
+            self.waiting.push_back((k, ran));
+        }
+        ran.is_some()
+    }
+
+    /// The next definition to try again with `remaining` seconds: those
+    /// that ran as long already are passed over.
+    fn again(&mut self, remaining: f64) -> Option<usize> {
+        while let Some((k, ran)) = self.waiting.pop_front() {
+            if remaining > ran {
+                return Some(k);
+            }
+        }
+        None
+    }
+
+    /// What an item that gave no state says about the definitions cut
+    /// short: the one that ran longest, of `candidates` (with its seconds).
+    fn note(&self, candidates: &[Candidate]) -> Option<(f64, String)> {
+        let (k, seconds) = self
+            .cut
+            .iter()
+            .copied()
+            .max_by(|a, b| a.1.total_cmp(&b.1))?;
+        let others = match self.cut.iter().filter(|(j, _)| *j != k).count() {
+            0 => String::new(),
+            1 => " (and 1 other)".to_owned(),
+            n => format!(" (and {n} others)"),
+        };
+        let note = format!(
+            "cut short after {seconds:.1} s: definition {} of {} ({}){others}",
+            k + 1,
+            candidates.len(),
+            brief(&candidates[k])
+        );
+        Some((seconds, note))
+    }
+}
+
+/// A candidate's feature in a few words, for the report: its type,
+/// operation and how many profiles.
+fn brief(c: &Candidate) -> String {
+    let Some(def) = c.defs.last() else {
+        return String::new();
+    };
+    let mut words = vec![def["type"].as_str().unwrap_or("?").to_owned()];
+    if let Some(operation) = def["operation"].as_str() {
+        words.push(operation.to_owned());
+    }
+    if let Some(profiles) = def["profiles"].as_array() {
+        let n = profiles.len();
+        words.push(format!("{n} profile{}", if n == 1 { "" } else { "s" }));
+    }
+    words.join(", ")
+}
+
+/// Whether a candidate's feature (its last definition) is a fillet or
+/// chamfer.
+fn is_dressup(c: &Candidate) -> bool {
+    c.defs
+        .last()
+        .is_some_and(|d| d["type"] == "fillet" || d["type"] == "chamfer")
+}
+
+/// Whether a result `d` from its state is closer than an approximate match
+/// `loose` before it, so that `c` takes its place: for a fillet or chamfer
+/// by a quarter at least. The right edges' rounding can differ from a
+/// stored one (a spline) by about as much as another edge set's, which then
+/// comes a little closer by chance (4.0e-4 against 4.4e-4) and whose edges
+/// keep later items from building; a closer definition that is right comes
+/// closer by half or more (the other reading of a chamfer, the edges a
+/// rounding really took).
+fn closer(c: &Candidate, d: f64, loose: f64) -> bool {
+    if is_dressup(c) {
+        d < 0.75 * loose
+    } else {
+        d < loose
+    }
+}
+
+/// Whether an approximate match of a candidate is suspect: an extrusion
+/// (a set of regions next to the right one can come within the
+/// tolerance), or copies the history guessed (copies of another feature,
+/// or about another plane, than the file's). Other approximations are the
+/// file's (fillets stored as splines) and stay.
+fn suspect(c: &Candidate) -> bool {
+    is_extrusion(c)
+        || (c.guess
+            && c.defs.last().is_some_and(|d| {
+                matches!(
+                    d["type"].as_str(),
+                    Some("circular_pattern" | "rectangular_pattern" | "mirror")
+                )
+            }))
+}
+
+/// Whether a result `d` from its state (relative, [`Sig::distance`]) is an
+/// approximation the item made itself, not one the bodies before it
+/// carried (`carried`, from the state before it): an item on bodies that
+/// differ from the file's by `carried` comes about as close and no closer.
+fn introduced(d: f64, carried: f64) -> bool {
+    d > history::EXACT && d > 1.5 * carried
+}
+
+/// Whether a candidate's feature cannot turn the bodies `before` into
+/// `after` (its result, or a history state it matched): a join (or new
+/// body) that leaves less solid volume on as many bodies, or a cut that
+/// leaves more. For an item without a state of its own, which may match
+/// any of the next states within the tolerance, a join came that close
+/// to a later fillet's state by chance; the geometry kernel's booleans
+/// also give such results on some inputs.
+fn implausible(c: &Candidate, before: &[Sig], after: &[Sig]) -> bool {
+    if before.len() != after.len() || before.is_empty() {
+        return false;
+    }
+    let volume = |sigs: &[Sig]| sigs.iter().map(|s| s.volume).sum::<f64>();
+    let (b, a) = (volume(before), volume(after));
+    let slack = 1e-7 * b.abs().max(a.abs());
+    match c.defs.last().and_then(|d| d["operation"].as_str()) {
+        Some("join" | "new_body") => a < b - slack,
+        Some("cut") => a > b + slack,
+        _ => false,
+    }
+}
+
+/// How many other definitions of an extrusion are kept for a later
+/// pattern or mirror of it ([`Alternatives`]).
+const ALTERNATIVES: usize = 4;
+
+/// The most extrusions given another definition for one pattern or mirror
+/// ([`Importer::with_other_profiles`]).
+const ALTERNATIVE_EDITS: usize = 8;
+
+/// Definitions of an extrusion ranked after the one that gave its state
+/// exactly, not tried: other sets of regions can give the same bodies
+/// (regions in material a cut already removed, or a join adds to), but
+/// not the same copies, so a later pattern or mirror of the extrusion
+/// that gives no state tries them ([`Importer::with_other_profiles`]).
+#[derive(Debug, Clone)]
+struct Alternatives {
+    /// The extrusion's entry in the report.
+    report: usize,
+    /// Single definitions, with their notes.
+    defs: Vec<(Value, Option<String>)>,
+}
+
+/// The extrusion definitions after `accepted` in `later` that differ from
+/// it and from each other by more than their participants (the same
+/// definition limited to some bodies gives the same copies), at most
+/// [`ALTERNATIVES`].
+fn other_definitions(accepted: &Candidate, later: &[Candidate]) -> Vec<(Value, Option<String>)> {
+    let free = |d: &Value| {
+        let mut d = d.clone();
+        if let Some(m) = d.as_object_mut() {
+            m.remove("participants");
+        }
+        d
+    };
+    let [def] = accepted.defs.as_slice() else {
+        return Vec::new();
+    };
+    if def["type"] != "extrude" {
+        return Vec::new();
+    }
+    let mut seen = vec![free(def)];
+    let mut out = Vec::new();
+    for c in later {
+        let [d] = c.defs.as_slice() else {
+            continue;
+        };
+        if d["type"] != "extrude" || seen.contains(&free(d)) {
+            continue;
+        }
+        seen.push(free(d));
+        out.push((d.clone(), c.note.clone()));
+        if out.len() >= ALTERNATIVES {
+            break;
+        }
+    }
+    out
+}
+
+/// The features a pattern or mirror candidate copies (`objects` of type
+/// `features`).
+fn copied_features(c: &Candidate) -> Vec<FeatureUid> {
+    let Some(def) = c.defs.last() else {
+        return Vec::new();
+    };
+    if def["objects"]["type"] != "features" {
+        return Vec::new();
+    }
+    def["objects"]["features"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| f.as_str()?.parse().ok())
+        .collect()
 }
 
 /// A fillet or chamfer candidate of one definition: the definition
@@ -542,8 +1148,11 @@ enum Class {
     Sketch,
     /// Construction plane, axis or point: no bodies.
     Datum,
-    /// Changes no body in its component (joints, occurrences, ...).
+    /// Changes no body in its component (occurrences, relationships, ...).
     NoGeometry,
+    /// A joint, an as-built joint, a joint origin or a ground item
+    /// (`joints.rs`).
+    Assembly,
     /// A modelling feature (or an unknown item, which may be one).
     Geometry,
 }
@@ -553,11 +1162,37 @@ fn classify(object_type: Option<&str>) -> Class {
         Some("Sketch") => Class::Sketch,
         Some("ConstructionPlane" | "ConstructionAxis" | "ConstructionPoint") => Class::Datum,
         Some(
-            "Joint" | "AsBuiltJoint" | "JointOrigin" | "RigidGroup" | "Canvas" | "Occurrence"
-            | "Decal" | "Snapshot" | "MotionLink" | "ContactSet",
-        ) => Class::NoGeometry,
+            "Joint" | "AsBuiltJoint" | "JointOrigin" | "GroundOccurrence" | "Snapshot"
+            | "RigidGroup",
+        ) => Class::Assembly,
+        Some(t) if no_geometry(t).is_some() => Class::NoGeometry,
         _ => Class::Geometry,
     }
+}
+
+/// Why an item of this type changes no body in its component, for the
+/// report; `None` for the types that may.
+fn no_geometry(object_type: &str) -> Option<&'static str> {
+    Some(match object_type {
+        "MotionLink" | "ContactSet" | "GeometricRelationship" | "AssemblyRelationship" => {
+            "no geometry: an assembly relationship (occurrences are placed by the occurrence tree)"
+        }
+        "Occurrence"
+        | "ComponentInsert"
+        | "Fastener"
+        | "CopyPasteOccurrence"
+        | "DerivedInstance"
+        | "RectangularOccurrencePattern"
+        | "CircularOccurrencePattern" => {
+            "no geometry: places occurrences of a component (they come from the occurrence tree, \
+             the component's bodies with the component)"
+        }
+        "Context" => "no geometry: the assembly context of a component of another design",
+        "Canvas" | "Decal" => "no geometry: a display item",
+        "Group" => "no geometry: a timeline group (its items follow it)",
+        "MeshFeature" => "no solid geometry: a mesh body, which the import leaves out",
+        _ => return None,
+    })
 }
 
 impl<'a, K: Kernel> Importer<'a, K> {
@@ -572,12 +1207,29 @@ impl<'a, K: Kernel> Importer<'a, K> {
             &mut self.report.components,
             &mut self.report.warnings,
         );
+        self.captures = captures::read(self.dump, &self.components, self.doc.assembly());
+        let captures = &self.captures;
         components::assign_items(
             self.dump,
+            self.doc.assembly(),
+            &|o, index| captures.placement_at(o.uid, index).unwrap_or(o.transform),
             &mut self.oracle,
             &mut self.components,
             &mut self.report.components,
         );
+        // The occurrences start where the file places them at the end of
+        // its timeline: their last captured positions (mitcad#75).
+        for (occurrence, placement) in self.captures.last() {
+            if let Err(e) = self
+                .doc
+                .set_occurrence_transform(occurrence, placement, false)
+            {
+                let name = self.doc.assembly().occurrence_name(occurrence);
+                self.report
+                    .warnings
+                    .push(format!("{name}: its captured position: {e}"));
+            }
+        }
         self.report.history.states = self.oracle.count();
         if self.oracle.enabled {
             // The replay starts with no bodies: the first state without
@@ -586,9 +1238,86 @@ impl<'a, K: Kernel> Importer<'a, K> {
         }
         let dump = self.dump;
         for (position, item) in dump.timeline_items().iter().enumerate() {
+            // A try the watchdog gave up does nothing more (mitcad#71).
+            if self.abandoned() {
+                trace!("given up by the watchdog before item {}", position + 1);
+                return;
+            }
             self.item(position, item);
         }
+        if self.abandoned() {
+            trace!("given up by the watchdog before the final bodies");
+            return;
+        }
         self.finish();
+    }
+
+    /// Whether the watchdog gave this try up ([`Progress::abandon`]).
+    fn abandoned(&self) -> bool {
+        self.options
+            .progress
+            .as_ref()
+            .is_some_and(|p| p.abandoned())
+    }
+
+    /// Whether the process is low on memory ([`Progress::low_memory`]): no
+    /// definitions are tried until it has recovered.
+    fn memory_low(&self) -> bool {
+        self.options
+            .progress
+            .as_ref()
+            .is_some_and(|p| p.is_memory_low())
+    }
+
+    /// How many times the process ran low on memory.
+    fn memory_lows(&self) -> u64 {
+        self.options
+            .progress
+            .as_ref()
+            .map_or(0, |p| p.memory_lows())
+    }
+
+    /// A kernel operation that ran out of memory (`error`, mitcad#80): the
+    /// process is low on memory.
+    fn out_of_memory(&self, error: &str) {
+        if KernelError::is_out_of_memory(error)
+            && let Some(p) = &self.options.progress
+        {
+            p.low_memory(&format!(
+                "a geometry kernel operation ran out of memory ({error})"
+            ));
+        }
+    }
+
+    /// Drops the cached results of the definitions tried and the bodies of
+    /// the history states behind the replay (mitcad#80): when memory gets
+    /// tight ([`Progress::tight_on_memory`]), and after each time it ran
+    /// low ([`Progress::low_memory`]; from the first on, the cached results
+    /// take at most [`CACHE_AFTER_LOW_MEMORY`]).
+    fn release_memory(&mut self) {
+        let Some(p) = self.options.progress.clone() else {
+            return;
+        };
+        // Once each time it ran low (also when it has recovered since).
+        let lows = p.memory_lows();
+        let low = lows != self.memory_released;
+        if !p.take_tight() && !low {
+            return;
+        }
+        if low {
+            if self.memory_released == 0 {
+                self.doc.set_memory_budget(Some(CACHE_AFTER_LOW_MEMORY));
+            }
+            self.memory_released = lows;
+        }
+        let (results, bytes) = self.doc.clear_memory_cache();
+        let states = self.oracle.release_behind();
+        trace!(
+            "memory {} ({}): {results} cached results ({} MiB) and {states} history states dropped",
+            if low { "low" } else { "tight" },
+            p.memory(),
+            bytes >> 20
+        );
     }
 
     fn set_units(&mut self) {
@@ -680,6 +1409,16 @@ impl<'a, K: Kernel> Importer<'a, K> {
         let at = self.report.items.len() - 1;
         // (The application's progress dialog shows it.)
         trace!("item {}: {name}", position + 1);
+        self.release_memory();
+        if let Some(memory) = self.options.progress.as_ref().map(|p| p.memory())
+            && !memory.is_empty()
+        {
+            trace!(
+                "memory: {memory}; cached results {} MiB, history states kept {}",
+                self.doc.memory_cache_bytes() >> 20,
+                self.oracle.kept()
+            );
+        }
         self.component = self.components.of_item(index);
         if !self.component.is_root() {
             self.report.items[at].component = Some(self.doc.assembly().name(self.component));
@@ -692,6 +1431,10 @@ impl<'a, K: Kernel> Importer<'a, K> {
             return;
         }
         let started = std::time::Instant::now();
+        let lows = self.memory_lows();
+        // The item's time; the parts of it that are given their own set
+        // theirs (`Importer::within`).
+        self.deadline = Some(started + seconds(self.options.item_seconds));
         let class = classify(object_type.as_deref());
         if class != Class::Geometry && self.options.hung_items.contains(&index) {
             self.note(at, Outcome::Skipped, HUNG);
@@ -700,16 +1443,39 @@ impl<'a, K: Kernel> Importer<'a, K> {
         match class {
             Class::Sketch => self.sketch_item(at, index, item),
             Class::Datum => self.datum_item(at, index, item),
+            Class::Assembly => self.assembly_item(at, index, item),
             Class::NoGeometry => self.note(
                 at,
                 Outcome::Skipped,
-                "no geometry (assembly relationship or display item)",
+                object_type
+                    .as_deref()
+                    .and_then(no_geometry)
+                    .unwrap_or("no geometry"),
             ),
             Class::Geometry => {
                 let originals = self.sketches_into_component(at, index, item);
                 self.geometry_item(at, index, item);
                 self.sketches.extend(originals);
             }
+        }
+        self.deadline = None;
+        // A modelling item that took the file's bodies while the process
+        // ran low on memory says so, also when it gave up for another
+        // reason after (mitcad#80).
+        let ran_low = self.memory_lows() != lows;
+        let report = &mut self.report.items[at];
+        if class == Class::Geometry
+            && ran_low
+            && matches!(report.outcome, Outcome::Fallback | Outcome::Skipped)
+            && !report
+                .note
+                .as_deref()
+                .is_some_and(|n| n.contains(LOW_MEMORY))
+        {
+            report.note = Some(match report.note.take() {
+                Some(n) if !n.is_empty() => format!("{n}; {LOW_MEMORY}"),
+                _ => LOW_MEMORY.to_owned(),
+            });
         }
         trace!(
             "{name}: {} in {:.2} s",
@@ -730,27 +1496,88 @@ impl<'a, K: Kernel> Importer<'a, K> {
     /// Adds a feature from its JSON definition; Ok with its uid when it
     /// evaluated, Err with the reason (the feature is then removed again).
     pub(crate) fn add(&mut self, def: &Value, name: Option<&str>) -> Result<FeatureUid, String> {
+        let target = self.def_component(def);
+        let mut def = def.clone();
+        self.solid_participants(&mut def, target);
+        self.add_in(&def, name, target)
+    }
+
+    /// Adds a feature from its JSON definition to `target` (see
+    /// [`Importer::add`]): a joint names geometry of other components than
+    /// its own.
+    pub(crate) fn add_in(
+        &mut self,
+        def: &Value,
+        name: Option<&str>,
+        target: ComponentUid,
+    ) -> Result<FeatureUid, String> {
         self.tick();
         // Items may have no name (the decoder's unknown ones).
         let name = name.filter(|n| !n.trim().is_empty());
-        let component = Some(self.def_component(def));
+        let component = Some(target);
+        let def = def.clone();
         let def: FeatureDef<ValueInput> =
-            serde_json::from_value(def.clone()).map_err(|e| format!("definition: {e}"))?;
+            serde_json::from_value(def).map_err(|e| format!("definition: {e}"))?;
         let added = match self.interruptible(|doc| doc.add_feature_to(&def, name, component)) {
             Ok(added) => added,
             // A name Mitcad already uses: take the default one.
             Err(e) if name.is_some() && e.to_string().contains("already named") => self
                 .interruptible(|doc| doc.add_feature_to(&def, None, component))
-                .map_err(|e| e.to_string())?,
-            Err(e) => return Err(e.to_string()),
+                .map_err(|e| e.to_string())
+                .inspect_err(|e| self.out_of_memory(e))?,
+            Err(e) => {
+                let e = e.to_string();
+                self.out_of_memory(&e);
+                return Err(e);
+            }
         };
         match self.doc.status(added.uid).and_then(|s| s.error()) {
             None => Ok(added.uid),
             Some(error) => {
                 let error = error.to_owned();
                 self.doc.undo();
+                self.out_of_memory(&error);
                 Err(error)
             }
+        }
+    }
+
+    /// A join, cut or intersection without participants works on every
+    /// body of its component, the file's sheets brought in as stored bodies
+    /// too ([`Importer::replace_bodies`]), while the file's solid operations
+    /// leave sheets alone: where the component holds sheets, its solids
+    /// become the participants (mitcad#35).
+    fn solid_participants(&self, def: &mut Value, component: ComponentUid) {
+        let kind = def["type"].as_str().unwrap_or_default();
+        let combines = match kind {
+            "hole" | "rib" | "web" => true,
+            "extrude" | "revolve" | "sweep" | "loft" | "pipe" | "helix" | "coil" | "box"
+            | "cylinder" | "sphere" | "torus" => {
+                matches!(
+                    def["operation"].as_str(),
+                    Some("join" | "cut" | "intersect")
+                )
+            }
+            _ => false,
+        };
+        if !combines || def.get("participants").is_some() {
+            return;
+        }
+        let kernel = self.doc.kernel();
+        let mut solids = Vec::new();
+        let mut sheets = false;
+        for b in self.doc.bodies() {
+            if self.doc.body_component(b.uid).unwrap_or(ComponentUid::ROOT) != component {
+                continue;
+            }
+            if SheetSig::of(kernel, b.shape).is_some() {
+                sheets = true;
+            } else {
+                solids.push(b.uid.to_string());
+            }
+        }
+        if sheets && !solids.is_empty() {
+            def["participants"] = serde_json::json!(solids);
         }
     }
 
@@ -801,8 +1628,15 @@ impl<'a, K: Kernel> Importer<'a, K> {
             if !uids.is_empty() {
                 substitute(&mut def, &uids);
             }
+            // A thread's faces sized before it (`ops.rs`, threads) leave
+            // the item's name to the thread.
+            let sizing = matches!(
+                def["type"].as_str(),
+                Some("offset_face" | "cylinder" | "combine")
+            ) && candidate.defs.last().is_some_and(|d| d["type"] == "thread");
             let own = match name {
                 _ if def["type"] == "sketch" && candidate.defs.len() > 1 => None,
+                _ if sizing => None,
                 Some(n) if named == 0 => Some(n.to_owned()),
                 Some(n) => Some(format!("{n}.{}", named + 1)),
                 None => None,
@@ -821,20 +1655,53 @@ impl<'a, K: Kernel> Importer<'a, K> {
         Ok(uids)
     }
 
-    /// Runs `f` on the document with the stop request as its monitor while
-    /// a modelling item's definitions are tried, so that a stop cuts the
-    /// evaluation short (P7e): the command then fails and changes nothing.
-    /// Undo never runs so: a cancelled monitor would refuse it.
+    /// Runs `f` on the document with a monitor while a modelling item's
+    /// definitions are tried, so that the evaluation stops (P7e: inside
+    /// the kernel's long operations too) on a stop request, when the
+    /// watchdog gives the try up ([`Progress::abandon`]), when the process
+    /// runs low on memory ([`Progress::low_memory`], mitcad#80), or when the
+    /// item's time is over ([`Importer::deadline`], mitcad#69): the
+    /// command then fails and changes nothing. Undo never runs so: a
+    /// cancelled monitor would refuse it.
     fn interruptible<T>(&mut self, f: impl FnOnce(&mut Document<K>) -> T) -> T {
-        let monitor = match &self.options.stop {
-            Some(m) if self.trying && !m.is_cancelled() => Arc::clone(m),
-            _ => return f(self.doc),
-        };
+        if !self.trying {
+            return f(self.doc);
+        }
+        let mut parents = Vec::new();
+        if let Some(m) = self.options.stop.as_ref().filter(|m| !m.is_cancelled()) {
+            parents.push(Arc::clone(m));
+        }
+        if let Some(p) = &self.options.progress {
+            parents.push(Arc::clone(&p.abandoned));
+            parents.extend(p.memory_monitor());
+        }
+        if parents.is_empty() && self.deadline.is_none() {
+            return f(self.doc);
+        }
+        let monitor = Arc::new(RecomputeMonitor::within(parents, self.deadline));
         let before = self.doc.monitor().cloned();
         self.doc.set_monitor(Some(monitor));
         let result = f(self.doc);
         self.doc.set_monitor(before);
         result
+    }
+
+    /// Runs `f` with the item's time ([`Importer::deadline`]) set to
+    /// `budget` seconds from now, for a part of an item that has a time of
+    /// its own.
+    fn within<T>(&mut self, budget: f64, f: impl FnOnce(&mut Self) -> T) -> T {
+        let outer = self
+            .deadline
+            .replace(std::time::Instant::now() + seconds(budget));
+        let result = f(self);
+        self.deadline = outer;
+        result
+    }
+
+    /// Whether the item's time is over ([`Importer::deadline`]).
+    fn past_deadline(&self) -> bool {
+        self.deadline
+            .is_some_and(|d| std::time::Instant::now() >= d)
     }
 
     /// Adds a candidate of the modelling item `index` (see
@@ -846,14 +1713,57 @@ impl<'a, K: Kernel> Importer<'a, K> {
         candidate: &Candidate,
         name: Option<&str>,
     ) -> Result<Vec<FeatureUid>, String> {
-        if self.stopped(index) {
+        self.try_candidate_for(index, candidate, name, None)
+    }
+
+    /// [`Importer::try_candidate`] for at most `share` seconds of the
+    /// item's time ([`Turns`]): cut short then, it fails with [`GAVE_WAY`].
+    fn try_candidate_for(
+        &mut self,
+        index: i64,
+        candidate: &Candidate,
+        name: Option<&str>,
+        share: Option<f64>,
+    ) -> Result<Vec<FeatureUid>, String> {
+        if self.abandoned() || self.stopped(index) {
             return Err(STOPPED.to_owned());
         }
+        if self.memory_low() {
+            return Err(LOW_MEMORY.to_owned());
+        }
+        let lows = self.memory_lows();
         self.trying = true;
+        let clock = std::time::Instant::now();
+        // A candidate given fewer seconds than its item has left: its own
+        // (a sizing offset's), or its share.
+        let item_deadline = self.deadline;
+        let own = candidate_seconds(candidate).map(|s| clock + seconds(s));
+        let shared = share.map(|s| clock + seconds(s));
+        self.deadline = [item_deadline, own, shared].into_iter().flatten().min();
         let added = self.add_all(candidate, name);
+        self.deadline = item_deadline;
         self.trying = false;
+        trace!(
+            "{}: evaluated in {:.2} s",
+            name.unwrap_or("?"),
+            clock.elapsed().as_secs_f64()
+        );
+        let past =
+            |d: Option<std::time::Instant>| d.is_some_and(|d| std::time::Instant::now() >= d);
         match added {
-            Err(_) if self.stopped(index) => Err(STOPPED.to_owned()),
+            Err(_) if self.abandoned() || self.stopped(index) => Err(STOPPED.to_owned()),
+            // Cut short (or failed) as the memory ran low: also when it has
+            // recovered since, as the definition's own memory was freed.
+            Err(_) if self.memory_low() || self.memory_lows() != lows => Err(LOW_MEMORY.to_owned()),
+            Err(e) if e == mitcad_model::Cancelled::MESSAGE && self.past_deadline() => {
+                Err(OUT_OF_TIME.to_owned())
+            }
+            Err(e) if e == mitcad_model::Cancelled::MESSAGE && past(own) => {
+                Err(CANDIDATE_OUT_OF_TIME.to_owned())
+            }
+            Err(e) if e == mitcad_model::Cancelled::MESSAGE && past(shared) => {
+                Err(GAVE_WAY.to_owned())
+            }
             added => added,
         }
     }
@@ -904,6 +1814,46 @@ impl<'a, K: Kernel> Importer<'a, K> {
         self.report.stopped = Some(StopReport { item, name });
     }
 
+    /// The report's warning when the process ran low on memory (mitcad#80).
+    fn report_low_memory(&mut self) {
+        let Some((memory, at)) = self
+            .options
+            .progress
+            .as_ref()
+            .and_then(|p| p.first_low_memory())
+        else {
+            return;
+        };
+        let item = (at >= 0).then_some(at);
+        let name = item
+            .and_then(|i| self.report.items.iter().find(|r| r.index == i))
+            .map(|r| r.name.clone());
+        let given_up = self
+            .report
+            .items
+            .iter()
+            .filter(|i| i.note.as_deref().is_some_and(|n| n.contains(LOW_MEMORY)))
+            .count();
+        let place = match (&name, at) {
+            (Some(name), _) => format!("at {name}"),
+            (None, Progress::STARTING) => "before its first item".to_owned(),
+            (None, _) => "after its last item".to_owned(),
+        };
+        let mut warning = format!(
+            "the import ran low on memory {place} ({memory}): definitions were cut short or not \
+             tried and {given_up} modelling items took the file's bodies"
+        );
+        if self.memory_low() {
+            warning.push_str("; the final bodies were compared by volume only");
+        }
+        self.report.warnings.push(warning);
+        self.report.low_memory = Some(LowMemoryReport {
+            item,
+            name,
+            memory,
+            items: given_up,
+        });
+    }
     /// Takes back commands down to an undo depth.
     fn undo_to(&mut self, depth: usize) {
         while self.doc.undo_depth() > depth {
@@ -923,11 +1873,9 @@ impl<'a, K: Kernel> Importer<'a, K> {
 
     /// Signatures of the solids at the marker.
     fn current_sigs(&self) -> Vec<Sig> {
-        let kernel = self.doc.kernel();
-        self.doc
-            .bodies()
-            .iter()
-            .filter_map(|b| Sig::of(kernel, b.shape))
+        self.current_bodies()
+            .into_iter()
+            .map(|(_, sig)| sig)
             .collect()
     }
 
@@ -974,10 +1922,21 @@ impl<'a, K: Kernel> Importer<'a, K> {
             if self.doc.feature(info.uid).map(|f| f.component) == Some(self.component) {
                 continue;
             }
-            let copy = match self.sketch_copies.get(&(i, self.component)) {
-                Some(copy) => Some(copy.clone()),
-                None => self.copy_sketch(i, &info),
+            // Moved by the placements at this item (mitcad#86): a copy made
+            // for an item before a captured position does not do after it.
+            let moved = self.doc.feature(info.uid).and_then(|f| {
+                let from = self.placement_at(f.component, index)?;
+                Some(inverse(&self.placement_at(self.component, index)?).after(&from))
+            });
+            let Some(moved) = moved else {
+                continue;
             };
+            let made = self
+                .sketch_copies
+                .get(&(i, self.component))
+                .filter(|(t, _)| same_placement(t, &moved))
+                .map(|(_, copy)| copy.clone());
+            let copy = made.or_else(|| self.copy_sketch(i, &info, &moved));
             if let Some(copy) = copy {
                 self.report.items[at].features.push(copy.uid.to_string());
                 self.sketches.insert(i, copy);
@@ -988,11 +1947,15 @@ impl<'a, K: Kernel> Importer<'a, K> {
     }
 
     /// Imports sketch `i` again into the current component, moved from the
-    /// coordinates of its own component into this one's (the file's
-    /// assembly context: a feature of one component may use another's
-    /// sketch); None when it does not import, lands elsewhere, or a
-    /// component is placed more than once (no one way to move it).
-    fn copy_sketch(&mut self, i: i64, original: &SketchInfo) -> Option<SketchInfo> {
+    /// coordinates of its own component into this one's by `moved` (the
+    /// file's assembly context: a feature of one component may use
+    /// another's sketch); None when it does not import or lands elsewhere.
+    fn copy_sketch(
+        &mut self,
+        i: i64,
+        original: &SketchInfo,
+        moved: &Transform,
+    ) -> Option<SketchInfo> {
         let dump = self.dump;
         let item = dump
             .timeline_items()
@@ -1000,17 +1963,19 @@ impl<'a, K: Kernel> Importer<'a, K> {
             .enumerate()
             .find(|(p, it)| it.index.unwrap_or(*p as i64) == i)?
             .1;
-        let from = self.doc.feature(original.uid)?.component;
-        let moved = inverse(&self.placement(self.component)?).after(&self.placement(from)?);
         let depth = self.doc.undo_depth();
-        let result = self.import_sketch(i, item, Some(&moved));
+        let result = self.import_sketch(i, item, Some(moved));
         let copy = self.sketches.insert(i, original.clone());
         match (result, copy) {
             (Ok(_), Some(copy))
                 if self.doc.feature(copy.uid).map(|f| f.component) == Some(self.component) =>
             {
-                trace!("sketch {i} imported again into {}", self.component);
-                self.sketch_copies.insert((i, self.component), copy.clone());
+                trace!(
+                    "sketch {i} imported again into {}, moved by {:?}",
+                    self.component, moved.translation
+                );
+                self.sketch_copies
+                    .insert((i, self.component), (*moved, copy.clone()));
                 Some(copy)
             }
             _ => {
@@ -1020,19 +1985,16 @@ impl<'a, K: Kernel> Importer<'a, K> {
         }
     }
 
-    /// Where a component is placed in the design, when it is placed once
-    /// (the root: as it is).
-    fn placement(&self, component: ComponentUid) -> Option<Transform> {
-        let assembly = self.doc.assembly();
-        let paths = assembly.paths_to(component);
-        let [path] = paths.as_slice() else {
-            return None;
-        };
-        let mut placed = Transform::IDENTITY;
-        for o in path {
-            placed = placed.after(&assembly.occurrence(*o)?.transform);
-        }
-        Some(placed)
+    /// Where a component is placed in the design at the item `index` of
+    /// the timeline, when it is placed once (the root: as it is): captured
+    /// occurrences where the file has them there, not where they start
+    /// (`captures.rs`, mitcad#86).
+    pub(crate) fn placement_at(&self, component: ComponentUid, index: i64) -> Option<Transform> {
+        components::placement(self.doc.assembly(), component, |o| {
+            self.captures
+                .placement_at(o.uid, index)
+                .unwrap_or(o.transform)
+        })
     }
 
     fn sketch_item(&mut self, at: usize, index: i64, item: &TimelineItem) {
@@ -1073,11 +2035,11 @@ impl<'a, K: Kernel> Importer<'a, K> {
         if self.at_final {
             // The stored design is the base body: the item continues on it
             // when it leaves it as the file stored it.
-            if self.stopped(index) {
+            if let Some(reason) = self.halted(index) {
                 self.note(
                     at,
                     Outcome::Skipped,
-                    format!("{STOPPED}; the stored bodies stand in for it"),
+                    format!("{reason}; the stored bodies stand in for it"),
                 );
             } else if !self.on_base(at, index, item, false) {
                 self.note(
@@ -1096,8 +2058,8 @@ impl<'a, K: Kernel> Importer<'a, K> {
             self.failed(at, HUNG.to_owned());
             return;
         }
-        if self.stopped(index) {
-            self.failed(at, STOPPED.to_owned());
+        if let Some(reason) = self.halted(index) {
+            self.failed(at, reason.to_owned());
             return;
         }
         match self.translate(index, item) {
@@ -1110,6 +2072,18 @@ impl<'a, K: Kernel> Importer<'a, K> {
         }
     }
 
+    /// Why no (more) definitions are tried for the modelling item `index`
+    /// whatever its state: the import was stopped, or ran low on memory.
+    fn halted(&self, index: i64) -> Option<&'static str> {
+        if self.stopped(index) {
+            Some(STOPPED)
+        } else if self.memory_low() {
+            Some(LOW_MEMORY)
+        } else {
+            None
+        }
+    }
+
     fn unverified(&mut self, at: usize, index: i64, item: &TimelineItem, candidates: &[Candidate]) {
         let mut last = "only guesses, which need the file's history to check".to_owned();
         for c in candidates.iter().filter(|c| !c.guess) {
@@ -1119,9 +2093,9 @@ impl<'a, K: Kernel> Importer<'a, K> {
                     return;
                 }
                 Err(e) => {
-                    let stopped = e == STOPPED;
+                    let halt = halts(&e);
                     last = e;
-                    if stopped {
+                    if halt {
                         break;
                     }
                 }
@@ -1171,6 +2145,227 @@ impl<'a, K: Kernel> Importer<'a, K> {
         }
     }
 
+    /// How far the replay's bodies are from history state `q`'s
+    /// ([`history::bodies_distance`]; 0 when they do not pair within the
+    /// tolerance or the state does not rebuild).
+    fn carried(&mut self, q: usize) -> f64 {
+        let kernel = self.doc.kernel();
+        let state = self.oracle.sigs(kernel, q);
+        history::bodies_distance(&state, &self.current_sigs()).map_or(0.0, |d| d.0)
+    }
+
+    /// The warning for a base feature that brought the bodies to the state
+    /// before item `name`.
+    fn exact_before(&mut self, uid: FeatureUid, name: &str) {
+        let base = self.doc.feature(uid).map(|f| f.name.clone());
+        self.report.warnings.push(format!(
+            "{} brings the bodies to the file's state before {name}",
+            base.unwrap_or_default()
+        ));
+    }
+
+    /// After candidate `c` of the item gave history state `state` within
+    /// `d` (the bodies before it `carried` from theirs; `later`: the
+    /// candidates ranked after it, not tried): an extrusion that gave it
+    /// exactly keeps its other definitions for a later pattern or mirror
+    /// ([`Alternatives`]); a suspect approximation it made itself
+    /// ([`suspect`]) does not reach later items: a base feature brings
+    /// the bodies to the state exactly (the item stays, checked within
+    /// the tolerance). Left alone, the difference grows in later items or
+    /// keeps a later state (a split, a mirror, the stored design) from
+    /// matching.
+    #[allow(clippy::too_many_arguments)]
+    fn after_match(
+        &mut self,
+        at: usize,
+        index: i64,
+        item: &TimelineItem,
+        c: &Candidate,
+        later: &[Candidate],
+        state: usize,
+        d: f64,
+        carried: f64,
+    ) {
+        if d <= history::EXACT {
+            let defs = other_definitions(c, later);
+            if let (false, Some(uid)) = (defs.is_empty(), self.features.get(&index)) {
+                trace!("{}: {} other definitions kept", item_name(item), defs.len());
+                self.alternatives
+                    .insert(*uid, Alternatives { report: at, defs });
+            }
+            return;
+        }
+        if !suspect(c) || !introduced(d, carried) {
+            return;
+        }
+        let name = item_name(item);
+        if tracing() {
+            let kernel = self.doc.kernel();
+            let target = self.oracle.sigs(kernel, state);
+            trace!(
+                "{name}: {:?} for state {state}: {:?}",
+                short(&self.current_sigs()),
+                short(&target)
+            );
+        }
+        let depth = self.doc.undo_depth();
+        match self.fallback_to(state, None) {
+            Ok(Some(uid)) => {
+                let base = self.doc.feature(uid).map(|f| f.name.clone());
+                trace!("{name}: {uid} brings the bodies to state {state} exactly");
+                self.report.warnings.push(format!(
+                    "{} brings the bodies to the file's state after {name}, whose result \
+                     differs from it by {:.1e}",
+                    base.unwrap_or_default(),
+                    d
+                ));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                trace!("{name}: its state did not come in exactly: {e}");
+                self.undo_to(depth);
+            }
+        }
+    }
+
+    /// A pattern or mirror of features that gave no state (`candidates`
+    /// tried against `target`, the item's state `state`): the extrusions
+    /// its candidates copy are given their other definitions
+    /// ([`Alternatives`]), each one kept only when the bodies stay as they
+    /// are, and the candidates that copy it are tried again. True when one
+    /// gave the state; the extrusion then keeps that definition.
+    fn with_other_profiles(
+        &mut self,
+        at: usize,
+        index: i64,
+        item: &TimelineItem,
+        candidates: &[Candidate],
+        target: &[Sig],
+        state: usize,
+    ) -> bool {
+        let budget = self.options.item_seconds;
+        self.within(budget, |s| {
+            s.with_other_profiles_in(at, index, item, candidates, target, state)
+        })
+    }
+
+    fn with_other_profiles_in(
+        &mut self,
+        at: usize,
+        index: i64,
+        item: &TimelineItem,
+        candidates: &[Candidate],
+        target: &[Sig],
+        state: usize,
+    ) -> bool {
+        let mut copied: Vec<FeatureUid> = Vec::new();
+        for c in candidates {
+            for f in copied_features(c) {
+                if self.alternatives.contains_key(&f) && !copied.contains(&f) {
+                    copied.push(f);
+                }
+            }
+        }
+        let name = item_name(item);
+        trace!(
+            "{name}: other definitions of {copied:?} for {} candidates",
+            candidates.len()
+        );
+        if copied.is_empty() {
+            return false;
+        }
+        let started = std::time::Instant::now();
+        let budget = self.options.item_seconds;
+        let before = self.current_sigs();
+        let mut edits = 0;
+        for f in copied {
+            let Some(alternatives) = self.alternatives.get(&f).cloned() else {
+                continue;
+            };
+            for (def, note) in &alternatives.defs {
+                if edits >= ALTERNATIVE_EDITS
+                    || started.elapsed().as_secs_f64() > budget
+                    || self.give_up(index).is_some()
+                {
+                    return false;
+                }
+                edits += 1;
+                let depth = self.doc.undo_depth();
+                let Ok(parsed) = serde_json::from_value::<FeatureDef<ValueInput>>(def.clone())
+                else {
+                    continue;
+                };
+                self.tick();
+                self.trying = true;
+                let edited = self.interruptible(|doc| doc.edit_feature(f, &parsed));
+                self.trying = false;
+                // The bodies must stay as they are: the extrusion gives its
+                // state, and the features after it theirs.
+                let unchanged = edited.is_ok()
+                    && self.doc.status(f).and_then(|s| s.error()).is_none()
+                    && history::bodies_distance(&before, &self.current_sigs())
+                        .is_some_and(|(_, exact)| exact);
+                if !unchanged {
+                    trace!(
+                        "{name}: {f} as {} changes the bodies",
+                        summary(&Candidate::new(def.clone()))
+                    );
+                    self.undo_to(depth);
+                    continue;
+                }
+                for c in candidates
+                    .iter()
+                    .filter(|c| copied_features(c).contains(&f))
+                {
+                    let inner = self.doc.undo_depth();
+                    let uids = match self.try_candidate(index, c, item.name()) {
+                        Ok(uids) => uids,
+                        Err(e) if halts(&e) => {
+                            self.undo_to(depth);
+                            return false;
+                        }
+                        Err(_) => continue,
+                    };
+                    let current = self.current_sigs();
+                    if let Some((d, _)) =
+                        history::bodies_distance_within(target, &current, c.tolerance())
+                    {
+                        trace!(
+                            "{name}: {} -> its state {state} ({d:.1e}) with {f} as {}",
+                            summary(c),
+                            summary(&Candidate::new(def.clone()))
+                        );
+                        self.oracle.cursor = Some(state);
+                        self.report.history.matched += 1;
+                        self.accepted(at, index, &uids, c, Some(true));
+                        self.loosely_matched(&name, d);
+                        let entry = &mut self.report.items[alternatives.report];
+                        let chosen = format!(
+                            "chosen for {name}: the first definition gave its state too, but \
+                             not the copies"
+                        );
+                        entry.note = Some(match note {
+                            Some(n) if !n.is_empty() => format!("{n}; {chosen}"),
+                            _ => chosen,
+                        });
+                        self.alternatives.remove(&f);
+                        self.after_match(at, index, item, c, &[], state, d, 0.0);
+                        return true;
+                    }
+                    trace!(
+                        "{name}: {} -> {:?} with {f} as {}",
+                        summary(c),
+                        short(&current),
+                        summary(&Candidate::new(def.clone()))
+                    );
+                    self.undo_to(inner);
+                }
+                self.undo_to(depth);
+            }
+        }
+        false
+    }
+
     /// The item's candidates against the history, also after the pending
     /// items' possible fallbacks. The candidates are made for the bodies
     /// they start from (edges found against a fallback's bodies).
@@ -1179,6 +2374,55 @@ impl<'a, K: Kernel> Importer<'a, K> {
             self.verified_at(at, index, item, state);
             return;
         }
+        // The state of the next item that has one is that item's: this one
+        // matches (and its fallbacks take) only states before it.
+        let limit = self.next_named_state(index);
+        self.oracle.limit = limit;
+        self.verified_without_state(at, index, item, limit);
+        self.oracle.limit = None;
+    }
+
+    /// The state the next item after `index` in the timeline that has a
+    /// state of its own made, when it lies ahead of the replay.
+    fn next_named_state(&mut self, index: i64) -> Option<usize> {
+        let dump = self.dump;
+        let from = self.oracle.next_index();
+        let items = dump.timeline_items();
+        let position = items
+            .iter()
+            .enumerate()
+            .position(|(p, it)| it.index.unwrap_or(p as i64) == index)?;
+        items
+            .iter()
+            .enumerate()
+            .skip(position + 1)
+            .filter_map(|(p, it)| self.oracle.state_of_item(it.index.unwrap_or(p as i64)))
+            .filter(|&s| s >= from)
+            .min()
+    }
+
+    /// [`Importer::verified`] of an item without a state of its own, with
+    /// the history's states before `limit`.
+    fn verified_without_state(
+        &mut self,
+        at: usize,
+        index: i64,
+        item: &TimelineItem,
+        limit: Option<usize>,
+    ) {
+        let budget = self.options.item_seconds;
+        self.within(budget, |s| {
+            s.verified_without_state_in(at, index, item, limit);
+        });
+    }
+
+    fn verified_without_state_in(
+        &mut self,
+        at: usize,
+        index: i64,
+        item: &TimelineItem,
+        limit: Option<usize>,
+    ) {
         let named = self.oracle.state_of_item(index);
         trace!(
             "{}: no state of its own (named {named:?}), the replay at {:?}, {} pending",
@@ -1201,23 +2445,33 @@ impl<'a, K: Kernel> Importer<'a, K> {
             return;
         }
         let mut befores = vec![Before::Keep];
-        if !self.pending.is_empty() {
+        let pending = !self.pending.is_empty();
+        if pending {
             let next = self.oracle.next_index();
             let last = self.oracle.count();
+            let last = last.min(limit.unwrap_or(usize::MAX));
             befores.extend(
                 (next..last)
                     .take(self.options.fallback_states)
                     .map(Before::State),
             );
+        } else if let Some(q) = self.oracle.cursor
+            && self.carried(q) > history::EXACT
+        {
+            // The bodies carry an earlier item's approximation, which may
+            // keep it from matching: also tried on the state's bodies.
+            befores.push(Before::State(q));
         }
         let mut last_error = String::from("no definition gave the file's result");
+        // The definition cut short after the longest time ([`Turns::note`]).
+        let mut slowest: Option<(f64, String)> = None;
         let mut attempts = 0;
         let started = std::time::Instant::now();
         let budget = self.options.item_seconds;
         let out_of_time = || started.elapsed().as_secs_f64() > budget;
         for before in befores {
-            if self.stopped(index) {
-                last_error = STOPPED.to_owned();
+            if let Some(reason) = self.halted(index) {
+                last_error = reason.to_owned();
                 break;
             }
             if attempts >= self.options.max_attempts || out_of_time() {
@@ -1241,6 +2495,11 @@ impl<'a, K: Kernel> Importer<'a, K> {
                 },
             };
             let from = base.map_or(0, |b| b + 1);
+            // How far the bodies are from the state they stand for.
+            let carried = match base {
+                Some(q) if before == Before::Keep => self.carried(q),
+                _ => 0.0,
+            };
             let candidates = match self.translate(index, item) {
                 Ok(c) if !c.is_empty() => self.rank(c, from),
                 Ok(_) => {
@@ -1266,34 +2525,94 @@ impl<'a, K: Kernel> Importer<'a, K> {
                 Before::Keep => candidates.len(),
                 Before::State(_) => candidates.len().min(4),
             };
-            for c in candidates.iter().take(limit) {
+            let start = self.current_sigs();
+            // Definitions cut short at their share of the time are tried
+            // again after the others ([`Turns`]).
+            let mut turns = Turns::default();
+            let mut position = 0;
+            loop {
+                let again = if position < limit {
+                    None
+                } else {
+                    let Some(k) = turns.again(budget - started.elapsed().as_secs_f64()) else {
+                        break;
+                    };
+                    Some(k)
+                };
+                let k = again.unwrap_or_else(|| {
+                    position += 1;
+                    position - 1
+                });
+                let c = &candidates[k];
+                if again.is_none() && turns.waits_behind(&candidates, k) {
+                    trace!(
+                        "{}: {before:?} {} waits behind the same definition without participants",
+                        item_name(item),
+                        summary(c)
+                    );
+                    continue;
+                }
                 if attempts >= self.options.max_attempts || out_of_time() {
                     last_error = format!("{last_error} (gave up after {attempts} attempts)");
                     break;
                 }
                 attempts += 1;
                 let inner = self.doc.undo_depth();
-                match self.try_candidate(index, c, item.name()) {
+                let share = turns.share(budget, position == limit, again.is_some());
+                let tried = std::time::Instant::now();
+                match self.try_candidate_for(index, c, item.name(), share) {
                     Ok(uids) => {
                         let current = self.current_sigs();
+                        if implausible(c, &start, &current) {
+                            trace!(
+                                "{}: {before:?} {} -> {:?} from {:?}: not what it makes",
+                                item_name(item),
+                                summary(c),
+                                short(&current),
+                                short(&start)
+                            );
+                            self.undo_to(inner);
+                            last_error = "its result is not in the file's history".to_owned();
+                            continue;
+                        }
                         let kernel = self.doc.kernel();
                         // With items pending and nothing in their place, an
                         // approximate match could hide what they changed.
                         let exact = before == Before::Keep && !self.pending.is_empty();
-                        if let Some((r, d)) =
+                        let found =
                             self.oracle
-                                .find_within(kernel, from, &current, exact, c.tolerance())
-                        {
+                                .find_within(kernel, from, &current, exact, c.tolerance());
+                        // (Nor can the feature make a state that has less
+                        // volume than the bodies it started from, for a join,
+                        // or more, for a cut: it came close by chance.)
+                        let found = found.filter(|(r, _)| {
+                            let kernel = self.doc.kernel();
+                            !implausible(c, &start, &self.oracle.sigs(kernel, *r))
+                        });
+                        if let Some((r, d)) = found {
                             trace!(
                                 "{}: {before:?} {} -> state {r}",
                                 item_name(item),
                                 summary(c)
                             );
                             self.commit(before, base, fallback);
+                            if !pending && let Some(uid) = fallback {
+                                self.exact_before(uid, &item_name(item));
+                            }
                             self.oracle.cursor = Some(r);
                             self.report.history.matched += 1;
                             self.accepted(at, index, &uids, c, Some(true));
                             self.loosely_matched(&item_name(item), d);
+                            self.after_match(
+                                at,
+                                index,
+                                item,
+                                c,
+                                &candidates[k + 1..],
+                                r,
+                                d,
+                                carried,
+                            );
                             return;
                         }
                         if exact && self.with_pending_bodies(at, index, from, &uids, c, &current) {
@@ -1313,18 +2632,42 @@ impl<'a, K: Kernel> Importer<'a, K> {
                         self.undo_to(inner);
                         last_error = "its result is not in the file's history".to_owned();
                     }
+                    Err(e) if e == GAVE_WAY => {
+                        let ran = tried.elapsed().as_secs_f64();
+                        trace!(
+                            "{}: {before:?} {} gives way after {ran:.2} s, its share",
+                            item_name(item),
+                            summary(c)
+                        );
+                        turns.cut_short(k, ran, true);
+                    }
                     Err(e) => {
                         trace!("{}: {before:?} {} failed: {e}", item_name(item), summary(c));
-                        let stopped = e == STOPPED;
+                        if e == OUT_OF_TIME {
+                            turns.cut_short(k, tried.elapsed().as_secs_f64(), false);
+                        }
+                        let halt = halts(&e);
                         last_error = e;
-                        if stopped {
+                        if halt {
                             break;
                         }
                     }
                 }
             }
+            if let Some(note) = turns.note(&candidates[..limit])
+                && slowest.as_ref().is_none_or(|(s, _)| note.0 > *s)
+            {
+                slowest = Some(note);
+            }
             self.undo_to(depth);
         }
+        // Which definition the time went to.
+        if !halts(&last_error)
+            && let Some((_, note)) = slowest
+        {
+            last_error = format!("{last_error}; {note}");
+        }
+        self.tried_in_vain(index, &last_error);
         self.failed(at, last_error);
     }
 
@@ -1350,11 +2693,23 @@ impl<'a, K: Kernel> Importer<'a, K> {
             None => Some(Vec::new()),
         };
         let current = self.current_sigs();
+        // How far the bodies are from the state before it (approximations
+        // of earlier items they carry).
+        let mut carried = 0.0;
+        let within = expected
+            .as_ref()
+            .and_then(|e| history::bodies_distance(e, &current));
+        // Bodies the state keeps in another component than the replay (an
+        // item that moved bodies into a new component, not replayed) are
+        // moved there by the state's base feature, so that the item finds
+        // them in its component.
+        let elsewhere = within.is_some() && start.is_some_and(|s| self.bodies_elsewhere(s));
         if expected.is_none() {
             // Not rebuilt: the replay goes on as it is.
             trace!("{name}: the state before it could not be rebuilt");
-        } else if expected.is_some_and(|e| history::bodies_distance(&e, &current).is_some()) {
+        } else if let Some((d, _)) = within.filter(|_| !elsewhere) {
             // The pending items changed nothing (or are in the state).
+            carried = d;
             self.commit(Before::Keep, start, None);
         } else if let Some(s) = start {
             let depth = self.doc.undo_depth();
@@ -1362,11 +2717,7 @@ impl<'a, K: Kernel> Importer<'a, K> {
             match self.fallback_to(s, None) {
                 Ok(fallback) => {
                     if !pending && let Some(uid) = fallback {
-                        let base = self.doc.feature(uid).map(|f| f.name.clone());
-                        self.report.warnings.push(format!(
-                            "{} brings the bodies to the file's state before {name}",
-                            base.unwrap_or_default()
-                        ));
+                        self.exact_before(uid, &name);
                     }
                     self.commit(Before::State(s), Some(s), fallback);
                 }
@@ -1385,129 +2736,38 @@ impl<'a, K: Kernel> Importer<'a, K> {
             self.unchecked(at, index, item, state);
             return;
         };
-        let mut last_error = String::from("no definition gave the file's result");
-        let started = std::time::Instant::now();
         let budget = self.options.item_seconds;
-        let translated = match self.give_up(index) {
-            Some(reason) => Err(reason),
-            None => self.translate(index, item),
-        };
-        let translated = translated.map(|c| self.rank(c, state));
-        // Extrusions whose prism holds less than the state adds or
-        // removes (or that change the volume the other way) are not tried.
-        let change = target.iter().map(|s| s.volume).sum::<f64>()
-            - self.current_sigs().iter().map(|s| s.volume).sum::<f64>();
-        let translated = translated.map(|mut c| {
-            let before = c.len();
-            c.retain(|c| !bounded(c) || c.predicted.is_some_and(|p| can_change(p, change)));
-            if c.len() < before {
-                trace!(
-                    "{name}: {} of {before} extrusions cannot change the volume by {change:.3}",
-                    before - c.len()
-                );
-            }
-            c
-        });
-        match translated {
-            Ok(c) if c.is_empty() => last_error = "nothing to try".to_owned(),
-            Ok(candidates) => {
-                // The bodies a definition without participants changed:
-                // limited to participants that include them it gives the
-                // same result, which is not built again (on large bodies
-                // each try takes seconds).
-                let before: HashMap<BodyUid, Sig> = self.current_bodies().into_iter().collect();
-                let mut changed_by: Vec<(&Value, BTreeSet<String>)> = Vec::new();
-                // The geometry kernel fails a fillet or chamfer of more
-                // edges too (contour by contour, unless at a vertex): such
-                // guesses are left out.
-                let mut failed_dressups: Vec<(Value, BTreeSet<String>)> = Vec::new();
-                let mut attempt = 0;
-                for c in &candidates {
-                    // (Participants in another component take the feature
-                    // there: not the same.)
-                    if let Some((free, limited)) = participants_of(c)
-                        && self.def_component(&free) == self.def_component(&c.defs[0])
-                        && changed_by
-                            .iter()
-                            .any(|(d, changed)| **d == free && changed.is_subset(&limited))
-                    {
-                        trace!(
-                            "{name}: {} gives what it gave without participants",
-                            summary(c)
-                        );
-                        continue;
-                    }
-                    if let Some((shape, edges)) = dressup_edges(c)
-                        && failed_dressups
-                            .iter()
-                            .any(|(s, failed)| *s == shape && failed.is_subset(&edges))
-                    {
-                        trace!("{name}: {} has the edges of one that failed", summary(c));
-                        continue;
-                    }
-                    if attempt >= self.options.max_attempts
-                        || started.elapsed().as_secs_f64() > budget
-                    {
-                        last_error = format!("{last_error} (gave up after {attempt} attempts)");
-                        break;
-                    }
-                    attempt += 1;
-                    let inner = self.doc.undo_depth();
-                    match self.try_candidate(index, c, item.name()) {
-                        Ok(uids) => {
-                            let bodies = self.current_bodies();
-                            if let [def] = c.defs.as_slice()
-                                && def.get("participants").is_none()
-                            {
-                                let after: HashMap<BodyUid, Sig> = bodies.iter().copied().collect();
-                                let changed = before
-                                    .iter()
-                                    .filter(|(uid, sig)| {
-                                        !after.get(uid).is_some_and(|s| s.same(sig))
-                                    })
-                                    .map(|(uid, _)| uid.to_string())
-                                    .collect();
-                                changed_by.push((def, changed));
-                            }
-                            let current: Vec<Sig> = bodies.iter().map(|(_, s)| *s).collect();
-                            if let Some((d, _)) =
-                                history::bodies_distance_within(&target, &current, c.tolerance())
-                            {
-                                trace!("{name}: {} -> its state {state}", summary(c));
-                                self.oracle.cursor = Some(state);
-                                self.report.history.matched += 1;
-                                self.accepted(at, index, &uids, c, Some(true));
-                                self.loosely_matched(&name, d);
-                                return;
-                            }
-                            trace!(
-                                "{name}: {} -> {:?}, its state {state}: {:?}",
-                                summary(c),
-                                short(&current),
-                                short(&target)
-                            );
-                            self.undo_to(inner);
-                            last_error = "its result is not in the file's history".to_owned();
-                        }
-                        Err(e) if e == STOPPED => {
-                            last_error = e;
-                            break;
-                        }
-                        Err(e) => {
-                            trace!("{name}: {} failed: {e}", summary(c));
-                            // More edges can end a rounding at a vertex.
-                            if !e.contains("vertex") {
-                                failed_dressups.extend(dressup_edges(c));
-                            }
-                            last_error = e;
-                        }
+        let fresh = self.give_up(index).is_none();
+        let mut tried = self.try_state(at, index, item, state, &target, carried, budget);
+        // The bodies before it carry an earlier item's approximation, which
+        // may keep it from matching: brought to the state before it exactly,
+        // it is tried again (in half the time).
+        let again = matches!(&tried, Err(e) if !halts(e))
+            && carried > history::EXACT
+            && self.give_up(index).is_none();
+        if let (true, Some(s)) = (again, start) {
+            let depth = self.doc.undo_depth();
+            match self.fallback_to(s, None) {
+                Ok(Some(uid)) => {
+                    trace!("{name}: tried again on state {s} exactly");
+                    let retried =
+                        self.try_state(at, index, item, state, &target, 0.0, budget / 2.0);
+                    if retried.is_ok() {
+                        self.exact_before(uid, &name);
+                        tried = retried;
+                    } else {
+                        self.undo_to(depth);
                     }
                 }
+                _ => self.undo_to(depth),
             }
-            Err(e) => {
-                trace!("{name}: {e}");
-                last_error = e;
-            }
+        }
+        let last_error = match tried {
+            Ok(()) => return,
+            Err(e) => e,
+        };
+        if fresh {
+            self.tried_in_vain(index, &last_error);
         }
         if !self.options.fallback {
             self.note(at, Outcome::Skipped, last_error);
@@ -1542,6 +2802,308 @@ impl<'a, K: Kernel> Importer<'a, K> {
         }
     }
 
+    /// The candidates of an item with a known state (`state`, whose bodies
+    /// are `target`) on the bodies as they are (`carried`: how far they
+    /// are from the state before it), for at most `budget` seconds: Ok when
+    /// one gave the state (and was accepted), else why none did.
+    #[allow(clippy::too_many_arguments)]
+    fn try_state(
+        &mut self,
+        at: usize,
+        index: i64,
+        item: &TimelineItem,
+        state: usize,
+        target: &[Sig],
+        carried: f64,
+        budget: f64,
+    ) -> Result<(), String> {
+        self.within(budget, |s| {
+            s.try_state_in(at, index, item, state, target, carried, budget)
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn try_state_in(
+        &mut self,
+        at: usize,
+        index: i64,
+        item: &TimelineItem,
+        state: usize,
+        target: &[Sig],
+        carried: f64,
+        budget: f64,
+    ) -> Result<(), String> {
+        let name = item_name(item);
+        let mut last_error = String::from("no definition gave the file's result");
+        let started = std::time::Instant::now();
+        // A fillet's or chamfer's edge guesses one history state at a time.
+        let mut guesses = matches!(&item.detail, Some(Detail::Fillet(_) | Detail::Chamfer(_)))
+            .then(Guesses::default);
+        let clock = std::time::Instant::now();
+        let translated = match self.give_up(index) {
+            Some(reason) => Err(reason),
+            None => self.translate_part(index, item, &mut guesses),
+        };
+        trace!(
+            "{name}: translated in {:.2} s",
+            clock.elapsed().as_secs_f64()
+        );
+        // Extrusions whose prism holds less than the state adds or
+        // removes (or that change the volume the other way) are not tried;
+        // they are left out before the likeliest are chosen.
+        let change = target.iter().map(|s| s.volume).sum::<f64>()
+            - self.current_sigs().iter().map(|s| s.volume).sum::<f64>();
+        let translated = translated.map(|mut c| {
+            let before = c.len();
+            c.retain(|c| !bounded(c) || c.predicted.is_some_and(|p| can_change(p, change)));
+            if c.len() < before {
+                trace!(
+                    "{name}: {} of {before} extrusions cannot change the volume by {change:.3}",
+                    before - c.len()
+                );
+            }
+            c
+        });
+        let translated = translated.map(|c| self.rank(c, state));
+        match translated {
+            Ok(c) if c.is_empty() => last_error = "nothing to try".to_owned(),
+            Ok(mut candidates) => {
+                // The bodies a definition without participants changed:
+                // limited to participants that include them it gives the
+                // same result, which is not built again (on large bodies
+                // each try takes seconds).
+                let before: HashMap<BodyUid, Sig> = self.current_bodies().into_iter().collect();
+                let mut changed_by: Vec<(Value, BTreeSet<String>)> = Vec::new();
+                // The geometry kernel fails a fillet or chamfer of more
+                // edges too (contour by contour, unless at a vertex): such
+                // guesses are left out.
+                let mut failed_dressups: Vec<(Value, BTreeSet<String>)> = Vec::new();
+                let mut attempt = 0;
+                // An extrusion that gives the state only approximately (a
+                // set of regions next to the right one can come within the
+                // tolerance, and the difference grows in later items): a
+                // few more definitions are tried for a closer one first.
+                let mut loose: Option<(usize, f64)> = None;
+                let mut closer_tries = 0;
+                // Definitions cut short at their share of the time wait for
+                // the second round.
+                let mut turns = Turns::default();
+                let mut second_round = false;
+                let mut next = 0;
+                loop {
+                    let mut again = None;
+                    if next == candidates.len() {
+                        // A fillet's or chamfer's next edge guesses (the
+                        // next history state's), as long as definitions are
+                        // still tried.
+                        let room = self.options.max_candidates.saturating_sub(candidates.len());
+                        let more = guesses.as_ref().is_some_and(|g| !g.done)
+                            && room > 0
+                            && (loose.is_none() || closer_tries < LOOSE_RETRIES)
+                            && !second_round;
+                        if more {
+                            if attempt >= self.options.max_attempts
+                                || started.elapsed().as_secs_f64() > budget
+                            {
+                                last_error =
+                                    format!("{last_error} (gave up after {attempt} attempts)");
+                                break;
+                            }
+                            let mut part = self
+                                .translate_part(index, item, &mut guesses)
+                                .unwrap_or_default();
+                            part.truncate(room);
+                            candidates.extend(part);
+                        }
+                        if next == candidates.len() {
+                            // The first round is over: those that gave way.
+                            second_round = true;
+                            let remaining = budget - started.elapsed().as_secs_f64();
+                            let Some(k) = turns.again(remaining) else {
+                                break;
+                            };
+                            again = Some(k);
+                        }
+                    }
+                    let k = again.unwrap_or_else(|| {
+                        next += 1;
+                        next - 1
+                    });
+                    let c = &candidates[k];
+                    if loose.is_some() {
+                        if closer_tries >= LOOSE_RETRIES {
+                            break;
+                        }
+                        closer_tries += 1;
+                    }
+                    // (Participants in another component take the feature
+                    // there: not the same.)
+                    if let Some((free, limited)) = participants_of(c)
+                        && self.def_component(&free) == self.def_component(&c.defs[0])
+                        && changed_by
+                            .iter()
+                            .any(|(d, changed)| *d == free && changed.is_subset(&limited))
+                    {
+                        trace!(
+                            "{name}: {} gives what it gave without participants",
+                            summary(c)
+                        );
+                        continue;
+                    }
+                    if again.is_none() && turns.waits_behind(&candidates, k) {
+                        trace!(
+                            "{name}: {} waits behind the same definition without participants",
+                            summary(c)
+                        );
+                        continue;
+                    }
+                    if let Some((shape, edges)) = dressup_edges(c)
+                        && failed_dressups
+                            .iter()
+                            .any(|(s, failed)| *s == shape && failed.is_subset(&edges))
+                    {
+                        trace!("{name}: {} has the edges of one that failed", summary(c));
+                        continue;
+                    }
+                    if attempt >= self.options.max_attempts
+                        || started.elapsed().as_secs_f64() > budget
+                    {
+                        last_error = format!("{last_error} (gave up after {attempt} attempts)");
+                        break;
+                    }
+                    attempt += 1;
+                    let inner = self.doc.undo_depth();
+                    let last = next == candidates.len() && guesses.as_ref().is_none_or(|g| g.done);
+                    let share = turns.share(budget, last, again.is_some());
+                    let tried = std::time::Instant::now();
+                    match self.try_candidate_for(index, c, item.name(), share) {
+                        Ok(uids) => {
+                            let clock = std::time::Instant::now();
+                            let bodies = self.current_bodies();
+                            trace!("{name}: measured in {:.2} s", clock.elapsed().as_secs_f64());
+                            if let [def] = c.defs.as_slice()
+                                && def.get("participants").is_none()
+                            {
+                                let after: HashMap<BodyUid, Sig> = bodies.iter().copied().collect();
+                                let changed = before
+                                    .iter()
+                                    .filter(|(uid, sig)| {
+                                        !after.get(uid).is_some_and(|s| s.same(sig))
+                                    })
+                                    .map(|(uid, _)| uid.to_string())
+                                    .collect();
+                                changed_by.push((def.clone(), changed));
+                            }
+                            let current: Vec<Sig> = bodies.iter().map(|(_, s)| *s).collect();
+                            let matched =
+                                history::bodies_distance_within(target, &current, c.tolerance());
+                            // (Not for a difference the bodies before it
+                            // carried: no definition comes closer.)
+                            if let Some((d, _)) = matched
+                                && seeks_closer(c)
+                                && introduced(d, carried)
+                                && loose.is_none_or(|(_, l)| closer(c, d, l))
+                                && closer_tries < LOOSE_RETRIES
+                            {
+                                trace!(
+                                    "{name}: {} -> its state {state} only within {d:.1e}; \
+                                     looking for a closer definition",
+                                    summary(c)
+                                );
+                                loose = Some((k, d));
+                                self.undo_to(inner);
+                                continue;
+                            }
+                            if let Some((d, _)) = matched
+                                && loose.is_none_or(|(_, l)| closer(c, d, l))
+                            {
+                                trace!("{name}: {} -> its state {state} ({d:.1e})", summary(c));
+                                self.oracle.cursor = Some(state);
+                                self.report.history.matched += 1;
+                                self.accepted(at, index, &uids, c, Some(true));
+                                self.loosely_matched(&name, d);
+                                let later = &candidates[k + 1..];
+                                self.after_match(at, index, item, c, later, state, d, carried);
+                                return Ok(());
+                            }
+                            trace!(
+                                "{name}: {} -> {:?}, its state {state}: {:?}",
+                                summary(c),
+                                short(&current),
+                                short(target)
+                            );
+                            self.undo_to(inner);
+                            last_error = "its result is not in the file's history".to_owned();
+                        }
+                        Err(e) if halts(&e) => {
+                            last_error = e;
+                            break;
+                        }
+                        Err(e) if e == GAVE_WAY => {
+                            let ran = tried.elapsed().as_secs_f64();
+                            trace!(
+                                "{name}: {} gives way after {ran:.2} s, its share",
+                                summary(c)
+                            );
+                            turns.cut_short(k, ran, true);
+                        }
+                        Err(e) => {
+                            trace!("{name}: {} failed: {e}", summary(c));
+                            if e == OUT_OF_TIME {
+                                turns.cut_short(k, tried.elapsed().as_secs_f64(), false);
+                            }
+                            // More edges can end a rounding at a vertex.
+                            if !e.contains("vertex") {
+                                failed_dressups.extend(dressup_edges(c));
+                            }
+                            last_error = e;
+                        }
+                    }
+                }
+                // None closer: the approximate one.
+                if let Some((k, _)) = loose
+                    && !halts(&last_error)
+                {
+                    let c = &candidates[k];
+                    let inner = self.doc.undo_depth();
+                    if let Ok(uids) = self.try_candidate(index, c, item.name()) {
+                        let current = self.current_sigs();
+                        if let Some((d, _)) =
+                            history::bodies_distance_within(target, &current, c.tolerance())
+                        {
+                            trace!("{name}: {} -> its state {state} ({d:.1e})", summary(c));
+                            self.oracle.cursor = Some(state);
+                            self.report.history.matched += 1;
+                            self.accepted(at, index, &uids, c, Some(true));
+                            self.loosely_matched(&name, d);
+                            self.after_match(at, index, item, c, &[], state, d, carried);
+                            return Ok(());
+                        }
+                        self.undo_to(inner);
+                    }
+                }
+                // A pattern or mirror of extrusions that gave other
+                // definitions' bodies too: with those definitions.
+                if !halts(&last_error)
+                    && self.with_other_profiles(at, index, item, &candidates, target, state)
+                {
+                    return Ok(());
+                }
+                // Which definition the time went to.
+                if !halts(&last_error)
+                    && let Some((_, note)) = turns.note(&candidates)
+                {
+                    last_error = format!("{last_error}; {note}");
+                }
+            }
+            Err(e) => {
+                trace!("{name}: {e}");
+                last_error = e;
+            }
+        }
+        Err(last_error)
+    }
+
     /// An item whose change the bodies hold already (a base feature before
     /// it brought them past it, or the stored design without a history):
     /// its first definition (`guesses` too) that builds and leaves the
@@ -1562,7 +3124,7 @@ impl<'a, K: Kernel> Importer<'a, K> {
             let depth = self.doc.undo_depth();
             let uids = match self.try_candidate(index, c, item.name()) {
                 Ok(uids) => uids,
-                Err(e) if e == STOPPED => break,
+                Err(e) if halts(&e) => break,
                 Err(_) => continue,
             };
             let after = self.current_sigs();
@@ -1620,9 +3182,9 @@ impl<'a, K: Kernel> Importer<'a, K> {
                             return;
                         }
                         Err(e) => {
-                            let stopped = e == STOPPED;
+                            let halt = halts(&e);
                             last = e;
-                            if stopped {
+                            if halt {
                                 break;
                             }
                         }
@@ -1653,17 +3215,53 @@ impl<'a, K: Kernel> Importer<'a, K> {
     }
 
     /// Why no definitions are tried for the item: the geometry kernel hung
-    /// on it in an earlier try, the import was stopped, or the time limit
-    /// is over.
+    /// on it in an earlier try, the import was stopped, its definitions
+    /// gave no state in an earlier try, the process ran low on memory, or
+    /// the time limit is over.
     fn give_up(&self, index: i64) -> Option<String> {
+        let failed = || {
+            self.options
+                .failed_items
+                .iter()
+                .find(|(i, _)| *i == index)
+                .map(|(_, reason)| reason.clone())
+        };
         if self.options.hung_items.contains(&index) {
             Some(HUNG.to_owned())
-        } else if self.stopped(index) {
+        } else if self.abandoned() || self.stopped(index) {
             Some(STOPPED.to_owned())
+        } else if let Some(reason) = failed() {
+            Some(reason)
+        } else if self.memory_low() {
+            Some(LOW_MEMORY.to_owned())
         } else if self.out_of_time() {
             Some("the import's time limit was reached".to_owned())
         } else {
             None
+        }
+    }
+
+    /// [`Importer::translate`]; with `guesses` set, the next part of a
+    /// fillet's or chamfer's candidates ([`Guesses`]).
+    fn translate_part(
+        &mut self,
+        index: i64,
+        item: &TimelineItem,
+        guesses: &mut Option<Guesses>,
+    ) -> Result<Vec<Candidate>, String> {
+        self.guesses = guesses.take();
+        let translated = self.translate(index, item);
+        *guesses = self.guesses.take();
+        translated
+    }
+
+    /// The item's definitions were tried and gave no state, for `reason`
+    /// (for a try run again, [`Options::failed_items`]).
+    fn tried_in_vain(&self, index: i64, reason: &str) {
+        if !halts(reason)
+            && let Some(p) = &self.options.progress
+        {
+            p.failed(index, reason);
         }
     }
 
@@ -1837,14 +3435,23 @@ impl<'a, K: Kernel> Importer<'a, K> {
     /// that state's bodies, as one base feature named after the pending
     /// item. Ok(None) when nothing differs.
     fn fallback_to(&mut self, q: usize, name: Option<&str>) -> Result<Option<FeatureUid>, String> {
+        if self.abandoned() {
+            return Err(STOPPED.to_owned());
+        }
         let kernel = self.doc.kernel();
         let state: Vec<(StoredBody<K::Shape>, Sig)> = self.oracle.state(kernel, q)?.to_vec();
+        let sheets = self.oracle.sheets(kernel, q)?.to_vec();
         let name = name.map(str::to_owned).or_else(|| {
             self.pending
                 .last()
                 .map(|p| self.report.items[p.report].name.clone())
         });
-        self.replace_bodies(&state, name.as_deref(), &format!("ASM history state {q}"))
+        self.replace_bodies(
+            &state,
+            &sheets,
+            name.as_deref(),
+            &format!("ASM history state {q}"),
+        )
     }
 
     /// Without a history: every body replaced by the stored design's.
@@ -1862,17 +3469,38 @@ impl<'a, K: Kernel> Importer<'a, K> {
         if finals.is_empty() {
             return Err("the file stores no solid bodies".to_owned());
         }
-        self.replace_bodies(&finals, Some(name), "stored design")?
+        // Without a history the file's sheets are not told from the tools
+        // and sketch faces its blobs also keep: solids only.
+        self.replace_bodies(&finals, &[], Some(name), "stored design")?
             .ok_or_else(|| "the bodies are the stored ones already".to_owned())
+    }
+
+    /// The replay's sheets (surface bodies) with their signatures and
+    /// components.
+    fn current_sheets(&self) -> Vec<(BodyUid, SheetSig, ComponentUid)> {
+        let kernel = self.doc.kernel();
+        self.doc
+            .bodies()
+            .iter()
+            .filter_map(|b| {
+                let sig = SheetSig::of(kernel, b.shape)?;
+                let c = self.doc.body_component(b.uid).unwrap_or(ComponentUid::ROOT);
+                Some((b.uid, sig, c))
+            })
+            .collect()
     }
 
     /// Base features, one per component that changes: bodies of `target`
     /// not in the replay replace the replay's bodies not in `target`, in
     /// their components (a body in another component than the file's moves
-    /// there). Returns the first.
+    /// there). Returns the first. The state's `sheets` (surface bodies,
+    /// which the history's matching leaves out) come in alike: those the
+    /// replay lacks are added, the replay's the state lacks removed
+    /// (mitcad#35).
     fn replace_bodies(
         &mut self,
         target: &[(StoredBody<K::Shape>, Sig)],
+        sheets: &[(StoredBody<K::Shape>, SheetSig)],
         name: Option<&str>,
         source: &str,
     ) -> Result<Option<FeatureUid>, String> {
@@ -1903,18 +3531,46 @@ impl<'a, K: Kernel> Importer<'a, K> {
                 old.entry(*component).or_default().push((*uid, *sig));
             }
         }
-        if new.is_empty() && old.is_empty() {
+        // Sheets: added and removed, not paired with solids.
+        let current_sheets = self.current_sheets();
+        let mut kept = vec![false; current_sheets.len()];
+        let mut new_sheets: BTreeMap<ComponentUid, Vec<&StoredBody<K::Shape>>> = BTreeMap::new();
+        for (body, sig) in sheets {
+            let component = self.components.of_body(body.component);
+            match (0..current_sheets.len()).find(|&i| {
+                !kept[i] && current_sheets[i].2 == component && current_sheets[i].1.same(sig)
+            }) {
+                Some(i) => kept[i] = true,
+                None => new_sheets.entry(component).or_default().push(body),
+            }
+        }
+        let mut old_sheets: BTreeMap<ComponentUid, Vec<BodyUid>> = BTreeMap::new();
+        for ((uid, _, component), kept) in current_sheets.iter().zip(&kept) {
+            if !kept {
+                old_sheets.entry(*component).or_default().push(*uid);
+            }
+        }
+        if new.is_empty() && old.is_empty() && new_sheets.is_empty() && old_sheets.is_empty() {
             return Ok(None);
         }
-        let components: BTreeSet<ComponentUid> = new.keys().chain(old.keys()).copied().collect();
+        let components: BTreeSet<ComponentUid> = new
+            .keys()
+            .chain(old.keys())
+            .chain(new_sheets.keys())
+            .chain(old_sheets.keys())
+            .copied()
+            .collect();
         let mut inputs = Vec::new();
         for component in components {
             let new = new.remove(&component).unwrap_or_default();
             let mut old = old.remove(&component).unwrap_or_default();
+            let added_sheets = new_sheets.remove(&component).unwrap_or_default();
+            let mut removed_sheets = old_sheets.remove(&component).unwrap_or_default();
             // Pair each new body with the nearest old one, so bodies keep
-            // their identity where they can.
+            // their identity where they can; sheets in order with sheets.
             let mut replaces = Vec::new();
-            let mut bodies = Vec::new();
+            let mut paired = Vec::new();
+            let mut unpaired = Vec::new();
             for (body, sig) in &new {
                 let nearest = old
                     .iter()
@@ -1924,35 +3580,67 @@ impl<'a, K: Kernel> Importer<'a, K> {
                         d(&a.1.1).total_cmp(&d(&b.1.1))
                     })
                     .map(|(i, _)| i);
-                if let Some(i) = nearest {
-                    replaces.push(old.remove(i).0);
+                match nearest {
+                    Some(i) => {
+                        replaces.push(old.remove(i).0);
+                        paired.push(*body);
+                    }
+                    None => unpaired.push(*body),
                 }
-                bodies.push(*body);
+            }
+            for body in added_sheets {
+                if removed_sheets.is_empty() {
+                    unpaired.push(body);
+                } else {
+                    replaces.push(removed_sheets.remove(0));
+                    paired.push(body);
+                }
             }
             // Bodies are listed replacing ones first.
-            let paired = replaces.len();
-            let mut ordered: Vec<ImportBody<K::Shape>> = Vec::new();
-            for body in bodies.iter().take(paired).chain(bodies.iter().skip(paired)) {
-                ordered.push(ImportBody {
+            let ordered: Vec<ImportBody<K::Shape>> = paired
+                .iter()
+                .chain(&unpaired)
+                .map(|body| ImportBody {
                     name: body.name.clone(),
                     color: None,
                     shape: body.shape.clone(),
-                });
+                })
+                .collect();
+            // Removed bodies come after the replacing ones, when there are
+            // no others (a base feature without bodies removes the bodies it
+            // replaces); else by a base feature of their own.
+            let removed: Vec<BodyUid> = old
+                .iter()
+                .map(|(uid, _)| *uid)
+                .chain(removed_sheets)
+                .collect();
+            let alone = !unpaired.is_empty() && !removed.is_empty();
+            if !alone {
+                replaces.extend(removed.iter().copied());
             }
-            // Removed bodies come after the replacing ones (only them: a
-            // base feature without bodies removes the bodies it replaces).
-            replaces.extend(old.iter().map(|(uid, _)| *uid));
-            inputs.push(BaseInput {
-                name: if inputs.is_empty() {
+            let input_name = |inputs: &Vec<BaseInput<K::Shape>>| {
+                if inputs.is_empty() {
                     name.filter(|n| !n.trim().is_empty()).map(str::to_owned)
                 } else {
                     None
-                },
+                }
+            };
+            inputs.push(BaseInput {
+                name: input_name(&inputs),
                 source: Some(format!("{} ({source})", self.report.label)),
                 replaces,
                 component: Some(component),
                 ..BaseInput::new(ordered)
             });
+            if alone {
+                inputs.push(BaseInput {
+                    name: None,
+                    source: Some(format!("{} ({source})", self.report.label)),
+                    replaces: removed,
+                    component: Some(component),
+                    ..BaseInput::new(Vec::new())
+                });
+            }
         }
         let label = name.map_or_else(|| "Add Base Feature".to_owned(), |n| format!("Add {n}"));
         let imported = match self.doc.add_base_features(&label, inputs.clone()) {
@@ -2020,7 +3708,10 @@ impl<'a, K: Kernel> Importer<'a, K> {
         }
         // A stop from now on has nothing left to cut short.
         self.report_stop();
-        // A kernel call that never returns, to test the watchdog with.
+        self.release_memory();
+        self.report_low_memory();
+        // A kernel call that never returns, to test the watchdog with
+        // (`mitcad-ffi` has another, `busy`).
         if self.options.compare
             && std::env::var_os("MITCAD_IMPORT_STALL").is_some_and(|v| v == "compare")
         {
@@ -2029,6 +3720,36 @@ impl<'a, K: Kernel> Importer<'a, K> {
             }
         }
         self.compare_final();
+    }
+
+    /// Whether history state `q` keeps a body in another component than
+    /// the replay does: the replay has the same body, but not in the
+    /// component the state's blob belongs to (bodies of blobs whose
+    /// component is not known are left out).
+    fn bodies_elsewhere(&mut self, q: usize) -> bool {
+        let kernel = self.doc.kernel();
+        let Ok(state) = self.oracle.state(kernel, q).map(<[_]>::to_vec) else {
+            return false;
+        };
+        let current: Vec<(Sig, ComponentUid)> = self
+            .current_bodies()
+            .into_iter()
+            .map(|(uid, sig)| {
+                let c = self.doc.body_component(uid).unwrap_or(ComponentUid::ROOT);
+                (sig, c)
+            })
+            .collect();
+        state.iter().any(|(body, sig)| {
+            let Some(component) = self.components.known_body(body.component) else {
+                return false;
+            };
+            let same: Vec<ComponentUid> = current
+                .iter()
+                .filter(|(s, _)| s.same(sig))
+                .map(|(_, c)| *c)
+                .collect();
+            !same.is_empty() && !same.contains(&component)
+        })
     }
 
     /// Whether a stored body has no body like it in its component in the
@@ -2060,6 +3781,10 @@ impl<'a, K: Kernel> Importer<'a, K> {
                 return;
             }
         };
+        // Given up by the watchdog while they were built (mitcad#71).
+        if self.abandoned() {
+            return;
+        }
         let kernel = self.doc.kernel();
         let finals: Vec<(StoredBody<K::Shape>, Sig)> = finals
             .into_iter()
@@ -2068,18 +3793,32 @@ impl<'a, K: Kernel> Importer<'a, K> {
                 Some((b, s))
             })
             .collect();
-        if finals.is_empty() {
+        // The last history state's sheets (without a history the file's
+        // sheets are not told from the tools its blobs keep).
+        let sheets: Vec<(StoredBody<K::Shape>, SheetSig)> = match self.oracle.last() {
+            Some(q) => self
+                .oracle
+                .sheets(kernel, q)
+                .map(<[_]>::to_vec)
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        if finals.is_empty() && sheets.is_empty() {
             return;
         }
-        let differs = !history::same_bodies(
+        let solids_differ = !history::same_bodies(
             &finals.iter().map(|(_, s)| *s).collect::<Vec<_>>(),
             &self.current_sigs(),
         ) || self.components_differ(&finals);
-        if differs && self.options.fallback && !self.at_final {
+        let sheets_differ = self.sheets_differ(&sheets);
+        if (solids_differ || sheets_differ) && self.options.fallback && !self.at_final {
             let replayed = self.doc.bodies().len();
-            match self.replace_bodies(&finals, Some("Stored bodies"), "stored design") {
+            match self.replace_bodies(&finals, &sheets, Some("Stored bodies"), "stored design") {
                 Ok(Some(uid)) if replayed == 0 => self.report.warnings.push(format!(
                     "nothing replayed: the file's bodies come in as they are ({uid})"
+                )),
+                Ok(Some(uid)) if !solids_differ => self.report.warnings.push(format!(
+                    "{uid} brings in the file's surface bodies as they are stored"
                 )),
                 Ok(Some(uid)) => self.report.warnings.push(format!(
                     "the replay differs from the stored design; {uid} replaces the bodies that differ"
@@ -2091,8 +3830,11 @@ impl<'a, K: Kernel> Importer<'a, K> {
                     .push(format!("the replay differs from the stored design: {e}")),
             }
         }
-        // Over the time limit or stopped: volumes only.
-        let compare = self.options.compare && !self.out_of_time() && self.report.stopped.is_none();
+        // Over the time limit, stopped or low on memory: volumes only.
+        let compare = self.options.compare
+            && !self.out_of_time()
+            && self.report.stopped.is_none()
+            && !self.memory_low();
         let progress = self.options.progress.clone();
         let tick = move || {
             if let Some(p) = &progress {
@@ -2106,13 +3848,38 @@ impl<'a, K: Kernel> Importer<'a, K> {
             .iter()
             .filter_map(|b| b.mitcad.clone())
             .collect();
+        // Sheets are not compared: they are the file's stored ones.
+        let kernel = self.doc.kernel();
         self.report.extra_bodies = self
             .doc
             .bodies()
             .iter()
             .filter(|b| !matched.iter().any(|m| m.starts_with(&b.uid.to_string())))
+            .filter(|b| SheetSig::of(kernel, b.shape).is_none())
             .map(|b| format!("{} {}", b.uid, b.name))
             .collect();
+    }
+
+    /// Whether the replay's sheets are not the state's `sheets` (each the
+    /// same in the same component).
+    fn sheets_differ(&self, sheets: &[(StoredBody<K::Shape>, SheetSig)]) -> bool {
+        let current = self.current_sheets();
+        if current.len() != sheets.len() {
+            return true;
+        }
+        let mut used = vec![false; current.len()];
+        !sheets.iter().all(|(body, sig)| {
+            let component = self.components.of_body(body.component);
+            match (0..current.len())
+                .find(|&i| !used[i] && current[i].2 == component && current[i].1.same(sig))
+            {
+                Some(i) => {
+                    used[i] = true;
+                    true
+                }
+                None => false,
+            }
+        })
     }
 }
 

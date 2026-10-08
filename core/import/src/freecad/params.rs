@@ -1546,10 +1546,11 @@ impl<K: Kernel> Importer<'_, '_, K> {
     }
 
     /// A sketch's or a datum plane's attachment offset that turns it about
-    /// its support's x axis (0) or y axis (1), without moving it, by an
-    /// angle an expression drives: the axis and the angle about its
-    /// positive direction (FreeCAD's value and expression).
-    pub(super) fn tilt_quantity(&mut self, o: &Object) -> Option<(usize, Q)> {
+    /// a line in its support's plane through its origin (the support's x or
+    /// y axis, or any direction between), without moving it, by an angle an
+    /// expression drives: the line's direction in the support's frame (x, y)
+    /// and the angle about it (FreeCAD's value and expression).
+    pub(super) fn tilt_quantity(&mut self, o: &Object) -> Option<([f64; 2], Q)> {
         let path = "AttachmentOffset.Rotation.Angle";
         let source = Source::property(&o.name, path);
         if !self.params.names.contains_key(&source) && !self.params.bindings.contains_key(&source) {
@@ -1561,19 +1562,19 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let (Some(axis), angle) = turn_of(p) else {
             return None;
         };
-        let which = (0..2).find(|&k| (axis[k].abs() - 1.0).abs() < 1e-9);
-        let (Some(which), true) = (which, p.position.iter().all(|v| v.abs() < 1e-9)) else {
+        if axis[2].abs() > 1e-9 || !p.position.iter().all(|v| v.abs() < 1e-9) {
             self.kept_value(
                 o,
                 path,
-                "a turn of the attachment offset about another axis than the support's x or y axis, or with a shift: Mitcad's planes turn about lines",
+                "a turn of the attachment offset about an axis out of the support's plane, or \
+                 with a shift: Mitcad's planes turn about lines in them (an angle plane), and a \
+                 turn about another axis (which also turns the plane within itself) has no \
+                 parametric plane; the plane is fixed at FreeCAD's placement",
             );
             return None;
-        };
+        }
         let q = self.quantity(source, Kind::Angle, angle);
-        q.text
-            .is_some()
-            .then(|| (which, q.signed(axis[which].signum())))
+        q.text.is_some().then(|| ([axis[0], axis[1]], q))
     }
 
     /// Whether an expression (or a parameter's name) drives an object's

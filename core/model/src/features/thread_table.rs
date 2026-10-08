@@ -5,7 +5,9 @@
 //! profile, in millimetres: the 60-degree profile of ISO 68-1 (ISO metric
 //! and Unified), the 55-degree Whitworth profile (BSW, BSF and the parallel
 //! pipe threads G of ISO 228-1) and the 60-degree taper pipe profile (NPT,
-//! its size at the pipe's outside diameter: the 1:16 taper is not kept).
+//! its size at the pipe's outside diameter: the 1:16 taper is not kept),
+//! and the tyre valve threads of ISO 4570 (`5V1`, `8V1`; the 60-degree
+//! profile).
 
 use std::sync::OnceLock;
 
@@ -24,6 +26,8 @@ pub enum ThreadStandard {
     Whitworth,
     /// American National Standard taper pipe threads (mitcad#4).
     Npt,
+    /// Tyre valve threads (ISO 4570): `5V1`, `8V1`, … (mitcad#59).
+    TyreValve,
 }
 
 /// Basic dimensions of a thread size.
@@ -51,7 +55,7 @@ impl ThreadData {
         // ISO 68-1: D1 = D - 5H/4, D2 = D - 3H/4, the depth 5H/8; the
         // other profiles are as deep as the pitch diameter is below D.
         let (below_minor, below_pitch, depth) = match standard {
-            ThreadStandard::IsoMetric | ThreadStandard::Unified => {
+            ThreadStandard::IsoMetric | ThreadStandard::Unified | ThreadStandard::TyreValve => {
                 let h = 3f64.sqrt() / 2.0 * pitch;
                 (1.25 * h, 0.75 * h, 0.625 * h)
             }
@@ -82,6 +86,22 @@ struct Table {
     unified: UnifiedTable,
     whitworth: WhitworthTable,
     npt: NptTable,
+    tyre_valve: TyreValveTable,
+}
+
+#[derive(Deserialize)]
+struct TyreValveTable {
+    classes_external: Vec<String>,
+    classes_internal: Vec<String>,
+    sizes: Vec<TyreValveSize>,
+}
+
+#[derive(Deserialize)]
+struct TyreValveSize {
+    /// The designation, `5V1`.
+    size: String,
+    d: f64,
+    pitch: f64,
 }
 
 #[derive(Deserialize)]
@@ -293,6 +313,21 @@ pub fn lookup(standard: ThreadStandard, designation: &str) -> Result<ThreadData,
                 INCH / entry.tpi,
             ))
         }
+        ThreadStandard::TyreValve => {
+            let text = designation.trim();
+            let entry = table()
+                .tyre_valve
+                .sizes
+                .iter()
+                .find(|s| s.size.eq_ignore_ascii_case(text))
+                .ok_or_else(unknown)?;
+            Ok(ThreadData::new(
+                standard,
+                entry.size.clone(),
+                entry.d,
+                entry.pitch,
+            ))
+        }
     }
 }
 
@@ -324,6 +359,7 @@ fn standard_name(standard: ThreadStandard) -> &'static str {
         ThreadStandard::Unified => "Unified",
         ThreadStandard::Whitworth => "Whitworth",
         ThreadStandard::Npt => "NPT",
+        ThreadStandard::TyreValve => "tyre valve",
     }
 }
 
@@ -331,7 +367,13 @@ impl ThreadStandard {
     /// The standards in the order a size table lists them: ISO metric
     /// first, the default (metric defaults, `docs/architecture.md`; inch
     /// sizes only by choice).
-    pub const ALL: [Self; 4] = [Self::IsoMetric, Self::Unified, Self::Whitworth, Self::Npt];
+    pub const ALL: [Self; 5] = [
+        Self::IsoMetric,
+        Self::Unified,
+        Self::Whitworth,
+        Self::Npt,
+        Self::TyreValve,
+    ];
 
     /// The name of the thread type (as .f3d designs store it for ISO metric
     /// and Unified threads).
@@ -341,6 +383,7 @@ impl ThreadStandard {
             Self::Unified => "ANSI Unified Screw Threads",
             Self::Whitworth => "British Standard Whitworth",
             Self::Npt => "ANSI Taper Pipe Threads (NPT)",
+            Self::TyreValve => "ISO Tyre Valve Threads",
         }
     }
 
@@ -352,7 +395,7 @@ impl ThreadStandard {
             (Self::Unified, true) => "2B",
             (Self::Unified, false) => "2A",
             (Self::Whitworth, _) => "Medium",
-            (Self::Npt, _) => "Standard",
+            (Self::Npt | Self::TyreValve, _) => "Standard",
         }
     }
 
@@ -361,7 +404,7 @@ impl ThreadStandard {
     /// pipe threads are not.
     pub fn check_modeled(self) -> Result<(), String> {
         match self {
-            Self::IsoMetric | Self::Unified => Ok(()),
+            Self::IsoMetric | Self::Unified | Self::TyreValve => Ok(()),
             Self::Whitworth => Err(
                 "a Whitworth thread cannot be modelled: Mitcad cuts the 60-degree profile; make \
                  it cosmetic"
@@ -449,6 +492,20 @@ pub fn sizes(standard: ThreadStandard) -> Vec<SizeEntry> {
                 designations: vec![format!("{}-{} NPT", s.size, s.tpi)],
             })
             .collect(),
+        ThreadStandard::TyreValve => {
+            let mut sizes: Vec<SizeEntry> = table()
+                .tyre_valve
+                .sizes
+                .iter()
+                .map(|s| SizeEntry {
+                    size: s.size.clone(),
+                    major: s.d,
+                    designations: vec![s.size.clone()],
+                })
+                .collect();
+            sizes.sort_by(|a, b| a.major.total_cmp(&b.major));
+            sizes
+        }
     }
 }
 
@@ -463,6 +520,10 @@ pub fn classes(standard: ThreadStandard) -> (&'static [String], &'static [String
         ThreadStandard::Unified => (&t.unified.classes_external, &t.unified.classes_internal),
         ThreadStandard::Whitworth => (&t.whitworth.classes_external, &t.whitworth.classes_internal),
         ThreadStandard::Npt => (&t.npt.classes_external, &t.npt.classes_internal),
+        ThreadStandard::TyreValve => (
+            &t.tyre_valve.classes_external,
+            &t.tyre_valve.classes_internal,
+        ),
     }
 }
 
@@ -575,6 +636,13 @@ mod tests {
         let npt = lookup(ThreadStandard::Npt, "1 1/4-11.5 NPT").unwrap();
         assert!(close(npt.major, 1.66 * 25.4) && close(npt.depth, 0.8 * 25.4 / 11.5));
         assert!(lookup(ThreadStandard::Npt, "1/4-20 NPT").is_err());
+        // Tyre valve threads (ISO 4570) on the 60-degree profile.
+        let valve = lookup(ThreadStandard::TyreValve, "8v1").unwrap();
+        assert_eq!(valve.designation, "8V1");
+        assert!(close(valve.major, 7.798) && close(valve.pitch, 0.794));
+        assert!(close(valve.depth, 0.625 * 3f64.sqrt() / 2.0 * 0.794));
+        assert!(lookup(ThreadStandard::TyreValve, "8V9").is_err());
+        assert!(ThreadStandard::TyreValve.check_modeled().is_ok());
         // Neither is modelled (the geometry cuts straight 60-degree threads).
         assert!(ThreadStandard::Unified.check_modeled().is_ok());
         assert!(ThreadStandard::Whitworth.check_modeled().is_err());

@@ -3,7 +3,11 @@
 // models (sweep_*, loft_*, pipe_*, ui_coil, ui_rib) and analytic ones,
 // names, and failures.
 
+#include <limits>
+#include <optional>
+
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
 
@@ -169,6 +173,215 @@ void test_sweeps() {
   CHECK(throws_with([&] { sweep(gap); }, "path curve c3 does not join"));
 }
 
+// A path whose first line meets its arc at a slight kink (0.7 degrees, as
+// sketches drawn without a tangent constraint have): (0,0)-(10,0), a quarter
+// of radius 5 less the kink, then 20 up along +Y; and its length.
+Path kinked_path(double& length) {
+  const double kink = 0.012;
+  const gp_Pnt center(10 - 5 * std::sin(kink), 5 * std::cos(kink), 0);
+  const gp_Pnt top(center.X() + 5, center.Y(), 0);
+  length = 10 + 5 * (kPi / 2 - kink) + 20;
+  return {{"c1", line3(gp_Pnt(0, 0, 0), gp_Pnt(10, 0, 0))},
+          {"c2", arc3(center, gp_Dir(0, 0, 1), gp_Dir(1, 0, 0), 5, kink - kPi / 2, 0)},
+          {"c3", line3(top, gp_Pnt(top.X(), top.Y() + 20, 0))}};
+}
+
+// A sketch frame in the plane y = `y` (normal +Y) with its origin at x.
+Frame xz_at(double x, double y) {
+  Frame frame;
+  frame.origin = gp_Pnt(x, y, 0);
+  frame.x_axis = gp_Dir(1, 0, 0);
+  frame.y_axis = gp_Dir(0, 0, -1);
+  return frame;
+}
+
+bool valid(const Shape& shape) { return BRepCheck_Analyzer(shape.occt()).IsValid(); }
+
+// Sweeps with the profile at an end of the path, swept backwards (only the
+// part before the profile), as cuts and joins.
+void test_backward_sweeps() {
+  // The bent path's end is (60, 60), where its last line runs along +Y.
+  SweepSpec back = circle_sweep(bent_path(), 5);
+  back.frame = xz_at(60, 60);
+  back.regions = {circle(1, 0, 0, 5)};
+  back.extent1 = 0;
+  back.extent2 = 1;
+  const ShapePtr bent = sweep(back);
+  CHECK_NEAR_TOL(precise_volume(*bent), kPi * 25 * (80 + 10 * kPi), 1e-6);
+  // The start cap is at the profile, the end cap at the path's start.
+  const std::vector<int> start = bent->find_faces("F5:start(r{c1})");
+  const std::vector<int> end = bent->find_faces("F5:end(r{c1})");
+  CHECK(start.size() == 1 && end.size() == 1);
+  if (start.size() == 1 && end.size() == 1) {
+    CHECK(near(bounding_box(Shape(bent->face(start.front()))).min.Y(), 60, 1e-9));
+    CHECK(near(bounding_box(Shape(bent->face(end.front()))).max.X(), 0, 1e-9));
+  }
+  // Half of the part before the profile: the last 40 + 5 pi.
+  back.extent2 = 0.5;
+  CHECK_NEAR_TOL(precise_volume(*sweep(back)), kPi * 25 * (80 + 10 * kPi) / 2, 1e-6);
+  // Forwards from the end there is nothing to sweep, also with the profile
+  // off the end by less than the modelling tolerance.
+  back.extent1 = 1;
+  back.extent2 = 0;
+  CHECK(throws_with([&] { sweep(back); }, "covers none of the path"));
+  SweepSpec short_path = circle_sweep(line_path(0, 10), 2);
+  short_path.frame.origin = gp_Pnt(10 - 5e-8, 0, 0);
+  short_path.extent2 = 0;
+  CHECK(throws_with([&] { sweep(short_path); }, "covers none of the path"));
+  short_path.extent1 = 0;
+  short_path.extent2 = 1;
+  CHECK_NEAR_TOL(precise_volume(*sweep(short_path)), kPi * 4 * 10, 1e-6);
+
+  // A rounded rectangle at the end of a path with a slight kink: the mitre
+  // at the kink is a sliver OCCT does not build, so the corner is rounded.
+  double length = 0;
+  SweepSpec kinked;
+  kinked.feature = "F7";
+  kinked.path = kinked_path(length);
+  const gp_Pnt top = kinked.path.back().curve.end;
+  kinked.frame = xz_at(top.X(), top.Y());
+  Region rounded;
+  rounded.name = "r1";
+  Loop loop;
+  const auto line = [](double x0, double y0, double x1, double y1, const char* name) {
+    Segment segment;
+    segment.name = name;
+    segment.start = gp_Pnt2d(x0, y0);
+    segment.end = gp_Pnt2d(x1, y1);
+    return segment;
+  };
+  const auto corner = [](double cx, double cy, double from, const char* name) {
+    Segment segment;
+    segment.name = name;
+    segment.kind = SegmentKind::Arc;
+    segment.center = gp_Pnt2d(cx, cy);
+    segment.radius = 1;
+    segment.start_angle = from;
+    segment.end_angle = from + kPi / 2;
+    return segment;
+  };
+  loop.segments = {line(2, -2, -2, -2, "c1"), corner(-2, -1, kPi, "c2"), line(-3, -1, -3, 1, "c3"),
+                   corner(-2, 1, kPi / 2, "c4"), line(-2, 2, 2, 2, "c5"), corner(2, 1, 0, "c6"),
+                   line(3, 1, 3, -1, "c7"), corner(2, -1, -kPi / 2, "c8")};
+  rounded.loops = {loop};
+  kinked.regions = {rounded};
+  kinked.extent1 = 0;
+  kinked.extent2 = 1;
+  const double area = 6 * 4 - (4 - kPi);
+  const ShapePtr tool = sweep(kinked);
+  CHECK_NEAR_TOL(precise_volume(*tool), area * length, 1e-3);
+  CHECK(faces_named(*tool, "F7:start(r1)") == 1 && faces_named(*tool, "F7:end(r1)") == 1);
+  CHECK(!tool->find_faces("F7:side(c3)").empty());
+  // The same forwards from the path's start.
+  SweepSpec forward = kinked;
+  forward.frame.origin = gp_Pnt(0, 0, 0);
+  forward.frame.x_axis = gp_Dir(0, 0, -1);
+  forward.frame.y_axis = gp_Dir(0, 1, 0);
+  forward.extent1 = 1;
+  forward.extent2 = 0;
+  CHECK_NEAR_TOL(precise_volume(*sweep(forward)), area * length, 1e-3);
+
+  // A circle there: neither mitred nor rounded corners build, the section
+  // turns through the kink.
+  SweepSpec circular = kinked;
+  circular.regions = {circle(9, 0, 0, 2)};
+  const ShapePtr tube = sweep(circular);
+  CHECK_NEAR_TOL(precise_volume(*tube), kPi * 4 * length, 1e-3);
+  CHECK(faces_named(*tube, "F7:start(r{c9})") == 1 && !tube->find_faces("F7:side(c9)").empty());
+
+  // As a cut and a join: a block round the last 15 mm of the path.
+  const ShapePtr block = extrude("F1", {rectangle(1, top.X() - 10, 10, 20, 20)}, -10, 10);
+  const double inside = area * 15;
+  const BooleanResult cut = boolean(BooleanOp::Cut, {block.get()}, *tool);
+  CHECK(cut.pieces.size() == 1);
+  if (cut.pieces.size() == 1) {
+    CHECK(valid(*cut.pieces[0].shape));
+    CHECK_NEAR_TOL(precise_volume(*cut.pieces[0].shape), 20 * 20 * 20 - inside, 1e-5);
+  }
+  const BooleanResult join = boolean(BooleanOp::Join, {block.get()}, *tool);
+  CHECK(join.pieces.size() == 1);
+  if (join.pieces.size() == 1) {
+    CHECK(valid(*join.pieces[0].shape));
+    CHECK_NEAR_TOL(precise_volume(*join.pieces[0].shape), 20 * 20 * 20 + area * length - inside, 1e-4);
+  }
+}
+
+// The parallel orientation along paths that turn through the profile's
+// plane: a translated rectangle, 4 wide along the path's plane and 6 across
+// it.
+void test_parallel_turns() {
+  SweepSpec spec;
+  spec.feature = "F5";
+  spec.frame = yz();
+  spec.regions = {rectangle(1, -3, -2, 6, 4)};
+  spec.orientation = SweepOrientation::Parallel;
+  // 120 degrees of a circle of radius 50 from the origin, facing +X at the
+  // start: the path turns back in X after 90 degrees. At x the section is
+  // the rectangle at y = 50 -+ sqrt(50^2 - x^2) (the second beyond x =
+  // 25 sqrt 3): V = 6 (4 * 50 + int min(4, 2 sqrt(50^2 - x^2)) dx), the
+  // copies overlapping beyond x0 = 50 sqrt(1 - 0.04^2).
+  spec.path = {{"c9", arc3(gp_Pnt(0, 50, 0), gp_Dir(0, 0, 1), gp_Dir(0, -1, 0), 50, 0, 2 * kPi / 3)}};
+  const double u0 = std::sqrt(1 - 0.04 * 0.04);
+  const auto quarter = [](double u) { return (u * std::sqrt(1 - u * u) + std::asin(u)) / 2; };
+  const double tail = 5000 * (quarter(1.0) - quarter(u0));
+  const ShapePtr turned = sweep(spec);
+  CHECK(valid(*turned));
+  CHECK_NEAR_TOL(precise_volume(*turned), 6 * (200 + 4 * (50 * u0 - 25 * std::sqrt(3.0)) + tail), 1e-6);
+  // Where it turns back the copy farthest along X is a face of its own.
+  const std::string turn = face_name("F5", "turn", rectangle_region_name(1));
+  CHECK(faces_named(*turned, turn) == 1);
+  CHECK(faces_named(*turned, start_cap("F5", 1)) == 1 && faces_named(*turned, end_cap("F5", 1)) == 1);
+  CHECK(turned->find_faces(side("F5", 1, 0)).size() == 2);
+  CHECK(edge_names_unique(*turned));
+  if (faces_named(*turned, turn) == 1) {
+    const BoundingBox box = bounding_box(Shape(turned->face(turned->find_faces(turn).front())));
+    CHECK(near(box.min.X(), 50, 1e-6) && near(box.max.X(), 50, 1e-6));
+  }
+  // The profile in the middle of a half circle, swept both ways: the same
+  // as the half circle from its start.
+  spec.path = {{"c9", arc3(gp_Pnt(0, 50, 0), gp_Dir(0, 0, 1), gp_Dir(0, -1, 0), 50, -kPi / 3, 2 * kPi / 3)}};
+  const double half = 6 * (4 * 50 * u0 + tail);
+  CHECK_NEAR_TOL(precise_volume(*sweep(spec)), 6 * 200 + half, 1e-6);
+  // A path that only touches the profile's plane (an S of two quarters
+  // meeting along +Y) moves the rectangle 100 along X: no turn face.
+  spec.path = {{"c9", arc3(gp_Pnt(0, 50, 0), gp_Dir(0, 0, 1), gp_Dir(0, -1, 0), 50, 0, kPi / 2)},
+               {"c10", arc3(gp_Pnt(100, 50, 0), gp_Dir(0, 0, -1), gp_Dir(-1, 0, 0), 50, 0, kPi / 2)}};
+  const ShapePtr s_bend = sweep(spec);
+  CHECK_NEAR_TOL(precise_volume(*s_bend), 24 * 100, 1e-6);
+  CHECK(faces_named(*s_bend, turn) == 0);
+  // Once round a circle the rectangle turns back twice and has no caps.
+  spec.path = {{"c9", arc3(gp_Pnt(0, 30, 0), gp_Dir(0, 0, 1), gp_Dir(0, -1, 0), 30, 0, 2 * kPi)}};
+  spec.extent2 = 0;
+  const ShapePtr ring = sweep(spec);
+  CHECK(valid(*ring));
+  CHECK(ring->find_faces(start_cap("F5", 1)).empty() && ring->find_faces(turn).size() == 2);
+  const double v0 = std::sqrt(1 - (2.0 / 30) * (2.0 / 30));
+  const double ring_tail = 1800 * (quarter(1.0) - quarter(v0));
+  CHECK_NEAR_TOL(precise_volume(*ring), 6 * (240 + 4 * 2 * 30 * v0 + 2 * ring_tail), 1e-6);
+}
+
+// Guide rails with several regions of a sketch: each region is turned and
+// sized about the path, the one off the path as well.
+void test_rail_regions() {
+  // The rail runs from 8 to 12 beside the path along +Y: everything grows
+  // by 1 + x/100 about the path, nothing turns. A circle of radius 3 round
+  // the path and one of radius 2 10 above it (sketch u = -10 is z = +10).
+  SweepSpec rail = circle_sweep(line_path(0, 50), 3);
+  rail.regions.push_back(circle(2, -10, 0, 2));
+  rail.rail = {{"c3", line3(gp_Pnt(0, 8, 0), gp_Pnt(50, 12, 0))}};
+  const double grown = 100.0 / 3.0 * (1.5 * 1.5 * 1.5 - 1);
+  const ShapePtr both = sweep(rail);
+  CHECK_NEAR_TOL(precise_volume(*both), kPi * (9 + 4) * grown, 1e-5);
+  CHECK(faces_named(*both, "F5:start(r{c2})") == 1 && faces_named(*both, "F5:end(r{c1})") == 1);
+  // The one off the path alone; and backwards from the end of the path,
+  // where it has its size at the rail's 12 and shrinks towards the start.
+  rail.regions = {circle(2, -10, 0, 2)};
+  CHECK_NEAR_TOL(precise_volume(*sweep(rail)), kPi * 4 * grown, 1e-5);
+  rail.frame.origin = gp_Pnt(50, 0, 0);
+  rail.extent1 = 0;
+  CHECK_NEAR_TOL(precise_volume(*sweep(rail)), kPi * 4 * grown / (1.5 * 1.5), 1e-5);
+}
+
 void test_pipes() {
   // pipe_path: an 8 mm rod along the bent path.
   PipeSpec rod;
@@ -269,6 +482,162 @@ void test_coils() {
   CHECK(throws_with([&] { coil(spring); }, "reaches its axis"));
   flat.pitch = 3;
   CHECK(throws_with([&] { coil(flat); }, "spiral's pitch"));
+}
+
+// The faces of a shape named <feature>:<role>(...).
+int faces_with(const Shape& shape, const std::string& prefix) {
+  int count = 0;
+  for (int i = 0; i < shape.face_count(); ++i) {
+    for (const std::string& name : shape.face_names(i)) {
+      if (name.rfind(prefix, 0) == 0) {
+        ++count;
+        break;
+      }
+    }
+  }
+  return count;
+}
+
+// FreeCAD's helices (mitcad#4, #59): a circle of radius 1 eight from the
+// axis in a plane through it, 4 turns of pitch 5. The profile stays in
+// planes through the axis, so V = A * 2 pi * N * (the mean radius).
+void test_helices() {
+  HelixSweepSpec spec;
+  spec.feature = "F1";
+  spec.frame.x_axis = gp_Dir(1, 0, 0);
+  spec.frame.y_axis = gp_Dir(0, 0, 1);
+  spec.regions = {circle(1, 8, 0, 1)};
+  spec.axis = gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+  spec.pitch = 5;
+  spec.revolutions = 4;
+  const ShapePtr screw = helix_sweep(spec);
+  CHECK_NEAR_TOL(precise_volume(*screw), kPi * 2 * kPi * 4 * 8, 1e-6);
+  CHECK(faces_with(*screw, "F1:start(") == 1 && faces_with(*screw, "F1:end(") == 1);
+  CHECK(faces_with(*screw, "F1:side(") >= 1);
+  // FreeCAD's construction (`freecad`), growing 1 a turn: the mean radius
+  // is 10, the end 12 from the axis.
+  spec.growth = 1;
+  spec.freecad = true;
+  const ShapePtr grown = helix_sweep(spec);
+  CHECK_NEAR_TOL(precise_volume(*grown), kPi * 2 * kPi * 4 * 10, 1e-5);
+  CHECK(faces_with(*grown, "F1:start(") == 1 && faces_with(*grown, "F1:end(") == 1);
+  CHECK(faces_with(*grown, "F1:side(") >= 1);
+  CHECK(near(bounding_box(*grown).max.Z(), 21, 1e-3) && near(bounding_box(*grown).max.X(), 13, 1e-3));
+  // Reversed and narrowing half a millimetre a turn, as FreeCAD 1.1 builds
+  // it (volumes and heights measured there): from a profile above the
+  // axis' base it goes down the axis; from one at its base FreeCAD's
+  // construction takes it up the axis, widening.
+  spec.growth = -0.5;
+  spec.flip = true;
+  spec.axis = gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, -1));
+  spec.regions = {circle(1, 8, 80, 1)};
+  const ShapePtr down = helix_sweep(spec);
+  CHECK_NEAR_TOL(precise_volume(*down), 558.9404195932443, 1e-6);
+  CHECK(near(bounding_box(*down).min.Z(), 59, 0.1));
+  spec.regions = {circle(1, 8, 0, 1)};
+  const ShapePtr up = helix_sweep(spec);
+  CHECK_NEAR_TOL(precise_volume(*up), 710.6111727249141, 1e-6);
+  CHECK(near(bounding_box(*up).max.Z(), 21, 0.1));
+  spec.growth = std::numeric_limits<double>::infinity();
+  CHECK(throws_with([&] { helix_sweep(spec); }, "growth"));
+}
+
+// The centre of the face of a shape that has the name, or nothing.
+std::optional<gp_Pnt> face_center(const Shape& shape, const std::string& prefix) {
+  for (int i = 0; i < shape.face_count(); ++i) {
+    for (const std::string& name : shape.face_names(i)) {
+      if (name.rfind(prefix, 0) == 0) {
+        GProp_GProps props;
+        BRepGProp::SurfaceProperties(shape.face(i), props);
+        return props.CentreOfMass();
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+// Mitcad's growing helices (mitcad#83): the profile, a circle of radius 1
+// eight from the axis in a plane through it, moves out by the growth in
+// proportion to the turn, whatever its height, the growth's sign and the
+// direction, so V = A * 2 pi * N * (8 + N growth / 2) exactly, and after
+// N = 4.25 turns the end cap's centre is a quarter turn round (right-handed
+// about the direction of travel), 8 + N growth out and N pitch along.
+void test_growing_helices() {
+  HelixSweepSpec spec;
+  spec.feature = "F1";
+  spec.frame.x_axis = gp_Dir(1, 0, 0);
+  spec.frame.y_axis = gp_Dir(0, 0, 1);
+  spec.pitch = 5;
+  spec.revolutions = 4.25;
+  for (const double growth : {1.0, -0.5}) {
+    for (const double height : {0.0, 80.0}) {
+      for (const double way : {1.0, -1.0}) {
+        for (const bool left : {false, true}) {
+          spec.growth = growth;
+          spec.regions = {circle(1, 8, height, 1)};
+          spec.axis = gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, way));
+          spec.flip = way < 0;
+          spec.left_handed = left;
+          const ShapePtr helix = helix_sweep(spec);
+          const double end = 8 + 4.25 * growth;
+          const double top = height + way * 4.25 * 5;
+          CHECK_NEAR_TOL(precise_volume(*helix), kPi * 2 * kPi * 4.25 * (8 + end) / 2, 1e-6);
+          CHECK(faces_with(*helix, "F1:start(") == 1 && faces_with(*helix, "F1:end(") == 1);
+          CHECK(faces_with(*helix, "F1:side(") >= 1);
+          const double turn = (left ? -1.0 : 1.0) * way;
+          const std::optional<gp_Pnt> cap = face_center(*helix, "F1:end(");
+          CHECK(cap && cap->Distance(gp_Pnt(0, turn * end, top)) < 1e-6);
+          const BoundingBox box = bounding_box(*helix);
+          CHECK(near(box.min.Z(), std::min(height, top) - 1, 1e-3));
+          CHECK(near(box.max.Z(), std::max(height, top) + 1, 1e-3));
+        }
+      }
+    }
+  }
+  // A ring (a circle of radius 2 with a hole of radius 1) and a square
+  // beside it, two regions, 12 turns narrowing 0.25 a turn: the ring's mean
+  // radius is 6.5, the square's (from 11 to 13) 10.5.
+  spec.left_handed = false;
+  spec.flip = false;
+  spec.axis = gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+  Region ring = circle(1, 8, 0, 2);
+  ring.loops.push_back(circle(2, 8, 0, 1).loops.front());
+  spec.regions = {ring, rectangle(3, 11, -1, 2, 2)};
+  spec.revolutions = 12;
+  spec.pitch = 6;
+  spec.growth = -0.25;
+  const ShapePtr coils = helix_sweep(spec);
+  CHECK_NEAR_TOL(precise_volume(*coils), 3 * kPi * 2 * kPi * 12 * 6.5 + 4 * 2 * kPi * 12 * 10.5, 1e-6);
+  CHECK(faces_with(*coils, "F1:start(") == 2 && faces_with(*coils, "F1:end(") == 2);
+  // A profile across the axis (on XY, the axis Z) moves within its plane
+  // as it turns and moves out, so the volume is its area times the rise;
+  // after two turns it is 2 out and 10 up.
+  Frame flat;
+  spec.frame = flat;
+  spec.regions = {circle(1, 8, 0, 1)};
+  spec.revolutions = 2;
+  spec.pitch = 5;
+  spec.growth = 1;
+  const ShapePtr risen = helix_sweep(spec);
+  CHECK_NEAR_TOL(precise_volume(*risen), kPi * 10, 1e-6);
+  const std::optional<gp_Pnt> top = face_center(*risen, "F1:end(");
+  CHECK(top && top->Distance(gp_Pnt(10, 0, 10)) < 1e-6);
+  spec.frame.x_axis = gp_Dir(1, 0, 0);
+  spec.frame.y_axis = gp_Dir(0, 0, 1);
+  // A profile centred on the axis moves out across its plane's normal.
+  spec.left_handed = false;
+  spec.flip = false;
+  spec.axis = gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+  spec.regions = {circle(1, 0, 0, 1)};
+  spec.growth = 3;
+  spec.revolutions = 1;
+  spec.pitch = 10;
+  CHECK_NEAR_TOL(precise_volume(*helix_sweep(spec)), kPi * 2 * kPi * 1.5, 1e-6);
+  // Narrowing into the axis fails.
+  spec.regions = {circle(1, 8, 0, 1)};
+  spec.growth = -2;
+  spec.revolutions = 4;
+  CHECK(throws_with([&] { helix_sweep(spec); }, "narrows into its axis"));
 }
 
 Frame xy_at(double z) {
@@ -485,8 +854,13 @@ void test_ribs() {
 
 void sweeps_tests() {
   guarded("sweeps", test_sweeps);
+  guarded("backward sweeps", test_backward_sweeps);
+  guarded("parallel turns", test_parallel_turns);
+  guarded("rail regions", test_rail_regions);
   guarded("pipes", test_pipes);
   guarded("coils", test_coils);
+  guarded("helices", test_helices);
+  guarded("growing helices", test_growing_helices);
   guarded("lofts", test_lofts);
   guarded("ribs", test_ribs);
 }

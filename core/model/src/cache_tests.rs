@@ -144,3 +144,28 @@ fn the_cache_query_tells_where_results_came_from() {
     assert_eq!(cache(&doc, false)["memory"]["results"], 4);
     assert_eq!((doc.revision(), doc.undo_depth()), (revision, depth));
 }
+
+#[test]
+fn a_failure_for_lack_of_memory_is_not_kept() {
+    // An operation that ran out of memory (mitcad#80) may build once the
+    // memory is free again: the failure is not cached, so the same inputs
+    // evaluate the feature again.
+    let (mut doc, extrude, _) = joined();
+    doc.kernel().out_of_memory.borrow_mut().insert("extrude");
+    doc.set_parameter("d3", 21.0).unwrap();
+    let error = doc
+        .status(extrude)
+        .and_then(|s| s.error())
+        .map(str::to_owned);
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|e| e.contains("out of memory")),
+        "{error:?}"
+    );
+    doc.kernel().out_of_memory.borrow_mut().clear();
+    doc.set_parameter("d3", 22.0).unwrap();
+    doc.set_parameter("d3", 21.0).unwrap();
+    assert!(doc.stats().evaluated.contains(&extrude));
+    assert_eq!(doc.status(extrude).and_then(|s| s.error()), None);
+}

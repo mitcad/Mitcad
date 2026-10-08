@@ -878,6 +878,17 @@ std::optional<std::pair<gp_Pnt, gp_Dir>> helixRise(const CommandState& state, co
   return std::make_pair(*center, state.checked(QStringLiteral("flip")) ? axis->second.Reversed() : axis->second);
 }
 
+// Whether the helix has a growth: anything but a plain zero.
+bool helixGrows(const CommandState& state) {
+  const QString growth = state.expression(QStringLiteral("growth")).trimmed();
+  if (growth.isEmpty()) {
+    return false;
+  }
+  bool number = false;
+  const double value = growth.section(QLatin1Char(' '), 0, 0).toDouble(&number);
+  return !(number && value == 0.0 && growth.count(QLatin1Char(' ')) <= 1);
+}
+
 } // namespace
 
 CommandDef helixCommand(const CommandContext& context) {
@@ -934,6 +945,9 @@ CommandDef helixCommand(const CommandContext& context) {
             handle.factor = turns;
             return handle;
           }),
+      valueInput(QStringLiteral("growth"), QObject::tr("Growth"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withTooltip(QObject::tr("How far the profiles move out from the axis per turn; negative narrows "
+                                   "the helix")),
       choiceInput(QStringLiteral("hand"), QObject::tr("Handedness"),
                   {{QStringLiteral("right"), QStringLiteral("Right Hand")},
                    {QStringLiteral("left"), QStringLiteral("Left Hand")}},
@@ -965,6 +979,15 @@ CommandDef helixCommand(const CommandContext& context) {
                   {QStringLiteral("axis"), state.items(QStringLiteral("axis")).first().reference()},
                   {QStringLiteral("pitch"), pitch},
                   {QStringLiteral("revolutions"), revolutions}};
+    if (helixGrows(state)) {
+      result.def.insert(QStringLiteral("growth"), state.expression(QStringLiteral("growth")));
+      // An edited helix keeps its construction (FreeCAD's for the FreeCAD
+      // import's); a new one is Mitcad's.
+      const QString construction = state.choice(QStringLiteral("construction"));
+      if (!construction.isEmpty()) {
+        result.def.insert(QStringLiteral("construction"), construction);
+      }
+    }
     if (state.choice(QStringLiteral("hand")) == QStringLiteral("left")) {
       result.def.insert(QStringLiteral("left_handed"), true);
     }
@@ -1000,6 +1023,10 @@ CommandDef helixCommand(const CommandContext& context) {
       state.setText(QStringLiteral("pitch"), pitch);
       state.setText(QStringLiteral("revolutions"), revolutions);
     }
+    if (feature.contains(QStringLiteral("growth"))) {
+      state.setText(QStringLiteral("growth"), context.valueText(feature.value(QStringLiteral("growth")), uid));
+    }
+    state.setChoice(QStringLiteral("construction"), feature.value(QStringLiteral("construction")).toString());
     state.setChoice(QStringLiteral("hand"), feature.value(QStringLiteral("left_handed")).toBool()
                                                 ? QStringLiteral("left")
                                                 : QStringLiteral("right"));
@@ -1022,10 +1049,16 @@ CommandDef helixCommand(const CommandContext& context) {
     } else if (type == kRevolutionsAndHeight) {
       pitch = height / turns;
     }
-    return QStringLiteral("Added helix (%1), %2 turns of %3, %4")
-        .arg(label(kOperations, state.choice(QStringLiteral("operation"))), number(turns), number(pitch),
-             state.choice(QStringLiteral("hand")) == QStringLiteral("left") ? QStringLiteral("left-handed")
-                                                                             : QStringLiteral("right-handed"));
+    QString text = QStringLiteral("Added helix (%1), %2 turns of %3, %4")
+                       .arg(label(kOperations, state.choice(QStringLiteral("operation"))), number(turns),
+                            number(pitch),
+                            state.choice(QStringLiteral("hand")) == QStringLiteral("left")
+                                ? QStringLiteral("left-handed")
+                                : QStringLiteral("right-handed"));
+    if (helixGrows(state)) {
+      text += QStringLiteral(", growing %1 per turn").arg(number(state.value(QStringLiteral("growth"))));
+    }
+    return text;
   };
   return def;
 }

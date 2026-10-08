@@ -458,6 +458,8 @@ pub(super) fn summary(diff: &DesignDiff) -> String {
         (&diff.bodies, "body", "bodies"),
         (&diff.groups, "timeline group", "timeline groups"),
         (&diff.views, "named view", "named views"),
+        (&diff.analyses, "analysis", "analyses"),
+        (&diff.appearances, "appearance", "appearances"),
     ] {
         let kinds: Vec<Kind> = items.iter().map(|i| i.kind).collect();
         counts(&mut parts, &kinds, one, many, "changed");
@@ -517,6 +519,8 @@ impl DesignDiff {
             ("Bodies", &self.bodies),
             ("Timeline groups", &self.groups),
             ("Named views", &self.views),
+            ("Analyses", &self.analyses),
+            ("Appearances", &self.appearances),
         ] {
             section(title, items.iter().map(|c| c.text.as_str()).collect());
         }

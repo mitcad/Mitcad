@@ -1,14 +1,91 @@
 // SPDX-License-Identifier: MIT
-//! Sweeps, pipes and lofts (F3) from external dumps (`commands.md`, the
-//! F3 import table). The stream decoder gives only their parameters, not
-//! their profiles and paths, so from an .f3d alone they fall back to the
-//! stored bodies, as do coils, ribs and webs, which dumps give no inputs of.
+//! Sweeps, pipes and lofts (F3): from external dumps (`commands.md`, the
+//! F3 import table) and from the stream decoder (mitcad#34), which gives
+//! their paths, rails, sections and conditions but not every choice: a
+//! profile's region (only its sketch), a sweep's direction, orientation
+//! and scaling, a pipe's section type and wall. Those are tried in turn
+//! and the history picks (the dump's readings first). Coils, ribs and webs,
+//! which dumps give no inputs of, fall back to the stored bodies.
 
 use mitcad_f3d::design::ir::{PipeDetail, Reference, SweepDetail, TimelineItem};
-use mitcad_model::{EdgeName, Kernel};
+use mitcad_model::{EdgeName, FeatureUid, Kernel};
 use serde_json::{Map, Value, json};
 
+use crate::features::profiles_of;
 use crate::{Candidate, Importer, refs};
+
+/// At most this many choices of loft sections' regions are tried.
+const SECTION_CHOICES: usize = 12;
+
+/// Choices of one option per section, those of the first options first
+/// (by the sum of the options' positions), at most `limit`.
+fn choices(options: &[Vec<Value>], limit: usize) -> Vec<Vec<Value>> {
+    let mut out: Vec<(usize, Vec<Value>)> = vec![(0, Vec::new())];
+    for section in options {
+        let mut next = Vec::new();
+        for (rank, chosen) in &out {
+            for (i, option) in section.iter().enumerate() {
+                let mut c = chosen.clone();
+                c.push(option.clone());
+                next.push((rank + i, c));
+            }
+        }
+        // A stable sort keeps the earlier sections' order among equals.
+        next.sort_by_key(|(rank, _)| *rank);
+        next.truncate(limit);
+        out = next;
+    }
+    out.into_iter().map(|(_, c)| c).collect()
+}
+
+/// The candidates with the operation's other readings ([`Importer::
+/// operation_readings`]) after them: the `k`-th reading of the `i`-th
+/// candidate by the rank `i + k`.
+fn with_operations(
+    candidates: Vec<Candidate>,
+    readings: &[(String, Vec<String>)],
+) -> Vec<Candidate> {
+    let mut ranked = Vec::new();
+    for (k, (operation, participants)) in readings.iter().enumerate() {
+        for (i, c) in candidates.iter().enumerate() {
+            let mut c = c.clone();
+            if k > 0 {
+                for def in &mut c.defs {
+                    def["operation"] = json!(operation);
+                    match def.as_object_mut() {
+                        Some(m) if participants.is_empty() => {
+                            m.remove("participants");
+                        }
+                        _ => def["participants"] = json!(participants),
+                    }
+                }
+                c.guess = true;
+            }
+            ranked.push((i + k, c));
+        }
+    }
+    ranked.sort_by_key(|(rank, _)| *rank);
+    ranked.into_iter().map(|(_, c)| c).collect()
+}
+
+/// Whether a sweep's, pipe's or loft's inputs name edges of the bodies
+/// (paths, rails or sections of edges), which a fallback before it can
+/// change.
+pub(crate) fn uses_edges(item: &TimelineItem) -> bool {
+    fn edges(v: &Value) -> bool {
+        match v {
+            Value::Object(m) => {
+                m.get("kind").and_then(Value::as_str) == Some("edge") || m.values().any(edges)
+            }
+            Value::Array(a) => a.iter().any(edges),
+            _ => false,
+        }
+    }
+    item.detail
+        .as_ref()
+        .and_then(|d| serde_json::to_value(d).ok())
+        .is_some_and(|v| edges(&v))
+}
 
 fn reference(v: &Value) -> Option<Reference> {
     Some(Reference::from_map(v.as_object()?.clone()))
@@ -21,10 +98,12 @@ fn is_zero(r: &Option<Reference>) -> bool {
         .is_none_or(|v| v == 0.0)
 }
 
-/// A value present and not empty (a guide rail, guide surfaces).
+/// A value present and not empty (a guide rail, guide surfaces). A text is
+/// a collection an external dump could not convert (its proxy's text),
+/// taken as empty: the history tells whether it was.
 fn given(v: Option<&Value>) -> bool {
     match v {
-        None | Some(Value::Null) => false,
+        None | Some(Value::Null | Value::String(_)) => false,
         Some(Value::Array(a)) => !a.is_empty(),
         Some(_) => true,
     }
@@ -165,6 +244,32 @@ impl<K: Kernel> Importer<'_, K> {
         extent
     }
 
+    /// The operation and participants to try, the dump's first. Without
+    /// participants (the stream decoder gives none) a join or cut is also
+    /// tried on the bodies the history changed, and a join as a new body
+    /// (a join that meets none of its participants makes one).
+    fn operation_readings(
+        &mut self,
+        index: i64,
+        operation: &str,
+        bodies: &Option<Vec<Reference>>,
+        sketch: Option<FeatureUid>,
+    ) -> Vec<(String, Vec<String>)> {
+        let decoded = self.participants(bodies);
+        let mut out: Vec<(String, Vec<String>)> = match sketch {
+            Some(s) => self
+                .participant_options(index, bodies, operation, s)
+                .into_iter()
+                .map(|p| (operation.to_owned(), p))
+                .collect(),
+            None => vec![(operation.to_owned(), decoded.clone())],
+        };
+        if operation == "join" && decoded.is_empty() {
+            out.push(("new_body".to_owned(), Vec::new()));
+        }
+        out
+    }
+
     pub(crate) fn sweep(&mut self, index: i64, d: &SweepDetail) -> Result<Vec<Candidate>, String> {
         if d.is_solid == Some(false) {
             return Err("surface sweeps are not supported".to_owned());
@@ -172,7 +277,7 @@ impl<K: Kernel> Importer<'_, K> {
         if given(d.other.get("guideSurfaces")) {
             return Err("sweeps along guide surfaces are not supported".to_owned());
         }
-        let profiles = d.profile.clone().unwrap_or_default();
+        let profiles = profiles_of(&d.profile, &d.other);
         if profiles.is_empty() {
             return Err("its profiles were not decoded".to_owned());
         }
@@ -188,7 +293,8 @@ impl<K: Kernel> Importer<'_, K> {
         {
             base["orientation"] = json!("parallel");
         }
-        if given(d.guide_rail.as_ref()) {
+        let rail = given(d.guide_rail.as_ref());
+        if rail {
             base["guide_rail"] = self.path_of(d.guide_rail.as_ref(), "guide rail")?;
             match d.profile_scaling.as_deref() {
                 Some(s) if s.contains("Stretch") => base["profile_scaling"] = json!("stretch"),
@@ -206,42 +312,98 @@ impl<K: Kernel> Importer<'_, K> {
                 base["taper_angle"] = self.value(&d.taper_angle).ok_or("no taper angle")?;
             }
         }
-        let extent = self.path_extent(&d.distance_one, Some(&d.distance_two));
-        if extent["type"] != "full" {
-            base["extent"] = extent;
+        // The stream decoder gives neither the direction nor the orientation
+        // nor the scaling, and a second fraction 0 where a dump has none (a
+        // profile at the path's end): the readings to try, the dump's first.
+        let flip = d.other.get("isDirectionFlipped").and_then(Value::as_bool);
+        let mut extents = vec![self.path_extent(&d.distance_one, Some(&d.distance_two))];
+        if flip.is_none() && is_zero(&d.distance_two) && d.distance_two.is_some() {
+            extents.insert(0, self.path_extent(&d.distance_one, None));
         }
-        if d.other.get("isDirectionFlipped").and_then(Value::as_bool) == Some(true) {
-            base["flip"] = json!(true);
+        let mut variants: Vec<Value> = Vec::new();
+        for extent in extents {
+            let mut def = base.clone();
+            if extent["type"] != "full" {
+                def["extent"] = extent;
+            }
+            // The dump's direction, then the other one. With a rail the
+            // file's flag reads the other way (the reference models' rail
+            // sweep, flipped, is Mitcad's sweep without `flip`). Without a
+            // partial extent or a rail the direction changes nothing.
+            let first = if rail {
+                !flip.unwrap_or(true)
+            } else {
+                flip.unwrap_or(false)
+            };
+            let both = rail || def.get("extent").is_some();
+            for f in [first, !first].into_iter().take(if both { 2 } else { 1 }) {
+                let mut def = def.clone();
+                if f {
+                    def["flip"] = json!(true);
+                }
+                variants.push(def);
+            }
         }
+        let mut more = Vec::new();
+        if rail && d.profile_scaling.is_none() {
+            for scaling in ["stretch", "none"] {
+                more.extend(variants.iter().map(|v| {
+                    let mut v = v.clone();
+                    v["profile_scaling"] = json!(scaling);
+                    v
+                }));
+            }
+        } else if !rail && d.orientation.is_none() && flip.is_none() {
+            more.extend(variants.iter().map(|v| {
+                let mut v = v.clone();
+                v["orientation"] = json!("parallel");
+                v
+            }));
+        }
+        variants.extend(more);
         let participants = self.participants(&d.participant_bodies);
         if !participants.is_empty() {
-            base["participants"] = json!(participants);
+            for v in &mut variants {
+                v["participants"] = json!(participants);
+            }
         }
-        Ok(sets
-            .iter()
-            .map(|set| {
-                let mut def = base.clone();
+        // The likeliest regions with the likeliest readings first: by the
+        // sum of their positions.
+        let mut candidates = Vec::new();
+        for (k, variant) in variants.iter().enumerate() {
+            for (s, set) in sets.iter().enumerate() {
+                let mut def = variant.clone();
                 def["profiles"] = set
                     .keys
                     .iter()
                     .map(|r| json!({"sketch": uid, "region": r}))
                     .collect();
-                Candidate {
+                let candidate = Candidate {
                     defs: vec![def],
                     note: None,
-                    guess: set.guess,
+                    guess: set.guess || k > 0,
                     predicted: None,
-                }
-            })
-            .collect())
+                };
+                candidates.push((k + s, candidate));
+            }
+        }
+        candidates.sort_by_key(|(rank, _)| *rank);
+        let operation = Self::operation(d.operation.as_deref());
+        let sketch_uid = self.sketches[&sketch].uid;
+        let readings =
+            self.operation_readings(index, operation, &d.participant_bodies, Some(sketch_uid));
+        Ok(with_operations(
+            candidates.into_iter().map(|(_, c)| c).collect(),
+            &readings,
+        ))
     }
 
-    pub(crate) fn pipe(&mut self, d: &PipeDetail) -> Result<Vec<Candidate>, String> {
+    pub(crate) fn pipe(&mut self, index: i64, d: &PipeDetail) -> Result<Vec<Candidate>, String> {
         let path = self.path_of(d.path.as_ref(), "path")?;
         let size = self
             .value(&d.section_size)
             .ok_or("its section size was not decoded")?;
-        let mut def = json!({"type": "pipe", "path": path, "size": size,
+        let mut def = json!({"type": "pipe", "path": path.clone(), "size": size,
                              "operation": Self::operation(d.operation.as_deref())});
         match d.section_type.as_deref() {
             Some(s) if s.starts_with("Square") => def["section"] = json!("square"),
@@ -259,18 +421,56 @@ impl<K: Kernel> Importer<'_, K> {
         }
         // The second fraction applies to closed paths only: with it first
         // when it is not zero, then without.
-        let mut candidates = Vec::new();
+        let mut defs = Vec::new();
         if !is_zero(&d.distance_two) {
             let mut both = def.clone();
             both["extent"] = self.path_extent(&d.distance_one, Some(&d.distance_two));
-            candidates.push(Candidate::new(both));
+            defs.push(both);
         }
         let extent = self.path_extent(&d.distance_one, None);
         if extent["type"] != "full" {
             def["extent"] = extent;
         }
-        candidates.push(Candidate::new(def));
-        Ok(candidates)
+        defs.push(def);
+        // The stream decoder gives neither the section's type nor whether
+        // it is hollow: a solid circle first, then the others.
+        if d.section_type.is_none() && d.is_hollow.is_none() {
+            let thickness = self.value(&d.section_thickness);
+            let mut all = Vec::new();
+            for section in ["circular", "square", "triangular"] {
+                for hollow in [false, true] {
+                    for def in &defs {
+                        let mut def = def.clone();
+                        if section != "circular" {
+                            def["section"] = json!(section);
+                        }
+                        match (&thickness, hollow) {
+                            (Some(t), true) => def["thickness"] = t.clone(),
+                            (None, true) => continue,
+                            _ => {}
+                        }
+                        all.push(def);
+                    }
+                }
+            }
+            defs = all;
+        }
+        let candidates = defs
+            .into_iter()
+            .enumerate()
+            .map(|(k, def)| Candidate {
+                guess: k > 0 && d.section_type.is_none(),
+                ..Candidate::new(def)
+            })
+            .collect();
+        // The component's bodies: those of the path's sketch.
+        let sketch = path
+            .get("sketch")
+            .and_then(Value::as_str)
+            .and_then(|s| s.parse().ok());
+        let operation = Self::operation(d.operation.as_deref());
+        let readings = self.operation_readings(index, operation, &d.participant_bodies, sketch);
+        Ok(with_operations(candidates, &readings))
     }
 
     pub(crate) fn loft(&mut self, item: &TimelineItem) -> Result<Vec<Candidate>, String> {
@@ -290,7 +490,9 @@ impl<K: Kernel> Importer<'_, K> {
             .ok_or("its sections were not decoded")?;
         items.sort_by_key(|s| s.get("index").and_then(Value::as_i64).unwrap_or(0));
         let index = item.index.unwrap_or(0);
-        let mut sections = Vec::new();
+        // Each section's options: one, or the regions a profile without its
+        // area (the stream decoder gives only its sketch) may be.
+        let mut sections: Vec<Vec<Value>> = Vec::new();
         for (i, section) in items.iter().enumerate() {
             let at = |e: String| format!("section {}: {e}", i + 1);
             // A path of edges (.f3d designs take tangent and smooth conditions
@@ -298,12 +500,13 @@ impl<K: Kernel> Importer<'_, K> {
             let raw = section.get("entity");
             let entity = raw.and_then(reference);
             if matches!(raw, Some(Value::Array(_))) || matches!(entity, Some(Reference::Edge(_))) {
-                sections.push(self.edge_loop_face(raw).map_err(at)?);
+                sections.push(vec![self.edge_loop_face(raw).map_err(at)?]);
                 continue;
             }
             let entity = entity.ok_or_else(|| at("its entity was not decoded".to_owned()))?;
-            sections.push(match entity {
+            sections.push(vec![match entity {
                 Reference::Profile(p) => {
+                    let measured = p.area.is_some();
                     let profile = Reference::Profile(p);
                     let (sketch, _) = self
                         .profile_sketch(std::slice::from_ref(&profile), index)
@@ -311,13 +514,26 @@ impl<K: Kernel> Importer<'_, K> {
                     let sets = self
                         .region_sets(std::slice::from_ref(&profile), sketch, None, None)
                         .map_err(at)?;
-                    let region = sets
-                        .iter()
-                        .find(|s| s.keys.len() == 1)
-                        .map(|s| s.keys[0].clone())
-                        .ok_or_else(|| at("its region was not found".to_owned()))?;
-                    json!({"type": "profile", "sketch": self.sketches[&sketch].uid.to_string(),
-                           "region": region})
+                    let mut regions: Vec<String> = Vec::new();
+                    for s in sets.iter().filter(|s| s.keys.len() == 1) {
+                        if !regions.contains(&s.keys[0]) {
+                            regions.push(s.keys[0].clone());
+                        }
+                    }
+                    if regions.is_empty() {
+                        return Err(at("its region was not found".to_owned()));
+                    }
+                    if measured {
+                        regions.truncate(1);
+                    }
+                    let uid = self.sketches[&sketch].uid.to_string();
+                    sections.push(
+                        regions
+                            .iter()
+                            .map(|r| json!({"type": "profile", "sketch": uid, "region": r}))
+                            .collect(),
+                    );
+                    continue;
                 }
                 Reference::Face(fp) => {
                     let (body, face) = refs::resolve_face(self.doc, &fp)
@@ -352,9 +568,9 @@ impl<K: Kernel> Importer<'_, K> {
                     json!({"type": "point", "point": point})
                 }
                 _ => return Err(at("this kind of section is not supported".to_owned())),
-            });
+            }]);
         }
-        let mut def = json!({"type": "loft", "sections": sections,
+        let mut def = json!({"type": "loft",
             "operation": Self::operation(d.get("operation").and_then(Value::as_str))});
         for (key, section) in [
             ("start_condition", items.first()),
@@ -388,22 +604,36 @@ impl<K: Kernel> Importer<'_, K> {
         if d.get("isClosed").and_then(Value::as_bool) == Some(true) {
             def["closed"] = json!(true);
         }
-        let participants: Vec<String> = d
+        let bodies: Option<Vec<Reference>> = d
             .get("participantBodies")
             .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(reference)
-            .filter_map(|r| match r {
-                Reference::Body(fp) => refs::resolve_body(self.doc, &fp),
-                _ => None,
-            })
-            .map(|b| b.to_string())
-            .collect();
+            .map(|a| a.iter().filter_map(reference).collect());
+        let participants = self.participants(&bodies);
         if !participants.is_empty() {
             def["participants"] = json!(participants);
         }
-        Ok(vec![Candidate::new(def)])
+        let candidates = choices(&sections, SECTION_CHOICES)
+            .into_iter()
+            .enumerate()
+            .map(|(k, chosen)| {
+                let mut def = def.clone();
+                def["sections"] = Value::Array(chosen);
+                Candidate {
+                    guess: k > 0,
+                    ..Candidate::new(def)
+                }
+            })
+            .collect();
+        // The component's bodies: those of the first profile's sketch.
+        let sketch = sections
+            .iter()
+            .flatten()
+            .find(|s| s["type"] == "profile")
+            .and_then(|s| s["sketch"].as_str())
+            .and_then(|s| s.parse().ok());
+        let operation = Self::operation(d.get("operation").and_then(Value::as_str));
+        let readings = self.operation_readings(index, operation, &bodies, sketch);
+        Ok(with_operations(candidates, &readings))
     }
 
     /// A loft section's end condition; none for a free one.
@@ -426,5 +656,26 @@ impl<K: Kernel> Importer<'_, K> {
                 "angle": self.value(&param("angle")).unwrap_or(json!(0.0)), "weight": weight()}),
             _ => return None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn choices_take_the_first_options_first() {
+        let options = vec![
+            vec![json!("a0"), json!("a1"), json!("a2")],
+            vec![json!("b0")],
+            vec![json!("c0"), json!("c1")],
+        ];
+        let all = choices(&options, 10);
+        assert_eq!(all.len(), 6);
+        assert_eq!(all[0], vec![json!("a0"), json!("b0"), json!("c0")]);
+        // Then a second option of one section.
+        assert_eq!(all[1], vec![json!("a0"), json!("b0"), json!("c1")]);
+        assert_eq!(all[2], vec![json!("a1"), json!("b0"), json!("c0")]);
+        assert_eq!(choices(&options, 2).len(), 2);
     }
 }

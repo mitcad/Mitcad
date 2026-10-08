@@ -30,6 +30,13 @@ void test_angles() {
   CHECK(full->find_faces(start_cap("F3", 1)).empty() && full->find_faces(end_cap("F3", 1)).empty());
   CHECK(full->find_edges(edge(side("F3", 1, 1), side("F3", 1, 1))).size() == 1); // the seam
   CHECK(edge_names_unique(*full));
+  // The flat rings at y = 0 and y = 30: their planes' normals point out
+  // of the body (a revolution's planes can be left-handed).
+  for (const int k : {0, 2}) {
+    const gp_Pln ring = face_plane(*full, side("F3", 1, k));
+    const gp_Vec out(gp_Pnt(0, 15, 0), ring.Location());
+    CHECK(near(std::abs(ring.Axis().Direction().Y()), 1.0) && ring.Axis().Direction().Dot(gp_Dir(out)) > 0.9);
+  }
 
   // A quarter, turning right-handed about +Y: from +x towards -z.
   const ShapePtr quarter = revolve(tube(kPi / 2));

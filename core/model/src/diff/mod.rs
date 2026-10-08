@@ -21,10 +21,12 @@
 //!   by id: their counts, those added, deleted and changed, and the
 //!   entities of which only the solved position or size changed; its
 //!   dimensions' values are slot values.
-//! - **Document:** units, the timeline marker, the active component.
+//! - **Document:** units, the timeline marker, the active component, the
+//!   render settings (mitcad#47, by field: `render.environment.preset`).
 //! - **Components** and **occurrences** by uid (placements as moves and
-//!   turns), **bodies** (names and attributes) by uid, **timeline groups**
-//!   and **named views** by name.
+//!   turns), **bodies** (names and attributes) by uid, **timeline
+//!   groups**, **named views** and **analyses** by name, the document's
+//!   **appearances** by id.
 //! - **Geometry** (optional, [`DesignDiff::add_geometry`]): the volume and
 //!   area of each body of two computed documents.
 //!
@@ -297,6 +299,10 @@ pub struct DesignDiff {
     pub bodies: Vec<ItemChange>,
     pub groups: Vec<ItemChange>,
     pub views: Vec<ItemChange>,
+    /// Analyses kept in the document (mitcad#41), by name.
+    pub analyses: Vec<ItemChange>,
+    /// The document's own appearances (mitcad#46), by id.
+    pub appearances: Vec<ItemChange>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub geometry: Option<GeometryDiff>,
 }
@@ -335,6 +341,8 @@ pub fn diff_states(from: &DocState, to: &DocState) -> DesignDiff {
         bodies: body_changes(from, to),
         groups: group_changes(from, to),
         views: view_changes(from, to),
+        analyses: analysis_changes(from, to),
+        appearances: appearance_changes(from, to),
         ..DesignDiff::default()
     };
     diff.finish();
@@ -407,6 +415,8 @@ impl DesignDiff {
             && self.bodies.is_empty()
             && self.groups.is_empty()
             && self.views.is_empty()
+            && self.analyses.is_empty()
+            && self.appearances.is_empty()
             && self
                 .geometry
                 .as_ref()
@@ -1232,6 +1242,12 @@ fn document_changes(a: &DocState, b: &DocState) -> Vec<FieldChange> {
             text: format!("marker {text_a} -> {text_b}"),
         });
     }
+    // Render settings (mitcad#47), by field.
+    for (field, from, to) in a.render.differences(&b.render) {
+        out.push(field_change(&format!("render.{field}"), from, to));
+    }
+    // The configuration table (mitcad#64), row by row.
+    out.extend(configuration_changes(&a.configurations, &b.configurations));
     let (active_a, active_b) = (a.assembly.active, b.assembly.active);
     if active_a != active_b {
         out.push(FieldChange {
@@ -1322,7 +1338,8 @@ fn component_changes(a: &Assembly, b: &Assembly) -> Vec<ItemChange> {
                 (
                     c.uid,
                     c.name.clone(),
-                    json!({"name": c.name, "created_by": c.created_by, "link": c.link}),
+                    json!({"name": c.name, "created_by": c.created_by, "link": c.link,
+                           "library": c.library}),
                 )
             }))
             .collect()
@@ -1389,7 +1406,8 @@ fn body_changes(a: &DocState, b: &DocState) -> Vec<ItemChange> {
                 let attributes = state.body_attributes.get(&uid).cloned().unwrap_or_default();
                 let value = json!({"name": name, "visible": attributes.visible,
                                    "material": attributes.material,
-                                   "appearance": attributes.appearance});
+                                   "appearance": attributes.appearance,
+                                   "face_appearances": attributes.face_appearances});
                 (uid, name, value)
             })
             .collect()
@@ -1431,6 +1449,50 @@ fn view_changes(a: &DocState, b: &DocState) -> Vec<ItemChange> {
     item_changes(list(a), list(b), false, &|_, _| {})
 }
 
+fn analysis_changes(a: &DocState, b: &DocState) -> Vec<ItemChange> {
+    let list = |state: &DocState| -> Vec<(String, String, Value)> {
+        state
+            .analyses
+            .iter()
+            .map(|analysis| {
+                let mut value = serde_json::to_value(analysis).expect("analyses serialize");
+                if let Value::Object(fields) = &mut value {
+                    fields.remove("name");
+                }
+                (analysis.name.clone(), analysis.name.clone(), value)
+            })
+            .collect()
+    };
+    item_changes(list(a), list(b), false, &|_, _| {})
+}
+
+fn appearance_changes(a: &DocState, b: &DocState) -> Vec<ItemChange> {
+    let list = |state: &DocState| -> Vec<(String, String, Value)> {
+        state
+            .appearances
+            .iter()
+            .map(|appearance| {
+                let mut value = serde_json::to_value(appearance).expect("appearances serialize");
+                if let Value::Object(fields) = &mut value {
+                    fields.remove("id");
+                }
+                // An embedded image by its digest, not its data (mitcad#53).
+                if let (Some(texture), Some(data)) = (
+                    value.get_mut("texture").and_then(Value::as_object_mut),
+                    appearance.texture.as_ref().and_then(|t| t.data.as_ref()),
+                ) {
+                    texture.insert(
+                        "data".to_owned(),
+                        json!(format!("sha256 {}", data.sha256())),
+                    );
+                }
+                (appearance.id.clone(), appearance.name.clone(), value)
+            })
+            .collect()
+    };
+    item_changes(list(a), list(b), true, &|_, _| {})
+}
+
 /// The rotation angle (radians) and the translation from `a` to `b`.
 fn motion(a: &Transform, b: &Transform) -> (f64, [f64; 3]) {
     // The rotation b * a^T; its angle from its trace.
@@ -1452,4 +1514,84 @@ fn motion(a: &Transform, b: &Transform) -> (f64, [f64; 3]) {
 /// A number for people: at most six decimals.
 fn number(value: f64) -> String {
     format_number(value, DEFAULT_DECIMALS)
+}
+
+/// Changes of the configuration table (mitcad#64): its selectors,
+/// parameters and default, and each row by name (`configurations.M5x16:
+/// dk 8.5 mm -> 8.52 mm`).
+fn configuration_changes(
+    a: &crate::configurations::Configurations,
+    b: &crate::configurations::Configurations,
+) -> Vec<FieldChange> {
+    let mut out = Vec::new();
+    for (field, from, to) in [
+        (
+            "configurations.selectors",
+            json!(a.selectors),
+            json!(b.selectors),
+        ),
+        (
+            "configurations.parameters",
+            json!(a.parameters),
+            json!(b.parameters),
+        ),
+        ("configurations.default", json!(a.default), json!(b.default)),
+    ] {
+        if from != to {
+            out.push(field_change(field, from, to));
+        }
+    }
+    for row in &a.rows {
+        match b.row(&row.name) {
+            None => out.push(FieldChange {
+                field: format!("configurations.{}", row.name),
+                from: json!(row),
+                to: Value::Null,
+                text: format!("configuration {} deleted", row.name),
+            }),
+            Some(other) if other != row => {
+                let mut parts = Vec::new();
+                let names: std::collections::BTreeSet<&String> =
+                    row.values.keys().chain(other.values.keys()).collect();
+                for name in names {
+                    let (x, y) = (row.values.get(name), other.values.get(name));
+                    if x != y {
+                        parts.push(format!(
+                            "{name} {} -> {}",
+                            x.map_or("-", String::as_str),
+                            y.map_or("-", String::as_str)
+                        ));
+                    }
+                }
+                if row.select != other.select {
+                    parts.push("selection changed".to_owned());
+                }
+                if row.designation != other.designation {
+                    parts.push(format!(
+                        "designation {} -> {}",
+                        row.designation.as_deref().unwrap_or("-"),
+                        other.designation.as_deref().unwrap_or("-")
+                    ));
+                }
+                out.push(FieldChange {
+                    field: format!("configurations.{}", row.name),
+                    from: json!(row),
+                    to: json!(other),
+                    text: format!("configuration {}: {}", row.name, parts.join(", ")),
+                });
+            }
+            Some(_) => {}
+        }
+    }
+    for row in &b.rows {
+        if a.row(&row.name).is_none() {
+            out.push(FieldChange {
+                field: format!("configurations.{}", row.name),
+                from: Value::Null,
+                to: json!(row),
+                text: format!("configuration {} added", row.name),
+            });
+        }
+    }
+    out
 }

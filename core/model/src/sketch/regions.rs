@@ -4,7 +4,8 @@
 //!
 //! 1. Every pair of curves is intersected (`intersect.rs`); curves are cut
 //!    at the intersections and their own ends. Points closer than the
-//!    tolerance are one vertex; overlapping pieces are kept once.
+//!    tolerance are one vertex; overlapping pieces are kept once, as are
+//!    closed curves on each other that nothing cuts (a circle drawn twice).
 //! 2. Pieces with a free end (dangling curves) and bridges (pieces with the
 //!    same face on both sides) bound nothing and are dropped, repeatedly.
 //!    Pieces of one curve that meet only each other join again.
@@ -421,6 +422,50 @@ impl<'a> Arrangement<'a> {
                 }
             }
         }
+        // Closed curves that are loops by themselves and lie on each other
+        // (a circle drawn twice; imported sketches have them): nothing cuts
+        // them, so the check above does not see them, and each would
+        // bound a face of its own and be a hole of the face around them,
+        // twice in one place (mitcad#93).
+        let whole: Vec<usize> = (0..self.edges.len())
+            .filter(|&e| self.edges[e].alive && self.edges[e].v0.is_none())
+            .collect();
+        for (k, &e) in whole.iter().enumerate() {
+            for &f in &whole[k + 1..] {
+                if !self.edges[e].alive {
+                    break;
+                }
+                if !self.edges[f].alive || !self.on_each_other(e, f) {
+                    continue;
+                }
+                let (ue, uf) = (
+                    self.curves[self.edges[e].curve].uid,
+                    self.curves[self.edges[f].curve].uid,
+                );
+                if uf < ue {
+                    self.edges[e].alive = false;
+                } else {
+                    self.edges[f].alive = false;
+                }
+            }
+        }
+    }
+
+    /// Whether the whole curves of two edges lie on each other within the
+    /// tolerance of overlapping pieces.
+    fn on_each_other(&self, e: usize, f: usize) -> bool {
+        let reach = 100.0 * self.tol;
+        let (a, b) = (self.curve(e).bounds(), self.curve(f).bounds());
+        if (0..2).any(|k| (a.0[k] - b.0[k]).abs() > reach || (a.1[k] - b.1[k]).abs() > reach) {
+            return false;
+        }
+        let on = |from: usize, to: usize| {
+            let target = self.curve(to);
+            self.samples(from)
+                .into_iter()
+                .all(|p| target.closest(p).1 <= reach)
+        };
+        on(e, f) && on(f, e)
     }
 
     fn degrees(&self) -> Vec<usize> {

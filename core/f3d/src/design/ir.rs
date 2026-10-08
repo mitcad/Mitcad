@@ -239,6 +239,21 @@ record! {
         /// Transform relative to the parent component (nested occurrences;
         /// the full-path composition is not verified).
         "local_transform" => local_transform: Mat4,
+        /// Where the items of the timeline put the occurrence (its path's
+        /// placement in the root component after each, mitcad#81), in
+        /// timeline order: the item that made it first.
+        "placements" => placements: Vec<PlacementStep>,
+    }
+}
+
+record! {
+    /// An occurrence's placement after an item that placed it (mitcad#81).
+    pub struct PlacementStep {
+        /// The item's timeline index (absent: not a timeline item).
+        "index" => index: i64,
+        "object_id" => object_id: u64,
+        /// The occurrence path's placement in the root component (cm).
+        "transform" => transform: Mat4,
     }
 }
 
@@ -332,6 +347,9 @@ record! {
         "class" => class: String,
         "class_version" => class_version: u32,
         "object_id" => object_id: u64,
+        /// The component that owns the item (`components[]._f3d.object_id`):
+        /// its feature, sketch or construction geometry (mitcad#37).
+        "component" => component: u64,
         /// Default name base (`Extrude`); display name = base + index.
         "base_name" => base_name: String,
         "index" => index: u32,
@@ -362,6 +380,9 @@ record! {
         "extent_b" => extent_b: u32,
         /// +1.0 / -1.0; `null` if not found.
         "direction" => direction: Option<f64>,
+        /// The extrusion's direction in the component's coordinates (unit
+        /// vector), where it is decoded.
+        "direction_vector" => direction_vector: Vec3,
     }
 }
 
@@ -905,6 +926,42 @@ record! {
         "loops" => loops: Vec<Value>,
         /// Topology: an edge's or loop's coedges.
         "coedges" => coedges: Vec<Value>,
+        /// Stream decoder: the entity's name in the file.
+        "_f3d" => f3d: FingerprintF3d,
+    }
+}
+
+/// One name the file gives a B-rep entity: a tag the operation that made it
+/// chose, and the operations that made and changed it (their ASM state
+/// numbers; a negative number is stored as it is, its meaning is open).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntityName {
+    pub tag: String,
+    /// A number stored with the tag (0 on faces; meaning open).
+    pub kind: i64,
+    pub ops: Vec<i64>,
+}
+
+record! {
+    /// Stream decoder data of a B-rep reference (a feature input): the
+    /// entity named as the file names it (a recipe of names), and what the
+    /// ASM history gave for it.
+    pub struct FingerprintF3d {
+        /// The reference object (`5662F619`, `9716F783`).
+        "object_id" => object_id: u64,
+        /// The recipe's type: `edge`, `face`, `bounded_face`, `body`,
+        /// `vertex`.
+        "recipe" => recipe: String,
+        /// The entities of the recipe, each by its names: an edge's two
+        /// faces, then the faces at its ends; a face, then its neighbours
+        /// (`bounded_face`); a body.
+        "entities" => entities: Vec<Vec<EntityName>>,
+        /// How the entity was found in the ASM history (`state N`), or why
+        /// it was not.
+        "found" => found: String,
+        /// A body found: the middle points of some of its edges (cm), by
+        /// which the import finds it among its own bodies.
+        "edge_points" => edge_points: Vec<Vec3>,
     }
 }
 

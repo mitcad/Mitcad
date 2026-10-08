@@ -13,6 +13,12 @@
 #     comes in as its stored shape; the import report's counts and text
 #     (mitcad#22), with the parameters made of a spreadsheet and the
 #     expressions translated or kept as FreeCAD's values (mitcad#4).
+#   - An .ipt part through File > Open (mitcad#60): Mitcad's own test part
+#     (a cube and a cylinder, inches, aluminium; test_exchange --write-ipt)
+#     imported in the import process, its report shown: the bodies as base
+#     features, the part's material and units. With MITCAD_IPT_CORPUS (real
+#     part files, never committed) the smallest of them too, its features
+#     replayed with the history and reported.
 #   - With MITCAD_F3D_CORPUS (real .f3d files, never committed): a small
 #     .f3d (MITCAD_F3D_UI_PART, else the corpus' smallest part) opened
 #     through File > Open, imported with its history to its end behind a
@@ -38,6 +44,7 @@
 source "$(dirname "$0")/ui-test-lib.sh"
 
 CLI=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}
+TEST_EXCHANGE=${UI_TEST_EXCHANGE:-$(cd "$(dirname "$UI_APP")/.." && pwd)/core/test_exchange}
 WORK=$(mktemp -d /tmp/mitcad-ui-import.XXXXXX)
 trap 'ui_cleanup; rm -rf "$WORK"' EXIT
 
@@ -326,6 +333,45 @@ ui_step "close the report (Enter)"         ui_key Return
 ui_focus_main
 ui_expect_new "Imported history.FCStd: 1 bodies" "a new document with the Body's body"
 expect_title "history* - Mitcad"
+
+echo "--- .ipt part (mitcad#60)"
+"$TEST_EXCHANGE" --write-ipt "$WORK/part.ipt" || ui_fail "cannot write the test part"
+ui_mark
+ui_step "open the part (Ctrl+O)"           open_fcstd "$WORK/part.ipt"
+ui_expect_new "Import of part.ipt started" "the import runs in its own process"
+ui_expect_new "Import report: part.ipt: 2 bodies (2 solids, 2 valid, 0 sheets, 0 not built)" \
+  "the cube and the cylinder came in as solids" 120
+ui_expect_new "Import report summary: part.ipt (part number MITCAD-TEST-1) 2 bodies stored in the file, each a base feature: 2 solids, 2 valid, 0 sheets, 0 not built. Material: Aluminum (Mitcad's aluminum). Units: in. Saved by release Mitcad test writer." \
+  "the report: the bodies, the part's material and units"
+ui_focus_dialog '^Import Report$'
+ui_step "close the report (Enter)"         ui_key Return
+ui_focus_main
+ui_expect_new "Imported part.ipt: 2 bodies" "a new document with the part's bodies"
+expect_title "part* - Mitcad"
+if [ -n "${MITCAD_IPT_CORPUS:-}" ]; then
+  REAL_IPT=$(IFS=:; find $MITCAD_IPT_CORPUS -iname '*.ipt' -printf '%s %p\n' 2> /dev/null | sort -n | head -1 | cut -d' ' -f2-)
+fi
+if [ -n "${REAL_IPT:-}" ]; then
+  REAL_NAME=$(basename "$REAL_IPT")
+  ui_mark
+  ui_step "open a real part (Ctrl+O)"      open_fcstd "$REAL_IPT"
+  ui_expect_new "Import report: $REAL_NAME: " "the real part's report" 300
+  report=$(grep "Import report: $REAL_NAME: " "$UI_LOG" | tail -1)
+  grep -qE ": ([0-9]+) bodies \(([0-9]+) solids, [0-9]+ valid, [0-9]+ sheets, 0 not built\)$" <<< "$report" ||
+    ui_fail "the real part's bodies did not all come in: $report"
+  echo "ok   ${report#*: }"
+  # Its features replayed with the history (mitcad#60, stage 3).
+  features=$(grep "Import report features: $REAL_NAME: " "$UI_LOG" | tail -1)
+  grep -qE ": [0-9]+ parametric, [0-9]+ partial, [0-9]+ fallback, [0-9]+ skipped$" <<< "$features" ||
+    ui_fail "the real part's features were not reported: $features"
+  echo "ok   ${features#*: }"
+  ui_focus_dialog '^Import Report$'
+  ui_step "close the report (Enter)"       ui_key Return
+  ui_focus_main
+  ui_expect_new "Imported $REAL_NAME:" "a new document with the real part's bodies"
+else
+  echo "skip a real .ipt part: MITCAD_IPT_CORPUS is not set"
+fi
 
 if [ -n "${MITCAD_F3D_CORPUS:-}" ] && [ -d "${MITCAD_F3D_CORPUS:-}" ]; then
   echo "--- .f3d import ($MITCAD_F3D_CORPUS)"

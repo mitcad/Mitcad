@@ -107,6 +107,15 @@ pub struct CompareOptions {
     /// The STEP body to compare with, by name or 0-based index; all bodies
     /// of the file when None.
     pub step_body: Option<String>,
+    /// How long the comparison may take, s: the boolean differences are
+    /// missing when they do not finish by then, and fewer points are
+    /// sampled. None: no limit.
+    pub seconds: Option<f64>,
+    /// Leave out the boolean differences when every point was sampled and
+    /// none lies farther than this from the other side, mm (0: never):
+    /// of nearly coincident bodies they are slow and say little more
+    /// (mitcad#69).
+    pub booleans_above: f64,
 }
 
 impl Default for CompareOptions {
@@ -115,6 +124,8 @@ impl Default for CompareOptions {
             samples: 2000,
             fuzzy: 1e-4,
             step_body: None,
+            seconds: None,
+            booleans_above: 0.0,
         }
     }
 }

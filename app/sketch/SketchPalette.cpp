@@ -9,6 +9,8 @@
 #include <QAbstractButton>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QStyle>
+#include <QStyleOptionButton>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QtLogging>
@@ -194,7 +196,13 @@ void SketchPalette::refresh() {
 
 void SketchPalette::logLayout() const {
   for (const QCheckBox* box : {m_construction, m_grid, m_dimensions, m_constraints, m_profiles, m_hideAbove}) {
-    const QPoint center = GlassCard::mapToHost(box, box->rect().center());
+    // The box's indicator: a click there toggles it whatever the width of
+    // the label, which a click on the widget's middle may miss.
+    QStyleOptionButton option;
+    option.initFrom(box);
+    option.text = box->text();
+    const QRect indicator = box->style()->subElementRect(QStyle::SE_CheckBoxIndicator, &option, box);
+    const QPoint center = GlassCard::mapToHost(box, indicator.center());
     qDebug().noquote() << QStringLiteral("Palette %1 at %2,%3").arg(box->objectName()).arg(center.x()).arg(center.y());
   }
 }

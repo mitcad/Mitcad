@@ -162,6 +162,22 @@ shipped.
 | linuxdeploy 1-alpha-20251107-1 | `install-appimage-tools.sh`, `~/appimage-tools` | https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage | `c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d` |
 | linuxdeploy-plugin-qt, continuous build of 22 August 2026 | `install-appimage-tools.sh`, `~/appimage-tools` | https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage | `cfc1055b2b9dbc08412b579f20990b7b41a17b61beaa5847dc9477c96c9e9617` |
 | appimagetool 1.9.1 | `install-appimage-tools.sh`, `~/appimage-tools` | https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage | `ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0` |
+| ISPC 1.31.0 (compiles Open Image Denoise) | `build-cycles.sh`, `<prefix>/src` | https://github.com/ispc/ispc/releases/download/v1.31.0/ispc-v1.31.0-linux.tar.gz | `d74089c835e10fd7e2c4b9225ced38b87d1fb53d35c7ceabd48cdf035da11b11` |
+
+`build-cycles.sh --cuda` (mitcad#50) fetches the CUDA compiler's
+components (`cuda_nvcc` 12.9.86, `cuda_cudart` 12.9.79, `cuda_cccl`
+12.9.27 of CUDA 12.9.1) from
+https://developer.download.nvidia.com/compute/cuda/redist/ and checks
+them against the SHA-256 digests NVIDIA lists in `redistrib_12.9.1.json`
+there (pins in `versions.sh`); when no GCC of version 14 or older is
+installed, it unpacks the distribution's `g++-14` packages
+(`apt-get download`). Both are build tools only; see
+[rendering.md](rendering.md#building).
+
+`build-cycles.sh` also builds the render worker's libraries from pinned
+sources (`versions.sh`): Open Image Denoise 2.5.1's source release
+(SHA-256 `e71fd043…c36`) and Cycles at tag v5.2.0 (commit `3b97e190…`);
+see [rendering.md](rendering.md#building). Those are linked; ISPC is not.
 
 linuxdeploy-plugin-qt publishes digests only for its continuous build, so
 the check fails whenever it is rebuilt; update the digest in the script.
@@ -223,6 +239,9 @@ icons, licences incl. `packaging/linux/THIRD-PARTY-NOTICES.txt`), then:
   RUNPATH; its Qt plugin adds the X11/GLX platform, image formats, SVG
   icons and TLS backends. glibc, libstdc++, X11/xcb, OpenGL, fontconfig,
   FreeType and OpenSSL stay the system's.
+- A build with `MITCAD_RENDER` adds the render worker `mitcad-render`
+  with its libraries (and Open Image Denoise's CPU device module) and
+  their licences ([rendering.md](rendering.md#appimage)).
 - ELF files are stripped.
 - appimagetool packs it with the pinned runtime. No AppImage update
   information and no GPG signature: Mitcad's own manifest signature is
@@ -241,8 +260,9 @@ GTK is bundled, so it uses the `xdgdesktopportal` platform theme unless
 
 `tools/appimage-test.sh` (ctest `app.appimage` once the AppImage exists)
 checks that every ELF resolves its libraries inside the AppImage or from
-system folders, runs it with an empty environment, and updates it to
-itself from a locally signed manifest.
+system folders, runs it with an empty environment, renders with its
+render worker when it has one, and updates it to itself from a locally
+signed manifest.
 
 ## Tests
 
@@ -251,7 +271,10 @@ Run in the isolated environments:
 - `ctest --preset dev`: geometry, bridge, model, solver, import,
   `mitcad-cli` scripts (`tools/cli/tests`), SPDX headers, dependency
   licences. `core.vcs` and `cli.remote` use a bare repository in a temp
-  folder and a fake `ssh`; no network; skipped without git.
+  folder and a fake `ssh`; no network; skipped without git. `cli.library`
+  makes a small fastener library with
+  `tools/libraries/make-fastener-library.py` in the build tree (needs git
+  and Python 3; skipped without them).
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` in
   `core/`.
 - `tools/check-dependencies.sh`: `cargo deny` with `core/deny.toml`,
@@ -259,8 +282,11 @@ Run in the isolated environments:
 - Performance: `UI_APP=build/rel/app/mitcad tools/perf-measure.sh
   design.mitcad d3 21 20` on a release build;
   `mitcad-cli info design.mitcad --timings [--result-store <dir>
-  --diagnostics]`. `cli.perf_recompute` and `cli.perf_join_recompute`
-  guard against large slowdowns.
+  --diagnostics]`. `cli.perf_recompute`, `cli.perf_join_recompute` and
+  `cli.perf_holes_recompute` guard against large slowdowns.
+  `mitcad-cli info design.mitcad --names` prints the names of every
+  body's faces and edges, to compare the topology two builds (or one
+  build with and without `MITCAD_NO_FAR_FEATURES=1`) give a design.
 - `tools/repo-growth.sh <work dir> design.mitcad...` measures git
   repository growth of the project formats over 50 saves.
 
@@ -274,14 +300,22 @@ Run in the isolated environments:
 | `MITCAD_TEST_RECOMPUTE_DELAY_MS=n[,job=m...]` | Every feature computed in a job takes n ms longer (`400,undo=800`), to exercise the progress dialog. |
 | `MITCAD_COMPUTE_INLINE=1` | Jobs on the UI thread, for a debugger. |
 | `MITCAD_TEST_OCCT_CRASH=<operation>` | That kernel operation (e.g. `fillet`) crashes like an access violation in OCCT; also in `mitcad-cli`. |
+| `MITCAD_TEST_OCCT_OUT_OF_MEMORY=<operation>` | An allocation in that kernel operation (e.g. `extrude`) fails with `std::bad_alloc`: the operation fails "out of memory" (mitcad#80). |
 | `MITCAD_CHECK_INPUTS=1` | Report operations that modify their input shapes ([architecture](architecture.md#geometry-kernel)). |
+| `MITCAD_NO_FAR_FEATURES=1` | Booleans on perforated bodies work on the whole body and cut a pattern's copies at once ([architecture](architecture.md#geometry-kernel)), for comparisons. |
+| `MITCAD_NO_NEAR_COPIES=1` | A mirror's `combine` joins every image with its body whole, also a near copy of it ([commands.md](../core/model/src/api/commands.md#mirror)), for comparisons. |
 | `MITCAD_RESULT_STORE` | Result store folder; `off` disables it. |
 | `MITCAD_RESULT_STORE_MIN_MS` | Store results that took at least this long (default 100). |
 | `MITCAD_PROJECTS_DIR` | Where New Project creates projects instead of Documents/Mitcad. |
 | `MITCAD_GIT` | git program for remotes (Preferences sets it for the app). |
+| `MITCAD_LIBRARIES_DIR` | Where fetched component libraries are kept (default: `libraries` in the user's local data folder). |
 | `MITCAD_TEST_REMOTE_RETRY_SECONDS` | First push retry delay instead of a minute. |
 | `MITCAD_TEST_REMOTE_CHANGE_CHECK_SECONDS` | Age of the last fetch after which the first change refetches (default two minutes). |
 | `MITCAD_NO_UPDATE_CHECK=1` | No update checks; update test variables: [updates.md](updates.md#tests). |
+| `MITCAD_TEST_LOG_URLS=1` | Addresses the app would open in the browser (a report's issue form) are logged, not opened; the UI test library sets it. |
+| `MITCAD_TEST_CRASH=app\|model-worker\|import-worker\|render-worker` | That process (or the model's worker thread) crashes as an access violation would, for the crash reports' tests ([app/COMMANDS.md](../app/COMMANDS.md#feedback-and-error-reports)). |
+| `MITCAD_CRASH_DIR` | Where crash reports go instead of `crashes` in the local app data (the app sets it for its workers, with `MITCAD_CRASH_PARENT`). |
+| `MITCAD_RENDER_SAMPLES`, `MITCAD_RENDER_TEST_SCENE=1`, `MITCAD_RENDER_WORKER` | The rendered view's samples per pixel; the fixed test scene instead of the document; another render worker than `mitcad-render` next to the app ([rendering.md](rendering.md)). |
 
 App options for tests: `--demo` (a ready block), `--screenshot <png>`,
 `--no-recovery`, `--no-native-dialogs` (Qt's file dialogs, so paths can
@@ -368,6 +402,39 @@ Full corpus runs need a release build: `test_f3d_import --corpus [dir]
 [--reports DIR] [--time-limit S]` ([core/import/README.md](../core/import/README.md))
 and `test_brep_import --corpus` ([core/f3d/CORPUS_REPORT.md](../core/f3d/CORPUS_REPORT.md)).
 
+The corpus runs (`test_f3d_import --corpus` and `--models`,
+`test_brep_import --corpus`, `test_exchange --corpus`, `freecad.corpus`,
+`ipt.corpus`)
+import each file in a child process of its own, several at once, the
+largest files first ([core/tests/parallel_runs.hpp](../core/tests/parallel_runs.hpp)).
+OCCT's global state stays per file, and a crash, a hang or too much memory
+ends only that file, which is reported and counted as failed. The lines
+come in the files' order and the totals are those of a run in one
+process, so outputs compare line by line (apart from the times, and a line
+on standard error that sums up the children).
+
+| Option | Environment | Default |
+|---|---|---|
+| `--jobs N` | `MITCAD_CORPUS_JOBS` | the cores / 4, at most the memory available / the limit; `1`: every file in the one process, as before |
+| `--memory SIZE` | `MITCAD_CORPUS_MEMORY` | `4G` per child: what it may commit (`RLIMIT_DATA` on Linux, inherited by its children; a job object's process memory limit on Windows; not enforced on macOS); `none` |
+| `--file-timeout S` | `MITCAD_CORPUS_TIMEOUT` | `3600` s per child; `0`: none |
+
+A child that cannot allocate fails its file, or hangs in a thread that
+could not allocate until its time is up: keep the limit well above what a
+file needs (the line on standard error gives the largest peak).
+
+### .ipt corpus
+
+Real `.ipt` part files are never committed. `MITCAD_IPT_CORPUS` (a
+`PATH`-like list of folders) points at them; without it the tests skip:
+the ctest `ipt.corpus` (`tools/cli/ipt-corpus.cmake`: every file imported
+with `mitcad-cli import-ipt`, compared with a STEP file of the same part
+next to it, `<name>.stp`, within 1e-6 or the limit the folder's
+`references.tsv` gives the file), `core/ipt/tests/corpus.rs` and a step
+of `ui-import-test.sh` (the smallest file). Files run as the other corpus
+tests do (the options above). See
+[core/import/README.md](../core/import/README.md#ipt-import).
+
 ### FreeCAD reference models and corpus
 
 FreeCAD documents are never committed (they contain B-rep files, and
@@ -392,7 +459,10 @@ in the distro only:
 - `MITCAD_FCSTD_CORPUS` (a `PATH`-like list): ctest `freecad.corpus`
   (`tools/cli/fcstd-corpus.cmake`) imports every file with `mitcad-cli
   import-fcstd`, compares with the dump (`--reference`) and replays
-  variants (`--set`). `core/freecad/tests/sketch_corpus.rs` compares every
+  variants (`--set`), each file in a child process of its own
+  (`mitcad_run_parallel`, the options above through the environment;
+  `MITCAD_CORPUS_JOBS=1` checks them in the script's process).
+  `core/freecad/tests/sketch_corpus.rs` compares every
   sketch with FreeCAD's reading. Example:
   `MITCAD_FCSTD_CORPUS=~/fcstd-models:~/fcstd-examples ctest -R freecad`.
 
@@ -407,14 +477,14 @@ in the distro only:
 
 ### The check script
 
-`tools/check-all.sh [--ui-jobs N] [--ctest-jobs N] [--corpus auto|always|never] [--memory SIZE] [--fresh] [--only STEP,...]`
+`tools/check-all.sh [--ui-jobs N] [--ctest-jobs N] [--corpus auto|always|never] [--corpus-tests N] [--corpus-jobs N] [--memory SIZE] [--fresh] [--only STEP,...]`
 
 | Step | |
 |---|---|
 | configure, build | Compiler warnings fail the check (an incremental build only shows those of what it compiled). |
 | fmt, clippy, deps | clippy's target dir is `build/dev/clippy`, kept across syncs. |
 | ctest | A quarter of the cores, without the corpus group; `cli.perf_*` run serially. |
-| corpus | `f3d.corpus*`, `f3d.models_loft`, `freecad.corpus`, one at a time. `auto` runs them only when `CORPUS_SOURCES` (import, readers, geometry, bridge, build files) or the corpus files differ from every passing run on the machine (`~/.cache/mitcad/corpus-passed`). Changes in `core/model` alone don't trigger it: use `--corpus always` when they may affect imports. |
+| corpus | `f3d.corpus*`, `f3d.models_loft`, `freecad.corpus`, `ipt.corpus`, several at once (`--corpus-tests`), each importing several files at once (`--corpus-jobs`, `MITCAD_CORPUS_JOBS`). By default all their children together fit the run's memory limit less 1G at `MITCAD_CORPUS_MEMORY` (1536M) each, and the cores of a test slot; about the square root of that many tests run at once (12G, 32 cores and three slots: two tests, three files each), each child within 300 s (`MITCAD_CORPUS_TIMEOUT`). Every corpus test is a row of the table. `auto` runs them only when `CORPUS_SOURCES` (import, readers, geometry, bridge, build files, the OCCT port) or the corpus files differ from every passing run on the machine (`~/.cache/mitcad/corpus-passed`). Changes in `core/model` alone don't trigger it: use `--corpus always` when they may affect imports. |
 | `ui-<name>` | Every `tools/ui-*-test.sh`, four at a time, longest first, 30 min limit each (`UI_TIMEOUT`); `ui-compute` runs alone at the end (flaky under load). |
 
 Results: `build/dev/check-timings.tsv` (plus ctest tests ≥ 10 s as
@@ -442,6 +512,18 @@ lint use half the cores unless `CMAKE_BUILD_PARALLEL_LEVEL` /
   checkouts share the cache. MSVC uses `/Z7` (CMP0141) because ccache
   can't cache shared PDBs. Rust is not cached (sccache needs identical
   absolute build paths).
+- OCCT comes from the overlay port in `third_party/vcpkg-ports` (patched,
+  see its README), so vcpkg builds it from source, debug and release, on
+  the first configure of a machine and after every change to the port:
+  about 15 min in the WSL distro and 19 min in the Windows VM (both at
+  once, vcpkg limited to 12 jobs with `VCPKG_MAX_CONCURRENCY`), with build
+  trees of about 5 GB in the distro and 14 GB in the VM. They go to
+  `$VCPKG_ROOT/buildtrees` and `packages` unless
+  `-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=<dir>;--x-packages-root=<dir>`
+  moves them (in the VM, under the checkout's `build` folder, which the
+  sync keeps), and can be deleted afterwards: every later configure, in
+  any checkout, restores OCCT from vcpkg's binary cache (an archive of
+  0.3 GB on Linux, 0.55 GB on Windows). macOS builds it the same way.
 
 ## Code conventions
 
@@ -474,8 +556,24 @@ lint use half the cores unless `CMAKE_BUILD_PARALLEL_LEVEL` /
   unchanged except for its cleared update information;
   `packaging/linux/THIRD-PARTY-NOTICES.txt` names it with the sources.
 - Copied or adapted code keeps its licence and headers in `third_party/`.
+  OCCT is built with patches of Mitcad's (under OCCT's licence, as
+  `SPDX-License-Identifier` lines in them say) through the vcpkg overlay
+  port `third_party/vcpkg-ports/opencascade`, which `vcpkg.json` names, so
+  every platform builds the same OCCT, still as shared libraries; the
+  patches are published with the source, the third-party notices name them,
+  and [its README](../third_party/vcpkg-ports/README.md) gives their origin
+  and licences.
 - If GPL components are ever included, the distribution becomes
   GPL-3.0-or-later; keep such components behind replaceable interfaces.
 - Rust dependencies are checked by cargo-deny (`core/deny.toml`).
+- GPU SDKs (the render worker's GPU devices, mitcad#50,
+  [rendering.md](rendering.md#licences)) are build tools only: nothing of
+  NVIDIA's CUDA toolkit (CUDA EULA), AMD's HIP SDK or Intel's oneAPI
+  compilers is linked statically or shipped; the GPU drivers are loaded
+  at run time (Cycles' cuew and hipew, Apache-2.0), and the kernels
+  shipped are Cycles' code compiled by them. NVIDIA's OptiX SDK headers
+  (a proprietary licence: binary-only, NVIDIA hardware only, recipients
+  bound to its terms) would be compiled in, so Mitcad does not use OptiX
+  (README, FAQ).
 - This is not a legal review; licence combinations are checked before a
   release.

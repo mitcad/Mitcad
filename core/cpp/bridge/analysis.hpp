@@ -72,10 +72,15 @@ AnalysisComparison analysis_compare_step(const ShapeList& bodies, rust::Str path
 
 // .f3d import (T1).
 AnalysisComparison analysis_compare_shapes(const ShapeList& a, const ShapeList& b,
-                                           std::size_t samples, double fuzzy);
+                                           std::size_t samples, double fuzzy, double seconds,
+                                           double booleans_above);
 rust::Vec<double> analysis_boundary_distances(const geometry::Shape& shape,
                                               rust::Slice<const double> points);
 rust::Vec<bool> analysis_points_inside(const geometry::Shape& shape, rust::Slice<const double> points);
+// Where a segment (two x, y, z triples) crosses the shape's faces: pairs of
+// the fraction along it and -1 where it enters the material, +1 where it
+// leaves, in order along it.
+rust::Vec<double> analysis_segment_crossings(const geometry::Shape& shape, rust::Slice<const double> segment);
 
 // The number of distinct faces of the shape.
 std::size_t analysis_face_count(const geometry::Shape& shape);

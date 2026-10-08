@@ -4,6 +4,7 @@
 // Carries face names through an operation's history into its result (see
 // naming.hpp). Internal to the geometry library.
 
+#include <functional>
 #include <memory>
 #include <set>
 #include <string>
@@ -76,6 +77,10 @@ public:
   // The same for an operation that ran on a copy of the input.
   void carry(BRepBuilderAPI_MakeShape& operation, const Shape& input, const InputCopy& copy,
              int source = -1);
+  // The same for an operation that ran on stand-ins of the input's faces
+  // (`stand_in` gives each face's, null for faces it left out).
+  void carry(BRepBuilderAPI_MakeShape& operation, const Shape& input,
+             const std::function<TopoDS_Shape(const TopoDS_Shape&)>& stand_in, int source = -1);
   // The same with the history of an algorithm that is not a MakeShape
   // (BRepTools_History has a constructor for any algorithm with Modified,
   // Generated and IsDeleted). Faces listed in `except` are not carried.
@@ -83,6 +88,12 @@ public:
              const std::vector<int>& except = {});
   void generated(const BRepTools_History& history, const TopoDS_Shape& source,
                  const std::string& name);
+  // Gives a face of the result names, and tags it as coming from an input
+  // (negative for none).
+  void add(const TopoDS_Shape& face, const NameList& names, int source);
+  // Takes over the names and tags of another namer's faces, each at its
+  // image in this result (`image`; the face itself where it is null).
+  void adopt(const FaceNamer& other, const std::function<TopoDS_Shape(const TopoDS_Shape&)>& image);
   // True when the face of the result has a name.
   bool named(const TopoDS_Shape& face) const;
   // True when the face is a face of the result.
@@ -93,6 +104,8 @@ public:
   void finish();
 
   const TopoDS_Shape& result() const { return m_result; }
+  // Marks the shapes it makes as unified (Shape::unified).
+  void set_unified(bool unified) { m_unified = unified; }
   // The whole result with its names.
   ShapePtr shape() const;
   // One shape per solid of the result, in geometric order, with the tags of
@@ -112,6 +125,7 @@ private:
   ShapeMap m_faces;
   std::vector<NameList> m_names;
   std::vector<std::set<int>> m_sources;
+  bool m_unified = false;
 };
 
 } // namespace mitcad::geometry::detail

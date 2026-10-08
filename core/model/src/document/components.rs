@@ -90,7 +90,7 @@ impl DocState {
         }
     }
 
-    fn require_occurrence(&self, uid: OccurrenceUid) -> Result<Occurrence, ModelError> {
+    pub(crate) fn require_occurrence(&self, uid: OccurrenceUid) -> Result<Occurrence, ModelError> {
         self.assembly
             .occurrence(uid)
             .cloned()
@@ -98,7 +98,7 @@ impl DocState {
     }
 
     /// The timeline features before the marker that place an occurrence.
-    fn positioning_features(&self, uid: OccurrenceUid) -> Vec<String> {
+    pub(crate) fn positioning_features(&self, uid: OccurrenceUid) -> Vec<String> {
         self.features[..self.marker]
             .iter()
             .filter(|f| !f.suppressed)
@@ -122,7 +122,11 @@ impl DocState {
             .expect("a free name exists")
     }
 
-    fn check_component_name(&self, name: &str, uid: ComponentUid) -> Result<(), ModelError> {
+    pub(crate) fn check_component_name(
+        &self,
+        name: &str,
+        uid: ComponentUid,
+    ) -> Result<(), ModelError> {
         if name.trim().is_empty() {
             return Err(invalid("the component name is empty"));
         }
@@ -653,11 +657,18 @@ impl<K: Kernel> Document<K> {
                 .occurrences_of(occurrence.component)
                 .next()
                 .is_none();
-            let deleted = if last {
+            let mut deleted = if last {
                 state.delete_components(BTreeSet::from([occurrence.component]))
             } else {
                 Vec::new()
             };
+            // Joints and rigid groups of the occurrences that went go too
+            // (mitcad#55), with what depends on them.
+            let mut orphans = crate::joints::orphaned(state);
+            if !orphans.is_empty() {
+                orphans.extend(state.dependents(&orphans));
+                deleted.extend(state.remove_features(&orphans));
+            }
             Ok((format!("Delete {name}"), deleted))
         })
     }
@@ -725,7 +736,7 @@ impl<K: Kernel> Document<K> {
 
     /// The visible bodies of another design, placed in its coordinates,
     /// as base-feature bodies.
-    fn design_bodies(
+    pub(super) fn design_bodies(
         &self,
         source: &DocState,
         path: &str,
@@ -793,10 +804,12 @@ impl<K: Kernel> Document<K> {
             .assembly
             .components
             .iter()
+            // Library parts are read from their libraries (mitcad#64).
+            .filter(|c| c.library.is_none())
             .filter_map(|c| Some((c.uid, c.link.clone()?)))
             .collect();
         let mut messages = Vec::new();
-        let mut updates = Vec::new();
+        let mut updates = self.library_link_updates(&mut messages)?;
         for (component, link) in links {
             let name = self.state.assembly.name(component);
             let resolved = resolve_path(&link.path, base);
@@ -859,7 +872,7 @@ impl<K: Kernel> Document<K> {
 }
 
 /// Occurrences are placed by rotations and translations only.
-fn check_transform(transform: &Transform) -> Result<(), ModelError> {
+pub(super) fn check_transform(transform: &Transform) -> Result<(), ModelError> {
     if transform.is_finite() && is_rigid(transform) {
         Ok(())
     } else {
@@ -878,7 +891,7 @@ fn resolve_path(path: &str, base: Option<&Path>) -> PathBuf {
 }
 
 /// The file name of a path, for labels.
-fn file_label(path: &str) -> String {
+pub(super) fn file_label(path: &str) -> String {
     Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
@@ -887,6 +900,10 @@ fn file_label(path: &str) -> String {
 }
 
 /// FNV-1a of the text, to tell whether a linked file changed.
+pub(super) fn design_digest(text: &str) -> String {
+    digest(text)
+}
+
 fn digest(text: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in text.bytes() {

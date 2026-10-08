@@ -33,6 +33,8 @@ pub fn datum_kind(def: &FeatureDef) -> Option<DatumKind> {
         FeatureDef::ConstructionPlane(_) => Some(DatumKind::Plane),
         FeatureDef::ConstructionAxis(_) => Some(DatumKind::Axis),
         FeatureDef::ConstructionPoint(_) => Some(DatumKind::Point),
+        // A joint origin's datum is a plane with its frame (mitcad#55).
+        FeatureDef::JointOrigin(_) => Some(DatumKind::Plane),
         _ => None,
     }
 }

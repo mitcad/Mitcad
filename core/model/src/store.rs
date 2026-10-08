@@ -294,6 +294,11 @@ pub(crate) fn storable(def: &FeatureDef) -> bool {
         | FeatureDef::ConstructionPoint(_)
         | FeatureDef::MoveOccurrence(_)
         | FeatureDef::CapturePosition(_) => false,
+        // Joints between occurrences (mitcad#55).
+        FeatureDef::Joint(_)
+        | FeatureDef::AsBuiltJoint(_)
+        | FeatureDef::JointOrigin(_)
+        | FeatureDef::RigidGroup(_) => false,
         FeatureDef::Base(base) => {
             !matches!(base.operation, Operation::NewBody | Operation::NewComponent)
         }

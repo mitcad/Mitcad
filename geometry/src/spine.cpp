@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <stdexcept>
 
@@ -324,15 +325,24 @@ double Spine::locate(const gp_Pln& plane, const gp_Pnt& near) const {
 }
 
 void Spine::add_part(std::vector<TopoDS_Edge>& edges, double from, double to) const {
-  const double tolerance = 1e-9 * std::max(1.0, m_length);
+  // An end nearer than the modelling tolerance to a vertex of the wire is
+  // taken at the vertex: no edge that short can be built.
+  const double snap = std::max(1e-9 * std::max(1.0, m_length), Precision::Confusion());
   for (const Piece& piece : m_pieces) {
-    const double a = std::max(from, piece.start);
-    const double b = std::min(to, piece.start + piece.length);
-    if (b - a <= tolerance) {
+    const double end = piece.start + piece.length;
+    if (from <= piece.start + snap && to >= end - snap) {
+      edges.push_back(piece.edge);
       continue;
     }
-    if (a <= piece.start + tolerance && b >= piece.start + piece.length - tolerance) {
-      edges.push_back(piece.edge);
+    double a = std::max(from, piece.start);
+    double b = std::min(to, end);
+    if (a <= piece.start + snap) {
+      a = piece.start;
+    }
+    if (b >= end - snap) {
+      b = end;
+    }
+    if (b - a <= snap) {
       continue;
     }
     double u = parameter(piece, a - piece.start);
@@ -350,7 +360,7 @@ void Spine::add_part(std::vector<TopoDS_Edge>& edges, double from, double to) co
 
 TopoDS_Wire Spine::part(double from, double to) const {
   const double tolerance = 1e-9 * std::max(1.0, m_length);
-  if (to - from <= tolerance) {
+  if (to - from <= std::max(tolerance, Precision::Confusion())) {
     throw std::invalid_argument("the swept part of the path has no length");
   }
   if (from >= -tolerance && from <= tolerance && to >= m_length - tolerance) {
@@ -365,6 +375,9 @@ TopoDS_Wire Spine::part(double from, double to) const {
     add_part(edges, 0.0, to);
   } else {
     add_part(edges, from, to);
+  }
+  if (edges.empty()) {
+    throw std::invalid_argument("the swept part of the path has no length");
   }
   BRepBuilderAPI_MakeWire wire;
   for (const TopoDS_Edge& edge : edges) {
@@ -560,8 +573,13 @@ TopoDS_Shape oriented_solid(const TopoDS_Shape& shape, const char* what) {
   return solid;
 }
 
-ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeMode& mode,
-                    const NameList& first, const NameList& last, double tolerance) {
+namespace {
+
+// The loop swept along the spine (pipe_shell), with corners of the spine
+// made by `transition`.
+ShapePtr pipe_shell_with(const NamedWire& loop, const TopoDS_Wire& spine, const PipeMode& mode,
+                         const NameList& first, const NameList& last, double tolerance,
+                         BRepBuilderAPI_TransitionMode transition) {
   BRepOffsetAPI_MakePipeShell pipe(spine);
   pipe.SetTolerance(tolerance, tolerance, 1.0e-2);
   switch (mode.kind) {
@@ -575,7 +593,7 @@ ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeM
     pipe.SetMode(mode.fixed);
     break;
   }
-  pipe.SetTransitionMode(BRepBuilderAPI_RightCorner);
+  pipe.SetTransitionMode(transition);
   pipe.Add(loop.wire, false, false);
   detail::build(pipe);
   if (!pipe.IsDone()) {
@@ -591,6 +609,52 @@ ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeM
   name_caps(namer, pipe.FirstShape(), first);
   name_caps(namer, pipe.LastShape(), last);
   return namer.shape();
+}
+
+} // namespace
+
+ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeMode& mode,
+                    const NameList& first, const NameList& last, double tolerance) {
+  int edges = 0;
+  for (TopExp_Explorer e(spine, TopAbs_EDGE); e.More(); e.Next()) {
+    ++edges;
+  }
+  // Corners of the spine are mitred: the sides run on until they meet.
+  // Where that cannot be built (a slight kink, whose mitre is a sliver)
+  // they are rounded instead, else the section turns through them.
+  if (edges < 2) {
+    return pipe_shell_with(loop, spine, mode, first, last, tolerance, BRepBuilderAPI_RightCorner);
+  }
+  ShapePtr mitred;
+  std::exception_ptr error;
+  try {
+    mitred = pipe_shell_with(loop, spine, mode, first, last, tolerance, BRepBuilderAPI_RightCorner);
+    if (is_valid(mitred->occt())) {
+      return mitred;
+    }
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    throw_if_cancelled();
+    error = std::current_exception();
+  }
+  for (const BRepBuilderAPI_TransitionMode transition :
+       {BRepBuilderAPI_RoundCorner, BRepBuilderAPI_Transformed}) {
+    try {
+      ShapePtr other = pipe_shell_with(loop, spine, mode, first, last, tolerance, transition);
+      if (is_valid(other->occt())) {
+        return other;
+      }
+    } catch (const Cancelled&) {
+      throw;
+    } catch (...) {
+      throw_if_cancelled();
+    }
+  }
+  if (error) {
+    std::rethrow_exception(error);
+  }
+  return mitred;
 }
 
 ShapePtr through_sections(const std::vector<TopoDS_Shape>& sections, const NamedWire& named,

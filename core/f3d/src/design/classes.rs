@@ -56,6 +56,7 @@ pub const PROFILE: &str = "0897AF07-EF1B-42E5-BDD9-1C746A085CBC";
 pub const PROFILE_ID: &str = "C46D3EEB-40E1-43FA-83DC-9CB204335417";
 pub const EXTRUDE: &str = "DD405BC2-D673-44F0-8833-5CB2A1C186C7";
 pub const CONSTRUCTION_PLANE: &str = "D869265F-F339-4751-A066-91D30F81FF08";
+pub const CONSTRUCTION_AXIS: &str = "803DEC43-AEA6-42CC-B8D0-F593B5124BDD";
 /// An integer input of a feature (pattern quantities): root list
 /// `[feature]`, then `u32 slot, u8 0, u8 1, u32 value` (T1b).
 pub const INT_HOLDER: &str = "A085449A-5144-4B2B-B455-7F7035A40559";
@@ -63,6 +64,11 @@ pub const INT_HOLDER: &str = "A085449A-5144-4B2B-B455-7F7035A40559";
 /// before its name and entity list (its own meaning is open); the sketch's
 /// light bulb comes before that reference (mitcad#6). Not in [`KNOWN`].
 pub const SKETCH_NAME_ANCHOR: &str = "5275CBA4-3D7D-40DC-A651-1DFF3FC8AFBF";
+/// A sketch offset (mitcad#36): its curves, chains, dimension, constraint
+/// and signed distance ([`super::sketch::offsets`]). Not in [`KNOWN`].
+pub const OFFSET: &str = "AFC07C10-99AC-5304-AE1B-DBEE335B0E43";
+/// One chain of a sketch offset: a root list of curves in chain order.
+pub const OFFSET_CHAIN: &str = "04E598FF-2979-5E41-8BC0-5C435C810909";
 
 /// Classes whose meaning is known, with the reference decoder's names.
 pub const KNOWN: &[(&str, &str)] = &[
@@ -189,12 +195,117 @@ pub const OBJECT_TYPES: &[(&str, &str)] = &[
 
 /// The IR `objectType` of a timeline entity of class `guid`.
 pub fn object_type(guid: &str) -> Option<&'static str> {
-    let name = known_name(guid)?;
-    OBJECT_TYPES
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, t)| *t)
+    let by_name = known_name(guid).and_then(|name| {
+        OBJECT_TYPES
+            .iter()
+            .chain(ITEM_TYPES)
+            .find(|(n, _)| *n == name)
+            .map(|(_, t)| *t)
+    });
+    by_name.or_else(|| {
+        ITEM_CLASSES
+            .iter()
+            .find(|(g, _)| *g == guid)
+            .map(|(_, t)| *t)
+    })
 }
+
+/// Timeline items the import names without translating them
+/// (mitcad#43), by the decoder's type name: the IR `objectType`. Their
+/// own data is not decoded; the import says what they do and why they are
+/// left out.
+pub const ITEM_TYPES: &[(&str, &str)] = &[
+    // Assembly items, which place occurrences or relate them.
+    ("PlaceComponentInstance", "ComponentInsert"),
+    ("FastenerFeature", "Fastener"),
+    ("CopyPasteFeature", "CopyPasteOccurrence"),
+    ("DerivedInstanceFeature", "DerivedInstance"),
+    ("GeometricRelationshipFeature", "GeometricRelationship"),
+    ("Feature(62E501B2)", "AssemblyRelationship"),
+    ("SnapshotFeature", "Snapshot"),
+    ("ContextFeature", "Context"),
+    // Items that move or copy bodies between components.
+    ("ComponentFromBodiesFeature", "ComponentFromBodies"),
+    ("CutPasteBodiesFeature", "CopyPasteBodies"),
+    ("MoveFaceFeature", "MoveFaceFeature"),
+];
+
+/// Timeline item classes beyond [`KNOWN`] (mitcad#43), with their IR
+/// `objectType`. Not in [`KNOWN`], whose classes count as known bytes in
+/// the coverage table: only the item's tail is decoded.
+pub const ITEM_CLASSES: &[(&str, &str)] = &[
+    // The item of a new or placed occurrence (no name of its own; the
+    // second one belongs to an electronics design).
+    (OCCURRENCE_ITEM, "Occurrence"),
+    ("8DBAF917-44EA-4D28-8410-201D9454C98B", "Occurrence"),
+    // Patterns of occurrences: inputs and copies are occurrences.
+    (
+        "E8816367-E309-4C27-A220-7862EE1A3498",
+        "RectangularOccurrencePattern",
+    ),
+    (
+        "85B1FC69-B27E-45F0-A531-385861034644",
+        "CircularOccurrencePattern",
+    ),
+    ("21E03EC1-0E53-406D-A852-6D088D4D1E95", "GroundOccurrence"),
+    ("71BBEDD5-81F8-4585-816B-05908C207204", "MirrorComponent"),
+    ("428956BD-1956-4BAF-A4F8-D01D0C465FF1", "DerivedContext"),
+    (GROUP, "Group"),
+    ("0EE4A83E-464B-4235-A62F-984F15834C27", "Canvas"),
+    ("5F40832C-61AA-4A05-95B1-EFA0BA483138", "ConstructionPoint"),
+    // Modelling features.
+    ("B6678572-C095-4DD1-9348-614677DD0B4A", "LoftFeature"),
+    ("F4163A07-9E71-4C46-BD92-ACE5B5B40BED", "DraftFeature"),
+    ("6AA4C36C-52A2-48D2-A062-69FE123B84D1", "CylinderFeature"),
+    ("04A353F2-AA37-4163-9D4D-A07A7AA9AFA5", "SphereFeature"),
+    ("C3A9ECCE-7D25-4432-A645-3A0D9687F22A", "EmbossFeature"),
+    // Sheet metal flanges (the base names are those of the flange types).
+    ("7AFA0A65-B53C-472C-ACA4-5C7C0A65001C", "FlangeFeature"),
+    ("B0EEF272-DF39-419E-905C-38FDB5032817", "PCBFeature"),
+    ("99F6967E-ED35-4222-B906-5CCF0AC70B53", "MeshFeature"),
+];
+
+/// The timeline item of a new or placed occurrence: the base class of
+/// component inserts, fasteners, pasted and derived occurrences.
+pub const OCCURRENCE_ITEM: &str = "54F9ACE8-B5B8-4A6E-B582-64F629511DE4";
+/// Refers to an occurrence (its first [`OCCURRENCE`] reference) and the
+/// item that made it.
+pub const OCCURRENCE_REF: &str = "2D6E13A1-BBEF-4FB3-9277-00D99F634136";
+/// A timeline group: `u32 n`, `n` references to its items (which follow
+/// it in the timeline), `str16 name` (empty for some).
+pub const GROUP: &str = "A917FE80-93D6-45AD-B741-93BB1ACA5E61";
+
+/// A component's list of its timeline items (mitcad#37): it refers to the
+/// component's [`FEATURE_MANAGER`] and to every item the component owns
+/// (features, sketches, construction geometry and the occurrences placed
+/// in it). Not in [`KNOWN`].
+pub const FEATURE_LIST: &str = "3A6D1E62-99F8-4E32-BAAA-DBA0A2CFB27C";
+
+/// Feature input naming bodies (`9716F783`): refers to a body recipe
+/// ([`super::recipe`]).
+pub const BODY_REF: &str = "9716F783-676D-42E0-93F9-EBF273E7C035";
+/// Feature input: a body, or a fillet's or chamfer's edge set (in an item's
+/// input list it comes before the edges and parameters of its set).
+pub const BODY_INPUT: &str = "2CA5A1CD-C99B-4C9B-91AF-57989148E841";
+/// A thread: a timeline item, or a tapped hole's sub-item (mitcad#35).
+pub const THREAD: &str = "584D9526-EF22-4F6F-9FE1-5FCF1F3CE575";
+
+// Sweeps, pipes and lofts (mitcad#34). Their paths, rails and sections
+// are [`BODY_INPUT`] lists (`u32 n | n refs` after the root part) of
+// entity inputs ([`ENTITY_REF`]) and edge inputs ([`FACE_REF`]).
+
+/// A loft (class version 9; not in [`KNOWN`]).
+pub const LOFT: &str = "B6678572-C095-4DD1-9348-614677DD0B4A";
+/// One section of a loft: `u64 0 | ref loft | ref list input | u32 kind`
+/// (2 a profile, 4 a point, 7 edges).
+pub const LOFT_SECTION: &str = "2F3200BA-FDFB-48C6-97D4-71A4A0D86190";
+/// The sketch curve an entity input names: `u64 secondary id | u64 sketch
+/// | u64 primary id` after its root part, the curve's `crv_secondary_id`,
+/// sketch object and `crv_primary_id`.
+pub const SKETCH_CURVE_ID: &str = "E2CEFD18-D755-4E09-8E7F-953A2F6D43F8";
+/// The sketch point an entity input names: `u64 sketch | u64 point tag`
+/// (the point's `pt_tag`).
+pub const SKETCH_POINT_ID: &str = "D95DBAC0-238B-4429-A0AD-4AE5BEE79ADF";
 
 /// Sketch point classes.
 pub fn is_point_class(guid: Option<&str>) -> bool {
@@ -205,3 +316,52 @@ pub fn is_point_class(guid: Option<&str>) -> bool {
 pub fn is_line_class(guid: Option<&str>) -> bool {
     matches!(guid, Some(SKETCH_LINE | SKETCH_LINE_2 | SKETCH_LINE_3))
 }
+
+// Joints and grounding (mitcad#66). Their own data: [`super::build`]'s
+// `joints` module.
+
+/// A joint item.
+pub const JOINT: &str = "8DFDD543-F823-43AA-BDAF-C638E023F0A0";
+/// An as-built joint item.
+pub const AS_BUILT_JOINT: &str = "AA8B3D40-B67D-4AF1-B3CF-E1E00279B5F0";
+/// A joint origin.
+pub const JOINT_ORIGIN: &str = "02E8AA49-08B8-439C-A8C7-221BE20143D8";
+/// A ground item: grounds the occurrence its placement names.
+pub const GROUND_OCCURRENCE: &str = "21E03EC1-0E53-406D-A852-6D088D4D1E95";
+/// A joint's or as-built joint's state: the occurrences it relates, its
+/// motion's type and current values, an ordinal.
+pub const JOINT_STATE: &str = "7F5A0426-1D2A-4DC4-9F06-58631F69D2F5";
+/// A placement: an occurrence (through a [`CONTEXT_PATH`]) and a frame
+/// in its component.
+pub const PLACEMENT: &str = "2E3AC990-483D-4A55-8662-C064B976A957";
+/// An occurrence path: `u8 | u32 n | n refs` to [`CONTEXT_LEVEL`]s.
+pub const CONTEXT_PATH: &str = "FF415D89-A1DB-44AC-B824-E9A772B86ED4";
+/// One level of an occurrence path: the occurrence's, its document's and
+/// its component's GUIDs, then the GUIDs of the document and component it
+/// sits in.
+pub const CONTEXT_LEVEL: &str = "96CBEA21-17E0-4BCB-BA77-04EA87B47934";
+/// A frame input (an input of [`BODY_INPUT`]'s kind): a matrix and the
+/// key point and direction inputs it was built from. Sketches and joint
+/// geometry use it.
+pub const FRAME_INPUT: &str = "7B6C3C2D-4096-4E6D-B225-699E8C2D9355";
+/// A key point input: a point (component space, cm), a key point code and
+/// the entity it lies on.
+pub const KEY_POINT: &str = "69EE2FA7-BCC7-449E-9CA9-976CEFDFED44";
+/// A direction input: a point, a direction (component space), a code and
+/// the entity it follows.
+pub const DIRECTION_INPUT: &str = "F2A7590D-6654-4674-B393-A2AEF4FEC48A";
+/// A body record: the body object and the feature that made it.
+pub const BODY_RECORD: &str = "D26351F0-5940-4D23-AA20-2C35475A6D9E";
+
+// Captured positions (mitcad#75).
+
+/// A captured position (`SnapshotFeature`): the placements of the
+/// occurrences it captured, each a [`PLACEMENT`] and a matrix.
+pub const SNAPSHOT: &str = "8EE00B00-76BB-49AB-8C25-E837FEC5BDA5";
+
+// Occurrence placements (mitcad#81).
+
+/// Where the items of the timeline put an occurrence: its path (the
+/// [`OCCURRENCE`]s, or the item that made it), the component the path
+/// starts in, and per item that placed it the path's placement.
+pub const OCCURRENCE_PLACEMENTS: &str = "549FBB80-B890-473E-A5C0-415D3D9BF4E6";

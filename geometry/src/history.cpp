@@ -152,6 +152,46 @@ void FaceNamer::carry(BRepBuilderAPI_MakeShape& operation, const Shape& input,
   }
 }
 
+void FaceNamer::carry(BRepBuilderAPI_MakeShape& operation, const Shape& input,
+                      const std::function<TopoDS_Shape(const TopoDS_Shape&)>& stand_in, int source) {
+  for (int i = 0; i < input.face_count(); ++i) {
+    const TopoDS_Shape face = stand_in(input.face(i));
+    if (!face.IsNull()) {
+      carry_face(operation, face, input.face_names(i), source);
+    }
+  }
+}
+
+void FaceNamer::add(const TopoDS_Shape& face, const NameList& names, int source) {
+  const int index = m_faces.FindIndex(face);
+  if (index <= 0) {
+    return;
+  }
+  NameList& own = m_names[static_cast<std::size_t>(index - 1)];
+  own.insert(own.end(), names.begin(), names.end());
+  if (source >= 0) {
+    m_sources[static_cast<std::size_t>(index - 1)].insert(source);
+  }
+}
+
+void FaceNamer::adopt(const FaceNamer& other, const std::function<TopoDS_Shape(const TopoDS_Shape&)>& image) {
+  for (int i = 1; i <= other.m_faces.Extent(); ++i) {
+    const TopoDS_Shape& face = other.m_faces(i);
+    TopoDS_Shape target = image(face);
+    if (target.IsNull()) {
+      target = face;
+    }
+    const int index = m_faces.FindIndex(target);
+    if (index <= 0) {
+      continue;
+    }
+    const auto from = static_cast<std::size_t>(i - 1);
+    const auto to = static_cast<std::size_t>(index - 1);
+    m_names[to].insert(m_names[to].end(), other.m_names[from].begin(), other.m_names[from].end());
+    m_sources[to].insert(other.m_sources[from].begin(), other.m_sources[from].end());
+  }
+}
+
 void FaceNamer::carry_face(BRepBuilderAPI_MakeShape& operation, const TopoDS_Shape& face,
                            const NameList& carried, int source) {
   if (operation.IsDeleted(face)) {
@@ -255,7 +295,11 @@ std::vector<Shape::NamedFace> FaceNamer::named_faces() const {
   return faces;
 }
 
-ShapePtr FaceNamer::shape() const { return std::make_shared<Shape>(m_result, named_faces()); }
+ShapePtr FaceNamer::shape() const {
+  auto shape = std::make_shared<Shape>(m_result, named_faces());
+  shape->set_unified(m_unified);
+  return shape;
+}
 
 std::vector<FaceNamer::Piece> FaceNamer::pieces() const {
   std::vector<std::pair<ShapeKey, Piece>> keyed;
@@ -278,7 +322,9 @@ std::vector<FaceNamer::Piece> FaceNamer::pieces() const {
         own.push_back({f.Current(), names});
       }
     }
-    piece.shape = std::make_shared<Shape>(it.Current(), own);
+    auto shape = std::make_shared<Shape>(it.Current(), own);
+    shape->set_unified(m_unified);
+    piece.shape = std::move(shape);
     // One solid needs no order: its key (a volume integral) is the
     // expensive part on large bodies.
     keyed.emplace_back(solids > 1 ? shape_key(it.Current()) : ShapeKey{}, std::move(piece));

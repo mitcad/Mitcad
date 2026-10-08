@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
+#include <map>
 #include <utility>
 
 #include <QAction>
@@ -37,9 +38,11 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
+#include <BOPTools_AlgoTools3D.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRep_Builder.hxx>
 #include <Bnd_Box.hxx>
+#include <IntTools_Context.hxx>
 #include <BRep_Tool.hxx>
 #include <NCollection_IndexedMap.hxx>
 #include <TopExp.hxx>
@@ -53,8 +56,10 @@
 #include <Precision.hxx>
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Ax3.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Pln.hxx>
+#include <gp_Pnt2d.hxx>
 #include <gp_Trsf.hxx>
 
 #include "AboutDialog.hpp"
@@ -87,6 +92,7 @@
 #include "sketch/SketchPalette.hpp"
 #include "sketch/SketchTool.hpp"
 #include "update/UpdateController.hpp"
+#include "report/ReportCenter.hpp"
 #include "view/ViewController.hpp"
 
 namespace mitcad {
@@ -104,28 +110,6 @@ std::string utf8(const QString& text) { return text.toStdString(); }
 
 TopoDS_Shape occtShape(const std::shared_ptr<geometry::Shape>& shape) {
   return shape ? shape->occt() : TopoDS_Shape();
-}
-
-// A placement of the model's queries: 3 or 4 rows of 4 numbers.
-gp_Trsf trsfOf(const QJsonArray& rows) {
-  const auto at = [&rows](int r, int c) { return rows[r].toArray()[c].toDouble(); };
-  gp_Trsf trsf;
-  if (rows.size() >= 3) {
-    trsf.SetValues(at(0, 0), at(0, 1), at(0, 2), at(0, 3), at(1, 0), at(1, 1), at(1, 2), at(1, 3),
-                   at(2, 0), at(2, 1), at(2, 2), at(2, 3));
-  }
-  return trsf;
-}
-
-bool isIdentity(const QJsonArray& rows) {
-  for (int r = 0; r < std::min(3, static_cast<int>(rows.size())); ++r) {
-    for (int c = 0; c < 4; ++c) {
-      if (std::abs(rows[r].toArray()[c].toDouble() - (r == c ? 1.0 : 0.0)) > 1e-12) {
-        return false;
-      }
-    }
-  }
-  return true;
 }
 
 QString pathOf(const QJsonValue& uids) {
@@ -223,6 +207,9 @@ MainWindow::MainWindow(bool demo, QWidget* parent)
   connect(m_viewer, &OcctViewer::glInitialized, this, [this](const QString& renderer) {
     m_rendererLabel->setText(tr("OpenGL: %1").arg(renderer));
     qInfo().noquote() << "OpenGL renderer:" << renderer;
+    if (m_reports != nullptr) {
+      m_reports->setGraphics(renderer, m_viewer->glVersion());
+    }
   });
   connect(m_viewer, &OcctViewer::glFailed, this, &MainWindow::showError);
   // Picks arrive while the view is painting; react afterwards.
@@ -230,11 +217,23 @@ MainWindow::MainWindow(bool demo, QWidget* parent)
   connect(m_viewer, &OcctViewer::contextMenuRequested, this, &MainWindow::showContextMenu,
           Qt::QueuedConnection);
   connect(m_viewer, &OcctViewer::viewChanged, this, &MainWindow::logBodyPlaces);
+  // Components the joints move are dragged in the view (mitcad#55).
+  setUpOccurrenceDrag();
 
   m_sketch = new sketch::SketchController(*this, *m_viewer, this);
   connect(m_sketch, &sketch::SketchController::toolChanged, this, [this] { updateIdleView(); });
 
   m_registry = new CommandRegistry(this);
+  // Help > Send Feedback and the error reports (mitcad#61, mitcad#62).
+  m_reports = new ReportCenter(
+      *this,
+      {[this] { return modelBusy() || !m_import.isNull(); },
+       [this](std::function<void()> call) {
+         runJob(QStringLiteral("test crash"), tr("Crashing for a test"), [call](ModelJob&) { call(); },
+                JobLog::Always);
+       },
+       [this](const QString& message) { showHint(message); }},
+      this);
   // Automatic updates (mitcad#9): Help > Check for Updates and the notice.
   m_updates = new UpdateController(
       *this, {[this] { return close(); }, [this](std::function<void()> call) { whenIdle(this, std::move(call)); }},
@@ -280,6 +279,7 @@ MainWindow::MainWindow(bool demo, QWidget* parent)
   TestSync::singleShot(500, this, [this] { m_ribbon->logLayout(); });
   m_updates->startUp();
   m_remote->startUp();
+  m_reports->startUp();
   if (m_header != nullptr) {
     // The update and remote notices under the ribbon, not above the title
     // bar row, which the window's content extends under.
@@ -328,27 +328,43 @@ void MainWindow::registerCommands() {
   // into CREATE after New Component.
   registerCreateCommands(*m_registry, *this, sketch);
   registerModifyCommands(*m_registry, *this);
+  registerAssembleCommands(*m_registry, *this);
   registerConstructCommands(*m_registry, *this);
   registerInspectCommands(*m_registry, *this, this, [this] { return m_selection; });
   registerSketchCommands(*m_registry, *m_sketch);
 
-  CommandDef removeSection =
+  CommandDef removeDef =
       action("inspect.remove_section", tr("Remove Section Analysis"), "section-analysis",
-             CommandDef::Mode::Model, [this] { showSection(QJsonValue()); });
-  removeSection.tooltip = tr("Shows the bodies whole again");
-  removeSection.tab = QStringLiteral("SOLID");
-  removeSection.group = QStringLiteral("INSPECT");
-  removeSection.keywords = {QStringLiteral("section"), QStringLiteral("clip")};
-  removeSection.enabled = [this] { return !m_section.isNull(); };
-  m_registry->add(removeSection);
+             CommandDef::Mode::Model, [this] { removeSection(); });
+  removeDef.tooltip = tr("Hides the section analysis shown: the bodies whole again");
+  removeDef.tab = QStringLiteral("SOLID");
+  removeDef.group = QStringLiteral("INSPECT");
+  removeDef.keywords = {QStringLiteral("section"), QStringLiteral("clip")};
+  removeDef.enabled = [this] { return !m_snapshot.shownAnalysis().isEmpty(); };
+  m_registry->add(removeDef);
   CommandDef flip = action("inspect.flip_section", tr("Flip Section Analysis"), "flip",
                            CommandDef::Mode::Model, [this] { flipSection(); });
   flip.tooltip = tr("Shows the other side of the section");
   flip.tab = QStringLiteral("SOLID");
   flip.group = QStringLiteral("INSPECT");
   flip.keywords = {QStringLiteral("section"), QStringLiteral("clip"), QStringLiteral("other side")};
-  flip.enabled = [this] { return !m_section.isNull(); };
+  flip.enabled = [this] { return !m_snapshot.shownAnalysis().isEmpty(); };
   m_registry->add(flip);
+  // ASSEMBLE (mitcad#55): after Drive Joint.
+  CommandDef animate = action("assemble.animate_joint", tr("Animate Joint"), "drive-joint",
+                              CommandDef::Mode::Model, [this] { animateSelectedJoint(); });
+  animate.tooltip = tr("Shows a joint's free motion through its range: the joint selected in the "
+                       "timeline, else the newest; nothing changes");
+  animate.tab = QStringLiteral("SOLID");
+  animate.group = QStringLiteral("ASSEMBLE");
+  animate.keywords = {QStringLiteral("motion"), QStringLiteral("play"), QStringLiteral("simulate")};
+  animate.enabled = [this] {
+    const QJsonArray joints = m_snapshot.joints.value(QStringLiteral("joints")).toArray();
+    return std::any_of(joints.begin(), joints.end(), [](const QJsonValue& joint) {
+      return !joint.toObject().value(QStringLiteral("motions")).toArray().isEmpty();
+    });
+  };
+  m_registry->add(animate);
 
   CommandDef finish = action("sketch.finish", tr("Finish Sketch"), "finish-sketch",
                              CommandDef::Mode::Sketch, [this] { finishSketch(); });
@@ -405,6 +421,8 @@ void MainWindow::registerCommands() {
   registerFileCommands();
   // New Project, Save Version, Start Version History (P12d).
   registerVersionCommands();
+  // Component libraries (mitcad#64, mitcad#63).
+  registerLibraryCommands();
 
   CommandDef search = action("tools.search", tr("Command Search"), "search", CommandDef::Mode::Any,
                              [this] { openCommandSearch(); });
@@ -426,6 +444,16 @@ void MainWindow::registerCommands() {
   parameters.keywords = {QStringLiteral("parameters"), QStringLiteral("user parameter"),
                          QStringLiteral("expression"), QStringLiteral("fx")};
   m_registry->add(parameters);
+  // Appearances with their physically based parameters (mitcad#46).
+  CommandDef appearances = action("solid.appearances", tr("Edit Appearances..."), "appearance",
+                                  CommandDef::Mode::Model, [this] { m_controller->openAppearances(appearanceTargets()); });
+  appearances.tooltip = tr("The appearance library and this design's own appearances: colour, metalness, "
+                           "roughness, transmission and more; assigns one to the selected bodies");
+  appearances.tab = QStringLiteral("SOLID");
+  appearances.group = QStringLiteral("MODIFY");
+  appearances.keywords = {QStringLiteral("material"), QStringLiteral("colour"), QStringLiteral("color"),
+                          QStringLiteral("render"), QStringLiteral("glass"), QStringLiteral("metal")};
+  m_registry->add(appearances);
 
   // The caches of computed results (P7d).
   CommandDef diagnostics = action("help.diagnostics", tr("Diagnostics..."), "measure", CommandDef::Mode::Any,
@@ -438,6 +466,8 @@ void MainWindow::registerCommands() {
   m_viewController->showDiagnostics = [this] { showDiagnostics(); };
   // Help > Check for Updates (mitcad#9).
   m_updates->registerCommands(*m_registry);
+  // Help > Send Feedback (mitcad#61).
+  m_reports->registerCommands(*m_registry);
 }
 
 void MainWindow::showDiagnostics() {
@@ -474,6 +504,8 @@ void MainWindow::createMenus() {
   QMenu* tools = menuBar()->addMenu(tr("&Tools"));
   tools->addAction(m_registry->action(QStringLiteral("tools.search")));
   tools->addAction(m_registry->action(QStringLiteral("tools.shortcuts")));
+  // Component libraries (mitcad#64, mitcad#63).
+  createLibraryMenu(tools);
 #ifdef Q_OS_MACOS
   createWindowMenu();
 #endif
@@ -481,6 +513,7 @@ void MainWindow::createMenus() {
   m_viewController->createMenus(view, tools, help);
   help->addAction(m_registry->action(QStringLiteral("help.diagnostics")));
   help->addAction(m_registry->action(QStringLiteral("help.check_updates")));
+  help->addAction(m_registry->action(QStringLiteral("help.send_feedback")));
   // About and About Qt: on macOS Qt moves them to the application menu
   // (AboutRole, AboutQtRole); elsewhere they end the Help menu.
 #ifndef Q_OS_MACOS
@@ -824,6 +857,9 @@ void MainWindow::trigger(const QString& id) {
   if (def == nullptr || !isAvailable(*def)) {
     return;
   }
+  if (m_reports != nullptr) {
+    m_reports->noteAction(QStringLiteral("command ") + id);
+  }
   if (def->kind == CommandDef::Kind::Feature) {
     startFeatureCommand(*def);
   } else if (def->run) {
@@ -831,7 +867,8 @@ void MainWindow::trigger(const QString& id) {
   }
 }
 
-void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editUid) {
+void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editUid,
+                                     const QJsonObject& analysis) {
   if (m_mode == Mode::Sketch && def.mode == CommandDef::Mode::Model) {
     // A feature from sketch mode (Extrude): the sketch is finished first,
     // its selected profiles go to the feature.
@@ -854,10 +891,13 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
     m_sketch->stopTool();
     m_sketch->setPaused(true);
   }
-  const Selection preselection = editUid.isEmpty() ? m_selection : Selection();
+  const Selection preselection = editUid.isEmpty() && analysis.isEmpty() ? m_selection : Selection();
   setSelection({});
   m_mode = Mode::Command;
   auto* session = new CommandSession(def, *this, editUid, this);
+  if (!analysis.isEmpty()) {
+    session->editAnalysis(analysis);
+  }
   QString error;
   if (!session->start(preselection, error)) {
     delete session;
@@ -929,6 +969,19 @@ void MainWindow::editFeature(const QString& uid) {
     return;
   }
   startFeatureCommand(*def, uid);
+}
+
+void MainWindow::editAnalysis(const QString& name) {
+  if (m_mode != Mode::Idle) {
+    return;
+  }
+  const QJsonObject analysis = m_snapshot.analysis(name);
+  const CommandDef* def = m_registry->find(QStringLiteral("inspect.section"));
+  if (analysis.isEmpty() || def == nullptr ||
+      analysis.value(QStringLiteral("type")).toString() != QStringLiteral("section")) {
+    return;
+  }
+  startFeatureCommand(*def, QString(), analysis);
 }
 
 void MainWindow::editInstead(const QString& uid, const QString& input) {
@@ -1066,6 +1119,9 @@ bool MainWindow::runCommand(const QJsonObject& cmd, QJsonObject* result) {
   QElapsedTimer timer;
   timer.start();
   QJsonObject answer;
+  if (m_reports != nullptr) {
+    m_reports->noteAction(QStringLiteral("model ") + name);
+  }
   try {
     answer = command(cmd);
   } catch (const ComputationCancelled& cancelled) {
@@ -1078,6 +1134,17 @@ bool MainWindow::runCommand(const QJsonObject& cmd, QJsonObject* result) {
   } catch (const rust::Error& error) {
     m_lastError = errorText(error);
     m_lastCancelled = false;
+    showError(m_lastError);
+    return false;
+  } catch (const ModelBusy&) {
+    throw;
+  } catch (const std::exception& error) {
+    // Not the model's answer: an internal error (mitcad#62).
+    m_lastError = errorText(error);
+    m_lastCancelled = false;
+    if (m_reports != nullptr) {
+      m_reports->internalError(QStringLiteral("model command %1").arg(name), m_lastError);
+    }
     showError(m_lastError);
     return false;
   }
@@ -1093,16 +1160,31 @@ bool MainWindow::runCommands(const QJsonArray& commands, const QString& label) {
 }
 
 void MainWindow::showSection(const QJsonValue& plane) {
+  if (setSection(plane)) {
+    showBodies();
+    updateActions();
+  }
+}
+
+bool MainWindow::setSection(const QJsonValue& plane) {
   if (plane == m_section) {
-    return;
+    return false;
   }
   m_section = plane;
-  showBodies();
-  updateActions();
   qDebug().noquote() << (plane.isNull() ? QStringLiteral("Section analysis off")
                                         : QStringLiteral("Section analysis at %1")
                                               .arg(QString::fromUtf8(compactJson(
                                                   QJsonObject{{QStringLiteral("plane"), plane}}))));
+  return true;
+}
+
+void MainWindow::followAnalyses() {
+  if (m_session && m_session->def().inspect) {
+    return; // the panel shows its own section until it closes
+  }
+  // The shown analysis' plane at the marker; none when its plane is gone.
+  const QJsonValue plane = m_snapshot.shownAnalysis().value(QStringLiteral("section"));
+  setSection(plane.isObject() ? plane : QJsonValue());
 }
 
 QJsonValue MainWindow::cutPlane() const {
@@ -1116,45 +1198,76 @@ QJsonValue MainWindow::cutPlane() const {
 }
 
 void MainWindow::showSectionCaps(const std::vector<BodyDisplay>& bodies) {
-  // Hide Above Sketch shows no caps: the sketch's own face is in its plane.
-  if (m_section.isNull() || cutPlane() != m_section) {
-    m_viewer->setSectionCaps(TopoDS_Shape());
+  const QJsonValue cut = cutPlane();
+  if (cut.isNull()) {
+    m_viewer->setSectionCaps(TopoDS_Shape(), gp_Ax3());
     m_loggedCaps.clear();
     return;
   }
-  // The section plane in design coordinates (Section Analysis gives it as
-  // an origin and a normal).
-  const QJsonObject plane = m_section.toObject();
+  // The plane in design coordinates (Section Analysis gives it as an origin
+  // and a normal; Hide Above Sketch's is the sketch's, whose axes the
+  // hatch follows).
+  const QJsonObject plane = cut.toObject();
   const gp_Pnt origin = pointOf(plane.value(QStringLiteral("origin")));
   const gp_Vec normal = vectorOf(plane.value(QStringLiteral("normal")));
   if (normal.Magnitude() < 1e-12) {
-    m_viewer->setSectionCaps(TopoDS_Shape());
+    m_viewer->setSectionCaps(TopoDS_Shape(), gp_Ax3());
     return;
   }
   const gp_Dir n(normal);
-  // The caps: the clipped bodies' faces that lie in the plane.
-  TopoDS_Compound caps;
-  BRep_Builder builder;
-  builder.MakeCompound(caps);
-  int count = 0;
-  for (const BodyDisplay& body : bodies) {
-    for (TopExp_Explorer faces(body.shape->occt(), TopAbs_FACE); faces.More(); faces.Next()) {
+  gp_Ax3 axes(origin, n);
+  if (cut != m_section) {
+    const geometry::Frame& frame = m_sketch->model().frame;
+    axes = gp_Ax3(frame.origin, frame.normal(), frame.x_axis);
+  }
+  // The faces of a body that lie in the plane, in the body's coordinates.
+  const auto inPlane = [&](const TopoDS_Shape& shape, const TopLoc_Location& placement) {
+    std::vector<TopoDS_Face> found;
+    for (TopExp_Explorer faces(shape, TopAbs_FACE); faces.More(); faces.Next()) {
       const TopoDS_Face& face = TopoDS::Face(faces.Current());
       const BRepAdaptor_Surface surface(face);
       if (surface.GetType() != GeomAbs_Plane) {
         continue;
       }
       const gp_Pln pln = surface.Plane();
-      const gp_Pnt at = pln.Location().Transformed(body.placement.Transformation());
+      const gp_Pnt at = pln.Location().Transformed(placement.Transformation());
       gp_Dir axis = pln.Axis().Direction();
-      axis.Transform(body.placement.Transformation());
+      axis.Transform(placement.Transformation());
       if (std::abs(axis.Dot(n)) > 1.0 - 1e-9 && std::abs(gp_Vec(origin, at).Dot(gp_Vec(n))) < 1e-6) {
+        found.push_back(face);
+      }
+    }
+    return found;
+  };
+  // The caps: the clipped bodies' faces in the plane, but not those the
+  // whole body has there too (a sketch on a body's face).
+  TopoDS_Compound caps;
+  BRep_Builder builder;
+  builder.MakeCompound(caps);
+  int count = 0;
+  const occ::handle<IntTools_Context> context = new IntTools_Context();
+  for (const BodyDisplay& body : bodies) {
+    const auto whole = idleDocument().body_shape(body.uid);
+    if (whole && whole->occt().IsSame(body.shape->occt())) {
+      continue; // not cut
+    }
+    const std::vector<TopoDS_Face> own = whole ? inPlane(whole->occt(), body.placement)
+                                               : std::vector<TopoDS_Face>();
+    for (const TopoDS_Face& face : inPlane(body.shape->occt(), body.placement)) {
+      gp_Pnt inside;
+      gp_Pnt2d uv;
+      const bool original =
+          !own.empty() && BOPTools_AlgoTools3D::PointInFace(face, inside, uv, context) == 0 &&
+          std::any_of(own.begin(), own.end(), [&](const TopoDS_Face& mine) {
+            return context->IsValidPointForFace(inside, mine, 1e-6);
+          });
+      if (!original) {
         builder.Add(caps, face.Moved(body.placement));
         ++count;
       }
     }
   }
-  m_viewer->setSectionCaps(count > 0 ? TopoDS_Shape(caps) : TopoDS_Shape());
+  m_viewer->setSectionCaps(count > 0 ? TopoDS_Shape(caps) : TopoDS_Shape(), axes);
   const QString logged = QStringLiteral("Section caps: %1 face(s) at %2")
                              .arg(count)
                              .arg(QString::fromUtf8(compactJson(plane)));
@@ -1256,16 +1369,30 @@ void MainWindow::showThreads(const std::vector<BodyDisplay>& bodies) {
 }
 
 void MainWindow::flipSection() {
-  if (m_section.isNull() || !m_section.isObject()) {
+  const QJsonObject shown = m_snapshot.shownAnalysis();
+  if (shown.isEmpty() || !canChangeModel()) {
     return;
   }
-  QJsonObject plane = m_section.toObject();
-  QJsonArray normal;
-  for (const QJsonValue& c : plane.value(QStringLiteral("normal")).toArray()) {
-    normal.append(c.toDouble() == 0.0 ? 0.0 : -c.toDouble());
+  // Its definition with the other side.
+  QJsonObject def = shown;
+  for (const char* key : {"name", "visible", "section", "error"}) {
+    def.remove(QLatin1String(key));
   }
-  plane.insert(QStringLiteral("normal"), normal);
-  showSection(plane);
+  def.insert(QStringLiteral("flip"), !shown.value(QStringLiteral("flip")).toBool());
+  runModelCommand({{QStringLiteral("cmd"), QStringLiteral("edit_analysis")},
+                   {QStringLiteral("name"), shown.value(QStringLiteral("name"))},
+                   {QStringLiteral("def"), def}});
+}
+
+void MainWindow::removeSection() {
+  const QString name = m_snapshot.shownAnalysis().value(QStringLiteral("name")).toString();
+  if (name.isEmpty() || !canChangeModel()) {
+    return;
+  }
+  // Hidden, not deleted: it stays in the browser's Analysis folder.
+  runModelCommand({{QStringLiteral("cmd"), QStringLiteral("set_analysis_visible")},
+                   {QStringLiteral("name"), name},
+                   {QStringLiteral("visible"), false}});
 }
 
 TopoDS_Shape MainWindow::analysisShape(const QJsonObject& request) const {
@@ -1484,6 +1611,8 @@ void MainWindow::refreshScene() {
     qWarning().noquote() << "Document structure not read:" << errorText(e);
   }
   snapshot.finish();
+  // The section of the analysis shown (mitcad#41).
+  followAnalyses();
   // The Origin folder and Isolate are the document's (P9).
   m_originShown = m_snapshot.originShown;
   m_isolation = m_snapshot.isolation;
@@ -1495,6 +1624,15 @@ void MainWindow::refreshScene() {
     }
   }
   m_viewer->setHome(home);
+  // The rendered view's light, background, ground and film (mitcad#47).
+  m_viewController->setDocumentName(m_filePath.isEmpty() ? QString() : QFileInfo(m_filePath).completeBaseName());
+  try {
+    m_viewController->setRenderSettings(
+        queryObject({{QStringLiteral("query"), QStringLiteral("render_settings")}}),
+        m_filePath.isEmpty() ? QString() : QFileInfo(m_filePath).absolutePath());
+  } catch (const std::exception& e) {
+    qWarning().noquote() << "Render settings not read:" << errorText(e);
+  }
   m_placements.clear();
   std::function<void(const QVector<DocumentSnapshot::Occurrence>&)> place =
       [this, &place](const QVector<DocumentSnapshot::Occurrence>& occurrences) {
@@ -1572,14 +1710,74 @@ std::vector<BodyDisplay> MainWindow::modelBodies() const {
   // its appearance's colour, and cut by a section analysis' plane or the
   // sketch's (Hide Above Sketch).
   const QJsonValue cut = cutPlane();
-  QHash<QString, QColor> colors;
-  for (const QJsonValue& value : queryArray(QStringLiteral("bodies"))) {
-    const QJsonObject body = value.toObject();
-    const QColor color = appearanceColor(body.value(QStringLiteral("appearance")).toString());
-    if (color.isValid()) {
-      colors.insert(body.value(QStringLiteral("uid")).toString(), color);
+  // Each body's appearance (mitcad#46); an unknown id (an imported one)
+  // shows the default look. Textures with the image files the renderer
+  // reads (mitcad#53).
+  QHash<QString, Appearance> known = appearancesById(appearancesOf(queryArray(QStringLiteral("appearances"))));
+  const QString folder = documentFolder();
+  for (Appearance& appearance : known) {
+    if (appearance.hasTexture) {
+      const QString id = appearance.id;
+      resolveTexture(appearance.texture, folder, [this, id] {
+        try {
+          return QByteArray::fromBase64(queryObject({{QStringLiteral("query"), QStringLiteral("appearance_image")},
+                                                     {QStringLiteral("id"), id}})
+                                            .value(QStringLiteral("data"))
+                                            .toString()
+                                            .toLatin1());
+        } catch (const std::exception&) {
+          return QByteArray();
+        }
+      });
     }
   }
+  QHash<QString, Appearance> looks;
+  // Faces with appearances of their own (mitcad#53): the names they find
+  // at the marker, by appearance.
+  QHash<QString, QVector<QPair<QStringList, QString>>> faceAppearances;
+  for (const QJsonValue& value : queryArray(QStringLiteral("bodies"))) {
+    const QJsonObject body = value.toObject();
+    const QString uid = body.value(QStringLiteral("uid")).toString();
+    const auto appearance = known.constFind(body.value(QStringLiteral("appearance")).toString());
+    if (appearance != known.cend()) {
+      looks.insert(uid, appearance.value());
+    }
+    for (const QJsonValue& face : body.value(QStringLiteral("face_appearances")).toArray()) {
+      QStringList names;
+      for (const QJsonValue& name : face.toObject().value(QStringLiteral("faces")).toArray()) {
+        names << name.toString();
+      }
+      faceAppearances[uid].append({names, face.toObject().value(QStringLiteral("appearance")).toString()});
+    }
+  }
+  // The faces of a shown shape by their names, grouped by appearance (a
+  // face named twice takes the later one).
+  const auto faceLooksOf = [&](const QString& uid, const geometry::Shape& shape) {
+    std::vector<BodyDisplay::FaceLook> faceLooks;
+    std::map<int, QString> byFace;
+    for (const auto& [names, id] : faceAppearances.value(uid)) {
+      for (const QString& name : names) {
+        for (const int face : shape.find_faces(utf8(name))) {
+          byFace[face] = id;
+        }
+      }
+    }
+    std::map<QString, std::vector<int>> byAppearance;
+    for (const auto& [face, id] : byFace) {
+      byAppearance[id].push_back(face);
+    }
+    for (const auto& [id, faces] : byAppearance) {
+      BodyDisplay::FaceLook look;
+      look.faces = faces;
+      // An unknown id: the default look.
+      if (const auto appearance = known.constFind(id); appearance != known.cend()) {
+        look.appearance = appearance.value();
+        look.color = appearance->displayColor;
+      }
+      faceLooks.push_back(std::move(look));
+    }
+    return faceLooks;
+  };
   std::vector<BodyDisplay> bodies;
   for (const QJsonValue& value : queryArray(QStringLiteral("instances"))) {
     const QJsonObject instance = value.toObject();
@@ -1609,7 +1807,13 @@ std::vector<BodyDisplay> MainWindow::modelBodies() const {
     BodyDisplay display;
     display.uid = utf8(uid);
     display.shape = shape;
-    display.color = colors.value(uid);
+    if (const auto look = looks.constFind(uid); look != looks.cend()) {
+      display.color = look->displayColor;
+      display.appearance = look.value();
+    }
+    if (faceAppearances.contains(uid)) {
+      display.faceLooks = faceLooksOf(uid, *shape);
+    }
     if (!isIdentity(rows)) {
       display.placement = TopLoc_Location(trsfOf(rows));
     }
@@ -1617,6 +1821,33 @@ std::vector<BodyDisplay> MainWindow::modelBodies() const {
     bodies.push_back(display);
   }
   return bodies;
+}
+
+QString MainWindow::documentFolder() const {
+  return m_filePath.isEmpty() ? QString() : QFileInfo(m_filePath).absolutePath();
+}
+
+Selection MainWindow::appearanceTargets() const {
+  // Faces get appearances of their own (mitcad#53); bodies, edges and
+  // vertices stand for their bodies.
+  Selection targets;
+  for (const SelectionItem& item : m_selection) {
+    const bool onBody = item.kind == SelectKind::Body || item.kind == SelectKind::Face ||
+                        item.kind == SelectKind::Edge || item.kind == SelectKind::Vertex;
+    if (!onBody || item.owner.isEmpty()) {
+      continue;
+    }
+    SelectionItem target = item;
+    if (item.kind != SelectKind::Face) {
+      target = SelectionItem{SelectKind::Body, item.owner, QString(), QString()};
+    }
+    target.occurrence.clear();
+    target.at.reset();
+    if (!targets.contains(target)) {
+      targets << target;
+    }
+  }
+  return targets;
 }
 
 bool MainWindow::isIsolated(const QString& body, const QString& occurrence) const {
@@ -2239,6 +2470,10 @@ void MainWindow::showError(const QString& message) {
   m_statusLabel->setText(message);
   updateStatusPill(true);
   qWarning().noquote() << message;
+  // A crash in the geometry kernel is an internal error (mitcad#62).
+  if (m_reports != nullptr) {
+    m_reports->errorShown(message);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2493,6 +2728,11 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
       }
       const bool onBody = first.kind == SelectKind::Face || first.kind == SelectKind::Edge ||
                           first.kind == SelectKind::Vertex || first.kind == SelectKind::Body;
+      // Appearances of the bodies selected or picked on (mitcad#46).
+      if (const Selection targets = appearanceTargets(); !targets.isEmpty()) {
+        addCall(QStringLiteral("appearance"), tr("Appearance..."),
+                [this, targets] { m_controller->openAppearances(targets); });
+      }
       // A feature selected as its faces (mitcad#28) has no row of its own.
       if (m_selection.size() == 1 && first.kind != SelectKind::Feature &&
           (onBody || !first.creatingFeature().isEmpty())) {

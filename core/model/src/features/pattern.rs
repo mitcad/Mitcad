@@ -15,7 +15,9 @@
 //!   when that gives the same bodies (no body split apart), which is much
 //!   faster on large bodies. Identical and
 //!   Optimized move the tool the feature left to every element and combine
-//!   them all at once.
+//!   them all at once. Groups of copies whose boxes stay away from the
+//!   bodies' boxes change nothing and are left out of a cut (and of
+//!   Adjust's join), before the copies are united ([`reaching`]).
 //! - Patterns and mirrors of features among the features (patterns of
 //!   patterns, mitcad#4): their originals are repeated at every place the
 //!   pattern put them (its elements, the original's too), so a pattern of
@@ -45,7 +47,7 @@ use super::{
     Operation, References, is_false,
 };
 use crate::ids::{BodyUid, FeatureUid};
-use crate::kernel::{BooleanOp, Kernel};
+use crate::kernel::{BooleanOp, BooleanOutput, BoundingBox, Kernel, KernelError};
 use crate::parameters::ParamId;
 use crate::topo::FaceName;
 use crate::transform::{Instance, Transform, add, cross, scaled, sub};
@@ -112,6 +114,18 @@ pub struct RectangularPatternDef<P = ParamId> {
     pub distance_type: SpacingType,
     #[serde(default, skip_serializing_if = "is_adjust")]
     pub compute: ComputeOption,
+    /// Copies of features act only on the bodies each feature changed
+    /// where the feature has no participants of its own (the `.f3d`
+    /// import's patterns, mitcad#74); by default on the feature's
+    /// participants, every body without them.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub original_bodies: bool,
+    /// Scales the copies (FreeCAD's Scaled transformation, mitcad#59): the
+    /// last element's factor; element e of n is scaled by
+    /// 1 + (factor − 1) · e / (n − 1) about the centre of mass of the first
+    /// object (a feature's tool, a body) carried to the element.
+    #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+    pub scale: Option<P>,
     /// Elements left out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suppressed_elements: Vec<u32>,
@@ -133,6 +147,15 @@ pub struct CircularPatternDef<P = ParamId> {
     pub symmetric: bool,
     #[serde(default, skip_serializing_if = "is_adjust")]
     pub compute: ComputeOption,
+    /// Copies of features act only on the bodies each feature changed
+    /// where the feature has no participants of its own (the `.f3d`
+    /// import's patterns, mitcad#74); by default on the feature's
+    /// participants, every body without them.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub original_bodies: bool,
+    /// Scales the copies, as [`RectangularPatternDef::scale`].
+    #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+    pub scale: Option<P>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suppressed_elements: Vec<u32>,
 }
@@ -161,6 +184,15 @@ pub struct PathPatternDef<P = ParamId> {
     pub symmetric: bool,
     #[serde(default, skip_serializing_if = "is_adjust")]
     pub compute: ComputeOption,
+    /// Copies of features act only on the bodies each feature changed
+    /// where the feature has no participants of its own (the `.f3d`
+    /// import's patterns, mitcad#74); by default on the feature's
+    /// participants, every body without them.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub original_bodies: bool,
+    /// Scales the copies, as [`RectangularPatternDef::scale`].
+    #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+    pub scale: Option<P>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suppressed_elements: Vec<u32>,
 }
@@ -169,6 +201,13 @@ pub struct PathPatternDef<P = ParamId> {
 /// `#[serde(default)]` puts on the value type.
 pub(crate) fn none<T>() -> Option<T> {
     None
+}
+
+fn map_scale<P, Q, E>(
+    scale: &Option<P>,
+    f: &mut dyn FnMut(&str, &P) -> Result<Q, E>,
+) -> Result<Option<Q>, E> {
+    scale.as_ref().map(|p| f("scale", p)).transpose()
 }
 
 fn is_zero(value: &f64) -> bool {
@@ -207,6 +246,8 @@ impl<P> RectangularPatternDef<P> {
             },
             distance_type: self.distance_type,
             compute: self.compute,
+            original_bodies: self.original_bodies,
+            scale: map_scale(&self.scale, f)?,
             suppressed_elements: self.suppressed_elements.clone(),
         })
     }
@@ -227,6 +268,8 @@ impl<P> CircularPatternDef<P> {
             angle: f("angle", &self.angle)?,
             symmetric: self.symmetric,
             compute: self.compute,
+            original_bodies: self.original_bodies,
+            scale: map_scale(&self.scale, f)?,
             suppressed_elements: self.suppressed_elements.clone(),
         })
     }
@@ -251,6 +294,8 @@ impl<P> PathPatternDef<P> {
             along_path: self.along_path,
             symmetric: self.symmetric,
             compute: self.compute,
+            original_bodies: self.original_bodies,
+            scale: map_scale(&self.scale, f)?,
             suppressed_elements: self.suppressed_elements.clone(),
         })
     }
@@ -413,6 +458,7 @@ pub(crate) fn repeated(def: &FeatureDef) -> Option<(&PatternObjects, &[u32])> {
 /// of the patterns of features (patterns of patterns) that took it there,
 /// innermost first: each element's transform and the instance that names
 /// its copies.
+#[derive(PartialEq)]
 struct Placed {
     feature: FeatureUid,
     steps: Vec<(Transform, Instance)>,
@@ -537,6 +583,69 @@ fn active(all: Vec<Transform>, suppressed: &[u32]) -> Result<Vec<Element>, Strin
         .collect())
 }
 
+/// The elements scaled about the first object's centre of mass carried to
+/// each ([`RectangularPatternDef::scale`]): element e of n by
+/// 1 + (factor − 1) · e / (n − 1).
+fn scale_elements<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    objects: &PatternObjects,
+    factor: Option<ParamId>,
+    all: Vec<Transform>,
+) -> Result<Vec<Transform>, String> {
+    let Some(factor) = factor else {
+        return Ok(all);
+    };
+    let name = ctx.param_name(factor);
+    let factor = ctx.param(factor)?;
+    check_scale(&name, factor)?;
+    if all.len() < 2 {
+        return Ok(all);
+    }
+    let shape = match objects {
+        PatternObjects::Bodies { bodies } => ctx.body(bodies[0])?,
+        PatternObjects::Features { features } => {
+            let place = originals(ctx, features[0], 0)?
+                .into_iter()
+                .next()
+                .ok_or("the pattern has no original to scale about")?;
+            let tool = ctx.feature_tool(place.feature)?;
+            let at = place
+                .steps
+                .iter()
+                .fold(Transform::IDENTITY, |done, (t, _)| t.after(&done));
+            ctx.kernel
+                .transform_shape(&tool, &at, None)
+                .map_err(|e| e.to_string())?
+        }
+        PatternObjects::Faces { .. } => {
+            return Err(format!("{UNSUPPORTED}scaled copies of faces"));
+        }
+    };
+    let center = ctx
+        .kernel
+        .mass_properties(&shape)
+        .map_err(|e| e.to_string())?
+        .center;
+    let last = (all.len() - 1) as f64;
+    Ok(all
+        .into_iter()
+        .enumerate()
+        .map(|(e, t)| {
+            let s = 1.0 + (factor - 1.0) * e as f64 / last;
+            Transform::scale(t.apply_point(center), [s; 3]).after(&t)
+        })
+        .collect())
+}
+
+/// A scale factor must be finite and positive.
+fn check_scale(what: &str, value: f64) -> Result<(), String> {
+    if value.is_finite() && value > 0.0 {
+        Ok(())
+    } else {
+        Err(format!("{what} must be a positive factor, got {value}"))
+    }
+}
+
 impl RectangularPatternDef {
     fn elements<K: Kernel>(&self, ctx: &mut EvalContext<'_, K>) -> Result<Vec<Element>, String> {
         let mut directions = Vec::new();
@@ -582,6 +691,7 @@ impl RectangularPatternDef {
                 )));
             }
         }
+        let all = scale_elements(ctx, &self.objects, self.scale, all)?;
         ctx.elements.clone_from(&all);
         active(all, &self.suppressed_elements)
     }
@@ -610,6 +720,7 @@ impl CircularPatternDef {
                     .expect("a unit axis direction")
             })
             .collect();
+        let all = scale_elements(ctx, &self.objects, self.scale, all)?;
         ctx.elements.clone_from(&all);
         active(all, &self.suppressed_elements)
     }
@@ -653,6 +764,7 @@ impl PathPatternDef {
             .into_iter()
             .map(|i| path_transform(&curve, s0, s0 + i * step, self.along_path))
             .collect();
+        let all = scale_elements(ctx, &self.objects, self.scale, all)?;
         ctx.elements.clone_from(&all);
         active(all, &self.suppressed_elements)
     }
@@ -665,6 +777,7 @@ pub(crate) fn repeat<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     objects: &PatternObjects,
     compute: ComputeOption,
+    original_bodies: bool,
     elements: &[Element],
     combine: bool,
 ) -> Result<FeatureOutput<K::Shape>, String> {
@@ -691,10 +804,7 @@ pub(crate) fn repeat<K: Kernel>(
                     let uid = BodyUid::new(ctx.uid, (element.index - 1) * count + j as u32);
                     if combine {
                         let target = merged.as_ref().unwrap_or(&shape);
-                        let result = ctx
-                            .kernel
-                            .boolean(BooleanOp::Join, &[target], &copy)
-                            .map_err(|e| e.to_string())?;
+                        let result = combined(ctx, target, &copy)?;
                         // A copy that touches the original joins it; one
                         // that does not stays a body of its own.
                         let joined = result.pieces.into_iter().find(|p| !p.sources.is_empty());
@@ -716,9 +826,16 @@ pub(crate) fn repeat<K: Kernel>(
         }
         PatternObjects::Features { features } => {
             let mut set = BodySet::new(ctx.bodies());
-            let mut places = Vec::new();
+            let mut places: Vec<Placed> = Vec::new();
             for uid in features {
-                places.extend(originals(ctx, *uid, 0)?);
+                for place in originals(ctx, *uid, 0)? {
+                    // A feature at the same place twice (a mirror of a
+                    // feature and of a pattern whose original it is) is
+                    // copied once: the second copy would reach nothing.
+                    if !places.contains(&place) {
+                        places.push(place);
+                    }
+                }
             }
             for place in places {
                 let uid = &place.feature;
@@ -729,6 +846,11 @@ pub(crate) fn repeat<K: Kernel>(
                     .tool_use()
                     .ok_or_else(|| format!("{} cannot be patterned or mirrored", entry.name))?;
                 let stored = ctx.feature_tool(*uid)?;
+                let participants = if original_bodies && tool_use.participants.is_empty() {
+                    changed_bodies(ctx, *uid, &set)?
+                } else {
+                    tool_use.participants.clone()
+                };
                 // The place's steps, composed: where the copy at an element
                 // goes is the element's transform after them.
                 let at = place
@@ -770,13 +892,10 @@ pub(crate) fn repeat<K: Kernel>(
                         };
                         copies.push(copy);
                     }
-                    match all_at_once(
-                        ctx,
-                        &mut set,
-                        tool_use.operation,
-                        &tool_use.participants,
-                        &copies,
-                    ) {
+                    if matches!(tool_use.operation, Operation::Cut | Operation::Join) {
+                        copies = reaching(ctx, &set, &participants, copies);
+                    }
+                    match all_at_once(ctx, &mut set, tool_use.operation, &participants, &copies) {
                         Some(r) => reached = r,
                         None => {
                             for copy in &copies {
@@ -784,21 +903,21 @@ pub(crate) fn repeat<K: Kernel>(
                                     ctx,
                                     &mut set,
                                     tool_use.operation,
-                                    &tool_use.participants,
+                                    &participants,
                                     copy,
                                 )?;
                             }
                         }
                     }
                 } else if !elements.is_empty() {
-                    let tool = moved_copies(ctx, &stored, &place.steps, elements)?;
-                    reached = apply_tool(
-                        ctx,
-                        &mut set,
-                        tool_use.operation,
-                        &tool_use.participants,
-                        &tool,
-                    )?;
+                    // A join's copies that touch nothing become bodies here,
+                    // so only a cut's are left out.
+                    let reach = (tool_use.operation == Operation::Cut)
+                        .then_some((&set, participants.as_slice()));
+                    if let Some(tool) = moved_copies(ctx, &stored, &place.steps, elements, reach)? {
+                        reached =
+                            apply_tool(ctx, &mut set, tool_use.operation, &participants, &tool)?;
+                    }
                 }
                 if !reached && !elements.is_empty() {
                     return Err(format!("no copy of {} reaches a body", entry.name));
@@ -835,6 +954,7 @@ pub(crate) fn repeat<K: Kernel>(
                         .map_err(|e| e.to_string())?;
                     copies.push(copy);
                 }
+                let copies = reaching(ctx, &set, &[*body], copies);
                 match all_at_once(ctx, &mut set, operation, &[*body], &copies) {
                     Some(r) => reached = r,
                     None => {
@@ -844,8 +964,11 @@ pub(crate) fn repeat<K: Kernel>(
                     }
                 }
             } else if !elements.is_empty() {
-                let tool = moved_copies(ctx, &tool, &[], elements)?;
-                reached = apply_tool(ctx, &mut set, operation, &[*body], &tool)?;
+                let reach =
+                    (operation == Operation::Cut).then_some((&set, std::slice::from_ref(body)));
+                if let Some(tool) = moved_copies(ctx, &tool, &[], elements, reach)? {
+                    reached = apply_tool(ctx, &mut set, operation, &[*body], &tool)?;
+                }
             }
             if !reached && !elements.is_empty() {
                 return Err("no copy of the faces reaches the body".to_owned());
@@ -856,6 +979,47 @@ pub(crate) fn repeat<K: Kernel>(
             })
         }
     }
+}
+
+/// The bodies feature `uid` changed (set or removed) that are still there,
+/// for copies that act on them only ([`RectangularPatternDef::original_bodies`]);
+/// none (every body) when none is left.
+fn changed_bodies<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    uid: FeatureUid,
+    set: &BodySet<K::Shape>,
+) -> Result<Vec<BodyUid>, String> {
+    Ok(ctx
+        .feature_changed_bodies(uid)?
+        .into_iter()
+        .filter(|b| set.get(*b).is_some())
+        .collect())
+}
+
+/// How far (mm) a mirror image may lie from the body and still count as
+/// the body's own faces when the two are joined ([`combined`]).
+const NEAR_COPY_SLACK: f64 = 0.1;
+
+/// A body joined with its copy (a mirror's `combine`). The mirror image of
+/// a nearly symmetric body lies on the body almost everywhere, nearly but
+/// not exactly, and a boolean of the whole shapes intersects every such
+/// pair of faces (minutes for free-form faces, mitcad#88): such a copy is
+/// joined only where it differs from the body by more than
+/// [`NEAR_COPY_SLACK`] ([`Kernel::join_near_copy`]); any other copy, and
+/// with a kernel without it, the whole shapes.
+fn combined<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    body: &K::Shape,
+    copy: &K::Shape,
+) -> Result<BooleanOutput<K::Shape>, String> {
+    match ctx.kernel.join_near_copy(body, copy, NEAR_COPY_SLACK) {
+        Ok(Some(result)) => return Ok(result),
+        Ok(None) | Err(KernelError::Unsupported(_)) => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    ctx.kernel
+        .boolean(BooleanOp::Join, &[body], copy)
+        .map_err(|e| e.to_string())
 }
 
 /// Adjust's copies of a feature's tool applied in one boolean operation
@@ -890,14 +1054,16 @@ fn all_at_once<K: Kernel>(
 }
 
 /// The tool moved through a place's steps (none for the pattern's own
-/// objects), then to every element, as one shape.
+/// objects), then to every element, as one shape. With `reach` (a cut)
+/// only the copies [`reaching`] keeps; None when it keeps none.
 fn moved_copies<K: Kernel>(
     ctx: &EvalContext<'_, K>,
     tool: &K::Shape,
     steps: &[(Transform, Instance)],
     elements: &[Element],
-) -> Result<K::Shape, String> {
-    let copies = elements
+    reach: Option<(&BodySet<K::Shape>, &[BodyUid])>,
+) -> Result<Option<K::Shape>, String> {
+    let mut copies = elements
         .iter()
         .map(|element| {
             let instance = Instance {
@@ -907,11 +1073,97 @@ fn moved_copies<K: Kernel>(
             placed_copy(ctx, tool, steps, &element.transform, instance, false)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    if copies.len() == 1 {
-        return Ok(copies.into_iter().next().expect("one copy"));
+    if let Some((set, participants)) = reach {
+        copies = reaching(ctx, set, participants, copies);
+    }
+    if copies.len() <= 1 {
+        return Ok(copies.into_iter().next());
     }
     let refs: Vec<&K::Shape> = copies.iter().collect();
-    ctx.kernel.unite(&refs).map_err(|e| e.to_string())
+    ctx.kernel.unite(&refs).map(Some).map_err(|e| e.to_string())
+}
+
+/// How far (mm) the boxes of copies may be from a body's box and still be
+/// kept by [`reaching`]: wider than the tolerances a boolean operation
+/// works with.
+const REACH: f64 = 0.1;
+
+/// The copies a cut (or Adjust's join, which skips copies that reach no
+/// body) needs, in their order: the others change no body. Copies whose
+/// boxes come within [`REACH`] of each other form a group (their union can
+/// merge their faces, so a group is kept or left out whole), and a group is
+/// kept when one of its copies' boxes comes within [`REACH`] of the box of
+/// a participant ([`BodySet::participants`]). A large pattern of holes over
+/// a round plate has most copies off the plate, and uniting and cutting
+/// with them took most of its time. All copies when a box cannot be
+/// measured.
+fn reaching<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    set: &BodySet<K::Shape>,
+    participants: &[BodyUid],
+    copies: Vec<K::Shape>,
+) -> Vec<K::Shape> {
+    let measure = |shape: &K::Shape| ctx.kernel.bounding_box(shape).map_err(|_| ());
+    let Ok(boxes) = copies.iter().map(measure).collect::<Result<Vec<_>, ()>>() else {
+        return copies;
+    };
+    let Ok(bodies) = set
+        .participants(participants)
+        .into_iter()
+        .map(measure)
+        .collect::<Result<Vec<_>, ()>>()
+    else {
+        return copies;
+    };
+    let bodies: Vec<BoundingBox> = bodies.into_iter().flatten().collect();
+    let near = |a: &BoundingBox, b: &BoundingBox| {
+        (0..3).all(|i| a.min[i] <= b.max[i] + REACH && b.min[i] <= a.max[i] + REACH)
+    };
+    // Groups of copies with touching boxes (a copy without a box is kept),
+    // found by sweeping the boxes along x.
+    let mut group: Vec<usize> = (0..copies.len()).collect();
+    fn root(group: &mut [usize], mut i: usize) -> usize {
+        while group[i] != i {
+            group[i] = group[group[i]];
+            i = group[i];
+        }
+        i
+    }
+    let mut order: Vec<usize> = (0..copies.len()).filter(|&i| boxes[i].is_some()).collect();
+    let low = |i: usize| boxes[i].as_ref().map_or(f64::NEG_INFINITY, |b| b.min[0]);
+    order.sort_by(|&a, &b| low(a).total_cmp(&low(b)));
+    for (k, &i) in order.iter().enumerate() {
+        let a = boxes[i].as_ref().expect("measured");
+        for &j in &order[k + 1..] {
+            let b = boxes[j].as_ref().expect("measured");
+            if b.min[0] > a.max[0] + REACH {
+                break;
+            }
+            if near(a, b) {
+                let (ri, rj) = (root(&mut group, i), root(&mut group, j));
+                group[ri] = rj;
+            }
+        }
+    }
+    let mut kept = vec![false; copies.len()];
+    for (i, copy_box) in boxes.iter().enumerate() {
+        let reaches = match copy_box {
+            Some(b) => bodies.iter().any(|body| near(b, body)),
+            None => true,
+        };
+        if reaches {
+            let r = root(&mut group, i);
+            kept[r] = true;
+        }
+    }
+    let keep: Vec<bool> = (0..copies.len())
+        .map(|i| kept[root(&mut group, i)])
+        .collect();
+    copies
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(copy, keep)| keep.then_some(copy))
+        .collect()
 }
 
 fn check_distance(what: &str, q: u32, value: f64) -> Result<(), String> {
@@ -947,7 +1199,8 @@ impl FeatureInfo for RectangularPatternDef {
             let q = quantity("pattern quantity", value(direction.quantity))?;
             check_distance("pattern distance", q, value(direction.distance))?;
         }
-        Ok(())
+        self.scale
+            .map_or(Ok(()), |f| check_scale("pattern scale", value(f)))
     }
 
     fn creates_bodies(&self) -> bool {
@@ -971,7 +1224,9 @@ impl FeatureInfo for CircularPatternDef {
 
     fn check_values(&self, value: &dyn Fn(ParamId) -> f64) -> Result<(), String> {
         let q = quantity("pattern quantity", value(self.quantity))?;
-        check_distance("pattern angle", q, value(self.angle))
+        check_distance("pattern angle", q, value(self.angle))?;
+        self.scale
+            .map_or(Ok(()), |f| check_scale("pattern scale", value(f)))
     }
 
     fn creates_bodies(&self) -> bool {
@@ -998,7 +1253,9 @@ impl FeatureInfo for PathPatternDef {
 
     fn check_values(&self, value: &dyn Fn(ParamId) -> f64) -> Result<(), String> {
         let q = quantity("pattern quantity", value(self.quantity))?;
-        check_distance("pattern distance", q, value(self.distance))
+        check_distance("pattern distance", q, value(self.distance))?;
+        self.scale
+            .map_or(Ok(()), |f| check_scale("pattern scale", value(f)))
     }
 
     fn creates_bodies(&self) -> bool {
@@ -1009,21 +1266,42 @@ impl FeatureInfo for PathPatternDef {
 impl<K: Kernel> Evaluate<K> for RectangularPatternDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let elements = self.elements(ctx)?;
-        repeat(ctx, &self.objects, self.compute, &elements, false)
+        repeat(
+            ctx,
+            &self.objects,
+            self.compute,
+            self.original_bodies,
+            &elements,
+            false,
+        )
     }
 }
 
 impl<K: Kernel> Evaluate<K> for CircularPatternDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let elements = self.elements(ctx)?;
-        repeat(ctx, &self.objects, self.compute, &elements, false)
+        repeat(
+            ctx,
+            &self.objects,
+            self.compute,
+            self.original_bodies,
+            &elements,
+            false,
+        )
     }
 }
 
 impl<K: Kernel> Evaluate<K> for PathPatternDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let elements = self.elements(ctx)?;
-        repeat(ctx, &self.objects, self.compute, &elements, false)
+        repeat(
+            ctx,
+            &self.objects,
+            self.compute,
+            self.original_bodies,
+            &elements,
+            false,
+        )
     }
 }
 

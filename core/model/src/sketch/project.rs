@@ -13,11 +13,13 @@
 use std::collections::BTreeMap;
 
 use super::geometry::{Curve2, P2, add, angle_after, dist, norm, scale, sub};
+use super::solve::{SolveError, Solved};
 use super::{Entity, EntityKind, Projection, Ref};
 use crate::features::EvalContext;
 use crate::features::sketch::SketchDef;
 use crate::ids::{BodyUid, EntityUid};
 use crate::kernel::{Curve3, Kernel};
+use crate::parameters::ParamId;
 use crate::profile::{SketchFrame, cross, dot};
 use crate::topo::TopoName;
 
@@ -383,6 +385,163 @@ pub fn follow_links<K: Kernel>(
         }
     }
     Ok(changed.then_some(updated))
+}
+
+/// Solves a definition whose linked projections [`follow_links`] moved
+/// (`followed`) as if they were dragged there from where `def` has them:
+/// in steps, each starting from the last one's solution, so that geometry
+/// constrained to them keeps its side, as with a dimension change (the
+/// solver's continuation). One solve when they moved little or a step
+/// does not solve.
+pub fn solve_followed(
+    def: &SketchDef,
+    followed: &SketchDef,
+    value: &mut dyn FnMut(ParamId) -> Result<f64, String>,
+    name: &dyn Fn(ParamId) -> String,
+) -> Result<Solved, SolveError> {
+    let steps = follow_steps(def, followed);
+    if steps > 1
+        && let Some(solved) = solve_in_steps(def, followed, steps, value, name)
+    {
+        return Ok(solved);
+    }
+    followed.solve_with(value, name)
+}
+
+/// The steps of [`solve_followed`]: one for each tenth of the sketch's
+/// size the farthest point moves, at most 16.
+fn follow_steps(def: &SketchDef, followed: &SketchDef) -> usize {
+    let at = |e: &Entity| match e.kind {
+        EntityKind::Point { at } => Some(at),
+        _ => None,
+    };
+    let (mut low, mut high) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for p in def.entities.iter().chain(&followed.entities).filter_map(at) {
+        for i in 0..2 {
+            low[i] = low[i].min(p[i]);
+            high[i] = high[i].max(p[i]);
+        }
+    }
+    let size = dist(low, high);
+    let farthest = def
+        .entities
+        .iter()
+        .zip(&followed.entities)
+        .filter_map(|(old, new)| Some(dist(at(old)?, at(new)?)))
+        .fold(0.0, f64::max);
+    if !(size.is_finite() && size > 0.0) {
+        return 1;
+    }
+    ((farthest / (0.1 * size)).ceil() as usize).clamp(1, 16)
+}
+
+fn solve_in_steps(
+    def: &SketchDef,
+    followed: &SketchDef,
+    steps: usize,
+    value: &mut dyn FnMut(ParamId) -> Result<f64, String>,
+    name: &dyn Fn(ParamId) -> String,
+) -> Option<Solved> {
+    // From the definition solved where it was.
+    let mut current = def.clone();
+    current
+        .solve_with(value, name)
+        .ok()?
+        .store(&mut current.entities);
+    for k in 1..=steps {
+        let t = k as f64 / steps as f64;
+        for ((entity, old), new) in current
+            .entities
+            .iter_mut()
+            .zip(&def.entities)
+            .zip(&followed.entities)
+        {
+            if old.kind != new.kind {
+                entity.kind = between(&old.kind, &new.kind, t);
+            }
+        }
+        let solved = current.solve_with(value, name).ok()?;
+        if k == steps {
+            return Some(solved);
+        }
+        solved.store(&mut current.entities);
+    }
+    None
+}
+
+/// An entity's kind the part `t` of the way from `old` to `new`: points
+/// and radii in between, the rest as `new`.
+fn between(old: &EntityKind, new: &EntityKind, t: f64) -> EntityKind {
+    let mix = |a: f64, b: f64| if t >= 1.0 { b } else { a + (b - a) * t };
+    let mut kind = new.clone();
+    match (old, &mut kind) {
+        (EntityKind::Point { at: a }, EntityKind::Point { at: b }) => {
+            *b = [mix(a[0], b[0]), mix(a[1], b[1])];
+        }
+        (EntityKind::Circle { radius: a, .. }, EntityKind::Circle { radius: b, .. })
+        | (
+            EntityKind::Ellipse {
+                minor_radius: a, ..
+            },
+            EntityKind::Ellipse {
+                minor_radius: b, ..
+            },
+        )
+        | (
+            EntityKind::EllipticalArc {
+                minor_radius: a, ..
+            },
+            EntityKind::EllipticalArc {
+                minor_radius: b, ..
+            },
+        ) => *b = mix(*a, *b),
+        _ => {}
+    }
+    kind
+}
+
+/// The entities of `solution` (the definition as it evaluated, solved)
+/// that differ from `def`'s: a sketch output keeps them.
+pub fn moved_entities(def: &SketchDef, solution: &SketchDef) -> Vec<Entity> {
+    solution
+        .entities
+        .iter()
+        .zip(&def.entities)
+        .filter(|(new, old)| new.id == old.id && new.kind != old.kind)
+        .map(|(new, _)| new.clone())
+        .collect()
+}
+
+/// The definition with the entities the last evaluation moved (a sketch
+/// output's `moved`) in place, or None when none applies. The stored
+/// definition keeps linked projections, and what is constrained to them,
+/// where the last edit left them; this is the sketch as it evaluated,
+/// which queries show and edits start from. Moved entities the definition
+/// no longer has as the same kind of entity on the same points, and fixed
+/// ones outside linked projections, are left out.
+pub fn with_moved(def: &SketchDef, moved: &[Entity]) -> Option<SketchDef> {
+    let mut out: Option<SketchDef> = None;
+    for entity in moved {
+        let Some(old) = def.entity(entity.id) else {
+            continue;
+        };
+        let linked = || {
+            def.projections
+                .iter()
+                .any(|p| p.entities.iter().any(|r| r.uid() == entity.id))
+        };
+        if old.kind == entity.kind
+            || old.kind.type_name() != entity.kind.type_name()
+            || old.kind.points() != entity.kind.points()
+            || (old.fixed && !linked())
+        {
+            continue;
+        }
+        if let Some(target) = out.get_or_insert_with(|| def.clone()).entity_mut(entity.id) {
+            target.kind = entity.kind.clone();
+        }
+    }
+    out
 }
 
 /// The entities of a projection with the points they use, in order:

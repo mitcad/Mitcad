@@ -1,0 +1,8 @@
+/* SPDX-License-Identifier: MIT */
+/* The symbols the application exports on Linux, so that crash reports'
+   stacks name its functions (app/CMakeLists.txt, mitcad#62): its C++
+   namespaces and its Rust crates. */
+{
+  _ZN6mitcad*;
+  _ZN*mitcad_*;
+};

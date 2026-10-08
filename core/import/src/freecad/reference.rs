@@ -249,12 +249,14 @@ pub(crate) fn check(report: &FcstdReport, dump: &Value) -> ReferenceReport {
         let what = &s.object;
         let edges = expected["edges"].as_u64().unwrap_or(0) as usize;
         // A file whose sketch has no geometry but a stored shape with
-        // edges says two things.
-        if o["sketch"]["geometry"]
-            .as_array()
-            .is_some_and(Vec::is_empty)
-            && edges > 0
-        {
+        // edges says two things. The dump's sketch tells; a dump without
+        // one (an object FreeCAD could not dump as a sketch), the file's
+        // geometry as the import read it.
+        let no_geometry = match o["sketch"]["geometry"].as_array() {
+            Some(geometry) => geometry.is_empty(),
+            None => o["sketch"].is_null() && s.geometry == 0,
+        };
+        if no_geometry && edges > 0 {
             out.not_compared.push(format!(
                 "{what}: FreeCAD's sketch has no geometry, its stored shape {edges} edges"
             ));

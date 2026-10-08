@@ -40,10 +40,12 @@ QJsonObject exportCommand(const QString& path, const QString& format, const QStr
 
 QJsonObject MainWindow::appearanceColors(const QStringList& bodies) const {
   QJsonObject colors;
+  const QVector<Appearance> appearances = appearancesOf(queryArray(QStringLiteral("appearances")));
   for (const QJsonValue& value : queryArray(QStringLiteral("bodies"))) {
     const QJsonObject body = value.toObject();
     const QString uid = body.value(QStringLiteral("uid")).toString();
-    const QColor color = appearanceColor(body.value(QStringLiteral("appearance")).toString());
+    const Appearance* appearance = findAppearance(appearances, body.value(QStringLiteral("appearance")).toString());
+    const QColor color = appearance != nullptr ? appearance->displayColor : QColor();
     if ((bodies.isEmpty() || bodies.contains(uid)) && color.isValid()) {
       colors.insert(uid, QJsonArray{color.redF(), color.greenF(), color.blueF()});
     }

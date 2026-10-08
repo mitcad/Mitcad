@@ -132,5 +132,11 @@ void cancel_tests();
 // Operations leave their inputs as they are (T0e).
 void input_check_self_tests();
 void input_check_tests();
+// Booleans on perforated bodies (mitcad#72).
+void far_features_tests();
+// The material a near copy of a body lacks (mitcad#85).
+void removed_tests();
+// A body joined with a near copy (mitcad#88).
+void mirror_join_tests();
 
 } // namespace test

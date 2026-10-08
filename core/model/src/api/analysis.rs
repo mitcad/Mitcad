@@ -633,6 +633,17 @@ impl<K: Kernel> Document<K> {
         if let Some(appearance) = &attributes.appearance {
             value["appearance"] = json!(appearance);
         }
+        // Faces with their own appearance (mitcad#53), with the faces each
+        // finds at the marker.
+        let faces = self.face_appearances(uid);
+        if !faces.is_empty() {
+            value["face_appearances"] = json!(
+                faces
+                    .into_iter()
+                    .map(|f| json!({"face": f.face, "appearance": f.appearance, "faces": f.faces}))
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     /// Answers an analysis query (`properties`, `measure`, `interference`,

@@ -9,6 +9,9 @@
 //!   format study marks certain or probable.
 //! - [`build`]: the decoded data shaped as the dump IR ([`ir`]), the JSON
 //!   of `core/import/SCHEMA.md`.
+//! - [`recipe`] and [`inputs`]: feature inputs named as the bodies name
+//!   their faces and edges, found in the ASM history of the body blobs
+//!   ([`decode_document`] does it).
 //!
 //! The decoder reproduces the reference decoder (a separate Python
 //! implementation of the format study, not part of this repository)
@@ -29,8 +32,10 @@
 pub mod build;
 pub mod classes;
 pub mod decode;
+pub mod inputs;
 pub mod ir;
 mod nonfinite;
+pub mod recipe;
 mod record;
 pub mod sketch;
 pub mod stream;
@@ -163,9 +168,12 @@ pub fn decode_document(doc: &F3dFile, label: &str) -> Result<FileDesign, String>
         });
     };
     let design = Design::parse(&s.meta, s.bulk).map_err(|e| format!("{label}: {e}"))?;
+    let mut dump = design.dump(label, &s.segment_dir);
+    // Inputs named in the streams, found in the bodies' history.
+    inputs::resolve(&mut dump, doc);
     Ok(FileDesign {
         label: label.to_string(),
-        dump: Some(design.dump(label, &s.segment_dir)),
+        dump: Some(dump),
         segment_dir: Some(s.segment_dir),
     })
 }

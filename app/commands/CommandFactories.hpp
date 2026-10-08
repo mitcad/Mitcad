@@ -61,4 +61,11 @@ CommandDef alignCommand(const CommandContext& context);
 CommandDef materialCommand(const CommandContext& context);
 CommandDef appearanceCommand(const CommandContext& context);
 
+// JointCommands.cpp (mitcad#55)
+CommandDef jointCommand(const CommandContext& context);
+CommandDef asBuiltJointCommand(const CommandContext& context);
+CommandDef jointOriginCommand(const CommandContext& context);
+CommandDef rigidGroupCommand(const CommandContext& context);
+CommandDef driveJointCommand(const CommandContext& context);
+
 } // namespace mitcad::cmd

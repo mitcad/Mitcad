@@ -27,6 +27,9 @@
 //                                     the same face count and bounding box;
 //                                     fail when a mesh has no such body or
 //                                     its volume differs by more than P %
+//   --jobs N, --memory SIZE,          each file in a child process of its
+//   --file-timeout S                  own, N at a time (parallel_runs.hpp;
+//                                     --jobs 1: all in this process)
 //
 // Corpus and file runs print one line per body and a summary. Files are
 // named by their position (f01, f02, ...) in sorted path order, so that
@@ -48,6 +51,7 @@
 
 #include "mitcad/geometry/brep_import.hpp"
 #include "mitcad_bridge/brep_import.h"
+#include "parallel_runs.hpp"
 #include "rust/cxx.h"
 
 namespace {
@@ -477,6 +481,126 @@ fs::path default_corpus() {
   return home.empty() ? fs::path() : fs::path(home) / "f3d-corpus";
 }
 
+// The totals as totals lines (parallel_runs.hpp) and back.
+void counts_to(const char* prefix, const Counts& c, std::map<std::string, double>& out) {
+  const std::string p(prefix);
+  out[p + "bodies"] = c.bodies;
+  out[p + "solids"] = c.solids;
+  out[p + "solids_valid"] = c.solids_valid;
+  out[p + "sheets"] = c.sheets;
+  out[p + "sheets_valid"] = c.sheets_valid;
+  out[p + "not_built"] = c.not_built;
+  out[p + "negative_raw_volume"] = c.negative_raw_volume;
+  out[p + "with_issues"] = c.with_issues;
+  out[p + "with_failed_geometry"] = c.with_failed_geometry;
+}
+
+void add_counts(const char* prefix, const std::map<std::string, double>& in, Counts& c) {
+  const std::string p(prefix);
+  const auto get = [&](const char* key) {
+    const auto at = in.find(p + key);
+    return at == in.end() ? 0 : static_cast<int>(at->second);
+  };
+  c.bodies += get("bodies");
+  c.solids += get("solids");
+  c.solids_valid += get("solids_valid");
+  c.sheets += get("sheets");
+  c.sheets_valid += get("sheets_valid");
+  c.not_built += get("not_built");
+  c.negative_raw_volume += get("negative_raw_volume");
+  c.with_issues += get("with_issues");
+  c.with_failed_geometry += get("with_failed_geometry");
+}
+
+std::map<std::string, double> totals_of(const Totals& t) {
+  std::map<std::string, double> out = {
+      {"files", t.files},
+      {"files_failed", t.files_failed},
+      {"meshes/bodies", t.meshes.bodies},
+      {"meshes/hidden", t.meshes.hidden},
+      {"meshes/closed", t.meshes.closed},
+      {"meshes/matched", t.meshes.matched},
+      {"meshes/from_history_blobs", t.meshes.from_history_blobs},
+      {"meshes/within", t.meshes.within},
+      {"max:meshes/worst", t.meshes.worst},
+  };
+  counts_to("saved/", t.saved, out);
+  counts_to("history/", t.history, out);
+  return out;
+}
+
+void add_totals(const std::map<std::string, double>& in, Totals& t) {
+  const auto get = [&](const char* key) {
+    const auto at = in.find(key);
+    return at == in.end() ? 0.0 : at->second;
+  };
+  t.files += static_cast<int>(get("files"));
+  t.files_failed += static_cast<int>(get("files_failed"));
+  t.meshes.bodies += static_cast<int>(get("meshes/bodies"));
+  t.meshes.hidden += static_cast<int>(get("meshes/hidden"));
+  t.meshes.closed += static_cast<int>(get("meshes/closed"));
+  t.meshes.matched += static_cast<int>(get("meshes/matched"));
+  t.meshes.from_history_blobs += static_cast<int>(get("meshes/from_history_blobs"));
+  t.meshes.within += static_cast<int>(get("meshes/within"));
+  t.meshes.worst = std::max(t.meshes.worst, get("max:meshes/worst"));
+  add_counts("saved/", in, t.saved);
+  add_counts("history/", in, t.history);
+}
+
+// Reports every file, each in a child process of its own when `parallel`
+// says so (mitcad#70): the child gets the file, its id, the options and,
+// when only every Nth body is built, how many bodies the files before it
+// have (counted first, also in children).
+void report_files(const std::vector<std::string>& files, const std::vector<std::string>& options,
+                  const mitcad::runs::Settings& parallel, const std::string& self, bool verbose, Totals& t) {
+  if (parallel.jobs <= 1) {
+    for (std::size_t i = 0; i < files.size(); ++i) {
+      report_file(file_id(i), files[i], verbose, t);
+    }
+    return;
+  }
+  std::vector<double> weights;
+  for (const std::string& file : files) {
+    weights.push_back(mitcad::runs::file_weight(file));
+  }
+  std::vector<long> seen(files.size(), 0);
+  if (t.every > 1 && t.mesh_error < 0.0) {
+    std::vector<mitcad::runs::Command> counts;
+    for (const std::string& file : files) {
+      counts.push_back({self, "--count-bodies", file});
+    }
+    long total = 0;
+    mitcad::runs::run_all(counts, parallel, [&](std::size_t i, const mitcad::runs::Outcome& outcome) {
+      std::string text;
+      std::map<std::string, double> totals;
+      mitcad::runs::split_totals(outcome.output, text, totals);
+      seen[i] = total;
+      total += static_cast<long>(totals["bodies"]);
+    }, weights);
+  }
+  std::vector<mitcad::runs::Command> commands;
+  for (std::size_t i = 0; i < files.size(); ++i) {
+    mitcad::runs::Command command = {self, "--corpus-file", files[i], "--id", file_id(i), "--seen",
+                                     std::to_string(seen[i])};
+    command.insert(command.end(), options.begin(), options.end());
+    commands.push_back(command);
+  }
+  mitcad::runs::run_all(commands, parallel, [&](std::size_t i, const mitcad::runs::Outcome& outcome) {
+    std::string text;
+    std::map<std::string, double> totals;
+    const bool finished = mitcad::runs::split_totals(outcome.output, text, totals);
+    std::fputs(text.c_str(), stdout);
+    std::fputs(mitcad::runs::describe_failure(file_id(i), outcome, finished).c_str(), stdout);
+    if (finished) {
+      add_totals(totals, t);
+    } else {
+      ++t.files;
+      ++t.files_failed;
+    }
+    std::fflush(stdout);
+  }, weights);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -489,29 +613,75 @@ int main(int argc, char** argv) {
   bool history = false;
   double mesh_error = -1.0;
   std::vector<std::string> paths;
-  for (int i = 1; i < argc; ++i) {
-    const std::string a = argv[i];
-    if (a == "-v") {
-      verbose = true;
-    } else if (a == "--corpus") {
-      corpus = true;
-    } else if (a == "--every" && i + 1 < argc) {
-      every = std::max(1, std::atoi(argv[++i]));
-    } else if (a == "--min-valid" && i + 1 < argc) {
-      min_valid = std::atof(argv[++i]);
-    } else if (a == "--only" && i + 1 < argc) {
-      only = argv[++i];
-    } else if (a == "--save" && i + 1 < argc) {
-      save = argv[++i];
-    } else if (a == "--history") {
-      history = true;
-    } else if (a == "--meshes" && i + 1 < argc) {
-      mesh_error = std::max(0.0, std::atof(argv[++i]));
-    } else {
-      paths.push_back(a);
-    }
-  }
+  std::vector<std::string> args(argv + 1, argv + argc);
+  std::string jobs;
+  std::string memory;
+  std::string timeout;
+  // A child of a parallel run (mitcad#70): one file, then its totals.
+  std::string child_file;
+  std::string child_id;
+  long child_seen = 0;
+  // The options a child gets.
+  std::vector<std::string> options;
   try {
+    mitcad::runs::take_options(args, jobs, memory, timeout);
+    if (args.size() == 2 && args[0] == "--count-bodies") {
+      std::size_t bodies = 0;
+      try {
+        bodies = mitcad::f3d::f3d_read_bodies(args[1]).size();
+      } catch (const std::exception&) {
+        // Read again, and reported, by the file's run.
+      }
+      mitcad::runs::print_totals({{"bodies", static_cast<double>(bodies)}});
+      return 0;
+    }
+    for (std::size_t i = 0; i < args.size(); ++i) {
+      const std::string& a = args[i];
+      const bool more = i + 1 < args.size();
+      if (a == "-v") {
+        verbose = true;
+        options.push_back(a);
+      } else if (a == "--corpus") {
+        corpus = true;
+      } else if (a == "--every" && more) {
+        every = std::max(1, std::atoi(args[++i].c_str()));
+        options.insert(options.end(), {a, args[i]});
+      } else if (a == "--min-valid" && more) {
+        min_valid = std::atof(args[++i].c_str());
+      } else if (a == "--only" && more) {
+        only = args[++i];
+        options.insert(options.end(), {a, args[i]});
+      } else if (a == "--save" && more) {
+        save = args[++i];
+        options.insert(options.end(), {a, args[i]});
+      } else if (a == "--history") {
+        history = true;
+        options.push_back(a);
+      } else if (a == "--meshes" && more) {
+        mesh_error = std::max(0.0, std::atof(args[++i].c_str()));
+        options.insert(options.end(), {a, args[i]});
+      } else if (a == "--corpus-file" && more) {
+        child_file = args[++i];
+      } else if (a == "--id" && more) {
+        child_id = args[++i];
+      } else if (a == "--seen" && more) {
+        child_seen = std::atol(args[++i].c_str());
+      } else {
+        paths.push_back(a);
+      }
+    }
+    Totals totals;
+    totals.every = every;
+    totals.only = only;
+    totals.save = save;
+    totals.with_history = history;
+    totals.mesh_error = mesh_error;
+    if (!child_file.empty()) {
+      totals.seen = child_seen;
+      report_file(child_id, child_file, verbose, totals);
+      mitcad::runs::print_totals(totals_of(totals));
+      return 0;
+    }
     if (!corpus && paths.empty()) {
       return self_test();
     }
@@ -527,15 +697,8 @@ int main(int argc, char** argv) {
     } else {
       files = paths;
     }
-    Totals totals;
-    totals.every = every;
-    totals.only = only;
-    totals.save = save;
-    totals.with_history = history;
-    totals.mesh_error = mesh_error;
-    for (std::size_t i = 0; i < files.size(); ++i) {
-      report_file(file_id(i), files[i], verbose, totals);
-    }
+    report_files(files, options, mitcad::runs::settings(jobs, memory, timeout),
+                 mitcad::runs::executable_path(argv[0]), verbose, totals);
     print_totals(totals);
     if (mesh_error >= 0.0) {
       const MeshTotals& m = totals.meshes;

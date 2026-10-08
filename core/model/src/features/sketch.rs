@@ -290,6 +290,10 @@ pub struct SketchOutput {
     pub solved: Arc<Solved>,
     /// The texts' glyph outlines.
     pub texts: Arc<Vec<TextOutline>>,
+    /// Entities of linked projections where their sources are now, when
+    /// that differs from the definition (which keeps them where the last
+    /// edit left them); see [`crate::sketch::project::with_moved`].
+    pub moved: Arc<Vec<crate::sketch::Entity>>,
 }
 
 impl SketchOutput {
@@ -944,19 +948,34 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
             (_, None) => face_frame(&self.plane, ctx)?,
         };
         let frame = self.place(&plane);
-        let def = crate::sketch::project::follow_links(self, &frame, ctx)?;
-        let def = def.as_ref().unwrap_or(self);
+        let followed = crate::sketch::project::follow_links(self, &frame, ctx)?;
+        let def = followed.as_ref().unwrap_or(self);
         let names: BTreeMap<ParamId, String> = def
             .dimensions
             .iter()
             .filter_map(|d| d.value)
             .map(|id| (id, ctx.param_name(id)))
             .collect();
-        let solved = def
-            .solve_with(&mut |id| ctx.param(id), &|id| {
-                names.get(&id).cloned().unwrap_or_default()
-            })
-            .map_err(|e| e.message)?;
+        let name = |id| names.get(&id).cloned().unwrap_or_default();
+        let solved = match &followed {
+            None => def.solve_with(&mut |id| ctx.param(id), &name),
+            Some(followed) => crate::sketch::project::solve_followed(
+                self,
+                followed,
+                &mut |id| ctx.param(id),
+                &name,
+            ),
+        }
+        .map_err(|e| e.message)?;
+        // Where linked projections and what hangs on them are now.
+        let moved = match &followed {
+            None => Vec::new(),
+            Some(followed) => {
+                let mut solution = followed.clone();
+                solved.store(&mut solution.entities);
+                crate::sketch::project::moved_entities(self, &solution)
+            }
+        };
         let texts = def.text_outlines(&solved, ctx.kernel)?;
         // A font this computer lacks is replaced (P9: with a warning).
         for outline in texts.iter().filter(|t| t.fallback) {
@@ -975,6 +994,7 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
                 region_info,
                 solved: Arc::new(solved),
                 texts: Arc::new(texts),
+                moved: Arc::new(moved),
             }),
             ..FeatureOutput::default()
         })

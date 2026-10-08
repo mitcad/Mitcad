@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include <BRepCheck_Analyzer.hxx>
 #include <TopoDS_Iterator.hxx>
 
 #include "mitcad/geometry/brep_import.hpp"
@@ -236,28 +237,36 @@ rust::Vec<F3dBody> f3d_bodies(rust::Str path, bool history, bool owners, ShapeLi
     if ((data.history && !history) || (!data.top_level && !owners)) {
       continue;
     }
-    F3dBody body;
-    body.document = data.document;
-    body.blob = data.blob;
-    body.record = data.record;
-    body.history = data.history;
-    body.top_level = data.top_level;
-    const brep::BuildResult result = brep::build_body(to_body(data));
-    const brep::BuildReport& r = result.report;
-    body.built = r.built && !result.shape.IsNull();
-    body.solid = r.solid;
-    body.valid = r.valid;
-    body.volume = r.volume;
-    body.area = r.area;
-    body.faces = r.faces;
-    body.issues = static_cast<std::uint32_t>(data.issues.size() + data.skipped_faces +
-                                             static_cast<std::size_t>(r.curves_failed + r.surfaces_failed +
-                                                                      r.edges_failed + r.faces_failed));
-    body.error = rust::String(r.error);
-    shapes.push(body.built ? std::make_shared<geometry::Shape>(result.shape) : nullptr);
-    out.push_back(std::move(body));
+    out.push_back(build_brep_body(data, shapes));
   }
   return out;
+}
+
+F3dBody build_brep_body(const f3d::BrepBodyData& data, ShapeList& shapes) {
+  F3dBody body;
+  body.document = data.document;
+  body.blob = data.blob;
+  body.record = data.record;
+  body.history = data.history;
+  body.top_level = data.top_level;
+  const brep::BuildResult result = brep::build_body(to_body(data));
+  const brep::BuildReport& r = result.report;
+  body.built = r.built && !result.shape.IsNull();
+  body.solid = r.solid;
+  body.valid = r.valid;
+  body.volume = r.volume;
+  body.area = r.area;
+  body.faces = r.faces;
+  body.issues = static_cast<std::uint32_t>(data.issues.size() + data.skipped_faces +
+                                           static_cast<std::size_t>(r.curves_failed + r.surfaces_failed +
+                                                                    r.edges_failed + r.faces_failed));
+  body.error = rust::String(r.error);
+  shapes.push(body.built ? std::make_shared<geometry::Shape>(result.shape) : nullptr);
+  return body;
+}
+
+bool shape_is_valid(const geometry::Shape& shape) {
+  return !shape.occt().IsNull() && BRepCheck_Analyzer(shape.occt()).IsValid();
 }
 
 void catch_occt_crashes() { geometry::catch_occt_crashes(); }
@@ -266,11 +275,23 @@ std::shared_ptr<geometry::Shape> f3d_build_body(const f3d::BrepBodyData& data) {
   // The importer measures the bodies itself: no report measures.
   brep::BuildOptions options;
   options.measure = false;
+  // Healing a large body takes minutes: its progress is the import's
+  // (its watchdog, mitcad#82).
+  options.progress = [] { f3d_build_progress(); };
   const brep::BuildResult result = brep::build_body(to_body(data), options);
   if (!result.report.built || result.shape.IsNull()) {
     return nullptr;
   }
   return std::make_shared<geometry::Shape>(result.shape);
+}
+
+std::shared_ptr<geometry::Shape> f3d_read_body(rust::Slice<const std::uint8_t> data) {
+  try {
+    return std::make_shared<geometry::Shape>(
+        geometry::read_brep_data(reinterpret_cast<const char*>(data.data()), data.size()));
+  } catch (const std::exception&) {
+    return nullptr;
+  }
 }
 
 } // namespace mitcad::bridge

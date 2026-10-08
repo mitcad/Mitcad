@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -156,8 +157,8 @@ public:
   // A stop was asked for: once is enough.
   void setStopping() { m_stopButton->setEnabled(false); }
 
-  // An import that cannot stop early (a FreeCAD document's bodies) has
-  // only Cancel.
+  // An import that cannot stop early (a FreeCAD document's bodies, an
+  // .ipt part's) has only Cancel.
   void setStoppable(bool stoppable) { m_stopButton->setVisible(stoppable); }
 
 protected:
@@ -197,13 +198,31 @@ bool isFreeCadFile(const QString& path) {
   return QFileInfo(path).suffix().compare(QStringLiteral("fcstd"), Qt::CaseInsensitive) == 0;
 }
 
+// An .ipt part file (mitcad#60): its stored bodies, without a timeline.
+bool isIptFile(const QString& path) {
+  return QFileInfo(path).suffix().compare(QStringLiteral("ipt"), Qt::CaseInsensitive) == 0;
+}
+
+// The worker's exit status. While import threads that the hang watchdog
+// gave up still run (their geometry kernel call has not returned), the
+// worker ends here, without the static destructors that would tear down
+// OCCT's state under them and crash the worker after it wrote its result
+// (mitcad#82).
+int endWorker(int code) {
+  if (abandoned_imports() > 0) {
+    std::fflush(nullptr);
+    std::_Exit(code);
+  }
+  return code;
+}
+
 } // namespace
 
 int runImportWorker(int argc, char* argv[]) {
   QCoreApplication app(argc, argv);
   QCommandLineParser parser;
-  const QCommandLineOption worker(QStringLiteral("import-worker"), QStringLiteral(".f3d, .f3z or .FCStd file"),
-                                  QStringLiteral("file"));
+  const QCommandLineOption worker(QStringLiteral("import-worker"),
+                                  QStringLiteral(".f3d, .f3z, .FCStd or .ipt file"), QStringLiteral("file"));
   const QCommandLineOption output(QStringLiteral("output"), QStringLiteral("Project file to write"),
                                   QStringLiteral("file"));
   const QCommandLineOption result(QStringLiteral("result"), QStringLiteral("Result (JSON) to write"),
@@ -228,11 +247,13 @@ int runImportWorker(int argc, char* argv[]) {
   }
   std::thread([control] { readRequests(control); }).detach();
   // A FreeCAD document: its structure, sketches and history in one
-  // command, which has no stop yet (and no item count for the progress).
+  // command, which has no stop yet (and no item count for the progress);
+  // an .ipt part's bodies likewise.
   const bool freecad = isFreeCadFile(QString::fromUtf8(path));
+  const bool ipt = isIptFile(QString::fromUtf8(path));
   // The timeline's length, for the progress dialog.
   try {
-    if (!freecad) {
+    if (!freecad && !ipt) {
       const QJsonObject designs = parseObject(document->import_f3d_timeline(rustStr(path), "{\"list\": true}"));
       int items = 0;
       for (const QJsonValue& design : designs.value(QStringLiteral("designs")).toArray()) {
@@ -248,6 +269,8 @@ int runImportWorker(int argc, char* argv[]) {
       freecad ? QJsonObject{{QStringLiteral("cmd"), QStringLiteral("import_fcstd")},
                             {QStringLiteral("path"), QString::fromUtf8(path)},
                             {QStringLiteral("bodies_only"), false}}
+      : ipt   ? QJsonObject{{QStringLiteral("cmd"), QStringLiteral("import_ipt")},
+                            {QStringLiteral("path"), QString::fromUtf8(path)}}
               : QJsonObject{{QStringLiteral("cmd"), QStringLiteral("import_f3d")},
                             {QStringLiteral("path"), QString::fromUtf8(path)},
                             {QStringLiteral("hang_limit"), kHangLimit}};
@@ -257,7 +280,7 @@ int runImportWorker(int argc, char* argv[]) {
     answer = parseObject(document->command(rustStr(compactJson(command))));
   } catch (const std::exception& e) {
     std::fprintf(stderr, "import-failed %s\n", e.what());
-    return 3;
+    return endWorker(3);
   }
   // A stop from now on has nothing to stop.
   document->detach_job();
@@ -273,11 +296,11 @@ int runImportWorker(int argc, char* argv[]) {
   if (!writeFile(parser.value(output), QByteArray(project.data(), static_cast<qsizetype>(project.size()))) ||
       !writeFile(parser.value(result), QJsonDocument(answer).toJson(QJsonDocument::Compact))) {
     std::fprintf(stderr, "import-failed cannot write the result\n");
-    return 3;
+    return endWorker(3);
   }
   std::printf("import-done\n");
   std::fflush(stdout);
-  return 0;
+  return endWorker(0);
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +339,7 @@ void F3dImport::start() {
   const QString name = QFileInfo(m_path).fileName();
   m_dialog = new ImportProgress(
       m_window, [this] { stop(); }, [this] { cancel(); });
-  m_dialog->setStoppable(!isFreeCadFile(m_path));
+  m_dialog->setStoppable(!isFreeCadFile(m_path) && !isIptFile(m_path));
   m_ticker = new QTimer(this);
   m_ticker->setInterval(500);
   connect(m_ticker, &QTimer::timeout, this, &F3dImport::tick);

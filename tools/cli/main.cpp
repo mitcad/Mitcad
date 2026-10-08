@@ -20,12 +20,17 @@
 #include "mitcad/io/body.hpp"
 #include "mitcad_bridge/lib.h"
 #include "rust/cxx.h"
+#ifdef MITCAD_RENDER
+#include "render.hpp"
+#endif
+// Component libraries (mitcad#64, mitcad#63).
+#include "library.hpp"
 
 namespace {
 
 const char* const kUsage = R"(usage:
   mitcad-cli info <file.mitcad> [--json] [--properties [--density G_PER_CM3]] [--timings]
-                  [--result-store DIR [--persist-min-ms MS]] [--diagnostics]
+                  [--result-store DIR [--persist-min-ms MS]] [--diagnostics] [--names]
       Opens a project file, recomputes it and prints the timeline with the
       status of each feature and the bodies with volume, area, centre of
       mass, bounding box and face and edge counts. --timings adds how long
@@ -35,6 +40,8 @@ const char* const kUsage = R"(usage:
       "restored from store: N, evaluated: M" (also for run --open).
       --diagnostics adds the caches' diagnostics (the cache query, JSON):
       memory and store sizes, hits, and where each result came from.
+      --names adds the names of every body's faces and edges (the faces and
+      edges queries, JSON), to compare the topology of two builds.
   mitcad-cli run <script.json> [--open <file.mitcad>] [--save <out.mitcad>] [--json]
                  [--properties [--density G_PER_CM3]]
       Runs a script of JSON commands and expectations on a new document, or
@@ -101,6 +108,25 @@ const char* const kUsage = R"(usage:
       parameters' values); exits with 1 when they differ. --set changes a
       parameter after the import, before the report measures it (to
       compare with FreeCAD's document after the same change).
+  mitcad-cli import-ipt <file.ipt> [--save <out.mitcad>] [--report <report.json>]
+                        [--reference <file.step> [--max-relative X] [--deviation]] [--json]
+                        [--bodies-only] [--no-verify] [--no-fallback] [--no-compare]
+                        [--time-limit S] [--dump <design.json>] [--design <design.json>]
+      Imports an .ipt part file: its parameters with their expressions and
+      its features, each checked against the ASM history stored with the
+      bodies, those that are not translated as the bodies of their history
+      state (as import-f3d does); --bodies-only imports the bodies stored in
+      the file as base features, one per body. The part's length unit and,
+      when Mitcad's library has it, its material apply. Prints the import
+      report (the features with their outcomes; each body: solid or sheet,
+      validity, volume, area; the part number, material and units; the
+      parameters and expressions) and the document report; --report writes
+      the import report as JSON, --dump the decoded design (the dump IR);
+      --design replays such a dump instead of the decoded design.
+      --reference compares the solids with the solids of a STEP file of the
+      same part: volume and area of each, relatively, within --max-relative
+      (default 1e-6), and every imported solid valid; --deviation also
+      measures the surface deviation. Exits with 1 when they differ.
   mitcad-cli export <file.mitcad> <out> [--bodies <b>,...] [--schema ap214|ap242]
                     [--unit mm|cm|m|in|ft] [--refinement low|medium|high]
                     [--deviation MM --angle DEG] [--ascii]
@@ -200,13 +226,31 @@ const char* const kUsage = R"(usage:
       its project files; a repository without a project is refused.
       Remote repositories need the git program (MITCAD_GIT, else PATH);
       with --json the answer's "error" is null on success.
+  mitcad-cli render <file.mitcad|script.json> -o <image> [--view <name>] [--size WxH] [--samples N]
+                    [--time-limit SECONDS] [--format png|png16|jpeg|exr] [--quality 1-100]
+                    [--transparent] [--no-denoise] [--worker <mitcad-render>]
+      Renders the visible bodies to an image file with the design's render
+      settings (environment, background, ground, film and output), as File >
+      Render Image does, in the render worker mitcad-render (next to
+      mitcad-cli, or --worker, or MITCAD_RENDER_WORKER); only in builds with
+      the renderer. --view is a named view of the design, or a standard view
+      (front, back, left, right, top, bottom, iso) fitted to the bodies; the
+      default is the design's Home view, else iso. --size, --samples,
+      --time-limit (stop after that long), --format (else from the file's
+      extension: .png, .jpg, .exr), --quality (JPEG), --transparent and
+      --no-denoise change the settings' output section for this render. PNG
+      and JPEG are as the view shows the render (exposure, view transform);
+      EXR is the render's linear light without them.
   mitcad-cli convert <file.mitcad> <out.mitcad> [--format v2|v3|auto]
       Writes a project file again without computing it: v3 refers to B-rep
       data in the project's store (the output must be in a project), v2 is
       a single file with the data inside, auto (default) is v3 in a
       project and v2 elsewhere. --save of the other commands writes as
       auto does.
-Exit status: 0 on success, 1 on errors (also of the network, signing in and
+)";
+
+// After the commands of other files (library.cpp).
+const char* const kExitStatus = R"(Exit status: 0 on success, 1 on errors (also of the network, signing in and
 the remote), failed expectations and exceeded limits, 2 on wrong arguments,
 3 when a sync needs a choice for files changed on both sides.
 )";
@@ -235,7 +279,7 @@ int fail(const std::string& message) {
 }
 
 int usage(const std::string& problem) {
-  std::cerr << "mitcad-cli: " << problem << "\n" << kUsage;
+  std::cerr << "mitcad-cli: " << problem << "\n" << kUsage << mitcad::cli::kLibraryUsage << kExitStatus;
   return 2;
 }
 
@@ -405,9 +449,41 @@ rust::Box<mitcad::Document> open_part(const std::string& path) {
 
 // The report, the physical properties with --properties and the times of
 // the last recompute with --timings.
+// The uids of the bodies, from the `bodies` query.
+std::vector<std::string> body_uids(const mitcad::Document& document) {
+  const std::string bodies(document.query(R"({"query": "bodies"})"));
+  std::vector<std::string> uids;
+  const std::string key = R"("uid":)";
+  for (std::size_t at = bodies.find(key); at != std::string::npos; at = bodies.find(key, at + 1)) {
+    const std::size_t open = bodies.find('"', at + key.size());
+    const std::size_t close = open == std::string::npos ? open : bodies.find('"', open + 1);
+    if (close != std::string::npos) {
+      uids.push_back(bodies.substr(open + 1, close - open - 1));
+    }
+  }
+  return uids;
+}
+
+// With --names: the names of every body's faces and edges (the `faces` and
+// `edges` queries), to compare the topology two builds give a model.
+void print_names(const mitcad::Document& document) {
+  for (const std::string& uid : body_uids(document)) {
+    const std::string body = R"(, "body": )" + json_string(uid) + "}";
+    std::cout << "Faces of " << uid << ": " << std::string(document.query(R"({"query": "faces")" + body))
+              << "\n";
+    std::cout << "Edges of " << uid << ": " << std::string(document.query(R"({"query": "edges")" + body))
+              << "\n";
+  }
+}
+
 void print_report(const mitcad::Document& document, bool json, bool properties,
-                  const std::string& density, bool timings, bool diagnostics = false) {
+                  const std::string& density, bool timings, bool diagnostics = false, bool names = false) {
   const std::string report(document.report(json));
+  if (names && !json) {
+    std::cout << report;
+    print_names(document);
+    return;
+  }
   if (!properties && !timings && !diagnostics) {
     std::cout << report;
     return;
@@ -463,9 +539,12 @@ int info_or_run(const std::string& mode, const std::vector<std::string>& args) {
   StoreOptions store;
   std::string min_ms;
   bool diagnostics = false;
+  bool names = false;
   for (std::size_t i = 1; i < args.size(); ++i) {
     if (args[i] == "--json") {
       json = true;
+    } else if (args[i] == "--names" && mode == "info") {
+      names = true;
     } else if (args[i] == "--diagnostics") {
       diagnostics = true;
     } else if (args[i] == "--properties") {
@@ -519,7 +598,7 @@ int info_or_run(const std::string& mode, const std::vector<std::string>& args) {
   if (!save.empty()) {
     save_document(*document, save);
   }
-  print_report(*document, json, properties, density, timings, diagnostics);
+  print_report(*document, json, properties, density, timings, diagnostics, names);
   return 0;
 }
 
@@ -657,13 +736,6 @@ int import_f3d_timeline(const Arguments& a) {
   } else {
     std::cout << report << std::string(document->report(false));
   }
-  if (report.find("the geometry kernel did not return") != std::string::npos) {
-    // The thread the kernel hung in still runs: end without running static
-    // destructors under it.
-    std::cout.flush();
-    std::fflush(nullptr);
-    std::_Exit(0);
-  }
   return 0;
 }
 
@@ -753,6 +825,73 @@ int import_fcstd(const std::vector<std::string>& args) {
   }
   const bool differs = report.find("\"pass\": false") != std::string::npos ||
                        report.find("reference check failed") != std::string::npos;
+  return differs ? 1 : 0;
+}
+
+// The bodies stored in an .ipt part file (mitcad#60).
+int import_ipt(const std::vector<std::string>& args) {
+  Arguments a;
+  std::string problem;
+  if (!parse_arguments(args,
+                       {"--save", "--report", "--reference", "--max-relative", "--dump", "--design", "--time-limit"},
+                       {"--deviation", "--json", "--bodies-only", "--no-verify", "--no-fallback", "--no-compare"}, a,
+                       problem)) {
+    return usage(problem);
+  }
+  if (a.positional.size() != 1) {
+    return usage(a.positional.empty() ? "no .ipt file" : "more than one .ipt file");
+  }
+  const bool json = a.flag("--json");
+  std::string options = std::string(R"({"text": )") + (json ? "false" : "true");
+  for (const auto& [flag, key] : {std::pair<const char*, const char*>{"--bodies-only", "bodies_only"},
+                                  {"--no-verify", "no_verify"},
+                                  {"--no-fallback", "no_fallback"},
+                                  {"--no-compare", "no_compare"}}) {
+    if (a.flag(flag)) {
+      options += std::string(R"(, ")") + key + R"(": true)";
+    }
+  }
+  if (const std::string* path = a.option("--dump")) {
+    options += R"(, "dump_path": )" + json_string(*path);
+  }
+  if (const std::string* path = a.option("--design")) {
+    options += R"(, "design_path": )" + json_string(*path);
+  }
+  if (const std::string* limit = a.option("--time-limit")) {
+    if (!is_number(*limit)) {
+      return usage("--time-limit needs a number");
+    }
+    options += R"(, "time_limit": )" + *limit;
+  }
+  if (const std::string* path = a.option("--report")) {
+    options += R"(, "report_path": )" + json_string(*path);
+  }
+  if (const std::string* path = a.option("--reference")) {
+    options += R"(, "reference": )" + json_string(*path);
+  }
+  if (const std::string* limit = a.option("--max-relative")) {
+    if (!is_number(*limit)) {
+      return usage("--max-relative needs a number");
+    }
+    options += R"(, "max_relative": )" + *limit;
+  }
+  if (a.flag("--deviation")) {
+    options += R"(, "deviation": true)";
+  }
+  options += "}";
+  rust::Box<mitcad::Document> document = mitcad::new_document();
+  const std::string report(document->import_ipt(a.positional[0], options));
+  if (const std::string* save = a.option("--save")) {
+    save_document(*document, *save);
+  }
+  if (json) {
+    std::cout << R"({"import": )" << report << R"(, "document": )"
+              << std::string(document->query(R"({"query": "report"})")) << "}\n";
+  } else {
+    std::cout << report << std::string(document->report(false));
+  }
+  const bool differs = report.find("\"pass\": false") != std::string::npos ||
+                       report.find(": FAILED\n") != std::string::npos;
   return differs ? 1 : 0;
 }
 
@@ -1208,15 +1347,28 @@ int convert(const std::vector<std::string>& args) {
   return 0;
 }
 
-} // namespace
+// Ends the program with `code` when import threads that the hang watchdog
+// gave up still run (their geometry kernel call has not returned): without
+// running static destructors, which would tear down OCCT's and the C++
+// runtime's state under them (mitcad#82: a crash at exit after an import
+// that hung). Else returns `code` for main to return.
+int finish(int code) {
+  if (mitcad::abandoned_imports() > 0) {
+    std::cout.flush();
+    std::cerr.flush();
+    std::fflush(nullptr);
+    std::_Exit(code);
+  }
+  return code;
+}
 
-int main(int argc, char* argv[]) {
+int run(int argc, char* argv[]) {
   const std::vector<std::string> args(argv + 1, argv + argc);
   if (args.empty()) {
     return usage("no command");
   }
   if (args[0] == "--help" || args[0] == "-h") {
-    std::cout << kUsage;
+    std::cout << kUsage << mitcad::cli::kLibraryUsage << kExitStatus;
     return 0;
   }
   const std::string& mode = args[0];
@@ -1227,6 +1379,9 @@ int main(int argc, char* argv[]) {
   // application's model worker thread; Ctrl+C still ends the program.
   mitcad::geometry::catch_occt_crashes();
   try {
+    // Library parts (mitcad#64) are read from the cache of fetched
+    // libraries: MITCAD_LIBRARIES_DIR, else the user's data folder.
+    mitcad::configure_libraries("");
     if (mode == "info" || mode == "run") {
       return info_or_run(mode, args);
     }
@@ -1238,6 +1393,9 @@ int main(int argc, char* argv[]) {
     }
     if (mode == "import-fcstd") {
       return import_fcstd(args);
+    }
+    if (mode == "import-ipt") {
+      return import_ipt(args);
     }
     if (mode == "export") {
       return export_bodies(args);
@@ -1279,6 +1437,21 @@ int main(int argc, char* argv[]) {
     if (mode == "sync") {
       return sync_project(args);
     }
+    // Component libraries and parts lists (mitcad#64, mitcad#63).
+    if (mode == "library") {
+      return mitcad::cli::library(args);
+    }
+    if (mode == "parts") {
+      return mitcad::cli::parts(args, [](const std::string& path) { return open_document(path); });
+    }
+    // The final render (mitcad#48), in builds with the renderer.
+    if (mode == "render") {
+#ifdef MITCAD_RENDER
+      return mitcad::cli::render(argc, argv, [](const std::string& path) { return open_part(path); });
+#else
+      return fail("this mitcad-cli is built without the renderer (the CMake option MITCAD_RENDER)");
+#endif
+    }
   } catch (const rust::Error& error) {
     return fail(error.what());
   } catch (const std::exception& error) {
@@ -1286,3 +1459,7 @@ int main(int argc, char* argv[]) {
   }
   return usage("unknown command '" + mode + "'");
 }
+
+} // namespace
+
+int main(int argc, char* argv[]) { return finish(run(argc, argv)); }

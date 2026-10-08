@@ -150,6 +150,51 @@ fn rectangular_patterns_of_bodies_make_new_bodies() {
 }
 
 #[test]
+fn patterns_scale_their_copies_about_the_carried_centre() {
+    // A pattern's `scale` (mitcad#59): element e of n scaled by
+    // 1 + (scale - 1) e / (n - 1) about the original's centre carried to
+    // the element. The block is 60 x 40 x 20 at the origin.
+    let mut b = block();
+    b.doc.kernel().measures.set(true);
+    let uid = add(&mut b.doc, x_pattern(3.0, 40.0, json!({"scale": 2})));
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    let copy1 = BodyUid::new(uid, 0).to_string();
+    let copy2 = BodyUid::new(uid, 1).to_string();
+    // 1.5 times about (70, 20, 10), twice about (110, 20, 10).
+    assert_bounds(&b.doc, &copy1, [25.0, -10.0, -5.0], [115.0, 50.0, 25.0]);
+    assert_bounds(&b.doc, &copy2, [50.0, -20.0, -10.0], [170.0, 60.0, 30.0]);
+    let answer: Value = serde_json::from_str(
+        &b.doc
+            .query(&json!({"query": "feature", "uid": uid}).to_string())
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(answer["def"].get("scale").is_some());
+    // The factor is a parameter, checked like the others.
+    let message = b
+        .doc
+        .edit_feature(uid, &def(x_pattern(3.0, 40.0, json!({"scale": 0}))))
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains("must be a positive factor"), "{message}");
+    // A circular pattern scales its copies too.
+    let turn = add(
+        &mut b.doc,
+        json!({"type": "circular_pattern", "objects": {"type": "bodies", "bodies": ["F2.b0"]},
+               "axis": {"type": "origin", "axis": "z"}, "quantity": 2,
+               "angle": std::f64::consts::TAU, "scale": 0.5}),
+    );
+    assert_eq!(status(&b.doc, turn), FeatureStatus::Ok);
+    // Half size about (-30, -20, 10), the centre turned half round.
+    assert_bounds(
+        &b.doc,
+        &BodyUid::new(turn, 0).to_string(),
+        [-45.0, -30.0, 5.0],
+        [-15.0, -10.0, 15.0],
+    );
+}
+
+#[test]
 fn two_directions_number_the_elements_direction_one_first() {
     let mut b = block();
     let mut value = x_pattern(3.0, 100.0, json!({"suppressed_elements": [4]}));
@@ -266,6 +311,93 @@ fn patterns_of_features_repeat_the_tool_and_follow_edits() {
 }
 
 #[test]
+fn cuts_leave_out_copies_that_stay_away_from_the_bodies() {
+    let mut b = block();
+    let (cut, _) = hole(&mut b.doc);
+    // Holes 20 mm apart from x = 10: the block (x 0..60) reaches the first
+    // three; the copies at x = 70 and 90 are left out of the union.
+    let pattern = add(
+        &mut b.doc,
+        json!({"type": "rectangular_pattern",
+               "objects": {"type": "features", "features": [cut]},
+               "direction1": {"axis": {"type": "origin", "axis": "x"}, "quantity": 5,
+                              "distance": 20},
+               "distance_type": "spacing"}),
+    );
+    assert_eq!(status(&b.doc, pattern), FeatureStatus::Ok);
+    let history = shape(&b.doc, "F2.b0").history;
+    assert!(
+        history.contains("inst1") && history.contains("inst2"),
+        "{history}"
+    );
+    assert!(
+        !history.contains("inst3") && !history.contains("inst4"),
+        "{history}"
+    );
+    // So are they by Identical.
+    let identical = json!({"type": "rectangular_pattern",
+        "objects": {"type": "features", "features": [cut]},
+        "direction1": {"axis": {"type": "origin", "axis": "x"}, "quantity": 5, "distance": 20},
+        "distance_type": "spacing", "compute": "identical"});
+    b.doc.edit_feature(pattern, &def(identical)).unwrap();
+    let history = shape(&b.doc, "F2.b0").history;
+    assert!(
+        history.contains("inst2") && !history.contains("inst3"),
+        "{history}"
+    );
+}
+
+#[test]
+fn copies_of_features_can_keep_to_the_bodies_the_feature_changed() {
+    let mut b = block();
+    let (cut, _) = hole(&mut b.doc);
+    // A second block at x 75..95, made after the hole: the copies at x = 70
+    // and 90 reach it.
+    let sketch = b.doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = b
+        .doc
+        .add_rectangle(sketch, [75.0, 0.0], &num(20.0), &num(40.0))
+        .unwrap()
+        .region;
+    add(
+        &mut b.doc,
+        json!({"type": "extrude", "profiles": [{"sketch": sketch, "region": region}],
+               "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}),
+    );
+    let other = uids(&b.doc)[1].clone();
+    let pattern = |original_bodies: bool| {
+        json!({"type": "rectangular_pattern",
+               "objects": {"type": "features", "features": [cut]},
+               "direction1": {"axis": {"type": "origin", "axis": "x"}, "quantity": 5,
+                              "distance": 20},
+               "distance_type": "spacing", "original_bodies": original_bodies})
+    };
+    // The hole has no participants: its copies cut every body they reach.
+    let uid = add(&mut b.doc, pattern(false));
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    let history = shape(&b.doc, &other).history;
+    assert!(history.contains("inst4"), "{history}");
+    // Kept to the bodies the hole changed, they leave the second block alone.
+    b.doc.edit_feature(uid, &def(pattern(true))).unwrap();
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    let history = shape(&b.doc, &other).history;
+    assert!(!history.contains("inst"), "{history}");
+    let history = shape(&b.doc, "F2.b0").history;
+    assert!(
+        history.contains("inst1") && history.contains("inst2"),
+        "{history}"
+    );
+    // The definition keeps the setting.
+    let saved: Value = serde_json::from_str(
+        &b.doc
+            .query(&format!(r#"{{"query": "feature", "uid": "{uid}"}}"#))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved["def"]["original_bodies"], json!(true));
+}
+
+#[test]
 fn patterns_of_new_body_features_make_bodies() {
     let mut b = block();
     let sketch = b.doc.add_sketch(SketchPlane::Xy).unwrap().uid;
@@ -319,11 +451,13 @@ fn patterns_of_patterns_repeat_the_originals_at_every_product() {
             .collect()
     };
     for compute in ["identical", "adjust"] {
+        // About the block's middle, so that the turned holes stay in it
+        // (copies that stay away from the bodies are left out).
         let turn = add(
             &mut b.doc,
             json!({"type": "circular_pattern", "objects": {"type": "features", "features": [row]},
-                   "axis": "z", "quantity": 2, "angle": std::f64::consts::TAU,
-                   "compute": compute}),
+                   "axis": {"origin": [30, 20, 0], "direction": [0, 0, 1]}, "quantity": 2,
+                   "angle": std::f64::consts::TAU, "compute": compute}),
         );
         assert_eq!(status(&b.doc, turn), FeatureStatus::Ok, "{compute}");
         // The hole, the row's element 2 (1 is suppressed), and both turned:
@@ -342,12 +476,12 @@ fn patterns_of_patterns_repeat_the_originals_at_every_product() {
         );
         b.doc.undo();
     }
-    // A mirror of the row, and a pattern of that mirror: reflections are
-    // moved as finished tools.
+    // A mirror of the row (in the block's middle), and a pattern of that
+    // mirror: reflections are moved as finished tools.
     let mirror = add(
         &mut b.doc,
         json!({"type": "mirror", "objects": {"type": "features", "features": [row]},
-               "plane": "yz"}),
+               "plane": {"origin": [30, 0, 0], "normal": [1, 0, 0]}}),
     );
     let shifted = add(
         &mut b.doc,
@@ -448,14 +582,16 @@ fn mirrors_copy_bodies_and_features() {
     assert_eq!(uids(&b.doc), ["F2.b0", "F3.b0"]);
     *b.doc.kernel().touch.borrow_mut() = None;
 
-    // A feature mirrored in a planar face of the block (x = 60).
+    // A feature mirrored in a planar face of the block (the mock's face is
+    // at x = 30, so that the image of the hole lies in the block: copies
+    // that stay away from the bodies are left out).
     let mut b = block();
     let (cut, _) = hole(&mut b.doc);
     let face = "F2:side(c2[c1,c3])";
     b.doc.kernel().surfaces.borrow_mut().insert(
         face.to_owned(),
         SurfaceGeometry::Plane {
-            origin: [60.0, 0.0, 0.0],
+            origin: [30.0, 0.0, 0.0],
             normal: [1.0, 0.0, 0.0],
         },
     );
@@ -485,6 +621,42 @@ fn mirrors_copy_bodies_and_features() {
         )
         .unwrap_err();
     assert!(error.to_string().contains("bodies only"), "{error}");
+}
+
+#[test]
+fn a_mirror_of_a_feature_and_of_its_mirror_copies_it_once() {
+    // Mirror2 reflects the hole and Mirror1, whose original is the hole
+    // too: the hole is reflected once (a second copy at the same place
+    // would reach nothing), Mirror1's copy once more.
+    let mut b = block();
+    let (cut, _) = hole(&mut b.doc);
+    let first = add(
+        &mut b.doc,
+        json!({"type": "mirror", "objects": {"type": "features", "features": [cut]},
+               "plane": {"origin": [30, 0, 0], "normal": [1, 0, 0]}}),
+    );
+    let second = add(
+        &mut b.doc,
+        json!({"type": "mirror", "objects": {"type": "features", "features": [cut, first]},
+               "plane": {"origin": [0, 20, 0], "normal": [0, 1, 0]}}),
+    );
+    assert_eq!(status(&b.doc, second), FeatureStatus::Ok);
+    let mut names: Vec<String> = shape(&b.doc, "F2.b0")
+        .faces
+        .iter()
+        .map(ToString::to_string)
+        .filter(|f| f.contains("side(c1)"))
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "F4:side(c1)",
+            "F5:inst1(F4:side(c1))",
+            "F6:inst1(F4:side(c1))",
+            "F6:inst1(F5:inst1(F4:side(c1)))",
+        ]
+    );
 }
 
 #[test]

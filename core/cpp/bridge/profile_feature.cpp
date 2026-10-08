@@ -166,8 +166,11 @@ std::shared_ptr<geometry::Shape> modeled_thread(rust::Str feature, const geometr
     spec.faces.emplace_back(face);
   }
   spec.pitch = input.pitch;
-  spec.depth = input.depth;
+  spec.major = input.major;
+  spec.minor = input.minor;
+  spec.pitch_diameter = input.pitch_diameter;
   spec.right_handed = input.right_handed;
+  spec.angle = input.angle;
   spec.full_length = input.full_length;
   spec.length = input.length;
   spec.offset = input.offset;

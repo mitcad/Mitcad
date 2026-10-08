@@ -14,6 +14,7 @@ enum class FileKind {
   Cad,     // .step, .stp, .iges, .igs, .brep, .brp: bodies without history
   Mesh,    // .stl, .obj: mesh bodies
   Drawing, // .dxf: a sketch
+  Ipt,     // .ipt: a new document with the part's stored bodies (mitcad#60)
 };
 
 FileKind fileKind(const QString& path);

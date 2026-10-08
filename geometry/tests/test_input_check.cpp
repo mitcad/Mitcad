@@ -89,11 +89,13 @@ void test_fingerprint() {
   const BrepFingerprint before = fingerprint(box->occt());
   CHECK(fingerprint(box->occt()) == before);
   // OCCT's prism shares the bottom's face, wire, edges and vertices with
-  // the top (moved by a location), and edges on planes need no p-curves.
+  // the top (moved by a location). Shape stores the curves of edges on
+  // planes: the 4 bottom edges on the bottom, the top (at its location)
+  // and a side, and the 4 vertical edges on two sides.
   CHECK(before.shapes == 1 + 1 + 5 + 5 + 8 + 4);
   CHECK(before.surfaces == 5);
   CHECK(before.curves == 8);
-  CHECK(before.pcurves == 0);
+  CHECK(before.pcurves == 20);
   CHECK(before.meshes == 0);
   CHECK(before.changes_since(before).empty());
   // The same block again: the same counts, other geometry handles.
@@ -107,7 +109,7 @@ void test_fingerprint() {
   CHECK(after.pcurves == before.pcurves + 1);
   CHECK(after.surfaces == before.surfaces + 1);
   CHECK(after.topology == before.topology);
-  CHECK(after.changes_since(before) == "surfaces 5 -> 6, p-curves 0 -> 1, geometry");
+  CHECK(after.changes_since(before) == "surfaces 5 -> 6, p-curves 20 -> 21, geometry");
 
   BRep_Builder().UpdateVertex(box->vertex(0), 1.0e-3);
   const BrepFingerprint wider = fingerprint(box->occt());
@@ -172,7 +174,7 @@ void test_input_check_reports() {
   CHECK(changes.size() == 1);
   if (!changes.empty()) {
     CHECK(changes[0].find("test change changed an input, a shape of 6 faces (F2:") == 0);
-    CHECK(changes[0].find(": surfaces 5 -> 6, p-curves 0 -> 1, geometry") != std::string::npos);
+    CHECK(changes[0].find(": surfaces 5 -> 6, p-curves 20 -> 21, geometry") != std::string::npos);
   }
   // Read outside an operation and changed there: the next operation tells.
   clear_input_changes();

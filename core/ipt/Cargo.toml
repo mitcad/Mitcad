@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-ipt"
+description = "Reader for .ipt part files: compound file container, property sets, the segment database and the B-rep record"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mitcad_ipt"
+
+[[bin]]
+name = "mitcad-ipt-inspect"
+path = "src/bin/mitcad-ipt-inspect.rs"
+
+[dependencies]
+# The B-rep record holds an ASM binary file, read and converted by the
+# .f3d reader's ASM code.
+mitcad-f3d = { path = "../f3d" }
+# Pure-Rust decompressors of the segment streams (zlib, zstd); zlib also
+# compresses (test files).
+miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }
+ruzstd = { version = "0.8.1", default-features = false, features = ["std"] }
+# The design as the import's dump IR (JSON) and the report summaries.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The design replayed by the import on the model's mock geometry kernel.
+mitcad-import = { path = "../import" }
+mitcad-model = { workspace = true, features = ["testing"] }

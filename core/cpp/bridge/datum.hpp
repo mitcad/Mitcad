@@ -16,6 +16,8 @@ struct DatumVec;
 struct DatumSurface;
 struct DatumCurve;
 struct DatumPointing;
+struct DatumFaceEntry;
+struct DatumEdgeEntry;
 
 DatumSurface datum_face_geometry(const geometry::Shape& shape, rust::Str face);
 DatumCurve datum_edge_geometry(const geometry::Shape& shape, rust::Str edge);
@@ -28,5 +30,7 @@ std::shared_ptr<geometry::Shape> datum_plane_shape(const DatumVec& origin, const
 std::shared_ptr<geometry::Shape> datum_axis_shape(const DatumVec& origin,
                                                   const DatumVec& direction, double size);
 std::shared_ptr<geometry::Shape> datum_point_shape(const DatumVec& point);
+rust::Vec<DatumFaceEntry> datum_face_geometries(const geometry::Shape& shape);
+rust::Vec<DatumEdgeEntry> datum_edge_geometries(const geometry::Shape& shape);
 
 } // namespace mitcad::bridge

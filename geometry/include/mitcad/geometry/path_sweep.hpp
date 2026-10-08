@@ -40,7 +40,10 @@ enum class ProfileScaling { Scale, Stretch, None };
 //
 // Faces: side(<segment>) from the profile segments (#k pieces), and with
 // caps start(<region>) and end(<region>): start at the profile when it is
-// at an end of the swept part, else at the end of side one.
+// at an end of the swept part, else at the end of side one. With the
+// parallel orientation a path turning back through the profile's plane is
+// swept in pieces that are fused; the copy where it turns is the face
+// turn(<region>).
 struct SweepSpec {
   std::string feature;
   Frame frame;
@@ -106,6 +109,17 @@ ShapePtr coil(const CoilSpec& spec);
 // right-handed about the direction unless `left_handed` (a screw motion:
 // every section in a plane through the axis is the profile turned there).
 // Faces side(<segment>), start(<region>) at the profile and end(<region>).
+// A `growth` (outwards per turn, mitcad#59) widens the helix: the profiles
+// move out as they turn. Mitcad's construction (mitcad#83) moves them by
+// the screw motion and out along the direction from the axis towards their
+// centre, in proportion to the turn, so every section in a plane through
+// the axis is the profile turned there and moved out; it is the same for
+// every profile position and growth sign. With `freecad` the profiles
+// instead follow the Frenet frame of a helix of the same pitch and growth
+// a hundred times as far from the axis, as FreeCAD builds its conical and
+// growing helices (staying nearly in planes through the axis), for the
+// FreeCAD import. `flip`: the travel `axis` is against the reference axis
+// (FreeCAD's construction depends on it).
 struct HelixSweepSpec {
   std::string feature;
   Frame frame;
@@ -114,6 +128,9 @@ struct HelixSweepSpec {
   double pitch = 0.0;
   double revolutions = 0.0;
   bool left_handed = false;
+  double growth = 0.0;
+  bool flip = false;
+  bool freecad = false;
 };
 
 ShapePtr helix_sweep(const HelixSweepSpec& spec);

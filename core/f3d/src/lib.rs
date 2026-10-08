@@ -24,6 +24,7 @@ pub mod container;
 pub mod convert;
 pub mod design;
 pub mod flat;
+pub mod names;
 pub mod ogs;
 #[doc(hidden)]
 pub mod testdata;

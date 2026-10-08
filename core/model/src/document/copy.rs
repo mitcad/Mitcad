@@ -184,19 +184,32 @@ impl DocState {
                     }
                     true
                 }
-                _ => false,
+                // Joints between occurrences (mitcad#55).
+                def => crate::joints::remap_occurrences(def, &|o| {
+                    occurrences.get(&o).copied().unwrap_or(o)
+                }),
             };
             if changed {
                 self.features[position] = Arc::new(entry);
             }
         }
-        // Body attributes follow the bodies.
+        // Body attributes follow the bodies, face appearances their faces.
+        let text: HashMap<String, String> = uids
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect();
         let attributes: Vec<_> = source
             .body_attributes
             .iter()
             .filter_map(|(body, attributes)| {
                 let feature = uids.get(&body.feature)?;
-                Some((BodyUid::new(*feature, body.index), attributes.clone()))
+                let mut attributes = attributes.clone();
+                attributes.face_appearances = attributes
+                    .face_appearances
+                    .into_iter()
+                    .map(|(face, appearance)| (remap_text(&face, &text), appearance))
+                    .collect();
+                Some((BodyUid::new(*feature, body.index), attributes))
             })
             .collect();
         self.body_attributes.extend(attributes);

@@ -363,6 +363,33 @@ fn touching_circles_split_at_the_contact_point() {
 }
 
 #[test]
+fn a_circle_drawn_twice_bounds_its_regions_once() {
+    // A ring and a disc in it whose circle is there twice (imported
+    // sketches), each copy a loop by itself: one hole of the ring and one
+    // disc (mitcad#93), the lower id kept.
+    let mut b = Builder::new();
+    b.circle([0.0, 0.0], 4.000000000000003); // c1
+    b.circle([0.0, 0.0], 6.1); // c2
+    b.circle([0.0, 0.0], 4.000000000000003); // c3, on c1
+    b.circle([0.0, 0.0], 6.0); // c4
+    let regions = b.regions();
+    assert_eq!(keys(&regions), ["r{c1}", "r{c2}", "r{c4}"]);
+    let holes: Vec<usize> = regions.iter().map(|r| r.profile.loops.len() - 1).collect();
+    assert_eq!(holes, [0, 1, 1]);
+    assert!(close(area(&regions, "r{c1}"), PI * 16.0, 2e-3));
+    assert!(close(area(&regions, "r{c4}"), PI * 20.0, 2e-3));
+    // Copies within the tolerance of overlapping pieces too, also of
+    // other closed curves; circles of other radii stay.
+    let mut b = Builder::new();
+    b.circle([0.0, 0.0], 10.0); // c1
+    b.circle([1e-10, 0.0], 3.0); // c2
+    b.circle([0.0, 0.0], 3.0); // c3
+    b.circle([0.0, 0.0], 3.0 + 1e-4); // c4
+    let regions = b.regions();
+    assert_eq!(keys(&regions), ["r{c1}", "r{c2}", "r{c4}"]);
+}
+
+#[test]
 fn a_tangent_line_does_not_cut_a_circle_into_regions() {
     let mut b = Builder::new();
     b.circle([0.0, 0.0], 10.0); // c1
@@ -522,6 +549,7 @@ fn changed_sketches_find_the_closest_region() {
         region_info: info,
         solved: std::sync::Arc::new(solved),
         texts: Default::default(),
+        moved: Default::default(),
     };
     // Both pieces share three curves with the old key; the bigger one wins.
     // It carries the old key, so the faces made from it keep their names.

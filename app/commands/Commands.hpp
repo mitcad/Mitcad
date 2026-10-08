@@ -35,6 +35,9 @@ void registerCreateCommands(CommandRegistry& registry, const CommandContext& con
 void registerModifyCommands(CommandRegistry& registry, const CommandContext& context);
 // CONSTRUCT: every construction plane, axis and point.
 void registerConstructCommands(CommandRegistry& registry, const CommandContext& context);
+// ASSEMBLE (mitcad#55): Joint, As-Built Joint, Joint Origin, Rigid Group,
+// Drive Joint.
+void registerAssembleCommands(CommandRegistry& registry, const CommandContext& context);
 // INSPECT: Measure, Interference, Section Analysis and Physical
 // Properties (a dialog over `window` for the bodies `selection` gives).
 void registerInspectCommands(CommandRegistry& registry, const CommandContext& context,

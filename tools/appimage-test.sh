@@ -15,6 +15,10 @@
 #      every library the running Mitcad has loaded (/proc/<pid>/maps) is
 #      the AppImage's or the system's, and its desktop file (Exec the
 #      AppImage) and icons are in the user's data folder.
+#   2b. With the render worker (MITCAD_RENDER): its libraries and their
+#      licences are in it, mitcad links none of them, and View > Rendered
+#      renders the demo block with them (on the GPU, with the AppImage's
+#      kernels, when the worker has a CUDA device; mitcad#50).
 #   3. The automatic update (docs/updates.md): the AppImage, taking itself
 #      for 0.0.0 (MITCAD_TEST_VERSION), finds a release whose manifest signs
 #      this AppImage as the linux-x64 download (mitcad-release, with a key
@@ -93,6 +97,29 @@ for library in libQt6Core libQt6Widgets libQt6Network libQt6Svg libQt6XcbQpa lib
 done
 grep -qx 'Exec=mitcad' "$DIR/mitcad.desktop" || ui_fail "the desktop file does not start mitcad"
 echo "ok   the executables, the desktop file, the icon, Qt's plugins, OCCT and the licences"
+RENDER=0
+if [ -e "$DIR/usr/bin/mitcad-render" ]; then
+  RENDER=1
+  for file in usr/share/doc/mitcad/licenses/cycles/LICENSE usr/share/doc/mitcad/licenses/cycles/BSD-3-Clause-license.txt \
+    usr/share/doc/mitcad/licenses/openimagedenoise/LICENSE.txt usr/share/doc/mitcad/licenses/vcpkg/embree/copyright; do
+    [ -e "$DIR/$file" ] || ui_fail "the AppImage has the render worker but no $file"
+  done
+  for library in libembree4 libtbb libOpenImageIO libOpenColorIO libOpenImageDenoise libOpenImageDenoise_core \
+    libOpenImageDenoise_device_cpu; do
+    compgen -G "$DIR/usr/lib/$library.so*" > /dev/null || ui_fail "the AppImage has the render worker but no $library"
+  done
+  for name in Cycles "Open Image Denoise" Embree OpenImageIO OpenColorIO; do
+    grep -q "$name" "$DIR/usr/share/doc/mitcad/THIRD-PARTY-NOTICES.txt" || ui_fail "the notices do not list $name"
+  done
+  # Only the worker loads the renderer's libraries.
+  render_libraries='libembree|libtbb|libOpenImageIO|libOpenColorIO|libOpenImageDenoise|libOpenEXR|libcrypto'
+  if env -i /usr/bin/ldd "$DIR/usr/bin/mitcad" | grep -E "$render_libraries"; then
+    ui_fail "mitcad links the renderer's libraries"
+  fi
+  echo "ok   the render worker mitcad-render, its libraries and their licences; mitcad links none of them"
+else
+  echo "note no render worker (a build without MITCAD_RENDER)"
+fi
 
 elves=0
 glibc=0
@@ -170,6 +197,44 @@ entry=$WORK/home/.local/share/applications/mitcad.desktop
 grep -qx "Exec=\"$COPY\"" "$entry" || ui_fail "no desktop file running the AppImage in $entry"
 [ -f "$WORK/home/.local/share/icons/hicolor/256x256/apps/mitcad.png" ] || ui_fail "no icon in the user's data folder"
 echo "ok   the desktop file and the icons in the user's data folder"
+
+if [ "$RENDER" = 1 ]; then
+  echo "--- 2b. View > Rendered with the AppImage's render worker"
+  export MITCAD_RENDER_SAMPLES=4
+  UI_GDB=0 UI_APP=$COPY ui_start_app --demo
+  ui_step "View > Rendered" ui_command "Rendered"
+  ui_expect_log "Render worker ready: Cycles" "the AppImage's worker runs Cycles"
+  worker=$(grep -o "Render worker started (pid [0-9]*): .*" "$UI_LOG" | tail -1)
+  pid=$(echo "$worker" | sed 's/.*(pid \([0-9]*\)).*/\1/')
+  appdir=$(tr '\0' '\n' < "/proc/$(xdotool getwindowpid "$UI_WINDOW")/environ" | sed -n 's/^APPDIR=//p')
+  [ "${worker##*: }" = "$appdir/usr/bin/mitcad-render" ] || ui_fail "the worker is not the AppImage's: $worker"
+  for _ in $(seq 1 300); do
+    grep -qE "Render view [0-9]+: $MITCAD_RENDER_SAMPLES samples in" "$UI_LOG" && break
+    ui_crashed && ui_fail "the app crashed"
+    sleep 0.2
+  done
+  grep -qE "Render view [0-9]+: $MITCAD_RENDER_SAMPLES samples in" "$UI_LOG" || ui_fail "the render did not finish"
+  grep -qE "Render view [0-9]+: first frame" "$UI_LOG" || ui_fail "no rendered frame shown"
+  loaded=$(grep -oE '/[^ ]+\.so[.0-9]*$' "/proc/$pid/maps" | sort -u)
+  while IFS= read -r library; do
+    library_ok "$library" "$appdir" || ui_fail "the worker loaded $library"
+  done <<< "$loaded"
+  for library in libembree4 libOpenImageDenoise_device_cpu; do
+    grep -q "^$appdir/usr/lib/$library" <<< "$loaded" || ui_fail "the worker did not load the AppImage's $library"
+  done
+  echo "ok   rendered ($(grep -oE "Render view [0-9]+: $MITCAD_RENDER_SAMPLES samples in .*" "$UI_LOG" | tail -1)), with the AppImage's libraries"
+  # The render device (mitcad#50): with a GPU build on a machine with a
+  # GPU, the automatic choice renders on it with the AppImage's kernels.
+  device=$(grep -o "Render device: .*" "$UI_LOG" | tail -1)
+  if "$DIR/usr/bin/mitcad-render" --list-devices 2> /dev/null | grep -q '"type":"CUDA"'; then
+    compgen -G "$DIR/usr/lib/mitcad/cycles/lib/kernel_*.cubin.zst" > /dev/null ||
+      ui_fail "the worker has a CUDA device but the AppImage no kernels"
+    grep -q "(CUDA) (asked for auto)" <<< "$device" || ui_fail "the AppImage's worker did not render on the GPU: $device"
+  fi
+  echo "ok   ${device:-no render device logged}"
+  ui_stop_app
+  unset MITCAD_RENDER_SAMPLES
+fi
 
 echo "--- 3. The AppImage updates itself"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 2 -subj /CN=localhost \

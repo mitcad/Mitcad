@@ -3,7 +3,9 @@
 
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <stdexcept>
+#include <vector>
 
 #include <BRepBuilderAPI_GTransform.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
@@ -73,6 +75,33 @@ bool has_mesh_faces(const TopoDS_Shape& shape) {
   return false;
 }
 
+// Whether the shape is valid as OCCT's checker sees it, checked once per
+// shape: a similarity moves its geometry exactly and keeps a valid shape
+// valid, so the copies of a pattern need not be checked one by one (the
+// check was four fifths of their time).
+bool valid_once(const Shape& shape) {
+  if (const std::optional<bool> known = shape.checked_valid()) {
+    return *known;
+  }
+  const bool valid = detail::is_valid(shape.occt());
+  shape.set_checked_valid(valid);
+  return valid;
+}
+
+bool is_identity(const Affine& map) {
+  for (std::size_t r = 0; r < 3; ++r) {
+    for (std::size_t c = 0; c < 3; ++c) {
+      if (map.linear[r][c] != (r == c ? 1.0 : 0.0)) {
+        return false;
+      }
+    }
+    if (map.translation[r] != 0.0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // OCCT's checker on the moved shape where it is a B-rep: it reports a face
 // without a surface as BRepCheck_NoSurface, and a mesh body's triangles
 // have nothing else for it to check. A compound's parts are checked one by
@@ -108,8 +137,25 @@ ShapePtr transform_shape(const Shape& shape, const Affine& map, const std::strin
     // or uniform scale moves it only with a copy of the triangulation
     // (otherwise the face stays where it was). GTransform always copies.
     const bool mesh = has_mesh_faces(shape.occt());
+    const bool similarity = is_similarity(map);
+    const bool known_valid = similarity && !mesh && valid_once(shape);
+    if (known_valid && is_identity(map)) {
+      // Only the names change (a tool a pattern rebuilt in its place): the
+      // same B-rep, as results share their unchanged parts with inputs.
+      std::vector<Shape::NamedFace> faces;
+      for (int i = 0; i < shape.face_count(); ++i) {
+        NameList names;
+        for (const std::string& name : shape.face_names(i)) {
+          names.push_back(rename.empty() ? name : rename + '(' + name + ')');
+        }
+        if (!names.empty()) {
+          faces.push_back({shape.face(i), names});
+        }
+      }
+      return std::make_shared<Shape>(shape.occt(), faces);
+    }
     std::unique_ptr<BRepBuilderAPI_ModifyShape> operation;
-    if (is_similarity(map)) {
+    if (similarity) {
       gp_Trsf trsf;
       trsf.SetValues(m[0][0], m[0][1], m[0][2], t[0], m[1][0], m[1][1], m[1][2], t[1], m[2][0],
                      m[2][1], m[2][2], t[2]);
@@ -132,7 +178,9 @@ ShapePtr transform_shape(const Shape& shape, const Affine& map, const std::strin
       }
     }
     namer.finish();
-    require_valid_brep(namer.result());
+    if (!known_valid) {
+      require_valid_brep(namer.result());
+    }
     return namer.shape();
   });
 }

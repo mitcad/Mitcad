@@ -143,17 +143,26 @@ pub mod ffi {
         ) -> Result<AnalysisComparison>;
 
         // .f3d import (T1).
-        /// The bodies `a` together against the bodies `b` together.
+        /// The bodies `a` together against the bodies `b` together, for
+        /// at most `seconds` (0: no limit), without the boolean differences
+        /// when no sample lies farther than `booleans_above` (0: always
+        /// with them).
         fn analysis_compare_shapes(
             a: &ShapeList,
             b: &ShapeList,
             samples: usize,
             fuzzy: f64,
+            seconds: f64,
+            booleans_above: f64,
         ) -> Result<AnalysisComparison>;
         /// Distances of points (x, y, z triples) from the shape's faces.
         fn analysis_boundary_distances(shape: &Shape, points: &[f64]) -> Result<Vec<f64>>;
         /// Whether points (x, y, z triples) lie inside the shape's solids.
         fn analysis_points_inside(shape: &Shape, points: &[f64]) -> Result<Vec<bool>>;
+        /// Where a segment (two x, y, z triples) crosses the shape's
+        /// faces: pairs of the fraction along it and -1 entering the
+        /// material, +1 leaving it, in order along it.
+        fn analysis_segment_crossings(shape: &Shape, segment: &[f64]) -> Result<Vec<f64>>;
         fn analysis_face_count(shape: &Shape) -> Result<usize>;
         /// Every named edge's middle, in the shape's edge order.
         fn analysis_edge_middles(shape: &Shape) -> Result<Vec<AnalysisEdgeMiddle>>;

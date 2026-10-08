@@ -155,6 +155,8 @@ function Invoke-Mitcad([string]$Name, [string[]]$Arguments, [hashtable]$Environm
   $info.EnvironmentVariables['QT_FORCE_STDERR_LOGGING'] = '1'
   # Autosave's recovery folder of the test's own, not the user's.
   $info.EnvironmentVariables['MITCAD_AUTOSAVE_DIR'] = Join-Path $Out 'autosave'
+  # Crash reports of the test's own (mitcad#62): none offered from the user's.
+  $info.EnvironmentVariables['MITCAD_CRASH_DIR'] = Join-Path $Out 'crashes'
   # The store of computed results (P7d) off, unless the run turns it on.
   $info.EnvironmentVariables['MITCAD_RESULT_STORE'] = 'off'
   # No update checks (mitcad#9): the tests make no network requests.

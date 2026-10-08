@@ -10,6 +10,10 @@ SolveSpace (GPLv3) or FreeCAD PlaneGCS (LGPL).
 The sketch model keeps its own stable ids (`EntityUid`, see
 `docs/architecture.md`) and maps them to solver ids.
 
+The same iteration, factorization, rank analysis and differentiation
+solve the joints of assemblies: rigid bodies joined by joints
+([Joints](#joints-rigid-bodies), `src/rigid.rs`).
+
 ## Usage
 
 ```rust
@@ -153,6 +157,75 @@ to all equations.
   is zero (below `1e-8`). A point is fully constrained when both coordinates
   are, an entity when all its points and radii are (sketch mode shows
   these in black). Components without remaining DOF skip this test.
+
+## Joints (rigid bodies)
+
+`RigidSystem` (`src/rigid.rs`, mitcad#55) places rigid bodies joined by
+joints; the model builds one per component from its joint features
+(`core/model/src/joints.rs`).
+
+```rust
+use mitcad_solver::{Freedom, JointMotion, Pose, RigidJoint, RigidOptions, RigidSystem};
+
+let mut s = RigidSystem::new();
+let base = s.add_body(true);                   // fixed
+let arm = s.add_body(false);
+let hinge = s.add_joint(RigidJoint {
+    a: Some(arm), frame_a: Pose::translation([100.0, 0.0, 0.0]),
+    b: Some(base), frame_b: Pose::IDENTITY,      // frames where the bodies are
+    motions: vec![JointMotion { target: Some(0.5), ..JointMotion::free(Freedom::Rz) }],
+    alignment: Pose::IDENTITY,
+})?;
+let r = s.solve(&RigidOptions::default());     // r.status, r.conflicts, r.at_limits
+let moved: Pose = s.body_pose(arm);            // the arm's motion since it was added
+let values = s.joint_values(hinge);            // [0.5]
+s.drag(arm, [10.0, 0.0, 0.0], [0.0, 10.0, 0.0], &RigidOptions::default());
+let a = s.analyze();                           // a.dof, a.body_dof, a.redundant
+```
+
+- **Unknowns.** Each free body has six: a translation `t` and a rotation
+  vector `w` turning about the body's centre `c` (the mean of its joint
+  frames' origins), `X = T(c + t) · R(w) · T(-c) · X0` (Rodrigues'
+  formula, with its series near zero so the derivatives stay exact). A
+  run starts at `t = w = 0` and folds the result into `X0`. Each joint's
+  free motions' values are unknowns too, kept within their limits
+  (bounds, as spline parameters are).
+- **Equations.** A joint holds when `frame_a = frame_b · M(values) ·
+  alignment` (`M` composes slides along and turns about frame `b`'s axes
+  in the order given). Six rows per joint: the origins' difference (mm)
+  and the skew part of the rotation between the frames, times the
+  system's size (the diagonal of the box around the frames). A driven
+  motion (a target value) adds `value - target`.
+- **Weights.** A body's turn weighs as moving points at the system's size
+  by the angle; values weigh a hundredth of that, so a step changes
+  values before it moves bodies. The minimum-norm step then moves the
+  bodies as little as possible.
+- **Placing first.** In joint order, a joint between a side that is fixed
+  (or joined to a fixed body by the joints before it) and one that is not
+  moves the free side's bodies, with every body joined to it so far, so
+  that the joint holds at its targets and, for free motions, at the
+  values nearest to where it is (closed forms: slides from the
+  translation, one turn from the rotation, turns about z, y and x as
+  angles in that order). Between two free sides `a` moves. Only joints
+  that close loops are iterated.
+- **Half turns.** The skew part of a rotation also vanishes at half a
+  turn; a run that ends more than a quarter turn off turns the joint's
+  body over about the error's axis and iterates again (up to four runs).
+- **Analysis.** The rows in joint order (each joint's frame rows, then
+  its targets) give the rank as in the sketch analysis: `dof` is the
+  unknowns less the rank (targets left out), `body_dof` the same with
+  every other body held (its unknowns weigh nothing), and dependent rows
+  are `redundant` (they hold) or `conflicts` (they do not), the newest
+  joint of a set reported with the joints (and targets) involved. A
+  failed solve reports the conflicts at the least-squares point and
+  leaves the bodies where they were.
+- **Drag.** `drag(body, point, target)` turns the body about `point`,
+  so the point's motion is the body's translation, a goal of the sketch
+  solver's drag iteration; targets are let go (read the values to drive
+  them there).
+- **Limits.** Turns of three free motions are angles about z, y and x
+  (the ball joint's); at ±90° about y they lose a direction, and the
+  analysis there counts one more degree of freedom.
 
 ## Performance
 

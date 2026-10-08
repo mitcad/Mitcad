@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Thread: a screw thread on cylindrical faces.
 //! A cosmetic thread changes no geometry; it is data on the faces that the
-//! `threads` query lists for display. A modelled thread cuts the 60-degree
-//! basic profile into the faces (ISO metric and Unified threads; Whitworth
-//! and NPT threads are cosmetic only).
+//! `threads` query lists for display. A modelled thread builds the
+//! 60-degree profile on the faces (ISO metric and Unified threads;
+//! Whitworth and NPT threads are cosmetic only): the basic profile of the
+//! size, or the profile of given diameters (a tolerance class's, as .f3d
+//! designs store them), turned about its axis by an angle.
 
 use serde::{Deserialize, Serialize};
 
@@ -77,6 +79,18 @@ impl ThreadEnd {
     }
 }
 
+/// The diameters of a modelled thread's profile: its crests and roots lie
+/// on the major and minor diameters, and it is half a pitch wide at the
+/// pitch diameter (`majorDiameter`, `minorDiameter` and `pitchDiameter` of
+/// a .f3d design's `ThreadInfo`: the middle of the class's tolerances).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThreadDiameters<P = ParamId> {
+    pub major: P,
+    pub minor: P,
+    pub pitch: P,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ThreadDef<P = ParamId> {
@@ -94,6 +108,14 @@ pub struct ThreadDef<P = ParamId> {
     pub offset: Option<P>,
     #[serde(default, skip_serializing_if = "ThreadEnd::is_high")]
     pub location: ThreadEnd,
+    /// A modelled thread's diameters; the size's basic ones (D, D1, D2)
+    /// without.
+    #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+    pub diameters: Option<ThreadDiameters<P>>,
+    /// A modelled thread turned about its axis (see `ThreadSpec`); 0
+    /// without.
+    #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+    pub angle: Option<P>,
 }
 
 impl<P> ThreadDef<P> {
@@ -111,6 +133,15 @@ impl<P> ThreadDef<P> {
             length: self.length.as_ref().map(|v| f("length", v)).transpose()?,
             offset: self.offset.as_ref().map(|v| f("offset", v)).transpose()?,
             location: self.location,
+            diameters: match &self.diameters {
+                Some(d) => Some(ThreadDiameters {
+                    major: f("diameters.major", &d.major)?,
+                    minor: f("diameters.minor", &d.minor)?,
+                    pitch: f("diameters.pitch", &d.pitch)?,
+                }),
+                None => None,
+            },
+            angle: self.angle.as_ref().map(|v| f("angle", v)).transpose()?,
         })
     }
 }
@@ -167,6 +198,8 @@ impl FeatureInfo for ThreadDef {
         }
         if self.modeled {
             self.thread.standard.check_modeled()?;
+        } else if self.diameters.is_some() || self.angle.is_some() {
+            return Err("only a modelled thread has diameters and an angle".to_owned());
         }
         self.thread.check(None).map(|_| ())
     }
@@ -188,6 +221,15 @@ impl FeatureInfo for ThreadDef {
                 value(offset)
             ));
         }
+        if let Some(d) = &self.diameters {
+            let (major, minor, pitch) = (value(d.major), value(d.minor), value(d.pitch));
+            if !(minor > 0.0 && minor < pitch && pitch < major) {
+                return Err(format!(
+                    "the thread's diameters must grow from the minor ({minor}) to the pitch \
+                     ({pitch}) to the major one ({major})"
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -200,6 +242,28 @@ impl<K: Kernel> Evaluate<K> for ThreadDef {
             self.offset,
             self.location == ThreadEnd::HighEnd,
         )?;
+        // The profile's diameters: given, or the size's basic ones.
+        let diameters = match &self.diameters {
+            Some(d) => {
+                let (major, minor, pitch) = (
+                    ctx.positive(d.major)?,
+                    ctx.positive(d.minor)?,
+                    ctx.positive(d.pitch)?,
+                );
+                if !(minor < pitch && pitch < major) {
+                    return Err(format!(
+                        "the thread's diameters must grow from the minor ({minor}) to the pitch \
+                         ({pitch}) to the major one ({major})"
+                    ));
+                }
+                Some((major, minor, pitch))
+            }
+            None => None,
+        };
+        let angle = match self.angle {
+            Some(id) => ctx.param(id)?,
+            None => 0.0,
+        };
         // The faces by body, each a cylinder, all on one side of their material.
         let mut bodies: Vec<(BodyUid, K::Shape, Vec<FaceName>)> = Vec::new();
         let mut internal = None;
@@ -225,10 +289,12 @@ impl<K: Kernel> Evaluate<K> for ThreadDef {
             // The size must fit the cylinder: an external thread's root lies
             // inside it, an internal thread's root outside the bore.
             let diameter = 2.0 * cylinder.radius;
+            let (major, minor, _) =
+                diameters.unwrap_or((data.major, data.minor, data.pitch_diameter));
             let fits = if cylinder.internal {
-                diameter < data.major
+                diameter < major
             } else {
-                diameter > data.minor
+                diameter > minor
             };
             if self.modeled && !fits {
                 return Err(format!(
@@ -246,13 +312,18 @@ impl<K: Kernel> Evaluate<K> for ThreadDef {
             return Ok(output);
         }
         let data = self.thread.data()?;
+        let (major, minor, pitch_diameter) =
+            diameters.unwrap_or((data.major, data.minor, data.pitch_diameter));
         for (uid, shape, faces) in bodies {
             let spec = ThreadSpec {
                 feature: ctx.uid,
                 faces: &faces,
                 pitch: data.pitch,
-                depth: data.depth,
+                major,
+                minor,
+                pitch_diameter,
                 right_handed: self.thread.right_handed,
+                angle,
                 part,
             };
             let threaded = ctx

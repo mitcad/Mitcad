@@ -4,6 +4,7 @@
 // Helpers shared by the geometry sources; not part of the public headers.
 
 #include <array>
+#include <new>
 #include <stdexcept>
 #include <string>
 
@@ -11,6 +12,7 @@
 #include <Message_ProgressRange.hxx>
 #include <Standard_ErrorHandler.hxx>
 #include <Standard_Failure.hxx>
+#include <Standard_OutOfMemory.hxx>
 #include <TopoDS_Shape.hxx>
 #include <gp_Pnt.hxx>
 
@@ -27,13 +29,22 @@ void require_finite(const char* what, double value);
 // MITCAD_TEST_OCCT_CRASH names this operation ("fillet").
 void crash_if_asked(const char* operation);
 
+// For tests of allocations that fail (mitcad#80): throws std::bad_alloc
+// when the environment variable MITCAD_TEST_OCCT_OUT_OF_MEMORY names this
+// operation ("extrude").
+void fail_allocation_if_asked(const char* operation);
+
 // OCCT reports errors as Standard_Failure; add context for the user. With
 // OCCT's signal handlers installed (catch_occt_crashes), a crash inside the
 // operation is one too: OCC_CATCH_SIGNALS gives the handlers somewhere to
 // return to where OCCT has no handler of its own (on Linux; on Windows the
 // handlers throw). An operation asked to stop does not start, and one that
-// fails after the request was cancelled (cancel.hpp). With the input check
-// on, the shapes it reads are compared before and after (input_check.hpp).
+// fails after the request was cancelled (cancel.hpp). An allocation that
+// fails (OCCT's Standard_OutOfMemory, std::bad_alloc) is an error
+// "<operation>: out of memory" (mitcad#80; the model's
+// KernelError::OUT_OF_MEMORY): the operation's memory is freed as it
+// unwinds. With the input check on, the shapes it reads are compared
+// before and after (input_check.hpp).
 template <class Operation>
 auto run(const char* operation, Operation&& op) -> decltype(op()) {
   throw_if_cancelled();
@@ -41,7 +52,12 @@ auto run(const char* operation, Operation&& op) -> decltype(op()) {
   try {
     OCC_CATCH_SIGNALS
     crash_if_asked(operation);
+    fail_allocation_if_asked(operation);
     return op();
+  } catch (const Standard_OutOfMemory&) {
+    throw std::runtime_error(std::string(operation) + ": out of memory");
+  } catch (const std::bad_alloc&) {
+    throw std::runtime_error(std::string(operation) + ": out of memory");
   } catch (const Standard_Failure& failure) {
     throw_if_cancelled();
     throw std::runtime_error(std::string(operation) + ": " + failure.what());

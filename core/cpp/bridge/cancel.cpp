@@ -14,6 +14,7 @@ public:
   explicit State(rust::Box<CancelCheck> check) : m_check(std::move(check)), m_scope(*this) {}
 
   bool cancel_requested() const noexcept override { return m_check->cancel_requested(); }
+  void progressed() const noexcept override { m_check->progressed(); }
 
 private:
   rust::Box<CancelCheck> m_check;

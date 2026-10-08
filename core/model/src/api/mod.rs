@@ -18,6 +18,10 @@ mod sketch;
 mod evaluate;
 // The caches of computed results (P7d).
 mod cache;
+// Joints between occurrences (mitcad#55).
+mod joints;
+// Configuration tables and library parts (mitcad#64).
+mod libraries;
 
 use std::fmt;
 
@@ -25,7 +29,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::document::{
-    Document, ModelError, NamedView, PreviewReport, status_message, status_text,
+    AnalysisDef, Document, ModelError, NamedView, PreviewReport, status_message, status_text,
 };
 use crate::expr::{DEFAULT_DECIMALS, Unit, value_to_expression};
 use crate::features::{FeatureDef, ValueInput};
@@ -152,6 +156,16 @@ enum Command {
         #[serde(default)]
         appearance: Option<String>,
     },
+    // Appearances of single faces (mitcad#53).
+    SetFaceAppearance {
+        uid: BodyUid,
+        faces: Vec<String>,
+        #[serde(default)]
+        appearance: Option<String>,
+    },
+    ClearFaceAppearances {
+        uid: BodyUid,
+    },
     ImportFile(exchange::ImportFileCommand),
     Export(exchange::ExportCommand),
     ExportSketch(exchange::ExportSketchCommand),
@@ -214,6 +228,46 @@ enum Command {
     MarkSaved,
     // The caches of computed results (P7d, `cache.rs`).
     ClearCache,
+    // Analyses kept in the document (mitcad#41, `document/analyses.rs`).
+    AddAnalysis {
+        def: AnalysisDef,
+        /// The next free `Section<n>` when left out.
+        #[serde(default)]
+        name: Option<String>,
+    },
+    EditAnalysis {
+        name: String,
+        def: AnalysisDef,
+        /// Shows (hiding the others) or hides it; as it was when left out.
+        #[serde(default)]
+        visible: Option<bool>,
+    },
+    SetAnalysisVisible {
+        name: String,
+        visible: bool,
+    },
+    RenameAnalysis {
+        name: String,
+        new_name: String,
+    },
+    DeleteAnalysis {
+        name: String,
+    },
+    // Appearances kept in the document (mitcad#46, `document/appearances.rs`).
+    CreateAppearance(crate::appearance::AppearanceChange),
+    EditAppearance(crate::appearance::AppearanceChange),
+    DeleteAppearance {
+        id: String,
+    },
+    // Render settings of the document (mitcad#47).
+    SetRenderSettings(crate::render_settings::RenderSettingsChange),
+    ResetRenderSettings,
+    // Lights of the render settings (mitcad#54): the light's fields.
+    AddRenderLight(serde_json::Map<String, Value>),
+    EditRenderLight(serde_json::Map<String, Value>),
+    DeleteRenderLight {
+        id: String,
+    },
 }
 
 fn yes() -> bool {
@@ -339,6 +393,27 @@ enum Query {
     },
     // Saving a version (P12d): what changed since the saved state.
     ChangesSinceSaved,
+    // Analyses kept in the document (mitcad#41).
+    Analyses,
+    // Appearances: the library's and the document's (mitcad#46).
+    Appearances,
+    // An appearance's embedded texture image (mitcad#53).
+    AppearanceImage {
+        id: String,
+    },
+    // Render settings of the document (mitcad#47).
+    RenderSettings,
+    // Joints between occurrences (mitcad#55, `joints.rs`).
+    Joints,
+    JointDof(joints::JointDofQuery),
+    JointDrag(joints::JointDragQuery),
+    // The frame a joint origin gives (mitcad#55 phase 3: the panels show
+    // where an origin snaps).
+    JointFrame(joints::JointFrameQuery),
+    // Configuration tables and library parts (mitcad#64).
+    Configurations,
+    LibraryParts,
+    PartsList,
 }
 
 fn names(names: &[String]) -> Value {
@@ -376,11 +451,25 @@ impl<K: Kernel> Document<K> {
             .get("cmd")
             .and_then(Value::as_str)
             .is_some_and(|cmd| components::COMMANDS.contains(&cmd));
+        // Joints between occurrences (mitcad#55).
+        let is_joint = value
+            .get("cmd")
+            .and_then(Value::as_str)
+            .is_some_and(|cmd| joints::COMMANDS.contains(&cmd));
+        // Configuration tables and library parts (mitcad#64).
+        let is_library = value
+            .get("cmd")
+            .and_then(Value::as_str)
+            .is_some_and(|cmd| libraries::COMMANDS.contains(&cmd));
         let mut result = if is_sketch {
             let command = sketch::parse_sketch_command(value)?;
             self.run_sketch_command(command)?
         } else if is_component {
             self.run_component_command(parse(value, "command")?)?
+        } else if is_joint {
+            self.run_joint_command(parse(value, "command")?)?
+        } else if is_library {
+            self.run_library_command(parse(value, "command")?)?
         } else {
             self.run_document_command(parse(value, "command")?)?
         };
@@ -546,6 +635,18 @@ impl<K: Kernel> Document<K> {
                 self.set_body_appearance(uid, appearance.as_deref())?;
                 json!({})
             }
+            Command::SetFaceAppearance {
+                uid,
+                faces,
+                appearance,
+            } => {
+                self.set_face_appearance(uid, &faces, appearance.as_deref())?;
+                json!({})
+            }
+            Command::ClearFaceAppearances { uid } => {
+                self.clear_face_appearances(uid)?;
+                json!({})
+            }
             Command::ImportFile(command) => self.import_file_command(command)?,
             Command::Export(command) => self.export_command(command)?,
             Command::ExportSketch(command) => self.export_sketch_command(command)?,
@@ -621,6 +722,68 @@ impl<K: Kernel> Document<K> {
             Command::ClearCache => {
                 let (results, bytes) = self.clear_memory_cache();
                 json!({"results": results, "bytes": bytes})
+            }
+            // Analyses kept in the document (mitcad#41).
+            Command::AddAnalysis { def, name } => {
+                json!({"name": self.add_analysis(def, name.as_deref())?})
+            }
+            Command::EditAnalysis { name, def, visible } => {
+                self.edit_analysis(&name, def, visible)?;
+                json!({})
+            }
+            Command::SetAnalysisVisible { name, visible } => {
+                self.set_analysis_visible(&name, visible)?;
+                json!({})
+            }
+            Command::RenameAnalysis { name, new_name } => {
+                self.rename_analysis(&name, &new_name)?;
+                json!({})
+            }
+            Command::DeleteAnalysis { name } => {
+                self.delete_analysis(&name)?;
+                json!({})
+            }
+            // Appearances kept in the document (mitcad#46).
+            Command::CreateAppearance(change) => {
+                json!({"id": self.create_appearance(&change)?})
+            }
+            Command::EditAppearance(change) => {
+                let id = change.id.clone().ok_or_else(|| {
+                    ApiError("edit_appearance needs the appearance's id".to_owned())
+                })?;
+                self.edit_appearance(&id, &change)?;
+                json!({})
+            }
+            Command::DeleteAppearance { id } => {
+                let deleted = self.delete_appearance(&id)?;
+                let faces: Vec<Value> = deleted
+                    .faces
+                    .iter()
+                    .map(|(body, face)| json!({"body": body, "face": face}))
+                    .collect();
+                json!({"bodies": deleted.bodies, "faces": faces})
+            }
+            // Render settings of the document (mitcad#47).
+            Command::SetRenderSettings(change) => {
+                json!({"changed": self.set_render_settings(&change)?})
+            }
+            Command::ResetRenderSettings => {
+                json!({"changed": self.reset_render_settings()?})
+            }
+            Command::AddRenderLight(fields) => {
+                json!({"id": self.add_render_light(&fields)?})
+            }
+            Command::EditRenderLight(mut fields) => {
+                let Some(Value::String(id)) = fields.remove("id") else {
+                    return Err(ApiError(
+                        "edit_render_light needs the light's id".to_owned(),
+                    ));
+                };
+                json!({"changed": self.edit_render_light(&id, &fields)?})
+            }
+            Command::DeleteRenderLight { id } => {
+                self.delete_render_light(&id)?;
+                json!({})
             }
         })
     }
@@ -820,6 +983,22 @@ impl<K: Kernel> Document<K> {
                 let steps = self.changes_since_saved();
                 json!({"known": steps.is_some(), "steps": steps.unwrap_or_default()})
             }
+            // Analyses kept in the document (mitcad#41).
+            Query::Analyses => self.analyses_json(),
+            // Appearances (mitcad#46).
+            Query::Appearances => self.appearances_json(),
+            Query::AppearanceImage { id } => self.appearance_image_json(&id)?,
+            // Render settings (mitcad#47).
+            Query::RenderSettings => self.render_settings_json(),
+            // Joints between occurrences (mitcad#55).
+            Query::Joints => self.joints_json(),
+            Query::JointDof(query) => self.joint_dof_json(&query)?,
+            Query::JointDrag(query) => self.joint_drag_json(&query)?,
+            Query::JointFrame(query) => self.joint_frame_json(&query)?,
+            // Configuration tables and library parts (mitcad#64).
+            Query::Configurations => self.configurations_json(),
+            Query::LibraryParts => self.library_parts_json(),
+            Query::PartsList => self.parts_list_json(),
         };
         Ok(result.to_string())
     }
@@ -1051,6 +1230,19 @@ fn preview_json(report: &PreviewReport) -> Value {
             .collect();
         value["elements"] = json!(elements);
     }
+    // Occurrences placed elsewhere (joints, moves of occurrences; mitcad#55):
+    // paths of uids from the root and their placements in the design.
+    if !report.placements.is_empty() {
+        let placements: Vec<Value> = report
+            .placements
+            .iter()
+            .map(|(path, t)| {
+                let path: Vec<String> = path.iter().map(ToString::to_string).collect();
+                json!({"path": path.join("/"), "transform": crate::assembly::matrix4(t)})
+            })
+            .collect();
+        value["placements"] = json!(placements);
+    }
     value
 }
 
@@ -1071,3 +1263,12 @@ mod sketch_p34_tests;
 mod metric_defaults_tests;
 #[cfg(test)]
 mod ui_gaps_tests;
+// Analyses kept in the document (mitcad#41).
+#[cfg(test)]
+mod analysis_tests;
+// Appearances kept in the document (mitcad#46).
+#[cfg(test)]
+mod appearance_tests;
+// Render settings of the document (mitcad#47).
+#[cfg(test)]
+mod render_settings_tests;

@@ -70,6 +70,9 @@ pub mod occurrence;
 // FreeCAD helices (mitcad#4).
 pub mod helix;
 
+// Joints between occurrences (mitcad#55).
+pub mod joint;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -122,7 +125,12 @@ pub use sweep::{PathExtent, SweepDef};
 // Components and occurrences (F6).
 pub use occurrence::{CapturePositionDef, ComponentFromBodiesDef, MoveOccurrenceDef, Position};
 // FreeCAD helices (mitcad#4).
-pub use helix::HelixDef;
+pub use helix::{HelixConstruction, HelixDef};
+// Joints between occurrences (mitcad#55).
+pub use joint::{
+    AsBuiltJointDef, FrameOverride, JointDef, JointOrigin, JointOriginDef, JointPosition, Limit,
+    Limits, OccurrencePath, RigidGroupDef,
+};
 
 use crate::assembly::Assembly;
 use crate::datum::Datum;
@@ -237,6 +245,8 @@ feature_types! {
     ComponentFromBodies(ComponentFromBodiesDef), MoveOccurrence(MoveOccurrenceDef), CapturePosition(CapturePositionDef),
     // FreeCAD helices (mitcad#4).
     Helix(HelixDef),
+    // Joints between occurrences (mitcad#55).
+    Joint(JointDef), AsBuiltJoint(AsBuiltJointDef), JointOrigin(JointOriginDef), RigidGroup(RigidGroupDef),
 }
 
 /// Brings a feature definition in an earlier form up to date before it is

@@ -7,6 +7,10 @@
 #   - Interference: the overlap's volume.
 #   - Section Analysis at the YZ plane moved by its arrow and typed: the
 #     section's area; kept after OK until Remove Section Analysis.
+#   - The analysis kept in the document (mitcad#41): the browser's Analysis
+#     folder lists it; Remove Section Analysis hides it, its light bulb
+#     shows and hides it; double-click edits it; saved with the file and
+#     cut again when it opens; deleted from the context menu, and undone.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-inspect-test.sh [screenshot.png]
@@ -16,6 +20,7 @@ source "$(dirname "$0")/ui-test-lib.sh"
 SHOT=${1:-}
 CLI=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}
 WORK=$(mktemp -d /tmp/mitcad-ui-inspect.XXXXXX)
+FILE=$WORK/cubes.mitcad
 trap 'ui_cleanup; rm -rf "$WORK"' EXIT
 R='r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}'
 
@@ -91,9 +96,55 @@ ui_expect_log "Inspect Section Analysis: area 400, length 80" "the cut through B
 [ -n "$SHOT" ] && ui_capture "$SHOT"
 ui_step "OK (Enter)"                       ui_key Return
 ui_expect_log "Closed Section Analysis" "closed, the section kept"
+ui_expect_log "Kept Section Analysis as Section1" "kept in the document"
+ui_expect_log 'Section analysis at {"plane":{"normal":[1,0,0],"origin":[10,0,0]}}' "cut where the model says"
 grep "Section analysis off" "$UI_LOG" > /dev/null && ui_fail "the section went with the panel"
+ui_expect_log "Browser Root/Analysis/Section1 at" "the browser's Analysis folder lists it"
+ui_mark
 ui_step "remove section analysis (search)" ui_command "Remove Section Analysis"
-ui_expect_log "Section analysis off" "the bodies are whole again"
+ui_expect_new "Section analysis off" "the bodies are whole again"
+
+echo "--- The Analysis folder (mitcad#41)"
+ui_mark
+ui_step "show it (light bulb)"             ui_click_logged "Browser eye Root/Analysis/Section1"
+ui_expect_new "Visibility Root/Analysis/Section1: shown" "shown with its light bulb"
+ui_expect_new '"origin":[10,0,0]' "cut again"
+ui_mark
+ui_step "hide it (light bulb)"             ui_click_logged "Browser eye Root/Analysis/Section1"
+ui_expect_new "Visibility Root/Analysis/Section1: hidden" "hidden with its light bulb"
+ui_expect_new "Section analysis off" "whole again"
+ui_mark
+ui_step "edit it (double-click)"           ui_double_click_logged "Browser Root/Analysis/Section1"
+ui_expect_new "Editing analysis Section1 with Section Analysis" "its panel opens"
+ui_expect_new "Section Analysis Faces/Plane: 1 plane [plane yz]" "with its plane"
+ui_expect_new "Inspect Section Analysis: area 400, length 80" "and its offset"
+ui_step "18 along X"                       ui_type_in "Panel Section Analysis input offset" "18"
+ui_expect_new "Inspect Section Analysis: area 800, length 160" "the cut through both cubes at x = 18"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Edited analysis Section1" "the analysis changed"
+ui_expect_new '"origin":[18,0,0]' "shown at its new place"
+ui_mark
+ui_step "save (Ctrl+S)"                    ui_key ctrl+s
+ui_expect_new "Saved $FILE" "saved"
+analyses=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["analyses"])' "$FILE") ||
+  ui_fail "no analyses in the file"
+[ "$analyses" = "[{'name': 'Section1', 'type': 'section', 'plane': 'yz', 'offset': 18.0}]" ] ||
+  ui_fail "the file's analyses: $analyses"
+echo "ok   saved in the file"
+ui_stop_app
+ui_start_app --open "$FILE"
+ui_expect_log 'Section analysis at {"plane":{"normal":[1,0,0],"origin":[18,0,0]}}' "cut again when the file opens"
+ui_expect_log "Browser Root/Analysis/Section1 at" "listed again"
+ui_mark
+ui_step "right-click Section1"             ui_click_logged "Browser Root/Analysis/Section1" 3
+ui_expect_new "Context menu: Edit Section Analysis | Hide | Rename | Delete" "its menu"
+ui_step "choose Delete"                    ui_menu_choose "Delete"
+ui_expect_new "Deleted analysis Section1" "deleted"
+ui_expect_new "Section analysis off" "whole again"
+ui_mark
+ui_step "undo (Ctrl+Z)"                    ui_key ctrl+z
+ui_expect_new "Undo: Delete Section1" "undone"
+ui_expect_new '"origin":[18,0,0]' "cut again"
 
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_finish "UI inspect test"

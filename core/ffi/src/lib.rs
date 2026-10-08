@@ -27,6 +27,15 @@ mod remote;
 mod fcstd_import;
 // Automatic updates (mitcad#9).
 mod update;
+// The .ipt import (mitcad#60).
+mod ipt_history;
+mod ipt_import;
+// Component libraries (mitcad#64, mitcad#63).
+mod libraries;
+// A Rust panic's message for the application's crash reports (mitcad#62).
+mod panic_note;
+// The process's memory against its limits, for the import (mitcad#80).
+pub mod memory;
 
 use cxx::SharedPtr;
 use mitcad_model::api::ApiError;
@@ -45,6 +54,10 @@ use diff::diff_documents;
 use remote::{
     SyncControl, clone_project, describe_remote, git_info, git_info_at, new_sync_control,
 };
+// Component libraries (mitcad#64).
+use libraries::{configure_libraries, describe_library, describe_parts, library_command};
+// Import threads the hang watchdog gave up (mitcad#82).
+use f3d_import::abandoned_imports;
 
 #[cxx::bridge(namespace = "mitcad")]
 mod ffi {
@@ -124,6 +137,10 @@ mod ffi {
         /// structure (options in commands.md, `import_fcstd`); returns the
         /// import report as JSON, or text with `{"text": true}`.
         fn import_fcstd(self: &mut Document, path: &str, json: &str) -> Result<String>;
+        /// Imports the bodies stored in an .ipt part file as base features
+        /// (options in commands.md, `import_ipt`); returns the import
+        /// report as JSON, or text with `{"text": true}`.
+        fn import_ipt(self: &mut Document, path: &str, json: &str) -> Result<String>;
     }
 
     // Background computation (P7, jobs.rs): the application computes a
@@ -314,6 +331,39 @@ mod ffi {
         /// program before it is chosen.
         fn git_info_at(program: &str) -> String;
     }
+
+    // Component libraries (mitcad#64, mitcad#63, libraries.rs): libraries
+    // and community indexes in git repositories, fetched into a cache;
+    // documents read library parts from it (commands.md "Component
+    // libraries").
+
+    extern "Rust" {
+        /// Sets where fetched libraries are kept (JSON {"root", "extra"};
+        /// "" for the default: MITCAD_LIBRARIES_DIR, else the user's data
+        /// folder) and lets documents read library parts from there.
+        /// Returns {"root", "extra"}.
+        fn configure_libraries(json: &str) -> Result<String>;
+        /// Runs a library command (library_fetch, library_list,
+        /// library_show, library_search, library_preview, library_diff,
+        /// library_check, library_init, library_add, index_entry,
+        /// licenses); a fetch reports its progress to `control`.
+        fn library_command(json: &str, control: &SyncControl) -> Result<String>;
+        /// A library command's JSON answer as text for people.
+        fn describe_library(command: &str, answer: &str) -> Result<String>;
+        /// The parts_list query's answer as text (mitcad-cli parts).
+        fn describe_parts(answer: &str) -> Result<String>;
+    }
+
+    // Import threads the hang watchdog gave up (mitcad#82, f3d_import.rs).
+
+    extern "Rust" {
+        /// How many import threads the hang watchdog gave up still run
+        /// (their geometry kernel call has not returned). A process that
+        /// ends while one runs ends with std::_Exit once its output is
+        /// written, without its static destructors, which would tear down
+        /// OCCT's state under the thread.
+        fn abandoned_imports() -> usize;
+    }
 }
 
 /// The document of the application and `mitcad-cli`.
@@ -417,14 +467,15 @@ impl Document {
         self.0.load_warnings().to_vec()
     }
 
-    /// Model commands, and `import_f3d` and `import_fcstd`, which need the
-    /// file's bodies built here (one command, or among an array).
+    /// Model commands, and `import_f3d`, `import_fcstd` and `import_ipt`,
+    /// which need the file's bodies built here (one command, or among an
+    /// array).
     fn command(&mut self, json: &str) -> Result<String, ApiError> {
         let value: Option<serde_json::Value> = serde_json::from_str(json).ok();
         let is_import = |v: &serde_json::Value| {
             matches!(
                 v.get("cmd").and_then(|c| c.as_str()),
-                Some("import_f3d" | "import_fcstd")
+                Some("import_f3d" | "import_fcstd" | "import_ipt")
             )
         };
         match value {
@@ -452,15 +503,15 @@ impl Document {
         }
     }
 
-    /// An `import_f3d` or `import_fcstd` command.
+    /// An `import_f3d`, `import_fcstd` or `import_ipt` command.
     fn import_command(
         &mut self,
         command: serde_json::Value,
     ) -> Result<serde_json::Value, ApiError> {
-        if command.get("cmd").and_then(|c| c.as_str()) == Some("import_fcstd") {
-            self.import_fcstd_command(command)
-        } else {
-            self.import_f3d_command(command)
+        match command.get("cmd").and_then(|c| c.as_str()) {
+            Some("import_fcstd") => self.import_fcstd_command(command),
+            Some("import_ipt") => self.import_ipt_command(command),
+            _ => self.import_f3d_command(command),
         }
     }
 

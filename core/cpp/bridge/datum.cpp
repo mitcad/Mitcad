@@ -3,7 +3,9 @@
 
 #include <array>
 #include <stdexcept>
+#include <cstddef>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gp.hxx>
@@ -29,10 +31,7 @@ gp_Dir direction(const DatumVec& v) {
   return gp_Dir(vector);
 }
 
-} // namespace
-
-DatumSurface datum_face_geometry(const geometry::Shape& shape, rust::Str face) {
-  const geometry::SurfaceDescription s = geometry::face_geometry(shape, std::string(face));
+DatumSurface surface(const geometry::SurfaceDescription& s) {
   DatumSurface result;
   result.kind = rust::String(s.type);
   result.origin = xyz(s.origin);
@@ -43,8 +42,7 @@ DatumSurface datum_face_geometry(const geometry::Shape& shape, rust::Str face) {
   return result;
 }
 
-DatumCurve datum_edge_geometry(const geometry::Shape& shape, rust::Str edge) {
-  const geometry::CurveDescription c = geometry::edge_geometry(shape, std::string(edge));
+DatumCurve curve(const geometry::CurveDescription& c) {
   DatumCurve result;
   result.kind = rust::String(c.type);
   result.start = xyz(c.start);
@@ -53,6 +51,16 @@ DatumCurve datum_edge_geometry(const geometry::Shape& shape, rust::Str edge) {
   result.normal = xyz(c.normal);
   result.radius = c.radius;
   return result;
+}
+
+} // namespace
+
+DatumSurface datum_face_geometry(const geometry::Shape& shape, rust::Str face) {
+  return surface(geometry::face_geometry(shape, std::string(face)));
+}
+
+DatumCurve datum_edge_geometry(const geometry::Shape& shape, rust::Str edge) {
+  return curve(geometry::edge_geometry(shape, std::string(edge)));
 }
 
 DatumVec datum_vertex_point(const geometry::Shape& shape, rust::Str vertex) {
@@ -98,6 +106,34 @@ std::shared_ptr<geometry::Shape> datum_axis_shape(const DatumVec& origin,
 
 std::shared_ptr<geometry::Shape> datum_point_shape(const DatumVec& p) {
   return geometry::point_shape(point(p));
+}
+
+rust::Vec<DatumFaceEntry> datum_face_geometries(const geometry::Shape& shape) {
+  const std::vector<geometry::SurfaceDescription> surfaces = geometry::face_geometries(shape);
+  rust::Vec<DatumFaceEntry> result;
+  result.reserve(surfaces.size());
+  for (std::size_t i = 0; i < surfaces.size(); ++i) {
+    DatumFaceEntry entry;
+    for (const std::string& name : shape.face_names(static_cast<int>(i))) {
+      entry.names.push_back(rust::String(name));
+    }
+    entry.surface = surface(surfaces[i]);
+    result.push_back(std::move(entry));
+  }
+  return result;
+}
+
+rust::Vec<DatumEdgeEntry> datum_edge_geometries(const geometry::Shape& shape) {
+  const std::vector<geometry::CurveDescription> curves = geometry::edge_geometries(shape);
+  rust::Vec<DatumEdgeEntry> result;
+  result.reserve(curves.size());
+  for (std::size_t i = 0; i < curves.size(); ++i) {
+    DatumEdgeEntry entry;
+    entry.name = rust::String(shape.edge_name(static_cast<int>(i)));
+    entry.curve = curve(curves[i]);
+    result.push_back(std::move(entry));
+  }
+  return result;
 }
 
 } // namespace mitcad::bridge

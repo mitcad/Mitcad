@@ -107,12 +107,12 @@ void MainWindow::registerFileCommands() {
   m_registry->add(component);
   CommandDef importDef = def("file.import", tr("Import..."), "import",
                              tr("STEP, IGES, BRep, STL, OBJ, DXF or another design into this one; an .f3d "
-                                "design as a new document with its history, a FreeCAD document with its "
-                                "bodies"),
+                                "design as a new document with its history, a FreeCAD document or an .ipt "
+                                "part with its bodies"),
                              [this] { importFile(); });
   importDef.keywords = {QStringLiteral("step"),    QStringLiteral("iges"),  QStringLiteral("brep"),
                         QStringLiteral("f3d"),     QStringLiteral("f3z"),   QStringLiteral("freecad"),
-                        QStringLiteral("fcstd"),   QStringLiteral("open")};
+                        QStringLiteral("fcstd"),   QStringLiteral("ipt"),   QStringLiteral("open")};
   m_registry->add(importDef);
   CommandDef exportDef = def("file.export", tr("Export..."), "export",
                              tr("Bodies to STEP, IGES, STL, OBJ or BRep; a sketch to DXF"),
@@ -199,6 +199,11 @@ void MainWindow::createFileMenu() {
   QAction* printAction = m_registry->action(QStringLiteral("make.print3d"));
   printAction->setText(tr("&3D Print..."));
   file->addAction(printAction);
+  // The final render (mitcad#48), with the render worker only.
+  if (QAction* render = m_registry->action(QStringLiteral("file.render_image"))) {
+    render->setText(tr("Render &Image..."));
+    file->addAction(render);
+  }
   QAction* component = m_registry->action(QStringLiteral("insert.component"));
   component->setText(tr("Insert Co&mponent..."));
   file->addAction(component);
@@ -264,6 +269,7 @@ bool MainWindow::openFile(const QString& path, QString& error) {
     return loadProject(path, error);
   case FileKind::F3d:
   case FileKind::FreeCad:
+  case FileKind::Ipt:
     // After the window shows: the import has a progress dialog.
     QTimer::singleShot(0, this, [this, path] { startF3dImport(path); });
     return true;
@@ -379,8 +385,9 @@ bool MainWindow::importPath(const QString& path, bool interactive, QString* erro
   switch (fileKind(path)) {
   case FileKind::F3d:
   case FileKind::FreeCad:
+  case FileKind::Ipt:
     // A design with its history is a document of its own (a FreeCAD
-    // document too: its history comes later).
+    // document too, and a part file, whose history comes later).
     if (interactive && !maybeSave()) {
       return false;
     }

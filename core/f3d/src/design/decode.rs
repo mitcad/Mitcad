@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use super::classes::{self, *};
 use super::stream::{
-    Object, Segment, f64_at, i32_at, slice, str16_at, text_at, u32_at, u64_at, utf16_units,
+    Object, Segment, f64_at, f64s_at, i32_at, slice, str16_at, text_at, u32_at, u64_at, utf16_units,
 };
 use super::unicode;
 
@@ -58,6 +58,10 @@ pub struct ExtrudeFields {
     pub extent_b: u32,
     /// The first ±1.0 after the extent fields.
     pub direction: Option<f64>,
+    /// The extrusion's direction in the component's coordinates (a unit
+    /// vector), stored after the extent fields: `u8 | u8 1 | u32 0 | f64 x
+    /// | f64 y | f64 z`.
+    pub vector: Option<[f64; 3]>,
 }
 
 impl ExtrudeFields {
@@ -121,6 +125,15 @@ pub struct ParameterEntry {
 impl ParameterEntry {
     pub fn is_user(&self) -> bool {
         self.holder.is_none()
+    }
+
+    /// The parameter of a driven (reference) sketch dimension: the fourth
+    /// byte from the end of the flags after the expression is 1 (mitcad#33,
+    /// probable: in every class version it marks the sketch dimensions
+    /// whose values look measured, such as `1.500001 mm`; the reference
+    /// models have no driven dimensions).
+    pub fn is_driven(&self) -> bool {
+        self.gap1.len() >= 4 && self.gap1[self.gap1.len() - 4] == 1
     }
 }
 
@@ -395,11 +408,17 @@ pub fn extrude_fields(seg: &Segment, o: &Object) -> Option<ExtrudeFields> {
         }
         q += 1;
     }
+    let vector = (d.get(p + 13) == Some(&1) && u32_at(d, p + 14) == Some(0))
+        .then(|| f64s_at(d, p + 18, 3))
+        .flatten()
+        .map(|v| [v[0], v[1], v[2]])
+        .filter(|v| ((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() - 1.0).abs() < 1e-6);
     Some(ExtrudeFields {
         operation_code,
         extent_a,
         extent_b,
         direction,
+        vector,
     })
 }
 
@@ -437,8 +456,26 @@ pub fn parse_parameter(seg: &Segment, o: &Object) -> Option<ParameterEntry> {
     let d = seg.data(o);
     let version = seg.version(o)?;
     let p = skip_attrs(d, super::stream::header_end(d)?)?;
-    let (g1, nstr) = if version <= 6 { (5, 3) } else { (9, 4) };
-    for gap in 0..24 {
+    let (g1, nstr) = match version {
+        ..=6 => (5, 3),
+        7 => (9, 4),
+        _ => (10, 4),
+    };
+    // Version 8 (2026 writers; verified on the reference models): the gap
+    // is `u8 | u32 | u8 | str16 comment`, so the comment comes before the
+    // number (the string after the role stays empty), and the flags after
+    // the expression take 10 bytes.
+    let v8_comment = if version >= 8 {
+        let (c, q) = str16_at(d, p + 6)?;
+        Some((c, q - p))
+    } else {
+        None
+    };
+    let gaps = match &v8_comment {
+        Some((_, gap)) => *gap..*gap + 1,
+        None => 0..24,
+    };
+    for gap in gaps {
         let q = p + gap;
         if q + 9 > d.len() {
             break;
@@ -485,7 +522,12 @@ pub fn parse_parameter(seg: &Segment, o: &Object) -> Option<ParameterEntry> {
         }
         let mut s = strs.into_iter();
         let role = s.next()?;
-        let comment = if nstr == 4 { s.next() } else { None };
+        let mut comment = if nstr == 4 { s.next() } else { None };
+        if let Some((c, _)) = &v8_comment
+            && comment.as_deref().is_none_or(str::is_empty)
+        {
+            comment = Some(c.clone());
+        }
         let unit = s.next()?;
         let name = s.next()?;
         return Some(ParameterEntry {

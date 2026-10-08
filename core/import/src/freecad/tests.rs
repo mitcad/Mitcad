@@ -1242,7 +1242,7 @@ fn defs_of(doc: &Document<MockKernel>, report: &FcstdReport, name: &str) -> Vec<
 
 #[test]
 fn helices_primitives_holes_and_multi_transforms_become_features() {
-    // A helix about its sketch's V axis; a skewed prism and a wedge; a
+    // A conical helix about its sketch's V axis; a skewed prism and a wedge; a
     // plate with a tapered, counterdrilled hole, and a pocket patterned by
     // a MultiTransform of two linear patterns.
     let xml = document(&[
@@ -1265,11 +1265,12 @@ fn helices_primitives_holes_and_multi_transforms_become_features() {
             "PartDesign::AdditiveHelix",
             "Helix",
             format!(
-                "{}{}{}{}{}{}",
+                "{}{}{}{}{}{}{}",
                 link_sub("Profile", "Profile", &[]),
                 link_sub("ReferenceAxis", "Profile", &["V_Axis"]),
                 float("Pitch", 5.0),
                 float("Height", 20.0),
+                float("Angle", 10.0),
                 enumeration("Mode", 0),
                 shape("Helix.brp")
             ),
@@ -1468,7 +1469,8 @@ fn helices_primitives_holes_and_multi_transforms_become_features() {
         ],
     );
     let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
-    // The helix: the profile turned about the sketch's V axis, 4 turns of 5.
+    // The helix: the profile turned about the sketch's V axis, 4 turns of 5,
+    // widening at 10 degrees.
     let helix = feature(&report, "Helix");
     assert_eq!(helix.outcome, ObjectOutcome::Parametric, "{helix:?}");
     assert_eq!(helix.mitcad, "helix");
@@ -1488,6 +1490,10 @@ fn helices_primitives_holes_and_multi_transforms_become_features() {
     assert_eq!(value(&def["pitch"]), 5.0);
     assert_eq!(value(&def["revolutions"]), 4.0);
     assert_eq!(def["operation"], "new_body");
+    // Conical: a growth of the pitch times the tangent of the angle per
+    // turn, built as FreeCAD builds it (mitcad#83).
+    assert!((value(&def["growth"]) - 5.0 * 10f64.to_radians().tan()).abs() < 1e-9);
+    assert_eq!(def["construction"], "freecad");
     // The skewed prism: its hexagon swept along the skew without turning.
     let prism = feature(&report, "Prism");
     assert_eq!(prism.mitcad, "sweep", "{prism:?}");

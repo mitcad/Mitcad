@@ -8,6 +8,18 @@ use crate::brep::{self, P3};
 
 /// A 1 cm cube at the origin: 8 vertices, 12 edges, 6 planar faces.
 pub fn cube_blob() -> Vec<u8> {
+    cube(false)
+}
+
+/// The cube of [`cube_blob`] with the names an extrusion gives (see
+/// [`crate::names`]): the body `"301"`, the faces `"1"` (bottom), `"2"`
+/// (top), `"3"` (y = 0), `"4"` (x = 1), `"5"` (y = 1) and `"6"` (x = 0), all
+/// made by operation 301.
+pub fn named_cube_blob() -> Vec<u8> {
+    cube(true)
+}
+
+fn cube(named: bool) -> Vec<u8> {
     // Record layout: 0 asmheader, 1 body, 2 lump, 3 shell,
     // faces 4..10, loops 10..16, coedges 16..40, edges 40..52,
     // vertices 52..60, points 60..68, curves 68..80, surfaces 80..86.
@@ -52,7 +64,16 @@ pub fn cube_blob() -> Vec<u8> {
         .int(-1)
         .str("231.6.3.65535")
         .end();
-    w.record("body").head().ptr(2).ptr(-1).ptr(-1).end();
+    let attrib0 = 86;
+    let attrib = |i: i32| if named { attrib0 + i } else { -1 };
+    w.record("body")
+        .ptr(attrib(6))
+        .int(-1)
+        .ptr(-1)
+        .ptr(2)
+        .ptr(-1)
+        .ptr(-1)
+        .end();
     w.record("lump").head().ptr(-1).ptr(3).ptr(1).end();
     w.record("shell")
         .head()
@@ -65,7 +86,9 @@ pub fn cube_blob() -> Vec<u8> {
     for f in 0..6 {
         let next = if f < 5 { face0 + f + 1 } else { -1 };
         w.record("face")
-            .head()
+            .ptr(attrib(f))
+            .int(-1)
+            .ptr(-1)
             .ptr(next)
             .ptr(loop0 + f)
             .ptr(3)
@@ -173,6 +196,37 @@ pub fn cube_blob() -> Vec<u8> {
             .bool(false)
             .bool(false)
             .end();
+    }
+    if named {
+        // Faces 0..6, then the body.
+        for i in 0..7 {
+            let (owner, kind_type, tag, kind) = if i < 6 {
+                (face0 + i, 1, (i + 1).to_string(), 0)
+            } else {
+                (1, 3, "301".to_owned(), 7)
+            };
+            w.record("ATTRIB_CUSTOM-attrib")
+                .ptr(-1)
+                .int(-1)
+                .ptr(-1)
+                .ptr(-1)
+                .ptr(owner)
+                .str("generic_tag_attrib_def")
+                .int(3)
+                .int(3)
+                .int(-1)
+                .str("generic_tag_attrib_def ")
+                .int(1)
+                .int(kind_type)
+                .str(&tag)
+                .int(kind);
+            if i < 6 {
+                w.int(1).int(301);
+            } else {
+                w.int(0);
+            }
+            w.int(0).end();
+        }
     }
     w.finish()
 }

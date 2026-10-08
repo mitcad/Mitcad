@@ -101,6 +101,9 @@ pub mod ffi {
         pitch: f64,
         revolutions: f64,
         left_handed: bool,
+        growth: f64,
+        flip: bool,
+        freecad: bool,
     }
 
     /// The chains' curves one after another, `chains` holding how many each
@@ -381,6 +384,9 @@ pub fn helix(spec: &mitcad_model::HelixSpec<'_>) -> Result<SharedPtr<Shape>, Ker
         pitch: spec.pitch,
         revolutions: spec.revolutions,
         left_handed: spec.left_handed,
+        growth: spec.growth,
+        flip: spec.flip,
+        freecad: spec.freecad,
     };
     ffi::helix_solid(
         &spec.feature.to_string(),

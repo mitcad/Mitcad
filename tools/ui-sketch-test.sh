@@ -15,6 +15,7 @@
 #   - Each other tool on a sample in a second sketch: arc, polygon, slot,
 #     ellipse, spline, point, text, offset, mirror, patterns, fillet,
 #     chamfer, a constraint, construction, delete, project.
+#   - The projection (linked) follows the block when Sketch1 changes.
 #   - The tools' pointer (mitcad#3): a bitmap cursor of Mitcad's own with
 #     the hot spot in the middle of its cross; the arrow again when the
 #     tool ends and when the sketch is finished with a tool active.
@@ -334,6 +335,46 @@ ui_expect_new "$CURSOR" "the precision cursor again"
 ui_mark
 ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
 ui_expect_new "Sketch cursor: arrow" "leaving the sketch restores the arrow"
+
+echo "--- The linked projection follows its source (mitcad#40)"
+# Sketch2 has the block's top face, projected with Projection Link (the
+# default). Narrow the block in Sketch1: 30 x 20 x 7.5.
+read -r tx ty <<< "$(ui_logged_at "Timeline Sketch1")"
+ui_mark
+ui_step "double-click Sketch1"           double_click_at "$tx" "$ty"
+ui_expect_new "Editing sketch F1 (Sketch1)" "Sketch1 edited again"
+ui_sync
+read -r dx dy <<< "$(ui_sketch_at 20 -10)"
+ui_step "double-click the 40"            double_click_at "$dx" "$dy"
+ui_expect_new "Editing dimension" "the dimension's value editor opened"
+ui_step "type 30"                        xdotool type --delay 40 "30"
+ui_step "Enter"                          ui_key Return
+ui_expect_new "= 30 mm (d1)" "the dimension changed"
+ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
+ui_expect_new "Body Body1 (F2.b0): volume 4500.000 mm3" "the block is 30 x 20 x 7.5"
+read -r tx ty <<< "$(ui_logged_at "Timeline Sketch2")"
+ui_mark
+ui_step "double-click Sketch2"           double_click_at "$tx" "$ty"
+ui_expect_new "Editing sketch F3 (Sketch2)" "Sketch2 edited"
+ui_sync
+# The sketch's geometry, as drawn and picked (the view picks the block's
+# edges above it): a drag of the projected corner finds it there.
+ui_mark
+ui_step "drag the face's new corner"     ui_sketch_drag 30 0 36 6
+ui_sync
+tail -n +$((UI_MARK + 1)) "$UI_LOG" |
+  grep -qE "Drag of p[0-9]+ did not move it|Dragged p[0-9]+ to \(30\.000, 0\.000\)" ||
+  ui_fail "no projected point at the face's new corner"
+echo "ok   the projected corner is where the face is now"
+ui_mark
+ui_step "drag at its old place"          ui_sketch_drag 40 0 46 6
+ui_sync
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qE "Drag of |Dragged " &&
+  ui_fail "a projected point stayed at the old corner"
+echo "ok   nothing projected is left at the old place"
+ui_mark
+ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
+ui_expect_new "Sketch finished" "Sketch2 finished"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 
 ui_finish "UI sketch test"

@@ -13,7 +13,10 @@ ICU (usr/lib/libicu*.so*, used by Qt)
 
 Open CASCADE Technology (usr/lib/libTK*.so*)
   Licence: GNU LGPL version 2.1 with the Open CASCADE exception. Linked
-  dynamically; source code at https://dev.opencascade.org/ .
+  dynamically; source code at https://dev.opencascade.org/ . Version 8.0.1
+  with four changes of Mitcad's that speed up booleans, the face merge after
+  them and the shape checker on faces with many edges; the patches are in
+  Mitcad's source code (third_party/vcpkg-ports/opencascade).
 
 Other libraries from vcpkg (for example libpng, bzip2, Brotli)
   Their licence texts are in mitcad/licenses/vcpkg/<library>/copyright.
@@ -42,3 +45,22 @@ unpacks the rest)
 Rust libraries compiled into mitcad and mitcad-cli
   Permissive licences (MIT, Apache-2.0, BSD and similar), checked by
   cargo-deny against core/deny.toml.
+
+Only in builds with the render worker (the CMake option MITCAD_RENDER, not
+in releases yet; docs/rendering.md): the executable usr/bin/mitcad-render,
+which alone links the following; mitcad starts it for View > Rendered.
+  Cycles (https://projects.blender.org/blender/cycles), Blender's path
+  tracer, Apache License 2.0, linked statically into mitcad-render, with
+  code it bundles under Apache-2.0, BSD-3-Clause and MIT; the licence
+  texts are in mitcad/licenses/cycles (in builds with Cycles' CUDA device
+  also cuew, Blender Foundation, Apache License 2.0 with a stricter
+  trademark clause: cuew-license.txt; it loads the system's GPU driver,
+  nothing of NVIDIA's is shipped). Open Image Denoise
+  (https://github.com/RenderKit/oidn, usr/lib/libOpenImageDenoise*.so*),
+  Apache License 2.0, with its trained weights (Apache License 2.0); see
+  mitcad/licenses/openimagedenoise. From vcpkg, linked dynamically:
+  Embree, oneTBB, OpenImageIO, OpenSSL (Apache-2.0); OpenColorIO,
+  OpenEXR, Imath, pystring, libtiff, libjpeg-turbo, zstd, hwloc, OpenJPH,
+  liblzma (BSD-style); pugixml, cgltf, yaml-cpp, fmt, robin-map,
+  libdeflate (MIT); minizip-ng (zlib licence). Their licence texts are in
+  mitcad/licenses/vcpkg/<library>/copyright.

@@ -36,7 +36,9 @@ corrosion_add_cxxbridge(mitcad_bridge CRATE mitcad_ffi FILES
   # Automatic updates (mitcad#9).
   update.rs
   # Triangle meshes for 3D printing (3MF export, mitcad#13).
-  kernel/mesh.rs)
+  kernel/mesh.rs
+  # The process's memory against its limits (mitcad#80).
+  memory.rs)
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/boolean.cpp
   cpp/bridge/boolean.hpp
@@ -90,6 +92,10 @@ target_sources(mitcad_bridge PRIVATE
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/mesh.cpp
   cpp/bridge/mesh.hpp)
+# The process's memory against its limits (mitcad#80).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/memory.cpp
+  cpp/bridge/memory.hpp)
 target_include_directories(mitcad_bridge PUBLIC cpp)
 target_link_libraries(mitcad_bridge PUBLIC mitcad_geometry)
 # The bridge and the Rust library call each other, and a single-pass
@@ -104,15 +110,28 @@ target_link_libraries(mitcad_bridge PRIVATE mitcad_geometry_io)
 
 if(BUILD_TESTING)
   add_executable(test_bridge tests/test_bridge.cpp)
-  target_link_libraries(test_bridge PRIVATE mitcad_ffi mitcad_geometry mitcad_warnings)
+  target_link_libraries(test_bridge PRIVATE mitcad_ffi mitcad_geometry mitcad_geometry_analysis
+                                            mitcad_warnings)
   add_test(NAME core.bridge COMMAND test_bridge)
 
   # .f3d body import: Rust reads and converts, C++ builds with OCCT. The
   # corpus run reads MITCAD_F3D_CORPUS (default ~/f3d-corpus) and is skipped
   # when the corpus is missing. It builds every 10th body to stay quick in
   # debug builds; core/f3d/CORPUS_REPORT.md describes the full run.
+  # The corpus runs import their files in child processes, several at once
+  # (mitcad#70, tests/parallel_runs.hpp); mitcad_run_parallel runs a list of
+  # commands that way (the FreeCAD corpus, tools/cli/fcstd-corpus.cmake).
+  add_library(mitcad_parallel_runs STATIC tests/parallel_runs.cpp tests/parallel_runs.hpp)
+  target_include_directories(mitcad_parallel_runs PUBLIC tests)
+  target_link_libraries(mitcad_parallel_runs PRIVATE mitcad_warnings)
+  find_package(Threads REQUIRED)
+  target_link_libraries(mitcad_parallel_runs PUBLIC Threads::Threads)
+  add_executable(mitcad_run_parallel tests/run_parallel.cpp)
+  target_link_libraries(mitcad_run_parallel PRIVATE mitcad_parallel_runs mitcad_warnings)
+  add_test(NAME core.parallel_runs COMMAND mitcad_run_parallel --self-test)
+
   add_executable(test_brep_import tests/test_brep_import.cpp)
-  target_link_libraries(test_brep_import PRIVATE mitcad_ffi mitcad_geometry mitcad_warnings)
+  target_link_libraries(test_brep_import PRIVATE mitcad_ffi mitcad_geometry mitcad_parallel_runs mitcad_warnings)
   add_test(NAME core.brep_import COMMAND test_brep_import)
   add_test(NAME f3d.corpus_occt COMMAND test_brep_import --corpus --every 10 --min-valid 99)
   set_tests_properties(f3d.corpus_occt PROPERTIES SKIP_RETURN_CODE 77)
@@ -128,7 +147,7 @@ if(BUILD_TESTING)
   # Every 10th file keeps it near 20 s in debug builds (all files: about
   # 6 min, building the bodies takes most of it).
   add_executable(test_exchange tests/test_exchange.cpp)
-  target_link_libraries(test_exchange PRIVATE mitcad_ffi mitcad_geometry mitcad_geometry_io mitcad_warnings)
+  target_link_libraries(test_exchange PRIVATE mitcad_ffi mitcad_geometry mitcad_geometry_io mitcad_parallel_runs mitcad_warnings)
   add_test(NAME core.exchange COMMAND test_exchange "${CMAKE_CURRENT_BINARY_DIR}/exchange-files")
   add_test(NAME f3d.corpus_import COMMAND test_exchange --corpus --every 10 --min-valid 97)
   set_tests_properties(f3d.corpus_import PROPERTIES SKIP_RETURN_CODE 77)
@@ -139,15 +158,16 @@ if(BUILD_TESTING)
   # every 4th file up to 30 timeline items; core/import/README.md has the
   # full run (release build).
   add_executable(test_f3d_import tests/test_f3d_import.cpp)
-  target_link_libraries(test_f3d_import PRIVATE mitcad_ffi mitcad_geometry mitcad_geometry_io mitcad_warnings)
+  target_link_libraries(test_f3d_import PRIVATE mitcad_ffi mitcad_geometry mitcad_geometry_io mitcad_parallel_runs mitcad_warnings)
   add_test(NAME core.f3d_import COMMAND test_f3d_import "${CMAKE_CURRENT_BINARY_DIR}/f3d-import-files")
   add_test(NAME f3d.corpus_timeline COMMAND test_f3d_import --corpus --every 4 --max-items 30
                                                             --time-limit 60)
   set_tests_properties(f3d.corpus_timeline PROPERTIES SKIP_RETURN_CODE 77)
-  # The reference lofts (route A of T0b): reference models kept outside the
-  # repository under MITCAD_F3D_MODELS (default ~/f3d-models; each an .f3d
-  # and its dump), replayed and compared with the volumes of the bodies
-  # stored in the files; skipped without them.
+  # The reference lofts and sweeps (route A of T0b): reference models kept
+  # outside the repository under MITCAD_F3D_MODELS (default ~/f3d-models;
+  # each an .f3d and its dump), replayed and compared with the volumes of
+  # the bodies stored in the files, and imported from the files' own
+  # streams (mitcad#34); skipped without them.
   add_test(NAME f3d.models_loft COMMAND test_f3d_import --models)
   set_tests_properties(f3d.models_loft PROPERTIES SKIP_RETURN_CODE 77)
 
@@ -240,5 +260,13 @@ if(BUILD_TESTING)
     COMMAND "${Rust_CARGO_CACHED}" test --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
             -p mitcad-3mf --quiet)
   set_tests_properties(core.3mf PROPERTIES
+    ENVIRONMENT "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo-test;${cargo_test_environment}")
+
+  # The .ipt reader (mitcad#60) on files made in the tests (no OCCT); its
+  # corpus test reads MITCAD_IPT_CORPUS and skips without it.
+  add_test(NAME core.ipt
+    COMMAND "${Rust_CARGO_CACHED}" test --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+            -p mitcad-ipt --release --quiet)
+  set_tests_properties(core.ipt PROPERTIES
     ENVIRONMENT "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo-test;${cargo_test_environment}")
 endif()

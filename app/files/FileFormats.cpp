@@ -29,15 +29,18 @@ FileKind fileKind(const QString& path) {
   if (suffix == QStringLiteral("dxf")) {
     return FileKind::Drawing;
   }
+  if (suffix == QStringLiteral("ipt")) {
+    return FileKind::Ipt;
+  }
   return FileKind::None;
 }
 
 namespace {
 
 // The CAD formats, one filter: designs with a history (FreeCAD, .f3d),
-// then STEP, IGES and BRep. Both spellings of .FCStd: name filters match
-// case-sensitively on Linux.
-const char* const kCad = "*.FCStd *.fcstd *.f3d *.f3z *.step *.stp *.iges *.igs *.brep *.brp";
+// part files (.ipt), then STEP, IGES and BRep. Both spellings of .FCStd
+// and .ipt: name filters match case-sensitively on Linux.
+const char* const kCad = "*.FCStd *.fcstd *.f3d *.f3z *.ipt *.IPT *.step *.stp *.iges *.igs *.brep *.brp";
 const char* const kMesh = "*.stl *.obj";
 const char* const kDrawing = "*.dxf";
 

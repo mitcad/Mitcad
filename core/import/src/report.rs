@@ -139,9 +139,15 @@ pub struct DesignReport {
     pub components: ComponentReport,
     /// The light bulbs of sketches and construction geometry (mitcad#6).
     pub light_bulbs: LightBulbReport,
+    /// The file's joints, as-built joints, joint origins and ground items
+    /// (mitcad#55).
+    pub joints: JointReport,
     /// Where the import was stopped on request (T1e), when it was.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stopped: Option<StopReport>,
+    /// Where the process ran low on memory (mitcad#80), when it did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub low_memory: Option<LowMemoryReport>,
 }
 
 /// The light bulbs of the imported sketches and construction features
@@ -164,6 +170,45 @@ pub struct LightBulbReport {
     pub bulbs_set: usize,
 }
 
+/// How the file's joints, as-built joints, joint origins and ground items
+/// came in (mitcad#55; `joints.rs`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct JointReport {
+    /// Joints that came in as joints: they hold where the file places the
+    /// occurrences.
+    pub joints: usize,
+    /// Of their sides, those on a fixed frame (no face, edge or joint
+    /// origin of the replay gives the file's frame).
+    pub fixed_sides: usize,
+    /// Of their sides, those on a component of another document (on the
+    /// origin of the empty component standing for it, mitcad#75).
+    pub inserted_sides: usize,
+    /// Joints kept as as-built joints: they do not hold where the file
+    /// places the occurrences (or their sides are not known).
+    pub kept_as_built: usize,
+    /// As-built joints that came in as as-built joints.
+    pub as_built: usize,
+    /// Joint origins that came in as joint origins.
+    pub origins: usize,
+    /// Ground items whose occurrence is grounded.
+    pub grounded: usize,
+    /// Captured positions that came in as `capture_position` features
+    /// (mitcad#75).
+    pub positions: usize,
+    /// Joints, as-built joints, joint origins, ground items and captured
+    /// positions left out (a level inside a component of another
+    /// document, a motion not decoded, ...).
+    pub skipped: usize,
+    /// Rigid groups that came in as rigid groups (mitcad#81).
+    pub rigid_groups: usize,
+}
+
+impl JointReport {
+    fn any(&self) -> bool {
+        *self != Self::default()
+    }
+}
+
 /// Where an import was stopped on request (T1e, `Options::stop`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct StopReport {
@@ -176,6 +221,26 @@ pub struct StopReport {
     /// That item's name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+}
+
+/// Where an import first ran low on memory (mitcad#80,
+/// `Progress::low_memory`): the definition being tried then was cut short,
+/// and the modelling items after it took the file's bodies without being
+/// replayed while the memory stayed low.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct LowMemoryReport {
+    /// The timeline index of the item being replayed; None before the
+    /// first item or after the last one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item: Option<i64>,
+    /// That item's name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// How much memory was in use, against what limit.
+    pub memory: String,
+    /// How many modelling items took the file's bodies while it was low
+    /// (their notes say "the import ran low on memory").
+    pub items: usize,
 }
 
 impl DesignReport {
@@ -257,7 +322,7 @@ impl DesignReport {
         if c.components + c.occurrences + c.external > 0 {
             let _ = writeln!(
                 out,
-                "  components: {} made, {} occurrences placed, {} of other documents left out",
+                "  components: {} made, {} occurrences placed, {} of other documents placed empty",
                 c.components, c.occurrences, c.external
             );
         }
@@ -272,6 +337,25 @@ impl DesignReport {
                 b.construction_bulbs,
                 b.construction_bulbs_unknown,
                 b.bulbs_set
+            );
+        }
+        let j = &self.joints;
+        if j.any() {
+            let _ = writeln!(
+                out,
+                "  joints: {} as joints ({} sides on fixed frames, {} on components of other \
+                 documents), {} kept as as-built joints, {} as-built joints, {} joint origins, {} \
+                 grounded, {} captured positions, {} rigid groups, {} left out",
+                j.joints,
+                j.fixed_sides,
+                j.inserted_sides,
+                j.kept_as_built,
+                j.as_built,
+                j.origins,
+                j.grounded,
+                j.positions,
+                j.rigid_groups,
+                j.skipped
             );
         }
         for item in &self.items {

@@ -23,6 +23,9 @@ namespace mitcad {
 
 class CommandRegistry;
 class DocumentHost;
+class RenderEnvironmentDialog;
+class RenderImageDialog;
+class RenderMode;
 
 // The display settings of the view (U5), kept in the user's settings
 // (group "view").
@@ -92,6 +95,17 @@ public:
   // `version_control`, `updates`, `print`); the last one shown when empty.
   void showPreferences(const QString& page = QString());
   void showGridSettings();
+  // The document's render settings (the `render_settings` query, mitcad#47)
+  // and its file's folder, after each change of the model: the rendered
+  // view and Render Environment follow them. Nothing without MITCAD_RENDER.
+  void setRenderSettings(const QJsonObject& settings, const QString& documentFolder);
+  // Render Environment (only with the render worker).
+  void showRenderEnvironment();
+  // File > Render Image (mitcad#48; only with the render worker).
+  void showRenderImage();
+  // The design's file name without its folder and extension (the rendered
+  // image's default name).
+  void setDocumentName(const QString& name) { m_documentName = name; }
 
 private:
   void apply();
@@ -109,6 +123,13 @@ private:
   QPointer<QWidget> m_settingsWindow; // macOS: the Settings window, when open
   ViewSettings m_settings;
   QHash<QString, QAction*> m_checks; // checkable actions by command id
+  // View > Rendered (docs/rendering.md); only in builds with MITCAD_RENDER.
+  RenderMode* m_render = nullptr;
+  QPointer<RenderEnvironmentDialog> m_renderEnvironment;
+  QPointer<RenderImageDialog> m_renderImage;
+  QString m_documentFolder;
+  QString m_documentName;
+  void setRendered(bool on);
   QString m_preferencesPage = QStringLiteral("general"); // the page Preferences opens on
 };
 

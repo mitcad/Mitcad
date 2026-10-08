@@ -130,6 +130,12 @@ int main() {
   test::cancel_tests();
   // Operations leave their inputs as they are (T0e); none of the run's did.
   test::input_check_tests();
+  // Booleans on perforated bodies (mitcad#72).
+  test::far_features_tests();
+  // The material a near copy of a body lacks (mitcad#85).
+  test::removed_tests();
+  // A mirror image joined only where it differs from the body (mitcad#88).
+  test::mirror_join_tests();
   for (const std::string& change : mitcad::geometry::input_changes()) {
     std::fprintf(stderr, "%s\n", change.c_str());
   }

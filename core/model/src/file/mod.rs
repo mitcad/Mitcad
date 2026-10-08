@@ -87,8 +87,30 @@
 //! name when renamed) and a feature's `component` when it is not the root
 //! (`C0`). Files without them load with every feature in the root.
 //!
+//! A component from a library (mitcad#64) has `library` (`library`, `url`,
+//! `rev`, `label`, `component`, `path`, `config`, `license`, `authors`,
+//! `designation`; [`crate::library::LibraryRef`]); a design with a table of
+//! sizes has `configurations` (`selectors`, `parameters`, `default`,
+//! `rows`; [`crate::configurations`]). Both are left out otherwise, so
+//! files without them are as before.
+//!
 //! Named views (U5), when there are any: `views` (`name`, `eye`, `target`,
 //! `up`, `height`, `"perspective": true`).
+//!
+//! Analyses (mitcad#41), when there are any: `analyses` (`name`,
+//! `"visible": false`, `type`: `section` with `plane`, `offset`, `flip`).
+//!
+//! Appearances of the document (mitcad#46), when there are any:
+//! `appearances` (`id`, `name`, `base_color`, `metalness`, `roughness`,
+//! `specular`, `transmission`, `ior`, `coat`, `coat_roughness`, `emission`,
+//! `emission_color`, `opacity`, and a `texture` {`path`, `size`,
+//! `rotation`, `projection`}; parameters left out are the default's), see
+//! [`crate::appearance`].
+//!
+//! Render settings (mitcad#47), when they are not the defaults: `render`
+//! with the sections `environment`, `background`, `ground`, `film` and
+//! `output` (mitcad#48; fields left out are the defaults), see
+//! [`crate::render_settings`].
 //!
 //! The display state (P9), when it is not the default: `display` with
 //! `"origin": true` (the Origin folder shown) and `isolated` (`body` and
@@ -399,6 +421,19 @@ pub(crate) fn load_state_at(json: &str, path: &Path) -> Result<(DocState, Vec<St
             path.display()
         )),
         None => {}
+    }
+    Ok((state, warnings))
+}
+
+/// The definition state of a project file whose B-rep data is in `store`
+/// (a library component read from a commit, mitcad#64).
+pub(crate) fn load_state_in(
+    json: &str,
+    store: &dyn BlobStore,
+) -> Result<(DocState, Vec<String>), FileError> {
+    let (mut state, mut warnings) = load_state(json)?;
+    if has_references(&state) {
+        resolve(&mut state, store, &mut warnings);
     }
     Ok((state, warnings))
 }

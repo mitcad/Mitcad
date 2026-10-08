@@ -442,7 +442,7 @@ pub trait Kernel {
         Err(KernelError::Unsupported("holes"))
     }
 
-    /// The body with threads cut into cylindrical faces (see [`ThreadSpec`]).
+    /// The body with threads built on cylindrical faces (see [`ThreadSpec`]).
     fn modeled_thread(
         &self,
         _body: &Self::Shape,
@@ -483,7 +483,8 @@ pub trait Kernel {
     // .f3d import (T1): replayed bodies against the file's.
 
     /// The distance of each point from the shape's boundary (its faces),
-    /// mm: zero on a face, positive inside and outside.
+    /// mm: zero on a face, positive inside and outside; within 1e-5 of a
+    /// face, the distance to that face (another may be nearer still).
     fn boundary_distances(
         &self,
         _shape: &Self::Shape,
@@ -668,6 +669,86 @@ pub trait Kernel {
     /// [`HelixSpec`]).
     fn helix(&self, _spec: &HelixSpec<'_>) -> Result<Self::Shape, KernelError> {
         Err(KernelError::Unsupported("helices"))
+    }
+
+    // Segment crossings (the `.f3d` import's thread angles, mitcad#68).
+
+    /// Where the segment from `from` to `to` crosses the shape's faces, in
+    /// order along it: the fraction of the way, and whether it enters the
+    /// material there (else it leaves it). Where it only touches a face is
+    /// left out. Much quicker than classifying points near spline faces
+    /// ([`Kernel::points_inside`]): only the faces near the segment are
+    /// intersected.
+    fn segment_crossings(
+        &self,
+        _shape: &Self::Shape,
+        _from: Vec3,
+        _to: Vec3,
+    ) -> Result<Vec<(f64, bool)>, KernelError> {
+        Err(KernelError::Unsupported("segment crossings"))
+    }
+
+    // Removed material (the import's history-based guesses, mitcad#85).
+
+    /// `before` minus `after` for two near copies of a body (a replayed
+    /// body and the one stored for its next history state), as the pieces
+    /// of [`Kernel::boolean`]'s cut: worked out only where the two differ
+    /// by more than `slack` mm, so that the faces both have, nearly but not
+    /// exactly, are not intersected (a boolean of the whole bodies can take
+    /// minutes on free-form faces). Material within `slack` of the faces
+    /// both have is left out.
+    fn removed_material(
+        &self,
+        _before: &Self::Shape,
+        _after: &Self::Shape,
+        _slack: f64,
+    ) -> Result<Vec<Self::Shape>, KernelError> {
+        Err(KernelError::Unsupported("removed material"))
+    }
+
+    // Near copies joined (mirrors of nearly symmetric bodies, mitcad#88).
+
+    /// The join of `body` with a near copy of it (the mirror image of a
+    /// nearly symmetric body), as [`Kernel::boolean`]'s join of the one
+    /// target `body`: worked out only where the two differ by more than
+    /// `slack` mm, so that the faces both have, nearly but not exactly, are
+    /// not intersected (a boolean of the whole shapes can take minutes on
+    /// free-form faces and often goes wrong there). Material of the copy
+    /// within `slack` of the body's faces is left out; where no face
+    /// differs by more, the result is the body. None when `copy` is not a
+    /// near copy of `body` (more than half the faces of either differ from
+    /// the other's): the caller joins the whole shapes.
+    fn join_near_copy(
+        &self,
+        _body: &Self::Shape,
+        _copy: &Self::Shape,
+        _slack: f64,
+    ) -> Result<Option<BooleanOutput<Self::Shape>>, KernelError> {
+        Err(KernelError::Unsupported("joins of near copies"))
+    }
+
+    // Every face's and edge's geometry at once (the `.f3d` import's joint
+    // sides on large bodies, mitcad#87).
+
+    /// Each face's names (as [`Kernel::faces`]) and surface (as
+    /// [`Kernel::face_geometry`], but `Other` for surfaces that are not
+    /// planes, cylinders, cones, spheres or tori, planar splines too), in
+    /// one pass instead of finding each face by its name.
+    fn face_geometries(
+        &self,
+        _shape: &Self::Shape,
+    ) -> Result<Vec<(Vec<String>, SurfaceGeometry)>, KernelError> {
+        Err(KernelError::Unsupported("face geometries"))
+    }
+
+    /// Each edge's name (as [`Kernel::edges`]) and curve (as
+    /// [`Kernel::edge_geometry`]; `Other` for degenerate edges), in one
+    /// pass.
+    fn edge_geometries(
+        &self,
+        _shape: &Self::Shape,
+    ) -> Result<Vec<(Option<String>, CurveGeometry)>, KernelError> {
+        Err(KernelError::Unsupported("edge geometries"))
     }
 }
 
@@ -1000,8 +1081,20 @@ pub enum KernelError {
 }
 
 impl KernelError {
+    /// What the message of an operation that ran out of memory says
+    /// (mitcad#80): the geometry kernel turns an allocation that fails into
+    /// an error "<operation>: out of memory", and the .f3d import then
+    /// tries no more definitions.
+    pub const OUT_OF_MEMORY: &'static str = "out of memory";
+
     pub fn failed(message: impl Into<String>) -> Self {
         Self::Failed(message.into())
+    }
+
+    /// Whether an error's message (of a kernel operation, or of a feature
+    /// one failed) says the operation ran out of memory.
+    pub fn is_out_of_memory(message: &str) -> bool {
+        message.contains(Self::OUT_OF_MEMORY)
     }
 }
 
@@ -1205,19 +1298,28 @@ pub struct HoleSpec<'a, S> {
     pub taper: f64,
 }
 
-/// Input of [`Kernel::modeled_thread`]: a 60-degree basic profile (ISO 68-1,
-/// Unified) of `pitch` and radial `depth` cut into each face. On an external
-/// thread the crest is the cylinder, on an internal one the cylinder is the
-/// minor diameter. `part` limits it to (length, offset, from the high end
-/// of the cylinder's axis); otherwise it runs out through both ends. The
-/// groove's faces are named `<feature>:thread(<face>)`.
+/// Input of [`Kernel::modeled_thread`]: the 60-degree profile (ISO 68-1,
+/// Unified) of `pitch`, half a pitch wide at `pitch_diameter`, with flat
+/// crests and roots at the `major` and `minor` diameters, built on each
+/// face: along the threaded part the material becomes the thread (removed
+/// beyond the profile, added where the face lies inside the crest).
+/// `angle` (radians) turns the thread about its axis from where its
+/// groove (an internal thread's tooth) spans the first half pitch from the
+/// face's low end at the reference direction (the X axis projected across
+/// the axis; Y for axes near X; `geometry/include/mitcad/geometry/thread.hpp`).
+/// `part` limits it to (length, offset, from the high end of the
+/// cylinder's axis); otherwise it covers the face and runs out through its
+/// free ends. The thread's faces are named `<feature>:thread(<face>)`.
 #[derive(Debug, Clone)]
 pub struct ThreadSpec<'a> {
     pub feature: FeatureUid,
     pub faces: &'a [FaceName],
     pub pitch: f64,
-    pub depth: f64,
+    pub major: f64,
+    pub minor: f64,
+    pub pitch_diameter: f64,
     pub right_handed: bool,
+    pub angle: f64,
     pub part: Option<(f64, f64, bool)>,
 }
 

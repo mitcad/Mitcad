@@ -1,0 +1,291 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+BRepCheck: the 2d closure check of a wire (BRepCheck_Wire::Closed2d,
+IsClosed2dForPeriodicFace) went through all edges of the face for each of
+its wires to find its seam edges, and BRepCheck_Wire::InContext searched the
+face for the wire: quadratic in the wires of a face (a face with thousands
+of holes). BRepCheck_Analyzer finds the seam edges once per face
+(BRepCheck_Wire::SeamEdges) and checks each wire of the face with
+BRepCheck_Wire::InContextOfFace, which uses them and skips the search; other
+callers keep InContext and Closed2d. The seam edges, the checks and their
+statuses are unchanged.
+diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx
+index 48ccc13..e73818e 100644
+--- a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx
++++ b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx
+@@ -229,6 +229,21 @@ public:
+             }
+           }
+ 
++          // The seam edges of the face, found once for the 2d closure check of
++          // all its wires instead of once for each wire.
++          NCollection_List<TopoDS_Shape> aSeamEdges;
++          bool                           isSeamEdgesFound = false;
++          try
++          {
++            OCC_CATCH_SIGNALS
++            BRepCheck_Wire::SeamEdges(TopoDS::Face(aShape), aSeamEdges);
++            isSeamEdgesFound = true;
++          }
++          catch (Standard_Failure const&)
++          {
++            // each wire searches the face itself (InContext)
++          }
++
+           bool orientofwires = performwire;
+           for (exp.Init(aShape, TopAbs_WIRE); exp.More(); exp.Next())
+           {
+@@ -236,7 +251,17 @@ public:
+             try
+             {
+               OCC_CATCH_SIGNALS
+-              aFaceWireRes->InContext(aShape);
++              // A wire of the face: not searched for in it.
++              const occ::handle<BRepCheck_Wire> aWireRes =
++                occ::down_cast<BRepCheck_Wire>(aFaceWireRes);
++              if (isSeamEdgesFound && !aWireRes.IsNull())
++              {
++                aWireRes->InContextOfFace(TopoDS::Face(aShape), aSeamEdges);
++              }
++              else
++              {
++                aFaceWireRes->InContext(aShape);
++              }
+ 
+               if (orientofwires)
+               {
+diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.cxx
+index 7d7323f..8f2f513 100644
+--- a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.cxx
++++ b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.cxx
+@@ -103,10 +103,11 @@ static void CurveDirForParameter(const Geom2dAdaptor_Curve& aC2d,
+                                  gp_Vec2d&                  aVec2d);
+ 
+ //  Modified by Sergey KHROMOV - Thu Jun 20 11:21:51 2002 OCC325 Begin
+-static bool IsClosed2dForPeriodicFace(const TopoDS_Face&   theFace,
+-                                      const gp_Pnt2d&      theP1,
+-                                      const gp_Pnt2d&      theP2,
+-                                      const TopoDS_Vertex& theVertex);
++static bool IsClosed2dForPeriodicFace(const TopoDS_Face&                    theFace,
++                                      const gp_Pnt2d&                       theP1,
++                                      const gp_Pnt2d&                       theP2,
++                                      const TopoDS_Vertex&                  theVertex,
++                                      const NCollection_List<TopoDS_Shape>* theSeamEdges);
+ 
+ static bool GetPnt2d(const TopoDS_Vertex& theVertex,
+                      const TopoDS_Edge&   theEdge,
+@@ -190,6 +191,22 @@ void BRepCheck_Wire::Minimum()
+ //=================================================================================================
+ 
+ void BRepCheck_Wire::InContext(const TopoDS_Shape& S)
++{
++  inContext(S, nullptr);
++}
++
++//=================================================================================================
++
++void BRepCheck_Wire::InContextOfFace(const TopoDS_Face&                    theFace,
++                                     const NCollection_List<TopoDS_Shape>& theSeamEdges)
++{
++  inContext(theFace, &theSeamEdges);
++}
++
++//=================================================================================================
++
++void BRepCheck_Wire::inContext(const TopoDS_Shape&                   S,
++                               const NCollection_List<TopoDS_Shape>* theSeamEdges)
+ {
+   occ::handle<NCollection_Shared<NCollection_List<BRepCheck_Status>>> aHList;
+   {
+@@ -209,19 +226,22 @@ void BRepCheck_Wire::InContext(const TopoDS_Shape& S)
+   }
+   NCollection_List<BRepCheck_Status>& lst = *aHList;
+ 
+-  // check if my wire is in <S>
+-  TopExp_Explorer exp(S, TopAbs_WIRE);
+-  for (; exp.More(); exp.Next())
++  // check if my wire is in <S> (known for InContextOfFace())
++  if (theSeamEdges == nullptr)
+   {
+-    if (exp.Current().IsSame(myShape))
++    TopExp_Explorer exp(S, TopAbs_WIRE);
++    for (; exp.More(); exp.Next())
+     {
+-      break;
++      if (exp.Current().IsSame(myShape))
++      {
++        break;
++      }
++    }
++    if (!exp.More())
++    {
++      BRepCheck::Add(lst, BRepCheck_SubshapeNotInShape);
++      return;
+     }
+-  }
+-  if (!exp.More())
+-  {
+-    BRepCheck::Add(lst, BRepCheck_SubshapeNotInShape);
+-    return;
+   }
+ 
+   BRepCheck_Status st   = BRepCheck_NoError;
+@@ -248,7 +268,7 @@ void BRepCheck_Wire::InContext(const TopoDS_Shape& S)
+       {
+         break;
+       }
+-      st = Closed2d(TopoDS::Face(S));
++      st = closed2d(TopoDS::Face(S), false, theSeamEdges);
+       break;
+     }
+     default: {
+@@ -521,6 +541,15 @@ static bool IsDistanceIn2DTolerance(const BRepAdaptor_Surface& aFaceSurface,
+ //=================================================================================================
+ 
+ BRepCheck_Status BRepCheck_Wire::Closed2d(const TopoDS_Face& theFace, const bool Update)
++{
++  return closed2d(theFace, Update, nullptr);
++}
++
++//=================================================================================================
++
++BRepCheck_Status BRepCheck_Wire::closed2d(const TopoDS_Face&                    theFace,
++                                          const bool                            Update,
++                                          const NCollection_List<TopoDS_Shape>* theSeamEdges)
+ {
+   occ::handle<NCollection_Shared<NCollection_List<BRepCheck_Status>>> aHList;
+   {
+@@ -674,7 +703,7 @@ BRepCheck_Status BRepCheck_Wire::Closed2d(const TopoDS_Face& theFace, const bool
+ 
+   //  Modified by Sergey KHROMOV - Thu Jun 20 10:55:42 2002 OCC325 Begin
+   // Check 2d distance for periodic faces with seam edge
+-  if (!IsClosed2dForPeriodicFace(theFace, aP_first, aP_last, aFirstVertex))
++  if (!IsClosed2dForPeriodicFace(theFace, aP_first, aP_last, aFirstVertex, theSeamEdges))
+   {
+     aClosedStat = BRepCheck_NotClosed;
+     if (Update)
+@@ -2082,38 +2111,22 @@ static bool GetPnt2d(const TopoDS_Vertex& theVertex,
+ // purpose  : Checks the distance between first point of the first edge
+ //           and last point of the last edge in 2d for periodic face.
+ //=======================================================================
+-static bool IsClosed2dForPeriodicFace(const TopoDS_Face&   theFace,
+-                                      const gp_Pnt2d&      theP1,
+-                                      const gp_Pnt2d&      theP2,
+-                                      const TopoDS_Vertex& theVertex)
++static bool IsClosed2dForPeriodicFace(const TopoDS_Face&                    theFace,
++                                      const gp_Pnt2d&                       theP1,
++                                      const gp_Pnt2d&                       theP2,
++                                      const TopoDS_Vertex&                  theVertex,
++                                      const NCollection_List<TopoDS_Shape>* theSeamEdges)
+ {
+   // Check 2d distance for periodic faces with seam edge.
+-  // Searching for seam edges
+-  NCollection_List<TopoDS_Shape>                         aSeamEdges;
+-  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> NotSeams;
+-  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> ClosedEdges;
+-  TopExp_Explorer                                        anExp(theFace, TopAbs_EDGE);
+-
+-  for (; anExp.More(); anExp.Next())
++  // Searching for seam edges (given by BRepCheck_Wire::InContextOfFace())
++  NCollection_List<TopoDS_Shape> aFoundSeamEdges;
++  if (theSeamEdges == nullptr)
+   {
+-    TopoDS_Edge anEdge = TopoDS::Edge(anExp.Current());
+-
+-    if (NotSeams.Contains(anEdge))
+-    {
+-      continue;
+-    }
+-
+-    if (!IsOriented(anEdge) || !BRep_Tool::IsClosed(anEdge, theFace))
+-    {
+-      NotSeams.Add(anEdge);
+-      continue;
+-    }
+-
+-    if (!ClosedEdges.Add(anEdge))
+-    {
+-      aSeamEdges.Append(anEdge);
+-    }
++    BRepCheck_Wire::SeamEdges(theFace, aFoundSeamEdges);
+   }
++  const NCollection_List<TopoDS_Shape>& aSeamEdges =
++    theSeamEdges != nullptr ? *theSeamEdges : aFoundSeamEdges;
++  TopExp_Explorer anExp;
+ 
+   if (aSeamEdges.Extent() == 0)
+   {
+@@ -2174,3 +2187,34 @@ static bool IsClosed2dForPeriodicFace(const TopoDS_Face&   theFace,
+ }
+ 
+ //  Modified by Sergey KHROMOV - Thu Jun 20 10:58:05 2002 End
++
++//=================================================================================================
++
++void BRepCheck_Wire::SeamEdges(const TopoDS_Face&              theFace,
++                               NCollection_List<TopoDS_Shape>& theSeamEdges)
++{
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> NotSeams;
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> ClosedEdges;
++  TopExp_Explorer                                        anExp(theFace, TopAbs_EDGE);
++
++  for (; anExp.More(); anExp.Next())
++  {
++    TopoDS_Edge anEdge = TopoDS::Edge(anExp.Current());
++
++    if (NotSeams.Contains(anEdge))
++    {
++      continue;
++    }
++
++    if (!IsOriented(anEdge) || !BRep_Tool::IsClosed(anEdge, theFace))
++    {
++      NotSeams.Add(anEdge);
++      continue;
++    }
++
++    if (!ClosedEdges.Add(anEdge))
++    {
++      theSeamEdges.Append(anEdge);
++    }
++  }
++}
+diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.hxx b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.hxx
+index c5f0f30..63213a0 100644
+--- a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.hxx
++++ b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.hxx
+@@ -42,6 +42,20 @@ public:
+   //! Closed2d until faulty is found
+   Standard_EXPORT void InContext(const TopoDS_Shape& ContextShape) override;
+ 
++  //! As InContext(), for a face the wire is known to be a wire of, with the
++  //! seam edges of the face given (SeamEdges()): the face is not searched for
++  //! the wire, and Closed2d() does not go through all edges of the face.
++  //! BRepCheck_Analyzer checks every wire of a face, and both made faces with
++  //! many wires quadratic.
++  Standard_EXPORT void InContextOfFace(const TopoDS_Face&                    theFace,
++                                       const NCollection_List<TopoDS_Shape>& theSeamEdges);
++
++  //! Returns in theSeamEdges the seam edges of the face (oriented edges closed
++  //! on it that it contains twice) at which Closed2d() checks the 2d closure
++  //! of a wire.
++  Standard_EXPORT static void SeamEdges(const TopoDS_Face&              theFace,
++                                        NCollection_List<TopoDS_Shape>& theSeamEdges);
++
+   //! checks that the wire is not empty and "connex".
+   //! Called by constructor
+   Standard_EXPORT void Minimum() override;
+@@ -112,6 +126,12 @@ public:
+   DEFINE_STANDARD_RTTIEXT(BRepCheck_Wire, BRepCheck_Result)
+ 
+ private:
++  void inContext(const TopoDS_Shape& theContext, const NCollection_List<TopoDS_Shape>* theSeamEdges);
++
++  BRepCheck_Status closed2d(const TopoDS_Face&                    theFace,
++                            const bool                            theUpdate,
++                            const NCollection_List<TopoDS_Shape>* theSeamEdges);
++
+   bool             myCdone;
+   BRepCheck_Status myCstat;
+   NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>

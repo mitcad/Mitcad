@@ -302,11 +302,11 @@ Ribbon::Ribbon(CommandRegistry& registry, Presentation presentation, QWidget* pa
 }
 
 const QStringList& Ribbon::groups(const QString& tab) {
-  // MAKE: 3D Print (mitcad#13).
+  // MAKE: 3D Print (mitcad#13). ASSEMBLE: joints (mitcad#55).
   static const QStringList solid = {QStringLiteral("CREATE"),  QStringLiteral("MODIFY"),
-                                    QStringLiteral("CONSTRUCT"), QStringLiteral("INSPECT"),
-                                    QStringLiteral("INSERT"),  QStringLiteral("MAKE"),
-                                    QStringLiteral("SELECT")};
+                                    QStringLiteral("ASSEMBLE"), QStringLiteral("CONSTRUCT"),
+                                    QStringLiteral("INSPECT"), QStringLiteral("INSERT"),
+                                    QStringLiteral("MAKE"),    QStringLiteral("SELECT")};
   static const QStringList sketch = {QStringLiteral("CREATE"),       QStringLiteral("MODIFY"),
                                      QStringLiteral("CONSTRAINTS"),  QStringLiteral("INSPECT"),
                                      QStringLiteral("INSERT"),       QStringLiteral("SELECT"),

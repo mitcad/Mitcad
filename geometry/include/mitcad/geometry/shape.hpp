@@ -140,6 +140,24 @@ public:
   // and again.
   std::optional<std::array<double, 6>> bounds() const { return m_bounds.get(); }
   void set_bounds(const std::array<double, 6>& values) const { m_bounds.set(values); }
+  // What the bridge's boundary distances keep of the shape between calls
+  // (its faces' projections, costly to set up, and asked for again and
+  // again by the .f3d import); null until the first call. The kept object
+  // has a lock of its own.
+  std::shared_ptr<void> boundary_index() const { return m_boundaryIndex.get().value_or(nullptr); }
+  void set_boundary_index(std::shared_ptr<void> index) const { m_boundaryIndex.set(std::move(index)); }
+
+  // Whether OCCT's checker finds the shape valid, once something asked
+  // (transforms check their input once instead of every copy they make).
+  std::optional<bool> checked_valid() const { return m_valid.get(); }
+  void set_checked_valid(bool valid) const { m_valid.set(valid); }
+
+  // Whether the shape is a boolean's result with its coplanar faces and
+  // collinear edges merged (OCCT's ShapeUpgrade_UnifySameDomain): what is
+  // left unmerged in it stays so in the merge after a later boolean
+  // (far_features.hpp). Not kept in stored results.
+  bool unified() const { return m_unified; }
+  void set_unified(bool unified) { m_unified = unified; }
 
   // What the operation that made the shape gave up to build it (a fillet
   // made 0.1 % smaller than asked); the model shows them as warnings.
@@ -165,6 +183,9 @@ private:
   std::vector<std::string> m_vertexNames;
   LazyValue<std::array<double, 5>> m_measured;
   LazyValue<std::array<double, 6>> m_bounds;
+  LazyValue<std::shared_ptr<void>> m_boundaryIndex;
+  LazyValue<bool> m_valid;
+  bool m_unified = false;
   std::vector<std::string> m_notes;
   // Registered with the input check when made.
   bool m_checked = false;

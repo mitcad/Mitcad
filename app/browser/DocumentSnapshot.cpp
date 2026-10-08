@@ -72,6 +72,8 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
   const QJsonObject units = document.value(QStringLiteral("units")).toObject();
   snapshot.lengthUnit = units.value(QStringLiteral("length")).toString(QStringLiteral("mm"));
   snapshot.namedViews = model.queryArray(QStringLiteral("named_views"));
+  snapshot.analyses = model.queryArray(QStringLiteral("analyses"));
+  snapshot.joints = model.queryObject({{QStringLiteral("query"), QStringLiteral("joints")}});
   const QJsonObject display = document.value(QStringLiteral("display")).toObject();
   snapshot.originShown = display.value(QStringLiteral("origin")).toBool();
   for (const QJsonValue& value : display.value(QStringLiteral("isolated")).toArray()) {
@@ -87,7 +89,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     snapshot.isolation.append(item);
   }
   snapshot.key = QJsonDocument(QJsonArray{timeline, components, bodies, profiles, snapshot.lengthUnit,
-                                          snapshot.namedViews, display})
+                                          snapshot.namedViews, display, snapshot.analyses, snapshot.joints})
                      .toJson(QJsonDocument::Compact);
 
   snapshot.marker = timeline.value(QStringLiteral("marker")).toInt();
@@ -111,7 +113,8 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     feature.index = i;
     feature.visible = f.value(QStringLiteral("visible")).toBool(true);
     feature.visibleSet = f.value(QStringLiteral("visible_set")).toBool();
-    if (feature.isSketch() || feature.isConstruction()) {
+    // A joint origin's light bulb is construction geometry's (mitcad#55).
+    if (feature.isSketch() || feature.isConstruction() || feature.type == QStringLiteral("joint_origin")) {
       snapshot.featureShown.insert(feature.uid, feature.visible);
     }
     snapshot.features.append(feature);
@@ -198,6 +201,53 @@ QVector<const DocumentSnapshot::Feature*> DocumentSnapshot::failures() const {
   return failed;
 }
 
+QJsonObject DocumentSnapshot::shownAnalysis() const {
+  for (const QJsonValue& value : analyses) {
+    if (value.toObject().value(QStringLiteral("visible")).toBool()) {
+      return value.toObject();
+    }
+  }
+  return QJsonObject();
+}
+
+QJsonObject DocumentSnapshot::analysis(const QString& name) const {
+  for (const QJsonValue& value : analyses) {
+    if (value.toObject().value(QStringLiteral("name")).toString() == name) {
+      return value.toObject();
+    }
+  }
+  return QJsonObject();
+}
+
+QJsonObject DocumentSnapshot::joint(const QString& uid) const {
+  for (const QJsonValue& value : joints.value(QStringLiteral("joints")).toArray()) {
+    if (value.toObject().value(QStringLiteral("uid")).toString() == uid) {
+      return value.toObject();
+    }
+  }
+  return QJsonObject();
+}
+
+QJsonObject DocumentSnapshot::jointDof(const QString& component) const {
+  for (const QJsonValue& value : joints.value(QStringLiteral("dof")).toArray()) {
+    if (value.toObject().value(QStringLiteral("component")).toString() == component) {
+      return value.toObject();
+    }
+  }
+  return QJsonObject();
+}
+
+int DocumentSnapshot::occurrenceDof(const QString& uid) const {
+  for (const QJsonValue& value : joints.value(QStringLiteral("dof")).toArray()) {
+    for (const QJsonValue& unit : value.toObject().value(QStringLiteral("units")).toArray()) {
+      if (unit.toObject().value(QStringLiteral("occurrences")).toArray().contains(uid)) {
+        return unit.toObject().value(QStringLiteral("dof")).toInt();
+      }
+    }
+  }
+  return -1;
+}
+
 QString featureIcon(const QString& type) {
   static const QHash<QString, QString> icons = {
       {QStringLiteral("sketch"), QStringLiteral("sketch")},
@@ -240,6 +290,11 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("move_occurrence"), QStringLiteral("move")},
       {QStringLiteral("capture_position"), QStringLiteral("position")},
       {QStringLiteral("helix"), QStringLiteral("helix")},
+      // Joints (mitcad#55).
+      {QStringLiteral("joint"), QStringLiteral("joint")},
+      {QStringLiteral("as_built_joint"), QStringLiteral("as-built-joint")},
+      {QStringLiteral("joint_origin"), QStringLiteral("joint-origin")},
+      {QStringLiteral("rigid_group"), QStringLiteral("rigid-group")},
   };
   return icons.value(type, QStringLiteral("feature"));
 }

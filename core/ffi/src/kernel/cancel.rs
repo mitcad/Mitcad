@@ -15,6 +15,10 @@ pub mod ffi {
         /// It is asked from OCCT's worker threads too.
         type CancelCheck;
         fn cancel_requested(self: &CancelCheck) -> bool;
+        /// The progress of an OCCT algorithm it stops advanced (from its
+        /// worker threads too): progress of the .f3d import that runs the
+        /// recompute, for its watchdog (mitcad#82).
+        fn progressed(self: &CancelCheck);
     }
 
     unsafe extern "C++" {
@@ -28,18 +32,28 @@ pub mod ffi {
     }
 }
 
-/// A recompute's monitor as the geometry asks it (it is `Sync`).
-pub struct CancelCheck(Arc<RecomputeMonitor>);
+/// A recompute's monitor as the geometry asks it (it is `Sync`), with the
+/// progress of the .f3d import running on the thread that made it, if any.
+pub struct CancelCheck(Arc<RecomputeMonitor>, Option<Arc<mitcad_import::Progress>>);
 
 impl CancelCheck {
     fn cancel_requested(&self) -> bool {
         self.0.is_cancelled()
     }
+
+    fn progressed(&self) {
+        if let Some(progress) = &self.1 {
+            progress.tick();
+        }
+    }
 }
 
 /// Runs `f` with the geometry's operations on this thread stopping once
-/// `monitor` is cancelled (`Kernel::interruptible`).
+/// `monitor` is cancelled (`Kernel::interruptible`); their progress is the
+/// progress of the .f3d import running on this thread (mitcad#82: a long
+/// boolean that advances is not stuck).
 pub fn interruptible<R>(monitor: &Arc<RecomputeMonitor>, f: impl FnOnce() -> R) -> R {
-    let _scope = ffi::enter_cancel_scope(Box::new(CancelCheck(Arc::clone(monitor))));
+    let check = CancelCheck(Arc::clone(monitor), mitcad_import::current_progress());
+    let _scope = ffi::enter_cancel_scope(Box::new(check));
     f()
 }

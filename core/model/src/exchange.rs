@@ -360,7 +360,7 @@ fn file_name(path: &str) -> String {
 }
 
 /// `name`, or `name (2)`, `name (3)`, ... the first one not taken.
-fn unique_name(name: &str, taken: &mut BTreeSet<String>) -> String {
+pub(crate) fn unique_name(name: &str, taken: &mut BTreeSet<String>) -> String {
     let name = name.trim();
     let unique = std::iter::once(name.to_owned())
         .chain((2..).map(|n| format!("{name} ({n})")))

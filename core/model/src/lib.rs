@@ -9,6 +9,8 @@
 
 pub mod analysis;
 pub mod api;
+// Appearances: physically based looks of bodies (mitcad#46).
+pub mod appearance;
 pub mod assembly;
 mod base64;
 pub mod datum;
@@ -72,7 +74,7 @@ pub use transform::{Instance, PrimitiveShape, PrimitiveSpec, Transform};
 pub use kernel::{DraftSpec, FilletSet, FilletSize, ShellSpec, ToolInput};
 // Construction geometry, analysis and body attributes (F5).
 pub use datum::{Datum, DatumAxis, DatumKind, DatumPlane, DatumPoint, OriginDatum};
-pub use document::{BodyAttributes, DatumView};
+pub use document::{BodyAttributes, DatumView, DeletedAppearance, FaceAppearance};
 pub use features::geom_ref::{GeomRef, PathRef};
 // Sweeps, lofts, pipes, coils, ribs and webs (F3).
 pub mod sweeps;
@@ -88,6 +90,8 @@ pub use document::{InsertOptions, InstanceView};
 pub use ids::{ComponentUid, OccurrenceUid};
 // Named views (U5).
 pub use document::NamedView;
+// Analyses kept in the document (mitcad#41).
+pub use document::{Analysis, AnalysisDef, SectionAnalysis, SectionPlane};
 // Sketch text (P3).
 pub use kernel::{FontGlyphs, FontRequest, Glyph};
 pub use topo::CurveId;
@@ -112,3 +116,21 @@ pub use file::{BlobStore, FileFormat, FsStore, MemoryStore, Project, ProjectErro
 // Comparison of two designs or versions (P12c).
 pub mod diff;
 pub use diff::DesignDiff;
+// Render settings of the document (mitcad#47).
+pub mod render_settings;
+pub use render_settings::RenderSettings;
+// Joints between occurrences (mitcad#55).
+#[cfg(test)]
+mod joint_solver_tests;
+#[cfg(test)]
+mod joint_tests;
+pub mod joints;
+
+// Configuration tables and library components (mitcad#64, mitcad#63).
+pub mod configurations;
+pub mod library;
+pub use configurations::{ConfigurationRow, Configurations};
+pub use document::{LibraryChange, LibraryPart, PartsListRow};
+pub use library::{LibraryRef, LibraryRequest, LibrarySource, LinkResolver, set_link_resolver};
+#[cfg(test)]
+mod library_tests;

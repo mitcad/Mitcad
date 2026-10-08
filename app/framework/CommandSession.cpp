@@ -214,6 +214,13 @@ bool CommandSession::start(const Selection& preselection, QString& error) {
       m_originalMarker = marker;
       m_host.refreshScene();
     }
+  } else if (!m_analysis.isEmpty()) {
+    if (!m_def.load) {
+      error = tr("%1 cannot edit %2.").arg(m_def.name, m_analysis.value(QStringLiteral("name")).toString());
+      return false;
+    }
+    m_def.load(m_analysis, m_state, m_host);
+    setRowDefaults();
   } else {
     // What was selected before the command goes to the first input that
     // takes it.
@@ -242,7 +249,7 @@ bool CommandSession::start(const Selection& preselection, QString& error) {
 }
 
 CommandPanel* CommandSession::createPanel(QWidget* parent) {
-  m_panel = new CommandPanel(m_def, m_state, isEditing(), parent);
+  m_panel = new CommandPanel(m_def, m_state, isEditing() || !m_analysis.isEmpty(), parent);
   connect(m_panel, &CommandPanel::textEdited, this, [this](const QString& key, const QString& text) {
     m_state.setText(key, text);
     const auto slot = slotOf(key);
@@ -279,6 +286,16 @@ CommandPanel* CommandSession::createPanel(QWidget* parent) {
               }
               if (slot->def->onChange) {
                 slot->def->onChange(m_state, m_host);
+                // Values it set (made NaN) are evaluated again (Drive
+                // Joint: the motion's value where it is).
+                if (m_panel) {
+                  m_panel->refresh(m_state);
+                }
+                for (const Slot& other : slotsOf(true)) {
+                  if (other.def->type == InputDef::Type::Value && std::isnan(m_state.value(other.key))) {
+                    evaluate(other.key);
+                  }
+                }
               }
             }
             inputsChanged();
@@ -390,8 +407,14 @@ CommandPanel* CommandSession::createPanel(QWidget* parent) {
   }
   updateHighlights();
   updateManipulators();
-  qDebug().noquote() << (isEditing() ? QStringLiteral("Editing %1 with %2").arg(m_editUid, m_def.name)
-                                     : QStringLiteral("Command %1 started").arg(m_def.name));
+  if (isEditing()) {
+    qDebug().noquote() << QStringLiteral("Editing %1 with %2").arg(m_editUid, m_def.name);
+  } else if (!m_analysis.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Editing analysis %1 with %2")
+                              .arg(m_analysis.value(QStringLiteral("name")).toString(), m_def.name);
+  } else {
+    qDebug().noquote() << QStringLiteral("Command %1 started").arg(m_def.name);
+  }
   // The choices the panel starts with (P11: metric defaults), for UI tests.
   QStringList choices;
   for (const InputDef& input : m_def.inputs) {
@@ -936,6 +959,20 @@ void CommandSession::runPreview() {
           preview.bodies.push_back(display);
         }
       }
+      // Occurrences the command places elsewhere (joints, moves of
+      // occurrences; mitcad#55): their bodies where it puts them.
+      QHash<QString, QJsonArray> placed;
+      for (const QJsonValue& value : preview.report.value(QStringLiteral("placements")).toArray()) {
+        const QJsonObject placement = value.toObject();
+        placed.insert(placement.value(QStringLiteral("path")).toString(),
+                      placement.value(QStringLiteral("transform")).toArray());
+      }
+      for (BodyDisplay& display : preview.bodies) {
+        const auto moved = placed.constFind(QString::fromStdString(display.occurrence));
+        if (moved != placed.cend()) {
+          display.placement = isIdentity(moved.value()) ? TopLoc_Location() : TopLoc_Location(trsfOf(moved.value()));
+        }
+      }
       if (const auto tool = m_host.previewToolShape()) {
         preview.tool = tool->occt();
       } else if (preview.report.contains(QStringLiteral("datum"))) {
@@ -966,6 +1003,14 @@ void CommandSession::runPreview() {
                               .arg(m_def.name, warnings.isEmpty()
                                                    ? QString()
                                                    : QStringLiteral(", warning: ") + warnings.join(QStringLiteral("; ")));
+    // The occurrences it shows elsewhere (mitcad#55), for UI tests.
+    QStringList moved;
+    for (const QJsonValue& value : preview.report.value(QStringLiteral("placements")).toArray()) {
+      moved << value.toObject().value(QStringLiteral("path")).toString();
+    }
+    if (!moved.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Preview %1 moves %2").arg(m_def.name, moved.join(QStringLiteral(", ")));
+    }
   } else {
     clearPreview();
     const QString problem = preview.report.value(QStringLiteral("error")).toString();
@@ -1174,7 +1219,11 @@ bool CommandSession::commit() {
     runPreview();
   }
   if (m_def.inspect) {
-    if (!m_def.keepsSection) {
+    if (m_def.keepsSection && m_def.build) {
+      if (!keepAnalysis()) {
+        return false;
+      }
+    } else if (!m_def.keepsSection) {
       m_host.showSection(m_sectionBefore);
     }
     qDebug().noquote() << QStringLiteral("Closed %1").arg(m_def.name);
@@ -1261,6 +1310,32 @@ bool CommandSession::commit() {
                                    .arg(m_def.name, result.value(QStringLiteral("uid")).toString()));
   logVolumes(before);
   finish(true);
+  return true;
+}
+
+bool CommandSession::keepAnalysis() {
+  const Built built = m_def.build(m_state, m_host);
+  if (!built.error.isEmpty()) {
+    // Nothing to keep (no plane picked): OK closes the panel all the same.
+    m_host.showSection(m_sectionBefore);
+    return true;
+  }
+  const QString name = m_analysis.value(QStringLiteral("name")).toString();
+  const QJsonObject command =
+      name.isEmpty() ? QJsonObject{{QStringLiteral("cmd"), QStringLiteral("add_analysis")},
+                                   {QStringLiteral("def"), built.def}}
+                     : QJsonObject{{QStringLiteral("cmd"), QStringLiteral("edit_analysis")},
+                                   {QStringLiteral("name"), name},
+                                   {QStringLiteral("def"), built.def},
+                                   {QStringLiteral("visible"), true}};
+  QJsonObject result;
+  if (!m_host.runCommand(command, &result)) {
+    qDebug().noquote() << QStringLiteral("%1: OK not done").arg(m_def.name);
+    return false;
+  }
+  qDebug().noquote() << (name.isEmpty() ? QStringLiteral("Kept %1 as %2")
+                                              .arg(m_def.name, result.value(QStringLiteral("name")).toString())
+                                        : QStringLiteral("Edited analysis %1").arg(name));
   return true;
 }
 

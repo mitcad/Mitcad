@@ -1,0 +1,101 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+ShapeUpgrade_UnifySameDomain: the edges removed between merged faces are
+looked up by vertex. ReconstructMissedSeam searched the whole sequence of
+removed edges for one ending at the current vertex at every step of a wire
+that crosses the seam of a periodic surface, which made merging faces of
+many pieces quadratic (minutes after a boolean on a body with hundreds of
+such faces). The edges are indexed by their vertices once per merged face,
+and the same edges are tried in the same order (the loop skipped the others
+without side effects), so the result is unchanged.
+--- a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
++++ b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
+@@ -839,7 +839,13 @@
+ 
+ //=================================================================================================
+ 
++// Indices, in ascending order, of the edges of a sequence that end at a
++// vertex, by vertex (filled by the first search of ReconstructMissedSeam).
++typedef NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<int>, TopTools_ShapeMapHasher>
++  VertexEdgeIndices;
++
+ static void ReconstructMissedSeam(const NCollection_Sequence<TopoDS_Shape>& theRemovedEdges,
++                                  VertexEdgeIndices&                        theRemovedEdgesAtVertex,
+                                   const TopoDS_Face&                        theFrefFace,
+                                   const TopoDS_Edge&                        theCurEdge,
+                                   const TopoDS_Vertex&                      theCurVertex,
+@@ -853,8 +859,40 @@
+ 
+   // Find seam edge between removed edges
+   theSeamEdge.Nullify();
+-  for (int i = 1; i <= theRemovedEdges.Length(); i++)
++  // Only the removed edges that end at the current vertex can be the seam;
++  // the loop skipped the others without side effects. Looking them up by
++  // vertex keeps every step of a wire from going through all removed edges,
++  // which made merging faces of many pieces quadratic.
++  if (theRemovedEdgesAtVertex.IsEmpty())
++  {
++    for (int i = 1; i <= theRemovedEdges.Length(); i++)
++    {
++      TopoDS_Vertex aV1, aV2;
++      TopExp::Vertices(TopoDS::Edge(theRemovedEdges(i)), aV1, aV2);
++      for (const TopoDS_Vertex& aV : {aV1, aV2})
++      {
++        int anIndex = theRemovedEdgesAtVertex.FindIndex(aV);
++        if (anIndex == 0)
++        {
++          anIndex = theRemovedEdgesAtVertex.Add(aV, NCollection_List<int>());
++        }
++        NCollection_List<int>& anIndices = theRemovedEdgesAtVertex.ChangeFromIndex(anIndex);
++        if (anIndices.IsEmpty() || anIndices.Last() != i)
++        {
++          anIndices.Append(i);
++        }
++      }
++    }
++  }
++  const NCollection_List<int>*    anIndicesAtVertex = theRemovedEdgesAtVertex.Seek(theCurVertex);
++  NCollection_List<int>::Iterator anIndexIter;
++  if (anIndicesAtVertex != nullptr)
++  {
++    anIndexIter.Init(*anIndicesAtVertex);
++  }
++  for (; anIndexIter.More(); anIndexIter.Next())
+   {
++    const int   i      = anIndexIter.Value();
+     TopoDS_Edge anEdge = TopoDS::Edge(theRemovedEdges(i));
+     if (anEdge.IsSame(theCurEdge))
+     {
+@@ -3868,6 +3906,7 @@
+       }
+ 
+       NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> UsedEdges;
++      VertexEdgeIndices aRemovedEdgesAtVertex; // see ReconstructMissedSeam
+       bool                                                   isWireBuildingFailed = false;
+ 
+       double FaceUmin = RealLast();
+@@ -3971,6 +4010,7 @@
+               {
+                 //<edges> do not contain seams => we must reconstruct the seam up to <NextEdge>
+                 ReconstructMissedSeam(RemovedEdges,
++                                      aRemovedEdgesAtVertex,
+                                       F_RefFace,
+                                       CurEdge,
+                                       CurVertex,
+@@ -4095,6 +4135,7 @@
+                 gp_Pnt2d      StartOfNextEdge;
+                 TopoDS_Vertex LastVertexOfSeam;
+                 ReconstructMissedSeam(RemovedEdges,
++                                      aRemovedEdgesAtVertex,
+                                       F_RefFace,
+                                       CurEdge,
+                                       CurVertex,
+@@ -4140,6 +4181,7 @@
+               }
+ 
+               ReconstructMissedSeam(RemovedEdges,
++                                      aRemovedEdgesAtVertex,
+                                     F_RefFace,
+                                     CurEdge,
+                                     CurVertex,

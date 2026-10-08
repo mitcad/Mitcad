@@ -40,6 +40,9 @@ pub struct ComponentDef {
     pub created_by: Option<FeatureUid>,
     /// Another project file this component shows (read only), when linked.
     pub link: Option<ExternalLink>,
+    /// The library it came from, linked or copied (mitcad#64, mitcad#63):
+    /// the version, configuration, licence and designation.
+    pub library: Option<crate::library::LibraryRef>,
 }
 
 /// A component linked from another project file: its bodies are the
@@ -223,6 +226,7 @@ impl Assembly {
             name,
             created_by,
             link: None,
+            library: None,
         });
         uid
     }

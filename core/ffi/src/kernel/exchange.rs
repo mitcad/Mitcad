@@ -139,9 +139,22 @@ pub mod ffi {
         /// Builds one body of an .f3d file from its neutral B-rep data
         /// (`brep_import.rs`); null when it cannot be built.
         fn f3d_build_body(data: &BrepBodyData) -> SharedPtr<Shape>;
+        /// A body `f3d_build_body` built, from its B-rep data (`brep_data`):
+        /// the next try of an import takes it from one the watchdog gave up
+        /// while it built it (mitcad#82); null when it cannot be read.
+        fn f3d_read_body(data: &[u8]) -> SharedPtr<Shape>;
         /// Crashes inside OCCT as errors from now on
         /// (`mitcad/geometry/guard.hpp`).
         fn catch_occt_crashes();
+
+        // .ipt import (mitcad#60).
+        /// Builds one body from its neutral B-rep data with OCCT and
+        /// reports how it went, as `f3d_bodies` does for each body; its
+        /// shape (null when not built) is appended to the list.
+        fn build_brep_body(data: &BrepBodyData, shapes: Pin<&mut ShapeList>) -> F3dBody;
+        /// Whether OCCT's checker finds the shape valid (the bodies of the
+        /// `.ipt` import with its history, mitcad#60).
+        fn shape_is_valid(shape: &Shape) -> bool;
     }
 
     extern "Rust" {
@@ -149,7 +162,27 @@ pub mod ffi {
         /// (a 10 mm cube and a cylinder of radius 10 mm and height 20 mm)
         /// in a `.smb` blob each, without the rest of an .f3d design.
         fn f3d_write_test_file(path: &str) -> Result<()>;
+
+        // .ipt import (mitcad#60).
+        /// Writes a small .ipt part file for tests (`mitcad_ipt::testdata`):
+        /// the cube and the cylinder above, each in a B-rep record of its
+        /// own, part number `MITCAD-TEST-1`, material `Aluminum`, inches.
+        fn ipt_write_test_file(path: &str) -> Result<()>;
+        /// Writes a small .ipt part file with a design for tests
+        /// (`mitcad_ipt::testdata::test_part_with_design`): the 10 mm cube
+        /// and the parameter, sketch and extrusion that make it, mm.
+        fn ipt_write_test_design_file(path: &str) -> Result<()>;
+
+        // .f3d import (mitcad#82).
+        /// `f3d_build_body` advanced (its healing, face by face): progress
+        /// of the import running on this thread, for its watchdog.
+        fn f3d_build_progress();
     }
+}
+
+/// See [`ffi::f3d_build_progress`].
+fn f3d_build_progress() {
+    crate::f3d_import::build_progress();
 }
 
 /// The blobs of [`ffi::f3d_write_test_file`] in a zip of stored entries.
@@ -169,4 +202,15 @@ fn f3d_write_test_file(path: &str) -> Result<(), String> {
     }
     let out = writer.finish().map_err(|e| e.to_string())?;
     std::fs::write(path, out).map_err(|e| format!("{path}: {e}"))
+}
+
+/// The part of [`ffi::ipt_write_test_file`].
+fn ipt_write_test_file(path: &str) -> Result<(), String> {
+    std::fs::write(path, mitcad_ipt::testdata::test_part()).map_err(|e| format!("{path}: {e}"))
+}
+
+/// The part of [`ffi::ipt_write_test_design_file`].
+fn ipt_write_test_design_file(path: &str) -> Result<(), String> {
+    std::fs::write(path, mitcad_ipt::testdata::test_part_with_design())
+        .map_err(|e| format!("{path}: {e}"))
 }

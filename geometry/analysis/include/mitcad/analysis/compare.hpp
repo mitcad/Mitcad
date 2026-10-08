@@ -21,6 +21,15 @@ struct CompareOptions {
   double fuzzy = 1e-4;
   // Also sample B against A, so that material only B has is seen.
   bool symmetric = true;
+  // How long the comparison may take, s (0: no limit). The boolean
+  // differences stop when it is over (they are then missing) and so does
+  // the sampling (fewer samples): booleans of nearly coincident shapes can
+  // take many minutes.
+  double seconds = 0.0;
+  // Leave out the boolean differences when every point was sampled and
+  // none lies farther than this from the other shape, mm (0: never). Of
+  // nearly coincident shapes they are slow and say little more.
+  double booleans_above = 0.0;
 };
 
 // Distances of sample points of one shape from the surface of the other.
@@ -34,10 +43,15 @@ struct Deviation {
 struct Comparison {
   double volume_a = 0.0; // mm^3
   double volume_b = 0.0;
-  // Volumes of A - B and B - A; empty when the boolean operation failed.
+  // Volumes of A - B and B - A; empty when the boolean operation failed,
+  // did not finish in time, was left out (CompareOptions::booleans_above)
+  // or gave a result the sampled deviations rule out (more volume between
+  // the shapes than their surfaces enclose within that distance of each
+  // other: on nearly coincident shapes the booleans can take them as
+  // apart).
   std::optional<double> a_minus_b;
   std::optional<double> b_minus_a;
-  // (|A - B| + |B - A|) / max(|A|, |B|); empty when a boolean failed.
+  // (|A - B| + |B - A|) / max(|A|, |B|); empty when either difference is.
   std::optional<double> relative_difference;
   Deviation a_to_b;
   Deviation b_to_a; // samples == 0 unless symmetric
@@ -50,5 +64,12 @@ struct Comparison {
 
 Comparison compare(const TopoDS_Shape& a, const TopoDS_Shape& b,
                    const CompareOptions& options = {});
+
+// Whether boolean differences of `differences` mm^3 in all (A - B and
+// B - A) can be right when every sample of both shapes lies within
+// `max_deviation` mm of the other shape, whose surfaces have `area` mm^2
+// in all: the material one shape lacks lies between the surfaces, so
+// within about that distance of them; four times that volume is allowed.
+bool plausible_differences(double differences, double max_deviation, double area, double fuzzy);
 
 } // namespace mitcad::analysis

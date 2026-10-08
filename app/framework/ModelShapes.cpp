@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "ModelShapes.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 
@@ -147,6 +148,27 @@ gp_Pnt pointOf(const QJsonValue& xyz) {
 gp_Vec vectorOf(const QJsonValue& xyz) {
   const QJsonArray a = xyz.toArray();
   return gp_Vec(a.at(0).toDouble(), a.at(1).toDouble(), a.at(2).toDouble());
+}
+
+gp_Trsf trsfOf(const QJsonArray& rows) {
+  const auto at = [&rows](int r, int c) { return rows[r].toArray()[c].toDouble(); };
+  gp_Trsf trsf;
+  if (rows.size() >= 3) {
+    trsf.SetValues(at(0, 0), at(0, 1), at(0, 2), at(0, 3), at(1, 0), at(1, 1), at(1, 2), at(1, 3),
+                   at(2, 0), at(2, 1), at(2, 2), at(2, 3));
+  }
+  return trsf;
+}
+
+bool isIdentity(const QJsonArray& rows) {
+  for (int r = 0; r < std::min(3, static_cast<int>(rows.size())); ++r) {
+    for (int c = 0; c < 4; ++c) {
+      if (std::abs(rows[r].toArray()[c].toDouble() - (r == c ? 1.0 : 0.0)) > 1e-12) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 TopoDS_Shape datumShape(const QJsonObject& datum, double size) {

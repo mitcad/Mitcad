@@ -45,7 +45,8 @@ end it early:
 
 An import report then shows which items came in as parametric features,
 which partly (for example a sketch without unsupported constraints),
-which as the file's bodies and which were left out (for example joints),
+which as the file's bodies and which were left out (for example assembly
+relationships),
 and how well the final bodies match those stored in the file. Save the
 result as a `.mitcad` project. More in [.f3d import](#f3d-import).
 
@@ -57,7 +58,8 @@ result as a `.mitcad` project. More in [.f3d import](#f3d-import).
   mode into the sketch being edited), another Mitcad project as a
   component, linked or as a copy (Insert Component). FreeCAD documents
   and `.f3d` designs open as new documents with their history
-  ([FreeCAD import](#freecad-import), [.f3d import](#f3d-import)). The
+  ([FreeCAD import](#freecad-import), [.f3d import](#f3d-import)), `.ipt`
+  parts as new documents with their bodies ([.ipt import](#ipt-import)). The
   file dialogs list the CAD formats under one *CAD files* filter. Which
   formats Mitcad reads and writes, and which keep their design history:
   [Support for multiple CAD formats](../README.md#support-for-multiple-cad-formats).
@@ -124,12 +126,21 @@ Other commands of the SOLID tab, in menu order:
   sketch profiles about an axis while they rise along it, as a screw
   moves (a thread's profile, a twisted ridge): give the revolutions and
   the pitch, the revolutions and the height, or the height and the pitch,
-  right- or left-handed. A hole can be counterdrilled (a counterbore
+  right- or left-handed; a Growth moves the profiles that far out from
+  the axis each turn (negative: in), widening the helix into a cone or a
+  spiral. A hole can be counterdrilled (a counterbore
   whose floor is a cone down to the hole) and tapered (Taper Angle: the
   wall leans in as the hole goes deeper).
 - **MODIFY:** Press Pull, Fillet, Chamfer, Shell, Draft, Scale, Combine,
   Offset Face, Replace Face, Split Face, Split Body, Move/Copy, Align,
-  Delete Face, Physical Material, Appearance, Change Parameters.
+  Delete Face, Physical Material, Appearance, Edit Appearances, Change
+  Parameters. Edit Appearances (also Appearance... in a body's context
+  menu) shows the appearance library with a preview of each: base colour,
+  metalness, roughness, specular, transmission, index of refraction, coat,
+  emission and opacity. New copies the selected appearance into the design,
+  where its values can be changed; Assign gives the bodies it was opened
+  for the selected appearance. The shaded view shows an appearance's base
+  colour; the rendered view uses all of its values.
 - **CONSTRUCT:** Offset Plane, Plane at Angle, Tangent Plane, Midplane,
   Plane Through Two Edges / Three Points / Edge and Point, Plane Tangent
   to Face at Point, Plane Along Path, Plane Normal to Path at Point, axes
@@ -173,6 +184,27 @@ application menu.
   (Shaded, Shaded with Visible Edges Only, Shaded with Hidden Edges,
   Wireframe, Wireframe with Hidden Edges), background, Grid and Snaps, and
   named views (stored in the document). The settings are remembered.
+- **Rendered view** (builds with the renderer): View > Visual Style >
+  Rendered shows the bodies path traced. View > Render Environment (also
+  in Visual Style and Environment) sets how: the light (Studio, White
+  Studio, Dark Studio, Outdoor with the sun's height and direction, or an
+  HDR image, `.hdr` or `.exr`, with its rotation and strength), what is
+  behind the bodies (the view's background, a colour or the environment
+  itself), the ground (shadows, reflections, its height) and the film
+  (exposure, Standard, Filmic or Neutral). These settings are kept in the
+  design and saved with it; each change is a step of Undo.
+- **Render Image** (builds with the renderer): File > Render Image
+  renders the current view, or a named view, to an image file in these
+  settings. Choose the size (a preset such as 1920 × 1080, or width and
+  height; the aspect from the view, or fixed, when the view shows the
+  image's frame), the samples or a time limit, denoising, a transparent
+  background and the format: PNG (8 or 16 bits per channel) and JPEG look
+  as the rendered view does, OpenEXR keeps the render's linear light
+  without the exposure and the view transform. Render works in the
+  background while you go on working; the dialog shows the image as it
+  refines, the samples and the time left. Cancel stops it; Save...
+  writes the finished image. These choices are saved with the design
+  too.
 - **Selection:** a click selects, Ctrl or Shift adds or removes; a drag
   from left to right selects what lies inside the window, from right to
   left also what the window crosses. The filters of the SELECT group limit
@@ -233,7 +265,9 @@ options (construction, snap to grid, showing dimensions, constraints and
 profiles, Hide Above Sketch, Look At) and the constraint buttons.
 *Hide Above Sketch* cuts the bodies at the sketch plane, so that a sketch
 on a face below other parts of a body is not hidden by them (the cut
-bodies cannot be picked meanwhile). It stays on for the next sketch.
+bodies cannot be picked meanwhile). The faces where it cuts the bodies are
+drawn in a colour of their own and hatched, as in Section Analysis. It
+stays on for the next sketch.
 
 - While a tool is active the pointer is a slim cross with the tool's
   icon; a small square in its centre gap shows that the point snaps to
@@ -427,6 +461,57 @@ server is reported with what to do.
   on Windows also where Git for Windows installs itself, or chosen), how
   often to check the remote, and whether each saved version is sent.
 
+### Component libraries
+
+Fasteners and other standard parts come from component libraries: git
+repositories of designs, each with a table of its sizes. Mitcad's own
+library has ISO metric screws (ISO 4762, ISO 4017, ISO 10642), nuts (ISO
+4032) and washers (ISO 7089) from M3 to M12. Libraries need the git
+program to be fetched; parts already in a design need nothing.
+
+1. **Tools › Libraries › Libraries...** lists the libraries and
+   community indexes to use (Mitcad's fastener library and the community
+   index to start with). Add a library by its URL or a folder, turn one
+   off, and **Fetch** to get it or its newer versions. Nothing is fetched
+   unless you ask.
+2. **Insert from Library** (the INSERT group, or Tools › Libraries):
+   search by name, standard or tag (`4762`, `washer`), choose the version
+   (the newest first) and the size (Size, then Length), and insert the part
+   **linked** (read only) or as a **copy** (editable, with its history).
+   The licence and the attribution are shown before you insert.
+3. Each linked part keeps the library version chosen for it. Opening the
+   design reads that version even when the library has moved on, so the
+   design always rebuilds the same way. **Library Parts...** shows the
+   parts with their versions and sizes: choose another version or size,
+   **Show Changes** lists what changes (`M5x16: dk 8.5 mm -> 8.7 mm`),
+   and **Update** applies it as one undo step. **Check for Newer
+   Versions** fetches the libraries first.
+4. Library parts carry their standard designation (`ISO 4762 M5x16`).
+   The **Parts List** tab of Library Parts lists every part with its
+   quantity, library, version and licence, and copies it as CSV.
+
+A design from another computer whose libraries are not here keeps the
+parts' saved bodies; **Get Missing Libraries** in Library Parts fetches
+them after showing their addresses.
+
+### Community library
+
+**Tools › Libraries › Community Library...** searches the designs and
+components others share in their own git repositories, listed by
+community indexes (an index is just another git repository). Items show
+their licence and what it asks of you (CC0, CC-BY, CC-BY-SA, MIT, Apache,
+BSD, CERN-OHL); items without a licence are hidden unless you ask for
+them. **Get Library** fetches a library an index lists; then insert its
+parts linked or as copies. The licence and the source are recorded with
+every part in the design.
+
+**Tools › Libraries › Publish to Library...** adds the open design to a
+library of your own: a folder (made when new, with your choice of
+licence) that keeps versions like a project. It records the design with
+an image of the view, pushes the library to a remote you give, and
+copies the entry to propose to a community index. The format is in
+[libraries.md](libraries.md).
+
 ### Cache of computed results
 
 Results of costly features are kept on disk in your user cache folder, so
@@ -463,6 +548,50 @@ with the environment variable `MITCAD_NO_UPDATE_CHECK=1` or, on Windows,
 the registry value `DisableUpdateCheck` (DWORD 1) under
 `HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Mitcad\Mitcad`. More:
 [updates.md](updates.md).
+
+### Feedback and error reports
+
+**Help › Send Feedback** reports a problem or a wish without leaving
+Mitcad: the kind (bug report, wish, other), a summary, a description, a
+contact address if you want one (the issue tracker is public), the
+diagnostics (Mitcad's version, the system, Qt and Open CASCADE, the
+graphics renderer and driver, the window's layout; on by default) and,
+if you tick it, a screenshot of the window, which you can crop by
+dragging over the part to keep (**Whole Window** undoes it).
+
+**Preview** shows everything the report contains, section by section:
+edit any part, untick what should not be sent, change the title, or
+Cancel. Folders and file paths, your user name and the computer's name
+are masked before you see it (`<path>/<file>.f3d`, `<user>`, `<host>`);
+names of program and source files stay, so that a stack stays readable.
+Your design and its files are never attached.
+
+**Send** opens the project's issue form in your web browser with the
+title and the report filled in; nothing is sent until you submit it
+there, and Mitcad holds no account or token. A report too long for the
+form's link is on the clipboard: paste it over the shortened text. A
+screenshot is saved in Mitcad's data folder (`reports`) and the message
+says where: drag it into the form.
+
+**Error reports.** When Mitcad crashes, it writes a crash report (the
+version, the platform, the signal or exception, the stack of the
+crashed thread and the last commands you used, never design content)
+and offers it the next time it starts. A crash of the import or render
+process is offered at once, and so is an internal error: the geometry
+kernel crashing inside an operation (the operation fails and the
+design stays as it was) or an unexpected error from a command. Review
+Report shows the same preview: add what you were doing, edit or leave
+out parts, Send or Cancel. The report carries a duplicate key
+(`mitcad-1a2b3c4d5e6f`, also in the title): the same error gives the same
+key, so its earlier reports can be found by searching for it. **Do not
+offer error reports again** in the offer turns offers off (setting
+`reports/offerErrors`); Help › Send Feedback stays. Crash reports are
+kept in the `crashes` folder of Mitcad's data folder (the newest 20).
+
+Administrators and builds of their own point the reports at another
+issue tracker with the setting `reports/issueUrl` (an issue list's
+address, `https://host/owner/repository/issues`, or a template with
+`{title}` and `{body}`).
 
 ## Import and export
 
@@ -510,13 +639,22 @@ files (Linux).
 An `.f3d` design file (or an `.f3z` package of them) opens with its
 history (File › Open, or `mitcad-cli import-f3d`). Parameters, sketches
 with constraints and dimensions, construction planes, extrudes,
-revolves, fillets, chamfers, holes, patterns, mirrors and Combine are
-replayed as Mitcad features, and after every feature the bodies are
-checked against the file. A feature that cannot be replayed comes in as
-a base feature of the file's bodies at its place, and the timeline
-continues on them, so the result always has the file's geometry. Sweeps,
-lofts, pipes, coils, ribs, threads and splits always come in this way.
+revolves, sweeps, lofts, pipes, fillets, chamfers, holes, threads,
+patterns, mirrors, splits and Combine are replayed as Mitcad features,
+and after every feature the bodies are checked against the file. A
+feature that cannot be replayed comes in as a base feature of the file's
+bodies at its place, and the timeline continues on them, so the result
+always has the file's geometry. Coils and ribs always come in this way.
 The whole import is one undoable step.
+
+Components and occurrences come in at the file's placements. Joints,
+as-built joints, joint origins, rigid groups, grounded occurrences and
+captured positions come in as Mitcad's where they hold
+where the file places the parts; a joint that does not hold there comes
+in as an as-built joint, so that nothing moves. Parts inserted from other
+documents (fasteners, for example) come in as empty components named
+after the item that inserted them: their bodies are not in the file, but
+their joints and positions are.
 
 In the application the import has no time limit; see [Opening an .f3d
 design](#opening-an-f3d-design) for stopping it early. A geometry kernel
@@ -560,6 +698,27 @@ FreeCAD's results or were skipped, which parameters and expressions were
 carried over (and why some kept FreeCAD's values), and what each object
 became or why it was left out.
 
+### .ipt import
+
+An `.ipt` part file opens as a new document with its history (File › Open
+or Import, or `mitcad-cli import-ipt`): its parameters with their
+expressions (Change Parameters lists them), its sketches with their
+constraints and dimensions, offset work planes, and its extrusions,
+revolutions, holes, fillets, chamfers, patterns and mirrors as Mitcad
+features, each checked against the bodies the file stored after it. A
+feature that cannot be replayed (a face draft, a shell, sheet metal, a
+mirror Mitcad does not reproduce) comes in as the bodies the file stored
+after it, a base feature, so the final bodies are always the file's. The
+document takes the part's length unit, and the bodies its material when
+Mitcad's material library has one of the same name. The import report
+lists each feature and sketch with how it came in, the parameters and
+expressions, the bodies (solid or sheet, valid, faces), the part number,
+material, units and the release that saved the file. The import runs in a
+process of its own, as the other design imports do; Cancel Import ends it.
+`mitcad-cli import-ipt --bodies-only` brings in only the stored bodies,
+each a base feature. Files of older releases whose bodies are not stored in
+the ASM format are not read.
+
 ## Command line
 
 The application (`mitcad`, on Windows `mitcad.exe`):
@@ -582,7 +741,8 @@ The application (`mitcad`, on Windows `mitcad.exe`):
 Environment variables: `MITCAD_NO_UPDATE_CHECK=1` turns update checks
 off, `MITCAD_PROJECTS_DIR` sets where New Project puts projects (instead
 of Documents/Mitcad), `MITCAD_GIT` the git program when it is not on
-`PATH` (Preferences, Version Control, sets it for the application).
+`PATH` (Preferences, Version Control, sets it for the application), `MITCAD_LIBRARIES_DIR` where fetched component libraries are
+kept.
 Variables for tests: [development.md](development.md).
 
 `mitcad-cli` works without a UI; `mitcad-cli --help` lists all commands
@@ -608,16 +768,30 @@ and options.
 - `import-fcstd part.FCStd --save part.mitcad [--report report.json]
   [--bodies-only]`: a FreeCAD document; `--bodies-only` imports FreeCAD's
   results without history and sketches.
+- `import-ipt part.ipt --save part.mitcad [--report report.json]
+  [--reference part.stp [--max-relative X] [--deviation]]`: the bodies
+  of an `.ipt` part; `--reference` compares its solids with a STEP file of
+  the same part (volume and area, 1e-6 relative by default; exit code 1
+  when they differ).
 - `export part.mitcad result.step [--bodies …] [--schema ap214|ap242]
   [--unit mm|in|…] [--refinement low|medium|high] [--ascii]`; a `.3mf`
   file holds the solid and mesh bodies as the parts of one object.
 - `export-sketch part.mitcad Sketch1 sketch.dxf [--r12]`.
+- `render part.mitcad -o image.png [--view Front] [--size 1920x1080]
+  [--samples 128] [--time-limit 60] [--format png|png16|jpeg|exr]
+  [--transparent] [--no-denoise]` (builds with the renderer): renders the
+  visible bodies as File > Render Image does, with the design's render
+  settings; `--view` is a named view or front, back, left, right, top,
+  bottom or iso (the default: the design's Home view, else iso).
 - `project init folder [--author "Name <email>"] [--no-history]`: makes
   a project folder with version history (the author: `--author`, else
   git's `user.name` and `user.email`); `--no-history` makes the folder
   only.
 - `convert part.mitcad out.mitcad [--format v2|v3|auto]`: writes a
   project file as a single file (`v2`) or into a project folder (`v3`).
+- `library fetch|list|show|search|diff|init|add|check|index-entry`:
+  component libraries (`mitcad-cli --help`); `parts part.mitcad`: the
+  parts list with the library parts' designations, versions and licences.
 - Version history: `version save part.mitcad [-m "message"]` records the
   saved file as a new version (none if nothing changed), `history
   part.mitcad` lists its versions, `version show part.mitcad <version>

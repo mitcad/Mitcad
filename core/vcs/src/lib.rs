@@ -65,6 +65,8 @@ mod commit;
 mod history;
 // Remote repositories (P12 remote).
 pub mod remote;
+// Component libraries and the community library (mitcad#64, mitcad#63).
+pub mod library;
 mod store;
 mod tree;
 

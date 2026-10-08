@@ -8,8 +8,24 @@ use std::collections::{BTreeMap, HashMap};
 use super::classes::{self, *};
 use super::decode::{self, Decoded, ParameterEntry, TimelineEntry};
 use super::ir::*;
+use super::recipe;
 use super::sketch::{self, LightBulb, SketchInfo};
-use super::stream::{Segment, f64s_at, header_end, hex, py_sum, str16_at, str16s, u32_at};
+use super::stream::{Segment, f64_at, f64s_at, header_end, hex, py_sum, str16_at, str16s, u32_at};
+
+// Sweeps, pipes and lofts (mitcad#34).
+mod sweeps;
+// Joints, as-built joints, joint origins and ground items (mitcad#66).
+mod joints;
+// Selections of combines, splits, patterns, mirrors and holes (mitcad#67).
+mod selections;
+// Where the timeline's items put the occurrences (mitcad#81).
+mod placements;
+
+/// Helpers for the decoder's tests.
+#[cfg(test)]
+pub(crate) mod tests_support {
+    pub(crate) use super::joints::kind_fits;
+}
 
 /// Name of this decoder in `generator.decoder`.
 pub const DECODER_NAME: &str = concat!("mitcad-f3d ", env!("CARGO_PKG_VERSION"));
@@ -73,6 +89,294 @@ fn inputs_of(seg: &Segment, id: u64, guid: &str) -> Vec<u64> {
         }
     }
     out
+}
+
+fn json_value<T: serde::Serialize>(v: &T) -> serde_json::Value {
+    serde_json::to_value(v).expect("serializes")
+}
+
+/// An item's input list: the common tail's `u32 n | n refs` that ends
+/// where the tail's decoded fields start (`ItemTail::start`, the result
+/// number). `None` for a null reference. The list with the most references
+/// that ends there (the end of the list can read as another, of nulls).
+fn tail_inputs(seg: &Segment, d: &[u8], end: usize) -> Option<Vec<Option<u64>>> {
+    let lo = end.saturating_sub(16 * 1024);
+    let mut p = end.checked_sub(4)?;
+    let mut best: Option<Vec<Option<u64>>> = None;
+    while p >= lo {
+        if let Some(n) = u32_at(d, p).filter(|&n| n <= 10_000) {
+            let mut q = p + 4;
+            let mut out = Vec::new();
+            for _ in 0..n {
+                if q >= end {
+                    break;
+                }
+                if d.get(q) == Some(&0) {
+                    out.push(None);
+                    q += 1;
+                    continue;
+                }
+                let Some(r) = seg.ref_at(d, q) else { break };
+                out.push(Some(r.id));
+                q = r.end;
+            }
+            let refs = |v: &[Option<u64>]| v.iter().flatten().count();
+            if q == end
+                && out.len() == n as usize
+                && best.as_ref().is_none_or(|b| refs(b) < refs(&out))
+            {
+                best = Some(out);
+            }
+        }
+        if p == 0 {
+            break;
+        }
+        p -= 1;
+    }
+    best
+}
+
+/// An edge input as a reference: an edge fingerprint with the edge's names
+/// (`_f3d`), its geometry left to [`super::inputs`]. `None` when the input
+/// has no edge recipe that decodes.
+fn edge_input(seg: &Segment, input: u64) -> Option<Reference> {
+    let recipe = recipe::of_input(seg, input).filter(|r| r.kind == "edge")?;
+    Some(Reference::Edge(Box::new(Fingerprint {
+        object_type: Some("BRepEdge".to_owned()),
+        f3d: Some(FingerprintF3d {
+            object_id: Some(input),
+            recipe: Some(recipe.kind),
+            entities: Some(recipe.entities),
+            ..FingerprintF3d::default()
+        }),
+        ..Fingerprint::default()
+    })))
+}
+
+/// A body input as a reference: a body fingerprint with the body's names
+/// (`_f3d`), resolved by [`super::inputs`]. `None` when the input has no
+/// body recipe that decodes.
+fn body_input(seg: &Segment, input: u64) -> Option<Reference> {
+    let recipe = recipe::of_input(seg, input).filter(|r| r.kind == "body")?;
+    Some(Reference::Body(Box::new(Fingerprint {
+        object_type: Some("BRepBody".to_owned()),
+        f3d: Some(FingerprintF3d {
+            object_id: Some(input),
+            recipe: Some(recipe.kind),
+            entities: Some(recipe.entities),
+            ..FingerprintF3d::default()
+        }),
+        ..Fingerprint::default()
+    })))
+}
+
+/// A face input as a reference: a face fingerprint with the face's names
+/// (`_f3d`), its geometry left to [`super::inputs`]. `None` when the input
+/// has no face recipe that decodes.
+fn face_input(seg: &Segment, input: u64) -> Option<Reference> {
+    let recipe = recipe::of_input(seg, input)
+        .filter(|r| matches!(r.kind.as_str(), "face" | "bounded_face"))?;
+    Some(Reference::Face(Box::new(Fingerprint {
+        object_type: Some("BRepFace".to_owned()),
+        f3d: Some(FingerprintF3d {
+            object_id: Some(input),
+            recipe: Some(recipe.kind),
+            entities: Some(recipe.entities),
+            ..FingerprintF3d::default()
+        }),
+        ..Fingerprint::default()
+    })))
+}
+
+/// A thread's fields (mitcad#35): a thread item's, or a tapped hole's
+/// thread sub-item's (class `584D9526`, version 5; older versions in
+/// [`thread_fields`]), after the root part
+/// *(read from the reference models' threads, whose dumps give the same
+/// values, and the corpus')*:
+///
+/// ```text
+/// f64 angle (deg) | u8 external | u32 n, n × 16 bytes (modelled threads)
+/// str16 class | str16 designation | str16 designation | str16 size | str16 type
+/// u8 full length | u32 location | f64 major diameter | f64 minor diameter (cm)
+/// u8 modelled | f64 pitch | f64 pitch diameter (cm) | ref hole (null for an
+/// item) | ...
+/// ```
+///
+/// `external` is 1 on every external face of the corpus' threads and 0 on
+/// every internal one. The first designation is empty in some files; the
+/// second is then the designation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ThreadFields {
+    /// The flank angle, degrees (60, 55 for Whitworth pipe threads).
+    pub angle: f64,
+    pub internal: bool,
+    pub full_length: bool,
+    pub modeled: bool,
+    pub class: String,
+    pub designation: String,
+    pub size: String,
+    pub thread_type: String,
+    /// Diameters and pitch, cm.
+    pub major: f64,
+    pub minor: f64,
+    pub pitch: f64,
+    pub pitch_diameter: f64,
+    /// The end a partial thread is measured from ([`Self::location`]).
+    pub location: u32,
+}
+
+impl ThreadFields {
+    /// The `ThreadInfo` of the dump (SCHEMA.md §5.3).
+    fn info(&self) -> serde_json::Value {
+        serde_json::json!({
+            "_type": "ThreadInfo",
+            "threadType": self.thread_type,
+            "threadSize": self.size,
+            "threadDesignation": self.designation,
+            "threadClass": self.class,
+            "isInternal": self.internal,
+            "threadAngle": self.angle,
+            "majorDiameter": self.major,
+            "minorDiameter": self.minor,
+            "pitchDiameter": self.pitch_diameter,
+            "threadPitch": self.pitch,
+        })
+    }
+
+    /// The end of the face a partial thread is measured from: 1 where the
+    /// axis of the face's cylinder points *(a modelled partial thread of the
+    /// corpus lies there; the reference models' threads have 1 and the
+    /// default `HighEndThreadLocation`)*, 2 the other end.
+    fn location(&self) -> Option<&'static str> {
+        match self.location {
+            1 => Some("HighEndThreadLocation"),
+            2 => Some("LowEndThreadLocation"),
+            _ => None,
+        }
+    }
+}
+
+/// See [`ThreadFields`]; `None` for other layouts. Class versions before 5
+/// have one designation, and before 4 no list after the side flag *(the
+/// corpus' threads of versions 1, 2 and 4)*.
+pub fn thread_fields(seg: &Segment, id: u64) -> Option<ThreadFields> {
+    let o = seg.object(id)?;
+    let version = seg.version(o)?;
+    if seg.guid(o) != Some(THREAD) || !(1..=5).contains(&version) {
+        return None;
+    }
+    let d = seg.data(o);
+    let mut p = seg.root_part(d)?.end;
+    let angle = f64_at(d, p)?;
+    let external = *d.get(p + 8)?;
+    if external > 1 {
+        return None;
+    }
+    p += 9;
+    if version >= 4 {
+        let n = u32_at(d, p)? as usize;
+        if n > 64 {
+            return None;
+        }
+        p += 4 + 16 * n;
+    }
+    let mut text = Vec::new();
+    for _ in 0..if version >= 5 { 5 } else { 4 } {
+        let (s, e) = str16_at(d, p)?;
+        text.push(s);
+        p = e;
+    }
+    let full_length = *d.get(p)?;
+    let location = u32_at(d, p + 1)?;
+    let major = f64_at(d, p + 5)?;
+    let minor = f64_at(d, p + 13)?;
+    let modeled = *d.get(p + 21)?;
+    let pitch = f64_at(d, p + 22)?;
+    let pitch_diameter = f64_at(d, p + 30)?;
+    let sane = |x: f64| x.is_finite() && x > 0.0;
+    if full_length > 1 || modeled > 1 || !(sane(angle) && sane(major) && sane(minor) && sane(pitch))
+    {
+        return None;
+    }
+    if text.len() == 4 {
+        text.insert(1, String::new());
+    }
+    let [class, first, second, size, thread_type]: [String; 5] = text.try_into().ok()?;
+    Some(ThreadFields {
+        angle,
+        internal: external == 0,
+        full_length: full_length == 1,
+        modeled: modeled == 1,
+        class,
+        designation: if first.is_empty() { second } else { first },
+        size,
+        thread_type,
+        major,
+        minor,
+        pitch,
+        pitch_diameter,
+        location,
+    })
+}
+
+/// The first rigid 4x4 matrix (row-major, last row `0 0 0 1`, orthonormal
+/// rotation) in an object's data, at any offset.
+fn rigid_matrix(d: &[u8]) -> Option<Mat4> {
+    let mut p = 0;
+    while p + 128 <= d.len() {
+        if let Some(m) = f64s_at(d, p, 16) {
+            let last = m[12] == 0.0 && m[13] == 0.0 && m[14] == 0.0 && m[15] == 1.0;
+            let row = |r: usize| [m[4 * r], m[4 * r + 1], m[4 * r + 2]];
+            let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+            let orthonormal = (0..3).all(|i| {
+                (0..3).all(|j| {
+                    let want = if i == j { 1.0 } else { 0.0 };
+                    (dot(row(i), row(j)) - want).abs() < 1e-9
+                })
+            });
+            if last && orthonormal && m.iter().all(|x| x.is_finite()) {
+                let mut out = [[0.0; 4]; 4];
+                for (r, row) in out.iter_mut().enumerate() {
+                    row.copy_from_slice(&m[4 * r..4 * r + 4]);
+                }
+                return Some(out);
+            }
+        }
+        p += 1;
+    }
+    None
+}
+
+/// A fillet's or chamfer's edges by set: the input list holds, for each
+/// set, its set input ([`BODY_INPUT`]), then its edges and parameter
+/// holders. Each group: (edge references, holders); a group's edges are
+/// `None` when one of them does not decode.
+fn edge_groups(seg: &Segment, inputs: &[Option<u64>]) -> Vec<(Option<Vec<Reference>>, Vec<u64>)> {
+    let mut groups: Vec<(Option<Vec<Reference>>, Vec<u64>)> = Vec::new();
+    for &i in inputs.iter().flatten() {
+        match seg.guid_of(i) {
+            Some(BODY_INPUT) => groups.push((Some(Vec::new()), Vec::new())),
+            Some(FACE_REF) => {
+                if let Some(g) = groups.last_mut() {
+                    let edge = edge_input(seg, i);
+                    g.0 = match (g.0.take(), edge) {
+                        (Some(mut v), Some(e)) => {
+                            v.push(e);
+                            Some(v)
+                        }
+                        _ => None,
+                    };
+                }
+            }
+            Some(PARAMETER_HOLDER) => {
+                if let Some(g) = groups.last_mut() {
+                    g.1.push(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    groups
 }
 
 /// A construction plane's light bulb (mitcad#6): in its plane object
@@ -227,6 +531,35 @@ pub fn occurrence_info(seg: &Segment, id: u64) -> Option<OccurrenceInfo> {
     })
 }
 
+/// The occurrence an occurrence item (mitcad#43) made: through its first
+/// [`OCCURRENCE_REF`].
+fn item_occurrence(seg: &Segment, item: u64) -> Option<u64> {
+    let r = seg
+        .ref_ids(seg.data_of(item))
+        .into_iter()
+        .find(|&r| seg.guid_of(r) == Some(OCCURRENCE_REF))?;
+    seg.ref_ids(seg.data_of(r))
+        .into_iter()
+        .find(|&o| seg.guid_of(o) == Some(OCCURRENCE))
+}
+
+/// The component of the occurrence an occurrence item made.
+fn occurrence_item_component(seg: &Segment, item: u64) -> Option<u64> {
+    occurrence_info(seg, item_occurrence(seg, item)?).map(|i| i.component)
+}
+
+/// The name of a timeline group ([`GROUP`]): the `str16` after its list of
+/// items.
+fn group_name(seg: &Segment, group: u64) -> Option<String> {
+    let d = seg.data_of(group);
+    let (first, _) = *seg
+        .refs_in(d, 0, seg.main_end(seg.object(group)?))
+        .first()?;
+    let (_, end) = seg.ref_list_at(d, first.checked_sub(4)?)?;
+    let (name, _) = str16_at(d, end)?;
+    super::unicode::is_printable(&name).then_some(name)
+}
+
 fn mat4(m: &Option<[f64; 16]>) -> Mat4 {
     match m {
         None => IDENTITY,
@@ -259,6 +592,43 @@ fn root_component(seg: &Segment) -> Option<u64> {
         }
     }
     None
+}
+
+/// The component that owns each timeline item (mitcad#37), by object id:
+/// every component has one [`FEATURE_LIST`], which refers to the
+/// component's feature manager (which refers to the component) and to the
+/// items the component owns. The file has one timeline for the whole
+/// design; this tells whose features, sketches and construction geometry
+/// each item is (the history's state numbers count per component).
+fn item_owners(seg: &Segment) -> HashMap<u64, u64> {
+    let mut owners = HashMap::new();
+    for list in seg.objects_of(FEATURE_LIST) {
+        let refs = seg.ref_ids(seg.data(list));
+        let component = refs
+            .iter()
+            .find(|&&r| seg.guid_of(r) == Some(FEATURE_MANAGER))
+            .and_then(|&fm| {
+                seg.ref_ids(seg.data_of(fm))
+                    .into_iter()
+                    .find(|&r| seg.guid_of(r) == Some(COMPONENT))
+            });
+        let Some(component) = component else {
+            continue;
+        };
+        for r in refs {
+            // An item listed by two components has no one owner.
+            match owners.get(&r) {
+                Some(&c) if c != component => {
+                    owners.insert(r, u64::MAX);
+                }
+                _ => {
+                    owners.insert(r, component);
+                }
+            }
+        }
+    }
+    owners.retain(|_, c| *c != u64::MAX);
+    owners
 }
 
 /// Names of parameters whose expression mentions `p` (as a name token).
@@ -310,6 +680,14 @@ struct Builder<'a> {
     local_ids: HashMap<u64, (u64, String)>,
     curve_types: HashMap<(u64, String), String>,
     plane_feature: HashMap<u64, u64>,
+    /// Axis objects of construction axes, to their feature (mitcad#67).
+    axis_feature: HashMap<u64, u64>,
+    /// Sketch entities by the ids inputs name them with (mitcad#34).
+    tags: sweeps::EntityTags,
+    /// Occurrences and components by their GUIDs (mitcad#66).
+    guids: joints::Guids,
+    /// Component names by object id.
+    component_names: HashMap<u64, String>,
 }
 
 impl Builder<'_> {
@@ -363,6 +741,25 @@ impl Builder<'_> {
         Some(Reference::ConstructionPlane(Box::new(out)))
     }
 
+    /// What an entity input names, by its target's kind: a plane, an axis,
+    /// the origin point, or a sketch entity (mitcad#66, mitcad#67).
+    fn entity_target(&self, entity_ref: u64) -> Option<Reference> {
+        let tid = decode::target_id(self.seg, entity_ref)?;
+        match self.seg.guid_of(tid) {
+            Some(ORIGIN_AXIS) => self.axis_ref(entity_ref),
+            Some(ORIGIN_POINT) => Some(Reference::ConstructionPoint(Box::new(ConstructionRef {
+                name: Some(Some("Origin".to_owned())),
+                origin: Some(Some("Origin".to_owned())),
+                timeline_index: Some(None),
+                ..ConstructionRef::default()
+            }))),
+            Some(ORIGIN_PLANE) => self.plane_ref(entity_ref),
+            _ => self
+                .input_entity(entity_ref)
+                .or_else(|| self.axis_ref(entity_ref)),
+        }
+    }
+
     fn axis_ref(&self, entity_ref: u64) -> Option<Reference> {
         let tid = decode::target_id(self.seg, entity_ref)?;
         if let Some(on) =
@@ -372,6 +769,15 @@ impl Builder<'_> {
                 name: Some(Some(on.clone())),
                 origin: Some(Some(on)),
                 timeline_index: Some(None),
+                ..ConstructionRef::default()
+            })));
+        }
+        // A construction axis (mitcad#67).
+        if let Some(&f) = self.axis_feature.get(&tid) {
+            return Some(Reference::ConstructionAxis(Box::new(ConstructionRef {
+                name: Some(self.name(Some(f))),
+                origin: Some(None),
+                timeline_index: Some(self.pos(Some(f))),
                 ..ConstructionRef::default()
             })));
         }
@@ -419,6 +825,68 @@ impl Builder<'_> {
             ..ProfileRef::default()
         });
         Some(vec![r; count])
+    }
+
+    /// The edges of a fillet's or chamfer's sets, the sets given by one
+    /// parameter of each (its holder is in the set's input group); `None`
+    /// unless every set's edges decode.
+    fn set_edges(
+        &self,
+        it: &TimelineEntry,
+        params: &[&ParameterEntry],
+    ) -> Option<Vec<Vec<Reference>>> {
+        let tail = it.tail.as_ref()?;
+        let inputs = tail_inputs(self.seg, self.seg.data_of(it.id), tail.start)?;
+        let groups = edge_groups(self.seg, &inputs);
+        if params.len() == 1 && groups.len() == 1 {
+            return groups[0]
+                .0
+                .clone()
+                .filter(|e| !e.is_empty())
+                .map(|e| vec![e]);
+        }
+        params
+            .iter()
+            .map(|p| {
+                let h = p.holder?;
+                let g = groups.iter().find(|g| g.1.contains(&h))?;
+                g.0.clone().filter(|e| !e.is_empty())
+            })
+            .collect()
+    }
+
+    /// An item's input list (the common tail's).
+    fn item_inputs(&self, it: &TimelineEntry) -> Vec<u64> {
+        it.tail
+            .as_ref()
+            .and_then(|t| tail_inputs(self.seg, self.seg.data_of(it.id), t.start))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .collect()
+    }
+
+    /// The bodies an item's body inputs name, in input order; `None`
+    /// unless there are some and every one decodes.
+    fn body_inputs(&self, it: &TimelineEntry) -> Option<Vec<Reference>> {
+        let ids: Vec<u64> = self
+            .item_inputs(it)
+            .into_iter()
+            .filter(|&i| self.seg.guid_of(i) == Some(BODY_REF))
+            .collect();
+        if ids.is_empty() {
+            return None;
+        }
+        ids.into_iter().map(|i| body_input(self.seg, i)).collect()
+    }
+
+    /// The plane of an item's first plane input (origin or construction
+    /// plane).
+    fn input_plane(&self, it: &TimelineEntry) -> Option<Reference> {
+        self.item_inputs(it)
+            .into_iter()
+            .filter(|&i| self.seg.guid_of(i) == Some(ENTITY_REF))
+            .find_map(|e| self.plane_ref(e))
     }
 
     fn roles(&self, fid: u64) -> BTreeMap<&str, Vec<&ParameterEntry>> {
@@ -526,11 +994,13 @@ impl Builder<'_> {
             Some("FilletFeature") => {
                 let mut x = FilletDetail::default();
                 if let Some(radii) = rl.get("Radius").filter(|r| !r.is_empty()) {
+                    let mut edges = self.set_edges(it, radii).map(Vec::into_iter);
                     x.edge_sets = Some(
                         radii
                             .iter()
                             .map(|p| EdgeSet {
                                 radius: Some(paramref(p)),
+                                edges: edges.as_mut().and_then(Iterator::next),
                                 ..EdgeSet::default()
                             })
                             .collect(),
@@ -565,22 +1035,115 @@ impl Builder<'_> {
                             .collect(),
                     );
                 }
+                // The edges of each set, by a parameter of the set.
+                let set_params: Option<Vec<&ParameterEntry>> = match x.chamfer_type.as_deref() {
+                    Some("TwoDistancesChamferType") => rl
+                        .get("Distance 1")
+                        .map(|v| v.iter().take(1).copied().collect()),
+                    Some(_) => rl.get("Distance").map(|v| match x.edge_sets.as_ref() {
+                        Some(s) if s.len() == 1 => v.iter().take(1).copied().collect(),
+                        _ => v.clone(),
+                    }),
+                    None => None,
+                };
+                if let (Some(params), Some(sets)) = (set_params, x.edge_sets.as_mut())
+                    && params.len() == sets.len()
+                    && let Some(edges) = self.set_edges(it, &params)
+                {
+                    for (s, e) in sets.iter_mut().zip(edges) {
+                        s.edges = Some(e);
+                    }
+                }
                 Detail::Chamfer(Box::new(x))
             }
-            Some("HoleFeature") => Detail::Hole(Box::new(HoleDetail {
-                hole_diameter: pr("HoleDiameter"),
-                tip_angle: pr("TipAngle"),
-                countersink_diameter: pr("CSDiameter"),
-                countersink_angle: pr("CSAngle"),
-                extent_definition: pr("HoleDepth")
-                    .map(|p| def("DistanceExtentDefinition", distance, p)),
-                ..HoleDetail::default()
-            })),
-            Some("ThreadFeature") => Detail::Thread(Box::new(ThreadDetail {
-                thread_length: pr("ThreadLength"),
-                thread_offset: pr("ThreadOffset"),
-                ..ThreadDetail::default()
-            })),
+            Some("HoleFeature") => {
+                let mut x = HoleDetail {
+                    hole_diameter: pr("HoleDiameter"),
+                    tip_angle: pr("TipAngle"),
+                    countersink_diameter: pr("CSDiameter"),
+                    countersink_angle: pr("CSAngle"),
+                    counterbore_diameter: pr("CBDiameter"),
+                    counterbore_depth: pr("CBDepth"),
+                    extent_definition: pr("HoleDepth")
+                        .map(|p| def("DistanceExtentDefinition", distance, p)),
+                    ..HoleDetail::default()
+                };
+                // Type, points and extent (mitcad#67).
+                x.hole_type = Some(
+                    if x.counterbore_diameter.is_some() {
+                        "CounterboreHoleType"
+                    } else if x.countersink_diameter.is_some() {
+                        "CountersinkHoleType"
+                    } else {
+                        "SimpleHoleType"
+                    }
+                    .to_owned(),
+                );
+                let points = self.hole_points(it);
+                if let Some(&first) = points.first() {
+                    x.position = Some(first);
+                    x.other
+                        .insert("_f3d_positions".to_owned(), json_value(&points));
+                }
+                if x.extent_definition.is_none() && self.hole_through_all(it) == Some(true) {
+                    x.extent_definition = Some(Definition {
+                        definition_type: Some("AllExtentDefinition".into()),
+                        ..Definition::default()
+                    });
+                }
+                // A tapped hole's thread is its sub-item (mitcad#35); its
+                // depth is the thread's length.
+                let thread = it
+                    .tail
+                    .iter()
+                    .flat_map(|t| t.sub_features.iter().flatten())
+                    .find_map(|&s| Some((s, thread_fields(seg, s)?)));
+                if let Some((sub, t)) = thread {
+                    let roles = self.roles(sub);
+                    let sub_param =
+                        |role: &str| roles.get(role).and_then(|v| v.first()).map(|p| paramref(p));
+                    let mut feature = serde_json::json!({
+                        "_type": "ThreadFeature",
+                        "isModeled": t.modeled,
+                        "isFullLength": t.full_length,
+                    });
+                    if let Some(l) = t.location() {
+                        feature["threadLocation"] = l.into();
+                    }
+                    if let Some(p) = sub_param("ThreadDepth") {
+                        feature["threadLength"] = json_value(&p);
+                    }
+                    if let Some(p) = sub_param("ThreadOffset") {
+                        feature["threadOffset"] = json_value(&p);
+                    }
+                    x.hole_tap_type = Some("TappedHoleTapType".to_owned());
+                    x.tapped_hole_info = Some(t.info());
+                    x.thread = Some(feature);
+                }
+                Detail::Hole(Box::new(x))
+            }
+            Some("ThreadFeature") => {
+                let mut x = ThreadDetail {
+                    thread_length: pr("ThreadLength"),
+                    thread_offset: pr("ThreadOffset"),
+                    ..ThreadDetail::default()
+                };
+                // The thread and its faces (mitcad#35).
+                if let Some(t) = thread_fields(seg, fid) {
+                    x.thread_info = Some(t.info());
+                    x.is_modeled = Some(t.modeled);
+                    x.is_full_length = Some(t.full_length);
+                    x.thread_location = t.location().map(str::to_owned);
+                }
+                let faces: Option<Vec<Reference>> = self
+                    .item_inputs(it)
+                    .into_iter()
+                    .filter(|&i| seg.guid_of(i) == Some(FACE_REF))
+                    .map(|i| face_input(seg, i))
+                    .collect();
+                x.input_cylindrical_faces = faces.filter(|f| !f.is_empty());
+                Detail::Thread(Box::new(x))
+            }
             Some("CircularPatternFeature") => {
                 let mut x = CircularPatternDetail {
                     total_angle: pr("TotalAngle"),
@@ -595,6 +1158,18 @@ impl Builder<'_> {
                     if let Some(a) = self.axis_ref(e) {
                         x.axis = Some(a);
                     }
+                }
+                // An edge or face as the axis (mitcad#67).
+                if x.axis.is_none() {
+                    x.axis = self.directions(it).into_iter().next().and_then(|d| d.0);
+                }
+                // Patterned bodies (mitcad#33), features and faces (mitcad#67).
+                match self.pattern_objects(it) {
+                    Some((objects, kind)) => {
+                        x.input_entities = Some(objects);
+                        x.pattern_entity_type = Some(kind);
+                    }
+                    None => x.input_entities = self.body_inputs(it),
                 }
                 Detail::CircularPattern(Box::new(x))
             }
@@ -611,9 +1186,32 @@ impl Builder<'_> {
                         _ => {}
                     }
                 }
+                match self.pattern_objects(it) {
+                    Some((objects, kind)) => {
+                        x.input_entities = Some(objects);
+                        x.pattern_entity_type = Some(kind);
+                    }
+                    None => x.input_entities = self.body_inputs(it),
+                }
+                // The directions (mitcad#67): the axis, edge or face each
+                // names, and its vector where one is stored.
+                let mut dirs = self.directions(it).into_iter();
+                if let Some((entity, vector)) = dirs.next() {
+                    x.direction_one_entity = entity;
+                    x.direction_one = vector;
+                }
+                if let Some((entity, vector)) = dirs.next() {
+                    x.direction_two_entity = entity;
+                    x.direction_two = vector;
+                }
                 Detail::RectangularPattern(Box::new(x))
             }
             Some("MirrorFeature") => {
+                // Objects and plane from its selections (mitcad#67).
+                let map = selections::mirror_map(self, it);
+                if map.contains_key("mirrorPlane") && map.contains_key("inputEntities") {
+                    return Detail::Other(map);
+                }
                 // The mirror plane when it is an origin or construction
                 // plane (the entity reference, as for sketches).
                 let mut map = serde_json::Map::new();
@@ -625,8 +1223,56 @@ impl Builder<'_> {
                         );
                     }
                 }
+                // Mirrored bodies (mitcad#33).
+                if let Some(b) = self.body_inputs(it) {
+                    map.insert("inputEntities".to_owned(), json_value(&b));
+                }
                 Detail::Other(map)
             }
+            // Moved bodies and the move's transform (mitcad#33): the
+            // transform is the rigid 4x4 matrix (row-major, cm) of one of
+            // its inputs *(the reference models' moves: translations,
+            // rotations, free moves)*.
+            Some("MoveFeature") => {
+                let mut map = serde_json::Map::new();
+                if let Some(b) = self.body_inputs(it) {
+                    map.insert("inputEntities".to_owned(), json_value(&b));
+                }
+                let matrix = self
+                    .item_inputs(it)
+                    .into_iter()
+                    .filter(|&i| {
+                        !matches!(
+                            seg.guid_of(i),
+                            Some(BODY_INPUT | BODY_REF | PARAMETER_HOLDER | ENTITY_REF | FACE_REF)
+                        )
+                    })
+                    .find_map(|i| rigid_matrix(seg.data_of(i)));
+                if let Some(m) = matrix {
+                    map.insert("transform".to_owned(), json_value(&m));
+                }
+                Detail::Other(map)
+            }
+            // Split bodies and an origin or construction plane as the tool
+            // (mitcad#33).
+            Some("SplitBodyFeature") => {
+                // Tool and split bodies from its selections (mitcad#67).
+                if let Detail::Other(map) = self.split(it)
+                    && map.contains_key("splitBodies")
+                {
+                    return Detail::Other(map);
+                }
+                let mut map = serde_json::Map::new();
+                if let Some(b) = self.body_inputs(it) {
+                    map.insert("splitBodies".to_owned(), json_value(&b));
+                }
+                if let Some(p) = self.input_plane(it) {
+                    map.insert("splittingTool".to_owned(), json_value(&p));
+                }
+                Detail::Other(map)
+            }
+            // Operation, target and tools (mitcad#67).
+            Some("CombineFeature") => self.combine(it),
             Some("ShellFeature") => Detail::Shell(Box::new(ShellDetail {
                 inside_thickness: pr("innerThickness"),
                 ..ShellDetail::default()
@@ -643,20 +1289,32 @@ impl Builder<'_> {
                 angle: pr("TaperAngle"),
                 ..CoilDetail::default()
             })),
-            Some("PipeFeature") => Detail::Pipe(Box::new(PipeDetail {
-                section_size: pr("SectionSize"),
-                section_thickness: pr("SectionThickness"),
-                distance_one: pr("AlongDistance"),
-                distance_two: pr("AgainstDistance"),
-                ..PipeDetail::default()
-            })),
-            Some("SweepFeature") => Detail::Sweep(Box::new(SweepDetail {
-                distance_one: pr("AlongDistance"),
-                distance_two: pr("AgainstDistance"),
-                taper_angle: pr("TaperAngle"),
-                twist_angle: pr("TwistAngle"),
-                ..SweepDetail::default()
-            })),
+            Some("PipeFeature") => {
+                let mut x = PipeDetail {
+                    section_size: pr("SectionSize"),
+                    section_thickness: pr("SectionThickness"),
+                    distance_one: pr("AlongDistance"),
+                    distance_two: pr("AgainstDistance"),
+                    ..PipeDetail::default()
+                };
+                // Operation and path (mitcad#34).
+                self.pipe_inputs(it, &mut x);
+                Detail::Pipe(Box::new(x))
+            }
+            Some("SweepFeature") => {
+                let mut x = SweepDetail {
+                    distance_one: pr("AlongDistance"),
+                    distance_two: pr("AgainstDistance"),
+                    taper_angle: pr("TaperAngle"),
+                    twist_angle: pr("TwistAngle"),
+                    ..SweepDetail::default()
+                };
+                // Operation, profiles, path and rail (mitcad#34).
+                self.sweep_inputs(it, &mut x);
+                Detail::Sweep(Box::new(x))
+            }
+            // Sections, conditions, centre line or rails (mitcad#34).
+            None if it.class == LOFT => self.loft(it),
             Some("ConstructionPlane") => {
                 let mut x = ConstructionPlaneDetail::default();
                 if let Some(p) = pr("AlongDistance") {
@@ -684,8 +1342,20 @@ impl Builder<'_> {
                 offset_y: pr("OffsetY"),
                 offset_z: pr("OffsetZ"),
                 angle: pr("AngleZ"),
+                // Its frame and the entities it was built on (mitcad#66).
+                geometry: self.joint_origin_geometry(fid),
                 ..JointOriginDetail::default()
             })),
+            // What joints, as-built joints and ground items say (mitcad#66).
+            Some("JointFeature") => self.joint(it),
+            Some("AsBuiltJointFeature") => self.as_built_joint(it),
+            None if it.class == GROUND_OCCURRENCE => self.ground(it),
+            // The placements a captured position puts occurrences at
+            // (mitcad#75).
+            Some("SnapshotFeature") => self.snapshot(it),
+            // The occurrence an insert, a fastener or a paste made
+            // (mitcad#75).
+            _ if seg.is_kind_of(fid, OCCURRENCE_ITEM) => self.occurrence_item(it),
             _ => Detail::empty(),
         }
     }
@@ -714,6 +1384,14 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
         local_ids: HashMap::new(),
         curve_types: HashMap::new(),
         plane_feature: HashMap::new(),
+        axis_feature: HashMap::new(),
+        tags: sweeps::EntityTags::default(),
+        guids: joints::Guids::new(seg),
+        component_names: dec
+            .components
+            .iter()
+            .filter_map(|c| Some((c.id, c.name.clone().filter(|n| !n.is_empty())?)))
+            .collect(),
     };
     for s in seg.objects_of(SKETCH) {
         for r in seg.ref_ids(seg.data(s)) {
@@ -724,6 +1402,7 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
         }
     }
     let (mut sketch_infos, local_ids) = sketch::sketch_details(seg);
+    b.tags = sweeps::EntityTags::new(seg, &local_ids);
     b.local_ids = local_ids;
     for s in &sketch_infos {
         for c in s.detail.curves.iter().flatten() {
@@ -736,6 +1415,13 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
         for r in seg.ref_ids(seg.data(f)) {
             if seg.guid_of(r) == Some(ORIGIN_PLANE) {
                 b.plane_feature.insert(r, f.id);
+            }
+        }
+    }
+    for f in seg.objects_of(CONSTRUCTION_AXIS) {
+        for r in seg.ref_ids(seg.data(f)) {
+            if seg.guid_of(r) == Some(ORIGIN_AXIS) {
+                b.axis_feature.entry(r).or_insert(f.id);
             }
         }
     }
@@ -766,17 +1452,41 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
         for (dm, h) in s.detail.dimensions.iter_mut().flatten().zip(holders) {
             if let Some(p) = h.and_then(|h| param_of_holder.get(&h)) {
                 dm.parameter = Some(Some(paramref(p)));
+                if p.is_driven() {
+                    dm.is_driving = Some(false);
+                }
+            }
+        }
+        // Pattern constraints' quantities, angles and distances.
+        let holders = s.constraint_holders.clone();
+        let Some(constraints) = s.detail.constraints.as_mut() else {
+            continue;
+        };
+        for (i, name, h) in holders {
+            if let (Some(p), Some(props)) = (
+                param_of_holder.get(&h),
+                constraints.get_mut(i).and_then(|c| c.props.as_mut()),
+            ) {
+                props.insert(name.to_owned(), json_value(&paramref(p)));
             }
         }
     }
     let sketches: HashMap<u64, &SketchInfo> = sketch_infos.iter().map(|s| (s.id, s)).collect();
 
+    let component_names: HashMap<u64, String> = dec
+        .components
+        .iter()
+        .filter_map(|c| Some((c.id, c.name.clone().filter(|n| !n.is_empty())?)))
+        .collect();
+    let owners = item_owners(seg);
     let mut tl_items = Vec::new();
     for it in items {
+        let owner = owners.get(&it.id).copied();
         let mut f3d = ItemF3d {
             class: Some(it.class.clone()),
             class_version: Some(it.class_version),
             object_id: Some(it.id),
+            component: owner,
             ..ItemF3d::default()
         };
         if let Some(t) = &it.tail {
@@ -794,6 +1504,7 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
                 extent_a: Some(ex.extent_a),
                 extent_b: Some(ex.extent_b),
                 direction: Some(ex.direction),
+                direction_vector: ex.vector,
                 ..ExtrudeF3d::default()
             });
         }
@@ -813,13 +1524,29 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
             f3d.light_bulb = Some(hex(&bulb.raw));
             serde_json::json!({"isLightBulbOn": bulb.on})
         });
+        // Items without a name of their own: occurrences are named after
+        // their component, groups by their own name (mitcad#43).
+        let object_type = match classes::object_type(&it.class) {
+            // An as-built joint of the rigid group type (mitcad#81).
+            Some("AsBuiltJoint") if b.is_rigid_group(it.id) => Some("RigidGroup"),
+            t => t,
+        };
+        let name = match &it.name {
+            Some(n) if n.is_empty() && object_type == Some("Occurrence") => {
+                occurrence_item_component(seg, it.id)
+                    .and_then(|c| component_names.get(&c).cloned())
+                    .or(Some(String::new()))
+            }
+            None if it.class == GROUP => group_name(seg, it.id).filter(|n| !n.is_empty()),
+            n => n.clone(),
+        };
         tl_items.push(TimelineItem {
             index: Some(it.pos as i64),
-            name: Some(it.name.clone()),
-            object_type: it
-                .type_name
-                .and_then(|n| classes::OBJECT_TYPES.iter().find(|(k, _)| *k == n))
-                .map(|(_, t)| Some(t.to_string())),
+            name: Some(name),
+            object_type: object_type.map(|t| Some(t.to_string())),
+            component: owner
+                .and_then(|c| component_names.get(&c))
+                .map(|n| Some(n.clone())),
             detail: Some(b.detail(it, &sketches)),
             props,
             f3d: Some(f3d),
@@ -890,7 +1617,13 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
         .collect();
     let comp_names: HashMap<u64, Option<String>> =
         comps.iter().map(|c| (c.id, c.name.clone())).collect();
-    let occurrences = occurrence_tree(seg, &infos, &comp_names, &xrefs, root_id);
+    let mut occurrences = occurrence_tree(seg, &infos, &comp_names, &xrefs, root_id);
+    // The occurrences ground items ground (mitcad#66).
+    let grounded = joints::grounded(&tl_items);
+    if let Some(nodes) = occurrences.as_mut() {
+        ground(nodes, &grounded);
+        placements::Histories::new(seg, root_id).attach(nodes, &b.pos_of);
+    }
 
     let format = Format {
         meta_magic: Some(seg.meta.magic),
@@ -1066,6 +1799,22 @@ fn occurrence_tree(
             .map(|i| tree.node(i, 0, true))
             .collect(),
     )
+}
+
+/// Marks the occurrences of these objects grounded.
+fn ground(nodes: &mut [OccurrenceNode], grounded: &[u64]) {
+    for n in nodes {
+        if n.f3d
+            .as_ref()
+            .and_then(|f| f.object_id)
+            .is_some_and(|id| grounded.contains(&id))
+        {
+            n.is_grounded = Some(true);
+        }
+        if let Some(children) = n.children.as_mut() {
+            ground(children, grounded);
+        }
+    }
 }
 
 /// Occurrences by parent component, for [`occurrence_tree`].

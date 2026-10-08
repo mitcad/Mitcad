@@ -1372,6 +1372,9 @@ impl<K: Kernel> Document<K> {
         };
         let params = self.parameters();
         let output: Option<&SketchOutput> = self.sketch_output(uid);
+        // Linked projections where their sources are now.
+        let followed = self.followed_sketch(uid, def);
+        let def = followed.as_ref().unwrap_or(def);
         // The status of the definition with the current values, whether
         // or not the sketch evaluated.
         let solved = def.solve_with(

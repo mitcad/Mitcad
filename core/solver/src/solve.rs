@@ -9,6 +9,9 @@
 //! case) it moves the geometry as little as possible; with `mu -> 0` it is
 //! the Gauss-Newton step of minimal norm. `mu` follows the gain ratio
 //! (Nielsen's update), so far-off starting geometry still converges.
+//!
+//! The iterations work on any residual equations ([`Equations`]): the
+//! sketch's and the rigid bodies' of `rigid.rs`.
 
 use crate::analysis;
 use crate::direction;
@@ -17,6 +20,50 @@ use crate::scalar::{Dual, LANES};
 use crate::sparse::{Factor, Rows};
 use crate::system::{EntityData, ParamKind, System};
 use crate::types::*;
+
+/// Residual equations of components of unknowns, as the iterations and
+/// the rank analysis see them.
+pub(crate) trait Equations {
+    /// The residuals of `comp`'s rows at `params` (global unknowns) and,
+    /// with `jac`, the Jacobian in `comp.jac`'s pattern.
+    fn evaluate(
+        &self,
+        comp: &Component,
+        params: &[f64],
+        scale: f64,
+        f: &mut [f64],
+        jac: Option<&mut Rows>,
+    );
+
+    /// The range a global unknown is kept in, if it has one.
+    fn bounds(&self, var: usize) -> Option<(f64, f64)>;
+}
+
+/// The sketch's equations.
+pub(crate) struct SketchEquations<'a> {
+    pub prep: &'a Prepared,
+    pub pkind: &'a [ParamKind],
+}
+
+impl Equations for SketchEquations<'_> {
+    fn evaluate(
+        &self,
+        comp: &Component,
+        params: &[f64],
+        scale: f64,
+        f: &mut [f64],
+        jac: Option<&mut Rows>,
+    ) {
+        evaluate(self.prep, comp, params, scale, f, jac);
+    }
+
+    fn bounds(&self, var: usize) -> Option<(f64, f64)> {
+        match self.pkind[var] {
+            ParamKind::SplineT { lo, hi } => Some((lo, hi)),
+            _ => None,
+        }
+    }
+}
 
 /// Residuals (and optionally the Jacobian) of a component.
 pub(crate) fn evaluate(
@@ -73,10 +120,10 @@ fn norm2(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum()
 }
 
-/// Keeps curve parameters in range.
-fn clamp(pkind: &[ParamKind], params: &mut [f64], vars: &[usize]) {
+/// Keeps bounded unknowns (curve parameters, limited motions) in range.
+fn clamp(eqs: &dyn Equations, params: &mut [f64], vars: &[usize]) {
     for &g in vars {
-        if let ParamKind::SplineT { lo, hi } = pkind[g] {
+        if let Some((lo, hi)) = eqs.bounds(g) {
             params[g] = params[g].clamp(lo, hi);
         }
     }
@@ -151,8 +198,7 @@ impl Work {
 }
 
 pub(crate) struct Ctx<'a> {
-    pub prep: &'a Prepared,
-    pub pkind: &'a [ParamKind],
+    pub eqs: &'a dyn Equations,
     pub scale: f64,
     pub tol: f64,
     pub max_iterations: usize,
@@ -162,7 +208,7 @@ pub(crate) struct Ctx<'a> {
 /// tolerance.
 pub(crate) fn lm(ctx: &Ctx, comp: &Component, params: &mut [f64], work: &mut Work) -> Run {
     let sym = &comp.plan.sym;
-    evaluate(ctx.prep, comp, params, ctx.scale, &mut work.f, None);
+    ctx.eqs.evaluate(comp, params, ctx.scale, &mut work.f, None);
     let mut fn2 = norm2(&work.f);
     let mut mu = -1.0;
     let mut nu = 2.0;
@@ -173,16 +219,14 @@ pub(crate) fn lm(ctx: &Ctx, comp: &Component, params: &mut [f64], work: &mut Wor
     // so this usually costs one step) to leave fixed geometry and exact
     // dimensions exact to rounding; a stall below the tolerance is fine.
     let target = (ctx.tol * 1e-3).max(1e-14 * ctx.scale);
-    // Curve parameters at the end of their range that a step would push
-    // outward are left out of that step (an active set for the bounds).
+    // Bounded unknowns (curve parameters, limited motions) at the end of
+    // their range that a step would push outward are left out of that step
+    // (an active set for the bounds).
     let bounded: Vec<(usize, f64, f64)> = comp
         .vars
         .iter()
         .enumerate()
-        .filter_map(|(c, &g)| match ctx.pkind[g] {
-            ParamKind::SplineT { lo, hi } => Some((c, lo, hi)),
-            _ => None,
-        })
+        .filter_map(|(c, &g)| ctx.eqs.bounds(g).map(|(lo, hi)| (c, lo, hi)))
         .collect();
     let mut dcol = comp.dcol.clone();
     let mut iterations = 0;
@@ -197,14 +241,8 @@ pub(crate) fn lm(ctx: &Ctx, comp: &Component, params: &mut [f64], work: &mut Wor
         }
         if need_jac {
             let mut f = std::mem::take(&mut work.f);
-            evaluate(
-                ctx.prep,
-                comp,
-                params,
-                ctx.scale,
-                &mut f,
-                Some(&mut work.jac),
-            );
+            ctx.eqs
+                .evaluate(comp, params, ctx.scale, &mut f, Some(&mut work.jac));
             work.f = f;
             dcol.copy_from_slice(&comp.dcol);
             comp.plan
@@ -251,8 +289,9 @@ pub(crate) fn lm(ctx: &Ctx, comp: &Component, params: &mut [f64], work: &mut Wor
             work.saved[k] = params[g];
             params[g] += work.dx[k];
         }
-        clamp(ctx.pkind, params, &comp.vars);
-        evaluate(ctx.prep, comp, params, ctx.scale, &mut work.fnew, None);
+        clamp(ctx.eqs, params, &comp.vars);
+        ctx.eqs
+            .evaluate(comp, params, ctx.scale, &mut work.fnew, None);
         let new2 = norm2(&work.fnew);
         let actual = fn2 - new2;
         let rho = if pred > 0.0 { actual / pred } else { -1.0 };
@@ -343,14 +382,8 @@ pub(crate) fn drag(
             g[c] = t - params[comp.vars[c]];
         }
         let mut f = std::mem::take(&mut work.f);
-        evaluate(
-            ctx.prep,
-            comp,
-            params,
-            ctx.scale,
-            &mut f,
-            Some(&mut work.jac),
-        );
+        ctx.eqs
+            .evaluate(comp, params, ctx.scale, &mut f, Some(&mut work.jac));
         work.f = f;
         comp.plan
             .fill(&work.jac, &dcol, &mut work.factor, &mut work.w, false);
@@ -380,7 +413,7 @@ pub(crate) fn drag(
         for (i, &v) in comp.vars.iter().enumerate() {
             params[v] += k * work.dx[i];
         }
-        clamp(ctx.pkind, params, &comp.vars);
+        clamp(ctx.eqs, params, &comp.vars);
         let run = lm(ctx, comp, params, work);
         iterations += run.iterations + 1;
         let d = goal_dist(params);
@@ -401,7 +434,7 @@ pub(crate) fn drag(
             }
         }
     }
-    evaluate(ctx.prep, comp, params, ctx.scale, &mut work.f, None);
+    ctx.eqs.evaluate(comp, params, ctx.scale, &mut work.f, None);
     let res = max_abs(&work.f);
     Run {
         converged: res <= ctx.tol,
@@ -592,9 +625,12 @@ impl System {
         goal_params: &[(usize, f64)],
         rollback: &[f64],
     ) -> SolveResult {
-        let ctx = Ctx {
+        let eqs = SketchEquations {
             prep,
             pkind: &self.pkind,
+        };
+        let ctx = Ctx {
+            eqs: &eqs,
             scale,
             tol,
             max_iterations: opts.max_iterations,
@@ -621,7 +657,7 @@ impl System {
                 // Explain the failure at the least-squares point, then put the
                 // component back where it was.
                 let deps =
-                    analysis::component_dependencies(prep, comp, &params, scale, &mut work, false);
+                    analysis::component_dependencies(&eqs, comp, &params, scale, &mut work, false);
                 let found: Vec<Dependency> =
                     analysis::to_dependencies(prep, comp, &deps.dependent, scale, true);
                 if found.is_empty() {

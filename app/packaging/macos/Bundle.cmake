@@ -156,7 +156,10 @@ Qt ${Qt6_VERSION}: GNU LGPL-3.0, linked dynamically (the QtCore, QtGui, ... fram
   https://download.qt.io/ and https://www.qt.io/ (Qt-* files here, if the Qt
   installation had them).
 Open CASCADE Technology ${OpenCASCADE_VERSION}: GNU LGPL-2.1 with the Open CASCADE exception,
-  linked dynamically (libTK*.dylib in Contents/Frameworks).
+  linked dynamically (libTK*.dylib in Contents/Frameworks); source code at
+  https://dev.opencascade.org/ . With four changes of Mitcad's that speed up
+  booleans, the face merge after them and the shape checker on faces with many
+  edges; the patches are in Mitcad's source code (third_party/vcpkg-ports/opencascade).
 FreeType: used under the FreeType Licence (FTL), not the GPL, which the package
   offers as an alternative.
 Droid Sans (the font of sketch texts, embedded): Apache-2.0 (DroidSans-Apache-2.0.txt).

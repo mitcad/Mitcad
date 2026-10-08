@@ -2,10 +2,13 @@
 #include "BrowserPanel.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <utility>
 
 #include <QApplication>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QHelpEvent>
 #include <QIconEngine>
 #include <QKeyEvent>
@@ -258,7 +261,8 @@ const OriginDatum kOriginDatums[] = {
     {"yz", "YZ", "offset-plane"}};
 
 SelectKind datumKind(const QString& type) {
-  if (type == QStringLiteral("construction_plane") || type.size() == 2) {
+  // A joint origin's datum is a plane with its frame (mitcad#55).
+  if (type == QStringLiteral("construction_plane") || type == QStringLiteral("joint_origin") || type.size() == 2) {
     return SelectKind::Plane;
   }
   if (type == QStringLiteral("construction_axis") || type.size() == 1) {
@@ -271,6 +275,39 @@ QString itemKey(const SelectionItem& item) {
   return QStringLiteral("%1|%2|%3")
       .arg(static_cast<unsigned>(item.kind))
       .arg(item.owner, item.occurrence);
+}
+
+// A joint's row (mitcad#55): its kind, whether it holds and its values
+// ("Joint1: revolute, placed, rz 30 deg"); a rigid group's members.
+QString jointTooltip(const DocumentSnapshot& snapshot, const DocumentSnapshot::Feature& feature) {
+  if (feature.type == QStringLiteral("rigid_group")) {
+    for (const QJsonValue& value : snapshot.joints.value(QStringLiteral("rigid_groups")).toArray()) {
+      const QJsonObject group = value.toObject();
+      if (group.value(QStringLiteral("uid")).toString() == feature.uid) {
+        return QObject::tr("%1: moves %2 as one")
+            .arg(feature.name, group.value(QStringLiteral("names")).toVariant().toStringList().join(QStringLiteral(", ")));
+      }
+    }
+    return feature.name;
+  }
+  const QJsonObject joint = snapshot.joint(feature.uid);
+  if (joint.isEmpty()) {
+    return feature.name;
+  }
+  QStringList parts{joint.value(QStringLiteral("kind")).toString(), joint.value(QStringLiteral("state")).toString()};
+  const QJsonObject values = joint.value(QStringLiteral("values")).toObject();
+  for (auto it = values.begin(); it != values.end(); ++it) {
+    const bool turn = it.key().startsWith(QLatin1Char('r'));
+    const double value = turn ? it.value().toDouble() * 57.29577951308232 : it.value().toDouble();
+    parts << QStringLiteral("%1 %2 %3")
+                 .arg(it.key(), QString::number(std::round(value * 1e4) / 1e4, 'g', 10),
+                      turn ? QStringLiteral("deg") : QStringLiteral("mm"));
+  }
+  const QString message = joint.value(QStringLiteral("message")).toString();
+  if (!message.isEmpty()) {
+    parts << message;
+  }
+  return QStringLiteral("%1: %2").arg(feature.name, parts.join(QStringLiteral(", ")));
 }
 
 
@@ -297,6 +334,10 @@ SelectionItem BrowserNode::item() const {
       return SelectionItem(); // the root is everything
     }
     item.kind = SelectKind::Component;
+    break;
+  case Type::Joint:
+    // A feature, as the timeline gives it (Drive Joint takes it).
+    item.kind = SelectKind::Feature;
     break;
   default:
     return SelectionItem();
@@ -490,6 +531,14 @@ QString BrowserPanel::keyOf(const BrowserNode& node) const {
     return QStringLiteral("sketch:") + node.uid + at;
   case BrowserNode::Type::Datum:
     return QStringLiteral("datum:") + node.uid + at;
+  case BrowserNode::Type::Analyses:
+    return QStringLiteral("analyses");
+  case BrowserNode::Type::Analysis:
+    return QStringLiteral("analysis:") + node.uid;
+  case BrowserNode::Type::Joints:
+    return QStringLiteral("joints") + at;
+  case BrowserNode::Type::Joint:
+    return QStringLiteral("joint:") + node.uid + at;
   case BrowserNode::Type::None:
     break;
   }
@@ -513,6 +562,7 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
                          node.type == BrowserNode::Type::Body ||
                          node.type == BrowserNode::Type::Sketch ||
                          node.type == BrowserNode::Type::Datum ||
+                         node.type == BrowserNode::Type::Analysis || node.type == BrowserNode::Type::Joint ||
                          (node.type == BrowserNode::Type::NamedView &&
                           node.uid.startsWith(QStringLiteral("named:")));
   if (renamable) {
@@ -522,7 +572,8 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
   const QString key = keyOf(node);
   const bool open = node.type == BrowserNode::Type::Component || node.type == BrowserNode::Type::Bodies ||
                     node.type == BrowserNode::Type::Sketches ||
-                    node.type == BrowserNode::Type::Construction;
+                    node.type == BrowserNode::Type::Construction || node.type == BrowserNode::Type::Analyses ||
+                    node.type == BrowserNode::Type::Joints;
   item->setExpanded(m_expanded.value(key, open));
   return item;
 }
@@ -617,6 +668,55 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
       } else {
         gray(row, shown && node.visible);
       }
+    }
+  }
+
+  // Joints (mitcad#55): the component's joints, as-built joints, joint
+  // origins (datums, with light bulbs) and rigid groups before the marker;
+  // the folder's tooltip has the component's degrees of freedom.
+  QVector<const DocumentSnapshot::Feature*> joints;
+  for (const DocumentSnapshot::Feature& feature : snapshot.features) {
+    if (feature.component == component && feature.isActive() && feature.isJoint()) {
+      joints.append(&feature);
+    }
+  }
+  if (joints.isEmpty()) {
+    return;
+  }
+  BrowserNode jointsFolder;
+  jointsFolder.type = BrowserNode::Type::Joints;
+  jointsFolder.occurrence = occurrence;
+  jointsFolder.component = component;
+  jointsFolder.name = tr("Joints");
+  const QJsonObject dof = snapshot.jointDof(component);
+  QString folderTip;
+  if (!dof.isEmpty()) {
+    folderTip = tr("%n degree(s) of freedom", nullptr, dof.value(QStringLiteral("total")).toInt());
+    if (dof.value(QStringLiteral("overconstrained")).toBool()) {
+      folderTip += tr(", over-constrained");
+    }
+  }
+  QTreeWidgetItem* jointRows = addRow(parent, jointsFolder, QStringLiteral("folder"), folderTip);
+  gray(jointRows, shown);
+  for (const DocumentSnapshot::Feature* feature : joints) {
+    BrowserNode node;
+    const bool origin = feature->type == QStringLiteral("joint_origin");
+    node.type = origin ? BrowserNode::Type::Datum : BrowserNode::Type::Joint;
+    node.uid = feature->uid;
+    node.occurrence = occurrence;
+    node.component = component;
+    node.featureType = feature->type;
+    node.name = feature->name;
+    node.visible = origin ? snapshot.isShown(feature->uid) : true;
+    node.hasEye = origin;
+    const bool failed = feature->status == QStringLiteral("error");
+    QTreeWidgetItem* row = addRow(jointRows, node, featureIcon(feature->type),
+                                  failed ? QStringLiteral("%1: %2").arg(feature->name, feature->error)
+                                         : jointTooltip(snapshot, *feature));
+    if (failed) {
+      row->setForeground(kName, kFailedText);
+    } else {
+      gray(row, shown && node.visible);
     }
   }
 }
@@ -716,6 +816,10 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
           if (occurrence.grounded) {
             tip += tr(", grounded");
           }
+          // What its joints leave it (mitcad#55), with the others held.
+          if (const int dof = snapshot.occurrenceDof(occurrence.uid); dof >= 0) {
+            tip += tr(", %n degree(s) of freedom", nullptr, dof);
+          }
           if (def != nullptr && def->linked) {
             tip += tr(", linked to a file");
           }
@@ -734,6 +838,34 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
       };
   place(rootItem, snapshot.occurrences, true);
   rootItem->setData(kName, kRadioRole, snapshot.activeComponent == rootNode.uid);
+
+  // The analyses kept in the document (mitcad#41), one shown at a time.
+  if (!snapshot.analyses.isEmpty()) {
+    BrowserNode folder;
+    folder.type = BrowserNode::Type::Analyses;
+    folder.component = rootNode.uid;
+    folder.name = tr("Analysis");
+    QTreeWidgetItem* analyses = addRow(rootItem, folder, QStringLiteral("folder"));
+    for (const QJsonValue& value : snapshot.analyses) {
+      const QJsonObject analysis = value.toObject();
+      BrowserNode row;
+      row.type = BrowserNode::Type::Analysis;
+      row.component = rootNode.uid;
+      row.uid = analysis.value(QStringLiteral("name")).toString();
+      row.name = row.uid;
+      row.visible = analysis.value(QStringLiteral("visible")).toBool();
+      row.hasEye = true;
+      const QString error = analysis.value(QStringLiteral("error")).toString();
+      QTreeWidgetItem* item = addRow(analyses, row, QStringLiteral("section-analysis"),
+                                     error.isEmpty() ? tr("%1: Section Analysis").arg(row.name)
+                                                     : QStringLiteral("%1: %2").arg(row.name, error));
+      if (!error.isEmpty()) {
+        item->setForeground(kName, kFailedText);
+      } else if (!row.visible) {
+        item->setForeground(kName, kHiddenText);
+      }
+    }
+  }
 
   for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
     if (selected.contains(keyOf(it.value()))) {
@@ -803,7 +935,8 @@ QVector<BrowserNode> BrowserPanel::nodesOfFeature(const QString& feature) const 
     const BrowserNode node = nodeOf(*it);
     const bool made = node.type == BrowserNode::Type::Body &&
                       node.uid.startsWith(feature + QLatin1Char('.'));
-    if (made || ((node.type == BrowserNode::Type::Sketch || node.type == BrowserNode::Type::Datum) &&
+    if (made || ((node.type == BrowserNode::Type::Sketch || node.type == BrowserNode::Type::Datum ||
+                  node.type == BrowserNode::Type::Joint) &&
                  node.uid == feature)) {
       nodes.append(node);
     }

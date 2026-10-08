@@ -12,6 +12,10 @@
 //! - Constraints and dimensions are mapped by type; those Mitcad lacks are
 //!   left out and counted. Driving dimensions refer to the parameter
 //!   created for the file's (`"value": "d3"`).
+//! - Polygons, sketch patterns, offsets and concentric circle dimensions
+//!   become what Mitcad's own tools make (`groups.rs`); their helper
+//!   entities (construction circles and lines, points on circles) come
+//!   after all others.
 
 use std::collections::HashMap;
 
@@ -24,6 +28,8 @@ use serde_json::{Value, json};
 use crate::geom::{add, cross, mm, scale, unit};
 use crate::params::ParamMap;
 
+mod groups;
+
 /// What a sketch translates to, without its plane.
 #[derive(Debug, Default)]
 pub struct SketchParts {
@@ -34,6 +40,14 @@ pub struct SketchParts {
     /// The same dimensions, all driven.
     pub driven_dimensions: Vec<Value>,
     pub texts: Vec<Value>,
+    /// Circular and rectangular patterns and offsets (`patterns`,
+    /// `offsets` of the definition).
+    pub patterns: Vec<Value>,
+    pub offsets: Vec<Value>,
+    /// Parameters to create before the sketch is added: (placeholder in
+    /// the values, suggested name, expression); offsets whose distance
+    /// parameter is negative use its negation (`groups.rs`).
+    pub new_params: Vec<(String, String, String)>,
     /// Entity id in the file (`p3`, `c5`) → Mitcad id (`p4`, `c50`).
     pub ids: HashMap<String, String>,
     /// Where each Mitcad point should be after solving (sketch mm).
@@ -151,30 +165,82 @@ pub fn translate(detail: &SketchDetail, params: &ParamMap) -> SketchParts {
     parts.entities.extend(extra_points);
     // Points that no curve uses keep their place; every point is checked
     // after solving.
-    parts.positions = point_at.into_iter().collect();
+    parts.positions = point_at.iter().map(|(n, at)| (*n, *at)).collect();
     parts.positions.sort_by_key(|(n, _)| *n);
 
+    let mut added = groups::Group::default();
+    let mut dropped = Vec::new();
+    let mut constraints = Vec::new();
+    let mut dimensions = Vec::new();
+    let dims = detail.dimensions.as_deref().unwrap_or(&[]);
+    let mut sk = groups::Sketch {
+        entities: parts
+            .entities
+            .iter()
+            .filter_map(|e| Some((e["id"].as_str()?.to_owned(), e)))
+            .collect(),
+        at: &point_at,
+        ids: &ids,
+        params,
+        next: ids.next,
+    };
+    // Offset dimensions that their offsets stand for.
+    let mut offset_dimensions = std::collections::HashSet::new();
     for c in detail.constraints.as_deref().unwrap_or(&[]) {
-        match constraint(c, &ids) {
-            Ok(Some(k)) => parts.constraints.push(k),
-            Ok(None) => {}
-            Err(reason) => parts
-                .dropped
-                .push(format!("{}: {reason}", c.id.as_deref().unwrap_or("?"))),
+        let group = match c.constraint_type.as_deref() {
+            Some("PolygonConstraint") => Some(groups::polygon(c, &mut sk)),
+            Some("CircularPatternConstraint") => Some(groups::circular_pattern(c, &mut sk)),
+            Some("RectangularPatternConstraint") => Some(groups::rectangular_pattern(c, &mut sk)),
+            Some("OffsetConstraint") => Some(groups::offset(c, &mut sk, dims).map(|(g, d)| {
+                offset_dimensions.extend(d);
+                g
+            })),
+            _ => None,
+        };
+        let result = match group {
+            Some(g) => g
+                .map(|g| added.append(g))
+                .map_err(|e| format!("{}: {e}", c.constraint_type.as_deref().unwrap_or_default())),
+            None => constraint(c, &ids).map(|k| constraints.extend(k)),
+        };
+        if let Err(reason) = result {
+            dropped.push(format!("{}: {reason}", c.id.as_deref().unwrap_or("?")));
         }
     }
-    for d in detail.dimensions.as_deref().unwrap_or(&[]) {
-        match dimension(d, &ids, params) {
-            Ok((driving, driven)) => {
-                parts.dimensions.push(driving);
-                parts.driven_dimensions.push(driven);
+    for d in dims {
+        let result = match d.dimension_type.as_deref() {
+            Some("SketchOffsetCurvesDimension") => {
+                if d.id
+                    .as_ref()
+                    .is_some_and(|id| offset_dimensions.contains(id))
+                {
+                    Ok(())
+                } else {
+                    Err("SketchOffsetCurvesDimension: an offset that was left out".to_owned())
+                }
             }
-            Err(reason) => parts
-                .dropped
-                .push(format!("{}: {reason}", d.id.as_deref().unwrap_or("?"))),
+            Some(kind @ "SketchConcentricCircleDimension") => driving_value(d, kind, params)
+                .and_then(|v| groups::concentric_dimension(d, &mut sk, v))
+                .map(|g| added.append(g))
+                .map_err(|e| format!("{kind}: {e}")),
+            _ => dimension(d, &ids, params).map(|pair| dimensions.push(pair)),
+        };
+        if let Err(reason) = result {
+            dropped.push(format!("{}: {reason}", d.id.as_deref().unwrap_or("?")));
         }
     }
-    // Constraint and dimension ids share one space.
+    let next = sk.next;
+    ids.next = next;
+    parts.dropped.extend(dropped);
+    parts.constraints = constraints;
+    parts.constraints.extend(added.constraints);
+    parts.entities.extend(added.entities);
+    for (driving, driven) in dimensions.into_iter().chain(added.dimensions) {
+        parts.dimensions.push(driving);
+        parts.driven_dimensions.push(driven);
+    }
+    parts.new_params = added.params;
+    // Constraint, dimension, pattern and offset ids share one space.
     for (i, item) in parts
         .constraints
         .iter_mut()
@@ -186,6 +252,17 @@ pub fn translate(detail: &SketchDetail, params: &ParamMap) -> SketchParts {
     let first_dimension = parts.constraints.len();
     for (i, item) in parts.driven_dimensions.iter_mut().enumerate() {
         item["id"] = json!(format!("k{}", first_dimension + i + 1));
+    }
+    let first_record = parts.constraints.len() + parts.dimensions.len();
+    parts.patterns = added.patterns;
+    parts.offsets = added.offsets;
+    for (i, item) in parts
+        .patterns
+        .iter_mut()
+        .chain(parts.offsets.iter_mut())
+        .enumerate()
+    {
+        item["id"] = json!(format!("k{}", first_record + i + 1));
     }
     let positions: HashMap<u32, [f64; 2]> = parts.positions.iter().copied().collect();
     for (i, t) in detail.texts.as_deref().unwrap_or(&[]).iter().enumerate() {
@@ -709,24 +786,41 @@ fn dimension(d: &SketchDimension, ids: &Ids, params: &ParamMap) -> Result<(Value
     }
     let mut driven = value.clone();
     driven["driven"] = json!(true);
-    // The parameter, by its Mitcad name; a driven dimension has none.
-    let parameter = d.parameter.clone().flatten();
-    let driving = d.is_driving != Some(false);
-    match parameter.as_ref().and_then(Reference::parameter) {
-        Some(p) if driving => {
-            let name = p.name.as_deref().unwrap_or_default();
-            match params.get(name) {
-                Some(mitcad) => value["value"] = json!(mitcad),
-                None => {
-                    let v = p.value.ok_or("its parameter has no value")?;
-                    let angle = matches!(kind, "SketchAngularDimension");
-                    value["value"] = json!(if angle { v } else { mm(v) });
-                }
-            }
-        }
-        _ => value = driven.clone(),
+    match driving_value(d, kind, params)? {
+        Some(v) => value["value"] = v,
+        None => value = driven.clone(),
     }
     Ok((value, driven))
+}
+
+/// The value of a driving dimension: its parameter by its Mitcad name
+/// (negated for a concentric circle dimension with a negative value),
+/// else its value; None for a driven dimension.
+fn driving_value(
+    d: &SketchDimension,
+    kind: &str,
+    params: &ParamMap,
+) -> Result<Option<Value>, String> {
+    let parameter = d.parameter.clone().flatten();
+    if d.is_driving == Some(false) {
+        return Ok(None);
+    }
+    let Some(p) = parameter.as_ref().and_then(Reference::parameter) else {
+        return Ok(None);
+    };
+    let v = p.value;
+    let negate = kind == "SketchConcentricCircleDimension" && v.is_some_and(|v| v < 0.0);
+    let name = p.name.as_deref().unwrap_or_default();
+    Ok(Some(match params.get(name) {
+        Some(mitcad) if negate => json!(format!("-({mitcad})")),
+        Some(mitcad) => json!(mitcad),
+        None => {
+            let v = v.ok_or("its parameter has no value")?;
+            let v = if negate { -v } else { v };
+            let angle = matches!(kind, "SketchAngularDimension");
+            json!(if angle { v } else { mm(v) })
+        }
+    }))
 }
 
 /// A sketch text (SCHEMA.md `Text`): content, height, position, angle,

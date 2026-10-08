@@ -2,23 +2,26 @@
 //! Project file versions 2 and 3 (see the module documentation of `file`):
 //! version 3 is version 2 with B-rep data in a project's store.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::{FORMAT, FileError, SINGLE_VERSION, VERSION, has_references, legacy_name};
+use crate::appearance::Appearance;
 use crate::assembly::{
     Assembly, ComponentDef, ExternalLink, Occurrence, ROOT_NAME, from_rows, matrix_rows,
 };
+use crate::configurations::Configurations;
 use crate::document::{
-    BodyAttributes, DisplayState, DocState, NamedView, TimelineGroup, check_components,
+    Analysis, BodyAttributes, DisplayState, DocState, NamedView, TimelineGroup, check_components,
 };
 use crate::expr::{EvalContext, ParamSpec, TableError, Unit, value_to_expression};
-use crate::features::{CheckContext, FeatureDef, FeatureEntry, is_false};
+use crate::features::{CheckContext, FeatureDef, FeatureEntry, HelixConstruction, is_false};
 use crate::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use crate::parameters::{Parameters, default_context, slot_unit};
+use crate::render_settings::RenderSettings;
 use crate::sketch::legacy::{LegacyShape, convert, settle};
 use crate::transform::Transform;
 
@@ -51,6 +54,18 @@ struct FileOut<'a> {
     // Timeline groups (P9), when there are any.
     #[serde(skip_serializing_if = "<[TimelineGroup]>::is_empty")]
     groups: &'a [TimelineGroup],
+    // Analyses (mitcad#41), when there are any.
+    #[serde(skip_serializing_if = "<[Analysis]>::is_empty")]
+    analyses: &'a [Analysis],
+    // The document's appearances (mitcad#46), when there are any.
+    #[serde(skip_serializing_if = "<[Appearance]>::is_empty")]
+    appearances: &'a [Appearance],
+    // Render settings (mitcad#47), when not the defaults.
+    #[serde(skip_serializing_if = "RenderSettings::is_default")]
+    render: &'a RenderSettings,
+    // The configuration table (mitcad#64), when there is one.
+    #[serde(skip_serializing_if = "Configurations::is_empty")]
+    configurations: &'a Configurations,
     #[serde(skip_serializing_if = "Option::is_none")]
     marker: Option<usize>,
 }
@@ -63,6 +78,9 @@ struct ComponentOut<'a> {
     created_by: Option<FeatureUid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     link: Option<&'a ExternalLink>,
+    // The library it came from (mitcad#64).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    library: Option<&'a crate::library::LibraryRef>,
 }
 
 #[derive(Serialize)]
@@ -133,6 +151,9 @@ struct BodyOut<'a> {
     material: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     appearance: Option<&'a str>,
+    // Appearances of single faces by face name (mitcad#53).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    face_appearances: Option<&'a BTreeMap<String, String>>,
 }
 
 pub(super) fn save(state: &DocState) -> String {
@@ -172,6 +193,7 @@ pub(super) fn save(state: &DocState) -> String {
                 name: &c.name,
                 created_by: c.created_by,
                 link: c.link.as_ref(),
+                library: c.library.as_ref(),
             })
             .collect(),
         occurrences: assembly
@@ -214,12 +236,19 @@ pub(super) fn save(state: &DocState) -> String {
                     visible: attributes.filter(|a| !a.visible).map(|_| false),
                     material: attributes.and_then(|a| a.material.as_deref()),
                     appearance: attributes.and_then(|a| a.appearance.as_deref()),
+                    face_appearances: attributes
+                        .map(|a| &a.face_appearances)
+                        .filter(|faces| !faces.is_empty()),
                 }
             })
             .collect(),
         views: &state.named_views,
         display: &state.display,
         groups: &state.groups,
+        analyses: &state.analyses,
+        appearances: &state.appearances,
+        render: &state.render,
+        configurations: &state.configurations,
         marker: (state.marker < state.features.len()).then_some(state.marker),
     };
     let mut json =
@@ -270,6 +299,8 @@ struct BodyIn {
     material: Option<String>,
     #[serde(default)]
     appearance: Option<String>,
+    #[serde(default)]
+    face_appearances: BTreeMap<String, String>,
 }
 
 fn visible() -> bool {
@@ -285,6 +316,8 @@ struct ComponentIn {
     created_by: Option<FeatureUid>,
     #[serde(default)]
     link: Option<ExternalLink>,
+    #[serde(default)]
+    library: Option<crate::library::LibraryRef>,
 }
 
 #[derive(Deserialize)]
@@ -316,7 +349,7 @@ struct FeatureIn {
     shapes: Option<Value>,
 }
 
-const TOP_FIELDS: [&str; 14] = [
+const TOP_FIELDS: [&str; 18] = [
     "format",
     "version",
     "units",
@@ -331,6 +364,11 @@ const TOP_FIELDS: [&str; 14] = [
     "views",
     "display",
     "groups",
+    "analyses",
+    "appearances",
+    "render",
+    // The configuration table (mitcad#64).
+    "configurations",
 ];
 
 fn schema(message: impl Into<String>) -> FileError {
@@ -437,6 +475,7 @@ fn assembly_in(top: &mut Map<String, Value>) -> Result<Assembly, FileError> {
             name: c.name,
             created_by: c.created_by,
             link: c.link,
+            library: c.library,
         });
     }
     for (i, o) in array(top, "occurrences", false)?.into_iter().enumerate() {
@@ -536,6 +575,46 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
                 .map_err(|e| schema(format!("groups[{i}]: {e}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let analyses = array(&mut top, "analyses", false)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let analysis = serde_json::from_value::<Analysis>(a)
+                .map_err(|e| schema(format!("analyses[{i}]: {e}")))?;
+            analysis
+                .check()
+                .map_err(|e| invalid(format!("analyses[{i}]: {e}")))?;
+            Ok(analysis)
+        })
+        .collect::<Result<Vec<_>, FileError>>()?;
+    let appearances = array(&mut top, "appearances", false)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let appearance = serde_json::from_value::<Appearance>(a)
+                .map_err(|e| schema(format!("appearances[{i}]: {e}")))?;
+            appearance
+                .check()
+                .map_err(|e| invalid(format!("appearances[{i}]: {e}")))?;
+            Ok(appearance)
+        })
+        .collect::<Result<Vec<_>, FileError>>()?;
+    let render = match top.remove("render") {
+        None => RenderSettings::default(),
+        Some(value) => {
+            let render = serde_json::from_value::<RenderSettings>(value)
+                .map_err(|e| schema(format!("render: {e}")))?;
+            render
+                .check()
+                .map_err(|e| invalid(format!("render: {e}")))?;
+            render
+        }
+    };
+    let configurations = match top.remove("configurations") {
+        None => Configurations::default(),
+        Some(value) => serde_json::from_value::<Configurations>(value)
+            .map_err(|e| schema(format!("configurations: {e}")))?,
+    };
     let marker = match top.remove("marker") {
         None => None,
         Some(value) => Some(
@@ -583,6 +662,10 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
                     .ok_or_else(|| format!("{slot}: parameter '{name}' does not exist"))
             })
             .map_err(|e| invalid(format!("features[{i}] ({}): {e}", f.name)))?;
+        // A growing helix of a file written before mitcad#83 is FreeCAD's.
+        if let FeatureDef::Helix(helix) = &mut def {
+            helix.settle_construction(HelixConstruction::Freecad);
+        }
         if let (Some(shapes), FeatureDef::Sketch(sketch)) = (&f.shapes, &mut def)
             && let Ok(shapes) = serde_json::from_value::<Vec<LegacyShape<String>>>(shapes.clone())
         {
@@ -657,10 +740,20 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
         {
             return Err(invalid(format!("bodies[{i}]: unknown material '{id}'")));
         }
+        if let Some(face) = body
+            .face_appearances
+            .keys()
+            .find(|face| face.parse::<crate::topo::FaceName>().is_err())
+        {
+            return Err(invalid(format!(
+                "bodies[{i}]: '{face}' is no face name in face_appearances"
+            )));
+        }
         let attributes = BodyAttributes {
             visible: body.visible,
             material: body.material,
             appearance: body.appearance,
+            face_appearances: body.face_appearances,
         };
         if !attributes.is_default() {
             state.body_attributes.insert(body.uid, attributes);
@@ -706,6 +799,49 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     }
     state.groups = groups;
     state.normalize_groups();
+    // Analyses (mitcad#41): their references are resolved when they are
+    // asked for, so one whose plane is gone loads and says why.
+    for (i, analysis) in analyses.iter().enumerate() {
+        if analyses[..i].iter().any(|a| a.name == analysis.name) {
+            return Err(invalid(format!(
+                "analyses[{i}]: analysis '{}' is listed more than once",
+                analysis.name
+            )));
+        }
+    }
+    state.analyses = analyses;
+    // Appearances (mitcad#46): ids of their own, not the library's.
+    for (i, appearance) in appearances.iter().enumerate() {
+        let id = &appearance.id;
+        if !crate::appearance::valid_id(id) {
+            return Err(invalid(format!(
+                "appearances[{i}]: '{id}' is no appearance id"
+            )));
+        }
+        if crate::appearance::library_appearance(id).is_some() {
+            return Err(invalid(format!(
+                "appearances[{i}]: '{id}' is a library appearance's id"
+            )));
+        }
+        if appearances[..i].iter().any(|a| a.id == *id) {
+            return Err(invalid(format!(
+                "appearances[{i}]: appearance '{id}' is listed more than once"
+            )));
+        }
+    }
+    state.appearances = appearances;
+    state.render = render;
+    // The configuration table (mitcad#64): rows of the file's parameters.
+    if let Some(problem) = configurations.problems(&state.parameters).first() {
+        return Err(invalid(format!("configurations: {problem}")));
+    }
+    state.configurations = configurations;
+    // One shown at a time: the first shown one.
+    let mut shown = false;
+    for analysis in &mut state.analyses {
+        analysis.visible = analysis.visible && !shown;
+        shown = shown || analysis.visible;
+    }
     Ok((state, warnings))
 }
 

@@ -129,12 +129,26 @@ TopAbs_Orientation orientation_in(const TopoDS_Shape& face, const TopoDS_Shape& 
 // when two boxes meet. A pattern's copies are mostly so, and fusing 90 of
 // them took most of a minute.
 ShapePtr disjoint_union(const std::vector<const Shape*>& shapes) {
+  // Boxes sorted by their low x, each compared with those that start
+  // before it ends (all pairs: 12 million for 4900 copies).
   std::vector<Bnd_Box> boxes(shapes.size());
+  std::vector<std::size_t> order(shapes.size());
   for (std::size_t i = 0; i < shapes.size(); ++i) {
     BRepBndLib::Add(shapes[i]->occt(), boxes[i]);
     boxes[i].Enlarge(kTolerance);
-    for (std::size_t j = 0; j < i; ++j) {
-      if (!boxes[i].IsOut(boxes[j])) {
+    if (boxes[i].IsVoid()) {
+      return nullptr;
+    }
+    order[i] = i;
+  }
+  std::sort(order.begin(), order.end(), [&boxes](std::size_t a, std::size_t b) {
+    return boxes[a].CornerMin().X() < boxes[b].CornerMin().X();
+  });
+  for (std::size_t k = 0; k < order.size(); ++k) {
+    const Bnd_Box& box = boxes[order[k]];
+    const double end = box.CornerMax().X();
+    for (std::size_t m = k + 1; m < order.size() && boxes[order[m]].CornerMin().X() <= end; ++m) {
+      if (!box.IsOut(boxes[order[m]])) {
         return nullptr;
       }
     }

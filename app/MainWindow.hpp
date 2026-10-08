@@ -50,6 +50,7 @@ class GlassCard;
 class RemoteController;
 class Ribbon;
 class UpdateController;
+class ReportCenter;
 class ViewController;
 struct FileVersion;
 struct RecoverableSession;
@@ -146,10 +147,13 @@ public:
   void showNamedView(const QString& view) override;
   void saveNamedView(const QString& name, bool replace) override;
   void exportSketch(const QString& sketch) override;
+  void editAnalysis(const QString& name) override;
+  void animateJoint(const QString& uid) override;
   void setIsolation(const Selection& items) override;
   const Selection& isolation() const override { return m_isolation; }
   void setOriginShown(bool shown) override;
   bool originShown() const override { return m_originShown; }
+  QString documentFolder() const override;
 
 protected:
   void closeEvent(QCloseEvent* event) override;
@@ -181,7 +185,10 @@ private:
   bool isAvailable(const CommandDef& def) const;
   void updateActions();
   void trigger(const QString& id) override;
-  void startFeatureCommand(const CommandDef& def, const QString& editUid = QString());
+  // `analysis`: an analysis to edit instead (an entry of the `analyses`
+  // query, mitcad#41).
+  void startFeatureCommand(const CommandDef& def, const QString& editUid = QString(),
+                           const QJsonObject& analysis = QJsonObject());
   // The command that can edit a feature, and the feature's name.
   const CommandDef* editorOf(const QString& uid, QString* name = nullptr) const;
   void onCommandFinished(bool committed);
@@ -250,6 +257,24 @@ private:
   // component's first), or empty: the root's, and the sketch being edited.
   QString placingOccurrence(const QString& feature) const;
 
+  // Dragging components the joints move (mitcad#55, MainWindowJoints.cpp):
+  // the `joint_drag` query per pointer move shows where the occurrences go,
+  // `drag_occurrence` on release keeps it, one undo step.
+  void setUpOccurrenceDrag();
+  // The occurrence a drag of a body that `path` places moves: the innermost
+  // one whose parent component has joints, unless it is held fixed
+  // (grounded); empty when there is none.
+  QString dragOccurrenceOf(const QString& path) const;
+  void occurrenceDragStarted(const SelectionItem& item, const gp_Pnt& grabbed);
+  void occurrenceDragged(const gp_Pnt& target);
+  void occurrenceDragFinished(const gp_Pnt& target, bool cancelled);
+  // Animate Joint: the joint selected in the timeline that has free
+  // motions, else the newest one.
+  void animateSelectedJoint();
+  // One frame of the animation: the joint previewed at its next value.
+  void animationFrame();
+  void stopAnimation(const QString& why);
+
   // Selection outside commands.
   void onPicked(const Selection& items, Qt::KeyboardModifiers modifiers, bool window);
   void updateIdleView();
@@ -278,8 +303,15 @@ private:
   // Look At (U5): the sketch plane in sketch mode, else the selected plane,
   // planar face, profile or sketch.
   void lookAtSelection();
-  // Section Analysis kept after OK (U5): the side cut away swapped.
+  // The analysis shown (mitcad#41): its side cut away swapped, or hidden.
   void flipSection();
+  void removeSection();
+  // The bodies cut where the model's shown analysis says (mitcad#41),
+  // unless an inspection's panel shows its own section.
+  void followAnalyses();
+  // Sets the plane the bodies are cut at, logging a change; showSection
+  // also redraws.
+  bool setSection(const QJsonValue& plane);
   // The plane the bodies are shown cut at: the sketch's while Hide Above
   // Sketch is on in sketch mode, else Section Analysis' (null: whole).
   QJsonValue cutPlane() const;
@@ -395,6 +427,14 @@ private:
   // for Save As instead, nothing to cancel.
   std::optional<bool> askOverwriteChanged();
 
+  // Component libraries (mitcad#64, mitcad#63, files/MainWindowLibraries.cpp).
+  void registerLibraryCommands();
+  void createLibraryMenu(QMenu* tools);
+  void insertFromLibrary(bool community);
+  void showLibraryParts();
+  void manageLibraries();
+  void publishToLibrary();
+
   // Files (U6, MainWindowFiles.cpp): the File menu, import and export.
   void createFileMenu();
   void registerFileCommands();
@@ -419,6 +459,9 @@ private:
   // The appearance colours the view shows of bodies (all when empty), as
   // `export`'s `colors` for 3MF files.
   QJsonObject appearanceColors(const QStringList& bodies) const;
+  // The bodies Edit Appearances assigns to: those the selection stands for
+  // (bodies, and the bodies of faces, edges and vertices), each once.
+  Selection appearanceTargets() const;
   void closeDocument();
   void addRecentFile(const QString& path);
   void updateRecentMenu();
@@ -493,6 +536,7 @@ private:
   CommandSearch* m_search = nullptr;
   ViewController* m_viewController = nullptr;
   UpdateController* m_updates = nullptr; // automatic updates (mitcad#9)
+  ReportCenter* m_reports = nullptr;     // feedback and error reports (mitcad#61, mitcad#62)
   sketch::SketchController* m_sketch = nullptr;
   sketch::SketchPalette* m_palette = nullptr;
 
@@ -537,6 +581,29 @@ private:
   QHash<const void*, gp_Pnt> m_localCenters;
   QString m_loggedBodies;
   QString m_loggedBodyPlaces;
+
+  // A component being dragged (mitcad#55).
+  struct OccurrenceDragState {
+    QString path;    // the occurrence that moves, uids from the root
+    QString name;    // its name, for the log
+    gp_Trsf parent;  // where its parent component is in the design
+    gp_Pnt grabbed;  // the point dragged, in the parent's coordinates
+    gp_Pnt target;   // where it was dragged to, in the parent's coordinates
+    std::vector<BodyDisplay> bodies; // as shown when the drag began
+  };
+  std::optional<OccurrenceDragState> m_drag;
+  // A joint being animated (mitcad#55): its definition, the motion and the
+  // values still to show; previews only, the document stays as it is.
+  struct JointAnimation {
+    QString uid;
+    QString name;
+    QString motion;
+    QJsonObject def;
+    QVector<double> frames;
+    int next = 0;
+    std::vector<BodyDisplay> bodies; // as shown when it began
+  };
+  std::optional<JointAnimation> m_animation;
 
   // The sketch being edited (sketch mode).
   bool m_sketchExisting = false; // edited rather than just created

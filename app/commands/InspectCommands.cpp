@@ -2,8 +2,9 @@
 // The INSPECT group of the SOLID tab (U4): Measure, Interference, Section
 // Analysis and Physical Properties, on the model's analysis queries
 // (commands.md, "Analysis queries").
-// They show answers; only Section Analysis leaves something behind: the
-// bodies stay cut at its plane until Remove Section Analysis.
+// They show answers; only Section Analysis leaves something behind: OK
+// keeps it in the document as an analysis (the browser's Analysis folder,
+// mitcad#41), and the bodies stay cut at its plane while it is shown.
 #include "Commands.hpp"
 
 #include <algorithm>
@@ -403,6 +404,30 @@ CommandDef sectionCommand() {
     result.log = QStringLiteral("area %1, length %2").arg(n(area), n(length));
     result.section = fixed;
     return result;
+  };
+  // OK keeps it in the document as an analysis (mitcad#41): the plane as
+  // a reference, so that a face's section follows the model.
+  def.build = [](const CommandState& state, const CommandContext&) {
+    const Selection& plane = state.items(QStringLiteral("plane"));
+    if (plane.isEmpty()) {
+      return Built::failure(QObject::tr("Select a plane."), QStringLiteral("plane"));
+    }
+    const double offset = state.value(QStringLiteral("offset"));
+    if (!std::isfinite(offset)) {
+      return Built::failure(QObject::tr("Distance: check the value."), QStringLiteral("offset"));
+    }
+    return Built::of({{QStringLiteral("type"), QStringLiteral("section")},
+                      {QStringLiteral("plane"), refsOf(plane).first()},
+                      {QStringLiteral("offset"), offset},
+                      {QStringLiteral("flip"), state.checked(QStringLiteral("flip"))}});
+  };
+  def.load = [](const QJsonObject& analysis, CommandState& state, const CommandContext& context) {
+    const SelectionItem plane = itemOf(analysis.value(QStringLiteral("plane")), context);
+    if (plane.isValid()) {
+      state.items(QStringLiteral("plane")) = {plane};
+    }
+    state.setText(QStringLiteral("offset"), lengthText(analysis.value(QStringLiteral("offset")).toDouble(), context));
+    state.setChecked(QStringLiteral("flip"), analysis.value(QStringLiteral("flip")).toBool());
   };
   return def;
 }

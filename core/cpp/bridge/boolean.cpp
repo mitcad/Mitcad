@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include "bridge/boolean.hpp"
 
+#include <optional>
+#include <utility>
 #include <vector>
 
+#include "mitcad/geometry/removed.hpp"
 #include "mitcad_bridge/kernel/boolean.h"
 
 namespace mitcad::bridge {
@@ -46,6 +49,23 @@ std::unique_ptr<BooleanResult> boolean_cut(const ShapeList& targets, const geome
 std::unique_ptr<BooleanResult> boolean_intersect(const ShapeList& targets,
                                                  const geometry::Shape& tool) {
   return run(geometry::BooleanOp::Intersect, targets, tool);
+}
+
+std::unique_ptr<BooleanResult> removed_material(const geometry::Shape& before, const geometry::Shape& after,
+                                                double slack) {
+  return std::make_unique<BooleanResult>(geometry::removed_material(before, after, slack));
+}
+
+std::unique_ptr<BooleanResult> join_near_copy(const geometry::Shape& body, const geometry::Shape& copy,
+                                              double slack) {
+  std::optional<geometry::BooleanResult> joined = geometry::join_near_copy(body, copy, slack);
+  if (!joined) {
+    geometry::BooleanResult none;
+    none.touched = {false};
+    return std::make_unique<BooleanResult>(std::move(none));
+  }
+  joined->touched.assign(1, true);
+  return std::make_unique<BooleanResult>(std::move(*joined));
 }
 
 } // namespace mitcad::bridge

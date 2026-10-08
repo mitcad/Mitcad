@@ -121,6 +121,9 @@ public:
   bool startsWithValues() const { return m_selectionsComplete; }
   const CommandDef& def() const { return m_def; }
   bool isEditing() const { return !m_editUid.isEmpty(); }
+  // Before start: the session edits an analysis kept in the document (an
+  // entry of the `analyses` query) instead of adding one (mitcad#41).
+  void editAnalysis(const QJsonObject& analysis) { m_analysis = analysis; }
   // Whether the active input takes items of this kind.
   bool activeTakes(SelectKind kind) const;
   // For autosave (P8): the timeline marker the edit restores when it rolled
@@ -192,6 +195,9 @@ private:
   void finish(bool committed);
   // False when the roll-back stays (its computation was cancelled).
   bool rollForward();
+  // OK of an inspection that keeps an analysis in the document: adds it,
+  // or changes the one edited; false when the model refuses it.
+  bool keepAnalysis();
   QJsonObject bodyVolumes() const;
   void logVolumes(const QJsonObject& before) const;
   // Sketch commands: applied for the preview, taken back on a change.
@@ -222,6 +228,7 @@ private:
   bool m_done = false;
   int m_appliedDepth = -1; // undo depth before an applied sketch preview
   QJsonValue m_sectionBefore; // the section shown before an inspection
+  QJsonObject m_analysis; // the analysis edited (mitcad#41), else empty
 };
 
 } // namespace mitcad

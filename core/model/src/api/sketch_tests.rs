@@ -791,6 +791,176 @@ fn a_linked_projection_with_an_arc_follows_after_other_entities() {
     assert_areas(&d, "F3", &[80.0 * 40.0 - 4.0 + PI]);
 }
 
+/// The position of a point in the sketch query.
+fn point_at(s: &Value, id: &str) -> [f64; 2] {
+    let e = s["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == id)
+        .unwrap_or_else(|| panic!("no {id}"));
+    [e["at"][0].as_f64().unwrap(), e["at"][1].as_f64().unwrap()]
+}
+
+/// The id of the point at a position in the sketch query.
+fn point_id(s: &Value, at: [f64; 2]) -> String {
+    s["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| {
+            e["type"] == "point"
+                && close(e["at"][0].as_f64().unwrap(), at[0])
+                && close(e["at"][1].as_f64().unwrap(), at[1])
+        })
+        .unwrap_or_else(|| panic!("no point at {at:?}"))["id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+fn measured(s: &Value, id: &str) -> f64 {
+    s["dimensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"] == id)
+        .unwrap()["measured"]
+        .as_f64()
+        .unwrap()
+}
+
+#[test]
+fn a_linked_projection_shows_its_followed_geometry_and_drags_its_constraints() {
+    // As the application works (mitcad#40): a block, a sketch on its top
+    // face with the face projected (linked), a line of the user's from a
+    // projected corner and dimensions on both; then the block's sketch
+    // changes. The sketch query, which the application draws and edits
+    // from, shows the projection where its source is now.
+    let mut d = doc();
+    command(&mut d, json!({"cmd": "sketch.create"}));
+    command(
+        &mut d,
+        json!({"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40}),
+    );
+    command(
+        &mut d,
+        json!({"cmd": "add_feature", "def": {"type": "extrude",
+               "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+               "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}}),
+    );
+    let face = "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})";
+    command(
+        &mut d,
+        json!({"cmd": "sketch.create", "plane": {"face": face}}),
+    );
+    let square = |size: f64| -> Vec<Curve3> {
+        let c = [[0.0, 0.0], [size, 0.0], [size, 40.0], [0.0, 40.0]];
+        (0..4)
+            .map(|i| Curve3::Line {
+                start: [c[i][0], c[i][1], 20.0],
+                end: [c[(i + 1) % 4][0], c[(i + 1) % 4][1], 20.0],
+            })
+            .collect()
+    };
+    *d.kernel().curves.borrow_mut() = square(60.0);
+    // The command as the Project dialog builds it.
+    command(
+        &mut d,
+        json!({"cmd": "sketch.project", "sketch": "F3", "source": face, "body": "F2.b0",
+               "linked": true}),
+    );
+    let s = sketch(&d, "F3");
+    let corner = point_id(&s, [60.0, 0.0]);
+    let bottom = s["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| {
+            e["type"] == "line"
+                && e["geometry"]["start"] == json!([0.0, 0.0])
+                && e["geometry"]["end"] == json!([60.0, 0.0])
+        })
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The user's line on from the corner, horizontal and 15 long.
+    let line = command(
+        &mut d,
+        json!({"cmd": "sketch.add_line", "sketch": "F3", "start": corner, "end": [75, 0]}),
+    );
+    let user = line["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e.as_str().unwrap().starts_with('c'))
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let end = point_id(&sketch(&d, "F3"), [75.0, 0.0]);
+    command(
+        &mut d,
+        json!({"cmd": "sketch.add_constraint", "sketch": "F3",
+               "constraint": {"type": "horizontal", "line": user}}),
+    );
+    command(
+        &mut d,
+        json!({"cmd": "sketch.add_dimension", "sketch": "F3",
+               "dimension": {"type": "length", "line": user}, "value": 15}),
+    );
+    // A driven dimension on the projection measures it.
+    let driven = command(
+        &mut d,
+        json!({"cmd": "sketch.add_dimension", "sketch": "F3",
+               "dimension": {"type": "length", "line": bottom}, "driven": true}),
+    );
+    let k = driven["dimensions"][0].as_str().unwrap().to_owned();
+    let s = sketch(&d, "F3");
+    assert_eq!(point_at(&s, &end), [75.0, 0.0]);
+    assert!(close(measured(&s, &k), 60.0));
+
+    // The block's width changes (a dimension of its sketch): the
+    // projection, the line hanging on it and the driven dimension follow.
+    *d.kernel().curves.borrow_mut() = square(80.0);
+    let changed = command(
+        &mut d,
+        json!({"cmd": "set_parameter", "name": "d1", "value": 80}),
+    );
+    assert_eq!(changed["error"], Value::Null);
+    let check = |d: &Document<MockKernel>, what: &str| {
+        let s = sketch(d, "F3");
+        assert_eq!(s["error"], Value::Null, "{what}");
+        let at = point_at(&s, &corner);
+        assert!(close(at[0], 80.0) && close(at[1], 0.0), "{what}: {at:?}");
+        let at = point_at(&s, &end);
+        assert!(close(at[0], 95.0) && close(at[1], 0.0), "{what}: {at:?}");
+        assert!(close(measured(&s, &k), 80.0), "{what}");
+        let line = s["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == bottom)
+            .unwrap();
+        assert_eq!(line["geometry"]["end"], json!([80.0, 0.0]), "{what}");
+        assert_areas(d, "F3", &[3200.0]);
+    };
+    check(&d, "after the change");
+    // An edit of the sketch starts from the followed geometry.
+    command(
+        &mut d,
+        json!({"cmd": "sketch.add_line", "sketch": "F3", "start": [0, -20], "end": [10, -30]}),
+    );
+    check(&d, "after an edit");
+    // And it is what the file keeps (the extrude's distance changes too).
+    command(
+        &mut d,
+        json!({"cmd": "set_parameter", "name": "d3", "value": 30}),
+    );
+    check(&d, "after another change");
+}
+
 #[test]
 fn sketches_on_construction_planes_follow_them() {
     let mut d = doc();

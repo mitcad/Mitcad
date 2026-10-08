@@ -52,6 +52,16 @@ struct CurveDescription {
 
 CurveDescription edge_geometry(const Shape& shape, const std::string& edge);
 
+// The surfaces of every face and the curves of every edge in one pass, in
+// the shape's face and edge order (Shape::face_names, Shape::edge_name name
+// them): the .f3d import looks for the faces and edges through a point of
+// large bodies (mitcad#87), where finding each by its name takes as long
+// as the whole list. A face whose surface is not a plane, cylinder, cone,
+// sphere or torus has only its type (no planar spline test). A degenerate
+// edge has the type "degenerate".
+std::vector<SurfaceDescription> face_geometries(const Shape& shape);
+std::vector<CurveDescription> edge_geometries(const Shape& shape);
+
 gp_Pnt vertex_point(const Shape& shape, const std::string& vertex);
 
 enum class PathAt {

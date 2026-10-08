@@ -54,6 +54,8 @@ target_sources(mitcad_geometry PRIVATE
   src/sweep.cpp
   src/sweep.hpp
   src/thread.cpp
+  src/local_boolean.cpp
+  src/local_boolean.hpp
   include/mitcad/geometry/hole.hpp
   include/mitcad/geometry/reference.hpp
   include/mitcad/geometry/revolve.hpp
@@ -123,6 +125,15 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/input_check.cpp
   include/mitcad/geometry/input_check.hpp)
+# Booleans on perforated bodies: holes away from the tool sit out (mitcad#72).
+target_sources(mitcad_geometry PRIVATE
+  src/far_features.cpp
+  src/far_features.hpp)
+# The material a near copy of a body lacks, cut only where the two differ
+# (the import's history-based guesses, mitcad#85).
+target_sources(mitcad_geometry PRIVATE
+  src/removed.cpp
+  include/mitcad/geometry/removed.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -163,9 +174,24 @@ if(BUILD_TESTING)
   target_sources(test_geometry PRIVATE tests/test_cancel.cpp)
   # Operations leave their inputs as they are (T0e), the analyses too.
   target_sources(test_geometry PRIVATE tests/test_input_check.cpp)
+  # Booleans on perforated bodies (mitcad#72).
+  target_sources(test_geometry PRIVATE tests/test_far_features.cpp)
+  # The material a near copy of a body lacks (mitcad#85).
+  target_sources(test_geometry PRIVATE tests/test_removed.cpp)
+  # A mirror image joined only where it differs from the body (mitcad#88).
+  target_sources(test_geometry PRIVATE tests/test_mirror_join.cpp)
   target_link_libraries(test_geometry PRIVATE mitcad_geometry_analysis)
   target_link_libraries(test_geometry PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry COMMAND test_geometry)
+  # OCCT's crash handlers next to the application's crash report (mitcad#62).
+  if(NOT WIN32)
+    add_executable(test_guard tests/test_guard.cpp)
+    target_link_libraries(test_guard PRIVATE mitcad_geometry mitcad_warnings)
+    add_test(NAME geometry.guard_inside COMMAND test_guard inside)
+    set_tests_properties(geometry.guard_inside PROPERTIES PASS_REGULAR_EXPRESSION "converted: SIGSEGV")
+    add_test(NAME geometry.guard_outside COMMAND test_guard outside)
+    set_tests_properties(geometry.guard_outside PROPERTIES PASS_REGULAR_EXPRESSION "earlier handler: signal 11")
+  endif()
 endif()
 
 # Data exchange and analysis services, separate libraries on top of OCCT.

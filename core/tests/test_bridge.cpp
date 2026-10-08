@@ -2,10 +2,12 @@
 // End-to-end check of the C++ -> Rust model -> C++/OCCT chain without the
 // UI: JSON commands in, shapes and names out.
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -13,14 +15,31 @@
 #include <thread>
 #include <vector>
 
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <BRep_Tool.hxx>
+#include <GeomAPI_PointsToBSplineSurface.hxx>
+#include <Geom_BSplineSurface.hxx>
+#include <NCollection_Array2.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Face.hxx>
+#include <gp_Vec.hxx>
 
+#include "bridge/analysis.hpp"
+#include "bridge/memory.hpp"
 #include "mitcad/geometry/geometry.hpp"
 #include "mitcad_bridge/lib.h"
+#include "mitcad_bridge/memory.h"
 #include "rust/cxx.h"
+
+// The Rust panic hook's sink and a test panic (core/ffi/src/panic_note.rs).
+extern "C" void mitcad_set_panic_sink(void (*sink)(const char* message, std::size_t length));
+extern "C" void mitcad_test_panic_note();
 
 namespace {
 
@@ -703,6 +722,185 @@ void test_remote_bridge() {
   }
 }
 
+// The positions of a sketch's points ("at": [x, y]) in the sketch query.
+std::vector<std::array<double, 2>> sketch_points(const mitcad::Document& document, const std::string& uid) {
+  const std::string json(document.query(R"({"query": "sketch", "uid": ")" + uid + "\"}"));
+  std::vector<std::array<double, 2>> out;
+  const std::string key = R"("at":[)";
+  for (std::size_t at = json.find(key); at != std::string::npos; at = json.find(key, at + 1)) {
+    char* end = nullptr;
+    const double x = std::strtod(json.c_str() + at + key.size(), &end);
+    const double y = std::strtod(end + 1, nullptr);
+    out.push_back({x, y});
+  }
+  return out;
+}
+
+bool has_point(const std::vector<std::array<double, 2>>& points, double x, double y) {
+  for (const auto& p : points) {
+    if (std::abs(p[0] - x) < 1e-6 && std::abs(p[1] - y) < 1e-6) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Project with Projection Link, as the application sends it (mitcad#40): a
+// vertical edge and the top face of the block into a sketch on XZ (sketch
+// y is -Z). When the block's sketch dimension or its extrude distance
+// changes, the projected entities follow, by their topological names.
+void test_linked_projection_follows_its_source() {
+  auto document = mitcad::new_demo_document(); // d1 = 60, d2 = 40, d3 = 20
+  run(*document, R"({"cmd": "sketch.create", "plane": "xz"})"); // F3
+  run(*document, R"({"cmd": "sketch.project", "sketch": "F3", "source": ")" + corner1("F2") +
+                     R"(", "body": "F2.b0", "linked": true})");
+  const std::string top = "F2:end(" + kRectangle + ")";
+  run(*document, R"({"cmd": "sketch.project", "sketch": "F3", "source": ")" + top +
+                     R"(", "body": "F2.b0", "linked": true})");
+  auto points = sketch_points(*document, "F3");
+  CHECK(has_point(points, 60, 0) && has_point(points, 60, -20) && has_point(points, 0, -20));
+  CHECK(!has_point(points, 80, 0));
+  CHECK(contains(run(*document, set("d1", 80)), R"("error":null)"));
+  points = sketch_points(*document, "F3");
+  CHECK(has_point(points, 80, 0) && has_point(points, 80, -20) && has_point(points, 0, -20));
+  CHECK(!has_point(points, 60, 0) && !has_point(points, 60, -20));
+  CHECK(contains(run(*document, set("d3", 30)), R"("error":null)"));
+  points = sketch_points(*document, "F3");
+  CHECK(has_point(points, 80, 0) && has_point(points, 80, -30) && has_point(points, 0, -30));
+  CHECK(!has_point(points, 80, -20));
+}
+
+// Distances from a body's faces (the .f3d import's fillet edge guesses):
+// zero on a spline face (projected from the nearest point of its grid) and
+// on an extruded side face, at most 1e-5 for a point 2e-6 off a face, the
+// distance for one farther off.
+void test_boundary_distances_on_spline_faces() {
+  NCollection_Array2<gp_Pnt> heights(1, 8, 1, 8);
+  for (int i = 1; i <= 8; ++i) {
+    for (int j = 1; j <= 8; ++j) {
+      heights(i, j) = gp_Pnt(2.0 * i, 2.0 * j, 0.5 * std::sin(i) * std::cos(0.7 * j));
+    }
+  }
+  const Handle(Geom_BSplineSurface) wave = GeomAPI_PointsToBSplineSurface(heights).Surface();
+  const TopoDS_Face top = BRepBuilderAPI_MakeFace(wave, 1e-7);
+  const mitcad::geometry::Shape body(BRepPrimAPI_MakePrism(top, gp_Vec(0.0, 0.0, -5.0)).Shape());
+  double u0 = 0.0;
+  double u1 = 0.0;
+  double v0 = 0.0;
+  double v1 = 0.0;
+  wave->Bounds(u0, u1, v0, v1);
+  std::vector<double> points;
+  const auto add = [&](const gp_Pnt& p) { points.insert(points.end(), {p.X(), p.Y(), p.Z()}); };
+  // On the spline at a few places, 2e-6 and 0.3 above it, and on a side.
+  const std::array<std::array<double, 2>, 3> at{{{0.3, 0.6}, {0.55, 0.2}, {0.8, 0.85}}};
+  for (const auto& [s, t] : at) {
+    gp_Pnt p;
+    gp_Vec du;
+    gp_Vec dv;
+    wave->D1(u0 + s * (u1 - u0), v0 + t * (v1 - v0), p, du, dv);
+    const gp_Vec normal = du.Crossed(dv).Normalized();
+    add(p);
+    add(p.Translated(normal * 2e-6));
+    add(p.Translated(normal * 0.3));
+  }
+  add(wave->Value(0.5 * (u0 + u1), v0).Translated(gp_Vec(0.0, 0.0, -2.0)));
+  for (int pass = 0; pass < 2; ++pass) {
+    // (The second pass reads the distances kept with the shape.)
+    const rust::Vec<double> d = mitcad::bridge::analysis_boundary_distances(
+        body, rust::Slice<const double>(points.data(), points.size()));
+    CHECK(d.size() == 10);
+    for (std::size_t k = 0; k < 3; ++k) {
+      CHECK(d[3 * k] == 0.0);
+      CHECK(d[3 * k + 1] <= 1e-5);
+      CHECK(std::abs(d[3 * k + 2] - 0.3) < 0.05);
+    }
+    CHECK(d[9] <= 1e-6);
+  }
+}
+
+// A Rust panic's message reaches the application's sink (mitcad#62),
+// before the hook that prints it.
+std::string g_panic_note;
+
+void note_panic(const char* message, std::size_t length) { g_panic_note.assign(message, length); }
+
+void test_panic_note() {
+  mitcad_set_panic_sink(&note_panic);
+  mitcad_test_panic_note();
+  CHECK(contains(g_panic_note, "Rust panic: panicked at "));
+  CHECK(contains(g_panic_note, "panic_note.rs:"));
+  CHECK(contains(g_panic_note, "panic for a test of the note"));
+}
+
+// Where segments cross a body's faces (the .f3d import's thread angles,
+// mitcad#68): a 10 mm block with a hole of radius 2 at (3, 7).
+// Each crossing once (also on an edge two faces share), in order, entering
+// the material or leaving it; none for a segment inside or outside.
+void test_segment_crossings() {
+  const TopoDS_Shape hole = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(3, 7, -1), gp::DZ()), 2.0, 12.0).Shape();
+  const mitcad::geometry::Shape body(BRepAlgoAPI_Cut(BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape(), hole).Shape());
+  const auto crossings = [&](std::array<double, 6> segment) {
+    const rust::Vec<double> c =
+        mitcad::bridge::analysis_segment_crossings(body, rust::Slice<const double>(segment.data(), segment.size()));
+    return std::vector<double>(c.begin(), c.end());
+  };
+  const auto same = [](const std::vector<double>& a, const std::vector<double>& b) {
+    if (a.size() != b.size()) {
+      return false;
+    }
+    for (std::size_t i = 0; i < a.size(); ++i) {
+      if (std::abs(a[i] - b[i]) > 1e-7) {
+        return false;
+      }
+    }
+    return true;
+  };
+  // Across the hole: in at x 0, out at 1, in at 5, out at 10.
+  CHECK(same(crossings({-1, 7, 5, 11, 7, 5}), {1.0 / 12, -1, 2.0 / 12, 1, 6.0 / 12, -1, 11.0 / 12, 1}));
+  // The other way round.
+  CHECK(same(crossings({11, 7, 5, -1, 7, 5}), {1.0 / 12, -1, 6.0 / 12, 1, 10.0 / 12, -1, 11.0 / 12, 1}));
+  // Through two vertical edges of the block, past the hole.
+  CHECK(same(crossings({-1, -1, 2, 11, 11, 2}), {1.0 / 12, -1, 11.0 / 12, 1}));
+  // Within the material, and in the hole.
+  CHECK(crossings({1, 1, 1, 1, 1, 9}).empty());
+  CHECK(crossings({3, 7, 0, 3, 7, 10}).empty());
+}
+
+void set_env(const char* name, const char* value) {
+#ifdef _WIN32
+  _putenv_s(name, value);
+#else
+  setenv(name, value, 1);
+#endif
+}
+
+// An allocation that fails inside a kernel operation (std::bad_alloc, as
+// MITCAD_TEST_OCCT_OUT_OF_MEMORY makes one) is that operation's error, which
+// says it ran out of memory (mitcad#80), and the document goes on; and the
+// process's memory against its limits.
+void test_out_of_memory_in_an_operation() {
+  auto document = mitcad::new_demo_document();
+  set_env("MITCAD_TEST_OCCT_OUT_OF_MEMORY", "fillet");
+  std::string failed;
+  try {
+    failed = std::string(document->command(fillet(quoted(corner1("F2")), 3)));
+  } catch (const rust::Error& error) {
+    failed = error.what();
+  }
+  set_env("MITCAD_TEST_OCCT_OUT_OF_MEMORY", "");
+  CHECK(contains(failed, "fillet: out of memory"));
+  CHECK(near(body_volume(*document), 60.0 * 40.0 * 20.0));
+  run(*document, R"({"cmd": "undo"})");
+  CHECK(contains(run(*document, fillet(quoted(corner1("F2")), 3)), R"("uid":"F)"));
+  CHECK(near(body_volume(*document), 60.0 * 40.0 * 20.0 - fillet_loss(3) * 20.0));
+
+  const mitcad::bridge::MemoryUse memory = mitcad::bridge::memory_use();
+  CHECK(memory.resident > 0);
+  CHECK(memory.limit > 0);
+  CHECK(memory.used > 0 && memory.used <= memory.limit);
+  CHECK(!memory.limit_kind.empty());
+}
+
 } // namespace
 
 int main() {
@@ -720,6 +918,11 @@ int main() {
   test_jobs_handed_between_threads();
   test_kernel_operation_cancelled_inside();
   test_remote_bridge();
+  test_linked_projection_follows_its_source();
+  test_boundary_distances_on_spline_faces();
+  test_panic_note();
+  test_segment_crossings();
+  test_out_of_memory_in_an_operation();
 
   if (failures == 0) {
     std::puts("test_bridge: all checks passed");

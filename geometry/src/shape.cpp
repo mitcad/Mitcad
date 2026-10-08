@@ -2,11 +2,15 @@
 #include "mitcad/geometry/shape.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <unordered_map>
 #include <utility>
 
+#include <BRepLib.hxx>
 #include <BRep_Tool.hxx>
+#include <Geom_Plane.hxx>
+#include <Geom_RectangularTrimmedSurface.hxx>
 #include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_List.hxx>
 #include <TopExp.hxx>
@@ -68,12 +72,65 @@ std::vector<int> adjacent_to(const ReferenceIndex& index, const std::string& ref
   return found;
 }
 
+// Of several references that a matching edge or vertex must all reach,
+// the one whose faces have the fewest of them: the edges between a plate's
+// top and each of its thousands of holes were each looked for among all
+// the top's edges, quadratic in the holes.
+const std::string& fewest_adjacent(const ReferenceIndex& index, const std::vector<std::string>& references,
+                                   const std::vector<std::vector<int>>& adjacent) {
+  const std::string* best = &references.front();
+  std::size_t fewest = SIZE_MAX;
+  for (const std::string& reference : references) {
+    std::size_t count = 0;
+    const auto faces = index.find(reference);
+    if (faces != index.end()) {
+      for (int face : faces->second) {
+        count += adjacent[static_cast<std::size_t>(face)].size();
+      }
+    }
+    if (count < fewest) {
+      fewest = count;
+      best = &reference;
+    }
+  }
+  return *best;
+}
+
+bool on_plane(const TopoDS_Face& face) {
+  Handle(Geom_Surface) surface = BRep_Tool::Surface(face);
+  if (const Handle(Geom_RectangularTrimmedSurface) trimmed =
+          Handle(Geom_RectangularTrimmedSurface)::DownCast(surface);
+      !trimmed.IsNull()) {
+    surface = trimmed->BasisSurface();
+  }
+  return !Handle(Geom_Plane)::DownCast(surface).IsNull();
+}
+
+// Stores the curves on their planes of the edges of planar faces that have
+// none. OCCT does not need them there (BRep_Tool::CurveOnPlane projects
+// the 3D curve), but it projects anew on every call: booleans ask for each
+// face's UV bounds and classify points on its faces many times, and the
+// projections took two fifths of a large design's import. A new shape
+// stores them once; edges it shares with earlier shapes have them already.
+void store_curves_on_planes(const TopoDS_Shape& shape) {
+  for (TopExp_Explorer faces(shape, TopAbs_FACE); faces.More(); faces.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(faces.Current());
+    if (!on_plane(face)) {
+      continue;
+    }
+    for (TopExp_Explorer edges(face, TopAbs_EDGE); edges.More(); edges.Next()) {
+      BRepLib::BuildPCurveForEdgeOnPlane(TopoDS::Edge(edges.Current()), face);
+    }
+  }
+}
+
 } // namespace
 
 Shape::Shape(TopoDS_Shape shape, const std::vector<NamedFace>& faces) : m_shape(std::move(shape)) {
   if (m_shape.IsNull()) {
     return;
   }
+  store_curves_on_planes(m_shape);
   TopExp::MapShapes(m_shape, TopAbs_FACE, m_faces);
   TopExp::MapShapes(m_shape, TopAbs_EDGE, m_edges);
   TopExp::MapShapes(m_shape, TopAbs_VERTEX, m_vertices);
@@ -218,7 +275,7 @@ void Shape::derive_edge_names() {
     // Number the edges the way a reference resolves: among all edges between
     // faces matching the two names.
     std::vector<int> candidates;
-    for (int j : adjacent_to(index, a, face_edges)) {
+    for (int j : adjacent_to(index, fewest_adjacent(index, {a, b}, face_edges), face_edges)) {
       if (edge_matches(j, a, b)) {
         candidates.push_back(j);
       }
@@ -288,7 +345,7 @@ void Shape::derive_vertex_names() {
   }
   for (const auto& [faces, members] : groups) {
     std::vector<int> candidates;
-    for (int j : adjacent_to(index, faces.front(), face_vertices)) {
+    for (int j : adjacent_to(index, fewest_adjacent(index, faces, face_vertices), face_vertices)) {
       if (vertex_matches(j, faces)) {
         candidates.push_back(j);
       }

@@ -38,6 +38,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -114,6 +115,12 @@ struct BuildOptions {
   // Fill the report's volumes, area, box and validity (costly on large
   // bodies; the .f3d importer measures the bodies itself).
   bool measure = true;
+  // Called as the build advances (ShapeFix face by face), at most ten
+  // thousand times: healing a body of tens of thousands of faces takes
+  // minutes, which a caller watching for hangs must not take for one (the
+  // .f3d import's watchdog, mitcad#82). Not called while a step of OCCT's
+  // does not return. May be empty.
+  std::function<void()> progress;
 };
 
 struct BuildReport {
