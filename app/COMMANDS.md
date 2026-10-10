@@ -397,7 +397,12 @@ only when the answers changed). They only show and emit;
   steps into one `Move Timeline Marker` (none when it ends where it
   began). Dragging a feature checks `can_reorder`. Groups are the model's
   (`group_features`); folding is the window's (`TimelineWidget`
-  `m_collapsed`), not saved. Colours of the marker, buttons and strike
+  `m_collapsed`), not saved. So is the filter (mitcad#98,
+  `TimelineWidget::setFilter`, the filter button and the browser's Show
+  in Timeline Only): hidden features take no room (`Item::filtered`), the
+  marker and drops land on `shownBoundary` places, and the playback
+  buttons step between them; it logs `Timeline filter: <label>: n of m
+  features`. Test: `tools/ui-component-sketch-test.sh`. Colours of the marker, buttons and strike
   line come from the palette and are repainted on a palette or style
   change (`TimelineWidget::changeEvent`). Test: `tools/ui-theme-test.sh`
   (the scheme switched with `MITCAD_TEST_COLOR_SCHEME`).
@@ -555,7 +560,7 @@ settings in the user's settings (`ViewSettings`, group `view`);
   zooms, Alt + left orbits). Pinch, rotation and two-finger double tap
   work in every scheme (`OcctViewer::event`).
 - **Preferences** (`tools.preferences`): one page per group (General,
-  Navigation, Display, Cache, Version Control, Updates, 3D Print) so the
+  Navigation, Display, Cache, Cloud, Updates, 3D Print) so the
   window fits 1366 × 768; each page is also a command
   `tools.preferences.<page>` that the search finds by its settings. OK
   saves every page. On macOS the pages are the panes of `SettingsWindow`
@@ -772,11 +777,14 @@ UI thread.
 | `LayoutGrid.*` | the layout grid |
 | `files/MainWindowFiles.cpp` | the File menu: open, recent files, close, import, export, Insert Component, drops |
 | `files/FileFormats.*`, `files/FileDialogs.*` | file kinds by extension and dialog filters; Export, Insert DXF, Insert Mesh, linked or copy, the import report |
-| `files/F3dImport.*` | `.f3d`, FreeCAD and `.ipt` import in a worker process behind a progress dialog |
+| `files/F3dImport.*` | `.f3d`, FreeCAD, `.ipt` and `.iam` import in a worker process behind a progress dialog |
 | `files/Autosave.*`, `files/Recovery.*`, `files/MainWindowAutosave.cpp` | autosave and recovery |
-| `files/MainWindowVersions.cpp`, `files/VersionDialogs.*` | saving versions: Save and Save Version in a versioned project, New Project, Start Version History, the author, changes and renames made outside Mitcad, the status bar's version |
+| `files/MainWindowVersions.cpp`, `files/VersionDialogs.*` | saving versions: Save and Save Version in a versioned project, the author, changes and renames made outside Mitcad, the indicator's version |
 | `files/VersionHistory.*` | the Version History window |
-| `files/Remote*.*` | remote repositories: connect, open from remote, sync, check for newer versions, settings; `RemoteTask` runs one operation on a thread of its own |
+| `files/MainWindowProjects.cpp`, `files/Projects.*` | Local and Cloud projects (mitcad#89): the window's current project (`ProjectState`), New Project, Open Project, Open from Cloud, Open Read-Only, Project Settings, Move to a Project |
+| `files/ProjectDialogs.*`, `files/ProjectSettings.*`, `files/CloudSection.*`, `files/CloudAddress.*` | their dialogs: New Project, Open from Cloud, the design chooser, Change Address, Project Settings; the shared Cloud section (service, address, the check, Trust This Server); addresses composed and read back (Qt Core, `app.unit`) |
+| `files/ProjectIndicator.*` | the project indicator and its menu |
+| `files/Remote*.*` | the current Cloud project's remote: sync, check for newer versions, open in browser, sending versions, Resolve Sync Conflicts, Preferences' Cloud page; `RemoteTask` runs one operation (a project's or a projects command) on a thread of its own |
 | `files/Print3d.*`, `files/MainWindowPrint.cpp` | 3D Print: slicers found, settings, file names, the dialog and Preferences group; the command |
 | `update/` | automatic updates ([docs/updates.md](../docs/updates.md)) |
 | `report/` | feedback and error reports ([below](#feedback-and-error-reports)): `ReportCenter` (Help › Send Feedback, the offers, the delivery), `ReportDialogs` (the form, the screenshot's crop, the preview), `ReportText` (masking, crash files, duplicate keys, the issue form's address; Qt Core, `app.unit`), `CrashHandler` (the signal and exception handlers, plain C++, also in `mitcad-render`) |
@@ -793,7 +801,8 @@ same ways without questions (mm, the XY plane, linked).
 |---|---|
 | `.f3d`, `.f3z` | a new document with the design's history (worker process, below) |
 | `.FCStd` | a new document with the bodies and PartDesign/Part history (`import_fcstd`, same worker; commands.md, "FreeCAD import (.FCStd)"); no Stop |
-| `.ipt` | a new document with the part's stored bodies, one base feature each (`import_ipt`, same worker; commands.md, ".ipt import"); no Stop; the report lists the bodies, part number, material and units |
+| `.ipt` | a new document with the part's stored bodies, one base feature each (`import_ipt`, same worker, `hang_limit` 90 s; commands.md, ".ipt import"); no Stop; the report lists the bodies, part number, material and units |
+| `.iam` | a new document with the assembly's components and occurrences, each part imported once with its features (`import_ipt`, which imports an assembly with `import_iam`; same worker; commands.md, ".iam import"); no Stop; the report lists the occurrences, how each file was found, missing files and the checks against the file |
 | STEP, IGES, BRep | a base feature (`import_file`, one undo step `Import part.step`) |
 | STL, OBJ | mesh bodies, after asking the unit (Insert Mesh) |
 | DXF | a new sketch on a plane (`sketch.create` + `sketch.import_dxf`, one undo step `Insert drawing.dxf`), or into the edited sketch; the dialog uses the `dxf_info` query (origin placement, layers) |
@@ -882,8 +891,8 @@ Each run is a session with a UUID. Its files:
 
 - `<id>.lock`: a `QLockFile` from the first write to the end; stale only
   when the process is gone.
-- `<id>.mitcad`: the project file.
-- `<id>.json`, written last: `"format": "mitcad-autosave"`, `version` 1,
+- `<id>.<generation UUID>.mitcad`: an immutable project snapshot.
+- `<id>.json`, atomically published last: `"format": "mitcad-autosave"`, `version` 2,
   `session`, `pid`, `application`, `application_version`, `document`,
   `path` and `base_digest` of the file it was opened from or saved to,
   `saved_at`, `revision`, `project`, and the project file's `size` and
@@ -893,7 +902,12 @@ The project file is made on the UI thread, never while a job has the
 model (`Autosave skipped: busy`, retried in 5 s) or while a sketch
 command's preview is applied; an edit that rolled the timeline back is
 written with the marker it restores (`to_json_with_marker`). Both files
-are written on a thread of their own with `QSaveFile`. Save, Save As, a
+are written on a thread of their own with `QSaveFile`. The metadata points
+to a complete generation; earlier bytes stay until its replacement is
+published, so interrupted updates retain the last recoverable snapshot.
+Successful publication cleans obsolete snapshots and interrupted writes.
+Version 1 metadata with `<id>.mitcad` is still recovered and cleaned up.
+Save, Save As, a
 new document (New, Open, Close, an import) and undo back to the saved
 state remove the session's files; a normal end removes them and the lock;
 a crash leaves them. An imported `.f3d` design is written at once.
@@ -960,9 +974,11 @@ in commands.md, "Version history".
   query, read before saving marks the state: `Save <file>: <steps>`, the
   steps' labels joined while the line stays within 72 characters, then
   `and N more` with the whole list in the body.
-- Author (`versionAuthor`): git's (`identity`) while `versions/useGit` is
-  on (default) and git has one, else `versions/name`, `versions/email`;
-  confirmed once (`versions/confirmed`).
+- Author (`versionAuthor`): the project's (`identity`: the repository's
+  own `user.name` and `user.email`, which New Project and Project Settings
+  write, else git's configured user), else Preferences' default author
+  (`versions/name`, `versions/email`); asked (`askVersionAuthor`) only when
+  none has one, and kept as the default.
 - Before Save overwrites its file, `askVersionConflict` compares the
   `status` command's blob ids with those of the open or last save
   (`m_versionBase`, by path). After anything that writes the file
@@ -971,10 +987,9 @@ in commands.md, "Version history".
 - Opening runs `follow_rename` first: a file renamed or moved outside
   Mitcad within its project takes its display state along, and Save
   records the rename first.
-- New Project: `projectsDirectory()` (Documents/Mitcad, or
-  `MITCAD_PROJECTS_DIR`), `create_project_repository`,
-  `init_project_history`; cancelled at the author, what it added is
-  removed again. The new design remembers the folder (`m_projectDir`).
+- Projects are made in [Projects](#projects) below; an untitled design of
+  a project remembers its folder for Save As (`m_projectDir`, else the
+  current project's root).
 - Versions are per file: `v3` is the file's history length (`history`),
   not the project's commits.
 - Tests: `tools/ui-version-test.sh`; the Windows workflow test's part 8.
@@ -1004,26 +1019,134 @@ waits until the summaries are read.
 
 ### Remote repositories
 
-`files/RemoteController.cpp`: File › Connect Project to Remote, Open
-Project from Remote, Sync, Check for Newer Versions, Remote Settings, the
-automatic push and the status bar. The model's side: commands.md,
-"Remote repositories".
+`files/RemoteController.cpp`: File › Sync, Check for Newer Versions, Open
+in Browser, the automatic push and the remote's state in the project
+indicator, for the window's current project (`Host::projectRoot`). The
+model's side: commands.md, "Remote repositories".
 
 | Model command / bridge function | Used by |
 |---|---|
-| `connect` (`author` given) | Connect, and Change Address in Remote Settings, with a progress dialog; `remote_info` with `links` first, warning about `external_links` |
-| `clone_project(url, dir, control, false)` | Open Project from Remote; then opens the project file of `files` (the only one, or the one chosen) |
-| `push` | after each version Save records (Preferences, on by default); a network failure, `not_found` or `other` retries after 60 s, doubling up to 15 minutes |
-| `fetch` | on opening a design in a project with a remote, every 10 minutes (Preferences; 0: never), at the first change after opening when the last fetch is over 2 minutes old, after a refused push, and Check for Newer Versions; then `push` if versions wait and the remote has none newer |
+| `push` | after each version Save records (Project Settings, else Preferences; on by default); a network failure, `not_found` or `other` retries after 60 s, doubling up to 15 minutes |
+| `fetch` | on opening a design in a Cloud project, every 10 minutes (Project Settings, else Preferences; 0: never), at the first change after opening when the last fetch is over 2 minutes old, after a refused push, and Check for Newer Versions; then `push` if versions wait and the remote has none newer |
 | `incoming` | the status bar tooltip: who saved the remote's newest version, and when |
 | `incoming` with `path` | after a fetch and after Save: the notice of a newer version of the open file (`file_versions`, `differs`, `changed_here`) |
 | `sync` (`author`; after a conflict `resolutions` and `fetch` false) | Sync and the notice's Sync Now; `changed_paths` reopens the design |
 | `diff` (`from`: the conflict's `theirs.version.id`, `to`: `mine.version.id`) | Compare in Resolve Sync Conflicts |
 | `commit` (`Save <paths> before sync`) | a sync refused for `local_changes`: records the files listed in `uncommitted` first |
-| `remote_info`, `remote_remove` | the status bar's state and Remote Settings; Disconnect |
-| `git_info_at(program)` | Preferences › Version Control: the chosen git program (a path, or "" for the one found) and its version; the app sets `MITCAD_GIT` from it |
+| `remote_info` | the indicator's state, Project Settings' Status row |
+| `git_info_at(program)` | Preferences › Cloud: the chosen git program (a path, or "" for the one found) and its version; the app sets `MITCAD_GIT` from it |
 
 Tests: `tools/ui-sync-test.sh` and the Windows workflow test.
+
+### Projects
+
+Local and Cloud projects (mitcad#89; `files/MainWindowProjects.cpp`,
+`files/ProjectDialogs`, `files/ProjectSettings`, `files/CloudSection`,
+`files/ProjectIndicator`; commands.md, "Projects"). The window keeps the
+current project (`ProjectState`: kind `None`, `Local`, `Cloud` or
+`NoHistory`, root, remote) as state of its own; the indicator, the
+remote and Project Settings use its root.
+
+| Command | What |
+|---|---|
+| `file.new_project` New Project... | the New Project dialog: folder, Local or Cloud, author, the Cloud section; Create, Open It, Open It Instead, Create as Local for Now |
+| `file.open_project` Open Project... | a folder (Qt's folder dialog) recognised with `inspect_folder`: a project opens with its design (the chooser for several), an older one gets its history (`init_project_history`), anything else goes to New Project with the folder fixed |
+| `file.open_read_only` Open Read-Only... | a design opened without an edit lock (`m_openingReadOnly` for the lock controller) |
+| `file.open_remote` Open from Cloud... | the Open from Cloud dialog: clone, Create Project Here, Make It a Project, Open It |
+| `file.project_settings` Project Settings... | the current project's settings (a loose design: Move to a Project offered) |
+| `file.move_to_project` Move to a Project... | a loose design into a new project (New Project, its own folder by default) or an existing one; not in the File menu: the indicator's menu, Save Version's and Version History's questions |
+
+| Model command | Used by |
+|---|---|
+| `inspect_folder` | the current project of a design opened or saved (`projectOfFile`); Open Project; the folder checks of New Project and Open from Cloud (a thread of their own, after a pause while typing) |
+| `check_remote` | the Cloud section of New Project and Open from Cloud (a thread of its own, after a pause, and when the dialog gets the focus back) |
+| `remote_check` (a project's) | the Cloud section of Project Settings' Share and of Change Address (`related`) |
+| `create_project` (`design`: an empty document named after the folder; `url` for Cloud; `shared` with New Project's live updates) | New Project's Create, Create as Local for Now, Open from Cloud's Create Project Here; with `init_bare` first for a new shared folder |
+| `clone_project` (`adopt` for Make It a Project) | Open from Cloud |
+| `connect` with `onto_files` | Project Settings' Share (conflicts in Resolve Sync Conflicts) |
+| `remote_set`, `remote_remove` | Change Address, Stop Syncing |
+| `project_settings`, `set_project_settings`, `set_identity`, `identity` | Project Settings (a change for everyone is a version, sent as a saved one is); the sending and checking of the remote |
+| `remember_design` | each design opened in a project (the chooser selects it next time) |
+| `project_settings`' `authors` | Share lists the authors of the versions to publish |
+| `git_info` (`credential_helper`, `author`) | HTTPS or SSH by default; the author New Project offers; Cloud off without git |
+| `ssh_public_key`, `host_keys`, `trust_host_key` | Copy Public Key; Trust This Server |
+
+Tests: `tools/ui-project-test.sh`, `tools/ui-cloud-test.sh`, `tools/ui-sync-test.sh`,
+`tools/ui-version-test.sh`, the Windows and macOS workflow tests.
+
+### Edit locks
+
+`files/LockController.cpp`, `files/MainWindowLocks.cpp` (mitcad#89; the
+user's side in [docs/user-guide.md](../docs/user-guide.md#edit-locks),
+the core's in commands.md, "Edit locks"): the open design's edit lock in a
+Cloud project with edit locks on, and the window's read-only mode. The
+lock commands run as `RemoteTask`s, one at a time, with a project of
+their own; `MITCAD_LOCK_TIME_SCALE` speeds up their timers as it does the
+core's clock (UI tests). What others should learn at once (locks,
+requests, receipts, answers, withdrawals, who has the design open) goes to
+the live controller through `LiveLink`, and its events come back through
+`LockEvents` (`files/MainWindowLive.cpp` joins them): a lock, request or
+version event polls at once, open events list who else has the design
+open, a holder's offline will asks whether to take the lock.
+
+| Model command | Used by |
+|---|---|
+| `lock_take` (`poll_seconds`, `mqtt`; `take_over` with the lock's commit), then `lock_status` (`network` false: `newer`) | a design of a Cloud project opened (not by Open Read-Only), Edit in the banner, Take Over, a request whose holder did not answer, the remote out of reach (tried again every poll) |
+| `lock_poll` (`mqtt`) | every `poll_seconds` (2 minutes while live updates are connected) while the design has a lock or is read-only; at once on a live lock, request or version event |
+| `lock_refresh` (`active_at`, `state`, `idle_minutes`, `poll_seconds`, `mqtt`) | every half idle time, when the lock turns idle or active, after Save |
+| `lock_request` (`message`), `lock_answer` (`declined`, `keep` for 15 minutes) | Request Edit Access; the holder's Decline and Keep 15 More Minutes |
+| `lock_hand_over` (`to`) | the holder's Release, a request while the lock is idle, a request not answered within the idle time |
+| `lock_release` (`all`) | closing the design or quitting, the idle time, Release Edit Lock, edit locks turned off, Stop Syncing |
+| `lock_probe` | Project Settings of a Cloud project, once per remote: a remote that refuses lock refs disables the Edit locks row |
+| `sync_plan` (`fetch` false, `locks` `last`, `session`) | before Sync sends versions: files someone else holds (Send Anyway) |
+| `sync` (`RemoteController::syncNow`) | the versions sent before a release or a hand-over |
+| `load_version` (bridge) | a read-only window shows the editor's version after a fetch (`incoming`) |
+
+Read-only windows: `MainWindow::isAvailable` disables all but the view's
+commands, inspections and `file.export`, `file.version_history`,
+`file.sync`, the project and opening commands, `make.print3d`, the
+libraries' browsing; `MainWindow::command` refuses every model command
+but `set_isolation`, `set_origin_visible`, the analyses' commands,
+`export`, `export_sketch` and the reading ones (`ReadOnlyError`); Save
+offers Save as Copy and Save as New Version for unsaved changes kept from
+editing; sketch mode, command panels and Restore are refused.
+
+Tests: `tools/ui-locks-test.sh` (two and three instances), the Windows
+workflow test (Take Over after a killed session).
+
+### Live updates
+
+Live updates through an MQTT broker (mitcad#89; `files/LiveController`,
+`files/LiveDialogs`, `files/LiveBrokers`, `files/Keychain`,
+`files/MainWindowLive.cpp`; commands.md, "Live updates"). One `LiveHub`
+for the application: its commands on the UI thread, its events read on a
+thread of the controller's own and handled on the UI thread. The window's
+current Cloud project subscribes when it opens with live updates set
+(Project Settings, for everyone or on this computer) and Preferences ›
+Cloud allows them, and unsubscribes when another project opens or it stops
+syncing; quitting closes the hub with `wait_ms` (a clean leave).
+
+| Hub command / model command | Used by |
+|---|---|
+| `project_settings` (`live_updates`), `project_id`, `identity` | the broker and prefix this computer uses, the project's id on the broker (its first commit), the name others see |
+| `subscribe` (`broker`, `prefix`, `session`: autosave's, `user` and `password` of the keychain over TLS only) | a project opens (after the trust question and the keychain), its live settings change, a sign-in; a new connection for another user unsubscribes the old one |
+| `unsubscribe` | another project opens, the live settings change, Stop Syncing, Preferences' Forget and Sign Out, live updates turned off |
+| `publish` | the lock controller's `LiveLink` calls; `version` after a push or a sync that pushed (`RemoteController::versionsSent`); `open` and `closed` for the open design while no lock controller does it |
+| `connect` with a password over `mqtt://` | the sign-in dialog: the core's refusal (`insecure`) shown in it |
+| `test` (on a thread of its own) | Project Settings' Test: its steps in a dialog |
+| `close` (`wait_ms` 2000) | quitting |
+| events: `state`, `subscribed` | the indicator's `Live` / `Live offline (polling)`; `auth_failed` shows the sign-in notice; a subscription after a lost connection checks the remote |
+| events: `version` (not this session's) | the remote checked at once (`RemoteController::versionAnnounced`): the indicator's newer versions and the notice of a newer version of the open file |
+| events: all of a project's | `LockEvents::liveEvent` of the lock controller, and `LockEvents::liveStateChanged` when the connection comes or goes |
+
+While the project's connection is up the remote is not checked on the
+timer (`RemoteController::setLive`). The trust answers are the settings
+`live/brokers` (address, trusted); credentials are QtKeychain entries in
+the service `Mitcad live updates`, keyed by host and port, holding the user
+name and the password; without a keychain they are kept for the session.
+
+Tests: `tools/ui-live-test.sh` (against a mosquitto it starts; skipped
+without one).
 
 ### Feedback and error reports
 
@@ -1150,6 +1273,18 @@ SVG at several sizes (`themeIcon`).
   from the model's `thread_sizes`.
 - **Press Pull** on one face of a fillet opens the fillet for the radius
   of the set that rounds its edge (`Built::editing`).
+- **Combine** (`solid.combine`, `MoveCommands.cpp`): a tool body picked
+  in another occurrence than the target (a body of another component, in
+  an assembly context) goes in with a link, `tool_links` (`source` the
+  tool's occurrence path, `target` the target's when it has one;
+  commands.md, *combine*, mitcad#104, mitcad#105): the tool is read where
+  it was picked and follows when either occurrence moves. `load` gives
+  the picks back their occurrences from the links. Test:
+  `tools/ui-component-combine-test.sh`.
+- **Patterns and Mirror** of features take fillets and chamfers among the
+  features (the timeline or a face they made picks them, as other
+  features); the model repeats them on the copies' edges (commands.md,
+  *Fillets and chamfers among the features*, mitcad#105).
 
 ## Known limitations
 
@@ -1240,14 +1375,14 @@ SVG at several sizes (`themeIcon`).
 | `Insert DXF drawing: unit mm, layers Outline (4) \| Holes (1) off`, `Insert DXF place lower_left at x,y`, `Insert DXF x at …`, `Insert DXF layer Holes at …`, `Insert DXF OK at …`, `Insert DXF: lower left corner at (10, 5), layers Outline` | the Insert DXF dialog (places in the main window's coordinates) and what it chose |
 | `Import of part.f3d started`, `Import item 3: Extrude2 parametric`, `Import of part.f3d: stop requested after 12 s`, `Import of part.f3d stopping: the remaining items take the file's bodies`, `Import of part.f3d cancelled`, `Import of part.f3d failed: …`, `Imported part.f3d: 2 bodies; items …[; stopped at Extrude3 (item 5)]`, `Import report: part.f3d: 28 items (25 parametric, …), 2 bodies, 2 of the file's 2 solids match[, stopped at Extrude3 (item 5)]`, `Import report summary: <the report's text above its list>`, `Import report kept: Pad.Length = Sheet.w * 2: <why>` | an `.f3d` or FreeCAD import (`stopped after the last item` when only the final comparison was left; `kept`: a FreeCAD expression kept as its value) |
 | `Recent files: a.mitcad \| b.step`, `Dropped <paths>`, `Document closed` | the File menu |
-| `Remote status: synced` (`ahead N`, `behind N`, `push`, `fetch`, `sync`, `conflict`, `offline`, `sign-in needed`, `remote not found`), `Remote task <command> started\|done\|failed (<class>): <message>`, `Remote push: sent N version(s) to origin/main`, `Remote check: ahead N, behind M`, `Remote notice: <text> [Sync Now, Dismiss]`, `Sync: <case>[ (<class>)], N replayed, sent\|nothing sent`, `Sync conflict: <path> (<kind>): <choice>`, `Open from Remote: <url> into <folder>: <files>` | remote repositories: the status bar's state, a remote task, a push, a check, the notice, a sync and its conflicts, a clone |
+| `Remote status: synced` (`ahead N`, `behind N`, `push`, `fetch`, `sync`, `conflict`, `offline`, `sign-in needed`, `remote not found`), `Remote task <command> started\|done\|failed (<class>): <message>`, `Remote push: sent N version(s) to origin/main`, `Remote check: ahead N, behind M`, `Remote notice: <text> [Sync Now, Dismiss]`, `Sync: <case>[ (<class>)], N replayed, sent\|nothing sent`, `Sync conflict: <path> (<kind>): <choice>`, `Sync done: <text>` | the current Cloud project's remote: its state (the indicator shows it), a remote task, a push, a check, the notice, a sync and its conflicts |
 | `Computing part.mitcad started`, `Computing part.mitcad: 57 of 196, Extrude6` (when the feature changes, at most 5 a second, after the first 50 ms), `Progress dialog shown: part.mitcad`, `Computing part.mitcad: cancel requested after <ms> ms`, `Computing part.mitcad cancelled after <ms> ms`, `Computing part.mitcad done in <ms> ms (<n> evaluated)`, `Opening part.mitcad cancelled` | a job on the model's worker thread (opening a project, an imported design, New, Close) |
 | `Computing set_parameter started` … `Computing set_parameter done in <ms> ms (<n> evaluated)` (a model command's job is named by its `cmd` and logged only when it takes over 50 ms; `Computing preview …` for a panel's preview), `Command set_parameter cancelled`, `Command undo refused: the model is busy computing`, `Preview Extrude: cancelled`, `Extrude: OK cancelled`, `Extrude: OK not done`, `Parameter d1 expression: 70 cancelled`, `Finish Sketch cancelled: Sketch1 stays open`, `Command Extrude: the timeline stays rolled back`, `Drag of p3 ended by a dialog`, `Manipulator Extrude distance dragged to 25 (ended by a dialog)`, `Context menu dropped: the model is computing` | commands and previews as jobs: a cancel, a call that came while a job ran (refused, or waiting until it is done), a drag the progress dialog ended |
-| `Autosave every 300 s to <folder>`, `Autosave off`, `Autosaved block.mitcad: 2865 bytes to <folder>/<id>.mitcad`, `Autosave removed for block.mitcad`, `Autosave skipped: busy` (or `previewing`), `Autosave of block.mitcad failed: <reason>` | autosave: the timer set at start and by Preferences, a write, the session's files removed, a write put off (`MITCAD_TEST_AUTOSAVE_SECONDS` for tests; `tools/ui-autosave-test.sh`) |
+| `Autosave every 300 s to <folder>`, `Autosave off`, `Autosaved block.mitcad: 2865 bytes to <folder>`, `Autosave removed for block.mitcad`, `Autosave skipped: busy` (or `previewing`), `Autosave of block.mitcad failed: <reason>` | autosave: the timer set at start and by Preferences, a write, the session's files removed, a write put off (`MITCAD_TEST_AUTOSAVE_SECONDS` for tests; `tools/ui-autosave-test.sh`) |
 | `Recovery: none`, `Recovery: 2 document(s) found`, `Recoverable block.mitcad: /path/block.mitcad, autosaved 2026-10-05T03:12:00Z, 2865 bytes` (`never saved`; `, the file has changed since`, `, the file is gone`, `, damaged: <why>`), `Recovery: removed the lock of session <id>`, `Recovery: later, 1 document(s) kept`, `Discarded recovery of block.mitcad`, `Recovered block.mitcad from autosave of 2026-10-05T03:12:00Z`, `Recovered session <id> removed`, `Recovering block.mitcad cancelled`, `Recovery of block.mitcad failed: <reason>`, `Save conflict: <path> changed since it was opened`, `Save conflict: overwrite` (`save as`, `cancelled`) | recovery: what was found, each session, the dialog's choices, the earlier session's files removed once this session wrote the document, and Save over a recovered document's changed file |
 | `Result store: restored 4, evaluated 2; stored 0 (0 bytes) in 0.1 ms`, `Result store: <error>`, `Result store: removed 12 old results (310.5 MB), 4800.0 MB kept`, `Result store cleared: 4 files, 0.2 MB`, `Import stored 17 results`, `Preferences: results on disk on, at most 5120 MB; in memory at most 7726 MB` | the result store: an open's job (restored from the store, evaluated, written) and a Save's, a write that failed, the clean-up beyond the size, Preferences' Clear, the `.f3d` import's worker, the Cache settings saved |
 | `Diagnostics: memory 307830 of 8101298176 bytes (11 results), disk 11238 bytes (4 files), process 355545088 bytes; last recompute 5 evaluated, 0 from the store, 1 cached`, `Diagnostics: cleared memory: 7 results, 120000 bytes`, `Diagnostics: cleared disk: 4 files, 11238 bytes`, `Diagnostics report written to <path>` | Help › Diagnostics: shown or refreshed, Clear Memory, Clear Disk, Export Report |
-| `Version recorded: part.mitcad abc1234 v3: <summary>`, `Version unchanged: part.mitcad (v3)`, `Version not recorded: <why>`, `Version failed: <error>`, `Version warning: <warning>`, `Version status: bracket, main, v3` (`…, no version`; `none` outside projects with history; when it changes), `Version author: Name <email> (git)` (or `(settings)`), `Version author dialog: git's Name <email>` (`the settings' (git has …)`, `git has none`), `Version author dialog cancelled`, `Save Version dialog: <automatic message's summary>`, `Save Version cancelled`, `Save Version: no version history for part.mitcad`, `Save conflict: <path> changed outside Mitcad (the file)` (or `(a newer version)`), `Save conflict: compare: <the diff's lines joined by " \| ">`, `Save conflict: new version` (`save as`, `cancelled`), `Renamed from a.mitcad: its display state moved along` | saving versions: a commit and what it did, the status bar's label, the author, Save Version, a change outside Mitcad before Save, a rename followed at opening |
+| `Version recorded: part.mitcad abc1234 v3: <summary>`, `Version unchanged: part.mitcad (v3)`, `Version not recorded: <why>`, `Version failed: <error>`, `Version warning: <warning>`, `Version status: bracket, main, v3` (`…, no version`; `none` outside projects with history; when it changes), `Version author: Name <email> (git)` (or `(settings)`), `Version author dialog: git has none` (an older project without an author), `Version author dialog cancelled`, `Save Version dialog: <automatic message's summary>`, `Save Version cancelled`, `Save Version: no version history for part.mitcad`, `Save conflict: <path> changed outside Mitcad (the file)` (or `(a newer version)`), `Save conflict: compare: <the diff's lines joined by " \| ">`, `Save conflict: new version` (`save as`, `cancelled`), `Renamed from a.mitcad: its display state moved along` | saving versions: a commit and what it did, the indicator's version (`Version status`), the author, Save Version, a change outside Mitcad before Save, a rename followed at opening |
 | `Version History dialog: part.mitcad, reading its versions`, `Version History: 3 versions of part.mitcad: v3 abc1234 <summary> \| v2 … (renamed from a.mitcad)` (at most 30), `Version History changes: v3 <changes> \| v2 … \| v1 first version`, `Version History selected v2 (abc1234): preview` (or `no preview`), `Version History compare v2 with v1: <heading and text joined by " \| ">` (`with the open design`), `Version History geometry v2 with v1: computing`, `…: <text>`, `…: cancelled`, `Version History open v2 (abc1234)`, `Version History restore v2 (abc1234)`, `Version History save copy v2 (abc1234)`, `Version History closed`, `Version History failed: <error>`, `Version History: no version history for part.mitcad`, `Restore dialog: v2 (abc1234) of part.mitcad` (` (unsaved changes)`), `Restore cancelled`, `Restore: the unsaved changes dropped`, `Version restored: part.mitcad v2 (abc1234) as v4 (def5678)`, `Opened version v2 (abc1234) of part.mitcad as part v2`, `Save Copy As dialog: part v2.mitcad`, `Save Copy As cancelled`, `Saved a copy of part.mitcad v2 (abc1234) as <path>`, `Version preview saved: <blob's 7 digits> (256 x 160)` | Version History: the list, the changes, the selection and its comparison, the geometry, the choice; Restore, Open and Save Copy As; a version's preview |
 | `Appearances dialog opened`, `Appearances for bodies: F1.b0 (custom1)` (the bodies' shared appearance; `none` without bodies), `Appearances item chrome at x,y` (the list's rows in sight), `Appearances field roughness at x,y` (also `name`, `base_color`, `emission_color`: their text fields), `Appearances new at x,y` (`delete`, `assign`, `close`), `Appearance selected: chrome`, `Created appearance custom1 (Chrome Copy) from chrome`, `Appearance custom1 roughness = 0.35` (`base_color = #d02020`; `… refused: <why>`), `Assigned appearance custom1 to F1.b0` (faces: `F1.b0 F1:top`), `Deleted appearance custom1`; mitcad#53: `Appearances for faces: F1.b0 F1:top (paint_red)`, `Appearances field texture_path at x,y` (also `texture_width`, `texture_height`, `texture_rotation`, `texture_projection`, `texture_embed`, `texture_remove`), `Appearances face F1.b0 F1:top paint_red at x,y` (the listed face appearances), `Appearances clear_faces at x,y`, `Cleared face appearances of F1.b0 F1:top`, `Appearance checker texture embedded` (`not embedded`, `removed`, `path <path>`, `size [...]`), `Appearance lost texture missing: <why>` | Edit Appearances (`tools/ui-appearance-test.sh`, `tools/ui-render-faces-test.sh`); places in the main window's coordinates |
 | `Render body F1.b0: appearance plastic_red` (`default`; with faces of their own `…, 1 faces paint_red`), `Render textures not drawn: <appearance>: <why>` | the rendered view's scene: each body's appearance and its faces' (`tools/ui-render-materials-test.sh`, `tools/ui-render-faces-test.sh`) |
@@ -1255,13 +1390,29 @@ SVG at several sizes (`themeIcon`).
 | `Render environment studio_dark, background view, ground shadows` (`environment`; `none`, `shadows and reflections`), `Render worker: environment studio_dark, 1 lights` (debug), `Render environment dialog opened`, `Render settings field film.exposure at x,y` (every field by its section and name, also `environment.image`, `background.color`, `ground.lowest`; a check box at its box), `Render settings rendered at x,y` (`reset`, `close`, `page environment`, `page lights`), `Render settings page lights` (the page shown; the places are logged again), `Render setting environment.preset = studio_dark` (`… refused: <why>`), `Render settings reset`, `Render light field power at x,y` (`list`, `new`, `add`, `delete`, `name`, `type`, `enabled`, `camera`, `position.0`…`direction.2`, `color`, `size`, `size_y`, `shape`, `spot_angle`, `spot_blend`, `angle`, `distance`, `aim`, `from_camera`), `Render light light1 added (point)`, `Render light light1 power = 25` (`… refused: <why>`; `space = camera`, `placed at the camera`, `aimed at a face`), `Render light light1: click a face to aim at`, `Render light light1 aimed at x, y, z (normal x, y, z)`, `Render light aim: no face there`, `Render light light1 deleted`, `Render light glyph light1 at x,y` (`tools/ui-render-lights-test.sh`), the environment's ending `, 1 lights` (`, 2 lights (1 off)`), `View message: Rendering: cannot read the environment image <path>: <why>; the studio lights the scene instead.` | the render settings: an environment sent to the worker, Render Environment's places (main window coordinates) and changes, an image the worker cannot read (`tools/ui-render-environment-test.sh`) |
 | `Send Feedback: the form shows`, `Feedback screenshot 1280x800`, `Feedback screenshot image at x,y`, `Feedback screenshot image size w h`, `Report screenshot cropped to 568x402`, `Feedback form: kind bug, summary '<s>', description 42 characters, contact given, diagnostics on, screenshot 568x402`, `Send Feedback cancelled`, `Report preview: <title>`, `Report section <id>: <text, lines joined by " \| ">`, `Report section <id> at x,y` (its check box), `Report text <id> at x,y` (its text), `Report key: mitcad-<key>`, `Report section <id> included` (`left out`), `Report not sent: the preview was cancelled`, `Report sent: '<title>', sections description, contact; link 812 characters`, `Report on the clipboard: <n> characters (too long for the link)`, `Report screenshot saved: <path> 568x402`, `Open URL (test, not opened): <url>`; `Internal error (<context>): <masked message>; key mitcad-<key>`, `Crash report of this application's import-worker: SIGSEGV <file>`, `Crash reports of earlier runs: 1, the newest SIGSEGV of the app`, `Error report offered (crash): <message>; key mitcad-<key>` (`worker-crash`, `error`), `Error report no more offers at x,y`, `Error reports: no more offers`, `Error report declined`, `Error report not offered (turned off): <message>`, `Crashing for a test (MITCAD_TEST_CRASH=app)`; on standard error of a crashed process `Mitcad crashed: SIGSEGV; crash report: <file>` | feedback and error reports (`tools/ui-report-test.sh`); places in the main window's coordinates |
 | `Sync 12` | with `MITCAD_TEST_SYNC=1` (the Linux UI tests): the answer to the Pause key (`ui_sync`), once the input before it is handled, at least 20 ms after it and when no watched timer runs (`framework/TestSync.hpp`) |
-| `New Project dialog: <folder offered>`, `New Project cancelled`, `New project inside the git repository <root>`, `Version history started in <root>: version abc1234 on main`, `New project <folder>`, `Start Version History dialog: <folder>` (` (a repository)`, ` (inside <root>)`; `: the project <root>`), `Start Version History: part.mitcad has version history already`, `Start Version History cancelled`, `Moved <path> to <path>`, `Preferences: versions by git's user, else Name <email>` (or `Name <email>`, `nobody`) | New Project, Start Version History, Preferences' author |
+| `Project: local Robot arm at <root>` (`cloud … at <root> (origin <url>)`, `no versions … at <root> (inside <repository>)`, `local … at <root> (remotes first, second, none followed)`, `none`), `Project indicator: Robot arm, local, v3` (`…, cloud, synced` / `ahead 2` / `behind 1` / `offline` / `remote not found` / `sign-in needed` / `conflict` / `not synced` / a running task `fetch`, `push`, `sync`; `…, cloud, no remote chosen`: several remotes and none followed; `not in a project`; `…, no versions (inside <repository>)`), `Project indicator at x,y`, `Project indicator menu: Sync Now \| Check for Newer Versions \| …`, `Project indicator menu chose file.sync` | the current project (mitcad#89): when it changes; the indicator's text, its place and its menu (entries as shown) |
+| `New Project dialog: <folder offered>`, `New Project dialog: folder <folder>: <kind>[ (inside <repository>)]` (the kinds of `inspect_folder`), `New Project dialog: storage cloud` (`local`), `New Project: creating <folder> (local)` (`(cloud <url>)`), `New Project: created <root>: version abc1234 on main[, sent \| , not sent (<class>)]`, `New Project failed (<class>): <message>`, `New Project: Open It <folder>`, `New Project: Open It Instead <url> into <folder>`, `New Project: Create as Local for Now`, `New Project cancelled`, `New project <root>` | New Project (also with the folder fixed by Open Project, and as Move to a Project's new project) |
+| `Cloud check started: <url>`, `Cloud check <url>: <what was found>` (`<class>: <message>` for a failure), `Cloud check again: <url>`, `Cloud section: open the new repository page <url>` (`SSH keys page`), `Copied the public key <path>`, `Trust This Server dialog: host: SHA256:… (verified \| mismatch \| not published)`, `Trust This Server cancelled`, `Trusted the keys of <host> in <known_hosts>`, `Trust This Server: <host> refused: <why>` | the Cloud section of New Project, Open from Cloud, Project Settings and Change Address |
+| `Open from Cloud dialog: <location>`, `Open from Cloud dialog: clone, enabled` (`create`, `adopt`, `open`, `none`; `disabled: <why>`), `Open from Cloud: <action> <url> into <folder>`, `Open from Cloud: <action> done into <root>[, not sent (<class>)]`, `Open from Cloud failed (<class>): <message>`, `Open from Cloud cancelled`, `Open from Cloud: opened <root> (<action>): <designs>` | Open from Cloud |
+| `Open Project: <folder>: <kind>`, `Open Project cancelled`, `Open Project: no designs in <root>: a new one, <path>`, `Version history started in <root>: version abc1234 on main`, `Design chooser: <project>: a.mitcad \| b.mitcad (selected b.mitcad)`, `Design chooser selected <design>`, `Design chooser: chose <design>` (`new design`), `Design chooser cancelled`, `Open Read-Only: <path>` | Open Project, its design chooser, Open Read-Only |
+| `Project Settings dialog: <name>, local; edit locks on, idle 10 min, poll 10 s; live updates none; author Name <email>; send at once on; check <choice>; live here project` (`cloud <url>`), `Project Settings: storage cloud (share)`, `Project Settings: authors to publish: …`, `Project Settings: share to <url>`, `Project Settings: shared <name> to <url>: versions sent` (`nothing sent`; ` (<class>)`), `Project Settings: share failed (<class>): <message>`, `Project Settings: stop syncing asked` (`cancelled`), `Project Settings: stopped syncing <root> (was <url>)`, `Change Address dialog: <url>`, `Change Address refused: <why>`, `Change Address cancelled`, `Project Settings: address changed to <url>`, `Project Settings: several remotes, none followed: first, second`, `Project Settings: following <name> (<url>), <name>/main` (`follow <name> failed: <message>`), `Project Settings: shared settings recorded: abc1234` (`no change`; `… refused: <why>`), `Project Settings: here: send at once on, check <choice>, live project`, `Project Settings: author Name <email>`, `Project Settings: Sync Now`, `Project Settings closed` | Project Settings |
+| `Edit lock: taking part.mitcad[ over]`, `Edit lock taken: part.mitcad[ from Alex (unchanged \| no_receipt \| unanswered \| take_over)]`, `Edit lock granted: part.mitcad by Alex`, `Edit lock held: part.mitcad by Alex[, another session] (since <time>)`, `Edit lock not confirmed (<class>): part.mitcad: <message>`, `Edit locks: part.mitcad: <message>` (a remote that refuses lock refs), `Edit lock: none for part.mitcad (<why>)`, `Edit lock: part.mitcad opened read-only, without an edit lock`, `Edit lock state: editing, part.mitcad` (`editing, idle`, `read-only`, `not confirmed`, `taking`, `none`), `Read-only: on (<reason>)`, `Read-only: off`, `Read-only: refused <command or what>`, `Read-only: unsaved changes of part.mitcad asked about`, `Lock banner: <text> [Request Edit Access..., Edit, Save as Copy..., Save as New Version]`, `Lock banner <button> at x,y`, `Lock banner: <button>` (clicked), `Lock banner: hidden` | the open design's edit lock (mitcad#89, `tools/ui-locks-test.sh`): taken, held by someone else, not confirmed, the window's read-only mode and its banner |
+| `Edit lock dialog: <text> [Continue Read-Only, Request Edit Access...]` (`[Take Over, Open Read-Only]`, `[Take the Edit Lock, Not Now]`), `Edit lock dialog: <button>`, `Request Edit Access dialog: part.mitcad, Alex`, `Request Edit Access cancelled`, `Edit lock request sent: part.mitcad to Alex[: "<message>"]`, `Edit lock request seen by Alex`, `Edit lock request declined by Alex[: <message>]`, `Edit lock request: Alex keeps the edit lock until <time>`, `Edit lock request: Alex did not answer (no_receipt): taking the lock`, `Edit lock of part.mitcad is free: taking it`, `Edit lock of part.mitcad released by its holder`, `Edit lock request refreshed: part.mitcad` (a poll kept the waiting request alive) | opening a design someone else holds, Take Over, a holder's offline will (live updates), the requester's side of a request |
+| `Edit lock receipt: part.mitcad for Sam`, `Edit lock request: Sam asks to edit part.mitcad[: "<message>"] [Release, Keep 15 More Minutes, Decline...]` (`Release (Save First), Release Without Saving` with unsaved changes), `Edit lock request: also waiting Kim`, `Edit lock request: Release[ Without Saving]` (`Keep 15 More Minutes`, `Decline`), `Decline dialog: Sam`, `Edit lock request of Sam declined[: <message>]`, `Edit lock request of Sam: kept until <time>`, `Edit lock request withdrawn: part.mitcad`, `Edit lock: handing part.mitcad over to Sam (released \| idle \| no answer)`, `Edit lock handed over: part.mitcad to Sam`, `Edit lock handed over: the unsaved changes of part.mitcad stay`, `Edit lock: Sam asks while part.mitcad is idle: handing it over`, `Edit lock request of Sam not answered within 10 min: handing over` | the holder's side of a request |
+| `Edit lock idle: part.mitcad after 10 min without activity (no unsaved changes \| unsaved changes)`, `Edit lock idle: saving part.mitcad`, `Edit lock idle: part.mitcad kept, marked idle (autosave off \| waits)`, `Edit lock idle: part.mitcad kept, marked idle (sync: <class>)`, `Edit lock: part.mitcad active again`, `Edit lock refreshed: part.mitcad (idle \| active)`, `Edit lock released: part.mitcad`, `Edit lock request withdrawn: <path>`, `Edit lock release failed (<class>): <message>`, `Edit lock stays: part.mitcad (<class>)`, `Edit lock: the sync of part.mitcad needs a choice before the release: asked`, `Edit lock: Resolve Sync` (`Release Without Sending`, `Keep Lock`), `Edit lock lost: part.mitcad to Alex (<reason> \| removed)`, `Edit lock lost: the unsaved changes of part.mitcad stay`, `Edit locks off: part.mitcad`, `Edit locks off: released <paths>`, `Edit lock: the project stops syncing`, `Edit lock: part.mitcad saved as copy.mitcad`, `Save as New Version: <path> (read-only)` | holding, idle time, releasing, losing a lock |
+| `Edit lock poll failed (<class>): <message>`, `Edit locks: the remote answers again`, `Edit lock: a stale request removed: part.mitcad by Sam` (a request its Mitcad no longer refreshed, removed by this poll), `Edit lock: a newer version on the remote: checking part.mitcad`, `Updated to Alex's version saved at 14:05.`, `Edit lock: bringing part.mitcad up to date (sync)`, `Edit lock: the remote has newer versions: checking part.mitcad`, `Edit lock: also open: <entries>`, `Edit locks: live updates connected: the remote is read every 120 s`, `Edit locks probe: the remote accepts Mitcad's lock references` (`<message> (<reason>)`), `Project Settings: edit locks accepted by the remote`, `Project Settings: edit locks: <message>`, `Edit lock details: <lines joined by " \| ">`, `Project indicator menu chose Release Edit Lock` (`Edit Lock Details`), `Sync: files someone else holds the edit lock of: part.mitcad (Alex): asked`, `Sync: Send Anyway`, `Sync: not sent (locked files)` | polls, a read-only window following the editor's versions, the lock just taken brought up to date, live updates, the remote's probe, the details, Sync's question |
+| `Move to a Project dialog: <design>`, `Move to a Project cancelled`, `Move to a Project: <path> into a new project`, `Move to a Project: <design> saved in <root>`, `Moved <path> to <path>`, `Recorded <path> in the project <root>`, `Preferences: cloud: git 2.47.0 at <path>…`, `Preferences: versions by git's user, else Name <email>` (or `nobody`), `Preferences: git …, remote checks every 10 min, each version sent on, live updates on, default broker none` | Move to a Project; Preferences' Cloud page |
 | `Updates: Mitcad 0.0.0 for linux-x64, the AppImage <path>` (`installed in <folder>`, `announce only: <why>`), `Automatic update checks are off`, `Update checks are turned off by the administrator`, `Update check: the last was at <time>`, `Update check: manifest at <url>` (`releases at <url>`), `Update request redirected to https://<host>`, `Update manifest: Mitcad 0.1.0 of 2026-10-06 (available), 214 bytes for linux-x64`, `Update check: Mitcad 0.0.1 is up to date`, `Update notice (offer): <text> [Release Notes, Install, Skip This Version, Later]` (`(progress)`, `(message)`, `(error)`), `Update notice closed`, `Update: skipping Mitcad 0.1.0`, `Update download: <url> (<n> bytes) to <path>`, `Update verified: <path>`, `Update rejected: <reason> (deleted <path>)`, `Update staged: 0.0.0 -> 0.1.0, <program> when Mitcad has quit`, `Update: replaced <AppImage>`, `Update: started <program> (process <pid>)`, `Update installed: 0.0.0 -> 0.1.0` (`Update not installed: …`), `Update failed: <reason>`, `Preferences: update checks on, channel stable` | automatic updates ([docs/updates.md](../docs/updates.md); `tools/ui-update-test.sh`) |
+| `Live: <project>: off (no broker)` (`not allowed in Preferences`, `no versions`), `Live trust question: <project> through <address> [Connect, Not Now]`, `Live trust: <address> connect` (`not now`), `Live: <project>: <address> not trusted (Not Now): not connected`, `Keychain: read <host:port>: found, user <user>` (`not found`, `unavailable (<why>)`), `Keychain: saved <host:port>` (`save … failed (<why>)`), `Keychain: removed <host:port>`, `Live: <project> subscribes through <address>, prefix <prefix>, as <user>` (`anonymous`; `(<connection>, <state>)`), `Live: <project>: cannot connect to <address>: <why>`, `Live: connection c1 (<address>) connected` (`connecting`, `offline, again in <ms> ms`, `failed (auth_failed: <why>)`, `closed`), `Live: <project> subscribed`, `Live: <project> unsubscribed from c1[, which closed]`, `Live: <project>: the remote is checked (version abc1234)` (`connected again`), `Remote check: announced by live updates`, `Remote check: no timer while live updates are connected` (`the timer again (every 10 min)`), `Live: <project> published version abc1234` (`open <path>`, `closed <path>`, `lock <path>`), `Live event: <project>: open <file id> by <name> (editing) in session <id>` (`open … closed by session <id>[ (cleared: offline)]`, `version abc1234 on main by <name>`, `lock <file id> held by <name> (active)`, `lock … released`, `request <kind> <file id> from <name>`, `session <id> online` / `offline` / `left`, `dropped <reason> (<n> so far)`; ` (retained)`; ids are their first 8 characters), `Live notice: Live updates need you to sign in to <host> [Sign In, Not Now]`, `Live notice Sign In at x,y` (`Not Now`), `Live notice: Sign In` (`not now`), `Live sign-in dialog: <address>, user <user>, keychain on` (`off`), `Live sign-in refused: <why>`, `Live sign-in: <address> as <user>[, remembered]` (`cancelled`), `Live: signed out of <host:port>`, `Live: <address> forgotten: <project> disconnected`, `Live test dialog: <address>, prefix <prefix>[, as <user>]`, `Live test: <address>: ok; steps connect ok, sign_in ok, subscribe ok, publish ok, receive ok` (`failed (<class>: <why>)`), `Live: closed[, every connection left cleanly]`, `Preferences: known brokers: <address> (trusted, user <user>), …` (`none`), `Preferences: sign out of <host:port>`, `Preferences: forget <address>` | live updates (mitcad#89, `tools/ui-live-test.sh`); places in the main window's coordinates |
 
 Test logs are switched on by environment variables
 (`framework/Diagnostics.hpp`): `MITCAD_LOG_PICKS`, `MITCAD_LOG_VOLUMES`
 (the UI test libraries set both), `MITCAD_LOG_TIMING`,
-`MITCAD_LOG_ORIENTATION_CUBE`; `MITCAD_TEST_SYNC` answers the sync key.
+`MITCAD_LOG_ORIENTATION_CUBE`; `MITCAD_TEST_SYNC` answers the sync key;
+`MITCAD_LOG_TYPED_TEXT` logs typed-in text fields (`File dialog Save As:
+/path/part.mitcad`, `File dialog Save As: accepted`, `Dialog field
+Parameters: 25 mm`, `Panel field sets.0.radius: 2`;
+`framework/TypedTextLog.hpp`).
 `MITCAD_SETTINGS_DIR` keeps the settings in an INI file of a test's own
 (on Windows they are otherwise in the registry).
 
@@ -1283,7 +1434,11 @@ sync works: [docs/development.md](../docs/development.md)).
   `ui_sketch_click x y`, `ui_sketch_drag x1 y1 x2 y2`, `ui_sketch_at x y`
   (sketch millimetres).
 - `ui_focus_dialog "title"`, `ui_focus_main` (Xvfb has no window
-  manager).
+  manager). After a dialog that works on a thread before it closes (New
+  Project's Create, Open from Cloud), call `ui_focus_main` once its result
+  is logged: the main window focused while the modal dialog is still open
+  is left without Qt's activation when the dialog closes, and its
+  shortcuts (S) do not work.
 - `ui_mark` and `ui_expect_new "text" [seconds]` (only lines logged since
   the mark).
 - `ui_click_pick "face F2.b0/F2:end"` (clicks where the last `Pick

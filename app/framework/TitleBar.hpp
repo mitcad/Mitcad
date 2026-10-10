@@ -33,6 +33,10 @@ public:
   // Shows or hides the Finish Sketch button; follows the ribbon's sketch mode.
   void setSketchMode(bool sketching);
 
+  // The project indicator (mitcad#89), beside the document's name: right of
+  // it, before the search field.
+  void setIndicator(QWidget* indicator);
+
   // The height of the row.
   static int rowHeight();
 
@@ -55,6 +59,7 @@ private:
   QWidget* m_tabs = nullptr;
   QWidget* m_search = nullptr;
   QWidget* m_finish = nullptr;
+  QPointer<QWidget> m_indicator;
   QPointer<QWidget> m_watched;
 };
 

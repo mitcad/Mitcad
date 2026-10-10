@@ -21,7 +21,8 @@ namespace mitcad {
 // A session whose process is gone, with what its files tell.
 struct RecoverableSession {
   QString directory;
-  QString session;    // its id: the files are <id>.json, <id>.mitcad and <id>.lock
+  QString session;    // its id: metadata, snapshots and lock share this prefix
+  QString project;    // validated snapshot basename, from v1 or v2 metadata
   QString document;   // the window's name of the document ("Untitled", "block.mitcad")
   QString path;       // the file it was opened from or saved to, or empty
   QString baseDigest; // that file's content then (fileDigest), or empty

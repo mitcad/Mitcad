@@ -138,5 +138,13 @@ void far_features_tests();
 void removed_tests();
 // A body joined with a near copy (mitcad#88).
 void mirror_join_tests();
+// Roundings wider than a neighbouring face (mitcad#121).
+void fillet_overflow_tests();
+// Roundings OCCT's fillet failed on, with the port's patches (mitcad#122).
+void fillet_kernel_tests();
+// Ends, seams and corner caps of OCCT's roundings (mitcad#133).
+void fillet_end_tests();
+// Allocations that fail inside OCCT, with the port's patch (mitcad#132).
+void allocation_tests();
 
 } // namespace test

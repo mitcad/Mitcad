@@ -190,12 +190,13 @@ struct PreferencePage {
 };
 
 const PreferencePage kPreferencePages[] = {
-    {"general", QT_TRANSLATE_NOOP("View", "General"), "autosave recovery author email name"},
+    {"general", QT_TRANSLATE_NOOP("View", "General"), "autosave recovery"},
     {"navigation", QT_TRANSLATE_NOOP("View", "Navigation"), "mouse orbit pan zoom scheme"},
     {"display", QT_TRANSLATE_NOOP("View", "Display"),
      "camera perspective orthographic background environment render device gpu cuda"},
     {"cache", QT_TRANSLATE_NOOP("View", "Cache"), "results memory disk diagnostics"},
-    {"version_control", QT_TRANSLATE_NOOP("View", "Version Control"), "git remote sync push fetch"},
+    {"cloud", QT_TRANSLATE_NOOP("View", "Cloud"),
+     "git remote sync push fetch version control author email name mqtt live broker"},
     {"updates", QT_TRANSLATE_NOOP("View", "Updates"), "release channel pre-release"},
     {"print", QT_TRANSLATE_NOOP("View", "3D Print"), "slicer printing"},
 };
@@ -498,7 +499,7 @@ void ViewController::registerCommands() {
   preferences.mode = CommandDef::Mode::Any;
   preferences.tab.clear();
   preferences.keywords = {QStringLiteral("options"), QStringLiteral("settings")};
-  preferences.tooltip = tr("General settings, navigation, display, cache, version control, updates and 3D print");
+  preferences.tooltip = tr("General settings, navigation, display, cache, cloud, updates and 3D print");
   preferences.run = [this] { showPreferences(); };
   preferences.duringCommands = true;
 #ifdef Q_OS_MACOS
@@ -970,21 +971,6 @@ void ViewController::showPreferences(const QString& page) {
   folderRow->addWidget(folderPath, 1);
   folderRow->addWidget(openFolder);
   generalForm->addRow(tr("Recovery folder:"), folderRow);
-  // Who versions of projects are recorded by (P12d): git's configured user
-  // by default, else the name and email here.
-  const auto versions = std::make_shared<VersionSettings>(VersionSettings::load());
-  auto* useGit = new QCheckBox(tr("Record versions with &git's name and email (user.name, user.email)"));
-  useGit->setChecked(versions->useGit);
-  useGit->setToolTip(tr("When git has none, or when this is off, the name and email below are used"));
-  control(generalForm, useGit);
-  auto* authorName = new QLineEdit(versions->name);
-  auto* authorEmail = new QLineEdit(versions->email);
-  generalForm->addRow(tr("Version author's &name:"), authorName);
-  generalForm->addRow(tr("Version author's e&mail:"), authorEmail);
-  auto* privacy = new QLabel(tr("The name and email address go into every version of a project; anyone who gets "
-                                "its history sees them."));
-  privacy->setWordWrap(true);
-  control(generalForm, privacy);
   groups.insert(QStringLiteral("general"), generalBox);
   // Automatic updates (mitcad#9).
   auto* updatesBox = new UpdatePreferencesBox;
@@ -999,9 +985,10 @@ void ViewController::showPreferences(const QString& page) {
   // The slicer 3D Print starts (mitcad#13).
   auto* slicerBox = new SlicerPreferencesBox;
   groups.insert(QStringLiteral("print"), slicerBox);
-  // Remote repositories: the git program, checks and pushes (P12 remote).
+  // Cloud projects: the git program, the default author, checks and pushes,
+  // live updates (P12 remote, mitcad#89).
   auto* remoteBox = new RemotePreferencesBox;
-  groups.insert(QStringLiteral("version_control"), remoteBox);
+  groups.insert(QStringLiteral("cloud"), remoteBox);
 
   QWidget* navigationBox = section(tr("Navigation"));
   auto* navigation = new QFormLayout(navigationBox);
@@ -1113,9 +1100,8 @@ void ViewController::showPreferences(const QString& page) {
 #endif
   groups.insert(QStringLiteral("display"), displayBox);
 
-  *commit = [this, general, versions, top, bottom, scheme, zoomToCursor, reverseZoom, constrained, animate, camera,
-             background, autosave, minutes, useGit, authorName, authorEmail, cacheBox, updatesBox, slicerBox,
-             remoteBox, renderDevice] {
+  *commit = [this, general, top, bottom, scheme, zoomToCursor, reverseZoom, constrained, animate, camera, background,
+             autosave, minutes, cacheBox, updatesBox, slicerBox, remoteBox, renderDevice] {
     m_settings.navigation.scheme = static_cast<NavigationScheme>(scheme->currentData().toInt());
     m_settings.navigation.zoomToCursor = zoomToCursor->isChecked();
     m_settings.navigation.reverseZoom = reverseZoom->isChecked();
@@ -1130,18 +1116,10 @@ void ViewController::showPreferences(const QString& page) {
     chosen.autosave = autosave->isChecked();
     chosen.autosaveMinutes = minutes->value();
     chosen.save();
-    VersionSettings author = *versions;
-    author.useGit = useGit->isChecked();
-    author.name = authorName->text().trimmed();
-    author.email = authorEmail->text().trimmed();
-    // Chosen here, the author need not be shown again on the next version.
-    author.confirmed = versions->confirmed || author.useGit != versions->useGit || author.name != versions->name ||
-                       author.email != versions->email;
+    const VersionSettings author = remoteBox->chosenAuthor();
     author.save();
-    *versions = author;
-    const QString own = author.complete() ? author.author() : QStringLiteral("nobody");
-    qDebug().noquote() << QStringLiteral("Preferences: versions by %1")
-                              .arg(author.useGit ? QStringLiteral("git's user, else %1").arg(own) : own);
+    qDebug().noquote() << QStringLiteral("Preferences: versions by git's user, else %1")
+                              .arg(author.complete() ? author.author() : QStringLiteral("nobody"));
     const CacheSettings cache = cacheBox->chosen();
     cache.save();
     qDebug().noquote() << QStringLiteral("Preferences: results on disk %1, at most %2 MB; in memory at most %3 MB")
@@ -1162,11 +1140,13 @@ void ViewController::showPreferences(const QString& page) {
                               .arg(print.slicer.isValid() ? print.slicer.describe() : QStringLiteral("automatic"));
     const RemoteSettings remote = remoteBox->chosen();
     remote.save();
-    qDebug().noquote() << QStringLiteral("Preferences: git %1, remote checks %2, each version sent %3")
+    qDebug().noquote() << QStringLiteral("Preferences: git %1, remote checks %2, each version sent %3, live updates "
+                                         "%4, default broker %5")
                               .arg(remote.git.isEmpty() ? QStringLiteral("found automatically") : remote.git,
                                    remote.checkMinutes > 0 ? QStringLiteral("every %1 min").arg(remote.checkMinutes)
                                                            : QStringLiteral("never"),
-                                   onOff(remote.autoPush));
+                                   onOff(remote.autoPush), onOff(remote.allowLive),
+                                   remote.defaultBroker.isEmpty() ? QStringLiteral("none") : remote.defaultBroker);
 #ifdef MITCAD_RENDER
     if (renderDevice != nullptr && renderDevice->currentData().toString() != render::renderDeviceChoice()) {
       render::setRenderDeviceChoice(renderDevice->currentData().toString());
@@ -1209,7 +1189,7 @@ void ViewController::showPreferences(const QString& page) {
         {"navigation", "hand.draw", "move.3d"},
         {"display", "display", ""},
         {"cache", "internaldrive", ""},
-        {"version_control", "arrow.triangle.branch", ""},
+        {"cloud", "cloud", ""},
         {"updates", "arrow.down.circle", ""},
         {"print", "printer", ""},
     };
@@ -1244,12 +1224,10 @@ void ViewController::showPreferences(const QString& page) {
     if (renderDevice != nullptr) {
       connect(renderDevice, &QComboBox::currentIndexChanged, host, changed);
     }
-    for (QCheckBox* box : {zoomToCursor, reverseZoom, constrained, animate, autosave, useGit}) {
+    for (QCheckBox* box : {zoomToCursor, reverseZoom, constrained, animate, autosave}) {
       connect(box, &QCheckBox::toggled, host, changed);
     }
     connect(minutes, &QSpinBox::valueChanged, host, changed);
-    connect(authorName, &QLineEdit::editingFinished, host, changed);
-    connect(authorEmail, &QLineEdit::editingFinished, host, changed);
     connect(cacheBox, &CachePreferencesBox::changed, host, changed);
     // The boxes of the other pages tell no change of their own: their
     // controls do.

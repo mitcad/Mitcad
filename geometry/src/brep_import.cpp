@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <functional>
 #include <map>
+#include <new>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -17,13 +18,17 @@
 #include <BRepCheck.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepCheck_Result.hxx>
+#include <BRepCheck_Wire.hxx>
 #include <BRepLib.hxx>
 #include <BRep_Builder.hxx>
+#include <BRep_TVertex.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
+#include <ElCLib.hxx>
 #include <ElSLib.hxx>
 #include <Geom2d_Line.hxx>
 #include <GeomAPI_Interpolate.hxx>
+#include <GeomAPI_ProjectPointOnCurve.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_BSplineSurface.hxx>
@@ -42,6 +47,7 @@
 #include <NCollection_Array1.hxx>
 #include <NCollection_Array2.hxx>
 #include <NCollection_HArray1.hxx>
+#include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_IndexedMap.hxx>
 #include <NCollection_List.hxx>
 #include <ShapeFix_Face.hxx>
@@ -49,6 +55,7 @@
 #include <ShapeFix_Shell.hxx>
 #include <ShapeFix_Solid.hxx>
 #include <Standard_Failure.hxx>
+#include <Standard_OutOfMemory.hxx>
 #include <TopAbs.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -71,12 +78,17 @@
 #include <gp_Dir.hxx>
 #include <gp_Dir2d.hxx>
 #include <gp_Elips.hxx>
+#include <gp_Lin.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Sphere.hxx>
+#include <gp_Torus.hxx>
 #include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
 
 #include "mitcad/analysis/common.hpp"
+#include "mitcad/geometry/guard.hpp"
+#include "util.hpp"
 
 namespace mitcad::brep {
 namespace {
@@ -94,6 +106,7 @@ constexpr int kSurfaceBSpline = 4;
 constexpr int kSurfaceExtrusion = 5;
 constexpr int kSurfaceRevolution = 6;
 constexpr int kSurfaceRuled = 7;
+constexpr int kSurfaceArcSweep = 8;
 
 constexpr double kPi = 3.14159265358979323846;
 
@@ -269,6 +282,61 @@ Handle(Geom_Surface) make_ruled(const Handle(Geom_Curve)& from, const Handle(Geo
   return new Geom_BSplineSurface(poles, uknots, vknots, umults, vmults, 1, a->Degree());
 }
 
+// Circular arcs through the corresponding points of B-spline curves with
+// the same knots: rational quadratic in u (one arc per two spans, knots
+// spaced evenly in [0, 1]) with the given weights, the curves' degree in v.
+Handle(Geom_Surface) make_arc_sweep(const std::vector<Handle(Geom_Curve)>& sections,
+                                    const std::vector<double>& weights) {
+  const std::size_t n = sections.size();
+  if (n < 3 || n % 2 == 0 || weights.size() != n) {
+    throw std::runtime_error("arc sweep: an odd number of sections, at least three, each with a weight");
+  }
+  std::vector<Handle(Geom_BSplineCurve)> curves;
+  for (const Handle(Geom_Curve)& c : sections) {
+    const Handle(Geom_BSplineCurve) b = Handle(Geom_BSplineCurve)::DownCast(c);
+    if (b.IsNull() || b->IsRational()) {
+      throw std::runtime_error("arc sweep: a section is not a polynomial B-spline");
+    }
+    curves.push_back(b);
+  }
+  const Handle(Geom_BSplineCurve)& first = curves.front();
+  const int nk = first->NbKnots();
+  const int np = first->NbPoles();
+  NCollection_Array1<double> vknots(1, nk);
+  NCollection_Array1<int> vmults(1, nk);
+  for (int i = 1; i <= nk; ++i) {
+    vknots(i) = first->Knot(i);
+    vmults(i) = first->Multiplicity(i);
+  }
+  for (const Handle(Geom_BSplineCurve)& b : curves) {
+    if (b->Degree() != first->Degree() || b->NbPoles() != np || b->NbKnots() != nk) {
+      throw std::runtime_error("arc sweep: the sections are not compatible B-splines");
+    }
+    for (int i = 1; i <= nk; ++i) {
+      if (b->Multiplicity(i) != vmults(i) || std::abs(b->Knot(i) - vknots(i)) > 1e-12 * (1.0 + std::abs(vknots(i)))) {
+        throw std::runtime_error("arc sweep: the sections have different knots");
+      }
+    }
+  }
+  const int nu = static_cast<int>(n);
+  NCollection_Array2<gp_Pnt> poles(1, nu, 1, np);
+  NCollection_Array2<double> pole_weights(1, nu, 1, np);
+  for (int i = 1; i <= nu; ++i) {
+    for (int j = 1; j <= np; ++j) {
+      poles(i, j) = curves[static_cast<std::size_t>(i - 1)]->Pole(j);
+      pole_weights(i, j) = weights[static_cast<std::size_t>(i - 1)];
+    }
+  }
+  const int arcs = (nu - 1) / 2;
+  NCollection_Array1<double> uknots(1, arcs + 1);
+  NCollection_Array1<int> umults(1, arcs + 1);
+  for (int k = 0; k <= arcs; ++k) {
+    uknots(k + 1) = static_cast<double>(k) / arcs;
+    umults(k + 1) = k == 0 || k == arcs ? 3 : 2;
+  }
+  return new Geom_BSplineSurface(poles, pole_weights, uknots, vknots, umults, vmults, 2, first->Degree());
+}
+
 Handle(Geom_Surface) make_surface(Reader& in, int kind) {
   switch (kind) {
   case kSurfacePlane: {
@@ -311,6 +379,8 @@ Handle(Geom_Surface) make_surface(Reader& in, int kind) {
     const int nu = in.count();
     const int nv = in.count();
     const bool rational = in.integer() != 0;
+    const bool u_periodic = in.integer() != 0;
+    const bool v_periodic = in.integer() != 0;
     NCollection_Array1<int> umults(1, nuk);
     for (int i = 1; i <= nuk; ++i) {
       umults(i) = in.integer();
@@ -333,6 +403,7 @@ Handle(Geom_Surface) make_surface(Reader& in, int kind) {
         poles(iu, iv) = in.point();
       }
     }
+    Handle(Geom_BSplineSurface) surface;
     if (rational) {
       NCollection_Array2<double> weights(1, nu, 1, nv);
       for (int iu = 1; iu <= nu; ++iu) {
@@ -340,9 +411,19 @@ Handle(Geom_Surface) make_surface(Reader& in, int kind) {
           weights(iu, iv) = in.real();
         }
       }
-      return new Geom_BSplineSurface(poles, weights, uknots, vknots, umults, vmults, ud, vd);
+      surface = new Geom_BSplineSurface(poles, weights, uknots, vknots, umults, vmults, ud, vd);
+    } else {
+      surface = new Geom_BSplineSurface(poles, uknots, vknots, umults, vmults, ud, vd);
     }
-    return new Geom_BSplineSurface(poles, uknots, vknots, umults, vmults, ud, vd);
+    // A face may cross the seam of a periodic surface (it then has an edge
+    // on the seam from one side only); make the parameter wrap.
+    if (u_periodic && surface->IsUClosed()) {
+      surface->SetUPeriodic();
+    }
+    if (v_periodic && surface->IsVClosed()) {
+      surface->SetVPeriodic();
+    }
+    return Handle(Geom_Surface)(surface);
   }
   case kSurfaceExtrusion: {
     const gp_Dir dir = in.dir();
@@ -361,6 +442,19 @@ Handle(Geom_Surface) make_surface(Reader& in, int kind) {
     const int to_kind = in.integer();
     const Handle(Geom_Curve) to = make_curve(in, to_kind);
     return make_ruled(from, to);
+  }
+  case kSurfaceArcSweep: {
+    const int n = in.count(1000);
+    std::vector<double> weights(static_cast<std::size_t>(n));
+    for (double& w : weights) {
+      w = in.real();
+    }
+    std::vector<Handle(Geom_Curve)> sections;
+    for (int i = 0; i < n; ++i) {
+      const int section_kind = in.integer();
+      sections.push_back(make_curve(in, section_kind));
+    }
+    return make_arc_sweep(sections, weights);
   }
   default:
     throw std::runtime_error("unknown surface kind " + std::to_string(kind));
@@ -489,8 +583,8 @@ Handle(Geom_Curve) normalize_conic(const Handle(Geom_Curve)& curve, double& t0, 
   return curve;
 }
 
-// The parameter v of a cone's apex or a sphere's pole at `p`, if `p` is
-// one (within `tol`).
+// The parameter v of a cone's apex, a sphere's pole or a pole of a torus or
+// a surface of revolution at `p`, if `p` is one (within `tol`).
 bool singular_v(const Handle(Geom_Surface)& surface, const gp_Pnt& p, double tol, double& v) {
   if (const Handle(Geom_ConicalSurface) cone = Handle(Geom_ConicalSurface)::DownCast(surface); !cone.IsNull()) {
     const gp_Cone c = cone->Cone();
@@ -505,7 +599,60 @@ bool singular_v(const Handle(Geom_Surface)& surface, const gp_Pnt& p, double tol
     v = v >= 0.0 ? kPi / 2 : -kPi / 2;
     return ElSLib::Value(0.0, v, s).Distance(p) <= tol;
   }
+  // A pole of a torus whose minor radius is larger than its major one: where
+  // its meridian circle meets the axis.
+  if (const Handle(Geom_ToroidalSurface) torus = Handle(Geom_ToroidalSurface)::DownCast(surface);
+      !torus.IsNull()) {
+    const gp_Torus t = torus->Torus();
+    if (t.MinorRadius() <= t.MajorRadius() || gp_Lin(t.Axis()).Distance(p) > tol) {
+      return false;
+    }
+    const double height = gp_Vec(t.Location(), p).Dot(gp_Vec(t.Axis().Direction()));
+    v = std::atan2(height, -t.MajorRadius());
+    return ElSLib::Value(0.0, v, t).Distance(p) <= tol;
+  }
+  // A pole of a surface of revolution (of a lemon torus): where its
+  // meridian meets the axis.
+  if (const Handle(Geom_SurfaceOfRevolution) revolution = Handle(Geom_SurfaceOfRevolution)::DownCast(surface);
+      !revolution.IsNull()) {
+    if (gp_Lin(revolution->Axis()).Distance(p) > tol) {
+      return false;
+    }
+    GeomAPI_ProjectPointOnCurve projection(p, revolution->BasisCurve());
+    if (projection.NbPoints() == 0 || projection.LowerDistance() > tol) {
+      return false;
+    }
+    v = projection.LowerDistanceParameter();
+    return true;
+  }
   return false;
+}
+
+// The copy of a pole's parameter v of a surface of revolution or a torus,
+// periodic in v, that a face at v_face reaches along its meridian (u = 0)
+// without crossing the axis: the one below v_face or the one above it.
+double pole_beyond(const Handle(Geom_Surface)& surface, double v, double v_face) {
+  gp_Ax1 axis_of;
+  if (const Handle(Geom_SurfaceOfRevolution) revolution = Handle(Geom_SurfaceOfRevolution)::DownCast(surface);
+      !revolution.IsNull()) {
+    axis_of = revolution->Axis();
+  } else if (const Handle(Geom_ToroidalSurface) torus = Handle(Geom_ToroidalSurface)::DownCast(surface);
+             !torus.IsNull()) {
+    axis_of = torus->Torus().Axis();
+  } else {
+    return v;
+  }
+  const double period = surface->VPeriod();
+  const double below = v + std::floor((v_face - v) / period) * period;
+  const gp_Lin axis(axis_of);
+  // The side of the axis a meridian point is on, in the meridian's plane.
+  const auto side = [&](double t) {
+    const gp_Pnt p = surface->Value(0.0, t);
+    const gp_Pnt foot = ElCLib::Value(ElCLib::Parameter(axis, p), axis);
+    return gp_Vec(foot, p);
+  };
+  const gp_Vec face_side = side(v_face);
+  return side(0.5 * (below + v_face)).Dot(face_side) > 0.0 ? below : below + period;
 }
 
 // A degenerated edge closing the face at a singular point of its surface:
@@ -581,14 +728,24 @@ TopoDS_Shape build_topology(const Body& body, const BuildOptions& options, Build
   }
 
   std::vector<TopoDS_Face> faces(body.faces.size());
+  std::vector<bool> surface_used(surfaces.size(), false);
   for (std::size_t i = 0; i < body.faces.size(); ++i) {
     const Face& f = body.faces[i];
     if (f.surface >= surfaces.size() || surfaces[f.surface].IsNull()) {
       ++report.faces_failed;
       continue;
     }
+    // Faces on one closed surface get a copy each: an edge's curve on a
+    // surface is kept once per surface, and an edge on the seam that two
+    // faces share needs it at u (or v) 0 for one and at the period for
+    // the other.
+    Handle(Geom_Surface) surface = surfaces[f.surface];
+    if (surface_used[f.surface] && (surface->IsUClosed() || surface->IsVClosed())) {
+      surface = Handle(Geom_Surface)::DownCast(surface->Copy());
+    }
+    surface_used[f.surface] = true;
     TopoDS_Face face;
-    builder.MakeFace(face, surfaces[f.surface], tol);
+    builder.MakeFace(face, surface, tol);
     bool complete = true;
     for (std::uint32_t l = f.first_loop; l < f.first_loop + f.loop_count && l < body.loops.size(); ++l) {
       const Loop& lp = body.loops[l];
@@ -616,7 +773,8 @@ TopoDS_Shape build_topology(const Body& body, const BuildOptions& options, Build
       }
     }
     // Point loops: a degenerated edge at the apex of a cone or the pole of
-    // a sphere, on the side of the face's other vertices.
+    // a sphere or of a surface of revolution, on the side of the face's
+    // other vertices.
     for (std::uint32_t k = f.first_point_loop;
          k < f.first_point_loop + f.point_loop_count && k < body.point_loops.size(); ++k) {
       const std::uint32_t vi = body.point_loops[k];
@@ -626,7 +784,7 @@ TopoDS_Shape build_topology(const Body& body, const BuildOptions& options, Build
       for (TopExp_Explorer ex(face, TopAbs_VERTEX); ex.More() && !other && vi < vertices.size(); ex.Next()) {
         const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
         if (p.Distance(BRep_Tool::Pnt(vertices[vi])) > 10.0 * tol) {
-          GeomAPI_ProjectPointOnSurf projection(p, surfaces[f.surface]);
+          GeomAPI_ProjectPointOnSurf projection(p, surface);
           if (projection.NbPoints() > 0) {
             double u = 0.0;
             projection.LowerDistanceParameters(u, v_face);
@@ -634,9 +792,14 @@ TopoDS_Shape build_topology(const Body& body, const BuildOptions& options, Build
           }
         }
       }
-      if (!other || !singular_v(surfaces[f.surface], BRep_Tool::Pnt(vertices[vi]), 10.0 * tol, v)) {
-        note(report, "face " + std::to_string(i) + ": point loop not at a cone apex or sphere pole");
+      if (!other || !singular_v(surface, BRep_Tool::Pnt(vertices[vi]), 10.0 * tol, v)) {
+        note(report, "face " + std::to_string(i) + ": point loop not at a cone apex or a pole");
         continue;
+      }
+      // On a surface periodic in v (the revolution of a circle) the face
+      // reaches the pole along the meridian without crossing the axis.
+      if (surface->IsVPeriodic()) {
+        v = pole_beyond(surface, v, v_face);
       }
       TopoDS_Wire wire;
       builder.MakeWire(wire);
@@ -767,31 +930,172 @@ private:
   double m_shown = 0.0;
 };
 
+// Whether two wires of a face share a vertex.
+bool has_touching_wires(const TopoDS_Shape& shape) {
+  for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next()) {
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> seen;
+    for (TopoDS_Iterator w(f.Current()); w.More(); w.Next()) {
+      NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> own;
+      TopExp::MapShapes(w.Value(), TopAbs_VERTEX, own);
+      for (int i = 1; i <= own.Extent(); ++i) {
+        if (seen.Contains(own(i))) {
+          return true;
+        }
+      }
+      for (int i = 1; i <= own.Extent(); ++i) {
+        seen.Add(own(i));
+      }
+    }
+  }
+  return false;
+}
+
+// Whether an edge bounds more than two faces of a shell (non-manifold).
+bool has_crowded_edges(const TopoDS_Shape& shape) {
+  for (TopExp_Explorer s(shape, TopAbs_SHELL); s.More(); s.Next()) {
+    NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces;
+    TopExp::MapShapesAndUniqueAncestors(s.Current(), TopAbs_EDGE, TopAbs_FACE, faces);
+    for (int i = 1; i <= faces.Extent(); ++i) {
+      if (faces(i).Extent() > 2) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// ShapeFix's healing of the built shape; `intersecting_wires`: with its
+// repair of wires that intersect; `orient_shells`: shells oriented by
+// ShapeFix, which splits them at edges of more than two of their faces.
+TopoDS_Shape heal(const TopoDS_Shape& shape, const BuildOptions& options, bool intersecting_wires,
+                  bool orient_shells) {
+  Handle(ShapeFix_Shape) fix = new ShapeFix_Shape(shape);
+  fix->SetPrecision(options.tolerance);
+  fix->SetMaxTolerance(kMaxTolerance);
+  // Keep the face orientations of the model, so that the raw volume
+  // shows whether they are right; solids are oriented afterwards.
+  // (Wires inside a face may still be reoriented.)
+  fix->FixShellTool()->FixOrientationMode() = 0;
+  fix->FixSolidTool()->FixShellOrientationMode() = 0;
+  fix->FixSolidTool()->CreateOpenSolidMode() = false;
+  if (!intersecting_wires) {
+    fix->FixFaceTool()->FixIntersectingWiresMode() = 0;
+  }
+  if (orient_shells) {
+    fix->FixShellTool()->FixOrientationMode() = 1;
+    fix->FixSolidTool()->FixShellOrientationMode() = 1;
+  }
+  occ::handle<Message_ProgressIndicator> advance;
+  if (options.progress) {
+    advance = new Advance(options.progress);
+  }
+  fix->Perform(Message_ProgressIndicator::Start(advance));
+  geometry::detail::fail_occt_allocation_if_asked("heal");
+  return fix->Shape();
+}
+
+// The largest tolerance (mm) `widen_cusps` gives a vertex.
+constexpr double kMaxCuspTolerance = 0.05;
+
+// Two edges of a loop that leave their shared vertex in the same direction
+// (a cusp: an arc tangent to a short arc that turns back along it) stay
+// within the tolerance of each other for a while beyond the vertex, and
+// OCCT then takes the loop for self-intersecting. The tolerance of such a
+// vertex is raised (doubled, up to kMaxCuspTolerance) until its edges no
+// longer cross outside it; a vertex whose edges still cross at that
+// tolerance keeps its own. The number of vertices raised, and the largest
+// tolerance given in `widest`.
+int widen_cusps(const TopoDS_Shape& shape, double& widest) {
+  NCollection_IndexedDataMap<TopoDS_Shape, double, TopTools_ShapeMapHasher> raised; // vertex -> its own
+  for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(f.Current());
+    for (TopExp_Explorer w(face, TopAbs_WIRE); w.More(); w.Next()) {
+      for (int round = 0; round < 64; ++round) {
+        Handle(BRepCheck_Wire) check = new BRepCheck_Wire(TopoDS::Wire(w.Current()));
+        TopoDS_Edge e1;
+        TopoDS_Edge e2;
+        if (check->SelfIntersect(face, e1, e2, false) != BRepCheck_SelfIntersectingWire || e1.IsNull() ||
+            e2.IsNull()) {
+          break;
+        }
+        TopoDS_Vertex shared;
+        if (!TopExp::CommonVertex(e1, e2, shared)) {
+          break;
+        }
+        const double tolerance = 2.0 * BRep_Tool::Tolerance(shared);
+        if (tolerance > kMaxCuspTolerance) {
+          // Not a cusp: the vertex keeps its own tolerance.
+          if (const double* own = raised.Seek(shared)) {
+            Handle(BRep_TVertex)::DownCast(shared.TShape())->Tolerance(*own);
+            raised.RemoveKey(shared);
+          }
+          break;
+        }
+        if (!raised.Contains(shared)) {
+          raised.Add(shared, BRep_Tool::Tolerance(shared));
+        }
+        BRep_Builder().UpdateVertex(shared, tolerance);
+      }
+    }
+  }
+  for (int i = 1; i <= raised.Extent(); ++i) {
+    widest = std::max(widest, BRep_Tool::Tolerance(TopoDS::Vertex(raised.FindKey(i))));
+  }
+  return raised.Extent();
+}
+
 } // namespace
 
-BuildResult build_body(const Body& body, const BuildOptions& options) {
-  BuildResult result;
+namespace {
+
+// build_body without its check of the memory.
+void build_into(const Body& body, const BuildOptions& options, BuildResult& result) {
   BuildReport& report = result.report;
   try {
     bool all_solid = false;
     TopoDS_Shape shape = build_topology(body, options, report, all_solid);
     shape = apply_transform(shape, body.transform);
     if (options.fix) {
-      Handle(ShapeFix_Shape) fix = new ShapeFix_Shape(shape);
-      fix->SetPrecision(options.tolerance);
-      fix->SetMaxTolerance(kMaxTolerance);
-      // Keep the face orientations of the model, so that the raw volume
-      // shows whether they are right; solids are oriented afterwards.
-      // (Wires inside a face may still be reoriented.)
-      fix->FixShellTool()->FixOrientationMode() = 0;
-      fix->FixSolidTool()->FixShellOrientationMode() = 0;
-      fix->FixSolidTool()->CreateOpenSolidMode() = false;
-      occ::handle<Message_ProgressIndicator> advance;
-      if (options.progress) {
-        advance = new Advance(options.progress);
+      // Two of ShapeFix's repairs leave some bodies invalid; they are
+      // healed again without them when the first healing leaves them
+      // invalid:
+      // - Wires of a face that touch at a vertex (a hole touching the
+      //   boundary): the repair of intersecting wires puts edges of no
+      //   length at the touching point.
+      // - Edges of more than two faces of a shell (solids touching along
+      //   an edge): keeping the faces' orientation keeps the shell
+      //   non-manifold; ShapeFix orients them instead, which splits the
+      //   shell, when that keeps the volume.
+      const bool touching = has_touching_wires(shape);
+      const bool crowded = has_crowded_edges(shape);
+      shape = heal(shape, options, true, false);
+      if ((touching || crowded) && !BRepCheck_Analyzer(shape).IsValid()) {
+        BuildReport scratch;
+        bool unused = false;
+        TopoDS_Shape again = apply_transform(build_topology(body, options, scratch, unused), body.transform);
+        again = heal(again, options, !touching, crowded);
+        const auto solid_volume = [](const TopoDS_Shape& s) {
+          return count_of(s, TopAbs_SOLID) > 0 ? std::abs(volume_of(orient_solids(s))) : 0.0;
+        };
+        if (BRepCheck_Analyzer(again).IsValid()) {
+          const double before = solid_volume(shape);
+          const double after = solid_volume(again);
+          if (std::abs(after - before) <= 1e-6 * std::max(before, after)) {
+            shape = again;
+            note(report, std::string("healed again") + (touching ? ", wires touching at a vertex kept" : "") +
+                             (crowded ? ", shells split at edges of more than two faces" : ""));
+          }
+        }
       }
-      fix->Perform(Message_ProgressIndicator::Start(advance));
-      shape = fix->Shape();
+      if (!BRepCheck_Analyzer(shape).IsValid()) {
+        double widest = 0.0;
+        const int cusps = widen_cusps(shape, widest);
+        if (cusps > 0) {
+          std::ostringstream text;
+          text << "tolerance of " << cusps << " vertices at cusps raised, up to " << widest << " mm";
+          note(report, text.str());
+        }
+      }
     }
     report.solid = all_solid && count_of(shape, TopAbs_SOLID) > 0;
     if (report.solid) {
@@ -806,7 +1110,7 @@ BuildResult build_body(const Body& body, const BuildOptions& options) {
     if (!options.measure) {
       report.built = true;
       result.shape = shape;
-      return result;
+      return;
     }
     report.area = analysis::surface_properties(shape).Mass();
     Bnd_Box box;
@@ -826,10 +1130,36 @@ BuildResult build_body(const Body& body, const BuildOptions& options) {
     }
     report.built = true;
     result.shape = shape;
+  } catch (const Standard_OutOfMemory&) {
+    report.out_of_memory = true;
+  } catch (const std::bad_alloc&) {
+    report.out_of_memory = true;
   } catch (const Standard_Failure& e) {
     report.error = failure_text(e);
   } catch (const std::exception& e) {
     report.error = e.what();
+  }
+}
+
+} // namespace
+
+BuildResult build_body(const Body& body, const BuildOptions& options) {
+  // An allocation that failed, also one the healing or the checker caught
+  // inside (mitcad#132: they go on, and the checker calls the shape
+  // invalid), leaves no body: the caller learns that memory ran out.
+  const std::size_t failed = geometry::failed_allocations_in_thread();
+  BuildResult result;
+  try {
+    build_into(body, options, result);
+  } catch (const std::bad_alloc&) {
+    // (Also while the report was written.)
+    result.report.out_of_memory = true;
+  }
+  if (result.report.out_of_memory || geometry::failed_allocations_in_thread() != failed) {
+    result.report.out_of_memory = true;
+    result.report.built = false;
+    result.report.error = "out of memory";
+    result.shape.Nullify();
   }
   return result;
 }

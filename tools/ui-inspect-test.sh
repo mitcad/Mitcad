@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/commands geometry/analysis
 # The INSPECT group (U4) through the real UI, on two 20 mm cubes that
 # overlap by 5 mm (Body1 at x = 0, Body2 at x = 15):
 #   - Measure between a face and a vertex, and an edge's length; in sketch
@@ -14,6 +15,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-inspect-test.sh [screenshot.png]
+# check-all sources: tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 

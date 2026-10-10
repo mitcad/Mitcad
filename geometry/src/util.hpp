@@ -4,9 +4,11 @@
 // Helpers shared by the geometry sources; not part of the public headers.
 
 #include <array>
+#include <cstddef>
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 #include <Message_ProgressIndicator.hxx>
 #include <Message_ProgressRange.hxx>
@@ -17,6 +19,7 @@
 #include <gp_Pnt.hxx>
 
 #include "mitcad/geometry/cancel.hpp"
+#include "mitcad/geometry/guard.hpp"
 #include "mitcad/geometry/input_check.hpp"
 
 namespace mitcad::geometry::detail {
@@ -34,6 +37,28 @@ void crash_if_asked(const char* operation);
 // operation ("extrude").
 void fail_allocation_if_asked(const char* operation);
 
+// For tests of allocations that fail inside OCCT (mitcad#132): when the
+// environment variable MITCAD_TEST_OCCT_ALLOCATION_FAILS names this
+// operation ("heal"), an allocation of OCCT's collections fails, and the
+// failure is caught as OCCT's checker catches its own.
+void fail_occt_allocation_if_asked(const char* operation);
+
+// Throws std::bad_alloc when an allocation inside OCCT has failed under
+// this thread's calls since failed_allocations_in_thread() (guard.hpp) was
+// `before`.
+void throw_if_allocation_failed(std::size_t before);
+
+// An operation that catches OCCT's exceptions runs on this thread while it
+// lives: on Windows OCCT's handlers turn a fault into an exception only
+// then (guard.cpp; elsewhere OCC_CATCH_SIGNALS says so).
+class OperationScope {
+public:
+  OperationScope();
+  ~OperationScope();
+  OperationScope(const OperationScope&) = delete;
+  OperationScope& operator=(const OperationScope&) = delete;
+};
+
 // OCCT reports errors as Standard_Failure; add context for the user. With
 // OCCT's signal handlers installed (catch_occt_crashes), a crash inside the
 // operation is one too: OCC_CATCH_SIGNALS gives the handlers somewhere to
@@ -43,23 +68,40 @@ void fail_allocation_if_asked(const char* operation);
 // fails (OCCT's Standard_OutOfMemory, std::bad_alloc) is an error
 // "<operation>: out of memory" (mitcad#80; the model's
 // KernelError::OUT_OF_MEMORY): the operation's memory is freed as it
-// unwinds. With the input check on, the shapes it reads are compared
-// before and after (input_check.hpp).
+// unwinds. So is one OCCT caught inside the operation (mitcad#132, its
+// checker reports the shape invalid instead), also in the jobs of OCCT's
+// thread pool the operation ran (guard.hpp's
+// failed_allocations_in_thread). With the input check on, the shapes it
+// reads are compared before and after (input_check.hpp).
 template <class Operation>
 auto run(const char* operation, Operation&& op) -> decltype(op()) {
   throw_if_cancelled();
   const CheckedOperation check(operation);
+  const OperationScope scope;
+  const std::size_t failed = failed_allocations_in_thread();
   try {
     OCC_CATCH_SIGNALS
     crash_if_asked(operation);
     fail_allocation_if_asked(operation);
-    return op();
+    fail_occt_allocation_if_asked(operation);
+    if constexpr (std::is_void_v<decltype(op())>) {
+      op();
+      throw_if_allocation_failed(failed);
+    } else {
+      decltype(auto) result = op();
+      throw_if_allocation_failed(failed);
+      return result;
+    }
   } catch (const Standard_OutOfMemory&) {
     throw std::runtime_error(std::string(operation) + ": out of memory");
   } catch (const std::bad_alloc&) {
     throw std::runtime_error(std::string(operation) + ": out of memory");
   } catch (const Standard_Failure& failure) {
     throw_if_cancelled();
+    if (failed_allocations_in_thread() != failed) {
+      // (A failure OCCT made of the allocation it caught.)
+      throw std::runtime_error(std::string(operation) + ": out of memory");
+    }
     throw std::runtime_error(std::string(operation) + ": " + failure.what());
   }
 }

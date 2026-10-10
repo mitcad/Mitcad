@@ -60,6 +60,15 @@ pub struct ItemReport {
     /// checked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified: Option<bool>,
+    /// How far the volume it adds or removes is from the file's change for
+    /// it, relative to the change ([`crate::history::Change`]); None when
+    /// not compared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_difference: Option<f64>,
+    /// What its faces said where its change alone did not settle it
+    /// (`crate::geometric`, mitcad#138); None when they were not asked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometric_check: Option<String>,
     /// Why it is not parametric, or what was simplified or guessed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,

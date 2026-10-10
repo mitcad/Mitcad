@@ -254,6 +254,130 @@ fn configuration_tables_are_checked_and_applied() {
 }
 
 #[test]
+fn configuration_parameter_renames_follow_keys_and_expression_references() {
+    let mut doc = Document::new(MockKernel::default());
+    for (name, expression) in [
+        ("Width", "10 mm"),
+        ("WidthExtra", "2 mm"),
+        ("Length", "3 mm"),
+    ] {
+        command(
+            &mut doc,
+            json!({"cmd": "add_parameter", "name": name,
+                   "expression": expression, "unit": "mm"}),
+        )
+        .unwrap();
+    }
+    command(
+        &mut doc,
+        json!({"cmd": "set_configurations", "configurations": {
+            "parameters": ["Width", "Length"],
+            "rows": [{"name": "Large", "values": {
+                "Width": "20 mm", "Length": "Width * 2 + WidthExtra"}}]}}),
+    )
+    .unwrap();
+    let before = doc.to_json();
+    doc.rename_parameter("Width", "Breadth").unwrap();
+    let renamed = doc.to_json();
+    let table = doc.configurations();
+    assert_eq!(table.parameters, ["Breadth", "Length"]);
+    assert_eq!(table.rows[0].values["Breadth"], "20 mm");
+    assert!(!table.rows[0].values.contains_key("Width"));
+    assert_eq!(table.rows[0].values["Length"], "Breadth * 2 + WidthExtra");
+    let mut reopened = Document::from_json(&renamed, MockKernel::default()).unwrap();
+    reopened.apply_configuration("Large").unwrap();
+    for (name, value) in [("Breadth", 20.0), ("Length", 42.0)] {
+        let id = reopened.parameters().find(name).unwrap();
+        assert_eq!(reopened.parameters().value(id), Some(value));
+    }
+    Document::from_json(&reopened.to_json(), MockKernel::default()).unwrap();
+    doc.undo().unwrap();
+    assert_eq!(doc.to_json(), before);
+    Document::from_json(&doc.to_json(), MockKernel::default()).unwrap();
+    doc.redo().unwrap();
+    assert_eq!(doc.to_json(), renamed);
+    Document::from_json(&doc.to_json(), MockKernel::default()).unwrap();
+
+    // References to parameters outside the table's columns follow too.
+    doc.rename_parameter("WidthExtra", "Allowance").unwrap();
+    assert_eq!(
+        doc.configurations().rows[0].values["Length"],
+        "Breadth * 2 + Allowance"
+    );
+    Document::from_json(&doc.to_json(), MockKernel::default()).unwrap();
+}
+
+#[test]
+fn deleting_configured_parameters_or_their_owners_is_atomic() {
+    let mut doc = Document::new(MockKernel::default());
+    for (name, expression) in [("Width", "10 mm"), ("Allowance", "2 mm")] {
+        command(
+            &mut doc,
+            json!({"cmd": "add_parameter", "name": name, "expression": expression}),
+        )
+        .unwrap();
+    }
+    command(
+        &mut doc,
+        json!({"cmd": "set_configurations", "configurations": {
+            "parameters": ["Width"], "rows": [{"name": "Large", "values": {
+                "Width": "Allowance * 2"}}]}}),
+    )
+    .unwrap();
+    for name in ["Width", "Allowance"] {
+        let before = doc.to_json();
+        let revision = doc.revision();
+        let undo = doc.undo_label().map(str::to_owned);
+        let count = doc.recompute_count();
+        let error = doc.delete_parameter(name).unwrap_err().to_string();
+        assert!(error.contains("configurations:"), "{error}");
+        assert!(error.contains(name), "{error}");
+        assert_eq!(doc.to_json(), before);
+        assert_eq!(doc.revision(), revision);
+        assert_eq!(doc.undo_label(), undo.as_deref());
+        assert_eq!(doc.recompute_count(), count);
+        Document::from_json(&before, MockKernel::default()).unwrap();
+    }
+
+    let mut block = crate::document_tests::block();
+    let dimension = block.doc.feature(block.extrude).unwrap().def.params()[0];
+    let name = block.doc.parameters().name(dimension);
+    command(
+        &mut block.doc,
+        json!({"cmd": "set_configurations", "configurations": {
+            "parameters": [name],
+            "rows": [{"name": "Tall", "values": {name.clone(): "20 mm"}}]}}),
+    )
+    .unwrap();
+    let before = block.doc.to_json();
+    let revision = block.doc.revision();
+    let error = block
+        .doc
+        .delete_feature(block.extrude, false)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("configurations:"), "{error}");
+    assert!(error.contains(&name), "{error}");
+    assert_eq!(block.doc.to_json(), before);
+    assert_eq!(block.doc.revision(), revision);
+    Document::from_json(&before, MockKernel::default()).unwrap();
+    // The author can explicitly remove the table, then delete its owner.
+    block
+        .doc
+        .set_configurations(Configurations::default())
+        .unwrap();
+    block.doc.delete_feature(block.extrude, false).unwrap();
+    assert!(block.doc.parameters().find(&name).is_none());
+    Document::from_json(&block.doc.to_json(), MockKernel::default()).unwrap();
+    block.doc.undo().unwrap();
+    block.doc.undo().unwrap();
+    assert_eq!(block.doc.to_json(), before);
+    block.doc.redo().unwrap();
+    block.doc.redo().unwrap();
+    Document::from_json(&block.doc.to_json(), MockKernel::default()).unwrap();
+}
+
+#[test]
 fn library_parts_keep_their_version_until_updated() {
     let library = Library::new();
     let mut doc = Document::new(MockKernel::default());

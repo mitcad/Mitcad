@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/files
 # Files (U6) through the File menu, on the demo block (60 x 40 x 20 mm):
 #   - STEP, STL and DXF round trips: File > Export writes the block (its
 #     sketch for DXF), File > Import brings the file back: a base feature
@@ -19,6 +20,10 @@
 #     features, the part's material and units. With MITCAD_IPT_CORPUS (real
 #     part files, never committed) the smallest of them too, its features
 #     replayed with the history and reported.
+#   - An .iam assembly through File > Open (mitcad#60, stage 4): the test
+#     project of test_exchange --write-iam (a sub-assembly, parts found
+#     relative to the assembly and by name, a missing one, a suppressed
+#     occurrence) imported in the import process, its report shown.
 #   - With MITCAD_F3D_CORPUS (real .f3d files, never committed): a small
 #     .f3d (MITCAD_F3D_UI_PART, else the corpus' smallest part) opened
 #     through File > Open, imported with its history to its end behind a
@@ -40,6 +45,9 @@
 # Runs headless on Xvfb (see ui-test-lib.sh); Qt's own file dialogs
 # (--no-native-dialogs), so that paths can be typed.
 # Usage: tools/ui-import-test.sh
+# check-all sources: core/import core/f3d core/freecad core/ipt core/zip core/dxf core/tests tools/cli
+# check-all sources: core/ffi/src/brep_import.rs core/ffi/src/f3d_import.rs core/ffi/src/fcstd_import.rs
+# check-all sources: core/ffi/src/ipt_import.rs core/ffi/src/ipt_history.rs core/ffi/src/iam_import.rs
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
@@ -55,24 +63,26 @@ file_menu() {
   ui_key "$1"
 }
 
-# type_into_dialog title path: a path typed into a dialog's focused field.
+# type_into_dialog title path: a path typed into a dialog's focused field
+# (ui_type_path), then Enter; no path: only Enter.
 type_into_dialog() {
-  ui_focus_dialog "$1"
-  ui_key ctrl+a
-  xdotool type --delay 20 "$2"
-  sleep 0.3
-  ui_key Return
+  if [ -z "$2" ]; then
+    ui_focus_dialog "$(ui_title_regex "$1")"
+    ui_key Return
+  else
+    ui_type_path "$1" "$2"
+  fi
 }
 
 export_to() {
   file_menu e
-  type_into_dialog '^Export$' "$1"
+  type_into_dialog 'Export' "$1"
   ui_focus_main
 }
 
 import_from() {
   file_menu i
-  type_into_dialog '^Import$' "$1"
+  type_into_dialog 'Import' "$1"
 }
 
 expect_title() {
@@ -108,7 +118,7 @@ ui_step "File > Export an STL file"        export_to "$WORK/block.stl"
 ui_expect_new "Exported $WORK/block.stl: stl, 1 body(ies)" "the block written as STL"
 ui_mark
 ui_step "File > Import it"                 import_from "$WORK/block.stl"
-ui_step "in millimetres (Enter)"           type_into_dialog '^Insert Mesh$' ""
+ui_step "in millimetres (Enter)"           type_into_dialog 'Insert Mesh' ""
 ui_focus_main
 ui_expect_new "Imported block.stl as" "the STL came in"
 ui_expect_volume "New body .*(F[0-9]*\.b0): volume \([0-9.]*\) mm3" 48000 "the mesh body's volume" 1e-4
@@ -121,12 +131,12 @@ ui_step "File > Export the sketch to DXF"  export_to "$WORK/sketch.dxf"
 ui_expect_new "Exported $WORK/sketch.dxf: dxf, 4 entities" "the rectangle written as DXF"
 ui_mark
 ui_step "File > Import it"                 import_from "$WORK/sketch.dxf"
-ui_step "on XY, in mm (Enter)"             type_into_dialog '^Insert DXF$' ""
+ui_step "on XY, in mm (Enter)"             type_into_dialog 'Insert DXF' ""
 ui_focus_main
 ui_expect_new "Inserted sketch.dxf into Sketch2: 4 curves, 4 points, 0 texts, 1 profiles, 0 warnings" \
   "the rectangle in a new sketch, a profile again"
 ui_step "save as (Ctrl+Shift+S)"           ui_key ctrl+shift+s
-type_into_dialog '^Save As$' "$WORK/block.mitcad"
+type_into_dialog 'Save As' "$WORK/block.mitcad"
 ui_focus_main
 ui_expect_log "Saved $WORK/block.mitcad" "saved"
 
@@ -166,7 +176,7 @@ ui_step "new (Ctrl+N)"                     ui_key ctrl+n
 ui_expect_log "New document" "an empty document"
 ui_mark
 ui_step "File > Insert Component"          file_menu m
-type_into_dialog '^Insert Component$' "$WORK/block.mitcad"
+type_into_dialog 'Insert Component' "$WORK/block.mitcad"
 ui_focus_dialog '^Insert Component$'
 ui_step "linked (Enter)"                   ui_key Return
 ui_focus_main
@@ -231,7 +241,7 @@ open_fcstd() {
   ui_key ctrl+o
   ui_focus_dialog '^Mitcad$'
   ui_key d
-  type_into_dialog '^Open$' "$1"
+  type_into_dialog 'Open' "$1"
 }
 ui_mark
 ui_step "open it (Ctrl+O)"                 open_fcstd "$WORK/block.FCStd"
@@ -373,6 +383,21 @@ else
   echo "skip a real .ipt part: MITCAD_IPT_CORPUS is not set"
 fi
 
+echo "--- .iam assembly (mitcad#60, stage 4)"
+"$TEST_EXCHANGE" --write-iam "$WORK/iam" || ui_fail "cannot write the test assemblies"
+ui_mark
+ui_step "open the assembly (Ctrl+O)"       open_fcstd "$WORK/iam/top.iam"
+ui_expect_new "Import of top.iam started" "the import runs in its own process"
+ui_expect_new "Import report: top.iam: 7 occurrences placed, 1 suppressed, 3 part files imported, 1 missing, 0 failed" \
+  "the occurrences placed, the parts imported, the missing one reported" 120
+ui_expect_new "Import report summary: top.iam (assembly) 7 occurrences placed, 1 suppressed, 3 part files imported, 1 missing, 0 failed; 1 sub-assemblies. Files found: 1 by name, 1 missing, 3 relative to the assembly. Checked against the file: 7 of 7 placements agree with the displayed ones, 5 of 5 parts' bodies lie within their range boxes." \
+  "the report: how the files were found and the checks against the file"
+ui_focus_dialog '^Import Report$'
+ui_step "close the report (Enter)"         ui_key Return
+ui_focus_main
+ui_expect_new "Imported top.iam: 5 bodies" "a new document with the parts' bodies in their components"
+expect_title "top* - Mitcad"
+
 if [ -n "${MITCAD_F3D_CORPUS:-}" ] && [ -d "${MITCAD_F3D_CORPUS:-}" ]; then
   echo "--- .f3d import ($MITCAD_F3D_CORPUS)"
   # A part to import (MITCAD_F3D_UI_PART, else the corpus' smallest part
@@ -386,7 +411,7 @@ if [ -n "${MITCAD_F3D_CORPUS:-}" ] && [ -d "${MITCAD_F3D_CORPUS:-}" ]; then
     ui_key ctrl+o
     ui_focus_dialog '^Mitcad$'
     ui_key d
-    type_into_dialog '^Open$' "$SMALL"
+    type_into_dialog 'Open' "$SMALL"
   }
   # report_count outcome: how many items came in so, by the last report.
   report_count() {
@@ -419,7 +444,7 @@ if [ -n "${MITCAD_F3D_CORPUS:-}" ] && [ -d "${MITCAD_F3D_CORPUS:-}" ]; then
   sketches_shown=${sketches_shown#*Sketches shown: }
   ui_mark
   ui_step "save as (Ctrl+Shift+S)"         ui_key ctrl+shift+s
-  type_into_dialog '^Save As$' "$WORK/part.mitcad"
+  type_into_dialog 'Save As' "$WORK/part.mitcad"
   ui_focus_main
   ui_expect_new "Saved $WORK/part.mitcad" "the imported part saved"
   "$CLI" info "$WORK/part.mitcad" --json > "$WORK/part.json" 2> "$WORK/part.err" ||
@@ -508,9 +533,7 @@ EOF
 export_local() {
   file_menu e
   ui_focus_dialog '^Export$'
-  ui_key ctrl+a
-  xdotool type --delay 20 "$1"
-  sleep 0.3
+  ui_type_field "Export" "$1"
   ui_key alt+d
   ui_key Down
   ui_key Return
@@ -548,7 +571,7 @@ ui_stop_app
 ui_start_app --open "$WORK/block.step" --no-native-dialogs
 ui_expect_log "Imported block.step as" "the STEP opened as a new document"
 ui_step "save as (Ctrl+Shift+S)"           ui_key ctrl+shift+s
-type_into_dialog '^Save As$' "$WORK/project/block.mitcad"
+type_into_dialog 'Save As' "$WORK/project/block.mitcad"
 ui_focus_main
 ui_expect_log "Saved $WORK/project/block.mitcad" "saved into the project"
 grep -q '"version": 3' "$WORK/project/block.mitcad" || ui_fail "the project file is not version 3"

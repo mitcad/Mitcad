@@ -14,9 +14,12 @@ ICU (usr/lib/libicu*.so*, used by Qt)
 Open CASCADE Technology (usr/lib/libTK*.so*)
   Licence: GNU LGPL version 2.1 with the Open CASCADE exception. Linked
   dynamically; source code at https://dev.opencascade.org/ . Version 8.0.1
-  with four changes of Mitcad's that speed up booleans, the face merge after
-  them and the shape checker on faces with many edges; the patches are in
-  Mitcad's source code (third_party/vcpkg-ports/opencascade).
+  with changes of Mitcad's that speed up booleans, the face merge after
+  them and the shape checker on faces with many edges, that let fillets run
+  over faces narrower than they are, that fix other failures and crashes of
+  the fillet, and that make an allocation that fails throw instead of
+  crashing; the patches are in Mitcad's source code
+  (third_party/vcpkg-ports/opencascade).
 
 Other libraries from vcpkg (for example libpng, bzip2, Brotli)
   Their licence texts are in mitcad/licenses/vcpkg/<library>/copyright.
@@ -28,6 +31,14 @@ Kerberos)
 
 Droid Sans (bundled font for sketch text)
   Apache License 2.0; see mitcad/licenses/droid-sans/LICENSE.txt.
+
+QtKeychain (https://github.com/frankosterfeld/qtkeychain), linked
+statically into mitcad
+  The live updates' credentials in the system's keychain. BSD-3-Clause,
+  Copyright (C) 2011-2015 Frank Osterfeld and its contributors; see
+  mitcad/licenses/qtkeychain/COPYING. It loads libsecret (GNU LGPL
+  version 2.1) at run time when the system has it; libsecret is not part
+  of the AppImage.
 
 The AppImage runtime (the start of the AppImage file, which mounts or
 unpacks the rest)
@@ -44,7 +55,12 @@ unpacks the rest)
 
 Rust libraries compiled into mitcad and mitcad-cli
   Permissive licences (MIT, Apache-2.0, BSD and similar), checked by
-  cargo-deny against core/deny.toml.
+  cargo-deny against core/deny.toml. Among them the TLS of live updates
+  (connections to an MQTT broker): rustls (Apache-2.0, ISC or MIT),
+  rustls-webpki and untrusted (ISC, Copyright 2015 Brian Smith), and ring
+  (ISC, Copyright 2015-2025 Brian Smith, with code from BoringSSL under
+  the Apache License 2.0 and the ISC licence, and from fiat-crypto under
+  the MIT licence).
 
 Only in builds with the render worker (the CMake option MITCAD_RENDER, not
 in releases yet; docs/rendering.md): the executable usr/bin/mitcad-render,

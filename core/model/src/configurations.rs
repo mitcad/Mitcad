@@ -56,6 +56,27 @@ pub struct ConfigurationRow {
 }
 
 impl Configurations {
+    /// Keeps the table's names and expression references in step with a
+    /// parameter rename. Parsed reference spans avoid changing substrings
+    /// of other parameter names, units or functions.
+    pub(crate) fn rename_parameter(&mut self, old: &str, new: &str) -> Result<(), String> {
+        for name in &mut self.parameters {
+            if name == old {
+                new.clone_into(name);
+            }
+        }
+        for row in &mut self.rows {
+            if let Some(expression) = row.values.remove(old) {
+                row.values.insert(new.to_owned(), expression);
+            }
+            for expression in row.values.values_mut() {
+                let expr = crate::expr::Expr::parse(expression).map_err(|e| e.to_string())?;
+                *expression = crate::expr::replace_references(expression, &expr, old, new);
+            }
+        }
+        Ok(())
+    }
+
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty() && self.parameters.is_empty() && self.selectors.is_empty()
     }

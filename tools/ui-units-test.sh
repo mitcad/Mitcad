@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/files app/commands
 # Metric defaults (P11, docs/architecture.md) through the real
 # UI, on the demo block (60 x 40 x 20 mm): wherever a unit or a measurement
 # system is chosen, the default is metric and inches are only a choice.
@@ -15,6 +16,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-units-test.sh
+# check-all sources: core/dxf
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
@@ -28,13 +30,15 @@ file_menu() {
   ui_key "$1"
 }
 
-# type_into_dialog title path: a path typed into a dialog's focused field.
+# type_into_dialog title path: a path typed into a dialog's focused field
+# (ui_type_path), then Enter; no path: only Enter.
 type_into_dialog() {
-  ui_focus_dialog "$1"
-  ui_key ctrl+a
-  xdotool type --delay 20 "$2"
-  sleep 0.3
-  ui_key Return
+  if [ -z "$2" ]; then
+    ui_focus_dialog "$(ui_title_regex "$1")"
+    ui_key Return
+  else
+    ui_type_path "$1" "$2"
+  fi
 }
 
 ui_start_display
@@ -56,30 +60,30 @@ echo "--- Export and import"
 ui_mark
 ui_step "File > Export"                    file_menu e
 ui_expect_new "Export dialog opened: unit $UNITS" "Export offers millimetres first"
-type_into_dialog '^Export$' "$WORK/block.step"
+type_into_dialog 'Export' "$WORK/block.step"
 ui_focus_main
 ui_expect_new "Exported $WORK/block.step: step, 1 body(ies), mm" "the STEP file is written in millimetres"
 grep -q "MILLI" "$WORK/block.step" || ui_fail "the STEP file names no millimetres"
 echo "ok   the file's unit is the millimetre"
 ui_step "File > Export an STL file"        file_menu e
-type_into_dialog '^Export$' "$WORK/block.stl"
+type_into_dialog 'Export' "$WORK/block.stl"
 ui_focus_main
 ui_mark
 ui_step "File > Import it"                 file_menu i
-type_into_dialog '^Import$' "$WORK/block.stl"
+type_into_dialog 'Import' "$WORK/block.stl"
 ui_expect_new "Insert Mesh dialog opened: unit $UNITS" "a mesh's unit is asked, millimetres first"
-ui_step "keep millimetres (Enter)"         type_into_dialog '^Insert Mesh$' ""
+ui_step "keep millimetres (Enter)"         type_into_dialog 'Insert Mesh' ""
 ui_focus_main
 ui_expect_volume "New body .*(F[0-9]*\.b0): volume \([0-9.]*\) mm3" 48000 "the mesh is as large as the block" 1e-4
 ui_step "undo the import (Ctrl+Z)"         ui_key ctrl+z
 ui_step "File > Export the sketch to DXF"  file_menu e
-type_into_dialog '^Export$' "$WORK/sketch.dxf"
+type_into_dialog 'Export' "$WORK/sketch.dxf"
 ui_focus_main
 ui_mark
 ui_step "File > Import it"                 file_menu i
-type_into_dialog '^Import$' "$WORK/sketch.dxf"
+type_into_dialog 'Import' "$WORK/sketch.dxf"
 ui_expect_new "Insert DXF dialog opened: unit $UNITS" "a drawing without a unit is read in millimetres"
-ui_step "on XY (Enter)"                    type_into_dialog '^Insert DXF$' ""
+ui_step "on XY (Enter)"                    type_into_dialog 'Insert DXF' ""
 ui_focus_main
 ui_expect_new "Inserted sketch.dxf into Sketch2: 4 curves" "the drawing came in"
 ui_step "undo the insert (Ctrl+Z)"         ui_key ctrl+z

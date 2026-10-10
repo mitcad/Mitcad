@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/files
 # Autosave (P8) through the real UI, every 2 s (MITCAD_TEST_AUTOSAVE_SECONDS):
 #   1. A changed document is written to the recovery folder in the user's
 #      data ($XDG_DATA_HOME/Mitcad/Mitcad/autosave): the project file and
@@ -108,12 +109,9 @@ no_new() {
 
 focus_dialog() { ui_focus_dialog "$1"; }
 
-# type_path path: replaces the file name in Qt's file dialog and accepts.
+# type_path title path: the path typed into Qt's file dialog (ui_type_path), accepted.
 type_path() {
-  ui_key ctrl+a
-  xdotool type --delay 20 "$1"
-  sleep 0.5
-  ui_key Return
+  ui_type_path "$1" "$2"
   ui_focus_main
 }
 
@@ -175,8 +173,8 @@ ui_expect_log "Autosave every 2 s to $FOLDER" "autosave every 2 s in the user's 
 ui_expect_log "Autosaved Untitled: " "the changed document was written"
 expect_files "$FOLDER" "a project file, its metadata and the lock" '*.mitcad' '*.json' '*.lock'
 expect_pair "$FOLDER" - 'meta["format"], meta["version"], meta["document"], meta["path"], meta["base_digest"], ok' \
-  "('mitcad-autosave', 1, 'Untitled', '', '', True)" "the metadata describes the project file"
-expect_pair "$FOLDER" - 'meta["project"] == meta["session"] + ".mitcad", os.path.exists(os.path.join(folder, meta["session"] + ".lock"))' \
+  "('mitcad-autosave', 2, 'Untitled', '', '', True)" "the metadata describes the project file"
+expect_pair "$FOLDER" - 'meta["project"].startswith(meta["session"] + ".") and meta["project"].endswith(".mitcad"), os.path.exists(os.path.join(folder, meta["session"] + ".lock"))' \
   "(True, True)" "the files are named by the session"
 expect_pair "$FOLDER" - 'os.path.exists("/proc/%d" % meta["pid"]), meta["saved_at"].endswith("Z"), meta["application"]' \
   "(True, True, 'Mitcad')" "the process and the time"
@@ -219,8 +217,7 @@ ui_expect_log "Autosaved Untitled: " "the changed document was written"
 first=$(pair_value "$FOLDER" - 'meta["session"]') || ui_fail "no session: $first"
 ui_mark
 ui_step "save as (Ctrl+Shift+S)"         ui_key ctrl+shift+s
-focus_dialog '^Save As$'
-ui_step "type the path, Enter"           type_path "$FILE"
+ui_step "type the path, Enter"           type_path "Save As" "$FILE"
 ui_expect_new "Saved $FILE" "saved"
 ui_expect_new "Autosave removed for Untitled" "saving removes the files"
 expect_files "$FOLDER" "only the session's lock is left" "$first.lock"
@@ -230,7 +227,8 @@ ui_expect_new "Autosaved block.mitcad: " "the change after saving was written"
 expect_pair "$FOLDER" "$first" 'meta["document"], meta["path"], meta["base_digest"] == fnv(meta["path"])' \
   "('block.mitcad', '$FILE', True)" "with the file's path and digest as saved"
 expect_pair "$FOLDER" "$first" "$(d3_of)" "[20.0]" "the change: d3 back to 20"
-checksum=$(sha256sum "$FOLDER/$first.json" "$FOLDER/$first.mitcad")
+first_snapshot=$(pair_value "$FOLDER" "$first" 'meta["project"]') || ui_fail "no snapshot"
+checksum=$(sha256sum "$FOLDER/$first.json" "$FOLDER/$first_snapshot")
 
 echo "--- Another instance does not offer a running one's session"
 "$UI_APP" > "$WORK/other.log" 2>&1 &
@@ -243,13 +241,13 @@ kill -KILL "$other" 2> /dev/null
 wait "$other" 2> /dev/null
 grep -qF "Recovery: none" "$WORK/other.log" || { cat "$WORK/other.log"; ui_fail "the running session was offered"; }
 echo "ok   nothing to recover while the session runs"
-[ "$(sha256sum "$FOLDER/$first.json" "$FOLDER/$first.mitcad")" = "$checksum" ] ||
+[ "$(sha256sum "$FOLDER/$first.json" "$FOLDER/$first_snapshot")" = "$checksum" ] ||
   ui_fail "the running session's files changed"
-expect_files "$FOLDER" "its files and lock are as they were" "$first.lock" "$first.json" "$first.mitcad"
+expect_files "$FOLDER" "its files and lock are as they were" "$first.lock" "$first.json" "$first_snapshot"
 
 echo "--- Killed, the session's files stay; a second session"
 ui_stop_app
-expect_files "$FOLDER" "the killed session's files and lock stay" "$first.lock" "$first.json" "$first.mitcad"
+expect_files "$FOLDER" "the killed session's files and lock stay" "$first.lock" "$first.json" "$first_snapshot"
 # The second instance opens the design on the worker, slowly: autosave
 # waits for it.
 export MITCAD_TEST_RECOMPUTE_DELAY_MS=2500
@@ -264,14 +262,14 @@ second=$(find "$FOLDER" -name '*.json' ! -name "$first.json" -printf '%f\n' | se
 [ -n "$second" ] && [ "$second" != "$first" ] || ui_fail "no second session in $FOLDER"
 echo "ok   a session of its own: $second"
 expect_pair "$FOLDER" "$second" "$(d3_of)" "[25.0]" "with its change"
-[ "$(sha256sum "$FOLDER/$first.json" "$FOLDER/$first.mitcad")" = "$checksum" ] ||
+[ "$(sha256sum "$FOLDER/$first.json" "$FOLDER/$first_snapshot")" = "$checksum" ] ||
   ui_fail "the first session's files changed"
 echo "ok   the first session's files are as they were"
 ui_step "exit (Ctrl+Q)"                  ui_key ctrl+q
 focus_dialog '^Mitcad$'
 ui_key d # Don't Save: the app ends
 expect_exit "the second session ended"
-expect_files "$FOLDER" "only the killed session's files are left" "$first.lock" "$first.json" "$first.mitcad"
+expect_files "$FOLDER" "only the killed session's files are left" "$first.lock" "$first.json" "$first_snapshot"
 expect_pair "$FOLDER" "$first" 'ok' "True" "and they are a complete pair"
 base=$(pair_value "$FOLDER" "$first" 'meta["base_digest"]') || ui_fail "no base digest: $base"
 
@@ -286,7 +284,7 @@ ui_step "later (Esc)"                    ui_key Escape
 ui_focus_main
 ui_expect_new "Recovery: later, 1 document(s) kept" "Later keeps it"
 expect_title "Untitled - Mitcad"
-expect_files "$FOLDER" "its files stay, unlocked" "$first.json" "$first.mitcad"
+expect_files "$FOLDER" "its files stay, unlocked" "$first.json" "$first_snapshot"
 
 echo "--- File > Recover Documents: the file changed since; Restore"
 file_d3 "$FILE" 40 # another program changes the file
@@ -306,7 +304,7 @@ expect_title "block.mitcad* - Mitcad"
 ui_expect_new "Autosaved block.mitcad: " "this session wrote it"
 ui_expect_new "Recovered session $first removed" "and removed the killed session's files"
 third=$(pair_value "$FOLDER" - 'meta["session"]') || ui_fail "no session: $third"
-expect_files "$FOLDER" "only this session's files are left" "$third.lock" "$third.json" "$third.mitcad"
+expect_files "$FOLDER" "only this session's files are left" "$third.lock" "$third.json" "$third.*.mitcad"
 expect_pair "$FOLDER" "$third" "meta['document'], meta['path'], meta['base_digest'] == '$base'" \
   "('block.mitcad', '$FILE', True)" "as its file, with the digest the file was opened with"
 expect_pair "$FOLDER" "$third" "$(d3_of)" "[20.0]" "with the recovered change"

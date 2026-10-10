@@ -80,6 +80,10 @@ pub struct BSplineSurface {
     pub nv: usize,
     pub poles: Vec<P3>,
     pub weights: Option<Vec<f64>>,
+    /// Periodic in u or v (stored clamped and closed): faces may cross
+    /// the seam, as edges may on periodic curves.
+    pub u_periodic: bool,
+    pub v_periodic: bool,
 }
 
 fn full_knots(knots: &[f64], mults: &[usize]) -> Vec<f64> {
@@ -330,6 +334,7 @@ impl Curve {
 ///   axis, v along the curve).
 /// - `Ruled`: du x dv of `S(u, v) = (1 - u) from(v) + u to(v)`, `u` in
 ///   [0, 1].
+/// - `ArcSweep`: du x dv, `u` in [0, 1] along the arcs.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Surface {
     Plane {
@@ -374,12 +379,23 @@ pub enum Surface {
         from: Curve,
         to: Curve,
     },
+    /// Circular arcs through corresponding points of curves with the same
+    /// parameter range: for each v, the rational quadratic B-spline (in u,
+    /// knots spaced evenly in [0, 1], one arc per two spans) whose control
+    /// points are the curves' points at v and whose weights are `weights`
+    /// (used for the rounded roots of threads, between helices sampled at
+    /// the same parameters).
+    ArcSweep {
+        sections: Vec<Curve>,
+        weights: Vec<f64>,
+    },
 }
 
 impl Surface {
     pub fn kind(&self) -> &'static str {
         match self {
             Surface::Ruled { .. } => "ruled",
+            Surface::ArcSweep { .. } => "arc sweep",
             Surface::Plane { .. } => "plane",
             Surface::Cone { half_angle, .. } if *half_angle == 0.0 => "cylinder",
             Surface::Cone { .. } => "cone",
@@ -564,9 +580,14 @@ impl Body {
     }
 
     /// Splits shells whose faces fall into groups that share no edge (ASM
-    /// allows that in sheet bodies, OCCT does not).
+    /// allows that in sheet bodies, OCCT does not). The groups of a lump's
+    /// only shell are lumps of their own: pieces side by side, not one
+    /// inside another (a lump's other shells are its voids, which ASM keeps
+    /// as shells of their own).
     pub fn split_disconnected_shells(&mut self) {
+        let mut pieces = Vec::new();
         for li in 0..self.lumps.len() {
+            let single = self.lumps[li].shells.len() == 1;
             let mut out = Vec::new();
             for shell in std::mem::take(&mut self.lumps[li].shells) {
                 let n = shell.faces.len();
@@ -606,12 +627,17 @@ impl Body {
                 }
                 if groups.len() <= 1 {
                     out.push(shell);
+                } else if single {
+                    let mut groups = groups.into_iter().map(|(_, s)| s);
+                    out.extend(groups.next());
+                    pieces.extend(groups.map(|s| Lump { shells: vec![s] }));
                 } else {
                     out.extend(groups.into_iter().map(|(_, s)| s));
                 }
             }
             self.lumps[li].shells = out;
         }
+        self.lumps.extend(pieces);
     }
 
     /// Every shell of every lump is closed: the body is a solid.

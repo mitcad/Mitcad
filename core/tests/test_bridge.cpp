@@ -15,7 +15,13 @@
 #include <thread>
 #include <vector>
 
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <BRep_Builder.hxx>
+#include <Bnd_Box.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -27,6 +33,7 @@
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
 #include <TopoDS_Face.hxx>
 #include <gp_Vec.hxx>
 
@@ -187,13 +194,34 @@ void test_block_fillet_and_dimension_change() {
                  R"({"comment":"Fillet1 radius","dependencies":[],"expression":"3 mm","favorite":false,)"
                  R"("kind":"model","name":"d4","owner":"F3","text":"3 mm","unit":"mm","value":3.0})"));
 
-  // A failing fillet (wider than the 40 mm face) keeps the unfilleted body.
-  const std::string failed = run(*document, set("d4", 50));
+  // A failing fillet keeps the unfilleted body: the ball is too large to
+  // touch either face inside the 80 x 40 block, even rolling on a far edge.
+  const std::string failed = run(*document, set("d4", 150));
   CHECK(contains(failed, R"("error":"Fillet1: )") && contains(failed, "fillet"));
   CHECK(near(body_volume(*document), 80.0 * 40.0 * 20.0));
   // Undo brings the working fillet back from the cache.
   CHECK(contains(run(*document, R"({"cmd": "undo"})"), R"("recomputed":0)"));
   CHECK(near(body_volume(*document), 80.0 * 40.0 * 20.0 - removed));
+
+  // Wider than the 40 mm face (mitcad#121): the ball touches the front and
+  // rolls on the far edge at (80, 40), the 40 mm face vanishes. Its centre
+  // lies 50 behind the front, L = sqrt(2400) left of x = 80; the section
+  // taken away is the integral of 50 - sqrt(2500 - u^2) over [0, L].
+  const std::string wide = run(*document, set("d4", 50));
+  CHECK(contains(wide, R"("error":null)"));
+  const double l = std::sqrt(2400.0);
+  const double cut = 50.0 * l - 0.5 * (10.0 * l + 2500.0 * std::asin(l / 50.0));
+  CHECK(near(body_volume(*document), 80.0 * 40.0 * 20.0 - cut * 20.0));
+  CHECK(!has_sharp_vertical_edge_at(*document, 80, 0));
+  CHECK(has_sharp_vertical_edge_at(*document, 80, 40));
+  CHECK(has_sharp_vertical_edge_at(*document, 0, 0));
+  CHECK(has_sharp_vertical_edge_at(*document, 80.0 - l, 0)); // where the rounding leaves the front
+  const auto rounded = document->body_shape("F2.b0");
+  int faces = 0;
+  for (TopExp_Explorer it(rounded->occt(), TopAbs_FACE); it.More(); it.Next()) {
+    ++faces;
+  }
+  CHECK(faces == 6); // the rounding in place of the 40 mm face
 }
 
 // A classic: a block with a boss joined onto it, a fillet on a boss
@@ -818,6 +846,77 @@ void test_boundary_distances_on_spline_faces() {
   }
 }
 
+// The boundary distances on a plate of many holes (mitcad#60): every
+// edge's middle is on the boundary, points off the faces have the
+// distance OCCT's distance query measures, and a point above the top face
+// has its nearest point and normal there unless it is over a hole.
+void test_boundary_distances_of_a_plate_with_holes() {
+  TopoDS_Shape plate = BRepPrimAPI_MakeBox(20.0, 20.0, 2.0).Shape();
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      const gp_Ax2 axis(gp_Pnt(3.0 + 4.5 * i, 3.0 + 4.5 * j, -1.0), gp::DZ());
+      plate = BRepAlgoAPI_Cut(plate, BRepPrimAPI_MakeCylinder(axis, 1.0, 4.0).Shape()).Shape();
+    }
+  }
+  const mitcad::geometry::Shape body(plate);
+  std::vector<double> points;
+  const auto add = [&](const gp_Pnt& p) { points.insert(points.end(), {p.X(), p.Y(), p.Z()}); };
+  for (int i = 0; i < body.edge_count(); ++i) {
+    const BRepAdaptor_Curve curve(body.edge(i));
+    add(curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter())));
+  }
+  const std::size_t middles = points.size() / 3;
+  // Off the faces: on a hole's axis, above the plate, beyond a corner,
+  // inside the material, beside a hole's rim above it.
+  const std::vector<gp_Pnt> off{gp_Pnt(3.0, 3.0, 1.0), gp_Pnt(10.0, 10.0, 3.5), gp_Pnt(-1.0, -2.0, 4.0),
+                                gp_Pnt(5.25, 5.25, 1.0), gp_Pnt(3.5, 3.0, 2.3)};
+  for (const gp_Pnt& p : off) {
+    add(p);
+  }
+  const rust::Vec<double> d =
+      mitcad::bridge::analysis_boundary_distances(body, rust::Slice<const double>(points.data(), points.size()));
+  CHECK(d.size() == points.size() / 3);
+  for (std::size_t k = 0; k < middles; ++k) {
+    CHECK(d[k] <= 1e-6);
+  }
+  BRep_Builder builder;
+  TopoDS_Compound faces;
+  builder.MakeCompound(faces);
+  for (int i = 0; i < body.face_count(); ++i) {
+    builder.Add(faces, body.face(i));
+  }
+  for (std::size_t k = 0; k < off.size(); ++k) {
+    BRepExtrema_DistShapeShape occt(BRepBuilderAPI_MakeVertex(off[k]).Vertex(), faces);
+    CHECK(occt.IsDone() && std::abs(d[middles + k] - occt.Value()) < 1e-7);
+  }
+  // The top face: the plane z = 2 facing up.
+  int top = -1;
+  for (int i = 0; i < body.face_count(); ++i) {
+    Bnd_Box box;
+    BRepBndLib::Add(body.face(i), box);
+    double x0 = 0.0;
+    double y0 = 0.0;
+    double z0 = 0.0;
+    double x1 = 0.0;
+    double y1 = 0.0;
+    double z1 = 0.0;
+    box.Get(x0, y0, z0, x1, y1, z1);
+    if (std::abs(z0 - 2.0) < 1e-3 && std::abs(z1 - 2.0) < 1e-3) {
+      top = i;
+    }
+  }
+  CHECK(top >= 0);
+  std::array<double, 3> point{};
+  std::array<double, 3> normal{};
+  // Beside a hole's rim, and exactly over it (on the boundary).
+  CHECK(mitcad::bridge::analysis_face_point(body, {top}, {4.5, 3.0, 2.7}, point, normal));
+  CHECK(std::abs(point[0] - 4.5) < 1e-9 && std::abs(point[2] - 2.0) < 1e-9 && normal[2] > 1.0 - 1e-9);
+  CHECK(mitcad::bridge::analysis_face_point(body, {top}, {4.0, 3.0, 2.0}, point, normal));
+  CHECK(std::abs(point[0] - 4.0) < 1e-9 && normal[2] > 1.0 - 1e-9);
+  // Over the hole: OCCT's distance query finds the rim.
+  CHECK(!mitcad::bridge::analysis_face_point(body, {top}, {3.2, 3.0, 2.5}, point, normal));
+}
+
 // A Rust panic's message reaches the application's sink (mitcad#62),
 // before the hook that prints it.
 std::string g_panic_note;
@@ -901,6 +1000,55 @@ void test_out_of_memory_in_an_operation() {
   CHECK(!memory.limit_kind.empty());
 }
 
+// Live updates (mitcad#89): the hub's commands and events through the
+// bridge, a connection's thread reporting a broker that cannot be reached,
+// TLS set up with the system's root certificates, and a read of the events
+// on another thread ended by close.
+void test_live_hub() {
+  const rust::Box<mitcad::LiveHub> hub = mitcad::new_live_hub();
+  CHECK(contains(std::string(hub->command(R"({"cmd": "status"})")), R"("connections":[])"));
+  CHECK(contains(std::string(hub->events(0)), R"("events":[])"));
+  CHECK(throws_with(
+      [&] {
+        hub->command(R"({"cmd": "connect", "broker": "mqtt://127.0.0.1:9", "user": "u",
+                         "password": "secret", "session": "01234567-89ab-cdef-0123-456789abcdef"})");
+      },
+      "only over TLS"));
+  CHECK(throws_with([&] { hub->command(R"({"cmd": "dance"})"); }, "unknown live command"));
+  // Nothing listens on port 9 here: the connection goes offline.
+  const std::string subscribed(hub->command(
+      R"({"cmd": "subscribe", "broker": "mqtt://127.0.0.1:9", "session": "01234567-89ab-cdef-0123-456789abcdef",
+          "project": "0123456789abcdef0123456789abcdef01234567"})"));
+  CHECK(contains(subscribed, R"("connection":"c1")"));
+  bool offline = false;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (!offline && std::chrono::steady_clock::now() < deadline) {
+    const std::string events(hub->events(500));
+    offline = contains(events, R"("state":"offline")");
+  }
+  CHECK(offline);
+  // TLS: the system's root certificates are read (Windows' and macOS'
+  // certificate stores through their libraries) before connecting.
+  const std::string test(hub->command(R"({"cmd": "test", "broker": "mqtts://127.0.0.1:9", "timeout_ms": 2000})"));
+  CHECK(contains(test, R"("ok":false)") && contains(test, R"("tls":true)"));
+  CHECK(contains(test, R"("step":"connect")"));
+  // A blocking read on another thread ends when the hub closes. Events of
+  // the connection's retries may come first (on Windows a refused connect
+  // takes a while), so the reader reads until it sees the hub closed.
+  std::string closed;
+  std::thread reader([&] {
+    for (int reads = 0; reads < 1000 && !contains(closed, R"("closed":true)"); ++reads) {
+      closed = std::string(hub->events(60000));
+    }
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  const auto closing = std::chrono::steady_clock::now();
+  hub->command(R"({"cmd": "close"})");
+  reader.join();
+  CHECK(contains(closed, R"("closed":true)"));
+  CHECK(std::chrono::steady_clock::now() - closing < std::chrono::seconds(10));
+}
+
 } // namespace
 
 int main() {
@@ -920,9 +1068,11 @@ int main() {
   test_remote_bridge();
   test_linked_projection_follows_its_source();
   test_boundary_distances_on_spline_faces();
+  test_boundary_distances_of_a_plate_with_holes();
   test_panic_note();
   test_segment_crossings();
   test_out_of_memory_in_an_operation();
+  test_live_hub();
 
   if (failures == 0) {
     std::puts("test_bridge: all checks passed");

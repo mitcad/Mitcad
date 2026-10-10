@@ -28,8 +28,11 @@ class TimelineStrip;
 // a feature moves it in the timeline, and a place it cannot go shows red
 // while dragging. Timeline groups (P9) have a band over their features,
 // which a click folds into one folder cell (and a double-click on that
-// opens again). Shift+click selects a run of features. What
-// the actions do is the BrowserController's.
+// opens again). Shift+click selects a run of features. A filter (mitcad#98)
+// shows only some components' features: the others take no room, a mark
+// stands for each run of them, and the marker and the playback buttons step
+// between the features shown. What the actions do is the
+// BrowserController's.
 class TimelineWidget : public QWidget {
   Q_OBJECT
 
@@ -37,6 +40,15 @@ public:
   explicit TimelineWidget(const CommandContext& model, QWidget* parent = nullptr);
 
   void rebuild(const DocumentSnapshot& snapshot);
+  // Shows only some components' features (mitcad#98): all (an empty
+  // filter), the active component's (kActiveFilter) or a component's (its
+  // uid), with those of the components placed in it when `subcomponents`.
+  // Joints and rigid groups that place occurrences of a shown component
+  // are shown too. This window's view, not saved.
+  void setFilter(const QString& filter, bool subcomponents);
+  QString filter() const { return m_filter; }
+  bool filterSubcomponents() const { return m_subcomponents; }
+  static const QString kActiveFilter;
   // Selects a feature and scrolls to it (Find in Timeline).
   void selectFeature(const QString& uid);
   QString selectedFeature() const;
@@ -81,6 +93,14 @@ private:
   // The playback buttons' icons and the marker in the colours of the
   // palette, light or dark (mitcad#14); logs them when they change.
   void applyPalette();
+  // The filter (mitcad#98): the components whose features it shows (empty:
+  // all), whether a feature is shown, its menu and its button's state.
+  QSet<QString> filteredComponents() const;
+  bool passesFilter(const DocumentSnapshot::Feature& feature, const QSet<QString>& components,
+                    const QHash<QString, QString>& occurrenceComponents) const;
+  QString filterLabel() const;
+  void showFilterMenu();
+  void updateFilterButton();
 
   const CommandContext& m_model;
   DocumentSnapshot m_snapshot; // the last rebuild's
@@ -94,6 +114,10 @@ private:
   QLineEdit* m_editor = nullptr;
   QString m_editing; // the feature being renamed
   QString m_logged;
+  QString m_filter; // empty: all components; kActiveFilter or a component's uid
+  bool m_subcomponents = false;
+  QToolButton* m_filterButton = nullptr;
+  QString m_loggedFilter;
 };
 
 } // namespace mitcad

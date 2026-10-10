@@ -30,12 +30,20 @@ mod update;
 // The .ipt import (mitcad#60).
 mod ipt_history;
 mod ipt_import;
+// The .iam import (mitcad#60, stage 4).
+mod iam_import;
 // Component libraries (mitcad#64, mitcad#63).
 mod libraries;
 // A Rust panic's message for the application's crash reports (mitcad#62).
 mod panic_note;
 // The process's memory against its limits, for the import (mitcad#80).
 pub mod memory;
+// Local and Cloud projects (mitcad#89).
+mod projects;
+// Live updates (mitcad#89).
+mod live;
+// Local headless MCP tools (mitcad#124).
+mod mcp;
 
 use cxx::SharedPtr;
 use mitcad_model::api::ApiError;
@@ -58,6 +66,11 @@ use remote::{
 use libraries::{configure_libraries, describe_library, describe_parts, library_command};
 // Import threads the hang watchdog gave up (mitcad#82).
 use f3d_import::abandoned_imports;
+// Local and Cloud projects (mitcad#89).
+use projects::{projects_command, projects_command_text};
+// Live updates (mitcad#89).
+use live::{LiveHub, new_live_hub};
+use mcp::run_mcp;
 
 #[cxx::bridge(namespace = "mitcad")]
 mod ffi {
@@ -74,6 +87,9 @@ mod ffi {
 
     extern "Rust" {
         type Document;
+
+        /// Serves local MCP tools on stdin/stdout within the workspace.
+        fn run_mcp(workspace: &str, read_only: bool) -> Result<()>;
 
         fn new_document() -> Box<Document>;
         /// A 60 x 40 x 20 mm block (Sketch1, Extrude1), used by tests.
@@ -141,6 +157,11 @@ mod ffi {
         /// (options in commands.md, `import_ipt`); returns the import
         /// report as JSON, or text with `{"text": true}`.
         fn import_ipt(self: &mut Document, path: &str, json: &str) -> Result<String>;
+        /// Imports an .iam assembly: its occurrences as components and
+        /// occurrences, each part with the .ipt import (options in
+        /// commands.md, `import_iam`); returns the import report as JSON,
+        /// or text with `{"text": true}`.
+        fn import_iam(self: &mut Document, path: &str, json: &str) -> Result<String>;
     }
 
     // Background computation (P7, jobs.rs): the application computes a
@@ -358,11 +379,54 @@ mod ffi {
 
     extern "Rust" {
         /// How many import threads the hang watchdog gave up still run
-        /// (their geometry kernel call has not returned). A process that
+        /// (their geometry kernel call has not returned), with the
+        /// workers that evaluated definitions ahead and still run
+        /// (mitcad#95). A process that
         /// ends while one runs ends with std::_Exit once its output is
         /// written, without its static destructors, which would tear down
         /// OCCT's state under the thread.
         fn abandoned_imports() -> usize;
+    }
+
+    // Local and Cloud projects (mitcad#89, projects.rs): what a folder is,
+    // what a remote holds, projects made and opened from a remote, shared
+    // folders and SSH host keys (commands.md "Projects"). A project's own
+    // commands (project_settings, set_project_settings, set_identity,
+    // remember_design) are Project commands.
+
+    extern "Rust" {
+        /// Runs a command without a project (inspect_folder, check_remote,
+        /// create_project, clone_project, init_bare, host_keys,
+        /// trust_host_key, ssh_public_key, git_info); one that uses git or
+        /// the network reports its progress to `control` and stops when it
+        /// is cancelled. JSON with "error" (null on success) and "log".
+        fn projects_command(json: &str, control: &SyncControl) -> Result<String>;
+        /// The same answered in text for people (mitcad-cli); a failure in
+        /// the answer's "error" is an error.
+        fn projects_command_text(json: &str, control: &SyncControl) -> Result<String>;
+    }
+
+    // Live updates (mitcad#89, live.rs): the MQTT client of Cloud
+    // projects, all in Rust (core/vcs/src/remote/mqtt); the application
+    // gets checked events as JSON (commands.md "Live updates").
+
+    extern "Rust" {
+        /// The application's live updates: one connection per broker, user
+        /// and prefix, shared by the projects on it. Both threads may use
+        /// it at once: the commands on the UI thread, the events on a
+        /// worker thread.
+        type LiveHub;
+
+        fn new_live_hub() -> Box<LiveHub>;
+        /// Runs a live command (connect, subscribe, unsubscribe, watch,
+        /// publish, disconnect, status, test, close); returns its JSON
+        /// answer. `test` blocks up to its timeout: run it on a worker
+        /// thread.
+        fn command(self: &LiveHub, json: &str) -> Result<String>;
+        /// The checked events that waited, after waiting up to
+        /// `timeout_ms` for one: JSON {"events": [...], "lost", "closed"};
+        /// at once when the hub is closed.
+        fn events(self: &LiveHub, timeout_ms: u32) -> String;
     }
 }
 
@@ -475,7 +539,7 @@ impl Document {
         let is_import = |v: &serde_json::Value| {
             matches!(
                 v.get("cmd").and_then(|c| c.as_str()),
-                Some("import_f3d" | "import_fcstd" | "import_ipt")
+                Some("import_f3d" | "import_fcstd" | "import_ipt" | "import_iam")
             )
         };
         match value {
@@ -511,6 +575,7 @@ impl Document {
         match command.get("cmd").and_then(|c| c.as_str()) {
             Some("import_fcstd") => self.import_fcstd_command(command),
             Some("import_ipt") => self.import_ipt_command(command),
+            Some("import_iam") => self.import_iam_command(command),
             _ => self.import_f3d_command(command),
         }
     }

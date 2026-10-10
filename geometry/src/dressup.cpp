@@ -6,6 +6,7 @@
 #include <cmath>
 #include <exception>
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepCheck_Result.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepGProp.hxx>
@@ -22,12 +24,17 @@
 #include <Law_Interpolate.hxx>
 #include <NCollection_Array1.hxx>
 #include <NCollection_HArray1.hxx>
+#include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_List.hxx>
 #include <Precision.hxx>
 #include <ShapeBuild_ReShape.hxx>
 #include <ShapeFix_Shape.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <Standard_ErrorHandler.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <gp_Pnt2d.hxx>
 
 #include "blend.hpp"
@@ -35,6 +42,7 @@
 #include "face_select.hpp"
 #include "history.hpp"
 #include "mitcad/geometry/boolean.hpp"
+#include "ring_dressup.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry {
@@ -51,6 +59,16 @@ constexpr double kAngleTolerance = 1.0e-4;
 // part). A strip of 1e-4 is too thin: OCCT corrupted its memory on one of
 // the corpus' fillets with it.
 constexpr double kShrink = 1.0 - 1.0e-3;
+// OCCT's fillet parameters (BRepFilletAPI_MakeFillet::SetParams: angular
+// tolerance, tolerance of the spine, 2d tolerance, approximation
+// tolerances in 3d and 2d, deflection) for a second try where the defaults
+// (1e-2, 1e-4, 1e-5, 1e-4, 1e-5, 1e-3) fail: with the defaults OCCT finds no
+// start for the rolling ball along some edges where the faces fold back
+// sharply (mitcad#107).
+constexpr double kTight[6] = {1.0e-3, 1.0e-7, 1.0e-9, 1.0e-6, 1.0e-8, 1.0e-5};
+// The angle between the faces' normals across a knife edge: more than
+// about 172 degrees (they fold back on each other).
+constexpr double kKnife = 3.0;
 
 // Runs `attempt` with the sizes as given (scale 1), then, when it fails
 // (not for invalid arguments), with the sizes scaled by kShrink, noting so
@@ -208,6 +226,96 @@ ShapePtr healed(const Shape& result, const Shape& body) {
   }
 }
 
+// The faces and edges of a shape that OCCT's checker rejects (a wire's
+// problem counts for its face), in any context.
+ShapeMap faulty_parts(const TopoDS_Shape& shape) {
+  BRepCheck_Analyzer analyzer(shape);
+  ShapeMap faulty;
+  const auto bad = [](const NCollection_List<BRepCheck_Status>& statuses) {
+    for (const BRepCheck_Status s : statuses) {
+      if (s != BRepCheck_NoError) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const auto check = [&](const TopoDS_Shape& part, const TopoDS_Shape& owner) {
+    const occ::handle<BRepCheck_Result>& result = analyzer.Result(part);
+    if (result.IsNull()) {
+      return;
+    }
+    bool faults = bad(result->Status());
+    for (result->InitContextIterator(); result->MoreShapeInContext(); result->NextShapeInContext()) {
+      faults = faults || bad(result->StatusOnShape());
+    }
+    if (faults) {
+      faulty.Add(owner);
+    }
+  };
+  for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next()) {
+    check(f.Current(), f.Current());
+    for (TopExp_Explorer w(f.Current(), TopAbs_WIRE); w.More(); w.Next()) {
+      check(w.Current(), f.Current());
+    }
+  }
+  for (TopExp_Explorer e(shape, TopAbs_EDGE); e.More(); e.Next()) {
+    check(e.Current(), e.Current());
+  }
+  return faulty;
+}
+
+// Whether every face and edge OCCT's checker rejects in a dressup's result
+// is one of its input's that the dressup left as it was, rejected there
+// too: stored bodies of imported designs are at times invalid in places
+// (a self-intersecting wire of a planar face, mitcad#107), and a rounding
+// elsewhere on them is then as good as its input. A problem of the shell
+// or solid as a whole does not count as inherited, nor one of a face the
+// dressup should have changed (`touched`: the faces at its edges), which
+// the result holding it unchanged leaves unfinished, nor one next to a face
+// the dressup made or changed: the faults must lie away from its work.
+bool inherited_faults_only(const TopoDS_Shape& result, const TopoDS_Shape& input, const ShapeMap& touched) {
+  const ShapeMap now = faulty_parts(result);
+  if (now.IsEmpty()) {
+    return false;
+  }
+  const ShapeMap before = faulty_parts(input);
+  ShapeMap kept; // the input's faces in the result
+  TopExp::MapShapes(input, TopAbs_FACE, kept);
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces_of;
+  TopExp::MapShapesAndAncestors(result, TopAbs_EDGE, TopAbs_FACE, faces_of);
+  for (int i = 1; i <= now.Extent(); ++i) {
+    const TopoDS_Shape& part = now(i);
+    if (!before.Contains(part) || touched.Contains(part)) {
+      return false;
+    }
+    for (TopExp_Explorer e(part, TopAbs_EDGE); e.More(); e.Next()) {
+      const int index = faces_of.FindIndex(e.Current());
+      if (index == 0) {
+        continue;
+      }
+      for (const TopoDS_Shape& next : faces_of(index)) {
+        if (!kept.Contains(next)) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+// Set while a dressup is tried again another way (dress): a result OCCT's
+// checker rejects is then not healed. Healing keeps a repair within a
+// quarter of the volume, too loose to take a second way's result on trust.
+thread_local bool t_retry = false;
+
+class RetryScope {
+public:
+  RetryScope() { t_retry = true; }
+  ~RetryScope() { t_retry = false; }
+  RetryScope(const RetryScope&) = delete;
+  RetryScope& operator=(const RetryScope&) = delete;
+};
+
 // Names the result of a fillet or chamfer: the faces generated from every
 // edge of the contours (the tangent chains included) and their vertices.
 ShapePtr name_result(BRepFilletAPI_LocalOperation& maker, const std::string& feature,
@@ -215,6 +323,7 @@ ShapePtr name_result(BRepFilletAPI_LocalOperation& maker, const std::string& fea
   detail::FaceNamer namer(maker.Shape());
   namer.carry(maker, body);
   ShapeMap vertices;
+  ShapeMap touched; // the faces at the contours' edges
   for (int ic = 1; ic <= maker.NbContours(); ++ic) {
     for (int ie = 1; ie <= maker.NbEdges(ic); ++ie) {
       const TopoDS_Edge& edge = maker.Edge(ic, ie);
@@ -222,6 +331,12 @@ ShapePtr name_result(BRepFilletAPI_LocalOperation& maker, const std::string& fea
         namer.generated(maker, edge, face_name(feature, role, *name));
       }
       TopExp::MapShapes(edge, TopAbs_VERTEX, vertices);
+      const int index = body.edge_index(edge);
+      if (index >= 0) {
+        for (const int f : detail::faces_at_edge(body, index)) {
+          touched.Add(body.face(f));
+        }
+      }
     }
   }
   for (int v = 1; v <= vertices.Extent(); ++v) {
@@ -232,9 +347,12 @@ ShapePtr name_result(BRepFilletAPI_LocalOperation& maker, const std::string& fea
   namer.finish();
   // One check of a valid result: on a large body BRepCheck takes about as
   // long as the fillet itself.
-  if (!BRepCheck_Analyzer(namer.result()).IsValid()) {
-    if (ShapePtr repaired = healed(*namer.shape(), body)) {
-      return repaired;
+  if (!BRepCheck_Analyzer(namer.result()).IsValid() &&
+      !inherited_faults_only(namer.result(), body.occt(), touched)) {
+    if (!t_retry) {
+      if (ShapePtr repaired = healed(*namer.shape(), body)) {
+        return repaired;
+      }
     }
     detail::require_valid(namer.result(), role); // throws with the problem
   }
@@ -451,8 +569,11 @@ double largest_distance(const ChamferSpec& spec) {
 // The rolling ball fillets of the sets (none asymmetric or G2) that own the
 // body's edges, at their sizes times `scale`.
 ShapePtr round_edges(const std::string& feature, const Shape& body, const std::vector<FilletSet>& sets,
-                     const std::vector<int>& owner, bool rolling_ball_corners, double scale) {
+                     const std::vector<int>& owner, bool rolling_ball_corners, double scale, bool tight) {
   BRepFilletAPI_MakeFillet maker(body.occt());
+  if (tight) {
+    maker.SetParams(kTight[0], kTight[1], kTight[2], kTight[3], kTight[4], kTight[5]);
+  }
   for (int edge = 0; edge < body.edge_count(); ++edge) {
     const int s = owner[static_cast<std::size_t>(edge)];
     if (s < 0 || maker.Contour(body.edge(edge)) != 0) {
@@ -712,7 +833,7 @@ double contact_distance(const Shape& body, int edge, const FilletSet& set) {
 // meets another rounded edge at a vertex is unsupported.
 ShapePtr round_and_blend(const std::string& feature, const Shape& body, const std::vector<FilletSet>& sets,
                          const std::vector<int>& owner, const std::vector<char>& blended,
-                         bool rolling_ball_corners, double scale) {
+                         bool rolling_ball_corners, double scale, bool tight) {
   // The chains of all sets, to see where the blended ones end.
   BRepFilletAPI_MakeChamfer probe(body.occt());
   for (int edge = 0; edge < body.edge_count(); ++edge) {
@@ -752,7 +873,7 @@ ShapePtr round_and_blend(const std::string& feature, const Shape& body, const st
     any_plain = any_plain || s >= 0;
   }
   if (any_plain) {
-    rounded = round_edges(feature, body, sets, plain, rolling_ball_corners, scale);
+    rounded = round_edges(feature, body, sets, plain, rolling_ball_corners, scale, tight);
   }
   const Shape& start = rounded ? *rounded : body;
   // The blended sets' chamfer, on the same edges by name.
@@ -818,6 +939,108 @@ ShapePtr round_and_blend(const std::string& feature, const Shape& body, const st
   return detail::blend_bevels(feature, start, *chamfered, kinds);
 }
 
+// The note on a dressup built as rings.
+std::string ring_note(const char* role) {
+  return std::string("the ") + role +
+         " is built as a ring about its circle: the geometry kernel's own stops where it runs over a "
+         "neighbouring face";
+}
+
+// The fillet as rings about whole circles (ring_dressup.hpp), for constant
+// radius and chord length sets; null when it cannot be built so.
+ShapePtr ring_fillet(const std::string& feature, const Shape& body, const std::vector<FilletSet>& sets,
+                     const std::vector<int>& owner) {
+  std::vector<detail::RingEdge> rings;
+  for (int edge = 0; edge < body.edge_count(); ++edge) {
+    const int s = owner[static_cast<std::size_t>(edge)];
+    if (s < 0) {
+      continue;
+    }
+    const FilletSet& set = sets[static_cast<std::size_t>(s)];
+    if (set.curvature) {
+      return nullptr;
+    }
+    detail::RingEdge ring;
+    ring.edge = edge;
+    switch (set.size) {
+    case FilletSize::Constant:
+      ring.radius = set.radius;
+      break;
+    case FilletSize::ChordLength:
+      ring.radius = chord_radius(body, edge, set.chord);
+      break;
+    case FilletSize::Variable:
+    case FilletSize::Asymmetric:
+      return nullptr;
+    }
+    rings.push_back(ring);
+  }
+  ShapePtr result = detail::ring_dressup(feature, "fillet", body, rings);
+  if (result) {
+    result->add_note(ring_note("fillet"));
+  }
+  return result;
+}
+
+// The chamfer as rings about whole circles; null when it cannot be built so.
+ShapePtr ring_chamfer(const std::string& feature, const Shape& body, const std::vector<ChamferSet>& sets,
+                      const std::vector<int>& owner) {
+  std::vector<detail::RingEdge> rings;
+  for (int edge = 0; edge < body.edge_count(); ++edge) {
+    const int s = owner[static_cast<std::size_t>(edge)];
+    if (s < 0) {
+      continue;
+    }
+    const ChamferSpec& spec = sets[static_cast<std::size_t>(s)].spec;
+    detail::RingEdge ring;
+    ring.edge = edge;
+    ring.fillet = false;
+    ring.distance = spec.distance;
+    ring.distance2 = spec.distance;
+    if (spec.type != ChamferType::EqualDistance) {
+      ring.face = measured_face(body, edge, spec.reference_face, spec.flip);
+      if (spec.type == ChamferType::TwoDistances) {
+        ring.distance2 = spec.distance2;
+      } else {
+        ring.angle = spec.angle;
+      }
+    }
+    rings.push_back(ring);
+  }
+  ShapePtr result = detail::ring_dressup(feature, "chamfer", body, rings);
+  if (result) {
+    result->add_note(ring_note("chamfer"));
+  }
+  return result;
+}
+
+// Runs a dressup; when the geometry kernel fails to build it (not for
+// invalid arguments), `rings` builds it as rings on a copy of the input
+// if it can, else the kernel's error stands.
+template <class Dressup, class Rings>
+ShapePtr or_rings(const char* operation, const Shape& input, Dressup&& dressup, Rings&& rings) {
+  try {
+    return detail::run(operation, dressup);
+  } catch (const std::invalid_argument&) {
+    throw;
+  } catch (const Cancelled&) {
+    throw;
+  } catch (const std::runtime_error&) {
+    ShapePtr ringed;
+    try {
+      ringed = detail::run(operation, [&] { return rings(*detail::working_copy(input)); });
+    } catch (const Cancelled&) {
+      throw;
+    } catch (const std::exception&) {
+      ringed = nullptr;
+    }
+    if (ringed) {
+      return ringed;
+    }
+    throw;
+  }
+}
+
 const char* corner_name(ChamferCorner corner) {
   switch (corner) {
   case ChamferCorner::Chamfer:
@@ -828,6 +1051,283 @@ const char* corner_name(ChamferCorner corner) {
     return "blend";
   }
   return "chamfer";
+}
+
+// The chamfer of the edges the sets own at their sizes times `scale`, with
+// the corner type's treatment.
+ShapePtr bevel(const std::string& feature, const Shape& body, const std::vector<ChamferSet>& sets,
+               const std::vector<int>& owner, ChamferCorner corner, double scale) {
+  BRepFilletAPI_MakeChamfer maker(body.occt());
+  add_chamfers(maker, body, sets, owner, scale);
+  const std::vector<int> contour_sets = check_contours(maker, body, sets, owner);
+  const std::vector<TopoDS_Shape> corners =
+      corner == ChamferCorner::Chamfer ? std::vector<TopoDS_Shape>() : corner_vertices(maker);
+  if (corner == ChamferCorner::Miter && !corners.empty()) {
+    return miter(feature, body, sets, owner, maker, corners, scale);
+  }
+  // Blend corners: OCCT's corner faces set back by a multiple of the
+  // largest distance that meets there, a patch in their place.
+  std::vector<detail::Setback> setbacks;
+  for (const TopoDS_Shape& vertex : corners) {
+    double largest = 0.0;
+    for (int ic = 1; ic <= maker.NbContours(); ++ic) {
+      const int s = contour_sets[static_cast<std::size_t>(ic - 1)];
+      for (int ie = 1; ie <= maker.NbEdges(ic) && s >= 0; ++ie) {
+        const TopoDS_Edge& edge = maker.Edge(ic, ie);
+        if (TopExp::FirstVertex(edge).IsSame(vertex) || TopExp::LastVertex(edge).IsSame(vertex)) {
+          largest = std::max(largest, largest_distance(sets[static_cast<std::size_t>(s)].spec) * scale);
+        }
+      }
+    }
+    const auto name = body.name_of_vertex(vertex);
+    if (!name || !(largest > 0.0)) {
+      throw std::invalid_argument("unsupported: a blend corner at an unnamed vertex");
+    }
+    setbacks.push_back({*name, kSetback * largest});
+  }
+  detail::build(maker);
+  if (!maker.IsDone()) {
+    throw std::runtime_error("chamfer failed; the distance may be too large for the edges");
+  }
+  ShapePtr result = name_result(maker, feature, "chamfer", body);
+  if (!setbacks.empty()) {
+    return detail::setback_corners(feature, "chamfer", body, *result, setbacks);
+  }
+  if (corner != ChamferCorner::Chamfer) {
+    result->add_note(std::string("the ") + corner_name(corner) +
+                     " corner type shapes nothing here: no three bevelled edges meet at a vertex");
+  }
+  return result;
+}
+
+// A body with the pieces of its edges merged, with the edge sets carried to
+// the merged edges: OCCT's ShapeUpgrade_UnifySameDomain on edges only joins
+// the edges between the same two faces that continue each other smoothly
+// at a vertex no other edge meets (a circle cut into two arcs, a line into
+// pieces). The faces stay as they are. OCCT's dressups fail on some chains
+// of such pieces (a whole circle in two arcs, mitcad#107) and build the
+// merged edge. `names`: per merged edge, the names of the selected pieces
+// in it.
+struct MergedEdges {
+  ShapePtr body;
+  std::vector<int> owner;
+  std::map<int, std::vector<std::string>> names;
+};
+
+// None when no selected edge merges with another, a merged edge holds
+// pieces of two sets, or it holds a piece no set selects where its set does
+// not follow tangent chains.
+template <class Set>
+std::optional<MergedEdges> merge_edge_pieces(const Shape& body, const std::vector<Set>& sets,
+                                             const std::vector<int>& owner) {
+  // First a quick look for a selected edge with an end where only one
+  // other edge, between the same two faces, meets it.
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> edges_of;
+  TopExp::MapShapesAndUniqueAncestors(body.occt(), TopAbs_VERTEX, TopAbs_EDGE, edges_of);
+  bool pieces_meet = false;
+  for (int e = 0; e < body.edge_count() && !pieces_meet; ++e) {
+    if (owner[static_cast<std::size_t>(e)] < 0) {
+      continue;
+    }
+    const auto faces_of = [&](int edge) {
+      std::vector<int> faces = detail::faces_at_edge(body, edge);
+      std::sort(faces.begin(), faces.end());
+      return faces;
+    };
+    const std::vector<int> faces = faces_of(e);
+    for (const TopoDS_Shape& vertex : {TopExp::FirstVertex(body.edge(e)), TopExp::LastVertex(body.edge(e))}) {
+      const int index = edges_of.FindIndex(vertex);
+      if (index == 0 || edges_of(index).Extent() != 2) {
+        continue;
+      }
+      for (const TopoDS_Shape& other : edges_of(index)) {
+        const int o = body.edge_index(other);
+        pieces_meet = pieces_meet || (o >= 0 && o != e && faces_of(o) == faces);
+      }
+    }
+  }
+  if (!pieces_meet) {
+    return std::nullopt;
+  }
+  ShapeUpgrade_UnifySameDomain unify(body.occt(), true, false, false);
+  unify.Build();
+  const occ::handle<BRepTools_History>& history = unify.History();
+  // The merged edge of each edge of the body (-1 for none).
+  bool merges = false;
+  MergedEdges merged;
+  detail::FaceNamer namer(unify.Shape());
+  namer.carry(*history, body);
+  namer.finish();
+  merged.body = namer.shape();
+  const Shape& m = *merged.body;
+  std::vector<int> image(static_cast<std::size_t>(body.edge_count()), -1);
+  std::vector<int> pieces(static_cast<std::size_t>(m.edge_count()), 0);
+  for (int e = 0; e < body.edge_count(); ++e) {
+    const TopoDS_Shape& edge = body.edge(e);
+    if (history->IsRemoved(edge)) {
+      continue;
+    }
+    const NCollection_List<TopoDS_Shape>& modified = history->Modified(edge);
+    const int i = m.edge_index(modified.IsEmpty() ? edge : modified.First());
+    if (i < 0 || modified.Extent() > 1) {
+      return std::nullopt;
+    }
+    image[static_cast<std::size_t>(e)] = i;
+    ++pieces[static_cast<std::size_t>(i)];
+  }
+  merged.owner.assign(static_cast<std::size_t>(m.edge_count()), -1);
+  std::vector<char> unselected(static_cast<std::size_t>(m.edge_count()), 0);
+  for (int e = 0; e < body.edge_count(); ++e) {
+    const int i = image[static_cast<std::size_t>(e)];
+    const int s = owner[static_cast<std::size_t>(e)];
+    if (i < 0) {
+      if (s >= 0) {
+        return std::nullopt; // a selected edge gone
+      }
+      continue;
+    }
+    if (s < 0) {
+      unselected[static_cast<std::size_t>(i)] = 1;
+      continue;
+    }
+    int& own = merged.owner[static_cast<std::size_t>(i)];
+    if (own >= 0 && own != s) {
+      return std::nullopt;
+    }
+    own = s;
+    merges = merges || pieces[static_cast<std::size_t>(i)] > 1;
+    if (!body.edge_name(e).empty()) {
+      merged.names[i].push_back(body.edge_name(e));
+    }
+  }
+  for (int i = 0; i < m.edge_count(); ++i) {
+    const int s = merged.owner[static_cast<std::size_t>(i)];
+    if (s >= 0 && unselected[static_cast<std::size_t>(i)] != 0 &&
+        !sets[static_cast<std::size_t>(s)].tangent_chain) {
+      return std::nullopt;
+    }
+  }
+  if (!merges) {
+    return std::nullopt;
+  }
+  return merged;
+}
+
+// A dressup of a body with merged edges, its faces also named after the
+// selected pieces: a face generated from a merged edge gets the names the
+// pieces' dressup would have given it (with its own "#k" of a split face).
+ShapePtr with_piece_names(const ShapePtr& result, const MergedEdges& merged, const std::string& feature,
+                          const char* role) {
+  std::map<std::string, std::vector<std::string>> extra;
+  for (const auto& [edge, names] : merged.names) {
+    const std::string& own = merged.body->edge_name(edge);
+    if (own.empty()) {
+      continue;
+    }
+    for (const std::string& name : names) {
+      if (name != own) {
+        extra[face_name(feature, role, own)].push_back(face_name(feature, role, name));
+      }
+    }
+  }
+  std::vector<Shape::NamedFace> faces;
+  for (int f = 0; f < result->face_count(); ++f) {
+    NameList names = result->face_names(f);
+    for (const std::string& name : result->face_names(f)) {
+      const std::size_t hash = name.rfind('#');
+      const bool piece = hash != std::string::npos && name.rfind(')') < hash;
+      const auto found = extra.find(piece ? name.substr(0, hash) : name);
+      if (found != extra.end()) {
+        for (const std::string& other : found->second) {
+          names.push_back(piece ? other + name.substr(hash) : other);
+        }
+      }
+    }
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    faces.push_back({result->face(f), names});
+  }
+  ShapePtr named = std::make_shared<Shape>(result->occt(), faces);
+  for (const std::string& note : result->notes()) {
+    named->add_note(note);
+  }
+  return named;
+}
+
+// The real dressup (`dressup(body, owner, scale, tight)`) on a copy of the
+// input. When OCCT fails at the sizes as asked, it is built again by the
+// same algorithm on the input with the pieces of its edges merged
+// (merge_edge_pieces), then, with `tighten` (fillets), with OCCT's
+// tolerances tightened (kTight), on the input and on the merged one.
+// Throws the first error when none builds.
+template <class Set, class Dressup>
+ShapePtr dress(const Shape& input, const std::vector<Set>& sets, const std::vector<int>& owner, double scale,
+               const std::string& feature, const char* role, bool tighten, Dressup&& dressup) {
+  std::exception_ptr first;
+  try {
+    OCC_CATCH_SIGNALS
+    // OCCT's dressups give the edges of their input p-curves on the new
+    // surfaces and wider tolerances (input_check.hpp): each try works on a
+    // copy of its own.
+    const ShapePtr copy = detail::working_copy(input);
+    return dressup(*copy, owner, scale, false);
+  } catch (const std::invalid_argument&) {
+    throw;
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    if (scale != 1.0) {
+      throw;
+    }
+    first = std::current_exception();
+  }
+  const RetryScope retry;
+  // Tighter tolerances only help where faces fold back on each other along
+  // a selected edge (a knife edge): elsewhere they would only cost the time
+  // of another try.
+  bool knife = false;
+  for (int e = 0; tighten && e < input.edge_count() && !knife; ++e) {
+    if (owner[static_cast<std::size_t>(e)] < 0) {
+      continue;
+    }
+    const std::vector<int> faces = detail::faces_at_edge(input, e);
+    try {
+      OCC_CATCH_SIGNALS
+      knife = faces.size() == 2 &&
+              detail::normal_angle(input.edge(e), input.face(faces[0]), input.face(faces[1])) > kKnife;
+    } catch (const Standard_Failure&) {
+    }
+  }
+  tighten = tighten && knife;
+  bool merges = true;
+  for (const bool tight : {false, true}) {
+    if (tight && tighten) {
+      try {
+        OCC_CATCH_SIGNALS
+        const ShapePtr copy = detail::working_copy(input);
+        return dressup(*copy, owner, scale, true);
+      } catch (const Cancelled&) {
+        throw;
+      } catch (...) {
+      }
+    }
+    if (!merges || (tight && !tighten)) {
+      continue;
+    }
+    try {
+      OCC_CATCH_SIGNALS
+      const ShapePtr copy = detail::working_copy(input);
+      const std::optional<MergedEdges> merged = merge_edge_pieces(*copy, sets, owner);
+      merges = merged.has_value();
+      if (merged) {
+        return with_piece_names(dressup(*merged->body, merged->owner, scale, tight), *merged, feature, role);
+      }
+    } catch (const Cancelled&) {
+      throw;
+    } catch (...) {
+    }
+  }
+  std::rethrow_exception(first);
 }
 
 } // namespace
@@ -844,19 +1344,19 @@ ShapePtr fillet(const std::string& feature, const Shape& input, const std::vecto
     blended[s] = sets[s].size == FilletSize::Asymmetric || sets[s].curvature ? 1 : 0;
     any_blended = any_blended || blended[s] != 0;
   }
-  return detail::run("fillet", [&] {
+  const auto rings = [&](const Shape& body) { return ring_fillet(feature, body, sets, owner); };
+  return or_rings("fillet", input, [&] {
     return with_shrink_retry("fillet", [&](double scale) {
-      // OCCT's fillets give the edges of their input p-curves on the
-      // rounding surfaces and wider tolerances (input_check.hpp): each try
-      // works on a copy of its own.
-      const ShapePtr copy = detail::working_copy(input);
-      const Shape& body = *copy;
-      if (any_blended) {
-        return round_and_blend(feature, body, sets, owner, blended, rolling_ball_corners, scale);
-      }
-      return round_edges(feature, body, sets, owner, rolling_ball_corners, scale);
+      return dress(input, sets, owner, scale, feature, "fillet", true,
+                   [&](const Shape& body, const std::vector<int>& own, double size_scale, bool tight) {
+                     if (any_blended) {
+                       return round_and_blend(feature, body, sets, own, blended, rolling_ball_corners, size_scale,
+                                              tight);
+                     }
+                     return round_edges(feature, body, sets, own, rolling_ball_corners, size_scale, tight);
+                   });
     });
-  });
+  }, rings);
 }
 
 ShapePtr fillet(const std::string& feature, const Shape& body, const std::vector<std::string>& edges,
@@ -880,54 +1380,15 @@ ShapePtr chamfer(const std::string& feature, const Shape& input, const std::vect
     }
   }
   const std::vector<int> owner = select_edges(input, sets);
-  return detail::run("chamfer", [&] {
+  const auto rings = [&](const Shape& body) { return ring_chamfer(feature, body, sets, owner); };
+  return or_rings("chamfer", input, [&] {
     return with_shrink_retry("chamfer", [&](double scale) {
-      // As OCCT's fillets, its chamfers change their input: a copy.
-      const ShapePtr copy = detail::working_copy(input);
-      const Shape& body = *copy;
-      BRepFilletAPI_MakeChamfer maker(body.occt());
-      add_chamfers(maker, body, sets, owner, scale);
-      const std::vector<int> contour_sets = check_contours(maker, body, sets, owner);
-      const std::vector<TopoDS_Shape> corners =
-          corner == ChamferCorner::Chamfer ? std::vector<TopoDS_Shape>() : corner_vertices(maker);
-      if (corner == ChamferCorner::Miter && !corners.empty()) {
-        return miter(feature, body, sets, owner, maker, corners, scale);
-      }
-      // Blend corners: OCCT's corner faces set back by a multiple of the
-      // largest distance that meets there, a patch in their place.
-      std::vector<detail::Setback> setbacks;
-      for (const TopoDS_Shape& vertex : corners) {
-        double largest = 0.0;
-        for (int ic = 1; ic <= maker.NbContours(); ++ic) {
-          const int s = contour_sets[static_cast<std::size_t>(ic - 1)];
-          for (int ie = 1; ie <= maker.NbEdges(ic) && s >= 0; ++ie) {
-            const TopoDS_Edge& edge = maker.Edge(ic, ie);
-            if (TopExp::FirstVertex(edge).IsSame(vertex) || TopExp::LastVertex(edge).IsSame(vertex)) {
-              largest = std::max(largest, largest_distance(sets[static_cast<std::size_t>(s)].spec) * scale);
-            }
-          }
-        }
-        const auto name = body.name_of_vertex(vertex);
-        if (!name || !(largest > 0.0)) {
-          throw std::invalid_argument("unsupported: a blend corner at an unnamed vertex");
-        }
-        setbacks.push_back({*name, kSetback * largest});
-      }
-      detail::build(maker);
-      if (!maker.IsDone()) {
-        throw std::runtime_error("chamfer failed; the distance may be too large for the edges");
-      }
-      ShapePtr result = name_result(maker, feature, "chamfer", body);
-      if (!setbacks.empty()) {
-        return detail::setback_corners(feature, "chamfer", body, *result, setbacks);
-      }
-      if (corner != ChamferCorner::Chamfer) {
-        result->add_note(std::string("the ") + corner_name(corner) +
-                         " corner type shapes nothing here: no three bevelled edges meet at a vertex");
-      }
-      return result;
+      return dress(input, sets, owner, scale, feature, "chamfer", false,
+                   [&](const Shape& body, const std::vector<int>& own, double size_scale, bool) {
+                     return bevel(feature, body, sets, own, corner, size_scale);
+                   });
     });
-  });
+  }, rings);
 }
 
 ShapePtr chamfer(const std::string& feature, const Shape& body, const std::vector<std::string>& edges,

@@ -17,11 +17,11 @@ use super::solve::{SolveError, Solved};
 use super::{Entity, EntityKind, Projection, Ref};
 use crate::features::EvalContext;
 use crate::features::sketch::SketchDef;
-use crate::ids::{BodyUid, EntityUid};
+use crate::ids::EntityUid;
 use crate::kernel::{Curve3, Kernel};
 use crate::parameters::ParamId;
 use crate::profile::{SketchFrame, cross, dot};
-use crate::topo::TopoName;
+use crate::transform::Transform;
 
 /// A projected primitive in sketch coordinates.
 #[derive(Debug, Clone, PartialEq)]
@@ -319,15 +319,26 @@ fn shape_of(entities: &[Entity]) -> Vec<(&'static str, Vec<usize>)> {
         .collect()
 }
 
-/// The model curves of a projection's source.
+/// The model curves of a projection's source, in the sketch's component's
+/// coordinates (moved there from another component's by its link,
+/// mitcad#100).
 fn source_curves<K: Kernel>(
-    source: &TopoName,
-    body: Option<BodyUid>,
+    projection: &Projection,
     ctx: &mut EvalContext<'_, K>,
 ) -> Result<Vec<Curve3>, String> {
-    let shapes = match body {
-        Some(body) => vec![(body, ctx.body(body)?)],
-        None => ctx.bodies(),
+    let source = &projection.source;
+    let (component, moved) = match &projection.link {
+        Some(link) => {
+            let (component, t) = ctx
+                .linked(link)
+                .map_err(|e| format!("projection of {source}: {e}"))?;
+            (component, Some(t))
+        }
+        None => (ctx.component(), None),
+    };
+    let shapes = match projection.body {
+        Some(body) => vec![(body, ctx.body_in(component, body)?)],
+        None => ctx.bodies_in(component),
     };
     for (_, shape) in shapes {
         let curves = ctx
@@ -335,10 +346,54 @@ fn source_curves<K: Kernel>(
             .curves_of(&shape, source)
             .map_err(|e| format!("projection of {source}: {e}"))?;
         if !curves.is_empty() {
-            return Ok(curves);
+            return Ok(match moved {
+                Some(t) => curves.iter().map(|c| transform_curve(&t, c)).collect(),
+                None => curves,
+            });
         }
     }
     Ok(Vec::new())
+}
+
+/// A model curve moved by a rigid transform.
+pub fn transform_curve(t: &Transform, curve: &Curve3) -> Curve3 {
+    match curve {
+        Curve3::Point(p) => Curve3::Point(t.apply_point(*p)),
+        Curve3::Line { start, end } => Curve3::Line {
+            start: t.apply_point(*start),
+            end: t.apply_point(*end),
+        },
+        Curve3::Conic {
+            center,
+            normal,
+            x_axis,
+            major,
+            minor,
+            start,
+            end,
+            closed,
+        } => Curve3::Conic {
+            center: t.apply_point(*center),
+            normal: t.apply_vector(*normal),
+            x_axis: t.apply_vector(*x_axis),
+            major: *major,
+            minor: *minor,
+            start: *start,
+            end: *end,
+            closed: *closed,
+        },
+        Curve3::BSpline {
+            degree,
+            poles,
+            weights,
+            knots,
+        } => Curve3::BSpline {
+            degree: *degree,
+            poles: poles.iter().map(|p| t.apply_point(*p)).collect(),
+            weights: weights.clone(),
+            knots: knots.clone(),
+        },
+    }
 }
 
 /// The definition with linked projections moved to their sources' current
@@ -354,7 +409,7 @@ pub fn follow_links<K: Kernel>(
     let mut updated = def.clone();
     let mut changed = false;
     for projection in &def.projections {
-        let curves = source_curves(&projection.source, projection.body, ctx)?;
+        let curves = source_curves(projection, ctx)?;
         if curves.is_empty() {
             // A lost projection keeps its last geometry.
             continue;

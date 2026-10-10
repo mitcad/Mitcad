@@ -26,6 +26,7 @@
 #include <QString>
 #include <QTemporaryDir>
 
+#include "files/CloudAddress.hpp"
 #include "files/Print3d.hpp"
 #include "framework/Cursors.hpp"
 #include "framework/DesktopEntry.hpp"
@@ -225,6 +226,24 @@ void printTests() {
     CHECK(found[5].arguments == QStringList{QStringLiteral("--single-instance")});
   }
   CHECK(mitcad::findSlicers(mitcad::SlicerSearch{}).isEmpty());
+
+  // Application bundles (macOS): started with `open -a`, the bundle shown.
+  QDir().mkpath(dir + QStringLiteral("/Applications/OrcaSlicer.app/Contents"));
+  QDir().mkpath(dir + QStringLiteral("/Applications/Original Prusa Drivers/PrusaSlicer.app"));
+  touch(dir + QStringLiteral("/Applications/BambuStudio.app")); // a file, not a bundle
+  mitcad::SlicerSearch bundles;
+  bundles.bundleDirectories = {dir + QStringLiteral("/Applications")};
+  const QVector<Slicer> apps = mitcad::findSlicers(bundles);
+  CHECK(apps.size() == 2);
+  if (apps.size() == 2) {
+    const QString orca = dir + QStringLiteral("/Applications/OrcaSlicer.app");
+    CHECK(apps[0].name == QStringLiteral("OrcaSlicer"));
+    CHECK(apps[0].program == QStringLiteral("/usr/bin/open"));
+    CHECK(apps[0].arguments == QStringList({QStringLiteral("-a"), orca}));
+    CHECK(apps[0].location() == orca);
+    CHECK(apps[1].location() == dir + QStringLiteral("/Applications/Original Prusa Drivers/PrusaSlicer.app"));
+  }
+  CHECK(found.isEmpty() || found[0].location() == found[0].program);
 
   CHECK(mitcad::safeFileName(QStringLiteral("Body1")) == QStringLiteral("Body1"));
   CHECK(mitcad::safeFileName(QStringLiteral("a/b\\c:d*e?\"<>|")) == QStringLiteral("a_b_c_d_e_____"));
@@ -692,6 +711,22 @@ void reportCrashTests() {
   CHECK(parseFrame(QStringLiteral("C:\\Mitcad\\bin\\TKernel.dll+0x1a2b")).offset == QStringLiteral("0x1a2b"));
   const Frame mac = parseFrame(QStringLiteral("3   mitcad    0x0000000100003f40 _ZN6mitcad5crash8crashNowEv + 52"));
   CHECK(mac.module == QStringLiteral("mitcad") && mac.offset == QStringLiteral("0x34"));
+  // Windows frames with their functions (dbghelp, mitcad#76): an abort's
+  // stack loses the C runtime's frames, a function's offset does not count.
+  const QStringList windows{QStringLiteral("C:\\Windows\\System32\\ucrtbase.dll!raise+0x1de"),
+                            QStringLiteral("C:\\Windows\\System32\\ucrtbase.dll!abort+0x4e"),
+                            QStringLiteral("C:\\Mitcad\\bin\\mitcad.exe!mitcad::Vector::operator+=+0x8"),
+                            QStringLiteral("C:\\Mitcad\\bin\\mitcad.exe!main+0x55")};
+  const Frame named = parseFrame(windows[2]);
+  CHECK(named.module == QStringLiteral("mitcad.exe"));
+  CHECK(named.symbol == QStringLiteral("mitcad::Vector::operator+="));
+  CHECK(named.offset == QStringLiteral("0x8"));
+  CHECK(trimmedStack(windows) == windows.mid(2));
+  CHECK(normalizedFrames(windows, 2) == QStringList({QStringLiteral("mitcad.exe!mitcad::Vector::operator+="),
+                                                     QStringLiteral("mitcad.exe!main")}));
+  QStringList rebuilt = windows;
+  rebuilt[2].replace(QStringLiteral("+0x8"), QStringLiteral("+0x1c"));
+  CHECK(crashKey(QStringLiteral("SIGABRT"), windows) == crashKey(QStringLiteral("SIGABRT"), rebuilt));
 
   // The same crash at other addresses (another run, another install
   // folder): the same key. Another place: another key.
@@ -768,7 +803,71 @@ void reportLinkTests() {
                        "<sub>Sent from Mitcad 0.1.0 · duplicate key `mitcad-0123456789ab`</sub>\n"));
 }
 
+// The addresses of Cloud projects (mitcad#89).
+void cloudAddressTests() {
+  using namespace mitcad;
+  CloudAddress address;
+  address.service = CloudService::GitHub;
+  address.account = QStringLiteral("you");
+  address.repository = QStringLiteral("robot-arm");
+  CHECK(address.url() == QStringLiteral("https://github.com/you/robot-arm.git"));
+  address.connect = CloudConnect::Ssh;
+  CHECK(address.url() == QStringLiteral("git@github.com:you/robot-arm.git"));
+  CHECK(address.webPage() == QStringLiteral("https://github.com/you/robot-arm"));
+  CHECK(address.newRepositoryPage() ==
+        QStringLiteral("https://github.com/new?owner=you&name=robot-arm&visibility=private"));
+  address.service = CloudService::Forgejo;
+  CHECK(address.url().isEmpty()); // no server yet
+  address.server = QStringLiteral("Code.Example.org");
+  CHECK(address.url() == QStringLiteral("git@code.example.org:you/robot-arm.git"));
+  CHECK(address.newRepositoryPage() == QStringLiteral("https://code.example.org/repo/create"));
+  address.service = CloudService::GitLab;
+  address.connect = CloudConnect::Https;
+  CHECK(address.url() == QStringLiteral("https://gitlab.com/you/robot-arm.git"));
+  address.repository.clear();
+  CHECK(address.url().isEmpty());
+
+  // Read back from an address.
+  CloudAddress parsed = parseCloudAddress(QStringLiteral("git@github.com:me/bracket.git"));
+  CHECK(parsed.service == CloudService::GitHub && parsed.connect == CloudConnect::Ssh);
+  CHECK(parsed.account == QStringLiteral("me") && parsed.repository == QStringLiteral("bracket"));
+  parsed = parseCloudAddress(QStringLiteral("https://gitlab.com/me/bracket"));
+  CHECK(parsed.service == CloudService::GitLab && parsed.connect == CloudConnect::Https);
+  CHECK(parsed.url() == QStringLiteral("https://gitlab.com/me/bracket.git"));
+  parsed = parseCloudAddress(QStringLiteral("https://codeberg.org/me/bracket.git"));
+  CHECK(parsed.service == CloudService::Forgejo && parsed.server == QStringLiteral("codeberg.org"));
+  parsed = parseCloudAddress(QStringLiteral("ssh://git@git.example.org:2222/me/bracket.git"));
+  CHECK(parsed.service == CloudService::Other && parsed.url() == QStringLiteral("ssh://git@git.example.org:2222/me/bracket.git"));
+  parsed = parseCloudAddress(QStringLiteral("git@git.example.org:me/bracket.git"), QStringLiteral("git.example.org"));
+  CHECK(parsed.service == CloudService::Forgejo && parsed.account == QStringLiteral("me"));
+  // GitLab's nested groups stay an address of their own.
+  parsed = parseCloudAddress(QStringLiteral("https://gitlab.com/group/sub/bracket.git"));
+  CHECK(parsed.service == CloudService::Other);
+  parsed = parseCloudAddress(QStringLiteral("/srv/git/bracket.git"));
+  CHECK(parsed.service == CloudService::SharedFolder && parsed.url() == QStringLiteral("/srv/git/bracket.git"));
+  parsed = parseCloudAddress(QStringLiteral("C:\\shared\\bracket.git"));
+  CHECK(parsed.service == CloudService::SharedFolder && parsed.url() == QStringLiteral("C:/shared/bracket.git"));
+  parsed = parseCloudAddress(QStringLiteral("file:///srv/git/bracket.git"));
+  CHECK(parsed.service == CloudService::SharedFolder && parsed.url() == QStringLiteral("/srv/git/bracket.git"));
+
+  CHECK(repositoryNameFor(QStringLiteral("Robot arm")) == QStringLiteral("robot-arm"));
+  CHECK(repositoryNameFor(QStringLiteral("  My  Part (v2) ")) == QStringLiteral("my-part-v2"));
+  CHECK(repositoryNameOf(QStringLiteral("git@github.com:me/bracket.git")) == QStringLiteral("bracket"));
+  CHECK(repositoryNameOf(QStringLiteral("/srv/git/bracket.git/")) == QStringLiteral("bracket"));
+  CHECK(addressHost(QStringLiteral("ssh://git@Example.org:2222/x.git")) == QStringLiteral("example.org"));
+  CHECK(addressHost(QStringLiteral("C:\\x")).isEmpty());
+  CHECK(isSshAddress(QStringLiteral("git@github.com:me/x.git")) && !isSshAddress(QStringLiteral("https://h/x")));
+  CHECK(addressHasPassword(QStringLiteral("https://me:token@github.com/me/x.git")));
+  CHECK(!addressHasPassword(QStringLiteral("https://me@github.com/me/x.git")));
+  CHECK(sameRepository(QStringLiteral("https://GitHub.com/me/x"), QStringLiteral("https://github.com/me/x.git/")));
+  CHECK(!sameRepository(QStringLiteral("https://github.com/me/x"), QStringLiteral("https://github.com/me/y")));
+  CHECK(sameRepository(QStringLiteral("/srv/git/x.git"), QStringLiteral("/srv/git/./x.git")));
+  CHECK(addressWebPage(QStringLiteral("git@github.com:me/x.git")) == QStringLiteral("https://github.com/me/x"));
+}
+
 } // namespace
+
+int autosaveTests();
 
 int main(int argc, char* argv[]) {
   QApplication app(argc, argv);
@@ -784,6 +883,8 @@ int main(int argc, char* argv[]) {
   reportMaskTests();
   reportCrashTests();
   reportLinkTests();
+  cloudAddressTests();
+  failures += autosaveTests();
   if (failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

@@ -239,6 +239,9 @@ function Ui-StartApp([string]$Name, [string[]]$Arguments = @(), [switch]$Recover
   $env:MITCAD_LOG_PICKS = '1'
   # The bodies' volumes before and after each change ("Body ... -> b mm3").
   $env:MITCAD_LOG_VOLUMES = '1'
+  # What typed-in text fields hold ("File dialog Save As: <path>"), so a
+  # failed run shows what a typed path or value became (mitcad#102).
+  $env:MITCAD_LOG_TYPED_TEXT = '1'
   # Settings in an INI file of the test's own, not the user's registry.
   $env:MITCAD_SETTINGS_DIR = $script:UiSettings
   # No update checks (mitcad#9): the tests make no network requests.
@@ -498,12 +501,19 @@ function Ui-TypeIn([string]$Field, [string]$Text) {
   Ui-Type $Text
 }
 
-# Ui-FocusDialog "title regex": waits for a window of the app with that title
-# (a dialog) and sends the keys there; Ui-FocusMain sends them to the main
-# window again. Qt drops key events for a window a modal dialog blocks.
-function Ui-FocusDialog([string]$TitlePattern) {
+# Ui-Windows "title regex": the app's windows with that title, newest first.
+function Ui-Windows([string]$TitlePattern) { return , [UiInput]::Windows($script:UiProcess.Id, $TitlePattern) }
+
+# Ui-FocusDialog "title regex" [-Except windows]: waits for a window of the
+# app with that title (a dialog) and sends the keys there; Ui-FocusMain
+# sends them to the main window again. Qt drops key events for a window a
+# modal dialog blocks. Windows in -Except (Ui-Windows before the dialog
+# opens) do not count: Qt titles a hidden window that has no title of its
+# own after the application, such as the 3D view's offscreen surfaces
+# ("Mitcad"), so a message box titled "Mitcad" is found only as a new window.
+function Ui-FocusDialog([string]$TitlePattern, [IntPtr[]]$Except = @()) {
   for ($i = 0; $i -lt 50; $i++) {
-    $windows = [UiInput]::Windows($script:UiProcess.Id, $TitlePattern)
+    $windows = @([UiInput]::Windows($script:UiProcess.Id, $TitlePattern) | Where-Object { $Except -notcontains $_ })
     if ($windows.Count -gt 0) {
       $script:UiTarget = $windows[0]
       Start-Sleep -Milliseconds 500

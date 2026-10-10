@@ -50,7 +50,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::features::{Env, FeatureDef, FeatureEntry, Operation};
 use crate::fingerprint::Fingerprint;
-use crate::ids::{BodyUid, FeatureUid};
+use crate::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use crate::kernel::Kernel;
 use crate::parameters::Parameters;
 use crate::recompute::{Change, Flag, Output, Part, Read, Versioned, output_version, part_version};
@@ -200,6 +200,9 @@ enum StoredRead {
     AllBodies(Vec<(BodyUid, Hex)>),
     Output(FeatureUid, Option<Hex>),
     Datum(FeatureUid, Option<Hex>),
+    BodyIn(ComponentUid, BodyUid, Option<Hex>),
+    BodiesIn(ComponentUid, Vec<(BodyUid, Hex)>),
+    Placement(OccurrenceUid, Option<[u64; 12]>),
 }
 
 impl StoredRead {
@@ -214,6 +217,12 @@ impl StoredRead {
             }
             Read::Output(uid, v) => Self::Output(*uid, hex(v)),
             Read::Datum(uid, v) => Self::Datum(*uid, hex(v)),
+            Read::BodyIn(component, uid, v) => Self::BodyIn(*component, *uid, hex(v)),
+            Read::BodiesIn(component, bodies) => Self::BodiesIn(
+                *component,
+                bodies.iter().map(|(uid, v)| (*uid, Hex(*v))).collect(),
+            ),
+            Read::Placement(uid, bits) => Self::Placement(*uid, *bits),
         }
     }
 
@@ -230,6 +239,12 @@ impl StoredRead {
             }
             Self::Output(uid, v) => Read::Output(*uid, version(v)),
             Self::Datum(uid, v) => Read::Datum(*uid, version(v)),
+            Self::BodyIn(component, uid, v) => Read::BodyIn(*component, *uid, version(v)),
+            Self::BodiesIn(component, bodies) => Read::BodiesIn(
+                *component,
+                bodies.iter().map(|(uid, v)| (*uid, v.0)).collect(),
+            ),
+            Self::Placement(uid, bits) => Read::Placement(*uid, *bits),
         })
     }
 }

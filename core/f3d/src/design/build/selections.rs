@@ -4,27 +4,37 @@
 //! inputs, and checked on the corpus' items)*.
 //!
 //! A selection is a list input ([`BODY_INPUT`]: `u32 n | n refs` after
-//! its root part) of body inputs ([`BODY_REF`], named by recipes), face
+//! its root part) of body inputs ([`BODY_REF`], named by recipes and by
+//! the items that made the bodies: `producers.rs`, mitcad#96), face
 //! and edge inputs ([`FACE_REF`]) and entity inputs ([`ENTITY_REF`]),
 //! whose target is a feature (a pattern's or mirror's features), an origin
 //! or construction plane or axis, or a sketch entity.
 //!
 //! - Combine: after the root part `u32 operation (0 join, 1 cut, 2
-//!   intersect) | u32 | u8 keep tools | u8 | u32 1 | ref | u32 | u32 0 |
-//!   u32 n | n tool selections | u64 0 | u32 m | m body records (the
-//!   bodies it consumes; none when the tools are kept) | u32 1 | ref target
-//!   selection`.
+//!   intersect) | u32 r | r refs | u8 keep tools | u8 | u32 1 | ref | u32
+//!   | u32 0 | u32 n | n tool selections | u64 0 | u32 m | m body records
+//!   (the bodies it consumes; none when the tools are kept) | u32 1 | ref
+//!   target selection` (one body input per selection; the operation, the
+//!   kept tools and the lists agree in every combine of the corpora, class
+//!   version 1). The `r` references are body removals
+//!   (`RemoveBodyFeature`) that consume tools of other components instead
+//!   of the body records (mitcad#104: one combine of the corpora, `r` 0 in
+//!   all others).
 //! - Split body: `u8 extend tool | u32 1 | ref | u32 | u32 0 | u32 1 | ref
-//!   tool selection | u32 0 | u32 m | m body records | u32 0 | u32 1 | ref
-//!   selection of the split bodies`.
+//!   tool selection | u32 0 | u32 m | m body records (the pieces it makes)
+//!   | u32 0 | u32 1 | ref selection of the split bodies`.
 //! - Patterns and mirrors: the first selection of the input list holds the
 //!   objects; a mirror's second its plane; a pattern's axis or directions
 //!   are direction inputs ([`DIRECTION_INPUT`]) naming an axis, an edge or
-//!   a face.
+//!   a face, with the line they store (mitcad#96). After the item's root
+//!   part and its first two references, `u32 0 | u32 n | n` body records:
+//!   the new bodies it makes (a mirror of bodies that makes none joins
+//!   them with their images, mitcad#96).
 //! - Hole: its points are key point inputs ([`KEY_POINT`]: points in the
-//!   component, cm); the byte six after the root part is 1 for a hole
-//!   through all; the type follows from its parameters (counterbore or
-//!   countersink sizes).
+//!   component, cm); a byte after the root part is 1 for a hole through
+//!   all (the second in class version 4, the sixth in version 7, from two
+//!   designs only; the seventh in the others); the type follows from its
+//!   parameters (counterbore or countersink sizes).
 
 use serde_json::{Map, Value, json};
 
@@ -32,9 +42,27 @@ use super::super::classes::*;
 use super::super::decode::TimelineEntry;
 use super::super::ir::*;
 use super::super::recipe;
-use super::super::stream::{Segment, header_end, u32_at};
-use super::joints::{direction_input, key_point};
-use super::{Builder, body_input, edge_input, face_input, json_value};
+use super::super::stream::{Segment, f64s_at, header_end, u32_at};
+use super::joints::key_point;
+use super::{Builder, edge_input, face_input, json_value};
+
+/// A direction input ([`DIRECTION_INPUT`]) as a line: its point (cm) and
+/// unit direction, both in the component. A construction axis' input
+/// stores its direction times its length (code 7), so the direction is
+/// normalised (mitcad#96).
+fn direction_line(seg: &Segment, id: u64) -> Option<(Vec3, Vec3)> {
+    if seg.guid_of(id) != Some(DIRECTION_INPUT) {
+        return None;
+    }
+    let d = seg.data_of(id);
+    let p = seg.root_part(d)?.end;
+    let v = f64s_at(d, p + 4, 6)?;
+    if !v.iter().all(|x| x.is_finite()) {
+        return None;
+    }
+    let len = (v[3] * v[3] + v[4] * v[4] + v[5] * v[5]).sqrt();
+    (len > 1e-9).then(|| ([v[0], v[1], v[2]], [v[3] / len, v[4] / len, v[5] / len]))
+}
 
 /// The end of a reference at `p`, resolving or not (a deleted object).
 fn ref_end(seg: &Segment, d: &[u8], p: usize) -> Option<usize> {
@@ -127,7 +155,7 @@ impl Builder<'_> {
     fn member(&self, m: u64) -> Option<Reference> {
         let seg = self.seg;
         match seg.guid_of(m)? {
-            BODY_REF => body_input(seg, m),
+            BODY_REF => self.body_input(m),
             FACE_REF => match recipe::of_input(seg, m)?.kind.as_str() {
                 "edge" => edge_input(seg, m),
                 _ => face_input(seg, m),
@@ -174,18 +202,31 @@ impl Builder<'_> {
         if let Some(o) = operation {
             map.insert("operation".into(), json!(o));
         }
-        let keep = d.get(p + 8).copied().filter(|&k| k <= 1);
+        // The tools' removals from other components (mitcad#104): `u32 n |
+        // n refs` to body removals (`RemoveBodyFeature`), which consume
+        // tools there instead of the body records below.
+        let removals = u32_at(d, p + 4).filter(|&n| n <= 100);
+        let mut k = Some(p + 8);
+        for _ in 0..removals.unwrap_or(0) {
+            k = k.and_then(|q| ref_end(seg, d, q));
+        }
+        let Some(k) = k else {
+            return Detail::Other(map);
+        };
+        let removed = removals.is_some_and(|n| n > 0);
+        let keep = d.get(k).copied().filter(|&k| k <= 1);
         if let Some(k) = keep {
             map.insert("isKeepToolBodies".into(), json!(k == 1));
         }
         // `u32 1 | ref | u32 | u32 0`, then the lists.
-        let lists = (u32_at(d, p + 10) == Some(1))
-            .then(|| ref_end(seg, d, p + 14))
+        let lists = (u32_at(d, k + 2) == Some(1))
+            .then(|| ref_end(seg, d, k + 6))
             .flatten()
             .and_then(|q| lists_at(seg, d, q + 8, 8, 0));
         if let Some(l) = lists
             && let [Some(target)] = l.last[..]
-            && l.records.is_empty() == (keep == Some(1))
+            && (l.records.is_empty() == (keep == Some(1))
+                || (removed && keep == Some(0) && l.records.is_empty()))
         {
             let tools: Option<Vec<Reference>> = l
                 .first
@@ -260,8 +301,13 @@ impl Builder<'_> {
     }
 
     /// The direction inputs of an item: the axis, edge or face each names,
-    /// and its stored direction where it has one.
-    pub(super) fn directions(&self, it: &TimelineEntry) -> Vec<(Option<Reference>, Option<Vec3>)> {
+    /// and its stored direction (a unit vector) and point where it has
+    /// them ([`direction_line`]).
+    #[allow(clippy::type_complexity)]
+    pub(super) fn directions(
+        &self,
+        it: &TimelineEntry,
+    ) -> Vec<(Option<Reference>, Option<Vec3>, Option<Vec3>)> {
         self.item_inputs(it)
             .into_iter()
             .filter(|&i| self.seg.guid_of(i) == Some(DIRECTION_INPUT))
@@ -274,9 +320,33 @@ impl Builder<'_> {
                         Some(ENTITY_REF | FACE_REF) => self.member(r),
                         _ => None,
                     });
-                (entity, direction_input(self.seg, i).map(|(_, d, _)| d))
+                let line = direction_line(self.seg, i);
+                (entity, line.map(|(_, d)| d), line.map(|(p, _)| p))
             })
             .collect()
+    }
+
+    /// How many new bodies a pattern or mirror makes: after its root part
+    /// two references (its data and the item's), then `u32 0 | u32 n | n`
+    /// body records ([`BODY_RECORD`]). A mirror of bodies that makes none
+    /// joins them with their images (mitcad#96: every mirror of the
+    /// learning dump).
+    pub(super) fn new_bodies(&self, it: &TimelineEntry) -> Option<usize> {
+        let seg = self.seg;
+        let d = seg.data_of(it.id);
+        let first = seg.ref_at(d, seg.root_part(d)?.end)?;
+        let second = seg.ref_at(d, first.end)?;
+        let p = second.end;
+        let n = u32_at(d, p + 4).filter(|&n| u32_at(d, p) == Some(0) && n <= 10_000)?;
+        let mut q = p + 8;
+        for _ in 0..n {
+            let r = seg.ref_at(d, q)?;
+            if seg.guid_of(r.id) != Some(BODY_RECORD) {
+                return None;
+            }
+            q = r.end;
+        }
+        Some(n as usize)
     }
 
     /// A hole's points (its key point inputs, component space, cm).
@@ -287,11 +357,18 @@ impl Builder<'_> {
             .collect()
     }
 
-    /// Whether a hole goes through all: the byte six after its root part.
+    /// Whether a hole goes through all: a byte after its root part, the
+    /// second in class version 4 and the sixth in version 7 (after a `u32
+    /// 2`; mitcad#96, from two designs only: a lead), else the seventh.
     pub(super) fn hole_through_all(&self, it: &TimelineEntry) -> Option<bool> {
         let d = self.seg.data_of(it.id);
         let p = root_end(self.seg, d)?;
-        match d.get(p + 6)? {
+        let at = match it.class_version {
+            4 => 1,
+            7 => 5,
+            _ => 6,
+        };
+        match d.get(p + at)? {
             0 => Some(false),
             1 => Some(true),
             _ => None,

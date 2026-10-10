@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/commands app/sketch
 # The CREATE group (U4) through the real UI, with the volumes the model
 # reports (analytic, or tools/cli/tests/f1_*.json):
 #   - Extrude: a thin extrusion (walls centred on the profile), edited to
@@ -16,6 +17,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-create-test.sh [screenshot.png]
+# check-all sources: tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 

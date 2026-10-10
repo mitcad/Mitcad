@@ -67,6 +67,7 @@ A one-byte tag followed by its data, little-endian.
 | 0x13 | position | 3 doubles |
 | 0x14 | vector | 3 doubles |
 | 0x15 | enumeration value | 4 or 8 bytes |
+| 0x16 | a pair of doubles *(seen in the unfolding attributes of a sheet metal part file)* | 2 doubles |
 
 Booleans are tags 0x0a/0x0b; `T` below means true. Keywords such as
 `nubs`, `nullbs`, `null_surface`, `plane` or `both` are identifiers (0x0d),
@@ -142,6 +143,10 @@ Conventions *(verified)*:
 - The body transform is identity (or missing) in every corpus file; its
   interpretation (rows = images of the axes, then translation) is
   *(assumed)*.
+
+For conservative endpoint face-order diagnostics from these coedge links,
+and the still-unverified relationship to edge recipe tails, see
+[EDGE_ORDER.md](EDGE_ORDER.md) (mitcad#106).
 
 ### Analytic surfaces and curves
 
@@ -219,10 +224,11 @@ a keyword followed by the record's fields (without the header): `plane`,
 | `rb_blend_spl_sur` | version, support surfaces/curves with their spines and offsets, radius data, then enum and bs3 approximation | approximation |
 | `loft_spl_sur` | version, section curves, ..., bs3 approximation | approximation |
 | `helix_spl_line` | version, three ranges, helix data as in `helix_int_cur`, two `null_surface`, two `nullbs`, line vector; no approximation | exact up to the sampling (see below) |
+| `helix_spl_circ` | version, two ranges, a phase, a range, helix data as in `helix_int_cur`, two `null_surface`, two `nullbs`, the arc's radius; no approximation | exact up to the sampling (see below) |
 
 All procedural curves except helices, and all procedural surfaces except
-`helix_spl_line` and `cyl_spl_sur` with approximation level 2 (built
-exactly anyway), carry a B-spline approximation directly in their subtype
+`helix_spl_line`, `helix_spl_circ` and `cyl_spl_sur` with approximation
+level 2 (built exactly anyway), carry a B-spline approximation directly in their subtype
 object (not in a nested one). The approximation is used where no exact
 construction is implemented; its parameterisation is that of the
 definition.
@@ -243,6 +249,32 @@ of the line's two ends: Mitcad samples both at the same angles (48 points
 per turn) and OCCT interpolates a ruled B-spline surface. The faces' edges
 (`helix_int_cur` of the same helices) lie on the built surfaces within the
 edge tolerance.
+
+**`helix_spl_circ`** (rounded thread roots and crests): a circular arc
+swept along a helix, the arc in the plane of the axis. Layout: version
+(22502), the arc's interval, the helix's interval, a phase `p`, the helix's
+interval again, center, major and minor axis vectors, pitch vector, taper,
+unit axis `a`, two `null_surface`, two `nullbs`, the arc's radius `rho`.
+With `r(v)` as above, `R = |major|` and `w = u + p`:
+`S(u, v) = center + (1 + taper v / 2pi) r(v) + pitch v / 2pi + rho (-cos w r(v) / R + sin w a)`
+*(verified on two surfaces of a part file, phases 180 and -120 degrees:
+the faces' edges are the helices at the ends of their u ranges)*. Mitcad
+samples the helices of the arcs' control points at the same angles (48
+points per turn) and builds rational quadratic arcs through them (one per
+quarter turn of the arc at most), so that each sampled arc is exact.
+A sweep, the ruled flanks beside it and the helical edges are built from
+at most 2160 samples (45 turns at 48 a turn): OCCT's projections and
+booleans make a search grid of a few points per knot span of a spline
+face for each query point, and the replay of parts with threads of 55 and
+81 turns took tens of gigabytes at 48 samples a turn (one of 40 turns
+stays under one). Longer helices are sampled less densely, down to 16
+points a turn (135 turns; longer sweeps are left out, longer flanks and
+edges sampled densely as before). The thread of 55 turns then replays in
+0.25 GB; the part with one of 81 turns (26 a turn) is a valid solid whose
+volume is within 3e-6 of the one sampled at 48 a turn, and it replays
+within the corpus run's 6 GB. Splitting such a face
+into faces of fewer spans (OCCT's face division) was tried: the replay
+took no less memory, and the volume changed by 0.5 %.
 
 ### Attributes and history
 

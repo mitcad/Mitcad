@@ -24,6 +24,10 @@
 //!   a pattern places the originals at every product of their elements,
 //!   the inner element first. Each copy's faces carry the inner instance's
 //!   name inside the outer one's.
+//! - Fillets and chamfers among the features (mitcad#105) are applied
+//!   again on the copies of the edges they round, found by the copies'
+//!   names ([`super::dressup_copies`]); the features then go in timeline
+//!   order.
 //! - Faces: the faces of a body bound a boss or a pocket together with
 //!   planar caps ([`crate::kernel::Kernel::face_tool`]); its copies are
 //!   joined to or cut from the body like a feature's tool.
@@ -40,6 +44,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use super::bodies::{BodySet, apply_tool, apply_tool_strays};
+use super::dressup_copies::{copied_features, is_dressup, repeat_dressup};
 use super::face_refs::UNSUPPORTED;
 use super::geom_ref::{GeomRef, PathCurve, PathRef, Want, path_curve};
 use super::{
@@ -354,7 +359,7 @@ impl PatternObjects {
                         }
                         None => {}
                     }
-                    if entry.def.info().tool_use().is_none() {
+                    if entry.def.info().tool_use().is_none() && !is_dressup(&entry.def) {
                         return Err(format!(
                             "{} ({}) cannot be patterned or mirrored: a {} has no tool body",
                             entry.name,
@@ -476,7 +481,7 @@ fn originals<K: Kernel>(
     depth: usize,
 ) -> Result<Vec<Placed>, String> {
     let entry = ctx.feature_entry(uid)?;
-    if entry.def.info().tool_use().is_some() {
+    if entry.def.info().tool_use().is_some() || is_dressup(&entry.def) {
         return Ok(vec![Placed {
             feature: uid,
             steps: Vec::new(),
@@ -604,7 +609,19 @@ fn scale_elements<K: Kernel>(
     let shape = match objects {
         PatternObjects::Bodies { bodies } => ctx.body(bodies[0])?,
         PatternObjects::Features { features } => {
-            let place = originals(ctx, features[0], 0)?
+            let mut places = Vec::new();
+            for uid in features {
+                places.extend(originals(ctx, *uid, 0)?);
+            }
+            if places.iter().any(|p| {
+                ctx.feature_entry(p.feature)
+                    .is_ok_and(|e| is_dressup(&e.def))
+            }) {
+                return Err(format!(
+                    "{UNSUPPORTED}scaled copies of fillets and chamfers"
+                ));
+            }
+            let place = places
                 .into_iter()
                 .next()
                 .ok_or("the pattern has no original to scale about")?;
@@ -837,91 +854,48 @@ pub(crate) fn repeat<K: Kernel>(
                     }
                 }
             }
-            for place in places {
-                let uid = &place.feature;
-                let entry = ctx.feature_entry(*uid)?;
-                let tool_use = entry
-                    .def
-                    .info()
-                    .tool_use()
-                    .ok_or_else(|| format!("{} cannot be patterned or mirrored", entry.name))?;
-                let stored = ctx.feature_tool(*uid)?;
-                let participants = if original_bodies && tool_use.participants.is_empty() {
-                    changed_bodies(ctx, *uid, &set)?
-                } else {
-                    tool_use.participants.clone()
+            // Fillets and chamfers (mitcad#105) go on the copies' edges,
+            // after the copies of the features before them.
+            let mut dressups = BTreeSet::new();
+            for place in &places {
+                if is_dressup(&ctx.feature_entry(place.feature)?.def) {
+                    dressups.insert(place.feature);
+                }
+            }
+            let mut copied = BTreeSet::new();
+            if !dressups.is_empty() {
+                let mut nested = |uid: FeatureUid| match ctx.feature_entry(uid) {
+                    Ok(entry) => match repeated(&entry.def) {
+                        Some((PatternObjects::Features { features }, _)) => features.clone(),
+                        _ => Vec::new(),
+                    },
+                    Err(_) => Vec::new(),
                 };
-                // The place's steps, composed: where the copy at an element
-                // goes is the element's transform after them.
-                let at = place
-                    .steps
-                    .iter()
-                    .fold(Transform::IDENTITY, |done, (t, _)| t.after(&done));
-                let mut reached = false;
-                if compute == ComputeOption::Adjust {
-                    let mut copies = Vec::with_capacity(elements.len());
-                    for element in elements {
-                        let transform = element.transform.after(&at);
-                        // A tool is rebuilt in place for rigid motions only;
-                        // a mirror reflects the finished tool.
-                        let placed = if transform.is_rigid() {
-                            entry
-                                .def
-                                .evaluator::<K>()
-                                .placed_tool(ctx, *uid, &transform)
-                        } else {
-                            None
-                        };
-                        let copy = match placed {
-                            Some(tool) => placed_copy(
-                                ctx,
-                                &tool.map_err(|e| format!("element {}: {e}", element.index))?,
-                                &place.steps,
-                                &element.transform,
-                                instance(ctx.uid, element),
-                                true,
-                            )?,
-                            None => placed_copy(
-                                ctx,
-                                &stored,
-                                &place.steps,
-                                &element.transform,
-                                instance(ctx.uid, element),
-                                false,
-                            )?,
-                        };
-                        copies.push(copy);
-                    }
-                    if matches!(tool_use.operation, Operation::Cut | Operation::Join) {
-                        copies = reaching(ctx, &set, &participants, copies);
-                    }
-                    match all_at_once(ctx, &mut set, tool_use.operation, &participants, &copies) {
-                        Some(r) => reached = r,
-                        None => {
-                            for copy in &copies {
-                                reached |= apply_tool(
-                                    ctx,
-                                    &mut set,
-                                    tool_use.operation,
-                                    &participants,
-                                    copy,
-                                )?;
-                            }
-                        }
-                    }
-                } else if !elements.is_empty() {
-                    // A join's copies that touch nothing become bodies here,
-                    // so only a cut's are left out.
-                    let reach = (tool_use.operation == Operation::Cut)
-                        .then_some((&set, participants.as_slice()));
-                    if let Some(tool) = moved_copies(ctx, &stored, &place.steps, elements, reach)? {
-                        reached =
-                            apply_tool(ctx, &mut set, tool_use.operation, &participants, &tool)?;
-                    }
+                copied = copied_features(features, &mut nested);
+                let timeline = &ctx.env.features;
+                let position = |uid: FeatureUid| timeline.iter().position(|f| f.uid == uid);
+                places.sort_by_key(|p| position(p.feature));
+            }
+            let copying = Copying {
+                places: &places,
+                compute,
+                original_bodies,
+                copied: &copied,
+                dressups: &dressups,
+            };
+            let saved = (set.clone(), ctx.next_body, ctx.warnings.len());
+            match copying.by_places(ctx, &mut set, elements) {
+                Ok(()) => {}
+                // A fillet's copies that fail on the copies of all the
+                // features: the features of one element after another (the
+                // copies of the next element's features then cut into or join
+                // the rounded ones, as they would be built one by one).
+                Err(_) if !dressups.is_empty() && elements.len() > 1 => {
+                    (set, ctx.next_body) = (saved.0, saved.1);
+                    ctx.warnings.truncate(saved.2);
+                    copying.by_elements(ctx, &mut set, elements)?;
                 }
-                if !reached && !elements.is_empty() {
-                    return Err(format!("no copy of {} reaches a body", entry.name));
-                }
+                Err(e) => return Err(e),
             }
             Ok(FeatureOutput {
                 changes: set.changes(),
@@ -978,6 +952,164 @@ pub(crate) fn repeat<K: Kernel>(
                 ..FeatureOutput::default()
             })
         }
+    }
+}
+
+/// A pattern's copies of features at their places, in the order to apply
+/// them.
+struct Copying<'a> {
+    places: &'a [Placed],
+    compute: ComputeOption,
+    original_bodies: bool,
+    /// The features whose faces the pattern copies, and the fillets and
+    /// chamfers among them (mitcad#105, [`super::dressup_copies`]).
+    copied: &'a BTreeSet<FeatureUid>,
+    dressups: &'a BTreeSet<FeatureUid>,
+}
+
+impl Copying<'_> {
+    /// Each place at all elements, one place after another.
+    fn by_places<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        set: &mut BodySet<K::Shape>,
+        elements: &[Element],
+    ) -> Result<(), String> {
+        for place in self.places {
+            if !self.place(ctx, set, place, elements)? && !elements.is_empty() {
+                return Err(self.unreached(ctx, place));
+            }
+        }
+        Ok(())
+    }
+
+    /// Every place at each element, one element after another.
+    fn by_elements<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        set: &mut BodySet<K::Shape>,
+        elements: &[Element],
+    ) -> Result<(), String> {
+        let mut reached = vec![false; self.places.len()];
+        for element in elements {
+            for (i, place) in self.places.iter().enumerate() {
+                reached[i] |= self.place(ctx, set, place, std::slice::from_ref(element))?;
+            }
+        }
+        match reached.iter().position(|r| !r) {
+            Some(i) if !elements.is_empty() => Err(self.unreached(ctx, &self.places[i])),
+            _ => Ok(()),
+        }
+    }
+
+    fn unreached<K: Kernel>(&self, ctx: &EvalContext<'_, K>, place: &Placed) -> String {
+        let name = ctx.feature_name(place.feature);
+        if self.dressups.contains(&place.feature) {
+            format!("no copy of the edges of {name} is on a body")
+        } else {
+            format!("no copy of {name} reaches a body")
+        }
+    }
+
+    /// The copies of the feature at `place` at the elements; false when none
+    /// reaches a body (a fillet's: none finds an edge).
+    fn place<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        set: &mut BodySet<K::Shape>,
+        place: &Placed,
+        elements: &[Element],
+    ) -> Result<bool, String> {
+        let instance = |uid: FeatureUid, element: &Element| Instance {
+            feature: uid,
+            index: element.index,
+        };
+        if self.dressups.contains(&place.feature) {
+            return repeat_dressup(
+                ctx,
+                set,
+                place.feature,
+                &place.steps,
+                elements,
+                self.copied,
+                self.dressups,
+            );
+        }
+        let uid = &place.feature;
+        let entry = ctx.feature_entry(*uid)?;
+        let tool_use = entry
+            .def
+            .info()
+            .tool_use()
+            .ok_or_else(|| format!("{} cannot be patterned or mirrored", entry.name))?;
+        let stored = ctx.feature_tool(*uid)?;
+        let participants = if self.original_bodies && tool_use.participants.is_empty() {
+            changed_bodies(ctx, *uid, set)?
+        } else {
+            tool_use.participants.clone()
+        };
+        // The place's steps, composed: where the copy at an element goes is
+        // the element's transform after them.
+        let at = place
+            .steps
+            .iter()
+            .fold(Transform::IDENTITY, |done, (t, _)| t.after(&done));
+        let mut reached = false;
+        if self.compute == ComputeOption::Adjust {
+            let mut copies = Vec::with_capacity(elements.len());
+            for element in elements {
+                let transform = element.transform.after(&at);
+                // A tool is rebuilt in place for rigid motions only; a mirror
+                // reflects the finished tool.
+                let placed = if transform.is_rigid() {
+                    entry
+                        .def
+                        .evaluator::<K>()
+                        .placed_tool(ctx, *uid, &transform)
+                } else {
+                    None
+                };
+                let copy = match placed {
+                    Some(tool) => placed_copy(
+                        ctx,
+                        &tool.map_err(|e| format!("element {}: {e}", element.index))?,
+                        &place.steps,
+                        &element.transform,
+                        instance(ctx.uid, element),
+                        true,
+                    )?,
+                    None => placed_copy(
+                        ctx,
+                        &stored,
+                        &place.steps,
+                        &element.transform,
+                        instance(ctx.uid, element),
+                        false,
+                    )?,
+                };
+                copies.push(copy);
+            }
+            if matches!(tool_use.operation, Operation::Cut | Operation::Join) {
+                copies = reaching(ctx, set, &participants, copies);
+            }
+            match all_at_once(ctx, set, tool_use.operation, &participants, &copies) {
+                Some(r) => reached = r,
+                None => {
+                    for copy in &copies {
+                        reached |= apply_tool(ctx, set, tool_use.operation, &participants, copy)?;
+                    }
+                }
+            }
+        } else if !elements.is_empty() {
+            // A join's copies that touch nothing become bodies here, so only
+            // a cut's are left out.
+            let reach =
+                (tool_use.operation == Operation::Cut).then_some((&*set, participants.as_slice()));
+            if let Some(tool) = moved_copies(ctx, &stored, &place.steps, elements, reach)? {
+                reached = apply_tool(ctx, set, tool_use.operation, &participants, &tool)?;
+            }
+        }
+        Ok(reached)
     }
 }
 

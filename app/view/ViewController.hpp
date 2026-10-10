@@ -92,7 +92,7 @@ public:
   void showOrientationCubeMenu(const QPoint& globalPosition);
   void showShortcutOverview();
   // Preferences on a page (`general`, `navigation`, `display`, `cache`,
-  // `version_control`, `updates`, `print`); the last one shown when empty.
+  // `cloud`, `updates`, `print`); the last one shown when empty.
   void showPreferences(const QString& page = QString());
   void showGridSettings();
   // The document's render settings (the `render_settings` query, mitcad#47)

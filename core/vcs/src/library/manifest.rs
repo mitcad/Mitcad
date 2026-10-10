@@ -337,7 +337,7 @@ impl Manifest {
             } else if !ids.insert(c.id.as_str()) {
                 out.error(format!("{label}: the id is used twice"));
             }
-            if !valid_path(&c.path) || !c.path.ends_with(".mitcad") {
+            if !valid_path(&c.path) || !crate::is_project_file(&c.path) {
                 out.error(format!(
                     "{label}: '{}' is no path of a design in the library (relative, with /, \
                      ending in .mitcad)",

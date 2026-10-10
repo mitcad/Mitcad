@@ -1,0 +1,38 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+BRepBlend_SurfRstLineBuilder::InternalPerform: when the contact of a blend
+rolling on a restriction (an edge) leaves the surface across one of its arcs
+in the same step as the point on the restriction leaves the restriction's
+domain (Blend_OnRst12, e.g. both reach a face at the end at once), the
+solution took the parameter on the surface's arc (solinvs(3)) as the
+parameter on the restriction, and the extremity on the surface took the
+guide's parameter (solinvs(1)) as the parameter on the arc. The section
+then jumped, TestArret rejected it and the walk ended short of both arcs.
+The vector of the inverse function Blend_SurfCurvFuncInv is (guide,
+restriction, arc): the restriction's parameter is solinvs(2) and the arc's
+solinvs(3), as the Blend_OnRst1 case and PerformFirstSection use them.
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
+index 7b05208..5f06577 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
+@@ -734,7 +734,9 @@ void BRepBlend_SurfRstLineBuilder::InternalPerform(Blend_SurfRstFunction&  Func,
+             param  = 0.5 * (ws + wrst);
+             sol(1) = U;
+             sol(2) = V;
+-            sol(3) = solinvs(3);
++            // the parameter on the restriction, as for Blend_OnRst1
++            // (solinvs: guide, restriction, arc of the surface)
++            sol(3) = solinvs(2);
+           }
+           else if (sens * (ws - wrst) < 0)
+           {
+@@ -955,7 +957,7 @@ void BRepBlend_SurfRstLineBuilder::InternalPerform(Blend_SurfRstFunction&  Func,
+         {
+           line->Prepend(previousP);
+         }
+-        MakeExtremity(Exts, true, Arc, solinvs(1), IsVtxs, Vtxs);
++        MakeExtremity(Exts, true, Arc, solinvs(3), IsVtxs, Vtxs);
+         MakeExtremity(Extrst, false, rst, sol(3), IsVtxrst, Vtxrst);
+         Arrive = true;
+       }

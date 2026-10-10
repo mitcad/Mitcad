@@ -6,8 +6,11 @@
 //! (also ZIP64), local headers, and the methods stored (0), deflate (8) and
 //! Zstandard (93). Entries are verified with their CRC-32, and one entry
 //! decompresses to at most 4 GiB. Encryption and multi-disk archives are not
-//! supported. The [`Writer`] writes stored and deflated entries (test
-//! files, and files Mitcad writes).
+//! supported. Explicit Zstandard history windows must fit the larger of the
+//! remaining declared output and 8 MiB, and must not exceed 100 MiB;
+//! unnecessarily large windows are rejected before decoding. Single-segment
+//! frames must fit the remaining output. The [`Writer`] writes stored and
+//! deflated entries (test files, and files Mitcad writes).
 
 use std::fmt;
 
@@ -204,16 +207,16 @@ impl Archive {
                 entry.name
             )));
         }
+        let size = usize::try_from(entry.size)
+            .map_err(|_| ZipError::Unsupported(format!("entry {} is too large", entry.name)))?;
         let raw = self.raw(entry)?;
         let data = match entry.method {
             Method::Stored => raw.to_vec(),
-            Method::Deflate => {
-                miniz_oxide::inflate::decompress_to_vec_with_limit(raw, entry.size as usize)
-                    .map_err(|e| {
-                        ZipError::Decompress(format!("{}: deflate {:?}", entry.name, e.status))
-                    })?
-            }
-            Method::Zstd => decompress_zstd(raw, entry.size as usize)
+            Method::Deflate => miniz_oxide::inflate::decompress_to_vec_with_limit(raw, size)
+                .map_err(|e| {
+                    ZipError::Decompress(format!("{}: deflate {:?}", entry.name, e.status))
+                })?,
+            Method::Zstd => decompress_zstd(raw, size)
                 .map_err(|e| ZipError::Decompress(format!("{}: zstd {e}", entry.name)))?,
             Method::Other(code) => {
                 return Err(ZipError::Unsupported(format!(
@@ -240,19 +243,84 @@ impl Archive {
 }
 
 fn decompress_zstd(raw: &[u8], size: usize) -> Result<Vec<u8>, String> {
-    use std::io::Read;
-    let mut out = Vec::with_capacity(size);
-    let mut rest = raw;
-    // An entry may hold several concatenated frames.
-    while !rest.is_empty() {
-        let mut decoder =
-            ruzstd::decoding::StreamingDecoder::new(&mut rest).map_err(|e| e.to_string())?;
-        decoder.read_to_end(&mut out).map_err(|e| e.to_string())?;
-        if out.len() > size {
-            return Err("more data than the entry size".to_string());
+    let mut out = Vec::new();
+    decompress_zstd_into(raw, size, &mut out)?;
+    Ok(out)
+}
+
+/// ruzstd 0.8.1 retains the entire advertised history before returning bytes.
+/// Check explicit windows before initializing it: a tiny unknown-size frame
+/// must not force an arbitrarily large internal allocation. Encoders choose
+/// the window by their level, not by the content (2 MiB in the files of
+/// `.f3d` writers, up to 8 MiB at the standard levels), so a window up to
+/// 8 MiB is taken whatever the remaining output; a larger one must fit it.
+fn check_zstd_window(raw: &[u8], remaining: usize) -> Result<(), String> {
+    const MAX_WINDOW: u64 = 100 * 1024 * 1024;
+    const MAX_BLOCK: usize = 8 * 1024 * 1024;
+    if raw.starts_with(&[0x28, 0xb5, 0x2f, 0xfd])
+        && let Some(&descriptor) = raw.get(4)
+        && descriptor & 0x20 == 0
+        && let Some(&window_descriptor) = raw.get(5)
+    {
+        // Zstandard's Window_Descriptor: exponent in bits 7..3, mantissa
+        // in bits 2..0. Single-segment frames use their known content size.
+        let base = 1u64 << (10 + (window_descriptor >> 3));
+        let window = base + (base / 8) * u64::from(window_descriptor & 7);
+        let budget = remaining.max(MAX_BLOCK) as u64;
+        if window > MAX_WINDOW || window > budget {
+            return Err(format!(
+                "unsupported history window {window} for output budget {remaining}"
+            ));
         }
     }
-    Ok(out)
+    Ok(())
+}
+
+/// Keep the destination available on error so tests can inspect the actual
+/// output budget. The limit is cumulative across frames, plus one sentinel
+/// byte to detect overflow even when no frame content size was recorded.
+fn decompress_zstd_into(raw: &[u8], size: usize, out: &mut Vec<u8>) -> Result<(), String> {
+    use std::io::Read;
+    let mut rest = raw;
+    let mut buffer = [0u8; 8192];
+    // An entry may hold several concatenated frames.
+    while !rest.is_empty() {
+        check_zstd_window(rest, size.saturating_sub(out.len()))?;
+        let mut decoder =
+            ruzstd::decoding::StreamingDecoder::new(&mut rest).map_err(|e| e.to_string())?;
+        // ruzstd retains a frame's history window internally. Reject a known
+        // oversized frame before any blocks are decoded into that window.
+        if decoder.decoder.content_size() > size.saturating_sub(out.len()) as u64 {
+            return Err("more data than the entry size".to_string());
+        }
+        loop {
+            let remaining = size.saturating_sub(out.len());
+            let request = buffer.len().min(remaining.saturating_add(1));
+            let read = match decoder.read(&mut buffer[..request]) {
+                Ok(read) => read,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e.to_string()),
+            };
+            if read == 0 {
+                break;
+            }
+            // Grow geometrically, capped at the cumulative budget rather
+            // than letting Vec round a near-boundary allocation upwards.
+            let needed = out.len() + read;
+            if needed > out.capacity() {
+                let capacity = needed
+                    .max(out.capacity().saturating_mul(2))
+                    .min(size.saturating_add(1));
+                out.try_reserve_exact(capacity - out.len())
+                    .map_err(|e| e.to_string())?;
+            }
+            out.extend_from_slice(&buffer[..read]);
+            if out.len() > size {
+                return Err("more data than the entry size".to_string());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn read_central_directory(data: &[u8]) -> Result<Vec<Entry>, ZipError> {
@@ -504,6 +572,155 @@ pub fn stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Zstandard frames containing RLE blocks, authored here rather than
+    /// requiring a compressor or a third-party binary fixture. Unknown-size
+    /// frames use a 1 KiB window, so a 16 MiB expansion spans many windows.
+    fn zstd_rle_frame(size: usize, known_size: bool) -> Vec<u8> {
+        let mut frame = vec![0x28, 0xb5, 0x2f, 0xfd];
+        if known_size {
+            frame.push(0xa0); // single segment, four-byte content size
+            frame.extend_from_slice(&(size as u32).to_le_bytes());
+        } else {
+            frame.extend_from_slice(&[0, 0]); // no content size, 1 KiB window
+        }
+        if size == 0 {
+            frame.extend_from_slice(&[1, 0, 0]); // final empty raw block
+        }
+        let mut remaining = size;
+        while remaining > 0 {
+            let count = remaining.min(if known_size { 128 * 1024 } else { 1024 });
+            remaining -= count;
+            let header = ((count as u32) << 3) | 2 | u32::from(remaining == 0);
+            frame.extend_from_slice(&header.to_le_bytes()[..3]);
+            frame.push(7);
+        }
+        frame
+    }
+
+    fn zstd_archive(raw: &[u8], expected: &[u8]) -> Archive {
+        let mut archive = Archive::new(stored_zip(&[("x", raw)])).unwrap();
+        archive.entries[0].method = Method::Zstd;
+        archive.entries[0].size = expected.len() as u64;
+        archive.entries[0].crc32 = crc32(expected);
+        archive
+    }
+
+    #[test]
+    fn zstd_output_is_bounded_during_single_frame_decode() {
+        for known_size in [false, true] {
+            let raw = zstd_rle_frame(16 * 1024 * 1024, known_size);
+            let mut out = Vec::new();
+            let error = decompress_zstd_into(&raw, 1, &mut out).unwrap_err();
+            assert_eq!(error, "more data than the entry size");
+            assert_eq!(out.len(), if known_size { 0 } else { 2 });
+            assert!(out.capacity() <= 2, "capacity {}", out.capacity());
+            let archive = zstd_archive(&raw, &[7]);
+            assert!(matches!(
+                archive.read_by_name("x"),
+                Err(ZipError::Decompress(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn zstd_output_budget_is_shared_between_frames() {
+        for known_size in [false, true] {
+            let mut raw = zstd_rle_frame(3, true);
+            raw.extend(zstd_rle_frame(16 * 1024 * 1024, known_size));
+            let mut out = Vec::new();
+            let error = decompress_zstd_into(&raw, 4, &mut out).unwrap_err();
+            assert_eq!(error, "more data than the entry size");
+            assert_eq!(out.len(), if known_size { 3 } else { 5 });
+            assert!(out.capacity() <= 5, "capacity {}", out.capacity());
+        }
+    }
+
+    #[test]
+    fn zstd_takes_an_encoders_window_larger_than_the_content() {
+        // A 2 MiB window (as `.f3d` writers use) over 1000 bytes of content.
+        let expected = vec![7u8; 1000];
+        let mut raw = zstd_rle_frame(expected.len(), false);
+        raw[5] = 0x58;
+        assert_eq!(decompress_zstd(&raw, expected.len()).unwrap(), expected);
+        assert_eq!(
+            zstd_archive(&raw, &expected).read_by_name("x").unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn zstd_rejects_excessive_unknown_size_history_before_decoding() {
+        // 32 MiB and 2 TiB windows.
+        for descriptor in [0x78, 0xf8] {
+            let mut raw = zstd_rle_frame(16 * 1024 * 1024, false);
+            raw[5] = descriptor;
+            let mut out = Vec::new();
+            let error = decompress_zstd_into(&raw, 1, &mut out).unwrap_err();
+            assert!(error.contains("unsupported history window"), "{error}");
+            assert_eq!(out.len(), 0);
+            assert_eq!(out.capacity(), 0);
+            let archive = zstd_archive(&raw, &[7]);
+            assert!(matches!(
+                archive.read_by_name("x"),
+                Err(ZipError::Decompress(_))
+            ));
+        }
+        // The check uses the remaining cumulative budget, including after a
+        // valid frame has used almost all of the entry's declared output.
+        let mut raw = zstd_rle_frame(200_000, true);
+        let mut next = zstd_rle_frame(1, false);
+        next[5] = 0x70; // 16 MiB, above the window always taken
+        raw.extend(next);
+        let mut out = Vec::new();
+        assert!(decompress_zstd_into(&raw, 200_001, &mut out).is_err());
+        assert_eq!(out.len(), 200_000);
+    }
+
+    #[test]
+    fn zstd_valid_frames_exact_boundary_and_empty_entries() {
+        for known_size in [false, true] {
+            for size in [0, 1, 1024, 16_385] {
+                let raw = zstd_rle_frame(size, known_size);
+                let expected = vec![7; size];
+                assert_eq!(decompress_zstd(&raw, size).unwrap(), expected);
+                let archive = zstd_archive(&raw, &expected);
+                assert_eq!(archive.read_by_name("x").unwrap(), expected);
+            }
+        }
+        let mut raw = zstd_rle_frame(3, true);
+        raw.extend(zstd_rle_frame(0, false));
+        raw.extend(zstd_rle_frame(8192, false));
+        raw.extend(zstd_rle_frame(0, true));
+        let expected = vec![7; 8195];
+        let archive = zstd_archive(&raw, &expected);
+        assert_eq!(archive.read_by_name("x").unwrap(), expected);
+        assert_eq!(decompress_zstd(&[], 0).unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn zstd_keeps_size_crc_and_decode_errors() {
+        let raw = zstd_rle_frame(3, true);
+        let mut archive = zstd_archive(&raw, &[7; 4]);
+        assert!(matches!(
+            archive.read_by_name("x"),
+            Err(ZipError::Decompress(_))
+        ));
+        archive.entries[0].size = 3;
+        archive.entries[0].crc32 = 0;
+        assert!(matches!(
+            archive.read_by_name("x"),
+            Err(ZipError::Crc { .. })
+        ));
+        let truncated = &raw[..raw.len() - 1];
+        assert!(decompress_zstd(truncated, 3).is_err());
+        assert!(decompress_zstd(&[0; 6], 3).is_err());
+        let nonempty = zstd_rle_frame(1, false);
+        let mut out = Vec::new();
+        assert!(decompress_zstd_into(&nonempty, 0, &mut out).is_err());
+        assert_eq!(out, [7]);
+        assert_eq!(out.capacity(), 1);
+    }
 
     fn build_stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
         stored_zip(files)

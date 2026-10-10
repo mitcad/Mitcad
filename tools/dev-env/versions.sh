@@ -29,6 +29,14 @@ PYTHON_MAC_SHA256=316a463172740e71d8dca1f2730784e325f3f720941137b5d674d5801a6322
 PKGCONF_VERSION=3.0.7
 PKGCONF_SHA256=c926ff491cbd9a331a589160811bd97ab1749b4d5198a519338f2cdfabe6940a
 
+# QtKeychain (BSD-3-Clause), the live updates' broker credentials in the
+# system's keychain (mitcad#89): the release's source archive
+# (https://github.com/frankosterfeld/qtkeychain/archive/refs/tags/<version>.tar.gz),
+# which cmake/Keychain.cmake fetches, checks and builds on every platform;
+# the digest is of that archive.
+QTKEYCHAIN_VERSION=0.17.0
+QTKEYCHAIN_SHA256=3b85c3929034b0a99da777130c34d99f006fcd3a9d56564159399a33fee0e504
+
 # The Cycles render worker (MITCAD_RENDER, tools/dev-env/build-cycles.sh):
 # the sources that vcpkg has no port for. Cycles is fetched by tag and
 # checked against the tag's commit; Open Image Denoise's source archive and
@@ -40,6 +48,11 @@ OIDN_VERSION=2.5.1
 OIDN_SRC_SHA256=e71fd043a70f1cc80e301d1b90df6c1f536098c4dd94baa612742f6db3369c36
 ISPC_VERSION=1.31.0
 ISPC_LINUX_SHA256=d74089c835e10fd7e2c4b9225ced38b87d1fb53d35c7ceabd48cdf035da11b11
+# build-cycles.ps1 reads this file's pins itself.
+ISPC_WINDOWS_SHA256=9a18793800b91d5be7b851513672cd9a81a985a5a5dfec5611c2318e8ad4140a
+# Native Apple Silicon archive; GitHub's official release asset digest:
+# https://api.github.com/repos/ispc/ispc/releases/tags/v1.31.0
+ISPC_MACOS_ARM64_SHA256=eac8009da38d41074d0adcf1fad4a3412fc9644a81ee5a49efeb07eac505b6ec
 # Cycles' GPU devices (build-cycles.sh --cuda, mitcad#50). The CUDA
 # compiler's components come from NVIDIA's redistributable archives
 # (https://developer.download.nvidia.com/compute/cuda/redist/), checked

@@ -25,6 +25,8 @@ QString platformName() {
   return QStringLiteral("linux-x64");
 #elif defined(__linux__) && defined(__aarch64__)
   return QStringLiteral("linux-arm64");
+#elif defined(__APPLE__) && defined(__aarch64__)
+  return QStringLiteral("macos-arm64");
 #else
   return QString();
 #endif

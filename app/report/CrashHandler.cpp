@@ -6,11 +6,16 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+
+#include <dbghelp.h> // after windows.h
 #else
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/utsname.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 #if __has_include(<execinfo.h>)
 #include <execinfo.h>
 #define MITCAD_HAS_BACKTRACE 1
@@ -20,6 +25,7 @@
 #include <atomic>
 #include <csignal>
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <ctime>
 #include <exception>
@@ -42,6 +48,7 @@ char g_process[64];        // "app", "import-worker", ...
 char g_directory[kPathSize];
 #ifdef _WIN32
 wchar_t g_directoryWide[kPathSize];
+wchar_t g_symbolPath[kPathSize]; // the executable's folder, where its PDB file is
 #endif
 char g_actions[kActions][kActionSize];
 std::atomic<unsigned> g_actionCount{0};
@@ -210,25 +217,58 @@ namespace detail {
 
 #ifdef _WIN32
 
-void putStack(File file, void* const* frames, int count) {
-  char digits[32];
-  for (int i = 0; i < count; ++i) {
-    HMODULE module = nullptr;
-    char path[MAX_PATH] = "?";
-    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           static_cast<LPCSTR>(frames[i]), &module) != 0 &&
-        module != nullptr) {
-      if (GetModuleFileNameA(module, path, MAX_PATH) == 0) {
-        copy(path, sizeof path, "?");
-      }
-    }
-    const auto address = reinterpret_cast<unsigned long long>(frames[i]);
-    const auto base = reinterpret_cast<unsigned long long>(module);
-    put(file, path);
-    put(file, "+0x");
-    put(file, number(module != nullptr ? address - base : address, digits, 16));
-    put(file, "\n");
+// The frames' functions come from the debug information (dbghelp, with the
+// PDB file next to the executable; a system library's from its exports).
+// Loaded at the crash, once, and never through a symbol server.
+bool loadSymbols() {
+  static bool loaded = false;
+  static bool tried = false;
+  if (!tried && g_symbolPath[0] != L'\0') {
+    tried = true;
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_FAIL_CRITICAL_ERRORS | SYMOPT_NO_PROMPTS |
+                  SYMOPT_DISABLE_SYMSRV_AUTODETECT);
+    loaded = SymInitializeW(GetCurrentProcess(), g_symbolPath, TRUE) != FALSE;
   }
+  return loaded;
+}
+
+// A frame as `<module path>!<function>+0x<offset in it>`, or without its
+// function as `<module path>+0x<offset in the module>`.
+void putFrame(File file, void* frame) {
+  char digits[32];
+  HMODULE module = nullptr;
+  char path[MAX_PATH] = "?";
+  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         static_cast<LPCSTR>(frame), &module) != 0 &&
+      module != nullptr) {
+    if (GetModuleFileNameA(module, path, MAX_PATH) == 0) {
+      copy(path, sizeof path, "?");
+    }
+  }
+  const auto address = reinterpret_cast<unsigned long long>(frame);
+  const auto base = reinterpret_cast<unsigned long long>(module);
+  put(file, path);
+  if (module != nullptr && loadSymbols()) {
+    constexpr int kName = 512;
+    alignas(SYMBOL_INFOW) unsigned char buffer[sizeof(SYMBOL_INFOW) + kName * sizeof(wchar_t)] = {};
+    auto* symbol = reinterpret_cast<SYMBOL_INFOW*>(buffer);
+    symbol->SizeOfStruct = sizeof(SYMBOL_INFOW);
+    symbol->MaxNameLen = kName;
+    DWORD64 displacement = 0;
+    char name[kName * 3] = "";
+    if (SymFromAddrW(GetCurrentProcess(), address, &displacement, symbol) != FALSE &&
+        WideCharToMultiByte(CP_UTF8, 0, symbol->Name, -1, name, sizeof name, nullptr, nullptr) > 1) {
+      put(file, "!");
+      put(file, name);
+      put(file, "+0x");
+      put(file, number(displacement, digits, 16));
+      put(file, "\n");
+      return;
+    }
+  }
+  put(file, "+0x");
+  put(file, number(module != nullptr ? address - base : address, digits, 16));
+  put(file, "\n");
 }
 
 void writeReport(const char* signal, const char* address, void* const* frames, int count) {
@@ -254,7 +294,9 @@ void writeReport(const char* signal, const char* address, void* const* frames, i
   putLine(file, "address", address);
   putLine(file, "message", g_message);
   put(file, "stack:\n");
-  putStack(file, frames, count);
+  for (int i = 0; i < count; ++i) {
+    putFrame(file, frames[i]);
+  }
   putActions(file);
   put(file, "end\n");
   if (file != kNoFile) {
@@ -284,18 +326,85 @@ const char* exceptionName(DWORD code) {
   }
 }
 
+// The crashed thread's stack from the faulting instruction on, walked from
+// the exception's context, so that the handler's own frames are not in it.
+// StackWalk64 reads the stack with ReadProcessMemory: a broken stack ends
+// the walk instead of faulting again.
+int walkStack(const CONTEXT& start, HANDLE thread, void** frames, int capacity) {
+  CONTEXT context = start; // StackWalk64 changes it
+  STACKFRAME64 frame{};
+  DWORD machine = IMAGE_FILE_MACHINE_UNKNOWN;
+#if defined(_M_X64)
+  machine = IMAGE_FILE_MACHINE_AMD64;
+  frame.AddrPC.Offset = context.Rip;
+  frame.AddrFrame.Offset = context.Rbp;
+  frame.AddrStack.Offset = context.Rsp;
+#elif defined(_M_ARM64)
+  machine = IMAGE_FILE_MACHINE_ARM64;
+  frame.AddrPC.Offset = context.Pc;
+  frame.AddrFrame.Offset = context.Fp;
+  frame.AddrStack.Offset = context.Sp;
+#elif defined(_M_IX86)
+  machine = IMAGE_FILE_MACHINE_I386;
+  frame.AddrPC.Offset = context.Eip;
+  frame.AddrFrame.Offset = context.Ebp;
+  frame.AddrStack.Offset = context.Esp;
+#endif
+  frame.AddrPC.Mode = AddrModeFlat;
+  frame.AddrFrame.Mode = AddrModeFlat;
+  frame.AddrStack.Mode = AddrModeFlat;
+  loadSymbols(); // the modules' function tables, which StackWalk64 unwinds with
+  int count = 0;
+  while (count < capacity && StackWalk64(machine, GetCurrentProcess(), thread, &frame, &context, nullptr,
+                                         SymFunctionTableAccess64, SymGetModuleBase64, nullptr) != FALSE) {
+    if (frame.AddrPC.Offset == 0) {
+      break;
+    }
+    frames[count++] = reinterpret_cast<void*>(static_cast<std::uintptr_t>(frame.AddrPC.Offset));
+  }
+  return count;
+}
+
+struct Crash {
+  const char* signal;
+  char address[40];
+  const CONTEXT* context; // the crashed thread's, at the fault
+  HANDLE thread;
+};
+
+DWORD WINAPI reportCrash(void* parameter) {
+  const Crash& crash = *static_cast<const Crash*>(parameter);
+  void* frames[kFrames];
+  const int count = crash.context != nullptr ? walkStack(*crash.context, crash.thread, frames, kFrames) : 0;
+  writeReport(crash.signal, crash.address, frames, count);
+  return 0;
+}
+
 LONG WINAPI onException(EXCEPTION_POINTERS* info) {
   if (g_entered.exchange(1) == 0) {
-    void* frames[kFrames];
-    const int count = static_cast<int>(CaptureStackBackTrace(0, kFrames, frames, nullptr));
+    Crash crash{};
+    const EXCEPTION_RECORD* record = info != nullptr ? info->ExceptionRecord : nullptr;
+    crash.signal = exceptionName(record != nullptr ? record->ExceptionCode : 0);
     char digits[32];
-    char address[40] = "0x";
-    const DWORD code = info != nullptr && info->ExceptionRecord != nullptr ? info->ExceptionRecord->ExceptionCode : 0;
-    const auto at = info != nullptr && info->ExceptionRecord != nullptr
-                        ? reinterpret_cast<unsigned long long>(info->ExceptionRecord->ExceptionAddress)
-                        : 0ULL;
-    append(address, sizeof address, number(at, digits, 16));
-    writeReport(exceptionName(code), address, frames, count);
+    copy(crash.address, sizeof crash.address, "0x");
+    append(crash.address, sizeof crash.address,
+           number(record != nullptr ? reinterpret_cast<unsigned long long>(record->ExceptionAddress) : 0ULL, digits,
+                  16));
+    crash.context = info != nullptr ? info->ContextRecord : nullptr;
+    DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &crash.thread, 0, FALSE,
+                    DUPLICATE_SAME_ACCESS);
+    // On a thread of its own: little may be left of this one's stack (a
+    // stack overflow). A report that does not finish in time is left out.
+    HANDLE reporter = CreateThread(nullptr, 256 * 1024, reportCrash, &crash, 0, nullptr);
+    if (reporter != nullptr) {
+      WaitForSingleObject(reporter, 60000);
+      CloseHandle(reporter);
+    } else {
+      reportCrash(&crash);
+    }
+    if (crash.thread != nullptr) {
+      CloseHandle(crash.thread);
+    }
   }
   // Windows ends the process as it would have (and its error reporting
   // sees it).
@@ -305,7 +414,8 @@ LONG WINAPI onException(EXCEPTION_POINTERS* info) {
 void onAbort(int) {
   if (g_entered.exchange(1) == 0) {
     void* frames[kFrames];
-    const int count = static_cast<int>(CaptureStackBackTrace(0, kFrames, frames, nullptr));
+    // From the caller on: this handler's own frame left out.
+    const int count = static_cast<int>(CaptureStackBackTrace(1, kFrames, frames, nullptr));
     writeReport("SIGABRT", "0x0", frames, count);
   }
   // abort() goes on to end the process.
@@ -426,6 +536,12 @@ void install(const char* process, const char* version) {
   }
   std::set_terminate(onTerminate);
 #ifdef _WIN32
+  const DWORD length = GetModuleFileNameW(nullptr, g_symbolPath, static_cast<DWORD>(kPathSize));
+  if (length == 0 || length >= kPathSize) {
+    g_symbolPath[0] = L'\0';
+  } else if (wchar_t* slash = wcsrchr(g_symbolPath, L'\\')) {
+    *slash = L'\0';
+  }
   SetUnhandledExceptionFilter(onException);
   std::signal(SIGABRT, onAbort);
 #else
@@ -484,6 +600,14 @@ void noteMessage(const char* message, std::size_t length) {
 bool testCrashRequested(const char* where) { return environment("MITCAD_TEST_CRASH") == where; }
 
 void crashNow() {
+#ifdef __linux__
+  // No core dump of a test's crash: a system that captures them (WSL's
+  // crash capture through a pipe in core_pattern, which ignores
+  // RLIMIT_CORE) would write one per run, and WSL's takes all of its
+  // distributions down with it. A process that is not dumpable is never
+  // dumped; the crash and its report are as before.
+  prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+#endif
   volatile int* volatile nowhere = nullptr;
   *nowhere = 0;
   std::abort();

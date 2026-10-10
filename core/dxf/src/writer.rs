@@ -65,7 +65,7 @@ pub fn write_string(drawing: &Drawing, options: &WriteOptions) -> Result<String,
         next_handle: 0x20,
         model_space: 0,
     };
-    Ok(writer.document(drawing))
+    writer.document(drawing)
 }
 
 fn finite(values: &[f64]) -> bool {
@@ -183,7 +183,7 @@ impl Writer {
         self.version == DxfVersion::R2000
     }
 
-    fn document(&mut self, drawing: &Drawing) -> String {
+    fn document(&mut self, drawing: &Drawing) -> Result<String, Error> {
         let layers = layers(drawing);
         // The body first: $HANDSEED in the header needs the last handle.
         self.model_space = 0x11;
@@ -197,8 +197,9 @@ impl Writer {
         }
         self.pair(0, "ENDSEC");
         self.section("ENTITIES");
-        for entity in &drawing.entities {
-            self.entity(entity);
+        for (index, entity) in drawing.entities.iter().enumerate() {
+            self.entity(entity)
+                .map_err(|e| Error::new(format!("entity {index}: {}", e.message)))?;
         }
         self.pair(0, "ENDSEC");
         if self.r2000() {
@@ -242,7 +243,7 @@ impl Writer {
         }
         let mut out = std::mem::take(&mut self.out);
         out.push_str(&body);
-        out
+        Ok(out)
     }
 
     fn section(&mut self, name: &str) {
@@ -414,7 +415,7 @@ impl Writer {
         }
     }
 
-    fn entity(&mut self, entity: &Entity) {
+    fn entity(&mut self, entity: &Entity) -> Result<(), Error> {
         let layer = entity.layer.as_str();
         match &entity.geometry {
             Geometry::Point(p) => {
@@ -478,7 +479,7 @@ impl Writer {
                 if self.r2000() {
                     self.spline(layer, spline);
                 } else {
-                    let points = spline_points(spline, self.tolerance);
+                    let points = spline_points(spline, self.tolerance)?;
                     self.polyline(layer, &points, false);
                 }
             }
@@ -493,6 +494,7 @@ impl Writer {
                 }
             }
         }
+        Ok(())
     }
 
     fn normal(&mut self) {
@@ -604,60 +606,201 @@ fn ellipse_points(
         .collect()
 }
 
-/// Points of a spline, at most about `tolerance` from the curve; the fit
-/// points when it has no control polygon.
-fn spline_points(spline: &Spline, tolerance: f64) -> Vec<Point2> {
-    let Some((start, end)) = spline.domain() else {
-        return spline.fit_points.clone();
-    };
-    // Distinct knots inside the domain split the curve into polynomial pieces.
-    let mut breaks: Vec<f64> = spline
-        .knots
-        .iter()
-        .copied()
-        .filter(|&k| k > start && k < end)
-        .collect();
-    breaks.insert(0, start);
-    breaks.push(end);
-    breaks.dedup();
-    let at = |t: f64| spline.point_at(t).unwrap_or_default();
-    let mut points = vec![at(start)];
-    for pair in breaks.windows(2) {
-        let pieces = 4;
-        for i in 0..pieces {
-            let t0 = pair[0] + (pair[1] - pair[0]) * i as f64 / pieces as f64;
-            let t1 = pair[0] + (pair[1] - pair[0]) * (i + 1) as f64 / pieces as f64;
-            refine(&at, t0, t1, tolerance, 12, &mut points);
-        }
-    }
-    points
+const MAX_SPLINE_POINTS: usize = 100_000;
+const MAX_SPLINE_DEPTH: u32 = 32;
+const MAX_SPLINE_WORK: usize = 10_000_000;
+
+fn spline_limit() -> Error {
+    Error::new("R12 spline cannot meet tolerance within the subdivision limit")
 }
 
-/// Appends points after `t0` up to `t1`, splitting while the curve's
-/// midpoint is farther than `tolerance` from the chord.
-fn refine(
-    at: &impl Fn(f64) -> Point2,
-    t0: f64,
-    t1: f64,
+/// Homogeneous Bezier controls keep rational curves exact during subdivision.
+type Homogeneous = [f64; 3];
+
+fn projected([x, y, w]: Homogeneous) -> Result<Point2, Error> {
+    let point = Point2::new(x / w, y / w);
+    if !finite(&[point.x, point.y]) {
+        return Err(Error::new(
+            "R12 spline has an undefined or non-finite point",
+        ));
+    }
+    Ok(point)
+}
+
+fn blend(a: Homogeneous, b: Homogeneous, t: f64) -> Homogeneous {
+    std::array::from_fn(|i| (1.0 - t) * a[i] + t * b[i])
+}
+
+/// Distance to the finite segment, including collinear curves that double back.
+fn segment_distance(point: Point2, start: Point2, end: Point2) -> f64 {
+    let chord = end - start;
+    let length = chord.length();
+    if length == 0.0 {
+        return point.distance(start);
+    }
+    let direction = chord * (1.0 / length);
+    let along = (point - start).dot(direction).clamp(0.0, length);
+    point.distance(start + direction * along)
+}
+
+struct SplineBudget {
+    points: usize,
+    work: usize,
+}
+
+impl SplineBudget {
+    fn spend(&mut self, work: usize) -> Result<(), Error> {
+        self.work = self.work.checked_sub(work).ok_or_else(spline_limit)?;
+        Ok(())
+    }
+
+    fn push(&self, points: &mut Vec<Point2>, point: Point2) -> Result<(), Error> {
+        if points.len() >= self.points {
+            return Err(spline_limit());
+        }
+        if points.len() == points.capacity() {
+            let capacity = points.capacity().saturating_mul(2).max(1).min(self.points);
+            points.reserve_exact(capacity - points.len());
+        }
+        points.push(point);
+        Ok(())
+    }
+}
+
+/// Bound each Bezier piece by its control polygon's distance to the chord.
+/// With weights of one sign the rational curve lies in that convex hull;
+/// distance to a segment is convex. This bounds the entire curve, including
+/// inflections that a midpoint check misses. Fit-only splines retain the
+/// existing polyline through their fit points.
+fn spline_points(spline: &Spline, tolerance: f64) -> Result<Vec<Point2>, Error> {
+    spline_points_with_limits(spline, tolerance, MAX_SPLINE_POINTS, MAX_SPLINE_DEPTH)
+}
+
+fn spline_points_with_limits(
+    spline: &Spline,
+    tolerance: f64,
+    max_points: usize,
+    depth: u32,
+) -> Result<Vec<Point2>, Error> {
+    let mut budget = SplineBudget {
+        points: max_points,
+        work: MAX_SPLINE_WORK,
+    };
+    let Some((start, end)) = spline.domain() else {
+        if spline.fit_points.len() > max_points {
+            return Err(spline_limit());
+        }
+        return Ok(spline.fit_points.clone());
+    };
+    let degree = spline.degree as usize;
+    let count = spline.control_points.len();
+    if degree >= count || start >= end || spline.knots.windows(2).any(|pair| pair[0] > pair[1]) {
+        return Err(Error::new("R12 spline has an invalid knot vector"));
+    }
+    // Normalize weights before forming homogeneous coordinates to avoid
+    // overflowing x*w for otherwise ordinary rational curves.
+    let scale = (0..count)
+        .map(|i| spline.weight(i).abs())
+        .fold(0.0, f64::max);
+    if scale == 0.0 {
+        return Err(Error::new("R12 spline has only zero weights"));
+    }
+    let order = degree + 1;
+    let quadratic_work = order.checked_mul(order).ok_or_else(spline_limit)?;
+    let extraction_work = quadratic_work.checked_mul(order).ok_or_else(spline_limit)?;
+    let mut points: Vec<Point2> = Vec::new();
+    for span in degree..count {
+        let left = spline.knots[span];
+        let right = spline.knots[span + 1];
+        if left == right {
+            continue;
+        }
+        budget.spend(extraction_work)?;
+        // The jth Bezier control is the B-spline blossom at degree-j
+        // copies of left and j copies of right. Unlike endpoint clamping,
+        // this also extracts the correct pieces from periodic knot vectors.
+        let mut controls = Vec::with_capacity(order);
+        for j in 0..=degree {
+            let mut d: Vec<Homogeneous> = (span - degree..=span)
+                .map(|i| {
+                    let w = spline.weight(i) / scale;
+                    let c = spline.control_points[i];
+                    [c.x * w, c.y * w, w]
+                })
+                .collect();
+            for r in 1..=degree {
+                let t = if r <= degree - j { left } else { right };
+                for k in (r..=degree).rev() {
+                    let i = span - degree + k;
+                    let denominator = spline.knots[i + degree + 1 - r] - spline.knots[i];
+                    let alpha = if denominator == 0.0 {
+                        0.0
+                    } else {
+                        (t - spline.knots[i]) / denominator
+                    };
+                    d[k] = blend(d[k - 1], d[k], alpha);
+                }
+            }
+            controls.push(d[degree]);
+        }
+        let first = projected(controls[0])?;
+        if let Some(&previous) = points.last() {
+            if previous.distance(first) > tolerance {
+                return Err(Error::new("R12 spline has a discontinuous knot span"));
+            }
+            if previous != first {
+                budget.push(&mut points, first)?;
+            }
+        } else {
+            budget.push(&mut points, first)?;
+        }
+        refine_bezier(&controls, tolerance, depth, &mut budget, &mut points)?;
+    }
+    Ok(points)
+}
+
+fn refine_bezier(
+    controls: &[Homogeneous],
     tolerance: f64,
     depth: u32,
+    budget: &mut SplineBudget,
     points: &mut Vec<Point2>,
-) {
-    let (p0, p1) = (at(t0), at(t1));
-    let tm = 0.5 * (t0 + t1);
-    let pm = at(tm);
-    let chord = p1 - p0;
-    let deviation = if chord.length() > 0.0 {
-        chord.cross(pm - p0).abs() / chord.length()
-    } else {
-        pm.distance(p0)
-    };
-    if depth == 0 || deviation <= tolerance {
-        points.push(p1);
-    } else {
-        refine(at, t0, tm, tolerance, depth - 1, points);
-        refine(at, tm, t1, tolerance, depth - 1, points);
+) -> Result<(), Error> {
+    let order = controls.len();
+    budget.spend(order.checked_mul(order).ok_or_else(spline_limit)?)?;
+    let start = projected(controls[0])?;
+    let end = projected(controls[order - 1])?;
+    let sign = controls[0][2].signum();
+    let same_sign = controls.iter().all(|c| c[2] * sign > 0.0);
+    let mut flat = same_sign;
+    if same_sign {
+        for &control in controls {
+            let distance = segment_distance(projected(control)?, start, end);
+            flat &= distance.is_finite() && distance <= tolerance;
+        }
     }
+    if flat {
+        return budget.push(points, end);
+    }
+    if depth == 0 {
+        return Err(spline_limit());
+    }
+    // De Casteljau subdivision preserves both polynomial and rational pieces.
+    let mut d = controls.to_vec();
+    let mut left = Vec::with_capacity(order);
+    let mut right = Vec::with_capacity(order);
+    left.push(d[0]);
+    right.push(d[order - 1]);
+    for remaining in (1..order).rev() {
+        for i in 0..remaining {
+            d[i] = blend(d[i], d[i + 1], 0.5);
+        }
+        left.push(d[0]);
+        right.push(d[remaining - 1]);
+    }
+    right.reverse();
+    refine_bezier(&left, tolerance, depth - 1, budget, points)?;
+    refine_bezier(&right, tolerance, depth - 1, budget, points)
 }
 
 #[cfg(test)]
@@ -699,5 +842,63 @@ mod tests {
             },
         );
         assert!(write_string(&drawing, &WriteOptions::default()).is_err());
+    }
+
+    #[test]
+    fn spline_limits_reject_inaccurate_chords_and_bound_vertices() {
+        let spline = Spline {
+            degree: 2,
+            control_points: vec![
+                Point2::default(),
+                Point2::new(1.0, 2.0),
+                Point2::new(2.0, 0.0),
+            ],
+            knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            ..Spline::default()
+        };
+        let depth_error = spline_points_with_limits(&spline, 0.001, 100, 0).unwrap_err();
+        assert!(depth_error.message.contains("subdivision limit"));
+        let point_error = spline_points_with_limits(&spline, 0.001, 2, 32).unwrap_err();
+        assert!(point_error.message.contains("subdivision limit"));
+        // Inspect the destination when subdivision runs out of vertices.
+        let mut points = vec![Point2::default()];
+        let mut budget = SplineBudget {
+            points: 2,
+            work: MAX_SPLINE_WORK,
+        };
+        let controls = [[0.0, 0.0, 1.0], [1.0, 2.0, 1.0], [2.0, 0.0, 1.0]];
+        assert!(refine_bezier(&controls, 0.001, 32, &mut budget, &mut points).is_err());
+        assert_eq!(points.len(), 2);
+        assert!(points.capacity() <= 2);
+    }
+
+    #[test]
+    fn spline_work_budget_rejects_before_large_degree_extraction() {
+        let degree = 1000;
+        let spline = Spline {
+            degree,
+            control_points: vec![Point2::default(); degree as usize + 1],
+            knots: std::iter::repeat_n(0.0, degree as usize + 1)
+                .chain(std::iter::repeat_n(1.0, degree as usize + 1))
+                .collect(),
+            ..Spline::default()
+        };
+        let error = spline_points(&spline, 0.001).unwrap_err();
+        assert!(error.message.contains("subdivision limit"));
+    }
+
+    #[test]
+    fn fit_only_spline_retains_its_polyline() {
+        let spline = Spline {
+            degree: 3,
+            fit_points: vec![
+                Point2::default(),
+                Point2::new(1.0, 2.0),
+                Point2::new(3.0, 0.0),
+            ],
+            ..Spline::default()
+        };
+        assert_eq!(spline_points(&spline, 0.001).unwrap(), spline.fit_points);
+        assert!(spline_points_with_limits(&spline, 0.001, 2, 32).is_err());
     }
 }

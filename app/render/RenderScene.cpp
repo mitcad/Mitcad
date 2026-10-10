@@ -263,17 +263,17 @@ bool readGlb(const std::string& path, std::vector<MeshData>& meshes, QJsonObject
       }
       if (!identity) {
         for (std::size_t v = 0; v + 2 < mesh.positions.size(); v += 3) {
-          const float p[3] = {mesh.positions[v], mesh.positions[v + 1], mesh.positions[v + 2]};
+          const float position[3] = {mesh.positions[v], mesh.positions[v + 1], mesh.positions[v + 2]};
           for (int row = 0; row < 3; ++row) {
             mesh.positions[v + static_cast<std::size_t>(row)] =
-                world[row] * p[0] + world[4 + row] * p[1] + world[8 + row] * p[2] + world[12 + row];
+                world[row] * position[0] + world[4 + row] * position[1] + world[8 + row] * position[2] + world[12 + row];
           }
         }
         for (std::size_t v = 0; v + 2 < mesh.normals.size(); v += 3) {
-          const float n[3] = {mesh.normals[v], mesh.normals[v + 1], mesh.normals[v + 2]};
+          const float normal[3] = {mesh.normals[v], mesh.normals[v + 1], mesh.normals[v + 2]};
           float out[3];
           for (int row = 0; row < 3; ++row) {
-            out[row] = world[row] * n[0] + world[4 + row] * n[1] + world[8 + row] * n[2];
+            out[row] = world[row] * normal[0] + world[4 + row] * normal[1] + world[8 + row] * normal[2];
           }
           const float length = std::sqrt(out[0] * out[0] + out[1] * out[1] + out[2] * out[2]);
           for (int row = 0; row < 3; ++row) {

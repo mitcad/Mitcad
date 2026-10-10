@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/commands
 # Sweep, Pipe, Loft, Coil, Rib and Web (U4) through the real UI, with the
 # volumes the model reports (tools/cli/tests/f3_*.json):
 #   - Sweep: a 10 mm circle on YZ along a 50 mm line: a cylinder; edited
@@ -23,6 +24,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sweep-test.sh [screenshot.png]
+# check-all sources: tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 

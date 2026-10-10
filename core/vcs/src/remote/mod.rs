@@ -39,8 +39,11 @@
 pub(crate) mod cli;
 pub(crate) mod commands;
 pub(crate) mod errors;
+pub mod mqtt;
 // Sync and conflicts.
 pub(crate) mod sync;
+// Edit locks (mitcad#89).
+pub mod locks;
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -65,7 +68,7 @@ pub const DEFAULT_REMOTE: &str = "origin";
 /// The message of the version that configures a project for sync.
 pub const CONFIGURE_MESSAGE: &str = "Configure project for sync";
 /// Versions ahead and behind are counted up to this many.
-const COUNT_LIMIT: usize = 10_000;
+pub(crate) const COUNT_LIMIT: usize = 10_000;
 /// How far the histories are followed to find a common version.
 const HISTORY_LIMIT: usize = 100_000;
 /// The last fetch, push and sync, per user and not versioned.
@@ -82,7 +85,7 @@ impl From<RemoteError> for VcsError {
     }
 }
 
-fn failure(class: ErrorClass, message: impl Into<String>) -> VcsError {
+pub(crate) fn failure(class: ErrorClass, message: impl Into<String>) -> VcsError {
     RemoteError::new(class, message).into()
 }
 
@@ -137,24 +140,61 @@ pub fn git_info(git: Option<&GitCli>) -> GitInfo {
 
 /// A remote's branch that the current branch follows.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Upstream {
-    remote: String,
+pub(crate) struct Upstream {
+    pub(crate) remote: String,
     /// The branch on the remote.
-    branch: String,
-    /// Whether the branch's configuration names it (else it is `origin` and
-    /// the branch's own name).
-    configured: bool,
+    pub(crate) branch: String,
+    /// Whether the branch's configuration names it (else it is `origin`,
+    /// or the only remote, and the branch's own name).
+    pub(crate) configured: bool,
 }
 
 impl Upstream {
     /// The remote-tracking reference (the default fetch refspec).
-    fn tracking(&self) -> String {
+    pub(crate) fn tracking(&self) -> String {
         format!("refs/remotes/{}/{}", self.remote, self.branch)
     }
 
-    fn short(&self) -> String {
+    pub(crate) fn short(&self) -> String {
         format!("{}/{}", self.remote, self.branch)
     }
+}
+
+/// The remote's branch that `branch` follows: its configuration, else
+/// `origin`'s branch of the same name, else (mitcad#89) the only remote's
+/// branch of the same name. A push sets it then (`--set-upstream`).
+pub(crate) fn upstream_for(repo: &gix::Repository, branch: &str) -> Option<Upstream> {
+    let configured = config(repo, &format!("branch.{branch}.remote"))
+        .filter(|remote| remote != "." && remote_url(repo, remote).is_some());
+    let remote = match &configured {
+        Some(remote) => remote.clone(),
+        None if remote_url(repo, DEFAULT_REMOTE).is_some() => DEFAULT_REMOTE.to_owned(),
+        None => {
+            let names: Vec<String> = repo
+                .remote_names()
+                .iter()
+                .map(|name| name.to_str_lossy().into_owned())
+                .filter(|name| remote_url(repo, name).is_some())
+                .collect();
+            match names.as_slice() {
+                [only] => only.clone(),
+                _ => return None,
+            }
+        }
+    };
+    let merge = configured
+        .as_ref()
+        .and_then(|_| config(repo, &format!("branch.{branch}.merge")));
+    let remote_branch = merge
+        .as_deref()
+        .and_then(|merge| merge.strip_prefix("refs/heads/"))
+        .unwrap_or(branch)
+        .to_owned();
+    Some(Upstream {
+        remote,
+        branch: remote_branch,
+        configured: configured.is_some(),
+    })
 }
 
 /// When a fetch or a push was last tried, and how it failed.
@@ -219,6 +259,36 @@ pub struct RemoteInfo {
     /// project file of the latest version).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_links: Option<Vec<OutsideLink>>,
+    /// Every remote, by name (mitcad#89): with several and none followed
+    /// (`name` None), Project Settings asks which to follow.
+    pub remotes: Vec<NamedRemote>,
+}
+
+/// A remote of the project's repository.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NamedRemote {
+    pub name: String,
+    /// Credentials hidden.
+    pub url: String,
+}
+
+/// The remote the current branch follows from now on
+/// ([`ProjectRepo::remote_follow`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RemoteFollowed {
+    pub name: String,
+    /// Credentials hidden.
+    pub url: String,
+    /// The branch HEAD is on.
+    pub branch: String,
+    /// `second/main`.
+    pub upstream: String,
+    /// Whether the branch followed another remote's branch before.
+    pub changed: bool,
+    /// As in [`RemoteInfo`], by the remote-tracking reference (None before
+    /// a fetch of that remote).
+    pub ahead: Option<usize>,
+    pub behind: Option<usize>,
 }
 
 /// What a remote holds, before connecting to it.
@@ -239,6 +309,14 @@ pub struct RemoteCheck {
     /// Whether it shares a version with the project's history; None when
     /// empty.
     pub related: Option<bool>,
+    /// What Open from Cloud shows (mitcad#89): the names at the root of
+    /// that commit (at most 100, cleaned for display), ...
+    pub files: Vec<String>,
+    /// ... its author and time ...
+    pub latest: Option<crate::projects::Latest>,
+    /// ... and the commits of the branch, counted up to 10 000; None when
+    /// empty.
+    pub versions: Option<usize>,
 }
 
 /// A remote set for the project.
@@ -309,6 +387,13 @@ pub struct Connected {
     /// A step after setting the remote that failed (the remote stays set).
     #[serde(skip)]
     pub error: Option<RemoteError>,
+    /// Onto a remote's files (mitcad#89, [`ProjectRepo::connect_with`]):
+    /// the sync that replayed the project's versions after the remote's.
+    pub sync: Option<SyncOutcome>,
+    /// The remote was removed again: the replay stopped (a conflict
+    /// without a choice, changes in the folder, a cancel) before it changed
+    /// the project.
+    pub undone: bool,
 }
 
 /// A project opened from a remote ([`clone_project`]).
@@ -324,7 +409,7 @@ pub struct CloneOutcome {
 
 /// Checks a remote's name: what git allows, leaving out what could be read
 /// as an option or a path.
-fn check_name(name: &str) -> Result<(), VcsError> {
+pub(crate) fn check_name(name: &str) -> Result<(), VcsError> {
     let valid = !name.is_empty()
         && !name.starts_with(['-', '.'])
         && !name.contains("..")
@@ -341,26 +426,26 @@ fn check_name(name: &str) -> Result<(), VcsError> {
 }
 
 /// The branch HEAD is on.
-fn branch_of(repo: &gix::Repository) -> Result<Option<String>, VcsError> {
+pub(crate) fn branch_of(repo: &gix::Repository) -> Result<Option<String>, VcsError> {
     Ok(repo
         .head_name()?
         .map(|name| name.shorten().to_str_lossy().into_owned()))
 }
 
 /// The commit HEAD points to.
-fn head_of(repo: &gix::Repository) -> Result<Option<ObjectId>, VcsError> {
+pub(crate) fn head_of(repo: &gix::Repository) -> Result<Option<ObjectId>, VcsError> {
     Ok(repo.head()?.id().map(|id| id.detach()))
 }
 
 /// A configuration value, None when not set or empty.
-fn config(repo: &gix::Repository, key: &str) -> Option<String> {
+pub(crate) fn config(repo: &gix::Repository, key: &str) -> Option<String> {
     repo.config_snapshot()
         .string(key)
         .map(|value| value.to_str_lossy().into_owned())
         .filter(|value| !value.is_empty())
 }
 
-fn remote_url(repo: &gix::Repository, name: &str) -> Option<String> {
+pub(crate) fn remote_url(repo: &gix::Repository, name: &str) -> Option<String> {
     config(repo, &format!("remote.{name}.url"))
 }
 
@@ -374,7 +459,11 @@ fn reference_id(repo: &gix::Repository, name: &str) -> Result<Option<ObjectId>, 
 
 /// The commits reachable from `tip` but not from `hidden` (`git rev-list
 /// --count hidden..tip`), up to [`COUNT_LIMIT`].
-fn count_only(repo: &gix::Repository, tip: ObjectId, hidden: ObjectId) -> Result<usize, VcsError> {
+pub(crate) fn count_only(
+    repo: &gix::Repository,
+    tip: ObjectId,
+    hidden: ObjectId,
+) -> Result<usize, VcsError> {
     let mut count = 0;
     for info in repo.rev_walk([tip]).with_hidden([hidden]).all()? {
         info?;
@@ -423,7 +512,7 @@ fn remote_refs(
 
 /// What `git ls-remote --symref` lists: the default branch, its commit,
 /// and whether there are no branches.
-fn parse_ls_remote(listing: &str) -> (Option<String>, Option<ObjectId>, bool) {
+pub(crate) fn parse_ls_remote(listing: &str) -> (Option<String>, Option<ObjectId>, bool) {
     let mut symref = None;
     let mut head = None;
     let mut branches: Vec<(String, ObjectId)> = Vec::new();
@@ -519,7 +608,7 @@ impl ProjectRepo {
     }
 
     /// Runs git in the project's folder; fails with `what` when git fails.
-    fn git_ok(
+    pub(crate) fn git_ok(
         &self,
         what: &str,
         args: &[&str],
@@ -546,33 +635,16 @@ impl ProjectRepo {
         })
     }
 
-    /// The remote's branch that `branch` follows: its configuration, else
-    /// `origin`'s branch of the same name when there is an `origin`.
+    /// The remote's branch that `branch` follows ([`upstream_for`]).
     fn upstream_of(&self, repo: &gix::Repository, branch: &str) -> Option<Upstream> {
-        let configured =
-            config(repo, &format!("branch.{branch}.remote")).filter(|remote| remote != ".");
-        let remote = match &configured {
-            Some(remote) => remote.clone(),
-            None if remote_url(repo, DEFAULT_REMOTE).is_some() => DEFAULT_REMOTE.to_owned(),
-            None => return None,
-        };
-        let merge = configured
-            .as_ref()
-            .and_then(|_| config(repo, &format!("branch.{branch}.merge")));
-        let remote_branch = merge
-            .as_deref()
-            .and_then(|merge| merge.strip_prefix("refs/heads/"))
-            .unwrap_or(branch)
-            .to_owned();
-        Some(Upstream {
-            remote,
-            branch: remote_branch,
-            configured: configured.is_some(),
-        })
+        upstream_for(repo, branch)
     }
 
     /// The upstream of the current branch, or why there is none.
-    fn current_upstream(&self, repo: &gix::Repository) -> Result<(String, Upstream), VcsError> {
+    pub(crate) fn current_upstream(
+        &self,
+        repo: &gix::Repository,
+    ) -> Result<(String, Upstream), VcsError> {
         let branch = self.current_branch()?;
         let upstream = self.upstream_of(repo, &branch).ok_or_else(|| {
             failure(
@@ -642,7 +714,16 @@ impl ProjectRepo {
             .and_then(|name| remote_url(&repo, name))
             .map(|url| redact(&url));
         let state = self.remote_state();
+        let (_, names) = crate::projects::remotes_of(&repo);
+        let remotes = names
+            .into_iter()
+            .map(|name| NamedRemote {
+                url: remote_url(&repo, &name).map_or_else(String::new, |url| redact(&url)),
+                name,
+            })
+            .collect();
         Ok(RemoteInfo {
+            remotes,
             name,
             url,
             branch,
@@ -743,6 +824,9 @@ impl ProjectRepo {
             head: tip.map(|id| id.to_string()),
             has_project: None,
             related: None,
+            files: Vec::new(),
+            latest: None,
+            versions: None,
         };
         let (Some(tip), Some(branch)) = (tip, default_branch) else {
             return Ok(check);
@@ -764,8 +848,11 @@ impl ProjectRepo {
             self.gc_auto();
         }
         let repo = self.fresh()?;
-        let tree = repo.find_commit(tip)?.tree_id()?.detach();
-        check.has_project = Some(self.blob_entry(tree, PROJECT_MARKER)?.is_some());
+        let summary = self.summary(&repo, tip)?;
+        check.has_project = Some(summary.has_project);
+        check.files = summary.files;
+        check.latest = summary.latest;
+        check.versions = Some(summary.versions);
         check.related = Some(match head_of(&repo)? {
             Some(local) => self.related(&repo, local, tip)?,
             None => false,
@@ -862,6 +949,70 @@ impl ProjectRepo {
         Ok(true)
     }
 
+    /// Makes the current branch follow the remote `name` (mitcad#89: a
+    /// repository with several remotes and none followed): its branch
+    /// `branch`, by default the one of the current branch's name. Only the
+    /// branch's configuration changes (`branch.<b>.remote`, `.merge`);
+    /// nothing is fetched or sent. A remote that is not there is `no_remote`.
+    pub fn remote_follow(
+        &self,
+        name: &str,
+        branch: Option<&str>,
+    ) -> Result<RemoteFollowed, VcsError> {
+        check_name(name)?;
+        let current = self.current_branch()?;
+        let remote_branch = branch.map_or(current.as_str(), str::trim);
+        let valid = !remote_branch.is_empty()
+            && !remote_branch.starts_with('-')
+            && gix::refs::FullName::try_from(format!("refs/heads/{remote_branch}")).is_ok();
+        if !valid {
+            return Err(VcsError::Command(format!(
+                "'{remote_branch}' is not a branch's name"
+            )));
+        }
+        let repo = self.fresh()?;
+        let Some(url) = remote_url(&repo, name) else {
+            return Err(failure(
+                ErrorClass::NoRemote,
+                format!("the project's repository has no remote '{name}'"),
+            ));
+        };
+        let before = self.upstream_of(&repo, &current);
+        let wanted = Upstream {
+            remote: name.to_owned(),
+            branch: remote_branch.to_owned(),
+            configured: true,
+        };
+        let changed = before.as_ref() != Some(&wanted);
+        if changed {
+            let what = format!("Setting the upstream of {current}");
+            self.git_ok(
+                &what,
+                &["config", &format!("branch.{current}.remote"), name],
+                None,
+            )?;
+            self.git_ok(
+                &what,
+                &[
+                    "config",
+                    &format!("branch.{current}.merge"),
+                    &format!("refs/heads/{remote_branch}"),
+                ],
+                None,
+            )?;
+        }
+        let (ahead, behind) = ahead_behind(&self.fresh()?, &wanted.tracking())?;
+        Ok(RemoteFollowed {
+            name: name.to_owned(),
+            url: redact(&url),
+            branch: current,
+            upstream: wanted.short(),
+            changed,
+            ahead,
+            behind,
+        })
+    }
+
     /// Connects the project to the remote at `url` as `name`: checks it
     /// ([`ProjectRepo::remote_check`]), refuses one that holds another
     /// history (nothing is changed), sets it ([`ProjectRepo::remote_set`]),
@@ -877,18 +1028,38 @@ impl ProjectRepo {
         push: bool,
         control: Option<&Control>,
     ) -> Result<Connected, VcsError> {
+        self.connect_with(url, name, author, push, None, control)
+    }
+
+    /// [`ProjectRepo::connect`], and with `onto` (mitcad#89, `onto_files`)
+    /// a remote with files but no project and no version in common gets
+    /// the project's versions replayed after its latest one, with `onto`'s
+    /// choices for the paths on both sides (`projects/onto.rs`).
+    pub fn connect_with(
+        &self,
+        url: &str,
+        name: &str,
+        author: &Identity,
+        push: bool,
+        onto: Option<&SyncOptions>,
+        control: Option<&Control>,
+    ) -> Result<Connected, VcsError> {
         let check = self.remote_check(url, control)?;
         if !check.empty && check.related != Some(true) {
+            if let Some(options) = onto.filter(|_| check.has_project == Some(false)) {
+                return self.connect_onto(check, url, name, author, push, options, control);
+            }
             let message = if check.has_project == Some(true) {
                 format!(
-                    "{} holds another project's history: open it with Open Project from \
-                     Remote (mitcad-cli clone) into a new folder",
+                    "{} holds another project's history: choose an empty repository, or open \
+                     that project with Open from Cloud (mitcad-cli clone) into a new folder",
                     check.url
                 )
             } else {
                 format!(
                     "{} is not empty and does not share this project's history: connect the \
-                     project to an empty repository",
+                     project to an empty repository, or share it onto the repository's files \
+                     (mitcad-cli remote share)",
                     check.url
                 )
             };
@@ -903,6 +1074,8 @@ impl ProjectRepo {
             ahead: None,
             behind: None,
             error: None,
+            sync: None,
+            undone: false,
         };
         let result = (|| -> Result<(), VcsError> {
             if !connected.check.empty {
@@ -1143,7 +1316,7 @@ impl ProjectRepo {
 /// Removes what a failed clone left: the folder, or what it holds when it
 /// was there before. On Windows git's pack files are read-only, and a git
 /// process that is ending may still hold a file for a moment.
-fn remove_clone(dir: &Path, existed: bool) {
+pub(crate) fn remove_clone(dir: &Path, existed: bool) {
     for attempt in 0..10 {
         if attempt > 0 {
             std::thread::sleep(std::time::Duration::from_millis(200));
@@ -1208,6 +1381,64 @@ pub fn clone_project(
     control: Option<&Control>,
     log: &mut Vec<String>,
 ) -> Result<CloneOutcome, VcsError> {
+    let cloned = clone_repository(url, dir, git, control, log)?;
+    if !cloned.dir.join(PROJECT_MARKER).is_file() {
+        remove_clone(&cloned.dir, cloned.existed);
+        return Err(failure(
+            ErrorClass::NotAProject,
+            format!(
+                "{} holds no Mitcad project ({PROJECT_MARKER} at its root)",
+                cloned.url
+            ),
+        ));
+    }
+    clone_outcome(&cloned)
+}
+
+/// A repository cloned into a folder ([`clone_repository`]).
+pub(crate) struct Cloned {
+    /// The folder (absolute).
+    pub(crate) dir: PathBuf,
+    /// Whether the folder was there before (empty).
+    pub(crate) existed: bool,
+    /// The URL, credentials hidden.
+    pub(crate) url: String,
+}
+
+/// What [`clone_project`] answers of a cloned project.
+pub(crate) fn clone_outcome(cloned: &Cloned) -> Result<CloneOutcome, VcsError> {
+    let repo = ProjectRepo::open(&cloned.dir)?;
+    let head = repo.head_commit()?;
+    let files = match head {
+        Some(head) => {
+            let tree = repo.repo.find_commit(head)?.tree_id()?.detach();
+            repo.project_files(tree)?
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect()
+        }
+        None => Vec::new(),
+    };
+    Ok(CloneOutcome {
+        root: cloned.dir.to_string_lossy().into_owned(),
+        url: cloned.url.clone(),
+        branch: repo.branch()?,
+        head: head.map(|id| id.to_string()),
+        files,
+    })
+}
+
+/// The remote at `url` cloned into folder `dir` (made; it may exist when
+/// empty) with `git clone` of its default branch, the remote named
+/// `origin`. An empty remote is `not_a_project`; a failed or cancelled
+/// clone leaves no folder (an empty one that was there stays, empty).
+pub(crate) fn clone_repository(
+    url: &str,
+    dir: &Path,
+    git: Option<&GitCli>,
+    control: Option<&Control>,
+    log: &mut Vec<String>,
+) -> Result<Cloned, VcsError> {
     let url = check_url(url)?;
     let shown = redact(&url);
     let dir = absolute(dir)?;
@@ -1272,30 +1503,9 @@ pub fn clone_project(
         remove_clone(&dir, existed);
         return Err(error);
     }
-    if !dir.join(PROJECT_MARKER).is_file() {
-        remove_clone(&dir, existed);
-        return Err(failure(
-            ErrorClass::NotAProject,
-            format!("{shown} holds no Mitcad project ({PROJECT_MARKER} at its root)"),
-        ));
-    }
-    let repo = ProjectRepo::open(&dir)?;
-    let head = repo.head_commit()?;
-    let files = match head {
-        Some(head) => {
-            let tree = repo.repo.find_commit(head)?.tree_id()?.detach();
-            repo.project_files(tree)?
-                .into_iter()
-                .map(|(path, _)| path)
-                .collect()
-        }
-        None => Vec::new(),
-    };
-    Ok(CloneOutcome {
-        root: dir.to_string_lossy().into_owned(),
+    Ok(Cloned {
+        dir,
+        existed,
         url: shown,
-        branch: repo.branch()?,
-        head: head.map(|id| id.to_string()),
-        files,
     })
 }

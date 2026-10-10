@@ -68,6 +68,9 @@
 #include "commands/Commands.hpp"
 #include "files/Autosave.hpp"
 #include "files/FileFormats.hpp"
+#include "files/LiveController.hpp"
+#include "files/LockController.hpp"
+#include "files/ProjectIndicator.hpp"
 #include "files/RemoteController.hpp"
 #include "files/VersionDialogs.hpp"
 #include "framework/Appearances.hpp"
@@ -145,6 +148,17 @@ QJsonValue planeOf(const SelectionItem& item) {
   return QJsonObject{{QStringLiteral("face"), item.name}, {QStringLiteral("body"), item.owner}};
 }
 
+// The sketch.create fields for a plane to sketch on, with where it was
+// picked: another component's face or plane is linked into the active
+// component (mitcad#100). The origin planes are the active component's.
+QJsonObject sketchPlaneFields(const SelectionItem& item) {
+  QJsonObject fields{{QStringLiteral("plane"), planeOf(item)}};
+  if (item.kind == SelectKind::Face || !kOriginDatums.contains(item.owner)) {
+    fields.insert(QStringLiteral("occurrence"), item.occurrence);
+  }
+  return fields;
+}
+
 // The document's state is its project file's, as saved or opened: the
 // model then reports it unmodified until its revision changes (P8).
 void markSaved(Document& document) {
@@ -180,28 +194,27 @@ MainWindow::MainWindow(bool demo, QWidget* parent)
   m_worker->start();
   setAcceptDrops(true);
 
-  // The project, branch and version of the open file (P12d).
-  m_versionLabel = new QLabel(this);
-  m_versionLabel->hide();
-  // Its remote's state (P12 remote).
+  // The project indicator (mitcad#89): the current project, its kind, the
+  // open design's version and its remote's state (P12 remote), with the
+  // project's menu.
+  m_indicator = new ProjectIndicator([this](const QString& id) { trigger(id); }, this);
   createRemote();
+  createLocks();
   if (chromeStyle() == ChromeStyle::Floating) {
     // No status bar: the view is the central widget of createPanels(),
-    // messages go to a transient pill over it. The labels and the remote's
-    // button stay as the store of the texts (the log, the version status),
-    // in a widget that is never shown; the remote's commands are in the File
-    // menu.
+    // messages go to a transient pill over it. The labels stay as the store
+    // of the texts (the log), in a widget that is never shown; the project
+    // indicator goes to the title bar row (createPanels).
     auto* store = new QWidget(this);
+    store->setObjectName(QStringLiteral("hiddenStore"));
     store->hide();
-    for (QWidget* widget : std::initializer_list<QWidget*>{m_statusLabel, m_versionLabel,
-                                                            m_remote->statusButton(), m_rendererLabel}) {
+    for (QWidget* widget : std::initializer_list<QWidget*>{m_statusLabel, m_indicator, m_rendererLabel}) {
       widget->setParent(store);
     }
   } else {
     setCentralWidget(m_viewer);
     statusBar()->addWidget(m_statusLabel, 1);
-    statusBar()->addPermanentWidget(m_versionLabel);
-    statusBar()->addPermanentWidget(m_remote->statusButton());
+    statusBar()->addPermanentWidget(m_indicator);
     statusBar()->addPermanentWidget(m_rendererLabel);
   }
   connect(m_viewer, &OcctViewer::glInitialized, this, [this](const QString& renderer) {
@@ -269,21 +282,27 @@ MainWindow::MainWindow(bool demo, QWidget* parent)
   createPanels();
   if (chromeStyle() == ChromeStyle::Docked) {
     statusBar()->insertPermanentWidget(0, m_controller->failures());
+  } else if (auto* titleBar = findChild<TitleBar*>()) {
+    // Beside the document's name in the title bar row.
+    titleBar->setIndicator(m_indicator);
   }
   m_search = new CommandSearch(*m_registry, this);
   connect(m_search, &CommandSearch::chosen, this, &MainWindow::trigger, Qt::QueuedConnection);
   createAutosave();
+  createLive();
 
   recompute();
   showHint(tr("Create a sketch to start modelling. S searches for commands."));
   TestSync::singleShot(500, this, [this] { m_ribbon->logLayout(); });
   m_updates->startUp();
   m_remote->startUp();
+  m_live->startUp();
+  m_locks->startUp();
   m_reports->startUp();
   if (m_header != nullptr) {
-    // The update and remote notices under the ribbon, not above the title
-    // bar row, which the window's content extends under.
-    for (const char* name : {"updateBar", "remoteBar"}) {
+    // The update, remote, live and edit-lock notices under the ribbon, not
+    // above the title bar row, which the window's content extends under.
+    for (const char* name : {"updateBar", "remoteBar", "liveBar", "lockBar"}) {
       if (auto* bar = findChild<QToolBar*>(QLatin1String(name), Qt::FindDirectChildrenOnly)) {
         const bool shown = !bar->isHidden();
         removeToolBar(bar);
@@ -806,6 +825,10 @@ void MainWindow::updateStatusPill(bool error) {
 }
 
 bool MainWindow::isAvailable(const CommandDef& def) const {
+  // A read-only window (mitcad#89): only what changes no design.
+  if (windowReadOnly() && !readOnlyCommand(def)) {
+    return false;
+  }
   if (m_mode == Mode::Command) {
     return def.duringCommands && (!def.enabled || def.enabled());
   }
@@ -854,12 +877,17 @@ void MainWindow::trigger(const QString& id) {
     return;
   }
   const CommandDef* def = m_registry->find(id);
+  if (def != nullptr && windowReadOnly() && !readOnlyCommand(*def)) {
+    refuseReadOnly(id);
+    return;
+  }
   if (def == nullptr || !isAvailable(*def)) {
     return;
   }
   if (m_reports != nullptr) {
     m_reports->noteAction(QStringLiteral("command ") + id);
   }
+  m_locks->activity();
   if (def->kind == CommandDef::Kind::Feature) {
     startFeatureCommand(*def);
   } else if (def->run) {
@@ -869,6 +897,9 @@ void MainWindow::trigger(const QString& id) {
 
 void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editUid,
                                      const QJsonObject& analysis) {
+  if (!readOnlyCommand(def) && refuseReadOnly(editUid.isEmpty() ? def.id : QStringLiteral("editing %1").arg(editUid))) {
+    return;
+  }
   if (m_mode == Mode::Sketch && def.mode == CommandDef::Mode::Model) {
     // A feature from sketch mode (Extrude): the sketch is finished first,
     // its selected profiles go to the feature.
@@ -1138,6 +1169,13 @@ bool MainWindow::runCommand(const QJsonObject& cmd, QJsonObject* result) {
     return false;
   } catch (const ModelBusy&) {
     throw;
+  } catch (const ReadOnlyError& error) {
+    // A read-only window (mitcad#89): nothing changed.
+    m_lastError = errorText(error);
+    m_lastCancelled = false;
+    qInfo().noquote() << QStringLiteral("Read-only: refused %1").arg(name);
+    showError(m_lastError);
+    return false;
   } catch (const std::exception& error) {
     // Not the model's answer: an internal error (mitcad#62).
     m_lastError = errorText(error);
@@ -1152,6 +1190,7 @@ bool MainWindow::runCommand(const QJsonObject& cmd, QJsonObject* result) {
   if (result != nullptr) {
     *result = answer;
   }
+  m_locks->activity(); // an edit keeps the edit lock active (mitcad#89)
   return true;
 }
 
@@ -1611,6 +1650,16 @@ void MainWindow::refreshScene() {
     qWarning().noquote() << "Document structure not read:" << errorText(e);
   }
   snapshot.finish();
+  // The sketch being edited went with another change, such as its
+  // component deleted (mitcad#99): sketch mode ends instead of editing
+  // what is no longer there.
+  if (m_mode == Mode::Sketch && m_sketch->isActive() && m_snapshot.feature(m_sketch->uid()) == nullptr) {
+    qDebug().noquote() << QStringLiteral("Sketch %1 is gone; sketch mode ends").arg(m_sketch->uid());
+    if (m_session) {
+      m_session->discard();
+    }
+    leaveSketchMode();
+  }
   // The section of the analysis shown (mitcad#41).
   followAnalyses();
   // The Origin folder and Isolate are the document's (P9).
@@ -2285,6 +2334,9 @@ bool MainWindow::runModelCommands(const QJsonArray& commands, const QString& lab
 }
 
 bool MainWindow::canChangeModel(bool visibilityOnly) const {
+  if (!visibilityOnly && windowReadOnly()) {
+    return false; // mitcad#89; what shows changes in the window's own state
+  }
   return m_mode == Mode::Idle || (visibilityOnly && m_mode == Mode::Sketch);
 }
 
@@ -2297,8 +2349,8 @@ void MainWindow::showStatus(const QString& message, bool error) {
 }
 
 void MainWindow::createSketchOn(const SelectionItem& plane) {
-  if (m_mode == Mode::Idle && isSketchPlane(plane) && plane.occurrence.isEmpty()) {
-    createSketch(planeOf(plane));
+  if (m_mode == Mode::Idle && isSketchPlane(plane)) {
+    createSketch(sketchPlaneFields(plane));
   }
 }
 
@@ -2314,9 +2366,9 @@ void MainWindow::pickItems(const Selection& items) {
   }
   if (m_mode == Mode::PickPlane) {
     for (const SelectionItem& item : items) {
-      if (isSketchPlane(item) && item.occurrence.isEmpty()) {
+      if (isSketchPlane(item)) {
         qDebug().noquote() << QStringLiteral("Create Sketch picked %1").arg(summarize({item}));
-        createSketch(planeOf(item));
+        createSketch(sketchPlaneFields(item));
         return;
       }
     }
@@ -2507,7 +2559,7 @@ void MainWindow::onPicked(const Selection& items, Qt::KeyboardModifiers modifier
     qDebug().noquote() << QStringLiteral("Create Sketch picked %1").arg(summarize(items));
     for (const SelectionItem& item : items) {
       if (isSketchPlane(item)) {
-        createSketch(planeOf(item));
+        createSketch(sketchPlaneFields(item));
         return;
       }
     }
@@ -2542,6 +2594,7 @@ void MainWindow::setSelection(const Selection& items) {
   const bool changed = items != m_selection;
   m_selection = items;
   if (changed) {
+    m_locks->activity(); // a selection keeps the edit lock active (mitcad#89)
     QStringList names;
     for (const SelectionItem& item : items) {
       names << item.describe();
@@ -2767,12 +2820,12 @@ QString MainWindow::sketchOf(const SelectionItem& item) {
 }
 
 void MainWindow::startSketch() {
-  if (m_mode != Mode::Idle) {
+  if (m_mode != Mode::Idle || refuseReadOnly(QStringLiteral("sketch.create"))) {
     return;
   }
   // On the selected plane or planar face; else the user is asked for one.
   if (m_selection.size() == 1 && isSketchPlane(m_selection.first())) {
-    createSketch(planeOf(m_selection.first()));
+    createSketch(sketchPlaneFields(m_selection.first()));
     return;
   }
   m_mode = Mode::PickPlane;
@@ -2784,23 +2837,55 @@ void MainWindow::startSketch() {
   qDebug() << "Create Sketch: select a plane";
 }
 
-void MainWindow::createSketch(const QJsonValue& plane) {
+void MainWindow::createSketch(const QJsonObject& fields) {
+  QJsonObject request = fields;
+  request.insert(QStringLiteral("cmd"), QStringLiteral("sketch.create"));
+  const int depth = undoDepth();
   QJsonObject result;
-  if (!runCommand({{QStringLiteral("cmd"), QStringLiteral("sketch.create")},
-                   {QStringLiteral("plane"), plane}},
-                  &result)) {
+  if (!runCommand(request, &result)) {
+    return; // the reason is shown; a plane can still be picked
+  }
+  const QString uid = result.value(QStringLiteral("uid")).toString();
+  // A sketch whose plane cannot be found where it is added is taken back
+  // with the reason (mitcad#99): nothing is left half made, and the
+  // command can go on with another plane.
+  const QString error = featureError(uid);
+  if (!error.isEmpty()) {
+    while (undoDepth() > depth) {
+      if (!runCommand({{QStringLiteral("cmd"), QStringLiteral("undo")}})) {
+        break;
+      }
+    }
+    refreshScene();
+    showError(tr("Create Sketch: %1").arg(error));
+    qDebug().noquote() << QStringLiteral("Create Sketch taken back: %1").arg(error);
     return;
   }
   m_mode = Mode::Idle;
-  enterSketch(result.value(QStringLiteral("uid")).toString(), false);
+  enterSketch(uid, false);
   const gp_Pnt origin = m_sketch->model().frame.origin;
-  qDebug().noquote() << QStringLiteral("Sketch started on %1, origin (%2, %3, %4)")
-                            .arg(plane.isString() ? plane.toString()
-                                                  : QString::fromUtf8(QJsonDocument(plane.toObject())
-                                                                          .toJson(QJsonDocument::Compact)))
+  const QJsonValue plane = fields.value(QStringLiteral("plane"));
+  const QString on = plane.isString()
+                         ? plane.toString()
+                         : QString::fromUtf8(QJsonDocument(plane.toObject()).toJson(QJsonDocument::Compact));
+  const QString occurrence = fields.value(QStringLiteral("occurrence")).toString();
+  qDebug().noquote() << QStringLiteral("Sketch started on %1%2, origin (%3, %4, %5)")
+                            .arg(on, occurrence.isEmpty() ? QString() : QStringLiteral(" in ") + occurrence)
                             .arg(origin.X())
                             .arg(origin.Y())
                             .arg(origin.Z());
+}
+
+QString MainWindow::featureError(const QString& uid) const {
+  const QJsonObject timeline = query({{QStringLiteral("query"), QStringLiteral("timeline")}}).toObject();
+  for (const QJsonValue& value : timeline.value(QStringLiteral("features")).toArray()) {
+    const QJsonObject feature = value.toObject();
+    if (feature.value(QStringLiteral("uid")).toString() == uid &&
+        feature.value(QStringLiteral("status")).toString() == QStringLiteral("error")) {
+      return feature.value(QStringLiteral("error")).toString();
+    }
+  }
+  return QString();
 }
 
 void MainWindow::enterSketch(const QString& uid, bool existing) {
@@ -2824,7 +2909,7 @@ void MainWindow::enterSketch(const QString& uid, bool existing) {
 }
 
 void MainWindow::editSketch(const QString& uid) {
-  if (m_mode != Mode::Idle) {
+  if (m_mode != Mode::Idle || refuseReadOnly(QStringLiteral("editing %1").arg(uid))) {
     return;
   }
   const QJsonObject timeline = queryObject({{QStringLiteral("query"), QStringLiteral("timeline")}});
@@ -2995,9 +3080,12 @@ void MainWindow::closeEvent(QCloseEvent* event) {
   if (m_session) {
     m_session->cancel(); // a rolled-back edit is no change to save
   }
-  if (maybeSave()) {
+  // The design's versions sent and its edit lock released (mitcad#89).
+  if (maybeSave() && m_locks->quitting()) {
     // Remote work stops; versions not sent yet go at the next start.
     m_remote->shutDown();
+    // Live updates leave the brokers cleanly (mitcad#89).
+    m_live->shutDown();
     event->accept();
   } else {
     event->ignore();
@@ -3095,12 +3183,26 @@ bool MainWindow::loadProject(const QString& path, QString& error) {
   }
   qInfo().noquote() << "Opened" << m_filePath;
   addRecentFile(m_filePath);
+  // Its project (the current one, installDocument) remembers the design
+  // opened last: Open Project selects it (mitcad#89).
+  if (project && m_project.hasHistory()) {
+    try {
+      (*project)->command(rustStr(compactJson(
+          {{QStringLiteral("cmd"), QStringLiteral("remember_design")}, {QStringLiteral("path"), m_filePath}})));
+    } catch (const std::exception& e) {
+      qWarning().noquote() << QStringLiteral("Version warning: %1").arg(errorText(e));
+    }
+  }
   // Its project's remote: its state, and a check for newer versions.
   m_remote->fileOpened(m_filePath);
   return true;
 }
 
 bool MainWindow::save() {
+  // A read-only window (mitcad#89): Save as Copy or as a new version.
+  if (const std::optional<bool> readOnlySaved = readOnlySave(false)) {
+    return *readOnlySaved;
+  }
   if (m_filePath.isEmpty()) {
     return saveAs();
   }
@@ -3125,12 +3227,33 @@ bool MainWindow::saveAs() {
   return writeFile(dialog.selectedFiles().constFirst());
 }
 
-bool MainWindow::writeFile(const QString& path, const QString& description) {
+bool MainWindow::writeFile(const QString& path, const QString& description, VersionRecord* required) {
   const QString absolute = QFileInfo(path).absoluteFilePath();
+  // Stopped by an error (shown here, red): what a caller requiring the
+  // version gets as why.
+  const auto fail = [this, required](const QString& failure) {
+    showError(failure);
+    if (required != nullptr) {
+      required->failure = failure;
+    }
+    return false;
+  };
+  // A read-only window writes over its design's file only for Save as New
+  // Version (mitcad#89); Save As writes a copy.
+  if (windowReadOnly() && !m_writeAnyway && !m_filePath.isEmpty() && sameFolderPath(absolute, m_filePath)) {
+    refuseReadOnly(QStringLiteral("writing %1").arg(absolute));
+    return false;
+  }
   // In a project with version history (P12d) Save records a version too:
   // by the author (shown once), after a change made outside Mitcad was
   // dealt with and a rename made outside it recorded.
-  const std::optional<rust::Box<Project>> project = versionedProject(absolute);
+  QString projectError;
+  const std::optional<rust::Box<Project>> project = versionedProject(absolute, &projectError);
+  if (!project && absolute == m_filePath &&
+      (m_project.hasHistory() || (m_versionBase && m_versionBase->path == absolute))) {
+    return fail(tr("Could not check %1 before saving: %2. Save As can keep your design in another file.")
+                    .arg(QFileInfo(absolute).fileName(), projectError));
+  }
   QString author;
   QStringList paths{absolute};
   QString message = description;
@@ -3144,8 +3267,12 @@ bool MainWindow::writeFile(const QString& path, const QString& description) {
     }
     author = *chosen;
     if (absolute == m_filePath) {
-      const std::optional<bool> write = askVersionConflict(**project, absolute, author);
+      QString conflictFailure;
+      const std::optional<bool> write = askVersionConflict(**project, absolute, author, conflictFailure);
       if (!write) {
+        if (!conflictFailure.isEmpty()) {
+          return fail(conflictFailure);
+        }
         showHint(tr("Save cancelled."));
         return false;
       }
@@ -3178,13 +3305,16 @@ bool MainWindow::writeFile(const QString& path, const QString& description) {
     const QString failure = tr("Could not save %1:\n%2").arg(QDir::toNativeSeparators(path), error);
     qWarning().noquote() << failure;
     sheetWarning(this, tr("Mitcad"), failure);
+    if (required != nullptr) {
+      required->failure = failure;
+    }
     return false;
   }
-  std::pair<QString, bool> status;
+  VersionRecord status;
   if (project) {
     status = recordVersion(**project, absolute, paths, message, author);
   }
-  afterSaved(path, QByteArrayView(json->data(), static_cast<qsizetype>(json->size())), status.first, status.second);
+  afterSaved(path, QByteArrayView(json->data(), static_cast<qsizetype>(json->size())), status.status, status.problem);
   if (project) {
     rememberVersionBase(**project, absolute);
     // The version's preview for Version History (P12e).
@@ -3195,12 +3325,25 @@ bool MainWindow::writeFile(const QString& path, const QString& description) {
     m_versionBase.reset();
     m_renamedFrom.clear();
   }
+  // Saved into another project, or outside projects: the current project
+  // follows the file (mitcad#89).
+  followFileProject(absolute);
   updateVersionStatus();
   if (project) {
     // Sent to the project's remote, if it has one (P12 remote).
     m_remote->versionRecorded(absolute);
   }
-  return true;
+  // Under another name, the design is that file now, with its own edit
+  // lock (Save As, Save as Copy).
+  m_locks->designSaved(absolute);
+  if (required == nullptr) {
+    return true;
+  }
+  if (!project) {
+    status.failure = tr("%1 has no version history.").arg(QFileInfo(absolute).fileName());
+  }
+  *required = status;
+  return project && status.preserved;
 }
 
 void MainWindow::afterSaved(const QString& path, QByteArrayView content, const QString& status, bool problem) {
@@ -3225,6 +3368,10 @@ void MainWindow::afterSaved(const QString& path, QByteArrayView content, const Q
 }
 
 bool MainWindow::maybeSave() {
+  // A read-only window (mitcad#89): only changes kept from editing count.
+  if (const std::optional<bool> readOnlySaved = readOnlySave(true)) {
+    return *readOnlySaved;
+  }
   if (!isModified()) {
     return true;
   }
@@ -3266,8 +3413,14 @@ QString MainWindow::fileDialogDirectory() const {
   if (!m_filePath.isEmpty()) {
     return QFileInfo(m_filePath).absolutePath();
   }
-  // A new project's design goes in it (P12d).
-  return !m_projectDir.isEmpty() ? m_projectDir : QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+  // A new design of a project goes in it (P12d, mitcad#89).
+  if (!m_projectDir.isEmpty()) {
+    return m_projectDir;
+  }
+  if (m_project.isProject()) {
+    return m_project.root;
+  }
+  return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
 }
 
 bool MainWindow::installDocument(const QString& label, const QString& path, const DocumentMaker& make,
@@ -3310,6 +3463,13 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
     error = errorText(e);
     return false;
   }
+  // Another design: the old one's versions are sent and its edit lock
+  // released first (mitcad#89); a sync that needs a choice may keep it.
+  const bool readOnlyOpen = m_openingReadOnly;
+  if (!m_locks->designClosing(path, readOnlyOpen)) {
+    error.clear();
+    return false;
+  }
   // The new document is this thread's now; the old one goes, and with it
   // any command or sketch on it, and its recovery data (P8).
   resetCommandState();
@@ -3322,6 +3482,11 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
   m_renamedFrom.clear();
   m_projectDir.clear();
   m_changeNoted = false;
+  if (!path.isEmpty()) {
+    // A design's file (opened, recovered): its project is the current one
+    // (mitcad#89); an untitled design keeps the project.
+    followFileProject(path);
+  }
   updateVersionStatus();
   m_profileFaces.clear();
   reportRecompute(recomputed, milliseconds);
@@ -3329,7 +3494,12 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
     reportStored(recomputed, persisted);
   }
   refreshScene();
-  m_viewer->fitAll();
+  if (!m_keepView) {
+    m_viewer->fitAll();
+  }
+  // Its edit lock (mitcad#89): taken, or the same design's kept.
+  m_locks->designOpened(path, readOnlyOpen);
+  updateActions();
   return true;
 }
 

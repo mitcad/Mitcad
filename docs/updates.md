@@ -139,7 +139,9 @@ downgrades); build metadata (`+...`) does not count.
   sha256 <64 hex digits>
   ```
 
-  A platform without an asset gets the notice without *Install*.
+  A platform without an asset gets the notice without *Install*; so does
+  macOS (`macos-arm64`), whose new version is installed from its disk
+  image.
 - Keys, signatures and digests are lowercase hex. `format` is 1; a
   manifest of another format is refused.
 

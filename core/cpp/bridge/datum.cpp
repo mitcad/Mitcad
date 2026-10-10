@@ -11,7 +11,9 @@
 #include <gp.hxx>
 #include <gp_Vec.hxx>
 
+#include "bridge/analysis.hpp"
 #include "mitcad/geometry/datum.hpp"
+#include "mitcad/geometry/input_check.hpp"
 #include "mitcad_bridge/kernel/datum.h"
 
 namespace mitcad::bridge {
@@ -86,6 +88,18 @@ DatumPointing datum_path_point(const geometry::Shape& shape, rust::Slice<const r
 }
 
 DatumPointing datum_face_point(const geometry::Shape& shape, rust::Str face, const DatumVec& near) {
+  // Where the point projects inside planes, cylinders or spheres, their
+  // kept projections and classifiers give it (the import asks about the
+  // edges of large faces again and again, mitcad#60: the distance query
+  // sets up a classifier of the whole face every time).
+  {
+    const geometry::CheckedOperation check("face point");
+    DatumPointing fast;
+    if (analysis_face_point(shape, shape.find_faces(std::string(face)), near.xyz, fast.point,
+                            fast.direction)) {
+      return fast;
+    }
+  }
   const geometry::SurfacePoint p =
       geometry::face_point_normal(shape, std::string(face), point(near));
   DatumPointing result;

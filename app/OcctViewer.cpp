@@ -2645,6 +2645,10 @@ void OcctViewer::paintGL() {
   } catch (const Standard_Failure& failure) {
     qWarning() << "OCCT view event failed:" << failure.what();
   }
+  if (m_context->DetectedOwner() != m_hoveredOwner) {
+    m_hoveredOwner = m_context->DetectedOwner();
+    emit hovered(itemFor(m_hoveredOwner).value_or(SelectionItem()));
+  }
   // The camera is logged once it has kept still for a moment.
   const occ::handle<Graphic3d_Camera>& current = m_view->Camera();
   const QString key = QStringLiteral("%1 %2 %3 %4 %5")

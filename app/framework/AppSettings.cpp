@@ -46,19 +46,18 @@ QString VersionSettings::author() const {
 VersionSettings VersionSettings::load() {
   const QSettings settings;
   VersionSettings versions;
-  versions.useGit = settings.value(QStringLiteral("versions/useGit"), versions.useGit).toBool();
   versions.name = settings.value(QStringLiteral("versions/name")).toString();
   versions.email = settings.value(QStringLiteral("versions/email")).toString();
-  versions.confirmed = settings.value(QStringLiteral("versions/confirmed"), false).toBool();
   return versions;
 }
 
 void VersionSettings::save() const {
   QSettings settings;
-  settings.setValue(QStringLiteral("versions/useGit"), useGit);
   settings.setValue(QStringLiteral("versions/name"), name.trimmed());
   settings.setValue(QStringLiteral("versions/email"), email.trimmed());
-  settings.setValue(QStringLiteral("versions/confirmed"), confirmed);
+  // Of the author's dialog before mitcad#89.
+  settings.remove(QStringLiteral("versions/useGit"));
+  settings.remove(QStringLiteral("versions/confirmed"));
 }
 
 RemoteSettings RemoteSettings::load() {
@@ -68,6 +67,8 @@ RemoteSettings RemoteSettings::load() {
   remote.checkMinutes = std::clamp(settings.value(QStringLiteral("remote/checkMinutes"), remote.checkMinutes).toInt(),
                                    0, kMaxCheckMinutes);
   remote.autoPush = settings.value(QStringLiteral("remote/autoPush"), remote.autoPush).toBool();
+  remote.allowLive = settings.value(QStringLiteral("remote/allowLive"), remote.allowLive).toBool();
+  remote.defaultBroker = settings.value(QStringLiteral("remote/defaultBroker")).toString().trimmed();
   return remote;
 }
 
@@ -76,6 +77,8 @@ void RemoteSettings::save() const {
   settings.setValue(QStringLiteral("remote/git"), git.trimmed());
   settings.setValue(QStringLiteral("remote/checkMinutes"), checkMinutes);
   settings.setValue(QStringLiteral("remote/autoPush"), autoPush);
+  settings.setValue(QStringLiteral("remote/allowLive"), allowLive);
+  settings.setValue(QStringLiteral("remote/defaultBroker"), defaultBroker.trimmed());
 }
 
 void RemoteSettings::apply() const {

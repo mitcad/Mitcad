@@ -23,6 +23,11 @@
 //!   overwrite changes no version holds. Then a push (never forced); the
 //!   remote moving meanwhile starts the round again.
 //!
+//! - Onto another history ([`SyncOptions::onto_files`], mitcad#89: a
+//!   project shared onto a repository's files): all of the project's
+//!   versions are replayed after R, and `.gitignore` and `.gitattributes`
+//!   on both sides are merged by lines instead of being conflicts.
+//!
 //! Nothing changes before the backup reference is written: a sync cancelled,
 //! or stopped by a conflict or by changes in the folder, leaves the project
 //! as it was (the objects a replay wrote are left to git's gc).
@@ -190,6 +195,11 @@ pub struct SyncOptions {
     /// Fetch first (else the remote-tracking reference as it is).
     pub fetch: bool,
     pub push: bool,
+    /// The remote's branch may hold another history (mitcad#89, a project
+    /// shared onto a repository's files): all of the project's versions
+    /// are replayed after it, and [`LINE_MERGED`] files on both sides are
+    /// merged by lines instead of being conflicts.
+    pub onto_files: bool,
 }
 
 impl Default for SyncOptions {
@@ -199,8 +209,33 @@ impl Default for SyncOptions {
             resolve_all: None,
             fetch: true,
             push: true,
+            onto_files: false,
         }
     }
+}
+
+/// The files a replay onto a remote's files merges by lines (the remote's
+/// lines, then the project's missing ones) when both sides have them.
+pub const LINE_MERGED: [&str; 2] = [".gitignore", ".gitattributes"];
+
+/// `theirs`' lines, then the lines of `mine` that `theirs` lacks (blank
+/// lines left out), each ended by a line break.
+pub(crate) fn merge_lines(theirs: &str, mine: &str) -> String {
+    let mut out = String::new();
+    let mut have = BTreeSet::new();
+    for line in theirs.lines() {
+        out.push_str(line);
+        out.push('\n');
+        have.insert(line.trim().to_owned());
+    }
+    for line in mine.lines() {
+        let key = line.trim();
+        if !key.is_empty() && have.insert(key.to_owned()) {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// A version of the project replayed after the remote's.
@@ -297,6 +332,9 @@ struct Analysis {
     ahead: usize,
     behind: usize,
     conflicts: Vec<Conflict>,
+    /// The project's versions go onto another history (no common version):
+    /// [`LINE_MERGED`] files on both sides are merged by lines.
+    onto: bool,
 }
 
 impl Analysis {
@@ -312,6 +350,7 @@ impl Analysis {
             ahead: 0,
             behind: 0,
             conflicts: Vec::new(),
+            onto: false,
         }
     }
 
@@ -554,7 +593,7 @@ impl ProjectRepo {
         } else {
             None
         };
-        let analysis = self.analyse(&upstream)?;
+        let analysis = self.analyse(&upstream, false)?;
         let versions = |list: &[ObjectId]| -> Result<Vec<SyncVersion>, VcsError> {
             list.iter()
                 .take(LIST_LIMIT)
@@ -584,8 +623,10 @@ impl ProjectRepo {
         })
     }
 
-    /// The two sides of a sync and what the sync does with them.
-    fn analyse(&self, upstream: &Upstream) -> Result<Analysis, VcsError> {
+    /// The two sides of a sync and what the sync does with them; `onto`:
+    /// the remote's branch may hold another history, after which all of
+    /// the project's versions are replayed ([`SyncOptions::onto_files`]).
+    fn analyse(&self, upstream: &Upstream, onto: bool) -> Result<Analysis, VcsError> {
         let repo = self.fresh()?;
         let head = head_of(&repo)?;
         let remote = reference_id(&repo, &upstream.tracking())?;
@@ -660,41 +701,46 @@ impl ProjectRepo {
                 }
             }
         };
-        let Some(base) = base.filter(|_| line.len() == own.len()) else {
+        // Onto another history: the whole line, back to the first version.
+        let unrelated = onto && base.is_none();
+        if line.len() != own.len() || (base.is_none() && !unrelated) {
             analysis.unsupported(
                 "the remote's branch holds another history than the project's: open the remote \
                  into a new folder (mitcad-cli clone) instead"
                     .to_owned(),
             );
             return Ok(analysis);
-        };
-        analysis.base = Some(base);
+        }
+        analysis.base = base;
         analysis.local = line;
         analysis.case = SyncCase::Replay;
+        analysis.onto = unrelated;
         analysis.conflicts = self.conflicts(&analysis, base, local, remote)?;
         Ok(analysis)
     }
 
     /// The files changed on both sides: paths the project's versions change
     /// and the remote's change too, whose contents in L and R differ; the
-    /// B-rep store left out.
+    /// B-rep store left out, and onto another history (no `base`) the
+    /// [`LINE_MERGED`] files.
     fn conflicts(
         &self,
         analysis: &Analysis,
-        base: ObjectId,
+        base: Option<ObjectId>,
         local: ObjectId,
         remote: ObjectId,
     ) -> Result<Vec<Conflict>, VcsError> {
         let (base_tree, local_tree, remote_tree) = (
-            self.tree_of(base)?,
+            base.map(|base| self.tree_of(base)).transpose()?,
             self.tree_of(local)?,
             self.tree_of(remote)?,
         );
         let theirs: BTreeSet<String> = self
-            .differences(Some(base_tree), Some(remote_tree))?
+            .differences(base_tree, Some(remote_tree))?
             .into_iter()
             .map(|difference| difference.path)
             .filter(|path| !in_store(path))
+            .filter(|path| !(analysis.onto && LINE_MERGED.contains(&path.as_str())))
             .collect();
         // The paths the project's versions change, with those versions,
         // oldest first.
@@ -725,7 +771,10 @@ impl ProjectRepo {
                 ConflictKind::DeletedMine
             } else if in_remote.is_none() {
                 ConflictKind::DeletedTheirs
-            } else if self.blob_entry(base_tree, &path)?.is_none() {
+            } else if match base_tree {
+                Some(base_tree) => self.blob_entry(base_tree, &path)?.is_none(),
+                None => true,
+            } {
                 ConflictKind::AddedBoth
             } else {
                 ConflictKind::Modified
@@ -866,7 +915,7 @@ impl ProjectRepo {
             if options.fetch || round > 0 {
                 outcome.fetch = Some(self.fetch(control)?);
             }
-            let analysis = self.analyse(upstream)?;
+            let analysis = self.analyse(upstream, options.onto_files)?;
             if round == 0 {
                 outcome.case = analysis.case;
             }
@@ -1102,17 +1151,40 @@ impl ProjectRepo {
         for &id in analysis.local.iter().rev() {
             cancelled(control)?;
             let commit = self.repo.find_commit(id)?;
-            let parent = commit
+            // Onto another history the first version has no parent.
+            let parent_tree = commit
                 .parent_ids()
                 .next()
-                .expect("a replayed version has one parent")
-                .detach();
+                .map(|parent| self.tree_of(parent.detach()))
+                .transpose()?;
             let own_tree = commit.tree_id()?.detach();
             let mut editor = self.repo.edit_tree(tree)?;
             let mut touched = false;
-            for difference in self.differences(Some(self.tree_of(parent)?), Some(own_tree))? {
+            for difference in self.differences(parent_tree, Some(own_tree))? {
                 // The store follows the project files below.
                 if in_store(&difference.path) {
+                    continue;
+                }
+                // Onto another history: the remote's lines, then the
+                // project's missing ones.
+                if analysis.onto
+                    && LINE_MERGED.contains(&difference.path.as_str())
+                    && let Some(theirs) = self.blob_entry(remote_tree, &difference.path)?
+                {
+                    let merged = match difference.new {
+                        Some(mine) => {
+                            let theirs = self.repo.find_blob(theirs)?.take_data();
+                            let mine = self.repo.find_blob(mine)?.take_data();
+                            let text = merge_lines(
+                                &String::from_utf8_lossy(&theirs),
+                                &String::from_utf8_lossy(&mine),
+                            );
+                            self.repo.write_blob(text.as_bytes())?.detach()
+                        }
+                        None => theirs,
+                    };
+                    editor.upsert(difference.path.as_str(), EntryKind::Blob, merged)?;
+                    touched = true;
                     continue;
                 }
                 let target = match chosen.get(&difference.path) {

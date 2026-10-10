@@ -24,9 +24,9 @@
      "size": {"type": "constant", "radius": 14}}], "rolling_ball_corners": false}},
   {"expect": {"feature": "Fillet2", "status": "error", "error_contains": "unsupported: a setback corner"}},
 
-  {"comment": "Fillet3 F5: a radius too large for the block."},
+  {"comment": "Fillet3 F5: a radius too large for the block: the ball touches neither face inside the 40 x 20 section, even rolling on a far edge."},
   {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
-    "edges": ["E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}"], "radius": 30}},
+    "edges": ["E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}"], "radius": 100}},
   {"expect": {"feature": "Fillet3", "status": "error", "error_contains": "fillet failed"}},
 
   {"comment": "DeleteFace1 F6: two opposite sides leave a gap nothing closes."},

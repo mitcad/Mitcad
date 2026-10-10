@@ -6,6 +6,7 @@
 // (geometry/analysis), STEP files read with the exchange library
 // (geometry/io).
 
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <vector>
@@ -26,6 +27,7 @@ struct AnalysisPlane;
 struct AnalysisComparison;
 struct AnalysisEdgeMiddle;
 struct AnalysisFacePoints;
+struct AnalysisNewFace;
 
 class AnalysisInterferences {
 public:
@@ -76,6 +78,14 @@ AnalysisComparison analysis_compare_shapes(const ShapeList& a, const ShapeList& 
                                            double booleans_above);
 rust::Vec<double> analysis_boundary_distances(const geometry::Shape& shape,
                                               rust::Slice<const double> points);
+// The point of the faces (indices into the shape's) nearest to `near` and
+// the face's normal there, as geometry::face_point_normal finds them,
+// where each face is a plane, cylinder or sphere onto which `near`
+// projects inside the face (the boundary index's projections, kept with
+// the shape); false otherwise, for geometry::face_point_normal to measure.
+bool analysis_face_point(const geometry::Shape& shape, const std::vector<int>& faces,
+                         const std::array<double, 3>& near, std::array<double, 3>& point,
+                         std::array<double, 3>& normal);
 rust::Vec<bool> analysis_points_inside(const geometry::Shape& shape, rust::Slice<const double> points);
 // Where a segment (two x, y, z triples) crosses the shape's faces: pairs of
 // the fraction along it and -1 where it enters the material, +1 where it
@@ -88,5 +98,9 @@ std::size_t analysis_face_count(const geometry::Shape& shape);
 rust::Vec<AnalysisEdgeMiddle> analysis_edge_middles(const geometry::Shape& shape);
 // Points inside every named face (geometry::face_points).
 rust::Vec<AnalysisFacePoints> analysis_face_points(const geometry::Shape& shape);
+// The faces of `after` that none of `before` has (geometry::new_faces,
+// mitcad#138).
+rust::Vec<AnalysisNewFace> analysis_new_faces(const ShapeList& before, const geometry::Shape& after,
+                                              std::size_t count);
 
 } // namespace mitcad::bridge

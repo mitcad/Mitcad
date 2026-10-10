@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/browser
 # The browser (U3) through the real UI, on a part with a component placed
 # 40 mm along X:
 #   - The rows' layout (mitcad#10): a compact width; each light bulb just
@@ -19,6 +20,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-browser-test.sh [screenshot.png]
+# check-all sources: tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 

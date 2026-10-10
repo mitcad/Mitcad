@@ -48,6 +48,8 @@ install(FILES "${PROJECT_SOURCE_DIR}/LICENSE"
   DESTINATION ${mitcad_doc_dir})
 install(FILES "${PROJECT_SOURCE_DIR}/third_party/fonts/droid-sans/LICENSE.txt"
   DESTINATION ${mitcad_doc_dir}/licenses/droid-sans)
+# QtKeychain, linked statically (cmake/Keychain.cmake).
+install(FILES "${MITCAD_QTKEYCHAIN_LICENSE}" DESTINATION ${mitcad_doc_dir}/licenses/qtkeychain)
 set(mitcad_vcpkg_share "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share")
 file(GLOB mitcad_vcpkg_copyrights RELATIVE "${mitcad_vcpkg_share}" "${mitcad_vcpkg_share}/*/copyright")
 foreach(copyright IN LISTS mitcad_vcpkg_copyrights)

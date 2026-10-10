@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -29,6 +30,10 @@
 #include <vector>
 
 #include "parallel_runs.hpp"
+
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 namespace {
 
@@ -62,9 +67,20 @@ int test_child(const std::string& mode, const std::string& value) {
 #ifdef _MSC_VER
     // No message box, no error report: the process just ends.
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
-#endif
     std::abort();
+#else
+    // Killed, not aborted: a signal that dumps core starts the system's
+    // crash capture, which under WSL takes the whole WSL service down.
+    std::raise(SIGKILL);
+    return 3;
+#endif
   }
+#ifdef __linux__
+  if (mode == "dumpable") {
+    std::printf("dumpable %d\n", prctl(PR_GET_DUMPABLE, 0, 0, 0, 0));
+    return 0;
+  }
+#endif
   if (mode == "sleep") {
     std::this_thread::sleep_for(std::chrono::seconds(std::atoi(value.c_str())));
     return 0;
@@ -132,6 +148,15 @@ int self_test(const std::string& self) {
   CHECK(sum == 15.0);
   CHECK(largest == 5.0);
 
+#ifdef __linux__
+  // Never dumped (no_core_dumps), as the runner itself.
+  std::string dumpable;
+  mitcad::runs::run_all({{self, "--test-child", "dumpable", ""}}, settings,
+                        [&](std::size_t, const mitcad::runs::Outcome& outcome) { dumpable = outcome.output; });
+  const char* keep = std::getenv("MITCAD_CORE_DUMPS");
+  CHECK(contains(dumpable, keep != nullptr && std::string(keep) == "1" ? "dumpable 1" : "dumpable 0"));
+#endif
+
   // A crash, a hang over the time limit, too much memory and a program
   // that does not exist end only their own runs.
   settings.timeout = 1.0;
@@ -170,6 +195,7 @@ int self_test(const std::string& self) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  mitcad::runs::no_core_dumps();
   std::vector<std::string> args(argv + 1, argv + argc);
   try {
     if (args.size() == 3 && args[0] == "--test-child") {

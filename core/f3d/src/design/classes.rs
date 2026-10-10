@@ -350,7 +350,9 @@ pub const KEY_POINT: &str = "69EE2FA7-BCC7-449E-9CA9-976CEFDFED44";
 /// A direction input: a point, a direction (component space), a code and
 /// the entity it follows.
 pub const DIRECTION_INPUT: &str = "F2A7590D-6654-4674-B393-A2AEF4FEC48A";
-/// A body record: the body object and the feature that made it.
+/// A body record: the body object and the feature that made it, which
+/// lists its records in the order it made the bodies (mitcad#96,
+/// `build/producers.rs`). A body input refers to its body's record.
 pub const BODY_RECORD: &str = "D26351F0-5940-4D23-AA20-2C35475A6D9E";
 
 // Captured positions (mitcad#75).
@@ -365,3 +367,13 @@ pub const SNAPSHOT: &str = "8EE00B00-76BB-49AB-8C25-E837FEC5BDA5";
 /// [`OCCURRENCE`]s, or the item that made it), the component the path
 /// starts in, and per item that placed it the path's placement.
 pub const OCCURRENCE_PLACEMENTS: &str = "549FBB80-B890-473E-A5C0-415D3D9BF4E6";
+
+// Inputs read from the learning dump (mitcad#96).
+
+/// The loops of the profiles a profile source ([`PROFILE_SOURCE`])
+/// selected, by the ids of their curves ([`super::build`]'s `profiles`
+/// module).
+pub const PROFILE_LOOPS: &str = "0D57BD2F-D09B-43FC-AD57-1E89A118C453";
+/// A revolution's profile input: `u32 n | n` [`PROFILE_ID`] references, as
+/// an extrusion's [`PROFILE`].
+pub const REVOLVE_PROFILE: &str = "63D2920D-7EC2-49C4-9F08-315197F9E657";

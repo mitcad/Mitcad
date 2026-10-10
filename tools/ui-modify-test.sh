@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/commands
 # The MODIFY group (U4) through the real UI, with the volumes the model
 # reports (analytic, or tools/cli/tests/f2_*.json, f4_*.json):
 #   - Fillet with two sets of edges, each its own radius; Chamfer with two
@@ -17,6 +18,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-modify-test.sh [screenshot.png]
+# check-all sources: tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 

@@ -23,6 +23,7 @@
 #include "framework/Numbers.hpp"
 #include "framework/TestDriver.hpp"
 #include "framework/TestSync.hpp"
+#include "framework/TypedTextLog.hpp"
 #include "mitcad/geometry/guard.hpp"
 #include "report/CrashHandler.hpp"
 #include "report/ReportCenter.hpp"
@@ -31,7 +32,7 @@ int main(int argc, char* argv[]) {
   // Crash reports (mitcad#62), in the application and its import worker.
   const bool importWorker = mitcad::isImportWorker(argc, argv);
   mitcad::crash::install(importWorker ? "import-worker" : "app", MITCAD_VERSION);
-  // An .f3d, .FCStd or .ipt import in a process of its own, without
+  // An .f3d, .FCStd, .ipt or .iam import in a process of its own, without
   // windows (U6).
   if (importWorker) {
     if (mitcad::crash::testCrashRequested("import-worker")) {
@@ -73,6 +74,8 @@ int main(int argc, char* argv[]) {
   QApplication app(argc, argv);
   // UI tests' sync key (MITCAD_TEST_SYNC), before the window's timers exist.
   mitcad::TestSync::installIfRequested();
+  // What the UI tests type into text fields (MITCAD_LOG_TYPED_TEXT).
+  mitcad::installTypedTextLogIfRequested();
   QApplication::setOrganizationName(QStringLiteral("Mitcad"));
 #ifdef Q_OS_MACOS
   // macOS names the settings file after the reversed domain
@@ -128,7 +131,7 @@ int main(int argc, char* argv[]) {
   const QCommandLineOption openOption(
       QStringLiteral("open"),
       QStringLiteral("Open <file> at start-up: a project (.mitcad), an .f3d or .f3z design, "
-                     "a FreeCAD document (.FCStd), an .ipt part, STEP, IGES, BRep, STL, OBJ or DXF as a "
+                     "a FreeCAD document (.FCStd), an .ipt part, an .iam assembly, STEP, IGES, BRep, STL, OBJ or DXF as a "
                      "new document."),
       QStringLiteral("file"));
   const QCommandLineOption qtDialogsOption(

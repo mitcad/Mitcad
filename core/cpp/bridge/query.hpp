@@ -21,6 +21,7 @@ struct BoundingBox;
 rust::Vec<FaceInfo> faces(const geometry::Shape& shape);
 rust::Vec<EdgeInfo> edges(const geometry::Shape& shape);
 MassProperties mass_properties(const geometry::Shape& shape);
+MassProperties fixed_point_properties(const geometry::Shape& shape);
 BoundingBox bounding_box(const geometry::Shape& shape);
 std::size_t count_edges(const geometry::Shape& shape, rust::Str name);
 std::size_t count_faces(const geometry::Shape& shape, rust::Str name);

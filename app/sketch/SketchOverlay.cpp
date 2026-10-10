@@ -866,6 +866,17 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
   }
   painter.restore();
 
+  // The selected curves and points, over OCCT's highlight, which only
+  // recolours them in lines one pixel wide on macOS. A tool takes the
+  // clicks and the view shows no selection then.
+  if (m_c.tool() == nullptr) {
+    for (const SelectionItem& item : m_c.host().selection()) {
+      if (item.owner == m_c.uid() &&
+          (item.kind == SelectKind::SketchCurve || item.kind == SelectKind::SketchPoint)) {
+        paintEntityHighlight(painter, item.name, kSelectedColor);
+      }
+    }
+  }
   // What a picking tool points at and has picked.
   for (const QString& entity : m_c.picked()) {
     paintEntityHighlight(painter, entity, kPickColor);

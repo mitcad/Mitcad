@@ -22,5 +22,11 @@ pub mod ffi {
         /// angle between neighbouring facets (radians), on a copy; a mesh
         /// body's own triangles.
         fn triangle_mesh(shape: &Shape, deviation: f64, angle: f64) -> Result<TriangleMesh>;
+
+        /// A mesh body (as an STL file gives) of triangles: `vertices` x,
+        /// y, z after each other (millimetres), `triangles` three vertex
+        /// indices each. Errors without triangles or with an index out of
+        /// range.
+        fn mesh_from_triangles(vertices: &[f64], triangles: &[u32]) -> Result<SharedPtr<Shape>>;
     }
 }

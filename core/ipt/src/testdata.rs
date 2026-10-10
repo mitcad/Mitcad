@@ -43,6 +43,11 @@ pub fn brep_record(asm: &[u8]) -> Vec<u8> {
 
 /// Writes the part file.
 pub fn part_file(part: &TestPart) -> Vec<u8> {
+    part_file_with_streams(part, &[])
+}
+
+/// Writes the part file with more streams (path, bytes).
+pub fn part_file_with_streams(part: &TestPart, streams: &[(&str, Vec<u8>)]) -> Vec<u8> {
     // Another record type before the B-rep's, so that the type index
     // matters.
     let types = [[0x11; 16], BREP_RECORD_TYPE];
@@ -94,7 +99,78 @@ pub fn part_file(part: &TestPart) -> Vec<u8> {
         .stream("RSeStorage/Btestbrepsegment", &b)
         .stream("RSeStorage/Mtestdcsegment", &m2)
         .stream("RSeStorage/Btestdcsegment", &b2);
+    for (path, bytes) in streams {
+        w.stream(path, bytes);
+    }
     w.finish()
+}
+
+/// An ASM file without bodies: the B-rep record of a part whose bodies
+/// are meshes, or of an empty part.
+pub fn empty_asm() -> Vec<u8> {
+    let mut w = mitcad_f3d::asm::writer::Writer::new(1, 0);
+    w.record("asmheader")
+        .ptr(-1)
+        .int(-1)
+        .str("231.6.3.65535")
+        .end();
+    w.finish()
+}
+
+/// A part whose body is a mesh feature's: an empty B-rep record, a mesh
+/// feature in the definitions segment and a tetrahedron of 1 cm, 1.5 cm
+/// and 2 cm legs at the origin in the graphics segment.
+pub fn test_mesh_part() -> Vec<u8> {
+    let types = [
+        [0x21; 16],
+        crate::mesh::VERTICES_TYPE,
+        crate::mesh::TRIANGLES_TYPE,
+    ];
+    let (m, b) = rse::write_segment(
+        "PmGraphicsSegment",
+        [0x44; 16],
+        &types,
+        &[
+            (0, vec![0; 12]),
+            (
+                1,
+                crate::mesh::write_vertices(&[
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.5, 0.0],
+                    [0.0, 0.0, 2.0],
+                ]),
+            ),
+            (
+                2,
+                crate::mesh::write_triangles(&[[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]]),
+            ),
+        ],
+    );
+    part_file_with_streams(
+        &TestPart {
+            bodies: vec![empty_asm()],
+            part_number: "MITCAD-TEST-MESH",
+            material: "Generic",
+            length_unit: 11269,
+            design: Some((25, vec![(crate::mesh::MESH_FEATURE_TYPE, vec![0; 30])])),
+        },
+        &[
+            ("RSeStorage/Mtestgraphicssegment", m),
+            ("RSeStorage/Btestgraphicssegment", b),
+        ],
+    )
+}
+
+/// An empty part: a B-rep record without bodies and no features.
+pub fn test_empty_part() -> Vec<u8> {
+    part_file(&TestPart {
+        bodies: vec![empty_asm()],
+        part_number: "MITCAD-TEST-EMPTY",
+        material: "Generic",
+        length_unit: 11269,
+        design: None,
+    })
 }
 
 /// A part with two bodies (one B-rep record each): the 10 mm cube and the
@@ -111,6 +187,48 @@ pub fn test_part() -> Vec<u8> {
         length_unit: 11272,
         design: None,
     })
+}
+
+/// The bodies of [`test_part`] with a result segment (`result`) that lists
+/// the cube as shown and the cylinder as hidden surfaces (a surface a
+/// feature consumed), millimetres.
+pub fn test_part_with_hidden_body() -> Vec<u8> {
+    use crate::result::{RESULT_BODIES, RESULT_SEGMENT, ResultBody, write};
+    let entry = |node, visible, kind, range| ResultBody {
+        node,
+        features: vec![node + 1],
+        visible,
+        solid: kind == 2,
+        kind,
+        members: Vec::new(),
+        range,
+    };
+    let bodies = [
+        entry(2, true, 2, [[0.0; 3], [1.0; 3]]),
+        entry(5, false, 1, [[-1.0, -1.0, 0.0], [1.0, 1.0, 2.0]]),
+    ];
+    let (m, b) = rse::write_segment(
+        RESULT_SEGMENT,
+        [0x45; 16],
+        &[[0x31; 16], RESULT_BODIES],
+        &[(1, write(&bodies)), (0, vec![0; 8])],
+    );
+    part_file_with_streams(
+        &TestPart {
+            bodies: vec![
+                mitcad_f3d::testdata::cube_blob(),
+                mitcad_f3d::testdata::cylinder_blob(),
+            ],
+            part_number: "MITCAD-TEST-HIDDEN",
+            material: "Generic",
+            length_unit: 11269,
+            design: None,
+        },
+        &[
+            ("RSeStorage/Mtestresultsegment", m),
+            ("RSeStorage/Btestresultsegment", b),
+        ],
+    )
 }
 
 /// A part with the 10 mm cube as its body and the design that makes it

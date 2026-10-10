@@ -8,7 +8,7 @@
 //! which dumps give no inputs of, fall back to the stored bodies.
 
 use mitcad_f3d::design::ir::{PipeDetail, Reference, SweepDetail, TimelineItem};
-use mitcad_model::{EdgeName, FeatureUid, Kernel};
+use mitcad_model::{EdgeName, FeatureUid};
 use serde_json::{Map, Value, json};
 
 use crate::features::profiles_of;
@@ -109,7 +109,7 @@ fn given(v: Option<&Value>) -> bool {
     }
 }
 
-impl<K: Kernel> Importer<'_, K> {
+impl<K: crate::ImportKernel> Importer<'_, K> {
     /// A `Path` of the dump (its `PathEntity` items, or entity references) as a
     /// Mitcad path: curves of one sketch or edges of one body.
     fn path_of(&self, path: Option<&Value>, what: &str) -> Result<Value, String> {
@@ -383,6 +383,7 @@ impl<K: Kernel> Importer<'_, K> {
                     note: None,
                     guess: set.guess || k > 0,
                     predicted: None,
+                    first: false,
                 };
                 candidates.push((k + s, candidate));
             }

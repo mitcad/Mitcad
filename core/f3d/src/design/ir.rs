@@ -383,6 +383,17 @@ record! {
         /// The extrusion's direction in the component's coordinates (unit
         /// vector), where it is decoded.
         "direction_vector" => direction_vector: Vec3,
+        /// The byte after the extent codes (mitcad#96): 1 on one-sided
+        /// extrusions through all or up to an object that go against their
+        /// sketch's normal.
+        "flag" => flag: u32,
+        /// The roles of the item's input slots in order (mitcad#96): 65
+        /// profile, 8 participants, 5 a side through all, 17 and 18 a side
+        /// up to an object.
+        "slot_roles" => slot_roles: Vec<u32>,
+        /// A symmetric extent's length (mitcad#96): the whole length or half
+        /// of it each way.
+        "full_length" => full_length: bool,
     }
 }
 
@@ -962,6 +973,16 @@ record! {
         /// A body found: the middle points of some of its edges (cm), by
         /// which the import finds it among its own bodies.
         "edge_points" => edge_points: Vec<Vec3>,
+        /// An edge found: the unit tangent at its middle point along its
+        /// own direction in the file (the face whose coedge runs that way
+        /// lies on its left; mitcad#96).
+        "direction" => direction: Vec3,
+        /// A body: the timeline index of the item that made it (its body
+        /// record's producer, mitcad#96), by which the import finds it
+        /// among the bodies that item made.
+        "producer" => producer: i64,
+        /// A body: its index among the bodies its producer made.
+        "body_index" => body_index: i64,
     }
 }
 

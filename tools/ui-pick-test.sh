@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/PickContext.cpp app/PickContext.hpp app/OcctViewer.cpp app/OcctViewer.hpp app/view
 # Picking edges next to faces (mitcad#29) through the real UI, on an L
 # bracket: a 60 x 40 x 5 mm floor (Box1, F1) and a 60 x 5 x 40 mm wall at
 # its back (Box2, F2, joined), seen from the front and above (the
@@ -15,6 +16,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-pick-test.sh
+# check-all sources: tools/cli
 
 if [ -z "${UI_SCALE:-}" ]; then
   UI_SCALE=1 bash "$0" "$@" || exit 1

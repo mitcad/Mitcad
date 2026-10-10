@@ -178,6 +178,24 @@ pub(crate) enum Read {
     /// The output of an earlier feature (its tool), None without one.
     Output(FeatureUid, Option<Version>),
     Datum(FeatureUid, Option<Version>),
+    /// A body of another component (linked geometry, mitcad#100).
+    BodyIn(ComponentUid, BodyUid, Option<Version>),
+    /// Every body of another component.
+    BodiesIn(ComponentUid, Vec<(BodyUid, Version)>),
+    /// An occurrence's placement at this point (its matrix as bits).
+    Placement(OccurrenceUid, Option<[u64; 12]>),
+}
+
+/// A placement's matrix as bits, for [`Read::Placement`].
+pub(crate) fn placement_bits(t: &Transform) -> [u64; 12] {
+    std::array::from_fn(|i| {
+        let (r, c) = (i / 4, i % 4);
+        if c == 3 {
+            t.translation[r].to_bits()
+        } else {
+            t.linear[r][c].to_bits()
+        }
+    })
 }
 
 impl Read {
@@ -200,6 +218,21 @@ impl Read {
                     == *version
             }
             Self::Datum(uid, version) => env.datums.get(uid).map(|d| d.version) == *version,
+            Self::BodyIn(component, uid, version) => {
+                env.components
+                    .get(component)
+                    .and_then(|bodies| bodies.get(uid))
+                    .map(|b| b.version)
+                    == *version
+            }
+            Self::BodiesIn(component, bodies) => env
+                .components
+                .get(component)
+                .into_iter()
+                .flat_map(|b| b.iter())
+                .map(|(uid, b)| (*uid, b.version))
+                .eq(bodies.iter().copied()),
+            Self::Placement(uid, bits) => env.placements.get(uid).map(placement_bits) == *bits,
         }
     }
 
@@ -238,6 +271,24 @@ impl Read {
             }
             Self::Output(uid, v) => version(fingerprint.u8(4).u64(uid.0), *v),
             Self::Datum(uid, v) => version(fingerprint.u8(5).u64(uid.0), *v),
+            Self::BodyIn(component, uid, v) => {
+                body(fingerprint.u8(6).u32(component.0), *uid);
+                version(fingerprint, *v);
+            }
+            Self::BodiesIn(component, bodies) => {
+                fingerprint.u8(7).u32(component.0).u64(bodies.len() as u64);
+                for (uid, v) in bodies {
+                    body(fingerprint, *uid);
+                    fingerprint.u128(*v);
+                }
+            }
+            Self::Placement(uid, bits) => {
+                fingerprint.u8(8).u32(uid.0).option(*bits, |f, bits| {
+                    for b in bits {
+                        f.u64(b);
+                    }
+                });
+            }
         }
     }
 }
@@ -385,6 +436,105 @@ fn output_bytes<K: Kernel>(kernel: &K, output: &Output<K::Shape>) -> u64 {
         bytes += 4096 + 2 * 160 * segments as u64;
     }
     bytes
+}
+
+// Definitions evaluated in parallel (the .f3d import, mitcad#95).
+impl<S> Cache<S> {
+    /// A copy for a document evaluated on another thread
+    /// ([`crate::Document::fork`]): the same results (shared) and budget,
+    /// without the result store.
+    pub(crate) fn fork(&self) -> Self {
+        let entries = self
+            .entries
+            .iter()
+            .map(|(uid, list)| {
+                let list = list
+                    .iter()
+                    .map(|e| CacheEntry {
+                        def: e.def.clone(),
+                        output: e.output.clone(),
+                        bytes: e.bytes,
+                        used: e.used,
+                    })
+                    .collect();
+                (*uid, list)
+            })
+            .collect();
+        Self {
+            entries,
+            store: None,
+            budget: self.budget,
+            bytes: self.bytes,
+            clock: self.clock,
+            stats: CacheStats::default(),
+        }
+    }
+
+    /// Takes the newest results of `uids` from `other` (a fork's), as if
+    /// they had been evaluated here; returns how many.
+    pub(crate) fn adopt(&mut self, other: &Cache<S>, uids: &[FeatureUid]) -> usize {
+        let mut adopted = 0;
+        for uid in uids {
+            let Some(theirs) = other.entries.get(uid).and_then(|l| l.front()) else {
+                continue;
+            };
+            let used = self.tick();
+            let entries = self.entries.entry(*uid).or_default();
+            if let Some(i) = entries
+                .iter()
+                .position(|e| Arc::ptr_eq(&e.output, &theirs.output))
+            {
+                let mut known = entries.remove(i).expect("index is in range");
+                known.used = used;
+                entries.push_front(known);
+                continue;
+            }
+            entries.push_front(CacheEntry {
+                def: theirs.def.clone(),
+                output: theirs.output.clone(),
+                bytes: theirs.bytes,
+                used,
+            });
+            self.bytes += theirs.bytes;
+            while entries.len() > ENTRIES_PER_FEATURE {
+                let dropped = entries.pop_back().expect("more than the limit");
+                self.bytes -= dropped.bytes;
+                self.stats.evicted += 1;
+                self.stats.evicted_bytes += dropped.bytes;
+            }
+            adopted += 1;
+        }
+        self.trim();
+        adopted
+    }
+}
+
+impl<S: Clone> Recomputed<S> {
+    /// A copy for a forked document ([`crate::Document::fork`]); the
+    /// results are shared.
+    pub(crate) fn fork(&self) -> Self {
+        Self {
+            results: self
+                .results
+                .iter()
+                .map(|r| FeatureResult {
+                    uid: r.uid,
+                    status: r.status.clone(),
+                    output: r.output.clone(),
+                })
+                .collect(),
+            bodies: self.bodies.clone(),
+            owners: self.owners.clone(),
+            sketches: self.sketches.clone(),
+            datums: self.datums.clone(),
+            placements: self.placements.clone(),
+            evaluated: Vec::new(),
+            times: Vec::new(),
+            restored: Vec::new(),
+            restore_times: Vec::new(),
+            joints: self.joints.clone(),
+        }
+    }
 }
 
 impl<S> Cache<S> {
@@ -629,6 +779,8 @@ pub(crate) fn recompute<K: Kernel>(
             datums: &done.datums,
             features: &state.features,
             history: &done.results,
+            components: &components,
+            placements: &done.placements,
         };
         let output = match cache.lookup(entry, &env) {
             Some(output) => output,

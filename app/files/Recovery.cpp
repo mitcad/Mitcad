@@ -47,6 +47,10 @@ void readSession(RecoverableSession& found) {
     return;
   }
   found.savedAt = QFileInfo(metadata).lastModified().toUTC();
+  if (QFileInfo(metadata).isSymLink()) {
+    found.damage = QObject::tr("the metadata is a symbolic link");
+    return;
+  }
   QFile file(metadata);
   const QJsonObject about =
       file.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(file.readAll()).object() : QJsonObject();
@@ -66,12 +70,20 @@ void readSession(RecoverableSession& found) {
   }
   found.size = about.value(QStringLiteral("size")).toInteger(-1);
   found.digest = about.value(QStringLiteral("digest")).toString();
-  if (about.value(QStringLiteral("version")).toInt() != 1) {
+  const int version = about.value(QStringLiteral("version")).toInt();
+  if (version != 1 && version != 2) {
     found.damage = QObject::tr("written by another version of Mitcad");
     return;
   }
-  if (about.value(QStringLiteral("project")).toString() != QFileInfo(found.projectFile()).fileName()) {
+  const QString snapshot = about.value(QStringLiteral("project")).toString();
+  if (about.value(QStringLiteral("session")).toString() != found.session ||
+      !validAutosaveProject(found.session, snapshot, version)) {
     found.damage = QObject::tr("the metadata names another project file");
+    return;
+  }
+  found.project = snapshot;
+  if (QFileInfo(found.projectFile()).isSymLink()) {
+    found.damage = QObject::tr("the project file is a symbolic link");
     return;
   }
   QFile data(found.projectFile());
@@ -121,7 +133,7 @@ RecoverableSession::RecoverableSession(RecoverableSession&&) noexcept = default;
 RecoverableSession& RecoverableSession::operator=(RecoverableSession&&) noexcept = default;
 
 QString RecoverableSession::projectFile() const {
-  return QDir(directory).filePath(session + QLatin1String(".mitcad"));
+  return QDir(directory).filePath(project.isEmpty() ? session + QLatin1String(".mitcad") : project);
 }
 
 QString RecoverableSession::describe() const {
@@ -150,10 +162,11 @@ std::vector<RecoverableSession> findRecoverable(const QString& directory, const 
   const QStringList names = dir.entryList({QStringLiteral("*.json"), QStringLiteral("*.mitcad"), QStringLiteral("*.lock")},
                                           QDir::Files | QDir::Hidden, QDir::Name);
   for (const QString& name : names) {
-    const QString id = name.section(QLatin1Char('.'), 0, -2);
+    const QString id = name.section(QLatin1Char('.'), 0, 0);
     // Only what autosave names (a session's UUID); nothing else there is
     // touched.
-    if (id != own && !ids.contains(id) && !QUuid::fromString(id).isNull()) {
+    if (id != own && !ids.contains(id) && !QUuid::fromString(id).isNull() &&
+        QUuid::fromString(id).toString(QUuid::WithoutBraces) == id) {
       ids << id;
     }
   }
@@ -170,7 +183,8 @@ std::vector<RecoverableSession> findRecoverable(const QString& directory, const 
     session.lock = std::move(lock);
     if (!QFileInfo::exists(dir.filePath(id + QLatin1String(".json"))) &&
         !QFileInfo::exists(session.projectFile())) {
-      // Its document was saved, or nothing was written: only the lock was left.
+      // No published snapshot. Remove any abandoned generation safely.
+      removeSessionFiles(directory, id);
       session.lock->unlock();
       qDebug().noquote() << QStringLiteral("Recovery: removed the lock of session %1").arg(id);
       continue;

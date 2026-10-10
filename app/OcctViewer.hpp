@@ -380,6 +380,11 @@ signals:
   // A click (window false) or a window selection; empty when the click hit
   // nothing. Emitted while the view paints: connect queued.
   void picked(const mitcad::Selection& items, Qt::KeyboardModifiers modifiers, bool window);
+  // What a click would pick changed as the mouse moved (invalid when
+  // nothing), for drawings over the view that show it more boldly than
+  // OCCT's highlight, whose lines are one pixel wide on macOS. Emitted while
+  // the view paints: connect queued.
+  void hovered(const mitcad::SelectionItem& item);
   // A right click; `item` is what lies under the mouse (invalid if nothing).
   void contextMenuRequested(const QPoint& globalPosition, const mitcad::SelectionItem& item);
   // A right click on the orientation cube.
@@ -616,6 +621,8 @@ private:
   QString m_loggedCamera;
   double m_loggedGridStep = -1.0;
   QString m_restingCamera; // the camera when the rest timer started
+  // What the mouse was last over, for hovered().
+  occ::handle<SelectMgr_EntityOwner> m_hoveredOwner;
 };
 
 } // namespace mitcad

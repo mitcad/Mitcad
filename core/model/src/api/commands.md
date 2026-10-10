@@ -156,7 +156,8 @@ Shared rules:
   suppressed`).
 - A feature that succeeds with a caveat has warnings (`timeline` status
   `warning`): a fillet or chamfer built 0.1 % smaller than asked (at the
-  exact size it takes a face away, which OCCT cannot build), a sketch
+  exact size it takes a face away, which OCCT cannot build) or built as
+  rings about its circles ([fillet](#fillet)), a sketch
   text whose font is not installed. Evaluators call `EvalContext::warn`;
   `Kernel::notes` gives what the geometry gave up
   (`geometry::Shape::notes`).
@@ -185,6 +186,10 @@ millimetres, angles radians. Build sketches with the
   `{"face": "<face name>", "body": "F2.b0"}` (`body` optional) of the
   bodies before the sketch (frame as in [References to
   geometry](#references-to-geometry)).
+- `plane_link` (optional): `{"source": "O1", "target": "O2"}` when the
+  plane is another component's ([Geometry of other
+  components](#geometry-of-other-components)); `projections` may have a
+  `link` of the same form.
 - `frame` (optional): the sketch's own frame in the plane's frame,
   `{"origin": [x, y, z], "x_axis": [..], "y_axis": [..]}` in the plane
   frame's (x, y, normal) coordinates; imports keep a file's exact sketch
@@ -544,6 +549,39 @@ form lists edge sets:
 - New faces: `<fillet>:fillet(<edge>)` along every rounded edge (also the
   ones a tangent chain adds) and `<fillet>:corner(<vertex>)` where rounded
   edges meet.
+- Rings: OCCT's roundings and bevels stop where they would run over the
+  edge of a neighbouring face (the rim of a hole closer to a side than
+  its radius). When OCCT fails and every selected edge is a whole circle
+  between two faces of revolution about its axis with straight sections
+  (planes square to the axis, cylinders, cones), the cross-section turned
+  about the axis is cut from the body (convex edges) or joined to it
+  (concave), running over what it meets; constant radius and chord
+  length sets, and chamfers of every size (`geometry/src/ring_dressup.cpp`).
+  The feature has a warning saying so.
+- Second tries of OCCT's own rounding, before any of the above (mitcad#107):
+  when it fails at the size asked, it is built again on the body with the
+  pieces of its edges merged (a whole circle in two arcs, a line in
+  pieces between the same two faces; the new faces carry the names of
+  every piece), then with tighter tolerances of OCCT's fillet (knife
+  edges, where the faces' normals are opposite). A result OCCT's checker
+  rejects only where the input body already was invalid, on faces the
+  rounding neither changed nor touches, is taken as it is (stored bodies
+  of imported designs are at times invalid in places); other invalid
+  results are healed as before, never those of a second try.
+- Edge overflow (mitcad#121, OCCT's fillet as patched in the port): a
+  rounding wider than a face next to its edge along the whole edge runs
+  onto the face beyond that face's far edge, or, where it cannot touch
+  that face, rolls on the far edge; the narrow face vanishes (also all
+  round a closed edge). It runs over several narrow faces in a row (a
+  strip and a sliver beyond it) and over narrow faces on both sides of
+  the edge, as long as the ball touching the faces it reaches clears
+  those it passes; otherwise it rolls on the last edge before a face it
+  cannot touch. Two roundings of the edges of a face narrower than both
+  (their contacts on it cross) are one rounding over that face, from the
+  face beyond one edge to the face beyond the other. Where a rounding is
+  wider only along part of the edge, OCCT's rounding rolls on the far
+  edge where its contact reaches it, and near an end of the edge it is
+  cut by the face beyond, as before. Chamfers do not overflow.
 
 ### chamfer
 
@@ -582,6 +620,10 @@ The general form has edge sets with a reference face:
   chamfer with the warning `the miter corner type shapes nothing here`
   (whether .f3d corner types change two-edge vertices is unknown).
 - New faces: `<chamfer>:chamfer(<edge>)`, `<chamfer>:corner(<vertex>)`.
+- Bevels of whole circles that run over a neighbouring face are built as
+  rings, as for fillets.
+- A failed bevel is built again on the body with merged edge pieces, and
+  an input's own faults away from it are taken over, as for fillets.
 
 ### Face features: shell, draft, offset_face, delete_face, replace_face, split_body, split_face
 
@@ -1006,7 +1048,8 @@ Patterns, mirrors, combine, moves and primitives: modules `pattern.rs`,
 
 - `objects`: `bodies` (each copy a new body), `features` (their tool
   bodies combined with the bodies again by the feature's operation; only
-  features that leave a tool, see [Adding to the API](#adding-to-the-api))
+  features that leave a tool, see [Adding to the API](#adding-to-the-api),
+  and fillets and chamfers, below)
   or `faces` of one body (with planar caps where they meet the body they
   bound a boss, joined, or a pocket, cut). A pattern or mirror of
   features among the `features` (a pattern of patterns) stands for its
@@ -1054,6 +1097,58 @@ Patterns, mirrors, combine, moves and primitives: modules `pattern.rs`,
   (position of the body), so suppressing an element keeps the other ids.
 - The `preview` of a pattern lists `elements` (see [Preview](#preview)).
 
+#### Fillets and chamfers among the features
+
+A `fillet` or `chamfer` may be among the `features` of a pattern or mirror,
+usually with the features whose edges it rounds (mitcad#105):
+
+```json
+{"type": "rectangular_pattern",
+ "objects": {"type": "features", "features": ["F4", "F5", "F6"]},
+ "direction1": {"axis": "x", "quantity": 3, "distance": 20}, "distance_type": "spacing"}
+```
+
+- It leaves no tool body, so it is not copied but applied again at each
+  element, on the copies of its edges, with its own sizes (parameters)
+  and options. The features go in timeline order then: a fillet after
+  the copies of the features before it, whatever the order of `features`.
+- The copies' edges are found by their names: in an edge name, a face
+  that a copied feature made becomes that face's copy at the element
+  (`<pattern>:inst<element>(…)`, inner instances of a pattern of patterns
+  inside), a face of another feature stays. A chamfer between a copied
+  boss `F4` and the plate `F2` it stands on, `E{F2:end(r{…})|F4:side(c1)}`,
+  is repeated on `E{F2:end(r{…})|F7:inst1(F4:side(c1))}`.
+- An edge whose copy no body has by that name (none of its faces copied,
+  as for a fillet patterned alone over holes an earlier pattern made, or
+  its other face is another face at the copy's place) is found by its
+  place: the edge whose middle (within 1e-4 mm), direction and length are
+  those of the original edge, on the body before the fillet, moved by the
+  element's transform. An edge found neither way (a copy that reaches no
+  body) is left out with the warning `<fillet> is not repeated where the
+  copies lack its edges (elements …)`; faces (`faces` sets) are found by
+  name only.
+- The copies' new faces are the pattern's: `<pattern>:fillet(<the copy's
+  edge>)`, `<pattern>:chamfer(…)`, `<pattern>:corner(…)` (e.g.
+  `F7:chamfer(E{F7:inst1(F4:end(r{c1}))|F7:inst1(F4:side(c1))})`). A fillet
+  among the objects that rounds a copied chamfer's edges is repeated on the
+  copy of that chamfer's face the same way.
+- A two-distance or distance-angle chamfer or an asymmetric fillet without
+  a reference face measures its first distance on the first face of each
+  edge's name; where the copy's name puts the other face first, the copy
+  takes it with `flip` swapped, so that the distances stay on the faces the
+  original measured them on (also with a mirror). Sets by `faces`, and
+  edges found by their place, keep the sorted order of the copies' names.
+- The copies go on the body that has their edges (the fillet's own body
+  first), all elements in one operation; when that fails, one element after
+  another. When that fails too, the pattern starts again with the features
+  of one element after another (each element's copies of all the objects,
+  then the next element's): where copies overlap (pockets around a hub),
+  the rounding of one copy otherwise ends at the edges of the next. A
+  fillet whose copies fail even so fails the pattern (`Fillet1 at
+  element 2: …`), as does one whose copies find no edge at all (`no copy
+  of the edges of Fillet1 is on a body`) and one that failed itself.
+  `scale` with fillets or chamfers is unsupported.
+
 ### mirror
 
 ```json
@@ -1064,7 +1159,8 @@ Patterns, mirrors, combine, moves and primitives: modules `pattern.rs`,
 A pattern of one copy, element 1 (`<mirror>:inst1(<face>)`). Mirrored
 bodies are new bodies; `combine` joins each to its original when they
 touch. Mirrored features reflect their finished tool (never a rebuilt
-one); `original_bodies` as for patterns.
+one); `original_bodies`, and fillets and chamfers among the features, as
+for patterns.
 
 The mirror image of a nearly symmetric body lies on the body almost
 everywhere, nearly but not exactly, and a boolean of the whole shapes
@@ -1091,6 +1187,24 @@ the combine; `intersect` keeps the common volume as the target (fails
 when empty). Tools are removed unless kept; faces keep their names
 through the boolean. With `new_component` the target goes into a new
 component.
+
+The target is a body of the combine's component; a tool may be a body of
+another component when `tool_links` names where it is seen (mitcad#104):
+
+```json
+{"type": "combine", "target": "F7.b0", "tools": ["F2.b0"], "operation": "cut",
+ "keep_tools": true, "tool_links": {"F2.b0": {"source": "O1", "target": "O2"}}}
+```
+
+Each link is an `OccurrenceLink` ([Geometry of other
+components](#geometry-of-other-components)): `source` the occurrence path
+to the tool's component, `target` the one to the combine's (default: its
+first path). The tool is read there and moved into the combine's
+coordinates by the occurrences' placements at the combine's point of the
+timeline, so the combine follows when either occurrence moves; a consumed
+tool (without `keep_tools`) leaves its own component. A link for a body
+that is not a tool is refused; a tool of another component without a link
+fails the combine (`body F2.b0 (from Extrude1) belongs to A; …`).
 
 ### move, align, scale
 
@@ -1786,7 +1900,7 @@ made, in order) and `status` (as the `sketch` query: `dof`,
 
 | Command | Fields | Notes |
 |---|---|---|
-| `sketch.create` | `plane` (default `xy`; `xz`, `yz`, a construction plane `"F5"` or `{"face": …, "body": …}`), `frame`, `name` (optional) | result `uid`, `name` |
+| `sketch.create` | `plane` (default `xy`; `xz`, `yz`, a construction plane `"F5"` or `{"face": …, "body": …}`), `frame`, `name` (optional), `occurrence` and `context` (optional: a plane of another component, see [Geometry of other components](#geometry-of-other-components)) | result `uid`, `name` |
 | `sketch.add_rectangle` | `corner` [x, y], `width`, `height` (values) | a dimensioned rectangle: fixed first corner, horizontal and vertical constraints, `width` and `height` dimensions; result also `curves`, `region` |
 | `sketch.add_circle` | `center` [x, y], `diameter` (value) | fixed centre and a diameter dimension; result also `curves`, `region` |
 | `sketch.add_point` | `at`, `fixed` | |
@@ -1821,7 +1935,7 @@ made, in order) and `status` (as the `sketch` query: `dof`,
 | `sketch.circular_pattern` | `entities`, `center` (point input; a new point is fixed), `count` (originals included), `angle` (value, default a full turn) | a `patterns` record; result `constraints` [the pattern's id] |
 | `sketch.rectangular_pattern` | `entities`, `direction` (default [1, 0]), `count` [n1, n2], `spacing` [s1, s2] (values) | as above |
 | `sketch.edit_pattern` | `pattern` (`k5`), and any of `count` (n, or [n1, n2]), `angle`, `spacing`, `direction`, `center`, `entities` (the originals) | the copies follow |
-| `sketch.project` | `source`: an edge, a face (its boundary) or a vertex of the bodies before the sketch, `body` (optional), `linked` (default false) | fixed reference entities; a linked projection follows its source when the model changes |
+| `sketch.project` | `source`: an edge, a face (its boundary) or a vertex of the bodies before the sketch, `body` (optional), `linked` (default false), `occurrence` and `context` (optional: geometry of another component, see [Geometry of other components](#geometry-of-other-components)) | fixed reference entities; a linked projection follows its source when the model changes |
 | `sketch.import_dxf` | `path` (.dxf), `unit` (of a drawing that names none: `mm` default, `cm`, `m`, `in`, `ft`), `at` (the sketch point the drawing's origin goes to, default [0, 0]), `layers` (only the entities on these layers; all when left out; a layer with nothing on it is refused) | as other edits, and `curves`, `points` (shared points made), `text_count`, `warnings`; undo step `Insert DXF into Sketch1`; see [DXF](#dxf-into-sketches) |
 
 The `sketch` query (`{"query": "sketch", "uid": "F1"}`) returns:
@@ -1865,6 +1979,9 @@ Examples: `tools/cli/tests/f6_*.json`.
   body of another component fails the feature (`body F3.b0 (from
   Extrude2) belongs to Component1; …`), and a sketch or construction
   geometry of another component is refused when the feature is added.
+  Sketch planes and projections, and a combine's tools, may name another
+  component's geometry with where it was picked ([Geometry of other
+  components](#geometry-of-other-components)).
 - **Shared definitions.** A component's bodies are built once, in its own
   coordinates; every occurrence shows them placed by its transform, and a
   component placed in another is placed again with every occurrence of
@@ -2375,6 +2492,8 @@ file's bodies built with OCCT.
 | `report_path` | also write the JSON report to this file |
 | `list` | `import_f3d_timeline` only lists the designs: `{"designs": [{"label", "items"}]}` |
 | `memory_limit` | MiB the import may take besides the process's own limits (mitcad#80): low on memory (85 % of the tightest limit, always watched), the import cuts the definition being tried short and tries no more until the memory recovers; those items take the file's bodies, and the report's `low_memory` (`item`, `name`, `memory`, `items`) and a warning say so (`core/import/README.md`, *Memory*) |
+| `threads` | how many threads the import uses at once (mitcad#95, mitcad#103; default 1, the application gives the logical cores up to 8): workers evaluate the definitions ranked after the one being evaluated, each on its own copy of the document, and the import takes their results in rank order; the file's bodies are read and the history's bodies built ahead of the replay on the same threads. It is the same import as with one thread, only faster (`core/import/README.md`, *Definitions evaluated in parallel*, *Work beside the replay*) |
+| `learn` | a directory for the learning dump (mitcad#96): one JSON line per modelling item with its raw record, its candidates and the one the history accepted (`core/import/README.md`, *Learning the undecoded inputs*); `MITCAD_IMPORT_LEARN` when left out |
 
 The result: `file`, `design`, `items` (timeline items), `counts` (items
 per outcome: `parametric`, `partial`, `fallback`, `skipped`) and
@@ -2435,10 +2554,10 @@ first, then those the file's history suggests without them.
 | `ReplaceFaceFeature` | `replace_face` | `targetFaces`: a construction plane → `plane`, one face → `face` (a planar face of a body the replay lacks → a fixed plane), all faces of one body or a body → `body`. Dumps do not record the faces replaced (`sourceFaces` or `inputFaces` are read when a dump has them): the history gives them, the faces of the body the next state changed whose points it no longer has on its faces; listed in full with `tangent_chain` false. Matched against the history within 0.5 %; without a history, or with a target the replay lacks (a curved face of a surface body), fallback |
 | `SplitBodyFeature` | `split_body` | `splitBodies` → `bodies`, `splittingTool` → plane / face / body / sketch, `isSplittingToolExtended` → `extend`; IR body names after the step name the pieces |
 | `SplitFaceFeature` | | not translated (fallback) |
-| `CombineFeature` | `combine` | `targetBody` → `target`, `toolBodies` → `tools`, `operation` (Join/Cut/IntersectFeatureOperation), `isKeepToolBodies` → `keep_tools`; `isNewComponent`: the combine goes into the component the import puts the item in |
-| `MirrorFeature` | `mirror` | `patternEntityType` + `inputEntities` → `objects` (Faces → faces of one body, Features, Bodies; not Occurrences), `mirrorPlane` (origin `XY`/`XZ`/`YZ` → origin plane; other construction planes → a fixed plane from `geometry`; face fingerprint → face), `isCombine` → `combine` (not given, as from the stream decoder: separate copies, then joined), `patternComputeOption` → `compute` |
+| `CombineFeature` | `combine` | `targetBody` → `target`, `toolBodies` → `tools`, `operation` (Join/Cut/IntersectFeatureOperation), `isKeepToolBodies` → `keep_tools` (tools consumed: the history's copies of them are left out from the combine's state on, mitcad#96); `isNewComponent`: the combine goes into the component the import puts the item in |
+| `MirrorFeature` | `mirror` | `patternEntityType` + `inputEntities` → `objects` (Faces → faces of one body, Features, Bodies; not Occurrences), `mirrorPlane` (origin `XY`/`XZ`/`YZ` → origin plane; other construction planes → a fixed plane from `geometry`; face fingerprint → face), `isCombine` → `combine` (the stream decoder's, then the other way as a guess; not given: separate copies, then joined), `patternComputeOption` → `compute` |
 | `RectangularPatternFeature` | `rectangular_pattern` | `directionOne/TwoEntity` → axes (origin X/Y/Z, edge, fixed from `directionOne/Two` when the entity is null or a sketch line), `quantityOne/Two`, `distanceOne/Two`, `isSymmetricInDirectionOne/Two`, `patternDistanceType` (Extent/Spacing), `patternComputeOption`, `suppressedElementsIds` → `suppressed_elements` matched by `outputs.patternElements[].transform`; without directions (the oldest item version, mitcad#74) the history checks guesses: direction one along an origin axis, two across it at 90°, 60° or 120°, both symmetric or not (`core/import/README.md`) |
-| `CircularPatternFeature` | `circular_pattern` | `axis`, `quantity`, `totalAngle` → `angle`, `isSymmetric`, `patternComputeOption`, `suppressedElementsIds` |
+| `CircularPatternFeature` | `circular_pattern` | `axis` (an axis entity not found: the line the stream decoder's `_f3d_axis` gives), `quantity`, `totalAngle` → `angle`, `isSymmetric`, `patternComputeOption`, `suppressedElementsIds` |
 | `PathPatternFeature` | `path_pattern` | `path` (a sketch line, arc or circle → `{"sketch", "curve"}`; else a fixed line), `quantity`, `distance`, `patternDistanceType`, `startPoint` → `start`, `isFlipDirection` → `flip`, `isOrientationAlongPath` → `along_path`, `isSymmetric` |
 | `MoveFeature` | `move` | bodies of `inputEntities`; `transform` (rigid, cm) → `free` matrix, or `moveFeatureDefinition` (`TranslateXYZ`, `TranslateAlongEntity`, `Rotate`, `PointToPoint`, `PointToPosition`) to keep it editable; moves of faces are unsupported |
 | `CopyPasteBody` | `move` with `copy: true` | `props.sourceBody`, `translate_xyz` 0, 0, 0 |
@@ -2452,7 +2571,7 @@ first, then those the file's history suggests without them.
 | `RibFeature`, `WebFeature` | | not translated (fallback): no inputs are recorded besides thickness and depth |
 | `ThreadFeature` | `thread` | `inputCylindricalFaces` (resolved through `point_on_face`) → `faces`; `threadInfo`: `threadType` ISO Metric profile and other metric `M` sizes → `iso_metric`, ANSI Unified → `unified`, BSP Pipe Threads → `whitworth` with `G <size>-<tpi>` → `G <size>`, others fallback; `threadDesignation` → `designation`, `threadClass` → `class` when Mitcad lists it for the face's side (else left out), `isRightHanded` → `right_handed`; `isModeled` true → `modeled` with `diameters` from `majorDiameter`, `minorDiameter` and `pitchDiameter` and the `angle` the next history state shows on each face (one `thread` per face; Whitworth and NPT fall back), tried first without sizing the faces; `isFullLength` false → `length` (`threadLength`), `offset` (`threadOffset`) and `location` (`threadLocation`, swapped where Mitcad's cylinder axis runs against the face's `geometry.axis`). First with an `offset_face` of each face to the thread's major (external) or minor (internal) diameter, as the file sizes threaded faces, then with a tube between the two radii (`cylinder`s and `combine`s) cut from or joined to the body, then without |
 | `HoleFeature` tapped (`holeTapType` Tapped) | `hole` + `thread` | the hole with its diameter (then `tappedHoleInfo.minorDiameter`), and a `thread` on `hole<i>.wall` with the size of `tappedHoleInfo` (as for `ThreadFeature`; for `thread.isModeled` modelled with its diameters, angle 0), and for `thread.isFullLength` false `length` and `offset` from the hole's start (`low_end`); then the hole without the thread |
-| `HoleFeature` | `hole` | `position` (the stream decoder: every point of `_f3d_positions`) on the planar face named by `holePositionDefinition` or through the point, `holeType` Simple/Counterbore/Countersink with `counterboreDiameter`/`Depth` or `countersinkDiameter`/`Angle`, `holeDiameter`, `tipAngle` (180° → `flat`), `extentDefinition` `DistanceExtentDefinition` → `distance`, `ThroughAllExtentDefinition` or `AllExtentDefinition` → `through_all` (others fall back), `isDefaultDirection` false → `flip`; without a position, the holes the history shows |
+| `HoleFeature` | `hole` | `position` (the stream decoder: every point of `_f3d_positions`) on the planar face named by `holePositionDefinition` or through the point, `holeType` Simple/Counterbore/Countersink with `counterboreDiameter`/`Depth` or `countersinkDiameter`/`Angle`, `holeDiameter`, `tipAngle` (180° → `flat`), `extentDefinition` `DistanceExtentDefinition` → `distance`, `ThroughAllExtentDefinition` or `AllExtentDefinition` → `through_all` (others fall back; with the stream decoder's `_f3d_through_all` through all first, checked by the history), `isDefaultDirection` false → `flip`; without a position, the holes the history shows |
 | `Joint` | `joint` | in the component its occurrence paths start in (`_f3d.context_component`); `occurrenceOne` → `a`, `occurrenceTwo` → `b` (`_f3d.path` of occurrence objects → occurrence uids, occurrences of components of other documents included: they are occurrences of empty components; a level inside one leaves the joint out); each side's stored frame (`_f3d.frames`, else `geometryOrOrigin*`) on geometry of the side's component that gives it (a joint origin, construction geometry, a circular edge, a planar face or a face of revolution, with a `frame_override` for the rest; on a component of another document its `"origin"`), else a fixed plane; `jointMotion` → `kind` (`slide_axis` by the motion's slot), the values the motions have where the file places the occurrences (from the frames, mitcad#87: a joint that cannot hold there is not added), `rotationLimits` → `rz`'s and `slideLimits` → the slide's `limits` where they hold those values (else left out), the values → `position` where the rest value is another; `_f3d.opposed` → `flip`, `angle` → `angle`, `offset` → `offset` (an offset the file stores rounded takes the placements' value, mitcad#81), `offsetX`/`offsetY` move `b`'s origin. Kept only where every occurrence stays where it was or goes where the file places it after the item or at the end of its timeline (the occurrences' `_f3d.placements`, else its last captured position, else its stored transform); else an `as_built_joint` of the placements with a warning ([core/import/README.md](../../../import/README.md#joints)) |
 | `AsBuiltJoint` | `as_built_joint` | `occurrenceOne`/`Two` → `a`/`b`, `relative` from the placements at its point of the timeline (`_f3d.placements` checked against them, a warning where they differ), `jointMotion` → `kind`, its motion frame `origin` the recorded frame (on geometry of `b`'s component, else of `a`'s, else fixed on `b`), its limits where the recorded placement is the file's and they hold 0 (a rest value other than 0 → `position` 0) |
 | `RigidGroup` (an as-built joint of motion type 11) | `rigid_group` | `occurrences` → the occurrences of its component they are or are in (members below the top level and inside components of other documents move with them); with the component's own geometry among them, rigid `as_built_joint`s of each to it |
@@ -2675,7 +2794,11 @@ The result: `file`, `design` (the document's label), `items` (objects),
   (`placed[].replayed`) within the replay's 1e-6; sketches' edge counts,
   lengths and centres within 1e-6 relative; parameters' values against
   FreeCAD's values of the cells, properties and constraints within 1e-9
-  relative).
+  relative). A place of stored shapes also has `placed[].fixed`: their
+  `volume`, `area` and `center` with the kernel's plain fixed-point
+  integration, as FreeCAD measures; where FreeCAD's measures are those,
+  a difference is listed as not compared (Mitcad integrates faces bounded
+  by B-splines of many spans more exactly, mitcad#139).
 
 Tests: `core/freecad/tests/parse.rs`, `core/freecad/tests/sketch_corpus.rs`,
 `core/import/src/freecad/tests.rs` (mock kernel), `cli.import_fcstd`
@@ -2704,7 +2827,9 @@ or `Document::import_ipt(path, json)` for the report alone) imports an
   `outside` (not the part's: annotations, reference dimensions, features'
   own tables), `internal` (`RDxVar<n>`), `unread`), `expressions`
   (`translated`, `agree`: evaluated to the stored value, `differ`,
-  `not_translated`, each `name: why`), `features` (items with a history
+  `not_translated`, `computed` (parameters whose value the model computes,
+  not their expression: the stored value comes in), each `name: why`),
+  `features` (items with a history
   state), `features_with_states` (of them, those whose state the history
   has), `counts` (items per outcome), `design` (the importer's report:
   `items`, `parameters`, `history`, `bodies`, `warnings`, as for
@@ -2714,6 +2839,12 @@ or `Document::import_ipt(path, json)` for the report alone) imports an
 - **Bodies only** (`bodies_only`, and files without definitions; stage
   1): one base feature per body (solids and sheet bodies), built from the
   file's B-rep record with OCCT.
+
+Either way the triangles of the part's mesh features come in as mesh
+bodies (`source` `PmGraphicsSegment#<record>`, `mesh` true, `closed`,
+`triangles`; after the replay with the history), and a part without
+bodies and meshes opens empty with a warning (bodies that cannot be built
+are still an error).
 
 Either way the document's length unit becomes the part's when the
 document has no features yet (else a warning says so), and the bodies get
@@ -2731,6 +2862,7 @@ it.
 | `bodies_only` | the bodies only, as base features (stage 1) |
 | `no_verify`, `no_fallback`, `no_compare` | as for `import_f3d`: do not check the replay against the history; leave out features that cannot be replayed; compare the final bodies by volume only |
 | `time_limit` | seconds after which the remaining features take the file's bodies |
+| `hang_limit` | seconds without progress after which a geometry kernel call counts as hung (an empty document only): as for `import_f3d`, the replay runs again on its own thread with the item it hung on taking the file's bodies, a warning saying so |
 | `dump_path` | also write the decoded design (the dump IR, `core/import/SCHEMA.md`) to this file |
 | `design_path` | replay this dump (as `dump_path` writes it) instead of the decoded design |
 
@@ -2742,7 +2874,9 @@ length unit, or null) and `unit_code`; `records` (each B-rep record:
 `source`, `asm_version`, `bodies`, `history_states` (the states of the
 ASM history the record carries), `truncated`); `imported`
 (each body: `source` `<segment>#<record>/<body>`, `solid`, `valid`
-(OCCT's checker), `volume`, `area`, `faces`, `issues`, `feature`,
+(OCCT's checker), `volume`, `raw_volume` (before the solids were
+oriented), `area`, `faces`, `issues`, `messages` (the builder's, with what
+the checker finds wrong), `feature`,
 `bodies` with `uid`, `name`, `kind`); `skipped` (bodies not built:
 `source`, `error`); `warnings`; `seconds` {`read`, `build`}; and with
 `reference`, `reference`: `file`, `step_solids`, `solids` (pairs:
@@ -2759,6 +2893,81 @@ mock kernel, `tests/design_import.rs`), `core.exchange`
 `ipt.corpus`
 (`MITCAD_IPT_CORPUS`, [core/import/README.md](../../../import/README.md#ipt-import))
 and `tools/ui-import-test.sh`.
+
+### .iam import
+
+`{"cmd": "import_iam", "path": "assembly.iam", …}` (also `import_ipt` with
+an `.iam` file; C++ `Document::command`, or `Document::import_iam(path,
+json)` for the report alone) imports an `.iam` assembly (mitcad#60, stage
+4; `core/ffi/src/iam_import.rs`, the reader is
+[core/ipt](../../../ipt/README.md#assemblies)):
+
+- Every distinct part file is imported once with the `.ipt` import, in a
+  document of its own: its stored bodies, which become one base feature
+  of a component of this document (the shapes shared, not copied), or
+  with `history` its parameters and features replayed, that design copied
+  into a component (`Document::add_component_copy`); each of its
+  occurrences is an
+  occurrence of that component, named after the file and the instance
+  number (`part:2`) or the label the file stores.
+- A sub-assembly is a component whose occurrences are placed in it the
+  same way; each sub-assembly file comes in once, however often it is
+  placed.
+- Placements are the file's (cm become mm); hidden occurrences are hidden,
+  grounded ones grounded, suppressed ones left out (counted).
+- Referenced files are found as saved, else relative to the assembly as it
+  was when saved (the saved paths of both), else by the saved path's tail
+  under the assembly's folder and the folders above it, else by name in
+  the assembly's folder tree and `search` folders. A part found there is
+  checked to be the referenced document: its own file list names the
+  version id the occurrence stores (`identity`). A file not found is an
+  empty component with the occurrences placed, and the report names it.
+- Checks against the file: each occurrence's placement in the document
+  against the transform the file displays it with (where the file keeps
+  one), and each placed part's bodies (their bounding box in the
+  component) against the range box the file stores for the document:
+  they must lie within it, to 1 % of its diagonal (at least 0.05 mm); the
+  stored box is not tight (curved faces make it larger), so how much
+  larger it is (`box_slack`) is information only. The stored centre of the
+  placed range box is compared too, for information only: the file does
+  not always keep it up to date.
+
+The document's length unit becomes the assembly's when the document has no
+features yet. One undo step (`Import assembly.iam`); a job does not cancel
+it.
+
+| Field | Meaning |
+|---|---|
+| `text` | `import_iam` returns a readable report |
+| `report_path` | also write the JSON report to this file |
+| `search` | more folders searched for referenced files by name (with their subfolders) |
+| `history` | each part with its design replayed (as `import_ipt` without `bodies_only`), not only its stored bodies: much longer and much more memory |
+| `no_verify`, `no_fallback`, `no_compare`, `time_limit`, `hang_limit` | with `history`, each part's import, as for `import_ipt` |
+
+The command's result: `file`, `occurrences` (placed) and `report`:
+`format` (`iam`), `release`, `units`, `unit_code`; `occurrences` (counts:
+`placed`, `suppressed`, `hidden`, `of_missing_files`, `not_placed`,
+`without_file`, `without_placement`, `not_rigid`); `parts` (part files:
+`files`, `imported`, `missing`, `failed`, `identity_confirmed`,
+`identity_differs`); `assemblies` (sub-assembly files); `resolution`
+(files per way they were found); `files` (each: `saved`, `path`, `found`,
+`kind`, `status`, `identity`, `occurrences`, `component`, and for parts
+`part`: the part import's `bodies`, `solids`, `valid`, `not_built`,
+`history`, `counts`, `features`, `warnings`, `units`, `material`);
+`display`, `boxes`, `centers` (each `compared`, `agree`, `worst` in mm,
+`failures`); `pass` (every display and range box check agrees);
+`occurrence_list` (each placed or suppressed occurrence with its path
+name, `file` index, `occurrence` uid, `grounded`, `hidden`, `checks`);
+`warnings`; `seconds`.
+
+Tests: `core/ipt` (`core.ipt`: the reader on assemblies made by
+`mitcad_ipt::testassembly`), `core.model` (`add_component_copy`),
+`cli.iam_files`, `cli.import_iam`, `cli.info_iam`, `cli.import_ipt_iam`
+(a test project of those assemblies: a sub-assembly, parts found relative
+to the assembly and by name, a missing one; hidden, grounded and
+suppressed occurrences), and `iam.corpus`
+([tools/cli/iam-corpus.cmake](../../../../tools/cli/iam-corpus.cmake),
+every `.iam` under `MITCAD_IPT_CORPUS`).
 
 ## Files and version history
 
@@ -3008,7 +3217,7 @@ have changes no version holds), `other`.
 | Command | Fields | Result |
 |---|---|---|
 | `git_info` | | `path`, `version`, `lfs` (git-lfs's version or null), `supported` (2.34 or newer), `minimum`, `error` (`git_missing`) |
-| `remote_info` | `links` (default false) | `name` (the remote the branch follows, else `origin` when there is one; null: none), `url` (credentials hidden), `branch`, `upstream` (`origin/main`), `ahead` and `behind` (versions the remote lacks and the project lacks, by the remote-tracking reference; null before the first fetch or push), `last_fetch`, `last_push` and `last_sync` ({`time`, `date`, `error`}, kept in `.mitcad/local/remote.json`), with `links` `external_links`: linked components whose files are outside the project ({`file`, `component`, `path`}), which other copies of the project do not have |
+| `remote_info` | `links` (default false) | `name` (the remote the branch follows, else `origin` when there is one; null: none), `url` (credentials hidden), `branch`, `upstream` (`origin/main`), `ahead` and `behind` (versions the remote lacks and the project lacks, by the remote-tracking reference; null before the first fetch or push), `last_fetch`, `last_push` and `last_sync` ({`time`, `date`, `error`}, kept in `.mitcad/local/remote.json`), `remotes` (every remote of the repository, sorted: {`name`, `url` (credentials hidden)}; with several and `name` null, none is followed: [Following a remote](#following-a-remote)), with `links` `external_links`: linked components whose files are outside the project ({`file`, `component`, `path`}), which other copies of the project do not have |
 | `remote_check` | `url` | `url`, `reachable`, `empty`, `default_branch` (what the remote's HEAD names, else `main`, `master` or the only branch), `head` (its commit), `has_project` (`.mitcad/project.json` at its root), `related` (a version in common with the project's history; null when empty). A branch whose commit the project lacks is fetched without a reference to read it, then `git gc --auto` |
 | `remote_set` | `url`, `name` (default `origin`), `author`, `fallback_author` | `name`, `url`, `branch`, `upstream`, `commit` (the version `Configure project for sync`, or null), `written`: the remote added or its URL changed, the branch following its branch of the same name (unless it follows one of that remote), and the recommended `.gitattributes` (`*.mitcad text eol=lf merge=binary`) recorded when the project lacks it. No network |
 | `remote_remove` | `name` (default `origin`) | `name`, `removed` (false: there was none); git drops the remote-tracking references and the upstream of branches that followed it |
@@ -3133,6 +3342,521 @@ meanwhile, a merge made with git, cancellation, files too large, backups,
 the JSON options, `incoming`, a remote's version compared by its id;
 after each `git fsck`, a clean `git status` and `git log
 --first-parent` of each file as its history) and ctest `cli.remote`.
+
+### Following a remote
+
+A repository can have several remotes; the project syncs with the one its
+branch follows: the branch's upstream, else `origin`, else the only remote
+(`upstream_for` in `core/vcs/src/remote/mod.rs`). With several, none of
+them `origin` and no upstream, none is followed (mitcad#89):
+`inspect_folder`'s `remote` and `remote_info`'s `name` are null, the
+remote commands answer `no_remote`, and the application's Project
+Settings asks which one to follow.
+
+| Command | Fields | Result |
+|---|---|---|
+| `remote_follow` | `name` (a remote of the repository), `branch` (the remote's branch; default the current branch's name) | `name`, `url` (credentials hidden), `branch` (the current branch), `upstream` (`second/main`), `changed` (false: it followed that branch already), `ahead` and `behind` (by the remote-tracking reference; null before that remote is fetched). The current branch follows the remote's branch from now on (`branch.<b>.remote`, `branch.<b>.merge` in the repository's configuration); nothing is fetched or sent. A remote that is not there is `no_remote`, a detached HEAD `unsupported`; a name that is no remote's name or a branch that is no branch's name is a failed command |
+
+`mitcad-cli remote follow <folder> <name> [--branch <branch>] [--json]`;
+`remote show` lists the remotes when none is followed. Tests:
+`core/vcs/src/tests/projects.rs`
+(`a_folder_is_told_for_what_it_is`: several remotes, none followed,
+then each followed) and ctest `cli.remote`.
+
+## Projects
+
+Local and Cloud projects (mitcad#89; `core/vcs/src/projects/`, design in
+[docs/architecture.md](../../../../docs/architecture.md#projects)). A
+project is a folder with `.mitcad/project.json`; it is **Local** when the
+folder is the root of a git repository without a remote and **Cloud** when
+the repository has one. The kind is never stored: it is read from the
+folder, so a project cloned with any git tool is Cloud when opened.
+
+Commands without a project go through `mitcad_vcs::api::projects_command`
+(bridge: `projects_command(json, control)` and `projects_command_text(json,
+control)`, with a `SyncControl` for progress and cancellation, as
+`library_command`). Every answer has `error` ({`class`, `message`,
+`detail`} or null) and `log` (the programs run, credentials hidden), as
+the remote commands: a failure of git, the network, the remote or a
+folder's state is an answer, not a failed command (`projects_command_text`
+makes it an error, `mitcad-cli` exits with 1). A command that is not
+understood, a path that is a file where a folder is needed, a host that is
+no host name and values that are no settings are failed commands. New
+error classes: `has_project` (the remote holds a Mitcad project where a
+new one was to go), `not_empty` (a folder that must be new or empty is
+not), `inside_project` (a folder that is a project, or inside one, where a
+new project was to be made).
+
+| Command | Fields | Result |
+|---|---|---|
+| `inspect_folder` | `dir` | what the folder is, no network and no writes; below |
+| `check_remote` | `url` | `remote_check` without a project: `url`, `reachable`, `empty`, `default_branch`, `head`, `has_project`, `files` (names at the root of the default branch's latest version, at most 100, cleaned for display), `latest` ({`time` (Unix seconds), `date` (RFC 3339, UTC), `author` (the name, cleaned)} or null), `versions` (commits on the default branch, counted up to 10 000; null when empty). A remote with branches is cloned without file contents (`--filter=blob:none` where the server allows it) into a temporary bare repository, which is removed: nothing is left behind |
+| `create_project` | `dir`, `author` (`Name <email>`), `design` ({`path` (relative, `/`), `text`}, optional), `include_designs` (default true), `url` (optional: Cloud), `push` (default true), `shared` (optional: the shared settings, as `set_project_settings`' `shared`, merged into the defaults and checked strictly) | below |
+| `clone_project` | `url`, `dir` (new or empty: `not_empty`; not in a project: `inside_project`), `adopt` (default false), `author` (optional) | the bridge's `clone_project` answer (`root`, `url`, `branch`, `head`, `files`), and `adopted`, `commit` (the first version as a project, or null) and `push` (`push`'s answer, or null). With `adopt` a remote with files but no project is cloned, made a project (marker, `.gitattributes`, `.gitignore`; first version `Make this repository a Mitcad project` by `author`, else git's configured author) and pushed; without, it is `not_a_project` and nothing stays. An empty remote is always `not_a_project` (`create_project` with `url` makes a project there). `author`, when given, is written to the repository's own configuration. A failure before the first version leaves no folder (an empty one that was there stays, empty); a failed push is `error`, the project made |
+| `init_bare` | `dir` | `dir`, `created` (false: it was a bare repository already): a missing or empty folder (files the system leaves count as empty) made a bare repository with the branch `main`, for a shared folder as a remote; a folder with anything else (a work tree too) is `not_empty` |
+| `host_keys` | `host`, `port` (default 22) | `host` (lowercase), `port`, `keys` ([{`type`, `key` (base64), `fingerprint` (`SHA256:…`)}]), `service` (`GitHub`, `GitLab` or `Codeberg` for github.com, gitlab.com and codeberg.org, else null), `published` (`verified`: every key is one the service publishes; `mismatch`: one is not; null for other servers), `known` (a key of the host is in `~/.ssh/known_hosts`, also under a hashed name), `changed` (`known_hosts` has another key of the same type for the host), `known_hosts` (its path), `dropped` (lines of the output not read). Below |
+| `trust_host_key` | `host`, `port`, `type`, `key` | `path`, `written` (false: it was there): the key appended to `~/.ssh/known_hosts` (the folder and the file made, readable by the user only, when missing) as `host`, or `[host]:port` for another port than 22, only when a new scan still gives it (else `host_key_unknown`) and it is one the service publishes (a `mismatch` is `host_key_unknown`, never written). Without `type` and `key`, every key a new scan gives (none when one is a mismatch) |
+| `ssh_public_key` | | `path` and `text` of the first of `~/.ssh/id_ed25519.pub`, `id_ecdsa.pub`, `id_rsa.pub` that holds a public key (at most 16 KiB), or both null |
+| `git_info` | | as the bridge's `git_info`, and `credential_helper` ({`configured`, `name`}: the `credential.helper` of git's system and user configuration that applies, credentials hidden) and `author` ({`name`, `email`}: git's configured `user.name` and `user.email`, which New Project shows first; null when git has none) |
+
+`inspect_folder` answers `dir` (absolute) and `kind`, the first that
+applies:
+
+- `missing`: the folder does not exist;
+- `project`: it has `.mitcad/project.json`;
+- `inside_project`: a folder above it has (`project_root` names it);
+- `repository`: it is the root of a git repository's work tree;
+- `empty`: nothing in it (`.DS_Store`, `desktop.ini` and `Thumbs.db`
+  do not count);
+- `designs`: `.mitcad` files in it or below;
+- `other`: anything else;
+
+and `project_root` (the project the folder is or is in, also for a missing
+folder inside a project; else null), `git_root` (the work tree the folder,
+or its nearest existing folder upwards, is in; or null), `outer_repository`
+(that work tree when it is not the project's or the folder's own),
+`history_blocked` (why a project inside another repository, not at its
+root, has no versions; null otherwise: a project made in a folder inside
+another repository gets a repository of its own, which the other one does
+not record), `has_history` (the project's folder is the root of its
+repository), `remote` ({`name`, `url` (credentials hidden), `branch`,
+`upstream`} or null: the remote the branch follows, else `origin`, else
+the only one; null with several and none of these, which Project Settings
+asks about: `remote_follow`), `remotes` (all names, of the project's repository or the
+folder's own), `cloud` (`has_history` and a remote), `designs` ([{`path`
+(relative to the project, else to the folder, with `/`), `modified` (RFC
+3339, UTC)}], newest first, at most 1000, `.git` and `.mitcad` folders and
+links left out, at most 50 000 entries looked at), `designs_truncated`
+(more than listed), `last_design` (from `.mitcad/local/recent.json`
+while that design is there, else null), `settings` (the project's shared
+settings, checked, as `project_settings`' `shared`; null outside
+projects) and `problems` (what of the settings was not used).
+
+`create_project` makes the project in `dir` (missing, empty, a folder of
+designs or other files, or a git repository's root; not a project and not
+inside one: `inside_project`):
+
+1. With `url`, the remote is checked first and nothing changes on a
+   failure (an unreachable remote too): a remote with a project is
+   `has_project`; an empty one becomes the project's remote; one with
+   files but no project is cloned into `dir`, which must then be missing
+   or empty (`not_empty`), and the project is made beside its files
+   (`adopted`), or, when `dir` is the root of a repository that shares
+   the remote's history (a clone of it), the project is made there
+   (`adopted`; the remote's newer versions are synced in before the
+   push).
+2. The folder, the repository (branch `main`, unless the folder is the
+   root of one), `.mitcad/project.json` (with `shared` when given: New
+   Project's live updates), `.gitattributes` and `.gitignore` (lines added
+   to those there).
+3. `author` in the repository's own configuration (`user.name`,
+   `user.email`).
+4. The first version, `Create project <folder name>`: the project's files,
+   `design` written to its `path` (it must not be there yet) when given,
+   and with `include_designs` the `.mitcad` files already in the folder
+   (other files stay as they are, not versioned).
+5. With `url`: the remote set as `remote_set` does (`origin`), then a push
+   unless `push` is false.
+
+The answer: `root`, `branch`, `commit` (the first version's id),
+`files` (the paths it recorded, sorted), `warnings` (as `commit`'s),
+`remote` (as in `inspect_folder`, or null), `adopted` (the remote's files
+were taken in), `push` (as `push`'s answer, or null), `sync` (the sync of
+a clone with newer versions on the remote, or null), `ahead`, `behind`,
+`error`, `log`. A cancel or a failure before the first version leaves the
+folder as it was (a folder made for the project is removed; the marker,
+`.mitcad`, `.git`, the design, and the `.gitattributes`, `.gitignore`
+and repository configuration as they were); a failure after it (the
+push) leaves the project made, with the error in `error` and its versions
+`ahead`.
+
+`host_keys` runs `ssh-keyscan` (`MITCAD_SSH_KEYSCAN` when set, else the
+one of the git installation, as Git for Windows' `usr/bin`, else `PATH`'s,
+else Windows' OpenSSH) as git runs: without a terminal, stdin closed, at
+most 20 s (10 s per connection), its output at most 64 KiB (more stops
+it). The output is untrusted: only lines for the host asked about (`host`,
+or `[host]:port`) with a key type `ssh-ed25519`, `ecdsa-sha2-nistp256`,
+`-nistp384`, `-nistp521` or `ssh-rsa` and a key that is base64 of a key
+blob of that type (at most 8 KiB) are read, at most 16 keys, repeats
+dropped; fingerprints are computed in Rust. The fingerprints GitHub,
+GitLab and Codeberg publish are built in (`hostkeys.rs`, with their
+sources). A server that sends no key is `network`.
+
+Commands of a project (`Project::command`, `command_with` for those that
+use the network):
+
+| Command | Fields | Result |
+|---|---|---|
+| `project_settings` | | `kind` (`local`, `cloud`: the repository has a remote), `shared` ({`edit_locks`: {`enabled`, `idle_minutes`, `poll_seconds`}, `live_updates`: {`broker`, `prefix`} or null}), `local` ({`live`: {`mode`: `project`, `off` or `broker`, `broker`, `prefix`}, `sync`: {`send_at_once`, `check_minutes`}, null meaning the application's default}), `live_updates` (what this computer uses, or null), `problems` (`mitcad_model::file::settings`), `authors` (who made the versions on HEAD's history, what sharing the project publishes: [{`name` (cleaned), `email`, `versions`}], most versions first, up to 10 000 versions read) |
+| `set_project_settings` | `shared` (optional), `local` (optional), `author`, `fallback_author` | `shared`, `local`, `written_local`, `commit` (null when the shared settings did not change), `skipped` (why no version was recorded: HEAD detached, a merge in progress; else null). `shared` is merged into the settings as they are, object by object (`{"edit_locks": {"enabled": false}}` keeps the times; `live_updates` is replaced whole, null: none); `local`'s `live` is replaced whole and its `sync` merged. Values are checked strictly (an error, nothing written). A change of the shared ones is written into the marker (its other fields kept) and recorded as a version, `Change project settings: <what changed>` (`edit locks off, idle time 15 min, live updates through mqtts://broker.example.com:8883`), by `author`, else git's configured author, else `fallback_author`, which the application then sends as a saved version |
+| `set_identity` | `name`, `email` (both empty: removed) | `name`, `email` (null when removed): the repository's own `user.name` and `user.email` in `.git/config` (a name and an email address without `<`, `>` or control characters, at most 200 characters each). `identity` and the author of versions then come from them first, before git's other configuration and `GIT_AUTHOR_*` |
+| `remember_design` | `path` | `path` (relative to the project): written to `.mitcad/local/recent.json` as the design opened last (`inspect_folder`'s `last_design`) |
+| `remote_check` | `url` | as before, and `files`, `latest`, `versions` as `check_remote` |
+| `connect` | as before, and `onto_files` (default false), `resolutions` and `resolve_all` (as `sync`'s) | as before, and `sync` and `undone`. With `onto_files`, a remote with files but no project and no version in common is set and fetched, and the project's versions (all of them) are replayed after the remote's latest one as `sync` replays unpublished versions: `.gitignore` and `.gitattributes` on both sides are merged by lines (the remote's, then the project's missing ones), another path on both sides is a conflict answered with `resolutions` (or `resolve_all`), then a push unless `push` is false. The branch then follows the remote's default branch (`set`'s `upstream`). `sync` is the sync's answer; when it stops before it changed the project (a conflict without a choice, changes in the folder, a cancel, the network) the remote is removed again (`undone` true) and nothing stays changed. A remote with a project and another history stays `unrelated` |
+
+A branch without an upstream follows `origin`'s branch of the same name,
+else (mitcad#89) the only remote's; a push then sets it (all remote
+commands).
+
+`mitcad-cli project inspect <folder>`, `project create <folder> --author A
+[--url U] [--no-push] [--design <name.mitcad>]` (`--design`: a new empty
+design in the first version), `project settings <folder> [--set JSON]
+[--author A]` (`--set` takes `{"shared": …, "local": …}`), `remote check
+<url>` without a folder (`check_remote`), `remote share <folder> <url>
+[--author A] [--resolve <path>=mine|theirs|copy]... [--resolve-all C]
+[--no-push]` (`connect` with `onto_files`; conflicts without a choice exit
+with 3), `clone <url> <folder> --adopt [--author A]`, `host-keys <host>
+[--port P] [--trust]` (`--trust`: `trust_host_key` of every key), each
+with `--json` (`tools/cli/projects.cpp`).
+
+Tests: `core/vcs/src/tests/projects.rs` (every kind of folder, a project
+inside another repository, several remotes and a branch without upstream;
+projects made Local, on an empty remote, beside a remote's README and
+`.gitignore`, in a clone of the remote; a remote with a project, an
+unreachable one, a cancel and a failure leaving the folder as it was; a
+repository adopted; a Local project shared onto a README, with a
+`.gitignore` merged, a file on both sides as a conflict and with a choice,
+and a remote with another project refused; the project's author and
+settings; shared folders; host keys parsed from good, malformed, oversized
+and mutated output and for the wrong host, compared with the published
+ones, trusted and found under hashed names, with a fake `ssh-keyscan`;
+the user's public key; after each `git fsck` and a clean `git status`),
+`core/vcs/src/projects/` (the services' keys as their servers send them,
+base64, HMAC-SHA1, RFC 3339 times, the cleaning of text) and ctest
+`cli.remote`.
+
+## Edit locks
+
+Advisory edit locks of the designs of Cloud projects (mitcad#89), kept on
+the remote as refs outside the branches: `refs/mitcad/locks/<id>`, a
+parentless commit whose tree holds `lock.json` (authored by the holder),
+and `refs/mitcad/lock-requests/<id>/<session>` with `request.json`, so a
+requester never races the holder; `<id>` is the SHA-256 (hex) of the
+file's path in the project. Mitcad honours them, other git tools do not
+see them (`core/vcs/src/remote/locks.rs`; the files and their checks in
+`locks/format.rs`; design in
+[docs/architecture.md](../../../../docs/architecture.md#edit-locks)).
+
+- **Writes** are compare-and-swap pushes, `git push --porcelain
+  --no-verify --no-signed --no-recurse-submodules
+  --force-with-lease=<ref>:<expected> <remote> <commit>:<ref>`
+  (`<expected>` empty: the ref must not exist); a release is a deletion
+  with the same lease. A ref the remote rejects is listed again: changed
+  means someone else wrote it first (`changed`), unchanged means the
+  remote refuses lock refs (`error` class `unsupported`, "This remote
+  does not accept Mitcad's lock references").
+- **Reading**: one `git ls-remote <remote> refs/mitcad/locks/*
+  refs/mitcad/lock-requests/* refs/heads/<branch>` per command; only when
+  a ref points to an object the project lacks, `git fetch --prune
+  <remote> +refs/mitcad/locks/*:refs/mitcad/remote-locks/locks/*
+  +refs/mitcad/lock-requests/*:refs/mitcad/remote-locks/lock-requests/*`.
+  `fetch`, `push`, `sync` and clones name only branches, so they never
+  fetch or push lock refs, and lock commits are in no version's history.
+- **Untrusted contents**: a lock or request commit is read only when it is
+  at most 64 KiB, without parents, with a tree of at most 4 KiB and its
+  file a blob of at most 16 KiB; then `format` (`mitcad-lock`,
+  `mitcad-lock-request`) and `version` (1; another version is listed as
+  unreadable, not guessed at), ids and commit ids as hex of the right
+  length, sessions as lowercase UUIDs, times as RFC 3339 from 2000 to
+  2200, paths relative without `..` and matching the ref's id, names at
+  most 100 characters, messages at most 200, texts cleaned (control,
+  bidirectional and other invisible characters removed, whitespace
+  collapsed; shown as plain text only), `idle_minutes` clamped to 1–120
+  and `poll_seconds` to 5–600. A malformed ref is listed (`readable`
+  false, `problem`) and counted once (`dropped`), never an error; a lock
+  that cannot be read holds its file until it is stale by the project's
+  settings.
+- **Stale** locks are judged on this process's monotonic clock, never by
+  comparing another computer's clock (the times in locks are only shown):
+  `unchanged`, the ref seen unchanged for `idle_minutes` × 60 + 2 ×
+  `poll_seconds`; `no_receipt`, this session's request missing from the
+  holder's `requests_seen` 2 × `poll_seconds` after it was asked (or the
+  holder took the lock; the project's poll interval when both listen to
+  the broker); `unanswered`, a receipt without an answer for the idle
+  time and two polls (after a `keep`, from the end of the keep). What each
+  listing saw is kept per project folder in the process and shared by
+  every `Project` of it (the application opens one per task).
+  `MITCAD_LOCK_TIME_SCALE` (a factor) speeds this clock up for the
+  application's tests.
+- **Requests go stale** as locks do (mitcad#89), so that a requester whose
+  Mitcad was killed is not asked about for ever: while a request waits
+  (no answer, or a `keep`; not declined, not granted), the requester's
+  `lock_poll` writes it again every half the project's idle time, as a
+  refresh of itself (`refresh_of` its id, `refreshed_at`, and the
+  requester's `poll_seconds`: one compare-and-swap push, the request's
+  id, place in the order, receipt and answer kept). Another session's
+  request whose ref this process has seen unchanged for the project's
+  idle time and two of the requester's polls (`poll_seconds` of the
+  request, else the project's) is stale: it gets no receipt
+  (`requests_seen`), a hand-over without `to` passes it by, it is listed
+  with `stale` `unchanged`, and the next `lock_poll` of any session
+  removes it with a compare-and-swap deletion (a refresh in between keeps
+  it). A declined request is not refreshed, so it goes the same way. A
+  session never judges its own requests.
+
+`lock.json` (`"format": "mitcad-lock", "version": 1`): `path`, `owner`
+({`name`, `email`}), `session`, `application_version`, `taken_at`,
+`refreshed_at`, `active_at` (RFC 3339, UTC), `idle_minutes`,
+`poll_seconds`, `mqtt`, `base` (the commit of the version the holder
+edits), `state` (`active`, `idle`), `idle_since`, `requests_seen`
+(request ids: the receipts), `answers` ({request id: {`answer`:
+`declined` | `keep`, `until`, `message`}}), `handed_over_from` and
+`taken_from` ({`name`, `email`, `session`}, `taken_from` with `reason`:
+`unchanged`, `no_receipt`, `unanswered` or `take_over`). A lock Mitcad
+writes always fits in 16 KiB (the oldest answers and request ids are
+left out). `request.json` (`"format": "mitcad-lock-request", "version":
+1`): `path`, `requester`, `session`, `asked_at`, `message`, and since
+mitcad#89's stale requests `poll_seconds` (the requester's git poll
+interval, clamped to 5–600) and, in a refresh, `refresh_of` (the
+request's id) and `refreshed_at` (shown only); a reader takes a request
+without them as before. A request's id is the commit it was first
+written as (a refresh names it), so asking again is a new request.
+
+The commands are `Project` commands, run with `command_with` (their git
+runs show progress and stop on a cancel); each answers `error` and `log`
+as the remote commands do, a failure of git or the network being an
+answer. Common fields: `path` (a design, absolute or relative to the
+current folder), `session` (the application's UUID for this run; without
+it the command line's session, a UUID made from the author's email, the
+same in every run), `author` and `fallback_author` (the holder or
+requester, as for versions), `mqtt` (this session listens to the
+project's broker).
+
+| Command | Fields | Result |
+|---|---|---|
+| `lock_poll` | `session`, `receipts` (default true), `mqtt`, `poll_seconds` (this session's poll interval, written into its requests' refreshes; default the request's), `tidy` (default true) | one listing; with `tidy` this session's waiting requests refreshed when due and other sessions' stale requests removed (one push); receipts written for the requests to this session's locks; the view below, and `receipts` (the paths whose locks got them), `lost` ([{`id`, `path`, `lock` (as it is now, or null)}]: locks this session held in this process that are not its own any more: taken, or removed), `refreshed_requests` (the paths of this session's requests refreshed) and `removed_requests` ([{`id`, `file_id`, `session`, `path`, `requester`}]: stale requests removed) |
+| `lock_status` | `path` (optional), `session`, `network` (default true; false: what the last listing saw, no git), `mqtt` | the view (of one file with `path`, and `path`, `file_id`, `lock` or null). Nothing is written |
+| `lock_take` | `path`, `session`, `author`, `idle_minutes` and `poll_seconds` (default the project's), `mqtt`, `base` (default HEAD), `take_over` (a lock's `commit`, as shown when the user confirmed) | `outcome`: `taken` (free, stale, or `take_over` still names it: another session of the same person, or a holder whose application went offline), `refreshed` (this session's already, one handed over to it too: written with these values, this session's request withdrawn), `held` (another session's; nothing written), `changed` (someone wrote it between the listing and the push); `path`, `file_id`, `session`, `lock` (as it is now), `taken_from`, and with `taken` `previous` (the lock as it was, for "Alex's edit lock had expired (last active 14:02)"; null when it was free) |
+| `lock_refresh` | `path`, `session`, `active_at` (RFC 3339, or `now`), `state` (`active`, `idle`: `idle_since` follows), `idle_minutes`, `poll_seconds`, `mqtt`, `base` | `outcome` `refreshed` (with the receipts of the requests seen that are not stale; answers of requests that are gone dropped) or `lost`; `lock` |
+| `lock_release` | `path`, or `all` true; `session`; `force` | `outcome` (`released`, `not_held`, `free`, `changed`), `released` and `withdrawn` (paths of the locks and requests removed), `changed`, `lock`. With `force` any lock of the file and the file's requests; `all`: this session's locks and requests, with `force` every lock and request ref of the project |
+| `lock_hand_over` | `path`, `session`, `to` (a requester's session; default the first request served that is not declined; never a stale one), `base` (default HEAD) | `outcome`: `handed_over` (one compare-and-swap writes the requester as the owner, `handed_over_from` this session, so nobody else can take it in between), `no_request`, `lost`, `free`, `changed`; `to` ({`name`, `email`, `session`}), `lock` |
+| `lock_request` | `path`, `session`, `author`, `message` (at most 200 characters), `mqtt`, `poll_seconds` (the requester's poll interval; default the project's) | `outcome`: `requested`, `free` (nothing written: take it), `mine`, `changed`; `request` (its id), `my_request`, `receipt_due_seconds` |
+| `lock_withdraw` | `path`, `session` | `outcome` `withdrawn` or `none` (the requester's window closed, or it got the lock) |
+| `lock_answer` | `path`, `session`, `request` (its id), `answer` (`declined`, `keep`), `minutes` (keep: 1–120, default 15), `message` | `outcome` `answered` (written into the lock with `until` for a keep), `no_request`, `lost`; `lock` |
+| `lock_probe` | `session` | `remote`, `accepted`, `message` ("This remote does not accept Mitcad's lock references" or null), `reason`, `left` (a probe ref the remote did not let go): `refs/mitcad/locks/probe-<hex>` created, listed and deleted |
+
+The **view**: `remote`, `session`, `polled`, `head` (the remote branch's
+commit, from the same listing), `tracking` (the remote-tracking
+reference's), `newer` (the two differ: newer versions to fetch), `locks`,
+`requests_without_lock`, `my_requests` (this session's requests),
+`dropped` (malformed lock and request refs seen by this process),
+`settings` (the project's `enabled`, `idle_minutes`, `poll_seconds`).
+
+- A **lock**: `id`, `commit`, `readable`, `problem`, the fields of
+  `lock.json` (null when it cannot be read; `owner` {`name`, `email`}),
+  `mine`, `same_owner` (another session of the same email: "You have this
+  design open elsewhere"), `unchanged_seconds`, `stale` (null,
+  `unchanged`, `no_receipt`, `unanswered`; never for this session's),
+  `stale_in_seconds` (until it is, by the earliest rule), `requests` (in
+  the order they are served: the order this process first saw them) and
+  `my_request`.
+- A **request**: `id`, `commit` (its ref's commit: the id, or the latest
+  refresh), `file_id`, `path`, `session`, `requester`, `asked_at`,
+  `refreshed_at`, `message`, `mine`, `order`, `waiting_seconds` (since
+  this process first saw it), `unchanged_seconds` (since its ref last
+  changed), `stale` (null, or `unchanged` for another session's request
+  not refreshed in time), `stale_in_seconds`, `seen` (the holder's
+  receipt), `answer` ({`answer`, `until`, `message`} or null),
+  `readable`, `problem`.
+- **my_request**: `id`, `commit`, `file_id`, `path`, `state` (`waiting` for the
+  receipt, `seen`, `kept`, `declined`, `granted`: the lock was handed
+  over, `free`: there is no lock), `answer`, `stale`, `stale_in_seconds`,
+  `tracked` (asked in this process).
+
+The application's lock controller polls every `poll_seconds` (2 minutes
+while live updates are connected) with `lock_poll` (with its
+`poll_seconds`, so a request it waits on stays alive), takes a design's
+lock when it opens (`lock_take`; `held` opens it read-only), refreshes
+it every half idle time and when its state changes (`lock_refresh`),
+answers requests (`lock_answer`, or `lock_hand_over` after saving and
+syncing), releases at idle time or on closing (`lock_release`) and turns a
+window read-only when a lock is `lost`; turning locking off or Cloud →
+Local releases this session's locks and requests (`lock_release` with
+`all`). `sync_plan` takes `session` and `locks` (`last`: the last
+listing, no git) and answers `locked` ([{`path`, `lock`}]: the files its
+push would send whose lock another session holds, for "Send Anyway";
+empty when locks are off or nothing is sent) and `locked_error` (null,
+or why the locks could not be read: `locked` is then null).
+
+`mitcad-cli lock status <project-or-file>`, `lock take <file>`, `lock
+release <project-or-file> [--force]`, each with `--author` and `--json`
+(a lock someone else holds is the exit status 1). Tests:
+`core/vcs/src/tests/locks.rs` (two clones of a bare repository and a
+`file://` remote: two takers at once, refresh, release, hand-over,
+requests, receipts and answers, each stale rule on an injected clock,
+a killed requester's request going stale and removed, a waiting
+request refreshed with its id, receipt and answer kept, a hand-over
+passing declined requests by, a
+takeover that fails because the holder refreshed, take-over from another
+session, release with `force` and `all`, Sync and fetch never carrying
+lock refs, `sync_plan`'s `locked`, a remote whose hook refuses them,
+malformed and oversized refs, the readers' checks and a seeded random
+run of mutated files; `git fsck` clean), ctest `cli.remote`, and the
+fuzz targets in `core/vcs/fuzz` (by hand: `cargo +nightly fuzz run
+lock_json`, `request_json`).
+
+## Live updates
+
+The optional MQTT client of Cloud projects (mitcad#89), all in Rust
+(`core/vcs/src/remote/mqtt.rs` and `mqtt/`; design in
+[docs/architecture.md](../../../../docs/architecture.md#live-updates)):
+the socket, TLS (rustls with ring, the broker's certificate checked by
+rustls-webpki against the system's root certificates), MQTT 3.1.1 and the
+checking of everything received. It is only an accelerator: a message
+makes the application poll git at once, and only the lock refs grant a
+lock. One connection per broker, user and prefix is shared by the open
+projects on it; each project subscribes to `<prefix>/<project>/#`, the
+project id being the repository's first commit.
+
+The bridge has a `LiveHub` (`new_live_hub()`) with `command(json)` (an
+error only for a command that is wrong; what happens on the network comes
+as events) and `events(timeout_ms)`, a blocking read of the checked events
+run on a worker thread. Both may run at once on two threads. The
+application never sees MQTT's bytes.
+
+### Topics and payloads
+
+| Topic | Payload (`format`) | |
+|---|---|---|
+| `<prefix>/<project>/locks/<file>` | `mitcad-live-lock` | retained; empty when the lock is released |
+| `<prefix>/<project>/requests/<file>` | `mitcad-live-request` | QoS 1, not retained: requests, receipts, answers, withdrawals |
+| `<prefix>/<project>/versions` | `mitcad-live-version` | QoS 1, not retained: a branch and commit after a push |
+| `<prefix>/<project>/open/<file>/<session>` | `mitcad-live-open` | retained; empty when the window closes |
+| `<prefix>/sessions/<session>` | `mitcad-live-session` | retained `online` after each connect; the connection's will `offline`; empty after a clean disconnect |
+
+`<file>` is the SHA-256 (hex) of the file's path in the project (`/`
+between folders), `<session>` the application's session (a UUID in
+lowercase). A session's presence is not under a project, since one
+connection has one will and serves every project on the broker (which is
+also why the connection is per prefix). Payloads are JSON with `format`
+and `version` (1); a reader takes only the topic's format and version 1
+and ignores fields it does not know. No email address is sent (the broker
+may be more public than the repository).
+
+| Format | Fields |
+|---|---|
+| `mitcad-live-lock` | `path`, `owner` ({`name`}), `session` (the holder's), `state` (`active`, `idle`), `taken_at`, `active_at`, `idle_since`, `idle_minutes`, `poll_seconds`, `commit` (of the lock ref) |
+| `mitcad-live-request` | `kind` (`request`, `receipt`, `answer`, `withdrawn`), `session` (the sender's), `name`, `at`, `for` (the requester's session; receipts and answers), `answer` (`released`, `keep`, `declined`), `until`, `message` |
+| `mitcad-live-version` | `branch`, `commit`, `session`, `name`, `at` |
+| `mitcad-live-open` | `name`, `mode` (`editing`, `read-only`), `since` |
+| `mitcad-live-session` | `state` (`online`, `offline`), `since` |
+
+Everything received is checked (mitcad#89, "Untrusted input"): a packet's
+remaining length at most 64 KiB, read only after that check (larger: the
+connection ends, class `protocol`); more than 200 messages in a second
+end the connection (`flood`), which connects again after the back-off
+(the retained copies a broker sends at once after a subscribe count
+apart, up to 2000 a second, so that a project with many designs open can
+subscribe); topics only under the connection's prefix, of the forms
+above, of a subscribed project or a followed session; no retained copies
+of requests and versions; payloads at most 16 KiB of
+UTF-8 JSON of the right format and version; ids as lowercase hex of their
+length, sessions as UUIDs, times RFC 3339 between 2020 and 2100 (given
+back in UTC), paths relative without `..`, a lock summary's path the one
+its topic's id is of, branch names as git allows them (stricter),
+`idle_minutes` and `poll_seconds` clamped to the project settings' bounds,
+names 1 to 100 characters and messages at most 200 after cleaning (control
+characters, bidirectional overrides and other invisible format characters
+removed, whitespace collapsed); at most 64 retained messages per file and
+10 000 per project. A message that fails is dropped and counted, never an
+error.
+
+### Commands
+
+| Command | Fields | Answer |
+|---|---|---|
+| `connect` | `broker` (`mqtts://host[:port]`, port 8883, or `mqtt://host[:port]`, 1883: plain text), `prefix` (default `mitcad`; letters, digits, `-`, `_`, `/`), `session` (the application's; one per hub), `user`, `password` (only with `mqtts://` and a user: else the class `insecure`, before anything is sent), `ca` (a PEM file of certificate authorities trusted besides the system's) | `connection` (`c1`), `broker`, `prefix`, `user`, `tls`, `state`, `warning` (for `mqtt://`: the messages are plain text). Opens the connection of the broker, user and prefix, or gives the open one; with a new password, or when it is `offline` or `failed`, it connects again at once (with these `password` and `ca`) |
+| `subscribe` | `connection`, or the fields of `connect`; `project` (the first commit id, 40 or 64 hex) | `connection`, `project`, `topic`, `state`; a `subscribed` event follows |
+| `unsubscribe` | `connection`, `project` | `subscribed` (it was), `closed`: the project's open entries of this session are cleared first; the connection's last project closes the connection |
+| `watch` | `connection`, `session` | follows a session's presence (`session` events); sessions named in a project's messages are followed without it, at most 512 per connection |
+| `publish` | `connection`, `project` (subscribed on it), `message` (below) | `topic`, `qos`, `retain`, `connected`; the message as others will read it (checked, cleaned, times in UTC, numbers clamped), sent at once or after the reconnect |
+| `disconnect` | `connection` (none: all), `wait_ms` (at most 10 000, default 0) | `closed` (the ids), `finished` (all disconnected within `wait_ms`): this session's open entries and presence cleared, DISCONNECT (no will), in the connection's thread |
+| `status` | | `session`, `closed`, `connections` ([{`connection`, `broker`, `prefix`, `user`, `projects`, `state`, `error`, `retry_in_ms`, `connected_since`, `tls`, `connects`, `received`, `dropped`, `dropped_reasons` ({reason: count}), `inflight`, `queued`, `watched_sessions`}]): the lock details' MQTT state |
+| `test` | the fields of `connect` but `session`; `timeout_ms` (per step, default 10 000), `text` | `ok`, `broker`, `prefix`, `user`, `tls`, `topic`, `steps` ([{`step`: `connect`, `sign_in`, `subscribe`, `publish`, `receive`; `ok`, `ms`}], up to the one that failed), `error`, `warning`; with `text` the same as text for people. Project Settings' Test: a connection of its own subscribes to `<prefix>/test/<random>`, publishes once and waits for the message. Blocks: run it on a worker thread |
+| `close` | `wait_ms` | as `disconnect` of all (quitting: `wait_ms` lets the others see a clean leave rather than the will); then `events` answers at once with `closed` (the reading thread ends) and `connect` fails (`closed`) |
+
+The messages of `publish` (`type` and its fields):
+
+| `type` | Fields | Sent |
+|---|---|---|
+| `lock` | `path`, `lock`: {`owner` ({`name`}; lock.json's owner may be given, its `email` is not sent), `session` (default this session), `state` (default `active`), `taken_at`, `active_at` (default now), `idle_since`, `idle_minutes`, `poll_seconds` (default the settings' defaults), `commit`}, or null: released | retained, QoS 1 |
+| `request` | `path`, `name`, `message` (optional) | QoS 1 |
+| `receipt` | `path`, `name`, `for` | QoS 1 |
+| `answer` | `path`, `name`, `for`, `answer`, `until` (with `keep`), `message` | QoS 1 |
+| `withdrawn` | `path` | QoS 1 |
+| `version` | `branch`, `commit`, `name` | QoS 1 |
+| `open` | `path`, `name`, `mode`, `since` (default now) | retained, QoS 1 |
+| `closed` | `path` | the open entry cleared |
+
+The session keeps its own retained state (its locks' summaries and its
+open entries) and publishes it again after each reconnect, as the broker
+had it last; a lock summary of another session (a hand-over) is published
+once, and another session's summary received for one of this session's
+locks (a takeover) ends that. QoS 1 messages without a PUBACK are sent
+again after 20 s and after a reconnect; while offline up to 256 wait.
+
+### Events
+
+`events(timeout_ms)` answers `{"events": [...], "lost": n, "closed":
+bool}`: at most 1000 events a read, `lost` those pushed out by the limit
+of 10 000 waiting. Every event has `type` and `connection`; those of a
+project `project`, `retained` (the broker's retained copy, after a
+subscribe) and `own` (sent by this session).
+
+| `type` | Fields |
+|---|---|
+| `state` | `broker`, `prefix`, `state`: `connecting`, `connected`, `offline` (connects again in `retry_in_ms`: 1 s doubling up to 5 min, ±20 %), `failed` (not again until a new `connect`: `auth_failed`, `certificate`, `refused`, `invalid`), `closed`; `error` ({`class`, `message`} or null) |
+| `subscribed` | `project`, `error` (the broker refused): after each SUBACK, also after a reconnect: what was known of the project's retained topics is to be forgotten, their retained copies follow |
+| `lock` | `file`, `lock` (the summary, checked) or null (released) |
+| `request` | `file`, `kind`, `session`, `name`, `at`, `for`, `answer`, `until`, `message` (fields not sent are absent) |
+| `version` | `branch`, `commit`, `session`, `name`, `at` |
+| `open` | `file`, `session`, `entry` ({`name`, `mode`, `since`} or null: closed), `cleared` (true: cleared on the broker by this session because that session went offline; given once the broker acknowledged it) |
+| `session` | `session`, `state` (`online`; `offline`: its connection was lost, the will; `left`: it disconnected cleanly), `since` |
+| `dropped` | `reason`, `topic` (cleaned, at most 200 characters), `count` (the connection's total; one event stands for a run of drops) |
+
+Error classes: `invalid` (a wrong command or field), `insecure` (a
+password without TLS), `network`, `timed_out`, `certificate` (not
+trusted, another host name, expired; or no root certificates on the
+computer), `tls`, `auth_failed` (the user name or password refused, not
+authorised; in `test` also a topic the broker does not let the user
+read or write), `refused`, `protocol` (the broker broke MQTT's rules or
+sent a packet over 64 KiB), `flood`, `closed`, `internal`.
+
+When a session goes offline (its will), the sessions that follow it
+clear its open entries on the broker (they become `open` events with
+`cleared` once the broker has acknowledged the clearing, so that a
+session subscribing after that event does not get them); its lock
+summaries stay, as its lock refs do. Another session's open entry is
+given only while that session is known to be online: the retained copies
+after a subscribe come before the session's presence, so an entry waits
+until its presence says `online` (then it is given), `offline` (then it is
+never given and is cleared on the broker, as above, without an event) or
+nothing yet (a session that left, or whose presence has not come: it
+waits). A closing is given only for an entry that was given. When the
+broker refuses the subscription to a session's presence, or the limit of
+followed sessions is reached, its entries are given as they come.
+
+`mitcad-cli live test <broker> [--prefix P] [--user U] [--ca FILE]
+[--timeout S] [--json]` runs `test`, the password from
+`MITCAD_MQTT_PASSWORD`. Tests: `core.vcs` (`remote::mqtt`: packets,
+limits, payloads, the cleaning of text, a seeded random run of mutated
+input, and scenarios against a broker in the test and against mosquitto
+when it is installed: TLS with a certificate authority made with openssl,
+the will (seen by a follower and by a newcomer), retained messages,
+reconnecting, one connection for two
+projects, a flood, a password refused over plain text), `core.bridge`,
+`cli.live_*`; fuzz targets in `core/vcs/fuzz`.
+
+### The project's id
+
+| Command | Fields | Answer |
+|---|---|---|
+| `project_id` (a `Project` command) | | `project`: the first commit of HEAD's first-parent chain (hex), the same in every clone; null before the first version |
+
+The application subscribes a Cloud project under it
+(`app/files/LiveController.cpp`, [app/COMMANDS.md](../../../../app/COMMANDS.md#live-updates)).
+Test: `core/vcs/src/tests.rs`
+(`the_project_id_is_the_first_commit_of_the_history`).
 
 ## Component libraries
 
@@ -3394,6 +4118,46 @@ The bridge's `query` adds to the `cache` answer `process`: `resident`,
 `OSD_MemInfo`). `mitcad-cli info <file> --diagnostics` prints it
 (`Cache: {...}`, with `disk`). Tests: `core/model/src/cache_tests.rs`,
 ctest `cli.store_diagnostics`.
+
+## Geometry of other components
+
+A sketch belongs to its component and lies in that component's
+coordinates, but its plane and its projections may be geometry of
+another component (mitcad#100, `core/model/src/links.rs`): a planar face,
+a construction plane or an origin plane, and edges, faces and vertices to
+project. Such geometry is named with where it was picked: `occurrence`,
+the occurrence path from the root to its component (`"O1"`, `"O1/O4"`,
+`""` for the root), and optionally `context`, the path the sketch's own
+component is seen at (default: the first path to it). The model keeps
+both as an `OccurrenceLink` (`{"source": "O1", "target": "O2"}`):
+
+- `sketch.create` with `occurrence` stores the plane's link as the
+  sketch's `plane_link`; `sketch.project` with `occurrence` moves the
+  picked geometry into the sketch, and a linked projection keeps the link
+  in its record (`projections[i].link`). Geometry in the sketch's own
+  component needs no link, and none is stored for it.
+- Evaluation finds the geometry in its component at the sketch's point of
+  the timeline and moves it by `placement(target)⁻¹ ·
+  placement(source)`, the occurrences' placements there. The sketch
+  follows when the geometry changes or either occurrence moves; the
+  cache keys on those placements and on the other component's bodies the
+  evaluation read. A face's frame is the frame of every planar face,
+  taken in the sketch's coordinates; a construction or origin plane keeps
+  its own axes.
+- A target that no longer leads to the sketch's component (a copy, an
+  occurrence deleted) is replaced by the first path to it; a source path
+  that leads nowhere fails the sketch with the reason. The sketch must
+  come after the features that make the geometry, as with any reference.
+- Without `occurrence`, another component's body fails the sketch as
+  before (`body F3.b0 (from Extrude2) belongs to A; …`), a construction
+  plane of another component is refused, and `sketch.project` refuses a
+  body of another component (`… is a body of A, not of B; pick it where
+  an occurrence of A shows it`).
+
+The `sketch` query shows `plane_link`. A combine's tools may be bodies of
+another component the same way (`tool_links`, [combine](#combine),
+mitcad#104). Tests: `core/model/src/link_tests.rs`,
+`core/model/src/links.rs`.
 
 ## Adding to the API
 

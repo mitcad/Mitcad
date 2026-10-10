@@ -17,22 +17,25 @@
 #      recovered design was the filleted one.
 #   7. Export a STEP file through the Export dialog; New; Import it: a base
 #      feature of the same volume; undo (Ctrl+Z).
-#   8. Version history (P12d): the saved design opened with a change,
-#      Start Version History makes its folder a project (the author asked,
-#      as git's configuration is the test's own, without a user), Ctrl+S
-#      records a second version; git's log has them where git is installed.
-#   9. Version History (P12e, Ctrl+Shift+H): the two versions with what the
-#      second changed, compared; Restore of the first records it as a
-#      third version and opens it.
+#   8. Version history (P12d, mitcad#89): the saved design opened with a
+#      change, Move to a Project makes its folder a Local project (New
+#      Project with the folder offered; the author typed there, as git's
+#      configuration is the test's own, without a user): the design as
+#      saved is the first version, the open one the second; Ctrl+S records
+#      a third; git's log has them where git is installed.
+#   9. Version History (P12e, Ctrl+Shift+H): the three versions with what
+#      each changed, compared; Restore of the second (the changed one)
+#      records it as a fourth version and opens it.
 #  10. 3D Print (mitcad#13) to a fake slicer (a PowerShell script that
 #      writes its arguments): the body as an STL file, then as a 3MF file
 #      (one object, the part named after the body, closed, of the body's
 #      volume), each in one start; the folder holds only the last send.
-#  11. Remote repository (P12 remote, where git is installed): Connect
-#      Project to Remote with a bare repository in a folder (its path typed
-#      into the dialog) sends the versions; opened again with a change,
-#      the remote is checked, Ctrl+S records a version and sends it at
-#      once; Sync (Ctrl+Alt+Y) finds the project up to date.
+#  11. Cloud project (P12 remote, mitcad#89, where git is installed):
+#      Project Settings shares the project to a bare repository in a folder
+#      (its path typed into the Cloud section's address) and sends the
+#      versions; opened again with a change, the remote is checked, Ctrl+S
+#      records a version and sends it at once; Sync (Ctrl+Alt+Y) finds the
+#      project up to date.
 #  12. Helix and Hole (mitcad#27) on a design mitcad-cli makes: Helix (a
 #      shortcut of the test's) turns a 2 mm square about the Z axis (a
 #      click on it), 3 turns of a typed pitch, of the volume by Pappus'
@@ -58,7 +61,7 @@ param(
 
 Ui-Init $App $Out $QtBin @{
   'sketch.create' = 'F7'; 'inspect.properties' = 'F8'; 'file.export' = 'F9'; 'file.import' = 'F11'
-  'file.start_history' = 'F12'; 'make.print3d' = 'Shift+F9'; 'file.connect_remote' = 'Shift+F11'
+  'file.move_to_project' = 'F12'; 'make.print3d' = 'Shift+F9'; 'file.project_settings' = 'Shift+F11'
   'solid.helix' = 'Shift+F7' }
 $work = Join-Path $script:UiOut 'files'
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
@@ -137,7 +140,7 @@ Start-Sleep -Milliseconds 2500
 $metadata = @(Get-ChildItem $script:UiAutosave -Filter '*.json')
 if ($metadata.Count -ne 1) { Ui-Fail "$($metadata.Count) autosave sessions in $($script:UiAutosave)" }
 $about = Get-Content -Raw $metadata[0].FullName | ConvertFrom-Json
-if ($about.format -ne 'mitcad-autosave' -or $about.version -ne 1 -or $about.document -ne 'Untitled') {
+if ($about.format -ne 'mitcad-autosave' -or $about.version -ne 2 -or $about.document -ne 'Untitled') {
   Ui-Fail "autosave metadata: $($about | ConvertTo-Json -Compress)"
 }
 $autosaved = Join-Path $script:UiAutosave $about.project
@@ -230,21 +233,26 @@ $env:MITCAD_PROJECTS_DIR = Join-Path $script:UiOut 'projects'
 Ui-StartApp 'versions' @('--open', $project, '--set', 'd3=25')
 Ui-ExpectLog "Opened $workLogged/block.mitcad" 'the saved design opened, changed'
 Ui-ExpectLog 'Version status: none' 'outside projects: no version history'
+Ui-ExpectLog 'Project indicator: not in a project' 'the indicator says so'
 Ui-Mark
-Ui-Step 'start version history (F12)'    { Ui-Key 'F12' }
-Ui-ExpectNew "Start Version History dialog: $workLogged" 'the dialog offers the folder'
-Ui-Step 'use the folder (Enter)'         { Ui-FocusDialog '^Start Version History$'; Ui-Key 'Return' }
-Ui-ExpectNew 'Version author dialog: git has none' 'the author is asked'
-Ui-FocusDialog '^Version Author$'
+Ui-Step 'move to a project (F12)'        { Ui-Key 'F12' }
+Ui-ExpectNew 'Move to a Project dialog: block.mitcad' 'asked where'
+Ui-Step 'a new project (Enter)'          { Ui-FocusDialog '^Move to a Project$'; Ui-Key 'Return' }
+Ui-ExpectNew "New Project dialog: $workLogged" "the design's own folder offered"
+Ui-ExpectNew "New Project dialog: folder ${workLogged}: designs" 'a folder of designs'
+# git has no user and Mitcad no default author: the author's fields are
+# empty, and the name has the focus.
+Ui-FocusDialog '^Move to a Project$'
 Ui-Step 'type the name'                  { Ui-Type 'Windows Tester' }
 Ui-Step 'the email (Tab)'                { Ui-Key 'Tab' }
 Ui-Step 'type the email'                 { Ui-Type 'windows@example.invalid' }
-Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
+Ui-Step 'create (Enter)'                 { Ui-Key 'Return' }
 Ui-FocusMain
-Ui-ExpectNew 'Version author: Windows Tester <windows@example.invalid> (settings)' 'the author given'
-Ui-ExpectNew "Version history started in ${workLogged}: version " 'the folder has version history'
-Ui-ExpectNew 'Version recorded: block.mitcad ' 'the first version of the design'
-Ui-ExpectNew 'Version status: files, main, v1' 'the status bar shows it'
+Ui-ExpectNew "New Project: created ${workLogged}: version " 'the folder is a Local project' 20
+Ui-ExpectNew 'Version author: Windows Tester <windows@example.invalid> (git)' "the project's author"
+Ui-ExpectNew 'Version recorded: block.mitcad ' 'the open design is the second version' 20
+Ui-ExpectNew 'Version status: files, main, v2' 'the first version is the design as saved'
+Ui-ExpectNew 'Project indicator: files, local, v2' 'the indicator shows it'
 Ui-ExpectNew 'Version preview saved: ' "the version's preview"
 if (@(Get-ChildItem $script:UiThumbnails -Filter '*.png' -ErrorAction SilentlyContinue).Count -ne 1) {
   Ui-Fail "no preview in $($script:UiThumbnails)"
@@ -253,8 +261,8 @@ Write-Host "ok   the preview is in the test's own folder"
 Ui-Mark
 Ui-Step 'undo the change of d3 (Ctrl+Z)' { Ui-Key 'ctrl+z' }
 Ui-Step 'save (Ctrl+S)'                  { Ui-Key 'ctrl+s' }
-Ui-ExpectNew 'Version recorded: block.mitcad ' 'Ctrl+S recorded the second version'
-Ui-ExpectNew 'Version status: files, main, v2' 'two versions of the design'
+Ui-ExpectNew 'Version recorded: block.mitcad ' 'Ctrl+S recorded the third version'
+Ui-ExpectNew 'Version status: files, main, v3' 'three versions of the design'
 $git = Get-Command git -ErrorAction SilentlyContinue
 if ($git) {
   $log = & $git.Source -C $work log --format='%s|%an|%ae' 2>&1
@@ -271,28 +279,28 @@ if ($git) {
   Write-Host 'note: git is not installed; the versions are checked through the log only'
 }
 
-Write-Host '--- Version History: the two versions compared, the first restored'
+Write-Host '--- Version History: the three versions compared, the second restored'
 Ui-Mark
 Ui-Step 'version history (Ctrl+Shift+H)' { Ui-Key 'ctrl+shift+h' }
-Ui-ExpectNew 'Version History: 2 versions of block.mitcad: v2 ' 'the two versions, newest first'
-Ui-ExpectNew 'Version History changes: v2 d3 25 mm -> 20 mm' 'what the second version changed'
-Ui-ExpectNew 'Version History selected v2 (' 'the latest selected'
-Ui-ExpectNew 'Version History compare v2 with v1: ' 'compared with the first'
+Ui-ExpectNew 'Version History: 3 versions of block.mitcad: v3 ' 'the three versions, newest first'
+Ui-ExpectNew 'Version History changes: v3 d3 25 mm -> 20 mm' 'what the third version changed'
+Ui-ExpectNew 'Version History selected v3 (' 'the latest selected'
+Ui-ExpectNew 'Version History compare v3 with v2: ' 'compared with the second'
 Ui-ExpectNew 'd3 (Extrude1 distance): 25 mm -> 20 mm' 'the change of d3'
 Ui-FocusDialog '^Version History - block\.mitcad$'
 Ui-Mark
-Ui-Step 'the first version (Down)'       { Ui-Key 'Down' }
-Ui-ExpectNew 'Version History selected v1 (' 'v1 selected'
+Ui-Step 'the second version (Down)'      { Ui-Key 'Down' }
+Ui-ExpectNew 'Version History selected v2 (' 'v2 selected'
 Ui-Step 'restore (Alt+R)'                { Ui-Key 'alt+r' }
-Ui-ExpectNew 'Restore dialog: v1 (' 'asked'
+Ui-ExpectNew 'Restore dialog: v2 (' 'asked'
 Ui-Step 'restore (Enter)'                { Ui-FocusDialog '^Restore Version$'; Ui-Key 'Return' }
 Ui-FocusMain
-Ui-ExpectNew 'Version restored: block.mitcad v1 (' 'the first version restored as a new one'
+Ui-ExpectNew 'Version restored: block.mitcad v2 (' 'the second version restored as a new one'
 Ui-ExpectNew "Opened $workLogged/block.mitcad" 'the restored design opened'
-Ui-ExpectNew 'Version status: files, main, v3' 'three versions of the design'
+Ui-ExpectNew 'Version status: files, main, v4' 'four versions of the design'
 if ($git) {
   $log = & $git.Source -C $work log -1 --format='%s|%an' 2>&1
-  if ($log -notmatch '^Restore v1 of block\.mitcad \([0-9a-f]{7}\)\|Windows Tester$') { Ui-Fail "git log: $log" }
+  if ($log -notmatch '^Restore v2 of block\.mitcad \([0-9a-f]{7}\)\|Windows Tester$') { Ui-Fail "git log: $log" }
   Write-Host "ok   git's log has the restore"
 }
 
@@ -359,15 +367,16 @@ foreach ($edge in $edges.Keys) {
   if ($edges[$edge] -ne 1 -or $edges["$($ends[1])-$($ends[0])"] -ne 1) { Ui-Fail "3MF: the mesh is not closed at $edge" }
 }
 $meshed = $six / 6
-# The restored first version's body: the filleted block extruded 25 mm
+# The restored second version's body: the filleted block extruded 25 mm
 # instead of 20 (d3), 40 x 25 x 5 mm more.
 $body = $filleted + 40 * 25 * 5
 if ([Math]::Abs($meshed - $body) -gt 1e-3 * $body) { Ui-Fail "3MF: mesh volume $meshed, the body's $body" }
 Write-Host "ok   one object, its part Body1 closed, $([Math]::Round($meshed, 3)) mm3 of $body"
 
-Write-Host '--- Remote repository: connect, a saved version sent, sync'
+Write-Host '--- Cloud project: shared in Project Settings, a saved version sent, sync'
 if ($git) {
   $remote = Join-Path $script:UiOut 'remote.git'
+  $remoteLogged = $remote -replace '\\', '/'
   Remove-Item -Recurse -Force $remote -ErrorAction SilentlyContinue
   & $git.Source init -q --bare $remote 2>&1 | Out-Null
   # The project's branch is the remote's main.
@@ -378,16 +387,31 @@ if ($git) {
     Write-Host "ok   $Description"
   }
   Ui-Mark
-  Ui-Step 'connect to a remote (Shift+F11)' { Ui-Key 'shift+F11' }
-  Ui-ExpectNew 'Connect dialog: files, GitHub' 'the Connect dialog'
-  Ui-FocusDialog '^Connect Project to Remote$'
+  Ui-Step 'project settings (Shift+F11)'   { Ui-Key 'shift+F11' }
+  Ui-ExpectNew 'Project Settings dialog: files, local; ' 'Project Settings of the Local project'
+  Ui-FocusDialog '^Project Settings - files$'
+  Ui-Step 'cloud (Alt+O)'                  { Ui-Key 'alt+o' }
+  Ui-ExpectNew 'Project Settings: storage cloud (share)' 'the Cloud section'
+  Ui-Step 'the address (Alt+E)'            { Ui-Key 'alt+e' }
   Ui-Step 'type the address'               { Ui-Key 'ctrl+a'; Ui-Type $remote }
-  Ui-Step 'connect (Enter)'                { Ui-Key 'Return' }
+  Ui-ExpectNew "Cloud check ${remoteLogged}: " 'the address checked' 30
+  Ui-Step 'share (Alt+S)'                  { Ui-Key 'alt+s' }
+  Ui-ExpectNew "Project Settings: shared files to ${remoteLogged}: versions sent" 'shared, the versions sent' 30
+  Ui-Step 'close (Esc)'                    { Ui-Key 'Escape' }
   Ui-FocusMain
-  Ui-ExpectNew "Remote: connected files to $remote`: versions sent, ahead 0, behind 0" 'connected, the versions sent' 30
-  Ui-ExpectNew 'Remote status: synced' 'the status bar says synced'
+  Ui-ExpectNew 'Remote status: synced' 'synced' 30
+  Ui-ExpectNew 'Project indicator: files, cloud, synced' 'the indicator: Cloud, synced' 30
+  Ui-ExpectNew 'Edit lock taken: block.mitcad' 'the design of the Cloud project has its edit lock (mitcad#89)' 30
   Expect-Sent 'the remote has the versions'
+  # Killed, the session leaves its edit lock on the remote: the same author
+  # in the next session is asked, and takes it over.
   Ui-StartApp 'remote' @('--open', $project, '--set', 'd3=30')
+  Ui-ExpectLog 'Edit lock dialog: You have this design open elsewhere' 'the killed session still holds the lock' 30
+  Ui-FocusDialog '^Edit Lock$'
+  Ui-Step 'take over (Alt+T)'              { Ui-Key 'alt+t' }
+  Ui-FocusMain
+  Ui-ExpectLog 'Edit lock taken: block.mitcad from ' 'taken over' 30
+  Ui-ExpectLog 'Read-only: off' 'editable again' 30
   Ui-ExpectLog 'Remote check: ahead 0, behind 0' 'the remote checked at opening' 30
   Ui-Mark
   Ui-Step 'save (Ctrl+S)'                  { Ui-Key 'ctrl+s' }

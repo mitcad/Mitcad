@@ -773,7 +773,7 @@ fn parse(name: &str, expression: &str) -> Result<Expr, TableError> {
 }
 
 /// `text` with the references to `old` replaced by `new`.
-fn replace_references(text: &str, expr: &Expr, old: &str, new: &str) -> String {
+pub(crate) fn replace_references(text: &str, expr: &Expr, old: &str, new: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut copied = 0;
     for (name, span) in expr.reference_spans() {

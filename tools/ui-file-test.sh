@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/files
 # Project files through the real UI: Save As with a typed path, reopen with
 # --open, Save (Ctrl+S) after a parameter change, the title's "*" through
 # undo and redo, the unsaved-changes prompt on New and on exit, and Open
@@ -8,6 +9,7 @@
 # Runs headless on Xvfb (see ui-test-lib.sh). The app uses Qt's own file
 # dialog (--no-native-dialogs), so a path can be typed into it.
 # Usage: tools/ui-file-test.sh
+# check-all sources: core/vcs core/ffi/src/vcs.rs core/ffi/src/remote.rs core/ffi/src/diff.rs
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
@@ -59,12 +61,9 @@ focus_main() {
   xdotool windowfocus --sync "$UI_WINDOW" 2> /dev/null
 }
 
-# type_path path: replaces the file name in Qt's file dialog and accepts.
+# type_path title path: the path typed into Qt's file dialog (ui_type_path), accepted.
 type_path() {
-  ui_key ctrl+a
-  xdotool type --delay 20 "$1"
-  sleep 0.5
-  ui_key Return
+  ui_type_path "$1" "$2"
   focus_main
 }
 
@@ -96,8 +95,7 @@ ui_step "confirm (Enter)"                ui_key Return
 ui_expect_log "Added fillet on 4 edge(s)" "fillet on the face's edges"
 expect_title "Untitled* - Mitcad"
 ui_step "save as (Ctrl+Shift+S)"         ui_key ctrl+shift+s
-focus_dialog '^Save As$'
-ui_step "type the path, Enter"           type_path "$FILE"
+ui_step "type the path, Enter"           type_path "Save As" "$FILE"
 ui_expect_log "Saved $FILE" "saved to the typed path"
 expect_title "block.mitcad - Mitcad"
 expect_file 'doc["format"], doc["version"]' "('mitcad', 2)" "format marker and version"
@@ -153,8 +151,7 @@ echo "--- Open dialog, Don't Save on New"
 ui_start_app --no-native-dialogs
 expect_title "Untitled - Mitcad"
 ui_step "open (Ctrl+O)"                  ui_key ctrl+o
-focus_dialog '^Open$'
-ui_step "type the path, Enter"           type_path "$FILE"
+ui_step "type the path, Enter"           type_path "Open" "$FILE"
 ui_expect_log "Opened $FILE" "opened through the dialog"
 ui_expect_log "Recomputed 3 feature(s)" "sketch, extrude and fillet recomputed"
 expect_title "block.mitcad - Mitcad"

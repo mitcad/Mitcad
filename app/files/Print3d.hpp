@@ -37,7 +37,14 @@ struct Slicer {
   bool operator!=(const Slicer& other) const { return !(*this == other); }
   // "Bambu Studio (C:\...\bambu-studio.exe)", for lists and logs.
   QString describe() const;
+  // The program, or the application bundle `open -a` starts (macOS).
+  QString location() const;
 };
+
+// A slicer for a program the user chose: a macOS application bundle
+// (Name.app) starts with `open -a`, which hands it the files; any other
+// program takes them on its command line.
+Slicer slicerForProgram(const QString& name, const QString& program);
 
 // Where findSlicers looks; system() gives the system's places, tests their
 // own folders.
@@ -55,13 +62,17 @@ struct SlicerSearch {
   QStringList flatpakDirectories;
   // Windows: the installed programs listed in the registry (read only).
   bool registry = false;
+  // Folders of application bundles (macOS: /Applications and
+  // ~/Applications), where the slicers are Name.app.
+  QStringList bundleDirectories;
 
   static SlicerSearch system();
 };
 
 // The slicers found, each once: Bambu Studio, OrcaSlicer, PrusaSlicer and
 // UltiMaker Cura in their usual install folders and the registry
-// (Windows), on PATH, as Flatpaks and in desktop files (Linux).
+// (Windows), as application bundles (macOS), on PATH, as Flatpaks and in
+// desktop files (Linux).
 QVector<Slicer> findSlicers(const SlicerSearch& search = SlicerSearch::system());
 
 // The settings of 3D Print (group "print"), remembered between sends.

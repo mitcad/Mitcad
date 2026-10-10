@@ -15,10 +15,11 @@
 //! | surface 1 cone | - | origin(3) axis(3) ref_dir(3) radius half_angle |
 //! | surface 2 sphere | - | center(3) axis(3) ref_dir(3) radius |
 //! | surface 3 torus | - | center(3) axis(3) ref_dir(3) major minor |
-//! | surface 4 bspline | u_deg v_deg n_uk n_vk nu nv rational u_mults... v_mults... | u_knots... v_knots... poles(3 each, u-major)... weights... |
+//! | surface 4 bspline | u_deg v_deg n_uk n_vk nu nv rational u_periodic v_periodic u_mults... v_mults... | u_knots... v_knots... poles(3 each, u-major)... weights... |
 //! | surface 5 extrusion | curve_kind curve_ints... | dir(3) curve_reals... |
 //! | surface 6 revolution | curve_kind curve_ints... | origin(3) axis(3) curve_reals... |
 //! | surface 7 ruled | from_kind from_ints... to_kind to_ints... | from_reals... to_reals... |
+//! | surface 8 arc sweep | n (kind ints...) n times | weights(n) reals... n times |
 //!
 //! A face's point loops (`Face::point_loops`) are the range
 //! `first_point_loop .. first_point_loop + point_loop_count` of
@@ -39,6 +40,7 @@ pub const SURFACE_BSPLINE: i32 = 4;
 pub const SURFACE_EXTRUSION: i32 = 5;
 pub const SURFACE_REVOLUTION: i32 = 6;
 pub const SURFACE_RULED: i32 = 7;
+pub const SURFACE_ARC_SWEEP: i32 = 8;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FlatGeometry {
@@ -233,6 +235,8 @@ fn encode_surface(s: &Surface, ints: &mut Vec<i32>, reals: &mut Vec<f64>) -> i32
                 ni(b.nu),
                 ni(b.nv),
                 i32::from(b.weights.is_some()),
+                i32::from(b.u_periodic),
+                i32::from(b.v_periodic),
             ]);
             ints.extend(b.u_mults.iter().map(|&m| ni(m)));
             ints.extend(b.v_mults.iter().map(|&m| ni(m)));
@@ -272,6 +276,16 @@ fn encode_surface(s: &Surface, ints: &mut Vec<i32>, reals: &mut Vec<f64>) -> i32
                 ints[at] = encode_curve(c, ints, reals);
             }
             SURFACE_RULED
+        }
+        Surface::ArcSweep { sections, weights } => {
+            ints.push(ni(sections.len()));
+            reals.extend_from_slice(weights);
+            for c in sections {
+                let at = ints.len();
+                ints.push(0);
+                ints[at] = encode_curve(c, ints, reals);
+            }
+            SURFACE_ARC_SWEEP
         }
     }
 }

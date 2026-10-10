@@ -640,12 +640,12 @@ int benchOnce(const Bench& bench, const QString& choice, const std::vector<rende
   render::SceneUpdate scene = render::testScene();
   if (!bench.texture.isEmpty()) {
     // --texture image[,size[,box|planar]] on the block (mitcad#53).
-    const QStringList parts = bench.texture.split(QLatin1Char(','));
+    const QStringList fields = bench.texture.split(QLatin1Char(','));
     render::MaterialData& material = scene.bodies.front().material;
-    material.texture = QFileInfo(parts.value(0)).absoluteFilePath().toStdString();
-    const float repeat = parts.size() > 1 ? parts.at(1).toFloat() : 20.0f;
+    material.texture = QFileInfo(fields.value(0)).absoluteFilePath().toStdString();
+    const float repeat = fields.size() > 1 ? fields.at(1).toFloat() : 20.0f;
     material.textureSize = {repeat, repeat};
-    material.texturePlanar = parts.value(2) == QLatin1String("planar");
+    material.texturePlanar = fields.value(2) == QLatin1String("planar");
     scene.bodies.front().materialKey =
         QJsonDocument(render::materialJson(material)).toJson(QJsonDocument::Compact).toStdString();
   }
@@ -1290,11 +1290,11 @@ int main(int argc, char* argv[]) {
     } else if (name == QLatin1String("view")) {
       renderer->setView(viewOf(command));
     } else if (name == QLatin1String("samples")) {
-      std::vector<int> previews;
+      std::vector<int> sampleCounts;
       for (const QJsonValue& at : command.value(QStringLiteral("previews")).toArray()) {
-        previews.push_back(at.toInt());
+        sampleCounts.push_back(at.toInt());
       }
-      renderer->setPreviews(previews);
+      renderer->setPreviews(sampleCounts);
       renderer->setSamples(command.value(QStringLiteral("count")).toInt());
     } else if (!name.isEmpty()) {
       emitError(QStringLiteral("unknown command %1").arg(name));

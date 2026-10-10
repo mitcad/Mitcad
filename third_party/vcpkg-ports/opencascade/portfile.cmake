@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # vcpkg's opencascade port (microsoft/vcpkg at the baseline in vcpkg.json)
-# with Mitcad's patches 0006 to 0009 (see ../README.md).
+# with Mitcad's patches 0006 and later (see ../README.md).
 string(REPLACE "." "_" VERSION_STR "V${VERSION}")
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
@@ -18,6 +18,23 @@ vcpkg_from_github(
         0007-brepcheck-analyzer-no-search-in-face.patch
         0008-brepcheck-wire-seam-edges-once-per-face.patch
         0009-bopalgo-face-face-adaptors-once-per-face.patch
+        0010-brepblend-surfrst-line-on-both-restrictions.patch
+        0011-chfi3d-fillet-edge-overflow.patch
+        0012-chfi3d-closed-stripe-end-on-vertex.patch
+        0013-chfi3d-overflow-across-faces-and-overlapping-roundings.patch
+        0014-chfi3d-contact-along-face-edge.patch
+        0015-brepblend-surfrst-smaller-step-on-failed-reframing.patch
+        0016-chfi3d-rounding-rolls-on-anothers-contact-line.patch
+        0020-chfi3d-crash-fixes.patch
+        0021-chfi3d-corner-of-contour-closed-at-sharp-vertex.patch
+        0022-chfi3d-round-edges-asked-for-near-tangent.patch
+        0023-chfi3d-meeting-point-of-periodic-contact-lines.patch
+        0024-chfi3d-order-of-periodic-kpart-surfaces.patch
+        0025-chfi3d-end-cut-by-faces-around-a-cylinder-corner.patch
+        0026-chfi3d-onsame-end-cut-by-several-faces.patch
+        0030-standard-failed-allocation-throws.patch
+        0031-osd-threadpool-failed-allocations-to-launching-thread.patch
+        0032-ncollection-containers-intact-when-allocation-fails.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

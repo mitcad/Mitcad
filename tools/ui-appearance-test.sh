@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/browser app/framework/Appearances.cpp app/framework/Appearances.hpp
 # Edit Appearances (mitcad#46) through the real UI, on a 40 x 30 x 20 mm box:
 #   - The dialog opens for the body selected in the browser, lists the
 #     library with swatches, and shows a library appearance read-only.
@@ -13,6 +14,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-appearance-test.sh [screenshot of the dialog.png]
+# check-all sources: tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 

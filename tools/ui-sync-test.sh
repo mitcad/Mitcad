@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/files
 # Remote repositories (P12 remote) through the real UI, against a bare
 # repository in a folder (no network), checked with the system's git:
-#   1. A design saved into project A, which Connect Project to Remote
-#      connects to the empty remote (its address typed in the dialog): the
-#      versions are sent, the status bar says synced. A change saved is a
+#   1. A design saved into Local project A, which Project Settings shares
+#      to the empty remote (its address typed in the Cloud section): the
+#      versions are sent, the remote's state is synced. A change saved is a
 #      version, sent at once.
-#   2. Open Project from Remote into a new folder (by default
+#   2. Open from Cloud into a new folder (by default
 #      Documents/Mitcad/<repository>): project B with the design opened.
 #   3. Another user changes the design in B and pushes it with git. A opened
 #      again checks the remote: the status bar has the newer version, the
@@ -19,12 +20,13 @@
 #      copy: the file is B's, the copy A's, both sent, the history one line.
 #   5. Offline: the remote gone, a saved version waits (the status bar shows
 #      it) and is sent once the remote is back, by the retries alone.
-#   6. Preferences' Version Control shows the git program found.
+#   6. Preferences' Cloud page shows the git program found.
 #
 # git's configuration and HOME are the test's own (as in
 # tools/ui-version-test.sh). Runs headless on Xvfb (see ui-test-lib.sh); Qt's
 # own file dialogs (--no-native-dialogs), so paths can be typed into them.
 # Usage: tools/ui-sync-test.sh
+# check-all sources: core/vcs core/ffi/src/vcs.rs core/ffi/src/remote.rs core/ffi/src/diff.rs tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
@@ -40,9 +42,6 @@ export GIT_CONFIG_GLOBAL=$WORK/gitconfig
 export GIT_CONFIG_NOSYSTEM=1
 unset EMAIL GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL GIT_DIR GIT_WORK_TREE MITCAD_GIT
 printf '[user]\n\tname = Ada Tester\n\temail = ada@example.invalid\n' > "$GIT_CONFIG_GLOBAL"
-# The author was shown before (P12d): no dialog for it.
-mkdir -p "$XDG_CONFIG_HOME/Mitcad"
-printf '[versions]\nconfirmed=true\n' > "$XDG_CONFIG_HOME/Mitcad/Mitcad.conf"
 # A failed push is tried again after 2 s (then 4, 8, ...), not a minute.
 export MITCAD_TEST_REMOTE_RETRY_SECONDS=2
 
@@ -54,6 +53,20 @@ FILE_B=$B/block.mitcad
 git init -q --bare "$REMOTE"
 "$CLI" project init "$A" --author "Ada Tester <ada@example.invalid>" > "$WORK/cli.log" 2>&1 ||
   { cat "$WORK/cli.log"; echo "FAIL: mitcad-cli project init"; exit 1; }
+# Without edit locks (mitcad#89): a design whose lock is taken is brought
+# up to date at once, while this test is about the notice of a newer
+# version, Sync Now and Resolve Sync Conflicts (tools/ui-locks-test.sh has
+# the locks).
+python3 - "$A/.mitcad/project.json" << 'EOF'
+import json, sys
+
+marker = json.load(open(sys.argv[1]))
+marker['edit_locks'] = {'enabled': False, 'idle_minutes': 10, 'poll_seconds': 10}
+with open(sys.argv[1], 'w') as f:
+    f.write(json.dumps(marker, indent=2) + '\n')
+EOF
+git -C "$A" -c user.name="Ada Tester" -c user.email=ada@example.invalid commit -qam "Edit locks off" ||
+  { echo "FAIL: git commit in A"; exit 1; }
 
 # in_git folder git-arguments...
 in_git() {
@@ -105,16 +118,12 @@ as_other() {
   echo "ok   the other user pushed: $2"
 }
 
-# type_text text: replaces the focused field's text.
-type_text() {
-  ui_key ctrl+a
-  xdotool type --delay 20 "$1"
-  ui_sync
-}
+# type_text text: replaces the text of the focused dialog's field (ui_type_text).
+type_text() { ui_type_text "$1"; }
 
+# type_path title path: the path typed into Qt's file dialog (ui_type_path), accepted.
 type_path() {
-  type_text "$1"
-  ui_key Return
+  ui_type_path "$1" "$2"
   ui_focus_main
 }
 
@@ -130,23 +139,27 @@ expect_exit() {
 
 ui_start_display
 
-echo "--- Connect project A to an empty remote; a saved version is sent"
+echo "--- Share project A to an empty remote; a saved version is sent"
 ui_start_app --demo --no-native-dialogs
 ui_mark
 ui_step "save as (Ctrl+Shift+S)"         ui_key ctrl+shift+s
-ui_focus_dialog '^Save As$'
-ui_step "into project A"                 type_path "$FILE_A"
+ui_step "into project A"                 type_path "Save As" "$FILE_A"
 ui_expect_new "Version recorded: block.mitcad " "the design is a version of A"
+ui_expect_new "Project indicator: bracket, local, v1" "a Local project"
 ui_mark
-ui_step "connect (search)"               ui_command "Connect Project to Remote"
-ui_expect_new "Connect dialog: bracket, GitHub" "the Connect dialog"
-ui_focus_dialog '^Connect Project to Remote$'
+ui_step "project settings (search)"      ui_command "Project Settings"
+ui_expect_new "Project Settings dialog: bracket, local; " "Project Settings"
+ui_focus_dialog '^Project Settings - bracket$'
+ui_step "cloud (Alt+O)"                  ui_key alt+o
+ui_step "the address (Alt+E)"            ui_key alt+e
 ui_step "the remote's address"           type_text "$REMOTE"
-ui_step "connect (Enter)"                ui_key Return
+ui_expect_new "Cloud check $REMOTE: " "the address checked" 20
+ui_step "share (Alt+S)"                  ui_key alt+s
+ui_expect_new "Project Settings: shared bracket to $REMOTE: versions sent" "shared, the versions sent" 30
+ui_step "close (Esc)"                    ui_key Escape
 ui_focus_main
-ui_expect_new "Connect dialog: $REMOTE (GitHub)" "the address given"
-ui_expect_new "Remote: connected bracket to $REMOTE: versions sent, ahead 0, behind 0" "connected, the versions sent"
-ui_expect_new "Remote status: synced" "the status bar says synced"
+ui_expect_new "Remote status: synced" "synced"
+ui_expect_new "Project indicator: bracket, cloud, synced" "the indicator: Cloud, synced"
 expect_sent "$A" "the remote has A's versions"
 [ "$(in_git "$A" rev-parse --abbrev-ref '@{upstream}')" = "origin/main" ] || ui_fail "main does not follow origin/main"
 echo "ok   main follows origin/main"
@@ -163,17 +176,19 @@ ui_expect_new "Remote status: synced" "synced again"
 expect_sent "$A" "the remote has the new version"
 expect_clean "$A" "A's git status is clean"
 
-echo "--- Open Project from Remote: project B"
+echo "--- Open from Cloud: project B"
 ui_mark
-ui_step "open from remote (search)"      ui_command "Open Project from Remote"
-ui_expect_new "Open from Remote dialog: $DOCUMENTS" "the dialog, in Documents/Mitcad"
-ui_focus_dialog '^Open Project from Remote$'
+ui_step "open from cloud (search)"       ui_command "Open from Cloud"
+ui_expect_new "Open from Cloud dialog: $DOCUMENTS" "the dialog, in Documents/Mitcad"
+ui_focus_dialog '^Open from Cloud$'
+ui_step "the address (Alt+E)"            ui_key alt+e
 ui_step "the remote's address"           type_text "$REMOTE"
+ui_expect_new "Open from Cloud dialog: clone, enabled" "a project there" 20
 ui_step "open (Enter)"                   ui_key Return
-ui_focus_main
-ui_expect_new "Open from Remote dialog: $REMOTE into $B" "into a folder named after the repository"
-ui_expect_new "Open from Remote: $REMOTE into $B: block.mitcad" "cloned, one design"
+ui_expect_new "Open from Cloud: clone $REMOTE into $B" "into a folder named after the repository"
+ui_expect_new "Open from Cloud: opened $B (clone): block.mitcad" "cloned, one design" 20
 ui_expect_new "Opened $FILE_B" "the design opened"
+ui_focus_main
 ui_expect_new "Remote status: synced" "B is synced"
 [ "$(in_git "$B" rev-parse HEAD)" = "$(in_git "$A" rev-parse HEAD)" ] || ui_fail "B has not A's versions"
 cmp -s "$FILE_A" "$FILE_B" || ui_fail "B's design differs from A's"
@@ -186,7 +201,8 @@ as_other 30 "Bea's d3"
 ui_start_app --open "$FILE_A" --no-native-dialogs
 ui_expect_log "Opened $FILE_A" "A opened"
 ui_expect_log "Remote check: ahead 0, behind 1" "the remote checked at opening"
-ui_expect_log "Remote status: behind 1" "the status bar has the newer version"
+ui_expect_log "Remote status: behind 1" "the newer version is known"
+ui_expect_log "Project indicator: bracket, cloud, behind 1" "the indicator shows it"
 ui_expect_log "Remote notice: A newer version of block.mitcad is on the remote, saved by Bea Other at " \
   "the notice names it"
 ui_expect_log "Sync takes it. [Sync Now, Dismiss]" "Sync takes it"
@@ -215,6 +231,7 @@ ui_step "save (Ctrl+S)"                  ui_key ctrl+s
 ui_expect_new "Version recorded: block.mitcad " "A's version"
 ui_expect_new "Remote push failed (rejected)" "it cannot be sent: the remote has a newer one"
 ui_expect_new "Remote status: ahead 1, behind 1" "one to send, one newer"
+ui_expect_new "Project indicator: bracket, cloud, ahead 1, behind 1" "the indicator shows both"
 ui_expect_new "You changed it too: Sync asks which to keep." "the notice says a sync will ask"
 ui_mark
 ui_step "sync (Ctrl+Alt+Y)"              ui_key ctrl+alt+y
@@ -256,7 +273,8 @@ ui_mark
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
 ui_expect_new "Version recorded: block.mitcad " "the version recorded"
 ui_expect_new "Remote push failed (not_found)" "it cannot be sent"
-ui_expect_new "Remote status: remote not found, ahead 1" "the status bar shows it waiting"
+ui_expect_new "Remote status: remote not found, ahead 1" "the remote's state: it waits"
+ui_expect_new "Project indicator: bracket, cloud, remote not found, ahead 1" "the indicator shows it waiting"
 ui_expect_new "Remote push: 1 version(s) wait; trying again in 2 s" "tried again later"
 mv "$REMOTE.away" "$REMOTE"
 ui_expect_new "Remote push: trying again (1 version(s) waiting)" "tried again" 20
@@ -267,7 +285,7 @@ expect_sent "$A" "the remote has it"
 echo "--- Preferences: the git program"
 ui_mark
 ui_step "preferences (search)"           ui_command "Preferences"
-ui_expect_new "Preferences: version control: git " "the git program found"
+ui_expect_new "Preferences: cloud: git " "the git program found"
 ui_focus_dialog '^Preferences$'
 ui_step "OK (Enter)"                     ui_key Return
 ui_focus_main

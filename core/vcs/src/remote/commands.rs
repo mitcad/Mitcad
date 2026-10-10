@@ -96,7 +96,7 @@ impl ProjectRepo {
                 answer(self.remote_check(url, control), |_| {
                     json!({"url": redact(url), "reachable": false, "empty": null,
                            "default_branch": null, "head": null, "has_project": null,
-                           "related": null})
+                           "related": null, "files": [], "latest": null, "versions": null})
                 })?
             }
             "remote_set" => {
@@ -112,20 +112,46 @@ impl ProjectRepo {
                     .map(|removed| json!({"name": remote, "removed": removed})),
                 |_| json!({"name": remote, "removed": false}),
             )?,
+            // Several remotes, none followed (mitcad#89): the one to follow.
+            "remote_follow" => {
+                let name = text(command, "name")?;
+                answer(
+                    self.remote_follow(name, optional(command, "branch")),
+                    |_| json!({"name": name, "url": null, "upstream": null, "changed": false}),
+                )?
+            }
             "connect" => {
                 let url = text(command, "url")?;
                 let author = self.author(command)?;
-                match self.connect(url, remote, &author, flag("push", true), control) {
+                // Onto a remote's files (mitcad#89): the choices for paths
+                // on both sides, as a sync takes them.
+                let onto = if flag("onto_files", false) {
+                    Some(SyncOptions {
+                        fetch: false,
+                        onto_files: true,
+                        ..sync_options(command)?
+                    })
+                } else {
+                    None
+                };
+                match self.connect_with(
+                    url,
+                    remote,
+                    &author,
+                    flag("push", true),
+                    onto.as_ref(),
+                    control,
+                ) {
                     Ok(connected) => {
                         let error = connected.error.clone();
                         let mut value = json!(connected);
                         value["error"] = json!(error);
                         (value, error)
                     }
-                    Err(error) => answer::<Value>(
-                        Err(error),
-                        |_| json!({"check": null, "set": null, "fetch": null, "push": null}),
-                    )?,
+                    Err(error) => answer::<Value>(Err(error), |_| {
+                        json!({"check": null, "set": null, "fetch": null, "push": null,
+                               "sync": null, "undone": false})
+                    })?,
                 }
             }
             "fetch" => answer(self.fetch(control), |_| self.local_counts())?,
@@ -139,16 +165,23 @@ impl ProjectRepo {
                 (value, error)
             }
             // Sync and conflicts.
-            "sync_plan" => answer(
-                self.sync_plan(
-                    command
-                        .get("fetch")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(true),
-                    control,
-                ),
-                |_| json!({"case": null, "local": [], "remote": [], "conflicts": [], "uncommitted": []}),
-            )?,
+            "sync_plan" => {
+                let (mut value, error) = answer(
+                    self.sync_plan(
+                        command
+                            .get("fetch")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(true),
+                        control,
+                    ),
+                    |_| json!({"case": null, "local": [], "remote": [], "conflicts": [], "uncommitted": []}),
+                )?;
+                // Edit locks (mitcad#89): files to send that another session holds.
+                if error.is_none() {
+                    self.plan_locks(&mut value, command, control);
+                }
+                (value, error)
+            }
             "sync" => {
                 let options = sync_options(command)?;
                 // Only a replay records versions, so only it needs a committer.
@@ -550,6 +583,27 @@ pub(crate) fn describe(name: &str, answer: &Value) -> Option<String> {
     match name {
         "git_info" => return Some(describe_git(answer)),
         "remote_info" => {
+            let remotes: Vec<String> = answer["remotes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|remote| {
+                    format!(
+                        "{} ({})",
+                        remote["name"].as_str().unwrap_or(""),
+                        remote["url"].as_str().unwrap_or("")
+                    )
+                })
+                .collect();
+            if answer["name"].is_null() && !remotes.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "Remotes {}: none is followed; choose one with mitcad-cli remote follow \
+                     <folder> <name>",
+                    remotes.join(", ")
+                );
+                return Some(out);
+            }
             if answer["name"].is_null() {
                 let _ = writeln!(
                     out,
@@ -603,6 +657,7 @@ pub(crate) fn describe(name: &str, answer: &Value) -> Option<String> {
                     field("default_branch"),
                     short(&answer["head"])
                 );
+                crate::projects::describe_summary(&mut out, answer);
             }
         }
         "remote_set" => describe_set(&mut out, answer),
@@ -613,6 +668,16 @@ pub(crate) fn describe(name: &str, answer: &Value) -> Option<String> {
                 writeln!(out, "No remote {}", field("name"))
             };
         }
+        "remote_follow" => {
+            let _ = writeln!(
+                out,
+                "Branch {} follows {} ({}): {}",
+                field("branch"),
+                field("upstream"),
+                field("url"),
+                state(answer)
+            );
+        }
         "connect" => {
             describe_set(&mut out, &answer["set"]);
             if !answer["fetch"].is_null() {
@@ -620,6 +685,14 @@ pub(crate) fn describe(name: &str, answer: &Value) -> Option<String> {
             }
             if !answer["push"].is_null() {
                 describe_push(&mut out, &answer["push"]);
+            }
+            // Onto a remote's files (mitcad#89).
+            if !answer["sync"].is_null() {
+                describe_sync(&mut out, &answer["sync"]);
+                if answer["undone"].as_bool() == Some(true) {
+                    let _ = writeln!(out, "The remote was removed again: nothing was shared");
+                }
+                return Some(out);
             }
             let _ = writeln!(
                 out,
@@ -661,7 +734,8 @@ pub(crate) fn describe(name: &str, answer: &Value) -> Option<String> {
                 let _ = writeln!(out, "{}: {how}", field("path"));
             }
         }
-        _ => return None,
+        // Edit locks (mitcad#89).
+        _ => return super::locks::commands::describe(name, answer),
     }
     Some(out)
 }
@@ -670,7 +744,9 @@ pub(crate) fn describe(name: &str, answer: &Value) -> Option<String> {
 /// before it stopped and why, else the failure's message.
 pub(crate) fn describe_answer(name: &str, answer: &Value) -> String {
     let failed = !answer["error"].is_null();
-    if failed && name != "sync" {
+    // A connect onto a remote's files tells its sync's conflicts too.
+    let synced = name == "connect" && !answer["sync"].is_null();
+    if failed && name != "sync" && !synced {
         return format!(
             "error: {}\n",
             answer["error"]["message"].as_str().unwrap_or("")

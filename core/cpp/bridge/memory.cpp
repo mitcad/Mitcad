@@ -29,6 +29,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "mitcad/geometry/guard.hpp"
 #include "mitcad_bridge/memory.h"
 
 namespace mitcad::bridge {
@@ -175,6 +176,7 @@ MemoryUse memory_use() {
     tightest.consider(in_use(resident, resident + left, spare), resident + left, "memory the system has left");
   }
 #endif
+  tightest.out.failed_allocations = static_cast<std::uint64_t>(geometry::failed_allocations());
   return tightest.out;
 }
 

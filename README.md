@@ -67,7 +67,9 @@ model, the solver and the file import), built with CMake and Ninja;
 Corrosion builds the Rust crates and CXX bridges the two languages.
 Versions used in development: Qt 6.12 LTS, OCCT 8.0.1 (built by vcpkg
 with a few patches of Mitcad's that speed up booleans and the shape checker
-on faces with many edges:
+on faces with many edges, let fillets run over faces narrower than they
+are, fix other failures and crashes of the fillet, and make an allocation
+that fails throw instead of crashing:
 [third_party/vcpkg-ports](third_party/vcpkg-ports/README.md)), the Rust
 toolchain pinned in [rust-toolchain.toml](rust-toolchain.toml).
 
@@ -101,15 +103,16 @@ AppImage: [docs/development.md](docs/development.md#linux-appimage).
 
 The rendered view (a prototype with Cycles on the CPU, or an NVIDIA GPU
 with `build-cycles.sh --cuda`) is built only with
-`-DMITCAD_RENDER=ON` after `tools/dev-env/build-cycles.sh`, which builds
+`-DMITCAD_RENDER=ON` after `tools/dev-env/build-cycles.sh` (`build-cycles.ps1` on
+Windows), which builds
 Cycles and Open Image Denoise from pinned sources
 ([docs/rendering.md](docs/rendering.md#building)). The renderer is then the
 executable `mitcad-render` next to `mitcad` (only it links the renderer's
 libraries), and View > Rendered appears whenever it is there, with View
 > Render Environment for the design's light (with lights of one's own),
 background, ground and exposure, and File > Render Image (and `mitcad-cli render`) for a final
-image file at a chosen size and quality; the AppImage of such a build
-includes it.
+image file at a chosen size and quality; the AppImage and the Windows
+installer of such a build include it.
 
 ### Windows
 
@@ -153,10 +156,11 @@ The application is `build/dev/app/mitcad.app`. Packaging as a disk image:
 tools/check-all.sh
 ```
 
-runs the warning-free build, `cargo fmt`/`clippy`, dependency checks,
-`ctest`, the corpus tests when relevant and the UI tests (on a hidden Xvfb
-display). Details, the Windows and macOS tests and the corpus setup:
-[docs/development.md](docs/development.md).
+runs the warning-free build, `cargo fmt`/`clippy`, dependency checks, and
+the ctests, corpus tests and UI tests (on a hidden Xvfb display) whose
+sources changed; `tools/check-all.sh --full`, the check before a release
+build, runs every test. Details, the Windows and macOS tests and the
+corpus setup: [docs/development.md](docs/development.md#the-check-script).
 
 ## Repository layout
 
@@ -212,3 +216,12 @@ cores, so RTX cards render slower than they could
 
 MIT ([LICENSE](LICENSE)). Qt and OCCT are LGPL and linked dynamically;
 licence policy: [docs/development.md](docs/development.md#licence-policy).
+
+## Model Context Protocol
+
+`mitcad-cli mcp --workspace /absolute/path/to/designs` starts a headless
+MCP server over stdio for a local AI client. It can create and open
+documents, run native modeling commands and queries, save editable
+`.mitcad` files, and export geometry inside the workspace. Add
+`--read-only` to inspect existing designs. Client setup, a modeling
+example, error semantics and current limits: [docs/mcp.md](docs/mcp.md).

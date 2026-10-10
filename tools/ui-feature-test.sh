@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/commands
 # Chamfer and Revolve, the commands added through the command framework,
 # end to end through the real UI, with the volumes the model reports:
 #   - Chamfer of the demo block's top face (all four edges), 2 mm given as

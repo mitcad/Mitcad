@@ -1,0 +1,97 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets and chamfers: an edge asked for whose faces meet at a small angle
+is rounded (mitcad#122).
+
+ChFi3d::IsTangentFaces takes two faces for tangent along an edge when
+their normals are within 0.1 rad (LocalAnalysis_SurfaceContinuity with
+EpsG1 0.1), and ChFi3d_Builder::PerformElement refused every edge such a
+test calls tangent: an edge between faces 1 to 5.7 degrees apart could not
+be rounded at all ("There are no suitable edges for chamfer or fillet").
+PerformElement now refuses the edge only when, besides, the normals of its
+faces sampled along it come within the builder's angular tolerance
+(SetParams, 0.01 rad by default) somewhere. The loose test stays as it is
+everywhere else (tangent chains, corners).
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
+@@ -61,6 +61,8 @@
+ #include <TopOpeBRepDS_HDataStructure.hxx>
+ #include <TopOpeBRepDS_Surface.hxx>
+ #include <BRepLib_MakeEdge.hxx>
++#include <BRepAdaptor_Surface.hxx>
++#include <BRep_Tool.hxx>
+ 
+ static void ReorderFaces(TopoDS_Face&         theF1,
+                          TopoDS_Face&         theF2,
+@@ -327,6 +329,57 @@
+   return OffsetEdge;
+ }
+ 
++//=======================================================================
++// function : MinNormalAngle
++// purpose  : The smallest angle between the normals of the two faces of
++//            an edge, sampled along it; -1 when it cannot be evaluated.
++//=======================================================================
++
++static double MinNormalAngle(const TopoDS_Edge& theEdge,
++                             const TopoDS_Face& theFace1,
++                             const TopoDS_Face& theFace2)
++{
++  double                    aFirst = 0., aLast = 0.;
++  occ::handle<Geom2d_Curve> aC1 = BRep_Tool::CurveOnSurface(theEdge, theFace1, aFirst, aLast);
++  occ::handle<Geom2d_Curve> aC2 = BRep_Tool::CurveOnSurface(theEdge, theFace2, aFirst, aLast);
++  if (aC1.IsNull() || aC2.IsNull())
++  {
++    return -1.;
++  }
++  BRepAdaptor_Surface aS1(theFace1, false), aS2(theFace2, false);
++  double              aMin = -1.;
++  const int           aNb  = 5;
++  for (int i = 0; i < aNb; ++i)
++  {
++    const double aT  = aFirst + (aLast - aFirst) * (i + 0.5) / aNb;
++    gp_Pnt2d     aP1 = aC1->Value(aT), aP2 = aC2->Value(aT);
++    gp_Pnt       aP;
++    gp_Vec       aDU, aDV;
++    aS1.D1(aP1.X(), aP1.Y(), aP, aDU, aDV);
++    gp_Vec aN1 = aDU.Crossed(aDV);
++    aS2.D1(aP2.X(), aP2.Y(), aP, aDU, aDV);
++    gp_Vec aN2 = aDU.Crossed(aDV);
++    if (aN1.SquareMagnitude() < 1.e-24 || aN2.SquareMagnitude() < 1.e-24)
++    {
++      continue;
++    }
++    if (theFace1.Orientation() == TopAbs_REVERSED)
++    {
++      aN1.Reverse();
++    }
++    if (theFace2.Orientation() == TopAbs_REVERSED)
++    {
++      aN2.Reverse();
++    }
++    const double anAngle = aN1.Angle(aN2);
++    if (aMin < 0. || anAngle < aMin)
++    {
++      aMin = anAngle;
++    }
++  }
++  return aMin;
++}
++
+ static TopOpeBRepDS_BuildTool mkbuildtool()
+ {
+   TopOpeBRepTool_GeomTool GT2(TopOpeBRepTool_BSPLINE1, true, false, false);
+@@ -911,7 +964,10 @@
+   }
+   //  Modified by Sergey KHROMOV - Fri Dec 21 17:46:22 2001 End
+   // if(BRep_Tool::Continuity(Ec,ff1,ff2) != GeomAbs_C0) return 0;
+-  if (ChFi3d::IsTangentFaces(Ec, ff1, ff2))
++  // ChFi3d::IsTangentFaces takes faces within 0.1 rad for tangent: an edge
++  // asked for whose faces are farther apart than the angular tolerance is
++  // still rounded.
++  if (ChFi3d::IsTangentFaces(Ec, ff1, ff2) && MinNormalAngle(Ec, ff1, ff2) <= angular)
+   {
+     return false;
+   }

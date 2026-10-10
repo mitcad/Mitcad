@@ -32,7 +32,7 @@ pub(crate) fn brep_sha256(path: &str) -> Option<Sha256> {
 
 impl ProjectRepo {
     /// The entries of a tree by name; none for the empty tree.
-    fn entries(
+    pub(crate) fn entries(
         &self,
         tree: ObjectId,
     ) -> Result<BTreeMap<BString, (EntryMode, ObjectId)>, VcsError> {

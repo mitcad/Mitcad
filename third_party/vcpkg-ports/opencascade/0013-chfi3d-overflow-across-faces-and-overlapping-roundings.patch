@@ -1,0 +1,1605 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Edge overflow of the rolling ball fillet across several faces and on both
+sides of the edge, and roundings that overlap on a face between their
+edges. On top of 0011: a ball that cannot touch the face beyond a narrow
+face may reach a face further on, the contacts on both faces of the edge
+may leave them, and two roundings of a face narrower than both run over
+it as one.
+
+- ChFi3d_Builder::StartSolOverflow: each side of the section has a support
+  that starts as the face of the edge and moves on across the face's edge
+  the section crosses between the spine (or the edge it came in by) and
+  the contact point, while the contact on the support's surface lies
+  beyond such an edge; both sides at once. Where a support's surface has
+  no tangent circle with the other side's (a sliver, a face parallel to
+  it), the face beyond its edge nearest to the edge it came in by is tried,
+  within the ball's diameter; when no face beyond is touched, the side
+  rolls on the edge before that face. A side whose contact lies before the
+  edge it came in by rolls on that edge (as 0011's obstacle). The start
+  touching the faces reached must clear the faces it passed (no face
+  nearer to the ball's centre than its radius, ballClears), and the faces
+  around those, else that section is not a start (one further along the
+  spine may be). The function returns the sides that roll (0, 1 or 2; a
+  start rolling on both sides, which touches no face, is not taken: the
+  faces are too narrow for the ball on both sides).
+- ChFi3d_CutConsumedFaces: the consumed faces between the spine and an
+  obstacle edge can be a chain of strips (each with all its vertices on its
+  edge toward the obstacle and the edge opposite it), not only one; each
+  strip's other edges at the ends of the blend are cut there.
+- Roundings that overlap: after the stripes are computed, two stripes
+  whose contacts on a face between their edges each lie beyond the other's
+  all along (ChFi3d_Builder::OverlappingStripes) are computed again: the
+  start of each overflows that face across the other's edge
+  (ChFi3d_Builder::OverlapEdge in StartSolOverflow; neither the analytic
+  blends nor StartSol are used for them). Both then make the same blend:
+  a stripe whose blend lies on another stripe's (the same faces and contact
+  curves, ChFi3d_Builder::RemoveCoincidentStripes) stays a contour of the
+  builder but gives no faces; the corners are those of the stripes kept.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -19,6 +19,10 @@
+ #include <BRepBlend_Line.hxx>
+ #include <BRepLib.hxx>
+ #include <BRepTopAdaptor_TopolTool.hxx>
++#include <GeomAPI_ProjectPointOnCurve.hxx>
++#include <GeomAdaptor_Curve.hxx>
++#include <Geom_Curve.hxx>
++#include <TopOpeBRepDS_Curve.hxx>
+ #include <ChFi3d_Builder.hxx>
+ #include <ChFi3d_Builder_0.hxx>
+ #include <ChFiDS_CommonPoint.hxx>
+@@ -169,6 +173,318 @@
+         break;
+       default:
+         break;
++    }
++  }
++}
++
++//=================================================================================================
++
++// The parameter of point P projected on curve C, and its distance.
++static double projectOn(const occ::handle<Geom_Curve>& C, const gp_Pnt& P, double& Dist)
++{
++  GeomAPI_ProjectPointOnCurve proj(P, C);
++  if (proj.NbPoints() == 0)
++  {
++    Dist = RealLast();
++    return 0.;
++  }
++  Dist = proj.LowerDistance();
++  return proj.LowerDistanceParameter();
++}
++
++// Whether the contact of SurfData B on its side onB lies on the contact of
++// SurfData A on its side onA: B's contact curve, sampled between its end
++// points, lies on A's curve between A's end points (within Tol).
++static bool sameContact(const TopOpeBRepDS_DataStructure&   DStr,
++                        const occ::handle<ChFiDS_SurfData>& A,
++                        const int                           onA,
++                        const occ::handle<ChFiDS_SurfData>& B,
++                        const int                           onB,
++                        const double                        Tol)
++{
++  const ChFiDS_FaceInterference& IA = onA == 1 ? A->InterferenceOnS1() : A->InterferenceOnS2();
++  const ChFiDS_FaceInterference& IB = onB == 1 ? B->InterferenceOnS1() : B->InterferenceOnS2();
++  if (IA.LineIndex() <= 0 || IB.LineIndex() <= 0)
++  {
++    return false;
++  }
++  const occ::handle<Geom_Curve>& CA = DStr.Curve(IA.LineIndex()).Curve();
++  const occ::handle<Geom_Curve>& CB = DStr.Curve(IB.LineIndex()).Curve();
++  if (CA.IsNull() || CB.IsNull())
++  {
++    return false;
++  }
++  double       d1 = 0., d2 = 0., d3 = 0., d4 = 0.;
++  const double ua1 = projectOn(CA, A->Vertex(true, onA).Point(), d1);
++  const double ua2 = projectOn(CA, A->Vertex(false, onA).Point(), d2);
++  const double ub1 = projectOn(CB, B->Vertex(true, onB).Point(), d3);
++  const double ub2 = projectOn(CB, B->Vertex(false, onB).Point(), d4);
++  if (std::max(std::max(d1, d2), std::max(d3, d4)) > Tol)
++  {
++    return false;
++  }
++  const double lo = std::min(ua1, ua2), hi = std::max(ua1, ua2);
++  const double slack = 1.e-6 * (hi - lo) + Precision::PConfusion();
++  for (int i = 0; i <= 4; i++)
++  {
++    const gp_Pnt P = CB->Value(ub1 + (ub2 - ub1) * i / 4.);
++    double       d = 0.;
++    const double u = projectOn(CA, P, d);
++    if (d > Tol || u < lo - slack || u > hi + slack)
++    {
++      return false;
++    }
++  }
++  return true;
++}
++
++// Whether SurfData B is a part of SurfData A: the same two faces, its
++// contact curves on those of A.
++static bool coincidentSurfData(const TopOpeBRepDS_DataStructure&   DStr,
++                               const occ::handle<ChFiDS_SurfData>& A,
++                               const occ::handle<ChFiDS_SurfData>& B,
++                               const double                        Tol)
++{
++  if (A->IndexOfS1() == B->IndexOfS1() && A->IndexOfS2() == B->IndexOfS2())
++  {
++    return sameContact(DStr, A, 1, B, 1, Tol) && sameContact(DStr, A, 2, B, 2, Tol);
++  }
++  if (A->IndexOfS1() == B->IndexOfS2() && A->IndexOfS2() == B->IndexOfS1())
++  {
++    return sameContact(DStr, A, 1, B, 2, Tol) && sameContact(DStr, A, 2, B, 1, Tol);
++  }
++  return false;
++}
++
++// The distance of point P from edge E, when its projection falls on the
++// edge; RealLast otherwise.
++static double distanceToEdge(const gp_Pnt& P, const TopoDS_Edge& E)
++{
++  double                         f = 0., l = 0.;
++  const occ::handle<Geom_Curve>& C = BRep_Tool::Curve(E, f, l);
++  if (C.IsNull())
++  {
++    return RealLast();
++  }
++  GeomAPI_ProjectPointOnCurve proj(P, C, f, l);
++  if (proj.NbPoints() == 0)
++  {
++    return RealLast();
++  }
++  return proj.LowerDistance();
++}
++
++// The edge of spine Sp that bounds face F, or a null edge.
++static TopoDS_Edge spineEdgeOf(const occ::handle<ChFiDS_Spine>& Sp, const TopoDS_Face& F)
++{
++  for (int i = 1; i <= Sp->NbEdges(); i++)
++  {
++    for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next())
++    {
++      if (ex.Current().IsSame(Sp->Edges(i)))
++      {
++        return Sp->Edges(i);
++      }
++    }
++  }
++  return TopoDS_Edge();
++}
++
++// Whether the contact of SurfData A on its side onA lies beyond the
++// contact of SurfData B on its side onB, seen from B's edge EB (both on
++// the same face): nearer to EB than B's contact, at points all along.
++static bool contactBeyond(const TopOpeBRepDS_DataStructure&   DStr,
++                          const occ::handle<ChFiDS_SurfData>& A,
++                          const int                           onA,
++                          const occ::handle<ChFiDS_SurfData>& B,
++                          const int                           onB,
++                          const TopoDS_Edge&                  EB,
++                          const double                        Tol)
++{
++  const ChFiDS_FaceInterference& IA = onA == 1 ? A->InterferenceOnS1() : A->InterferenceOnS2();
++  const ChFiDS_FaceInterference& IB = onB == 1 ? B->InterferenceOnS1() : B->InterferenceOnS2();
++  if (IA.LineIndex() <= 0 || IB.LineIndex() <= 0)
++  {
++    return false;
++  }
++  const occ::handle<Geom_Curve>& CA = DStr.Curve(IA.LineIndex()).Curve();
++  const occ::handle<Geom_Curve>& CB = DStr.Curve(IB.LineIndex()).Curve();
++  if (CA.IsNull() || CB.IsNull())
++  {
++    return false;
++  }
++  double       d1 = 0., d2 = 0.;
++  const double ua1 = projectOn(CA, A->Vertex(true, onA).Point(), d1);
++  const double ua2 = projectOn(CA, A->Vertex(false, onA).Point(), d2);
++  if (std::max(d1, d2) > Tol)
++  {
++    return false;
++  }
++  for (int i = 1; i <= 3; i++)
++  {
++    const gp_Pnt Pa = CA->Value(ua1 + (ua2 - ua1) * i / 4.);
++    double       dq = 0.;
++    const double uq = projectOn(CB, Pa, dq);
++    if (dq == RealLast())
++    {
++      return false;
++    }
++    const double dA = distanceToEdge(Pa, EB);
++    const double dB = distanceToEdge(CB->Value(uq), EB);
++    if (dA == RealLast() || dB == RealLast() || dA > dB - Tol)
++    {
++      return false;
++    }
++  }
++  return true;
++}
++
++NCollection_List<occ::handle<ChFiDS_Stripe>> ChFi3d_Builder::OverlappingStripes()
++{
++  NCollection_List<occ::handle<ChFiDS_Stripe>> again;
++  const TopOpeBRepDS_DataStructure&            DStr = myDS->DS();
++  const double                                 tol  = 10. * tolapp3d;
++  for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itA(myListStripe); itA.More();
++       itA.Next())
++  {
++    const occ::handle<ChFiDS_Stripe>& A = itA.Value();
++    NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itB = itA;
++    for (itB.Next(); itB.More(); itB.Next())
++    {
++      const occ::handle<ChFiDS_Stripe>& B = itB.Value();
++      if (A->SetOfSurfData().IsNull() || B->SetOfSurfData().IsNull())
++      {
++        continue;
++      }
++      bool found = false;
++      for (int i = 1; i <= A->SetOfSurfData()->Length() && !found; i++)
++      {
++        const occ::handle<ChFiDS_SurfData>& a = A->SetOfSurfData()->Value(i);
++        for (int j = 1; j <= B->SetOfSurfData()->Length() && !found; j++)
++        {
++          const occ::handle<ChFiDS_SurfData>& b = B->SetOfSurfData()->Value(j);
++          for (int ka = 1; ka <= 2 && !found; ka++)
++          {
++            for (int kb = 1; kb <= 2 && !found; kb++)
++            {
++              if (a->Index(ka) <= 0 || a->Index(ka) != b->Index(kb)
++                  || a->IsOnCurve(ka) || b->IsOnCurve(kb))
++              {
++                continue;
++              }
++              const TopoDS_Face F  = TopoDS::Face(DStr.Shape(a->Index(ka)));
++              const TopoDS_Edge EA = spineEdgeOf(A->Spine(), F);
++              const TopoDS_Edge EB = spineEdgeOf(B->Spine(), F);
++              if (EA.IsNull() || EB.IsNull() || EA.IsSame(EB))
++              {
++                continue;
++              }
++              if (contactBeyond(DStr, a, ka, b, kb, EB, tol)
++                  && contactBeyond(DStr, b, kb, a, ka, EA, tol))
++              {
++                found = true;
++                myOverlapStripes.Append(A);
++                myOverlapFaces.Append(F);
++                myOverlapEdges.Append(EB);
++                myOverlapStripes.Append(B);
++                myOverlapFaces.Append(F);
++                myOverlapEdges.Append(EA);
++              }
++            }
++          }
++        }
++      }
++      if (found)
++      {
++        if (!again.Contains(A))
++        {
++          again.Append(A);
++        }
++        if (!again.Contains(B))
++        {
++          again.Append(B);
++        }
++      }
++    }
++  }
++  return again;
++}
++
++TopoDS_Edge ChFi3d_Builder::OverlapEdge(const occ::handle<ChFiDS_Stripe>& S,
++                                        const TopoDS_Face&                F) const
++{
++  NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itS(myOverlapStripes);
++  NCollection_List<TopoDS_Shape>::Iterator               itF(myOverlapFaces);
++  NCollection_List<TopoDS_Shape>::Iterator               itE(myOverlapEdges);
++  for (; itS.More(); itS.Next(), itF.Next(), itE.Next())
++  {
++    if (itS.Value() == S && itF.Value().IsSame(F))
++    {
++      return TopoDS::Edge(itE.Value());
++    }
++  }
++  return TopoDS_Edge();
++}
++
++void ChFi3d_Builder::RemoveCoincidentStripes()
++{
++  TopOpeBRepDS_DataStructure&  DStr = myDS->ChangeDS();
++  NCollection_List<occ::handle<ChFiDS_Stripe>> kept;
++  bool                                         removed = false;
++  for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itB(myListStripe); itB.More();
++       itB.Next())
++  {
++    const occ::handle<ChFiDS_Stripe>& B = itB.Value();
++    bool                              redundant = false;
++    for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itA(kept);
++         itA.More() && !redundant;
++         itA.Next())
++    {
++      const occ::handle<ChFiDS_Stripe>& A = itA.Value();
++      if (A->SetOfSurfData().IsNull() || B->SetOfSurfData().IsNull()
++          || B->SetOfSurfData()->IsEmpty())
++      {
++        continue;
++      }
++      redundant = true;
++      for (int j = 1; j <= B->SetOfSurfData()->Length() && redundant; j++)
++      {
++        bool found = false;
++        for (int i = 1; i <= A->SetOfSurfData()->Length() && !found; i++)
++        {
++          found = coincidentSurfData(DStr,
++                                     A->SetOfSurfData()->Value(i),
++                                     B->SetOfSurfData()->Value(j),
++                                     10. * tolapp3d);
++        }
++        redundant = found;
++      }
++    }
++    if (redundant)
++    {
++      removed = true;
++      myDroppedStripes.Append(B);
++      continue;
++    }
++    kept.Append(B);
++  }
++  if (!removed)
++  {
++    return;
++  }
++  // (The dropped stripes stay contours of the builder.)
++  // The corners of the stripes kept.
++  myVDataMap.Clear();
++  for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itel(kept); itel.More();
++       itel.Next())
++  {
++    if (itel.Value()->Spine()->FirstStatus() <= ChFiDS_BreakPoint)
++    {
++      myVDataMap.Add(itel.Value()->Spine()->FirstVertex(), itel.Value());
++    }
++    if (itel.Value()->Spine()->LastStatus() <= ChFiDS_BreakPoint)
++    {
++      myVDataMap.Add(itel.Value()->Spine()->LastVertex(), itel.Value());
+     }
+   }
+ }
+@@ -292,6 +608,38 @@
+     done = true;
+   }
+   done = (badstripes.IsEmpty());
++  // Stripes whose blends overlap all along on a face between their edges
++  // are computed again overflowing that face; stripes that then make the
++  // blend of another are dropped with their corners.
++  if (done)
++  {
++    const NCollection_List<occ::handle<ChFiDS_Stripe>> again = OverlappingStripes();
++    for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator it(again); it.More(); it.Next())
++    {
++      occ::handle<ChFiDS_Stripe> st = it.Value();
++      st->Reset();
++      st->Spine()->SetErrorStatus(ChFiDS_Ok);
++      try
++      {
++        OCC_CATCH_SIGNALS
++        PerformSetOfSurf(st);
++      }
++      catch (Standard_Failure const& anException)
++      {
++        (void)anException;
++        badstripes.Append(st);
++        if (st->Spine()->ErrorStatus() == ChFiDS_Ok)
++        {
++          st->Spine()->SetErrorStatus(ChFiDS_Error);
++        }
++      }
++    }
++    done = badstripes.IsEmpty();
++  }
++  if (done)
++  {
++    RemoveCoincidentStripes();
++  }
+ 
+ #ifdef OCCT_DEBUG // perf
+   ChFi3d_ResultChron(cl_perfsetofsurf, t_perfsetofsurf);
+@@ -357,6 +705,10 @@
+     for (itel.Initialize(myListStripe), i1 = 0; itel.More(); itel.Next(), i1++)
+     {
+       const occ::handle<ChFiDS_Stripe>& st = itel.Value();
++      if (myDroppedStripes.Contains(st))
++      {
++        continue; // its blend is another stripe's
++      }
+       // 05/02/02 akm vvv : (OCC119) First we'll check ain't there
+       //                    intersections between fillets
+       NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itel1;
+@@ -369,6 +721,10 @@
+           continue;
+         }
+         occ::handle<ChFiDS_Stripe> aCheckStripe = itel1.Value();
++        if (myDroppedStripes.Contains(aCheckStripe))
++        {
++          continue;
++        }
+         try
+         {
+           OCC_CATCH_SIGNALS
+@@ -931,6 +1287,10 @@
+   myEVIMap.Clear();
+   badstripes.Clear();
+   badvertices.Clear();
++  myOverlapStripes.Clear();
++  myOverlapFaces.Clear();
++  myOverlapEdges.Clear();
++  myDroppedStripes.Clear();
+ 
+   NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itel;
+   for (itel.Initialize(myListStripe); itel.More();)
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+@@ -761,6 +761,15 @@
+   NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>          myEdgeFirstFace;
+   bool                                                                              done;
+   bool                                                                              hasresult;
++  //! Faces between the edges of two stripes whose blends overlap on them
++  //! (OverlappingStripes): each stripe overflows that face across the
++  //! other's edge (the stripe, the face, the edge, in parallel lists).
++  NCollection_List<occ::handle<ChFiDS_Stripe>>                                      myOverlapStripes;
++  NCollection_List<TopoDS_Shape>                                                    myOverlapFaces;
++  NCollection_List<TopoDS_Shape>                                                    myOverlapEdges;
++  //! Stripes whose blend is another's (RemoveCoincidentStripes): they
++  //! stay contours, but give no faces.
++  NCollection_List<occ::handle<ChFiDS_Stripe>>                                      myDroppedStripes;
+ 
+ private:
+   Standard_EXPORT bool FaceTangency(const TopoDS_Edge&   E0,
+@@ -829,12 +838,15 @@
+                                 gp_Pnt2d&                              P2,
+                                 double&                                First) const;
+ 
+-  //! Start solution of a stripe whose contact line leaves one of the faces
+-  //! of its edges at once, across a boundary edge to a non-tangent face
+-  //! (edge overflow): the blend then either touches that next face (returns
+-  //! 0, HS1/HS2 and P1/P2 updated) or rolls on the boundary edge (returns
+-  //! the side, 1 or 2, of the obstacle: HS, HC, HSref, HCref, W as
+-  //! StartSol gives them for an obstacle). Returns -1 when neither is found.
++  //! Start solution of a stripe whose contact lines leave the faces of its
++  //! edges at once (edge overflow), on one side or both, across boundary
++  //! edges: on each such side the blend touches a face beyond (one or
++  //! more narrow faces away) or, on one side at most, rolls on the
++  //! boundary edge before a face it cannot touch. Returns -1 when no start
++  //! is found, else the side that rolls on an edge: 0 none (HS1/HS2 and
++  //! P1/P2 updated), 1 or 2 (HC, HSref, HCref and W of that side as
++  //! StartSol gives them for an obstacle; the result is a mask of the
++  //! sides, 3 never given).
+   Standard_EXPORT int StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      S,
+                                        const occ::handle<ChFiDS_ElSpine>&     HGuide,
+                                        occ::handle<BRepAdaptor_Surface>&      HS1,
+@@ -844,10 +856,32 @@
+                                        gp_Pnt2d&                              P1,
+                                        gp_Pnt2d&                              P2,
+                                        double&                                First,
+-                                       occ::handle<BRepAdaptor_Curve2d>&      HC,
+-                                       occ::handle<BRepAdaptor_Surface>&      HSref,
+-                                       occ::handle<BRepAdaptor_Curve2d>&      HCref,
+-                                       double&                                W) const;
++                                       occ::handle<BRepAdaptor_Curve2d>&      HC1,
++                                       occ::handle<BRepAdaptor_Surface>&      HSref1,
++                                       occ::handle<BRepAdaptor_Curve2d>&      HCref1,
++                                       double&                                W1,
++                                       occ::handle<BRepAdaptor_Curve2d>&      HC2,
++                                       occ::handle<BRepAdaptor_Surface>&      HSref2,
++                                       occ::handle<BRepAdaptor_Curve2d>&      HCref2,
++                                       double&                                W2) const;
++
++  //! Finds the stripes whose blends overlap on a face between their edges
++  //! (each one's contact on that face lies beyond the other's) all along
++  //! and records them (myOverlapStripes): such a face is narrower than the
++  //! two roundings, which overflow it across each other's edge. Returns
++  //! the stripes to compute again.
++  Standard_EXPORT NCollection_List<occ::handle<ChFiDS_Stripe>> OverlappingStripes();
++
++  //! The edge across which stripe S overflows face F (an overlap found by
++  //! OverlappingStripes), or a null edge.
++  Standard_EXPORT TopoDS_Edge OverlapEdge(const occ::handle<ChFiDS_Stripe>& S,
++                                          const TopoDS_Face&                F) const;
++
++  //! Drops the stripes whose blend lies on another stripe's (the same two
++  //! faces, the same contact curves): edges of a face narrower than their
++  //! roundings, whose balls both overflow onto the faces beyond it. The
++  //! vertices are given the corners of the stripes kept.
++  Standard_EXPORT void RemoveCoincidentStripes();
+ 
+   //! Whether the common point of SurfData SD at its start or end on side
+   //! ons lies on an edge of a face at the vertex Bout ending the spine.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -2596,6 +2596,108 @@
+   return false;
+ }
+ 
++// Whether shape S has vertex V.
++static bool hasVertex(const TopoDS_Shape& S, const TopoDS_Shape& V)
++{
++  for (TopExp_Explorer ex(S, TopAbs_VERTEX); ex.More(); ex.Next())
++  {
++    if (ex.Current().IsSame(V))
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
++// Whether a list holds shape S (in any orientation).
++static bool containsSame(const NCollection_List<TopoDS_Shape>& L, const TopoDS_Shape& S)
++{
++  for (NCollection_List<TopoDS_Shape>::Iterator it(L); it.More(); it.Next())
++  {
++    if (it.Value().IsSame(S))
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
++// The edge of a strip face F opposite its edge Near: the one edge of F that
++// shares no vertex with Near, every vertex of F lying on Near or on it. A
++// null edge when F is no such strip.
++static TopoDS_Edge oppositeEdge(const TopoDS_Face& F, const TopoDS_Edge& Near)
++{
++  TopoDS_Edge aFar;
++  for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next())
++  {
++    const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
++    if (E.IsSame(Near) || BRep_Tool::Degenerated(E))
++    {
++      continue;
++    }
++    bool touches = false;
++    for (TopExp_Explorer exv(E, TopAbs_VERTEX); exv.More() && !touches; exv.Next())
++    {
++      touches = hasVertex(Near, exv.Current());
++    }
++    if (touches)
++    {
++      continue;
++    }
++    if (!aFar.IsNull() && !aFar.IsSame(E))
++    {
++      return TopoDS_Edge();
++    }
++    aFar = E;
++  }
++  if (aFar.IsNull())
++  {
++    return aFar;
++  }
++  for (TopExp_Explorer ex(F, TopAbs_VERTEX); ex.More(); ex.Next())
++  {
++    if (!hasVertex(Near, ex.Current()) && !hasVertex(aFar, ex.Current()))
++    {
++      return TopoDS_Edge();
++    }
++  }
++  return aFar;
++}
++
++// The edges of face F other than Near that end at vertex V are cut there.
++static void cutEdgesAt(TopOpeBRepDS_DataStructure& DStr,
++                       const TopoDS_Face&          F,
++                       const TopoDS_Edge&          Near,
++                       const TopoDS_Vertex&        V)
++{
++  const int   IV = DStr.AddShape(V);
++  TopoDS_Face aF = F;
++  aF.Orientation(TopAbs_FORWARD);
++  for (TopExp_Explorer ex(aF, TopAbs_EDGE); ex.More(); ex.Next())
++  {
++    TopoDS_Edge E = TopoDS::Edge(ex.Current());
++    if (E.IsSame(Near) || BRep_Tool::Degenerated(E))
++    {
++      continue;
++    }
++    E.Orientation(TopAbs_FORWARD);
++    for (TopExp_Explorer exv(E, TopAbs_VERTEX); exv.More(); exv.Next())
++    {
++      const TopoDS_Vertex& vv = TopoDS::Vertex(exv.Current());
++      if (!vv.IsSame(V))
++      {
++        continue;
++      }
++      const int IE = DStr.AddShape(E);
++      QueryAddVertexInEdge(DStr.ChangeShapeInterferences(IE),
++                           IE,
++                           IV,
++                           BRep_Tool::Parameter(vv, E),
++                           TopAbs::Reverse(vv.Orientation()));
++    }
++  }
++}
++
+ //=======================================================================
+ // function : ChFi3d_CutConsumedFaces
+ // purpose  : A SurfData rolling on an obstacle edge (side ons) keeps the
+@@ -2654,56 +2756,80 @@
+       {
+         continue;
+       }
+-      // The consumed face must be a strip between the spine and the
+-      // obstacle edge.
+-      bool isStrip = true;
+-      for (TopExp_Explorer ex(aLeft, TopAbs_VERTEX); ex.More() && isStrip; ex.Next())
+-      {
+-        bool onObst = false;
+-        for (TopExp_Explorer exo(anObst, TopAbs_VERTEX); exo.More() && !onObst; exo.Next())
+-        {
+-          onObst = exo.Current().IsSame(ex.Current());
+-        }
+-        isStrip = onObst || aSpineVertices.Contains(ex.Current());
+-      }
+-      if (!isStrip)
++      // The consumed faces: strips between the spine and the obstacle edge
++      // (all their vertices on their edge toward the obstacle and on the
++      // edge opposite it), from the one at the obstacle edge to the one at
++      // the spine.
++      NCollection_List<TopoDS_Shape> aStrips, aNears;
++      TopoDS_Face                    aCur  = aLeft;
++      TopoDS_Edge                    aNear = TopoDS::Edge(anObst);
++      bool                           atSpine = false;
++      for (int k = 0; k < 8 && !atSpine; k++)
++      {
++        bool onSpine = true;
++        for (TopExp_Explorer ex(aCur, TopAbs_VERTEX); ex.More() && onSpine; ex.Next())
++        {
++          onSpine = hasVertex(aNear, ex.Current()) || aSpineVertices.Contains(ex.Current());
++        }
++        aStrips.Append(aCur);
++        aNears.Append(aNear);
++        if (onSpine)
++        {
++          atSpine = true;
++          break;
++        }
++        const TopoDS_Edge aFar = oppositeEdge(aCur, aNear);
++        if (aFar.IsNull() || !EFMap.Contains(aFar))
++        {
++          break;
++        }
++        TopoDS_Face aNext;
++        for (NCollection_List<TopoDS_Shape>::Iterator it(EFMap(aFar)); it.More(); it.Next())
++        {
++          if (!it.Value().IsSame(aCur))
++          {
++            aNext = TopoDS::Face(it.Value());
++          }
++        }
++        if (aNext.IsNull() || aNext.IsSame(aFace) || containsSame(aStrips, aNext))
++        {
++          break;
++        }
++        aCur  = aNext;
++        aNear = aFar;
++      }
++      if (!atSpine)
+       {
+         continue;
+       }
+-      // Its other edges at the ends of the blend.
++      // The ends of the blend on the obstacle edge.
++      NCollection_List<TopoDS_Shape> anEnds;
+       for (int f = 0; f < 2; f++)
+       {
+         const ChFiDS_CommonPoint& CP = Fd->Vertex(f == 0, ons);
+-        if (!CP.IsVertex())
+-        {
+-          continue;
+-        }
+-        const TopoDS_Vertex& V      = CP.Vertex();
+-        const int            IV     = DStr.AddShape(V);
+-        TopoDS_Face          aLeftF = aLeft;
+-        aLeftF.Orientation(TopAbs_FORWARD);
+-        for (TopExp_Explorer ex(aLeftF, TopAbs_EDGE); ex.More(); ex.Next())
+-        {
+-          TopoDS_Edge E = TopoDS::Edge(ex.Current());
+-          if (E.IsSame(anObst) || BRep_Tool::Degenerated(E))
++        if (CP.IsVertex())
++        {
++          anEnds.Append(CP.Vertex());
++        }
++      }
++      // Each strip's other edges at the ends of the blend (on the strips
++      // beyond the first: at the ends of its edge toward the obstacle) are
++      // cut there.
++      NCollection_List<TopoDS_Shape>::Iterator itS(aStrips), itN(aNears);
++      for (bool first = true; itS.More(); itS.Next(), itN.Next(), first = false)
++      {
++        if (!first && anEnds.Extent() < 2)
++        {
++          break;
++        }
++        const TopoDS_Edge& aStripNear = TopoDS::Edge(itN.Value());
++        for (TopExp_Explorer exv(aStripNear, TopAbs_VERTEX); exv.More(); exv.Next())
++        {
++          if (first && !containsSame(anEnds, exv.Current()))
+           {
+             continue;
+           }
+-          E.Orientation(TopAbs_FORWARD);
+-          for (TopExp_Explorer exv(E, TopAbs_VERTEX); exv.More(); exv.Next())
+-          {
+-            const TopoDS_Vertex& vv = TopoDS::Vertex(exv.Current());
+-            if (!vv.IsSame(V))
+-            {
+-              continue;
+-            }
+-            const int IE = DStr.AddShape(E);
+-            QueryAddVertexInEdge(DStr.ChangeShapeInterferences(IE),
+-                                 IE,
+-                                 IV,
+-                                 BRep_Tool::Parameter(vv, E),
+-                                 TopAbs::Reverse(vv.Orientation()));
+-          }
++          cutEdgesAt(DStr, TopoDS::Face(itS.Value()), aStripNear, TopoDS::Vertex(exv.Current()));
+         }
+       }
+     }
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -17,7 +17,9 @@
+ #include <Adaptor2d_Curve2d.hxx>
+ #include <Blend_FuncInv.hxx>
+ #include <BRepBlend_Line.hxx>
++#include <BRepExtrema_DistShapeShape.hxx>
+ #include <BRepLib_MakeFace.hxx>
++#include <BRepLib_MakeVertex.hxx>
+ #include <BRepLProp_SLProps.hxx>
+ #include <BRepTools.hxx>
+ #include <BRepTools_WireExplorer.hxx>
+@@ -1136,14 +1138,17 @@
+ 
+ // Whether a circle tangent to surface S1 at (U1, V1) and to S2 at (U2, V2)
+ // exists: the normal lines through both points meet at a point as far from
+-// both. Rejects the false roots a section solver may stop at.
+-static bool isTangentCircle(const Adaptor3d_Surface& S1,
+-                            const double             U1,
+-                            const double             V1,
+-                            const Adaptor3d_Surface& S2,
+-                            const double             U2,
+-                            const double             V2,
+-                            const double             Tol)
++// both. Rejects the false roots a section solver may stop at. The circle's
++// centre C and radius R.
++static bool tangentCircle(const Adaptor3d_Surface& S1,
++                          const double             U1,
++                          const double             V1,
++                          const Adaptor3d_Surface& S2,
++                          const double             U2,
++                          const double             V2,
++                          const double             Tol,
++                          gp_Pnt&                  C,
++                          double&                  R)
+ {
+   gp_Pnt P1, P2;
+   gp_Vec D1U, D1V, D2U, D2V;
+@@ -1168,7 +1173,28 @@
+   const double c  = (e - b * d) / den;
+   const gp_Pnt C1 = P1.Translated(a * N1);
+   const gp_Pnt C2 = P2.Translated(c * N2);
++  C               = gp_Pnt(0.5 * (C1.XYZ() + C2.XYZ()));
++  R               = 0.5 * (std::abs(a) + std::abs(c));
+   return C1.Distance(C2) < Tol && std::abs(std::abs(a) - std::abs(c)) < Tol;
++}
++
++// Whether the ball of centre C and radius R clears the faces: none comes
++// nearer to its centre than R (within Tol).
++static bool ballClears(const gp_Pnt&                         C,
++                       const double                          R,
++                       const NCollection_List<TopoDS_Shape>& Faces,
++                       const double                          Tol)
++{
++  const TopoDS_Vertex V = BRepLib_MakeVertex(C);
++  for (NCollection_List<TopoDS_Shape>::Iterator it(Faces); it.More(); it.Next())
++  {
++    BRepExtrema_DistShapeShape dist(V, it.Value());
++    if (dist.IsDone() && dist.Value() < R - Tol)
++    {
++      return false;
++    }
++  }
++  return true;
+ }
+ 
+ // The occurrence of edge E in face F (taken FORWARD), or a null edge.
+@@ -1184,6 +1210,121 @@
+     }
+   }
+   return TopoDS_Edge();
++}
++
++// The boundary edge of face F, other than Skip1 and Skip2, that crosses
++// the plane Plane nearest to the segment [A, B]: its parameter W where it
++// crosses and the distance Dist of the crossing from the segment. A null
++// edge when none crosses.
++static TopoDS_Edge crossedEdge(const TopoDS_Face&                      F,
++                               const occ::handle<GeomAdaptor_Surface>& Plane,
++                               const gp_Pnt&                           A,
++                               const gp_Pnt&                           B,
++                               const TopoDS_Edge&                      Skip1,
++                               const TopoDS_Edge&                      Skip2,
++                               const double                            Tol,
++                               double&                                 W,
++                               double&                                 Dist)
++{
++  TopoDS_Edge arc;
++  Dist = RealLast();
++  for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next())
++  {
++    const TopoDS_Edge& ecur = TopoDS::Edge(ex.Current());
++    if (ecur.IsSame(Skip1) || ecur.IsSame(Skip2) || BRep_Tool::Degenerated(ecur))
++    {
++      continue;
++    }
++    occ::handle<BRepAdaptor_Curve> hc = new BRepAdaptor_Curve(ecur);
++    IntCurveSurface_HInter         inter;
++    inter.Perform(hc, Plane);
++    if (!inter.IsDone())
++    {
++      continue;
++    }
++    const double tolc = hc->Resolution(Tol);
++    for (int ip = 1; ip <= inter.NbPoints(); ip++)
++    {
++      const double cw = inter.Point(ip).W();
++      if (cw < hc->FirstParameter() - tolc || cw > hc->LastParameter() + tolc)
++      {
++        continue;
++      }
++      const double d = distanceToSegment(inter.Point(ip).Pnt(), A, B);
++      if (d < Dist)
++      {
++        Dist = d;
++        arc  = ecur;
++        W    = cw;
++      }
++    }
++  }
++  return arc;
++}
++
++// Where edge E crosses the plane Plane (its parameter W, nearest to point
++// A); false when it does not.
++static bool crossingOf(const TopoDS_Edge&                      E,
++                       const occ::handle<GeomAdaptor_Surface>& Plane,
++                       const gp_Pnt&                           A,
++                       const double                            Tol,
++                       double&                                 W)
++{
++  occ::handle<BRepAdaptor_Curve> hc = new BRepAdaptor_Curve(E);
++  IntCurveSurface_HInter         inter;
++  inter.Perform(hc, Plane);
++  if (!inter.IsDone())
++  {
++    return false;
++  }
++  const double tolc = hc->Resolution(Tol);
++  double       best = RealLast();
++  for (int ip = 1; ip <= inter.NbPoints(); ip++)
++  {
++    const double cw = inter.Point(ip).W();
++    if (cw < hc->FirstParameter() - tolc || cw > hc->LastParameter() + tolc)
++    {
++      continue;
++    }
++    const double d = inter.Point(ip).Pnt().Distance(A);
++    if (d < best)
++    {
++      best = d;
++      W    = cw;
++    }
++  }
++  return best < RealLast();
++}
++
++// Whether a list holds shape S (in any orientation).
++static bool containsSameShape(const NCollection_List<TopoDS_Shape>& L, const TopoDS_Shape& S)
++{
++  for (NCollection_List<TopoDS_Shape>::Iterator it(L); it.More(); it.Next())
++  {
++    if (it.Value().IsSame(S))
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
++// The face that shares edge E with face F, or a null face.
++static TopoDS_Face otherFace(const ChFiDS_Map& EFMap, const TopoDS_Edge& E, const TopoDS_Face& F)
++{
++  TopoDS_Face Fn;
++  if (!EFMap.Contains(E))
++  {
++    return Fn;
++  }
++  for (NCollection_List<TopoDS_Shape>::Iterator it(EFMap(E)); it.More(); it.Next())
++  {
++    if (!it.Value().IsSame(F))
++    {
++      Fn = TopoDS::Face(it.Value());
++    }
++  }
++  return Fn;
+ }
+ 
+ //=================================================================================================
+@@ -1217,10 +1358,14 @@
+                                      gp_Pnt2d&                              P1,
+                                      gp_Pnt2d&                              P2,
+                                      double&                                First,
+-                                     occ::handle<BRepAdaptor_Curve2d>&      HC,
+-                                     occ::handle<BRepAdaptor_Surface>&      HSref,
+-                                     occ::handle<BRepAdaptor_Curve2d>&      HCref,
+-                                     double&                                W) const
++                                     occ::handle<BRepAdaptor_Curve2d>&      HC1,
++                                     occ::handle<BRepAdaptor_Surface>&      HSref1,
++                                     occ::handle<BRepAdaptor_Curve2d>&      HCref1,
++                                     double&                                W1,
++                                     occ::handle<BRepAdaptor_Curve2d>&      HC2,
++                                     occ::handle<BRepAdaptor_Surface>&      HSref2,
++                                     occ::handle<BRepAdaptor_Curve2d>&      HCref2,
++                                     double&                                W2) const
+ {
+   const occ::handle<ChFiDS_Spine>& Spine      = Stripe->Spine();
+   ChFiDS_ElSpine&                  els        = *HGuide;
+@@ -1229,7 +1374,8 @@
+   const double wf = 0.9981 * Spine->FirstParameter(1) + 0.0019 * Spine->LastParameter(1);
+   const double wl = 0.9973 * Spine->LastParameter(nbed) + 0.0027 * Spine->FirstParameter(nbed);
+   const int    RC = Stripe->Choix();
+-  const bool   isFillet = !occ::down_cast<ChFiDS_FilSpine>(Spine).IsNull();
++  const occ::handle<ChFiDS_FilSpine> fsp = occ::down_cast<ChFiDS_FilSpine>(Spine);
++  const bool                         isFillet = !fsp.IsNull();
+   if (!isFillet)
+   {
+     return -1; // chamfers do not roll over edges
+@@ -1240,7 +1386,6 @@
+                   Spine->FirstParameter(1),
+                   Spine->LastParameter(nbed),
+                   Precision::Confusion());
+-  math_Vector SolDep(1, 4);
+   for (int nbessai = 0; nbessai <= nbessaimax; nbessai++)
+   {
+     const double t     = double(nbessai) / nbessaimax;
+@@ -1255,6 +1400,7 @@
+       continue;
+     }
+     double woned;
++    const double radius = fsp->IsConstant(iedge) ? fsp->Radius(iedge) : fsp->MaxRadFromSeqAndLaws();
+     Spine->Parameter(iedge, w, woned, true);
+     const BRepAdaptor_Curve& Ced = Spine->CurrentElementarySpine(iedge);
+     const gp_Pnt             pnt = Ced.Value(woned);
+@@ -1272,193 +1418,342 @@
+     {
+       continue;
+     }
+-    P1 = PC1->Value(woned);
+-    P2 = PC2->Value(woned);
+-
+-    // The section on the surfaces of both faces, not bounded by them.
+-    occ::handle<BRepAdaptor_Surface> U1 = new BRepAdaptor_Surface(f1, false);
+-    occ::handle<BRepAdaptor_Surface> U2 = new BRepAdaptor_Surface(f2, false);
+-    I1->Initialize((const occ::handle<Adaptor3d_Surface>&)U1);
+-    I2->Initialize((const occ::handle<Adaptor3d_Surface>&)U2);
+-    TopAbs_Orientation Or1   = f1.Orientation();
+-    TopAbs_Orientation Or2   = f2.Orientation();
+-    const int          Choix = ChFi3d::NextSide(Or1,
+-                                       Or2,
+-                                       Stripe->OrientationOnFace1(),
+-                                       Stripe->OrientationOnFace2(),
+-                                       RC);
+-    SolDep(1) = P1.X();
+-    SolDep(2) = P1.Y();
+-    SolDep(3) = P2.X();
+-    SolDep(4) = P2.Y();
+-    TopAbs_State Pos1 = TopAbs_UNKNOWN, Pos2 = TopAbs_UNKNOWN;
+-    PerformFirstSection(Spine, HGuide, Choix, U1, U2, I1, I2, w, SolDep, Pos1, Pos2);
+-    int ons = 0;
+-    if (Pos1 == TopAbs_OUT && (Pos2 == TopAbs_IN || Pos2 == TopAbs_ON))
+-    {
+-      ons = 1;
+-    }
+-    else if (Pos2 == TopAbs_OUT && (Pos1 == TopAbs_IN || Pos1 == TopAbs_ON))
+-    {
+-      ons = 2;
+-    }
+-    if (ons == 0)
+-    {
+-      continue;
+-    }
+-    const TopoDS_Face& Fk = ons == 1 ? f1 : f2;
+-    const gp_Pnt Pc = ons == 1 ? U1->Value(SolDep(1), SolDep(2)) : U2->Value(SolDep(3), SolDep(4));
+-
+-    // The boundary edge of Fk the section crosses between the spine and
+-    // the contact point.
+     gp_Pnt P;
+     gp_Vec V;
+     HGuide->D1(w, P, V);
+     occ::handle<GeomAdaptor_Surface> plane =
+       new GeomAdaptor_Surface(new Geom_Plane(P, gp_Dir(V)));
+-    TopoDS_Edge arc;
+-    double      warc = 0., best = RealLast();
+-    for (TopExp_Explorer ex(Fk, TopAbs_EDGE); ex.More(); ex.Next())
+-    {
+-      const TopoDS_Edge& ecur = TopoDS::Edge(ex.Current());
+-      if (ecur.IsSame(cured) || BRep_Tool::Degenerated(ecur))
++
++    // Each side's support: the face of the edge, or a face beyond it across
++    // a boundary edge (`entry`, crossed at `went`; `before` the face on the
++    // spine's side of it). A side whose ball cannot touch the face beyond
++    // the edge rolls on that edge.
++    TopoDS_Face face[2]   = {f1, f2};
++    TopoDS_Face before[2] = {TopoDS_Face(), TopoDS_Face()};
++    TopoDS_Edge entry[2]  = {cured, cured};
++    double      went[2]   = {woned, woned};
++    gp_Pnt2d    uv[2]     = {PC1->Value(woned), PC2->Value(woned)};
++    bool        rolls[2]  = {false, false};
++    NCollection_List<TopoDS_Shape> passed;
++    int                            lastMoved = -1;
++    bool                           failed    = false;
++    math_Vector                    Sol(1, 4);
++    TopAbs_State                   pos[2] = {TopAbs_UNKNOWN, TopAbs_UNKNOWN};
++    gp_Pnt                         C;
++    double                         R = 0.;
++    occ::handle<BRepAdaptor_Surface> S[2];
++
++    // The section on the faces (bounded) or on their surfaces.
++    auto section = [&](const bool bounded) {
++      for (int k = 0; k < 2; k++)
++      {
++        S[k] = new BRepAdaptor_Surface(face[k], bounded);
++      }
++      Sol(1) = uv[0].X();
++      Sol(2) = uv[0].Y();
++      Sol(3) = uv[1].X();
++      Sol(4) = uv[1].Y();
++      I1->Initialize((const occ::handle<Adaptor3d_Surface>&)S[0]);
++      I2->Initialize((const occ::handle<Adaptor3d_Surface>&)S[1]);
++      TopAbs_Orientation Or1   = face[0].Orientation();
++      TopAbs_Orientation Or2   = face[1].Orientation();
++      const int          Choix = ChFi3d::NextSide(Or1,
++                                         Or2,
++                                         Stripe->OrientationOnFace1(),
++                                         Stripe->OrientationOnFace2(),
++                                         RC);
++      pos[0] = pos[1] = TopAbs_UNKNOWN;
++      // (A section on the surfaces is solved when it is outside a face.)
++      const bool solved =
++        PerformFirstSection(Spine, HGuide, Choix, S[0], S[1], I1, I2, w, Sol, pos[0], pos[1])
++        || (!bounded && pos[0] != TopAbs_UNKNOWN && pos[1] != TopAbs_UNKNOWN);
++      return solved
++             && tangentCircle(*S[0], Sol(1), Sol(2), *S[1], Sol(3), Sol(4), 10. * tolapp3d, C, R);
++    };
++    // Side k goes on across edge en of its face, crossed at wn.
++    auto moveOn = [&](const int k, const TopoDS_Edge& en, const double wn) {
++      const TopoDS_Face Fn = otherFace(myEFMap, en, face[k]);
++      if (Fn.IsNull())
++      {
++        return false;
++      }
++      const TopoDS_Edge enOnFn = edgeInFace(en, Fn);
++      if (enOnFn.IsNull())
++      {
++        return false;
++      }
++      const occ::handle<Geom2d_Curve> pc = getCurveOnSurface(enOnFn, Fn);
++      if (pc.IsNull())
++      {
++        return false;
++      }
++      passed.Append(face[k]);
++      before[k] = face[k];
++      face[k]   = Fn;
++      entry[k]  = en;
++      went[k]   = wn;
++      uv[k]     = pc->Value(wn);
++      lastMoved = k;
++      return true;
++    };
++    // Where side k rolls if the faces beyond a face its ball touches at no
++    // point (a sliver) cannot be touched either: on the edge before it.
++    bool        hasFallback[2] = {false, false};
++    TopoDS_Face fbBefore[2], fbFace[2];
++    TopoDS_Edge fbEntry[2];
++    double      fbWent[2] = {0., 0.};
++    // Side k rolls on its entry edge (or the fallback's), unless the faces
++    // there are tangent (the blend can only run onto the next face).
++    auto roll = [&](const int k) {
++      if (hasFallback[k])
++      {
++        before[k] = fbBefore[k];
++        face[k]   = fbFace[k];
++        entry[k]  = fbEntry[k];
++        went[k]   = fbWent[k];
++      }
++      if (before[k].IsNull() || ChFi3d::IsTangentFaces(entry[k], before[k], face[k]))
++      {
++        failed = true;
++        return;
++      }
++      rolls[k] = true;
++    };
++
++    // The side that moved over a face its ball touches at no point (once).
++    int blind = -1;
++    // The ball touching the faces reached cuts into faces around those it
++    // passed at this section.
++    bool elsewhere = false;
++    for (int iter = 0; iter < 8 && !failed && !rolls[0] && !rolls[1]; iter++)
++    {
++      if (!section(false))
++      {
++        // Tangent to no point of the last face's surface (a sliver): the
++        // face beyond its edge nearest to the last edge is tried, within the
++        // size of the rounding; else the ball rolls on that edge.
++        if (lastMoved < 0)
++        {
++          failed = true;
++          break;
++        }
++        if (blind >= 0)
++        {
++          roll(blind);
++          break;
++        }
++        const int    k  = lastMoved;
++        const gp_Pnt Pa = BRepAdaptor_Curve(entry[k]).Value(went[k]);
++        double       wn = 0., dn = RealLast();
++        const TopoDS_Edge en =
++          crossedEdge(face[k], plane, Pa, Pa, entry[k], cured, tolapp3d, wn, dn);
++        // (A ball passes over no face wider than its diameter.)
++        const double reach = 2. * radius + tolapp3d;
++        if (!hasFallback[k])
++        {
++          hasFallback[k] = true;
++          fbBefore[k]    = before[k];
++          fbFace[k]      = face[k];
++          fbEntry[k]     = entry[k];
++          fbWent[k]      = went[k];
++        }
++        if (!en.IsNull() && dn <= reach && moveOn(k, en, wn))
++        {
++          blind = k;
++          continue;
++        }
++        roll(k);
++        break;
++      }
++      bool in[2] = {pos[0] == TopAbs_IN || pos[0] == TopAbs_ON,
++                    pos[1] == TopAbs_IN || pos[1] == TopAbs_ON};
++      // (The start on a side is the contact of a section inside its face.)
++      if (in[0])
++      {
++        uv[0].SetCoord(Sol(1), Sol(2));
++      }
++      if (in[1])
++      {
++        uv[1].SetCoord(Sol(3), Sol(4));
++      }
++      // A face of the edge narrower than this rounding and another stripe's
++      // on its other edge (OverlappingStripes): the side goes on across that
++      // edge.
++      bool forcedMove = false;
++      for (int k = 0; k < 2; k++)
++      {
++        double            wf2    = 0.;
++        const TopoDS_Edge forced = before[k].IsNull() ? OverlapEdge(Stripe, face[k]) : TopoDS_Edge();
++        if (!forced.IsNull() && crossingOf(forced, plane, P, tolapp3d, wf2) && moveOn(k, forced, wf2))
++        {
++          forcedMove = true;
++          in[k]      = false;
++        }
++      }
++      if (forcedMove)
+       {
+         continue;
+       }
+-      occ::handle<BRepAdaptor_Curve> hc = new BRepAdaptor_Curve(ecur);
+-      IntCurveSurface_HInter         inter;
+-      inter.Perform(hc, plane);
+-      if (!inter.IsDone())
+-      {
++      if (in[0] && in[1])
++      {
++        if (lastMoved < 0)
++        {
++          failed = true; // on the edge's faces: no overflow
++          break;
++        }
++        // The ball touching the faces it reached, clear of those it passed.
++        // (Clear of the faces around those passed too, but for the faces
++        // touched: a ball touching a face beyond on the wrong branch of its
++        // surface cuts into them.)
++        NCollection_List<TopoDS_Shape> around;
++        for (NCollection_List<TopoDS_Shape>::Iterator itp(passed); itp.More(); itp.Next())
++        {
++          for (TopExp_Explorer ex(itp.Value(), TopAbs_EDGE); ex.More(); ex.Next())
++          {
++            const TopoDS_Face Fa = otherFace(myEFMap, TopoDS::Edge(ex.Current()), TopoDS::Face(itp.Value()));
++            if (!Fa.IsNull() && !Fa.IsSame(face[0]) && !Fa.IsSame(face[1]) && !containsSameShape(passed, Fa)
++                && !containsSameShape(around, Fa))
++            {
++              around.Append(Fa);
++            }
++          }
++        }
++        const bool touches = section(true) && ballClears(C, R, passed, tolapp3d);
++        if (touches && !ballClears(C, R, around, tolapp3d))
++        {
++          failed    = true; // (here; a section further along the spine may do)
++          elsewhere = true;
++          break;
++        }
++        if (touches)
++        {
++          HS1 = S[0];
++          HS2 = S[1];
++          P1.SetCoord(Sol(1), Sol(2));
++          P2.SetCoord(Sol(3), Sol(4));
++          First = w;
++          return 0;
++        }
++        roll(lastMoved);
++        break;
++      }
++      // Each side whose contact lies outside its face: beyond an edge of
++      // the face, the face beyond is tried; before its entry edge, the ball
++      // cannot touch the face and rolls on that edge. A side that rolls
++      // ends the search (the other side's contact comes from a ball that is
++      // not the blend's).
++      const gp_Pnt Pc[2] = {S[0]->Value(Sol(1), Sol(2)), S[1]->Value(Sol(3), Sol(4))};
++      TopoDS_Edge  en[2];
++      double       wn[2]       = {0., 0.};
++      bool         toRoll[2]   = {false, false};
++      for (int k = 0; k < 2; k++)
++      {
++        if (in[k])
++        {
++          continue;
++        }
++        const bool   atSpine = before[k].IsNull();
++        const gp_Pnt Pa      = atSpine ? P : BRepAdaptor_Curve(entry[k]).Value(went[k]);
++        double       dn      = RealLast();
++        en[k] = crossedEdge(face[k], plane, Pa, Pc[k], entry[k], cured, tolapp3d, wn[k], dn);
++        if (!en[k].IsNull() && dn <= 0.25 * Pa.Distance(Pc[k]) + tolapp3d)
++        {
++          continue;
++        }
++        en[k].Nullify();
++        toRoll[k] = !atSpine;
++      }
++      if (toRoll[0] || toRoll[1])
++      {
++        for (int k = 0; k < 2; k++)
++        {
++          if (toRoll[k])
++          {
++            roll(k);
++          }
++        }
++        break;
++      }
++      bool moved = false;
++      for (int k = 0; k < 2; k++)
++      {
++        if (!en[k].IsNull() && moveOn(k, en[k], wn[k]))
++        {
++          moved = true;
++        }
++      }
++      // (A side outside its face at the spine with no edge crossed may come
++      // onto it once the other side has moved.)
++      if (!moved)
++      {
++        failed = true;
++        break;
++      }
++    }
++    // A side that went on over a face its ball touches at no point and
++    // reached no face it touches rolls on the edge before that face.
++    if (blind >= 0 && !rolls[0] && !rolls[1] && !elsewhere)
++    {
++      failed = false;
++      roll(blind);
++    }
++    // (A ball rolling on edges on both sides touches no face: no rounding
++    // of the edge, the faces are too narrow for the ball on both sides.)
++    if (failed || (!rolls[0] && !rolls[1]) || (rolls[0] && rolls[1]))
++    {
++      continue;
++    }
++
++    // The blend rolling on the boundary edge of one side or both: an
++    // obstacle as StartSol sets it up when a walking meets one.
++    occ::handle<BRepAdaptor_Surface> HS[2]    = {HS1, HS2};
++    occ::handle<BRepAdaptor_Curve2d> HC[2]    = {HC1, HC2};
++    occ::handle<BRepAdaptor_Surface> HSref[2] = {HSref1, HSref2};
++    occ::handle<BRepAdaptor_Curve2d> HCref[2] = {HCref1, HCref2};
++    double                           W[2]     = {W1, W2};
++    gp_Pnt2d                         Pk[2];
++    bool                             ok = true;
++    for (int k = 0; k < 2 && ok; k++)
++    {
++      HS[k] = new BRepAdaptor_Surface(face[k]);
++      if (!rolls[k])
++      {
++        Pk[k] = uv[k];
+         continue;
+       }
+-      const double tolc = hc->Resolution(tolapp3d);
+-      for (int ip = 1; ip <= inter.NbPoints(); ip++)
+-      {
+-        const double cw = inter.Point(ip).W();
+-        if (cw < hc->FirstParameter() - tolc || cw > hc->LastParameter() + tolc)
+-        {
+-          continue;
+-        }
+-        const double d = distanceToSegment(inter.Point(ip).Pnt(), P, Pc);
+-        if (d < best)
+-        {
+-          best = d;
+-          arc  = ecur;
+-          warc = cw;
+-        }
+-      }
+-    }
+-    if (arc.IsNull())
++      const TopoDS_Edge onBefore = edgeInFace(entry[k], before[k]);
++      const TopoDS_Edge onFace   = edgeInFace(entry[k], face[k]);
++      if (onBefore.IsNull() || onFace.IsNull())
++      {
++        ok = false;
++        break;
++      }
++      HSref[k] = new BRepAdaptor_Surface(before[k]);
++      HCref[k] = new BRepAdaptor_Curve2d(onBefore, before[k]);
++      HC[k]    = new BRepAdaptor_Curve2d(onFace, face[k]);
++      W[k]     = went[k];
++      Pk[k]    = HC[k]->Value(W[k]);
++    }
++    if (!ok)
+     {
+       continue;
+     }
+-    TopoDS_Face Fn;
+-    for (NCollection_List<TopoDS_Shape>::Iterator it(myEFMap(arc)); it.More(); it.Next())
+-    {
+-      if (!it.Value().IsSame(Fk))
+-      {
+-        Fn = TopoDS::Face(it.Value());
+-      }
+-    }
+-    if (Fn.IsNull())
+-    {
+-      continue;
+-    }
+-    // Beyond a tangent edge the blend can only run onto the next face.
+-    const bool isTangent = ChFi3d::IsTangentFaces(arc, Fk, Fn);
+-    const TopoDS_Edge arcOnFk = edgeInFace(arc, Fk);
+-    const TopoDS_Edge arcOnFn = edgeInFace(arc, Fn);
+-    if (arcOnFk.IsNull() || arcOnFn.IsNull())
+-    {
+-      continue;
+-    }
+-    const occ::handle<Geom2d_Curve> pcFn = getCurveOnSurface(arcOnFn, Fn);
+-    if (pcFn.IsNull())
+-    {
+-      continue;
+-    }
+-
+-    // The blend touching the next face.
+-    {
+-      occ::handle<BRepAdaptor_Surface> Hn = new BRepAdaptor_Surface(Fn);
+-      occ::handle<BRepAdaptor_Surface> Ho = ons == 1 ? HS2 : HS1;
+-      math_Vector                      SolN(1, 4);
+-      const gp_Pnt2d                   pn = pcFn->Value(warc);
+-      if (ons == 1)
+-      {
+-        SolN(1) = pn.X();
+-        SolN(2) = pn.Y();
+-        SolN(3) = SolDep(3);
+-        SolN(4) = SolDep(4);
+-        I1->Initialize((const occ::handle<Adaptor3d_Surface>&)Hn);
+-        I2->Initialize((const occ::handle<Adaptor3d_Surface>&)Ho);
+-      }
+-      else
+-      {
+-        SolN(1) = SolDep(1);
+-        SolN(2) = SolDep(2);
+-        SolN(3) = pn.X();
+-        SolN(4) = pn.Y();
+-        I1->Initialize((const occ::handle<Adaptor3d_Surface>&)Ho);
+-        I2->Initialize((const occ::handle<Adaptor3d_Surface>&)Hn);
+-      }
+-      occ::handle<BRepAdaptor_Surface> S1 = ons == 1 ? Hn : Ho;
+-      occ::handle<BRepAdaptor_Surface> S2 = ons == 1 ? Ho : Hn;
+-      TopAbs_Orientation OrN1   = S1->Face().Orientation();
+-      TopAbs_Orientation OrN2   = S2->Face().Orientation();
+-      const int          ChoixN = ChFi3d::NextSide(OrN1,
+-                                          OrN2,
+-                                          Stripe->OrientationOnFace1(),
+-                                          Stripe->OrientationOnFace2(),
+-                                          RC);
+-      TopAbs_State N1 = TopAbs_UNKNOWN, N2 = TopAbs_UNKNOWN;
+-      bool         onNext =
+-        PerformFirstSection(Spine, HGuide, ChoixN, S1, S2, I1, I2, w, SolN, N1, N2);
+-      if (onNext
+-          && !isTangentCircle(*S1, SolN(1), SolN(2), *S2, SolN(3), SolN(4), 10. * tolapp3d))
+-      {
+-        onNext = false;
+-      }
+-      if (onNext)
+-      {
+-        HS1 = S1;
+-        HS2 = S2;
+-        P1.SetCoord(SolN(1), SolN(2));
+-        P2.SetCoord(SolN(3), SolN(4));
+-        First = w;
+-        return 0;
+-      }
+-    }
+-
+-    if (isTangent)
+-    {
+-      continue;
+-    }
+-    // The blend rolling on the boundary edge: an obstacle as StartSol sets
+-    // it up when a walking meets one.
+-    HSref = new BRepAdaptor_Surface(Fk);
+-    HCref = new BRepAdaptor_Curve2d(arcOnFk, Fk);
+-    HC    = new BRepAdaptor_Curve2d(arcOnFn, Fn);
+-    W     = warc;
+-    if (ons == 1)
+-    {
+-      HS1->Initialize(Fn);
+-      HS2->Initialize(f2);
+-      P1 = HC->Value(W);
+-      P2.SetCoord(SolDep(3), SolDep(4));
+-    }
+-    else
+-    {
+-      HS1->Initialize(f1);
+-      HS2->Initialize(Fn);
+-      P1.SetCoord(SolDep(1), SolDep(2));
+-      P2 = HC->Value(W);
+-    }
++    HS1    = HS[0];
++    HS2    = HS[1];
++    HC1    = HC[0];
++    HC2    = HC[1];
++    HSref1 = HSref[0];
++    HSref2 = HSref[1];
++    HCref1 = HCref[0];
++    HCref2 = HCref[1];
++    W1     = W[0];
++    W2     = W[1];
++    P1     = Pk[0];
++    P2     = Pk[1];
+     I1->Initialize((const occ::handle<Adaptor3d_Surface>&)HS1);
+     I2->Initialize((const occ::handle<Adaptor3d_Surface>&)HS2);
+     First = w;
+-    return ons;
++    return (rolls[0] ? 1 : 0) | (rolls[1] ? 2 : 0);
+   }
+   return -1;
+ }
+@@ -2712,49 +3007,41 @@
+     try
+     {
+       OCC_CATCH_SIGNALS
++      if (myOverlapStripes.Contains(Stripe))
++      {
++        // (A face between this edge and another stripe's narrower than both
++        // roundings: the start overflows it.)
++        throw Standard_Failure("overlapping roundings");
++      }
+       StartSol(Stripe, HGuide, HS1, HS2, It1, It2, pp1, pp2, First);
+     }
+     catch (Standard_Failure const&)
+     {
+-      // The contact line may leave a face at once (edge overflow).
+-      occ::handle<BRepAdaptor_Curve2d> HCo;
+-      occ::handle<BRepAdaptor_Surface> HSrefo;
+-      occ::handle<BRepAdaptor_Curve2d> HCrefo;
+-      double                           Wo = 0.;
+-      const int side = StartSolOverflow(Stripe,
+-                                        HGuide,
+-                                        HS1,
+-                                        HS2,
+-                                        It1,
+-                                        It2,
+-                                        pp1,
+-                                        pp2,
+-                                        First,
+-                                        HCo,
+-                                        HSrefo,
+-                                        HCrefo,
+-                                        Wo);
+-      if (side < 0)
++      // The contact lines may leave the faces at once (edge overflow).
++      const int sides = StartSolOverflow(Stripe,
++                                         HGuide,
++                                         HS1,
++                                         HS2,
++                                         It1,
++                                         It2,
++                                         pp1,
++                                         pp2,
++                                         First,
++                                         HC1,
++                                         HSref1,
++                                         HCref1,
++                                         w1,
++                                         HC2,
++                                         HSref2,
++                                         HCref2,
++                                         w2);
++      if (sides < 0)
+       {
+         throw;
+       }
+       Spine->SetErrorStatus(ChFiDS_Ok);
+-      if (side == 1)
+-      {
+-        HC1         = HCo;
+-        HSref1      = HSrefo;
+-        HCref1      = HCrefo;
+-        w1          = Wo;
+-        obstacleon1 = true;
+-      }
+-      else if (side == 2)
+-      {
+-        HC2         = HCo;
+-        HSref2      = HSrefo;
+-        HCref2      = HCrefo;
+-        w2          = Wo;
+-        obstacleon2 = true;
+-      }
++      obstacleon1 = (sides & 1) != 0;
++      obstacleon2 = (sides & 2) != 0;
+     }
+ 
+     Last = wf;
+@@ -3534,7 +3821,7 @@
+ 
+     ConexFaces(Spine, iedge, HS1, HS2);
+ 
+-    if (ChFi3d_KParticular(Spine, iedge, *HS1, *HS2))
++    if (ChFi3d_KParticular(Spine, iedge, *HS1, *HS2) && !myOverlapStripes.Contains(Stripe))
+     {
+       intf = ((iedge == 1) && !Spine->IsPeriodic());
+       intl = ((iedge == Spine->NbEdges()) && !Spine->IsPeriodic());
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -1259,6 +1259,10 @@
+     for (; aStrIt.More(); aStrIt.Next())
+     {
+       occ::handle<ChFiDS_Stripe> aCheckStripe = aStrIt.Value();
++      if (myDroppedStripes.Contains(aCheckStripe))
++      {
++        continue; // its blend is another stripe's
++      }
+       occ::handle<NCollection_HSequence<occ::handle<ChFiDS_SurfData>>> aSeqData =
+         aCheckStripe->SetOfSurfData();
+       // Loop on parts of the stripe

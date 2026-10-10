@@ -8,7 +8,14 @@
 //! count as their union, experiment K48). The tools are consumed unless
 //! kept. With `new_component` the result (the target) goes into a new
 //! component (F6).
+//!
+//! Tools may be bodies of another component (mitcad#104): `tool_links`
+//! names, per such tool, where it and the combine's component are seen
+//! ([`OccurrenceLink`], `links.rs`). The tool is read in its component and
+//! moved into the combine's coordinates by the placements at the combine's
+//! point of the timeline; a consumed tool leaves its own component.
 
+use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
@@ -19,6 +26,7 @@ use super::{
 };
 use crate::ids::BodyUid;
 use crate::kernel::{BooleanOp, Kernel};
+use crate::links::OccurrenceLink;
 use crate::parameters::ParamId;
 
 /// The combine operations.
@@ -41,6 +49,9 @@ pub struct CombineDef<P = ParamId> {
     /// Puts the result into a new component (`isNewComponent` in .f3d imports).
     #[serde(default, skip_serializing_if = "is_false")]
     pub new_component: bool,
+    /// Tools of other components, by tool (mitcad#104).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_links: BTreeMap<BodyUid, OccurrenceLink>,
     #[serde(skip)]
     pub marker: PhantomData<P>,
 }
@@ -59,6 +70,7 @@ impl<P> CombineDef<P> {
             operation: self.operation,
             keep_tools: self.keep_tools,
             new_component: self.new_component,
+            tool_links: self.tool_links.clone(),
             marker: PhantomData,
         })
     }
@@ -88,6 +100,9 @@ impl FeatureInfo for CombineDef {
             }
             ctx.body(*tool)?;
         }
+        if let Some(other) = self.tool_links.keys().find(|b| !self.tools.contains(b)) {
+            return Err(format!("body {other} is linked but not a tool"));
+        }
         Ok(())
     }
 
@@ -107,7 +122,10 @@ impl<K: Kernel> Evaluate<K> for CombineDef {
         let tools = self
             .tools
             .iter()
-            .map(|uid| ctx.body(*uid))
+            .map(|uid| match self.tool_links.get(uid) {
+                Some(link) => linked_tool(ctx, *uid, link),
+                None => ctx.body(*uid),
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let kernel = ctx.kernel;
         let error = |e: crate::kernel::KernelError| e.to_string();
@@ -167,4 +185,17 @@ impl<K: Kernel> Evaluate<K> for CombineDef {
             ..FeatureOutput::default()
         })
     }
+}
+
+/// A tool of another component, moved into the combine's coordinates.
+fn linked_tool<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    uid: BodyUid,
+    link: &OccurrenceLink,
+) -> Result<K::Shape, String> {
+    let (component, transform) = ctx.linked(link).map_err(|e| format!("tool {uid}: {e}"))?;
+    let shape = ctx.body_in(component, uid)?;
+    ctx.kernel
+        .transform_shape(&shape, &transform, None)
+        .map_err(|e| format!("tool {uid}: {e}"))
 }

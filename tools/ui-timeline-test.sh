@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/browser
 # The timeline (U3) through the real UI, with the volumes the model reports:
 #   - A failed feature: its tooltip, the status bar's summary that goes to
 #     it, and Delete without dependents.
@@ -21,6 +22,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-timeline-test.sh [screenshot.png]
+# check-all sources: tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 

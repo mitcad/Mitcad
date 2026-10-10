@@ -13,17 +13,21 @@
 //! - Expression nodes start with u32, u16 and their display unit: a
 //!   number (`047aa7f8…`: f64 in internal units, u16, u32), a parameter
 //!   (`057aa7f8…`: its record), the operators `+ - * / % ^` (`067aa7f8…`
-//!   to `0b7aa7f8…`: two operands) and negation (`0c7aa7f8…`: one).
+//!   to `0b7aa7f8…`: two operands), negation (`0c7aa7f8…`: one) and
+//!   parentheses (`0d7aa7f8…`: one).
 //!
 //! An expression is translated into Mitcad's expression language and
-//! evaluated here against the value the file stores.
+//! evaluated here against the value the file stores. A parameter with the
+//! flag [`COMPUTED`] has a value the model computes (a thread's minor
+//! radius from its table, for one): its expression need not give it, and
+//! the parameters that name it use its value.
 
 use std::collections::HashMap;
 
 use crate::dc::{self, Definitions, Reader, reference, type_id};
 
 pub const PARAMETER: [u8; 16] = type_id("264d8790d011f8d10008cabc0663dc09");
-/// An integer parameter (a pattern's count): the header, eight bytes, the
+/// An integer parameter (a pattern's count): the header, the prefix, the
 /// name, a u32 and the nominal and model values (u32).
 pub const INTEGER: [u8; 16] = type_id("dfd51dbbd1116e72000817bd0663dc09");
 pub const UNIT: [u8; 16] = type_id("fd79a7f8d2118f09c0005a9a2378d04f");
@@ -39,6 +43,9 @@ const OPERATORS: [(u8, Op); 6] = [
     (0x0A, Op::Rem),
     (0x0B, Op::Pow),
 ];
+/// The header flag of a parameter whose value the model computes, not its
+/// expression (see the module docs).
+pub const COMPUTED: u32 = 0x0100_0000;
 /// The last 15 bytes of the expression node types.
 const NODE_SUFFIX: [u8; 15] = [
     0x7A, 0xA7, 0xF8, 0xD2, 0x11, 0x8F, 0x09, 0xC0, 0x00, 0x5A, 0x9A, 0x23, 0x78, 0xD0, 0x4F,
@@ -246,6 +253,167 @@ pub enum Expr {
     Parameter(usize),
     Neg(Box<Expr>),
     Binary(Op, Box<Expr>, Box<Expr>),
+    /// A function of its operands (`037aa7f8…`, [`Function`]).
+    Call(Function, Vec<Expr>),
+}
+
+/// The functions of function nodes (`037aa7f8…`): u32, u16, the display
+/// unit, a list (kind 2) of the operands and a u32, the function's code.
+/// Codes 1 (cosine, of one angle) and 26 (of three operands, the value and
+/// two numbers 1 in units: its value is the first operand's in every case
+/// of the test files) are *(seen)*, their values agreeing with the stored
+/// ones; the others follow the order of the functions in the public
+/// documentation of the expression language, which codes 1 and 26 fit
+/// (not seen: a wrong guess shows as an expression that does not give its
+/// stored value, and the stored value is used).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Function {
+    Cos,
+    Sin,
+    Tan,
+    Acos,
+    Asin,
+    Atan,
+    Cosh,
+    Sinh,
+    Tanh,
+    Acosh,
+    Asinh,
+    Atanh,
+    Sqrt,
+    Sign,
+    Exp,
+    Floor,
+    Ceil,
+    Round,
+    Abs,
+    Max,
+    Min,
+    Ln,
+    Log,
+    Pow,
+    /// The first operand with other units (code 26): taken as the first
+    /// operand.
+    Units,
+}
+
+impl Function {
+    const CODES: [Function; 24] = [
+        Function::Cos,
+        Function::Sin,
+        Function::Tan,
+        Function::Acos,
+        Function::Asin,
+        Function::Atan,
+        Function::Cosh,
+        Function::Sinh,
+        Function::Tanh,
+        Function::Acosh,
+        Function::Asinh,
+        Function::Atanh,
+        Function::Sqrt,
+        Function::Sign,
+        Function::Exp,
+        Function::Floor,
+        Function::Ceil,
+        Function::Round,
+        Function::Abs,
+        Function::Max,
+        Function::Min,
+        Function::Ln,
+        Function::Log,
+        Function::Pow,
+    ];
+
+    /// The function of a code (25, a random number, has none).
+    fn of(code: u32) -> Option<Function> {
+        match code {
+            26 => Some(Function::Units),
+            1..=24 => Some(Self::CODES[code as usize - 1]),
+            _ => None,
+        }
+    }
+
+    /// Mitcad's name of it (none for [`Function::Units`]).
+    fn name(self) -> &'static str {
+        match self {
+            Function::Cos => "cos",
+            Function::Sin => "sin",
+            Function::Tan => "tan",
+            Function::Acos => "acos",
+            Function::Asin => "asin",
+            Function::Atan => "atan",
+            Function::Cosh => "cosh",
+            Function::Sinh => "sinh",
+            Function::Tanh => "tanh",
+            Function::Acosh => "acosh",
+            Function::Asinh => "asinh",
+            Function::Atanh => "atanh",
+            Function::Sqrt => "sqrt",
+            Function::Sign => "sign",
+            Function::Exp => "exp",
+            Function::Floor => "floor",
+            Function::Ceil => "ceil",
+            Function::Round => "round",
+            Function::Abs => "abs",
+            Function::Max => "max",
+            Function::Min => "min",
+            Function::Ln => "ln",
+            Function::Log => "log",
+            Function::Pow => "pow",
+            Function::Units => "",
+        }
+    }
+
+    /// How many operands it takes.
+    fn arity(self) -> std::ops::RangeInclusive<usize> {
+        match self {
+            Function::Units => 3..=3,
+            Function::Pow => 2..=2,
+            Function::Max | Function::Min => 1..=64,
+            _ => 1..=1,
+        }
+    }
+
+    /// Its value (internal units: angles in radians).
+    fn apply(self, a: &[f64]) -> f64 {
+        let x = a[0];
+        match self {
+            Function::Cos => x.cos(),
+            Function::Sin => x.sin(),
+            Function::Tan => x.tan(),
+            Function::Acos => x.acos(),
+            Function::Asin => x.asin(),
+            Function::Atan => x.atan(),
+            Function::Cosh => x.cosh(),
+            Function::Sinh => x.sinh(),
+            Function::Tanh => x.tanh(),
+            Function::Acosh => x.acosh(),
+            Function::Asinh => x.asinh(),
+            Function::Atanh => x.atanh(),
+            Function::Sqrt => x.sqrt(),
+            Function::Sign => {
+                if x > 0.0 {
+                    1.0
+                } else if x < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                }
+            }
+            Function::Exp => x.exp(),
+            Function::Floor => x.floor(),
+            Function::Ceil => x.ceil(),
+            Function::Round => x.round(),
+            Function::Abs => x.abs(),
+            Function::Max => a.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            Function::Min => a.iter().copied().fold(f64::INFINITY, f64::min),
+            Function::Ln => x.ln(),
+            Function::Log => x.log10(),
+            Function::Pow => x.powf(a[1]),
+            Function::Units => x,
+        }
+    }
 }
 
 /// Reads an expression tree from its root record.
@@ -309,7 +477,31 @@ fn expression_at(dc: &Definitions, record: usize, depth: usize) -> Result<Expr, 
             }
             Ok(Expr::Parameter(p))
         }
+        0x03 => {
+            let operands = r.list().map_err(fail)?.1;
+            let code = r.u32().map_err(fail)?;
+            let f = Function::of(code)
+                .ok_or_else(|| format!("expression record {record}: function {code} not known"))?;
+            if !f.arity().contains(&operands.len()) {
+                return Err(format!(
+                    "expression record {record}: function {code} of {} operands",
+                    operands.len()
+                ));
+            }
+            let operands = operands
+                .into_iter()
+                .map(|v| {
+                    let o = dc::reference(v)
+                        .ok_or_else(|| format!("expression record {record}: a missing operand"))?;
+                    expression_at(dc, o, depth + 1)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Expr::Call(f, operands))
+        }
         0x0C => Ok(Expr::Neg(child(&mut r)?)),
+        // Parentheses: the operand as it is (the text puts them back where
+        // the operators need them).
+        0x0D => Ok(*child(&mut r)?),
         code => match OPERATORS.iter().find(|(c, _)| *c == code) {
             Some(&(_, op)) => {
                 let a = child(&mut r)?;
@@ -351,6 +543,13 @@ pub struct Parameter {
     pub expression: Result<Expr, String>,
 }
 
+impl Parameter {
+    /// The model computes its value (the flag [`COMPUTED`]).
+    pub fn is_computed(&self) -> bool {
+        self.flags & COMPUTED != 0
+    }
+}
+
 /// The parameters of a file.
 #[derive(Clone, Debug, Default)]
 pub struct Parameters {
@@ -367,8 +566,7 @@ fn integer(dc: &Definitions, record: usize, table: Option<usize>) -> dc::Result<
     let header = dc
         .header(record)
         .ok_or_else(|| dc::DcError("no header".to_owned()))?;
-    let mut r = dc.body(record);
-    r.skip(8)?;
+    let mut r = dc.fields(record);
     let name = r.text()?;
     r.u32()?;
     let value = f64::from(r.u32()?);
@@ -404,8 +602,7 @@ fn parameter(dc: &Definitions, record: usize, table: Option<usize>) -> dc::Resul
     let header = dc
         .header(record)
         .ok_or_else(|| dc::DcError("no header".to_owned()))?;
-    let mut r = dc.body(record);
-    r.skip(8)?;
+    let mut r = dc.fields(record);
     let name = r.text()?;
     r.u32()?;
     let unit_ref = r.reference()?;
@@ -480,6 +677,24 @@ impl Parameters {
         out
     }
 
+    /// The parameter records an expression names.
+    pub fn named(e: &Expr, out: &mut Vec<usize>) {
+        match e {
+            Expr::Number { .. } => {}
+            Expr::Parameter(r) => out.push(*r),
+            Expr::Neg(a) => Self::named(a, out),
+            Expr::Binary(_, a, b) => {
+                Self::named(a, out);
+                Self::named(b, out);
+            }
+            Expr::Call(_, operands) => {
+                for o in operands {
+                    Self::named(o, out);
+                }
+            }
+        }
+    }
+
     pub fn by_record(&self, record: usize) -> Option<&Parameter> {
         self.by_record.get(&record).map(|&i| &self.list[i])
     }
@@ -490,7 +705,7 @@ impl Parameters {
     }
 
     /// Evaluates a parameter's expression (internal units), following the
-    /// parameters it names.
+    /// parameters it names (the values of computed ones).
     pub fn evaluate(&self, p: &Parameter) -> Result<f64, String> {
         self.evaluate_depth(p, 0)
     }
@@ -513,9 +728,22 @@ impl Parameters {
                 let p = self
                     .by_record(*r)
                     .ok_or_else(|| format!("parameter record {r} was not read"))?;
-                self.evaluate_depth(p, depth + 1)?
+                // One whose expression is not read comes in as its stored
+                // value too.
+                if p.is_computed() || p.expression.is_err() {
+                    p.value
+                } else {
+                    self.evaluate_depth(p, depth + 1)?
+                }
             }
             Expr::Neg(a) => -self.eval(a, depth)?,
+            Expr::Call(f, operands) => {
+                let values = operands
+                    .iter()
+                    .map(|o| self.eval(o, depth))
+                    .collect::<Result<Vec<f64>, String>>()?;
+                f.apply(&values)
+            }
             Expr::Binary(op, a, b) => {
                 let (a, b) = (self.eval(a, depth)?, self.eval(b, depth)?);
                 match op {
@@ -573,6 +801,19 @@ impl Parameters {
                     .by_record(*r)
                     .ok_or_else(|| format!("parameter record {r} was not read"))?;
                 out.push_str(&p.name);
+            }
+            // The first operand with other units: the operand as it is.
+            Expr::Call(Function::Units, operands) => self.write(&operands[0], outer, out)?,
+            Expr::Call(f, operands) => {
+                out.push_str(f.name());
+                out.push('(');
+                for (k, o) in operands.iter().enumerate() {
+                    if k > 0 {
+                        out.push_str("; ");
+                    }
+                    self.write(o, 0, out)?;
+                }
+                out.push(')');
             }
             Expr::Neg(a) => {
                 let wrap = outer > 3;
@@ -694,6 +935,23 @@ mod tests {
             self.push(t, b)
         }
 
+        /// A function node (`037aa7f8…`): its operands as a list, then
+        /// its code.
+        pub fn call(&mut self, code: u32, unit: usize, operands: &[usize]) -> usize {
+            let mut t = NUMBER;
+            t[0] = 0x03;
+            let mut b = vec![0u8; 6];
+            b.extend_from_slice(&reference_bytes(unit));
+            b.extend_from_slice(&[2, 0, 0, 0x30]);
+            b.extend_from_slice(&(operands.len() as u32).to_le_bytes());
+            b.extend_from_slice(&[4, 0, 0, 0, 0, 0, 0, 0]);
+            for &o in operands {
+                b.extend_from_slice(&reference_bytes(o));
+            }
+            b.extend_from_slice(&code.to_le_bytes());
+            self.push(t, b)
+        }
+
         pub fn parameter(&mut self, name: &str, unit: usize, formula: usize, value: f64) -> usize {
             let mut b = vec![0u8; 14];
             b.extend_from_slice(&0x8000_0002u32.to_le_bytes()); // context: the table
@@ -785,20 +1043,124 @@ mod tests {
         let mut b = Builder::new();
         let length = b.unit(LENGTH, 1.0);
         let mut unknown = NUMBER;
-        unknown[0] = 0x0D;
+        unknown[0] = 0x0E;
         let n = b.push(unknown, vec![0; 14]);
-        b.parameter("d0", length, n, 1.0);
+        let d0_record = b.parameter("d0", length, n, 1.0);
         // A parameter referring to itself.
         let cycle_ref = b.records.len() + 1;
         let r = b.node(0x05, &[cycle_ref]);
         b.parameter("d1", length, r, 1.0);
+        // A parameter naming d0, whose expression is not read: d0 comes
+        // in as its stored value.
+        let r = b.node(0x05, &[d0_record]);
+        b.parameter("d2", length, r, 1.0);
         let dc = b.definitions();
         let params = Parameters::read(&dc);
         let d0 = &params.list[0];
         assert!(d0.expression.as_ref().unwrap_err().contains("not known"));
         let d1 = &params.list[1];
         assert!(params.evaluate(d1).unwrap_err().contains("cycle"));
+        assert_eq!(params.evaluate(&params.list[2]), Ok(1.0));
         assert_eq!(number(0.6000000000000001, DisplayUnit::Mm), "6 mm");
         assert_eq!(number(-0.0, DisplayUnit::Unitless), "0");
+    }
+
+    #[test]
+    fn reads_functions() {
+        let mut b = Builder::new();
+        let length = b.unit(LENGTH, 1.0);
+        let mm = b.unit(METRE, 1e-3);
+        let deg = b.unit(DEGREE, 1.0);
+        let none = b.unit(UNITLESS, 1.0);
+        // SW = 2 mm; d1 = SW / cos(30 deg); d2 = the units function of
+        // SW / 2 with 1 mm and 1 deg: SW / 2.
+        let n = b.number(0.2, mm);
+        let sw = b.parameter("SW", length, n, 0.2);
+        let r = b.node(0x05, &[sw]);
+        let thirty = b.number(std::f64::consts::PI / 6.0, deg);
+        let cos = b.call(1, none, &[thirty]);
+        let quotient = b.node(0x09, &[r, cos]);
+        b.parameter("d1", length, quotient, 0.2 / 0.75f64.sqrt());
+        let r = b.node(0x05, &[sw]);
+        let two = b.number(2.0, none);
+        let half = b.node(0x09, &[r, two]);
+        let one_mm = b.number(0.1, mm);
+        let one_deg = b.number(std::f64::consts::PI / 180.0, deg);
+        let units = b.call(26, mm, &[half, one_mm, one_deg]);
+        b.parameter("d2", length, units, 0.1);
+        // A function not known, and one of too many operands.
+        let x = b.number(1.0, none);
+        let random = b.call(25, none, &[x]);
+        b.parameter("d3", length, random, 1.0);
+        let x = b.number(1.0, none);
+        let y = b.number(1.0, none);
+        let cos2 = b.call(1, none, &[x, y]);
+        b.parameter("d4", length, cos2, 1.0);
+        let dc = b.definitions();
+        let params = Parameters::read(&dc);
+        let texts: Vec<String> = params.list[1..3]
+            .iter()
+            .map(|p| params.text(p, DisplayUnit::Mm).unwrap())
+            .collect();
+        assert_eq!(texts, ["SW / cos(30 deg)", "SW / 2"]);
+        for p in &params.list[..3] {
+            let v = params.evaluate(p).unwrap();
+            assert!((v - p.value).abs() < 1e-12, "{}: {v} {}", p.name, p.value);
+        }
+        assert!(
+            params.list[3]
+                .expression
+                .as_ref()
+                .unwrap_err()
+                .contains("function 25 not known")
+        );
+        assert!(
+            params.list[4]
+                .expression
+                .as_ref()
+                .unwrap_err()
+                .contains("of 2 operands")
+        );
+        let mut named = Vec::new();
+        Parameters::named(params.list[2].expression.as_ref().unwrap(), &mut named);
+        assert_eq!(named, [sw]);
+    }
+
+    #[test]
+    fn reads_parentheses_and_computed_parameters() {
+        let mut b = Builder::new();
+        let length = b.unit(LENGTH, 1.0);
+        let mm = b.unit(METRE, 1e-3);
+        let none = b.unit(UNITLESS, 1.0);
+        // d0 = 190 mm, but the model computed 21 cm.
+        let n = b.number(19.0, mm);
+        let d0 = b.parameter("d0", length, n, 21.0);
+        let header = &mut b.records[d0].1;
+        header[10..14].copy_from_slice(&(0x0102_4200u32).to_le_bytes());
+        // d1 = (d0 / 2 - 62 mm / 2) * 2: 21 / 2 - 3.1 = 7.4 cm, times 2.
+        let r = b.node(0x05, &[d0]);
+        let two = b.number(2.0, none);
+        let half = b.node(0x09, &[r, two]);
+        let n62 = b.number(6.2, mm);
+        let two2 = b.number(2.0, none);
+        let half62 = b.node(0x09, &[n62, two2]);
+        let diff = b.node(0x07, &[half, half62]);
+        let group = b.node(0x0D, &[diff]);
+        let two3 = b.number(2.0, none);
+        let product = b.node(0x08, &[group, two3]);
+        b.parameter("d1", length, product, 14.8);
+        let dc = b.definitions();
+        let params = Parameters::read(&dc);
+        assert!(params.unread.is_empty(), "{:?}", params.unread);
+        let (p0, p1) = (&params.list[0], &params.list[1]);
+        assert!(p0.is_computed() && !p1.is_computed());
+        // The computed parameter's expression gives another value; the
+        // parameters that name it take its value.
+        assert!((params.evaluate(p0).unwrap() - 19.0).abs() < 1e-12);
+        assert!((params.evaluate(p1).unwrap() - 14.8).abs() < 1e-12);
+        assert_eq!(
+            params.text(p1, DisplayUnit::Mm).unwrap(),
+            "(d0 / 2 - 62 mm / 2) * 2"
+        );
     }
 }

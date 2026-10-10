@@ -59,9 +59,21 @@ pub struct ExtrudeFields {
     /// The first ±1.0 after the extent fields.
     pub direction: Option<f64>,
     /// The extrusion's direction in the component's coordinates (a unit
-    /// vector), stored after the extent fields: `u8 | u8 1 | u32 0 | f64 x
-    /// | f64 y | f64 z`.
+    /// vector), stored after the extent fields: `u8 flag | u8 1 | u32 (0, or
+    /// 1 on a few items) | f64 x | f64 y | f64 z` (mitcad#96: valid on every
+    /// extrusion of the corpus, whatever that `u32`).
     pub vector: Option<[f64; 3]>,
+    /// The byte after the extent codes (mitcad#96): 1 only on one-sided
+    /// extrusions through all or up to an object, which then go against
+    /// their sketch's normal ([`ExtentSlot`]); 0 on every other extrusion.
+    pub flag: Option<u8>,
+    /// A symmetric extent's length (code a 3, mitcad#96): `true` the whole
+    /// length, `false` half of it each way. The byte 19 bytes before the
+    /// item's first input slot ([`BODY_INPUT`], after `u8 0 | byte | 14 × 0
+    /// | u32 1`) is 1 or 2 *(the reference models' symmetric extrusions: 1
+    /// on every whole length, 2 on the half one; the corpus' settled ones
+    /// agree but for three cuts, where either length cuts the same)*.
+    pub full_length: Option<bool>,
 }
 
 impl ExtrudeFields {
@@ -317,17 +329,35 @@ pub fn decode(seg: &Segment) -> Decoded {
     }
 }
 
-/// The common item tail (section 9.1), anchored at the first reference to
-/// a health object (`B7F34D7B`) in the main part and found by scanning
-/// back: `i32 result_no | str16 base_name | u32 index | u32 0 |
+/// The common item tail (section 9.1), anchored at a reference to a
+/// health object (`B7F34D7B`) in the main part and found by scanning back:
+/// `i32 result_no | str16 base_name | u32 index | u32 0 |
 /// str16 custom_name | u32 n | n refs | 3 flag bytes | ref health`.
+///
+/// The last such reference anchors it, the earlier ones when no tail ends
+/// there (mitcad#96: fillets of class version 3 can refer to a health
+/// object near their start too, `ref 4A557CE2 | u32 0 | ref health |
+/// 00 01 00 00 00 | ref 2CA5A1CD ...`; a tail found back from that one has
+/// no base name, a wrong result number and no inputs. In the learning
+/// dump the last reference gave the tail of all 53 such items, and every
+/// other fillet and chamfer has one reference).
 pub fn feature_tail(seg: &Segment, o: &Object) -> Option<ItemTail> {
     let d = seg.data(o);
     let end = seg.main_end(o);
-    let (p, _) = seg
+    let health: Vec<usize> = seg
         .refs_in(d, 0, end)
         .into_iter()
-        .find(|(_, r)| seg.guid_of(r.id) == Some(HEALTH))?;
+        .filter(|(_, r)| seg.guid_of(r.id) == Some(HEALTH))
+        .map(|(p, _)| p)
+        .collect();
+    health
+        .into_iter()
+        .rev()
+        .find_map(|p| tail_before(seg, d, p))
+}
+
+/// The tail that ends at the health reference at `p`.
+fn tail_before(seg: &Segment, d: &[u8], p: usize) -> Option<ItemTail> {
     let lo = (p as isize - 3000).max(4);
     let mut b = p as isize - 22;
     while b > lo {
@@ -408,7 +438,7 @@ pub fn extrude_fields(seg: &Segment, o: &Object) -> Option<ExtrudeFields> {
         }
         q += 1;
     }
-    let vector = (d.get(p + 13) == Some(&1) && u32_at(d, p + 14) == Some(0))
+    let vector = (d.get(p + 13) == Some(&1))
         .then(|| f64s_at(d, p + 18, 3))
         .flatten()
         .map(|v| [v[0], v[1], v[2]])
@@ -419,7 +449,102 @@ pub fn extrude_fields(seg: &Segment, o: &Object) -> Option<ExtrudeFields> {
         extent_b,
         direction,
         vector,
+        flag: d.get(p + 12).copied(),
+        full_length: (extent_a == 3)
+            .then(|| symmetric_full_length(seg, d, p + 42))
+            .flatten(),
     })
+}
+
+/// See [`ExtrudeFields::full_length`]; `from` is the end of the direction
+/// vector.
+fn symmetric_full_length(seg: &Segment, d: &[u8], from: usize) -> Option<bool> {
+    let (s, _) = seg
+        .refs_in(d, from, d.len())
+        .into_iter()
+        .find(|(_, r)| seg.guid_of(r.id) == Some(BODY_INPUT))?;
+    if s < from + 20 || u32_at(d, s - 4) != Some(1) || d[s - 20] != 0 {
+        return None;
+    }
+    match d[s - 19] {
+        1 => Some(true),
+        2 => Some(false),
+        _ => None,
+    }
+}
+
+/// The object an input slot's role ([`ExtentSlot::role`]) is read after.
+const SLOT_KEY: &str = "2DF7DA30-A4E4-4260-AFD1-D9C7154CB44B";
+
+/// An extrusion's input slot (mitcad#96): a [`BODY_INPUT`] object the item
+/// refers to, `u32 n | n refs | ... | ref 2DF7DA30 | u32 0 | u32 role |
+/// ...` after its root part *(the corpus' extrusions of every class
+/// version; the learning dump's items, where the history settled their
+/// extents, agree with these roles on all but two that went to an
+/// equivalent extent)*:
+///
+/// - 65: the profile source (a profile source, a face for a face profile);
+/// - 8: the participating bodies ([`BODY_REF`]);
+/// - 5: one side extends through all (one slot per such side, its input
+///   the bodies); in the reference models' newer writer also a side up to a
+///   plane (its input the plane's [`ENTITY_REF`]);
+/// - 17, 18: one side extends up to an object, the slot's one input
+///   ([`FACE_REF`]); 18 where the extent codes still say a distance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExtentSlot {
+    pub role: u32,
+    /// The slot's inputs (the `n` references), in order.
+    pub inputs: Vec<u64>,
+}
+
+impl ExtentSlot {
+    /// A side up to an object.
+    pub fn is_to_object(&self) -> bool {
+        matches!(self.role, 17 | 18)
+    }
+
+    /// A side through all.
+    pub fn is_through_all(&self) -> bool {
+        self.role == 5
+    }
+}
+
+/// An item's input slots in the order it refers to them (slots without
+/// the role's object are left out).
+pub fn extent_slots(seg: &Segment, item: u64) -> Vec<ExtentSlot> {
+    let mut out = Vec::new();
+    let mut seen = Vec::new();
+    for id in seg.ref_ids(seg.data_of(item)) {
+        if seg.guid_of(id) != Some(BODY_INPUT) || seen.contains(&id) {
+            continue;
+        }
+        seen.push(id);
+        let d = seg.data_of(id);
+        let Some(root) = seg.root_part(d) else {
+            continue;
+        };
+        let Some(n) = u32_at(d, root.end).filter(|&n| n <= 10_000) else {
+            continue;
+        };
+        let mut q = root.end + 4;
+        let mut inputs = Vec::new();
+        for _ in 0..n {
+            let Some(r) = seg.ref_at(d, q) else { break };
+            inputs.push(r.id);
+            q = r.end;
+        }
+        if inputs.len() != n as usize {
+            continue;
+        }
+        let key = seg
+            .refs_in(d, q, d.len())
+            .into_iter()
+            .find(|(_, r)| seg.guid_of(r.id) == Some(SLOT_KEY));
+        if let Some(role) = key.and_then(|(_, r)| u32_at(d, r.end + 4)) {
+            out.push(ExtentSlot { role, inputs });
+        }
+    }
+    out
 }
 
 /// Skips the parameter's root part: `u8 | u8 has_attrs | [attributes]`.

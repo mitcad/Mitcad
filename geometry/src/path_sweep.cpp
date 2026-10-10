@@ -39,7 +39,7 @@
 #include <Geom_SurfaceOfRevolution.hxx>
 #include <Geom_BezierCurve.hxx>
 #include <Geom2d_TrimmedCurve.hxx>
-#include <GCE2d_MakeSegment.hxx>
+#include <GC_MakeSegment2d.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_ConicalSurface.hxx>
 #include <Geom_CylindricalSurface.hxx>
@@ -754,13 +754,13 @@ TopoDS_Wire widening_path(const HelixSweepSpec& spec, const gp_Pnt& center) {
   BRepBuilderAPI_MakeWire wire;
   for (int i = 0; i < static_cast<int>(full); ++i) {
     const gp_Pnt2d end = begin.Translated(direction);
-    const occ::handle<Geom2d_TrimmedCurve> segment = GCE2d_MakeSegment(begin, end);
+    const occ::handle<Geom2d_TrimmedCurve> segment = GC_MakeSegment2d(begin, end);
     wire.Add(BRepBuilderAPI_MakeEdge(segment, surface).Edge());
     begin = end;
   }
   if (part > Precision::Confusion()) {
     direction.Scale(part);
-    const occ::handle<Geom2d_TrimmedCurve> segment = GCE2d_MakeSegment(begin, begin.Translated(direction));
+    const occ::handle<Geom2d_TrimmedCurve> segment = GC_MakeSegment2d(begin, begin.Translated(direction));
     wire.Add(BRepBuilderAPI_MakeEdge(segment, surface).Edge());
   }
   TopoDS_Wire path = wire.Wire();

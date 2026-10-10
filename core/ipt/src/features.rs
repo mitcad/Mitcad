@@ -6,7 +6,7 @@
 //! feature's kind within the file), a reference list (kind 2) of its
 //! properties by slot, and a u32. Properties are records of their own:
 //! parameters, enumerations (`28be9a72…` operation, `297d6392…` extent:
-//! eight bytes, u16 kind, u16 value), booleans (`284d8790…`: a name, a u32
+//! the prefix (`dc`), u16 kind, u16 value), booleans (`284d8790…`: a name, a u32
 //! and the value as the last byte), directions (`40df52ce…`: three f64 at
 //! the end) and lists of other records.
 
@@ -33,6 +33,52 @@ pub struct Context<'a> {
     pub profiles: &'a std::cell::RefCell<crate::profile::Profiles>,
     /// Sketch records → their entity records' ids in the dump.
     pub sketch_ids: &'a HashMap<usize, HashMap<usize, String>>,
+    /// Body records → the bodies' producers ([`Producers`]).
+    pub bodies: &'a Producers,
+}
+
+/// A solid body of the part (`474d8790…`: the header, the prefix and a
+/// u32, the body's number *(seen)*); the browser's label names it.
+pub const BODY: [u8; 16] = type_id("474d8790d011f8d10008cabc0663dc09");
+/// A list of bodies (`ae70680e…`, `83aadad5…`: the prefix and a list of
+/// body records) *(seen)*: every feature refers to one (the bodies it
+/// made or changed); a combine's target is the other kind.
+pub const BODIES: [u8; 16] = type_id("ae70680ed14a1e86d76248b03c2a96e1");
+pub const TARGET_BODIES: [u8; 16] = type_id("83aadad54f4375dacd1003b260a8a422");
+
+/// The bodies' producers: body record → the timeline index of the item
+/// that made it, its index among that item's bodies, and its name.
+#[derive(Clone, Debug, Default)]
+pub struct Producers {
+    pub of: HashMap<usize, (i64, usize, Option<String>)>,
+}
+
+impl Producers {
+    /// The body as the dump's body reference: by its producer where it is
+    /// known (`_f3d.producer`, `_f3d.body_index`), by its name always.
+    pub fn reference(&self, body: usize, name: Option<&str>) -> Value {
+        let mut r = json!({"kind": "body", "objectType": "BRepBody"});
+        let known = self.of.get(&body);
+        if let Some(n) = name.or_else(|| known.and_then(|k| k.2.as_deref())) {
+            r["name"] = json!(n);
+        }
+        if let Some((producer, index, _)) = known {
+            r["_f3d"] = json!({"producer": producer, "body_index": index});
+        }
+        r
+    }
+
+    /// Records the bodies the item `index` refers to: those not seen
+    /// before are its own (the first item to refer to a body made it).
+    pub fn record(&mut self, index: i64, bodies: &[usize], name: impl Fn(usize) -> Option<String>) {
+        for &b in bodies {
+            if self.of.contains_key(&b) {
+                continue;
+            }
+            let k = self.of.values().filter(|v| v.0 == index).count();
+            self.of.insert(b, (index, k, name(b)));
+        }
+    }
 }
 
 /// A feature's detail, and the parameter records it made (its model
@@ -63,8 +109,8 @@ impl Context<'_> {
     /// An enumeration's value.
     pub fn enumeration(&self, record: Option<usize>, t: &[u8; 16]) -> Option<u16> {
         let record = record.filter(|&r| self.dc.is(r, t))?;
-        let mut r = self.dc.body(record);
-        r.skip(10).ok()?;
+        let mut r = self.dc.fields(record);
+        r.skip(2).ok()?;
         r.u16().ok()
     }
 
@@ -95,24 +141,59 @@ impl Context<'_> {
 
     /// The records of a list property (a boundary patch's profiles).
     pub fn list(&self, record: Option<usize>) -> Option<Vec<usize>> {
-        let mut r = self.dc.body(record?);
-        r.skip(8).ok()?;
+        let mut r = self.dc.fields(record?);
         r.references().ok()
+    }
+
+    /// The body records of a list of bodies (`t`: [`BODIES`] or
+    /// [`TARGET_BODIES`]).
+    pub fn bodies_in(&self, record: Option<usize>, t: &[u8; 16]) -> Vec<usize> {
+        self.list(record.filter(|&r| self.dc.is(r, t)))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|&b| self.dc.is(b, &BODY))
+            .collect()
+    }
+
+    /// The bodies a feature refers to: those of its lists of bodies, in
+    /// the order of its slots.
+    pub fn feature_bodies(&self, record: usize) -> Vec<usize> {
+        let mut out: Vec<usize> = Vec::new();
+        for s in self.slots(record).unwrap_or_default() {
+            for t in [&TARGET_BODIES, &BODIES] {
+                for b in self.bodies_in(s, t) {
+                    if !out.contains(&b) {
+                        out.push(b);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Body references for the bodies of a list.
+    fn body_references(&self, record: Option<usize>, t: &[u8; 16]) -> Vec<Value> {
+        self.bodies_in(record, t)
+            .into_iter()
+            .map(|b| self.bodies.reference(b, None))
+            .collect()
     }
 }
 
 /// An extrusion: slots 0 operation, 1 profiles, 2 direction, 3 reversed,
 /// 4 distance, 5 taper, 6 extent, 7 symmetric *(verified on the test
 /// files' extrusions)*. Operations 1 new body, 2 cut, 3 join, 4
-/// intersection; extents 1 distance, 2 symmetric, 5 through all, 7 up to
-/// a face or work plane (slots 11, 13 and 18; not decoded: the import
-/// looks for the face). The extrusion goes along the direction, against it
-/// when reversed.
+/// intersection; extents 1 distance, 2 symmetric, 5 through all, 4 up to
+/// the next face (slot 24: the body it reaches), 7 up to a face or work
+/// plane (slot 11 a work plane, slot 18 the face's surface; slot 13 not
+/// decoded). The extrusion goes along the direction, against it when
+/// reversed.
 pub fn extrude(
     cx: &Context,
     record: usize,
     sketch: Option<(i64, String)>,
     sketch_record: Option<usize>,
+    items: &HashMap<usize, i64>,
 ) -> Result<Translated, String> {
     let slots = cx.slots(record)?;
     let slot = |i: usize| slots.get(i).copied().flatten();
@@ -128,6 +209,7 @@ pub fn extrude(
     let distance = cx.parameter(slot(4), &mut t.parameters);
     let taper = cx.parameter(slot(5), &mut t.parameters);
     let mut d = json!({"operation": operation, "isSolid": true});
+    participants(cx, &slots, operation, &mut d);
     match extent {
         Some(1) => {
             d["extentType"] = json!("OneSideFeatureExtentType");
@@ -138,18 +220,53 @@ pub fn extrude(
             d["symmetricExtent"] = json!({"_type": "SymmetricExtentDefinition",
                 "distance": distance});
         }
+        // Through all both ways when slot 7 is set (as it is in every
+        // symmetric extent, and in 9 of the 279 through all *(seen)*).
         Some(5) => {
-            d["extentType"] = json!("OneSideFeatureExtentType");
+            let both = cx.boolean(slot(7)) == Some(true);
+            d["extentType"] = json!(if both {
+                "SymmetricFeatureExtentType"
+            } else {
+                "OneSideFeatureExtentType"
+            });
             d["extentOne"] = json!({"_type": "ThroughAllExtentDefinition"});
         }
+        // Up to a work plane (slot 11), else up to the surface of the face
+        // slot 18 keeps (a plane or a cylinder), which the import looks for.
         Some(7) => {
             d["extentType"] = json!("OneSideFeatureExtentType");
-            d["extentOne"] = json!({"_type": "ToEntityExtentDefinition"});
-            t.notes
-                .push("the face or plane it extends to is not decoded".to_owned());
+            let mut one = json!({"_type": "ToEntityExtentDefinition"});
+            let entity = slot(11)
+                .and_then(|p| plane_reference(cx, p, items))
+                .or_else(|| slot(18).and_then(|s| extent_surface(cx.dc, s)));
+            match entity {
+                Some(e) => one["entity"] = e,
+                None => t
+                    .notes
+                    .push("the face or plane it extends to is not decoded".to_owned()),
+            }
+            d["extentOne"] = one;
+        }
+        // Extent 4, up to the next face: up to the first face of the body
+        // its slot 24 names (a list of bodies `83aadad5…` *(seen)*), else
+        // the import looks for the face.
+        Some(4) => {
+            d["extentType"] = json!("OneSideFeatureExtentType");
+            let mut one = json!({"_type": "ToEntityExtentDefinition"});
+            match cx.body_references(slot(24), &TARGET_BODIES).first() {
+                Some(body) => {
+                    one["entity"] = body.clone();
+                    one["isMinimumSolution"] = json!(true);
+                }
+                None => t
+                    .notes
+                    .push("an extent up to the next face, which is looked for".to_owned()),
+            }
+            d["extentOne"] = one;
         }
         other => return Err(format!("extent {other:?} is not known")),
     }
+    let reversed = cx.boolean(slot(3)) == Some(true);
     if let Some(taper) = taper {
         d["taperAngleOne"] = taper;
     }
@@ -157,11 +274,464 @@ pub fn extrude(
         d["profile"] = json!(profiles(cx, slot(1), index, &name, sketch_record));
     }
     if let Some(v) = cx.direction(slot(2)) {
-        let reversed = cx.boolean(slot(3)) == Some(true);
         let v = if reversed { v.map(|x| -x) } else { v };
         t.raw = Some(json!({"extrude": {"direction_vector": v}}));
     }
     t.detail = d;
+    Ok(t)
+}
+
+/// The bodies a join, cut or intersection works on: its list of bodies
+/// (the first slot of [`BODIES`]) *(seen)*, as `participantBodies`, in parts
+/// of more than one body.
+fn participants(cx: &Context, slots: &[Option<usize>], operation: &str, d: &mut Value) {
+    // A part of one body: its only body takes part anyway (and the
+    // import's tries with and without participants cost time).
+    if operation == "NewBodyFeatureOperation" || cx.dc.of_type(&BODY).nth(1).is_none() {
+        return;
+    }
+    let list = slots
+        .iter()
+        .copied()
+        .find(|s| s.is_some_and(|r| cx.dc.is(r, &BODIES)))
+        .flatten();
+    let bodies = cx.body_references(list, &BODIES);
+    if !bodies.is_empty() {
+        d["participantBodies"] = json!(bodies);
+    }
+}
+
+/// The surface of the face an extrusion extends up to (slot 18).
+pub const EXTENT_SURFACE: [u8; 16] = type_id("f0801215d4119e8eef90a8ac7f9ac3ff");
+
+/// The surface of the face an extrusion up to a face extends to
+/// ([`EXTENT_SURFACE`]): after the prefix zeros, a byte 1 and a u32 kind
+/// *(seen: 144 extrusions)*. Kind `0x19` a plane: four bytes, then its
+/// origin (cm), x and y axes (f64; both across the extrusion's direction
+/// in all 130 such records); kind `0x49` a cone: eight bytes,
+/// then the cosine and sine of its half angle, a point on its axis (cm),
+/// its two radii (cm), its axis and its reference direction, a cylinder
+/// when the sine is 0 and the radii agree. As the dump's face reference
+/// with that geometry and no point on it (a plane's origin need not lie on
+/// the face, and another face may pass through it).
+fn extent_surface(dc: &Definitions, record: usize) -> Option<Value> {
+    if !dc.is(record, &EXTENT_SURFACE) {
+        return None;
+    }
+    let bytes = dc.bytes(record);
+    let from = dc.header_len();
+    let head = |k: u8| [1, k, 0, 0, 0];
+    let find = |k: u8| {
+        bytes
+            .get(from..(from + 48).min(bytes.len()))?
+            .windows(5)
+            .position(|w| w == head(k))
+            .map(|i| from + i)
+    };
+    let read = |at: usize, n: usize| -> Option<Vec<f64>> {
+        let mut r = Reader::at(bytes, at);
+        let v: Vec<f64> = (0..n).map(|_| r.f64().ok()).collect::<Option<_>>()?;
+        v.iter().all(|x| x.is_finite()).then_some(v)
+    };
+    let is_unit = |v: &[f64]| ((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() - 1.0).abs() < 1e-6;
+    if let Some(at) = find(0x19) {
+        let v = read(at + 9, 9)?;
+        let (origin, x, y) = (&v[0..3], &v[3..6], &v[6..9]);
+        if !is_unit(x) || !is_unit(y) {
+            return None;
+        }
+        let normal = unit(cross([x[0], x[1], x[2]], [y[0], y[1], y[2]]))?;
+        return Some(json!({"kind": "face", "objectType": "BRepFace",
+                           "geometry": {"type": "Plane", "origin": origin, "normal": normal}}));
+    }
+    let at = find(0x49)?;
+    let v = read(at + 13, 13)?;
+    let (sine, origin, radii, axis) = (v[1], &v[2..5], (v[5], v[6]), &v[7..10]);
+    if sine.abs() > 1e-9 || (radii.0 - radii.1).abs() > 1e-9 || radii.0 <= 0.0 || !is_unit(axis) {
+        return None;
+    }
+    Some(json!({"kind": "face", "objectType": "BRepFace",
+                "geometry": {"type": "Cylinder", "origin": origin, "axis": axis, "radius": radii.0}}))
+}
+
+/// A combine: slots 0 the target (`83aadad5…`, one body), 1 the tools
+/// (`ae70680e…`), 2 the operation (2 cut, 3 join, 4 intersection), 3 keep
+/// the tools *(verified: every combine of the test files)*.
+pub fn combine(cx: &Context, record: usize) -> Result<Translated, String> {
+    let slots = cx.slots(record)?;
+    let slot = |i: usize| slots.get(i).copied().flatten();
+    let operation = match cx.enumeration(slot(2), &ENUM_OPERATION) {
+        Some(2) => "CutFeatureOperation",
+        Some(3) => "JoinFeatureOperation",
+        Some(4) => "IntersectFeatureOperation",
+        other => return Err(format!("combine operation {other:?} is not known")),
+    };
+    let target = cx.body_references(slot(0), &TARGET_BODIES);
+    let tools = cx.body_references(slot(1), &BODIES);
+    let [target] = &target[..] else {
+        return Err(format!("{} target bodies", target.len()));
+    };
+    if tools.is_empty() {
+        return Err("no tool bodies".to_owned());
+    }
+    // Read from the record, not guessed (`_ipt_inputs`).
+    let mut d = json!({"operation": operation, "targetBody": target, "toolBodies": tools,
+                       "_ipt_inputs": true});
+    if let Some(keep) = cx.boolean(slot(3)) {
+        d["isKeepToolBodies"] = json!(keep);
+    }
+    Ok(Translated {
+        detail: d,
+        ..Translated::default()
+    })
+}
+
+pub const ENUM_SPLIT: [u8; 16] = type_id("1990e1b8d311467bc000e39545df724f");
+
+/// A split: slots 0 its kind (`1990e1b8…`: 2 split faces, 3 split bodies),
+/// 2 the faces to split (topological names, not decoded), 4 the tool's
+/// sketch profiles (`91739422…`, as an extrusion's), 5 a work plane as the
+/// tool, 7 the bodies (`83aadad5…`) *(seen: every split of the test
+/// files, of 78 the kinds 2 and 3)*. The object type it comes in as, and
+/// its detail.
+pub fn split(
+    cx: &Context,
+    record: usize,
+    sketch: Option<(i64, String)>,
+    sketch_record: Option<usize>,
+    items: &HashMap<usize, i64>,
+) -> Result<(&'static str, Translated), String> {
+    let slots = cx.slots(record)?;
+    let slot = |i: usize| slots.get(i).copied().flatten();
+    let mut t = Translated::default();
+    let plane = slot(5).and_then(|p| plane_reference(cx, p, items));
+    let tool = match (plane, &sketch) {
+        (Some(p), _) => json!([p]),
+        (None, Some((index, name))) => json!(profiles(cx, slot(4), *index, name, sketch_record)),
+        (None, None) => return Err("its tool was not decoded".to_owned()),
+    };
+    let bodies = cx.body_references(slot(7), &TARGET_BODIES);
+    match cx.enumeration(slot(0), &ENUM_SPLIT) {
+        Some(2) => {
+            t.detail = json!({"splittingTool": tool});
+            t.notes
+                .push("the faces it splits are found with the history".to_owned());
+            if let [body] = &bodies[..] {
+                t.detail["body"] = body.clone();
+            }
+            Ok(("SplitFaceFeature", t))
+        }
+        Some(3) => {
+            let [tool] = tool.as_array().map_or(&[][..], Vec::as_slice) else {
+                return Err("a body split by several profiles".to_owned());
+            };
+            if bodies.is_empty() {
+                return Err("no bodies to split".to_owned());
+            }
+            t.detail = json!({"splitBodies": bodies, "splittingTool": tool});
+            Ok(("SplitBodyFeature", t))
+        }
+        other => Err(format!("split kind {other:?} is not known")),
+    }
+}
+
+/// A sweep: slots 0 the profiles (as an extrusion's), 1 the path (a
+/// profile selection or a path selection `473f20fc…`, whose wire body is
+/// the path), 2 the operation, 3 the taper *(seen: every sweep of the test
+/// files)*. Its label shows the profile's sketch and the path's: the
+/// profile's is the one whose plane holds the selected profile. The path
+/// is given as points along it (model coordinates, cm) with the label's
+/// sketches (`_ipt_path`): [`path_curves`] names the curves on it.
+pub fn sweep(
+    cx: &Context,
+    record: usize,
+    sketches: &[(usize, i64, String)],
+) -> Result<Translated, String> {
+    let slots = cx.slots(record)?;
+    let slot = |i: usize| slots.get(i).copied().flatten();
+    let mut t = Translated::default();
+    let operation = match cx.enumeration(slot(2), &ENUM_OPERATION) {
+        Some(1) => "NewBodyFeatureOperation",
+        Some(2) => "CutFeatureOperation",
+        Some(3) => "JoinFeatureOperation",
+        Some(4) => "IntersectFeatureOperation",
+        other => return Err(format!("operation {other:?} is not known")),
+    };
+    let selections = cx
+        .list(slot(0).filter(|&r| cx.dc.is(r, &BOUNDARY_PATCH)))
+        .unwrap_or_default();
+    let first = selections.first().ok_or("no profiles selected")?;
+    let loops = cx
+        .profiles
+        .borrow_mut()
+        .loops(cx.dc, *first)
+        .ok_or("its profile was not read")?;
+    let on_plane = |sketch: usize| {
+        crate::sketch::sketch_matrix(cx.dc, sketch).is_ok_and(|m| {
+            let n = [m[0][2], m[1][2], m[2][2]];
+            let o = [m[0][3], m[1][3], m[2][3]];
+            loops.iter().flatten().all(|p| {
+                let d = [p[0] / 10.0 - o[0], p[1] / 10.0 - o[1], p[2] / 10.0 - o[2]];
+                (d[0] * n[0] + d[1] * n[1] + d[2] * n[2]).abs() < 1e-6
+            })
+        })
+    };
+    let (profile_record, index, name) = sketches
+        .iter()
+        .find(|(s, _, _)| on_plane(*s))
+        .ok_or("its profile lies in none of its sketches")?;
+    let mut d = json!({"operation": operation, "isSolid": true,
+        "profile": profiles(cx, slot(0), *index, name, Some(*profile_record))});
+    participants(cx, &slots, operation, &mut d);
+    if let Some(taper) = cx.parameter(slot(3), &mut t.parameters) {
+        d["taperAngle"] = taper;
+    }
+    let path = slot(1)
+        .and_then(|p| cx.profiles.borrow_mut().loops(cx.dc, p))
+        .ok_or("its path was not read")?;
+    let points: Vec<[f64; 3]> = path
+        .into_iter()
+        .flatten()
+        .map(|p| p.map(|v| v / 10.0))
+        .collect();
+    let all: Vec<i64> = sketches.iter().map(|s| s.1).collect();
+    d["_ipt_path"] = json!({"sketches": all, "points": points});
+    t.detail = d;
+    Ok(t)
+}
+
+/// The list of a loft's sections (`509e2f31…`: the prefix and a list).
+pub const LOFT_SECTIONS: [u8; 16] = type_id("509e2f31d1110344000881ba32a3dc09");
+
+/// A loft: slots 0 its sections (a list `509e2f31…` of sections
+/// `e850314b…`, `profile::LOFT_SECTION`, whose wire bodies are their
+/// boundaries), 1 the operation *(seen: every loft of the test files)*.
+/// Each section is the profile of the first of `sketches` whose plane
+/// holds its boundary, measured there; rails and conditions are not
+/// decoded.
+pub fn loft(
+    cx: &Context,
+    record: usize,
+    sketches: &[(usize, i64, String)],
+) -> Result<Translated, String> {
+    let slots = cx.slots(record)?;
+    let slot = |i: usize| slots.get(i).copied().flatten();
+    let mut t = Translated::default();
+    let operation = match cx.enumeration(slot(1), &ENUM_OPERATION) {
+        Some(1) => "NewBodyFeatureOperation",
+        Some(2) => "CutFeatureOperation",
+        Some(3) => "JoinFeatureOperation",
+        Some(4) => "IntersectFeatureOperation",
+        other => return Err(format!("operation {other:?} is not known")),
+    };
+    let sections = cx
+        .list(slot(0).filter(|&r| cx.dc.is(r, &LOFT_SECTIONS)))
+        .ok_or("its sections were not read")?;
+    if sections.len() < 2 {
+        return Err(format!("{} sections", sections.len()));
+    }
+    let mut out = Vec::new();
+    for (k, &s) in sections.iter().enumerate() {
+        let at = |e: &str| format!("section {}: {e}", k + 1);
+        let loops = cx
+            .profiles
+            .borrow_mut()
+            .loops(cx.dc, s)
+            .ok_or_else(|| at("its boundary was not read"))?;
+        let on_plane = |sketch: usize| {
+            crate::sketch::sketch_matrix(cx.dc, sketch).is_ok_and(|m| {
+                let n = [m[0][2], m[1][2], m[2][2]];
+                let o = [m[0][3], m[1][3], m[2][3]];
+                loops.iter().flatten().all(|p| {
+                    let d = [p[0] / 10.0 - o[0], p[1] / 10.0 - o[1], p[2] / 10.0 - o[2]];
+                    (d[0] * n[0] + d[1] * n[1] + d[2] * n[2]).abs() < 1e-6
+                })
+            })
+        };
+        let (sketch, index, name) = sketches
+            .iter()
+            .find(|(s, _, _)| on_plane(*s))
+            .ok_or_else(|| at("its boundary lies in none of its sketches"))?;
+        let m = crate::sketch::sketch_matrix(cx.dc, *sketch)?;
+        let measured = cx
+            .profiles
+            .borrow_mut()
+            .measure(cx.dc, s, &m)
+            .ok_or_else(|| at("its boundary was not measured"))?;
+        cx.profiles
+            .borrow_mut()
+            .outlines
+            .extend(measured.loops.iter().map(|l| (*sketch, s, l.clone())));
+        out.push(
+            json!({"index": k, "entity": {"kind": "profile", "sketch": name,
+            "sketch_timeline_index": index, "area": measured.area,
+            "centroid": [measured.centroid[0], measured.centroid[1], 0.0]}}),
+        );
+    }
+    let mut d = json!({"operation": operation, "isSolid": true, "loftSections": out});
+    participants(cx, &slots, operation, &mut d);
+    t.detail = d;
+    Ok(t)
+}
+
+/// The curves of a sweep's sketches that lie on its path (`_ipt_path`,
+/// [`sweep`]): those of the sketch with the most of them, in the order
+/// along the path, as the dump's path (`PathEntity` items of sketch
+/// curves).
+pub fn path_curves(items: &mut [Value]) {
+    let vec3 = |v: &Value| -> Option<[f64; 3]> { serde_json::from_value(v.clone()).ok() };
+    for k in 0..items.len() {
+        let Some(path) = items[k]["detail"]
+            .as_object_mut()
+            .and_then(|d| d.remove("_ipt_path"))
+        else {
+            continue;
+        };
+        let points: Vec<[f64; 3]> = path["points"]
+            .as_array()
+            .map(|a| a.iter().filter_map(vec3).collect())
+            .unwrap_or_default();
+        let mut best: Option<(i64, Vec<(usize, String)>)> = None;
+        for sketch in path["sketches"].as_array().into_iter().flatten() {
+            let Some(sketch) = sketch.as_i64() else {
+                continue;
+            };
+            let Some(item) = usize::try_from(sketch).ok().and_then(|i| items.get(i)) else {
+                continue;
+            };
+            let on = curves_on_path(&item["detail"], &points);
+            if on.len() > best.as_ref().map_or(0, |b| b.1.len()) {
+                best = Some((sketch, on));
+            }
+        }
+        let Some((sketch, on)) = best else {
+            continue;
+        };
+        items[k]["detail"]["path"] = Value::Array(
+            on.into_iter()
+                .map(|(_, id)| {
+                    json!({"entity": {"kind": "sketch_entity", "objectType": "SketchCurve",
+                                      "sketch_timeline_index": sketch, "id": id}})
+                })
+                .collect(),
+        );
+    }
+}
+
+/// The lines, arcs and circles of a sketch's detail that lie on a polyline (model
+/// coordinates, cm), with where along it each lies (its middle's segment),
+/// in that order.
+fn curves_on_path(detail: &Value, points: &[[f64; 3]]) -> Vec<(usize, String)> {
+    let vec3 = |v: &Value| -> Option<[f64; 3]> { serde_json::from_value(v.clone()).ok() };
+    let frame = &detail["model_frame"];
+    let (Some(o), Some(x), Some(y)) = (
+        vec3(&frame["origin"]),
+        vec3(&frame["x_axis"]),
+        vec3(&frame["y_axis"]),
+    ) else {
+        return Vec::new();
+    };
+    let model = |p: [f64; 2]| -> [f64; 3] { [0, 1, 2].map(|i| o[i] + p[0] * x[i] + p[1] * y[i]) };
+    // The nearest segment of the path to a point, and how far off it.
+    let along = |p: [f64; 3]| -> (usize, f64) {
+        let mut best = (0, f64::INFINITY);
+        for i in 0..points.len().saturating_sub(1) {
+            let (a, b) = (points[i], points[i + 1]);
+            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let l2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+            let t = if l2 > 0.0 {
+                (((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1] + (p[2] - a[2]) * ab[2]) / l2)
+                    .clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let q = [a[0] + t * ab[0], a[1] + t * ab[1], a[2] + t * ab[2]];
+            let dist =
+                ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt();
+            if dist < best.1 {
+                best = (i, dist);
+            }
+        }
+        best
+    };
+    let xy = |v: &Value| -> Option<[f64; 2]> { Some([v[0].as_f64()?, v[1].as_f64()?]) };
+    let mut on: Vec<(usize, String)> = Vec::new();
+    for c in detail["curves"].as_array().into_iter().flatten() {
+        let g = &c["geometry"];
+        let samples: Option<(Vec<[f64; 2]>, f64)> = match g["type"].as_str() {
+            Some("Line3D") => xy(&g["startPoint"]).zip(xy(&g["endPoint"])).map(|(a, b)| {
+                let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+                (vec![a, mid, b], 1e-5)
+            }),
+            // A full circle too (a path round it) *(seen)*.
+            Some(t @ ("Arc3D" | "Circle3D")) => (|| {
+                let center = xy(&g["center"])?;
+                let r = g["radius"].as_f64()?;
+                let (a0, a1) = if t == "Arc3D" {
+                    (g["startAngle"].as_f64()?, g["endAngle"].as_f64()?)
+                } else {
+                    (0.0, std::f64::consts::TAU)
+                };
+                let points = (0..=4)
+                    .map(|k| {
+                        let a = a0 + (a1 - a0) * f64::from(k) / 4.0;
+                        [center[0] + r * a.cos(), center[1] + r * a.sin()]
+                    })
+                    .collect();
+                // The path samples an arc with 720 chords.
+                Some((
+                    points,
+                    r * (1.0 - (std::f64::consts::PI / 720.0).cos()) + 1e-5,
+                ))
+            })(),
+            _ => None,
+        };
+        let (Some((samples, tolerance)), Some(id)) = (samples, c["id"].as_str()) else {
+            continue;
+        };
+        let at: Vec<(usize, f64)> = samples.iter().map(|&p| along(model(p))).collect();
+        if at.iter().all(|(_, d)| *d <= tolerance) {
+            on.push((at[at.len() / 2].0, id.to_owned()));
+        }
+    }
+    on.sort();
+    on
+}
+
+pub const ENUM_SHELL: [u8; 16] = type_id("e469a1b3d111382960008cb801f31bb0");
+/// A list of faces (`f1b2bc24…`: the prefix and a list of face names
+/// `ccb59f50…`, not decoded).
+pub const FACES: [u8; 16] = type_id("f1b2bc24d01121dd0008d0bc0663dc09");
+
+/// A shell: slots 0 its direction (`e469a1b3…`: 0 inside), 1 the faces it
+/// removes (their topological names, not decoded: the import finds them
+/// with the history; their number is given), 3 the thickness, 9 its body
+/// *(seen: every shell of the test files, inside, with no face or one)*.
+pub fn shell(cx: &Context, record: usize) -> Result<Translated, String> {
+    let slots = cx.slots(record)?;
+    let slot = |i: usize| slots.get(i).copied().flatten();
+    let mut t = Translated::default();
+    let thickness = cx
+        .parameter(slot(3), &mut t.parameters)
+        .ok_or("its thickness was not read")?;
+    let side = match cx.enumeration(slot(0), &ENUM_SHELL) {
+        Some(0) => "insideThickness",
+        other => return Err(format!("shell direction {other:?} is not known")),
+    };
+    let removed = cx
+        .list(slot(1).filter(|&r| cx.dc.is(r, &FACES)))
+        .ok_or("its faces were not read")?
+        .len();
+    let bodies = cx.body_references(slot(9), &BODIES);
+    let [body] = &bodies[..] else {
+        return Err(format!("{} bodies shelled", bodies.len()));
+    };
+    t.detail = json!({"inputEntities": [body], side: thickness, "isTangentChain": false,
+                      "shellType": "SharpOffsetShellType", "_ipt_removed_faces": removed});
+    if removed > 0 {
+        t.notes
+            .push("the faces it removes are found with the history".to_owned());
+    }
     Ok(t)
 }
 
@@ -186,23 +756,65 @@ fn profiles(
         .list(patch.filter(|&r| cx.dc.is(r, &BOUNDARY_PATCH)))
         .unwrap_or_default();
     let m = sketch.and_then(|s| crate::sketch::sketch_matrix(cx.dc, s).ok());
-    let measured: Option<Vec<crate::profile::Measured>> = m
-        .and_then(|m| {
-            selections
-                .iter()
-                .map(|&s| cx.profiles.borrow_mut().measure(cx.dc, s, &m))
-                .collect()
+    let each: Option<Vec<Option<crate::profile::Measured>>> = m.map(|m| {
+        selections
+            .iter()
+            .map(|&s| cx.profiles.borrow_mut().measure(cx.dc, s, &m))
+            .collect()
+    });
+    // The boundaries the file selected, for the sketch's curves on them.
+    if let (Some(s), Some(each), Some(patch)) = (sketch, &each, patch) {
+        let mut p = cx.profiles.borrow_mut();
+        p.outlines.extend(
+            each.iter()
+                .flatten()
+                .flat_map(|m| m.loops.iter().map(move |l| (s, patch, l.clone()))),
+        );
+    }
+    // A boundary selected more than once (the regions of coincident
+    // curves, as a pattern's copies on their original *(seen)*) is one
+    // region: the extrusion of the same region again adds nothing.
+    let same = |a: &crate::profile::Measured, b: &crate::profile::Measured| {
+        let tol = 1e-9 * a.area.abs().max(1e-12);
+        (a.area - b.area).abs() <= tol
+            && (a.centroid[0] - b.centroid[0]).abs() <= 1e-9
+            && (a.centroid[1] - b.centroid[1]).abs() <= 1e-9
+    };
+    // Selections inside one another make up their regions by the
+    // even-odd rule (`profile::even_odd`), where a boundary selected twice
+    // is a ring's hole and the next ring's outside *(seen: four loops,
+    // the middle one twice, for the ring between the outer and the inner
+    // one)*.
+    let measured: Option<Vec<crate::profile::Measured>> = each
+        .and_then(|each| each.into_iter().collect::<Option<Vec<_>>>())
+        .and_then(|all| {
+            let mut distinct: Vec<crate::profile::Measured> = Vec::new();
+            for m in &all {
+                if !distinct.iter().any(|d| same(d, m)) {
+                    distinct.push(m.clone());
+                }
+            }
+            if crate::profile::nested(&distinct) {
+                crate::profile::even_odd(&all)
+            } else {
+                Some(distinct)
+            }
         })
-        .filter(|m: &Vec<crate::profile::Measured>| !crate::profile::nested(m));
-    let reference = |k: usize| {
+        .filter(|v| !v.is_empty());
+    let reference = |m: Option<&crate::profile::Measured>| {
         let mut p = json!({"kind": "profile", "sketch": name, "sketch_timeline_index": index});
-        if let Some(m) = measured.as_ref().and_then(|v| v.get(k)) {
+        if let Some(m) = m {
             p["area"] = json!(m.area);
             p["centroid"] = json!([m.centroid[0], m.centroid[1], 0.0]);
         }
         p
     };
-    (0..selections.len().max(1)).map(reference).collect()
+    match &measured {
+        Some(v) => v.iter().map(|m| reference(Some(m))).collect(),
+        None => (0..selections.len().max(1))
+            .map(|_| reference(None))
+            .collect(),
+    }
 }
 
 /// A hole: slots 0 form (0 drilled, 1 countersink, 2 counterbore, 3 spot
@@ -300,10 +912,13 @@ pub fn hole(cx: &Context, record: usize, sketch: Option<usize>) -> Result<Transl
 }
 
 /// A fillet: slot 0 the edge sets (`dae9481b…`, a list of `1641d6aa…`:
-/// eight bytes, the edges, the radius, the selection and the tangent
-/// chain), 11 its form (0 edge fillet). The edges are named by the file's
-/// topological names, which are not decoded: the import finds them from
-/// the history state.
+/// the prefix, the edges, the radius, the selection and a boolean), 11 its
+/// form (0 edge fillet). The edges are named by the file's topological
+/// names, which are not decoded: the import finds them from the history
+/// state. The boolean was taken for the tangent chain option, but it reads
+/// false in every fillet of the test files while their history states
+/// show whole tangent chains rounded from edges inside them: the sets
+/// follow tangent chains (the dump's default).
 pub fn fillet(cx: &Context, record: usize) -> Result<Translated, String> {
     let slots = cx.slots(record)?;
     let slot = |i: usize| slots.get(i).copied().flatten();
@@ -317,20 +932,15 @@ pub fn fillet(cx: &Context, record: usize) -> Result<Translated, String> {
         .ok_or("its edge sets were not read")?;
     let mut edge_sets = Vec::new();
     for set in sets.into_iter().filter(|&s| cx.dc.is(s, &FILLET_SET)) {
-        let mut r = cx.dc.body(set);
-        let refs = (|| -> dc::Result<Vec<Option<usize>>> {
-            r.skip(8)?;
-            (0..4).map(|_| r.reference()).collect()
-        })()
-        .map_err(|e| format!("edge set {set}: {e}"))?;
+        let mut r = cx.dc.fields(set);
+        let refs = (0..4)
+            .map(|_| r.reference())
+            .collect::<dc::Result<Vec<Option<usize>>>>()
+            .map_err(|e| format!("edge set {set}: {e}"))?;
         let radius = cx
             .parameter(refs[1], &mut t.parameters)
             .ok_or("an edge set without its radius")?;
-        let mut s = json!({"_type": "ConstantRadiusFilletEdgeSet", "radius": radius});
-        if let Some(chain) = cx.boolean(refs[3]) {
-            s["isTangentChain"] = json!(chain);
-        }
-        edge_sets.push(s);
+        edge_sets.push(json!({"_type": "ConstantRadiusFilletEdgeSet", "radius": radius}));
     }
     if edge_sets.is_empty() {
         return Err("no edge sets read".to_owned());
@@ -440,9 +1050,98 @@ pub fn plane_offset(dc: &Definitions, record: usize) -> Option<(usize, usize)> {
     })
 }
 
+/// A mid plane's definition (`560a6ccb…`: the header, an i32, the plane
+/// and the two planes it lies midway between) *(seen)*.
+pub const PLANE_MID: [u8; 16] = type_id("560a6ccba54b56ceec60569ccfa621b0");
+/// A plane at an angle (`8af4e674…`: the header, an i32, the plane, the
+/// work axis it turns about, the plane it is at an angle to, the angle (a
+/// parameter), then data not decoded) *(seen)*.
+pub const PLANE_ANGLE: [u8; 16] = type_id("8af4e674d2117f3160008db7b035c3b0");
+
+/// A plane through three work points (`8a924209…`: the header, an i32, the
+/// plane and the three points) *(seen)*.
+pub const PLANE_THREE_POINTS: [u8; 16] = type_id("8a924209d211042860008cb7b035c3b0");
+/// A plane through two work axes (`5abeff8a…`: the header, an i32, the
+/// plane and the two axes) *(seen)*.
+pub const PLANE_TWO_AXES: [u8; 16] = type_id("5abeff8ad211e92b60008db7b035c3b0");
+/// A plane of a work point and a work axis (`62b73858…`: the header, an
+/// i32, the plane, the point and the axis): through the axis and the point,
+/// or through the point normal to the axis (its geometry tells) *(seen)*.
+pub const PLANE_POINT_AXIS: [u8; 16] = type_id("62b73858d2116e3160008db7b035c3b0");
+/// A work point (`3edf52ce…`): after the header, the prefix and 12 bytes
+/// (up to major 18; 16 from major 24) its position (three f64, model
+/// coordinates, cm) and two lists, empty *(seen)*.
+pub const WORK_POINT: [u8; 16] = type_id("3edf52ced011d0d20008ccbc0663dc09");
+
+/// A work point's position (cm).
+pub fn work_point(dc: &Definitions, record: usize) -> Option<[f64; 3]> {
+    if !dc.is(record, &WORK_POINT) {
+        return None;
+    }
+    // Its position is followed by two lists, empty in every work point
+    // seen (12 bytes before it up to major 18, 16 from 24).
+    let bytes = dc.bytes(record);
+    let n = bytes.len().checked_sub(40)?;
+    let empty = [2, 0, 0, 0x30, 0, 0, 0, 0];
+    if bytes[n + 24..n + 32] != empty || bytes[n + 32..] != empty {
+        return None;
+    }
+    let mut r = Reader::at(bytes, n);
+    let p = [r.f64().ok()?, r.f64().ok()?, r.f64().ok()?];
+    // Within 10 km: other bytes read as a position are not.
+    p.iter().all(|x| x.abs() < 1e6).then_some(p)
+}
+
+/// A work point as the dump's construction point reference: the origin
+/// by its name, else its position (cm).
+fn point_entity(dc: &Definitions, record: usize) -> Option<Value> {
+    let p = work_point(dc, record)?;
+    Some(if p.iter().all(|v| v.abs() < 1e-12) {
+        json!({"kind": "construction_point", "origin": "Origin", "timeline_index": null})
+    } else {
+        json!({"kind": "construction_point", "origin": null, "timeline_index": null,
+               "geometry": {"type": "Point3D", "origin": p}})
+    })
+}
+
+/// The references after the plane in a definition of `record` of type
+/// `t` (the header, an i32, the plane, then `n` references).
+fn plane_definition(dc: &Definitions, record: usize, t: &[u8; 16], n: usize) -> Option<Vec<usize>> {
+    dc.of_type(t).find_map(|d| {
+        let mut r = dc.body(d);
+        r.i32().ok()?;
+        if r.reference().ok()?? != record {
+            return None;
+        }
+        (0..n).map(|_| r.reference().ok().flatten()).collect()
+    })
+}
+
+/// A work axis as the dump's construction axis reference: an origin axis
+/// by its name, else its geometry (cm).
+fn axis_entity(dc: &Definitions, record: usize) -> Option<Value> {
+    let (p, v) = axis(dc, record)?;
+    let along = p[0] * v[0] + p[1] * v[1] + p[2] * v[2];
+    let through_origin = (0..3).all(|i| (p[i] - along * v[i]).abs() < 1e-9);
+    let origin = [(0, "X"), (1, "Y"), (2, "Z")]
+        .into_iter()
+        .find(|&(i, _)| (v[i].abs() - 1.0).abs() < 1e-9)
+        .map(|(_, n)| n);
+    Some(match origin {
+        Some(name) if through_origin => {
+            json!({"kind": "construction_axis", "origin": name, "timeline_index": null})
+        }
+        _ => json!({"kind": "construction_axis", "origin": null, "timeline_index": null,
+                    "geometry": {"type": "Line3D", "origin": p, "direction": v}}),
+    })
+}
+
 /// A work plane item: offset from another plane where the file says so
-/// (`ConstructionPlaneOffsetDefinition`), else fixed where it is; its
-/// geometry either way.
+/// (`ConstructionPlaneOffsetDefinition`), midway between two
+/// (`ConstructionPlaneMidplaneDefinition`: `planarEntityOne` and `Two`) or
+/// at an angle to one about a work axis
+/// (`ConstructionPlaneAtAngleDefinition`: `linearEntity`, `planarEntity`,
+/// `angle`), else fixed where it is; its geometry either way.
 pub fn work_plane(
     cx: &Context,
     record: usize,
@@ -461,8 +1160,100 @@ pub fn work_plane(
     {
         t.detail["definition"] = json!({"_type": "ConstructionPlaneOffsetDefinition",
             "planarEntity": base, "offset": offset});
+    } else if let Some(refs) = plane_definition(cx.dc, record, &PLANE_MID, 2)
+        && let (Some(a), Some(b)) = (
+            plane_reference(cx, refs[0], items),
+            plane_reference(cx, refs[1], items),
+        )
+    {
+        t.detail["definition"] = json!({"_type": "ConstructionPlaneMidplaneDefinition",
+            "planarEntityOne": a, "planarEntityTwo": b});
+    } else if let Some(refs) = plane_definition(cx.dc, record, &PLANE_ANGLE, 3)
+        && let Some(line) = axis_entity(cx.dc, refs[0])
+        && let Some(base) = plane_reference(cx, refs[1], items)
+        && let Some(angle) = cx.parameter(Some(refs[2]), &mut t.parameters)
+    {
+        t.detail["definition"] = json!({"_type": "ConstructionPlaneAtAngleDefinition",
+            "linearEntity": line, "planarEntity": base, "angle": angle});
+    } else if let Some(refs) = plane_definition(cx.dc, record, &PLANE_THREE_POINTS, 3)
+        && let Some(points) = refs
+            .iter()
+            .map(|&p| point_entity(cx.dc, p))
+            .collect::<Option<Vec<Value>>>()
+    {
+        t.detail["definition"] = json!({"_type": "ConstructionPlaneThreePointsDefinition",
+            "pointEntityOne": points[0], "pointEntityTwo": points[1],
+            "pointEntityThree": points[2]});
+    } else if let Some(refs) = plane_definition(cx.dc, record, &PLANE_TWO_AXES, 2)
+        && let (Some(a), Some(b)) = (axis_entity(cx.dc, refs[0]), axis_entity(cx.dc, refs[1]))
+    {
+        t.detail["definition"] = json!({"_type": "ConstructionPlaneTwoEdgesDefinition",
+            "linearEntityOne": a, "linearEntityTwo": b});
+    } else if let Some(refs) = plane_definition(cx.dc, record, &PLANE_POINT_AXIS, 2)
+        && let (Some(point), Some(line), Some((_, v))) = (
+            point_entity(cx.dc, refs[0]),
+            axis_entity(cx.dc, refs[1]),
+            axis(cx.dc, refs[1]),
+        )
+    {
+        // Through the axis, or normal to it.
+        let along = (normal[0] * v[0] + normal[1] * v[1] + normal[2] * v[2]).abs();
+        let kind = if along < 1e-9 {
+            "ConstructionPlaneLineAndPointDefinition"
+        } else {
+            "ConstructionPlaneNormalToLineDefinition"
+        };
+        t.detail["definition"] = json!({"_type": kind, "linearEntity": line, "pointEntity": point});
+    } else if let Some(base) = [PLANE_PARALLEL_POINT, PLANE_PARALLEL_GEOMETRY]
+        .iter()
+        .filter_map(|ty| plane_definition(cx.dc, record, ty, 2))
+        .find_map(|refs| refs.into_iter().find(|&r| cx.dc.is(r, &WORK_PLANE)))
+        && let Some((reference, offset)) = parallel_offset(cx, base, items, origin, normal)
+    {
+        // Parallel to a plane through a point: offset from that plane to
+        // where the point puts it (the point fixed where it is, as work
+        // points are).
+        t.detail["definition"] = json!({"_type": "ConstructionPlaneOffsetDefinition",
+            "planarEntity": reference, "offset": {"kind": "parameter", "value": offset}});
     }
     Ok(t)
+}
+
+/// A plane parallel to a work plane through a work point (`63b73858…`:
+/// the header, an i32, the plane, the point and the plane it is parallel
+/// to) *(seen: the plane's origin is the point)*.
+pub const PLANE_PARALLEL_POINT: [u8; 16] = type_id("63b73858d2116e3160008db7b035c3b0");
+/// A plane parallel to a work plane through a point of the model's
+/// geometry (`eea9eab3…`: the header, an i32, the plane, the plane it is
+/// parallel to, a reference to the model's geometry `4a068a52…` (an edge
+/// with its curve, not decoded), then two f64) *(seen)*.
+pub const PLANE_PARALLEL_GEOMETRY: [u8; 16] = type_id("eea9eab3d211dd3260008db7b035c3b0");
+
+/// The base plane's reference and the offset (cm) along its normal (an
+/// origin plane's own: +z for XY, +y for XZ, +x for YZ) that puts a plane
+/// parallel to it at `origin`; None when the planes are not parallel.
+fn parallel_offset(
+    cx: &Context,
+    base: usize,
+    items: &HashMap<usize, i64>,
+    origin: [f64; 3],
+    normal: [f64; 3],
+) -> Option<(Value, f64)> {
+    let (o, x, y) = plane(cx.dc, base)?;
+    let n = unit(cross(x, y))?;
+    let c = cross(n, normal);
+    if c.iter().map(|v| v * v).sum::<f64>().sqrt() > 1e-9 {
+        return None;
+    }
+    let reference = plane_reference(cx, base, items)?;
+    let n = match reference["origin"].as_str() {
+        Some("XY") => [0.0, 0.0, 1.0],
+        Some("XZ") => [0.0, 1.0, 0.0],
+        Some("YZ") => [1.0, 0.0, 0.0],
+        _ => n,
+    };
+    let d: f64 = (0..3).map(|i| (origin[i] - o[i]) * n[i]).sum();
+    Some((reference, d))
 }
 
 /// The features a pattern or mirror copies and its properties: the record
@@ -557,6 +1348,21 @@ pub fn rectangular_pattern(
     {
         let (Some(&c), Some(&s), Some(&v)) = (counts.get(k), spacings.get(k), directions.get(k))
         else {
+            // A direction of another record (a direction `40df52ce…`
+            // whose flip is not decoded, a path `aa7b97a5…`) *(seen)*: the
+            // count and spacing, the direction found with the history.
+            if k == 0
+                && directions.is_empty()
+                && let (Some(&c), Some(&s)) = (counts.first(), spacings.first())
+            {
+                d[quantity] = cx.parameter(Some(c), &mut t.parameters).ok_or("a count")?;
+                d[distance] = cx
+                    .parameter(Some(s), &mut t.parameters)
+                    .ok_or("a spacing")?;
+                t.notes
+                    .push("its direction is found with the history".to_owned());
+                break;
+            }
             if k == 0 {
                 return Err("its first direction was not read".to_owned());
             }
@@ -654,6 +1460,90 @@ pub fn mirror(
     Ok(t)
 }
 
+/// A thread's ends (`9984474c…`, slot 10 of a thread).
+pub const THREAD_ENDS: [u8; 16] = type_id("9984474cf54708717e794c81ae021d41");
+/// A thread's size (`1f7e08a4…`): its context is the thread feature.
+pub const THREAD_SIZE: [u8; 16] = type_id("1f7e08a4d4115f956000c6a4cae1fbb0");
+
+/// A thread's size from its record (`1f7e08a4…`, the thread feature its
+/// header's context): after the header a reference, then texts: the
+/// nominal size, the designation (`M3x0.5`), the thread type (`ISO Metric
+/// profile`), an empty text, a u32, four empty texts and the class (`6g`,
+/// `6H`), then the limits of its diameters and its pitch as texts in the
+/// saving machine's number format *(seen)*.
+fn thread_size(dc: &Definitions, feature: usize) -> Option<(String, String, String)> {
+    let record = dc
+        .of_type(&THREAD_SIZE)
+        .find(|&r| dc.header(r).is_some_and(|h| h.context == Some(feature)))?;
+    let mut r = dc.body(record);
+    r.u32().ok()?;
+    r.text().ok()?;
+    let designation = r.text().ok()?;
+    let kind = r.text().ok()?;
+    r.text().ok()?;
+    r.u32().ok()?;
+    for _ in 0..4 {
+        r.text().ok()?;
+    }
+    let class = r.text().ok()?;
+    (!designation.is_empty()).then_some((designation, kind, class))
+}
+
+/// A thread: slots 0 its faces (named by the file's topological names, not
+/// decoded), 1 full length (a boolean), 3 the length and 4 the offset of a
+/// thread that is not, 6 modelled (a boolean) and 10 its ends
+/// (`9984474c…`: after the prefix two points, cm, on its cylinder's
+/// surface or axis, where the thread starts and where it ends) *(seen)*;
+/// its size in a record of its own ([`thread_size`]). The face is the
+/// cylinder through both points, which the import looks for.
+pub fn thread(cx: &Context, record: usize) -> Result<Translated, String> {
+    let slots = cx.slots(record)?;
+    let slot = |i: usize| slots.get(i).copied().flatten();
+    let mut t = Translated::default();
+    let ends = slot(10)
+        .filter(|&r| cx.dc.is(r, &THREAD_ENDS))
+        .and_then(|r| {
+            let mut rd = cx.dc.fields(r);
+            let mut p = [[0.0; 3]; 2];
+            for q in &mut p {
+                for x in q.iter_mut() {
+                    *x = rd.f64().ok()?;
+                }
+            }
+            p.iter().flatten().all(|x| x.is_finite()).then_some(p)
+        })
+        .ok_or("its ends were not read")?;
+    let along = [
+        ends[1][0] - ends[0][0],
+        ends[1][1] - ends[0][1],
+        ends[1][2] - ends[0][2],
+    ];
+    let axis = unit(along).ok_or("its ends are one point")?;
+    let (designation, kind, class) = thread_size(cx.dc, record).ok_or("its size was not read")?;
+    let full = cx.boolean(slot(1)).ok_or("its extent was not read")?;
+    let mut d = json!({
+        "inputCylindricalFaces": [{"kind": "face", "geometry": {"type": "Cylinder", "axis": axis},
+                                   "start_point": ends[0], "end_point": ends[1]}],
+        "threadInfo": {"threadType": kind, "threadDesignation": designation,
+                       "threadClass": class},
+        "isModeled": cx.boolean(slot(6)) == Some(true),
+        "isFullLength": full,
+        // It starts at its first end: the low end along the face's axis
+        // given above.
+        "threadLocation": "LowEndThreadLocation",
+    });
+    if !full {
+        d["threadLength"] = cx
+            .parameter(slot(3), &mut t.parameters)
+            .ok_or("its length was not read")?;
+        if let Some(offset) = cx.parameter(slot(4), &mut t.parameters) {
+            d["threadOffset"] = offset;
+        }
+    }
+    t.detail = d;
+    Ok(t)
+}
+
 /// A work axis: its last 48 bytes before a byte are a point and a
 /// direction (model coordinates, cm).
 pub fn axis(dc: &Definitions, record: usize) -> Option<([f64; 3], [f64; 3])> {
@@ -668,8 +1558,14 @@ pub fn axis(dc: &Definitions, record: usize) -> Option<([f64; 3], [f64; 3])> {
 }
 
 /// The dump id of a line of a sketch that lies on the axis through `p`
-/// along `v` (model coordinates, cm).
-fn sketch_line_on(cx: &Context, sketch: usize, p: [f64; 3], v: [f64; 3]) -> Option<String> {
+/// along `v` (model coordinates, cm), and the line's direction from its
+/// start to its end.
+fn sketch_line_on(
+    cx: &Context,
+    sketch: usize,
+    p: [f64; 3],
+    v: [f64; 3],
+) -> Option<(String, [f64; 3])> {
     let ids = cx.sketch_ids.get(&sketch)?;
     let m = crate::sketch::sketch_matrix(cx.dc, sketch).ok()?;
     let model = |q: [f64; 2]| {
@@ -687,17 +1583,19 @@ fn sketch_line_on(cx: &Context, sketch: usize, p: [f64; 3], v: [f64; 3]) -> Opti
         .collect();
     lines.sort();
     lines.into_iter().find_map(|(&r, id)| {
-        let mut rd = cx.dc.body(r);
-        rd.skip(16).ok()?;
+        let mut rd = cx.dc.fields(r);
+        rd.skip(8).ok()?;
         let ends = rd.references().ok()?;
         let a = model(crate::sketch::point(cx.dc, *ends.first()?)?);
         let b = model(crate::sketch::point(cx.dc, *ends.get(1)?)?);
-        (off_axis(a) < 1e-6 && off_axis(b) < 1e-6).then(|| id.clone())
+        (off_axis(a) < 1e-6 && off_axis(b) < 1e-6)
+            .then(|| (id.clone(), [b[0] - a[0], b[1] - a[1], b[2] - a[2]]))
     })
 }
 
 /// A revolution: slots 0 operation, 1 profiles, 2 axis (a work axis), 3
-/// extent (3 an angle), 4 the angle *(seen)*. An axis along an origin axis
+/// extent (1 an angle, 3 a full turn *(verified)*), 4 the angle, 5 its
+/// direction (an enumeration `c26aa0c7…`, not decoded) *(seen)*. An axis along an origin axis
 /// is named so; another is left to the import, which tries the sketch's
 /// lines.
 pub fn revolve(
@@ -717,47 +1615,164 @@ pub fn revolve(
         other => return Err(format!("operation {other:?} is not known")),
     };
     let mut d = json!({"operation": operation, "isSolid": true});
+    participants(cx, &slots, operation, &mut d);
     match cx.enumeration(slot(3), &ENUM_EXTENT) {
-        Some(3) => {
+        // 1 an angle.
+        Some(1) => {
             let angle = cx
                 .parameter(slot(4), &mut t.parameters)
                 .ok_or("its angle was not read")?;
             d["extentDefinition"] = json!({"_type": "AngleExtentDefinition", "angle": angle});
+        }
+        // 3 a full turn: the angle parameter keeps a value the extent does
+        // not use (0, or the 90° it was made with).
+        Some(3) => {
+            d["extentDefinition"] = json!({"_type": "AngleExtentDefinition",
+                "angle": {"kind": "parameter", "value": std::f64::consts::TAU, "unit": "rad"}});
         }
         other => return Err(format!("revolution extent {other:?} is not known")),
     }
     if let Some((index, name)) = &sketch {
         d["profile"] = json!(profiles(cx, slot(1), *index, name, sketch_record));
     }
-    if let Some((p, v)) = slot(2).and_then(|a| axis(cx.dc, a)) {
-        let through_origin = {
-            // The axis passes through the origin: p minus its part along v
-            // is zero.
-            let along = p[0] * v[0] + p[1] * v[1] + p[2] * v[2];
-            (0..3).all(|i| (p[i] - along * v[i]).abs() < 1e-9)
-        };
-        let origin = [(0, "X"), (1, "Y"), (2, "Z")]
-            .into_iter()
-            .find(|&(i, _)| (v[i].abs() - 1.0).abs() < 1e-9)
-            .map(|(_, n)| n);
-        let line = sketch
-            .as_ref()
-            .zip(sketch_record)
-            .and_then(|((index, _), s)| {
-                let id = sketch_line_on(cx, s, p, v)?;
-                Some(json!({"kind": "sketch_entity", "objectType": "SketchLine",
-                        "sketch_timeline_index": index, "id": id}))
-            });
-        match (origin, line) {
-            (_, Some(line)) => d["axis"] = line,
-            (Some(name), None) if through_origin => {
-                d["axis"] =
-                    json!({"kind": "construction_axis", "origin": name, "timeline_index": null});
-            }
-            _ => t
+    if let Some(a) = slot(2) {
+        match axis_reference(cx, a, sketch.as_ref(), sketch_record) {
+            Some(a) => d["axis"] = a,
+            None => t
                 .notes
                 .push("its axis is found among the sketch's lines".to_owned()),
         }
+    }
+    t.detail = d;
+    Ok(t)
+}
+
+/// A work axis as the dump's reference: a line of the sketch on it, else
+/// an origin axis it lies on, else its geometry (cm).
+fn axis_reference(
+    cx: &Context,
+    record: usize,
+    sketch: Option<&(i64, String)>,
+    sketch_record: Option<usize>,
+) -> Option<Value> {
+    axis_reference_along(cx, record, sketch, sketch_record).map(|(a, _)| a)
+}
+
+/// [`axis_reference`], and whether the reference runs against the work
+/// axis' stored direction (a line from its start to its end, an origin
+/// axis along +X, +Y or +Z).
+fn axis_reference_along(
+    cx: &Context,
+    record: usize,
+    sketch: Option<&(i64, String)>,
+    sketch_record: Option<usize>,
+) -> Option<(Value, bool)> {
+    let (p, v) = axis(cx.dc, record)?;
+    let against = |d: [f64; 3]| d[0] * v[0] + d[1] * v[1] + d[2] * v[2] < 0.0;
+    let through_origin = {
+        // The axis passes through the origin: p minus its part along v
+        // is zero.
+        let along = p[0] * v[0] + p[1] * v[1] + p[2] * v[2];
+        (0..3).all(|i| (p[i] - along * v[i]).abs() < 1e-9)
+    };
+    let origin = [(0, "X"), (1, "Y"), (2, "Z")]
+        .into_iter()
+        .find(|&(i, _)| (v[i].abs() - 1.0).abs() < 1e-9);
+    let line = sketch.zip(sketch_record).and_then(|((index, _), s)| {
+        let (id, d) = sketch_line_on(cx, s, p, v)?;
+        Some((
+            json!({"kind": "sketch_entity", "objectType": "SketchLine",
+                "sketch_timeline_index": index, "id": id}),
+            against(d),
+        ))
+    });
+    match (origin, line) {
+        (_, Some(line)) => Some(line),
+        (Some((i, name)), None) if through_origin => Some((
+            json!({"kind": "construction_axis", "origin": name, "timeline_index": null}),
+            v[i] < 0.0,
+        )),
+        // Another work axis (a cylinder's axis, a line of another sketch):
+        // by its geometry, fixed where it is as work axes are.
+        _ => Some((
+            json!({"kind": "construction_axis", "origin": null, "timeline_index": null,
+                   "geometry": {"type": "Line3D", "origin": p, "direction": v}}),
+            false,
+        )),
+    }
+}
+
+/// A coil's type (`b80cb14f…`: the prefix, two u16, the second the type)
+/// *(seen)*.
+pub const COIL_TYPE: [u8; 16] = type_id("b80cb14fd21158d6600013a99dccefb0");
+
+/// A coil: slots 0 operation, 1 profiles, 2 axis (a work axis), 3 against
+/// the axis (a boolean), 5 its type (0 pitch and turns, 1 turns and
+/// height, 2 pitch and height; 3, a spiral, not seen), 6 pitch, 7 height,
+/// 8 turns, 9 taper *(seen)*; the hand is not decoded (the import tries
+/// both).
+pub fn coil(
+    cx: &Context,
+    record: usize,
+    sketch: Option<(i64, String)>,
+    sketch_record: Option<usize>,
+) -> Result<Translated, String> {
+    let slots = cx.slots(record)?;
+    let slot = |i: usize| slots.get(i).copied().flatten();
+    let mut t = Translated::default();
+    let operation = match cx.enumeration(slot(0), &ENUM_OPERATION) {
+        Some(1) => "NewBodyFeatureOperation",
+        Some(2) => "CutFeatureOperation",
+        Some(3) => "JoinFeatureOperation",
+        Some(4) => "IntersectFeatureOperation",
+        other => return Err(format!("operation {other:?} is not known")),
+    };
+    let kind = slot(5).filter(|&r| cx.dc.is(r, &COIL_TYPE)).and_then(|r| {
+        let mut rd = cx.dc.fields(r);
+        rd.skip(2).ok()?;
+        rd.u16().ok()
+    });
+    let (kind, used): (&str, [usize; 2]) = match kind {
+        Some(0) => ("PitchAndRevolutionCoilType", [6, 8]),
+        Some(1) => ("RevolutionAndHeightCoilType", [8, 7]),
+        Some(2) => ("PitchAndHeightCoilType", [6, 7]),
+        other => return Err(format!("coil type {other:?} is not known")),
+    };
+    let mut d = json!({"operation": operation, "coilType": kind});
+    for (key, i) in [
+        ("pitch", 6),
+        ("height", 7),
+        ("revolutions", 8),
+        ("angle", 9),
+    ] {
+        // The sizes its type uses are its parameters; the others keep
+        // values the coil does not use.
+        let mut scratch = Vec::new();
+        let made = if used.contains(&i) || i == 9 {
+            &mut t.parameters
+        } else {
+            &mut scratch
+        };
+        if let Some(p) = cx.parameter(slot(i), made) {
+            d[key] = p;
+        }
+    }
+    if let Some((index, name)) = &sketch {
+        d["profile"] = json!(profiles(cx, slot(1), *index, name, sketch_record));
+    }
+    match slot(2).and_then(|a| axis_reference_along(cx, a, sketch.as_ref(), sketch_record)) {
+        Some((a, against)) => {
+            d["axis"] = a;
+            // Slot 3 turns the coil against the work axis' direction
+            // *(seen: the coils of the older parts that came in, all
+            // right-handed)*: the import tries that direction first.
+            if let Some(reversed) = cx.boolean(slot(3)) {
+                d["flip"] = json!(reversed != against);
+            }
+        }
+        None => t
+            .notes
+            .push("its axis is found among the sketch's lines".to_owned()),
     }
     t.detail = d;
     Ok(t)

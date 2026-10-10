@@ -7,235 +7,145 @@
 //! (`mitcad_ipt::design::history_states`), so every feature is checked
 //! against its own state.
 //!
-//! Bodies are converted to the neutral model when the file is opened and
-//! built with OCCT only when the importer asks for a state.
+//! The states are read once for all tries of an import
+//! (`mitcad_ipt::states::States`, which keeps the distinct bodies by the
+//! step of the history they were converted at); each try converts a body
+//! again and builds it with OCCT only when the importer asks for its state
+//! ([`IptGeometry`]).
 
-use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use cxx::SharedPtr;
-use mitcad_f3d::asm::AsmFile;
-use mitcad_f3d::asm::history::History;
-use mitcad_f3d::convert::{self, ConvertedBody};
 use mitcad_import::{StoredBody, StoredGeometry};
-use mitcad_ipt::BrepRecord;
+use mitcad_ipt::states::States;
 
 use crate::brep_import::{Source, to_ffi};
+use crate::f3d_import::build_stored_body;
 use crate::kernel::Shape;
-use crate::kernel::exchange::ffi::f3d_build_body;
 
-/// The largest distance (mm) from an edge's end to its vertex that a body
-/// of a history state may have and still be built (as for `.f3d` files).
-const MAX_VERTEX_GAP: f64 = 1e-2;
-
-struct Variant {
-    /// The B-rep record it comes from (index into `places`).
-    record: usize,
-    body: ConvertedBody,
-    built: Option<Option<SharedPtr<Shape>>>,
-}
-
-/// The bodies of a part's B-rep records.
+/// A try's view of the part's states: the bodies it built.
 pub struct IptGeometry {
-    places: Vec<(String, String)>,
-    variants: Vec<Variant>,
-    /// Distinct body sets of the history, oldest first (variants).
-    states: Vec<Vec<usize>>,
-    /// ASM state id → index into `states` of the bodies after it.
-    ops: HashMap<i64, usize>,
-    /// Timeline index → index into `states`.
-    item_states: HashMap<i64, usize>,
-    /// The bodies of records without a history (in the stored design).
-    plain: Vec<usize>,
-    /// The record whose history gives the states.
-    history_record: Option<usize>,
+    states: Arc<States>,
+    built: Vec<Option<Option<SharedPtr<Shape>>>>,
+    /// Each variant's lumps once looked at ([`IptGeometry::lumps`]).
+    lumps: Vec<Option<Vec<SharedPtr<Shape>>>>,
 }
 
 impl IptGeometry {
-    /// Reads the bodies of the B-rep records; `results` maps timeline
-    /// indices to the ASM state ids their operations made.
-    pub fn new(records: &[BrepRecord], results: &BTreeMap<i64, i64>) -> Result<Self, String> {
-        let options = mitcad_ipt::convert_options();
-        let mut g = IptGeometry {
-            places: Vec::new(),
-            variants: Vec::new(),
-            states: Vec::new(),
-            ops: HashMap::new(),
-            item_states: HashMap::new(),
-            plain: Vec::new(),
-            history_record: None,
-        };
-        for (index, record) in records.iter().enumerate() {
-            let place = record.place();
-            let file = AsmFile::parse(&record.asm).map_err(|e| format!("{place}: {e}"))?;
-            g.places
-                .push((place.clone(), file.header.asm_version.clone()));
-            let bodies: Vec<usize> = convert::body_records(&file)
-                .into_iter()
-                .filter(|(_, top)| *top)
-                .map(|(r, _)| r)
-                .collect();
-            let history = if g.history_record.is_none() {
-                History::parse(&file).ok().flatten()
-            } else {
-                None
-            };
-            let Some(h) = history else {
-                for &r in &bodies {
-                    let body = convert::convert_body(&file, r, &options);
-                    g.plain.push(g.variants.len());
-                    g.variants.push(Variant {
-                        record: index,
-                        body,
-                        built: None,
-                    });
-                }
-                continue;
-            };
-            g.history_record = Some(index);
-            // From the current state back: k operations undone, the bodies
-            // after the operation of state k.
-            let mut newest_first: Vec<Vec<ConvertedBody>> = Vec::new();
-            let mut ops: Vec<(i64, usize)> = Vec::new();
-            for k in 0..=h.states.len() {
-                let view = h.view(k);
-                let set: Vec<ConvertedBody> = bodies
-                    .iter()
-                    .filter(|r| view.get(r) != Some(&None))
-                    .map(|&r| {
-                        if k == 0 {
-                            convert::convert_body(&file, r, &options)
-                        } else {
-                            convert::convert_body_at(&file, r, &options, Some(&view))
-                        }
-                    })
-                    .collect();
-                let same = newest_first.last().is_some_and(|last| {
-                    last.len() == set.len() && last.iter().zip(&set).all(|(a, b)| a.body == b.body)
-                });
-                if !same {
-                    newest_first.push(set);
-                }
-                if let Some(s) = h.states.get(k) {
-                    ops.push((s.id, newest_first.len() - 1));
-                }
-            }
-            let count = newest_first.len();
-            g.ops = ops.into_iter().map(|(id, j)| (id, count - 1 - j)).collect();
-            // A body as it was in the state before is that state's variant.
-            let mut previous: Vec<usize> = Vec::new();
-            for set in newest_first.into_iter().rev() {
-                let ids: Vec<usize> = set
-                    .into_iter()
-                    .map(|body| {
-                        previous
-                            .iter()
-                            .copied()
-                            .find(|&v| {
-                                let old = &g.variants[v].body;
-                                old.record == body.record && old.body == body.body
-                            })
-                            .unwrap_or_else(|| {
-                                g.variants.push(Variant {
-                                    record: index,
-                                    body,
-                                    built: None,
-                                });
-                                g.variants.len() - 1
-                            })
-                    })
-                    .collect();
-                previous.clone_from(&ids);
-                g.states.push(ids);
-            }
+    pub fn new(states: Arc<States>) -> Self {
+        let built = vec![None; states.variants.len()];
+        let lumps = vec![None; states.variants.len()];
+        Self {
+            states,
+            built,
+            lumps,
         }
-        g.item_states = results
-            .iter()
-            .filter_map(|(item, id)| Some((*item, *g.ops.get(id)?)))
-            .collect();
-        Ok(g)
     }
 
     /// The number of items whose history state was found.
     pub fn items_with_states(&self) -> usize {
-        self.item_states.len()
+        self.states.items_with_states()
     }
 
     fn build(&mut self, v: usize) -> Option<SharedPtr<Shape>> {
-        if let Some(built) = &self.variants[v].built {
+        if let Some(built) = &self.built[v] {
             return built.clone();
         }
-        let variant = &self.variants[v];
-        let (place, asm_version) = &self.places[variant.record];
+        let states = &self.states;
+        let variant = &states.variants[v];
+        let (place, asm_version) = &states.places[variant.record];
         let source = Source {
             document: "",
             blob: place,
             asm_version,
-            history: Some(variant.record) == self.history_record,
+            history: Some(variant.record) == states.history_record,
             history_step: 0,
         };
-        let data = to_ffi(&source, &variant.body);
-        let shape = f3d_build_body(&data);
-        let shape = (!shape.is_null()).then_some(shape);
-        self.variants[v].built = Some(shape.clone());
+        let shape = states
+            .converted(v)
+            .and_then(|body| build_stored_body(&to_ffi(&source, &body)));
+        self.built[v] = Some(shape.clone());
         shape
-    }
-
-    /// Whether the conversion of a variant lost faces (as for `.f3d`
-    /// files): faces left out, broken topology, or a sheet where the stored
-    /// design has a solid.
-    fn lost_faces(&self, v: usize) -> bool {
-        let body = &self.variants[v].body;
-        let check = &body.check;
-        let gaps = check.vertex_mismatches > 0 && check.max_vertex_gap > MAX_VERTEX_GAP;
-        if body.skipped_faces > 0 || check.unpaired_coedges > 0 || check.open_loops > 0 || gaps {
-            return true;
-        }
-        if body.body.is_solid() {
-            return false;
-        }
-        self.states.last().is_some_and(|last| {
-            last.iter().any(|&w| {
-                let stored = &self.variants[w].body;
-                stored.record == body.record && stored.body.is_solid()
-            })
-        })
     }
 
     fn bodies(&mut self, variants: &[usize]) -> (Vec<StoredBody<SharedPtr<Shape>>>, usize) {
         let mut broken = 0;
         let mut out = Vec::new();
         for &v in variants {
+            // A deleted body that does not build cleanly is left out of the
+            // state (as the states held no deleted bodies before), so that
+            // the others still check the items.
+            let deleted = self.states.variants[v].deleted;
             let Some(shape) = self.build(v) else {
-                broken += 1;
+                if !deleted {
+                    broken += 1;
+                }
                 continue;
             };
-            if self.lost_faces(v) {
+            let states = &self.states;
+            let variant = &states.variants[v];
+            if variant.lost {
+                if deleted {
+                    continue;
+                }
                 broken += 1;
             }
-            let variant = &self.variants[v];
-            out.push(StoredBody {
-                shape,
-                name: None,
-                source: format!("{}/{}", self.places[variant.record].0, variant.body.record),
-                component: None,
-                id: Some(v as u64),
-            });
+            let source = format!(
+                "{}/{}",
+                states.places[variant.record].0, variant.body_record
+            );
+            let lumps = self.lumps(v, &shape);
+            if lumps.len() < 2 {
+                out.push(StoredBody {
+                    shape,
+                    name: None,
+                    source,
+                    component: None,
+                    id: Some(v as u64),
+                });
+                continue;
+            }
+            for (k, lump) in (0u64..).zip(lumps) {
+                out.push(StoredBody {
+                    shape: lump,
+                    name: None,
+                    source: format!("{source}#{k}"),
+                    component: None,
+                    id: Some(v as u64 | ((k + 1) << 32)),
+                });
+            }
         }
         (out, broken)
+    }
+
+    /// The lumps of a variant's body ([`mitcad_import::history::lumps`]),
+    /// looked at once (and again once its shape was released).
+    fn lumps(&mut self, v: usize, shape: &SharedPtr<Shape>) -> Vec<SharedPtr<Shape>> {
+        if let Some(lumps) = &self.lumps[v] {
+            return lumps.clone();
+        }
+        let lumps = mitcad_import::history::lumps(&crate::kernel::OcctKernel, shape);
+        self.lumps[v] = Some(lumps.clone());
+        lumps
     }
 }
 
 impl StoredGeometry<SharedPtr<Shape>> for IptGeometry {
     fn state_count(&mut self) -> usize {
-        self.states.len()
+        self.states.states.len()
     }
 
     fn item_state(&mut self, index: i64) -> Option<usize> {
-        self.item_states.get(&index).copied()
+        self.states.item_states.get(&index).copied()
+    }
+
+    fn item_without_result(&mut self, index: i64) -> bool {
+        self.states.without_result.contains(&index)
     }
 
     fn state(&mut self, index: usize) -> Result<Vec<StoredBody<SharedPtr<Shape>>>, String> {
         let variants = self
+            .states
             .states
             .get(index)
             .cloned()
@@ -248,11 +158,34 @@ impl StoredGeometry<SharedPtr<Shape>> for IptGeometry {
         }
     }
 
+    /// Drops the shapes built for the variants of the states before
+    /// `state` alone (mitcad#80: memory got tight); they are built again
+    /// when asked for. A variant that did not build is not tried again.
+    fn release_before(&mut self, state: usize) {
+        let states = &self.states;
+        let mut kept = vec![false; states.variants.len()];
+        for &v in states
+            .states
+            .iter()
+            .skip(state)
+            .flatten()
+            .chain(&states.plain)
+        {
+            kept[v] = true;
+        }
+        for ((built, lumps), kept) in self.built.iter_mut().zip(&mut self.lumps).zip(kept) {
+            if !kept && matches!(built, Some(Some(_))) {
+                *built = None;
+                *lumps = None;
+            }
+        }
+    }
+
     /// The last history state's bodies and the bodies of the records
     /// without a history.
     fn final_bodies(&mut self) -> Result<Vec<StoredBody<SharedPtr<Shape>>>, String> {
-        let mut variants = self.states.last().cloned().unwrap_or_default();
-        variants.extend(self.plain.iter().copied());
+        let mut variants = self.states.states.last().cloned().unwrap_or_default();
+        variants.extend(self.states.plain.iter().copied());
         Ok(self.bodies(&variants).0)
     }
 }

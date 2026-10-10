@@ -1,0 +1,82 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: three causes of segmentation faults in TKFillet (mitcad#122).
+
+- ChFi3d_Builder::StartSol (continuing a stripe from its previous surface
+  data): when the face found past the contact point is an obstacle but does
+  not hold the arc the contact left by (it lies across another edge at a
+  vertex), StartSol returned false with c1obstacle set and HC a new, empty
+  BRepAdaptor_Curve2d. PerformSetOfSurfOnElSpine then took the obstacle
+  branch and walked a surface/restriction blend on that empty curve
+  (BRepBlend_SurfRstConstRad::Values). StartSol now leaves HC null and
+  c1obstacle false there, so the caller ends or stops the stripe as for any
+  other missing neighbour.
+- ChFi3d_Builder::PerformOneCorner and IntersectMoreCorner split the corner
+  curve at the seam of the face at the end with Extrema_ExtCC; when the curve
+  runs parallel to the seam, Extrema_ExtCC reports one distance but no
+  points, and Points() read past the end of its sequence. The seam split is
+  skipped for parallel curves (as ChFi3d_Builder_CnCrn.cxx already does).
+- ChFi3d_Builder::PerformMoreSurfdata read the neighbour face index from
+  the first stripe of the builder (myListStripe.First()) instead of the
+  stripe at the vertex: with several contours that stripe may have fewer
+  surface data, the out-of-range Value() left its sequence with a current
+  index past its end, and a later Value() (ChFi3d_StripeEdgeInter) followed
+  a null node.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -1557,6 +1557,9 @@
+         }
+         else
+         {
++          // No obstacle after all: leave HC null, as the callers test it.
++          HC.Nullify();
++          c1obstacle = false;
+           prepareDefaultReturn();
+           return false;
+         }
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -1024,7 +1024,7 @@
+       GeomAdaptor_Curve              cur1(Ctrim->BasisCurve());
+       GeomAdaptor_Curve              cur2(Cc);
+       Extrema_ExtCC                  extCC(cur1, cur2);
+-      if (extCC.IsDone() && extCC.NbExt() != 0)
++      if (extCC.IsDone() && !extCC.IsParallel() && extCC.NbExt() != 0)
+       {
+         int    imin     = 0;
+         double distmin2 = RealLast();
+@@ -1506,7 +1506,7 @@
+       BRepLib_MakeEdge  Bedge(zob3d);
+       TopoDS_Edge       edg = Bedge.Edge();
+       BRepExtrema_ExtCC extCC(edgecouture, edg);
+-      if (extCC.IsDone() && extCC.NbExt() != 0)
++      if (extCC.IsDone() && !extCC.IsParallel() && extCC.NbExt() != 0)
+       {
+         for (int i = 1; i <= extCC.NbExt() && !intcouture; i++)
+         {
+@@ -3901,11 +3901,11 @@
+   int indSurface;
+   if (is1stCP1OnArc)
+   {
+-    indSurface = myListStripe.First()->SetOfSurfData()->Value(anInd)->IndexOfS1();
++    indSurface = aSeqSurfData.Value(anInd)->IndexOfS1();
+   }
+   else
+   {
+-    indSurface = myListStripe.First()->SetOfSurfData()->Value(anInd)->IndexOfS2();
++    indSurface = aSeqSurfData.Value(anInd)->IndexOfS2();
+   }
+ 
+   aNeighborFace = TopoDS::Face(myDS->Shape(indSurface));
+@@ -5085,7 +5085,7 @@
+       GeomAdaptor_Curve              cur1(Ctrim->BasisCurve());
+       GeomAdaptor_Curve              cur2(Cc);
+       Extrema_ExtCC                  extCC(cur1, cur2);
+-      if (extCC.IsDone() && extCC.NbExt() != 0)
++      if (extCC.IsDone() && !extCC.IsParallel() && extCC.NbExt() != 0)
+       {
+         int    imin     = 0;
+         double dist2min = RealLast();

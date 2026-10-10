@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// Remote repositories in the application (P12 remote, mitcad#11): a
-// project's versions shared through a git server or a folder.
+// The remote of the current Cloud project in the application (P12 remote,
+// mitcad#11, mitcad#89): the project's versions shared through a git server
+// or a folder.
 //
-// - File > Connect Project to Remote, Open Project from Remote, Sync,
-//   Check for Newer Versions, Remote Settings (files/RemoteDialogs.hpp).
-// - Each version Save records is sent to the remote at once (Preferences,
-//   Version Control); without a connection the versions wait, the status
-//   bar shows them, and they go when the remote can be reached again.
+// - File > Sync, Check for Newer Versions, Open in Browser; Project
+//   Settings (files/ProjectSettings.hpp) shares a project, changes its
+//   address or stops syncing it, and New Project and Open from Cloud make
+//   Cloud projects (files/ProjectDialogs.hpp).
+// - Each version Save records is sent to the remote at once (Project
+//   Settings, with Preferences' Cloud page as the default); without a
+//   connection the versions wait, the project indicator shows them, and
+//   they go when the remote can be reached again.
 // - The remote is checked for newer versions when a design opens, every
 //   so many minutes, and at the first change after opening; a newer
 //   version of the open file shows a notice under the toolbar ("A newer
@@ -18,13 +22,13 @@
 //   `sync`); files changed on both sides are chosen in Resolve Sync
 //   Conflicts. The open design is saved first, and opened again when the
 //   sync changed its file.
-// - The status bar shows the remote's state next to the version: synced,
-//   versions to send (an up arrow), newer ones on the remote (a down
-//   arrow), syncing, a conflict, offline, sign-in needed; a click gives its
-//   menu.
+// - Its state (synced, versions to send, newer ones, syncing, a conflict,
+//   offline, sign-in needed) goes to the project indicator
+//   (files/ProjectIndicator.hpp).
 //
-// The remote work runs on threads of its own (files/RemoteTask.hpp), one
-// at a time; the window asks it about the open file through Host.
+// The project is the window's current project (Host::projectRoot), never
+// the design's path. The remote work runs on threads of its own
+// (files/RemoteTask.hpp), one at a time.
 
 #include <functional>
 #include <optional>
@@ -36,13 +40,13 @@
 #include <QPointer>
 #include <QString>
 
+#include "ProjectIndicator.hpp"
+#include "ProjectSettings.hpp"
 #include "mitcad_bridge/lib.h"
 
 class QMainWindow;
-class QMenu;
 class QTimer;
 class QToolBar;
-class QToolButton;
 
 namespace mitcad {
 
@@ -56,14 +60,14 @@ class RemoteController : public QObject {
 public:
   // What the controller asks the window.
   struct Host {
+    // The current project's folder when it has versions ("" none).
+    std::function<QString()> projectRoot;
     // The open design's file (absolute; empty when untitled).
     std::function<QString()> filePath;
     // Whether it has unsaved changes.
     std::function<bool()> modified;
     // Save (with its version); false when cancelled or failed.
     std::function<bool()> save;
-    // Asks about unsaved changes before another design opens; false: cancel.
-    std::function<bool()> maybeSave;
     // Who records versions (files/MainWindowVersions.cpp), none when
     // cancelled.
     std::function<std::optional<QString>(const Project& project)> author;
@@ -71,15 +75,23 @@ public:
     // or with none when cancelled.
     std::function<bool(const QString& path, QString& error)> open;
     // The project's history moved (a sync): what Save compares the file
-    // with, and the status bar's version.
+    // with, and the indicator's version.
     std::function<void()> versionsChanged;
     // The status bar's message, red when `error`.
     std::function<void(const QString& message, bool error)> status;
-    // Starts Version History for a design without one.
-    std::function<void()> startHistory;
+    // Opens Project Settings (a project without a remote is shared there).
+    std::function<void()> projectSettings;
     // Runs `call` once the model's worker computes nothing (the window's
     // document is read then).
     std::function<void(std::function<void()> call)> whenIdle;
+    // Edit locks (mitcad#89, files/LockController.hpp): before Sync sends
+    // versions (false: cancelled, "Send Anyway" was not chosen), and the
+    // remote's newer version of the open file after a fetch (`incoming`
+    // with `path`): true when the lock controller took care of it (a
+    // read-only window shows it, a design whose lock was just taken is
+    // brought up to date), so no notice shows.
+    std::function<bool()> confirmSend;
+    std::function<bool(const QString& file, const QJsonObject& incoming)> newerVersion;
   };
 
   RemoteController(QMainWindow& window, Host host, QObject* parent = nullptr);
@@ -89,41 +101,76 @@ public:
   // The notice under the toolbar and the settings applied; after the
   // window's other bars.
   void startUp();
-  // The status bar's remote state (a button with the remote's menu).
-  QToolButton* statusButton() const { return m_button; }
+  // The remote's state for the project indicator.
+  ProjectIndicator::Remote indicatorState() const;
+  // "Up to date, last sync 10:42" (Project Settings' Status row).
+  QString statusText() const;
 
+  // The current project changed (opened, made, shared, stopped syncing):
+  // its remote's state, and a check for newer versions when `check`.
+  void projectChanged(bool check);
   // A project file opened as the design: its remote's state, and a check
   // for newer versions.
   void fileOpened(const QString& path);
-  // Save recorded a version of `path`: sent to the remote at once (unless
-  // turned off), and a newer version on the remote told.
+  // Save (or Project Settings) recorded a version in the project: sent to
+  // the remote at once (unless turned off), and a newer version on the
+  // remote told.
   void versionRecorded(const QString& path);
   // The open design's first change since it opened: the remote is checked
   // when it was not lately.
   void firstChange();
-  // The state of the open file's remote, read from the project (no
+  // The state of the current project's remote, read from the project (no
   // network).
   void refreshStatus();
-  // Preferences changed: the git program, the checks.
+  // Preferences or Project Settings changed: the git program, the checks,
+  // sending at once.
   void settingsChanged();
   // Before Save or Restore records a version: while a sync or a connection
   // moves the project's branch, waits for it (with a Cancel that stops it).
   void waitForBranch();
+  // Stops a running background check or push and waits for it; false (and
+  // `why` can wait, said) while a sync runs.
+  bool settle(const QString& why);
+  // Runs a task while a progress dialog with Cancel shows; its answer.
+  QJsonObject runModal(RemoteTask* task, const QString& label);
+  // Schedules sending the versions that wait, after a push failed.
+  void retryLater();
   // Before the window closes: running work is stopped (versions not sent
   // stay waiting, and go at the next start).
   void shutDown();
 
   // The commands.
-  void connectProject();
-  void openFromRemote();
   void sync();
   void check();
-  void showSettings();
   void openInBrowser();
+
+  // Live updates (mitcad#89, files/LiveController.hpp): while the current
+  // project's live connection is up, newer versions are announced and the
+  // remote is not checked on the timer; an announced version (or a
+  // connection back after missing messages) checks it at once, which shows
+  // it in the indicator and the notice of a newer version.
+  void setLive(bool live);
+  void versionAnnounced();
+
+  // Edit locks (mitcad#89): a fetch without telling its outcome (a
+  // read-only window follows the editor's versions), and the project's
+  // unpublished versions sent before an edit lock is released or handed
+  // over: a sync while a progress dialog shows, after the running work.
+  // Its answer ({"case": "nothing"} when nothing waits to be sent; a
+  // conflict is the error class "conflict", which is not asked about).
+  void checkQuietly();
+  QJsonObject syncNow(const QString& label);
+
+signals:
+  // The remote's state changed (indicatorState()).
+  void stateChanged();
+  // Versions of the project in `root` went to the remote (a push, or a sync
+  // that pushed): the branch there and its new commit.
+  void versionsSent(const QString& root, const QString& branch, const QString& commit);
 
 private:
   enum class Mode { Quiet, Shown };
-  // What the status bar shows: the remote of the open file's project.
+  // The remote of the current project.
   struct State {
     QString root; // the project's folder ("" none)
     QString name; // the remote ("" none)
@@ -139,24 +186,19 @@ private:
     bool conflict = false; // a sync stopped for choices
   };
 
-  // A command of the project of `path` on this thread (no network:
+  // A command of the project in `path` on this thread (no network:
   // remote_info, incoming, status, commit, remote_remove); empty when it
   // fails.
   QJsonObject local(const QString& path, const QJsonObject& command) const;
-  // The open file's project with history, or none.
+  // The current project with history, or none.
   std::optional<rust::Box<Project>> project() const;
   // Starts a background task (false, and the task deleted, when one runs
   // or work is held); `done` gets its answer once the model is idle.
   bool startTask(RemoteTask* task, std::function<void(const QJsonObject&)> done);
-  // Runs a task while a progress dialog with Cancel shows; its answer.
-  QJsonObject runModal(RemoteTask* task, const QString& label);
-  // Stops a running background check or push and waits for it; false (and
-  // `why` can wait, said) while a sync runs.
-  bool settle(const QString& why);
   void taskFinished();
   // Starts what waited for the task that ended.
   void runWaiting();
-  void updateButton();
+  void publishState();
   void logFailure(const QString& what, const QJsonObject& answer);
   // A fetch (`Shown`: asked for, its outcome told).
   void startCheck(Mode mode);
@@ -177,8 +219,10 @@ private:
 
   QMainWindow& m_window;
   Host m_host;
-  CommandRegistry* m_registry = nullptr;
   State m_state;
+  // Sending at once and the check interval of the current project.
+  ProjectSync m_sync;
+  QString m_syncRoot; // the project m_sync was read for
   QString m_loggedState;
   QPointer<RemoteTask> m_task;
   std::function<void(const QJsonObject&)> m_taskDone;
@@ -194,8 +238,6 @@ private:
   bool m_interactive = true;
   // The file opened again after a sync or a clone: no check of its own.
   bool m_skipCheck = false;
-  QToolButton* m_button = nullptr;
-  QMenu* m_menu = nullptr;
   QToolBar* m_bar = nullptr;
   RemoteNotice* m_notice = nullptr;
   QString m_noticeId;  // the remote's version the notice tells of
@@ -203,6 +245,7 @@ private:
   QTimer* m_checkTimer = nullptr;
   QTimer* m_retryTimer = nullptr;
   int m_retries = 0;
+  bool m_live = false; // the current project's live updates are connected
 };
 
 } // namespace mitcad

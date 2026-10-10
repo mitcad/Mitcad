@@ -595,16 +595,31 @@ CommandDef combineCommand(const CommandContext& context) {
   def.enabled = [&context] { return context.queryArray(QStringLiteral("bodies")).size() > 1; };
   def.build = [](const CommandState& state, const CommandContext&) {
     Built result;
-    const QString target = state.items(QStringLiteral("target")).first().owner;
+    const SelectionItem& targetItem = state.items(QStringLiteral("target")).first();
+    const QString target = targetItem.owner;
+    // A tool picked in another occurrence than the target (a body of
+    // another component) is read where it was picked, through a link
+    // (commands.md, "combine", mitcad#104).
+    QJsonObject links;
     for (const SelectionItem& tool : state.items(QStringLiteral("tools"))) {
       if (tool.owner == target) {
         return Built::failure(QObject::tr("The target cannot be a tool too."), QStringLiteral("tools"));
+      }
+      if (tool.occurrence != targetItem.occurrence) {
+        QJsonObject link{{QStringLiteral("source"), tool.occurrence}};
+        if (!targetItem.occurrence.isEmpty()) {
+          link.insert(QStringLiteral("target"), targetItem.occurrence);
+        }
+        links.insert(tool.owner, link);
       }
     }
     result.def = {{QStringLiteral("type"), QStringLiteral("combine")},
                   {QStringLiteral("target"), target},
                   {QStringLiteral("tools"), bodyUids(state.items(QStringLiteral("tools")))},
                   {QStringLiteral("operation"), state.choice(QStringLiteral("operation"))}};
+    if (!links.isEmpty()) {
+      result.def.insert(QStringLiteral("tool_links"), links);
+    }
     if (state.checked(QStringLiteral("keep_tools"))) {
       result.def.insert(QStringLiteral("keep_tools"), true);
     }
@@ -614,8 +629,20 @@ CommandDef combineCommand(const CommandContext& context) {
     return result;
   };
   def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext&) {
-    state.setItems(QStringLiteral("target"), bodiesOf({feature.value(QStringLiteral("target"))}));
-    state.setItems(QStringLiteral("tools"), bodiesOf(feature.value(QStringLiteral("tools")).toArray()));
+    // Linked tools where they were picked, the target where the links
+    // see it.
+    const QJsonObject links = feature.value(QStringLiteral("tool_links")).toObject();
+    Selection target = bodiesOf({feature.value(QStringLiteral("target"))});
+    Selection tools = bodiesOf(feature.value(QStringLiteral("tools")).toArray());
+    for (SelectionItem& tool : tools) {
+      const QJsonObject link = links.value(tool.owner).toObject();
+      if (links.contains(tool.owner)) {
+        tool.occurrence = str(link, "source");
+        target.first().occurrence = str(link, "target");
+      }
+    }
+    state.setItems(QStringLiteral("target"), target);
+    state.setItems(QStringLiteral("tools"), tools);
     state.setChoice(QStringLiteral("operation"), str(feature, "operation"));
     state.setChecked(QStringLiteral("keep_tools"), feature.value(QStringLiteral("keep_tools")).toBool());
     state.setChecked(QStringLiteral("new_component"), feature.value(QStringLiteral("new_component")).toBool());

@@ -10,8 +10,13 @@
 // threads at once (the model computes on a worker thread, docs/
 // architecture.md); what it remembers of itself (measured(), bounds()) is
 // kept behind a lock. The TopoDS shape underneath shares sub-shapes with
-// other results, and OCCT's algorithms set flags on the sub-shapes of their
-// inputs: a thread does not read it while another computes with it.
+// other results. The library's operations read it on several threads at
+// once (the .f3d import's workers, mitcad#95): they never change their
+// inputs (input_check.hpp), and those whose OCCT algorithms write into
+// their inputs' sub-shapes work on copies (history.hpp, InputCopy); OCCT's
+// builders still set bookkeeping flags (free, modified) on the sub-shapes
+// they put into a new shape, which nothing reads. Triangulating it (the
+// view) writes into its faces: not while another thread computes with it.
 
 #include <array>
 #include <memory>

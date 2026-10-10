@@ -142,6 +142,10 @@ pub struct MockKernel {
     /// (lines otherwise), and `vertex_point` by vertex name.
     pub edge_curves: RefCell<BTreeMap<String, CurveGeometry>>,
     pub vertex_points: RefCell<BTreeMap<String, crate::datum::Vec3>>,
+    /// Fillets repeated on a pattern's copies (mitcad#105): edge middles
+    /// by edge name; `edge_middles` lists the shape's edges that have one
+    /// (along y, 1 mm long).
+    pub middles: RefCell<BTreeMap<String, [f64; 3]>>,
 }
 
 impl MockShape {
@@ -1578,6 +1582,50 @@ impl Kernel for MockKernel {
             bounds: None,
             parts: Vec::new(),
         })
+    }
+
+    // Definitions evaluated in parallel (the .f3d import, mitcad#95): a
+    // kernel with the same settings, its own calls and requests.
+    fn fork(&self) -> Option<Self> {
+        Some(MockKernel {
+            measures: self.measures.clone(),
+            fail: self.fail.clone(),
+            out_of_memory: self.out_of_memory.clone(),
+            touch: self.touch.clone(),
+            split: self.split.clone(),
+            lose: self.lose.clone(),
+            voids: self.voids.clone(),
+            surfaces: self.surfaces.clone(),
+            files: self.files.clone(),
+            notes: self.notes.clone(),
+            curves: self.curves.clone(),
+            named_curves: self.named_curves.clone(),
+            edge_curves: self.edge_curves.clone(),
+            vertex_points: self.vertex_points.clone(),
+            middles: self.middles.clone(),
+            ..MockKernel::default()
+        })
+    }
+
+    // Fillets repeated on a pattern's copies (mitcad#105).
+    fn edge_middles(
+        &self,
+        shape: &MockShape,
+    ) -> Result<Vec<crate::kernel::EdgeMiddle>, KernelError> {
+        let middles = self.middles.borrow();
+        Ok(shape
+            .edges
+            .iter()
+            .filter_map(|(a, b)| {
+                let name = EdgeName::new(a.clone(), b.clone()).to_string();
+                middles.get(&name).map(|point| crate::kernel::EdgeMiddle {
+                    name,
+                    point: *point,
+                    tangent: [0.0, 1.0, 0.0],
+                    length: 1.0,
+                })
+            })
+            .collect())
     }
 }
 

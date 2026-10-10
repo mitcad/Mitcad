@@ -39,6 +39,8 @@ pub mod ffi {
         fn faces(shape: &Shape) -> Result<Vec<FaceInfo>>;
         fn edges(shape: &Shape) -> Result<Vec<EdgeInfo>>;
         fn mass_properties(shape: &Shape) -> Result<MassProperties>;
+        /// The measures of OCCT's fixed Gauss points (mitcad#139).
+        fn fixed_point_properties(shape: &Shape) -> Result<MassProperties>;
         fn bounding_box(shape: &Shape) -> Result<BoundingBox>;
         /// The number of edges or faces a name resolves to.
         fn count_edges(shape: &Shape, name: &str) -> usize;

@@ -21,7 +21,7 @@
 //   surface 2 sphere      reals: center(3) axis(3) ref_dir(3) radius
 //   surface 3 torus       reals: center(3) axis(3) ref_dir(3) major minor
 //   surface 4 bspline     ints: u_deg v_deg n_uk n_vk nu nv rational
-//                               u_mults... v_mults...
+//                               u_periodic v_periodic u_mults... v_mults...
 //                         reals: u_knots... v_knots... poles(3 each, u-major)...
 //                                weights...
 //   surface 5 extrusion   ints: curve_kind curve_ints...; reals: dir(3) curve_reals...
@@ -31,6 +31,12 @@
 //                         reals: from_reals... to_reals...
 //                         S(u, v) = (1 - u) from(v) + u to(v), u in [0, 1];
 //                         both curves interpolated at the same parameters
+//   surface 8 arc sweep   ints: n (kind ints...) n times;
+//                         reals: weights(n) reals... n times;
+//                         rational quadratic arcs in u (knots spaced evenly
+//                         in [0, 1], one arc per two spans) whose control
+//                         points are the n curves' points at v, all
+//                         interpolated at the same parameters
 //
 // A face's point loops (Body::point_loops[first_point_loop ...]) are
 // vertices where the face closes up at a singular point of its surface
@@ -126,6 +132,10 @@ struct BuildOptions {
 struct BuildReport {
   bool built = false;
   std::string error;
+  // An allocation failed while the body was built (mitcad#132), also one
+  // OCCT's healing or checker caught inside, on this thread or in the jobs
+  // of OCCT's thread pool it ran: not built, error "out of memory".
+  bool out_of_memory = false;
   // Every lump became a solid (closed shells only).
   bool solid = false;
   // BRepCheck_Analyzer accepts the result.

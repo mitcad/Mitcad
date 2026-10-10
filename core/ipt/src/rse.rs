@@ -310,12 +310,35 @@ pub fn data_start(b: &[u8]) -> Result<(usize, Compression), RseError> {
         .ok_or_else(|| RseError("data stream without compressed records".into()))
 }
 
-/// Splits decompressed data into records by the block table. A record
-/// whose byte after its echoed size is not 0 has an extended trailer (typed
-/// property and reference lists, not read here): its end is where the next
-/// record starts, found by that record's echoed size, or the end marker
-/// after the last record.
+/// Whether the records of a segment of this major version (see
+/// [`MetaHeader::major`]) end with a trailer flag byte after their echoed
+/// size: from major 20 (files saved by a 2016 release) on; the segments of
+/// majors 16 and 18 (2012 and 2014 releases) have none.
+pub fn has_trailer_flags(major: u8) -> bool {
+    major >= 20
+}
+
+/// Splits decompressed data into records by the block table, with the
+/// layout of the segment's version ([`has_trailer_flags`]); when that does
+/// not split, with the other layout (for versions not seen).
+pub fn split(data: &[u8], tables: &Tables, major: u8) -> Result<Vec<Record>, RseError> {
+    let flags = has_trailer_flags(major);
+    records_with(data, tables, flags).or_else(|e| records_with(data, tables, !flags).map_err(|_| e))
+}
+
+/// Splits decompressed data into records by the block table, each record
+/// ending with a trailer flag byte ([`records_with`]).
 pub fn records(data: &[u8], tables: &Tables) -> Result<Vec<Record>, RseError> {
+    records_with(data, tables, true)
+}
+
+/// Splits decompressed data into records by the block table. With
+/// `flags`, a byte follows each record's echoed size; a record whose byte
+/// is not 0 has an extended trailer (typed property and reference lists,
+/// not read here): its end is where the next record starts, found by that
+/// record's echoed size, or the end marker after the last record. Without
+/// `flags` (older segments) the next record follows the echoed size.
+pub fn records_with(data: &[u8], tables: &Tables, flags: bool) -> Result<Vec<Record>, RseError> {
     let sizes: Vec<usize> = tables
         .blocks
         .iter()
@@ -331,7 +354,7 @@ pub fn records(data: &[u8], tables: &Tables) -> Result<Vec<Record>, RseError> {
         if echo as usize != size {
             return err(format!("record {index}: size {size}, then {echo}"));
         }
-        let trailer = c.u8()?;
+        let trailer = if flags { c.u8()? } else { 0 };
         if tables.types.get((selector & 0xFF) as usize).is_none() {
             return err(format!(
                 "record {index}: type {} of {}",
@@ -400,7 +423,8 @@ pub fn write_segment(
 
 /// [`write_segment`] with the segment's major version and records with
 /// extended trailers (type index, bytes, trailer; an empty trailer is the
-/// byte 0, another is written after a byte 1).
+/// byte 0, another is written after a byte 1). Before major 20 the records
+/// have no trailer flag byte ([`has_trailer_flags`]) and no trailers.
 pub fn write_segment_with(
     name: &str,
     id: [u8; 16],
@@ -454,7 +478,9 @@ pub fn write_segment_with(
         d.extend_from_slice(&(u32::from(*ty) | 0x100).to_le_bytes());
         d.extend_from_slice(bytes);
         d.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-        if trailer.is_empty() {
+        if !has_trailer_flags(major) {
+            assert!(trailer.is_empty(), "no trailers before major 20");
+        } else if trailer.is_empty() {
             d.push(0);
         } else {
             d.push(1);
@@ -541,6 +567,51 @@ mod tests {
         assert!(r[1].trailer.is_empty());
         assert_eq!(&data[r[2].range.clone()], b"last");
         assert_eq!(&data[r[2].trailer.clone()], &[7; 12]);
+    }
+
+    #[test]
+    fn splits_older_segments_without_trailer_flags() {
+        let types = [[1u8; 16], [2u8; 16]];
+        let written = vec![
+            (1u8, b"first".to_vec(), Vec::new()),
+            (0, vec![5; 16], Vec::new()),
+            (1, b"last".to_vec(), Vec::new()),
+        ];
+        for major in [16, 18] {
+            let (m, b) = write_segment_with("S", [3; 16], major, &types, &written);
+            let header = meta_header(&m).unwrap();
+            assert_eq!(header.major(), major);
+            assert!(!has_trailer_flags(major));
+            let t =
+                tables(&decompress(&m[header.data_offset..], header.compression).unwrap()).unwrap();
+            let (start, c) = data_start(&b).unwrap();
+            let data = decompress(&b[start..], c).unwrap();
+            // The next record's selector follows the echoed size: read with
+            // a flag byte, the selector's low byte would be taken for one.
+            assert!(records(&data, &t).is_err());
+            for r in [
+                records_with(&data, &t, false).unwrap(),
+                split(&data, &t, major).unwrap(),
+            ] {
+                assert_eq!(r.len(), 3);
+                assert_eq!(&data[r[0].range.clone()], b"first");
+                assert_eq!(data[r[1].range.clone()], vec![5; 16]);
+                assert_eq!(r[1].type_index(), 0);
+                assert_eq!(&data[r[2].range.clone()], b"last");
+                assert!(r.iter().all(|r| r.trailer.is_empty()));
+                assert_eq!(&data[r[2].range.end + 4..r[2].range.end + 8], &[0xFF; 4]);
+            }
+        }
+        // A newer segment splits with its flag bytes, also when its version
+        // says otherwise.
+        let (m, b) = write_segment_with("S", [3; 16], 20, &types, &written);
+        let header = meta_header(&m).unwrap();
+        let t = tables(&decompress(&m[header.data_offset..], header.compression).unwrap()).unwrap();
+        let (start, c) = data_start(&b).unwrap();
+        let data = decompress(&b[start..], c).unwrap();
+        assert!(records_with(&data, &t, false).is_err());
+        assert_eq!(split(&data, &t, 20).unwrap().len(), 3);
+        assert_eq!(split(&data, &t, 18).unwrap().len(), 3);
     }
 
     #[test]

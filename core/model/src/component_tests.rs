@@ -728,3 +728,50 @@ fn placements_read_and_write_as_rows() {
     let rows: Vec<Vec<f64>> = matrix_rows(&t).iter().map(|r| r.to_vec()).collect();
     assert_eq!(from_rows(&rows).unwrap(), t);
 }
+
+#[test]
+fn another_documents_design_is_copied_into_a_component() {
+    // A part made in a document of its own (as the .iam import makes each
+    // part), copied into a component of the assembly and placed twice.
+    let mut part = Document::new(MockKernel::default());
+    let (_, body) = small_block(&mut part);
+    assert!(part.body_shape(body).is_some());
+    let mut doc = Document::new(MockKernel::default());
+    let (component, first) = doc
+        .add_component_copy(
+            &part,
+            Some("block"),
+            ComponentUid::ROOT,
+            shift(20.0, 0.0, 0.0),
+        )
+        .unwrap();
+    let second = doc
+        .add_occurrence(component, ComponentUid::ROOT, shift(0.0, 30.0, 0.0))
+        .unwrap();
+    assert_ne!(first, second);
+    assert_eq!(doc.assembly().name(component), "block");
+    // The copy's features are the component's, recomputed in the assembly.
+    assert_eq!(doc.component_bodies(component).len(), 1);
+    assert!(doc.features().all(|f| f.component == component));
+    let boxes = world_boxes(&doc);
+    assert_eq!(boxes.len(), 2);
+    let mins: Vec<[f64; 3]> = boxes.iter().map(|b| b.2.min).collect();
+    assert!(mins.iter().any(|m| near(*m, [20.0, 0.0, 0.0])));
+    assert!(mins.iter().any(|m| near(*m, [0.0, 30.0, 0.0])));
+    // The active component stays; a second copy gets a name of its own.
+    assert_eq!(doc.active_component(), ComponentUid::ROOT);
+    let (again, _) = doc
+        .add_component_copy(
+            &part,
+            Some("block"),
+            ComponentUid::ROOT,
+            Transform::IDENTITY,
+        )
+        .unwrap();
+    assert_ne!(doc.assembly().name(again), "block");
+    // A copy into a component that does not exist is refused.
+    assert!(
+        doc.add_component_copy(&part, None, ComponentUid(999), Transform::IDENTITY)
+            .is_err()
+    );
+}

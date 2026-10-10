@@ -99,6 +99,16 @@ double file_weight(const std::string& path);
 // The child's side: prints its totals after its text (flushing stdout).
 void print_totals(const std::map<std::string, double>& totals);
 
+// Makes this process one that is never dumped on Linux (PR_SET_DUMPABLE
+// 0), unless MITCAD_CORE_DUMPS=1: a child that runs out of its memory
+// limit aborts, and a system that captures core dumps through a pipe in
+// core_pattern (WSL's crash capture, which RLIMIT_CORE does not stop)
+// writes gigabytes for it and takes WSL down. execve makes a process
+// dumpable again, so each program calls it itself (the runner, the
+// corpus tests that start themselves per file, mitcad-cli). Elsewhere it
+// does nothing.
+void no_core_dumps();
+
 // The parent's side: the child's text without the totals lines, and the
 // totals added to `totals` (keys "max:..." keep the largest value instead);
 // false when the child printed none (it did not finish).

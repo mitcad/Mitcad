@@ -1316,9 +1316,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     .map(|i| (i.body, i.transform))
                     .collect(),
             };
-            let mut solid = (0.0, [0.0; 3]);
-            let mut sheet = (0.0, [0.0; 3]);
-            let mut area = 0.0;
+            let mut together = Together::default();
             let replayed = pieces
                 .iter()
                 .any(|(body, _)| self.replayed_bodies.contains(body));
@@ -1326,19 +1324,25 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 let Some(m) = self.doc.body_shape(*body).and_then(|s| measure(kernel, s)) else {
                     continue;
                 };
-                let c = t.apply_point(m.center);
-                area += m.area;
-                let (weight, sum) = if m.volume > 0.0 {
-                    (m.volume, &mut solid)
-                } else {
-                    (m.area, &mut sheet)
-                };
-                sum.0 += weight;
-                for (s, c) in sum.1.iter_mut().zip(c) {
-                    *s += weight * c;
-                }
+                together.add(&m, t.apply_point(m.center));
             }
-            let (weight, sum) = if solid.0 > 0.0 { solid } else { sheet };
+            // Shapes brought in as stored: also measured as FreeCAD measures
+            // them (mitcad#139).
+            let fixed = if replayed {
+                None
+            } else {
+                let mut fixed = Together::default();
+                pieces
+                    .iter()
+                    .try_for_each(|(body, t)| {
+                        let m = kernel
+                            .fixed_point_properties(self.doc.body_shape(*body)?)
+                            .ok()?;
+                        fixed.add(&m, t.apply_point(m.center));
+                        Some(())
+                    })
+                    .map(|()| fixed.measures())
+            };
             // A replayed body: the stored shape measured too.
             let stored = match &place.what {
                 Measured::Body(index) if replayed => self
@@ -1352,24 +1356,64 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     }),
                 _ => None,
             };
+            let measures = together.measures();
             out.push(PlacedReport {
                 object: place.object.clone(),
                 element: place.element,
                 path: assembly.path_name(&place.path),
                 bodies: pieces.len(),
-                volume: solid.0,
-                area,
-                center: if weight > 0.0 {
-                    sum.map(|s| s / weight)
-                } else {
-                    [0.0; 3]
-                },
+                volume: measures.volume,
+                area: measures.area,
+                center: measures.center,
                 visible: place.visible,
                 replayed,
                 stored,
+                fixed,
             });
         }
         out
+    }
+}
+
+/// The measures of several bodies together: the volume of the solids, the
+/// area, and the centre of the solids by volume, else of the sheets by area.
+#[derive(Default)]
+struct Together {
+    solid: (f64, [f64; 3]),
+    sheet: (f64, [f64; 3]),
+    area: f64,
+}
+
+impl Together {
+    /// A body's measures, its centre `center` in world coordinates.
+    fn add(&mut self, m: &MassProperties, center: [f64; 3]) {
+        self.area += m.area;
+        let (weight, sum) = if m.volume > 0.0 {
+            (m.volume, &mut self.solid)
+        } else {
+            (m.area, &mut self.sheet)
+        };
+        sum.0 += weight;
+        for (s, c) in sum.1.iter_mut().zip(center) {
+            *s += weight * c;
+        }
+    }
+
+    fn measures(&self) -> report::StoredMeasures {
+        let (weight, sum) = if self.solid.0 > 0.0 {
+            self.solid
+        } else {
+            self.sheet
+        };
+        report::StoredMeasures {
+            volume: self.solid.0,
+            area: self.area,
+            center: if weight > 0.0 {
+                sum.map(|s| s / weight)
+            } else {
+                [0.0; 3]
+            },
+        }
     }
 }
 

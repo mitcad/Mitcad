@@ -109,6 +109,8 @@ ui_init() {
   # Where faces and edges can be clicked, and the bodies' volumes.
   export MITCAD_LOG_PICKS=1
   export MITCAD_LOG_VOLUMES=1
+  # What typed-in text fields hold ("File dialog Save As: <path>").
+  export MITCAD_LOG_TYPED_TEXT=1
   # Git's configuration of our own (empty), as in ui-test-lib.sh.
   : > "$UI_ROOT/gitconfig"
   export GIT_CONFIG_GLOBAL=$UI_ROOT/gitconfig

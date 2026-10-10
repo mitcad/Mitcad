@@ -3,13 +3,13 @@
 // .mitcad/project.json at the root of a git repository; core/vcs), Save
 // records a version of the saved file, a commit whose message is made of
 // the undo steps since the last save, and File > Save Version one with a
-// description. The author is git's configured user or Mitcad's settings,
-// shown once and asked when neither has one. A file changed outside Mitcad
-// since it was opened is noticed before Save writes over it, and a file
-// renamed outside Mitcad takes its display state along and gets its rename
-// recorded. File > New Project makes a project with history, File > Start
-// Version History gives a design outside one history. Autosave never
-// records a version (files/Autosave.hpp). File > Version History (P12e,
+// description. The author is the project's (its repository's or git's
+// configuration), else Preferences' default author, asked when none has
+// one. A file changed outside Mitcad since it was opened is noticed before
+// Save writes over it, and a file renamed outside Mitcad takes its display
+// state along and gets its rename recorded. Projects are made and opened
+// in files/MainWindowProjects.cpp (mitcad#89). Autosave never records a
+// version (files/Autosave.hpp). File > Version History (P12e,
 // files/VersionHistory.hpp) lists a file's versions and compares them;
 // Open makes one a new design, Restore the latest version, Save Copy As a
 // file of its own; Save keeps a preview of each version.
@@ -35,6 +35,7 @@
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/Json.hpp"
 #include "../framework/ResultCache.hpp"
+#include "LockController.hpp"
 #include "RemoteController.hpp"
 #include "VersionDialogs.hpp"
 #include "VersionHistory.hpp"
@@ -55,20 +56,6 @@ QJsonObject withPath(const char* name, const QString& path) {
 }
 
 QString shortId(const QString& id) { return id.left(7); }
-
-// Whether two paths name the same folder.
-bool sameFolder(const QString& a, const QString& b) {
-  const auto normal = [](const QString& path) {
-    const QFileInfo info(path);
-    const QString canonical = info.canonicalFilePath();
-    return canonical.isEmpty() ? QDir::cleanPath(info.absoluteFilePath()) : canonical;
-  };
-#ifdef _WIN32
-  return normal(a).compare(normal(b), Qt::CaseInsensitive) == 0;
-#else
-  return normal(a) == normal(b);
-#endif
-}
 
 // The number of versions of a file (its history's length).
 int versionCount(const Project& project, const QString& path) {
@@ -119,12 +106,9 @@ void MainWindow::registerVersionCommands() {
     d.run = std::move(run);
     return d;
   };
-  CommandDef project = def("file.new_project", tr("New Project..."), "new-project",
-                           tr("A new folder whose designs keep their versions (a git repository)"),
-                           [this] { newProject(); });
-  project.keywords = {QStringLiteral("project"), QStringLiteral("folder"), QStringLiteral("git"),
-                      QStringLiteral("version history")};
-  m_registry->add(project);
+  // New Project, Open Project, Open from Cloud, Project Settings, Move to a
+  // Project (mitcad#89).
+  registerProjectCommands();
   CommandDef version = def("file.save_version", tr("Save Version..."), "save-version",
                            tr("Saves the design and records a version of it with a description"),
                            [this] { saveVersion(); });
@@ -132,13 +116,6 @@ void MainWindow::registerVersionCommands() {
   version.keywords = {QStringLiteral("version"), QStringLiteral("commit"), QStringLiteral("description"),
                       QStringLiteral("milestone"), QStringLiteral("git")};
   m_registry->add(version);
-  CommandDef history = def("file.start_history", tr("Start Version History..."), "version-history",
-                           tr("Keeps the versions of this design: its project or folder gets version history, "
-                              "or it moves into a new project"),
-                           [this] { startVersionHistory(); });
-  history.keywords = {QStringLiteral("version history"), QStringLiteral("versions"), QStringLiteral("git"),
-                      QStringLiteral("project")};
-  m_registry->add(history);
   // P12e.
   CommandDef versions = def("file.version_history", tr("Version History..."), "versions",
                             tr("The versions of this design: compare one with another or with the open design, "
@@ -149,7 +126,8 @@ void MainWindow::registerVersionCommands() {
                        QStringLiteral("restore"), QStringLiteral("older"), QStringLiteral("git"),
                        QStringLiteral("log")};
   m_registry->add(versions);
-  // Remote repositories (P12 remote): Connect, Open from Remote, Sync, ...
+  // Remote repositories (P12 remote): Sync, Check for Newer Versions, Open
+  // in Browser.
   m_remote->registerCommands(*m_registry);
 }
 
@@ -170,266 +148,58 @@ std::optional<rust::Box<Project>> MainWindow::versionedProject(const QString& pa
   }
 }
 
-std::optional<QString> MainWindow::chooseNewProject(const QString& title, const QString& name) {
-  const QString location = projectsDirectory();
-  QString suggested = name;
-  for (int n = 1; suggested.isEmpty(); ++n) {
-    const QString candidate = tr("Project%1").arg(n);
-    if (!QFileInfo::exists(QDir(location).filePath(candidate))) {
-      suggested = candidate;
-    }
-  }
-  const std::optional<QString> dir = askNewProject(this, title, suggested, location);
-  if (!dir) {
-    return std::nullopt;
-  }
-  const QString outer = qstr(git_repository_root(rustStr(dir->toUtf8())));
-  if (!outer.isEmpty()) {
-    qInfo().noquote() << QStringLiteral("New project inside the git repository %1").arg(outer);
-    QMessageBox box(QMessageBox::Warning, title,
-                    tr("%1 is inside the git repository %2.").arg(QDir::toNativeSeparators(*dir),
-                                                                 QDir::toNativeSeparators(outer)),
-                    QMessageBox::Yes | QMessageBox::No, this);
-    box.setInformativeText(tr("The project gets a repository of its own there, which the other one does not "
-                              "record. Make the project there anyway?"));
-    box.setDefaultButton(QMessageBox::No);
-    prepareModal(&box);
-    if (box.exec() != QMessageBox::Yes) {
-      return std::nullopt;
-    }
-  }
-  return dir;
-}
-
-bool MainWindow::makeProject(const QString& dir, bool removeOnCancel) {
-  const bool existed = QFileInfo::exists(dir);
-  // What making the project adds to a folder, and of it what was there.
-  const QDir folder(dir);
-  const QStringList made = {QStringLiteral(".git"), QStringLiteral(".mitcad/project.json"),
-                            QStringLiteral(".gitattributes"), QStringLiteral(".gitignore")};
-  QStringList there;
-  for (const QString& name : made) {
-    if (QFileInfo::exists(folder.filePath(name))) {
-      there << name;
-    }
-  }
-  // Cancelled or failed: a folder made for the project goes, and in a
-  // folder that was there what was added (lines added to a .gitignore or
-  // .gitattributes of its own stay).
-  const auto undo = [&] {
-    if (!existed) {
-      if (removeOnCancel) {
-        QDir(dir).removeRecursively();
-      }
-      return;
-    }
-    for (const QString& name : made) {
-      const QString path = folder.filePath(name);
-      if (there.contains(name)) {
-        continue;
-      }
-      if (QFileInfo(path).isDir()) {
-        QDir(path).removeRecursively();
-      } else {
-        QFile::remove(path);
-      }
-    }
-    folder.rmdir(QStringLiteral(".mitcad")); // only when empty
-  };
-  const auto fail = [&](const QString& reason) {
-    undo();
-    const QString message = tr("Could not make %1 a project with version history:\n%2")
-                                .arg(QDir::toNativeSeparators(dir), reason);
-    qWarning().noquote() << message;
-    sheetWarning(this, tr("Mitcad"), message);
-    return false;
-  };
-  QString author;
-  try {
-    // The project and its repository first, so that the author git's
-    // configuration gives there can be shown before the first version.
-    const rust::Box<Project> project = create_project_repository(rustStr(dir.toUtf8()));
-    const std::optional<QString> chosen = versionAuthor(*project);
-    if (!chosen) {
-      undo();
-      return false;
-    }
-    author = *chosen;
-  } catch (const std::exception& e) {
-    return fail(errorText(e));
-  }
-  QJsonObject answer;
-  try {
-    answer = parseObject(init_project_history(rustStr(dir.toUtf8()), rustStr(author.toUtf8())));
-  } catch (const std::exception& e) {
-    return fail(errorText(e));
-  }
-  qInfo().noquote() << QStringLiteral("Version history started in %1: version %2 on %3")
-                           .arg(QDir::cleanPath(answer.value(QStringLiteral("root")).toString()),
-                                shortId(answer.value(QStringLiteral("commit")).toString()),
-                                answer.value(QStringLiteral("branch")).toString());
-  return true;
-}
-
-void MainWindow::newProject() {
-  if (!maybeSave()) {
-    return;
-  }
-  const std::optional<QString> dir = chooseNewProject(tr("New Project"), QString());
-  if (!dir || !makeProject(*dir, true)) {
-    return;
-  }
-  // A new design, which Save puts in the project.
-  const QString name = QFileInfo(*dir).fileName();
-  installEmptyDocument(name);
-  m_projectDir = *dir;
-  qInfo().noquote() << QStringLiteral("New project %1").arg(*dir);
-  showHint(tr("Project %1 is in %2. Save (Ctrl+S) puts the design in it.")
-               .arg(name, QDir::toNativeSeparators(*dir)));
-}
-
-void MainWindow::startVersionHistory() {
-  if (m_filePath.isEmpty()) {
-    // An untitled design is saved into a new project.
-    const std::optional<QString> dir = chooseNewProject(tr("Save in a New Project"), QString());
-    if (!dir || !makeProject(*dir, true)) {
-      return;
-    }
-    m_projectDir = *dir;
-    saveAs();
-    return;
-  }
-  const QString path = m_filePath;
-  const QString name = QFileInfo(path).fileName();
-  if (versionedProject(path)) {
-    qInfo().noquote() << QStringLiteral("Start Version History: %1 has version history already").arg(name);
-    sheetInformation(this, tr("Start Version History"),
-                             tr("%1 has version history already: every save records a version.").arg(name));
-    return;
-  }
-  // In a project without history: its folder gets a repository.
-  const QString root = qstr(find_project(rustStr(path.toUtf8())));
-  if (!root.isEmpty()) {
-    const QString outer = qstr(git_repository_root(rustStr(root.toUtf8())));
-    if (!outer.isEmpty() && !sameFolder(outer, root)) {
-      qInfo().noquote() << QStringLiteral("Start Version History dialog: the project %1 is inside %2").arg(root, outer);
-      QMessageBox box(QMessageBox::Question, tr("Start Version History"),
-                      tr("The project %1 is inside the git repository %2.")
-                          .arg(QDir::toNativeSeparators(root), QDir::toNativeSeparators(outer)),
-                      QMessageBox::Cancel, this);
-      box.setInformativeText(tr("Mitcad records versions only in a repository of the project's own. Move %1 into "
-                                "a new project?")
-                                 .arg(name));
-      QPushButton* move = box.addButton(tr("&Move to a New Project..."), QMessageBox::AcceptRole);
-      prepareModal(&box);
-      box.exec();
-      if (box.clickedButton() == move) {
-        moveToNewProject(path);
-      }
-      return;
-    }
-    qInfo().noquote() << QStringLiteral("Start Version History dialog: the project %1").arg(root);
-    QMessageBox box(QMessageBox::Question, tr("Start Version History"),
-                    tr("Start version history for the project %1?").arg(QDir::toNativeSeparators(root)),
-                    QMessageBox::Yes | QMessageBox::Cancel, this);
-    box.setInformativeText(tr("Mitcad makes a git repository in its folder, records %1 as a version now and each "
-                              "of the project's designs when it is saved.")
-                               .arg(name));
-    box.setDefaultButton(QMessageBox::Yes);
-    prepareModal(&box);
-    if (box.exec() == QMessageBox::Yes && makeProject(root, false)) {
-      writeFile(path);
-    }
-    return;
-  }
-  // Outside projects: the file's folder, or a new project.
-  const QString folder = QFileInfo(path).absolutePath();
-  QString outer = qstr(git_repository_root(rustStr(folder.toUtf8())));
-  const bool repository = !outer.isEmpty() && sameFolder(outer, folder);
-  if (repository) {
-    outer.clear();
-  }
-  const std::optional<HistoryStart> choice = askStartHistory(this, name, folder, outer, repository);
-  if (!choice) {
-    return;
-  }
-  if (*choice == HistoryStart::UseFolder) {
-    if (makeProject(folder, false)) {
-      writeFile(path);
-    }
-    return;
-  }
-  moveToNewProject(path);
-}
-
-bool MainWindow::moveToNewProject(const QString& path) {
-  const QFileInfo info(path);
-  const std::optional<QString> dir = chooseNewProject(tr("Move to a New Project"), info.completeBaseName());
-  if (!dir || !makeProject(*dir, true)) {
-    return false;
-  }
-  const QString target = QDir(*dir).filePath(info.fileName());
-  if (!writeFile(target)) {
-    return false;
-  }
-  // The design is the project's now; the file it came from goes.
-  if (!QFile::remove(info.absoluteFilePath())) {
-    showError(tr("Moved %1 into the project %2, but could not remove the file it came from.")
-                  .arg(info.fileName(), QDir::toNativeSeparators(*dir)));
-    return true;
-  }
-  qInfo().noquote() << QStringLiteral("Moved %1 to %2").arg(info.absoluteFilePath(), target);
-  showHint(tr("Moved %1 into the project %2: every save records a version.")
-               .arg(info.fileName(), QDir::toNativeSeparators(*dir)));
-  return true;
-}
-
 // ---------------------------------------------------------------------------
 // Saving versions
 
 std::optional<QString> MainWindow::versionAuthor(const Project& project) {
-  VersionSettings settings = VersionSettings::load();
-  QString gitName;
-  QString gitEmail;
+  QString name;
+  QString email;
   try {
-    // Git's configured user; an error when it has none.
+    // The repository's own author (New Project, Project Settings), else
+    // git's configured user; an error when neither has one.
     const QJsonObject identity = vcs(project, {{QStringLiteral("cmd"), QStringLiteral("identity")}});
-    gitName = identity.value(QStringLiteral("name")).toString();
-    gitEmail = identity.value(QStringLiteral("email")).toString();
+    name = identity.value(QStringLiteral("name")).toString();
+    email = identity.value(QStringLiteral("email")).toString();
   } catch (const std::exception&) {
   }
-  const bool hasGit = !gitName.isEmpty() && !gitEmail.isEmpty();
-  const bool known = (settings.useGit && hasGit) || settings.complete();
-  if (!settings.confirmed || !known) {
-    // Shown once: the name and email go into every version.
-    const std::optional<VersionSettings> chosen = askVersionAuthor(this, gitName, gitEmail, settings);
+  if (!name.isEmpty() && !email.isEmpty()) {
+    const QString author = QStringLiteral("%1 <%2>").arg(name, email);
+    qInfo().noquote() << QStringLiteral("Version author: %1 (git)").arg(author);
+    return author;
+  }
+  VersionSettings settings = VersionSettings::load();
+  if (!settings.complete()) {
+    // An older project that nobody named an author for: asked once, kept
+    // as Preferences' default author.
+    const std::optional<VersionSettings> chosen = askVersionAuthor(this, settings);
     if (!chosen) {
       return std::nullopt;
     }
     settings = *chosen;
     settings.save();
   }
-  const bool git = settings.useGit && hasGit;
-  const QString author = git ? QStringLiteral("%1 <%2>").arg(gitName, gitEmail) : settings.author();
-  qInfo().noquote() << QStringLiteral("Version author: %1 (%2)")
-                           .arg(author, git ? QStringLiteral("git") : QStringLiteral("settings"));
-  return author;
+  qInfo().noquote() << QStringLiteral("Version author: %1 (settings)").arg(settings.author());
+  return settings.author();
 }
 
 bool MainWindow::saveVersion() {
   QString why;
+  if (m_filePath.isEmpty() && m_project.hasHistory()) {
+    // A new design of the project: Save puts it there as its first version.
+    return save();
+  }
   if (m_filePath.isEmpty() || !versionedProject(m_filePath, &why)) {
     qInfo().noquote() << QStringLiteral("Save Version: no version history for %1").arg(documentName());
     QMessageBox box(QMessageBox::Question, tr("Save Version"),
                     tr("%1 has no version history.").arg(documentName()), QMessageBox::Cancel, this);
-    box.setInformativeText(m_filePath.isEmpty() ? tr("Save it in a project to keep its versions.")
-                                                : tr("Versions are kept for the designs of projects."));
-    QPushButton* start = box.addButton(tr("&Start Version History..."), QMessageBox::AcceptRole);
-    box.setDefaultButton(start);
+    box.setInformativeText(tr("Versions are kept for the designs of projects: Move to a Project puts it in "
+                              "one."));
+    QPushButton* move = box.addButton(tr("&Move to a Project..."), QMessageBox::AcceptRole);
+    box.setDefaultButton(move);
     prepareModal(&box);
     box.exec();
-    if (box.clickedButton() == start) {
-      startVersionHistory();
+    if (box.clickedButton() == move) {
+      moveToProject();
     }
     return false;
   }
@@ -446,21 +216,25 @@ bool MainWindow::saveVersion() {
   return writeFile(m_filePath, *description);
 }
 
-std::optional<bool> MainWindow::askVersionConflict(const Project& project, const QString& path, const QString& author) {
-  if (!m_versionBase || m_versionBase->path != path) {
-    return true; // not opened from or saved to this file in its project
-  }
+std::optional<bool> MainWindow::askVersionConflict(const Project& project, const QString& path, const QString& author,
+                                                   QString& failure) {
   QJsonObject status;
   try {
     status = vcs(project, withPath("status", path));
-  } catch (const std::exception&) {
-    return true;
+  } catch (const std::exception& e) {
+    failure = tr("Could not check %1 before saving: %2. Save As can keep your design in another file.")
+                  .arg(QFileInfo(path).fileName(), errorText(e));
+    return std::nullopt;
   }
   const QString file = status.value(QStringLiteral("file")).toString(); // "" when gone
   const QString head = status.value(QStringLiteral("head")).toString();
-  const bool fileChanged = file != m_versionBase->file;
+  // History may have been enabled since opening this document. Without a
+  // baseline, preserve any unrecorded bytes conservatively; already recorded
+  // bytes can safely be replaced. A status read failure still cancels above.
+  const bool haveBase = m_versionBase && m_versionBase->path == path;
+  const bool fileChanged = haveBase ? file != m_versionBase->file : file != head;
   // A version neither as opened nor as recorded then.
-  const bool newer = head != m_versionBase->head && head != m_versionBase->file;
+  const bool newer = haveBase && head != m_versionBase->head && head != m_versionBase->file;
   if (!fileChanged && !newer) {
     return true;
   }
@@ -482,7 +256,13 @@ std::optional<bool> MainWindow::askVersionConflict(const Project& project, const
     case ExternalChange::NewVersion:
       qInfo().noquote() << QStringLiteral("Save conflict: new version");
       if (unrecorded) {
-        recordVersion(project, path, {path}, tr("Save %1 as changed outside Mitcad").arg(name), author);
+        const VersionRecord recorded =
+            recordVersion(project, path, {path}, tr("Save %1 as changed outside Mitcad").arg(name), author);
+        if (!recorded.preserved) {
+          failure = tr("Could not preserve the external changes of %1. Save cancelled. %2")
+                        .arg(name, recorded.failure);
+          return std::nullopt;
+        }
       }
       return true;
     case ExternalChange::Compare:
@@ -530,8 +310,8 @@ QStringList MainWindow::recordRename(const Project& project, const QString& path
   return {from}; // the old path goes with the version of the change
 }
 
-std::pair<QString, bool> MainWindow::recordVersion(const Project& project, const QString& path, QStringList paths,
-                                                   const QString& message, const QString& author) {
+MainWindow::VersionRecord MainWindow::recordVersion(const Project& project, const QString& path, QStringList paths,
+                                                    const QString& message, const QString& author) {
   const QString name = QFileInfo(path).fileName();
   QJsonObject result;
   try {
@@ -540,9 +320,11 @@ std::pair<QString, bool> MainWindow::recordVersion(const Project& project, const
                            {QStringLiteral("message"), message},
                            {QStringLiteral("author"), author}});
   } catch (const std::exception& e) {
-    // The file is saved; only its version is missing.
+    // No version was recorded. A caller preserving bytes before overwrite
+    // must stop; an ordinary save still keeps the bytes it already wrote.
     qWarning().noquote() << QStringLiteral("Version failed: %1").arg(errorText(e));
-    return {tr("Saved %1, but the version could not be recorded: %2").arg(name, errorText(e)), true};
+    return {tr("Saved %1, but the version could not be recorded: %2").arg(name, errorText(e)), true, false,
+            tr("The version of %1 could not be recorded: %2").arg(name, errorText(e))};
   }
   QStringList warnings;
   for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
@@ -552,7 +334,8 @@ std::pair<QString, bool> MainWindow::recordVersion(const Project& project, const
   const QString skipped = result.value(QStringLiteral("skipped")).toString();
   if (!skipped.isEmpty()) {
     qWarning().noquote() << QStringLiteral("Version not recorded: %1").arg(skipped);
-    return {tr("Saved %1, but the version was not recorded: %2").arg(name, skipped), true};
+    return {tr("Saved %1, but the version was not recorded: %2").arg(name, skipped), true, false,
+            tr("The version of %1 was not recorded: %2").arg(name, skipped)};
   }
   const QString commit = result.value(QStringLiteral("commit")).toString();
   const int number = versionCount(project, path);
@@ -568,9 +351,9 @@ std::pair<QString, bool> MainWindow::recordVersion(const Project& project, const
     status = tr("Saved %1 as version %2 (%3)").arg(name).arg(number).arg(shortId(commit));
   }
   if (!warnings.isEmpty()) {
-    return {tr("%1, but: %2").arg(status, warnings.join(QStringLiteral("; "))), true};
+    return {tr("%1, but: %2").arg(status, warnings.join(QStringLiteral("; "))), true, true, QString()};
   }
-  return {status + QLatin1Char('.'), false};
+  return {status + QLatin1Char('.'), false, true, QString()};
 }
 
 void MainWindow::rememberVersionBase(const Project& project, const QString& path) {
@@ -602,9 +385,8 @@ QString MainWindow::followRename(const Project& project, const QString& path) {
 }
 
 void MainWindow::updateVersionStatus() {
-  QString text;
   QString logged = QStringLiteral("none");
-  QString tip;
+  int count = 0;
   if (std::optional<rust::Box<Project>> project = versionedProject(m_filePath)) {
     try {
       const QJsonObject info = vcs(**project, {{QStringLiteral("cmd"), QStringLiteral("info")}});
@@ -612,44 +394,25 @@ void MainWindow::updateVersionStatus() {
       const QString name = QFileInfo(root).fileName();
       const QString branch = info.value(QStringLiteral("branch")).isString()
                                  ? info.value(QStringLiteral("branch")).toString()
-                                 : tr("detached");
+                                 : QStringLiteral("detached");
       const QJsonArray versions =
           vcs(**project, withPath("history", m_filePath)).value(QStringLiteral("versions")).toArray();
-      // A middle dot between the parts (ASCII source).
-      const QString dot = QStringLiteral(" ") + QChar(0x00B7) + QStringLiteral(" ");
-      if (versions.isEmpty()) {
-        text = name + dot + branch + dot + tr("no version yet");
-        logged = QStringLiteral("%1, %2, no version").arg(name, branch);
-        tip = tr("Project %1 on branch %2; %3 has no version yet")
-                  .arg(QDir::toNativeSeparators(root), branch, documentName());
-      } else {
-        const QJsonObject latest = versions.first().toObject();
-        const QString when = QDateTime::fromSecsSinceEpoch(latest.value(QStringLiteral("time")).toInteger())
-                                 .toLocalTime()
-                                 .toString(QStringLiteral("yyyy-MM-dd HH:mm"));
-        text = name + dot + branch + dot + tr("v%1, %2").arg(versions.size()).arg(when);
-        logged = QStringLiteral("%1, %2, v%3").arg(name, branch).arg(versions.size());
-        tip = tr("Project %1 on branch %2\nVersion %3 of %4 (%5), %6 by %7:\n%8")
-                  .arg(QDir::toNativeSeparators(root), branch)
-                  .arg(versions.size())
-                  .arg(documentName(), latest.value(QStringLiteral("short_id")).toString(),
-                       latest.value(QStringLiteral("date")).toString(),
-                       latest.value(QStringLiteral("author")).toObject().value(QStringLiteral("name")).toString(),
-                       latest.value(QStringLiteral("summary")).toString());
-      }
+      count = static_cast<int>(versions.size());
+      logged = versions.isEmpty() ? QStringLiteral("%1, %2, no version").arg(name, branch)
+                                  : QStringLiteral("%1, %2, v%3").arg(name, branch).arg(versions.size());
     } catch (const std::exception& e) {
       qWarning().noquote() << QStringLiteral("Version warning: %1").arg(errorText(e));
     }
   }
-  m_versionLabel->setText(text);
-  m_versionLabel->setToolTip(tip);
-  m_versionLabel->setVisible(!text.isEmpty());
   if (logged != m_loggedVersionStatus) {
     m_loggedVersionStatus = logged;
     qInfo().noquote() << QStringLiteral("Version status: %1").arg(logged);
   }
-  // And its remote's (P12 remote).
+  // The project indicator's version, and its remote's state (P12 remote).
+  m_indicator->setVersions(count);
   m_remote->refreshStatus();
+  // The open design, as live updates tell others (mitcad#89).
+  updateLive();
 }
 
 // ---------------------------------------------------------------------------
@@ -657,10 +420,10 @@ void MainWindow::updateVersionStatus() {
 
 void MainWindow::createRemote() {
   RemoteController::Host host;
+  host.projectRoot = [this] { return projectRootWithHistory(); };
   host.filePath = [this] { return m_filePath; };
   host.modified = [this] { return isModified(); };
   host.save = [this] { return save(); };
-  host.maybeSave = [this] { return maybeSave(); };
   host.author = [this](const Project& project) { return versionAuthor(project); };
   host.open = [this](const QString& path, QString& error) { return openFile(path, error); };
   host.versionsChanged = [this] {
@@ -676,9 +439,21 @@ void MainWindow::createRemote() {
       showHint(message);
     }
   };
-  host.startHistory = [this] { startVersionHistory(); };
+  host.projectSettings = [this] { showProjectSettings(); };
   host.whenIdle = [this](std::function<void()> call) { whenIdle(m_remote, std::move(call)); };
+  // Edit locks (mitcad#89): Send Anyway, and a newer version of a design
+  // with a lock.
+  host.confirmSend = [this] { return m_locks == nullptr || m_locks->confirmSend(); };
+  host.newerVersion = [this](const QString& file, const QJsonObject& incoming) {
+    return m_locks != nullptr && m_locks->newerVersion(file, incoming);
+  };
   m_remote = new RemoteController(*this, std::move(host), this);
+  // Its state in the project indicator.
+  connect(m_remote, &RemoteController::stateChanged, this, [this] {
+    if (m_indicator != nullptr) {
+      m_indicator->setRemote(m_remote->indicatorState());
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -690,14 +465,18 @@ void MainWindow::showVersionHistory() {
     qInfo().noquote() << QStringLiteral("Version History: no version history for %1").arg(documentName());
     QMessageBox box(QMessageBox::Question, tr("Version History"),
                     tr("%1 has no version history.").arg(documentName()), QMessageBox::Cancel, this);
-    box.setInformativeText(m_filePath.isEmpty() ? tr("Save it in a project to keep its versions.")
-                                                : tr("Versions are kept for the designs of projects."));
-    QPushButton* start = box.addButton(tr("&Start Version History..."), QMessageBox::AcceptRole);
-    box.setDefaultButton(start);
+    if (m_filePath.isEmpty() && m_project.hasHistory()) {
+      box.setInformativeText(tr("Save it in the project to keep its versions."));
+    } else {
+      box.setInformativeText(tr("Versions are kept for the designs of projects: Move to a Project puts it in "
+                                "one."));
+      QPushButton* move = box.addButton(tr("&Move to a Project..."), QMessageBox::AcceptRole);
+      box.setDefaultButton(move);
+    }
     prepareModal(&box);
     box.exec();
-    if (box.clickedButton() == start) {
-      startVersionHistory();
+    if (box.clickedButton() != nullptr && box.buttonRole(box.clickedButton()) == QMessageBox::AcceptRole) {
+      moveToProject();
     }
     return;
   }
@@ -849,6 +628,10 @@ void MainWindow::openVersion(const QString& file, const FileVersion& version) {
 }
 
 void MainWindow::restoreVersion(const QString& file, const FileVersion& version, int next) {
+  // Restore writes the file: not while someone else edits it (mitcad#89).
+  if (refuseReadOnly(QStringLiteral("restore %1").arg(version.label()))) {
+    return;
+  }
   const QString name = QFileInfo(file).fileName();
   const bool modified = sameFile(m_filePath, file) && isModified();
   const std::optional<bool> saveFirst =
@@ -859,9 +642,20 @@ void MainWindow::restoreVersion(const QString& file, const FileVersion& version,
   }
   if (modified) {
     if (*saveFirst) {
-      // The changes are a version of their own, before the restore.
-      if (!writeFile(file)) {
-        showHint(tr("Restore cancelled."));
+      // The changes are a version of their own, before the restore. Without
+      // that version the restore would write over them: it stops, saying
+      // why (mitcad#114).
+      VersionRecord saved;
+      if (!writeFile(file, QString(), &saved)) {
+        if (saved.failure.isEmpty()) {
+          qInfo().noquote() << QStringLiteral("Restore: cancelled while saving the changes");
+          showHint(tr("Restore cancelled."));
+        } else if (!isModified()) {
+          showError(tr("Restore cancelled: your changes are saved in %1, but not as a version. %2")
+                        .arg(name, saved.failure));
+        } else {
+          showError(tr("Restore cancelled: your changes could not be saved. %1").arg(saved.failure));
+        }
         return;
       }
     } else {
@@ -887,11 +681,18 @@ void MainWindow::restoreVersion(const QString& file, const FileVersion& version,
     const QJsonObject status = vcs(**project, withPath("status", file));
     const QString inFolder = status.value(QStringLiteral("file")).toString();
     if (!inFolder.isEmpty() && inFolder != status.value(QStringLiteral("head")).toString()) {
+      const VersionRecord recorded =
+          recordVersion(**project, file, {file}, tr("Save %1 as changed outside Mitcad").arg(name), *author);
+      if (!recorded.preserved) {
+        showError(tr("Could not preserve the external changes of %1. Restore cancelled. %2")
+                      .arg(name, recorded.failure));
+        return;
+      }
       qInfo().noquote() << QStringLiteral("Restore: %1 changed outside Mitcad, recorded first").arg(name);
-      recordVersion(**project, file, {file}, tr("Save %1 as changed outside Mitcad").arg(name), *author);
     }
   } catch (const std::exception& e) {
-    qWarning().noquote() << QStringLiteral("Version warning: %1").arg(errorText(e));
+    showError(tr("Could not check %1 before restoring: %2. Restore cancelled.").arg(name, errorText(e)));
+    return;
   }
   const QString message = tr("Restore %1 of %2 (%3)").arg(version.label(), name, version.shortId);
   QJsonObject result;
@@ -990,8 +791,8 @@ void MainWindow::saveVersionCopy(QWidget* parent, const QString& file, const Fil
     return;
   }
   qInfo().noquote() << QStringLiteral("Saved a copy of %1 %2 as %3").arg(name, version.labelWithId(), target);
-  std::pair<QString, bool> status{
-      tr("Saved %1 of %2 as %3.").arg(version.label(), name, QDir::toNativeSeparators(target)), false};
+  VersionRecord status;
+  status.status = tr("Saved %1 of %2 as %3.").arg(version.label(), name, QDir::toNativeSeparators(target));
   // In a project with version history the copy is a version of its own.
   if (const std::optional<rust::Box<Project>> project = versionedProject(target)) {
     if (const std::optional<QString> author = versionAuthor(**project)) {
@@ -1001,10 +802,10 @@ void MainWindow::saveVersionCopy(QWidget* parent, const QString& file, const Fil
                              *author);
     }
   }
-  if (status.second) {
-    showError(status.first);
+  if (status.problem) {
+    showError(status.status);
   } else {
-    showHint(status.first);
+    showHint(status.status);
   }
 }
 

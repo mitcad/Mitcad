@@ -12,11 +12,13 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::{DocState, ModelError, invalid};
-use crate::assembly::Occurrence;
+use crate::assembly::{Assembly, Occurrence};
 use crate::expr::ParamSpec;
-use crate::features::{FeatureDef, FeatureEntry};
+use crate::features::{ChamferSizeDef, FeatureDef, FeatureEntry, FilletSizeDef, OccurrencePath};
 use crate::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
+use crate::links::OccurrenceLink;
 use crate::parameters::ParamId;
+use crate::topo::{EdgeName, TopoName};
 use crate::transform::Transform;
 
 /// Marks a parameter in the JSON form of a copied definition.
@@ -44,22 +46,24 @@ impl DocState {
         Ok(made)
     }
 
-    /// Copies component `from` of `source` (this document's state before
-    /// the copy when `same_document`, else another file's) with its
-    /// features before the marker, the components placed in it and their
-    /// occurrences, at the marker. The copy is `into`, or, with `maker`
-    /// (the same document only), the component that a copy of that
-    /// feature, which made `from`, makes in the maker's own component.
-    /// Returns the copy.
+    /// Copies the component at `source_path` of `source` (this document's
+    /// state before the copy when `same_document`, else another file's)
+    /// with its features before the marker, the components placed in it and their
+    /// occurrences, at the marker. `into` is already placed in the
+    /// destination assembly. With `maker` (the same document only), the
+    /// feature that made the source component is copied too and owns
+    /// `into`. An empty source path copies another file's root component.
     pub(crate) fn copy_component(
         &mut self,
         source: &DocState,
-        from: ComponentUid,
-        into: Option<ComponentUid>,
+        source_path: &[OccurrenceUid],
+        into: ComponentUid,
         maker: Option<FeatureUid>,
         same_document: bool,
     ) -> Result<ComponentUid, ModelError> {
         let a = &source.assembly;
+        let from =
+            crate::joints::path_component(a, ComponentUid::ROOT, source_path).map_err(invalid)?;
         // The components to copy: `from` and everything placed in it.
         let mut inside = BTreeSet::from([from]);
         let mut todo = vec![from];
@@ -82,98 +86,53 @@ impl DocState {
         let params = self.copy_parameters(source, &features, &uids, same_document)?;
 
         let mut components: BTreeMap<ComponentUid, ComponentUid> = BTreeMap::new();
-        if let Some(into) = into {
-            components.insert(from, into);
-        }
+        components.insert(from, into);
         if let Some(maker) = maker.and_then(|m| source.entry(m)) {
             components.insert(maker.component, maker.component);
         }
-        // Components that no copied feature makes are made now.
+        // Make the whole assembly before validating features: links and
+        // joints must already be able to resolve their copied occurrences.
         for c in &inside {
-            let made_by_copy = a
-                .component(*c)
-                .and_then(|d| d.created_by)
-                .is_some_and(|f| uids.contains_key(&f));
-            if components.contains_key(c) || made_by_copy {
-                continue;
+            if !components.contains_key(c) {
+                let name = self.free_component_name(&a.name(*c));
+                components.insert(*c, self.assembly.create(Some(&name), None));
             }
-            let name = self.free_component_name(&a.name(*c));
-            components.insert(*c, self.assembly.create(Some(&name), None));
-        }
-
-        // The features, in timeline order.
-        let mut copied = Vec::with_capacity(features.len());
-        for f in &features {
-            let component = *components.get(&f.component).ok_or_else(|| {
-                invalid(format!(
-                    "cannot copy {}: it comes before the feature that makes {}",
-                    f.name,
-                    a.name(f.component)
-                ))
-            })?;
-            let def = copy_def(&f.def, &params, &uids)?;
-            let uid = uids[&f.uid];
-            let entry = FeatureEntry {
-                uid,
-                name: self.default_name(def.base_name()),
-                suppressed: f.suppressed,
-                component,
-                def,
-            };
-            let made = self
-                .insert_resolved(entry)
-                .map_err(|e| invalid(format!("copy of {}: {e}", f.name)))?;
-            if let (Some(made), Some(original)) = (made, a.created_by(f.uid)) {
-                let name = self.free_component_name(&a.name(original));
-                if let Some(c) = self.assembly.component_mut(made) {
-                    c.name = name;
-                }
-                components.insert(original, made);
+            if let Some(copy) = self.assembly.component_mut(components[c]) {
+                copy.created_by = a
+                    .component(*c)
+                    .and_then(|d| d.created_by)
+                    .and_then(|f| uids.get(&f).copied());
             }
-            copied.push(uid);
         }
-        let copy = *components
-            .get(&from)
-            .ok_or_else(|| invalid("the copy made no component"))?;
-
-        // Occurrences in the copied components; the first of a component
-        // that a copied feature made is the one that feature placed.
         let mut occurrences: HashMap<OccurrenceUid, OccurrenceUid> = HashMap::new();
-        let mut auto_used = BTreeSet::new();
         for o in a.occurrences.iter().filter(|o| inside.contains(&o.parent)) {
-            let (Some(&parent), Some(&component)) =
-                (components.get(&o.parent), components.get(&o.component))
-            else {
-                continue;
-            };
-            let automatic = self
-                .assembly
-                .occurrences_of(component)
-                .find(|t| t.parent == parent && !auto_used.contains(&t.uid))
-                .filter(|_| {
-                    a.component(o.component)
-                        .and_then(|d| d.created_by)
-                        .is_some_and(|f| uids.contains_key(&f))
-                })
-                .map(|t| t.uid);
-            let target = match automatic {
-                Some(t) => t,
-                None => self.assembly.place(component, parent, o.transform),
-            };
-            auto_used.insert(target);
+            let target =
+                self.assembly
+                    .place(components[&o.component], components[&o.parent], o.transform);
             set_flags(self.assembly.occurrence_mut(target).expect("placed"), o);
             occurrences.insert(o.uid, target);
         }
-        // Moves of occurrences name the copies.
-        for uid in &copied {
-            let position = self.position(*uid).expect("inserted");
-            let mut entry = (*self.features[position]).clone();
-            let changed = match &mut entry.def {
+        let prefix = crate::links::first_path(&self.assembly, into, None).map_err(invalid)?;
+
+        // The features, in timeline order, checked only after all their
+        // reference names and occurrence paths have been mapped.
+        for f in &features {
+            let component = components[&f.component];
+            let mut def = copy_def(&f.def, &params, &uids)?;
+            let references = CopyReferences {
+                source: a,
+                destination: &self.assembly,
+                source_path,
+                prefix: &prefix,
+                occurrences: &occurrences,
+                uids: &uids,
+            };
+            references.links(&mut def, &f.def, component)?;
+            match &mut def {
                 FeatureDef::MoveOccurrence(m) => {
                     for o in &mut m.occurrences {
                         *o = occurrences.get(o).copied().unwrap_or(*o);
                     }
-                    true
                 }
                 FeatureDef::CapturePosition(c) => {
                     for p in &mut c.positions {
@@ -182,16 +141,28 @@ impl DocState {
                             .copied()
                             .unwrap_or(p.occurrence);
                     }
-                    true
                 }
                 // Joints between occurrences (mitcad#55).
-                def => crate::joints::remap_occurrences(def, &|o| {
-                    occurrences.get(&o).copied().unwrap_or(o)
-                }),
-            };
-            if changed {
-                self.features[position] = Arc::new(entry);
+                def => {
+                    crate::joints::remap_occurrences(def, &|o| {
+                        occurrences.get(&o).copied().unwrap_or(o)
+                    });
+                }
             }
+            let entry = FeatureEntry {
+                uid: uids[&f.uid],
+                name: self.default_name(def.base_name()),
+                suppressed: f.suppressed,
+                component,
+                def,
+            };
+            self.check_feature(self.marker, &entry)
+                .map_err(|e| invalid(format!("copy of {}: {e}", f.name)))?;
+            // Components and placements, including ones made by these
+            // features, were created above; insert_resolved would make
+            // them a second time.
+            self.features.insert(self.marker, Arc::new(entry));
+            self.marker += 1;
         }
         // Body attributes follow the bodies, face appearances their faces.
         let text: HashMap<String, String> = uids
@@ -207,13 +178,13 @@ impl DocState {
                 attributes.face_appearances = attributes
                     .face_appearances
                     .into_iter()
-                    .map(|(face, appearance)| (remap_text(&face, &text), appearance))
+                    .map(|(face, appearance)| (remap_reference(&face, &text), appearance))
                     .collect();
                 Some((BodyUid::new(*feature, body.index), attributes))
             })
             .collect();
         self.body_attributes.extend(attributes);
-        Ok(copy)
+        Ok(into)
     }
 
     /// The parameters the copied features use: their own ones copied with
@@ -292,6 +263,138 @@ fn free_parameter_name(parameters: &crate::parameters::Parameters, name: &str) -
         .expect("a free name exists")
 }
 
+/// Reference mapping for geometry picked in assembly context. The same
+/// component may also be placed outside the copied subtree: a link picked
+/// there keeps both that occurrence and its original geometry ids.
+struct CopyReferences<'a> {
+    source: &'a Assembly,
+    destination: &'a Assembly,
+    source_path: &'a [OccurrenceUid],
+    prefix: &'a [OccurrenceUid],
+    occurrences: &'a HashMap<OccurrenceUid, OccurrenceUid>,
+    uids: &'a HashMap<FeatureUid, FeatureUid>,
+}
+
+impl CopyReferences<'_> {
+    fn body(&self, body: BodyUid) -> BodyUid {
+        BodyUid::new(
+            self.uids
+                .get(&body.feature)
+                .copied()
+                .unwrap_or(body.feature),
+            body.index,
+        )
+    }
+
+    /// A root-relative path through the selected source occurrence, with
+    /// its prefix replaced by the new copy's and the occurrences below
+    /// it mapped. Paths outside that subtree remain external, even if
+    /// they end in a copied component.
+    fn path(&self, path: &OccurrencePath) -> Option<OccurrencePath> {
+        let mut component = ComponentUid::ROOT;
+        if !path.0.starts_with(self.source_path) {
+            return None;
+        }
+        for uid in &path.0 {
+            let occurrence = self.source.occurrence(*uid)?;
+            if occurrence.parent != component {
+                return None;
+            }
+            component = occurrence.component;
+        }
+        let suffix: Option<Vec<_>> = path.0[self.source_path.len()..]
+            .iter()
+            .map(|o| self.occurrences.get(o).copied())
+            .collect();
+        Some(OccurrencePath(
+            self.prefix.iter().copied().chain(suffix?).collect(),
+        ))
+    }
+
+    fn link(
+        &self,
+        link: &OccurrenceLink,
+        component: ComponentUid,
+    ) -> Result<(OccurrenceLink, bool), ModelError> {
+        let source = self.path(&link.source);
+        let internal = source.is_some();
+        let target = self.path(&link.target);
+        let target = crate::links::first_path(
+            self.destination,
+            component,
+            target.as_ref().map(|p| p.0.as_slice()),
+        )
+        .map_err(invalid)?;
+        Ok((
+            OccurrenceLink {
+                source: source.unwrap_or_else(|| link.source.clone()),
+                target: OccurrencePath(target),
+            },
+            internal,
+        ))
+    }
+
+    fn links(
+        &self,
+        copy: &mut FeatureDef,
+        original: &FeatureDef,
+        component: ComponentUid,
+    ) -> Result<(), ModelError> {
+        match (copy, original) {
+            (FeatureDef::Combine(copy), FeatureDef::Combine(original)) => {
+                let mut tools = HashMap::new();
+                copy.tool_links.clear();
+                for (tool, link) in &original.tool_links {
+                    let (link, internal) = self.link(link, component)?;
+                    let mapped = if internal { self.body(*tool) } else { *tool };
+                    tools.insert(*tool, mapped);
+                    copy.tool_links.insert(mapped, link);
+                }
+                copy.tools = original
+                    .tools
+                    .iter()
+                    .map(|tool| tools.get(tool).copied().unwrap_or_else(|| self.body(*tool)))
+                    .collect();
+            }
+            (FeatureDef::Sketch(copy), FeatureDef::Sketch(original)) => {
+                if let Some(link) = &original.plane_link {
+                    let (link, internal) = self.link(link, component)?;
+                    copy.plane_link = Some(link);
+                    if !internal {
+                        copy.plane = original.plane.clone();
+                    }
+                }
+                let text = self
+                    .uids
+                    .iter()
+                    .map(|(a, b)| (a.to_string(), b.to_string()))
+                    .collect();
+                for (copy, original) in copy.projections.iter_mut().zip(&original.projections) {
+                    let internal = if let Some(link) = &original.link {
+                        let (link, internal) = self.link(link, component)?;
+                        copy.link = Some(link);
+                        internal
+                    } else {
+                        true
+                    };
+                    copy.source = if internal {
+                        remap_reference(&original.source.to_string(), &text)
+                            .parse()
+                            .map_err(|e| invalid(format!("copy projection: {e}")))?
+                    } else {
+                        original.source.clone()
+                    };
+                    copy.body = original
+                        .body
+                        .map(|b| if internal { self.body(b) } else { b });
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
 /// An expression with the references renamed by `names` all at once.
 fn rename_references(
     text: &str,
@@ -312,8 +415,9 @@ fn rename_references(
 }
 
 /// A definition with its parameters and feature references mapped. The
-/// references are rewritten in the definition's JSON form: every feature
-/// id in a reference text (`F3`, `F3.b0`, `E{F3:side(c1)|…}`).
+/// references are rewritten in the definition's JSON form, accepting only
+/// feature ids, body ids and parsed topological names. Body-keyed links
+/// and projection sources are handled in their typed context above.
 fn copy_def(
     def: &FeatureDef,
     params: &HashMap<ParamId, ParamId>,
@@ -334,13 +438,90 @@ fn copy_def(
     remap_value(&mut value, &text);
     let copied: FeatureDef<String> =
         serde_json::from_value(value).map_err(|e| invalid(format!("copy: {e}")))?;
-    copied.map_params(&mut |slot, marker: &String| {
+    let mut copied = copied.map_params(&mut |slot, marker: &String| {
         marker
             .strip_prefix(PARAM)
             .and_then(|i| i.parse::<usize>().ok())
             .and_then(|i| slots.get(i).copied())
             .ok_or_else(|| invalid(format!("copy: {slot} lost its parameter")))
-    })
+    })?;
+    copy_measurement_sides(&mut copied, def, &text);
+    Ok(copied)
+}
+
+/// Renumbering may reverse the canonical faces of an edge. Distances
+/// measured on its first face must still refer to that same copied face.
+fn copy_measurement_sides(
+    copy: &mut FeatureDef,
+    original: &FeatureDef,
+    uids: &HashMap<String, String>,
+) {
+    let edges = |old: &[EdgeName], new: &[EdgeName]| -> (Vec<EdgeName>, Vec<EdgeName>) {
+        let (mut kept, mut swapped) = (Vec::new(), Vec::new());
+        for (old, new) in old.iter().zip(new) {
+            if remap_reference(&old.faces()[0].to_string(), uids) == new.faces()[0].to_string() {
+                kept.push(new.clone());
+            } else {
+                swapped.push(new.clone());
+            }
+        }
+        (kept, swapped)
+    };
+    match (copy, original) {
+        (FeatureDef::Fillet(copy), FeatureDef::Fillet(original)) => {
+            for (mut set, old) in std::mem::take(&mut copy.sets)
+                .into_iter()
+                .zip(&original.sets)
+            {
+                let mut split = false;
+                if set.reference_face.is_none()
+                    && matches!(set.size, FilletSizeDef::Asymmetric { .. })
+                {
+                    let (kept, swapped) = edges(&old.edges, &set.edges);
+                    if !swapped.is_empty() {
+                        split = true;
+                        let mut other = set.clone();
+                        other.edges = swapped;
+                        other.faces.clear();
+                        if let FilletSizeDef::Asymmetric { flip, .. } = &mut other.size {
+                            *flip = !*flip;
+                        }
+                        copy.sets.push(other);
+                        set.edges = kept;
+                    }
+                }
+                if !split || !set.edges.is_empty() || !set.faces.is_empty() {
+                    copy.sets.push(set);
+                }
+            }
+        }
+        (FeatureDef::Chamfer(copy), FeatureDef::Chamfer(original)) => {
+            for (mut set, old) in std::mem::take(&mut copy.sets)
+                .into_iter()
+                .zip(&original.sets)
+            {
+                let mut split = false;
+                if set.reference_face.is_none()
+                    && !matches!(set.size, ChamferSizeDef::EqualDistance { .. })
+                {
+                    let (kept, swapped) = edges(&old.edges, &set.edges);
+                    if !swapped.is_empty() {
+                        split = true;
+                        let mut other = set.clone();
+                        other.edges = swapped;
+                        other.faces.clear();
+                        other.flip = !other.flip;
+                        copy.sets.push(other);
+                        set.edges = kept;
+                    }
+                }
+                if !split || !set.edges.is_empty() || !set.faces.is_empty() {
+                    copy.sets.push(set);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Fields of definitions that are texts, not references.
@@ -348,7 +529,7 @@ const TEXT_FIELDS: [&str; 5] = ["name", "source", "text", "font", "brep"];
 
 fn remap_value(value: &mut Value, uids: &HashMap<String, String>) {
     match value {
-        Value::String(s) if !s.starts_with(PARAM) => *s = remap_text(s, uids),
+        Value::String(s) if !s.starts_with(PARAM) => *s = remap_reference(s, uids),
         Value::Array(items) => {
             for item in items {
                 remap_value(item, uids);
@@ -363,6 +544,21 @@ fn remap_value(value: &mut Value, uids: &HashMap<String, String>) {
         }
         _ => {}
     }
+}
+
+fn remap_reference(text: &str, uids: &HashMap<String, String>) -> String {
+    if text.parse::<FeatureUid>().is_ok() || text.parse::<BodyUid>().is_ok() {
+        return remap_text(text, uids);
+    }
+    if text.parse::<TopoName>().is_ok() {
+        // Parsing again canonicalises nested edge/vertex face order after
+        // renumbering (F9 sorts differently from F10).
+        return remap_text(text, uids)
+            .parse::<TopoName>()
+            .expect("mapping feature ids preserves a topological name")
+            .to_string();
+    }
+    text.to_owned()
 }
 
 /// Replaces the feature ids `F<n>` in a reference text: an `F` that does
@@ -417,6 +613,130 @@ mod tests {
         assert_eq!(remap_text("XF2", &uids), "XF2");
         assert_eq!(remap_text("F2a", &uids), "F2a");
         assert_eq!(remap_text("r{c1[c4,c2]}", &uids), "r{c1[c4,c2]}");
+    }
+
+    #[test]
+    fn only_typed_references_are_mapped_and_nested_names_are_canonical() {
+        let uids = HashMap::from([
+            ("F2".to_owned(), "F9".to_owned()),
+            ("F3".to_owned(), "F10".to_owned()),
+        ]);
+        assert_eq!(remap_reference("F2.b0", &uids), "F9.b0");
+        assert_eq!(
+            remap_reference("F3:fillet(E{F2:side(c1)|F3:end(r{c1})})", &uids),
+            "F10:fillet(E{F10:end(r{c1})|F9:side(c1)})"
+        );
+        assert_eq!(remap_reference("caption F2", &uids), "caption F2");
+        let mut value = serde_json::json!({
+            "name": "F2", "source": "F2", "text": "F2", "font": "F2", "brep": "F2",
+            "body": "F2.b0", "reference_face": "F2:end(r{c1})",
+        });
+        remap_value(&mut value, &uids);
+        for field in TEXT_FIELDS {
+            assert_eq!(value[field], "F2");
+        }
+        assert_eq!(value["body"], "F9.b0");
+        assert_eq!(value["reference_face"], "F9:end(r{c1})");
+    }
+
+    #[test]
+    fn whole_design_links_to_root_geometry_receive_the_copy_prefix() {
+        let source = Assembly::default();
+        let mut destination = Assembly::default();
+        let copy = destination.create(Some("Copy"), None);
+        let occurrence = destination.place(copy, ComponentUid::ROOT, Transform::IDENTITY);
+        let prefix = [occurrence];
+        let references = CopyReferences {
+            source: &source,
+            destination: &destination,
+            source_path: &[],
+            prefix: &prefix,
+            occurrences: &HashMap::new(),
+            uids: &HashMap::new(),
+        };
+        let (link, internal) = references.link(&OccurrenceLink::default(), copy).unwrap();
+        assert!(internal);
+        assert_eq!(link.source.0, prefix);
+        assert_eq!(link.target.0, prefix);
+    }
+
+    #[test]
+    fn copied_chamfers_keep_distances_on_the_original_faces() {
+        use crate::features::{ChamferCorner, ChamferDef, ChamferSetDef};
+        let old = FeatureDef::Chamfer(ChamferDef {
+            body: "F2.b0".parse().unwrap(),
+            sets: vec![ChamferSetDef {
+                edges: vec![
+                    "E{F2:a|F3:b}".parse().unwrap(),
+                    "E{F2:a|F2:b}".parse().unwrap(),
+                ],
+                faces: Vec::new(),
+                size: ChamferSizeDef::TwoDistances {
+                    distance1: ParamId::from_raw(1),
+                    distance2: ParamId::from_raw(2),
+                },
+                reference_face: None,
+                flip: false,
+                tangent_chain: true,
+            }],
+            corner: ChamferCorner::Chamfer,
+        });
+        let uids = HashMap::from([
+            (FeatureUid(2), FeatureUid(9)),
+            (FeatureUid(3), FeatureUid(10)),
+        ]);
+        let FeatureDef::Chamfer(copy) = copy_def(&old, &HashMap::new(), &uids).unwrap() else {
+            panic!("copied a chamfer");
+        };
+        assert_eq!(copy.sets.len(), 2);
+        assert!(copy.sets[0].flip);
+        assert_eq!(copy.sets[0].edges[0].to_string(), "E{F10:b|F9:a}");
+        assert!(!copy.sets[1].flip);
+        assert_eq!(copy.sets[1].edges[0].to_string(), "E{F9:a|F9:b}");
+        assert_eq!(copy.sets[0].size, copy.sets[1].size);
+    }
+
+    #[test]
+    fn copied_fillets_map_reference_faces_vertices_and_asymmetric_sides() {
+        let old: FeatureDef<String> = serde_json::from_value(serde_json::json!({
+            "type": "fillet", "body": "F2.b0", "sets": [
+                {"edges": ["E{F2:a|F3:b}"],
+                 "size": {"type": "asymmetric", "distance1": "d1", "distance2": "d2"}},
+                {"edges": ["E{F2:a|F3:b}"], "faces": ["F2:a"],
+                 "reference_face": "F3:b",
+                 "size": {"type": "variable", "start": "d1", "end": "d2",
+                          "start_vertex": "V{F2:a|F2:b|F3:c}"}}
+            ]
+        }))
+        .unwrap();
+        let old = old
+            .map_params(&mut |_, _| Ok::<_, ()>(ParamId::from_raw(1)))
+            .unwrap();
+        let uids = HashMap::from([
+            (FeatureUid(2), FeatureUid(9)),
+            (FeatureUid(3), FeatureUid(10)),
+        ]);
+        let FeatureDef::Fillet(copy) = copy_def(&old, &HashMap::new(), &uids).unwrap() else {
+            panic!("copied a fillet");
+        };
+        assert_eq!(copy.sets.len(), 2);
+        assert!(matches!(
+            copy.sets[0].size,
+            FilletSizeDef::Asymmetric { flip: true, .. }
+        ));
+        assert_eq!(copy.sets[0].edges[0].to_string(), "E{F10:b|F9:a}");
+        assert_eq!(
+            copy.sets[1].reference_face.as_ref().unwrap().to_string(),
+            "F10:b"
+        );
+        assert_eq!(copy.sets[1].faces[0].to_string(), "F9:a");
+        let FilletSizeDef::Variable { start_vertex, .. } = &copy.sets[1].size else {
+            panic!("kept a variable fillet");
+        };
+        assert_eq!(
+            start_vertex.as_ref().unwrap().to_string(),
+            "V{F10:c|F9:a|F9:b}"
+        );
     }
 
     #[test]

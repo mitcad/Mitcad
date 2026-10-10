@@ -55,6 +55,14 @@ pub enum ErrorClass {
     /// Files a sync would change have changes no version holds.
     LocalChanges,
     Other,
+    // Local and Cloud projects (mitcad#89).
+    /// The remote holds a Mitcad project (where a new one was to go).
+    HasProject,
+    /// A folder that must be empty (or missing) is not.
+    NotEmpty,
+    /// A folder that is a project, or inside one, where a new project was
+    /// to be made.
+    InsideProject,
 }
 
 /// A failure of a remote operation: its class, a message for people and
@@ -114,9 +122,9 @@ fn hint(class: ErrorClass) -> Option<&'static str> {
              helper such as Git Credential Manager, or use SSH."
         }
         ErrorClass::HostKeyUnknown => {
-            "the server's SSH host key is not known yet, or it changed. Compare it with \
-             the fingerprints the service publishes and confirm it once in a terminal \
-             (for example ssh -T git@github.com); Mitcad does not change known_hosts."
+            "the server's SSH host key is not known yet, or it changed. Compare its \
+             fingerprint with the one the service publishes, then trust it, which adds it \
+             to known_hosts (Trust This Server, or mitcad-cli host-keys <host> --trust)."
         }
         ErrorClass::Network => {
             "the server cannot be reached. Check the network connection and the host name."

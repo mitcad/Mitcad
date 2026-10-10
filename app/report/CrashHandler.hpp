@@ -7,7 +7,10 @@
 // do nothing a crashed process cannot do: on Linux and macOS signal
 // handlers (SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT) that write with
 // write() and backtrace_symbols_fd(); on Windows an unhandled exception
-// filter and a SIGABRT handler with CaptureStackBackTrace. An uncaught C++
+// filter that walks the stack from the fault (StackWalk64, on a thread of
+// its own) and a SIGABRT handler with CaptureStackBackTrace, both naming
+// the frames' functions from the PDB file next to the executable where
+// there is one (dbghelp's SymFromAddr). An uncaught C++
 // exception (std::terminate) and a Rust panic (noteMessage, before the
 // abort that follows it) leave their message in the report.
 //

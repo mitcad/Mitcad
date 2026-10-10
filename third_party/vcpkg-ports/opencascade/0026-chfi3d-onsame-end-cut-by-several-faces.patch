@@ -1,0 +1,244 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the end of a rounding whose face runs on tangentially past the
+vertex, cut by several faces (mitcad#133).
+
+The case: the top edge of a window through a slab rounded, where at the
+window's end the slab's face turns tangentially into the end wall (an arc
+of a cylinder, then a flat across the slab). At the vertex the edges are in
+the OnSame state: the contact line on the slab's face does not end on any
+edge, it runs on past the vertex, while the contact on the window's ceiling
+ends on the flat. ChFi3d_Builder::PerformIntersectionAtEnd handles an
+OnSame end (it prolongs the face's edge at the vertex to the contact and
+updates the contact with IntersUpdateOnSame), but gave up as soon as a
+contact point was off an edge (PerformMoreThreeCorner, which failed). Now:
+
+- A three-edge vertex in the OnSame state whose contact on one side is
+  off any edge takes the edge of that side's face at the vertex as the
+  first (or last) edge when it is the one in that state, and the end is
+  cut by the faces around (the arc, the flat), as for any intersection at
+  end. Both sides are handled: the first contact off its edge with the
+  first face's edge in the OnSame state, or the second contact off its
+  edge with the second face's edge in it.
+- When the updated contact point lies beyond the vertex on that edge's
+  prolongation, the piece of its curve from the vertex to the point bounds
+  the side's face and the face across the edge, each in the edge's own
+  orientation in that face, instead of a point beyond the edge's end; and
+  the spine's edge is cut at the vertex, as in PerformOneCorner's OnSame
+  case (ProlongOnSameEdge).
+- On a periodic face at the end, the ends of the intersection (from
+  p-curves and projections in any period) are taken into the face's
+  domain where a period brings them there.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -1958,6 +1958,82 @@ static bool IsShrink(const Geom2dAdaptor_Curve& PC,
+   return false;
+ }
+ 
++//=======================================================================
++// function : ProlongOnSameEdge
++// purpose  : In the OnSame state the contact point on the face running on
++//           past the vertex lies beyond the vertex on the prolongation of
++//           the face's edge <theEdge> at the vertex (parameter <thePar>,
++//           point <theIndPoint>). The piece of the edge's curve from the
++//           vertex to that point bounds both faces of the edge, in the
++//           edge's orientation in each, as in PerformOneCorner's OnSame
++//           case, and the spine's edge is cut at the vertex. Returns false
++//           (nothing done) when the point lies on the edge.
++//=======================================================================
++
++static bool ProlongOnSameEdge(TopOpeBRepDS_DataStructure& DStr,
++                              const TopoDS_Edge&          theEdge,
++                              const TopoDS_Face&          theFace1,
++                              const TopoDS_Face&          theFace2,
++                              const TopoDS_Vertex&        theVtx,
++                              const TopoDS_Edge&          theSpineEdge,
++                              const double                thePar,
++                              const int                   theIndPoint,
++                              const double                theTol)
++{
++  double                  aFirst, aLast;
++  occ::handle<Geom_Curve> aCurve = BRep_Tool::Curve(theEdge, aFirst, aLast);
++  if (aCurve.IsNull()
++      || (thePar >= aFirst - Precision::PConfusion() && thePar <= aLast + Precision::PConfusion()))
++  {
++    return false;
++  }
++  const double parVtx   = BRep_Tool::Parameter(theVtx, theEdge);
++  const double par1     = std::min(parVtx, thePar);
++  const double par2     = std::max(parVtx, thePar);
++  const bool   isVtxLow = parVtx < thePar;
++  const int    IVtx     = DStr.AddShape(theVtx);
++  const int    indcurv  = DStr.AddCurve(
++    TopOpeBRepDS_Curve(new Geom_TrimmedCurve(aCurve, par1, par2), theTol));
++  DStr.ChangeCurveInterferences(indcurv).Append(
++    ChFi3d_FilPointInDS(TopAbs_FORWARD, indcurv, isVtxLow ? IVtx : theIndPoint, par1, isVtxLow));
++  DStr.ChangeCurveInterferences(indcurv).Append(
++    ChFi3d_FilPointInDS(TopAbs_REVERSED, indcurv, isVtxLow ? theIndPoint : IVtx, par2, !isVtxLow));
++  const TopoDS_Face aFaces[2] = {theFace1, theFace2};
++  for (int iF = 0; iF < 2; iF++)
++  {
++    TopAbs_Orientation anOri = TopAbs_FORWARD;
++    for (TopExp_Explorer anExp(aFaces[iF].Oriented(TopAbs_FORWARD), TopAbs_EDGE); anExp.More();
++         anExp.Next())
++    {
++      if (anExp.Current().IsSame(theEdge))
++      {
++        anOri = anExp.Current().Orientation();
++      }
++    }
++    double                    aU1, aU2;
++    occ::handle<Geom2d_Curve> aPCurve = BRep_Tool::CurveOnSurface(theEdge, aFaces[iF], aU1, aU2);
++    const int                 anIF    = DStr.AddShape(aFaces[iF]);
++    DStr.ChangeShapeInterferences(anIF).Append(ChFi3d_FilCurveInDS(indcurv, anIF, aPCurve, anOri));
++  }
++  const int          IArcspine = DStr.AddShape(theSpineEdge);
++  TopAbs_Orientation OVtx      = TopAbs_FORWARD;
++  for (TopExp_Explorer anExp(theSpineEdge.Oriented(TopAbs_FORWARD), TopAbs_VERTEX); anExp.More();
++       anExp.Next())
++  {
++    if (theVtx.IsSame(anExp.Current()))
++    {
++      OVtx = anExp.Current().Orientation();
++      break;
++    }
++  }
++  DStr.ChangeShapeInterferences(IArcspine).Append(
++    ChFi3d_FilVertexInDS(TopAbs::Reverse(OVtx),
++                         IArcspine,
++                         IVtx,
++                         BRep_Tool::Parameter(theVtx, theSpineEdge)));
++  return true;
++}
++
+ //=================================================================================================
+ 
+ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -2304,14 +2380,36 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+   {
+     nbface = nface - 2;
+   }
+-  if (!CV1.IsOnArc() || !CV2.IsOnArc())
++  // A face of the fillet that runs on tangentially past the vertex (the
++  // OnSame state) leaves its contact point off any edge: the edge of that
++  // face at the vertex is then the first (or last) one, prolonged up to
++  // that point (isOnSame1 or isOnSame2 below).
++  TopoDS_Edge anOnSameEdge, anOnSameEdge2;
++  if (nface == 3 && state == ChFiDS_OnSame && CV1.IsOnArc() != CV2.IsOnArc())
++  {
++    TopoDS_Edge   threeE[3];
++    TopoDS_Vertex aVbid;
++    ChFi3d_cherche_element(Vtx, EdgeSpine, F1, threeE[0], aVbid);
++    ChFi3d_cherche_element(Vtx, EdgeSpine, F2, threeE[1], aVbid);
++    threeE[2]                = EdgeSpine;
++    const bool isOnSameSide1 = ChFi3d_EdgeState(threeE, myEFMap) == ChFiDS_OnSame;
++    if (!CV1.IsOnArc() && isOnSameSide1)
++    {
++      anOnSameEdge = threeE[0];
++    }
++    else if (!CV2.IsOnArc() && !isOnSameSide1)
++    {
++      anOnSameEdge2 = threeE[1];
++    }
++  }
++  if ((!CV1.IsOnArc() || !CV2.IsOnArc()) && anOnSameEdge.IsNull() && anOnSameEdge2.IsNull())
+   {
+     PerformMoreThreeCorner(Index, 1);
+     return;
+   }
+ 
+-  Edge[0]      = CV1.Arc();
+-  Edge[nbface] = CV2.Arc();
++  Edge[0]      = anOnSameEdge.IsNull() ? CV1.Arc() : anOnSameEdge;
++  Edge[nbface] = anOnSameEdge2.IsNull() ? CV2.Arc() : anOnSameEdge2;
+   tabedg.SetValue(0, Edge[0]);
+   tabedg.SetValue(nbface, Edge[nbface]);
+   // processing of a fillet arriving on a vertex
+@@ -2542,7 +2640,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+         }
+         if (!findonf2)
+         {
+-          Edge[nb] = CV2.Arc();
++          Edge[nb] = anOnSameEdge2.IsNull() ? CV2.Arc() : anOnSameEdge2;
+         }
+       }
+       if (findonf2 && !isOnSame2)
+@@ -3348,6 +3446,38 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+     //       pfac2.SetX(xx2);
+     //     }
+ 
++    if ((!anOnSameEdge.IsNull() || !anOnSameEdge2.IsNull())
++        && (Bs.IsUPeriodic() || Bs.IsVPeriodic()))
++    {
++      // The ends come from p-curves and projections in any period: on a
++      // periodic face they are taken into the face's domain where a period
++      // brings them there (a point projected on the prolongation of the
++      // OnSame edge came out a period away).
++      double aUMin, aUMax, aVMin, aVMax;
++      BRepTools::UVBounds(Face[nb - 1], aUMin, aUMax, aVMin, aVMax);
++      const double aTol    = Precision::PConfusion();
++      gp_Pnt2d*    aEnds[2] = {&pfac1, &pfac2};
++      for (int iEnd = 0; iEnd < 2; iEnd++)
++      {
++        gp_Pnt2d& aP = *aEnds[iEnd];
++        if (Bs.IsUPeriodic() && (aP.X() < aUMin - aTol || aP.X() > aUMax + aTol))
++        {
++          const double aX = ElCLib::InPeriod(aP.X(), aUMin - aTol, aUMin - aTol + Bs.UPeriod());
++          if (aX <= aUMax + aTol)
++          {
++            aP.SetX(aX);
++          }
++        }
++        if (Bs.IsVPeriodic() && (aP.Y() < aVMin - aTol || aP.Y() > aVMax + aTol))
++        {
++          const double aY = ElCLib::InPeriod(aP.Y(), aVMin - aTol, aVMin - aTol + Bs.VPeriod());
++          if (aY <= aVMax + aTol)
++          {
++            aP.SetY(aY);
++          }
++        }
++      }
++    }
+     if (isSeamOnEndFace && facecouture.IsSame(Face[nb - 1]))
+     {
+       // On the face whose seam runs from the vertex, the ends of the
+@@ -3565,6 +3695,12 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+       Interfedge[0] =
+         ChFi3d_FilPointInDS(CV1.TransitionOnArc(), Iarc1, indpoint1, paredge1, Isvtx1);
+       // DStr.ChangeShapeInterferences(Edge[0]).Append(Interfp1);
++      if (isOnSame1 && !anOnSameEdge.IsNull()
++          && ProlongOnSameEdge(
++            DStr, Edge[0], Face[0], F1, Vtx, EdgeSpine, paredge1, indpoint1, tolapp3d))
++      {
++        proledge[0] = 1;
++      }
+     }
+     if (nb == nbface)
+     {
+@@ -3572,6 +3708,12 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+       Interfedge[nb] =
+         ChFi3d_FilPointInDS(CV2.TransitionOnArc(), Iarc2, indpoint2, paredge2, Isvtx2);
+       // DStr.ChangeShapeInterferences(Edge[nb]).Append(Interfp2);
++      if (isOnSame2 && !anOnSameEdge2.IsNull()
++          && ProlongOnSameEdge(
++            DStr, Edge[nb], Face[nb - 1], F2, Vtx, EdgeSpine, paredge2, indpoint2, tolapp3d))
++      {
++        proledge[nb] = 1;
++      }
+     }
+ 
+     if (nb != nbface || oneintersection1 || oneintersection2)
+@@ -3962,7 +4104,10 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+       DStr.ChangeShapeInterferences(Edge[nb - 1]).Append(Interfedge[nb - 1]);
+     }
+   }
+-  DStr.ChangeShapeInterferences(Edge[nbface]).Append(Interfedge[nbface]);
++  if (!proledge[nbface])
++  {
++    DStr.ChangeShapeInterferences(Edge[nbface]).Append(Interfedge[nbface]);
++  }
+ 
+   if (!isShrink)
+   {

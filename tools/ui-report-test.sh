@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/report
 # Feedback and error reports (mitcad#61, mitcad#62) through the real UI.
 # No browser opens: MITCAD_TEST_LOG_URLS=1 (ui-test-lib.sh) logs the
 # prefilled issue form's address instead, and the test reads it.
@@ -26,6 +27,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-report-test.sh
+# check-all sources: tools/cli/tests/v1_boss.mitcad
 
 source "$(dirname "$0")/ui-test-lib.sh"
 

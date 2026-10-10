@@ -2,6 +2,15 @@
 # The bridge, and the release tool mitcad-release of the automatic updates
 # (mitcad#9, docs/updates.md).
 corrosion_import_crate(MANIFEST_PATH Cargo.toml CRATES mitcad-ffi mitcad-update)
+# Live updates (mitcad#89): TLS in the bridge (rustls with ring) takes
+# random numbers from the system (bcrypt on Windows) and reads the system's
+# root certificates (the Security framework on macOS). Corrosion links what
+# Rust's standard library needs, not what crates add.
+if(WIN32)
+  target_link_libraries(mitcad_ffi INTERFACE bcrypt)
+elseif(APPLE)
+  target_link_libraries(mitcad_ffi INTERFACE "-framework Security" "-framework CoreFoundation")
+endif()
 
 # C++ side of the bridges: the generated mitcad_bridge/*.h and the adapters
 # in cpp/bridge/, one per kernel family. Rust calls the geometry library
@@ -181,67 +190,85 @@ if(BUILD_TESTING)
   if(Rust_TOOLCHAIN)
     list(APPEND cargo_test_environment "RUSTUP_TOOLCHAIN=${Rust_TOOLCHAIN}")
   endif()
+  set(cargo_build_environment "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo-test" ${cargo_test_environment})
 
-  add_test(NAME core.model
-    COMMAND "${Rust_CARGO_CACHED}" test --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-            -p mitcad-model --quiet)
-  set_tests_properties(core.model PROPERTIES
-    ENVIRONMENT "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo-test;${cargo_test_environment}")
+  # The crates' tests (mitcad#101). A fixture per profile builds the test
+  # binaries of every crate in one cargo run, core.cargo_build (debug) and
+  # core.cargo_build_release: cargo's lock on its target directory is taken
+  # once and the crates compile in parallel, where a cargo test per crate
+  # waited for the others' builds. The tests then run the binaries directly
+  # (cargo-tests.cmake), at the same time, and core.doctests and
+  # core.doctests_release run the documentation tests.
+  #
+  # mitcad_cargo_test(<name> <package> [RELEASE] [PARTS <part> <filter>...]):
+  # the ctest <name> runs the package's tests (RELEASE: optimised). With
+  # PARTS, <name>.<part> runs the tests whose names contain <filter>,
+  # <name>.rest the others, and <name>.parts checks that the parts together
+  # hold each of the package's tests exactly once (a new module goes to the
+  # rest until it gets a part of its own).
+  function(mitcad_cargo_test name package)
+    cmake_parse_arguments(PARSE_ARGV 2 arg "RELEASE" "" "PARTS")
+    set(profile debug)
+    if(arg_RELEASE)
+      set(profile release)
+    endif()
+    set_property(GLOBAL APPEND PROPERTY MITCAD_CARGO_TESTS_${profile} ${package})
+    set(run "${CMAKE_COMMAND}" "-DLIST=${CMAKE_CURRENT_BINARY_DIR}/cargo-test/tests-${profile}.tsv"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cargo-tests.cmake" --)
+    if(NOT arg_PARTS)
+      add_test(NAME ${name} COMMAND ${run} run ${package})
+      set(tests ${name})
+    else()
+      set(tests)
+      set(filters)
+      set(skips)
+      while(arg_PARTS)
+        list(POP_FRONT arg_PARTS part filter)
+        add_test(NAME ${name}.${part} COMMAND ${run} run ${package} "${filter}")
+        list(APPEND tests ${name}.${part})
+        list(APPEND filters "${filter}")
+        list(APPEND skips --skip "${filter}")
+      endwhile()
+      add_test(NAME ${name}.rest COMMAND ${run} run ${package} ${skips})
+      add_test(NAME ${name}.parts COMMAND ${run} parts ${package} ${filters})
+      list(APPEND tests ${name}.rest ${name}.parts)
+    endif()
+    set_tests_properties(${tests} PROPERTIES FIXTURES_REQUIRED cargo_tests_${profile})
+  endfunction()
+
+  mitcad_cargo_test(core.model mitcad-model)
 
   # The .f3d import on synthetic dumps with the mock kernel (T1).
-  add_test(NAME core.import
-    COMMAND "${Rust_CARGO_CACHED}" test --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-            -p mitcad-import --quiet)
-  set_tests_properties(core.import PROPERTIES
-    ENVIRONMENT "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo-test;${cargo_test_environment}")
+  mitcad_cargo_test(core.import mitcad-import)
 
-  add_test(NAME core.solver
-    COMMAND "${Rust_CARGO_CACHED}" test --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-            -p mitcad-solver --quiet)
-  set_tests_properties(core.solver PROPERTIES
-    ENVIRONMENT "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo-test")
+  mitcad_cargo_test(core.solver mitcad-solver)
 
   # The .f3d reader; its corpus test reads MITCAD_F3D_CORPUS (default
   # ~/f3d-corpus) and skips when the corpus is missing.
-  add_test(NAME core.f3d
-    COMMAND "${Rust_CARGO_CACHED}" test --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-            -p mitcad-f3d --release --quiet)
-  set_tests_properties(core.f3d PROPERTIES
-    ENVIRONMENT "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo-test;${cargo_test_environment}")
+  mitcad_cargo_test(core.f3d mitcad-f3d RELEASE)
 
-  add_test(NAME core.dxf
-    COMMAND "${Rust_CARGO_CACHED}" test --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-            -p mitcad-dxf --quiet)
-  set_tests_properties(core.dxf PROPERTIES
-    ENVIRONMENT "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo-test;${cargo_test_environment}")
+  mitcad_cargo_test(core.dxf mitcad-dxf)
 
   # Version history (P12b): commits, history and older versions in
   # temporary git repositories, checked with the system's git where it is
-  # installed.
-  add_test(NAME core.vcs
-    COMMAND "${Rust_CARGO_CACHED}" test --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-            -p mitcad-vcs --quiet)
-  set_tests_properties(core.vcs PROPERTIES
-    ENVIRONMENT "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo-test;${cargo_test_environment}")
+  # installed. In parts by module: remote repositories, sync, libraries,
+  # the edit locks (mitcad#89; once their module is there), and the rest.
+  set(vcs_parts remote tests::remote:: sync tests::sync:: library tests::library::)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vcs/src/tests/locks.rs")
+    list(APPEND vcs_parts locks tests::locks::)
+  endif()
+  mitcad_cargo_test(core.vcs mitcad-vcs PARTS ${vcs_parts})
 
   # The zip container shared by the .f3d and .FCStd readers, and the
   # FreeCAD reader on hand-made documents (no OCCT).
   foreach(crate zip freecad)
-    add_test(NAME core.${crate}
-      COMMAND "${Rust_CARGO_CACHED}" test --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-              -p mitcad-${crate} --quiet)
-    set_tests_properties(core.${crate} PROPERTIES
-      ENVIRONMENT "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo-test;${cargo_test_environment}")
+    mitcad_cargo_test(core.${crate} mitcad-${crate})
   endforeach()
 
   # Automatic updates (mitcad#9): manifests and downloads signed with keys
   # made in the test (valid, tampered, the wrong key, older versions,
   # pre-releases), and the release tool; no network.
-  add_test(NAME core.update
-    COMMAND "${Rust_CARGO_CACHED}" test --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-            -p mitcad-update --quiet)
-  set_tests_properties(core.update PROPERTIES
-    ENVIRONMENT "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo-test;${cargo_test_environment}")
+  mitcad_cargo_test(core.update mitcad-update)
 
   # Licences, bans and sources need no network; advisories are checked by
   # tools/check-dependencies.sh, which fetches the advisory database.
@@ -256,17 +283,44 @@ if(BUILD_TESTING)
   endif()
 
   # The 3MF writer and reader (mitcad#13; no OCCT).
-  add_test(NAME core.3mf
-    COMMAND "${Rust_CARGO_CACHED}" test --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-            -p mitcad-3mf --quiet)
-  set_tests_properties(core.3mf PROPERTIES
-    ENVIRONMENT "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo-test;${cargo_test_environment}")
+  mitcad_cargo_test(core.3mf mitcad-3mf)
 
   # The .ipt reader (mitcad#60) on files made in the tests (no OCCT); its
   # corpus test reads MITCAD_IPT_CORPUS and skips without it.
-  add_test(NAME core.ipt
-    COMMAND "${Rust_CARGO_CACHED}" test --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
-            -p mitcad-ipt --release --quiet)
-  set_tests_properties(core.ipt PROPERTIES
-    ENVIRONMENT "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo-test;${cargo_test_environment}")
+  mitcad_cargo_test(core.ipt mitcad-ipt RELEASE)
+
+  # MCP stdio framing and discovery, with a mock document backend (mitcad#124).
+  mitcad_cargo_test(core.mcp mitcad-mcp)
+
+  # The fixtures that build the test binaries, and the documentation tests
+  # (cargo with the fixture's packages, so that it builds nothing again).
+  foreach(profile debug release)
+    get_property(packages GLOBAL PROPERTY MITCAD_CARGO_TESTS_${profile})
+    if(NOT packages)
+      continue()
+    endif()
+    set(suffix "")
+    set(release "")
+    if(profile STREQUAL "release")
+      set(suffix _release)
+      set(release --release)
+    endif()
+    set(selected)
+    foreach(package IN LISTS packages)
+      list(APPEND selected -p ${package})
+    endforeach()
+    add_test(NAME core.cargo_build${suffix}
+      COMMAND "${CMAKE_COMMAND}" "-DCARGO=${Rust_CARGO_CACHED}" "-DMANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+              "-DLIST=${CMAKE_CURRENT_BINARY_DIR}/cargo-test/tests-${profile}.tsv"
+              -P "${CMAKE_CURRENT_SOURCE_DIR}/cargo-tests.cmake" -- build ${release} ${packages})
+    # A build from scratch (a new build folder, a new toolchain) takes long
+    # in a VM.
+    set_tests_properties(core.cargo_build${suffix} PROPERTIES FIXTURES_SETUP cargo_tests_${profile}
+      ENVIRONMENT "${cargo_build_environment}" TIMEOUT 3600)
+    add_test(NAME core.doctests${suffix}
+      COMMAND "${Rust_CARGO_CACHED}" test --doc --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+              --quiet ${release} ${selected})
+    set_tests_properties(core.doctests${suffix} PROPERTIES FIXTURES_REQUIRED cargo_tests_${profile}
+      ENVIRONMENT "${cargo_build_environment}")
+  endforeach()
 endif()

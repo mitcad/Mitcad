@@ -19,7 +19,7 @@ use super::face_refs::{add_faces, check_faces, kernel_error, require_faces};
 use super::{
     BodyChange, CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References,
 };
-use crate::ids::BodyUid;
+use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::{FilletSet, FilletSize, Kernel};
 use crate::parameters::ParamId;
 use crate::topo::{EdgeName, FaceName, VertexName};
@@ -441,6 +441,41 @@ enum Size {
 
 impl<K: Kernel> Evaluate<K> for FilletDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
+        let (sizes, weights) = self.values(ctx)?;
+        let shape = ctx.body(self.body)?;
+        for set in &self.sets {
+            ctx.require_edges(self.body, &shape, &set.edges)?;
+            require_faces(ctx, self.body, &shape, &set.faces)?;
+            require_faces(ctx, self.body, &shape, set.reference_face.as_slice())?;
+        }
+        let uid = ctx.uid;
+        let rounded = self.apply(ctx, uid, &shape, &sizes, &weights)?;
+        Ok(FeatureOutput {
+            changes: vec![BodyChange::Set(self.body, rounded)],
+            ..FeatureOutput::default()
+        })
+    }
+}
+
+impl FilletDef {
+    /// Rounds the sets' edges of `shape`, the new faces named after
+    /// `feature` (the fillet's copies on a pattern's copies, mitcad#105,
+    /// are named after the pattern).
+    pub(crate) fn round<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        feature: FeatureUid,
+        shape: &K::Shape,
+    ) -> Result<K::Shape, String> {
+        let (sizes, weights) = self.values(ctx)?;
+        self.apply(ctx, feature, shape, &sizes, &weights)
+    }
+
+    /// The sets' sizes and tangency weights.
+    fn values<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+    ) -> Result<(Vec<Size>, Vec<f64>), String> {
         let mut sizes = Vec::with_capacity(self.sets.len());
         let mut weights = Vec::with_capacity(self.sets.len());
         for set in &self.sets {
@@ -471,16 +506,21 @@ impl<K: Kernel> Evaluate<K> for FilletDef {
                 None => 1.0,
             });
         }
-        let shape = ctx.body(self.body)?;
-        for set in &self.sets {
-            ctx.require_edges(self.body, &shape, &set.edges)?;
-            require_faces(ctx, self.body, &shape, &set.faces)?;
-            require_faces(ctx, self.body, &shape, set.reference_face.as_slice())?;
-        }
+        Ok((sizes, weights))
+    }
+
+    fn apply<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        feature: FeatureUid,
+        shape: &K::Shape,
+        sizes: &[Size],
+        weights: &[f64],
+    ) -> Result<K::Shape, String> {
         let sets: Vec<FilletSet<'_>> = self
             .sets
             .iter()
-            .zip(sizes.iter().zip(&weights))
+            .zip(sizes.iter().zip(weights))
             .map(|(set, (size, weight))| FilletSet {
                 edges: &set.edges,
                 faces: &set.faces,
@@ -510,13 +550,10 @@ impl<K: Kernel> Evaluate<K> for FilletDef {
             .collect();
         let rounded = ctx
             .kernel
-            .fillet(ctx.uid, &shape, &sets, self.rolling_ball_corners)
+            .fillet(feature, shape, &sets, self.rolling_ball_corners)
             .map_err(kernel_error)?;
         ctx.warn_notes(&rounded);
-        Ok(FeatureOutput {
-            changes: vec![BodyChange::Set(self.body, rounded)],
-            ..FeatureOutput::default()
-        })
+        Ok(rounded)
     }
 }
 

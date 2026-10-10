@@ -251,6 +251,20 @@ SketchController::SketchController(SketchHost& host, OcctViewer& viewer, QObject
         logView();
       },
       Qt::QueuedConnection);
+  // Without a tool, the curve or point a click would select is drawn over
+  // the view as the tools draw theirs: OCCT's highlight only recolours it,
+  // in lines one pixel wide on macOS.
+  connect(
+      &viewer, &OcctViewer::hovered, this,
+      [this](const SelectionItem& item) {
+        if (!isActive() || m_tool) {
+          return;
+        }
+        const bool ours = item.owner == m_uid && (item.kind == SelectKind::SketchCurve ||
+                                                  item.kind == SelectKind::SketchPoint);
+        setHover(ours ? item.name : QString());
+      },
+      Qt::QueuedConnection);
   m_dragTimer.setSingleShot(true);
   connect(&m_dragTimer, &QTimer::timeout, this, &SketchController::applyDrag);
   TestSync::watch(&m_dragTimer);

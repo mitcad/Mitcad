@@ -19,6 +19,9 @@ pub mod ffi {
         /// What the limit is ("address-space limit", ...); empty without
         /// one.
         limit_kind: String,
+        /// How many allocations inside the geometry kernel have failed in
+        /// the process so far (mitcad#132), also those it caught inside.
+        failed_allocations: u64,
     }
 
     unsafe extern "C++" {

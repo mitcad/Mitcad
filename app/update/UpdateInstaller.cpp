@@ -102,6 +102,10 @@ Installation Installation::detect() {
   } else {
     installation.reason = QStringLiteral("not installed by the installer (the portable .zip or a development build)");
   }
+#elif defined(__APPLE__)
+  // A new version comes as a disk image the user installs from; the
+  // application bundle is not replaced in place.
+  installation.reason = QStringLiteral("a macOS application bundle (updates come as disk images)");
 #else
   const QString appImage = qEnvironmentVariable("APPIMAGE");
   const QFileInfo file(appImage);

@@ -190,6 +190,29 @@ impl Definitions {
         r
     }
 
+    /// The length of the prefix that the records of sketch entities,
+    /// transforms, parameters and feature properties have after the
+    /// header: from major 25 eight bytes (an i32, −1 or in a fillet edge
+    /// set's parameter and booleans their index, and an i32 release stamp
+    /// such as 2706), in majors 23 and 24 the first i32 alone, and none up
+    /// to major 22 *(verified for majors 20 to 22, 24 and 27; 23 not
+    /// seen)*.
+    pub fn prefix_len(&self) -> usize {
+        match self.major {
+            0..=22 => 0,
+            23 | 24 => 4,
+            _ => 8,
+        }
+    }
+
+    /// A reader of record `i` after its header and the prefix (see
+    /// [`Definitions::prefix_len`]).
+    pub fn fields(&self, i: usize) -> Reader<'_> {
+        let mut r = Reader::new(self.bytes(i));
+        r.pos = self.header_len() + self.prefix_len();
+        r
+    }
+
     /// A reader of record `i` from its start.
     pub fn reader(&self, i: usize) -> Reader<'_> {
         Reader::new(self.bytes(i))

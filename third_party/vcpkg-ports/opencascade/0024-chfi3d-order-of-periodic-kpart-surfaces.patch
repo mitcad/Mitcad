@@ -1,0 +1,31 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the order of the analytic pieces of a closed rounding (mitcad#133).
+
+ChFi3d_Builder::PerformSetOfKPart sorts the pieces SplitKPart cuts out of
+an analytic blend of a periodic spine (a torus along a whole circle whose
+contact line on a face leaves that face several times) by their start on
+the spine. The exchange sort kept the j-th piece read before the inner loop
+and swapped that stale piece in at every later exchange, so a list whose
+second piece belonged at the end (the piece that closes the circle) came
+out with that piece repeated and others lost. The walks between the pieces
+then went over the repeated piece again and the stripe failed in
+PerformSetOfKGen (ChFiDS_CommonPoint::Vector on a point without a tangent),
+on a rounding of a circle whose contact on a plane crosses six slots. The
+j-th piece is now read again at each step.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -3587,9 +3587,10 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+         }
+         for (int j = 1; j < nbsd; j++)
+         {
+-          occ::handle<ChFiDS_SurfData> jSD = LSD.Value(j);
+           for (int k = j + 1; k <= nbsd; k++)
+           {
++            // The j-th SurfData is read again at each step: a swap replaces it.
++            occ::handle<ChFiDS_SurfData> jSD = LSD.Value(j);
+             occ::handle<ChFiDS_SurfData> kSD = LSD.Value(k);
+             double                       jwf = jSD->FirstSpineParam();
+             jwf                              = ChFi3d_InPeriod(jwf, wfp, wlp, tolesp);

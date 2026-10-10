@@ -2,7 +2,6 @@
 // mitcad-cli: opens or builds a part without the user interface and prints
 // its timeline and bodies. The kernel and import tests run through it.
 
-#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -14,17 +13,27 @@
 #include <string>
 #include <utility>
 #include <vector>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 #include "mitcad/geometry/guard.hpp"
-#include "mitcad/geometry/persist.hpp"
 #include "mitcad/io/body.hpp"
 #include "mitcad_bridge/lib.h"
 #include "rust/cxx.h"
+// The imports, and the helpers the commands share (import.cpp).
+#include "import.hpp"
 #ifdef MITCAD_RENDER
 #include "render.hpp"
 #endif
 // Component libraries (mitcad#64, mitcad#63).
 #include "library.hpp"
+// Local and Cloud projects (mitcad#89).
+#include "projects.hpp"
+// Live updates (mitcad#89).
+#include "live.hpp"
+// Headless Model Context Protocol (mitcad#124).
+#include "mcp.hpp"
 
 namespace {
 
@@ -72,6 +81,7 @@ const char* const kUsage = R"(usage:
   mitcad-cli import-f3d <file.f3d> [--save <out.mitcad>] [--report <report.json>] [--json]
                         [--design <name>] [--dump <dump.json>] [--no-verify] [--no-fallback]
                         [--no-compare] [--time-limit <seconds>] [--hang-limit <seconds>]
+                        [--threads N] [--learn <dir>]
       Imports an .f3d or .f3z design with its timeline: parameters,
       sketches and features replayed as Mitcad features, checked against
       the file's ASM history; an item that cannot be replayed becomes a
@@ -83,6 +93,12 @@ const char* const kUsage = R"(usage:
       after --time-limit seconds the remaining items take the file's bodies;
       with --hang-limit the import runs again when the geometry kernel does
       not return for that long, the item it hung on taking the file's bodies.
+      --threads is how many threads the import uses at once: to evaluate
+      an item's definitions, to read the file's bodies and to build the
+      history's bodies ahead of the replay (default: the logical cores, at
+      most 8; 1: one after another); the import is the same, only faster.
+      --learn writes the items the history settled, with their raw records,
+      to <dir> (also MITCAD_IMPORT_LEARN; core/import/README.md).
   mitcad-cli import-f3d <file.f3d> --bodies-only [--history] [--owners] [--save <out.mitcad>] [--json]
       Imports the bodies of an .f3d or .f3z file without their
       history: one base feature per body, built from the file's B-rep data.
@@ -111,7 +127,8 @@ const char* const kUsage = R"(usage:
   mitcad-cli import-ipt <file.ipt> [--save <out.mitcad>] [--report <report.json>]
                         [--reference <file.step> [--max-relative X] [--deviation]] [--json]
                         [--bodies-only] [--no-verify] [--no-fallback] [--no-compare]
-                        [--time-limit S] [--dump <design.json>] [--design <design.json>]
+                        [--time-limit S] [--hang-limit S] [--dump <design.json>]
+                        [--design <design.json>]
       Imports an .ipt part file: its parameters with their expressions and
       its features, each checked against the ASM history stored with the
       bodies, those that are not translated as the bodies of their history
@@ -123,10 +140,31 @@ const char* const kUsage = R"(usage:
       parameters and expressions) and the document report; --report writes
       the import report as JSON, --dump the decoded design (the dump IR);
       --design replays such a dump instead of the decoded design.
+      With --hang-limit the replay runs again when the geometry kernel does
+      not return for S seconds, the item it hung on taking the file's
+      bodies (as import-f3d's).
       --reference compares the solids with the solids of a STEP file of the
       same part: volume and area of each, relatively, within --max-relative
       (default 1e-6), and every imported solid valid; --deviation also
       measures the surface deviation. Exits with 1 when they differ.
+      An .iam file is imported as with import-iam.
+  mitcad-cli import-iam <file.iam> [--save <out.mitcad>] [--report <report.json>] [--json]
+                        [--search <folder>]... [--history [--no-verify] [--no-fallback]
+                        [--no-compare] [--time-limit S]]
+      Imports an .iam assembly: its occurrences as components and
+      occurrences placed as in the file, sub-assemblies as nested
+      components, each part file once with the .ipt import: its stored
+      bodies, or with --history its design replayed (much slower, much
+      more memory; the options after it apply to each part). Referenced files are found where
+      the assembly saved them, else relative to the assembly, else by the
+      saved path's tail, else by name in the assembly's folder tree and
+      each --search folder (and below); a file not found is an empty
+      component. Prints the import report: occurrences (placed, suppressed,
+      hidden), files (found how, imported, missing, failed), and the checks
+      against the file: each placement against the transform the file
+      displays the occurrence with (where it keeps one), each placed part's
+      bodies within the range box the file stores; exits with 1 when a
+      check fails.
   mitcad-cli export <file.mitcad> <out> [--bodies <b>,...] [--schema ap214|ap242]
                     [--unit mm|cm|m|in|ft] [--refinement low|medium|high]
                     [--deviation MM --angle DEG] [--ascii]
@@ -144,7 +182,9 @@ const char* const kUsage = R"(usage:
   mitcad-cli export-sketch <file.mitcad> <sketch> <out.dxf> [--r12]
       Writes the geometry of a sketch (uid or name) to a DXF file (R2000,
       or R12 with --r12).
-  mitcad-cli project init <folder> [--author "Name <email>"] [--no-history]
+)"
+                          // MSVC takes at most 16 KiB in one literal (C2026).
+                          R"(  mitcad-cli project init <folder> [--author "Name <email>"] [--no-history]
       Makes a folder a Mitcad project: writes .mitcad/project.json and the
       recommended .gitattributes and .gitignore lines, makes the folder a
       git repository (unless it is the root of one) and records these files
@@ -201,6 +241,10 @@ const char* const kUsage = R"(usage:
       and those newer on the remote (as the last fetch or push left them),
       the last fetch and push, and linked files outside the project.
   mitcad-cli remote remove <folder> [--name <name>] [--json]
+  mitcad-cli remote follow <folder> <name> [--branch <branch>] [--json]
+      The remote the project's branch follows from now on (a repository
+      with several remotes and none followed): its branch of the same name,
+      or <branch>. Nothing is fetched or sent.
   mitcad-cli fetch <folder> [--json]
       Fetches the remote's versions; the project's files stay as they are.
   mitcad-cli push <folder> [--json]
@@ -226,6 +270,17 @@ const char* const kUsage = R"(usage:
       its project files; a repository without a project is refused.
       Remote repositories need the git program (MITCAD_GIT, else PATH);
       with --json the answer's "error" is null on success.
+  mitcad-cli lock status <project-or-file> [--json]
+      The edit locks of a Cloud project's designs on its remote (with a
+      file, that design's): who edits them since when, their requests, and
+      lock or request refs that cannot be read.
+  mitcad-cli lock take <file> [--author "Name <email>"] [--json]
+  mitcad-cli lock release <project-or-file> [--force] [--author "Name <email>"] [--json]
+      Takes or releases a design's edit lock as the command line's session
+      (one per author, the same in every run); a lock someone else holds is
+      the exit status 1. release --force removes any lock of the file and
+      its requests; on a project folder release removes the command line's
+      locks and requests, with --force every lock and request ref.
   mitcad-cli render <file.mitcad|script.json> -o <image> [--view <name>] [--size WxH] [--samples N]
                     [--time-limit SECONDS] [--format png|png16|jpeg|exr] [--quality 1-100]
                     [--transparent] [--no-denoise] [--worker <mitcad-render>]
@@ -266,55 +321,32 @@ bool read_file(const std::string& path, std::string& text) {
   return true;
 }
 
-// Writes the project file whole or not at all: version 3 in a project
-// (P12a; the B-rep data in the project's store), else one file. Throws
-// rust::Error when it cannot be written.
-void save_document(const mitcad::Document& document, const std::string& path) {
-  document.save_project(path, "auto");
-}
-
 int fail(const std::string& message) {
   std::cerr << "mitcad-cli: " << message << "\n";
   return 1;
 }
 
 int usage(const std::string& problem) {
-  std::cerr << "mitcad-cli: " << problem << "\n" << kUsage << mitcad::cli::kLibraryUsage << kExitStatus;
+  std::cerr << "mitcad-cli: " << problem << "\n"
+            << kUsage << mitcad::cli::kLibraryUsage << mitcad::cli::kProjectsUsage << mitcad::cli::kLiveUsage
+            << kExitStatus;
   return 2;
 }
 
-// A JSON string literal.
-std::string json_string(const std::string& text) {
-  std::string out = "\"";
-  for (const char c : text) {
-    switch (c) {
-    case '"':
-      out += "\\\"";
-      break;
-    case '\\':
-      out += "\\\\";
-      break;
-    case '\n':
-      out += "\\n";
-      break;
-    case '\r':
-      out += "\\r";
-      break;
-    case '\t':
-      out += "\\t";
-      break;
-    default:
-      if (static_cast<unsigned char>(c) < 0x20) {
-        char escaped[8];
-        std::snprintf(escaped, sizeof escaped, "\\u%04x", c);
-        out += escaped;
-      } else {
-        out += c;
-      }
-    }
-  }
-  return out + "\"";
-}
+// The helpers in import.cpp, and the imports.
+using mitcad::cli::Arguments;
+using mitcad::cli::import;
+using mitcad::cli::import_f3d;
+using mitcad::cli::import_fcstd;
+using mitcad::cli::import_ipt;
+using mitcad::cli::import_iam;
+using mitcad::cli::is_number;
+using mitcad::cli::json_count;
+using mitcad::cli::json_string;
+using mitcad::cli::open_document;
+using mitcad::cli::parse_arguments;
+using mitcad::cli::save_document;
+using mitcad::cli::StoreOptions;
 
 // A JSON array of strings from a comma-separated list.
 std::string string_list(const std::string& text) {
@@ -330,106 +362,6 @@ std::string string_list(const std::string& text) {
     start = end + 1;
   }
   return out + "]";
-}
-
-bool is_number(const std::string& text) {
-  if (text.empty()) {
-    return false;
-  }
-  std::istringstream in(text);
-  double value = 0.0;
-  in >> value;
-  return !in.fail() && in.eof();
-}
-
-// Command line: positional arguments, `--name value` options and flags.
-struct Arguments {
-  std::vector<std::string> positional;
-  std::vector<std::pair<std::string, std::string>> options;
-
-  const std::string* option(const std::string& name) const {
-    for (const auto& [key, value] : options) {
-      if (key == name) {
-        return &value;
-      }
-    }
-    return nullptr;
-  }
-  bool flag(const std::string& name) const { return option(name) != nullptr; }
-};
-
-// Splits the arguments after the mode; options not in `with_value` or
-// `flags` are an error.
-bool parse_arguments(const std::vector<std::string>& args, const std::vector<std::string>& with_value,
-                     const std::vector<std::string>& flags, Arguments& out, std::string& problem) {
-  const auto listed = [](const std::vector<std::string>& list, const std::string& name) {
-    for (const std::string& item : list) {
-      if (item == name) {
-        return true;
-      }
-    }
-    return false;
-  };
-  for (std::size_t i = 1; i < args.size(); ++i) {
-    const std::string& arg = args[i];
-    if (arg.size() > 1 && arg[0] == '-') {
-      if (listed(flags, arg)) {
-        out.options.emplace_back(arg, "");
-      } else if (listed(with_value, arg) && i + 1 < args.size()) {
-        out.options.emplace_back(arg, args[++i]);
-      } else {
-        problem = "unexpected argument '" + arg + "'";
-        return false;
-      }
-    } else {
-      out.positional.push_back(arg);
-    }
-  }
-  return true;
-}
-
-// The number after "key": in compact JSON, or -1.
-long long json_count(const std::string& json, const std::string& key) {
-  const std::string field = "\"" + key + "\":";
-  const std::size_t at = json.find(field);
-  if (at == std::string::npos) {
-    return -1;
-  }
-  return std::strtoll(json.c_str() + at + field.size(), nullptr, 10);
-}
-
-// The result store (P7d): with a folder, opening takes results from it
-// and writes those that took at least min_ms to evaluate.
-struct StoreOptions {
-  std::string dir;
-  double min_ms = 100.0;
-};
-
-rust::Box<mitcad::Document> open_document(const std::string& path, const StoreOptions& store = {},
-                                          std::ostream* log = nullptr) {
-  // A version 3 file's B-rep data comes from its project's store (P12a).
-  rust::Box<mitcad::Document> document = mitcad::load_project(path);
-  if (!store.dir.empty()) {
-    document->set_result_store(store.dir, mitcad::geometry::kernel_build_id(),
-                               std::filesystem::path(path).filename().string());
-  }
-  // Linked components follow their files, relative to the project's.
-  std::string base = std::filesystem::path(path).parent_path().string();
-  if (base.empty()) {
-    base = ".";
-  }
-  document->command(R"({"cmd": "update_links", "base": )" + json_string(base) + "}");
-  const std::string recomputed(document->command(R"({"cmd": "recompute"})"));
-  if (!store.dir.empty()) {
-    const std::string persisted(document->persist_results(store.min_ms));
-    if (log != nullptr) {
-      *log << "Result store: restored from store: " << std::max(0LL, json_count(recomputed, "restored"))
-           << ", evaluated: " << json_count(recomputed, "recomputed")
-           << "; stored: " << json_count(persisted, "results") << " ("
-           << json_count(persisted, "bytes") << " bytes)\n";
-    }
-  }
-  return document;
 }
 
 // A project file, or a script (.json) run on a new document.
@@ -663,238 +595,6 @@ int compare_step(const std::vector<std::string>& args) {
   return exceeded ? 1 : 0;
 }
 
-int import(const std::vector<std::string>& args) {
-  Arguments a;
-  std::string problem;
-  if (!parse_arguments(args, {"--unit-mm", "--open", "--save"}, {"--json"}, a, problem)) {
-    return usage(problem);
-  }
-  if (a.positional.size() != 1) {
-    return usage(a.positional.empty() ? "no file to import" : "more than one file to import");
-  }
-  std::string command = R"({"cmd": "import_file", "path": )" + json_string(a.positional[0]);
-  if (const std::string* unit = a.option("--unit-mm")) {
-    if (!is_number(*unit)) {
-      return usage("--unit-mm needs a number");
-    }
-    command += R"(, "unit_mm": )" + *unit;
-  }
-  command += "}";
-  rust::Box<mitcad::Document> document =
-      a.flag("--open") ? open_document(*a.option("--open")) : mitcad::new_document();
-  document->command(command);
-  if (const std::string* save = a.option("--save")) {
-    save_document(*document, *save);
-  }
-  std::cout << std::string(document->report(a.flag("--json")));
-  return 0;
-}
-
-// The timeline import (T1): the design replayed as Mitcad features.
-int import_f3d_timeline(const Arguments& a) {
-  std::string options = "{";
-  const auto add = [&options](const std::string& field) {
-    options += (options.size() > 1 ? ", " : "") + field;
-  };
-  if (const std::string* design = a.option("--design")) {
-    add(R"("design": )" + json_string(*design));
-  }
-  if (const std::string* dump = a.option("--dump")) {
-    add(R"("dump": )" + json_string(*dump));
-  }
-  if (a.flag("--no-verify")) {
-    add(R"("no_verify": true)");
-  }
-  if (a.flag("--no-fallback")) {
-    add(R"("no_fallback": true)");
-  }
-  if (a.flag("--no-compare")) {
-    add(R"("no_compare": true)");
-  }
-  if (const std::string* seconds = a.option("--time-limit")) {
-    add(R"("time_limit": )" + std::to_string(std::atof(seconds->c_str())));
-  }
-  if (const std::string* seconds = a.option("--hang-limit")) {
-    add(R"("hang_limit": )" + std::to_string(std::atof(seconds->c_str())));
-  }
-  if (const std::string* path = a.option("--report")) {
-    add(R"("report_path": )" + json_string(*path));
-  }
-  const bool json = a.flag("--json");
-  if (!json) {
-    add(R"("text": true)");
-  }
-  options += "}";
-  rust::Box<mitcad::Document> document = mitcad::new_document();
-  const std::string report(document->import_f3d_timeline(a.positional[0], options));
-  if (const std::string* save = a.option("--save")) {
-    save_document(*document, *save);
-  }
-  if (json) {
-    std::cout << R"({"import": )" << report << R"(, "document": )"
-              << std::string(document->query(R"({"query": "report"})")) << "}\n";
-  } else {
-    std::cout << report << std::string(document->report(false));
-  }
-  return 0;
-}
-
-int import_f3d(const std::vector<std::string>& args) {
-  Arguments a;
-  std::string problem;
-  if (!parse_arguments(args, {"--save", "--report", "--dump", "--design", "--time-limit", "--hang-limit"},
-                       {"--bodies-only", "--history", "--owners", "--json", "--no-verify", "--no-fallback",
-                        "--no-compare"},
-                       a, problem)) {
-    return usage(problem);
-  }
-  if (a.positional.size() != 1) {
-    return usage(a.positional.empty() ? "no .f3d file" : "more than one .f3d file");
-  }
-  if (!a.flag("--bodies-only")) {
-    if (a.flag("--history") || a.flag("--owners")) {
-      return usage("--history and --owners go with --bodies-only");
-    }
-    return import_f3d_timeline(a);
-  }
-  const bool json = a.flag("--json");
-  const auto yes_no = [&a](const char* flag) { return a.flag(flag) ? "true" : "false"; };
-  const std::string options = std::string(R"({"history": )") + yes_no("--history") + R"(, "owners": )" +
-                              yes_no("--owners") + R"(, "text": )" + (json ? "false" : "true") + "}";
-  rust::Box<mitcad::Document> document = mitcad::new_document();
-  const std::string imported(document->import_f3d(a.positional[0], options));
-  if (const std::string* save = a.option("--save")) {
-    save_document(*document, *save);
-  }
-  if (json) {
-    std::cout << R"({"import": )" << imported << R"(, "document": )"
-              << std::string(document->query(R"({"query": "report"})")) << "}\n";
-  } else {
-    std::cout << imported << std::string(document->report(false));
-  }
-  return 0;
-}
-
-// A FreeCAD document's stored bodies in its structure.
-int import_fcstd(const std::vector<std::string>& args) {
-  Arguments a;
-  std::string problem;
-  if (!parse_arguments(args, {"--save", "--report", "--reference", "--set"}, {"--bodies-only", "--json"}, a,
-                       problem)) {
-    return usage(problem);
-  }
-  if (a.positional.size() != 1) {
-    return usage(a.positional.empty() ? "no .FCStd file" : "more than one .FCStd file");
-  }
-  const bool json = a.flag("--json");
-  std::string options = std::string(R"({"bodies_only": )") + (a.flag("--bodies-only") ? "true" : "false") +
-                        R"(, "text": )" + (json ? "false" : "true");
-  if (const std::string* path = a.option("--report")) {
-    options += R"(, "report_path": )" + json_string(*path);
-  }
-  if (const std::string* path = a.option("--reference")) {
-    options += R"(, "reference": )" + json_string(*path);
-  }
-  // Parameters changed after the import: --set name=expression, repeated.
-  std::string changes;
-  for (const auto& [key, value] : a.options) {
-    if (key != "--set") {
-      continue;
-    }
-    const std::size_t equals = value.find('=');
-    if (equals == std::string::npos || equals == 0) {
-      return usage("--set needs name=expression");
-    }
-    changes += (changes.empty() ? "" : ", ") + json_string(value.substr(0, equals)) + ": " +
-               json_string(value.substr(equals + 1));
-  }
-  if (!changes.empty()) {
-    options += R"(, "set_parameters": {)" + changes + "}";
-  }
-  options += "}";
-  rust::Box<mitcad::Document> document = mitcad::new_document();
-  const std::string report(document->import_fcstd(a.positional[0], options));
-  if (const std::string* save = a.option("--save")) {
-    save_document(*document, *save);
-  }
-  if (json) {
-    std::cout << R"({"import": )" << report << R"(, "document": )"
-              << std::string(document->query(R"({"query": "report"})")) << "}\n";
-  } else {
-    std::cout << report << std::string(document->report(false));
-  }
-  const bool differs = report.find("\"pass\": false") != std::string::npos ||
-                       report.find("reference check failed") != std::string::npos;
-  return differs ? 1 : 0;
-}
-
-// The bodies stored in an .ipt part file (mitcad#60).
-int import_ipt(const std::vector<std::string>& args) {
-  Arguments a;
-  std::string problem;
-  if (!parse_arguments(args,
-                       {"--save", "--report", "--reference", "--max-relative", "--dump", "--design", "--time-limit"},
-                       {"--deviation", "--json", "--bodies-only", "--no-verify", "--no-fallback", "--no-compare"}, a,
-                       problem)) {
-    return usage(problem);
-  }
-  if (a.positional.size() != 1) {
-    return usage(a.positional.empty() ? "no .ipt file" : "more than one .ipt file");
-  }
-  const bool json = a.flag("--json");
-  std::string options = std::string(R"({"text": )") + (json ? "false" : "true");
-  for (const auto& [flag, key] : {std::pair<const char*, const char*>{"--bodies-only", "bodies_only"},
-                                  {"--no-verify", "no_verify"},
-                                  {"--no-fallback", "no_fallback"},
-                                  {"--no-compare", "no_compare"}}) {
-    if (a.flag(flag)) {
-      options += std::string(R"(, ")") + key + R"(": true)";
-    }
-  }
-  if (const std::string* path = a.option("--dump")) {
-    options += R"(, "dump_path": )" + json_string(*path);
-  }
-  if (const std::string* path = a.option("--design")) {
-    options += R"(, "design_path": )" + json_string(*path);
-  }
-  if (const std::string* limit = a.option("--time-limit")) {
-    if (!is_number(*limit)) {
-      return usage("--time-limit needs a number");
-    }
-    options += R"(, "time_limit": )" + *limit;
-  }
-  if (const std::string* path = a.option("--report")) {
-    options += R"(, "report_path": )" + json_string(*path);
-  }
-  if (const std::string* path = a.option("--reference")) {
-    options += R"(, "reference": )" + json_string(*path);
-  }
-  if (const std::string* limit = a.option("--max-relative")) {
-    if (!is_number(*limit)) {
-      return usage("--max-relative needs a number");
-    }
-    options += R"(, "max_relative": )" + *limit;
-  }
-  if (a.flag("--deviation")) {
-    options += R"(, "deviation": true)";
-  }
-  options += "}";
-  rust::Box<mitcad::Document> document = mitcad::new_document();
-  const std::string report(document->import_ipt(a.positional[0], options));
-  if (const std::string* save = a.option("--save")) {
-    save_document(*document, *save);
-  }
-  if (json) {
-    std::cout << R"({"import": )" << report << R"(, "document": )"
-              << std::string(document->query(R"({"query": "report"})")) << "}\n";
-  } else {
-    std::cout << report << std::string(document->report(false));
-  }
-  const bool differs = report.find("\"pass\": false") != std::string::npos ||
-                       report.find(": FAILED\n") != std::string::npos;
-  return differs ? 1 : 0;
-}
-
 int export_bodies(const std::vector<std::string>& args) {
   Arguments a;
   std::string problem;
@@ -976,6 +676,10 @@ int export_sketch(const std::vector<std::string>& args) {
 // Projects (P12a): a folder with .mitcad/project.json, with version
 // history (P12b) unless --no-history.
 int project(const std::vector<std::string>& args) {
+  // Local and Cloud projects (mitcad#89).
+  if (args.size() > 1 && args[1] != "init") {
+    return mitcad::cli::project(args);
+  }
   Arguments a;
   std::string problem;
   if (!parse_arguments(args, {"--author"}, {"--no-history"}, a, problem)) {
@@ -1178,16 +882,24 @@ int print_remote(const mitcad::Project& project, const std::string& command, boo
 }
 
 int remote(const std::vector<std::string>& args) {
+  // A project shared onto a repository's files (mitcad#89).
+  if (args.size() > 1 && args[1] == "share") {
+    return mitcad::cli::remote_share(args);
+  }
   Arguments a;
   std::string problem;
-  if (!parse_arguments(args, {"--name", "--author"}, {"--json"}, a, problem)) {
+  if (!parse_arguments(args, {"--name", "--author", "--branch"}, {"--json"}, a, problem)) {
     return usage(problem);
   }
   if (a.positional.empty()) {
-    return usage("remote needs add, check, show or remove");
+    return usage("remote needs add, check, share, show, remove or follow");
   }
   const std::string& what = a.positional[0];
   const bool json = a.flag("--json");
+  // What a remote holds, without a project (mitcad#89).
+  if (what == "check" && a.positional.size() == 2 && a.options.size() == (json ? 1U : 0U)) {
+    return mitcad::cli::check_remote(a.positional[1], json);
+  }
   std::string fields;
   if (const std::string* name = a.option("--name")) {
     if (what != "add" && what != "remove") {
@@ -1200,6 +912,12 @@ int remote(const std::vector<std::string>& args) {
       return usage("--author is for remote add");
     }
     fields += R"(, "author": )" + json_string(*author);
+  }
+  if (const std::string* branch = a.option("--branch")) {
+    if (what != "follow") {
+      return usage("--branch is for remote follow");
+    }
+    fields += R"(, "branch": )" + json_string(*branch);
   }
   if ((what == "add" || what == "check") && a.positional.size() == 3) {
     const rust::Box<mitcad::Project> project = mitcad::open_project(a.positional[1]);
@@ -1218,6 +936,12 @@ int remote(const std::vector<std::string>& args) {
   if (what == "remove" && a.positional.size() == 2) {
     const rust::Box<mitcad::Project> project = mitcad::open_project(a.positional[1]);
     return print_remote(*project, R"({"cmd": "remote_remove")" + fields + "}", json);
+  }
+  // Several remotes, none followed (mitcad#89): the one to follow.
+  if (what == "follow" && a.positional.size() == 3) {
+    const rust::Box<mitcad::Project> project = mitcad::open_project(a.positional[1]);
+    return print_remote(*project,
+                        R"({"cmd": "remote_follow", "name": )" + json_string(a.positional[2]) + fields + "}", json);
   }
   return usage("remote " + what + ": wrong arguments");
 }
@@ -1303,17 +1027,76 @@ int sync_project(const std::vector<std::string>& args) {
 int clone(const std::vector<std::string>& args) {
   Arguments a;
   std::string problem;
-  if (!parse_arguments(args, {}, {"--json"}, a, problem)) {
+  if (!parse_arguments(args, {"--author"}, {"--json", "--adopt"}, a, problem)) {
     return usage(problem);
   }
   if (a.positional.size() != 2) {
     return usage("clone needs a remote's URL and a folder");
   }
   const bool json = a.flag("--json");
+  // A repository with files made a project (mitcad#89).
+  if (a.flag("--adopt")) {
+    return mitcad::cli::clone_adopt(a.positional[0], a.positional[1], a.option("--author"), json);
+  }
+  if (a.flag("--author")) {
+    return usage("--author goes with --adopt");
+  }
   const rust::Box<mitcad::SyncControl> control = mitcad::new_sync_control();
   const std::string answer(mitcad::clone_project(a.positional[0], a.positional[1], *control, !json));
   std::cout << answer << (json ? "\n" : "");
   return json && answer.find("\"error\":null") == std::string::npos ? 1 : 0;
+}
+
+// Edit locks (mitcad#89) of a Cloud project's designs, as the command
+// line's session (made from the author's email, the same in every run). A
+// lock someone else holds, or one that changed meanwhile, is the exit
+// status 1, as are failures of git and the network.
+int lock(const std::vector<std::string>& args) {
+  Arguments a;
+  std::string problem;
+  if (!parse_arguments(args, {"--author"}, {"--json", "--force"}, a, problem)) {
+    return usage(problem);
+  }
+  if (a.positional.size() != 2) {
+    return usage("lock needs status, take or release and a project's folder or a design");
+  }
+  const std::string& what = a.positional[0];
+  const std::string& target = a.positional[1];
+  const bool folder = std::filesystem::is_directory(target);
+  std::string fields = folder ? "" : R"(, "path": )" + json_string(target);
+  if (const std::string* author = a.option("--author")) {
+    fields += R"(, "author": )" + json_string(*author);
+  }
+  if (a.flag("--force") && what != "release") {
+    return usage("--force is for lock release");
+  }
+  std::string command;
+  if (what == "status") {
+    command = R"({"cmd": "lock_status")" + fields + "}";
+  } else if (what == "take" && !folder) {
+    command = R"({"cmd": "lock_take")" + fields + "}";
+  } else if (what == "release") {
+    command = R"({"cmd": "lock_release")" + fields + (folder ? R"(, "all": true)" : "") +
+              (a.flag("--force") ? R"(, "force": true)" : "") + "}";
+  } else {
+    return usage("lock " + what + ": wrong arguments");
+  }
+  const rust::Box<mitcad::Project> project = mitcad::open_project(target);
+  const std::string answer(project->command(command));
+  if (a.flag("--json")) {
+    std::cout << answer << "\n";
+  } else {
+    std::cout << std::string(mitcad::describe_remote("lock_" + what, answer));
+  }
+  if (answer.find("\"error\":null") == std::string::npos) {
+    return 1;
+  }
+  for (const char* refused : {R"("outcome":"held")", R"("outcome":"changed")", R"("outcome":"not_held")"}) {
+    if (answer.find(refused) != std::string::npos) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 // Writes a project file in another format without computing it: the
@@ -1368,7 +1151,8 @@ int run(int argc, char* argv[]) {
     return usage("no command");
   }
   if (args[0] == "--help" || args[0] == "-h") {
-    std::cout << kUsage << mitcad::cli::kLibraryUsage << kExitStatus;
+    std::cout << kUsage << mitcad::cli::kLibraryUsage << mitcad::cli::kProjectsUsage << mitcad::cli::kLiveUsage
+              << mitcad::cli::kMcpUsage << kExitStatus;
     return 0;
   }
   const std::string& mode = args[0];
@@ -1379,6 +1163,11 @@ int run(int argc, char* argv[]) {
   // application's model worker thread; Ctrl+C still ends the program.
   mitcad::geometry::catch_occt_crashes();
   try {
+    // MCP owns its workspace and must not configure the global library
+    // resolver, whose cache can read or write outside that workspace.
+    if (mode == "mcp") {
+      return mitcad::cli::mcp(args);
+    }
     // Library parts (mitcad#64) are read from the cache of fetched
     // libraries: MITCAD_LIBRARIES_DIR, else the user's data folder.
     mitcad::configure_libraries("");
@@ -1396,6 +1185,9 @@ int run(int argc, char* argv[]) {
     }
     if (mode == "import-ipt") {
       return import_ipt(args);
+    }
+    if (mode == "import-iam") {
+      return import_iam(args);
     }
     if (mode == "export") {
       return export_bodies(args);
@@ -1437,12 +1229,20 @@ int run(int argc, char* argv[]) {
     if (mode == "sync") {
       return sync_project(args);
     }
+    // Edit locks (mitcad#89).
+    if (mode == "lock") {
+      return lock(args);
+    }
     // Component libraries and parts lists (mitcad#64, mitcad#63).
     if (mode == "library") {
       return mitcad::cli::library(args);
     }
     if (mode == "parts") {
       return mitcad::cli::parts(args, [](const std::string& path) { return open_document(path); });
+    }
+    // SSH servers' host keys (mitcad#89).
+    if (mode == "host-keys") {
+      return mitcad::cli::host_keys(args);
     }
     // The final render (mitcad#48), in builds with the renderer.
     if (mode == "render") {
@@ -1451,6 +1251,10 @@ int run(int argc, char* argv[]) {
 #else
       return fail("this mitcad-cli is built without the renderer (the CMake option MITCAD_RENDER)");
 #endif
+    }
+    // Live updates (mitcad#89).
+    if (mode == "live") {
+      return mitcad::cli::live(args);
     }
   } catch (const rust::Error& error) {
     return fail(error.what());
@@ -1462,4 +1266,20 @@ int run(int argc, char* argv[]) {
 
 } // namespace
 
-int main(int argc, char* argv[]) { return finish(run(argc, argv)); }
+// For the commands in import.cpp.
+int mitcad::cli::usage(const std::string& problem) { return ::usage(problem); }
+
+int main(int argc, char* argv[]) {
+#ifdef __linux__
+  // Never dumped (docs/development.md, "Core dumps"), unless
+  // MITCAD_CORE_DUMPS=1: an import that runs out of the memory a corpus
+  // run gives it aborts, and WSL's crash capture (a pipe in core_pattern,
+  // which RLIMIT_CORE does not stop) writes gigabytes for it and takes WSL
+  // down.
+  const char* dumps = std::getenv("MITCAD_CORE_DUMPS");
+  if (dumps == nullptr || std::string(dumps) != "1") {
+    prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+  }
+#endif
+  return finish(run(argc, argv));
+}

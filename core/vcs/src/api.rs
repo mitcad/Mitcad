@@ -124,7 +124,9 @@ impl ProjectRepo {
         if let Some(error) = error {
             return Err(error.into());
         }
-        Ok(remote::describe(&name, &answer).unwrap_or_else(|| describe(&name, &answer)))
+        Ok(remote::describe(&name, &answer)
+            .or_else(|| crate::projects::describe_project(&name, &answer))
+            .unwrap_or_else(|| describe(&name, &answer)))
     }
 
     /// The command's name, its answer and a remote command's failure.
@@ -139,6 +141,19 @@ impl ProjectRepo {
         // Remote repositories (P12 remote).
         if let Some((answer, error)) = self.remote_command(&name, &command, control)? {
             return Ok((name, answer, error));
+        }
+        // Local and Cloud projects (mitcad#89).
+        if let Some((answer, error)) = self.project_command(&name, &command)? {
+            return Ok((name, answer, error));
+        }
+        // Edit locks (mitcad#89).
+        if let Some((answer, error)) = self.lock_command(&name, &command, control)? {
+            return Ok((name, answer, error));
+        }
+        // Live updates in the application (mitcad#89): the project's id
+        // under a broker's prefix.
+        if name == "project_id" {
+            return Ok((name, json!({"project": self.project_id()?}), None));
         }
         let path = || text(&command, "path").map(PathBuf::from);
         let answer = match name.as_str() {
@@ -267,6 +282,29 @@ fn outcome_json(outcome: &CommitOutcome, files: &str) -> Value {
     let mut answer = serde_json::to_value(outcome).expect("serializable");
     answer["files"] = json!(files);
     answer
+}
+
+// Local and Cloud projects (mitcad#89).
+
+/// Runs a command without a project (`core/model/src/api/commands.md`,
+/// "Projects": inspect_folder, check_remote, create_project, clone_project,
+/// init_bare, host_keys, trust_host_key, ssh_public_key, git_info) whose
+/// progress `control` shows and whose cancel request it carries; the
+/// answer in JSON, a failure of git, the network or the remote in its
+/// `error`.
+pub fn projects_command(json: &str, control: Option<&Control>) -> Result<String, VcsError> {
+    let (_, answer, _) = crate::projects::run(json, &Default::default(), control)?;
+    Ok(answer.to_string())
+}
+
+/// [`projects_command`] answered in text for people (`mitcad-cli`); a
+/// failure in the answer's `error` is an error.
+pub fn projects_command_text(json: &str, control: Option<&Control>) -> Result<String, VcsError> {
+    let (name, answer, error) = crate::projects::run(json, &Default::default(), control)?;
+    if let Some(error) = error {
+        return Err(error.into());
+    }
+    Ok(crate::projects::describe(&name, &answer))
 }
 
 /// A command's answer as text.

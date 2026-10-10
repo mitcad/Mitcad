@@ -3,6 +3,10 @@
 
 #include <thread>
 
+#include <BRepBuilderAPI_Copy.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+
 #include "check.hpp"
 
 namespace test {
@@ -89,12 +93,55 @@ void test_measured_from_threads() {
   CHECK(copy.measured() == measured && copy.bounds() == block->bounds());
 }
 
+// The faces an operation made or changed (the .f3d import's geometric
+// check, mitcad#138): a rounding of a block's top front edge makes its own
+// face and trims the four faces it meets; the back and the bottom stay. A
+// copy rebuilt from the same data has none.
+void test_new_faces() {
+  const ShapePtr block = extrude("F2", {rectangle(1, 0, 0, 60, 40)}, 0, 20);
+  const double r = 5;
+  const ShapePtr rounded = fillet("F5", *block, {edge(end_cap("F2", 1), side("F2", 1, 0))}, r);
+  const std::vector<NewFace> faces = new_faces({block->occt()}, rounded->occt(), 9);
+  CHECK(faces.size() == 5);
+  double area = 0;
+  int round = 0;
+  for (const NewFace& face : faces) {
+    area += face.area;
+    CHECK(face.points.size() == 9);
+    for (const gp_Pnt& p : face.points) {
+      BRepExtrema_DistShapeShape on(BRepBuilderAPI_MakeVertex(p).Vertex(), rounded->occt());
+      CHECK(on.IsDone() && on.Value() < 1e-7);
+    }
+    // The rounding's face: its points r from the edge's axis.
+    if (near(face.area, kPi / 2 * r * 60, 1e-4)) {
+      ++round;
+      for (const gp_Pnt& p : face.points) {
+        CHECK_NEAR(std::hypot(p.Y() - r, p.Z() - (20 - r)), r);
+      }
+    }
+  }
+  CHECK(round == 1);
+  // All of the block's faces but the back and the bottom, less what the
+  // rounding took, and the rounding.
+  const double kept = 60.0 * 20.0 + 60.0 * 40.0;
+  const double total = 2 * (60.0 * 40.0 + 60.0 * 20.0 + 40.0 * 20.0);
+  const double taken = 2 * r * 60 + 2 * (r * r - kPi * r * r / 4);
+  CHECK_NEAR(area, total - kept - taken + kPi / 2 * r * 60);
+  // Nothing new against itself or a copy of itself.
+  CHECK(new_faces({rounded->occt()}, rounded->occt(), 9).empty());
+  const TopoDS_Shape copy = BRepBuilderAPI_Copy(rounded->occt()).Shape();
+  CHECK(new_faces({rounded->occt()}, copy, 9).empty());
+  // Without bodies before, every face is new.
+  CHECK(new_faces({}, rounded->occt(), 4).size() == 7);
+}
+
 } // namespace
 
 void query_tests() {
   test_mass_properties_and_box();
   test_face_and_edge_infos();
   test_measured_from_threads();
+  test_new_faces();
 }
 
 } // namespace test

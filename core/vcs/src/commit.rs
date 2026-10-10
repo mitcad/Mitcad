@@ -473,7 +473,7 @@ impl ProjectRepo {
 
 /// The project files under `root`, leaving out folders whose names start
 /// with a dot (`.git`, `.mitcad`) and links.
-fn project_files_in(root: &Path) -> Vec<PathBuf> {
+pub(crate) fn project_files_in(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut folders = vec![root.to_path_buf()];
     while let Some(folder) = folders.pop() {

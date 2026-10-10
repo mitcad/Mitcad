@@ -30,3 +30,5 @@ serde_json.workspace = true
 mitcad-update = { path = "../update" }
 # The .ipt import (mitcad#60).
 mitcad-ipt = { path = "../ipt" }
+# Local headless MCP tools (mitcad#124).
+mitcad-mcp = { path = "../mcp" }

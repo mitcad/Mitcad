@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 [package]
 name = "mitcad-ipt"
-description = "Reader for .ipt part files: compound file container, property sets, the segment database and the B-rep record"
+description = "Reader for .ipt part and .iam assembly files: compound file container, property sets, the segment database, the B-rep record and assemblies' occurrences"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

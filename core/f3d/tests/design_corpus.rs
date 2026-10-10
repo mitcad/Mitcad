@@ -117,6 +117,13 @@ const DECODER_ONLY: &[&str] = &[
     ".timeline.items[].detail.splittingTool",
     // An extrusion's direction vector (mitcad#42).
     ".timeline.items[]._f3d.extrude.direction_vector",
+    // An extrusion's flag, input slots and the object of an extent up to
+    // an object (mitcad#96), checked against the reference models' dumps
+    // (`design_models.rs`).
+    ".timeline.items[]._f3d.extrude.flag",
+    ".timeline.items[]._f3d.extrude.slot_roles",
+    ".timeline.items[]._f3d.extrude.full_length",
+    ".timeline.items[].detail.extentOne.entity",
     // Offset and pattern constraints' values and curves (mitcad#36).
     ".timeline.items[].detail.constraints[].props",
     // Threads, their faces and tapped holes' threads (mitcad#35).
@@ -193,6 +200,17 @@ const DECODER_ONLY: &[&str] = &[
     ".occurrences[].children[].children[]._f3d.placements",
     ".occurrences[].children[].children[].children[]._f3d.placements",
     ".timeline.items[].detail.occurrences",
+    // Inputs read from the learning dump (mitcad#96): profile loops, a
+    // pattern's axis line, a hole's through-all flag beside its depth, a
+    // mirror's combine.
+    ".timeline.items[].detail._f3d_profile_loops",
+    ".timeline.items[].detail._f3d_axis",
+    ".timeline.items[].detail._f3d_through_all",
+    ".timeline.items[].detail.isCombine",
+    // A join's or cut's participants by the items that made them
+    // (mitcad#96), checked against the bodies the history accepted with
+    // the import's learning dump.
+    ".timeline.items[].detail.participantBodies",
 ];
 
 /// Fields this decoder fills where the reference decoder has an empty
@@ -552,4 +570,31 @@ fn corpus_designs_match_the_reference_decoder() {
         "the dump IR differs from the reference decoder; if the reference decoder \
          changed, regenerate the reference JSON (MITCAD_F3D_DESIGN_REF) with it"
     );
+}
+
+/// The inputs found on several threads (`resolve_inputs`, mitcad#103) give
+/// the dump one thread gives, for every corpus design.
+#[test]
+fn inputs_found_on_threads_give_the_same_dump() {
+    let Some(dir) = home_dir("MITCAD_F3D_CORPUS", "f3d-corpus") else {
+        eprintln!("corpus not found; skipped");
+        return;
+    };
+    let mut compared = 0;
+    for path in corpus_files(&dir) {
+        let Ok(documents) = design::documents(&path) else {
+            continue;
+        };
+        for (label, doc) in &documents {
+            let Ok(one) = design::decode_document(doc, label) else {
+                continue;
+            };
+            let mut four = design::decode_streams(doc, label).expect("decoded once");
+            design::resolve_inputs(&mut four, doc, 4);
+            let json = |d: &design::FileDesign| serde_json::to_value(&d.dump).expect("serializes");
+            assert!(json(&one) == json(&four), "{label}: the dumps differ");
+            compared += 1;
+        }
+    }
+    eprintln!("{compared} designs compared");
 }

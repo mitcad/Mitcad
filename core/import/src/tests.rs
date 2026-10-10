@@ -193,6 +193,13 @@ struct TestKernel {
     /// Whether extrusions against the sketch's normal differ from those
     /// along it (a marker in their history; the mock kernel's are alike).
     directed: bool,
+    /// Shapes whose history contains this are invalid for the kernel's
+    /// checker (`Kernel::is_valid`).
+    invalid: Option<&'static str>,
+    /// How many slow extrusions began, and how many were cut short by a
+    /// request to stop, in this kernel and its forks (mitcad#95).
+    began: Arc<std::sync::atomic::AtomicUsize>,
+    stopped: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Extrusions of `regions` (along the sketch's normal only, with `along`)
@@ -201,6 +208,8 @@ struct TestKernel {
 struct SlowExtrusions {
     regions: &'static [&'static str],
     along: bool,
+    /// Against the sketch's normal only (mitcad#95).
+    against: bool,
     seconds: f64,
 }
 
@@ -221,7 +230,7 @@ fn slow_call(mock: &MockKernel) {
 }
 
 /// A kernel call that takes up to `seconds`, as [`slow_call`].
-fn slow_call_for(mock: &MockKernel, seconds: f64) {
+fn slow_call_for(mock: &MockKernel, seconds: f64) -> bool {
     mock.stop_on_cancel.set(true);
     let begun = std::time::Instant::now();
     while begun.elapsed().as_secs_f64() < seconds {
@@ -231,10 +240,11 @@ fn slow_call_for(mock: &MockKernel, seconds: f64) {
             .as_ref()
             .is_some_and(|m| m.is_cancelled())
         {
-            break;
+            return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+    false
 }
 
 use mitcad_model::testing::MockShape;
@@ -288,6 +298,13 @@ fn hash(text: &str, salt: u64) -> f64 {
 impl Kernel for TestKernel {
     type Shape = MockShape;
 
+    fn is_valid(&self, shape: &MockShape) -> Result<bool, KernelError> {
+        match self.invalid {
+            Some(marker) => Ok(!shape.history.contains(marker)),
+            None => Err(KernelError::Unsupported("validity checks")),
+        }
+    }
+
     fn extrude(&self, spec: &ExtrudeSpec<'_>) -> Result<MockShape, KernelError> {
         self.mock.extrude(spec)
     }
@@ -308,9 +325,14 @@ impl Kernel for TestKernel {
         if let Some(slow) = self.slow
             && keys == slow.regions.iter().map(|r| r.to_string()).collect()
             && (!slow.along || spec.direction[2] > 0.0)
+            && (!slow.against || spec.direction[2] < 0.0)
         {
             self.slow_calls.set(self.slow_calls.get() + 1);
-            slow_call_for(&self.mock, slow.seconds);
+            self.began.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if slow_call_for(&self.mock, slow.seconds) {
+                self.stopped
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
         }
         let mut shape = self.mock.extrude_feature(spec)?;
         if self.skew {
@@ -474,6 +496,15 @@ impl Kernel for TestKernel {
         Ok(shape)
     }
 
+    fn shell(
+        &self,
+        feature: FeatureUid,
+        body: &MockShape,
+        spec: &mitcad_model::ShellSpec<'_>,
+    ) -> Result<MockShape, KernelError> {
+        self.mock.shell(feature, body, spec)
+    }
+
     fn loft(&self, spec: &mitcad_model::LoftSpec<'_, MockShape>) -> Result<MockShape, KernelError> {
         self.mock.loft(spec)
     }
@@ -604,6 +635,30 @@ impl Kernel for TestKernel {
             })
             .collect())
     }
+
+    // Definitions evaluated ahead (mitcad#95): the same settings; not with
+    // the hooks of a test that counts or blocks calls.
+    fn fork(&self) -> Option<Self> {
+        if self.on_call.borrow().is_some() || self.out_of_memory.get() > 0 {
+            return None;
+        }
+        Some(TestKernel {
+            mock: self.mock.fork()?,
+            written: self.written.clone(),
+            edge_points: self.edge_points,
+            face_listing: self.face_listing,
+            skew: self.skew,
+            alike: self.alike,
+            on_call: Default::default(),
+            out_of_memory: Default::default(),
+            slow: self.slow,
+            slow_calls: Default::default(),
+            directed: self.directed,
+            invalid: self.invalid,
+            began: Arc::clone(&self.began),
+            stopped: Arc::clone(&self.stopped),
+        })
+    }
 }
 
 /// The test kernel's point inside a face (the same in every document).
@@ -632,6 +687,10 @@ struct TestGeometry {
     broken: Vec<usize>,
     /// The component (object id) of every body and of the items' states.
     component: Option<u64>,
+    /// Bodies have ids: the same shape in different states the same.
+    ids: bool,
+    /// Items whose state the history does not hold (suppressed).
+    without_result: Vec<i64>,
 }
 
 impl StoredGeometry<MockShape> for TestGeometry {
@@ -641,6 +700,10 @@ impl StoredGeometry<MockShape> for TestGeometry {
 
     fn item_state(&mut self, index: i64) -> Option<usize> {
         self.items.get(&index).copied()
+    }
+
+    fn item_without_result(&mut self, index: i64) -> bool {
+        self.without_result.contains(&index)
     }
 
     fn state(&mut self, index: usize) -> Result<Vec<StoredBody<MockShape>>, String> {
@@ -655,7 +718,11 @@ impl StoredGeometry<MockShape> for TestGeometry {
                 name: None,
                 source: format!("state {index} body {i}"),
                 component: self.component,
-                id: None,
+                id: self
+                    .ids
+                    .then(|| self.states.iter().flatten().position(|s| s == shape))
+                    .flatten()
+                    .map(|p| p as u64),
             })
             .collect())
     }
@@ -769,6 +836,53 @@ fn the_history_chooses_the_profile() {
     assert!(report.history.reached_end);
     assert_eq!(report.bodies.len(), 1);
     assert_eq!(report.bodies[0].volume_difference, Some(0.0));
+}
+
+#[test]
+fn the_decoded_profile_loops_choose_the_profile() {
+    // mitcad#96: the decoder lists the small rectangle's loop (the file's
+    // curve ids with their geometry), so that even without a history the
+    // import extrudes it, not the first guess (the larger one).
+    let mut sketch = two_rectangles(0);
+    let corners = [
+        ([0.0, 0.0], [4.0, 0.0]),
+        ([4.0, 0.0], [4.0, 2.0]),
+        ([4.0, 2.0], [0.0, 2.0]),
+        ([0.0, 2.0], [0.0, 0.0]),
+        ([5.0, 0.0], [6.0, 0.0]),
+        ([6.0, 0.0], [6.0, 2.0]),
+        ([6.0, 2.0], [5.0, 2.0]),
+        ([5.0, 2.0], [5.0, 0.0]),
+    ];
+    for (c, (a, b)) in sketch["detail"]["curves"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip(corners)
+    {
+        c["geometry"] = json!({"type": "Line3D", "startPoint": [a[0], a[1], 0.0],
+                               "endPoint": [b[0], b[1], 0.0]});
+    }
+    let record = |id: &str, k: u64| {
+        json!({"id": id, "primary": k, "secondary": 0, "tag": 3, "reversed": false,
+               "piece": 1, "pieces": 1})
+    };
+    let mut item = extrude(1, 0, "NewBodyFeatureOperation", "d2");
+    item["detail"]["_f3d_profile_loops"] = json!([{"loops": [{"outer": true, "curves": [
+        record("c4", 4), record("c5", 5), record("c6", 6), record("c7", 7)]}], "children": []}]);
+    let mut doc = Document::new(TestKernel::default());
+    let report = import_design(
+        &mut doc,
+        &timeline_dump(vec![sketch, item]),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    assert_eq!(report.items[1].outcome, Outcome::Parametric);
+    let def: Value =
+        serde_json::from_str(&doc.query(r#"{"query": "feature", "uid": "F2"}"#).unwrap()).unwrap();
+    let small = "r{c13[c16,c14],c14[c13,c15],c15[c14,c16],c16[c15,c13]}";
+    assert_eq!(def["def"]["profiles"][0]["region"], small);
+    assert_eq!(def["def"]["profiles"].as_array().unwrap().len(), 1);
 }
 
 /// A fillet whose edges the decoder does not give, and an extrusion after
@@ -929,6 +1043,8 @@ fn block_history(broken: Vec<usize>) -> (Vec<Value>, TestGeometry) {
         items: HashMap::from([(1, 1), (2, 2)]),
         broken,
         component: None,
+        ids: false,
+        ..TestGeometry::default()
     };
     (items, geometry)
 }
@@ -1406,6 +1522,72 @@ fn an_item_whose_state_cannot_be_rebuilt_is_taken_unchecked() {
 }
 
 #[test]
+fn a_definition_that_makes_an_invalid_body_is_not_taken() {
+    for validate in [false, true] {
+        let (items, mut geometry) = block_history(Vec::new());
+        let mut doc = Document::new(TestKernel {
+            invalid: Some("join("),
+            ..TestKernel::default()
+        });
+        let report = import_design(
+            &mut doc,
+            &timeline_dump(items),
+            &mut geometry,
+            &Options {
+                validate,
+                ..Options::default()
+            },
+        );
+        let outcomes: Vec<_> = report.items.iter().map(|i| i.outcome).collect();
+        let join = if validate {
+            Outcome::Fallback
+        } else {
+            Outcome::Parametric
+        };
+        assert_eq!(
+            outcomes,
+            [Outcome::Partial, Outcome::Parametric, join],
+            "{}",
+            report.text()
+        );
+        if validate {
+            assert!(report.text().contains("checker finds"), "{}", report.text());
+        }
+    }
+}
+
+#[test]
+fn an_unchecked_item_does_not_take_every_body_away() {
+    // A cut whose state cannot be rebuilt and that would remove the block.
+    let (mut items, mut geometry) = block_history(vec![2]);
+    items[2] = extrude(2, 0, "CutFeatureOperation", "d2");
+    let mut doc = Document::new(TestKernel::default());
+    doc.kernel().mock.split.set(Some(0));
+    let report = import_design(
+        &mut doc,
+        &timeline_dump(items),
+        &mut geometry,
+        &Options::default(),
+    );
+    assert_ne!(
+        report.items[2].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    assert!(
+        report.items[2]
+            .note
+            .as_deref()
+            .unwrap_or_default()
+            .contains("it would leave no bodies"),
+        "{}",
+        report.text()
+    );
+    assert_eq!(doc.bodies().len(), 1, "{}", report.text());
+}
+
+#[test]
 fn after_the_time_limit_items_take_their_states() {
     let (items, mut geometry) = block_history(Vec::new());
     let mut doc = Document::new(TestKernel::default());
@@ -1748,6 +1930,30 @@ fn an_external_dump_replays_with_profiles_matched_by_area_and_centroid() {
     };
     assert!(s.entities.iter().any(|e| e.construction));
     assert_eq!(doc.bodies().len(), 1);
+}
+
+#[test]
+fn a_measured_profile_may_be_a_union_of_regions() {
+    // One profile of both rectangles' area (10 cm²) and centroid: no
+    // region of the sketch has them, the two together do.
+    let mut feature = extrude(1, 0, "NewBodyFeatureOperation", "d2");
+    feature["detail"]["profile"][0]["area"] = json!(10.0);
+    feature["detail"]["profile"][0]["centroid"] = json!([2.7, 1.0, 0.0]);
+    let mut doc = Document::new(MockKernel::default());
+    let report = import(&mut doc, &timeline_dump(vec![two_rectangles(0), feature]));
+    assert_eq!(
+        report.items[1].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    let def: Value =
+        serde_json::from_str(&doc.query(r#"{"query": "feature", "uid": "F2"}"#).unwrap()).unwrap();
+    assert_eq!(
+        def["def"]["profiles"].as_array().map(Vec::len),
+        Some(2),
+        "{def}"
+    );
 }
 
 /// The body fingerprint of an external dump for a replayed body (its volume in
@@ -2464,6 +2670,7 @@ fn prisms_bound_the_change_of_extrusions() {
         note: None,
         guess: true,
         predicted: Some(-100.0),
+        first: false,
     };
     assert!(bounded(&extrude(
         json!({"type": "distance", "distance": "d1"})
@@ -3028,6 +3235,27 @@ fn edges_the_decoder_found_by_their_names_come_first() {
         "{}",
         report.text()
     );
+    assert!(
+        report
+            .text()
+            .contains("edge set 0, input 0: decoder_unresolved")
+    );
+    assert!(
+        report
+            .text()
+            .contains("a face of the edge is not in the history state")
+    );
+    // The decoder succeeded, but the replay does not have that edge:
+    // keep this separate from a recipe the decoder could not resolve.
+    let report = replay(json!({"kind": "edge", "length": 0.1,
+        "mid_point": [1000.0, 1000.0, 1000.0],
+        "_f3d": {"found": "BREP.x.smbh before state 4", "recipe": "edge", "entities": names["entities"]}}));
+    assert!(
+        report
+            .text()
+            .contains("edge set 0, input 0: missing_in_replay")
+    );
+    assert!(report.text().contains("BREP.x.smbh before state 4"));
 }
 
 #[test]
@@ -3130,6 +3358,95 @@ fn fillet_and_chamfer_options_come_in_as_their_definitions() {
     }
     let plain = json!({"type": "fillet", "sets": [{"size": {"type": "constant", "radius": 2}}]});
     assert_eq!(Candidate::new(plain).tolerance(), history::RELATIVE);
+}
+
+#[test]
+fn patterns_of_features_with_a_chamfer_repeat_it_on_the_copies() {
+    // The block with a chamfer on its first edge, and a circular pattern
+    // of the extrusion and the chamfer (mitcad#105).
+    let block_items = vec![
+        rectangle_sketch(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+    ];
+    let mut reference = Document::new(TestKernel::default());
+    import_design(
+        &mut reference,
+        &timeline_dump(block_items.clone()),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let (a, b) = shapes(&reference)[0].edges[0].clone();
+    let p = edge_point(&a, &b);
+    let edge = json!({"kind": "edge", "mid_point": [p[0] / 10.0, p[1] / 10.0, p[2] / 10.0],
+                      "length": 0.1});
+    let mut items = block_items;
+    items.push(
+        json!({"index": 2, "name": "Chamfer1", "objectType": "ChamferFeature",
+        "detail": {"edgeSets": [{"edges": [edge], "distance": param("d5", "2 mm", 0.2, "mm")}]}}),
+    );
+    items.push(
+        json!({"index": 3, "name": "C-Pattern1", "objectType": "CircularPatternFeature",
+        "detail": {"inputEntities": [
+                       {"kind": "feature", "objectType": "ExtrudeFeature", "name": "Extrude1",
+                        "timeline_index": 1},
+                       {"kind": "feature", "objectType": "ChamferFeature", "name": "Chamfer1",
+                        "timeline_index": 2}],
+                   "patternEntityType": "FeaturesPatternType",
+                   "axis": {"kind": "construction_axis", "name": "Z", "origin": "Z"},
+                   "quantity": param("d6", "2", 2.0, ""),
+                   "totalAngle": param("d7", "360 deg", std::f64::consts::TAU, "deg"),
+                   "isSymmetric": false}}),
+    );
+    let mut dump = timeline_dump(items);
+    for (name, expression, unit) in [("d6", "2", ""), ("d7", "360 deg", "deg")] {
+        dump.parameters
+            .as_mut()
+            .unwrap()
+            .model
+            .as_mut()
+            .unwrap()
+            .push(
+                serde_json::from_value(
+                    json!({"name": name, "expression": expression, "unit": unit}),
+                )
+                .unwrap(),
+            );
+    }
+    let mut doc = Document::new(TestKernel {
+        edge_points: true,
+        ..TestKernel::default()
+    });
+    let report = import_design(&mut doc, &dump, &mut NoGeometry, &Options::default());
+    let pattern = &report.items[3];
+    assert_eq!(pattern.outcome, Outcome::Parametric, "{}", report.text());
+    assert_eq!(
+        pattern.note.as_deref(),
+        Some("its fillets and chamfers repeated on the copies")
+    );
+    let chamfer = &report.items[2].features[0];
+    let def: Value = serde_json::from_str::<Value>(
+        &doc.query(&format!(
+            r#"{{"query": "feature", "uid": "{}"}}"#,
+            pattern.features[0]
+        ))
+        .unwrap(),
+    )
+    .unwrap()["def"]
+        .clone();
+    // The chamfer among the objects (the first definition tried).
+    assert_eq!(
+        def["objects"],
+        json!({"type": "features", "features": ["F2", chamfer]})
+    );
+    // The copy of the block got the chamfer's copy, named after the pattern.
+    let prefix = format!("{}:chamfer(", pattern.features[0]);
+    assert!(
+        shapes(&doc)
+            .iter()
+            .any(|s| s.faces.iter().any(|f| f.to_string().starts_with(&prefix))),
+        "{:?}",
+        shapes(&doc)
+    );
 }
 
 /// A replace face of the block's top onto the XY plane, as external dumps give
@@ -3352,6 +3669,14 @@ fn stream_extent_codes_and_direction_vector_choose_the_extent() {
     let def = first(
         json!({"operation_code": 4, "extent_a": 1, "extent_b": 2, "direction": -1.0,
                "direction_vector": [0.0, 0.0, 1.0]}),
+        Some("d2"),
+    );
+    assert_ne!(def["flip"], true);
+    // A vector oblique to the sketch's normal tells no side: along the
+    // normal (mitcad#104).
+    let def = first(
+        json!({"operation_code": 4, "extent_a": 1, "extent_b": 2,
+               "direction_vector": [0.0, 0.6, -0.8]}),
         Some("d2"),
     );
     assert_ne!(def["flip"], true);
@@ -4007,6 +4332,34 @@ fn a_definition_cut_short_for_lack_of_memory_falls_back_and_the_import_goes_on()
 }
 
 #[test]
+fn the_next_item_waits_for_the_memory_guard_to_see_the_memory_recover() {
+    // The memory guard measures the process every so often: it sees the
+    // memory recover after the definition cut short only a little later,
+    // and the join after it is tried all the same.
+    let progress = Arc::new(crate::Progress::new());
+    let guard = progress.clone();
+    let worker = import_block_on_thread(
+        Options {
+            progress: Some(progress.clone()),
+            ..Options::default()
+        },
+        Box::new(move |mock| {
+            guard.low_memory("9.9 GiB of 10.0 GiB (test)");
+            slow_call(mock);
+            let later = guard.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                later.memory_recovered();
+            });
+        }),
+    );
+    let (report, _) = worker.join().unwrap();
+    let note = |i: usize| report.items[i].note.clone().unwrap_or_default();
+    assert!(note(1).contains(LOW_MEMORY), "{}", report.text());
+    assert!(!note(2).contains(LOW_MEMORY), "{}", report.text());
+}
+
+#[test]
 fn memory_tight_drops_what_the_import_can_build_again() {
     // Asked to while the first extrusion is evaluated (mitcad#80), the
     // import drops before its next item the cached results of the
@@ -4210,6 +4563,37 @@ fn a_kernel_call_that_does_not_return_still_looks_hung() {
 }
 
 #[test]
+fn a_join_of_the_same_bodies_waits_behind_one_that_gave_way() {
+    let mut turns = Turns::default();
+    let combine = |target: &str, tools: &[&str], operation: &str, keep: bool| {
+        Candidate::new(json!({"type": "combine", "target": target, "tools": tools,
+                              "operation": operation, "keep_tools": keep}))
+    };
+    let candidates = vec![
+        combine("F2.b0", &["F12.b0"], "join", false),
+        combine("F12.b0", &["F2.b0"], "join", false),
+        combine("F12.b0", &["F2.b0"], "join", true),
+        combine("F12.b0", &["F2.b0"], "cut", false),
+        combine("F2.b0", &["F12.b0", "F3.b0"], "join", false),
+        combine("F12.b0", &["F2.b0"], "intersect", false),
+    ];
+    assert!(!turns.waits_behind(&candidates, 1));
+    turns.cut_short(0, 20.0, true);
+    // The same union with the other body as the target, keeping its tools
+    // or not, waits behind the first; a cut, a union of more bodies and an
+    // intersection are other booleans.
+    assert!(turns.waits_behind(&candidates, 1));
+    assert!(turns.waits_behind(&candidates, 2));
+    assert!(!turns.waits_behind(&candidates, 3));
+    assert!(!turns.waits_behind(&candidates, 4));
+    assert!(!turns.waits_behind(&candidates, 5));
+    // With the time they ran: tried again only when more is left.
+    assert_eq!(turns.again(25.0), Some(0));
+    assert_eq!(turns.again(25.0), Some(1));
+    assert_eq!(turns.again(15.0), None);
+}
+
+#[test]
 fn definitions_that_gave_way_wait_for_the_rest_of_the_time() {
     let mut turns = Turns::default();
     // A share of the item's time each, the last one the rest.
@@ -4330,6 +4714,7 @@ fn a_slow_definition_gives_way_to_the_next_ones() {
     let slow = SlowExtrusions {
         regions: &[LARGE],
         along: true,
+        against: false,
         seconds: 30.0,
     };
     for known in [true, false] {
@@ -4357,6 +4742,7 @@ fn a_definition_that_gave_way_gets_the_rest_of_the_time() {
     let slow = SlowExtrusions {
         regions: &[LARGE],
         along: true,
+        against: false,
         seconds: 1.0,
     };
     for known in [true, false] {
@@ -4383,6 +4769,7 @@ fn an_item_out_of_time_names_the_definition_its_time_went_to() {
     let slow = SlowExtrusions {
         regions: &[LARGE, SMALL],
         along: true,
+        against: false,
         seconds: 30.0,
     };
     for known in [true, false] {
@@ -4490,3 +4877,1004 @@ fn a_sizing_offset_that_takes_long_gives_way_to_the_next_definition() {
 
 // Joints, as-built joints, joint origins and ground items (mitcad#55).
 mod joint_tests;
+
+/// The learning dump (mitcad#96): the item the history settled is written
+/// with its candidates and answer in the file's terms.
+#[test]
+fn the_learning_dump_keeps_what_the_history_chose() {
+    let items = vec![
+        two_rectangles(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+    ];
+    let mut reference = Document::new(TestKernel::default());
+    import_design(
+        &mut reference,
+        &timeline_dump(items[..1].to_vec()),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let small = "r{c13[c16,c14],c14[c13,c15],c15[c14,c16],c16[c15,c13]}";
+    add(
+        &mut reference,
+        json!({"type": "extrude", "profiles": [{"sketch": "F1", "region": small}],
+               "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}),
+    );
+    let mut geometry = TestGeometry {
+        states: vec![Vec::new(), shapes(&reference)],
+        ..TestGeometry::default()
+    };
+    let dir = std::env::temp_dir().join(format!("mitcad-learn-{}", std::process::id()));
+    let options = Options {
+        learn: Some(crate::learn::LearnOptions {
+            dir: dir.clone(),
+            path: None,
+        }),
+        ..Options::default()
+    };
+    let mut doc = Document::new(TestKernel::default());
+    let report = import_design(&mut doc, &timeline_dump(items), &mut geometry, &options);
+    assert_eq!(report.items[1].verified, Some(true), "{}", report.text());
+    let settled = std::fs::read_dir(dir.join("settled"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect::<String>();
+    let _ = std::fs::remove_dir_all(&dir);
+    let lines: Vec<Value> = settled
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1);
+    let line = &lines[0];
+    assert_eq!(line["item"], 1);
+    assert_eq!(line["type"], "ExtrudeFeature");
+    assert_eq!(line["status"], "settled");
+    // The sketch's regions by the file's curve ids; the answer names the
+    // small rectangle by its index among them.
+    let regions = line["context"]["sketches"]["T0"]["regions"]
+        .as_array()
+        .unwrap();
+    assert_eq!(regions.len(), 2);
+    let answer = &line["answer"]["defs"][0]["profiles"][0];
+    assert_eq!(answer["sketch"], "T0");
+    let chosen = &regions[answer["region"].as_u64().unwrap() as usize];
+    let mut outer: Vec<&str> = chosen["outer"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    outer.sort_unstable();
+    assert_eq!(outer, ["c4", "c5", "c6", "c7"]);
+    assert!(chosen["inside"].is_array());
+    // The candidates in their order, the answer among them.
+    let rank = line["accepted"].as_u64().unwrap() as usize;
+    assert_eq!(line["candidates"][rank], line["answer"]);
+    assert!(line["candidates"].as_array().unwrap().len() >= 2);
+    // No file: no raw record.
+    assert!(line["record"].is_null());
+}
+
+#[test]
+fn the_learning_dump_captures_the_dressup_matcher_result() {
+    let mut items = vec![
+        rectangle_sketch(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+    ];
+    let mut reference = Document::new(TestKernel::default());
+    import_design(
+        &mut reference,
+        &timeline_dump(items.clone()),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let (a, b) = shapes(&reference)[0].edges[0].clone();
+    let p = edge_point(&a, &b);
+    items.push(
+        json!({"index": 2, "name": "Fillet1", "objectType": "FilletFeature",
+        "detail": {"edgeSets": [{"radius": param("d5", "2 mm", 0.2, "mm"), "edges": [{
+            "kind": "edge", "length": 0.1,
+            "mid_point": p.map(|x| x / 10.0),
+            "_f3d": {"recipe": "edge", "found": "BREP.x.smbh before state 4"}
+        }]}]}}),
+    );
+    let dir = std::env::temp_dir().join(format!("mitcad-learn-edges-{}", std::process::id()));
+    let mut doc = Document::new(TestKernel {
+        edge_points: true,
+        ..TestKernel::default()
+    });
+    let report = import_design(
+        &mut doc,
+        &timeline_dump(items),
+        &mut NoGeometry,
+        &Options {
+            learn: Some(crate::learn::LearnOptions {
+                dir: dir.clone(),
+                path: None,
+            }),
+            ..Options::default()
+        },
+    );
+    assert_eq!(
+        report.items[2].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    let text = std::fs::read_dir(dir.join("unsettled"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect::<String>();
+    let _ = std::fs::remove_dir_all(&dir);
+    let line = text
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|line| line["item"] == 2)
+        .unwrap();
+    let diagnostic = &line["context"]["edge_matches"]["/detail/edgeSets/0/edges/0"];
+    assert_eq!(diagnostic["status"], "matched");
+    assert_eq!(diagnostic["count"], 1);
+    assert_eq!(diagnostic["matches"][0]["body"], "T1.b0");
+    assert_eq!(diagnostic["decoder_found"], "BREP.x.smbh before state 4");
+    assert!(line.get("translation_error").is_none());
+    // The additive field leaves existing readers' resolved input intact.
+    assert_eq!(
+        line["context"]["resolved"]["/detail/edgeSets/0/edges/0"]["kind"],
+        "edge"
+    );
+}
+
+#[test]
+fn the_learning_dump_keeps_a_failed_dressup_without_history_or_candidates() {
+    let items = vec![
+        rectangle_sketch(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+        json!({"index": 2, "name": "Fillet1", "objectType": "FilletFeature",
+        "detail": {"edgeSets": [{"radius": param("d5", "2 mm", 0.2, "mm"), "edges": [{
+            "kind": "edge", "_f3d": {"recipe": "edge",
+                "found": "a face of the edge is not in the history state"}
+        }]}]}}),
+    ];
+    let dir =
+        std::env::temp_dir().join(format!("mitcad-learn-failed-edges-{}", std::process::id()));
+    let mut doc = Document::new(TestKernel {
+        edge_points: true,
+        ..TestKernel::default()
+    });
+    let report = import_design(
+        &mut doc,
+        &timeline_dump(items),
+        &mut NoGeometry,
+        &Options {
+            learn: Some(crate::learn::LearnOptions {
+                dir: dir.clone(),
+                path: None,
+            }),
+            ..Options::default()
+        },
+    );
+    assert_ne!(
+        report.items[2].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    assert!(report.text().contains("decoder_unresolved"));
+    let text = std::fs::read_dir(dir.join("unsettled"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect::<String>();
+    let _ = std::fs::remove_dir_all(&dir);
+    let line = text
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|line| line["item"] == 2)
+        .expect("candidate-free dressup must have an unsettled learning record");
+    assert_eq!(line["status"], "unsettled");
+    assert_eq!(line["candidates"], json!([]));
+    assert_eq!(line["cost"]["candidates"], 0);
+    assert!(line["accepted"].is_null());
+    assert!(line["answer"].is_null());
+    let error = line["translation_error"].as_str().unwrap();
+    assert!(error.contains("edge set 0, input 0: decoder_unresolved"));
+    assert!(error.contains("no history to find them"));
+    let pointer = "/detail/edgeSets/0/edges/0";
+    let diagnostic = &line["context"]["edge_matches"][pointer];
+    assert_eq!(diagnostic["status"], "decoder_unresolved");
+    assert_eq!(
+        diagnostic["decoder_found"],
+        "a face of the edge is not in the history state"
+    );
+    assert_eq!(diagnostic["count"], 0);
+    assert_eq!(diagnostic["candidates"], json!([]));
+    assert!(line["context"]["resolved"][pointer].is_null());
+    assert!(!line["context"]["bodies"].as_array().unwrap().is_empty());
+}
+
+// An item's definitions evaluated ahead, in parallel (mitcad#95).
+
+/// One profile of the two rectangles extruded as a new body (as
+/// [`slow_profile_import`]) against the file's state `right` on `kernel`,
+/// with `threads`: the report, each feature's name and definition, the
+/// seconds the import took, and the kernel (whose forks count the slow
+/// extrusions stopped in its `stopped`).
+fn ahead_import(
+    threads: usize,
+    known: bool,
+    right: (&str, f64, bool),
+    kernel: impl Fn() -> TestKernel,
+    item_seconds: f64,
+) -> (
+    DesignReport,
+    Vec<Value>,
+    f64,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
+    let items = vec![
+        two_rectangles(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+    ];
+    let mut reference = Document::new(TestKernel {
+        slow: None,
+        ..kernel()
+    });
+    import_design(
+        &mut reference,
+        &timeline_dump(items[..1].to_vec()),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let (region, distance, flip) = right;
+    add(
+        &mut reference,
+        json!({"type": "extrude", "profiles": [{"sketch": "F1", "region": region}],
+               "extent": {"type": "distance", "distance": distance}, "flip": flip,
+               "operation": "new_body"}),
+    );
+    let mut geometry = TestGeometry {
+        states: vec![Vec::new(), shapes(&reference)],
+        items: if known {
+            HashMap::from([(1, 1)])
+        } else {
+            HashMap::new()
+        },
+        ..TestGeometry::default()
+    };
+    let mut doc = Document::new(kernel());
+    let started = std::time::Instant::now();
+    let report = import_design(
+        &mut doc,
+        &timeline_dump(items),
+        &mut geometry,
+        &Options {
+            item_seconds,
+            threads,
+            ..Options::default()
+        },
+    );
+    let elapsed = started.elapsed().as_secs_f64();
+    let features = doc
+        .features()
+        .map(|f| f.uid)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|uid| {
+            let text = doc
+                .query(&format!(r#"{{"query": "feature", "uid": "{uid}"}}"#))
+                .unwrap();
+            serde_json::from_str::<Value>(&text).unwrap()
+        })
+        .collect();
+    (report, features, elapsed, Arc::clone(&doc.kernel().stopped))
+}
+
+#[test]
+fn definitions_evaluated_ahead_give_the_same_import() {
+    // The history picks the profile and direction; with workers the
+    // definitions after the one evaluated are evaluated ahead, and the one
+    // taken (here a worker's, as it is not ranked first) comes in with the
+    // same features, names and report as without them.
+    let kernel = || TestKernel {
+        directed: true,
+        ..TestKernel::default()
+    };
+    for known in [true, false] {
+        for right in [(LARGE, 10.0, false), (LARGE, 10.0, true)] {
+            let (one, one_features, _, _) = ahead_import(1, known, right, kernel, 60.0);
+            let (eight, eight_features, _, _) = ahead_import(8, known, right, kernel, 60.0);
+            assert_eq!(
+                one.items[1].outcome,
+                Outcome::Parametric,
+                "{right:?} {known}: {}",
+                one.text()
+            );
+            assert_eq!(one.text(), eight.text());
+            assert_eq!(
+                serde_json::to_string(&one.items).unwrap(),
+                serde_json::to_string(&eight.items).unwrap()
+            );
+            assert_eq!(one_features, eight_features);
+        }
+    }
+}
+
+#[test]
+fn the_first_definition_that_gives_the_state_is_taken() {
+    // Every extrusion measures the same here, so each definition gives the
+    // state. The first one ranked takes a while; the workers have the
+    // others done before it, but it is the one taken, as without workers.
+    let kernel = || TestKernel {
+        alike: true,
+        directed: true,
+        slow: Some(SlowExtrusions {
+            regions: &[SMALL],
+            along: true,
+            against: false,
+            seconds: 0.5,
+        }),
+        ..TestKernel::default()
+    };
+    for known in [true, false] {
+        let (one, one_features, _, _) = ahead_import(1, known, (SMALL, 10.0, false), kernel, 60.0);
+        let (eight, eight_features, _, _) =
+            ahead_import(8, known, (SMALL, 10.0, false), kernel, 60.0);
+        assert_eq!(one.items[1].verified, Some(true), "{}", one.text());
+        assert_eq!(one.text(), eight.text());
+        assert_eq!(one_features, eight_features);
+        let def = &eight_features.last().unwrap()["def"];
+        assert_eq!(def["profiles"][0]["region"], SMALL, "{}", eight.text());
+        assert_ne!(def["flip"], true, "{}", eight.text());
+    }
+}
+
+#[test]
+fn definitions_after_the_one_taken_are_cut_short() {
+    // The definitions of the small rectangle give no state, the third (the
+    // large one along the sketch's normal) gives it, and the fourth
+    // (against the normal) would take 30 s. Its worker is stopped as soon
+    // as the third is taken, and the import does not wait for it.
+    let began = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stopped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let kernel = || TestKernel {
+        directed: true,
+        slow: Some(SlowExtrusions {
+            regions: &[LARGE],
+            along: false,
+            against: true,
+            seconds: 30.0,
+        }),
+        began: Arc::clone(&began),
+        stopped: Arc::clone(&stopped),
+        ..TestKernel::default()
+    };
+    let (report, features, elapsed, _) = ahead_import(8, false, (LARGE, 10.0, false), kernel, 60.0);
+    assert_eq!(report.items[1].verified, Some(true), "{}", report.text());
+    let def = &features.last().unwrap()["def"];
+    assert_eq!(def["profiles"][0]["region"], LARGE, "{}", report.text());
+    assert_ne!(def["flip"], true, "{}", report.text());
+    assert!(elapsed < 10.0, "{elapsed} s");
+    // Its worker stops within a few milliseconds of the stop (unless the
+    // stop came before its extrusion began).
+    let load =
+        |n: &Arc<std::sync::atomic::AtomicUsize>| n.load(std::sync::atomic::Ordering::SeqCst);
+    let waited = std::time::Instant::now();
+    while load(&stopped) < load(&began) && waited.elapsed().as_secs_f64() < 10.0 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(load(&stopped), load(&began));
+}
+
+#[test]
+fn a_document_fork_adds_features_as_the_document_would() {
+    // A fork's feature gets the uid the document's would, and its result,
+    // adopted, makes adding the same definition to the document reuse it.
+    let mut doc = Document::new(MockKernel::default());
+    import(&mut doc, &block_dump());
+    let def: FeatureDef<mitcad_model::ValueInput> = serde_json::from_value(json!({
+        "type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c5[c8,c6],c6[c5,c7],c7[c6,c8],c8[c7,c5]}"}],
+        "extent": {"type": "distance", "distance": 5}, "operation": "new_body"}))
+    .unwrap();
+    let mut fork = doc.fork().expect("the mock kernel forks");
+    let forked = fork.add_feature(&def, None).unwrap().uid;
+    let extrudes = |d: &Document<MockKernel>| d.kernel().calls.borrow().get("extrude").copied();
+    assert_eq!(extrudes(&fork), Some(1));
+    assert_eq!(doc.adopt_results(&fork, &[forked]), 1);
+    let before = extrudes(&doc);
+    let added = doc.add_feature(&def, None).unwrap().uid;
+    assert_eq!(added, forked);
+    assert_eq!(extrudes(&doc), before, "evaluated again");
+    assert_eq!(doc.status(added).and_then(|s| s.error()), None);
+}
+
+/// A combine named only by the items that made its bodies (the decoder's
+/// `_f3d.producer`, mitcad#96), whose tool the file consumed: the history
+/// keeps the tool as it was, so it is left out from the combine's state
+/// on, and the combine comes in with its tool consumed.
+#[test]
+fn a_combine_finds_its_bodies_by_their_producers_and_consumes_its_tool() {
+    let mut reference = Document::new(TestKernel::default());
+    import_design(
+        &mut reference,
+        &timeline_dump(vec![
+            two_rectangles(0),
+            extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+        ]),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let s0 = shapes(&reference);
+    let small = "r{c13[c16,c14],c14[c13,c15],c15[c14,c16],c16[c15,c13]}";
+    add(
+        &mut reference,
+        json!({"type": "extrude", "profiles": [{"sketch": "F1", "region": small}],
+               "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}),
+    );
+    let s1 = shapes(&reference);
+    let tool = reference
+        .body_shape("F3.b0".parse().unwrap())
+        .unwrap()
+        .clone();
+    add(
+        &mut reference,
+        json!({"type": "combine", "target": "F2.b0", "tools": ["F3.b0"], "operation": "join"}),
+    );
+    let mut s2 = shapes(&reference);
+    s2.push(tool);
+    let produced = |producer: i64| {
+        json!({"kind": "body", "objectType": "BRepBody",
+               "_f3d": {"producer": producer, "body_index": 0}})
+    };
+    let items = vec![
+        two_rectangles(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+        extrude(2, 0, "NewBodyFeatureOperation", "d2"),
+        json!({"index": 3, "name": "Combine1", "objectType": "CombineFeature",
+               "detail": {"targetBody": produced(1), "toolBodies": [produced(2)],
+                          "operation": "JoinFeatureOperation", "isKeepToolBodies": false}}),
+    ];
+    let mut geometry = TestGeometry {
+        states: vec![s0, s1, s2],
+        items: HashMap::from([(1, 0), (2, 1), (3, 2)]),
+        ids: true,
+        ..TestGeometry::default()
+    };
+    let mut doc = Document::new(TestKernel::default());
+    let report = import_design(
+        &mut doc,
+        &timeline_dump(items),
+        &mut geometry,
+        &Options::default(),
+    );
+    let combine = &report.items[3];
+    assert_eq!(combine.outcome, Outcome::Parametric, "{}", report.text());
+    assert_eq!(combine.verified, Some(true));
+    let def: Value = serde_json::from_str(
+        &doc.query(&format!(
+            r#"{{"query": "feature", "uid": "{}"}}"#,
+            combine.features[0]
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let tool = &report.items[2].features[0];
+    assert_eq!(def["def"]["tools"], json!([format!("{tool}.b0")]));
+    assert_ne!(def["def"]["keep_tools"], true);
+    // The stored design without the consumed tool: nothing to replace.
+    assert_eq!(doc.bodies().len(), 1);
+    assert_eq!(report.bodies.len(), 1, "{}", report.text());
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+/// A symmetric extent's length from the stream decoder (mitcad#96): tried
+/// first, without a history the only one.
+#[test]
+fn decoded_symmetric_length_comes_first() {
+    for full in [true, false] {
+        let dump = timeline_dump(vec![
+            rectangle_sketch(0),
+            stream_extrude(
+                1,
+                "NewBodyFeatureOperation",
+                json!({"operation_code": 4, "extent_a": 3, "extent_b": 2,
+                       "direction_vector": [0.0, 0.0, 1.0], "full_length": full}),
+                Some("d2"),
+            ),
+        ]);
+        let mut doc = Document::new(MockKernel::default());
+        import(&mut doc, &dump);
+        let def: Value =
+            serde_json::from_str(&doc.query(r#"{"query": "feature", "uid": "F2"}"#).unwrap())
+                .unwrap();
+        assert_eq!(def["def"]["extent"]["type"], "symmetric");
+        let length = def["def"]["extent"]["full_length"].as_bool();
+        assert_eq!(length.unwrap_or(false), full);
+    }
+}
+
+#[test]
+fn an_item_the_file_keeps_no_result_for_is_skipped() {
+    // mitcad#96: result number -1 with a state byte set (suppressed or
+    // failed in the file); one with none set is tried as before.
+    let mut fillet = fillet_item(2);
+    fillet["_f3d"] = json!({"result_no": -1, "flags": "010000"});
+    let mut failed = extrude(3, 0, "JoinFeatureOperation", "d2");
+    failed["_f3d"] = json!({"result_no": -1, "flags": "000100"});
+    let mut plain = extrude(4, 0, "NewBodyFeatureOperation", "d2");
+    plain["_f3d"] = json!({"result_no": -1, "flags": "000000"});
+    let items = vec![
+        rectangle_sketch(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+        fillet,
+        failed,
+        plain,
+    ];
+    let mut doc = Document::new(TestKernel::default());
+    let report = import_design(
+        &mut doc,
+        &timeline_dump(items),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    for i in [2, 3] {
+        assert_eq!(
+            report.items[i].outcome,
+            Outcome::Skipped,
+            "{}",
+            report.text()
+        );
+        assert!(
+            report.items[i]
+                .note
+                .as_deref()
+                .is_some_and(|n| n.contains("keeps no result")),
+            "{}",
+            report.text()
+        );
+    }
+    assert_eq!(
+        report.items[4].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+}
+
+#[test]
+fn an_item_whose_state_the_history_does_not_hold_is_skipped() {
+    // A feature suppressed in an `.ipt` part: its state is gone from the
+    // history. It is not tried; the join after it gives its own state.
+    let (mut items, mut geometry) = block_history(Vec::new());
+    let mut joined = extrude(3, 0, "JoinFeatureOperation", "d2");
+    joined["name"] = json!("Extrude3");
+    items.push(joined);
+    geometry.items = HashMap::from([(1, 1), (3, 2)]);
+    geometry.without_result = vec![2];
+    let mut doc = Document::new(TestKernel::default());
+    let report = import_design(
+        &mut doc,
+        &timeline_dump(items),
+        &mut geometry,
+        &Options::default(),
+    );
+    let outcomes: Vec<_> = report.items.iter().map(|i| i.outcome).collect();
+    assert_eq!(
+        outcomes,
+        [
+            Outcome::Partial,
+            Outcome::Parametric,
+            Outcome::Skipped,
+            Outcome::Parametric
+        ],
+        "{}",
+        report.text()
+    );
+    assert!(
+        report.items[2]
+            .note
+            .as_deref()
+            .is_some_and(|n| n.contains("keeps no result")),
+        "{}",
+        report.text()
+    );
+    assert_eq!(report.items[3].verified, Some(true), "{}", report.text());
+}
+
+#[test]
+fn a_fillet_that_fails_on_the_replay_is_tried_on_the_stored_state_before_it() {
+    // The replay's bodies are the state before the fillet within the
+    // tolerance, but the fillet does not build on them (its edge is the
+    // stored state's: the replay's edges are split otherwise, as the
+    // geometry kernel's rounding can fail on one and build on the other).
+    // It is tried again on the stored state before it, and gives its own
+    // state there.
+    use mitcad_model::FilletSize;
+    let mut items = vec![
+        rectangle_sketch(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+    ];
+    let kernel = TestKernel {
+        edge_points: true,
+        ..TestKernel::default()
+    };
+    let mut reference = Document::new(TestKernel::default());
+    import_design(
+        &mut reference,
+        &timeline_dump(items.clone()),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let block = shapes(&reference);
+    // The stored state's block as a base feature has it, and its fillet.
+    let data = kernel.brep_data(&block[0]).unwrap();
+    let (stored, _) = kernel.import_brep(FeatureUid(9), &data, 0).unwrap();
+    let edge = EdgeName::new(stored.faces[0].clone(), stored.faces[1].clone());
+    let set = FilletSet {
+        edges: std::slice::from_ref(&edge),
+        faces: &[],
+        size: FilletSize::Constant { radius: 2.0 },
+        tangent_chain: true,
+        curvature: false,
+        weight: 0.0,
+    };
+    let filleted = kernel
+        .fillet(FeatureUid(10), &stored, &[set], true)
+        .unwrap();
+    let p = edge_point(&stored.faces[0], &stored.faces[1]);
+    items.push(
+        json!({"index": 2, "name": "Fillet1", "objectType": "FilletFeature",
+        "detail": {"edgeSets": [{"radius": param("d5", "2 mm", 0.2, "mm"), "edges": [{
+            "kind": "edge", "length": 0.1, "mid_point": p.map(|x| x / 10.0)
+        }]}]}}),
+    );
+    let mut geometry = TestGeometry {
+        states: vec![Vec::new(), block, vec![filleted]],
+        items: HashMap::from([(1, 1), (2, 2)]),
+        ..TestGeometry::default()
+    };
+    let mut doc = Document::new(kernel);
+    let report = import_design(
+        &mut doc,
+        &timeline_dump(items),
+        &mut geometry,
+        &Options::default(),
+    );
+    assert_eq!(
+        report.items[2].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    assert_eq!(report.items[2].verified, Some(true), "{}", report.text());
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("to the file's state before Fillet1")),
+        "{}",
+        report.text()
+    );
+}
+
+// Work beside the replay in parallel (mitcad#103).
+
+#[test]
+fn in_order_hands_the_results_over_in_order() {
+    for threads in [1, 2, 8] {
+        for count in [0, 1, 5, 40] {
+            let mut seen = Vec::new();
+            crate::in_order(
+                count,
+                threads,
+                |k| {
+                    // Later ones finish first.
+                    std::thread::sleep(std::time::Duration::from_micros(((count - k) * 50) as u64));
+                    k * k
+                },
+                |k, square| seen.push((k, square)),
+            );
+            let expected: Vec<(usize, usize)> = (0..count).map(|k| (k, k * k)).collect();
+            assert_eq!(seen, expected, "{threads} threads, {count} items");
+        }
+    }
+}
+
+#[test]
+fn in_order_passes_a_panic_on() {
+    let caught = std::panic::catch_unwind(|| {
+        crate::in_order(
+            20,
+            4,
+            |k| {
+                assert!(k != 7, "item 7");
+                k
+            },
+            |_, _| {},
+        );
+    });
+    assert!(caught.is_err());
+}
+
+#[test]
+fn threads_beside_the_import_share_one_budget() {
+    let progress = Progress::new();
+    progress.set_threads(3);
+    let a = progress.helper().expect("one of three");
+    let b = progress.helper().expect("two of three");
+    assert!(progress.helper().is_none(), "the import's own is the third");
+    drop(a);
+    let c = progress.helper().expect("given back");
+    drop((b, c));
+    // Not while memory is short.
+    progress.set_memory_share(0.55);
+    assert!(progress.helper().is_none());
+    progress.set_memory_share(0.1);
+    assert!(progress.helper().is_some());
+    progress.set_threads(1);
+    assert!(progress.helper().is_none(), "one thread: the import's own");
+}
+
+#[test]
+fn planar_faces_are_found_once_per_body_shape() {
+    let mut doc = Document::new(MockKernel::default());
+    import(&mut doc, &block_dump());
+    let found = || crate::refs::planar_faces(&doc);
+    let plain = found();
+    assert!(!plain.is_empty());
+    let kept = crate::refs::KeptPlanes::new();
+    assert_eq!(found(), plain);
+    assert_eq!(found(), plain);
+    // Kept by version: the same version is not looked at again.
+    let finds = std::cell::Cell::new(0);
+    let find = || {
+        finds.set(finds.get() + 1);
+        Vec::new()
+    };
+    crate::refs::planes_of(1, find);
+    crate::refs::planes_of(1, find);
+    crate::refs::planes_of(2, find);
+    assert_eq!(finds.get(), 2);
+    drop(kept);
+    // Not kept outside an import.
+    crate::refs::planes_of(1, find);
+    assert_eq!(finds.get(), 3);
+}
+
+/// A combine whose target is in one component and its tool in another
+/// (the file's assembly context, mitcad#104): the tool comes in by its
+/// occurrence link, and the combine goes where its target is.
+#[test]
+fn a_combine_takes_a_tool_of_another_component_by_its_link() {
+    let produced = |producer: i64| {
+        json!({"kind": "body", "objectType": "BRepBody",
+               "_f3d": {"producer": producer, "body_index": 0}})
+    };
+    let owned = |mut item: Value, owner: u64| {
+        item["_f3d"]["component"] = json!(owner);
+        item
+    };
+    let mut value: Value = serde_json::to_value(timeline_dump(vec![
+        owned(rectangle_sketch(0), 3),
+        owned(extrude(1, 0, "NewBodyFeatureOperation", "d2"), 3),
+        owned(rectangle_sketch(2), 10),
+        owned(extrude(3, 2, "NewBodyFeatureOperation", "d2"), 10),
+        owned(
+            json!({"index": 4, "name": "Combine1", "objectType": "CombineFeature",
+                   "detail": {"targetBody": produced(3), "toolBodies": [produced(1)],
+                              "operation": "CutFeatureOperation", "isKeepToolBodies": true}}),
+            10,
+        ),
+    ]))
+    .unwrap();
+    value["document"] = json!({"root_component": "Assembly"});
+    value["components"] = json!([
+        {"name": "Assembly", "is_root": true, "_f3d": {"object_id": 3}},
+        {"name": "Plate", "_f3d": {"object_id": 10}}]);
+    value["occurrences"] = json!([
+        {"component": "Plate", "_f3d": {"component_object": 10},
+         "transform": [[1.0, 0.0, 0.0, 5.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0],
+                       [0.0, 0.0, 0.0, 1.0]]}]);
+    let dump = Dump::from_json(&value.to_string()).unwrap();
+    let mut doc = Document::new(MockKernel::default());
+    let report = import(&mut doc, &dump);
+    let combine = &report.items[4];
+    assert_eq!(combine.outcome, Outcome::Parametric, "{}", report.text());
+    let uid: FeatureUid = combine.features[0].parse().unwrap();
+    let plate = doc.assembly().components[0].uid;
+    assert_eq!(doc.feature(uid).unwrap().component, plate);
+    let def: Value = serde_json::from_str(
+        &doc.query(&format!(r#"{{"query": "feature", "uid": "{uid}"}}"#))
+            .unwrap(),
+    )
+    .unwrap();
+    let tool = format!("{}.b0", report.items[1].features[0]);
+    assert_eq!(def["def"]["tools"], json!([tool]));
+    assert_eq!(
+        def["def"]["tool_links"],
+        json!({tool.clone(): {"target": "O1"}})
+    );
+    // The root's block, moved into Plate (5 cm back along X), cut it.
+    let target = format!("{}.b0", report.items[3].features[0]);
+    let cut = &doc.body_shape(target.parse().unwrap()).unwrap().history;
+    assert!(
+        cut.starts_with("cut(") && cut.contains(",-50,0,0)"),
+        "{cut}"
+    );
+}
+
+/// A two-sided extrusion with both sides up to faces the replay does not
+/// have (mitcad#104): each side goes up to its face's plane, side one
+/// towards the side of the sketch its face lies on.
+#[test]
+fn two_sided_extrusion_goes_up_to_both_decoded_planes() {
+    let face = |z: f64| {
+        json!({"kind": "face", "objectType": "BRepFace",
+               "point_on_face": [1.0, 1.0, z],
+               "geometry": {"type": "Plane", "origin": [0.0, 0.0, z], "normal": [0.0, 0.0, 1.0]},
+               "_f3d": {"recipe": "bounded_face", "entities": [[{"tag": "9", "ops": [5]}]]}})
+    };
+    let mut item = stream_extrude(
+        1,
+        "NewBodyFeatureOperation",
+        json!({"operation_code": 4, "extent_a": 2, "extent_b": 1, "flag": 0,
+               "direction_vector": [0.0, 0.0, 1.0], "slot_roles": [17, 17, 65]}),
+        None,
+    );
+    item["detail"]["extentType"] = json!("TwoSidesFeatureExtentType");
+    item["detail"]["extentOne"] =
+        json!({"_type": "ToEntityExtentDefinition", "entity": face(-0.3)});
+    item["detail"]["extentTwo"] = json!({"_type": "ToEntityExtentDefinition", "entity": face(0.5)});
+    let dump = timeline_dump(vec![rectangle_sketch(0), item]);
+    let mut doc = Document::new(MockKernel::default());
+    let report = import(&mut doc, &dump);
+    assert_eq!(
+        report.items[1].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    let def: Value =
+        serde_json::from_str(&doc.query(r#"{"query": "feature", "uid": "F2"}"#).unwrap()).unwrap();
+    let extent = &def["def"]["extent"];
+    assert_eq!(extent["type"], "two_sides", "{def}");
+    let origin = |side: &str| extent[side]["object"]["plane"]["origin"][2].as_f64();
+    assert_eq!((origin("side1"), origin("side2")), (Some(-3.0), Some(5.0)));
+    assert_eq!(def["def"]["flip"], true);
+}
+
+/// A shell of the block whose removed face the dump does not name, only
+/// how many it removes (the `.ipt` import's): the face the next history
+/// state lost.
+#[test]
+fn a_shell_removes_the_faces_the_history_lost() {
+    let shell = json!({"index": 2, "name": "Shell1", "objectType": "ShellFeature",
+        "detail": {"inputEntities": [{"kind": "body", "objectType": "BRepBody",
+                                      "_f3d": {"producer": 1, "body_index": 0}}],
+                   "insideThickness": {"kind": "parameter", "value": 0.1},
+                   "isTangentChain": false, "shellType": "SharpOffsetShellType",
+                   "_ipt_removed_faces": 1}});
+    let items = vec![
+        rectangle_sketch(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+        shell,
+    ];
+    let mut reference = Document::new(TestKernel::default());
+    import_design(
+        &mut reference,
+        &timeline_dump(items[..2].to_vec()),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let block = shapes(&reference);
+    let top = block[0]
+        .faces
+        .iter()
+        .find(|f| f.to_string().starts_with("F2:end("))
+        .expect("the block's top")
+        .to_string();
+    add(
+        &mut reference,
+        json!({"type": "shell", "body": "F2.b0", "faces": [top], "inside": 1,
+               "tangent_chain": false}),
+    );
+    let mut geometry = TestGeometry {
+        states: vec![Vec::new(), block, shapes(&reference)],
+        items: HashMap::from([(1, 1), (2, 2)]),
+        ..TestGeometry::default()
+    };
+    let mut doc = Document::new(TestKernel::default());
+    let report = import_design(
+        &mut doc,
+        &timeline_dump(items.clone()),
+        &mut geometry,
+        &Options::default(),
+    );
+    let item = &report.items[2];
+    assert_eq!(item.outcome, Outcome::Parametric, "{}", report.text());
+    let def: Value = serde_json::from_str::<Value>(
+        &doc.query(&format!(
+            r#"{{"query": "feature", "uid": "{}"}}"#,
+            item.features[0]
+        ))
+        .unwrap(),
+    )
+    .unwrap()["def"]
+        .clone();
+    assert_eq!(def["faces"], json!([top]));
+
+    // Without a history the faces are not known.
+    let mut doc = Document::new(TestKernel::default());
+    let report = import_design(
+        &mut doc,
+        &timeline_dump(items),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    assert_ne!(report.items[2].outcome, Outcome::Parametric);
+}
+
+/// A combine whose history state is a cut while its detail says join: the
+/// history's guesses find the cut, unless the `.ipt` decoder read the
+/// operation from the record (`_ipt_inputs`), whose operation is not
+/// guessed (mitcad#60: a guessed cut of a coil's body took gigabytes).
+#[test]
+fn a_combine_operation_read_from_its_record_is_not_guessed() {
+    let mut reference = Document::new(TestKernel::default());
+    import_design(
+        &mut reference,
+        &timeline_dump(vec![
+            two_rectangles(0),
+            extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+        ]),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let s0 = shapes(&reference);
+    let small = "r{c13[c16,c14],c14[c13,c15],c15[c14,c16],c16[c15,c13]}";
+    add(
+        &mut reference,
+        json!({"type": "extrude", "profiles": [{"sketch": "F1", "region": small}],
+               "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}),
+    );
+    let s1 = shapes(&reference);
+    add(
+        &mut reference,
+        json!({"type": "combine", "target": "F2.b0", "tools": ["F3.b0"], "operation": "cut",
+               "keep_tools": true}),
+    );
+    let s2 = shapes(&reference);
+    let produced = |producer: i64| {
+        json!({"kind": "body", "objectType": "BRepBody",
+               "_f3d": {"producer": producer, "body_index": 0}})
+    };
+    let outcome = |laid_out: bool| {
+        let mut detail = json!({"targetBody": produced(1), "toolBodies": [produced(2)],
+                                "operation": "JoinFeatureOperation", "isKeepToolBodies": true});
+        if laid_out {
+            detail["_ipt_inputs"] = json!(true);
+        }
+        let items = vec![
+            two_rectangles(0),
+            extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+            extrude(2, 0, "NewBodyFeatureOperation", "d2"),
+            json!({"index": 3, "name": "Combine1", "objectType": "CombineFeature",
+                   "detail": detail}),
+        ];
+        let mut geometry = TestGeometry {
+            states: vec![s0.clone(), s1.clone(), s2.clone()],
+            items: HashMap::from([(1, 0), (2, 1), (3, 2)]),
+            ids: true,
+            ..TestGeometry::default()
+        };
+        let mut doc = Document::new(TestKernel::default());
+        let report = import_design(
+            &mut doc,
+            &timeline_dump(items),
+            &mut geometry,
+            &Options::default(),
+        );
+        (report.items[3].outcome, report.text())
+    };
+    let (guessed, text) = outcome(false);
+    assert_eq!(guessed, Outcome::Parametric, "{text}");
+    let (read, text) = outcome(true);
+    assert_ne!(read, Outcome::Parametric, "{text}");
+}

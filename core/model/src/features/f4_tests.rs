@@ -530,7 +530,7 @@ fn features_without_a_tool_cannot_be_patterned() {
         .doc
         .add_feature(
             &def(
-                json!({"type": "mirror", "objects": {"type": "features", "features": [fillet]},
+                json!({"type": "mirror", "objects": {"type": "features", "features": [b.sketch]},
                         "plane": {"type": "origin", "plane": "yz"}}),
             ),
             None,
@@ -539,9 +539,213 @@ fn features_without_a_tool_cannot_be_patterned() {
     assert!(
         error
             .to_string()
-            .contains("Fillet1 (F3) cannot be patterned"),
+            .contains("Sketch1 (F1) cannot be patterned"),
         "{error}"
     );
+    // A fillet can (mitcad#105); where its mirrored edge is on no body, the
+    // mirror fails.
+    let mirror = add(
+        &mut b.doc,
+        json!({"type": "mirror", "objects": {"type": "features", "features": [fillet]},
+               "plane": {"type": "origin", "plane": "yz"}}),
+    );
+    assert!(
+        matches!(status(&b.doc, mirror), FeatureStatus::Failed(m)
+            if m.contains("no copy of the edges of Fillet1 is on a body")),
+        "{:?}",
+        status(&b.doc, mirror)
+    );
+}
+
+#[test]
+fn patterns_and_mirrors_repeat_fillets_and_chamfers_on_the_copies() {
+    // The hole (Extrude2, F4) with a chamfer on its rim (Chamfer1, F5, d5)
+    // and a fillet between the chamfer and the wall (Fillet1, F6, d6).
+    let mut b = block();
+    let (cut, region) = hole(&mut b.doc);
+    let side: FaceName = format!("{cut}:side(c1)").parse().unwrap();
+    let rim = EdgeName::new(side.clone(), FaceName::end(cut, region.clone()));
+    let chamfer = add(
+        &mut b.doc,
+        json!({"type": "chamfer", "body": "F2.b0", "edges": [rim],
+               "size": {"type": "equal_distance", "distance": 1}}),
+    );
+    let bevel = FaceName::chamfer(chamfer, rim.clone());
+    let fillet = add(
+        &mut b.doc,
+        json!({"type": "fillet", "body": "F2.b0", "edges": [EdgeName::new(bevel, side)],
+               "radius": 0.5}),
+    );
+    let row = |objects: Value| {
+        json!({"type": "rectangular_pattern", "objects": {"type": "features", "features": objects},
+               "direction1": {"axis": "x", "quantity": 3, "distance": 20},
+               "distance_type": "spacing"})
+    };
+    let counts =
+        |doc: &Document<MockKernel>| (doc.kernel().count("chamfer"), doc.kernel().count("fillet"));
+    let (chamfers, fillets) = counts(&b.doc);
+    // Listed out of the timeline's order: the hole's copies come first.
+    let pattern = add(&mut b.doc, row(json!([fillet, chamfer, cut])));
+    assert_eq!(status(&b.doc, pattern), FeatureStatus::Ok);
+    // Each in one operation for both copies.
+    assert_eq!(counts(&b.doc), (chamfers + 1, fillets + 1));
+    let faces = |doc: &Document<MockKernel>| -> Vec<String> {
+        shape(doc, "F2.b0")
+            .faces
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    };
+    // The copies' faces: the chamfer's and the fillet's are the pattern's.
+    // `inst`: the instances around a face of the hole, outermost first.
+    let copies = |pattern: FeatureUid, inst: &[String]| {
+        let wrap = |face: String| {
+            inst.iter()
+                .rev()
+                .fold(face, |name, i| format!("{i}({name})"))
+        };
+        let side: FaceName = wrap("F4:side(c1)".to_owned()).parse().unwrap();
+        let end: FaceName = wrap(format!("F4:end({region})")).parse().unwrap();
+        let bevel = FaceName::chamfer(pattern, EdgeName::new(side.clone(), end));
+        let round = FaceName::fillet(pattern, EdgeName::new(bevel.clone(), side));
+        [bevel.to_string(), round.to_string()]
+    };
+    let names = faces(&b.doc);
+    for k in 1..=2 {
+        for face in copies(pattern, &[format!("F7:inst{k}")]) {
+            assert!(names.contains(&face), "{face}: {names:?}");
+        }
+    }
+    assert!(b.doc.warnings(pattern).is_empty());
+
+    // The chamfer's distance recomputes the pattern.
+    b.doc.set_parameter("d5", 2.0).unwrap();
+    assert!(b.doc.stats().evaluated.contains(&pattern));
+    b.doc.undo();
+
+    // Copies off the block (x = 70 and 90) reach no body, nor do their
+    // chamfers and fillets: a warning.
+    b.doc.set_parameter("d7", 5.0).unwrap();
+    assert_eq!(status(&b.doc, pattern), FeatureStatus::Ok);
+    let warnings = b.doc.warnings(pattern).join("; ");
+    assert!(
+        warnings
+            .contains("Chamfer1 is not repeated where the copies lack its edges (elements 3, 4)"),
+        "{warnings}"
+    );
+
+    // A chamfer that fails on all copies at once is tried copy by copy,
+    // then with the hole's copies one element after another; failing
+    // there too, it fails the pattern.
+    b.doc.kernel().fail.borrow_mut().insert("chamfer");
+    let (chamfers, _) = counts(&b.doc);
+    b.doc.set_parameter("d8", 21.0).unwrap();
+    assert!(
+        matches!(status(&b.doc, pattern), FeatureStatus::Failed(m)
+            if m.contains("Chamfer1 at element 1: chamfer failed")),
+        "{:?}",
+        status(&b.doc, pattern)
+    );
+    assert_eq!(counts(&b.doc).0, chamfers + 3);
+    b.doc.kernel().fail.borrow_mut().clear();
+    b.doc.undo();
+    b.doc.undo();
+
+    // A pattern of the pattern repeats them at every product.
+    let shifted = add(
+        &mut b.doc,
+        json!({"type": "rectangular_pattern", "objects": {"type": "features", "features": [pattern]},
+               "direction1": {"axis": "y", "quantity": 2, "distance": 5},
+               "distance_type": "spacing"}),
+    );
+    assert_eq!(status(&b.doc, shifted), FeatureStatus::Ok);
+    let names = faces(&b.doc);
+    let outer = "F8:inst1".to_owned();
+    for inst in [
+        vec![outer.clone()],
+        vec![outer.clone(), "F7:inst1".to_owned()],
+        vec![outer, "F7:inst2".to_owned()],
+    ] {
+        // The inner instance's name inside the outer one's.
+        for face in copies(shifted, &inst) {
+            assert!(names.contains(&face), "{face}: {names:?}");
+        }
+    }
+    b.doc.undo();
+
+    // A mirror of the hole and its chamfer.
+    let mirror = add(
+        &mut b.doc,
+        json!({"type": "mirror", "objects": {"type": "features", "features": [cut, chamfer]},
+               "plane": {"origin": [30, 0, 0], "normal": [1, 0, 0]}}),
+    );
+    assert_eq!(status(&b.doc, mirror), FeatureStatus::Ok);
+    let [bevel, _] = copies(mirror, &[format!("{mirror}:inst1")]);
+    assert!(faces(&b.doc).contains(&bevel), "{bevel}");
+    b.doc.undo();
+
+    // A chamfer patterned without the hole: nothing to repeat on by name,
+    // nor by place (no hole's copy there).
+    let alone = add(&mut b.doc, row(json!([chamfer])));
+    assert!(
+        matches!(status(&b.doc, alone), FeatureStatus::Failed(m)
+            if m.contains("no copy of the edges of Chamfer1 is on a body")),
+        "{:?}",
+        status(&b.doc, alone)
+    );
+}
+
+#[test]
+fn a_chamfer_patterned_alone_goes_on_the_edges_at_its_copies_places() {
+    // Three holes (Extrude2 and RectangularPattern1, 20 mm apart along x),
+    // a chamfer on the first one's rim, and a pattern of the chamfer
+    // alone: the other rims are found by their places.
+    let mut b = block();
+    let (cut, region) = hole(&mut b.doc);
+    let row = |objects: Value| {
+        json!({"type": "rectangular_pattern", "objects": {"type": "features", "features": objects},
+               "direction1": {"axis": "x", "quantity": 3, "distance": 20},
+               "distance_type": "spacing"})
+    };
+    let holes = add(&mut b.doc, row(json!([cut])));
+    let rim = |inst: Option<u32>| {
+        let wrap = |face: FaceName| match inst {
+            Some(k) => crate::transform::Instance {
+                feature: holes,
+                index: k,
+            }
+            .face(face),
+            None => face,
+        };
+        EdgeName::new(
+            wrap(format!("{cut}:side(c1)").parse().unwrap()),
+            wrap(FaceName::end(cut, region.clone())),
+        )
+    };
+    for (k, x) in [(None, 15.0), (Some(1), 35.0), (Some(2), 55.0)] {
+        b.doc
+            .kernel()
+            .middles
+            .borrow_mut()
+            .insert(rim(k).to_string(), [x, 10.0, 20.0]);
+    }
+    let chamfer = add(
+        &mut b.doc,
+        json!({"type": "chamfer", "body": "F2.b0", "edges": [rim(None)],
+               "size": {"type": "equal_distance", "distance": 1}}),
+    );
+    let pattern = add(&mut b.doc, row(json!([chamfer])));
+    assert_eq!(status(&b.doc, pattern), FeatureStatus::Ok);
+    assert!(
+        b.doc.warnings(pattern).is_empty(),
+        "{:?}",
+        b.doc.warnings(pattern)
+    );
+    let faces = shape(&b.doc, "F2.b0").faces;
+    for k in [1, 2] {
+        let bevel = FaceName::chamfer(pattern, rim(Some(k)));
+        assert!(faces.contains(&bevel), "{bevel}: {faces:?}");
+    }
 }
 
 #[test]

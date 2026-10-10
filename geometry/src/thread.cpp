@@ -116,6 +116,23 @@ TopoDS_Shape tube(const Thread& t, double inner, double outer, double from, doub
 // edge per turn. (A spine of one edge over many turns makes OCCT's cut
 // remove nothing or everything; separate sweeps per turn touch each other
 // at their ends, which the local boolean cannot take.)
+// The common of a shape and a tool, which a cancel request stops inside
+// (detail::build): the grooves' common is seconds of the thread's time.
+TopoDS_Shape common_of(const TopoDS_Shape& shape, const TopoDS_Shape& tool, const char* failure) {
+  BRepAlgoAPI_Common common;
+  NCollection_List<TopoDS_Shape> arguments;
+  arguments.Append(shape);
+  NCollection_List<TopoDS_Shape> tools;
+  tools.Append(tool);
+  common.SetArguments(arguments);
+  common.SetTools(tools);
+  detail::build(common);
+  if (!common.IsDone() || common.HasErrors()) {
+    throw std::runtime_error(failure);
+  }
+  return common.Shape();
+}
+
 TopoDS_Shape groove_sweep(const Thread& t, double theta, int turns, double low, double high) {
   const gp_Dir start_direction = t.direction(theta);
   const double centre = t.groove_centre(theta);
@@ -171,11 +188,8 @@ TopoDS_Shape grooves(const Thread& t, double low, double high, double from, doub
   const double target = t.right_handed ? from - 1.5 * t.pitch : to + 1.5 * t.pitch;
   const double first = t.angle + sign * kTwoPi * (target - t.groove_centre(t.angle)) / t.pitch;
   const int turns = static_cast<int>(std::ceil((to - from) / t.pitch)) + 3;
-  BRepAlgoAPI_Common common(groove_sweep(t, first, turns, low, high), tube(t, 0.0, outer, from, to));
-  if (!common.IsDone() || common.HasErrors()) {
-    throw std::runtime_error("the thread's grooves could not be cut to length");
-  }
-  return common.Shape();
+  return common_of(groove_sweep(t, first, turns, low, high), tube(t, 0.0, outer, from, to),
+                   "the thread's grooves could not be cut to length");
 }
 
 // Whether the body has material just past the end of the threaded part
@@ -286,11 +300,8 @@ ShapePtr thread_face(const Shape& body, const std::string& face_reference, const
   if (beyond > kSame) {
     TopoDS_Shape band = radial_band(body, face_reference, t.face_radius, t.crest());
     if (from > kSame || to < t.length - kSame) {
-      BRepAlgoAPI_Common part(band, tube(t, 0.0, std::max(t.face_radius, t.crest()) + margin, from, to));
-      if (!part.IsDone() || part.HasErrors()) {
-        throw std::runtime_error("the thread's teeth could not be cut to length");
-      }
-      band = part.Shape();
+      band = common_of(band, tube(t, 0.0, std::max(t.face_radius, t.crest()) + margin, from, to),
+                       "the thread's teeth could not be cut to length");
     }
     current = detail::local_boolean(*current, band, detail::LocalOperation::Fuse, name).shape;
   }

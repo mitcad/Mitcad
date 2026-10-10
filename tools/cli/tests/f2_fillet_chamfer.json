@@ -175,5 +175,20 @@
      "size": {"type": "equal_distance", "distance": 2}}], "corner": "blend"}},
   {"expect": {"feature": "Corner", "status": "ok", "body": "F39.b0", "volume": 47769.27, "tolerance": 1e-5, "faces": 10,
     "has_face": "F40:corner(V{F39:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F39:side(c1[c4,c2])|F39:side(c2[c1,c3])})"}},
-  {"expect": {"bodies": 13}}
+
+  {"comment": "fil_edge_overflow (mitcad#121): Sketch14 F41, Extrude14 F42 at (1300, 0), 60 x 40 x 20; its top front edge rounded 30 mm, wider than the 20 mm front: the ball touches the top and rolls on the bottom front edge, the front face vanishes. The centre lies 30 below the top, c = sqrt(800) behind the front; the section left under the arc is the integral of sqrt(900 - u^2) - 10 over [-c, 0], so the volume is 48000 - (20 c - (450 asin(c / 30) - 5 c)) 60."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F41", "corner": [1300, 0], "width": 60, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F41", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"expect": {"body": "F42.b0", "faces": 6,
+    "has_edge": "E{F42:side(c1[c4,c2])|F42:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})}"}},
+  {"cmd": "add_feature", "name": "Overflow", "def": {"type": "fillet", "body": "F42.b0",
+    "edges": ["E{F42:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F42:side(c1[c4,c2])}"], "radius": 30}},
+  {"expect": {"feature": "Overflow", "status": "ok", "body": "F42.b0", "volume": 38809.497397, "faces": 6,
+    "has_face": "F43:fillet(E{F42:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F42:side(c1[c4,c2])})",
+    "no_edge": "E{F42:side(c1[c4,c2])|F42:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})}",
+    "min": [1300, 0, 0], "max": [1360, 40, 20]}},
+  {"expect": {"bodies": 14}}
 ]

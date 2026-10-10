@@ -24,6 +24,17 @@ install(TARGETS mitcad mitcad-cli
   RUNTIME DESTINATION bin)
 # The automatic updates' installer step (mitcad#9); system DLLs only.
 install(TARGETS mitcad-updater RUNTIME DESTINATION bin)
+# The render worker (MITCAD_RENDER, docs/rendering.md) next to mitcad, where
+# the application looks for it, with its libraries: vcpkg's and Open Image
+# Denoise's through the runtime dependencies below, and Open Image
+# Denoise's CPU device, which its core loads at run time from its folder.
+set(mitcad_runtime_directories)
+if(TARGET mitcad-render)
+  install(TARGETS mitcad-render RUNTIME_DEPENDENCY_SET mitcad_runtime RUNTIME DESTINATION bin)
+  get_property(mitcad_oidn_dlls GLOBAL PROPERTY MITCAD_OIDN_DLLS)
+  install(FILES ${mitcad_oidn_dlls} DESTINATION bin)
+  list(APPEND mitcad_runtime_directories "${MITCAD_RENDER_DEPS}/install/oidn/bin")
+endif()
 
 # Qt's DLLs and plugins (platforms/qwindows.dll, styles, image formats, the
 # SVG icon engine) through windeployqt. The software OpenGL (opengl32sw.dll)
@@ -51,7 +62,7 @@ install(RUNTIME_DEPENDENCY_SET mitcad_runtime
   PRE_EXCLUDE_REGEXES [[api-ms-win-.*]] [[ext-ms-.*]]
                       [[opengl32\.dll]] [[libgallium_wgl\.dll]]
   POST_EXCLUDE_REGEXES [[.*[/\\][Ss]ystem32[/\\].*]] [[.*[/\\]Windows[/\\].*]]
-  DIRECTORIES "${mitcad_vcpkg_bin}" "$<TARGET_FILE_DIR:Qt6::Core>"
+  DIRECTORIES "${mitcad_vcpkg_bin}" "$<TARGET_FILE_DIR:Qt6::Core>" ${mitcad_runtime_directories}
   DESTINATION bin)
 
 # The Visual C++ runtime (vcruntime140*.dll, msvcp140*.dll, ...) next to the
@@ -67,9 +78,22 @@ install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION .)
 install(FILES "${PROJECT_SOURCE_DIR}/packaging/windows/THIRD-PARTY-NOTICES.txt" DESTINATION .)
 install(FILES "${PROJECT_SOURCE_DIR}/third_party/fonts/droid-sans/LICENSE.txt"
   DESTINATION licenses/droid-sans)
+# QtKeychain, linked statically (cmake/Keychain.cmake).
+install(FILES "${MITCAD_QTKEYCHAIN_LICENSE}" DESTINATION licenses/qtkeychain)
 install(DIRECTORY "${mitcad_vcpkg_prefix}/share/"
   DESTINATION licenses/vcpkg
   FILES_MATCHING PATTERN "copyright")
+# The render worker's libraries that do not come from vcpkg (build-cycles.ps1's
+# prefix): Cycles with the licences of the code it bundles, and Open Image
+# Denoise.
+if(TARGET mitcad-render)
+  set(mitcad_render_install "${MITCAD_RENDER_DEPS}/install")
+  install(FILES "${mitcad_render_install}/cycles/LICENSE" DESTINATION licenses/cycles)
+  install(DIRECTORY "${mitcad_render_install}/cycles/licenses/" DESTINATION licenses/cycles)
+  install(FILES "${mitcad_render_install}/oidn/share/doc/OpenImageDenoise/LICENSE.txt"
+                "${mitcad_render_install}/oidn/share/doc/OpenImageDenoise/third-party-programs.txt"
+          DESTINATION licenses/openimagedenoise)
+endif()
 
 # --- CPack ---------------------------------------------------------------
 

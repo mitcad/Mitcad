@@ -22,7 +22,8 @@ Entry points:
 - `mitcad-cli import-f3d part.f3d [--save part.mitcad] [--report
   report.json] [--design <doc>] [--dump dump.json] [--no-verify]
   [--no-fallback] [--no-compare] [--time-limit S] [--hang-limit S]
-  [--json]`; `--bodies-only` imports the bodies without the history;
+  [--threads N] [--json]`; `--bodies-only` imports the bodies without
+  the history;
 - the document command `{"cmd": "import_f3d", "path": …}` and
   `Document::import_f3d_timeline(path, json)`, implemented in
   `core/ffi/src/f3d_import.rs`;
@@ -73,9 +74,10 @@ Matching rules:
 - An extrusion, fillet or chamfer that gives its known state only
   approximately (beyond 1e-5) tries up to eight more definitions and
   keeps the closest: a set of regions next to the right one, or the
-  wrong reading of a two-distance chamfer or asymmetric fillet (which
-  face takes which distance is not decoded; the other reading is tried
-  right after each definition), can come within 1e-3, and the
+  wrong reading of a two-distance chamfer or asymmetric fillet (the
+  other reading is tried right after each definition; which face takes
+  which distance is decoded for two-distance chamfers only, *Named
+  inputs*), can come within 1e-3, and the
   difference grows in later items. A fillet or chamfer is replaced only
   by one that comes closer by a quarter at least: another edge set's
   rounding can come a little closer to a stored spline rounding by
@@ -97,7 +99,15 @@ Matching rules:
   (beyond 1e-5 from the state before it) is tried again, in half the
   time, after a base feature brings them to that state exactly (a warning
   names it); an item without a state of its own tries the replay's
-  current state that way too.
+  current state that way too. So does a fillet or chamfer with a state
+  of its own that failed on the replay's bodies for another reason than a
+  result not in the history (OCCT failed or crashed, an edge was not
+  found), even on bodies within 1e-5 of the state: every solid comes from
+  the stored state, whose edges are split otherwise (an `.ipt` part's
+  rounding that crashed OCCT on the replay's bodies built on the stored
+  ones). Before, only items without a state of their own were tried on
+  the stored state, so an `.ipt` part whose features came to know their
+  states lost such a rounding.
 - An item without a known state must equal one of the next states before
   the state of the next item that has one (that state is the later
   item's; so are the fallbacks tried for it): exactly (measures within
@@ -105,6 +115,71 @@ Matching rules:
   result, or the state it matches, has less volume on as many bodies than
   the bodies before it, nor a cut when it has more (a join can come
   within the tolerance of a later fillet's state by chance).
+- A combine's tools that the file says it consumed (`isKeepToolBodies`
+  false) stay in the ASM history as they were (the design no longer has
+  them; its components' body lists leave them out). Where every tool is
+  found by the item that made it and the combine's state holds each tool
+  unchanged (the same stored body as in the state before it, with the
+  replay's measures of the tool), those stored bodies are left out of the
+  history from that state on and out of the
+  stored design (`Oracle::retire`, mitcad#96): the combine is checked
+  with its tools consumed, and they do not come back with a later base
+  feature or the final comparison. Before, only a combine keeping its
+  tools gave such a state, and the import kept bodies the design does
+  not have.
+- The volume an item adds or removes must be the file's too (mitcad#121,
+  `history::Change`): its measures within the tolerance relative to the
+  bodies let a wrong rounding of a large body pass (a few per cent of a
+  small change are below 1e-5 of the body). Its own difference is the
+  smaller of its change's from the file's change (the item's state
+  minus the state the bodies before it stand for) and its result's
+  volume from the state's (the item may take away a difference the bodies
+  carried), relative to the larger change; above 1 % the result is not
+  taken (unless its faces settle it, below) and the next definition is
+  tried (the note of an item that falls
+  back says by how much its last one was off). A result that is the state
+  exactly (the same faces, measures within 1e-5) and differences below
+  1e-6 of the bodies' volume (the measures' noise) are not compared. The
+  report gives the difference of each item taken (`change_difference`).
+  The change is only as good as the measures: a through-all cut of two
+  holes through a cylinder's wall was 2.6 % off (106.6 mm³) because the
+  state's holes, bounded by cubics of 132 spans fitted to the
+  intersection, were integrated with too few fixed Gauss points; every
+  face is integrated span by span now (mitcad#139, mitcad#140,
+  `docs/architecture.md`).
+- Where the volumes do not settle an item (its own difference above
+  0.5 %, `history::UNSETTLED`), its faces do (mitcad#138,
+  `src/geometric.rs`): a wrong rounding (its surface 0.15 mm off along its
+  whole length), differences at the corners of a rounding only and the
+  file's spline approximations (every face within 1e-4 mm, a thin layer
+  over the body) all come to a few per cent of a small change. The faces
+  the result made or changed (`Kernel::new_faces`: the faces of the
+  changed bodies that the bodies before the item do not have, also as the
+  same surface, area and centre) are measured against the state's faces,
+  and the faces the file's operation made or changed (the state's against
+  the state before it) against the result, at up to 16 points spread over
+  each (`Kernel::boundary_distances`; 3000 a side at most, so a pattern's
+  thousands of faces get fewer each). A face is off when a point lies
+  farther than 0.01 mm (`geometric::TOLERANCE`). The result is taken when
+  every face off on either side is a corner patch, at most 2 % of that
+  side's new area (`geometric::CORNER`) and at most 0.3 mm off
+  (`geometric::CORNER_DISTANCE`: the corners of roundings that are the
+  file's lay 0.03–0.25 mm off, while corner faces 0.83 and 2.5 mm off were
+  other corners), and together they hold at most
+  5 % (`geometric::CORNERS`), and when the faces account for the volume
+  the change is off: at most twice their area times their distances
+  (1e-5 mm at least each; the points are a sample, and a part of a face
+  they miss shows in the volume: a cut whose end lay elsewhere on a face
+  of 145 000 mm² was 67 mm³ off with every point on the file's faces). A main face off rejects the result,
+  also within 1 %. A change more than 10 % off the file's is rejected
+  without asking the faces (`history::DIFFERENT`: the differences they let
+  pass came to 2–4 %). Where the faces cannot be measured (a state not
+  rebuilt) the 1 % rule stays. The largest faces are measured first, and
+  the measuring ends at a main face off (then the file's side is not
+  measured): a point off a face takes the kernel milliseconds on a large
+  body, and a rejected rounding of a design's large body took 10 s a
+  definition before. The report gives the faces' verdict
+  (`geometric_check`), the trace each side's new area and the faces off.
 - Lofts with end conditions or rails match within 5e-3, with a warning
   beyond 1e-3. Mitcad builds their weights, angles and free ends by its
   own rule (`commands.md`, `loft`), while the file's surfaces may be
@@ -127,15 +202,77 @@ just before the item (its `_f3d.result_no`) and finds them there
   and second; where several are, the one whose start and end touch the
   faces named third and fourth. Faces not in that state are looked for up
   to 24 states earlier (some recipes name a face as it was before later
-  operations renamed it). The edge's middle point, length and ends go into
-  its fingerprint; the import finds it by them and tries those edges first,
-  then the history's guesses (*What the history settles*).
+  operations renamed it). The edge's middle point, length, ends and its
+  own direction (`_f3d.direction`) go into its fingerprint; the import
+  finds it by them and tries those edges first, then the history's
+  guesses (*What the history settles*). What the learning dump settled
+  (mitcad#96, *Learning the undecoded inputs*):
+  - an item's tail ends at its last reference to a health object (some
+    fillets refer to one near their start too, and lost their name,
+    state and edges);
+  - a recipe whose first entity has a negative tag (`"-1029"`) names the
+    edge itself first, then its faces; the blob gives edges such names
+    too, which pick among the edges between the faces where they are one,
+    else the faces after it decide;
+  - a recipe may have a second entity list after the first (read over);
+  - a set input says what its group selects (the `u32` after `ref
+    2DF7DA30 | u32 0`): 8 edges, 16 faces (every edge between the face
+    and another is rounded), 9 a face the next group's edges repeat
+    (left out); a group without parameter holders belongs to the next
+    group that has some;
+  - n inputs of one item with the same names, where exactly n edges fit
+    them (n edges between the same two faces, without end faces to tell
+    them apart), take one edge each;
+  - the import finds a closed edge by its circle and length (the file
+    gives its middle half way along its parameter, opposite its seam,
+    which the replay puts elsewhere), an open one whose middle is up to
+    0.05 mm off by its length (the parameter middle of a B-spline or
+    ellipse edge), and an edge the replay splits in two by the two pieces
+    on its segment or circle whose lengths add up to its
+    (`refs::dressup_edge_match`);
+  - replay matches with midpoint-plus-length scores tied within
+    `1e-9` mm in one body are refused (mitcad#106); coincident copies in
+    different bodies keep the existing first-body rule. Repeated aliases
+    of the same body and edge name count once. Matcher failures distinguish
+    `decoder_unresolved` (no decoded edge geometry),
+    `missing_fingerprint` (no external fingerprint geometry),
+    `missing_in_replay`, and `ambiguous_in_replay`. Decoder input failure
+    notes retain the edge set, input position and decoder's `found` reason.
+    Recipe tails remain
+    unused for replay matching until their semantics are proved;
+  - a two-distance chamfer's first distance lies on the face left of the
+    edge's own direction in the file (the face whose coedge runs along
+    it, seen against the face's normal): the import sets `flip` so that
+    the replay's first distance lands there (per tangent chain, by the
+    most of its edges; sets of equal distances keep theirs), and the
+    other reading stays a guess after it;
+  - the edges found by their names are also tried one tangent chain at a
+    time (a feature per chain), right after all at once.
 - **Bodies** of moves, splits, body patterns and mirrors: by their tags;
   the middle points of some of their edges let the import find them among
   its bodies (`refs::resolve_body`), else as the only body whose faces
   pass through those points (a replayed sweep or pipe has the stored
   surfaces but its seams and edges elsewhere). A mirror's joining is not
   decoded: separate copies are tried first, then joined ones.
+- **Bodies by the item that made them** (mitcad#96): every body input
+  also refers to the body's record, which names the timeline item that
+  made the body (`_f3d.producer`) and, by the record's position among
+  that item's own records, which of its bodies (`_f3d.body_index`;
+  `core/f3d/src/design/build/producers.rs`). The import keeps what each
+  item made (`producers.rs`): the bodies of the features made for it (a
+  split's pieces from the bodies it split, which keep their ids). A body
+  input is found there first, then by its names (for an item with several
+  bodies the names choose among them, else the index). Where base
+  features took the item's state (a fallback), they bring every body that
+  differs from the state, and a new body can take the id of one it
+  replaces: there the names come first, then the base features' new
+  bodies in the item's component. This also names bodies whose recipe
+  does not decode (pipes' bodies, bodies later features changed: a
+  split's bodies, combine tools) and the copies of a pattern, which the
+  names alone cannot tell apart. Bodies made by items off the timeline
+  (base features of other designs) are found by their names only.
+- **Participants** of joins and cuts of extrusions: their body inputs,
+  by the item that made each body (mitcad#96).
 - **Thread faces**: the face named first (a `bounded_face` recipe names
   the faces around it next, which pick one of several); its cylinder
   (origin, axis as the file has it, radius) and a point inside it go into
@@ -322,8 +459,23 @@ candidates against the next state:
   a cut; on the side of the state's new body). These are tried before the
   last sketch before the item. A join that touches no body is also tried
   as a new body when the state has one more.
-- **Profiles.** The decoder knows how many profiles an extrude used, not
-  which. In order:
+- **Profiles.** The decoder reads the loops of the profiles an extrusion
+  or revolution selected (`_f3d_profile_loops`, mitcad#96: the file's
+  curve ids, which piece of each curve, outer loop or hole, the pieces a
+  profile is split into). `src/profiles.rs` maps them onto Mitcad's
+  regions: a listed profile is a face (its outer loops less its holes),
+  and a region is selected when its inside point lies inside one by the
+  even-odd rule against the listed curve pieces, with the file's curve
+  geometry (a curve cut where the other curves of its loop cross it, the
+  pieces numbered along its parameter); where a profile lists curves
+  without such geometry (ellipses, splines) or selects nothing, its outer
+  loops select the regions whose outer loops share most of their curves.
+  Over both private corpora the history accepted the decoded regions for
+  1509 of the 1532 settled extrusions that have the loops (most others
+  are sets it cannot tell apart from them) and for all 97 settled
+  revolutions. Those regions are tried first, before any ranking
+  (`Candidate::first`), with the decoded extent; without a history they
+  are the ones used. Then, as before the loops were read:
   1. regions whose material the next states change, found by probing a
      point inside each region (in its outline, not its holes:
      `Region::holes`) halfway along the extent on both sides
@@ -343,16 +495,45 @@ candidates against the next state:
   out before the likeliest are chosen), and one limited to participants
   that include every body the same definition without them changes (same
   result).
-- **Participants** of a join, cut or intersection: all bodies first, then
-  the bodies of the sketch's component that the state changed (a cut in
-  the file may leave bodies in its way alone).
+- **Participants** of a join, cut or intersection: the decoded ones first
+  when every one is found (all bodies when they are all the solids of the
+  sketch's component), then all bodies; without decoded ones all bodies
+  first, then the bodies of the sketch's component that the state
+  changed (a cut in the file may leave bodies in its way alone).
 - **Direction:** the decoded direction vector against the sketch's normal
   (one side through all: the stored vector points away from the
-  extrusion), else the decoder's ±1, then the other way; **symmetric
-  extents** (half the length each way first, then the whole length);
-  **up to an object** (planar faces parallel to the sketch, nearest
-  first), **revolve axes** (sketch lines and origin axes, ranked by
-  Pappus' volume).
+  extrusion; a vector oblique to the normal, along the normal: all 36
+  such settled extrusions went that way, mitcad#104), else the decoder's
+  ±1, then the other way. What the file does not decide (mitcad#104):
+  a one-sided cut through all whose flag byte after the extent codes is
+  0 goes against the stored vector in 15 of the 22 the history settled
+  over both private corpora and along it in 7, and no byte of its record
+  or its inputs, nor the side of the sketch plane where the bodies' volume
+  lies (along it in 4, against it in 9 of those with the volume on the
+  vector's side), nor the material just off the profile tells which;
+  some distance extrusions (13 of about 1400 one-sided ones, most with a
+  join or cut whose other side gives a state too) and 4 two-sided ones
+  with equal or nearly equal sides likewise. The history settles those
+  (the other way is the next definition); without a history the first
+  is taken; **symmetric
+  extents** (the decoded length first, then the other; without one, half
+  the length each way first, then the whole length); **up to an object**
+  (the decoded object first, towards the side of the sketch its point lies
+  on, else by the stream's flag; then, and without a decoded object,
+  planar faces parallel to the sketch, nearest first; a two-sided
+  extrusion has an input slot for each side up to an object, decoded in
+  order onto the sides the parameters `Side1Offset` and `Side2Offset`
+  make extents up to an entity, each side up to its face or, where the
+  replay lacks the face as it is, its plane, side one towards the side of
+  the sketch its object lies on: mitcad#104), **revolve axes**
+  (sketch lines and origin axes, ranked by Pappus' volume). A
+  revolution's operation (join, cut, new body: the first `u32` after its
+  root part, an extrusion's codes) and its axis
+  when it is a sketch line (the axis input's curve ids, as a sweep's
+  path names its curves; a line of another sketch too) are decoded
+  (mitcad#96): the decoded axis comes first, the guessed ones after it;
+  a revolution whose profiles, axis and extent are all decoded is tried
+  first. Axes that are faces stay guesses.
 - **Fillet and chamfer edges** the decoder did not find by their names
   (and after those it found, should they not give the state). Candidates
   are the replay's edges whose midpoints are off the next state's faces
@@ -370,10 +551,16 @@ candidates against the next state:
   where that does not tell) lie on the state's faces (within 5 % of the
   size and 1e-3 mm), and the edge's
   midpoint is as far from the state as that size leaves at its corner
-  angle (within 10 %). Tried in order: all those edges at once; one
-  tangent chain after another (sets and edges in order); then looser
-  guesses (the edges at that distance, all, the largest group at one
-  distance). The next four states are looked at; for an item whose state
+  angle (within 10 %). Edges between faces that meet tangentially are
+  no dressup's. Tried in order: all those edges at once; one tangent
+  chain after another (sets and edges in order); those edges with the
+  gone edges that continue them tangentially (a rounding that ends where
+  its edge runs on tangentially takes the next edge's middle away too,
+  and Mitcad's fillet follows the chain); the edges whose dressup the
+  state has whatever their distance, with their continuations; then
+  looser guesses (the edges at that distance, all, the largest group at
+  one distance). A definition refused because it holds only a part of a
+  tangent chain does not rule out the definitions with more edges. The next four states are looked at; for an item whose state
   is known, one at a time (`Guesses`): the edges found by their names
   first, then its own state's guesses, the next state's only when those
   gave no state, in the same order as all at once (finding the edges a
@@ -388,10 +575,24 @@ candidates against the next state:
     such dressups.
   - A result BRepCheck rejects is repaired by shape healing when the
     repair keeps the volume (OCCT turns some roundings on stored bodies
-    inside out).
-- **Combine** target and tools: the bodies the next state changed (a body
-  with a stored body's measures counts as unchanged even where its faces
-  are split otherwise).
+    inside out). A result it rejects only on faces of the stored body that
+    were invalid already, away from the rounding, is taken as it is
+    (mitcad#107).
+  - Where OCCT's rounding fails at the size asked, it is tried again on
+    the body with the pieces of its edges merged (stored circles in two
+    arcs), then with tighter tolerances of OCCT's fillet (knife edges),
+    before the retries below (mitcad#107).
+  - A rounding or bevel of a whole circle that runs over a neighbouring
+    face (the rim of a hole near a side), which OCCT stops at, is built
+    as a ring about the circle's axis when both faces are planes,
+    cylinders or cones on it ([fillet](../model/src/api/commands.md#fillet)).
+- **Combine** target and tools, when the decoded ones are not found: the
+  bodies the next state changed (a body with a stored body's measures
+  counts as unchanged even where its faces are split otherwise), the
+  decoded operation first.
+- **Split bodies** the tool does not divide: the file's split leaves such
+  a selected body as it is, Mitcad's fails, so each body alone is tried
+  after the decoded set (mitcad#96).
 - **Replace face's replaced faces** (dumps do not record them): faces of a
   body the next state changed none of whose interior points
   (`Kernel::face_points`, up to nine) lie on the state's faces (1e-3 mm);
@@ -399,6 +600,11 @@ candidates against the next state:
   tangent chain, and the result is matched within 0.5 % (Mitcad's own
   conventions for curved faces and targets). The target comes from the
   dump.
+- **Holes** whose item's through-all flag is set while the file keeps a
+  depth for them (`_f3d_through_all`: a byte after the root part, the
+  second in class version 4 and the sixth in version 7; seen in two
+  designs only, so a lead, mitcad#96): through all first, as a guess the
+  history checks, then the depth.
 - **Holes** without decoded inputs: each piece of material the state
   removes is a hole along its cylinder's axis, starting at the plane of a
   planar face across the axis at either end of the piece (where the axis
@@ -415,7 +621,9 @@ candidates against the next state:
   wrong result. `MITCAD_NO_REMOVED_REGIONS=1` cuts the whole bodies (for
   comparisons).
 - **Patterns** without decoded inputs: copies of one of the last six
-  extrusions about the decoded axis (else the origin axes), as many as the
+  extrusions about the decoded axis (else the line the axis' direction
+  input stores, `_f3d_axis`, mitcad#96, then the origin axes; else the
+  origin axes), as many as the
   decoded quantities (else as the state's volume change asks for); the
   extrusion and quantity whose copies come closest to the change first;
   computed `adjust`, then, for an extrusion up to an object, `identical`
@@ -444,6 +652,24 @@ candidates against the next state:
   it give their states), and the pattern's candidates of it are tried
   again (at most eight such edits per item). The extrusion's note says
   which pattern chose its profiles.
+- **Pattern and mirror objects** decoded as features with fillets and
+  chamfers among them (mitcad#105): without them, as before (the copies
+  of the other features carry them where those made the edges they
+  round), then with them, where every one of them came in parametric (all
+  the features made for each, one per tangent chain where the import split
+  it), so that the pattern repeats them on its copies (`commands.md`,
+  *Fillets and chamfers among the features*; the report's note says so).
+  Where the history checks the item, the definitions with them come
+  last, after the history's guesses too: repeating roundings on tens of
+  copies of a large body takes tens of seconds, and most such items'
+  states do not need it (a design at the time limit lost items to them
+  otherwise); without a history, with them first. A circular
+  pattern whose axis entity (a face, an edge) is not found in the replay
+  turns about the line its direction input stores (a construction
+  axis' stores its direction times its length); a construction axis that
+  was not imported is that line too. A mirror's `combine` is decoded
+  (none of the bodies it makes is new: after its first two references
+  `u32 0 | u32 n | n` body records), the other way after it as a guess.
 - **Mirrors** without decoded inputs: sets of up to four preceding
   features whose changes in the history add up to the state's change.
   Bodies the state has twins of become new bodies; a body is joined with
@@ -461,6 +687,12 @@ candidates against the next state:
 
 ### Fallback
 
+- A modelling item the file keeps no result for (its result number is -1
+  and one of the three state bytes before its health reference is set:
+  suppressed or failed in the file, mitcad#96) is skipped at once: it
+  changed nothing in the file, and no state could check a definition of
+  it (its edges and faces are not in any state either). Before, every
+  definition and guess was tried and the history then skipped it.
 - An item with a known state that cannot be translated, fails, or does not
   give its state takes that state at once: one base feature (`base` with
   `replaces`; the changed bodies keep their ids, so later features
@@ -683,12 +915,218 @@ again before more is mapped.
   instead of ending the process; the import takes it as low memory.
   `MITCAD_TEST_OCCT_OUT_OF_MEMORY=<operation>` makes one fail for the
   tests.
+- OCCT's allocator throws `Standard_OutOfMemory` instead of returning
+  null, and counts its failures, per process and per thread with the
+  jobs of OCCT's thread pool it ran (patches 0030 and 0031 of the port,
+  mitcad#132):
+  OCCT's collections wrote to the null block, and a large design under
+  the corpus runner's 4 GB limit crashed in the checker
+  (`CSLib_Class2d`) while one of the file's bodies was healed. The
+  checker and the healing catch OCCT's failures inside and go on (the
+  checker then calls a sub-shape invalid), so a moved count is what
+  tells: a kernel operation and the checks whose thread's count moved
+  (`geometry::failed_allocations_in_thread`) fail "out of memory", a
+  body of the file whose build moved it does not build ("building a
+  body of the file: out of memory", the import is low on memory), and
+  the memory guard takes a process count that moved since its last
+  measure (`geometry::failed_allocations`) as low memory ("an
+  allocation in the geometry kernel failed"), also for failures on
+  threads of no import. An operation on another thread at the same time
+  is not failed by them.
+  `MITCAD_TEST_OCCT_ALLOCATION_FAILS=<operation>` (or `heal`) makes one
+  fail and be caught inside for the tests.
 
 The history's bodies are converted keeping only the distinct ones: each
 state holds the bodies that differ from the state after it, not a copy of
 every body (a design of 256 items took 5.8 GB before the first item that
 way, and the memory the allocator kept afterwards left 40 MB of a 12 GB
 address-space limit once OCCT's threads started).
+
+### Definitions evaluated in parallel
+
+Most of an import's time goes to definitions the history rejects: each
+candidate (*What the history settles*) is a full geometry evaluation. With
+`Options::threads` above one (`--threads`, the `threads` option of
+`import_f3d`; `mitcad-cli` and the application use the logical cores, at
+most 8; `test_f3d_import` one unless `--threads`), the definitions ranked
+after the one being evaluated are evaluated ahead by workers (`ahead.rs`,
+mitcad#95), and the import is the same as with one thread, only faster:
+
+- **Rank order.** The import still goes through the candidates one by
+  one and decides as before; it evaluates candidate *k* on its document
+  while workers evaluate *k+1*, *k+2*, … (up to `threads` − 1 at once, as
+  far as the item's attempts and a loose match's closer tries reach), from
+  the second candidate of a list on: the first is usually the one taken,
+  and workers beside it would only take processors and memory from it.
+  When
+  it comes to a candidate a worker has evaluated (or waits for it), it
+  takes the worker's result instead of evaluating it again. So candidate
+  *k* is taken only when every one ranked before it was rejected,
+  whichever finished first, and everything that depends on earlier
+  outcomes (participants that give what the definition without them gave,
+  edges of a fillet that failed, `Turns`) is decided as before. Once the
+  import leaves the list (one was taken, or none is left) the workers
+  still evaluating are cut short through their monitors, as on a stop; the
+  import does not wait for them.
+- **Copies of the document.** A worker evaluates on its own copy of the
+  document as it is before the item (`Document::fork`: the definition, the
+  cached results and the last recompute, shared, with a kernel of its own,
+  `Kernel::fork`; no undo history). A feature added there gets the uid it
+  would get in the document, and its result the same version. A rejected
+  candidate leaves the document as it is (it was undone anyway); its
+  results go into the document's cache, as if it had been evaluated there.
+  The candidate taken is added to the document again and finds the
+  worker's results in the cache (`Document::adopt_results`): the same
+  shapes, topological names, uids and notes.
+- **Shared shapes.** The workers read the same bodies (the results before
+  the item) at once. The geometry's operations never modify their inputs
+  (T0e): those whose OCCT algorithms write into their inputs' sub-shapes
+  (booleans, fillets, chamfers, shells, healing) work on copies
+  (`InputCopy`), a `Shape` keeps what it measured of itself behind a lock,
+  and OCCT's handles count references atomically. The cancellation scope
+  of the geometry is per thread, and each worker installs the kernel's
+  crash handlers and ticks the import's progress (`mitcad-ffi`).
+- **Time.** A worker's definition is given the first round's share of the
+  item's time (`SHARE`) from when it starts, and the item's deadline. One
+  that gave way at its share is evaluated again on the document when the
+  import would give it the rest of the item's time (the last one);
+  otherwise its result stands. Results that depend on the time (an item
+  out of time, an import past its time limit) can differ, as between two
+  runs with one thread: with workers more definitions fit into the time.
+- **Memory.** Each worker holds its definition's memory and a stack of
+  64 MiB (the import's own thread has 256 MiB). No worker starts while the
+  process uses half of its tightest memory limit or more (*Memory*;
+  `Progress::set_memory_share`), and at 60 % the definitions being
+  evaluated ahead are cut short and evaluated on the import's thread
+  instead when the import comes to them; the import's own definition keeps
+  the memory, as with one thread. A worker's definition that runs out of
+  memory is evaluated again on the import's thread too.
+- **Stop and hangs.** While the import waits for a worker it looks for a
+  stop, the watchdog's give-up and low memory every 20 ms: a worker that
+  does not return does not keep the stop from stopping. The watchdog
+  counts the workers' progress as the import's; a worker the import waits
+  for that hangs leaves no progress once the others are done, so the item
+  is given up as before (`Options::hung_items`). Workers whose result is
+  no longer wanted may still be in a kernel call when the import ends:
+  `running_workers()` counts them, and `mitcad-ffi`'s
+  `abandoned_imports()` includes them, so that the process ends with
+  `std::_Exit` as after a hang.
+- **What stays on the import's thread.** The second round of definitions
+  that gave way, the approximate definition taken after a loose match,
+  the next history state's fillet and chamfer edge guesses (`Guesses`,
+  found between the definitions), the edits of a pattern's extrusions
+  (*Profiles a pattern or mirror needs*), and the definitions tried on
+  bodies the history holds already (*Bodies the history already holds*).
+
+**Where the time goes.** Workers help only where an item has several
+definitions queued and the first ones are rejected; the rest of an import
+runs on its own thread as before. On a 199-item design of the private
+corpus (time limit 300 s) 46 % of the time went to evaluating definitions
+on one thread, 8 % to translating items and the rest to finding fillet
+and chamfer edges between the definitions, the edits of a pattern's
+extrusions, sketches, the history's bodies and the final comparison;
+on a 76-item design 52 % went to definitions and 36 % to finding fillet
+edges. Most items take their first definition (sketches, construction
+geometry, fillets of edges found by their names, extrusions whose first
+profile set is right), and a fillet's or chamfer's edge guesses come one
+history state at a time, so its list has one or two definitions when the
+workers could start. So an import with eight threads keeps about 1.5 to
+2.5 cores busy where a single-threaded one keeps 1 to 2 (the geometry
+kernel's own parallel booleans), and designs whose time goes to rejected
+extrusions, combines and patterns gain most (up to about twice as fast).
+A worker's definition also slows the import's own one where the
+processors are all busy: on a machine loaded already, an import with
+eight threads can take longer than one with one. *Work beside the
+replay* below runs more of an import in parallel.
+
+### Work beside the replay
+
+The timeline's items are replayed one after another; with `threads`
+above one the work that does not depend on the replay runs beside it
+(mitcad#103), and the import is the same as with one thread:
+
+- **Reading the file.** The design streams of every design of the file
+  are decoded first (`mitcad_f3d::design::decode_streams`); only the
+  chosen design's named inputs are then looked up in the bodies' history
+  (`resolve_inputs`), its items on several threads (each item reads the
+  history's blobs only, read once for all). That runs at the same time
+  as the conversion of the bodies of every history state to the neutral
+  model (`StoredFile::new`), whose states are converted on several
+  threads and taken in order as before (`mitcad_import::in_order`), so
+  that the same bodies are kept once each. The two share the threads
+  half and half. On a large design of the private corpus reading took
+  about 140 s on one thread (80 s finding the inputs, 60 s converting);
+  with eight threads about 20 s. An item's inputs are looked up in one
+  named history state at a time (the state before the item, then up to
+  24 earlier ones per blob, until each input is found): naming all of
+  them at once on every thread ran the largest design of the backup
+  corpus out of a 4 GB limit before the import began (an allocation of
+  Rust's, which ends the process, mitcad#132).
+- **The history's bodies built ahead.** When the replay asks for a
+  history state, the bodies of the next four states that it has not built
+  yet are built (healed) and measured on other threads
+  (`F3dGeometry::build_ahead`, `mitcad-ffi`): the replay finds them
+  built when it comes to them (the same bodies; a shape keeps what it
+  measured of itself). A try that asks for a body being built ahead waits
+  for it and ticks the watchdog while the build makes progress, so a
+  build that does not return still looks hung; the threads count in
+  `abandoned_imports()`. Bodies built ahead that no try took are dropped
+  with the states behind the replay when memory gets tight. On the large
+  design above, building two bodies of 15 000 and 23 000 faces took the
+  first item 142 s on one thread.
+- **One budget.** The workers that evaluate definitions ahead and the
+  threads that build bodies ahead take their threads from the same
+  `Options::threads` (`Progress::helper`: the import's own thread is one of
+  them), and none starts while the process uses half of its tightest
+  memory limit or is low on memory.
+- **Planar faces kept per body.** Every sketch looks for its plane among
+  the planar faces of all bodies (`refs::planar_faces`); on bodies of
+  thousands of faces that took seconds per sketch (12 s on a body of
+  23 000 faces, where most of a 256-item design's time went to its 73
+  sketches). An import keeps the planar faces it found by the body's
+  version (`refs::KeptPlanes`), which names one shape, so a sketch finds
+  them again until the body changes. This is quicker with one thread too.
+
+Coverage runs before and after these changes, at the same time with six
+threads (time limit 300 s): `MITCAD_F3D_CORPUS` 575 s → 520 s in all
+(1.11×, the slowest designs 1.08–1.39×), the backup corpus 4759 s →
+3287 s (1.45×; the 256-item design above 1005 s → 341 s, others up to
+3×). The reports with one and with eight threads are the same except
+where a time limit decides (`MITCAD_F3D_CORPUS` 47 of 48 identical,
+the backup corpus 318 of 325, each difference first at an item whose
+time ran out or in the time-limited final comparison).
+
+**Why the items are not replayed in parallel.** A profile of the five
+slowest designs of each corpus (four and eight threads, time limit
+300 s, before the changes above) kept 1.0 to 3.1 cores busy (mostly 1.4
+to 2.3). Evaluating definitions took most of the time of the corpus
+designs (the workers' share), finding fillet and chamfer edges 10–30 %
+of the fillet-heavy ones, sketches up to 70 % of one large design
+(the planar faces above), building the history's bodies up to 240 s of
+another, and reading the file up to 140 s. Replaying independent items
+at the same time would need items that neither read nor change what an
+earlier one changes. Most designs are one component (in the slowest
+ones 62–100 % of the items with a state change the same component), and
+most of a part's items change the same body. Counting only the bodies
+each item's state changes (an item reads at least those; a join or cut
+with all bodies as participants reads more), the longest chain of
+dependent items holds 42–66 % of the items' time on the slowest corpus
+designs (a bound of 1.5–2.4× at best); with the items without a state of
+their own (sketches, construction geometry, which find their planes on
+the bodies) as dependencies of what follows, the chain is 82–100 % of
+the time. A speculative item would also have to
+run on a copy of the document and the importer's state (report, history
+cursor, alternatives, sketches) and be replayed into the document as
+the definitions evaluated ahead are, and the features' uids and
+topological names of later items depend on every earlier item's. So the
+replay stays sequential, and the work beside it runs ahead instead.
+
+Not done: finding the fillet and chamfer edges of several history
+states at once (10–30 % of the time of fillet-heavy designs). The search
+asks the stored bodies' boundary index (`Kernel::boundary_distances`),
+which keeps the projections it set up between calls; asked in another
+order on other threads, the same answers are not assured, so it stays on
+the import's thread.
 
 ### Components
 
@@ -767,11 +1205,22 @@ uses of other components comes along:
   where that face's occurrence places it in the sketch's component at the
   extrusion's point of the timeline.
 
-Both need each component placed once (one occurrence on the way from the
-root); else the feature falls back. Features that work on bodies of two
-components at once (a combine of bodies of two components) fall back too:
-the base feature takes the item's history state in each component, and
-later items continue parametrically.
+- a combine whose tools are bodies of another component than its target
+  (a part cut by another part) goes into the target's component and
+  takes those tools by their occurrence links (`tool_links`,
+  `commands.md`, *combine*; mitcad#104): the model reads each tool in its
+  component and moves it by the placements at the combine's point of the
+  timeline. Such a combine that consumes its tools lists body removals
+  in their components instead of body records (`selections.rs`); the
+  consumed tools leave their components. Before, these combines fell
+  back (5 items of `MITCAD_F3D_CORPUS` and 17 of the backup corpus, all
+  but one cuts keeping their tools); all now give their states.
+
+These need each component placed once (one occurrence on the way from the
+root); else the feature falls back. Other features that work on bodies of
+two components at once fall back too: the base feature takes the item's
+history state in each component, and later items continue
+parametrically.
 
 **Occurrence placements.** The transform the file stores for an
 occurrence is where the item that made it put it; joints, captured
@@ -1033,12 +1482,14 @@ memory cannot be caught: a fillet with a strip 1e-4 wide did, hence the
   back or take the history's guesses.
 - Extrusions: the decoder gives the extent codes (one side, two sides,
   symmetric; per side a distance, an object or through all), the
-  distances, tapers and start offset, and the direction as a vector. Not
+  distances, tapers and start offset, the direction as a vector, the
+  object of an extent up to an object (a face by its names, or a plane;
+  mitcad#96) and whether a symmetric distance is the whole length. Not
   decoded: which profiles (only how many, see *What the history settles*),
-  the object of an extent up to an object (planar faces parallel to the
-  sketch are tried; a two-sided extent with an object side falls back),
-  whether a symmetric distance is the whole length, thin walls and
-  participant bodies.
+  a two-sided extent's object side (it falls back), which way a one-sided
+  extent through all goes when the stream's flag is not set (the vector is
+  the sketch's normal; the history settles it), thin walls and participant
+  bodies.
 - Features that use bodies of two components at once fall back, and so
   do features across components whose components are placed more than
   once (*Across components*).
@@ -1114,7 +1565,7 @@ Real designs are kept outside the repository (`MITCAD_F3D_CORPUS`, default
 
 ```bash
 test_f3d_import --corpus [dir] [--every N] [--max-items N] \
-    [--time-limit S] [--hang-limit S] [--reports DIR] \
+    [--time-limit S] [--hang-limit S] [--reports DIR] [--threads N] \
     [--jobs N] [--memory SIZE] [--file-timeout S]       # build/rel/core
 mitcad-cli import-f3d part.f3d --time-limit 300 --report report.json
 ```
@@ -1126,6 +1577,10 @@ mitcad-cli import-f3d part.f3d --time-limit 300 --report report.json
   (skipped) without a corpus. Files are named by position (f01, …), as in
   `core/f3d/CORPUS_REPORT.md`.
 - `--reports DIR` keeps each JSON report; `--hang-limit` defaults to 600 s.
+- `--threads N` imports with N threads (*Definitions evaluated in
+  parallel*, *Work beside the replay*; default 1). Keep `--jobs` ×
+  `--threads` within the cores; the reports are those of `--threads 1`
+  except where the time decides.
 - `--models [dir]` replays the reference models' external dumps
   (`MITCAD_F3D_MODELS`, default `~/f3d-models`) of lofts and sweeps,
   compares with the stored volumes, and imports each model from its own
@@ -1185,8 +1640,11 @@ Known failure classes:
   so the items after it do not depend on its parameters;
 - fillets and chamfers OCCT does not build (`fillet failed` / `chamfer
   failed`), mostly on the right edges: the stored rounding runs over a
-  neighbouring face, which OCCT does not do, or the body is a stored one
-  with tolerances up to 0.05 mm;
+  neighbouring face, which OCCT does only where it runs over that face
+  along the whole edge (the port's edge overflow, mitcad#121) and around
+  whole circles (built as rings), or the body is a stored one with tolerances
+  up to 0.05 mm (the classes and counts: *Fillets and chamfers whose
+  by-name definition fails in the kernel*);
 - items after the time limit (very large designs);
 - patterns whose input is not one of the last six extrusions, or copies
   features other than extrusions (with their fillets, for example);
@@ -1196,6 +1654,380 @@ Known failure classes:
 - items without a translation (*Items without a translation*), items of
   unknown classes (`?…`), construction axes, and the untranslated types
   under *Limits*, which are skipped or fall back.
+
+### Learning the undecoded inputs
+
+Every item whose definition the history settles (*What the history
+settles*) is a labelled example of what the stream decoder does not read
+yet: the item's raw record and the answer the history accepted
+(mitcad#96). The learning dump collects them, and a tester checks rules
+from the record's bytes to the answer on them, without geometry.
+
+**Dump.** `mitcad-cli import-f3d part.f3d --learn DIR`, the `learn` field
+of the `import_f3d` command, or `MITCAD_IMPORT_LEARN=DIR` (read by
+`mitcad-ffi`, so `test_f3d_import --corpus` writes it for every design):
+
+```bash
+MITCAD_IMPORT_LEARN=$HOME/f3d-learn build/rel/core/test_f3d_import --corpus \
+    --time-limit 300 --hang-limit 300 --jobs 5 --memory 4G
+```
+
+The lines are derived from the designs: keep the directory outside the
+repository, like the corpora. Per design, `DIR/settled/<design>.jsonl`
+holds the items accepted against their known history state and
+`DIR/unsettled/<design>.jsonl` the others that had candidates (none
+accepted, or accepted unchecked), plus fillet and chamfer items whose
+translation failed or offered no candidates (mitcad#106). Their decoded
+edge match diagnostics remain available even without history fallback;
+`candidates` is empty and `accepted` and `answer` are null when none were
+offered or accepted. A rule must not contradict unsettled examples either.
+A rerun replaces a design's files. The dump's own work (the
+bodies, inputs and sketches it records when an item's definitions are
+translated: seconds on a large item) is left out of the item's time and
+the import's time limit (`learn::Clock`; the deadlines move by it), so
+that a dump run gives no item up that a run without it keeps; candidates
+are kept once by a hash of their definitions, and at most 1000 per item
+(an item can have tens of thousands, which took gigabytes). The import reports to
+`src/learn.rs` at four points: the candidates translated
+(`Importer::translate`), ranked (`Importer::rank`), the one accepted
+(`Importer::accepted`) and the end of the import; the raw records come
+from `mitcad_f3d::design::learn`.
+
+One line (`schema` 1):
+
+| Key | |
+|---|---|
+| `file`, `item`, `name`, `type`, `class`, `class_version`, `object_id`, `f3d` | the design, the item's timeline index, its type and the decoder's raw item fields |
+| `status`, `outcome`, `note` | `settled` or `unsettled`; how the item came in |
+| `translation_error` | present only when a fillet or chamfer translation failed: the most recent failure text, including the input position and decoder/replay reason when available. Retained if a later translation offers candidates |
+| `known` | what the decoder made of the item (the dump IR's item without `_f3d`) |
+| `record` | the item's object and the input objects it refers to, three references deep: `objects[]` with `path` (`item`, `item>0897AF07#0>C46D3EEB#0`: the class's first eight digits and the position among the parent's references to that class), `id`, `class`, `module`, `version`, `len`, `hex` (up to 16 KiB), `sub` (sub-chunk start) and `tokens` (`header`, `root` with its references and attributes, `ref` with `id` and `class`, `str16` with `text`, `sub`). Other timeline items, sketches and their entities, parameters, components and the like are not followed |
+| `context.sketches` | per sketch the candidates use (`T<index>`): `regions[]` as Mitcad computes them, in the file's ids (`key`, `outer` and `holes` curve lists, `area` mm², `centroid` and an `inside` point in sketch mm), the `frame` the import placed the sketch on (`origin`, `x_axis`, `y_axis`, `normal`; model mm, the space of an extrusion's stored direction) and `curves` by the file's ids (`object`, `class`, the `u64` root attributes such as `crv_primary_id`, `crv_secondary_id`, `pt_tag`; `type`, `construction`, `geometry` from the dump, sketch space in cm). Curves Mitcad made itself appear as `m<id>` |
+| `context.bodies`, `context.edges` | the bodies before the item (`uid`, `volume`, `area`, `center`, `faces`; at most 200) and the edges the candidates name (`mid`, `length`, `body`), mm |
+| `context.resolved` | the bodies, faces and edges the decoder gave for the item (by JSON pointer into `known`, e.g. `/detail/edgeSets/0/edges/2`) as the replay's (`{"kind": "body", "uid"}`, `{"kind", "body", "name"}`; `null`: not found), so that a decoded input can be compared with the answer |
+| `context.edge_matches` | additive dressup matcher diagnostics for decoded edge inputs at those same pointers (mitcad#106): `status` (`matched`, `decoder_unresolved`, `missing_in_replay`, `ambiguous_in_replay`), `decoder_found` (the decoder's `found` text), `count` and either `matches[]` (`body`, `name`, `mid` mm, `direction`) or ambiguity `candidates[]` (`body`, `name`). The first 64 decoded inputs are considered, with at most 16 matches or candidates per edge; `count` retains the full number. Bodies and names use the file's timeline indices. This uses the actual dressup matcher, including circles and split edges; `context.resolved` retains its older midpoint matching for compatibility. No recipe-tail rule is applied |
+| `candidates[]` | in the order tried, the first 1000 (`cost.candidates` counts all, `accepted` is the rank among all): `defs` (Mitcad feature definitions in the file's terms: feature uids as timeline indices `T<i>`, profile regions as `{"sketch": "T<i>", "region": <index in regions>}`, sketch curves by the file's ids), `note`, `guess`, `predicted` |
+| `accepted`, `answer` | the accepted candidate's rank and the candidate itself |
+| `cost` | `candidates`, `rank`, `seconds` from the translation to the acceptance |
+
+**Tester.** `tools/f3d-learn/learn.py` (Python 3, standard library;
+`--data DIR`, default `MITCAD_IMPORT_LEARN`) reads only the dump:
+
+- `stats`: settled and unsettled items per type with their cost;
+- `show` / `fields`: examples with their objects, tokens and the gaps
+  between them, and one object's fields over all examples;
+- `test`: a rule as a Python expression (`--expr`, compared with a target
+  such as `regions`, `curves`, `edges`, `flip`, `operation`, `extent`,
+  `participants`, `axis`, `def.<key>`), a check (`--check`) or a file
+  defining `predict(ex)` or `check(ex)` (`--rule`); prints how many
+  examples it explains, contradicts or does not apply to, the
+  counterexamples, and with `--unsettled` whether its predictions for
+  the unsettled items are among their candidates;
+- `search`: rule families over every field of every object (fields are
+  addressed `gK+N` / `gK-N` in the K-th gap, `@N`, or `rK` for the K-th
+  reference, read as `u8` … `f64` or `sign`): `eq` (the field is the
+  value, or the number of selected entities), `map` (each value stands
+  for one answer class), `idin` (the field holds an id of an answer
+  entity and of no other), `idset` (the object holds the ids of the
+  answer's entities), `bits` (bit i selects region i);
+- `survey`: per type the record's objects, their lengths and gaps, and
+  the fields that vary with their values and how purely they go with a
+  target.
+
+Its unit tests (`tools/f3d-learn/test_learn.py`, the ctest
+`tools.f3d_learn`) run on a synthetic dataset; `src/learn.rs` and
+`mitcad_f3d::design::learn` have their own.
+
+A rule that explains every settled example (or every counterexample with
+a reason) and agrees with the unsettled ones goes into `core/f3d` with a
+unit test on a synthetic record; the import then tries the decoded
+answer first, the guesses after it.
+
+Decoded so far (mitcad#96, *What the history settles* says how the import
+uses them): the profile loops of extrusions and revolutions
+(`_f3d_profile_loops`), a revolution's operation, profile count and
+sketch-line axis, a circular pattern's axis line (`_f3d_axis`) and the
+direction of each rectangular pattern direction from a construction axis,
+a mirror's `isCombine`, a hole's through-all flag where the file keeps
+a depth (`_f3d_through_all`, a lead), and fillet and chamfer edges
+(the item tail's anchor, recipes that name the edge itself or carry a
+second list, face selections, inputs of the same names, the replay's
+edges where the middle does not tell, a two-distance chamfer's sides:
+*Named inputs*), and items without a result (*Fallback*). A mirror's plane and the patterns'
+quantities the decoder read already (the dump confirms them on every
+settled item). For extrusions also the flag byte after the extent codes,
+the input slots' roles, the object of an extent up to an object and a
+symmetric extent's length (`ExtrudeFields`, `decode::extent_slots`; in
+the dump `_f3d.extrude.flag`, `slot_roles`, `full_length` and
+`extentOne.entity`). Then (mitcad#104): both sides of a two-sided
+extrusion up to objects, a combine's body removals in other components
+(*Components*) and an oblique stored extrusion vector.
+
+#### What the file does not settle yet (mitcad#104)
+
+Counted over both private corpora with the learning dump and per-file
+traces of the import (the backup corpus repeats some designs of
+`MITCAD_F3D_CORPUS`, so these are instances, not distinct items):
+
+- **Flips no byte decides** (*What the history settles*, *Direction*):
+  one-sided cuts through all with the flag byte 0, a few distance and
+  two-sided extrusions. The history settles them with the next
+  definition; files without a history get the first.
+- **Patterns and mirrors of features with fillets or chamfers among
+  their objects** (the case of a pattern's join whose volume differed
+  from its state). A rectangular pattern of a boss, a cut and a chamfer
+  between the boss and the plate gave 3979 mm³ less than its state: the
+  file's six copies carry the chamfer (755 mm³ each, the five copies
+  added come to about that), Mitcad's copies of the features do not (a
+  chamfer leaves no tool body to copy; the decoded objects leave
+  dressups out). The order of the copies does not matter there (applying
+  each element's copies in the features' order gave the same volume). 36
+  unsettled patterns and mirrors have such objects (35 settled ones too,
+  where the dressups made no difference to the state). Done in
+  mitcad#105: patterns and mirrors repeat fillets and chamfers among their
+  features on the copies' edges (`commands.md`, *Fillets and chamfers
+  among the features*), and the import tries them (*What the history
+  settles*). Over both private corpora the patterns and mirrors with such
+  objects came in parametric 30 → 39 of 72 (the rest: the copies'
+  roundings OCCT does not build, mostly where copies overlap or meet the
+  original's rounding, mitcad#107; copies that reach no body after an
+  earlier fallback; the time limit), the final bodies as before, the
+  import's time unchanged.
+- **Fillets and chamfers whose by-name definition fails in the kernel**:
+  273 fall back with every edge found by its name. 218 of them round
+  edges of stored faces (bodies a base feature brought in, the faces
+  named `import`: an earlier fallback, or the file's own base
+  features), whose tolerances (up to 0.05 mm) and approximations OCCT's
+  dressups often do not build on; 25 round replayed faces after an
+  earlier fallback; 29 bodies replayed throughout (radius or distance too
+  large 10, rounding cannot end at a vertex 6, invalid shape 3, others
+  not the state or names gone). In the samples of the last class the
+  rounding is wider than a face next to it (a 90 mm edge rounded wider
+  than the 4 mm face beside it; a rounding along a chamfer wider than
+  the chamfer), so it runs over or removes that face, which OCCT's
+  rolling-ball fillet does not do. These are geometry kernel limits, not
+  decoding: fewer fallbacks before them is the cure for the first class.
+
+  Classified in mitcad#107 on the 249 such dressups of both private
+  corpora (192 distinct inputs), each built again on its stored input
+  body by OCCT's rounding alone (the 1e-3 smaller retry and the rings
+  off) and compared with the file's next state (volume within 1e-5 and
+  the same face count):
+
+  | Class | Dressups (distinct) | Built by the real rounding |
+  |---|---|---|
+  | OCCT's result rejected only for faults of the input away from the rounding | 12 (12) | yes: taken as it is |
+  | a whole circle stored in two arcs | 3 (3) | yes: the pieces merged first |
+  | knife edges (the faces' normals opposite) | 3 (2) | yes: tighter tolerances of OCCT's fillet |
+  | built, but not the file's body (faces split otherwise; an input with 11 mm tolerances) | 3 (2) | built, not matching |
+  | rounding wider than a face next to it: the face gone in the file's body | 54 (43) | no |
+  | the same, the face partly gone | 59 (40) | no |
+  | the same, the face kept or not known (state unreadable) | 44 (37) | no |
+  | two roundings on the two sides of a face narrower than both | 16 (11) | no |
+  | rounding cannot end at a vertex (7: the face it ends on runs on tangentially into a face of the other convexity) | 18 (13) | no |
+  | OCCT's result invalid and not the file's body | 11 (10) | no |
+  | no start for the rolling ball, or the walk fails, on wide faces | 8 (4) | no |
+  | a bevel exactly as wide as its face, contours whose corners fail | 7 (5) | no |
+  | OCCT finds no edge to round (faces 1° from tangent), OCCT exceptions | 4 (4) | no |
+  | OCCT crashes | 7 (6) | no |
+
+  Where the rounding is wider than a neighbouring face, the file's
+  rounding runs over that face or rides its far edge, while OCCT's
+  rolling ball stays on the two faces of the edge: it finds no start, the
+  walk fails, or it cannot end. Deleting the narrow face first
+  (`BRepAlgoAPI_Defeaturing`, its neighbours extended; one attempt, the
+  faces next to the edges that the rounding is wider than all along) and
+  rounding the edge that takes its place gives the file's body in none
+  of them: it applies to 91 of the 249, the deletion fails in 49, the
+  rounding in 25, 10 leave no edge where the face was, and the 7 it
+  builds all take more material than the
+  file's rounding (up to twice: the ball touches the extended neighbour
+  instead of riding the narrow face's edge); it costs 6 s a case on
+  average, up to 127 s on large bodies. It is not done. OCCT's other
+  options (polynomial or quasi-angular sections, its continuity and
+  tolerance parameters other than the knife edges', one contour after
+  another, healing or merging the input's faces first) build none of
+  the rest.
+
+  Coverage with the 1e-3 smaller retry and the rings off in both builds
+  (the dressups OCCT's rounding builds), before and after, both corpora:
+  fillets parametric 237 → 238 and 967 → 991, chamfers 39 → 39 and
+  162 → 164, all items 1049 → 1050 and 4677 → 4702; final bodies as
+  before except one body of a design stored twice, exact before and now
+  4e-6 from the file's (three of its fillets on a stored body with faulty
+  faces come in parametric, matching their states within 1e-5).
+
+  The OCCT port's edge overflow (mitcad#121, patches 0010 to 0012 of
+  [the port](../../third_party/vcpkg-ports/README.md)) lets the rolling
+  ball run onto the face beyond a narrow face or roll on its far edge
+  where the narrow face's contact leaves it along the whole edge (OCCT
+  found no start there), and drops the narrow face it consumes. Of the
+  249, measured the same way: the face gone in the file's body 6 now the
+  file's body (MATCH) and 11 within 1e-3 (NEAR: corner patches or
+  approximated blend surfaces other than the file's), 1 off; the face
+  kept 2 NEAR; the face partly gone none (OCCT's walks there reach the
+  far edge and roll on it as before, then fail at the corners or build
+  invalid shapes; where the contact leaves a face near the end of the
+  spine OCCT cuts the rounding with the face beyond, as before, which the
+  file's body agreed with in the samples). The rest fail in OCCT's
+  corners at vertices, in walks that switch to a tangent neighbour on the
+  wrong branch of its surface, on narrow faces on both sides of the edge,
+  or are chamfers (OCCT has no chamfer rolling on an edge). The other
+  classes build as before: where two roundings overlap on a face the
+  file's one surface replaces both and the band between them, which
+  would merge two stripes (OCCT computes both and fails at the corner
+  between them); a chamfer exactly as wide as a face gets no start; and
+  where roundings of one fillet consume each other's faces, OCCT stops
+  because the two stripes' surfaces intersect.
+  Coverage with OCCT's and the patched fillet, both corpora: fillets
+  parametric 251 → 253 and 1088 → 1101, all items 1070 → 1072 and
+  4874 → 4886, circular patterns 89 → 88 in the backup corpus; final
+  bodies exact 525 → 523 and 3169 → 3162, the others within 0.1 %, none
+  off. The fillets the patch builds mostly failed before by building
+  a wrong body, so the replay took the file's state before them and
+  went on exactly; now they come in parametric on the chain's earlier
+  approximation (an approximate chamfer before them: up to 2e-4), so
+  the final bodies are as far from the file's as that chain, and one
+  pattern after such a chain no longer comes within the tolerance. One
+  rounding next to a 0.0015 mm sliver now builds onto the face beyond
+  it, removing 6 % more or less than the file's (its body 7e-6 off),
+  which the import takes; and one fillet after three that now come in
+  fails on their result.
+
+  Second round (mitcad#121, patch 0013): the overflow runs over several
+  narrow faces in a row (a strip and a sliver beyond it) and on both sides
+  of the edge, and two roundings whose contacts cross on a face between
+  their edges are one rounding. Of the 249, measured the same way: the
+  face gone 6 MATCH / 11 NEAR → 9 / 8 (one family of three now the file's
+  body: the ball reaches the face beyond a 0.0005 mm sliver instead of
+  rolling on the sliver's edge), the face kept 2 → 3 NEAR, two roundings
+  overlapping on a face 0 → 3 NEAR (the volume within 1e-7; the file
+  merges two coplanar faces the rounding leaves next to each other). Of
+  the NEARs, 9 change the volume as the file's within 1 %; 9 do not (2 to
+  56 % off) and are not taken by the import's change comparison. With
+  the patches 0020 to 0023 after them, the face partly gone builds 3 NEAR
+  too. The rest still fail: corners where a rounding that runs onto faces
+  beyond ends (`PerformIntersectionAtEnd`, `PerformOneCorner`), walks that
+  fail rolling on an edge, roundings partly wider than the narrow face
+  near the spine's ends, chamfers exactly as wide as their face (the
+  contact lies on the face's boundary, which the hatching of the analytic
+  chamfer leaves out), the second rounding riding on the first one's torus
+  and earlier roundings the file's rounding replaces.
+  Coverage before (main, with OCCT's overflow of 0010 to 0012 and without
+  the change comparison) and after, both corpora at the same time: items
+  parametric 1061 → 1034 and 4912 → 4796, fillets 252 → 231 and
+  1101 → 1035; final bodies exact 523 → 527 and 3162 → 3180, within 0.1 %
+  12 → 8 and 72 → 54, off as before (0 and 1). Nearly all the items that
+  no longer come in parametric are results the change comparison rejects
+  (above; the smallest 1.0 to 1.5 % off with other faces than the file's)
+  or items after them that the replay no longer reaches the same way; the
+  rest: the time limit in three large designs (as in other runs), the
+  fillet after the sliver rounding above, now the file's, whose edges
+  then resolve to other edges (the design is in both corpora), and one
+  rounding next to earlier roundings stored as splines that the file
+  rounds again (built within 1.7e-4 before, now off). The patch alone
+  (the same import before and after): 1 fillet lost and 1 gained in the
+  main corpus, 3 lost and 4 gained in the backup corpus.
+
+  Third round (mitcad#121, patches 0014 to 0016): an analytic rounding or
+  chamfer exactly as wide as its face (its contact line on the face's far
+  edge) is split on that face and stored as a blend on the edge, so that
+  the face goes (0014); a rounding rolling on an edge halves its step
+  where a section cannot be reframed (0015); and of two roundings of the
+  same kind overlapping on a face narrower than both, which 0013 cannot
+  make one, the later rolls on the earlier one's contact line and the two
+  meet there (0016). Of the 249, measured the same way: two roundings
+  overlapping on a face 0 MATCH / 4 NEAR → 6 / 4; the other classes as
+  before. The chamfers exactly as wide as their face now get their exact
+  surface but fail in the corners at their ends; walked (non-analytic)
+  blends along a face's boundary, corners after an overflow onto
+  different faces beyond, rolling that pivots on a point or turns at a
+  vertex and the ball leaving the edge it rolls on at the start still
+  fail. Coverage before (main) and after, both corpora at the same time:
+  items parametric 1059 → 1060 and 4905 → 4907, fillets 244 → 245 and
+  1092 → 1094, chamfers 56 and 236 as before; final bodies exact
+  527 → 529 and 3176 → 3182, within 0.1 % 8 → 6 and 58 → 52, off as
+  before (0 and 1). Lost: a two-distance chamfer exactly as wide as its
+  face whose ends meet a cylinder (the exact result has a face of
+  inconsistent orientation; before, the 0.1 % smaller retry built it),
+  and a fillet whose exactly consumed face takes an edge the file keeps.
+  The results rejected at 2 to 4 % with the file's faces were compared
+  with the file's bodies: one is a different rounding (0.15 mm from the
+  file's along its whole length, 2.1 % off), others differ only at the
+  corner patches at the ends (2.4 %) or by spline approximations spread
+  over the body (2.4 %): no face count or percentage separates them, so
+  the tolerance stays 1 %.
+
+  The other classes were traced inside OCCT's fillet (mitcad#122, patches
+  0020 to 0023 of [the port](../../third_party/vcpkg-ports/README.md)).
+  Measured the same way, on OCCT with the edge overflow, before and after:
+
+  | Class (dressups) | Cause found | File's body before → after |
+  |---|---|---|
+  | OCCT crashes (7) | an empty restriction curve after a stripe met an obstacle face that does not hold its edge; a seam intersected with a parallel curve; the corner code reading another stripe's surface data | 0 → 2; none crashes now, 3 fail cleanly (no start past the obstacle), 2 build invalid shapes |
+  | OCCT exceptions (2) | the corner of a contour closed by its sharp corner, at a vertex of more than three sharp edges, found only one of the contour's ends | 0 → 2 (3 more of the narrow-face classes now come within 1e-3) |
+  | faces 1° to 6° from tangent (2) | an edge OCCT's loose tangency test (0.1 rad) calls tangent was refused although asked for | 0 → 1; the other fails in the walk at the ends of a circle between faces 1° apart |
+  | OCCT's result invalid (11) | at a shallow corner of an arc and a line, the meeting point of the contact lines taken on the arc's extension | 0 → 1; the others: corner caps at vertices where a stripe ends on its face's boundary, contact lines reset to the far end of a periodic hatch at the spine's start (`SplitKPart`) |
+  | rounding cannot end at a vertex (18) | the contact leaves the face near the end of the spine (a face narrower than the rounding there), and the corner (`PerformMoreThreeCorner`) takes an edge that does not touch the vertex for the continuation of another; correcting that gives invalid corners | 0 → 0 |
+  | two roundings on the two sides of a narrow face (16), a bevel exactly as wide as its face (7), consumed earlier roundings (3) | the file's rounding consumes the face or the earlier roundings: edge overflow across two stripes, which OCCT does not merge, and chamfers, which the overflow does not cover | 0 → 0 |
+  | no start or the walk fails on wide faces (8) | the walk stops where the contact meets a torus' seam or switches to a tangent neighbour | 0 → 0 |
+  | built, not the file's body (3) | OCCT's blend split into slivers at a torus seam (the same volume, more faces) | 0 → 0 |
+
+  None of the 249 crashes now (7 before). Coverage before and after the
+  patches (both with the edge overflow), both corpora: fillets parametric
+  253 → 256 and 1101 → 1112, chamfers 55 → 55 and 231 → 232, all items
+  1072 → 1075 and 4881 → 4898; final bodies as before (523 and 3162
+  exact). The backup numbers leave out one large design that reaches the
+  coverage runner's 4 GB memory limit in both runs (before: the import's
+  low-memory stop; after: OCCT's shape checker failing to allocate, a
+  segmentation fault in `CSLib_Class2d`); without the limit it imports
+  the same before and after.
+
+  The classes left after mitcad#122 were traced further (mitcad#133, patches
+  0024 to 0026 of [the port](../../third_party/vcpkg-ports/README.md)), measured
+  the same way on OCCT with patches 0010 to 0023, before and after:
+
+  | Class (dressups) | Cause found | File's body (within 1e-3) before → after |
+  |---|---|---|
+  | no start or the walk fails on wide faces (8) | a rounding along a whole circle whose contact line on a plane crosses six slots: SplitKPart's pieces were sorted with a stale piece, repeated and lost, and the walks between them threw (3, one design, fixed by 0024); a contact line crossing a notch in its plane (2) or a near-tangent spline edge whose approximation fails (2); a rounding wider than the earlier roundings on both sides of its edge (1, the edge overflow's class) | 0 (0) → 0 (3); the file keeps one torus across the slots and trims it with the slots' faces, OCCT runs the rounding along the slot walls (0.7 % of the rounding's volume) |
+  | rounding cannot end at a vertex, the face continuing tangentially (7) | the rounding's face turns tangentially into a rounded wall at the end and the contact on it ends off any edge (the OnSame state), the end cut by the rounded wall and the faces beyond it: OCCT's intersection at end gave up on a contact off an edge (5, two designs, the face on either side of the rounding, fixed by 0026: the face's edge at the vertex is prolonged to the contact, the spine's edge cut there, the ends on the cylinder taken in its period); the rounded wall at the end is an earlier rounding that the file extends along the new one in a way OCCT's corners do not build (2) | 0 → 5 (the file's body) |
+  | rounding cannot end at a vertex, other (11) | an end cut by a sliver, a cylinder's corner patch and the next sliver (2, one design, fixed by 0025: the intersection at end took the other sliver's crossing of their shared circle, did not prolong the slivers' edges to crossings beyond their ends nor cut the corner patch's edges, counted the cylinder's seam as an edge at one corner, and did not cut the end's intersection at the seam); two roundings meeting on a face narrower than both (5, the edge overflow's class; mitcad#121's patch 0013 does not build them yet); the file extending a cone at the end (2); end corners of a radius of 100 crossing on the face at the end (1); an edge of 0.0006 mm at the vertex (1) | 0 → 2 (the file's body) |
+  | OCCT's result invalid (10) | the edge chain ends on both sides of a notch the file's rounding runs across (6, two designs: the file continues the torus across the notch and trims it with the notch's faces; SplitKPart also resets the contact point to the far end of the periodic hatch there; the chains end at faces 0.17 to 0.57 mm wide under roundings of 0.3 to 0.5 mm, so the rounding overflows them as in the narrow face class); side faces narrower than the rounding (2, the edge overflow's class); a face of 2e-5 mm² in the input (1); a chamfer, not traced (1) | 0 → 0 |
+  | built, not the file's body (3) | a contact circle tangent to two edges of the plate (the hatch sees two crossings 0.008 mm long, which OCCT walks as slivers; merging them gives the file's faces but a plane face touching itself, which the file splits); an input with 11 mm tolerances (2) | 0 → 0 |
+  | faces 1° from tangent (1), crashes that now fail cleanly (3) | the rolling ball's radius exceeds the convex curvature radius of a face (10 on a circle of 8, 1 past a corner of 0.5): the walk reports a twist and stops | 0 → 0 |
+  | crashes that now build invalid shapes (2) | the end of a concave rounding where the chain turns convex tangentially (1); not traced (1) | 0 → 0 |
+
+  Over both corpora (fallbacks on, with patches 0024 to 0026 against
+  without) fillets came in parametric 4 and 15 times more and as
+  fallbacks 4 and 21 times less; no final body is off. A few final bodies
+  move from exact to within 0.1 %: a fillet that now builds runs on a body
+  where an earlier fillet failed and was accepted within the history's
+  tolerance, so the earlier fillet's missing rounding reaches the final
+  body instead of being replaced by the stored state.
+
+- **Edge names several edges fit** ("n edges fit the names"): 118 edges
+  in 25 items. The recipe's tail after its type string, `i32 -1 | i32 -1
+  | u32 n` then per vertex of the edge a record of entity indices
+  separated by `-1`, appears to list the faces around each end of the
+  edge in cyclic order (the edge's two faces and the end face, in an
+  orientation that differs between otherwise equal recipes), followed by
+  two words (`0 0`) or longer index lists; it would tell mirror-image
+  edges apart, but the decoder's B-rep walk has no cyclic face order
+  around vertices yet. Not decoded in this round.
+- **Named edges the replay lacks**: of the settled fillets whose every
+  edge the decoder found but whose answer is a guess, 85 have named edges
+  that are not in the replay's bodies (no by-name definition); 21 more
+  had the by-name definition rejected, the answer differing from the
+  names both ways (the replay's bodies differ from the file's there).
+- **One tangent chain at a time** (`by_chains`): building the
+  definition takes no measurable time (0.4 s over 1547 items); its
+  evaluation does. Over the 125 files with fillets that fell back or took
+  a guess, it was evaluated 300 times for 72 s (5 % of those fillets'
+  1488 s): after an approximate match of the edges at once 68 times
+  (23 gave the state or came closer, 12 s), after a kernel failure 218
+  times (6 gave the state, 57 s), after another state 14 times (1). No
+  failure kind, chain count or whether the chains meet at a vertex
+  separates the 6 from the 212, so it stays after every failure.
 
 ## FreeCAD import (.FCStd)
 
@@ -1405,7 +2237,11 @@ Some models need FreeCAD
 1.0 (VarSets, extents up to shapes) or 1.1 (Whitworth and NPT threads). Ellipsoids and skewed cylinders are
 B-spline and extrusion surfaces that FreeCAD's own measures integrate less
 exactly (up to 4e-4) than Mitcad's; the reference check does not compare
-those.
+those. Nor does it compare the measures of shapes brought in as FreeCAD
+stored them where FreeCAD's are those of OCCT's plain fixed Gauss points
+(`Kernel::fixed_point_properties`, `placed[].fixed`): Mitcad integrates
+faces bounded by B-splines of many spans more exactly (mitcad#139; 2e-6 of
+the volume on the hydraulic cylinders of the assembly example).
 
 ## .ipt import
 
@@ -1419,7 +2255,7 @@ the `.f3d` import's `F3dGeometry` does for the `.smbh` blobs. Entry
 points: `mitcad-cli import-ipt part.ipt [--save part.mitcad] [--report
 report.json] [--reference part.stp [--max-relative X] [--deviation]]
 [--bodies-only] [--no-verify] [--no-fallback] [--no-compare] [--time-limit
-S] [--dump design.json] [--design design.json] [--json]`, the `import_ipt`
+S] [--hang-limit S] [--dump design.json] [--design design.json] [--json]`, the `import_ipt`
 command ([commands.md](../model/src/api/commands.md#ipt-import)) and File ›
 Open or Import in the application (the import process, as for `.f3d` and
 FreeCAD documents; Cancel only).
@@ -1432,6 +2268,27 @@ FreeCAD documents; Cancel only).
   the fallbacks, the guesses the history settles (profiles, fillet and
   chamfer edges, hole positions, mirror planes) and the final comparison
   of this crate. The items are those of the browser, in its order.
+  With `Options::validate` a definition that gives an item's state but
+  leaves a body OCCT's checker finds invalid is not taken: the item takes
+  the file's bodies (a cut checked only near its change made a part's
+  body invalid).
+  An item whose state the history does not hold, between states it does
+  (a feature suppressed in the file, `StoredGeometry::item_without_result`),
+  is skipped as one the file keeps no result for, as an `.f3d` item with
+  result number -1 is: before, its definitions were tried against the
+  states up to the next item's, and it was skipped or taken into a later
+  fallback, often with a reason that did not apply (*its result is not in
+  the file's history*, *the extrusion does not cut into any participant
+  body*, *its edges were not decoded …*).
+  A stored body of several lumps (disjoint solids in one body, as a join
+  of a piece that touches nothing makes it in the file) comes in as one
+  body per lump in the history states and the stored design, as the
+  replay makes them (Mitcad keeps disjoint solids apart); before, such a
+  join's replay had one body more than its state and fell back. With `hang_limit` (`--hang-limit`; the application 90 s,
+  `ipt.corpus` 300 s) the replay runs on its own thread, watched as the
+  `.f3d` import's (*Hangs* above): an item whose kernel call does not
+  return (a fuse of two revolved regions that never ended) takes the
+  file's bodies in the next try.
 - **Bodies only** (`--bodies-only`, and files without a definitions
   segment): one base feature per body, solids and sheet bodies alike; a
   body that OCCT cannot build is reported (`skipped`) and left out.
@@ -1443,8 +2300,10 @@ FreeCAD documents; Cancel only).
   volume, area, faces); with the history also the parameters (records,
   model, user, those not the part's), the expressions (translated,
   agreeing with the stored values), the features and the replay's report.
-- Not yet: body names and colours, assemblies (`.iam`, stage 4), files
-  whose B-rep record is not an ASM file (older releases); what the
+- Assemblies (`.iam`, stage 4) are an import of their own, which imports
+  each part this way (*.iam import* below).
+- Not yet: body names and colours, files whose B-rep record is not an ASM
+  file (older releases); what the
   definitions segment does not tell (core/ipt/README.md, *What the files
   do not tell*) comes in as the bodies of the history states.
 - A hole whose decoded position does not give its state also tries the
@@ -1498,12 +2357,59 @@ Results (dev build, 2026-10-08):
   226 and 229) give the same solids: volume and area within 5e-7 through
   a STEP round trip, 3e-9 between the build reports; two parts were
   changed between the saves.
-- With the history (2026-10-08): 2,785 parameters with their expressions,
+- With the history (2026-10-09): 2,785 parameters with their expressions,
   all agreeing; 344 features with their history states; of 607 timeline
-  items 429 parametric, 64 partial, 102 fallback and 12 skipped (per kind:
+  items 450 parametric, 53 partial, 92 fallback and 12 skipped (per kind:
   [core/ipt/README.md](../ipt/README.md#results-on-the-test-files)); the
   final bodies are the stored ones in every part.
 - Import times: bodies only 0.12 to 0.83 s per file and 45 to 63 MB (dev
   build, which optimises dependencies); with the history 0.2 s to 3 min
   (most under 20 s; the slowest has the hole above). The corpus test
   takes about 3 minutes with 6 files at once.
+
+## .iam import
+
+mitcad#60, stage 4. [core/ipt](../ipt/README.md#assemblies) reads the
+assembly (referenced files, occurrences, placements, the range boxes and
+display transforms the file stores); `core/ffi/src/iam_import.rs` makes
+Mitcad's components and occurrences of them and imports each part with
+the `.ipt` import above, in a document of its own: its bodies become a
+base feature of a component, or with `--history` its replayed design is
+copied into one (`Document::add_component_copy`). Entry points: `mitcad-cli
+import-iam assembly.iam [--save out.mitcad] [--report report.json]
+[--search folder]... [--history [--no-verify] [--no-fallback]
+[--no-compare] [--time-limit S]] [--json]` (`import-ipt` takes an `.iam`
+too), the `import_iam` command
+([commands.md](../model/src/api/commands.md#iam-import)) and File › Open
+or Import in the application (the import process, as for parts).
+
+- Each part file comes in once, its stored bodies as base features (with
+  `--history` its features as the `.ipt` import replays them), and each
+  occurrence is an occurrence of its component;
+  sub-assemblies are components with their own occurrences.
+- Referenced files are found as saved, relative to the assembly as it was
+  saved, by the saved path's tail, or by name in the search folders; a
+  part found so is checked to be the referenced document by the version
+  id both files store. Files that are not found are empty components,
+  placed, and reported.
+- Checks against the file: each placement against the transform the file
+  displays the occurrence with, each part's bodies within the range box
+  the file stores for it (parts saved again after the assembly only
+  reported).
+- Not yet: constraints and joints (the stored placements are taken as
+  they are), design views and positional representations, the model state
+  an occurrence uses (the part comes in in its active state).
+
+### .iam corpus test
+
+`iam.corpus` ([tools/cli/iam-corpus.cmake](../../tools/cli/iam-corpus.cmake))
+imports every `.iam` under `MITCAD_IPT_CORPUS` with `mitcad-cli
+import-iam`, the corpus folders searched by name, each in a child process
+of its own, several at once (as `ipt.corpus`). Every occurrence that is
+not suppressed must be placed, every part file found must import, every
+placement must agree with the displayed one and every part's bodies must
+lie within their stored range box; files that are not in the corpus
+(library parts, files of other projects) are reported, not failed.
+
+Results (dev build, 2026-10-09) on a private project tree of 166
+assemblies: see [core/ipt/README.md](../ipt/README.md#results-on-the-assemblies).

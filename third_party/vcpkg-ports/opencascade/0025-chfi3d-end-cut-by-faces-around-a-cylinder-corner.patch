@@ -1,0 +1,417 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a rounding whose end is cut by several faces around a corner
+patch of a cylinder (mitcad#133).
+
+The case: the corner edges of a hexagonal frustum rounded, each edge ending
+at a vertex where a cylinder cuts the frustum's corner, under flat slivers
+between the frustum's top edges and the cylinder. The contact lines reach
+the slivers beyond the vertex, so ChFi3d_Builder::PerformIntersectionAtEnd
+cuts the rounding with a sliver, the cylinder and the next sliver. Four
+things went wrong there:
+
+- The fillet's crossing with the common edge of two faces at the end was
+  the one nearest to the vertex on the edge's whole curve. The slivers'
+  edges with the cylinder are arcs of one circle, so both edges got the
+  same crossing, the cylinder's part of the end was empty and the trimmed
+  surface threw (Geom_RectangularTrimmedSurface V1==V2). The crossings on
+  the edge come first now, then the one nearest to the edge's range.
+- That crossing lies on the arc's extension beyond its end vertex. As where
+  the edge is not crossed at all (the faces' surfaces intersected and the
+  common boundary prolonged from the vertex), the common boundary is now
+  prolonged along the edge's own curve from that end vertex (the faces keep
+  their surfaces), and the edge of the corner patch that runs from there to
+  the vertex (or to the end of an edge prolonged before) is cut at that
+  end, so that the corner patch goes with the corner. Not so where the
+  fillet passes beside a face between the end's first and last faces (a
+  narrow chamfer at a corner of a step): when the crossing with that
+  face's first edge lies beyond the corner where the previous edge meets
+  it and outside both faces of the edge, and so does the crossing with its
+  next edge, the crossings are taken as before (the prolongation would
+  bound neither face and gave a self-intersecting wire).
+- At the corner the cylinder's seam runs from, the seam was counted as an
+  edge of the vertex, which sent the corner to the search for faces around
+  a vertex of more than three edges ("Failed to find edge"). When the seam
+  lies only on a face at the end and both contacts end on edges away from
+  the vertex, it is not counted; the faces at the end are found along the
+  fillet's faces as at the other corners.
+- On that cylinder the two ends of its part of the end come from the
+  p-curves of edges on the two sides of the seam, in different periods:
+  they are taken the nearer way across the seam, the intersection is split
+  where it crosses the seam (each piece with its own p-curve) and the seam
+  is cut there, as PerformOneCorner does.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -2281,7 +2281,18 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+   F1 = TopoDS::Face(DStr.Shape(Fd->IndexOfS1()));
+   F2 = TopoDS::Face(DStr.Shape(Fd->IndexOfS2()));
+   F3 = F1;
+-  if (couture || bordlibre)
++  // A seam counts as an edge of the vertex where the walk round it passes
++  // it: not when it lies on a face at the end only and both contacts end on
++  // edges away from the vertex (the faces at the end are then found along
++  // the boundaries of the fillet's faces).
++  bool isSeamOnEndFace = couture && !facecouture.IsSame(F1) && !facecouture.IsSame(F2);
++  for (int iCV = 1; iCV <= 2 && isSeamOnEndFace; iCV++)
++  {
++    const ChFiDS_CommonPoint& aCV = iCV == 1 ? CV1 : CV2;
++    isSeamOnEndFace = aCV.IsOnArc() && !TopExp::FirstVertex(aCV.Arc()).IsSame(Vtx)
++                      && !TopExp::LastVertex(aCV.Arc()).IsSame(Vtx);
++  }
++  if ((couture && !isSeamOnEndFace) || bordlibre)
+   {
+     nface = nface + 1;
+   }
+@@ -2758,11 +2769,20 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+     nb = 1;
+   }
+   bool intersOnSameFailed = false;
++  // The vertex and the ends of the edges prolonged so far: the edges between
++  // them and the next prolonged edge's end lie in the removed corner.
++  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aCornerVertices;
++  aCornerVertices.Add(Vtx);
++  // The previous crossing lay beside a face between the first and the last.
++  bool isBesideMiddleFace = false;
+ 
+   for (; nb <= nbface; nb++)
+   {
+-    extend = false;
+-    E2     = Edge[nb];
++    const bool wasBesideMiddleFace = isBesideMiddleFace;
++    isBesideMiddleFace             = false;
++    extend                         = false;
++    TopoDS_Vertex Vprol            = Vtx; // where a prolonged common boundary starts
++    E2                  = Edge[nb];
+     if (!nb)
+     {
+       F = F1;
+@@ -2905,6 +2925,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+ 
+       occ::handle<Geom_Curve> C;
+       C                                    = BRep_Tool::Curve(E2, Ubid, Vbid);
++      const double aFirstE2 = Ubid, aLastE2 = Vbid;
+       occ::handle<Geom_TrimmedCurve> Ctrim = new Geom_TrimmedCurve(C, Ubid, Vbid);
+       double                         Utrim, Vtrim;
+       Utrim = Ctrim->BasisCurve()->FirstParameter();
+@@ -3039,14 +3060,34 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+         }
+         else
+         {
+-          gp_Pnt P       = BRep_Tool::Pnt(Vtx);
+-          double distmin = P.Distance(inters.Point(1).Pnt());
+-          nbp            = 1;
+-          for (int i = 2; i <= inters.NbPoints(); i++)
++          // The crossing nearest to the vertex. When the curve is the edge's
++          // own (not an intersection of extended faces), the crossings on the
++          // edge come first, then the one nearest to the edge's range: two
++          // edges on one curve (two arcs of a circle) give the same
++          // crossings, and the one nearest to the vertex may be the other
++          // edge's.
++          gp_Pnt       P = BRep_Tool::Pnt(Vtx);
++          const double tolW =
++            std::max(Cad.Resolution(BRep_Tool::Tolerance(E2)), Precision::PConfusion());
++          double distmin = RealLast(), gapmin = RealLast();
++          nbp            = 0;
++          for (int i = 1; i <= inters.NbPoints(); i++)
+           {
++            double gap = 0.;
++            if (!extend)
++            {
++              double aW = inters.Point(i).W();
++              if (C->IsPeriodic())
++              {
++                const double aMid = 0.5 * (aFirstE2 + aLastE2);
++                aW = ElCLib::InPeriod(aW, aMid - 0.5 * C->Period(), aMid + 0.5 * C->Period());
++              }
++              gap = std::max(0., std::max(aFirstE2 - aW, aW - aLastE2) - tolW);
++            }
+             dist = P.Distance(inters.Point(i).Pnt());
+-            if (dist < distmin)
++            if (gap < gapmin || (gap == gapmin && dist < distmin))
+             {
++              gapmin  = gap;
+               distmin = dist;
+               nbp     = i;
+             }
+@@ -3054,6 +3095,67 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+           gp_Pnt2d pt2d(inters.Point(nbp).U(), inters.Point(nbp).V());
+           pfil2    = pt2d;
+           paredge2 = inters.Point(nbp).W();
++          if (!extend && gapmin > 0.)
++          {
++            // The fillet crosses the curve of the edge beyond the edge's end:
++            // the common boundary of the two faces is prolonged along that
++            // curve from the edge's end vertex, as it is along the
++            // intersection of their surfaces from the vertex otherwise.
++            double aW = paredge2;
++            if (C->IsPeriodic())
++            {
++              const double aMid = 0.5 * (aFirstE2 + aLastE2);
++              aW = ElCLib::InPeriod(aW, aMid - 0.5 * C->Period(), aMid + 0.5 * C->Period());
++            }
++            const TopoDS_Edge   aForwardE2 = TopoDS::Edge(E2.Oriented(TopAbs_FORWARD));
++            const TopoDS_Vertex anEnd      = aW > aLastE2 ? TopExp::LastVertex(aForwardE2)
++                                                          : TopExp::FirstVertex(aForwardE2);
++            C2dint1 = BRep_Tool::CurveOnSurface(E2, F, u2, v2);
++            C2dint2 = BRep_Tool::CurveOnSurface(E2, Face[nb], u2, v2);
++            // A face between the end's first and last faces is passed
++            // beside, not cut, when the crossing with its first edge lies
++            // beyond the corner where the previous edge meets that edge,
++            // outside both faces of the edge, and so does the crossing with
++            // its next edge (a narrow chamfer at a corner of the faces at the
++            // end): their boundary is not prolonged there, the crossings are
++            // taken as they are.
++            bool isOutOfBothFaces = false;
++            bool isCornerOfPrevious = false;
++            if (nb >= 1 && !Edge[nb - 1].IsNull() && !Edge[nb - 1].IsSame(E2))
++            {
++              TopoDS_Vertex aV1, aV2;
++              TopExp::Vertices(Edge[nb - 1], aV1, aV2);
++              isCornerOfPrevious = anEnd.IsSame(aV1) || anEnd.IsSame(aV2);
++            }
++            if (nbface >= 3 && nb <= nbface - 1 && (isCornerOfPrevious || wasBesideMiddleFace)
++                && !anEnd.IsSame(Vtx) && !C2dint1.IsNull() && !C2dint2.IsNull())
++            {
++              isOutOfBothFaces = true;
++              for (int iF = 0; iF < 2 && isOutOfBothFaces; iF++)
++              {
++                occ::handle<BRepAdaptor_Surface> aSurf =
++                  new BRepAdaptor_Surface(iF == 0 ? F : Face[nb]);
++                BRepTopAdaptor_TopolTool aTool(aSurf);
++                const double             aTol2d =
++                  std::max(aSurf->UResolution(BRep_Tool::Tolerance(anEnd)),
++                           aSurf->VResolution(BRep_Tool::Tolerance(anEnd)));
++                const gp_Pnt2d aP = (iF == 0 ? C2dint1 : C2dint2)->Value(aW);
++                isOutOfBothFaces  = aTool.Classify(aP, aTol2d) == TopAbs_OUT;
++              }
++            }
++            isBesideMiddleFace = isOutOfBothFaces;
++            if (!isOutOfBothFaces && !C2dint1.IsNull() && !C2dint2.IsNull()
++                && inters.Point(nbp).Pnt().Distance(BRep_Tool::Pnt(anEnd))
++                     > BRep_Tool::Tolerance(anEnd))
++            {
++              paredge2 = aW;
++              Vprol    = anEnd;
++              cint     = C;
++              Sface    = BRep_Tool::Surface(Face[nb]);
++              tolex    = std::max(tolex, BRep_Tool::Tolerance(E2));
++              extend   = true;
++            }
++          }
+           if (!extend)
+           {
+             cfacemoins1 = BRep_Tool::CurveOnSurface(E2, F, u2, v2);
+@@ -3246,6 +3348,23 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+     //       pfac2.SetX(xx2);
+     //     }
+ 
++    if (isSeamOnEndFace && facecouture.IsSame(Face[nb - 1]))
++    {
++      // On the face whose seam runs from the vertex, the ends of the
++      // intersection come from the p-curves of edges on the two sides of
++      // the seam, in different periods: the intersection is taken between
++      // them the nearer way, across the seam.
++      if (Bs.IsUPeriodic())
++      {
++        const double aPer = Bs.UPeriod();
++        pfac2.SetX(ElCLib::InPeriod(pfac2.X(), pfac1.X() - 0.5 * aPer, pfac1.X() + 0.5 * aPer));
++      }
++      if (Bs.IsVPeriodic())
++      {
++        const double aPer = Bs.VPeriod();
++        pfac2.SetY(ElCLib::InPeriod(pfac2.Y(), pfac1.Y() - 0.5 * aPer, pfac1.Y() + 0.5 * aPer));
++      }
++    }
+     Pardeb(1) = pfil1.X();
+     Pardeb(2) = pfil1.Y();
+     Pardeb(3) = pfac1.X();
+@@ -3347,7 +3466,40 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+       TopOpeBRepDS_Point& tpt = DStr.ChangePoint(indpoint1);
+       tpt.Tolerance(std::max(tpt.Tolerance(), to1));
+     }
+-    TopOpeBRepDS_Curve tcurv3d(Cc, tolreached);
++    // The intersection with a face whose seam runs from the vertex is split
++    // where it crosses the seam, and the seam is cut there.
++    double parSeam = 0.;
++    int    indSeam = 0;
++    if (isSeamOnEndFace && facecouture.IsSame(Face[nb - 1])
++        && !BRep_Tool::Degenerated(edgecouture))
++    {
++      BRepLib_MakeEdge  aBuilder(Cc);
++      BRepExtrema_ExtCC anExtCC(edgecouture, aBuilder.Edge());
++      if (anExtCC.IsDone() && !anExtCC.IsParallel())
++      {
++        for (int i = 1; i <= anExtCC.NbExt() && indSeam == 0; i++)
++        {
++          const double aPar = anExtCC.ParameterOnE2(i);
++          if (anExtCC.SquareDistance(i) <= 1.e-8 && aPar - p1 > tolex && p2 - aPar > tolex)
++          {
++            parSeam = aPar;
++            indSeam = DStr.AddPoint(TopOpeBRepDS_Point(anExtCC.PointOnE1(i), 1.e-4));
++            // The part of the seam toward the vertex goes with the corner.
++            const int                anIseam = DStr.AddShape(edgecouture);
++            const TopAbs_Orientation anOri =
++              TopExp::FirstVertex(edgecouture).IsSame(Vtx) ? TopAbs_FORWARD : TopAbs_REVERSED;
++            DStr.ChangeShapeInterferences(anIseam).Append(
++              ChFi3d_FilPointInDS(anOri, anIseam, indSeam, anExtCC.ParameterOnE1(i)));
++          }
++        }
++      }
++    }
++    occ::handle<Geom_Curve> Cc1 = Cc;
++    if (indSeam != 0)
++    {
++      Cc1 = new Geom_TrimmedCurve(Cc, p1, parSeam);
++    }
++    TopOpeBRepDS_Curve tcurv3d(Cc1, tolreached);
+     indcurve[nb - 1] = DStr.AddCurve(tcurv3d);
+ 
+     Interfp1 = ChFi3d_FilPointInDS(TopAbs_FORWARD,
+@@ -3356,14 +3508,41 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+                                    Cc->FirstParameter(),
+                                    Isvtx1);
+ 
+-    Interfp2 = ChFi3d_FilPointInDS(TopAbs_REVERSED,
+-                                   indcurve[nb - 1],
+-                                   indpoint2,
+-                                   Cc->LastParameter(),
+-                                   Isvtx2);
++    if (indSeam != 0)
++    {
++      Interfp2 = ChFi3d_FilPointInDS(TopAbs_REVERSED, indcurve[nb - 1], indSeam, parSeam);
++    }
++    else
++    {
++      Interfp2 = ChFi3d_FilPointInDS(TopAbs_REVERSED,
++                                     indcurve[nb - 1],
++                                     indpoint2,
++                                     Cc->LastParameter(),
++                                     Isvtx2);
++    }
+ 
+     DStr.ChangeCurveInterferences(indcurve[nb - 1]).Append(Interfp1);
+     DStr.ChangeCurveInterferences(indcurve[nb - 1]).Append(Interfp2);
++    if (indSeam != 0)
++    {
++      // The second piece, with its own interferences on the face (its
++      // p-curve in the face's period beyond the seam) and on the fillet.
++      occ::handle<Geom_Curve> Cc2 = new Geom_TrimmedCurve(Cc, parSeam, p2);
++      const int               ic2 = DStr.AddCurve(TopOpeBRepDS_Curve(Cc2, tolreached));
++      DStr.ChangeCurveInterferences(ic2).Append(
++        ChFi3d_FilPointInDS(TopAbs_FORWARD, ic2, indSeam, parSeam));
++      DStr.ChangeCurveInterferences(ic2).Append(
++        ChFi3d_FilPointInDS(TopAbs_REVERSED, ic2, indpoint2, Cc->LastParameter(), Isvtx2));
++      occ::handle<Geom2d_Curve> aPc2;
++      ComputeCurve2d(Cc2, Face[nb - 1], aPc2);
++      const TopAbs_Orientation anOrien =
++        Face[nb - 1].Orientation() == orsurfdata ? TopAbs::Reverse(orcourbe) : orcourbe;
++      const int anIface = DStr.AddShape(Face[nb - 1]);
++      DStr.ChangeShapeInterferences(anIface).Append(
++        ChFi3d_FilCurveInDS(ic2, anIface, aPc2, anOrien));
++      DStr.ChangeSurfaceInterferences(Isurf).Append(
++        ChFi3d_FilCurveInDS(ic2, Isurf, Ps, orcourbe));
++    }
+ 
+     //////////////////////////////////////////////////////////////////////
+     // storage for the face
+@@ -3467,7 +3646,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+         int    indp1, indp2, ind;
+         gp_Pnt pext;
+         double ubid, vbid;
+-        pext = BRep_Tool::Pnt(Vtx);
++        pext = BRep_Tool::Pnt(Vprol);
+         GeomAdaptor_Curve       cad;
+         occ::handle<Geom_Curve> csau;
+         if (!(oneintersection1 || oneintersection2))
+@@ -3534,7 +3713,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+         if (par1 > par2)
+         {
+           indp1 = ind;
+-          indp2 = DStr.AddShape(Vtx);
++          indp2 = DStr.AddShape(Vprol);
+           vtx2  = true;
+           par   = par1;
+           par1  = par2;
+@@ -3542,7 +3721,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+         }
+         else
+         {
+-          indp1 = DStr.AddShape(Vtx);
++          indp1 = DStr.AddShape(Vprol);
+           indp2 = ind;
+           vtx1  = true;
+         }
+@@ -3581,12 +3760,17 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+         else
+         {
+           indice = DStr.AddShape(Face[nb - 1]);
+-          DStr.SetNewSurface(Face[nb - 1], Sfacemoins1);
++          if (Vprol.IsSame(Vtx))
++          {
++            DStr.SetNewSurface(Face[nb - 1], Sfacemoins1);
++          }
+         }
+         //// for periodic 3d curves ////
+         if (cad.IsPeriodic() && !C2dint1.IsNull())
+         {
+-          gp_Pnt2d                      P2d = BRep_Tool::Parameters(Vtx, Face[0]);
++          gp_Pnt2d                      P2d = Vprol.IsSame(Vtx)
++                                                ? BRep_Tool::Parameters(Vtx, Face[0])
++                                                : BRep_Tool::Parameters(Vprol, Face[nb - 1]);
+           Geom2dAPI_ProjectPointOnCurve Projector(P2d, C2dint1);
+           par          = Projector.LowerDistanceParameter();
+           double shift = par - ParVtx;
+@@ -3652,7 +3836,10 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+         else
+         {
+           indice = DStr.AddShape(Face[nb]);
+-          DStr.SetNewSurface(Face[nb], Sface);
++          if (Vprol.IsSame(Vtx))
++          {
++            DStr.SetNewSurface(Face[nb], Sface);
++          }
+           if (Face[nb].Orientation() == Face[nb - 1].Orientation())
+           {
+             orient = TopAbs::Reverse(orient);
+@@ -3663,6 +3850,39 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+           Interfc = ChFi3d_FilCurveInDS(indcurv, indice, C2dint2, orient);
+           DStr.ChangeShapeInterferences(indice).Append(Interfc);
+         }
++        if (!Vprol.IsSame(Vtx))
++        {
++          // The edge of the two faces that runs from the end of the
++          // prolonged edge to the vertex (or to the end of an edge
++          // prolonged before) lies in the corner the fillet removes: it is
++          // cut at its end there, the whole of it removed.
++          bool isCut = false;
++          for (int iF = nb - 1; iF <= nb && !isCut; iF++)
++          {
++            for (TopExp_Explorer anExp(Face[iF], TopAbs_EDGE); anExp.More() && !isCut;
++                 anExp.Next())
++            {
++              const TopoDS_Edge& anE = TopoDS::Edge(anExp.Current());
++              TopoDS_Vertex      aV1, aV2;
++              TopExp::Vertices(anE, aV1, aV2);
++              const bool isFromVtx = aCornerVertices.Contains(aV1) && aV2.IsSame(Vprol);
++              const bool isToVtx   = aCornerVertices.Contains(aV2) && aV1.IsSame(Vprol);
++              if (anE.IsSame(E2) || (!isFromVtx && !isToVtx))
++              {
++                continue;
++              }
++              const int anIE = DStr.AddShape(anE);
++              DStr.ChangeShapeInterferences(anIE).Append(
++                ChFi3d_FilPointInDS(isFromVtx ? TopAbs_FORWARD : TopAbs_REVERSED,
++                                    anIE,
++                                    DStr.AddShape(Vprol),
++                                    BRep_Tool::Parameter(Vprol, anE),
++                                    true));
++              isCut = true;
++            }
++          }
++          aCornerVertices.Add(Vprol);
++        }
+       }
+     }
+ 

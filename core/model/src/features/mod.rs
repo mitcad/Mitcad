@@ -73,6 +73,9 @@ pub mod helix;
 // Joints between occurrences (mitcad#55).
 pub mod joint;
 
+// Fillets and chamfers repeated by patterns and mirrors (mitcad#105).
+pub(crate) mod dressup_copies;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -504,6 +507,10 @@ pub(crate) struct Env<'a, S> {
     pub features: &'a [Arc<FeatureEntry>],
     /// Results of the features before this one.
     pub history: &'a [FeatureResult<S>],
+    /// Every component's bodies, for linked geometry (mitcad#100).
+    pub components: &'a BTreeMap<ComponentUid, Arc<BodyState<S>>>,
+    /// Every occurrence's placement at this point of the timeline.
+    pub placements: &'a BTreeMap<OccurrenceUid, Transform>,
 }
 
 /// Inputs of an evaluating feature. Every read is recorded, so the
@@ -616,6 +623,82 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             .bodies
             .iter()
             .map(|(u, b)| (*u, b.value.clone()))
+            .collect()
+    }
+
+    /// The component the feature belongs to.
+    pub fn component(&self) -> ComponentUid {
+        self.env
+            .features
+            .iter()
+            .find(|f| f.uid == self.uid)
+            .map_or(ComponentUid::ROOT, |f| f.component)
+    }
+
+    /// Where linked geometry is (mitcad#100, `links.rs`): its component
+    /// and the transform from that component's coordinates into this
+    /// feature's, by the placements at this point of the timeline.
+    pub fn linked(
+        &mut self,
+        link: &crate::links::OccurrenceLink,
+    ) -> Result<(ComponentUid, Transform), String> {
+        let assembly = self.env.assembly;
+        let source = link.source_component(assembly)?;
+        let component = self.component();
+        let transform = link.transform(assembly, component, &mut |o| self.placement(o))?;
+        Ok((source, transform))
+    }
+
+    /// An occurrence's placement at this point of the timeline: its own
+    /// transform, moved by the features before this one.
+    pub fn placement(&mut self, uid: OccurrenceUid) -> Transform {
+        let placed = self.env.placements.get(&uid).copied();
+        self.reads.push(Read::Placement(
+            uid,
+            placed.as_ref().map(crate::recompute::placement_bits),
+        ));
+        placed
+            .or_else(|| self.env.assembly.occurrence(uid).map(|o| o.transform))
+            .unwrap_or(Transform::IDENTITY)
+    }
+
+    /// A body of `component` at this point (linked geometry).
+    pub fn body_in(&mut self, component: ComponentUid, uid: BodyUid) -> Result<K::Shape, String> {
+        if component == self.component() {
+            return self.body(uid);
+        }
+        let components = self.env.components;
+        let body = components.get(&component).and_then(|b| b.get(&uid));
+        self.reads
+            .push(Read::BodyIn(component, uid, body.map(|b| b.version)));
+        body.map(|b| b.value.clone()).ok_or_else(|| {
+            format!(
+                "body {uid} (from {}) is not in {} at this point of the timeline",
+                self.feature_name(uid.feature),
+                self.env.assembly.name(component)
+            )
+        })
+    }
+
+    /// All bodies of `component` at this point, in order of their ids.
+    pub fn bodies_in(&mut self, component: ComponentUid) -> Vec<(BodyUid, K::Shape)> {
+        if component == self.component() {
+            return self.bodies();
+        }
+        let components = self.env.components;
+        let bodies: Vec<(BodyUid, &Versioned<K::Shape>)> = components
+            .get(&component)
+            .into_iter()
+            .flat_map(|b| b.iter())
+            .map(|(uid, b)| (*uid, b))
+            .collect();
+        self.reads.push(Read::BodiesIn(
+            component,
+            bodies.iter().map(|(uid, b)| (*uid, b.version)).collect(),
+        ));
+        bodies
+            .into_iter()
+            .map(|(uid, b)| (uid, b.value.clone()))
             .collect()
     }
 

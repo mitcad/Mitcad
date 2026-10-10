@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Open Image Denoise 2.5.1: respect an explicitly requested deployment target.
+# Original: https://github.com/RenderKit/oidn/blob/v2.5.1/cmake/oidn_platform.cmake
+# Copyright 2016 Intel Corporation. Modification by Mitcad contributors.
+--- a/cmake/oidn_platform.cmake
++++ b/cmake/oidn_platform.cmake
+@@ -168,10 +168,12 @@
+   # Make sure code runs on older macOS/iOS versions
+   if(NOT IOS)
+     set(OIDN_APPLE_SDK "macosx")
+-    if(OIDN_ARCH STREQUAL "ARM64")
+-      set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0)
+-    else()
+-      set(CMAKE_OSX_DEPLOYMENT_TARGET 10.11)
++    if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
++      if(OIDN_ARCH STREQUAL "ARM64")
++        set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0)
++      else()
++        set(CMAKE_OSX_DEPLOYMENT_TARGET 10.11)
++      endif()
+     endif()
+   else()
+     set(OIDN_APPLE_SDK "iphoneos")

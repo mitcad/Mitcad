@@ -20,8 +20,12 @@
 //! measures of the shape FreeCAD stored, which the body agrees with
 //! (FreeCAD's default integration of B-spline surfaces is off by up to
 //! about 1e-3), FreeCAD's measures are no reference: a difference there is
-//! listed as not compared. Objects with faces in FreeCAD that the import
-//! left out for want of faces are differences.
+//! listed as not compared. So is a difference at a place of shapes the
+//! import brought in as FreeCAD stored them, where FreeCAD's measures are
+//! those the kernel's plain fixed-point integration gives the same shapes:
+//! FreeCAD measures so, while Mitcad integrates faces bounded by B-splines
+//! of many spans more exactly (mitcad#139). Objects with faces in FreeCAD
+//! that the import left out for want of faces are differences.
 //!
 //! An imported sketch's profile curves are compared with its stored
 //! shape's edges: their number, total length and world centre (by length)
@@ -71,6 +75,35 @@ fn close(a: f64, b: f64, relative: f64) -> bool {
     (a - b).abs() <= relative * a.abs().max(b.abs()).max(1.0)
 }
 
+/// The size of FreeCAD's shape: the largest side of its bounding box, at
+/// least 1.
+fn size_of(expected: &Value) -> f64 {
+    expected["bound_box"].as_array().map_or(1.0, |b| {
+        let v: Vec<f64> = b.iter().filter_map(number).collect();
+        if v.len() == 6 {
+            (0..3).map(|k| (v[k + 3] - v[k]).abs()).fold(1.0, f64::max)
+        } else {
+            1.0
+        }
+    })
+}
+
+/// Whether FreeCAD's volume (of solids), area and world centre are the
+/// measures `m`, within `relative` (the centre within 1e-6 mm plus
+/// `relative` of the shape's size).
+fn freecad_has(expected: &Value, m: &super::report::StoredMeasures, relative: f64) -> bool {
+    let solids = expected["solids"].as_u64().unwrap_or(0) > 0;
+    let size = size_of(expected);
+    let volume = number(&expected["volume"]).map(f64::abs);
+    let area = number(&expected["area"]);
+    let center = point(&expected["world_center"]);
+    (!solids || volume.is_some_and(|v| close(v, m.volume, relative)))
+        && area.is_some_and(|a| close(a, m.area, relative))
+        && center.is_some_and(|c| {
+            (0..3).all(|k| (c[k] - m.center[k]).abs() <= ABSOLUTE + relative * size)
+        })
+}
+
 /// Why FreeCAD's measures of a shape are no reference, if they are not.
 fn unreliable(expected: &Value) -> Option<String> {
     if expected["valid"] == false {
@@ -103,14 +136,7 @@ fn stored_apart(
 ) -> Option<String> {
     let stored = place.stored?;
     let solids = expected["solids"].as_u64().unwrap_or(0) > 0;
-    let size = expected["bound_box"].as_array().map_or(1.0, |b| {
-        let v: Vec<f64> = b.iter().filter_map(number).collect();
-        if v.len() == 6 {
-            (0..3).map(|k| (v[k + 3] - v[k]).abs()).fold(1.0, f64::max)
-        } else {
-            1.0
-        }
-    });
+    let size = size_of(expected);
     let near = |a: [f64; 3], b: [f64; 3]| {
         (0..3).all(|k| (a[k] - b[k]).abs() <= ABSOLUTE + relative * size)
     };
@@ -127,6 +153,27 @@ fn stored_apart(
         format!(
             "FreeCAD's measures of its stored shape differ from Mitcad's of the same shape (volume {} against {}, area {} against {}), which the import agrees with",
             expected["volume"], stored.volume, expected["area"], stored.area
+        )
+    })
+}
+
+/// Why FreeCAD's measures of a place of shapes the import brought in as
+/// FreeCAD stored them are no reference, if they are not: they are the
+/// measures of the kernel's plain fixed-point integration of the same shapes
+/// ([`super::report::PlacedReport::fixed`]), as FreeCAD measures, which do
+/// not follow a face's boundary curves that are B-splines of many spans;
+/// Mitcad integrates those faces more exactly (mitcad#139).
+fn fixed_apart(
+    place: &super::report::PlacedReport,
+    expected: &Value,
+    relative: f64,
+) -> Option<String> {
+    let fixed = place.fixed?;
+    (!place.replayed && freecad_has(expected, &fixed, relative)).then(|| {
+        format!(
+            "FreeCAD's measures are those of fixed-point integration (volume {}, area {}), \
+             which Mitcad's integration of faces bounded by B-splines of many spans refines",
+            fixed.volume, fixed.area
         )
     })
 }
@@ -203,15 +250,7 @@ pub(crate) fn check(report: &FcstdReport, dump: &Value) -> ReferenceReport {
         match point(&expected["world_center"]) {
             _ if curves_only => {}
             Some(c) => {
-                let size = expected["bound_box"].as_array().map_or(1.0, |b| {
-                    let v: Vec<f64> = b.iter().filter_map(number).collect();
-                    if v.len() == 6 {
-                        (0..3).map(|k| (v[k + 3] - v[k]).abs()).fold(1.0, f64::max)
-                    } else {
-                        1.0
-                    }
-                });
-                let tolerance = ABSOLUTE + relative * size;
+                let tolerance = ABSOLUTE + relative * size_of(expected);
                 let far = (0..3).any(|k| (place.center[k] - c[k]).abs() > tolerance);
                 if far {
                     differences.push(format!(
@@ -224,7 +263,10 @@ pub(crate) fn check(report: &FcstdReport, dump: &Value) -> ReferenceReport {
         }
         // A difference from measures FreeCAD itself does not get right is
         // no difference of the import.
-        match unreliable(expected).or_else(|| stored_apart(place, expected, relative)) {
+        let why = unreliable(expected)
+            .or_else(|| stored_apart(place, expected, relative))
+            .or_else(|| fixed_apart(place, expected, relative));
+        match why {
             Some(why) if !differences.is_empty() => {
                 out.not_compared
                     .push(format!("{what}: {why}; {}", differences.join("; ")));

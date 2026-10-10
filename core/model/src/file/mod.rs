@@ -139,6 +139,8 @@
 //! {...}}`), which opening reads.
 
 mod project;
+// A project's settings, shared and of this computer (mitcad#89).
+pub mod settings;
 mod v1;
 mod v2;
 

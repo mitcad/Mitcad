@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/update
 # Automatic updates (mitcad#9) through the real UI, against a local HTTPS
 # server (tools/update-test-server.py) with a certificate and a release key
 # made for the test (MITCAD_UPDATE_TEST_CA, MITCAD_UPDATE_TEST_KEY); no
@@ -29,6 +30,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh); needs python3 and openssl.
 # Usage: tools/ui-update-test.sh
+# check-all sources: core/update tools/update-test-server.py
 
 source "$(dirname "$0")/ui-test-lib.sh"
 

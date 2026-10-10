@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/commands
 # The CONSTRUCT group (U4) through the real UI, on the demo block (60 x 40
 # x 20 mm, Body1 F2.b0): construction planes, axes and points picked from
 # the origin and the block, with the geometry the model gives them

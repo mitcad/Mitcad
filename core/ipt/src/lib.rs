@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Reader for `.ipt` part files: the bodies stored in the file and its
-//! document properties. See `README.md` for the format as far as it is
-//! implemented.
+//! document properties; and for `.iam` assemblies ([`assembly`]): the
+//! files they refer to and the occurrences that place them. See
+//! `README.md` for the format as far as it is implemented.
 //!
 //! Layers, bottom up:
 //! - [`cfb`]: the compound file container (Microsoft's published MS-CFB
@@ -17,15 +18,22 @@
 //! The format knowledge comes from Microsoft's specifications for the
 //! container and the property sets, and from inspecting files for the rest.
 
+pub mod assembly;
 pub mod cfb;
 pub mod dc;
 pub mod design;
 pub mod features;
+pub mod groups;
+pub mod mesh;
 pub mod params;
 pub mod profile;
 pub mod props;
+pub mod result;
 pub mod rse;
 pub mod sketch;
+pub mod states;
+#[doc(hidden)]
+pub mod testassembly;
 #[doc(hidden)]
 pub mod testdata;
 #[doc(hidden)]
@@ -63,6 +71,13 @@ pub const PID_LENGTH_UNIT: u32 = 8;
 
 /// The ASM magic of the B-rep record's data.
 const ASM_MAGIC: &[u8] = b"ASM BinaryFile";
+/// The magic of the same format in files of releases before 2013.
+const OLDER_ASM_MAGIC: &[u8] = mitcad_f3d::asm::file::OLDER_MAGIC;
+
+/// The data starts with an ASM binary file.
+fn is_asm(data: &[u8]) -> bool {
+    data.starts_with(ASM_MAGIC) || data.starts_with(OLDER_ASM_MAGIC)
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum IptError {
@@ -159,6 +174,9 @@ pub struct DocumentInfo {
     /// The model's length unit code and its symbol when known.
     pub length_unit_code: Option<i64>,
     pub length_unit: Option<&'static str>,
+    /// The range boxes (cm: min, max) of the bodies the file keeps hidden
+    /// ([`result`]: the result list's hidden entries).
+    pub hidden_bodies: Vec<[[f64; 3]; 2]>,
 }
 
 /// An opened `.ipt` file.
@@ -262,6 +280,7 @@ impl IptFile {
             release: text(PID_RELEASE),
             length_unit_code: code,
             length_unit: code.and_then(length_unit),
+            hidden_bodies: self.hidden_ranges().unwrap_or_default(),
         }
     }
 
@@ -281,7 +300,8 @@ impl IptFile {
         let data = rse::decompress(&stream[start..], compression).map_err(what)?;
         let (tables, records) = match rse::tables(&raw) {
             Ok(tables) => {
-                let records = rse::records(&data, &tables).map_err(|e| e.to_string());
+                let records =
+                    rse::split(&data, &tables, segment.meta.major()).map_err(|e| e.to_string());
                 (tables, records)
             }
             Err(e) => (rse::Tables::default(), Err(format!("tables: {e}"))),
@@ -333,7 +353,7 @@ impl IptFile {
                             continue;
                         }
                         match data[r.range.clone()].get(BREP_RECORD_HEAD..) {
-                            Some(asm) if asm.starts_with(ASM_MAGIC) => out.push(BrepRecord {
+                            Some(asm) if is_asm(asm) => out.push(BrepRecord {
                                 segment: segment.name.clone(),
                                 record: Some(r.index),
                                 asm: asm.to_vec(),
@@ -346,16 +366,18 @@ impl IptFile {
                     }
                 }
                 Err(e) => {
-                    let mut at = 0;
                     let mut found = false;
-                    while let Some(p) = find(&data[at..], ASM_MAGIC) {
-                        out.push(BrepRecord {
-                            segment: segment.name.clone(),
-                            record: None,
-                            asm: data[at + p..].to_vec(),
-                        });
-                        found = true;
-                        at += p + ASM_MAGIC.len();
+                    for magic in [ASM_MAGIC, OLDER_ASM_MAGIC] {
+                        let mut at = 0;
+                        while let Some(p) = find(&data[at..], magic) {
+                            out.push(BrepRecord {
+                                segment: segment.name.clone(),
+                                record: None,
+                                asm: data[at + p..].to_vec(),
+                            });
+                            found = true;
+                            at += p + magic.len();
+                        }
                     }
                     if !found {
                         problems.push(format!("{}: {e}", segment.name));
@@ -406,6 +428,32 @@ pub fn history_states(asm: &[u8]) -> Option<usize> {
         .map(|h| h.states.len())
 }
 
+/// The bodies the ASM history deleted (a combine's tools, joined into its
+/// target): the copy that stands for each and the index in the history's
+/// states of the state that deleted it. Rolled back past that state, the
+/// body exists (unless an older state created it) with the copy as its
+/// entity.
+pub fn deleted_bodies(
+    history: &mitcad_f3d::asm::history::History,
+    file: &mitcad_f3d::asm::AsmFile,
+) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for (j, state) in history.states.iter().enumerate() {
+        for &(before, after) in &state.bulletins {
+            if let (Some(copy), None) = (before, after)
+                && file
+                    .records
+                    .get(copy)
+                    .is_some_and(|r| r.type_name == "body")
+                && !out.iter().any(|&(c, _)| c == copy)
+            {
+                out.push((copy, j));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,6 +473,7 @@ mod tests {
                 release: Some("Mitcad test writer".into()),
                 length_unit_code: Some(11272),
                 length_unit: Some("in"),
+                hidden_bodies: Vec::new(),
             }
         );
         let records = f.brep_records().unwrap();
@@ -448,6 +497,22 @@ mod tests {
                 .any(|v| (v.point[0] - 10.0).abs() < 1e-9)
         );
         assert_eq!(history_states(&records[0].asm), None);
+    }
+
+    #[test]
+    fn reads_the_hidden_bodies_of_the_result_list() {
+        let f = IptFile::parse(testdata::test_part_with_hidden_body()).unwrap();
+        let list = f.result_bodies().unwrap().unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(list[0].visible && list[0].solid);
+        assert!(!list[1].visible && !list[1].solid);
+        assert_eq!(
+            f.document().hidden_bodies,
+            vec![[[-1.0, -1.0, 0.0], [1.0, 1.0, 2.0]]]
+        );
+        // Without a result segment nothing is hidden.
+        let plain = IptFile::parse(testdata::test_part()).unwrap();
+        assert_eq!(plain.result_bodies().unwrap(), None);
     }
 
     #[test]

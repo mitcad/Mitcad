@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/commands app/MainWindowJoints.cpp
 # Joints between components (mitcad#55) through the real UI, on a design
 # mitcad-cli makes: Plate:1 (a 40 x 40 x 10 block, grounded), Pin:1 (a
 # 10 x 10 x 20 block at x = 100) and Cap:1 (a 10 x 10 x 5 block at y = 100):
@@ -19,6 +20,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-joint-test.sh [screenshot.png]
+# check-all sources: tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 

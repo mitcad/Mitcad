@@ -1,0 +1,33 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a blend rolling on an edge (surface/restriction walking) stopped
+where a step was too large (mitcad#121).
+
+BRepBlend_SurfRstLineBuilder::InternalPerform: a section whose contacts lie
+outside their domains and cannot be reframed on an arc (on the surface, on
+the restriction, or where the ball leaves the restriction) ended the walk
+at once (Blend_SamePoints). A step that is too large lands such sections:
+on a long rounding the guide's maximal step reaches the other branch of
+the solution (a ball on the far side of the restriction), whose contact
+lies outside the face. As BRepBlend_Walking does for blends between two
+faces, the step is now halved (Blend_StepTooLarge) while it is larger than
+twice the guide's tolerance; only then does the walk stop there.
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
+index 5f06577..d79fc74 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
+@@ -787,6 +787,13 @@ void BRepBlend_SurfRstLineBuilder::InternalPerform(Blend_SurfRstFunction&  Func,
+         }
+         State = TestArret(Func, true, State);
+       }
++      else if (stepw > 2. * tolgui)
++      {
++        // Failed reframing: the step may have been too large (a section on
++        // another branch of the solution, outside the domains); it is reduced
++        // as the walking between two faces does.
++        State = Blend_StepTooLarge;
++      }
+       else
+       {
+         // Failed reframing. Leave with PointsConfondus

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/render app/framework/Appearances.cpp app/framework/Appearances.hpp
 # Appearances in the rendered view (mitcad#46, docs/rendering.md): a box in
 # red plastic and a sphere in chrome, rendered through the real UI:
 #   - The scene sent to the worker names each body's appearance.
@@ -15,6 +16,7 @@
 # Skipped (exit 0) when the build has no render worker (MITCAD_RENDER off).
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-render-materials-test.sh [directory for screenshots]
+# check-all sources: tools/cli
 
 UI_APP=${UI_APP:-$(cd "$(dirname "$0")/.." && pwd)/build/dev/app/mitcad}
 BUILD_DIR=$(cd "$(dirname "$UI_APP")/.." 2> /dev/null && pwd)

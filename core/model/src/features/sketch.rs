@@ -35,6 +35,8 @@ use crate::topo::{FaceName, RegionKey};
 use super::construction::datum_kind;
 use super::geom_ref::GeomRef;
 use crate::datum::{Datum, DatumKind, DatumPlane, OriginDatum};
+use crate::links::OccurrenceLink;
+use crate::transform::Transform;
 
 /// The plane a sketch lies on. Origin planes have the frames of the origin
 /// datums ([`OriginDatum::datum`]): XY x = +X, y = +Y (normal +Z); XZ
@@ -188,6 +190,11 @@ impl FrameDef {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SketchDef<P = ParamId> {
     pub plane: SketchPlane,
+    /// Where the plane is when it is another component's (mitcad#100,
+    /// `links.rs`): a face, a construction plane or an origin plane of
+    /// that component, moved into the sketch's coordinates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plane_link: Option<OccurrenceLink>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame: Option<Box<FrameDef>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -212,6 +219,7 @@ impl<P> Default for SketchDef<P> {
     fn default() -> Self {
         Self {
             plane: SketchPlane::Xy,
+            plane_link: None,
             frame: None,
             entities: Vec::new(),
             constraints: Vec::new(),
@@ -231,6 +239,8 @@ impl<P> Default for SketchDef<P> {
 struct SketchDefIn<P> {
     #[serde(default)]
     plane: SketchPlane,
+    #[serde(default)]
+    plane_link: Option<OccurrenceLink>,
     #[serde(default)]
     frame: Option<Box<FrameDef>>,
     #[serde(default)]
@@ -256,6 +266,7 @@ impl<'de, P: Deserialize<'de>> Deserialize<'de> for SketchDef<P> {
         let def = SketchDefIn::<P>::deserialize(deserializer)?;
         let mut sketch = SketchDef {
             plane: def.plane,
+            plane_link: def.plane_link,
             frame: def.frame,
             entities: def.entities,
             constraints: def.constraints,
@@ -337,6 +348,7 @@ impl<P> SketchDef<P> {
     ) -> Result<SketchDef<Q>, E> {
         Ok(SketchDef {
             plane: self.plane.clone(),
+            plane_link: self.plane_link.clone(),
             frame: self.frame.clone(),
             entities: self.entities.clone(),
             constraints: self.constraints.clone(),
@@ -929,6 +941,40 @@ impl FeatureInfo for SketchDef {
     }
 }
 
+impl SketchDef {
+    /// The features the sketch names through links to other components
+    /// (mitcad#100), each with its link.
+    pub(crate) fn linked_references(&self) -> Vec<(FeatureUid, &OccurrenceLink)> {
+        let mut out = Vec::new();
+        if let Some(link) = &self.plane_link {
+            let mut references = References::default();
+            match &self.plane {
+                SketchPlane::Face { face, body } => {
+                    references.features.extend(face.features());
+                    if let Some(body) = body {
+                        references.body(*body);
+                    }
+                }
+                SketchPlane::Construction(uid) => {
+                    references.features.insert(*uid);
+                }
+                SketchPlane::Xy | SketchPlane::Xz | SketchPlane::Yz => {}
+            }
+            out.extend(references.features.into_iter().map(|uid| (uid, link)));
+        }
+        for projection in &self.projections {
+            if let Some(link) = &projection.link {
+                let mut features = topo_features(&projection.source);
+                if let Some(body) = projection.body {
+                    features.insert(body.feature);
+                }
+                out.extend(features.into_iter().map(|uid| (uid, link)));
+            }
+        }
+        out
+    }
+}
+
 pub(crate) fn topo_features(name: &crate::topo::TopoName) -> BTreeSet<FeatureUid> {
     match name {
         crate::topo::TopoName::Face(f) => f.features(),
@@ -942,10 +988,11 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
         &self,
         ctx: &mut super::EvalContext<'_, K>,
     ) -> Result<FeatureOutput<K::Shape>, String> {
-        let plane = match (&self.plane, self.plane.origin_frame()) {
-            (_, Some(frame)) => frame,
-            (SketchPlane::Construction(uid), None) => ctx.datum_plane(*uid)?.frame(),
-            (_, None) => face_frame(&self.plane, ctx)?,
+        let plane = match (&self.plane_link, &self.plane, self.plane.origin_frame()) {
+            (Some(link), _, _) => linked_frame(&self.plane, link, ctx)?,
+            (None, _, Some(frame)) => frame,
+            (None, SketchPlane::Construction(uid), None) => ctx.datum_plane(*uid)?.frame(),
+            (None, _, None) => face_frame(&self.plane, ctx)?,
         };
         let frame = self.place(&plane);
         let followed = crate::sketch::project::follow_links(self, &frame, ctx)?;
@@ -1013,24 +1060,7 @@ fn face_frame<K: Kernel>(
         Some(body) => vec![(*body, ctx.body(*body)?)],
         None => ctx.bodies(),
     };
-    let mut found = None;
-    for (uid, shape) in shapes {
-        let count = ctx
-            .kernel
-            .count_faces(&shape, face)
-            .map_err(|e| format!("plane {face}: {e}"))?;
-        if count > 0 {
-            if found.is_some() {
-                return Err(format!(
-                    "plane {face}: the face is on several bodies; name the body"
-                ));
-            }
-            found = Some(uid);
-        }
-    }
-    let body = found.ok_or_else(|| {
-        format!("plane {face}: the face does not exist at this point of the timeline")
-    })?;
+    let (body, _) = face_body(ctx.kernel, face, shapes)?;
     let face = GeomRef::Face {
         body,
         face: (**face).clone(),
@@ -1039,6 +1069,79 @@ fn face_frame<K: Kernel>(
         .plane(&face)
         .map_err(|e| format!("the sketch plane: {e}"))?
         .frame())
+}
+
+/// The body among `shapes` that has the face: exactly one must.
+fn face_body<K: Kernel>(
+    kernel: &K,
+    face: &FaceName,
+    shapes: Vec<(BodyUid, K::Shape)>,
+) -> Result<(BodyUid, K::Shape), String> {
+    let mut found = None;
+    for (uid, shape) in shapes {
+        let count = kernel
+            .count_faces(&shape, face)
+            .map_err(|e| format!("plane {face}: {e}"))?;
+        if count > 0 {
+            if found.is_some() {
+                return Err(format!(
+                    "plane {face}: the face is on several bodies; name the body"
+                ));
+            }
+            found = Some((uid, shape));
+        }
+    }
+    found.ok_or_else(|| {
+        format!("plane {face}: the face does not exist at this point of the timeline")
+    })
+}
+
+/// The frame of a plane of another component (mitcad#100): found there and
+/// moved into the sketch's coordinates. An origin or construction plane
+/// keeps its own axes; a face gets the frame every planar face gets
+/// ([`SketchPlane::face_frame`]), in the sketch's coordinates.
+fn linked_frame<K: Kernel>(
+    plane: &SketchPlane,
+    link: &OccurrenceLink,
+    ctx: &mut super::EvalContext<'_, K>,
+) -> Result<SketchFrame, String> {
+    let (component, to_sketch): (_, Transform) = ctx
+        .linked(link)
+        .map_err(|e| format!("the sketch plane: {e}"))?;
+    if let Some(frame) = plane.origin_frame() {
+        return Ok(to_sketch.apply_frame(&frame));
+    }
+    match plane {
+        SketchPlane::Construction(uid) => {
+            Ok(to_sketch.apply_frame(&ctx.datum_plane(*uid)?.frame()))
+        }
+        SketchPlane::Face { face, body } => {
+            let shapes = match body {
+                Some(body) => vec![(*body, ctx.body_in(component, *body)?)],
+                None => ctx.bodies_in(component),
+            };
+            let (_, shape) = face_body(ctx.kernel, face, shapes)?;
+            match ctx
+                .kernel
+                .face_geometry(&shape, face)
+                .map_err(|e| format!("the sketch plane: face {face}: {e}"))?
+            {
+                crate::datum::SurfaceGeometry::Plane { origin, normal } => {
+                    Ok(SketchPlane::face_frame(
+                        to_sketch.apply_point(origin),
+                        to_sketch.apply_vector(normal),
+                    ))
+                }
+                other => Err(format!(
+                    "the sketch plane: face {face} is not planar ({})",
+                    other.kind()
+                )),
+            }
+        }
+        SketchPlane::Xy | SketchPlane::Xz | SketchPlane::Yz => {
+            unreachable!("origin planes have a frame")
+        }
+    }
 }
 
 /// The curves of solved geometry by id, for callers outside the module.

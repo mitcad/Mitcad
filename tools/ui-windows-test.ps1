@@ -5,6 +5,10 @@
 #   1. --demo: the demo block is drawn with the body colours.
 #   2. --open of a project file with a fillet: recomputed and drawn.
 #   3. the same file with --set d3=35: the block is drawn taller.
+#   4. MITCAD_TEST_CRASH=app and model-worker: the crash report's stack
+#      starts at the crashing function, named from the PDB file (mitcad#76).
+#   5. View > Rendered, with the render worker: its frames refine and show
+#      the block (mitcad#51; skipped without mitcad-render.exe).
 # The app renders into an offscreen framebuffer and --screenshot reads it
 # back, so this works over SSH, in session 0 without a desktop.
 #
@@ -145,8 +149,9 @@ public static class Shot {
 '@
 
 # Invoke-Mitcad name arguments...: runs the app until it exits and returns
-# its log (Qt messages go to stderr with QT_FORCE_STDERR_LOGGING).
-function Invoke-Mitcad([string]$Name, [string[]]$Arguments, [hashtable]$Environment = @{}) {
+# its log (Qt messages go to stderr with QT_FORCE_STDERR_LOGGING). With
+# -Crash the app is to crash instead of exiting.
+function Invoke-Mitcad([string]$Name, [string[]]$Arguments, [hashtable]$Environment = @{}, [switch]$Crash) {
   $info = New-Object System.Diagnostics.ProcessStartInfo $App
   $info.Arguments = ($Arguments | ForEach-Object { '"' + $_ + '"' }) -join ' '
   $info.UseShellExecute = $false
@@ -174,7 +179,9 @@ function Invoke-Mitcad([string]$Name, [string[]]$Arguments, [hashtable]$Environm
   $process.WaitForExit()
   $log = $stdout.Result + $stderr.Result
   Set-Content -Encoding utf8 (Join-Path $Out "$Name.log") $log
-  if ($process.ExitCode -ne 0) { Fail "${Name}: exit code $($process.ExitCode)"; Write-Host $log }
+  if ($Crash) {
+    if ($process.ExitCode -eq 0) { Fail "${Name}: Mitcad exited instead of crashing"; Write-Host $log }
+  } elseif ($process.ExitCode -ne 0) { Fail "${Name}: exit code $($process.ExitCode)"; Write-Host $log }
   return $log
 }
 
@@ -268,6 +275,62 @@ Expect-Log $log 'Recomputed 1 feature\(s\)' 'only the sketch computed'
 $stored = Check-Shot 'store2'
 if ($low -and $stored -and $stored.Shades.Count -eq $low.Shades.Count) {
   Pass 'the stored block is drawn as the computed one'
+}
+
+# A crash (mitcad#76), of the window's thread and of the model's worker
+# thread (where OCCT's handlers are, the C runtime's signal): the report's
+# stack is walked from the fault, so it starts at the crashing function and
+# not in the handlers, and names it from the PDB file next to the build's
+# executable.
+foreach ($where in @('app', 'model-worker')) {
+  $crashes = Join-Path $Out "crashes-$where"
+  Remove-Item -Recurse -Force $crashes -ErrorAction SilentlyContinue
+  $log = Invoke-Mitcad "crash-$where" @('--no-recovery', '--demo') @{
+    'MITCAD_TEST_CRASH' = $where; 'MITCAD_CRASH_DIR' = $crashes } -Crash
+  Expect-Log $log "MITCAD_TEST_CRASH=$where\)" "${where}: crashed for the test"
+  $report = Get-ChildItem -Path $crashes -Filter 'crash-*.crash' -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $report) { Fail "${where}: no crash report written"; continue }
+  $lines = Get-Content $report.FullName
+  $stack = $lines[([Array]::IndexOf($lines, 'stack:') + 1)..([Array]::IndexOf($lines, 'actions:') - 1)]
+  $stack | Select-Object -First 4 | ForEach-Object { Write-Host "     $_" }
+  if ($lines -notcontains 'signal: EXCEPTION_ACCESS_VIOLATION') { Fail "${where}: the report is not of an access violation" }
+  elseif ($stack.Count -lt 3) { Fail "${where}: the report's stack has $($stack.Count) frames" }
+  elseif ($stack[0] -match '\\mitcad\.exe!mitcad::crash::crashNow\+0x[0-9a-f]+$') {
+    Pass "${where}: the report's stack starts at the crashing function, named"
+  } else { Fail "${where}: the report's stack starts at $($stack[0]), not at mitcad::crash::crashNow" }
+}
+
+# View > Rendered (mitcad#51), in a build with the render worker: the app
+# starts mitcad-render.exe next to it, whose frames (through the named
+# shared memory) refine to all samples; the rendered view shows the block.
+$worker = Join-Path (Split-Path $App) 'mitcad-render.exe'
+if (-not (Test-Path $worker)) {
+  Write-Host 'SKIP: View > Rendered (no mitcad-render.exe: MITCAD_RENDER=OFF)'
+} else {
+  $script = Join-Path $Out 'render.script'
+  @"
+command view.rendered
+expect-log 'Rendered view on'
+wait-log 'Render frame view [0-9]+ [0-9]+x[0-9]+ samples 16 ' 120
+screenshot-view '$((Join-Path $Out 'rendered.png') -replace "'", "''")'
+command view.rendered
+expect-log 'Rendered view off'
+"@ | Set-Content -Encoding ascii $script
+  $log = Invoke-Mitcad 'rendered' @('--no-recovery', '--demo') @{
+    'MITCAD_TEST_INPUT' = $script; 'MITCAD_RENDER_SAMPLES' = '16' }
+  Expect-Log $log 'TestDriver: done' 'View > Rendered: the script ran'
+  $frames = ([regex]::Matches($log, 'Render frame view [0-9]+ [0-9]+x[0-9]+ samples ')).Count
+  if ($frames -ge 2) { Pass "View > Rendered: the view refined in $frames frames" }
+  else { Fail "View > Rendered: $frames frames shown" }
+  $path = Join-Path $Out 'rendered.png'
+  if (-not (Test-Path $path)) { Fail 'View > Rendered: no screenshot' }
+  else {
+    $stats = [Shot]::Analyze($path)
+    Write-Host ("     rendered: {0}x{1}, background {2}, body {3:0.0}%" -f $stats.Width, $stats.Height,
+      $stats.Background, $stats.Percent($stats.FacePixels))
+    if ($stats.Percent($stats.FacePixels) -ge 10) { Pass 'View > Rendered: the block is in the rendered view' }
+    else { Fail 'View > Rendered: no block in the rendered view' }
+  }
 }
 
 Write-Host "Screenshots and logs: $Out"

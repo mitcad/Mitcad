@@ -1,0 +1,40 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+ChFi3d_FilDS: the end of a closed stripe is its start: the index of its last
+points is the index of its first (ChFi3d_MakeExtremities), a vertex index
+when the first common point is a vertex. The type of the interference at
+the end was taken from the last common point, which a walk may end without
+identifying with that vertex; a vertex index then went in as the index of a
+point, and ChFi3d_Builder::Compute failed in
+TopOpeBRepDS_DataStructure::Point (a closed blend rolling on a closed edge,
+from the edge overflow of the previous patch, reaches it). The type now
+comes from the first common point too.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+index b8def97..e583b66 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -3141,6 +3141,12 @@ void ChFi3d_FilDS(const int                         SolidIndex,
+       if (j == SeqFil.Length())
+       {
+         ipoin = CorDat->IndexLastPointOnS1();
++        if (Closed)
++        {
++          // The end of a closed stripe is its start, which may lie on a
++          // vertex its end point was not identified with.
++          isVertex = SeqFil(1)->VertexFirstOnS1().IsVertex();
++        }
+       }
+       else if (j == (SeqFil.Length() - 1) && /*Closed &&*/
+                (DStr.Curve(SeqFil.Last()->InterferenceOnS1().LineIndex()).Curve().IsNull()))
+@@ -3241,6 +3247,10 @@ void ChFi3d_FilDS(const int                         SolidIndex,
+       if (j == SeqFil.Length())
+       {
+         ipoin = CorDat->IndexLastPointOnS2();
++        if (Closed)
++        {
++          isVertex = SeqFil(1)->VertexFirstOnS2().IsVertex();
++        }
+       }
+       else if (j == (SeqFil.Length() - 1) && /*Closed &&*/
+                (DStr.Curve(SeqFil.Last()->InterferenceOnS2().LineIndex()).Curve().IsNull()))

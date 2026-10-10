@@ -13,6 +13,7 @@
 #include <QTimer>
 
 class QLockFile;
+class QJsonObject;
 
 namespace mitcad {
 
@@ -29,10 +30,10 @@ struct GeneralSettings;
 // - `<id>.lock`: a QLockFile held while the session runs, from its first
 //   autosave to its end. A lock whose process is gone (QLockFile checks the
 //   process id and the application's name) marks a session that crashed.
-// - `<id>.mitcad`: the project file (the same format as a saved one, so
-//   load_document reads it), written first.
+// - `<id>.<generation UUID>.mitcad`: an immutable project snapshot (the
+//   same format as a saved one), written before publishing its metadata.
 // - `<id>.json`: what it is, written last, so that it marks a complete
-//   pair: {"format": "mitcad-autosave", "version": 1, "session", "pid",
+//   generation: {"format": "mitcad-autosave", "version": 2, "session", "pid",
 //   "application", "application_version", "document" (the window's name for
 //   it), "path" (the file it was opened from or saved to, or empty),
 //   "base_digest" (that file's content as opened or saved, or empty),
@@ -47,8 +48,10 @@ struct GeneralSettings;
 // another document. A normal end removes the session's files and its lock.
 // The project file is made on the UI thread when the model is not busy (the
 // window's `blocked` says why not; it is tried again a little later), and
-// both files are written on a thread of the manager's own, each atomically
-// (QSaveFile: a temporary file, flushed to disk, then renamed).
+// both files are written on a thread of the manager's own. QSaveFile
+// atomically publishes the metadata pointer only after its new snapshot
+// is complete; the prior snapshot stays until that publication succeeds.
+// Recovery also reads version 1's fixed `<id>.mitcad` snapshots.
 //
 // A session that ended without removing its files left work to recover
 // (Recovery.hpp). A document recovered from them is this session's then
@@ -142,6 +145,14 @@ private:
 // FNV-1a 64 of the bytes as 16 hex digits (the model's digest of linked
 // files is the same hash).
 QString fileDigest(QByteArrayView data);
+
+// The production publication path; a writer can inject failures in tests.
+// Metadata always points to a complete immutable snapshot. A failed write
+// leaves the previously published generation intact.
+using AutosaveWriter = std::function<bool(const QString&, const QByteArray&, QString&)>;
+bool publishAutosave(const QString& directory, const QString& session, const QByteArray& data,
+                     QJsonObject about, QString& error, const AutosaveWriter& writer = {});
+bool validAutosaveProject(const QString& session, const QString& project, int version);
 
 // Removes a session's files from the recovery folder: its metadata first
 // (without it, what is left is no pair to recover), then its project file

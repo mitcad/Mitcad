@@ -37,6 +37,14 @@ public:
   // A library command (mitcad#64, commands.md "Component libraries":
   // library_fetch, ...); name() is the command's name.
   static RemoteTask* library(const QJsonObject& command, QObject* parent);
+  // A projects command without a project (mitcad#89, commands.md
+  // "Projects": check_remote, create_project, clone_project, init_bare,
+  // host_keys, ...); name() is the command's name.
+  static RemoteTask* projects(const QJsonObject& command, QObject* parent);
+  // Work of several commands in a row (`run` on the task's thread, its
+  // answer in the form of a command's), named `name`.
+  using Run = std::function<QJsonObject(const SyncControl& control)>;
+  static RemoteTask* custom(const QString& name, Run run, QObject* parent);
   // A task still running is cancelled and waited for.
   ~RemoteTask() override;
 
@@ -60,7 +68,6 @@ signals:
   void finished();
 
 private:
-  using Run = std::function<QJsonObject(const SyncControl& control)>;
   RemoteTask(QString name, Run run, QObject* parent);
   void poll();
 

@@ -19,7 +19,74 @@ pub fn named_cube_blob() -> Vec<u8> {
     cube(true)
 }
 
+/// The cube of [`cube_blob`] with an ASM history of three operations,
+/// newest first: state 3 moved the corner (1, 1, 1) from (1, 1, 0.5),
+/// state 2 changed nothing, state 1 created the body. Rolled back one or
+/// two states, the corner is at (1, 1, 0.5); three, there is no body.
+pub fn cube_with_history_blob() -> Vec<u8> {
+    // The live records 0..86, the history section (records 86..90: its
+    // header and the three states; its end marker takes no record), and
+    // the corner point's copy, record 90 and pointer 86 (the history
+    // section takes no pointer numbers).
+    let mut w = cube_writer(false);
+    let (corner, copy) = (66, 86);
+    w.record("Begin-of-ASM-History-Data")
+        .ident("history_stream")
+        .int(3)
+        .int(3)
+        .int(0)
+        .int(3)
+        .ptr(-1)
+        .ptr(0)
+        .ptr(2)
+        .ptr(-1)
+        .end();
+    // State 3 (index 0): newer -1, older 1, itself 0; the corner changed.
+    w.record("delta_state")
+        .int(3)
+        .int(1)
+        .int(0)
+        .ptr(-1)
+        .ptr(1)
+        .ptr(0)
+        .ptr(-1)
+        .ptr(0);
+    w.bool(false).int(1).ptr(0).int(2);
+    w.int(1).ptr(copy).ptr(corner).int(0).int(0).int(0).end();
+    // State 2 (index 1): no bulletins.
+    w.record("delta_state")
+        .int(2)
+        .int(1)
+        .int(0)
+        .ptr(0)
+        .ptr(2)
+        .ptr(1)
+        .ptr(-1)
+        .ptr(0);
+    w.bool(false).int(0).int(0).end();
+    // State 1 (index 2): created the body.
+    w.record("delta_state")
+        .int(1)
+        .int(1)
+        .int(0)
+        .ptr(1)
+        .ptr(-1)
+        .ptr(2)
+        .ptr(-1)
+        .ptr(0);
+    w.bool(false).int(1).ptr(2).int(2);
+    w.int(1).ptr(-1).ptr(1).int(0).int(0).int(0).end();
+    w.record("End-of-ASM-History-Section");
+    w.record("point").head().pos([1.0, 1.0, 0.5]).end();
+    w.finish()
+}
+
 fn cube(named: bool) -> Vec<u8> {
+    cube_writer(named).finish()
+}
+
+/// The cube's records written, before the end of the data.
+fn cube_writer(named: bool) -> Writer {
     // Record layout: 0 asmheader, 1 body, 2 lump, 3 shell,
     // faces 4..10, loops 10..16, coedges 16..40, edges 40..52,
     // vertices 52..60, points 60..68, curves 68..80, surfaces 80..86.
@@ -228,7 +295,7 @@ fn cube(named: bool) -> Vec<u8> {
             w.int(0).end();
         }
     }
-    w.finish()
+    w
 }
 
 /// A cylinder of radius 1 cm and height 2 cm on the XY plane. Like ASM, the
@@ -533,11 +600,24 @@ mod tests {
         let data = cube_blob();
         let file = AsmFile::parse(&data).unwrap();
         let mut b = convert_file(&file, &Options::default()).remove(0).body;
-        // Keep the bottom and top faces only: two parts without a shared edge.
+        // Keep the bottom and top faces only: two parts without a shared
+        // edge, side by side: a lump each.
+        let mut two = b.clone();
+        two.lumps[0].shells[0].faces = vec![0, 1];
+        two.split_disconnected_shells();
+        assert_eq!(two.lumps.len(), 2);
+        assert_eq!(two.lumps[0].shells.len(), 1);
+        assert_eq!(two.lumps[1].shells[0].faces, vec![1]);
+        assert!(!two.is_solid());
+        // A shell besides another one (a void) splits within its lump.
         b.lumps[0].shells[0].faces = vec![0, 1];
+        b.lumps[0].shells.push(crate::brep::Shell {
+            faces: vec![2],
+            wire_edges: Vec::new(),
+        });
         b.split_disconnected_shells();
-        assert_eq!(b.lumps[0].shells.len(), 2);
-        assert!(!b.is_solid());
+        assert_eq!(b.lumps.len(), 1);
+        assert_eq!(b.lumps[0].shells.len(), 3);
     }
 
     #[test]

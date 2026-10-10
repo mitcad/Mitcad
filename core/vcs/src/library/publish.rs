@@ -242,7 +242,7 @@ pub(super) fn add_command(command: &Value) -> Result<Value, VcsError> {
     let path = optional(command, "path")
         .map(str::to_owned)
         .unwrap_or_else(|| format!("{folder_name}/{id}.mitcad"));
-    if !valid_path(&path) || !path.ends_with(".mitcad") {
+    if !valid_path(&path) || !crate::is_project_file(&path) {
         return Err(invalid(format!(
             "'{path}' is no path of a design in the library"
         )));

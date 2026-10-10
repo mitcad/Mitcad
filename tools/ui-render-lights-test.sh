@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/render
 # The render settings' lights and coloured reflections on the ground
 # (mitcad#54, docs/rendering.md "Lights" and "Environment"), through View >
 # Render Environment on a red plastic block in the dark studio:
@@ -17,6 +18,7 @@
 # Skipped (exit 0) when the build has no render worker (MITCAD_RENDER off).
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-render-lights-test.sh [directory for screenshots]
+# check-all sources: tools/cli
 
 UI_APP=${UI_APP:-$(cd "$(dirname "$0")/.." && pwd)/build/dev/app/mitcad}
 BUILD_DIR=$(cd "$(dirname "$UI_APP")/.." 2> /dev/null && pwd)
@@ -300,12 +302,8 @@ ui_mark
 ui_step "Render" ui_click_logged "Render image render"
 ui_expect_new "Render image done: 480 x " "the image is rendered" 90
 ui_step "Save..." ui_click_logged "Render image save"
-ui_focus_dialog '^Save Rendered Image$'
-ui_key ctrl+a
-xdotool type --delay 20 "$WORK/render.png"
-sleep 0.5
 ui_mark
-ui_key Return
+ui_type_path "Save Rendered Image" "$WORK/render.png"
 ui_expect_new "Render image saved $WORK/render.png" "Save wrote the image" 10
 [ -n "$SHOTS" ] && cp "$WORK/render.png" "$SHOTS/render-lights-render.png"
 image=$(png_reflection "$WORK/render.png")

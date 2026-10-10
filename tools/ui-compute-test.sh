@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/MainWindowJobs.cpp app/framework/ComputeProgress.cpp app/framework/ComputeProgress.hpp
 # Background computation (P7) through the real UI. Every feature a job
 # evaluates is made slower (MITCAD_TEST_RECOMPUTE_DELAY_MS: 400 ms, in
 # some jobs more), so a six-feature design takes seconds to compute:
@@ -30,6 +31,7 @@
 # Runs headless on Xvfb (see ui-test-lib.sh). The app uses Qt's own file
 # dialog (--no-native-dialogs), so a path can be typed into it.
 # Usage: tools/ui-compute-test.sh
+# check-all sources: tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
@@ -84,11 +86,7 @@ expect_title() {
 # open_through_dialog: File > Open (Ctrl+O), the path typed into Qt's dialog.
 open_through_dialog() {
   ui_key ctrl+o
-  ui_focus_dialog '^Open$'
-  ui_key ctrl+a
-  xdotool type --delay 20 "$FILE"
-  sleep 0.5
-  ui_key Return
+  ui_type_path "Open" "$FILE"
 }
 
 # edit_cell "name column" text: double-click a cell of Change Parameters,
@@ -96,9 +94,8 @@ open_through_dialog() {
 edit_cell() {
   ui_focus_dialog '^Parameters$'
   ui_double_click_logged "Parameters $1"
-  sleep 0.5
-  ui_key ctrl+a
-  xdotool type --delay 40 "$2"
+  ui_sync
+  ui_type_field "Parameters" "$2"
   ui_key Return
 }
 
@@ -357,11 +354,7 @@ ui_focus_dialog '^Diagnostics$'
 ui_step "clear memory (Alt+M)"           ui_key alt+m
 ui_expect_new "Diagnostics: cleared memory: " "Clear Memory"
 ui_step "export the report (Alt+E)"      ui_key alt+e
-ui_focus_dialog '^Export Report$'
-ui_key ctrl+a
-xdotool type --delay 20 "$WORK/report.json"
-sleep 0.5
-ui_key Return
+ui_type_path "Export Report" "$WORK/report.json"
 ui_expect_new "Diagnostics report written to $WORK/report.json" "the report written"
 grep -q '"last_recompute"' "$WORK/report.json" && grep -q '"by_type"' "$WORK/report.json" ||
   ui_fail "the report has no recompute or sizes"
@@ -395,8 +388,9 @@ ui_stop_app
 echo "--- A long kernel operation (P7e): cancelled inside it"
 # No test delay: the groove of a modelled thread on a 150 mm rod takes
 # seconds (4.5 s with OCCT's release libraries, which the Linux debug
-# build links), in OCCT's sweeps and boolean cut, which a cancel stops
-# inside.
+# build links), in OCCT's sweeps, the grooves' common and the boolean cut,
+# which a cancel stops inside (the common could not be stopped before
+# mitcad#102: a cancel a second and a half into the preview waited for it).
 export MITCAD_TEST_RECOMPUTE_DELAY_MS=0
 cat > "$WORK/rod.json" << 'EOF'
 [

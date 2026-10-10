@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::{ApiError, parse};
 use crate::document::Document;
 use crate::features::sketch::{FrameDef, SketchDef, SketchOutput};
-use crate::features::{FeatureDef, SketchPlane, ValueInput};
+use crate::features::{FeatureDef, OccurrencePath, SketchPlane, ValueInput};
 use crate::ids::{BodyUid, EntityUid, FeatureUid};
 use crate::kernel::Kernel;
 use crate::sketch::edit::{EditReport, PointInput};
@@ -34,6 +34,15 @@ pub(super) enum SketchCommand {
         frame: Option<FrameDef>,
         #[serde(default)]
         name: Option<String>,
+        /// Where the plane was picked: the occurrence path from the root
+        /// to its component (mitcad#100); another component's plane is
+        /// linked.
+        #[serde(default)]
+        occurrence: Option<OccurrencePath>,
+        /// Where the active component is seen (its first occurrence path
+        /// when left out).
+        #[serde(default)]
+        context: Option<OccurrencePath>,
     },
     #[serde(rename = "sketch.add_rectangle")]
     AddRectangle {
@@ -415,6 +424,11 @@ pub(super) enum SketchCommand {
         body: Option<BodyUid>,
         #[serde(default)]
         linked: bool,
+        /// As in `sketch.create` (mitcad#100).
+        #[serde(default)]
+        occurrence: Option<OccurrencePath>,
+        #[serde(default)]
+        context: Option<OccurrencePath>,
     },
     // Sketch mode (U2): a dimension's value dragged to another place.
     #[serde(rename = "sketch.set_dimension_text")]
@@ -678,8 +692,25 @@ fn curve_json(curve: &Curve2) -> Value {
 impl<K: Kernel> Document<K> {
     pub(super) fn run_sketch_command(&mut self, command: SketchCommand) -> Result<Value, ApiError> {
         Ok(match command {
-            SketchCommand::Create { plane, frame, name } => {
+            SketchCommand::Create {
+                plane,
+                frame,
+                name,
+                occurrence,
+                context,
+            } => {
+                let plane_link = match &occurrence {
+                    Some(path) => crate::links::link_for(
+                        self.assembly(),
+                        self.active_component(),
+                        &path.0,
+                        context.as_ref().map(|c| &c.0[..]),
+                    )
+                    .map_err(|e| ApiError(format!("plane: {e}")))?,
+                    None => None,
+                };
                 let def = FeatureDef::Sketch(SketchDef {
+                    plane_link,
                     frame: frame.map(Box::new),
                     ..SketchDef::new(plane)
                 });
@@ -708,8 +739,17 @@ impl<K: Kernel> Document<K> {
                 source,
                 body,
                 linked,
+                occurrence,
+                context,
             } => {
-                let report = self.project_into_sketch(sketch, &source, body, linked)?;
+                let report = self.project_from(
+                    sketch,
+                    &source,
+                    body,
+                    linked,
+                    occurrence.as_ref().map(|o| &o.0[..]),
+                    context.as_ref().map(|c| &c.0[..]),
+                )?;
                 report_json(&report, self.sketch_def(sketch))
             }
             SketchCommand::ImportDxf {
@@ -1544,6 +1584,7 @@ impl<K: Kernel> Document<K> {
             "uid": uid,
             "name": entry.name,
             "plane": def.plane,
+            "plane_link": def.plane_link,
             "frame": frame,
             "solved": solved.is_some(),
             "error": error.map(|e| e.message),

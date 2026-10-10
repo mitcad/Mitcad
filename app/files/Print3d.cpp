@@ -47,20 +47,23 @@ struct KnownSlicer {
   // The program's names on PATH.
   const char* programs;
   const char* flatpak;
+  // macOS: the application bundles' names in the Applications folders.
+  const char* bundles;
 };
 
 const KnownSlicer kKnownSlicers[] = {
     {"Bambu Studio", "Bambu Studio", "Bambu Studio", "bambu-studio.exe", "bambu-studio,BambuStudio",
-     "com.bambulab.BambuStudio"},
+     "com.bambulab.BambuStudio", "BambuStudio.app,Bambu Studio.app"},
     {"OrcaSlicer", "OrcaSlicer", "OrcaSlicer", "orca-slicer.exe", "orca-slicer,OrcaSlicer,orcaslicer",
-     "io.github.softfever.OrcaSlicer"},
+     "io.github.softfever.OrcaSlicer", "OrcaSlicer.app"},
     {"PrusaSlicer", "PrusaSlicer", "Prusa3D/PrusaSlicer", "prusa-slicer.exe", "prusa-slicer,PrusaSlicer",
-     "com.prusa3d.PrusaSlicer"},
+     "com.prusa3d.PrusaSlicer", "PrusaSlicer.app,Original Prusa Drivers/PrusaSlicer.app"},
     {"UltiMaker Cura", "Cura", "UltiMaker Cura*", "UltiMaker-Cura.exe", "cura,UltiMaker-Cura,ultimaker-cura",
-     "com.ultimaker.cura"},
+     "com.ultimaker.cura", "UltiMaker Cura.app,Ultimaker Cura.app"},
 };
 
 const QString kGroup = QStringLiteral("print");
+const QString kOpen = QStringLiteral("/usr/bin/open");
 
 void addSlicer(QVector<Slicer>& found, Slicer slicer) {
   if (slicer.isValid() && !found.contains(slicer)) {
@@ -167,6 +170,20 @@ QString Slicer::describe() const {
                                         command.join(QLatin1Char(' ')));
 }
 
+QString Slicer::location() const {
+  if (program == kOpen && arguments.size() == 2 && arguments.first() == QStringLiteral("-a")) {
+    return arguments.last();
+  }
+  return program;
+}
+
+Slicer slicerForProgram(const QString& name, const QString& program) {
+  if (program.endsWith(QStringLiteral(".app"), Qt::CaseInsensitive) && QFileInfo(program).isDir()) {
+    return Slicer{name, kOpen, {QStringLiteral("-a"), program}, {}};
+  }
+  return Slicer{name, QDir::toNativeSeparators(program), {}, {}};
+}
+
 SlicerSearch SlicerSearch::system() {
   SlicerSearch search;
   search.path = qEnvironmentVariable("PATH").split(QDir::listSeparator(), Qt::SkipEmptyParts);
@@ -182,6 +199,8 @@ SlicerSearch SlicerSearch::system() {
     search.programDirectories << local + QStringLiteral("/Programs");
   }
   search.registry = true;
+#elif defined(__APPLE__)
+  search.bundleDirectories = {QStringLiteral("/Applications"), QDir::homePath() + QStringLiteral("/Applications")};
 #else
   search.applicationDirectories = QStandardPaths::standardLocations(QStandardPaths::ApplicationsLocation);
   search.flatpakDirectories = {QStringLiteral("/var/lib/flatpak/app"),
@@ -196,6 +215,14 @@ QVector<Slicer> findSlicers(const SlicerSearch& search) {
     const QString name = QString::fromLatin1(known.name);
     for (const QString& dir : search.programDirectories) {
       addSlicer(found, Slicer{name, programIn(dir, known), {}, {}});
+    }
+    for (const QString& dir : search.bundleDirectories) {
+      for (const QString& bundle : QString::fromLatin1(known.bundles).split(QLatin1Char(','))) {
+        const QString path = dir + QLatin1Char('/') + bundle;
+        if (QFileInfo(path).isDir()) {
+          addSlicer(found, slicerForProgram(name, path));
+        }
+      }
     }
     for (const QString& program : QString::fromLatin1(known.programs).split(QLatin1Char(','))) {
       const QString path = QStandardPaths::findExecutable(program, search.path);
@@ -415,8 +442,8 @@ Slicer slicerFromData(const QVariant& data) {
 }
 
 QString itemLabel(const Slicer& slicer) {
-  return QStringLiteral("%1 - %2").arg(slicer.name.isEmpty() ? QFileInfo(slicer.program).fileName() : slicer.name,
-                                        QDir::toNativeSeparators(slicer.program));
+  return QStringLiteral("%1 - %2").arg(slicer.name.isEmpty() ? QFileInfo(slicer.location()).fileName() : slicer.name,
+                                        QDir::toNativeSeparators(slicer.location()));
 }
 
 } // namespace
@@ -442,13 +469,14 @@ QComboBox* slicerComboBox(const QVector<Slicer>& found, const Slicer& current, c
       combo->setProperty("previous", index);
       return;
     }
-    // Another program: an AppImage, a slicer installed elsewhere.
+    // Another program: an AppImage, a slicer installed elsewhere, an
+    // application bundle.
     const QString program = QFileDialog::getOpenFileName(combo->window(), QObject::tr("Slicer Program"));
     if (program.isEmpty()) {
       combo->setCurrentIndex(combo->property("previous").toInt());
       return;
     }
-    const Slicer chosenSlicer{QFileInfo(program).completeBaseName(), QDir::toNativeSeparators(program), {}, {}};
+    const Slicer chosenSlicer = slicerForProgram(QFileInfo(program).completeBaseName(), program);
     combo->insertItem(index, itemLabel(chosenSlicer), slicerData(chosenSlicer));
     combo->setCurrentIndex(index);
     combo->setProperty("previous", index);

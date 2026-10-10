@@ -17,7 +17,7 @@ if(MITCAD_RENDER)
 endif()
 
 project(Mitcad
-  VERSION 0.2.0
+  VERSION 0.2.1
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 
@@ -60,6 +60,10 @@ FetchContent_MakeAvailable(Corrosion)
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets)
 qt_standard_project_setup()
+
+# The system's keychain for the live updates' broker credentials (mitcad#89):
+# QtKeychain from its pinned source, a static library (cmake/Keychain.cmake).
+include(cmake/Keychain.cmake)
 
 # OCCT's version file only accepts an exact version, so check the minimum here.
 find_package(OpenCASCADE CONFIG REQUIRED)
@@ -118,5 +122,12 @@ if(BUILD_TESTING)
   find_program(BASH_EXECUTABLE bash)
   if(BASH_EXECUTABLE AND NOT WIN32)
     add_test(NAME repo.spdx COMMAND "${BASH_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/check-spdx.sh")
+  endif()
+  # The hypothesis tester of the .f3d import's learning dump (mitcad#96).
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME tools.f3d_learn
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/f3d-learn/test_learn.py")
+    set_tests_properties(tools.f3d_learn PROPERTIES ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   endif()
 endif()

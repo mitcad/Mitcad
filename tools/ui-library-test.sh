@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/files
 # Component libraries (mitcad#64) and the community library (mitcad#63)
 # through the real UI, with local git repositories only (no network):
 #   1. Publish to Library: the demo block added to a new library of one's
@@ -20,6 +21,8 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-library-test.sh
+# check-all sources: core/vcs core/ffi/src/vcs.rs core/ffi/src/remote.rs core/ffi/src/diff.rs
+# check-all sources: tools/cli tools/libraries
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
@@ -70,18 +73,18 @@ echo "--- 1. Publish to Library"
 ui_mark
 ui_step "Publish to Library (command search)" ui_command "Publish to Library"
 ui_focus_dialog '^Publish to Library$'
-ui_step "the folder"                       eval 'ui_key alt+f; xdotool type --delay 10 "$MINE"'
-ui_step "the library's id"                 eval 'ui_key alt+i; xdotool type --delay 20 "my-parts"'
-ui_step "the library's name"               eval 'ui_key alt+n; xdotool type --delay 20 "My parts"'
-ui_step "the author"                       eval 'ui_key alt+a; xdotool type --delay 20 "Library Tester"'
-ui_step "the component's id"               eval 'ui_key alt+d; xdotool type --delay 20 "demo-block"'
-ui_step "its name"                         eval 'ui_key alt+m; xdotool type --delay 20 "Demo block"'
-ui_step "its category"                     eval 'ui_key alt+g; xdotool type --delay 20 "blocks"'
-ui_step "its tags"                         eval 'ui_key alt+t; xdotool type --delay 20 "block, demo"'
+ui_step "the folder"                       eval 'ui_key alt+f; ui_type_text "$MINE"'
+ui_step "the library's id"                 eval 'ui_key alt+i; ui_type_text "my-parts"'
+ui_step "the library's name"               eval 'ui_key alt+n; ui_type_text "My parts"'
+ui_step "the author"                       eval 'ui_key alt+a; ui_type_text "Library Tester"'
+ui_step "the component's id"               eval 'ui_key alt+d; ui_type_text "demo-block"'
+ui_step "its name"                         eval 'ui_key alt+m; ui_type_text "Demo block"'
+ui_step "its category"                     eval 'ui_key alt+g; ui_type_text "blocks"'
+ui_step "its tags"                         eval 'ui_key alt+t; ui_type_text "block, demo"'
 ui_step "Add to Library (Alt+L)"           ui_key alt+l
 ui_expect_new "Publish: Made the library my-parts in $MINE" "the library made"
 ui_expect_new "Publish: Added demo-block to the library, recorded as version " "added and recorded"
-ui_step "the remote"                       eval 'ui_key alt+r; xdotool type --delay 10 "$BARE"'
+ui_step "the remote"                       eval 'ui_key alt+r; ui_type_text "$BARE"'
 ui_step "Push (Alt+P)"                     ui_key alt+p
 ui_expect_new "Publish: Pushed the library." "pushed" 30
 ui_step "Index Entry (Alt+X)"              ui_key alt+x
@@ -103,7 +106,7 @@ ui_expect_new "Library source removed: https://github.com/mitcad/community-index
 for url in "$LIB" "$INDEX"; do
   ui_step "Add URL (Alt+A)"                ui_key alt+a
   ui_focus_dialog '^Add Library$'
-  ui_step "the URL"                        eval 'xdotool type --delay 10 "$url"; ui_key Return'
+  ui_step "the URL"                        eval 'ui_type_text "$url"; ui_key Return'
   ui_focus_dialog '^Libraries$'
 done
 ui_expect_new "Library source added: $INDEX" "the sources added"
@@ -181,7 +184,7 @@ ui_focus_dialog '^Community Library$'
 ui_expect_new "Library search '': 2 components, 1 libraries, 1 hidden by the licence" "the unlicensed library hidden"
 ui_step "with items without a licence (Alt+W)" ui_key alt+w
 ui_expect_new "Library search '': 2 components, 2 libraries, 0 hidden by the licence" "shown when asked"
-ui_step "search bracket"                   eval 'ui_key alt+s; xdotool type --delay 40 "bracket"'
+ui_step "search bracket"                   eval 'ui_key alt+s; ui_type_text "bracket"'
 ui_expect_new "Library browser selected library test-brackets ($OTHER), licence none, not fetched" "the index's entry"
 ui_step "Get Library (Alt+G)"              ui_key alt+g
 ui_focus_dialog '^Get Library$'

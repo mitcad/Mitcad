@@ -9,11 +9,11 @@
 //! the file has; without a history only the first, which is not a guess,
 //! is used.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use mitcad_f3d::design::ir::{
-    ChamferDetail, Definition, Detail, EdgeSet, ExtrudeDetail, ExtrudeF3d, FilletDetail,
-    Fingerprint, Reference, RevolveDetail, SketchDetail, TimelineItem,
+    ChamferDetail, CoilDetail, Definition, Detail, EdgeSet, ExtrudeDetail, ExtrudeF3d,
+    FilletDetail, Fingerprint, Geometry, Reference, RevolveDetail, SketchDetail, TimelineItem,
 };
 use mitcad_model::assembly::inverse;
 use mitcad_model::datum::Datum;
@@ -81,7 +81,11 @@ fn not_translated(object_type: &str) -> Option<&'static str> {
     })
 }
 
-impl<K: Kernel> Importer<'_, K> {
+/// An extrusion's extent to try: (extent, flip, guess, length swept in mm
+/// when known).
+type ExtentChoice = (Value, bool, bool, Option<f64>);
+
+impl<K: crate::ImportKernel> Importer<'_, K> {
     /// A parameter reference as a value: the imported parameter's name, or
     /// its value (mm or rad).
     pub(crate) fn value(&self, r: &Option<Reference>) -> Option<Value> {
@@ -355,6 +359,125 @@ impl<K: Kernel> Importer<'_, K> {
                     "definition": {"type": "offset", "plane": base, "distance": offset}})));
             }
         }
+        // Mid planes and planes at an angle (the `.ipt` import's): each
+        // pairing of the planes and lines they may be measured from, an
+        // angle either way round; `datum_item` keeps the one in the
+        // plane's place.
+        let entity = |key: &str| {
+            detail
+                .definition
+                .as_ref()
+                .and_then(|d| d.other.get(key))
+                .and_then(Value::as_object)
+                .map(|m| Reference::from_map(m.clone()))
+        };
+        match detail
+            .definition
+            .as_ref()
+            .and_then(|d| d.definition_type.as_deref())
+        {
+            Some("ConstructionPlaneMidplaneDefinition") => {
+                let one = self.plane_options(entity("planarEntityOne").as_ref());
+                let two = self.plane_options(entity("planarEntityTwo").as_ref());
+                for a in &one {
+                    for b in &two {
+                        candidates.push(Candidate::new(json!({"type": "construction_plane",
+                            "definition": {"type": "midplane", "plane1": a, "plane2": b}})));
+                    }
+                }
+            }
+            Some("ConstructionPlaneAtAngleDefinition") => {
+                let def = detail.definition.as_ref().expect("matched");
+                let planes = self.plane_options(def.planar_entity.as_ref());
+                let lines = self.axis_options(entity("linearEntity").as_ref());
+                if let Some(angle) = self.value(&def.angle) {
+                    let negated = match &angle {
+                        Value::String(s) => json!(format!("-({s})")),
+                        v => json!(-v.as_f64().unwrap_or(0.0)),
+                    };
+                    for line in &lines {
+                        for plane in &planes {
+                            for a in [&angle, &negated] {
+                                candidates.push(Candidate::new(
+                                    json!({"type": "construction_plane",
+                                    "definition": {"type": "angle", "line": line, "angle": a,
+                                                   "plane": plane}}),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            // Planes through points and lines (the `.ipt` import's): each
+            // pairing of what they may be, the lines either way round.
+            Some("ConstructionPlaneThreePointsDefinition") => {
+                let p = |k: &str| self.point_options(entity(k).as_ref());
+                let (a, b, c) = (
+                    p("pointEntityOne"),
+                    p("pointEntityTwo"),
+                    p("pointEntityThree"),
+                );
+                for x in &a {
+                    for y in &b {
+                        for z in &c {
+                            candidates.push(Candidate::new(json!({"type": "construction_plane",
+                                "definition": {"type": "three_points", "point1": x,
+                                               "point2": y, "point3": z}})));
+                        }
+                    }
+                }
+            }
+            Some("ConstructionPlaneTwoEdgesDefinition") => {
+                let one = self.axis_options(entity("linearEntityOne").as_ref());
+                let two = self.axis_options(entity("linearEntityTwo").as_ref());
+                for (a, b) in one.iter().flat_map(|a| two.iter().map(move |b| (a, b))) {
+                    for (l1, l2) in [(a, b), (b, a)] {
+                        candidates.push(Candidate::new(json!({"type": "construction_plane",
+                            "definition": {"type": "two_edges", "line1": l1, "line2": l2}})));
+                    }
+                }
+            }
+            Some("ConstructionPlaneLineAndPointDefinition") => {
+                let lines = self.axis_options(entity("linearEntity").as_ref());
+                let points = self.point_options(entity("pointEntity").as_ref());
+                for line in &lines {
+                    for point in &points {
+                        candidates.push(Candidate::new(json!({"type": "construction_plane",
+                            "definition": {"type": "edge_and_point", "line": line,
+                                           "point": point}})));
+                    }
+                }
+            }
+            Some("ConstructionPlaneNormalToLineDefinition") => {
+                // Normal to the line where it is nearest to the point: the
+                // line as a straight path about that place.
+                let line = match entity("linearEntity") {
+                    Some(Reference::ConstructionAxis(c)) => {
+                        match c.origin.clone().flatten().as_deref() {
+                            Some("X") => Some(([0.0; 3], [1.0, 0.0, 0.0])),
+                            Some("Y") => Some(([0.0; 3], [0.0, 1.0, 0.0])),
+                            Some("Z") => Some(([0.0; 3], [0.0, 0.0, 1.0])),
+                            _ => c
+                                .geometry
+                                .as_ref()
+                                .and_then(|g| Some((mm3(g.origin?), geom::unit(g.direction?)?))),
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some((o, v)) = line {
+                    let at = geom::add(o, geom::scale(v, geom::dot(geom::sub(origin, o), v)));
+                    let path = json!({"start": geom::sub(at, geom::scale(v, 100.0)),
+                                      "end": geom::add(at, geom::scale(v, 100.0))});
+                    for point in self.point_options(entity("pointEntity").as_ref()) {
+                        candidates.push(Candidate::new(json!({"type": "construction_plane",
+                            "definition": {"type": "normal_at_point", "path": path,
+                                           "point": point}})));
+                    }
+                }
+            }
+            _ => {}
+        }
         let x = geometry
             .u_direction
             .and_then(geom::unit)
@@ -368,6 +491,106 @@ impl<K: Kernel> Importer<'_, K> {
             .with_note("a fixed plane"),
         );
         Ok(candidates)
+    }
+
+    /// A plane reference as the planes it may be: an origin plane, an
+    /// imported construction plane, a face it names, or by its geometry
+    /// the origin planes and planar faces in it, else that plane fixed.
+    fn plane_options(&self, r: Option<&Reference>) -> Vec<Value> {
+        let mut out = Vec::new();
+        let Some(r) = r else {
+            return out;
+        };
+        if let Reference::ConstructionPlane(c) = r
+            && c.origin.clone().flatten().is_none()
+            && c.timeline_index.flatten().is_none()
+            && let Some(g) = &c.geometry
+            && let (Some(o), Some(n)) = (g.origin, g.normal.and_then(geom::unit))
+        {
+            let o = mm3(o);
+            let on = |p: [f64; 3], m: [f64; 3]| {
+                geom::norm(geom::cross(n, m)) < 1e-9 && geom::dot(geom::sub(p, o), n).abs() < 1e-4
+            };
+            for (text, axis) in [("xy", 2), ("xz", 1), ("yz", 0)] {
+                let mut m = [0.0; 3];
+                m[axis] = 1.0;
+                if on([0.0; 3], m) {
+                    out.push(json!(text));
+                }
+            }
+            for (body, face, p) in refs::planar_faces(self.doc) {
+                if on(p.origin, p.normal) {
+                    out.push(json!({"body": body.to_string(), "face": face.to_string()}));
+                }
+            }
+        }
+        out.extend(self.plane_ref(r));
+        out
+    }
+
+    /// A line reference as the axes it may be: an origin axis, an imported
+    /// construction axis, by its geometry an origin axis on it, else that
+    /// axis fixed.
+    fn axis_options(&self, r: Option<&Reference>) -> Vec<Value> {
+        let mut out = Vec::new();
+        let Some(Reference::ConstructionAxis(c)) = r else {
+            return out;
+        };
+        match c.origin.clone().flatten().as_deref() {
+            Some(o @ ("X" | "Y" | "Z")) => return vec![json!(o.to_lowercase())],
+            _ => {
+                if let Some(uid) = c
+                    .timeline_index
+                    .flatten()
+                    .and_then(|i| self.features.get(&i))
+                {
+                    return vec![json!(uid.to_string())];
+                }
+            }
+        }
+        let Some(g) = &c.geometry else {
+            return out;
+        };
+        let (Some(o), Some(v)) = (g.origin, g.direction.and_then(geom::unit)) else {
+            return out;
+        };
+        let o = mm3(o);
+        let on = |p: [f64; 3]| {
+            let d = geom::sub(p, o);
+            geom::norm(geom::sub(d, geom::scale(v, geom::dot(d, v)))) < 1e-4
+        };
+        for (text, axis) in [("x", 0), ("y", 1), ("z", 2)] {
+            let mut m = [0.0; 3];
+            m[axis] = 1.0;
+            if on([0.0; 3]) && geom::norm(geom::cross(v, m)) < 1e-9 {
+                out.push(json!(text));
+            }
+        }
+        out.push(json!({"origin": o, "direction": v}));
+        out
+    }
+
+    /// A point reference as the points it may be: the origin, an imported
+    /// construction point, else that point fixed.
+    fn point_options(&self, r: Option<&Reference>) -> Vec<Value> {
+        let Some(Reference::ConstructionPoint(c)) = r else {
+            return Vec::new();
+        };
+        if c.origin.clone().flatten().is_some() {
+            return vec![json!("origin")];
+        }
+        if let Some(uid) = c
+            .timeline_index
+            .flatten()
+            .and_then(|i| self.features.get(&i))
+        {
+            return vec![json!(uid.to_string())];
+        }
+        c.geometry
+            .as_ref()
+            .and_then(|g| g.origin)
+            .map(|p| vec![json!({"point": mm3(p)})])
+            .unwrap_or_default()
     }
 
     /// The planes an offset plane may be measured from: its planar entity
@@ -392,6 +615,34 @@ impl<K: Kernel> Importer<'_, K> {
                             .and_then(|i| self.features.get(&i))
                         {
                             out.push(json!(uid.to_string()));
+                        } else if let Some(g) = &c.geometry
+                            && let (Some(o), Some(n)) = (g.origin, g.normal.and_then(geom::unit))
+                        {
+                            // A plane off the timeline by its geometry (an
+                            // `.ipt` part's work plane on a face): an
+                            // origin plane or a planar face in it.
+                            // With the offset along its normal giving the
+                            // plane's place.
+                            let o = mm3(o);
+                            let close = |a: f64, b: f64| (a - b).abs() < 1e-6 * (1.0 + a.abs());
+                            let on = |p: [f64; 3], m: [f64; 3]| {
+                                geom::norm(geom::cross(n, m)) < 1e-9
+                                    && geom::dot(geom::sub(p, o), n).abs() < 1e-4
+                                    && close(geom::dot(geom::sub(origin, p), m), distance)
+                            };
+                            for (text, axis) in [("xy", 2), ("xz", 1), ("yz", 0)] {
+                                let mut m = [0.0; 3];
+                                m[axis] = 1.0;
+                                if on([0.0; 3], m) {
+                                    out.push(json!(text));
+                                }
+                            }
+                            for (body, face, p) in refs::planar_faces(self.doc) {
+                                if on(p.origin, p.normal) {
+                                    out.push(json!({"body": body.to_string(),
+                                                    "face": face.to_string()}));
+                                }
+                            }
                         }
                     }
                 }
@@ -463,6 +714,17 @@ impl<K: Kernel> Importer<'_, K> {
         index: i64,
         item: &TimelineItem,
     ) -> Result<Vec<Candidate>, String> {
+        let translated = self.translate_item(index, item);
+        // The learning dump keeps them (mitcad#96), outside the item's time.
+        self.learn_offered_paused(index, item, &translated);
+        translated
+    }
+
+    fn translate_item(
+        &mut self,
+        index: i64,
+        item: &TimelineItem,
+    ) -> Result<Vec<Candidate>, String> {
         let Some(object_type) = item.object_type() else {
             return Err("unknown timeline item (type not decoded)".to_owned());
         };
@@ -478,6 +740,10 @@ impl<K: Kernel> Importer<'_, K> {
             (Some(Detail::Sweep(d)), _) => self.sweep(index, d),
             (Some(Detail::Pipe(d)), _) => self.pipe(index, d),
             (Some(_), "LoftFeature") => self.loft(item),
+            // Coils of sketch profiles (the `.ipt` import's).
+            (Some(Detail::Coil(d)), _) if d.other.contains_key("profile") => {
+                self.coil_helix(index, d)
+            }
             (_, "BaseFeature") => Err("a base feature: the file's bodies as they are".to_owned()),
             (
                 _,
@@ -489,6 +755,7 @@ impl<K: Kernel> Importer<'_, K> {
                 | "OffsetFacesFeature"
                 | "MoveFeature"
                 | "SplitBodyFeature"
+                | "SplitFaceFeature"
                 | "HoleFeature"
                 | "ThreadFeature"
                 | "ReplaceFaceFeature"),
@@ -525,8 +792,9 @@ impl<K: Kernel> Importer<'_, K> {
     }
 
     /// Region sets to try: matched by area and centroid when the dump has
-    /// them, else every set of as many regions as the item used, largest
-    /// first, with their total area (mm²).
+    /// them (a region, each of several alike as a guess, or else a union of
+    /// regions first), else every set of as many regions as the item used,
+    /// largest first, with their total area (mm²).
     pub(crate) fn region_sets(
         &mut self,
         profiles: &[Reference],
@@ -554,30 +822,109 @@ impl<K: Kernel> Importer<'_, K> {
                 _ => None,
             })
             .collect();
+        let mut first: Vec<RegionSet> = Vec::new();
         if !measured.is_empty() && measured.len() == profiles.len() {
-            let mut set = RegionSet::default();
-            for (area, centroid) in measured {
-                let area = area * 100.0;
-                let c = [mm(centroid[0]), mm(centroid[1])];
-                let tol = 1e-3 * area.sqrt().max(1.0);
-                let found = regions.iter().find(|r| {
-                    (r.area - area).abs() <= 1e-3 * area.abs().max(1e-6)
-                        && (r.centroid[0] - c[0]).hypot(r.centroid[1] - c[1]) <= tol
-                });
-                match found {
-                    Some(r) => {
-                        set.keys.push(key(r));
-                        set.area += r.area;
-                        set.parts.push((r.centroid, r.area));
+            // Each profile's regions of its area and centroid: several
+            // when the sketch has regions alike (rings of one area about
+            // one centre), and then each choice of regions apart from
+            // the other profiles' is a guess. Without one,
+            // a union of regions of that area and centroid (a line that
+            // bounds another feature's profile splits this one in
+            // Mitcad's sketch), tried before the sets found without the
+            // measures.
+            let mut order: Vec<&Region> = regions.iter().collect();
+            order.sort_by(|a, b| b.area.total_cmp(&a.area));
+            let areas: Vec<f64> = order.iter().map(|r| r.area).collect();
+            let mut unions = false;
+            let found: Vec<Vec<Vec<&Region>>> = measured
+                .iter()
+                .map(|&(area, centroid)| {
+                    let area = area * 100.0;
+                    let c = [mm(centroid[0]), mm(centroid[1])];
+                    let tol = 1e-3 * area.sqrt().max(1.0);
+                    let fits = |set: &[&Region]| {
+                        let a: f64 = set.iter().map(|r| r.area).sum();
+                        let m = set.iter().fold([0.0, 0.0], |m, r| {
+                            [m[0] + r.centroid[0] * r.area, m[1] + r.centroid[1] * r.area]
+                        });
+                        a > 0.0
+                            && (a - area).abs() <= 1e-3 * area.abs().max(1e-6)
+                            && (m[0] / a - c[0]).hypot(m[1] / a - c[1]) <= tol
+                    };
+                    let single: Vec<Vec<&Region>> = regions
+                        .iter()
+                        .filter(|r| fits(&[*r]))
+                        .map(|r| vec![r])
+                        .collect();
+                    if !single.is_empty() {
+                        return single;
                     }
-                    None => {
-                        set.keys.clear();
-                        break;
+                    unions = true;
+                    // (The search may give a set more than once.)
+                    let mut sets = area_subsets(&areas, area, 12);
+                    sets.sort();
+                    sets.dedup();
+                    sets.into_iter()
+                        .map(|s| s.into_iter().map(|i| order[i]).collect::<Vec<_>>())
+                        .filter(|s| s.len() > 1 && fits(s))
+                        .collect()
+                })
+                .collect();
+            if crate::tracing() {
+                eprintln!(
+                    "import:   measured profiles {measured:?}: {:?} choices{}",
+                    found.iter().map(Vec::len).collect::<Vec<_>>(),
+                    if unions { " (unions)" } else { "" }
+                );
+                for options in found
+                    .iter()
+                    .filter(|f| f.len() > 1 || f.iter().any(|g| g.len() > 1))
+                {
+                    for g in options.iter().take(4) {
+                        let parts: Vec<String> = g
+                            .iter()
+                            .map(|r| format!("{:.3}@{:.3?}", r.area, r.centroid))
+                            .collect();
+                        eprintln!("import:     {}", parts.join(" + "));
                     }
                 }
             }
-            if !set.keys.is_empty() {
-                return Ok(vec![set]);
+            if found.iter().all(|f| !f.is_empty()) {
+                let mut chosen: Vec<Vec<&Region>> = vec![Vec::new()];
+                for options in &found {
+                    let mut next = Vec::new();
+                    for c in &chosen {
+                        for group in options {
+                            let apart =
+                                !group.iter().any(|r| c.iter().any(|d| std::ptr::eq(*d, *r)));
+                            if next.len() < 32 && apart {
+                                let mut c = c.clone();
+                                c.extend(group.iter().copied());
+                                next.push(c);
+                            }
+                        }
+                    }
+                    chosen = next;
+                }
+                // One way to take the regions apart is no guess.
+                let alike = chosen.len() > 1;
+                let sets: Vec<RegionSet> = chosen
+                    .into_iter()
+                    .map(|c| RegionSet {
+                        keys: c.iter().map(|r| key(r)).collect(),
+                        guess: alike,
+                        area: c.iter().map(|r| r.area).sum(),
+                        parts: c.iter().map(|r| (r.centroid, r.area)).collect(),
+                        probe: None,
+                        measured: unions && !alike,
+                    })
+                    .collect();
+                // Unions come before the sets found without the measures.
+                if unions {
+                    first = sets;
+                } else if !sets.is_empty() {
+                    return Ok(sets);
+                }
             }
         }
         let n = profiles.len().max(1);
@@ -603,6 +950,7 @@ impl<K: Kernel> Importer<'_, K> {
                         .map(|&i| (order[i].centroid, order[i].area))
                         .collect(),
                     probe: None,
+                    measured: false,
                 };
                 if !probed.iter().any(|p| same_keys(&p.keys, &set.keys)) {
                     probed.push(set);
@@ -615,16 +963,28 @@ impl<K: Kernel> Importer<'_, K> {
             area: order.iter().map(|r| r.area).sum(),
             parts: order.iter().map(|r| (r.centroid, r.area)).collect(),
             probe: None,
+            measured: false,
         };
         // (A probe that finds every region keeps what it found.)
         all.probe = probed
             .iter()
             .find(|p| same_keys(&p.keys, &all.keys))
             .and_then(|p| p.probe);
+        // (A union a probe also found keeps what the probe found.)
+        let with_first = |mut sets: Vec<RegionSet>| {
+            let mut first = first.clone();
+            for f in &mut first {
+                if let Some(s) = sets.iter().find(|s| same_keys(&s.keys, &f.keys)) {
+                    f.probe = f.probe.or(s.probe);
+                }
+            }
+            sets.retain(|s| !first.iter().any(|f| same_keys(&f.keys, &s.keys)));
+            first.into_iter().chain(sets).collect::<Vec<_>>()
+        };
         if n >= regions.len() {
             probed.retain(|p| !same_keys(&p.keys, &all.keys));
             probed.insert(0, all);
-            return Ok(probed);
+            return Ok(with_first(probed));
         }
         let mut sets: Vec<RegionSet> = Vec::new();
         combinations(order.len(), n, 2000, &mut |c| {
@@ -637,12 +997,95 @@ impl<K: Kernel> Importer<'_, K> {
                     .map(|&i| (order[i].centroid, order[i].area))
                     .collect(),
                 probe: None,
+                measured: false,
             });
         });
         sets.push(RegionSet { guess: true, ..all });
         sets.retain(|s| !probed.iter().any(|p| same_keys(&p.keys, &s.keys)));
         probed.extend(sets);
-        Ok(probed)
+        Ok(with_first(probed))
+    }
+
+    /// The regions the decoded profile loops select (`_f3d_profile_loops`
+    /// of the item's detail, mitcad#96), mapped by
+    /// [`crate::profiles::mapped_regions`] with the file's geometry of the
+    /// sketch's curves.
+    fn mapped_set(&self, other: &serde_json::Map<String, Value>, sketch: i64) -> Option<RegionSet> {
+        let loops = other.get("_f3d_profile_loops")?;
+        let info = self.sketches.get(&sketch)?;
+        let output = self.doc.sketch_output(info.uid)?;
+        let regions = &output.region_info;
+        let detail = self
+            .dump
+            .timeline_items()
+            .iter()
+            .enumerate()
+            .find(|(p, it)| it.index.unwrap_or(*p as i64) == sketch)
+            .and_then(|(_, it)| match &it.detail {
+                Some(Detail::Sketch(s)) => Some(s),
+                _ => None,
+            })?;
+        let curves: HashMap<String, Geometry> = detail
+            .curves
+            .iter()
+            .flatten()
+            .filter_map(|c| Some((c.id.clone()?, c.geometry.clone()?)))
+            .collect();
+        let back: HashMap<&str, &str> = info
+            .ids
+            .iter()
+            .map(|(file, ours)| (ours.as_str(), file.as_str()))
+            .collect();
+        let views: Vec<crate::profiles::RegionView> = regions
+            .iter()
+            .zip(interior_points(regions))
+            .map(|(r, inside)| crate::profiles::RegionView {
+                inside,
+                outer: r.profile.loops.first().and_then(|l| {
+                    l.segments
+                        .iter()
+                        .map(|s| {
+                            back.get(s.key.curve.to_string().as_str())
+                                .map(|f| f.to_string())
+                        })
+                        .collect()
+                }),
+            })
+            .collect();
+        let chosen = crate::profiles::mapped_regions(loops, &curves, &views)?;
+        Some(RegionSet {
+            keys: chosen
+                .iter()
+                .map(|&i| regions[i].profile.key.to_string())
+                .collect(),
+            guess: false,
+            area: chosen.iter().map(|&i| regions[i].area).sum(),
+            parts: chosen
+                .iter()
+                .map(|&i| (regions[i].centroid, regions[i].area))
+                .collect(),
+            probe: None,
+            measured: false,
+        })
+    }
+
+    /// Puts the decoded profiles' set ([`Importer::mapped_set`]) first in
+    /// `sets` (with what a probe found for the same regions); whether there
+    /// is one.
+    pub(crate) fn mapped_first(
+        &self,
+        sets: &mut Vec<RegionSet>,
+        other: &serde_json::Map<String, Value>,
+        sketch: i64,
+    ) -> bool {
+        let Some(mut mapped) = self.mapped_set(other, sketch) else {
+            return false;
+        };
+        if let Some(k) = sets.iter().position(|s| same_keys(&s.keys, &mapped.keys)) {
+            mapped.probe = sets.remove(k).probe;
+        }
+        sets.insert(0, mapped);
+        true
     }
 
     /// The regions whose material the history's next states change: a
@@ -748,6 +1191,7 @@ impl<K: Kernel> Importer<'_, K> {
                     area: chosen.iter().map(|r| r.area).sum(),
                     parts: chosen.iter().map(|r| (r.centroid, r.area)).collect(),
                     probe: Some((side, volume(state) - now)),
+                    measured: false,
                 };
                 if !sets.iter().any(|s| s.keys == set.keys) {
                     sets.push(set);
@@ -777,6 +1221,13 @@ impl<K: Kernel> Importer<'_, K> {
     /// alone). All bodies come first, so that features keep no
     /// participants they do not need (a pattern of the feature later
     /// would combine with them).
+    ///
+    /// The stream decoder gives an extrusion's participants (mitcad#96):
+    /// when every one is found and they are not all the solids of the
+    /// sketch's component, they come first, then all bodies and the
+    /// history's guess. The guess stays even where the file names every
+    /// body: a join there changes only the bodies its material overlaps,
+    /// while Mitcad's also takes in those it only touches.
     pub(crate) fn participant_options(
         &mut self,
         index: i64,
@@ -785,6 +1236,25 @@ impl<K: Kernel> Importer<'_, K> {
         sketch: FeatureUid,
     ) -> Vec<Vec<String>> {
         let decoded = self.participants(bodies);
+        if !decoded.is_empty() && operation != "new_body" {
+            let component = self.doc.feature(sketch).map(|f| f.component);
+            let all = self
+                .current_bodies()
+                .into_iter()
+                .filter(|(b, _)| self.doc.body_component(*b) == component)
+                .all(|(b, _)| decoded.contains(&b.to_string()));
+            let mut options = Vec::new();
+            if !all {
+                options.push(decoded);
+            }
+            options.push(Vec::new());
+            if let Some(changed) = self.changed_bodies(index, &[], operation, sketch)
+                && !options.contains(&changed)
+            {
+                options.push(changed);
+            }
+            return options;
+        }
         let mut options = vec![decoded.clone()];
         if let Some(changed) = self.changed_bodies(index, &decoded, operation, sketch) {
             options.push(changed);
@@ -827,14 +1297,14 @@ impl<K: Kernel> Importer<'_, K> {
         (!changed.is_empty() && changed.len() < current.len()).then_some(changed)
     }
 
+    /// The decoded participants, once each; none unless every one is
+    /// found (a part of them would leave the others out).
     pub(crate) fn participants(&self, bodies: &Option<Vec<Reference>>) -> Vec<String> {
         bodies
-            .iter()
-            .flatten()
-            .filter_map(|r| match r {
-                Reference::Body(fp) => refs::resolve_body(self.doc, fp),
-                _ => None,
-            })
+            .as_deref()
+            .and_then(|b| self.bodies_of_refs(b))
+            .unwrap_or_default()
+            .into_iter()
             .map(|b: BodyUid| b.to_string())
             .collect()
     }
@@ -856,19 +1326,29 @@ impl<K: Kernel> Importer<'_, K> {
                 }
             },
             Reference::Face(fp) => {
-                let (body, face) = refs::resolve_face(self.doc, fp)?;
+                let (body, face) = refs::resolve_face(self.doc, fp).or_else(|| {
+                    fp.point_on_face
+                        .is_none()
+                        .then(|| refs::resolve_cylinder_surface(self.doc, fp))
+                        .flatten()
+                })?;
                 Some(
                     json!({"type": "face", "body": body.to_string(), "face": face.to_string(),
                             "chained": def.is_chained == Some(true)}),
                 )
             }
             Reference::Body(fp) => {
-                let body = refs::resolve_body(self.doc, fp)?;
+                let body = self.body_ref(fp)?;
                 Some(json!({"type": "body", "body": body.to_string(),
                             "through": def.is_minimum_solution == Some(false)}))
             }
             _ => None,
         }
+    }
+
+    /// A taper that is not zero, as a definition's value.
+    fn taper_of(&self, taper: &Option<Reference>) -> Option<Value> {
+        (!Self::is_zero(taper)).then(|| self.value(taper)).flatten()
     }
 
     /// One side's extent; Ok(None) when it is not decoded.
@@ -961,7 +1441,7 @@ impl<K: Kernel> Importer<'_, K> {
             let swept = if symmetric {
                 let s = d.symmetric_extent.as_ref().unwrap_or(&one);
                 length(s).map(|l| {
-                    if s.is_full_length == Some(true) {
+                    if s.is_full_length.or(raw.and_then(|r| r.full_length)) == Some(true) {
                         l
                     } else {
                         2.0 * l
@@ -987,7 +1467,9 @@ impl<K: Kernel> Importer<'_, K> {
         } else {
             None
         };
-        let sets = self.region_sets(&profiles, sketch, probe, target_area)?;
+        let mut sets = self.region_sets(&profiles, sketch, probe, target_area)?;
+        // The regions the decoded profile loops select first (mitcad#96).
+        let mapped = self.mapped_first(&mut sets, &d.other, sketch);
         let sketch_uid = self.sketches[&sketch].uid.to_string();
         let operation = Self::operation(
             d.operation
@@ -1014,7 +1496,7 @@ impl<K: Kernel> Importer<'_, K> {
         };
 
         // Extents: (extent, flip, guess, length swept in mm when known).
-        let mut extents: Vec<(Value, bool, bool, Option<f64>)> = Vec::new();
+        let mut extents: Vec<ExtentChoice> = Vec::new();
         if symmetric && d.symmetric_extent.is_none() && one.distance.is_none() {
             // Symmetric through all (no distance).
             extents.push((
@@ -1025,11 +1507,12 @@ impl<K: Kernel> Importer<'_, K> {
             ));
         } else if symmetric {
             let s = d.symmetric_extent.as_ref().unwrap_or(&one);
-            // The stream decoder does not tell a whole length from a half:
-            // a half each way first.
-            let fulls = match s.is_full_length {
-                Some(full) => vec![(full, false)],
-                None => vec![(false, false), (true, true)],
+            // Without the stream decoder's length: a half each way first.
+            let fulls = match (s.is_full_length, raw.and_then(|r| r.full_length)) {
+                (Some(full), _) => vec![(full, false)],
+                // The stream decoder's (mitcad#96) first, the other after it.
+                (None, Some(full)) => vec![(full, false), (!full, true)],
+                (None, None) => vec![(false, false), (true, true)],
             };
             for (full, guess) in fulls {
                 let mut v = json!({"type": "symmetric", "distance": self.value_or(&s.distance, "distance")?,
@@ -1054,85 +1537,80 @@ impl<K: Kernel> Importer<'_, K> {
                 }
                 (raw.is_some() && def.definition_type.is_none()).then_some((v, None))
             };
-            let (s1, _) = match self.side(&one, &d.taper_angle_one)? {
+            // A side up to a face the replay does not have as it is goes
+            // up to its plane (mitcad#104).
+            let side = |def: &Definition, taper: &Option<Reference>| {
+                if def.definition_type.as_deref() == Some("ToEntityExtentDefinition")
+                    && self.extent_object(&def.entity, def).is_none()
+                    && let Some(mut v) = self.decoded_plane(def)?
+                {
+                    if !Self::is_zero(taper)
+                        && let Some(t) = self.value(taper)
+                    {
+                        v["taper"] = t;
+                    }
+                    return Ok(Some((v, None)));
+                }
+                self.side(def, taper)
+            };
+            let (s1, _) = match side(&one, &d.taper_angle_one)? {
                 Some(s) => s,
                 None => through_all(&one, &d.taper_angle_one).ok_or("side one not decoded")?,
             };
-            let (s2, _) = match self.side(&two, &d.taper_angle_two)? {
+            let (s2, _) = match side(&two, &d.taper_angle_two)? {
                 Some(s) => s,
                 None => through_all(&two, &d.taper_angle_two).ok_or("side two not decoded")?,
             };
             let swept = length(&one).zip(length(&two)).map(|(a, b)| a + b);
-            // Side one goes along the decoded direction.
-            let flip = decoded_flip.unwrap_or(false);
+            // Side one goes along the decoded direction; up to an object,
+            // towards the side of the sketch the object lies on.
+            let flip = if s1["type"] == "to_object" {
+                self.to_object_flip(&one, raw, sketch).or(decoded_flip)
+            } else {
+                decoded_flip
+            }
+            .unwrap_or(false);
             let v = json!({"type": "two_sides", "side1": s1, "side2": s2});
             extents.push((v.clone(), flip, false, swept));
             extents.push((v, !flip, true, swept));
         } else if one.definition_type.as_deref() == Some("ToEntityExtentDefinition")
             && self.extent_object(&one.entity, &one).is_none()
         {
+            // Up to a planar face the decoder named but the replay does not
+            // have as it is (mitcad#96): its plane first.
+            let plane = self.decoded_plane(&one)?;
+            if let Some(v) = &plane {
+                let flip = self
+                    .to_object_flip(&one, raw, sketch)
+                    .or(decoded_flip)
+                    .unwrap_or(false);
+                extents.push((v.clone(), flip, false, None));
+                extents.push((v.clone(), !flip, true, None));
+            }
             // Up to an object the decoder does not name: planar faces
             // parallel to the sketch, nearest first, and through all.
             if !self.oracle.enabled {
-                return Err("its extent's object was not decoded".to_owned());
-            }
-            let frame = self
-                .doc
-                .sketch_output(self.sketches[&sketch].uid)
-                .map(|o| o.frame)
-                .ok_or("its sketch did not evaluate")?;
-            let normal = geom::normal(&frame);
-            // Faces of the sketch's component as they are; those of other
-            // components (the file's assembly context: a cut up to another
-            // part) as fixed planes where their occurrences place them in
-            // the sketch's component, which the extrusion can work in, at
-            // this point of the timeline (mitcad#86).
-            let own = self
-                .doc
-                .feature(self.sketches[&sketch].uid)
-                .map(|f| f.component);
-            let into_own = |c: ComponentUid| {
-                let own = own?;
-                Some(inverse(&self.placement_at(own, index)?).after(&self.placement_at(c, index)?))
-            };
-            let mut faces: Vec<(f64, Value)> = refs::planar_faces(self.doc)
-                .into_iter()
-                .filter_map(|(body, face, p)| {
-                    let c = self.doc.body_component(body)?;
-                    if Some(c) == own {
-                        let object = json!({"type": "face", "body": body.to_string(),
-                                            "face": face.to_string()});
-                        return Some((p.origin, p.normal, object));
-                    }
-                    let t = into_own(c)?;
-                    let (origin, n) = (t.apply_point(p.origin), t.apply_vector(p.normal));
-                    let object = json!({"type": "plane", "plane": {"origin": origin, "normal": n}});
-                    Some((origin, n, object))
-                })
-                .filter(|(_, n, _)| geom::norm(geom::cross(*n, normal)) < 1e-9)
-                .map(|(origin, _, object)| {
-                    (geom::dot(geom::sub(origin, frame.origin), normal), object)
-                })
-                .filter(|(s, _)| s.abs() > 1e-6)
-                .collect();
-            faces.sort_by(|a, b| a.0.abs().total_cmp(&b.0.abs()));
-            faces.truncate(24);
-            let offset = (!Self::is_zero(&one.offset))
-                .then(|| self.value(&one.offset))
-                .flatten();
-            for (s, object) in faces {
-                let mut v = json!({"type": "to_object", "object": object});
-                if let Some(o) = &offset {
-                    v["offset"] = o.clone();
+                if plane.is_none() {
+                    return Err("its extent's object was not decoded".to_owned());
                 }
-                extents.push((v, s < 0.0, true, Some(s.abs())));
+            } else {
+                extents.extend(self.to_object_guesses(sketch, index, &one, None)?);
             }
-            for flip in [false, true] {
-                extents.push((json!({"type": "through_all"}), flip, true, None));
+            // With the extrusion's taper (an `.ipt` extrusion up to a face
+            // keeps one).
+            if let Some(t) = self.taper_of(&d.taper_angle_one) {
+                for e in &mut extents {
+                    e.0["taper"] = t.clone();
+                }
             }
         } else {
             match self.side(&one, &d.taper_angle_one)? {
                 Some((v, flip)) => {
+                    let flip = if v["type"] == "to_object" {
+                        flip.or(self.to_object_flip(&one, raw, sketch))
+                    } else {
+                        flip
+                    };
                     let flip = flip.or(decoded_flip).unwrap_or(false);
                     let swept = length(&one);
                     extents.push((v.clone(), flip, false, swept));
@@ -1145,12 +1623,38 @@ impl<K: Kernel> Importer<'_, K> {
                         s["type"] = json!("symmetric");
                         extents.push((s, false, true, swept.map(|l| 2.0 * l)));
                     }
+                    // The object the decoder named (mitcad#96) first, then
+                    // a planar face's whole plane (a face of the replay
+                    // bounded otherwise, or another piece of the plane),
+                    // then the faces the history may settle.
+                    if v["type"] == "to_object" && self.oracle.enabled {
+                        let from = extents.len();
+                        if let Ok(Some(p)) = self.decoded_plane(&one) {
+                            extents.push((p.clone(), flip, true, None));
+                            extents.push((p, !flip, true, None));
+                        }
+                        if let Ok(guesses) =
+                            self.to_object_guesses(sketch, index, &one, Some(&v["object"]))
+                        {
+                            extents.extend(guesses);
+                        }
+                        if let Some(t) = self.taper_of(&d.taper_angle_one) {
+                            for e in &mut extents[from..] {
+                                e.0["taper"] = t.clone();
+                            }
+                        }
+                    }
                 }
                 None => {
                     // Not a distance (the decoder leaves the extent out):
                     // through all is the likeliest, and certain with the
-                    // stream's extent code for it and a decoded direction.
-                    let through_all = raw_extent == Some((Some(1), Some(0)));
+                    // stream's extent code for it, or a one-sided input
+                    // slot through all of bodies (mitcad#96), and a decoded
+                    // direction.
+                    let slot = raw.is_some_and(|r| {
+                        r.extent_a == Some(1) && r.slot_roles.iter().flatten().any(|&x| x == 5)
+                    });
+                    let through_all = raw_extent == Some((Some(1), Some(0))) || slot;
                     let flip = decoded_flip.unwrap_or(false);
                     for (flip, guess) in [
                         (flip, !(through_all && decoded_flip.is_some())),
@@ -1221,7 +1725,8 @@ impl<K: Kernel> Importer<'_, K> {
         let mut candidates = Vec::new();
         // Profile sets outside, extents inside: the likeliest extent of
         // each set is tried before the next set.
-        for set in &sets {
+        for (k, set) in sets.iter().enumerate() {
+            let decoded = mapped && k == 0;
             for (extent, flip, extent_guess, swept) in &extents {
                 let profiles: Vec<Value> = set
                     .keys
@@ -1254,7 +1759,10 @@ impl<K: Kernel> Importer<'_, K> {
                 if set.guess || *extent_guess {
                     c.guess = true;
                 }
-                if sets.len() > 1 {
+                c.first = (decoded && !*extent_guess) || set.measured;
+                if decoded {
+                    notes.push("the profiles as decoded".to_owned());
+                } else if sets.len() > 1 {
                     notes.push(format!("profiles {}", set.keys.join(" + ")));
                 }
                 if !notes.is_empty() {
@@ -1265,6 +1773,7 @@ impl<K: Kernel> Importer<'_, K> {
                     let mut n = c.clone();
                     n.defs[0]["operation"] = json!("new_body");
                     n.guess = true;
+                    n.first = false;
                     notes.push("a join that touches no body: a new body".to_owned());
                     n.note = Some(notes.join("; "));
                     candidates.push(n);
@@ -1274,6 +1783,163 @@ impl<K: Kernel> Importer<'_, K> {
         let mut all = faces;
         all.extend(candidates);
         Ok(all)
+    }
+
+    /// Extents up to an object the history may settle (an object the
+    /// decoder does not name, or that did not give the state): planar faces
+    /// parallel to the sketch, nearest first, and through all both ways;
+    /// all guesses. `decoded` (the object the decoder named) is left out.
+    fn to_object_guesses(
+        &self,
+        sketch: i64,
+        index: i64,
+        one: &Definition,
+        decoded: Option<&Value>,
+    ) -> Result<Vec<ExtentChoice>, String> {
+        let mut extents = Vec::new();
+        let frame = self
+            .doc
+            .sketch_output(self.sketches[&sketch].uid)
+            .map(|o| o.frame)
+            .ok_or("its sketch did not evaluate")?;
+        let normal = geom::normal(&frame);
+        // Faces of the sketch's component as they are; those of other
+        // components (the file's assembly context: a cut up to another
+        // part) as fixed planes where their occurrences place them in
+        // the sketch's component, which the extrusion can work in, at
+        // this point of the timeline (mitcad#86).
+        let own = self
+            .doc
+            .feature(self.sketches[&sketch].uid)
+            .map(|f| f.component);
+        let into_own = |c: ComponentUid| {
+            let own = own?;
+            Some(inverse(&self.placement_at(own, index)?).after(&self.placement_at(c, index)?))
+        };
+        let mut faces: Vec<(f64, Value)> = refs::planar_faces(self.doc)
+            .into_iter()
+            .filter_map(|(body, face, p)| {
+                let c = self.doc.body_component(body)?;
+                if Some(c) == own {
+                    let object = json!({"type": "face", "body": body.to_string(),
+                                            "face": face.to_string()});
+                    return Some((p.origin, p.normal, object));
+                }
+                let t = into_own(c)?;
+                let (origin, n) = (t.apply_point(p.origin), t.apply_vector(p.normal));
+                let object = json!({"type": "plane", "plane": {"origin": origin, "normal": n}});
+                Some((origin, n, object))
+            })
+            .filter(|(_, n, _)| geom::norm(geom::cross(*n, normal)) < 1e-9)
+            .map(|(origin, _, object)| (geom::dot(geom::sub(origin, frame.origin), normal), object))
+            .filter(|(s, _)| s.abs() > 1e-6)
+            .collect();
+        faces.sort_by(|a, b| a.0.abs().total_cmp(&b.0.abs()));
+        faces.truncate(24);
+        let offset = (!Self::is_zero(&one.offset))
+            .then(|| self.value(&one.offset))
+            .flatten();
+        for (s, object) in faces {
+            let mut v = json!({"type": "to_object", "object": object});
+            if let Some(o) = &offset {
+                v["offset"] = o.clone();
+            }
+            if decoded.is_some_and(|o| Self::same_object(o, &v["object"])) {
+                continue;
+            }
+            extents.push((v, s < 0.0, true, Some(s.abs())));
+        }
+        // Up to the first face of a body of the component it reaches (an
+        // object that is not a planar face parallel to the sketch: the next
+        // face, a curved one).
+        let bodies: Vec<BodyUid> = self.doc.bodies().iter().map(|b| b.uid).collect();
+        for body in bodies {
+            if self.doc.body_component(body) != own {
+                continue;
+            }
+            let mut v = json!({"type": "to_object",
+                               "object": {"type": "body", "body": body.to_string(), "through": false}});
+            if let Some(o) = &offset {
+                v["offset"] = o.clone();
+            }
+            if decoded.is_some_and(|o| o["type"] == "body" && o["body"] == v["object"]["body"]) {
+                continue;
+            }
+            for flip in [false, true] {
+                extents.push((v.clone(), flip, true, None));
+            }
+        }
+        for flip in [false, true] {
+            extents.push((json!({"type": "through_all"}), flip, true, None));
+        }
+        Ok(extents)
+    }
+
+    /// Whether an extent up to the object the decoder named goes against
+    /// the sketch's normal (mitcad#96): the side of the sketch's plane the
+    /// object's point lies on (a face's, or a plane's origin), else the
+    /// stream's flag (1: against the normal; on every extrusion up to an
+    /// object of the corpus' older writers, where the stored direction is
+    /// the sketch's normal).
+    fn to_object_flip(
+        &self,
+        one: &Definition,
+        raw: Option<&ExtrudeF3d>,
+        sketch: i64,
+    ) -> Option<bool> {
+        let point = match one.entity.as_ref()? {
+            Reference::Face(fp) => fp.point_on_face,
+            Reference::ConstructionPlane(c) => c.geometry.as_ref().and_then(|g| g.origin),
+            _ => None,
+        };
+        let frame = self
+            .doc
+            .sketch_output(self.sketches[&sketch].uid)
+            .map(|o| o.frame);
+        if let (Some(p), Some(frame)) = (point, frame) {
+            let s = geom::dot(geom::sub(geom::mm3(p), frame.origin), geom::normal(&frame));
+            if s.abs() > 1e-6 {
+                return Some(s < 0.0);
+            }
+        }
+        let to_object = raw?
+            .slot_roles
+            .iter()
+            .flatten()
+            .any(|r| matches!(r, 17 | 18));
+        raw?.flag.filter(|_| to_object).map(|f| f == 1)
+    }
+
+    /// The plane of the planar face an extent up to an object names
+    /// (mitcad#96), as an extent up to that plane (mm), with the extent's
+    /// offset.
+    fn decoded_plane(&self, one: &Definition) -> Result<Option<Value>, String> {
+        let Some(Reference::Face(fp)) = one.entity.as_ref() else {
+            return Ok(None);
+        };
+        let Some(g) = fp
+            .geometry
+            .as_ref()
+            .filter(|g| g.geometry_type.as_deref() == Some("Plane"))
+        else {
+            return Ok(None);
+        };
+        let (Some(origin), Some(normal)) = (g.origin, g.normal) else {
+            return Ok(None);
+        };
+        let mut v = json!({"type": "to_object",
+                           "object": {"type": "plane",
+                                      "plane": {"origin": geom::mm3(origin), "normal": normal}}});
+        if !Self::is_zero(&one.offset) {
+            v["offset"] = self.value_or(&one.offset, "offset")?;
+        }
+        Ok(Some(v))
+    }
+
+    /// Whether two extent objects name the same face (a decoded one carries
+    /// `chained`).
+    fn same_object(a: &Value, b: &Value) -> bool {
+        a["type"] == b["type"] && a["body"] == b["body"] && a["face"] == b["face"]
     }
 
     /// Whether the extrusion goes against its sketch's normal: by the
@@ -1292,6 +1958,13 @@ impl<K: Kernel> Importer<'_, K> {
             .map(|o| geom::normal(&o.frame));
         if let (Some(v), Some(n)) = (raw.direction_vector, normal) {
             let along = geom::dot(v, n);
+            // A stored vector oblique to the sketch's normal tells no side
+            // (mitcad#104): every such extrusion the history settled went
+            // along the normal (36 with distance extents, in sketches on
+            // tilted planes), against the vector's side in 8 of them.
+            if !away && along.abs() > 1e-6 && along.abs() < 1.0 - 1e-6 {
+                return Some(false);
+            }
             if along.abs() > 1e-6 {
                 return Some((along < 0.0) != away);
             }
@@ -1460,6 +2133,7 @@ impl<K: Kernel> Importer<'_, K> {
                     )),
                     guess: true,
                     predicted: Some(sign * area * length),
+                    first: false,
                 });
             }
         }
@@ -1472,7 +2146,9 @@ impl<K: Kernel> Importer<'_, K> {
         }
         let profiles = profiles_of(&d.profile, &d.other);
         let (sketch, last_sketch) = self.profile_sketch(&profiles, index)?;
-        let sets = self.region_sets(&profiles, sketch, None, None)?;
+        let mut sets = self.region_sets(&profiles, sketch, None, None)?;
+        // The regions the decoded profile loops select first (mitcad#96).
+        let mapped = self.mapped_first(&mut sets, &d.other, sketch);
         let info = self.sketches[&sketch].clone();
         let axes = self.revolve_axes(&d.axis, &info)?;
         let operation = Self::operation(d.operation.as_deref());
@@ -1544,7 +2220,7 @@ impl<K: Kernel> Importer<'_, K> {
             _ => Some(1.0),
         };
         let mut candidates = Vec::new();
-        for set in &sets {
+        for (k, set) in sets.iter().enumerate() {
             for (axis, axis_guess) in &axes {
                 let line = self.axis_line(axis, &info);
                 for (extent, extent_guess) in &extents {
@@ -1564,6 +2240,101 @@ impl<K: Kernel> Importer<'_, K> {
                         .zip(sign)
                         .map(|(((a, d), angle), s)| s * set.turned(a, d, angle));
                     c.guess = set.guess || *axis_guess || *extent_guess;
+                    // Profiles, axis and extent as decoded (mitcad#96).
+                    c.first = mapped && k == 0 && !*axis_guess && !*extent_guess;
+                    if last_sketch {
+                        c.note = Some("the sketch is the last one before it".to_owned());
+                    } else if mapped && k == 0 {
+                        c.note = Some("the profiles as decoded".to_owned());
+                    }
+                    candidates.extend(with_participants(&c, &participant_options));
+                }
+            }
+        }
+        Ok(candidates)
+    }
+
+    /// A coil that sweeps profiles of a sketch along a helix about an axis
+    /// (the `.ipt` import's coils: `profile` and `axis` in the detail),
+    /// as Mitcad's helix: the pitch and the turns (a height divided by the
+    /// pitch), right-handed and along the axis first (against it where
+    /// the detail's `flip` says so), then the other hand and direction as
+    /// guesses.
+    fn coil_helix(&mut self, index: i64, d: &CoilDetail) -> Result<Vec<Candidate>, String> {
+        let profiles: Vec<Reference> = d
+            .other
+            .get("profile")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_object().map(|m| Reference::from_map(m.clone())))
+            .collect();
+        if profiles.is_empty() {
+            return Err("its profiles were not decoded".to_owned());
+        }
+        let (sketch, last_sketch) = self.profile_sketch(&profiles, index)?;
+        let sets = self.region_sets(&profiles, sketch, None, None)?;
+        let info = self.sketches[&sketch].clone();
+        let axis = d
+            .other
+            .get("axis")
+            .and_then(Value::as_object)
+            .map(|m| Reference::from_map(m.clone()));
+        let axes = self.revolve_axes(&axis, &info)?;
+        let operation = Self::operation(d.operation.as_deref());
+        let participant_options = self.participant_options(index, &None, operation, info.uid);
+        // A quotient of two parameters: by their names, else their values.
+        let ratio = |a: &Option<Reference>, b: &Option<Reference>| -> Option<Value> {
+            match (self.value(a)?, self.value(b)?) {
+                (Value::String(x), Value::String(y)) => Some(json!(format!("{x} / {y}"))),
+                _ => {
+                    let (x, y) = (param(a)?.value?, param(b)?.value?);
+                    (y != 0.0).then(|| json!(x / y))
+                }
+            }
+        };
+        let (pitch, revolutions) = match d.coil_type.as_deref() {
+            Some("PitchAndRevolutionCoilType") => (
+                self.value_or(&d.pitch, "pitch")?,
+                self.value_or(&d.revolutions, "revolutions")?,
+            ),
+            Some("PitchAndHeightCoilType") => (
+                self.value_or(&d.pitch, "pitch")?,
+                ratio(&d.height, &d.pitch).ok_or("no height or pitch")?,
+            ),
+            Some("RevolutionAndHeightCoilType") => (
+                ratio(&d.height, &d.revolutions).ok_or("no height or turns")?,
+                self.value_or(&d.revolutions, "revolutions")?,
+            ),
+            other => return Err(format!("coil type {other:?} is not supported")),
+        };
+        if !Self::is_zero(&d.angle) {
+            return Err("a tapered coil is not supported".to_owned());
+        }
+        // The direction along the axis the decoder read (`flip`) first.
+        let reversed = d.other.get("flip").and_then(Value::as_bool) == Some(true);
+        let mut candidates = Vec::new();
+        for set in &sets {
+            for (axis, axis_guess) in &axes {
+                for (k, (left_handed, flip)) in [
+                    (false, reversed),
+                    (true, reversed),
+                    (false, !reversed),
+                    (true, !reversed),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let profiles: Vec<Value> = set
+                        .keys
+                        .iter()
+                        .map(|r| json!({"sketch": info.uid.to_string(), "region": r}))
+                        .collect();
+                    let def = json!({"type": "helix", "profiles": profiles, "axis": axis,
+                        "pitch": pitch, "revolutions": revolutions,
+                        "left_handed": left_handed, "flip": flip, "operation": operation});
+                    let mut c = Candidate::new(def);
+                    c.guess = set.guess || *axis_guess || k > 0;
                     if last_sketch {
                         c.note = Some("the sketch is the last one before it".to_owned());
                     }
@@ -1604,12 +2375,31 @@ impl<K: Kernel> Importer<'_, K> {
             }
             Value::Object(m) => {
                 let curve = m.get("curve")?.as_str()?.strip_prefix('c')?.parse().ok()?;
-                match output.solved.curves.get(&mitcad_model::EntityUid(curve))? {
-                    mitcad_model::sketch::geometry::Curve2::Line { a, b } => {
-                        Some((*a, unit2([b[0] - a[0], b[1] - a[1]])?))
-                    }
+                // A line of another sketch (mitcad#96): where it lies in
+                // this sketch's plane.
+                let own = sketch.uid.to_string();
+                let other = match m.get("sketch").and_then(Value::as_str) {
+                    Some(uid) if uid != own => Some(self.doc.sketch_output(uid.parse().ok()?)?),
                     _ => None,
-                }
+                };
+                let of = other.as_ref().unwrap_or(&output);
+                let (a, b) = match of.solved.curves.get(&mitcad_model::EntityUid(curve))? {
+                    mitcad_model::sketch::geometry::Curve2::Line { a, b } => (*a, *b),
+                    _ => return None,
+                };
+                let (a, b) = match &other {
+                    Some(o) => {
+                        let (p, q) = (o.frame.point(a), o.frame.point(b));
+                        let normal = geom::normal(&frame);
+                        let off = |x| geom::dot(geom::sub(x, frame.origin), normal).abs();
+                        if off(p) > 1e-6 || off(q) > 1e-6 {
+                            return None;
+                        }
+                        (geom::to_sketch(&frame, p), geom::to_sketch(&frame, q))
+                    }
+                    None => (a, b),
+                };
+                Some((a, unit2([b[0] - a[0], b[1] - a[1]])?))
             }
             _ => None,
         }
@@ -1631,6 +2421,20 @@ impl<K: Kernel> Importer<'_, K> {
                         other => Err(format!("axis {other}")),
                     };
                 }
+                // An axis off the timeline by its geometry (an `.ipt`
+                // part's work axis, as its planes take them): fixed where
+                // it is, then the guesses.
+                if c.timeline_index.flatten().is_none()
+                    && let Some((o, v)) = c
+                        .geometry
+                        .as_ref()
+                        .and_then(|g| Some((mm3(g.origin?), geom::unit(g.direction?)?)))
+                {
+                    let fixed = json!({"origin": o, "direction": v});
+                    let mut axes = vec![(fixed, false)];
+                    axes.extend(self.revolve_axes(&None, sketch)?);
+                    return Ok(axes);
+                }
                 let uid = c
                     .timeline_index
                     .flatten()
@@ -1646,10 +2450,16 @@ impl<K: Kernel> Importer<'_, K> {
                 let s = s.ok_or("the axis' sketch was not imported")?;
                 let id = e.id.clone().flatten().ok_or("the axis line has no id")?;
                 let curve = s.ids.get(&id).ok_or("the axis line was left out")?;
-                Ok(vec![(
-                    json!({"sketch": s.uid.to_string(), "curve": curve}),
-                    false,
-                )])
+                // Read from the axis input's curve ids (mitcad#96): the
+                // guesses stay after it.
+                let decoded = json!({"sketch": s.uid.to_string(), "curve": curve});
+                let mut axes = vec![(decoded.clone(), false)];
+                axes.extend(
+                    self.revolve_axes(&None, sketch)?
+                        .into_iter()
+                        .filter(|(a, _)| *a != decoded),
+                );
+                Ok(axes)
             }
             Some(Reference::Edge(fp)) => {
                 let (body, edge) =
@@ -1965,6 +2775,9 @@ impl<K: Kernel> Importer<'_, K> {
                     .flatten()
                     .filter_map(|r| match r {
                         Reference::Edge(fp) => Some(&**fp),
+                        // A face the decoder did not turn into its edges
+                        // (mitcad#96): not found.
+                        Reference::Face(fp) if fp.f3d.is_some() => Some(&**fp),
                         _ => None,
                     })
                     .collect()
@@ -1974,9 +2787,10 @@ impl<K: Kernel> Importer<'_, K> {
         // then what the history suggests; an external dump's edges are
         // taken as they are.
         let mut first = Vec::new();
+        let mut named_error = None;
         if named_first && fingerprints.iter().any(|f| !f.is_empty()) {
             let named = fingerprints.iter().flatten().any(|fp| fp.f3d.is_some());
-            let result = self.dressup_by_fingerprints(&fingerprints, make);
+            let result = self.dressup_by_fingerprints(&fingerprints, sections, make);
             if !named && let Some(g) = lazy.as_deref_mut() {
                 g.done = true;
             }
@@ -1984,13 +2798,16 @@ impl<K: Kernel> Importer<'_, K> {
                 Ok(c) if !named => return Ok(vec![c]),
                 Err(e) if !named => return Err(e),
                 Ok(mut c) => {
-                    c.note = Some("edges found by their names in the file".to_owned());
+                    c.note = Some(BY_NAME.to_owned());
+                    let chains = self.by_chains(&c);
                     first.push(c);
+                    first.extend(chains);
                 }
                 Err(e) => {
                     if crate::tracing() {
                         eprintln!("import: edges by their names: {e}");
                     }
+                    named_error = Some(e);
                 }
             }
         }
@@ -2001,7 +2818,10 @@ impl<K: Kernel> Importer<'_, K> {
             if !first.is_empty() {
                 return Ok(first);
             }
-            return Err("its edges were not decoded (no history to find them)".to_owned());
+            return Err(match named_error {
+                Some(e) => format!("{e} (no history to find them)"),
+                None => "its edges were not decoded (no history to find them)".to_owned(),
+            });
         }
         // (The edges found by their names are not tried twice.)
         let mut seen: BTreeSet<Vec<String>> = first.iter().map(|c| dressup_key(&c.defs)).collect();
@@ -2114,6 +2934,7 @@ impl<K: Kernel> Importer<'_, K> {
                             off: off(set),
                             fit: fit[set],
                             fits: fit[set] <= FIT,
+                            smooth: gone.wedge.is_some_and(|w| w > std::f64::consts::PI - 1e-3),
                         }
                     })
                     .collect();
@@ -2148,30 +2969,47 @@ impl<K: Kernel> Importer<'_, K> {
             // the points where it meets theirs): at once, then one tangent
             // chain after the other in the dump's order of the sets and edges
             // (OCCT fails some contours together that build one by one).
-            // Then the looser guesses: those at that distance (edges next
-            // to the rounded ones can be cut away too); every gone edge;
-            // per set the largest group at one distance.
-            for variant in 0..5 {
+            // Then those edges with the gone edges that continue them
+            // tangentially (a rounding that ends where its edge runs on
+            // tangentially takes the next edge's middle away too, and the
+            // kernel follows the chain); the edges whose dressup the state
+            // has whatever their distance (beside a narrow wedge another
+            // face of the state can be nearer than the rounding), with their
+            // continuations. Then the looser guesses: those at that
+            // distance (edges next to the rounded ones can be cut away too);
+            // every gone edge; per set the largest group at one distance.
+            // Edges between faces that meet tangentially are no dressup's.
+            for variant in 0..7 {
                 let mut defs = Vec::new();
                 for (uid, edges) in &found {
                     let mut by_set: Vec<SetEdges> =
                         (0..sets.len()).map(|i| (i, Vec::new())).collect();
+                    let shape = bodies.iter().find(|(b, _, _)| b == uid).map(|(_, s, _)| s);
                     for (i, list) in by_set.iter_mut() {
                         let i = *i;
-                        let mine: Vec<&SetGone> = edges.iter().filter(|e| e.set == i).collect();
+                        let mine: Vec<&SetGone> =
+                            edges.iter().filter(|e| e.set == i && !e.smooth).collect();
                         let chosen: Vec<&SetGone> = match variant {
-                            0 | 1 => mine
-                                .into_iter()
+                            0..=2 => mine
+                                .iter()
+                                .copied()
                                 .filter(|e| e.fits && e.off <= 0.1)
                                 .collect(),
-                            2 => mine.into_iter().filter(|e| e.off <= 0.1).collect(),
-                            3 => mine,
+                            3 => mine.iter().copied().filter(|e| e.fits).collect(),
+                            4 => mine.iter().copied().filter(|e| e.off <= 0.1).collect(),
+                            5 => mine.clone(),
                             _ => largest_group(&mine),
                         };
                         list.extend(chosen.into_iter().map(|e| e.name.clone()));
+                        if matches!(variant, 2 | 3)
+                            && !list.is_empty()
+                            && let Some(shape) = shape
+                        {
+                            let more = tangent_continuations(kernel, shape, list, &mine);
+                            list.extend(more);
+                        }
                     }
                     if variant == 1 {
-                        let shape = bodies.iter().find(|(b, _, _)| b == uid).map(|(_, s, _)| s);
                         for (i, list) in &by_set {
                             let chains = match shape {
                                 Some(shape) => tangent_chains(kernel, shape, list),
@@ -2202,6 +3040,7 @@ impl<K: Kernel> Importer<'_, K> {
                         note: Some(note),
                         guess: true,
                         predicted: None,
+                        first: false,
                     });
                 }
             }
@@ -2216,48 +3055,236 @@ impl<K: Kernel> Importer<'_, K> {
         }
         first.extend(candidates);
         if first.is_empty() {
-            return Err(last_error.unwrap_or_else(|| {
-                "its edges were not decoded, and no edge of the replay is gone in the next history states"
-                    .to_owned()
-            }));
+            return Err(match named_error {
+                Some(e) => format!(
+                    "{e}; {}",
+                    last_error.unwrap_or_else(|| {
+                        "no edge of the replay is gone in the next history states".to_owned()
+                    })
+                ),
+                None => last_error.unwrap_or_else(|| {
+                    "its edges were not decoded, and no edge of the replay is gone in the next history states"
+                        .to_owned()
+                }),
+            });
         }
         Ok(first)
     }
 
     /// The dressup of edges given by fingerprints (every set's), by body.
+    /// The stream decoder's edges (`_f3d`) as [`refs::dressup_edge_match`]
+    /// finds them (a two-distance chamfer's sides decoded, mitcad#96:
+    /// [`Importer::decoded_sides`]); an external dump's by their middles.
     fn dressup_by_fingerprints(
         &self,
         fingerprints: &[Vec<&Fingerprint>],
+        sections: &[Vec<Section>],
         make: &dyn Fn(&str, &[SetEdges]) -> Value,
     ) -> Result<Candidate, String> {
         let mut by_body: Vec<(BodyUid, Vec<SetEdges>)> = Vec::new();
+        let replay = fingerprints
+            .iter()
+            .flatten()
+            .any(|fp| fp.f3d.is_some())
+            .then(|| refs::ReplayEdges::of(self.doc));
+        let mut found_edges: Vec<refs::FoundEdge> = Vec::new();
         for (i, fps) in fingerprints.iter().enumerate() {
-            for fp in fps {
-                let (body, edge) = refs::resolve_edge(self.doc, fp)
-                    .ok_or("an edge was not found in the replay")?;
-                let entry = match by_body.iter_mut().position(|(b, _)| *b == body) {
-                    Some(k) => &mut by_body[k].1,
-                    None => {
-                        let sets = (0..fingerprints.len()).map(|i| (i, Vec::new())).collect();
-                        by_body.push((body, sets));
-                        &mut by_body.last_mut().expect("pushed").1
-                    }
+            for (j, fp) in fps.iter().enumerate() {
+                let edges = match &replay {
+                    Some(replay) if fp.f3d.is_some() => refs::dressup_edge_match(replay, fp)
+                        .map_err(|e| {
+                            let context = fp
+                                .f3d
+                                .as_ref()
+                                .and_then(|f| f.found.as_deref())
+                                .map(|found| format!(" (decoder: {found})"))
+                                .unwrap_or_default();
+                            format!("edge set {i}, input {j}: {e}{context}")
+                        })?,
+                    _ => refs::resolve_edge(self.doc, fp)
+                        .map(|(body, name)| {
+                            vec![refs::FoundEdge {
+                                body,
+                                name,
+                                mid: [0.0; 3],
+                                direction: None,
+                            }]
+                        })
+                        .ok_or("an edge was not found in the replay")?,
                 };
-                entry[i].1.push(edge.to_string());
+                for e in edges {
+                    let entry = match by_body.iter_mut().position(|(b, _)| *b == e.body) {
+                        Some(k) => &mut by_body[k].1,
+                        None => {
+                            let sets = (0..fingerprints.len()).map(|i| (i, Vec::new())).collect();
+                            by_body.push((e.body, sets));
+                            &mut by_body.last_mut().expect("pushed").1
+                        }
+                    };
+                    let name = e.name.to_string();
+                    if !entry[i].1.contains(&name) {
+                        entry[i].1.push(name);
+                    }
+                    found_edges.push(e);
+                }
             }
         }
         let defs = by_body
             .iter()
-            .map(|(body, edges)| make(&body.to_string(), edges))
+            .map(|(body, edges)| {
+                let mut def = make(&body.to_string(), edges);
+                self.decoded_sides(&mut def, *body, edges, sections, &found_edges);
+                def
+            })
             .collect();
         Ok(Candidate {
             defs,
             note: None,
             guess: false,
             predicted: None,
+            first: false,
+        })
+    }
+
+    // Edges found by their names (mitcad#96).
+
+    /// A two-distance chamfer's sides in a definition made of `edges`
+    /// (mitcad#96): the file's first distance is taken to lie on the face
+    /// on the left of the edge's own direction in the file (the face whose
+    /// coedge runs along the edge), Mitcad's on the first face of the edge's
+    /// name unless `flip` ([`refs::first_face_on_left`]). A tangent chain
+    /// takes the reading of most of its edges (the kernel carries the side
+    /// of the chain's first edge along it); a set whose chains differ is
+    /// split. Sets of equal distances and edges whose side is not known
+    /// keep the set's `flip`. The other reading stays a guess after it.
+    fn decoded_sides(
+        &self,
+        def: &mut Value,
+        body: BodyUid,
+        edges: &[SetEdges],
+        sections: &[Vec<Section>],
+        found: &[refs::FoundEdge],
+    ) {
+        if def["type"] != "chamfer" || found.iter().all(|e| e.direction.is_none()) {
+            return;
+        }
+        let Some(shape) = self
+            .doc
+            .bodies()
+            .iter()
+            .find(|b| b.uid == body)
+            .map(|b| b.shape.clone())
+        else {
+            return;
+        };
+        let kernel = self.doc.kernel();
+        let Some(sets) = def["sets"].as_array() else {
+            return;
+        };
+        // The definition's sets are the non-empty ones, in order.
+        let index: Vec<usize> = edges
+            .iter()
+            .filter(|(_, e)| !e.is_empty())
+            .map(|(i, _)| *i)
+            .collect();
+        let mut out = Vec::new();
+        for (k, set) in sets.iter().enumerate() {
+            let unequal = index
+                .get(k)
+                .and_then(|&i| sections.get(i))
+                .and_then(|s| s.first())
+                .is_some_and(|s| match *s {
+                    Section::Chamfer(a, b) => (a - b).abs() > 1e-9 * a.max(b),
+                    _ => false,
+                });
+            if set["size"]["type"] != "two_distances" || !unequal {
+                out.push(set.clone());
+                continue;
+            }
+            let flip = set["flip"].as_bool().unwrap_or(false);
+            let names: Vec<String> = set["edges"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|e| e.as_str().map(str::to_owned))
+                .collect();
+            let mut groups: Vec<(bool, Vec<String>)> = Vec::new();
+            for chain in tangent_chains(kernel, &shape, &names) {
+                // (Each edge's reading; the kernel takes the side of the
+                // chain's first edge in its own order, so the most edges'.)
+                let flips: Vec<bool> = chain
+                    .iter()
+                    .filter_map(|name| {
+                        let e = found
+                            .iter()
+                            .find(|e| e.body == body && e.name.to_string() == *name)?;
+                        refs::first_face_on_left(kernel, &shape, e).map(|left| !left)
+                    })
+                    .collect();
+                let flipped = flips.iter().filter(|&&f| f).count();
+                let f = match flipped * 2 {
+                    _ if flips.is_empty() => flip,
+                    n if n == flips.len() => flips[0],
+                    n => n > flips.len(),
+                };
+                match groups.last_mut() {
+                    Some((g, list)) if *g == f => list.extend(chain),
+                    _ => groups.push((f, chain)),
+                }
+            }
+            for (f, list) in groups {
+                let mut s = set.clone();
+                s["edges"] = json!(list);
+                s["flip"] = json!(f);
+                out.push(s);
+            }
+        }
+        def["sets"] = Value::Array(out);
+    }
+
+    /// The edges found by their names one tangent chain at a time (a
+    /// feature per chain and set: the kernel builds some chains only one by
+    /// one, mitcad#96), when that makes more than one feature; a guess
+    /// after the edges at once.
+    fn by_chains(&self, c: &Candidate) -> Option<Candidate> {
+        let kernel = self.doc.kernel();
+        let mut defs = Vec::new();
+        for def in &c.defs {
+            let body = def["body"].as_str()?;
+            let shape = self
+                .doc
+                .bodies()
+                .iter()
+                .find(|b| b.uid.to_string() == body)?
+                .shape
+                .clone();
+            for set in def["sets"].as_array()? {
+                let edges: Vec<String> = set["edges"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|e| e.as_str().map(str::to_owned))
+                    .collect();
+                for chain in tangent_chains(kernel, &shape, &edges) {
+                    let mut one = set.clone();
+                    one["edges"] = json!(chain);
+                    let mut d = def.clone();
+                    d["sets"] = json!([one]);
+                    defs.push(d);
+                }
+            }
+        }
+        (defs.len() > c.defs.len()).then(|| Candidate {
+            defs,
+            note: Some(format!("{BY_NAME}, one tangent chain at a time")),
+            guess: true,
+            predicted: None,
+            first: false,
         })
     }
 }
+
+/// The note of a fillet's or chamfer's edges found by their names.
+const BY_NAME: &str = "edges found by their names in the file";
 
 /// A candidate once with each set of participants (none: all bodies).
 fn with_participants(c: &Candidate, options: &[Vec<String>]) -> Vec<Candidate> {
@@ -2292,6 +3319,8 @@ struct SetGone {
     fit: f64,
     /// Whether the next state has the set's dressup there.
     fits: bool,
+    /// Whether its faces meet tangentially (no dressup's input).
+    smooth: bool,
 }
 
 /// How far (relative to its size) the points of a dressup at an edge may
@@ -2400,6 +3429,31 @@ fn tangent_chains<K: Kernel>(kernel: &K, shape: &K::Shape, names: &[String]) -> 
         }
     }
     out.into_iter().map(|(_, list)| list).collect()
+}
+
+/// The edges of `pool` (gone edges, by name) not in `chosen` that lie in a
+/// tangent chain with one of `chosen`, in the pool's order.
+fn tangent_continuations<K: Kernel>(
+    kernel: &K,
+    shape: &K::Shape,
+    chosen: &[String],
+    pool: &[&SetGone],
+) -> Vec<String> {
+    let mut names = chosen.to_vec();
+    names.extend(
+        pool.iter()
+            .filter(|e| !chosen.contains(&e.name))
+            .map(|e| e.name.clone()),
+    );
+    if names.len() == chosen.len() {
+        return Vec::new();
+    }
+    tangent_chains(kernel, shape, &names)
+        .into_iter()
+        .filter(|chain| chain.iter().any(|n| chosen.contains(n)))
+        .flatten()
+        .filter(|n| !chosen.contains(n))
+        .collect()
 }
 
 /// What tells fillet or chamfer definitions apart: each with its sets'
@@ -2538,6 +3592,9 @@ pub(crate) struct RegionSet {
     /// plane (±1 along its normal) where the state changes their material,
     /// and the state's volume change (mm³).
     probe: Option<(f64, f64)>,
+    /// The one set the dump's measured profiles make up with a union of
+    /// regions: tried before the sets found without the measures.
+    measured: bool,
 }
 
 impl RegionSet {
@@ -2633,7 +3690,7 @@ fn crossings(polygon: &[[f64; 2]], y: f64, out: &mut Vec<f64>) {
 /// its holes; the centroid when it is, else the middle of the widest
 /// stretch of a horizontal scan line inside it; None when the region is
 /// too thin to find one.
-fn interior_points(regions: &[Region]) -> Vec<Option<[f64; 2]>> {
+pub(crate) fn interior_points(regions: &[Region]) -> Vec<Option<[f64; 2]>> {
     regions
         .iter()
         .map(|r| {

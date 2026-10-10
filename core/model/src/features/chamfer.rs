@@ -20,7 +20,7 @@ use super::{
     BodyChange, CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References,
     is_false,
 };
-use crate::ids::BodyUid;
+use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::{Chamfer, ChamferSize, Kernel};
 use crate::parameters::ParamId;
 use crate::topo::{EdgeName, FaceName};
@@ -303,6 +303,37 @@ impl FeatureInfo for ChamferDef {
 
 impl<K: Kernel> Evaluate<K> for ChamferDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
+        let sizes = self.sizes(ctx)?;
+        let shape = ctx.body(self.body)?;
+        for set in &self.sets {
+            ctx.require_edges(self.body, &shape, &set.edges)?;
+            require_faces(ctx, self.body, &shape, &set.faces)?;
+            require_faces(ctx, self.body, &shape, set.reference_face.as_slice())?;
+        }
+        let uid = ctx.uid;
+        let bevelled = self.apply(ctx, uid, &shape, sizes)?;
+        Ok(FeatureOutput {
+            changes: vec![BodyChange::Set(self.body, bevelled)],
+            ..FeatureOutput::default()
+        })
+    }
+}
+
+impl ChamferDef {
+    /// Bevels the sets' edges of `shape`, the new faces named after
+    /// `feature` (the chamfer's copies on a pattern's copies, mitcad#105,
+    /// are named after the pattern).
+    pub(crate) fn bevel<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        feature: FeatureUid,
+        shape: &K::Shape,
+    ) -> Result<K::Shape, String> {
+        let sizes = self.sizes(ctx)?;
+        self.apply(ctx, feature, shape, sizes)
+    }
+
+    fn sizes<K: Kernel>(&self, ctx: &mut EvalContext<'_, K>) -> Result<Vec<ChamferSize>, String> {
         let mut sizes = Vec::with_capacity(self.sets.len());
         for set in &self.sets {
             sizes.push(match &set.size {
@@ -328,12 +359,16 @@ impl<K: Kernel> Evaluate<K> for ChamferDef {
                 }
             });
         }
-        let shape = ctx.body(self.body)?;
-        for set in &self.sets {
-            ctx.require_edges(self.body, &shape, &set.edges)?;
-            require_faces(ctx, self.body, &shape, &set.faces)?;
-            require_faces(ctx, self.body, &shape, set.reference_face.as_slice())?;
-        }
+        Ok(sizes)
+    }
+
+    fn apply<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        feature: FeatureUid,
+        shape: &K::Shape,
+        sizes: Vec<ChamferSize>,
+    ) -> Result<K::Shape, String> {
         let sets: Vec<Chamfer<'_>> = self
             .sets
             .iter()
@@ -349,13 +384,10 @@ impl<K: Kernel> Evaluate<K> for ChamferDef {
             .collect();
         let bevelled = ctx
             .kernel
-            .chamfer(ctx.uid, &shape, &sets, self.corner)
+            .chamfer(feature, shape, &sets, self.corner)
             .map_err(kernel_error)?;
         ctx.warn_notes(&bevelled);
-        Ok(FeatureOutput {
-            changes: vec![BodyChange::Set(self.body, bevelled)],
-            ..FeatureOutput::default()
-        })
+        Ok(bevelled)
     }
 }
 

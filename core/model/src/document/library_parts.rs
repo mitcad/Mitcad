@@ -161,6 +161,7 @@ impl<K: Kernel> Document<K> {
                 None => state.free_component_name(&wanted),
             };
             let made = state.assembly.create(Some(&name), None);
+            let occurrence = state.assembly.place(made, parent, options.transform);
             match bodies {
                 Some(bodies) => {
                     let base = BaseDef {
@@ -184,17 +185,10 @@ impl<K: Kernel> Document<K> {
                     });
                 }
                 None => {
-                    state.copy_component(
-                        &configured.state,
-                        ComponentUid::ROOT,
-                        Some(made),
-                        None,
-                        false,
-                    )?;
+                    state.copy_component(&configured.state, &[], made, None, false)?;
                 }
             }
             state.assembly.component_mut(made).expect("made").library = Some(reference);
-            let occurrence = state.assembly.place(made, parent, options.transform);
             Ok((label, (made, occurrence)))
         })
     }

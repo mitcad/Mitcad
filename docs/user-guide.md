@@ -85,18 +85,19 @@ The shortcuts below are the defaults; they can be changed (Tools ›
 Keyboard Shortcuts), and Help › Keyboard and Mouse Overview lists them
 all. Commands without a shortcut are in command search (S) and in the
 groups' menus. Tools › Preferences has a page for each kind of setting
-(General, Navigation, Display, Cache, Version Control, Updates,
+(General, Navigation, Display, Cache, Cloud, Updates,
 3D Print); command search finds each page by its name or by what it
 sets ("autosave", "slicer", "git"), as *Preferences: Cache* and so on.
 
 | Command | Key | Action |
 |---|---|---|
 | Command Search | S | Find a command by name or keyword |
-| New, Open, Close | Ctrl+N, Ctrl+O, Ctrl+W | New part; open a project or a file to import as a new document; close |
-| Save, Save As | Ctrl+S, Ctrl+Shift+S | Save a `.mitcad` project (in a project with version history also a version) |
+| New, Open, Close | Ctrl+N, Ctrl+O, Ctrl+W | New part; open a design or a file to import as a new document; close |
+| New Project, Open Project, Open from Cloud, Project Settings | | A Local or Cloud project: make, open, clone, set up ([Versions](#versions)) |
+| Save, Save As | Ctrl+S, Ctrl+Shift+S | Save a `.mitcad` design (in a project also a version) |
 | Save Version | Ctrl+Alt+S | Save and record a version with a description |
 | Version History | Ctrl+Shift+H | The design's versions: compare, open, restore or save a copy of one |
-| Sync | Ctrl+Alt+Y | Take the remote's newer versions and send yours (a project with a remote) |
+| Sync | Ctrl+Alt+Y | Take the remote's newer versions and send yours (a Cloud project) |
 | Undo, Redo | Ctrl+Z, Ctrl+Y | Undo, redo (also a dimension change and a drag of the timeline marker) |
 | Fit | F6 | Fit the model to the view |
 | OK, Cancel | Enter, Esc | Accept or cancel a command; Esc also clears the selection |
@@ -283,6 +284,14 @@ stays on for the next sketch.
   be dragged. A dimension that would over-constrain the sketch is added
   as driven (in parentheses); an over-constraining constraint is refused
   with a message.
+- A constraint button applies to the selected geometry, or picks it
+  when nothing fitting is selected. Equal, Parallel, Perpendicular,
+  Collinear, Concentric, Tangent and Coincident on more than two selected
+  entities constrain the first one selected with each of the others (for
+  example, several circles equal to a dimensioned one); Horizontal/Vertical
+  on several lines makes each one horizontal or vertical. The constraints
+  are one undo step; ones the sketch refuses (already implied or
+  conflicting) are left out with a message.
 - Fully defined geometry is black, free geometry blue, construction
   geometry an orange dashed line, projected geometry purple. Dragging a
   point or a curve moves it as far as the constraints allow.
@@ -314,6 +323,18 @@ stays on for the next sketch.
   Suppress, Delete (dependent features are asked about), Roll History
   Marker Here. Dragging the marker rolls the model back; dragging a
   feature moves it (a forbidden place shows in red with the reason).
+- **Timeline filter:** the filter button after the playback buttons shows
+  only some components' features: All Components, Active Component (it
+  follows the radio button) or a component chosen from the list, with
+  Include Subcomponents for the components placed in it. Show in
+  Timeline Only on a component's browser row does the same. Joints and
+  rigid groups that place an occurrence of a shown component stay. The
+  other features take no room; a dotted mark stands for each run of them.
+  The marker still rolls back every later feature, shown or not (its
+  tooltip says how many hidden ones); the playback buttons step between
+  the features shown, and a feature dragged lands just before or after a
+  shown neighbour. Find in Timeline on a hidden feature shows all again.
+  The filter belongs to the window and is not saved.
 - **Change Parameters:** user and model parameters with expressions and
   comments; a refused change (a cycle, a wrong unit) stays in the cell in
   red with the reason. Renaming updates the expressions.
@@ -328,6 +349,14 @@ occurrence and Paste New a new component. Activating a component (the
 radio button) directs new features into it. Ground fixes an occurrence;
 Move/Copy moves components as a timeline feature. Insert Component
 inserts another project linked (updated when opened) or as a copy.
+
+A sketch of the active component can lie on a face or a construction
+plane of another component: Create Sketch on it where an occurrence
+shows it. The sketch stays linked to that face and follows it when the
+face changes or either component moves. Project in such a sketch, or in
+any sketch, also takes edges, faces and vertices of other components,
+linked when Projection Link is on. Features other than sketches still
+work only on their own component's bodies.
 
 ### Long computations
 
@@ -364,28 +393,64 @@ keeps them for next time or for File › Recover Documents.
 
 ### Versions
 
-A project keeps the versions of its designs. **File › New Project…**
-makes one (a folder, by default in Documents/Mitcad). Every Save (Ctrl+S)
-of a design in it records a version, named after what you did since the
-last save (`Save bracket.mitcad: Add Fillet1, Change d3`); **File › Save
+A **project** is a folder whose designs keep their versions. It is
+**Local** (the versions are on this computer) or **Cloud** (they are also
+in a git repository that others share; see
+[Sharing a project](#sharing-a-project)). Every Save (Ctrl+S) of a design
+in a project records a version, named after what you did since the last
+save (`Save bracket.mitcad: Add Fillet1, Change d3`); **File › Save
 Version…** (Ctrl+Alt+S) records one with a description you type. Saving
 without a change, or after changing only the view (Origin folder shown,
-Isolate), records none, and autosave never does. The status bar shows the
-project, its branch and the file's latest version.
+Isolate), records none, and autosave never does.
 
-**File › Start Version History…** gives a design outside projects its
-versions: its folder becomes a project, or the design moves into a new
-one.
+**File › New Project…** makes one:
 
-Versions are recorded with git's `user.name` and `user.email` when git
-has them, else with a name and email address Mitcad asks for
-(Preferences, General). The email address is part of every version:
-anyone the project is shared with sees it.
+- **Folder:** a full path, by default Documents/Mitcad/Project1 (the first
+  that is free). A folder that is a project already turns Create into
+  **Open It**; designs in the folder become the project's, in its first
+  version; other files stay there and are not versioned. A folder inside
+  another git repository gets a repository of its own (a warning says so).
+- **Storage:** Local, or Cloud with the Cloud section (below).
+- **Author:** the name and email address every version records, filled in
+  from git's settings, else from Preferences › Cloud. They are kept in the
+  project's repository; the email address is part of every version.
+
+**Create** makes the folder, its repository and the project's first
+version, which holds its first design, named after the folder; the design
+opens. A cancel leaves the folder as it was.
+
+**File › Open Project…** opens a folder: a project opens with its design
+(the only one, a new one named after it when it has none, or the one you
+pick in the design chooser, which shows each design's latest preview and
+selects the one opened last; **New Design** starts another). An older
+project without versions gets them at once. A git repository, a folder of
+designs and an empty folder go to New Project with the folder filled in. A
+project inside another git repository opens without versions. **Open…**
+and **Open Recent** (designs listed with their project, `bracket.mitcad —
+Robot arm`) recognise the project of a design the same way.
+
+**The project indicator** shows the current project where the version was
+in the status bar (on a Mac beside the document's name in the title bar
+row): `Robot arm · Local · v14`, `Robot arm · Cloud · ✓` (with `↑2` to
+send, `↓1` newer, `Offline, ↑2 waiting`), or `Not in a project`. A click
+opens its menu: Sync Now, Check for Newer Versions, Version History,
+Project Settings and Open in Browser; for a design in no project **Move to
+a Project…**, which moves the design into a new project (its own folder by
+default) or one you have, and records it.
+
+**File › Project Settings…** has the project's folder, its storage
+(Local or Cloud), and on this computer its author, whether each version is
+sent at once and how often the remote is checked (Preferences › Cloud gives
+the defaults).
 
 When the file changed outside Mitcad since you opened it (another
 program, another Mitcad, git), Save asks first: **Save as New Version**
 (the outside change is recorded as a version first, so both stay in the
-history), **Save As**, or **Compare**. A design renamed or moved within
+history), **Save As**, or **Compare**. When that outside change cannot be
+recorded (HEAD detached, a merge in progress, the repository's index
+locked by another program) or the version status cannot be read, Save
+stops with an error and leaves the file as it is; Save As still keeps
+your design in another file. A design renamed or moved within
 its project outside Mitcad keeps its view settings, and its next save
 records the rename.
 
@@ -409,40 +474,66 @@ bodies; **Compare Geometry** also compares the bodies' volumes and areas.
 - **Restore** makes a version the latest again by recording its design
   as a new version (`Restore v3 of bracket.mitcad (abc1234)`). The
   versions since stay; history is never rewritten. Unsaved changes are
-  saved as a version first, or dropped if you choose.
+  saved as a version first, or dropped if you choose; a change made to
+  the file outside Mitcad is recorded as a version first. When either
+  cannot be recorded as a version, Restore stops with an error saying
+  why and writes nothing over the file (unsaved changes it saved stay in
+  the file, without a version yet).
 - **Save Copy As** writes a version to a file of your choice.
+
 
 ### Sharing a project
 
-A project's versions can be shared through a remote repository: a git
-server (Forgejo, Gitea, GitHub, GitLab, …) or a repository in a shared
+A **Cloud** project's versions are shared through a git repository: on a
+git service (GitHub, GitLab, Forgejo or Gitea, any server) or in a shared
 folder. This needs the git program (Git for Windows on Windows).
 
-1. Create an empty, private repository (without a README) on the
-   server's web page. **File › Connect Project to Remote** has **Create
-   Repository in Browser**, with GitHub's form filled in.
-2. Give its address in **Connect Project to Remote**
-   (`git@github.com:you/bracket.git`, `https://…` or a folder). The
-   project's versions are sent there. Designs linked from outside the
-   project are not shared; Connect warns about them.
+- **New Project** with Storage **Cloud**, or **Project Settings** of a
+  Local project with **Cloud** and **Share** (which sends its whole
+  history; the dialog lists the authors whose names and email addresses
+  the versions carry), or **File › Open from Cloud…** to open one.
+- **The Cloud section:** the **Service** (GitHub, GitLab, Forgejo / Gitea
+  with its server, Shared folder, Other address), the **Account** and the
+  **Repository** (named after the project's folder until you type one) and
+  **HTTPS** or **SSH** make the **Address**; an address can also be typed
+  or pasted, and fills the fields it can. **Create Repository in
+  Browser…** opens the service's page for a new repository (GitHub's form
+  filled in). A shared folder that is empty is made a repository.
+- The address is checked as you type, and again when the dialog gets the
+  focus back (after making the repository in the browser): empty and
+  ready; files but no project (a README: the project goes beside them, its
+  history after theirs); a Mitcad project (**Open It Instead** opens it);
+  not found; or a problem of signing in or of the network. When the server
+  cannot be reached, **Create as Local for Now** makes a Local project,
+  shared later in Project Settings.
+- **Open from Cloud** clones a project into a new or empty folder (by
+  default Documents/Mitcad/<repository>), with a summary of what is there
+  (`Project "robot-arm": 14 versions, latest 2026-10-07 by Your Name`). An
+  empty repository gets a new project (**Create Project Here**), one with
+  files but no project gets one beside them (**Make It a Project**), and a
+  folder that holds a clone of the repository opens as it is (**Open It**).
 
-Mitcad never asks for a password: it signs in as your other git tools
-do, with an SSH key (and its agent) or a credential helper such as Git
-Credential Manager for `https://` addresses, and refuses addresses with a
-password or token in them. A server's SSH host key must be confirmed once
-in a terminal (`ssh -T git@github.com`). A missing key or an unknown
-server is reported with what to do.
+**Signing in** is git's: Mitcad never asks for, keeps or passes a password
+or a token, and refuses addresses with one in them. Over SSH it uses your
+SSH key (and its agent); when the server refuses it, **Copy Public Key**
+puts your key on the clipboard for the service's **SSH Keys Page**. Over
+HTTPS git uses a credential helper (Git Credential Manager comes with Git
+for Windows). A server whose identity this computer does not know yet
+shows **Trust This Server…**: its keys' fingerprints, checked against the
+keys GitHub, GitLab and Codeberg publish (for another server, compare them
+with what its administrator gives); trusting adds them to your
+`~/.ssh/known_hosts`.
 
-- Every version Save records is sent at once (Tools › Preferences,
-  Version Control, can turn that off). Offline, versions wait and the
-  status bar shows them (`↑2`); they are sent when the remote can be
-  reached again.
-- **Open Project from Remote** opens a project with its versions into a
-  new folder (by default Documents/Mitcad/<repository>).
-- The remote is checked for newer versions when a design opens, every 10
-  minutes and at the first change after opening (Preferences: how often,
-  or never). The status bar shows them (`↓1`), and a newer version of the
-  open design shows a notice under the toolbar with **Sync Now**.
+In a Cloud project:
+
+- Every version Save records is sent at once (Project Settings, with
+  Preferences › Cloud as the default, can turn that off). Offline, versions
+  wait and the indicator shows them (`Offline, ↑2 waiting`); they are sent
+  when the repository can be reached again.
+- The repository is checked for newer versions when a design opens, every
+  10 minutes and at the first change after opening (Project Settings: how
+  often, or never). The indicator shows them (`↓1`), and a newer version of
+  the open design shows a notice under the toolbar with **Sync Now**.
 - **Sync** (File › Sync, Ctrl+Alt+Y) saves the open design, takes the
   remote's newer versions and sends yours after them; the history stays
   one line. The design is reopened when its file changed.
@@ -453,13 +544,141 @@ server is reported with what to do.
   2026-10-05 14.03).mitcad`); **Compare** lists what differs. Designs are
   never merged, and nothing is lost: versions left out stay in a backup
   of the history.
-- The status bar's remote state (synced, `↑` to send, `↓` newer, syncing,
-  conflict, offline, sign-in needed) has a menu: Sync, Check for Newer
-  Versions, Remote Settings (address, last check; Change Address,
-  Disconnect) and Open Remote in Browser.
-- Tools › Preferences, Version Control: the git program (found on `PATH`,
-  on Windows also where Git for Windows installs itself, or chosen), how
-  often to check the remote, and whether each saved version is sent.
+- **Project Settings** shows the address with **Change…** (a new address
+  of the same repository, when it moved; another repository is refused)
+  and **Open in Browser**, the state with **Sync Now**, and **Local**
+  stops syncing: the remote is removed, the versions stay here and in the
+  repository. Under **For everyone in this project** are the settings the
+  project's members share, recorded as a version and sent; the others'
+  Mitcad follows them after its next sync.
+- Designs linked from outside the project are not shared.
+- A repository with **several remotes** (set up with git) syncs with the
+  one its branch follows, else `origin`, else the only one. When none of
+  these applies, the indicator says `No remote chosen`, nothing is sent
+  or fetched, and Project Settings asks which remote to follow (**Remote**
+  and **Follow**; `mitcad-cli remote follow` does the same).
+
+**Live updates** make what others do arrive at once instead of at the next
+check: a version someone sends, and who has a design open. They go
+through an MQTT broker that the project names (Project Settings › Live
+updates › Broker, with a topic prefix, `mitcad` by default; or **Another
+broker** or **Off** for this computer only, under Live updates here). The
+versions themselves stay in the git repository; the broker only says
+that something changed.
+
+- **Trust:** the first time a project wants to connect to a broker,
+  Mitcad asks: "Robot arm uses live updates through broker.example.com.
+  Your name and the designs you open are sent there." **Connect** or
+  **Not Now**. Anyone who can send versions to the project can change its
+  broker, so nothing connects before you answer, the answer is kept for
+  that address, and another address asks again. A plain-text broker
+  (`mqtt://`) says so in the question: anyone on the network can read its
+  messages.
+- **Signing in:** a broker that wants a user name and a password shows a
+  notice under the toolbar, "Live updates need you to sign in to
+  broker.example.com" with **Sign In** and **Not Now**; the design opens
+  meanwhile. They are kept in the system's keychain (Windows Credential
+  Manager, the macOS Keychain, the Secret Service or KWallet on Linux),
+  never in the project or Mitcad's settings, and go only to that broker's
+  host and port, and only over an encrypted connection (`mqtts://`; a
+  password for `mqtt://` is refused). Without a keychain they are kept
+  until Mitcad closes.
+- **The indicator** says `· Live` while the connection is up, and
+  `· Live offline (polling)` while it is not: Mitcad then checks the
+  repository on its own again. While live, a version someone sends shows
+  at once (`↓1` and the notice of a newer version of the open design),
+  and the repository is not checked on the timer.
+- **Test** in Project Settings connects to the broker, subscribes,
+  publishes one message under the prefix and waits for it, and lists the
+  steps.
+
+**Tools › Preferences › Cloud:** the git program (found on `PATH`, on
+Windows also where Git for Windows installs itself, or chosen), the
+default author (when git has none), the defaults of projects for sending
+each version at once and for how often to check for newer versions,
+whether live updates are allowed (off: no project connects to a broker),
+the broker New Project offers, and **Known brokers**: the brokers you
+answered the trust question for, with the user you signed in as. **Sign
+Out** removes a broker's user name and password from the keychain;
+**Forget** also removes the answer, so that the next connection asks
+again.
+
+#### Edit locks
+
+In a Cloud project a design has one editor at a time. Opening a design
+takes its **edit lock** on the remote (a reference of the repository's
+own, outside its branches); anyone else who opens it gets it
+**read-only** and can ask for it. Locks are on by default; Project
+Settings turns them off for everyone, and sets the idle time (1–120
+minutes, 10 by default) and how often the remote is read (5 s–10 min, 10 s
+by default; every 2 minutes while live updates are connected, which tell
+of every change at once). Other git tools do not see them, and a remote
+that does not take such references (Project Settings says so) has none.
+
+- **Opening a design:** free, it opens for editing and the indicator says
+  `Editing`; if the remote has a newer version of it, that is taken first
+  (as Sync does). Someone else editing it: it opens read-only with
+  "part.mitcad is being edited by Alex (since 13:40, last active 2 min
+  ago)", **Continue Read-Only** or **Request Edit Access…**. Open
+  elsewhere by yourself (another computer or window): **Take Over** (the
+  other window turns read-only and keeps its changes) or **Open
+  Read-Only**. A lock whose holder is gone (its Mitcad ended without
+  releasing it, it did not answer, or, with live updates, its connection
+  was lost and you said so) is taken as free, and you are told whose it
+  was. When the remote cannot be reached the design opens for editing
+  with `Edit lock not confirmed (offline)`, and the lock is taken once the
+  remote answers (or the window turns read-only if someone else holds it
+  by then). **File › Open Read-Only…** opens a design without a lock; an
+  older version opened from Version History takes none either.
+- **Read-only windows** show and inspect the design (selection, measuring,
+  sections, isolating, exporting, 3D printing, rendering, Version History
+  and its comparisons) but do not change it: commands, timeline edits,
+  sketches and parameters are refused. The banner under the toolbar says
+  why, with **Request Edit Access…** (a message of up to 200 characters),
+  and shows the holder's answer and, with live updates, who else has the
+  design open. When the holder sends a version, the window shows it
+  without changing your copy of the file ("Updated to Alex's version
+  saved at 14:05."); your copy follows when you get the lock. **Save As**
+  keeps a copy, which opens for editing with a lock of its own.
+- **Holding a lock:** a command, an edit, a selection or a change of the
+  view keeps it active. After the idle time without any: with no unsaved
+  changes the design's versions are sent and the lock released; with
+  unsaved changes and autosave on (Preferences › General) they are saved
+  as a version first ("Saved automatically before releasing the edit
+  lock"); with autosave off the lock stays, marked idle, and a request
+  gets it at once, your changes staying in your window. The banner then
+  says "Your edit lock was released after 10 minutes without activity",
+  and **Edit** takes it again. The indicator's menu has **Release Edit
+  Lock** and **Edit Lock Details…** (the holder, since when, the requests,
+  who else has the design open, the live updates' connection).
+- **Requests:** your Mitcad answers with a receipt by itself, and asks
+  you: **Release** (unsaved changes are saved first, or **Release Without
+  Saving** keeps them in your read-only window; the versions are sent and
+  the lock goes straight to the one who asked), **Keep 15 More Minutes**
+  (asked again then), or **Decline…** with a message. Without an answer
+  within the idle time the lock is released as at the idle time. When
+  your Mitcad does not answer at all (it ended, or the computer is off),
+  the one who asked takes the lock after two of its polls. The other way
+  round, the asking Mitcad renews its request while it waits; a request
+  whose Mitcad ended (or whose window closed without withdrawing it) is
+  no longer renewed, and after the idle time and two polls nobody is
+  asked about it any more and the next Mitcad that sees it removes it.
+  A declined request goes the same way unless you ask again.
+- **Losing a lock** (taken over, or taken because your Mitcad did not
+  answer): the window turns read-only and says who took it; unsaved
+  changes stay, and **Save as Copy…** or **Save as New Version** keeps
+  them (Sync then asks which version of the file to keep).
+- **Closing** a design or quitting sends the versions not sent yet and
+  releases its lock and requests; when that sync needs your choice,
+  **Resolve Sync**, **Release Without Sending** or **Keep Lock**. Offline,
+  the lock stays until it is stale. After a crash it stays too; reopening
+  the design (or restoring its autosaved work) checks it as opening does.
+- **Sync** asks before it sends a version of a file someone else holds
+  the lock of: **Send Anyway** or **Cancel**.
+- Turning edit locks off releases your locks; others' stay listed by
+  `mitcad-cli lock status` and can be removed with `mitcad-cli lock
+  release --force`.
+
 
 ### Component libraries
 
@@ -624,15 +843,17 @@ out. The dialog chooses:
   triangles may lie from the surface (mm) and the angle between
   neighbouring triangles.
 - **Slicer:** the one of Preferences (3D Print), found automatically
-  where possible, or another program (an AppImage, for example).
+  where possible, or another program (an AppImage or, on macOS, an
+  application in the Applications folder, for example).
 
 The files go into `mitcad-print/<design>` in the temporary folder, which
 is emptied before each send. Without a slicer, or when it does not
 start, the folder opens instead. The choices are remembered.
 
 Slicers are found in their usual install folders and the list of
-installed programs (Windows), and on `PATH`, as Flatpaks and in desktop
-files (Linux).
+installed programs (Windows), in the Applications folders (macOS; an
+application gets the files through `open -a`), and on `PATH`, as
+Flatpaks and in desktop files (Linux).
 
 ### .f3d import
 
@@ -741,7 +962,7 @@ The application (`mitcad`, on Windows `mitcad.exe`):
 Environment variables: `MITCAD_NO_UPDATE_CHECK=1` turns update checks
 off, `MITCAD_PROJECTS_DIR` sets where New Project puts projects (instead
 of Documents/Mitcad), `MITCAD_GIT` the git program when it is not on
-`PATH` (Preferences, Version Control, sets it for the application), `MITCAD_LIBRARIES_DIR` where fetched component libraries are
+`PATH` (Preferences › Cloud sets it for the application), `MITCAD_LIBRARIES_DIR` where fetched component libraries are
 kept.
 Variables for tests: [development.md](development.md).
 
@@ -824,3 +1045,20 @@ and options.
     would do. Record your changes as versions first: unrecorded changes
     in a file the sync would change stop it. Your history from before
     the sync is kept in a backup for 30 days (the latest five always).
+- Local and Cloud projects:
+  - `project inspect folder` tells what a folder is (a Local or Cloud
+    project, a repository, designs, empty) with its designs and settings;
+    `project create folder --author "Name <email>" [--url <url>]` makes a
+    project with its first version, and with `--url` a Cloud one (an empty
+    server repository gets its versions; one with files such as a README
+    is taken in beside the project); `project settings folder [--set
+    '{"shared": {"edit_locks": {"enabled": false}}}']` shows or changes the
+    project's settings (a change for everyone is recorded as a version).
+  - `remote check <url>` tells what a server repository holds;
+    `remote share project-folder <url>` connects a Local project to a
+    repository that holds files but no project (your versions go after
+    its own); `clone <url> new-folder --adopt` makes a repository with
+    files a project.
+  - `host-keys <server> [--trust]` shows the server's SSH key
+    fingerprints, checked against those GitHub, GitLab and Codeberg
+    publish, and with `--trust` adds them to `~/.ssh/known_hosts`.

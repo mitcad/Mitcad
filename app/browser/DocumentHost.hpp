@@ -42,6 +42,9 @@ public:
   // Whether the model can change now: no command panel open and no sketch
   // being edited. Visibility can also change while sketching.
   virtual bool canChangeModel(bool visibilityOnly = false) const = 0;
+  // Why the design cannot be changed at all (a read-only window whose edit
+  // lock someone else holds, mitcad#89); empty when it can.
+  virtual QString readOnlyReason() const { return {}; }
   // Shows a message in the status bar (red for an error).
   virtual void showStatus(const QString& message, bool error) = 0;
 

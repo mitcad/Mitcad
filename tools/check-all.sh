@@ -3,8 +3,18 @@
 # The checks before a commit, in the Linux build environment (run from any
 # directory; it works in the checkout it belongs to): configure and build
 # with the dev preset, cargo fmt and clippy, the dependency check, ctest,
-# the corpus tests when they are relevant, and every UI test
-# (tools/ui-*-test.sh), several at once.
+# the ctests, the corpus tests and the UI tests (tools/ui-*-test.sh) whose
+# sources changed, several at once.
+#
+# Two depths. By default (development, before a merge to main) the check
+# is scoped to the change: a test runs only when what it depends on
+# differs from every run in which it passed on this machine, a few long
+# tests that seldom catch anything (FULL_ONLY in tools/ctest-fingerprints.py)
+# are left out, and a UI test depends only on the areas it declares (the
+# smoke set, UI_SMOKE, on everything the application is built from), so
+# that now and then a fault slips through to the full check. --full runs
+# everything: every ctest, the corpus and every UI test. Use it before a
+# release build.
 #
 # Every step's time and result go to build/dev/check-timings.tsv (step,
 # seconds, result; also appended to check-timings-history.tsv with the
@@ -12,24 +22,53 @@
 # measures itself; the steps' output is in build/dev/check-logs/. The exit
 # status is 0 only if every step passed.
 #
-# Usage: tools/check-all.sh [--ui-jobs N] [--ctest-jobs N]
+# Usage: tools/check-all.sh [--full] [--ui-jobs N] [--ui auto|all]
+#          [--ctest auto|all] [--ctest-jobs N]
 #          [--corpus auto|always|never] [--corpus-tests N] [--corpus-jobs N]
 #          [--memory SIZE] [--fresh] [--only STEP,...]
+#   --full          the full check, before a release build: --ctest all,
+#                   --corpus always, --ui all (--release is the same).
 #   --ui-jobs N     UI tests at once (default 4). The longest ones start
 #                   first, by their last times in the history.
+#   --ui MODE       "all", or "auto" (default): a UI test runs only when the
+#                   files it depends on differ from every run in which it
+#                   passed on this machine (kept in
+#                   ~/.cache/mitcad/ui-passed/<name>): the areas it
+#                   declares in header lines "# check-all sources:
+#                   <path>..." (several such lines add up: the parts of
+#                   app/ and core/ it exercises, tools/cli when it makes
+#                   designs with mitcad-cli, ...), the build files and
+#                   options (UI_BASE), its script and the test library
+#                   (UI_LIBRARY). The smoke set (UI_SMOKE) depends on
+#                   everything the application is built from (UI_COMMON)
+#                   besides, so a change anywhere in app/, core/ or
+#                   geometry/ runs at least it. A test named in --only
+#                   always runs.
+#   --ctest MODE    "all", or "auto" (default): a ctest runs only when its
+#                   fingerprint differs from every run in which it passed
+#                   on this machine (~/.cache/mitcad/ctest-passed/<name>):
+#                   what its command runs and names, the targets and crates
+#                   they are built from, the build files, the compiler and
+#                   the options, found from the build itself
+#                   (tools/ctest-fingerprints.py says how). Its FULL_ONLY
+#                   tests run only with "all". --only ctest:<name> runs that
+#                   test whatever changed (with "ctest" also the others
+#                   that changed).
 #   --ctest-jobs N  ctest's parallel tests (default: the cores / 4).
 #   --corpus MODE   the corpus group: f3d.corpus*, f3d.models_loft (the
-#                   reference models replayed), freecad.corpus and
-#                   ipt.corpus, after
+#                   reference models replayed), freecad.corpus,
+#                   ipt.corpus and iam.corpus, after
 #                   ctest's other tests, several at once, each importing
 #                   several files at once in child processes (mitcad#70).
 #                   "always", "never",
 #                   or "auto" (default): only when the files they depend on
 #                   (CORPUS_SOURCES below: the import, the readers, the
-#                   geometry, the bridge and how they are built) or the
-#                   corpora differ from every corpus run that passed on
-#                   this machine, which are kept in
-#                   ~/.cache/mitcad/corpus-passed.
+#                   geometry, the bridge's kernel and import files and how
+#                   they are built, and the resolved dependencies of the
+#                   import's crates, CORPUS_CRATES) or the corpora differ
+#                   from every corpus run that passed on this machine,
+#                   which are kept in ~/.cache/mitcad/corpus-passed.
+#                   Markdown documents count for neither fingerprint.
 #   --corpus-tests N, --corpus-jobs N
 #                   corpus tests at once (ctest -j) and the files each
 #                   imports at once (MITCAD_CORPUS_JOBS). By default the
@@ -47,7 +86,20 @@
 #   --fresh         configure from scratch (cmake --fresh), as after
 #                   changes of CMake files.
 #   --only STEPS    only these steps: configure, build, fmt, clippy, deps,
-#                   ctest, corpus, ui, or single UI tests (ui-sketch).
+#                   ctest, corpus, ui, or single UI tests (ui-sketch) or
+#                   ctests (ctest:core.model).
+#   --dry-run       builds and runs nothing: lists the ctests, the corpus
+#                   and the UI tests that would run for the working tree as
+#                   it is (against the last configure's targets), and why.
+#
+# A UI test that fails keeps the application's log as ui-<name>.app.log
+# beside its own; when it runs again, both are renamed *.failed.log and
+# *.failed.app.log first (run_ui).
+#
+# The passes of the ctests, the corpus and the UI tests are kept only from
+# runs that built (the build step ran), so that a test of an older build
+# does not count for newer sources. The tests left out appear as "skipped"
+# rows of the table (a ctest's indented, as ctest:<name>).
 #
 # The test steps (ctest, corpus, UI) hold one of two test slots, files that
 # flock(1) locks ($MITCAD_TEST_LOCK, default ~/.mitcad-test.lock, and
@@ -70,30 +122,53 @@ HISTORY=$BUILD/check-timings-history.tsv
 LOCK=${MITCAD_TEST_LOCK:-$HOME/.mitcad-test.lock}
 SLOTS=${MITCAD_TEST_SLOTS:-2}
 UI_TIMEOUT=${UI_TIMEOUT:-1800}
-# The corpus group's tests, and what they depend on besides the corpora.
-CORPUS_TESTS='^(f3d\.corpus|f3d\.models_loft$|freecad\.corpus$|ipt\.corpus$)'
-CORPUS_SOURCES=(core/f3d core/import core/freecad core/zip core/ffi core/cpp core/tests
-  core/CMakeLists.txt core/Cargo.toml core/Cargo.lock geometry tools/cli/main.cpp
-  tools/cli/CMakeLists.txt tools/cli/fcstd-corpus.cmake CMakeLists.txt rust-toolchain.toml vcpkg.json
-  core/ipt tools/cli/ipt-corpus.cmake third_party/vcpkg-ports)
+# The corpus group's tests, and what they depend on besides the corpora:
+# the readers and the import, the bridge's kernel and import files (not
+# other families'), the geometry, mitcad-cli's imports (import.cpp, not
+# main.cpp), how they are built, and the import's crates' resolved
+# dependencies (cargo tree; not Cargo.toml and Cargo.lock, which change for
+# crates of other parts too).
+CORPUS_TESTS='^(f3d\.corpus|f3d\.models_loft$|freecad\.corpus$|ipt\.corpus$|iam\.corpus$)'
+CORPUS_SOURCES=(core/f3d core/import core/freecad core/zip core/ipt core/tests
+  core/ffi/src/kernel core/ffi/src/*_import.rs core/ffi/src/ipt_history.rs core/ffi/src/exchange.rs
+  core/ffi/src/memory.rs core/cpp core/CMakeLists.txt geometry tools/cli/import.cpp tools/cli/import.hpp
+  tools/cli/CMakeLists.txt tools/cli/fcstd-corpus.cmake tools/cli/ipt-corpus.cmake tools/cli/iam-corpus.cmake
+  CMakeLists.txt rust-toolchain.toml vcpkg.json third_party/vcpkg-ports)
+CORPUS_CRATES=(mitcad-import mitcad-f3d mitcad-freecad mitcad-ipt mitcad-zip)
 CORPUS_PASSED=${XDG_CACHE_HOME:-$HOME/.cache}/mitcad/corpus-passed
+# The build files every UI test depends on, what the application is built
+# from (which the smoke set depends on), the smoke set, and the test
+# library every UI test uses.
+UI_BASE=(third_party CMakeLists.txt CMakePresets.json cmake triplets rust-toolchain.toml vcpkg.json)
+UI_COMMON=(app geometry core)
+UI_SMOKE=(smoke workflow command file)
+UI_LIBRARY=(tools/ui-test-lib.sh tools/ui-image-stats.py tools/xwd2png.py)
+UI_PASSED=${XDG_CACHE_HOME:-$HOME/.cache}/mitcad/ui-passed
+CTEST_PASSED=${XDG_CACHE_HOME:-$HOME/.cache}/mitcad/ctest-passed
 # The memory a corpus test's child may commit, and its time.
 CORPUS_MEMORY=${MITCAD_CORPUS_MEMORY:-1536M}
 CORPUS_TIMEOUT=${MITCAD_CORPUS_TIMEOUT:-300}
 
 UI_JOBS=4
+UI=auto
+CTEST=auto
 CTEST_JOBS=$(($(nproc) / 4))
 [ "$CTEST_JOBS" -ge 1 ] || CTEST_JOBS=1
 CORPUS=auto
 CORPUS_TESTS_AT_ONCE=""
 CORPUS_JOBS=""
 MEMORY=${MITCAD_CHECK_MEMORY:-12G}
+FULL=0
+DRY=0
 FRESH=()
 ONLY=""
 ARGS=("$@")
 while [ $# -gt 0 ]; do
   case $1 in
     --ui-jobs) UI_JOBS=$2; shift 2 ;;
+    --ui) UI=$2; shift 2 ;;
+    --full | --release) FULL=1; shift ;;
+    --ctest) CTEST=$2; shift 2 ;;
     --ctest-jobs) CTEST_JOBS=$2; shift 2 ;;
     --corpus) CORPUS=$2; shift 2 ;;
     --corpus-tests) CORPUS_TESTS_AT_ONCE=$2; shift 2 ;;
@@ -101,11 +176,25 @@ while [ $# -gt 0 ]; do
     --memory) MEMORY=$2; shift 2 ;;
     --fresh) FRESH=(--fresh); shift ;;
     --only) ONLY=$2; shift 2 ;;
+    --dry-run) DRY=1; shift ;;
     -h | --help) sed -n '3,/^set -uo/{/^set -uo/d;s/^# \{0,1\}//;p}' "$SELF"; exit 0 ;;
     *) echo "unknown option $1 (--help)" >&2; exit 2 ;;
   esac
 done
 case $CORPUS in auto | always | never) ;; *) echo "--corpus auto, always or never" >&2; exit 2 ;; esac
+case $UI in auto | all) ;; *) echo "--ui auto or all" >&2; exit 2 ;; esac
+case $CTEST in auto | all) ;; *) echo "--ctest auto or all" >&2; exit 2 ;; esac
+if [ "$FULL" = 1 ]; then
+  CTEST=all
+  CORPUS=always
+  UI=all
+fi
+# A dry run keeps no history, holds no memory scope and takes no slot.
+if [ "$DRY" = 1 ]; then
+  TIMINGS=$LOGS/dry-run.tsv
+  HISTORY=/dev/null
+  MEMORY=none
+fi
 
 # The whole run in a systemd scope with the memory limit (the script again,
 # inside it), when the user's systemd can make one.
@@ -123,26 +212,43 @@ export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$(($(nproc) / 2))}
 # The UI tests show no windows here, whatever the caller's environment says.
 unset MITCAD_UI_VISIBLE
 
-wanted() { [ -z "$ONLY" ] || [[ ",$ONLY," == *",$1,"* ]]; }
+wanted() {
+  if [ "$DRY" = 1 ]; then
+    case $1 in configure | build | fmt | clippy | deps) return 1 ;; esac
+  fi
+  [ -z "$ONLY" ] || [[ ",$ONLY," == *",$1,"* ]]
+}
+# ctest_named: the ctests named in --only (ctest:<name>), one a line.
+ctest_named() { tr ',' '\n' <<< "$ONLY" | sed -n 's/^ctest://p'; }
 ui_wanted() {
   [ -z "$ONLY" ] || [[ ",$ONLY," == *",ui,"* ]] || [[ ",$ONLY," == *",ui-$1,"* ]]
 }
+# ui_named name: the UI test is named in --only, so it runs whatever changed.
+ui_named() { [[ ",$ONLY," == *",ui-$1,"* ]]; }
 
 now_us() { echo "${EPOCHREALTIME/[.,]/}"; }
 # seconds_since start_us: the seconds since then, to a tenth.
 seconds_since() {
   local tenths=$((($(now_us) - $1) / 100000))
+  # The clock can step back (time synchronisation).
+  [ "$tenths" -ge 0 ] || tenths=0
   echo "$((tenths / 10)).$((tenths % 10))"
 }
 
 STARTED=$(date '+%Y-%m-%d %H:%M')
 RUN_START=$(now_us)
 FAILED=0
+# Whether this run built: only then are the passes of the corpus and of the
+# UI tests kept for their sources.
+BUILT=0
 mkdir -p "$LOGS"
-# Each step's time in the last run that had it, which orders the UI tests.
+# Each step's time in the last run that ran it (not skipped), which orders
+# the UI tests.
 declare -A LAST
 if [ -f "$HISTORY" ]; then
-  while IFS=$'\t' read -r _ name seconds _; do LAST[$name]=${seconds%.*}; done < "$HISTORY"
+  while IFS=$'\t' read -r _ name seconds result; do
+    [ "$result" = skipped ] || LAST[$name]=${seconds%.*}
+  done < "$HISTORY"
 fi
 printf 'step\tseconds\tresult\n' > "$TIMINGS"
 
@@ -253,24 +359,102 @@ corpus_plan() {
   fi
 }
 
+# not_docs: from NUL-separated paths, those that are not Markdown documents:
+# neither the corpus nor a UI test reads them, so editing a README or
+# commands.md reruns neither. (The MCP server embeds commands.md: the
+# ctests' fingerprints count the files a crate includes, core.mcp's that.)
+not_docs() { grep -zvE '\.md$'; }
+
+# files_digest path...: an md5sum line for each file under the paths, by
+# path (Python's caches and Markdown documents left out).
+files_digest() {
+  find "$@" -type f -not -path '*/__pycache__/*' -print0 2> /dev/null | not_docs | sort -z | xargs -0 -r md5sum
+}
+
+# corpus_dependencies: the resolved dependencies of the import's crates,
+# with their versions and features (cargo tree; the checkout's paths left
+# out, so that checkouts share the fingerprints), or, when cargo cannot
+# tell them offline, Cargo.toml's and Cargo.lock's digests.
+corpus_dependencies() {
+  local crate selected=()
+  for crate in "${CORPUS_CRATES[@]}"; do selected+=(-p "$crate"); done
+  cargo tree --offline --locked --manifest-path core/Cargo.toml -e normal,build --prefix none -f '{p} {f}' \
+    "${selected[@]}" 2> /dev/null | sed -E 's# \(/[^)]*\)##; s# \(\*\)$##' | sort -u ||
+    md5sum core/Cargo.toml core/Cargo.lock
+}
+
 corpus_fingerprint() {
   local dir dirs=()
   IFS=: read -ra dirs <<< "${MITCAD_FCSTD_CORPUS:-}:${MITCAD_IPT_CORPUS:-}"
   dirs+=("${MITCAD_F3D_CORPUS:-$HOME/f3d-corpus}" "${MITCAD_F3D_MODELS:-$HOME/f3d-models}")
   {
-    find "${CORPUS_SOURCES[@]}" -type f -print0 2> /dev/null | sort -z | xargs -0 md5sum
+    files_digest "${CORPUS_SOURCES[@]}"
+    corpus_dependencies
     for dir in "${dirs[@]}"; do
       [ -d "$dir" ] && find "$dir" -type f -printf '%p %s %T@\n' | sort
     done
   } | md5sum | cut -d' ' -f1
 }
 
+# ui_declared name: the areas tools/ui-<name>-test.sh declares it depends
+# on ("# check-all sources: <path>..." lines).
+ui_declared() { sed -n 's/^# check-all sources: *//p' "tools/ui-$1-test.sh" | tr '\n' ' '; }
+
+# ui_base_fingerprint: the digest of the build files every UI test depends
+# on (UI_BASE) and of the build's options (MITCAD_RENDER, ...).
+ui_base_fingerprint() {
+  {
+    files_digest "${UI_BASE[@]}"
+    grep -sE '^(MITCAD_[A-Z0-9_]+:BOOL|CMAKE_BUILD_TYPE:STRING)=' "$BUILD/CMakeCache.txt" | sort
+  } | md5sum | cut -d' ' -f1
+}
+
+# ui_smoke name: the UI test is in the smoke set.
+ui_smoke() { [[ " ${UI_SMOKE[*]} " == *" $1 "* ]]; }
+
+# ui_fingerprint name base common: the digest of what the UI test depends
+# on: the base's digest, the areas it declares, its script and the test
+# library, and for the smoke set the digest of what the application is
+# built from (common).
+ui_fingerprint() {
+  local sources=()
+  read -ra sources <<< "$(ui_declared "$1")"
+  {
+    echo "$2"
+    if ui_smoke "$1"; then echo "smoke $3"; fi
+    files_digest "tools/ui-$1-test.sh" "${UI_LIBRARY[@]}" ${sources[@]+"${sources[@]}"}
+  } | md5sum | cut -d' ' -f1
+}
+
+# ctest_plan: which ctests run (tools/ctest-fingerprints.py) into
+# check-logs/ctest-plan.tsv, a line per test: name, run or skip,
+# fingerprint, reason. Without a plan (the helper failed) every test runs.
+ctest_plan() {
+  local name args=(--source "$ROOT" --build "$BUILD" --passed "$CTEST_PASSED" --mode "$CTEST"
+    --exclude "$CORPUS_TESTS")
+  while read -r name; do
+    [ -n "$name" ] && args+=(--force "$name")
+  done < <(ctest_named)
+  wanted ctest || args+=(--forced-only)
+  python3 tools/ctest-fingerprints.py plan "${args[@]}" > "$LOGS/ctest-plan.tsv" 2> "$LOGS/ctest-plan.log"
+}
+
+# ctest_regex: the tests of the plan that run, as a regular expression.
+ctest_regex() {
+  awk -F'\t' '$2 == "run" { print $1 }' "$LOGS/ctest-plan.tsv" | sed 's/[.[\*^$()+?{|]/\\&/g' |
+    paste -sd '|' | sed 's/^\(..*\)$/^(\1)$/'
+}
+
 # --- Build and lint
+# CMake's file API: the targets the ctests' fingerprints follow.
+mkdir -p "$BUILD/.cmake/api/v1/query"
+touch "$BUILD/.cmake/api/v1/query/codemodel-v2" "$BUILD/.cmake/api/v1/query/toolchains-v1"
 if wanted configure; then
   step configure cmake --preset dev "${FRESH[@]}" || { echo "configure failed"; exit 1; }
 fi
 if wanted build; then
   step build cmake --build --preset dev || { echo "build failed"; exit 1; }
+  BUILT=1
   # The build is to be warning-free (what it compiled, that is).
   warnings=$(grep -cE '(^| )warning(\[[^]]*\])?: ' "$LOGS/build.log")
   if [ "$warnings" -gt 0 ]; then
@@ -292,10 +476,35 @@ if wanted deps; then
 fi
 
 # --- Tests, under the test lock
-if wanted ctest; then
-  take_lock
-  step ctest ctest --preset dev -j "$CTEST_JOBS" -E "$CORPUS_TESTS"
-  ctest_rows "$LOGS/ctest.log"
+if wanted ctest || [ -n "$(ctest_named)" ]; then
+  if ctest_plan; then
+    regex=$(ctest_regex)
+    echo "== ctest: $(grep -c $'\trun\t' "$LOGS/ctest-plan.tsv") of $(wc -l < "$LOGS/ctest-plan.tsv") tests" \
+      "run, the others are skipped (check-logs/ctest-plan.tsv)"
+  else
+    echo "== ctest: no plan (check-logs/ctest-plan.log); every test runs"
+    : > "$LOGS/ctest-plan.tsv"
+    regex=.
+  fi
+  if [ "$DRY" = 1 ]; then
+    awk -F'\t' '$2 == "run" { print "   would run ctest:" $1 " (" $4 ")" }' "$LOGS/ctest-plan.tsv"
+  elif [ -z "$regex" ]; then
+    record ctest 0 skipped
+  else
+    take_lock
+    step ctest ctest --preset dev -j "$CTEST_JOBS" -R "$regex" -E "$CORPUS_TESTS"
+    ctest_rows "$LOGS/ctest.log"
+    if [ "$BUILT" = 1 ]; then
+      python3 tools/ctest-fingerprints.py record --plan "$LOGS/ctest-plan.tsv" --log "$LOGS/ctest.log" \
+        --passed "$CTEST_PASSED" > /dev/null
+    fi
+  fi
+  # The tests left out (not those a fixture brought in after all).
+  awk -F'\t' '$2 == "skip" { print $1 }' "$LOGS/ctest-plan.tsv" | while read -r name; do
+    if [ -z "$regex" ] || ! grep -qE "Test +#[0-9]+: +${name//./\\.} " "$LOGS/ctest.log"; then
+      printf '  ctest:%s\t0\tskipped\n' "$name" >> "$TIMINGS"
+    fi
+  done
 fi
 
 if wanted corpus; then
@@ -306,13 +515,16 @@ if wanted corpus; then
     grep -qxF "$fingerprint" "$CORPUS_PASSED" 2> /dev/null; then
     echo "== corpus: skipped, its sources and corpora are those of a run that passed"
     record corpus 0 skipped
+  elif [ "$DRY" = 1 ]; then
+    echo "== corpus: would run"
   else
     take_lock
     [ -n "$fingerprint" ] || fingerprint=$(corpus_fingerprint)
     corpus_plan
     echo "== corpus: $CORPUS_TESTS_AT_ONCE tests at once, $CORPUS_JOBS files each at once, $CORPUS_MEMORY each"
     if step corpus env MITCAD_CORPUS_JOBS="$CORPUS_JOBS" MITCAD_CORPUS_MEMORY="$CORPUS_MEMORY" \
-      MITCAD_CORPUS_TIMEOUT="$CORPUS_TIMEOUT" ctest --preset dev -j "$CORPUS_TESTS_AT_ONCE" -R "$CORPUS_TESTS"; then
+      MITCAD_CORPUS_TIMEOUT="$CORPUS_TIMEOUT" ctest --preset dev -j "$CORPUS_TESTS_AT_ONCE" -R "$CORPUS_TESTS" &&
+      [ "$BUILT" = 1 ]; then
       mkdir -p "$(dirname "$CORPUS_PASSED")"
       echo "$fingerprint" >> "$CORPUS_PASSED"
     fi
@@ -321,17 +533,30 @@ if wanted corpus; then
 fi
 
 # run_ui name: one UI test, with its exit status and time in <log>.status.
+# The logs of a run that failed (the test's, and the application's that a
+# failed test keeps, ui_keep_log) are kept as ui-<name>.failed.log and
+# ui-<name>[.<instance>].failed.app.log when the test runs again (mitcad#102).
 run_ui() {
-  local start status
+  local start status kept
+  if [ -f "$LOGS/ui-$1.status" ] && [ "$(cut -d' ' -f1 "$LOGS/ui-$1.status")" != 0 ]; then
+    mv -f "$LOGS/ui-$1.log" "$LOGS/ui-$1.failed.log" 2> /dev/null
+    for kept in "$LOGS/ui-$1".app.log "$LOGS/ui-$1".*.app.log; do
+      case $kept in *.failed.app.log) continue ;; esac
+      [ -f "$kept" ] && mv -f "$kept" "${kept%.app.log}.failed.app.log"
+    done
+  fi
   start=$(now_us)
-  timeout -k 30 "$UI_TIMEOUT" bash "tools/ui-$1-test.sh" > "$LOGS/ui-$1.log" 2>&1 9>&-
+  MITCAD_UI_LOG_DIR=$LOGS timeout -k 30 "$UI_TIMEOUT" bash "tools/ui-$1-test.sh" > "$LOGS/ui-$1.log" 2>&1 9>&-
   status=$?
   echo "$status $(seconds_since "$start")" > "$LOGS/ui-$1.status"
 }
 
 declare -A UI_PIDS
+# Each UI test's fingerprint, kept with its passes.
+declare -A UI_FINGERPRINTS
 UI_RUNNING=0
-# reap_ui: waits for a UI test to end and records it.
+# reap_ui: waits for a UI test to end and records it; a pass in a run that
+# built is kept for the test's fingerprint.
 reap_ui() {
   local pid="" name status seconds result=ok
   wait -n -p pid
@@ -350,17 +575,50 @@ reap_ui() {
   echo "   $result ui-$name ($seconds s)"
   [ "$result" = ok ] || tail -n 40 "$LOGS/ui-$name.log"
   record "ui-$name" "$seconds" "$result"
+  if [ "$result" = ok ] && [ "$BUILT" = 1 ]; then
+    mkdir -p "$UI_PASSED"
+    echo "${UI_FINGERPRINTS[$name]}" >> "$UI_PASSED/$name"
+  fi
 }
 
 UI_TESTS=()
+UI_SKIPPED=()
+UI_BASE_FINGERPRINT=""
+UI_COMMON_FINGERPRINT=""
 for test in tools/ui-*-test.sh; do
   name=${test#tools/ui-}
   name=${name%-test.sh}
   # The macOS UI tests are ctests in the macOS VM (cmake/MacUiTests.cmake).
   case $name in macos*) continue ;; esac
-  ui_wanted "$name" && UI_TESTS+=("$name")
+  ui_wanted "$name" || continue
+  # The paths a test declares must be there: a declaration left behind by a
+  # move would leave the moved files to the common sources unnoticed.
+  read -ra sources <<< "$(ui_declared "$name")"
+  for source in ${sources[@]+"${sources[@]}"}; do
+    if [ ! -e "$source" ]; then
+      echo "ui-$name declares $source, which is not there"
+      record "ui-$name sources" - "FAIL($source)"
+    fi
+  done
+  [ -n "$UI_BASE_FINGERPRINT" ] || UI_BASE_FINGERPRINT=$(ui_base_fingerprint)
+  if ui_smoke "$name" && [ -z "$UI_COMMON_FINGERPRINT" ]; then
+    UI_COMMON_FINGERPRINT=$(files_digest "${UI_COMMON[@]}" | md5sum | cut -d' ' -f1)
+  fi
+  UI_FINGERPRINTS[$name]=$(ui_fingerprint "$name" "$UI_BASE_FINGERPRINT" "$UI_COMMON_FINGERPRINT")
+  if [ "$UI" = auto ] && ! ui_named "$name" &&
+    grep -qxF "${UI_FINGERPRINTS[$name]}" "$UI_PASSED/$name" 2> /dev/null; then
+    UI_SKIPPED+=("$name")
+    record "ui-$name" 0 skipped
+  else
+    UI_TESTS+=("$name")
+  fi
 done
-if [ ${#UI_TESTS[@]} -gt 0 ]; then
+if [ ${#UI_SKIPPED[@]} -gt 0 ]; then
+  echo "== UI tests skipped, their sources are those of a run in which they passed: ${UI_SKIPPED[*]}"
+fi
+if [ "$DRY" = 1 ]; then
+  echo "== UI tests that would run: ${UI_TESTS[*]}"
+elif [ ${#UI_TESTS[@]} -gt 0 ]; then
   take_lock
   echo "== UI tests, $UI_JOBS at once"
   start=$(now_us)

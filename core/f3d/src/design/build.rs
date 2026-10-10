@@ -20,6 +20,10 @@ mod joints;
 mod selections;
 // Where the timeline's items put the occurrences (mitcad#81).
 mod placements;
+// The loops of the profiles extrusions and revolutions select (mitcad#96).
+mod profiles;
+// The items that made the bodies feature inputs name (mitcad#96).
+mod producers;
 
 /// Helpers for the decoder's tests.
 #[cfg(test)]
@@ -143,23 +147,6 @@ fn edge_input(seg: &Segment, input: u64) -> Option<Reference> {
     let recipe = recipe::of_input(seg, input).filter(|r| r.kind == "edge")?;
     Some(Reference::Edge(Box::new(Fingerprint {
         object_type: Some("BRepEdge".to_owned()),
-        f3d: Some(FingerprintF3d {
-            object_id: Some(input),
-            recipe: Some(recipe.kind),
-            entities: Some(recipe.entities),
-            ..FingerprintF3d::default()
-        }),
-        ..Fingerprint::default()
-    })))
-}
-
-/// A body input as a reference: a body fingerprint with the body's names
-/// (`_f3d`), resolved by [`super::inputs`]. `None` when the input has no
-/// body recipe that decodes.
-fn body_input(seg: &Segment, input: u64) -> Option<Reference> {
-    let recipe = recipe::of_input(seg, input).filter(|r| r.kind == "body")?;
-    Some(Reference::Body(Box::new(Fingerprint {
-        object_type: Some("BRepBody".to_owned()),
         f3d: Some(FingerprintF3d {
             object_id: Some(input),
             recipe: Some(recipe.kind),
@@ -351,15 +338,28 @@ fn rigid_matrix(d: &[u8]) -> Option<Mat4> {
 /// set, its set input ([`BODY_INPUT`]), then its edges and parameter
 /// holders. Each group: (edge references, holders); a group's edges are
 /// `None` when one of them does not decode.
+///
+/// A set input says what its group selects (mitcad#96: the `u32` after
+/// `ref 2DF7DA30 | u32 0` in the set input object): 8 edges, 16 faces
+/// (`bounded_face` recipes: every edge of the face, as a face reference
+/// that [`super::inputs`] turns into the face's edges), 9 a face that the
+/// next group's edges repeat (left out). A group without holders goes with
+/// the next group that has some (`B e.. B f.. H H`: edges and a face of one
+/// set; `H B f.. B f.. H`).
 fn edge_groups(seg: &Segment, inputs: &[Option<u64>]) -> Vec<(Option<Vec<Reference>>, Vec<u64>)> {
-    let mut groups: Vec<(Option<Vec<Reference>>, Vec<u64>)> = Vec::new();
+    // (Edges, holders, what the set input selects.)
+    type Group = (Option<Vec<Reference>>, Vec<u64>, Option<u32>);
+    let mut groups: Vec<Group> = Vec::new();
     for &i in inputs.iter().flatten() {
         match seg.guid_of(i) {
-            Some(BODY_INPUT) => groups.push((Some(Vec::new()), Vec::new())),
+            Some(BODY_INPUT) => groups.push((Some(Vec::new()), Vec::new(), set_selects(seg, i))),
             Some(FACE_REF) => {
                 if let Some(g) = groups.last_mut() {
-                    let edge = edge_input(seg, i);
-                    g.0 = match (g.0.take(), edge) {
+                    if g.2 == Some(9) {
+                        continue;
+                    }
+                    let entity = edge_input(seg, i).or_else(|| face_input(seg, i));
+                    g.0 = match (g.0.take(), entity) {
                         (Some(mut v), Some(e)) => {
                             v.push(e);
                             Some(v)
@@ -376,7 +376,41 @@ fn edge_groups(seg: &Segment, inputs: &[Option<u64>]) -> Vec<(Option<Vec<Referen
             _ => {}
         }
     }
-    groups
+    // Groups without holders joined to the next one with holders.
+    let mut out: Vec<(Option<Vec<Reference>>, Vec<u64>)> = Vec::new();
+    let mut waiting: Option<Option<Vec<Reference>>> = None;
+    let later_holders: Vec<bool> = (0..groups.len())
+        .map(|k| groups[k + 1..].iter().any(|g| !g.1.is_empty()))
+        .collect();
+    for (k, (edges, holders, _)) in groups.into_iter().enumerate() {
+        let edges = match waiting.take() {
+            Some(before) => before.zip(edges).map(|(mut a, b)| {
+                a.extend(b);
+                a
+            }),
+            None => edges,
+        };
+        if holders.is_empty() && later_holders[k] {
+            waiting = Some(edges);
+        } else {
+            out.push((edges, holders));
+        }
+    }
+    out
+}
+
+/// What a fillet's or chamfer's set input selects: the `u32` after
+/// `ref 2DF7DA30 | u32 0` (8 edges, 9 a face, 16 faces with their
+/// edges; [`edge_groups`]).
+fn set_selects(seg: &Segment, input: u64) -> Option<u32> {
+    let d = seg.data_of(input);
+    let (_, r) = seg
+        .refs_in(d, 0, d.len())
+        .into_iter()
+        .find(|(_, r)| seg.guid_of(r.id).is_some_and(|g| g.starts_with("2DF7DA30")))?;
+    (u32_at(d, r.end)? == 0)
+        .then(|| u32_at(d, r.end + 4))
+        .flatten()
 }
 
 /// A construction plane's light bulb (mitcad#6): in its plane object
@@ -807,6 +841,7 @@ impl Builder<'_> {
         }
         let count: usize = inputs_of(seg, fid, PROFILE)
             .into_iter()
+            .chain(inputs_of(seg, fid, REVOLVE_PROFILE))
             .map(|pr| {
                 seg.ref_ids(seg.data_of(pr))
                     .into_iter()
@@ -877,7 +912,7 @@ impl Builder<'_> {
         if ids.is_empty() {
             return None;
         }
-        ids.into_iter().map(|i| body_input(self.seg, i)).collect()
+        ids.into_iter().map(|i| self.body_input(i)).collect()
     }
 
     /// The plane of an item's first plane input (origin or construction
@@ -887,6 +922,64 @@ impl Builder<'_> {
             .into_iter()
             .filter(|&i| self.seg.guid_of(i) == Some(ENTITY_REF))
             .find_map(|e| self.plane_ref(e))
+    }
+
+    /// The object an extrusion's side up to an object goes to, from the
+    /// item's input slot for it ([`decode::extent_slots`], mitcad#96): a
+    /// face (by its names) or a plane (role 5 with an entity input: the
+    /// reference models' writer). A side up to an object is the first
+    /// side, which the extent parameters (`Side1Offset`) make an extent up
+    /// to an entity; without them it is one now, without an offset.
+    ///
+    /// A two-sided extrusion has a slot for each side up to an object
+    /// (mitcad#104): they go, in order, to the sides the extent parameters
+    /// make extents up to an entity (`Side1Offset`, `Side2Offset`).
+    fn extent_objects(&self, fid: u64, x: &mut ExtrudeDetail) {
+        let seg = self.seg;
+        let inputs: Vec<u64> = decode::extent_slots(seg, fid)
+            .into_iter()
+            .filter_map(|s| {
+                let input = s.inputs.first().copied()?;
+                let object = s.is_to_object()
+                    || (s.role == 5 && seg.guid_of(input).is_some_and(|g| g != BODY_REF));
+                object.then_some(input)
+            })
+            .collect();
+        let to_entity = |d: &Option<Definition>| {
+            d.as_ref().and_then(|d| d.definition_type.as_deref())
+                == Some("ToEntityExtentDefinition")
+        };
+        let mut sides = Vec::new();
+        if to_entity(&x.extent_one) {
+            sides.push(1);
+        }
+        if to_entity(&x.extent_two) {
+            sides.push(2);
+        }
+        if sides.is_empty() {
+            sides.push(1);
+        }
+        for (input, side) in inputs.into_iter().zip(sides) {
+            let entity = match seg.guid_of(input) {
+                Some(FACE_REF) => face_input(seg, input),
+                Some(ENTITY_REF) => self.entity_target(input),
+                Some(BODY_REF) => self.body_input(input),
+                _ => None,
+            };
+            let Some(entity) = entity else { continue };
+            let def = if side == 1 {
+                &mut x.extent_one
+            } else {
+                &mut x.extent_two
+            };
+            let def = def.get_or_insert_with(|| Definition {
+                definition_type: Some("ToEntityExtentDefinition".into()),
+                ..Definition::default()
+            });
+            if def.definition_type.as_deref() == Some("ToEntityExtentDefinition") {
+                def.entity = Some(entity);
+            }
+        }
     }
 
     fn roles(&self, fid: u64) -> BTreeMap<&str, Vec<&ParameterEntry>> {
@@ -969,6 +1062,9 @@ impl Builder<'_> {
                 }
                 if let Some(p) = pr("AgainstDistance") {
                     x.extent_two = Some(def("DistanceExtentDefinition", distance, p));
+                } else if let Some(p) = pr("Side2Offset") {
+                    // The second side up to an object (mitcad#104).
+                    x.extent_two = Some(def("ToEntityExtentDefinition", offset, p));
                 }
                 x.taper_angle_one = pr("TaperAngle");
                 x.taper_angle_two = pr("Side2TaperAngle");
@@ -976,6 +1072,19 @@ impl Builder<'_> {
                     x.start_extent = Some(def("OffsetStartDefinition", offset, p));
                 }
                 x.profile = self.profiles(fid);
+                // The selected profiles' loops (mitcad#96).
+                if let Some(loops) = self.profile_loops(fid) {
+                    x.other.insert("_f3d_profile_loops".to_owned(), loops);
+                }
+                // The bodies a join or cut works on: its body inputs
+                // (mitcad#96).
+                if matches!(
+                    x.operation.as_deref(),
+                    Some("JoinFeatureOperation" | "CutFeatureOperation")
+                ) {
+                    x.participant_bodies = self.body_inputs(it);
+                }
+                self.extent_objects(fid, &mut x);
                 Detail::Extrude(Box::new(x))
             }
             Some("RevolveFeature") => {
@@ -983,12 +1092,29 @@ impl Builder<'_> {
                 if let Some(p) = pr("AlongAngle") {
                     x.extent_definition = Some(def("AngleExtentDefinition", angle, p));
                 }
+                // The operation is the first `u32` after the root part,
+                // with an extrusion's codes; the axis a sketch line (by its
+                // curve's ids, as sweeps name them), else an origin or
+                // construction axis (mitcad#96).
+                let d = seg.data_of(fid);
+                x.operation = seg
+                    .root_part(d)
+                    .and_then(|r| u32_at(d, r.end))
+                    .and_then(|code| match code {
+                        1 => Some("JoinFeatureOperation".into()),
+                        2 => Some("CutFeatureOperation".into()),
+                        4 => Some("NewBodyFeatureOperation".into()),
+                        _ => None,
+                    });
                 for e in inputs_of(seg, fid, ENTITY_REF) {
-                    if let Some(a) = self.axis_ref(e) {
+                    if let Some(a) = self.input_entity(e).or_else(|| self.axis_ref(e)) {
                         x.axis = Some(a);
                     }
                 }
                 x.profile = self.profiles(fid);
+                if let Some(loops) = self.profile_loops(fid) {
+                    x.other.insert("_f3d_profile_loops".to_owned(), loops);
+                }
                 Detail::Revolve(Box::new(x))
             }
             Some("FilletFeature") => {
@@ -1085,11 +1211,17 @@ impl Builder<'_> {
                     x.other
                         .insert("_f3d_positions".to_owned(), json_value(&points));
                 }
-                if x.extent_definition.is_none() && self.hole_through_all(it) == Some(true) {
+                let through_all = self.hole_through_all(it);
+                if x.extent_definition.is_none() && through_all == Some(true) {
                     x.extent_definition = Some(Definition {
                         definition_type: Some("AllExtentDefinition".into()),
                         ..Definition::default()
                     });
+                } else if through_all == Some(true) {
+                    // The depth is then the one kept for a distance extent:
+                    // a lead the import tries first (mitcad#96).
+                    x.other
+                        .insert("_f3d_through_all".to_owned(), serde_json::json!(true));
                 }
                 // A tapped hole's thread is its sub-item (mitcad#35); its
                 // depth is the thread's length.
@@ -1160,8 +1292,29 @@ impl Builder<'_> {
                     }
                 }
                 // An edge or face as the axis (mitcad#67).
+                let first = self.directions(it).into_iter().next();
                 if x.axis.is_none() {
-                    x.axis = self.directions(it).into_iter().next().and_then(|d| d.0);
+                    x.axis = first.as_ref().and_then(|d| d.0.clone());
+                }
+                // The axis' line, stored with it (mitcad#96): the geometry
+                // of a construction axis, and a fixed line for the import
+                // when the axis' entity is not found.
+                if let Some((_, Some(direction), Some(point))) = first {
+                    if let Some(Reference::ConstructionAxis(c)) = x.axis.as_mut()
+                        && c.origin.clone().flatten().is_none()
+                        && c.geometry.is_none()
+                    {
+                        c.geometry = Some(Geometry {
+                            geometry_type: Some("InfiniteLine3D".into()),
+                            origin: Some(point),
+                            direction: Some(direction),
+                            ..Geometry::default()
+                        });
+                    }
+                    x.other.insert(
+                        "_f3d_axis".to_owned(),
+                        serde_json::json!({"origin": point, "direction": direction}),
+                    );
                 }
                 // Patterned bodies (mitcad#33), features and faces (mitcad#67).
                 match self.pattern_objects(it) {
@@ -1196,11 +1349,11 @@ impl Builder<'_> {
                 // The directions (mitcad#67): the axis, edge or face each
                 // names, and its vector where one is stored.
                 let mut dirs = self.directions(it).into_iter();
-                if let Some((entity, vector)) = dirs.next() {
+                if let Some((entity, vector, _)) = dirs.next() {
                     x.direction_one_entity = entity;
                     x.direction_one = vector;
                 }
-                if let Some((entity, vector)) = dirs.next() {
+                if let Some((entity, vector, _)) = dirs.next() {
                     x.direction_two_entity = entity;
                     x.direction_two = vector;
                 }
@@ -1208,8 +1361,14 @@ impl Builder<'_> {
             }
             Some("MirrorFeature") => {
                 // Objects and plane from its selections (mitcad#67).
-                let map = selections::mirror_map(self, it);
+                let mut map = selections::mirror_map(self, it);
+                // Whether bodies are joined with their images: none of the
+                // bodies it makes is new (mitcad#96).
+                let combine = self.new_bodies(it).map(|n| n == 0);
                 if map.contains_key("mirrorPlane") && map.contains_key("inputEntities") {
+                    if let Some(c) = combine {
+                        map.insert("isCombine".to_owned(), serde_json::json!(c));
+                    }
                     return Detail::Other(map);
                 }
                 // The mirror plane when it is an origin or construction
@@ -1226,6 +1385,9 @@ impl Builder<'_> {
                 // Mirrored bodies (mitcad#33).
                 if let Some(b) = self.body_inputs(it) {
                     map.insert("inputEntities".to_owned(), json_value(&b));
+                }
+                if let Some(c) = combine {
+                    map.insert("isCombine".to_owned(), serde_json::json!(c));
                 }
                 Detail::Other(map)
             }
@@ -1505,6 +1667,14 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
                 extent_b: Some(ex.extent_b),
                 direction: Some(ex.direction),
                 direction_vector: ex.vector,
+                flag: ex.flag.map(u32::from),
+                full_length: ex.full_length,
+                slot_roles: Some(
+                    decode::extent_slots(seg, it.id)
+                        .iter()
+                        .map(|s| s.role)
+                        .collect(),
+                ),
                 ..ExtrudeF3d::default()
             });
         }

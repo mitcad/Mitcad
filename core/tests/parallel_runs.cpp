@@ -667,6 +667,15 @@ double file_weight(const std::string& path) {
   return ec ? 0.0 : static_cast<double>(size);
 }
 
+void no_core_dumps() {
+#ifdef __linux__
+  const char* keep = std::getenv("MITCAD_CORE_DUMPS");
+  if (keep == nullptr || std::string(keep) != "1") {
+    prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+  }
+#endif
+}
+
 void print_totals(const std::map<std::string, double>& totals) {
   std::fflush(stdout);
   for (const auto& [key, value] : totals) {

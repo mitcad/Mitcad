@@ -327,3 +327,193 @@ fn rejects_bad_options() {
     };
     assert!(write_string(&Drawing::default(), &options).is_err());
 }
+
+fn distance_to_segment(point: Point2, start: Point2, end: Point2) -> f64 {
+    let delta = end - start;
+    let length = delta.length();
+    if length == 0.0 {
+        return point.distance(start);
+    }
+    let direction = delta * (1.0 / length);
+    let along = (point - start).dot(direction).clamp(0.0, length);
+    point.distance(start + direction * along)
+}
+
+/// Check the DXF's actual finite line segments against dense samples of the
+/// original NURBS, rather than just checking that subdivision added vertices.
+fn assert_r12_spline_error(spline: &Spline, tolerance: f64) {
+    let mut drawing = Drawing::new(Units::Millimeters);
+    drawing.push("Curve", Geometry::Spline(spline.clone()));
+    let text = write_string(
+        &drawing,
+        &WriteOptions {
+            version: DxfVersion::R12,
+            tolerance,
+        },
+    )
+    .unwrap();
+    let back = read_str(&text).unwrap();
+    assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+    let segments: Vec<_> = back
+        .entities
+        .iter()
+        .map(|entity| {
+            let Geometry::Line { start, end } = entity.geometry else {
+                panic!("expected a polyline segment: {:?}", entity.geometry);
+            };
+            (start, end)
+        })
+        .collect();
+    assert!(!segments.is_empty());
+    let (start, end) = spline.domain().unwrap();
+    for i in 0..=16_384 {
+        let t = start + (end - start) * i as f64 / 16_384.0;
+        let point = spline.point_at(t).unwrap();
+        let error = segments
+            .iter()
+            .map(|&(a, b)| distance_to_segment(point, a, b))
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            error <= tolerance + 1e-10,
+            "t={t}: error {error} > {tolerance}"
+        );
+    }
+    // The exact R2000 path must remain independent of tessellation.
+    let exact = write_string(&drawing, &WriteOptions::default()).unwrap();
+    let exact_back = read_str(&exact).unwrap();
+    assert_eq!(
+        exact_back.entities[0].geometry,
+        drawing.entities[0].geometry
+    );
+}
+
+#[test]
+fn r12_inflected_cubic_respects_tolerance() {
+    // Issue #113: x(t)=100t, y(t)=100(t-1/8)^3. The old midpoint
+    // criterion misses the first inflection; the dense check includes 1/16.
+    assert_r12_spline_error(
+        &Spline {
+            degree: 3,
+            control_points: vec![
+                p(0.0, -0.1953125),
+                p(100.0 / 3.0, 1.3671875),
+                p(200.0 / 3.0, -9.5703125),
+                p(100.0, 66.9921875),
+            ],
+            knots: vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            ..Spline::default()
+        },
+        0.01,
+    );
+}
+
+#[test]
+fn r12_tight_bend_and_collinear_doubleback_respect_tolerance() {
+    for controls in [
+        vec![
+            p(0.0, 0.0),
+            p(0.001, 100.0),
+            p(-0.001, -100.0),
+            p(0.01, 0.0),
+        ],
+        vec![p(0.0, 0.0), p(100.0, 0.0), p(-100.0, 0.0), p(1.0, 0.0)],
+        vec![p(0.0, 0.0), p(10.0, 10.0), p(-10.0, 10.0), p(0.0, 0.0)],
+    ] {
+        assert_r12_spline_error(
+            &Spline {
+                degree: 3,
+                control_points: controls,
+                knots: vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                ..Spline::default()
+            },
+            0.001,
+        );
+    }
+}
+
+#[test]
+fn r12_multiple_spans_and_repeated_knots_respect_tolerance() {
+    assert_r12_spline_error(
+        &Spline {
+            degree: 3,
+            control_points: vec![
+                p(0.0, 0.0),
+                p(1.0, 5.0),
+                p(2.0, -3.0),
+                p(3.0, 6.0),
+                p(4.0, -4.0),
+                p(5.0, 2.0),
+                p(6.0, 0.0),
+            ],
+            knots: vec![0.0, 0.0, 0.0, 0.0, 0.3, 0.5, 0.5, 1.0, 1.0, 1.0, 1.0],
+            ..Spline::default()
+        },
+        0.001,
+    );
+    assert_r12_spline_error(
+        &Spline {
+            degree: 2,
+            control_points: vec![
+                p(1.0, 0.0),
+                p(1.0, 1.0),
+                p(0.0, 1.0),
+                p(-1.0, 1.0),
+                p(-1.0, 0.0),
+            ],
+            knots: vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+            weights: vec![1.0, 0.5_f64.sqrt(), 1.0, 0.5_f64.sqrt(), 1.0],
+            ..Spline::default()
+        },
+        0.001,
+    );
+}
+
+#[test]
+fn r12_unclamped_periodic_spline_respects_tolerance() {
+    assert_r12_spline_error(
+        &Spline {
+            degree: 2,
+            control_points: vec![
+                p(0.0, 0.0),
+                p(2.0, 0.0),
+                p(1.0, 2.0),
+                p(0.0, 0.0),
+                p(2.0, 0.0),
+            ],
+            knots: (0..8).map(f64::from).collect(),
+            closed: true,
+            periodic: true,
+            ..Spline::default()
+        },
+        0.001,
+    );
+}
+
+#[test]
+fn r12_reports_an_unreachable_spline_tolerance() {
+    let spline = Spline {
+        degree: 2,
+        control_points: vec![p(0.0, 0.0), p(1.0, 2.0), p(2.0, 0.0)],
+        knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        ..Spline::default()
+    };
+    let mut drawing = Drawing::default();
+    drawing.push("0", Geometry::Spline(spline));
+    let options = WriteOptions {
+        version: DxfVersion::R12,
+        tolerance: 1e-100,
+    };
+    let error = write_string(&drawing, &options).unwrap_err();
+    assert!(error.message.contains("entity 0"), "{error}");
+    assert!(error.message.contains("subdivision limit"), "{error}");
+    assert!(
+        write_string(
+            &drawing,
+            &WriteOptions {
+                version: DxfVersion::R2000,
+                ..options
+            }
+        )
+        .is_ok()
+    );
+}

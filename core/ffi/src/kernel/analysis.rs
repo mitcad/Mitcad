@@ -70,6 +70,13 @@ pub mod ffi {
         points: Vec<f64>,
     }
 
+    /// A face an operation made or changed (mitcad#138): its area and
+    /// points inside it, x, y, z triples.
+    struct AnalysisNewFace {
+        area: f64,
+        points: Vec<f64>,
+    }
+
     struct AnalysisComparison {
         step_bodies: Vec<String>,
         volume_a: f64,
@@ -168,6 +175,13 @@ pub mod ffi {
         fn analysis_edge_middles(shape: &Shape) -> Result<Vec<AnalysisEdgeMiddle>>;
         /// Points inside every named face, in the shape's face order (P5).
         fn analysis_face_points(shape: &Shape) -> Result<Vec<AnalysisFacePoints>>;
+        /// The faces of `after` that none of `before` has, with up to
+        /// `count` points each, in its face order (mitcad#138).
+        fn analysis_new_faces(
+            before: &ShapeList,
+            after: &Shape,
+            count: usize,
+        ) -> Result<Vec<AnalysisNewFace>>;
     }
 }
 

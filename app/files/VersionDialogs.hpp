@@ -12,37 +12,20 @@ namespace mitcad {
 
 struct VersionSettings;
 
-// The dialogs of saving versions (P12d): a new project's folder, the
-// author of versions, a version's description, how a file outside
-// projects gets version history, and a file changed outside Mitcad; and
-// Version History's Restore (P12e).
+// The dialogs of saving versions (P12d): the author of an older project
+// without one, a version's description and a file changed outside Mitcad;
+// and Version History's Restore (P12e). New Project and the other dialogs
+// of projects are in files/ProjectDialogs.hpp (mitcad#89).
 
-// File > New Project (also when a design moves into a new project): the
-// project's name and the folder it goes in (`location`, by default
-// Documents/Mitcad). Returns the project's folder, a new one or an empty
-// one.
-std::optional<QString> askNewProject(QWidget* parent, const QString& title, const QString& name,
-                                     const QString& location);
-
-// Who versions are recorded by, shown when the first version is saved and
-// asked when neither git nor the settings name one. `gitName` and
-// `gitEmail`: git's configured user, empty when it has none. Returns the
-// settings chosen (confirmed), or nothing when cancelled.
-std::optional<VersionSettings> askVersionAuthor(QWidget* parent, const QString& gitName, const QString& gitEmail,
-                                                const VersionSettings& settings);
+// Who records the versions of a project that has no author (an older
+// project: neither its repository, git nor Preferences name one): a name
+// and an email address, the defaults `settings` offers. Nothing when
+// cancelled.
+std::optional<VersionSettings> askVersionAuthor(QWidget* parent, const VersionSettings& settings);
 
 // File > Save Version: the description of the version (`automatic`: the
 // message Save would write). Empty when the description is left empty.
 std::optional<QString> askVersionDescription(QWidget* parent, const QString& file, const QString& automatic);
-
-// File > Start Version History for a file outside projects: its folder made
-// a project with version history, or the file moved into a new project.
-enum class HistoryStart { UseFolder, MoveToProject };
-// `outer`: the git repository the folder is in below its root (the folder
-// cannot then be a project of its own), or empty; `repository`: the folder
-// is the root of a git repository already.
-std::optional<HistoryStart> askStartHistory(QWidget* parent, const QString& file, const QString& folder,
-                                            const QString& outer, bool repository);
 
 // Save over a file that changed outside Mitcad since it was opened or saved
 // (`newerVersion`: the project's history has another version of it; else

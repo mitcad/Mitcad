@@ -582,6 +582,34 @@ fn reference_dumps_are_compared() {
             "{r:?}"
         );
     }
+    // A shape brought in as FreeCAD stored it: where FreeCAD's measures are
+    // those of the kernel's fixed-point integration of it, which Mitcad's
+    // refine, a difference is none of the import (mitcad#139); where they
+    // are not (another volume or centre), it is. The mock kernel has no
+    // such measures: none, no excuse.
+    report.placed[0].volume = 1000.0;
+    report.placed[0].area = 600.0;
+    let dump = json!({"format": "mitcad-freecad-dump", "objects": [
+        {"name": "Box", "shape": {"solids": 1, "volume": 1000.002, "area": 600.0001,
+                                  "world_center": [0.0, 0.0, 1.0], "faces": 6}}]});
+    assert!(report.placed[0].fixed.is_none());
+    assert!(!reference::check(&report, &dump).pass);
+    report.placed[0].fixed = Some(report::StoredMeasures {
+        volume: 1000.002,
+        area: 600.0001,
+        center: [0.0, 0.0, 1.0],
+    });
+    for (volume, center, pass, excused) in [
+        (1000.002, [0.0, 0.0, 1.0], true, 1),
+        (1000.001, [0.0, 0.0, 1.0], false, 0),
+        (1000.002, [0.0, 0.0, 1.001], false, 0),
+    ] {
+        let dump = json!({"format": "mitcad-freecad-dump", "objects": [
+            {"name": "Box", "shape": {"solids": 1, "volume": volume, "area": 600.0001,
+                                      "world_center": center, "faces": 6}}]});
+        let r = reference::check(&report, &dump);
+        assert!(r.pass == pass && r.not_compared.len() == excused, "{r:?}");
+    }
     // A transform as the importer makes them.
     assert_eq!(
         transform(&Placement::translation([1.0, 2.0, 3.0])),

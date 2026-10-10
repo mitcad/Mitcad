@@ -15,6 +15,9 @@
 //                                       writes a small .ipt part file with
 //                                       a design (a parameter, a sketch and
 //                                       an extrusion; CLI tests)
+//   test_exchange --write-iam <dir>     writes a small project with .iam
+//                                       assemblies and parts into <dir>
+//                                       (CLI tests)
 //   test_exchange --corpus [dir]        imports every .f3d/.f3z under dir
 //                                       (default MITCAD_F3D_CORPUS, else
 //                                       ~/f3d-corpus) bodies only; exits 77
@@ -380,6 +383,35 @@ void test_ipt_import(const fs::path& dir) {
   auto bodies = mitcad::new_document();
   const std::string plain(bodies->import_ipt(designed.string(), R"({"text": true, "bodies_only": true})"));
   CHECK(contains(plain, "F1 Body1 (F1.b0): valid solid, volume 1000.000 mm3"));
+
+  // A part whose body is a mesh feature's (no B-rep bodies): a mesh body
+  // of its triangles, a tetrahedron of 10, 15 and 20 mm legs.
+  const fs::path meshed = dir / "mesh.ipt";
+  mitcad::bridge::ipt_write_test_mesh_file(meshed.string());
+  auto mesh = mitcad::new_document();
+  const std::string triangles(mesh->import_ipt(meshed.string(), R"({"text": true})"));
+  CHECK(contains(triangles, "Imported 1 bodies of mesh.ipt (0 solids, 1 valid; 0 not built)"));
+  CHECK(contains(triangles, "F1 Body1 (F1.b0): valid mesh, volume 500.000 mm3"));
+  CHECK(contains(triangles, "from PmGraphicsSegment#1"));
+  // An empty part opens empty, and says so.
+  const fs::path empty = dir / "empty.ipt";
+  mitcad::bridge::ipt_write_test_empty_file(empty.string());
+  auto nothing = mitcad::new_document();
+  const std::string none(nothing->import_ipt(empty.string(), R"({"text": true})"));
+  CHECK(contains(none, "Imported 0 bodies of empty.ipt (0 solids, 0 valid; 0 not built)"));
+  CHECK(contains(none, "warning: the part has no bodies"));
+  // A body the part's result list keeps hidden comes in hidden, matched
+  // by its range box, without and with the history.
+  const fs::path hidden = dir / "hidden.ipt";
+  mitcad::bridge::ipt_write_test_hidden_file(hidden.string());
+  for (const char* options : {R"({"text": true, "bodies_only": true})", R"({"text": true})"}) {
+    auto part = mitcad::new_document();
+    const std::string shown(part->import_ipt(hidden.string(), options));
+    CHECK(contains(shown, "Imported 2 bodies of hidden.ipt (2 solids, 2 valid; 0 not built)"));
+    CHECK(contains(shown, "Body2 (F2.b0): valid solid (hidden), volume 6283.185 mm3"));
+    CHECK(!contains(shown, "Body1 (F1.b0): valid solid (hidden)"));
+    CHECK(contains(std::string(part->query(R"({"query": "bodies"})")), R"("visible":false)"));
+  }
 }
 
 // The number after "<key>": in a JSON text from `from` on.
@@ -664,6 +696,7 @@ int corpus(const fs::path& dir, int every, double min_valid, const mitcad::runs:
 } // namespace
 
 int main(int argc, char** argv) {
+  mitcad::runs::no_core_dumps();
   mitcad::io::silence_occt_messages();
   std::vector<std::string> args(argv + 1, argv + argc);
   try {
@@ -677,6 +710,10 @@ int main(int argc, char** argv) {
     }
     if (args.size() == 2 && args[0] == "--write-ipt-design") {
       mitcad::bridge::ipt_write_test_design_file(args[1]);
+      return 0;
+    }
+    if (args.size() == 2 && args[0] == "--write-iam") {
+      mitcad::bridge::ipt_write_test_assembly(args[1]);
       return 0;
     }
     if (args.size() == 3 && args[0] == "--corpus-file") {

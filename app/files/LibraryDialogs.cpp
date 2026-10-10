@@ -452,7 +452,7 @@ LibraryBrowser::LibraryBrowser(bool community, QWidget* parent) : QDialog(parent
     dialog.exec();
     search();
   });
-  connect(m_size, &SizeChooser::rowChanged, this, [this](const QString& row) {
+  connect(m_size, &SizeChooser::rowChanged, this, [](const QString& row) {
     if (!row.isEmpty()) {
       qInfo().noquote() << QStringLiteral("Library browser size %1").arg(row);
     }

@@ -43,7 +43,7 @@ log says `No render worker (mitcad-render) next to the application`).
 - **Worker process** (`app/render/RenderWorker.cpp`, the target
   `mitcad-render`): the application starts `mitcad-render` from the folder
   of its own executable (inside an AppImage, the AppImage's `usr/bin`; a
-  macOS bundle would need it in `Contents/MacOS`), so a crash or an
+  macOS bundle's `Contents/MacOS`), so a crash or an
   out-of-memory in the renderer ends only that process, and only that
   process loads Cycles, Embree, Open Image Denoise, OpenImageIO and
   OpenColorIO. It links Qt Core and Gui (`QImage` for `--bench --output`)
@@ -883,7 +883,9 @@ cmake --preset dev -DMITCAD_RENDER=ON -DMITCAD_RENDER_DEPS=$HOME/mitcad-render-d
   OpenImageIO, OpenColorIO, OpenEXR, pugixml, zstd, cgltf and what they
   need) to the toolchain's install, so it has to be set at the first
   configure of a build folder (or with `--fresh`).
-- `tools/dev-env/build-cycles.sh [prefix]` (Linux x86-64 for now) installs
+- `tools/dev-env/build-cycles.sh [prefix]` (Linux x86-64; Windows:
+  [build-cycles.ps1](#windows); Apple Silicon:
+  [build-cycles-macos.sh](#macos)) installs
   the same feature into the prefix, downloads ISPC (a build tool) and
   Open Image Denoise's source release (both checked against SHA-256
   pins), clones Cycles at its tag and checks the commit (pins in
@@ -900,8 +902,9 @@ cmake --preset dev -DMITCAD_RENDER=ON -DMITCAD_RENDER_DEPS=$HOME/mitcad-render-d
   89, 120 and PTX for compute 7.5); no OptiX ([Devices](#devices)); `--hip`
   HIP (ROCm's HIP SDK) and `--oneapi` oneAPI (the DPC++ compiler and Level
   Zero), both untested so far; `--oidn-gpu` Open Image Denoise's devices
-  for those GPUs. Metal belongs to the macOS build of the script, which
-  does not exist yet. Each choice gets its own build stamp, so changing
+  for those GPUs. Metal is a macOS follow-up (mitcad#50); the initial
+  macOS script builds CPU rendering only. Each choice gets its own build
+  stamp, so changing
   them builds Cycles again; `install/cycles/kernels/lib` holds the kernels
   and `mitcad-cycles.cmake` names them (`MITCAD_CYCLES_KERNELS`) with the
   devices (`MITCAD_CYCLES_DEVICES`, which CMake prints: `Cycles devices:
@@ -950,6 +953,105 @@ kernel for sm_61 alone 68 s with nvcc's split compilation on 16 threads).
 The kernels are 28 MB compressed with zstd (165 MB uncompressed): 2.7 to
 3.6 MB per cubin, 1.2 MB of PTX. The CUDA toolkit's components take
 180 MB in the prefix, the unpacked GCC 14 100 MB.
+
+### Windows
+
+In the build VM (mitcad#51), in the Visual Studio x64 environment:
+
+```bat
+tools\dev-env\msvc.cmd powershell -ExecutionPolicy Bypass -File tools\dev-env\build-cycles.ps1
+tools\dev-env\msvc.cmd cmake --preset dev -DMITCAD_RENDER=ON
+```
+
+- `build-cycles.ps1 [-Prefix dir]` does what `build-cycles.sh` does,
+  with MSVC and Ninja: the render feature for `x64-windows`, ISPC's
+  Windows release (`ISPC_WINDOWS_SHA256`; the script reads the pins of
+  `versions.sh` itself), Open Image Denoise and Cycles as release builds
+  with the CPU device only (no GPU devices yet), the check with Cycles'
+  standalone program and `mitcad-cycles.cmake` (the definitions of
+  `compile_commands.json`, MSVC's `/fp:` and `/arch:` options). The
+  prefix defaults to `MITCAD_RENDER_DEPS`, else
+  `C:\dev\mitcad-render-deps`, which is also `cmake/Render.cmake`'s
+  default on Windows. Cycles' `FindTBB` looks for `tbb.lib`; the script
+  names oneTBB's `tbb12.lib`. MSVC's linker needs no link group for
+  Cycles' libraries.
+- A release configuration only (the Windows presets are RelWithDebInfo):
+  a Debug build's runtime library (`/MDd`) does not match the release
+  libraries, and `cmake/Render.cmake` stops with a message.
+- `mitcad-render.exe` is built next to `mitcad.exe` with vcpkg's DLLs
+  (vcpkg's applocal step) and Open Image Denoise's (copied after the
+  build: the core loads its CPU device from its own folder). The worker's
+  tests and `mitcad-cli`'s, which then loads Qt (`mitcad-cli render`),
+  find Qt's DLLs through `PATH`, as `app.unit` does.
+- The frames go through a named `QSharedMemory` (`FrameMemory`);
+  `app.ui-windows` turns View > Rendered on with the in-process test
+  driver (`MITCAD_TEST_INPUT`) on the demo block and checks that the
+  frames refine to all samples and show the block.
+- The installer has `mitcad-render.exe` with its DLLs (the runtime
+  dependency set, with Open Image Denoise's folder) and Open Image
+  Denoise's CPU device, the licences in `licenses\cycles` and
+  `licenses\openimagedenoise`, and `THIRD-PARTY-NOTICES.txt` lists them;
+  `tools/installer-windows-test.ps1` checks them and renders the test
+  scene with the installed worker on a system-only `PATH`.
+
+On the build VM: the render feature's vcpkg ports take the
+longest the first time (hwloc alone 10 minutes, Embree next), Cycles
+111 s with 12 jobs. The prefix needs about 4 GB (its `vcpkg_installed`
+2.6 GB with the default features' ports, sources and ISPC 820 MB,
+builds 390 MB). `mitcad-render.exe` is 11 MB, Open Image Denoise's core
+45 MB, Embree 33 MB, OpenImageIO 6 MB, OpenColorIO 5 MB.
+
+### macOS
+
+In the isolated Apple Silicon build guest (mitcad#51), after
+`tools/dev-env/setup-macos.sh`:
+
+```bash
+tools/dev-env/build-cycles-macos.sh
+cmake --preset dev -DMITCAD_RENDER=ON
+```
+
+`build-cycles-macos.sh [prefix]` follows the Linux and Windows prefix layout
+and defaults to `MITCAD_RENDER_DEPS`, else `~/mitcad-render-deps`. It uses
+the pinned arm64 ISPC release (its SHA-256 comes from the
+[official release metadata](https://api.github.com/repos/ispc/ispc/releases/tags/v1.31.0)),
+the same Open Image Denoise source archive and Cycles commit, and the
+manifest's render feature through `arm64-osx-dynamic` and the overlay
+triplet. Cycles' NEON headers use sse2neon (MIT). The CPU denoiser uses
+ISPC's NEON kernels and Apple's Accelerate framework (BNNS).
+
+Both dependency builds request arm64 and macOS 14.4, matching the app's
+presets and vcpkg triplet. A narrow patch of Open Image Denoise's
+`cmake/oidn_platform.cmake` keeps it from overriding that deployment
+target; the Apache-2.0 patch is published in `third_party/oidn/`.
+The generated `mitcad-cycles.cmake` exports Cycles' own definitions and
+host options. Apple's linker takes its static libraries without GNU's
+link group. Every GPU device, including Metal in Cycles and the denoiser,
+is disabled; enabling Metal remains mitcad#50.
+
+The worker is built beside `mitcad` in the build bundle's `Contents/MacOS`
+and installed there too. Bundle deployment discovers the dependencies of
+both executables and Open Image Denoise's CPU module, which the core opens
+at run time. They go to `Contents/Frameworks`; copied dylibs receive
+relative install names and a loader-relative rpath. Qt's deployment also
+processes the worker and the module. `tools/package-macos.sh` then removes
+absolute build rpaths, signs the nested code and checks the bundle.
+`Contents/Resources/licenses` holds Cycles' and its bundled code's texts,
+Open Image Denoise's notices, and the render feature's vcpkg copyrights;
+`THIRD-PARTY-NOTICES.txt` names the renderer and the deployment-target patch.
+`tools/check-bundle-macos.sh` checks their presence and the CPU module as
+well as the normal arm64 and dependency-path checks.
+
+The macOS bundle contains the app and its worker. To render through the
+separate build-tree `mitcad-cli`, pass
+`--worker <build>/app/mitcad.app/Contents/MacOS/mitcad-render` (or set
+`MITCAD_RENDER_WORKER`); `cli.render` uses the target's complete path too.
+
+This macOS implementation has not been built or tested. Validation in the
+macOS guest remains required: run the dependency script's standalone
+render, build Mitcad with `MITCAD_RENDER`, run `ctest` and the macOS UI
+tests, and check the installed bundle on a machine without the development
+prefixes. No renderer acceptance on macOS is claimed yet.
 
 ### AppImage
 
@@ -1112,8 +1214,9 @@ yaml-cpp, minizip-ng (MIT or zlib-style), OpenSSL (Apache-2.0). Cycles is
 linked statically into `mitcad-render`, the others dynamically by it.
 ISPC (BSD-3-Clause) only compiles Open Image Denoise and is not shipped.
 Nothing GPL. The AppImage of a build with `MITCAD_RENDER` includes the
-renderer and its licences ([AppImage](#appimage)); the Windows installer
-and the macOS bundle do not yet.
+renderer and its licences ([AppImage](#appimage)), and so does the
+Windows installer ([Windows](#windows)) and the macOS bundle
+([macOS](#macos), implementation awaiting guest validation).
 
 GPU devices (mitcad#50; also in [development.md](development.md#licence-policy)):
 
@@ -1151,8 +1254,7 @@ GPU devices (mitcad#50; also in [development.md](development.md#licence-policy))
 - GPU devices (mitcad#50): HIP and oneAPI built and tested on their
   hardware; Metal with the macOS build; Open Image Denoise's CUDA device
   built with CUDA 13 and tested on Turing or newer; several GPUs at once;
-  the kernels in the Windows installer and the macOS bundle (with the
-  worker itself, below).
+  the kernels in the Windows installer and the macOS bundle.
 - Roughness and normal maps, textures in the shaded view, OCCT's PBR shading from the same
   parameters ([Materials](#materials)).
 - Lights ([Lights](#lights)): a rotation of area lights about their
@@ -1162,13 +1264,10 @@ GPU devices (mitcad#50; also in [development.md](development.md#licence-policy))
   image formats (TIFF), render passes and render queues for the final
   render ([Final render](#final-render)); `mitcad-cli render` in
   `tools/appimage-test.sh`.
-- Windows and macOS builds of the script (vcpkg ports exist; ISPC and
-  Open Image Denoise have releases for both), and `mitcad-render` with its
-  libraries and notices in the Windows installer and in the macOS bundle
-  (`Contents/MacOS`, where the application would look for it). The
-  Windows and macOS code paths of `FrameMemory` (named `QSharedMemory`,
-  and `shm_open` with the socket) are written but not built or tested
-  yet.
+- Validate the macOS CPU dependency build, worker, shared frame memory
+  (`shm_open` with the socket) and installed bundle in the isolated guest
+  ([macOS](#macos)); they have not been built or tested yet. GPU devices
+  in `build-cycles.ps1` (CUDA and HIP on Windows).
 - A body recomputed to the same geometry (a later feature changed) is
   another `TopoDS_Shape`: its display triangulation is read and hashed
   again (not sent: the worker holds the hash). The model could keep the

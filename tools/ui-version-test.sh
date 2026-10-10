@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/files
 # Saving versions (P12d) through the real UI, checked with the system's git:
-#   1. Start Version History of an untitled design: the New Project dialog
-#      (by default Documents/Mitcad/Project1), the author git's settings
-#      give shown once, Save As in the project's folder; the first version
-#      has the undo steps' names as its message, git's author and Mitcad's
-#      trailers, and git status is clean. Save without a change, and a
-#      change of the display state only (the Origin shown, kept apart in
-#      .mitcad/local), record no version.
+#   1. Move to a Project of an untitled design: New Project (the folder
+#      typed, the author git's settings give), Save As in the project's
+#      folder; the first version has the undo steps' names as its message,
+#      git's author and Mitcad's trailers, and git status is clean. Save
+#      without a change, and a change of the display state only (the Origin
+#      shown, kept apart in .mitcad/local), record no version.
 #   2. Autosave writes the changed design to the recovery folder but
 #      records no version and leaves the file. Save Version (Ctrl+Alt+S)
 #      records one with the description typed.
@@ -16,16 +16,16 @@
 #      as New Version records it first and then the design on top. A newer
 #      version committed with git: Cancel writes nothing, Save as New
 #      Version builds on it.
-#   4. Preferences, General: versions by the name and email there instead
-#      of git's.
+#   4. Project Settings, the author: versions by the name and email there
+#      (the project's repository's) instead of git's.
 #   5. A file renamed outside Mitcad: opened, its display state follows,
 #      and Save records the rename as a version of its own, then the change.
-#   6. Start Version History of a file outside projects: its folder made a
+#   6. Move to a Project of a file outside projects: its folder made a
 #      project; another one moved into a new project.
-#   7. Without git's user.name and user.email the first version asks for
-#      them: cancelled, what was added to the folder (or the new project's
-#      folder) goes again; given, Mitcad's settings keep them, and New
-#      Project's design is saved in the project's folder.
+#   7. Without git's user.name and user.email: an older project without
+#      versions opened asks for the author; cancelled, nothing is added to
+#      its folder; given, Preferences keep it as the default author. New
+#      Project asks for the author in its own fields.
 #   8. Version History (P12e; each Save above kept a preview): the renamed
 #      file's ten versions newest first with what each changed, the latest
 #      with its preview compared with the one before; an older one compared
@@ -34,6 +34,14 @@
 #      saved first: git's log has the restore as a new version, the file
 #      is the old version's, and Save asks nothing after it; Open of an
 #      older version as an untitled design, which Save As keeps.
+#   9. When the version that keeps bytes about to be written over cannot
+#      be recorded (HEAD detached, the index locked; mitcad#114): Save as
+#      New Version of a change made outside, Restore over such a change
+#      and Save and Restore of unsaved changes stop with an error saying
+#      why, the file's bytes and HEAD as they were (Save and Restore: the
+#      changes saved, without a version); with the version recorded,
+#      Restore writes over the file; a status that cannot be read stops
+#      Save.
 #
 # No test uses the user's identity: git's global configuration is the test's
 # own (GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM), and HOME is the test's, so
@@ -41,6 +49,7 @@
 # Runs headless on Xvfb (see ui-test-lib.sh); Qt's own file dialogs
 # (--no-native-dialogs), so paths can be typed into them.
 # Usage: tools/ui-version-test.sh
+# check-all sources: core/vcs core/ffi/src/vcs.rs core/ffi/src/remote.rs core/ffi/src/diff.rs
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
@@ -111,17 +120,12 @@ else:
 EOF
 }
 
-# type_text text: replaces the focused field's text.
-type_text() {
-  ui_key ctrl+a
-  xdotool type --delay 20 "$1"
-  ui_sync
-}
+# type_text text: replaces the text of the focused dialog's field (ui_type_text).
+type_text() { ui_type_text "$1"; }
 
-# type_path path: replaces the file name in Qt's file dialog and accepts.
+# type_path title path: the path typed into Qt's file dialog (ui_type_path), accepted.
 type_path() {
-  type_text "$1"
-  ui_key Return
+  ui_type_path "$1" "$2"
   ui_focus_main
 }
 
@@ -143,7 +147,7 @@ expect_exit() {
 
 ui_start_display
 
-echo "--- Start Version History of an untitled design: a new project"
+echo "--- Move to a Project of an untitled design: a new project"
 ui_start_app --demo --no-native-dialogs
 ui_step "fit (F6)"                       ui_key F6
 ui_step "fillet (F)"                     ui_key f
@@ -151,19 +155,19 @@ ui_step "pick a face of the body"        ui_view_click 50 50
 ui_step "confirm (Enter)"                ui_key Return
 ui_expect_log "Added fillet on 4 edge(s)" "a fillet: a change to save"
 ui_mark
-ui_step "start version history (search)" ui_command "Start Version History"
-ui_expect_new "New Project dialog: $DOCUMENTS/Project1" "a new project, by default in Documents/Mitcad"
-ui_focus_dialog '^Save in a New Project$'
-ui_step "name it bracket, Enter"         type_text bracket
-ui_key Return
-ui_expect_new "Version author dialog: git's Git Test <git-test@example.invalid>" \
-  "the author git's settings give is shown"
-ui_focus_dialog '^Version Author$'
-ui_step "OK (Enter)"                     ui_key Return
+ui_step "move to a project (search)"     ui_command "Move to a Project"
+ui_expect_new "Move to a Project dialog: Untitled" "asked where"
+ui_focus_dialog '^Move to a Project$'
+ui_step "a new project (Enter)"          ui_key Return
+ui_expect_new "New Project dialog: $DOCUMENTS/Untitled" "a new project, by default in Documents/Mitcad"
+ui_focus_dialog '^Move to a Project$'
+ui_step "the folder (Alt+F)"             ui_key alt+f
+ui_step "name it bracket"                type_text "$PROJECT"
+ui_expect_new "New Project dialog: folder $PROJECT: missing" "a new folder"
+ui_step "create (Enter)"                 ui_key Return
+ui_expect_new "New Project: created $PROJECT: version " "the project is made"
+ui_step "a name in the project's folder" type_path "Save As" block.mitcad
 ui_expect_new "Version author: Git Test <git-test@example.invalid> (git)" "git's author"
-ui_expect_new "Version history started in $PROJECT: version " "the project has version history"
-ui_focus_dialog '^Save As$'
-ui_step "a name in the project's folder" type_path block.mitcad
 ui_expect_new "Saved $FILE" "saved in the project's folder"
 ui_expect_new "Version recorded: block.mitcad " "a version recorded"
 ui_expect_new "Version status: bracket, main, v1" "the status bar shows the version"
@@ -182,14 +186,13 @@ expect_git "$PROJECT" "ls-files" ".gitattributes
 .mitcad/project.json
 block.mitcad" "the versioned files"
 expect_clean "$PROJECT" "git status is clean"
-grep -q '^confirmed=true' "$SETTINGS" || ui_fail "the author is not marked shown in the settings"
-echo "ok   the author is shown once"
+expect_git "$PROJECT" "config user.name" "Git Test" "the author in the project's repository"
 
 echo "--- No change, or only the display state: no version"
 ui_mark
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
 ui_expect_new "Version unchanged: block.mitcad (v1)" "nothing changed: no version"
-no_new_since "Version author dialog" "the author is not asked again"
+no_new_since "Version author dialog" "the author is not asked"
 ui_mark
 ui_step "show the origin"                ui_click_logged "Browser eye Root/Origin"
 ui_expect_new "Visibility Root/Origin: shown" "origin shown"
@@ -293,23 +296,23 @@ Elsewhere|Git Elsewhere" "on top of the newer version"
 [ "$(file_d3 "$FILE")" = "[30.0]" ] || ui_fail "the file has d3 $(file_d3 "$FILE")"
 echo "ok   the file has the design's d3"
 
-echo "--- Preferences: the author's name and email instead of git's"
+echo "--- Project Settings: the project's author instead of git's"
 ui_mark
-ui_step "preferences, General (search)"  ui_command "Preferences: General"
-ui_focus_dialog '^Preferences$'
-ui_step "not git's (Alt+G)"              ui_key alt+g
-ui_step "name (Alt+N)"                   ui_key alt+n
+ui_step "project settings (search)"      ui_command "Project Settings"
+ui_expect_new "Project Settings dialog: bracket, local; " "Project Settings"
+ui_focus_dialog '^Project Settings - bracket$'
+ui_step "the author's name (Alt+A)"      ui_key alt+a
 ui_step "type the name"                  type_text "Settings Author"
-ui_step "email (Alt+M)"                  ui_key alt+m
+ui_step "the email (Tab)"                ui_key Tab
 ui_step "type the email"                 type_text "settings@example.invalid"
-ui_step "OK (Enter)"                     ui_key Return
+ui_step "close (Esc)"                    ui_key Escape
 ui_focus_main
-ui_expect_new "Preferences: versions by Settings Author <settings@example.invalid>" "saved"
-grep -q '^useGit=false' "$SETTINGS" || ui_fail "useGit is not saved off"
+ui_expect_new "Project Settings: author Settings Author <settings@example.invalid>" "saved"
+expect_git "$PROJECT" "config user.email" "settings@example.invalid" "in the project's repository"
 ui_mark
 ui_step "undo the change of d3 (Ctrl+Z)" ui_key ctrl+z
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
-ui_expect_new "Version author: Settings Author <settings@example.invalid> (settings)" "the settings' author"
+ui_expect_new "Version author: Settings Author <settings@example.invalid> (git)" "the project's author"
 ui_expect_new "Version recorded: block.mitcad " "recorded"
 expect_git "$PROJECT" "log -1 --format=%an|%ae" "Settings Author|settings@example.invalid" "by the settings' author"
 ui_mark
@@ -340,45 +343,52 @@ expect_git "$PROJECT" "log --follow --format=%s -- plate.mitcad" "$(in_git "$PRO
   "git follows the rename back to the first version"
 expect_clean "$PROJECT" "git status is clean"
 
-echo "--- Start Version History of a file outside projects: its folder"
+echo "--- Move to a Project of a file outside projects: its folder"
 SINGLE=$WORK/single
 mkdir -p "$SINGLE"
 ui_mark
 ui_step "save as (Ctrl+Shift+S)"         ui_key ctrl+shift+s
-ui_focus_dialog '^Save As$'
-ui_step "a folder outside projects"      type_path "$SINGLE/part.mitcad"
+ui_step "a folder outside projects"      type_path "Save As" "$SINGLE/part.mitcad"
 ui_expect_new "Saved $SINGLE/part.mitcad" "saved"
 ui_expect_new "Version status: none" "no version history there"
+ui_expect_new "Project indicator: not in a project" "the indicator says so"
 no_new_since "Version recorded" "and no version"
 ui_mark
-ui_step "start version history (search)" ui_command "Start Version History"
-ui_expect_new "Start Version History dialog: $SINGLE" "the dialog"
-ui_focus_dialog '^Start Version History$'
-ui_step "use the folder (Enter)"         ui_key Return
+ui_step "move to a project (search)"     ui_command "Move to a Project"
+ui_expect_new "Move to a Project dialog: part.mitcad" "the dialog"
+ui_focus_dialog '^Move to a Project$'
+ui_step "a new project (Enter)"          ui_key Return
+ui_expect_new "New Project dialog: $SINGLE" "the design's own folder offered"
+ui_focus_dialog '^Move to a Project$'
+ui_expect_new "New Project dialog: folder $SINGLE: designs" "a folder of designs"
+ui_step "create (Enter)"                 ui_key Return
+ui_expect_new "New Project: created $SINGLE: version " "the folder is a project"
+ui_expect_new "Recorded $SINGLE/part.mitcad in the project $SINGLE" "the design recorded"
 ui_focus_main
-ui_expect_new "Version history started in $SINGLE: version " "the folder has version history"
-ui_expect_new "Version recorded: part.mitcad " "the design recorded"
-expect_git "$SINGLE" "log --reverse --format=%s|%an" "Create project single|Settings Author
-Save part.mitcad|Settings Author" "the folder's versions"
+first=$(in_git "$SINGLE" log --reverse --format='%s|%an' | head -1)
+[ "$first" = "Create project single|Git Test" ] || ui_fail "the folder's first version is '$first'"
+echo "ok   the folder's first version"
+expect_git "$SINGLE" "ls-files -- part.mitcad" "part.mitcad" "the design is in it"
 expect_clean "$SINGLE" "git status is clean"
 
-echo "--- Start Version History: moved into a new project"
+echo "--- Move to a Project: into a new project"
 OTHER=$WORK/other
 mkdir -p "$OTHER"
 ui_mark
 ui_step "save as (Ctrl+Shift+S)"         ui_key ctrl+shift+s
-ui_focus_dialog '^Save As$'
-ui_step "another folder"                 type_path "$OTHER/gear.mitcad"
+ui_step "another folder"                 type_path "Save As" "$OTHER/gear.mitcad"
 ui_expect_new "Saved $OTHER/gear.mitcad" "saved"
 ui_mark
-ui_step "start version history (search)" ui_command "Start Version History"
-ui_focus_dialog '^Start Version History$'
-ui_step "move to a new project (M)"      ui_key m
-ui_expect_new "New Project dialog: $DOCUMENTS/gear" "a new project named after the design"
-ui_focus_dialog '^Move to a New Project$'
+ui_step "move to a project (search)"     ui_command "Move to a Project"
+ui_focus_dialog '^Move to a Project$'
+ui_step "a new project (Enter)"          ui_key Return
+ui_focus_dialog '^Move to a Project$'
+ui_step "the folder (Alt+F)"             ui_key alt+f
+ui_step "a new one, named after it"      type_text "$DOCUMENTS/gear"
+ui_expect_new "New Project dialog: folder $DOCUMENTS/gear: missing" "a new folder"
 ui_step "create (Enter)"                 ui_key Return
-ui_focus_main
 ui_expect_new "Moved $OTHER/gear.mitcad to $DOCUMENTS/gear/gear.mitcad" "moved"
+ui_focus_main
 [ ! -e "$OTHER/gear.mitcad" ] || ui_fail "the file it came from is still there"
 expect_git "$DOCUMENTS/gear" "log --format=%s" "Save gear.mitcad
 Create project gear" "the new project's versions"
@@ -386,46 +396,36 @@ expect_clean "$DOCUMENTS/gear" "git status is clean"
 ui_key ctrl+q # exit
 expect_exit "exited"
 
-echo "--- Without git's user: cancelled, nothing is left behind"
+echo "--- Without git's user: an older project asks for the author; cancelled, nothing is added"
 : > "$GIT_CONFIG_GLOBAL"
 export XDG_CONFIG_HOME=$WORK/config
 SETTINGS=$XDG_CONFIG_HOME/Mitcad/Mitcad.conf
 KEEP=$WORK/keep
-mkdir -p "$KEEP"
+CLI=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}
+"$CLI" project init "$KEEP" --no-history > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli project init"; }
 cp "$SINGLE/part.mitcad" "$KEEP/part.mitcad"
-ui_start_app --open "$KEEP/part.mitcad" --no-native-dialogs
-ui_expect_log "Opened $KEEP/part.mitcad" "a file outside projects opened"
-ui_mark
-ui_step "start version history (search)" ui_command "Start Version History"
-ui_focus_dialog '^Start Version History$'
-ui_step "use the folder (Enter)"         ui_key Return
+ui_start_app --no-native-dialogs
+# open_project folder: Open Project of a folder typed into the folder dialog.
+open_project() {
+  ui_mark
+  ui_step "open project (search)"        ui_command "Open Project"
+  ui_focus_dialog '^Open Project$'
+  type_text "$1"
+  ui_key Return
+}
+open_project "$KEEP"
+ui_expect_new "Open Project: $KEEP: project" "an older project without versions"
 ui_expect_new "Version author dialog: git has none" "the author is asked"
 ui_focus_dialog '^Version Author$'
 ui_step "cancel (Esc)"                   ui_key Escape
 ui_focus_main
 ui_expect_new "Version author dialog cancelled" "cancelled"
-[ "$(ls -A "$KEEP")" = "part.mitcad" ] || ui_fail "left in the folder: $(ls -A "$KEEP")"
-echo "ok   the folder is as it was"
-ui_mark
-ui_step "new project (search)"           ui_command "New Project"
-ui_focus_dialog '^New Project$'
-ui_step "name it gone, Enter"            type_text gone
-ui_key Return
-ui_focus_dialog '^Version Author$'
-ui_step "cancel (Esc)"                   ui_key Escape
-ui_focus_main
-ui_expect_new "Version author dialog cancelled" "cancelled"
-[ ! -e "$DOCUMENTS/gone" ] || ui_fail "the new project's folder is left"
-echo "ok   the new project's folder went again"
-no_new_since "New project " "no new project"
+[ ! -e "$KEEP/.git" ] || ui_fail "a repository was made"
+echo "ok   no repository in its folder"
+ui_expect_new "Opened $KEEP/part.mitcad" "its design opened without versions"
 
-echo "--- Without git's user: asked once, kept in Mitcad's settings"
-ui_mark
-ui_step "new project (search)"           ui_command "New Project"
-ui_expect_new "New Project dialog: $DOCUMENTS/Project1" "Project1 is free"
-ui_focus_dialog '^New Project$'
-ui_step "name it nogit, Enter"           type_text nogit
-ui_key Return
+echo "--- Without git's user: given once, kept as Preferences' default author"
+open_project "$KEEP"
 ui_expect_new "Version author dialog: git has none" "the author is asked"
 ui_focus_dialog '^Version Author$'
 ui_step "type the name"                  type_text "Asked Author"
@@ -433,22 +433,25 @@ ui_step "the email (Tab)"                ui_key Tab
 ui_step "type the email"                 type_text "asked@example.invalid"
 ui_step "OK (Enter)"                     ui_key Return
 ui_focus_main
-ui_expect_new "Version author: Asked Author <asked@example.invalid> (settings)" "the author given"
-ui_expect_new "New project $DOCUMENTS/nogit" "a new design for the project"
+ui_expect_new "Version history started in $KEEP: version " "its history started"
+ui_expect_new "Project indicator: keep, local" "a Local project"
+expect_git "$KEEP" "log --format=%an|%ae" "Asked Author|asked@example.invalid" "by the author given"
 grep -q '^name=Asked Author' "$SETTINGS" && grep -q '^email=asked@example.invalid' "$SETTINGS" ||
   ui_fail "the author is not in the settings"
 echo "ok   kept in the settings"
 ui_mark
-ui_step "save (Ctrl+S)"                  ui_key ctrl+s
-ui_focus_dialog '^Save As$'
-ui_step "accept the name offered"        ui_key Return
+ui_step "new project (search)"           ui_command "New Project"
+ui_expect_new "New Project dialog: $DOCUMENTS/Project1" "Project1 is free"
+ui_focus_dialog '^New Project$'
+ui_step "create (Enter)"                 ui_key Return
+ui_expect_new "New project $DOCUMENTS/Project1" "a new project, its author the default one"
+ui_expect_new "Opened $DOCUMENTS/Project1/Project1.mitcad" "its first design"
 ui_focus_main
-ui_expect_new "Saved $DOCUMENTS/nogit/nogit.mitcad" "saved in the project, named after it"
-ui_expect_new "Version recorded: nogit.mitcad " "recorded"
-expect_git "$DOCUMENTS/nogit" "log --format=%s|%an|%ae" "Save nogit.mitcad|Asked Author|asked@example.invalid
-Create project nogit|Asked Author|asked@example.invalid" "by the author given"
+expect_git "$DOCUMENTS/Project1" "log --format=%s|%an|%ae" "Create project Project1|Asked Author|asked@example.invalid" \
+  "by Preferences' author"
 ui_key ctrl+q # exit
 expect_exit "exited"
+
 
 echo "--- Version History: the versions, what each changed, comparisons"
 FILE=$PROJECT/plate.mitcad
@@ -520,8 +523,8 @@ ui_expect_new "Version recorded: plate.mitcad " "the unsaved change recorded fir
 ui_expect_new "Version restored: plate.mitcad v8 ($v8) as v12 (" "v8 restored as a new version"
 ui_expect_new "Opened $FILE" "the restored design opened"
 ui_expect_new "Version status: bracket, main, v12" "the status bar shows it"
-expect_git "$PROJECT" "log -2 --format=%s|%an" "Restore v8 of plate.mitcad ($v8)|Asked Author
-Save plate.mitcad: Change d3|Asked Author" "the restore on top of the saved change"
+expect_git "$PROJECT" "log -2 --format=%s|%an" "Restore v8 of plate.mitcad ($v8)|Settings Author
+Save plate.mitcad: Change d3|Settings Author" "the restore on top of the saved change, by the project's author"
 [ "$(file_d3 "$FILE")" = "[20.0]" ] || ui_fail "the file has d3 $(file_d3 "$FILE")"
 [ "$(in_git "$PROJECT" rev-parse HEAD:plate.mitcad)" = "$(in_git "$PROJECT" rev-parse "$v8:block.mitcad")" ] ||
   ui_fail "the restored file is not v8's"
@@ -557,8 +560,7 @@ ui_step "cancel (Esc)"                   ui_key Escape
 ui_focus_main
 ui_mark
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
-ui_focus_dialog '^Save As$'
-ui_step "a name in the project"          type_path "$PROJECT/plate-v11.mitcad"
+ui_step "a name in the project"          type_path "Save As" "$PROJECT/plate-v11.mitcad"
 ui_expect_new "Saved $PROJECT/plate-v11.mitcad" "Save asks for a name"
 ui_expect_new "Version recorded: plate-v11.mitcad " "a file of its own in the project"
 [ "$(file_d3 "$PROJECT/plate-v11.mitcad")" = "[36.0]" ] || ui_fail "the file has d3 $(file_d3 "$PROJECT/plate-v11.mitcad")"
@@ -567,5 +569,126 @@ expect_git "$PROJECT" "log -1 --format=%s" "Save plate-v11.mitcad" "recorded"
 expect_clean "$PROJECT" "git status is clean"
 ui_key ctrl+q # exit
 expect_exit "exited"
+
+echo "--- Failed preservation stops Save and Restore (mitcad#114)"
+# Separate copies keep the earlier history/count assertions meaningful.
+# These exercise the actual UI overwrite paths, with both skipped commits
+# and errors acquiring the index lock, without a fake commit implementation.
+ORIGINAL_PROJECT=$PROJECT
+for failure in detached index-lock; do
+  for operation in save restore save-and-restore; do
+    PROJECT=$WORK/preservation-$failure-$operation
+    cp -a "$ORIGINAL_PROJECT" "$PROJECT"
+    FILE=$PROJECT/plate.mitcad
+    head_before=$(in_git "$PROJECT" rev-parse HEAD)
+    if [ "$operation" = restore ]; then
+      ui_start_app --open "$FILE" --no-native-dialogs
+    else
+      ui_start_app --open "$FILE" --set d3=36 --no-native-dialogs
+    fi
+    ui_expect_log "Opened $FILE" "preservation scenario opened"
+    if [ "$operation" != save-and-restore ]; then
+      file_d3 "$FILE" 40 # unrecorded bytes about to be overwritten
+      bytes_before=$(sha256sum "$FILE")
+    fi
+    if [ "$failure" = detached ]; then
+      in_git "$PROJECT" checkout --detach
+      why="The version of plate.mitcad was not recorded: HEAD is detached"
+      saved_why="Saved plate.mitcad, but the version was not recorded: HEAD is detached"
+    else
+      : > "$PROJECT/.git/index.lock"
+      why="The version of plate.mitcad could not be recorded: cannot lock the index"
+      saved_why="Saved plate.mitcad, but the version could not be recorded: cannot lock the index"
+    fi
+    ui_mark
+    if [ "$operation" = save ]; then
+      ui_key ctrl+s
+      ui_expect_new "Save conflict: $FILE changed outside Mitcad" "external change found"
+      ui_focus_dialog '^Mitcad$'
+      ui_key n
+      ui_focus_main
+      ui_expect_new "Could not preserve the external changes of plate.mitcad. Save cancelled. $why" \
+        "Save refused failed preservation, saying why" 20
+    else
+      ui_key ctrl+shift+h
+      ui_expect_new "Version History selected v12" "latest design version selected"
+      ui_focus_dialog '^Version History - plate.mitcad$'
+      ui_key Down # v11 has d3=36, distinct from the external d3=40
+      if [ "$operation" = save-and-restore ]; then
+        ui_key Down # v10 has d3=33, distinct from the unsaved d3=36
+      fi
+      ui_key alt+r
+      ui_focus_dialog '^Restore Version$'
+      ui_key Return
+      ui_focus_main
+      if [ "$operation" = restore ]; then
+        ui_expect_new "Could not preserve the external changes of plate.mitcad. Restore cancelled. $why" \
+          "Restore refused failed preservation, saying why" 20
+      else
+        # The unsaved design is written to the file (its bytes before are
+        # the latest version's), but no version holds it: the restore,
+        # which would write over it, stops with an error saying why.
+        ui_expect_new "$saved_why" "the changes saved, without a version" 20
+        ui_expect_new "Restore cancelled: your changes are saved in plate.mitcad, but not as a version. $why" \
+          "Save-and-Restore stops when saving a version fails, saying why" 20
+        [ "$(file_d3 "$FILE")" = "[36.0]" ] || ui_fail "unsaved design was replaced by restore"
+        echo "ok   the file keeps the design as saved"
+      fi
+      no_new_since "Version restored:" "no restore performed"
+      no_new_since "Opened $FILE" "open design was not replaced"
+    fi
+    if [ "$operation" != save-and-restore ]; then
+      [ "$(sha256sum "$FILE")" = "$bytes_before" ] || ui_fail "external bytes overwritten by $operation"
+    fi
+    [ "$(in_git "$PROJECT" rev-parse HEAD)" = "$head_before" ] || ui_fail "failed preservation moved HEAD"
+    echo "ok   $failure blocks $operation without losing bytes"
+    ui_stop_app
+    rm -f "$PROJECT/.git/index.lock"
+  done
+done
+
+echo "--- Restore preserves an external version successfully"
+PROJECT=$WORK/preservation-successful-restore
+cp -a "$ORIGINAL_PROJECT" "$PROJECT"
+FILE=$PROJECT/plate.mitcad
+ui_start_app --open "$FILE" --no-native-dialogs
+ui_expect_log "Opened $FILE" "successful preservation scenario opened"
+file_d3 "$FILE" 40
+ui_mark
+ui_key ctrl+shift+h
+ui_expect_new "Version History selected v12" "latest version selected"
+ui_focus_dialog '^Version History - plate.mitcad$'
+ui_key Down
+ui_key alt+r
+ui_focus_dialog '^Restore Version$'
+ui_key Return
+ui_focus_main
+ui_expect_new "Version restored: plate.mitcad v11" "Restore succeeds after preserving external bytes"
+ui_expect_new "Opened $FILE" "restored file opened"
+[ "$(file_d3 "$FILE")" = "[36.0]" ] || ui_fail "requested version was not restored"
+[ "$(in_git "$PROJECT" show HEAD~1:plate.mitcad | python3 -c 'import json, sys; print([p["value"] for p in json.load(sys.stdin)["parameters"] if p["name"] == "d3"])')" = "[40.0]" ] ||
+  ui_fail "external bytes missing from the preserved version"
+echo "ok   Restore retains external bytes in history before overwriting"
+ui_stop_app
+
+echo "--- Save fails closed when status cannot read HEAD"
+PROJECT=$WORK/preservation-status-error
+cp -a "$ORIGINAL_PROJECT" "$PROJECT"
+FILE=$PROJECT/plate.mitcad
+ui_start_app --open "$FILE" --set d3=36 --no-native-dialogs
+ui_expect_log "Opened $FILE" "status-error scenario opened"
+file_d3 "$FILE" 40
+bytes_before=$(sha256sum "$FILE")
+cp "$PROJECT/.git/HEAD" "$WORK/status-head"
+# Opening the repo and reading identity still work; resolving HEAD for the
+# status request fails because this well-formed reference has no object.
+printf '0000000000000000000000000000000000000001\n' > "$PROJECT/.git/HEAD"
+ui_mark
+ui_key ctrl+s
+ui_expect_new "Could not check plate.mitcad before saving:" "status failure cancels Save"
+[ "$(sha256sum "$FILE")" = "$bytes_before" ] || ui_fail "status failure overwrote external bytes"
+no_new_since "Save conflict: new version" "no overwrite was permitted"
+cp "$WORK/status-head" "$PROJECT/.git/HEAD"
+ui_stop_app
 
 ui_finish "UI version test"

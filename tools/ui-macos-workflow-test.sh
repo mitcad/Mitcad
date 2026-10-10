@@ -14,7 +14,8 @@
 #   workflow-recovery.mitcad-ui  the killed session is offered and restored;
 #                                Save As, New, Open, Export, Import, undo
 #   workflow-versions.mitcad-ui  the saved design opened with a change:
-#                                version history, two versions, one restored
+#                                Move to a Project makes its folder a Local
+#                                project, three versions, one restored
 # This script checks what lies outside the application between and after the
 # runs: the autosave files the killed session left (their metadata, the
 # project file's features and the lock), git's log of the versions.
@@ -110,7 +111,7 @@ found = sorted(glob.glob(os.path.join(folder, '*.json')))
 if len(found) != 1:
     sys.exit('%d autosave sessions in %s' % (len(found), folder))
 about = json.load(open(found[0]))
-if about.get('format') != 'mitcad-autosave' or about.get('version') != 1 or about.get('document') != 'Untitled':
+if about.get('format') != 'mitcad-autosave' or about.get('version') != 2 or about.get('document') != 'Untitled':
     sys.exit('autosave metadata: %s' % json.dumps(about))
 project = os.path.join(folder, about['project'])
 if not os.path.exists(project) or os.path.getsize(project) != about['size']:
@@ -152,9 +153,10 @@ fi
 
 echo '--- Version history'
 # Git's configuration is the test's own (ui_init), without a user: the author
-# is asked once and kept in the test's settings, never the machine's identity.
+# is typed into New Project and kept in the project's repository, never the
+# machine's identity.
 run_script versions workflow-versions.mitcad-ui "$dialogs" --no-recovery --open "$work/block.mitcad" --set d3=25
-ui_expect_log 'Version restored: block\.mitcad v1 \(' 'the first version restored as a new one'
+ui_expect_log 'Version restored: block\.mitcad v2 \(' 'the second version restored as a new one'
 ui_expect_log 'TestDriver: done' 'the script ran to its end'
 if command -v git > /dev/null; then
   author='macOS Tester|macos@example.invalid'
@@ -162,10 +164,10 @@ if command -v git > /dev/null; then
   expected="Save block.mitcad: Undo Change d3|$author
 Save block.mitcad: Change d3|$author
 Create project files|$author"
-  # The restore is the newest version: "Restore v1 of block.mitcad (hash)".
+  # The restore is the newest version: "Restore v2 of block.mitcad (hash)".
   newest=$(printf '%s\n' "$log" | sed -n 1p)
   older=$(printf '%s\n' "$log" | sed -n '2,$p')
-  if printf '%s' "$newest" | grep -Eq '^Restore v1 of block\.mitcad \([0-9a-f]{7}\)\|macOS Tester\|'; then
+  if printf '%s' "$newest" | grep -Eq '^Restore v2 of block\.mitcad \([0-9a-f]{7}\)\|macOS Tester\|'; then
     ui_pass "git's log has the restore"
   else
     ui_fail "git log, newest: $newest"

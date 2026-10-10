@@ -46,6 +46,21 @@ impl<S: Clone> BodySet<S> {
         self.current.remove(&uid);
     }
 
+    /// The bodies there are now, in order of their ids.
+    pub fn uids(&self) -> Vec<BodyUid> {
+        self.current.keys().copied().collect()
+    }
+
+    /// The bodies the feature set so far that are still there, in the
+    /// order it first set them.
+    pub fn changed(&self) -> Vec<BodyUid> {
+        self.set
+            .iter()
+            .copied()
+            .filter(|uid| self.current.contains_key(uid))
+            .collect()
+    }
+
     /// The shapes of the participants an operation works on ([`apply_tool`]:
     /// empty means all bodies); bodies that do not exist are left out.
     pub fn participants(&self, participants: &[BodyUid]) -> Vec<&S> {

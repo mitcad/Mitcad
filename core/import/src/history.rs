@@ -67,6 +67,29 @@ pub trait StoredGeometry<S> {
     fn release_before(&mut self, state: usize) {
         let _ = state;
     }
+    /// Whether the file names a state for the timeline item that its
+    /// history does not hold, between states it does: the operation's
+    /// states were taken out of the history (a feature suppressed or
+    /// failed in the file), so the file keeps no result for it.
+    fn item_without_result(&mut self, index: i64) -> bool {
+        let _ = index;
+        false
+    }
+}
+
+/// The solids of a stored body of several lumps (disjoint pieces of one
+/// body), each to come in as a body of its own, as the replay makes them
+/// (Mitcad keeps disjoint solids apart: a join of a piece that touches
+/// nothing makes a body of it). Empty for one solid, and when the solids
+/// do not hold all of its faces (sheet faces with them).
+pub fn lumps<K: Kernel>(kernel: &K, shape: &K::Shape) -> Vec<K::Shape> {
+    let solids = kernel.solids(shape).unwrap_or_default();
+    let faces = |s: &K::Shape| kernel.face_count(s).unwrap_or(0);
+    if solids.len() > 1 && solids.iter().map(faces).sum::<usize>() == faces(shape) {
+        solids
+    } else {
+        Vec::new()
+    }
 }
 
 /// No bodies: an external dump without its `.f3d`.
@@ -247,6 +270,119 @@ pub fn same_bodies(a: &[Sig], b: &[Sig]) -> bool {
 /// measures less than that, but not its faces.
 pub(crate) const EXACT: f64 = 1e-5;
 
+/// Relative tolerance of the volume an item itself adds or removes against
+/// the file's change for it ([`Change`]).
+pub(crate) const CHANGE: f64 = 1e-2;
+
+/// Changes further than this from the file's ([`Change::difference`]) are
+/// near or beyond [`CHANGE`]: the volumes do not settle them, the faces do
+/// (`crate::geometric`, mitcad#138).
+pub(crate) const UNSETTLED: f64 = CHANGE / 2.0;
+
+/// Changes further than this from the file's are another result whatever
+/// its faces say: the differences the faces let pass (at the corners of a
+/// rounding, the file's approximations) came to 2–4 % of the change.
+pub(crate) const DIFFERENT: f64 = 10.0 * CHANGE;
+
+/// Volume differences below this part of the bodies' volume are the
+/// measures' noise: [`Change`] does not compare changes that small.
+pub(crate) const CHANGE_NOISE: f64 = 1e-6;
+
+/// The volume an item adds or removes against the change of the file's
+/// history for it (mitcad#121). The bodies' measures are compared with a
+/// tolerance relative to the bodies ([`RELATIVE`]), within which a wrong
+/// rounding of a large body still fits (one that removes a few per cent
+/// more or less than the file's changes the body by less than 1e-5): the
+/// change is compared relative to itself as well.
+///
+/// The bodies before the item may carry a difference from the file's
+/// state of earlier approximations, which the item can take away (a
+/// mirror or a rounding that replaces the approximated part): its result
+/// is then the state's although its change is not the file's. So the
+/// item's own difference is the smaller of its change's from the file's
+/// and its result's from the state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Change {
+    /// The solid volume of the replay's bodies before the item.
+    start: f64,
+    /// The file's change: the state after the item minus the state the
+    /// bodies before it stand for.
+    theirs: f64,
+    /// The solid volume of the state after the item.
+    target: f64,
+    /// The largest volume of the four, for the noise floor.
+    scale: f64,
+}
+
+impl Change {
+    /// The change from the state the bodies before the item stand for
+    /// (`reference`) to the state after it (`target`); `start` the replay's
+    /// bodies before the item. None when `start` does not pair with
+    /// `reference` within the tolerance (the bodies stand for no state).
+    pub fn new(reference: &[Sig], start: &[Sig], target: &[Sig]) -> Option<Change> {
+        bodies_distance(reference, start)?;
+        let (r, s, t) = (volume(reference), volume(start), volume(target));
+        Some(Change {
+            start: s,
+            theirs: t - r,
+            target: t,
+            scale: r.abs().max(s.abs()).max(t.abs()),
+        })
+    }
+
+    /// How far the item's change to the bodies `after` is from the file's,
+    /// relative to the larger of the two changes: the smaller of the
+    /// changes' difference and the result's from the state; 0 within the
+    /// noise.
+    pub fn difference(&self, after: &[Sig]) -> f64 {
+        let a = volume(after);
+        let ours = a - self.start;
+        let off = self.difference_volume(after);
+        if off <= CHANGE_NOISE * self.scale.max(a.abs()) {
+            return 0.0;
+        }
+        off / ours.abs().max(self.theirs.abs())
+    }
+
+    /// [`Change::difference`] in mm³: the smaller of the changes'
+    /// difference and the result's from the state.
+    pub fn difference_volume(&self, after: &[Sig]) -> f64 {
+        let a = volume(after);
+        ((a - self.start) - self.theirs)
+            .abs()
+            .min((a - self.target).abs())
+    }
+
+    /// The replay's change to the bodies `after` and the file's (mm³).
+    pub fn volumes(&self, after: &[Sig]) -> (f64, f64) {
+        (volume(after) - self.start, self.theirs)
+    }
+
+    /// Whether the change to the bodies `after` is the file's within
+    /// [`CHANGE`].
+    pub fn agrees(&self, after: &[Sig]) -> bool {
+        self.difference(after) <= CHANGE
+    }
+}
+
+/// The item's own difference ([`Change::difference`]) for its result
+/// `after` against its state `target`; None without a change to compare
+/// or when the result is the state exactly ([`Sig::same`]: the same faces
+/// and measures within [`EXACT`], which the measures' noise reaches for
+/// small changes of large bodies).
+pub fn own_difference(own: Option<Change>, target: &[Sig], after: &[Sig]) -> Option<f64> {
+    let own = own?;
+    if bodies_distance(target, after).is_some_and(|(_, exact)| exact) {
+        return None;
+    }
+    Some(own.difference(after))
+}
+
+/// The solid volume of a set of bodies.
+fn volume(sigs: &[Sig]) -> f64 {
+    sigs.iter().map(|s| s.volume).sum()
+}
+
 /// The solids of a state with their signatures.
 type Measured<S> = Vec<(StoredBody<S>, Sig)>;
 
@@ -281,6 +417,9 @@ pub struct Oracle<'g, S> {
     /// States whose bodies were dropped ([`Oracle::release_behind`]): built
     /// again, they do not count as built once more.
     released: std::collections::HashSet<usize>,
+    /// Bodies the design no longer has from a state on although the ASM
+    /// history keeps them, by body id ([`Oracle::retire`]).
+    retired: Vec<(usize, u64)>,
 }
 
 impl<'g, S: Clone> Oracle<'g, S> {
@@ -299,7 +438,32 @@ impl<'g, S: Clone> Oracle<'g, S> {
             enabled: count > 0,
             broken: std::collections::HashMap::new(),
             released: std::collections::HashSet::new(),
+            retired: Vec::new(),
         }
+    }
+
+    /// Leaves bodies (by [`StoredBody::id`]) out of the states from `from`
+    /// on and out of the stored design: a combine's tools that the file
+    /// says it consumed stay in the ASM history as they were, but are no
+    /// bodies of the design (mitcad#96).
+    pub fn retire(&mut self, from: usize, ids: &[u64]) {
+        let new: Vec<u64> = ids
+            .iter()
+            .copied()
+            .filter(|id| !self.retired.iter().any(|(f, r)| r == id && *f <= from))
+            .collect();
+        if new.is_empty() {
+            return;
+        }
+        self.retired.extend(new.iter().map(|&id| (from, id)));
+        for state in self.states.iter_mut().skip(from).flatten() {
+            state.retain(|(b, _)| b.id.is_none_or(|id| !new.contains(&id)));
+        }
+    }
+
+    /// Whether a body is retired in a state ([`Oracle::retire`]).
+    fn is_retired(&self, state: usize, id: Option<u64>) -> bool {
+        id.is_some_and(|id| self.retired.iter().any(|&(f, r)| r == id && f <= state))
     }
 
     pub fn count(&self) -> usize {
@@ -379,6 +543,13 @@ impl<'g, S: Clone> Oracle<'g, S> {
             let mut solids = Vec::new();
             let mut sheets = Vec::new();
             for b in bodies {
+                if self
+                    .retired
+                    .iter()
+                    .any(|&(f, r)| b.id == Some(r) && f <= index)
+                {
+                    continue;
+                }
                 let sig = match b.id {
                     Some(id) => *measured
                         .entry(id)
@@ -524,7 +695,14 @@ impl<'g, S: Clone> Oracle<'g, S> {
     }
 
     pub fn final_bodies(&mut self) -> Result<Vec<StoredBody<S>>, String> {
-        self.geometry.final_bodies()
+        let mut bodies = self.geometry.final_bodies()?;
+        bodies.retain(|b| !self.is_retired(usize::MAX, b.id));
+        Ok(bodies)
+    }
+
+    /// See [`StoredGeometry::item_without_result`].
+    pub fn item_without_result(&mut self, index: i64) -> bool {
+        self.geometry.item_without_result(index)
     }
 
     /// See [`StoredGeometry::item_components`].
@@ -557,6 +735,21 @@ mod tests {
     }
 
     #[test]
+    fn a_body_of_disjoint_solids_comes_in_as_its_lumps() {
+        use mitcad_model::testing::{MockKernel, MockShape};
+        let kernel = MockKernel::default();
+        let (a, b) = (MockShape::imported("a", 6), MockShape::imported("b", 4));
+        let two = kernel.compound(&[a.clone(), b.clone()]).unwrap();
+        assert_eq!(lumps(&kernel, &two), [a.clone(), b.clone()]);
+        // One solid: no lumps.
+        assert!(lumps(&kernel, &a).is_empty());
+        // Solids that leave faces out (sheet faces with them): kept whole.
+        let mut mixed = two.clone();
+        mixed.faces.extend(MockShape::imported("c", 1).faces);
+        assert!(lumps(&kernel, &mixed).is_empty());
+    }
+
+    #[test]
     fn body_sets_match_in_any_order_within_tolerance() {
         assert!(same_bodies(
             &[sig(10.0), sig(20.0)],
@@ -572,5 +765,44 @@ mod tests {
         moved.center[0] += 1.0;
         assert!(!same_bodies(&[sig(10.0)], &[moved]));
         assert!(same_bodies(&[], &[]));
+    }
+
+    #[test]
+    fn an_item_s_change_is_compared_relative_to_itself() {
+        // A rounding of a large body: the file's removes 1.0, the replay's
+        // 1.06; the bodies agree within 6e-6 of their volume.
+        let (before, file) = (sig(1e4), sig(1e4 - 1.0));
+        let change = Change::new(&[before], &[before], &[file]).expect("paired");
+        let wrong = sig(1e4 - 1.06);
+        assert!(same_bodies(&[file], &[wrong]));
+        assert!((change.difference(&[wrong]) - 0.06 / 1.06).abs() < 1e-9);
+        assert!(!change.agrees(&[wrong]));
+        assert!(change.agrees(&[sig(1e4 - 1.005)]));
+        // Bodies before the item that carry an earlier approximation: what
+        // the item adds to it counts, not the bodies' difference; or the
+        // item takes it away and its result is the state's.
+        let carried = sig(1e4 + 0.5);
+        let change = Change::new(&[before], &[carried], &[file]).expect("paired");
+        assert!(change.agrees(&[sig(1e4 - 0.5)]));
+        assert!(change.agrees(&[sig(1e4 - 1.0)]));
+        assert!(!change.agrees(&[sig(1e4 - 0.8)]));
+        assert!(!change.agrees(&[sig(1e4 - 1.2)]));
+        // Changes within the measures' noise are not compared.
+        let change = Change::new(&[before], &[before], &[before]).expect("paired");
+        assert_eq!(change.difference(&[sig(1e4 + 0.005)]), 0.0);
+        assert!(!change.agrees(&[sig(1e4 + 0.02)]));
+        // Bodies that stand for another state: no comparison.
+        assert!(Change::new(&[before], &[sig(2e5)], &[file]).is_none());
+        // From no bodies: the whole new body is the change.
+        let change = Change::new(&[], &[], &[file]).expect("paired");
+        assert!(change.agrees(&[sig(1e4 - 1.0001)]));
+        // A result that is the state exactly is not compared; one with other
+        // faces is.
+        let change = Change::new(&[before], &[before], &[file]);
+        assert_eq!(own_difference(change, &[file], &[sig(1e4 - 1.05)]), None);
+        let mut faces = sig(1e4 - 1.05);
+        faces.faces += 2;
+        assert!(own_difference(change, &[file], &[faces]).is_some_and(|d| d > CHANGE));
+        assert_eq!(own_difference(None, &[file], &[faces]), None);
     }
 }

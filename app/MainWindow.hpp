@@ -22,6 +22,8 @@
 #include "OcctViewer.hpp"
 #include "browser/DocumentHost.hpp"
 #include "browser/DocumentSnapshot.hpp"
+#include "files/ProjectDialogs.hpp"
+#include "files/Projects.hpp"
 #include "framework/CommandSession.hpp"
 #include "framework/ModelWorker.hpp"
 #include "mitcad/geometry/shape.hpp"
@@ -47,7 +49,10 @@ class CommandSearch;
 class F3dImport;
 class FloatingLayout;
 class GlassCard;
+class LockController;
+class ProjectIndicator;
 class RemoteController;
+class LiveController;
 class Ribbon;
 class UpdateController;
 class ReportCenter;
@@ -136,6 +141,7 @@ public:
   bool runModelCommands(const QJsonArray& commands, const QString& label) override;
   QString lastError() const override { return m_lastError; }
   bool canChangeModel(bool visibilityOnly = false) const override;
+  QString readOnlyReason() const override;
   void showStatus(const QString& message, bool error) override;
   void editFeature(const QString& uid) override;
   void startCommand(const QString& id, const Selection& preselection,
@@ -285,7 +291,10 @@ private:
   // Sketches: Create Sketch picks the plane, then sketch mode until Finish
   // Sketch. Editing a sketch rolls the timeline back to it.
   void startSketch();
-  void createSketch(const QJsonValue& plane);
+  // sketch.create with these fields (the plane, where it was picked).
+  void createSketch(const QJsonObject& fields);
+  // A feature's error at the marker; empty when it did not fail.
+  QString featureError(const QString& uid) const;
   void enterSketch(const QString& uid, bool existing);
   void editSketch(const QString& uid);
   // False when sketch mode stays: the timeline's roll-forward after an
@@ -327,10 +336,29 @@ private:
   void openDocument();
   bool save();
   bool saveAs();
+  // A version recorded (recordVersion), or why not.
+  struct VersionRecord {
+    // What the status bar says after the save ("Saved bracket.mitcad as
+    // version 3 (abc1234).", "Saved ..., but the version was not recorded:
+    // ..."), red when `problem`.
+    QString status;
+    bool problem = false;
+    // Recorded, or the file's content in the latest version already
+    // (including commits with cleanup warnings).
+    bool preserved = false;
+    // When not preserved: why, as a sentence of its own ("The version of
+    // bracket.mitcad was not recorded: HEAD is detached ..."); empty when
+    // the user cancelled.
+    QString failure;
+  };
   // Writes the project file to `path`; in a project with version history
   // (P12d) also records a version with `description` (empty: the
-  // automatic message of the undo steps since the last save).
-  bool writeFile(const QString& path, const QString& description = QString());
+  // automatic message of the undo steps since the last save). With
+  // `required` the version is required (Save and Restore, mitcad#114):
+  // false when none was recorded, even though the file may have been
+  // written, and `required` says why (`failure`, empty when cancelled), so
+  // that the caller writes nothing over those bytes.
+  bool writeFile(const QString& path, const QString& description = QString(), VersionRecord* required = nullptr);
   // What follows writing the document's project file (`content`) to path:
   // the document is that file's now (mark_saved) and its autosave goes.
   // `status`: what the status bar says (empty: "Saved <path>"), red when
@@ -342,38 +370,67 @@ private:
   // version history (a folder with .mitcad/project.json at the root of a
   // git repository) records a version; autosave never does.
   void registerVersionCommands();
-  // File > New Project: a new folder with version history and a new design
-  // to save in it.
-  void newProject();
   // File > Save Version: a version with a description.
   bool saveVersion();
-  // File > Start Version History: the design's project, or its folder,
-  // gets version history, or the design moves into a new project.
-  void startVersionHistory();
-  bool moveToNewProject(const QString& path);
-  // The folder of a new project, asked (`title`, the name suggested);
-  // nothing when cancelled.
-  std::optional<QString> chooseNewProject(const QString& title, const QString& name);
-  // Makes `dir` a project with version history and records its first
-  // version; asks for the author first when needed. False when cancelled
-  // or failed (said); what it added to a folder that was there then goes
-  // again, and a folder it made when `removeOnCancel`.
-  bool makeProject(const QString& dir, bool removeOnCancel);
   // The project with version history a file is in; none with the reason.
   std::optional<rust::Box<Project>> versionedProject(const QString& path, QString* why = nullptr) const;
-  // Who records versions ("Name <email>"): git's configured user or
-  // Mitcad's settings, shown the first time and asked when neither has
-  // one (files/VersionDialogs.hpp). None when cancelled.
+  // Who records versions ("Name <email>"): the project's or git's
+  // configured author, else Preferences' default author; asked when none
+  // has one (an older project, files/VersionDialogs.hpp). None when
+  // cancelled.
   std::optional<QString> versionAuthor(const Project& project);
+
+  // Local and Cloud projects (mitcad#89, files/MainWindowProjects.cpp):
+  // the window's current project, which the indicator, remote work and
+  // Project Settings follow, never the design's path.
+  void registerProjectCommands();
+  // The current project's folder when it keeps versions, else "".
+  QString projectRootWithHistory() const;
+  // The current project changed (`check`: its remote is checked).
+  void setCurrentProject(const ProjectState& project, bool check);
+  // A design opened or saved: the current project is its project (none
+  // for a loose file).
+  void followFileProject(const QString& path);
+  void updateProjectIndicator();
+  // File > New Project: the dialog, then the project's first design opens.
+  void newProject();
+  // What New Project chose: a project made (its design opened, or the
+  // design `moving` moved into it), Open It or Open It Instead. True when
+  // a project is the current one now.
+  bool handleNewProject(const std::optional<NewProjectResult>& result, const QString& moving);
+  // File > Open Project: a folder (asked when empty) recognised; a project
+  // opens with a design, anything else goes to New Project. `ask`: unsaved
+  // changes are asked about first.
+  void openProjectFolder(const QString& folder = QString(), bool ask = true);
+  // An older project without versions: its repository and a first version.
+  bool startProjectHistory(const QString& root);
+  // A project's design opens: `design` (relative), else the only one, else
+  // the chooser; a project without designs gets one, named after it.
+  bool openProjectDesign(const QString& root, const QString& design);
+  // File > Open from Cloud.
+  void openFromCloud(const OpenFromCloudOptions& options = OpenFromCloudOptions(), bool ask = true);
+  // File > Open Read-Only: a design without an edit lock.
+  void openReadOnly();
+  // File > Project Settings.
+  void showProjectSettings();
+  // Move to a Project: a loose design into a new or an existing project.
+  void moveToProject();
+  bool moveIntoProject(const QString& root);
+  // Open Recent's label of a design: "bracket.mitcad - Robot arm".
+  QString recentLabel(const QString& path) const;
   // Before Save writes over its file in a project with history: true to
   // write (unchanged outside Mitcad, or Save as New Version chosen, which
   // records a change made outside first), false for Save As, none to
-  // cancel.
-  std::optional<bool> askVersionConflict(const Project& project, const QString& path, const QString& author);
-  // Records the saved file as a version; returns what the status bar says
-  // and whether it is a problem ("Saved, but ...").
-  std::pair<QString, bool> recordVersion(const Project& project, const QString& path, QStringList paths,
-                                         const QString& message, const QString& author);
+  // cancel: by the user (`failure` left empty) or because the status could
+  // not be read or the change made outside not recorded (`failure` says
+  // so; mitcad#114).
+  std::optional<bool> askVersionConflict(const Project& project, const QString& path, const QString& author,
+                                         QString& failure);
+  // Records the saved file as a version. The displayed warning and the
+  // preservation are separate: a failed or skipped commit (`preserved`
+  // false) must stop an overwrite that requires the version (mitcad#114).
+  VersionRecord recordVersion(const Project& project, const QString& path, QStringList paths,
+                              const QString& message, const QString& author);
   // A file renamed outside Mitcad (m_renamedFrom): its rename recorded as a
   // version of its own while its content is as renamed; else the old path
   // goes with the next version (returned).
@@ -410,6 +467,40 @@ private:
   // Remote repositories (P12 remote, files/RemoteController.hpp): what the
   // controller asks the window about the open design.
   void createRemote();
+  // Edit locks (mitcad#89, files/MainWindowLocks.cpp, files/LockController):
+  // the controller of the open design's lock, and the window's read-only
+  // mode, which refuses every edit where it passes: the commands'
+  // availability (isAvailable), the model commands (command(): only those
+  // that change no design, such as isolation and the section analyses, and
+  // exporting), writing the design's file (writeFile), sketch mode and
+  // command panels.
+  void createLocks();
+  bool windowReadOnly() const;
+  // Whether a command is available in a read-only window: viewing,
+  // inspecting, exporting, files, projects and versions.
+  static bool readOnlyCommand(const CommandDef& def);
+  // Whether a model command changes nothing of the design (allowed in a
+  // read-only window).
+  static bool readOnlyModelCommand(const QString& name);
+  // In a read-only window: refuses `what` with the reason (status bar,
+  // log) and returns true; else false.
+  bool refuseReadOnly(const QString& what);
+  void readOnlyChanged();
+  // A read-only window shows a version of its design (the editor's, as
+  // fetched), the file and the view left as they are.
+  bool showLockedVersion(const QString& commit, QString& error);
+  // A read-only window's unsaved changes: saved as a new version of the
+  // file all the same (Sync's conflict dialog resolves them), or as a copy.
+  bool saveAsNewVersion();
+  // Save, Save As and closing in a read-only window: the unsaved changes
+  // kept from editing are asked about (Save as Copy, Save as New Version,
+  // Don't Save); nothing else is written. None: not read-only.
+  std::optional<bool> readOnlySave(bool closing);
+  // Live updates (mitcad#89, files/MainWindowLive.cpp): the live controller
+  // with the remote's and the indicator's ends; updateLive tells it the
+  // current project and the open design.
+  void createLive();
+  void updateLive();
 
   // Autosave (P8, files/MainWindowAutosave.cpp): the manager asks the
   // window about its document.
@@ -518,13 +609,29 @@ private:
   // The path the file had in the history when it was renamed outside
   // Mitcad (absolute), recorded with the next version.
   QString m_renamedFrom;
-  // A new project's folder (New Project): where Save As puts the design.
+  // A project's folder for an untitled design (New Design): where Save As
+  // puts it.
   QString m_projectDir;
-  QLabel* m_versionLabel = nullptr;
   QString m_loggedVersionStatus;
-  // The remote of the open design's project: sync, sending versions, its
-  // state in the status bar (P12 remote).
+  // The current project (mitcad#89) and its indicator.
+  ProjectState m_project;
+  ProjectIndicator* m_indicator = nullptr;
+  // Open Read-Only is opening a design: the lock controller takes no edit
+  // lock on it, and the window is read-only.
+  bool m_openingReadOnly = false;
+  // The open design's edit lock and the read-only mode (mitcad#89).
+  LockController* m_locks = nullptr;
+  // Save as New Version writes a read-only window's file all the same, and
+  // the editing that ends when the window turns read-only finishes.
+  bool m_writeAnyway = false;
+  // The next document installed keeps the camera (a read-only window
+  // following the editor's versions).
+  bool m_keepView = false;
+  // The remote of the current project: sync, sending versions, its state
+  // in the indicator (P12 remote).
   RemoteController* m_remote = nullptr;
+  // Live updates through an MQTT broker (mitcad#89).
+  LiveController* m_live = nullptr;
   bool m_changeNoted = false; // the first change since opening was told to it
   QMenu* m_recentMenu = nullptr;
   QPointer<F3dImport> m_import; // an .f3d import in progress

@@ -1205,6 +1205,52 @@ impl Kernel for OcctKernel {
             })
             .collect())
     }
+
+    // Definitions evaluated in parallel (the .f3d import, mitcad#95): the
+    // kernel holds no state; the geometry's state is per thread (its
+    // cancellation scope) or behind locks.
+
+    fn fork(&self) -> Option<Self> {
+        Some(OcctKernel)
+    }
+
+    // A shape's validity (the `.ipt` import's replayed bodies, mitcad#60).
+
+    fn is_valid(&self, shape: &Self::Shape) -> Result<bool, KernelError> {
+        exchange::ffi::shape_is_valid(occt(shape)?).map_err(failed)
+    }
+
+    // An operation's new faces (the .f3d import's geometric check,
+    // mitcad#138; analysis.rs).
+
+    fn new_faces(
+        &self,
+        before: &[&Self::Shape],
+        after: &Self::Shape,
+        count: usize,
+    ) -> Result<Vec<mitcad_model::NewFace>, KernelError> {
+        let faces = analysis::ffi::analysis_new_faces(&*shape_list(before)?, occt(after)?, count)
+            .map_err(failed)?;
+        Ok(faces
+            .into_iter()
+            .map(|f| mitcad_model::NewFace {
+                area: f.area,
+                points: f.points.as_chunks::<3>().0.to_vec(),
+            })
+            .collect())
+    }
+
+    // Measures of other programs' integration (the FreeCAD import's
+    // reference check, mitcad#139; query.rs).
+
+    fn fixed_point_properties(&self, shape: &Self::Shape) -> Result<MassProperties, KernelError> {
+        let props = query::ffi::fixed_point_properties(occt(shape)?).map_err(failed)?;
+        Ok(MassProperties {
+            volume: props.volume,
+            area: props.area,
+            center: props.center,
+        })
+    }
 }
 
 /// The name of a selection's sub-shape, empty for the whole body.

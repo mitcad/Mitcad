@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-mcp"
+description = "Local MCP stdio protocol for Mitcad document tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde_json.workspace = true

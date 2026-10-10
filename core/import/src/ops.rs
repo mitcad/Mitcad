@@ -7,7 +7,7 @@
 //! combine is found with the history: the bodies the next state changed
 //! are its target and tools; so are the faces a replace face replaced.
 
-use mitcad_f3d::design::ir::{Detail, Geometry, Reference, TimelineItem, Vec3};
+use mitcad_f3d::design::ir::{Detail, Fingerprint, Geometry, Reference, TimelineItem, Vec3};
 use mitcad_model::{BodyUid, Cylinder, FaceName, FeatureUid, Kernel, Plane};
 use serde_json::{Map, Value, json};
 
@@ -80,6 +80,9 @@ enum Copies {
         symmetric: bool,
         quantity: Option<i64>,
         axis: Option<Value>,
+        /// Whether the origin axes are guessed after `axis` (one from the
+        /// axis' stored line, mitcad#96).
+        origin_axes: bool,
     },
     Rectangular {
         distance: Value,
@@ -283,7 +286,7 @@ fn plane_geometry(plane: &Value) -> Option<(Vec3, Vec3)> {
     Some(([0.0; 3], normal))
 }
 
-impl<K: Kernel> Importer<'_, K> {
+impl<K: crate::ImportKernel> Importer<'_, K> {
     /// The volume the history shows the item at timeline `index` adding
     /// (negative: removing): its state against the one before.
     pub(crate) fn history_change(&mut self, index: i64) -> Option<f64> {
@@ -404,6 +407,7 @@ impl<K: Kernel> Importer<'_, K> {
                     )),
                     guess: true,
                     predicted: Some(added * copies),
+                    first: false,
                 };
                 let mut out = Vec::new();
                 if to_object {
@@ -421,12 +425,17 @@ impl<K: Kernel> Importer<'_, K> {
                     angle,
                     symmetric,
                     axis,
+                    origin_axes,
                     ..
                 } => {
-                    let axes = match axis {
-                        Some(a) => vec![a.clone()],
-                        None => vec![json!("z"), json!("x"), json!("y")],
-                    };
+                    let mut axes: Vec<Value> = axis.iter().cloned().collect();
+                    if axes.is_empty() || *origin_axes {
+                        for a in ["z", "x", "y"] {
+                            if !axes.contains(&json!(a)) {
+                                axes.push(json!(a));
+                            }
+                        }
+                    }
                     for q in &quantities {
                         for axis in &axes {
                             out.extend(candidate(
@@ -702,6 +711,7 @@ impl<K: Kernel> Importer<'_, K> {
                         )),
                         guess: true,
                         predicted: Some(volume),
+                        first: false,
                     });
                 }
             };
@@ -794,6 +804,7 @@ impl<K: Kernel> Importer<'_, K> {
                     )),
                     guess: true,
                     predicted: Some(sum),
+                    first: false,
                 });
             }
         }
@@ -819,20 +830,106 @@ impl<K: Kernel> Importer<'_, K> {
         self.value(&Some(r))
     }
 
+    /// The links of a combine's tools in another component than its
+    /// target's (mitcad#104): the occurrence paths to the tool's component
+    /// and to the target's, each placed once.
+    fn tool_links(&self, target: BodyUid, tools: &[String]) -> Result<Map<String, Value>, String> {
+        let assembly = self.doc.assembly();
+        let only_path = |c| match assembly.paths_to(c).as_slice() {
+            [path] => Ok(path
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("/")),
+            _ => Err(format!(
+                "a tool of another component than the target's, and {} is not placed once",
+                assembly.name(c)
+            )),
+        };
+        let own = self.doc.body_component(target);
+        let mut links = Map::new();
+        for tool in tools {
+            let Ok(uid) = tool.parse::<BodyUid>() else {
+                continue;
+            };
+            match (self.doc.body_component(uid), own) {
+                (Some(c), Some(own)) if c != own => {
+                    links.insert(
+                        tool.clone(),
+                        json!({"source": only_path(c)?, "target": only_path(own)?}),
+                    );
+                }
+                _ => {}
+            }
+        }
+        Ok(links)
+    }
+
     fn body_of(&self, r: &Reference) -> Option<BodyUid> {
         match r {
-            Reference::Body(fp) => refs::resolve_body(self.doc, fp),
+            Reference::Body(fp) => self.body_ref(fp),
             _ => None,
         }
     }
 
+    /// Pattern and mirror objects as decoded: without the fillets and
+    /// chamfers among the features (the copies of the other features carry
+    /// them where those made the edges they round), and with them where
+    /// there are any and all of them came in parametric (the pattern
+    /// repeats them on its copies, mitcad#105), true. Where the history
+    /// checks the item, without them first: repeating fillets on many
+    /// copies takes long, and most such items' states are the copies
+    /// without them (the fillets' edges are not on the copies); without a
+    /// history, with them first.
+    fn object_variants(&self, inputs: &[Reference]) -> Result<Vec<(Value, bool)>, String> {
+        let without = self.objects(inputs, false)?;
+        let mut out = vec![(without.clone(), false)];
+        if let Ok(with) = self.objects(inputs, true)
+            && with != without
+        {
+            if self.oracle.enabled {
+                out.push((with, true));
+            } else {
+                out.insert(0, (with, true));
+            }
+        }
+        Ok(out)
+    }
+
     /// Pattern and mirror objects: features, bodies or faces of one body.
-    fn objects(&self, inputs: &[Reference]) -> Result<Value, String> {
+    /// Fillets and chamfers among the features only `with_dressups` (each
+    /// with the features made for it, which must all be fillets and
+    /// chamfers), else left out (where there are others).
+    fn objects(&self, inputs: &[Reference], with_dressups: bool) -> Result<Value, String> {
         let mut features = Vec::new();
         let mut bodies = Vec::new();
         let mut faces: Vec<(BodyUid, String)> = Vec::new();
+        // Fillets and chamfers among the features change the edges of
+        // the others and leave no tool to copy: the copies of the others
+        // carry them where they made those edges (mitcad#96), or the
+        // pattern repeats them on its copies (mitcad#105).
+        let dependent = |r: &&Reference| {
+            matches!(r, Reference::Feature(f) if matches!(
+                f.object_type.as_deref(),
+                Some("FilletFeature" | "ChamferFeature")
+            ))
+        };
+        let kept: Vec<&Reference> = inputs.iter().filter(|r| !dependent(r)).collect();
+        let inputs = if kept.is_empty() || with_dressups {
+            inputs.iter().collect()
+        } else {
+            kept
+        };
         for r in inputs {
             match r {
+                Reference::Feature(f) if with_dressups && dependent(&r) => {
+                    let uids = f
+                        .timeline_index
+                        .flatten()
+                        .and_then(|i| self.dressups.get(&i))
+                        .ok_or("a patterned fillet or chamfer did not come in parametric")?;
+                    features.extend(uids.iter().map(ToString::to_string));
+                }
                 Reference::Feature(f) => {
                     let uid = f
                         .timeline_index
@@ -842,7 +939,7 @@ impl<K: Kernel> Importer<'_, K> {
                     features.push(uid.to_string());
                 }
                 Reference::Body(fp) => bodies.push(
-                    refs::resolve_body(self.doc, fp)
+                    self.body_ref(fp)
                         .ok_or("a body was not found in the replay")?
                         .to_string(),
                 ),
@@ -910,7 +1007,7 @@ impl<K: Kernel> Importer<'_, K> {
 
     /// A plane reference (`GeomRef`): origin plane, planar face, or a fixed
     /// plane from a construction plane's geometry.
-    fn plane_ref(&self, r: &Reference) -> Option<Value> {
+    pub(crate) fn plane_ref(&self, r: &Reference) -> Option<Value> {
         match r {
             Reference::ConstructionPlane(c) => match c.origin.clone().flatten().as_deref() {
                 Some(o @ ("XY" | "XZ" | "YZ")) => Some(json!(o.to_lowercase())),
@@ -943,7 +1040,10 @@ impl<K: Kernel> Importer<'_, K> {
     /// decoded from the streams).
     fn explicit_copies(&self, object_type: &str, d: &Map<String, Value>) -> bool {
         let get = |k: &str| d.get(k);
-        if self.objects(&references(get("inputEntities"))).is_err() {
+        if self
+            .objects(&references(get("inputEntities")), false)
+            .is_err()
+        {
             return false;
         }
         match object_type {
@@ -955,6 +1055,7 @@ impl<K: Kernel> Importer<'_, K> {
                 get("axis")
                     .and_then(reference)
                     .and_then(|r| self.axis_ref(&r))
+                    .or_else(|| decoded_line(get("_f3d_axis")))
                     .is_some()
                     && self.value_of(get("quantity")).is_some()
                     && self.value_of(get("totalAngle")).is_some()
@@ -985,6 +1086,13 @@ impl<K: Kernel> Importer<'_, K> {
             }
             new
         });
+        // Where the history checks the item, a pattern or mirror that
+        // repeats its fillets and chamfers comes after the guesses too: on
+        // large bodies its roundings take tens of seconds, and the guesses
+        // often give the state first (mitcad#105).
+        if self.oracle.enabled {
+            candidates.sort_by_key(|c| c.note.as_deref() == Some(DRESSED));
+        }
         Ok(candidates)
     }
 
@@ -1007,6 +1115,16 @@ impl<K: Kernel> Importer<'_, K> {
         if !self.oracle.enabled || !decoded.iter().any(|k| map.contains_key(*k)) {
             return explicit;
         }
+        // A combine's operation the `.ipt` decoder read from the record's
+        // layout (`_ipt_inputs`, mitcad#60) is not guessed: a guessed cut
+        // of a coil's body took gigabytes.
+        let operation = (object_type == "CombineFeature"
+            && map.get("_ipt_inputs").and_then(Value::as_bool) == Some(true))
+        .then(|| match map.get("operation").and_then(Value::as_str) {
+            Some(o) if o.starts_with("Cut") => "cut",
+            Some(o) if o.starts_with("Intersect") => "intersect",
+            _ => "join",
+        });
         let mut without = map;
         for k in decoded {
             without.remove(*k);
@@ -1042,7 +1160,22 @@ impl<K: Kernel> Importer<'_, K> {
         }
         let mut guessed = item.clone();
         guessed.detail = Some(Detail::typed(Some(object_type), without));
-        match (explicit, self.translate_op_inputs(object_type, &guessed)) {
+        let guesses = self
+            .translate_op_inputs(object_type, &guessed)
+            .map(|mut b| {
+                if let Some(o) = operation {
+                    b.retain(|c| c.defs[0]["operation"] == o);
+                }
+                b
+            })
+            .and_then(|b| {
+                if b.is_empty() {
+                    Err("no guess of its operation".to_owned())
+                } else {
+                    Ok(b)
+                }
+            });
+        match (explicit, guesses) {
             (Ok(mut a), Ok(b)) => {
                 a.extend(b);
                 Ok(a)
@@ -1066,8 +1199,14 @@ impl<K: Kernel> Importer<'_, K> {
             "CombineFeature" => {
                 let target = get("targetBody").and_then(reference);
                 let tools = references(get("toolBodies"));
+                let operation = match get("operation").and_then(Value::as_str) {
+                    Some(o) if o.starts_with("Cut") => "cut",
+                    Some(o) if o.starts_with("Intersect") => "intersect",
+                    Some(o) if o.starts_with("Join") => "join",
+                    _ => "",
+                };
                 if target.is_none() && tools.is_empty() {
-                    return self.combine_by_history();
+                    return self.combine_by_history(operation);
                 }
                 let target = target
                     .as_ref()
@@ -1078,18 +1217,23 @@ impl<K: Kernel> Importer<'_, K> {
                     .map(|r| self.body_of(r).map(|b| b.to_string()))
                     .collect::<Option<_>>()
                     .ok_or("a tool body was not found")?;
-                let operation = match get("operation").and_then(Value::as_str) {
-                    Some(o) if o.starts_with("Cut") => "cut",
-                    Some(o) if o.starts_with("Intersect") => "intersect",
-                    _ => "join",
+                let operation = if operation.is_empty() {
+                    "join"
+                } else {
+                    operation
                 };
                 // A new component's result is the target in the component
                 // the import put the item in (the dump's components, F6).
-                Ok(vec![Candidate::new(
-                    json!({"type": "combine", "target": target.to_string(),
+                let mut def = json!({"type": "combine", "target": target.to_string(),
                     "tools": tools, "operation": operation,
-                    "keep_tools": get("isKeepToolBodies").and_then(Value::as_bool).unwrap_or(false)}),
-                )])
+                    "keep_tools": get("isKeepToolBodies").and_then(Value::as_bool).unwrap_or(false)});
+                // Tools of another component than the target's (the file's
+                // assembly context) by their links (mitcad#104).
+                let links = self.tool_links(target, &tools)?;
+                if !links.is_empty() {
+                    def["tool_links"] = Value::Object(links);
+                }
+                Ok(vec![Candidate::new(def)])
             }
             // Without inputs, or with bodies the decoder named but the replay
             // lacks, the history suggests them.
@@ -1130,16 +1274,23 @@ impl<K: Kernel> Importer<'_, K> {
                         }
                         return Ok(out);
                     }
-                    "CircularPatternFeature" => Copies::Circular {
-                        angle: self
-                            .value_of(get("totalAngle"))
-                            .unwrap_or(json!(std::f64::consts::TAU)),
-                        symmetric: flag(item, "isSymmetric").unwrap_or(false),
-                        quantity: count("quantity"),
-                        axis: get("axis")
+                    "CircularPatternFeature" => {
+                        let entity = get("axis")
                             .and_then(reference)
-                            .and_then(|r| self.pattern_axis(&r)),
-                    },
+                            .and_then(|r| self.pattern_axis(&r));
+                        // The axis' stored line where its entity is not
+                        // found (mitcad#96), the origin axes after it.
+                        let line = decoded_line(get("_f3d_axis"));
+                        Copies::Circular {
+                            angle: self
+                                .value_of(get("totalAngle"))
+                                .unwrap_or(json!(std::f64::consts::TAU)),
+                            symmetric: flag(item, "isSymmetric").unwrap_or(false),
+                            quantity: count("quantity"),
+                            origin_axes: entity.is_none(),
+                            axis: entity.or(line),
+                        }
+                    }
                     _ => Copies::Rectangular {
                         distance: self
                             .value_of(get("distanceOne"))
@@ -1153,33 +1304,35 @@ impl<K: Kernel> Importer<'_, K> {
                 self.guessed_copies(item, copies, None)
             }
             "MirrorFeature" => {
-                let objects = self.objects(&references(get("inputEntities")))?;
+                let variants = self.object_variants(&references(get("inputEntities")))?;
                 let plane = get("mirrorPlane")
                     .and_then(reference)
                     .and_then(|r| self.plane_ref(&r))
                     .ok_or("the mirror plane was not decoded")?;
-                let def = |combine: bool| {
+                let def = |objects: &Value, combine: bool| {
                     json!({"type": "mirror", "objects": objects, "plane": plane,
                            "combine": combine, "compute": compute(item)})
                 };
-                Ok(match flag(item, "isCombine") {
-                    Some(combine) => vec![Candidate::new(def(combine))],
-                    // The stream decoder does not give it: the history
-                    // tells whether bodies were joined with their images.
-                    None => vec![
-                        Candidate::new(def(false)),
-                        Candidate {
-                            guess: true,
-                            ..Candidate::new(def(true))
-                        },
-                    ],
-                })
+                // Decoded (mitcad#96), the other way a guess after it; where
+                // the stream decoder does not give it, the history tells
+                // whether bodies were joined with their images.
+                let combine = flag(item, "isCombine").unwrap_or(false);
+                let mut out: Vec<Candidate> = variants
+                    .iter()
+                    .map(|(objects, dressed)| dressed_note(def(objects, combine), *dressed))
+                    .collect();
+                out.extend(variants.iter().map(|(objects, dressed)| Candidate {
+                    guess: true,
+                    ..dressed_note(def(objects, !combine), *dressed)
+                }));
+                Ok(out)
             }
             "CircularPatternFeature" => {
-                let objects = self.objects(&references(get("inputEntities")))?;
+                let variants = self.object_variants(&references(get("inputEntities")))?;
                 let axis = get("axis")
                     .and_then(reference)
                     .and_then(|r| self.axis_ref(&r))
+                    .or_else(|| decoded_line(get("_f3d_axis")))
                     .ok_or("the pattern axis was not decoded")?;
                 let quantity = self
                     .value_of(get("quantity"))
@@ -1187,15 +1340,21 @@ impl<K: Kernel> Importer<'_, K> {
                 let angle = self
                     .value_of(get("totalAngle"))
                     .ok_or("the angle was not decoded")?;
-                let mut def = json!({"type": "circular_pattern", "objects": objects, "axis": axis,
-                    "quantity": quantity, "angle": angle,
-                    "symmetric": flag(item, "isSymmetric").unwrap_or(false),
-                    "compute": compute(item)});
-                suppressed(&mut def, get("suppressedElementsIds"));
-                Ok(vec![Candidate::new(def)])
+                Ok(variants
+                    .iter()
+                    .map(|(objects, dressed)| {
+                        let mut def = json!({"type": "circular_pattern", "objects": objects,
+                            "axis": axis, "quantity": quantity, "angle": angle,
+                            "symmetric": flag(item, "isSymmetric").unwrap_or(false),
+                            "compute": compute(item)});
+                        suppressed(&mut def, get("suppressedElementsIds"));
+                        dressed_note(def, *dressed)
+                    })
+                    .collect())
             }
             "RectangularPatternFeature" => {
-                let objects = self.objects(&references(get("inputEntities")))?;
+                let variants = self.object_variants(&references(get("inputEntities")))?;
+                let (objects, _) = variants.last().expect("the objects without dressups");
                 let direction = |entity: &str,
                                  vector: &str,
                                  quantity: &str,
@@ -1246,7 +1405,7 @@ impl<K: Kernel> Importer<'_, K> {
                         _ => Err("direction one was not decoded".to_owned()),
                     };
                 };
-                let mut def = json!({"type": "rectangular_pattern", "objects": objects,
+                let mut def = json!({"type": "rectangular_pattern",
                 "direction1": one, "compute": compute(item),
                 "distance_type": match get("patternDistanceType").and_then(Value::as_str) {
                     Some(t) if t.starts_with("Extent") => "extent",
@@ -1262,7 +1421,14 @@ impl<K: Kernel> Importer<'_, K> {
                     def["direction2"] = two;
                 }
                 suppressed(&mut def, get("suppressedElementsIds"));
-                Ok(vec![Candidate::new(def)])
+                Ok(variants
+                    .iter()
+                    .map(|(objects, dressed)| {
+                        let mut def = def.clone();
+                        def["objects"] = objects.clone();
+                        dressed_note(def, *dressed)
+                    })
+                    .collect())
             }
             "ShellFeature" => {
                 let inputs = references(get("inputEntities"));
@@ -1276,7 +1442,9 @@ impl<K: Kernel> Importer<'_, K> {
                             body = Some(b);
                             faces.push(f.to_string());
                         }
-                        Reference::Body(_) => body = self.body_of(r),
+                        Reference::Body(fp) => {
+                            body = self.body_of(r).or_else(|| self.only_solid(fp));
+                        }
                         _ => {}
                     }
                 }
@@ -1290,6 +1458,14 @@ impl<K: Kernel> Importer<'_, K> {
                 }
                 if let Some(v) = self.value_of(get("outsideThickness")) {
                     def["outside"] = v;
+                }
+                // The `.ipt` import gives the number of faces removed, not
+                // the faces: the history gives them (mitcad#60).
+                let removed = get("_ipt_removed_faces").and_then(Value::as_u64);
+                if def["faces"].as_array().is_some_and(Vec::is_empty)
+                    && removed.is_some_and(|n| n > 0)
+                {
+                    return self.shell_by_history(body, def);
                 }
                 Ok(vec![Candidate::new(def)])
             }
@@ -1325,6 +1501,7 @@ impl<K: Kernel> Importer<'_, K> {
                     note: None,
                     guess: false,
                     predicted: None,
+                    first: false,
                 }])
             }
             "MoveFeature" => {
@@ -1376,11 +1553,26 @@ impl<K: Kernel> Importer<'_, K> {
                     }
                     _ => return Err("the splitting tool was not decoded".to_owned()),
                 };
-                Ok(vec![Candidate::new(
-                    json!({"type": "split_body", "bodies": bodies, "tool": tool,
-                    "extend": flag(item, "isSplittingToolExtended").unwrap_or(true)}),
-                )])
+                let extend = flag(item, "isSplittingToolExtended").unwrap_or(true);
+                let mut candidates = vec![Candidate::new(
+                    json!({"type": "split_body", "bodies": bodies, "tool": tool, "extend": extend}),
+                )];
+                // The file's split leaves a selected body the tool does not
+                // divide as it is, Mitcad's fails: each body alone after
+                // (mitcad#96).
+                if bodies.len() > 1 {
+                    for b in &bodies {
+                        let mut c = Candidate::new(
+                            json!({"type": "split_body", "bodies": [b], "tool": tool, "extend": extend}),
+                        )
+                        .with_note("only the body the tool divides");
+                        c.guess = true;
+                        candidates.push(c);
+                    }
+                }
+                Ok(candidates)
             }
+            "SplitFaceFeature" => self.split_face(&other),
             "HoleFeature" => self.hole(&other),
             "ThreadFeature" => self.thread(&other),
             "ReplaceFaceFeature" => self.replace_face(&other),
@@ -1430,16 +1622,30 @@ impl<K: Kernel> Importer<'_, K> {
             .map(|p| p.into_iter().map(mm3).collect())
             .unwrap_or_else(|| vec![at]);
         let def = self.hole_def(d, body, &face.to_string(), &points, kind)?;
-        Ok(self
-            .hole_variants(d, vec![def])?
-            .into_iter()
-            .map(|(defs, note)| Candidate {
-                defs,
-                note,
-                guess: false,
-                predicted: None,
-            })
-            .collect())
+        // A hole through all whose depth the file keeps (a lead, mitcad#96):
+        // through all first, the history to check it.
+        let mut defs = Vec::new();
+        if through_all_lead(d) && def["extent"]["type"] == "distance" {
+            let mut all = def.clone();
+            all["extent"] = json!({"type": "through_all"});
+            defs.push((all, true));
+        }
+        defs.push((def, false));
+        let mut out = Vec::new();
+        for (def, guess) in defs {
+            out.extend(
+                self.hole_variants(d, vec![def])?
+                    .into_iter()
+                    .map(|(defs, note)| Candidate {
+                        defs,
+                        note,
+                        guess,
+                        predicted: None,
+                        first: false,
+                    }),
+            );
+        }
+        Ok(out)
     }
 
     /// A hole from the history: each piece of material the item's state
@@ -1551,7 +1757,12 @@ impl<K: Kernel> Importer<'_, K> {
             json!({"_type": "ThroughAllExtentDefinition"}),
         );
         let mut last_error = None;
-        for through in [false, true] {
+        let order = if through_all_lead(d) {
+            [true, false]
+        } else {
+            [false, true]
+        };
+        for through in order {
             let d = if through { &through_all } else { d };
             for groups in &placements {
                 for kind in &kinds {
@@ -1597,6 +1808,7 @@ impl<K: Kernel> Importer<'_, K> {
                                 note: Some(note),
                                 guess: true,
                                 predicted: None,
+                                first: false,
                             };
                             candidates.push(((set, variant), c));
                         }
@@ -1835,8 +2047,10 @@ impl<K: Kernel> Importer<'_, K> {
             let Reference::Face(fp) = r else {
                 return Err("a threaded face of another kind".to_owned());
             };
-            let (body, face) =
-                refs::resolve_face(self.doc, fp).ok_or("a threaded face was not found")?;
+            // By a point on it, or by the thread's ends (`.ipt` threads).
+            let (body, face) = refs::resolve_face(self.doc, fp)
+                .or_else(|| refs::resolve_cylinder_through(self.doc, fp))
+                .ok_or("a threaded face was not found")?;
             let shape = self
                 .doc
                 .body_shape(body)
@@ -1961,6 +2175,7 @@ impl<K: Kernel> Importer<'_, K> {
                 note: note.clone(),
                 guess: false,
                 predicted: None,
+                first: false,
             });
         }
         if threaded.iter().any(|t| t.4.is_some()) {
@@ -2003,6 +2218,7 @@ impl<K: Kernel> Importer<'_, K> {
                 note: Some(with("its faces sized to the thread's diameter")),
                 guess: false,
                 predicted: sized_change,
+                first: false,
             });
             // Or the tube of material between the radii (a little wider on
             // the face's side) along the face, cut from or joined to the
@@ -2046,6 +2262,7 @@ impl<K: Kernel> Importer<'_, K> {
                 note: Some(with("its faces sized to the thread's diameter by a tube")),
                 guess: false,
                 predicted: sized_change,
+                first: false,
             });
         }
         if modelled.is_none() {
@@ -2055,6 +2272,7 @@ impl<K: Kernel> Importer<'_, K> {
                 note,
                 guess: false,
                 predicted: sizes.then_some(0.0),
+                first: false,
             });
         }
         Ok(candidates)
@@ -2264,8 +2482,9 @@ impl<K: Kernel> Importer<'_, K> {
     }
 
     /// A combine the dump does not describe (the stream decoder): the
-    /// bodies the next history states changed are its target and tools.
-    fn combine_by_history(&mut self) -> Result<Vec<Candidate>, String> {
+    /// bodies the next history states changed are its target and tools;
+    /// the decoded `operation` (when not empty) first (mitcad#96).
+    fn combine_by_history(&mut self, operation: &str) -> Result<Vec<Candidate>, String> {
         if !self.oracle.enabled {
             return Err("its bodies were not decoded (no history to find them)".to_owned());
         }
@@ -2332,15 +2551,23 @@ impl<K: Kernel> Importer<'_, K> {
                     push(target, tools, false);
                 }
             }
-            // Tools kept: one changed body, any other body as the tool.
+            // Tools kept: one changed body, any other body as the tool;
+            // then consumed (a tool the replay has in another place than
+            // the history, so that it did not count as changed).
             if changed.len() == 1 {
                 for &tool in &others {
                     push(changed[0], vec![tool], true);
+                }
+                for &tool in &others {
+                    push(changed[0], vec![tool], false);
                 }
             }
         }
         if candidates.is_empty() {
             return Err("no body changes in the next history states".to_owned());
+        }
+        if !operation.is_empty() {
+            candidates.sort_by_key(|c| c.defs[0]["operation"] != operation);
         }
         Ok(candidates)
     }
@@ -2509,11 +2736,294 @@ impl<K: Kernel> Importer<'_, K> {
         }
         Ok(candidates)
     }
+
+    /// A split face's tools (`splittingTool`): sketch profiles as the
+    /// curves around the regions they select (the regions of the same area
+    /// and centroid), then the whole sketch; a construction plane; a face.
+    fn split_face_tools(&mut self, d: &Map<String, Value>) -> Result<Vec<Value>, String> {
+        let tools = references(d.get("splittingTool"));
+        match tools.first() {
+            Some(Reference::Profile(p)) => {
+                let index = p
+                    .sketch_timeline_index
+                    .flatten()
+                    .ok_or("the tool's sketch was not decoded")?;
+                let uid = self
+                    .sketches
+                    .get(&index)
+                    .map(|s| s.uid)
+                    .ok_or("the tool's sketch was not imported")?;
+                let mut out = Vec::new();
+                let output = self
+                    .doc
+                    .sketch_output(uid)
+                    .ok_or("the tool's sketch did not evaluate")?;
+                // Each profile's region by its area and centroid (cm², cm),
+                // as `Importer::region_sets` matches them.
+                let mut curves: Vec<String> = Vec::new();
+                let mut all = true;
+                for t in &tools {
+                    let Reference::Profile(p) = t else {
+                        all = false;
+                        continue;
+                    };
+                    let (Some(area), Some(centroid)) = (p.area, p.centroid) else {
+                        all = false;
+                        continue;
+                    };
+                    let area = area * 100.0;
+                    let c = [mm(centroid[0]), mm(centroid[1])];
+                    let tol = 1e-3 * area.sqrt().max(1.0);
+                    let found = output.region_info.iter().find(|r| {
+                        (r.area - area).abs() <= 1e-3 * area.abs().max(1e-6)
+                            && (r.centroid[0] - c[0]).hypot(r.centroid[1] - c[1]) <= tol
+                    });
+                    let Some(r) = found else {
+                        all = false;
+                        continue;
+                    };
+                    for s in r.profile.key.segments() {
+                        let c = s.curve.to_string();
+                        if !curves.contains(&c) {
+                            curves.push(c);
+                        }
+                    }
+                }
+                if all && !curves.is_empty() {
+                    out.push(json!({"sketch": uid.to_string(), "curves": curves}));
+                }
+                out.push(json!({"sketch": uid.to_string()}));
+                Ok(out)
+            }
+            Some(r @ Reference::ConstructionPlane(_)) => Ok(vec![
+                self.plane_ref(r)
+                    .ok_or("the splitting plane was not decoded")?,
+            ]),
+            Some(Reference::Face(fp)) => {
+                let (b, f) =
+                    refs::resolve_face(self.doc, fp).ok_or("the splitting face was not found")?;
+                Ok(vec![json!({"body": b.to_string(), "face": f.to_string()})])
+            }
+            _ => Err("its splitting tool was not decoded".to_owned()),
+        }
+    }
+
+    /// A split face (the `.ipt` import's, mitcad#60). Its faces are not
+    /// decoded: they are the faces of the body a next history state
+    /// changed (the decoded `body` when there is one) that the state no
+    /// longer has whole, no face of its body there of the same surface and
+    /// area.
+    fn split_face(&mut self, d: &Map<String, Value>) -> Result<Vec<Candidate>, String> {
+        let tools = self.split_face_tools(d)?;
+        if !self.oracle.enabled {
+            return Err("its faces were not decoded (no history to find them)".to_owned());
+        }
+        let only = d
+            .get("body")
+            .and_then(reference)
+            .and_then(|r| self.body_of(&r));
+        let kernel = self.doc.kernel();
+        let bodies: Vec<(BodyUid, K::Shape, Option<Sig>)> = self
+            .doc
+            .bodies()
+            .iter()
+            .filter(|b| only.is_none_or(|o| o == b.uid))
+            .map(|b| (b.uid, b.shape.clone(), Sig::of(kernel, b.shape)))
+            .collect();
+        let mut candidates: Vec<Candidate> = Vec::new();
+        let mut last_error = None;
+        for q in self.lookahead(3) {
+            let state: Vec<(crate::StoredBody<K::Shape>, Sig)> = match self.oracle.state(kernel, q)
+            {
+                Ok(s) => s.to_vec(),
+                Err(e) => {
+                    last_error = Some(e);
+                    continue;
+                }
+            };
+            let mut used = vec![false; state.len()];
+            let mut changed = Vec::new();
+            for (uid, shape, sig) in &bodies {
+                let Some(sig) = sig else { continue };
+                if let Some(j) = (0..state.len()).find(|&j| !used[j] && state[j].1.same(sig)) {
+                    used[j] = true;
+                } else {
+                    changed.push((*uid, shape, *sig));
+                }
+            }
+            if crate::tracing() {
+                eprintln!(
+                    "import: split face: state {q}: {} of {} bodies changed, {} stored",
+                    changed.len(),
+                    bodies.len(),
+                    state.len()
+                );
+            }
+            for (uid, shape, sig) in changed {
+                // The same solid with its faces split: the state's body of
+                // the same measures.
+                let Some(j) =
+                    (0..state.len()).find(|&j| !used[j] && state[j].1.distance(&sig) <= RELATIVE)
+                else {
+                    continue;
+                };
+                let (Ok(mine), Ok(stored)) = (kernel.faces(shape), kernel.faces(&state[j].0.shape))
+                else {
+                    continue;
+                };
+                if crate::tracing() {
+                    eprintln!(
+                        "import: split face: state {q}: {} faces of {uid} against {} stored",
+                        mine.len(),
+                        stored.len()
+                    );
+                }
+                // A small piece cut off a large face leaves it almost its
+                // area: a tight tolerance first, then a looser one for
+                // replayed faces that differ from the stored ones a little.
+                for tolerance in [1e-8, 1e-5] {
+                    // Each stored face stands for one face (faces of the
+                    // same area, as opposite sides, are told apart so).
+                    let mut taken = vec![false; stored.len()];
+                    let mut faces: Vec<String> = Vec::new();
+                    for f in &mine {
+                        let off = |k: usize| (stored[k].area - f.area).abs();
+                        let near = (0..stored.len())
+                            .filter(|&k| {
+                                !taken[k]
+                                    && stored[k].surface == f.surface
+                                    && off(k) <= tolerance * f.area.abs().max(1e-6)
+                            })
+                            .min_by(|&a, &b| off(a).total_cmp(&off(b)));
+                        match near {
+                            Some(k) => taken[k] = true,
+                            None => faces.extend(f.names.first().cloned()),
+                        }
+                    }
+                    if faces.is_empty() {
+                        continue;
+                    }
+                    for tool in &tools {
+                        let def = json!({"type": "split_face", "body": uid.to_string(),
+                                     "faces": faces, "tool": tool});
+                        if !candidates.iter().any(|c| c.defs[0] == def) {
+                            let mut c = Candidate::new(def);
+                            c.guess = true;
+                            c.note = Some("the faces split found with the history".to_owned());
+                            candidates.push(c);
+                        }
+                    }
+                }
+            }
+        }
+        if candidates.is_empty() {
+            return Err(last_error.unwrap_or_else(|| {
+                "its faces were not decoded, and no next history state split faces".to_owned()
+            }));
+        }
+        Ok(candidates)
+    }
+
+    /// A body reference that names nothing to find it by (no producer,
+    /// name or measures: a body of the `.ipt` import's base features) is
+    /// the replay's only solid, when it has one.
+    fn only_solid(&self, fp: &Fingerprint) -> Option<BodyUid> {
+        let anything = fp.name.is_some()
+            || fp.volume.is_some()
+            || fp.f3d.as_ref().is_some_and(|f| {
+                f.producer.is_some() || f.edge_points.as_ref().is_some_and(|p| !p.is_empty())
+            });
+        if anything {
+            return None;
+        }
+        let kernel = self.doc.kernel();
+        let solids: Vec<BodyUid> = self
+            .doc
+            .bodies()
+            .iter()
+            .filter(|b| matches!(kernel.body_kind(b.shape), Ok(mitcad_model::BodyKind::Solid)))
+            .map(|b| b.uid)
+            .collect();
+        match solids[..] {
+            [only] => Some(only),
+            _ => None,
+        }
+    }
+
+    /// A shell whose removed faces are not decoded (the `.ipt` import's,
+    /// mitcad#60): the faces of its body that a next history state no
+    /// longer has (an opening where each was), as for a replace face.
+    fn shell_by_history(&mut self, body: BodyUid, def: Value) -> Result<Vec<Candidate>, String> {
+        if !self.oracle.enabled {
+            return Err("its faces were not decoded (no history to find them)".to_owned());
+        }
+        let shape = self
+            .doc
+            .body_shape(body)
+            .ok_or("the shelled body was not found")?
+            .clone();
+        let mut candidates: Vec<Candidate> = Vec::new();
+        let mut last_error = None;
+        for q in self.lookahead(3) {
+            let kernel = self.doc.kernel();
+            let state = match self.oracle.state(kernel, q) {
+                Ok(s) => s.to_vec(),
+                Err(e) => {
+                    last_error = Some(e);
+                    continue;
+                }
+            };
+            let after: Vec<&K::Shape> = state.iter().map(|(b, _)| &b.shape).collect();
+            // Every point of a removed face off the state's faces, else
+            // most of them (those near its edges can lie on the wall's
+            // end).
+            for share in [1.0, 0.5] {
+                let lost = match refs::lost_faces_by(kernel, &shape, &after, share) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        last_error = Some(e);
+                        continue;
+                    }
+                };
+                if lost.is_empty() {
+                    continue;
+                }
+                let mut d = def.clone();
+                d["faces"] = json!(lost.iter().map(ToString::to_string).collect::<Vec<_>>());
+                if !candidates.iter().any(|c| c.defs[0] == d) {
+                    let mut c = Candidate::new(d);
+                    c.guess = true;
+                    c.note = Some("the faces removed found with the history".to_owned());
+                    candidates.push(c);
+                }
+            }
+        }
+        if candidates.is_empty() {
+            return Err(last_error.unwrap_or_else(|| {
+                "its faces were not decoded, and no next history state lost faces".to_owned()
+            }));
+        }
+        Ok(candidates)
+    }
 }
 
 /// A modelled thread's diameters from the dump's ThreadInfo (centimetres):
 /// the major, minor and pitch diameters in millimetres, when all are given
 /// and in order.
+/// The note of a pattern or mirror that repeats its fillets and chamfers.
+const DRESSED: &str = "its fillets and chamfers repeated on the copies";
+
+/// A pattern's or mirror's candidate; one whose objects have the fillets
+/// and chamfers among them says so (mitcad#105).
+fn dressed_note(def: Value, dressed: bool) -> Candidate {
+    let candidate = Candidate::new(def);
+    if dressed {
+        candidate.with_note(DRESSED)
+    } else {
+        candidate
+    }
+}
+
 fn thread_diameters(info: Option<&Map<String, Value>>) -> Option<Value> {
     let info = info?;
     let get = |key: &str| info.get(key).and_then(Value::as_f64).map(mm);
@@ -2696,6 +3206,29 @@ fn axis_starts<K: Kernel>(
         }
     }
     (!found.is_empty()).then_some(found)
+}
+
+/// A pattern axis from the line its direction input stores
+/// (`_f3d_axis`: origin in cm and unit direction, mitcad#96): an origin
+/// axis when it is one, else a fixed axis.
+fn decoded_line(v: Option<&Value>) -> Option<Value> {
+    let origin: Vec3 = serde_json::from_value(v?.get("origin")?.clone()).ok()?;
+    let direction = geom::unit(serde_json::from_value(v?.get("direction")?.clone()).ok()?)?;
+    let origin = mm3(origin);
+    for (name, a) in AXES {
+        let along = geom::dot(direction, a).abs();
+        let off = geom::norm(geom::cross(origin, a));
+        if (along - 1.0).abs() < 1e-9 && off < 1e-3 {
+            return Some(json!(name));
+        }
+    }
+    Some(json!({"origin": origin, "direction": direction}))
+}
+
+/// Whether the decoder found a hole's through-all flag set while its extent
+/// is the depth the file keeps (`_f3d_through_all`, mitcad#96).
+fn through_all_lead(d: &Map<String, Value>) -> bool {
+    d.get("_f3d_through_all").and_then(Value::as_bool) == Some(true)
 }
 
 /// A fixed axis from a construction axis' line geometry.

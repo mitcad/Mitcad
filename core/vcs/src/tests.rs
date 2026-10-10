@@ -20,6 +20,10 @@ mod remote;
 mod sync;
 // Component libraries and the community library (mitcad#64, mitcad#63).
 mod library;
+// Local and Cloud projects (mitcad#89).
+mod projects;
+// Edit locks (mitcad#89).
+mod locks;
 
 /// A fresh folder in the temporary directory, removed afterwards.
 struct Scratch(PathBuf);
@@ -412,6 +416,124 @@ fn brep_files_nothing_refers_to_are_removed() {
         .unwrap();
     assert!(old.load_warnings().is_empty(), "{:?}", old.load_warnings());
     assert_eq!(bodies(&mut old).len(), 3);
+}
+
+#[test]
+fn project_extension_casing_preserves_store_history_and_restore() {
+    for extension in ["mitcad", "MITCAD", "MiTcAd"] {
+        let scratch = Scratch::new("extension-store");
+        let (repo, mut doc, original) = project(&scratch);
+        let part = repo.root().join(format!("part.{extension}"));
+        if part != original {
+            fs::rename(&original, &part).unwrap();
+        }
+        let first = repo
+            .commit(std::slice::from_ref(&part), "First", &author())
+            .unwrap()
+            .commit
+            .unwrap();
+        for data in ["6 bolt", "4 wedge"] {
+            assert!(tree_files(&repo).contains(&brep_file(data)));
+            assert!(repo.root().join(brep_file(data)).is_file());
+        }
+        let info = crate::projects::inspect_folder(repo.root()).unwrap();
+        assert_eq!(info.designs[0].path, format!("part.{extension}"));
+        let mut recorded = repo
+            .load_version(&first, &part, MockKernel::default())
+            .unwrap();
+        assert!(recorded.load_warnings().is_empty());
+        assert_eq!(bodies(&mut recorded), bodies(&mut doc));
+        doc.command(r#"{"cmd": "delete_feature", "uid": "F3"}"#)
+            .unwrap();
+        doc.save_file(&part, FileFormat::Auto).unwrap();
+        repo.commit(std::slice::from_ref(&part), "Remove bolt", &author())
+            .unwrap();
+        assert!(!repo.root().join(brep_file("6 bolt")).exists());
+        assert!(tree_files(&repo).contains(&brep_file("4 wedge")));
+        repo.restore(&part, &first, None, &author()).unwrap();
+        let mut restored = Document::load_project(&part, MockKernel::default()).unwrap();
+        assert!(restored.load_warnings().is_empty());
+        assert_eq!(bodies(&mut restored), bodies(&mut design()));
+        let history = repo.history(&part).unwrap();
+        assert_eq!(history.len(), 3);
+        let summaries = repo.summaries(&history);
+        assert_eq!(summaries.len(), 3);
+        assert!(summaries[0].is_some());
+        assert!(summaries.iter().flatten().all(Result::is_ok));
+    }
+}
+
+#[test]
+fn an_external_case_only_rename_keeps_referenced_geometry() {
+    if !has_git() {
+        return;
+    }
+    let scratch = Scratch::new("case-rename-store");
+    let (repo, mut doc, original) = project(&scratch);
+    repo.commit(std::slice::from_ref(&original), "First", &author())
+        .unwrap();
+    // An intermediate filename also works on case-insensitive filesystems.
+    git(repo.root(), &["mv", "part.mitcad", "temporary.mitcad"]).unwrap();
+    git(repo.root(), &["mv", "temporary.mitcad", "part.MITCAD"]).unwrap();
+    git(repo.root(), &["commit", "-m", "Case-only rename"]).unwrap();
+    let part = repo.root().join("part.MITCAD");
+    set_parameter(&mut doc, "d3", 25.0);
+    doc.save_file(&part, FileFormat::Auto).unwrap();
+    let outcome = repo
+        .commit(std::slice::from_ref(&part), "Save uppercase", &author())
+        .unwrap();
+    assert!(outcome.removed.is_empty(), "{outcome:?}");
+    assert!(outcome.deleted.is_empty(), "{outcome:?}");
+    for data in ["6 bolt", "4 wedge"] {
+        assert!(tree_files(&repo).contains(&brep_file(data)));
+        assert!(repo.root().join(brep_file(data)).is_file());
+    }
+    let mut reopened = Document::load_project(&part, MockKernel::default()).unwrap();
+    assert!(reopened.load_warnings().is_empty());
+    assert_eq!(bodies(&mut reopened), bodies(&mut doc));
+    let history = repo.history(&part).unwrap();
+    assert_eq!(history.len(), 3);
+    assert_eq!(history[1].renamed_from.as_deref(), Some("part.mitcad"));
+}
+
+#[test]
+fn unrecorded_uppercase_designs_protect_referenced_store_files() {
+    for extension in ["MITCAD", "MiTcAd"] {
+        let scratch = Scratch::new("unrecorded-case-store");
+        let (repo, mut doc, part) = project(&scratch);
+        let first = repo
+            .commit(std::slice::from_ref(&part), "First", &author())
+            .unwrap()
+            .commit
+            .unwrap();
+        let draft = repo.root().join(format!("drafts/other.{extension}"));
+        doc.save_file(&draft, FileFormat::Auto).unwrap();
+        doc.command(r#"{"cmd": "delete_feature", "uid": "F3"}"#)
+            .unwrap();
+        doc.save_file(&part, FileFormat::Auto).unwrap();
+        let removed = repo
+            .commit(std::slice::from_ref(&part), "Remove bolt", &author())
+            .unwrap();
+        assert!(removed.removed.contains(&brep_file("6 bolt")));
+        assert!(removed.deleted.is_empty(), "{removed:?}");
+        assert!(repo.root().join(brep_file("6 bolt")).is_file());
+        let mut draft_doc = Document::load_project(&draft, MockKernel::default()).unwrap();
+        assert!(draft_doc.load_warnings().is_empty());
+        assert_eq!(bodies(&mut draft_doc).len(), 3);
+        fs::remove_file(&draft).unwrap();
+        repo.restore(&part, &first, None, &author()).unwrap();
+        doc.save_file(&part, FileFormat::Auto).unwrap();
+        let removed = repo
+            .commit(
+                std::slice::from_ref(&part),
+                "Remove unreferenced bolt",
+                &author(),
+            )
+            .unwrap();
+        assert!(removed.deleted.contains(&brep_file("6 bolt")));
+        assert!(!repo.root().join(brep_file("6 bolt")).exists());
+        assert!(repo.root().join(brep_file("4 wedge")).is_file());
+    }
 }
 
 #[test]
@@ -1217,4 +1339,25 @@ fn measure_a_large_project() {
         "an older version read with its B-rep data: {:?}",
         start.elapsed()
     );
+}
+
+#[test]
+fn the_project_id_is_the_first_commit_of_the_history() {
+    // Live updates (mitcad#89): a project's topics are under its first
+    // commit, the same in every clone.
+    let scratch = Scratch::new("project-id");
+    let (repo, _, part) = project(&scratch);
+    let first = repo.head_commit().unwrap().unwrap().to_string();
+    let answer = |repo: &ProjectRepo| -> serde_json::Value {
+        serde_json::from_str(&repo.command(r#"{"cmd": "project_id"}"#).unwrap()).unwrap()
+    };
+    assert_eq!(answer(&repo)["project"], first.as_str());
+    repo.commit(std::slice::from_ref(&part), "", &author())
+        .unwrap();
+    assert_ne!(repo.head_commit().unwrap().unwrap().to_string(), first);
+    assert_eq!(answer(&repo)["project"], first.as_str());
+    if has_git() {
+        let root = git(repo.root(), &["rev-list", "--max-parents=0", "HEAD"]).unwrap();
+        assert_eq!(root.trim(), first);
+    }
 }

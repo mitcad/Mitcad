@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-// The main window's File menu (U6): New, New Project (P12d,
-// MainWindowVersions.cpp), Open (projects, and any file Import takes, as a
-// new document), Open Recent, Recover Documents (P8c,
-// MainWindowAutosave.cpp), Close, Save, Save As, Save Version and Start
-// Version History (P12d), Version History (P12e), Import, Export, Insert
-// Component; the INSERT
+// The main window's File menu (U6): New, New Project, Open Read-Only, Open
+// Project, Open from Cloud (mitcad#89, MainWindowProjects.cpp), Open (designs,
+// and any file Import takes, as a new document), Open Recent, Recover
+// Documents (P8c, MainWindowAutosave.cpp), Close, Save, Save As, Save
+// Version (P12d), Version History (P12e), Sync, Project Settings, Import,
+// Export, Insert Component; the INSERT
 // group's Insert Mesh, Insert DXF and Insert Component; files dropped on
 // the window.
 #include "../MainWindow.hpp"
@@ -107,12 +107,13 @@ void MainWindow::registerFileCommands() {
   m_registry->add(component);
   CommandDef importDef = def("file.import", tr("Import..."), "import",
                              tr("STEP, IGES, BRep, STL, OBJ, DXF or another design into this one; an .f3d "
-                                "design as a new document with its history, a FreeCAD document or an .ipt "
-                                "part with its bodies"),
+                                "design as a new document with its history, a FreeCAD document, an .ipt "
+                                "part or an .iam assembly"),
                              [this] { importFile(); });
   importDef.keywords = {QStringLiteral("step"),    QStringLiteral("iges"),  QStringLiteral("brep"),
                         QStringLiteral("f3d"),     QStringLiteral("f3z"),   QStringLiteral("freecad"),
-                        QStringLiteral("fcstd"),   QStringLiteral("ipt"),   QStringLiteral("open")};
+                        QStringLiteral("fcstd"),   QStringLiteral("ipt"),   QStringLiteral("iam"),
+                        QStringLiteral("open")};
   m_registry->add(importDef);
   CommandDef exportDef = def("file.export", tr("Export..."), "export",
                              tr("Bodies to STEP, IGES, STL, OBJ or BRep; a sketch to DXF"),
@@ -149,46 +150,36 @@ void MainWindow::createFileMenu() {
     action->setShortcut(shortcut);
     return action;
   };
+  const auto command = [this, file](const char* id, const QString& text) {
+    QAction* action = m_registry->action(QString::fromLatin1(id));
+    action->setText(text);
+    file->addAction(action);
+  };
   add(tr("&New"), QKeySequence::New, &MainWindow::newDocument);
-  // Projects with version history (P12d).
-  QAction* project = m_registry->action(QStringLiteral("file.new_project"));
-  project->setText(tr("New &Project..."));
-  file->addAction(project);
+  // Local and Cloud projects (P12d, mitcad#89).
+  command("file.new_project", tr("New &Project..."));
   add(tr("&Open..."), QKeySequence::Open, &MainWindow::openDocument);
+  command("file.open_read_only", tr("Open Rea&d-Only..."));
+  command("file.open_project", tr("Open Pro&ject..."));
+  command("file.open_remote", tr("Open from C&loud..."));
   m_recentMenu = file->addMenu(tr("Open &Recent"));
   connect(m_recentMenu, &QMenu::aboutToShow, this, &MainWindow::updateRecentMenu);
   updateRecentMenu();
-  QAction* recover = m_registry->action(QStringLiteral("file.recover"));
-  recover->setText(tr("Recover &Documents..."));
-  file->addAction(recover);
+  command("file.recover", tr("Recover Doc&uments..."));
   add(tr("&Close"), QKeySequence(Qt::CTRL | Qt::Key_W), &MainWindow::closeDocument);
   file->addSeparator();
   add(tr("&Save"), QKeySequence::Save, &MainWindow::save);
   // QKeySequence::SaveAs has no key on Windows.
   add(tr("Save &As..."), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S), &MainWindow::saveAs);
-  // Versions (P12d): Save records one in a project with version history;
-  // Save Version with a description; Version History (P12e) lists them.
-  QAction* version = m_registry->action(QStringLiteral("file.save_version"));
-  version->setText(tr("Save &Version..."));
-  file->addAction(version);
-  QAction* history = m_registry->action(QStringLiteral("file.start_history"));
-  history->setText(tr("S&tart Version History..."));
-  file->addAction(history);
-  QAction* versions = m_registry->action(QStringLiteral("file.version_history"));
-  versions->setText(tr("Version &History..."));
-  file->addAction(versions);
-  // Remote repositories (P12 remote): the project's versions shared.
+  // Versions (P12d): Save records one in a project; Save Version with a
+  // description; Version History (P12e) lists them.
+  command("file.save_version", tr("Save &Version..."));
+  command("file.version_history", tr("Version &History..."));
+  // The current project (P12 remote, mitcad#89): its versions shared, its
+  // settings.
   file->addSeparator();
-  const std::pair<const char*, QString> remote[] = {
-      {"file.connect_remote", tr("Connect Pro&ject to Remote...")},
-      {"file.open_remote", tr("Open Project &from Remote...")},
-      {"file.sync", tr("S&ync")},
-      {"file.remote_settings", tr("Remote Settin&gs...")}};
-  for (const auto& [id, text] : remote) {
-    QAction* action = m_registry->action(QString::fromLatin1(id));
-    action->setText(text);
-    file->addAction(action);
-  }
+  command("file.sync", tr("S&ync"));
+  command("file.project_settings", tr("Project Settin&gs..."));
   file->addSeparator();
   QAction* importAction = m_registry->action(QStringLiteral("file.import"));
   importAction->setText(tr("&Import..."));
@@ -236,12 +227,14 @@ void MainWindow::updateRecentMenu() {
   QStringList names;
   for (int i = 0; i < files.size(); ++i) {
     const QString path = files[i];
-    QAction* action = m_recentMenu->addAction(QStringLiteral("&%1 %2").arg(i + 1).arg(QFileInfo(path).fileName()),
-                                              this, [this, path] { openPath(path); });
+    // A design of a project with the project's name (mitcad#89).
+    const QString label = recentLabel(path);
+    QAction* action = m_recentMenu->addAction(QStringLiteral("&%1 %2").arg(i + 1).arg(label), this,
+                                              [this, path] { openPath(path); });
     action->setMenuRole(QAction::NoRole); // a file name is no About or Settings
     action->setToolTip(QDir::toNativeSeparators(path));
     action->setStatusTip(QDir::toNativeSeparators(path));
-    names << QFileInfo(path).fileName();
+    names << QString(label).replace(QChar(0x2014), QLatin1Char('-'));
   }
   if (files.isEmpty()) {
     m_recentMenu->addAction(tr("No recent files"))->setEnabled(false);
@@ -520,15 +513,16 @@ bool MainWindow::importDrawing(const QString& path, bool interactive, QString* e
   // planar face.
   QVector<QPair<QString, QString>> planes;
   QJsonValue selectedPlane;
+  QString selectedOccurrence; // where it was picked (mitcad#100)
   if (m_selection.size() == 1 && (m_selection.first().kind == SelectKind::Plane ||
                                   (m_selection.first().kind == SelectKind::Face &&
-                                   m_selection.first().geometry == QStringLiteral("plane"))) &&
-      m_selection.first().occurrence.isEmpty()) {
+                                   m_selection.first().geometry == QStringLiteral("plane")))) {
     const SelectionItem& item = m_selection.first();
     selectedPlane = item.kind == SelectKind::Plane
                         ? QJsonValue(item.owner)
                         : QJsonValue(QJsonObject{{QStringLiteral("face"), item.name},
                                                  {QStringLiteral("body"), item.owner}});
+    selectedOccurrence = item.occurrence;
     planes.append({QStringLiteral("selected"), tr("Selected: %1").arg(item.describe())});
   }
   planes.append({QStringLiteral("xy"), tr("XY plane")});
@@ -545,10 +539,18 @@ bool MainWindow::importDrawing(const QString& path, bool interactive, QString* e
     }
     choice = *chosen;
   }
-  const QJsonValue plane = choice.plane == QStringLiteral("selected") ? selectedPlane : QJsonValue(choice.plane);
+  const bool selected = choice.plane == QStringLiteral("selected");
+  const QJsonValue plane = selected ? selectedPlane : QJsonValue(choice.plane);
+  QJsonObject fields{{QStringLiteral("plane"), plane}};
+  const bool originPlane = selectedPlane.isString() &&
+                           QStringList{QStringLiteral("xy"), QStringLiteral("xz"), QStringLiteral("yz")}.contains(
+                               selectedPlane.toString());
+  if (selected && !originPlane) {
+    fields.insert(QStringLiteral("occurrence"), selectedOccurrence);
+  }
   const int depth = undoDepth();
   QJsonObject created;
-  if (!runCommand(cmd("sketch.create", {{QStringLiteral("plane"), plane}}), &created)) {
+  if (!runCommand(cmd("sketch.create", fields), &created)) {
     *error = m_lastError;
     return false;
   }

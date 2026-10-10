@@ -335,6 +335,12 @@ pub struct PlacedReport {
     /// exact).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stored: Option<StoredMeasures>,
+    /// A place of shapes the import brought in as FreeCAD stored them: their
+    /// measures with the kernel's plain fixed-point integration, as FreeCAD
+    /// measures (`Kernel::fixed_point_properties`; Mitcad integrates faces
+    /// bounded by B-splines of many spans more exactly, mitcad#139).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixed: Option<StoredMeasures>,
 }
 
 /// Measures of a shape: the volume, area and world centre of mass.

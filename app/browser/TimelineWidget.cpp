@@ -7,12 +7,15 @@
 #include <utility>
 
 #include <QContextMenuEvent>
+#include <QAction>
 #include <QHBoxLayout>
 #include <QHelpEvent>
 #include <QIcon>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPalette>
@@ -53,6 +56,7 @@ constexpr int kBand = 3; // the component colour, in the cell's room under its i
 constexpr int kBandTop = kTop + kItem - kBand;
 constexpr int kHeight = kTop + kItem + 1;
 constexpr int kDragPixels = 6;
+constexpr int kRunMark = 8; // stands for a run of features the filter hides (mitcad#98)
 
 const QColor kErrorFill(0xfb, 0xd5, 0xd5);
 const QColor kErrorBorder(0xd0, 0x20, 0x20);
@@ -157,6 +161,7 @@ public:
     DocumentSnapshot::Feature feature;
     int colour = -1; // index into kComponentColors, -1 for the root
     int group = -1;  // index into the groups
+    bool filtered = false; // a feature the filter hides (mitcad#98)
   };
   // A timeline group (P9): its first and last item, folded or open.
   struct Group {
@@ -186,15 +191,29 @@ public:
       m_dragItem = false;
     }
     // Where each cell starts; the cells of a folded group after its first
-    // take no room.
+    // take no room, nor do those the filter hides: a mark stands for each
+    // run of them, with the cells at its left, so that a drop or the
+    // marker left of the mark goes before the run and right of it after.
     m_left.assign(m_items.size(), 0);
+    m_runs.clear();
     int x = kPad;
+    int run = -1; // where the current run's cells are
     for (int i = 0; i <= count(); ++i) {
       if (i == m_marker) {
         m_markerX = x;
         x += kMarkerSlot + kGap;
       }
       if (i < count()) {
+        if (m_items[i].filtered) {
+          if (run < 0) {
+            run = x;
+            m_runs.push_back(x);
+            x += kRunMark + kGap;
+          }
+          m_left[static_cast<std::size_t>(i)] = run;
+          continue;
+        }
+        run = -1;
         m_left[static_cast<std::size_t>(i)] = x;
         if (!hidden(i)) {
           x += kItem + kGap;
@@ -203,6 +222,43 @@ public:
     }
     setFixedWidth(x + kPad);
     update();
+  }
+
+  // The features the filter hides (mitcad#98), and those after the marker.
+  int filteredCount() const {
+    return static_cast<int>(std::count_if(m_items.begin(), m_items.end(), [](const Item& i) { return i.filtered; }));
+  }
+  int filteredAfter(int position) const {
+    int n = 0;
+    for (int i = std::max(0, position); i < count(); ++i) {
+      n += m_items[i].filtered ? 1 : 0;
+    }
+    return n;
+  }
+
+  // Where the playback buttons step (mitcad#98): the boundaries of the
+  // features shown, so that a run the filter hides is passed in one step.
+  int stepBefore(int g) const {
+    for (int k = std::min(g, count() + 1) - 1; k > 0; --k) {
+      if (shownBoundary(k)) {
+        return k;
+      }
+    }
+    return 0;
+  }
+  int stepAfter(int g) const {
+    for (int k = std::max(g, -1) + 1; k < count(); ++k) {
+      if (shownBoundary(k)) {
+        return k;
+      }
+    }
+    return count();
+  }
+
+  // A boundary of the filtered view (mitcad#98): not between two features
+  // it hides.
+  bool shownBoundary(int g) const {
+    return g <= 0 || g >= count() || !m_items[g].filtered || !m_items[g - 1].filtered;
   }
 
   int count() const { return static_cast<int>(m_items.size()); }
@@ -224,7 +280,8 @@ public:
     m_selectedTo = uid;
     update();
   }
-  // The selected run: from the anchor to the last Shift+click.
+  // The selected run: from the anchor to the last Shift+click, without the
+  // features the filter hides.
   QStringList selectedRun() const {
     const int a = indexOf(m_selected);
     const int b = indexOf(m_selectedTo);
@@ -233,17 +290,20 @@ public:
       return run;
     }
     for (int i = std::min(a, b); i <= std::max(a, b); ++i) {
-      run << m_items[i].feature.uid;
+      if (!m_items[i].filtered) {
+        run << m_items[i].feature.uid;
+      }
     }
     return run;
   }
 
   // A cell of a folded group after its first is not shown; the first
-  // stands for the group.
+  // stands for the group. Nor is one the filter hides.
   bool hidden(int i) const {
     const int g = m_items[i].group;
-    return g >= 0 && m_groups[g].collapsed && i != m_groups[g].first;
+    return m_items[i].filtered || (g >= 0 && m_groups[g].collapsed && i != m_groups[g].first);
   }
+  bool filtered(int i) const { return m_items[i].filtered; }
   bool isHead(int i) const {
     const int g = m_items[i].group;
     return g >= 0 && m_groups[g].collapsed && i == m_groups[g].first;
@@ -270,6 +330,9 @@ private:
     if (g < count()) {
       return cell(g).left() - kGap / 2.0;
     }
+    if (count() > 0 && m_items[count() - 1].filtered && !m_runs.empty()) {
+      return m_runs.back() + kRunMark + kGap / 2.0; // after the last run's mark
+    }
     return cell(count() - 1).right() + 1 + kGap / 2.0;
   }
 
@@ -282,7 +345,7 @@ private:
   int nearestBoundary(double x) const {
     int best = 0;
     for (int g = 1; g <= count(); ++g) {
-      if (open(g) && std::abs(boundary(g) - x) < std::abs(boundary(best) - x)) {
+      if (open(g) && shownBoundary(g) && std::abs(boundary(g) - x) < std::abs(boundary(best) - x)) {
         best = g;
       }
     }
@@ -408,6 +471,15 @@ protected:
       if (feature.suppressed) {
         painter.setPen(QPen(strikeColor(palette()), 1.6));
         painter.drawLine(rect.bottomLeft() + QPointF(4, -4), rect.topRight() + QPointF(-4, 4));
+      }
+    }
+    // A run of features the filter hides (mitcad#98): a dotted bar.
+    for (const int at : m_runs) {
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(strikeColor(palette()));
+      const double middle = at + kRunMark / 2.0;
+      for (int dot = 0; dot < 4; ++dot) {
+        painter.drawEllipse(QPointF(middle, kTop + kItem * (dot + 1) / 5.0), 1.3, 1.3);
       }
     }
     // The history marker: a bar with a handle to drag, from the groups'
@@ -613,6 +685,19 @@ protected:
     if (event->type() == QEvent::ToolTip) {
       const auto* help = static_cast<QHelpEvent*>(event);
       const int i = itemAt(help->pos());
+      // The marker rolls back the features the filter hides too
+      // (mitcad#98): how many of them are after it.
+      const int hiddenAfter = filteredAfter(m_marker);
+      if (i < 0 && filteredCount() > 0 && markerRect().adjusted(-3, 0, 3, 0).contains(help->pos())) {
+        const QString tip = tr("History marker: %n feature(s) of components not shown are rolled back", nullptr,
+                               hiddenAfter);
+        QToolTip::showText(help->globalPos(), tip, this, markerRect());
+        if (tip != m_loggedTip) {
+          m_loggedTip = tip;
+          qDebug().noquote() << QStringLiteral("Timeline tooltip: %1").arg(tip);
+        }
+        return true;
+      }
       if (i < 0) {
         QToolTip::hideText();
         return true;
@@ -648,6 +733,7 @@ private:
   QVector<Item> m_items;
   QVector<Group> m_groups;
   std::vector<int> m_left; // where each cell starts
+  std::vector<int> m_runs; // where the marks of hidden runs are (mitcad#98)
   int m_markerX = kPad;
   int m_marker = 0;
   QString m_selected;   // the anchor of the selection
@@ -690,11 +776,27 @@ TimelineWidget::TimelineWidget(const CommandContext& model, QWidget* parent)
     m_buttonSymbols.append(floating ? QString::fromLatin1(symbol) : QString());
   };
   button("start", QStyle::SP_MediaSkipBackward, "backward.end.fill", tr("Move to Beginning"), [] { return 0; });
+  // A step passes over the features the filter hides (mitcad#98).
   button("back", QStyle::SP_MediaSeekBackward, "backward.fill", tr("Step Back"),
-         [this] { return std::max(0, m_strip->marker() - 1); });
+         [this] { return m_strip->stepBefore(m_strip->marker()); });
   button("forward", QStyle::SP_MediaSeekForward, "forward.fill", tr("Step Forward"),
-         [this] { return std::min(m_strip->count(), m_strip->marker() + 1); });
+         [this] { return m_strip->stepAfter(m_strip->marker()); });
   button("end", QStyle::SP_MediaSkipForward, "forward.end.fill", tr("Move to End"), [this] { return m_strip->count(); });
+
+  // The filter (mitcad#98): which components' features are shown.
+  m_filterButton = new QToolButton(this);
+  m_filterButton->setAutoRaise(true);
+  m_filterButton->setCheckable(true);
+  if (floating) {
+    setFlatCardButton(m_filterButton);
+  }
+  m_filterButton->setFocusPolicy(Qt::NoFocus);
+  connect(m_filterButton, &QToolButton::clicked, this, [this] {
+    updateFilterButton(); // the click toggled it; the filter decides
+    showFilterMenu();
+  });
+  layout->addWidget(m_filterButton);
+  updateFilterButton();
 
   m_strip = new TimelineStrip(*this);
   m_scroll = new QScrollArea(this);
@@ -760,6 +862,7 @@ void TimelineWidget::applyPalette() {
     m_buttons[i].second->setIcon(m_buttonSymbols[i].isEmpty() ? standard
                                                               : mac::symbolIcon(m_buttonSymbols[i], standard));
   }
+  updateFilterButton(); // its icon in the theme's colours
   m_strip->update();
   const QString colours = QStringLiteral("Timeline colours: %1, marker %2, buttons %3, window %4")
                               .arg(darkPalette(palette()) ? QStringLiteral("dark") : QStringLiteral("light"),
@@ -779,20 +882,40 @@ void TimelineWidget::rebuild(const DocumentSnapshot& snapshot) {
   for (int i = 1; i < snapshot.components.size(); ++i) {
     colours.insert(snapshot.components[i].uid, i - 1);
   }
+  // A filter of a component that is gone shows everything again.
+  if (!m_filter.isEmpty() && m_filter != kActiveFilter && snapshot.component(m_filter) == nullptr) {
+    m_filter.clear();
+    updateFilterButton();
+  }
+  const QSet<QString> shown = filteredComponents();
+  QHash<QString, QString> occurrenceComponents;
+  std::function<void(const QVector<DocumentSnapshot::Occurrence>&)> collect =
+      [&](const QVector<DocumentSnapshot::Occurrence>& occurrences) {
+        for (const DocumentSnapshot::Occurrence& occurrence : occurrences) {
+          occurrenceComponents.insert(occurrence.uid, occurrence.component);
+          collect(occurrence.children);
+        }
+      };
+  collect(snapshot.occurrences);
   QVector<TimelineStrip::Item> items;
   QHash<QString, int> index;
+  int hidden = 0;
   for (const DocumentSnapshot::Feature& feature : snapshot.features) {
     index.insert(feature.uid, static_cast<int>(items.size()));
-    items.append({feature, colours.value(feature.component, -1), -1});
+    const bool filtered = !shown.isEmpty() && !passesFilter(feature, shown, occurrenceComponents);
+    hidden += filtered ? 1 : 0;
+    items.append({feature, colours.value(feature.component, -1), -1, filtered});
   }
-  // Timeline groups (P9): runs of features, folded or open.
+  // Timeline groups (P9): runs of features, folded or open; with a filter,
+  // of the features it shows (a group with none is not shown).
   QVector<TimelineStrip::Group> groups;
   QSet<QString> names;
   for (const DocumentSnapshot::Group& group : snapshot.groups) {
+    names.insert(group.name);
     int first = static_cast<int>(items.size());
     int last = -1;
     for (const QString& uid : group.features) {
-      if (index.contains(uid)) {
+      if (index.contains(uid) && !items[index.value(uid)].filtered) {
         first = std::min(first, index.value(uid));
         last = std::max(last, index.value(uid));
       }
@@ -801,17 +924,139 @@ void TimelineWidget::rebuild(const DocumentSnapshot& snapshot) {
       continue;
     }
     for (int i = first; i <= last; ++i) {
-      items[i].group = static_cast<int>(groups.size());
+      if (!items[i].filtered) {
+        items[i].group = static_cast<int>(groups.size());
+      }
     }
     groups.append({group.name, first, last, m_collapsed.contains(group.name)});
-    names.insert(group.name);
   }
   m_collapsed.intersect(names); // groups that are gone
   m_strip->setItems(std::move(items), snapshot.marker, std::move(groups));
-  if (m_strip->indexOf(m_strip->selected()) < 0) {
+  if (m_strip->indexOf(m_strip->selected()) < 0 ||
+      (!m_strip->selected().isEmpty() && m_strip->filtered(m_strip->indexOf(m_strip->selected())))) {
     m_strip->select(QString());
   }
+  const QString logged = shown.isEmpty() ? QStringLiteral("all components")
+                                         : QStringLiteral("%1: %2 of %3 features")
+                                               .arg(filterLabel())
+                                               .arg(snapshot.features.size() - hidden)
+                                               .arg(snapshot.features.size());
+  if (logged != m_loggedFilter) {
+    m_loggedFilter = logged;
+    qDebug().noquote() << QStringLiteral("Timeline filter: %1").arg(logged);
+  }
   QTimer::singleShot(0, this, &TimelineWidget::logLayout);
+}
+
+const QString TimelineWidget::kActiveFilter = QStringLiteral("active");
+
+void TimelineWidget::setFilter(const QString& filter, bool subcomponents) {
+  if (filter == m_filter && subcomponents == m_subcomponents) {
+    return;
+  }
+  m_filter = filter;
+  m_subcomponents = subcomponents;
+  updateFilterButton();
+  rebuild(DocumentSnapshot(m_snapshot));
+}
+
+QSet<QString> TimelineWidget::filteredComponents() const {
+  if (m_filter.isEmpty()) {
+    return {};
+  }
+  const QString component = m_filter == kActiveFilter ? m_snapshot.activeComponent : m_filter;
+  QSet<QString> components{component};
+  if (!m_subcomponents) {
+    return components;
+  }
+  // The components placed in it, at any depth.
+  std::function<void(const QVector<DocumentSnapshot::Occurrence>&, bool)> walk =
+      [&](const QVector<DocumentSnapshot::Occurrence>& occurrences, bool inside) {
+        for (const DocumentSnapshot::Occurrence& occurrence : occurrences) {
+          const bool in = inside || occurrence.component == component;
+          if (inside) {
+            components.insert(occurrence.component);
+          }
+          walk(occurrence.children, in);
+        }
+      };
+  walk(m_snapshot.occurrences, component == QStringLiteral("C0"));
+  return components;
+}
+
+bool TimelineWidget::passesFilter(const DocumentSnapshot::Feature& feature, const QSet<QString>& components,
+                                  const QHash<QString, QString>& occurrenceComponents) const {
+  if (components.contains(feature.component)) {
+    return true;
+  }
+  if (!feature.isJoint()) {
+    return false;
+  }
+  // A joint or rigid group of another component that places occurrences of
+  // a shown one: its sides' paths or its members.
+  const auto reaches = [&](const QJsonArray& occurrences) {
+    return std::any_of(occurrences.begin(), occurrences.end(), [&](const QJsonValue& uid) {
+      return components.contains(occurrenceComponents.value(uid.toString()));
+    });
+  };
+  const QJsonObject joint = m_snapshot.joint(feature.uid);
+  if (!joint.isEmpty()) {
+    return reaches(joint.value(QStringLiteral("a")).toObject().value(QStringLiteral("path")).toArray()) ||
+           reaches(joint.value(QStringLiteral("b")).toObject().value(QStringLiteral("path")).toArray());
+  }
+  for (const QJsonValue& value : m_snapshot.joints.value(QStringLiteral("rigid_groups")).toArray()) {
+    const QJsonObject group = value.toObject();
+    if (group.value(QStringLiteral("uid")).toString() == feature.uid) {
+      return reaches(group.value(QStringLiteral("occurrences")).toArray());
+    }
+  }
+  return false;
+}
+
+QString TimelineWidget::filterLabel() const {
+  if (m_filter.isEmpty()) {
+    return tr("All Components");
+  }
+  const QString component = m_filter == kActiveFilter ? m_snapshot.activeComponent : m_filter;
+  QString label = m_filter == kActiveFilter ? tr("Active Component (%1)").arg(m_snapshot.componentName(component))
+                                            : m_snapshot.componentName(component);
+  if (m_subcomponents) {
+    label = tr("%1 with Subcomponents").arg(label);
+  }
+  return label;
+}
+
+void TimelineWidget::updateFilterButton() {
+  if (m_filterButton == nullptr) {
+    return;
+  }
+  m_filterButton->setIcon(themeIcon(QStringLiteral("filter")));
+  m_filterButton->setChecked(!m_filter.isEmpty());
+  m_filterButton->setToolTip(m_filter.isEmpty() ? tr("Timeline Filter: all components")
+                                                : tr("Timeline Filter: %1").arg(filterLabel()));
+}
+
+void TimelineWidget::showFilterMenu() {
+  QMenu menu(this);
+  QStringList entries;
+  const auto add = [&](const QString& text, bool checked, std::function<void()> call) {
+    QAction* action = menu.addAction(text);
+    action->setCheckable(true);
+    action->setChecked(checked);
+    connect(action, &QAction::triggered, this, std::move(call));
+    entries << text;
+  };
+  add(tr("All Components"), m_filter.isEmpty(), [this] { setFilter(QString(), m_subcomponents); });
+  add(tr("Active Component"), m_filter == kActiveFilter, [this] { setFilter(kActiveFilter, m_subcomponents); });
+  menu.addSeparator();
+  for (const DocumentSnapshot::Component& component : std::as_const(m_snapshot.components)) {
+    const QString uid = component.uid;
+    add(component.name, m_filter == uid, [this, uid] { setFilter(uid, m_subcomponents); });
+  }
+  menu.addSeparator();
+  add(tr("Include Subcomponents"), m_subcomponents, [this] { setFilter(m_filter, !m_subcomponents); });
+  qDebug().noquote() << QStringLiteral("Context menu: %1").arg(entries.join(QStringLiteral(" | ")));
+  menu.exec(m_filterButton->mapToGlobal(QPoint(0, m_filterButton->height())));
 }
 
 void TimelineWidget::setGroupCollapsed(const QString& name, bool collapsed) {
@@ -837,6 +1082,11 @@ void TimelineWidget::groupRenamed(const QString& name, const QString& newName) {
 QStringList TimelineWidget::selectedFeatures() const { return m_strip->selectedRun(); }
 
 void TimelineWidget::selectFeature(const QString& uid) {
+  // A feature the filter hides shows everything again (mitcad#98).
+  if (const int at = m_strip->indexOf(uid); at >= 0 && m_strip->filtered(at)) {
+    qDebug().noquote() << QStringLiteral("Timeline filter cleared to show %1").arg(m_strip->item(at)->feature.name);
+    setFilter(QString(), m_subcomponents);
+  }
   // A feature in a folded group opens it.
   int i = m_strip->indexOf(uid);
   if (i >= 0 && m_strip->hidden(i)) {
@@ -900,6 +1150,8 @@ void TimelineWidget::logLayout() {
     const QPoint at = GlassCard::mapToHost(button, button->rect().center());
     lines << QStringLiteral("Timeline button %1 at %2,%3").arg(id).arg(at.x()).arg(at.y());
   }
+  const QPoint filterAt = GlassCard::mapToHost(m_filterButton, m_filterButton->rect().center());
+  lines << QStringLiteral("Timeline button filter at %1,%2").arg(filterAt.x()).arg(filterAt.y());
   const QString logged = lines.join(QLatin1Char('\n'));
   if (logged != m_logged) {
     m_logged = logged;

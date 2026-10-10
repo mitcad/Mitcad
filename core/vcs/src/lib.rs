@@ -69,6 +69,8 @@ pub mod remote;
 pub mod library;
 mod store;
 mod tree;
+// Local and Cloud projects (mitcad#89).
+pub mod projects;
 
 pub use commit::CommitOutcome;
 pub use history::{Change, ChangeKind, FileStatus, Version};
@@ -237,7 +239,8 @@ pub fn repository_root(dir: &Path) -> Option<PathBuf> {
 
 /// Whether a path in a version is a project file.
 fn is_project_file(path: &str) -> bool {
-    path.ends_with(".mitcad")
+    path.rsplit_once('.')
+        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("mitcad"))
 }
 
 /// A project whose folder is the root of a git repository: its version
@@ -404,10 +407,15 @@ impl ProjectRepo {
             .map(|name| name.shorten().to_str_lossy().into_owned()))
     }
 
-    /// The author of new versions: git's configuration (`user.name` and
-    /// `user.email`, or `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL`), else
-    /// `fallback` (Mitcad's settings).
+    /// The author of new versions: the repository's own `user.name` and
+    /// `user.email` as they are now (mitcad#89, [`ProjectRepo::set_identity`]),
+    /// else git's configuration (`user.name` and `user.email`, or
+    /// `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL`), else `fallback` (Mitcad's
+    /// settings).
     pub fn identity(&self, fallback: Option<&Identity>) -> Result<Identity, VcsError> {
+        if let Some(identity) = self.own_identity() {
+            return Ok(identity);
+        }
         if let Some(Ok(author)) = self.repo.author() {
             let configured =
                 Identity::new(&author.name.to_str_lossy(), &author.email.to_str_lossy());

@@ -604,6 +604,7 @@ void report_files(const std::vector<std::string>& files, const std::vector<std::
 } // namespace
 
 int main(int argc, char** argv) {
+  mitcad::runs::no_core_dumps();
   bool verbose = false;
   bool corpus = false;
   int every = 1;

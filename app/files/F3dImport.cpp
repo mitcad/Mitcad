@@ -51,6 +51,14 @@ namespace {
 // kernel call to hang (the model's hang_limit).
 constexpr int kHangLimit = 90;
 
+// The threads that evaluate an item's definitions at once (mitcad#95):
+// the logical cores, at most 8 (more gain little: an item rarely has more
+// definitions to try, and each worker holds its definition's memory).
+int importThreads() {
+  const unsigned cores = std::thread::hardware_concurrency();
+  return static_cast<int>(std::clamp(cores, 1u, 8u));
+}
+
 const QRegularExpression kItemStart(QStringLiteral(R"(^import: \[[0-9.]+\] item ([0-9]+): (.*)$)"));
 const QRegularExpression kItemDone(
     QStringLiteral(R"(^import: \[[0-9.]+\] (.+): (parametric|partial|fallback|skipped) in [0-9.]+ s$)"));
@@ -198,9 +206,11 @@ bool isFreeCadFile(const QString& path) {
   return QFileInfo(path).suffix().compare(QStringLiteral("fcstd"), Qt::CaseInsensitive) == 0;
 }
 
-// An .ipt part file (mitcad#60): its stored bodies, without a timeline.
+// An .ipt part file or an .iam assembly (mitcad#60), both by import_ipt.
 bool isIptFile(const QString& path) {
-  return QFileInfo(path).suffix().compare(QStringLiteral("ipt"), Qt::CaseInsensitive) == 0;
+  const QString suffix = QFileInfo(path).suffix();
+  return suffix.compare(QStringLiteral("ipt"), Qt::CaseInsensitive) == 0 ||
+         suffix.compare(QStringLiteral("iam"), Qt::CaseInsensitive) == 0;
 }
 
 // The worker's exit status. While import threads that the hang watchdog
@@ -222,7 +232,7 @@ int runImportWorker(int argc, char* argv[]) {
   QCoreApplication app(argc, argv);
   QCommandLineParser parser;
   const QCommandLineOption worker(QStringLiteral("import-worker"),
-                                  QStringLiteral(".f3d, .f3z, .FCStd or .ipt file"), QStringLiteral("file"));
+                                  QStringLiteral(".f3d, .f3z, .FCStd, .ipt or .iam file"), QStringLiteral("file"));
   const QCommandLineOption output(QStringLiteral("output"), QStringLiteral("Project file to write"),
                                   QStringLiteral("file"));
   const QCommandLineOption result(QStringLiteral("result"), QStringLiteral("Result (JSON) to write"),
@@ -270,10 +280,14 @@ int runImportWorker(int argc, char* argv[]) {
                             {QStringLiteral("path"), QString::fromUtf8(path)},
                             {QStringLiteral("bodies_only"), false}}
       : ipt   ? QJsonObject{{QStringLiteral("cmd"), QStringLiteral("import_ipt")},
-                            {QStringLiteral("path"), QString::fromUtf8(path)}}
+                            {QStringLiteral("path"), QString::fromUtf8(path)},
+                            {QStringLiteral("hang_limit"), kHangLimit}}
               : QJsonObject{{QStringLiteral("cmd"), QStringLiteral("import_f3d")},
                             {QStringLiteral("path"), QString::fromUtf8(path)},
-                            {QStringLiteral("hang_limit"), kHangLimit}};
+                            {QStringLiteral("hang_limit"), kHangLimit},
+                            // An item's definitions evaluated in parallel
+                            // (mitcad#95): the logical cores, at most 8.
+                            {QStringLiteral("threads"), importThreads()}};
   QJsonObject answer;
   document->attach_job(**control);
   try {

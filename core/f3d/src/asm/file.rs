@@ -97,17 +97,45 @@ pub struct AsmFile {
 
 const MAGIC: &[u8] = b"ASM BinaryFile";
 
+/// The magic of the same binary format as saved before ASM 218 (files of
+/// 2012 seen, ASM 217): another four-letter prefix and no integer width
+/// digit; integers are 4 bytes.
+pub const OLDER_MAGIC: &[u8] = &[
+    0x41, 0x43, 0x49, 0x53, b' ', b'B', b'i', b'n', b'a', b'r', b'y', b'F', b'i', b'l', b'e',
+];
+
+/// The markers of a file with the older magic name the format by its
+/// prefix there (`End-of-<prefix>-data`, `Begin-of-<prefix>-History-Data`,
+/// `End-of-<prefix>-History-Section`): they are read as the ASM markers.
+fn marker_name(name: String) -> String {
+    let prefix = &OLDER_MAGIC[..4];
+    for start in ["End-of-", "Begin-of-"] {
+        if let Some(rest) = name.strip_prefix(start)
+            && rest.as_bytes().starts_with(prefix)
+            && rest.as_bytes().get(prefix.len()) == Some(&b'-')
+        {
+            return format!("{start}ASM{}", &rest[prefix.len()..]);
+        }
+    }
+    name
+}
+
 impl AsmFile {
     pub fn parse(data: &[u8]) -> Result<AsmFile, AsmError> {
-        if data.len() < MAGIC.len() + 1 || &data[..MAGIC.len()] != MAGIC {
-            return Err(AsmError::NotAsm);
-        }
-        let int_size = match data[MAGIC.len()] {
-            b'4' => 4,
-            b'8' => 8,
-            _ => return Err(AsmError::NotAsm),
+        let older = data.starts_with(OLDER_MAGIC);
+        let (int_size, mut pos) = if older {
+            (4, OLDER_MAGIC.len())
+        } else {
+            if data.len() < MAGIC.len() + 1 || &data[..MAGIC.len()] != MAGIC {
+                return Err(AsmError::NotAsm);
+            }
+            let int_size = match data[MAGIC.len()] {
+                b'4' => 4,
+                b'8' => 8,
+                _ => return Err(AsmError::NotAsm),
+            };
+            (int_size, MAGIC.len() + 1)
         };
-        let mut pos = MAGIC.len() + 1;
         let mut ints = [0i64; 4];
         for v in ints.iter_mut() {
             let b = data
@@ -185,6 +213,9 @@ impl AsmFile {
                         break 'records;
                     }
                 }
+            }
+            if older {
+                name = marker_name(name);
             }
             match name.as_str() {
                 "End-of-ASM-data" => {
@@ -335,6 +366,37 @@ mod tests {
             Token::Ident("exact_int_cur".into())
         );
         assert_eq!(f.top_level(), 1..2);
+    }
+
+    #[test]
+    fn parses_the_older_magic() {
+        let mut w = Writer::new(1, 2);
+        w.record("asmheader").ptr(-1).int(-1).str("217.0").end();
+        // The same file with the older magic (no integer width digit) and
+        // markers named by its prefix.
+        let prefix = std::str::from_utf8(&OLDER_MAGIC[..4]).unwrap();
+        let mut older = OLDER_MAGIC.to_vec();
+        older.extend_from_slice(&w.data[MAGIC.len() + 1..]);
+        let data = w.finish();
+        let mut o = Writer { data: older };
+        o.record(&format!("Begin-of-{prefix}-History-Data")).end();
+        o.record(&format!("End-of-{prefix}-History-Section"));
+        o.record(&format!("End-of-{prefix}-data"));
+        o.data.extend_from_slice(&[0; 4]);
+        let f = AsmFile::parse(&o.data).unwrap();
+        assert!(f.complete, "{:?}", f.truncated);
+        assert_eq!(f.header.int_size, 4);
+        assert_eq!(
+            f.header.version,
+            AsmFile::parse(&data).unwrap().header.version
+        );
+        assert_eq!(f.records.len(), 2);
+        assert_eq!(f.records[1].type_name, "Begin-of-ASM-History-Data");
+        assert_eq!(f.history_section, Some(1..2));
+        assert_eq!(marker_name("End-of-data".into()), "End-of-data");
+        // Neither magic.
+        o.data[0] = b'X';
+        assert!(matches!(AsmFile::parse(&o.data), Err(AsmError::NotAsm)));
     }
 
     #[test]

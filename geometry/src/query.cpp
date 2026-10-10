@@ -2,6 +2,7 @@
 #include "mitcad/geometry/query.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -13,7 +14,11 @@
 #include <Bnd_Box.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
 #include <GProp_GProps.hxx>
+#include <NCollection_Map.hxx>
 #include <Precision.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
+#include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <gp.hxx>
 #include <gp_Pnt2d.hxx>
@@ -106,6 +111,32 @@ MassProperties mass_properties(const Shape& shape) {
 
 double volume(const Shape& shape) { return mass_properties(shape).volume; }
 
+MassProperties fixed_point_properties(const Shape& shape) {
+  return detail::run("mass properties", [&] {
+    MassProperties result;
+    if (shape.occt().IsNull()) {
+      return result;
+    }
+    gp_XYZ moment(0.0, 0.0, 0.0);
+    for (TopExp_Explorer it(shape.occt(), TopAbs_SOLID); it.More(); it.Next()) {
+      GProp_GProps solid;
+      BRepGProp::VolumeProperties(it.Current(), solid);
+      const double volume = std::abs(solid.Mass());
+      result.volume += volume;
+      moment += volume * solid.CentreOfMass().XYZ();
+    }
+    GProp_GProps surface;
+    BRepGProp::SurfaceProperties(shape.occt(), surface);
+    result.area = surface.Mass();
+    if (result.volume > 0.0) {
+      result.center = gp_Pnt(moment / result.volume);
+    } else {
+      result.center = surface.CentreOfMass();
+    }
+    return result;
+  });
+}
+
 BoundingBox bounding_box(const Shape& shape) {
   return detail::run("bounding box", [&] {
     BoundingBox result;
@@ -192,6 +223,64 @@ std::vector<EdgeMiddle> edge_middles(const Shape& shape) {
   });
 }
 
+namespace {
+
+// Up to `count` points inside a face, spread over it: the middles of the
+// cells of a coarse grid over its parameters that lie inside it, of a fine
+// one for narrow faces.
+std::vector<gp_Pnt> inside_points(const TopoDS_Face& face, int count) {
+  double u0 = 0, u1 = 0, v0 = 0, v1 = 0;
+  BRepTools::UVBounds(face, u0, u1, v0, v1);
+  BRepTopAdaptor_FClass2d classifier(face, Precision::PConfusion());
+  std::vector<gp_Pnt2d> inside;
+  for (const int cells : {6, 24}) {
+    for (int a = 0; a < cells; ++a) {
+      for (int b = 0; b < cells; ++b) {
+        const gp_Pnt2d uv(u0 + (u1 - u0) * (a + 0.5) / cells, v0 + (v1 - v0) * (b + 0.5) / cells);
+        if (classifier.Perform(uv) == TopAbs_IN) {
+          inside.push_back(uv);
+        }
+      }
+    }
+    if (!inside.empty()) {
+      break;
+    }
+  }
+  std::vector<gp_Pnt> points;
+  const BRepAdaptor_Surface surface(face);
+  const std::size_t wanted = std::min(inside.size(), static_cast<std::size_t>(std::max(count, 0)));
+  for (std::size_t k = 0; k < wanted; ++k) {
+    const gp_Pnt2d& uv = inside[k * inside.size() / wanted];
+    points.push_back(surface.Value(uv.X(), uv.Y()));
+  }
+  return points;
+}
+
+// What tells a face from another for new_faces: its kind of surface, area
+// and centre.
+struct FaceKey {
+  GeomAbs_SurfaceType surface = GeomAbs_OtherSurface;
+  double area = 0.0;
+  gp_Pnt center;
+};
+
+FaceKey face_key(const TopoDS_Face& face) {
+  GProp_GProps props;
+  BRepGProp::SurfaceProperties(face, props);
+  return {BRepAdaptor_Surface(face, false).GetType(), props.Mass(), props.CentreOfMass()};
+}
+
+// The same face rebuilt from the same data: the measures agree to within
+// what integrating them again may change.
+bool same_face(const FaceKey& a, const FaceKey& b) {
+  constexpr double kArea = 1e-7;
+  constexpr double kCenter = 1e-6;
+  return a.surface == b.surface && std::abs(a.area - b.area) <= kArea * std::max(std::abs(a.area), 1.0) &&
+         a.center.Distance(b.center) <= kCenter;
+}
+
+} // namespace
+
 std::vector<FacePoints> face_points(const Shape& shape, int count) {
   return detail::run("faces", [&] {
     std::vector<FacePoints> result;
@@ -199,34 +288,51 @@ std::vector<FacePoints> face_points(const Shape& shape, int count) {
       if (shape.face_names(i).empty()) {
         continue;
       }
-      const TopoDS_Face& face = shape.face(i);
-      double u0 = 0, u1 = 0, v0 = 0, v1 = 0;
-      BRepTools::UVBounds(face, u0, u1, v0, v1);
-      BRepTopAdaptor_FClass2d classifier(face, Precision::PConfusion());
-      std::vector<gp_Pnt2d> inside;
-      // A coarse grid, a fine one for narrow faces.
-      for (const int cells : {6, 24}) {
-        for (int a = 0; a < cells; ++a) {
-          for (int b = 0; b < cells; ++b) {
-            const gp_Pnt2d uv(u0 + (u1 - u0) * (a + 0.5) / cells,
-                              v0 + (v1 - v0) * (b + 0.5) / cells);
-            if (classifier.Perform(uv) == TopAbs_IN) {
-              inside.push_back(uv);
-            }
-          }
-        }
-        if (!inside.empty()) {
-          break;
-        }
+      result.push_back({shape.face_names(i).front(), inside_points(shape.face(i), count)});
+    }
+    return result;
+  });
+}
+
+std::vector<NewFace> new_faces(const std::vector<TopoDS_Shape>& before, const TopoDS_Shape& after,
+                               int count) {
+  return detail::run("new faces", [&] {
+    NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> kept;
+    for (const TopoDS_Shape& shape : before) {
+      for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+        kept.Add(it.Current());
       }
-      FacePoints points{shape.face_names(i).front(), {}};
-      const BRepAdaptor_Surface surface(face);
-      const std::size_t wanted = std::min(inside.size(), static_cast<std::size_t>(count));
-      for (std::size_t k = 0; k < wanted; ++k) {
-        const gp_Pnt2d& uv = inside[k * inside.size() / wanted];
-        points.points.push_back(surface.Value(uv.X(), uv.Y()));
+    }
+    // The faces of `after` that are not the same faces as those of
+    // `before`; the measures of `before`'s only when there are such.
+    std::vector<TopoDS_Face> others;
+    NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> seen;
+    for (TopExp_Explorer it(after, TopAbs_FACE); it.More(); it.Next()) {
+      if (!kept.Contains(it.Current()) && seen.Add(it.Current())) {
+        others.push_back(TopoDS::Face(it.Current()));
       }
-      result.push_back(std::move(points));
+    }
+    std::vector<FaceKey> keys;
+    if (!others.empty()) {
+      for (NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator it(kept); it.More(); it.Next()) {
+        keys.push_back(face_key(TopoDS::Face(it.Key())));
+      }
+      std::sort(keys.begin(), keys.end(), [](const FaceKey& a, const FaceKey& b) { return a.area < b.area; });
+    }
+    std::vector<NewFace> result;
+    for (const TopoDS_Face& face : others) {
+      const FaceKey key = face_key(face);
+      // Those of about the same area, by the sorted areas.
+      const double slack = 1e-7 * std::max(std::abs(key.area), 1.0);
+      auto it = std::lower_bound(keys.begin(), keys.end(), key.area - slack,
+                                 [](const FaceKey& k, double area) { return k.area < area; });
+      bool found = false;
+      for (; it != keys.end() && it->area <= key.area + slack && !found; ++it) {
+        found = same_face(*it, key);
+      }
+      if (!found) {
+        result.push_back({key.area, inside_points(face, count)});
+      }
     }
     return result;
   });

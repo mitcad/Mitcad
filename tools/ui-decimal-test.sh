@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/sketch app/commands
 # Decimal commas (mitcad#2) through the real UI: a value typed with a comma
 # is read as with a point, and kept and shown with a point.
 #   - A sketch dimension typed as 42,5 is 42.5 mm.

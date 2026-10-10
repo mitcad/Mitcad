@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/render
 # The rendered view's environment (mitcad#47, docs/rendering.md), through
 # View > Render Environment on a white box and a clear glass sphere:
 #   - The Dark Studio lights the box less than the Studio (its mean
@@ -15,6 +16,7 @@
 # Skipped (exit 0) when the build has no render worker (MITCAD_RENDER off).
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-render-environment-test.sh [directory for screenshots]
+# check-all sources: tools/cli
 
 UI_APP=${UI_APP:-$(cd "$(dirname "$0")/.." && pwd)/build/dev/app/mitcad}
 BUILD_DIR=$(cd "$(dirname "$UI_APP")/.." 2> /dev/null && pwd)

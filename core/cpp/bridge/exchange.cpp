@@ -2,6 +2,8 @@
 #include "bridge/exchange.hpp"
 
 #include <cmath>
+#include <cstddef>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -92,8 +94,10 @@ brep::Body to_body(const f3d::BrepBodyData& d) {
     b.edges.push_back({e.curve, e.v0, e.v1, e.t0, e.t1, e.tolerance});
   }
   for (const auto& f : d.faces) {
-    b.faces.push_back({f.surface, f.reversed, f.double_sided, f.first_loop, f.loop_count});
+    b.faces.push_back(
+        {f.surface, f.reversed, f.double_sided, f.first_loop, f.loop_count, f.first_point_loop, f.point_loop_count});
   }
+  b.point_loops.assign(d.point_loops.begin(), d.point_loops.end());
   for (const auto& l : d.loops) {
     b.loops.push_back({l.first_coedge, l.coedge_count});
   }
@@ -261,12 +265,26 @@ F3dBody build_brep_body(const f3d::BrepBodyData& data, ShapeList& shapes) {
                                            static_cast<std::size_t>(r.curves_failed + r.surfaces_failed +
                                                                     r.edges_failed + r.faces_failed));
   body.error = rust::String(r.error);
+  for (const std::string& message : r.messages) {
+    body.messages.push_back(rust::String(message));
+  }
+  body.raw_volume = r.raw_volume;
   shapes.push(body.built ? std::make_shared<geometry::Shape>(result.shape) : nullptr);
   return body;
 }
 
 bool shape_is_valid(const geometry::Shape& shape) {
-  return !shape.occt().IsNull() && BRepCheck_Analyzer(shape.occt()).IsValid();
+  if (shape.occt().IsNull()) {
+    return false;
+  }
+  // The checker catches an allocation that fails and calls the sub-shape
+  // invalid (mitcad#132): that is no answer.
+  const std::size_t failed = geometry::failed_allocations_in_thread();
+  const bool valid = BRepCheck_Analyzer(shape.occt()).IsValid();
+  if (geometry::failed_allocations_in_thread() != failed) {
+    throw std::bad_alloc();
+  }
+  return valid;
 }
 
 void catch_occt_crashes() { geometry::catch_occt_crashes(); }
@@ -279,6 +297,10 @@ std::shared_ptr<geometry::Shape> f3d_build_body(const f3d::BrepBodyData& data) {
   // (its watchdog, mitcad#82).
   options.progress = [] { f3d_build_progress(); };
   const brep::BuildResult result = brep::build_body(to_body(data), options);
+  if (result.report.out_of_memory) {
+    // (mitcad#132: the import is low on memory.)
+    throw std::runtime_error("building a body of the file: out of memory");
+  }
   if (!result.report.built || result.shape.IsNull()) {
     return nullptr;
   }

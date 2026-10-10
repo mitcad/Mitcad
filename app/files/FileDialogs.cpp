@@ -512,6 +512,26 @@ bool isIptImport(const QJsonObject& result) {
          QLatin1String("ipt");
 }
 
+// An .iam assembly's import result (import_ipt or import_iam, mitcad#60
+// stage 4).
+bool isIamImport(const QJsonObject& result) {
+  return result.value(QStringLiteral("report")).toObject().value(QStringLiteral("format")).toString() ==
+         QLatin1String("iam");
+}
+
+// An assembly's occurrences and files: placed, suppressed, parts imported
+// and missing.
+QString iamCounts(const QJsonObject& report) {
+  const QJsonObject occurrences = report.value(QStringLiteral("occurrences")).toObject();
+  const QJsonObject parts = report.value(QStringLiteral("parts")).toObject();
+  return QStringLiteral("%1 occurrences placed, %2 suppressed, %3 part files imported, %4 missing, %5 failed")
+      .arg(occurrences.value(QStringLiteral("placed")).toInt())
+      .arg(occurrences.value(QStringLiteral("suppressed")).toInt())
+      .arg(parts.value(QStringLiteral("imported")).toInt())
+      .arg(parts.value(QStringLiteral("missing")).toInt())
+      .arg(parts.value(QStringLiteral("failed")).toInt());
+}
+
 // The bodies an import_ipt result reports: solids, valid ones, sheets.
 QString iptCounts(const QJsonObject& report) {
   int solids = 0;
@@ -543,6 +563,9 @@ QString iptFeatureCounts(const QJsonObject& report) {
 } // namespace
 
 QString importCounts(const QJsonObject& result) {
+  if (isIamImport(result)) {
+    return iamCounts(result.value(QStringLiteral("report")).toObject());
+  }
   if (isIptImport(result)) {
     return iptCounts(result.value(QStringLiteral("report")).toObject());
   }
@@ -563,7 +586,7 @@ namespace {
 // import_fcstd's report itself (its items and warnings have the same form).
 QJsonObject importedDesign(const QJsonObject& result) {
   const QJsonObject report = result.value(QStringLiteral("report")).toObject();
-  if (isFreeCadImport(result) || isIptImport(result)) {
+  if (isFreeCadImport(result) || isIptImport(result) || isIamImport(result)) {
     return report;
   }
   const QJsonArray designs = report.value(QStringLiteral("designs")).toArray();
@@ -721,8 +744,27 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
           ? QObject::tr("%1 (Mitcad's %2)").arg(field("material", QString()), field("mitcad_material", QString()))
           : QObject::tr("%1 (not in Mitcad's library: the bodies keep the default)")
                 .arg(field("material", QObject::tr("none")));
+  const QJsonObject boxes = design.value(QStringLiteral("boxes")).toObject();
+  const QJsonObject display = design.value(QStringLiteral("display")).toObject();
+  QStringList found;
+  const QJsonObject resolution = design.value(QStringLiteral("resolution")).toObject();
+  for (auto it = resolution.begin(); it != resolution.end(); ++it) {
+    found << QStringLiteral("%1 %2").arg(it.value().toInt()).arg(it.key());
+  }
   QString summary =
-      iptHistory
+      isIamImport(result)
+          ? QObject::tr("<b>%1</b> (assembly)<br>%2; %3 sub-assemblies.<br>Files found: %4.<br>Checked against "
+                        "the file: %5 of %6 placements agree with the displayed ones, %7 of %8 parts' bodies lie "
+                        "within their range boxes.<br>Units: %9. Saved by release %10.")
+                .arg(file.toHtmlEscaped(), importCounts(result).toHtmlEscaped())
+                .arg(design.value(QStringLiteral("assemblies")).toInt())
+                .arg(found.join(QStringLiteral(", ")).toHtmlEscaped())
+                .arg(display.value(QStringLiteral("agree")).toInt())
+                .arg(display.value(QStringLiteral("compared")).toInt())
+                .arg(boxes.value(QStringLiteral("agree")).toInt())
+                .arg(boxes.value(QStringLiteral("compared")).toInt())
+                .arg(field("units", QStringLiteral("mm")), field("release", QObject::tr("unknown")))
+      : iptHistory
           ? QObject::tr("<b>%1</b> (part number %2)<br>%3 features and sketches: %4.<br>%5 parameters, %6 of %7 "
                         "expressions as the file evaluates them.<br>%8 bodies: %9.<br>Material: %10. Units: %11. "
                         "Saved by release %12.")
@@ -802,6 +844,20 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
                 note});
     item->setToolTip(4, note);
   }
+  // An assembly's files: how each was found and what came in.
+  int fileIndex = 0;
+  for (const QJsonValue& value : design.value(QStringLiteral("files")).toArray()) {
+    const QJsonObject f = value.toObject();
+    const QString path = f.value(QStringLiteral("path")).isString() ? f.value(QStringLiteral("path")).toString()
+                                                                    : f.value(QStringLiteral("saved")).toString();
+    const QString note = QObject::tr("%1 occurrences, found %2: %3")
+                             .arg(f.value(QStringLiteral("occurrences")).toInt())
+                             .arg(f.value(QStringLiteral("found")).toString(), path);
+    auto* row = new QTreeWidgetItem(items, {QString::number(++fileIndex), QFileInfo(path).fileName(),
+                                            f.value(QStringLiteral("kind")).toString(),
+                                            f.value(QStringLiteral("status")).toString(), note});
+    row->setToolTip(4, note);
+  }
   for (const QJsonValue& value : (iptHistory ? replay : design).value(QStringLiteral("items")).toArray()) {
     const QJsonObject item = value.toObject();
     auto* row = new QTreeWidgetItem(
@@ -839,7 +895,9 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
   buttons->button(QDialogButtonBox::Close)->setDefault(true);
   layout->addWidget(buttons);
   dialog.resize(720, 520);
-  if (isIptImport(result)) {
+  if (isIamImport(result)) {
+    qDebug().noquote() << QStringLiteral("Import report: %1: %2").arg(file, importCounts(result));
+  } else if (isIptImport(result)) {
     qDebug().noquote()
         << QStringLiteral("Import report: %1: %2 bodies (%3)").arg(file).arg(bodies).arg(importCounts(result));
     if (iptHistory) {

@@ -13,7 +13,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLockFile>
-#include <QSaveFile>
 #include <QUuid>
 #include <QtLogging>
 
@@ -27,43 +26,7 @@ namespace {
 // going) is tried again this much later at most.
 constexpr int kRetryMs = 5000;
 
-// Writes the whole file or nothing: QSaveFile writes a temporary file next
-// to it, and commit() flushes that to disk and renames it over the file.
-bool writeAtomically(const QString& path, const QByteArray& data, QString& error) {
-  QSaveFile file(path);
-  if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit()) {
-    // Not committed, the temporary file goes with `file`.
-    error = QStringLiteral("%1: %2").arg(QDir::toNativeSeparators(path), file.errorString());
-    return false;
-  }
-  return true;
-}
-
 } // namespace
-
-QString fileDigest(QByteArrayView data) {
-  quint64 hash = 0xcbf29ce484222325ULL;
-  for (const char byte : data) {
-    hash ^= static_cast<unsigned char>(byte);
-    hash *= 0x100000001b3ULL;
-  }
-  return QStringLiteral("%1").arg(hash, 16, 16, QLatin1Char('0'));
-}
-
-void removeSessionFiles(const QString& directory, const QString& session) {
-  const QDir dir(directory);
-  QFile::remove(dir.filePath(session + QLatin1String(".json")));
-  QFile::remove(dir.filePath(session + QLatin1String(".mitcad")));
-  // QSaveFile's temporary files ("<id>.mitcad.AbCdEf") where a write was
-  // cut off; the lock ("<id>.lock", and QLockFile's "<id>.lock.rmlock")
-  // is its owner's.
-  const QString lock = session + QLatin1String(".lock");
-  for (const QString& name : dir.entryList({session + QLatin1String(".*")}, QDir::Files | QDir::Hidden)) {
-    if (!name.startsWith(lock)) {
-      QFile::remove(dir.filePath(name));
-    }
-  }
-}
 
 AutosaveManager::AutosaveManager(QObject* parent)
     : QObject(parent), m_directory(recoveryDirectory()),
@@ -175,10 +138,8 @@ void AutosaveManager::tick() {
     qWarning().noquote() << QStringLiteral("Autosave failed: %1").arg(QString::fromUtf8(e.what()));
     return;
   }
-  const QString project = filePath(".mitcad");
   QJsonObject about{
       {QStringLiteral("format"), QStringLiteral("mitcad-autosave")},
-      {QStringLiteral("version"), 1},
       {QStringLiteral("session"), m_session},
       {QStringLiteral("pid"), QCoreApplication::applicationPid()},
       {QStringLiteral("application"), QCoreApplication::applicationName()},
@@ -188,27 +149,19 @@ void AutosaveManager::tick() {
       {QStringLiteral("base_digest"), m_baseDigest},
       {QStringLiteral("saved_at"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
       {QStringLiteral("revision"), static_cast<qint64>(now.revision)},
-      {QStringLiteral("project"), QFileInfo(project).fileName()},
   };
   m_writing = true;
   m_haveFiles = true;
   m_writtenName = taken.name;
   const quint64 generation = m_generation;
   const quint64 revision = now.revision;
-  m_pool.start([this, generation, revision, project, metadata = filePath(".json"), name = taken.name,
+  m_pool.start([this, generation, revision, directory = m_directory, session = m_session, name = taken.name,
                 data = std::move(taken.project), about = std::move(about)]() mutable {
-    // The project file first: the metadata, written last, marks the pair
-    // complete (and tells the project file's size and digest).
     QString error;
-    bool ok = writeAtomically(project, data, error);
-    if (ok) {
-      about.insert(QStringLiteral("size"), static_cast<qint64>(data.size()));
-      about.insert(QStringLiteral("digest"), fileDigest(data));
-      ok = writeAtomically(metadata, QJsonDocument(about).toJson(QJsonDocument::Indented), error);
-    }
+    const bool ok = publishAutosave(directory, session, data, std::move(about), error);
     if (ok) {
       qDebug().noquote() << QStringLiteral("Autosaved %1: %2 bytes to %3")
-                                .arg(name, QString::number(data.size()), project);
+                                .arg(name, QString::number(data.size()), directory);
     } else {
       qWarning().noquote() << QStringLiteral("Autosave of %1 failed: %2").arg(name, error);
     }

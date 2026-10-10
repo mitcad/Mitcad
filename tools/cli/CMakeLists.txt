@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # mitcad-cli: the model and the kernel without the user interface.
-add_executable(mitcad-cli main.cpp library.cpp library.hpp)
+add_executable(mitcad-cli main.cpp library.cpp library.hpp projects.cpp projects.hpp)
 target_link_libraries(mitcad-cli PRIVATE mitcad_ffi mitcad_geometry mitcad_geometry_io mitcad_warnings)
 
 # mitcad-cli render (mitcad#48, docs/rendering.md "Final render"): only with
@@ -22,6 +22,10 @@ if(MITCAD_RENDER)
   target_include_directories(mitcad-cli SYSTEM PRIVATE "${MITCAD_CGLTF_INCLUDE_DIR}")
   target_link_libraries(mitcad-cli PRIVATE Qt6::Gui TKMesh TKFillet TKPrim TKTopAlgo TKBRep)
 endif()
+
+# The imports, which the import corpus tests run, apart from the other
+# commands (tools/check-all.sh runs the corpus again when they change).
+target_sources(mitcad-cli PRIVATE import.cpp import.hpp)
 
 if(BUILD_TESTING)
   set(scripts "${CMAKE_CURRENT_SOURCE_DIR}/tests")
@@ -263,6 +267,12 @@ if(BUILD_TESTING)
   # sketch and the extrusion replayed parametric, making the stored cube.
   add_test(NAME cli.ipt_design_file COMMAND test_exchange --write-ipt-design "${exchange}/designed.ipt")
   set_tests_properties(cli.ipt_design_file PROPERTIES FIXTURES_SETUP cli_ipt_design)
+  # The replay's hang watchdog (--hang-limit): a try that hangs comparing
+  # the final bodies is given up, and the next one compares by volume.
+  add_test(NAME cli.import_ipt_hang_exit
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DFILE=${exchange}/designed.ipt"
+            -DMODE=import-ipt -P "${CMAKE_CURRENT_SOURCE_DIR}/hang-exit-test.cmake")
+  set_tests_properties(cli.import_ipt_hang_exit PROPERTIES FIXTURES_REQUIRED cli_ipt_design)
   add_test(NAME cli.import_ipt_design COMMAND mitcad-cli import-ipt "${exchange}/designed.ipt")
   set_tests_properties(cli.import_ipt_design PROPERTIES FIXTURES_REQUIRED cli_ipt_design PASS_REGULAR_EXPRESSION
     "Imported 1 bodies of designed\\.ipt.*parameters: 4 model, 1 user.*expressions: 5 translated, 5 agree.*2 timeline items: 2 parametric, 0 partial, 0 fallback, 0 skipped.*F1 Sketch1 \\(sketch\\): ok.*F2 Extrusion1 \\(extrude\\): ok")
@@ -270,6 +280,34 @@ if(BUILD_TESTING)
     COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DRUNNER=$<TARGET_FILE:mitcad_run_parallel>"
             "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/ipt-corpus" -P "${CMAKE_CURRENT_SOURCE_DIR}/ipt-corpus.cmake")
   set_tests_properties(ipt.corpus PROPERTIES SKIP_REGULAR_EXPRESSION "ipt corpus: skipped")
+  # The .iam import (mitcad#60, stage 4): a test project of assemblies saved
+  # on another machine (mitcad_ipt::testassembly): parts found relative to
+  # the assembly and by name, one missing, a sub-assembly, hidden, grounded
+  # and suppressed occurrences; every placement checked against the one
+  # the file displays and every placed part against its stored range box. Real assemblies under
+  # MITCAD_IPT_CORPUS: iam-corpus.cmake.
+  add_test(NAME cli.iam_files COMMAND test_exchange --write-iam "${exchange}/iam")
+  set_tests_properties(cli.iam_files PROPERTIES FIXTURES_SETUP cli_iam)
+  add_test(NAME cli.import_iam
+    COMMAND mitcad-cli import-iam "${exchange}/iam/top.iam" --save "${exchange}/iam/top.mitcad")
+  set_tests_properties(cli.import_iam PROPERTIES FIXTURES_REQUIRED cli_iam FIXTURES_SETUP cli_iam_saved
+    PASS_REGULAR_EXPRESSION
+    "Imported assembly top\\.iam: 7 occurrences placed \\(1 suppressed, 1 hidden, 1 of missing files, 0 not placed\\); 4 part files \\(3 imported, 1 missing, 0 failed; 3 identities confirmed, 0 differ\\), 1 sub-assemblies; units: mm.*files found: 1 by name, 1 missing, 3 relative to the assembly.*check: 7 of 7 placements agree with the displayed ones.*check: 5 of 5 parts. bodies lie within their stored range boxes")
+  add_test(NAME cli.info_iam COMMAND mitcad-cli info "${exchange}/iam/top.mitcad")
+  set_tests_properties(cli.info_iam PROPERTIES FIXTURES_REQUIRED cli_iam_saved
+    PASS_REGULAR_EXPRESSION "F1 Base1 \\(base\\): ok.*Bodies: 5")
+  # With --history, each part's design replayed: the cube's sketch and
+  # extrusion.
+  add_test(NAME cli.import_iam_history COMMAND mitcad-cli import-iam "${exchange}/iam/top.iam" --history)
+  set_tests_properties(cli.import_iam_history PROPERTIES FIXTURES_REQUIRED cli_iam PASS_REGULAR_EXPRESSION
+    "part [^\n]*cube\\.ipt [^\n]*imported: 1 bodies \\(1 valid, 0 not built\\); features 2 parametric")
+  add_test(NAME cli.import_ipt_iam COMMAND mitcad-cli import-ipt "${exchange}/iam/sub/sub.iam")
+  set_tests_properties(cli.import_ipt_iam PROPERTIES FIXTURES_REQUIRED cli_iam PASS_REGULAR_EXPRESSION
+    "Imported assembly sub\\.iam: 2 occurrences placed.*1 part files \\(1 imported, 0 missing.*check: 2 of 2 placements agree.*check: 2 of 2 parts. bodies lie within their stored range boxes")
+  add_test(NAME iam.corpus
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DRUNNER=$<TARGET_FILE:mitcad_run_parallel>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/iam-corpus" -P "${CMAKE_CURRENT_SOURCE_DIR}/iam-corpus.cmake")
+  set_tests_properties(iam.corpus PROPERTIES SKIP_REGULAR_EXPRESSION "iam corpus: skipped")
 
   # FreeCAD .FCStd import: a small document made by the test (B-rep shapes
   # from mitcad-geomtool), imported against a reference, saved and opened.
@@ -407,5 +445,43 @@ if(BUILD_TESTING)
               "-DPYTHON=${Python3_EXECUTABLE}"
               "-DGENERATOR=${PROJECT_SOURCE_DIR}/tools/libraries/make-fastener-library.py"
               "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/library" -P "${CMAKE_CURRENT_SOURCE_DIR}/library-test.cmake")
+  endif()
+endif()
+
+# Live updates (mitcad#89): mitcad-cli live test. Its tests need no broker:
+# a password over plain text is refused, a broker that cannot be reached is
+# reported (the client against brokers is tested in core.vcs).
+target_sources(mitcad-cli PRIVATE live.cpp live.hpp)
+if(BUILD_TESTING)
+  add_test(NAME cli.live_insecure COMMAND mitcad-cli live test mqtt://127.0.0.1:9 --user someone)
+  set_tests_properties(cli.live_insecure PROPERTIES ENVIRONMENT "MITCAD_MQTT_PASSWORD=secret"
+    PASS_REGULAR_EXPRESSION "sent only over TLS")
+  add_test(NAME cli.live_unreachable COMMAND mitcad-cli live test mqtt://127.0.0.1:9 --timeout 3)
+  set_tests_properties(cli.live_unreachable PROPERTIES PASS_REGULAR_EXPRESSION
+    "connect: failed \\([0-9]+ ms\\).*Warning: mqtt://127.0.0.1:9 is plain text.*Failed: ")
+endif()
+
+# With MITCAD_RENDER mitcad-cli loads Qt's DLLs (mitcad-cli render): on
+# Windows its tests find them through PATH, as app.unit does.
+if(BUILD_TESTING AND MITCAD_RENDER AND WIN32)
+  get_property(mitcad_cli_tests DIRECTORY PROPERTY TESTS)
+  set_property(TEST ${mitcad_cli_tests} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+
+# Headless MCP stdio server (mitcad#124), and the real CLI transport test.
+target_sources(mitcad-cli PRIVATE mcp.cpp mcp.hpp)
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME cli.mcp
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/mcp-test.py"
+              "$<TARGET_FILE:mitcad-cli>" "${CMAKE_CURRENT_BINARY_DIR}/mcp")
+    set_tests_properties(cli.mcp PROPERTIES TIMEOUT 180
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    if(MITCAD_RENDER AND WIN32)
+      set_property(TEST cli.mcp APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
   endif()
 endif()

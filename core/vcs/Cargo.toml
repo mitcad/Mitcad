@@ -18,6 +18,12 @@ mitcad-model.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+# Live updates (mitcad#89, remote/mqtt.rs): TLS in Rust, with ring as the
+# crypto provider (the default aws-lc-rs needs CMake and NASM to build) and
+# the system's root certificates checked by rustls-webpki.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8.4"
+
 [target.'cfg(unix)'.dependencies]
 # setsid() and kill() for the git program (remote/cli.rs): git runs without
 # the terminal Mitcad was started from, and a cancel ends its children too.

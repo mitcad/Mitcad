@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/render
 # File > Render Image (mitcad#48, docs/rendering.md "Final render") through
 # the real UI, on a red 60 x 40 x 20 mm block with a 16 mm hole through it:
 #   - The dialog changes the render settings' output section (each change
@@ -17,6 +18,7 @@
 # Skipped (exit 0) when the build has no render worker (MITCAD_RENDER off).
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-render-image-test.sh [directory for screenshots]
+# check-all sources: tools/cli
 
 UI_APP=${UI_APP:-$(cd "$(dirname "$0")/.." && pwd)/build/dev/app/mitcad}
 BUILD_DIR=$(cd "$(dirname "$UI_APP")/.." 2> /dev/null && pwd)
@@ -160,12 +162,8 @@ ui_step "Render" ui_click_logged "Render image render"
 expect_new_within 60 "Render image done: 320 x 240, 8 samples in" "the image is rendered"
 shot done
 ui_step "Save..." ui_click_logged "Render image save"
-ui_focus_dialog '^Save Rendered Image$'
-ui_key ctrl+a
-xdotool type --delay 20 "$WORK/render.png"
-sleep 0.5
 ui_mark
-ui_key Return
+ui_type_path "Save Rendered Image" "$WORK/render.png"
 expect_new_within 10 "Render image saved $WORK/render.png" "Save wrote the image"
 [ -s "$WORK/render.png" ] || ui_fail "the image file is empty"
 echo "ok   render.png has $(stat -c %s "$WORK/render.png") bytes"

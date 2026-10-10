@@ -580,11 +580,33 @@ pub(crate) fn check_components(
     if let Some(result) = crate::joints::check_components(assembly, features, entry) {
         return result;
     }
+    // A sketch's plane and projections may be geometry of the component a
+    // link names (mitcad#100); a path that leads nowhere now is left to
+    // recompute, which reports it.
+    let linked = match &entry.def {
+        FeatureDef::Sketch(sketch) => sketch.linked_references(),
+        _ => Vec::new(),
+    };
     for uid in entry.def.info().references().features {
         let Some(other) = features.iter().find(|f| f.uid == uid) else {
             continue;
         };
         let placed = crate::joints::placed_geometry(&other.def);
+        if let Some((_, link)) = linked.iter().find(|(u, _)| *u == uid) {
+            if let Ok(component) = link.source_component(assembly)
+                && placed
+                && other.component != component
+            {
+                return Err(format!(
+                    "{} is in {}, not in {}, where the link {} leads",
+                    other.name,
+                    assembly.name(other.component),
+                    assembly.name(component),
+                    link.source
+                ));
+            }
+            continue;
+        }
         if placed && other.component != entry.component {
             return Err(format!(
                 "{} is in {}; a feature of {} cannot use it",
@@ -1030,6 +1052,43 @@ impl<K: Kernel> Document<K> {
         self.cache.clear()
     }
 
+    // Definitions evaluated in parallel (the .f3d import, mitcad#95).
+
+    /// A copy of the document for another thread, which evaluates features
+    /// on the same results at the same time ([`Kernel::fork`]; None when
+    /// the kernel has no fork): the definition, the cached results and the
+    /// last recompute, shared, without undo history, result store or
+    /// monitor. Features added to the copy get the uids they would get
+    /// here, and their results the same versions, so
+    /// [`Document::adopt_results`] can take them over.
+    pub fn fork(&self) -> Option<Document<K>> {
+        let kernel = self.kernel.fork()?;
+        Some(Self {
+            kernel,
+            state: self.state.clone(),
+            revision: self.revision,
+            next_revision: self.next_revision,
+            saved_revision: self.saved_revision,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            cache: self.cache.fork(),
+            result: self.result.fork(),
+            recomputes: self.recomputes,
+            preview: None,
+            warnings: Vec::new(),
+            monitor: None,
+            resolver: self.resolver.clone(),
+        })
+    }
+
+    /// Takes over the cached results of the features `uids` that a fork of
+    /// this document evaluated ([`Document::fork`]): adding the same
+    /// definitions here then reuses them instead of evaluating them again.
+    /// Returns how many were taken.
+    pub fn adopt_results(&mut self, fork: &Document<K>, uids: &[FeatureUid]) -> usize {
+        self.cache.adopt(&fork.cache, uids)
+    }
+
     /// The cache and the last recompute, for diagnostics (`api/cache.rs`).
     pub(crate) fn cache(&self) -> &Cache<K::Shape> {
         &self.cache
@@ -1225,6 +1284,15 @@ impl<K: Kernel> Document<K> {
     ) -> Result<T, ModelError> {
         let mut next = self.state.clone();
         let (label, value, recompute) = edit(&mut next)?;
+        // Parameters can disappear with their owning features or
+        // components, or change units or dependencies. Keep every saved
+        // configuration applicable before committing any such edit.
+        if (next.parameters != self.state.parameters
+            || next.configurations != self.state.configurations)
+            && let Some(problem) = next.configurations.problems(&next.parameters).first()
+        {
+            return Err(invalid(format!("configurations: {problem}")));
+        }
         // Timeline groups stay runs whatever the edit did (P9).
         next.normalize_groups();
         // A sketch that got its first consumer hides, one that lost its
@@ -1538,6 +1606,10 @@ impl<K: Kernel> Document<K> {
         let id = self.param_id(name)?;
         self.apply_with(|state| {
             state.parameters.rename(id, new_name)?;
+            state
+                .configurations
+                .rename_parameter(name, new_name)
+                .map_err(invalid)?;
             Ok((format!("Rename {name} to {new_name}"), (), false))
         })
     }
@@ -1705,6 +1777,24 @@ impl<K: Kernel> Document<K> {
         body: Option<BodyUid>,
         linked: bool,
     ) -> Result<EditReport, ModelError> {
+        self.project_from(sketch, source, body, linked, None, None)
+    }
+
+    /// [`Document::project_into_sketch`] of geometry picked where an
+    /// occurrence path from the root (`occurrence`) places it, for the
+    /// sketch's component seen at `context` (mitcad#100): geometry of
+    /// another component is moved into the sketch's coordinates by the
+    /// placements at the marker, and a linked projection keeps the
+    /// [`crate::links::OccurrenceLink`] to follow it.
+    pub fn project_from(
+        &mut self,
+        sketch: FeatureUid,
+        source: &crate::topo::TopoName,
+        body: Option<BodyUid>,
+        linked: bool,
+        occurrence: Option<&[OccurrenceUid]>,
+        context: Option<&[OccurrenceUid]>,
+    ) -> Result<EditReport, ModelError> {
         let position = self.state.require(sketch)?;
         let frame = match (
             self.sketch_output(sketch),
@@ -1719,12 +1809,48 @@ impl<K: Kernel> Document<K> {
             (None, _) => return Err(invalid(format!("{sketch} is not a sketch"))),
         };
         let bodies = self.bodies_before(position);
-        // Only the sketch's component's bodies are in its coordinates.
+        // The sketch's component's bodies are in its coordinates; another
+        // component's are moved there through a link.
         let component = self.state.features[position].component;
+        let assembly = &self.state.assembly;
+        let link = match occurrence {
+            Some(path) => crate::links::link_for(assembly, component, path, context)
+                .map_err(|e| invalid(format!("projection of {source}: {e}")))?,
+            None => None,
+        };
+        let (from, to_sketch) = match &link {
+            Some(link) => {
+                let placements = &self.result.placements;
+                let mut placement = |o: OccurrenceUid| {
+                    placements.get(&o).copied().unwrap_or_else(|| {
+                        assembly
+                            .occurrence(o)
+                            .map_or(crate::transform::Transform::IDENTITY, |o| o.transform)
+                    })
+                };
+                let from = link.source_component(assembly);
+                let to_sketch = link.transform(assembly, component, &mut placement);
+                let error = |e: String| invalid(format!("projection of {source}: {e}"));
+                (from.map_err(error)?, Some(to_sketch.map_err(error)?))
+            }
+            None => (component, None),
+        };
+        if let Some(b) = body
+            && let Some(owner) = self.body_component(b)
+            && owner != from
+        {
+            return Err(invalid(format!(
+                "projection of {source}: {b} is a body of {}, not of {}; pick it where an \
+                 occurrence of {} shows it",
+                assembly.name(owner),
+                assembly.name(from),
+                assembly.name(owner)
+            )));
+        }
         let mut curves = Vec::new();
         for (uid, shape) in &bodies {
             if body.is_some_and(|b| b != *uid)
-                || self.body_component(*uid).is_some_and(|c| c != component)
+                || self.body_component(*uid).is_some_and(|c| c != from)
             {
                 continue;
             }
@@ -1741,6 +1867,12 @@ impl<K: Kernel> Document<K> {
                 "nothing named {source} exists before the sketch"
             )));
         }
+        if let Some(t) = &to_sketch {
+            curves = curves
+                .iter()
+                .map(|c| crate::sketch::project::transform_curve(t, c))
+                .collect();
+        }
         let projected = crate::sketch::project::project(&curves, &frame);
         let source = source.clone();
         let ((), report) = self.edit_sketch(sketch, "Project to {sketch}", |edit| {
@@ -1754,6 +1886,7 @@ impl<K: Kernel> Document<K> {
                     source,
                     body,
                     entities: refs,
+                    link,
                 });
             }
             Ok(())

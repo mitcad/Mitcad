@@ -16,6 +16,8 @@
 //! - The inputs of sweeps and lofts (mitcad#34).
 //! - Where the timeline's items put the occurrences, joints' motion types
 //!   and rigid groups' members (mitcad#81).
+//! - Extrusions' objects of extents up to an object and symmetric lengths
+//!   (mitcad#96).
 
 use std::path::PathBuf;
 
@@ -967,5 +969,74 @@ fn placements_joints_and_rigid_groups_match_the_reference_dumps() {
         "placements, joints and rigid groups: {agree} agree, {} differ",
         differ.len()
     );
+    assert!(differ.is_empty(), "{differ:#?}");
+}
+
+/// Extrusions' extents (mitcad#96): the object of an extent up to an
+/// object (a face found by its names at the dump's point, a plane by its
+/// name) and a symmetric extent's length.
+#[test]
+fn extrusion_extents_match_the_reference_dumps() {
+    let Some(dir) = models_dir() else {
+        eprintln!("reference models not found; skipped");
+        return;
+    };
+    let (mut agree, mut differ) = (0usize, Vec::new());
+    for (id, f3d, json) in models(&dir) {
+        let text = std::fs::read_to_string(&json).unwrap();
+        let reference = ir::Dump::from_json(&text).unwrap_or_else(|e| panic!("{id}: {e}"));
+        let designs = design::decode_path(&f3d).unwrap_or_else(|e| panic!("{id}: {e}"));
+        let Some(decoded) = designs.into_iter().find_map(|d| d.dump) else {
+            panic!("{id}: no design decoded");
+        };
+        let twins = of_kind(&decoded, "ExtrudeFeature");
+        for (k, item) in of_kind(&reference, "ExtrudeFeature")
+            .into_iter()
+            .enumerate()
+        {
+            let theirs = serde_json::to_value(item.detail.as_ref()).unwrap_or_default();
+            let Some(twin) = twins.get(k) else {
+                differ.push(format!("{id}: {}: not decoded", item.name().unwrap_or("?")));
+                continue;
+            };
+            let mine = serde_json::to_value(twin.detail.as_ref()).unwrap_or_default();
+            let raw = twin.f3d.as_ref().and_then(|f| f.extrude.as_ref());
+            let ok = if theirs["extentOne"]["_type"] == "ToEntityExtentDefinition" {
+                let (a, b) = (&mine["extentOne"]["entity"], &theirs["extentOne"]["entity"]);
+                let near = |x: &serde_json::Value, y: &serde_json::Value| {
+                    (0..3).all(|i| match (x[i].as_f64(), y[i].as_f64()) {
+                        (Some(p), Some(q)) => (p - q).abs() < 1e-6,
+                        _ => false,
+                    })
+                };
+                mine["extentOne"]["_type"] == "ToEntityExtentDefinition"
+                    && match b["kind"].as_str() {
+                        Some("face") => {
+                            a["kind"] == "face" && near(&a["point_on_face"], &b["point_on_face"])
+                        }
+                        _ => reference_key(a) == reference_key(b),
+                    }
+            } else if theirs["symmetricExtent"]["_type"] == "SymmetricExtentDefinition" {
+                raw.and_then(|r| r.full_length)
+                    == theirs["symmetricExtent"]["isFullLength"].as_bool()
+            } else {
+                continue;
+            };
+            if ok {
+                agree += 1;
+            } else {
+                differ.push(format!(
+                    "{id}: {}: {} / {}",
+                    item.name().unwrap_or("?"),
+                    mine["extentOne"],
+                    theirs["extentOne"]
+                ));
+            }
+        }
+    }
+    println!("extrusion extents: {agree} agree, {} differ", differ.len());
+    for d in &differ {
+        println!("  {d}");
+    }
     assert!(differ.is_empty(), "{differ:#?}");
 }

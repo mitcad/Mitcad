@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/render
 # The render device (mitcad#50, docs/rendering.md "Devices") through the
 # real UI, on a red block:
 #   - View > Rendered renders on the automatic choice: a GPU when the
@@ -20,6 +21,7 @@
 # The app starts three times.
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-render-device-test.sh
+# check-all sources: tools/cli
 
 UI_APP=${UI_APP:-$(cd "$(dirname "$0")/.." && pwd)/build/dev/app/mitcad}
 BUILD_DIR=$(cd "$(dirname "$UI_APP")/.." 2> /dev/null && pwd)

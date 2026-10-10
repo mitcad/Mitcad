@@ -1,0 +1,531 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets and chamfers whose contact runs along the far edge of a face: a
+face exactly as wide as the rounding's or the chamfer's contact distance
+(mitcad#121). The blend touches that face on its boundary all along, and
+the face vanishes in the result.
+
+- ChFi3d_Builder::SplitKPart: the tangency line of an analytic blend
+  (plane, cylinder, cone, torus) is cut into the domains of its faces by
+  hatching. A line lying on the boundary of its face has no domain inside
+  the face for the hatcher: the split failed, the stripe went to the
+  walking path (an approximated surface instead of the exact one), whose
+  start on the boundary was refused, so that the blend failed. Such a line
+  (HatchOnBoundary: no domain, and the same line moved into the face by
+  ten times the 2d tolerance has domains along which the line lies on the
+  boundary within Precision::Confusion) now takes the domains of the moved
+  line; the ends it finds on the arcs across, near a vertex, are put at
+  that vertex (SnapToVertex: on the line at the vertex, on the arc at the
+  vertex's parameter).
+- ChFi3d_ContactsAlongFaceEdges (new, called in ChFi3d_Builder::Compute
+  before ChFi3d_FilDS, after the corners): a surface data whose contact
+  curve on a face covers a whole edge of that face (its ends at the edge's
+  vertices, its points on the edge within a tenth of the 3d approximation
+  tolerance) is stored as a blend on that edge, the form 0011 gives a
+  blend rolling on an obstacle edge: that side takes the face beyond the
+  edge (its p-curve on that face, the transition seen from it) and the
+  edge as its curve. ChFi3d_CutConsumedFaces then drops the face it
+  consumes; before, the builder trimmed that face to a face of no area
+  along the edge (or an invalid wire). A blend made a little smaller than
+  its face (a retry at 99.9 %) stays inside the face.
+
+A contact that runs along an edge for part of the blend only is left as
+it was, and so is a walked (non-analytic) blend whose contact runs along
+the boundary: its start there is still refused.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 3a60958..3b50a0d 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -744,6 +744,8 @@ void ChFi3d_Builder::Compute()
+       }
+       // 05/02/02 akm ^^^
+       int solidindex = st->SolidIndex();
++      // Contacts along whole edges of their faces, once the corners are done.
++      ChFi3d_ContactsAlongFaceEdges(DStr, st, myEFMap, tolapp3d);
+       ChFi3d_FilDS(solidindex, st, DStr, myRegul, tolapp3d, tol2d);
+       // Narrow faces consumed by blends on their edges (edge overflow).
+       ChFi3d_CutConsumedFaces(DStr, st, myEFMap);
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+index 072bc3b..b31bc45 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -52,10 +52,12 @@
+ #include <GeomInt_IntSS.hxx>
+ #include <GeomInt_WLApprox.hxx>
+ #include <GeomLib.hxx>
++#include <GeomProjLib.hxx>
+ #include <GeomLProp_CLProps.hxx>
+ #include <Geom_Ellipse.hxx>
+ #include <Geom_Line.hxx>
+ #include <Geom_RectangularTrimmedSurface.hxx>
++#include <Geom_TrimmedCurve.hxx>
+ #include <IntAna_QuadQuadGeo.hxx>
+ #include <IntCurveSurface_HInter.hxx>
+ #include <IntCurveSurface_IntersectionPoint.hxx>
+@@ -2836,6 +2838,190 @@ void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&       DStr,
+   }
+ }
+ 
++// Whether the contact curve C on [T1, T2] runs along the whole edge E: its
++// ends at the vertices of E and its points on E, within Tol.
++static bool runsAlongEdge(const occ::handle<Geom_Curve>& C,
++                          const double                   T1,
++                          const double                   T2,
++                          const TopoDS_Edge&             E,
++                          const double                   Tol)
++{
++  TopoDS_Vertex V1, V2;
++  TopExp::Vertices(E, V1, V2);
++  if (V1.IsNull() || V2.IsNull() || V1.IsSame(V2))
++  {
++    return false;
++  }
++  const gp_Pnt A = BRep_Tool::Pnt(V1), B = BRep_Tool::Pnt(V2);
++  const gp_Pnt P1 = C->Value(T1), P2 = C->Value(T2);
++  const double aTol = Tol + std::max(BRep_Tool::Tolerance(V1), BRep_Tool::Tolerance(V2));
++  if (!((P1.Distance(A) <= aTol && P2.Distance(B) <= aTol)
++        || (P1.Distance(B) <= aTol && P2.Distance(A) <= aTol)))
++  {
++    return false;
++  }
++  double                        f = 0., l = 0.;
++  const occ::handle<Geom_Curve> aCE = BRep_Tool::Curve(E, f, l);
++  if (aCE.IsNull())
++  {
++    return false;
++  }
++  // (Not widened by the edge's tolerance: a rounding made a little smaller
++  // than its face, as on a retry, stays inside the face.)
++  const double  aTolE = Tol;
++  constexpr int aNbSamples = 9;
++  for (int i = 1; i < aNbSamples; i++)
++  {
++    const gp_Pnt                aP = C->Value(T1 + (T2 - T1) * i / aNbSamples);
++    GeomAPI_ProjectPointOnCurve aProj(aP, aCE, f, l);
++    if (aProj.NbPoints() == 0 || aProj.LowerDistance() > aTolE)
++    {
++      return false;
++    }
++  }
++  return true;
++}
++
++// The outward normal of face F at the point of its surface nearest to P.
++static bool faceNormalAt(const TopoDS_Face& F, const gp_Pnt& P, gp_Dir& N)
++{
++  const occ::handle<Geom_Surface> S = BRep_Tool::Surface(F);
++  GeomAPI_ProjectPointOnSurf      aProj(P, S);
++  if (aProj.NbPoints() == 0)
++  {
++    return false;
++  }
++  double u = 0., v = 0.;
++  aProj.LowerDistanceParameters(u, v);
++  gp_Pnt aP;
++  gp_Vec aDu, aDv;
++  S->D1(u, v, aP, aDu, aDv);
++  const gp_Vec aN = aDu.Crossed(aDv);
++  if (aN.Magnitude() <= gp::Resolution())
++  {
++    return false;
++  }
++  N = gp_Dir(aN);
++  return true;
++}
++
++void ChFi3d_ContactsAlongFaceEdges(TopOpeBRepDS_DataStructure&       DStr,
++                                   const occ::handle<ChFiDS_Stripe>& CorDat,
++                                   const ChFiDS_Map&                 EFMap,
++                                   const double                      Tol3d)
++{
++  const occ::handle<ChFiDS_Spine>& aSpine = CorDat->Spine();
++  if (aSpine.IsNull() || CorDat->SetOfSurfData().IsNull())
++  {
++    return;
++  }
++  const NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& SeqFil =
++    CorDat->SetOfSurfData()->Sequence();
++  for (int j = 1; j <= SeqFil.Length(); j++)
++  {
++    const occ::handle<ChFiDS_SurfData>& Fd = SeqFil(j);
++    for (int ons = 1; ons <= 2; ons++)
++    {
++      const int anIndex = Fd->Index(ons);
++      if (Fd->IsOnCurve(ons) || anIndex <= 0)
++      {
++        continue;
++      }
++      const ChFiDS_FaceInterference& FI = Fd->Interference(ons);
++      if (FI.LineIndex() == 0 || FI.PCurveOnFace().IsNull())
++      {
++        continue;
++      }
++      const occ::handle<Geom_Curve>& C  = DStr.Curve(FI.LineIndex()).Curve();
++      const double                   T1 = FI.FirstParameter(), T2 = FI.LastParameter();
++      if (C.IsNull() || std::abs(T2 - T1) <= Precision::PConfusion())
++      {
++        continue;
++      }
++      const TopoDS_Face F = TopoDS::Face(DStr.Shape(anIndex));
++      TopoDS_Edge       E;
++      for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More() && E.IsNull(); ex.Next())
++      {
++        const TopoDS_Edge& aCur = TopoDS::Edge(ex.Current());
++        bool               onSpine = BRep_Tool::Degenerated(aCur);
++        for (int ie = 1; ie <= aSpine->NbEdges() && !onSpine; ie++)
++        {
++          onSpine = aSpine->Edges(ie).IsSame(aCur);
++        }
++        if (!onSpine && runsAlongEdge(C, T1, T2, aCur, 0.1 * Tol3d))
++        {
++          E = aCur;
++        }
++      }
++      if (E.IsNull() || !EFMap.Contains(E))
++      {
++        continue;
++      }
++      // The face beyond the edge.
++      TopoDS_Face Fv;
++      int         aNbFaces = 0;
++      for (NCollection_List<TopoDS_Shape>::Iterator it(EFMap(E)); it.More(); it.Next())
++      {
++        aNbFaces++;
++        if (!it.Value().IsSame(F))
++        {
++          Fv = TopoDS::Face(it.Value());
++        }
++      }
++      if (Fv.IsNull() || aNbFaces != 2)
++      {
++        continue;
++      }
++      const occ::handle<Geom_Surface> Sv = BRep_Tool::Surface(Fv);
++      const occ::handle<Geom2d_Curve> PCv =
++        GeomProjLib::Curve2d(new Geom_TrimmedCurve(C, T1, T2), T1, T2, Sv);
++      if (PCv.IsNull())
++      {
++        continue;
++      }
++      // The transition on the face beyond: the blend lies, from the contact
++      // curve, toward the other contact (outside that face), as on F (inside
++      // F); the sides compare in each face's parametric orientation.
++      const double aTm = 0.5 * (T1 + T2);
++      gp_Pnt       aPm;
++      gp_Vec       aT;
++      C->D1(aTm, aPm, aT);
++      const ChFiDS_FaceInterference& FIo = Fd->Interference(3 - ons);
++      const occ::handle<Geom_Curve>& Co  = DStr.Curve(FIo.LineIndex()).Curve();
++      gp_Dir                         NF, Nv;
++      if (Co.IsNull() || aT.Magnitude() <= gp::Resolution() || !faceNormalAt(F, aPm, NF)
++          || !faceNormalAt(Fv, aPm, Nv))
++      {
++        continue;
++      }
++      const gp_Vec aToBlend(aPm, Co->Value(aTm));
++      const gp_Vec aBF = aToBlend - gp_Vec(NF) * aToBlend.Dot(gp_Vec(NF));
++      const gp_Vec aBv = aToBlend - gp_Vec(Nv) * aToBlend.Dot(gp_Vec(Nv));
++      const double aSF = gp_Vec(NF).Crossed(aT).Dot(aBF);
++      const double aSv = gp_Vec(Nv).Crossed(aT).Dot(aBv);
++      if (std::abs(aSF) <= gp::Resolution() || std::abs(aSv) <= gp::Resolution())
++      {
++        continue;
++      }
++      const TopAbs_Orientation aTra =
++        (aSF > 0.) == (aSv > 0.) ? FI.Transition() : TopAbs::Reverse(FI.Transition());
++      ChFiDS_FaceInterference& aFI = Fd->ChangeInterference(ons);
++      aFI.ChangePCurveOnFace()     = PCv;
++      aFI.SetTransition(aTra);
++      if (ons == 1)
++      {
++        Fd->ChangeIndexOfS1(DStr.AddShape(Fv));
++        Fd->SetIndexOfC1(DStr.AddShape(E));
++      }
++      else
++      {
++        Fd->ChangeIndexOfS2(DStr.AddShape(Fv));
++        Fd->SetIndexOfC2(DStr.AddShape(E));
++      }
++    }
++  }
++}
++
+ void ChFi3d_FilDS(const int                         SolidIndex,
+                   const occ::handle<ChFiDS_Stripe>& CorDat,
+                   TopOpeBRepDS_DataStructure&       DStr,
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+index 45a5294..6859a55 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+@@ -543,4 +543,15 @@ void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&       DStr,
+                              const occ::handle<ChFiDS_Stripe>& CorDat,
+                              const ChFiDS_Map&                 EFMap);
+ 
++//! A blend between two faces whose contact line on a face runs along a whole
++//! edge of that face (a face exactly as wide as the blend's contact distance)
++//! is stored as a blend on that edge: its side takes the face beyond the
++//! edge, as a blend rolling on an obstacle does, so that the face it
++//! consumes is dropped (ChFi3d_CutConsumedFaces) instead of being trimmed to
++//! nothing.
++void ChFi3d_ContactsAlongFaceEdges(TopOpeBRepDS_DataStructure&       DStr,
++                                   const occ::handle<ChFiDS_Stripe>& CorDat,
++                                   const ChFiDS_Map&                 EFMap,
++                                   const double                      Tol3d);
++
+ #endif
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
+index a3ee64b..f258c5a 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
+@@ -28,7 +28,9 @@
+ #include <NCollection_DataMap.hxx>
+ #include <ElCLib.hxx>
+ #include <ElSLib.hxx>
++#include <BRep_Tool.hxx>
+ #include <Geom2d_Curve.hxx>
++#include <Geom2dAPI_ProjectPointOnCurve.hxx>
+ #include <Geom2dAdaptor_Curve.hxx>
+ #include <Geom2dHatch_Hatcher.hxx>
+ #include <Geom2dHatch_Intersector.hxx>
+@@ -48,6 +50,7 @@
+ #include <NCollection_Array1.hxx>
+ #include <NCollection_Sequence.hxx>
+ #include <TopExp.hxx>
++#include <TopoDS.hxx>
+ #include <TopoDS_Edge.hxx>
+ #include <TopoDS_Face.hxx>
+ #include <TopoDS_Shape.hxx>
+@@ -622,6 +625,128 @@ static bool Tri(const Geom2dHatch_Hatcher& H,
+   return true;
+ }
+ 
++//=======================================================================
++// function : HatchOnBoundary
++// purpose  : A tangency line lying on the boundary of its face (a face
++//            exactly as wide as the blend's contact distance) has no domain
++//            inside the face for the hatcher. Its domains are those of the
++//            same line moved into the face by Shift (a little more than the
++//            hatcher's tolerance), when the line lies on the boundary all
++//            along them. Replaces the hatching iH of H by that one and
++//            returns the number of domains; 0 otherwise.
++//=======================================================================
++
++static int HatchOnBoundary(Geom2dHatch_Hatcher&                    H,
++                           int&                                    iH,
++                           const occ::handle<Geom2d_Curve>&        C,
++                           const occ::handle<Adaptor3d_TopolTool>& I,
++                           const double                            Shift)
++{
++  const double f = C->FirstParameter(), l = C->LastParameter();
++  const double tm =
++    (Precision::IsInfinite(f) || Precision::IsInfinite(l)) ? 0. : 0.5 * (f + l);
++  gp_Pnt2d aP;
++  gp_Vec2d aT;
++  C->D1(tm, aP, aT);
++  if (aT.Magnitude() <= gp::Resolution())
++  {
++    return 0;
++  }
++  const gp_Vec2d aN = gp_Vec2d(-aT.Y(), aT.X()) / aT.Magnitude();
++  for (const double aSide : {1., -1.})
++  {
++    const occ::handle<Geom2d_Curve> aCs =
++      occ::down_cast<Geom2d_Curve>(C->Translated(aN * (aSide * Shift)));
++    if (aCs.IsNull())
++    {
++      continue;
++    }
++    Geom2dAdaptor_Curve aLs(aCs);
++    const int           iHs = H.Trim(aLs);
++    H.ComputeDomains(iHs);
++    const int aNb = H.IsDone(iHs) ? H.NbDomains(iHs) : 0;
++    bool      onBoundary = aNb > 0;
++    for (int i = 1; i <= aNb && onBoundary; i++)
++    {
++      const HatchGen_Domain& aDom = H.Domain(iHs, i);
++      if (!aDom.HasFirstPoint() || !aDom.HasSecondPoint())
++      {
++        onBoundary = false;
++        break;
++      }
++      const double a = aDom.FirstPoint().Parameter(), b = aDom.SecondPoint().Parameter();
++      for (int k = 1; k < 8 && onBoundary; k++)
++      {
++        onBoundary =
++          I->Classify(C->Value(a + (b - a) * k / 8.), Precision::Confusion(), false) == TopAbs_ON;
++      }
++    }
++    if (onBoundary)
++    {
++      H.RemHatching(iH);
++      iH = iHs;
++      return aNb;
++    }
++    H.RemHatching(iHs);
++  }
++  return 0;
++}
++
++//=======================================================================
++// function : SnapToVertex
++// purpose  : The end of a tangency line on the boundary of face F (see
++//            HatchOnBoundary) found on arc E within Tol of a vertex of E is
++//            at that vertex: on the line at the vertex, on E at its
++//            parameter.
++//=======================================================================
++
++static void SnapToVertex(TopOpeBRepDS_DataStructure&   DStr,
++                         occ::handle<ChFiDS_SurfData>& CD,
++                         const bool                    isFirst,
++                         const int                     ons,
++                         const double                  pitol,
++                         const double                  Tol)
++{
++  ChFiDS_CommonPoint& Pons = CD->ChangeVertex(isFirst, ons);
++  if (!Pons.IsOnArc() || Pons.IsVertex())
++  {
++    return;
++  }
++  const TopoDS_Edge E = Pons.Arc();
++  const TopoDS_Face F = TopoDS::Face(DStr.Shape(CD->Index(ons)));
++  TopoDS_Vertex     V1, V2;
++  TopExp::Vertices(E, V1, V2);
++  for (const TopoDS_Vertex& V : {V1, V2})
++  {
++    if (V.IsNull() || BRep_Tool::Pnt(V).Distance(Pons.Point()) > Tol)
++    {
++      continue;
++    }
++    Geom2dAPI_ProjectPointOnCurve aProj(BRep_Tool::Parameters(V, F),
++                                        CD->Interference(ons).PCurveOnFace());
++    if (aProj.NbPoints() == 0)
++    {
++      return;
++    }
++    const double             aPar = aProj.LowerDistanceParameter();
++    const TopAbs_Orientation aTra = Pons.TransitionOnArc();
++    Pons.SetVertex(V);
++    Pons.SetArc(pitol, E, BRep_Tool::Parameter(V, E), aTra);
++    occ::handle<Geom_Surface> Surf = DStr.Surface(CD->Surf()).Surface();
++    for (int s = 1; s <= 2; s++)
++    {
++      if (s != ons && CD->Vertex(isFirst, s).IsOnArc())
++      {
++        continue;
++      }
++      CD->ChangeInterference(s).SetParameter(aPar, isFirst);
++      const gp_Pnt2d aUV = CD->Interference(s).PCurveOnSurf()->Value(aPar);
++      CD->ChangeVertex(isFirst, s).SetPoint(Surf->Value(aUV.X(), aUV.Y()));
++    }
++    return;
++  }
++}
++
+ //=================================================================================================
+ 
+ static void FillSD(TopOpeBRepDS_DataStructure&                               DStr,
+@@ -632,7 +757,8 @@ static void FillSD(TopOpeBRepDS_DataStructure&                               DSt
+                    const bool                                                isFirst,
+                    const int                                                 ons,
+                    const double                                              pitol,
+-                   const TopoDS_Vertex&                                      bout)
++                   const TopoDS_Vertex&                                      bout,
++                   const double                                              snapTol = 0.)
+ 
+ {
+   int                 opp  = 3 - ons;
+@@ -739,6 +865,12 @@ static void FillSD(TopOpeBRepDS_DataStructure&                               DSt
+     pcopp->Value(ponH).Coord(x, y);
+     CD->ChangeVertex(isFirst, opp).SetPoint(Surf->Value(x, y));
+   }
++  if (snapTol > 0. && pPH != nullptr)
++  {
++    // (A tangency line on the boundary of its face, hatched a little
++    // inside.)
++    SnapToVertex(DStr, CD, isFirst, ons, pitol, snapTol);
++  }
+ }
+ 
+ //=======================================================================
+@@ -764,6 +896,10 @@ bool ChFi3d_Builder::SplitKPart(const occ::handle<ChFiDS_SurfData>&
+   NCollection_DataMap<int, occ::handle<Adaptor2d_Curve2d>> M1, M2;
+   int                                                      iH1 = 0, iH2 = 0;
+   int                                                      Nb1 = 1, Nb2 = 1;
++  // A tangency line on the boundary of its face is hatched this far inside
++  // it, and its ends found this near a vertex are at the vertex.
++  const double aShift = 10. * tol2d;
++  double       snap1 = 0., snap2 = 0.;
+ 
+   // Cutting of tangency lines (hatching).
+   Geom2dHatch_Intersector   Inter(pitol, pitol);
+@@ -797,6 +933,11 @@ bool ChFi3d_Builder::SplitKPart(const occ::handle<ChFiDS_SurfData>&
+     Nb1 = H1.NbDomains(iH1);
+     if (Nb1 == 0)
+     {
++      Nb1   = HatchOnBoundary(H1, iH1, C1, I1, aShift);
++      snap1 = Nb1 > 0 ? 100. * aShift : 0.;
++    }
++    if (Nb1 == 0)
++    {
+ #ifdef OCCT_DEBUG
+       std::cout << "SplitKPart : tangency line out of the face" << std::endl;
+ #endif
+@@ -832,6 +973,11 @@ bool ChFi3d_Builder::SplitKPart(const occ::handle<ChFiDS_SurfData>&
+     Nb2 = H2.NbDomains(iH2);
+     if (Nb2 == 0)
+     {
++      Nb2   = HatchOnBoundary(H2, iH2, C2, I2, aShift);
++      snap2 = Nb2 > 0 ? 100. * aShift : 0.;
++    }
++    if (Nb2 == 0)
++    {
+ #ifdef OCCT_DEBUG
+       std::cout << "SplitKPart : tangency line out of the face" << std::endl;
+ #endif
+@@ -908,8 +1054,8 @@ bool ChFi3d_Builder::SplitKPart(const occ::handle<ChFiDS_SurfData>&
+     for (int i = 1; i <= Nb2; i++)
+     {
+       const HatchGen_Domain& Dom2 = H2.Domain(iH2, Ind2(i));
+-      FillSD(DStr, CD, M2, Dom2, Dom2.FirstPoint().Parameter(), true, 2, pitol, bout1);
+-      FillSD(DStr, CD, M2, Dom2, Dom2.SecondPoint().Parameter(), false, 2, pitol, bout2);
++      FillSD(DStr, CD, M2, Dom2, Dom2.FirstPoint().Parameter(), true, 2, pitol, bout1, snap2);
++      FillSD(DStr, CD, M2, Dom2, Dom2.SecondPoint().Parameter(), false, 2, pitol, bout2, snap2);
+       SetData.Append(CD);
+       CD = CpSD(DStr, CD);
+     }
+@@ -962,8 +1108,8 @@ bool ChFi3d_Builder::SplitKPart(const occ::handle<ChFiDS_SurfData>&
+     for (int i = 1; i <= Nb1; i++)
+     {
+       const HatchGen_Domain& Dom1 = H1.Domain(iH1, Ind1(i));
+-      FillSD(DStr, CD, M1, Dom1, Dom1.FirstPoint().Parameter(), true, 1, pitol, bout1);
+-      FillSD(DStr, CD, M1, Dom1, Dom1.SecondPoint().Parameter(), false, 1, pitol, bout2);
++      FillSD(DStr, CD, M1, Dom1, Dom1.FirstPoint().Parameter(), true, 1, pitol, bout1, snap1);
++      FillSD(DStr, CD, M1, Dom1, Dom1.SecondPoint().Parameter(), false, 1, pitol, bout2, snap1);
+       SetData.Append(CD);
+       CD = CpSD(DStr, CD);
+     }
+@@ -1056,19 +1202,19 @@ bool ChFi3d_Builder::SplitKPart(const occ::handle<ChFiDS_SurfData>&
+             {
+               if (f1 >= f2 - tol2d)
+               {
+-                FillSD(DStr, CD, M1, Dom1, f1, true, 1, pitol, bout1);
++                FillSD(DStr, CD, M1, Dom1, f1, true, 1, pitol, bout1, snap1);
+               }
+               if (f2 >= f1 - tol2d)
+               {
+-                FillSD(DStr, CD, M2, Dom2, f2, true, 2, pitol, bout1);
++                FillSD(DStr, CD, M2, Dom2, f2, true, 2, pitol, bout1, snap2);
+               }
+               if (l1 >= l2 - tol2d)
+               {
+-                FillSD(DStr, CD, M2, Dom2, l2, false, 2, pitol, bout2);
++                FillSD(DStr, CD, M2, Dom2, l2, false, 2, pitol, bout2, snap2);
+               }
+               if (l2 >= l1 - tol2d)
+               {
+-                FillSD(DStr, CD, M1, Dom1, l1, false, 1, pitol, bout2);
++                FillSD(DStr, CD, M1, Dom1, l1, false, 1, pitol, bout2, snap1);
+               }
+               SetData.Append(CD);
+               CD = CpSD(DStr, CD);

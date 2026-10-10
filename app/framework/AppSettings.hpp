@@ -21,16 +21,14 @@ struct GeneralSettings {
   void save() const;
 };
 
-// Who the versions of projects are recorded by (P12d, Preferences, General;
-// the settings versions/useGit, versions/name, versions/email,
-// versions/confirmed): git's configured user (user.name and user.email)
-// while useGit is on and git has one, else the name and email here. The
-// first version saved shows the author once (confirmed).
+// The default author of versions (Preferences, Cloud; the settings
+// versions/name, versions/email): a project's versions are recorded by the
+// author in its repository's configuration (New Project and Project
+// Settings set it), else git's configured user (user.name and user.email),
+// else this name and email (mitcad#89).
 struct VersionSettings {
-  bool useGit = true;
   QString name;
   QString email;
-  bool confirmed = false;
 
   // Both a name and an email address are given.
   bool complete() const;
@@ -45,19 +43,24 @@ struct VersionSettings {
 // user's documents (MITCAD_PROJECTS_DIR for tests).
 QString projectsDirectory();
 
-// Remote repositories (P12 remote, Preferences, Version Control; the
-// settings remote/git, remote/checkMinutes, remote/autoPush): the git
-// program that does the network work (empty: found on PATH, on Windows
-// also where Git for Windows installs itself), how often the remote of
-// the open design's project is checked for newer versions (when the
-// design opens and then every so many minutes; 0: never on its own), and
-// whether each version saved is sent to the remote at once.
+// Cloud projects (P12 remote, mitcad#89; Preferences, Cloud; the settings
+// remote/git, remote/checkMinutes, remote/autoPush, remote/allowLive,
+// remote/defaultBroker): the git program that does the network work
+// (empty: found on PATH, on Windows also where Git for Windows installs
+// itself), how often the remote of the current project is checked for
+// newer versions (when a design opens and then every so many minutes; 0:
+// never on its own) and whether each version saved is sent to the remote
+// at once, both the defaults of projects that do not set them (Project
+// Settings); whether live updates (MQTT) are allowed at all, and the
+// broker New Project offers.
 struct RemoteSettings {
   static constexpr int kMaxCheckMinutes = 240;
 
   QString git;
   int checkMinutes = 10;
   bool autoPush = true;
+  bool allowLive = true;
+  QString defaultBroker;
 
   static RemoteSettings load();
   void save() const;

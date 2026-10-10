@@ -19,6 +19,12 @@
 //                                       return for S seconds is imported
 //                                       again without the item (default
 //                                       600), so no design hangs the run
+//   --threads N                         threads an import uses at once:
+//                                       an item's definitions, reading the
+//                                       bodies, the history's bodies built
+//                                       ahead (default 1, mitcad#95,
+//                                       mitcad#103); the reports are the
+//                                       same, only the times differ
 //   test_f3d_import --models [dir]      the reference lofts and sweeps (route
 //                                       A): the reference models under dir
 //                                       (default MITCAD_F3D_MODELS, else
@@ -348,6 +354,39 @@ void test_out_of_memory(const fs::path& dir) {
   }
 }
 
+// An allocation that fails inside OCCT (mitcad#132), caught there as its
+// checker and healing catch their failures, so that only the count of
+// failed allocations tells (MITCAD_TEST_OCCT_ALLOCATION_FAILS): in the
+// healing of the file's bodies, and in an item's kernel operation. The
+// process goes on (OCCT's allocator throws instead of returning null), and
+// the import stops as low on memory.
+void test_failed_occt_allocation(const fs::path& dir) {
+  const fs::path file = dir / "bodies.f3d";
+  const fs::path dump = dir / "block-dump.json";
+  std::ofstream(dump) << kBlockDump;
+  for (const char* operation : {"heal", "extrude"}) {
+    set_env("MITCAD_TEST_OCCT_ALLOCATION_FAILS", operation);
+    auto document = mitcad::new_document();
+    std::string report;
+    std::string error;
+    try {
+      report = std::string(
+          document->import_f3d_timeline(file.string(), R"({"dump": )" + json_path(dump) + R"(, "hang_limit": 60})"));
+    } catch (const std::exception& e) {
+      error = e.what();
+    }
+    set_env("MITCAD_TEST_OCCT_ALLOCATION_FAILS", "");
+    CHECK(error.empty());
+    CHECK(contains(report, "the import ran low on memory"));
+    CHECK(contains(report, R"("low_memory": {)"));
+    if (std::string(operation) == "heal") {
+      CHECK(contains(report, "building a body of the file: out of memory"));
+    } else {
+      CHECK(contains(report, "extrude: out of memory"));
+    }
+  }
+}
+
 void test_bad_input(const fs::path& dir) {
   auto document = mitcad::new_document();
   bool failed = false;
@@ -436,6 +475,9 @@ fs::path default_corpus() {
   return home.empty() ? fs::path() : fs::path(home) / "f3d-corpus";
 }
 
+// The threads of the corpus imports (--threads, mitcad#95).
+int g_import_threads = 1;
+
 // Imports one design of a corpus file (`design` empty: the default one)
 // and adds its items and body agreement to the coverage.
 void import_corpus_design(const std::string& id, const std::string& path, const std::string& design,
@@ -443,7 +485,8 @@ void import_corpus_design(const std::string& id, const std::string& path, const 
   ++c.designs;
   const auto start = std::chrono::steady_clock::now();
   std::string options = "{" + std::string(R"("time_limit": )") + std::to_string(time_limit) +
-                        R"(, "hang_limit": )" + std::to_string(hang_limit);
+                        R"(, "hang_limit": )" + std::to_string(hang_limit) + R"(, "threads": )" +
+                        std::to_string(g_import_threads);
   if (!design.empty()) {
     options += R"(, "design": )" + json_path(design);
   }
@@ -656,7 +699,7 @@ int corpus(const fs::path& dir, const CorpusOptions& o) {
     weights.push_back(mitcad::runs::file_weight(files[i]));
     commands.push_back({o.self, "--corpus-file", files[i], "--id", id, "--max-items", std::to_string(max_items),
                         "--time-limit", std::to_string(time_limit), "--hang-limit", std::to_string(hang_limit),
-                        "--reports", reports.string()});
+                        "--reports", reports.string(), "--threads", std::to_string(g_import_threads)});
   }
   mitcad::runs::run_all(commands, o.parallel, [&](std::size_t i, const mitcad::runs::Outcome& outcome) {
     std::string text;
@@ -897,6 +940,8 @@ int child(const std::vector<std::string>& args) {
       o.hang_limit = std::atof(value.c_str());
     } else if (args[i] == "--reports") {
       o.reports = value;
+    } else if (args[i] == "--threads") {
+      g_import_threads = std::max(1, std::atoi(value.c_str()));
     }
   }
   Coverage c;
@@ -914,6 +959,7 @@ int child(const std::vector<std::string>& args) {
 } // namespace
 
 int main(int argc, char** argv) {
+  mitcad::runs::no_core_dumps();
   mitcad::io::silence_occt_messages();
   std::vector<std::string> args(argv + 1, argv + argc);
   try {
@@ -938,6 +984,8 @@ int main(int argc, char** argv) {
           o.hang_limit = std::atof(args[++i].c_str());
         } else if (args[i] == "--reports" && i + 1 < args.size()) {
           o.reports = args[++i];
+        } else if (args[i] == "--threads" && i + 1 < args.size()) {
+          g_import_threads = std::max(1, std::atoi(args[++i].c_str()));
         } else {
           dir = args[i];
         }
@@ -952,7 +1000,7 @@ int main(int argc, char** argv) {
     }
     if (args.size() != 1) {
       std::fprintf(stderr, "usage: test_f3d_import <dir> | --corpus [dir] [--every N] [--max-items N] "
-                           "[--time-limit S] [--hang-limit S] [--reports DIR] | --models [dir]\n"
+                           "[--time-limit S] [--hang-limit S] [--reports DIR] [--threads N] | --models [dir]\n"
                            "  corpus and models: [--jobs N] [--memory SIZE] [--file-timeout S]\n");
       return 2;
     }
@@ -963,6 +1011,7 @@ int main(int argc, char** argv) {
     test_watchdog(dir);
     test_watchdog_slow_build(dir);
     test_out_of_memory(dir);
+    test_failed_occt_allocation(dir);
     test_bad_input(dir);
   } catch (const std::exception& e) {
     std::fprintf(stderr, "test_f3d_import: %s\n", e.what());

@@ -15,7 +15,7 @@ JSON commands.
 | `core/import` (`mitcad-import`) | Rust | Replays `.f3d` dumps and FreeCAD documents as Mitcad commands, checked against the file's stored results ([README](../core/import/README.md)). |
 | `core/freecad` (`mitcad-freecad`) | Rust | `.FCStd` reader: typed objects and properties, placements, links, sketches, spreadsheets, expressions. No geometry. |
 | `core/zip` (`mitcad-zip`) | Rust | Zip container for `.f3d` and `.FCStd` (stored, deflate, zstd; a writer for tests). |
-| `core/ipt` (`mitcad-ipt`) | Rust | `.ipt` part files: compound file container (MS-CFB), property sets (MS-OLEPS), the segment database, the B-rep record converted by `core/f3d`'s ASM code, the definitions segment (parameters, sketches, features) as the import's dump IR ([README](../core/ipt/README.md)). No geometry. |
+| `core/ipt` (`mitcad-ipt`) | Rust | `.ipt` part files: compound file container (MS-CFB), property sets (MS-OLEPS), the segment database, the B-rep record converted by `core/f3d`'s ASM code, the meshes of mesh features, the definitions segment (parameters, sketches, features) as the import's dump IR, and `.iam` assemblies (referenced files, occurrences, placements; [README](../core/ipt/README.md)). No geometry. |
 | `core/dxf` | Rust | DXF read and write. |
 | `core/3mf` (`mitcad-3mf`) | Rust | 3MF writer (one object of parts) and a checking reader for tests. |
 | `core/vcs` (`mitcad-vcs`) | Rust | Version history of projects in git (gitoxide, only here); remotes through the system's git; component libraries and community indexes in git repositories ([libraries.md](libraries.md)). |
@@ -87,6 +87,20 @@ through the `Kernel` trait, so model tests run on a mock kernel.
   of that time, at which it gives way to the next ones and waits for what
   is left (mitcad#78). Without a monitor (`mitcad-cli`) nothing stops
   early.
+- **Parallel evaluation:** `Document::fork` copies a document for another
+  thread (definition, cached results and last recompute shared; a kernel
+  of its own from `Kernel::fork`, None where a kernel cannot work on
+  another thread), and `Document::adopt_results` takes a fork's results
+  into the document's cache. The `.f3d` import evaluates the definitions
+  ranked after the one it tries on such forks, with `threads` workers,
+  and takes their results in rank order, so the import is the one of a
+  single thread (mitcad#95, `core/import/README.md`, *Definitions
+  evaluated in parallel*). Its kernels must be `ImportKernel`s: `Send`,
+  with shapes that threads may share (`Send + Sync`). Within the same
+  `threads` (`Progress::helper`) the import reads the file's bodies
+  on several threads and builds the history's bodies ahead of the
+  replay (mitcad#103, *Work beside the replay*); the timeline items
+  themselves are replayed one after another.
 - **Memory:** an allocation that fails ends the process (Rust's cannot be
   caught; OCCT's `Standard_OutOfMemory` and `std::bad_alloc` inside a
   kernel operation become its error "<operation>: out of memory",
@@ -94,7 +108,16 @@ through the `Kernel` trait, so model tests run on a mock kernel.
   process against its tightest limit (`core/ffi/src/memory.rs`: an
   address-space or data limit, a Windows job's limit or the commit left,
   the memory the system has left) and gives up definitions before an
-  allocation can fail (`core/import/README.md`, *Memory*).
+  allocation can fail (`core/import/README.md`, *Memory*). OCCT's own
+  allocator throws instead of returning null (a patch of the port,
+  mitcad#132) and counts its failures per process and per thread, the
+  jobs of OCCT's thread pool counted for the thread that ran them
+  (`geometry::failed_allocations`, `failed_allocations_in_thread`):
+  OCCT's checker and healing catch failures inside and go on, so an
+  operation, the checks and the build of a body from B-rep data compare
+  their thread's count before and after and fail "out of memory" when it
+  moved, and the import's memory guard takes a moved process count as
+  low memory.
 - **Hangs:** a kernel call cannot be interrupted, so the `.f3d` import's
   watchdog gives up a try that makes no progress for its hang limit and
   runs the import again. The import ticks it between kernel calls, also
@@ -161,7 +184,13 @@ through the `Kernel` trait, so model tests run on a mock kernel.
   components. Occurrences belong to a component, so sub-assemblies are
   shared and world placements are paths from the root. One timeline;
   occurrence moves on it are placement changes. A feature refers only to
-  geometry of its own component, except joints (below). A linked
+  geometry of its own component, except joints (below) and a sketch's
+  plane and projections, which may name another component's geometry
+  through an `OccurrenceLink` (mitcad#100, `core/model/src/links.rs`):
+  the occurrence paths from the root to both components, resolved at the
+  sketch's point of the timeline (`placement(target)⁻¹ ·
+  placement(source)`; the cache keys on those placements and the other
+  component's bodies, `Read::Placement`, `Read::BodyIn`). A linked
   external component is read-only; its bodies are stored in a base
   feature refreshed on open.
 - **Joints** (mitcad#55, `core/model/src/joints.rs`, phases 1 to 3):
@@ -217,11 +246,36 @@ the `Shape` type.
 - Query results are kernel-independent descriptions: a planar face's
   origin is the projection of the model origin; a surface of revolution's
   axis points along its largest component.
-- Volumes and areas are integrated per face: exact Gauss points on planes,
-  quadrics, tori and polynomial B-splines, adaptive to 1e-9 relative
-  elsewhere. `Shape` caches its measured properties and bounding box
-  behind a lock; the underlying OCCT shape must not be read while another
-  thread computes with it.
+- Volumes and areas are integrated per face, span by span with fixed
+  Gauss rules (`geometry/analysis/src/face_integral.cpp`, mitcad#140). The
+  integral over the face's domain in the parameter space becomes one along
+  its boundary curves (Green's theorem, as in OCCT's `BRepGProp`) of an
+  integral across the surface. Both are split where the integrand is not
+  smooth or a piece would be too long for a fixed rule: across the surface
+  at its knots (B-spline surfaces, the curves of extrusions and
+  revolutions, the basis of offsets) and every eighth of a turn of an angle
+  parameter; along a curve at its knots, where it crosses a knot line of
+  the surface, and the same angle steps. Each piece gets Gauss points exact
+  for a polynomial piece's second moments (8 for cubics), more for
+  rational and offset geometry, and rational spans are taken in quarters
+  (an area's square root has branch points near them). The number of
+  points depends on the geometry only, so a face always measures the
+  same; faces of every kind come within 1e-9 of their exact values in the
+  tests. OCCT's rules do not follow spans: the fixed one takes at most 61
+  points across a face and along a boundary curve (a hole bounded by a
+  cubic of 132 spans, an intersection curve stored in a file, took 141 mm²
+  off its face, mitcad#139), and the adaptive one never refines across the
+  face (its error estimate there starts at zero and is never set) and
+  drops one span of a boundary curve of more than 1953 spans (a stored
+  thread's crest bounded by helices of 2574 spans lost 1.4 % of its area).
+  Only FreeCAD's reference check measures with OCCT's fixed rule
+  (`fixed_point_properties`), as FreeCAD does. `Shape` caches its measured properties and bounding box
+  behind a lock. Operations may read the same input shapes on several
+  threads at once (the `.f3d` import's workers, mitcad#95): they never
+  modify their inputs, and those whose OCCT algorithms write into their
+  inputs' sub-shapes work on copies (below). A shape must still not be
+  triangulated while another thread computes with it (OCCT stores the
+  triangulation in its faces).
 - Boolean results get coplanar faces and collinear edges merged, unless
   the merge breaks a result OCCT's checker accepted.
 - Local booleans (`geometry/src/local_boolean.hpp`, modelled threads):
@@ -309,7 +363,12 @@ the `Shape` type.
   an operation that catches it (`Standard_ErrorHandler::IsInTryBlock`)
   goes to the handler installed before them, the application's crash
   report (below), instead of OCCT's "no catch was found" exit
-  (`geometry/src/guard.cpp`, `geometry.guard_*`).
+  (`geometry/src/guard.cpp`, `geometry.guard_*`). On Windows OCCT's
+  handlers (the unhandled exception filter, the C runtime's signals) turn
+  a fault into an exception only on a thread running an operation
+  (`run` in `geometry/src/util.hpp`) and on OCCT's own threads while one
+  runs; any other fault goes to the filter installed before them, the
+  crash report, with the stack from the fault.
 - Where OCCT cannot impose what a feature asks, the geometry builds the
   surfaces itself (`geometry/src/skin.hpp`: interpolation with end
   derivatives, Gordon surfaces). Lofts with end conditions or rails
@@ -344,7 +403,7 @@ them through operations and derives edge names.
 | Hole | `hole<i>.wall`, `.tip`, `.cbore_wall`, `.cbore_floor`, `.csink`, `.top`; thread `thread(<face>)` |
 | Shell | `offset(<face>)`, `offset_cap(<removed face>)` |
 | Replace face, split | `replace(<face>)`, `split`, `split(<tool face>)` |
-| Pattern, mirror, copy | `inst<i>(<original face name>)`; a pattern of a pattern nests: `F6:inst1(F5:inst2(F4:side(c1)))` |
+| Pattern, mirror, copy | `inst<i>(<original face name>)`; a pattern of a pattern nests: `F6:inst1(F5:inst2(F4:side(c1)))`; a fillet or chamfer among the objects, repeated on the copies' edges (mitcad#105): `fillet(<copy's edge>)`, `chamfer(…)`, `corner(…)` |
 | Pipe, coil | `side<i>`, `inner<i>`, `start`, `end` |
 | Primitives | `top`, `bottom`, `side<i>` |
 | Imported body | `import(<i>)` |
@@ -455,9 +514,9 @@ not recompute.
 - **Imports** run in a separate process (`mitcad --import-worker`) so a
   kernel crash or hang only kills that process. Stop keeps what was
   imported (the worker reads `stop` on stdin); Cancel kills the process.
-  Inside it, the `.f3d` import guards its memory itself (mitcad#80): low
-  on memory, it gives up definitions and finishes with the file's bodies
-  rather than end the process.
+  Inside it, the `.f3d` and `.ipt` imports guard their memory themselves
+  (mitcad#80, mitcad#60): low on memory, they give up definitions and
+  finish with the file's bodies rather than end the process.
 - **Rendering** (`app/render/`, only with the CMake option `MITCAD_RENDER`):
   View > Rendered shows the visible bodies path traced by Cycles in the
   render worker `mitcad-render`, an executable of its own next to
@@ -508,11 +567,14 @@ not recompute.
   and `mitcad-render`: signal handlers (Linux, macOS) or an unhandled
   exception filter (Windows), `std::terminate`, and a Rust panic hook
   that leaves the panic's message (`core/ffi/src/panic_note.rs`); each
-  writes a text report (header, stack from `backtrace_symbols_fd` or
-  `CaptureStackBackTrace`, recent actions) into the crash folder and lets
-  the process die as before. On Linux the executables export Mitcad's
-  own symbols (`app/report/crash-symbols.list`) so that stacks name its
-  functions. The application offers a worker's report at once (it watches
+  writes a text report (header, stack, recent actions) into the crash
+  folder and lets the process die as before. The stack comes from
+  `backtrace_symbols_fd` on Linux and macOS; on Windows it is walked from
+  the exception's context (`StackWalk64`, on a thread of its own), so it
+  starts at the faulting function, and dbghelp names the frames from the
+  PDB file next to the executable where there is one (module and offset
+  otherwise). On Linux the executables export Mitcad's own symbols
+  (`app/report/crash-symbols.list`) so that stacks name its functions. The application offers a worker's report at once (it watches
   the folder; `MITCAD_CRASH_PARENT` tells its workers' from others') and
   its own at the next start. The duplicate key is a hash of the signal and
   the top frames as module and function, with the handlers' own frames
@@ -549,8 +611,9 @@ Floating is a full-window 3D view with the panels over it:
 
 - `TitleBar`: one toolbar-high row under the native title bar (the content
   extends under it; empty parts move the window): Undo and Redo, the
-  ribbon's tabs as a segmented control, the document name, the command
-  search and, in a sketch, Finish Sketch. Under it the ribbon in
+  ribbon's tabs as a segmented control, the document name with the project
+  indicator beside it, the command search and, in a sketch, Finish Sketch.
+  Under it the ribbon in
   `Presentation::Mac` (capsule groups whose name opens a menu of all their
   commands), and the update and remote notices.
 - `GlassCard`: the rounded Browser, Command and Timeline cards and the
@@ -621,6 +684,16 @@ per-user display state (Origin folder, Isolate) is kept out of versioned
 files in `.mitcad/local/display/<path>.json`. Autosave and the import
 process always write single files (version 2).
 
+Autosave publishes immutable snapshots named
+`<session UUID>.<generation UUID>.mitcad` in the user's recovery folder.
+An atomic replacement of `<session UUID>.json` (autosave metadata version
+2) points to the completed snapshot. The prior snapshot remains until that
+replacement succeeds, so failed or interrupted updates preserve the last
+completed generation. Recovery still accepts metadata version 1 with its
+fixed `<session UUID>.mitcad` snapshot. Snapshot names are validated before
+recovery reads them; obsolete generations are removed after publication or
+when the session is discarded.
+
 Code: `Document::save_file` (atomic: temp file renamed over),
 `load_project`, `from_json_at`, `from_json_in` with a `BlobStore`
 (`core/model/src/file/project.rs`: `FsStore`, `MemoryStore`; `core/vcs`
@@ -659,8 +732,10 @@ in the crate's API. JSON commands: [commands.md](../core/model/src/api/commands.
   entries change, so the user's staged changes survive and `git status`
   stays clean. No commit when nothing changed, HEAD is detached, or a
   merge/rebase is in progress.
-- Author: git's configured one, else Mitcad's settings. Messages end with
-  trailers `Mitcad-Version` and `Mitcad-Format: 3`.
+- Author: the repository's own `user.name` and `user.email` (New Project
+  and Project Settings write them), else git's configured user, else
+  Preferences' default author. Messages end with trailers
+  `Mitcad-Version` and `Mitcad-Format: 3`.
 - A file's history is HEAD's first-parent chain, following content-
   preserving renames. Older versions are read from the commit tree with
   `GitTreeStore`, no checkout. Restore writes the old content back as a
@@ -680,10 +755,10 @@ message is the undo labels since the saved state
 overwriting, Save compares the file's blob ids in the folder and HEAD
 (`status`) with those at open/save and asks on a mismatch. A file renamed
 outside Mitcad (`status`'s `renamed_from`) takes its display state along
-(`follow_rename`), and the next save records the rename first. Creating
-history is two steps (`create_project_repository`, then
-`init_project_history`) so the author can be confirmed. Autosave never
-records a version.
+(`follow_rename`), and the next save records the rename first. Projects
+are made by the core's `create_project` (below); an older project without
+history gets it from `init_project_history`. Autosave never records a
+version.
 
 The Version History window (`app/files/VersionHistory.cpp`) reads history
 on its own thread with its own `Project` (a project is single-threaded):
@@ -728,8 +803,269 @@ at a time on its own thread (`RemoteTask` with its own `Project` and a
 cancellable `SyncControl`), never on the UI thread or the model worker;
 `remote_info` and `incoming` (no network) run on the UI thread. Saves push
 immediately, retrying with exponential backoff from one minute; the remote
-is fetched on open, every 10 minutes and at the first change. Save and
-Restore wait for a running sync.
+is fetched on open, every 10 minutes and at the first change (both per
+project in Project Settings, Preferences' Cloud page giving the defaults).
+Save and Restore wait for a running sync.
+
+### Projects
+
+Local and Cloud projects (mitcad#89, `core/vcs/src/projects/`). A project
+is Local when its folder is the root of a git repository without a
+remote and Cloud when the repository has one. The kind is never stored:
+`inspect_folder` reads it (and what else a folder is: missing, empty, a
+repository, designs, inside a project, inside another repository) without
+the network or writes, so a project cloned with any git tool is Cloud.
+JSON commands without a project go through the bridge's
+`projects_command` with a `SyncControl`; a project's own are `Project`
+commands ([commands.md](../core/model/src/api/commands.md), "Projects").
+
+- **Made in one step** (`create_project`): the folder, the repository, the
+  marker, `.gitattributes`, `.gitignore`, the author in the repository's
+  own configuration and the first version; for Cloud the remote is
+  checked first (nothing changes on a failure), an empty one gets the
+  versions, one with files but no project is cloned and the project made
+  beside its files, then a push. A failure before the first version puts
+  the folder back as it was; a failed push leaves the versions waiting.
+  `clone_project` with `adopt` makes a repository with files a project;
+  `init_bare` makes a shared folder a remote.
+- **Onto a repository's files** (`connect` with `onto_files`, Local →
+  Cloud): the sync's replay (`remote/sync.rs`) puts all of the project's
+  versions after the remote's, with `.gitignore` and `.gitattributes`
+  merged by lines and other paths on both sides as conflicts; a replay
+  that stops before it changed the project removes the remote again.
+- **Settings**: the shared ones (edit locks, the MQTT broker) are typed
+  fields of the marker (`core/model/src/file/settings.rs`, read
+  defensively), and a change is recorded as a version; this computer's
+  are in `.mitcad/local/`. The author of versions is the repository's own
+  `user.name` and `user.email` first.
+- **Remotes**: a branch without an upstream follows `origin`, else the only
+  remote; with several and none followed nothing syncs until one is
+  chosen: the window's project is Local with the remotes' names
+  (`ProjectState::unfollowedRemotes`; the indicator says "No remote
+  chosen"), and Project Settings asks which, `remote_follow` setting the
+  branch's upstream (no network).
+- **What a remote or a server sends is untrusted**: a check of a remote
+  without a project clones it without file contents into a temporary
+  repository that is removed, and names shown are cleaned of control and
+  invisible characters. SSH host keys come from `ssh-keyscan` (the git
+  installation's or the system's, no terminal, 20 s, 64 KiB) parsed in
+  Rust: only the asked host's lines of known key types with well-formed
+  keys, fingerprints computed here and compared with those GitHub, GitLab
+  and Codeberg publish (built in) and with `known_hosts` (hashed names
+  too). Trusting appends to `~/.ssh/known_hosts` only a key a new scan
+  still gives and, for those services, one they publish.
+
+### Projects in the application
+
+In the app (`app/files/MainWindowProjects.cpp`) the window keeps the
+**current project** (`ProjectState`: kind, root, remote; `files/Projects`)
+as state of its own, independent of the open design's file. New Project,
+Open Project, Open from Cloud, Move to a Project and opening or saving a
+design set it (`setCurrentProject`, `followFileProject`); an untitled
+design keeps it. `RemoteController`, the indicator and Project Settings
+use its root, never the design's path (before mitcad#89 the remote looked
+for the project through the design's file and could not find a project
+just made).
+
+- Dialogs (`files/ProjectDialogs`, `files/ProjectSettings`): New Project,
+  Open from Cloud, the design chooser, Move to a Project's question,
+  Change Address and Project Settings. The first three and Change Address
+  share `CloudSection` (`files/CloudSection`): the service, the address
+  composed of account, repository and HTTPS or SSH (`files/CloudAddress`,
+  plain Qt Core, unit-tested; a typed address fills the fields back), and
+  the check of the address while typing (after a pause), again when the
+  dialog gets the focus back, on a thread of its own; its failures get
+  their fixes (Copy Public Key and the SSH keys page, a credential helper's
+  hint, Trust This Server's host key dialog). Folders are inspected on a
+  thread too; a project is made (`create_project`) with its progress and
+  Cancel in the dialog, and a cancel or a failure leaves the folder as it
+  was.
+- The **project indicator** (`files/ProjectIndicator`) replaces the
+  status bar's version and remote labels: in the docked layout's status
+  bar, in the floating layout's title bar row beside the document's name.
+  It shows the project, its kind, the open design's version and the
+  remote's state (`RemoteController::indicatorState`), and has the
+  project's menu.
+- Hooks for the edit locks and live updates (the lock controller, below):
+  `ProjectIndicator::setLockText`, `setLiveText`, `setLockActions`;
+  `ProjectSettingsHost::stoppingSync`, `settingsChanged`, `probeLocks`,
+  `testBroker`; `MainWindow::m_openingReadOnly` while Open Read-Only
+  opens a design.
+
+### Edit locks
+
+In a Cloud project a design has one editor at a time (mitcad#89,
+`core/vcs/src/remote/locks.rs`). The lock is a git ref on the remote
+outside the branches, so it works with any git host that accepts such
+refs; it is advisory (Mitcad honours it, other git tools do not see it).
+
+- `refs/mitcad/locks/<sha256 of the path>` points to a parentless commit
+  whose tree holds `lock.json` (holder, session, times, idle time and
+  poll interval, state, receipts and answers); requests are refs of
+  their own, `refs/mitcad/lock-requests/<id>/<session>`, so a requester
+  never races the holder.
+- Every write is a compare-and-swap push (`--force-with-lease` with the
+  expected commit, empty for "must not exist"): of two takers one wins,
+  a takeover fails when the holder refreshed meanwhile, and a hand-over
+  writes the requester as the owner in one step. A rejected push is told
+  apart from a remote that refuses such refs by listing the ref again;
+  `lock_probe` checks a remote once (create, list, delete).
+- One `ls-remote` per poll lists the lock refs, the requests and the
+  branch head; changed refs are fetched into `refs/mitcad/remote-locks/`
+  and read with gix under size limits, every field checked, texts
+  cleaned and numbers clamped (`locks/format.rs`; fuzz targets in
+  `core/vcs/fuzz`). Branch fetches, pushes and Sync never carry lock refs.
+- Staleness never compares two computers' clocks: a ref seen unchanged
+  for the idle time and two polls, a request without a receipt within two
+  of the holder's polls, or a receipt without an answer, all on this
+  process's monotonic clock. The observations are kept per project folder
+  in the process, shared by every `Project` of it, since the application
+  opens one per task.
+- Requests go stale the same way, so that a requester whose Mitcad was
+  killed is not asked about for ever: the requester's polls write a
+  waiting request again every half idle time as a refresh of itself (its
+  id, the commit it was first written as, stays, and with it the
+  receipt, the answer and its place in the order); another session's
+  request seen unchanged for the idle time and two of the requester's
+  polls gets no receipt, is passed by in a hand-over and is removed by
+  the next poll of whoever sees it, with a compare-and-swap deletion that
+  a refresh in between defeats.
+
+In the app (`app/files/LockController`, `files/MainWindowLocks.cpp`) one
+lock controller per window keeps the open design's lock:
+
+- Its lock commands run as `RemoteTask`s one at a time, each with a
+  `Project` of its own; taking the lock when a design opens, polls, the
+  refresh, requests and answers do not wait, while releasing, handing over
+  and the sync before them run with a progress dialog (closing,
+  quitting, the idle time). Polls come every `poll_seconds` (2 minutes
+  while live updates are connected), the refresh every half idle time,
+  and an idle timer restarts on activity: commands, model commands that
+  ran, selections and the camera that came to rest (not frames drawn for
+  a highlight under the mouse). `MITCAD_LOCK_TIME_SCALE` divides the
+  timers as it speeds up the core's clock, for the UI tests. A request
+  the window waits on is kept alive by its polls (they pass the poll
+  interval); the holder is asked only about requests that are not stale
+  and not declined, in the order served.
+- The window is editable while its first take runs, and while the remote
+  cannot be reached ("Edit lock not confirmed"); the lock is then taken
+  when the remote answers, or the window turns read-only as for a lost
+  lock. Saving, the designs' versions and Sync stay `RemoteController`'s:
+  it asks the lock controller before Sync sends files someone else holds
+  (`sync_plan`'s `locked` from the last listing, no network), leaves the
+  newer-version notice of a design with a lock to it (a read-only window
+  shows the editor's version, read with `load_version` from the fetched
+  commit without touching the file; a design whose lock was just taken
+  is brought up to date with a sync when the remote has a newer version
+  of it, not when only other files are newer), and runs the sync before a release
+  (`syncNow`).
+- **Read-only windows** refuse edits where they pass rather than in each
+  widget: the commands' availability (`MainWindow::isAvailable`: only
+  the view's, inspections, exports, files, projects and versions), every
+  model command (`MainWindow::command`, which the browser, the timeline,
+  the parameters, sketches and drags all go through, throws
+  `ReadOnlyError` for all but the display state, section analyses and
+  exports), the design's file (`writeFile`; Save as New Version of a lost
+  lock's changes is the one exception) and sketch mode and command panels.
+  Unsaved changes from before the window turned read-only are kept for
+  Save as Copy or Save as New Version; other changes in a read-only window
+  (isolation, analyses) are never saved over the file.
+- What others should learn at once goes to the live controller through
+  `LiveLink` (`files/LiveLink.hpp`: locks, requests, receipts, answers;
+  the open design of a Cloud project, editing or read-only, also with
+  edit locks off; the versions sent are the live controller's own, from
+  `RemoteController::versionsSent`); its events come back through
+  `LockEvents` (`files/MainWindowLive.cpp` joins the two): a lock,
+  request or version event polls at once, open events say who else has
+  the design open, and a holder's offline will offers to take the lock
+  after a question.
+
+### Live updates
+
+An optional MQTT broker tells the open projects at once about edit locks,
+requests for them, pushed versions and who has a design open (mitcad#89;
+commands and events: [commands.md](../core/model/src/api/commands.md#live-updates)).
+It only speeds things up: a message makes the application poll git at
+once, and only the lock refs on the remote grant a lock.
+
+- **All in Rust** (`core/vcs/src/remote/mqtt.rs`, `mqtt/`), so that
+  nothing a broker or another user sends is parsed by C or C++: the
+  socket (`std::net`, blocking with timeouts, one thread per connection,
+  no async runtime), TLS (rustls with ring as its crypto; the broker's
+  certificate checked by rustls-webpki against the system's root
+  certificates from rustls-native-certs, and a certificate authority file
+  the user names), MQTT 3.1.1 (`packet.rs`: CONNECT with a will, user name
+  and password, SUBSCRIBE, UNSUBSCRIBE, PUBLISH QoS 0 and 1 with PUBACK
+  and resending, retained messages, keep-alive 30 s), reconnecting with an
+  exponential back-off. Qt MQTT (GPL-3.0 or commercial) is not used.
+- **One connection per broker, user and prefix** (`hub.rs`), shared by
+  the open projects on it; each subscribes to `<prefix>/<project id>/#`
+  (the project id is the repository's first commit) and unsubscribes when
+  it closes. The connection's will marks the session `offline` at
+  `<prefix>/sessions/<session>`: one will per connection is why presence
+  is not under a project and why the prefix is part of the key.
+- **Credentials**: the application passes the user name and password of
+  the keychain for the broker it connects to; a password goes only over
+  TLS (`mqtt://` with a password is refused before anything is sent;
+  without one it works, with a warning).
+- **Untrusted input** (`check.rs`, `messages.rs`): the decoder refuses a
+  remaining length over 64 KiB before reading the packet; more than 200
+  messages a second end the connection; topics only of the known forms
+  under the prefix, of subscribed projects; payloads read with serde into
+  typed structures of a known format and version, fields checked (ids,
+  UUIDs, RFC 3339 times, paths, branch names, numbers clamped to the
+  settings' bounds), text for people cleaned of control, bidirectional
+  and invisible characters; at most 64 retained messages per file. A bad
+  message is dropped and counted, never an error. The application shows
+  names and messages as plain text only.
+- **State over reconnects**: the session's own retained state (its lock
+  summaries and open entries) is published again after each reconnect;
+  QoS 1 messages are sent again until acknowledged; a session that goes
+  offline has its open entries cleared by the sessions that follow it
+  (reported once the broker acknowledged the clearing). Another session's
+  open entry is given only once its presence says it is online, so that a
+  newcomer never shows the entry of a session whose will is already on the
+  broker; it clears such an entry instead.
+
+In the app the `LiveHub` of the bridge (`core/ffi/src/live.rs`) takes JSON
+commands on the UI thread and gives checked events through a blocking
+`events(timeout_ms)` on a worker thread, as remote tasks run; it never
+sees MQTT's bytes. `mitcad-cli live test` is Project Settings' Test
+button.
+
+The application's side is the live controller (`app/files/LiveController`,
+wired in `files/MainWindowLive.cpp`):
+
+- **One hub** for the application; its events are read on a thread of the
+  controller's own and handled on the UI thread. The window's current
+  Cloud project subscribes with what `project_settings`' `live_updates`
+  says this computer uses, under its id (`project_id`: the first commit of
+  HEAD's first-parent chain), and unsubscribes when another project opens,
+  its live settings change, it stops syncing or Preferences turns live
+  updates off. Quitting closes the hub with `wait_ms`, so that the others
+  see a clean leave rather than the will.
+- **Trust** (`files/LiveBrokers`): the trust question's answer per broker
+  address in the application settings (`live/brokers`), Connect or Not
+  Now; nothing connects before it, and another address asks again.
+- **Credentials** (`files/Keychain`): QtKeychain (BSD-3-Clause, built from
+  its pinned source as a static library, `cmake/Keychain.cmake`) keeps a
+  broker's user name and password in the system's keychain, one entry per
+  host and port; on Linux it loads libsecret at run time (not linked) or
+  talks to KWallet over D-Bus, and without either the credentials are kept
+  for the session. A broker that refuses shows a notice under the toolbar
+  with Sign In, never blocking an open; a password goes only over TLS.
+- **The rest of the window:** the indicator's `Live` / `Live offline
+  (polling)`; `RemoteController::setLive` stops the remote's check timer
+  while live, a `version` event of another session (or a connection back
+  after a loss) checks the remote at once, and `versionsSent` (a push, a
+  sync that pushed) publishes a `version`. The lock controller meets it
+  through `files/LiveLink.hpp`: it publishes locks, requests and windows
+  through `LiveLink`, and gets every event and the connection's state
+  through `LockEvents`; while there is none, the controller publishes the
+  open design (`open`) itself. Tests run against a broker in the test process and against
+mosquitto (a test tool from the dev-env setup scripts, not shipped) when
+it is installed; fuzz targets for the decoder and the readers are in
+`core/vcs/fuzz` (nightly, by hand).
 
 ### Component libraries
 
@@ -836,4 +1172,7 @@ replays it against the ASM history of the B-rep record
 (`core/ffi/src/ipt_history.rs`), with the same checks and fallbacks as an
 `.f3d` design (`core/ffi/src/ipt_import.rs`; the `import_ipt` command), in
 the import process like the others; or only the bodies stored in the file
-as base features (`bodies_only`).
+as base features (`bodies_only`). The triangles of mesh features (kept in
+the graphics segment, not the B-rep record) come in as mesh bodies, base
+features after the replay; a part without bodies opens empty, with a
+warning.

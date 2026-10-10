@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/files
 # 3D Print (mitcad#13) through the real UI, with a fake slicer: a script
 # that writes the arguments it was started with, so no slicer runs.
 #   1. Nothing selected: the three visible bodies as an STL file each
@@ -20,6 +21,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-print-test.sh
+# check-all sources: core/3mf core/zip tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 

@@ -63,6 +63,34 @@ fi
 if ! ls "$contents/Resources/licenses/"* >/dev/null 2>&1; then
   fail "$contents/Resources/licenses" "the licence texts are missing"
 fi
+# QtKeychain is linked statically (cmake/Keychain.cmake): its licence text.
+if [ ! -f "$contents/Resources/licenses/QtKeychain-BSD-3-Clause.txt" ]; then
+  fail "$contents/Resources/licenses/QtKeychain-BSD-3-Clause.txt" "QtKeychain's licence text is missing"
+fi
+
+# A renderer build must include the worker, its dynamically opened denoiser
+# device and its notices. The notice also detects an accidentally omitted
+# worker; the Mach-O checks below cover its linked dependency graph.
+licenses="$contents/Resources/licenses"
+worker="$contents/MacOS/mitcad-render"
+if [ -e "$worker" ] || grep -q '^The CPU render worker' "$licenses/THIRD-PARTY-NOTICES.txt" 2>/dev/null; then
+  if [ ! -x "$worker" ]; then
+    fail "$worker" "the renderer is not an executable in Contents/MacOS"
+  fi
+  for license in cycles/LICENSE openimagedenoise/LICENSE.txt openimagedenoise/third-party-programs.txt \
+                 embree-copyright.txt tbb-copyright.txt openimageio-copyright.txt \
+                 opencolorio-copyright.txt cgltf-copyright.txt sse2neon-copyright.txt; do
+    if [ ! -s "$licenses/$license" ]; then
+      fail "$licenses/$license" "the renderer's licence text is missing or empty"
+    fi
+  done
+  if ! ls "$licenses/cycles/"*license*.txt >/dev/null 2>&1; then
+    fail "$licenses/cycles" "the licence texts of Cycles' bundled code are missing"
+  fi
+  if ! ls "$contents/Frameworks/"libOpenImageDenoise_device_cpu*.dylib >/dev/null 2>&1; then
+    fail "$contents/Frameworks" "Open Image Denoise's runtime-loaded CPU device is missing"
+  fi
+fi
 
 # Symbolic links must stay inside the bundle: an absolute target is a path
 # of the machine that built it.

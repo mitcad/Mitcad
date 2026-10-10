@@ -1,0 +1,145 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Allocations that failed, per thread: Standard_OutOfMemory::NbRaisedInThread
+counts those of the calling thread (the previous patch counts those of the
+process), and OSD_ThreadPool::Launcher hands the failures of the jobs its
+threads ran over to the thread that launched them when it waits for them
+(Standard_OutOfMemory::AddRaisedInThread). The checker
+(BRepCheck_Analyzer) and the booleans run their work on the pool's threads
+and catch the failures there; with this a caller knows whether memory ran
+out under its own call rather than under another thread's call at the same
+time. (Without TBB every OSD_Parallel loop runs on the pool; TBB's threads
+are not handed over.)
+diff --git a/src/FoundationClasses/TKernel/OSD/OSD_ThreadPool.cxx b/src/FoundationClasses/TKernel/OSD/OSD_ThreadPool.cxx
+index ed7c1ff..ad3797e 100644
+--- a/src/FoundationClasses/TKernel/OSD/OSD_ThreadPool.cxx
++++ b/src/FoundationClasses/TKernel/OSD/OSD_ThreadPool.cxx
+@@ -17,6 +17,7 @@
+ #include <OSD.hxx>
+ #include <OSD_Parallel.hxx>
+ #include <Standard_ErrorHandler.hxx>
++#include <Standard_OutOfMemory.hxx>
+ #include <TCollection_AsciiString.hxx>
+ 
+ IMPLEMENT_STANDARD_RTTIEXT(OSD_ThreadPool, Standard_Transient)
+@@ -217,6 +218,10 @@ void OSD_ThreadPool::Launcher::wait()
+        aThreadIter.Next())
+   {
+     aThreadIter.ChangeValue()->WaitIdle();
++    // Allocations that failed in this thread's jobs count for the thread
++    // that launched them (the self thread counted its own).
++    Standard_OutOfMemory::AddRaisedInThread(aThreadIter.Value()->myNbOutOfMemory);
++    aThreadIter.ChangeValue()->myNbOutOfMemory = 0;
+     if (aThreadIter.Value()->myFailure)
+     {
+       ++aNbFailures;
+@@ -296,11 +301,14 @@ void OSD_ThreadPool::EnumeratedThread::performThread()
+     }
+ 
+     myFailure.reset();
++    myNbOutOfMemory = 0;
+     if (myJob != nullptr)
+     {
+       OSD::SetThreadLocalSignal(OSD::SignalMode(), myToCatchFpe);
++      const size_t aNbOutOfMemory = Standard_OutOfMemory::NbRaisedInThread();
+       OSD_ThreadPool::performJob(myFailure, myJob, myThreadIndex);
+-      myJob = nullptr;
++      myNbOutOfMemory = Standard_OutOfMemory::NbRaisedInThread() - aNbOutOfMemory;
++      myJob           = nullptr;
+     }
+     myIdleEvent.Set();
+   }
+diff --git a/src/FoundationClasses/TKernel/OSD/OSD_ThreadPool.hxx b/src/FoundationClasses/TKernel/OSD/OSD_ThreadPool.hxx
+index 13e9ed2..e6ec37c 100644
+--- a/src/FoundationClasses/TKernel/OSD/OSD_ThreadPool.hxx
++++ b/src/FoundationClasses/TKernel/OSD/OSD_ThreadPool.hxx
+@@ -122,6 +122,7 @@ protected:
+           myWakeEvent(false),
+           myIdleEvent(false),
+           myThreadIndex(0),
++          myNbOutOfMemory(0),
+           myUsageCounter(0),
+           myIsStarted(false),
+           myToCatchFpe(false),
+@@ -152,6 +153,7 @@ protected:
+           myWakeEvent(false),
+           myIdleEvent(false),
+           myThreadIndex(0),
++          myNbOutOfMemory(0),
+           myUsageCounter(0),
+           myIsStarted(false),
+           myToCatchFpe(false),
+@@ -192,6 +194,9 @@ protected:
+     Standard_Condition                   myWakeEvent;
+     Standard_Condition                   myIdleEvent;
+     int                                  myThreadIndex;
++    //! Allocations that failed in the last job (Standard_OutOfMemory), handed
++    //! over to the launching thread when it waits.
++    size_t                               myNbOutOfMemory;
+     std::atomic<int>                     myUsageCounter;
+     bool                                 myIsStarted;
+     bool                                 myToCatchFpe;
+diff --git a/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.cxx b/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.cxx
+index eb61baf..d88a08e 100644
+--- a/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.cxx
++++ b/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.cxx
+@@ -24,6 +24,8 @@ namespace
+ {
+ //! Instances constructed in the process (copies not counted).
+ std::atomic<size_t> THE_NB_RAISED{0};
++//! Those of this thread and of the jobs it had other threads run.
++thread_local size_t THE_NB_RAISED_IN_THREAD = 0;
+ } // namespace
+ 
+ //=================================================================================================
+@@ -31,6 +33,7 @@ std::atomic<size_t> THE_NB_RAISED{0};
+ Standard_OutOfMemory::Standard_OutOfMemory(const char* const theMessage)
+ {
+   THE_NB_RAISED.fetch_add(1, std::memory_order_relaxed);
++  ++THE_NB_RAISED_IN_THREAD;
+   myBuffer[0] = '\0';
+   // call explicitly own method (non-virtual call)
+   Standard_OutOfMemory::SetMessageString(theMessage);
+@@ -45,6 +48,20 @@ size_t Standard_OutOfMemory::NbRaised() noexcept
+ 
+ //=================================================================================================
+ 
++size_t Standard_OutOfMemory::NbRaisedInThread() noexcept
++{
++  return THE_NB_RAISED_IN_THREAD;
++}
++
++//=================================================================================================
++
++void Standard_OutOfMemory::AddRaisedInThread(const size_t theNb) noexcept
++{
++  THE_NB_RAISED_IN_THREAD += theNb;
++}
++
++//=================================================================================================
++
+ const char* Standard_OutOfMemory::what() const noexcept
+ {
+   return myBuffer;
+diff --git a/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.hxx b/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.hxx
+index 21ec2ad..f962aa1 100644
+--- a/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.hxx
++++ b/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.hxx
+@@ -63,6 +63,16 @@ public:
+   //! out inside it, on any thread.
+   Standard_EXPORT static size_t NbRaised() noexcept;
+ 
++  //! Returns how many of these exceptions this thread has constructed, with
++  //! those of the thread pool's jobs it launched and waited for
++  //! (OSD_ThreadPool::Launcher hands them over): the allocations that failed
++  //! under this thread's calls, not under another thread's.
++  Standard_EXPORT static size_t NbRaisedInThread() noexcept;
++
++  //! Adds failed allocations to this thread's count (NbRaisedInThread()):
++  //! those of jobs that other threads ran for it.
++  Standard_EXPORT static void AddRaisedInThread(const size_t theNb) noexcept;
++
+ private:
+   char myBuffer[1024];
+ };

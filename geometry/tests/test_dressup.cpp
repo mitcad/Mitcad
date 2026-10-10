@@ -6,16 +6,37 @@
 #include <cmath>
 #include <utility>
 
+#include <cstdint>
+
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Common.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
+#include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCone.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakeTorus.hxx>
+#include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
+#include <Geom2d_Curve.hxx>
 #include <NCollection_List.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Vec2d.hxx>
 
 #include "../src/face_select.hpp"
+#include "../src/history.hpp"
+#include "../src/util.hpp"
+#include "mitcad/geometry/brep_import.hpp"
+#include "mitcad/geometry/import.hpp"
+#include "mitcad/geometry/naming.hpp"
 #include "check.hpp"
 
 namespace test {
@@ -62,7 +83,8 @@ void test_fillet_volume_and_names() {
                     "the body has no edge E{F2:side(c1[c4,c2])|F2:side(c3[c2,c4])}"));
   CHECK(throws_with([&] { fillet("F5", *block(), std::vector<std::string>{}, 1); }, "no edges"));
   CHECK(throws_with([&] { fillet("F5", *block(), {corner()}, 0); }, "radius must be greater"));
-  CHECK(throws_with([&] { fillet("F5", *block(), {top_front()}, 30); }, "fillet failed"));
+  // Wider than the side (20) and the top (40) together: no rolling ball fits.
+  CHECK(throws_with([&] { fillet("F5", *block(), {top_front()}, 60); }, "fillet failed"));
 }
 
 void test_fillet_corner_blends_are_named() {
@@ -726,6 +748,243 @@ void test_dressups_that_take_a_face_away() {
   CHECK(bevelled->notes().size() == 1);
 }
 
+// Faces named `name` or one of its split pieces.
+int faces_matching(const Shape& shape, const std::string& name) {
+  int count = 0;
+  for (int i = 0; i < shape.face_count(); ++i) {
+    count += face_matches(shape.face_names(i), name) ? 1 : 0;
+  }
+  return count;
+}
+
+void test_dressups_of_circles_built_as_rings() {
+  // A hole 0.5 mm from the block's side: bevelling or rounding its rim by
+  // 1 mm runs over the side face, which OCCT's dressups cannot; the
+  // section revolved about the hole's axis is cut away instead.
+  const ShapePtr drill = extrude("F4", {circle(5, 5.5, 20, 5)}, -1, 21);
+  const ShapePtr holed = boolean(BooleanOp::Cut, {block().get()}, *drill).pieces.at(0).shape;
+  const std::string rim = edge(end_cap("F2", 1), "F4:side(c5)");
+  ChamferSet bevel;
+  bevel.edges = {rim};
+  bevel.spec.distance = 1;
+  const ShapePtr bevelled = chamfer("F5", *holed, {bevel});
+  CHECK(mitcad::geometry::detail::is_valid(bevelled->occt()));
+  CHECK(faces_matching(*bevelled, "F5:chamfer(" + rim + ")") >= 1);
+  CHECK(bevelled->notes().size() == 1 && bevelled->notes().front().find("ring") != std::string::npos);
+  // What it takes away: the block's part of the cone the bevel bounds.
+  const TopoDS_Shape cone =
+      BRepPrimAPI_MakeCone(gp_Ax2(gp_Pnt(5.5, 20, 19), gp_Dir(0, 0, 1)), 5, 6, 1).Shape();
+  // (On a copy: the boolean adds p-curves to its arguments.)
+  GProp_GProps props;
+  BRepGProp::VolumeProperties(BRepAlgoAPI_Common(BRepBuilderAPI_Copy(holed->occt()).Shape(), cone).Shape(),
+                              props);
+  const double bevel_loss = volume(*holed) - volume(*bevelled);
+  CHECK(near(bevel_loss, props.Mass(), 1e-6));
+  // A rounding takes less than the bevel of its size.
+  const ShapePtr rounded = fillet("F5", *holed, {rim}, 1);
+  CHECK(mitcad::geometry::detail::is_valid(rounded->occt()));
+  CHECK(faces_matching(*rounded, "F5:fillet(" + rim + ")") >= 1);
+  const double round_loss = volume(*holed) - volume(*rounded);
+  CHECK(round_loss > 0.3 * bevel_loss && round_loss < bevel_loss);
+  // A boss 0.5 mm from the side: the rounding at its foot (concave) is
+  // joined to it, over the edge of the top face.
+  const ShapePtr post = extrude("F4", {circle(5, 5.5, 20, 5)}, 20, 30);
+  const ShapePtr bossed = boolean(BooleanOp::Join, {block().get()}, *post).pieces.at(0).shape;
+  const std::string foot = edge(end_cap("F2", 1), "F4:side(c5)");
+  const ShapePtr footed = fillet("F5", *bossed, {foot}, 1);
+  CHECK(mitcad::geometry::detail::is_valid(footed->occt()));
+  CHECK(faces_matching(*footed, "F5:fillet(" + foot + ")") >= 1);
+  CHECK(volume(*footed) > volume(*bossed));
+  // Other edges keep OCCT's failure.
+  CHECK(throws_with([&] { fillet("F5", *block(), {top_front()}, 60); }, "fillet failed"));
+}
+
+// A block with a post on top, the post's top rim given a p-curve on its top
+// face 0.01 mm off its curve: an input that OCCT's checker rejects there.
+ShapePtr block_with_faulty_post() {
+  const TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 60, 40, 20).Shape();
+  const TopoDS_Shape post = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(10, 20, 20), gp_Dir(0, 0, 1)), 5, 5).Shape();
+  const TopoDS_Shape body = BRepBuilderAPI_Copy(BRepAlgoAPI_Fuse(box, post).Shape()).Shape();
+  for (TopExp_Explorer f(body, TopAbs_FACE); f.More(); f.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(f.Current());
+    BRepAdaptor_Surface surface(face);
+    if (surface.GetType() != GeomAbs_Plane || std::abs(surface.Plane().Location().Z() - 25) > 1e-6) {
+      continue;
+    }
+    for (TopExp_Explorer e(face, TopAbs_EDGE); e.More(); e.Next()) {
+      const TopoDS_Edge& rim = TopoDS::Edge(e.Current());
+      double first = 0;
+      double last = 0;
+      const occ::handle<Geom2d_Curve> curve = BRep_Tool::CurveOnSurface(rim, face, first, last);
+      const occ::handle<Geom2d_Curve> moved = occ::down_cast<Geom2d_Curve>(curve->Translated(gp_Vec2d(0.01, 0)));
+      BRep_Builder().UpdateEdge(rim, moved, face, BRep_Tool::Tolerance(rim));
+    }
+  }
+  return import_body(body, "F1", 0);
+}
+
+// The edge of a body between the points (x, y, any z) at both ends.
+std::string vertical_edge_at(const Shape& body, double x, double y) {
+  for (int i = 0; i < body.edge_count(); ++i) {
+    const gp_Pnt a = BRep_Tool::Pnt(TopExp::FirstVertex(body.edge(i)));
+    const gp_Pnt b = BRep_Tool::Pnt(TopExp::LastVertex(body.edge(i)));
+    if (near(a.X(), x) && near(a.Y(), y) && near(b.X(), x) && near(b.Y(), y)) {
+      return body.edge_name(i);
+    }
+  }
+  return {};
+}
+
+void test_dressups_of_faulty_inputs() {
+  // Stored bodies of imported designs are at times invalid in places
+  // (mitcad#107). A rounding away from the fault is built and keeps it as
+  // it was; it is not refused, nor the rest of the body healed.
+  const ShapePtr body = block_with_faulty_post();
+  CHECK(!mitcad::geometry::detail::is_valid(body->occt()));
+  const std::string corner = vertical_edge_at(*body, 60, 0);
+  CHECK(!corner.empty());
+  const ShapePtr rounded = fillet("F5", *body, {corner}, 3);
+  CHECK_NEAR(volume(*rounded), volume(*body) - fillet_loss(3) * 20);
+  CHECK(faces_named(*rounded, "F5:fillet(" + corner + ")") == 1);
+  CHECK(rounded->notes().empty());
+  CHECK(!mitcad::geometry::detail::is_valid(rounded->occt()));
+  // A fault next to the rounding is not taken over: the post's foot
+  // rounded beside its faulty top comes out healed.
+  std::string foot;
+  for (int i = 0; i < body->edge_count(); ++i) {
+    const gp_Pnt a = BRep_Tool::Pnt(TopExp::FirstVertex(body->edge(i)));
+    BRepAdaptor_Curve curve(body->edge(i));
+    if (curve.GetType() == GeomAbs_Circle && near(a.Z(), 20)) {
+      foot = body->edge_name(i);
+    }
+  }
+  CHECK(!foot.empty());
+  const ShapePtr footed = fillet("F5", *body, {foot}, 1);
+  CHECK(mitcad::geometry::detail::is_valid(footed->occt()));
+  CHECK(volume(*footed) > volume(*body));
+}
+
+// A cone frustum (radii 3 at z = 0 and 1 at z = 2) as the .f3d import
+// builds it from its stored B-rep, the top circle in two arcs whose curve
+// runs clockwise seen from above, against the side's axis.
+ShapePtr imported_frustum() {
+  mitcad::brep::Body b;
+  const double r0 = 3;
+  const double r1 = 1;
+  const double h = 2;
+  const auto add = [&](int kind, const std::vector<double>& reals) {
+    mitcad::brep::Geometry g;
+    g.kind = kind;
+    g.real_offset = static_cast<std::uint32_t>(b.reals.size());
+    g.real_count = static_cast<std::uint32_t>(reals.size());
+    b.reals.insert(b.reals.end(), reals.begin(), reals.end());
+    return g;
+  };
+  const double slant = std::sqrt((r0 - r1) * (r0 - r1) + h * h);
+  b.vertices = {r1, 0, h, 1e-4, -r1, 0, h, 1e-4, r0, 0, 0, 1e-4};
+  b.curves.push_back(add(1, {0, 0, h, 0, 0, -1, 1, 0, 0, r1, r1}));                  // top circle
+  b.curves.push_back(add(1, {0, 0, 0, 0, 0, 1, 1, 0, 0, r0, r0}));                   // bottom circle
+  b.curves.push_back(add(0, {r0, 0, 0, (r1 - r0) / slant, 0, h / slant}));           // seam
+  b.surfaces.push_back(add(1, {0, 0, 0, 0, 0, 1, 1, 0, 0, r0, -std::atan((r0 - r1) / h)}));
+  b.surfaces.push_back(add(0, {0, 0, h, 0, 0, 1, 1, 0, 0}));
+  b.surfaces.push_back(add(0, {0, 0, 0, 0, 0, -1, 1, 0, 0}));
+  b.edges.push_back({0, 0, 1, 0.0, kPi, 1e-4});
+  b.edges.push_back({0, 1, 0, kPi, 2 * kPi, 1e-4});
+  b.edges.push_back({1, 2, 2, 0.0, 2 * kPi, 1e-4});
+  b.edges.push_back({2, 2, 0, 0.0, slant, 1e-4});
+  const auto loop = [&](const std::vector<mitcad::brep::Coedge>& coedges) {
+    b.loops.push_back({static_cast<std::uint32_t>(b.coedges.size()), static_cast<std::uint32_t>(coedges.size())});
+    b.coedges.insert(b.coedges.end(), coedges.begin(), coedges.end());
+  };
+  loop({{2, true}, {3, true}, {0, true}, {1, true}, {3, false}}); // side
+  loop({{1, false}, {0, false}});                                // top
+  loop({{2, false}});                                            // bottom
+  for (std::uint32_t f = 0; f < 3; ++f) {
+    mitcad::brep::Face face;
+    face.surface = f;
+    face.first_loop = f;
+    face.loop_count = 1;
+    b.faces.push_back(face);
+    b.shell_faces.push_back(f);
+  }
+  b.shells.push_back({0, 0, 3, true});
+  b.lump_count = 1;
+  const mitcad::brep::BuildResult built = mitcad::brep::build_body(b);
+  CHECK(built.report.built && built.report.valid);
+  return import_body(built.shape, "F1", 0);
+}
+
+void test_fillets_of_circles_in_pieces() {
+  // OCCT's fillet fails on the top rim of the imported frustum, a whole
+  // circle in two arcs (mitcad#107); it rounds the rim once its pieces are
+  // merged into one edge, and both pieces name the rounding.
+  const ShapePtr frustum = imported_frustum();
+  const std::vector<std::string> rim = {edge("F1:import(0)", "F1:import(1)") + "#0",
+                                        edge("F1:import(0)", "F1:import(1)") + "#1"};
+  CHECK(frustum->find_edges(rim[0]).size() == 1 && frustum->find_edges(rim[1]).size() == 1);
+  {
+    const ShapePtr copy = mitcad::geometry::detail::working_copy(*frustum);
+    BRepFilletAPI_MakeFillet plain(copy->occt());
+    for (const std::string& name : rim) {
+      const int e = copy->find_edges(name).front();
+      if (plain.Contour(copy->edge(e)) == 0) {
+        plain.Add(0.5, copy->edge(e));
+      }
+    }
+    plain.Build();
+    CHECK(!plain.IsDone()); // why the pieces are merged; if OCCT learns it, this test can go
+  }
+  const ShapePtr rounded = fillet("F5", *frustum, rim, 0.5);
+  CHECK(mitcad::geometry::detail::is_valid(rounded->occt()));
+  CHECK(rounded->notes().empty());
+  CHECK(faces_matching(*rounded, "F5:fillet(" + rim[0] + ")") >= 1);
+  CHECK(faces_matching(*rounded, "F5:fillet(" + rim[1] + ")") >= 1);
+  // The same rounding as on OCCT's own frustum with a whole top circle.
+  const TopoDS_Shape cone = BRepPrimAPI_MakeCone(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 3, 1, 2).Shape();
+  const ShapePtr whole = import_body(cone, "F1", 0);
+  std::string top;
+  for (int i = 0; i < whole->edge_count(); ++i) {
+    BRepAdaptor_Curve curve(whole->edge(i));
+    if (curve.GetType() == GeomAbs_Circle && near(curve.Value(curve.FirstParameter()).Z(), 2)) {
+      top = whole->edge_name(i);
+    }
+  }
+  CHECK_NEAR(volume(*rounded), volume(*fillet("F5", *whole, {top}, 0.5)));
+}
+
+void test_fillets_of_knife_edges() {
+  // A disk with a cove round its rim tangent to both faces: the edges where
+  // the cove meets them are knife edges (the faces' normals opposite).
+  // OCCT's default tolerances find no start for the rolling ball there; it
+  // builds the rounding with tighter ones (mitcad#107).
+  const TopoDS_Shape disk = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 20, 3).Shape();
+  const TopoDS_Shape cove = BRepPrimAPI_MakeTorus(gp_Ax2(gp_Pnt(0, 0, 1.5), gp_Dir(0, 0, 1)), 20, 1.5).Shape();
+  const ShapePtr body = import_body(BRepAlgoAPI_Cut(disk, cove).Shape(), "F1", 0);
+  // The upper knife edge.
+  int index = -1;
+  for (int i = 0; i < body->edge_count(); ++i) {
+    const std::vector<int> faces = mitcad::geometry::detail::faces_at_edge(*body, i);
+    BRepAdaptor_Curve curve(body->edge(i));
+    if (faces.size() == 2 && near(curve.Value(curve.FirstParameter()).Z(), 3) &&
+        mitcad::geometry::detail::normal_angle(body->edge(i), body->face(faces[0]), body->face(faces[1])) > 3) {
+      index = i;
+    }
+  }
+  CHECK(index >= 0);
+  const std::string knife = body->edge_name(index);
+  {
+    const ShapePtr copy = mitcad::geometry::detail::working_copy(*body);
+    BRepFilletAPI_MakeFillet plain(copy->occt());
+    plain.Add(0.5, copy->edge(index));
+    plain.Build();
+    CHECK(!plain.IsDone()); // why the parameters are tightened
+  }
+  const ShapePtr rounded = fillet("F5", *body, {knife}, 0.5);
+  CHECK(mitcad::geometry::detail::is_valid(rounded->occt()));
+  CHECK(faces_named(*rounded, "F5:fillet(" + knife + ")") == 1);
+  CHECK(volume(*rounded) < volume(*body));
+}
+
 } // namespace
 
 void dressup_tests() {
@@ -746,6 +1005,10 @@ void dressup_tests() {
   guarded("test_fillet_corner_types", test_fillet_corner_types);
   guarded("test_chamfer_sets_and_reference_faces", test_chamfer_sets_and_reference_faces);
   guarded("test_dressups_that_take_a_face_away", test_dressups_that_take_a_face_away);
+  guarded("test_dressups_of_circles_built_as_rings", test_dressups_of_circles_built_as_rings);
+  guarded("test_dressups_of_faulty_inputs", test_dressups_of_faulty_inputs);
+  guarded("test_fillets_of_circles_in_pieces", test_fillets_of_circles_in_pieces);
+  guarded("test_fillets_of_knife_edges", test_fillets_of_knife_edges);
 }
 
 } // namespace test

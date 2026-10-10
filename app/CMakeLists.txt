@@ -122,6 +122,7 @@ qt_add_executable(mitcad
   framework/ModelWorker.hpp
   # Autosave to the recovery folder (P8) and the general settings.
   files/Autosave.cpp
+  files/AutosaveFiles.cpp
   files/Autosave.hpp
   files/MainWindowAutosave.cpp
   framework/AppSettings.cpp
@@ -166,6 +167,9 @@ qt_add_executable(mitcad
   # The UI tests' sync key (mitcad#15).
   framework/TestSync.cpp
   framework/TestSync.hpp
+  # Typed text in the UI tests' log (mitcad#102).
+  framework/TypedTextLog.cpp
+  framework/TypedTextLog.hpp
   # Automatic updates (mitcad#9).
   update/UpdateClient.cpp
   update/UpdateClient.hpp
@@ -192,6 +196,21 @@ qt_add_executable(mitcad
   files/RemotePreferences.hpp
   files/RemoteTask.cpp
   files/RemoteTask.hpp
+  # Local and Cloud projects: New Project, Open Project, Open from Cloud,
+  # Project Settings, the project indicator (mitcad#89).
+  files/CloudAddress.cpp
+  files/CloudAddress.hpp
+  files/CloudSection.cpp
+  files/CloudSection.hpp
+  files/MainWindowProjects.cpp
+  files/ProjectDialogs.cpp
+  files/ProjectDialogs.hpp
+  files/ProjectIndicator.cpp
+  files/ProjectIndicator.hpp
+  files/ProjectSettings.cpp
+  files/ProjectSettings.hpp
+  files/Projects.cpp
+  files/Projects.hpp
   # Feedback and error reports: Help > Send Feedback, crash capture, the
   # preview and the issue form (mitcad#61, mitcad#62).
   report/CrashHandler.cpp
@@ -207,7 +226,11 @@ qt_add_executable(mitcad
   files/Libraries.hpp
   files/LibraryDialogs.cpp
   files/LibraryDialogs.hpp
-  files/MainWindowLibraries.cpp)
+  files/MainWindowLibraries.cpp
+  # Edit locks of Cloud projects' designs and read-only windows (mitcad#89).
+  files/LockController.cpp
+  files/LockController.hpp
+  files/MainWindowLocks.cpp)
 
 # Toolbar and command icons (own drawings, MIT), rendered with Qt SVG.
 file(GLOB MITCAD_ICONS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" CONFIGURE_DEPENDS icons/*.svg)
@@ -233,6 +256,8 @@ target_link_libraries(mitcad PRIVATE
 if(WIN32)
   # wglGetCurrentDC() in OcctViewer.cpp
   target_link_libraries(mitcad PRIVATE opengl32)
+  # Crash reports' stacks and function names (report/CrashHandler.cpp).
+  target_link_libraries(mitcad PRIVATE dbghelp)
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   # The X keyboard mapping in framework/TestSync.cpp.
@@ -256,11 +281,6 @@ if(APPLE)
 endif()
 
 set_target_properties(mitcad PROPERTIES WIN32_EXECUTABLE ON)
-
-if(APPLE)
-  # The application bundle, its icon and install rules (macOS packaging).
-  include(packaging/macos/Bundle.cmake)
-endif()
 
 # Automatic updates (mitcad#9, docs/updates.md). The requests go through Qt
 # Network (its TLS backends are Qt's plugins: no TLS library of Mitcad's
@@ -302,6 +322,23 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set_property(TARGET mitcad APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/report/crash-symbols.list")
 endif()
 
+# Live updates through an MQTT broker (mitcad#89, files/LiveController.hpp):
+# the core's LiveHub, the trust and sign-in questions, the brokers' user
+# names and passwords in the system's keychain through QtKeychain (linked
+# statically, cmake/Keychain.cmake).
+target_sources(mitcad PRIVATE
+  files/Keychain.cpp
+  files/Keychain.hpp
+  files/LiveBrokers.cpp
+  files/LiveBrokers.hpp
+  files/LiveController.cpp
+  files/LiveController.hpp
+  files/LiveDialogs.cpp
+  files/LiveDialogs.hpp
+  files/LiveLink.hpp
+  files/MainWindowLive.cpp)
+target_link_libraries(mitcad PRIVATE qt6keychain)
+
 if(WIN32)
   # Runs the installer once Mitcad has quit (update/UpdaterWindows.cpp): no
   # Qt, the C++ runtime linked in, so that it runs from the temp folder.
@@ -334,6 +371,10 @@ if(BUILD_TESTING)
   # Feedback and error reports (mitcad#61, mitcad#62): masking, crash files,
   # duplicate keys, the issue form's address.
   target_sources(test_app PRIVATE report/ReportText.cpp report/ReportText.hpp)
+  # The addresses of Cloud projects (mitcad#89): composed and read back.
+  target_sources(test_app PRIVATE files/CloudAddress.cpp files/CloudAddress.hpp)
+  # Atomic autosave generations through normal recovery (mitcad#110).
+  target_sources(test_app PRIVATE tests/autosave.cpp files/AutosaveFiles.cpp files/Recovery.cpp framework/Dialogs.cpp)
   target_include_directories(test_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(test_app PRIVATE Qt6::Widgets Qt6::Svg mitcad_warnings)
   add_test(NAME app.unit COMMAND test_app)
@@ -402,6 +443,9 @@ if(MITCAD_RENDER)
     target_link_options(mitcad-render PRIVATE
       "LINKER:--dynamic-list=${CMAKE_CURRENT_SOURCE_DIR}/report/crash-symbols.list")
   endif()
+  if(WIN32)
+    target_link_libraries(mitcad-render PRIVATE dbghelp)
+  endif()
   # The final render's image files (mitcad#48): PNG and JPEG through Qt,
   # OpenEXR through OpenImageIO.
   target_sources(mitcad-render PRIVATE render/RenderOutput.cpp render/RenderOutput.hpp)
@@ -410,9 +454,14 @@ if(MITCAD_RENDER)
   target_compile_definitions(mitcad-render PRIVATE MITCAD_VERSION="${PROJECT_VERSION}")
   target_link_libraries(mitcad-render PRIVATE
     mitcad_cycles_renderer Qt6::Gui TKMesh TKFillet TKPrim TKTopAlgo TKBRep mitcad_warnings)
-  # Built with the application, into the same folder (the application
-  # looks for it next to its executable; a macOS bundle would need it in
-  # Contents/MacOS), so that the UI tests find it.
+  # Built with the application. On macOS the worker lives in Contents/MacOS
+  # in the build bundle too, where the application's ordinary lookup finds it.
+  if(APPLE)
+    set_target_properties(mitcad-render PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:mitcad>"
+      INSTALL_RPATH "@executable_path/../Frameworks")
+    target_link_options(mitcad-render PRIVATE LINKER:-headerpad_max_install_names)
+  endif()
   add_dependencies(mitcad mitcad-render)
   # The GPU devices' kernels (mitcad#50, build-cycles.sh --cuda and the
   # like) where the worker looks for them in a build folder: cycles/lib
@@ -422,6 +471,13 @@ if(MITCAD_RENDER)
       COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:mitcad-render>/cycles/lib"
       COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${MITCAD_CYCLES_KERNELS}
               "$<TARGET_FILE_DIR:mitcad-render>/cycles/lib/"
+      VERBATIM)
+  endif()
+  # On Windows Open Image Denoise's DLLs next to it (vcpkg's come with
+  # vcpkg's applocal step).
+  if(MITCAD_OIDN_DLLS)
+    add_custom_command(TARGET mitcad-render POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${MITCAD_OIDN_DLLS} "$<TARGET_FILE_DIR:mitcad-render>"
       VERBATIM)
   endif()
   if(BUILD_TESTING)
@@ -460,5 +516,17 @@ if(MITCAD_RENDER)
                      --output "${CMAKE_CURRENT_BINARY_DIR}/render-worker-gpu-test.png")
     set_tests_properties(app.render_worker_gpu PROPERTIES SKIP_RETURN_CODE 77
       PASS_REGULAR_EXPRESSION "render-compare (CUDA|OPTIX|HIP|METAL|ONEAPI) ")
+    # On Windows the worker finds Qt's DLLs through PATH, as app.unit does.
+    if(WIN32)
+      set_tests_properties(app.render_worker app.render_updates app.render_worker_environment
+                           app.render_worker_fallback app.render_worker_device_failure app.render_worker_gpu
+        PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
   endif()
+endif()
+
+if(APPLE)
+  # Configure the bundle after its optional render worker exists, so its
+  # install rules include the worker, denoiser module and their libraries.
+  include(packaging/macos/Bundle.cmake)
 endif()

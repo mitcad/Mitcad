@@ -73,6 +73,11 @@ impl EntityTags {
         }
         out
     }
+
+    /// The curve of a sketch with these ids, unless two share them.
+    pub(super) fn curve(&self, sketch: u64, primary: u64, secondary: u64) -> Option<u64> {
+        *self.curves.get(&(sketch, primary, secondary))?
+    }
 }
 
 /// A reference or a null reference (`00`) at `p`, and the end.

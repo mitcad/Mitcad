@@ -17,7 +17,7 @@
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -108,6 +108,9 @@ pub struct StoredFile {
     builds: Mutex<HashMap<usize, SharedBuild>>,
     /// Notified whenever a build in `builds` ends.
     build_ended: Condvar,
+    /// The bodies to build ahead of the replay, oldest state first
+    /// ([`F3dGeometry::build_ahead`], mitcad#103).
+    ahead: Mutex<std::collections::VecDeque<usize>>,
 }
 
 /// A body's build shared by the tries of an import ([`StoredFile::builds`]).
@@ -117,6 +120,9 @@ enum SharedBuild {
     /// Built by a try the watchdog gave up meanwhile: its B-rep data (None:
     /// it did not build).
     Given(Option<Arc<Vec<u8>>>),
+    /// Built ahead of the replay (mitcad#103), for the try that asks for it
+    /// first (None: it did not build).
+    Ready(Option<SharedPtr<Shape>>),
 }
 
 /// What a try does about a body ([`StoredFile::claim`]).
@@ -126,6 +132,8 @@ enum Claim {
     /// Reads the B-rep data a try the watchdog gave up built (None: it did
     /// not build).
     Given(Option<Arc<Vec<u8>>>),
+    /// Takes the body built ahead (None: it did not build).
+    Ready(Option<SharedPtr<Shape>>),
 }
 
 impl StoredFile {
@@ -142,10 +150,22 @@ impl StoredFile {
         loop {
             match builds.get(&variant) {
                 Some(SharedBuild::InProgress) => {
+                    // A build ahead of the replay moves the watchdog's step
+                    // as the try's own would (mitcad#103).
+                    let ticks = BUILD_TICKS.load(Ordering::Relaxed);
                     builds = self
                         .build_ended
-                        .wait(builds)
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        .wait_timeout(builds, Duration::from_millis(100))
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .0;
+                    if BUILD_TICKS.load(Ordering::Relaxed) != ticks {
+                        mitcad_import::tick();
+                    }
+                }
+                Some(SharedBuild::Ready(_)) => {
+                    if let Some(SharedBuild::Ready(shape)) = builds.remove(&variant) {
+                        return Claim::Ready(shape);
+                    }
                 }
                 Some(SharedBuild::Given(data)) => return Claim::Given(data.clone()),
                 None => {
@@ -174,8 +194,14 @@ impl StoredFile {
 
 impl StoredFile {
     /// Reads the body blobs of a document. `dump` (the decoded design)
-    /// links blobs to components.
-    pub fn new(doc: &F3dFile, document: &str, dump: Option<&Dump>) -> Result<Self, String> {
+    /// links blobs to components. `threads`: how many threads convert the
+    /// bodies of a blob's states at once.
+    pub fn new(
+        doc: &F3dFile,
+        document: &str,
+        dump: Option<&Dump>,
+        threads: usize,
+    ) -> Result<Self, String> {
         let components: HashMap<String, u64> = dump
             .and_then(|d| d.f3d.as_ref())
             .and_then(|f| f.brep_blobs.as_ref())
@@ -207,6 +233,7 @@ impl StoredFile {
             component_names,
             builds: Mutex::new(HashMap::new()),
             build_ended: Condvar::new(),
+            ahead: Mutex::new(std::collections::VecDeque::new()),
         };
         for blob in doc.body_blobs() {
             let data = doc
@@ -251,17 +278,28 @@ impl StoredFile {
                     let mut distinct: Vec<ConvertedBody> = Vec::new();
                     let mut newest_first: Vec<(i64, Vec<usize>)> = Vec::new();
                     let mut ops: Vec<(i64, usize)> = Vec::new();
-                    for k in 0..=h.states.len() {
+                    // The states converted on up to `threads` threads at once
+                    // (mitcad#103), taken in order as one by one.
+                    let states = h.states.len() + 1;
+                    let convert_state = |k: usize| -> Vec<ConvertedBody> {
                         let view = h.view(k);
+                        records
+                            .iter()
+                            .filter(|r| view.get(r) != Some(&None))
+                            .map(|&r| {
+                                if k == 0 {
+                                    convert::convert_body(&file, r, &options)
+                                } else {
+                                    convert::convert_body_at(&file, r, &options, Some(&view))
+                                }
+                            })
+                            .collect()
+                    };
+                    mitcad_import::in_order(states, threads, convert_state, |k, converted| {
                         let kept = distinct.len();
                         let after: &[usize] = newest_first.last().map_or(&[], |(_, ids)| ids);
                         let mut bodies: Vec<usize> = Vec::new();
-                        for &r in records.iter().filter(|r| view.get(r) != Some(&None)) {
-                            let body = if k == 0 {
-                                convert::convert_body(&file, r, &options)
-                            } else {
-                                convert::convert_body_at(&file, r, &options, Some(&view))
-                            };
+                        for body in converted {
                             let same = after.iter().copied().find(|&d| {
                                 let old = &distinct[d];
                                 old.record == body.record && old.body == body.body
@@ -293,7 +331,7 @@ impl StoredFile {
                         if let Some(s) = h.states.get(k) {
                             ops.push((s.id, newest_first.len() - 1));
                         }
-                    }
+                    });
                     let count = newest_first.len();
                     b.ops = ops.into_iter().map(|(id, j)| (id, count - 1 - j)).collect();
                     // The variants in the order of the states, oldest first.
@@ -640,6 +678,7 @@ thread_local! {
 /// 84 s to heal).
 pub(crate) fn build_progress() {
     mitcad_import::tick();
+    BUILD_TICKS.fetch_add(1, Ordering::Relaxed);
     BUILD_PROGRESS.with(|p| {
         if let Some((last, longest)) = p.get() {
             let now = Instant::now();
@@ -714,6 +753,10 @@ impl F3dGeometry {
                 }
             }
             Claim::Given(None) => None,
+            Claim::Ready(shape) => {
+                self.trace_body(variant, "built ahead");
+                shape
+            }
         };
         self.built[variant] = Some(shape.clone());
         shape
@@ -721,53 +764,12 @@ impl F3dGeometry {
 
     /// Builds the shape of a variant from the file's data with OCCT.
     fn heal(&self, variant: usize) -> Option<SharedPtr<Shape>> {
-        let file = &self.file;
-        let v = &file.variants[variant];
-        let blob = &file.blobs[v.blob];
-        let source = Source {
-            document: &file.document,
-            blob: &blob.entry,
-            asm_version: &blob.asm_version,
-            history: !file.plain.contains(&v.blob),
-            history_step: 0,
-        };
-        let data = to_ffi(&source, &v.body);
-        let clock = Instant::now();
-        BUILD_PROGRESS.with(|p| p.set(Some((clock, 0.0))));
-        // A build longer than the hang limit that returns, for the tests
-        // (mitcad#82): the file's first body takes 1.5 s, without progress.
-        if variant == 0 && std::env::var_os("MITCAD_IMPORT_STALL").is_some_and(|s| s == "slow") {
-            std::thread::sleep(Duration::from_millis(1500));
-        }
-        let shape = f3d_build_body(&data);
-        let seconds = clock.elapsed().as_secs_f64();
-        let still = BUILD_PROGRESS
-            .with(Cell::take)
-            .map_or(seconds, |(last, longest)| {
-                longest.max(last.elapsed().as_secs_f64())
-            });
-        if seconds >= 1.0 {
-            self.trace_body(
-                variant,
-                &format!("built in {seconds:.2} s, at most {still:.2} s without progress"),
-            );
-        }
-        (!shape.is_null()).then_some(shape)
+        self.file.heal(variant)
     }
 
     /// Traces what happened to a variant's body (`MITCAD_IMPORT_TRACE`).
     fn trace_body(&self, variant: usize, what: &str) {
-        if std::env::var_os("MITCAD_IMPORT_TRACE").is_none() {
-            return;
-        }
-        let v = &self.file.variants[variant];
-        let entry = &self.file.blobs[v.blob].entry;
-        eprintln!(
-            "import: body {}#{} ({} faces) {what}",
-            entry.rsplit('/').next().unwrap_or(entry),
-            v.body.record,
-            v.body.body.faces.len()
-        );
+        trace_body(&self.file, variant, what);
     }
 
     /// The bodies of variants that build, with the number of those that do
@@ -804,6 +806,239 @@ impl F3dGeometry {
             });
         }
         (bodies, broken)
+    }
+}
+
+/// Traces what happened to a variant's body (`MITCAD_IMPORT_TRACE`).
+fn trace_body(file: &StoredFile, variant: usize, what: &str) {
+    if std::env::var_os("MITCAD_IMPORT_TRACE").is_none() {
+        return;
+    }
+    let v = &file.variants[variant];
+    let entry = &file.blobs[v.blob].entry;
+    eprintln!(
+        "import: body {}#{} ({} faces) {what}",
+        entry.rsplit('/').next().unwrap_or(entry),
+        v.body.record,
+        v.body.body.faces.len()
+    );
+}
+
+impl StoredFile {
+    /// Builds the shape of a variant from the file's data with OCCT.
+    fn heal(&self, variant: usize) -> Option<SharedPtr<Shape>> {
+        let file = self;
+        let v = &file.variants[variant];
+        let blob = &file.blobs[v.blob];
+        let source = Source {
+            document: &file.document,
+            blob: &blob.entry,
+            asm_version: &blob.asm_version,
+            history: !file.plain.contains(&v.blob),
+            history_step: 0,
+        };
+        let data = to_ffi(&source, &v.body);
+        let clock = Instant::now();
+        BUILD_PROGRESS.with(|p| p.set(Some((clock, 0.0))));
+        // A build longer than the hang limit that returns, for the tests
+        // (mitcad#82): the file's first body takes 1.5 s, without progress.
+        if variant == 0 && std::env::var_os("MITCAD_IMPORT_STALL").is_some_and(|s| s == "slow") {
+            std::thread::sleep(Duration::from_millis(1500));
+        }
+        let shape = build_stored_body(&data);
+        let seconds = clock.elapsed().as_secs_f64();
+        let still = BUILD_PROGRESS
+            .with(Cell::take)
+            .map_or(seconds, |(last, longest)| {
+                longest.max(last.elapsed().as_secs_f64())
+            });
+        if seconds >= 1.0 {
+            trace_body(
+                self,
+                variant,
+                &format!("built in {seconds:.2} s, at most {still:.2} s without progress"),
+            );
+        }
+        shape
+    }
+}
+
+/// Builds a body of the file from its B-rep data with OCCT
+/// (`f3d_build_body`); None when it does not build. When an allocation
+/// failed meanwhile (mitcad#132, also one OCCT's healing or checker caught
+/// inside), the import running on this thread is low on memory.
+pub(crate) fn build_stored_body(
+    data: &crate::brep_import::ffi::BrepBodyData,
+) -> Option<SharedPtr<Shape>> {
+    match f3d_build_body(data) {
+        Ok(shape) => (!shape.is_null()).then_some(shape),
+        Err(e) => {
+            if let Some(progress) = mitcad_import::current_progress() {
+                progress.low_memory(&format!(
+                    "{} ({})",
+                    e.what(),
+                    crate::memory::memory_use().describe()
+                ));
+            }
+            None
+        }
+    }
+}
+
+// The history's bodies built ahead of the replay (mitcad#103).
+
+/// How many history states after the one the replay asks for have their
+/// bodies built ahead.
+const STATES_AHEAD: usize = 4;
+
+/// Moves whenever a body's build makes progress, on any thread: a try
+/// waiting for a build ahead of it ticks its watchdog with it.
+static BUILD_TICKS: AtomicU64 = AtomicU64::new(0);
+
+/// Threads building bodies ahead that still run (counted in
+/// [`abandoned_imports`]: the process must not run its static destructors
+/// under them).
+static BUILDING_AHEAD: AtomicUsize = AtomicUsize::new(0);
+
+/// Counts a thread in [`BUILDING_AHEAD`] until dropped.
+struct BuildingAhead;
+
+impl BuildingAhead {
+    fn new() -> Self {
+        BUILDING_AHEAD.fetch_add(1, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for BuildingAhead {
+    fn drop(&mut self) {
+        BUILDING_AHEAD.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl StoredFile {
+    /// Claims `variant` for a build ahead: false when it is built or being
+    /// built already.
+    fn claim_ahead(&self, variant: usize) -> bool {
+        let mut builds = self
+            .builds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if builds.contains_key(&variant) {
+            return false;
+        }
+        builds.insert(variant, SharedBuild::InProgress);
+        true
+    }
+
+    /// Builds the bodies queued in [`StoredFile::ahead`] while the import
+    /// has a thread for it ([`mitcad_import::Progress::helper`]), each
+    /// measured as the replay measures it (the shape keeps what it
+    /// measured): what the replay then asks for is there.
+    fn build_queued(self: &Arc<Self>, progress: &Arc<mitcad_import::Progress>) {
+        // (A thread per body queued at most; those running take some.)
+        let queued = self
+            .ahead
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        for _ in 0..queued {
+            let Some(helper) = progress.helper() else {
+                return;
+            };
+            let (file, progress_owned) = (Arc::clone(self), Arc::clone(progress));
+            let counted = BuildingAhead::new();
+            let started = std::thread::Builder::new()
+                .name("mitcad-import-bodies".to_owned())
+                .stack_size(mitcad_import::WORKER_STACK)
+                .spawn(move || {
+                    let _counted = counted;
+                    let _helper = helper;
+                    crate::kernel::exchange::ffi::catch_occt_crashes();
+                    // Its builds' progress is the import's (the watchdog's).
+                    let _ticking = mitcad_import::Ticking::new(Some(Arc::clone(&progress_owned)));
+                    file.build_ahead_loop(&progress_owned);
+                });
+            if started.is_err() {
+                return;
+            }
+        }
+    }
+
+    /// A thread's builds ahead, until the queue is empty or the import
+    /// needs the memory or was given up.
+    fn build_ahead_loop(&self, progress: &mitcad_import::Progress) {
+        loop {
+            if progress.abandoned()
+                || progress.is_memory_low()
+                || progress.memory_share() >= AHEAD_BODIES_MEMORY
+            {
+                return;
+            }
+            let next = self
+                .ahead
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pop_front();
+            let Some(variant) = next else {
+                return;
+            };
+            if !self.claim_ahead(variant) {
+                continue;
+            }
+            let mut claimed = Claimed {
+                file: self,
+                variant,
+                given: None,
+            };
+            let shape = self.heal(variant);
+            if let Some(s) = shape.as_ref().and_then(|s| s.as_ref()) {
+                // (The shape keeps its measures for the replay.)
+                let _ = crate::kernel::query::ffi::mass_properties(s);
+            }
+            claimed.given = Some(SharedBuild::Ready(shape));
+        }
+    }
+
+    /// Drops the bodies built ahead that no try took, except `kept`.
+    fn release_ahead(&self, kept: &[bool]) {
+        let mut builds = self
+            .builds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        builds.retain(|&v, b| !matches!(b, SharedBuild::Ready(_)) || kept.get(v) == Some(&true));
+    }
+}
+
+/// The share of the tightest memory limit above which no bodies are built
+/// ahead, as for definitions evaluated ahead (`mitcad_import`'s helpers).
+const AHEAD_BODIES_MEMORY: f64 = 0.5;
+
+impl F3dGeometry {
+    /// Builds the bodies of the states after `state` that this try has not
+    /// built yet on threads of the import's budget (mitcad#103): the
+    /// replay asks for them next, and building a large body takes seconds
+    /// to minutes. The bodies are the same as when the replay builds them.
+    fn build_ahead(&self, state: usize) {
+        let Some(progress) = mitcad_import::current_progress() else {
+            return;
+        };
+        let file = &self.file;
+        let last = file.states.len();
+        {
+            let mut queue = file
+                .ahead
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for s in state + 1..(state + 1 + STATES_AHEAD).min(last) {
+                for v in file.state_variants(s) {
+                    if self.built[v].is_none() && !queue.contains(&v) {
+                        queue.push_back(v);
+                    }
+                }
+            }
+        }
+        file.build_queued(&progress);
     }
 }
 
@@ -854,6 +1089,7 @@ impl StoredGeometry<SharedPtr<Shape>> for F3dGeometry {
                 kept[v] = true;
             }
         }
+        file.release_ahead(&kept);
         // (A body that did not build is not tried again.)
         for (built, kept) in self.built.iter_mut().zip(kept) {
             if !kept && matches!(built, Some(Some(_))) {
@@ -867,6 +1103,7 @@ impl StoredGeometry<SharedPtr<Shape>> for F3dGeometry {
             return Err(format!("there is no history state {index}"));
         }
         let variants = self.file.state_variants(index);
+        self.build_ahead(index);
         match self.bodies(&variants) {
             (bodies, 0) => Ok(bodies),
             (_, broken) => Err(format!(
@@ -945,6 +1182,14 @@ pub struct TimelineOptions {
     /// against the tightest of them.
     #[serde(default)]
     pub memory_limit: Option<f64>,
+    /// The threads that evaluate an item's definitions
+    /// (`mitcad_import::Options::threads`, mitcad#95); none or 0: one.
+    #[serde(default)]
+    pub threads: Option<usize>,
+    /// The directory of the learning dump (mitcad#96,
+    /// `mitcad_import::learn`); `MITCAD_IMPORT_LEARN` when left out.
+    #[serde(default)]
+    pub learn: Option<String>,
 }
 
 /// What a try of the import is told by the watchdog.
@@ -974,7 +1219,7 @@ struct Try {
 /// once the thread is done with them (they are sent as its last act). The
 /// document's shapes are C++ objects behind `shared_ptr`s and OCCT handles,
 /// whose reference counts are atomic; nothing else refers to them.
-struct Handover<T>(T);
+pub(crate) struct Handover<T>(pub(crate) T);
 
 unsafe impl<T> Send for Handover<T> {}
 
@@ -983,14 +1228,37 @@ unsafe impl<T> Send for Handover<T> {}
 static ABANDONED_RUNNING: AtomicUsize = AtomicUsize::new(0);
 
 /// How many import threads the hang watchdog gave up still run: their
-/// geometry kernel call has not returned yet. A process that ends while
+/// geometry kernel call has not returned yet; and the workers that
+/// evaluated an item's definitions ahead and still run, whose result is no
+/// longer wanted (mitcad#95). A process that ends while
 /// one runs must end without its static destructors (C++ `std::_Exit`
 /// once its output is written; `mitcad-cli`, the application's import
 /// worker): the shared libraries' finalizers tear down OCCT's state under
 /// the thread, which then crashes (mitcad#82: a segmentation fault at exit
 /// on Linux after an import that hung, the thread healing a body).
 pub fn abandoned_imports() -> usize {
+    // (Workers that evaluate definitions ahead and still run, mitcad#95:
+    // their results are no longer wanted once the import has ended.)
     ABANDONED_RUNNING.load(Ordering::SeqCst)
+        + mitcad_import::running_workers()
+        + BUILDING_AHEAD.load(Ordering::SeqCst)
+}
+
+/// Starts the threads that evaluate an item's definitions ahead
+/// (mitcad#95): an import thread's stack, with OCCT's crash handlers as on
+/// the import's thread. None start when the stack cannot be reserved (the
+/// import's thread then evaluates the definition).
+fn worker_spawner() -> mitcad_import::Spawner {
+    mitcad_import::Spawner(Arc::new(|job: mitcad_import::WorkerJob| {
+        std::thread::Builder::new()
+            .name("mitcad-import-worker".to_owned())
+            .stack_size(mitcad_import::WORKER_STACK)
+            .spawn(move || {
+                crate::kernel::exchange::ffi::catch_occt_crashes();
+                job();
+            })
+            .is_ok()
+    }))
 }
 
 /// A try's thread runs, has finished, or was given up while it ran.
@@ -1001,15 +1269,15 @@ const TRY_ABANDONED: u8 = 2;
 /// Whether a try's thread runs, counted in [`ABANDONED_RUNNING`] once the
 /// watchdog gave it up ([`TryThread::abandon`]) until it ends.
 #[derive(Clone)]
-struct TryThread(Arc<AtomicU8>);
+pub(crate) struct TryThread(Arc<AtomicU8>);
 
 impl TryThread {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(Arc::new(AtomicU8::new(TRY_RUNNING)))
     }
 
     /// The watchdog gave the try up: counted until its thread ends.
-    fn abandon(&self) {
+    pub(crate) fn abandon(&self) {
         ABANDONED_RUNNING.fetch_add(1, Ordering::SeqCst);
         if self
             .0
@@ -1028,7 +1296,7 @@ impl TryThread {
 }
 
 /// Held by a try's thread to its very end (dropped last): no longer counted.
-struct TryEnd(TryThread);
+pub(crate) struct TryEnd(pub(crate) TryThread);
 
 impl Drop for TryEnd {
     fn drop(&mut self) {
@@ -1039,7 +1307,7 @@ impl Drop for TryEnd {
 }
 
 /// How many times an import that hung is run again.
-const HANG_RETRIES: usize = 8;
+pub(crate) const HANG_RETRIES: usize = 8;
 
 /// The stack of an import thread (the main thread's is 8 MiB on Linux).
 const IMPORT_STACK: usize = 256 << 20;
@@ -1055,7 +1323,7 @@ const SMALLER_STACKS: [usize; 3] = [64 << 20, 16 << 20, 8 << 20];
 /// Starts `run` on a new import thread, on the full stack or, when that
 /// cannot be reserved, on the largest smaller one that can; the stack size
 /// it got, or the error of the last attempt.
-fn spawn_import<F>(run: F) -> std::io::Result<usize>
+pub(crate) fn spawn_import<F>(run: F) -> std::io::Result<usize>
 where
     F: FnOnce() + Send + 'static,
 {
@@ -1097,34 +1365,55 @@ const MEMORY_TIGHT: f64 = 0.70;
 const MEMORY_LOW: f64 = 0.85;
 
 /// How often the memory guard measures the process.
-const MEMORY_POLL: Duration = Duration::from_millis(100);
+pub(crate) const MEMORY_POLL: Duration = Duration::from_millis(100);
 
 /// The import's memory guard (mitcad#80): measures the process against
 /// its limits (`memory::memory_use`, and the import's own
-/// `memory_limit`) and tells a try when memory gets tight or low.
-struct MemoryGuard {
+/// `memory_limit`) and tells a try when memory gets tight or low; also the
+/// `.ipt` import's (`ipt_import.rs`).
+pub(crate) struct MemoryGuard {
     /// The import's own limit in bytes.
     limit: Option<u64>,
     /// The share at which the try is next told that memory is tight.
     next_tight: f64,
+    /// The allocations in the geometry kernel that had failed when last
+    /// measured.
+    failed_allocations: u64,
 }
 
 impl MemoryGuard {
     fn new(options: &TimelineOptions) -> Self {
+        Self::with_limit(options.memory_limit)
+    }
+
+    /// A guard with the import's own limit in MiB (none or 0: the
+    /// process's limits only).
+    pub(crate) fn with_limit(memory_limit: Option<f64>) -> Self {
         Self {
-            limit: options
-                .memory_limit
+            limit: memory_limit
                 .filter(|m| *m > 0.0)
                 .map(|m| (m * f64::from(1u32 << 20)) as u64),
             next_tight: MEMORY_TIGHT,
+            failed_allocations: crate::memory::memory_use().failed_allocations,
         }
     }
 
-    fn check(&mut self, progress: &mitcad_import::Progress) {
+    pub(crate) fn check(&mut self, progress: &mitcad_import::Progress) {
         let memory = crate::memory::memory_use().within(self.limit);
         let share = memory.share();
         let text = memory.describe();
         progress.set_memory(&text);
+        progress.set_memory_share(share);
+        // An allocation in the kernel failed (mitcad#132): also one it
+        // caught inside, which no operation reported, and one on a thread
+        // of no import. The memory ran out, whatever it is now.
+        if memory.failed_allocations != self.failed_allocations {
+            self.failed_allocations = memory.failed_allocations;
+            progress.low_memory(&format!(
+                "an allocation in the geometry kernel failed, {text}"
+            ));
+            return;
+        }
         if share >= MEMORY_LOW {
             progress.low_memory(&text);
             return;
@@ -1143,7 +1432,11 @@ impl MemoryGuard {
 
     /// Runs `f` with the guard measuring the process on a thread of its
     /// own (an import without the watchdog, whose loop measures it).
-    fn around<T>(mut self, progress: &Arc<mitcad_import::Progress>, f: impl FnOnce() -> T) -> T {
+    pub(crate) fn around<T>(
+        mut self,
+        progress: &Arc<mitcad_import::Progress>,
+        f: impl FnOnce() -> T,
+    ) -> T {
         self.check(progress);
         let (done, finished) = std::sync::mpsc::channel::<()>();
         let watched = progress.clone();
@@ -1185,15 +1478,17 @@ struct Prepared {
 /// Reads the design to import and its bodies.
 fn prepare(path: &str, options: &TimelineOptions) -> Result<Prepared, ApiError> {
     let fail = |e: String| ApiError(e);
+    let clock = Instant::now();
     let documents = mitcad_f3d::design::documents(std::path::Path::new(path)).map_err(fail)?;
     if documents.is_empty() {
         return Err(ApiError(format!("{path} holds no design")));
     }
-    // The design and its dump.
+    // Each design's streams, to choose one; only the chosen one's inputs
+    // are found in the bodies' history (mitcad#103).
     let mut designs = Vec::new();
     for (label, doc) in &documents {
-        let design = mitcad_f3d::design::decode_document(doc, label).map_err(fail)?;
-        designs.push((label.clone(), doc, design.dump));
+        let design = mitcad_f3d::design::decode_streams(doc, label).map_err(fail)?;
+        designs.push((label.clone(), doc, design));
     }
     let chosen = match &options.design {
         Some(wanted) => designs
@@ -1210,6 +1505,7 @@ fn prepare(path: &str, options: &TimelineOptions) -> Result<Prepared, ApiError> 
             .max_by_key(|&i| {
                 designs[i]
                     .2
+                    .dump
                     .as_ref()
                     .map_or(0, |d| d.timeline_items().len())
             })
@@ -1221,16 +1517,75 @@ fn prepare(path: &str, options: &TimelineOptions) -> Result<Prepared, ApiError> 
         .filter(|(i, _)| *i != chosen)
         .map(|(_, (l, _, _))| l.clone())
         .collect();
-    let (label, doc, decoded) = designs.swap_remove(chosen);
+    let (label, doc, mut decoded) = designs.swap_remove(chosen);
     drop(designs);
-    let file = StoredFile::new(doc, &label, decoded.as_ref()).map_err(fail)?;
+    trace_reading("design streams decoded", clock);
+    // (An external dump stands in for the file's design.)
+    let resolve = options.dump.is_none();
+    let threads = options.threads.unwrap_or(1).max(1);
+    let file = if resolve && threads > 1 {
+        // The inputs are found while the bodies are converted: they read
+        // the same history, and neither needs the other (the bodies need
+        // the blobs' links, components and the items' states, which finding
+        // the inputs leaves as they are).
+        let links = decoded.dump.clone();
+        // The threads shared between the two.
+        let (converting, finding) = (threads / 2, threads - threads / 2);
+        let resolved = Mutex::new((decoded, false));
+        let resolve = || {
+            let mut design = resolved
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !design.1 {
+                let clock = Instant::now();
+                mitcad_f3d::design::resolve_inputs(&mut design.0, doc, finding);
+                design.1 = true;
+                trace_reading("inputs found", clock);
+            }
+        };
+        let file = std::thread::scope(|scope| {
+            let resolving = std::thread::Builder::new()
+                .name("mitcad-import-inputs".to_owned())
+                .stack_size(IMPORT_STACK)
+                .spawn_scoped(scope, resolve);
+            let clock = Instant::now();
+            let file = StoredFile::new(doc, &label, links.as_ref(), converting);
+            trace_reading("bodies converted", clock);
+            match resolving {
+                Ok(thread) => {
+                    if let Err(panic) = thread.join() {
+                        std::panic::resume_unwind(panic);
+                    }
+                }
+                // (Not started: here.)
+                Err(_) => resolve(),
+            }
+            file
+        });
+        decoded = resolved
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .0;
+        file
+    } else {
+        if resolve {
+            let clock = Instant::now();
+            mitcad_f3d::design::resolve_inputs(&mut decoded, doc, threads);
+            trace_reading("inputs found", clock);
+        }
+        let clock = Instant::now();
+        let file = StoredFile::new(doc, &label, decoded.dump.as_ref(), threads);
+        trace_reading("bodies converted", clock);
+        file
+    }
+    .map_err(fail)?;
     let dump = match &options.dump {
         Some(dump_path) => {
             let text = std::fs::read_to_string(dump_path)
                 .map_err(|e| ApiError(format!("{dump_path}: {e}")))?;
             Some(Dump::from_json(&text).map_err(|e| ApiError(format!("{dump_path}: {e}")))?)
         }
-        None => decoded,
+        None => decoded.dump,
     };
     Ok(Prepared {
         label,
@@ -1238,6 +1593,16 @@ fn prepare(path: &str, options: &TimelineOptions) -> Result<Prepared, ApiError> 
         file: Arc::new(file),
         others,
     })
+}
+
+/// Traces how long a part of reading the file took (`MITCAD_IMPORT_TRACE`).
+fn trace_reading(what: &str, clock: Instant) {
+    if std::env::var_os("MITCAD_IMPORT_TRACE").is_some() {
+        eprintln!(
+            "import: file read: {what} in {:.2} s",
+            clock.elapsed().as_secs_f64()
+        );
+    }
 }
 
 /// [`prepare`] on a thread with an import thread's stack (as a try's, for
@@ -1262,7 +1627,7 @@ fn list_designs(path: &str) -> Result<String, ApiError> {
     let documents = mitcad_f3d::design::documents(std::path::Path::new(path)).map_err(ApiError)?;
     let mut designs = Vec::new();
     for (label, doc) in &documents {
-        let design = mitcad_f3d::design::decode_document(doc, label).map_err(ApiError)?;
+        let design = mitcad_f3d::design::decode_streams(doc, label).map_err(ApiError)?;
         let items = design.dump.as_ref().map_or(0, |d| d.timeline_items().len());
         designs.push(json!({"label": label, "items": items}));
     }
@@ -1539,6 +1904,17 @@ impl Document {
             stop: attempt.stop.clone(),
             stop_at: attempt.stop_at,
             failed_items: attempt.failed.clone(),
+            threads: options.threads.unwrap_or(1).max(1),
+            spawn: Some(worker_spawner()),
+            learn: options
+                .learn
+                .clone()
+                .or_else(|| std::env::var("MITCAD_IMPORT_LEARN").ok())
+                .filter(|d| !d.is_empty())
+                .map(|dir| mitcad_import::learn::LearnOptions {
+                    dir: dir.into(),
+                    path: Some(path.into()),
+                }),
             ..mitcad_import::Options::default()
         };
         let design =

@@ -1,0 +1,1022 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Edge overflow of the rolling ball fillet. Where the ball tangent to the two
+faces of an edge cannot touch one of them within that face (a face narrower
+than the rounding), the rounding runs onto the face beyond the narrow
+face's far edge or, where the ball cannot touch that face, rolls on the far
+edge (a blend on an obstacle: surface/restriction), and the narrow face
+vanishes. OCCT had blends on obstacles only where a walk met an edge in the
+middle of a rounding; a rounding whose contact leaves a face along the whole
+edge found no start (StartsolFailure).
+
+- ChFi3d_Builder::StartSolOverflow (new, called from
+  PerformSetOfSurfOnElSpine when StartSol finds no start): at sections along
+  the spine, the section on the faces' unbounded surfaces; where exactly one
+  contact lies outside its face, the face's edge the section crosses between
+  the spine and that contact and the face beyond it: a start touching that
+  face (a section whose normals meet in a circle centre), else a start
+  rolling on the edge, set up as StartSol sets up an obstacle met by a walk.
+  Fillets only (chamfers implement no blend on an obstacle).
+- PerformSetOfSurfOnElSpine: a blend on an obstacle that reaches the end of
+  the spine, or a face at the vertex that ends it (ObstacleAtSpineEnd, new,
+  with ChFi3d_ArcEndsSpine), ends the stripe there, as a blend between two
+  faces does; before, the loop went on past the end.
+- ChFi3d_Builder::ComputeData (edge/face): on a periodic guide a path that
+  starts inside sets the period's origin where the path to the left ended,
+  as the face/face ComputeData does, so that a blend rolling on a closed
+  edge goes round.
+- ChFi3d_FilBuilder::PerformSurf (both edge/face variants): a blend on an
+  obstacle whose contact on its face ends on an edge of a face at the end of
+  the spine is extended past it (ChFi3d_ExtendAtSpineEnds), as blends
+  between two faces are, so that the face at the end cuts it.
+- PerformOneCorner: the end of a blend on an obstacle lies at a vertex of
+  the obstacle edge (or near it, where a section across the spine meets the
+  face at the end a little before); its common point gets the edge of that
+  vertex that bounds the face the blend touches and the face at the end
+  (ChFi3d_ObstacleEndOnFace), so that FindFace finds the face at the end.
+- ChFi3d_CutConsumedFaces (new, called after ChFi3d_FilDS): the face on the
+  other side of an obstacle edge, between it and the spine, which the blend
+  consumes, is dropped when it is a strip between the spine and that edge:
+  its other edges at the vertices where the blend ends are cut there, so
+  that nothing of it is connected to the result.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 192f69f..886899c 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -389,6 +389,8 @@ void ChFi3d_Builder::Compute()
+       // 05/02/02 akm ^^^
+       int solidindex = st->SolidIndex();
+       ChFi3d_FilDS(solidindex, st, DStr, myRegul, tolapp3d, tol2d);
++      // Narrow faces consumed by blends on their edges (edge overflow).
++      ChFi3d_CutConsumedFaces(DStr, st, myEFMap);
+       if (!done)
+       {
+         break;
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index ab5614b..857a2a7 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+@@ -829,6 +829,33 @@ private:
+                                 gp_Pnt2d&                              P2,
+                                 double&                                First) const;
+ 
++  //! Start solution of a stripe whose contact line leaves one of the faces
++  //! of its edges at once, across a boundary edge to a non-tangent face
++  //! (edge overflow): the blend then either touches that next face (returns
++  //! 0, HS1/HS2 and P1/P2 updated) or rolls on the boundary edge (returns
++  //! the side, 1 or 2, of the obstacle: HS, HC, HSref, HCref, W as
++  //! StartSol gives them for an obstacle). Returns -1 when neither is found.
++  Standard_EXPORT int StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      S,
++                                       const occ::handle<ChFiDS_ElSpine>&     HGuide,
++                                       occ::handle<BRepAdaptor_Surface>&      HS1,
++                                       occ::handle<BRepAdaptor_Surface>&      HS2,
++                                       occ::handle<BRepTopAdaptor_TopolTool>& I1,
++                                       occ::handle<BRepTopAdaptor_TopolTool>& I2,
++                                       gp_Pnt2d&                              P1,
++                                       gp_Pnt2d&                              P2,
++                                       double&                                First,
++                                       occ::handle<BRepAdaptor_Curve2d>&      HC,
++                                       occ::handle<BRepAdaptor_Surface>&      HSref,
++                                       occ::handle<BRepAdaptor_Curve2d>&      HCref,
++                                       double&                                W) const;
++
++  //! Whether the common point of SurfData SD at its start or end on side
++  //! ons lies on an edge of a face at the vertex Bout ending the spine.
++  Standard_EXPORT bool ObstacleAtSpineEnd(const occ::handle<ChFiDS_SurfData>& SD,
++                                          const bool                          isFirst,
++                                          const int                           ons,
++                                          const TopoDS_Vertex&                Bout) const;
++
+   Standard_EXPORT void ConexFaces(const occ::handle<ChFiDS_Spine>&  Sp,
+                                   const int                         IEdge,
+                                   occ::handle<BRepAdaptor_Surface>& HS1,
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+index 2fe42a0..b8def97 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -2562,6 +2562,154 @@ static bool findIndexPoint(const TopOpeBRepDS_DataStructure&   DStr,
+ 
+ //=================================================================================================
+ 
++bool ChFi3d_ArcEndsSpine(const ChFiDS_CommonPoint& CP,
++                         const TopoDS_Face&        F,
++                         const TopoDS_Vertex&      Bout,
++                         const ChFiDS_Map&         EFMap,
++                         const ChFiDS_Map&         VFMap)
++{
++  if (!CP.IsOnArc() || Bout.IsNull() || !EFMap.Contains(CP.Arc()) || !VFMap.Contains(Bout))
++  {
++    return true;
++  }
++  for (TopExp_Explorer ex(CP.Arc(), TopAbs_VERTEX); ex.More(); ex.Next())
++  {
++    if (ex.Current().IsSame(Bout))
++    {
++      return true;
++    }
++  }
++  for (NCollection_List<TopoDS_Shape>::Iterator itF(EFMap(CP.Arc())); itF.More(); itF.Next())
++  {
++    if (itF.Value().IsSame(F))
++    {
++      continue;
++    }
++    for (NCollection_List<TopoDS_Shape>::Iterator itV(VFMap(Bout)); itV.More(); itV.Next())
++    {
++      if (itV.Value().IsSame(itF.Value()))
++      {
++        return true;
++      }
++    }
++  }
++  return false;
++}
++
++//=======================================================================
++// function : ChFi3d_CutConsumedFaces
++// purpose  : A SurfData rolling on an obstacle edge (side ons) keeps the
++//            face beyond that edge (IndexOfS) and shares the edge with it;
++//            the face on the other side of the obstacle edge, between it
++//            and the spine, is consumed by the blend. When that face is a
++//            strip between the spine and the obstacle edge (all its vertices
++//            on them) and the blend ends at the vertices of the obstacle
++//            edge, its other edges at those vertices are cut there, so that
++//            the builder drops the face with them.
++//=======================================================================
++
++void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&       DStr,
++                             const occ::handle<ChFiDS_Stripe>& CorDat,
++                             const ChFiDS_Map&                 EFMap)
++{
++  const occ::handle<ChFiDS_Spine>& aSpine = CorDat->Spine();
++  if (aSpine.IsNull())
++  {
++    return;
++  }
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aSpineVertices;
++  for (int ie = 1; ie <= aSpine->NbEdges(); ie++)
++  {
++    for (TopExp_Explorer ex(aSpine->Edges(ie), TopAbs_VERTEX); ex.More(); ex.Next())
++    {
++      aSpineVertices.Add(ex.Current());
++    }
++  }
++  const NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& SeqFil =
++    CorDat->SetOfSurfData()->Sequence();
++  for (int j = 1; j <= SeqFil.Length(); j++)
++  {
++    const occ::handle<ChFiDS_SurfData>& Fd = SeqFil(j);
++    for (int ons = 1; ons <= 2; ons++)
++    {
++      if (!Fd->IsOnCurve(ons) || Fd->Index(ons) <= 0)
++      {
++        continue;
++      }
++      const TopoDS_Shape& anObst = DStr.Shape(Fd->IndexOfC(ons));
++      const TopoDS_Shape& aFace  = DStr.Shape(Fd->Index(ons));
++      if (!EFMap.Contains(anObst))
++      {
++        continue;
++      }
++      TopoDS_Face aLeft;
++      for (NCollection_List<TopoDS_Shape>::Iterator it(EFMap(anObst)); it.More(); it.Next())
++      {
++        if (!it.Value().IsSame(aFace))
++        {
++          aLeft = TopoDS::Face(it.Value());
++        }
++      }
++      if (aLeft.IsNull())
++      {
++        continue;
++      }
++      // The consumed face must be a strip between the spine and the
++      // obstacle edge.
++      bool isStrip = true;
++      for (TopExp_Explorer ex(aLeft, TopAbs_VERTEX); ex.More() && isStrip; ex.Next())
++      {
++        bool onObst = false;
++        for (TopExp_Explorer exo(anObst, TopAbs_VERTEX); exo.More() && !onObst; exo.Next())
++        {
++          onObst = exo.Current().IsSame(ex.Current());
++        }
++        isStrip = onObst || aSpineVertices.Contains(ex.Current());
++      }
++      if (!isStrip)
++      {
++        continue;
++      }
++      // Its other edges at the ends of the blend.
++      for (int f = 0; f < 2; f++)
++      {
++        const ChFiDS_CommonPoint& CP = Fd->Vertex(f == 0, ons);
++        if (!CP.IsVertex())
++        {
++          continue;
++        }
++        const TopoDS_Vertex& V      = CP.Vertex();
++        const int            IV     = DStr.AddShape(V);
++        TopoDS_Face          aLeftF = aLeft;
++        aLeftF.Orientation(TopAbs_FORWARD);
++        for (TopExp_Explorer ex(aLeftF, TopAbs_EDGE); ex.More(); ex.Next())
++        {
++          TopoDS_Edge E = TopoDS::Edge(ex.Current());
++          if (E.IsSame(anObst) || BRep_Tool::Degenerated(E))
++          {
++            continue;
++          }
++          E.Orientation(TopAbs_FORWARD);
++          for (TopExp_Explorer exv(E, TopAbs_VERTEX); exv.More(); exv.Next())
++          {
++            const TopoDS_Vertex& vv = TopoDS::Vertex(exv.Current());
++            if (!vv.IsSame(V))
++            {
++              continue;
++            }
++            const int IE = DStr.AddShape(E);
++            QueryAddVertexInEdge(DStr.ChangeShapeInterferences(IE),
++                                 IE,
++                                 IV,
++                                 BRep_Tool::Parameter(vv, E),
++                                 TopAbs::Reverse(vv.Orientation()));
++          }
++        }
++      }
++    }
++  }
++}
++
+ void ChFi3d_FilDS(const int                         SolidIndex,
+                   const occ::handle<ChFiDS_Stripe>& CorDat,
+                   TopOpeBRepDS_DataStructure&       DStr,
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+index 466bf52..45a5294 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+@@ -526,4 +526,21 @@ occ::handle<Geom_BSplineCurve> ChFi3d_ApproxByC2(const occ::handle<Geom_Curve>&
+ 
+ bool ChFi3d_IsSmooth(const occ::handle<Geom_Curve>& C);
+ 
++//! Whether the arc of a common point, an edge of face F, bounds besides F
++//! a face that has the vertex at the end of the spine (or is an edge of
++//! that vertex): the blend meets the face at the end of the spine there.
++//! Otherwise the contact line leaves F across the arc before the end.
++bool ChFi3d_ArcEndsSpine(const ChFiDS_CommonPoint& CP,
++                         const TopoDS_Face&        F,
++                         const TopoDS_Vertex&      Bout,
++                         const ChFiDS_Map&         EFMap,
++                         const ChFiDS_Map&         VFMap);
++
++//! The faces that blends rolling on their edges (obstacles) consume
++//! entirely are dropped from the result: their other edges at the ends of
++//! those blends are cut there.
++void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&       DStr,
++                             const occ::handle<ChFiDS_Stripe>& CorDat,
++                             const ChFiDS_Map&                 EFMap);
++
+ #endif
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 9a6c580..b4cb2ec 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -28,6 +28,7 @@
+ #include <ChFiDS_ChamfSpine.hxx>
+ #include <ChFiDS_CommonPoint.hxx>
+ #include <ChFiDS_ElSpine.hxx>
++#include <ChFiDS_FilSpine.hxx>
+ #include <ChFiDS_ErrorStatus.hxx>
+ #include <ChFiDS_FaceInterference.hxx>
+ #include <ChFiDS_SurfData.hxx>
+@@ -49,12 +50,16 @@
+ #include <GeomAdaptor_Surface.hxx>
+ #include <GeomAPI_ProjectPointOnCurve.hxx>
+ #include <GeomFill_ConstrainedFilling.hxx>
++#include <IntCurveSurface_HInter.hxx>
++#include <IntCurveSurface_IntersectionPoint.hxx>
+ #include <gp_Pnt.hxx>
+ #include <gp_Pnt2d.hxx>
+ #include <gp_Vec.hxx>
+ #include <gp_XYZ.hxx>
+ #include <math_Vector.hxx>
+ #include <Precision.hxx>
++#include <Standard_ErrorHandler.hxx>
++#include <Standard_Failure.hxx>
+ #include <Standard_NotImplemented.hxx>
+ #include <NCollection_Array1.hxx>
+ #include <Standard_Integer.hxx>
+@@ -1115,6 +1120,351 @@ void ChFi3d_Builder::StartSol(const occ::handle<ChFiDS_Stripe>&      Stripe,
+ 
+ //=================================================================================================
+ 
++// The distance of a point from the segment [A, B].
++static double distanceToSegment(const gp_Pnt& P, const gp_Pnt& A, const gp_Pnt& B)
++{
++  const gp_Vec AB(A, B);
++  const double L2 = AB.SquareMagnitude();
++  if (L2 < gp::Resolution())
++  {
++    return P.Distance(A);
++  }
++  double t = gp_Vec(A, P).Dot(AB) / L2;
++  t        = std::min(1., std::max(0., t));
++  return P.Distance(A.Translated(t * AB));
++}
++
++// Whether a circle tangent to surface S1 at (U1, V1) and to S2 at (U2, V2)
++// exists: the normal lines through both points meet at a point as far from
++// both. Rejects the false roots a section solver may stop at.
++static bool isTangentCircle(const Adaptor3d_Surface& S1,
++                            const double             U1,
++                            const double             V1,
++                            const Adaptor3d_Surface& S2,
++                            const double             U2,
++                            const double             V2,
++                            const double             Tol)
++{
++  gp_Pnt P1, P2;
++  gp_Vec D1U, D1V, D2U, D2V;
++  S1.D1(U1, V1, P1, D1U, D1V);
++  S2.D1(U2, V2, P2, D2U, D2V);
++  gp_Vec N1 = D1U.Crossed(D1V), N2 = D2U.Crossed(D2V);
++  if (N1.Magnitude() < gp::Resolution() || N2.Magnitude() < gp::Resolution())
++  {
++    return false;
++  }
++  N1.Normalize();
++  N2.Normalize();
++  // The closest points of the lines P1 + a N1 and P2 + b N2.
++  const gp_Vec W0(P2, P1);
++  const double b = N1.Dot(N2), d = N1.Dot(W0), e = N2.Dot(W0);
++  const double den = 1. - b * b;
++  if (den < 1.e-12)
++  {
++    return false; // parallel normals: no circle touches both
++  }
++  const double a  = (b * e - d) / den;
++  const double c  = (e - b * d) / den;
++  const gp_Pnt C1 = P1.Translated(a * N1);
++  const gp_Pnt C2 = P2.Translated(c * N2);
++  return C1.Distance(C2) < Tol && std::abs(std::abs(a) - std::abs(c)) < Tol;
++}
++
++// The occurrence of edge E in face F (taken FORWARD), or a null edge.
++static TopoDS_Edge edgeInFace(const TopoDS_Edge& E, const TopoDS_Face& F)
++{
++  TopoDS_Face aF = F;
++  aF.Orientation(TopAbs_FORWARD);
++  for (TopExp_Explorer ex(aF, TopAbs_EDGE); ex.More(); ex.Next())
++  {
++    if (ex.Current().IsSame(E))
++    {
++      return TopoDS::Edge(ex.Current());
++    }
++  }
++  return TopoDS_Edge();
++}
++
++//=================================================================================================
++
++bool ChFi3d_Builder::ObstacleAtSpineEnd(const occ::handle<ChFiDS_SurfData>& SD,
++                                        const bool                          isFirst,
++                                        const int                           ons,
++                                        const TopoDS_Vertex&                Bout) const
++{
++  if (SD.IsNull() || Bout.IsNull() || SD->Index(ons) <= 0)
++  {
++    return false;
++  }
++  const ChFiDS_CommonPoint& CP = SD->Vertex(isFirst, ons);
++  if (!CP.IsOnArc() || !myEFMap.Contains(CP.Arc()) || !myVFMap.Contains(Bout))
++  {
++    return false;
++  }
++  const TopoDS_Face F = TopoDS::Face(myDS->DS().Shape(SD->Index(ons)));
++  return ChFi3d_ArcEndsSpine(CP, F, Bout, myEFMap, myVFMap);
++}
++
++//=================================================================================================
++
++int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stripe,
++                                     const occ::handle<ChFiDS_ElSpine>&     HGuide,
++                                     occ::handle<BRepAdaptor_Surface>&      HS1,
++                                     occ::handle<BRepAdaptor_Surface>&      HS2,
++                                     occ::handle<BRepTopAdaptor_TopolTool>& I1,
++                                     occ::handle<BRepTopAdaptor_TopolTool>& I2,
++                                     gp_Pnt2d&                              P1,
++                                     gp_Pnt2d&                              P2,
++                                     double&                                First,
++                                     occ::handle<BRepAdaptor_Curve2d>&      HC,
++                                     occ::handle<BRepAdaptor_Surface>&      HSref,
++                                     occ::handle<BRepAdaptor_Curve2d>&      HCref,
++                                     double&                                W) const
++{
++  const occ::handle<ChFiDS_Spine>& Spine      = Stripe->Spine();
++  ChFiDS_ElSpine&                  els        = *HGuide;
++  const int                        nbed       = Spine->NbEdges();
++  const int                        nbessaimax = std::max(3 * nbed, 10);
++  const double wf = 0.9981 * Spine->FirstParameter(1) + 0.0019 * Spine->LastParameter(1);
++  const double wl = 0.9973 * Spine->LastParameter(nbed) + 0.0027 * Spine->FirstParameter(nbed);
++  const int    RC = Stripe->Choix();
++  const bool   isFillet = !occ::down_cast<ChFiDS_FilSpine>(Spine).IsNull();
++  if (!isFillet)
++  {
++    return -1; // chamfers do not roll over edges
++  }
++
++  Extrema_ExtPC PExt;
++  PExt.Initialize(els,
++                  Spine->FirstParameter(1),
++                  Spine->LastParameter(nbed),
++                  Precision::Confusion());
++  math_Vector SolDep(1, 4);
++  for (int nbessai = 0; nbessai <= nbessaimax; nbessai++)
++  {
++    const double t     = double(nbessai) / nbessaimax;
++    double       w     = wf * (1. - t) + wl * t;
++    const int    iedge = Spine->Index(w);
++    TopoDS_Edge  cured = Spine->Edges(iedge);
++    ConexFaces(Spine, iedge, HS1, HS2);
++    const TopoDS_Face f1 = HS1->Face();
++    const TopoDS_Face f2 = HS2->Face();
++    if (f1.IsSame(f2))
++    {
++      continue;
++    }
++    double woned;
++    Spine->Parameter(iedge, w, woned, true);
++    const BRepAdaptor_Curve& Ced = Spine->CurrentElementarySpine(iedge);
++    const gp_Pnt             pnt = Ced.Value(woned);
++    if (!Projection(PExt, pnt, els, w, tolapp3d))
++    {
++      continue;
++    }
++    TopoDS_Face f1forward = f1, f2forward = f2;
++    f1forward.Orientation(TopAbs_FORWARD);
++    f2forward.Orientation(TopAbs_FORWARD);
++    cured.Orientation(TopAbs_FORWARD);
++    const occ::handle<Geom2d_Curve> PC1 = getCurveOnSurface(cured, f1forward);
++    const occ::handle<Geom2d_Curve> PC2 = getCurveOnSurface(cured, f2forward);
++    if (PC1.IsNull() || PC2.IsNull())
++    {
++      continue;
++    }
++    P1 = PC1->Value(woned);
++    P2 = PC2->Value(woned);
++
++    // The section on the surfaces of both faces, not bounded by them.
++    occ::handle<BRepAdaptor_Surface> U1 = new BRepAdaptor_Surface(f1, false);
++    occ::handle<BRepAdaptor_Surface> U2 = new BRepAdaptor_Surface(f2, false);
++    I1->Initialize((const occ::handle<Adaptor3d_Surface>&)U1);
++    I2->Initialize((const occ::handle<Adaptor3d_Surface>&)U2);
++    TopAbs_Orientation Or1   = f1.Orientation();
++    TopAbs_Orientation Or2   = f2.Orientation();
++    const int          Choix = ChFi3d::NextSide(Or1,
++                                       Or2,
++                                       Stripe->OrientationOnFace1(),
++                                       Stripe->OrientationOnFace2(),
++                                       RC);
++    SolDep(1) = P1.X();
++    SolDep(2) = P1.Y();
++    SolDep(3) = P2.X();
++    SolDep(4) = P2.Y();
++    TopAbs_State Pos1 = TopAbs_UNKNOWN, Pos2 = TopAbs_UNKNOWN;
++    PerformFirstSection(Spine, HGuide, Choix, U1, U2, I1, I2, w, SolDep, Pos1, Pos2);
++    int ons = 0;
++    if (Pos1 == TopAbs_OUT && (Pos2 == TopAbs_IN || Pos2 == TopAbs_ON))
++    {
++      ons = 1;
++    }
++    else if (Pos2 == TopAbs_OUT && (Pos1 == TopAbs_IN || Pos1 == TopAbs_ON))
++    {
++      ons = 2;
++    }
++    if (ons == 0)
++    {
++      continue;
++    }
++    const TopoDS_Face& Fk = ons == 1 ? f1 : f2;
++    const gp_Pnt Pc = ons == 1 ? U1->Value(SolDep(1), SolDep(2)) : U2->Value(SolDep(3), SolDep(4));
++
++    // The boundary edge of Fk the section crosses between the spine and
++    // the contact point.
++    gp_Pnt P;
++    gp_Vec V;
++    HGuide->D1(w, P, V);
++    occ::handle<GeomAdaptor_Surface> plane =
++      new GeomAdaptor_Surface(new Geom_Plane(P, gp_Dir(V)));
++    TopoDS_Edge arc;
++    double      warc = 0., best = RealLast();
++    for (TopExp_Explorer ex(Fk, TopAbs_EDGE); ex.More(); ex.Next())
++    {
++      const TopoDS_Edge& ecur = TopoDS::Edge(ex.Current());
++      if (ecur.IsSame(cured) || BRep_Tool::Degenerated(ecur))
++      {
++        continue;
++      }
++      occ::handle<BRepAdaptor_Curve> hc = new BRepAdaptor_Curve(ecur);
++      IntCurveSurface_HInter         inter;
++      inter.Perform(hc, plane);
++      if (!inter.IsDone())
++      {
++        continue;
++      }
++      const double tolc = hc->Resolution(tolapp3d);
++      for (int ip = 1; ip <= inter.NbPoints(); ip++)
++      {
++        const double cw = inter.Point(ip).W();
++        if (cw < hc->FirstParameter() - tolc || cw > hc->LastParameter() + tolc)
++        {
++          continue;
++        }
++        const double d = distanceToSegment(inter.Point(ip).Pnt(), P, Pc);
++        if (d < best)
++        {
++          best = d;
++          arc  = ecur;
++          warc = cw;
++        }
++      }
++    }
++    if (arc.IsNull())
++    {
++      continue;
++    }
++    TopoDS_Face Fn;
++    for (NCollection_List<TopoDS_Shape>::Iterator it(myEFMap(arc)); it.More(); it.Next())
++    {
++      if (!it.Value().IsSame(Fk))
++      {
++        Fn = TopoDS::Face(it.Value());
++      }
++    }
++    if (Fn.IsNull())
++    {
++      continue;
++    }
++    // Beyond a tangent edge the blend can only run onto the next face.
++    const bool isTangent = ChFi3d::IsTangentFaces(arc, Fk, Fn);
++    const TopoDS_Edge arcOnFk = edgeInFace(arc, Fk);
++    const TopoDS_Edge arcOnFn = edgeInFace(arc, Fn);
++    if (arcOnFk.IsNull() || arcOnFn.IsNull())
++    {
++      continue;
++    }
++    const occ::handle<Geom2d_Curve> pcFn = getCurveOnSurface(arcOnFn, Fn);
++    if (pcFn.IsNull())
++    {
++      continue;
++    }
++
++    // The blend touching the next face.
++    {
++      occ::handle<BRepAdaptor_Surface> Hn = new BRepAdaptor_Surface(Fn);
++      occ::handle<BRepAdaptor_Surface> Ho = ons == 1 ? HS2 : HS1;
++      math_Vector                      SolN(1, 4);
++      const gp_Pnt2d                   pn = pcFn->Value(warc);
++      if (ons == 1)
++      {
++        SolN(1) = pn.X();
++        SolN(2) = pn.Y();
++        SolN(3) = SolDep(3);
++        SolN(4) = SolDep(4);
++        I1->Initialize((const occ::handle<Adaptor3d_Surface>&)Hn);
++        I2->Initialize((const occ::handle<Adaptor3d_Surface>&)Ho);
++      }
++      else
++      {
++        SolN(1) = SolDep(1);
++        SolN(2) = SolDep(2);
++        SolN(3) = pn.X();
++        SolN(4) = pn.Y();
++        I1->Initialize((const occ::handle<Adaptor3d_Surface>&)Ho);
++        I2->Initialize((const occ::handle<Adaptor3d_Surface>&)Hn);
++      }
++      occ::handle<BRepAdaptor_Surface> S1 = ons == 1 ? Hn : Ho;
++      occ::handle<BRepAdaptor_Surface> S2 = ons == 1 ? Ho : Hn;
++      TopAbs_Orientation OrN1   = S1->Face().Orientation();
++      TopAbs_Orientation OrN2   = S2->Face().Orientation();
++      const int          ChoixN = ChFi3d::NextSide(OrN1,
++                                          OrN2,
++                                          Stripe->OrientationOnFace1(),
++                                          Stripe->OrientationOnFace2(),
++                                          RC);
++      TopAbs_State N1 = TopAbs_UNKNOWN, N2 = TopAbs_UNKNOWN;
++      bool         onNext =
++        PerformFirstSection(Spine, HGuide, ChoixN, S1, S2, I1, I2, w, SolN, N1, N2);
++      if (onNext
++          && !isTangentCircle(*S1, SolN(1), SolN(2), *S2, SolN(3), SolN(4), 10. * tolapp3d))
++      {
++        onNext = false;
++      }
++      if (onNext)
++      {
++        HS1 = S1;
++        HS2 = S2;
++        P1.SetCoord(SolN(1), SolN(2));
++        P2.SetCoord(SolN(3), SolN(4));
++        First = w;
++        return 0;
++      }
++    }
++
++    if (isTangent)
++    {
++      continue;
++    }
++    // The blend rolling on the boundary edge: an obstacle as StartSol sets
++    // it up when a walking meets one.
++    HSref = new BRepAdaptor_Surface(Fk);
++    HCref = new BRepAdaptor_Curve2d(arcOnFk, Fk);
++    HC    = new BRepAdaptor_Curve2d(arcOnFn, Fn);
++    W     = warc;
++    if (ons == 1)
++    {
++      HS1->Initialize(Fn);
++      HS2->Initialize(f2);
++      P1 = HC->Value(W);
++      P2.SetCoord(SolDep(3), SolDep(4));
++    }
++    else
++    {
++      HS1->Initialize(f1);
++      HS2->Initialize(Fn);
++      P1.SetCoord(SolDep(1), SolDep(2));
++      P2 = HC->Value(W);
++    }
++    I1->Initialize((const occ::handle<Adaptor3d_Surface>&)HS1);
++    I2->Initialize((const occ::handle<Adaptor3d_Surface>&)HS2);
++    First = w;
++    return ons;
++  }
++  return -1;
++}
++
++//=================================================================================================
++
+ static void ChFi3d_BuildPlane(TopOpeBRepDS_DataStructure&         DStr,
+                               occ::handle<BRepAdaptor_Surface>&   HS,
+                               gp_Pnt2d&                           pons,
+@@ -2359,7 +2709,53 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+     // sinon solution approchee.
+     Inside = true;
+ 
+-    StartSol(Stripe, HGuide, HS1, HS2, It1, It2, pp1, pp2, First);
++    try
++    {
++      OCC_CATCH_SIGNALS
++      StartSol(Stripe, HGuide, HS1, HS2, It1, It2, pp1, pp2, First);
++    }
++    catch (Standard_Failure const&)
++    {
++      // The contact line may leave a face at once (edge overflow).
++      occ::handle<BRepAdaptor_Curve2d> HCo;
++      occ::handle<BRepAdaptor_Surface> HSrefo;
++      occ::handle<BRepAdaptor_Curve2d> HCrefo;
++      double                           Wo = 0.;
++      const int side = StartSolOverflow(Stripe,
++                                        HGuide,
++                                        HS1,
++                                        HS2,
++                                        It1,
++                                        It2,
++                                        pp1,
++                                        pp2,
++                                        First,
++                                        HCo,
++                                        HSrefo,
++                                        HCrefo,
++                                        Wo);
++      if (side < 0)
++      {
++        throw;
++      }
++      Spine->SetErrorStatus(ChFiDS_Ok);
++      if (side == 1)
++      {
++        HC1         = HCo;
++        HSref1      = HSrefo;
++        HCref1      = HCrefo;
++        w1          = Wo;
++        obstacleon1 = true;
++      }
++      else if (side == 2)
++      {
++        HC2         = HCo;
++        HSref2      = HSrefo;
++        HCref2      = HCrefo;
++        w2          = Wo;
++        obstacleon2 = true;
++      }
++    }
+ 
+     Last = wf;
+     if (Guide.IsPeriodic())
+@@ -3013,6 +3409,14 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+     {
+       fini =
+         ((wl - Last) <= 10. * tolesp || (intl && !(obstacleon1 || obstacleon2))); // General case
++      // A blend rolling on an obstacle up to the end of the spine, or up to
++      // the face at the end, ends there.
++      if (!fini && intl && (obstacleon1 || obstacleon2) && !Spine->IsPeriodic()
++          && (Last >= lastedlastp - 10. * tolesp
++              || ObstacleAtSpineEnd(ref, false, obstacleon1 ? 2 : 1, Spine->LastVertex())))
++      {
++        fini = true;
++      }
+ 
+       if (!fini && Guide.IsPeriodic() && ((wl - Last) < Guide.Period() * 1.e-3))
+       {
+@@ -3054,6 +3458,12 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+     if (!forward)
+     {
+       fini     = ((First - wf) <= 10. * tolesp || (intf && !(obstacleon1 || obstacleon2)));
++      if (!fini && intf && (obstacleon1 || obstacleon2) && !Spine->IsPeriodic()
++          && (First <= Spine->FirstParameter(1) + 10. * tolesp
++              || ObstacleAtSpineEnd(ref, true, obstacleon1 ? 2 : 1, Spine->FirstVertex())))
++      {
++        fini = true;
++      }
+       complete = false;
+       Last     = wf;
+     }
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
+index e1c8bb1..2a4d6f1 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
+@@ -1111,6 +1111,17 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+       return false;
+     }
+ 
++    if (HGuide->IsPeriodic() && Inside)
++    {
++      // As for a blend between two faces: the period starts where the path
++      // to the left ended.
++      SpFirst = TheWalk.Line()->Point(1).Parameter();
++      SpLast  = SpFirst + HGuide->Period();
++      HGuide->FirstParameter(SpFirst);
++      HGuide->LastParameter(SpLast);
++      HGuide->SetOrigin(SpFirst);
++    }
++
+     if (reverse)
+     {
+       if (!TheWalk.Complete(Func, FInv, FInvP, FInvC, SpLast))
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index d7195c7..1dc894e 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -608,6 +608,130 @@ bool ChFi3d_SelectStripe(NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator&
+ //           (eap, Arp 9 2002, occ266)
+ //=======================================================================
+ 
++//=======================================================================
++// function : ChFi3d_ObstacleEndOnFace
++// purpose  : The end point of a SurfData on its obstacle side (a blend
++//            rolling on an edge) is a vertex of that edge, with that edge
++//            as arc. For the face at the end, the point is given the edge
++//            of the vertex that bounds a face which also bounds the arc of
++//            the point of the other side (Favoid excepted). Returns true
++//            when such an edge is found and set.
++//=======================================================================
++
++// The orientation of edge E in face F (taken FORWARD); FORWARD if absent.
++static TopAbs_Orientation ChFi3d_OrientationInFace(const TopoDS_Shape& E, const TopoDS_Face& F)
++{
++  for (TopExp_Explorer ex(F.Oriented(TopAbs_FORWARD), TopAbs_EDGE); ex.More(); ex.Next())
++  {
++    if (ex.Current().IsSame(E))
++    {
++      return ex.Current().Orientation();
++    }
++  }
++  return TopAbs_FORWARD;
++}
++
++static bool ChFi3d_ObstacleEndOnFace(const TopOpeBRepDS_DataStructure&   DStr,
++                                     const occ::handle<ChFiDS_SurfData>& Fd,
++                                     ChFiDS_CommonPoint&                 CV1,
++                                     ChFiDS_CommonPoint&                 CV2,
++                                     const TopoDS_Face&                  Favoid,
++                                     const ChFiDS_Map&                   VEMap,
++                                     const ChFiDS_Map&                   EFMap)
++{
++  for (int ons = 1; ons <= 2; ons++)
++  {
++    ChFiDS_CommonPoint&       CV    = ons == 1 ? CV1 : CV2;
++    const ChFiDS_CommonPoint& Other = ons == 1 ? CV2 : CV1;
++    if (!Fd->IsOnCurve(ons) || !CV.IsOnArc() || !Other.IsOnArc())
++    {
++      continue;
++    }
++    TopoDS_Vertex V;
++    if (CV.IsVertex())
++    {
++      V = CV.Vertex();
++    }
++    else
++    {
++      // The other side of the blend reached the face at the end a little
++      // before the obstacle edge ends there (a section across the spine
++      // is not in the face at the end): the blend ends at the vertex of
++      // the obstacle edge.
++      const double aWidth = CV.Point().Distance(Other.Point());
++      double       aBest  = 0.5 * aWidth;
++      for (TopExp_Explorer ex(CV.Arc(), TopAbs_VERTEX); ex.More(); ex.Next())
++      {
++        const TopoDS_Vertex& aV = TopoDS::Vertex(ex.Current());
++        const double         d  = BRep_Tool::Pnt(aV).Distance(CV.Point());
++        if (d < aBest)
++        {
++          aBest = d;
++          V     = aV;
++        }
++      }
++      if (V.IsNull())
++      {
++        continue;
++      }
++    }
++    const TopoDS_Face& Fn = TopoDS::Face(DStr.Shape(Fd->Index(ons)));
++    if (!VEMap.Contains(V) || !EFMap.Contains(Other.Arc()))
++    {
++      continue;
++    }
++    for (NCollection_List<TopoDS_Shape>::Iterator itE(VEMap(V)); itE.More(); itE.Next())
++    {
++      const TopoDS_Edge& E = TopoDS::Edge(itE.Value());
++      if (E.IsSame(CV.Arc()) || BRep_Tool::Degenerated(E) || !EFMap.Contains(E))
++      {
++        continue;
++      }
++      // E must bound the face the blend touches and the face at the end.
++      bool onFn = false;
++      for (NCollection_List<TopoDS_Shape>::Iterator itF(EFMap(E)); itF.More(); itF.Next())
++      {
++        onFn = onFn || itF.Value().IsSame(Fn);
++      }
++      if (!onFn)
++      {
++        continue;
++      }
++      for (NCollection_List<TopoDS_Shape>::Iterator itF(EFMap(E)); itF.More(); itF.Next())
++      {
++        if (itF.Value().IsSame(Favoid) || itF.Value().IsSame(Fn))
++        {
++          continue;
++        }
++        for (NCollection_List<TopoDS_Shape>::Iterator itO(EFMap(Other.Arc())); itO.More();
++             itO.Next())
++        {
++          if (itO.Value().IsSame(itF.Value()))
++          {
++            // The transition of the contact line on the face is the same
++            // through both arcs: only the orientation of the arc changes.
++            TopAbs_Orientation Tr = CV.TransitionOnArc();
++            if (ChFi3d_OrientationInFace(CV.Arc(), Fn) != ChFi3d_OrientationInFace(E, Fn))
++            {
++              Tr = TopAbs::Reverse(Tr);
++            }
++            if (!CV.IsVertex())
++            {
++              CV.SetVertex(V);
++              CV.SetPoint(BRep_Tool::Pnt(V));
++            }
++            CV.SetArc(CV.Tolerance(), E, BRep_Tool::Parameter(V, E), Tr);
++            return true;
++          }
++        }
++      }
++    }
++  }
++  return false;
++}
++
++//=================================================================================================
++
+ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSame)
+ {
+   TopOpeBRepDS_DataStructure& DStr = myDS->ChangeDS();
+@@ -908,6 +1032,17 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+   {
+     inters = FindFace(Vtx, CV1, CV2, Fv, Fop);
+     if (!inters)
++    {
++      // A blend rolling on an edge (an obstacle) ends at a vertex of that
++      // edge: its point there lies on the face at the end through another
++      // edge of the vertex.
++      inters = ChFi3d_ObstacleEndOnFace(DStr, Fd, CV1, CV2, Fop, myVEMap, myEFMap);
++      if (inters)
++      {
++        inters = FindFace(Vtx, CV1, CV2, Fv, Fop);
++      }
++    }
++    if (!inters)
+     {
+       PerformIntersectionAtEnd(Index);
+       return;
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
+index d2b91f7..a4f9aa1 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
+@@ -1495,6 +1495,68 @@ void ChFi3d_FilBuilder::SimulSurf(occ::handle<ChFiDS_SurfData>&           Data,
+                         tolapp3d);
+ }
+ 
++//=======================================================================
++// function : ChFi3d_ExtendAtSpineEnds
++// purpose  : A blend rolling on an obstacle edge (surface/restriction
++//            line <lin>, the surface on face FS) that ends where its
++//            contact on FS reaches the face at an end of the spine is
++//            extended past it, so that the face at the end cuts it there
++//            (as blends between two faces are at the ends of the spine).
++//=======================================================================
++
++static void ChFi3d_ExtendAtSpineEnds(const occ::handle<ChFiDS_SurfData>& Data,
++                                     const occ::handle<BRepBlend_Line>&  lin,
++                                     const occ::handle<ChFiDS_Spine>&    Spine,
++                                     const occ::handle<ChFiDS_ElSpine>&  HGuide,
++                                     const TopoDS_Face&                  FS,
++                                     const ChFiDS_Map&                   EFMap,
++                                     const ChFiDS_Map&                   VFMap)
++{
++  if (Spine->IsPeriodic() || lin->NbPoints() < 2)
++  {
++    return;
++  }
++  const double aRab = 0.03 * (HGuide->LastParameter() - HGuide->FirstParameter());
++  for (int f = 0; f < 2; f++)
++  {
++    const BRepBlend_Extremity& anExt = f == 0 ? lin->StartPointOnFirst() : lin->EndPointOnFirst();
++    if (anExt.NbPointOnRst() == 0)
++    {
++      continue;
++    }
++    const occ::handle<BRepAdaptor_Curve2d> anArc =
++      occ::down_cast<BRepAdaptor_Curve2d>(anExt.PointOnRst(1).Arc());
++    if (anArc.IsNull())
++    {
++      continue;
++    }
++    ChFiDS_CommonPoint aCP;
++    aCP.SetArc(Precision::Confusion(),
++               anArc->Edge(),
++               anExt.PointOnRst(1).ParameterOnArc(),
++               TopAbs_FORWARD);
++    const TopoDS_Vertex aBout = f == 0 ? Spine->FirstVertex() : Spine->LastVertex();
++    // Only an arc between FS and a face at the end of the spine.
++    bool atEnd = false;
++    for (NCollection_List<TopoDS_Shape>::Iterator itF(EFMap(aCP.Arc())); itF.More() && !atEnd;
++         itF.Next())
++    {
++      atEnd = !itF.Value().IsSame(FS) && VFMap.Contains(aBout);
++    }
++    if (atEnd && ChFi3d_ArcEndsSpine(aCP, FS, aBout, EFMap, VFMap))
++    {
++      if (f == 0)
++      {
++        Data->FirstExtensionValue(aRab);
++      }
++      else
++      {
++        Data->LastExtensionValue(aRab);
++      }
++    }
++  }
++}
++
+ //=================================================================================================
+ 
+ bool ChFi3d_FilBuilder::PerformFirstSection(const occ::handle<ChFiDS_Spine>&        Spine,
+@@ -1812,6 +1874,7 @@ void ChFi3d_FilBuilder::PerformSurf(NCollection_Sequence<occ::handle<ChFiDS_Surf
+       Spine->SetErrorStatus(ChFiDS_WalkingFailure);
+       throw Standard_Failure("PerformSurf : Failed processing!");
+     }
++    ChFi3d_ExtendAtSpineEnds(Data, lin, Spine, HGuide, HS2->Face(), myEFMap, myVFMap);
+     TopAbs_Orientation Or = HS2->Face().Orientation();
+     done                  = CompleteData(Data, func, lin, HS1, HS2, Or, true);
+     if (!done)
+@@ -1875,6 +1938,7 @@ void ChFi3d_FilBuilder::PerformSurf(NCollection_Sequence<occ::handle<ChFiDS_Surf
+       Spine->SetErrorStatus(ChFiDS_WalkingFailure);
+       throw Standard_Failure("PerformSurf : Failed processing!");
+     }
++    ChFi3d_ExtendAtSpineEnds(Data, lin, Spine, HGuide, HS2->Face(), myEFMap, myVFMap);
+     TopAbs_Orientation Or = HS2->Face().Orientation();
+     done                  = CompleteData(Data, func, lin, HS1, HS2, Or, true);
+     if (!done)
+@@ -1985,6 +2049,7 @@ void ChFi3d_FilBuilder::PerformSurf(NCollection_Sequence<occ::handle<ChFiDS_Surf
+       Spine->SetErrorStatus(ChFiDS_WalkingFailure);
+       throw Standard_Failure("PerformSurf : Failed processing!");
+     }
++    ChFi3d_ExtendAtSpineEnds(Data, lin, Spine, HGuide, HS1->Face(), myEFMap, myVFMap);
+     TopAbs_Orientation Or = HS1->Face().Orientation();
+     done                  = CompleteData(Data, func, lin, HS1, HS2, Or, false);
+     if (!done)
+@@ -2049,6 +2114,7 @@ void ChFi3d_FilBuilder::PerformSurf(NCollection_Sequence<occ::handle<ChFiDS_Surf
+       Spine->SetErrorStatus(ChFiDS_WalkingFailure);
+       throw Standard_Failure("PerformSurf : Failed processing!");
+     }
++    ChFi3d_ExtendAtSpineEnds(Data, lin, Spine, HGuide, HS1->Face(), myEFMap, myVFMap);
+     TopAbs_Orientation Or = HS1->Face().Orientation();
+     done                  = CompleteData(Data, func, lin, HS1, HS2, Or, false);
+     if (!done)

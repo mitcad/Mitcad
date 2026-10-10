@@ -1,0 +1,160 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Collections left intact when an allocation in them throws: with the previous
+patches an allocation that fails throws instead of crashing, and the
+algorithms that catch it go on and later destroy their collections. Some
+collections were left with a freed block or rewired nodes:
+- NCollection_Array1::Resize without its data freed the old block before
+  allocating the new one, and kept pointing to it when the allocation
+  threw (freed again by its destructor); NCollection_LocalArray likewise.
+  They are empty while the new block is allocated.
+- NCollection_IndexedMap and NCollection_IndexedDataMap::ReSize moved
+  their nodes to the new buckets and only then reallocated their index
+  array: when that threw, the old buckets still held nodes linked into the
+  new chains, and the map's destructor freed nodes twice (a "double free"
+  that ended the process in a boolean, BOPAlgo_WireSplitter, under a memory
+  limit). The index array is reallocated first.
+- NCollection_BaseMap::BeginResize freed nothing when the second bucket
+  array failed (a leak).
+diff --git a/src/FoundationClasses/TKernel/NCollection/NCollection_Array1.hxx b/src/FoundationClasses/TKernel/NCollection/NCollection_Array1.hxx
+index 36107c7..ef40145 100644
+--- a/src/FoundationClasses/TKernel/NCollection/NCollection_Array1.hxx
++++ b/src/FoundationClasses/TKernel/NCollection/NCollection_Array1.hxx
+@@ -482,6 +482,9 @@ protected:
+       const size_t aMinSize = (std::min)(theNewSize, mySize);
+       if (myIsOwner)
+       {
++        // The elements past a smaller size are destroyed: a reallocation
++        // that throws leaves the array at that size.
++        mySize    = (std::min)(mySize, theNewSize);
+         myPointer = myAllocator.reallocate(myPointer, theNewSize);
+       }
+       else
+@@ -497,6 +500,11 @@ protected:
+       {
+         myAllocator.deallocate(aPrevPtr, mySize);
+       }
++      // Empty while the new block is allocated: an allocation that throws
++      // leaves no freed block to free again.
++      myPointer = nullptr;
++      mySize    = 0;
++      myIsOwner = false;
+       myPointer = myAllocator.allocate(theNewSize);
+       construct(0, theNewSize);
+     }
+diff --git a/src/FoundationClasses/TKernel/NCollection/NCollection_BaseMap.cxx b/src/FoundationClasses/TKernel/NCollection/NCollection_BaseMap.cxx
+index 7f53bfd..fa5739c 100644
+--- a/src/FoundationClasses/TKernel/NCollection/NCollection_BaseMap.cxx
++++ b/src/FoundationClasses/TKernel/NCollection/NCollection_BaseMap.cxx
+@@ -42,8 +42,17 @@ bool NCollection_BaseMap::BeginResize(const size_t            theExtent,
+     (NCollection_ListNode**)Standard::Allocate((theNewBuckets + 1) * sizeof(NCollection_ListNode*));
+   if (isDouble)
+   {
+-    data2 = (NCollection_ListNode**)Standard::Allocate((theNewBuckets + 1)
+-                                                       * sizeof(NCollection_ListNode*));
++    try
++    {
++      data2 = (NCollection_ListNode**)Standard::Allocate((theNewBuckets + 1)
++                                                         * sizeof(NCollection_ListNode*));
++    }
++    catch (...)
++    {
++      Standard::Free(data1);
++      data1 = nullptr;
++      throw;
++    }
+   }
+   else
+   {
+diff --git a/src/FoundationClasses/TKernel/NCollection/NCollection_IndexedDataMap.hxx b/src/FoundationClasses/TKernel/NCollection/NCollection_IndexedDataMap.hxx
+index 07b024a..647a712 100644
+--- a/src/FoundationClasses/TKernel/NCollection/NCollection_IndexedDataMap.hxx
++++ b/src/FoundationClasses/TKernel/NCollection/NCollection_IndexedDataMap.hxx
+@@ -459,6 +459,19 @@ public:
+     size_t                 newBuck;
+     if (BeginResize(N, newBuck, ppNewData1, ppNewData2))
+     {
++      // The index array first: when its reallocation throws, the map is
++      // as it was (its nodes are moved to the new buckets only below).
++      try
++      {
++        myData2 = (NCollection_ListNode**)Standard::Reallocate(
++          myData2,
++          (newBuck + 1) * sizeof(NCollection_ListNode*));
++      }
++      catch (...)
++      {
++        Standard::Free(ppNewData1);
++        throw;
++      }
+       if (myData1)
+       {
+         for (size_t aBucketIter = 0; aBucketIter <= NbBuckets(); ++aBucketIter)
+@@ -477,11 +490,7 @@ public:
+           }
+         }
+       }
+-      EndResize(N,
+-                newBuck,
+-                ppNewData1,
+-                (NCollection_ListNode**)
+-                  Standard::Reallocate(myData2, (newBuck + 1) * sizeof(NCollection_ListNode*)));
++      EndResize(N, newBuck, ppNewData1, myData2);
+     }
+   }
+ 
+diff --git a/src/FoundationClasses/TKernel/NCollection/NCollection_IndexedMap.hxx b/src/FoundationClasses/TKernel/NCollection/NCollection_IndexedMap.hxx
+index 9c21e9c..d8c09b5 100644
+--- a/src/FoundationClasses/TKernel/NCollection/NCollection_IndexedMap.hxx
++++ b/src/FoundationClasses/TKernel/NCollection/NCollection_IndexedMap.hxx
+@@ -336,6 +336,19 @@ public:
+     size_t                 newBuck;
+     if (BeginResize(theExtent, newBuck, ppNewData1, ppNewData2))
+     {
++      // The index array first: when its reallocation throws, the map is
++      // as it was (its nodes are moved to the new buckets only below).
++      try
++      {
++        myData2 = (NCollection_ListNode**)Standard::Reallocate(
++          myData2,
++          (newBuck + 1) * sizeof(NCollection_ListNode*));
++      }
++      catch (...)
++      {
++        Standard::Free(ppNewData1);
++        throw;
++      }
+       if (myData1)
+       {
+         for (size_t aBucketIter = 0; aBucketIter <= NbBuckets(); ++aBucketIter)
+@@ -354,11 +367,7 @@ public:
+           }
+         }
+       }
+-      EndResize(theExtent,
+-                newBuck,
+-                ppNewData1,
+-                (NCollection_ListNode**)
+-                  Standard::Reallocate(myData2, (newBuck + 1) * sizeof(NCollection_ListNode*)));
++      EndResize(theExtent, newBuck, ppNewData1, myData2);
+     }
+   }
+ 
+diff --git a/src/FoundationClasses/TKernel/NCollection/NCollection_LocalArray.hxx b/src/FoundationClasses/TKernel/NCollection/NCollection_LocalArray.hxx
+index 656bc5d..283c990 100644
+--- a/src/FoundationClasses/TKernel/NCollection/NCollection_LocalArray.hxx
++++ b/src/FoundationClasses/TKernel/NCollection/NCollection_LocalArray.hxx
+@@ -151,7 +151,11 @@ public:
+         else
+         {
+           Standard::Free(myPtr);
+-          myPtr = static_cast<theItem*>(Standard::Allocate(aNewBytes));
++          // Empty and inline while the new block is allocated: an
++          // allocation that throws leaves no freed block to free again.
++          myPtr  = inlinePtr();
++          mySize = 0;
++          myPtr  = static_cast<theItem*>(Standard::Allocate(aNewBytes));
+         }
+       }
+       else

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/browser
 # Change Parameters (U3) through the real UI on the demo block (60 x 40 x 20
 # mm: d1, d2, d3), with the volumes the model reports:
 #   - Add a user parameter (width = 30 mm).

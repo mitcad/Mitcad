@@ -9,10 +9,21 @@
 // message, as do options OCCT lacks (see the model's fillet and
 // chamfer features); the importer then falls back to the stored body.
 //
+// When OCCT's dressup fails at the sizes asked, the same OCCT algorithm is
+// tried again on the body with the pieces of its edges merged (a whole
+// circle in two arcs between the same faces, on which it fails), then, for
+// fillets, with tighter tolerances (knife edges), keeping the names of
+// every piece. A result that OCCT's checker rejects only where the input
+// already was invalid, away from the dressup, is taken as it is.
+//
 // OCCT fails where a rounding or bevel takes a neighbouring face away
 // exactly (a radius as large as the face is wide). A fillet or chamfer that
 // fails is therefore built once more with its sizes 1e-3 (relative)
-// smaller, which leaves a strip that narrow where the face was.
+// smaller, which leaves a strip that narrow where the face was. When that
+// fails too and every selected edge is a whole circle between two faces of
+// revolution about its axis with straight sections, the dressup is built
+// as rings (src/ring_dressup.hpp): its cross-section turned about the
+// axis, cut from the body or joined to it, running over any face it meets.
 
 #include <string>
 #include <utility>

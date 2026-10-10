@@ -444,6 +444,30 @@ pub struct HelixLine {
     pub line: P3,
 }
 
+/// `helix_spl_circ`: a circular arc swept along a helix (the rounded root
+/// or crest of a thread or coil). With `r(v) = major cos v + minor sin v`
+/// (radius `R`), the radial unit `x(v) = r(v) / R`, `a` the unit axis and
+/// `w = u + phase`, the surface is `S(u, v) = center + (1 + taper v / 2pi)
+/// r(v) + pitch v / 2pi + radius (-cos w x(v) + sin w a)`: the arc lies in
+/// the plane of the axis, `u` is its angle and `v` the helix angle
+/// *(verified on the faces of two such surfaces of different phases: their
+/// edges are the helices of the arc's ends)*.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HelixCircle {
+    /// The arc's range and the helix's (the definition's first two
+    /// intervals; a third repeats the helix's).
+    pub ranges: [[Option<f64>; 2]; 2],
+    pub phase: f64,
+    pub center: P3,
+    pub major: P3,
+    pub minor: P3,
+    /// Advance per turn.
+    pub pitch: P3,
+    pub taper: f64,
+    pub axis: P3,
+    pub radius: f64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum SplineGeom {
     /// B-spline: exact (`exact_spl_sur`) or the stored approximation.
@@ -465,6 +489,8 @@ pub enum SplineGeom {
     },
     /// `helix_spl_line`: a line swept along a helix.
     HelixLine(Box<HelixLine>),
+    /// `helix_spl_circ`: a circular arc swept along a helix.
+    HelixCircle(Box<HelixCircle>),
     Unsupported(String),
 }
 
@@ -717,6 +743,48 @@ pub fn spline_surface_subtype(
                     }))
                 }
                 _ => SplineGeom::Unsupported("helix_spl_line: unknown layout".into()),
+            }
+        }
+        "helix_spl_circ" => {
+            // version, the arc's and the helix's intervals, the phase, the
+            // helix's interval again, the helix (center, major, minor,
+            // pitch, taper, axis), two null surfaces and two null
+            // B-splines, then the arc's radius.
+            if let Some(Token::Int(_)) = c.peek() {
+                c.pos += 1;
+            }
+            let ranges = [c.interval()?, c.interval()?];
+            let phase = c.double()?;
+            c.interval()?;
+            let center = c.point()?;
+            let major = c.point()?;
+            let minor = c.point()?;
+            let pitch = c.point()?;
+            let taper = c.double()?;
+            let axis = c.point()?;
+            let mut nulls = 0;
+            while let Some(Token::Ident(k)) = c.peek() {
+                if k != "null_surface" && k != "nullbs" {
+                    break;
+                }
+                c.pos += 1;
+                nulls += 1;
+            }
+            match c.peek() {
+                Some(Token::Double(_) | Token::Int(_)) if nulls == 4 => {
+                    SplineGeom::HelixCircle(Box::new(HelixCircle {
+                        ranges,
+                        phase,
+                        center,
+                        major,
+                        minor,
+                        pitch,
+                        taper,
+                        axis,
+                        radius: c.double()?,
+                    }))
+                }
+                _ => SplineGeom::Unsupported("helix_spl_circ: unknown layout".into()),
             }
         }
         _ => match find_bs3_surface(file, def)? {
@@ -992,6 +1060,58 @@ mod tests {
         assert_eq!(h.center, [0.0, 0.0, 1.0]);
         assert_eq!(h.pitch, [0.0, 0.0, 0.05]);
         assert_eq!(h.line, [6.8488, 0.0, -0.5]);
+    }
+
+    #[test]
+    fn decodes_helix_spl_circ() {
+        // Layout as in a part file (a thread root of radius 0.0875 mm).
+        let f = file_with(|w| {
+            w.record("spline-surface")
+                .head()
+                .bool(false)
+                .sub_start()
+                .ident("helix_spl_circ")
+                .int(22502);
+            w.bool(true).dbl(2.0944).bool(true).dbl(3.125);
+            w.bool(true).dbl(0.0).bool(true).dbl(50.2);
+            w.dbl(3.125);
+            w.bool(true).dbl(0.0).bool(true).dbl(50.2);
+            w.pos([0.0, 0.0413, 0.0])
+                .vec([0.0, 0.0, -0.17086])
+                .vec([-0.17086, 0.0, 0.0])
+                .vec([0.0, 0.07007, 0.0])
+                .int(0)
+                .vec([0.0, 1.0, 0.0]);
+            w.ident("null_surface")
+                .ident("null_surface")
+                .ident("nullbs")
+                .ident("nullbs")
+                .dbl(0.00875)
+                .sub_end();
+            w.bool(true).dbl(2.0944).bool(true).dbl(3.125);
+            w.bool(true).dbl(3.47).bool(true).dbl(40.59);
+            w.bool(false).bool(false).bool(false).end();
+        });
+        let s = surface_record(&f, 1).unwrap();
+        let AsmSurface::Spline {
+            subtype,
+            geom: SplineGeom::HelixCircle(h),
+            ranges,
+            ..
+        } = s
+        else {
+            panic!("{s:?}")
+        };
+        assert_eq!(subtype, "helix_spl_circ");
+        assert_eq!(
+            ranges,
+            [[Some(2.0944), Some(3.125)], [Some(3.47), Some(40.59)]]
+        );
+        assert_eq!(h.ranges[1], [Some(0.0), Some(50.2)]);
+        assert_eq!(h.phase, 3.125);
+        assert_eq!(h.minor, [-0.17086, 0.0, 0.0]);
+        assert_eq!(h.taper, 0.0);
+        assert_eq!(h.radius, 0.00875);
     }
 
     #[test]

@@ -1,0 +1,66 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the meeting point of two stripes on their common face when one
+contact line is periodic (mitcad#122).
+
+ChFi3d_IntTraces intersects the contact lines of two stripes ending at the
+same vertex on their common face, and among several intersections keeps,
+for a periodic contact line (a fillet along a circle), the one whose
+parameter is closest to the reference parameter, the end of that stripe's
+surface data. That end may lie far beyond the vertex, on the extension of
+the stripe (a torus extended by a quarter turn): two fillets meeting at a
+shallow corner (an arc and a line at 10 degrees) then met at the far
+intersection of the arc's contact circle with the line's contact line, and
+the bevel between them (PerformTwoCornerbyInter) gave a self-intersecting
+face. When the vertex is given (Check2dDistance) and the other, non-periodic
+contact line prefers the other point, the point nearest to the vertex is
+kept.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -1362,7 +1362,22 @@
+           {
+             double pp1 = int2d.ParamOnFirst();
+             pp1        = recadre(pp1, pref1, sens1, first1, last1);
+-            if ((std::abs(pp1 - pref1) < std::abs(p1 - pref1)))
++            // The reference parameter of a periodic trace may lie on the
++            // extension of its stripe, far from the vertex: when the other,
++            // non-periodic, trace prefers the other point, the vertex decides.
++            const bool isCloser1 = std::abs(pp1 - pref1) < std::abs(p1 - pref1);
++            const bool isCloser2 =
++              std::abs(int2d.ParamOnSecond() - pref2) < std::abs(p2 - pref2);
++            if (Check2dDistance && !isper2 && isCloser1 != isCloser2)
++            {
++              if (RefP2d.Distance(int2d.Value()) < RefP2d.Distance(p2d))
++              {
++                p1  = pp1;
++                p2  = int2d.ParamOnSecond();
++                p2d = int2d.Value();
++              }
++            }
++            else if (isCloser1)
+             {
+               p1  = pp1;
+               p2  = int2d.ParamOnSecond();
+@@ -1388,7 +1403,19 @@
+           {
+             double pp2 = int2d.ParamOnSecond();
+             pp2        = recadre(pp2, pref2, sens2, first2, last2);
+-            if ((std::abs(pp2 - pref2) < std::abs(p2 - pref2)))
++            const bool isCloser2 = std::abs(pp2 - pref2) < std::abs(p2 - pref2);
++            const bool isCloser1 =
++              std::abs(int2d.ParamOnFirst() - pref1) < std::abs(p1 - pref1);
++            if (Check2dDistance && isCloser1 != isCloser2)
++            {
++              if (RefP2d.Distance(int2d.Value()) < RefP2d.Distance(p2d))
++              {
++                p2  = pp2;
++                p1  = int2d.ParamOnFirst();
++                p2d = int2d.Value();
++              }
++            }
++            else if (isCloser2)
+             {
+               p2  = pp2;
+               p1  = int2d.ParamOnFirst();

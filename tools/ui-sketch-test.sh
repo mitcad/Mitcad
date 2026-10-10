@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/sketch core/solver
 # Sketch mode (U2) through the real UI, as a user works:
 #   - Create Sketch asks for the plane; the view looks at it.
 #   - A closed profile drawn with the line tool, its horizontal and
@@ -14,7 +15,8 @@
 #     body follows, undo the edit as one step.
 #   - Each other tool on a sample in a second sketch: arc, polygon, slot,
 #     ellipse, spline, point, text, offset, mirror, patterns, fillet,
-#     chamfer, a constraint, construction, delete, project.
+#     chamfer, a constraint, Equal on several selected circles (the first
+#     with each other, one undo step), construction, delete, project.
 #   - The projection (linked) follows the block when Sketch1 changes.
 #   - The tools' pointer (mitcad#3): a bitmap cursor of Mitcad's own with
 #     the hot spot in the middle of its cross; the arrow again when the
@@ -82,6 +84,9 @@ select_at() {
     ui_sketch_click "$1" "$2"
   fi
 }
+
+# sketch2_dof: the degrees of freedom of Sketch2 the app logged last.
+sketch2_dof() { sed -n 's/^Sketch Sketch2: \([0-9]*\) DOF.*/\1/p' "$UI_LOG" | tail -1; }
 
 # The standard pointer size: the precision cursor is 32 x 32 pixels.
 export XCURSOR_SIZE=24
@@ -298,6 +303,40 @@ ui_step "horizontal/vertical (search)"   ui_command "Horizontal/Vertical"
 ui_step "pick the slanted line"          ui_sketch_click -30 75
 ui_expect_log "Added constraint horizontal" "horizontal constraint added"
 ui_step "end the tool (Esc)"             ui_key Escape
+
+echo "--- Equal on three selected circles: the first with each other (mitcad#97)"
+ui_step "circle tool (C)"                ui_key c
+ui_step "circle 1: centre"               ui_sketch_click -40 50
+ui_step "circle 1: rim"                  ui_sketch_click -30 50
+ui_step "circle 2: centre"               ui_sketch_click -10 50
+ui_step "circle 2: rim"                  ui_sketch_click 0 50
+ui_step "circle 3: centre"               ui_sketch_click 30 50
+ui_step "circle 3: rim"                  ui_sketch_click 50 50
+ui_expect_log "Added circle, diameter 40 mm at (30, 50)" "three circles"
+ui_step "end the tool (Esc Esc)"         ui_key Escape Escape
+dof_before=$(sketch2_dof)
+ui_step "select circle 1"                select_at -40 60
+ui_step "and circle 2 (Ctrl)"            select_at -10 60 ctrl
+ui_step "and circle 3 (Ctrl)"            select_at 30 70 ctrl
+ui_expect_log "Selected: 3 sketch curves" "three circles selected"
+ui_mark
+ui_step "equal (search)"                 ui_command "Equal"
+ui_expect_new "Added constraint equal" "equal constraints added"
+expect_count "Added constraint equal" 2 "one for each circle after the first"
+grep -E "Added constraint equal k[0-9]+ on (c[0-9]+), c[0-9]+" "$UI_LOG" |
+  sed -E 's/.* on (c[0-9]+), .*/\1/' | sort -u | wc -l | grep -qx 1 ||
+  ui_fail "the equal constraints are not all with the first circle"
+echo "ok   both with the first circle"
+dof_after=$(sketch2_dof)
+[ "$dof_after" = "$((dof_before - 2))" ] ||
+  ui_fail "DOF $dof_after after the equal constraints, expected $dof_before - 2"
+echo "ok   two degrees of freedom fewer"
+ui_mark
+ui_step "undo (Ctrl+Z)"                  ui_key ctrl+z
+ui_expect_new "Undo: " "the equal constraints undone"
+dof_undone=$(sketch2_dof)
+[ "$dof_undone" = "$dof_before" ] || ui_fail "$dof_undone after the undo, expected $dof_before"
+echo "ok   one undo takes both back"
 ui_step "select the ellipse"             select_at 80 30
 ui_step "construction (X)"               ui_key x
 ui_expect_log "Construction on:" "the ellipse is construction geometry"

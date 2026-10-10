@@ -300,6 +300,9 @@ void addProject(CommandRegistry& registry, SketchController& c) {
       cmd.insert(QStringLiteral("source"), item.name);
       cmd.insert(QStringLiteral("body"), item.owner);
       cmd.insert(QStringLiteral("linked"), s.checked(QStringLiteral("linked")));
+      // Where it was picked: another component's geometry comes through
+      // a link (mitcad#100).
+      cmd.insert(QStringLiteral("occurrence"), item.occurrence);
       commands.append(cmd);
     }
     return Built::of(QJsonObject{{QStringLiteral("commands"), commands}});

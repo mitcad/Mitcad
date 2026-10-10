@@ -216,9 +216,11 @@ file(WRITE "${WORK}/history/Document.xml" "<?xml version='1.0' encoding='utf-8'?
 run(ok "${CMAKE_COMMAND}" -E chdir "${WORK}/history"
     "${CMAKE_COMMAND}" -E tar cf "${WORK}/history.FCStd" --format=zip Document.xml Pad.brp Helix.brp)
 run(ok "${CLI}" import-fcstd "${WORK}/history.FCStd" --save "${WORK}/history.mitcad")
+# The Pad's volume against FreeCAD's: equal up to rounding (Mitcad's and
+# FreeCAD's integration rules differ, mitcad#140).
 expect("import-fcstd history"
   "history\\.FCStd \\(FreeCAD 1\\.0R39319 \\(Git\\), schema 4\\): 4 objects: 1 bodies, 0 components, 0 links, 2 parametric, 0 partial, 1 fallback, 0 included, 0 skipped"
-  "feature Pad \\(F2\\): parametric extrude PartDesign::Pad, volume 6000\\.000 mm3 against FreeCAD's 6000\\.000, 1 solids, off by 0\\.0e0"
+  "feature Pad \\(F2\\): parametric extrude PartDesign::Pad, volume 6000\\.000 mm3 against FreeCAD's 6000\\.000, 1 solids, off by (0\\.0e0|[0-9]\\.[0-9]e-1[0-9])"
   "feature Helix \\(F3\\): fallback base PartDesign::AdditiveHelix"
   "body Plate \\(F2\\.b0\\): solid, volume 7200\\.000 mm3")
 run(ok "${CLI}" info "${WORK}/history.mitcad")

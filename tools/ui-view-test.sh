@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/view app/OcctViewer.cpp app/OcctViewer.hpp
 # The view (U5) through the real UI, on a red 60 x 40 x 20 mm block with a
 # 16 mm hole through it:
 #   - The orientation cube: clicks on a face, an edge and a corner turn the
@@ -22,6 +23,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-view-test.sh [directory for screenshots]
+# check-all sources: tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
@@ -225,10 +227,7 @@ ui_mark
 ui_step "double-click NamedView1"          ui_double_click_logged "Browser Root/Named Views/NamedView1"
 expect_camera "0 1 0 up 0 0 1" "the named view again"
 ui_step "save as (Ctrl+Shift+S)"           ui_key ctrl+shift+s
-ui_focus_dialog '^Save As$'
-ui_key ctrl+a
-xdotool type --delay 20 "$WORK/views.mitcad"
-ui_key Return
+ui_type_path "Save As" "$WORK/views.mitcad"
 ui_focus_main
 ui_expect_log "Saved $WORK/views.mitcad" "saved"
 python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); assert [v["name"] for v in d["views"]] == ["NamedView1"], d.get("views")' \

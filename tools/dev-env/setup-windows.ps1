@@ -36,6 +36,17 @@ foreach ($id in 'Git.Git', 'Kitware.CMake', 'Ninja-build.Ninja', 'Rustlang.Rustu
     Invoke-Checked { winget install --id $id -e --source winget --silent --accept-package-agreements --accept-source-agreements }
   }
 }
+# The MQTT broker of the live updates' tests (mitcad#89), a test tool: the
+# tests start their own (C:\Program Files\mosquitto) and skip without it.
+# Its installer adds a Windows service, which is not needed.
+winget list --id EclipseFoundation.Mosquitto -e --accept-source-agreements *> $null
+if ($LASTEXITCODE -ne 0) {
+  Invoke-Checked { winget install --id EclipseFoundation.Mosquitto -e --source winget --silent --accept-package-agreements --accept-source-agreements }
+}
+if (Get-Service mosquitto -ErrorAction SilentlyContinue) {
+  Stop-Service mosquitto -ErrorAction SilentlyContinue
+  Set-Service mosquitto -StartupType Disabled
+}
 # The compiler cache for the C++ compiles, shared by the checkouts.
 & (Join-Path $PSScriptRoot 'setup-ccache-windows.ps1')
 Refresh-Path

@@ -1,0 +1,138 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Standard::AllocateOptimal: an allocation that fails throws
+Standard_OutOfMemory, as Standard::Allocate, Standard::Reallocate and the
+flexible memory manager do. With the native (default), TBB and jemalloc
+memory managers it returned null, and its callers (NCollection_Allocator,
+so NCollection_Array1 and every collection on it, NCollection_IncAllocator,
+the packed and sparse maps, the strings) wrote to the block at once: under
+a memory limit the shape checker crashed in CSLib_Class2d (the polygon of a
+face's wire, BRepTopAdaptor_FClass2d) writing to an array whose allocation
+had failed. Standard_Failure's message, the one caller that checked for
+null, catches the exception and goes without the message as before.
+
+Standard_OutOfMemory::NbRaised: how many of these exceptions the process
+has constructed. The checker and the shape healing catch Standard_Failure
+inside (a sub-shape whose check failed is invalid), so an allocation that
+failed under them may not reach their caller; it compares the count before
+and after the call.
+diff --git a/src/FoundationClasses/TKernel/Standard/Standard.cxx b/src/FoundationClasses/TKernel/Standard/Standard.cxx
+index bddca3e..d898d78 100644
+--- a/src/FoundationClasses/TKernel/Standard/Standard.cxx
++++ b/src/FoundationClasses/TKernel/Standard/Standard.cxx
+@@ -398,12 +398,22 @@ void* Standard::AllocateOptimal(const size_t theSize)
+ {
+ #ifdef OCCT_MMGT_OPT_FLEXIBLE
+   return Standard_MMgrFactory::GetMMgr()->Allocate(theSize);
+-#elif defined OCCT_MMGT_OPT_JEMALLOC
+-  return je_malloc(theSize);
+-#elif defined OCCT_MMGT_OPT_TBB
+-  return scalable_malloc(theSize);
+ #else
+-  return malloc(theSize);
++  // As Allocate() and the flexible memory manager: callers (the collections'
++  // allocators, strings) write to the block at once, so a failed allocation
++  // must not return null.
++  #if defined OCCT_MMGT_OPT_JEMALLOC
++  void* aPtr = je_malloc(theSize);
++  #elif defined OCCT_MMGT_OPT_TBB
++  void* aPtr = scalable_malloc(theSize);
++  #else
++  void* aPtr = malloc(theSize);
++  #endif
++  if (aPtr == nullptr && theSize != 0)
++  {
++    throw Standard_OutOfMemory("Standard::AllocateOptimal(): malloc failed");
++  }
++  return aPtr;
+ #endif
+ }
+ 
+diff --git a/src/FoundationClasses/TKernel/Standard/Standard_Failure.cxx b/src/FoundationClasses/TKernel/Standard/Standard_Failure.cxx
+index cf85853..233ec9e 100644
+--- a/src/FoundationClasses/TKernel/Standard/Standard_Failure.cxx
++++ b/src/FoundationClasses/TKernel/Standard/Standard_Failure.cxx
+@@ -15,6 +15,7 @@
+ #include <Standard_Failure.hxx>
+ 
+ #include <Standard_ErrorHandler.hxx>
++#include <Standard_OutOfMemory.hxx>
+ 
+ #include <algorithm>
+ #include <atomic>
+@@ -36,7 +37,15 @@ Standard_Failure::StringRef* Standard_Failure::StringRef::Allocate(const char* t
+   }
+ 
+   const size_t aLen    = std::strlen(theString);
+-  StringRef*   aStrPtr = (StringRef*)Standard::AllocateOptimal(aLen + sizeof(int) + 1);
++  StringRef*   aStrPtr = nullptr;
++  try
++  {
++    aStrPtr = (StringRef*)Standard::AllocateOptimal(aLen + sizeof(int) + 1);
++  }
++  catch (const Standard_OutOfMemory&)
++  {
++    // An exception without its message rather than another one.
++  }
+   if (aStrPtr != nullptr)
+   {
+     std::strcpy(&aStrPtr->Message[0], theString);
+diff --git a/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.cxx b/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.cxx
+index 5c2fa0d..eb61baf 100644
+--- a/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.cxx
++++ b/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.cxx
+@@ -16,13 +16,21 @@
+ #include <Standard_OutOfMemory.hxx>
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <cstdlib>
+ #include <cstring>
+ 
++namespace
++{
++//! Instances constructed in the process (copies not counted).
++std::atomic<size_t> THE_NB_RAISED{0};
++} // namespace
++
+ //=================================================================================================
+ 
+ Standard_OutOfMemory::Standard_OutOfMemory(const char* const theMessage)
+ {
++  THE_NB_RAISED.fetch_add(1, std::memory_order_relaxed);
+   myBuffer[0] = '\0';
+   // call explicitly own method (non-virtual call)
+   Standard_OutOfMemory::SetMessageString(theMessage);
+@@ -30,6 +38,13 @@ Standard_OutOfMemory::Standard_OutOfMemory(const char* const theMessage)
+ 
+ //=================================================================================================
+ 
++size_t Standard_OutOfMemory::NbRaised() noexcept
++{
++  return THE_NB_RAISED.load(std::memory_order_relaxed);
++}
++
++//=================================================================================================
++
+ const char* Standard_OutOfMemory::what() const noexcept
+ {
+   return myBuffer;
+diff --git a/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.hxx b/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.hxx
+index ab8160b..21ec2ad 100644
+--- a/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.hxx
++++ b/src/FoundationClasses/TKernel/Standard/Standard_OutOfMemory.hxx
+@@ -56,6 +56,13 @@ public:
+   //! @param theMessage error message (can be nullptr)
+   Standard_EXPORT void SetMessageString(const char* const theMessage);
+ 
++  //! Returns how many of these exceptions the process has constructed, each
++  //! for an allocation that failed. Many algorithms catch Standard_Failure
++  //! and go on (the shape checker then reports a shape invalid): a caller
++  //! compares the count before and after a call to know whether memory ran
++  //! out inside it, on any thread.
++  Standard_EXPORT static size_t NbRaised() noexcept;
++
+ private:
+   char myBuffer[1024];
+ };

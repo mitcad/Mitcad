@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/framework app/commands
 # The command framework through the real UI (app/COMMANDS.md): a panel
 # generated from a definition, a group menu of the toolbar, a shortcut from
 # the settings, selection with Ctrl and Shift and with windows, the context

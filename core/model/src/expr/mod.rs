@@ -160,6 +160,7 @@ pub use format::{
     DEFAULT_DECIMALS, format_number, format_number_exact, format_value, value_to_expression,
 };
 pub use parser::{ParseError, ParseErrorKind};
+pub(crate) use table::replace_references;
 pub use table::{ChangeSet, ParamId, ParamKind, ParamSpec, Parameter, ParameterTable, TableError};
 pub use units::{AngleUnit, DimensionError, Dims, LengthUnit, Quantity, Ratio, Unit};
 

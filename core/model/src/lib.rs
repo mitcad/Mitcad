@@ -134,3 +134,12 @@ pub use document::{LibraryChange, LibraryPart, PartsListRow};
 pub use library::{LibraryRef, LibraryRequest, LibrarySource, LinkResolver, set_link_resolver};
 #[cfg(test)]
 mod library_tests;
+
+// Geometry of other components in sketches (mitcad#100).
+pub mod links;
+pub use links::OccurrenceLink;
+#[cfg(test)]
+mod link_tests;
+
+// An operation's new faces (the .f3d import's geometric check, mitcad#138).
+pub use kernel::NewFace;

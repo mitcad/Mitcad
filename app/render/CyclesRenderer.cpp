@@ -1556,7 +1556,7 @@ void initCycles(const std::string& kernelFolder) {
 // ones (several GPUs as one, which Mitcad does not offer).
 ccl::vector<ccl::DeviceInfo> allCyclesDevices() {
   ccl::vector<ccl::DeviceInfo> devices;
-  for (const ccl::DeviceInfo& info : ccl::Device::available_devices(ccl::DEVICE_MASK_ALL)) {
+  for (const ccl::DeviceInfo& info : ccl::Device::available_devices(static_cast<ccl::uint>(ccl::DEVICE_MASK_ALL))) {
     if (info.type != ccl::DEVICE_MULTI && info.type != ccl::DEVICE_DUMMY && info.type != ccl::DEVICE_NONE) {
       devices.push_back(info);
     }

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/render
 # View > Rendered (mitcad#32, docs/rendering.md) through the real UI, on a
 # red 60 x 40 x 20 mm block with a 16 mm hole through it:
 #   - The mode starts the render worker; its frames refine (more samples)
@@ -29,6 +30,7 @@
 # The app starts five times.
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-render-test.sh [directory for screenshots]
+# check-all sources: tools/cli
 
 UI_APP=${UI_APP:-$(cd "$(dirname "$0")/.." && pwd)/build/dev/app/mitcad}
 BUILD_DIR=$(cd "$(dirname "$UI_APP")/.." 2> /dev/null && pwd)
@@ -338,8 +340,7 @@ ui_focus_dialog '^Parameters$'
 ui_mark
 ui_double_click_logged "Parameters d6 expression"
 ui_sync
-ui_key ctrl+a
-xdotool type --delay 40 "25 mm"
+ui_type_field "Parameters" "25 mm"
 ui_key Return
 ui_expect_new "Parameter d6 expression: 25 mm" "the small box's extrusion is 25 mm"
 expect_scene "only the changed body was sent" "F4.b0" "F4.b0"

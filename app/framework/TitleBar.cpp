@@ -163,6 +163,19 @@ void TitleBar::setSketchMode(bool sketching) {
   update();
 }
 
+void TitleBar::setIndicator(QWidget* indicator) {
+  auto* row = qobject_cast<QHBoxLayout*>(layout());
+  if (row == nullptr || indicator == nullptr) {
+    return;
+  }
+  m_indicator = indicator;
+  indicator->setParent(this);
+  indicator->setFixedHeight(kControlHeight);
+  row->insertWidget(row->indexOf(m_search), indicator);
+  indicator->show();
+  update();
+}
+
 bool TitleBar::underNativeTitleBar() const {
 #if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
   const QWidget* top = window();
@@ -254,7 +267,8 @@ void TitleBar::paintEvent(QPaintEvent*) {
   // Between the tabs and the search field; the middle of the window when the
   // text fits there.
   const int freeLeft = m_tabs->geometry().right() + 16;
-  const int freeRight = m_search->geometry().left() - 16;
+  const QWidget* right = m_indicator != nullptr && m_indicator->isVisible() ? m_indicator.data() : m_search;
+  const int freeRight = right->geometry().left() - 16;
   if (freeRight - freeLeft < 60) {
     return;
   }

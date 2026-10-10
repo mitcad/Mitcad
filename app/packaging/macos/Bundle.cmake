@@ -103,6 +103,12 @@ endif()
 
 # --- Install: the bundle, its libraries, the licence texts ----------------------
 install(TARGETS mitcad BUNDLE DESTINATION .)
+if(TARGET mitcad-render)
+  install(TARGETS mitcad-render RUNTIME DESTINATION "${MITCAD_BUNDLE_DIR}/Contents/MacOS")
+  # Save the complete build paths for runtime discovery before install
+  # rewrites the worker's rpath to the bundle's Frameworks directory.
+  install(CODE "set(MITCAD_BUILD_RENDER_EXECUTABLE [[$<TARGET_FILE:mitcad-render>]])")
+endif()
 
 set(MITCAD_LICENSES_DIR "${MITCAD_BUNDLE_DIR}/Contents/Resources/licenses")
 
@@ -110,6 +116,35 @@ install(FILES "${PROJECT_SOURCE_DIR}/LICENSE"
   DESTINATION "${MITCAD_LICENSES_DIR}" RENAME Mitcad-LICENSE.txt)
 install(FILES "${PROJECT_SOURCE_DIR}/third_party/fonts/droid-sans/LICENSE.txt"
   DESTINATION "${MITCAD_LICENSES_DIR}" RENAME DroidSans-Apache-2.0.txt)
+# QtKeychain, linked statically (cmake/Keychain.cmake).
+install(FILES "${MITCAD_QTKEYCHAIN_LICENSE}"
+  DESTINATION "${MITCAD_LICENSES_DIR}" RENAME QtKeychain-BSD-3-Clause.txt)
+
+set(MITCAD_RENDER_THIRD_PARTY_NOTES "")
+if(TARGET mitcad-render)
+  install(FILES "${MITCAD_CYCLES_ROOT}/LICENSE" DESTINATION "${MITCAD_LICENSES_DIR}/cycles")
+  install(DIRECTORY "${MITCAD_CYCLES_ROOT}/licenses/" DESTINATION "${MITCAD_LICENSES_DIR}/cycles")
+  install(FILES "${MITCAD_OIDN_ROOT}/share/doc/OpenImageDenoise/LICENSE.txt"
+                "${MITCAD_OIDN_ROOT}/share/doc/OpenImageDenoise/third-party-programs.txt"
+          DESTINATION "${MITCAD_LICENSES_DIR}/openimagedenoise")
+  set(MITCAD_RENDER_THIRD_PARTY_NOTES
+"The CPU render worker (mitcad-render, Contents/MacOS):
+  Cycles (https://projects.blender.org/blender/cycles): Apache-2.0, linked
+  statically into the worker (cycles/LICENSE). Its bundled sky model, atomic
+  operations and mikktspace: Apache-2.0, BSD and MIT (cycles/*license*.txt).
+  Open Image Denoise (https://github.com/RenderKit/oidn): Apache-2.0, linked
+  dynamically, with its CPU device loaded at run time from Contents/Frameworks
+  (openimagedenoise/LICENSE.txt and third-party-programs.txt). Mitcad's patch
+  preserves the requested deployment target; published in third_party/oidn/.
+  Embree, oneTBB, OpenImageIO: Apache-2.0. OpenColorIO, OpenEXR, Imath, libtiff,
+  libjpeg-turbo and zstd: BSD-style. pugixml, cgltf, sse2neon and yaml-cpp: MIT.
+  minizip-ng and zlib: zlib-style. OpenSSL: Apache-2.0. Library licence texts
+  are collected below from vcpkg; sse2neon and cgltf are compiled headers.
+  ISPC (BSD-3-Clause) is a build tool only and is not shipped. Metal and
+  other GPU devices are disabled in this build.
+
+")
+endif()
 
 # What vcpkg installed has its licence texts in share/<port>/copyright: OCCT
 # (LGPL-2.1 with the OCCT exception), FreeType (the FreeType Licence or the
@@ -157,16 +192,27 @@ Qt ${Qt6_VERSION}: GNU LGPL-3.0, linked dynamically (the QtCore, QtGui, ... fram
   installation had them).
 Open CASCADE Technology ${OpenCASCADE_VERSION}: GNU LGPL-2.1 with the Open CASCADE exception,
   linked dynamically (libTK*.dylib in Contents/Frameworks); source code at
-  https://dev.opencascade.org/ . With four changes of Mitcad's that speed up
+  https://dev.opencascade.org/ . With changes of Mitcad's that speed up
   booleans, the face merge after them and the shape checker on faces with many
-  edges; the patches are in Mitcad's source code (third_party/vcpkg-ports/opencascade).
+  edges, that let fillets run over faces narrower than they are, that fix
+  other failures and crashes of the fillet, and that make an allocation that
+  fails throw instead of crashing; the patches are in Mitcad's source code
+  (third_party/vcpkg-ports/opencascade).
 FreeType: used under the FreeType Licence (FTL), not the GPL, which the package
   offers as an alternative.
 Droid Sans (the font of sketch texts, embedded): Apache-2.0 (DroidSans-Apache-2.0.txt).
-The vcpkg ports that make the libraries above (licence text per port):
+QtKeychain ${MITCAD_QTKEYCHAIN_VERSION} (https://github.com/frankosterfeld/qtkeychain), the live updates'
+  credentials in the macOS Keychain: BSD-3-Clause, Copyright (C) 2011-2015 Frank
+  Osterfeld and its contributors, linked statically into the mitcad executable
+  (QtKeychain-BSD-3-Clause.txt).
+${MITCAD_RENDER_THIRD_PARTY_NOTES}The vcpkg ports that make the libraries above (licence text per port):
 ${MITCAD_THIRD_PARTY_NOTES}
 The Rust crates in Mitcad's core are under MIT, Apache-2.0 and similar licences
-(checked with cargo-deny); their texts are not collected here yet.
+(checked with cargo-deny); their texts are not collected here yet. Among them the
+TLS of live updates (connections to an MQTT broker): rustls (Apache-2.0, ISC or
+MIT), rustls-webpki and untrusted (ISC, Copyright 2015 Brian Smith), and ring (ISC,
+Copyright 2015-2025 Brian Smith, with code from BoringSSL under the Apache License
+2.0 and the ISC licence, and from fiat-crypto under the MIT licence).
 ")
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/THIRD-PARTY-NOTICES.txt"
   DESTINATION "${MITCAD_LICENSES_DIR}")
@@ -200,15 +246,42 @@ if(MITCAD_MACOS_DEPLOY)
   if(QT6_INSTALL_PREFIX AND IS_DIRECTORY "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_LIBS}")
     list(APPEND mitcad_deploy_options "-libpath=${QT6_INSTALL_PREFIX}/${QT6_INSTALL_LIBS}")
   endif()
+  if(TARGET mitcad-render)
+    list(APPEND mitcad_deploy_options "-libpath=${MITCAD_OIDN_ROOT}/lib")
+  endif()
   if(mitcad_deploy_options)
     set(mitcad_deploy_tool_options DEPLOY_TOOL_OPTIONS ${mitcad_deploy_options})
   else()
     set(mitcad_deploy_tool_options "")
   endif()
-  qt_generate_deploy_app_script(
-    TARGET mitcad
-    OUTPUT_SCRIPT MITCAD_QT_DEPLOY_SCRIPT
-    NO_UNSUPPORTED_PLATFORM_ERROR
-    ${mitcad_deploy_tool_options})
+  if(TARGET mitcad-render)
+    # Qt turns each additional binary into macdeployqt's -executable option,
+    # including the runtime-loaded module, and rewrites its Qt references.
+    # Paths here are relative to the install prefix, macdeployqt's cwd.
+    set(mitcad_render_deploy_modules "")
+    foreach(mitcad_oidn_module IN LISTS MITCAD_OIDN_MODULES)
+      get_filename_component(mitcad_module_name "${mitcad_oidn_module}" NAME)
+      string(APPEND mitcad_render_deploy_modules
+        " \"${MITCAD_BUNDLE_DIR}/Contents/Frameworks/${mitcad_module_name}\"")
+    endforeach()
+    set(mitcad_render_deploy_options "")
+    foreach(mitcad_deploy_option IN LISTS mitcad_deploy_options)
+      string(APPEND mitcad_render_deploy_options " \"${mitcad_deploy_option}\"")
+    endforeach()
+    qt_generate_deploy_script(
+      TARGET mitcad
+      OUTPUT_SCRIPT MITCAD_QT_DEPLOY_SCRIPT
+      CONTENT "qt_deploy_runtime_dependencies(
+        EXECUTABLE \"${MITCAD_BUNDLE_DIR}\"
+        ADDITIONAL_EXECUTABLES \"${MITCAD_BUNDLE_DIR}/Contents/MacOS/$<TARGET_FILE_NAME:mitcad-render>\"
+        ADDITIONAL_LIBRARIES ${mitcad_render_deploy_modules}
+        DEPLOY_TOOL_OPTIONS ${mitcad_render_deploy_options})")
+  else()
+    qt_generate_deploy_app_script(
+      TARGET mitcad
+      OUTPUT_SCRIPT MITCAD_QT_DEPLOY_SCRIPT
+      NO_UNSUPPORTED_PLATFORM_ERROR
+      ${mitcad_deploy_tool_options})
+  endif()
   install(SCRIPT "${MITCAD_QT_DEPLOY_SCRIPT}")
 endif()

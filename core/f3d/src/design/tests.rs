@@ -49,7 +49,7 @@ type TestObject = (u64, usize, Vec<u8>, Option<Vec<u8>>);
 
 /// A synthetic design: class table and objects.
 #[derive(Default)]
-struct Doc {
+pub(crate) struct Doc {
     classes: Vec<(String, String, u32)>,
     objects: Vec<TestObject>,
     external: Vec<(u64, String)>,
@@ -57,7 +57,7 @@ struct Doc {
 }
 
 impl Doc {
-    fn class(&mut self, guid: &str, parent: &str, version: u32) -> usize {
+    pub(crate) fn class(&mut self, guid: &str, parent: &str, version: u32) -> usize {
         self.classes.push((guid.into(), parent.into(), version));
         self.classes.len() - 1
     }
@@ -66,7 +66,7 @@ impl Doc {
         self.classes.iter().position(|c| c.0 == guid).unwrap()
     }
 
-    fn obj(&mut self, id: u64, guid: &str, body: Vec<u8>) {
+    pub(crate) fn obj(&mut self, id: u64, guid: &str, body: Vec<u8>) {
         let c = self.class_index(guid);
         self.objects.push((id, c, body, None));
     }
@@ -154,7 +154,7 @@ impl Doc {
         (m, bulk)
     }
 
-    fn segment(&self) -> Segment {
+    pub(crate) fn segment(&self) -> Segment {
         let (m, b) = self.streams();
         Segment::parse(&m, b).unwrap()
     }
@@ -1258,6 +1258,13 @@ fn file_level_api() {
     let s = find_design_streams(&doc).unwrap().unwrap();
     assert_eq!(s.segment_dir, "Design1");
     let fd = decode_document(&doc, "a.f3d").unwrap();
+    // In two parts, the inputs found on threads (mitcad#103): the same.
+    let mut parts = decode_streams(&doc, "a.f3d").unwrap();
+    resolve_inputs(&mut parts, &doc, 4);
+    assert_eq!(
+        serde_json::to_value(&parts.dump).unwrap(),
+        serde_json::to_value(&fd.dump).unwrap()
+    );
     assert_eq!(fd.dump.unwrap().timeline_items().len(), 2);
     assert_eq!(
         short_name(Path::new(
@@ -1834,4 +1841,771 @@ fn combine_and_hole_selections() {
         json!([[1.0, 1.0, 1.0], [5.0, 1.0, 1.0]])
     );
     assert_eq!(h["extentDefinition"]["_type"], "AllExtentDefinition");
+}
+
+#[test]
+fn revolve_pattern_mirror_and_hole_inputs() {
+    // mitcad#96: a revolution's operation, axis line and profile loops, a
+    // mirror's new bodies, a circular pattern's axis line and a hole's
+    // through-all flag beside its kept depth.
+    const REVOLVE: &str = "E3849A15-2FC6-42A0-AF3A-2F1D7273B406";
+    const MIRROR: &str = "D1728651-3640-4CCF-8083-AF7703013978";
+    const CIRCULAR: &str = "11F1A5CE-2B57-4476-8480-6994621493C9";
+    const HOLE: &str = "1C037A07-4A15-43F6-ABFC-BBF61B9038D4";
+    let mut d = sample();
+    for (g, v) in [
+        (REVOLVE, 2),
+        (MIRROR, 0),
+        (CIRCULAR, 0),
+        (HOLE, 4),
+        (SKETCH_CURVE_ID, 0),
+        (PROFILE_LOOPS, 1),
+        (REVOLVE_PROFILE, 0),
+        (BODY_RECORD, 2),
+        (DIRECTION_INPUT, 4),
+    ] {
+        d.class(g, ROOT, v);
+    }
+    d.objects.retain(|o| ![3, 52].contains(&o.0));
+    d.obj(
+        3,
+        TIMELINE,
+        cat(&[
+            &[0, 0],
+            &r(1),
+            &u32b(6),
+            &r(10),
+            &r(20),
+            &r(300),
+            &r(400),
+            &r(500),
+            &r(600),
+        ]),
+    );
+    let tag =
+        |key: &str, v: u64| cat(&[&s8(key), &s8("IntrinsicMetaTypeuint64"), &v.to_le_bytes()]);
+    d.obj(
+        52,
+        SKETCH_LINE,
+        cat(&[
+            &[0, 1],
+            &u32b(2),
+            &tag("crv_primary_id", 103),
+            &tag("crv_secondary_id", 0),
+            &f64s(&[0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0]),
+            &r(51),
+            &r(50),
+            &r(40),
+        ]),
+    );
+    // The revolution: a cut about the sketch's line, of the profile whose
+    // one loop is that line's piece.
+    d.obj(
+        300,
+        REVOLVE,
+        cat(&[
+            &[0, 0],
+            &u32b(2),
+            &u32b(2),
+            &r(310),
+            &r(311),
+            &r(312),
+            &tail(5, "Revolve", 1, "", [0, 0, 0], 301),
+        ]),
+    );
+    d.obj(301, HEALTH, vec![0, 0]);
+    d.obj(
+        310,
+        REVOLVE_PROFILE,
+        cat(&[&[0, 0], &r(300), &u32b(1), &r(315)]),
+    );
+    d.obj(315, PROFILE_ID, vec![0, 0]);
+    d.obj(311, PROFILE_SOURCE, cat(&[&[0, 0], &r(314), &s16("40")]));
+    let mut record = u32b(2);
+    record.extend(103u64.to_le_bytes());
+    record.extend(0u64.to_le_bytes());
+    record.extend(u32b(0));
+    record.extend(u32b(1));
+    record.extend(u32b(1));
+    record.extend(0u64.to_le_bytes());
+    d.obj(
+        314,
+        PROFILE_LOOPS,
+        cat(&[
+            &[0, 0],
+            &r(311),
+            &u32b(1),
+            &u32b(1),
+            &u32b(1),
+            &record,
+            &[1],
+            &u32b(0),
+        ]),
+    );
+    d.obj(312, ENTITY_REF, cat(&[&[0, 0], &r(313)]));
+    d.obj(
+        313,
+        SKETCH_CURVE_ID,
+        cat(&[
+            &[0, 0],
+            &0u64.to_le_bytes(),
+            &40u64.to_le_bytes(),
+            &103u64.to_le_bytes(),
+        ]),
+    );
+    // A mirror that makes one new body: not joined with its image.
+    d.obj(
+        400,
+        MIRROR,
+        cat(&[
+            &[0, 0],
+            &r(401),
+            &r(402),
+            &u32b(0),
+            &u32b(1),
+            &r(403),
+            &0u64.to_le_bytes(),
+            &tail(6, "Mirror", 1, "", [0, 0, 0], 404),
+        ]),
+    );
+    for id in [401, 402, 404] {
+        d.obj(id, HEALTH, vec![0, 0]);
+    }
+    d.obj(403, BODY_RECORD, vec![0, 0]);
+    // A circular pattern about a construction axis off the origin, whose
+    // direction input stores the direction times the axis' length.
+    d.obj(
+        500,
+        CIRCULAR,
+        cat(&[
+            &[0, 0],
+            &u32b(1),
+            &r(501),
+            &tail(7, "C-Pattern", 1, "", [0, 0, 0], 502),
+        ]),
+    );
+    d.obj(502, HEALTH, vec![0, 0]);
+    d.obj(
+        501,
+        DIRECTION_INPUT,
+        cat(&[
+            &[0, 0],
+            &u32b(0),
+            &f64s(&[1.0, 2.0, 0.0, 0.0, 0.0, 5.0, 0.0, 0.0]),
+            &u32b(7),
+        ]),
+    );
+    // A hole (class version 4) through all that keeps a depth.
+    d.obj(
+        600,
+        HOLE,
+        cat(&[
+            &[0, 0],
+            &[1, 1, 1, 0, 1, 0, 0, 0],
+            &tail(8, "Hole", 1, "", [0, 0, 0], 601),
+        ]),
+    );
+    d.obj(601, HEALTH, vec![0, 0]);
+    d.obj(602, PARAMETER_HOLDER, cat(&[&[1], &u32b(1), &r(600), &[0]]));
+    let p = parameter(20, Some(602), "6 mm", "HoleDepth", "", "mm", "d20", 0.6);
+    d.obj(603, PARAMETER, p);
+    let (m, b) = d.streams();
+    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    let items = v["timeline"]["items"].as_array().unwrap();
+    let rev = &items[2]["detail"];
+    assert_eq!(items[2]["objectType"], "RevolveFeature");
+    assert_eq!(rev["operation"], "CutFeatureOperation");
+    assert_eq!(
+        rev["axis"],
+        json!({"kind": "sketch_entity", "objectType": "SketchLine", "sketch": "Sketch1",
+               "sketch_timeline_index": 0, "id": "c0"})
+    );
+    assert_eq!(rev["profile"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        rev["_f3d_profile_loops"],
+        json!([{"loops": [{"outer": true, "curves": [{"primary": 103, "secondary": 0,
+                 "tag": 2, "reversed": false, "piece": 1, "pieces": 1, "id": "c0"}]}],
+                "children": []}])
+    );
+    assert_eq!(items[3]["detail"]["isCombine"], false);
+    let pattern = &items[4]["detail"];
+    assert_eq!(
+        pattern["_f3d_axis"],
+        json!({"origin": [1.0, 2.0, 0.0], "direction": [0.0, 0.0, 1.0]})
+    );
+    let hole = &items[5]["detail"];
+    assert_eq!(
+        hole["extentDefinition"]["_type"],
+        "DistanceExtentDefinition"
+    );
+    assert_eq!(hole["_f3d_through_all"], true);
+}
+
+/// Bodies named by the item that made them (mitcad#96): a body input's
+/// record names its producer, and the body's index is the record's
+/// position among the producer's own records (else among its records in
+/// object order). A body without a recipe that decodes still comes in;
+/// a join's or cut's body inputs are its participants.
+#[test]
+fn bodies_by_the_items_that_made_them() {
+    const RECIPE: &str = "7ACC2A03-0261-4879-A14A-A93D661A5BDC";
+    const COMBINE: &str = "2A94257F-2020-4B19-9A68-103A2672F1B7";
+    const HOLE: &str = "1C037A07-4A15-43F6-ABFC-BBF61B9038D4";
+    let mut d = sample();
+    for (g, v) in [
+        (COMBINE, 1),
+        (HOLE, 7),
+        (BODY_INPUT, 1),
+        (BODY_REF, 1),
+        (BODY_RECORD, 2),
+        (PLACEMENT, 5),
+        (RECIPE, 1),
+    ] {
+        d.class(g, ROOT, v);
+    }
+    d.objects.retain(|o| o.0 != 3);
+    d.obj(
+        3,
+        TIMELINE,
+        cat(&[
+            &[0, 0],
+            &r(1),
+            &u32b(5),
+            &r(10),
+            &r(20),
+            &r(500),
+            &r(600),
+            &r(700),
+        ]),
+    );
+    let mut recipe = face_recipe("2", &[3]);
+    let n = recipe.len();
+    recipe.truncate(n - 20);
+    recipe.extend(s8("body_recipe_data"));
+    // The tool names no recipe, only its record; the target both.
+    d.obj(510, BODY_INPUT, cat(&[&[0, 0], &u32b(1), &r(511)]));
+    d.obj(511, BODY_REF, cat(&[&[0, 0], &r(541)]));
+    d.obj(520, BODY_INPUT, cat(&[&[0, 0], &u32b(1), &r(521)]));
+    d.obj(521, BODY_REF, cat(&[&[0, 0], &r(522), &r(550)]));
+    d.obj(522, RECIPE, recipe);
+    // Records: two of the extrusion's (not listed by it: object order),
+    // two of the hole's (listed in the other order).
+    for (id, producer) in [(540, 20), (541, 20), (550, 600), (551, 600)] {
+        d.obj(id, BODY_RECORD, cat(&[&[0, 0], &r(producer)]));
+    }
+    d.obj(531, PLACEMENT, vec![0, 0]);
+    d.obj(
+        500,
+        COMBINE,
+        cat(&[
+            &[0, 0],
+            &u32b(0),
+            &u32b(0),
+            &[0, 0],
+            &u32b(1),
+            &r(531),
+            &u32b(0x132),
+            &u32b(0),
+            &u32b(1),
+            &r(510),
+            &[0; 8],
+            &u32b(1),
+            &r(541),
+            &u32b(1),
+            &r(520),
+            &u32b(4),
+            &r(510),
+            &r(511),
+            &r(520),
+            &r(521),
+            &tail(5, "Combine", 1, "", [0, 0, 0], 501),
+        ]),
+    );
+    d.obj(501, HEALTH, vec![0, 0]);
+    d.obj(
+        600,
+        HOLE,
+        cat(&[
+            &[0, 0],
+            &u32b(0),
+            &[1, 1, 1, 0],
+            &r(551),
+            &r(550),
+            &u32b(0),
+            &tail(6, "Hole", 1, "", [0, 0, 0], 601),
+        ]),
+    );
+    d.obj(601, HEALTH, vec![0, 0]);
+    // A cut whose participant is the extrusion's second body.
+    d.obj(701, BODY_REF, cat(&[&[0, 0], &r(541)]));
+    d.obj(
+        700,
+        EXTRUDE,
+        cat(&[
+            &[0, 0],
+            &[0, 0, 0],
+            &u32b(2),
+            &u32b(1),
+            &u32b(2),
+            &[0, 1],
+            &u32b(0),
+            &f64s(&[0.0, 0.0, 1.0]),
+            &[0, 0],
+            &u32b(1),
+            &r(701),
+            &tail(7, "Extrude", 2, "", [0, 0, 0], 702),
+        ]),
+    );
+    d.obj(702, HEALTH, vec![0, 0]);
+    let (m, b) = d.streams();
+    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    let items = v["timeline"]["items"].as_array().unwrap();
+    let c = &items[2]["detail"];
+    assert_eq!(c["operation"], "JoinFeatureOperation");
+    let tool = &c["toolBodies"][0]["_f3d"];
+    assert_eq!(
+        (&tool["producer"], &tool["body_index"]),
+        (&json!(1), &json!(1))
+    );
+    assert!(tool.get("recipe").is_none() && tool.get("entities").is_none());
+    let target = &c["targetBody"]["_f3d"];
+    assert_eq!(target["entities"][0][0]["tag"], "2");
+    assert_eq!(
+        (&target["producer"], &target["body_index"]),
+        (&json!(3), &json!(1))
+    );
+    let x = &items[4]["detail"];
+    assert_eq!(x["operation"], "CutFeatureOperation");
+    let p = &x["participantBodies"][0]["_f3d"];
+    assert_eq!((&p["producer"], &p["body_index"]), (&json!(1), &json!(1)));
+}
+
+/// An extrusion up to a face (mitcad#96): the flag byte after the extent
+/// codes, the direction vector after a `u32 1`, and the input slots whose
+/// roles say which input is the extent's object (17) and which the profile
+/// (65).
+#[test]
+fn extrusion_up_to_a_face() {
+    const RECIPE: &str = "7ACC2A03-0261-4879-A14A-A93D661A5BDC";
+    const SLOT_KEY: &str = "2DF7DA30-A4E4-4260-AFD1-D9C7154CB44B";
+    let mut d = sample();
+    for g in [BODY_INPUT, FACE_REF, RECIPE, SLOT_KEY] {
+        d.class(g, ROOT, 1);
+    }
+    d.objects.retain(|o| o.0 != 3);
+    d.obj(
+        3,
+        TIMELINE,
+        cat(&[&[0, 0], &r(1), &u32b(3), &r(10), &r(20), &r(700)]),
+    );
+    d.obj(
+        700,
+        EXTRUDE,
+        cat(&[
+            &[0, 0],
+            &[0, 0, 0],
+            &u32b(2),
+            &u32b(1),
+            &u32b(1),
+            &[1, 1],
+            &u32b(1),
+            &f64s(&[0.0, 0.0, -1.0]),
+            &[0, 0],
+            &r(70),
+            &r(730),
+            &r(740),
+            &r(741),
+            &tail(7, "Extrude", 2, "", [0, 0, 0], 701),
+        ]),
+    );
+    d.obj(701, HEALTH, vec![0, 0]);
+    d.obj(730, PARAMETER_HOLDER, cat(&[&[1], &u32b(1), &r(700), &[0]]));
+    let p = parameter(5, Some(730), "0 mm", "Side1Offset", "", "mm", "d5", 0.0);
+    d.obj(731, PARAMETER, p);
+    for (slot, input, key, role) in [(740, 750, 760, 17), (741, 70, 761, 65)] {
+        d.obj(
+            slot,
+            BODY_INPUT,
+            cat(&[
+                &[0, 0],
+                &u32b(1),
+                &r(input),
+                &[0; 6],
+                &r(key),
+                &u32b(0),
+                &u32b(role),
+                &[0; 4],
+            ]),
+        );
+        d.obj(key, SLOT_KEY, vec![0, 0]);
+    }
+    d.obj(750, FACE_REF, cat(&[&[0, 0], &r(751)]));
+    d.obj(751, RECIPE, face_recipe("9", &[5]));
+    // Symmetric extrusions, half and whole length: `u8 0 | 1 or 2 | 14 × 0
+    // | u32 1` before the first input slot.
+    for (id, length) in [(800, 2u8), (810, 1)] {
+        let mut gap = vec![0, length];
+        gap.extend([0; 14]);
+        d.obj(
+            id,
+            EXTRUDE,
+            cat(&[
+                &[0, 0],
+                &[0, 0, 0],
+                &u32b(4),
+                &u32b(3),
+                &u32b(2),
+                &[0, 1],
+                &u32b(0),
+                &f64s(&[0.0, 0.0, 1.0]),
+                &r(30),
+                &gap,
+                &u32b(1),
+                &r(741),
+                &tail(8, "Extrude", 3, "", [0, 0, 0], 701),
+            ]),
+        );
+    }
+
+    let seg = d.segment();
+    let dec = decode::decode(&seg);
+    let f = dec.timeline[2].extrude.unwrap();
+    assert_eq!((f.extent_a, f.extent_b, f.flag), (1, 1, Some(1)));
+    assert_eq!(f.vector, Some([0.0, 0.0, -1.0]));
+    // The sample's distance extrusion: flag 0, no slots.
+    assert_eq!(dec.timeline[1].extrude.unwrap().flag, Some(0));
+    assert!(decode::extent_slots(&seg, 20).is_empty());
+    let length =
+        |id| decode::extrude_fields(&seg, seg.object(id).unwrap()).and_then(|f| f.full_length);
+    assert_eq!(
+        (length(800), length(810), length(20)),
+        (Some(false), Some(true), None)
+    );
+    let slots = decode::extent_slots(&seg, 700);
+    assert_eq!(slots.len(), 2);
+    assert!(slots[0].is_to_object() && slots[0].inputs == [750]);
+    assert_eq!((slots[1].role, slots[1].inputs.as_slice()), (65, &[70][..]));
+
+    let (m, b) = d.streams();
+    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    let item = &v["timeline"]["items"][2];
+    assert_eq!(item["_f3d"]["extrude"]["flag"], 1);
+    assert_eq!(item["_f3d"]["extrude"]["slot_roles"], json!([17, 65]));
+    let one = &item["detail"]["extentOne"];
+    assert_eq!(one["_type"], "ToEntityExtentDefinition");
+    assert_eq!(one["offset"]["name"], "d5");
+    assert_eq!(one["entity"]["kind"], "face");
+    assert_eq!(one["entity"]["_f3d"]["object_id"], 750);
+    assert_eq!(one["entity"]["_f3d"]["entities"][0][0]["tag"], "9");
+    // The distance extrusion keeps its extent and names no object.
+    let one = &v["timeline"]["items"][1]["detail"]["extentOne"];
+    assert_eq!(one["_type"], "DistanceExtentDefinition");
+    assert!(one.get("entity").is_none());
+}
+
+/// A recipe naming entities by `(tag, ops)` names, one name each.
+fn recipe(kind: &str, entities: &[(&str, i32)], second: &[(&str, i32)]) -> Vec<u8> {
+    let list = |es: &[(&str, i32)]| {
+        let mut b = u32b(es.len() as u32);
+        for (tag, op) in es {
+            b.extend(cat(&[
+                &u32b(1),
+                &s8(tag),
+                &u32b(0),
+                &u32b(1),
+                &op.to_le_bytes(),
+                &u32b(0),
+            ]));
+        }
+        b
+    };
+    cat(&[
+        &[0, 0],
+        &u32b(1),
+        &u32b(3),
+        &list(entities),
+        &list(second),
+        &s8(&format!("{kind}_recipe_data")),
+        &[0xff; 8],
+    ])
+}
+
+#[test]
+fn fillet_tail_and_face_selections() {
+    // mitcad#96: a fillet that refers to a health object near its start
+    // too (its tail ends at the last one); its set of an edge and a face
+    // in two groups (8: edges, 16: faces) that share the holders after
+    // them; a group of a face the next group repeats (9) left out; an edge
+    // recipe with a second entity list; an edge named first by its own
+    // (negative) tag.
+    const FILLET: &str = "A07D5F17-68CB-464D-9935-BF68E98A865F";
+    const RECIPE: &str = "7ACC2A03-0261-4879-A14A-A93D661A5BDC";
+    const SELECTS: &str = "2DF7DA30-0000-0000-0000-000000000000";
+    const OTHER: &str = "4A557CE2-0000-0000-0000-000000000000";
+    let mut d = sample();
+    for (g, v) in [
+        (FILLET, 3),
+        (RECIPE, 1),
+        (FACE_REF, 2),
+        (BODY_INPUT, 1),
+        (SELECTS, 1),
+        (OTHER, 1),
+    ] {
+        d.class(g, ROOT, v);
+    }
+    d.objects.retain(|o| o.0 != 3);
+    d.obj(
+        3,
+        TIMELINE,
+        cat(&[&[0, 0], &r(1), &u32b(3), &r(10), &r(20), &r(700)]),
+    );
+    d.obj(
+        700,
+        FILLET,
+        cat(&[
+            &[0, 0],
+            &r(701),
+            &u32b(0),
+            &r(702),
+            &[0, 1, 0, 0, 0],
+            &r(710),
+            &u32b(9),
+            &r(710),
+            &r(711),
+            &r(712),
+            &r(720),
+            &r(721),
+            &r(730),
+            &r(731),
+            &r(740),
+            &r(741),
+            &tail(9, "Fillet", 1, "", [0, 0, 0], 703),
+        ]),
+    );
+    d.obj(701, OTHER, vec![0, 0]);
+    d.obj(702, HEALTH, vec![0, 0]);
+    d.obj(703, HEALTH, vec![0, 0]);
+    d.obj(709, SELECTS, vec![0, 0]);
+    let set = |k: u32| {
+        cat(&[
+            &[0, 0],
+            &u32b(0),
+            &[0, 0, 1, 0, 0, 0],
+            &r(709),
+            &u32b(0),
+            &u32b(k),
+        ])
+    };
+    d.obj(710, BODY_INPUT, set(8));
+    d.obj(720, BODY_INPUT, set(9));
+    d.obj(730, BODY_INPUT, set(16));
+    for (input, rec) in [(711, 751), (712, 752), (721, 753), (731, 754)] {
+        d.obj(input, FACE_REF, cat(&[&[0, 0], &r(rec)]));
+    }
+    d.obj(
+        751,
+        RECIPE,
+        recipe("edge", &[("3", 301), ("4", 301)], &[("", 340)]),
+    );
+    d.obj(
+        752,
+        RECIPE,
+        recipe("edge", &[("-1029", 416), ("3", 301), ("1", 301)], &[]),
+    );
+    d.obj(753, RECIPE, recipe("face", &[("2", 301)], &[]));
+    d.obj(
+        754,
+        RECIPE,
+        recipe("bounded_face", &[("2", 301), ("3", 301), ("4", 301)], &[]),
+    );
+    d.obj(740, PARAMETER_HOLDER, cat(&[&[1], &u32b(1), &r(700), &[0]]));
+    d.obj(741, PARAMETER_HOLDER, cat(&[&[1], &u32b(1), &r(700), &[0]]));
+    let p = parameter(30, Some(740), "1 mm", "Radius", "", "mm", "d30", 0.1);
+    d.obj(742, PARAMETER, p);
+    let (m, b) = d.streams();
+    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    let item = &v["timeline"]["items"][2];
+    assert_eq!(item["objectType"], "FilletFeature");
+    assert_eq!(item["name"], "Fillet1");
+    assert_eq!(item["_f3d"]["result_no"], 9);
+    let sets = item["detail"]["edgeSets"].as_array().unwrap();
+    assert_eq!(sets.len(), 1);
+    let edges = sets[0]["edges"].as_array().unwrap();
+    let kinds: Vec<(&str, &str)> = edges
+        .iter()
+        .map(|e| {
+            (
+                e["kind"].as_str().unwrap(),
+                e["_f3d"]["recipe"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [("edge", "edge"), ("edge", "edge"), ("face", "bounded_face")]
+    );
+    // The second list is left out; the edge's own name stays first.
+    assert_eq!(edges[0]["_f3d"]["entities"].as_array().unwrap().len(), 2);
+    assert_eq!(edges[1]["_f3d"]["entities"][0][0]["tag"], "-1029");
+}
+
+/// A two-sided extrusion with both sides up to faces (mitcad#104): a slot
+/// of role 17 for each side, which go in order to the sides the extent
+/// parameters make extents up to an entity (`Side1Offset`, `Side2Offset`).
+#[test]
+fn two_sided_extrusion_up_to_two_faces() {
+    const RECIPE: &str = "7ACC2A03-0261-4879-A14A-A93D661A5BDC";
+    const SLOT_KEY: &str = "2DF7DA30-A4E4-4260-AFD1-D9C7154CB44B";
+    let mut d = sample();
+    for g in [BODY_INPUT, FACE_REF, RECIPE, SLOT_KEY] {
+        d.class(g, ROOT, 1);
+    }
+    d.objects.retain(|o| o.0 != 3);
+    d.obj(
+        3,
+        TIMELINE,
+        cat(&[&[0, 0], &r(1), &u32b(3), &r(10), &r(20), &r(700)]),
+    );
+    // Cut (2), two sides (2), the second code 1, flag 0.
+    d.obj(
+        700,
+        EXTRUDE,
+        cat(&[
+            &[0, 0],
+            &[0, 0, 0],
+            &u32b(2),
+            &u32b(2),
+            &u32b(1),
+            &[0, 1],
+            &u32b(0),
+            &f64s(&[1.0, 0.0, 0.0]),
+            &[0, 0],
+            &r(70),
+            &r(730),
+            &r(740),
+            &r(742),
+            &r(741),
+            &tail(7, "Extrude", 2, "", [0, 0, 0], 701),
+        ]),
+    );
+    d.obj(701, HEALTH, vec![0, 0]);
+    d.obj(730, PARAMETER_HOLDER, cat(&[&[1], &u32b(1), &r(700), &[0]]));
+    let p = parameter(5, Some(730), "0 mm", "Side1Offset", "", "mm", "d5", 0.0);
+    d.obj(731, PARAMETER, p);
+    let p = parameter(6, Some(730), "2 mm", "Side2Offset", "", "mm", "d6", 0.2);
+    d.obj(732, PARAMETER, p);
+    for (slot, input, key, role) in [(740, 750, 760, 17), (742, 752, 762, 17), (741, 70, 761, 65)] {
+        d.obj(
+            slot,
+            BODY_INPUT,
+            cat(&[
+                &[0, 0],
+                &u32b(1),
+                &r(input),
+                &[0; 6],
+                &r(key),
+                &u32b(0),
+                &u32b(role),
+                &[0; 4],
+            ]),
+        );
+        d.obj(key, SLOT_KEY, vec![0, 0]);
+    }
+    d.obj(750, FACE_REF, cat(&[&[0, 0], &r(751)]));
+    d.obj(751, RECIPE, face_recipe("9", &[5]));
+    d.obj(752, FACE_REF, cat(&[&[0, 0], &r(753)]));
+    d.obj(753, RECIPE, face_recipe("4", &[6]));
+
+    let (m, b) = d.streams();
+    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    let item = &v["timeline"]["items"][2];
+    assert_eq!(item["_f3d"]["extrude"]["slot_roles"], json!([17, 17, 65]));
+    let detail = &item["detail"];
+    assert_eq!(detail["extentType"], "TwoSidesFeatureExtentType");
+    for (key, offset, object, tag) in [("extentOne", "d5", 750, "9"), ("extentTwo", "d6", 752, "4")]
+    {
+        let side = &detail[key];
+        assert_eq!(side["_type"], "ToEntityExtentDefinition", "{key}");
+        assert_eq!(side["offset"]["name"], offset);
+        assert_eq!(side["entity"]["_f3d"]["object_id"], object);
+        assert_eq!(side["entity"]["_f3d"]["entities"][0][0]["tag"], tag);
+    }
+}
+
+/// A combine that consumes a tool of another component through a body
+/// removal there (mitcad#104): `u32 r | r refs` to `RemoveBodyFeature`
+/// objects after the operation, then the usual layout without body
+/// records.
+#[test]
+fn combine_with_body_removals_in_other_components() {
+    const RECIPE: &str = "7ACC2A03-0261-4879-A14A-A93D661A5BDC";
+    const COMBINE: &str = "2A94257F-2020-4B19-9A68-103A2672F1B7";
+    const REMOVE: &str = "4A782808-FBDD-4351-A10A-F7AE5693D330";
+    let mut d = sample();
+    for (g, v) in [
+        (COMBINE, 1),
+        (REMOVE, 0),
+        (BODY_INPUT, 1),
+        (BODY_REF, 1),
+        (PLACEMENT, 5),
+        (RECIPE, 1),
+    ] {
+        d.class(g, ROOT, v);
+    }
+    d.objects.retain(|o| o.0 != 3);
+    d.obj(
+        3,
+        TIMELINE,
+        cat(&[&[0, 0], &r(1), &u32b(3), &r(10), &r(20), &r(500)]),
+    );
+    let body = |tag: &str| {
+        let mut b = face_recipe(tag, &[3]);
+        let n = b.len();
+        b.truncate(n - 20);
+        b.extend(s8("body_recipe_data"));
+        b
+    };
+    for (input, refer, recipe, tag) in [(510, 511, 512, "1"), (520, 521, 522, "2")] {
+        d.obj(input, BODY_INPUT, cat(&[&[0, 0], &u32b(1), &r(refer)]));
+        d.obj(refer, BODY_REF, cat(&[&[0, 0], &r(recipe)]));
+        d.obj(recipe, RECIPE, body(tag));
+    }
+    d.obj(540, REMOVE, vec![0, 0]);
+    d.obj(531, PLACEMENT, vec![0, 0]);
+    // Join, tools not kept: tools [510] removed by 540, target 520.
+    d.obj(
+        500,
+        COMBINE,
+        cat(&[
+            &[0, 0],
+            &u32b(0),
+            &u32b(1),
+            &r(540),
+            &[0, 0],
+            &u32b(1),
+            &r(531),
+            &u32b(0x195),
+            &u32b(0),
+            &u32b(1),
+            &r(510),
+            &[0; 8],
+            &u32b(0),
+            &u32b(1),
+            &r(520),
+            &u32b(4),
+            &r(510),
+            &r(511),
+            &r(520),
+            &r(521),
+            &tail(5, "Combine", 1, "", [0, 0, 0], 501),
+        ]),
+    );
+    d.obj(501, HEALTH, vec![0, 0]);
+    let (m, b) = d.streams();
+    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    let c = &v["timeline"]["items"][2]["detail"];
+    assert_eq!(c["operation"], "JoinFeatureOperation");
+    assert_eq!(c["isKeepToolBodies"], false);
+    assert_eq!(c["targetBody"]["_f3d"]["entities"][0][0]["tag"], "2");
+    assert_eq!(c["toolBodies"][0]["_f3d"]["entities"][0][0]["tag"], "1");
 }

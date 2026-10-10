@@ -561,6 +561,9 @@ impl<K: Kernel> Document<K> {
             None
         };
         let source_state = self.state.clone();
+        let mut source_path = crate::links::first_path(&source_state.assembly, source.parent, None)
+            .map_err(invalid)?;
+        source_path.push(uid);
         self.apply(|state| {
             let name = state.free_component_name(&def.name);
             let (made, occurrence) = match (snapshot, made_by) {
@@ -588,33 +591,15 @@ impl<K: Kernel> Document<K> {
                 (None, Some((feature, _))) => {
                     // The feature that made it is copied too, in its own
                     // component, and makes the copy.
-                    let made = state.copy_component(
-                        &source_state,
-                        component,
-                        None,
-                        Some(feature),
-                        true,
-                    )?;
-                    if let Some(c) = state.assembly.component_mut(made) {
-                        c.name = name;
-                    }
-                    let occurrence = state
-                        .assembly
-                        .occurrences_of(made)
-                        .next()
-                        .map(|o| o.uid)
-                        .expect("the copied feature placed it");
-                    // Placed in the active component, which the copied
-                    // feature's own component need not be.
-                    let o = state.assembly.occurrence_mut(occurrence).expect("exists");
-                    o.transform = transform;
-                    o.parent = parent;
+                    let made = state.assembly.create(Some(&name), None);
+                    let occurrence = state.assembly.place(made, parent, transform);
+                    state.copy_component(&source_state, &source_path, made, Some(feature), true)?;
                     (made, occurrence)
                 }
                 (None, None) => {
                     let made = state.assembly.create(Some(&name), None);
-                    state.copy_component(&source_state, component, Some(made), None, true)?;
                     let occurrence = state.assembly.place(made, parent, transform);
+                    state.copy_component(&source_state, &source_path, made, None, true)?;
                     (made, occurrence)
                 }
             };
@@ -712,6 +697,7 @@ impl<K: Kernel> Document<K> {
                 None => state.free_component_name(&wanted),
             };
             let made = state.assembly.create(Some(&name), None);
+            let occurrence = state.assembly.place(made, parent, options.transform);
             match bodies {
                 Some(bodies) => {
                     let base = BaseDef {
@@ -726,10 +712,36 @@ impl<K: Kernel> Document<K> {
                     });
                 }
                 None => {
-                    state.copy_component(&source, ComponentUid::ROOT, Some(made), None, false)?;
+                    state.copy_component(&source, &[], made, None, false)?;
                 }
             }
-            let occurrence = state.assembly.place(made, parent, options.transform);
+            Ok((label, (made, occurrence)))
+        })
+    }
+
+    /// Copies another document's design (its root component with its
+    /// features, parameters and components) into a new component placed in
+    /// `parent` (an importer's structure: the `.iam` import copies each
+    /// part, imported into a document of its own, once). The name is made
+    /// unique; the active component stays.
+    pub fn add_component_copy(
+        &mut self,
+        source: &Document<K>,
+        name: Option<&str>,
+        parent: ComponentUid,
+        transform: Transform,
+    ) -> Result<(ComponentUid, OccurrenceUid), ModelError> {
+        check_transform(&transform)?;
+        self.state.editable(parent)?;
+        let source = &source.state;
+        self.apply(|state| {
+            let name = name
+                .filter(|n| !n.trim().is_empty())
+                .map(|n| state.free_component_name(n));
+            let made = state.assembly.create(name.as_deref(), None);
+            let occurrence = state.assembly.place(made, parent, transform);
+            state.copy_component(source, &[], made, None, false)?;
+            let label = format!("Copy into {}", state.assembly.name(made));
             Ok((label, (made, occurrence)))
         })
     }

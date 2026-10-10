@@ -413,7 +413,7 @@ fn datum_ref<K: Kernel>(importer: &Importer<'_, K>, entity: &Value) -> Option<Va
         .map(|uid| json!(uid.to_string()))
 }
 
-impl<K: Kernel> Importer<'_, K> {
+impl<K: crate::ImportKernel> Importer<'_, K> {
     /// A joint, an as-built joint, a joint origin or a ground item.
     pub(crate) fn assembly_item(&mut self, at: usize, index: i64, item: &TimelineItem) {
         let result = match item.object_type() {

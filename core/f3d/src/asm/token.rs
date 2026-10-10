@@ -37,6 +37,8 @@ pub enum Token {
     Vector([f64; 3]),
     /// Tag 0x15: enumeration value (integer width as for `Int`).
     Enum(i64),
+    /// Tag 0x16: two doubles (a parameter pair, seen in attributes).
+    Pair([f64; 2]),
 }
 
 impl fmt::Display for Token {
@@ -57,6 +59,7 @@ impl fmt::Display for Token {
             Token::Pos(p) => write!(f, "P({} {} {})", p[0], p[1], p[2]),
             Token::Vector(p) => write!(f, "V({} {} {})", p[0], p[1], p[2]),
             Token::Enum(v) => write!(f, "E{v}"),
+            Token::Pair(p) => write!(f, "U({} {})", p[0], p[1]),
         }
     }
 }
@@ -184,6 +187,7 @@ impl<'a> Tokenizer<'a> {
             0x13 => Token::Pos(self.triple()?),
             0x14 => Token::Vector(self.triple()?),
             0x15 => Token::Enum(self.int(isz)?),
+            0x16 => Token::Pair([self.double()?, self.double()?]),
             other => {
                 return Err(TokenError {
                     offset: start,
@@ -236,6 +240,18 @@ mod tests {
         data.extend_from_slice(&(-2i64).to_le_bytes());
         let mut t = Tokenizer::new(&data, 0, 8);
         assert_eq!(t.next_token().unwrap(), Token::Enum(-2));
+    }
+
+    #[test]
+    fn reads_pairs_of_doubles() {
+        let mut data = vec![0x16];
+        data.extend_from_slice(&0.25f64.to_le_bytes());
+        data.extend_from_slice(&(-0.5f64).to_le_bytes());
+        data.push(0x11);
+        let mut t = Tokenizer::new(&data, 0, 4);
+        assert_eq!(t.next_token().unwrap(), Token::Pair([0.25, -0.5]));
+        assert_eq!(t.next_token().unwrap(), Token::End);
+        assert_eq!(Token::Pair([0.25, -0.5]).to_string(), "U(0.25 -0.5)");
     }
 
     #[test]

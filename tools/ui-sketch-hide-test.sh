@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/sketch
 # Hide Above Sketch, the sketch palette's option, through the real UI:
 #   - Body1 from z = 0 to 10 and Body2 from z = 5 to 15; a sketch on the
 #     construction plane at z = 5 has 5 mm of Body1 and all of Body2 in
@@ -14,6 +15,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sketch-hide-test.sh [screenshot.png]
+# check-all sources: tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 

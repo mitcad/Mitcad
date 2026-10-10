@@ -51,6 +51,10 @@ export MITCAD_LOG_PICKS=1
 export MITCAD_LOG_VOLUMES=1
 # The sync key (ui_sync): Pause answered with "Sync <n>" (app/framework/TestSync.hpp).
 export MITCAD_TEST_SYNC=1
+# What typed-in fields hold: "File dialog <title>: <text>", "Dialog field
+# <title>: <text>", "Panel field <input>: <text>"
+# (app/framework/TypedTextLog.hpp; ui_type_field, ui_type_in).
+export MITCAD_LOG_TYPED_TEXT=1
 # The app's scale (QT_SCALE_FACTOR, a whole number): with UI_SCALE=2 it runs
 # at device pixel ratio 2 on a screen twice as large. The app logs places in
 # logical pixels; the helpers below click at UI_SCALE times them.
@@ -95,10 +99,69 @@ ui_stop_app() {
 
 ui_cleanup() {
   ui_stop_app
+  # The other instances of a test that runs several (ui_instance).
+  local instance runner
+  for instance in $UI_INSTANCES; do
+    [ "$instance" = "$UI_CURRENT" ] && continue
+    runner="UI_INSTANCE_${instance}_RUNNER"
+    UI_RUNNER=${!runner:-}
+    ui_stop_app
+  done
   [ -n "$UI_XVFB_PID" ] && kill "$UI_XVFB_PID" 2> /dev/null
   rm -rf "$UI_CONFIG" "$UI_DATA" "$UI_CACHE"
 }
 trap ui_cleanup EXIT
+
+# Several instances of Mitcad at once (tools/ui-locks-test.sh): the helpers
+# work on the current one, its process, log, window and mark (UI_RUNNER,
+# UI_LOG, UI_WINDOW, X, Y, WIDTH, HEIGHT, UI_MARK). ui_instance NAME keeps
+# the current instance's state and makes NAME the current one: an instance
+# seen before gets its state back and its window raised and given the
+# keyboard; a new one starts with a log of its own and no process, for
+# ui_start_app. They share the display, the settings and the data folders.
+UI_INSTANCES=""
+UI_CURRENT=""
+# ui_app_pid: the current instance's process (gdb's child under gdb).
+ui_app_pid() {
+  local child
+  child=$(pgrep -P "$UI_RUNNER" 2> /dev/null | head -1)
+  echo "${child:-$UI_RUNNER}"
+}
+ui_instance() {
+  local var
+  if [ -n "$UI_CURRENT" ]; then
+    for var in RUNNER LOG WINDOW MARK; do
+      local value="UI_$var"
+      printf -v "UI_INSTANCE_${UI_CURRENT}_$var" '%s' "${!value:-}"
+    done
+    printf -v "UI_INSTANCE_${UI_CURRENT}_GEOMETRY" '%s %s %s %s' "${X:-0}" "${Y:-0}" "${WIDTH:-0}" "${HEIGHT:-0}"
+  fi
+  case " $UI_INSTANCES " in
+  *" $1 "*)
+    for var in RUNNER LOG WINDOW MARK; do
+      local saved="UI_INSTANCE_${1}_$var"
+      printf -v "UI_$var" '%s' "${!saved:-}"
+    done
+    local geometry="UI_INSTANCE_${1}_GEOMETRY"
+    read -r X Y WIDTH HEIGHT <<< "${!geometry}"
+    ;;
+  *)
+    UI_INSTANCES="$UI_INSTANCES $1"
+    if [ -n "$UI_CURRENT" ]; then
+      UI_LOG=$(mktemp /tmp/mitcad-ui.XXXXXX.log)
+    fi
+    UI_RUNNER=""
+    UI_WINDOW=""
+    UI_MARK=0
+    ;;
+  esac
+  UI_CURRENT=$1
+  if [ -n "$UI_WINDOW" ] && [ -n "$UI_RUNNER" ]; then
+    xdotool windowraise "$UI_WINDOW" 2> /dev/null
+    xdotool windowfocus --sync "$UI_WINDOW" 2> /dev/null
+    ui_sync
+  fi
+}
 
 # ui_lock_owner n: the PID in display n's lock file, which an X server
 # creates atomically (link()) for its display number before it starts.
@@ -167,8 +230,10 @@ ui_start_display() {
 # killed it and starts it again would get the question) unless
 # UI_RECOVERY=1.
 ui_start_app() {
-  local options=(--no-recovery)
+  local options=(--no-recovery) before window
   [ "${UI_RECOVERY:-0}" = 1 ] && options=()
+  # The windows of other instances (ui_instance) are not this one's.
+  before=" $(xdotool search --onlyvisible --name ' - Mitcad$' 2> /dev/null | tr '\n' ' ')"
   if [ "${UI_GDB:-1}" = 1 ] && command -v gdb > /dev/null; then
     gdb -q -batch -ex "set debuginfod enabled off" -ex run -ex bt --args "$UI_APP" "${options[@]}" "$@" \
       > "$UI_LOG" 2>&1 &
@@ -177,8 +242,17 @@ ui_start_app() {
   fi
   UI_RUNNER=$!
   # The main window is titled "<document> - Mitcad", "*" marking changes.
+  UI_WINDOW=""
   for _ in $(seq 1 $((${UI_WINDOW_WAIT:-20} * 5))); do
-    UI_WINDOW=$(xdotool search --onlyvisible --name ' - Mitcad$' 2> /dev/null | head -1)
+    for window in $(xdotool search --onlyvisible --name ' - Mitcad$' 2> /dev/null); do
+      case "$before " in
+      *" $window "*) ;;
+      *)
+        UI_WINDOW=$window
+        break
+        ;;
+      esac
+    done
     [ -n "$UI_WINDOW" ] && break
     sleep 0.2
   done
@@ -230,7 +304,20 @@ ui_fail() {
   echo "FAIL: $1"
   grep -vE "^\[(New|Thread|Detaching)|libthread_db|Using host|auto-load|debug_gdb_scripts" \
     "$UI_LOG" | tail -40
+  ui_keep_log
   exit 1
+}
+
+# ui_keep_log [log [instance]]: with MITCAD_UI_LOG_DIR set (tools/check-all.sh
+# sets it), a failed test keeps the application's whole log there, as
+# ui-<name>.app.log (ui-<name>.<instance>.app.log): the one in /tmp is
+# not kept for long.
+ui_keep_log() {
+  [ -n "${MITCAD_UI_LOG_DIR:-}" ] || return 0
+  local name
+  name=$(basename "$0" .sh)
+  name=$MITCAD_UI_LOG_DIR/${name%-test}${2:+.$2}.app.log
+  cp -f "${1:-$UI_LOG}" "$name" 2> /dev/null && echo "the application's log: $name"
 }
 
 # ui_wait_idle: waits (up to 60 s) until the app computes nothing: every job
@@ -432,6 +519,28 @@ ui_menu_choose() {
 # ui_double_click_logged "text": a double-click at the last "<text> at x,y".
 ui_double_click_logged() { xdotool mousemove $(ui_logged_at "$1") click --repeat 2 --delay 80 1; }
 
+# ui_double_click_expect "text" "logged line" description: a double-click at
+# the last "<text> at x,y" that the app answers with the line; when it does
+# not (under load xdotool can send the second click too late for a
+# double-click, and the app sees two clicks), once more, a moment later.
+ui_double_click_expect() {
+  local attempt
+  for attempt in 1 2; do
+    ui_mark
+    ui_wait_idle
+    ui_double_click_logged "$1"
+    ui_sync
+    ui_crashed && ui_fail "crashed during the double-click on '$1'"
+    for _ in $(seq 1 15); do
+      tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF -- "$2" && { echo "ok   $3"; return; }
+      sleep 0.2
+    done
+    echo "note: no '$2' after the double-click on '$1' (attempt $attempt)"
+    sleep 0.45 # not a double-click with the clicks before
+  done
+  ui_fail "$3: '$2' not in the log after two double-clicks"
+}
+
 # ui_drag_logged "from text" "to text" [dx]: a left drag between two logged
 # places; dx moves the end that many pixels right (negative: left).
 ui_drag_logged() {
@@ -451,14 +560,22 @@ ui_drag_logged() {
 
 # ui_focus_dialog "title regex": waits for a dialog and gives it the keyboard
 # (Xvfb has no window manager to do it); ui_focus_main gives it back.
+UI_DIALOG_TITLE=""
 ui_focus_dialog() {
   local dialog=""
   for _ in $(seq 1 50); do
-    dialog=$(xdotool search --onlyvisible --name "$1" 2> /dev/null | head -1)
+    if [ -n "$UI_INSTANCES" ] && [ -n "$UI_RUNNER" ]; then
+      # Several instances (ui_instance): the current one's dialog.
+      dialog=$(xdotool search --all --pid "$(ui_app_pid)" --onlyvisible --name "$1" 2> /dev/null | head -1)
+    else
+      dialog=$(xdotool search --onlyvisible --name "$1" 2> /dev/null | head -1)
+    fi
     [ -n "$dialog" ] && break
     sleep 0.2
   done
   [ -n "$dialog" ] || ui_fail "no dialog matching '$1'"
+  # Its title, for ui_type_text.
+  UI_DIALOG_TITLE=$(xdotool getwindowname "$dialog" 2> /dev/null)
   ui_sync "$dialog"
   xdotool windowfocus --sync "$dialog" 2> /dev/null
   ui_sync "$dialog"
@@ -468,6 +585,57 @@ ui_focus_main() {
   ui_wait_idle
   xdotool windowfocus --sync "$UI_WINDOW" 2> /dev/null
   ui_sync
+}
+
+# ui_title_regex "title": a regex that matches exactly that window title.
+ui_title_regex() { printf '^%s$' "$(printf '%s' "$1" | sed 's/[][\.*^$+?(){}|]/\\&/g')"; }
+
+# ui_typed_since line "prefix"...: the text logged last after that line of
+# the log for a typed-in field, in lines "<prefix><text>"
+# (MITCAD_LOG_TYPED_TEXT, app/framework/TypedTextLog.hpp), "(nothing
+# logged)" if none.
+ui_typed_since() {
+  local from=$1
+  shift
+  tail -n +$((from + 1)) "$UI_LOG" | awk -v prefixes="$(printf '%s\n' "$@")" '
+    BEGIN { n = split(prefixes, prefix, "\n") }
+    { for (i = 1; i <= n; i++) if (prefix[i] != "" && index($0, prefix[i]) == 1) { last = substr($0, length(prefix[i]) + 1); seen = 1 } }
+    END { print seen ? last : "(nothing logged)" }'
+}
+
+# ui_type_field "dialog title" text: replaces the text of the dialog's field
+# that has the keyboard (select all, type) and waits until the app has
+# logged exactly that text for it ("File dialog <title>: <text>", "Dialog
+# field <title>: <text>"); otherwise (the dialog had not taken the
+# keyboard, or a character was lost under load) gives the dialog the
+# keyboard again and types once more. No fixed wait (mitcad#102).
+ui_type_field() {
+  local attempt from typed=""
+  for attempt in 1 2; do
+    from=$(wc -l < "$UI_LOG")
+    ui_key ctrl+a
+    xdotool type --delay 20 -- "$2"
+    ui_sync
+    typed=$(ui_typed_since "$from" "File dialog $1: " "Dialog field $1: ")
+    [ "$typed" = "$2" ] && return 0
+    echo "note: '$1' has '$typed' after typing '$2' (attempt $attempt)"
+    [ "$attempt" = 1 ] && ui_focus_dialog "$(ui_title_regex "$1")"
+  done
+  ui_fail "typing into '$1': its field has '$typed', not '$2'"
+}
+
+# ui_type_text text: ui_type_field in the dialog ui_focus_dialog gave the
+# keyboard last.
+ui_type_text() { ui_type_field "$UI_DIALOG_TITLE" "$1"; }
+
+# ui_type_path "dialog title" path: a path typed into a file dialog (Qt's
+# own, --no-native-dialogs) or another dialog's focused path field, checked
+# as ui_type_field does, then Enter. The caller gives the keyboard back
+# (ui_focus_main) or goes on in the next dialog.
+ui_type_path() {
+  ui_focus_dialog "$(ui_title_regex "$1")"
+  ui_type_field "$1" "$2"
+  ui_key Return
 }
 
 # ui_mark; ...; ui_expect_new "text" "description" [seconds]: like
@@ -514,12 +682,30 @@ ui_drag_from() {
 }
 
 # ui_type_in "Panel <command> input <id>" text: replaces a panel field's
-# text (a click in it, select all, type).
+# text (a click in it, select all, type) and waits until the app has logged
+# exactly that text for it ("Panel field <id>: <text>"; for a dialog's
+# field logged as "<name> at x,y", "Dialog field <title>: <text>");
+# otherwise clicks and types once more (mitcad#102).
 ui_type_in() {
-  ui_click_logged "$1"
-  ui_sync
-  ui_key ctrl+a
-  xdotool type --delay 40 -- "$2"
+  local attempt from typed=""
+  for attempt in 1 2; do
+    from=$(wc -l < "$UI_LOG")
+    ui_click_logged "$1"
+    ui_sync
+    ui_key ctrl+a
+    xdotool type --delay 40 -- "$2"
+    ui_sync
+    if [[ $1 == "Panel "*" input "* ]]; then
+      typed=$(ui_typed_since "$from" "Panel field ${1##* input }: ")
+    else
+      # A field of a dialog: "Dialog field <title>: <text>".
+      typed=$(ui_typed_since "$from" "Dialog field ")
+      typed=${typed#*: }
+    fi
+    [ "$typed" = "$2" ] && return 0
+    echo "note: '$1' has '$typed' after typing '$2' (attempt $attempt)"
+  done
+  ui_fail "typing into '$1': it has '$typed', not '$2'"
 }
 
 # ui_choose "Panel <command> input <id>" downs: picks the entry that many

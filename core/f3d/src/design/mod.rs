@@ -34,6 +34,8 @@ pub mod classes;
 pub mod decode;
 pub mod inputs;
 pub mod ir;
+// Raw item records for the import's learning dump (mitcad#96).
+pub mod learn;
 mod nonfinite;
 pub mod recipe;
 mod record;
@@ -160,6 +162,19 @@ pub fn documents(path: &Path) -> Result<Vec<(String, F3dFile)>, String> {
 
 /// Decodes the design of a document.
 pub fn decode_document(doc: &F3dFile, label: &str) -> Result<FileDesign, String> {
+    let mut design = decode_streams(doc, label)?;
+    resolve_inputs(&mut design, doc, 1);
+    Ok(design)
+}
+
+// Decoding in two parts (mitcad#103): the import decodes every design's
+// streams to choose one, and finds the chosen one's inputs in the bodies'
+// history while it reads the bodies themselves.
+
+/// [`decode_document`] without [`resolve_inputs`]: the design streams
+/// alone (the timeline, components, features and the blobs' links); quick
+/// next to finding the inputs in the bodies' history.
+pub fn decode_streams(doc: &F3dFile, label: &str) -> Result<FileDesign, String> {
     let Some(s) = find_design_streams(doc).map_err(|e| format!("{label}: {e}"))? else {
         return Ok(FileDesign {
             label: label.to_string(),
@@ -168,14 +183,24 @@ pub fn decode_document(doc: &F3dFile, label: &str) -> Result<FileDesign, String>
         });
     };
     let design = Design::parse(&s.meta, s.bulk).map_err(|e| format!("{label}: {e}"))?;
-    let mut dump = design.dump(label, &s.segment_dir);
-    // Inputs named in the streams, found in the bodies' history.
-    inputs::resolve(&mut dump, doc);
+    let dump = design.dump(label, &s.segment_dir);
     Ok(FileDesign {
         label: label.to_string(),
         dump: Some(dump),
         segment_dir: Some(s.segment_dir),
     })
+}
+
+/// The rest of [`decode_document`] after [`decode_streams`]: the inputs
+/// named in the streams, found in the bodies' history (on large designs
+/// most of the decoding's time). Changes the items' inputs only, not the
+/// timeline's order, the items' states and components, the components or
+/// the blobs' links. `threads`: how many threads find them (the items one
+/// at a time each; the same dump with any number).
+pub fn resolve_inputs(design: &mut FileDesign, doc: &F3dFile, threads: usize) {
+    if let Some(dump) = &mut design.dump {
+        inputs::resolve_on(dump, doc, threads);
+    }
 }
 
 /// Decodes every design of an `.f3d` or `.f3z` file.

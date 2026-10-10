@@ -1,0 +1,103 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the corner of a contour closed by a sharp corner, at a vertex with
+more than three sharp edges (mitcad#122).
+
+A chain of tangent edges that closes on itself at a vertex where its first
+and last edges meet at an angle gives one stripe with both ends at that
+vertex; the vertex lists the stripe twice. ChFi3d_Builder::PerformTwoCorner
+handles that (the second occurrence is the last end), but
+PerformMoreThreeCorner, which takes such vertices when they hold more than
+three sharp edges, matched the edges around the vertex against the first
+end of each stripe only (ChFi3d_IndexOfSurfData). The last edge of the
+contour was taken for an edge without a fillet, the stripe's last end got
+no corner curve and no points, and ChFi3d_FilDS then added point
+interferences with index 0 (Standard_ProgramError
+"TopOpeBRepDS_DataStructure::Point" in ChFi3d_Builder::Compute). The edge
+parsing now also matches the last end of a stripe whose last edge ends at
+the vertex, and the indices of the surface data come from the end recorded
+for each edge.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+@@ -1170,6 +1170,20 @@
+ }
+ 
+ //=======================================================================
++// function : IndexOfSurfDataAtEnd
++// purpose  : Index of the surface data at the end <theSens> (1: first,
++//           -1: last) of a stripe. A contour closed by a sharp corner has
++//           both its ends at the corner's vertex, which
++//           ChFi3d_IndexOfSurfData cannot tell apart: the corner keeps the
++//           end it found for each of its edges.
++//=======================================================================
++
++static int IndexOfSurfDataAtEnd(const occ::handle<ChFiDS_Stripe>& theStripe, const int theSens)
++{
++  return theSens == 1 ? 1 : theStripe->SetOfSurfData()->Length();
++}
++
++//=======================================================================
+ // function : PlateOrientation
+ // purpose  : Define Plate orientation compared to <theRefDir> previewing
+ //           that Plate surface can have a sharp angle with adjacent
+@@ -1458,6 +1472,22 @@
+           cnext  = It.Value();
+           trouve = true;
+         }
++        else if (sense == 1 && It.Value()->Spine()->NbEdges() > 1)
++        {
++          // A contour closed by a sharp corner at V1 has its last end there too.
++          const TopoDS_Edge& aLast =
++            It.Value()->Spine()->Edges(It.Value()->Spine()->NbEdges());
++          const TopoDS_Vertex aVLast = aLast.Orientation() == TopAbs_REVERSED
++                                         ? TopExp::FirstVertex(aLast)
++                                         : TopExp::LastVertex(aLast);
++          if (Enext.IsSame(aLast) && aVLast.IsSame(V1))
++          {
++            cnext  = It.Value();
++            index  = IndexOfSurfDataAtEnd(cnext, -1);
++            sense  = -1;
++            trouve = true;
++          }
++        }
+       }
+       if (trouve)
+       {
+@@ -1924,7 +1954,7 @@
+           }
+           strip = CD.Value(ic);
+           RemoveSD(strip, ideb, ifin);
+-          num = ChFi3d_IndexOfSurfData(V1, CD.Value(ic), sense);
++          num = IndexOfSurfDataAtEnd(CD.Value(ic), sens.Value(ic));
+           Index.SetValue(ic, num);
+           i1 = num;
+         }
+@@ -1974,7 +2004,7 @@
+             }
+           }
+           RemoveSD(strip, ideb, ifin);
+-          num = ChFi3d_IndexOfSurfData(V1, CD.Value(icplus), sense);
++          num = IndexOfSurfDataAtEnd(CD.Value(icplus), sens.Value(icplus));
+           Index.SetValue(icplus, num);
+           i2 = num;
+         }
+@@ -2022,7 +2052,7 @@
+         else
+         {
+           isfirst = (sens.Value(ic) == 1);
+-          i.SetValue(ic, icplus, ChFi3d_IndexOfSurfData(V1, CD.Value(ic), sense));
++          i.SetValue(ic, icplus, IndexOfSurfDataAtEnd(CD.Value(ic), sens.Value(ic)));
+           if (oksea.Value(icmoins))
+           {
+             para = p.Value(ic, icmoins);
+@@ -2046,7 +2076,7 @@
+         else
+         {
+           isfirst = (sens.Value(icplus) == 1);
+-          i.SetValue(icplus, ic, ChFi3d_IndexOfSurfData(V1, CD.Value(icplus), sense));
++          i.SetValue(icplus, ic, IndexOfSurfDataAtEnd(CD.Value(icplus), sens.Value(icplus)));
+           if (oksea.Value(icplus))
+           {
+             para = p.Value(icplus, icplus2);

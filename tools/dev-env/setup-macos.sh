@@ -187,6 +187,17 @@ if [ ! -d "$HOME/Qt/$QT_VERSION/macos" ]; then
     -O "$HOME/Qt" > /dev/null)
 fi
 
+echo "== mosquitto (a test tool)"
+# The MQTT broker of the live updates' tests (mitcad#89); they start their
+# own and skip without it. From Homebrew when it is there, not as a service.
+if command -v mosquitto > /dev/null 2>&1 || [ -x /opt/homebrew/sbin/mosquitto ]; then
+  echo "mosquitto is installed"
+elif command -v brew > /dev/null 2>&1; then
+  brew install mosquitto
+else
+  echo "Homebrew is missing: the tests against mosquitto are skipped (brew install mosquitto)"
+fi
+
 echo "== CMakeUserPresets.json"
 if [ ! -f "$REPO/CMakeUserPresets.json" ]; then
   cat > "$REPO/CMakeUserPresets.json" << EOF

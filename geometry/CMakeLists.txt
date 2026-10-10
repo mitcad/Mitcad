@@ -134,6 +134,11 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/removed.cpp
   include/mitcad/geometry/removed.hpp)
+# Fillets and chamfers of whole circles that run over a neighbouring face,
+# built as rings (mitcad#60).
+target_sources(mitcad_geometry PRIVATE
+  src/ring_dressup.cpp
+  src/ring_dressup.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -180,6 +185,14 @@ if(BUILD_TESTING)
   target_sources(test_geometry PRIVATE tests/test_removed.cpp)
   # A mirror image joined only where it differs from the body (mitcad#88).
   target_sources(test_geometry PRIVATE tests/test_mirror_join.cpp)
+  # Roundings wider than a neighbouring face, OCCT's edge overflow (mitcad#121).
+  target_sources(test_geometry PRIVATE tests/test_fillet_overflow.cpp)
+  # Roundings OCCT's fillet failed on, with the port's patches (mitcad#122).
+  target_sources(test_geometry PRIVATE tests/test_fillet_kernel.cpp)
+  # Ends, seams and corner caps of OCCT's roundings (mitcad#133).
+  target_sources(test_geometry PRIVATE tests/test_fillet_ends.cpp)
+  # Allocations that fail inside OCCT, with the port's patch (mitcad#132).
+  target_sources(test_geometry PRIVATE tests/test_allocation.cpp)
   target_link_libraries(test_geometry PRIVATE mitcad_geometry_analysis)
   target_link_libraries(test_geometry PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry COMMAND test_geometry)

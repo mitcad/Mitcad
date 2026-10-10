@@ -5,6 +5,8 @@ add_library(mitcad_geometry_analysis STATIC
   src/common.cpp
   src/compare.cpp
   src/convert.hpp
+  src/face_integral.cpp
+  src/face_integral.hpp
   src/interference.cpp
   src/measure.cpp
   src/properties.cpp
@@ -24,6 +26,7 @@ target_link_libraries(mitcad_geometry_analysis
 if(BUILD_TESTING)
   add_executable(test_geometry_analysis tests/test_analysis.cpp)
   target_link_libraries(test_geometry_analysis PRIVATE mitcad_geometry_analysis TKG3d TKGeomBase
-                                                       TKTopAlgo TKPrim TKBO TKFillet mitcad_warnings)
+                                                       TKGeomAlgo TKTopAlgo TKPrim TKBO TKFillet
+                                                       mitcad_warnings)
   add_test(NAME geometry.analysis COMMAND test_geometry_analysis)
 endif()

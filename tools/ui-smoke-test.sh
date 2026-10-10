@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/view app/OcctViewer.cpp app/OcctViewer.hpp
 # Drives the view of the demo block with mouse and keyboard input and fails if
 # the application crashes or OCCT reports a failed view operation.
 #

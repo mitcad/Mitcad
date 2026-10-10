@@ -90,6 +90,12 @@ pub mod ffi {
         issues: u32,
         /// Why it was not built.
         error: String,
+        /// The builder's messages: geometry it rejected, and what OCCT's
+        /// checker finds wrong.
+        messages: Vec<String>,
+        /// The volume before the solids were oriented (negative when the
+        /// faces have the material on their outer side).
+        raw_volume: f64,
     }
 
     unsafe extern "C++" {
@@ -137,8 +143,10 @@ pub mod ffi {
         #[namespace = "mitcad::f3d"]
         type BrepBodyData = crate::brep_import::ffi::BrepBodyData;
         /// Builds one body of an .f3d file from its neutral B-rep data
-        /// (`brep_import.rs`); null when it cannot be built.
-        fn f3d_build_body(data: &BrepBodyData) -> SharedPtr<Shape>;
+        /// (`brep_import.rs`); null when it cannot be built, an error when
+        /// an allocation failed meanwhile (the process is out of memory,
+        /// mitcad#132).
+        fn f3d_build_body(data: &BrepBodyData) -> Result<SharedPtr<Shape>>;
         /// A body `f3d_build_body` built, from its B-rep data (`brep_data`):
         /// the next try of an import takes it from one the watchdog gave up
         /// while it built it (mitcad#82); null when it cannot be read.
@@ -153,8 +161,9 @@ pub mod ffi {
         /// shape (null when not built) is appended to the list.
         fn build_brep_body(data: &BrepBodyData, shapes: Pin<&mut ShapeList>) -> F3dBody;
         /// Whether OCCT's checker finds the shape valid (the bodies of the
-        /// `.ipt` import with its history, mitcad#60).
-        fn shape_is_valid(shape: &Shape) -> bool;
+        /// `.ipt` import with its history, mitcad#60); an error when an
+        /// allocation failed in the checker (mitcad#132).
+        fn shape_is_valid(shape: &Shape) -> Result<bool>;
     }
 
     extern "Rust" {
@@ -172,6 +181,19 @@ pub mod ffi {
         /// (`mitcad_ipt::testdata::test_part_with_design`): the 10 mm cube
         /// and the parameter, sketch and extrusion that make it, mm.
         fn ipt_write_test_design_file(path: &str) -> Result<()>;
+        /// Writes .ipt part files without B-rep bodies for tests: with a
+        /// mesh feature's tetrahedron (`mitcad_ipt::testdata::test_mesh_part`),
+        /// or empty (`test_empty_part`).
+        fn ipt_write_test_mesh_file(path: &str) -> Result<()>;
+        fn ipt_write_test_empty_file(path: &str) -> Result<()>;
+        /// Writes an .ipt part file for tests whose result list keeps a
+        /// body hidden (`mitcad_ipt::testdata::test_part_with_hidden_body`):
+        /// the cube shown, the cylinder hidden, mm.
+        fn ipt_write_test_hidden_file(path: &str) -> Result<()>;
+        /// Writes a small project with .iam assemblies into a folder for
+        /// tests (`mitcad_ipt::testassembly::write_test_project`): a top
+        /// assembly as saved elsewhere, a sub-assembly and parts.
+        fn ipt_write_test_assembly(dir: &str) -> Result<()>;
 
         // .f3d import (mitcad#82).
         /// `f3d_build_body` advanced (its healing, face by face): progress
@@ -213,4 +235,27 @@ fn ipt_write_test_file(path: &str) -> Result<(), String> {
 fn ipt_write_test_design_file(path: &str) -> Result<(), String> {
     std::fs::write(path, mitcad_ipt::testdata::test_part_with_design())
         .map_err(|e| format!("{path}: {e}"))
+}
+
+/// The part of [`ffi::ipt_write_test_mesh_file`].
+fn ipt_write_test_mesh_file(path: &str) -> Result<(), String> {
+    std::fs::write(path, mitcad_ipt::testdata::test_mesh_part()).map_err(|e| format!("{path}: {e}"))
+}
+
+/// The part of [`ffi::ipt_write_test_empty_file`].
+fn ipt_write_test_empty_file(path: &str) -> Result<(), String> {
+    std::fs::write(path, mitcad_ipt::testdata::test_empty_part())
+        .map_err(|e| format!("{path}: {e}"))
+}
+
+/// The part of [`ffi::ipt_write_test_hidden_file`].
+fn ipt_write_test_hidden_file(path: &str) -> Result<(), String> {
+    std::fs::write(path, mitcad_ipt::testdata::test_part_with_hidden_body())
+        .map_err(|e| format!("{path}: {e}"))
+}
+
+/// The project of [`ffi::ipt_write_test_assembly`].
+fn ipt_write_test_assembly(dir: &str) -> Result<(), String> {
+    mitcad_ipt::testassembly::write_test_project(std::path::Path::new(dir))
+        .map_err(|e| format!("{dir}: {e}"))
 }

@@ -80,6 +80,20 @@ pub struct FileStatus {
 }
 
 impl ProjectRepo {
+    /// The project's id on an MQTT broker (live updates, mitcad#89): the
+    /// first commit of HEAD's first-parent chain, the same in every clone;
+    /// None before the first version.
+    pub fn project_id(&self) -> Result<Option<String>, VcsError> {
+        let Some(head) = self.head_commit()? else {
+            return Ok(None);
+        };
+        let mut first = head;
+        for info in self.repo.rev_walk([head]).first_parent_only().all()? {
+            first = info?.id;
+        }
+        Ok(Some(first.to_string()))
+    }
+
     /// The versions of `file`, newest first: the commits on HEAD's
     /// first-parent chain that changed it (`git log --first-parent --
     /// <path>`), following it back through renames that kept its content.

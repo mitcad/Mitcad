@@ -449,21 +449,21 @@ pub(crate) fn through_points(p1: Vec3, p2: Vec3, p3: Vec3) -> Result<DatumPlane,
     let (a, b) = (sub(p2, p1), sub(p3, p1));
     let normal = cross(a, b);
     let size = norm(a).max(norm(b));
-    if norm(normal) <= LINEAR * size.max(1.0) {
+    // Points that are not finite are refused here too.
+    if !normal.iter().all(|v| v.is_finite()) || norm(normal) <= LINEAR * size.max(1.0) {
         return Err("the three points lie on one line".to_owned());
     }
-    Ok(DatumPlane::from_normal(
-        p1,
-        unit(normal).expect("not zero"),
-        Some(a),
-    ))
+    let normal = unit(normal).ok_or("the three points lie on one line")?;
+    Ok(DatumPlane::from_normal(p1, normal, Some(a)))
 }
 
 pub(crate) fn through_line_and_point(line: &DatumAxis, point: Vec3) -> Result<DatumPlane, String> {
-    if line.distance_to(point) <= LINEAR {
+    let off = line.distance_to(point);
+    if off.is_nan() || off <= LINEAR {
         return Err("the point lies on the line".to_owned());
     }
-    let normal = unit(cross(line.direction, sub(point, line.origin))).expect("off the line");
+    let normal =
+        unit(cross(line.direction, sub(point, line.origin))).ok_or("the point lies on the line")?;
     Ok(DatumPlane::from_normal(
         line.origin,
         normal,

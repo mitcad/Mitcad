@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/render app/framework/Appearances.cpp app/framework/Appearances.hpp
 # Appearances of faces and textures (mitcad#53, docs/rendering.md
 # "Materials"), through the real UI:
 #   - The Appearance panel gives the box's top face Paint - Red (its Faces
@@ -19,6 +20,7 @@
 # Without the renderer, the parts that need it are skipped.
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-render-faces-test.sh [directory for screenshots]
+# check-all sources: tools/cli
 
 UI_APP=${UI_APP:-$(cd "$(dirname "$0")/.." && pwd)/build/dev/app/mitcad}
 BUILD_DIR=$(cd "$(dirname "$UI_APP")/.." 2> /dev/null && pwd)

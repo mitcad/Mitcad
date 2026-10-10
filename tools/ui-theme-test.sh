@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/browser app/framework/ChromeStyle.cpp app/framework/ChromeStyle.hpp
 # The timeline in a light and a dark theme (mitcad#14): the history marker
 # and the playback buttons' glyphs follow the palette, also when the theme
 # changes while Mitcad runs.

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "mitcad/analysis/common.hpp"
 
+#include <algorithm>
 #include <array>
 #include <exception>
 #include <map>
@@ -8,8 +9,6 @@
 #include <utility>
 #include <vector>
 
-#include <BRepAdaptor_Curve2d.hxx>
-#include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
 #include <BRepGProp_Domain.hxx>
@@ -34,6 +33,7 @@
 #include <gp_Trsf.hxx>
 
 #include "convert.hpp"
+#include "face_integral.hpp"
 
 namespace mitcad::analysis {
 
@@ -134,48 +134,6 @@ Bounds bounds(const TopoDS_Shape& shape) {
 
 namespace {
 
-// Faces OCCT's fixed Gauss points integrate well: planes, quadrics, tori
-// and polynomial B-spline and Bezier patches, bounded by lines, conics and
-// polynomial curves in their parameter space. Rational patches and curves
-// (a cylinder scaled non-uniformly has both), surfaces of revolution and
-// extrusion and offset surfaces need the adaptive integration.
-bool fixed_points_suffice(const TopoDS_Face& face) {
-  const BRepAdaptor_Surface surface(face, false);
-  switch (surface.GetType()) {
-  case GeomAbs_Plane:
-  case GeomAbs_Cylinder:
-  case GeomAbs_Cone:
-  case GeomAbs_Sphere:
-  case GeomAbs_Torus:
-    break;
-  case GeomAbs_BezierSurface:
-  case GeomAbs_BSplineSurface:
-    if (surface.IsURational() || surface.IsVRational()) {
-      return false;
-    }
-    break;
-  default:
-    return false;
-  }
-  for (TopExp_Explorer it(face, TopAbs_EDGE); it.More(); it.Next()) {
-    const BRepAdaptor_Curve2d curve(TopoDS::Edge(it.Current()), face);
-    switch (curve.GetType()) {
-    case GeomAbs_BezierCurve:
-    case GeomAbs_BSplineCurve:
-      if (curve.IsRational()) {
-        return false;
-      }
-      break;
-    case GeomAbs_OffsetCurve:
-    case GeomAbs_OtherCurve:
-      return false;
-    default:
-      break;
-    }
-  }
-  return true;
-}
-
 // The point the integrals of a shape are taken about: the mean of its
 // vertices, as OCCT takes it (any point gives the same totals; a near one
 // keeps them accurate).
@@ -189,34 +147,25 @@ gp_Pnt reference_point(const TopoDS_Shape& shape) {
   return gp_Pnt(count > 0 ? sum / count : sum);
 }
 
-enum class Integral { Volume, Surface };
+using detail::Integral;
 
-// A face's integral about `at`: over its triangles for a mesh face, with
-// fixed or adaptive Gauss points for a surface.
+// OCCT's fixed rule, for a face reaching to infinity.
 template <class Inert>
-GProp_GProps surface_face(const TopoDS_Face& face, const gp_Pnt& at) {
+GProp_GProps unbounded_face(const TopoDS_Face& face, const gp_Pnt& at) {
   BRepGProp_Face surface(face);
   Inert props;
   props.SetLocation(at);
-  const bool natural = face.NbChildren() == 0;
-  BRepGProp_Domain domain;
-  if (!natural) {
-    domain.Init(face);
-  }
-  if (fixed_points_suffice(face)) {
-    if (natural) {
-      props.Perform(surface);
-    } else {
-      props.Perform(surface, domain);
-    }
-  } else if (natural) {
-    props.Perform(surface, kIntegrationTolerance);
+  if (face.NbChildren() == 0) {
+    props.Perform(surface);
   } else {
-    props.Perform(surface, domain, kIntegrationTolerance);
+    BRepGProp_Domain domain(face);
+    props.Perform(surface, domain);
   }
   return props;
 }
 
+// A face's integral about `at`: over its triangles for a mesh face, span by
+// span over its surface otherwise (detail::integrate_face).
 std::optional<GProp_GProps> face_integral(const TopoDS_Face& face, const gp_Pnt& at, Integral integral) {
   TopLoc_Location location;
   if (BRep_Tool::Surface(face, location).IsNull()) {
@@ -230,10 +179,13 @@ std::optional<GProp_GProps> face_integral(const TopoDS_Face& face, const gp_Pnt&
     props.Perform(mesh, location, face.Orientation());
     return props;
   }
-  if (integral == Integral::Volume) {
-    return surface_face<BRepGProp_Vinert>(face, at);
+  if (std::optional<GProp_GProps> props = detail::integrate_face(face, at, integral)) {
+    return props;
   }
-  return surface_face<BRepGProp_Sinert>(face, at);
+  if (integral == Integral::Volume) {
+    return unbounded_face<BRepGProp_Vinert>(face, at);
+  }
+  return unbounded_face<BRepGProp_Sinert>(face, at);
 }
 
 // The sum of the faces' integrals. The faces are integrated on all cores

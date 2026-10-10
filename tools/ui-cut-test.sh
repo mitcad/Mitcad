@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/commands app/sketch
 # Cuts a hole through a block with the extrude Cut operation through the real
 # UI: sketch and extrude a block, sketch a circle over it, extrude the circle
 # with Operation = Cut, check the removed volume, undo.

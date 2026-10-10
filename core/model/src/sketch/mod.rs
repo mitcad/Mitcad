@@ -897,6 +897,10 @@ pub struct Projection {
     /// curves.
     #[serde(with = "uids_serde")]
     pub entities: Vec<Ref>,
+    /// Where the source is when it is geometry of another component
+    /// (mitcad#100, `links.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<crate::links::OccurrenceLink>,
 }
 
 /// Text: the outlines of its characters' glyphs

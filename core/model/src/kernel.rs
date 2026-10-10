@@ -750,6 +750,60 @@ pub trait Kernel {
     ) -> Result<Vec<(Option<String>, CurveGeometry)>, KernelError> {
         Err(KernelError::Unsupported("edge geometries"))
     }
+
+    // Definitions evaluated in parallel (the .f3d import, mitcad#95).
+
+    /// A kernel for another thread that evaluates features on this
+    /// kernel's shapes at the same time as this one ([`Document::fork`]):
+    /// its own settings and state, the same geometry. None (the default)
+    /// when the kernel cannot work on another thread: the caller then
+    /// evaluates on this one.
+    ///
+    /// [`Document::fork`]: crate::Document::fork
+    fn fork(&self) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        None
+    }
+
+    // A shape's validity (the `.ipt` import's replayed bodies, mitcad#60).
+
+    /// Whether the geometry kernel's checker finds the shape valid.
+    fn is_valid(&self, _shape: &Self::Shape) -> Result<bool, KernelError> {
+        Err(KernelError::Unsupported("validity checks"))
+    }
+
+    // An operation's new faces (the `.f3d` import's geometric check of an
+    // item's change, mitcad#138).
+
+    /// The faces of `after` that none of the shapes `before` has: the faces
+    /// an operation made or changed. A face counts as one `before` has when
+    /// it is the same face, or one on the same kind of surface with the same
+    /// area and centre (a body rebuilt from the same data). Each with its
+    /// area and up to `count` points spread over it (the middles of the
+    /// cells of a grid over its parameters that lie inside it), in the
+    /// shape's face order.
+    fn new_faces(
+        &self,
+        _before: &[&Self::Shape],
+        _after: &Self::Shape,
+        _count: usize,
+    ) -> Result<Vec<NewFace>, KernelError> {
+        Err(KernelError::Unsupported("new faces"))
+    }
+
+    // Measures of other programs' integration (the FreeCAD import's
+    // reference check, mitcad#139).
+
+    /// The volume, area and centre a shape has with the geometry kernel's
+    /// plain fixed-point integration of every face, as other programs on
+    /// the same kernel measure it ([`Kernel::mass_properties`] integrates
+    /// some faces more exactly): the volume of its solids (each positive),
+    /// the centre of the solids by volume, else of the faces by area.
+    fn fixed_point_properties(&self, _shape: &Self::Shape) -> Result<MassProperties, KernelError> {
+        Err(KernelError::Unsupported("fixed-point measures"))
+    }
 }
 
 /// What [`Kernel::indexed_element`] counts.
@@ -772,6 +826,16 @@ pub struct IndexedElement {
 pub struct FacePoints {
     /// Its first name.
     pub name: String,
+    pub points: Vec<[f64; 3]>,
+}
+
+/// A face an operation made or changed (see [`Kernel::new_faces`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewFace {
+    /// mm².
+    pub area: f64,
+    /// Points inside it, spread over it; none for a face too thin for the
+    /// grid.
     pub points: Vec<[f64; 3]>,
 }
 

@@ -136,6 +136,14 @@ int main() {
   test::removed_tests();
   // A mirror image joined only where it differs from the body (mitcad#88).
   test::mirror_join_tests();
+  // Roundings wider than a neighbouring face (mitcad#121).
+  test::fillet_overflow_tests();
+  // Roundings OCCT's fillet failed on, with the port's patches (mitcad#122).
+  test::fillet_kernel_tests();
+  // Ends, seams and corner caps of OCCT's roundings (mitcad#133).
+  test::fillet_end_tests();
+  // Allocations that fail inside OCCT, with the port's patch (mitcad#132).
+  test::allocation_tests();
   for (const std::string& change : mitcad::geometry::input_changes()) {
     std::fprintf(stderr, "%s\n", change.c_str());
   }

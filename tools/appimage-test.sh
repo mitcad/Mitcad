@@ -89,10 +89,11 @@ for file in AppRun mitcad.desktop mitcad.png .DirIcon usr/bin/mitcad usr/bin/mit
   usr/plugins/imageformats/libqsvg.so usr/plugins/iconengines/libqsvgicon.so \
   usr/plugins/tls/libqopensslbackend.so \
   usr/share/doc/mitcad/LICENSE usr/share/doc/mitcad/THIRD-PARTY-NOTICES.txt \
-  usr/share/doc/mitcad/licenses/droid-sans/LICENSE.txt; do
+  usr/share/doc/mitcad/licenses/droid-sans/LICENSE.txt usr/share/doc/mitcad/licenses/qtkeychain/COPYING; do
   [ -e "$DIR/$file" ] || ui_fail "the AppImage has no $file"
 done
-for library in libQt6Core libQt6Widgets libQt6Network libQt6Svg libQt6XcbQpa libTKernel libTKV3d libTKOpenGl; do
+# Qt's D-Bus module: the keychain's (KWallet, the Secret Service).
+for library in libQt6Core libQt6Widgets libQt6Network libQt6Svg libQt6XcbQpa libQt6DBus libTKernel libTKV3d libTKOpenGl; do
   compgen -G "$DIR/usr/lib/$library.so*" > /dev/null || ui_fail "the AppImage has no $library"
 done
 grep -qx 'Exec=mitcad' "$DIR/mitcad.desktop" || ui_fail "the desktop file does not start mitcad"

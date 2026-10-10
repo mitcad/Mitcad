@@ -22,6 +22,14 @@ struct MassProperties {
 MassProperties mass_properties(const Shape& shape);
 double volume(const Shape& shape);
 
+// The measures OCCT's fixed Gauss points give every face (BRepGProp's
+// default, as other OCCT-based programs measure): the volume of the solids
+// (each counted positive), the area and the centre of the solids by volume,
+// else of the faces by area. Mitcad's own (mass_properties) integrate every
+// face span by span (mitcad#140); these are for comparing with such
+// programs' measures of the same shape.
+MassProperties fixed_point_properties(const Shape& shape);
+
 // Axis-aligned box around the geometry (not enlarged by tolerances).
 struct BoundingBox {
   bool empty = true;
@@ -70,5 +78,20 @@ struct FacePoints {
 // Every named face's points, in the shape's face order (.f3d import: the
 // faces a replace face replaced, P5). A face too thin for the grid has none.
 std::vector<FacePoints> face_points(const Shape& shape, int count = 9);
+
+// A face an operation made or changed, with its area and up to `count`
+// points spread over it (as face_points places them).
+struct NewFace {
+  double area = 0.0;
+  std::vector<gp_Pnt> points;
+};
+
+// The faces of `after` that none of `before` has, in its face order: a face
+// counts as one `before` has when it is the same face, or one on the same
+// kind of surface with the same area and centre (a body rebuilt from the
+// same data). (.f3d import: the geometric check of an item's change,
+// mitcad#138.)
+std::vector<NewFace> new_faces(const std::vector<TopoDS_Shape>& before, const TopoDS_Shape& after,
+                               int count);
 
 } // namespace mitcad::geometry

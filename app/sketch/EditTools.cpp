@@ -574,9 +574,49 @@ QJsonObject build(const QString& type, const QStringList& picks, const SketchMod
   return obj(type, {{"a", picks[0]}, {"b", picks[1]}});
 }
 
-bool apply(SketchController& c, const QString& type, const QStringList& picks) {
+// Adds a constraint for each set of complete picks, as one undo step. A
+// refused one is left out, so entities already constrained do not stop
+// the others; when all are refused nothing changes.
+bool applyEach(SketchController& c, const QString& type, const QVector<QStringList>& sets) {
   SketchOp op(c);
+  int added = 0;
+  QString reason;
+  for (const QStringList& picks : sets) {
+    const QJsonObject constraint = build(type, picks, op.model());
+    QJsonObject cmd = op.command(QStringLiteral("sketch.add_constraint"));
+    cmd.insert(QStringLiteral("constraint"), constraint);
+    QJsonObject result;
+    if (!op.run(cmd, &result)) {
+      reason = op.error();
+      qDebug().noquote() << QStringLiteral("Constraint %1 refused: %2")
+                                .arg(constraint.value(QStringLiteral("type")).toString(), reason);
+      continue;
+    }
+    ++added;
+    qDebug().noquote() << QStringLiteral("Added constraint %1 %2 on %3")
+                              .arg(constraint.value(QStringLiteral("type")).toString(),
+                                   result.value(QStringLiteral("constraints")).toArray().first().toString(),
+                                   picks.join(QStringLiteral(", ")));
+  }
+  if (added == 0) {
+    op.rollback();
+    c.error(QObject::tr("%1 not added: %2").arg(constraintName(type), reason));
+    return false;
+  }
+  op.commit();
+  if (added < static_cast<int>(sets.size())) {
+    c.hint(QObject::tr("%1: %2 of %3 added; the others were refused: %4")
+               .arg(constraintName(type))
+               .arg(added)
+               .arg(static_cast<int>(sets.size()))
+               .arg(reason));
+  }
+  return true;
+}
+
+bool apply(SketchController& c, const QString& type, const QStringList& picks) {
   if (type == QStringLiteral("fix")) {
+    SketchOp op(c);
     bool fixed = true;
     for (const QString& id : picks) {
       const PointData* p = c.model().point(id);
@@ -597,24 +637,56 @@ bool apply(SketchController& c, const QString& type, const QStringList& picks) {
                                                       picks.join(QStringLiteral(", ")));
     return true;
   }
-  const QJsonObject constraint = build(type, picks, c.model());
-  QJsonObject cmd = op.command(QStringLiteral("sketch.add_constraint"));
-  cmd.insert(QStringLiteral("constraint"), constraint);
-  QJsonObject result;
-  if (!op.run(cmd, &result)) {
-    const QString reason = op.error();
-    op.rollback();
-    c.error(QObject::tr("%1 not added: %2").arg(constraintName(type), reason));
-    qDebug().noquote() << QStringLiteral("Constraint %1 refused: %2")
-                              .arg(constraint.value(QStringLiteral("type")).toString(), reason);
-    return false;
+  return applyEach(c, type, {picks});
+}
+
+// Constraints that a selection of more than they take applies to the
+// first entity with each of the others (a line's horizontal/vertical: to
+// each line).
+bool pairwise(const QString& type) {
+  return type == QStringLiteral("equal") || type == QStringLiteral("parallel") ||
+         type == QStringLiteral("perpendicular") || type == QStringLiteral("collinear") ||
+         type == QStringLiteral("concentric") || type == QStringLiteral("tangent") ||
+         type == QStringLiteral("coincident") || type == QStringLiteral("horizontal_vertical");
+}
+
+// The picks of each constraint a preselection makes: the selection itself
+// when it is what the constraint takes; for a pairwise constraint, the
+// first entity with each of the others, in the order they were selected.
+// Empty when the selection does not fit.
+QVector<QStringList> selectionSets(const QString& type, const QStringList& picks, const SketchModel& model) {
+  QStringList ordered;
+  for (const QString& pick : picks) {
+    if (!acceptable(type, ordered, pick, model)) {
+      break;
+    }
+    ordered << pick;
   }
-  op.commit();
-  qDebug().noquote() << QStringLiteral("Added constraint %1 %2 on %3")
-                            .arg(constraint.value(QStringLiteral("type")).toString(),
-                                 result.value(QStringLiteral("constraints")).toArray().first().toString(),
-                                 picks.join(QStringLiteral(", ")));
-  return true;
+  if (ordered.size() == picks.size() &&
+      (type == QStringLiteral("fix") || static_cast<int>(ordered.size()) == needed(type, ordered, model))) {
+    return {ordered};
+  }
+  if (!pairwise(type) || picks.size() < 2) {
+    return {};
+  }
+  const QString& first = picks.first();
+  QVector<QStringList> sets;
+  if (needed(type, {first}, model) == 1) {
+    for (const QString& pick : picks) {
+      if (!acceptable(type, {}, pick, model) || needed(type, {pick}, model) != 1) {
+        return {};
+      }
+      sets << QStringList{pick};
+    }
+    return sets;
+  }
+  for (const QString& pick : picks.mid(1)) {
+    if (!acceptable(type, {first}, pick, model)) {
+      return {};
+    }
+    sets << QStringList{first, pick};
+  }
+  return sets;
 }
 
 class ConstraintTool : public SketchTool {
@@ -662,7 +734,7 @@ private:
                          : m_type == QStringLiteral("midpoint")     ? QObject::tr("a point and a line or arc")
                          : m_type == QStringLiteral("symmetric")    ? QObject::tr("two entities and a line")
                          : m_type == QStringLiteral("fix")          ? QObject::tr("an entity")
-                         : m_type == QStringLiteral("equal")        ? QObject::tr("two lines or two arcs")
+                         : m_type == QStringLiteral("equal")        ? QObject::tr("two lines, or two circles or arcs")
                          : m_type == QStringLiteral("concentric")   ? QObject::tr("two circles or arcs")
                          : m_type == QStringLiteral("tangent") || m_type == QStringLiteral("smooth")
                              ? QObject::tr("two curves")
@@ -727,17 +799,11 @@ bool constrainSelection(SketchController& c, const QString& type) {
   if (picks.isEmpty()) {
     return false;
   }
-  QStringList ordered;
-  for (const QString& pick : picks) {
-    if (!acceptable(type, ordered, pick, c.model())) {
-      return false;
-    }
-    ordered << pick;
-  }
-  if (type != QStringLiteral("fix") && static_cast<int>(ordered.size()) != needed(type, ordered, c.model())) {
+  const QVector<QStringList> sets = selectionSets(type, picks, c.model());
+  if (sets.isEmpty()) {
     return false;
   }
-  const bool done = apply(c, type, ordered);
+  const bool done = sets.size() == 1 ? apply(c, type, sets.first()) : applyEach(c, type, sets);
   if (done) {
     c.host().setSelection({});
   }

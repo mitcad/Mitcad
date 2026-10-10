@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/commands
 # Rectangular, Circular and Path Pattern and Mirror (U4) through the real
 # UI, on a 20 x 20 x 10 block with a 5 mm hole cut through it at (5, 5):
 #   - a rectangular pattern of the hole's feature, picked in the timeline;
@@ -9,6 +10,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-pattern-test.sh [screenshot.png]
+# check-all sources: tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 

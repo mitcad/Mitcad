@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/sketch app/commands
 # Sketch text, pattern edits and offsets (P3, P4) through the real UI, as a
 # user works, with the volumes the model reports:
 #   - A 60 x 40 plate with six holes patterned round its centre (made with
@@ -19,6 +20,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-text-pattern-test.sh [screenshot.png]
+# check-all sources: tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
@@ -82,6 +84,27 @@ expect_near() {
 # double_click_sketch x y: a double click at a sketch point (mm).
 double_click_sketch() { xdotool mousemove $(ui_sketch_at "$1" "$2") click --repeat 2 --delay 90 1; }
 
+# double_click_sketch_expect x y "log text" "what": a double click at a
+# sketch point that must log the text; under load the two clicks may come
+# as two single clicks, so it is tried once more (as ui_double_click_expect).
+double_click_sketch_expect() {
+  local attempt
+  for attempt in 1 2; do
+    ui_mark
+    ui_wait_idle
+    double_click_sketch "$1" "$2"
+    ui_sync
+    ui_crashed && ui_fail "crashed during the double-click at ($1, $2)"
+    for _ in $(seq 1 15); do
+      tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF -- "$3" && { echo "ok   $4"; return; }
+      sleep 0.2
+    done
+    echo "note: no '$3' after the double-click at ($1, $2) (attempt $attempt)"
+    sleep 0.45 # not a double-click with the clicks before
+  done
+  ui_fail "$4: '$3' not in the log after two double-clicks"
+}
+
 # newest_curve: the sketch curve with the highest number among the places
 # logged since the mark ("Sketch entity F1/c17 at x,y").
 newest_curve() {
@@ -99,8 +122,7 @@ ui_expect_log "Editing sketch F1 (Sketch1)" "sketch edited with the timeline rol
 ui_sync
 ui_step "zoom out"                         zoom_to_show -10 -40 70 80
 # The copy at 0 degrees: centre (45, 20), its right side at (48, 20).
-ui_step "double-click the copy"            double_click_sketch 48 20
-ui_expect_log ": sketch.edit_pattern" "the double-click opened Edit Pattern"
+double_click_sketch_expect 48 20 ": sketch.edit_pattern" "the double-click opened Edit Pattern"
 ui_expect_log "Panel Edit Pattern input quantity at" "the pattern's panel"
 ui_step "quantity 4"                       ui_type_in "Panel Edit Pattern input quantity" "4"
 ui_expect_log "Preview Edit Pattern: ok" "four holes previewed"
@@ -162,8 +184,8 @@ ui_step "select the moved ellipse"         ui_sketch_click 30.858 -27.071
 ui_expect_new "Selected: 1 sketch curve [sketch curve $ELLIPSE of F1]" "the ellipse moved with its offset"
 
 echo "--- Edit Text: a double-click on the text"
-ui_step "double-click the text"            ui_double_click_logged "Sketch entity F1/$TEXT"
-ui_expect_log "Double-click on $TEXT: sketch.edit_text" "the double-click opened Edit Text"
+ui_double_click_expect "Sketch entity F1/$TEXT" "Double-click on $TEXT: sketch.edit_text" \
+  "the double-click opened Edit Text"
 ui_expect_log "Panel Edit Text input height at" "the text's panel"
 ui_step "height 8"                         ui_type_in "Panel Edit Text input height" "8"
 ui_step "centred"                          ui_choose "Panel Edit Text input align" 1

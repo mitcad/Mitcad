@@ -240,7 +240,8 @@ bool BrowserController::canChange(bool visibilityOnly) {
   if (m_host.canChangeModel(visibilityOnly)) {
     return true;
   }
-  m_host.showStatus(tr("Finish the command or the sketch first."), true);
+  const QString readOnly = m_host.readOnlyReason();
+  m_host.showStatus(readOnly.isEmpty() ? tr("Finish the command or the sketch first.") : readOnly, true);
   return false;
 }
 
@@ -646,6 +647,14 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       visibility();
     }
     isolate();
+    // The timeline's filter (mitcad#98), this window's view.
+    menu.add(QStringLiteral("filter"), tr("Show in Timeline Only"), [this, node] {
+      m_timeline->setFilter(node.uid, m_timeline->filterSubcomponents());
+    });
+    if (!m_timeline->filter().isEmpty()) {
+      menu.add(QString(), tr("Show All in Timeline"),
+               [this] { m_timeline->setFilter(QString(), m_timeline->filterSubcomponents()); });
+    }
     menu.separator();
     renameEntry();
     if (!root) {

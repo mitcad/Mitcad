@@ -20,6 +20,7 @@
 #include "framework/ComputeProgress.hpp"
 #include "framework/Diagnostics.hpp"
 #include "framework/Json.hpp"
+#include "files/LockController.hpp"
 
 namespace mitcad {
 namespace {
@@ -227,6 +228,11 @@ void MainWindow::runIdleCalls() {
 
 QJsonObject MainWindow::command(const QJsonObject& command) {
   const QString name = command.value(QStringLiteral("cmd")).toString();
+  // Every change of the document passes here: a read-only window
+  // (mitcad#89) refuses what would change the design.
+  if (windowReadOnly() && !m_writeAnyway && !readOnlyModelCommand(name)) {
+    throw ReadOnlyError(readOnlyReason().toStdString());
+  }
   // What the progress dialog says: "Undo", "Set parameter".
   QString stage = name;
   stage.replace(QLatin1Char('_'), QLatin1Char(' ')).replace(QLatin1Char('.'), QLatin1Char(' '));

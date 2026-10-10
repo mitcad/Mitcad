@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: MIT
+# Fuzz targets for the readers of untrusted input (mitcad#89): lock.json and
+# request.json from refs anyone with push access writes, and the live
+# updates' MQTT packet decoder and the readers of topics and payloads on
+# arbitrary bytes; none may panic. Not part of the core workspace or the
+# check script; cargo-fuzz needs a nightly toolchain (in the WSL distro):
+#
+#   rustup toolchain install nightly --profile minimal && cargo install cargo-fuzz
+#   cd core/vcs/fuzz
+#   cargo +nightly fuzz run lock_json -- -max_total_time=600
+#   cargo +nightly fuzz run request_json -- -max_total_time=600
+#   cargo +nightly fuzz run mqtt_packets -- -max_total_time=600
+#   cargo +nightly fuzz run mqtt_messages -- -max_total_time=600
+#
+# A crash is saved under artifacts/<target>/; `cargo +nightly fuzz run
+# <target> <file>` repeats it. The normal tests run a seeded random sample of
+# the same input (core.vcs).
+[package]
+name = "mitcad-vcs-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mitcad-vcs = { path = ".." }
+
+# A workspace of its own, outside the core's.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "lock_json"
+path = "fuzz_targets/lock_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request_json"
+path = "fuzz_targets/request_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mqtt_packets"
+path = "fuzz_targets/mqtt_packets.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mqtt_messages"
+path = "fuzz_targets/mqtt_messages.rs"
+test = false
+doc = false
+bench = false

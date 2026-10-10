@@ -49,6 +49,15 @@ MassProperties mass_properties(const geometry::Shape& shape) {
   return result;
 }
 
+MassProperties fixed_point_properties(const geometry::Shape& shape) {
+  const geometry::MassProperties props = geometry::fixed_point_properties(shape);
+  MassProperties result;
+  result.volume = props.volume;
+  result.area = props.area;
+  result.center = xyz(props.center);
+  return result;
+}
+
 BoundingBox bounding_box(const geometry::Shape& shape) {
   const geometry::BoundingBox box = geometry::bounding_box(shape);
   BoundingBox result;

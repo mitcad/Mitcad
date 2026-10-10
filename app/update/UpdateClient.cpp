@@ -199,6 +199,8 @@ void UpdateClient::onFinished(QNetworkReply* reply, Step step) {
   const QString why = reply->property(kWhy).toString();
   if (reply->error() != QNetworkReply::NoError || !why.isEmpty()) {
     if (step == Step::Download) {
+      qInfo().noquote()
+          << QStringLiteral("Update download stopped after %1 of %2 bytes").arg(m_file.pos()).arg(m_expected);
       m_file.close();
       m_file.remove();
     }

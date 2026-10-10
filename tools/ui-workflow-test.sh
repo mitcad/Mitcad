@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
+# check-all sources: app/sketch app/commands
 # The basic modelling workflow through the real UI: sketch a rectangle,
 # extrude it (the sketch hides; deleting the extrusion shows it again,
 # mitcad#7), fillet the edges of a picked face, sketch a circle, undo.

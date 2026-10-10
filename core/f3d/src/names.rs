@@ -32,6 +32,8 @@ use crate::brep::{self, Curve, P3, Surface};
 use crate::convert::{self, Options};
 use crate::design::ir::EntityName;
 
+mod topology;
+
 /// A name on an entity of a blob.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AsmName {
@@ -184,6 +186,8 @@ pub struct NamedEdge {
     pub reversed: Vec<bool>,
     /// The vertex entities at its start and end.
     pub vertices: [Option<usize>; 2],
+    /// Its own names, where the blob gives it some (mitcad#96).
+    pub names: Vec<AsmName>,
 }
 
 /// A body of a history state.
@@ -210,6 +214,10 @@ pub struct EdgeGeometry {
     pub length: f64,
     pub start: P3,
     pub end: P3,
+    /// The unit tangent at `mid` along the edge's own direction (from its
+    /// start vertex to its end vertex: the face whose coedge is not
+    /// reversed lies on its left, seen against the face's normal).
+    pub direction: P3,
 }
 
 /// A cylindrical face's geometry in millimetres, in its component's
@@ -338,6 +346,7 @@ impl<'a> NamedState<'a> {
                             faces: Vec::new(),
                             reversed: Vec::new(),
                             vertices,
+                            names: w.names(edge),
                         });
                         self.edges.len() - 1
                     });
@@ -385,6 +394,24 @@ impl<'a> NamedState<'a> {
         if flip { [b, a] } else { [a, b] }
     }
 
+    /// Ordered faces around the edge's endpoints, for diagnostics (mitcad#106).
+    ///
+    /// `edge` and `face` index [`Self::edges`] and [`Self::faces`]. Endpoints
+    /// follow the coedge on `face`; each cycle starts with `face`, then the
+    /// other face along the edge, then the remaining incident faces. Order
+    /// follows partner and loop links, without a geometric angle sort.
+    /// Boundaries, seams, nonmanifold or incomplete vertex fans fail.
+    ///
+    /// This proves a topological order only. Its relationship to opaque
+    /// recipe tails is unverified and must not decide an edge match.
+    pub fn edge_endpoint_face_cycles(
+        &self,
+        edge: usize,
+        face: usize,
+    ) -> Result<[Vec<usize>; 2], String> {
+        topology::endpoint_face_cycles(self, edge, face)
+    }
+
     /// The faces at a vertex: those of the edges that end at it.
     fn faces_at(&self, vertex: Option<usize>) -> HashSet<usize> {
         let Some(v) = vertex else {
@@ -397,11 +424,49 @@ impl<'a> NamedState<'a> {
             .collect()
     }
 
-    /// The edge an edge recipe names (index into [`Self::edges`]): along
-    /// faces named by its first two entities; when several are, the one
-    /// whose ends touch faces named by the others. `Err` says why there is
+    /// The edges an edge recipe names (indices into [`Self::edges`], in
+    /// their order; one, unless the names fit several equally): along
+    /// faces named by its first two entities; when several are, those whose
+    /// ends touch faces named by the others most. `Err` says why there is
     /// none.
+    ///
+    /// A first entity named with a negative tag is the edge itself, and the
+    /// faces follow it (mitcad#96: `[edge, face, face, end faces...]`):
+    /// the edge with that name when the blob names its edges, else by the
+    /// faces after it.
+    pub fn edges_fitting(&self, entities: &[Vec<EntityName>]) -> Result<Vec<usize>, String> {
+        if let Some((own, faces)) = entities.split_first()
+            && own.iter().any(|n| n.tag.starts_with('-'))
+        {
+            let named: HashSet<usize> = (0..self.edges.len())
+                .filter(|&i| {
+                    let e = &self.edges[i];
+                    own.iter().any(|n| e.names.iter().any(|m| m.is(n)))
+                })
+                .collect();
+            return self
+                .edges_between(faces, (!named.is_empty()).then_some(&named))
+                .or_else(|e| self.edges_between(faces, None).map_err(|_| e));
+        }
+        self.edges_between(entities, None)
+    }
+
+    /// The edge an edge recipe names, as [`Self::edges_fitting`] when one
+    /// fits.
     pub fn find_edge(&self, entities: &[Vec<EntityName>]) -> Result<usize, String> {
+        match self.edges_fitting(entities)?[..] {
+            [i] => Ok(i),
+            ref top => Err(format!("{} edges fit the names", top.len())),
+        }
+    }
+
+    /// The edges between the faces the first two entities name (of
+    /// `among`, when given), as [`Self::edges_fitting`].
+    fn edges_between(
+        &self,
+        entities: &[Vec<EntityName>],
+        among: Option<&HashSet<usize>>,
+    ) -> Result<Vec<usize>, String> {
         if entities.len() < 2 {
             return Err("the recipe names fewer than two faces".to_owned());
         }
@@ -416,11 +481,12 @@ impl<'a> NamedState<'a> {
                 f.len() == 2
                     && ((a.contains(&f[0]) && b.contains(&f[1]))
                         || (b.contains(&f[0]) && a.contains(&f[1])))
+                    && among.is_none_or(|s| s.contains(&i))
             })
             .collect();
         match along.len() {
             0 => return Err("no edge between the faces named".to_owned()),
-            1 => return Ok(along[0]),
+            1 => return Ok(along),
             _ => {}
         }
         // Several: the faces at the ends, the third entity's at the edge's
@@ -445,12 +511,19 @@ impl<'a> NamedState<'a> {
             )
         };
         let best = along.iter().map(|&i| score(i)).max().unwrap_or((0, 0));
-        let top: Vec<usize> = along.into_iter().filter(|&i| score(i) == best).collect();
-        if top.len() == 1 {
-            Ok(top[0])
-        } else {
-            Err(format!("{} edges fit the names", top.len()))
-        }
+        Ok(along.into_iter().filter(|&i| score(i) == best).collect())
+    }
+
+    /// The edges of a face (indices into [`Self::edges`]) between it and
+    /// another face: those a fillet of the face rounds (mitcad#96), no
+    /// seams.
+    pub fn edges_of_face(&self, face: usize) -> Vec<usize> {
+        (0..self.edges.len())
+            .filter(|&i| {
+                let f = &self.edges[i].faces;
+                f.len() == 2 && f.contains(&face)
+            })
+            .collect()
     }
 
     /// The face a face recipe names (index into [`Self::faces`]): one named
@@ -678,8 +751,8 @@ impl<'a> NamedState<'a> {
     pub fn edge(&self, index: usize) -> Result<EdgeGeometry, String> {
         let e = &self.edges[index];
         let body = self.bodies[e.body].record;
-        let (curve, t, transform) =
-            convert::edge_curve(self.file, body, e.entity, &Options::default(), self.view)
+        let (curve, t, transform, along) =
+            convert::edge_curve_along(self.file, body, e.entity, &Options::default(), self.view)
                 .map_err(|err| err.0)?;
         let apply = |p: P3| match &transform {
             Some(tr) => brep::add(
@@ -711,11 +784,20 @@ impl<'a> NamedState<'a> {
                     sum
                 }
             };
+        let m = 0.5 * (t[0] + t[1]);
+        let h = 1e-4 * (t[1] - t[0]);
+        let ahead = brep::sub(apply(curve.eval(m + h)), apply(curve.eval(m - h)));
+        let direction = brep::normalize(if along {
+            ahead
+        } else {
+            brep::scale(ahead, -1.0)
+        });
         Ok(EdgeGeometry {
-            mid: apply(curve.eval(0.5 * (t[0] + t[1]))),
+            mid: apply(curve.eval(m)),
             length,
             start: apply(curve.eval(t[0])),
             end: apply(curve.eval(t[1])),
+            direction,
         })
     }
 }
@@ -764,6 +846,26 @@ mod tests {
         let [start, end] = state.ends(e, None);
         assert!(start.contains(&bottom[0]) && !start.contains(&top[0]));
         assert!(end.contains(&top[0]) && !end.contains(&bottom[0]));
+        assert!(brep::dist(g.direction, [0.0, 0.0, 1.0]) < 1e-9, "{g:?}");
+        // An edge named first by its own (negative) tag: the faces follow
+        // (the cube's edges carry no names of their own).
+        assert_eq!(
+            state.find_edge(&[
+                vec![n("-1029", &[416])],
+                vec![n("3", &[301])],
+                vec![n("4", &[301])],
+                vec![n("1", &[301])],
+            ]),
+            Ok(e)
+        );
+        // A face's edges to other faces.
+        assert_eq!(state.edges_of_face(bottom[0]).len(), 4);
+        assert!(
+            state
+                .edges_of_face(bottom[0])
+                .iter()
+                .all(|&i| state.edges[i].faces.len() == 2)
+        );
         // The body by its tag, and points on it.
         let b = state.find_body(&[vec![n("301", &[])]]).unwrap();
         assert_eq!(b, 0);
