@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <QAbstractScrollArea>
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -69,6 +70,23 @@ QString countText(const InputDef& input, int count) {
     return input.min > 0 ? QObject::tr("Select") : input.max == 1 ? QObject::tr("None") : QObject::tr("None (all)");
   }
   return QObject::tr("%1 selected").arg(count);
+}
+
+// Gives a value field the keyboard and selects its text. With native glass
+// the panel's card is a separate window that does not activate when shown
+// (GlassCard::setWindowed), so setFocus alone would leave the keys with the
+// window clicked last, e.g. the timeline card that opened the edit. The card
+// is activated first, but only if the active window belongs to the same main
+// window, so that a dialog or another application keeps the keyboard.
+void focusField(QLineEdit* edit) {
+  QWidget* window = edit->window();
+  const QWidget* active = QApplication::activeWindow();
+  if (active != nullptr && active != window && QApplication::activePopupWidget() == nullptr &&
+      GlassCard::hostWindow(active) == GlassCard::hostWindow(window)) {
+    window->activateWindow();
+  }
+  edit->setFocus();
+  edit->selectAll();
 }
 
 bool isShown(const InputDef& input, const CommandState& state) {
@@ -1551,8 +1569,7 @@ bool CommandPanel::focusFirstValue() {
   for (const Row* row : orderedRows()) {
     if (row->edit != nullptr && row->input->type == InputDef::Type::Value &&
         row->field->isVisibleTo(this)) {
-      row->edit->setFocus();
-      row->edit->selectAll();
+      focusField(row->edit);
       return true;
     }
   }
@@ -1564,8 +1581,7 @@ bool CommandPanel::focusValue(const QString& key) {
   if (row == nullptr || row->edit == nullptr || !row->field->isVisibleTo(this)) {
     return false;
   }
-  row->edit->setFocus();
-  row->edit->selectAll();
+  focusField(row->edit);
   return true;
 }
 
