@@ -42,6 +42,7 @@
 #include <QtLogging>
 
 #include "ComponentColors.hpp"
+#include "FeatureStatus.hpp"
 #include "TimelineSearch.hpp"
 #include "../framework/ChromeStyle.hpp"
 #include "../framework/Dialogs.hpp"
@@ -76,15 +77,21 @@ constexpr int kHeight = timeline::height;
 constexpr int kDragPixels = 6;
 constexpr int kRunMark = 8; // stands for a run of features the filter hides (mitcad#98)
 
-const QColor kErrorFill(0xfb, 0xd5, 0xd5);
+const QColor kErrorFill(0xf8, 0xc6, 0xc6);
 const QColor kErrorBorder(0xd0, 0x20, 0x20);
-const QColor kWarningFill(0xff, 0xf1, 0xc2);
-const QColor kWarningBorder(0xd0, 0xa0, 0x00);
+const QColor kWarningFill(0xff, 0xec, 0xb0);
+const QColor kWarningBorder(0xa8, 0x7d, 0x00); // at least 3:1 on the light strip (mitcad#961)
+const QColor kWarningTint(0xf2, 0xb2, 0x00);   // the Floating light theme's warning fill, tinted
 const QColor kHoverFill(0xe9, 0xf1, 0xfc);
 const QColor kMarkerColor(0x2b, 0x3a, 0x4a);
-// The same on a dark palette (fills that the light ones would glare among).
-const QColor kErrorFillDark(0x5c, 0x2b, 0x30);
-const QColor kWarningFillDark(0x57, 0x4a, 0x20);
+// The same on a dark palette (fills that the light ones would glare among);
+// the error fill plainly red beside the strip's background (mitcad#961).
+const QColor kErrorFillDark(0x86, 0x2c, 0x34);
+const QColor kWarningFillDark(0x6e, 0x5a, 0x1a);
+// The status rings brighter on a dark palette, plain beside the fills and the
+// selection's ring (mitcad#961).
+const QColor kErrorBorderDark(0xff, 0x5a, 0x5a);
+const QColor kWarningBorderDark(0xf2, 0xc2, 0x30);
 const QColor kHoverFillDark(0x34, 0x3c, 0x48);
 const QColor kMarkerColorDark(0xc8, 0xd0, 0xda); // on a dark theme's background (mitcad#14)
 const QColor kMarkerHandle(0xe0, 0x7b, 0x1a);
@@ -110,8 +117,8 @@ StripColors stripColors(const QPalette& palette) {
     const QColor accent = actionColor(palette);
     QColor selected = accent;
     selected.setAlphaF(dark ? 0.30f : 0.18f);
-    return {dark ? kErrorFillDark : kErrorFill,     kErrorBorder,
-            dark ? kWarningFillDark : kWarningFill, kWarningBorder,
+    return {dark ? kErrorFillDark : kErrorFill,     dark ? kErrorBorderDark : kErrorBorder,
+            dark ? kWarningFillDark : kWarningFill, dark ? kWarningBorderDark : kWarningBorder,
             selected,                               accent,
             dark ? kHoverFillDark : kHoverFill,     dark ? kMarkerColorDark : kMarkerColor,
             kFoundBorder,                           accent};
@@ -122,11 +129,26 @@ StripColors stripColors(const QPalette& palette) {
   };
   const QColor text = palette.color(QPalette::WindowText);
   const QColor accent = accentColor(palette);
-  return {tint(errorColor(palette), 0.20),  errorColor(palette),
-          tint(warningColor(palette), 0.22), warningColor(palette),
-          tint(accent, 0.24),                accent,
-          tint(text, 0.09),                  text,
+  // The status fills stronger on a dark card, where a faint tint vanishes;
+  // on a light one the warning amber as Docked, not the text's brown
+  // (mitcad#961).
+  return {tint(errorColor(palette), dark ? 0.40 : 0.24),  errorColor(palette),
+          dark ? tint(warningColor(palette), 0.36) : tint(kWarningTint, 0.30),
+          dark ? warningColor(palette) : kWarningBorder,
+          tint(accent, 0.24),                              accent,
+          tint(text, 0.09),                                text,
           kFoundBorder};
+}
+
+// The cells' colours (FeatureStatus.hpp): the pointer's ring on a failed or
+// warned cell the text colour at 80 %, the strip's background around the status
+// badge.
+timeline::CellColors cellColors(const StripColors& strip, const QPalette& palette) {
+  QColor hoverRing = palette.color(QPalette::WindowText);
+  hoverRing.setAlphaF(0.8f);
+  return {strip.errorFill,    strip.errorBorder,    strip.warningFill, strip.warningBorder,
+          strip.selectedFill, strip.selectedBorder, strip.hoverFill,   strip.found,
+          hoverRing,          palette.color(QPalette::Window)};
 }
 
 // The colours that follow the theme (mitcad#14): a dark theme's palette
@@ -513,6 +535,8 @@ protected:
       }
     }
     const StripColors colors = stripColors(palette());
+    const timeline::CellColors cells = cellColors(colors, palette());
+    QHash<QString, QString> cellLines; // the painted state of cells with a status (mitcad#961)
     for (int i = 0; i < count(); ++i) {
       if (hidden(i)) {
         continue;
@@ -522,48 +546,27 @@ protected:
       const QRectF rect = QRectF(cell(i)).adjusted(0.5, 0.5, -0.5, -0.5);
       const bool head = isHead(i);
       // A folded group shows the worst of its features.
-      bool failed = false;
-      bool warned = false;
-      bool noted = false; // an import note on a feature that is not built (mitcad#170)
+      timeline::CellState state;
       bool off = true;
-      bool found = false; // a match of the search (mitcad#179)
       const int last = head ? m_groups[item.group].last : i;
       for (int k = i; k <= last; ++k) {
         const DocumentSnapshot::Feature& member = m_items[k].feature;
-        failed = failed || member.status == QStringLiteral("error");
-        warned = warned || member.status == QStringLiteral("warning");
-        noted = noted || !member.importNote.isEmpty();
+        state.state = std::max(state.state, featureState(member.status));
+        // An import note on a feature that is not built (mitcad#170).
+        state.noted = state.noted || !member.importNote.isEmpty();
         off = off && (member.suppressed || k >= m_marker);
-        found = found || m_found.contains(member.uid);
+        // A match of the search (mitcad#179).
+        state.found = state.found || m_found.contains(member.uid);
       }
-      const bool selected = run.contains(feature.uid);
-      QColor fill = Qt::transparent;
-      QColor border = Qt::transparent;
-      if (failed) {
-        fill = colors.errorFill;
-        border = colors.errorBorder;
-      } else if (warned) {
-        fill = colors.warningFill;
-        border = colors.warningBorder;
-      } else if (noted) {
-        // A placeholder of an item the import skipped: suppressed, with a
-        // yellow outline.
-        border = colors.warningBorder;
+      state.selected = run.contains(feature.uid);
+      state.hovered = i == m_hover;
+      state.rolledBack = off;
+      // The status ring stays inside the selection's (mitcad#961).
+      const timeline::CellLook look = timeline::cellLook(state, cells);
+      timeline::paintCellFrame(painter, QRectF(cell(i)), look);
+      if (state.state != FeatureState::Ok || state.noted) {
+        cellLines.insert(head ? m_groups[item.group].name : feature.name, timeline::describeCell(state, look));
       }
-      if (selected) {
-        fill = failed || warned ? fill : colors.selectedFill;
-        border = colors.selectedBorder;
-      } else {
-        if (found) {
-          border = colors.found;
-        }
-        if (i == m_hover && !failed && !warned) {
-          fill = colors.hoverFill;
-        }
-      }
-      painter.setPen(QPen(border, selected || found ? 2.0 : 1.2));
-      painter.setBrush(fill);
-      painter.drawRoundedRect(rect, 4, 4);
       if (item.colour >= 0) {
         const QColor colour = componentColor(item.colour);
         painter.setPen(Qt::NoPen);
@@ -579,14 +582,24 @@ protected:
       const QPixmap pixmap = icon.pixmap(QSize(kIcon, kIcon), devicePixelRatioF());
       painter.drawPixmap(cell(i).left() + (kItem - kIcon) / 2, kTop + (kItem - kIcon) / 2, pixmap);
       painter.setOpacity(1.0);
-      if (head) {
-        continue;
-      }
-      if (feature.suppressed) {
+      if (!head && feature.suppressed) {
         painter.setPen(QPen(strikeColor(palette()), 1.6));
         painter.drawLine(rect.bottomLeft() + QPointF(4, -4), rect.topRight() + QPointF(-4, 4));
       }
+      // The status badge over everything, whatever the cell's state
+      // (mitcad#961): a folded group's when one of its features failed.
+      if (look.badge) {
+        timeline::paintStatusBadge(painter, QRectF(cell(i)), state.state, cells.halo);
+      }
     }
+    // The painted state of the cells with a status, for UI tests: logged
+    // when it changes (mitcad#961).
+    for (auto line = cellLines.cbegin(); line != cellLines.cend(); ++line) {
+      if (m_loggedCells.value(line.key()) != line.value()) {
+        qDebug().noquote() << QStringLiteral("Timeline cell %1: %2").arg(line.key(), line.value());
+      }
+    }
+    m_loggedCells = std::move(cellLines);
     // A run of features the filter hides (mitcad#98): a dotted bar.
     for (const int at : m_runs) {
       painter.setPen(Qt::NoPen);
@@ -952,6 +965,7 @@ private:
   bool m_dropAllowed = true;
   QHash<int, QString> m_reorder; // index: why not (empty: allowed)
   QString m_loggedTip;
+  QHash<QString, QString> m_loggedCells; // name: the painted state last logged (mitcad#961)
 };
 
 TimelineWidget::TimelineWidget(const CommandContext& model, QWidget* parent)

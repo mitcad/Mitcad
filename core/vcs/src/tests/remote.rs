@@ -1057,18 +1057,22 @@ fn credentials_never_reach_what_is_shown() {
     .unwrap();
     let info = run(&repo, json!({"cmd": "remote_info"}));
     assert_eq!(info["url"], "http://***@127.0.0.1:1/x.git");
+    // The configured address is checked like a typed one (mitcad#920):
+    // git does not fetch from it.
     let fetched = repo.command(r#"{"cmd": "fetch"}"#).unwrap();
     let answer: Value = serde_json::from_str(&fetched).unwrap();
-    assert_eq!(error_class(&answer), "network", "{answer}");
+    assert_eq!(error_class(&answer), "invalid_url", "{answer}");
     assert!(!fetched.contains("s3cret"), "{fetched}");
     let state = fs::read_to_string(repo.root().join(".mitcad/local/remote.json")).unwrap();
     assert!(!state.contains("s3cret"), "{state}");
+    assert!(state.contains("invalid_url"), "{state}");
     let error = repo
         .command_text(r#"{"cmd": "fetch"}"#)
         .unwrap_err()
         .to_string();
     assert!(
-        error.starts_with("Fetching from origin failed: the server cannot be reached"),
+        error.starts_with("The remote origin is not used: 'http://***@127.0.0.1:1/x.git'"),
         "{error}"
     );
+    assert!(error.contains("holds credentials"), "{error}");
 }

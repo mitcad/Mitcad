@@ -274,6 +274,13 @@ pub mod place_at;
 pub use place_at::{PlaceAt, Placed};
 // Clearance holes and head recesses by screw size (mitcad#903).
 pub mod hole_sizes;
+// Feature inputs drawn where they were: a Fillet's or Chamfer's picked
+// edges kept with its result (mitcad#957).
+pub mod inputs;
+pub use inputs::FeatureInputs;
+// What a Join touches in child occurrences when it touches none of its
+// participants (mitcad#958).
+mod join_elsewhere;
 
 use crate::assembly::Assembly;
 use crate::datum::Datum;
@@ -640,6 +647,9 @@ pub struct FeatureOutput<S> {
     /// part), as they were before the thread (mitcad#436, mitcad#628): the
     /// threads query lists the thread from them.
     pub threaded_walls: Vec<hole::ThreadedWall>,
+    /// What the feature picked, drawn where it was (a Fillet's or a
+    /// Chamfer's edges, mitcad#957); None when the kernel gave nothing.
+    pub inputs: Option<FeatureInputs>,
 }
 
 impl<S> Default for FeatureOutput<S> {
@@ -656,6 +666,7 @@ impl<S> Default for FeatureOutput<S> {
             mounts: BTreeMap::new(),
             measured: Vec::new(),
             threaded_walls: Vec::new(),
+            inputs: None,
         }
     }
 }

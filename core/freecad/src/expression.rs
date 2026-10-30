@@ -27,6 +27,11 @@
 //!
 //! The units read are lengths and angles (FreeCAD's other quantities are
 //! names a reader cannot resolve).
+//!
+//! An expression nests at most [`MAX_DEPTH`] levels deep (parentheses,
+//! signs, operators in a chain, conditionals, units in parentheses); a
+//! deeper one is an error, so that a hostile file cannot overflow the
+//! stack of the parser or of the code walking its tree.
 
 use std::fmt;
 
@@ -361,13 +366,44 @@ fn lex(text: &str) -> Result<Vec<Token>, ParseError> {
     Ok(out)
 }
 
+/// How deep an expression may nest. Every nesting level counts: each
+/// parenthesis (three levels: the conditional, the sign and the primary
+/// inside it), each sign, each operator of a chain (`1+1+1` is a tree two
+/// deep), each conditional and each unit in parentheses. The expressions
+/// FreeCAD writes nest a few levels (the deepest in the test corpora have
+/// two parentheses and four operators); 256 keeps the parser's recursion
+/// and every walk of the tree well within a thread's stack.
+pub const MAX_DEPTH: usize = 256;
+
 struct Parser {
     tokens: Vec<Token>,
     at: usize,
     len: usize,
+    /// The nesting levels open now (see [`MAX_DEPTH`]).
+    depth: usize,
 }
 
 impl Parser {
+    /// Opens a nesting level; an error past [`MAX_DEPTH`].
+    fn enter(&mut self) -> Result<(), ParseError> {
+        if self.depth >= MAX_DEPTH {
+            return error("the expression nests too deep", self.offset());
+        }
+        self.depth += 1;
+        Ok(())
+    }
+
+    /// Runs `f` one nesting level deeper.
+    fn nested<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        self.enter()?;
+        let out = f(self);
+        self.depth -= 1;
+        out
+    }
+
     fn peek(&self) -> Option<&Tok> {
         self.tokens.get(self.at).map(|t| &t.tok)
     }
@@ -398,14 +434,21 @@ impl Parser {
     }
 
     fn conditional(&mut self) -> Result<Expr, ParseError> {
-        let mut e = self.comparison()?;
-        while self.eat("?") {
-            let then = self.conditional()?;
-            self.expect(":")?;
-            let otherwise = self.comparison()?;
-            e = Expr::Conditional(Box::new(e), Box::new(then), Box::new(otherwise));
-        }
-        Ok(e)
+        self.nested(|p| {
+            let mut e = p.comparison()?;
+            // Each conditional of a chain nests the tree one level deeper.
+            let mut chained = 0;
+            while p.eat("?") {
+                p.enter()?;
+                chained += 1;
+                let then = p.conditional()?;
+                p.expect(":")?;
+                let otherwise = p.comparison()?;
+                e = Expr::Conditional(Box::new(e), Box::new(then), Box::new(otherwise));
+            }
+            p.depth -= chained;
+            Ok(e)
+        })
     }
 
     fn binary_level(
@@ -414,14 +457,19 @@ impl Parser {
         next: fn(&mut Self) -> Result<Expr, ParseError>,
     ) -> Result<Expr, ParseError> {
         let mut e = next(self)?;
+        // Each operator of a chain nests the tree one level deeper.
+        let mut chained = 0;
         'outer: loop {
             for (symbol, op) in ops {
                 if self.eat(symbol) {
+                    self.enter()?;
+                    chained += 1;
                     let right = next(self)?;
                     e = Expr::Binary(*op, Box::new(e), Box::new(right));
                     continue 'outer;
                 }
             }
+            self.depth -= chained;
             return Ok(e);
         }
     }
@@ -463,19 +511,21 @@ impl Parser {
     }
 
     fn unary(&mut self) -> Result<Expr, ParseError> {
-        if self.eat("-") {
-            return Ok(Expr::Negate(Box::new(self.unary()?)));
-        }
-        if self.eat("+") {
-            return Ok(Expr::Plus(Box::new(self.unary()?)));
-        }
-        let e = self.primary()?;
-        // A unit after a number (or a parenthesized expression).
-        if self.unit_ahead() {
-            let unit = self.unit()?;
-            return Ok(Expr::WithUnit(Box::new(e), unit));
-        }
-        Ok(e)
+        self.nested(|p| {
+            if p.eat("-") {
+                return Ok(Expr::Negate(Box::new(p.unary()?)));
+            }
+            if p.eat("+") {
+                return Ok(Expr::Plus(Box::new(p.unary()?)));
+            }
+            let e = p.primary()?;
+            // A unit after a number (or a parenthesized expression).
+            if p.unit_ahead() {
+                let unit = p.unit()?;
+                return Ok(Expr::WithUnit(Box::new(e), unit));
+            }
+            Ok(e)
+        })
     }
 
     /// Whether a unit comes next (a unit name not starting a reference or
@@ -518,13 +568,19 @@ impl Parser {
         let mut sign = 1;
         loop {
             if self.eat("(") {
-                let inner = self.unit()?;
+                let inner = self.nested(Self::unit)?;
                 self.expect(")")?;
-                let power = self.power_suffix();
-                factors.extend(inner.into_iter().map(|f| UnitFactor {
-                    name: f.name,
-                    power: sign * power * f.power,
-                }));
+                let power = sign * self.power_suffix();
+                for f in inner {
+                    // Powers of powers: `((mm^99)^99)^99` does not fit.
+                    let Some(power) = power.checked_mul(f.power) else {
+                        return error("a unit's power is out of range", self.offset());
+                    };
+                    factors.push(UnitFactor {
+                        name: f.name,
+                        power,
+                    });
+                }
             } else {
                 let name = match self.peek() {
                     Some(Tok::Ident(n)) | Some(Tok::Symbol(n)) => n.clone(),
@@ -554,6 +610,10 @@ impl Parser {
     }
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
+        self.nested(Self::primary_inner)
+    }
+
+    fn primary_inner(&mut self) -> Result<Expr, ParseError> {
         let at = self.offset();
         let Some(tok) = self.peek().cloned() else {
             return error("an expression ended early", at);
@@ -698,6 +758,7 @@ impl Expr {
             tokens,
             at: 0,
             len: text.len(),
+            depth: 0,
         };
         let e = parser.conditional()?;
         if parser.at < parser.tokens.len() {
@@ -996,6 +1057,66 @@ mod tests {
         assert!(Expr::parse("(1").is_err());
         assert!(Expr::parse("1 2").is_err());
         assert!(Expr::parse("<<open").is_err());
+    }
+
+    /// The depth of a parsed tree (by a walk of its own, with a stack).
+    fn tree_depth(e: &Expr) -> usize {
+        let mut deepest = 0;
+        let mut stack: Vec<(&Expr, usize)> = vec![(e, 1)];
+        while let Some((e, depth)) = stack.pop() {
+            deepest = deepest.max(depth);
+            match e {
+                Expr::WithUnit(a, _) | Expr::Negate(a) | Expr::Plus(a) => {
+                    stack.push((a.as_ref(), depth + 1));
+                }
+                Expr::Binary(_, a, b) => {
+                    stack.push((a.as_ref(), depth + 1));
+                    stack.push((b.as_ref(), depth + 1));
+                }
+                Expr::Conditional(c, a, b) => {
+                    stack.push((c.as_ref(), depth + 1));
+                    stack.push((a.as_ref(), depth + 1));
+                    stack.push((b.as_ref(), depth + 1));
+                }
+                Expr::Call(_, args) => stack.extend(args.iter().map(|a| (a, depth + 1))),
+                _ => {}
+            }
+        }
+        deepest
+    }
+
+    #[test]
+    fn hostile_nesting_is_an_error_not_a_stack_overflow() {
+        // Parentheses, signs, chains of operators and of conditionals,
+        // units in parentheses, far past any expression FreeCAD writes.
+        let open = Expr::parse(&"(".repeat(100_000)).unwrap_err();
+        assert_eq!(open.message, "the expression nests too deep");
+        let parens = format!("{}1{}", "(".repeat(50_000), ")".repeat(50_000));
+        assert!(Expr::parse(&parens).is_err());
+        assert!(Expr::parse(&format!("{}1", "-".repeat(400_000))).is_err());
+        assert!(Expr::parse(&format!("{}1", "+ ".repeat(1_000))).is_err());
+        assert!(Expr::parse(&format!("1{}", "+1".repeat(100_000))).is_err());
+        assert!(Expr::parse(&format!("1{}", "^2".repeat(1_000))).is_err());
+        assert!(Expr::parse(&format!("a{}", " ? 1 : 2".repeat(1_000))).is_err());
+        assert!(Expr::parse(&format!("a{}", " ? b".repeat(1_000))).is_err());
+        let calls = format!("{}1{}", "abs(".repeat(1_000), ")".repeat(1_000));
+        assert!(Expr::parse(&calls).is_err());
+        let units = format!("1 mm{}", "*(mm".repeat(1_000));
+        assert!(Expr::parse(&units).is_err());
+        // Powers of unit powers that do not fit an integer.
+        let powers = format!("1 {}mm{}", "mm*(".repeat(8), ")^99".repeat(8));
+        assert_eq!(
+            Expr::parse(&powers).unwrap_err().message,
+            "a unit's power is out of range"
+        );
+        // Ordinary nesting reads; the tree stays within the limit.
+        let fine = format!("{}1 mm{}", "(".repeat(20), ")".repeat(20));
+        assert!(Expr::parse(&fine).is_ok());
+        let sum = Expr::parse(&format!("1{}", " + 1".repeat(100))).unwrap();
+        assert_eq!(tree_depth(&sum), 101);
+        // A chain as long as the limit is refused (the tree would be
+        // deeper than it).
+        assert!(Expr::parse(&format!("1{}", "+1".repeat(MAX_DEPTH))).is_err());
     }
 
     #[test]

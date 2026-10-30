@@ -27,6 +27,7 @@
 #include "framework/Diagnostics.hpp"
 #include "framework/TestSync.hpp"
 #include "mitcad/geometry/import.hpp"
+#include "view/CameraHeight.hpp"
 #include "view/ViewCube.hpp"
 #include "view/ViewTessellation.hpp"
 #ifdef __APPLE__
@@ -2605,7 +2606,10 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
     }
     const Quantity_Color color = occtColor(highlight.color);
     int mode = AIS_WireFrame;
-    switch (highlight.item.kind) {
+    // A feature's inputs where they were (mitcad#957): lines, as the
+    // selected edges are drawn.
+    const SelectKind drawnAs = highlight.inputLines ? SelectKind::Edge : highlight.item.kind;
+    switch (drawnAs) {
     case SelectKind::Face:
     case SelectKind::Feature: // the faces it made (mitcad#28)
     case SelectKind::Profile:
@@ -4476,7 +4480,10 @@ void OcctViewer::setCamera(const CameraState& state) {
     // Square to the direction (mitcad#773): an up along it makes no view.
     end->SetUp(upAcross(end->Direction(), state.up.XYZ()));
     end->OrthogonalizeUp();
-    end->SetScale(state.height);
+    // The stored height is what the view shows (camera(): ViewDimensions);
+    // OCCT's scale is the shorter side, so a view taller than wide takes
+    // the height times its aspect (mitcad#959).
+    setVisibleHeight(*end, state.height);
     m_viewStep = "the camera's move";
     moveCamera(end);
   });
@@ -4590,10 +4597,12 @@ void OcctViewer::setNavigation(const NavigationSettings& settings) {
   m_navigation.panSpeed = sanitizeNavigationSpeed(settings.panSpeed);
   m_navigation.zoomSpeed = sanitizeNavigationSpeed(settings.zoomSpeed);
   m_navigation.trackpadSpeed = sanitizeNavigationSpeed(settings.trackpadSpeed);
+  m_navigation.spaceMouse.speed = sanitizeSpaceMouseSpeed(settings.spaceMouse.speed);
   m_panRemainder = {};
   bindGestures();
   SetOrbitAcceleration(float(m_navigation.orbitSpeed));
   SetLockOrbitZUp(settings.constrainedOrbit);
+  emit navigationChanged(); // the 3D mouse follows (mitcad#951)
 }
 
 // OCCT exposes orbit acceleration, but its mouse acceleration only affects
@@ -5246,6 +5255,10 @@ void OcctViewer::paintGL() {
     m_view->Invalidate();
     m_fitPending = false;
   }
+
+  // A 3D mouse moves the camera by the time since its last frame
+  // (mitcad#951, view/SpaceMouseView.cpp).
+  stepSpaceMouse();
 
   m_view->InvalidateImmediate();
   // An exception escaping a Qt event handler terminates the application, so

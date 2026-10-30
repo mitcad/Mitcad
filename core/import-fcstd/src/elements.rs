@@ -123,9 +123,24 @@ impl<K: Kernel> Importer<'_, '_, K> {
         (tip.object == object).then(|| owner(b)).flatten()
     }
 
+    /// Every Mitcad body holding an object's result: [`Self::body_of_object`]'s
+    /// first, then the others of a result of several solids (a pad FreeCAD
+    /// keeps as one shape of two solids, mitcad#541, mitcad#952).
+    fn bodies_of_object(&self, object: &str) -> Vec<BodyUid> {
+        let mut out: Vec<BodyUid> = self.body_of_object(object).into_iter().collect();
+        if let Some(made) = self.replay.results.get(object) {
+            for (body, _) in &made.bodies {
+                if !out.contains(body) && self.doc.body_shape(*body).is_some() {
+                    out.push(*body);
+                }
+            }
+        }
+        out
+    }
+
     /// The Mitcad names of an element (`Edge12`) of an object, in the body
-    /// holding its result now: one name, or the pieces of an edge FreeCAD
-    /// merged.
+    /// holding its result now (the one that has it, for a result of several
+    /// bodies): one name, or the pieces of an edge FreeCAD merged.
     pub(super) fn element_names(
         &mut self,
         object: &str,
@@ -133,8 +148,9 @@ impl<K: Kernel> Importer<'_, '_, K> {
     ) -> Result<(BodyUid, Vec<String>), String> {
         let (kind, index) =
             parse_element(element).ok_or_else(|| format!("{object}.{element}: not an element"))?;
-        let body = self
-            .body_of_object(object)
+        let bodies = self.bodies_of_object(object);
+        let body = *bodies
+            .first()
             .ok_or_else(|| format!("{object} has no body here"))?;
         let component = self
             .doc
@@ -144,48 +160,48 @@ impl<K: Kernel> Importer<'_, '_, K> {
             .stored_element(object, kind, index, component)
             .ok_or_else(|| format!("{object}.{element}: not in its stored shape"))?;
         let kernel = self.doc.kernel();
-        let now = self
-            .doc
-            .body_shape(body)
-            .ok_or_else(|| format!("{object}: its body is gone"))?
-            .clone();
-        // The same element now: at FreeCAD's index (a base feature of
-        // FreeCAD's shape keeps its order), else anywhere.
-        if let Ok(Some(e)) = kernel.indexed_element(&now, kind, index)
-            && let Some(name) = e.name
-            && same_curves(&e.curves, &stored)
-        {
-            return Ok((body, vec![name]));
-        }
-        if let Some(name) = find_same(kernel, &now, kind, &stored) {
-            return Ok((body, vec![name]));
-        }
-        // An element of an earlier state that later features changed (a
-        // face a pocket was cut into): its name right after the object,
-        // which carries through to the body now.
-        if let Some(made) = self.replay.results.get(object) {
-            for (_, shape) in &made.bodies {
-                if let Some(name) = find_same(kernel, shape, kind, &stored)
-                    && let Ok(parsed) = name.parse::<TopoName>()
-                    && kernel.curves_of(&now, &parsed).is_ok_and(|c| !c.is_empty())
-                {
-                    return Ok((body, vec![name]));
+        for body in bodies {
+            let Some(now) = self.doc.body_shape(body).cloned() else {
+                continue;
+            };
+            // The same element now: at FreeCAD's index (a base feature of
+            // FreeCAD's shape keeps its order), else anywhere.
+            if let Ok(Some(e)) = kernel.indexed_element(&now, kind, index)
+                && let Some(name) = e.name
+                && same_curves(&e.curves, &stored)
+            {
+                return Ok((body, vec![name]));
+            }
+            if let Some(name) = find_same(kernel, &now, kind, &stored) {
+                return Ok((body, vec![name]));
+            }
+            // An element of an earlier state that later features changed
+            // (a face a pocket was cut into): its name right after the
+            // object, which carries through to the body now.
+            if let Some(made) = self.replay.results.get(object) {
+                for (_, shape) in &made.bodies {
+                    if let Some(name) = find_same(kernel, shape, kind, &stored)
+                        && let Ok(parsed) = name.parse::<TopoName>()
+                        && kernel.curves_of(&now, &parsed).is_ok_and(|c| !c.is_empty())
+                    {
+                        return Ok((body, vec![name]));
+                    }
                 }
             }
-        }
-        // An edge FreeCAD merged: Mitcad's pieces along it.
-        if kind == ElementKind::Edge && stored.len() == 1 {
-            let pieces: Vec<String> = elements(kernel, &now, ElementKind::Edge)
-                .into_iter()
-                .filter(|(name, c)| {
-                    name.is_some()
-                        && c.len() == 1
-                        && key_points(&c[0]).iter().all(|p| on_curve(&stored[0], *p))
-                })
-                .filter_map(|(name, _)| name)
-                .collect();
-            if !pieces.is_empty() {
-                return Ok((body, by_face_pairs(kernel, &now, pieces)));
+            // An edge FreeCAD merged: Mitcad's pieces along it.
+            if kind == ElementKind::Edge && stored.len() == 1 {
+                let pieces: Vec<String> = elements(kernel, &now, ElementKind::Edge)
+                    .into_iter()
+                    .filter(|(name, c)| {
+                        name.is_some()
+                            && c.len() == 1
+                            && key_points(&c[0]).iter().all(|p| on_curve(&stored[0], *p))
+                    })
+                    .filter_map(|(name, _)| name)
+                    .collect();
+                if !pieces.is_empty() {
+                    return Ok((body, by_face_pairs(kernel, &now, pieces)));
+                }
             }
         }
         Err(format!("{object}.{element} was not found in the body"))
@@ -266,6 +282,32 @@ impl<K: Kernel> Importer<'_, '_, K> {
         Some(place.transform.after(&transform(&placement_of(object))))
     }
 
+    /// An origin's plane or axis that a link names as the origin's element
+    /// (FreeCAD 1.x attaches to `(Origin, XY_Plane013)`, the member's name,
+    /// or to its role `XY_Plane`; mitcad#955): that member's name. None for
+    /// other links.
+    pub(super) fn origin_member(&self, object: &str, element: &str) -> Option<String> {
+        let source = &self.sources[0];
+        let origin = source.object(object)?;
+        if origin.type_name != "App::Origin" || element.is_empty() {
+            return None;
+        }
+        let members: Vec<&str> = origin
+            .links("OriginFeatures")
+            .iter()
+            .map(|l| l.object.as_str())
+            .collect();
+        members
+            .iter()
+            .find(|name| **name == element)
+            .or_else(|| {
+                members
+                    .iter()
+                    .find(|name| source.object(name).and_then(|o| o.str("Role")) == Some(element))
+            })
+            .map(|name| (*name).to_owned())
+    }
+
     /// A plane reference for FreeCAD's plane references: an origin plane,
     /// a datum plane, a sketch (its plane, or the plane through its H or V
     /// axis along its normal), a planar face.
@@ -275,6 +317,15 @@ impl<K: Kernel> Importer<'_, '_, K> {
         component: ComponentUid,
     ) -> Result<Value, String> {
         let sub = link.subs.first().map_or("", sub_name);
+        // An origin's plane named as its element: that plane.
+        if let Some(plane) = self.origin_member(&link.object, sub) {
+            let whole = LinkRef {
+                object: plane,
+                subs: Vec::new(),
+                file: link.file.clone(),
+            };
+            return self.plane_ref(&whole, component);
+        }
         let o = self.sources[0]
             .object(&link.object)
             .cloned()
@@ -322,7 +373,20 @@ impl<K: Kernel> Importer<'_, '_, K> {
             return Ok(json!({"origin": p.translation, "normal": normal, "x_axis": x}));
         }
         if sub.starts_with("Face") {
-            let (body, face) = self.element_name(&o.name, sub)?;
+            let (body, face) = match self.element_name(&o.name, sub) {
+                Ok(found) => found,
+                // A face of a binder of a feature's result (mitcad#955):
+                // that feature's same face.
+                Err(why) => {
+                    let found = element_index(sub, "Face").and_then(|index| {
+                        self.binder_support_element(&o.name, ElementKind::Face, index)
+                    });
+                    let Some((support, index)) = found else {
+                        return Err(why);
+                    };
+                    self.element_name(&support, &format!("Face{}", index + 1))?
+                }
+            };
             return Ok(json!({"body": body.to_string(), "face": face}));
         }
         Err(format!(
@@ -461,28 +525,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let index = element_index(element, "Edge")?;
         let stored = self.stored_element(&sketch.name, ElementKind::Edge, index, component)?;
         let frame = self.sketch_frame(sketch, component).ok()?;
-        let size = 1.0
-            + stored
-                .iter()
-                .flat_map(key_points)
-                .map(norm)
-                .fold(0.0, f64::max);
-        let close = |a: [f64; 3], b: [f64; 3]| norm(sub(a, b)) <= SAME_GEOMETRY * size;
-        parsed
-            .geometry
-            .iter()
-            .enumerate()
-            .filter(|(_, g)| !g.construction)
-            .find(|(_, g)| {
-                let ends: Vec<[f64; 3]> = [PointPos::Start, PointPos::End, PointPos::Mid]
-                    .into_iter()
-                    .filter_map(|pos| g.curve.point(pos))
-                    .map(|p| frame.point(p))
-                    .collect();
-                let theirs: Vec<[f64; 3]> = stored.iter().flat_map(key_points).collect();
-                !ends.is_empty() && ends.iter().all(|p| theirs.iter().any(|q| close(*p, *q)))
-            })
-            .map(|(i, _)| i as i32)
+        geometry_along(&parsed, &frame, &stored)
     }
 
     /// A straight line of a sketch (`Edge<n>`, `Axis<n>`): a point on it and
@@ -544,6 +587,92 @@ pub(super) fn by_face_pairs<K: Kernel>(
         }
     }
     out
+}
+
+/// The geometry index of a sketch's curve (not construction) along model
+/// curves (an edge of the sketch's stored shape, or of a binder's copy of
+/// it, mitcad#952), the sketch's `frame` in their coordinates.
+pub(super) fn geometry_along(
+    parsed: &fc::Sketch,
+    frame: &SketchFrame,
+    stored: &[Curve3],
+) -> Option<i32> {
+    parsed
+        .geometry
+        .iter()
+        .position(|g| !g.construction && same_geometry(&g.curve, frame, stored))
+        .map(|i| i as i32)
+}
+
+/// The index of a sketch's defining external geometry (1.1: part of its
+/// shape) along model curves, as [`geometry_along`].
+pub(super) fn defining_external_along(
+    parsed: &fc::Sketch,
+    frame: &SketchFrame,
+    stored: &[Curve3],
+) -> Option<usize> {
+    parsed.external.iter().position(|g| {
+        g.as_ref()
+            .is_some_and(|g| g.defining && same_geometry(&g.curve, frame, stored))
+    })
+}
+
+/// Whether a sketch curve (in its `frame`) is the model curves of an edge:
+/// a line with the same ends, a circle of the same centre, radius and
+/// plane, an arc of those with the same ends (not a concentric one, nor
+/// another curve between the same points); another kind with its ends and
+/// centre among the edge's points.
+fn same_geometry(curve: &Curve, frame: &SketchFrame, stored: &[Curve3]) -> bool {
+    let size = 1.0
+        + stored
+            .iter()
+            .flat_map(key_points)
+            .map(norm)
+            .fold(0.0, f64::max);
+    let tol = SAME_GEOMETRY * size;
+    let close = |a: [f64; 3], b: [f64; 3]| norm(sub(a, b)) <= tol;
+    let at = |pos: PointPos| curve.point(pos).map(|p| frame.point(p));
+    let ends_at = |s: [f64; 3], e: [f64; 3]| match (at(PointPos::Start), at(PointPos::End)) {
+        (Some(a), Some(b)) => close(a, s) && close(b, e) || close(a, e) && close(b, s),
+        _ => false,
+    };
+    match (curve, stored) {
+        (Curve::Line { .. }, [Curve3::Line { start, end }]) => ends_at(*start, *end),
+        (
+            Curve::Circle { radius, .. } | Curve::Arc { radius, .. },
+            [
+                conic @ Curve3::Conic {
+                    center,
+                    normal,
+                    major,
+                    minor,
+                    ..
+                },
+            ],
+        ) => {
+            let round = at(PointPos::Mid).is_some_and(|c| close(c, *center))
+                && (major - radius).abs() <= tol
+                && (minor - radius).abs() <= tol
+                && unit(*normal).is_some_and(|n| norm(cross(n, frame.normal())) <= 1e-9);
+            round
+                && (matches!(curve, Curve::Circle { .. })
+                    || curve_ends(conic).is_some_and(|(s, e)| ends_at(s, e)))
+        }
+        // A point is no edge, even at one's end (mitcad#955: a sketch
+        // point at a line's end was taken for the line, which has no curve).
+        (
+            Curve::Line { .. } | Curve::Circle { .. } | Curve::Arc { .. } | Curve::Point { .. },
+            _,
+        ) => false,
+        _ => {
+            let theirs: Vec<[f64; 3]> = stored.iter().flat_map(key_points).collect();
+            let ends: Vec<[f64; 3]> = [PointPos::Start, PointPos::End, PointPos::Mid]
+                .into_iter()
+                .filter_map(at)
+                .collect();
+            !ends.is_empty() && ends.iter().all(|p| theirs.iter().any(|q| close(*p, *q)))
+        }
+    }
 }
 
 /// Points along a model curve (its ends, middle and centre; a spline's

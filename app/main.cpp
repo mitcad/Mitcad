@@ -28,6 +28,7 @@
 #include "framework/Diagnostics.hpp"
 #include "framework/DisplayMeshes.hpp"
 #include "framework/Numbers.hpp"
+#include "framework/ProcessEnd.hpp"
 #include "framework/Restart.hpp"
 #include "framework/TestDriver.hpp"
 #include "framework/TestSync.hpp"
@@ -40,7 +41,11 @@
 #include "report/CrashHandler.hpp"
 #include "report/ReportCenter.hpp"
 
-int main(int argc, char* argv[]) {
+namespace {
+
+// The application, or its import worker; main ends the process with what
+// this returns (framework/ProcessEnd.hpp).
+int runApplication(int argc, char* argv[]) {
   // Crash reports (mitcad#62), in the application and its import worker.
   const bool importWorker = mitcad::isImportWorker(argc, argv);
   mitcad::crash::install(importWorker ? "import-worker" : "app", MITCAD_VERSION);
@@ -470,4 +475,15 @@ int main(int argc, char* argv[]) {
   // meshes and stores them).
   mitcad::finishDisplayMeshWrites();
   return status;
+}
+
+} // namespace
+
+int main(int argc, char* argv[]) {
+  // The window, the document session and the autosave are gone here, and
+  // QApplication's post routines have run (a staged restart or update was
+  // started); a face of a cancelled display meshing that never ended, or
+  // an import call the watchdog gave up, must not see the static
+  // destructors (mitcad#936).
+  return mitcad::endProcess(runApplication(argc, argv));
 }

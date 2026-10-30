@@ -37,7 +37,9 @@ pub enum RevolveExtent<P = ParamId> {
     Full,
     /// `angle` to each side (a symmetric revolve measures per side).
     Symmetric { angle: P },
-    /// `angle1` the positive way, `angle2` the other.
+    /// `angle1` the positive way, `angle2` the other; a negative `angle2`
+    /// ends side two past the profile (mitcad#955): the turn runs from
+    /// `-angle2` to `angle1`, the profile turned there first.
     TwoSides { angle1: P, angle2: P },
     /// The positive way up to an object: its first face reached, or
     /// through a body (`through`, mitcad#539) to its last face, where the
@@ -233,9 +235,11 @@ fn check_angles(extent: &RevolveExtent, value: &dyn Fn(ParamId) -> f64) -> Resul
         }
         RevolveExtent::TwoSides { angle1, angle2 } => {
             let (a, b) = (value(*angle1), value(*angle2));
-            if !(a >= 0.0 && b >= 0.0 && a + b > 0.0) {
+            // A negative second angle ends side two past the profile
+            // (mitcad#955): the turn runs from -b to a.
+            if !(a >= 0.0 && b.is_finite() && a + b > 0.0) {
                 return Err(format!(
-                    "the revolve angles must not be negative and add up to more than zero, got {a} and {b}"
+                    "the first revolve angle must not be negative and the two must add up to more than zero, got {a} and {b}"
                 ));
             }
             a + b
@@ -282,6 +286,7 @@ impl<K: Kernel> Evaluate<K> for RevolveDef {
                 .map_or(f64::NAN, |(_, v)| *v)
         };
         check_angles(&self.extent, &value)?;
+        let mut frame = sketch.frame;
         let (mut angle1, mut angle2, mut target) = (0.0, None, None);
         match &self.extent {
             RevolveExtent::Angle { angle } => {
@@ -309,6 +314,13 @@ impl<K: Kernel> Evaluate<K> for RevolveDef {
                     angle2 = None;
                 } else if value(*two) == 0.0 {
                     angle2 = None;
+                } else if value(*two) < 0.0 {
+                    // Side two ending past the profile (mitcad#955): the
+                    // profile turned to where the turn starts, then one
+                    // side.
+                    frame = turned_frame(frame, &axis, -value(*two))?;
+                    angle1 += value(*two);
+                    angle2 = None;
                 }
             }
             RevolveExtent::ToObject { object } => {
@@ -316,11 +328,11 @@ impl<K: Kernel> Evaluate<K> for RevolveDef {
             }
         }
         if self.surface {
-            return self.surface_output(ctx, sketch.frame, &regions, axis, angle1, angle2, target);
+            return self.surface_output(ctx, frame, &regions, axis, angle1, angle2, target);
         }
         let spec = RevolveSpec {
             feature: ctx.uid,
-            frame: sketch.frame,
+            frame,
             regions: &regions,
             axis,
             angle1,
@@ -465,6 +477,12 @@ impl RevolveDef {
             RevolveExtent::Symmetric { angle } => (value(*angle), Some(value(*angle))),
             RevolveExtent::TwoSides { angle1, angle2 } => {
                 let (a, b) = (value(*angle1), value(*angle2));
+                if b < 0.0 {
+                    return Err(
+                        "a revolution of a body face turns from the face: the second angle must not be negative"
+                            .to_owned(),
+                    );
+                }
                 if a == 0.0 {
                     reverse(&mut axis);
                     (b, None)
@@ -489,4 +507,20 @@ impl RevolveDef {
             .revolve_face(&spec)
             .map_err(super::face_refs::kernel_error)
     }
+}
+
+/// The sketch frame turned by `angle` about the axis (right-handed): a
+/// turn that starts past the profile (two sides with a negative second
+/// angle, mitcad#955) turns the profile there first.
+fn turned_frame(frame: SketchFrame, axis: &Axis, angle: f64) -> Result<SketchFrame, String> {
+    use crate::datum::{add, rotate, sub, unit};
+    let d = unit(axis.direction).ok_or("the revolve axis has no direction")?;
+    Ok(SketchFrame {
+        origin: add(
+            axis.origin,
+            rotate(sub(frame.origin, axis.origin), d, angle),
+        ),
+        x_axis: rotate(frame.x_axis, d, angle),
+        y_axis: rotate(frame.y_axis, d, angle),
+    })
 }

@@ -325,8 +325,18 @@ impl<K: Kernel> Evaluate<K> for ChamferDef {
         }
         let uid = ctx.uid;
         let bevelled = found.apply(ctx, uid, &shape, sizes)?;
+        // The picked edges where they were, for the timeline (mitcad#957).
+        let inputs = super::inputs::picked_edges(
+            ctx.kernel,
+            &shape,
+            found
+                .sets
+                .iter()
+                .map(|set| (set.edges.as_slice(), set.faces.as_slice())),
+        );
         Ok(FeatureOutput {
             changes: vec![BodyChange::Set(self.body, bevelled)],
+            inputs,
             ..FeatureOutput::default()
         })
     }

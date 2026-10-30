@@ -432,6 +432,9 @@ function Ui-StartApp([string]$Name, [string[]]$Arguments = @(), [switch]$Recover
   # The first dimension of a drawn sketch scales nothing (mitcad#860), as in
   # the Linux tests.
   $env:MITCAD_SKETCH_FIRST_DIMENSION_SCALE = '0'
+  # No question whether to activate a picked face's component (mitcad#960),
+  # as in the Linux tests; a test of the question sets it to 1 first.
+  if (-not $env:MITCAD_ASK_ACTIVATE_COMPONENT) { $env:MITCAD_ASK_ACTIVATE_COMPONENT = '0' }
   $env:MITCAD_AUTOSAVE_DIR = $script:UiAutosave
   # Crash reports of the test's own (mitcad#62): none offered from the user's.
   $env:MITCAD_CRASH_DIR = Join-Path $script:UiOut 'crashes'

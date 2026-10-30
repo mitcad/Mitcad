@@ -21,6 +21,11 @@ bridge:
     Finish Sketch;
   - document_save to the design's own path;
   - ui_log: the commands' lines, and since a sequence number.
+Before the flow (mitcad#935): the bridge authenticates while eight idle
+connections that never authenticate are held open (each opened again when
+the application closes it), and 200 ui_select calls with a 7 MiB owner and
+50 model_command calls with a 7 MiB command name leave the application's
+memory under 50 MB more (Linux) and every ui_log line under 4 KiB.
 run_flow() is shared with the macOS test (tools/ui-macos-mcp-test.py).
 Only the standard library is used.
 """
@@ -30,6 +35,8 @@ import json
 import os
 from pathlib import Path
 import queue
+import select
+import socket
 import struct
 import subprocess
 import sys
@@ -192,6 +199,19 @@ class Bridge:
         if params is not None:
             message["params"] = params
         self.send(message)
+        return self.answer()
+
+    def request_encoded(self, method, params):
+        """request() with its params already encoded as JSON bytes (a large
+        input sent many times)."""
+        self.next_id += 1
+        self.process.stdin.write(b'{"jsonrpc":"2.0","id":%d,"method":"%s","params":'
+                                 % (self.next_id, method.encode("ascii")) + params + b"}\n")
+        self.process.stdin.flush()
+        return self.answer()
+
+    def answer(self):
+        """The answer to the request sent last."""
         # Empty lines and notifications (a method, no id) are skipped;
         # anything else must be the answer with this id.
         for _ in range(1000):
@@ -241,6 +261,121 @@ class Bridge:
         self.reader.join(timeout=5)
         self.process.stdout.close()
         self.err.close()
+
+
+class IdleConnections:
+    """Connections to the listener that never authenticate, as another local
+    account could hold them (mitcad#935): each is opened again as soon as the
+    application closes it."""
+
+    def __init__(self, port, count):
+        self.port = port
+        self.reopened = 0
+        self.stopping = threading.Event()
+        self.sockets = [self.open() for _ in range(count)]
+        self.thread = threading.Thread(target=self.hold, daemon=True)
+        self.thread.start()
+
+    def open(self):
+        return socket.create_connection(("127.0.0.1", self.port), timeout=5)
+
+    def hold(self):
+        while not self.stopping.is_set():
+            readable = select.select(self.sockets, [], [], 0.05)[0] if self.sockets else []
+            for closed in readable:
+                try:
+                    data = closed.recv(1)
+                except OSError:
+                    data = b""
+                if data:
+                    continue
+                closed.close()
+                self.sockets.remove(closed)
+                try:
+                    self.sockets.append(self.open())
+                    self.reopened += 1
+                except OSError:
+                    pass
+            if not self.sockets:
+                time.sleep(0.05)
+
+    def stop(self):
+        self.stopping.set()
+        self.thread.join(timeout=5)
+        for held in self.sockets:
+            held.close()
+
+
+def resident_kb(pid):
+    """The process's resident memory in kB (Linux), or None."""
+    try:
+        with open("/proc/%d/status" % pid, encoding="ascii", errors="replace") as status:
+            for line in status:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1])
+    except OSError:
+        return None
+    return None
+
+
+def check_hostile_input(bridge, pid, say=print):
+    """mitcad#935: a client's huge strings neither fill the application's
+    memory nor its log, through the actual endpoint."""
+    document = bridge.tool("document_list", {})["documents"][0]["document"]
+    huge = 7 * 1024 * 1024
+    select_params = json.dumps({"name": "ui_select", "arguments": {"document": document, "items": [
+        {"kind": "face", "owner": "o" * huge, "name": "x"}]}}, separators=(",", ":")).encode("utf-8")
+    command_params = json.dumps({"name": "model_command", "arguments": {"document": document, "command": {
+        "cmd": "c" * huge}}}, separators=(",", ":")).encode("utf-8")
+    check(len(select_params) < FRAME_LIMIT - 1024 and len(command_params) < FRAME_LIMIT - 1024,
+          "The hostile frames do not fit the frame limit")
+
+    def select_once():
+        response = bridge.request_encoded("tools/call", select_params)
+        check(response.get("error", {}).get("code") == -32602, "A 7 MiB owner was not refused: " + repr(response)[:500])
+        message = response["error"]["message"]
+        check("owner must have at most" in message and len(message) < 1024,
+              "The refusal of a 7 MiB owner: " + message[:500])
+
+    def command_once():
+        response = bridge.request_encoded("tools/call", command_params)
+        check("error" not in response, "model_command: protocol failure: " + repr(response)[:500])
+        result = response["result"]
+        error = result["structuredContent"].get("error", "")
+        check(result.get("isError") is True and error, "A 7 MiB command name was not refused: " + repr(result)[:500])
+        return error
+
+    # The design may still be computing: until model_command answers.
+    deadline = time.monotonic() + TIMEOUT
+    while True:
+        error = command_once()
+        if "busy" not in error or time.monotonic() > deadline:
+            break
+        time.sleep(0.5)
+    check("unknown command 'ccc" in error and "c" * 1000 not in error and len(error) < 1024 * 1024,
+          "The refusal of a 7 MiB command name: " + error[:500])
+    for _ in range(4):
+        select_once()
+        command_once()
+    before = resident_kb(pid)
+    for _ in range(200):
+        select_once()
+    for _ in range(50):
+        error = command_once()
+        check("c" * 1000 not in error, "A refusal repeated the 7 MiB command name")
+    after = resident_kb(pid)
+    if before is not None and after is not None:
+        check(after - before < 50 * 1024, "The application's memory grew by %d kB" % (after - before))
+        say("ok   200 ui_select calls with a 7 MiB owner, 50 model_command calls with a 7 MiB name: "
+            "memory grew %d kB" % (after - before))
+    else:
+        say("ok   200 ui_select calls with a 7 MiB owner, 50 model_command calls with a 7 MiB name")
+    log = bridge.tool("ui_log", {"limit": 2000})
+    sizes = [len(line["text"].encode("utf-8")) for line in log["lines"]]
+    check(max(sizes) < 4096, "A ui_log line of %d bytes" % max(sizes))
+    check(any("MCP refused: unknown command 'ccc" in line["text"] for line in log["lines"]),
+          "ui_log lacks the refusals of the long command name")
+    say("ok   every ui_log line is under 4 KiB")
 
 
 def wait_for_listener(cli, env, seconds=30):
@@ -447,9 +582,21 @@ def main():
         return 2
     cli, design = sys.argv[1], Path(sys.argv[2]).resolve()
     wait_for_listener(cli, dict(os.environ))
-    bridge = Bridge(cli, dict(os.environ), design.parent / "bridge.stderr.log")
+    listed = subprocess.run([cli, "mcp", "--list-instances"], env=dict(os.environ), capture_output=True,
+                            timeout=TIMEOUT, check=True)
+    instance = json.loads(listed.stdout)["instances"][0]
+    # The bridge authenticates while eight idle connections are held open
+    # (mitcad#935).
+    idle = IdleConnections(instance["port"], 8)
+    bridge = None
     try:
+        bridge = Bridge(cli, dict(os.environ), design.parent / "bridge.stderr.log")
         bridge.initialize()
+        check(bridge.tool("ui_state", {}).get("mode") is not None, "ui_state through the bridge")
+        idle.stop()
+        print("ok   the bridge authenticated with eight idle connections held open (%d opened again)"
+              % idle.reopened)
+        check_hostile_input(bridge, instance["pid"])
         run_flow(bridge, design)
         bridge.finish()
         print("PASS: live MCP debugging flow")
@@ -458,7 +605,9 @@ def main():
         print("FAIL: live MCP: " + str(error), file=sys.stderr)
         return 1
     finally:
-        bridge.stop()
+        idle.stop()
+        if bridge is not None:
+            bridge.stop()
 
 
 if __name__ == "__main__":

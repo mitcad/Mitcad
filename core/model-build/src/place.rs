@@ -1628,6 +1628,8 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                 standard: &source.def.standard,
                 name: &label,
                 fallback: "{name} {config}",
+                rows: None,
+                chosen: "",
             },
             &shown,
         )

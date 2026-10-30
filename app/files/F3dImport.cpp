@@ -61,6 +61,13 @@ namespace {
 // kernel call to hang (the model's hang_limit).
 constexpr int kHangLimit = 90;
 
+// Seconds a listing before the import (a design's references, a building
+// project's links; mitcad#922) may take: a reader that runs longer is
+// taken to hang, its process is ended, and the import goes on without the
+// listing's dialogs. (A listing reads streams only, no geometry: a large
+// package's takes seconds.)
+constexpr int kListLimit = 300;
+
 // The threads that evaluate an item's definitions at once (mitcad#95):
 // the logical cores, at most 8 (more gain little: an item rarely has more
 // definitions to try, and each worker holds its definition's memory).
@@ -286,6 +293,38 @@ int endWorker(int code) {
   return code;
 }
 
+// A listing before the import (mitcad#922): the documents an .f3d design
+// refers to (`links` false) or a building project's linked models, with
+// the options of `optionsFile` (the documents' files chosen so far),
+// written as JSON to `resultFile`. A reader's fault ends this process; the
+// application reports it as the import process stopping.
+int runListing(const QByteArray& path, bool links, const QString& optionsFile, const QString& resultFile) {
+  QJsonObject options;
+  if (!optionsFile.isEmpty()) {
+    QFile file(optionsFile);
+    if (file.open(QIODevice::ReadOnly)) {
+      options = QJsonDocument::fromJson(file.readAll()).object();
+    }
+  }
+  options.insert(links ? QStringLiteral("list_links") : QStringLiteral("list_references"), true);
+  QJsonObject listed;
+  try {
+    rust::Box<Document> document = new_document();
+    listed = links ? parseObject(document->import_rvt(rustStr(path), rustStr(compactJson(options))))
+                   : parseObject(document->import_f3d_timeline(rustStr(path), rustStr(compactJson(options))));
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "import-failed %s\n", e.what());
+    return endWorker(3);
+  }
+  if (!writeFile(resultFile, QJsonDocument(listed).toJson(QJsonDocument::Compact))) {
+    std::fprintf(stderr, "import-failed cannot write the listing\n");
+    return endWorker(3);
+  }
+  std::printf("import-listed\n");
+  std::fflush(stdout);
+  return endWorker(0);
+}
+
 } // namespace
 
 int runImportWorker(int argc, char* argv[]) {
@@ -314,9 +353,19 @@ int runImportWorker(int argc, char* argv[]) {
   // design refers to that the user chose (mitcad#196).
   const QCommandLineOption more(QStringLiteral("import-options"), QStringLiteral("Import options (JSON)"),
                                 QStringLiteral("file"));
-  parser.addOptions({worker, output, result, store, minMs, handOff, more});
+  // Only a listing before the import (mitcad#922): an .f3d design's
+  // references or a building project's linked models, to --result.
+  const QCommandLineOption listReferences(QStringLiteral("list-references"),
+                                          QStringLiteral("List the documents the design refers to"));
+  const QCommandLineOption listLinks(QStringLiteral("list-links"),
+                                     QStringLiteral("List the building project's linked models"));
+  parser.addOptions({worker, output, result, store, minMs, handOff, more, listReferences, listLinks});
   parser.process(app);
   const QByteArray path = parser.value(worker).toUtf8();
+  if (parser.isSet(listReferences) || parser.isSet(listLinks)) {
+    return runListing(path, parser.isSet(listLinks), parser.isSet(more) ? parser.value(more) : QString(),
+                      parser.value(result));
+  }
 
   rust::Box<Document> document = new_document();
   // Stop (T1e): import_f3d takes the cancel of the document's job as a
@@ -468,33 +517,41 @@ void F3dImport::start() {
     done(false, tr("No temporary directory for the import."));
     return;
   }
-  m_process = new QProcess(this);
-  QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-  // The importer's trace gives a line per timeline item: the progress.
-  environment.insert(QStringLiteral("MITCAD_IMPORT_TRACE"), QStringLiteral("1"));
-  m_process->setProcessEnvironment(environment);
-  connect(m_process, &QProcess::readyReadStandardOutput, this, &F3dImport::readProgress);
-  connect(m_process, &QProcess::readyReadStandardError, this, &F3dImport::readProgress);
-  connect(m_process, &QProcess::finished, this, [this](int exitCode) { processFinished(exitCode); });
-  connect(m_process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
-    if (error == QProcess::FailedToStart) {
-      done(false, tr("The import could not start: %1").arg(m_process->errorString()));
+  const QString name = QFileInfo(m_path).fileName();
+  m_dialog = new ImportProgress(
+      m_window, [this] { stop(); }, [this] { cancel(); });
+  m_ticker = new QTimer(this);
+  m_ticker->setInterval(500);
+  connect(m_ticker, &QTimer::timeout, this, &F3dImport::tick);
+  m_clock.start();
+  m_ticker->start();
+  // A listing's time limit (kListLimit): its process is ended, and the
+  // import goes on without it (listingFinished).
+  m_listWatch = new QTimer(this);
+  m_listWatch->setSingleShot(true);
+  connect(m_listWatch, &QTimer::timeout, this, [this] {
+    if (m_finished || m_process == nullptr ||
+        (m_phase != Phase::ListingReferences && m_phase != Phase::ListingLinks)) {
+      return;
     }
+    m_listTimedOut = true;
+    m_process->kill();
   });
 
-  const QString name = QFileInfo(m_path).fileName();
   if (m_preset) {
     // (Run again with the options of the import before, mitcad#379.)
   } else if (!isFreeCadFile(m_path) && !isIptFile(m_path) && !isIfcFile(m_path) && !isRvtFile(m_path) &&
              !isSolidcraftFile(m_path) && !isDwgFile(m_path)) {
-    m_options = askReferences();
-    // The geometric tolerance of the Preferences (mitcad#224).
-    m_options.insert(QStringLiteral("geometric_tolerance"), GeneralSettings::load().importTolerance);
-    // Whether a retry on the file's stored bodies replaces imported bodies
-    // that match them: asked when it comes to that (mitcad#283).
-    m_options.insert(QStringLiteral("retry_bodies"), QStringLiteral("ask"));
+    // The documents it refers to, listed by the worker (mitcad#922); the
+    // import starts once they are asked for (finishReferences).
+    m_folder = QFileInfo(m_path).absolutePath();
+    listReferences();
+    return;
   } else if (isRvtFile(m_path)) {
-    m_options = askRvtLinks();
+    // Its linked models likewise (linksListed).
+    m_folder = QFileInfo(m_path).absolutePath();
+    listLinks();
+    return;
   } else if (isIamFile(m_path)) {
     // Parts with their design history (mitcad#507): asked by File > Open
     // and Import, else as chosen last.
@@ -511,19 +568,44 @@ void F3dImport::start() {
     qInfo().noquote() << QStringLiteral("Import of %1: parts with their design history %2")
                              .arg(name, history ? QStringLiteral("on") : QStringLiteral("off"));
   }
-  m_dialog = new ImportProgress(
-      m_window, [this] { stop(); }, [this] { cancel(); });
+  startImport();
+}
+
+void F3dImport::startWorker(const QStringList& arguments) {
+  m_errors.clear();
+  m_lastLine.clear();
+  m_failure.clear();
+  m_process = new QProcess(this);
+  QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+  // The importer's trace gives a line per timeline item: the progress.
+  environment.insert(QStringLiteral("MITCAD_IMPORT_TRACE"), QStringLiteral("1"));
+  m_process->setProcessEnvironment(environment);
+  connect(m_process, &QProcess::readyReadStandardOutput, this, &F3dImport::readProgress);
+  connect(m_process, &QProcess::readyReadStandardError, this, &F3dImport::readProgress);
+  QProcess* const process = m_process;
+  connect(m_process, &QProcess::finished, this, [this, process](int exitCode, QProcess::ExitStatus status) {
+    if (process == m_process) {
+      processFinished(exitCode, status);
+    }
+  });
+  connect(m_process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
+    if (error == QProcess::FailedToStart && process == m_process) {
+      done(false, tr("The import could not start: %1").arg(m_process->errorString()));
+    }
+  });
+  tick();
+  if (!m_dialog->isVisible()) {
+    showDialog(m_dialog);
+  }
+  m_process->start(QCoreApplication::applicationFilePath(), arguments);
+}
+
+void F3dImport::startImport() {
+  m_phase = Phase::Importing;
+  m_listing.clear();
   m_dialog->setStoppable(!isFreeCadFile(m_path) && !isIptFile(m_path) && !isIfcFile(m_path) &&
                          !isRvtFile(m_path) && !isSolidcraftFile(m_path) && !isDwgFile(m_path));
-  m_ticker = new QTimer(this);
-  m_ticker->setInterval(500);
-  connect(m_ticker, &QTimer::timeout, this, &F3dImport::tick);
-
-  m_clock.start();
-  m_ticker->start();
-  tick();
-  showDialog(m_dialog);
-  qInfo().noquote() << QStringLiteral("Import of %1 started").arg(name);
+  qInfo().noquote() << QStringLiteral("Import of %1 started").arg(QFileInfo(m_path).fileName());
   QStringList arguments{QStringLiteral("--import-worker"), m_path, QStringLiteral("--output"),
                         m_dir.filePath(QStringLiteral("import.mitcad")), QStringLiteral("--result"),
                         m_dir.filePath(QStringLiteral("result.json"))};
@@ -542,7 +624,7 @@ void F3dImport::start() {
       arguments << QStringLiteral("--import-options") << options;
     }
   }
-  m_process->start(QCoreApplication::applicationFilePath(), arguments);
+  startWorker(arguments);
 }
 
 void F3dImport::setOptions(const QJsonObject& options) {
@@ -550,46 +632,119 @@ void F3dImport::setOptions(const QJsonObject& options) {
   m_preset = true;
 }
 
-QJsonObject F3dImport::askReferences() {
-  QJsonObject files;
-  QJsonArray skipped;
-  QStringList asked;
-  QString folder = QFileInfo(m_path).absolutePath();
+void F3dImport::listReferences() {
   const QString design = QFileInfo(m_path).fileName();
-  for (;;) {
-    // Listed again after each chosen file: its folder may hold the others,
-    // and a document found refers to its own.
-    QJsonObject listed;
-    try {
-      const QJsonObject options{{QStringLiteral("list_references"), true},
-                                {QStringLiteral("reference_files"), files}};
-      listed = parseObject(new_document()->import_f3d_timeline(rustStr(m_path.toUtf8()), rustStr(compactJson(options))));
-    } catch (const std::exception& e) {
-      // The import itself says what is wrong with the file.
-      qInfo().noquote() << QStringLiteral("Import references of %1 not listed: %2").arg(design, QString::fromUtf8(e.what()));
-      break;
+  m_phase = Phase::ListingReferences;
+  m_listing = tr("Reading the documents %1 refers to").arg(design);
+  qInfo().noquote() << QStringLiteral("Import references of %1: listed in the import process").arg(design);
+  QStringList arguments{QStringLiteral("--import-worker"), m_path, QStringLiteral("--list-references"),
+                        QStringLiteral("--result"), m_dir.filePath(QStringLiteral("listing.json"))};
+  if (!m_referenceFiles.isEmpty()) {
+    QJsonObject options;
+    options.insert(QStringLiteral("reference_files"), m_referenceFiles);
+    const QString file = m_dir.filePath(QStringLiteral("listing-options.json"));
+    if (writeFile(file, QJsonDocument(options).toJson(QJsonDocument::Compact))) {
+      arguments << QStringLiteral("--import-options") << file;
     }
+  }
+  m_dialog->setStoppable(false);
+  m_listTimedOut = false;
+  startWorker(arguments);
+  m_listWatch->start(kListLimit * 1000);
+}
+
+void F3dImport::listLinks() {
+  const QString project = QFileInfo(m_path).fileName();
+  m_phase = Phase::ListingLinks;
+  m_listing = tr("Reading the linked models of %1").arg(project);
+  qInfo().noquote() << QStringLiteral("Import links of %1: listed in the import process").arg(project);
+  // Listed once (mitcad#413: each listing reads the project): a link is
+  // found by its own name, so a file chosen for one finds no other.
+  m_dialog->setStoppable(false);
+  m_listTimedOut = false;
+  QStringList arguments{QStringLiteral("--import-worker"), m_path, QStringLiteral("--list-links"),
+                        QStringLiteral("--result"), m_dir.filePath(QStringLiteral("listing.json"))};
+  startWorker(arguments);
+  m_listWatch->start(kListLimit * 1000);
+}
+
+void F3dImport::listingFinished(int exitCode, QProcess::ExitStatus status) {
+  m_listWatch->stop();
+  const bool references = m_phase == Phase::ListingReferences;
+  const QString name = QFileInfo(m_path).fileName();
+  const QString what = references ? QStringLiteral("references") : QStringLiteral("links");
+  // (This process is done: the next one, a listing or the import, is new.)
+  QProcess* const process = m_process;
+  m_process = nullptr;
+  process->deleteLater();
+  QString notListed;
+  if (m_listTimedOut) {
+    notListed = QStringLiteral("no answer in %1 s").arg(kListLimit);
+  } else if (status != QProcess::NormalExit || (exitCode != 0 && m_failure.isEmpty())) {
+    // A reader's fault on the file (a crash, a panic, memory): the import
+    // would meet it again.
+    qWarning().noquote() << QStringLiteral("Import %1 of %2: the import process stopped").arg(what, name);
+    done(false, failure(exitCode, status));
+    return;
+  } else if (exitCode != 0) {
+    // The import itself says what is wrong with the file.
+    notListed = m_failure;
+  }
+  QJsonObject listed;
+  if (notListed.isEmpty()) {
+    QFile file(m_dir.filePath(QStringLiteral("listing.json")));
+    if (file.open(QIODevice::ReadOnly)) {
+      listed = QJsonDocument::fromJson(file.readAll()).object();
+    } else {
+      notListed = QStringLiteral("no listing written");
+    }
+  }
+  if (!notListed.isEmpty()) {
+    qInfo().noquote() << QStringLiteral("Import %1 of %2 not listed: %3").arg(what, name, notListed);
+    if (references) {
+      finishReferences();
+    } else {
+      startImport();
+    }
+    return;
+  }
+  if (references) {
+    referencesListed(listed);
+  } else {
+    linksListed(listed);
+  }
+}
+
+void F3dImport::referencesListed(const QJsonObject& listed) {
+  const QString design = QFileInfo(m_path).fileName();
+  int found = 0;
+  for (const QJsonValue& value : listed.value(QStringLiteral("documents")).toArray()) {
+    if (value.toObject().value(QStringLiteral("file")).isString()) {
+      ++found;
+    }
+  }
+  // The first document not found and not asked yet; a skipped one changes
+  // nothing the listing found, so the next comes from the same listing.
+  for (;;) {
     QJsonObject missing;
-    int found = 0;
     for (const QJsonValue& value : listed.value(QStringLiteral("documents")).toArray()) {
       const QJsonObject document = value.toObject();
-      if (!document.value(QStringLiteral("file")).isString()) {
-        if (missing.isEmpty() && !asked.contains(document.value(QStringLiteral("document")).toString())) {
-          missing = document;
-        }
-      } else {
-        ++found;
+      if (!document.value(QStringLiteral("file")).isString() &&
+          !m_asked.contains(document.value(QStringLiteral("document")).toString())) {
+        missing = document;
+        break;
       }
     }
     if (missing.isEmpty()) {
       qInfo().noquote() << QStringLiteral("Import references of %1: %2 found, %3 skipped")
                                .arg(design)
                                .arg(found)
-                               .arg(skipped.size());
-      break;
+                               .arg(m_skipped.size());
+      finishReferences();
+      return;
     }
     const QString urn = missing.value(QStringLiteral("document")).toString();
-    asked.append(urn);
+    m_asked.append(urn);
     const QString name = missing.value(QStringLiteral("name")).toString();
     const int version = missing.value(QStringLiteral("version")).toInt();
     const QString what = name.isEmpty() ? tr("a Document %1 Refers To").arg(design) : name;
@@ -598,41 +753,48 @@ QJsonObject F3dImport::askReferences() {
                              .arg(name.isEmpty() ? QStringLiteral("?") : name)
                              .arg(version)
                              .arg(design);
+    // (The progress dialog comes back with the next process.)
+    m_dialog->hide();
+    const QPointer<F3dImport> self(this);
     const QString file =
-        dialogChooseFile(m_window, title, folder, tr("Designs (*.f3d *.f3z)"), tr("&Use"), tr("&Skip"));
+        dialogChooseFile(m_window, title, m_folder, tr("Designs (*.f3d *.f3z)"), tr("&Use"), tr("&Skip"));
+    if (self == nullptr || m_finished) {
+      return;
+    }
     if (file.isEmpty()) {
-      skipped.append(urn);
+      m_skipped.append(urn);
       qInfo().noquote() << QStringLiteral("References dialog: skipped");
       continue;
     }
-    files.insert(urn, file);
-    folder = QFileInfo(file).absolutePath();
+    m_referenceFiles.insert(urn, file);
+    m_folder = QFileInfo(file).absolutePath();
     qInfo().noquote() << QStringLiteral("References dialog: chose %1").arg(QFileInfo(file).fileName());
+    // Listed again: the chosen file's folder may hold the others, and a
+    // document found refers to its own.
+    listReferences();
+    return;
   }
-  QJsonObject options;
-  if (!files.isEmpty()) {
-    options.insert(QStringLiteral("reference_files"), files);
-  }
-  if (!skipped.isEmpty()) {
-    options.insert(QStringLiteral("skipped_references"), skipped);
-  }
-  return options;
 }
 
-QJsonObject F3dImport::askRvtLinks() {
-  QJsonObject files;
-  QString folder = QFileInfo(m_path).absolutePath();
-  const QString project = QFileInfo(m_path).fileName();
-  // Listed once (mitcad#413: each listing reads the project): a link is
-  // found by its own name, so a file chosen for one finds no other.
-  QJsonObject listed;
-  try {
-    const QJsonObject options{{QStringLiteral("list_links"), true}};
-    listed = parseObject(new_document()->import_rvt(rustStr(m_path.toUtf8()), rustStr(compactJson(options))));
-  } catch (const std::exception& e) {
-    // The import itself says what is wrong with the file.
-    qInfo().noquote() << QStringLiteral("Import links of %1 not listed: %2").arg(project, QString::fromUtf8(e.what()));
+void F3dImport::finishReferences() {
+  m_options = QJsonObject();
+  if (!m_referenceFiles.isEmpty()) {
+    m_options.insert(QStringLiteral("reference_files"), m_referenceFiles);
   }
+  if (!m_skipped.isEmpty()) {
+    m_options.insert(QStringLiteral("skipped_references"), m_skipped);
+  }
+  // The geometric tolerance of the Preferences (mitcad#224).
+  m_options.insert(QStringLiteral("geometric_tolerance"), GeneralSettings::load().importTolerance);
+  // Whether a retry on the file's stored bodies replaces imported bodies
+  // that match them: asked when it comes to that (mitcad#283).
+  m_options.insert(QStringLiteral("retry_bodies"), QStringLiteral("ask"));
+  startImport();
+}
+
+void F3dImport::linksListed(const QJsonObject& listed) {
+  QJsonObject files;
+  const QString project = QFileInfo(m_path).fileName();
   QStringList asked;
   for (const QJsonValue& value : listed.value(QStringLiteral("links")).toArray()) {
     const QJsonObject link = value.toObject();
@@ -642,21 +804,26 @@ QJsonObject F3dImport::askRvtLinks() {
     }
     asked.append(missing);
     qInfo().noquote() << QStringLiteral("Links dialog: %1 of %2").arg(missing, project);
-    const QString file = dialogChooseFile(m_window, tr("Find the Linked Model %1").arg(missing), folder,
+    // (The progress dialog comes back with the import's process.)
+    m_dialog->hide();
+    const QPointer<F3dImport> self(this);
+    const QString file = dialogChooseFile(m_window, tr("Find the Linked Model %1").arg(missing), m_folder,
                                           tr("Building projects (*.rvt)"), tr("&Use"), tr("&Skip"));
+    if (self == nullptr || m_finished) {
+      return;
+    }
     if (file.isEmpty()) {
       qInfo().noquote() << QStringLiteral("Links dialog: skipped");
       continue;
     }
     files.insert(missing, file);
-    folder = QFileInfo(file).absolutePath();
+    m_folder = QFileInfo(file).absolutePath();
     qInfo().noquote() << QStringLiteral("Links dialog: chose %1").arg(QFileInfo(file).fileName());
   }
-  QJsonObject options;
   if (!files.isEmpty()) {
-    options.insert(QStringLiteral("link_files"), files);
+    m_options.insert(QStringLiteral("link_files"), files);
   }
-  return options;
+  startImport();
 }
 
 void F3dImport::readProgress() {
@@ -728,9 +895,15 @@ void F3dImport::readProgress() {
       qDebug().noquote() << QStringLiteral("Import item %1: %2 %3").arg(m_done).arg(item.captured(1), item.captured(2));
       continue;
     }
-    if (line.startsWith(QStringLiteral("import-failed ")) ||
-        (!line.startsWith(QStringLiteral("import:")) && !line.isEmpty())) {
-      m_lastLine = line.startsWith(QStringLiteral("import-failed ")) ? line.mid(14) : line;
+    if (line == QStringLiteral("import-listed")) {
+      continue;
+    }
+    if (line.startsWith(QStringLiteral("import-failed "))) {
+      m_failure = line.mid(14);
+      continue;
+    }
+    if (!line.startsWith(QStringLiteral("import:")) && !line.isEmpty()) {
+      m_lastLine = line;
     }
   }
   tick();
@@ -778,7 +951,10 @@ void F3dImport::tick() {
   }
   const qint64 seconds = m_clock.elapsed() / 1000;
   QString item;
-  if (m_parts > 0) {
+  if (!m_listing.isEmpty()) {
+    // A listing before the import (mitcad#922).
+    item = m_listing;
+  } else if (m_parts > 0) {
     // An .iam assembly's part being imported, and its timeline item when it
     // is replayed (mitcad#507).
     const int part = std::clamp(m_part, 1, m_parts);
@@ -801,7 +977,7 @@ void F3dImport::tick() {
 }
 
 void F3dImport::stop() {
-  if (m_finished || m_stopping || m_process == nullptr) {
+  if (m_finished || m_stopping || m_process == nullptr || m_phase != Phase::Importing) {
     return;
   }
   m_stopping = true;
@@ -824,15 +1000,29 @@ void F3dImport::cancel() {
   done(false, QString());
 }
 
-void F3dImport::processFinished(int exitCode) {
+QString F3dImport::failure(int exitCode, QProcess::ExitStatus status) const {
+  // The worker's own message: it ended as it meant to.
+  if (status == QProcess::NormalExit && !m_failure.isEmpty()) {
+    return m_failure;
+  }
+  // Otherwise it stopped (a crash, a panic of a reader, memory): what it
+  // said last, a crash report's place.
+  const QString how = status == QProcess::CrashExit ? tr("it crashed") : tr("exit code %1").arg(exitCode);
+  return m_lastLine.isEmpty() ? tr("the import process stopped (%1)").arg(how)
+                              : tr("the import process stopped (%1): %2").arg(how, m_lastLine);
+}
+
+void F3dImport::processFinished(int exitCode, QProcess::ExitStatus status) {
   if (m_finished) {
     return;
   }
   readProgress();
-  if (exitCode != 0 || m_process->exitStatus() != QProcess::NormalExit) {
-    const QString why = m_lastLine.isEmpty() ? tr("the import process stopped (exit code %1)").arg(exitCode)
-                                             : m_lastLine;
-    done(false, why);
+  if (m_phase == Phase::ListingReferences || m_phase == Phase::ListingLinks) {
+    listingFinished(exitCode, status);
+    return;
+  }
+  if (exitCode != 0 || status != QProcess::NormalExit) {
+    done(false, failure(exitCode, status));
     return;
   }
   QFile design(m_dir.filePath(QStringLiteral("import.mitcad")));

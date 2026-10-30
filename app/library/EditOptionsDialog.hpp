@@ -14,7 +14,10 @@
 // chooser shows the value it gets. OK keeps the expressions in one undo
 // step (`set_component_parameters`, run by the caller).
 //
-// Logged for the UI tests: "Edit Options <option> expression at x,y" and
+// Above the choosers, the Standard and Supplier filters of a library part
+// whose rows name standards or suppliers' articles (mitcad#949); under them
+// the row's supplier part numbers ("Edit Options supplier part numbers:
+// ..."). Logged for the UI tests: "Edit Options <option> expression at x,y" and
 // "Edit Options OK at x,y" (in the main window, as the panels' places;
 // Return in an expression field may take a suggestion instead of OK),
 // "Edit Options bound <option> =
@@ -43,8 +46,13 @@ class EditOptionsDialog : public QDialog {
 
 public:
   // `query` runs the model's queries (a failure as {"error": {"message"}});
-  // `component` the inserted component's uid, `name` as the browser shows it.
-  EditOptionsDialog(JsonRunner query, const QString& component, const QString& name, QWidget* parent = nullptr);
+  // `component` the inserted component's uid, `name` as the browser shows it;
+  // `libraryTable` its library component's table as library_show gives it
+  // (with the component's `standards`), when it has one: its rows' standards
+  // and suppliers' articles make the Standard and Supplier filters above the
+  // choosers and the row's supplier part numbers under them (mitcad#949).
+  EditOptionsDialog(JsonRunner query, const QString& component, const QString& name,
+                    const QJsonObject& libraryTable = QJsonObject(), QWidget* parent = nullptr);
 
   // Whether the component has options (else the dialog says why and has
   // nothing to keep).
@@ -63,6 +71,8 @@ protected:
 private:
   // The expressions' fields again from the chooser's answer.
   void fillExpressions();
+  // The combination's row's suppliers' part numbers (mitcad#949).
+  void showSupplierParts();
   void expressionEdited(const QString& option);
   void logPlaces() const;
 
@@ -70,6 +80,7 @@ private:
   OptionChooser* m_chooser = nullptr;
   QFormLayout* m_expressionsForm = nullptr;
   QLabel* m_intro = nullptr;
+  QLabel* m_supplierParts = nullptr;
   QHash<QString, QLineEdit*> m_expressions;
   QStringList m_order;
   // The options bound to the design's parameters: option -> formula.

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/sketch app/browser app/MainWindow.cpp app/MainWindow.hpp app/MainWindowVisibility.cpp
 # check-all sources: app/OcctViewer.cpp app/OcctViewer.hpp app/framework/DocumentSession.hpp tools/cli
+# check-all sources: app/MainWindowActivate.cpp
 # Input-driven Windows UI test of a sketch on a face of an occurrence
 # placed by a turn and a move (mitcad#505) in the build VM
 # (tools/ui-windows-lib.ps1 says how the input is posted); the Linux test
@@ -13,7 +14,12 @@
 #      frame in the design on the face's plane with the normal (0, -1, 0),
 #      the view looking along +Y; a line drawn from the face's middle (where
 #      the view shows the block's middle) has both ends on the face.
-#   2. The root active: the same in a sketch of the root linked to the face.
+#   2. The root active: the same in a sketch of the root linked to the face;
+#      the pick asks whether to activate Box:1 (mitcad#960, "Activate
+#      component asked: Box:1 (active Root)"), answered Keep in Root
+#      (Alt+K).
+#   3. The root still active, the question answered Activate Box:1 (Enter,
+#      the default): Box is active, the sketch on the same pick is Box's.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-occurrence-face-sketch-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -87,10 +93,12 @@ function On-Face([double[]]$Got, [string]$Description, [switch]$Plane) {
   Write-Host "ok   ${Description}: ($($Got -join ', ')) on the face"
 }
 
-# Sketch-OnFace where: Create Sketch on the block's top face, seen from the
-# front; the frame and the view checked; a line from the face's middle 7
-# and 4 mm along the sketch's axes, its ends checked.
-function Sketch-OnFace([string]$Where) {
+# Sketch-OnFace where [keep|activate]: Create Sketch on the block's top
+# face, seen from the front; the frame and the view checked; a line from
+# the face's middle 7 and 4 mm along the sketch's axes, its ends checked.
+# With keep or activate, the pick asks whether to activate Box:1
+# (mitcad#960) and is answered so; without, it asks nothing.
+function Sketch-OnFace([string]$Where, [string]$Answer = '') {
   Ui-Step 'front view (F8)'              { Ui-Key 'F8' }
   Ui-Step 'fit (F6)'                     { Ui-Key 'F6' }
   Ui-Sync
@@ -98,7 +106,27 @@ function Sketch-OnFace([string]$Where) {
   Ui-Step 'create sketch (F7)'           { Ui-Key 'F7' }
   Ui-ExpectNew 'Pick face F2.b0/F2:end(' "${Where}: the top face can be picked"
   Ui-Step 'pick the top face'            { Ui-ClickPick 'face F2.b0/F2:end(' }
+  if ($Answer) {
+    Ui-ExpectNew 'Activate component asked: Box:1 (active Root)' "${Where}: asked whether to activate Box:1"
+    Ui-FocusDialog '^Activate Component$'
+    if ($Answer -eq 'keep') {
+      Ui-Step 'keep in Root (Alt+K)'     { Ui-Key 'alt+k' }
+      Ui-FocusMain
+      Ui-ExpectNew 'Activate component answer: keep in Root' "${Where}: kept in the root"
+    } else {
+      Ui-Step 'activate Box:1 (Enter)'   { Ui-Key 'Return' }
+      Ui-FocusMain
+      Ui-ExpectNew 'Activate component answer: activate Box:1' "${Where}: Box:1 to be activated"
+      Ui-ExpectNew 'Activated Box' "${Where}: Box is active"
+    }
+  }
   Ui-ExpectNew 'Sketch started on {"body":"F2.b0","face":"F2:end(' "${Where}: a sketch on the face"
+  if (-not $Answer) {
+    if (Ui-LogLines | Select-Object -Skip ($script:UiMark + 1) | Where-Object { $_.Contains('Activate component asked') }) {
+      Ui-Fail "${Where}: asked whether to activate a component"
+    }
+    Write-Host "ok   ${Where}: nothing asked"
+  }
   Ui-ExpectNew '} in O1, origin (' "${Where}: picked where Box:1 shows it"
   Ui-ExpectNew 'Sketch view along' "${Where}: the view's direction logged"
   $frame = New-Line 'Sketch frame in the design'
@@ -142,6 +170,9 @@ function Sketch-OnFace([string]$Where) {
   if ((Ui-LogLines) | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
 }
 
+# The question whether to activate a picked face's component (mitcad#960),
+# which the other tests turn off.
+$env:MITCAD_ASK_ACTIVATE_COMPONENT = '1'
 Ui-StartApp 'occurrence-face-sketch' @('--open', $design)
 Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
 Ui-ExpectLog 'Bodies shown: F2.b0 in O1' "Box's block shown"
@@ -158,7 +189,16 @@ Write-Host '--- 2. The root active: a sketch of the root linked to the face'
 Ui-Mark
 Ui-Step 'activate the root'              { Ui-ClickLogged 'Browser radio Root' }
 Ui-ExpectNew 'Activated Root' 'the root is active'
-Sketch-OnFace 'the root active'
+Sketch-OnFace 'the root active' 'keep'
 Ui-ExpectLog 'Sketch Sketch3 is in Root' "the sketch is the root's"
+
+Write-Host '--- 3. The root active, Box:1 activated from the question (mitcad#960)'
+$framesAtO1 = @(Ui-LogLines | Where-Object { $_.Contains('Sketch frame in the design (at O1)') }).Count
+Sketch-OnFace 'Box:1 activated' 'activate'
+Ui-ExpectLog 'Sketch Sketch4 is in Box' "the sketch is Box's"
+if (@(Ui-LogLines | Where-Object { $_.Contains('Sketch frame in the design (at O1)') }).Count -le $framesAtO1) {
+  Ui-Fail 'Box:1 activated: the sketch is not shown where Box:1 places it'
+}
+Write-Host 'ok   Box:1 activated: shown where Box:1 places it'
 
 Ui-Finish 'UI Windows occurrence face sketch test'

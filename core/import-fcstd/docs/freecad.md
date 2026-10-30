@@ -12,6 +12,19 @@ Enumerations are stored as indices, so it carries each FreeCAD version's
 value lists (`data/enums.json`, read from FreeCAD by
 `tools/freecad-export/enums.py`).
 
+Hostile files meet bounds well above anything FreeCAD writes (the test
+corpora's largest values in parentheses), so that they end in an error or
+a warning, never in a stack overflow, a panic or an unbounded allocation
+(mitcad#932): XML elements nested deeper than 256 levels are left out with
+a warning (9), a value kept as XML keeps 64 levels (4), an expression may
+nest 256 levels, counting parentheses, signs and operators of a chain (two
+parentheses, four operators), a sketch B-spline needs ascending finite
+knots, more poles than its degree (a periodic one's poles wrap around),
+a degree up to 25 (3) and
+multiplicities adding up to 4096 at most (10). A folder listing an object
+twice places it once, and an import places at most a million objects and
+link elements (under a thousand objects).
+
 Entry points: `mitcad-cli import-fcstd <file.FCStd> [--save out.mitcad]
 [--report report.json] [--bodies-only] [--reference dump.json] [--set
 name=expression]... [--json]`; the `import_fcstd` command, run with OCCT by
@@ -26,8 +39,10 @@ per component); App::Link → occurrences (arrays, links of links, links to
 other files read next to it); visibility, colours and the document's unit
 system. Placements come from the file, not from attachments. Datums and
 joints are left out; features inside Bodies and consumed operands are part
-of their results. The report says why for each object. `--bodies-only`
-stops here.
+of their results. A binder's `Context` (the Body or Assembly it is in)
+consumes nothing (mitcad#952): only its `Support` is what it binds, so a
+Body with binders stays a body. The report says why for each object.
+`--bodies-only` stops here.
 
 ## Colours as appearances (mitcad#793)
 
@@ -78,14 +93,49 @@ checks.
   or vertex by FreeCAD's index (OCCT `TopExp::MapShapes` order); every link
   is checked against the same element of the referenced object's stored
   shape.
+- External geometry on another sketch (mitcad#952) becomes a linked
+  projection of that sketch's curve or point (`{"sketch": …, "curve": …}`
+  or `{"sketch": …, "point": …}`, mitcad#904), when the import made that
+  sketch earlier on the timeline: an edge is the sketch's curve along the
+  edge of its stored shape (a line with the same ends, a circle or arc of
+  the same centre, radius and plane; also 1.1's defining external
+  geometry, which is part of the sketch's shape), a vertex the sketch's
+  point there. An edge, vertex or face of a binder
+  (`PartDesign::SubShapeBinder`, `ShapeBinder`) is found the same way in
+  the sketches its `Support` names (also through a Body's path, `Body004`
+  with `Sketch072.`); a face is the sketch's curves around it, one
+  projection for each of FreeCAD's curves. A binder of a feature's result
+  is that feature's element, found by its geometry.
+- A body's element of a result of several solids is looked for in each of
+  their bodies. Geometry of another component (a Body with a component of
+  its own, at a placement or shown by links) is projected through the
+  occurrences where the document places the two components first (the
+  record's `link`, mitcad#100), so it follows when either moves.
+- The projection follows its source when it changes. Other external
+  geometry is fixed in place from the stored shapes; the report says why
+  (`fixed in place (not linked: <reason>)`): an edge FreeCAD merged from
+  several of Mitcad's, a sketch made later or not at all, a source whose
+  projection does not match FreeCAD's copy, another document.
 - A sketch is accepted when MitCad's solution keeps FreeCAD's points
   within 1e-4 mm (else with the fewest constraints and dimensions that keep
   it off inactive, else with all of them inactive: `partial`, mitcad#721,
   `crate::sketch::inactive` as in the .f3d import; the notes name them)
   and is compared with its stored shape. What MitCad cannot express
-  (tangency with ellipses, Snell's law, distances to circles,
-  intermediate features' elements) is listed, and the sketch is
+  (tangency with ellipses, Snell's law, distances to ellipses and
+  splines, intermediate features' elements) is listed, and the sketch is
   `partial`.
+- Distances to circles and arcs (FreeCAD 1.0's, mitcad#955), read from
+  the stored geometry as the gap outside the circle or the one inside it,
+  whichever is the value: a line outside a circle is MitCad's
+  `tangent_distance`; the others are a `concentric_distance` from the
+  circle to a construction circle about its centre: through the point
+  (a point's distance), touching the line across it, touching the other
+  circle (two circles outside each other: about the first; one inside the
+  other: about the inner one, touching the outer one from inside; about
+  the same centre: the two circles' own concentric distance). A distance
+  neither gap gives is left out with both readings. A right angle between
+  a line and external geometry's circle holds the line on the circle's
+  projected centre.
 
 ## Stage 3: history
 
@@ -363,13 +413,116 @@ cells.
   on into tangent edges FreeCAD did not list is rounded along the whole
   chain by MitCad and may then differ from FreeCAD's (the check decides).
 
+## Binders, extents across components, turns over a full turn (mitcad#955)
+
+- A Pad's, Pocket's, Revolution's, Groove's or Hole's `Profile` that is a
+  binder (`SubShapeBinder`, `ShapeBinder`) of one whole sketch, not moved
+  or offset: in the sketch's own component that sketch; in another
+  component (a binder in one Body of a sketch in another) a sketch of the
+  binder's, hidden, on the bound sketch's plane seen through the
+  occurrences where the document places the two components first, each of
+  the bound sketch's profile curves and points a linked projection of its
+  curve or point (`{"sketch": …, "curve": …}` with the `link`), so the
+  profile follows the sketch. A hole drills at the projected circles'
+  centres, else at the projected points, as it does on the sketch. A hole
+  also drills at the circles and arcs of 1.1's defining external geometry
+  (part of the sketch's shape, whose circles FreeCAD drills at; before,
+  a reported model's hole missed one of its five places: off by 1.2e-2).
+- A face of a binder of a feature's result named by an extent (`UpToFace`
+  = (binder, `Face44`)) is that feature's face found by its geometry, as
+  external geometry finds it (mitcad#952).
+- An extent up to a face or a body of another component (a Body at a
+  placement): the face is read in its body's component through the
+  occurrences where the document places the two components first (the
+  definition's `object_links`, the model's mitcad#762).
+- A symmetric extent up to a face (1.1's SideType Symmetric, Midplane):
+  FreeCAD extrudes side one up to the face (moved by the offset) and
+  mirrors that side across the sketch plane. Up to a planar face (or a
+  plane) parallel to the sketch it is `two_sides`: up to the face, and as
+  far the other way (a distance: it does not follow the face). Up to
+  other objects it falls back with that reason (MitCad's extrusions have
+  no mirrored side).
+- A Revolution of TwoAngles adding up to more than a full turn: FreeCAD
+  turns the profile back by Angle2 and revolves by the sum, which OCCT's
+  revolution takes less a whole turn (100° and 280°: 20°). The turn runs
+  from 360° less Angle2 to Angle past the profile: `two_sides` with
+  `angle2` = Angle2 − 360° (negative: the model's side two then ends past
+  the profile, mitcad#955).
+- Sketches attached to an origin's plane named as the origin's element
+  (FreeCAD 1.x's `(Origin, XY_Plane013)`, or the role `XY_Plane`) lie on
+  that plane (MitCad's origin plane there), as those attached to the plane
+  itself (before: "parallel to it (its support is not imported)").
+- External geometry whose link the file no longer has (FreeCAD keeps its
+  last copy, its source missing) is fixed in place from the copy, so the
+  constraints on it hold (before: left out with them).
+- Two sides with a negative length (1.1's SideType Two sides, the
+  TwoLengths type): FreeCAD's side then ends on the other side's side, the
+  solid between the two ends; MitCad's `signed` sides are tried first (a
+  side through all or up to an object is cut off there), then each side
+  its own way.
+- An extent up to a planar face MitCad's body does not have as one face
+  (FreeCAD split or merged it otherwise) is up to that face's plane, fixed,
+  as FreeCAD takes the face's surface without its limits where the profile
+  reaches past them.
+- A hole from a sketch bound into another Body may have centres where that
+  Body has no material: FreeCAD drills there too, cutting nothing. Such a
+  centre (its axis missing the body's box, or no edge of FreeCAD's stored
+  result about its axis) gets no modelled thread groove and no thread on
+  its wall.
+- A circle or arc seen edge on (a sketch square to its plane) projects to
+  the line between its exact extremes, as FreeCAD's copy holds it; a
+  sketch point at a line's end is not the edge along that line.
+
+## Binders of another Body's sketch (mitcad#963)
+
+- The sketch of the binder's that a Pad, Pocket, Revolution, Groove or
+  Hole takes for a binder of one whole sketch of another component
+  (mitcad#955, above) lies on the bound sketch's own plane (an origin
+  plane, a construction plane or a face of that component) with the
+  sketch's `plane_link` through the occurrences where the document places
+  the two components first (mitcad#100), and the bound sketch's own frame,
+  so that it follows that plane as its projections follow the curves; a
+  plane of a third component (the bound sketch's own `plane_link`) is
+  seen from the binder's component through the same occurrence. Where
+  that plane is not found at the binder's place on the timeline (a face
+  that later features of the other Body took away), it lies on the origin
+  plane of the binder's component parallel to it, else on a fixed plane,
+  as before.
+- A sketch attached to a face of such a binder (the face the binder makes
+  of the bound sketch) lies on the plane of the binder's sketch, with its
+  `plane_link`, when that is the sketch's plane, with the note `on the
+  plane of <sketch>, which <binder> binds`. The binder's sketch is made
+  for it before the sketch, also when no feature takes the binder; for a
+  binder of a sketch of the sketch's own component that plane is the bound
+  sketch's. Before, such sketches lay on a plane parallel to the face
+  (`its support is not imported`).
+
+## A reported assembly's last fallbacks (mitcad#964)
+
+- A modelled thread's groove is cut about every centre the hole drills
+  and the body reaches: the solved positions of the sketch's circles, of
+  1.1's defining external circles and arcs, or of its points (before:
+  the sketch's own circles only, so a hole drilled at an external arc's
+  centre had no thread there and its result was off FreeCAD's by 1e-3).
+- A Pad or Pocket along a reference axis or a custom direction parallel
+  to the profile's normal: FreeCAD's Direction is the one before Reversed
+  turns it, so Reversed pads or pockets the other way, and that is the
+  first reading.
+- A Pad whose tool lies flush with two tangent walls of the body, which
+  OCCT's exact union got wrong on MitCad's body (its faces merged by the
+  earlier booleans, where FreeCAD's history keeps them split): such a
+  join loses volume and is tried again with a fuzzy value
+  (commands.md, "Joins that lose volume").
+
 ## Not translated (fallback)
 
 Part sweeps (mitcad#548) through several sections of which one is an
 open wire or a wire in no plane (MitCad's loft of curve sections takes no
 centre line), and of a section of several wires; Part extrusions
 (mitcad#548) of a spline in no plane that does not start at its first
-pole (a swept line needs the path's start); binders; Draft and
+pole (a swept line needs the path's start); binders (skipped: sketches
+project their geometry, see stage 2; features take the sketch one binds, see
+above); Draft and
 Python objects (`Part::Part2DObjectPython`). The Part extrusions FreeCAD
 fails itself (a curved face, a helix or non-planar edges along the
 base's normal, tapered or with Solid on) fall back with that reason.

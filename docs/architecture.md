@@ -271,8 +271,8 @@ design in a project.
   counts (mitcad#82). A try given up keeps its thread until the call
   returns; a process that ends meanwhile ends with `std::_Exit` once its
   output is written (`abandoned_imports()`: `mitcad-cli`, the import
-  worker), as the shared libraries' static destructors would tear down
-  OCCT's state under that thread.
+  worker, the application), as the shared libraries' static destructors
+  would tear down OCCT's state under that thread.
 - **Undo:** the definition state (parameters, features, marker, body
   attributes, assembly, visibility, named views, analyses) is cheap to
   clone and pushed on a stack; several commands can merge into one step
@@ -355,7 +355,10 @@ design in a project.
   INI, Cura stacks; presets and bundles) into profiles and materials, never
   geometry; the 3MF export writes each body's effective settings in a
   slicer's dialect (`core/3mf` carries more metadata, per-object
-  metadata and files; `read_package` reads them without the geometry).
+  metadata and files; `read_package` reads them without the geometry,
+  within a budget checked against the declared sizes before reading: at
+  most 4096 entries and a 256 MiB model part, other files over 64 MiB
+  left out and 256 MiB for the files read in all, mitcad#927).
 - **Appearances** (mitcad#46, `core/model-base/src/appearance.rs`): physically
   based parameter sets (base colour, metalness, roughness, specular,
   transmission, IOR, coat, emission, opacity, and a texture for the base
@@ -1219,7 +1222,10 @@ the `Shape` type.
   `export_drawing`): `Kernel::project_view` gives a view's edges with
   hidden lines removed (OCCT's `HLRBRep_Algo`, lines and circles exact,
   other curves as polylines; `HLRBRep_PolyAlgo` on a triangulated copy
-  when asked or when the exact one fails, and for mesh bodies) and a
+  when asked or when the exact one fails, for mesh bodies, and for a
+  drawing's views of bodies with free-form faces, where the exact one
+  took half a minute a view (`ViewSpec::quick`, mitcad#962; its segments
+  fitted back into lines and arcs, `docs/performance.md`) and a
   section's cut faces (Section Analysis' `analysis::clip` and
   `analysis::section`), `Kernel::round_holes` the holes (coaxial
   cylinders with the material outside, a counterbore or countersink
@@ -1564,6 +1570,20 @@ not recompute.
   orbit acceleration through OCCT, scales pan deltas with fractional
   carry, and scales wheel/drag zoom; trackpad scrolling has its own
   multiplier. Settings and the visual guide use the same binding table.
+- **3D mice** (mitcad#951): `app/platform/SpaceMouseDevice.hpp` is the
+  small backend interface (six axes in the view's frame, button events,
+  hot plug) with the pure parsing of the devices' reports; one backend per
+  platform, none with a vendor SDK: Raw Input on Windows
+  (`platform/windows/SpaceMouseWindows.cpp`), spacenavd's own socket on
+  Linux and the BSDs (`platform/unix/SpaceMouseSpnav.cpp`), IOKit's HID
+  Manager on macOS (`platform/macos/SpaceMouseMac.cpp`). A missing device
+  or daemon is no error. `view/SpaceMouseController` maps the axes to the
+  camera's rates (`view/SpaceMouseNavigation.hpp`: speed, dead zone,
+  reversed axes, locks, dominant axis; pan and zoom only in sketch mode)
+  and runs the buttons' view commands through their actions;
+  `OcctViewer` moves the camera by the rates at each frame about the
+  mouse orbit's centre (`AIS_ViewController::GravityPoint`) with its Z
+  lock. The settings are part of `NavigationSettings`.
 - **Timeline inspection** (`app/browser/FeaturePresentation.hpp`): hover
   previews are independent of selection and exclude failed, suppressed
   and rolled-back features. A nonpickable dashed boundary on the Topmost
@@ -1659,7 +1679,14 @@ not recompute.
   for the faces under way and then abandons the rest, whose results are
   discarded whenever they end (`MeshReport::abandoned`). The bodies are
   then drawn with the faces meshed by then, and the view never meshes
-  them itself. All the bodies of a job are meshed
+  them itself. Such a face's thread counts in `io::abandoned_faces()`
+  until it ends; a process that quits meanwhile (the application once its
+  window and session are gone, `mitcad-cli`, `mitcad-geomtool`) ends with
+  `std::_Exit`, as for the imports' given-up tries (mitcad#936,
+  `app/framework/ProcessEnd`). A face whose triangulation throws, whatever
+  the exception, is left failed and the others are meshed; an allocation
+  that failed in one makes the meshing throw "triangulation: out of
+  memory" (mitcad#936). All the bodies of a job are meshed
   together in one compound (`io::mesh_all_in_place`, mitcad#438), so that
   OCCT meshes the faces of all of them in parallel on every core (one body
   at a time, a design of many small bodies used a core or two) and a face
@@ -1913,6 +1940,27 @@ not recompute.
   `model_export` writes into the folders for designs with the headless
   server's command and checks (`Document::mcp_export_plan`), and
   `ui_screenshot` returns an MCP image block (mitcad#689).
+- **Chat panel** (`app/agent`, `core/mcp/src/chat.rs`, mitcad#947,
+  [ai-chat.md](ai-chat.md)): the user's own agent through its own native
+  interface, one class per agent behind `agent::ChatAgent` (Claude Code's
+  print mode with stream-json, `agent::ClaudeCodeAgent`; Codex's app server
+  with JSON-RPC, `agent::CodexAgent`, the bridge given as the thread's
+  configuration overrides). The agent's
+  only tool source is the live server of its window, through the installed
+  bridge with the chat's marker (`mitcad-cli mcp --connect --chat-session`);
+  the listener asks the panel (`mcp::ChatGate`, `agent::ChatController`)
+  before each call of that connection and holds it, and that connection's
+  next requests, while a card waits for the user. The conversation reads
+  the undo depth and the document's revision around the agent's calls and
+  merges a message's steps into one (`merge_undo`) unless the user changed
+  the design meanwhile. The history is a JSON Lines file per design in the
+  user's data folder. What does not need Qt (the agents' streams as panel
+  events, command lines, the approval policy, the undo merge, the history
+  format, Codex's whole JSON-RPC exchange) is Rust, reached through
+  `agent_chat` requests and `ChatStream` (`feed_line`, and `control` for a
+  protocol with state of its own: its events include the lines to write).
+  The panel is Qt in both layouts (a `FloatingLayout::Anchor::Right` card,
+  a dock); the native AppKit panel comes later.
 - **Logging** (`app/mcp/LogRing`, `app/framework/DebugLog`, mitcad#269):
   one message handler for the whole run, installed by `main()` after the
   UI test driver's and passing every message on to it: a ring of the
@@ -1923,7 +1971,17 @@ not recompute.
   switches), flushed every second and at each warning, rolled over at
   20 MB, the folder kept to 10 files and 200 MB.
 - **Imports** run in a separate process (`mitcad --import-worker`) so a
-  kernel crash or hang only kills that process. The worker hands the
+  kernel crash or hang only kills that process. Nothing of an imported
+  file is read in the application's process (mitcad#922): the listings
+  asked before the import (the documents an `.f3d`/`.f3z` design refers
+  to, a building project's linked models) run in that process too
+  (`--list-references`, `--list-links`), behind the progress dialog, and
+  a reader's fault there fails the import with "the import process
+  stopped" instead of ending the session. The parsing queries that do
+  run in the application (`dxf_info`, `svg_info`, the DXF and SVG
+  inserts, the print settings' read) run their reader through
+  `reader_guard::catch_panic` (core/model-base), which turns a panic into
+  the query's or command's error instead of an abort at the bridge. The worker hands the
   import's evaluation back in a result store of the import's own (every
   result a store takes, `hand_off_results`); the window reads the
   imported design with it, restoring those results rather than
@@ -2480,6 +2538,48 @@ are cancellable and time out after 5 minutes without output. MitCad never
 handles passwords: URLs with credentials and `ext::` helpers are refused,
 and credentials are hidden in output.
 
+A repository's own git configuration is untrusted input (mitcad#920,
+`core/vcs/src/remote/trust.rs`): a project folder may arrive from
+anywhere with its `.git`, and git runs on open without a question (the
+edit lock, the quiet fetch). Before every run, `GitCli::run` reads the
+configuration of the repository git would use there (`config` of the
+common git folder, `config.worktree`; no includes followed) and refuses
+(class `untrusted_config`, git not started) when it sets a key that starts
+a program, sends the sign-in or traffic elsewhere or moves the work tree:
+`core.sshCommand`, `core.gitProxy`, `core.askPass`, `core.worktree`,
+`remote.*.uploadpack/receivepack/vcs/proxy`, `credential.*helper`,
+`url.*.insteadOf/pushInsteadOf`, `http.*` (but transfer sizes),
+`protocol.*`, `filter.*`, diff and merge drivers, `gpg.*`,
+`push.gpgSign`, `include`/`includeIf`, `init.templateDir`, git-lfs's
+transfer agents. These are refused rather than overridden because their
+safe value is the user's own configuration (an SSH command or credential
+helper that signing in needs). What has one safe value is overridden on
+every run instead: `core.hooksPath=/dev/null` (no hooks, also none from
+`.git/hooks`), `core.fsmonitor` off, no submodule recursion; so a team's
+`core.hooksPath` does not refuse a project. A `fetch`, `push` or
+`ls-remote` addressed to a configured remote checks its `url` and
+`pushurl` with `check_url` first. Projects MitCad created or cloned set
+none of the refused keys. `remote_info` names the refusal
+(`untrusted_config`), which the project indicator shows.
+
+A remote in a folder (a path or `file://`) is untrusted too (mitcad#940):
+git runs that repository's own git on this computer for a push
+(`receive-pack`, with its `pre-receive`, `update`, `post-receive` and
+`reference-transaction` hooks) and a fetch or listing (`upload-pack`),
+and the `-c` overrides above do not reach it (git clears them for a local
+remote). So `check_run` finds the address a network command reaches (the
+named remote's `pushurl`s for a push, else its `url`s, also from the
+legacy `remotes/` and `branches/` files; else the operand itself) and, for
+a folder, puts `--receive-pack='git -c core.hooksPath=/dev/null -c
+core.fsmonitor= receive-pack'` (`--upload-pack=…` for `fetch`,
+`ls-remote`, `pull`, `clone`) right after the command, and refuses
+(`untrusted_config`) when the configuration of that folder's repository
+sets a refused key (`core.alternateRefsCommand`, filters or
+`core.worktree` for a push that updates its work tree). Remotes on a
+server get no such option: their hooks are the server's. Tests that need
+a remote that refuses lock refs hide them by its configuration
+(`receive.hideRefs=refs/mitcad`) instead of a hook.
+
 - Ahead/behind counts come from local refs (`HEAD` vs.
   `refs/remotes/origin/<branch>`), so status needs no network.
 - Connecting refuses an unrelated history, sets `origin` and upstream,
@@ -3011,8 +3111,9 @@ direction), not only the kernel's (`commands.md`, fillet).
   computed from its frames before it is added, so a joint item costs one
   recompute (mitcad#87). Rigid groups come in as rigid groups.
 - FreeCAD: `core/freecad` reads the archive and XML (`roxmltree`, DTDs
-  refused); enumerations are indices, mapped per FreeCAD version through
-  `core/freecad/data/enums.json`.
+  refused, nesting, expressions and B-splines bounded against hostile
+  files, mitcad#932); enumerations are indices, mapped per FreeCAD version
+  through `core/freecad/data/enums.json`.
 
 How both work, their limits and corpus tests:
 [core/import/README.md](../core/import/README.md) and, for FreeCAD

@@ -255,6 +255,11 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/blend_surfaces.cpp
   src/blend_surfaces.hpp)
+# Feature inputs drawn where they were: a Fillet's or a Chamfer's picked
+# edges as polylines (mitcad#957).
+target_sources(mitcad_geometry PRIVATE
+  src/input_edges.cpp
+  include/mitcad/geometry/input_edges.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).

@@ -804,7 +804,9 @@ type Vertices = (Vec<u64>, Option<(u64, u64)>);
 
 fn owned_vertices(r: &mut Reader, count: i32) -> Result<Vertices, DwgError> {
     if r.v >= Version::R2004 {
-        let mut owned = Vec::with_capacity(count.max(0) as usize);
+        // Not sized from the count (a field of the file): the list grows
+        // with the handles the data really holds.
+        let mut owned = Vec::with_capacity((count.max(0) as usize).min(1024));
         for _ in 0..count.max(0) {
             owned.push(r.h()?.handle);
         }
@@ -871,7 +873,7 @@ fn mesh(r: &mut Reader) -> Result<EntityData, DwgError> {
     if !(0..=10_000_000).contains(&n) {
         return Err(DwgError::Corrupt(format!("a mesh of {n} vertices")));
     }
-    let mut vertices = Vec::with_capacity(n as usize);
+    let mut vertices = Vec::with_capacity((n as usize).min(1024));
     for _ in 0..n {
         vertices.push(d.bd3()?);
     }
@@ -879,7 +881,7 @@ fn mesh(r: &mut Reader) -> Result<EntityData, DwgError> {
     if !(0..=50_000_000).contains(&list) {
         return Err(DwgError::Corrupt(format!("a mesh face list of {list}")));
     }
-    let mut items = Vec::with_capacity(list as usize);
+    let mut items = Vec::with_capacity((list as usize).min(1024));
     for _ in 0..list {
         items.push(d.bl()?);
     }

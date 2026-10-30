@@ -63,6 +63,7 @@
 
 use mitcad_freecad::sketch::{self as fc, Curve};
 use mitcad_freecad::{LinkRef, Object, Value as FcValue};
+use mitcad_model::sketch::geometry::Curve2;
 use mitcad_model::{BodyUid, ComponentUid, Kernel, SketchFrame};
 use serde_json::{Value, json};
 
@@ -72,7 +73,7 @@ use super::history::{Candidate, SketchMade, Target};
 use super::params::{Kind, Q};
 use super::profiles::Swept;
 use super::sketches::Placed;
-use mitcad_import_base::geom::{add, cross, dot, norm, scale, sub, unit};
+use mitcad_import_base::geom::{cross, dot, norm, scale, sub, unit};
 
 /// What a fillet or chamfer works on: its body, the edges and faces named,
 /// or (`all`, FreeCAD's `UseAllEdges`) every edge of the body.
@@ -268,6 +269,54 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
     }
 
+    /// The bounding box of the Body's one body, when it has one.
+    fn body_box(&self, target: &Target) -> Option<mitcad_model::BoundingBox> {
+        let body = self.body(target).ok()?;
+        let shape = self.doc.body_shape(body)?;
+        self.doc.kernel().bounding_box(shape).ok().flatten()
+    }
+
+    /// For each centre of a hole, whether FreeCAD's stored result of the
+    /// hole `o` has an edge about the axis through it (along `normal`,
+    /// within the hole's widest radius): material FreeCAD drilled there. A
+    /// centre without any is one where the Body has no material (a sketch
+    /// bound from another Body, mitcad#955). None without a stored result.
+    fn drilled_at(
+        &mut self,
+        o: &Object,
+        centres: &[[f64; 3]],
+        normal: [f64; 3],
+    ) -> Option<Vec<bool>> {
+        let widest = ["Diameter", "HoleCutDiameter"]
+            .iter()
+            .filter_map(|p| o.f64(p))
+            .fold(0.0, f64::max);
+        let reach = widest / 2.0 + 0.5;
+        let mut points: Vec<[f64; 3]> = Vec::new();
+        for i in 0..1_000_000 {
+            let Some((_, curves)) =
+                self.stored_element_own(&o.name, mitcad_model::ElementKind::Edge, i)
+            else {
+                break;
+            };
+            points.extend(curves.iter().flat_map(super::elements::key_points));
+        }
+        if points.is_empty() {
+            return None;
+        }
+        Some(
+            centres
+                .iter()
+                .map(|c| {
+                    points.iter().any(|p| {
+                        let d = sub(*p, *c);
+                        norm(sub(d, scale(normal, dot(d, normal)))) <= reach
+                    })
+                })
+                .collect(),
+        )
+    }
+
     /// The Body's one body a dress-up works on.
     pub(super) fn body(&self, target: &Target) -> Result<BodyUid, String> {
         match target.current.as_slice() {
@@ -309,10 +358,16 @@ impl<K: Kernel> Importer<'_, '_, K> {
             .link(property)
             .ok_or_else(|| format!("no {property}"))?
             .clone();
-        let is_sketch = self.sources[0]
+        let kind = self.sources[0]
             .object(&link.object)
-            .is_some_and(|s| super::is_sketch(&s.type_name));
-        if !is_sketch {
+            .map(|s| s.type_name.clone())
+            .unwrap_or_default();
+        // A binder of a whole sketch (mitcad#955): that sketch's curves.
+        if super::sketches::is_binder(&kind) && link.subs.is_empty() {
+            let sketch = self.binder_sketch(&link.object, component)?;
+            return self.whole_profile(sketch);
+        }
+        if !super::is_sketch(&kind) {
             return Err(format!(
                 "a profile that is not a sketch ({}) is not translated yet",
                 link.object
@@ -322,6 +377,11 @@ impl<K: Kernel> Importer<'_, '_, K> {
         if !link.subs.is_empty() && o.bool("AllowMultiFace") == Some(true) {
             return self.chosen_profile(&link, sketch, component);
         }
+        self.whole_profile(sketch)
+    }
+
+    /// A whole sketch's profile: its material regions.
+    fn whole_profile(&self, sketch: SketchMade) -> Result<Profile, String> {
         let output = self
             .doc
             .sketch_output(sketch.uid)
@@ -380,7 +440,10 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 // extrusion takes a direction since mitcad#541).
                 return self.oblique_candidates(o, &swept, d, pocket, &operation, &participants);
             }
-            flip = dot(d, n) < 0.0;
+            // FreeCAD's Direction is the one before Reversed turns it
+            // (mitcad#964: a pad along its sketch's normal axis, Reversed,
+            // keeps Direction along the normal and pads the other way).
+            flip = (dot(d, n) < 0.0) ^ reversed;
         }
         let taper = self.prop(o, "TaperAngle", Kind::Angle, 0.0);
         let taper2 = self.prop(o, "TaperAngle2", Kind::Angle, 0.0);
@@ -390,6 +453,10 @@ impl<K: Kernel> Importer<'_, '_, K> {
             .enum_text(o, "Type")
             .unwrap_or_else(|| "Length".to_owned());
         let kind = kind.trim_start_matches('?').to_owned();
+        let negative_side = mode == "Two sides"
+            && ["Length", "Length2"]
+                .iter()
+                .any(|p| o.f64(p).is_some_and(|v| v < 0.0));
         let mut out = Vec::new();
         // FreeCAD's conventions where they are uncertain: the direction,
         // the taper's and the offset's signs.
@@ -405,15 +472,26 @@ impl<K: Kernel> Importer<'_, '_, K> {
         // as FreeCAD sweeps it, by distances only.
         for (field, profile) in swept.readings() {
             for (flip, taper_sign, offset_sign) in &variants {
-                let extent = self.extent(
-                    o,
-                    target,
-                    &mode,
-                    &kind,
-                    &taper.signed(*taper_sign),
-                    &taper2.signed(*taper_sign),
-                    &offset.signed(*offset_sign),
-                )?;
+                let extent = if mode == "Symmetric" && kind.starts_with("UpTo") {
+                    self.symmetric_up_to(
+                        o,
+                        target,
+                        &swept,
+                        &kind,
+                        &taper,
+                        &offset.signed(*offset_sign),
+                    )?
+                } else {
+                    self.extent(
+                        o,
+                        target,
+                        &mode,
+                        &kind,
+                        &taper.signed(*taper_sign),
+                        &taper2.signed(*taper_sign),
+                        &offset.signed(*offset_sign),
+                    )?
+                };
                 if swept.is_face() {
                     super::profiles::face_extrusion_extent(&extent)?;
                 }
@@ -422,6 +500,19 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 def[field] = profile.clone();
                 if participants.as_array().is_some_and(|p| !p.is_empty()) {
                     def["participants"] = participants.clone();
+                }
+                if let Some(links) = self.object_links(&def, component)? {
+                    def["object_links"] = links;
+                }
+                // A negative length of two sides (mitcad#955): FreeCAD's
+                // side then ends on the other side's side, the solid between
+                // the two ends (Mitcad's signed sides; a side through all or
+                // up to an object cut off there). That reading first, then
+                // each side its own way.
+                if negative_side && def["extent"]["type"] == "two_sides" {
+                    let mut signed = def.clone();
+                    signed["extent"]["signed"] = json!(true);
+                    out.push(swept.candidate(signed));
                 }
                 out.push(swept.candidate(def));
             }
@@ -523,6 +614,133 @@ impl<K: Kernel> Importer<'_, '_, K> {
             }
         }
         Ok(out)
+    }
+
+    /// A symmetric extent up to an object (FreeCAD 1.1's SideType
+    /// Symmetric, mitcad#955): FreeCAD extrudes side one up to it (the face
+    /// moved by the offset) and mirrors that side across the profile's
+    /// plane. Up to a planar face parallel to the profile that is two
+    /// sides: up to the face, and as far the other way (a distance, which
+    /// does not follow the face). Mitcad's extrusions have no mirrored
+    /// side, so other objects are not translated.
+    fn symmetric_up_to(
+        &mut self,
+        o: &Object,
+        target: &Target,
+        swept: &Swept,
+        kind: &str,
+        taper: &Q,
+        offset: &Q,
+    ) -> Result<Value, String> {
+        let refused = || {
+            format!(
+                "a symmetric {kind} extent (FreeCAD mirrors side one across the sketch plane) \
+                 is translated only up to a planar face parallel to the sketch"
+            )
+        };
+        if kind != "UpToFace" || taper.value != 0.0 {
+            return Err(refused());
+        }
+        let Swept::Sketch(p) = swept else {
+            return Err(refused());
+        };
+        let frame = p.sketch.frame;
+        let length = self.prop(o, "Length", Kind::Length, 0.0);
+        let side = self.side(o, target, kind, &length, offset, "UpToFace")?;
+        // (The face's plane is measured in the profile's component.)
+        let elsewhere = side["object"]["body"]
+            .as_str()
+            .and_then(|b| b.parse::<BodyUid>().ok())
+            .is_some_and(|b| self.doc.body_component(b) != Some(target.place.component));
+        if elsewhere {
+            return Err(refused());
+        }
+        let (base, n) = self.plane_geometry(&side["object"]).ok_or_else(refused)?;
+        let normal = frame.normal();
+        if norm(cross(n, normal)) > 1e-9 {
+            return Err(refused());
+        }
+        let depth = dot(sub(base, frame.origin), normal).abs() + offset.value;
+        if depth <= 1e-9 {
+            return Err("a symmetric extent up to a face in the sketch's plane".to_owned());
+        }
+        Ok(json!({"type": "two_sides", "side1": side,
+                  "side2": {"type": "distance", "distance": depth}}))
+    }
+
+    /// The `object_links` of an extrusion's or a revolution's objects that
+    /// are (or are faces of) bodies of another component than `own`
+    /// (mitcad#955; the model's mitcad#762): each body read in its
+    /// component through the occurrences where the document places the
+    /// two components first, so the extent follows when either moves.
+    fn object_links(&self, def: &Value, own: ComponentUid) -> Result<Option<Value>, String> {
+        let objects = [
+            &def["start"]["object"],
+            &def["extent"]["object"],
+            &def["extent"]["side1"]["object"],
+            &def["extent"]["side2"]["object"],
+        ];
+        let mut links = serde_json::Map::new();
+        for body in objects.iter().filter_map(|o| o["body"].as_str()) {
+            let Some(component) = body
+                .parse::<BodyUid>()
+                .ok()
+                .and_then(|uid| self.doc.body_component(uid))
+            else {
+                continue;
+            };
+            if component == own || links.contains_key(body) {
+                continue;
+            }
+            let (_, link) = self
+                .seen_in(component, own)
+                .ok_or_else(|| format!("{body}'s component is not placed"))?;
+            if let Some(link) = link {
+                links.insert(body.to_owned(), link);
+            }
+        }
+        Ok((!links.is_empty()).then_some(Value::Object(links)))
+    }
+
+    /// The point and normal of an extent's object that is a plane: an
+    /// origin plane, a fixed plane or a planar face of a body.
+    fn plane_geometry(&self, object: &Value) -> Option<([f64; 3], [f64; 3])> {
+        let plane = match object["type"].as_str()? {
+            "plane" => &object["plane"],
+            "face" => object,
+            _ => return None,
+        };
+        let vector = |v: &Value| -> Option<[f64; 3]> {
+            let a = v.as_array()?;
+            Some([
+                a.first()?.as_f64()?,
+                a.get(1)?.as_f64()?,
+                a.get(2)?.as_f64()?,
+            ])
+        };
+        match plane {
+            Value::String(s) => match s.as_str() {
+                "xy" => Some(([0.0; 3], [0.0, 0.0, 1.0])),
+                "xz" => Some(([0.0; 3], [0.0, 1.0, 0.0])),
+                "yz" => Some(([0.0; 3], [1.0, 0.0, 0.0])),
+                // A construction plane made of a datum.
+                uid => match self.doc.datum(uid.parse().ok()?)? {
+                    mitcad_model::datum::Datum::Plane(p) => {
+                        Some((p.origin, cross(p.x_axis, p.y_axis)))
+                    }
+                    _ => None,
+                },
+            },
+            Value::Object(map) if map.contains_key("face") => {
+                let body: BodyUid = map["body"].as_str()?.parse().ok()?;
+                let face = map["face"].as_str()?.parse().ok()?;
+                let shape = self.doc.body_shape(body)?;
+                let p = self.doc.kernel().face_plane(shape, &face).ok()?;
+                Some((p.origin, p.normal))
+            }
+            Value::Object(map) => Some((vector(&map["origin"])?, vector(&map["normal"])?)),
+            _ => None,
+        }
     }
 
     /// One side, two sides or symmetric (1.1's SideType, else Midplane and
@@ -669,15 +887,23 @@ impl<K: Kernel> Importer<'_, '_, K> {
         // A whole object that is not a plane: its body.
         let plane = shape.type_name.ends_with("Plane") || super::is_sketch(&shape.type_name);
         if link.subs.is_empty() && !plane {
+            // (Another component's body: through `object_links`.)
             let body = self
                 .body_of_object(&link.object)
                 .ok_or_else(|| format!("{} has no body here", link.object))?;
-            if self.doc.body_component(body) != Some(target.place.component) {
-                return Err(format!("{} is in another component", link.object));
-            }
             return Ok(json!({"type": "body", "body": body.to_string(), "through": false}));
         }
-        Ok(match self.plane_ref(link, target.place.component)? {
+        let found = match self.plane_ref(link, target.place.component) {
+            Ok(found) => found,
+            // A planar face Mitcad's body does not have as one face (FreeCAD
+            // split or merged it otherwise, mitcad#955): its plane, as
+            // FreeCAD takes the face's surface without its limits where the
+            // profile reaches past them. Fixed: it does not follow the body.
+            Err(why) => self
+                .stored_face_plane(link, target.place.component)
+                .ok_or(why)?,
+        };
+        Ok(match found {
             Value::Object(map) if map.contains_key("face") => {
                 let mut face = Value::Object(map);
                 face["type"] = json!("face");
@@ -685,6 +911,31 @@ impl<K: Kernel> Importer<'_, '_, K> {
             }
             plane => json!({"type": "plane", "plane": plane}),
         })
+    }
+
+    /// The plane of a planar face of an object's stored shape (`Face<n>`),
+    /// in `component`'s coordinates: `{"origin", "normal", "x_axis"}`.
+    fn stored_face_plane(&mut self, link: &LinkRef, component: ComponentUid) -> Option<Value> {
+        let element = link.subs.first().map(sub_name)?;
+        let index = super::elements::element_index(element, "Face")?;
+        let (from, curves) =
+            self.stored_element_own(&link.object, mitcad_model::ElementKind::Face, index)?;
+        let (into, _) = self.seen_in(from, component)?;
+        let curves: Vec<mitcad_model::Curve3> = curves
+            .iter()
+            .map(|c| super::sketches::transform_curve(c, &into))
+            .collect();
+        let frame = super::sweep_inputs::plane_through(&curves)?;
+        let normal = frame.normal();
+        let points: Vec<[f64; 3]> = curves
+            .iter()
+            .flat_map(super::elements::key_points)
+            .collect();
+        let size = 1.0 + points.iter().map(|p| norm(*p)).fold(0.0, f64::max);
+        let planar = points
+            .iter()
+            .all(|p| dot(sub(*p, frame.origin), normal).abs() <= 1e-7 * size);
+        planar.then(|| json!({"origin": frame.origin, "normal": normal, "x_axis": frame.x_axis}))
     }
 
     // Revolution and Groove.
@@ -735,6 +986,23 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 vec![json!({"type": "to_object",
                             "object": {"type": "body", "body": body.to_string(), "through": true}})]
             }
+            // Over a full turn (mitcad#955): FreeCAD turns the profile back
+            // by Angle2 and revolves by the sum, which OCCT's revolution
+            // takes less whole turns, so the turn runs from 360° less
+            // Angle2 to Angle past the profile: a negative second angle.
+            "TwoAngles" if angle.value + angle2.value > std::f64::consts::TAU + 1e-9 => {
+                let past = |q: &Q| {
+                    Q::combine(&[q], q.value - std::f64::consts::TAU, Kind::Angle, |t| {
+                        format!("{} - 360 deg", t[0])
+                    })
+                };
+                vec![
+                    json!({"type": "two_sides", "angle1": angle.json(),
+                           "angle2": past(&angle2).json()}),
+                    json!({"type": "two_sides", "angle1": angle2.json(),
+                           "angle2": past(&angle).json()}),
+                ]
+            }
             "TwoAngles" => vec![
                 json!({"type": "two_sides", "angle1": angle.json(), "angle2": angle2.json()}),
                 json!({"type": "two_sides", "angle1": angle2.json(), "angle2": angle.json()}),
@@ -782,6 +1050,9 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     def[field] = profile.clone();
                     if participants.as_array().is_some_and(|p| !p.is_empty()) {
                         def["participants"] = participants.clone();
+                    }
+                    if let Some(links) = self.object_links(&def, component)? {
+                        def["object_links"] = links;
                     }
                     out.push(swept.candidate(def));
                 }
@@ -897,11 +1168,25 @@ impl<K: Kernel> Importer<'_, '_, K> {
     fn hole_candidates(&mut self, o: &Object, target: &Target) -> Result<Vec<Candidate>, String> {
         let component = target.place.component;
         let link = o.link("Profile").ok_or("no profile")?.clone();
-        let sketch = self.sketch_of(&link, component)?;
-        let fc_sketch = self.sources[0]
+        let profile_object = self.sources[0]
             .object(&link.object)
-            .map(fc::Sketch::of)
+            .cloned()
             .ok_or("no sketch")?;
+        // A binder of a whole sketch (mitcad#955): that sketch's circles
+        // and points, projected.
+        let (sketch, fc_sketch) = if super::sketches::is_binder(&profile_object.type_name) {
+            let sketch = self.binder_sketch(&link.object, component)?;
+            let bound = self
+                .sketches_of(&profile_object)
+                .and_then(|s| s.into_iter().next())
+                .ok_or("the binder binds no sketch")?;
+            (sketch, fc::Sketch::of(&bound))
+        } else {
+            (
+                self.sketch_of(&link, component)?,
+                fc::Sketch::of(&profile_object),
+            )
+        };
         // The circles' (and arcs') centres; else the points.
         let mut points: Vec<String> = fc_sketch
             .geometry
@@ -912,6 +1197,20 @@ impl<K: Kernel> Importer<'_, '_, K> {
             })
             .filter_map(|(i, _)| sketch.curves.get(&(i as i32)).map(|id| format!("c{id}")))
             .collect();
+        // 1.1's defining external geometry is part of the sketch's shape,
+        // whose circles and arcs FreeCAD drills at too (mitcad#955).
+        for (k, g) in fc_sketch.external.iter().enumerate() {
+            let Some(g) = g else { continue };
+            if g.defining
+                && matches!(g.curve, Curve::Circle { .. } | Curve::Arc { .. })
+                && let Some(id) = sketch.externals.get(&k)
+            {
+                let curve = format!("c{id}");
+                if !points.contains(&curve) {
+                    points.push(curve);
+                }
+            }
+        }
         if points.is_empty() {
             // The sketch's points in FreeCAD's order, construction ones left
             // out as FreeCAD's sketch shape leaves them out. Coincident
@@ -933,6 +1232,50 @@ impl<K: Kernel> Importer<'_, '_, K> {
         if points.is_empty() {
             return Err("the profile sketch has no circles or points".to_owned());
         }
+        // Which holes reach the body (a sketch bound into another Body may
+        // hold centres where that Body has no material; FreeCAD drills
+        // there too, cutting nothing, mitcad#955): the axis meets the
+        // body's box, and FreeCAD's result has edges about it.
+        let normal = sketch.frame.normal();
+        let positions: Vec<Option<[f64; 3]>> = {
+            let output = self.doc.sketch_output(sketch.uid);
+            let frame = sketch.frame;
+            points
+                .iter()
+                .map(|r| {
+                    let at = output.and_then(|o| {
+                        let id = mitcad_model::EntityUid(r.get(1..)?.parse().ok()?);
+                        if r.starts_with('c') {
+                            match o.solved.curves.get(&id)? {
+                                Curve2::Circle { center, .. } | Curve2::Arc { center, .. } => {
+                                    Some(*center)
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            o.solved.points.get(&id).copied()
+                        }
+                    });
+                    at.map(|p| frame.point(p))
+                })
+                .collect()
+        };
+        let known: Vec<[f64; 3]> = positions.iter().flatten().copied().collect();
+        let mut drilled = self
+            .drilled_at(o, &known, normal)
+            .unwrap_or_else(|| vec![true; known.len()])
+            .into_iter();
+        let body_box = self.body_box(target);
+        let reached: Vec<bool> = positions
+            .iter()
+            .map(|p| match p {
+                Some(p) => {
+                    let hit = drilled.next().unwrap_or(true);
+                    hit && body_box.as_ref().is_none_or(|b| !misses_box(*p, normal, b))
+                }
+                None => true,
+            })
+            .collect();
         // A tapered hole: FreeCAD's angle is the wall's to the top face.
         let tapered = o.bool("Tapered") == Some(true)
             && o.f64("TaperedAngle")
@@ -974,9 +1317,21 @@ impl<K: Kernel> Importer<'_, '_, K> {
             }
         }
         // A modelled thread as FreeCAD makes it: its groove cut along a
-        // helix (tried before Mitcad's thread on the walls).
+        // helix (tried before Mitcad's thread on the walls), about each
+        // centre the hole drills that reaches the body: the solved
+        // positions of its circles, of 1.1's defining external circles and
+        // arcs, or of its points (mitcad#964: the groove took the sketch's
+        // own circles only, so a hole drilled at an external arc's centre
+        // had no thread there).
         let groove = match &thread {
-            Some(t) if modeled => Some(self.thread_groove(o, t, &fc_sketch, &sketch, target)),
+            Some(t) if modeled => {
+                let centers: Vec<[f64; 3]> = positions
+                    .iter()
+                    .zip(&reached)
+                    .filter_map(|(p, hit)| if *hit { *p } else { None })
+                    .collect();
+                Some(self.thread_groove(o, t, centers, &sketch, target))
+            }
             _ => None,
         };
         o.f64("Diameter").ok_or("no diameter")?;
@@ -1067,7 +1422,9 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     candidate.note(format!("FreeCAD's thread groove is not rebuilt: {why}"));
             }
             if let Some(thread) = &thread {
+                // (Only the holes that reach the body have walls.)
                 let faces: Vec<Value> = (0..points.len())
+                    .filter(|i| reached[*i])
                     .map(|i| json!({"body": current.to_string(), "face": format!("$0:hole{i}.wall")}))
                     .collect();
                 candidate = candidate.then(
@@ -1196,10 +1553,10 @@ impl<K: Kernel> Importer<'_, '_, K> {
     /// whose flanks start at the basic minor diameter; beyond the bore both
     /// are the same.
     fn thread_groove(
-        &self,
+        &mut self,
         o: &Object,
         thread: &Value,
-        fc_sketch: &fc::Sketch,
+        centers: Vec<[f64; 3]>,
         sketch: &SketchMade,
         target: &Target,
     ) -> Result<ThreadGroove, String> {
@@ -1295,25 +1652,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
             ]
         };
         let frame = &sketch.frame;
-        let centers: Vec<[f64; 3]> = fc_sketch
-            .geometry
-            .iter()
-            .filter(|g| !g.construction)
-            .filter_map(|g| match g.curve {
-                Curve::Circle { center, .. } | Curve::Arc { center, .. } => Some(add(
-                    frame.origin,
-                    add(
-                        scale(frame.x_axis, center[0]),
-                        scale(frame.y_axis, center[1]),
-                    ),
-                )),
-                _ => None,
-            })
-            .collect();
+        // (The centres whose axis misses the body, or where FreeCAD's
+        // result has no edge about the axis, cut nothing there: FreeCAD
+        // drills them anyway, mitcad#955. They are left out of `centers`,
+        // as a groove there would refuse to cut.)
+        let normal = unit(cross(frame.x_axis, frame.y_axis)).ok_or("the sketch has no normal")?;
         if centers.is_empty() {
             return Err("no circles to thread".to_owned());
         }
-        let normal = unit(cross(frame.x_axis, frame.y_axis)).ok_or("the sketch has no normal")?;
         // Through all, FreeCAD's groove runs on far past the body: it is cut
         // only as far as two pitches beyond the body's farthest corner from
         // the sketch plane (the same result, a shorter helix).
@@ -2771,4 +3117,24 @@ impl ThreadGroove {
             "its modelled thread as FreeCAD cuts it: the groove's section swept along a helix",
         )
     }
+}
+
+/// Whether the line through `p` along `n` misses the box: a hole there
+/// cuts nothing.
+fn misses_box(p: [f64; 3], n: [f64; 3], b: &mitcad_model::BoundingBox) -> bool {
+    let tol = 1e-6;
+    let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
+    for k in 0..3 {
+        if n[k].abs() < 1e-12 {
+            if p[k] < b.min[k] - tol || p[k] > b.max[k] + tol {
+                return true;
+            }
+        } else {
+            let a = (b.min[k] - tol - p[k]) / n[k];
+            let c = (b.max[k] + tol - p[k]) / n[k];
+            lo = lo.max(a.min(c));
+            hi = hi.min(a.max(c));
+        }
+    }
+    lo > hi
 }

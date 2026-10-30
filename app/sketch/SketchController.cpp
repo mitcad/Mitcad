@@ -326,6 +326,21 @@ void SketchOp::constrain(const QString& point, const Snap& snap) {
                    {QStringLiteral("curve"), snap.curve}});
     break;
   case Snap::Kind::OnCurve:
+    if (!snap.axis.isEmpty()) {
+      // Onto the x or y axis (mitcad#948): on the axis's line, made in this
+      // step when the sketch lacks it.
+      const auto hold = axisHold(point, snap, [this](const QString& pick) { return axisInput(pick); });
+      if (hold) {
+        QJsonObject cmd = command(QStringLiteral("sketch.add_constraint"));
+        cmd.insert(QStringLiteral("constraint"), *hold);
+        if (attempt(cmd)) {
+          // For UI tests: the constraint that holds the point.
+          qDebug().noquote() << QStringLiteral("Coincident %1 on the sketch %2 axis %3")
+                                    .arg(point, snap.axis, hold->value(QStringLiteral("entity")).toString());
+        }
+      }
+      break;
+    }
     coincident(snap.curve);
     break;
   case Snap::Kind::Intersection:
@@ -2156,6 +2171,7 @@ void SketchController::updateCursor(const QPointF& position) {
     settings.grid = m_gridSnap;
     settings.gridStep = m_gridStep > 0.0 ? m_gridStep : m_viewer.gridStep(); // the lines shown
     settings.body = m_tool->bodySnaps() ? &bodyGeometry() : nullptr;
+    settings.axes = true; // mitcad#948
     m_snap = snap(settings, *raw, position);
   } else {
     m_snap = Snap();

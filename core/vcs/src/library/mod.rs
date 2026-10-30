@@ -453,6 +453,8 @@ impl LibraryRepo {
             part_number: non_empty(&item.part_number),
             supplier_url: non_empty(&item.supplier_url),
             build: item.build.clone(),
+            // The rows' standards and articles (mitcad#949).
+            rows: manifest.named_rows(item),
             text,
         })
     }

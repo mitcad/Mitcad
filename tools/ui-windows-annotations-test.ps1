@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/commands app/framework app/browser app/view core/model-api/src core/model/src/document tools/cli
-# check-all sources: core/model-drawing/src
+# check-all sources: core/model-drawing/src third_party/fonts/iso-lettering
 # Input-driven Windows UI test of annotations (mitcad#702) in the build VM
 # (tools/ui-windows-lib.ps1 says how the input is posted), as
 # tools/ui-annotations-test.sh on Linux, on the design of

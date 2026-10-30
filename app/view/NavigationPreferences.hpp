@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <functional>
 #include <utility>
 
@@ -22,6 +23,7 @@
 #include <QSignalBlocker>
 #include <QStringList>
 #include <QSlider>
+#include <QTabWidget>
 #include <QTableWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -180,12 +182,27 @@ private:
 
 class NavigationPreferences : public QWidget {
 public:
+  // `buttonCommands`: the commands a 3D mouse's button can run, by id and
+  // name (Fit and Home when empty).
   NavigationPreferences(const NavigationSettings& settings,
-                        const QVector<QPair<NavigationScheme, QString>>& schemes, QWidget* parent = nullptr)
-      : QWidget(parent), m_settings(settings) {
+                        const QVector<QPair<NavigationScheme, QString>>& schemes, QWidget* parent = nullptr,
+                        const QVector<QPair<QString, QString>>& buttonCommands = {})
+      : QWidget(parent), m_settings(settings), m_buttonCommands(buttonCommands) {
+    if (m_buttonCommands.isEmpty()) {
+      m_buttonCommands = {{QStringLiteral("view.fit"), tr("Fit")}, {QStringLiteral("view.home"), tr("Home")}};
+    }
     setObjectName(QStringLiteral("navigationPreferences"));
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    // The mouse and the trackpad, and the 3D mouse (mitcad#951), on tabs
+    // of their own, so that the page keeps a height a low screen shows.
+    auto* tabs = new QTabWidget;
+    tabs->setObjectName(QStringLiteral("navigationTabs"));
+    tabs->setDocumentMode(true);
+    outer->addWidget(tabs);
+    auto* mousePage = new QWidget;
+    auto* layout = new QVBoxLayout(mousePage);
+    layout->setContentsMargins(0, 6, 0, 0);
     auto* top = new QFormLayout;
     m_scheme = new QComboBox;
     m_scheme->setObjectName(QStringLiteral("navigationScheme"));
@@ -246,6 +263,13 @@ public:
     hint->setObjectName(QStringLiteral("navigationGuideExplanation"));
     hint->setWordWrap(true);
     layout->addWidget(hint);
+    tabs->addTab(mousePage, tr("Mouse and Trackpad"));
+    auto* spacePage = new QWidget;
+    auto* spaceLayout = new QVBoxLayout(spacePage);
+    spaceLayout->setContentsMargins(0, 6, 0, 0);
+    addSpaceMouse(spaceLayout);
+    spaceLayout->addStretch(1);
+    tabs->addTab(spacePage, tr("3D Mouse"));
     connect(m_scheme, &QComboBox::currentIndexChanged, this, [this] {
       m_settings.scheme = static_cast<NavigationScheme>(m_scheme->currentData().toInt());
       if (m_settings.scheme == NavigationScheme::Custom && m_settings.customBindings.isEmpty())
@@ -365,7 +389,144 @@ private:
     grid->addWidget(box, row, column);
     connect(box, &QCheckBox::toggled, this, [this, field](bool value) { m_settings.*field = value; notify(); });
   }
+  // The 3D mouse's tab (mitcad#951): on or off, its speed, each axis on
+  // and reversed, the locks, the dominant axis and its buttons' commands.
+  void addSpaceMouse(QVBoxLayout* layout) {
+    auto* group = new QWidget;
+    group->setObjectName(QStringLiteral("navigationSpaceMouse"));
+    auto* box = new QVBoxLayout(group);
+    box->setContentsMargins(0, 0, 0, 0);
+    const QString status = spaceMouseStatus().text;
+    auto* found = new QLabel(status.isEmpty() ? tr("No 3D mouse found") : status);
+    found->setObjectName(QStringLiteral("navigationSpaceMouseStatus"));
+    found->setWordWrap(true);
+    box->addWidget(found);
+    auto* on = new QCheckBox(tr("Use a 3D mouse"));
+    on->setObjectName(QStringLiteral("navigationSpaceMouseOn"));
+    on->setChecked(m_settings.spaceMouse.enabled);
+    box->addWidget(on);
+    connect(on, &QCheckBox::toggled, this, [this](bool value) {
+      m_settings.spaceMouse.enabled = value;
+      notify();
+    });
+    auto* speedForm = new QFormLayout;
+    auto* speedRow = new QHBoxLayout;
+    auto* slider = new QSlider(Qt::Horizontal);
+    slider->setObjectName(QStringLiteral("navigationSpaceMouseSpeed"));
+    slider->setMinimumWidth(70);
+    slider->setRange(10, 400);
+    slider->setSingleStep(10);
+    slider->setPageStep(25);
+    slider->setValue(int(std::lround(sanitizeSpaceMouseSpeed(m_settings.spaceMouse.speed) * 100)));
+    auto* speedValue = new QLabel(QStringLiteral("%1×").arg(slider->value() / 100.0, 0, 'f', 2));
+    speedValue->setMinimumWidth(48);
+    auto* speedReset = new QPushButton(tr("Reset"));
+    speedReset->setObjectName(QStringLiteral("navigationSpaceMouseSpeedReset"));
+    speedReset->setToolTip(tr("Restores the default 3D mouse speed"));
+    speedRow->addWidget(slider, 1);
+    speedRow->addWidget(speedValue);
+    speedRow->addWidget(speedReset);
+    speedForm->addRow(tr("3D mouse speed:"), speedRow);
+    box->addLayout(speedForm);
+    connect(slider, &QSlider::valueChanged, this, [this, speedValue](int position) {
+      m_settings.spaceMouse.speed = position / 100.0;
+      speedValue->setText(QStringLiteral("%1×").arg(m_settings.spaceMouse.speed, 0, 'f', 2));
+      notify();
+    });
+    connect(speedReset, &QPushButton::clicked, slider, [slider] { slider->setValue(100); });
+    // One row per axis: whether it moves the view, and its direction.
+    auto* axes = new QGridLayout;
+    axes->addWidget(new QLabel(tr("Axis")), 0, 0);
+    axes->addWidget(new QLabel(tr("On")), 0, 1);
+    axes->addWidget(new QLabel(tr("Reverse")), 0, 2);
+    const QString axisNames[6] = {tr("Pan left and right"), tr("Pan up and down"), tr("Zoom (pull and push)"),
+                                  tr("Tilt forward and back"), tr("Spin"), tr("Roll sideways")};
+    for (int axis = 0; axis < 6; ++axis) {
+      const auto index = static_cast<std::size_t>(axis);
+      axes->addWidget(new QLabel(axisNames[axis]), axis + 1, 0);
+      auto* axisOn = new QCheckBox;
+      axisOn->setObjectName(QStringLiteral("navigationSpaceMouseAxis%1").arg(axis));
+      axisOn->setAccessibleName(tr("%1 on").arg(axisNames[axis]));
+      axisOn->setChecked(m_settings.spaceMouse.axisOn[index]);
+      axes->addWidget(axisOn, axis + 1, 1);
+      auto* reverse = new QCheckBox;
+      reverse->setObjectName(QStringLiteral("navigationSpaceMouseReverse%1").arg(axis));
+      reverse->setAccessibleName(tr("%1 reversed").arg(axisNames[axis]));
+      reverse->setChecked(m_settings.spaceMouse.reversed[index]);
+      axes->addWidget(reverse, axis + 1, 2);
+      connect(axisOn, &QCheckBox::toggled, this, [this, index](bool value) {
+        m_settings.spaceMouse.axisOn[index] = value;
+        notify();
+      });
+      connect(reverse, &QCheckBox::toggled, this, [this, index](bool value) {
+        m_settings.spaceMouse.reversed[index] = value;
+        notify();
+      });
+    }
+    axes->setColumnStretch(0, 1);
+    box->addLayout(axes);
+    auto* locks = new QGridLayout;
+    const auto lock = [this, locks](int row, int column, const QString& title, const char* name,
+                                    bool SpaceMouseSettings::*field) {
+      auto* check = new QCheckBox(title);
+      check->setObjectName(QString::fromLatin1(name));
+      check->setChecked(m_settings.spaceMouse.*field);
+      locks->addWidget(check, row, column);
+      connect(check, &QCheckBox::toggled, this, [this, field](bool value) {
+        m_settings.spaceMouse.*field = value;
+        notify();
+      });
+    };
+    lock(0, 0, tr("Lock rotation"), "navigationSpaceMouseLockRotation", &SpaceMouseSettings::lockRotation);
+    lock(0, 1, tr("Lock translation"), "navigationSpaceMouseLockTranslation", &SpaceMouseSettings::lockTranslation);
+    lock(1, 0, tr("Dominant axis only"), "navigationSpaceMouseDominant", &SpaceMouseSettings::dominantAxis);
+    box->addLayout(locks);
+    // The buttons the device has, at least two, and those bound before.
+    const int rows = std::clamp(std::max({2, int(m_settings.spaceMouse.buttons.size()), spaceMouseStatus().buttonsSeen}),
+                                2, 32);
+    auto* buttons = new QTableWidget(rows, 2);
+    buttons->setObjectName(QStringLiteral("navigationSpaceMouseButtons"));
+    mac::styleListTable(buttons);
+    buttons->setHorizontalHeaderLabels({tr("Button"), tr("Command")});
+    buttons->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    buttons->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    buttons->verticalHeader()->hide();
+    buttons->setSelectionMode(QAbstractItemView::NoSelection);
+    buttons->setAccessibleName(tr("3D mouse buttons"));
+    for (int row = 0; row < rows; ++row) {
+      auto* label = new QTableWidgetItem(tr("Button %1").arg(row + 1));
+      label->setFlags(Qt::ItemIsEnabled);
+      buttons->setItem(row, 0, label);
+      auto* command = new QComboBox;
+      command->setObjectName(QStringLiteral("navigationSpaceMouseButton%1").arg(row));
+      command->addItem(tr("None"), QString());
+      for (const auto& entry : m_buttonCommands) {
+        command->addItem(entry.second, entry.first);
+      }
+      const QString bound = m_settings.spaceMouse.buttons.value(row);
+      if (!bound.isEmpty() && command->findData(bound) < 0) {
+        command->addItem(bound, bound); // a command this list does not offer keeps its binding
+      }
+      command->setCurrentIndex(std::max(0, command->findData(bound)));
+      buttons->setCellWidget(row, 1, command);
+      connect(command, &QComboBox::currentIndexChanged, this, [this, row, command] {
+        QStringList& bindings = m_settings.spaceMouse.buttons;
+        while (bindings.size() <= row) {
+          bindings.append(QString());
+        }
+        bindings[row] = command->currentData().toString();
+        notify();
+      });
+    }
+    buttons->resizeRowsToContents();
+    buttons->setFixedHeight(std::min(rows, 4) * buttons->rowHeight(0) +
+                            buttons->horizontalHeader()->sizeHint().height() + 2 * buttons->frameWidth());
+    box->addWidget(buttons);
+    layout->addWidget(group);
+  }
+
   NavigationSettings m_settings;
+  QVector<QPair<QString, QString>> m_buttonCommands;
   QVector<NavigationBinding> m_bindings;
   QComboBox* m_scheme = nullptr;
   QComboBox* m_seed = nullptr;

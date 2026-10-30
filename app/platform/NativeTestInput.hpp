@@ -125,6 +125,9 @@ bool tileAction(const QStringList& args, QString& error);
 bool tileCheck(const QStringList& args, QString& detail);
 // Shared layout bounds, real pointer input and button order (mitcad#812, #817).
 bool controlBounds(const QString& identifier, double minimumWidth, const QString& labelPattern, QString& error);
+// controlBounds with the width the text field's own cell needs to show its
+// whole placeholder in its actual font and insets (mitcad#953).
+bool placeholderBounds(const QString& identifier, const QString& labelPattern, QString& error);
 // Simultaneous, read-only geometry: no scrolling individual controls into
 // view. Entries are identifiers, optionally followed by = and a label.
 bool formLayout(const QStringList& entries, QString& error);
@@ -135,6 +138,9 @@ bool configurationLayout(QString& detail);
 // Read the actual visible group row: full-width caption, no clipping, and
 // the shared tree item's selection policy. Does not scroll or create rows.
 bool spannedHeading(const QString& table, const QRegularExpression& caption, QString& detail);
+// The first row wholly in a native table's viewport, by its first column's
+// text (mitcad#972). Read only: nothing is scrolled.
+bool firstVisibleRow(const QString& table, const QRegularExpression& text, QString& detail);
 // The actual colour-field swatch pixels and drawn placeholder text.
 bool colorField(const QString& identifier, const QString& color, const QString& words, bool placeholder,
                 const QString& accessibilityLabel, QString& error);
@@ -230,9 +236,11 @@ inline bool commandLayout(const QStringList&, QString&) { return false; }
 inline bool tileAction(const QStringList&, QString&) { return false; }
 inline bool tileCheck(const QStringList&, QString&) { return false; }
 inline bool controlBounds(const QString&, double, const QString&, QString&) { return false; }
+inline bool placeholderBounds(const QString&, const QString&, QString&) { return false; }
 inline bool formLayout(const QStringList&, QString&) { return false; }
 inline bool configurationLayout(QString&) { return false; }
 inline bool spannedHeading(const QString&, const QRegularExpression&, QString&) { return false; }
+inline bool firstVisibleRow(const QString&, const QRegularExpression&, QString&) { return false; }
 inline bool colorField(const QString&, const QString&, const QString&, bool, const QString&, QString&) { return false; }
 inline bool buttonOrder(const QStringList&, QString&) { return false; }
 inline bool focused(const QString&) { return false; }

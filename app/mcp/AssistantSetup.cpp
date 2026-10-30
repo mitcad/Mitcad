@@ -10,6 +10,7 @@
 #include <QJsonDocument>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QUuid>
 
@@ -42,24 +43,116 @@ QString installedBridge(const QString& applicationDirectory) {
   return {};
 }
 
-QString assistantExecutable(const QString& name, const QString& home) {
-  if (!qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT")) {
-    const QString folder = qEnvironmentVariable("MITCAD_TEST_ASSISTANT_EXECUTABLES");
-    if (!folder.isEmpty()) {
-      if (folder == QStringLiteral("none")) return {};
+QStringList assistantExecutableSuffixes(bool windows, const QString& pathext) {
+  if (!windows) return {QString()};
+  const QStringList known{QStringLiteral(".exe"), QStringLiteral(".cmd"), QStringLiteral(".bat")};
+  QStringList suffixes;
+  for (const QString& entry : pathext.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+    const QString suffix = entry.trimmed().toLower();
+    if (known.contains(suffix) && !suffixes.contains(suffix)) suffixes << suffix;
+  }
+  // Windows' own order when PATHEXT names none of them.
+  return suffixes.isEmpty() ? QStringList{QStringLiteral(".exe"), QStringLiteral(".bat"), QStringLiteral(".cmd")} : suffixes;
+}
+
+QString expandWindowsVariables(const QString& text) {
+  static const QRegularExpression variable(QStringLiteral("%([^%;]+)%"));
+  QString expanded;
+  qsizetype last = 0;
+  for (auto matches = variable.globalMatch(text); matches.hasNext();) {
+    const QRegularExpressionMatch match = matches.next();
+    const QString value = qEnvironmentVariable(match.captured(1).toLocal8Bit().constData());
+    expanded += text.mid(last, match.capturedStart() - last);
+    expanded += value.isEmpty() ? match.captured() : value;
+    last = match.capturedEnd();
+  }
+  return expanded + text.mid(last);
+}
+
+QStringList windowsPathEntries(const QString& value) {
+  QStringList entries;
+  for (const QString& entry : value.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+    QString folder = entry.trimmed();
+    if (folder.size() >= 2 && folder.startsWith(QLatin1Char('"')) && folder.endsWith(QLatin1Char('"'))) {
+      folder = folder.mid(1, folder.size() - 2);
+    }
+    // Windows' separators on every platform (a test reads it anywhere).
+    folder = expandWindowsVariables(folder).replace(QLatin1Char('\\'), QLatin1Char('/'));
+    if (!folder.isEmpty()) entries << folder;
+  }
+  return entries;
+}
+
+QStringList storedUserPath() {
 #ifdef Q_OS_WIN
-      return executable(QDir(folder).filePath(name + QStringLiteral(".exe")));
+  const QSettings environment(QStringLiteral("HKEY_CURRENT_USER\\Environment"), QSettings::NativeFormat);
+  return windowsPathEntries(environment.value(QStringLiteral("Path")).toString());
 #else
-      return executable(QDir(folder).filePath(name));
+  return {};
 #endif
+}
+
+QStringList assistantFallbackFolders(const QString& home, const QString& roamingAppData, const QStringList& storedPath) {
+  const QDir root(home);
+  QStringList folders{root.filePath(QStringLiteral(".local/bin"))};
+  if (!roamingAppData.isEmpty()) folders << QDir(roamingAppData).filePath(QStringLiteral("npm"));
+  folders << root.filePath(QStringLiteral(".cargo/bin"));
+  for (const QString& folder : storedPath) {
+    if (!folders.contains(folder)) folders << folder;
+  }
+  return folders;
+}
+
+QString findAssistantExecutable(const QString& name, const QStringList& folders, const QStringList& suffixes) {
+  for (const QString& folder : folders) {
+    for (const QString& suffix : suffixes) {
+      if (const QString found = executable(QDir(folder).filePath(name + suffix)); !found.isEmpty()) return found;
     }
   }
-  if (const QString found = QStandardPaths::findExecutable(name); !found.isEmpty()) return found;
-  const QString root = home.isEmpty() ? QDir::homePath() : home;
-  for (const QString& folder : {QStringLiteral(".local/bin"), QStringLiteral(".cargo/bin")}) {
-    if (const QString found = executable(QDir(root).filePath(folder + QLatin1Char('/') + name)); !found.isEmpty()) return found;
+  return {};
+}
+
+namespace {
+constexpr bool kWindows =
+#ifdef Q_OS_WIN
+    true;
+#else
+    false;
+#endif
+
+// The lookup behind assistantExecutable; `onPath` says whether PATH found it.
+QString lookupAssistant(const QString& name, const QString& home, bool& onPath) {
+  onPath = false;
+  const QStringList suffixes = assistantExecutableSuffixes(kWindows, qEnvironmentVariable("PATHEXT"));
+  // The roaming application data where Windows keeps it under a home.
+  const auto roaming = [](const QString& base) {
+    return kWindows ? QDir(base).filePath(QStringLiteral("AppData/Roaming")) : QString();
+  };
+  if (!qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT")) {
+    const QString folder = qEnvironmentVariable("MITCAD_TEST_ASSISTANT_EXECUTABLES");
+    const QString testHome = qEnvironmentVariable("MITCAD_TEST_ASSISTANT_HOME");
+    if (!folder.isEmpty() || !testHome.isEmpty()) {
+      if (folder == QStringLiteral("none")) return {};
+      if (!folder.isEmpty()) {
+        if (const QString found = findAssistantExecutable(name, {folder}, suffixes); !found.isEmpty()) return found;
+      }
+      return testHome.isEmpty() ? QString()
+                                : findAssistantExecutable(name, assistantFallbackFolders(testHome, roaming(testHome), {}), suffixes);
+    }
+  }
+  if (!home.isEmpty()) return findAssistantExecutable(name, assistantFallbackFolders(home, roaming(home), {}), suffixes);
+  if (QString found = QStandardPaths::findExecutable(name); !found.isEmpty()) {
+    onPath = true;
+    return found;
+  }
+  const QString roamingAppData = kWindows ? qEnvironmentVariable("APPDATA") : QString();
+  if (const QString found = findAssistantExecutable(
+          name, assistantFallbackFolders(QDir::homePath(), roamingAppData, storedUserPath()), suffixes);
+      !found.isEmpty()) {
+    return found;
   }
 #ifdef Q_OS_MACOS
+  const QString root = QDir::homePath();
   if (name == QStringLiteral("codex")) {
     for (const QString& applications : {QStringLiteral("/Applications"), QDir(root).filePath(QStringLiteral("Applications"))}) {
       for (const QString& binary : {QStringLiteral("ChatGPT.app/Contents/Resources/codex"),
@@ -73,6 +166,18 @@ QString assistantExecutable(const QString& name, const QString& home) {
   }
 #endif
   return {};
+}
+} // namespace
+
+QString assistantExecutable(const QString& name, const QString& home) {
+  bool onPath = false;
+  return lookupAssistant(name, home, onPath);
+}
+
+QString assistantProgram(const QString& name) {
+  bool onPath = false;
+  const QString found = lookupAssistant(name, {}, onPath);
+  return found.isEmpty() || onPath ? name : found;
 }
 
 QString codexConfigurationPath() {

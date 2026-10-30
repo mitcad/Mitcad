@@ -3,7 +3,8 @@
 // `configure` answer read (a list option narrowed by a rule, a range, a
 // driven option, the row, the moves and a refusal), the requests sent for
 // a library component and an inserted one, the tables of library_show
-// (open, closed, the old form) and the constants written.
+// (open, closed, the old form), the constants written, and the rows'
+// Standard and Supplier filters with the designation's standard (mitcad#949).
 #include "library/PartOptions.hpp"
 
 #include <cmath>
@@ -193,6 +194,137 @@ void valueTests() {
   CHECK(numberText(2.0, QString()) == QStringLiteral("2"));
 }
 
+// A socket head screw's rows as library_show gives them (mitcad#949): M6x6
+// of no standard, M6x8 of DIN 912 only, M6x10 and M5x10 of both standards;
+// Würth sells M6x8 and M6x10, Etra M6x10.
+const char* kTaggedTable = R"({"options": ["Size", "Length"], "closed": true, "selectors": ["Size", "Length"],
+  "default": "M6x6", "standards": ["ISO 4762", "DIN 912", "non-standard"],
+  "rows": [
+    {"name": "M5x10", "select": {"Size": "M5", "Length": "10"}, "standards": ["ISO 4762", "DIN 912"]},
+    {"name": "M6x6", "select": {"Size": "M6", "Length": "6"}, "standards": ["non-standard"]},
+    {"name": "M6x8", "select": {"Size": "M6", "Length": "8"}, "standards": ["DIN 912"],
+     "supplier_parts": [{"supplier": "wurth", "supplier_name": "Würth", "part_number": "0084 6 8",
+                         "material": "8.8", "finish": "zinc-plated", "checked": "2026-10-30"}]},
+    {"name": "M6x10", "select": {"Size": "M6", "Length": "10"}, "standards": ["ISO 4762", "DIN 912"],
+     "supplier_parts": [{"supplier": "wurth", "supplier_name": "Würth", "part_number": "0084 6 10",
+                         "material": "8.8", "finish": "zinc-plated"},
+                        {"supplier": "etra", "supplier_name": "Etra", "part_number": "E-610", "material": "A2"}]}
+  ]})";
+
+QStringList namesOf(const QJsonArray& rows) {
+  QStringList out;
+  for (const QJsonValue& row : rows) {
+    out << row.toObject().value(QStringLiteral("name")).toString();
+  }
+  return out;
+}
+
+void rowFilterTests() {
+  const QJsonObject table = parse(kTaggedTable);
+  const QJsonArray rows = table.value(QStringLiteral("rows")).toArray();
+  // The filters' choices: the component's order (ISO before DIN),
+  // non-standard last; the suppliers as the rows name them.
+  CHECK(rowStandards(rows, {QStringLiteral("ISO 4762"), QStringLiteral("DIN 912")}) ==
+        (QStringList{QStringLiteral("ISO 4762"), QStringLiteral("DIN 912"), QStringLiteral("non-standard")}));
+  CHECK(rowStandards(rows).first() == QStringLiteral("ISO 4762"));
+  const QList<RowSupplier> suppliers = rowSuppliers(rows);
+  CHECK(suppliers.size() == 2 && suppliers.first().id == QStringLiteral("wurth") &&
+        suppliers.first().name == QStringLiteral("Würth") && suppliers.last().name == QStringLiteral("Etra"));
+
+  // The Standard filter narrows Size and Length to its rows.
+  RowFilter din;
+  din.standard = QStringLiteral("DIN 912");
+  CHECK(!din.isAll());
+  CHECK(namesOf(filteredRows(rows, din)) ==
+        (QStringList{QStringLiteral("M5x10"), QStringLiteral("M6x8"), QStringLiteral("M6x10")}));
+  const QStringList options{QStringLiteral("Size"), QStringLiteral("Length")};
+  CHECK(filteredOptionValues(rows, options, 0, QJsonObject(), din) ==
+        (QStringList{QStringLiteral("M5"), QStringLiteral("M6")}));
+  const QJsonObject m6{{QStringLiteral("Size"), QStringLiteral("M6")}};
+  CHECK(filteredOptionValues(rows, options, 1, m6, din) == (QStringList{QStringLiteral("8"), QStringLiteral("10")}));
+  // All: every length of M6.
+  CHECK(filteredOptionValues(rows, options, 1, m6, RowFilter()) ==
+        (QStringList{QStringLiteral("6"), QStringLiteral("8"), QStringLiteral("10")}));
+  RowFilter iso;
+  iso.standard = QStringLiteral("iso 4762");
+  CHECK(filteredOptionValues(rows, options, 1, m6, iso) == QStringList{QStringLiteral("10")});
+  // The table filtered: its rows, its default the first that passes when
+  // its own (M6x6) does not.
+  const QJsonObject narrowed = filteredTable(table, din);
+  CHECK(narrowed.value(QStringLiteral("rows")).toArray().size() == 3);
+  CHECK(narrowed.value(QStringLiteral("default")).toString() == QStringLiteral("M5x10"));
+  CHECK(filteredTable(table, RowFilter()) == table);
+
+  // The Supplier filter likewise; with both, the rows of both.
+  RowFilter etra;
+  etra.supplier = QStringLiteral("etra");
+  CHECK(namesOf(filteredRows(rows, etra)) == QStringList{QStringLiteral("M6x10")});
+  RowFilter wurth;
+  wurth.supplier = QStringLiteral("wurth");
+  CHECK(filteredOptionValues(rows, options, 1, m6, wurth) ==
+        (QStringList{QStringLiteral("8"), QStringLiteral("10")}));
+  RowFilter both = wurth;
+  both.standard = QStringLiteral("ISO 4762");
+  CHECK(namesOf(filteredRows(rows, both)) == QStringList{QStringLiteral("M6x10")});
+  CHECK(filteredOptionValues(rows, options, 0, QJsonObject(), both) == QStringList{QStringLiteral("M6")});
+  CHECK(rowFilterText(both) == QStringLiteral("Standard ISO 4762, Supplier wurth"));
+
+  // An open answer's list values narrowed (Edit Options, BUILD's picker):
+  // Length's "6 mm" left out by DIN 912 for M6, its numbers compared.
+  OptionsAnswer answer = optionsAnswer(parse(R"({
+    "options": [
+      {"name": "Size", "kind": "text", "value": "M6", "text": "M6", "expression": "'M6'",
+       "allowed": {"kind": "list", "values": [{"value": "M5", "text": "M5"}, {"value": "M6", "text": "M6"}]}},
+      {"name": "Length", "kind": "number", "unit": "mm", "value": 8, "text": "8 mm", "expression": "8 mm",
+       "allowed": {"kind": "list", "values": [{"value": 6, "text": "6 mm"}, {"value": 8, "text": "8 mm"},
+                                              {"value": 10, "text": "10 mm"}]}}],
+    "row": "M6x8"})"));
+  narrowAnswer(answer, rows, din);
+  const PartOption* length = answer.option(QStringLiteral("Length"));
+  CHECK(length != nullptr && length->allowedText() == QStringLiteral("8 mm, 10 mm"));
+  const PartOption* size = answer.option(QStringLiteral("Size"));
+  CHECK(size != nullptr && size->allowedText() == QStringLiteral("M5, M6"));
+  OptionsAnswer untouched = optionsAnswer(parse(kAnswer));
+  narrowAnswer(untouched, rows, RowFilter());
+  CHECK(untouched.option(QStringLiteral("Color"))->values.size() == 2);
+
+  // The designation follows the chosen standard: the row's own when it
+  // names it, else its first; a row of no standard.
+  const auto row = [&rows](const QString& name) {
+    for (const QJsonValue& value : rows) {
+      if (value.toObject().value(QStringLiteral("name")).toString() == name) {
+        return value.toObject();
+      }
+    }
+    return QJsonObject();
+  };
+  CHECK(namedStandard(row(QStringLiteral("M6x10")), QStringLiteral("DIN 912")) == QStringLiteral("DIN 912"));
+  CHECK(namedStandard(row(QStringLiteral("M6x10")), QString()) == QStringLiteral("ISO 4762"));
+  CHECK(namedStandard(row(QStringLiteral("M6x8")), QStringLiteral("ISO 4762")) == QStringLiteral("DIN 912"));
+  CHECK(namedStandard(row(QStringLiteral("M6x6")), QStringLiteral("DIN 912")) == nonStandardTag());
+  CHECK(namedStandard(QJsonObject(), QStringLiteral("DIN 912")).isEmpty());
+  // library_configure is asked with the standard, so that its designation
+  // follows it.
+  QJsonObject asked;
+  QString chosen = QStringLiteral("DIN 912");
+  const JsonRunner run = [&asked](const QJsonObject& request) {
+    asked = request;
+    return parse(R"({"options": [], "designation": "DIN 912 M6x10", "row": "M6x10"})");
+  };
+  const OptionsQuery query = libraryOptionsQuery(run, QString(), QStringLiteral("parts"), QString(),
+                                                 QStringLiteral("iso4762"), [&chosen] { return chosen; });
+  query(QJsonObject());
+  CHECK(asked.value(QStringLiteral("standard")).toString() == QStringLiteral("DIN 912"));
+  chosen.clear();
+  query(QJsonObject());
+  CHECK(!asked.contains(QStringLiteral("standard")));
+
+  // The suppliers' part numbers as the parts list's column.
+  CHECK(supplierPartsText(row(QStringLiteral("M6x10")).value(QStringLiteral("supplier_parts")).toArray()) ==
+        QStringLiteral("Würth 0084 6 10 (8.8 zinc-plated); Etra E-610 (A2)"));
+  CHECK(supplierPartsText(QJsonArray()).isEmpty());
+}
+
 } // namespace
 
 int partOptionsTests() {
@@ -200,5 +332,6 @@ int partOptionsTests() {
   requestTests();
   tableTests();
   valueTests();
+  rowFilterTests();
   return failures;
 }

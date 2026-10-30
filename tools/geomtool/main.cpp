@@ -32,6 +32,7 @@
 #include "mitcad/analysis/properties.hpp"
 #include "mitcad/analysis/section.hpp"
 #include "mitcad/io/exchange.hpp"
+#include "mitcad/io/mesh.hpp"
 
 namespace {
 
@@ -525,9 +526,8 @@ int distance(const Arguments& args) {
   return 0;
 }
 
-} // namespace
-
-int main(int argc, char** argv) {
+// The command; main ends the process with what it returns.
+int run(int argc, char** argv) {
   if (argc < 2 || std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h") {
     std::fputs(kUsage, argc < 2 ? stderr : stdout);
     return argc < 2 ? 2 : 0;
@@ -557,7 +557,8 @@ int main(int argc, char** argv) {
     if (command == "distance") {
       return distance(args);
     }
-    throw UsageError("unknown command: " + command);
+    std::fprintf(stderr, "mitcad-geomtool: unknown command: %s\n\n%s", command.c_str(), kUsage);
+    return 2;
   } catch (const UsageError& error) {
     std::fprintf(stderr, "mitcad-geomtool: %s\n\n%s", error.what(), kUsage);
     return 2;
@@ -565,4 +566,18 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "mitcad-geomtool: %s\n", error.what());
     return 2;
   }
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+  const int code = run(argc, argv);
+  // While a face of a stopped meshing that did not end still runs inside
+  // OCCT (io::abandoned_faces), without the static destructors that would
+  // tear OCCT's state down under it (mitcad#936).
+  if (mitcad::io::abandoned_faces() > 0) {
+    std::fflush(nullptr);
+    std::_Exit(code);
+  }
+  return code;
 }

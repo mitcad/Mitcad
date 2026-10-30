@@ -24,6 +24,7 @@
 #include <functional>
 #include <limits>
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QList>
@@ -103,8 +104,11 @@ using JsonRunner = std::function<QJsonObject(const QJsonObject& request)>;
 OptionsAnswer optionsAnswer(const QJsonObject& answer);
 
 // A library component's options before it is inserted (`library_configure`).
+// `standard`, when given, names the standard the designation follows
+// (mitcad#949: the Standard filter's; empty: each row's first).
 OptionsQuery libraryOptionsQuery(const JsonRunner& run, const QString& url, const QString& library,
-                                 const QString& rev, const QString& component);
+                                 const QString& rev, const QString& component,
+                                 const std::function<QString()>& standard = {});
 // An inserted component's options: `configure` with `component` and
 // `parameters`; `parameters` are the component's expressions as they would
 // be (the values given to the query are merged over them as constants);
@@ -156,5 +160,72 @@ QString numberText(double value, const QString& unit);
 
 // The options' log line: "Color = Black, Length = 800 mm (row Standard)".
 QString optionsSummary(const OptionsAnswer& answer);
+
+// --- The rows' standards and suppliers (mitcad#949; docs/libraries.md,
+// "Standards and suppliers of rows")
+//
+// A library's rows (library_show's `configurations.rows`,
+// library_configure's `rows`) may name their standards (`standards`:
+// ["ISO 4762", "DIN 912"], ["non-standard"]) and the suppliers' articles
+// (`supplier_parts`: {supplier, supplier_name, part_number, material,
+// finish, checked}). The Standard and Supplier filters above the size
+// choosers narrow the choices to the rows that match; they change no part
+// and are not kept in the design.
+
+// The standard tag of a row made to no standard.
+inline QString nonStandardTag() { return QStringLiteral("non-standard"); }
+
+// A Standard and a Supplier filter: empty for All.
+struct RowFilter {
+  QString standard;  // a standard tag ("DIN 912"), compared without case
+  QString supplier;  // a supplier's id ("wurth")
+
+  bool isAll() const { return standard.isEmpty() && supplier.isEmpty(); }
+  bool operator==(const RowFilter& other) const {
+    return standard == other.standard && supplier == other.supplier;
+  }
+  bool operator!=(const RowFilter& other) const { return !(*this == other); }
+};
+
+// A supplier the filter offers: its id and its name for people.
+struct RowSupplier {
+  QString id;
+  QString name;
+};
+
+// Whether a row passes the filter: it names the standard, and the supplier
+// has an article of it.
+bool rowPasses(const QJsonObject& row, const RowFilter& filter);
+// The standards the rows name, each once: those of `order` first in that
+// order (the component's `standards`), then as the rows name them,
+// "non-standard" last.
+QStringList rowStandards(const QJsonArray& rows, const QStringList& order = QStringList());
+// The suppliers with articles on the rows, each once, in the order the rows
+// name them (their names from `supplier_name`, else the id).
+QList<RowSupplier> rowSuppliers(const QJsonArray& rows);
+// The rows that pass.
+QJsonArray filteredRows(const QJsonArray& rows, const RowFilter& filter);
+// The table with the rows that pass only; its default the first that
+// passes when its own does not. All: the table as it is.
+QJsonObject filteredTable(const QJsonObject& configurations, const RowFilter& filter);
+// The values of the option `options[index]` in the rows that pass and
+// have the values `chosen` gives the options before it (texts, as
+// rowOptionText gives them), each once in the rows' order.
+QStringList filteredOptionValues(const QJsonArray& rows, const QStringList& options, int index,
+                                 const QJsonObject& chosen, const RowFilter& filter);
+// An open table's answer narrowed (Edit Options, the BUILD picker): each
+// list option's values to those of the rows that pass with the values of
+// the options before it. A value no row has is compared as a number too
+// ("8" and "8 mm").
+void narrowAnswer(OptionsAnswer& answer, const QJsonArray& rows, const RowFilter& filter);
+// The standard a row is named by (the designation's `{standard}`): the
+// chosen one when the row names it, else its first; empty when it names
+// none. "non-standard" for a row of no standard.
+QString namedStandard(const QJsonObject& row, const QString& chosen);
+// The articles of a row as one text: "Würth 0084 6 8 (8.8 zinc-plated);
+// Etra 123 (A2)"; empty for none.
+QString supplierPartsText(const QJsonArray& parts);
+// "Standard DIN 912, Supplier All" for the log.
+QString rowFilterText(const RowFilter& filter);
 
 } // namespace mitcad

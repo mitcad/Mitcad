@@ -204,7 +204,15 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad)
       add_test(NAME app.ui-macos-update
         COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-update-test.sh"
                 "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-release>" "${CMAKE_BINARY_DIR}/ui-macos-update")
-      set_tests_properties(app.ui-macos-update PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
+      # A build without the update test hooks (mitcad#921) is checked to
+      # ignore the tests' variables instead of updating.
+      if(MITCAD_UPDATE_TEST_HOOKS)
+        set(mitcad_update_test_hooks ON)
+      else()
+        set(mitcad_update_test_hooks OFF)
+      endif()
+      set_tests_properties(app.ui-macos-update PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE
+        ENVIRONMENT "UI_UPDATE_TEST_HOOKS=${mitcad_update_test_hooks}")
     endif()
     if(TARGET mitcad-cli AND MITCAD_MACOS_NATIVE_UI)
       add_test(NAME app.ui-macos-section

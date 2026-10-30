@@ -19,6 +19,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <new>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -1140,6 +1141,7 @@ void test_abandoned_face() {
   const TopoDS_Shape cylinder = BRepPrimAPI_MakeCylinder(10.0, 30.0).Shape();
   const occ::handle<StopWhenStuck> stop = new StopWhenStuck(state, 2);
   mitcad::io::MeshReport report;
+  const std::size_t abandonedBefore = mitcad::io::abandoned_faces();
   const auto start = std::chrono::steady_clock::now();
   const bool done = mitcad::io::mesh_in_place(cylinder, view, stop->Start(), &report);
   const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
@@ -1149,6 +1151,9 @@ void test_abandoned_face() {
   CHECK(seconds < mitcad::io::kMeshAbandonSeconds + 3.0);
   CHECK(report.abandoned == 1);
   CHECK(report.line().find("; abandoned 1") != std::string::npos);
+  // Its worker counts in the process's abandoned faces until it ends
+  // (mitcad#936).
+  CHECK(mitcad::io::abandoned_faces() == abandonedBefore + 1);
   int planes = 0;
   TopoDS_Face round;
   for (TopExp_Explorer it(cylinder, TopAbs_FACE); it.More(); it.Next()) {
@@ -1170,6 +1175,10 @@ void test_abandoned_face() {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   CHECK(state.returned);
+  for (int i = 0; i < 2000 && mitcad::io::abandoned_faces() != abandonedBefore; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  CHECK(mitcad::io::abandoned_faces() == abandonedBefore);
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   TopLoc_Location location;
   CHECK(!round.IsNull() && BRep_Tool::Triangulation(round, location).IsNull());
@@ -1185,6 +1194,125 @@ void test_abandoned_face() {
   CHECK(mitcad::io::has_triangulation(plain));
   CHECK(plainReport.abandoned == 0 && plainReport.meshed == 3);
   CHECK(face_triangles(plain) == face_triangles(again));
+}
+
+// A stand-in for a face's triangulation that throws what OCCT's own
+// failures are not (use_face_algorithms_for_tests, mitcad#936): a
+// std::runtime_error, or std::bad_alloc as a plain allocation that fails.
+class ThrowingFace : public IMeshTools_MeshAlgo {
+public:
+  explicit ThrowingFace(bool allocation) : m_allocation(allocation) {}
+
+  void Perform(const IMeshData::IFaceHandle&, const IMeshTools_Parameters&, const Message_ProgressRange&) override {
+    if (m_allocation) {
+      throw std::bad_alloc();
+    }
+    throw std::runtime_error("a face's triangulation threw");
+  }
+
+private:
+  bool m_allocation;
+};
+
+// A cylinder's face through ThrowingFace, the others through the default
+// insertion.
+class ThrowingCylinders : public IMeshTools_MeshAlgoFactory {
+public:
+  explicit ThrowingCylinders(bool allocation) : m_allocation(allocation) {}
+
+  occ::handle<IMeshTools_MeshAlgo> GetAlgo(const GeomAbs_SurfaceType type,
+                                           const IMeshTools_Parameters& parameters) const override {
+    if (type == GeomAbs_Cylinder) {
+      return new ThrowingFace(m_allocation);
+    }
+    return BRepMesh_MeshAlgoFactory().GetAlgo(type, parameters);
+  }
+
+private:
+  bool m_allocation;
+};
+
+// A range that is never stopped: the meshing's own workers (mesh_in_place).
+class NeverStops : public Message_ProgressIndicator {
+public:
+  bool UserBreak() override { return false; }
+  void Show(const Message_ProgressScope&, const bool) override {}
+};
+
+// How many of a cylinder's planes have a triangulation; `roundMeshed`:
+// whether its round face has one.
+int meshed_planes(const TopoDS_Shape& cylinder, bool& roundMeshed) {
+  int planes = 0;
+  roundMeshed = false;
+  for (TopExp_Explorer it(cylinder, TopAbs_FACE); it.More(); it.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(it.Current());
+    TopLoc_Location location;
+    const bool meshed = !BRep_Tool::Triangulation(face, location).IsNull();
+    if (BRepAdaptor_Surface(face, false).GetType() == GeomAbs_Cylinder) {
+      roundMeshed = meshed;
+    } else {
+      planes += meshed ? 1 : 0;
+    }
+  }
+  return planes;
+}
+
+// A face whose triangulation throws something other than OCCT's failures
+// (mitcad#936): with a range that can be stopped (the meshing's own
+// detached workers, where an escaping exception ended the process through
+// std::terminate) and without one (OCCT's pool, which threw it again on
+// the meshing's thread), the meshing returns with that face failed and
+// without a triangulation, the other faces meshed, the process alive. An
+// allocation that fails leaves the face failed too, and the meshing then
+// throws "out of memory", the other faces meshed.
+void test_throwing_face() {
+  const mitcad::io::MeshOptions view{0.01, 5.0 * std::atan(1.0) / 45.0, false, 20000, false, false};
+  const bool ranges[] = {true, false};
+  for (const bool active : ranges) {
+    const occ::handle<NeverStops> never = new NeverStops();
+    mitcad::io::use_face_algorithms_for_tests(new ThrowingCylinders(false));
+    const TopoDS_Shape cylinder = BRepPrimAPI_MakeCylinder(10.0, 30.0).Shape();
+    mitcad::io::MeshReport report;
+    bool done = false;
+    bool threw = false;
+    try {
+      done = mitcad::io::mesh_in_place(cylinder, view, active ? never->Start() : Message_ProgressRange(), &report);
+    } catch (const std::exception& error) {
+      threw = true;
+      std::printf("Throwing face (%s): unexpected %s\n", active ? "own workers" : "OCCT's pool", error.what());
+    }
+    mitcad::io::use_face_algorithms_for_tests(occ::handle<IMeshTools_MeshAlgoFactory>());
+    std::printf("Throwing face (%s): %s\n", active ? "own workers" : "OCCT's pool", report.line().c_str());
+    CHECK(!threw);
+    CHECK(done);
+    CHECK(report.faces == 3 && report.failed == 1 && report.meshed == 2 && report.abandoned == 0);
+    bool roundMeshed = true;
+    CHECK(meshed_planes(cylinder, roundMeshed) == 2);
+    CHECK(!roundMeshed);
+  }
+  for (const bool active : ranges) {
+    const occ::handle<NeverStops> never = new NeverStops();
+    mitcad::io::use_face_algorithms_for_tests(new ThrowingCylinders(true));
+    const TopoDS_Shape cylinder = BRepPrimAPI_MakeCylinder(10.0, 30.0).Shape();
+    std::string message;
+    try {
+      mitcad::io::mesh_in_place(cylinder, view, active ? never->Start() : Message_ProgressRange());
+    } catch (const mitcad::io::Error& error) {
+      message = error.what();
+    } catch (const std::exception& error) {
+      message = std::string("unexpected ") + error.what();
+    }
+    mitcad::io::use_face_algorithms_for_tests(occ::handle<IMeshTools_MeshAlgoFactory>());
+    std::printf("Face out of memory (%s): %s\n", active ? "own workers" : "OCCT's pool", message.c_str());
+    CHECK(message == "triangulation: out of memory");
+    bool roundMeshed = true;
+    CHECK(meshed_planes(cylinder, roundMeshed) == 2);
+    CHECK(!roundMeshed);
+  }
+  // Meshings go on as before.
+  const TopoDS_Shape plain = BRepPrimAPI_MakeCylinder(10.0, 30.0).Shape();
+  CHECK(mitcad::io::mesh_in_place(plain, view));
+  CHECK(mitcad::io::has_triangulation(plain));
 }
 
 // A square plate of 1 650 mm, 125 to 1 775 mm from the origin on both axes,
@@ -1810,6 +1938,7 @@ int main(int argc, char** argv) {
     test_compare_meshing();
     test_checked_planes();
     test_abandoned_face();
+    test_throwing_face();
     test_nearly_cocircular_planes();
     test_face_checker_wire_boxes();
     test_building_scale_round_faces();

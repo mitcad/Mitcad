@@ -12,6 +12,7 @@
 #include <QBoxLayout>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QFontMetrics>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QKeySequenceEdit>
@@ -180,12 +181,32 @@ int widgetStretch(QLayoutItem* source, bool horizontal) {
   return horizontal ? widget->sizePolicy().horizontalStretch() : widget->sizePolicy().verticalStretch();
 }
 
+// AppKit draws a line edit's placeholder in its own font and cell insets,
+// which can need more than the shared 17-character width (mitcad#953). A
+// placeholder that fits the presenter's own hint stays whole in the native
+// field too; a longer one keeps the shared width rather than widening the
+// form, as its Qt field does not show it whole either.
+void fitPlaceholder(const QWidget* widget, NSView* view, Axis& axis) {
+  const auto* edit = qobject_cast<const QLineEdit*>(widget);
+  if (edit == nullptr || axis.preferred < 0 || ![view isKindOfClass:NSTextField.class]) { return; }
+  const QString text = edit->placeholderText();
+  if (text.isEmpty() || QFontMetrics(edit->font()).horizontalAdvance(text) > edit->sizeHint().width()) { return; }
+  // The field's own cell measures the text with its actual font, bezel and
+  // padding; the copy leaves the field untouched.
+  NSTextFieldCell* probe = [((NSTextField*)view).cell copy];
+  probe.stringValue = text.toNSString();
+  CGFloat needed = std::ceil([probe cellSizeForBounds:NSMakeRect(0, 0, CGFLOAT_MAX, CGFLOAT_MAX)].width);
+  if (axis.maximum >= 0) { needed = std::min(needed, axis.maximum); }
+  axis.preferred = std::max(axis.preferred, needed);
+}
+
 bool makeItem(QLayoutItem* source, const Render& render, Item& item) {
   const Qt::Alignment alignment = source->alignment();
   if (QWidget* widget = source->widget()) {
     item.view = render(source);
     item.horizontal = widgetAxis(widget, true, alignment);
     item.vertical = widgetAxis(widget, false, alignment);
+    fitPlaceholder(widget, item.view, item.horizontal);
     // An ignored width hint lets a long title shrink, as in the Qt layout.
     item.entry = entryWidth(widget) || widget->sizePolicy().horizontalPolicy() == QSizePolicy::Ignored;
   } else if (source->layout() != nullptr) {

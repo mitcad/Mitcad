@@ -1435,3 +1435,91 @@ fn paste_new_keeps_a_combines_tools_in_occurrences() {
     }
     assert!(doc.status(combine.uid).unwrap().is_ok());
 }
+
+/// A Join of a component's sketch whose own bodies the extrusion misses but
+/// whose child occurrence's body it touches names that body and says that
+/// a feature joins only its own component's bodies (mitcad#958): Brace:1
+/// (O1) is turned a quarter about X, Bracket:1 (O2) inside it turned 45°
+/// about Z and moved 20 along x, with a 10 x 10 x 5 block; Brace has a rod
+/// far away and a 4 x 4 profile over the bracket.
+#[test]
+fn a_join_that_touches_only_a_child_occurrences_body_names_it() {
+    let mut doc = Document::new(MockKernel::default());
+    let quarter = Transform::rotation(
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        std::f64::consts::FRAC_PI_2,
+    )
+    .unwrap();
+    let (brace, _) = doc.create_component(Some("Brace"), quarter, true).unwrap();
+    let oblique = shift(20.0, 0.0, 0.0).after(
+        &Transform::rotation(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap(),
+    );
+    doc.create_component(Some("Bracket"), oblique, true)
+        .unwrap();
+    let (_, bracket_body, _) = block(&mut doc);
+    doc.activate_component(brace).unwrap();
+    // The rod, Brace's own body, far from the profile.
+    let rod_sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let rod_region = doc
+        .add_rectangle(rod_sketch, [-50.0, -50.0], &num(5.0), &num(5.0))
+        .unwrap()
+        .region;
+    doc.add_feature(
+        &extrude(rod_sketch, &[&rod_region], 5.0, "new_body", &[]),
+        None,
+    )
+    .unwrap();
+    let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = doc
+        .add_rectangle(sketch, [18.0, 4.0], &num(4.0), &num(4.0))
+        .unwrap()
+        .region;
+    // The kernel's join reaches no participant (the rod).
+    *doc.kernel().touch.borrow_mut() = Some(vec![false]);
+    let join = doc
+        .add_feature(&extrude(sketch, &[&region], 5.0, "join", &[]), None)
+        .unwrap()
+        .uid;
+    assert_eq!(doc.feature(join).unwrap().component, brace);
+    let status = doc.status(join).unwrap().clone();
+    let error = status.error().expect("the join fails").to_owned();
+    assert!(
+        error.starts_with("the extrusion does not touch any participant body of Brace; "),
+        "{error}"
+    );
+    assert!(
+        error.contains(&format!("it touches body {bracket_body} (from "))
+            && error.contains(") in Bracket:1, a body of another component"),
+        "{error}"
+    );
+    assert!(
+        error.contains("a feature of Brace joins only Brace's own bodies")
+            && error.contains("choose New Body, or activate Bracket"),
+        "{error}"
+    );
+    // The bracket's body cannot be a participant either: it is Bracket's
+    // (refused, or the feature fails saying so).
+    let refused = match doc.edit_feature(
+        join,
+        &extrude(sketch, &[&region], 5.0, "join", &[bracket_body]),
+    ) {
+        Err(e) => e.to_string(),
+        Ok(_) => doc
+            .status(join)
+            .and_then(|s| s.error())
+            .unwrap_or_default()
+            .to_owned(),
+    };
+    assert!(refused.contains("belongs to Bracket"), "{refused}");
+    // As a new body it succeeds.
+    *doc.kernel().touch.borrow_mut() = None;
+    doc.edit_feature(join, &extrude(sketch, &[&region], 5.0, "new_body", &[]))
+        .unwrap();
+    assert!(doc.status(join).unwrap().is_ok(), "{:?}", doc.status(join));
+}

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/browser
 # The timeline (U3) through the real UI, with the volumes the model reports:
-#   - A failed feature: its tooltip, the status bar's summary that goes to
+#   - A failed feature: its cell red with its badge, hovered and selected
+#     too (mitcad#961), its tooltip, the status bar's summary that goes to
 #     it, and Delete without dependents.
 #   - Suppress and unsuppress; the history marker dragged back (one undo
 #     step), the playback buttons, Roll History Marker Here.
@@ -21,10 +22,14 @@
 #     its rounded face, a Shift+click run the faces of each feature in it;
 #     Esc and a click in the view clear it; a chamfer after the marker or
 #     suppressed highlights nothing.
+#   - A fillet's and a chamfer's picked edges where they were (mitcad#957):
+#     a click on the rib's fillet of four edges, then on the block's fillet
+#     and chamfer, logs their edges drawn; Esc takes them away.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-timeline-test.sh [screenshot.png]
 # check-all sources: tools/cli
+# check-all sources: app/MainWindowFeatureInputs.cpp core/model/src/features/inputs.rs
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
@@ -107,11 +112,17 @@ ui_expect_log "Timeline Fillet2 at" "the timeline is logged"
 
 echo "--- A failed feature"
 ui_expect_log "Failed features: Fillet2: " "Fillet2 failed"
+ui_expect_log "Timeline cell Fillet2: failed, status ring, badge" "its cell is red with the badge (mitcad#961)"
 ui_step "hover over Fillet2"             xdotool mousemove $(ui_logged_at "Timeline Fillet2")
 ui_expect_log "Timeline tooltip: Fillet2: " "its tooltip has the error"
+ui_expect_log "Timeline cell Fillet2: failed, hovered, status ring, outer ring, badge" "hovered: still red, with the badge, the pointer's ring outside"
 ui_mark
 ui_step "click the failures summary"     ui_click_logged "Failures button"
 ui_expect_new "Revealed Fillet2" "the summary went to Fillet2"
+ui_expect_new "Timeline cell Fillet2: failed, selected, " "selected: still red"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep "Timeline cell Fillet2: failed, selected, " | tail -1 |
+  grep -q "status ring, outer ring, badge" || ui_fail "selected Fillet2 lost its status ring or badge"
+echo "ok   the selection ring outside the red one, the badge kept"
 ui_mark
 ui_step "right-click Fillet2"            ui_click_logged "Timeline Fillet2" 3
 ui_step "choose Delete"                  ui_menu_choose "Delete"
@@ -289,6 +300,7 @@ EOF
 ui_start_app --open "$WORK/rib.mitcad"
 ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Feature warnings: Fillet1: the fillet is built 0.1 % smaller" "Fillet1 succeeded with a warning"
+ui_expect_log "Timeline cell Fillet1: warning, status ring, badge" "its cell is yellow with the badge (mitcad#961)"
 grep -q "Failed features: Fillet1" "$UI_LOG" && ui_fail "Fillet1 failed"
 ui_expect_log "Timeline Fillet1 at" "the timeline is logged"
 ui_step "hover over Fillet1"             xdotool mousemove $(ui_logged_at "Timeline Fillet1")
@@ -298,6 +310,16 @@ ui_step "double-click Fillet1"           ui_double_click_logged "Timeline Fillet
 ui_expect_new "Editing F3 with Fillet" "editing Fillet1"
 ui_expect_new "Preview Fillet: ok, warning: the fillet is built 0.1 % smaller" "the panel tells" 30
 ui_step "cancel (Esc)"                   ui_key Escape
+
+echo "--- A fillet's picked edges where they were (mitcad#957)"
+ui_wait_idle
+ui_mark
+ui_step "click Fillet1"                  ui_click_logged "Timeline Fillet1"
+expect_last "Selected: " "1 feature [feature F3]" "the fillet is selected"
+expect_last "Feature inputs highlighted: " "Fillet1 edges 4" "its four rounded edges are drawn where they were"
+ui_mark
+ui_step "Esc"                            ui_key Escape
+expect_last "Feature inputs highlighted: " "none" "and go with the selection"
 
 echo "--- The wheel scrolls the timeline (mitcad#826)"
 # wheel_strip up|down notches: turns the wheel over the strip, where Plane1
@@ -352,10 +374,12 @@ ui_mark
 ui_step "click Fillet1"                  ui_click_logged "Timeline Fillet1"
 expect_last "Selected: " "1 feature [feature F3]" "the fillet is selected"
 expect_last "Feature faces highlighted: " "F3 1" "its rounded face is highlighted"
+expect_last "Feature inputs highlighted: " "Fillet1 edges 1" "and its rounded edge where it was"
 ui_mark
 ui_step "Esc"                            ui_key Escape
 expect_last "Selected: " "nothing" "Esc clears the selection"
 expect_last "Feature faces highlighted: " "none" "and the highlight"
+expect_last "Feature inputs highlighted: " "none" "and the edge"
 ui_mark
 ui_step "click Extrude1"                 ui_click_logged "Timeline Extrude1"
 expect_last "Selected: " "1 body [body F2.b0]" "Extrude1 selects its body, as before"
@@ -364,6 +388,7 @@ ui_step "Shift+click Chamfer1"           xdotool keydown shift mousemove $(ui_lo
 ui_expect_new "Timeline selected: F2, F3, F4" "a run of three features"
 expect_last "Selected: " "1 body, 2 features [body F2.b0; feature F3; feature F4]" "each feature of the run selected"
 expect_last "Feature faces highlighted: " "F3 1, F4 1" "the fillet's and the chamfer's faces highlighted"
+expect_last "Feature inputs highlighted: " "Fillet1 edges 1, Chamfer1 edges 1" "and their edges where they were"
 ui_mark
 ui_step "click beside the block"         ui_view_click 4 50
 expect_last "Selected: " "nothing" "a click in the view clears it"

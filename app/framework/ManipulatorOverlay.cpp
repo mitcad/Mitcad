@@ -787,6 +787,17 @@ void ManipulatorOverlay::logPlaces() {
                                   .arg(handle.manipulator.on ? QString() : QStringLiteral(" (off)"))
                             : handle.key;
     lines << QStringLiteral("Manipulator %1 %2 at %3,%4").arg(m_command, key).arg(at.x()).arg(at.y());
+    if (handle.manipulator.kind == Manipulator::Kind::Arrow) {
+      // Which way the arrow points in the design, for UI tests (mitcad#958:
+      // a sketch in a turned occurrence). Its own prefix, so that the
+      // lines above stay the newest "Manipulator ..." of the handle.
+      const auto rounded = [](double value) {
+        return QString::number(std::abs(value) < 5e-4 ? 0.0 : value, 'f', 3);
+      };
+      const gp_Dir& way = handle.manipulator.direction;
+      lines << QStringLiteral("Arrow direction %1 %2: %3,%4,%5")
+                   .arg(m_command, key, rounded(way.X()), rounded(way.Y()), rounded(way.Z()));
+    }
     if (index < m_boxes.size() && !m_boxes[index].isEmpty()) {
       // Where a click edits the value (mitcad#656).
       const QPoint box = mapTo(window(), m_boxes[index].center().toPoint());

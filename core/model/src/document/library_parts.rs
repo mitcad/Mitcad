@@ -17,7 +17,10 @@ use crate::configurations::{ConfigurationRow, Configurations};
 use crate::features::{BaseBody, BaseDef, FeatureDef};
 use crate::ids::{ComponentUid, OccurrenceUid};
 use crate::kernel::Kernel;
-use crate::library::{LibraryRef, LibraryRequest, LibrarySource, designation};
+use crate::library::{
+    LibraryRef, LibraryRequest, LibrarySource, SupplierPart, designation, row_standard,
+    row_supplier_parts,
+};
 use mitcad_model_base::internal::configurations::apply_values;
 
 /// A library component to insert: the library, the version, the
@@ -32,6 +35,10 @@ pub struct LibraryPart {
     pub component: String,
     /// The row; the table's default when None.
     pub config: Option<String>,
+    /// The standard the part is named by when its row names several
+    /// (mitcad#949: `DIN 912`, the Standard filter's); empty: the row's
+    /// first.
+    pub standard: String,
 }
 
 /// A change of a linked library part: another version, another row, or
@@ -60,6 +67,8 @@ pub struct PartsListRow {
     pub supplier: String,
     pub part_number: String,
     pub supplier_url: String,
+    /// The suppliers' articles of its row (mitcad#949).
+    pub supplier_parts: Vec<SupplierPart>,
 }
 
 /// New bodies of a linked component: the component, its link, the new
@@ -127,7 +136,12 @@ impl<K: Kernel> Document<K> {
         };
         let source = self.library_source(&request).map_err(invalid)?;
         let configured = Self::configured(&source, part.config.as_deref())?;
-        let designation = designation(&source, &configured.state, configured.row.as_ref());
+        let designation = designation(
+            &source,
+            &configured.state,
+            configured.row.as_ref(),
+            &part.standard,
+        );
         let name = if designation.is_empty() {
             source.name.clone()
         } else {
@@ -196,8 +210,18 @@ impl<K: Kernel> Document<K> {
             ..request
         };
         let configured = Self::configured(&source, part.config.as_deref())?;
-        let designation = designation(&source, &configured.state, configured.row.as_ref());
-        let reference = library_ref(&source, configured.row.as_ref(), &designation);
+        let designation = designation(
+            &source,
+            &configured.state,
+            configured.row.as_ref(),
+            &part.standard,
+        );
+        let reference = library_ref(
+            &source,
+            configured.row.as_ref(),
+            &designation,
+            &part.standard,
+        );
         let wanted = options.name.clone().unwrap_or_else(|| {
             if designation.is_empty() {
                 source.name.clone()
@@ -339,8 +363,20 @@ impl<K: Kernel> Document<K> {
             let config = change.config.clone().or_else(|| old.config.clone());
             let configured = Self::configured(&source, config.as_deref())
                 .map_err(|e| invalid(format!("{}: {e}", component.name)))?;
-            let designation = designation(&source, &configured.state, configured.row.as_ref());
-            let reference = library_ref(&source, configured.row.as_ref(), &designation);
+            // The standard it was named by stays where the new row has it
+            // (mitcad#949).
+            let designation = designation(
+                &source,
+                &configured.state,
+                configured.row.as_ref(),
+                &old.standard,
+            );
+            let reference = library_ref(
+                &source,
+                configured.row.as_ref(),
+                &designation,
+                &old.standard,
+            );
             let (bodies, mounts) = self.library_bodies(&configured, &designation, &source.path)?;
             let digest = part_digest(&source, configured.row.as_ref());
             let rename = !old.designation.is_empty()
@@ -558,6 +594,10 @@ impl<K: Kernel> Document<K> {
                         .as_ref()
                         .map(|l| l.supplier_url.clone())
                         .unwrap_or_default(),
+                    supplier_parts: library
+                        .as_ref()
+                        .map(|l| l.supplier_parts.clone())
+                        .unwrap_or_default(),
                     library,
                 }
             })
@@ -591,7 +631,9 @@ fn library_ref(
     source: &LibrarySource,
     row: Option<&ConfigurationRow>,
     designation: &str,
+    standard: &str,
 ) -> LibraryRef {
+    let row_name = row.map(|r| r.name.as_str());
     LibraryRef {
         library: source.library.clone(),
         url: source.url.clone(),
@@ -612,6 +654,8 @@ fn library_ref(
             .and_then(|r| r.supplier_url.clone())
             .or_else(|| source.supplier_url.clone())
             .unwrap_or_default(),
+        standard: row_standard(source, row_name, standard),
+        supplier_parts: row_supplier_parts(source, row_name),
     }
 }
 

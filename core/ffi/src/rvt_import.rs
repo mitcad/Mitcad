@@ -11,7 +11,7 @@
 //! elements out and says so.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -77,6 +77,13 @@ impl Document {
         let fail = |e: &dyn std::fmt::Display| ApiError(format!("{file}: {e}"));
         let started = std::time::Instant::now();
         let progress = Arc::new(mitcad_import::Progress::new());
+        // The links are listed in the import process (mitcad#922:
+        // `--import-worker --list-links`), where a fault of the reader ends
+        // that process, not the application. (For tests: a panic as the
+        // reader's bug would.)
+        if options.list_links {
+            mitcad_model::reader_guard::test_panic(path);
+        }
         let rvt = RvtFile::open(std::path::Path::new(path)).map_err(|e| fail(&e))?;
         let schema = rvt.schema().map_err(|e| fail(&e))?;
         let unknown = schema.unknown_encodings();
@@ -475,7 +482,10 @@ type IfcOpenings = std::collections::HashMap<String, Vec<mitcad_ifc::geometry::I
 
 /// Where a link's file is: the file given for it, else next to the
 /// project (by its name, then by the path the project stores), else in
-/// the link folder.
+/// the link folder. The name and the path come from the file
+/// (mitcad#924): only a bare file name is looked for, and a stored path
+/// only when it stays below the project's folder (no root, drive or
+/// `..`), so a crafted project cannot have files elsewhere read.
 fn find_link(
     project: &str,
     link: &mitcad_rvt::building::Link,
@@ -485,6 +495,11 @@ fn find_link(
     if let Some(given) = options.link_files.get(name) {
         return Some(PathBuf::from(given)).filter(|p| p.is_file());
     }
+    if Path::new(name).file_name() != Some(std::ffi::OsStr::new(name))
+        || name.contains(['/', '\\', ':'])
+    {
+        return None;
+    }
     let dir = Path::new(project)
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
@@ -493,7 +508,9 @@ fn find_link(
     let mut candidates = vec![dir.join(name)];
     if let Some(stored) = &stored
         && !stored.contains(':')
-        && !stored.starts_with('/')
+        && Path::new(stored)
+            .components()
+            .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
     {
         candidates.push(dir.join(stored));
     }
@@ -715,6 +732,55 @@ mod tests {
         assert_eq!(
             find_link(&project.display().to_string(), &other, &Options::default()),
             None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_link_name_from_the_file_stays_in_the_project_s_folder() {
+        // mitcad#924: names and stored paths that climb out of the
+        // project's folder, or name another place, find nothing although
+        // the file is there.
+        let dir =
+            std::env::temp_dir().join(format!("mitcad-rvt-link-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let project_dir = dir.join("a").join("b");
+        std::fs::create_dir_all(project_dir.join("Links")).unwrap();
+        std::fs::write(dir.join("x.rvt"), b"").unwrap();
+        let project = project_dir.join("project.rvt").display().to_string();
+        let link = |file: &str, path: Option<&str>| mitcad_rvt::building::Link {
+            id: 1,
+            symbol: None,
+            instance_name: String::new(),
+            transform: None,
+            file: Some(file.into()),
+            path: path.map(Into::into),
+        };
+        let absolute = dir.join("x.rvt").display().to_string();
+        for (file, path) in [
+            ("../../x.rvt", None),
+            (r"..\..\x.rvt", None),
+            (absolute.as_str(), None),
+            ("x.rvt", Some("../../x.rvt")),
+            ("x.rvt", Some(r"..\..\x.rvt")),
+            ("x.rvt", Some(absolute.as_str())),
+            ("..", None),
+        ] {
+            assert_eq!(
+                find_link(&project, &link(file, path), &Options::default()),
+                None,
+                "{file} {path:?}"
+            );
+        }
+        // A stored path below the project's folder is followed.
+        std::fs::write(project_dir.join("Links").join("y.rvt"), b"").unwrap();
+        assert_eq!(
+            find_link(
+                &project,
+                &link("y.rvt", Some(r"Links\y.rvt")),
+                &Options::default()
+            ),
+            Some(project_dir.join("Links").join("y.rvt"))
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

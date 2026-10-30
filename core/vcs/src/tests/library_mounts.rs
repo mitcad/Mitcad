@@ -304,6 +304,7 @@ fn parts_of_a_fetched_library_are_placed_by_their_frames() {
         rev: "v1.0.0".to_owned(),
         component: component.to_owned(),
         config: None,
+        standard: String::new(),
     };
     let plate = doc
         .insert_library(&part("baseplate"), &InsertOptions::default())

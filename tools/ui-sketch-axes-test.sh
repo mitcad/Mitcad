@@ -38,6 +38,11 @@
 #      and the y axis selected the same way, which makes nothing,
 #      Coincident makes the y axis in its step and puts p1 on it (0 DOF);
 #      undo takes both back.
+#   8. Drawing onto an axis (mitcad#948): Sketch5 (F5, on XY) is empty.
+#      Hovering the x axis with the circle tool makes nothing; a circle
+#      whose centre is clicked on the x axis makes the x axis and holds
+#      the centre on it with a Coincident in the circle's step (2 DOF);
+#      one undo takes all of it back (0 DOF).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sketch-axes-test.sh [screenshot.png]
@@ -63,7 +68,8 @@ cat > "$WORK/model.json" << 'EOF'
   {"cmd": "sketch.add_point", "sketch": "F3", "at": [-8, 5]},
   {"cmd": "sketch.circle", "sketch": "F3", "mode": "center", "center": [10, 12], "radius": 3},
   {"cmd": "sketch.create"},
-  {"cmd": "sketch.add_point", "sketch": "F4", "at": [-6, 8]}
+  {"cmd": "sketch.add_point", "sketch": "F4", "at": [-6, 8]},
+  {"cmd": "sketch.create"}
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
@@ -316,5 +322,35 @@ ui_expect_new "Sketch Sketch4: 0 DOF" "both again"
 ui_mark
 ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
 ui_expect_new "Sketch finished" "Sketch4 finished"
+
+echo "--- 8. A circle's centre snapped onto the x axis (mitcad#948)"
+ui_mark
+ui_step "double-click Sketch5"           ui_double_click_logged "Timeline Sketch5"
+ui_expect_new "Editing sketch F5 (Sketch5)" "Sketch5 edited"
+ui_expect_new "Sketch Sketch5: 0 DOF" "an empty sketch"
+ui_step "show the axes"                  zoom_to_show -15 -5 20 20
+ui_mark
+ui_step "circle tool (C)"                ui_key c
+ui_expect_new "Sketch tool Center Diameter Circle" "the circle tool"
+ui_step "hover the x axis"               xdotool mousemove $(ui_sketch_at 4 0)
+ui_sync
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Made the sketch" && ui_fail "hovering the x axis made it"
+echo "ok   hovering the x axis makes nothing"
+ui_mark
+ui_step "centre on the x axis"           ui_sketch_click 10 0
+ui_step "rim"                            ui_sketch_click 10 6
+ui_expect_new "Added circle, diameter" "the circle added"
+ui_expect_new "Made the sketch x axis for a pick: c" "the x axis made in the circle's step"
+ui_expect_new " on the sketch x axis c" "the centre held on the x axis by a Coincident"
+ui_expect_new "Sketch Sketch5: 2 DOF" "only the circle's x and radius free"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Constraint coincident on .* not added" &&
+  ui_fail "the Coincident with the axis was refused"
+ui_step "end the tool (Esc)"             ui_key Escape
+ui_mark
+ui_step "undo (Ctrl+Z)"                  ui_key ctrl+z
+ui_expect_new "Sketch Sketch5: 0 DOF" "the circle, the x axis and the Coincident taken back as one step"
+ui_mark
+ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
+ui_expect_new "Sketch finished" "Sketch5 finished"
 
 ui_finish "UI sketch axes test"

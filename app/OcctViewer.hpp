@@ -190,6 +190,10 @@ struct HighlightDisplay {
   // while a command preview replaces the displayed body.
   std::shared_ptr<geometry::Shape> body = nullptr;
   bool throughSolid = false; // feature inspection: boundaries remain visible behind solids
+  // A feature's inputs where they were (mitcad#957): the shape is lines (a
+  // Fillet's picked edges), drawn as edges in the colour whatever the
+  // item's kind. With throughSolid, dashed where a solid hides them.
+  bool inputLines = false;
   // Diagnostic alternatives for whole-body overlay cost (mitcad#770).
   // Production callers keep the normal transparent, bounded presentation.
   bool opaqueWholeBody = false;
@@ -279,6 +283,11 @@ public:
   void setNavigation(const NavigationSettings& settings);
   bool UpdateZoom(const Aspect_ScrollDelta& delta) override;
   const NavigationSettings& navigation() const { return m_navigation; }
+  // A 3D mouse's motion (mitcad#951, view/SpaceMouseView.cpp): the camera
+  // moves by these rates at each frame (the time between the frames)
+  // until they are zero, turning about the mouse orbit's centre with its
+  // Z lock. Zero rates end the motion and log "3D mouse motion: …".
+  void setSpaceMouseRates(const SpaceMouseRates& rates);
   // The background: a vertical gradient from top to bottom, or one colour.
   void setBackground(const QColor& top, const QColor& bottom, bool gradient);
   // The layout grid on the grid plane (XY, or the sketch plane): `step`
@@ -776,6 +785,8 @@ signals:
   void bodiesChanged();
   // Shift went down or up while a selection scope is set (setPickScope).
   void shiftChanged(bool held);
+  // setNavigation() applied new settings (the 3D mouse's among them).
+  void navigationChanged();
 
 protected:
   // Shift anywhere in the window widens a scope's clicks (setPickScope).
@@ -1267,6 +1278,18 @@ private:
   QHash<QString, occ::handle<Graphic3d_Texture2D>> m_imageTextures;
   QString m_loggedImageReferences = QStringLiteral("Image references drawn: none");
   bool m_loggedImageLayer = false;
+  // A 3D mouse's motion (setSpaceMouseRates, mitcad#951): its rates, the
+  // clock between its frames, the orbit's centre taken as it began, and
+  // what it did so far (logged when it ends).
+  void stepSpaceMouse();
+  void endSpaceMouse();
+  SpaceMouseRates m_spaceMouse;
+  QElapsedTimer m_spaceMouseClock;
+  std::optional<gp_Pnt> m_spaceMousePivot;
+  int m_spaceMouseFrames = 0;
+  double m_spaceMouseTurned = 0.0; // degrees
+  double m_spaceMousePanned = 0.0; // view heights
+  double m_spaceMouseStartScale = 0.0; // the camera's scale as it began (the zoom logged)
 };
 
 } // namespace mitcad

@@ -229,7 +229,22 @@ The update code has three parts:
   `ed25519-dalek`, `sha2` and `semver`.
 - The bridge `core/ffi/src/update.rs`
 - `app/update/`: the requests, with Qt Network. Thus TLS is Qt's
-  platform backend.
+  platform backend. The first request logs it:
+  `Update check: TLS <library> (<backend> backend)`, or
+  `Update check: TLS unavailable (…)` with Qt's backends when none works.
+
+**TLS on Linux:** Qt's OpenSSL backend loads `libssl.so.3` and
+`libcrypto.so.3` at run time. The AppImage carries both, from one
+OpenSSL build (vcpkg's), and Qt finds them in the AppImage before the
+system's (mitcad#954). Before, the AppImage carried only `libcrypto`
+(for the render worker), and Qt combined it with the system's `libssl`.
+Two OpenSSL builds then ran in one process, and on some distributions
+(Fedora) the check failed with "TLS initialization failed". The bundled
+OpenSSL reads the system's `/etc/ssl/openssl.cnf` (the distribution's
+crypto policy), and Qt reads the system's CA certificates itself
+(`/etc/ssl/certs`, Fedora's `/etc/pki/tls/certs/ca-bundle.crt` and
+others). It loads no engine or provider module: TLS needs none
+([development.md](development.md#linux-appimage)).
 
 ### The manifest
 
@@ -351,7 +366,9 @@ Then installations can move to the new key.
 
 ### Tests
 
-No test contacts any host but the machine itself. The tests are:
+No test contacts any host but the machine itself. The tests point
+MitCad at their own server only in a test build
+([the test hooks](#the-test-hooks)). The tests are:
 
 - `app.unit` (`app/tests/update_installer.cpp`, every platform): the
   private download folder of Windows and macOS (a random name in the
@@ -360,7 +377,18 @@ No test contacts any host but the machine itself. The tests are:
   command line with `--sha256`, which MitCad writes and the updater
   reads (`app/update/UpdaterChecks.hpp`). The updater refuses a missing
   or malformed hash. The hash comparison of a file tells a changed file
-  apart.
+  apart. An installation for all users only announces an update from a
+  test's source, unless MitCad has administrator rights already
+  (mitcad#921).
+- `app.update_source_release` and `app.update_source_hooks`
+  (`app/tests/update_source.cpp`, every platform): the update source
+  built as a release and as a test build, whatever the build's own
+  option, with every test variable set. The release keeps GitHub's
+  addresses, its built-in keys, no extra certificate and its own
+  version, and the core refuses a manifest signed with
+  `MITCAD_UPDATE_TEST_KEY` (made by `mitcad-release` for the run). The
+  test build takes them all, and the core accepts that manifest. Both
+  keep the built-in keys apart for the gate of a build without a key.
 - `core.update` (ctest, `cargo test -p mitcad-update`): manifests and
   downloads signed with keys that the tests make. The test covers valid
   manifests and downloads, and tampered manifests and downloads. It
@@ -407,12 +435,19 @@ No test contacts any host but the machine itself. The tests are:
   otherwise. The real AppImage is signed as the `linux-x64` download
   with a key made for the test and served over HTTPS from 127.0.0.1.
   MitCad offers it with *Install*. The AppImage replaces itself after
-  MitCad has quit and starts again as the release.
+  MitCad has quit and starts again as the release. The check uses the
+  AppImage's own OpenSSL: the logged TLS library is the bundled
+  libcrypto's version, and MitCad has loaded `libssl.so.3` and
+  `libcrypto.so.3` from the AppImage only.
 
-The tests point MitCad at their server with environment variables. An
-installed MitCad reads these variables too. They open no new way in: a
-person who can set the environment of a user can also change what Qt
-loads.
+#### The test hooks
+
+The tests point MitCad at their server with environment variables. Only
+a **test build** reads them: a build configured with the CMake option
+`MITCAD_UPDATE_TEST_HOOKS` (mitcad#921). The option is off by default
+and in the release presets (`linux-release`, `macos-release`,
+`windows-release`), and on in the debug presets (`linux-debug`,
+`macos-debug`), which the development builds and `check-all.sh` use.
 
 | Variable | Content |
 |---|---|
@@ -421,6 +456,49 @@ loads.
 | `MITCAD_UPDATE_TEST_KEY` | a public key trusted besides the built-in one |
 | `MITCAD_UPDATE_TEST_CA` | a PEM certificate the update requests trust besides the system's |
 | `MITCAD_TEST_VERSION` | the version MitCad compares with (the new MitCad an update starts does not get it) |
+
+The policy:
+
+- **A release never reads these variables.** Whoever can set a user's
+  environment (on Windows, any program that runs as the user can write
+  `HKEY_CURRENT_USER\Environment`) could otherwise point MitCad at a
+  server of their own and have a key of their own trusted. MitCad would
+  then offer, verify and install their installer as a genuine update,
+  and on an installation for all users the UAC prompt that the user
+  expects after *Install* would run it with administrator rights. A
+  release checks GitHub's addresses with the built-in release keys only,
+  and compares its own version.
+- MitCad logs where its updates come from at start-up, also with checks
+  off: `Update source: manifest at <url>, releases at <url>, N built-in
+  release key(s)` (`and the test key` when a test build took one). With
+  any of the variables set, a second line says `this test build reads
+  ...` or `this build ignores ... (MITCAD_UPDATE_TEST_HOOKS off)`.
+- **A test's source never asks for administrator rights.** When a test
+  build takes an address, a key or a certificate from the environment,
+  an installation for all users only announces a release, unless MitCad
+  runs with administrator rights already. Then the update elevates
+  nothing (the installer test runs so). A changed version alone
+  (`MITCAD_TEST_VERSION`) is not a test's source.
+- **A build without a release key makes no update request**, also when
+  a test build has `MITCAD_UPDATE_TEST_KEY` set: only the built-in keys
+  count.
+- A configure that requires the render worker's CUDA device (a release:
+  `MITCAD_RENDER_REQUIRED_DEVICES` naming CUDA, as a cache variable or
+  from the environment) stops when `MITCAD_UPDATE_TEST_HOOKS` is on. The
+  `update-manifest` target of a test build refuses to sign.
+- The update tests take the option from the build: the ctest's
+  `UI_UPDATE_TEST_HOOKS`, or the build folder's `CMakeCache.txt`. Built
+  without it (a release's configuration), `app.appimage`,
+  `app.installer-windows`, `app.ui-macos-update` and
+  `tools/ui-update-test.sh` check that MitCad ignores the variables: its
+  own version, GitHub's addresses, the built-in keys only, no request to
+  the test's server. A release AppImage (`appimage-test.sh
+  --require-cuda`) with the option on fails.
+
+On Windows the `dev` preset of the build VM inherits `windows-release`
+and builds the releases too, so it stays without the option. Configure a
+separate build with `-DMITCAD_UPDATE_TEST_HOOKS=ON` to run the update
+part of `app.installer-windows`.
 
 The other UI tests set `MITCAD_NO_UPDATE_CHECK=1` (in `ui-test-lib.sh`
 and `ui-windows-lib.ps1`). Thus they make no requests.

@@ -10,6 +10,8 @@
 #include <QNetworkRequest>
 #include <QSslConfiguration>
 #include <QSslError>
+#include <QSslSocket>
+#include <QStringList>
 #include <QUrl>
 #include <QtLogging>
 
@@ -35,6 +37,20 @@ rust::Slice<const std::uint8_t> bytesOf(const QByteArray& data) {
 // Only the host, for the log: an address may carry a signed query.
 QString hostOf(const QUrl& url) { return url.scheme() + QStringLiteral("://") + url.host(); }
 
+// Which TLS library the requests use, for the log: the AppImage's test
+// checks that it is the bundled OpenSSL (mitcad#954), and a failed check
+// ("TLS initialization failed") says which backends Qt had.
+void logTls() {
+  if (!QSslSocket::supportsSsl()) {
+    qInfo().noquote() << QStringLiteral("Update check: TLS unavailable (Qt's TLS backends: %1; Qt built with %2)")
+                             .arg(QSslSocket::availableBackends().join(QStringLiteral(", ")),
+                                  QSslSocket::sslLibraryBuildVersionString());
+    return;
+  }
+  qInfo().noquote() << QStringLiteral("Update check: TLS %1 (%2 backend)")
+                           .arg(QSslSocket::sslLibraryVersionString(), QSslSocket::activeBackend());
+}
+
 } // namespace
 
 UpdateClient::UpdateClient(UpdateSource source, QObject* parent) : QObject(parent), m_source(std::move(source)) {
@@ -52,6 +68,7 @@ QNetworkAccessManager* UpdateClient::network() {
   // Made on the first request: with checks off, there is none.
   if (m_network == nullptr) {
     m_network = new QNetworkAccessManager(this);
+    logTls();
   }
   return m_network;
 }

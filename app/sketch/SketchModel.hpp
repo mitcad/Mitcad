@@ -249,6 +249,10 @@ public:
   // in their order: an axis or origin pick as axisEntity(); with `axes`
   // false (Fix/Unfix), the axes and origin left out.
   QStringList selectionPicks(const QStringList& names, bool axes) const;
+  // The axes point `id` lies on by what the sketch holds it with
+  // (mitcad#948): "xy" for the origin point, else "x", "y" or both for its
+  // active coincident constraints on the axes' lines; empty otherwise.
+  QString pointAxes(const QString& id) const;
   // Curves with a point as an end (or their centre, with `centers`).
   QStringList curvesAt(const QString& point, bool centers = false) const;
   // Whether everything is constrained (and there is something).

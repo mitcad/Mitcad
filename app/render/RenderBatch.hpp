@@ -90,8 +90,8 @@ struct Camera {
 };
 
 // The camera of a named view (the `named_views` query's entry) for an
-// image of `aspect`: the view's height spans the image's shorter side, as
-// the 3D view shows a named view.
+// image of `aspect`: the view's height spans the image's height, as the 3D
+// view shows a named view (mitcad#959).
 Camera namedViewCamera(const QJsonObject& view, double aspect);
 
 // The image's size in pixels for the render settings' `output` section:

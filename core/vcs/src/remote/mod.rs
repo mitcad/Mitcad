@@ -44,6 +44,8 @@ pub mod mqtt;
 pub(crate) mod sync;
 // Edit locks (mitcad#89).
 pub mod locks;
+// A repository's own configuration as untrusted input (mitcad#920).
+pub(crate) mod trust;
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -262,6 +264,11 @@ pub struct RemoteInfo {
     /// Every remote, by name (mitcad#89): with several and none followed
     /// (`name` None), Project Settings asks which to follow.
     pub remotes: Vec<NamedRemote>,
+    /// Why git is not run in this project (mitcad#920): the repository's
+    /// own configuration sets keys that could start programs (class
+    /// `untrusted_config`, the keys in its message); left out when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub untrusted_config: Option<RemoteError>,
 }
 
 /// A remote of the project's repository.
@@ -722,7 +729,11 @@ impl ProjectRepo {
                 name,
             })
             .collect();
+        let untrusted_config = trust::RepositoryConfig::read(self.repo.git_dir())
+            .and_then(|config| config.refuse_untrusted())
+            .err();
         Ok(RemoteInfo {
+            untrusted_config,
             remotes,
             name,
             url,

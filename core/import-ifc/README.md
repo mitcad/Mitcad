@@ -13,6 +13,10 @@ the `import_ifc` command, `mitcad-cli import-ifc`).
 | `sketch`, `transform` | Profiles and paths as sketches; items moved, scaled and mirrored by a transform. |
 | `properties`, `report` | Elements' property sets (mitcad#496); the report, with the quantity checks against the file's element quantities. |
 
+A product (with its openings), or a representation map's component,
+expands at most 10 000 items from its mapped items, nested maps included;
+past that its shape is one "too many nested items" note (mitcad#930).
+
 It depends on `mitcad-import-base` (the import's `Progress`, its memory
 guard) and on no other import.
 

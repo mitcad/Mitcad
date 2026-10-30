@@ -15,7 +15,11 @@
 #      supported system (Ubuntu 24.04), and every ELF
 #      file that links Qt finds each libQt6 library inside the AppImage,
 #      through its own $ORIGIN RUNPATH and in ldd's view, never a system's
-#      Qt. Prints the newest glibc version it needs.
+#      Qt. Prints the newest glibc version it needs. OpenSSL (mitcad#954):
+#      libssl.so.3 and libcrypto.so.3 are both bundled or both absent, and
+#      no file names a library folder of the build machine (vcpkg's install
+#      trees, the render libraries' prefix, the built executables'
+#      RUNPATHs), as OpenSSL's ENGINESDIR and MODULESDIR did.
 #   2. Copied into a folder of its own and started with an empty
 #      environment (env -i; PATH /usr/bin:/bin, and update checks off):
 #      --version, then the demo block's screenshot (--screenshot), while
@@ -34,9 +38,18 @@
 #      this AppImage as the linux-x64 download (mitcad-release, with a key
 #      made for the test), served over HTTPS from 127.0.0.1 with a
 #      certificate made for the test (tools/update-test-server.py; needs
-#      python3 and openssl); Install downloads and verifies it, Mitcad
+#      python3 and openssl), with the AppImage's OpenSSL when it has one
+#      (the logged TLS library is the bundled libcrypto's version, and the
+#      running Mitcad has loaded libssl and libcrypto from its usr/lib
+#      only), else one system's pair; Install downloads and verifies it, Mitcad
 #      quits, the download replaces the AppImage (a new file of the same
 #      name) and starts as the release, which reports the update.
+#      Only a test build reads the tests' variables (the CMake option
+#      MITCAD_UPDATE_TEST_HOOKS, mitcad#921; the built mitcad's
+#      CMakeCache.txt tells, or without it the AppImage's log). A release's
+#      AppImage, without the option, is checked to ignore them instead:
+#      its own version, GitHub's addresses, the built-in key only, no
+#      request to the test's server.
 # Without a working FUSE the AppImage runs with APPIMAGE_EXTRACT_AND_RUN=1.
 #
 # Usage: tools/appimage-test.sh [--skip-stale] [--require-cuda] <AppImage> [<built mitcad>] [<mitcad-release>]
@@ -84,6 +97,10 @@ fi
 IMAGE=$(readlink -f "$IMAGE")
 
 source "$ROOT/tools/ui-test-lib.sh"
+# Whether the AppImage reads the update tests' variables (mitcad#921): ON,
+# OFF, or empty (no build folder: section 3 asks the AppImage).
+HOOKS=""
+[ -n "$BUILT" ] && HOOKS=$(ui_update_test_hooks "$BUILT")
 
 WORK=$(mktemp -d /tmp/mitcad-appimage.XXXXXX)
 APPS=$WORK/apps
@@ -167,6 +184,58 @@ if env -i /usr/bin/ldd "$DIR/usr/bin/mitcad" | grep -E "$render_libraries"; then
   ui_fail "mitcad links the renderer's libraries"
 fi
 echo "ok   the render worker mitcad-render, its libraries and their licences; mitcad links none of them"
+# OpenSSL (mitcad#954, packaging/linux/make-appimage.sh): libssl.so.3 and
+# libcrypto.so.3 both bundled, which Qt's TLS plugin then loads from
+# usr/lib, or both the system's; never one of each, which mixes two
+# OpenSSL builds in one process. The bundled libcrypto's run-time folders
+# (OPENSSLDIR, ENGINESDIR, MODULESDIR) are none of the build machine's.
+openssl_dir() { grep -aoE "$1: \"[^\"]*\"" "$2" | head -1 | sed -E "s/^$1: \"(.*)\"\$/\1/"; }
+BUNDLED_TLS=""
+ssl_bundled=$(compgen -G "$DIR/usr/lib/libssl.so*")
+crypto_bundled=$(compgen -G "$DIR/usr/lib/libcrypto.so*")
+if [ -n "$ssl_bundled" ] && [ -n "$crypto_bundled" ]; then
+  [ -f "$DIR/usr/lib/libssl.so.3" ] && [ -f "$DIR/usr/lib/libcrypto.so.3" ] ||
+    ui_fail "the AppImage's OpenSSL is not libssl.so.3 and libcrypto.so.3: $(basename -a $ssl_bundled $crypto_bundled | tr '\n' ' ')"
+  BUNDLED_TLS=$(grep -aoE 'OpenSSL [0-9]+\.[0-9]+\.[0-9]+[^ [:cntrl:]]* +[0-9]+ [A-Z][a-z]+ [0-9]{4}' \
+    "$DIR/usr/lib/libcrypto.so.3" | head -1)
+  [ -n "$BUNDLED_TLS" ] || ui_fail "no version text in the bundled libcrypto.so.3"
+  folders=""
+  for name in OPENSSLDIR ENGINESDIR MODULESDIR; do
+    folder=$(openssl_dir "$name" "$DIR/usr/lib/libcrypto.so.3")
+    case $folder in
+      "${HOME:-/no-home-set}"/* | "$ROOT"/* | */vcpkg_installed/* | */vcpkg/*)
+        ui_fail "the bundled libcrypto's $name is the build machine's $folder" ;;
+    esac
+    folders="$folders, $name ${folder:-none}"
+  done
+  echo "ok   libssl.so.3 and libcrypto.so.3 bundled ($BUNDLED_TLS$folders)"
+elif [ -n "$ssl_bundled$crypto_bundled" ]; then
+  ui_fail "the AppImage bundles $(basename -a $ssl_bundled $crypto_bundled | tr '\n' ' ')without its pair, so Qt's TLS would mix it with the system's"
+else
+  echo "ok   no bundled OpenSSL: Qt's TLS loads the system's libssl and libcrypto"
+fi
+# No file names a folder of the build machine that libraries are looked up
+# in (mitcad#954: the bundled libcrypto's ENGINESDIR and MODULESDIR were
+# vcpkg's install folder): vcpkg's install trees, the render libraries'
+# prefix and the built executables' RUNPATHs. Source file names in
+# messages (OCCT's, Cycles', the Rust crates') are no such folders.
+lookup=(-e /vcpkg_installed/)
+if [ -n "$BUILT" ]; then
+  for program in "$BUILT" "$(dirname "$BUILT")/mitcad-render"; do
+    [ -f "$program" ] || continue
+    while IFS= read -r path; do
+      case $path in
+        '' | '$ORIGIN'*) ;;
+        *) lookup+=(-e "$path") ;;
+      esac
+    done < <(readelf -d "$program" | sed -n 's/.*(R*U*N*PATH).*\[\(.*\)\]$/\1/p' | tr ':' '\n')
+  done
+  deps=$(sed -n 's/^MITCAD_RENDER_DEPS:[A-Z]*=//p' "$(dirname "$BUILT")/../CMakeCache.txt" 2> /dev/null)
+  [ -n "$deps" ] && lookup+=(-e "$deps/install/" -e "$deps/vcpkg_installed")
+fi
+carriers=$(grep -rlaF "${lookup[@]}" "$DIR" | sed "s|^$DIR/||")
+[ -z "$carriers" ] || ui_fail "these files name the build machine's library folders ($(printf '%s ' "${lookup[@]}" | sed 's/-e //g')): $(echo $carriers)"
+echo "ok   no file names the build machine's library folders"
 # The CUDA kernels (mitcad#202): a release must have them, with cuew's
 # licence, whatever this machine's GPU.
 CUBINS=$(compgen -G "$DIR/usr/lib/mitcad/cycles/lib/kernel_sm_*.cubin.zst" | wc -l)
@@ -370,12 +439,65 @@ echo "ok   the AppImage signed as linux-x64 with a key made for the test"
 export MITCAD_UPDATE_URL=$BASE/release/update-manifest.json
 export MITCAD_UPDATE_TEST_KEY=$PUBLIC MITCAD_UPDATE_TEST_CA=$WORK/cert.pem MITCAD_TEST_VERSION=0.0.0
 unset MITCAD_NO_UPDATE_CHECK
+if [ -z "$HOOKS" ]; then
+  # No build folder: the AppImage's log says whether it reads the variables
+  # (checks off, its source is logged anyway).
+  MITCAD_NO_UPDATE_CHECK=1 UI_GDB=0 UI_APP=$COPY ui_start_app
+  ui_expect_log "Update source: " "the AppImage logs where its updates come from"
+  if grep -qF "Update source: this test build reads" "$UI_LOG"; then HOOKS=ON; else HOOKS=OFF; fi
+  ui_stop_app
+  echo "note no build folder given: the AppImage's test hooks are $HOOKS by its own log"
+fi
+# A release (--require-cuda or its build's CUDA requirement) never has them.
+[ "$REQUIRE_CUDA" = 1 ] && [ "$HOOKS" = ON ] &&
+  ui_fail "a release's AppImage reads the update tests' variables (configure it with -DMITCAD_UPDATE_TEST_HOOKS=OFF)"
+if [ "$HOOKS" = OFF ]; then
+  # A release's AppImage (mitcad#921): its check would go to GitHub, so
+  # checks off; its source is logged anyway.
+  MITCAD_NO_UPDATE_CHECK=1 UI_GDB=0 UI_APP=$COPY ui_start_app
+  ui_expect_log "Updates: Mitcad $VERSION for linux-x64, the AppImage $COPY" "its own version, not MITCAD_TEST_VERSION"
+  ui_expect_log "Update source: manifest at https://github.com/mitcad/Mitcad/releases/latest/download/update-manifest.json, releases at https://api.github.com/repos/mitcad/Mitcad/releases?per_page=20, " \
+    "GitHub's addresses, not MITCAD_UPDATE_URL"
+  ui_expect_log "Update source: this build ignores MITCAD_UPDATE_URL, MITCAD_UPDATE_TEST_KEY, MITCAD_UPDATE_TEST_CA, MITCAD_TEST_VERSION (MITCAD_UPDATE_TEST_HOOKS off)" \
+    "a release ignores the update tests' variables"
+  grep -qE "and the test key|test certificate" "$UI_LOG" && ui_fail "the AppImage took the test's key or certificate"
+  echo "ok   the built-in key only, no test certificate"
+  sleep 4
+  [ -s "$WORK/requests.log" ] && ui_fail "requests to the test's server: $(cat "$WORK/requests.log")"
+  echo "ok   no request to the test's server"
+  ui_stop_app
+  ui_finish "AppImage test (a release build: the update tests' variables ignored)"
+  exit 0
+fi
 inode=$(stat -c %i "$COPY")
 UI_GDB=0 UI_APP=$COPY ui_start_app
 ui_expect_log "Updates: Mitcad 0.0.0 for linux-x64, the AppImage $COPY" "the AppImage can update itself"
+ui_expect_log "Update source: this test build reads MITCAD_UPDATE_URL, MITCAD_UPDATE_TEST_KEY, MITCAD_UPDATE_TEST_CA, MITCAD_TEST_VERSION (MITCAD_UPDATE_TEST_HOOKS)" \
+  "a test build reads the update tests' variables"
 ui_expect_log "Update notice (offer): MitCad $VERSION is available (this is 0.0.0). MitCad checks for updates once a day; Tools › Preferences turns that off. [Release Notes, Install, Skip This Version, Later]" \
   "the notice offers Install"
 OLD=$(xdotool getwindowpid "$UI_WINDOW")
+# The TLS of the check (mitcad#954): the bundled OpenSSL, libssl and
+# libcrypto both from the AppImage's usr/lib and no other; without one,
+# both from one system folder.
+if [ -n "$BUNDLED_TLS" ]; then
+  ui_expect_log "Update check: TLS $BUNDLED_TLS (openssl backend)" "the update check's TLS is the bundled $BUNDLED_TLS"
+else
+  ui_expect_log "Update check: TLS OpenSSL " "the update check's TLS is the system's OpenSSL"
+fi
+appdir=$(tr '\0' '\n' < "/proc/$OLD/environ" | sed -n 's/^APPDIR=//p')
+openssl_loaded=$(grep -oE '/[^ ]+/lib(ssl|crypto)\.so[.0-9]*$' "/proc/$OLD/maps" | sort -u)
+for library in libssl.so.3 libcrypto.so.3; do
+  grep -q "/$library\$" <<< "$openssl_loaded" || ui_fail "Mitcad has not loaded $library: $(echo $openssl_loaded)"
+done
+if [ -n "$BUNDLED_TLS" ]; then
+  [ "$openssl_loaded" = "$(printf '%s\n' "$appdir/usr/lib/libcrypto.so.3" "$appdir/usr/lib/libssl.so.3")" ] ||
+    ui_fail "Mitcad's OpenSSL is not only the AppImage's: $(echo $openssl_loaded)"
+else
+  [ "$(dirname $openssl_loaded | sort -u | wc -l)" = 1 ] ||
+    ui_fail "Mitcad's libssl and libcrypto come from different folders: $(echo $openssl_loaded)"
+fi
+echo "ok   libssl and libcrypto loaded from $(dirname $openssl_loaded | sort -u)"
 ui_mark
 ui_key alt+i
 ui_expect_new "Update verified: $APPS/.Mitcad.AppImage.update" "the download is verified" 30

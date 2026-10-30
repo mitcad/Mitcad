@@ -457,6 +457,8 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
             hidden: false,
             smooth: true,
             exact: true,
+            // Cut sheets write the curves as they are (mitcad#853).
+            quick: false,
             section: None,
             deflection: 0.01,
         };

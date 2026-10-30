@@ -49,7 +49,8 @@ native-action tools.search
 native-type native.commandSearch 'Preferences: Cache'
 key Return
 focus-dialog '^Settings$'
-button '^Diagnostics.*$'
+# The Cache page's button, not the Diagnostics section of the selector.
+button '^Diagnostics…$'
 focus-dialog '^Diagnostics$'
 button '^Export Report.*$'
 focus-dialog '^Export Report$'

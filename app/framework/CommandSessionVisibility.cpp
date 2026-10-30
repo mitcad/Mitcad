@@ -31,6 +31,19 @@ bool CommandSession::runVisibility(const QJsonArray& commands, const QString& la
   return runOutsideRange(commands, label, false, nullptr);
 }
 
+// The component activated (mitcad#960): add_feature goes into the active
+// component, so a preview cached for a definition is another component's
+// now. With the shown one gone from the cache, the change computes it
+// again (visibilityChanged).
+bool CommandSession::runActivation(const QJsonArray& commands, const QString& label) {
+  if (m_done) {
+    return false;
+  }
+  m_cache.clear();
+  m_cacheOrder.clear();
+  return runOutsideRange(commands, label, false, nullptr);
+}
+
 // A parameter table's change (mitcad#564) goes the same way: outside the
 // range, run again where the range is taken back.
 bool CommandSession::runOutsideRange(const QJsonArray& commands, const QString& label, bool parameter,

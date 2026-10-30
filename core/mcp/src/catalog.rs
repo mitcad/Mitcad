@@ -1,9 +1,19 @@
 // SPDX-License-Identifier: MIT
 use serde_json::{Value, json};
 
+use crate::reference::echoed;
+
+// The longest strings the tools take (mitcad#935), in characters: a
+// handle or a command id, an owner, occurrence or other name, an entity's
+// topological name (it nests the features it came through), a path.
+const ID_CHARS: u64 = 256;
+const NAME_CHARS: u64 = 1024;
+const ENTITY_CHARS: u64 = 4096;
+const PATH_CHARS: u64 = 4096;
+
 pub(crate) fn tools() -> Vec<Value> {
-    let document = json!({"type": "string", "minLength": 1, "description": "Explicit document handle returned by document_create or document_open"});
-    let path = json!({"type": "string", "minLength": 1, "description": "Path within the configured workspace"});
+    let document = json!({"type": "string", "minLength": 1, "maxLength": ID_CHARS, "description": "Explicit document handle returned by document_create or document_open"});
+    let path = json!({"type": "string", "minLength": 1, "maxLength": PATH_CHARS, "description": "Path within the configured workspace"});
     vec![
         tool(
             "document_create",
@@ -79,11 +89,11 @@ pub(crate) fn tools() -> Vec<Value> {
                 "document": document,
                 "path": path,
                 "format": {"type": "string", "enum": ["step", "iges", "brep", "stl", "obj", "3mf", "usdz", "dxf", "pdf", "svg"]},
-                "bodies": {"type": "array", "items": {"type": "string", "minLength": 1}, "description": "Optional body identities, for example F7.b0"},
-                "sketch": {"type": "string", "minLength": 1, "description": "Sketch feature identity for DXF, for example F2"},
-                "flat_pattern": {"type": "string", "minLength": 1, "description": "Sheet-metal body identity for a Flat Pattern DXF, for example F3.b0"},
+                "bodies": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS}, "description": "Optional body identities, for example F7.b0"},
+                "sketch": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "Sketch feature identity for DXF, for example F2"},
+                "flat_pattern": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "Sheet-metal body identity for a Flat Pattern DXF, for example F3.b0"},
                 "drawing": {"type": "object", "description": "Drawing options (export_drawing without cmd, path and bodies), for example {\"sheet\": \"A3\", \"views\": [\"front\", \"top\", \"right\", \"iso\"], \"hidden_lines\": true}"},
-                "cut_sheet": {"type": "string", "minLength": 1, "description": "A cut sheet kept in the design (its id like D2, or its name) written as DXF or SVG: its parts' outlines at 1:1 on the layers CUT_OUTER and CUT_INNER"},
+                "cut_sheet": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A cut sheet kept in the design (its id like D2, or its name) written as DXF or SVG: its parts' outlines at 1:1 on the layers CUT_OUTER and CUT_INNER"},
                 "labels": {"type": "boolean", "default": false, "description": "With cut_sheet: each part's name as text on the layer LABEL"}
             }),
             &["document", "path", "format"],
@@ -101,11 +111,11 @@ fn reference_tool() -> Value {
         "model_reference",
         "Look up the model API reference: commands, queries, feature definitions, values and units, identities. Without arguments: the contents (the sections' headings) and the names of every query, command and feature type this server permits. With one of: section (a heading or a name it lists, e.g. \"Values\", \"split_body\", \"Sketch commands\"), query or command (its reference row: fields and result), feature (a feature type's section with an example definition), search (the sections and excerpts that contain a text). Each answer holds at most 64 kB of text; a longer one says truncated and gives next_offset, to pass as offset for the rest. The resource mitcad://reference/commands is the whole reference (about 1 MB).",
         json!({
-            "section": {"type": "string", "minLength": 1, "description": "A section's heading, or a name its heading lists, e.g. \"Values\", \"split_body\" or \"Sketch commands\""},
-            "query": {"type": "string", "minLength": 1, "description": "A query's name, e.g. \"bodies\" or \"faces\""},
-            "command": {"type": "string", "minLength": 1, "description": "A command's name (its cmd), e.g. \"add_feature\" or \"sketch.add_line\""},
-            "feature": {"type": "string", "minLength": 1, "description": "A feature type (a definition's type), e.g. \"extrude\" or \"construction_plane\""},
-            "search": {"type": "string", "minLength": 2, "description": "A text to find in any case, e.g. \"bbox\""},
+            "section": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A section's heading, or a name its heading lists, e.g. \"Values\", \"split_body\" or \"Sketch commands\""},
+            "query": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A query's name, e.g. \"bodies\" or \"faces\""},
+            "command": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A command's name (its cmd), e.g. \"add_feature\" or \"sketch.add_line\""},
+            "feature": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A feature type (a definition's type), e.g. \"extrude\" or \"construction_plane\""},
+            "search": {"type": "string", "minLength": 2, "maxLength": NAME_CHARS, "description": "A text to find in any case, e.g. \"bbox\""},
             "offset": {"type": "integer", "minimum": 0, "description": "Where a truncated answer continues: its next_offset"}
         }),
         &[],
@@ -202,7 +212,7 @@ const LIVE_DOCUMENT: &str = "Explicit live document handle returned by document_
 /// The application's own state and actions on the open document
 /// (mitcad#265); the application executes them.
 fn ui_tools() -> Vec<Value> {
-    let document = json!({"type": "string", "minLength": 1, "description": LIVE_DOCUMENT});
+    let document = json!({"type": "string", "minLength": 1, "maxLength": ID_CHARS, "description": LIVE_DOCUMENT});
     let kinds = json!([
         "face",
         "edge",
@@ -225,14 +235,14 @@ fn ui_tools() -> Vec<Value> {
         "description": "An entity as ui_state lists the selection: kind, owner (a body such as F2.b0, a sketch such as F4, a datum, a component), name (a face, edge or vertex name, a region key, a curve, point, constraint or dimension id; empty for bodies, datums and sketches), occurrence (\"O1/O4\"; empty in the root)",
         "properties": {
             "kind": {"type": "string", "enum": kinds},
-            "owner": {"type": "string", "minLength": 1},
-            "name": {"type": "string"},
-            "occurrence": {"type": "string"}
+            "owner": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS},
+            "name": {"type": "string", "maxLength": ENTITY_CHARS},
+            "occurrence": {"type": "string", "maxLength": NAME_CHARS}
         },
         "required": ["kind", "owner"],
         "additionalProperties": false
     });
-    let folder_path = json!({"type": "string", "minLength": 1, "description": "A .mitcad file in a folder the user allows agents to use (Preferences > AI Assistants, or the application's --mcp-folder); a relative path is relative to the first allowed folder; '..' is refused"});
+    let folder_path = json!({"type": "string", "minLength": 1, "maxLength": PATH_CHARS, "description": "A .mitcad file in a folder the user allows agents to use (Preferences > AI Assistants, or the application's --mcp-folder); a relative path is relative to the first allowed folder; '..' is refused"});
     let point = json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "x, y, z in millimetres"});
     vec![
         tool(
@@ -288,7 +298,7 @@ fn ui_tools() -> Vec<Value> {
                 "width": {"type": "integer", "minimum": 16, "maximum": 4096, "description": "Pixels across an offscreen render of the 3D view (with height, or with aspect)"},
                 "height": {"type": "integer", "minimum": 16, "maximum": 4096, "description": "Pixels down an offscreen render of the 3D view (with width, or with aspect)"},
                 "aspect": {"type": "number", "minimum": 0.1, "maximum": 10, "description": "Width / height of an offscreen render of the 3D view; max_size on its longer side unless width or height is given"},
-                "path": {"type": "string", "minLength": 1, "description": "A .png or .jpg file in a folder the user allows agents to use (Preferences > AI Assistants, or the application's --mcp-folder) to write the image to instead of returning it; a relative path is relative to the first allowed folder; '..' is refused"},
+                "path": {"type": "string", "minLength": 1, "maxLength": PATH_CHARS, "description": "A .png or .jpg file in a folder the user allows agents to use (Preferences > AI Assistants, or the application's --mcp-folder) to write the image to instead of returning it; a relative path is relative to the first allowed folder; '..' is refused"},
                 "overwrite": {"type": "boolean", "default": false, "description": "Explicitly allow replacement of an existing file at path"}
             }),
             &[],
@@ -312,8 +322,8 @@ fn ui_tools() -> Vec<Value> {
             "Run a command of the application's command registry by its id (as app/COMMANDS.md lists them: sketch.clean_up_stale_projections, sketch.project, sketch.finish, ...) with input values, then OK or Cancel; or with edit, open a feature for editing (a sketch in sketch mode) as a double-click in the timeline does; or with only finish, end the open command panel, or with cancel a sketch being edited (its changes taken back). The result carries the panel's validation, preview and warnings. Commands that open a file dialog or another modal dialog are refused.",
             json!({
                 "document": document,
-                "id": {"type": "string", "minLength": 1, "description": "A command id of the registry"},
-                "edit": {"type": "string", "minLength": 1, "description": "A feature uid to edit instead of running a command"},
+                "id": {"type": "string", "minLength": 1, "maxLength": ID_CHARS, "description": "A command id of the registry"},
+                "edit": {"type": "string", "minLength": 1, "maxLength": ID_CHARS, "description": "A feature uid to edit instead of running a command"},
                 "inputs": {"type": "object", "description": "Input values by the panel's input keys: text for values and texts, a choice's value, true or false for checks, an array of entities (as ui_select's items) for selections"},
                 "finish": {"type": "string", "enum": ["ok", "cancel", "keep_open"], "default": "ok", "description": "What ends a command panel"}
             }),
@@ -417,6 +427,17 @@ pub(crate) fn validate(value: &Value, schema: &Value, path: &str) -> Result<(), 
     {
         return Err(format!("{path} must not be empty"));
     }
+    // A string's length in characters (mitcad#935): counted only up to the
+    // limit, a megabyte string is refused without being walked.
+    if let Some(string) = value.as_str()
+        && let Some(maximum) = schema.get("maxLength").and_then(Value::as_u64)
+        && string
+            .chars()
+            .nth(usize::try_from(maximum).unwrap_or(usize::MAX))
+            .is_some()
+    {
+        return Err(format!("{path} must have at most {maximum} characters"));
+    }
     if let Some(object) = value.as_object() {
         if let Some(required) = schema.get("required").and_then(Value::as_array) {
             for key in required.iter().filter_map(Value::as_str) {
@@ -430,7 +451,7 @@ pub(crate) fn validate(value: &Value, schema: &Value, path: &str) -> Result<(), 
             if let Some(property) = properties.and_then(|properties| properties.get(key)) {
                 validate(value, property, &format!("{path}.{key}"))?;
             } else if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
-                return Err(format!("Unknown argument {path}.{key}"));
+                return Err(format!("Unknown argument {path}.{}", echoed(key)));
             }
         }
     }

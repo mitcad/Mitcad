@@ -500,6 +500,27 @@ mod tests {
     }
 
     #[test]
+    fn deeply_nested_record_is_skipped() {
+        // mitcad#930: a record of 100 000 nested parentheses is a warning,
+        // not a stack overflow; the records after it are read.
+        let text = format!(
+            "ISO-10303-21;HEADER;FILE_SCHEMA(('IFC4'));ENDSEC;DATA;\n\
+             #1=IFCWALL({}));\n#2=IFCB(2);ENDSEC;END-ISO-10303-21;",
+            "(".repeat(100_000)
+        );
+        let file = IfcFile::parse(&text).expect("reads what it can");
+        assert_eq!(file.warnings.len(), 1, "{:?}", file.warnings);
+        assert!(
+            file.warnings[0].starts_with("record not read")
+                && file.warnings[0].contains("nested too deeply"),
+            "{:?}",
+            file.warnings
+        );
+        assert!(file.get(1).is_none());
+        assert_eq!(file.get(2).expect("kept").args, vec![Value::Integer(2)]);
+    }
+
+    #[test]
     fn ifczip_archives_open() {
         let dir = std::env::temp_dir().join(format!("mitcad-ifc-zip-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temporary folder");

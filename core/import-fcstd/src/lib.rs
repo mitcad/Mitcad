@@ -64,7 +64,7 @@ mod tests;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use mitcad_freecad::{FcstdFile, Object, Placement, Value, version};
+use mitcad_freecad::{FcstdFile, LinkRef, Object, Placement, Value, version};
 use mitcad_model::expr::LengthUnit;
 use mitcad_model::{
     BaseInput, BodyKind, BodyUid, ComponentUid, Document, FeatureUid, ImportBody, Kernel,
@@ -151,6 +151,7 @@ pub fn import_fcstd_file<K: Kernel>(
         measured_sketches: Vec::new(),
         appearances: HashMap::new(),
         looks: HashMap::new(),
+        placements: 0,
     };
     let result = importer.run();
     let Importer {
@@ -204,7 +205,8 @@ struct Source {
 
 /// Link properties that do not consume what they refer to: containers'
 /// lists, attachments, references for directions and limits, a link's
-/// target, assembly joints' references.
+/// target, assembly joints' references, a binder's context (the Body it
+/// is in, mitcad#952: only its `Support` is what it binds).
 const NOT_CONSUMING: &[&str] = &[
     "Group",
     "Origin",
@@ -232,6 +234,7 @@ const NOT_CONSUMING: &[&str] = &[
     "ObjectToGround",
     "Reference1",
     "Reference2",
+    "Context",
 ];
 
 impl Source {
@@ -271,6 +274,26 @@ impl Source {
 
     fn object(&self, name: &str) -> Option<&Object> {
         self.file.document.object(name)
+    }
+
+    /// The objects a link names through its sub-element paths (a binder's
+    /// `Support` of `Body004` with `Sketch072.`: the sketch, mitcad#952);
+    /// the linked object itself where a path names none.
+    fn path_objects<'s>(&'s self, link: &'s LinkRef) -> Vec<&'s str> {
+        let named: Vec<&str> = link
+            .subs
+            .iter()
+            .filter_map(|s| {
+                s.name
+                    .split('.')
+                    .rfind(|part| !part.is_empty() && self.object(part).is_some())
+            })
+            .collect();
+        if named.is_empty() {
+            vec![link.object.as_str()]
+        } else {
+            named
+        }
     }
 
     fn label(&self, name: &str) -> String {
@@ -349,16 +372,20 @@ impl Source {
             .collect()
     }
 
-    /// The objects a container holds, in its order.
+    /// The objects a container holds, in its order, each once (a group
+    /// listing an object again would otherwise place it again, and a chain
+    /// of such groups multiply the walk at every level).
     fn children(&self, name: &str) -> Vec<String> {
         let Some(o) = self.object(name) else {
             return Vec::new();
         };
+        let mut seen = HashSet::new();
         o.links("Group")
             .iter()
             .filter(|l| {
                 l.file.is_none() && self.container.get(&l.object).map(String::as_str) == Some(name)
             })
+            .filter(|l| seen.insert(l.object.as_str()))
             .map(|l| l.object.clone())
             .collect()
     }
@@ -495,12 +522,33 @@ struct Importer<'a, 'l, K: Kernel> {
     appearances: HashMap<appearances::ShadeKey, String>,
     /// Each body's appearance and how many of its faces got their own.
     looks: HashMap<BodyUid, (Option<String>, usize)>,
+    /// The objects placed so far (see [`MAX_PLACED`]).
+    placements: usize,
 }
 
 /// How deep links of links and nested parts are followed.
 const MAX_DEPTH: usize = 32;
 
+/// The most placements of objects and link elements one import makes: a
+/// guard against hostile files (links and nested parts can repeat what
+/// they show). A document places each object once, or once per link
+/// element; the documents in the test corpora have under a thousand
+/// objects.
+const MAX_PLACED: usize = 1_000_000;
+
 impl<K: Kernel> Importer<'_, '_, K> {
+    /// Counts a placement; false past [`MAX_PLACED`] (with a warning, the
+    /// first time).
+    fn count_placement(&mut self) -> bool {
+        self.placements += 1;
+        if self.placements == MAX_PLACED + 1 {
+            self.warn(format!(
+                "more than {MAX_PLACED} objects to place; the rest are left out"
+            ));
+        }
+        self.placements <= MAX_PLACED
+    }
+
     fn run(&mut self) -> Result<(), String> {
         self.describe();
         self.set_units();
@@ -679,6 +727,9 @@ impl<K: Kernel> Importer<'_, '_, K> {
         record: bool,
         depth: usize,
     ) {
+        if !self.count_placement() {
+            return;
+        }
         let key = Key {
             doc,
             name: name.to_owned(),
@@ -998,6 +1049,9 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let inner = own.inverse().multiply(&frame);
         let count = elements.as_ref().map_or(1, Vec::len);
         for i in 0..count {
+            if elements.is_some() && !self.count_placement() {
+                break;
+            }
             let (element, element_placement, element_visible, element_scale) = match &elements {
                 Some(list) => (Some(i), list[i].0, list[i].1, list[i].2),
                 None => (None, Placement::IDENTITY, true, [1.0; 3]),
@@ -1488,7 +1542,11 @@ fn placement_of(o: &Object) -> Placement {
 /// for a plain link. Element objects (`ShowElement`) carry their own
 /// placements; without them the link's `PlacementList` does.
 fn elements(source: &Source, o: &Object) -> Option<Vec<(Placement, bool, [f64; 3])>> {
-    let count = usize::try_from(o.i64("ElementCount").unwrap_or(0)).unwrap_or(0);
+    // No more than an import places (the count is the file's word: a
+    // hostile one would allocate without bound).
+    let count = usize::try_from(o.i64("ElementCount").unwrap_or(0))
+        .unwrap_or(0)
+        .min(MAX_PLACED);
     if count == 0 {
         return None;
     }

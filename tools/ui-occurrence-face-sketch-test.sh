@@ -3,6 +3,7 @@
 # check-all sources: app/sketch app/browser app/MainWindow.cpp app/MainWindow.hpp app/MainWindowVisibility.cpp
 # check-all sources: app/OcctViewer.cpp app/OcctViewer.hpp app/framework/ModelShapes.cpp app/framework/DocumentSession.hpp
 # check-all sources: core/model/src/links.rs core/model-api/src/sketch.rs tools/cli
+# check-all sources: app/MainWindowActivate.cpp
 # A sketch on a face of an occurrence placed by a turn and a move, through
 # the real UI (mitcad#505). Box:1 (O1) is turned 90 degrees about X and
 # moved by (100, 0, 50); its 30 x 20 x 10 block's top face (z = 10 in Box)
@@ -12,15 +13,23 @@
 #     sketch is Box's, its frame in the design lies on the face (origin on
 #     its plane, the normal (0, -1, 0)), the view looks along it
 #     (+Y), and a line drawn from the face's middle has both ends on the
-#     face where the view shows it.
+#     face where the view shows it. Its own face asks nothing.
 #   - With the root active, the same in a sketch of the root linked to the
-#     face.
+#     face: the pick of the root's child occurrence's face asks whether to
+#     activate Box:1 (mitcad#960, "Activate component asked: Box:1 (active
+#     Root)"), answered Keep in Root (Alt+K).
+#   - The root still active, the question answered Activate Box:1 (Enter,
+#     the default): Box is active, and the sketch on the same pick is Box's,
+#     shown where Box:1 places it.
 # The Windows test is tools/ui-windows-occurrence-face-sketch-test.ps1.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-occurrence-face-sketch-test.sh
 
 source "$(dirname "$0")/ui-test-lib.sh"
+# The question whether to activate a picked face's component (mitcad#960),
+# which the other tests turn off.
+export MITCAD_ASK_ACTIVATE_COMPONENT=1
 
 CLI=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}
 WORK=$(mktemp -d /tmp/mitcad-ui-occurrence-face-sketch.XXXXXX)
@@ -52,10 +61,12 @@ on_face() {
   echo "ok   $2: ($1) $where"
 }
 
-# sketch_on_face where: Create Sketch on the block's top face, seen from
-# the front; the frame and the view checked; a line from the face's middle
-# (where the view shows the block's middle) 7 and 4 mm along the sketch's
-# axes, its ends checked.
+# sketch_on_face where [keep|activate]: Create Sketch on the block's top
+# face, seen from the front; the frame and the view checked; a line from
+# the face's middle (where the view shows the block's middle) 7 and 4 mm
+# along the sketch's axes, its ends checked. With keep or activate, the
+# pick asks whether to activate Box:1 (mitcad#960) and is answered so;
+# without, it asks nothing.
 sketch_on_face() {
   local line origin normal along from to at x y sx sy
   ui_step "front view (search)"          ui_command "Front View"
@@ -65,7 +76,28 @@ sketch_on_face() {
   ui_step "create sketch (search)"       ui_command "Create Sketch"
   ui_expect_new "Pick face F2.b0/F2:end(" "$1: the top face can be picked"
   ui_step "pick the top face"            ui_click_pick "face F2.b0/F2:end("
+  case "${2:-}" in
+    keep|activate)
+      ui_expect_new "Activate component asked: Box:1 (active Root)" "$1: asked whether to activate Box:1"
+      ui_focus_dialog '^Activate Component$'
+      if [ "$2" = keep ]; then
+        ui_step "keep in Root (Alt+K)"   ui_key alt+k
+        ui_focus_main
+        ui_expect_new "Activate component answer: keep in Root" "$1: kept in the root"
+      else
+        ui_step "activate Box:1 (Enter)" ui_key Return
+        ui_focus_main
+        ui_expect_new "Activate component answer: activate Box:1" "$1: Box:1 to be activated"
+        ui_expect_new "Activated Box" "$1: Box is active"
+      fi
+      ;;
+  esac
   ui_expect_new 'Sketch started on {"body":"F2.b0","face":"F2:end(' "$1: a sketch on the face"
+  if [ -z "${2:-}" ]; then
+    tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Activate component asked" &&
+      ui_fail "$1: asked whether to activate a component"
+    echo "ok   $1: nothing asked"
+  fi
   ui_expect_new "} in O1, origin (" "$1: picked where Box:1 shows it"
   ui_expect_new "Sketch view along" "$1: the view's direction logged"
   line=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Sketch frame in the design" | tail -1)
@@ -144,7 +176,15 @@ echo "--- The root active: a sketch of the root linked to Box's face"
 ui_mark
 ui_step "activate the root (radio)"      ui_click_logged "Browser radio Root"
 ui_expect_new "Activated Root" "the root is active"
-sketch_on_face "the root active"
+sketch_on_face "the root active" keep
 ui_expect_log "Sketch Sketch3 is in Root" "the sketch is the root's"
+
+echo "--- The root active, Box:1 activated from the question (mitcad#960)"
+FRAMES_AT_O1=$(grep -cF "Sketch frame in the design (at O1)" "$UI_LOG")
+sketch_on_face "Box:1 activated" activate
+ui_expect_log "Sketch Sketch4 is in Box" "the sketch is Box's"
+[ "$(grep -cF "Sketch frame in the design (at O1)" "$UI_LOG")" -gt "$FRAMES_AT_O1" ] ||
+  ui_fail "Box:1 activated: the sketch is not shown where Box:1 places it"
+echo "ok   Box:1 activated: shown where Box:1 places it"
 
 ui_finish "UI occurrence face sketch test"

@@ -107,6 +107,10 @@ fn naming(source: &LibrarySourceDef, build: bool) -> Naming<'_> {
         } else {
             "{standard} {config}"
         },
+        // A source in the design keeps no rows' standards (mitcad#949):
+        // its pattern's `{standard}` is the component's.
+        rows: None,
+        chosen: "",
     }
 }
 

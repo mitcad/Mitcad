@@ -1193,6 +1193,86 @@ fn line_subclass_in_its_sub_chunk() {
     assert_eq!((ln.end_point, ln.start_point), (Some(51), Some(50)));
 }
 
+/// A text box's corner point (`00D157C2`) keeps its members in its
+/// sub-chunk; a sub-chunk index entry that points past the object is no
+/// sub-chunk to read, not a slice past the data (mitcad#934).
+#[test]
+fn a_sub_chunk_offset_past_the_object_is_skipped() {
+    let mut doc = Doc::default();
+    doc.class(ROOT, "", 0);
+    doc.class(SKETCH_POINT, ROOT, 11);
+    doc.class(SKETCH_POINT_2, SKETCH_POINT, 1);
+    doc.class(USAGE, ROOT, 1);
+    doc.obj(53, USAGE, vec![0, 0]);
+    doc.obj_sub(
+        59,
+        SKETCH_POINT_2,
+        vec![0, 0],
+        cat(&[
+            &u32b(0),
+            &r(53),
+            &[0, 0, 0, 0, 1, 0, 1, 0],
+            &f64s(&[1.0, 2.0, 0.0]),
+        ]),
+    );
+    doc.obj(60, USAGE, vec![0, 0]);
+    let mut seg = doc.segment();
+    // As written, the point is read from its sub-chunk.
+    assert_eq!(sketch::points(&seg)[&59].xyz, [1.0, 2.0, 0.0]);
+    let i = seg.objects.iter().position(|o| o.id == 59).unwrap();
+    let (offset, end) = (seg.objects[i].offset, seg.objects[i].end);
+    let len = (end - offset) as usize;
+    // Past the object (into the next one) and past the whole stream.
+    for past in [end + 4, end + 1_000_000] {
+        seg.objects[i].subchunk = Some(past);
+        let o = &seg.objects[i];
+        assert_eq!((seg.sub_start(o), seg.main_end(o)), (len, len));
+        assert!(sketch::points(&seg).is_empty());
+        assert!(sketch::lines(&seg).is_empty());
+        assert!(sketch::entity_list(&seg, o).is_empty());
+    }
+}
+
+/// A sketch's sub-chunk of 100 000 back-to-back references. A reference
+/// `01 id 00 00` whose id has the bytes 6 and 7 `FF FF` reads, with its
+/// two closing zeros, as the count 65 535 before the next reference; in
+/// the last 65 535 references no such count can be filled, so every
+/// candidate list there fails, and reading each one afresh took about
+/// 2 × 10^9 reference reads. Each offset is now read once (mitcad#934).
+#[test]
+fn entity_list_of_many_references_is_linear() {
+    const N: usize = 100_000;
+    const TAIL: usize = 65_535;
+    let (plain, counting): (u64, u64) = (7, 0xFFFF_0000_0000_0007);
+    let ids: Vec<u64> = (0..N)
+        .map(|i| if i >= N - TAIL { counting } else { plain })
+        .collect();
+    let refs: Vec<u8> = ids.iter().flat_map(|&id| r(id)).collect();
+    let sketch_with = |count: u32| {
+        let mut doc = Doc::default();
+        doc.class(ROOT, "", 0);
+        doc.class(SKETCH, ROOT, 18);
+        doc.class(USAGE, ROOT, 1);
+        doc.obj(plain, USAGE, vec![0, 0]);
+        doc.obj(counting, USAGE, vec![0, 0]);
+        doc.obj_sub(40, SKETCH, vec![0, 0], cat(&[&u32b(count), &refs]));
+        doc.segment()
+    };
+    // A count of zero first: no list starts before the references.
+    let seg = sketch_with(0);
+    let s = seg.object(40).unwrap();
+    let started = std::time::Instant::now();
+    assert!(sketch::entity_list(&seg, s).is_empty());
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_millis(100),
+        "{elapsed:?}"
+    );
+    // With the count of 100 000 first, the whole run is the list.
+    let seg = sketch_with(N as u32);
+    assert_eq!(sketch::entity_list(&seg, seg.object(40).unwrap()), ids);
+}
+
 /// A driven dimension (mitcad#178): a null reference (one zero byte)
 /// where the parameter holder would be, then its entities; its string is
 /// the value it shows. The sketch's dimension comes in driven.
@@ -3734,10 +3814,42 @@ fn a_move_without_a_stored_matrix_is_the_identity() {
             &[0; 4],
         ]),
     );
+    // A root part whose only attribute is a text of 0x7FFF_FFFF characters
+    // in a few bytes: no root part, so not the identity (its end once lay
+    // past the data, mitcad#934).
+    d.obj(
+        903,
+        MOVE_DATA,
+        cat(&[
+            &[0, 1],
+            &u32b(1),
+            &s8("name"),
+            &s8("IntrinsicMetaTypeIString"),
+            &u32b(0x7FFF_FFFF),
+            &[0x41, 0, 0x42, 0],
+        ]),
+    );
     let seg = d.segment();
     assert!(build::identity_move_data(&seg, 900));
     assert!(!build::identity_move_data(&seg, 901));
     assert!(!build::identity_move_data(&seg, 902));
+    assert_eq!(seg.root_part(seg.data_of(903)), None);
+    assert!(!build::identity_move_data(&seg, 903));
+    // The same attribute with its true count is read, ending at the data's
+    // end.
+    let text = cat(&[
+        &s8("256"),
+        &903u64.to_le_bytes(),
+        &s8(""),
+        &[0, 1],
+        &u32b(1),
+        &s8("name"),
+        &s8("IntrinsicMetaTypeIString"),
+        &s16("AB"),
+    ]);
+    let root = seg.root_part(&text).unwrap();
+    assert_eq!(root.attrs[0].value, AttrValue::Text("AB".into()));
+    assert_eq!(root.end, text.len());
     assert!(!build::identity_move_data(&seg, 1));
 }
 

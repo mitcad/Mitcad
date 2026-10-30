@@ -350,6 +350,15 @@ fn default_x(n: [f64; 3]) -> [f64; 3] {
     unit_div_above(d, 0.0).unwrap_or([1.0, 0.0, 0.0])
 }
 
+/// The highest B-spline degree read (OCCT's own limit; the sketches in the
+/// test corpora have degree 3 at most).
+pub const MAX_SPLINE_DEGREE: usize = 25;
+
+/// The most knots a B-spline's multiplicities may add up to (a guard
+/// against hostile files, whose multiplicities would otherwise allocate
+/// without bound; the sketches in the test corpora have ten at most).
+pub const MAX_SPLINE_KNOTS: usize = 4096;
+
 /// A B-spline of the sketch.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct BSpline {
@@ -386,11 +395,28 @@ impl BSpline {
     /// first `degree` again at the end) over its knots extended by the
     /// period, which gives the same curve (OCCT's periodic B-splines start
     /// their first pole's basis function `degree` knots before the first
-    /// knot). None when the knots and poles do not fit.
+    /// knot). None when the knots and poles do not fit: a degree outside
+    /// 1..=[`MAX_SPLINE_DEGREE`], knots not finite or not ascending,
+    /// multiplicities adding up to more than [`MAX_SPLINE_KNOTS`] (checked
+    /// before anything is allocated), or no more poles than the degree.
     pub fn flat(&self) -> Option<FlatSpline> {
         let p = self.degree;
         let n = self.poles.len();
-        if p == 0 || self.knots.len() != self.mults.len() || self.knots.len() < 2 {
+        if p == 0
+            || p > MAX_SPLINE_DEGREE
+            || self.knots.len() != self.mults.len()
+            || self.knots.len() < 2
+        {
+            return None;
+        }
+        if self.knots.iter().any(|k| !k.is_finite()) || self.knots.windows(2).any(|w| w[1] < w[0]) {
+            return None;
+        }
+        let total = self
+            .mults
+            .iter()
+            .try_fold(0usize, |sum, &m| sum.checked_add(m))?;
+        if total > MAX_SPLINE_KNOTS {
             return None;
         }
         let weights = if self.weights.len() == n {
@@ -405,7 +431,7 @@ impl BSpline {
                 .zip(&self.mults)
                 .flat_map(|(k, m)| std::iter::repeat_n(*k, *m))
                 .collect();
-            return (knots.len() == n + p + 1).then(|| FlatSpline {
+            return (n > p && knots.len() == n + p + 1).then(|| FlatSpline {
                 degree: p,
                 poles: self.poles.clone(),
                 weights,
@@ -451,11 +477,16 @@ impl FlatSpline {
     }
 
     /// The point at `t` (de Boor, in homogeneous coordinates).
+    /// No point (NaN) when the spline is not one [`BSpline::flat`] makes.
     pub fn point(&self, t: f64) -> [f64; 2] {
         let p = self.degree;
         let n = self.poles.len();
+        if n <= p || self.weights.len() != n || self.knots.len() != n + p + 1 {
+            return [f64::NAN; 2];
+        }
         let (lo, hi) = self.domain();
-        let t = t.clamp(lo, hi);
+        // Not `clamp`, which panics on NaN or on `lo > hi`.
+        let t = t.max(lo).min(hi);
         // The span: knots[k] <= t < knots[k + 1], within p..n.
         let mut k = p;
         while k + 1 < n && self.knots[k + 1] <= t {
@@ -1131,6 +1162,79 @@ mod tests {
                 .unwrap(),
             poles[3]
         ));
+    }
+
+    /// A sketch geometry element with a B-spline: its degree, poles on
+    /// the X axis, knots (value, multiplicity) and whether it is periodic.
+    fn spline_geometry(
+        degree: &str,
+        poles: usize,
+        knots: &[(&str, &str)],
+        periodic: bool,
+    ) -> Result<Geometry, String> {
+        let poles: String = (0..poles)
+            .map(|i| format!("<Pole X=\"{i}\" Y=\"0\" Z=\"0\" Weight=\"1\"/>"))
+            .collect();
+        let knots: String = knots
+            .iter()
+            .map(|(value, mult)| format!("<Knot Value=\"{value}\" Mult=\"{mult}\"/>"))
+            .collect();
+        let xml = format!(
+            "<Geometry type=\"Part::GeomBSplineCurve\" id=\"1\">\
+             <BSplineCurve Degree=\"{degree}\" IsPeriodic=\"{}\">{poles}{knots}</BSplineCurve>\
+             </Geometry>",
+            u8::from(periodic)
+        );
+        let doc = crate::xml::parse(&xml).unwrap();
+        geometry(&Element::from_node(&doc.root_element()))
+    }
+
+    #[test]
+    fn b_splines_that_do_not_fit_are_errors_not_panics() {
+        // A clamped cubic reads.
+        let fine = spline_geometry("3", 4, &[("0", "4"), ("1", "4")], false).unwrap();
+        assert!(matches!(&fine.curve, Curve::BSpline(b) if b.flat().is_some()));
+        assert!(fine.curve.point(PointPos::End).is_some());
+        // Two poles of a cubic: the knots add up to poles + degree + 1, but
+        // there are too few poles to evaluate.
+        let short = [("0", "2"), ("1", "1"), ("2", "1"), ("3", "1"), ("4", "1")];
+        assert!(spline_geometry("3", 2, &short, false).is_err());
+        let five = [("0", "1"), ("1", "1"), ("2", "1"), ("3", "1"), ("4", "1")];
+        assert!(spline_geometry("3", 2, &five, false).is_err());
+        // Descending or non-finite knots.
+        assert!(spline_geometry("3", 4, &[("1", "4"), ("0", "4")], false).is_err());
+        assert!(spline_geometry("3", 4, &[("0", "4"), ("nan", "4")], false).is_err());
+        assert!(spline_geometry("3", 4, &[("0", "4"), ("inf", "4")], false).is_err());
+        assert!(spline_geometry("3", 4, &[("1", "1"), ("0", "1")], true).is_err());
+        // Multiplicities and degrees that would allocate without bound are
+        // refused before anything is allocated.
+        let huge = [("0", "4000000000"), ("1", "4000000000")];
+        assert!(spline_geometry("3", 4, &huge, false).is_err());
+        assert!(spline_geometry("3", 4, &huge, true).is_err());
+        let overflow = [("0", "9223372036854775807"), ("1", "9223372036854775807")];
+        assert!(spline_geometry("3", 4, &overflow, false).is_err());
+        assert!(spline_geometry("4000000000", 4, &[("0", "4"), ("1", "1")], true).is_err());
+        assert!(spline_geometry("26", 27, &[("0", "27"), ("1", "27")], false).is_err());
+        // A flat spline not made by `flat` has no points instead of
+        // panicking.
+        let bad = FlatSpline {
+            degree: 3,
+            poles: vec![[0.0, 0.0]; 2],
+            weights: vec![1.0; 2],
+            knots: vec![1.0, 0.0],
+        };
+        assert!(bad.point(0.5).iter().all(|v| v.is_nan()));
+        // A domain that runs backwards and a NaN parameter: `clamp` would
+        // panic on either.
+        let reversed = FlatSpline {
+            degree: 1,
+            poles: vec![[0.0, 0.0], [1.0, 0.0]],
+            weights: vec![1.0; 2],
+            knots: vec![0.0, 2.0, 1.0, 3.0],
+        };
+        assert!(reversed.domain().0 > reversed.domain().1);
+        assert!(reversed.point(f64::NAN).iter().all(|v| v.is_finite()));
+        assert!(reversed.point(0.5).iter().all(|v| v.is_finite()));
     }
 
     #[test]

@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# A 3D mouse (mitcad#951) through the test driver's input, the input the
+# platforms' backends give: without a device (or spacenavd) the log says
+# "3D mouse: none"; a held spin of the cap turns the view, a held push to
+# the right pans it without turning it, a held pull zooms in, and the
+# first button runs Fit. Run by ui-space-mouse-test.sh on Linux and
+# ui-windows-space-mouse-test.ps1 in the Windows VM, on the demo design.
+wait-idle
+expect-ever '^3D mouse: (none|.+ connected \()'
+capture-view-orientation turned
+mark
+space-mouse 0 0 0 0 0.8 0 600
+wait-log '^3D mouse motion: [1-9][0-9]* frame\(s\), turned [0-9.]+ degrees'
+expect-view-orientation ${turned} changed
+capture-view-target panned
+capture-view-orientation steady
+mark
+space-mouse 0.8 0 0 0 0 0 600
+wait-log '^3D mouse motion: '
+expect-view-pan ${panned} changed
+expect-view-orientation ${steady} unchanged
+capture-view-height zoomed
+mark
+space-mouse 0 0 1 0 0 0 600
+wait-log '^3D mouse motion: '
+expect-view-zoom ${zoomed} in
+mark
+space-mouse-button 1
+wait-log '^3D mouse: button 1 runs view\.fit$'

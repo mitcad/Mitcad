@@ -102,6 +102,28 @@ DimensionShape onDevicePixels(const DimensionShape& shape, const QPainter& paint
   return out;
 }
 
+// Whether `rect`, with a 2 px margin, holds a point of `outline` (a single
+// point, or a polyline) or crosses one of its segments.
+bool rectTouches(const QRectF& rect, const std::vector<QPointF>& outline) {
+  const QRectF area = rect.adjusted(-2, -2, 2, 2);
+  for (const QPointF& p : outline) {
+    if (area.contains(p)) {
+      return true;
+    }
+  }
+  const QLineF sides[] = {QLineF(area.topLeft(), area.topRight()), QLineF(area.topRight(), area.bottomRight()),
+                          QLineF(area.bottomRight(), area.bottomLeft()), QLineF(area.bottomLeft(), area.topLeft())};
+  for (std::size_t i = 1; i < outline.size(); ++i) {
+    const QLineF segment(outline[i - 1], outline[i]);
+    for (const QLineF& side : sides) {
+      if (segment.intersects(side, nullptr) == QLineF::BoundedIntersection) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // The part of the line through `at` along `direction` (not zero) inside
 // `area`, from its end against the direction to the other.
 std::optional<QLineF> lineAcross(const QPointF& at, const QPointF& direction, const QRectF& area) {
@@ -869,6 +891,8 @@ std::vector<SketchOverlay::Glyph> SketchOverlay::glyphs() const {
     // Keep an entity's glyph row together. Only a collision moves it,
     // to the nearer side of its original normal; dimension positions and
     // model constraints stay intact. Painting and picking use this layout.
+    // A move never puts the row over its own point or curve: a symbol
+    // there would hide it and take the clicks meant for it.
     auto [offset, inserted] = rowOffsets.try_emplace(g.entity);
     if (inserted) {
       const QPointF first = center - along * (index * kGlyphStep);
@@ -880,13 +904,39 @@ std::vector<SketchOverlay::Glyph> SketchOverlay::glyphs() const {
       if (normal.isNull()) normal = QPointF(0.0, -1.0);
       const double forward = distanceToClear(row, normal);
       const double backward = distanceToClear(row, -normal);
-      offset->second = normal * (forward <= backward ? forward : -backward);
+      if (forward > 0 || backward > 0) {
+        const std::vector<QPointF> own = entityOutline(g.entity);
+        const bool forwardOver = rectTouches(row.translated(normal * forward), own);
+        const bool backwardOver = rectTouches(row.translated(-normal * backward), own);
+        // The nearer side clear of it; when neither is, the original side.
+        const bool useForward = forwardOver == backwardOver ? forwardOver || forward <= backward : !forwardOver;
+        offset->second = normal * (useForward ? forward : -backward);
+      }
     }
     center += offset->second;
     g.rect = QRectF(center.x() - kGlyphSize / 2, center.y() - kGlyphSize / 2, kGlyphSize, kGlyphSize);
     result.push_back(g);
   }
   return result;
+}
+
+std::vector<QPointF> SketchOverlay::entityOutline(const QString& entity) const {
+  const SketchModel& model = m_c.model();
+  std::vector<QPointF> outline;
+  if (const auto p = model.pointAt(entity)) {
+    outline.push_back(m_c.toScreen(*p));
+  } else if (const CurveData* c = model.curve(entity)) {
+    if (!c->axis.isEmpty()) {
+      return outline; // an axis's line runs across the view
+    }
+    constexpr int kSamples = 64;
+    const double t0 = c->curve.t0();
+    const double t1 = c->curve.t1();
+    for (int i = 0; i <= kSamples; ++i) {
+      outline.push_back(m_c.toScreen(c->curve.at(t0 + (t1 - t0) * i / kSamples)));
+    }
+  }
+  return outline;
 }
 
 SketchOverlay::Hit SketchOverlay::hitTest(const QPointF& position) const {

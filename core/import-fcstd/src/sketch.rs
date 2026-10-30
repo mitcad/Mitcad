@@ -249,6 +249,27 @@ fn wrap(a: f64) -> f64 {
     }
 }
 
+fn dist2(a: [f64; 2], b: [f64; 2]) -> f64 {
+    (a[0] - b[0]).hypot(a[1] - b[1])
+}
+
+/// Which of FreeCAD's two readings of a distance to a circle the stored
+/// geometry holds: true for the gap `outside` it, false for the one
+/// `inside`; an error when neither is the value (FreeCAD measures
+/// another way, or the sketch was not solved).
+fn gap_side(value: f64, outside: f64, inside: f64, size: f64) -> Result<bool, String> {
+    let tol = 1e-6 * size.max(value).max(1.0);
+    if (outside - value).abs() <= tol {
+        Ok(true)
+    } else if (inside - value).abs() <= tol {
+        Ok(false)
+    } else {
+        Err(format!(
+            "the geometry is {outside:.6} outside the circle or {inside:.6} inside it, not {value}"
+        ))
+    }
+}
+
 impl Translator<'_> {
     fn geometry(&self, geo: i32) -> Option<&fc::Geometry> {
         self.sketch.geometry(geo)
@@ -1129,7 +1150,7 @@ impl Translator<'_> {
                 if con.kind == T::Tangent {
                     self.tangent(a, b)?;
                 } else {
-                    self.perpendicular(a, b)?;
+                    self.perpendicular((first.geo, a), (second.geo, b))?;
                 }
             }
             T::Distance => self.distance(i, con)?,
@@ -1278,21 +1299,25 @@ impl Translator<'_> {
         Ok(())
     }
 
-    fn perpendicular(&mut self, a: (u32, Kind), b: (u32, Kind)) -> Result<(), String> {
-        let ((ia, ka), (ib, kb)) = (a, b);
+    /// Two curves at right angles; each with its FreeCAD geometry index.
+    fn perpendicular(
+        &mut self,
+        a: (i32, (u32, Kind)),
+        b: (i32, (u32, Kind)),
+    ) -> Result<(), String> {
+        let ((ga, (ia, ka)), (gb, (ib, kb))) = (a, b);
         match (ka, kb) {
             (Kind::Line, Kind::Line) => {
                 self.push(json!({"type": "perpendicular", "a": c(ia), "b": c(ib)}));
             }
             // A line at right angles to a circle runs through its centre.
             (Kind::Line, k) | (k, Kind::Line) if k.is_round() => {
-                let (line, round) = if ka == Kind::Line { (ia, ib) } else { (ib, ia) };
-                let center = self
-                    .entity_at
-                    .get(&round)
-                    .and_then(|&at| self.out.entities[at]["center"].as_str())
-                    .and_then(|s| s.strip_prefix('p')?.parse::<u32>().ok())
-                    .ok_or("the circle has no centre")?;
+                let (line, (g, round)) = if ka == Kind::Line {
+                    (ia, (gb, ib))
+                } else {
+                    (ib, (ga, ia))
+                };
+                let center = self.center_of(g, round).ok_or("the circle has no centre")?;
                 self.on_curve(center, line)?;
             }
             _ => return Err("Mitcad's right angles are between lines".to_owned()),
@@ -1300,8 +1325,189 @@ impl Translator<'_> {
         Ok(())
     }
 
+    /// The centre point of a circle or an arc: its entity's, or for
+    /// external geometry (made outside this translation) the point mapped
+    /// to FreeCAD's centre.
+    fn center_of(&mut self, geo: i32, id: u32) -> Option<u32> {
+        self.entity_at
+            .get(&id)
+            .and_then(|&at| self.out.entities[at]["center"].as_str())
+            .and_then(|s| s.strip_prefix('p')?.parse::<u32>().ok())
+            .or_else(|| self.at(geo, PointPos::Mid).ok())
+    }
+
+    /// A circle's or an arc's centre and radius as FreeCAD stores them.
+    fn round_geometry(&self, geo: i32) -> Option<([f64; 2], f64)> {
+        match &self.geometry(geo)?.curve {
+            Curve::Circle { center, radius } | Curve::Arc { center, radius, .. } => {
+                Some((*center, *radius))
+            }
+            _ => None,
+        }
+    }
+
+    /// A construction circle about `center`: the helper a distance to a
+    /// circle or an arc is measured with.
+    fn helper_circle(&mut self, center: u32, radius: f64) -> u32 {
+        let id = self.alloc();
+        self.push_entity(
+            id,
+            json!({"id": c(id), "type": "circle", "center": p(center), "radius": radius,
+                   "construction": true}),
+        );
+        id
+    }
+
+    /// A point's distance from a circle or an arc (FreeCAD 1.0's
+    /// point-to-circle distance: from the curve, outside or inside it): a
+    /// construction circle about the same centre through the point, its
+    /// radius `value` from the curve's (a concentric distance).
+    fn point_round_distance(
+        &mut self,
+        i: usize,
+        con: &fc::Constraint,
+        at: GeoRef,
+        geo: i32,
+        round: u32,
+    ) -> Result<(), String> {
+        let q = self.point(at)?;
+        let (center_at, r) = self
+            .round_geometry(geo)
+            .ok_or("the circle's geometry is missing")?;
+        let q_at = self
+            .vertex(at)
+            .and_then(|v| self.position(v))
+            .ok_or("the point's position is missing")?;
+        let reach = dist2(q_at, center_at);
+        gap_side(con.value, reach - r, r - reach, reach.max(r))?;
+        let center = self
+            .center_of(geo, round)
+            .ok_or("the circle has no centre")?;
+        if center == q || reach <= 1e-9 {
+            return Err("a point at the circle's centre".to_owned());
+        }
+        let helper = self.helper_circle(center, reach);
+        self.on_curve(q, helper)?;
+        self.dimension(
+            i,
+            con,
+            json!({"type": "concentric_distance", "a": c(round), "b": c(helper)}),
+            con.value,
+        );
+        Ok(())
+    }
+
+    /// A line's distance from a circle or an arc (FreeCAD 1.0): the gap
+    /// from the curve to a line outside it is Mitcad's tangent distance;
+    /// to a line across it, a construction circle about the same centre
+    /// touching the line, its radius `value` less than the curve's.
+    fn line_round_distance(
+        &mut self,
+        i: usize,
+        con: &fc::Constraint,
+        (line_geo, line): (i32, u32),
+        (geo, round): (i32, u32),
+    ) -> Result<(), String> {
+        let (center_at, r) = self
+            .round_geometry(geo)
+            .ok_or("the circle's geometry is missing")?;
+        let Some(Curve::Line { start, end }) = self.geometry(line_geo).map(|g| &g.curve) else {
+            return Err("the line's geometry is missing".to_owned());
+        };
+        let (start, end) = (*start, *end);
+        let length = dist2(start, end);
+        if length <= 1e-12 {
+            return Err("a line of no length".to_owned());
+        }
+        let cross = (end[0] - start[0]) * (center_at[1] - start[1])
+            - (end[1] - start[1]) * (center_at[0] - start[0]);
+        let h = cross.abs() / length;
+        if gap_side(con.value, h - r, r - h, h.max(r))? {
+            self.dimension(
+                i,
+                con,
+                json!({"type": "tangent_distance", "circle": c(round), "line": c(line)}),
+                con.value,
+            );
+            return Ok(());
+        }
+        let center = self
+            .center_of(geo, round)
+            .ok_or("the circle has no centre")?;
+        if h <= 1e-9 {
+            return Err("a line through the circle's centre".to_owned());
+        }
+        let helper = self.helper_circle(center, h);
+        self.tangent((helper, Kind::Circle), (line, Kind::Line))?;
+        self.dimension(
+            i,
+            con,
+            json!({"type": "concentric_distance", "a": c(round), "b": c(helper)}),
+            con.value,
+        );
+        Ok(())
+    }
+
+    /// The distance between two circles or arcs (FreeCAD 1.0): outside each
+    /// other, the gap between them, a construction circle about the first's
+    /// centre `value` larger touching the second; one inside the other,
+    /// the gap between the inner and the outer, a construction circle
+    /// about the inner one's centre `value` larger touching the outer one
+    /// from inside (about the same centre: the concentric distance).
+    fn round_round_distance(
+        &mut self,
+        i: usize,
+        con: &fc::Constraint,
+        a: (i32, u32),
+        b: (i32, u32),
+    ) -> Result<(), String> {
+        let (ca, ra) = self
+            .round_geometry(a.0)
+            .ok_or("the circle's geometry is missing")?;
+        let (cb, rb) = self
+            .round_geometry(b.0)
+            .ok_or("the circle's geometry is missing")?;
+        let span = dist2(ca, cb);
+        let (small, big, r_small, r_big) = if ra <= rb {
+            (a, b, ra, rb)
+        } else {
+            (b, a, rb, ra)
+        };
+        let size = span.max(r_big);
+        let outside = gap_side(con.value, span - ra - rb, r_big - r_small - span, size)?;
+        let (around, to, radius) = if outside {
+            (a, b, span - rb)
+        } else if span <= 1e-9 * size.max(1.0) {
+            self.dimension(
+                i,
+                con,
+                json!({"type": "concentric_distance", "a": c(small.1), "b": c(big.1)}),
+                con.value,
+            );
+            return Ok(());
+        } else {
+            (small, big, r_big - span)
+        };
+        let center = self
+            .center_of(around.0, around.1)
+            .ok_or("the circle has no centre")?;
+        let helper = self.helper_circle(center, radius);
+        self.tangent((helper, Kind::Circle), (to.1, Kind::Circle))?;
+        self.dimension(
+            i,
+            con,
+            json!({"type": "concentric_distance", "a": c(around.1), "b": c(helper)}),
+            con.value,
+        );
+        Ok(())
+    }
+
     fn distance(&mut self, i: usize, con: &fc::Constraint) -> Result<(), String> {
-        let (first, second) = (con.first, con.second);
+        let (mut first, mut second) = (con.first, con.second);
+        // A curve's distance from a point: the point first.
+        if !first.is_point() && second.is_point() {
+            std::mem::swap(&mut first, &mut second);
+        }
         if con.value <= 0.0 {
             return Err("not positive".to_owned());
         }
@@ -1322,7 +1528,15 @@ impl Translator<'_> {
                 (l, Kind::Line) => {
                     json!({"type": "point_line_distance", "point": p(q), "line": c(l)})
                 }
-                _ => return Err("a point's distance from a curve other than a line".to_owned()),
+                (r, k) if k.is_round() => {
+                    return self.point_round_distance(i, con, first, second.geo, r);
+                }
+                _ => {
+                    return Err(
+                        "a point's distance from a curve other than a line, a circle or an arc"
+                            .to_owned(),
+                    );
+                }
             }
         } else if second.is_undef() {
             match found(self, first.geo)? {
@@ -1331,11 +1545,28 @@ impl Translator<'_> {
                 _ => return Err("the length of a curve other than a line or an arc".to_owned()),
             }
         } else {
-            match (found(self, first.geo)?, found(self, second.geo)?) {
+            let (ga, gb) = (first.geo, second.geo);
+            match (found(self, ga)?, found(self, gb)?) {
                 ((a, Kind::Line), (b, Kind::Line)) => {
                     json!({"type": "line_distance", "a": c(a), "b": c(b)})
                 }
-                _ => return Err("the distance between curves other than lines".to_owned()),
+                ((l, Kind::Line), (r, k)) if k.is_round() => {
+                    return self.line_round_distance(i, con, (ga, l), (gb, r));
+                }
+                ((r, k), (l, Kind::Line)) if k.is_round() => {
+                    return self.line_round_distance(i, con, (gb, l), (ga, r));
+                }
+                ((a, ka), (b, kb)) if ka.is_round() && kb.is_round() => {
+                    if a == b {
+                        return Err("between a circle and itself".to_owned());
+                    }
+                    return self.round_round_distance(i, con, (ga, a), (gb, b));
+                }
+                _ => {
+                    return Err(
+                        "the distance between curves other than lines, circles and arcs".to_owned(),
+                    );
+                }
             }
         };
         self.dimension(i, con, v, con.value);

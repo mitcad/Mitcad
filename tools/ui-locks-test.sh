@@ -35,8 +35,9 @@
 #      unsaved changes and autosave on, a version is saved first; with
 #      autosave off the lock stays, marked idle, and a request gets it at
 #      once, the changes staying in the window.
-#   8. A remote that refuses lock refs: no lock, and Project Settings says
-#      so.
+#   8. A remote that refuses lock refs (hidden by its configuration): no
+#      lock, Project Settings says so, and no hook of the remote's
+#      repository runs (mitcad#940).
 #   9. The remote out of reach: the design opens for editing, "Edit lock
 #      not confirmed (offline)", and the lock is taken once it answers;
 #      Release Edit Lock in the indicator's menu.
@@ -569,13 +570,14 @@ echo "ok   ada quit without saving"
 echo "--- 8. A remote that refuses lock refs"
 REFUSE=$WORK/refuse.git
 make_project "$REFUSE" 10 10
-cat > "$REFUSE/hooks/pre-receive" << 'EOF'
+# refs/mitcad hidden: receive-pack refuses to update them by its
+# configuration. A hook of the folder's repository never runs for
+# MitCad's push (mitcad#940): one that would refuse too leaves a marker.
+in_git "$REFUSE" config receive.hideRefs refs/mitcad
+cat > "$REFUSE/hooks/pre-receive" << EOF
 #!/bin/sh
-while read -r old new ref; do
-  case "$ref" in
-  refs/mitcad/*) echo "lock refs are not taken here" >&2; exit 1 ;;
-  esac
-done
+echo ran > "$WORK/refuse-hook-ran"
+exit 1
 EOF
 chmod +x "$REFUSE/hooks/pre-receive"
 RA=$WORK/ada/refuse
@@ -591,6 +593,8 @@ ui_focus_dialog '^Project Settings - refuse$'
 ui_step "close (Esc)"                   ui_key Escape
 ui_focus_main
 quit ada
+[ -e "$WORK/refuse-hook-ran" ] && ui_fail "a hook of the remote's repository ran"
+echo "ok   no hook of the remote's repository ran"
 
 echo "--- 9. The remote out of reach: editable, the lock taken once it answers"
 AWAY=$WORK/away.git

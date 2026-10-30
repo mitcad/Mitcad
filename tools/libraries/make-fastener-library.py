@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: MIT
 """Builds the metric fasteners of Mitcad's parts library (mitcad-parts;
 mitcad#64; the fastener library mitcad-fasteners until 2.0.0) from the
-standards' dimension tables: one Mitcad design per standard, made with
+standards' dimension tables: one Mitcad design per kind of fastener, its
+ISO standard and the DIN one it replaced, each row tagged with its
+standards and the suppliers' articles (mitcad#949; fastener_suppliers.py), made with
 mitcad-cli from commands, with a configuration table of its sizes and its
 surface finish as an appearance; preview images rendered with `mitcad-cli
 render` in one studio setup (library_previews.py; mitcad#526); the
@@ -41,11 +43,15 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import library_previews as previews  # noqa: E402
+import fastener_suppliers  # noqa: E402
 
 LIBRARY_ID = "mitcad-parts"
 LIBRARY_NAME = "Mitcad parts"
-LIBRARY_DESCRIPTION = ("Mitcad's parts: ISO metric screws, nuts and washers, and slot profiles, connectors, nuts, "
-                       "caps, panels and linear parts for the BUILD tab.")
+LIBRARY_DESCRIPTION = ("Mitcad's parts: ISO and DIN metric screws, nuts and washers, and slot profiles, connectors, "
+                       "nuts, caps, panels and linear parts for the BUILD tab.")
+# The suppliers whose articles the fasteners' rows list (mitcad#949; the
+# articles: fastener_suppliers.py).
+SUPPLIERS = fastener_suppliers.SUPPLIERS
 # The library's licence; the fasteners' own is LICENSE.
 LIBRARY_LICENSE = "MIT"
 LICENSE = "CC0-1.0"
@@ -58,10 +64,20 @@ LICENSE = "CC0-1.0"
 # The sizes M1.6 to M24 (M1.6 to M2.5 and M14 to M24 contributed by
 # @Dmagg in GitHub mitcad/Mitcad#64, checked against the standards); a
 # standard's table has only the sizes the standard has (ISO 10642 M3 to
-# M20). The lengths are the standards' preferred lengths within each
-# size's range, and the rows of the earlier library versions stay (ISO
-# 4762 M6x8 and M8x10, ISO 4017 M6x10, M8x12, M10x16 and M12x20, shorter
-# than the range).
+# M20). The ISO lengths are the standards' preferred lengths within each
+# size's range (ISO 4017:2011 Table 1 and Table 2: M16, M20 and M24 up to
+# 200, product grade B over 150).
+#
+# One component per kind of fastener stands for its ISO standard and the
+# DIN standard it replaced (mitcad#949): each row names the standards whose
+# tables have it (STANDARDS_OF). The DIN lengths are those of the DIN
+# tables (DIN912_LENGTHS, DIN933, DIN7991_LENGTHS); a size whose DIN head
+# differs from the ISO one (DIN 933 and DIN 934 at M10, M12 and M14 across
+# flats 17, 19, 22, DIN 934's lower nuts from M5) is a size of its own
+# (`M10 DIN 933`), its rows named `M10x20 DIN 933`. The suppliers' lengths
+# in no table are rows of their own, tagged non-standard (socket head and
+# hexagon head screws). The rows of the earlier library versions stay
+# (LEGACY_ROWS).
 SIZES = ["M1.6", "M2", "M2.5", "M3", "M4", "M5", "M6", "M8", "M10", "M12", "M14", "M16", "M20", "M24"]
 DIAMETER = {"M1.6": 1.6, "M2": 2, "M2.5": 2.5, "M3": 3, "M4": 4, "M5": 5, "M6": 6, "M8": 8, "M10": 10, "M12": 12,
             "M14": 14, "M16": 16, "M20": 20, "M24": 24}
@@ -78,8 +94,8 @@ ISO4762 = {
     "M3": (5.5, 3, 2.5, 1.3, [5, 6, 8, 10, 12, 16, 20, 25, 30]),
     "M4": (7, 4, 3, 2, [6, 8, 10, 12, 16, 20, 25, 30, 35, 40]),
     "M5": (8.5, 5, 4, 2.5, [8, 10, 12, 16, 20, 25, 30, 35, 40, 45, 50]),
-    "M6": (10, 6, 5, 3, [8, 10, 12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60]),
-    "M8": (13, 8, 6, 4, [10, 12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]),
+    "M6": (10, 6, 5, 3, [10, 12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60]),
+    "M8": (13, 8, 6, 4, [12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]),
     "M10": (16, 10, 8, 5, [16, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100]),
     "M12": (18, 12, 10, 6, [20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110, 120]),
     "M14": (21, 14, 12, 7, [25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110, 120, 130, 140]),
@@ -88,7 +104,7 @@ ISO4762 = {
     "M20": (30, 20, 17, 10, [30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160,
                              180, 200]),
     "M24": (36, 24, 19, 12, [40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 180,
-                             200]),
+                             200, 220, 240]),
 }
 
 # ISO 4017 hexagon head screws, thread to the head: width across flats s,
@@ -100,19 +116,20 @@ ISO4017 = {
     "M3": (5.5, 2, [6, 8, 10, 12, 16, 20, 25, 30]),
     "M4": (7, 2.8, [8, 10, 12, 16, 20, 25, 30, 35, 40]),
     "M5": (8, 3.5, [10, 12, 16, 20, 25, 30, 35, 40, 45, 50]),
-    "M6": (10, 4, [10, 12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60]),
-    "M8": (13, 5.3, [12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]),
-    "M10": (16, 6.4, [16, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100]),
-    "M12": (18, 7.5, [20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110, 120]),
+    "M6": (10, 4, [12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60]),
+    "M8": (13, 5.3, [16, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]),
+    "M10": (16, 6.4, [20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100]),
+    "M12": (18, 7.5, [25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110, 120]),
     "M14": (21, 8.8, [30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110, 120, 130, 140]),
-    "M16": (24, 10, [30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110, 120, 130, 140, 150]),
-    "M20": (30, 12.5, [40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110, 120, 130, 140, 150]),
-    "M24": (36, 15, [50, 55, 60, 65, 70, 80, 90, 100, 110, 120, 130, 140, 150]),
+    "M16": (24, 10, [30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 180, 200]),
+    "M20": (30, 12.5, [40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 180, 200]),
+    "M24": (36, 15, [50, 55, 60, 65, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 180, 200]),
 }
 
 # ISO 10642 hexagon socket countersunk head screws (90 degrees): head
 # diameter dk (theoretical), head height k, socket size s, socket depth
-# t; preferred lengths (including the head).
+# t; preferred lengths (including the head). M14's dk 30.8 and k 8.4 are
+# the standard's (DIN EN ISO 10642:2004, :2013 and :2020 alike; mitcad#949).
 ISO10642 = {
     "M3": (6.72, 1.86, 2, 1.1, [8, 10, 12, 16, 20, 25, 30]),
     "M4": (8.96, 2.48, 2.5, 1.5, [8, 10, 12, 16, 20, 25, 30, 35, 40]),
@@ -162,7 +179,106 @@ ISO7089 = {
     "M24": (25, 44, 4),
 }
 
-HEXAGON = "r{c1[c6,c2],c2[c1,c3],c3[c2,c4],c4[c3,c5],c5[c4,c6],c6[c5,c1]}"
+# The DIN standards that the ISO ones replaced (mitcad#949), from their
+# tables (DIN 912:1983, DIN 933:1987, DIN 7991:1986, DIN 934:1987, DIN
+# 125-1:1990): the lengths of each size (the lengths their mass tables
+# list), and the dimensions where they differ from the ISO standard's.
+#
+# DIN 912 has the head of ISO 4762.
+DIN912_LENGTHS = {
+    "M1.6": [2.5, 3, 4, 5, 6, 8, 10, 12, 16],
+    "M2": [3, 4, 5, 6, 8, 10, 12, 16, 18, 20],
+    "M2.5": [4, 5, 6, 8, 10, 12, 16, 18, 20, 25],
+    "M3": [5, 6, 8, 10, 12, 16, 18, 20, 25, 30, 35, 40, 45, 50],
+    "M4": [5, 6, 8, 10, 12, 16, 18, 20, 25, 30, 35, 40, 45, 50, 55, 60],
+    "M5": [6, 8, 10, 12, 16, 18, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100],
+    "M6": [8, 10, 12, 16, 18, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120, 130, 140, 150],
+    "M8": [10, 12, 16, 18, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120, 130, 140, 150],
+    "M10": [12, 16, 18, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120, 130, 140, 150, 160,
+            170, 180, 190, 200],
+    "M12": [20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180,
+            190, 200, 220, 240, 260, 280, 300],
+    "M14": [25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190,
+            200, 220, 240, 260, 280, 300],
+    "M16": [25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190,
+            200, 220, 240, 260, 280, 300],
+    "M20": [30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 220,
+            240, 260, 280, 300],
+    "M24": [40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 220, 240,
+            260, 280, 300],
+}
+
+# DIN 933: width across flats s where it differs from ISO 4017's (the head
+# height is ISO 4017's), and the lengths.
+DIN933_HEAD = {"M10": 17, "M12": 19, "M14": 22}
+DIN933_LENGTHS = {
+    "M1.6": [3, 4, 5, 6, 7, 8, 10, 12],
+    "M2": [3, 4, 5, 6, 7, 8, 10, 12, 14, 16],
+    "M2.5": [3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28],
+    "M3": [4, 5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30],
+    "M4": [5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 35, 40, 45, 50, 55, 60, 65, 70],
+    "M5": [6, 7, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80],
+    "M6": [6, 7, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110,
+           120, 130, 140, 150],
+    "M8": [8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120,
+           130, 140, 150, 160, 170, 180, 190, 200],
+    "M10": [8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120,
+            130, 140, 150, 160, 170, 180, 190, 200],
+    "M12": [10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120, 130,
+            140, 150, 160, 170, 180, 190, 200],
+    "M14": [10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120, 130,
+            140, 150, 160, 170, 180, 190, 200],
+    "M16": [12, 14, 16, 18, 20, 22, 25, 28, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120, 130, 140,
+            150, 160, 170, 180, 190, 200],
+    "M20": [16, 18, 20, 22, 25, 28, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120, 130, 140, 150,
+            160, 170, 180, 190, 200],
+    "M24": [16, 18, 20, 22, 25, 28, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120, 130, 140, 150,
+            160, 170, 180, 190, 200],
+}
+
+# DIN 7991's lengths. Its head (dk, k of the 90-degree countersink up to
+# M20) gives the same countersink as ISO 10642's theoretical head, which
+# the library models: its rows are ISO 10642's, tagged DIN 7991 where its
+# table has the length.
+DIN7991_LENGTHS = {
+    "M3": [6, 8, 10, 12, 16, 20, 25, 30, 35, 40],
+    "M4": [6, 8, 10, 12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60],
+    "M5": [8, 10, 12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60],
+    "M6": [8, 10, 12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100],
+    "M8": [10, 12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100],
+    "M10": [12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100],
+    "M12": [16, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180,
+            190, 200],
+    "M14": [25, 30, 35, 40, 45, 50, 55, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160],
+    "M16": [25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190,
+            200],
+    "M20": [35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200],
+}
+
+# DIN 934 nuts where they differ from ISO 4032 (M5 and over: lower, and
+# wider across flats at M10, M12, M14): width across flats s, height m. M1.6
+# to M4 are ISO 4032's.
+DIN934 = {
+    "M5": (8, 4),
+    "M6": (10, 5),
+    "M8": (13, 6.5),
+    "M10": (17, 8),
+    "M12": (19, 10),
+    "M14": (22, 11),
+    "M16": (24, 13),
+    "M20": (30, 16),
+    "M24": (36, 19),
+}
+
+# DIN 125-1 (form A) washers are ISO 7089's in every size of the library.
+
+# The rows of the library's earlier versions, kept for the designs that use
+# them (mitcad-parts 2.8.0: ISO 4762 M6x8 and M8x10, ISO 4017 M6x10, M8x12,
+# M10x16 and M12x20, shorter than the ISO ranges): (component, size, length).
+LEGACY_ROWS = [("iso4762", "M6", 8), ("iso4762", "M8", 10), ("iso4017", "M6", 10), ("iso4017", "M8", 12),
+               ("iso4017", "M10", 16), ("iso4017", "M12", 20)]
+
+HEXAGON ="r{c1[c6,c2],c2[c1,c3],c3[c2,c4],c4[c3,c5],c5[c4,c6],c6[c5,c1]}"
 
 # Each standard's surface (library_previews.FINISHES): the socket screws
 # black oxide, the usual finish of their property classes; the others zinc
@@ -282,25 +398,127 @@ def washer(first):
     ]
 
 
-def screw_rows(table, sizes, values, default_length):
+NON_STANDARD = "non-standard"
+
+
+def length_text(value):
+    """`16`, `2.5`: a length as rows and options name it."""
+    return f"{float(value):g}"
+
+
+def articles(entries):
+    """The `supplier_parts` of a row: one per article, in the order read,
+    without repeats."""
+    out, seen = [], set()
+    for supplier, material, finish, number in entries:
+        if (supplier, number, material, finish) in seen:
+            continue
+        seen.add((supplier, number, material, finish))
+        out.append({"supplier": supplier, "part_number": number, "material": material, "finish": finish,
+                    "checked": fastener_suppliers.CHECKED})
+    return out
+
+
+def screw_rows(sid, sizes, iso, din, values, din_heads):
+    """A screw's rows (mitcad#949): per size, the lengths of the ISO table
+    `iso` (size: entry, its lengths last), of the DIN standard `din` (name,
+    size: lengths), of the library's earlier rows, and the suppliers'
+    lengths in no table (socket and hexagon head screws). A size in
+    `din_heads` (size: values that differ) has a second size `M10 DIN 933`
+    for the DIN head's rows. Each row has its `standards` and its
+    `supplier_parts`; the default row is M5 and the ISO size's fourth
+    length."""
+    iso_name = "ISO " + sid[3:]
+    din_name, din_lengths = din
+    # DIN 912's and DIN 933's own lengths, and the suppliers' lengths in no
+    # table, are rows of their own; ISO 10642's rows are tagged DIN 7991
+    # where its table has them (mitcad#949).
+    keep_supplier_lengths = sid in ("iso4762", "iso4017")
+    keep_din_lengths = sid in ("iso4762", "iso4017")
+    by_row = {}
+    for (component, size, head, length, supplier, material, finish, number,
+         _page) in fastener_suppliers.screw_articles():
+        if component == sid and size in sizes:
+            key = (f"{size} {din_name}" if head == "DIN" and size in din_heads else size, length)
+            by_row.setdefault(key, []).append((supplier, material, finish, number))
     rows = []
     for size in sizes:
-        entry = table[size]
-        for length in entry[-1]:
-            row_values = values(size, entry)
-            row_values["L"] = length
-            rows.append({"name": f"{size}x{length}", "select": {"Size": size, "Length": str(length)},
-                         "values": {name: mm(v) for name, v in row_values.items()}})
-    default = next((r["name"] for r in rows if r["select"] == {"Size": default_length[0],
-                                                               "Length": str(default_length[1])}),
-                   rows[0]["name"])
+        entry = iso[size]
+        variants = [(size, values(size, entry), set(map(length_text, entry[-1])),
+                     set() if size in din_heads else set(map(length_text, din_lengths.get(size, []))))]
+        if size in din_heads:
+            din_values = dict(values(size, entry), **din_heads[size])
+            variants.append((f"{size} {din_name}", din_values, set(), set(map(length_text, din_lengths[size]))))
+        for size_key, size_values, iso_set, din_set in variants:
+            lengths = iso_set | din_set if keep_din_lengths else set(iso_set)
+            lengths |= {length_text(length) for component, s, length in LEGACY_ROWS
+                        if component == sid and s == size_key}
+            if keep_supplier_lengths:
+                lengths |= {length for (key, length) in by_row if key == size_key}
+            for length in sorted(lengths, key=float):
+                tags = ([iso_name] if length in iso_set else []) + ([din_name] if length in din_set else [])
+                row_values = dict(size_values, L=float(length))
+                row = {"name": f"{size}x{length}" + ("" if size_key == size else f" {din_name}"),
+                       "select": {"Size": size_key, "Length": length},
+                       "values": {name: mm(v) for name, v in row_values.items()},
+                       "standards": tags or [NON_STANDARD]}
+                if size_key != size:
+                    # The size's name carries the DIN head (`M10 DIN 933`):
+                    # the row is named as the standard names it.
+                    row["designation"] = (f"{din_name} {size}x{length}" if tags
+                                          else f"{size}x{length} ({NON_STANDARD})")
+                parts = articles(by_row.get((size_key, length), []))
+                if parts:
+                    row["supplier_parts"] = parts
+                rows.append(row)
+    default_size = "M5" if "M5" in sizes else sizes[0]
+    lengths = iso[default_size][-1]
+    default = f"{default_size}x{length_text(lengths[min(3, len(lengths) - 1)])}"
     return rows, default
 
 
-def size_rows(table, sizes, values):
-    rows = [{"name": size, "select": {"Size": size},
-             "values": {name: mm(v) for name, v in values(size, table[size]).items()}} for size in sizes]
+def size_rows(sid, sizes, table, values, din, din_table=None):
+    """A nut's or washer's rows (mitcad#949): one per size of the ISO table,
+    tagged with the DIN standard `din` too when `din_table` has no values of
+    its own for the size; a size whose DIN values differ is a size of its
+    own (`M10 DIN 934`)."""
+    iso_name = "ISO " + sid[3:]
+    din_table = din_table or {}
+    by_row = {}
+    for component, size, standard, supplier, material, finish, number, _page in fastener_suppliers.sized_articles():
+        if component == sid and size in sizes:
+            key = f"{size} {din}" if standard == din and size in din_table else size
+            by_row.setdefault(key, []).append((supplier, material, finish, number))
+    rows = []
+    for size in sizes:
+        variants = [(size, values(size, table[size]), [iso_name] if size in din_table else [iso_name, din])]
+        if size in din_table:
+            variants.append((f"{size} {din}", values(size, din_table[size]), [din]))
+        for size_key, size_values, tags in variants:
+            row = {"name": size_key, "select": {"Size": size_key},
+                   "values": {name: mm(v) for name, v in size_values.items()}, "standards": tags}
+            if size_key != size:
+                row["designation"] = f"{din} {size}"
+            parts = articles(by_row.get(size_key, []))
+            if parts:
+                row["supplier_parts"] = parts
+            rows.append(row)
     return rows, ("M5" if "M5" in sizes else rows[len(rows) // 2]["name"])
+
+
+def unplaced_articles(items):
+    """The suppliers' articles that no row of the library has (a length of
+    a countersunk screw in no table, a size that is not one of SIZES)."""
+    placed = {(item["id"], part["supplier"], part["part_number"], part["material"], part["finish"])
+              for item in items for row in item["rows"] for part in row.get("supplier_parts", [])}
+    out = []
+    for component, size, head, length, supplier, material, finish, number, page in fastener_suppliers.screw_articles():
+        if (component, supplier, number, material, finish) not in placed:
+            out.append((component, f"{size}x{length}" + (" DIN head" if head == "DIN" else ""), supplier, number))
+    for component, size, _standard, supplier, material, finish, number, _page in fastener_suppliers.sized_articles():
+        if (component, supplier, number, material, finish) not in placed:
+            out.append((component, size, supplier, number))
+    return out
 
 
 def standards(sizes):
@@ -309,46 +527,43 @@ def standards(sizes):
     row, and a profile for the preview."""
     out = []
 
-    def screw(sid, table, name, keywords, values, build, folder, profile):
+    def screw(sid, table, din, din_heads, name, keywords, values, build, folder, profile):
         sizes_here = [s for s in sizes if s in table]
-        default_size = "M5" if "M5" in sizes_here else sizes_here[0]
-        lengths = table[default_size][-1]
-        default_length = (default_size, lengths[min(3, len(lengths) - 1)])
-        rows, default = screw_rows(table, sizes_here, values, default_length)
+        rows, default = screw_rows(sid, sizes_here, table, din, values, din_heads)
         first = next(r for r in rows if r["name"] == default)
         out.append({
             "id": sid, "category": "screws", "path": f"{folder}/{sid}.mitcad", "name": name,
-            "standard": "ISO " + sid[3:], "keywords": keywords,
-            "designation": "ISO " + sid[3:] + " {Size}x{Length}",
+            "standard": f"ISO {sid[3:]} / {din[0]}", "keywords": keywords,
+            "designation": "{standard} {Size}x{Length}",
             "build": build, "selectors": ["Size", "Length"], "rows": rows, "default": default,
             "first": {k: float(v.split()[0]) for k, v in first["values"].items()}, "profile": profile,
         })
 
-    screw("iso4762", ISO4762, "Hexagon socket head cap screw",
+    screw("iso4762", ISO4762, ("DIN 912", DIN912_LENGTHS), {}, "Hexagon socket head cap screw",
           ["socket head", "cap screw", "SHCS", "DIN 912", "allen"],
           lambda size, e: {"d": DIAMETER[size], "P": PITCH[size], "dk": e[0], "k": e[1], "s": e[2], "t": e[3]},
           socket_head, "screws", "socket")
-    screw("iso4017", ISO4017, "Hexagon head screw, thread to the head",
-          ["hex head", "hex bolt", "set screw", "DIN 933"],
+    screw("iso4017", ISO4017, ("DIN 933", DIN933_LENGTHS), {s: {"s": v} for s, v in DIN933_HEAD.items()},
+          "Hexagon head screw, thread to the head", ["hex head", "hex bolt", "set screw", "DIN 933"],
           lambda size, e: {"d": DIAMETER[size], "P": PITCH[size], "s": e[0], "k": e[1]},
           hex_head, "screws", "hex")
-    screw("iso10642", ISO10642, "Hexagon socket countersunk head screw",
+    screw("iso10642", ISO10642, ("DIN 7991", DIN7991_LENGTHS), {}, "Hexagon socket countersunk head screw",
           ["countersunk", "flat head", "DIN 7991", "socket"],
           lambda size, e: {"d": DIAMETER[size], "P": PITCH[size], "dk": e[0], "k": e[1], "s": e[2], "t": e[3]},
           countersunk, "screws", "countersunk")
-    for sid, table, name, keywords, values, build, category, folder, profile in [
-        ("iso4032", ISO4032, "Hexagon nut", ["hex nut", "DIN 934", "nut"],
+    for sid, table, din, din_table, name, keywords, values, build, category, folder, profile in [
+        ("iso4032", ISO4032, "DIN 934", DIN934, "Hexagon nut", ["hex nut", "DIN 934", "nut"],
          lambda size, e: {"d": DIAMETER[size], "P": PITCH[size], "s": e[0], "mn": e[1]}, nut, "nuts", "nuts",
          "nut"),
-        ("iso7089", ISO7089, "Plain washer, normal series", ["washer", "flat washer", "DIN 125"],
+        ("iso7089", ISO7089, "DIN 125", None, "Plain washer", ["washer", "flat washer", "DIN 125", "normal series"],
          lambda size, e: {"d1": e[0], "d2": e[1], "h": e[2]}, washer, "washers", "washers", "washer"),
     ]:
         sizes_here = [s for s in sizes if s in table]
-        rows, default = size_rows(table, sizes_here, values)
+        rows, default = size_rows(sid, sizes_here, table, values, din, din_table)
         first = next(r for r in rows if r["name"] == default)
         out.append({
             "id": sid, "category": category, "path": f"{folder}/{sid}.mitcad", "name": name,
-            "standard": "ISO " + sid[3:], "keywords": keywords, "designation": "ISO " + sid[3:] + " {Size}",
+            "standard": f"ISO {sid[3:]} / {din}", "keywords": keywords, "designation": "{standard} {Size}",
             "build": build, "selectors": ["Size"], "rows": rows, "default": default,
             "first": {k: float(v.split()[0]) for k, v in first["values"].items()}, "profile": profile,
         })
@@ -514,6 +729,25 @@ def dress_screw(cli, item, commands, target, scratch):
     return [thread]
 
 
+# A row's fields that the manifest keeps (mitcad#949, docs/libraries.md,
+# "Standards and suppliers of rows"): its standards (["ISO 4762", "DIN
+# 912"], ["non-standard"]) and the suppliers' articles ({"supplier",
+# "part_number", "material", "finish", "checked"}), by the row's name in the
+# component's `rows`; never in the design's table.
+ROW_MANIFEST_FIELDS = ("standards", "supplier_parts")
+
+
+def manifest_rows(rows):
+    """The component's `rows` of the manifest: each row's standards and
+    articles that it has, by its name."""
+    out = {}
+    for row in rows:
+        block = {key: row[key] for key in ROW_MANIFEST_FIELDS if row.get(key)}
+        if block:
+            out[row["name"]] = block
+    return out
+
+
 def run(command, cwd=None):
     result = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -546,6 +780,15 @@ copied):
 - ISO 7089, plain washers, normal series: hole diameter (minimum), outside
   diameter (maximum), thickness (nominal).
 - ISO 261 and ISO 724: the coarse thread pitches (parameter P).
+- DIN 912, DIN 933, DIN 7991, DIN 934 and DIN 125-1, the standards the
+  ISO ones replaced: their lengths, DIN 933's width across flats at M10,
+  M12 and M14, and DIN 934's widths and heights. Each row of a component
+  names the standards whose tables have it; a supplier's length in no
+  table is marked non-standard.
+
+The suppliers' part numbers, materials and finishes of the rows (Würth,
+Etra) were read from their public catalogue pages on the date each entry
+names (`checked`); no prices or product texts are kept.
 
 The geometry is simplified for assemblies: the screws' threads are
 cosmetic (a thread feature without geometry but the chamfer at the tip),
@@ -661,9 +904,11 @@ def main():
         for item in items:
             commands = item["build"](item["first"])
             parameters_used = list(item["first"].keys())
+            # A row's standards and suppliers' articles (mitcad#949) go into
+            # the manifest's `rows`, not the design's table.
             commands.append({"cmd": "set_configurations", "configurations": {
                 "selectors": item["selectors"], "parameters": parameters_used, "default": item["default"],
-                "rows": item["rows"]}})
+                "rows": [{k: v for k, v in row.items() if k not in ROW_MANIFEST_FIELDS} for row in item["rows"]]}})
             commands.append({"expect": {"bodies": 1}})
             script = os.path.join(scratch, item["id"] + ".json")
             write(script, json.dumps(commands, indent=1))
@@ -694,12 +939,16 @@ def main():
             print(f"preview {item['id']}: {how} ({look})")
             if how.startswith("rendered without"):
                 previews.PROBLEMS.append(f"{item['id']}: {how}")
-            components.append({
+            component = {
                 "id": item["id"], "path": item["path"], "category": item["category"], "name": item["name"],
                 "standard": item["standard"], "keywords": item["keywords"], "preview": preview_path,
                 "license": LICENSE, "designation": item["designation"],
                 "description": f"{len(item['rows'])} sizes, {item['rows'][0]['name']} to {item['rows'][-1]['name']}.",
-            })
+            }
+            rows = manifest_rows(item["rows"])
+            if rows:
+                component["rows"] = rows
+            components.append(component)
     made = len(components)
     # Under the main group General fasteners (mitcad#527: the groups' tree).
     categories = [c for c in [{"id": "screws", "name": "General fasteners/Screws"},
@@ -718,6 +967,11 @@ def main():
         "library_version": args.version, "license": LIBRARY_LICENSE, "authors": ["Mitcad contributors"],
         "sources": sources, "units": "mm", "categories": categories, "components": components,
     }
+    # The suppliers the rows' articles name (mitcad#949), when the tables
+    # have any.
+    suppliers = list(globals().get("SUPPLIERS") or [])
+    if suppliers:
+        manifest["suppliers"] = suppliers
     write(os.path.join(out, "mitcad-library.json"), json.dumps(manifest, indent=2) + "\n")
     write(os.path.join(out, "LICENSE"), LICENSE_TEXT)
     write(os.path.join(out, "SOURCES.md"), SOURCES)

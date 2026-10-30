@@ -68,6 +68,15 @@ expect-log 'Command Offset Plane cancelled' 30
 native-resize 1280 820
 expect-native-layout
 
+# Command Search rows keep the shared CAD action icons beside their names
+# (mitcad#974): Extrude, which cannot run yet, dimmed with its name.
+focus-main
+native-action tools.search
+native-type native.commandSearch 'Extrude'
+expect-native-style native.command.solid.extrude 'result-icon,disabled'
+key Ctrl+w
+expect-native-visible native.commandSearch false
+
 # Create a box through the native menu and form, including input validation.
 mark
 native-action solid.box
@@ -161,9 +170,13 @@ expect-log 'Command Box cancelled' 30
 
 # Native command search uses a real NSSearchField and native result table.
 # Command-W dismisses the borderless search popover and retains the design.
+# The chosen row keeps its shared CAD icon (mitcad#974).
 focus-main
 native-action tools.search
+native-type native.commandSearch 'Libraries'
+expect-native-style native.command.tools.libraries 'result-icon,enabled,selected'
 native-type native.commandSearch 'Sphere'
+expect-native-style native.command.solid.sphere 'result-icon,enabled,selected'
 key Ctrl+w
 expect-native-visible native.commandSearch false
 expect-native-visible native.modelTree true

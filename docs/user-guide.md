@@ -90,6 +90,38 @@ has **Connect AI Assistant…** and **Folders for Designs…** (**Preferences �
 AI Assistants**), and with several MitCad windows open **Copy Command for
 This Window** (a command that connects to this window only).
 
+## Chat with an AI agent
+
+**View › Chat** (Ctrl+Shift+L, ⌘⇧L on macOS, or its button beside the
+assistant indicator) opens the chat panel: write what you want, for
+example "a 30 × 20 × 10 mm box with the top edges rounded 2 mm", and your
+own Claude Code or Codex changes the open design through MitCad's tools
+while you watch. The panel finds an installed agent by itself; when it is
+missing, **Install Claude Code** (**Install Codex**) opens its setup page,
+and when it is not signed in, **Sign in to Claude** (**Sign in to
+ChatGPT**) starts its own sign-in.
+
+- With both agents installed, the header chooses between them; the other
+  one starts a new conversation and stays chosen next time. **Model**
+  below it sets the model the agent uses (**Default model**, the ones the
+  agent names, or a name you type), from the next message on.
+
+- **Enter** sends, **Shift+Enter** starts a new line; **Selection** (on
+  by default) and **View** say what goes with the message. While the
+  agent works, the button is **Stop** (Esc).
+- The agent's calls are rows in the conversation; saving, opening,
+  exporting and undoing what was there before the message ask first with
+  a card: **Allow once**, **Always allow** or **Deny** (**Preferences › AI
+  Assistants › Chat** sets what asks).
+- Each message is one undo step, **AI: *its first words***: one **Undo**
+  takes it back. If you change the design yourself meanwhile, the
+  agent's changes stay separate steps.
+- The conversation is kept with the design in your own data folder (not
+  in the design file) and shown again when you open the design.
+
+See [the chat panel](ai-chat.md) for the setup, the approvals, privacy
+and the history.
+
 ## Installation
 
 MitCad runs on Windows, Linux and macOS. On macOS it needs Apple Silicon
@@ -372,6 +404,47 @@ views are stored in the design. MitCad remembers the settings.
 View › Visual Style › Rendered shows the bodies path traced: refer to
 [The rendered view](#the-rendered-view) for the render environment, the
 lights and Render Image.
+
+#### 3D mouse
+
+A 3D mouse (a 6-DOF device such as a SpaceMouse or a Space Navigator)
+moves the view. Orbit, pan and zoom work together, and the model
+follows the cap:
+
+- Push the cap to the side or lift it, and the model moves the same way.
+- Pull the cap toward you, and the model comes closer. Push it away to
+  zoom out.
+- Tilt, twist or roll the cap, and the model turns the same way. It
+  turns about the same centre as the mouse's orbit. With a constrained
+  orbit, Z stays upright and the view does not roll.
+
+In sketch mode the 3D mouse only pans and zooms. The first button fits
+everything and the second button goes to the home view.
+
+The **3D Mouse** tab of Tools › Preferences › Navigation has the
+settings:
+
+- **Use a 3D mouse** turns it on or off.
+- **3D mouse speed** sets how fast the view moves.
+- For each axis, **On** lets the axis move the view, and **Reverse**
+  turns its direction around.
+- **Lock rotation** and **Lock translation** stop all turning or all
+  panning and zooming. **Dominant axis only** uses only the axis that
+  you push the most.
+- The button table sets the command of each button: Fit, Home, a
+  standard view, Look At, Orthographic or Perspective, or None.
+
+The tab also shows whether MitCad found a 3D mouse. MitCad needs no
+driver from the device's maker:
+
+- On Windows, MitCad reads the device directly. If the maker's driver
+  is installed, set it to send nothing of its own to MitCad, so that the
+  view does not move twice.
+- On Linux, MitCad uses the spacenavd service. Install and start
+  spacenavd; MitCad finds it also when it starts later.
+- On macOS, MitCad reads the device directly. If the maker's driver is
+  installed and running, it can keep the device to itself; then quit
+  the driver to use the device in MitCad.
 
 ### Selection
 
@@ -1507,8 +1580,8 @@ origin. The origin has a ring. The sketch always shows its origin and
 axes, also when the eye of the Origin folder is off, as it is in a new
 design. The sketch does not change the eye, so the Origin folder is as
 before when you finish the sketch. The same holds when you edit a sketch
-again. The tools snap to the sketch's origin, and Sketch Dimension and
-the constraints can use its origin and axes (refer to
+again. The tools snap to the sketch's origin and onto its axes, and
+Sketch Dimension and the constraints can use its origin and axes (refer to
 [Dimensions](#dimensions)). They belong to the sketch: you cannot select
 them outside the sketch or as the geometry of a body.
 A sketch can have an origin that is not the design's: a sketch on a
@@ -1724,6 +1797,19 @@ quadrants, intersections, curves and the origin. With the snap to grid
 option, it also snaps to the grid. A snap adds a constraint. When a
 line is nearly horizontal, vertical, perpendicular, parallel or tangent,
 it gets that constraint.
+
+**On the axes:** every drawing tool also snaps onto the sketch's X and Y
+axes, along their whole length across the view, with the marker of a
+curve. Thus a circle's centre placed on an axis stays on it. A click
+there holds the point on the axis with a Coincident constraint, as on a
+construction line. This is one undo step with the rest of the click.
+While the pointer only hovers, MitCad adds nothing. The sketch's own
+curves and points and the origin win when they are under the pointer
+too. With the snap to grid option, the point keeps to the grid along
+the axis. A line drawn along an axis gets only the constraints it needs:
+a line from the origin along the X axis is horizontal, and its end stays
+on the axis. Horizontal and vertical are the directions of the axes, so
+the line tool needs no axis to infer them.
 
 **Point on a body:** the Point tool also snaps to the corners of visible
 bodies that lie in the sketch plane. It also snaps to the middles of
@@ -2450,6 +2536,14 @@ After a short pause, the tooltip shows the feature's kind, name, component and
 main dimensions, using the same labels as its editor. A failed, suppressed or
 rolled-back feature says **No geometry to show**. The selection card names the
 selected timeline features and their components and shows their main dimensions.
+
+A selected or hovered Fillet or Chamfer also shows the edges it picked, as
+blue lines where they were before the feature rounded or bevelled them
+away; the parts behind or inside the body are dashed. Its own faces are then
+shaded amber, so that they stand apart from the lines. The lines only show
+where the edges were: they cannot be clicked, and nothing is rolled back or
+rebuilt to show them. The selection card names how many edges the feature
+picked (for example, **12 edges**).
 
 **Selection.** A click on a feature selects what the feature made:
 
@@ -3849,6 +3943,22 @@ component can lie on a face or a construction plane of another
 component. Use Create Sketch on the face where an occurrence shows it.
 The sketch stays linked to that face. It follows the face when the
 face changes or when either component moves.
+
+**Activate the component of a picked face.** Create Sketch and the
+Construct commands ask a question when you pick a face, a plane or an
+edge of a component that is not active. This includes a component that
+is placed in the active component. An example is "The face belongs to
+M6 rod bracket:1, but Corner brace:1 is active." Click **Activate M6 rod
+bracket:1** (the default) to put the sketch or the construction feature
+into that component. MitCad activates the component, and the command
+continues with the same pick, at the occurrence that you picked. The activation is one
+step of Undo, as the radio button makes. Click **Keep in Corner
+brace:1** to put it into the active component, linked to the face. Select
+**Don't ask again** to stop the question. To start it again, set **Ask
+to activate the component of a picked face** on the General page of
+Tools › Preferences. MitCad does not ask for the faces and planes of the
+active component, for the origin planes, or for a face that the design
+policy does not let you sketch on.
 
 Project in such a sketch, or in any sketch, also takes edges, faces
 and vertices of other components. These projections are linked when
@@ -5811,6 +5921,25 @@ service's **SSH Keys Page**. The key goes to your own user account, also
 for an organisation's repository. Over HTTPS, git uses a credential
 helper. Git Credential Manager comes with Git for Windows.
 
+**A project folder from someone else.** A project that you get as a zip
+or from a shared drive brings its own git settings (`.git/config`). Some
+settings start programs when git connects, for example `core.sshCommand`,
+`credential.helper` or `remote.origin.uploadpack`. MitCad does not trust
+these settings of a project. If the project's own settings contain such
+a setting, MitCad runs no git in the project: it does not fetch, send,
+sync or take edit locks there. The project indicator shows `Not synced:
+untrusted git settings`, and its tooltip names the settings. Your
+versions on this computer are not affected. If you made the setting
+yourself, remove it from the project (`git config --local --unset
+<setting>`) and keep it in your own git settings (`git config --global`),
+which MitCad uses. MitCad also runs no git hooks, and it checks the
+repository address that a project's settings give as it checks an
+address that you type. When the project's remote is a folder (for
+example a repository beside the project on the shared drive), MitCad
+runs none of that repository's hooks when it sends to it, and it does
+not use the remote if that repository's own settings start programs. Projects that MitCad makes or opens from a
+remote do not have such settings.
+
 If this computer does not know the identity of the server yet, MitCad
 shows **Trust This Server…**. It shows the fingerprints of the server's
 keys. MitCad checks them against the keys that GitHub, GitLab and
@@ -6092,6 +6221,43 @@ picker (refer to [Part picker](#part-picker)). To insert a component:
    read-only. A copy is editable and has its history.
 
 MitCad shows the licence and the attribution before you insert the component.
+
+#### Standards and suppliers
+
+One component can have the sizes of several standards. For example, the
+hexagon socket head cap screw has the lengths of ISO 4762 and of DIN 912,
+and some lengths that a supplier sells outside every standard. Each size
+names its standards. When a library gives them, two filters show above
+**Size**:
+
+- **Standard** (Alt+D): **All**, or one standard. **Size** and
+  **Length** then list only the sizes of that standard.
+- **Supplier** (Alt+E): **All**, or one supplier. **Size** and
+  **Length** then list only the sizes that the supplier sells.
+
+The filters change no component and are not saved in the design. They
+are in **Insert from Library**, **Library Parts**, **Edit Options...**
+and the Build tab's part picker.
+
+The name of the component follows the standard: with **DIN 912**, the
+M6 x 10 screw is `DIN 912 M6x10`. With **All**, it gets its first
+standard (`ISO 4762 M6x10`). A size of no standard is
+`M6x6 (non-standard)`. The component keeps the name, also in the parts
+list.
+
+Under the size, **Insert from Library** shows the designation and the
+suppliers' part numbers of the size, for example `Würth 0084 6 10 (8.8
+zinc-plated)`. **Library Parts** and **Edit Options...** show the part
+numbers too, and the parts lists have them in the column **Supplier part
+numbers** (also in CSV and PDF).
+
+The grid has its own **Supplier** filter (Alt+R) beside the search. It
+hides the components that the supplier sells in no size. MitCad
+remembers it.
+
+When a community index offers a library that one of your libraries
+already is (under its old name, for example), MitCad does not list it a
+second time.
 
 #### Components with options
 
@@ -6781,6 +6947,12 @@ import-fcstd`. The import does this:
   imported without that constraint and is marked partial. Constraints
   and dimensions that FreeCAD's solution does not meet are imported
   inactive, as in the .f3d import (refer to [.f3d import](#f3d-import)).
+- A sketch's external geometry becomes linked projections where MitCad
+  can follow it: edges, faces and vertices of the bodies, and curves and
+  points of an earlier sketch, also through a shape binder of that sketch,
+  also of another body that has a component of its own. These follow
+  their sources when you change the design. Other external geometry is
+  fixed in place, and the report says why.
 - Shapes without a history (plain shapes, Draft objects, bodies of
   other documents) are base features.
 - FreeCAD's colours come in as appearances of the design, on rebuilt
@@ -7057,6 +7229,10 @@ drawing keeps no history. Thus everything is imported as bodies:
   with many occurrences. Occurrences only move and turn. Thus an insert
   that scales or mirrors its block, and an anonymous block, are copied
   into the component that inserts them instead.
+- At most a million bodies and occurrences are placed, counting the
+  contents of every occurrence. A drawing that places more, for example
+  through very large or nested array inserts, imports the first million;
+  the report says that the rest were left out.
 - The bodies of a component on one layer are one base feature named
   after the layer (`Layer Tubes`, in a component `Segment layer
   Tubes`). The bodies take the entities' colours: their own, their
@@ -7374,6 +7550,14 @@ selected in the model behind it.
 The drawing stores only how its views are set up. MitCad draws the
 lines from the model each time. When you change the model, the views
 change with it. Undo and redo work for drawings too.
+
+A view of bodies with only flat, cylindrical, conical, spherical and
+toroidal faces is drawn from their exact edges. Exact edges are slow on
+free-form faces, such as a modelled thread's: MitCad then draws the
+view from a fine triangulation of the bodies, within a 2000th of their
+size (0.06 mm on a 120 mm assembly), and draws its edges as straight
+lines and arcs wherever they follow them, as polylines elsewhere.
+Moving a view, or changing its scale or label, projects nothing again.
 
 #### Views
 
@@ -7925,7 +8109,7 @@ guide that explains its settings.
 
 | Page | What it sets | Refer to |
 |---|---|---|
-| **General** | The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder | [Import](#import), [Saving and recovery](#saving-and-recovery) |
+| **General** | The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Ask to activate the component of a picked face** | [Import](#import), [Saving and recovery](#saving-and-recovery), [Components](#components) |
 | **Navigation** | The mouse scheme for orbit, pan and zoom | [View and navigation](#view-and-navigation) |
 | **Display** | **Camera**, **Orientation cube**, **Layout**, **Browser background**, **Ghost inactive components**, **Pick the active component first** | [View and navigation](#view-and-navigation), [Layouts](#layouts), [Components](#components) |
 | **Cache** | The cache of computed results: on or off, the size, the folder, **Clear**, the memory limit | [Cache of computed results](#cache-of-computed-results) |

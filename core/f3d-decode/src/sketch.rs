@@ -117,7 +117,7 @@ pub fn points(seg: &Segment) -> HashMap<u64, PointGeom> {
         // point's members in the sub-chunk, right after its header.
         let sub = seg.sub_start(o);
         let at = if seg.guid_of(o.id) == Some(SKETCH_POINT_2) && sub > 0 {
-            match header_end(&d[sub..]) {
+            match d.get(sub..).and_then(header_end) {
                 Some(h) => sub + h,
                 None => continue,
             }
@@ -163,7 +163,7 @@ pub fn lines(seg: &Segment) -> HashMap<u64, LineGeom> {
         // sketches in the corpora came out as denormal numbers).
         let sub = seg.sub_start(o);
         let p = if seg.guid_of(o.id) != Some(SKETCH_LINE) && sub > 0 {
-            match header_end(&d[sub..]) {
+            match d.get(sub..).and_then(header_end) {
                 Some(h) => sub + h,
                 None => continue,
             }
@@ -356,15 +356,21 @@ impl SplineGeom {
 /// `u32 count | u32 capacity | u32 8 | count × width f64` at `p`: the
 /// values and the end. The capacity is at least the count.
 fn counted_f64s(d: &[u8], p: usize, width: usize) -> Option<(Vec<f64>, usize)> {
+    let (n, end) = counted_len(d, p, width)?;
+    let v = f64s_at(d, p + 12, n * width)?;
+    v.iter().all(|x| x.is_finite()).then_some((v, end))
+}
+
+/// The count and the end of a [`counted_f64s`] array at `p`, from its
+/// header alone (the values are not read).
+fn counted_len(d: &[u8], p: usize, width: usize) -> Option<(usize, usize)> {
     let n = u32_at(d, p)? as usize;
     let cap = u32_at(d, p + 4)? as usize;
     if cap < n || u32_at(d, p + 8)? != 8 || n > 100_000 {
         return None;
     }
-    let v = f64s_at(d, p + 12, n * width)?;
-    v.iter()
-        .all(|x| x.is_finite())
-        .then_some((v, p + 12 + 8 * n * width))
+    let end = p + 12 + 8 * n * width;
+    (end <= d.len()).then_some((n, end))
 }
 
 /// The NURBS data of a spline record: `u32 degree | f64 fit tolerance |
@@ -377,8 +383,36 @@ fn counted_f64s(d: &[u8], p: usize, width: usize) -> Option<(Vec<f64>, usize)> {
 /// (Where it starts, degree, knots, weights, control points.)
 #[allow(clippy::type_complexity)]
 fn nurbs_at(d: &[u8], from: usize) -> Option<(usize, u32, Vec<f64>, Vec<f64>, Vec<Vec3>)> {
+    // The degree and the three counts at `p`, from the headers alone: the
+    // number of values a payload there has, if they agree. Reading the
+    // arrays at every offset re-read up to 300 000 values per byte of a
+    // crafted record (mitcad#934).
+    let counts = |p: usize| -> Option<usize> {
+        let degree = u32_at(d, p)? as usize;
+        if !(1..=25).contains(&degree) || !f64_at(d, p + 4)?.is_finite() {
+            return None;
+        }
+        let (knots, q) = counted_len(d, p + 12, 1)?;
+        let (weights, q) = counted_len(d, q, 1)?;
+        let (poles, _) = counted_len(d, q, 3)?;
+        (poles >= 2 && knots == poles + degree + 1 && (weights == 0 || weights == poles))
+            .then_some(knots + weights + 3 * poles)
+    };
+    // The values read for such candidates, at most as many as the data
+    // has bytes (eight times what one payload can hold): in a real record
+    // the payload is the first offset whose headers agree, so the bound
+    // only stops crafted data.
+    let mut budget = d.len();
     let mut p = from;
     while p + 12 + 36 <= d.len() {
+        match counts(p) {
+            None => {
+                p += 1;
+                continue;
+            }
+            Some(n) if n > budget => return None,
+            Some(n) => budget -= n,
+        }
         let found = (|| {
             let degree = u32_at(d, p)?;
             if !(1..=25).contains(&degree) || !f64_at(d, p + 4)?.is_finite() {
@@ -637,19 +671,83 @@ pub fn transforms(seg: &Segment) -> HashMap<u64, SketchTransform> {
 /// order).
 pub fn entity_list(seg: &Segment, s: &Object) -> Vec<u64> {
     let d = seg.data(s);
-    let mut best: Vec<u64> = Vec::new();
+    let mut runs = RefRuns::new(seg, d, |_| true);
+    // Where the longest list's references start, and how many.
+    let mut best = (0, 0);
     let mut q = seg.sub_start(s);
     while q + 4 < d.len() {
         let n = u32_at(d, q).unwrap_or(0) as usize;
-        if (1..=100_000).contains(&n) && n > best.len() {
-            let list = refs_from(seg, d, q + 4, n);
-            if list.len() == n {
-                best = list;
-            }
+        if (1..=MAX_LIST).contains(&n) && n > best.1 && runs.run(q + 4) >= n {
+            best = (q + 4, n);
         }
         q += 1;
     }
-    best
+    refs_from(seg, d, best.0, best.1)
+}
+
+/// The longest reference list the sketch scans accept.
+const MAX_LIST: usize = 100_000;
+
+/// The runs of consecutive references in an object's data whose ids `keep`
+/// accepts: how many start at each offset, each offset read at most once.
+/// The sketch scans try a `u32 n, ref[n]` list at every byte; reading each
+/// candidate's references afresh cost an object of back-to-back references
+/// one walk per byte, about 10^10 reads for 11 MB (mitcad#934).
+struct RefRuns<'a, F: Fn(u64) -> bool> {
+    seg: &'a Segment,
+    d: &'a [u8],
+    keep: F,
+    /// Run length by offset (at most `MAX_LIST + 1`), `u32::MAX` while
+    /// not read; allocated on first use.
+    len: Vec<u32>,
+}
+
+impl<'a, F: Fn(u64) -> bool> RefRuns<'a, F> {
+    fn new(seg: &'a Segment, d: &'a [u8], keep: F) -> Self {
+        RefRuns {
+            seg,
+            d,
+            keep,
+            len: Vec::new(),
+        }
+    }
+
+    /// How many consecutive kept references start at `p` (counted up to
+    /// `MAX_LIST + 1`).
+    fn run(&mut self, p: usize) -> usize {
+        if p > self.d.len() {
+            return 0;
+        }
+        if self.len.is_empty() {
+            self.len = vec![u32::MAX; self.d.len() + 1];
+        }
+        // Follow the references to an offset already counted (or the end
+        // of the run), then count back along the way.
+        let mut path = Vec::new();
+        let mut q = p;
+        let mut n = loop {
+            let known = self.len[q];
+            if known != u32::MAX {
+                break known;
+            }
+            match self.seg.ref_at(self.d, q).filter(|r| (self.keep)(r.id)) {
+                // A reference ends after its start and within the data.
+                Some(r) if r.end > q && r.end <= self.d.len() => {
+                    path.push(q);
+                    q = r.end;
+                }
+                _ => {
+                    self.len[q] = 0;
+                    break 0;
+                }
+            }
+        };
+        for &x in path.iter().rev() {
+            n = (n + 1).min(MAX_LIST as u32 + 1);
+            self.len[x] = n;
+        }
+        self.len[p] as usize
+    }
 }
 
 /// A light bulb as the file stores it: on or off, and its raw bytes.
@@ -740,28 +838,30 @@ fn refs_from(seg: &Segment, d: &[u8], mut p: usize, n: usize) -> Vec<u64> {
 pub fn main_lists(seg: &Segment, s: &Object) -> (Vec<u64>, Vec<u64>) {
     let d = seg.data(s);
     let end = seg.main_end(s).min(d.len());
-    let (mut cons, mut dims): (Vec<u64>, Vec<u64>) = (Vec::new(), Vec::new());
     let Some(start) = header_end(d) else {
-        return (cons, dims);
+        return (Vec::new(), Vec::new());
     };
+    // Runs of constraints and of dimensions, each offset read once
+    // ([`RefRuns`], mitcad#934); the lists' starts and lengths.
+    let mut cons_runs = RefRuns::new(seg, d, |x| seg.is_kind_of(x, SKETCH_CONSTRAINT));
+    let mut dims_runs = RefRuns::new(seg, d, |x| seg.is_kind_of(x, SKETCH_DIMENSION));
+    let (mut cons, mut dims) = ((0, 0), (0, 0));
     let mut q = start;
     while q + 4 < end {
         let n = u32_at(d, q).unwrap_or(0) as usize;
-        if (1..=100_000).contains(&n) {
-            let list = refs_from(seg, d, q + 4, n);
-            if list.len() == n {
-                if n > cons.len() && list.iter().all(|&x| seg.is_kind_of(x, SKETCH_CONSTRAINT)) {
-                    cons = list;
-                } else if n > dims.len()
-                    && list.iter().all(|&x| seg.is_kind_of(x, SKETCH_DIMENSION))
-                {
-                    dims = list;
-                }
+        if (1..=MAX_LIST).contains(&n) {
+            if n > cons.1 && cons_runs.run(q + 4) >= n {
+                cons = (q + 4, n);
+            } else if n > dims.1 && dims_runs.run(q + 4) >= n {
+                dims = (q + 4, n);
             }
         }
         q += 1;
     }
-    (cons, dims)
+    (
+        refs_from(seg, d, cons.0, cons.1),
+        refs_from(seg, d, dims.0, dims.1),
+    )
 }
 
 /// A geometric constraint `60403D47` (section 10.3): root part with

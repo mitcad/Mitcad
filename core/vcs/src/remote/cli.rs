@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use super::errors::{ErrorClass, RemoteError, redact};
+use super::trust;
 
 /// The oldest git that Mitcad's remote work is tested with; an older one is
 /// reported as not supported.
@@ -196,7 +197,7 @@ impl GitCli {
 
     /// `git --version`.
     pub fn version(&self) -> Result<GitVersion, RemoteError> {
-        let output = self.run(None, &["--version"], None)?;
+        let output = self.run(Some(&std::env::temp_dir()), &["--version"], None)?;
         GitVersion::parse(&output.stdout).ok_or_else(|| {
             RemoteError::new(
                 ErrorClass::GitMissing,
@@ -211,7 +212,11 @@ impl GitCli {
 
     /// The version of git-lfs (`3.4.1`), or None without it.
     pub fn lfs_version(&self) -> Option<String> {
-        let output = self.run(None, &["lfs", "version"], None).ok()?;
+        // In the temporary folder, not where MitCad was started: no
+        // repository's configuration there (an alias named lfs).
+        let output = self
+            .run(Some(&std::env::temp_dir()), &["lfs", "version"], None)
+            .ok()?;
         let version = output.stdout.trim().strip_prefix("git-lfs/")?;
         let version = version.split_whitespace().next()?;
         output.success.then(|| version.to_owned())
@@ -229,9 +234,15 @@ impl GitCli {
         if control.is_some_and(Control::is_cancelled) {
             return Err(cancelled());
         }
+        // The repository's own configuration is untrusted (mitcad#920), and
+        // so is a remote in a folder, whose git runs here (mitcad#940).
+        let checked = trust::check_run(dir, args)?;
+        let args = checked.arguments(args);
+        let args = args.as_slice();
         let mut command = Command::new(&self.program);
         command
             .args(CONFIGURATION)
+            .args(trust::NEUTRAL)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

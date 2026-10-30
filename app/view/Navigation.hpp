@@ -11,6 +11,8 @@
 #include <QVector>
 #include <Qt>
 
+#include "SpaceMouseNavigation.hpp"
+
 namespace mitcad {
 
 // Preset indices remain stable for settings written before named schemes.
@@ -39,6 +41,8 @@ struct NavigationSettings {
   double panSpeed = 1.0;
   double zoomSpeed = 1.0;
   double trackpadSpeed = 1.0;
+  // The 3D mouse (mitcad#951, SpaceMouseNavigation.hpp).
+  SpaceMouseSettings spaceMouse;
 };
 
 inline double sanitizeNavigationSpeed(double speed) {
@@ -181,6 +185,7 @@ inline void loadNavigationDetails(const QSettings& store, NavigationSettings& se
   settings.panSpeed = speed("panSpeed");
   settings.zoomSpeed = speed("zoomSpeed");
   settings.trackpadSpeed = speed("trackpadSpeed");
+  loadSpaceMouseSettings(store, settings.spaceMouse);
   QVector<NavigationBinding> bindings;
   const QJsonDocument document = QJsonDocument::fromJson(
       store.value(prefix + QStringLiteral("navigationBindings")).toByteArray());
@@ -221,6 +226,7 @@ inline void saveNavigationDetails(QSettings& store, const NavigationSettings& se
   store.setValue(prefix + QStringLiteral("panSpeed"), sanitizeNavigationSpeed(settings.panSpeed));
   store.setValue(prefix + QStringLiteral("zoomSpeed"), sanitizeNavigationSpeed(settings.zoomSpeed));
   store.setValue(prefix + QStringLiteral("trackpadSpeed"), sanitizeNavigationSpeed(settings.trackpadSpeed));
+  saveSpaceMouseSettings(store, settings.spaceMouse);
   if (settings.customBindings.isEmpty()) {
     store.remove(prefix + QStringLiteral("navigationBindings"));
     return;

@@ -160,16 +160,22 @@ pub fn display_scene(doc: &F3dFile) -> Result<Option<DisplayScene>, OgsError> {
         return Ok(None);
     };
     let world = doc.read(&format!("{dir}world"))?;
-    // Mesh buffers by number; a gap ends the list.
-    let names: Vec<String> = doc.entries().into_iter().map(|e| e.name).collect();
+    // Mesh buffers by number; a gap ends the list. The entries by name
+    // (the first of a name, as `F3dFile::read` finds it), so a crafted
+    // archive of many buffers is not searched once per buffer
+    // (mitcad#934).
+    let mut entries = HashMap::new();
+    for e in doc.archive().entries() {
+        entries.entry(e.name.as_str()).or_insert(e);
+    }
     let numbered = |prefix: &str| -> Result<Vec<Vec<u8>>, OgsError> {
         let mut out = Vec::new();
         loop {
             let name = format!("{dir}{prefix}{:03}", out.len());
-            if !names.contains(&name) {
+            let Some(&e) = entries.get(name.as_str()) else {
                 return Ok(out);
-            }
-            out.push(doc.read(&name)?);
+            };
+            out.push(doc.archive().read(e)?);
         }
     };
     let buffers = numbered(MESH_PREFIX)?;
@@ -252,11 +258,20 @@ impl DisplayScene {
         let mut keys: Vec<[u8; 12]> = tails.iter().map(|&(_, k)| k).collect();
         let mut first_face: Vec<Option<usize>> = vec![None; bodies.len()];
         let mut orphans: HashMap<[u8; 12], usize> = HashMap::new();
+        // The body records of each key, in stream order (`find_all` finds
+        // them in increasing offsets): a face finds its owner by a binary
+        // search, not by a scan of every record (mitcad#934).
+        let mut by_key: HashMap<[u8; 12], Vec<usize>> = HashMap::new();
+        for (i, &(_, k)) in tails.iter().enumerate() {
+            by_key.entry(k).or_default().push(i);
+        }
         for (at, key, number, rec) in faces {
-            let owner = tails
-                .iter()
-                .position(|&(t, k)| k == key && t > at)
-                .or_else(|| tails.iter().rposition(|&(_, k)| k == key))
+            let owner = by_key
+                .get(&key)
+                .and_then(|list| {
+                    let after = list.partition_point(|&i| tails[i].0 <= at);
+                    list.get(after).or(list.last()).copied()
+                })
                 .or_else(|| orphans.get(&key).copied());
             let bi = owner.unwrap_or_else(|| {
                 issues.push(format!("faces with key {} have no body record", hex(&key)));
@@ -287,12 +302,10 @@ impl DisplayScene {
                 ));
             }
             if let Some(first) = first_face[bi] {
-                let start = tails
-                    .iter()
-                    .map(|&(t, _)| t)
-                    .filter(|&t| t < first)
-                    .max()
-                    .unwrap_or(0);
+                // The last body record before the first face (the records
+                // are in increasing offsets).
+                let before = tails.partition_point(|&(t, _)| t < first);
+                let start = before.checked_sub(1).map_or(0, |i| tails[i].0);
                 body.appearance = appearance_between(world, start, first);
             }
         }
@@ -803,7 +816,13 @@ pub fn mesh_stats(positions_cm: &[[f32; 3]], triangles: &[[u32; 3]]) -> MeshStat
 
 /// Maps each point to the first earlier point within `tol` (max norm).
 fn weld(p: &[[f64; 3]], tol: f64) -> Vec<usize> {
-    let cell = |q: &[f64; 3]| q.map(|c| (c / tol).floor() as i64);
+    // Cell coordinates clamped well inside i64 (mitcad#934): a far-away
+    // point (1e30 cm at the smallest tolerance) saturated the cast to
+    // i64::MAX and the neighbour search below overflowed adding 1. Points
+    // beyond the clamp share border cells; the search still compares the
+    // real coordinates, so the welding stays the same.
+    const LIMIT: f64 = (1u64 << 60) as f64;
+    let cell = |q: &[f64; 3]| q.map(|c| (c / tol).floor().clamp(-LIMIT, LIMIT) as i64);
     let mut grid: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
     let mut out = Vec::with_capacity(p.len());
     for (i, q) in p.iter().enumerate() {
@@ -1321,6 +1340,24 @@ mod tests {
         t.push([0, 1, 9999]);
         assert_eq!(mesh_stats(&p, &t).triangles, 12);
         assert_eq!(mesh_stats(&[], &[]), MeshStats::default());
+    }
+
+    /// Far-away positions at the smallest weld tolerance (a zero bounding
+    /// box): the cell coordinates are clamped, so the neighbour search does
+    /// not overflow in a debug build (mitcad#934).
+    #[test]
+    fn far_away_positions_do_not_overflow_the_weld_grid() {
+        let s = mesh_stats(&[[1e30, 0.0, 0.0]; 3], &[[0, 1, 2]]);
+        assert_eq!((s.triangles, s.degenerate_triangles), (1, 1));
+        let s = mesh_stats(&[[-1e30, 1e30, -1e30]; 3], &[[0, 1, 2]]);
+        assert_eq!(s.degenerate_triangles, 1);
+        // Distinct far-away points stay apart: the search still compares
+        // the coordinates themselves.
+        let welded = weld(
+            &[[1e31, 0.0, 0.0], [2e31, 0.0, 0.0], [1e31, 0.0, 0.0]],
+            1e-9,
+        );
+        assert_eq!(welded, vec![0, 1, 0]);
     }
 
     #[test]

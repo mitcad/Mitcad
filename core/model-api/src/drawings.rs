@@ -466,6 +466,61 @@ fn path_from(assembly: &Assembly, component: ComponentUid, path: &[OccurrenceUid
     true
 }
 
+/// Whether `MITCAD_DRAWING_TRACE` asks for the drawings' trace (mitcad#962):
+/// `drawing-trace:` lines on standard error, as the kernel prints one per
+/// projected view, about the kernel's projections (the bodies placed, the
+/// kernel's milliseconds), each sheet's views worked out (how many were
+/// projected and how many taken from the projection cache) and the phases
+/// of drawing a sheet and adding a view.
+pub(super) fn tracing() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("MITCAD_DRAWING_TRACE").is_some())
+}
+
+thread_local! {
+    /// The kernel's projections made on this thread and their
+    /// milliseconds, for the trace's line per sheet.
+    static PROJECTIONS: std::cell::Cell<(u64, f64)> = const { std::cell::Cell::new((0, 0.0)) };
+}
+
+/// The phases of one step for the trace, printed when it ends.
+pub(super) struct Phases {
+    what: Option<String>,
+    start: std::time::Instant,
+    last: std::time::Instant,
+    line: String,
+}
+
+impl Phases {
+    pub(super) fn new(what: impl FnOnce() -> String) -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            what: tracing().then(what),
+            start: now,
+            last: now,
+            line: String::new(),
+        }
+    }
+
+    pub(super) fn mark(&mut self, phase: &str) {
+        if self.what.is_some() {
+            let now = std::time::Instant::now();
+            let ms = (now - self.last).as_secs_f64() * 1e3;
+            self.line.push_str(&format!(" {phase}={ms:.1}"));
+            self.last = now;
+        }
+    }
+}
+
+impl Drop for Phases {
+    fn drop(&mut self) {
+        if let Some(what) = &self.what {
+            let ms = self.start.elapsed().as_secs_f64() * 1e3;
+            eprintln!("drawing-trace: {what} total={ms:.1} ms{}", self.line);
+        }
+    }
+}
+
 /// The cache key of a view's projection or shading.
 pub(super) fn view_key(tag: &str, shown: &[(BodyUid, u128, Transform)], spec: &ViewSpec) -> u128 {
     let mut fp = Fingerprint::new(tag);
@@ -475,6 +530,7 @@ pub(super) fn view_key(tag: &str, shown: &[(BodyUid, u128, Transform)], spec: &V
     fp.bool(spec.hidden)
         .bool(spec.smooth)
         .bool(spec.exact)
+        .bool(spec.quick)
         .f64(spec.deflection);
     fp.option(spec.section.as_ref(), |fp, plane| {
         for v in plane.origin.iter().chain(&plane.normal) {
@@ -1169,14 +1225,43 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
     }
 
     fn project_now(&self, shown: &[Shown], spec: &ViewSpec) -> Result<ViewProjection, String> {
+        let started = std::time::Instant::now();
         let shapes = self.placed_shapes(shown)?;
+        let placed = started.elapsed().as_secs_f64() * 1e3;
         let refs: Vec<&K::Shape> = shapes.iter().collect();
-        self.kernel()
+        let projection = self
+            .kernel()
             .project_view(&refs, spec)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+        let ms = started.elapsed().as_secs_f64() * 1e3;
+        PROJECTIONS.with(|p| {
+            let (n, total) = p.get();
+            p.set((n + 1, total + ms));
+        });
+        if tracing() {
+            let how = match &projection {
+                Ok(p) if p.polygonal => "polygonal",
+                Ok(_) => "exact",
+                Err(_) => "failed",
+            };
+            let bodies: Vec<String> = shown
+                .iter()
+                .enumerate()
+                .map(|(i, s)| format!("{i} {}", s.name))
+                .collect();
+            eprintln!(
+                "drawing-trace: project {} bodies {how}: place={placed:.1} kernel={:.1} total={ms:.1} ms; bodies {}",
+                shown.len(),
+                ms - placed,
+                bodies.join(", ")
+            );
+        }
+        projection
     }
 
     fn evaluate_views(&self, drawing: &Drawing, si: usize) -> Evaluated {
+        let started = std::time::Instant::now();
+        let before = PROJECTIONS.with(std::cell::Cell::get);
         let sheet = &drawing.sheets[si];
         let mut out = Evaluated {
             views: Vec::new(),
@@ -1292,6 +1377,19 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                 }
             }
         }
+        if tracing() {
+            let (n, ms) = PROJECTIONS.with(std::cell::Cell::get);
+            let projected = n - before.0;
+            eprintln!(
+                "drawing-trace: views of sheet {si} of {}: {} views, {projected} projected ({:.1} ms), {} reused, {} not drawn, {:.1} ms",
+                drawing.name,
+                sheet.views.len(),
+                ms - before.1,
+                (out.views.len() as u64).saturating_sub(projected),
+                out.errors.len(),
+                started.elapsed().as_secs_f64() * 1e3
+            );
+        }
         out
     }
 
@@ -1318,6 +1416,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
         si: usize,
         title: Option<&str>,
     ) -> Result<SheetDrawn, ApiError> {
+        let mut phases = Phases::new(|| format!("draw sheet {si} of {}", drawing.name));
         let sheet = &drawing.sheets[si];
         let units = match &sheet.units {
             Some(symbol) => Units::by_symbol(symbol)
@@ -1325,6 +1424,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             None => Units::of(self.parameters().context().default_length_unit),
         };
         let mut evaluated = self.evaluate_views(drawing, si);
+        phases.mark("views");
         let mut warnings: Vec<String> = evaluated
             .errors
             .iter()
@@ -1400,6 +1500,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                 }
             }
         }
+        phases.mark("holes");
         let retrieving = sheet.views.iter().any(|v| v.retrieved_dimensions);
         let all_sketch_dimensions =
             if (sheet.annotations.sketch_dimensions || retrieving) && drawing.component.is_root() {
@@ -1411,6 +1512,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
         // and the sheet's text notes; a broken one is a warning.
         let annotated = self.annotate_sheet(drawing, si, &evaluated, units, &all_sketch_dimensions);
         warnings.extend(annotated.warnings.iter().cloned());
+        phases.mark("annotations");
         // The sheet's own sketch dimensions (File › Export Drawing's), but
         // those a view retrieved already (mitcad#717: once each); each
         // where the placements of the bodies its sketch shapes put it
@@ -1468,6 +1570,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
         // A template's fields filled in from the design (mitcad#707 phase
         // 4, `drawing_templates.rs`).
         info.template = self.filled_template(drawing, si, title, scale, units);
+        phases.mark("title");
         let title_fields = super::drawing_templates::title_fields(&info);
         let content = SheetContent {
             views: evaluated.views.clone(),
@@ -1491,6 +1594,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             &content,
             warnings,
         );
+        phases.mark("compose");
         Ok(SheetDrawn {
             composed,
             evaluated,
@@ -1774,6 +1878,7 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
     }
 
     fn add_view_command(&mut self, c: AddViewCommand) -> Result<Value, ApiError> {
+        let mut phases = Phases::new(|| format!("add view to {}", c.drawing));
         let old = self.find_drawing(&c.drawing)?.clone();
         let si = c.sheet;
         let sheet = old
@@ -1902,6 +2007,7 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
             sketch: Vec::new(),
         });
         changed.check().map_err(ApiError)?;
+        phases.mark("define");
         // Clear of the views already on the sheet, inside its area (their
         // boxes worked out only when a place is to be found).
         let clear = |target: P2, size: P2, away: P2, both_ways: bool| {
@@ -1938,6 +2044,7 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
         } else {
             // Its box is known once it is projected.
             let b = self.placed_view(&changed, si, id)?.bounds;
+            phases.mark("project");
             if b.is_empty() {
                 return Err(ApiError(format!("view {id} would show nothing")));
             }
@@ -1968,9 +2075,11 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
                 target[1] - s * (center[1] - anchor[1]),
             ];
         }
+        phases.mark("place");
         align(&mut changed.sheets[si]);
         let label = format!("Add view {id} to {}", old.name);
         self.set_drawing(old.uid, label, changed)?;
+        phases.mark("store");
         Ok(json!({"drawing": old.uid, "sheet": si, "view": id}))
     }
 

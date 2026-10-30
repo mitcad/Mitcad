@@ -81,6 +81,8 @@ private:
   void applyStyles();
   void updateFolderText();
   void updateClient();
+  // The command under Advanced, again when the client's place changed.
+  void updateCommand();
   void fitConfigurationHeight();
   void refreshConnection();
   void refreshWindows();
@@ -125,6 +127,7 @@ private:
   QLineEdit* m_command = nullptr;
   QWidget* m_commandBox = nullptr;
   QPushButton* m_setup = nullptr;
+  QPushButton* m_checkAgain = nullptr;
   QPushButton* m_connectAnyway = nullptr;
   QPushButton* m_openDesktop = nullptr;
   QPushButton* m_copyConfiguration = nullptr;
@@ -140,5 +143,10 @@ private:
   bool m_desktopNotFound = false; // no application takes the Claude Desktop extension
   bool m_copied = false;          // another assistant's configuration was copied
 };
+
+// Whether Claude Desktop's application is on this computer (an isolated
+// test run looks at its client executables): the chat panel, which needs
+// Claude Code, points it to Connect AI Assistant (mitcad#947).
+bool claudeDesktopOnComputer();
 
 } // namespace mitcad::mcp

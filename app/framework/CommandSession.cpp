@@ -1180,6 +1180,16 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
   // pick taken, then OK. Not a window, not with Ctrl (Ctrl + Shift adds).
   const bool shiftApplies = !window && input->shiftClickApplies && input->max == 1 &&
                             modifiers.testFlag(Qt::ShiftModifier) && !modifiers.testFlag(Qt::ControlModifier);
+  // A click on another component's geometry may ask to activate that
+  // component first (mitcad#960, the Construct commands' question): before
+  // the pick goes in and previews, not for a pick a click takes out again.
+  if (!window && !accepted.isEmpty() && !isEditing() &&
+      !containsEntry(m_state.items(key), accepted.first(), resolver())) {
+    m_host.pickComing(m_def, raw.first());
+    if (m_done || activeInput() != input) {
+      return;
+    }
+  }
   Selection& selection = m_state.items(key);
   // One entry per model item: a profile clicked where the view shows it is
   // the entry the newest profile or the edited definition put there, under

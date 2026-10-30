@@ -573,7 +573,10 @@ pub(super) fn identity_move_data(seg: &Segment, id: u64) -> bool {
     let Some(root) = seg.root_part(d) else {
         return false;
     };
-    let zeros = d[root.end..].iter().take_while(|&&v| v == 0).count();
+    let Some(rest) = d.get(root.end..) else {
+        return false;
+    };
+    let zeros = rest.iter().take_while(|&&v| v == 0).count();
     let p = root.end + zeros;
     d.get(p..p + 12) == Some(&[5, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0][..])
         && seg.ref_at(d, p + 12).is_some()

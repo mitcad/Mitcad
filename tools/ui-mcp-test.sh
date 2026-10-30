@@ -12,7 +12,9 @@
 # tools/ui-mcp-live.py runs against it: queries with the sketch open,
 # sketch.add_line through the sketch session and undo, ui_state with the
 # palette's warning, ui_select, ui_screenshot, ui_command Clean Up Stale
-# Projections and Finish Sketch, document_save, ui_log. The agent indicator
+# Projections and Finish Sketch, document_save, ui_log; before it, the
+# bridge authenticates with eight idle connections held open, and 7 MiB
+# inputs neither grow the memory nor the log lines (mitcad#935). The agent indicator
 # (mitcad#710) names the initialized client while the bridge is connected;
 # with none, a click on it opens Connect AI Assistant and its menu offers
 # Connect AI Assistant and Folders for Designs. Preferences > AI Assistants'

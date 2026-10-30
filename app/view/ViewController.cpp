@@ -74,12 +74,15 @@
 #include "../render/RenderMode.hpp"
 // Texture folders for Edit Appearances (mitcad#315).
 #include "../materials/TexturePreferences.hpp"
+#include "../agent/ChatPreferences.hpp"
 #include "../mcp/AgentFolders.hpp"
 // Font folders for sketch text (mitcad#473).
 #include "../sketch/FontFiles.hpp"
 #include "../platform/MacDialogs.hpp"
 // The Sketch page: the first dimension scales the sketch (mitcad#860).
 #include "../sketch/SketchPreferences.hpp"
+// General: ask to activate the component of a picked face (mitcad#960).
+#include "../browser/ActivateQuestion.hpp"
 
 namespace mitcad {
 namespace {
@@ -208,7 +211,7 @@ struct PreferencePage {
 };
 
 const PreferencePage kPreferencePages[] = {
-    {"general", QT_TRANSLATE_NOOP("View", "General"), "autosave recovery"},
+    {"general", QT_TRANSLATE_NOOP("View", "General"), "autosave recovery activate component ask picked face"},
     {"navigation", QT_TRANSLATE_NOOP("View", "Navigation"), "mouse orbit pan zoom scheme"},
     {"display", QT_TRANSLATE_NOOP("View", "Display"),
      "camera perspective orthographic orientation view cube projection follow background environment render device gpu cuda ghost inactive components pick priority layout docked floating browser background rows card"},
@@ -1107,6 +1110,29 @@ void ViewController::showPreferences(const QString& page) {
   importTolerance->setValue(general->importTolerance);
   importTolerance->setToolTip(tr("How far replayed geometry of an imported design may be from the file's"));
   generalForm->addRow(tr("Import tolerance:"), importTolerance);
+  // Create Sketch and the Construct commands on another component's face
+  // ask whether to activate it (mitcad#960); the question's Don't ask
+  // again turns this off. Saved when the dialog is accepted, at once in
+  // the Settings window.
+  auto* askActivate = new QCheckBox(tr("Ask to &activate the component of a picked face"));
+  askActivate->setObjectName(QStringLiteral("askActivateComponent"));
+  askActivate->setChecked(askToActivateComponent());
+  askActivate->setToolTip(tr("Ask before sketching or constructing on another component's geometry"));
+  control(generalForm, askActivate);
+  const auto applyAskActivate = [askActivate] {
+    const bool on = askActivate->isChecked();
+    if (on == askToActivateComponent()) {
+      return;
+    }
+    saveAskToActivateComponent(on);
+    qDebug().noquote() << QStringLiteral("Preferences: ask to activate the component of a picked face %1")
+                              .arg(onOff(on));
+  };
+  if (window != nullptr) {
+    connect(askActivate, &QCheckBox::toggled, host, applyAskActivate);
+  } else {
+    connect(dialog.get(), &QDialog::accepted, askActivate, applyAskActivate);
+  }
   groups.insert(QStringLiteral("general"), generalBox);
   // Automatic updates (mitcad#9).
   auto* updatesBox = new UpdatePreferencesBox;
@@ -1166,7 +1192,14 @@ void ViewController::showPreferences(const QString& page) {
   connect(agentsBox, &mcp::AgentPreferencesBox::connectRequested, host, [this] {
     if (auto* action = m_registry.action(QStringLiteral("help.connect_assistant"))) action->trigger();
   });
-  groups.insert(QStringLiteral("agents"), agentsBox);
+  // The chat panel's settings below them (mitcad#947).
+  auto* chatBox = new agent::ChatPreferencesBox;
+  auto* agentsPage = new QWidget;
+  auto* agentsColumn = new QVBoxLayout(agentsPage);
+  agentsColumn->setContentsMargins(0, 0, 0, 0);
+  agentsColumn->addWidget(agentsBox, 1);
+  agentsColumn->addWidget(chatBox);
+  groups.insert(QStringLiteral("agents"), agentsPage);
   // Font folders for sketch text (mitcad#473).
   auto* fontsBox = new sketch::FontPreferencesBox;
   groups.insert(QStringLiteral("fonts"), fontsBox);
@@ -1203,7 +1236,22 @@ void ViewController::showPreferences(const QString& page) {
   for (const SchemeEntry& entry : kSchemes) {
     navigationSchemes.append({entry.scheme, schemeName(entry.scheme)});
   }
-  auto* navigation = new NavigationPreferences(m_settings.navigation, navigationSchemes);
+  // The view commands a 3D mouse's button can run (mitcad#951).
+  QVector<QPair<QString, QString>> buttonCommands;
+  const auto offer = [this, &buttonCommands](const QString& id) {
+    if (const CommandDef* def = m_registry.find(id)) {
+      buttonCommands.append({def->id, def->name});
+    }
+  };
+  offer(QStringLiteral("view.fit"));
+  offer(QStringLiteral("view.home"));
+  for (const StandardView& view : kStandardViews) {
+    offer(QStringLiteral("view.%1").arg(QString::fromLatin1(view.key)));
+  }
+  offer(QStringLiteral("view.look_at"));
+  offer(QStringLiteral("view.orthographic"));
+  offer(QStringLiteral("view.perspective"));
+  auto* navigation = new NavigationPreferences(m_settings.navigation, navigationSchemes, nullptr, buttonCommands);
   navigationLayout->addWidget(navigation);
   navigation->changed = [this, navigation, window] {
     const NavigationSettings chosen = navigation->chosen();
@@ -1213,12 +1261,14 @@ void ViewController::showPreferences(const QString& page) {
       m_settings.save();
     }
     qDebug().noquote() << QStringLiteral("Preferences: navigation %1, orbit speed %2, pan speed %3, "
-                                         "zoom speed %4, trackpad speed %5")
+                                         "zoom speed %4, trackpad speed %5, 3D mouse %6 speed %7")
                               .arg(QLatin1String(schemeEntry(chosen.scheme).id))
                               .arg(chosen.orbitSpeed)
                               .arg(chosen.panSpeed)
                               .arg(chosen.zoomSpeed)
-                              .arg(chosen.trackpadSpeed);
+                              .arg(chosen.trackpadSpeed)
+                              .arg(onOff(chosen.spaceMouse.enabled))
+                              .arg(chosen.spaceMouse.speed);
   };
   groups.insert(QStringLiteral("navigation"), navigationBox);
 
@@ -1429,7 +1479,7 @@ void ViewController::showPreferences(const QString& page) {
 
   *commit = [this, general, top, bottom, navigation, camera, cubeProjection, background,
              autosave, minutes, importTolerance, cacheBox, updatesBox, slicerBox, remoteBox, renderDevice, debugLog,
-             debugLogApplied, texturesBox, agentsBox, fontsBox, layoutChoice, layoutApplied] {
+             debugLogApplied, texturesBox, agentsBox, chatBox, fontsBox, layoutChoice, layoutApplied] {
     // Font folders for sketch text (mitcad#473).
     const QStringList fontFolders = fontsBox->chosen();
     if (fontFolders != sketch::savedFontFolders()) {
@@ -1439,6 +1489,17 @@ void ViewController::showPreferences(const QString& page) {
                                                            : fontFolders.join(QStringLiteral(", ")));
     }
     // Folders for designs (mitcad#402).
+    // The chat (mitcad#947).
+    const agent::ChatSettings chat = chatBox->chosen();
+    const agent::ChatSettings chatBefore = agent::ChatSettings::load();
+    if (chat != chatBefore) {
+      chat.save();
+      qDebug().noquote() << QStringLiteral("Preferences: chat agent %1, approvals %2, history %3")
+                                .arg(chat.agent, agent::approvalModeKey(chat.approvals), onOff(chat.history));
+      if (chat.agent != chatBefore.agent) {
+        emit agent::ChatNotifier::instance().agentChosen(chat.agent);
+      }
+    }
     const QStringList agentFolders = agentsBox->chosen();
     if (agentFolders != mcp::savedAgentFolders()) {
       mcp::saveAgentFolders(agentFolders);
@@ -1635,6 +1696,7 @@ void ViewController::showPreferences(const QString& page) {
     connect(cacheBox, &CachePreferencesBox::changed, host, changed);
     connect(texturesBox, &TexturePreferencesBox::changed, host, changed);
     connect(agentsBox, &mcp::AgentPreferencesBox::changed, host, changed);
+    connect(chatBox, &agent::ChatPreferencesBox::changed, host, changed);
     connect(fontsBox, &sketch::FontPreferencesBox::changed, host, changed);
     // The boxes of the other pages tell no change of their own: their
     // controls do.

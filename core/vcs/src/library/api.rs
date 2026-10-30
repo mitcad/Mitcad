@@ -237,6 +237,10 @@ fn component_json(
         "build": component.build,
         // Mount frames of any part (mitcad#525).
         "mounts": component.mounts,
+        // The standards and suppliers of its rows (mitcad#949): what the
+        // Standard and Supplier filters offer.
+        "standards": component.row_standards(&[]),
+        "suppliers": component.row_suppliers(&manifest.suppliers),
     });
     if tables
         && let Some(design) = component_design(repo, commit, &component.path)
@@ -269,9 +273,17 @@ fn component_json(
                 if component.row_previews.contains_key(&r.name) {
                     row["preview"] = json!(true);
                 }
+                // Its standards and suppliers' articles (mitcad#949).
+                if let Some(block) = component.rows.get(&r.name) {
+                    row["standards"] = json!(block.standards);
+                    row["supplier_parts"] =
+                        json!(manifest.named_supplier_parts(component, &r.name));
+                }
                 row
             }).collect::<Vec<_>>(),
         });
+        let order: Vec<String> = table.rows.iter().map(|r| r.name.clone()).collect();
+        value["standards"] = json!(component.row_standards(&order));
         // Each option with its domain and allowed values in the default
         // row, for a chooser per option (mitcad#801).
         if !table.options.is_empty() {
@@ -308,8 +320,14 @@ fn component_state(
         .map(|(state, _)| state)
 }
 
-/// The pattern a library component's designation follows.
-fn naming(component: &ManifestComponent) -> Naming<'_> {
+/// The pattern a library component's designation follows, with its rows'
+/// standards (mitcad#949) and the standard asked for (`chosen`; empty:
+/// each row's first).
+fn naming<'a>(
+    component: &'a ManifestComponent,
+    rows: &'a BTreeMap<String, mitcad_model::library::LibraryRow>,
+    chosen: &'a str,
+) -> Naming<'a> {
     Naming {
         pattern: &component.designation,
         standard: &component.standard,
@@ -319,6 +337,8 @@ fn naming(component: &ManifestComponent) -> Naming<'_> {
         } else {
             "{standard} {config}"
         },
+        rows: Some(rows),
+        chosen,
     }
 }
 
@@ -350,6 +370,9 @@ fn configure(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
         }
     }
     let pinned: BTreeSet<String> = values.iter().map(|(name, _)| name.clone()).collect();
+    // The standard the Standard filter asks for (mitcad#949).
+    let chosen = optional(command, "standard").unwrap_or("");
+    let rows = manifest.named_rows(component);
     let mut answer = part_options::configure_json(
         &state,
         &component.name,
@@ -357,12 +380,35 @@ fn configure(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
         &values,
         &pinned,
         &BTreeMap::new(),
-        Some(&naming(component)),
+        Some(&naming(component, &rows, chosen)),
     )
     .map_err(|e| invalid(format!("{id}: {e}")))?;
     answer["component"] = json!(component.id);
     answer["library"] = json!(manifest.id);
     answer["rev"] = json!(commit.to_string());
+    // The rows with their option values, standards and suppliers'
+    // articles (mitcad#949): what the Standard and Supplier filters narrow
+    // the choosers to; the combination's row's standard and articles.
+    let table = &state.configurations;
+    answer["rows"] = Value::Array(
+        table
+            .rows
+            .iter()
+            .map(|r| {
+                let block = rows.get(&r.name);
+                json!({
+                    "name": r.name,
+                    "select": table.row_option_texts(r),
+                    "standards": block.map(|b| b.standards.clone()).unwrap_or_default(),
+                    "supplier_parts": block.map(|b| b.supplier_parts.clone()).unwrap_or_default(),
+                })
+            })
+            .collect(),
+    );
+    let row = answer["row"].as_str().map(str::to_owned);
+    let block = row.as_deref().and_then(|name| rows.get(name));
+    answer["standard"] = json!(block.and_then(|b| b.named_standard(chosen)));
+    answer["supplier_parts"] = json!(block.map(|b| b.supplier_parts.clone()).unwrap_or_default());
     Ok(answer)
 }
 
@@ -501,8 +547,9 @@ fn found_json(
     item
 }
 
-/// Whether a component has `number` as its part number or one of its
-/// rows' (compared without case).
+/// Whether a component has `number` as its part number, one of its rows'
+/// or one of its rows' suppliers' articles (mitcad#949; compared without
+/// case).
 fn has_part_number(
     repo: &LibraryRepo,
     commit: ObjectId,
@@ -511,14 +558,118 @@ fn has_part_number(
 ) -> bool {
     let same = |other: &str| other.trim().eq_ignore_ascii_case(number.trim());
     same(&c.part_number)
+        || c.rows
+            .values()
+            .any(|row| row.supplier_parts.iter().any(|p| same(&p.part_number)))
         || component_design(repo, commit, &c.path)
             .is_some_and(|design| row_part_numbers(&design).values().any(|n| same(n)))
+}
+
+/// Whether a component is sold by `supplier`: its own `supplier`, or a
+/// supplier with articles on its rows (mitcad#949), by id or name
+/// (compared without case).
+fn has_supplier(manifest: &Manifest, c: &ManifestComponent, supplier: &str) -> bool {
+    let same = |other: &str| other.trim().eq_ignore_ascii_case(supplier.trim());
+    same(&c.supplier)
+        || c.row_suppliers(&manifest.suppliers)
+            .iter()
+            .any(|s| same(&s.id) || same(&s.name))
+}
+
+/// A URL as a repository's key (mitcad#949): without user information, a
+/// trailing slash or `.git`, `/` for a backslash, in lower case.
+fn url_key(url: &str) -> String {
+    let shown = mitcad_model::library::shown_url(url.trim()).replace('\\', "/");
+    let mut key = shown.trim_end_matches('/').to_ascii_lowercase();
+    if let Some(stripped) = key.strip_suffix(".git") {
+        key = stripped.to_owned();
+    }
+    key
+}
+
+/// A library fetched here, at its newest version.
+struct Fetched {
+    repo: LibraryRepo,
+    url: String,
+    version: LibraryVersion,
+    commit: ObjectId,
+    manifest: Manifest,
+}
+
+/// Why a library is not listed (mitcad#949): an index's library, or a
+/// clone of one, whose repository an enabled source has (after redirects:
+/// the source's clone has its commits) or whose id a fetched library
+/// replaces. Its line `<id> left out: same repository as <source>`.
+fn left_out_json(id: &str, url: &str, why: &str) -> Value {
+    json!({"id": id, "url": url, "reason": why, "text": format!("{id} left out: {why}")})
+}
+
+/// What leaves the fetched library `f` out (mitcad#949): another fetched
+/// library that replaces its id, or, when it is no enabled source, an
+/// enabled source whose clone has its newest commit.
+fn fetched_left_out(
+    f: &Fetched,
+    all: &[Fetched],
+    is_source: &dyn Fn(&str) -> bool,
+) -> Option<String> {
+    for other in all {
+        if std::ptr::eq(other, f) || other.manifest.id == f.manifest.id {
+            continue;
+        }
+        if other
+            .manifest
+            .replaces
+            .iter()
+            .any(|id| id == &f.manifest.id)
+        {
+            return Some(format!(
+                "superseded by {} ({})",
+                other.manifest.id, other.url
+            ));
+        }
+    }
+    if is_source(&f.url) {
+        return None;
+    }
+    all.iter()
+        .filter(|other| !std::ptr::eq(*other, f) && is_source(&other.url))
+        .find(|other| url_key(&other.url) == url_key(&f.url) || other.repo.contains(f.commit))
+        .map(|other| format!("same repository as {}", other.url))
+}
+
+/// What leaves an index's entry out (mitcad#949): a fetched library that
+/// replaces its id, or an enabled source of another id with its
+/// repository (the same URL, or a clone that has a version the index
+/// reviewed).
+fn entry_left_out(
+    entry: &IndexEntry,
+    all: &[Fetched],
+    is_source: &dyn Fn(&str) -> bool,
+) -> Option<String> {
+    for f in all {
+        if f.manifest.id != entry.id && f.manifest.replaces.iter().any(|id| id == &entry.id) {
+            return Some(format!("superseded by {} ({})", f.manifest.id, f.url));
+        }
+    }
+    all.iter()
+        .filter(|f| is_source(&f.url) && f.manifest.id != entry.id)
+        .find(|f| {
+            url_key(&f.url) == url_key(&entry.url)
+                || entry.reviewed.iter().any(|r| {
+                    ObjectId::from_hex(r.rev.trim().as_bytes()).is_ok_and(|id| f.repo.contains(id))
+                })
+        })
+        .map(|f| format!("same repository as {}", f.url))
 }
 
 /// `library_search`: the components of every fetched library (at its
 /// newest version) and the libraries the fetched indexes list, by words,
 /// licence and category; BUILD parts also by `role`, `system`, `supplier`
 /// and `part_number`. Items without a licence only with `unlicensed`.
+/// With `sources` (the enabled sources' URLs), a library an index offers,
+/// or a clone of one, that is the same repository as a source's under
+/// another id, or whose id a fetched library `replaces`, is left out
+/// (`left_out`, mitcad#949).
 fn search(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
     let words = search_words(optional(command, "text").unwrap_or(""));
     let filter = license_filter(command);
@@ -531,11 +682,17 @@ fn search(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
     let picker = picker_fields(command)?;
     let supplier = optional(command, "supplier");
     let part_number = optional(command, "part_number");
+    let sources: Option<Vec<String>> = command
+        .get("sources")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).map(url_key).collect());
+    let is_source = |url: &str| {
+        sources
+            .as_ref()
+            .is_none_or(|list| list.contains(&url_key(url)))
+    };
     let build_only = !picker.is_empty();
-    let mut components = Vec::new();
-    let mut libraries = Vec::new();
-    let mut fetched_ids = BTreeSet::new();
-    let mut hidden = 0;
+    let mut fetched: Vec<Fetched> = Vec::new();
     let mut indexes = Vec::new();
     for dir in cache.repos() {
         let Ok(repo) = LibraryRepo::open(&dir) else {
@@ -554,41 +711,59 @@ fn search(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
                 let Ok(manifest) = repo.manifest(commit) else {
                     continue;
                 };
-                fetched_ids.insert(manifest.id.clone());
-                if only
-                    .as_ref()
-                    .is_some_and(|set| !set.contains(&manifest.id) && !set.contains(&url))
-                {
-                    continue;
-                }
-                for c in &manifest.components {
-                    let license = manifest.license_of(c);
-                    if category.is_some_and(|wanted| !c.in_category(wanted)) {
-                        continue;
-                    }
-                    if build_only && !matches!(build::fit_picker(c, &picker), Fit::Fits(_)) {
-                        continue;
-                    }
-                    if supplier.is_some_and(|s| !c.supplier.trim().eq_ignore_ascii_case(s.trim())) {
-                        continue;
-                    }
-                    if !matches(&words, &component_texts(&manifest, c)) {
-                        continue;
-                    }
-                    if part_number.is_some_and(|n| !has_part_number(&repo, commit, c, n)) {
-                        continue;
-                    }
-                    if !license_passes(license.as_deref(), &filter, unlicensed) {
-                        hidden += 1;
-                        continue;
-                    }
-                    components.push(found_json(
-                        &repo, commit, &manifest, c, &url, &version, false,
-                    ));
-                }
+                fetched.push(Fetched {
+                    repo,
+                    url,
+                    version,
+                    commit,
+                    manifest,
+                });
             }
             RepoKind::Index => indexes.push((repo, head, url)),
             RepoKind::Unknown => {}
+        }
+    }
+    let mut components = Vec::new();
+    let mut libraries = Vec::new();
+    let mut left_out = Vec::new();
+    let mut hidden = 0;
+    let fetched_ids: BTreeSet<String> = fetched.iter().map(|f| f.manifest.id.clone()).collect();
+    for f in &fetched {
+        if let Some(why) = fetched_left_out(f, &fetched, &is_source) {
+            left_out.push(left_out_json(&f.manifest.id, &f.url, &why));
+            continue;
+        }
+        let (repo, manifest, url) = (&f.repo, &f.manifest, &f.url);
+        if only
+            .as_ref()
+            .is_some_and(|set| !set.contains(&manifest.id) && !set.contains(url))
+        {
+            continue;
+        }
+        for c in &manifest.components {
+            let license = manifest.license_of(c);
+            if category.is_some_and(|wanted| !c.in_category(wanted)) {
+                continue;
+            }
+            if build_only && !matches!(build::fit_picker(c, &picker), Fit::Fits(_)) {
+                continue;
+            }
+            if supplier.is_some_and(|s| !has_supplier(manifest, c, s)) {
+                continue;
+            }
+            if !matches(&words, &component_texts(manifest, c)) {
+                continue;
+            }
+            if part_number.is_some_and(|n| !has_part_number(repo, f.commit, c, n)) {
+                continue;
+            }
+            if !license_passes(license.as_deref(), &filter, unlicensed) {
+                hidden += 1;
+                continue;
+            }
+            components.push(found_json(
+                repo, f.commit, manifest, c, url, &f.version, false,
+            ));
         }
     }
     for (repo, head, index_url) in indexes {
@@ -596,6 +771,10 @@ fn search(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
             continue;
         };
         for entry in entries {
+            if let Some(why) = entry_left_out(&entry, &fetched, &is_source) {
+                left_out.push(left_out_json(&entry.id, &entry.url, &why));
+                continue;
+            }
             if !entry_matches(&entry, &words) {
                 continue;
             }
@@ -611,7 +790,10 @@ fn search(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
             libraries.push(item);
         }
     }
-    Ok(json!({"components": components, "libraries": libraries, "hidden": hidden}))
+    Ok(
+        json!({"components": components, "libraries": libraries, "hidden": hidden,
+              "left_out": left_out}),
+    )
 }
 
 /// `library_build_candidates` (mitcad#375): the BUILD parts of the fetched
@@ -1074,6 +1256,10 @@ pub fn describe(command: &str, answer: &str) -> Result<String, VcsError> {
                         ""
                     }
                 );
+            }
+            // Libraries an index offers that a source has (mitcad#949).
+            for l in answer["left_out"].as_array().into_iter().flatten() {
+                let _ = writeln!(out, "not listed: {}", s(&l["text"]));
             }
             if answer["hidden"].as_u64().unwrap_or(0) > 0 {
                 let _ = writeln!(out, "{} more without an accepted licence", answer["hidden"]);

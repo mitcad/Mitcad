@@ -323,6 +323,43 @@ fn values_that_do_not_read_are_kept_with_a_warning() {
 }
 
 #[test]
+fn a_value_nested_100_000_deep_is_kept_shallow() {
+    // A hostile file: an unknown value 100 000 elements deep would
+    // overflow the stack of the XML parser and of the value's copy.
+    let depth = 100_000;
+    let xml = format!(
+        r#"<Document SchemaVersion="4" ProgramVersion="1.0R1">
+      <Objects><Object type="Part::Box" name="Box"/></Objects>
+      <ObjectData><Object name="Box"><Properties>
+        <Property name="Deep" type="App::PropertyPythonObject">{}{}</Property>
+        <Property name="Length" type="App::PropertyLength"><Float value="10"/></Property>
+      </Properties></Object></ObjectData></Document>"#,
+        "<Nested a=\"1\">".repeat(depth),
+        "</Nested>".repeat(depth)
+    );
+    let doc = Document::parse(&xml).unwrap();
+    assert!(
+        doc.warnings.iter().any(|w| w.contains("nested deeper")),
+        "{:?}",
+        doc.warnings
+    );
+    let r#box = doc.object("Box").unwrap();
+    let Some(Value::Xml(deep)) = r#box.value("Deep") else {
+        panic!("{:?}", r#box.value("Deep"));
+    };
+    let mut levels = 1;
+    let mut at = deep;
+    while let Some(child) = at.children.first() {
+        levels += 1;
+        at = child;
+    }
+    assert_eq!(levels, mitcad_freecad::ELEMENT_DEPTH);
+    assert_eq!(at.attribute("a"), Some("1"));
+    // The properties after it read as usual.
+    assert!(matches!(r#box.value("Length"), Some(Value::Float(v)) if *v == 10.0));
+}
+
+#[test]
 fn an_empty_sub_element_links_the_whole_object() {
     // FreeCAD 1.x writes a link to a whole sketch as one empty sub-element
     // (mitcad#708), older files as none; the XLink and LinkSubList forms

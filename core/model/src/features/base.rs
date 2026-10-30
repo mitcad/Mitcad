@@ -300,6 +300,13 @@ pub(crate) fn apply_tool<K: Kernel>(
         BooleanOp::Intersect => "intersect",
     };
     if participants.is_empty() {
+        // A component without bodies of its own whose child occurrence's
+        // body the tool touches says so (mitcad#958).
+        if op == BooleanOp::Join
+            && let Some((own, rest)) = super::join_elsewhere::joined_elsewhere(ctx, tool)
+        {
+            return Err(format!("there is no body of {own} to join{rest}"));
+        }
         return Err(format!("there is no body to {verb}"));
     }
     // A cut or intersection works on each lump of a body of several (its
@@ -317,7 +324,14 @@ pub(crate) fn apply_tool<K: Kernel>(
     let result = ctx.boolean(op, &targets, tool).map_err(|e| e.to_string())?;
     if !result.touched.iter().any(|t| *t) {
         return Err(match op {
-            BooleanOp::Join => format!("the {what} does not touch any participant body"),
+            // What it touches instead in the component's child
+            // occurrences, which a feature cannot join into (mitcad#958).
+            BooleanOp::Join => match super::join_elsewhere::joined_elsewhere(ctx, tool) {
+                Some((own, rest)) => {
+                    format!("the {what} does not touch any participant body of {own}{rest}")
+                }
+                None => format!("the {what} does not touch any participant body"),
+            },
             BooleanOp::Cut => format!("the {what} does not cut into any participant body"),
             BooleanOp::Intersect => format!("the {what} does not intersect any participant body"),
         });

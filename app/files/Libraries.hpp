@@ -10,6 +10,7 @@
 // when the user asks, or at start-up for the sources with Auto-update on
 // (mitcad#576, LibraryAutoUpdate.hpp).
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QList>
 #include <QString>
@@ -50,6 +51,19 @@ QList<LibrarySource> defaultLibrarySources();
 // A source's URL compared as written, without a trailing slash, the
 // separators of a folder as '/'.
 QString normalLibraryUrl(const QString& url);
+
+// The libraries of the community indexes a library browser lists from a
+// `library_search` answer (mitcad#949): Insert from Library those not
+// fetched, the Community Library all. The answer leaves out a library an
+// index offers whose repository an enabled source has (`sources`) or whose
+// id a fetched library replaces (`left_out`); an entry whose URL is an
+// enabled source's while its id is not fetched is left out here too.
+// `leftOut` gets one text per library left out ("<id> left out: same
+// repository as <source>").
+QJsonArray browserLibraries(const QJsonObject& answer, const QStringList& sources, bool community,
+                            QStringList* leftOut = nullptr);
+// Logs "Library index: <text>" for each text, once in a session.
+void logLeftOutLibraries(const QStringList& texts);
 
 // Where fetched libraries are kept: MITCAD_LIBRARIES_DIR, else
 // "libraries" in the application's local data folder.

@@ -43,8 +43,11 @@ QString shortTime(const QDateTime& time) {
 QString agentLine(const ConnectedAgent& agent) {
   const QString shown = assistantDisplayName(agent.name);
   const QString own = agent.version.isEmpty() ? agent.name : QString(agent.name + QLatin1Char(' ') + agent.version);
-  return shown == agent.name ? AgentIndicator::tr("%1, connected since %2").arg(own, shortTime(agent.since))
-                             : AgentIndicator::tr("%1 (%2), connected since %3").arg(shown, own, shortTime(agent.since));
+  // The chat panel's own agent (mitcad#947).
+  const QString chat = agent.chat ? AgentIndicator::tr(", the chat's") : QString();
+  return shown == agent.name
+             ? AgentIndicator::tr("%1%2, connected since %3").arg(own, chat, shortTime(agent.since))
+             : AgentIndicator::tr("%1 (%2)%3, connected since %4").arg(shown, own, chat, shortTime(agent.since));
 }
 
 } // namespace
@@ -99,8 +102,15 @@ void AgentIndicator::setAgents(const QList<ConnectedAgent>& agents) {
   }
 }
 
+void AgentIndicator::setChatWorking(const QString& agentName) {
+  if (agentName != m_chatWorking) {
+    m_chatWorking = agentName;
+    refresh();
+  }
+}
+
 AgentIndicator::State AgentIndicator::state() const {
-  if (!m_agents.isEmpty()) {
+  if (!m_agents.isEmpty() || !m_chatWorking.isEmpty()) {
     return State::Connected;
   }
   return m_unavailable ? State::Unavailable : State::NoAgent;
@@ -250,7 +260,11 @@ void AgentIndicator::refresh() {
       names << agent.name;
       tip << agentLine(agent);
     }
-    if (m_agents.size() == 1) {
+    if (!m_chatWorking.isEmpty()) {
+      // The chat's agent at work on a message (mitcad#947).
+      shown = tr("%1 working").arg(m_chatWorking);
+      logged = QStringLiteral("chat working: %1").arg(m_chatWorking);
+    } else if (m_agents.size() == 1) {
       shown = tr("%1 connected").arg(assistantDisplayName(m_agents.first().name));
       logged = QStringLiteral("connected: %1").arg(m_agents.first().name);
     } else {

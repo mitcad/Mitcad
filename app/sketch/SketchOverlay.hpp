@@ -149,6 +149,8 @@ private:
   Projection projection() const;
   AxesShape axesShape() const;
   std::vector<Glyph> glyphs() const;
+  // A sketch point's place, or a curve as a polyline, in view pixels.
+  std::vector<QPointF> entityOutline(const QString& entity) const;
   std::vector<DimensionLayout> dimensions() const;
   QRectF textRect(const QPointF& at, const QString& text) const;
   // The sketch's x and y axes across the view, its origin, and the design

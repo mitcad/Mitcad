@@ -1250,6 +1250,7 @@ impl DrawingSheet {
             hidden: style.hidden_lines && !pictorial && section.is_none(),
             smooth: style.tangent_edges,
             exact: !style.polygonal,
+            quick: true,
             section,
             deflection: 0.01,
         })

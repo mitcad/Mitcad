@@ -4,6 +4,7 @@
 # check-all sources: app/framework/Command.hpp app/framework/CommandSession.cpp app/MainWindowContextMenu.cpp
 # check-all sources: core/model/src/features/extrude.rs core/ffi/src/kernel/face_extrude.rs
 # check-all sources: core/cpp/bridge/face_extrude.cpp geometry/src/face_extrude.cpp tools/cli
+# check-all sources: app/commands/SketchNormal.cpp app/framework/ManipulatorOverlay.cpp
 # Extrude with a planar body face as the profile (mitcad#535) through the
 # real UI, on designs mitcad-cli makes:
 #   1. One imported 20 mm cube (written to STEP and read back: a base
@@ -26,6 +27,9 @@
 #        automatically: 8000 -> 6000 mm3;
 #      - the sphere's face selected, E: refused on the panel as not planar,
 #        and the square does not stand in for it.
+#   3. A square sketch in component Brace, whose occurrence is turned a
+#      quarter about X (mitcad#958): Extrude's distance arrow points along
+#      the sketch's normal in the design (-Y), not the component's +Z.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-extrude-face-test.sh
@@ -72,6 +76,13 @@ cat > "$WORK/imported.json" << EOF
   {"expect": {"feature": "Base1", "status": "ok", "volume": 8000, "tolerance": 1e-6}}
 ]
 EOF
+cat > "$WORK/turned.json" << EOF
+[
+  {"cmd": "create_component", "name": "Brace", "transform": [[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 30]]},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 20}
+]
+EOF
 cat > "$WORK/block.json" << EOF
 [
   {"cmd": "sketch.create"},
@@ -88,6 +99,8 @@ EOF
 "$CLI" run "$WORK/imported.json" --save "$WORK/imported.mitcad" > "$WORK/cli.log" 2>&1 ||
   { cat "$WORK/cli.log"; ui_fail "mitcad-cli imported"; }
 "$CLI" run "$WORK/block.json" --save "$WORK/block.mitcad" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli block"; }
+"$CLI" run "$WORK/turned.json" --save "$WORK/turned.mitcad" > "$WORK/cli.log" 2>&1 ||
+  { cat "$WORK/cli.log"; ui_fail "mitcad-cli turned"; }
 
 ui_start_display
 
@@ -222,5 +235,20 @@ ui_step "cancel (Esc)"                     ui_key Escape
 ui_expect_new "Command Extrude cancelled" "cancelled"
 
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+ui_stop_app
+
+echo "=== 3. A sketch in a turned occurrence: the arrow along its normal in the design (mitcad#958)"
+ui_start_app --open "$WORK/turned.mitcad"
+ui_step "fit (F6)"                         ui_key F6
+ui_mark
+ui_step "extrude (E)"                      ui_key e
+ui_expect_new "Extrude Profiles: 1 profile [profile $R of F1" "the square in Brace is the profile"
+ui_expect_new "Manipulator Extrude distance at " "the distance's arrow"
+# Brace:1 turns the component's +Z to the design's -Y.
+ui_expect_new "Arrow direction Extrude distance: 0.000,-1.000,0.000" \
+  "the arrow along the sketch's normal in the design"
+no_new "Arrow direction Extrude distance: 0.000,0.000,1.000" "not along the component's own normal"
+ui_step "cancel (Esc)"                     ui_key Escape
+ui_expect_new "Command Extrude cancelled" "cancelled"
 ui_stop_app
 ui_finish "UI extrude face"

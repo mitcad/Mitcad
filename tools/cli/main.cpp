@@ -19,6 +19,7 @@
 
 #include "mitcad/geometry/guard.hpp"
 #include "mitcad/io/body.hpp"
+#include "mitcad/io/mesh.hpp"
 #include "mitcad_bridge/lib.h"
 #include "rust/cxx.h"
 // The imports, and the helpers the commands share (import.cpp).
@@ -1331,9 +1332,11 @@ int convert(const std::vector<std::string>& args) {
 // gave up still run (their geometry kernel call has not returned): without
 // running static destructors, which would tear down OCCT's and the C++
 // runtime's state under them (mitcad#82: a crash at exit after an import
-// that hung). Else returns `code` for main to return.
+// that hung), and so while a face of a stopped meshing that did not end
+// still runs (io::abandoned_faces, mitcad#936). Else returns `code` for
+// main to return.
 int finish(int code) {
-  if (mitcad::abandoned_imports() > 0) {
+  if (mitcad::abandoned_imports() > 0 || mitcad::io::abandoned_faces() > 0) {
     std::cout.flush();
     std::cerr.flush();
     std::fflush(nullptr);

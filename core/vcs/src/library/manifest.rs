@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+pub use mitcad_model::library::{LibraryRow, NON_STANDARD, SupplierPart};
+
 /// The manifest at a library repository's root.
 pub const LIBRARY_MANIFEST: &str = "mitcad-library.json";
 /// The manifest at a community index's root.
@@ -199,6 +201,11 @@ pub struct ManifestComponent {
     /// [`super::mounts`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mounts: Option<serde_json::Value>,
+    /// Its configuration rows' standards and suppliers' articles by the
+    /// row's name (mitcad#949, `docs/libraries.md`, *Standards and
+    /// suppliers of rows*).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rows: BTreeMap<String, LibraryRow>,
 }
 
 impl ManifestComponent {
@@ -223,6 +230,80 @@ impl ManifestComponent {
     pub fn in_category(&self, id: &str) -> bool {
         self.category_ids().contains(&id.trim())
     }
+
+    /// The standards its rows name (mitcad#949), each once: those its
+    /// `standard` names in that order, then in the order the rows (`order`,
+    /// the table's) first name them, `non-standard` last.
+    pub fn row_standards(&self, order: &[String]) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut odd = false;
+        // The rows in the table's order, then any the order does not name.
+        let ordered = order.iter().filter_map(|name| self.rows.get(name));
+        for row in ordered.chain(self.rows.values()) {
+            for standard in row.standards.iter().map(|s| s.trim()) {
+                if standard.is_empty() {
+                    continue;
+                }
+                if is_non_standard_tag(standard) {
+                    odd = true;
+                } else if !out.iter().any(|s| s.eq_ignore_ascii_case(standard)) {
+                    out.push(standard.to_owned());
+                }
+            }
+        }
+        // The component's own order first (`ISO 4762 / DIN 912`: ISO
+        // before DIN), then as the rows name them.
+        let own = self.standard.to_ascii_lowercase();
+        out.sort_by_key(|s| own.find(&s.to_ascii_lowercase()).unwrap_or(usize::MAX));
+        if odd {
+            out.push(NON_STANDARD.to_owned());
+        }
+        out
+    }
+
+    /// The ids of the suppliers with articles on its rows (mitcad#949),
+    /// each once, in the order of the library's `suppliers`.
+    pub fn row_suppliers<'a>(&self, suppliers: &'a [Supplier]) -> Vec<&'a Supplier> {
+        suppliers
+            .iter()
+            .filter(|s| {
+                self.rows
+                    .values()
+                    .any(|r| r.supplier_parts.iter().any(|p| p.supplier == s.id))
+            })
+            .collect()
+    }
+}
+
+/// A supplier a library's rows refer to (mitcad#949, the manifest's
+/// `suppliers`): a stable id, its name for people and its own site.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Supplier {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub url: String,
+}
+
+/// Whether a text is a date `YYYY-MM-DD` (a supplier's article's
+/// `checked`).
+pub fn valid_date(text: &str) -> bool {
+    let parts: Vec<&str> = text.split('-').collect();
+    let [year, month, day] = parts.as_slice() else {
+        return false;
+    };
+    let number = |s: &str, digits: usize| -> Option<u32> {
+        if s.len() == digits && s.bytes().all(|b| b.is_ascii_digit()) {
+            s.parse().ok()
+        } else {
+            None
+        }
+    };
+    matches!(
+        (number(year, 4), number(month, 2), number(day, 2)),
+        (Some(_), Some(1..=12), Some(1..=31))
+    )
 }
 
 /// The names of a category's own path (`Wood/Dimensioned timber`): its
@@ -275,6 +356,14 @@ pub struct Manifest {
     pub printers: Vec<ManifestItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub processes: Vec<ManifestItem>,
+    /// The suppliers the rows' articles name (mitcad#949).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suppliers: Vec<Supplier>,
+    /// The ids this library had before (mitcad#949: `mitcad-fasteners`,
+    /// which became `mitcad-parts`): a library of such an id that an index
+    /// offers, or a clone of it, is not listed beside this one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaces: Vec<String>,
 }
 
 /// A material or print profile a manifest lists (mitcad#640): its id and
@@ -636,7 +725,10 @@ impl Manifest {
             super::build::check_component(self, c, &label, &mut out);
             // Mount frames of any part (mitcad#525).
             super::mounts::check_component(c, &label, &mut out);
+            // The rows' standards and articles (mitcad#949).
+            self.row_problems(c, &label, &mut out);
         }
+        self.supplier_problems(&mut out);
         // Materials and print profiles (mitcad#640): files in their
         // folders, each id once per list.
         for (field, folder, items) in [
@@ -663,6 +755,122 @@ impl Manifest {
             }
         }
         out
+    }
+
+    /// The suppliers' problems (mitcad#949): each needs an id (as a
+    /// component's) used once and a name; its site is an https address.
+    fn supplier_problems(&self, out: &mut Problems) {
+        let mut ids = BTreeSet::new();
+        for (i, supplier) in self.suppliers.iter().enumerate() {
+            if !valid_id(&supplier.id) {
+                out.error(format!(
+                    "suppliers[{i}]: '{}' is no supplier id (2 to 64 of a-z, 0-9 and -)",
+                    supplier.id
+                ));
+            } else if !ids.insert(supplier.id.as_str()) {
+                out.error(format!(
+                    "suppliers[{i}]: the id {} is used twice",
+                    supplier.id
+                ));
+            }
+            if supplier.name.trim().is_empty() {
+                out.error(format!("suppliers[{i}]: no name"));
+            }
+            if !supplier.url.is_empty() && !supplier.url.starts_with("https://") {
+                out.error(format!(
+                    "suppliers[{i}]: the url '{}' is no https:// address",
+                    supplier.url
+                ));
+            }
+        }
+        for id in &self.replaces {
+            if !valid_id(id) {
+                out.error(format!("replaces: '{id}' is no library id"));
+            } else if id == &self.id {
+                out.error(format!("replaces: {id} is the library's own id"));
+            }
+        }
+    }
+
+    /// A component's rows' problems (mitcad#949): an article names one of
+    /// the library's `suppliers`, has a part number and a `checked` date;
+    /// a standard is no empty text.
+    fn row_problems(&self, c: &ManifestComponent, label: &str, out: &mut Problems) {
+        for (row, block) in &c.rows {
+            if block.standards.iter().any(|s| s.trim().is_empty()) {
+                out.error(format!("{label}: the row {row} names an empty standard"));
+            }
+            if block.standards.iter().any(|s| is_non_standard_tag(s)) && block.standards.len() > 1 {
+                out.warn(format!(
+                    "{label}: the row {row} is {NON_STANDARD} and names standards as well"
+                ));
+            }
+            for (i, part) in block.supplier_parts.iter().enumerate() {
+                let at = format!("{label}: the row {row}'s supplier_parts[{i}]");
+                if !self.suppliers.iter().any(|s| s.id == part.supplier) {
+                    out.error(format!(
+                        "{at}: the supplier '{}' is not one of the library's suppliers",
+                        part.supplier
+                    ));
+                }
+                if part.part_number.trim().is_empty() {
+                    out.error(format!("{at}: no part number"));
+                }
+                if !part.checked.is_empty() && !valid_date(&part.checked) {
+                    out.error(format!(
+                        "{at}: checked '{}' is no date (YYYY-MM-DD)",
+                        part.checked
+                    ));
+                } else if part.checked.is_empty() {
+                    out.warn(format!("{at}: no date it was checked"));
+                }
+            }
+        }
+    }
+
+    /// The suppliers' articles of a component's row, each with its
+    /// supplier's name (mitcad#949).
+    pub fn named_supplier_parts(&self, c: &ManifestComponent, row: &str) -> Vec<SupplierPart> {
+        c.rows
+            .get(row)
+            .map(|block| {
+                block
+                    .supplier_parts
+                    .iter()
+                    .map(|part| self.named_part(part))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// An article with its supplier's name from `suppliers`.
+    pub fn named_part(&self, part: &SupplierPart) -> SupplierPart {
+        let mut named = part.clone();
+        if named.supplier_name.trim().is_empty()
+            && let Some(supplier) = self.suppliers.iter().find(|s| s.id == part.supplier)
+        {
+            named.supplier_name = supplier.name.clone();
+        }
+        named
+    }
+
+    /// A component's rows' blocks with the suppliers' names (as
+    /// [`mitcad_model::library::LibrarySource::rows`] has them).
+    pub fn named_rows(&self, c: &ManifestComponent) -> BTreeMap<String, LibraryRow> {
+        c.rows
+            .iter()
+            .map(|(name, block)| {
+                let named = LibraryRow {
+                    standards: block.standards.clone(),
+                    supplier_parts: block
+                        .supplier_parts
+                        .iter()
+                        .map(|part| self.named_part(part))
+                        .collect(),
+                };
+                (name.clone(), named)
+            })
+            .collect()
     }
 
     /// The item files of materials and print profiles the manifest lists
@@ -708,6 +916,10 @@ impl IndexEntry {
         }
         out
     }
+}
+
+fn is_non_standard_tag(standard: &str) -> bool {
+    mitcad_model::library::is_non_standard(standard)
 }
 
 /// Words of a search: lowercase, split at spaces.

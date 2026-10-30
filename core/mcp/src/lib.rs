@@ -16,7 +16,10 @@ pub use changes::{
 };
 // The command reference in parts, errors that give the choices (mitcad#714).
 mod reference;
-pub use reference::{Vocabulary, missing_name, unknown_command, unknown_query};
+pub use reference::{ECHO_CHARS, Vocabulary, echoed, missing_name, unknown_command, unknown_query};
+// The AI chat panel's own logic: agent streams, approvals, undo merge,
+// history (mitcad#947).
+pub mod chat;
 
 use serde_json::{Value, json};
 use std::io::{self, BufRead, Write};

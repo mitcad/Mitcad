@@ -166,6 +166,9 @@ ui_init() {
   # The first dimension of a drawn sketch scales nothing (mitcad#860), as in
   # ui-test-lib.sh.
   export MITCAD_SKETCH_FIRST_DIMENSION_SCALE=0
+  # No question whether to activate a picked face's component (mitcad#960),
+  # as in ui-test-lib.sh.
+  export MITCAD_ASK_ACTIVATE_COMPONENT=0
   # Git's configuration of our own (empty), as in ui-test-lib.sh.
   : > "$UI_ROOT/gitconfig"
   export GIT_CONFIG_GLOBAL=$UI_ROOT/gitconfig
@@ -308,6 +311,31 @@ ui_log_value() {
 # ui_gt a b: a > b for decimal numbers.
 ui_gt() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a > b) }'; }
 ui_lt() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a < b) }'; }
+
+# ui_update_test_hooks file: ON when the build that made the file reads the
+# update tests' environment variables (the CMake option
+# MITCAD_UPDATE_TEST_HOOKS, mitcad#921), OFF when it does not; empty when
+# unknown. UI_UPDATE_TEST_HOOKS (the ctest's setting) decides first, then
+# the first CMakeCache.txt above the file (as in ui-test-lib.sh).
+ui_update_test_hooks() {
+  local dir
+  if [ -n "${UI_UPDATE_TEST_HOOKS:-}" ]; then
+    case $UI_UPDATE_TEST_HOOKS in
+      ON | on | 1 | TRUE | true | YES | yes) echo ON ;;
+      *) echo OFF ;;
+    esac
+    return 0
+  fi
+  dir=$(cd "$(dirname "$1")" 2> /dev/null && pwd) || return 0
+  while [ -n "$dir" ] && [ "$dir" != / ]; do
+    if [ -f "$dir/CMakeCache.txt" ]; then
+      if grep -qiE '^MITCAD_UPDATE_TEST_HOOKS:BOOL=(ON|1|TRUE|YES|Y)$' "$dir/CMakeCache.txt"; then echo ON; else echo OFF; fi
+      return 0
+    fi
+    dir=$(dirname "$dir")
+  done
+  return 0
+}
 
 # ui_check_shot name: checks the screenshot <out>/<name>.png as the Windows
 # test does (tools/ui-windows-test.ps1, Check-Shot): the light background,

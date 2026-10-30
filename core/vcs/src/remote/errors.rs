@@ -72,6 +72,11 @@ pub enum ErrorClass {
     /// A path the operation does not take: outside the project, a hidden
     /// name, not a design's name, a folder moved into itself.
     InvalidPath,
+    // A repository's own configuration (mitcad#920).
+    /// The repository's own git configuration sets keys that could start
+    /// programs or send the sign-in elsewhere: git is not run there
+    /// (`remote/trust.rs`).
+    UntrustedConfig,
 }
 
 /// A failure of a remote operation: its class, a message for people and

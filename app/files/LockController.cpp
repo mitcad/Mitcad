@@ -857,6 +857,20 @@ void LockController::taken(const QJsonObject& answer) {
       updateBanner();
       return;
     }
+    if (cls == QLatin1String("untrusted_config")) {
+      // The repository's own git configuration names programs (mitcad#920):
+      // git is not run for it, so no edit lock; the project indicator says why.
+      qInfo().noquote() << QStringLiteral("Edit locks: %1: %2").arg(fileName(), message);
+      const bool wasReadOnly = isReadOnly();
+      m_mode = Mode::None;
+      if (wasReadOnly) {
+        m_host.readOnlyChanged();
+      }
+      m_host.status(tr("%1 has no edit lock: %2").arg(fileName(), message), true);
+      updateIndicator();
+      updateBanner();
+      return;
+    }
     qInfo().noquote() << QStringLiteral("Edit lock not confirmed (%1): %2: %3").arg(cls, fileName(), message);
     if (m_mode == Mode::Taking || m_mode == Mode::Unconfirmed) {
       m_mode = Mode::Unconfirmed;

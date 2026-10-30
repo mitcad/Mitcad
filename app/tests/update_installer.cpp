@@ -300,6 +300,58 @@ void digestTests() {
   }, [](const unsigned char*, std::size_t) { return true; }));
 }
 
+// mitcad#921: an update from a test's source (an address, key or
+// certificate from the environment) never asks for administrator rights.
+void elevationTests() {
+  using namespace mitcad;
+  Installation allUsers;
+  allUsers.kind = Installation::Kind::WindowsInstaller;
+  allUsers.location = text("C:/Program Files/Mitcad");
+  allUsers.allUsers = true;
+
+  // The released source: an installation for all users updates as before.
+  Installation same = allUsers;
+  CHECK(!restrictToUserRights(same, false, false));
+  CHECK(same.kind == Installation::Kind::WindowsInstaller && same.canInstall());
+
+  // A test's source without administrator rights: announce only, with the
+  // reason in the log's "announce only: ..." line.
+  Installation restricted = allUsers;
+  CHECK(restrictToUserRights(restricted, true, false));
+  CHECK(restricted.kind == Installation::Kind::NotifyOnly);
+  CHECK(!restricted.canInstall());
+  CHECK(restricted.downloadPath(text("1.2.3")).isEmpty());
+  CHECK(restricted.describe().startsWith(text("announce only: an update from a test's source")));
+  CHECK(restricted.describe().contains(text("administrator rights")));
+
+  // With administrator rights already (the installer test in session 0),
+  // nothing is elevated: the update installs.
+  Installation administrator = allUsers;
+  CHECK(!restrictToUserRights(administrator, true, true));
+  CHECK(administrator.canInstall());
+
+  // Just for the current user, an AppImage, a macOS bundle: never elevated.
+  Installation user = allUsers;
+  user.allUsers = false;
+  CHECK(!restrictToUserRights(user, true, false));
+  CHECK(user.canInstall());
+  Installation appImage;
+  appImage.kind = Installation::Kind::AppImage;
+  appImage.location = text("/home/user/Mitcad.AppImage");
+  CHECK(!restrictToUserRights(appImage, true, false));
+  CHECK(appImage.canInstall());
+  Installation mac;
+  mac.kind = Installation::Kind::MacBundle;
+  mac.location = text("/Applications/Mitcad.app");
+  CHECK(!restrictToUserRights(mac, true, false));
+  CHECK(mac.canInstall());
+
+  // Off Windows no process counts as an administrator here.
+#ifndef _WIN32
+  CHECK(!processHasAdministratorRights());
+#endif
+}
+
 } // namespace
 
 int updateInstallerTests() {
@@ -317,6 +369,7 @@ int updateInstallerTests() {
   privateFolderTests();
   updaterArgumentTests();
   digestTests();
+  elevationTests();
   QSettings::setDefaultFormat(format);
   QCoreApplication::setOrganizationName(organization);
   QCoreApplication::setApplicationName(application);

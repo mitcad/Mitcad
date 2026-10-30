@@ -698,6 +698,15 @@ int measurementDrawingTests() {
   CHECK(near(layoutMeasurement(tiny, top).textPixels, measurementTextFloor(), 1e-9));
   CHECK(near(face.textPixels, 12.0, 1e-9)); // between them: the model's
 
+  // Nearly equal projection scales must not lose their small difference
+  // in the singular-value calculation (a face-on plane's repeated value).
+  const auto almostTop = [](const gp_Pnt& p) -> std::optional<QPointF> {
+    return QPointF(100.0 + 10.0 * (1.0 + 1e-8) * p.X(), 100.0 - 10.0 * p.Y());
+  };
+  CHECK(near(layoutMeasurement(tall, almostTop).textPixels, measurementTextCeiling() * (1.0 + 1e-8), 1e-9));
+  CHECK(near(layoutMeasurement(tiny, almostTop).textPixels, measurementTextFloor() * (1.0 + 1e-8), 1e-9));
+  CHECK(near(layoutMeasurement(drawn[0], almostTop).textPixels, 12.0 * (1.0 + 1e-8), 1e-9));
+
   // Arrowheads in the annotation's plane, as its text: seen with the
   // plane's y squashed to 0.7 (the plane turned away about X), an
   // arrowhead along X keeps its length but its width is squashed with the

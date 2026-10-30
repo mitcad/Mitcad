@@ -76,7 +76,9 @@ impl Input<'_> {
 
 /// Decompresses `data` into at most `size` bytes (more output is an error).
 pub fn decompress(data: &[u8], size: usize) -> Result<Vec<u8>, DwgError> {
-    let mut out: Vec<u8> = Vec::with_capacity(size);
+    // Sized from the data, not from `size` (a field of the file, up to
+    // 4 GiB): the output grows as the data gives it.
+    let mut out: Vec<u8> = Vec::with_capacity(size.min(data.len().saturating_mul(4)));
     let mut input = Input { data, pos: 0 };
     let mut pending = None;
     let copy_literals = |out: &mut Vec<u8>, input: &mut Input, n: usize| -> Result<(), DwgError> {
@@ -331,6 +333,14 @@ mod tests {
         };
         assert_eq!(i.long_count().unwrap(), 0xdd);
         assert_eq!(i.long_count().unwrap(), 0x232);
+    }
+
+    #[test]
+    fn a_page_size_the_file_gives_allocates_nothing_up_front() {
+        // The output was pre-sized from the size (up to 4 GiB from a
+        // field; usize::MAX overflowed the capacity, mitcad#931).
+        let packed = compress(b"abcdefgh");
+        assert_eq!(decompress(&packed, usize::MAX).unwrap(), b"abcdefgh");
     }
 
     #[test]

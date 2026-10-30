@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/platform/macos app/platform/NativeTestInput.hpp app/platform/NativeDialogs.hpp app/framework/TestDriver app/browser/ParametersDialog app/files/ProjectDialogs app/files/ProjectSettings app/view/NavigationPreferences.hpp app/files/LibraryDialogs app/render/RenderImageDialog
+# check-all sources: app/platform/macos app/platform/NativeTestInput.hpp app/platform/NativeDialogs.hpp app/framework/TestDriver app/framework/SettingsWindow app/browser/ParametersDialog app/files/ProjectDialogs app/files/ProjectSettings app/view/NavigationPreferences.hpp app/files/LibraryDialogs app/render/RenderImageDialog
 # Native dialog sizing contract and macOS button order (mitcad#812, #817),
 # in light and dark appearance: synthetic presenters, then Parameters, New
-# Project, Settings > Navigation, Insert from Library, Render Image and
-# Library Parts at normal and narrow sizes, with real pointer and key input.
+# Project, Settings > Navigation (with its section icons, mitcad#971),
+# Insert from Library, Render Image and Library Parts at normal and narrow
+# sizes, with real pointer and key input.
 # Usage: tools/ui-macos-native-dialog-layout-test.sh <app> [out directory]
 # Requires MITCAD_MACOS_NATIVE_UI=ON and a logged-in macOS window server.
 set -u

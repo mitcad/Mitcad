@@ -5,7 +5,7 @@
 //! (timeline, parameters, sketches).
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use mitcad_f3d::asm::AsmFile;
@@ -27,7 +27,8 @@ const USAGE: &str = "usage: mitcad-f3d-inspect <command> ...
   face-boundary <file> <entry> <guid>
                               the face carrying an appearance GUID: its
                               edges sampled and the point inside it
-  extract <file> <dir>        write every entry to <dir>
+  extract <file> <dir>        write every entry to <dir> (names that would
+                              leave <dir> are refused)
   dump <file> <entry> [n]     ASM records of a body blob as text (first n)
   bodies <file> [-v]          convert every body; per-body report
   history <file>              ASM history of the .smbh blobs: delta states
@@ -194,12 +195,16 @@ fn cmd_extract(path: &str, out: &str) -> Result<(), String> {
         if e.is_dir() {
             continue;
         }
+        let Some(p) = entry_path(Path::new(out), &e.name) else {
+            eprintln!("{}: not a relative path inside the folder, skipped", e.name);
+            failed = true;
+            continue;
+        };
         match f
             .archive()
             .read_with_limit(e, mitcad_f3d::zip::LARGE_ENTRY_LIMIT)
         {
             Ok(data) => {
-                let p = Path::new(out).join(&e.name);
                 if let Some(parent) = p.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                 }
@@ -216,6 +221,21 @@ fn cmd_extract(path: &str, out: &str) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+/// Where `extract` writes an archive entry: its name below `out`, or None
+/// for a name that could leave the folder (mitcad#934): an absolute or
+/// rooted name, one with a drive or other prefix, or one with a `..`
+/// component (with either separator, as an archive may use `\`).
+fn entry_path(out: &Path, name: &str) -> Option<PathBuf> {
+    if name.is_empty() || name.split(['/', '\\']).any(|c| c == "..") {
+        return None;
+    }
+    let relative = Path::new(name);
+    relative
+        .components()
+        .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+        .then(|| out.join(relative))
 }
 
 fn cmd_dump(path: &str, entry: &str, max: Option<usize>) -> Result<(), String> {
@@ -1301,5 +1321,46 @@ fn main() -> ExitCode {
             eprintln!("{e}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An archive entry named `../escape.txt` is not written beside the
+    /// output folder: `extract` fails and writes the other entries
+    /// (mitcad#934).
+    #[test]
+    fn extract_refuses_names_that_leave_the_folder() {
+        let dir =
+            std::env::temp_dir().join(format!("mitcad-f3d-inspect-extract-{}", std::process::id()));
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let escaped = dir.join("escape.txt");
+        let _ = std::fs::remove_file(&escaped);
+        let archive = dir.join("escape.f3d");
+        let zip = mitcad_f3d::zip::stored_zip(&[
+            ("inside.txt", &b"in"[..]),
+            ("../escape.txt", &b"out"[..]),
+        ]);
+        std::fs::write(&archive, zip).unwrap();
+        let result = cmd_extract(archive.to_str().unwrap(), out.to_str().unwrap());
+        assert!(result.is_err());
+        assert!(!escaped.exists());
+        assert_eq!(std::fs::read(out.join("inside.txt")).unwrap(), b"in");
+
+        let base = Path::new("out");
+        for bad in ["", "../x", "a/../../x", "a\\..\\x", "/etc/x", "\\x"] {
+            if bad == "\\x" && cfg!(not(windows)) {
+                // A plain file name on Unix; rooted on Windows.
+                continue;
+            }
+            assert_eq!(entry_path(base, bad), None, "{bad}");
+        }
+        assert_eq!(
+            entry_path(base, "a/b.txt"),
+            Some(base.join("a").join("b.txt"))
+        );
     }
 }

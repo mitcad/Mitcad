@@ -71,6 +71,10 @@ export MITCAD_NO_UPDATE_CHECK=1
 # The first dimension of a drawn sketch scales nothing (mitcad#860): the
 # tests' sketches keep the sizes they are drawn at, as their clicks expect.
 export MITCAD_SKETCH_FIRST_DIMENSION_SCALE=0
+# Create Sketch and the Construct commands on another component's face ask
+# nothing (mitcad#960): the tests' picks stay as they were. A test of the
+# question sets it to 1 after sourcing this file.
+export MITCAD_ASK_ACTIVATE_COMPONENT=0
 # No browser either: an address the app would open (a report's issue form,
 # mitcad#61) is logged instead ("Open URL (test, not opened): <url>").
 export MITCAD_TEST_LOG_URLS=1
@@ -969,6 +973,31 @@ ui_capture() {
   dump=$(mktemp /tmp/mitcad-ui.XXXXXX.xwd)
   xwd -root -silent > "$dump" && python3 "$(dirname "${BASH_SOURCE[0]}")/xwd2png.py" "$dump" "$1"
   rm -f "$dump"
+}
+
+# ui_update_test_hooks file: ON when the build that made the file (an
+# executable in a build folder) reads the update tests' environment
+# variables (the CMake option MITCAD_UPDATE_TEST_HOOKS, mitcad#921), OFF
+# when it does not; empty when unknown. UI_UPDATE_TEST_HOOKS (a ctest's
+# setting) decides first, then the first CMakeCache.txt above the file.
+ui_update_test_hooks() {
+  local dir
+  if [ -n "${UI_UPDATE_TEST_HOOKS:-}" ]; then
+    case $UI_UPDATE_TEST_HOOKS in
+      ON | on | 1 | TRUE | true | YES | yes) echo ON ;;
+      *) echo OFF ;;
+    esac
+    return 0
+  fi
+  dir=$(cd "$(dirname "$1")" 2> /dev/null && pwd) || return 0
+  while [ -n "$dir" ] && [ "$dir" != / ]; do
+    if [ -f "$dir/CMakeCache.txt" ]; then
+      if grep -qiE '^MITCAD_UPDATE_TEST_HOOKS:BOOL=(ON|1|TRUE|YES|Y)$' "$dir/CMakeCache.txt"; then echo ON; else echo OFF; fi
+      return 0
+    fi
+    dir=$(dirname "$dir")
+  done
+  return 0
 }
 
 ui_finish() {

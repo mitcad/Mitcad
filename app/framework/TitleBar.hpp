@@ -39,6 +39,8 @@ public:
   void setIndicator(QWidget* indicator);
   // The agent indicator (mitcad#710), right of the project indicator.
   void setAgentIndicator(QWidget* indicator);
+  // The chat panel's button (mitcad#947), right of the agent indicator.
+  void setChatButton(QWidget* button);
 
   // The height of the row.
   static int rowHeight();
@@ -56,8 +58,8 @@ public:
   bool isFloatingRow() const { return m_floatingRow; }
   // setFloatingRow: the controls shown and the title's box, named
   // ("titleHistory", "titleTabs", "titleBox", "titleIndicator",
-  // "titleAgent", "titleSearch"), in the row's coordinates, left to
-  // right.
+  // "titleAgent", "titleChat", "titleSearch"), in the row's coordinates,
+  // left to right.
   std::vector<std::pair<QString, QRect>> rowParts() const;
   // The box behind the document's name in the row's coordinates (empty
   // while there is no room for the name).
@@ -101,6 +103,7 @@ private:
   QWidget* m_search = nullptr;
   QPointer<QWidget> m_indicator;
   QPointer<QWidget> m_agentIndicator;
+  QPointer<QWidget> m_chatButton;
   QPointer<QWidget> m_watched;
   bool m_floatingRow = false;
 };

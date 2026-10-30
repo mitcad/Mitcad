@@ -183,8 +183,13 @@ QList<Endpoint> discover(QString* error) {
   return endpoints;
 }
 
-QByteArray encodeAuth(const Endpoint& endpoint) {
-  return QJsonDocument(QJsonObject{{QStringLiteral("mitcadAuth"), endpoint.token}}).toJson(QJsonDocument::Compact) + '\n';
+QByteArray encodeAuth(const Endpoint& endpoint, const QString& chat) {
+  QJsonObject authentication{{QStringLiteral("mitcadAuth"), endpoint.token}};
+  if (!chat.isEmpty()) {
+    // The chat panel's own bridge connection (mitcad#947).
+    authentication.insert(QStringLiteral("mitcadChat"), chat);
+  }
+  return QJsonDocument(authentication).toJson(QJsonDocument::Compact) + '\n';
 }
 
 bool processRunning(qint64 pid) {

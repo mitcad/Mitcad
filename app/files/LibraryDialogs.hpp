@@ -8,9 +8,11 @@
 // - LibraryBrowser: Insert from Library and the community library: search
 //   with a licence filter, the results as the part picker's grid of previews
 //   (PartGrid, mitcad#418: groups, favourites, In this design), details
-//   with the licence and the attribution, the version and the size,
-//   linked or a copy; libraries a community index lists are fetched from
-//   there.
+//   with the licence and the attribution, the version and the size (with
+//   the Standard and Supplier filters, mitcad#949), the row's designation
+//   and suppliers' part numbers, linked or a copy; libraries a community
+//   index lists are fetched from there, those an enabled source has under
+//   another id left out.
 // - LibraryPartsDialog: the design's library parts, each kept at the
 //   version chosen for it: another version or size, what changes, the
 //   update; and the parts list with the designations (a bill of
@@ -85,6 +87,9 @@ struct LibraryChoice {
   // closed table. `config` is then the combination's row, if any.
   QJsonObject parameters;
   QString license;
+  // The standard the part is named by (mitcad#949: the Standard filter's,
+  // insert_component's `standard`); empty: its row's first.
+  QString standard;
   bool link = true;
   // The manifest's mount frames of the part (mitcad#525): with any, Insert
   // from Library places it by one (Place Part).
@@ -108,6 +113,9 @@ private:
   void search();
   void select();
   void showVersion();
+  // The chosen row's designation (following the Standard filter) and its
+  // suppliers' part numbers under the size (mitcad#949).
+  void showRowDetails();
   // The size's or the options' fields in the tab order after the version.
   void orderFields();
   void getLibrary();
@@ -132,6 +140,7 @@ private:
   QLabel* m_details = nullptr;
   QComboBox* m_version = nullptr;
   SizeChooser* m_size = nullptr;
+  QLabel* m_rowDetails = nullptr;
   QRadioButton* m_link = nullptr;
   QRadioButton* m_copy = nullptr;
   QPushButton* m_insert = nullptr;
@@ -176,6 +185,8 @@ private:
   QTableWidget* m_table = nullptr;
   QComboBox* m_version = nullptr;
   SizeChooser* m_size = nullptr;
+  // The chosen part's suppliers' part numbers (mitcad#949).
+  QLabel* m_supplierParts = nullptr;
   QPlainTextEdit* m_changes = nullptr;
   QPushButton* m_update = nullptr;
   QPushButton* m_get = nullptr;

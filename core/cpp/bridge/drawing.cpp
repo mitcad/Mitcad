@@ -32,6 +32,7 @@ DrawingProjection project_view(const ShapeList& shapes, const DrawingView& view)
   spec.hidden = view.hidden;
   spec.smooth = view.smooth;
   spec.exact = view.exact;
+  spec.quick = view.quick;
   if (view.has_section) {
     spec.section = geometry::DrawingSection{point(view.section_origin), direction(view.section_normal)};
   }

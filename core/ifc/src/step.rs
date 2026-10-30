@@ -346,6 +346,7 @@ pub fn parse_record(offset: u64, text: &[u8]) -> Result<Record, StepError> {
         text,
         at: 0,
         offset,
+        depth: 0,
     };
     p.skip_space();
     let record = if p.peek() == Some(b'#') {
@@ -396,10 +397,18 @@ pub fn parse_record(offset: u64, text: &[u8]) -> Result<Record, StepError> {
     Ok(record)
 }
 
+/// How deeply lists and typed values may nest in a record. IFC's deepest
+/// values (lists of coordinate lists in a typed value) need a few levels;
+/// the limit keeps a hostile record (thousands of `(`) from overflowing
+/// the stack of the recursive parser.
+pub const MAX_NESTING: usize = 64;
+
 struct Parser<'a> {
     text: &'a [u8],
     at: usize,
     offset: u64,
+    /// The `(` levels open now ([`MAX_NESTING`] at most).
+    depth: usize,
 }
 
 impl Parser<'_> {
@@ -456,8 +465,18 @@ impl Parser<'_> {
         Ok(String::from_utf8_lossy(&self.text[start..self.at]).to_ascii_uppercase())
     }
 
-    /// `( value, value, ... )`.
+    /// `( value, value, ... )`, nested at most [`MAX_NESTING`] deep.
     fn arguments(&mut self) -> Result<Vec<Value>, StepError> {
+        if self.depth >= MAX_NESTING {
+            return Err(self.error("values nested too deeply"));
+        }
+        self.depth += 1;
+        let values = self.argument_list();
+        self.depth -= 1;
+        values
+    }
+
+    fn argument_list(&mut self) -> Result<Vec<Value>, StepError> {
         self.expect(b'(')?;
         let mut values = Vec::new();
         self.skip_space();
@@ -750,6 +769,46 @@ mod tests {
         assert!(parse_record(offset, &bytes).is_err());
         let open: Vec<_> = Records::new("#1=A('x".as_bytes()).collect();
         assert!(open[0].is_err());
+    }
+
+    #[test]
+    fn deep_nesting_fails_the_record_not_the_stack() {
+        // mitcad#930: 100 000 open lists would overflow the stack of the
+        // recursive parser; the record fails instead.
+        let mut text = String::from("#1=IFCWALL(");
+        text.push_str(&"(".repeat(100_000));
+        text.push_str("))");
+        let error = parse_record(0, text.as_bytes()).expect_err("too deep");
+        assert!(
+            error.message.contains("nested too deeply"),
+            "{}",
+            error.message
+        );
+        // Nesting up to the limit still reads (the record's own list is
+        // the first level).
+        let inner = MAX_NESTING - 1;
+        let text = format!("#2=IFCA({}1{})", "(".repeat(inner), ")".repeat(inner));
+        let Record::Instance(2, _, args) = parse_record(0, text.as_bytes()).expect("reads") else {
+            panic!("an instance");
+        };
+        let mut value = &args[0];
+        for _ in 1..inner {
+            value = &value.as_list().expect("a list")[0];
+        }
+        assert_eq!(value.as_list(), Some(&[Value::Integer(1)][..]));
+        let text = format!(
+            "#3=IFCA({}1{})",
+            "(".repeat(inner + 1),
+            ")".repeat(inner + 1)
+        );
+        assert!(parse_record(0, text.as_bytes()).is_err());
+        // Typed values count as levels too.
+        let text = format!(
+            "#4=IFCA({}1{})",
+            "IFCLABEL(".repeat(MAX_NESTING),
+            ")".repeat(MAX_NESTING)
+        );
+        assert!(parse_record(0, text.as_bytes()).is_err());
     }
 
     #[test]

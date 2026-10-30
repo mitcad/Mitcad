@@ -2938,12 +2938,23 @@ impl Document {
             return list_designs(path);
         }
         if options.list_references {
-            let listed = mitcad_import::reference_folder::list(
-                path,
-                &options.references,
-                &options.reference_files,
-            )
-            .map_err(ApiError)?;
+            // The application runs the listing in the import process
+            // (mitcad#922: `--import-worker --list-references`), watched by
+            // the memory guard like an import; a fault of the readers ends
+            // that process, not the application. Not caught here: the
+            // application reports the process's end.
+            let progress = Arc::new(mitcad_import::Progress::new());
+            let listed = MemoryGuard::new(&options)
+                .around(&progress, || {
+                    // (For tests: a panic as a stream parser's bug would.)
+                    mitcad_model::reader_guard::test_panic(path);
+                    mitcad_import::reference_folder::list(
+                        path,
+                        &options.references,
+                        &options.reference_files,
+                    )
+                })
+                .map_err(ApiError)?;
             return Ok(serde_json::to_string_pretty(&listed).expect("serializes"));
         }
         let report = self.import_timeline(path, &options)?;

@@ -123,3 +123,21 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter
     set_property(TEST "${timeline_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   endif()
 endif()
+
+# The chat panel (mitcad#947) with its scripted test agent in place of Claude
+# Code, through the real live MCP server and bridge. Linux runs the same
+# script as tools/ui-chat-test.sh among check-all's UI tests; Windows and
+# macOS run it here (app.ui-windows-chat, app.ui-macos-chat).
+if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND TARGET test_chat_agent
+   AND Python3_Interpreter_FOUND AND selection_ui_platform AND NOT selection_ui_platform STREQUAL "linux")
+  set(chat_ui_test "app.ui-${selection_ui_platform}-chat")
+  selection_ui_command_prefix(280)
+  add_test(NAME "${chat_ui_test}"
+    COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/tools/ui-chat-test.py"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:test_chat_agent>"
+            "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-chat"
+            "$<TARGET_FILE_DIR:Qt6::Core>")
+  set_tests_properties("${chat_ui_test}" PROPERTIES TIMEOUT 900 ${selection_ui_alone}
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+endif()

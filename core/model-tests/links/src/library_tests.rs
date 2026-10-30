@@ -13,7 +13,9 @@ use serde_json::{Value, json};
 use mitcad_model::features::SketchPlane;
 use mitcad_model::file::MemoryStore;
 use mitcad_model::ids::ComponentUid;
-use mitcad_model::library::{LibraryRequest, LibrarySource, LinkResolver};
+use mitcad_model::library::{
+    LibraryRequest, LibraryRow, LibrarySource, LinkResolver, SupplierPart,
+};
 use mitcad_model::test_support::def;
 use mitcad_model::testing::MockKernel;
 use mitcad_model::{Configurations, Document, InsertOptions, LibraryChange, LibraryPart};
@@ -87,6 +89,9 @@ fn rows_v1() -> Value {
 struct Library {
     versions: Mutex<BTreeMap<String, String>>,
     asked: Mutex<Vec<String>>,
+    /// The manifest's blocks of the rows (mitcad#949): none unless a test
+    /// gives them.
+    rows: Mutex<BTreeMap<String, LibraryRow>>,
 }
 
 impl Library {
@@ -142,6 +147,7 @@ impl LinkResolver for Library {
             part_number: None,
             supplier_url: None,
             build: None,
+            rows: self.rows.lock().unwrap().clone(),
         })
     }
 }
@@ -153,6 +159,7 @@ fn part(rev: &str, config: Option<&str>) -> LibraryPart {
         rev: rev.to_owned(),
         component: "pin".to_owned(),
         config: config.map(str::to_owned),
+        standard: String::new(),
     }
 }
 
@@ -736,4 +743,166 @@ fn the_library_usage_counts_each_configuration_row_of_a_component() {
         parts[0]["rows"],
         json!([{"config": "M4x16", "count": 35}, {"config": "M10x20", "count": 2}])
     );
+}
+
+/// mitcad#949: rows tagged with standards and suppliers' articles. A part
+/// inserted with a standard is named by it and keeps it; a size its row
+/// lacks takes the row's first; a row of no standard says so; the parts
+/// list carries the articles as a column's text.
+#[test]
+fn library_parts_follow_the_rows_standards_and_list_supplier_parts() {
+    let library = Library::new();
+    let article = |number: &str| SupplierPart {
+        supplier: "acme".to_owned(),
+        supplier_name: "Acme".to_owned(),
+        part_number: number.to_owned(),
+        material: "8.8".to_owned(),
+        finish: "zinc-plated".to_owned(),
+        checked: "2026-10-30".to_owned(),
+    };
+    {
+        let mut rows = library.rows.lock().unwrap();
+        rows.insert(
+            "M4x10".to_owned(),
+            LibraryRow {
+                standards: vec!["TP 1".to_owned(), "DN 1".to_owned()],
+                supplier_parts: vec![article("A 4 10")],
+            },
+        );
+        rows.insert(
+            "M4x16".to_owned(),
+            LibraryRow {
+                standards: vec!["DN 1".to_owned()],
+                supplier_parts: vec![article("A 4 16"), article("A 4 16 S")],
+            },
+        );
+        rows.insert(
+            "M10x20".to_owned(),
+            LibraryRow {
+                standards: vec!["non-standard".to_owned()],
+                supplier_parts: Vec::new(),
+            },
+        );
+    }
+    let mut doc = Document::new(MockKernel::default());
+    doc.set_link_resolver(Some(library.clone()));
+    // Inserted with the Standard filter's DN 1 (insert_component's
+    // `standard`): named and recorded by it.
+    let inserted = command(
+        &mut doc,
+        json!({"cmd": "insert_component", "library": {"id": "test-pins", "url": "https://example.org/pins.git",
+               "rev": V1, "component": "pin", "config": "M4x10", "standard": "DN 1"}, "link": true}),
+    )
+    .unwrap();
+    let parts = query(&doc, json!({"query": "library_parts"}))["parts"].clone();
+    let reference = &parts[0]["library"];
+    assert_eq!(reference["designation"], "DN 1 M4x10", "{inserted}");
+    assert_eq!(reference["standard"], "DN 1");
+    assert_eq!(reference["supplier_parts"][0]["part_number"], "A 4 10");
+    assert_eq!(reference["supplier_parts"][0]["supplier_name"], "Acme");
+    // Without a standard asked for: the row's first.
+    let mut plain = part(V1, Some("M4x10"));
+    let (first, _) = doc
+        .insert_library_component(&plain, &InsertOptions::default())
+        .unwrap();
+    let first_ref = doc
+        .assembly()
+        .component(first)
+        .unwrap()
+        .library
+        .clone()
+        .unwrap();
+    assert_eq!(first_ref.designation, "TP 1 M4x10");
+    assert_eq!(first_ref.standard, "TP 1");
+    // A standard the row lacks: its own first.
+    plain.config = Some("M4x16".to_owned());
+    plain.standard = "TP 1".to_owned();
+    let (din, _) = doc
+        .insert_library_component(&plain, &InsertOptions::default())
+        .unwrap();
+    let din_ref = doc
+        .assembly()
+        .component(din)
+        .unwrap()
+        .library
+        .clone()
+        .unwrap();
+    assert_eq!(din_ref.designation, "DN 1 M4x16");
+    assert_eq!(din_ref.supplier_parts.len(), 2);
+    // A row of no standard.
+    plain.config = Some("M10x20".to_owned());
+    let (odd, _) = doc
+        .insert_library_component(&plain, &InsertOptions::default())
+        .unwrap();
+    assert_eq!(doc.assembly().name(odd), "M10x20 (non-standard)");
+    // Another size keeps the standard it was named by where the row has it.
+    let lines = doc
+        .update_library_parts(&[LibraryChange {
+            component: first,
+            rev: None,
+            config: Some("M4x16".to_owned()),
+        }])
+        .unwrap();
+    assert_eq!(lines.len(), 1);
+    let moved = doc
+        .assembly()
+        .component(first)
+        .unwrap()
+        .library
+        .clone()
+        .unwrap();
+    assert_eq!(moved.designation, "DN 1 M4x16");
+    assert_eq!(moved.standard, "DN 1");
+    // Renamed after it (the name taken by the other part: with a number).
+    assert!(doc.assembly().name(first).starts_with("DN 1 M4x16"));
+    // The parts list: the articles' text per row.
+    let rows = query(&doc, json!({"query": "parts_list"}))["rows"].clone();
+    let din_row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["component"] == json!(din))
+        .unwrap()
+        .clone();
+    assert_eq!(
+        din_row["supplier_parts_text"],
+        "Acme A 4 16 (8.8 zinc-plated); Acme A 4 16 S (8.8 zinc-plated)"
+    );
+    assert_eq!(din_row["supplier_parts"].as_array().unwrap().len(), 2);
+    // The design keeps the standard and the articles: saved and read again.
+    let again = Document::from_json(&doc.to_json(), MockKernel::default()).unwrap();
+    let kept = again
+        .assembly()
+        .component(din)
+        .unwrap()
+        .library
+        .clone()
+        .unwrap();
+    assert_eq!(kept.standard, "DN 1");
+    assert_eq!(kept.supplier_parts.len(), 2);
+}
+
+/// A library of today without row blocks names its parts as before
+/// (mitcad#949): the component's standard, no articles.
+#[test]
+fn library_parts_without_row_blocks_read_as_before() {
+    let library = Library::new();
+    let mut doc = Document::new(MockKernel::default());
+    doc.set_link_resolver(Some(library));
+    let mut asked = part(V1, Some("M4x16"));
+    asked.standard = "DN 1".to_owned();
+    let (screw, _) = doc
+        .insert_library_component(&asked, &InsertOptions::default())
+        .unwrap();
+    let reference = doc
+        .assembly()
+        .component(screw)
+        .unwrap()
+        .library
+        .clone()
+        .unwrap();
+    assert_eq!(reference.designation, "TP 1 M4x16");
+    assert!(reference.standard.is_empty() && reference.supplier_parts.is_empty());
+    let saved: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    assert!(!saved.to_string().contains("supplier_parts"));
 }

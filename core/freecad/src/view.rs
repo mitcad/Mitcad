@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::document::{Property, parse_properties};
 use crate::value::{Color, Value};
-use crate::xml::{attr, parse};
+use crate::xml::{attr, parse, shallow};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ViewProvider {
@@ -76,7 +76,9 @@ pub struct GuiDocument {
 
 impl GuiDocument {
     pub fn parse(text: &str) -> Result<GuiDocument, String> {
-        let xml = parse(text)?;
+        // View data nested too deep is left out (it is not read anyway).
+        let (text, _) = shallow(text);
+        let xml = parse(&text)?;
         let root = xml.root_element();
         let mut providers = Vec::new();
         for data in root

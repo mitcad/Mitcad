@@ -37,8 +37,10 @@ QColor cardBorderColor(const QPalette& palette = QGuiApplication::palette());
 QColor cardShadowColor(const QPalette& palette = QGuiApplication::palette());
 
 // Sets a style sheet of a widget whose format has the error colour (or the
-// warning colour) where it says %1, e.g. "color: %1;", and keeps it in step
-// with the application's palette: it is set again when the palette changes.
+// warning colour) where it says %1, e.g. "color: %1;", for the palette of
+// what it sits on (its first ancestor with an opaque background, else the
+// application's; mitcad#961), and keeps it in step
+// with it: it is set again when the palette or the parent changes.
 // A format without %1 is set as it is; an empty one clears the style sheet.
 // Call it again to change the format.
 // While the format colours the text ("color: %1"), the widget's dynamic

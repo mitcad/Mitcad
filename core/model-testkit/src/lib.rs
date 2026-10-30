@@ -4838,6 +4838,61 @@ impl Kernel for MockKernel {
             _ => Vec::new(),
         })
     }
+
+    /// Each picked edge (the named ones, then those at the faces named,
+    /// each once) as its `edge_geometry` from start to end: two points,
+    /// three for a circle (start, centre, end; enough for tests). A name
+    /// the shape lacks is an error (mitcad#957).
+    fn edge_polylines(
+        &self,
+        shape: &MockShape,
+        edges: &[EdgeName],
+        faces: &[FaceName],
+        _deflection: f64,
+        _angle: f64,
+    ) -> Result<Vec<Vec<[f64; 3]>>, KernelError> {
+        self.call("edge_polylines")?;
+        let mut picked: Vec<EdgeName> = Vec::new();
+        for edge in edges {
+            let found = shape.matching_edges(edge);
+            if found.is_empty() {
+                return Err(KernelError::failed(format!("the body has no edge {edge}")));
+            }
+            for (a, b) in found {
+                let name = EdgeName::new(a.clone(), b.clone());
+                if !picked.contains(&name) {
+                    picked.push(name);
+                }
+            }
+        }
+        for face in faces {
+            if !shape.has_face(face) {
+                return Err(KernelError::failed(format!("the body has no face {face}")));
+            }
+            for (a, b) in &shape.edges {
+                if a.matches(face) || b.matches(face) {
+                    let name = EdgeName::new(a.clone(), b.clone());
+                    if !picked.contains(&name) {
+                        picked.push(name);
+                    }
+                }
+            }
+        }
+        picked
+            .iter()
+            .map(|edge| {
+                Ok(match self.edge_geometry(shape, edge)? {
+                    CurveGeometry::Line { start, end }
+                    | CurveGeometry::Other { start, end, .. } => {
+                        vec![start, end]
+                    }
+                    CurveGeometry::Circle {
+                        start, end, center, ..
+                    } => vec![start, center, end],
+                })
+            })
+            .collect()
+    }
 }
 
 /// A chain of a body's edges as `3 edges, 1 openings` (the named edges

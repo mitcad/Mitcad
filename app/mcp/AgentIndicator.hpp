@@ -42,9 +42,12 @@ struct ConnectedAgent {
   QString version;
   QDateTime since;
   QString id;
+  // The chat panel's own agent (mitcad#947).
+  bool chat = false;
 
   bool operator==(const ConnectedAgent& other) const {
-    return name == other.name && version == other.version && since == other.since && id == other.id;
+    return name == other.name && version == other.version && since == other.since && id == other.id &&
+           chat == other.chat;
   }
   bool operator!=(const ConnectedAgent& other) const { return !(*this == other); }
 };
@@ -70,9 +73,16 @@ public:
   // The listener did not start (or was not asked to), and why.
   void setUnavailable(const QString& reason);
   void setAgents(const QList<ConnectedAgent>& agents);
+  // The chat panel's agent while it works on a message (mitcad#947): "Claude
+  // Code working" instead of the connections; empty when it does not.
+  void setChatWorking(const QString& agentName);
 
   State state() const;
   const QList<ConnectedAgent>& agents() const { return m_agents; }
+  // The listener's instance id (empty while there is none) and why there is
+  // none (the chat panel, mitcad#947).
+  const QString& listenerInstance() const { return m_instance; }
+  const QString& unavailableReason() const { return m_reason; }
   // The bridge's command for this window, "" while there is no listener.
   QString connectCommand() const;
   // Its menu, filled when it is about to show (native chrome shows it too).
@@ -113,6 +123,7 @@ private:
   bool m_unavailable = false;
   QString m_reason;
   QList<ConnectedAgent> m_agents;
+  QString m_chatWorking;
   QMenu* m_menu = nullptr;
   QString m_logged;
   QString m_loggedPlace;

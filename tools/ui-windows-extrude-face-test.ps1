@@ -3,6 +3,7 @@
 # check-all sources: app/framework/Command.hpp app/framework/CommandSession.cpp
 # check-all sources: core/model/src/features/extrude.rs core/ffi/src/kernel/face_extrude.rs
 # check-all sources: core/cpp/bridge/face_extrude.cpp geometry/src/face_extrude.cpp tools/cli
+# check-all sources: app/commands/SketchNormal.cpp app/framework/ManipulatorOverlay.cpp
 # Input-driven Windows UI test of Extrude with a planar body face as the
 # profile (mitcad#535) in the build VM (tools/ui-windows-lib.ps1 says how
 # the input is posted), as tools/ui-extrude-face-test.sh on Linux (whose
@@ -16,6 +17,9 @@
 #      sketch: its side x = 20 selected before Extrude is the profile, not
 #      the square; 5 mm into the cube is Cut, chosen automatically:
 #      8000 -> 6000 mm3.
+#   3. A square sketch in component Brace, whose occurrence is turned a
+#      quarter about X (mitcad#958): Extrude's distance arrow points along
+#      the sketch's normal in the design (-Y), not the component's +Z.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-extrude-face-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -67,9 +71,19 @@ Set-Content -Encoding ascii $blockJson (@'
   {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [-40, 0], "width": 10, "height": 10}
 ]
 '@).Replace('RECT', $r)
+$turnedJson = Join-Path $work 'turned.json'
+Set-Content -Encoding ascii $turnedJson (@'
+[
+  {"cmd": "create_component", "name": "Brace", "transform": [[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 30]]},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 20}
+]
+'@)
 $imported = Join-Path $work 'imported.mitcad'
 $block = Join-Path $work 'block.mitcad'
-foreach ($run in @(@($cubeJson, (Join-Path $work 'cube.mitcad')), @($importedJson, $imported), @($blockJson, $block))) {
+$turned = Join-Path $work 'turned.mitcad'
+foreach ($run in @(@($cubeJson, (Join-Path $work 'cube.mitcad')), @($importedJson, $imported), @($blockJson, $block),
+                   @($turnedJson, $turned))) {
   $output = & $cli run $run[0] --save $run[1] 2>&1
   if ($LASTEXITCODE -ne 0) { Ui-Fail "mitcad-cli $($run[0]): $($output -join ' / ')" }
 }
@@ -147,5 +161,19 @@ Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
 Ui-ExpectNew 'Added extrude (Cut), distance -5, of a face' 'the side cut in' 30
 Ui-ExpectVolume 'Body Body1 \(F2\.b0\): volume 8000\.000 -> ([0-9.]+) mm3' 6000 'the cube 15 wide'
 if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
+Ui-StopApp
+
+Write-Host '--- 3. A sketch in a turned occurrence: the arrow along its normal in the design (mitcad#958)'
+Ui-StartApp 'extrude-face-turned' @('--open', $turned)
+Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
+Ui-Mark
+Ui-Step 'extrude (E)'                    { Ui-Key 'e' }
+Ui-ExpectNew "Extrude Profiles: 1 profile [profile $r of F1" 'the square in Brace is the profile'
+Ui-ExpectNew 'Manipulator Extrude distance at ' "the distance's arrow" 30
+# Brace:1 turns the component's +Z to the design's -Y.
+Ui-ExpectNew 'Arrow direction Extrude distance: 0.000,-1.000,0.000' "the arrow along the sketch's normal in the design" 30
+Expect-NoNew 'Arrow direction Extrude distance: 0.000,0.000,1.000' "not along the component's own normal"
+Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
+Ui-ExpectNew 'Command Extrude cancelled' 'cancelled'
 
 Ui-Finish 'UI Windows extrude face test'

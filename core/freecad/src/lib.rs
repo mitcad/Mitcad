@@ -44,7 +44,7 @@ pub use sketch::Sketch;
 pub use value::{Color, Enumeration, Expression, LinkRef, Material, ShapeRef, SubName, Value};
 pub use version::Version;
 pub use view::{GuiDocument, ViewProvider};
-pub use xml::Element;
+pub use xml::{ELEMENT_DEPTH, Element, XML_DEPTH};
 
 /// The most bytes `Document.xml` or `GuiDocument.xml` may have.
 const MAX_XML: u64 = 1 << 30;

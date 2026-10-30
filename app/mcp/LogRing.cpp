@@ -16,10 +16,15 @@ namespace mitcad::mcp {
 namespace {
 
 constexpr std::size_t kKept = 5000;
+// mitcad#935: the ring's bytes too, and each line's text cut so that its
+// formatted line stays under kMaxLogLineBytes.
+constexpr std::size_t kKeptBytes = 8 * 1024 * 1024;
+constexpr qsizetype kTextBytes = kMaxLogLineBytes - 512;
 
 struct Ring {
   std::mutex mutex;
   std::deque<LogLine> lines;
+  std::size_t bytes = 0;
   quint64 next = 1;
   QtMessageHandler previous = nullptr;
   bool installed = false;
@@ -29,6 +34,47 @@ struct Ring {
 Ring& ring() {
   static Ring instance;
   return instance;
+}
+
+// What a line takes in the ring, about: its strings' characters and the
+// line itself.
+std::size_t lineBytes(const LogLine& line) {
+  return sizeof(LogLine) +
+         static_cast<std::size_t>(line.text.size() + line.level.size() + line.thread.size()) * sizeof(QChar);
+}
+
+// The text as the ring keeps it: whole when it takes at most kTextBytes in
+// UTF-8, a line break counted with the formatted line's indent; else as
+// much as fits and a marker of how many characters were cut. Only the kept
+// part is walked, however long the text.
+QString keptText(const QString& text) {
+  qsizetype bytes = 0;
+  qsizetype index = 0;
+  const qsizetype size = text.size();
+  while (index < size) {
+    const char16_t unit = text.at(index).unicode();
+    qsizetype cost = 3;
+    qsizetype units = 1;
+    if (unit == u'\n') {
+      cost = 5;
+    } else if (unit < 0x80) {
+      cost = 1;
+    } else if (unit < 0x800) {
+      cost = 2;
+    } else if (QChar::isHighSurrogate(unit) && index + 1 < size && text.at(index + 1).isLowSurrogate()) {
+      cost = 4;
+      units = 2;
+    }
+    if (bytes + cost > kTextBytes) {
+      break;
+    }
+    bytes += cost;
+    index += units;
+  }
+  if (index >= size) {
+    return text;
+  }
+  return text.left(index) + QStringLiteral(" … [%1 more characters cut]").arg(size - index);
 }
 
 // A message logged while this thread is in the handler (by the sink, or
@@ -81,7 +127,7 @@ void handle(QtMsgType type, const QMessageLogContext& context, const QString& me
   t_handling = true;
   LogLine line;
   line.level = levelName(type);
-  line.text = message;
+  line.text = keptText(message);
   line.time = QDateTime::currentMSecsSinceEpoch();
   line.thread = threadName();
   QtMessageHandler previous = nullptr;
@@ -90,7 +136,9 @@ void handle(QtMsgType type, const QMessageLogContext& context, const QString& me
     const std::lock_guard<std::mutex> lock(r.mutex);
     line.sequence = r.next++;
     r.lines.push_back(line);
-    while (r.lines.size() > kKept) {
+    r.bytes += lineBytes(line);
+    while (r.lines.size() > kKept || (r.bytes > kKeptBytes && r.lines.size() > 1)) {
+      r.bytes -= lineBytes(r.lines.front());
       r.lines.pop_front();
     }
     previous = r.previous;
@@ -170,5 +218,11 @@ QString formatLogLine(const LogLine& line) {
 }
 
 void setLogSink(LogSink sink) { ring().sink.store(sink); }
+
+std::size_t logRingBytes() {
+  Ring& r = ring();
+  const std::lock_guard<std::mutex> lock(r.mutex);
+  return r.bytes;
+}
 
 } // namespace mitcad::mcp

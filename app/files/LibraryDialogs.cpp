@@ -382,6 +382,14 @@ LibraryBrowser::LibraryBrowser(bool community, QWidget* parent) : QDialog(parent
   side->addLayout(form);
   m_size = new SizeChooser;
   side->addWidget(m_size);
+  // The row's designation and suppliers' part numbers (mitcad#949).
+  m_rowDetails = new QLabel;
+  m_rowDetails->setObjectName(QStringLiteral("libraryRowDetails"));
+  m_rowDetails->setWordWrap(true);
+  m_rowDetails->setTextFormat(Qt::RichText);
+  m_rowDetails->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  m_rowDetails->hide();
+  side->addWidget(m_rowDetails);
   m_link = new QRadioButton(tr("&Linked"));
   m_link->setToolTip(tr("Read only; follows the version chosen for it"));
   m_copy = new QRadioButton(tr("Co&py"));
@@ -434,10 +442,21 @@ LibraryBrowser::LibraryBrowser(bool community, QWidget* parent) : QDialog(parent
   });
   connect(update, &QPushButton::clicked, this, &LibraryBrowser::updateLibraries);
   mac::styleDialog(this);
-  connect(m_size, &SizeChooser::rowChanged, this, [](const QString& row) {
+  connect(m_size, &SizeChooser::rowChanged, this, [this](const QString& row) {
     if (!row.isEmpty()) {
       qInfo().noquote() << QStringLiteral("Library browser size %1").arg(row);
     }
+    showRowDetails();
+  });
+  // The Standard and Supplier filters (mitcad#949): the designation follows
+  // the standard; the filters' fields in the tab order.
+  connect(m_size, &SizeChooser::filterChanged, this, [this] {
+    showRowDetails();
+    orderFields();
+  });
+  // The grid's supplier is the size's to start with.
+  connect(m_grid, &PartGrid::supplierChanged, this, [this](const QString& supplier) {
+    m_size->setSupplierFilter(supplier);
   });
   // An option chosen may make other fields (mitcad#810): the tab order again.
   connect(m_size, &SizeChooser::optionsChanged, this, &LibraryBrowser::orderFields);
@@ -467,17 +486,16 @@ void LibraryBrowser::search() {
   if (licenses.isValid()) {
     query.insert(QStringLiteral("licenses"), QJsonArray::fromStringList(licenses.toStringList()));
   }
+  // The enabled sources (mitcad#949): a library an index offers that one
+  // of them has under another id is left out, logged once.
+  const QStringList sources = LibrarySettings::load().enabledUrls();
+  query.insert(QStringLiteral("sources"), QJsonArray::fromStringList(sources));
   const QJsonObject answer = command("library_search", query);
   m_items = {};
   const QJsonArray components = answer.value(QStringLiteral("components")).toArray();
-  QJsonArray libraries;
-  for (const QJsonValue& value : answer.value(QStringLiteral("libraries")).toArray()) {
-    // A fetched library's components are listed themselves; the community
-    // view lists every library of the indexes.
-    if (m_community || !value.toObject().value(QStringLiteral("fetched")).toBool()) {
-      libraries.append(value);
-    }
-  }
+  QStringList leftOut;
+  const QJsonArray libraries = browserLibraries(answer, sources, m_community, &leftOut);
+  logLeftOutLibraries(leftOut);
   const auto addAll = [this](const QJsonArray& list, const char* kind) {
     for (const QJsonValue& value : list) {
       QJsonObject item = value.toObject();
@@ -531,6 +549,7 @@ void LibraryBrowser::select() {
   m_version->clear();
   m_version->blockSignals(false);
   m_size->setTable({});
+  m_rowDetails->hide();
   m_insert->setEnabled(false);
   m_get->setEnabled(false);
   m_shown = {};
@@ -659,9 +678,15 @@ void LibraryBrowser::showVersion() {
   // An open table's options, filtered by the rules (mitcad#810): asked of
   // the library's component at the version shown.
   m_size->setOptionsQuery(libraryOptionsQuery(libraryCommand, str(item, "url"), str(item, "library"), rev,
-                                              str(item, "id")));
-  m_size->setTable(component.value(QStringLiteral("configurations")).toObject());
+                                              str(item, "id"), [this] { return m_size->standard(); }));
+  // The Standard and Supplier filters (mitcad#949): the component's
+  // standards in its order, the grid's supplier to start with.
+  QJsonObject table = component.value(QStringLiteral("configurations")).toObject();
+  table.insert(QStringLiteral("standards"), component.value(QStringLiteral("standards")));
+  m_size->setSupplierFilter(m_grid->supplierFilter(), false);
+  m_size->setTable(table);
   m_insert->setEnabled(true);
+  showRowDetails();
   orderFields();
   qInfo().noquote() << QStringLiteral("Library browser selected %1/%2: version %3, size %4, licence %5")
                            .arg(str(item, "library"), str(item, "id"), m_version->currentText(),
@@ -671,6 +696,48 @@ void LibraryBrowser::showVersion() {
     qInfo().noquote() << QStringLiteral("Library browser options of %1/%2: %3")
                              .arg(str(item, "library"), str(item, "id"), m_size->summary());
   }
+}
+
+void LibraryBrowser::showRowDetails() {
+  const int index = currentIndex();
+  const QString row = m_size->row();
+  if (index < 0 || index >= m_items.size() || m_shown.isEmpty() || row.isEmpty()) {
+    m_rowDetails->hide();
+    return;
+  }
+  const QJsonObject item = m_items[index].toObject();
+  // The designation as the part would get it: the library's own answer,
+  // with the standard of the Standard filter.
+  QJsonObject asked{{QStringLiteral("url"), str(item, "url")},
+                    {QStringLiteral("id"), str(item, "library")},
+                    {QStringLiteral("rev"), m_version->currentData().toString()},
+                    {QStringLiteral("component"), str(item, "id")},
+                    {QStringLiteral("config"), row}};
+  if (!m_size->standard().isEmpty()) {
+    asked.insert(QStringLiteral("standard"), m_size->standard());
+  }
+  if (m_size->isOpen()) {
+    asked.insert(QStringLiteral("values"), m_size->parameters());
+  }
+  const QJsonObject configured = command("library_configure", asked);
+  const QString designation = str(configured, "designation");
+  QJsonArray parts = configured.value(QStringLiteral("supplier_parts")).toArray();
+  if (parts.isEmpty()) {
+    parts = m_size->filterRow(row).value(QStringLiteral("supplier_parts")).toArray();
+  }
+  const QString numbers = supplierPartsText(parts);
+  QStringList lines;
+  if (!designation.isEmpty()) {
+    lines << tr("<b>Designation:</b> %1").arg(escaped(designation));
+  }
+  if (!numbers.isEmpty()) {
+    lines << tr("<b>Supplier part numbers:</b> %1").arg(escaped(numbers));
+  }
+  m_rowDetails->setText(lines.join(QStringLiteral("<br>")));
+  m_rowDetails->setVisible(!lines.isEmpty());
+  qInfo().noquote() << QStringLiteral("Library browser row %1: designation %2; supplier part numbers %3")
+                           .arg(row, designation.isEmpty() ? QStringLiteral("-") : designation,
+                                numbers.isEmpty() ? QStringLiteral("none") : numbers);
 }
 
 void LibraryBrowser::orderFields() {
@@ -775,6 +842,8 @@ void LibraryBrowser::insert() {
   // combination matches as `config`, else none.
   choice.parameters = m_size->parameters();
   choice.license = item.value(QStringLiteral("license")).toString();
+  // The designation follows the Standard filter (mitcad#949).
+  choice.standard = m_size->standard();
   choice.link = m_link->isChecked();
   // Its mount frames at the version shown (mitcad#525).
   for (const QJsonValue& value : m_shown.value(QStringLiteral("components")).toArray()) {
@@ -820,6 +889,13 @@ LibraryPartsDialog::LibraryPartsDialog(const QJsonArray& parts, const QJsonArray
   page->addLayout(editor);
   m_size = new SizeChooser;
   page->addWidget(m_size);
+  // The chosen part's suppliers' part numbers (mitcad#949).
+  m_supplierParts = new QLabel;
+  m_supplierParts->setObjectName(QStringLiteral("libraryPartSupplierParts"));
+  m_supplierParts->setWordWrap(true);
+  m_supplierParts->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  m_supplierParts->hide();
+  page->addWidget(m_supplierParts);
   m_changes = new QPlainTextEdit;
   m_changes->setReadOnly(true);
   m_changes->setPlaceholderText(tr("Show Changes lists what an update changes."));
@@ -841,18 +917,27 @@ LibraryPartsDialog::LibraryPartsDialog(const QJsonArray& parts, const QJsonArray
 
   auto* listPage = new QWidget;
   auto* listLayout = new QVBoxLayout(listPage);
-  auto* bom = new QTableWidget(0, 5);
+  auto* bom = new QTableWidget(0, 6);
   bom->setObjectName(QStringLiteral("partsList"));
-  bom->setHorizontalHeaderLabels({tr("Qty"), tr("Part"), tr("Library"), tr("Version"), tr("Licence")});
+  bom->setHorizontalHeaderLabels(
+      {tr("Qty"), tr("Part"), tr("Library"), tr("Version"), tr("Licence"), tr("Supplier part numbers")});
   bom->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
   bom->setEditTriggers(QAbstractItemView::NoEditTriggers);
   mac::styleListTable(bom);
   bom->setRowCount(int(list.size()));
-  QStringList csv{QStringLiteral("Quantity,Part,Library,Version,Licence")};
+  QStringList csv{QStringLiteral("Quantity,Part,Library,Version,Licence,Supplier part numbers")};
   for (int i = 0; i < list.size(); ++i) {
     const QJsonObject r = list[i].toObject();
-    const QStringList cells{QString::number(r.value(QStringLiteral("quantity")).toInt()), str(r, "designation"),
-                            str(r, "library"), str(r, "version"), str(r, "license")};
+    // The suppliers' articles of the part's row (mitcad#949).
+    const QString numbers = str(r, "supplier_parts_text").isEmpty()
+                                ? supplierPartsText(r.value(QStringLiteral("supplier_parts")).toArray())
+                                : str(r, "supplier_parts_text");
+    const QStringList cells{QString::number(r.value(QStringLiteral("quantity")).toInt()),
+                            str(r, "designation"),
+                            str(r, "library"),
+                            str(r, "version"),
+                            str(r, "license"),
+                            numbers};
     for (int c = 0; c < cells.size(); ++c) {
       bom->setItem(i, c, new QTableWidgetItem(cells[c]));
     }
@@ -861,10 +946,11 @@ LibraryPartsDialog::LibraryPartsDialog(const QJsonArray& parts, const QJsonArray
       quoted << QStringLiteral("\"%1\"").arg(QString(cell).replace(QLatin1Char('"'), QStringLiteral("\"\"")));
     }
     csv << quoted.join(QLatin1Char(','));
-    qInfo().noquote() << QStringLiteral("Parts list row: %1 x %2%3")
+    qInfo().noquote() << QStringLiteral("Parts list row: %1 x %2%3%4")
                              .arg(cells[0], cells[1],
                                   cells[2].isEmpty() ? QString()
-                                                     : QStringLiteral(" (%1 %2, %3)").arg(cells[2], cells[3], cells[4]));
+                                                     : QStringLiteral(" (%1 %2, %3)").arg(cells[2], cells[3], cells[4]),
+                                  numbers.isEmpty() ? QString() : QStringLiteral("; %1").arg(numbers));
   }
   bom->resizeColumnsToContents();
   listLayout->addWidget(bom, 1);
@@ -1022,8 +1108,26 @@ void LibraryPartsDialog::versionChosen() {
     }
   }
   m_loading = true;
-  m_size->setTable(component.value(QStringLiteral("configurations")).toObject(), part.config);
+  // The Standard and Supplier filters in the component's order (mitcad#949).
+  QJsonObject table = component.value(QStringLiteral("configurations")).toObject();
+  table.insert(QStringLiteral("standards"), component.value(QStringLiteral("standards")));
+  m_size->setTable(table, part.config);
   m_size->setEnabled(part.part.value(QStringLiteral("linked")).toBool() && !component.isEmpty());
+  // The suppliers' part numbers of the row chosen: the library's at this
+  // version, else those recorded with the part.
+  QJsonArray articles = m_size->filterRow(m_size->row().isEmpty() ? part.config : m_size->row())
+                            .value(QStringLiteral("supplier_parts"))
+                            .toArray();
+  if (articles.isEmpty()) {
+    articles = library.value(QStringLiteral("supplier_parts")).toArray();
+  }
+  const QString numbers = supplierPartsText(articles);
+  m_supplierParts->setText(tr("Supplier part numbers: %1").arg(numbers));
+  m_supplierParts->setVisible(!numbers.isEmpty());
+  if (!numbers.isEmpty()) {
+    qInfo().noquote() << QStringLiteral("Library part %1 supplier part numbers: %2")
+                             .arg(str(part.part, "name"), numbers);
+  }
   // Tab order: the version, then the sizes.
   QWidget* previous = m_version;
   for (QComboBox* combo : m_size->combos()) {

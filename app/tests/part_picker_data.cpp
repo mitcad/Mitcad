@@ -7,9 +7,11 @@
 // groups by name, a part in two groups listed once, a group's star over
 // its subtree) and the design's used library parts read from the model's
 // `library_usage` answer (core/model-tests/links/src/library_tests.rs and
-// build/source_tests.rs check the model's side).
+// build/source_tests.rs check the model's side), and the grid's Supplier
+// filter (mitcad#949).
 #include "library/PartFavourites.hpp"
 #include "library/PartGroups.hpp"
+#include "library/PartSuppliers.hpp"
 #include "library/UsedParts.hpp"
 
 #include <cstdio>
@@ -462,6 +464,71 @@ void groupTreeTests() {
   CHECK(favourites.starredParts().isEmpty());
 }
 
+// The grid's Supplier filter (mitcad#949): a component's suppliers from
+// library_search (its rows' and its own), a tile of one row's, the filter's
+// choices, a component no row of which the supplier sells hidden, and the
+// choice kept in the settings.
+void supplierFilterTests() {
+  const QJsonObject screw{
+      {QStringLiteral("id"), QStringLiteral("iso4762")},
+      {QStringLiteral("suppliers"),
+       QJsonArray{QJsonObject{{QStringLiteral("id"), QStringLiteral("wurth")}, {QStringLiteral("name"), QStringLiteral("Würth")}},
+                  QJsonObject{{QStringLiteral("id"), QStringLiteral("etra")}, {QStringLiteral("name"), QStringLiteral("Etra")}}}}};
+  QJsonObject nut{{QStringLiteral("id"), QStringLiteral("iso4032")}};
+  nut.insert(QStringLiteral("suppliers"),
+             QJsonArray{QJsonObject{{QStringLiteral("id"), QStringLiteral("etra")}, {QStringLiteral("name"), QStringLiteral("Etra")}}});
+  // A BUILD part of a maker of its own, without rows' articles.
+  const QJsonObject profile{{QStringLiteral("id"), QStringLiteral("profile-30")},
+                            {QStringLiteral("supplier"), QStringLiteral("Profiles Inc")}};
+  const QJsonObject washer{{QStringLiteral("id"), QStringLiteral("iso7089")}};
+  const QList<PartSupplier> screwSuppliers = componentSuppliers(screw);
+  CHECK(screwSuppliers.size() == 2 && screwSuppliers.first().name == QStringLiteral("Würth"));
+  const QList<PartSupplier> profileSuppliers = componentSuppliers(profile);
+  CHECK(profileSuppliers.size() == 1 && profileSuppliers.first().id == QStringLiteral("Profiles Inc"));
+  CHECK(componentSuppliers(washer).isEmpty());
+  // The choices: each supplier once, by name.
+  const QList<QList<PartSupplier>> lists{screwSuppliers, componentSuppliers(nut), profileSuppliers,
+                                         componentSuppliers(washer)};
+  const QList<PartSupplier> choices = supplierChoices(lists);
+  QStringList names;
+  for (const PartSupplier& one : choices) {
+    names << one.name;
+  }
+  CHECK(names == (QStringList{QStringLiteral("Etra"), QStringLiteral("Profiles Inc"), QStringLiteral("Würth")}));
+  // Würth chosen: the nut and the washer are hidden, the screw stays.
+  const auto shown = [&lists](const QString& supplier) {
+    QList<int> kept;
+    for (int i = 0; i < lists.size(); ++i) {
+      if (soldBy(lists.at(i), supplier)) {
+        kept << i;
+      }
+    }
+    return kept;
+  };
+  CHECK(shown(QStringLiteral("wurth")) == QList<int>{0});
+  CHECK(shown(QStringLiteral("etra")) == (QList<int>{0, 1}));
+  CHECK(shown(QString()) == (QList<int>{0, 1, 2, 3}));
+  CHECK(supplierNames(screwSuppliers) == QStringLiteral("Würth, Etra"));
+  // A tile of one row: that row's suppliers, then the component's own.
+  const QJsonObject table{
+      {QStringLiteral("rows"),
+       QJsonArray{QJsonObject{{QStringLiteral("name"), QStringLiteral("M6x8")},
+                              {QStringLiteral("supplier_parts"),
+                               QJsonArray{QJsonObject{{QStringLiteral("supplier"), QStringLiteral("wurth")},
+                                                      {QStringLiteral("supplier_name"), QStringLiteral("Würth")},
+                                                      {QStringLiteral("part_number"), QStringLiteral("0084 6 8")}}}}},
+                  QJsonObject{{QStringLiteral("name"), QStringLiteral("M6x10")}}}}};
+  const QList<PartSupplier> row = rowPartSuppliers(table, QStringLiteral("M6x8"), QStringLiteral("Maker"));
+  CHECK(row.size() == 2 && row.first().id == QStringLiteral("wurth") && row.last().id == QStringLiteral("Maker"));
+  CHECK(!soldBy(rowPartSuppliers(table, QStringLiteral("M6x10"), QString()), QStringLiteral("wurth")));
+  // The choice kept in the settings, All when cleared.
+  CHECK(savedSupplierFilter().isEmpty());
+  saveSupplierFilter(QStringLiteral("wurth"));
+  CHECK(savedSupplierFilter() == QStringLiteral("wurth"));
+  saveSupplierFilter(QString());
+  CHECK(savedSupplierFilter().isEmpty());
+}
+
 } // namespace
 
 int partPickerDataTests() {
@@ -480,6 +547,7 @@ int partPickerDataTests() {
   orderAndSettingsTests();
   rowTests();
   groupTreeTests();
+  supplierFilterTests();
   QSettings::setDefaultFormat(format);
   QCoreApplication::setOrganizationName(organization);
   QCoreApplication::setApplicationName(application);

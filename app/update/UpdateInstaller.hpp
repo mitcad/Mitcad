@@ -52,6 +52,18 @@ struct Installation {
   void removeLeftovers() const;
 };
 
+// Whether this process has administrator rights already (Windows: a member
+// of the Administrators group with an elevated token); false elsewhere.
+bool processHasAdministratorRights();
+
+// mitcad#921: an update from a test's source (UpdateSource::testSource: an
+// address, key or certificate a test build took from the environment)
+// never asks for administrator rights. A Windows installation for all users
+// then only announces, unless this process has those rights already
+// (`administrator`; the installer tests run so), when the update elevates
+// nothing. True when it changed `installation` (with the reason).
+bool restrictToUserRights(Installation& installation, bool testSource, bool administrator);
+
 // mitcad-updater.exe's command line (app/update/UpdaterWindows.cpp) for the
 // verified installer `file` with its SHA-256 `sha256` from the verified
 // manifest (64 lower-case hex digits), which the updater checks again right

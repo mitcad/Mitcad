@@ -2,6 +2,7 @@
 #include "LiveServer.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <exception>
 #include <stdexcept>
 #include <vector>
@@ -20,9 +21,12 @@
 
 #include "MainWindow.hpp"
 #include "AgentIndicator.hpp"
+#include "ChatGate.hpp"
+#include "EndpointLimits.hpp"
 #include "LiveErrors.hpp"
 #include "LocalEndpoint.hpp"
 #include "LogRing.hpp"
+#include "LoopbackListener.hpp"
 #include "mitcad_bridge/lib.h"
 
 namespace mitcad::mcp {
@@ -55,6 +59,14 @@ struct LiveServer::State {
     QDateTime since;
     // This connection among the others, to end it alone (mitcad#706).
     QString id = randomId();
+    // When it came among the connections (mitcad#935): the oldest one that
+    // has not authenticated gives way to a new one.
+    quint64 order = 0;
+    // The chat panel's marker of its own bridge connection (mitcad#947):
+    // its calls go through the panel's approvals (ChatGate), and one that
+    // waits for the user's answer holds the connection's next requests.
+    QString chat;
+    bool waiting = false;
     rust::Box<LiveMcpSession> session = new_live_mcp_session();
   };
 
@@ -64,6 +76,7 @@ struct LiveServer::State {
   Endpoint endpoint;
   bool published = false;
   bool handling = false;
+  quint64 connections = 0;
   std::vector<std::shared_ptr<Client>> clients;
 
   State(LiveServer* object, MainWindow* documentWindow) : owner(object), window(documentWindow) {}
@@ -74,7 +87,7 @@ struct LiveServer::State {
     QList<ConnectedAgent> agents;
     for (const auto& client : clients) {
       if (client->initialized && client->socket && client->socket->state() == QAbstractSocket::ConnectedState) {
-        agents.append({client->displayName, client->version, client->since, client->id});
+        agents.append({client->displayName, client->version, client->since, client->id, !client->chat.isEmpty()});
       }
     }
     if (window) {
@@ -103,12 +116,112 @@ struct LiveServer::State {
     }
   }
 
-  void frame(Client& client, const QByteArray& message) {
+  static bool connected(const Client& client) {
+    return client.socket && client.socket->state() == QAbstractSocket::ConnectedState;
+  }
+
+  int authenticatedClients() const {
+    return static_cast<int>(std::count_if(clients.begin(), clients.end(), [](const auto& client) {
+      return client->authenticated && connected(*client);
+    }));
+  }
+
+  ChatGate* chatGate() const { return window ? window->chatGate() : nullptr; }
+
+  // A tool's result back to the client, through the session's pending
+  // request.
+  void finishTool(Client& client, const QJsonObject& value, bool error) {
+    try {
+      const QByteArray result = QJsonDocument(value).toJson(QJsonDocument::Compact);
+      const std::string response(client.session->finish_mcp(rust::Str(result.constData(), size_t(result.size())), error));
+      write(client, QByteArray::fromStdString(response) + '\n');
+    } catch (const std::exception& failure) {
+      write(client, protocolError(-32603, QString::fromUtf8(failure.what())));
+    }
+  }
+
+  void runTool(Client& client, const QString& tool, const QJsonObject& arguments) {
+    QJsonObject value;
+    bool error = false;
+    // The chat's own calls (mitcad#947): it tells its changes of the
+    // design from the user's.
+    const QString chat = client.chat;
+    if (ChatGate* gate = chat.isEmpty() ? nullptr : chatGate()) {
+      gate->toolStarted(chat, tool);
+    }
+    try {
+      if (!window) {
+        throw std::runtime_error("The application document window has closed");
+      }
+      // The live catalog (mitcad#265): MainWindowMcp.cpp, MainWindowMcpUi.cpp.
+      // An applied model command is an error only when a feature it
+      // added or edited fails; finish_mcp decides (mitcad#401).
+      value = window->mcpTool(tool, arguments);
+    } catch (const Refusal& refusal) {
+      // Busy (when to retry), a panel's state.
+      error = true;
+      value = refusal.fields();
+      value.insert(QStringLiteral("error"), QString::fromUtf8(refusal.what()));
+    } catch (const std::exception& failure) {
+      error = true;
+      value = {{QStringLiteral("error"), QString::fromUtf8(failure.what())}};
+    }
+    if (ChatGate* gate = chat.isEmpty() ? nullptr : chatGate()) {
+      gate->toolFinished(chat, tool, error);
+    }
+    finishTool(client, value, error);
+  }
+
+  // The user answered a chat call's card: run it or refuse it, then the
+  // connection's next requests.
+  void resume(const std::weak_ptr<Client>& weak, const QString& tool, const QJsonObject& arguments, bool allowed,
+              const QString& reason) {
+    const std::shared_ptr<Client> client = weak.lock();
+    if (!client || !client->waiting || !connected(*client)) {
+      return;
+    }
+    if (handling) {
+      // Another client's model command runs Qt's progress loop: after it.
+      QTimer::singleShot(20, owner, [this, weak, tool, arguments, allowed, reason] {
+        resume(weak, tool, arguments, allowed, reason);
+      });
+      return;
+    }
+    client->waiting = false;
+    handling = true;
+    if (allowed) {
+      runTool(*client, tool, arguments);
+    } else {
+      finishTool(*client,
+                 {{QStringLiteral("error"), reason.isEmpty() ? QObject::tr("The user did not allow this.") : reason},
+                  {QStringLiteral("denied"), true}},
+                 true);
+    }
+    handling = false;
+    drain(client);
+  }
+
+  void frame(const std::shared_ptr<Client>& shared, const QByteArray& message) {
+    Client& client = *shared;
     if (!client.authenticated) {
       const auto object = QJsonDocument::fromJson(message).object();
-      const bool accepted = object.size() == 1 && object.value(QStringLiteral("mitcadAuth")).toString() == endpoint.token;
-      write(client, accepted ? QByteArray("{\"authenticated\":true}\n") : QByteArray("{\"authenticated\":false}\n"));
+      // The chat panel's own connection carries its marker beside the token
+      // (mitcad#947).
+      const QString marker = object.value(QStringLiteral("mitcadChat")).toString();
+      const bool chatMarked = object.size() == 2 && !marker.isEmpty() && marker.size() <= kMaxChatMarker;
+      // The token in constant time; only authenticated connections hold
+      // the clients' slots (mitcad#935).
+      bool accepted = (object.size() == 1 || chatMarked) &&
+                      sameToken(object.value(QStringLiteral("mitcadAuth")).toString(), endpoint.token);
+      const bool full = accepted && !clientSlotFree(authenticatedClients());
+      accepted = accepted && !full;
+      write(client, accepted ? QByteArray("{\"authenticated\":true}\n")
+                    : full   ? QByteArray("{\"authenticated\":false,\"error\":\"too many clients\"}\n")
+                             : QByteArray("{\"authenticated\":false}\n"));
       client.authenticated = accepted;
+      if (accepted && chatMarked) {
+        client.chat = marker;
+      }
       if (!accepted && client.socket) {
         client.socket->disconnectFromHost();
       }
@@ -153,30 +266,36 @@ struct LiveServer::State {
         }
         return;
       }
-      QJsonObject value;
-      bool error = false;
-      try {
-        if (!window) {
-          throw std::runtime_error("The application document window has closed");
+      const QString tool = plan.value(QStringLiteral("tool")).toString();
+      const auto arguments = plan.value(QStringLiteral("arguments")).toObject();
+      if (!client.chat.isEmpty()) {
+        // The chat's own connection (mitcad#947): its approvals first.
+        ChatGate* gate = chatGate();
+        if (gate == nullptr) {
+          finishTool(client, {{QStringLiteral("error"), QObject::tr("The chat that started this agent has closed.")}},
+                     true);
+          return;
         }
-        const QString tool = plan.value(QStringLiteral("tool")).toString();
-        const auto arguments = plan.value(QStringLiteral("arguments")).toObject();
-        // The live catalog (mitcad#265): MainWindowMcp.cpp, MainWindowMcpUi.cpp.
-        // An applied model command is an error only when a feature it
-        // added or edited fails; finish_mcp decides (mitcad#401).
-        value = window->mcpTool(tool, arguments);
-      } catch (const Refusal& refusal) {
-        // Busy (when to retry), a panel's state.
-        error = true;
-        value = refusal.fields();
-        value.insert(QStringLiteral("error"), QString::fromUtf8(refusal.what()));
-      } catch (const std::exception& failure) {
-        error = true;
-        value = {{QStringLiteral("error"), QString::fromUtf8(failure.what())}};
+        const std::weak_ptr<Client> weak = shared;
+        const QPointer<QObject> server(owner);
+        const ChatGate::Decision decision = gate->decide(
+            client.chat, tool, arguments, [this, server, weak, tool, arguments](bool allowed, const QString& reason) {
+              if (server) {
+                QTimer::singleShot(0, server.data(), [this, weak, tool, arguments, allowed, reason] {
+                  resume(weak, tool, arguments, allowed, reason);
+                });
+              }
+            });
+        if (decision.verdict == ChatGate::Verdict::Deny) {
+          finishTool(client, {{QStringLiteral("error"), decision.reason}, {QStringLiteral("denied"), true}}, true);
+          return;
+        }
+        if (decision.verdict == ChatGate::Verdict::Ask) {
+          client.waiting = true;
+          return;
+        }
       }
-      const QByteArray result = QJsonDocument(value).toJson(QJsonDocument::Compact);
-      const std::string response(client.session->finish_mcp(rust::Str(result.constData(), size_t(result.size())), error));
-      write(client, QByteArray::fromStdString(response) + '\n');
+      runTool(client, tool, arguments);
     } catch (const std::exception& failure) {
       write(client, protocolError(-32603, QString::fromUtf8(failure.what())));
     }
@@ -184,7 +303,7 @@ struct LiveServer::State {
 
   void drain(const std::shared_ptr<Client>& client) {
     if (!client->socket || client->socket->state() != QAbstractSocket::ConnectedState ||
-        (handling && client->authenticated)) {
+        (handling && client->authenticated) || client->waiting) {
       return;
     }
     const bool alreadyHandling = handling;
@@ -206,8 +325,11 @@ struct LiveServer::State {
         }
         QByteArray message = client->input.left(newline);
         client->input.remove(0, newline + 1);
-        frame(*client, message);
+        frame(client, message);
         ++processed;
+        if (client->waiting) {
+          break; // the user's answer comes first (mitcad#947)
+        }
         continue;
       }
       if (client->input.size() > limit) {
@@ -242,19 +364,48 @@ struct LiveServer::State {
       auto* socket = listener.nextPendingConnection();
       clients.erase(std::remove_if(clients.begin(), clients.end(), [](const auto& client) { return !client->socket; }),
                     clients.end());
-      if (clients.size() >= 8) {
-        socket->abort();
-        socket->deleteLater();
-        continue;
+      // Connections that have not authenticated hold no client slot; when
+      // kMaxPending of them wait, the oldest gives way (mitcad#935): idle
+      // connections of another local account cannot keep agents out. The
+      // lines already written are read first: a burst of new connections
+      // closes only connections that have not authenticated by then, not an
+      // agent's whose line was still unread.
+      const std::vector<std::shared_ptr<Client>> known = clients;
+      for (const auto& waiting : known) {
+        if (!waiting->authenticated && connected(*waiting) &&
+            (waiting->socket->bytesAvailable() > 0 || waiting->socket->waitForReadyRead(0))) {
+          drain(waiting);
+        }
+      }
+      std::vector<std::shared_ptr<Client>> pending;
+      std::vector<quint64> since;
+      for (const auto& client : clients) {
+        if (!client->authenticated && connected(*client)) {
+          pending.push_back(client);
+          since.push_back(client->order);
+        }
+      }
+      const int oldest = pendingToClose(since);
+      if (oldest >= 0) {
+        pending[static_cast<std::size_t>(oldest)]->socket->abort();
       }
       socket->setParent(owner);
       socket->setReadBufferSize(kMaxFrameBytes + 1);
       auto client = std::make_shared<Client>();
       client->socket = socket;
+      client->order = ++connections;
       clients.push_back(client);
       QObject::connect(socket, &QTcpSocket::readyRead, owner, [this, client] { drain(client); });
-      QObject::connect(socket, &QTcpSocket::disconnected, owner, [this, socket] {
+      const std::weak_ptr<Client> weak = client;
+      QObject::connect(socket, &QTcpSocket::disconnected, owner, [this, socket, weak] {
         socket->deleteLater();
+        // The chat's agent ended (mitcad#947): its card goes.
+        if (const std::shared_ptr<Client> gone = weak.lock(); gone && !gone->chat.isEmpty()) {
+          gone->waiting = false;
+          if (ChatGate* gate = chatGate()) {
+            gate->connectionClosed(gone->chat);
+          }
+        }
         // Once the socket's QPointer has cleared.
         QTimer::singleShot(0, owner, [this] { updateAgents(); });
       });
@@ -275,10 +426,15 @@ LiveServer::~LiveServer() {
   if (m_state->window) {
     m_state->window->setMcpAgents({}, {});
   }
+  ChatGate* gate = m_state->chatGate();
   for (const auto& client : m_state->clients) {
     if (client->socket) {
       client->socket->disconnect(this);
       client->socket->abort();
+    }
+    // Its waiting card's answer would come to no listener (mitcad#947).
+    if (gate != nullptr && !client->chat.isEmpty()) {
+      gate->connectionClosed(client->chat);
     }
   }
   if (m_state->published) {
@@ -296,10 +452,8 @@ bool LiveServer::start(QString* error) {
   // Removes the records of killed instances (mitcad#437) before a client
   // has to skip them.
   discover();
-  if (!m_state->listener.listen(QHostAddress::LocalHost, 0)) {
-    if (error) {
-      *error = m_state->listener.errorString();
-    }
+  // On Windows with SO_EXCLUSIVEADDRUSE (mitcad#945).
+  if (!listenOnLoopback(m_state->listener, error)) {
     return false;
   }
   auto& endpoint = m_state->endpoint;

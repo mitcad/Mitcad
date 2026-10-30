@@ -58,6 +58,7 @@
 #include "framework/CommandRegistry.hpp"
 #include "framework/ResultCache.hpp"
 #include "mcp/AgentFolders.hpp"
+#include "mcp/EndpointLimits.hpp"
 #include "mcp/LiveErrors.hpp"
 #include "mcp/LogRing.hpp"
 #include "mcp/ModalGuard.hpp"
@@ -136,8 +137,14 @@ std::optional<SelectionItem> readItem(const QJsonValue& value, const CommandCont
   item.name = entry.value(QStringLiteral("name")).toString();
   item.occurrence = entry.value(QStringLiteral("occurrence")).toString();
   item.geometry = entry.value(QStringLiteral("geometry")).toString();
-  if (!item.isValid() || item.owner.isEmpty()) {
-    problem = QObject::tr("not an entity: %1").arg(QString::fromUtf8(QJsonDocument(entry).toJson(QJsonDocument::Compact)));
+  // ui_select's limits (core/mcp catalog.rs) also for ui_command's
+  // selections, which its schema does not check; the refusal repeats only
+  // the entry's start (mitcad#935).
+  const bool tooLong = item.owner.size() > 1024 || item.name.size() > 4096 || item.occurrence.size() > 1024 ||
+                       item.geometry.size() > 1024;
+  if (!item.isValid() || item.owner.isEmpty() || tooLong) {
+    problem = QObject::tr("not an entity: %1")
+                  .arg(mcp::echoed(QString::fromUtf8(QJsonDocument(entry).toJson(QJsonDocument::Compact))));
     return std::nullopt;
   }
   if (item.geometry.isEmpty() && (item.kind == SelectKind::Face || item.kind == SelectKind::Edge)) {
@@ -178,12 +185,14 @@ QString modeName(DocumentSession::Mode mode) {
 }
 
 [[noreturn]] void refuse(const QString& reason) {
-  qInfo().noquote() << QStringLiteral("MCP refused: %1").arg(reason);
+  // A refusal can repeat a client's text: its log line keeps the start
+  // (mitcad#935).
+  qInfo().noquote() << QStringLiteral("MCP refused: %1").arg(mcp::echoed(reason, mcp::kRefusalLogChars));
   throw std::runtime_error(reason.toStdString());
 }
 
 [[noreturn]] void refuseWith(const QString& reason, const QJsonObject& fields) {
-  qInfo().noquote() << QStringLiteral("MCP refused: %1").arg(reason);
+  qInfo().noquote() << QStringLiteral("MCP refused: %1").arg(mcp::echoed(reason, mcp::kRefusalLogChars));
   throw mcp::Refusal(reason, fields);
 }
 
@@ -603,6 +612,8 @@ QJsonObject MainWindow::mcpSelect(const QJsonObject& arguments) {
     // view and rows picked in the browser do (each a click: one already
     // there goes out again).
     const QPointer<CommandSession> session = m_session;
+    // No question waits for an answer the agent cannot give (mitcad#960).
+    const QScopedValueRollback<bool> picking(m_mcpPicking, true);
     for (const SelectionItem& item : items) {
       if (session) {
         session->picked({item}, Qt::NoModifier, false);
@@ -635,7 +646,7 @@ QJsonObject MainWindow::mcpSelect(const QJsonObject& arguments) {
       (there ? ids : missing) << item.name;
     }
     if (!missing.isEmpty()) {
-      refuse(tr("%1 has no %2").arg(m_sketch->model().name, missing.join(QStringLiteral(", "))));
+      refuse(tr("%1 has no %2").arg(m_sketch->model().name, mcp::echoed(missing.join(QStringLiteral(", ")))));
     }
     m_sketch->selectEntities(ids, reveal != QStringLiteral("none"), reveal == QStringLiteral("fit"));
   } else {
@@ -644,7 +655,7 @@ QJsonObject MainWindow::mcpSelect(const QJsonObject& arguments) {
     std::vector<gp_Pnt> places;
     QString missing;
     if (!mcpItemCorners(items, places, &missing)) {
-      refuse(tr("Not in the design: %1").arg(missing));
+      refuse(tr("Not in the design: %1").arg(mcp::echoed(missing)));
     }
     setSelection(items);
     if (reveal != QStringLiteral("none")) {
@@ -1013,7 +1024,7 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
       refuse(readOnlyReason());
     }
     if (!sketchExists(edit)) {
-      refuse(tr("No feature %1 in the design.").arg(edit));
+      refuse(tr("No feature %1 in the design.").arg(mcp::echoed(edit)));
     }
     result.insert(QStringLiteral("command"), QStringLiteral("edit"));
     editFeature(edit);
@@ -1026,7 +1037,7 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
   } else {
     const CommandDef* def = m_registry->find(id);
     if (def == nullptr) {
-      refuse(tr("No command %1 in the command registry (app/COMMANDS.md).").arg(id));
+      refuse(tr("No command %1 in the command registry (app/COMMANDS.md).").arg(mcp::echoed(id)));
     }
     if (opensDialog(id)) {
       refuse(tr("%1 opens a file dialog or another window, which an agent cannot use: run it in the application.")

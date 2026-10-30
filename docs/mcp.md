@@ -3,6 +3,11 @@
 
 ## Connect from MitCad
 
+To work with an agent inside MitCad instead, open the chat panel (**View ›
+Chat**): it starts your own Claude Code or Codex with this window's live server as
+its only tool source and asks you before file operations; see [the chat
+panel](ai-chat.md).
+
 For a design already open in MitCad, choose **Help › Connect AI Assistant…**.
 The assistant indicator (a click with no assistant connected, or **Connect
 AI Assistant…** in its menu) and **Preferences › AI Assistants** offer the same command; command search also finds `claude`, `codex`, `chatgpt` and `mcp`.
@@ -18,10 +23,15 @@ The state line names the next step, and its button does it:
 - ***Assistant* was not found on this computer** with **Get Claude
   Desktop** (the download page) or **How to install** (Claude Code's
   quickstart, OpenAI's Codex documentation). MitCad looks for Claude Code's and Codex's
-  executables (on `PATH`, `~/.local/bin`, `~/.cargo/bin`, and the ChatGPT
-  application on macOS), for Codex's settings folder, and for the Claude
+  executables (on `PATH`, `~/.local/bin`, on Windows `%APPDATA%\npm` and
+  the user's `Path` as stored, so an install made while MitCad runs counts,
+  `~/.cargo/bin`, and the ChatGPT application on macOS; on Windows with
+  `.exe`, `.cmd` or `.bat`), for Codex's settings folder, and for the Claude
   Desktop application or the settings folder it makes on its first start.
-  The line changes by itself once the assistant is there. Since this is a
+  The line changes by itself once the assistant is there, at once when you
+  come back to the dialog, and on **Check again** below **How to install**.
+  A client found outside `PATH` is named by its full path in the command
+  under **Advanced**. Since this is a
   guess, Claude Desktop and ChatGPT / Codex also offer a small **Connect
   anyway**, which runs the same setup as **Connect**; Claude Code's setup
   runs its CLI, so it has none. An extension installer that opens shows
@@ -260,6 +270,12 @@ connects only to that record. It uses the connection that authenticates
 the record. `--connect` without `--instance` probes every record to find
 the single live one.
 
+`--chat-session MARKER` belongs to the chat panel ([ai-chat.md](ai-chat.md)),
+which starts its agent with it: the bridge sends the marker with the token
+(`{"mitcadAuth": token, "mitcadChat": marker}`), and the window asks its
+user before such a connection's file operations, as the panel's approvals
+say. A connection without it is unchanged.
+
 Configure an MCP client to start the stdio bridge:
 
 ```json
@@ -275,7 +291,9 @@ Configure an MCP client to start the stdio bridge:
 
 The bridge authenticates the local socket before it forwards MCP
 messages. The listener binds only to `127.0.0.1`. MitCad selects the
-port automatically. The discovery record and the token are private to
+port automatically. On Windows the listener holds its address and port
+exclusively (`SO_EXCLUSIVEADDRUSE`): no other local process can bind
+them while MitCad runs. The discovery record and the token are private to
 the current user. They are under `GenericCacheLocation/Mitcad/mcp`:
 
 | Platform | Discovery directory |
@@ -289,6 +307,19 @@ tests or for a separate client environment. The application and the
 bridge must use the same absolute directory. The bridge refuses public
 or symlinked discovery records. This is a local stdio bridge. It is not
 an HTTP endpoint for remote clients.
+
+Other local accounts can see the port, so the listener protects itself
+against a connection that does not authenticate:
+
+- The token is compared in constant time: digests of both, compared byte
+  by byte without an early exit.
+- Only authenticated connections take one of the 8 client slots (agents
+  and the bridge's probes). At most 4 connections can wait to
+  authenticate; a new one closes the oldest of them. A waiting
+  connection is also closed after 5 s and after 4 KiB without its
+  authentication line. Thus idle connections cannot keep an agent out.
+  When all 8 slots are taken, the answer to a correct token is
+  `{"authenticated":false,"error":"too many clients"}`.
 
 ### Windows
 
@@ -604,7 +635,10 @@ key, with `label`, `type` and the values. `panel` holds `message`,
 is the number of the next line. `dropped` counts the lines after `since`
 that are no longer kept. The lines are the application's own log lines,
 the same as on stderr: what commands did, `Selected: …`, `Preview …`,
-refusals and `MCP refused: …`. MitCad keeps the newest 5000 lines.
+refusals and `MCP refused: …`. MitCad keeps the newest 5000 lines, at
+most 8 MiB of them. A line's text is cut to keep the formatted line under
+4 KiB, with ` … [N more characters cut]` at its end; the debug log's file
+gets the same cut line.
 
 **`ui_screenshot`** returns the image that the user sees, with the
 sketch overlay. By default, it shows the 3D view. With `window`, it
@@ -1006,6 +1040,16 @@ Errors give the choices (mitcad#714), in both servers:
   names the `model_reference` call that gives the rest.
 - The model's `unknown variant … expected one of …` and `unknown field …
   expected one of …` errors stay as they are.
+
+The tools' strings have a maximum length in characters (`maxLength` in
+their schemas): document handles, command ids (`id`) and feature uids
+(`edit`) 256; owners, occurrences, body, sketch and cut sheet names and
+`model_reference`'s arguments 1024; an entity's `name` (a topological
+name, which nests the features it came through) and paths 4096. A longer
+string is an invalid parameter. An error repeats at most 200 characters of
+a name or other text that the client sent, then `…` and how much was left
+out; a missing name lists at most 20 of the object's fields. The log line
+of a refusal keeps its first 2000 characters.
 
 Request and response frames are limited to 8 MiB. The limit includes
 the JSON escaping and both the text and the structured tool content. An

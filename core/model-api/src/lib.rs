@@ -117,6 +117,9 @@ mod hole_sizes;
 // Hole callouts on the model, their text from the hole's feature
 // (mitcad#902).
 mod hole_callouts;
+// A Fillet's or Chamfer's picked edges kept with its result, drawn where
+// they were (mitcad#957).
+mod feature_inputs;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -925,6 +928,9 @@ named_enum! {
         // Clearance holes and head recesses by screw size (mitcad#903,
         // `hole_sizes.rs`).
         "hole_sizes" => HoleSizes(hole_sizes::HoleSizesQuery),
+        // A Fillet's or Chamfer's picked edges kept with its result
+        // (mitcad#957, `feature_inputs.rs`).
+        "feature_inputs" => FeatureInputs(feature_inputs::FeatureInputsQuery),
     }
 }
 
@@ -1365,6 +1371,9 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::AnnotationTextHeight => self.annotation_text_height_json(),
             // Clearance holes and head recesses by screw size (mitcad#903).
             Query::HoleSizes(query) => hole_sizes::hole_sizes_json(&query)?,
+            // A Fillet's or Chamfer's picked edges kept with its result
+            // (mitcad#957).
+            Query::FeatureInputs(query) => feature_inputs::feature_inputs_json(self, &query)?,
         };
         Ok(result.to_string())
     }

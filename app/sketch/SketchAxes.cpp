@@ -6,7 +6,9 @@
 // data: the app's unit tests take this file alone. With no tool running
 // they are selected like construction geometry (mitcad#899): the selection
 // keeps them by their pick ids, and the tools that take them make their
-// entities when they use them.
+// entities when they use them. The drawing tools snap onto the axes
+// (mitcad#948, SketchSnap.cpp); a point placed there is held on the axis's
+// entity, made in the same step.
 #include "SketchModel.hpp"
 
 #include <cmath>
@@ -124,6 +126,38 @@ QStringList SketchModel::selectionPicks(const QStringList& names, bool axes) con
     }
   }
   return picks;
+}
+
+QString SketchModel::pointAxes(const QString& id) const {
+  if (id.isEmpty()) {
+    return QString();
+  }
+  if (id == originPoint()) {
+    return QStringLiteral("xy");
+  }
+  bool onX = false;
+  bool onY = false;
+  for (const ConstraintData& k : constraints) {
+    if (!k.active || k.type != QStringLiteral("coincident") || !k.refs.contains(id)) {
+      continue;
+    }
+    for (const QString& ref : k.refs) {
+      if (ref == id) {
+        continue;
+      }
+      const QString axis = axisOf(ref);
+      onX = onX || axis == QStringLiteral("x");
+      onY = onY || axis == QStringLiteral("y");
+    }
+  }
+  QString axes;
+  if (onX) {
+    axes += QLatin1Char('x');
+  }
+  if (onY) {
+    axes += QLatin1Char('y');
+  }
+  return axes;
 }
 
 QString originPick() { return QStringLiteral("origin"); }

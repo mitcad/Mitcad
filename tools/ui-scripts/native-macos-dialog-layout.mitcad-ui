@@ -64,6 +64,8 @@ expect-native-bounds projectFolder 300 '^Folder:$'
 expect-native-bounds projectDisplayName 100 '^Display name:$'
 expect-native-bounds projectAuthorName 100 '^Author:$'
 expect-native-bounds projectAuthorEmail 100 '^Author:$'
+# The whole placeholder in AppKit's font and insets (mitcad#953).
+expect-native-bounds projectAuthorEmail placeholder '^Author:$'
 native-pointer-click projectAuthorName
 expect-native-control-focus projectAuthorName
 key Ctrl+a
@@ -81,6 +83,7 @@ native-dialog-resize 400 400
 expect-native-form-layout 'projectAuthorName=Author:' 'projectAuthorEmail=Author:'
 expect-native-bounds projectAuthorName 100 '^Author:$'
 expect-native-bounds projectAuthorEmail 100 '^Author:$'
+expect-native-bounds projectAuthorEmail placeholder '^Author:$'
 expect-native-button-order '^Cancel$' '^Create$'
 native-pointer-click projectAuthorName
 expect-native-control-focus projectAuthorName
@@ -112,6 +115,7 @@ focus-main
 mark
 command tools.preferences.cloud
 focus-dialog '^Settings$'
+expect-native-style native.settings.panes 'pane-icons,Cloud'
 expect-native-text cloudAuthorNote '^When git has none[.].*history sees them[.]$'
 expect-native-bounds cloudAuthorNote shared
 expect-native-bounds cloudGitStatus shared
@@ -133,9 +137,22 @@ focus-main
 mark
 command tools.preferences.navigation
 focus-dialog '^Settings$'
+# The bindings open at the first active one, Option + Left drag, below the
+# reserved left drags, as the shared table's reveal asks (mitcad#972).
+expect-native-first-row navigationBindings '^Option \+ Left drag$'
+# The section selector keeps each shared section icon above its complete
+# name, Navigation chosen (mitcad#971). Real clicks show Display and return.
+expect-native-style native.settings.panes 'pane-icons,Navigation'
+native-pointer-click native.settings.pane.2
+expect-native-style native.settings.panes 'pane-icons,Display'
+expect-native-visible preferencesCamera true
+screenshot '${MITCAD_TEST_WORK}/settings-display-${MITCAD_TEST_APPEARANCE}.png'
+native-pointer-click native.settings.pane.1
+expect-native-style native.settings.panes 'pane-icons,Navigation'
+expect-native-visible navigationGuide true
 # Embedded table choices have the cell's padding, not dialog margins; their
 # full selected titles and the speed captions must be readable together.
-expect-native-form-layout navigationBinding0 navigationBinding1 navigationBinding2 navigationBinding3
+expect-native-form-layout navigationBinding4 navigationBinding5 navigationBinding6
 expect-native-form-layout 'navigationOrbitSpeed=Orbit speed:' 'navigationPanSpeed=Pan speed:' 'navigationZoomSpeed=Zoom speed:' 'navigationTrackpadSpeed=Trackpad scroll speed:'
 # The native guide must draw its actual vector artwork and describe the
 # current bindings; the old generic adapter left this entire area blank.
@@ -144,9 +161,11 @@ expect-native-style navigationGuide artwork
 native-choice navigationScheme 'Middle orbits, ⌘ + middle pans, Shift + middle zooms'
 expect-native-text navigationGuide 'Middle drag: Orbit'
 expect-native-style navigationGuide artwork
+expect-native-first-row navigationBindings '^Middle drag$'
 native-choice navigationScheme 'Trackpad (two-finger scroll pans, pinch zooms, ⌥ orbits)'
 expect-native-text navigationGuide 'Two-finger scroll: Pan'
 expect-native-style navigationGuide artwork
+expect-native-first-row navigationBindings '^Option \+ Left drag$'
 expect-native-bounds navigationOrbitSpeed 70 '^Orbit speed:$'
 expect-native-bounds navigationPanSpeed 70 '^Pan speed:$'
 expect-native-bounds navigationZoomSpeed 70 '^Zoom speed:$'
@@ -183,6 +202,8 @@ expect-widget-property navigationZoomSpeed value 100
 screenshot '${MITCAD_TEST_WORK}/settings-navigation-${MITCAD_TEST_APPEARANCE}.png'
 native-dialog-resize 400 400
 expect-native-style navigationGuide artwork
+expect-native-style native.settings.panes 'pane-icons,Navigation'
+expect-native-first-row navigationBindings '^Option \+ Left drag$'
 expect-native-bounds navigationOrbitSpeed 70 '^Orbit speed:$'
 expect-native-bounds navigationPanSpeed 70 '^Pan speed:$'
 expect-native-bounds navigationZoomSpeed 70 '^Zoom speed:$'
@@ -296,6 +317,7 @@ native-action file.new_project
 focus-dialog '^New Project$'
 expect-native-bounds projectAuthorName 100 '^Author:$'
 expect-native-bounds projectAuthorEmail 100 '^Author:$'
+expect-native-bounds projectAuthorEmail placeholder '^Author:$'
 expect-native-button-order '^Cancel$' '^Create$'
 native-pointer-button '^Cancel$'
 expect-native-dialog-gone '^New Project$'

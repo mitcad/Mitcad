@@ -58,6 +58,7 @@
 #include "../platform/NativeTestInput.hpp"
 #include "../OcctViewer.hpp"
 #include "../MainWindow.hpp"
+#include "../view/SpaceMouseController.hpp"
 #include "../sketch/SketchController.hpp"
 #include "../sketch/SketchOverlay.hpp"
 #include "../sketch/SketchTool.hpp"
@@ -285,6 +286,7 @@ const StepSpec kSpecs[] = {
     {"screenshot-view", 1, 1, kIdle},
     {"screenshot-screen", 1, 1, kIdle},
     {"screenshot-dialog", 1, 1, kIdle},
+    {"screenshot-widget", 2, 2, kIdle},
     {"quit", 0, 1, kPlain},
     {"kill", 0, 0, kPlain},
     {"stay", 0, 0, kPlain},
@@ -305,6 +307,7 @@ const StepSpec kSpecs[] = {
     {"expect-native-form-layout", 1, -1, kIdle},
     {"expect-native-configuration-layout", 0, 0, kIdle},
     {"expect-native-spanned-heading", 2, 2, kIdle},
+    {"expect-native-first-row", 2, 2, kIdle},
     {"expect-native-color-field", 4, 5, kIdle},
     {"expect-native-button-order", 1, -1, kIdle},
     {"expect-native-control-focus", 1, 1, kIdle},
@@ -316,6 +319,9 @@ const StepSpec kSpecs[] = {
     {"native-pointer-button", 1, 1, kInputOfTarget},
     {"native-pointer-drag", 3, 3, kInputOfTarget},
     {"native-dialog-resize", 2, 2, kInputOfTarget},
+    // A 3D mouse's axes and buttons (mitcad#951).
+    {"space-mouse", 6, 7, kInputOfMain},
+    {"space-mouse-button", 1, 1, kInputOfMain},
 };
 
 const StepSpec* findSpec(const QString& name) {
@@ -1336,14 +1342,14 @@ void TestDriver::sendWheel(const QPoint& windowPos, int notches, Qt::KeyboardMod
   QCoreApplication::sendEvent(target, &event);
 }
 
-bool TestDriver::saveScreenshot(const QString& path, bool viewOnly) {
+bool TestDriver::saveScreenshot(const QString& path, bool viewOnly, QWidget* crop) {
   QDir().mkpath(QFileInfo(path).absolutePath());
   QOpenGLWidget* gl = qobject_cast<QOpenGLWidget*>(viewer());
   if (viewOnly) {
     // What --screenshot saves.
     return gl != nullptr && gl->grabFramebuffer().save(path);
   }
-  if (mac::test::active()) return mac::test::screenshot(path, gl);
+  if (mac::test::active()) return crop == nullptr && mac::test::screenshot(path, gl);
   QWidget* top = m_main.data();
   if (top == nullptr) {
     return false;
@@ -1389,6 +1395,17 @@ bool TestDriver::saveScreenshot(const QString& path, bool viewOnly) {
         painter.drawPixmap(top->mapFromGlobal(card->geometry().topLeft()), card->grab());
       }
     }
+  }
+  if (crop != nullptr && !shot.isNull()) {
+    // Cut to the widget, whatever window it is in (a card's or the main
+    // window's), in the shot's device pixels.
+    const QRect area =
+        QRect(top->mapFromGlobal(crop->mapToGlobal(QPoint(0, 0))), crop->size()).intersected(top->rect());
+    if (area.isEmpty()) {
+      return false;
+    }
+    const qreal scale = shot.devicePixelRatio();
+    shot = shot.copy(QRectF(QPointF(area.topLeft()) * scale, QSizeF(area.size()) * scale).toAlignedRect());
   }
   return shot.save(path);
 }
@@ -2561,7 +2578,7 @@ void TestDriver::run(const Step& step) {
     }
   } else if (name == QLatin1String("expect-native-bounds") || name == QLatin1String("expect-native-button-order") ||
              name == QLatin1String("expect-native-form-layout") || name == QLatin1String("expect-native-configuration-layout") ||
-             name == QLatin1String("expect-native-spanned-heading") ||
+             name == QLatin1String("expect-native-spanned-heading") || name == QLatin1String("expect-native-first-row") ||
              name == QLatin1String("expect-native-control-focus") || name == QLatin1String("expect-native-layout-contract") ||
              name == QLatin1String("native-pointer-click") || name == QLatin1String("native-pointer-dblclick") ||
              name == QLatin1String("native-pointer-button") ||
@@ -2573,7 +2590,10 @@ void TestDriver::run(const Step& step) {
     }
     if (name == QLatin1String("expect-native-bounds")) {
       double minimum = 0;
-      if (a.at(1) == QLatin1String("shared")) {
+      // "placeholder": the minimum is the AppKit cell's size for its whole
+      // placeholder, read from the actual field when the check runs (mitcad#953).
+      const bool placeholder = a.at(1) == QLatin1String("placeholder");
+      if (!placeholder && a.at(1) == QLatin1String("shared")) {
         // Read the same populated presenter that owns the native control.
         // Native modeless windows keep their Qt windows hidden, so lookup
         // cannot depend on QApplication's active Qt window or hasFocus().
@@ -2617,17 +2637,21 @@ void TestDriver::run(const Step& step) {
         qInfo().noquote() << QStringLiteral("Native shared bounds: %1 minimum=%2 hint=%3 explicit=%4 policy=%5 formGrowth=%6 required=%7")
             .arg(a.at(0)).arg(least).arg(hint).arg(field->minimumWidth()).arg(int(policy))
             .arg(form ? int(form->fieldGrowthPolicy()) : -1).arg(minimum);
-      } else if (!toNumber(a.at(1), minimum) || minimum < 0) {
-        fail(line, QStringLiteral("expect-native-bounds <identifier> <minimum width|shared> [label regex]"));
+      } else if (!placeholder && (!toNumber(a.at(1), minimum) || minimum < 0)) {
+        fail(line, QStringLiteral("expect-native-bounds <identifier> <minimum width|shared|placeholder> [label regex]"));
         return;
       }
       const QString id = a.at(0);
       const QString label = a.size() > 2 ? a.at(2) : QString();
+      const auto check = [id, minimum, label, placeholder](QString& error) {
+        return placeholder ? mac::test::placeholderBounds(id, label, error)
+                           : mac::test::controlBounds(id, minimum, label, error);
+      };
       QString detail;
-      if (!mac::test::controlBounds(id, minimum, label, detail)) {
-        whenReady([id, minimum, label] {
+      if (!check(detail)) {
+        whenReady([check] {
           QString ignored;
-          return mac::test::controlBounds(id, minimum, label, ignored);
+          return check(ignored);
         }, 6, detail);
       }
     } else if (name == QLatin1String("expect-native-configuration-layout")) {
@@ -2641,6 +2665,12 @@ void TestDriver::run(const Step& step) {
       if (!regex(a.at(1), caption)) return;
       whenReady([this, id = a.at(0), caption] { return mac::test::spannedHeading(id, caption, m_waitDetail); }, 6,
                 QStringLiteral("native '%1' has no whole, visible spanning heading matching '%2'").arg(a.at(0), a.at(1)));
+    } else if (name == QLatin1String("expect-native-first-row")) {
+      // The table's own viewport shows this row first (mitcad#972).
+      QRegularExpression text;
+      if (!regex(a.at(1), text)) return;
+      whenReady([this, id = a.at(0), text] { return mac::test::firstVisibleRow(id, text, m_waitDetail); }, 6,
+                QStringLiteral("native '%1' does not show a row matching '%2' first").arg(a.at(0), a.at(1)));
     } else if (name == QLatin1String("expect-native-button-order")) {
       const QStringList patterns = a;
       QString detail;
@@ -4178,6 +4208,44 @@ void TestDriver::run(const Step& step) {
       return;
     }
 
+    // --- A 3D mouse (mitcad#951): the input its backend gives
+  } else if (name == QLatin1String("space-mouse")) {
+    SpaceMouseAxes axes{};
+    double milliseconds = 300;
+    bool valid = true;
+    for (int axis = 0; axis < 6 && valid; ++axis) {
+      valid = toNumber(a.at(axis), axes[static_cast<std::size_t>(axis)]);
+    }
+    if (!valid || (a.size() > 6 && (!toNumber(a.at(6), milliseconds) || milliseconds < 0))) {
+      fail(line, QStringLiteral("space-mouse <tx> <ty> <tz> <rx> <ry> <rz> [milliseconds]"));
+      return;
+    }
+    auto* window = qobject_cast<MainWindow*>(m_main.data());
+    if (window == nullptr || window->spaceMouse() == nullptr) {
+      fail(line, QStringLiteral("space-mouse requires the main window"));
+      return;
+    }
+    // Held for the time, then released, as a hand on the cap.
+    window->spaceMouse()->motion(axes, false);
+    const auto clock = std::make_shared<QElapsedTimer>();
+    clock->start();
+    whenReady([clock, milliseconds] { return clock->elapsed() >= milliseconds; }, milliseconds / 1000.0 + 5,
+              QStringLiteral("space-mouse"), [this] {
+                if (auto* owner = qobject_cast<MainWindow*>(m_main.data()); owner && owner->spaceMouse()) {
+                  owner->spaceMouse()->motion(SpaceMouseAxes{}, false);
+                }
+              });
+  } else if (name == QLatin1String("space-mouse-button")) {
+    bool ok = false;
+    const int number = a.at(0).toInt(&ok);
+    auto* window = qobject_cast<MainWindow*>(m_main.data());
+    if (!ok || number < 1 || number > 32 || window == nullptr || window->spaceMouse() == nullptr) {
+      fail(line, QStringLiteral("space-mouse-button <1..32> requires the main window"));
+      return;
+    }
+    window->spaceMouse()->button(number - 1, true);
+    window->spaceMouse()->button(number - 1, false);
+
     // --- The system
   } else if (name == QLatin1String("wait-idle")) {
     double limit = 60;
@@ -4220,9 +4288,21 @@ void TestDriver::run(const Step& step) {
           return names.size() == count;
         },
         limit, QStringLiteral("not %1 files '%2' in %3").arg(count).arg(glob, dir));
-  } else if (name == QLatin1String("screenshot") || name == QLatin1String("screenshot-view")) {
-    if (!saveScreenshot(a.at(0), name == QLatin1String("screenshot-view"))) {
-      fail(line, QStringLiteral("could not save the screenshot %1").arg(a.at(0)));
+  } else if (name == QLatin1String("screenshot") || name == QLatin1String("screenshot-view") ||
+             name == QLatin1String("screenshot-widget")) {
+    // screenshot-widget <name> <png>: the main window's screenshot cut to
+    // a widget, such as the timeline (timelineDock, mitcad#961).
+    QWidget* crop = nullptr;
+    if (name == QLatin1String("screenshot-widget")) {
+      crop = namedWidget(mainWindow, a.at(0));
+      if (crop == nullptr || !crop->isVisible()) {
+        fail(line, QStringLiteral("no visible widget %1 to take a screenshot of").arg(a.at(0)));
+        return;
+      }
+    }
+    const QString path = a.at(crop != nullptr ? 1 : 0);
+    if (!saveScreenshot(path, name == QLatin1String("screenshot-view"), crop)) {
+      fail(line, QStringLiteral("could not save the screenshot %1").arg(path));
       return;
     }
   } else if (name == QLatin1String("screenshot-screen")) {

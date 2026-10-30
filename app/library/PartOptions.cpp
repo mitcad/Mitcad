@@ -236,11 +236,15 @@ OptionsAnswer optionsAnswer(const QJsonObject& answer) {
 }
 
 OptionsQuery libraryOptionsQuery(const JsonRunner& run, const QString& url, const QString& library, const QString& rev,
-                                 const QString& component) {
-  return [run, url, library, rev, component](const QJsonObject& values) {
+                                 const QString& component, const std::function<QString()>& standard) {
+  return [run, url, library, rev, component, standard](const QJsonObject& values) {
     QJsonObject request{{QStringLiteral("cmd"), QStringLiteral("library_configure")},
                         {QStringLiteral("component"), component},
                         {QStringLiteral("values"), values}};
+    const QString chosen = standard ? standard() : QString();
+    if (!chosen.isEmpty()) {
+      request.insert(QStringLiteral("standard"), chosen);
+    }
     if (!url.isEmpty()) {
       request.insert(QStringLiteral("url"), url);
     }
@@ -430,6 +434,229 @@ QString optionsSummary(const OptionsAnswer& answer) {
   return QStringLiteral("%1 (%2)").arg(parts.join(QStringLiteral(", ")),
                                        answer.row.isEmpty() ? QStringLiteral("no row")
                                                             : QStringLiteral("row %1").arg(answer.row));
+}
+
+// --- The rows' standards and suppliers (mitcad#949)
+
+namespace {
+
+bool sameTag(const QString& a, const QString& b) { return a.trimmed().compare(b.trimmed(), Qt::CaseInsensitive) == 0; }
+
+bool isNonStandard(const QString& tag) { return sameTag(tag, nonStandardTag()); }
+
+QStringList rowStandardTags(const QJsonObject& row) {
+  QStringList out;
+  for (const QJsonValue& value : row.value(QStringLiteral("standards")).toArray()) {
+    const QString tag = value.toString().trimmed();
+    if (!tag.isEmpty()) {
+      out << tag;
+    }
+  }
+  return out;
+}
+
+// Two option values the same: the same text, or the same number ("8",
+// "8 mm").
+bool sameOptionText(const QString& a, const QString& b) {
+  if (a.trimmed() == b.trimmed()) {
+    return true;
+  }
+  const double x = constantNumber(a, QStringLiteral("mm"));
+  const double y = constantNumber(b, QStringLiteral("mm"));
+  return std::isfinite(x) && std::isfinite(y) && std::abs(x - y) <= 1e-9 * std::max(1.0, std::abs(x));
+}
+
+} // namespace
+
+bool rowPasses(const QJsonObject& row, const RowFilter& filter) {
+  if (!filter.standard.isEmpty()) {
+    const QStringList tags = rowStandardTags(row);
+    if (std::none_of(tags.cbegin(), tags.cend(), [&filter](const QString& tag) { return sameTag(tag, filter.standard); })) {
+      return false;
+    }
+  }
+  if (!filter.supplier.isEmpty()) {
+    const QJsonArray parts = row.value(QStringLiteral("supplier_parts")).toArray();
+    const bool sold = std::any_of(parts.cbegin(), parts.cend(), [&filter](const QJsonValue& part) {
+      const QJsonObject one = part.toObject();
+      return sameTag(textOf(one, "supplier"), filter.supplier) ||
+             (!textOf(one, "supplier_name").isEmpty() && sameTag(textOf(one, "supplier_name"), filter.supplier));
+    });
+    if (!sold) {
+      return false;
+    }
+  }
+  return true;
+}
+
+QStringList rowStandards(const QJsonArray& rows, const QStringList& order) {
+  QStringList out;
+  bool odd = false;
+  const auto add = [&out, &odd](const QString& tag) {
+    if (isNonStandard(tag)) {
+      odd = true;
+      return;
+    }
+    if (std::none_of(out.cbegin(), out.cend(), [&tag](const QString& known) { return sameTag(known, tag); })) {
+      out << tag;
+    }
+  };
+  for (const QString& tag : order) {
+    if (!tag.trimmed().isEmpty()) {
+      add(tag.trimmed());
+    }
+  }
+  for (const QJsonValue& value : rows) {
+    for (const QString& tag : rowStandardTags(value.toObject())) {
+      add(tag);
+    }
+  }
+  if (odd) {
+    out << nonStandardTag();
+  }
+  return out;
+}
+
+QList<RowSupplier> rowSuppliers(const QJsonArray& rows) {
+  QList<RowSupplier> out;
+  for (const QJsonValue& value : rows) {
+    for (const QJsonValue& part : value.toObject().value(QStringLiteral("supplier_parts")).toArray()) {
+      const QJsonObject one = part.toObject();
+      const QString id = textOf(one, "supplier");
+      if (id.isEmpty() ||
+          std::any_of(out.cbegin(), out.cend(), [&id](const RowSupplier& known) { return known.id == id; })) {
+        continue;
+      }
+      const QString name = textOf(one, "supplier_name");
+      out.append({id, name.isEmpty() ? id : name});
+    }
+  }
+  return out;
+}
+
+QJsonArray filteredRows(const QJsonArray& rows, const RowFilter& filter) {
+  if (filter.isAll()) {
+    return rows;
+  }
+  QJsonArray out;
+  for (const QJsonValue& value : rows) {
+    if (rowPasses(value.toObject(), filter)) {
+      out.append(value);
+    }
+  }
+  return out;
+}
+
+QJsonObject filteredTable(const QJsonObject& configurations, const RowFilter& filter) {
+  if (filter.isAll()) {
+    return configurations;
+  }
+  QJsonObject out = configurations;
+  const QJsonArray rows = filteredRows(configurations.value(QStringLiteral("rows")).toArray(), filter);
+  out.insert(QStringLiteral("rows"), rows);
+  const QString wanted = textOf(configurations, "default");
+  const bool kept = std::any_of(rows.cbegin(), rows.cend(),
+                                [&wanted](const QJsonValue& row) { return textOf(row.toObject(), "name") == wanted; });
+  if (!kept) {
+    if (rows.isEmpty()) {
+      out.remove(QStringLiteral("default"));
+    } else {
+      out.insert(QStringLiteral("default"), textOf(rows.first().toObject(), "name"));
+    }
+  }
+  return out;
+}
+
+QStringList filteredOptionValues(const QJsonArray& rows, const QStringList& options, int index,
+                                 const QJsonObject& chosen, const RowFilter& filter) {
+  QStringList out;
+  if (index < 0 || index >= options.size()) {
+    return out;
+  }
+  for (const QJsonValue& value : rows) {
+    const QJsonObject row = value.toObject();
+    if (!rowPasses(row, filter)) {
+      continue;
+    }
+    bool matches = true;
+    for (int j = 0; j < index && matches; ++j) {
+      const QJsonValue before = chosen.value(options[j]);
+      if (before.isString() && !before.toString().isEmpty()) {
+        matches = sameOptionText(rowOptionText(row, options[j]), before.toString());
+      }
+    }
+    const QString text = rowOptionText(row, options[index]);
+    if (matches && !text.isEmpty() && !out.contains(text)) {
+      out << text;
+    }
+  }
+  return out;
+}
+
+void narrowAnswer(OptionsAnswer& answer, const QJsonArray& rows, const RowFilter& filter) {
+  if (filter.isAll() || rows.isEmpty()) {
+    return;
+  }
+  QStringList names;
+  QJsonObject chosen;
+  for (const PartOption& option : answer.options) {
+    names << option.name;
+    chosen.insert(option.name, option.valueText);
+  }
+  for (int i = 0; i < answer.options.size(); ++i) {
+    PartOption& option = answer.options[i];
+    if (option.kind != PartOption::Kind::List || option.driven) {
+      continue;
+    }
+    const QStringList kept = filteredOptionValues(rows, names, i, chosen, filter);
+    QList<OptionValueChoice> values;
+    for (const OptionValueChoice& choice : option.values) {
+      if (std::any_of(kept.cbegin(), kept.cend(),
+                      [&choice](const QString& text) { return sameOptionText(text, choice.text); })) {
+        values.append(choice);
+      }
+    }
+    option.values = values;
+  }
+}
+
+QString namedStandard(const QJsonObject& row, const QString& chosen) {
+  const QStringList tags = rowStandardTags(row);
+  if (!chosen.trimmed().isEmpty()) {
+    for (const QString& tag : tags) {
+      if (sameTag(tag, chosen)) {
+        return tag;
+      }
+    }
+  }
+  return tags.isEmpty() ? QString() : tags.first();
+}
+
+QString supplierPartsText(const QJsonArray& parts) {
+  QStringList texts;
+  for (const QJsonValue& value : parts) {
+    const QJsonObject part = value.toObject();
+    const QString who = textOf(part, "supplier_name").isEmpty() ? textOf(part, "supplier") : textOf(part, "supplier_name");
+    QString text = QStringLiteral("%1 %2").arg(who, textOf(part, "part_number")).trimmed();
+    QStringList what;
+    static const char* const kWhat[] = {"material", "finish"};
+    for (const char* key : kWhat) {
+      if (!textOf(part, key).trimmed().isEmpty()) {
+        what << textOf(part, key).trimmed();
+      }
+    }
+    if (!what.isEmpty()) {
+      text += QStringLiteral(" (%1)").arg(what.join(QLatin1Char(' ')));
+    }
+    texts << text;
+  }
+  return texts.join(QStringLiteral("; "));
+}
+
+QString rowFilterText(const RowFilter& filter) {
+  return QStringLiteral("Standard %1, Supplier %2")
+      .arg(filter.standard.isEmpty() ? QStringLiteral("All") : filter.standard,
+           filter.supplier.isEmpty() ? QStringLiteral("All") : filter.supplier);
 }
 
 } // namespace mitcad

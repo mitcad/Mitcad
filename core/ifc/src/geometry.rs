@@ -20,6 +20,8 @@
 //!
 //! What is not understood is an [`Item::Unsupported`] that says why.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::f64::consts::{PI, TAU};
 
 use serde::Serialize;
@@ -869,15 +871,229 @@ impl Item {
 pub struct Decoder<'a> {
     pub file: &'a IfcFile,
     pub units: &'a Units,
+    /// The sub-items, curves and profiles a top-level call decoded
+    /// (mitcad#930).
+    memo: RefCell<Memo>,
 }
 
 type Decoded<T> = Result<T, String>;
 
 const MAX_DEPTH: usize = 64;
 
+/// How much one top-level call ([`Decoder::item`], [`Decoder::curve`],
+/// [`Decoder::profile`]) may copy from results it decoded before: the
+/// size of every result used a third time or more (roughly its
+/// segments, points and nodes). A file's items share little (a profile
+/// used by both ends of a tapered extrusion is decoded twice, not
+/// copied); a hostile chain of items that each use the one below twice
+/// would double the result at every level (mitcad#930).
+pub const MAX_SHARED_SIZE: usize = 100_000;
+
+/// Why a top-level call stopped at [`MAX_SHARED_SIZE`].
+pub const TOO_MANY_ITEMS: &str = "too many nested items";
+
+/// A result in the memo: seen once (decoded, not kept), or kept with its
+/// size after its second use.
+enum Cached<T> {
+    Seen,
+    Kept(T, usize),
+}
+
+type Table<T> = HashMap<u64, Cached<T>>;
+
+/// The results of one top-level call, by entity: each is decoded at most
+/// twice, then copied.
+#[derive(Default)]
+struct Memo {
+    /// Top-level calls under way (nested ones share the memo).
+    active: usize,
+    /// The size copied from kept results so far.
+    shared: usize,
+    /// Whether `shared` passed [`MAX_SHARED_SIZE`]: everything left
+    /// fails at once.
+    exceeded: bool,
+    items: Table<Item>,
+    curves: Table<Decoded<Path>>,
+    profiles: Table<Decoded<Profile>>,
+}
+
+impl Memo {
+    fn items(&mut self) -> &mut Table<Item> {
+        &mut self.items
+    }
+
+    fn curves(&mut self) -> &mut Table<Decoded<Path>> {
+        &mut self.curves
+    }
+
+    fn profiles(&mut self) -> &mut Table<Decoded<Profile>> {
+        &mut self.profiles
+    }
+}
+
+/// How much copying a decoded result costs, roughly in segments, points
+/// and nodes.
+trait Size {
+    fn size(&self) -> usize;
+}
+
+impl Size for Seg {
+    fn size(&self) -> usize {
+        match self {
+            Seg::Spline { poles, .. } => 1 + poles.len(),
+            _ => 1,
+        }
+    }
+}
+
+impl Size for Path {
+    fn size(&self) -> usize {
+        1 + self.segments.iter().map(Size::size).sum::<usize>()
+    }
+}
+
+impl Size for Profile {
+    fn size(&self) -> usize {
+        1 + self
+            .areas
+            .iter()
+            .map(|a| a.outer.size() + a.holes.iter().map(Size::size).sum::<usize>())
+            .sum::<usize>()
+    }
+}
+
+impl Size for Surface {
+    fn size(&self) -> usize {
+        match self {
+            Surface::BSpline { poles, .. } => 1 + poles.iter().map(Vec::len).sum::<usize>(),
+            Surface::Extrusion { curve, .. } => 1 + curve.size(),
+            _ => 1,
+        }
+    }
+}
+
+impl Size for Item {
+    fn size(&self) -> usize {
+        let inner = match self {
+            Item::Extrusion { profile, .. } | Item::Revolution { profile, .. } => profile.size(),
+            Item::TaperedExtrusion {
+                profile,
+                end_profile,
+                ..
+            } => profile.size() + end_profile.size(),
+            Item::Sweep {
+                profile, directrix, ..
+            } => profile.size() + directrix.size(),
+            Item::SweptDisk { directrix, .. } => directrix.size(),
+            Item::Boolean { first, second, .. } => first.size().saturating_add(second.size()),
+            Item::HalfSpace { boundary, .. } => boundary.as_ref().map_or(0, |(_, p)| p.size()),
+            Item::Faceted { faces, .. } => faces.iter().flatten().map(Vec::len).sum::<usize>(),
+            Item::Mesh {
+                points, triangles, ..
+            } => points.len() + triangles.len(),
+            Item::Advanced { faces, .. } => faces
+                .iter()
+                .map(|f| {
+                    f.surface.size()
+                        + f.bounds
+                            .iter()
+                            .flat_map(|b| &b.edges)
+                            .map(|e| e.curve.size())
+                            .sum::<usize>()
+                })
+                .sum::<usize>(),
+            _ => 0,
+        };
+        inner.saturating_add(1)
+    }
+}
+
+impl<T: Size> Size for Decoded<T> {
+    fn size(&self) -> usize {
+        self.as_ref().map_or(1, Size::size)
+    }
+}
+
 impl<'a> Decoder<'a> {
     pub fn new(file: &'a IfcFile, units: &'a Units) -> Self {
-        Self { file, units }
+        Self {
+            file,
+            units,
+            memo: RefCell::new(Memo::default()),
+        }
+    }
+
+    /// Runs a top-level call: an outermost one starts with an empty memo
+    /// and fails as a whole (`too_many`) when it copied more than
+    /// [`MAX_SHARED_SIZE`]; a nested one shares its caller's memo.
+    fn top<T>(&self, too_many: impl FnOnce() -> T, decode: impl FnOnce() -> T) -> T {
+        let outermost = {
+            let mut memo = self.memo.borrow_mut();
+            memo.active += 1;
+            memo.active == 1
+        };
+        let value = decode();
+        let exceeded = {
+            let mut memo = self.memo.borrow_mut();
+            memo.active -= 1;
+            if !outermost {
+                return value;
+            }
+            let exceeded = memo.exceeded;
+            *memo = Memo::default();
+            exceeded
+        };
+        if exceeded { too_many() } else { value }
+    }
+
+    /// The result for entity `id` from the memo, or decoded: the first
+    /// use decodes, the second decodes again and keeps the result, later
+    /// ones copy it (and count its size towards [`MAX_SHARED_SIZE`]). A
+    /// result is kept whatever depth it was decoded at: only an entity
+    /// reached both near and beyond [`MAX_DEPTH`] could decode otherwise.
+    fn memoised<T: Clone + Size>(
+        &self,
+        id: u64,
+        table: fn(&mut Memo) -> &mut Table<T>,
+        too_many: impl FnOnce() -> T,
+        decode: impl FnOnce() -> T,
+    ) -> T {
+        let keep = {
+            let mut memo = self.memo.borrow_mut();
+            if memo.exceeded {
+                return too_many();
+            }
+            let size = match table(&mut memo).get(&id) {
+                None => None,
+                Some(Cached::Seen) => Some(None),
+                Some(Cached::Kept(_, size)) => Some(Some(*size)),
+            };
+            match size {
+                None => {
+                    table(&mut memo).insert(id, Cached::Seen);
+                    false
+                }
+                Some(None) => true,
+                Some(Some(size)) => {
+                    memo.shared = memo.shared.saturating_add(size.max(1));
+                    if memo.shared > MAX_SHARED_SIZE {
+                        memo.exceeded = true;
+                        return too_many();
+                    }
+                    if let Some(Cached::Kept(value, _)) = table(&mut memo).get(&id) {
+                        return value.clone();
+                    }
+                    false
+                }
+            }
+        };
+        let value = decode();
+        if keep {
+            let size = value.size();
+            let mut memo = self.memo.borrow_mut();
+            table(&mut memo).insert(id, Cached::Kept(value.clone(), size));
+        }
+        value
     }
 
     fn entity(&self, value: &Value) -> Decoded<&'a Entity> {
@@ -1024,16 +1240,30 @@ impl<'a> Decoder<'a> {
 
     // Curves.
 
-    /// A curve as a path, with the depth of nesting.
+    /// A curve as a path.
     pub fn curve(&self, value: &Value) -> Decoded<Path> {
-        self.curve_at(value, 0)
+        self.top(
+            || Err(TOO_MANY_ITEMS.to_owned()),
+            || self.curve_at(value, 0),
+        )
     }
 
+    /// A curve, with the depth of nesting; each curve entity is decoded at
+    /// most twice per top-level call.
     fn curve_at(&self, value: &Value, depth: usize) -> Decoded<Path> {
         if depth > MAX_DEPTH {
             return Err("curves nested too deeply".to_owned());
         }
         let e = self.entity(value)?;
+        self.memoised(
+            e.id,
+            Memo::curves,
+            || Err(TOO_MANY_ITEMS.to_owned()),
+            || self.curve_of(e, depth),
+        )
+    }
+
+    fn curve_of(&self, e: &Entity, depth: usize) -> Decoded<Path> {
         let kind = &*e.kind;
         let segments = match kind {
             "IFCPOLYLINE" => {
@@ -1128,9 +1358,8 @@ impl<'a> Decoder<'a> {
             })
             .collect();
         let at = |i: i64| -> Decoded<[f64; 3]> {
-            usize::try_from(i - 1)
-                .ok()
-                .and_then(|i| points.get(i).copied())
+            one_based(i, points.len())
+                .map(|k| points[k])
                 .ok_or_else(|| format!("#{}: point index {i} out of range", e.id))
         };
         let Some(segments) = e.arg(1).as_list() else {
@@ -1276,7 +1505,7 @@ impl<'a> Decoder<'a> {
     fn bspline_curve(&self, e: &Entity) -> Decoded<Seg> {
         // (Degree, ControlPointsList, CurveForm, ClosedCurve, SelfIntersect,
         // KnotMultiplicities, Knots, KnotSpec[, WeightsData])
-        let degree = e.arg(0).as_i64().ok_or("no degree")? as u32;
+        let degree = as_count(e.arg(0).as_i64().ok_or("no degree")?);
         let poles: Vec<[f64; 3]> = e
             .arg(1)
             .as_list()
@@ -1290,7 +1519,7 @@ impl<'a> Decoder<'a> {
             .unwrap_or_default()
             .iter()
             .filter_map(Value::as_i64)
-            .map(|m| m as u32)
+            .map(as_count)
             .collect();
         let knots = e.arg(6).numbers().unwrap_or_default();
         let weights = if e.is("IFCRATIONALBSPLINECURVEWITHKNOTS") {
@@ -1311,14 +1540,28 @@ impl<'a> Decoder<'a> {
     // Profiles.
 
     pub fn profile(&self, value: &Value) -> Decoded<Profile> {
-        self.profile_at(value, 0)
+        self.top(
+            || Err(TOO_MANY_ITEMS.to_owned()),
+            || self.profile_at(value, 0),
+        )
     }
 
+    /// A profile, with the depth of nesting; each profile entity is
+    /// decoded at most twice per top-level call.
     fn profile_at(&self, value: &Value, depth: usize) -> Decoded<Profile> {
         if depth > MAX_DEPTH {
             return Err("profiles nested too deeply".to_owned());
         }
         let e = self.entity(value)?;
+        self.memoised(
+            e.id,
+            Memo::profiles,
+            || Err(TOO_MANY_ITEMS.to_owned()),
+            || self.profile_of(e, depth),
+        )
+    }
+
+    fn profile_of(&self, e: &Entity, depth: usize) -> Decoded<Profile> {
         let kind = e.kind.to_string();
         let name = e.arg(1).as_str().unwrap_or_default().to_owned();
         if e.arg(0).as_enum() == Some("CURVE") && !e.is("IFCARBITRARYCLOSEDPROFILEDEF") {
@@ -1668,8 +1911,18 @@ impl<'a> Decoder<'a> {
 
     /// A representation item as an [`Item`]; what cannot be read is an
     /// [`Item::Unsupported`].
+    ///
+    /// Sub-items, curves and profiles that the item uses several times
+    /// are decoded at most twice; an item that would copy more than
+    /// [`MAX_SHARED_SIZE`] of them is unsupported as a whole
+    /// ([`TOO_MANY_ITEMS`], mitcad#930).
     pub fn item(&self, id: u64) -> Item {
-        self.item_at(id, 0)
+        let too_many = || Item::Unsupported {
+            id,
+            kind: self.file.kind(id).unwrap_or_default().to_owned(),
+            why: TOO_MANY_ITEMS.to_owned(),
+        };
+        self.top(too_many, || self.item_at(id, 0))
     }
 
     fn item_at(&self, id: u64, depth: usize) -> Item {
@@ -1684,10 +1937,15 @@ impl<'a> Decoder<'a> {
         if depth > MAX_DEPTH {
             return unsupported(&e.kind, "items nested too deeply".to_owned());
         }
-        match self.solid(e, depth) {
-            Ok(item) => item,
-            Err(why) => unsupported(&e.kind, why),
-        }
+        self.memoised(
+            id,
+            Memo::items,
+            || unsupported(&e.kind, TOO_MANY_ITEMS.to_owned()),
+            || match self.solid(e, depth) {
+                Ok(item) => item,
+                Err(why) => unsupported(&e.kind, why),
+            },
+        )
     }
 
     fn solid(&self, e: &Entity, depth: usize) -> Decoded<Item> {
@@ -2215,8 +2473,8 @@ impl<'a> Decoder<'a> {
                 // (UDegree, VDegree, ControlPointsList, SurfaceForm, UClosed,
                 // VClosed, SelfIntersect, UMultiplicities, VMultiplicities,
                 // UKnots, VKnots, KnotSpec[, WeightsData])
-                let u_degree = e.arg(0).as_i64().ok_or("no u degree")? as u32;
-                let v_degree = e.arg(1).as_i64().ok_or("no v degree")? as u32;
+                let u_degree = as_count(e.arg(0).as_i64().ok_or("no u degree")?);
+                let v_degree = as_count(e.arg(1).as_i64().ok_or("no v degree")?);
                 let poles: Vec<Vec<[f64; 3]>> = e
                     .arg(2)
                     .as_list()
@@ -2235,7 +2493,7 @@ impl<'a> Decoder<'a> {
                         .unwrap_or_default()
                         .iter()
                         .filter_map(Value::as_i64)
-                        .map(|m| m as u32)
+                        .map(as_count)
                         .collect()
                 };
                 let weights = if e.is("IFCRATIONALBSPLINESURFACEWITHKNOTS") {
@@ -2320,17 +2578,36 @@ impl<'a> Decoder<'a> {
     }
 }
 
+/// A degree or a knot multiplicity from the file; one that is negative or
+/// beyond `u32` becomes `u32::MAX`, which [`check_spline`] refuses.
+fn as_count(value: i64) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+/// Whether a B-spline's degree, poles, knots and multiplicities fit
+/// together. The multiplicities are summed without wrapping and each is at
+/// most degree + 1 (mitcad#930: a sum that wrapped to the expected total
+/// let [`full_knots`] build a knot vector of billions).
 fn check_spline(id: u64, degree: u32, poles: usize, knots: &[f64], mults: &[u32]) -> Decoded<()> {
-    let total: u32 = mults.iter().sum();
+    let total: u64 = mults.iter().map(|&m| u64::from(m)).sum();
     if degree == 0 || poles <= degree as usize {
         return Err(format!(
             "#{id}: a B-spline of degree {degree} with {poles} poles"
         ));
     }
-    if knots.len() != mults.len() || total as usize != poles + degree as usize + 1 {
+    let expected = poles as u64 + u64::from(degree) + 1;
+    if knots.len() != mults.len() || total != expected {
         return Err(format!(
             "#{id}: {} knots with multiplicities summing to {total} do not fit {poles} poles of degree {degree}",
             knots.len()
+        ));
+    }
+    if let Some(m) = mults
+        .iter()
+        .find(|&&m| u64::from(m) > u64::from(degree) + 1)
+    {
+        return Err(format!(
+            "#{id}: a knot multiplicity of {m} does not fit degree {degree}"
         ));
     }
     if knots.windows(2).any(|w| w[1] < w[0]) {
@@ -2339,20 +2616,26 @@ fn check_spline(id: u64, degree: u32, poles: usize, knots: &[f64], mults: &[u32]
     Ok(())
 }
 
+/// A 1-based index from the file as a 0-based one below `len`; none when it
+/// is 0 or less or past the end (checked: the file's `i64` may be anything,
+/// mitcad#930).
+fn one_based(i: i64, len: usize) -> Option<usize> {
+    i.checked_sub(1)
+        .and_then(|k| usize::try_from(k).ok())
+        .filter(|k| *k < len)
+}
+
 fn point_index(i: i64, pn: &[i64], count: usize) -> Decoded<u32> {
     // With PnIndex, coordinate indices index it; then 1-based points.
     let i = if pn.is_empty() {
         i
     } else {
-        *usize::try_from(i - 1)
-            .ok()
-            .and_then(|k| pn.get(k))
+        one_based(i, pn.len())
+            .map(|k| pn[k])
             .ok_or_else(|| format!("index {i} beyond the point index list"))?
     };
-    usize::try_from(i - 1)
-        .ok()
-        .filter(|k| *k < count)
-        .map(|k| k as u32)
+    one_based(i, count)
+        .and_then(|k| u32::try_from(k).ok())
         .ok_or_else(|| format!("point index {i} out of range"))
 }
 
@@ -2877,5 +3160,179 @@ mod tests {
             panic!("an arc");
         };
         assert!((sweep + 1.5 * PI).abs() < 1e-12);
+    }
+
+    const LIMITS_HEAD: &str = "ISO-10303-21;HEADER;FILE_SCHEMA(('IFC4'));ENDSEC;DATA;\n\
+        #1=IFCPROJECT('0123456789012345678901',$,$,$,$,$,$,$,#2);\n\
+        #2=IFCUNITASSIGNMENT((#3));\n\
+        #3=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);\n";
+
+    /// `levels` booleans over one extruded solid (#10), each using the one
+    /// below twice: #101 the lowest, `#(100 + levels)` the top.
+    fn self_doubling_booleans(levels: u64) -> String {
+        let mut text = LIMITS_HEAD.to_owned();
+        text.push_str(
+            "#10=IFCEXTRUDEDAREASOLID(#11,$,#13,100.);\n\
+             #11=IFCRECTANGLEPROFILEDEF(.AREA.,$,$,100.,100.);\n\
+             #13=IFCDIRECTION((0.,0.,1.));\n\
+             #101=IFCBOOLEANRESULT(.UNION.,#10,#10);\n",
+        );
+        for k in 102..=100 + levels {
+            text.push_str(&format!(
+                "#{k}=IFCBOOLEANRESULT(.UNION.,#{},#{});\n",
+                k - 1,
+                k - 1
+            ));
+        }
+        text.push_str("ENDSEC;END-ISO-10303-21;");
+        text
+    }
+
+    fn leaves(item: &Item) -> usize {
+        match item {
+            Item::Boolean { first, second, .. } => leaves(first) + leaves(second),
+            _ => 1,
+        }
+    }
+
+    #[test]
+    fn shared_sub_items_decode_once() {
+        // mitcad#930: a few levels of shared operands still decode to the
+        // whole tree.
+        let (file, units) = decoder_items(&self_doubling_booleans(5));
+        let d = Decoder::new(&file, &units);
+        let item = d.item(105);
+        assert_eq!(leaves(&item), 32, "{item:?}");
+        assert!(item.unsupported().is_empty(), "{:?}", item.unsupported());
+        // The memo is the top-level call's: the next call starts afresh.
+        assert_eq!(d.item(105), item);
+        let Item::Boolean { first, .. } = &item else {
+            panic!("a boolean");
+        };
+        assert_eq!(**first, d.item(104));
+    }
+
+    #[test]
+    fn self_doubling_booleans_stop_at_the_shared_size() {
+        // mitcad#930: 40 levels would be 2^40 extrusions; the item is
+        // unsupported as a whole, at once.
+        let (file, units) = decoder_items(&self_doubling_booleans(40));
+        let d = Decoder::new(&file, &units);
+        let started = std::time::Instant::now();
+        let item = d.item(140);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+        let Item::Unsupported { id, kind, why } = &item else {
+            panic!("unsupported: {item:?}");
+        };
+        assert_eq!(*id, 140);
+        assert_eq!(kind, "IFCBOOLEANRESULT");
+        assert_eq!(why, TOO_MANY_ITEMS);
+        // Other items of the decoder are not affected.
+        assert!(matches!(d.item(10), Item::Extrusion { .. }));
+    }
+
+    #[test]
+    fn self_doubling_composite_curves_stop_at_the_shared_size() {
+        let mut text = LIMITS_HEAD.to_owned();
+        text.push_str(
+            "#10=IFCPOLYLINE((#11,#12));\n\
+             #11=IFCCARTESIANPOINT((0.,0.));\n\
+             #12=IFCCARTESIANPOINT((1.,0.));\n",
+        );
+        let mut parent = 10;
+        for k in 1..=40u64 {
+            let segment = 1000 + 2 * k;
+            let curve = segment + 1;
+            text.push_str(&format!(
+                "#{segment}=IFCCOMPOSITECURVESEGMENT(.CONTINUOUS.,.T.,#{parent});\n\
+                 #{curve}=IFCCOMPOSITECURVE((#{segment},#{segment}),.F.);\n"
+            ));
+            parent = curve;
+        }
+        text.push_str("ENDSEC;END-ISO-10303-21;");
+        let (file, units) = decoder_items(&text);
+        let d = Decoder::new(&file, &units);
+        // A few levels: every segment.
+        let path = d.curve(&Value::Ref(1011)).expect("decodes");
+        assert_eq!(path.segments.len(), 32);
+        let started = std::time::Instant::now();
+        let error = d.curve(&Value::Ref(parent)).expect_err("too many");
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(error, TOO_MANY_ITEMS);
+    }
+
+    #[test]
+    fn point_indices_out_of_range_are_errors() {
+        // mitcad#930: `i - 1` on the file's i64 overflowed for i64::MIN.
+        assert_eq!(point_index(1, &[], 3), Ok(0));
+        assert_eq!(point_index(3, &[], 3), Ok(2));
+        for i in [0, -1, 4, i64::MIN, i64::MAX] {
+            let error = point_index(i, &[], 3).expect_err("out of range");
+            assert!(error.contains("out of range"), "{error}");
+        }
+        // Through PnIndex: its entries index the points.
+        assert_eq!(point_index(2, &[3, 1], 3), Ok(0));
+        for i in [0, 3, i64::MIN, i64::MAX] {
+            let error = point_index(i, &[3, 1], 3).expect_err("beyond");
+            assert!(error.contains("beyond the point index list"), "{error}");
+        }
+        assert!(point_index(1, &[i64::MIN], 3).is_err());
+        assert!(point_index(1, &[4], 3).is_err());
+        // The item's error: a face set and an indexed poly curve.
+        let mut text = LIMITS_HEAD.to_owned();
+        text.push_str(
+            "#10=IFCCARTESIANPOINTLIST3D(((0.,0.,0.),(1.,0.,0.),(0.,1.,0.)));\n\
+             #11=IFCTRIANGULATEDFACESET(#10,$,.F.,((1,2,-9223372036854775808)),$);\n\
+             #12=IFCTRIANGULATEDFACESET(#10,$,.F.,((1,2,3)),$);\n\
+             #20=IFCCARTESIANPOINTLIST2D(((0.,0.),(1.,0.)));\n\
+             #21=IFCINDEXEDPOLYCURVE(#20,(IFCLINEINDEX((1,-9223372036854775808))),.F.);\n\
+             #22=IFCINDEXEDPOLYCURVE(#20,(IFCLINEINDEX((0,1))),.F.);\n\
+             ENDSEC;END-ISO-10303-21;",
+        );
+        let (file, units) = decoder_items(&text);
+        let d = Decoder::new(&file, &units);
+        let Item::Unsupported { why, .. } = d.item(11) else {
+            panic!("unsupported: {:?}", d.item(11));
+        };
+        assert!(why.contains("out of range"), "{why}");
+        assert!(matches!(d.item(12), Item::Mesh { .. }), "{:?}", d.item(12));
+        for curve in [21, 22] {
+            let error = d.curve(&Value::Ref(curve)).expect_err("out of range");
+            assert!(error.contains("out of range"), "{error}");
+        }
+    }
+
+    #[test]
+    fn spline_multiplicities_do_not_wrap() {
+        // mitcad#930: 4294967295 + 9 wrapped to 8 = 4 poles + degree 3 + 1
+        // in u32, and the knot vector would have had 4.3e9 knots.
+        let mut text = LIMITS_HEAD.to_owned();
+        text.push_str(
+            "#11=IFCCARTESIANPOINT((0.,0.,0.));\n\
+             #12=IFCCARTESIANPOINT((1.,0.,0.));\n\
+             #13=IFCCARTESIANPOINT((2.,1.,0.));\n\
+             #14=IFCCARTESIANPOINT((3.,1.,0.));\n\
+             #20=IFCBSPLINECURVEWITHKNOTS(3,(#11,#12,#13,#14),.UNSPECIFIED.,.F.,.U.,(4294967295,9),(0.,1.),.UNSPECIFIED.);\n\
+             #21=IFCBSPLINECURVEWITHKNOTS(3,(#11,#12,#13,#14),.UNSPECIFIED.,.F.,.U.,(4,4),(0.,1.),.UNSPECIFIED.);\n\
+             #22=IFCBSPLINECURVEWITHKNOTS(3,(#11,#12,#13,#14),.UNSPECIFIED.,.F.,.U.,(-1,9),(0.,1.),.UNSPECIFIED.);\n\
+             ENDSEC;END-ISO-10303-21;",
+        );
+        let (file, units) = decoder_items(&text);
+        let d = Decoder::new(&file, &units);
+        let error = d.curve(&Value::Ref(20)).expect_err("refused");
+        assert!(error.contains("do not fit"), "{error}");
+        assert!(error.contains("summing to 4294967304"), "{error}");
+        let error = d.curve(&Value::Ref(22)).expect_err("refused");
+        assert!(error.contains("do not fit"), "{error}");
+        let path = d.curve(&Value::Ref(21)).expect("a clamped cubic");
+        assert_eq!(path.segments.len(), 1);
+        // Each multiplicity at most degree + 1, even when the sum fits.
+        let error = check_spline(5, 1, 3, &[0.0, 1.0], &[3, 2]).expect_err("refused");
+        assert!(error.contains("multiplicity of 3"), "{error}");
+        assert!(check_spline(5, 1, 3, &[0.0, 0.5, 1.0], &[2, 1, 2]).is_ok());
     }
 }

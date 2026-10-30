@@ -393,24 +393,33 @@ mod tests {
 /// the entries' size and their bytes against each other (verified on the
 /// MIT project: every element's `EpisodeId` names the episode of its
 /// GlobalId). Empty when the stream does not read so.
+///
+/// One pass (mitcad#924): the entries a count names are the last `count`
+/// before the end, so their bytes agree exactly while the count is within
+/// the run of entries from the end whose last byte is the newest's; only
+/// those counts are candidates, and the entries are collected only for
+/// the count that reads.
 pub fn episodes(data: &[u8]) -> Vec<[u8; 16]> {
     const ENTRY: usize = 17;
     let Some(body) = data.len().checked_sub(4) else {
         return Vec::new();
     };
-    for count in 1..=(body / ENTRY) {
+    let mut entries = data[..body].rchunks_exact(ENTRY);
+    let Some(newest) = entries.next() else {
+        return Vec::new();
+    };
+    let tail = newest[16];
+    let run = 1 + entries.take_while(|e| e[16] == tail).count();
+    for count in 1..=run {
         let start = body - count * ENTRY;
         let Some(at) = start.checked_sub(4) else {
             break;
         };
         let word = u32::from_le_bytes(data[at..start].try_into().expect("4 bytes"));
-        if word as usize != count {
-            continue;
-        }
-        let entries: Vec<&[u8]> = data[start..body].chunks(ENTRY).collect();
-        let tail = entries[0][16];
-        if entries.iter().all(|e| e[16] == tail) {
-            return entries
+        if word as usize == count {
+            return data[start..body]
+                .as_chunks::<ENTRY>()
+                .0
                 .iter()
                 .map(|e| e[..16].try_into().expect("16 bytes"))
                 .collect();
@@ -460,5 +469,31 @@ mod episode_tests {
         }
         stream.extend(0u32.to_le_bytes());
         assert_eq!(episodes(&stream), vec![[1u8; 16], stored]);
+    }
+
+    #[test]
+    fn a_history_of_matching_counts_reads_in_one_pass() {
+        // mitcad#924: 4 MB whose word before the last c entries is c for
+        // every c from 2 on, the newest entry's last byte unlike the
+        // others': no count reads, and none may cost a collection.
+        let mut stream = vec![0u8; 4 << 20];
+        let body = stream.len() - 4;
+        let mut c = 2;
+        while let Some(at) = body.checked_sub(17 * c + 4) {
+            stream[at..at + 4].copy_from_slice(&(c as u32).to_le_bytes());
+            c += 1;
+        }
+        stream[body - 1] = 1;
+        let mut best = std::time::Duration::MAX;
+        for _ in 0..3 {
+            let started = std::time::Instant::now();
+            assert!(episodes(&stream).is_empty());
+            best = best.min(started.elapsed());
+        }
+        assert!(best.as_millis() < 50, "{best:?}");
+        // With every entry's last byte alike, the smallest matching count
+        // reads (2: the word before the last two entries).
+        stream[body - 1] = 0;
+        assert_eq!(episodes(&stream).len(), 2);
     }
 }

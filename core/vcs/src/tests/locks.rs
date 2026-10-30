@@ -974,24 +974,19 @@ fn a_remote_that_refuses_lock_refs() {
     let probe = ok(&p.a, json!({"cmd": "lock_probe", "session": SA}));
     assert_eq!(probe["accepted"], true, "{probe}");
     assert!(lock_refs(&p.remote).is_empty());
-    if !cfg!(unix) {
-        return;
-    }
-    // A server hook that refuses every ref outside the branches.
-    let hook = p.remote.join("hooks").join("pre-receive");
-    fs::write(
-        &hook,
-        "#!/bin/sh\nwhile read old new name; do\n  case \"$name\" in\n    refs/heads/*) ;;\n    \
-         *) echo \"refs outside the branches are not allowed\" >&2; exit 1 ;;\n  esac\ndone\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    // A server that takes no refs under refs/mitcad: hidden refs, which
+    // receive-pack refuses to update by its configuration (a hook of a
+    // remote in a folder never runs, mitcad#940).
+    git(&p.remote, &["config", "receive.hideRefs", "refs/mitcad"]).unwrap();
     let probe = ok(&p.a, json!({"cmd": "lock_probe", "session": SA}));
     assert_eq!(probe["accepted"], false, "{probe}");
+    assert!(
+        probe["reason"]
+            .as_str()
+            .unwrap()
+            .contains("deny updating a hidden ref"),
+        "{probe}"
+    );
     assert_eq!(
         probe["message"],
         "This remote does not accept Mitcad's lock references"

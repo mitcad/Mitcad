@@ -5,7 +5,6 @@
 wait-idle
 window-resize 1400 990
 mark
-hold-model-preview true
 dblclick-logged '^Timeline Extrude1 at '
 expect-log 'Extrude: editing keeps the stored operation' 30
 wait-idle
@@ -13,6 +12,7 @@ wait-idle
 # its per-evaluation delay cannot keep the worker busy. Change the actual
 # distance first, then make the asserted input while that preview computes.
 mark
+hold-model-preview true
 qt-type-now input_distance '7 mm'
 wait-log 'Computing preview started' 30
 expect-model-busy true

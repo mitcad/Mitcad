@@ -57,6 +57,10 @@ public:
   // partial items and placeholders among them (mitcad#170); a click goes
   // to them.
   QToolButton* warnings() const { return m_warnings; }
+  // The warnings' button shows only their count beside its triangle (a
+  // narrow card's header, mitcad#961); its tooltip and accessible name
+  // say the rest.
+  void setCompactBadges(bool compact) { m_compactBadges = compact; }
   // Shared issue navigation, anchored by either frontend's actual badge.
   void showIssues(bool warnings, const QPoint& globalPosition);
 
@@ -283,6 +287,7 @@ private:
   TimelineWidget* m_timeline = nullptr;
   QToolButton* m_failures = nullptr;
   QToolButton* m_warnings = nullptr;
+  bool m_compactBadges = false;
   QPointer<ParametersDialog> m_parameters;
   QPointer<ConfigurationsDialog> m_configurations; // mitcad#807
   ConfigurationBar* m_configurationBar = nullptr;   // mitcad#807

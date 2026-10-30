@@ -240,10 +240,19 @@ impl<K: Kernel> Document<K> {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let map = installed::resolved_preset(folder, &choice.path).map_err(invalid)?;
-            let text = Value::Object(map).to_string();
-            let imported = print_files::read_file(&file, text.as_bytes(), Some(dialect))
-                .map_err(|e| invalid(format!("{file}: {e}")))?;
+            // The installed preset (and those it inherits from) read in the
+            // application's process: a panic of the reader is its error
+            // (mitcad#922), not an abort of the application.
+            let imported = crate::reader_guard::catch_panic(
+                &choice.path.to_string_lossy(),
+                || {
+                    let map = installed::resolved_preset(folder, &choice.path).map_err(invalid)?;
+                    let text = Value::Object(map).to_string();
+                    print_files::read_file(&file, text.as_bytes(), Some(dialect))
+                        .map_err(|e| invalid(format!("{file}: {e}")))
+                },
+                ModelError::Invalid,
+            )?;
             report.mapped.extend(imported.report.mapped);
             report.kept.extend(imported.report.kept);
             report.left_out.extend(imported.report.left_out);

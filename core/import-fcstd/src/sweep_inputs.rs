@@ -437,7 +437,7 @@ pub(super) fn wires_of(curves: &[Curve3]) -> Vec<bool> {
 /// A plane through the curves: a conic's own, else through their first
 /// point, the point farthest from it and the one farthest from the line
 /// through both.
-fn plane_through(curves: &[Curve3]) -> Option<SketchFrame> {
+pub(super) fn plane_through(curves: &[Curve3]) -> Option<SketchFrame> {
     for c in curves {
         if let Curve3::Conic {
             center,

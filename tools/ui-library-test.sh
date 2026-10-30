@@ -34,6 +34,9 @@
 #      General fasteners/Screws, beside the ISO screw) and once in
 #      Favourites, Wood folded and still folded when the browser opens
 #      again, then unfolded.
+#   9. The Standard filter (mitcad#949): Standard = DIN 912 on the socket
+#      head cap screw narrows its lengths (M6x8 offered, the non-standard
+#      M6x6 not), and the part inserted is named DIN 912 M6x8.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-library-test.sh
@@ -427,6 +430,41 @@ ui_step "unfold it (Alt+O, W, Right)"      eval 'ui_key alt+o; ui_sync; ui_type_
 ui_expect_new "Part picker group Wood unfolded" "Wood unfolded"
 ui_step "close (Escape)"                   ui_key Escape
 ui_focus_main
+
+echo "--- 9. The Standard filter (mitcad#949)"
+# The generator's socket head cap screws name their rows' standards: with
+# Standard = DIN 912 the lengths are those of DIN 912 (M6x8, which ISO 4762
+# lacks, and not the non-standard M6x6), and the part inserted is named by
+# that standard.
+ui_mark
+ui_step "Insert from Library (command search)" ui_command "Insert from Library"
+ui_focus_dialog '^Insert from Library$'
+ui_step "All parts (Alt+O, A)"             eval 'ui_key alt+o; ui_sync; ui_type_ahead "A"'
+ui_mark
+ui_step "search 4762"                      eval 'ui_key alt+s; ui_sync; xdotool type --delay 40 "4762"'
+ui_expect_new "Library browser selected mitcad-parts/iso4762: version v1.1.0 (" "the socket head cap screw"
+ui_mark
+ui_step "Standard DIN 912 (Alt+D)"         eval 'ui_key alt+d; ui_sync; ui_type_ahead "DIN"'
+ui_expect_new "Library filter: Standard DIN 912, Supplier All: " "the Standard filter narrows the rows"
+ui_mark
+# Size M6: the field before Length, which is before Linked.
+ui_step "size M6 (Alt+L, Shift+Tab twice)" eval 'ui_key alt+l; ui_sync; ui_key shift+Tab; ui_sync; ui_key shift+Tab;
+  ui_sync; xdotool type --delay 80 "M6"'
+ui_expect_new "Library Length choices (Standard DIN 912, Supplier All): " "the lengths of M6 narrowed"
+LENGTHS=$(grep "^Library Length choices (Standard DIN 912, Supplier All): " "$UI_LOG" | tail -1 | sed 's/^.*): //')
+[[ ", $LENGTHS, " == *", 8, "* ]] || ui_fail "DIN 912's M6x8 is not offered: '$LENGTHS'"
+[[ ", $LENGTHS, " != *", 6, "* ]] || ui_fail "the non-standard M6x6 is offered with DIN 912: '$LENGTHS'"
+[[ $LENGTHS == "8, "* ]] || ui_fail "M6x8 is not DIN 912's shortest M6: '$LENGTHS'"
+echo "ok   the lengths of M6 with DIN 912: $LENGTHS"
+ui_mark
+# The first length (8): Home, since a typed 8 would look on from the
+# current length to 80.
+ui_step "length 8 (Tab, Home)"             eval 'ui_key Tab; ui_sync; ui_key Home'
+ui_expect_new "Library size M6x8" "M6x8 chosen"
+ui_expect_new "Library browser row M6x8: designation DIN 912 M6x8" "the designation follows the standard"
+ui_step "Insert (Alt+I)"                   ui_key alt+i
+ui_focus_main
+ui_expect_new "Inserted component DIN 912 M6x8 (linked) from mitcad-parts v1.1.0" "the part named by DIN 912"
 
 ui_stop_app
 ui_finish "component libraries and the community library"

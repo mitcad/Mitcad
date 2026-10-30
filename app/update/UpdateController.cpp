@@ -88,6 +88,9 @@ void UpdateController::startUp() {
   connect(m_notice, &UpdateNotice::closed, this, &UpdateController::hideNotice);
 
   const UpdateSource source = UpdateSource::fromEnvironment();
+  // A test's source never elevates an installation for all users
+  // (mitcad#921).
+  restrictToUserRights(m_installation, source.testSource, processHasAdministratorRights());
   m_client = new UpdateClient(source, this);
   connect(m_client, &UpdateClient::checked, this, &UpdateController::onChecked);
   connect(m_client, &UpdateClient::failed, this, &UpdateController::onFailed);
@@ -101,6 +104,9 @@ void UpdateController::startUp() {
                            .arg(source.currentVersion,
                                 source.platform.isEmpty() ? QStringLiteral("an unknown platform") : source.platform,
                                 m_installation.describe());
+  for (const QString& line : source.describe()) {
+    qInfo().noquote() << line;
+  }
 
   if (const std::optional<FinishedUpdate> finished = takeFinishedUpdate(source.currentVersion)) {
     if (finished->installed) {
@@ -161,9 +167,10 @@ void UpdateController::check(bool manual) {
     }
     return;
   }
-  // Without a release key nothing could be verified (docs/updates.md):
-  // no request then.
-  if (m_client->source().keys.trimmed().isEmpty()) {
+  // Without a release key built in nothing could be verified
+  // (docs/updates.md): no request then, whatever test key is set
+  // (mitcad#921).
+  if (m_client->source().builtInKeys.trimmed().isEmpty()) {
     qInfo() << "Update check skipped: this build has no release key";
     if (manual) {
       m_notice->showMessage(tr("This build of MitCad has no release key, so it cannot verify updates."), true);

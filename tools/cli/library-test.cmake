@@ -95,7 +95,7 @@ cli(ok library fetch "${library}")
 expect("Fetched library Mitcad parts \\(mitcad-parts\\)" "the fetch")
 expect("Versions: v1.1.0 \\([0-9a-f]+\\), v1.0.0" "the versions after the fetch")
 cli(ok library show mitcad-parts --rev v1.0.0)
-expect("iso4762 Hexagon socket head cap screw \\(ISO 4762\\): screws/iso4762.mitcad, [0-9]+ sizes \\(default M5x16\\)"
+expect("iso4762 Hexagon socket head cap screw \\(ISO 4762 / DIN 912\\): screws/iso4762.mitcad, [0-9]+ sizes \\(default M5x16\\)"
        "the library's components")
 cli(ok library search "din 912" --license CC0-1.0)
 expect("mitcad-parts/iso4762" "the search for DIN 912")
@@ -167,6 +167,8 @@ expect("\"url\": \"https://example.org/mitcad-parts.git\"" "the index entry's UR
 # shank and socket less the head's rounding and the tip's chamfer; ISO
 # 4017's hexagon less its top edges chamfered 0.06 s at 45 degrees:
 # perimeter c^2 / 2 - 2 sqrt(3) c^3 / 3), the nuts' and washers' exact.
+# A DIN-only row of each kind (mitcad#949) is named by its DIN standard:
+# DIN 912 M6x8, DIN 933's own head M10x20, DIN 934's M10.
 set(all "${WORK}/all-sizes/mitcad-parts")
 set(ENV{MITCAD_LIBRARIES_DIR} "${WORK}/cache-all")
 execute_process(COMMAND "${PYTHON}" "${GENERATOR}" --cli "${CLI}" --out "${all}" --version 1.0.0 --no-render
@@ -180,14 +182,14 @@ cli(ok library check "${all}")
 expect("mitcad-parts: 5 components, no errors" "the check of every size")
 cli(ok library fetch "${all}")
 cli(ok library show mitcad-parts --rev v1.0.0)
-expect("iso4762 Hexagon socket head cap screw \\(ISO 4762\\): screws/iso4762.mitcad, 190 sizes \\(default M5x16\\)"
+expect("iso4762 Hexagon socket head cap screw \\(ISO 4762 / DIN 912\\): screws/iso4762.mitcad, 448 sizes \\(default M5x16\\)"
        "the socket head screws' sizes")
-expect("iso4017 Hexagon head screw, thread to the head \\(ISO 4017\\): screws/iso4017.mitcad, 170 sizes \\(default M5x20\\)"
+expect("iso4017 Hexagon head screw, thread to the head \\(ISO 4017 / DIN 933\\): screws/iso4017.mitcad, 429 sizes \\(default M5x20\\)"
        "the hexagon head screws' sizes")
-expect("iso10642 Hexagon socket countersunk head screw \\(ISO 10642\\): screws/iso10642.mitcad, 121 sizes \\(default M5x16\\)"
+expect("iso10642 Hexagon socket countersunk head screw \\(ISO 10642 / DIN 7991\\): screws/iso10642.mitcad, 121 sizes \\(default M5x16\\)"
        "the countersunk screws' sizes")
-expect("iso4032 Hexagon nut \\(ISO 4032\\): nuts/iso4032.mitcad, 14 sizes \\(default M5\\)" "the nuts' sizes")
-expect("iso7089 Plain washer, normal series \\(ISO 7089\\): washers/iso7089.mitcad, 14 sizes \\(default M5\\)"
+expect("iso4032 Hexagon nut \\(ISO 4032 / DIN 934\\): nuts/iso4032.mitcad, 23 sizes \\(default M5\\)" "the nuts' sizes")
+expect("iso7089 Plain washer \\(ISO 7089 / DIN 125\\): washers/iso7089.mitcad, 14 sizes \\(default M5\\)"
        "the washers' sizes")
 file(TO_CMAKE_PATH "${all}" url)
 set(part "\"id\": \"mitcad-parts\", \"url\": \"${url}\", \"rev\": \"v1.0.0\"")
@@ -202,7 +204,10 @@ file(WRITE "${WORK}/all-sizes.json" "[
   {\"cmd\": \"insert_component\", \"library\": {${part}, \"component\": \"iso4032\", \"config\": \"M24\"}},
   {\"cmd\": \"insert_component\", \"library\": {${part}, \"component\": \"iso7089\", \"config\": \"M1.6\"}},
   {\"cmd\": \"insert_component\", \"library\": {${part}, \"component\": \"iso7089\", \"config\": \"M24\"}},
-  {\"expect\": {\"bodies\": 10}},
+  {\"cmd\": \"insert_component\", \"library\": {${part}, \"component\": \"iso4762\", \"config\": \"M6x8\"}},
+  {\"cmd\": \"insert_component\", \"library\": {${part}, \"component\": \"iso4017\", \"config\": \"M10x20 DIN 933\"}},
+  {\"cmd\": \"insert_component\", \"library\": {${part}, \"component\": \"iso4032\", \"config\": \"M10 DIN 934\"}},
+  {\"expect\": {\"bodies\": 13}},
   {\"expect\": {\"body\": \"ISO 4762 M1.6x2.5\", \"volume\": 14.810165764, \"tolerance\": 1e-4}},
   {\"expect\": {\"body\": \"ISO 4762 M24x200\", \"volume\": 110932.29771, \"tolerance\": 1e-4}},
   {\"expect\": {\"body\": \"ISO 4017 M1.6x2\", \"volume\": 13.481649188, \"tolerance\": 1e-4}},
@@ -216,6 +221,6 @@ cli(ok run "${WORK}/all-sizes.json" --save "${WORK}/all-sizes.mitcad")
 cli(ok parts "${WORK}/all-sizes.mitcad")
 foreach(row "ISO 4762 M1\\.6x2\\.5" "ISO 4762 M24x200" "ISO 4017 M1\\.6x2" "ISO 4017 M24x150"
             "ISO 10642 M14x25" "ISO 10642 M20x100" "ISO 4032 M1\\.6" "ISO 4032 M24" "ISO 7089 M1\\.6"
-            "ISO 7089 M24")
+            "ISO 7089 M24" "DIN 912 M6x8" "DIN 933 M10x20" "DIN 934 M10")
   expect("1  ${row}  \\(mitcad-parts v1\\.0\\.0" "the parts list's ${row}")
 endforeach()

@@ -10,7 +10,9 @@
 // categories as a tree of groups (mitcad#527: a click on a group shows its
 // subgroups' parts too; folding is remembered; starred groups first on
 // each level; PartGroups.hpp); above the grid a search, the slot
-// system (BUILD parts) and the tiles' size. Hovering a tile shows a larger
+// system (BUILD parts), the supplier (mitcad#949, PartSuppliers.hpp: a
+// part none of whose rows it sells is hidden; kept in the settings) and the
+// tiles' size. Hovering a tile shows a larger
 // picture with the supplier, the part number, the library and the licence.
 //
 // - PartGrid: the groups, filters and grid as a widget; Insert from
@@ -50,6 +52,7 @@
 #include <QWidget>
 
 #include "PartGroups.hpp"
+#include "PartSuppliers.hpp"
 #include "UsedParts.hpp"
 
 class QComboBox;
@@ -90,6 +93,9 @@ struct PickerPart {
   QStringList keywords;
   QString supplier;
   QString partNumber;
+  // The suppliers of its rows and its own (mitcad#949): the grid's
+  // Supplier filter hides a part none of whose rows the chosen one sells.
+  QList<PartSupplier> suppliers;
   QString license;      // SPDX id, empty for none
   QString sizes;        // the main sizes under the name ("30x30", "M5x16")
   QString system;       // the slot system(s) of a BUILD part ("B8 30")
@@ -212,6 +218,10 @@ public:
   void showGroup(const QString& group);
   QString groupShown() const { return m_group; }
   void setSystem(const QString& system);
+  // The Supplier filter (mitcad#949): a supplier's id, empty for All. Kept
+  // in the settings; a supplier none of the parts has shows as All.
+  QString supplierFilter() const;
+  void setSupplierFilter(const QString& supplier);
   // External: the search text is the caller's to search with
   // (searchChanged), the grid does not filter by it; else the grid keeps
   // the parts whose fields have every word.
@@ -246,6 +256,8 @@ signals:
   // A group was folded or unfolded: the groups' rows moved (mitcad#527).
   void placesChanged();
   void searchChanged(const QString& text);
+  // The Supplier filter changed (its id, empty for All).
+  void supplierChanged(const QString& supplier);
   // Another tile became current (a click, the arrow keys).
   void currentChanged(const QString& key);
   // A tile clicked (not on its star).
@@ -260,6 +272,8 @@ protected:
 private:
   void fillGroups();
   void fillSystems();
+  // The Supplier filter's choices from the parts (mitcad#949).
+  void fillSuppliers();
   // The tiles again from the parts, the group and the filters (logged).
   // The current part stays when it is still shown; else, with `notify`,
   // the first tile becomes current (currentChanged), without it none.
@@ -313,6 +327,9 @@ private:
   QLineEdit* m_search = nullptr;
   QComboBox* m_system = nullptr;
   QLabel* m_systemLabel = nullptr;
+  QComboBox* m_supplier = nullptr;
+  QLabel* m_supplierLabel = nullptr;
+  QString m_wantedSupplier; // the settings' or the user's, also while no part has it
   QSlider* m_size = nullptr;
   QWidget* m_filters = nullptr;
   QListView* m_view = nullptr;

@@ -11,6 +11,17 @@ Qt 6 (usr/lib/libQt6*.so*, usr/plugins)
 ICU (usr/lib/libicu*.so*, used by Qt)
   Licence: the Unicode licence (https://www.unicode.org/license.txt).
 
+OpenSSL 3 (usr/lib/libssl.so.3 and usr/lib/libcrypto.so.3, one build),
+which Qt's TLS plugin loads for the update check; the render worker links
+libcrypto too
+  Licence: Apache License 2.0; see mitcad/licenses/vcpkg/openssl/copyright.
+  Source code: https://www.openssl.org/ , built by vcpkg's port openssl at
+  vcpkg.json's builtin-baseline. Loaded dynamically; the only change is
+  that the folders libcrypto looks in for engines and provider modules
+  (ENGINESDIR, MODULESDIR, the build machine's) are set to
+  /nonexistent/engines-3 and /nonexistent/ossl-modules when the AppImage
+  is made (packaging/linux/make-appimage.sh in MitCad's source code).
+
 Open CASCADE Technology (usr/lib/libTK*.so*)
   Licence: GNU LGPL version 2.1 with the Open CASCADE exception. Linked
   dynamically; source code at https://dev.opencascade.org/ . Version 8.0.1

@@ -137,6 +137,75 @@ void TestDriver::testAssistantSetup(const QString& mode) {
         !anyway || anyway->isVisibleTo(dialog)) {
       fail(m_line, QStringLiteral("missing client was not reported before registration"));
     }
+  } else if (mode == QStringLiteral("local-bin")) {
+    // Claude Code's own installer puts it in the home's .local\bin and may
+    // leave PATH without it (mitcad#956): found there, with this platform's
+    // suffix, when the dialog is activated again or Check again is pressed;
+    // its command then names it by its full path. The isolated home is
+    // MITCAD_TEST_ASSISTANT_HOME, searched after the test's client folder.
+    const QString home = QDir(work).filePath(QStringLiteral("user home"));
+    const QString folder = QDir(home).filePath(QStringLiteral(".local/bin"));
+#ifdef Q_OS_WIN
+    const QString installed = QDir(folder).filePath(QStringLiteral("claude.exe"));
+#else
+    const QString installed = QDir(folder).filePath(QStringLiteral("claude"));
+#endif
+    auto* checkAgain = dialog->findChild<QPushButton*>(QStringLiteral("assistantCheckAgain"));
+    auto* command = dialog->findChild<QLineEdit*>(QStringLiteral("assistantCommand"));
+    const auto install = [installed, folder] {
+      return QDir().mkpath(folder) && QFile::copy(qEnvironmentVariable("MITCAD_TEST_ASSISTANT_STUB"), installed) &&
+          QFile::setPermissions(installed, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    };
+    const auto ready = [status, setup] {
+      return stateOf(status) == QStringLiteral("ready") && actionOf(setup) == QStringLiteral("connect");
+    };
+    const auto missing = [status, setup, checkAgain, dialog] {
+      return stateOf(status) == QStringLiteral("not-installed") && setup->text() == QStringLiteral("How to install") &&
+          checkAgain->isVisibleTo(dialog);
+    };
+    QString problem;
+    if (!checkAgain || !command) problem = QStringLiteral("Check again or the command missing");
+    qputenv("MITCAD_TEST_ASSISTANT_HOME", home.toLocal8Bit());
+    if (problem.isEmpty()) {
+      chooseAssistant(dialog, mcp::AssistantClient::ClaudeCode);
+      if (!missing()) problem = QStringLiteral("a missing Claude Code did not offer Check again after How to install");
+    }
+    if (problem.isEmpty()) {
+      checkAgain->click();
+      if (!missing() || checkAgain->text() != QStringLiteral("Not found yet")) {
+        problem = QStringLiteral("Check again without Claude Code did not say Not found yet");
+      }
+    }
+    if (problem.isEmpty() && !install()) problem = QStringLiteral("Claude Code in the isolated .local/bin could not be prepared");
+    if (problem.isEmpty()) {
+      // What the window system sends when the user comes back to the dialog.
+      QEvent activation(QEvent::ActivationChange);
+      QCoreApplication::sendEvent(dialog, &activation);
+      const QString expected = QDir::toNativeSeparators(QFileInfo(installed).canonicalFilePath());
+      if (!ready() || checkAgain->isVisibleTo(dialog)) {
+        problem = QStringLiteral("Claude Code in .local/bin was not found on activation: ") + status->text();
+      } else if (!command->text().contains(expected)) {
+        problem = QStringLiteral("the command did not name Claude Code by its full path: ") + command->text();
+      }
+    }
+    if (problem.isEmpty()) {
+      QFile::remove(installed);
+      checkAgain->setText(QStringLiteral("Check again"));
+      checkAgain->click();
+      if (!missing()) problem = QStringLiteral("Check again did not see Claude Code removed: ") + status->text();
+    }
+    if (problem.isEmpty()) {
+      if (!install()) problem = QStringLiteral("Claude Code in the isolated .local/bin could not be prepared again");
+      else {
+        checkAgain->click();
+        if (!ready()) problem = QStringLiteral("Check again did not find Claude Code in .local/bin: ") + status->text();
+      }
+    }
+    // Back to the other modes' environment: the test's client folder only.
+    qunsetenv("MITCAD_TEST_ASSISTANT_HOME");
+    QDir(home).removeRecursively();
+    chooseAssistant(dialog, mcp::AssistantClient::ClaudeCode);
+    if (!problem.isEmpty()) { fail(m_line, problem); return; }
   } else if (mode == QStringLiteral("claude")) {
     const QString executable = QDir(qEnvironmentVariable("MITCAD_TEST_ASSISTANT_EXECUTABLES"))
 #ifdef Q_OS_WIN
@@ -425,8 +494,8 @@ void TestDriver::testAssistantSetup(const QString& mode) {
     // host lists a Claude Code client and an `example-client`.
     const QDateTime since = QDateTime::currentDateTime();
     auto connected = std::make_shared<QList<mcp::ConnectedAgent>>(QList<mcp::ConnectedAgent>{
-        {QStringLiteral("claude-code"), QStringLiteral("1.0"), since, QStringLiteral("claude")},
-        {QStringLiteral("example-client"), QStringLiteral("1.0"), since, QStringLiteral("example")}});
+        {QStringLiteral("claude-code"), QStringLiteral("1.0"), since, QStringLiteral("claude"), false},
+        {QStringLiteral("example-client"), QStringLiteral("1.0"), since, QStringLiteral("example"), false}});
     mcp::ConnectAssistantDialog::Host host{[connected] { return *connected; },
         [connected](const QStringList& ids) {
           connected->removeIf([&ids](const mcp::ConnectedAgent& agent) { return ids.contains(agent.id); });

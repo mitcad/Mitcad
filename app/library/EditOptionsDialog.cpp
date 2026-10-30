@@ -5,6 +5,7 @@
 
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QJsonArray>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -20,7 +21,7 @@
 namespace mitcad {
 
 EditOptionsDialog::EditOptionsDialog(JsonRunner query, const QString& component, const QString& name,
-                                     QWidget* parent)
+                                     const QJsonObject& libraryTable, QWidget* parent)
     : QDialog(parent), m_component(component) {
   setObjectName(QStringLiteral("editOptionsDialog"));
   setWindowTitle(tr("Edit Options - %1").arg(name));
@@ -36,7 +37,20 @@ EditOptionsDialog::EditOptionsDialog(JsonRunner query, const QString& component,
   m_chooser->setOptionsQuery(componentOptionsQuery(std::move(query), component, [this] {
     return m_read ? QJsonValue(m_bound) : QJsonValue();
   }));
+  // The library's rows with their standards and suppliers' articles
+  // (mitcad#949): the filters above the choosers.
+  QStringList standards;
+  for (const QJsonValue& value : libraryTable.value(QStringLiteral("standards")).toArray()) {
+    standards << value.toString();
+  }
+  m_chooser->setFilterRows(libraryTable.value(QStringLiteral("rows")).toArray(), standards);
   layout->addWidget(m_chooser);
+  m_supplierParts = new QLabel;
+  m_supplierParts->setObjectName(QStringLiteral("editOptionsSupplierParts"));
+  m_supplierParts->setWordWrap(true);
+  m_supplierParts->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  m_supplierParts->hide();
+  layout->addWidget(m_supplierParts);
   auto* heading = new QLabel(tr("<b>Expressions</b>"));
   layout->addWidget(heading);
   m_expressionsForm = new QFormLayout;
@@ -63,7 +77,9 @@ EditOptionsDialog::EditOptionsDialog(JsonRunner query, const QString& component,
     qInfo().noquote() << QStringLiteral("Edit Options of %1: no options (%2)").arg(name, why);
   }
   fillExpressions();
+  showSupplierParts();
   connect(m_chooser, &OptionChooser::optionsChanged, this, &EditOptionsDialog::fillExpressions);
+  connect(m_chooser, &OptionChooser::rowChanged, this, &EditOptionsDialog::showSupplierParts);
   m_placesTimer.setSingleShot(true);
   m_placesTimer.setInterval(100);
   connect(&m_placesTimer, &QTimer::timeout, this, [this] { logPlaces(); });
@@ -162,6 +178,16 @@ void EditOptionsDialog::expressionEdited(const QString& option) {
   m_bound.insert(option, text);
   qInfo().noquote() << QStringLiteral("Edit Options bound %1 = %2").arg(option, text);
   m_chooser->requery();
+}
+
+void EditOptionsDialog::showSupplierParts() {
+  const QString numbers =
+      supplierPartsText(m_chooser->filterRow(m_chooser->row()).value(QStringLiteral("supplier_parts")).toArray());
+  m_supplierParts->setText(tr("Supplier part numbers: %1").arg(numbers));
+  m_supplierParts->setVisible(!numbers.isEmpty());
+  if (!numbers.isEmpty()) {
+    qInfo().noquote() << QStringLiteral("Edit Options supplier part numbers: %1").arg(numbers);
+  }
 }
 
 QJsonObject EditOptionsDialog::parameters() const {

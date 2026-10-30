@@ -58,6 +58,14 @@ of the format were neither copied, translated nor linked.
   closed with a line (exports leave out the closing segment).
 - Trimming parameters of circles and ellipses are plane angles in the
   project's angle unit; points are preferred where the file says so.
+- Limits against hostile files (mitcad#930): values nest at most 64
+  levels in a record (deeper is a record not read, not a stack overflow);
+  items, curves and profiles nest at most 64 levels. Within one decoded
+  item an entity used several times is decoded at most twice, then
+  copied; an item that would copy more than 100 000 segments, points and
+  nodes that way is unsupported as a whole ("too many nested items"). A
+  B-spline's knot multiplicities must sum (without wrapping) to poles +
+  degree + 1, each at most degree + 1.
 
 ## Tests
 
@@ -68,7 +76,10 @@ and cubic centimetres); the test building's model (structure, placements,
 openings, types, materials, styles, quantities, grid axes) and its items
 (profile areas, the I-beam's, the clipped column, the cube, the
 tetrahedron, the mapped window); rounded profiles' areas; three-point
-arcs; conics as rational B-splines; triangulated polygons with holes.
+arcs; conics as rational B-splines; triangulated polygons with holes;
+the limits of mitcad#930 (a record of 100 000 nested parentheses,
+40-level self-doubling booleans and composite curves, B-spline
+multiplicities that would wrap).
 
 The corpus test (`tests/corpus.rs`) reads every `.ifc` that the index of
 `MITCAD_IFC_CORPUS` lists (`index.tsv`; files named by the first 8 hex

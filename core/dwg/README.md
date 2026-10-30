@@ -182,6 +182,26 @@ with the transform; an array insert places one occurrence per cell.
 Colours: the entity's own, `BYLAYER` the layer's, `BYBLOCK` the
 inserting entity's.
 
+The plan places at most `scene::PLAN_BUDGET` (10^6) bodies and
+occurrences in the world, an occurrence's contents counted once per
+occurrence at every level (an array may have 32767 × 32767 cells, and
+nested arrays multiply); what does not fit is left out with a warning
+(mitcad#931). The cells of an array are made one at a time.
+
+## Damaged and hostile files
+
+The reader runs on files from anywhere (in the import worker process):
+a damaged field gives `DwgError::Corrupt`, never a panic or an
+allocation the file's data does not back (mitcad#931). Offsets and sizes
+read from the file are added with checks (`container::span`); a section,
+page or system page that claims more than 64 times the file (at least
+1 MiB, `container::size_limit`) is refused; decompression is not
+pre-sized from the size a page claims, and an R2007 data page keeps only
+the bytes its data gives (the section's bytes are zeros past them); an
+R2004 page decompresses into at most 0x7400 bytes or what its section
+still takes; lists counted by a field of the file grow with the data
+read rather than being allocated for the count.
+
 ## Writer
 
 `write::drawing` writes a 2D drawing (`mitcad_dxf::Drawing`: the drawing

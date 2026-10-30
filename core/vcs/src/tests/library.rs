@@ -283,6 +283,7 @@ fn libraries_are_fetched_and_read_at_their_versions() {
         rev: "v1.0.0".to_owned(),
         component: "pin".to_owned(),
         config: Some("M4x16".to_owned()),
+        standard: String::new(),
     };
     let (component, _) = doc
         .insert_library_component(&part, &InsertOptions::default())
@@ -635,6 +636,7 @@ fn parts_keep_resolving_after_their_library_is_renamed() {
         rev: v1.clone(),
         component: "pin".to_owned(),
         config: Some("M4x16".to_owned()),
+        standard: String::new(),
     };
     let (component, _) = doc
         .insert_library_component(&part, &InsertOptions::default())

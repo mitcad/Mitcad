@@ -84,6 +84,8 @@ expect-native-text projectCheckMinutes '^every 30 minutes$'
 expect-native-text projectLiveHere '^Off$'
 expect-native-text projectAuthorName '^Native Project Tester$'
 expect-native-text projectAuthorEmail '^native-project@example\.invalid$'
+# Its width still holds the whole placeholder in AppKit's font (mitcad#953).
+expect-native-bounds projectAuthorEmail placeholder '^Author:$'
 native-type projectAuthorName 'Native Project Edited'
 button '^Close$'
 expect-log 'Project Settings: author Native Project Edited <native-project@example\.invalid>'
@@ -191,7 +193,8 @@ native-action tools.search
 native-type native.commandSearch 'Preferences: Cache'
 key Return
 focus-dialog '^Settings$'
-button '^Diagnostics.*$'
+# The Cache page's button, not the Diagnostics section of the selector.
+button '^Diagnostics…$'
 focus-dialog '^Diagnostics$'
 button '^Close$'
 focus-dialog '^Settings$'

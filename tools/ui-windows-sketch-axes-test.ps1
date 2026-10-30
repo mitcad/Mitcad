@@ -32,6 +32,11 @@
 #      x axis and the dimension in one step (3 DOF). p1 and the y axis
 #      selected the same way, which makes nothing, Coincident makes the y
 #      axis in its step and puts p1 on it (2 DOF); undo takes both back.
+#   8. Drawing onto an axis (mitcad#948): Sketch4 is empty. Hovering the
+#      x axis with the circle tool makes nothing; a circle whose centre is
+#      clicked on the x axis makes the x axis and holds the centre on it
+#      with a Coincident in the circle's step (2 DOF); one undo takes all
+#      of it back (0 DOF).
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-sketch-axes-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -63,7 +68,8 @@ Set-Content -Encoding ascii $script @'
   {"cmd": "sketch.circle", "sketch": "F2", "mode": "center", "center": [10, 12], "radius": 3},
   {"cmd": "sketch.create"},
   {"cmd": "sketch.add_point", "sketch": "F3", "at": [-6, 8]},
-  {"cmd": "sketch.add_point", "sketch": "F3", "at": [14, -3]}
+  {"cmd": "sketch.add_point", "sketch": "F3", "at": [14, -3]},
+  {"cmd": "sketch.create"}
 ]
 '@
 $made = & $cli run $script --save $design
@@ -283,5 +289,42 @@ Ui-ExpectNew 'Sketch Sketch3: 2 DOF' 'both again'
 Ui-Mark
 Ui-Step 'finish sketch (Ctrl+Enter)'     { Ui-Key 'ctrl+Return' }
 Ui-ExpectNew 'Sketch finished' 'Sketch3 finished'
+
+Write-Host "--- 8. A circle's centre snapped onto the x axis (mitcad#948)"
+Ui-Mark
+Ui-Step 'edit Sketch4 (double-click)'    { Ui-DoubleClickLogged 'Timeline Sketch4' }
+Ui-ExpectNew 'Editing sketch F4 (Sketch4)' 'Sketch4 is edited' 30
+Ui-ExpectNew 'Sketch Sketch4: 0 DOF' 'an empty sketch'
+Ui-Step 'zoom out to show the axes'      { Ui-ZoomOut 2 }
+Ui-Mark
+Ui-Step 'circle tool (C)'                { Ui-Key 'c' }
+Ui-ExpectNew 'Sketch tool Center Diameter Circle' 'the circle tool'
+Ui-Step 'hover the x axis'               {
+  $at = Ui-SketchAt 4 0
+  [UiInput]::Move($script:UiWindow, $at[0], $at[1], 0)
+  Start-Sleep -Milliseconds 300
+  Ui-SyncOr 500
+}
+if (@(Ui-NewLines | Where-Object { $_.Contains('Made the sketch') }).Count -ne 0) {
+  Ui-Fail 'hovering the x axis made it'
+}
+Write-Host 'ok   hovering the x axis makes nothing'
+Ui-Mark
+Ui-Step 'centre on the x axis'           { Ui-SketchClick 10 0 }
+Ui-Step 'rim'                            { Ui-SketchClick 10 6 }
+Ui-ExpectNew 'Added circle, diameter' 'the circle added'
+Ui-ExpectNew 'Made the sketch x axis for a pick: c' "the x axis made in the circle's step"
+Ui-ExpectNew ' on the sketch x axis c' 'the centre held on the x axis by a Coincident'
+Ui-ExpectNew 'Sketch Sketch4: 2 DOF' "only the circle's x and radius free"
+if (@(Ui-NewLines | Where-Object { $_ -match 'Constraint coincident on .* not added' }).Count -ne 0) {
+  Ui-Fail 'the Coincident with the axis was refused'
+}
+Ui-Step 'end the tool (Esc)'             { Ui-Key 'Escape' }
+Ui-Mark
+Ui-Step 'undo (Ctrl+Z)'                  { Ui-Key 'ctrl+z' }
+Ui-ExpectNew 'Sketch Sketch4: 0 DOF' 'the circle, the x axis and the Coincident taken back as one step'
+Ui-Mark
+Ui-Step 'finish sketch (Ctrl+Enter)'     { Ui-Key 'ctrl+Return' }
+Ui-ExpectNew 'Sketch finished' 'Sketch4 finished'
 
 Ui-Finish 'UI Windows sketch axes test'

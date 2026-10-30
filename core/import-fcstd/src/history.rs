@@ -62,6 +62,10 @@ pub(super) struct SketchMade {
     pub points: HashMap<i32, u32>,
     /// The H and V axis lines.
     pub axes: [Option<u32>; 2],
+    /// FreeCAD external geometry index → the Mitcad curve projected for it
+    /// (mitcad#952: 1.1's defining external geometry is part of the
+    /// sketch's shape, which other sketches project).
+    pub externals: HashMap<usize, u32>,
 }
 
 /// The Mitcad bodies holding an object's result, with their shapes right
@@ -498,17 +502,31 @@ impl<K: Kernel> Importer<'_, '_, K> {
             );
             let mut deps = BTreeSet::new();
             for (property, link) in o.references() {
+                // A binder's context is the Body it is in (mitcad#952): no
+                // dependency, or the Body and everything after the binder
+                // would be a cycle.
                 let skip = match property {
                     "Group" => !group,
                     "Origin" | "OriginFeatures" | "Tip" | "ElementList" | "LinkedObject"
-                    | "_Body" => true,
+                    | "_Body" | "Context" => true,
                     _ => false,
                 };
                 if skip || link.file.is_some() || link.object == o.name {
                     continue;
                 }
-                if let Some(&dep) = wanted.get(link.object.as_str()) {
-                    deps.insert(dep);
+                // A binder after what its support's path names (a sketch of
+                // another Body, mitcad#952), not after that whole Body.
+                let targets = if property == "Support" {
+                    self.sources[0].path_objects(link)
+                } else {
+                    vec![link.object.as_str()]
+                };
+                for target in targets {
+                    if target != o.name
+                        && let Some(&dep) = wanted.get(target)
+                    {
+                        deps.insert(dep);
+                    }
                 }
             }
             for dep in &deps {
@@ -570,7 +588,8 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 self.feature_skipped(
                     &o,
                     body,
-                    "a binder: Mitcad has none (sketches take its geometry as fixed geometry)",
+                    "a binder: Mitcad has none (sketches project its geometry linked to the \
+                     sketch it binds; features take that sketch, mitcad#955)",
                 );
             } else {
                 self.part_item(&o);

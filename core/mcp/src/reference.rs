@@ -8,6 +8,7 @@
 //! refused command that misses fields gets the reference of its feature
 //! type or command.
 
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 use serde_json::{Value, json};
@@ -53,7 +54,29 @@ pub fn unknown_command(name: &str, vocabulary: &Vocabulary) -> String {
     unknown("command", "commands", name, &vocabulary.commands)
 }
 
+/// The most characters of a client's own text that an error repeats
+/// (mitcad#935): refusals are logged, and a client's text can be
+/// megabytes long.
+pub const ECHO_CHARS: usize = 200;
+/// The most field names of a client's object that an error lists.
+const ECHO_FIELDS: usize = 20;
+
+/// A client's text as an error repeats it (mitcad#935): whole when it has
+/// at most [`ECHO_CHARS`] characters, else its first [`ECHO_CHARS`] with
+/// `…` and how many bytes were left out.
+pub fn echoed(text: &str) -> Cow<'_, str> {
+    match text.char_indices().nth(ECHO_CHARS) {
+        None => Cow::Borrowed(text),
+        Some((cut, _)) => Cow::Owned(format!(
+            "{}… ({} more bytes)",
+            &text[..cut],
+            text.len() - cut
+        )),
+    }
+}
+
 fn unknown(kind: &str, plural: &str, name: &str, names: &[String]) -> String {
+    let name = echoed(name);
     if names.is_empty() {
         return format!(
             "unknown {kind} '{name}'; model_reference without arguments lists the {plural}"
@@ -82,14 +105,28 @@ pub fn missing_name(request: &Value, key: &str) -> String {
             "queries",
         )
     };
-    let fields: Vec<&str> = request
+    // At most ECHO_FIELDS of the client's names, each cut (mitcad#935).
+    let count = request.as_object().map_or(0, serde_json::Map::len);
+    let fields: Vec<Cow<'_, str>> = request
         .as_object()
-        .map(|object| object.keys().map(String::as_str).collect())
+        .map(|object| {
+            object
+                .keys()
+                .take(ECHO_FIELDS)
+                .map(|field| echoed(field.as_str()))
+                .collect()
+        })
         .unwrap_or_default();
     let found = if request.get(key).is_some() {
         format!("its '{key}' is not a nonempty string")
     } else if fields.is_empty() {
         "this one is empty".to_owned()
+    } else if count > fields.len() {
+        format!(
+            "this one has no '{key}' (its fields: {}, and {} more)",
+            fields.join(", "),
+            count - fields.len()
+        )
     } else {
         format!(
             "this one has no '{key}' (its fields: {})",

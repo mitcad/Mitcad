@@ -555,6 +555,60 @@ bool volume_changed(const Shape& target, const TopoDS_Shape& seen, const Shape& 
   return whole();
 }
 
+// Whether a piece of a join holds less volume than a target it merged
+// (`seen`, the copy of the target the operation worked on): a union never
+// does, so such a result is wrong (mitcad#964: OCCT's exact union of a
+// pad's tool whose cylindrical face lies on a cylindrical face of the
+// body that the body's earlier face merge made one face, partly beside
+// the tool, came out with the tool's overlap with the body taken away).
+// The difference is measured on the faces the two do not share, as
+// volume_changed does; the limit, 1e-6 of the larger of 1 and the
+// target's box, stays above the integration's noise.
+bool loses_volume(const Shape& target, const TopoDS_Shape& seen, const Shape& piece) {
+  ShapeMap own;
+  std::vector<TopoDS_Shape> faces;
+  for (TopExp_Explorer it(seen, TopAbs_FACE); it.More(); it.Next()) {
+    if (own.Add(it.Current()) <= static_cast<int>(faces.size())) {
+      own.Clear();
+      faces.clear();
+      break; // a face used twice (by two shells): both measured whole
+    }
+    faces.push_back(it.Current());
+  }
+  std::vector<bool> kept(faces.size(), false);
+  BRep_Builder builder;
+  TopoDS_Compound change;
+  builder.MakeCompound(change);
+  for (TopExp_Explorer it(piece.occt(), TopAbs_FACE); it.More(); it.Next()) {
+    const int index = faces.empty() ? 0 : own.FindIndex(it.Current());
+    const auto at = static_cast<std::size_t>(index - 1);
+    if (index > 0 && !kept[at] && faces[at].Orientation() == it.Current().Orientation()) {
+      kept[at] = true;
+    } else {
+      builder.Add(change, it.Current());
+    }
+  }
+  if (faces.empty()) {
+    for (TopExp_Explorer it(seen, TopAbs_FACE); it.More(); it.Next()) {
+      builder.Add(change, it.Current().Reversed());
+    }
+  }
+  for (std::size_t i = 0; i < faces.size(); ++i) {
+    if (!kept[i]) {
+      builder.Add(change, faces[i].Reversed());
+    }
+  }
+  const double added = analysis::volume_properties(change).Mass();
+  const Bnd_Box box = box_of(target);
+  double bound = 1.0;
+  if (!box.IsVoid()) {
+    double xmin = 0, ymin = 0, zmin = 0, xmax = 0, ymax = 0, zmax = 0;
+    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    bound = std::max(1.0, (xmax - xmin) * (ymax - ymin) * (zmax - zmin));
+  }
+  return added < -1.0e-6 * bound;
+}
+
 std::unique_ptr<BRepAlgoAPI_BooleanOperation> make_operation(BooleanOp op) {
   switch (op) {
   case BooleanOp::Join:
@@ -1273,6 +1327,56 @@ BooleanResult boolean(BooleanOp op, const std::vector<const Shape*>& targets, co
         }
         return std::nullopt;
       };
+      // Whether a piece of a join holds less volume than a target it merged
+      // (loses_volume, mitcad#964); `copies` are the copies of `joined`'s
+      // targets the operation worked on, in its order.
+      const auto lost_volume = [&](const std::vector<detail::FaceNamer::Piece>& solids,
+                                   const std::vector<std::pair<const Shape*, int>>& joined,
+                                   const std::vector<TopoDS_Shape>& copies) {
+        if (copies.size() != joined.size()) {
+          return false;
+        }
+        for (const detail::FaceNamer::Piece& piece : solids) {
+          if (piece.sources.count(tool_tag) == 0) {
+            continue;
+          }
+          for (std::size_t k = 0; k < joined.size(); ++k) {
+            if (piece.sources.count(joined[k].second) > 0 &&
+                loses_volume(*joined[k].first, copies[k], *piece.shape)) {
+              return true;
+            }
+          }
+        }
+        return false;
+      };
+      // A join that lost volume is wrong whatever the tolerance: it is
+      // tried again with the smallest fuzzy value (fuzzy_steps, from
+      // kNearContact) whose result merges every target with the tool and
+      // loses none. None when no fuzzy value does; the exact join stays.
+      const auto without_volume_loss = [&](const std::vector<std::pair<const Shape*, int>>& joined)
+          -> std::optional<std::vector<detail::FaceNamer::Piece>> {
+        for (const double step : fuzzy_steps(reach)) {
+          std::vector<TopoDS_Shape> copies;
+          std::vector<detail::FaceNamer::Piece> solids;
+          try {
+            solids = run_operation(op, joined, tool, tool_tag, true, &copies, false, nullptr, step).pieces();
+          } catch (const Cancelled&) {
+            throw;
+          } catch (...) {
+            continue;
+          }
+          const bool merges_all = std::all_of(joined.begin(), joined.end(), [&](const auto& entry) {
+            return std::any_of(solids.begin(), solids.end(), [&](const detail::FaceNamer::Piece& piece) {
+              return piece.sources.count(tool_tag) > 0 && piece.sources.count(entry.second) > 0;
+            });
+          });
+          if (merges_all && !lost_volume(solids, joined, copies)) {
+            trace.note("lost volume fuzzy=" + std::to_string(step));
+            return solids;
+          }
+        }
+        return std::nullopt;
+      };
       // Only the targets the tool touches: fusing all of them would also
       // merge targets that overlap each other but not the tool.
       std::vector<std::pair<const Shape*, int>> near;
@@ -1296,8 +1400,9 @@ BooleanResult boolean(BooleanOp op, const std::vector<const Shape*>& targets, co
       // result could not tell, so they were fused again.
       if (near.size() == 1) {
         std::vector<detail::FaceNamer::Piece> solids;
+        std::vector<TopoDS_Shape> copies;
         try {
-          solids = run_operation(op, near, tool, tool_tag).pieces();
+          solids = run_operation(op, near, tool, tool_tag, true, &copies).pieces();
         } catch (const Cancelled&) {
           throw;
         } catch (...) {
@@ -1312,6 +1417,11 @@ BooleanResult boolean(BooleanOp op, const std::vector<const Shape*>& targets, co
           });
         };
         const bool merged = merges(solids);
+        if (merged && lost_volume(solids, near, copies)) {
+          if (std::optional<std::vector<detail::FaceNamer::Piece>> fuzzy = without_volume_loss(near)) {
+            solids = std::move(*fuzzy);
+          }
+        }
         if (merged && within > 0.0) {
           int count = 0;
           for (const detail::FaceNamer::Piece& piece : solids) {
@@ -1408,7 +1518,15 @@ BooleanResult boolean(BooleanOp op, const std::vector<const Shape*>& targets, co
         return result;
       }
       if (within <= 0.0) {
-        result.pieces = pieces_of(run_operation(op, joined, tool, tool_tag));
+        std::vector<TopoDS_Shape> copies;
+        std::vector<detail::FaceNamer::Piece> solids =
+            run_operation(op, joined, tool, tool_tag, true, &copies).pieces();
+        if (lost_volume(solids, joined, copies)) {
+          if (std::optional<std::vector<detail::FaceNamer::Piece>> fuzzy = without_volume_loss(joined)) {
+            solids = std::move(*fuzzy);
+          }
+        }
+        result.pieces = to_pieces(solids);
         return result;
       }
       // Within a tolerance (mitcad#298), for bodies that match a file's
@@ -1417,14 +1535,24 @@ BooleanResult boolean(BooleanOp op, const std::vector<const Shape*>& targets, co
       // fuzzy value that gives a valid result.
       std::vector<BooleanPiece> exact;
       bool lost = false;
+      std::vector<TopoDS_Shape> exact_copies;
+      std::vector<detail::FaceNamer::Piece> exact_solids;
       try {
-        exact = pieces_of(run_operation(op, joined, tool, tool_tag, true, nullptr, true, nullptr, 0.0, &lost));
+        exact_solids =
+            run_operation(op, joined, tool, tool_tag, true, &exact_copies, true, nullptr, 0.0, &lost).pieces();
+        exact = to_pieces(exact_solids);
       } catch (const Cancelled&) {
         throw;
       } catch (...) {
         trace.note("exact join failed: fuzzy");
         result.pieces = pieces_of(fuzzy_join(joined, 0.0));
         return result;
+      }
+      if (!lost && lost_volume(exact_solids, joined, exact_copies)) {
+        if (std::optional<std::vector<detail::FaceNamer::Piece>> fuzzy = without_volume_loss(joined)) {
+          result.pieces = to_pieces(*fuzzy);
+          return result;
+        }
       }
       // An exact join that could not build its solids of all the faces
       // (OCCT cannot orient them and leaves faces unused: no solid at all,

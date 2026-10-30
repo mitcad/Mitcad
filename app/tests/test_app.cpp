@@ -2557,6 +2557,13 @@ int partOptionsTests();
 int documentSnapshotTests();
 int heifImageTests();
 int profilePicksTests();
+int spaceMouseTests();
+int mcpEndpointLimitsTests();
+int chatHistoryTests();
+int cameraHeightTests();
+int sketchNormalTests();
+int activateQuestionTests();
+int featureStatusTests();
 
 int main(int argc, char* argv[]) {
   QApplication app(argc, argv);
@@ -2659,6 +2666,13 @@ int main(int argc, char* argv[]) {
     failures += documentSnapshotTests();
     failures += heifImageTests();
     failures += profilePicksTests();
+    failures += spaceMouseTests();
+    failures += mcpEndpointLimitsTests();
+    failures += chatHistoryTests();
+    failures += cameraHeightTests();
+    failures += sketchNormalTests();
+    failures += activateQuestionTests();
+    failures += featureStatusTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

@@ -8,10 +8,12 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <system_error>
 #include <thread>
 #include <unordered_map>
@@ -62,6 +64,7 @@
 #include <Precision.hxx>
 #include <Standard_ErrorHandler.hxx>
 #include <Standard_Failure.hxx>
+#include <Standard_OutOfMemory.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
@@ -414,6 +417,9 @@ struct MeshShared {
   std::vector<MeshReport::FaceTime> times;
   std::atomic<std::size_t> redone{0}; // CheckedPlaneAlgo
   std::atomic<bool> stop{false};      // the meshing's range was stopped
+  // An allocation failed in a face's triangulation (FaceWork, mitcad#936):
+  // the meshing throws "out of memory" once it ends (BoundedMesh).
+  std::atomic<bool> out_of_memory{false};
 };
 using MeshSharedPtr = std::shared_ptr<MeshShared>;
 
@@ -757,6 +763,9 @@ private:
   MeshSharedPtr m_shared;
 };
 
+// The workers of abandoned meshings still running (abandoned_faces).
+std::atomic<std::size_t> g_abandonedWorkers{0};
+
 // The faces of one meshing, triangulated one at a time by each worker, as
 // BRepMesh_FaceDiscret triangulates them.
 struct FaceWork {
@@ -764,7 +773,13 @@ struct FaceWork {
            const IMeshTools_Parameters& parameters_, MeshSharedPtr shared_)
       : model(std::move(model_)), factory(std::move(factory_)), parameters(parameters_), shared(std::move(shared_)) {}
 
-  // BRepMesh_FaceDiscret::process.
+  // BRepMesh_FaceDiscret::process, which catches OCCT's exceptions only:
+  // here any exception leaves the face failed (mitcad#936). On a worker of
+  // its own, one that escaped would end the process (std::terminate); on
+  // OCCT's pool, it was thrown again on the meshing's thread. A failed
+  // allocation (OCCT's own allocations throw Standard_OutOfMemory, plain
+  // C++ ones std::bad_alloc: Delabella's, the plane check's) is noted for
+  // the meshing to report.
   void process(int index, const Message_ProgressRange& range) const {
     const IMeshData::IFaceHandle& face = model->GetFace(index);
     if (face->IsSet(IMeshData_Failure) || face->IsSet(IMeshData_Reused)) {
@@ -783,21 +798,43 @@ struct FaceWork {
         return;
       }
       algorithm->Perform(face, parameters, range);
+    } catch (const Standard_OutOfMemory&) {
+      shared->out_of_memory = true;
+      face->SetStatus(IMeshData_Failure);
     } catch (const Standard_Failure&) {
+      face->SetStatus(IMeshData_Failure);
+    } catch (const std::bad_alloc&) {
+      shared->out_of_memory = true;
+      face->SetStatus(IMeshData_Failure);
+    } catch (const std::exception&) {
+      face->SetStatus(IMeshData_Failure);
+    } catch (...) {
       face->SetStatus(IMeshData_Failure);
     }
   }
 
-  // A worker: the next face not taken, until none is left.
-  void run() {
-    OSD::SetThreadLocalSignal(OSD::SignalMode(), catch_fpe);
-    const occ::handle<SharedStop> stop = new SharedStop(shared);
-    for (int index = next++; index < model->FacesNb(); index = next++) {
-      process(index, stop->Start());
+  // A worker: the next face not taken, until none is left. Returns whether
+  // the meshing abandoned it meanwhile (counted in g_abandonedWorkers). An
+  // exception outside a face (its stop's allocation) ends the worker; the
+  // others take the faces left.
+  bool run() {
+    try {
+      OSD::SetThreadLocalSignal(OSD::SignalMode(), catch_fpe);
+      const occ::handle<SharedStop> stop = new SharedStop(shared);
+      for (int index = next++; index < model->FacesNb(); index = next++) {
+        process(index, stop->Start());
+      }
+    } catch (const Standard_OutOfMemory&) {
+      shared->out_of_memory = true;
+    } catch (const std::bad_alloc&) {
+      shared->out_of_memory = true;
+    } catch (...) {
+      // The faces it did not take are the other workers'.
     }
     const std::lock_guard<std::mutex> lock(mutex);
     --running;
     idle.notify_all();
+    return abandoned;
   }
 
   const occ::handle<IMeshData_Model> model;
@@ -809,7 +846,22 @@ struct FaceWork {
   std::mutex mutex;
   std::condition_variable idle;
   int running = 0;
+  // Set, under `mutex`, when the meshing gives up the workers still
+  // running; each of them counts in g_abandonedWorkers until it ends.
+  bool abandoned = false;
 };
+
+// A detached worker of StoppableFaceDiscret (mitcad#936): its faces, then
+// the meshing's data released (the mesher's model, freed inside OCCT when
+// this is the last holder, as for an abandoned meshing) while the worker
+// still counts as abandoned, if it was.
+void work_on_faces(std::shared_ptr<FaceWork> work) {
+  const bool abandoned = work->run();
+  work.reset();
+  if (abandoned) {
+    --g_abandonedWorkers;
+  }
+}
 
 // BRepMesh's face discretization (BRepMesh_FaceDiscret) whose stop does not
 // wait for a face that does not end (mitcad#846). OCCT's algorithms test
@@ -822,8 +874,9 @@ struct FaceWork {
 // Once stopped, the workers take no other face and the faces under way get
 // kMeshAbandonSeconds to end; then the meshing is abandoned: the faces still
 // under way are counted (MeshShared::left), their results discarded when
-// they end (PrivateFaceAlgo), and this returns as stopped. Without such a
-// range, BRepMesh's own parallel loop.
+// they end (PrivateFaceAlgo), and this returns as stopped; the workers
+// still running count in abandoned_faces until they end (mitcad#936).
+// Without such a range, BRepMesh's own parallel loop.
 class StoppableFaceDiscret : public IMeshTools_ModelAlgo {
 public:
   StoppableFaceDiscret(occ::handle<IMeshTools_MeshAlgoFactory> factory, MeshSharedPtr shared)
@@ -854,7 +907,7 @@ protected:
     int started = 0;
     for (int i = 0; i < threads; ++i) {
       try {
-        std::thread([work] { work->run(); }).detach();
+        std::thread(work_on_faces, work).detach();
         ++started;
       } catch (const std::system_error&) {
         const std::lock_guard<std::mutex> lock(work->mutex);
@@ -890,6 +943,12 @@ protected:
       }
     }
     const bool abandon = work->running > 0;
+    if (abandon) {
+      // Counted before any of them can end (under the work's mutex, which
+      // each takes to end; work_on_faces counts it off).
+      work->abandoned = true;
+      g_abandonedWorkers += static_cast<std::size_t>(work->running);
+    }
     lock.unlock();
     if (abandon) {
       const std::lock_guard<std::mutex> guard(m_shared->mutex);
@@ -998,6 +1057,9 @@ public:
     return done;
   }
 
+  // Whether an allocation failed in a face's triangulation (mitcad#936).
+  bool outOfMemory() const { return m_shared->out_of_memory.load(); }
+
 private:
   void add(double MeshReport::*phase, Clock::time_point start) {
     if (m_report != nullptr) {
@@ -1053,7 +1115,12 @@ private:
 std::atomic<std::size_t> g_presentationFaces{0};
 
 // BRepMesh_IncrementalMesh with that context. A presentation's meshing
-// (BoundedFactory) counts the faces it meshed and traces itself.
+// (BoundedFactory) counts the faces it meshed and traces itself. An
+// allocation that failed in a face's triangulation (the face is left
+// failed) makes the meshing throw Error "triangulation: out of memory" once
+// it ends (mitcad#936; geometry's operations report such failures alike),
+// except a presentation's, which OCCT's viewer runs on the UI thread and
+// which draws the faces it has.
 class BoundedMesh : public BRepMesh_IncrementalMesh {
 public:
   explicit BoundedMesh(const MeshOptions& options, MeshReport* report = nullptr, bool presentation = false)
@@ -1066,8 +1133,9 @@ public:
     MeshReport own;
     MeshReport* report = m_presentation ? &own : m_report;
     const Clock::time_point start = Clock::now();
-    BRepMesh_IncrementalMesh::Perform(new BoundedContext(m_faceTriangles, m_fastPlanes, m_checkPlanes, report),
-                                      range);
+    BoundedContext* context = new BoundedContext(m_faceTriangles, m_fastPlanes, m_checkPlanes, report);
+    const occ::handle<IMeshTools_Context> held = context;
+    BRepMesh_IncrementalMesh::Perform(held, range);
     if (report != nullptr) {
       report->total += milliseconds_since(start);
     }
@@ -1076,6 +1144,10 @@ public:
       if (mesh_tracing()) {
         std::fprintf(stderr, "mesh-trace: presentation %s\n", own.line().c_str());
       }
+      return;
+    }
+    if (context->outOfMemory()) {
+      throw Error("triangulation: out of memory");
     }
   }
 
@@ -1142,6 +1214,8 @@ bool mesh_tracing() {
 }
 
 std::size_t presentation_faces_meshed() { return g_presentationFaces.load(); }
+
+std::size_t abandoned_faces() { return g_abandonedWorkers.load(); }
 
 std::string MeshReport::line() const {
   char text[256];

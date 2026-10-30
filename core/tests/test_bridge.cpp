@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -1303,6 +1304,45 @@ void test_panic_note() {
   CHECK(contains(g_panic_note, "panic for a test of the note"));
 }
 
+// A file reader the application runs in its own process (mitcad#922): a
+// panic of the DXF reader in the dxf_info query (forced by the test hook
+// MITCAD_TEST_PARSER_PANIC, which names the file) is the query's error,
+// with the panic's message, not an abort at the bridge; this process lives
+// on, and the same query answers once the reader is well again.
+void test_reader_panic_is_an_error() {
+  const std::string path = "test_bridge_reader_panic.dxf"; // (in the test's working folder)
+  {
+    std::ofstream file(path, std::ios::binary);
+    file << "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n10\n21\n0\n0\nENDSEC\n0\nEOF\n";
+  }
+  const std::string query = R"({"query": "dxf_info", "path": ")" + path + "\"}";
+  auto document = mitcad::new_document();
+  g_panic_note.clear();
+#ifdef _WIN32
+  _putenv_s("MITCAD_TEST_PARSER_PANIC", path.c_str());
+#else
+  setenv("MITCAD_TEST_PARSER_PANIC", path.c_str(), 1);
+#endif
+  CHECK(throws_with([&] { (void)document->query(query); },
+                    "test_bridge_reader_panic.dxf: the file's reader failed (an internal error): a test panic in "
+                    "the reader of test_bridge_reader_panic.dxf (MITCAD_TEST_PARSER_PANIC)"));
+  // The panic hook still ran: a crash report would have its message.
+  CHECK(contains(g_panic_note, "MITCAD_TEST_PARSER_PANIC"));
+#ifdef _WIN32
+  _putenv_s("MITCAD_TEST_PARSER_PANIC", "");
+#else
+  unsetenv("MITCAD_TEST_PARSER_PANIC");
+#endif
+  try {
+    const std::string answer(document->query(query));
+    CHECK(contains(answer, "\"entities\""));
+  } catch (const rust::Error& error) {
+    std::fprintf(stderr, "dxf_info after the panic failed: %s\n", error.what());
+    ++failures;
+  }
+  std::remove(path.c_str());
+}
+
 // Where segments cross a body's faces (the .f3d import's thread angles,
 // mitcad#68): a 10 mm block with a hole of radius 2 at (3, 7).
 // Each crossing once (also on an edge two faces share), in order, entering
@@ -1563,6 +1603,7 @@ int main() {
   test_boundary_distances_of_a_plate_with_holes();
   test_boundary_distances_off_free_form_faces();
   test_panic_note();
+  test_reader_panic_is_an_error();
   test_segment_crossings();
   test_out_of_memory_in_an_operation();
   test_live_hub();

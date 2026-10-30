@@ -152,6 +152,10 @@ The wheel over the native timeline scrolls towards older or newer features,
 using its larger axis for diagonal motion. Precise trackpad deltas retain
 their point values; the strip consumes scrolling at both ends so it cannot
 zoom the canvas.
+Command search result rows keep each command's shared CAD icon, at the shared
+search's 18 points, beside its name and shortcut: the same artwork as the
+ribbon and menus in the palette's light or dark rendering, dimmed with the
+name when the command cannot run (mitcad#974).
 Command+W in command or timeline search dismisses that search and keeps the
 document open. Removing Project through toolbar customisation remains in
 effect after saves and other project-status changes.
@@ -258,7 +262,11 @@ take extra height. Preferred sizes stay below the window's own size
 priority; minimum sizes hold against resizing, so a window cannot become
 narrower than its fields' usable widths. Qt size hints of widgets are read
 when a presenter is converted; a nested layout's natural size comes from its
-native items, and a line edit keeps at least Qt's 17-character width.
+native items, and a line edit keeps at least Qt's 17-character width. A
+placeholder that fits its presenter's hint also stays whole: the line
+edit's preferred width covers the AppKit cell's size for it, in the field's
+actual font, bezel and padding. A longer placeholder keeps the shared width
+instead of widening the form, as its Qt field does not show it whole either.
 Non-wrapping form captions keep their complete single-line AppKit text
 metrics, including trailing punctuation. Embedded table controls use cell
 padding rather than the margins of an independent dialog.
@@ -267,6 +275,15 @@ constraints of the entire hidden subtree in one batch. Hidden rows and
 cells leave no guides in the active graph. Showing the category restores
 its constraints even when its children's individual hidden flags did not
 change; category switching, Search and Advanced keep every field available.
+
+Settings chooses its sections in a native row of buttons above a separator,
+not in text-only tabs (mitcad#971): each button has the shared section icon
+above its complete name, in the shared header's order. The icons are
+template images of the shared ones at 24 points with Retina pixels, so they
+follow the appearance; the chosen section has the accent tint, as in the
+shared header. A click selects the page through the same tab view and pane
+switching as before, and the window is at least as wide as the complete
+row. Other tabbed dialogs, without such icons, keep their tabs.
 
 Converted button boxes use the macOS role order: help, reset, apply and
 other helper actions on the left; destructive actions set apart; then
@@ -296,9 +313,11 @@ unambiguous layout, and the role order with its gaps, Return, Escape, a
 helper action and later role changes. Then, in light and dark appearance, it
 opens Parameters, New Project, Settings > Navigation, Insert from Library,
 Render Image and Library Parts at the normal and a narrow document size and
-at each dialog's narrowest size. It asserts the visible, unclipped and
-unobstructed bounds of the search field, the author's name and email and the
-speed sliders beside their labels; left-to-right button bounds with the
+at each dialog's narrowest size. In Settings every section button must show
+its template icon and complete name within its bounds, and real clicks
+switch to Display and back to Navigation. It asserts the visible, unclipped
+and unobstructed bounds of the search field, the author's name and email
+and the speed sliders beside their labels; left-to-right button bounds with the
 primary action rightmost; real AppKit pointer clicks and slider drags; Tab
 from name to email at both sizes; repeated pointer/search edits after the
 narrow resize; all four narrow slider bounds; Return while Create is
@@ -357,6 +376,19 @@ span width, padding, font and selection policy of both kinds without
 scrolling individual rows into view. Padding is measured between the actual
 AppKit alignment rectangles used by the anchors, while caption completeness
 and clipping are checked against the visible view bounds.
+
+A native table follows its shared view's own scroll requests: when the
+shared view's vertical position moves, as after a presenter's `scrollTo`
+(Settings > Navigation reveals its first active binding below the reserved
+left drags, mitcad#972), and its new top row is not wholly in the native
+viewport, that row becomes the native top row, below the header. Only a
+move of the shared position counts, so the user's own native scrolling
+stays; a shared move that only keeps its current row in sight, as after
+native input chose a row the native table already shows, leaves the native
+position too. All rows, reserved and disabled ones included, remain in the
+table. The native dialog layout regression reads the first whole row in the
+actual viewport (`expect-native-first-row`) when Navigation opens, after
+scheme changes and at the narrow size.
 
 When a shared `SelectItems` view restores a selected cell after rebuilding
 its model, the native row containing that cell regains its highlight. This
@@ -818,9 +850,11 @@ Repeated native inputs retain their values after adding and removing rows,
 and their controls unlock after each structural action is applied.
 Native outline selection drives worker measurements, canvas Return and
 Browser Escape close the inspector, and Physical Properties presents a
-native report dialog. Command search checks Command+W dismissal without
-closing the document. The native sketch workflow checks Browser Return
-activation for sketches and features, row renaming and command isolation.
+native report dialog. Command search checks its rows' shared CAD icons
+(Libraries and Sphere selected, Extrude dimmed before it can run) and
+Command+W dismissal without closing the document. The native sketch
+workflow checks Browser Return activation for sketches and features, row
+renaming and command isolation.
 The toolbar regression upgrades an older saved layout, checks live status
 after a customization-palette request, removes Project, changes projects,
 and verifies that removal persists in a second application process.
@@ -1184,6 +1218,10 @@ its width. `expect-native-bounds <identifier> shared [label regex]` reads
 forms that keep nonexpanding fields at their hint. It logs the minimum,
 hint, explicit minimum, size policy and form growth policy, then applies
 the usual actual AppKit visibility, clipping, hit-test and label checks.
+`expect-native-bounds <identifier> placeholder [label regex]` takes the
+width the text field's own AppKit cell needs for its whole placeholder as
+the minimum; New Project and Project Settings check their Author email
+field with it (mitcad#953).
 The number editor's inner native text field is checked separately against
 its adapter's 80-point minimum; a compound editor's full Qt width also
 includes its stepper. The shared probe reads sizes without resizing or

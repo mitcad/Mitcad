@@ -431,6 +431,11 @@ target_link_libraries(mitcad PRIVATE mitcad_geometry_io)
 target_sources(mitcad PRIVATE
   framework/DisplayMeshes.cpp
   framework/DisplayMeshes.hpp)
+# The process's end without static destructors while a cancelled display
+# meshing's face or a given-up import still runs (mitcad#936).
+target_sources(mitcad PRIVATE
+  framework/ProcessEnd.cpp
+  framework/ProcessEnd.hpp)
 # A dragged Extrude's provisional tool while its exact preview computes
 # (mitcad#636): an owned copy of the tool's mesh, changed on each move.
 target_sources(mitcad PRIVATE
@@ -450,6 +455,11 @@ target_sources(mitcad PRIVATE
 target_sources(mitcad PRIVATE
   commands/ProfilePicks.cpp
   commands/ProfilePicks.hpp)
+# A sketch's normal in the design through the occurrences it is seen at:
+# Extrude's arrow in a turned component (mitcad#958).
+target_sources(mitcad PRIVATE
+  commands/SketchNormal.cpp
+  commands/SketchNormal.hpp)
 
 if(WIN32)
   # wglGetCurrentDC() in OcctViewer.cpp
@@ -528,7 +538,8 @@ target_link_libraries(mitcad PRIVATE Qt6::Network)
 target_sources(mitcad PRIVATE
   MainWindowMcp.cpp
   mcp/LocalEndpoint.cpp mcp/LocalEndpoint.hpp
-  mcp/LiveServer.cpp mcp/LiveServer.hpp)
+  mcp/LiveServer.cpp mcp/LiveServer.hpp
+  mcp/EndpointLimits.cpp mcp/EndpointLimits.hpp)
 # Live MCP for debugging (mitcad#265): queries and sketch commands while a
 # sketch is open, the UI's state, log and view, selections, UI commands by
 # id, Save.
@@ -549,6 +560,12 @@ target_sources(mitcad PRIVATE
   framework/TestDriverAssistant.cpp)
 # The agent indicator beside the project indicator (mitcad#710).
 target_sources(mitcad PRIVATE mcp/AgentIndicator.cpp mcp/AgentIndicator.hpp)
+# The live MCP endpoint's listening socket: on Windows WinSock's own, with
+# SO_EXCLUSIVEADDRUSE (mitcad#945).
+target_sources(mitcad PRIVATE mcp/LoopbackListener.cpp mcp/LoopbackListener.hpp)
+if(WIN32)
+  target_link_libraries(mitcad PRIVATE ws2_32)
+endif()
 # The MCP Bundle contains this Qt-free launcher, which starts the installed
 # CLI directly so its own runtime paths remain valid after extraction.
 add_executable(mitcad-mcp-launcher mcp/AssistantLauncher.cpp)
@@ -583,6 +600,11 @@ if(NOT mitcad_update_keys)
   message(STATUS "No release key in ${MITCAD_UPDATE_KEY_FILE}: no update checks")
 endif()
 target_compile_definitions(mitcad PRIVATE MITCAD_UPDATE_KEY="${mitcad_update_keys}")
+# The tests' environment variables only in a test build (mitcad#921, the
+# option in the top CMakeLists.txt).
+if(MITCAD_UPDATE_TEST_HOOKS)
+  target_compile_definitions(mitcad PRIVATE MITCAD_UPDATE_TEST_HOOKS=1)
+endif()
 # Feedback and error reports (mitcad#61, mitcad#62) go to the issue form of
 # this tracker, filled in through its address and opened in the browser
 # (report/ReportCenter.hpp): an issue list's address (".../issues") or a
@@ -782,6 +804,13 @@ if(BUILD_TESTING)
   # What Extrude's and Revolve's Profiles take with a click (mitcad#868):
   # plain Qt Core.
   target_sources(test_app PRIVATE tests/profile_picks.cpp commands/ProfilePicks.cpp commands/ProfilePicks.hpp)
+  # The live MCP endpoint's limits against a hostile local client
+  # (mitcad#935): refusal echoes, the log ring's bytes, the connection
+  # slots and the token's comparison; plain Qt Core and the log ring.
+  target_sources(test_app PRIVATE tests/mcp_endpoint_limits.cpp mcp/EndpointLimits.cpp mcp/EndpointLimits.hpp)
+  # A sketch's normal in turned, nested and oblique occurrences (mitcad#958):
+  # Qt Core and OCCT's math.
+  target_sources(test_app PRIVATE tests/sketch_normal.cpp commands/SketchNormal.cpp commands/SketchNormal.hpp)
   target_link_libraries(test_app PRIVATE mitcad_geometry)
   target_include_directories(test_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(test_app PRIVATE Qt6::Widgets Qt6::Svg mitcad_warnings)
@@ -825,6 +854,12 @@ if(BUILD_TESTING)
   target_include_directories(test_preview_meshing PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(test_preview_meshing PRIVATE Qt6::Core mitcad_ffi mitcad_geometry mitcad_geometry_io
     TKMesh TKPrim TKTopAlgo TKBRep TKV3d mitcad_warnings)
+  # A cancelled display meshing's endless face at the process's end
+  # (mitcad#936): the application's end and its crash reports.
+  target_sources(test_preview_meshing PRIVATE framework/ProcessEnd.cpp report/CrashHandler.cpp)
+  if(WIN32)
+    target_link_libraries(test_preview_meshing PRIVATE dbghelp)
+  endif()
   # A dragged Extrude's provisional tool (mitcad#636): the owned mesh copy,
   # its stretches and moves, and Extrude's rules, without a window; Move/
   # Copy's provisional motion (mitcad#838).
@@ -1234,15 +1269,18 @@ target_sources(mitcad PRIVATE
   library/PartFavourites.hpp
   library/PartGroups.cpp
   library/PartGroups.hpp
+  library/PartSuppliers.cpp
+  library/PartSuppliers.hpp
   library/UsedParts.cpp
   library/UsedParts.hpp)
 if(BUILD_TESTING)
   # The order with stars, the stars' settings, the used parts read from a
-  # model's answer and the groups' tree: plain Qt Core and the command
-  # context's interface.
+  # model's answer, the groups' tree and the Supplier filter (mitcad#949):
+  # plain Qt Core and the command context's interface.
   target_sources(test_app PRIVATE tests/part_picker_data.cpp
                  library/PartFavourites.cpp library/PartFavourites.hpp
                  library/PartGroups.cpp library/PartGroups.hpp
+                 library/PartSuppliers.cpp library/PartSuppliers.hpp
                  library/UsedParts.cpp library/UsedParts.hpp)
 endif()
 # The part picker (mitcad#418, app/library): the library's parts as a grid
@@ -1410,6 +1448,10 @@ target_sources(mitcad PRIVATE
   commands/MoveFaceText.cpp
   commands/MoveFaceText.hpp
   MainWindowMoveFace.cpp)
+# Feature inputs where they were (mitcad#957): a selected or hovered
+# Fillet's or Chamfer's picked edges as lines, from `feature_inputs`.
+target_sources(mitcad PRIVATE
+  MainWindowFeatureInputs.cpp)
 if(BUILD_TESTING)
   # Its motions in words: plain Qt Core.
   target_sources(test_app PRIVATE tests/move_face_text.cpp commands/MoveFaceText.cpp commands/MoveFaceText.hpp)
@@ -1570,6 +1612,33 @@ endif()
 if(BUILD_TESTING)
   target_sources(test_app PRIVATE tests/update_installer.cpp update/UpdateInstaller.cpp update/UpdateInstaller.hpp
                  update/UpdaterChecks.hpp)
+  if(WIN32)
+    # processHasAdministratorRights (mitcad#921).
+    target_link_libraries(test_app PRIVATE advapi32)
+  endif()
+endif()
+
+# The updates' test hooks (mitcad#921, docs/updates.md#the-test-hooks): the
+# update source read as a release (MITCAD_UPDATE_TEST_HOOKS 0) and as a
+# test build (1), whatever this build's option, with the tests' variables
+# set; a manifest signed with their key by mitcad-release is refused by the
+# release and accepted by the test build.
+if(BUILD_TESTING AND TARGET mitcad-release)
+  foreach(mitcad_update_build IN ITEMS release hooks)
+    add_executable(test_update_source_${mitcad_update_build} tests/update_source.cpp update/UpdateSettings.cpp
+      update/UpdateSettings.hpp)
+    target_include_directories(test_update_source_${mitcad_update_build} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_definitions(test_update_source_${mitcad_update_build} PRIVATE
+      MITCAD_VERSION="${PROJECT_VERSION}" MITCAD_UPDATE_KEY="${mitcad_update_keys}")
+    target_link_libraries(test_update_source_${mitcad_update_build} PRIVATE Qt6::Core mitcad_ffi mitcad_warnings)
+    add_dependencies(test_update_source_${mitcad_update_build} mitcad-release)
+    add_test(NAME app.update_source_${mitcad_update_build}
+      COMMAND test_update_source_${mitcad_update_build} "$<TARGET_FILE:mitcad-release>")
+    set_tests_properties(app.update_source_${mitcad_update_build} PROPERTIES TIMEOUT 120
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endforeach()
+  target_compile_definitions(test_update_source_release PRIVATE MITCAD_UPDATE_TEST_HOOKS=0)
+  target_compile_definitions(test_update_source_hooks PRIVATE MITCAD_UPDATE_TEST_HOOKS=1)
 endif()
 
 # Print Analysis (mitcad#620, app/COMMANDS.md "Print Analysis"): the panel's
@@ -1896,3 +1965,94 @@ endif()
 # The Sketch page of Preferences (mitcad#860): the first dimension that
 # scales the whole sketch to it.
 target_sources(mitcad PRIVATE sketch/SketchPreferences.cpp sketch/SketchPreferences.hpp)
+
+# 3D mice (mitcad#951, docs/rendering.md "Navigation"): the view's mapping
+# and the controller, the camera's side in OcctViewer, and one backend per
+# platform without a vendor SDK (Raw Input on Windows, spacenavd's socket
+# on Linux and the BSDs, IOKit's HID Manager on macOS).
+target_sources(mitcad PRIVATE
+  platform/SpaceMouseDevice.hpp
+  view/SpaceMouseCamera.hpp
+  view/SpaceMouseController.cpp
+  view/SpaceMouseController.hpp
+  view/SpaceMouseNavigation.hpp
+  view/SpaceMouseView.cpp)
+if(WIN32)
+  target_sources(mitcad PRIVATE platform/windows/SpaceMouseWindows.cpp)
+  # HidD_GetProductString for the device's name in the log: hid.dll is in every Windows.
+  target_link_libraries(mitcad PRIVATE hid)
+elseif(APPLE)
+  target_sources(mitcad PRIVATE platform/macos/SpaceMouseMac.cpp)
+  target_link_libraries(mitcad PRIVATE "-framework IOKit" "-framework CoreFoundation")
+else()
+  target_sources(mitcad PRIVATE platform/unix/SpaceMouseSpnav.cpp)
+endif()
+if(BUILD_TESTING)
+  # The reports' parsing, the mapping to the camera and the controller with
+  # a backend of the test's own (plain Qt Core and Gui), and the camera's step on
+  # an OCCT camera as OcctViewer applies it (Graphic3d_Camera: TKService).
+  target_sources(test_app PRIVATE tests/space_mouse.cpp view/SpaceMouseCamera.hpp view/SpaceMouseController.cpp
+                 view/SpaceMouseController.hpp)
+  target_link_libraries(test_app PRIVATE TKService)
+endif()
+# The AI chat panel (mitcad#947, docs/ai-chat.md): the user's own agent
+# through its own interface (agent/ChatAgent.hpp; Claude Code, Codex), the
+# Qt panel, its approvals enforced by the live server (mcp/ChatGate.hpp),
+# one undo step per message and the history per design. The chat's own
+# logic is Rust (core/mcp/src/chat.rs, agent_chat through the bridge).
+target_sources(mitcad PRIVATE
+  agent/ChatAgent.hpp
+  agent/ChatController.cpp agent/ChatController.hpp
+  agent/ChatHistoryStore.cpp agent/ChatHistoryStore.hpp
+  agent/ChatLogic.hpp
+  agent/ChatPanel.cpp agent/ChatPanel.hpp
+  agent/ChatPreferences.cpp agent/ChatPreferences.hpp
+  agent/ChatSettings.cpp agent/ChatSettings.hpp
+  agent/ClaudeCodeAgent.cpp agent/ClaudeCodeAgent.hpp
+  agent/CodexAgent.cpp agent/CodexAgent.hpp
+  agent/MainWindowChat.cpp
+  mcp/ChatGate.hpp)
+if(BUILD_TESTING)
+  # The history files (keys, the end read, moves, clearing) and the chat's
+  # settings: plain Qt Core.
+  target_sources(test_app PRIVATE tests/chat_history.cpp agent/ChatHistoryStore.cpp agent/ChatHistoryStore.hpp
+                 agent/ChatSettings.cpp agent/ChatSettings.hpp)
+  # The chat's UI tests' scripted agent (tools/ui-chat-test.py): Claude
+  # Code's stream-json (as `claude`) or Codex's app server (as `codex`) on
+  # stdin and stdout, the real bridge as its MCP server; no AI. It is never
+  # installed.
+  add_executable(test_chat_agent tests/chat_test_agent.cpp)
+  target_link_libraries(test_chat_agent PRIVATE Qt6::Core mitcad_warnings)
+  mitcad_utf8_code_page(test_chat_agent)
+  add_dependencies(mitcad test_chat_agent)
+endif()
+
+# A stored view's height set as OCCT's camera scale through the view's
+# aspect (mitcad#959): OcctViewer::setCamera restores named views and Home
+# at any aspect; the unit tests use OCCT's cameras (TKService).
+target_sources(mitcad PRIVATE view/CameraHeight.hpp)
+if(BUILD_TESTING)
+  target_sources(test_app PRIVATE tests/camera_height.cpp view/CameraHeight.hpp)
+  target_link_libraries(test_app PRIVATE TKService)
+endif()
+# Create Sketch and the Construct commands ask whether to activate the
+# component of a picked face, plane or edge (mitcad#960, app/COMMANDS.md
+# "Activating the picked component"): the decision and the question, and
+# the main window's side.
+target_sources(mitcad PRIVATE
+  browser/ActivateQuestion.cpp
+  browser/ActivateQuestion.hpp
+  MainWindowActivate.cpp)
+if(BUILD_TESTING)
+  # When it asks and with what names, and the message box: Qt Widgets on
+  # the offscreen platform.
+  target_sources(test_app PRIVATE tests/activate_question.cpp browser/ActivateQuestion.cpp
+                 browser/ActivateQuestion.hpp)
+endif()
+# A feature's build state on the timeline and the selection card
+# (mitcad#961): the cell's fill, its status ring inside the selection's and
+# the status badge that stays in every state; plain Qt Gui.
+target_sources(mitcad PRIVATE browser/FeatureStatus.cpp browser/FeatureStatus.hpp)
+if(BUILD_TESTING)
+  target_sources(test_app PRIVATE tests/feature_status.cpp browser/FeatureStatus.cpp browser/FeatureStatus.hpp)
+endif()

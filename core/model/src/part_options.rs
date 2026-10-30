@@ -327,6 +327,11 @@ pub struct Naming<'a> {
     pub standard: &'a str,
     pub name: &'a str,
     pub fallback: &'a str,
+    /// The manifest's blocks of the rows (mitcad#949: their standards),
+    /// when the library gives them, and the standard asked for (the
+    /// Standard filter's; empty: each row's first).
+    pub rows: Option<&'a BTreeMap<String, crate::library::LibraryRow>>,
+    pub chosen: &'a str,
 }
 
 /// What a parts list says of a combination of options: its row, and the
@@ -382,8 +387,14 @@ pub fn combination(
         }
         pattern
     };
+    // A row tagged with standards is named by one of them (mitcad#949).
+    let named = row
+        .zip(naming.rows)
+        .and_then(|(r, rows)| rows.get(&r.name))
+        .and_then(|r| r.named_standard(naming.chosen));
+    let (pattern, non_standard) =
+        crate::library::standard_in_pattern(&pattern, naming.standard, named);
     let mut text = pattern
-        .replace("{standard}", naming.standard)
         .replace("{name}", naming.name)
         .replace("{config}", row.map_or("", |r| r.name.as_str()));
     for (option, value) in table.designation_values(&state.parameters) {
@@ -391,6 +402,9 @@ pub fn combination(
     }
     for (name, value) in numbers {
         text = text.replace(&format!("{{{name}}}"), &crate::build::round(*value));
+    }
+    if non_standard {
+        text.push_str(&format!(" ({})", crate::library::NON_STANDARD));
     }
     out.designation = text.split_whitespace().collect::<Vec<_>>().join(" ");
     out

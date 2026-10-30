@@ -25,6 +25,20 @@ const MAX_DEPTH: usize = 64;
 /// run long).
 const MAX_STEPS: usize = 50_000_000;
 
+/// Values that read no bytes of their own (objects other than ElementIds,
+/// fixed arrays) a record may hold: [`ZERO_BASE`] and [`ZERO_PER_BYTE`]
+/// for every byte of the record (mitcad#924). Every other value reads at
+/// least one byte, so a walk takes at most `17 × bytes + 1024` steps
+/// however its schema nests: a class without stored fields in arrays of
+/// arrays (`Array(65536, Array(65536, Object(empty)))`, which the schema
+/// allows) cannot make a record of a few bytes take billions. Real
+/// records stay far below the bound: a value without bytes of its own
+/// holds values that have them (a matrix of doubles, an object of
+/// fields), except an object of a class with no stored fields, which real
+/// schemas use by value a few times per record at most.
+const ZERO_BASE: usize = 1024;
+const ZERO_PER_BYTE: usize = 16;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Bool(bool),
@@ -89,6 +103,15 @@ struct Walker<'a> {
     numbered: HashMap<u32, usize>,
     path: Vec<String>,
     steps: usize,
+    /// Values read that take no bytes of their own, and how many the
+    /// record may hold ([`ZERO_BASE`]).
+    zero: usize,
+    zero_limit: usize,
+    /// The fewest bytes an object of a class reads, by class tag.
+    min_sizes: HashMap<u16, usize>,
+    /// By class tag: how many values an object of the class is when it
+    /// reads no bytes at all (None when it reads some, or is not known).
+    empty_values: HashMap<u16, Option<usize>>,
 }
 
 impl Walker<'_> {
@@ -135,6 +158,127 @@ impl Walker<'_> {
         Ok(())
     }
 
+    /// Counts `n` values that read no bytes of their own against the
+    /// record's allowance ([`ZERO_BASE`]).
+    fn charge(&mut self, n: usize) -> Result<(), WalkError> {
+        self.zero = self.zero.saturating_add(n);
+        if self.zero > self.zero_limit {
+            return Err(self.fail(format!(
+                "more values than its {} bytes can hold",
+                self.data.len()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Refuses `count` elements of `element` that cannot fit what is left
+    /// of the record: elements of a known size in fewer bytes than they
+    /// take, elements that read no bytes beyond the record's allowance.
+    fn check_count(&mut self, count: usize, element: &Encoding) -> Result<(), WalkError> {
+        let left = self.data.len() - self.at;
+        let min = self.min_size(element, 0);
+        if min > 0 {
+            if count.saturating_mul(min) > left {
+                return Err(self.fail(format!(
+                    "{count} values of at least {min} bytes in {left} bytes"
+                )));
+            }
+        } else if let Some(each) = self.empty_count(element, 0)
+            && count.saturating_mul(each) > self.zero_limit.saturating_sub(self.zero)
+        {
+            return Err(self.fail(format!(
+                "{count} values that read no bytes: more than its {} bytes can hold",
+                self.data.len()
+            )));
+        }
+        Ok(())
+    }
+
+    /// The fewest bytes a value of the encoding reads (a lower bound: 0
+    /// where it is not known).
+    fn min_size(&mut self, encoding: &Encoding, depth: usize) -> usize {
+        if depth > MAX_DEPTH {
+            return 0;
+        }
+        match encoding {
+            Encoding::Scalar(s) => match s {
+                Scalar::Bool | Scalar::U8 => 1,
+                Scalar::U16 | Scalar::ClassTag => 2,
+                Scalar::U32 | Scalar::F32 | Scalar::Text => 4,
+                Scalar::F64 | Scalar::U64 => 8,
+                Scalar::Guid => 16,
+            },
+            Encoding::Object(tag) if *tag == self.schema.element_id => self.schema.id_width,
+            Encoding::Object(tag) => {
+                if let Some(&size) = self.min_sizes.get(tag) {
+                    return size;
+                }
+                // (A class holding itself by value gives no bound.)
+                self.min_sizes.insert(*tag, 0);
+                let schema = self.schema;
+                let mut size = 0usize;
+                for class_tag in schema.lineage(*tag) {
+                    let Some(class) = schema.class(class_tag) else {
+                        continue;
+                    };
+                    for field in class.fields.iter().filter(|f| f.ty.stored()) {
+                        if let Ok(e) = field.ty.encoding() {
+                            size = size.saturating_add(self.min_size(&e, depth + 1));
+                        }
+                    }
+                }
+                self.min_sizes.insert(*tag, size);
+                size
+            }
+            Encoding::Pointer(_) | Encoding::Container(_) => 4,
+            Encoding::Array(count, element) => {
+                (*count as usize).saturating_mul(self.min_size(element, depth + 1))
+            }
+        }
+    }
+
+    /// How many values a value of the encoding is when it never reads a
+    /// byte (objects of classes without stored fields, arrays of them),
+    /// None when it reads some (or that is not known).
+    fn empty_count(&mut self, encoding: &Encoding, depth: usize) -> Option<usize> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        match encoding {
+            Encoding::Object(tag) if *tag != self.schema.element_id => {
+                if let Some(&count) = self.empty_values.get(tag) {
+                    return count;
+                }
+                self.empty_values.insert(*tag, None);
+                let schema = self.schema;
+                let mut count = Some(1usize);
+                'fields: for class_tag in schema.lineage(*tag) {
+                    let Some(class) = schema.class(class_tag) else {
+                        continue;
+                    };
+                    for field in class.fields.iter().filter(|f| f.ty.stored()) {
+                        let n = field
+                            .ty
+                            .encoding()
+                            .ok()
+                            .and_then(|e| self.empty_count(&e, depth + 1));
+                        count = count.zip(n).map(|(a, b)| a.saturating_add(b));
+                        if count.is_none() {
+                            break 'fields;
+                        }
+                    }
+                }
+                self.empty_values.insert(*tag, count);
+                count
+            }
+            Encoding::Array(0, _) => Some(1),
+            Encoding::Array(count, element) => self
+                .empty_count(element, depth + 1)
+                .map(|n| n.saturating_mul(*count as usize).saturating_add(1)),
+            _ => None,
+        }
+    }
+
     fn object(&mut self, tag: u16, depth: usize) -> Result<Object, WalkError> {
         if depth > MAX_DEPTH {
             return Err(self.fail("objects nest too deep"));
@@ -165,6 +309,14 @@ impl Walker<'_> {
 
     fn value(&mut self, encoding: &Encoding, depth: usize) -> Result<Value, WalkError> {
         self.step()?;
+        let no_bytes = match encoding {
+            Encoding::Object(tag) => *tag != self.schema.element_id,
+            Encoding::Array(..) => true,
+            _ => false,
+        };
+        if no_bytes {
+            self.charge(1)?;
+        }
         Ok(match encoding {
             Encoding::Scalar(s) => self.scalar(*s)?,
             Encoding::Object(tag) if *tag == self.schema.element_id => {
@@ -178,6 +330,7 @@ impl Walker<'_> {
             Encoding::Pointer(PointerKind::Reference) => Value::Reference(self.u32()?),
             Encoding::Pointer(_) => self.pointer()?,
             Encoding::Array(count, element) => {
+                self.check_count(*count as usize, element)?;
                 let mut items = Vec::with_capacity((*count as usize).min(1024));
                 for _ in 0..*count {
                     items.push(self.value(element, depth)?);
@@ -190,6 +343,7 @@ impl Walker<'_> {
                 if count > left + 65_536 {
                     return Err(self.fail(format!("a container of {count} in {left} bytes")));
                 }
+                self.check_count(count, element)?;
                 let mut items = Vec::with_capacity(count.min(1024));
                 for _ in 0..count {
                     items.push(self.value(element, depth)?);
@@ -292,6 +446,10 @@ pub fn walk_partial(schema: &Schema, data: &[u8]) -> (Option<Record>, usize, Opt
         numbered: HashMap::new(),
         path: Vec::new(),
         steps: 0,
+        zero: 0,
+        zero_limit: ZERO_BASE.saturating_add(data.len().saturating_mul(ZERO_PER_BYTE)),
+        min_sizes: HashMap::new(),
+        empty_values: HashMap::new(),
     };
     let tag = match walker.u16() {
         Ok(tag) => tag,
@@ -494,8 +652,8 @@ fn value_json(schema: &Schema, value: &Value) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::SchemaWriter;
     use crate::schema::types::*;
+    use crate::schema::{SchemaWriter, Type};
 
     /// A schema of an element-like class with a pointer and a container,
     /// and a record of it.
@@ -580,6 +738,154 @@ mod tests {
         let json = record.to_json(&schema);
         assert_eq!(json["object"]["class"], "Thing");
         assert_eq!(json["pointees"][0]["class"], "Outline");
+    }
+
+    /// The test binary's allocator: the system's, counting each thread's
+    /// bytes in use and their peak (mitcad#924: what a walk allocates).
+    pub(crate) mod counting {
+        use std::alloc::{GlobalAlloc, Layout, System};
+        use std::cell::Cell;
+
+        pub struct Counting;
+
+        thread_local! {
+            static LIVE: Cell<isize> = const { Cell::new(0) };
+            static PEAK: Cell<isize> = const { Cell::new(0) };
+        }
+
+        fn add(bytes: isize) {
+            let _ = LIVE.try_with(|live| {
+                let now = live.get() + bytes;
+                live.set(now);
+                let _ = PEAK.try_with(|peak| peak.set(peak.get().max(now)));
+            });
+        }
+
+        // SAFETY: every call is passed on to the system allocator as it
+        // came; the counters are thread-locals without destructors.
+        unsafe impl GlobalAlloc for Counting {
+            unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+                add(layout.size() as isize);
+                // SAFETY: the caller's layout, as GlobalAlloc requires.
+                unsafe { System.alloc(layout) }
+            }
+            unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+                add(-(layout.size() as isize));
+                // SAFETY: allocated by `alloc` above with this layout.
+                unsafe { System.dealloc(ptr, layout) }
+            }
+        }
+
+        #[global_allocator]
+        static ALLOCATOR: Counting = Counting;
+
+        /// What `f` returns, and the most bytes it had allocated at once
+        /// on this thread.
+        pub fn peak<T>(f: impl FnOnce() -> T) -> (T, usize) {
+            let start = LIVE.with(Cell::get);
+            PEAK.with(|p| p.set(start));
+            let out = f();
+            let top = PEAK.with(Cell::get);
+            (out, (top - start).max(0) as usize)
+        }
+    }
+
+    /// A schema with a class without stored fields and a header class of
+    /// `fields`.
+    fn hostile(fields: impl FnOnce(u16) -> Vec<(&'static str, Type)>) -> (Schema, u16) {
+        let mut w = SchemaWriter::new();
+        let identifier = w.class("Identifier", None, &[("m_id64", word(U64))]);
+        w.class("ElementId", None, &[("m_id", object(identifier))]);
+        let empty = w.class("Empty", None, &[]);
+        let header = w.class("Header", None, &fields(empty));
+        (Schema::parse(&w.finish()).unwrap(), header)
+    }
+
+    #[test]
+    fn values_without_bytes_are_bounded_by_the_record_s_size() {
+        // mitcad#924: Array(65536, Array(65536, Object(empty))) on a
+        // header class, the record only its class tag.
+        let (schema, header) = hostile(|empty| {
+            let inner = Type {
+                count: Some(65_536),
+                class: Some(empty),
+                ..word(0x100e)
+            };
+            vec![(
+                "m_nested",
+                Type {
+                    count: Some(65_536),
+                    inner: Some(Box::new(inner)),
+                    class: Some(empty),
+                    ..word(0x100d)
+                },
+            )]
+        });
+        assert_eq!(
+            schema.class(header).unwrap().fields[0].ty.encoding(),
+            Ok(Encoding::Array(
+                65_536,
+                Box::new(Encoding::Array(
+                    65_536,
+                    Box::new(Encoding::Object(schema.tag("Empty").unwrap()))
+                ))
+            ))
+        );
+        let data = header.to_le_bytes().to_vec();
+        // The best of three, against a busy machine's pauses.
+        let mut best = std::time::Duration::MAX;
+        let mut most = 0;
+        for _ in 0..3 {
+            let started = std::time::Instant::now();
+            let (result, bytes) = counting::peak(|| walk(&schema, &data));
+            best = best.min(started.elapsed());
+            most = most.max(bytes);
+            let e = result.unwrap_err();
+            assert!(e.message.contains("can hold"), "{e}");
+        }
+        assert!(best.as_millis() < 10, "{best:?}");
+        assert!(most < 1 << 20, "{most} bytes");
+
+        // A container of objects without bytes: refused by its count.
+        let (schema, header) = hostile(|empty| vec![("m_list", container_of(empty))]);
+        let mut data = header.to_le_bytes().to_vec();
+        data.extend(60_000u32.to_le_bytes());
+        let e = walk(&schema, &data).unwrap_err();
+        assert!(e.message.contains("read no bytes"), "{e}");
+        // A few of them read.
+        let mut data = header.to_le_bytes().to_vec();
+        data.extend(3u32.to_le_bytes());
+        let record = walk(&schema, &data).unwrap();
+        assert_eq!(
+            record
+                .root
+                .get(&schema, "m_list")
+                .unwrap()
+                .as_list()
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn counts_that_cannot_fit_the_record_are_refused() {
+        // A container of 1000 doubles in 8 bytes.
+        let (schema, header) = hostile(|_| vec![("m_values", word(0x5007))]);
+        let mut data = header.to_le_bytes().to_vec();
+        data.extend(1000u32.to_le_bytes());
+        data.extend(1.0f64.to_le_bytes());
+        let e = walk(&schema, &data).unwrap_err();
+        assert!(e.message.contains("at least 8 bytes"), "{e}");
+        // One double in its 8 bytes reads.
+        let mut data = header.to_le_bytes().to_vec();
+        data.extend(1u32.to_le_bytes());
+        data.extend(1.5f64.to_le_bytes());
+        let record = walk(&schema, &data).unwrap();
+        assert_eq!(
+            record.root.get(&schema, "m_values").unwrap().floats(),
+            vec![1.5]
+        );
     }
 
     #[test]

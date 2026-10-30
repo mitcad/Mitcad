@@ -425,7 +425,10 @@ with an embedded XPC service and leased IOSurfaces instead; see
   the worker goes on with the view it has, and its frames are not shown;
   then one view goes to the worker. A camera change that is a single
   step (a fit without animation, a camera set without one) sends its view
-  at once. There is no 3D mouse input. The view never draws a rendered
+  at once. A 3D mouse (mitcad#951, `view/SpaceMouseView.cpp`) is input
+  without a release: each frame of its motion is a step, and the
+  navigation ends once the cap has been let go and the camera has kept
+  still for the quiet time. The view never draws a rendered
   image over a camera or size other than the one it was made for: once
   the camera or the size changes, or an animation starts, the frame that
   shows it draws the bodies shaded (`OcctViewer::setRenderedImage`, the
@@ -1138,7 +1141,8 @@ one.
   unless transparent, with the shadows in the alpha as in PNG).
 - **Camera** (`render::finalView`, `imageFrame`): the current view's
   camera, or a named view (`namedViewCamera`: its height spans the
-  image's shorter side, as the 3D view applies a named view). With the
+  image's height at any aspect, as the 3D view applies a named view,
+  mitcad#959). With the
   aspect `view`, the image is `width` wide and as high as the view is in
   proportion; with `fixed`, it shows the largest rectangle of its aspect
   in the middle of the view, which the view shows dimmed around a dashed

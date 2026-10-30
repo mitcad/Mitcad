@@ -920,6 +920,46 @@ rail's sloped elliptical piece and the level arc after it meet in faces
 gaps; with an element id it lists that element's bodies and placed types,
 and with `--points` each face's loops as points (feet).
 
+## Limits on crafted files (mitcad#924)
+
+A file is read on opening (the link listing) and by the import, so no
+count stored in it may make the reading run long or allocate without
+bound. Each limit is far above what real files hold:
+
+- **Streams** (`gzip::stream_limit`): a stream's members together inflate
+  to 64 times its stored size and 16 MiB more at most, besides each
+  member's 1 GiB; past it the stream is an error ("inflates to more than
+  … bytes"). Element data inflates to a few times its stored size.
+- **Records** (`walk`): every value that reads no bytes of its own (an
+  object other than an ElementId, a fixed array) counts against 1,024
+  and 16 per byte of the record, every other value reads at least a
+  byte, so a walk takes at most 17 steps per byte and 1,024 more. An
+  array or container whose elements cannot fit the bytes left (each
+  element's fewest bytes by the schema) or the allowance left (elements
+  that never read a byte, as objects of a class without stored fields)
+  is refused before its elements are read.
+- **History** (`info::episodes`): one pass; only the counts within the
+  run of entries ending like the newest are candidates.
+- **Node trees** (`brep`): a node whose sub-nodes name itself or an
+  ancestor is left out there; one walk of a record reads a million nodes
+  and faces at most (a real tree reads each of its objects once); each
+  with a note once.
+- **Bodies' loops** (`brep`, mitcad#942): a face's loop that names a loop
+  already read on the face ends the face's loops there, with a note once
+  (a real face's loops end with a null). A body takes at most two edge
+  steps (an edge's side in a face's loop) per object of the record and
+  does not read past them ("its loops take more than … edge steps"): in
+  a real body each side of an edge lies in one loop, and every edge is an
+  object of the record. One walk takes ten million edge steps at most
+  over all its bodies (bodies shared by several nodes multiply as the
+  nodes do); the bodies after it are left out with a note once.
+- **Placed types** (the import's meshes): 100,000 placements per element,
+  nested ones counted, and no more placements once the element has ten
+  million triangles, with a note.
+- **Links**: a link's file name is looked for only as a bare name, and
+  the path the project stores only below the project's folder (see
+  `core/ffi/src/rvt_import.rs`, `find_link`).
+
 ## The test corpus
 
 37 files under `MITCAD_RVT_CORPUS` (never in the repository): a sample

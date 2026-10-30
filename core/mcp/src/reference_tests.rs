@@ -511,3 +511,35 @@ fn the_live_server_answers_the_reference_and_explains_its_refusals() {
             .contains("missing field `plane`; the fields of the feature type 'construction_plane'")
     );
 }
+
+/// mitcad#935: the errors repeat at most `ECHO_CHARS` characters of a
+/// client's name, and at most a few of its field names.
+#[test]
+fn errors_repeat_only_the_start_of_a_clients_long_names() {
+    assert_eq!(echoed("short"), "short");
+    let exact = "a".repeat(ECHO_CHARS);
+    assert_eq!(echoed(&exact), exact.as_str());
+    let long = format!("{}{}", "ä".repeat(ECHO_CHARS), "b".repeat(1000));
+    let cut = echoed(&long);
+    assert!(cut.starts_with(&"ä".repeat(ECHO_CHARS)));
+    assert!(cut.ends_with("… (1000 more bytes)"), "{cut}");
+
+    let huge = "c".repeat(7 * 1024 * 1024);
+    for error in [
+        unknown_command(&huge, &names()),
+        unknown_command(&huge, &Vocabulary::default()),
+        unknown_query(&huge, &names()),
+    ] {
+        assert!(error.starts_with("unknown "), "{error}");
+        assert!(error.contains("more bytes)"), "{error}");
+        assert!(error.len() < 2048, "{}", error.len());
+    }
+    let mut fields = serde_json::Map::new();
+    for i in 0..1000 {
+        fields.insert(format!("{i}{}", "f".repeat(10_000)), json!(1));
+    }
+    let error = missing_name(&Value::Object(fields), "cmd");
+    assert!(error.contains("this one has no 'cmd'"), "{error}");
+    assert!(error.contains(", and 980 more)"), "{error}");
+    assert!(error.len() < 8 * 1024, "{}", error.len());
+}

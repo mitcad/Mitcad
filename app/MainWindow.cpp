@@ -76,6 +76,7 @@
 #include "browser/ComponentColors.hpp"
 #include "browser/TimelineWidget.hpp"
 #include "browser/FeaturePresentation.hpp"
+#include "browser/FeatureStatus.hpp"
 #include "commands/Commands.hpp"
 #include "files/Autosave.hpp"
 #include "files/FileFormats.hpp"
@@ -127,6 +128,7 @@
 #include "update/UpdateController.hpp"
 #include "report/ReportCenter.hpp"
 #include "view/ModeBanner.hpp"
+#include "view/SpaceMouseController.hpp"
 #include "view/ViewController.hpp"
 #include "view/ViewTessellation.hpp"
 #include "mitcad/io/mesh.hpp"
@@ -136,6 +138,12 @@ namespace {
 
 const QString kFileSuffix = QStringLiteral("mitcad");
 const QColor kSelectionColor(0x1f, 0x7a, 0xff);
+// A Fillet's or Chamfer's own faces while its picked edges are drawn where
+// they were in the selection colour (mitcad#957): amber, apart from those
+// lines on the light and the dark background; lighter on the timeline's
+// hover.
+const QColor kFeatureFacesColor(0xf5, 0xa5, 0x24);
+const QColor kFeatureFacesHoverColor(0xff, 0xcf, 0x86);
 // A body's print bed face shown while a face's context menu is open
 // (mitcad#731).
 const QColor kPrintBedColor = printBedColor();
@@ -492,6 +500,26 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   registerCommands();
   m_registry->createActions(this, [this](const QString& id) { trigger(id); });
 
+  // 3D mice (mitcad#951): the view moves by the device's axes (pan and
+  // zoom only in sketch mode), its buttons run view commands as their
+  // actions do. It starts once the saved navigation is applied, and follows
+  // Preferences.
+  SpaceMouseController::Hooks spaceMouseHooks;
+  spaceMouseHooks.settings = [this] { return m_viewer->navigation().spaceMouse; };
+  spaceMouseHooks.flat = [this] { return m_sketch->isActive(); };
+  spaceMouseHooks.rates = [this](const SpaceMouseRates& rates) { m_viewer->setSpaceMouseRates(rates); };
+  spaceMouseHooks.runCommand = [this](const QString& id) {
+    QAction* command = m_registry->action(id);
+    if (command == nullptr || !command->isEnabled()) {
+      qDebug().noquote() << QStringLiteral("3D mouse: %1 is not available now").arg(id);
+      return;
+    }
+    command->trigger();
+  };
+  m_spaceMouse = new SpaceMouseController(std::move(spaceMouseHooks), &createSpaceMouseBackend, this);
+  connect(m_viewer, &OcctViewer::navigationChanged, m_spaceMouse, [this] { m_spaceMouse->refresh(); });
+  QTimer::singleShot(0, m_spaceMouse, [this] { m_spaceMouse->refresh(); });
+
   // Enter confirms the active command (or what a sketch tool has typed)
   // wherever the focus is; Esc cancels it, or steps back in a
   // sketch tool, or clears the selection.
@@ -585,6 +613,8 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   connect(m_search, &CommandSearch::chosen, this, &MainWindow::trigger, Qt::QueuedConnection);
   createAutosave();
   createLive();
+  // The chat panel (mitcad#947).
+  createChat();
   // The debug log in the project indicator (mitcad#269).
   createDebugLog();
   // A wait cursor left on is cleared once the window is idle (mitcad#268).
@@ -1069,6 +1099,8 @@ void MainWindow::registerCommands() {
   registerWaitCursorTestCommands();
   // Insert: Image Reference and Calibrate Image Reference (mitcad#782).
   registerImageReferenceCommands();
+  // View › Chat (mitcad#947).
+  registerChatCommands();
 }
 
 void MainWindow::showDiagnostics() {
@@ -1252,7 +1284,7 @@ void MainWindow::createRibbon() {
   windowAction->setChecked(true);
   windowAction->setEnabled(false);
   auto* clearAction = new QAction(tr("Clear Selection"), this);
-  connect(clearAction, &QAction::triggered, this, [this] { setSelection({}); });
+  connect(clearAction, &QAction::triggered, this, [this] { clearSelection(); });
   m_ribbon->addGroupExtras(QStringLiteral("SOLID"), QStringLiteral("SELECT"),
                            {windowAction, filterAction, clearAction}, {filterAction});
   // Sketch mode has its own three-state filter (mitcad#217).
@@ -1394,18 +1426,15 @@ void MainWindow::createFloatingPanels() {
   find->setIconSize(QSize(14, 14));
   browserCard->addHeaderWidget(find);
   find->show();
-  // The failed features' badge, in the header: red, small, a capsule.
+  // The failed features' badge, in the header: a red capsule (its own
+  // style, BrowserController), small.
   QToolButton* failures = m_controller->failures();
-  setErrorStyleSheet(failures, QStringLiteral("QToolButton { color: %1; border: 1px solid %1; "
-                                              "border-radius: 9px; padding: 0px 6px; }"));
-  failures->setAutoRaise(false);
   failures->setIconSize(QSize(12, 12));
   browserCard->addHeaderWidget(failures);
-  // The warnings' badge beside it, yellow (mitcad#170).
+  // The warnings' badge beside it, yellow (mitcad#170): its triangle and
+  // count only, so that both fit the header (mitcad#961).
+  m_controller->setCompactBadges(true);
   QToolButton* warnings = m_controller->warnings();
-  setWarningStyleSheet(warnings, QStringLiteral("QToolButton { color: %1; border: 1px solid %1; "
-                                                "border-radius: 9px; padding: 0px 6px; }"));
-  warnings->setAutoRaise(false);
   warnings->setIconSize(QSize(12, 12));
   browserCard->addHeaderWidget(warnings);
   browserCard->setContent(m_controller->browser(), QMargins(6, 0, 6, 8));
@@ -1516,7 +1545,7 @@ void MainWindow::createIdlePage() {
   });
   connect(m_autoselect, &AutoselectPanel::clearRequested, this, [this] {
     if (m_mode == Mode::Idle && !modelBusy()) {
-      setSelection({});
+      clearSelection();
     }
   });
   connect(m_autoselect, &AutoselectPanel::previewChanged, this, [this](const Selection& candidates) {
@@ -2058,7 +2087,12 @@ void MainWindow::cancel() {
   if (escapeDrawing()) {
     return; // an open drawing's Esc (mitcad#707)
   }
+  clearSelection();
+}
+
+void MainWindow::clearSelection() {
   setSelection({});
+  m_controller->timeline()->setSelectedFeatures({});
 }
 
 void MainWindow::openCommandSearch() {
@@ -2810,6 +2844,8 @@ void MainWindow::refreshScene() {
   // A recompute, edit, undo or newly opened document can change the
   // geometry behind the same selection reference.
   m_idleMeasurements.clear();
+  // And a feature's inputs, kept by its last build (mitcad#957).
+  m_featureInputLines.clear();
   ScopedTiming total("refresh");
   ScopedTiming snapshot("refresh snapshot");
   try {
@@ -3834,7 +3870,7 @@ void MainWindow::createSketchOn(const SelectionItem& plane) {
       qInfo().noquote() << QStringLiteral("Create Sketch refused: %1").arg(refused);
       return;
     }
-    createSketch(sketchPlaneFields(plane));
+    createSketchOnPick(plane);
   }
 }
 
@@ -3858,7 +3894,7 @@ void MainWindow::pickItems(const Selection& items) {
           qInfo().noquote() << QStringLiteral("Create Sketch refused: %1").arg(refused);
           return;
         }
-        createSketch(sketchPlaneFields(item));
+        createSketchOnPick(item);
         return;
       }
     }
@@ -4115,7 +4151,7 @@ void MainWindow::onPicked(const Selection& items, Qt::KeyboardModifiers modifier
             return;
           }
         }
-        createSketch(sketchPlaneFields(item));
+        createSketchOnPick(item);
         return;
       }
     }
@@ -4229,6 +4265,17 @@ void MainWindow::updateIdleView() {
   }
   std::vector<HighlightDisplay> highlights;
   QStringList featureFaces; // "F4 1": a selected feature's faces (mitcad#28)
+  QStringList featureInputs; // "Fillet1 edges 4": its picked edges (mitcad#957)
+  // A feature's picked edges where they were (mitcad#957): lines in the
+  // selection colour, dashed where the solids hide them, nothing picked on
+  // them; a null shape when the feature kept none. `count` gets how many.
+  const auto inputLines = [this](const SelectionItem& feature, int& count) {
+    HighlightDisplay drawn{feature, featureInputLines(feature, &count), kSelectionColor};
+    drawn.inputLines = true;
+    drawn.pickable = false;
+    drawn.throughSolid = true;
+    return drawn;
+  };
   std::optional<SketchShapeBatch> batch(std::in_place, *this);
   for (const SelectionItem& item : m_selection) {
     if (item.kind == SelectKind::Profile && m_sketch->draggingGeometry() && item.owner == m_sketch->uid()) {
@@ -4250,7 +4297,19 @@ void MainWindow::updateIdleView() {
       if (item.kind == SelectKind::Face || item.kind == SelectKind::Edge) {
         shown.body = bodyShape(item.owner);
       }
+      // A Fillet's or Chamfer's picked edges where they were, its faces
+      // in a colour apart from them (mitcad#957).
+      int inputCount = 0;
+      HighlightDisplay lines = item.kind == SelectKind::Feature ? inputLines(item, inputCount) : HighlightDisplay{};
+      if (!lines.shape.IsNull()) {
+        shown.color = kFeatureFacesColor;
+        const DocumentSnapshot::Feature* feature = m_snapshot.feature(item.owner);
+        featureInputs << QStringLiteral("%1 edges %2").arg(feature ? feature->name : item.owner).arg(inputCount);
+      }
       highlights.push_back(std::move(shown));
+      if (!lines.shape.IsNull()) {
+        highlights.push_back(std::move(lines));
+      }
     }
   }
   for (const SelectionItem& item : m_autoselectPreview) {
@@ -4283,7 +4342,16 @@ void MainWindow::updateIdleView() {
     HighlightDisplay shown{item, shape, QColor(0x82, 0xc5, 0xff)};
     shown.pickable = false;
     shown.throughSolid = true;
+    // The hovered Fillet's or Chamfer's picked edges too (mitcad#957).
+    int inputCount = 0;
+    HighlightDisplay lines = inputLines(item, inputCount);
+    if (!lines.shape.IsNull()) {
+      shown.color = kFeatureFacesHoverColor;
+    }
     highlights.push_back(std::move(shown));
+    if (!lines.shape.IsNull()) {
+      highlights.push_back(std::move(lines));
+    }
   }
   const QString hovered = hoverFaces.isEmpty() ? QStringLiteral("none") : hoverFaces.join(QStringLiteral(", "));
   if (hovered != m_loggedTimelineHover) {
@@ -4302,31 +4370,51 @@ void MainWindow::updateIdleView() {
     m_loggedFeatureFaces = logged;
     qDebug().noquote() << QStringLiteral("Feature faces highlighted: %1").arg(logged);
   }
+  // The selected features' picked edges drawn where they were (mitcad#957).
+  const QString loggedInputs =
+      featureInputs.isEmpty() ? QStringLiteral("none") : featureInputs.join(QStringLiteral(", "));
+  if (loggedInputs != m_loggedFeatureInputs) {
+    m_loggedFeatureInputs = loggedInputs;
+    qDebug().noquote() << QStringLiteral("Feature inputs highlighted: %1").arg(loggedInputs);
+  }
 
   QString text = tr("<b>No command</b><br>Press S to search for a command, or right-click the "
                     "selection for the commands that fit it.");
   QStringList jointCards; // the selected joints' lines of the card (mitcad#523)
-  if (!m_selection.isEmpty()) {
+  // A failed feature selected on the timeline has no faces to keep in the
+  // selection: the timeline's selection alone has a card, with why it
+  // failed (mitcad#961).
+  const bool timelineOnly =
+      m_selection.isEmpty() && std::any_of(m_timelineSelection.cbegin(), m_timelineSelection.cend(),
+                                           [this](const QString& uid) { return m_snapshot.feature(uid) != nullptr; });
+  const bool anySelected = !m_selection.isEmpty() || timelineOnly;
+  if (anySelected) {
     QStringList featureNames;
     QStringList lines;
     QHash<QString, QString> featureCards;
     // A selected feature's card: a joint's sides (mitcad#523) and a Move
     // Face's motion (mitcad#531) have cards of their own, any other feature
-    // its kind, component and sizes.
+    // its kind, component and sizes. A failed feature's card ends with a
+    // red line of why, one with a warning a yellow one (mitcad#961).
     const auto featureCard = [&](const DocumentSnapshot::Feature& feature, QString* heading) {
+      const QString status = featureStatusLine(feature.status, feature.error, errorColor(m_idleInfo->palette()),
+                                               warningColor(m_idleInfo->palette()));
+      const auto withStatus = [&status](const QString& card) {
+        return status.isEmpty() ? card : QStringLiteral("%1<br>%2").arg(card, status);
+      };
       const auto selected = std::find_if(m_selection.cbegin(), m_selection.cend(), [&feature](const SelectionItem& item) {
         return item.kind == SelectKind::Feature && item.owner == feature.uid;
       });
       if (selected != m_selection.cend()) {
         if (const QString joint = jointCardBlock(*selected); !joint.isEmpty()) {
           jointCards << joint;
-          return joint;
+          return withStatus(joint);
         }
         if (const QString moved = moveFaceCard(*selected); !moved.isEmpty()) {
-          return moved;
+          return withStatus(moved);
         }
       }
-      return featurePresentation(feature, m_snapshot, *this, *m_registry, heading);
+      return withStatus(featurePresentation(feature, m_snapshot, *this, *m_registry, heading));
     };
     for (const QString& uid : m_timelineSelection.mid(0, 8)) {
       if (const auto* feature = m_snapshot.feature(uid)) {
@@ -4475,7 +4563,7 @@ void MainWindow::updateIdleView() {
   }
   if (m_nativeUi || chromeStyle() == ChromeStyle::Floating) {
     // The card is for what there is to say: the selection, not the hint.
-    text = m_selection.isEmpty() ? QString() : text.mid(text.indexOf(QStringLiteral("<br><br>")) + 8);
+    text = anySelected ? text.mid(text.indexOf(QStringLiteral("<br><br>")) + 8) : QString();
   }
   m_idleInfo->setText(text);
   m_idleInfo->setVisible(!text.isEmpty());
@@ -4723,7 +4811,7 @@ void MainWindow::startSketch() {
       qInfo().noquote() << QStringLiteral("Create Sketch refused: %1").arg(refused);
       return;
     }
-    createSketch(sketchPlaneFields(m_selection.first()));
+    createSketchOnPick(m_selection.first());
     return;
   }
   endAnnotationPick();
@@ -4836,6 +4924,16 @@ void MainWindow::createSketch(const QJsonObject& fields) {
                                 .arg(m_sketch->model().name, value.toObject().value(QStringLiteral("name")).toString());
     }
   }
+}
+
+void MainWindow::createSketchOnPick(SelectionItem item) {
+  // Another component's face or plane: activate that component first?
+  // (mitcad#960, MainWindowActivate.cpp)
+  if (askToActivatePicked(item, sketchSupportRefusal(item), true)) {
+    // What the newly active component's sketches may lie on.
+    refreshSketchSupports();
+  }
+  createSketch(sketchPlaneFields(item));
 }
 
 QString MainWindow::featureError(const QString& uid) const {
@@ -5892,6 +5990,8 @@ void MainWindow::updateWindowTitle() {
     m_changeNoted = true;
     m_remote->firstChange();
   }
+  // The chat's conversation follows the design (mitcad#947).
+  noteChatDocument();
 }
 
 } // namespace mitcad

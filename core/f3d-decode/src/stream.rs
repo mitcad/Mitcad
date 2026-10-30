@@ -605,19 +605,31 @@ impl Segment {
 
     /// Object-relative end of the main part: the sub-chunk offset, or the
     /// object end when there is none (or the sub-chunk is at offset 0).
+    /// Never past the object's data: a sub-chunk index entry that points
+    /// beyond the object ends the main part at the object's end
+    /// (mitcad#934).
     pub fn main_end(&self, o: &Object) -> usize {
+        self.sub_offset(o).unwrap_or_else(|| self.data(o).len())
+    }
+
+    /// The object-relative sub-chunk offset of the index, clamped to the
+    /// object's data (`None` without a sub-chunk or at offset 0).
+    fn sub_offset(&self, o: &Object) -> Option<usize> {
+        let len = self.data(o).len();
         match o.subchunk {
-            Some(s) if s != 0 => s.saturating_sub(o.offset) as usize,
-            _ => self.data(o).len(),
+            Some(s) if s != 0 => {
+                Some(usize::try_from(s.saturating_sub(o.offset)).map_or(len, |e| e.min(len)))
+            }
+            _ => None,
         }
     }
 
     /// Object-relative start of the sub-chunk (0 when there is none).
+    /// Never past the object's data (mitcad#934): a sub-chunk index entry
+    /// that points beyond the object gives the object's length, where no
+    /// sub-chunk header can be read.
     pub fn sub_start(&self, o: &Object) -> usize {
-        match o.subchunk {
-            Some(s) if s != 0 => s.saturating_sub(o.offset) as usize,
-            _ => 0,
-        }
+        self.sub_offset(o).unwrap_or(0)
     }
 
     pub fn class(&self, o: &Object) -> Option<&ClassRecord> {
@@ -913,9 +925,15 @@ pub(crate) fn attribute_at(d: &[u8], p: usize) -> Option<(Attribute, usize)> {
         p += 1;
         AttrValue::Bool(v)
     } else if typ.ends_with(b"IString") {
+        // A count that runs past the data is no attribute (as `str16_at`):
+        // the root part's end stays within the data (mitcad#934).
         let n = u32_at(d, p)? as usize;
-        let units = utf16_units(slice(d, p + 4, p + 4 + 2 * n));
-        p += 4 + 2 * n;
+        let end = n.checked_mul(2)?.checked_add(p + 4)?;
+        if end > d.len() {
+            return None;
+        }
+        let units = utf16_units(&d[p + 4..end]);
+        p = end;
         AttrValue::Text(String::from_utf16_lossy(&units))
     } else {
         return None;

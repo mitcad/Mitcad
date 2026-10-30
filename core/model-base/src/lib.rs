@@ -73,6 +73,9 @@ pub mod values;
 // The sizes of image files from their headers (image references,
 // mitcad#782).
 pub mod image_header;
+// Readers of files the user chose, run in the application: a panic of
+// theirs is their error (mitcad#922).
+pub mod reader_guard;
 
 pub use kernel::{Kernel, KernelError};
 // Design files' content hashes (P12a).

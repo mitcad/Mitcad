@@ -190,6 +190,14 @@ QString partDetails(const PickerPart& shown, int uses, bool rich) {
   }
   text += line(PartGrid::tr("Supplier:"), shown.supplier);
   text += line(PartGrid::tr("Part number:"), shown.partNumber);
+  // The suppliers of its rows (mitcad#949).
+  QList<PartSupplier> others;
+  for (const PartSupplier& one : shown.suppliers) {
+    if (one.id != shown.supplier) {
+      others.append(one);
+    }
+  }
+  text += line(PartGrid::tr("Sold by:"), supplierNames(others));
   const QString library = shown.libraryName.isEmpty() || shown.libraryName == shown.library
                               ? shown.library
                               : QStringLiteral("%1 (%2)").arg(shown.libraryName, shown.library);
@@ -458,6 +466,7 @@ PickerPart pickerPart(const QJsonObject& component) {
   }
   part.supplier = str(component, "supplier");
   part.partNumber = str(component, "part_number");
+  part.suppliers = componentSuppliers(component);
   part.license = str(component, "license");
   const QJsonValue preview = component.value(QStringLiteral("preview"));
   part.preview = preview.isBool() ? preview.toBool() : true;
@@ -521,6 +530,8 @@ PickerPart pickerPart(const build::Part& source) {
   part.designation = source.designation;
   part.supplier = source.supplier;
   part.partNumber = source.partNumber;
+  // A tile of one row: the suppliers of that row (mitcad#949).
+  part.suppliers = rowPartSuppliers(source.table, source.config, source.supplier);
   part.system = source.systemText();
   QStringList sizes;
   if (!source.sizeText().isEmpty()) {
@@ -561,6 +572,10 @@ QList<PickerPart> pickerParts(const QVector<build::Part>& parts) {
       part.keywords = found->keywords;
       part.license = found->license;
       part.preview = found->preview;
+      // A tile of the component (no row): its rows' suppliers.
+      if (part.config.isEmpty()) {
+        part.suppliers = supplierChoices({part.suppliers, found->suppliers});
+      }
     }
     out.append(part);
   }
@@ -814,6 +829,17 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
   m_systemLabel->setBuddy(m_system);
   second->addWidget(m_systemLabel);
   second->addWidget(m_system);
+  // The supplier (mitcad#949): kept in the settings.
+  m_supplier = new QComboBox;
+  m_supplier->setObjectName(QStringLiteral("partPickerSupplier"));
+  m_supplier->setToolTip(tr("Only the parts this supplier sells in some size"));
+  m_supplierLabel = new QLabel(tr("Supplie&r:"));
+  m_supplierLabel->setBuddy(m_supplier);
+  m_wantedSupplier = savedSupplierFilter();
+  second->addWidget(m_supplierLabel);
+  second->addWidget(m_supplier);
+  m_supplier->hide();
+  m_supplierLabel->hide();
   second->addStretch(1);
   m_star = new QToolButton;
   m_star->setObjectName(QStringLiteral("partPickerStar"));
@@ -945,6 +971,19 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
     qInfo().noquote() << QStringLiteral("Part picker system %1").arg(shown.isEmpty() ? QStringLiteral("all") : shown);
     refill(true);
   });
+  // The supplier (mitcad#949), kept in the settings.
+  connect(m_supplier, &QComboBox::currentIndexChanged, this, [this] {
+    if (m_filling) {
+      return;
+    }
+    const QString chosen = m_supplier->currentData().toString();
+    m_wantedSupplier = chosen;
+    saveSupplierFilter(chosen);
+    qInfo().noquote() << QStringLiteral("Part picker supplier %1")
+                             .arg(chosen.isEmpty() ? QStringLiteral("all") : chosen);
+    refill(true);
+    emit supplierChanged(chosen);
+  });
   connect(m_size, &QSlider::valueChanged, this, [this](int value) {
     setTileSize(value);
     QSettings().setValue(kTileSizeKey, value);
@@ -988,6 +1027,7 @@ void PartGrid::setParts(const QList<PickerPart>& parts) {
   m_parts = parts;
   fillGroups();
   fillSystems();
+  fillSuppliers();
   refill(false);
 }
 
@@ -1365,6 +1405,34 @@ void PartGrid::fillSystems() {
   m_systemLabel->setVisible(!systems.isEmpty());
 }
 
+void PartGrid::fillSuppliers() {
+  QList<QList<PartSupplier>> lists;
+  for (const PickerPart& listed : m_parts) {
+    lists.append(listed.suppliers);
+  }
+  const QList<PartSupplier> suppliers = supplierChoices(lists);
+  m_filling = true;
+  m_supplier->clear();
+  m_supplier->addItem(tr("All suppliers"), QString());
+  for (const PartSupplier& one : suppliers) {
+    m_supplier->addItem(one.name, one.id);
+  }
+  m_supplier->setCurrentIndex(std::max(0, m_supplier->findData(m_wantedSupplier)));
+  m_filling = false;
+  m_supplier->setVisible(!suppliers.isEmpty());
+  m_supplierLabel->setVisible(!suppliers.isEmpty());
+}
+
+QString PartGrid::supplierFilter() const { return m_supplier->currentData().toString(); }
+
+void PartGrid::setSupplierFilter(const QString& supplier) {
+  m_wantedSupplier = supplier;
+  const int at = std::max(0, m_supplier->findData(supplier));
+  if (at != m_supplier->currentIndex()) {
+    m_supplier->setCurrentIndex(at); // refills
+  }
+}
+
 bool PartGrid::passes(const PickerPart& part) const {
   if (m_group == kFavourites) {
     if (part.libraryEntry || !starredTile(part)) {
@@ -1387,6 +1455,10 @@ bool PartGrid::passes(const PickerPart& part) const {
     if (!inShownGroup(part)) {
       return false;
     }
+  }
+  // The supplier (mitcad#949): a library's entry has none to compare.
+  if (!part.libraryEntry && !soldBy(part.suppliers, m_supplier->currentData().toString())) {
+    return false;
   }
   const QString system = m_system->currentData().toString();
   if (!system.isEmpty()) {
@@ -1955,8 +2027,11 @@ void PartPicker::showOptions(const QString& key, const QJsonObject& parameters) 
     return;
   }
   m_showingOptions = true;
-  m_options->setOptionsQuery(
-      libraryOptionsQuery(libraryCommand, shown->url, shown->library, shown->rev, shown->component));
+  m_options->setOptionsQuery(libraryOptionsQuery(libraryCommand, shown->url, shown->library, shown->rev,
+                                                 shown->component, [this] { return m_options->standard(); }));
+  // The Standard and Supplier filters above the options (mitcad#949): the
+  // grid's supplier to start with.
+  m_options->setSupplierFilter(m_grid->supplierFilter(), false);
   m_options->setTable(shown->table, shown->config, parameters);
   m_showingOptions = false;
   m_options->setVisible(m_options->isOpen());

@@ -5,8 +5,10 @@
 # mitcad-cli.exe mcp --connect, over JSON-RPC on its stdin and stdout.
 #   1. A design (mitcad-cli): a block with a fillet, and a sketch F4 whose
 #      projection of the block's bottom face no longer matches the face.
-#   2. The bridge connects: the catalog's tools, "Agent connected", the
-#      agent indicator names the client (mitcad#710).
+#   2. No other socket can bind the listener's 127.0.0.1 port, not even
+#      with SO_REUSEADDR (mitcad#945). The bridge connects: the catalog's
+#      tools, "Agent connected", the agent indicator names the client
+#      (mitcad#710).
 #   3. ui_command edit F4 opens the sketch; queries with it open (sketch,
 #      timeline); ui_state reports the sketch and its Sketch Palette's
 #      warning with the projection's entities.
@@ -201,6 +203,31 @@ for ($i = 0; $i -lt 150; $i++) {
 }
 if ($null -eq $listed) { Ui-Fail 'mitcad-cli mcp --list-instances did not list the application in 30 s' }
 Write-Host 'ok   the listener answers'
+
+Write-Host '--- No other socket can bind the endpoint (mitcad#945)'
+$port = [int]@(((@($listed) -join "`n") | ConvertFrom-Json).instances)[0].port
+if ($port -le 0) { Ui-Fail "mitcad-cli mcp --list-instances gave no port: $($listed -join ' ')" }
+# The listener's SO_EXCLUSIVEADDRUSE refuses a second bind to its address
+# and port also with SO_REUSEADDR, which a plain listener would let through.
+foreach ($reuse in @($false, $true)) {
+  $other = New-Object System.Net.Sockets.Socket([System.Net.Sockets.AddressFamily]::InterNetwork,
+    [System.Net.Sockets.SocketType]::Stream, [System.Net.Sockets.ProtocolType]::Tcp)
+  $bound = $false
+  try {
+    if ($reuse) {
+      $other.SetSocketOption([System.Net.Sockets.SocketOptionLevel]::Socket,
+        [System.Net.Sockets.SocketOptionName]::ReuseAddress, $true)
+    }
+    $other.Bind((New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Loopback, $port)))
+    $bound = $true
+  } catch {
+    Write-Host "note: the second bind (SO_REUSEADDR $reuse) was refused: $($_.Exception.Message)"
+  } finally {
+    $other.Close()
+  }
+  if ($bound) { Ui-Fail "another socket bound 127.0.0.1:$port (SO_REUSEADDR $reuse) while MitCad listens" }
+  Write-Host "ok   another socket cannot bind 127.0.0.1:$port (SO_REUSEADDR $reuse)"
+}
 
 Write-Host '--- The bridge connects'
 Ui-Mark

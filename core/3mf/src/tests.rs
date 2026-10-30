@@ -456,3 +456,115 @@ fn several_objects_are_build_items_of_their_own_and_read_back() {
     };
     assert!(write(&wrong).is_err());
 }
+
+/// A package of `(name, bytes, declared)` entries, stored; an entry with a
+/// `declared` size declares itself a deflate entry of that many bytes (in
+/// its local header and the central directory), what a deflate run of its
+/// bytes inflating to `declared` bytes would declare, without the test
+/// holding them. Bytes of 0xff are no valid deflate stream, so a read that
+/// got past the size checks would fail to inflate them.
+fn declared_package(entries: &[(&str, &[u8], Option<u32>)]) -> Vec<u8> {
+    let files: Vec<(&str, &[u8])> = entries
+        .iter()
+        .map(|&(name, bytes, _)| (name, bytes))
+        .collect();
+    let mut zip = mitcad_zip::stored_zip(&files);
+    let u16_at = |b: &[u8], at: usize| usize::from(u16::from_le_bytes([b[at], b[at + 1]]));
+    let u32_at =
+        |b: &[u8], at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+    let mut central = u32_at(&zip, zip.len() - 22 + 16);
+    for &(_, _, declared) in entries {
+        if let Some(declared) = declared {
+            let local = u32_at(&zip, central + 42);
+            for (method_at, size_at) in [(local + 8, local + 22), (central + 10, central + 24)] {
+                zip[method_at..method_at + 2]
+                    .copy_from_slice(&mitcad_zip::Method::Deflate.code().to_le_bytes());
+                zip[size_at..size_at + 4].copy_from_slice(&declared.to_le_bytes());
+            }
+        }
+        central += 46
+            + u16_at(&zip, central + 28)
+            + u16_at(&zip, central + 30)
+            + u16_at(&zip, central + 32);
+    }
+    zip
+}
+
+#[test]
+fn a_package_refuses_a_model_part_over_its_budget_before_reading_it() {
+    // 1 GiB declared from 1 MiB: within the zip reader's expansion ratio
+    // (1024:1) and its large entry limit, but over the package's budget.
+    let run = vec![0xffu8; 1 << 20];
+    let bomb = declared_package(&[("3D/3dmodel.model", run.as_slice(), Some(1 << 30))]);
+    let archive = mitcad_zip::Archive::new(bomb.clone()).unwrap();
+    assert_eq!(archive.entries()[0].size, 1 << 30);
+    let error = read_package(&bomb).unwrap_err().to_string();
+    assert!(
+        error.contains("3D/3dmodel.model declares 1073741824 bytes, more than"),
+        "{error}"
+    );
+    // The model part the relationships name, and the relationships
+    // themselves, are held to the budget too.
+    let rels = format!(
+        "<Relationships><Relationship Target=\"/3D/other.model\" \
+         Type=\"{MODEL_RELATIONSHIP}\"/></Relationships>"
+    );
+    let named = declared_package(&[
+        ("_rels/.rels", rels.as_bytes(), None),
+        ("3D/other.model", run.as_slice(), Some(1 << 30)),
+    ]);
+    let error = read_package(&named).unwrap_err().to_string();
+    assert!(error.contains("3D/other.model declares"), "{error}");
+    let relationships = declared_package(&[("_rels/.rels", run.as_slice(), Some(1 << 30))]);
+    let error = read_package(&relationships).unwrap_err().to_string();
+    assert!(error.contains("_rels/.rels declares"), "{error}");
+}
+
+#[test]
+fn a_package_of_too_many_entries_is_refused() {
+    let mut zip = mitcad_zip::Writer::new();
+    for i in 0..5000 {
+        zip.add(&format!("a{i}.json"), b"{}", mitcad_zip::Method::Stored)
+            .unwrap();
+    }
+    let error = read_package(&zip.finish().unwrap())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("the package has 5000 entries, more than the limit"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_package_whose_files_declare_too_much_in_all_is_refused() {
+    // Five files of 60 MiB each, from 60 KiB each: each within the file
+    // limit, together over the total, refused before any is read.
+    let run = vec![0xffu8; 60 << 10];
+    let names: Vec<String> = (0..5)
+        .map(|i| format!("Metadata/plate_{i}.config"))
+        .collect();
+    let entries: Vec<(&str, &[u8], Option<u32>)> = names
+        .iter()
+        .map(|name| (name.as_str(), run.as_slice(), Some(60 << 20)))
+        .collect();
+    let error = read_package(&declared_package(&entries))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("the package's files declare 314572800 bytes, more than the limit"),
+        "{error}"
+    );
+    // A file over the file limit is still left out, not an error.
+    let big = vec![0xffu8; 70 << 10];
+    let package = read_package(&declared_package(&[
+        ("Metadata/big.config", big.as_slice(), Some(70 << 20)),
+        ("Metadata/project_settings.config", &b"{}"[..], None),
+    ]))
+    .unwrap();
+    assert_eq!(package.file("Metadata/big.config"), None);
+    assert_eq!(
+        package.file("Metadata/project_settings.config"),
+        Some(&b"{}"[..])
+    );
+}

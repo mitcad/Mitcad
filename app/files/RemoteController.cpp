@@ -395,6 +395,13 @@ void RemoteController::refreshStatus() {
         state.problemMessage = error.value(QStringLiteral("message")).toString();
       }
     }
+    // The repository's own git configuration names programs (mitcad#920):
+    // no git runs for it, whatever the last attempt said.
+    const QJsonObject untrusted = info.value(QStringLiteral("untrusted_config")).toObject();
+    if (!untrusted.isEmpty()) {
+      state.problem = untrusted.value(QStringLiteral("class")).toString();
+      state.problemMessage = untrusted.value(QStringLiteral("message")).toString();
+    }
     state.lastFetch = timeOf(info.value(QStringLiteral("last_fetch")));
     if (state.behind > 0) {
       const QJsonObject incoming = local(state.root, named("incoming"));
@@ -438,6 +445,8 @@ void RemoteController::publishState() {
       logged << QStringLiteral("remote not found");
     } else if (cls == QLatin1String("git_missing")) {
       logged << QStringLiteral("git missing");
+    } else if (cls == QLatin1String("untrusted_config")) {
+      logged << QStringLiteral("untrusted git settings");
     }
   }
   if (m_state.ahead > 0) {

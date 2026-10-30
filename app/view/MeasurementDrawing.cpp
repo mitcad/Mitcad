@@ -844,9 +844,13 @@ void layoutPlanar(const MeasurementDisplay& m, const MeasurementProjection& proj
   }
   // How face on the plane is: the smaller of the projection's two singular
   // values against the larger.
-  const double a = dotOf(*ex, *ex) + dotOf(*ey, *ey);
+  const double xx = dotOf(*ex, *ex);
+  const double yy = dotOf(*ey, *ey);
+  const double xy = dotOf(*ex, *ey);
   const double det = ex->x() * ey->y() - ex->y() * ey->x();
-  const double larger = std::sqrt(std::max(0.0, (a + std::sqrt(std::max(0.0, a * a - 4.0 * det * det))) / 2.0));
+  // The eigenvalue gap of the Gram matrix without subtracting nearly
+  // equal fourth powers: face-on projections have equal singular values.
+  const double larger = std::sqrt(std::max(0.0, (xx + yy + std::hypot(xx - yy, 2.0 * xy)) / 2.0));
   if (!(larger > 1e-12) || !std::isfinite(larger)) {
     return;
   }

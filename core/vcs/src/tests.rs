@@ -33,6 +33,10 @@ mod library_build;
 mod library_groups;
 // Mount frames of library parts (mitcad#525).
 mod library_mounts;
+// Standards and suppliers of library rows (mitcad#949).
+mod library_rows;
+// A repository's own git configuration as untrusted input (mitcad#920).
+mod untrusted;
 
 /// A fresh folder in the temporary directory, removed afterwards.
 struct Scratch(PathBuf);

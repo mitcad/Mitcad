@@ -124,6 +124,10 @@ void MainWindow::insertFromLibrary(bool community) {
   if (!choice.config.isEmpty()) {
     library.insert(QStringLiteral("config"), choice.config);
   }
+  // The Standard filter's standard names the part (mitcad#949).
+  if (!choice.standard.isEmpty()) {
+    library.insert(QStringLiteral("standard"), choice.standard);
+  }
   // A part with mount frames (mitcad#525): Place Part, where a click snaps a
   // frame to a face, a hole or a grid and Enter drops it in as below.
   const QVector<MountFrameInfo> frames = mountFramesOf(choice.mounts);

@@ -216,6 +216,10 @@ impl LibrarySourceDef {
                 supplier: source.supplier.clone().unwrap_or_default(),
                 part_number: source.part_number.clone().unwrap_or_default(),
                 supplier_url: source.supplier_url.clone().unwrap_or_default(),
+                // A source stands for every row (mitcad#949): its parts
+                // record their own row's standard and articles.
+                standard: String::new(),
+                supplier_parts: Vec::new(),
             },
             name: source.name.clone(),
             standard: source.standard.clone(),

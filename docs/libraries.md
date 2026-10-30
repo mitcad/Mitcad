@@ -72,7 +72,9 @@ A library holds data only:
 | `authors`, `homepage`, `sources` | For the attribution and the data's origin |
 | `units` | `mm` |
 | `categories` | `id` and `name` of the groups that components belong to. Optional: `parent` ([Groups](#groups)) |
-| `components` | Required: `id`, `path` (a `.mitcad` file) and `name`. Optional: `category` (one id or a list, [Groups](#groups)), `categories`, `standard`, `description`, `keywords` (or `tags`), `preview` (a PNG), `row_previews`, `license` (instead of the library's), `designation`, `supplier`, `part_number`, `supplier_url`, `build` and `mounts` ([Mount frames](#mount-frames)) |
+| `components` | Required: `id`, `path` (a `.mitcad` file) and `name`. Optional: `category` (one id or a list, [Groups](#groups)), `categories`, `standard`, `description`, `keywords` (or `tags`), `preview` (a PNG), `row_previews`, `license` (instead of the library's), `designation`, `supplier`, `part_number`, `supplier_url`, `rows` (the rows' standards and suppliers' articles, [Standards and suppliers of rows](#standards-and-suppliers-of-rows)), `build` and `mounts` ([Mount frames](#mount-frames)) |
+| `suppliers` | Optional: the suppliers the rows' articles name, each `id`, `name` and `url` ([Standards and suppliers of rows](#standards-and-suppliers-of-rows)) |
+| `replaces` | Optional: the ids the library had before (`["mitcad-fasteners"]`). An index's library of such an id is not listed beside this one ([A community index](#a-community-index)) |
 | `materials`, `printers`, `processes` | Optional: the library's materials and print profiles, each `id` and `path` ([Materials and print profiles](#materials-and-print-profiles)) |
 
 Three fields tell who sells the component:
@@ -108,6 +110,67 @@ combination comes first; a combination that is no row of an open table
 takes the pattern, with `{config}` empty.
 
 MitCad ignores unknown fields. Thus newer libraries stay readable.
+
+### Standards and suppliers of rows
+
+One component can stand for a fastener of several standards. A screw's
+length is often in two standards (M6x10 is ISO 4762 and DIN 912), only
+in one (M6x8 is DIN 912 only), or in none (a supplier's own length). The
+component's `rows` tags each configuration row with its standards and
+the suppliers' articles of it. The library's `suppliers` names the
+suppliers once:
+
+```json
+"suppliers": [{"id": "wurth", "name": "Würth", "url": "https://www.wurth.fi"},
+              {"id": "etra", "name": "Etra", "url": "https://www.etra.fi"}],
+"components": [
+  {"id": "iso4762", "path": "screws/iso4762.mitcad", "name": "Hexagon socket head cap screw",
+   "standard": "ISO 4762 / DIN 912", "designation": "{standard} {Size}x{Length}",
+   "rows": {
+     "M6x6":  {"standards": ["non-standard"],
+               "supplier_parts": [{"supplier": "wurth", "part_number": "0084 6 6", "material": "8.8",
+                                   "finish": "zinc-plated", "checked": "2026-10-30"}]},
+     "M6x8":  {"standards": ["DIN 912"]},
+     "M6x10": {"standards": ["ISO 4762", "DIN 912"],
+               "supplier_parts": [{"supplier": "wurth", "part_number": "0084 6 10", "material": "8.8",
+                                   "finish": "zinc-plated", "checked": "2026-10-30"}]}}}]
+```
+
+| Field | Meaning |
+|---|---|
+| `suppliers` | The library's suppliers. `id`: 2 to 64 characters of `a-z`, `0-9` and `-`, the same in every version (the rows refer to it). `name`: for people. `url`: the supplier's own site (https) |
+| `rows` | A component's rows by the row's name (as the design's table names them). Each has `standards` and `supplier_parts`, both optional |
+| `standards` | The standards the row belongs to, in the component's order (`["ISO 4762", "DIN 912"]`). `["non-standard"]`: a length outside every standard's table |
+| `supplier_parts` | One entry per article: a supplier sells one size in several materials and finishes. `supplier`: an id of `suppliers`. `part_number`: in the supplier's own form (below). `material` (`8.8`, `A2`), `finish` (`zinc-plated`, `plain`). `checked`: the date the entry was read from the supplier's catalogue (`YYYY-MM-DD`). No price and no address |
+
+**Part numbers.** A part number is written as the supplier's catalogue
+writes it, so that an address made from it later finds the article:
+
+| Supplier | Form |
+|---|---|
+| Würth (`wurth`) | The article number in its groups, separated by single spaces: `0084 6 10` |
+| Etra (`etra`) | The product code as the catalogue writes it, without spaces added or left out |
+
+**Designations.** In a pattern, `{standard}` is the standard the row is
+named by: the standard chosen in the Standard filter when the row has
+it, else the row's first (`ISO 4762 M6x10`, `DIN 912 M6x8`). A row of no
+standard is named without one and marked: `M6x6 (non-standard)`. A row
+without `standards` takes the component's `standard`, as before. The
+part records the standard it is named by and its row's articles
+(commands.md, [Standards and suppliers of library rows](../core/model-api/src/commands.md#standards-and-suppliers-of-library-rows)).
+
+**Filters.** Insert from Library, Library Parts, Edit Options and the
+Build tab's part picker show a Standard and a Supplier filter above the
+size choosers when the rows name standards or articles. They narrow the
+sizes to the rows that match. The part grid's Supplier filter hides the
+components that the supplier sells in no size
+([the user guide](user-guide.md#component-libraries)).
+
+**Checks.** `library check` refuses an article of a supplier that
+`suppliers` does not list, a `checked` that is no date, an article
+without a part number, a supplier without an id or a name, and a row
+name that the design's table does not have. MitCad of before mitcad#949
+ignores `rows` and `suppliers`, and reads the library as before.
 
 ### Groups
 
@@ -792,6 +855,15 @@ community-index/
 
 `components` lets MitCad find a library before it is fetched.
 `reviewed` lists the versions that the index's maintainers looked at.
+
+MitCad does not list an index's library when an enabled source has its
+repository under another id, or when a fetched library `replaces` its
+id (mitcad#949). The same repository is the same URL, or a source whose
+clone has the library's newest commit or a version the index reviewed
+(an address that redirects to a source's repository). The log says so
+once: `Library index: mitcad-fasteners left out: same repository as
+https://github.com/mitcad/parts.git`. Thus an index that still names a
+library's former id shows no second group of the same parts.
 An index only lists. The libraries stay where their authors keep them.
 An index's checks, if it has any, only check entries.
 `mitcad-cli library index-entry <folder> --url <url>` writes an entry
@@ -848,13 +920,62 @@ mitcad-cli library index-entry my-parts --url https://example.org/you/my-parts.g
 that MitCad offers. It is kept in a repository of its own
 (`https://github.com/mitcad/parts.git`). It holds:
 
-- The metric fasteners: ISO 4762 and ISO 4017 screws, ISO 4032 nuts and
-  ISO 7089 washers M1.6 to M24, and ISO 10642 screws M3 to M20, in their
-  preferred lengths (M1.6 to M2.5 and M14 to M24 since 2.8.0,
-  mitcad#900). The rows of earlier versions stay, also the few shorter
-  than a standard's range (ISO 4762 M6x8, M8x10; ISO 4017 M6x10, M8x12,
-  M10x16, M12x20).
-  They are simplified for assemblies: cosmetic threads, the heads' top
+- The metric fasteners, one component per kind, each for its ISO
+  standard and the DIN standard that the ISO one replaced (mitcad#949):
+  - Hexagon socket head cap screw, ISO 4762 / DIN 912, M1.6 to M24
+  - Hexagon head screw, thread to the head, ISO 4017 / DIN 933, M1.6 to
+    M24
+  - Hexagon socket countersunk head screw, ISO 10642 / DIN 7991, M3 to
+    M20
+  - Hexagon nut, ISO 4032 / DIN 934, M1.6 to M24
+  - Plain washer, ISO 7089 / DIN 125, M1.6 to M24
+
+  The component ids stay (`iso4762`, `iso4017`, `iso10642`, `iso4032`,
+  `iso7089`), and so do the rows of earlier versions. Each row names its
+  standards in the component's `rows` ([Standards and suppliers of
+  rows](#standards-and-suppliers-of-rows)):
+  - A length in both standards' tables names both (`M6x10`: ISO 4762,
+    DIN 912).
+  - The DIN tables' own lengths are rows tagged DIN only (`M6x8`:
+    DIN 912; `M5x7`: DIN 933).
+  - A DIN size whose dimensions differ from the ISO one is a size of its
+    own, its rows tagged DIN only: DIN 933 at M10, M12 and M14 (across
+    flats 17, 19, 22 against ISO 4017's 16, 18, 21; size `M10 DIN 933`,
+    row `M10x20 DIN 933`) and DIN 934 from M5 (lower nuts, and 17, 19, 22
+    across flats at M10, M12, M14; row `M10 DIN 934`). The ISO size keeps
+    its rows and their names, tagged ISO only.
+  - The suppliers' lengths outside every table are rows tagged
+    `non-standard` (socket head and hexagon head screws: `M6x6`), with
+    the supplier's head (`M12x220 DIN 933`). The earlier rows that are in
+    no table stay the same way (ISO 4017 `M10x16`, `M12x20`).
+  - DIN 7991's head gives the countersink of ISO 10642's theoretical head,
+    which the library models: the countersunk screw's rows are ISO 10642's,
+    tagged DIN 7991 too where its table has the length. DIN 125-1 washers
+    are ISO 7089's in every size.
+
+  The ISO lengths are the standards' preferred ones. ISO 4017 has M16,
+  M20 and M24 up to 200 mm (ISO 4017:2011 Table 1, product grade B over
+  150 mm; up to 150 before mitcad#949). ISO 10642 M14 has the standard's
+  head, dk 30.8 and k 8.4.
+
+  The rows list Würth's and Etra's articles (`supplier_parts`): every
+  article of the groups read from their catalogues on 2026-10-30, in
+  steel 8.8, 10.9 and 12.9 zinc-plated or plain and stainless A2 and A4
+  (screws), class 6 and 8, A2 and A4 (nuts), steel 200 HV, A2 and A4
+  (washers). The articles are kept in
+  `tools/libraries/fastener_suppliers.py` with the catalogue page of each
+  group. A countersunk screw's length that no row has is left out. The
+  part numbers are in each supplier's form:
+  - Würth: the article number in its groups, separated by single spaces
+    (`0084 6 8`). They are the groups of the article key of Würth's shop
+    (`00846  8`, in the product address `.../00846%20%208.sku/...`): the
+    first four digits, the next three characters without their filling
+    spaces, then the rest. Back to the key: the middle group filled with
+    spaces to three characters when a third group follows.
+  - Etra: the product code as Etra's catalogue writes it, digits only
+    (`701200206008`).
+
+  The fasteners are simplified for assemblies: cosmetic threads, the heads' top
   edges rounded or chamfered, and no other chamfers or fillets
   ([Previews](#previews)). Each names CC0-1.0 as its own licence.
 - The Build tab's slot profiles, connectors, nuts, caps, panels and
@@ -951,7 +1072,7 @@ Three generators make the library with `mitcad-cli`:
 
 ```
 tools/libraries/make-parts-library.py --cli <mitcad-cli> --source <folder of the supplier's files>
-    --out <clone of the parts repository> [--groups <folder>] [--version 2.8.0] [--work <folder>]
+    --out <clone of the parts repository> [--groups <folder>] [--version 2.9.0] [--work <folder>]
     [--render-worker <mitcad-render>] [--no-render] [--rerender] [--commit]
 tools/libraries/make-fastener-library.py --cli <mitcad-cli> --out <folder> [--sizes M3,M5]
     [--standards iso4762,iso4032] [--version 1.0.0] [--render-worker <mitcad-render>] [--no-render]
@@ -968,7 +1089,7 @@ tools/libraries/library_previews.py   the fasteners' studio and finishes (both g
   `LICENSE`, `README.md` and `SOURCES.md`. Then it checks the folder.
   `--out` is a clone of the components repository, so that its versions
   stay. `--commit` records the result on top of them and tags it. The
-  default tag is `v2.8.0`, the next version to publish.
+  default tag is `v2.9.0`, the next version to publish.
 - `make-fastener-library.py` builds the fasteners from the standards'
   dimension tables. Each fastener has its finish as its appearance and
   a rendered preview ([Previews](#previews)).

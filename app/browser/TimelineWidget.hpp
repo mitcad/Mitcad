@@ -31,8 +31,9 @@ class TimelineStrip;
 // The timeline, docked at the bottom: the features as icons in
 // timeline order (coloured by component), the history marker, and the
 // playback buttons that step it. Hovering shows a feature's name, a failed
-// feature is red and one with a warning yellow, with the message as its
-// tooltip; a placeholder of an item an import skipped (mitcad#170) is
+// feature is red and one with a warning yellow, with a status badge that
+// stays whatever the cell's state (mitcad#961, FeatureStatus.hpp) and the
+// message as its tooltip; a placeholder of an item an import skipped (mitcad#170) is
 // suppressed with a yellow outline, the file's state in its tooltip. Dragging the marker rolls the model back and forward; dragging
 // a feature moves it in the timeline, and a place it cannot go shows red
 // while dragging. Timeline groups (P9) have a band over their features,

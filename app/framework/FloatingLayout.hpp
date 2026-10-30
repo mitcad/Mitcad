@@ -53,8 +53,11 @@ class FloatingLayout : public QWidget {
 
 public:
   // Where a card sits in the view: the upper left corner, the upper right
-  // corner under the orientation cube, or the bottom spanning the width.
-  enum class Anchor { TopLeft, TopRight, Bottom };
+  // corner under the orientation cube, the bottom spanning the width, or
+  // a panel on the right edge from the top rows down to the bottom card
+  // (the chat, mitcad#947), with the upper right cards and the
+  // orientation cube left of it.
+  enum class Anchor { TopLeft, TopRight, Bottom, Right };
 
   struct Sizing {
     int width = 0; // 0: the width of the view less the margins

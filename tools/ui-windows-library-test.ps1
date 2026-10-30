@@ -19,6 +19,9 @@
 #      libraries' parts, a screw in two groups (Slot profile/Screws and
 #      General fasteners/Screws) and once in Favourites, Wood folded and
 #      still folded when the browser opens again, then unfolded.
+#   6. The Standard filter (mitcad#949): a socket head cap screw whose rows
+#      name their standards; Standard = DIN 912 narrows the lengths of M6 to
+#      8 and 10, and the part inserted is named DIN 912 M6x8.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-library-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -281,5 +284,94 @@ Ui-Step 'unfold it (Alt+O, W, Right)'    { Ui-Key 'alt+o'; Type-Ahead 'W'; Ui-Ke
 Ui-ExpectNew 'Part picker group Wood unfolded' 'Wood unfolded'
 Ui-Step 'close (Escape)'                 { Ui-Key 'Escape' }
 Ui-FocusMain
+
+Write-Host '--- 6. The Standard filter (mitcad#949)'
+# A socket head cap screw of four rows, tagged with their standards as the
+# parts library's (Linux: tools/ui-library-test.sh, part 9): M5x10 and M6x10
+# of ISO 4762 and DIN 912, M6x8 of DIN 912 only, M6x6 of no standard. With
+# Standard = DIN 912 the lengths of M6 are 8 and 10, and the part inserted
+# is named by that standard.
+$screws = Join-Path $work 'screws'
+New-Item -ItemType Directory -Force (Join-Path $screws 'screws') | Out-Null
+$screwScript = Join-Path $work 'screw.json'
+Set-Content -Encoding ascii $screwScript @'
+[
+  {"cmd": "add_parameter", "name": "d", "expression": "6 mm"},
+  {"cmd": "add_parameter", "name": "L", "expression": "10 mm"},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": "d", "height": "d"},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": "L"}, "operation": "new_body"}},
+  {"cmd": "set_configurations", "configurations": {
+    "selectors": ["Size", "Length"], "parameters": ["d", "L"], "default": "M5x10",
+    "rows": [
+      {"name": "M5x10", "select": {"Size": "M5", "Length": "10"}, "values": {"d": "5 mm", "L": "10 mm"}},
+      {"name": "M6x6", "select": {"Size": "M6", "Length": "6"}, "values": {"d": "6 mm", "L": "6 mm"}},
+      {"name": "M6x8", "select": {"Size": "M6", "Length": "8"}, "values": {"d": "6 mm", "L": "8 mm"}},
+      {"name": "M6x10", "select": {"Size": "M6", "Length": "10"}, "values": {"d": "6 mm", "L": "10 mm"}}]}}
+]
+'@
+$screwDesign = Join-Path $screws 'screws\iso4762.mitcad'
+$output = & $cli run $screwScript --save $screwDesign
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $screwDesign)) { Ui-Fail "mitcad-cli run: $($output -join ' / ')" }
+Set-Content -Encoding ascii (Join-Path $screws 'mitcad-library.json') @'
+{"format": "mitcad-library", "version": 1, "id": "test-screws", "name": "Test screws", "license": "MIT",
+ "suppliers": [{"id": "acme", "name": "Acme", "url": "https://acme.example.org"}],
+ "categories": [{"id": "screws", "name": "General fasteners/Screws"}],
+ "components": [
+   {"id": "iso4762", "path": "screws/iso4762.mitcad", "name": "Hexagon socket head cap screw",
+    "category": "screws", "standard": "ISO 4762 / DIN 912", "designation": "{standard} {Size}x{Length}",
+    "rows": {
+      "M5x10": {"standards": ["ISO 4762", "DIN 912"]},
+      "M6x6": {"standards": ["non-standard"]},
+      "M6x8": {"standards": ["DIN 912"],
+               "supplier_parts": [{"supplier": "acme", "part_number": "A 6 8", "material": "8.8",
+                                   "finish": "zinc-plated", "checked": "2026-10-30"}]},
+      "M6x10": {"standards": ["ISO 4762", "DIN 912"]}}}]}
+'@
+Set-Content -Encoding ascii (Join-Path $screws 'LICENSE') 'MIT'
+$output = & $cli library check $screws
+if ($LASTEXITCODE -ne 0) { Ui-Fail "mitcad-cli library check ${screws}: $($output -join ' / ')" }
+foreach ($arguments in @(@('init', '-q'), @('add', '-A'), @('commit', '-q', '-m', 'Screws'))) {
+  $output = & $git.Source -C $screws -c user.name=T -c user.email=t@example.invalid @arguments 2>&1
+  if ($LASTEXITCODE -ne 0) { Ui-Fail "git $($arguments -join ' '): $($output -join ' / ')" }
+}
+Ui-Mark
+Ui-Step 'Libraries (F8)'                 { Ui-Key 'F8' }
+Ui-FocusDialog '^Libraries$'
+Add-Source $screws
+Ui-Step 'close (Alt+C)'                  { Ui-Key 'alt+c' }
+Ui-FocusMain
+Ui-Mark
+Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+Ui-FocusDialog '^Insert from Library$'
+Ui-Mark
+Ui-Step 'Update (Alt+U)'                 { Ui-Key 'alt+u' }
+Ui-ExpectNew "Library fetched: library Test screws (test-screws) from $screws" 'the screws fetched' 30
+Ui-ExpectNew 'source(s): 1 failed' 'only the broken source fails' 30
+Ui-FocusDialog '^Fetch Libraries$'
+Ui-Step 'close the warning (Return)'     { Ui-Key 'Return' }
+Ui-FocusDialog '^Insert from Library$'
+Ui-Step 'All parts (Alt+O, A)'           { Ui-Key 'alt+o'; Type-Ahead 'A' }
+Ui-Mark
+Ui-Step 'search the screw (Alt+S)'       { Ui-Key 'alt+s'; Ui-Type 'socket head' }
+Ui-ExpectNew 'Library browser selected test-screws/iso4762: version ' 'the socket head cap screw'
+Ui-Mark
+Ui-Step 'Standard DIN 912 (Alt+D)'       { Ui-Key 'alt+d'; Type-Ahead 'DIN' }
+Ui-ExpectNew 'Library filter: Standard DIN 912, Supplier All: 3 of 4 rows' 'the Standard filter narrows the rows'
+Ui-Mark
+# Size M6: the field before Length, which is before Linked.
+Ui-Step 'size M6 (Alt+L, Shift+Tab twice)' { Ui-Key 'alt+l', 'shift+Tab', 'shift+Tab'; Ui-Type 'M6' }
+Ui-ExpectNew 'Library Length choices (Standard DIN 912, Supplier All): 8, 10' 'the lengths of M6 narrowed'
+Ui-Mark
+# The first length (8): Home, as a typed 8 looks on from the current length.
+Ui-Step 'length 8 (Tab, Home)'           { Ui-Key 'Tab', 'Home' }
+Ui-ExpectNew 'Library size M6x8' 'M6x8 chosen'
+Ui-ExpectNew 'Library browser row M6x8: designation DIN 912 M6x8; supplier part numbers Acme A 6 8 (8.8 zinc-plated)' `
+  'the designation follows the standard; the supplier part number'
+Ui-Step 'Insert (Alt+I)'                 { Ui-Key 'alt+i' }
+Ui-FocusMain
+Ui-ExpectNew 'Inserted component DIN 912 M6x8 (linked) from test-screws' 'the part named by DIN 912'
 
 Ui-Finish 'UI Windows library test'

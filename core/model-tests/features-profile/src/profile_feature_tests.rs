@@ -647,6 +647,13 @@ fn revolutions_take_axes_and_angles() {
             json!({"type": "two_sides", "angle1": 0.25, "angle2": 0.5}),
             "axis [0.0, 0.0, 0.0] [1.0, 0.0, 0.0] angles 0.25 Some(0.5)",
         ),
+        // Side two ending past the profile (mitcad#955): the profile turned
+        // there, the rest one side.
+        (
+            json!("y"),
+            json!({"type": "two_sides", "angle1": 0.75, "angle2": -0.25}),
+            "axis [0.0, 0.0, 0.0] [0.0, 1.0, 0.0] angles 0.5 None",
+        ),
         (
             json!("y"),
             json!({"type": "to_object", "object": {"type": "plane", "plane": "yz"}}),
@@ -677,6 +684,10 @@ fn revolutions_take_axes_and_angles() {
         (
             json!({"type": "two_sides", "angle1": -1, "angle2": 2}),
             "must not be negative",
+        ),
+        (
+            json!({"type": "two_sides", "angle1": 0.25, "angle2": -0.5}),
+            "add up to more than zero",
         ),
     ] {
         let error = b

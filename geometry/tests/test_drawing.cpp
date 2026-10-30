@@ -5,12 +5,15 @@
 // diameter 6.6 at (20, 15) runs along Z, counterbored 11 wide and 6.8 deep
 // from the top.
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <memory>
 #include <vector>
 
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepBuilderAPI_NurbsConvert.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <gp_Ax2.hxx>
@@ -224,12 +227,256 @@ void test_round_holes() {
   CHECK(round_holes(Shape(boss)).empty());
 }
 
+// --- The quick path (mitcad#962) ------------------------------------------------
+
+using Segments = std::vector<std::array<Point2, 2>>;
+
+void add_chords(Segments& segments, const std::vector<Point2>& points, bool closed) {
+  const std::size_t n = points.size();
+  for (std::size_t k = 0; k + 1 < n; ++k) {
+    segments.push_back({points[k], points[k + 1]});
+  }
+  if (closed) {
+    segments.push_back({points[n - 1], points[0]});
+  }
+}
+
+std::vector<Point2> on_circle(double cx, double cy, double radius, double from, double to, int chords,
+                              bool closed) {
+  std::vector<Point2> points;
+  const int n = closed ? chords : chords + 1;
+  for (int k = 0; k < n; ++k) {
+    const double a = from + (to - from) * k / chords;
+    points.push_back({cx + radius * std::cos(a), cy + radius * std::sin(a)});
+  }
+  return points;
+}
+
+int count_of(const std::vector<DrawnCurve>& curves, DrawnCurve::Type type) {
+  return static_cast<int>(
+      std::count_if(curves.begin(), curves.end(), [&](const DrawnCurve& c) { return c.type == type; }));
+}
+
+void test_fit_segments() {
+  // A rectangle, each side in three pieces: four lines.
+  Segments rectangle;
+  const Point2 corners[] = {{0.0, 0.0}, {30.0, 0.0}, {30.0, 20.0}, {0.0, 20.0}};
+  for (int k = 0; k < 4; ++k) {
+    const Point2 a = corners[k];
+    const Point2 b = corners[(k + 1) % 4];
+    const auto at = [&](double t) { return Point2{a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t}; };
+    for (int s = 0; s < 3; ++s) {
+      rectangle.push_back({at(s / 3.0), at((s + 1) / 3.0)});
+    }
+  }
+  const std::vector<DrawnCurve> sides = fit_segments(rectangle, 0.01);
+  CHECK(sides.size() == 4);
+  CHECK(count_of(sides, DrawnCurve::Type::Line) == 4);
+  double length = 0.0;
+  for (const DrawnCurve& c : sides) {
+    if (c.type == DrawnCurve::Type::Line) {
+      length += std::hypot(c.points[1][0] - c.points[0][0], c.points[1][1] - c.points[0][1]);
+    }
+  }
+  CHECK_NEAR(length, 100.0);
+
+  // A circle in 32 chords (their sagitta 0.048): one whole arc.
+  Segments circle;
+  add_chords(circle, on_circle(5.0, -3.0, 10.0, 0.0, 2.0 * test::kPi, 32, true), true);
+  const std::vector<DrawnCurve> whole = fit_segments(circle, 0.06);
+  CHECK(whole.size() == 1);
+  if (whole.size() == 1) {
+    const DrawnCurve& c = whole.front();
+    CHECK(c.type == DrawnCurve::Type::Arc);
+    CHECK_NEAR(c.center[0], 5.0);
+    CHECK_NEAR(c.center[1], -3.0);
+    CHECK_NEAR(c.radius, 10.0);
+    CHECK_NEAR(c.end - c.start, 2.0 * test::kPi);
+  }
+
+  // A hexagon's corners lie on a circle, its sides far from it: six lines.
+  Segments hexagon;
+  add_chords(hexagon, on_circle(0.0, 0.0, 3.0, 0.0, 2.0 * test::kPi, 6, true), true);
+  const std::vector<DrawnCurve> hex = fit_segments(hexagon, 0.06);
+  CHECK(hex.size() == 6);
+  CHECK(count_of(hex, DrawnCurve::Type::Line) == 6);
+
+  // A quarter of a circle in eight chords, then a line on from it along its
+  // tangent: an arc and a line.
+  std::vector<Point2> path = on_circle(0.0, 0.0, 10.0, -test::kPi / 2.0, 0.0, 8, false);
+  path.push_back({10.0, 15.0});
+  Segments bend;
+  add_chords(bend, path, false);
+  const std::vector<DrawnCurve> pieces = fit_segments(bend, 0.06);
+  CHECK(pieces.size() == 2);
+  CHECK(count_of(pieces, DrawnCurve::Type::Arc) == 1);
+  CHECK(count_of(pieces, DrawnCurve::Type::Line) == 1);
+  for (const DrawnCurve& c : pieces) {
+    if (c.type == DrawnCurve::Type::Arc) {
+      CHECK_NEAR(c.radius, 10.0);
+      CHECK_NEAR(c.end - c.start, test::kPi / 2.0);
+      CHECK_NEAR(std::cos(c.start), 0.0);
+      CHECK_NEAR(std::sin(c.start), -1.0);
+    }
+  }
+}
+
+double segment_distance(const Point2& p, const Point2& a, const Point2& b) {
+  const double dx = b[0] - a[0];
+  const double dy = b[1] - a[1];
+  const double length2 = dx * dx + dy * dy;
+  double t = length2 > 0.0 ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length2 : 0.0;
+  t = std::max(0.0, std::min(1.0, t));
+  return std::hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+}
+
+Point2 arc_point(const DrawnCurve& c, double angle) {
+  return {c.center[0] + c.radius * std::cos(angle), c.center[1] + c.radius * std::sin(angle)};
+}
+
+double distance_to(const DrawnCurve& c, const Point2& p) {
+  if (c.type == DrawnCurve::Type::Line) {
+    return segment_distance(p, c.points[0], c.points[1]);
+  }
+  if (c.type == DrawnCurve::Type::Arc) {
+    const double dx = p[0] - c.center[0];
+    const double dy = p[1] - c.center[1];
+    double along = std::fmod(std::atan2(dy, dx) - c.start, 2.0 * test::kPi);
+    if (along < 0.0) {
+      along += 2.0 * test::kPi;
+    }
+    if (along <= c.end - c.start + 1e-9) {
+      return std::abs(std::hypot(dx, dy) - c.radius);
+    }
+    const Point2 a = arc_point(c, c.start);
+    const Point2 b = arc_point(c, c.end);
+    return std::min(std::hypot(p[0] - a[0], p[1] - a[1]), std::hypot(p[0] - b[0], p[1] - b[1]));
+  }
+  double nearest = 1e300;
+  for (std::size_t k = 0; k + 1 < c.points.size(); ++k) {
+    nearest = std::min(nearest, segment_distance(p, c.points[k], c.points[k + 1]));
+  }
+  return nearest;
+}
+
+// Points along a drawn curve.
+std::vector<Point2> samples(const DrawnCurve& c) {
+  std::vector<Point2> out;
+  if (c.type == DrawnCurve::Type::Line) {
+    for (int k = 0; k <= 16; ++k) {
+      const double t = k / 16.0;
+      out.push_back({c.points[0][0] + (c.points[1][0] - c.points[0][0]) * t,
+                     c.points[0][1] + (c.points[1][1] - c.points[0][1]) * t});
+    }
+  } else if (c.type == DrawnCurve::Type::Arc) {
+    for (int k = 0; k <= 64; ++k) {
+      out.push_back(arc_point(c, c.start + (c.end - c.start) * k / 64.0));
+    }
+  } else {
+    for (std::size_t k = 0; k < c.points.size(); ++k) {
+      out.push_back(c.points[k]);
+      if (k + 1 < c.points.size()) {
+        out.push_back({(c.points[k][0] + c.points[k + 1][0]) / 2.0, (c.points[k][1] + c.points[k + 1][1]) / 2.0});
+      }
+    }
+  }
+  return out;
+}
+
+// The farthest a point of the curves of `from` seen (or hidden) lies from
+// the other view's: a seen one from its seen curves, a hidden one from
+// any (a hidden line under a seen one does not show).
+double deviation(const DrawnView& from, const DrawnView& to, bool visible) {
+  double worst = 0.0;
+  for (const DrawnCurve& c : from.curves) {
+    if (c.visible != visible) {
+      continue;
+    }
+    for (const Point2& p : samples(c)) {
+      double nearest = 1e300;
+      for (const DrawnCurve& other : to.curves) {
+        if (other.visible || !visible) {
+          nearest = std::min(nearest, distance_to(other, p));
+        }
+      }
+      worst = std::max(worst, nearest);
+    }
+  }
+  return worst;
+}
+
+bool has_arc_near(const DrawnView& drawn, double cx, double cy, double radius) {
+  for (const DrawnCurve& c : drawn.curves) {
+    if (c.type == DrawnCurve::Type::Arc && c.visible && std::abs(c.center[0] - cx) < 1e-4 &&
+        std::abs(c.center[1] - cy) < 1e-4 && std::abs(c.radius - radius) < 1e-4) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The quick path: the same shapes with their faces as B-splines (free-form)
+// projected from a triangulation, its lines fitted, match the exact view of
+// the shapes within the drawing's tolerance; their circles are arcs.
+void test_quick_path() {
+  const ShapePtr block = counterbored_block();
+  const TopoDS_Shape post = cylinder(60.0, 15.0, 0.0, 30.0, 10.0);
+  const ShapePtr exact_post = std::make_shared<Shape>(post);
+  const ShapePtr free_block = std::make_shared<Shape>(BRepBuilderAPI_NurbsConvert(block->occt(), true).Shape());
+  const ShapePtr free_post = std::make_shared<Shape>(BRepBuilderAPI_NurbsConvert(post, true).Shape());
+  // Under half a thin line (0.25 mm) at 1:1.
+  constexpr double kTolerance = 0.1;
+  struct Case {
+    gp_Dir toward_eye;
+    gp_Dir x_axis;
+    bool hidden;
+    const char* name;
+  };
+  const Case cases[] = {
+      {gp_Dir(0, 0, 1), gp_Dir(1, 0, 0), false, "top"},
+      {gp_Dir(0, -1, 0), gp_Dir(1, 0, 0), true, "front with hidden lines"},
+      {gp_Dir(1, -1, 1), gp_Dir(1, 1, 0), false, "isometric"},
+  };
+  for (const Case& c : cases) {
+    const DrawnView exact = project_view({block, exact_post}, view(c.toward_eye, c.x_axis, c.hidden));
+    DrawingViewSpec spec = view(c.toward_eye, c.x_axis, c.hidden);
+    spec.quick = true;
+    const DrawnView quick = project_view({free_block, free_post}, spec);
+    CHECK(!exact.polygonal);
+    CHECK(quick.polygonal);
+    for (const bool visible : {true, false}) {
+      if (!visible && !c.hidden) {
+        continue;
+      }
+      const double there = deviation(quick, exact, visible);
+      const double back = deviation(exact, quick, visible);
+      if (!(there <= kTolerance && back <= kTolerance)) {
+        std::fprintf(stderr, "%s, %s lines: the quick view %.4f mm from the exact one, the exact %.4f mm from it\n",
+                     c.name, visible ? "seen" : "hidden", there, back);
+        ++test::failures;
+      }
+    }
+    if (c.toward_eye.Z() > 0.99) {
+      // From above: the hole's circles and the post's as arcs.
+      CHECK(has_arc_near(quick, 20.0, 15.0, 5.5));
+      CHECK(has_arc_near(quick, 20.0, 15.0, 3.3));
+      CHECK(has_arc_near(quick, 60.0, 15.0, 10.0));
+    }
+  }
+  // Without free-form faces the quick path is the exact one.
+  DrawingViewSpec spec = view(gp_Dir(0, 0, 1), gp_Dir(1, 0, 0), false);
+  spec.quick = true;
+  CHECK(!project_view({block, exact_post}, spec).polygonal);
+}
+
 } // namespace
 
 int main() {
   test::guarded("three views", test_three_views);
   test::guarded("a section view", test_section_view);
   test::guarded("round holes", test_round_holes);
+  test::guarded("lines and arcs from segments", test_fit_segments);
+  test::guarded("the quick path", test_quick_path);
   if (test::failures == 0) {
     std::puts("test_drawing: all checks passed");
   }

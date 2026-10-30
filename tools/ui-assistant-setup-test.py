@@ -57,7 +57,9 @@ def main():
                     "focus-dialog '^Connect AI Assistant$'", "expect-assistant-setup codex",
                     "expect-assistant-setup other", "expect-assistant-setup disconnect-other",
                     "expect-assistant-setup folder",
-                    "expect-assistant-setup missing-claude", "expect-assistant-setup claude"]
+                    "expect-assistant-setup missing-claude",
+                    # Found in the isolated home's .local/bin, outside PATH (mitcad#956).
+                    "expect-assistant-setup local-bin", "expect-assistant-setup claude"]
                 if sys.platform == "win32":
                     # A Microsoft Store Claude Desktop without a .mcpb handler (mitcad#763).
                     script.append("expect-assistant-setup packaged-claude")

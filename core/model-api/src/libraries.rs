@@ -27,6 +27,10 @@ pub(crate) struct LibraryInput {
     component: String,
     #[serde(default)]
     config: Option<String>,
+    /// The standard the part is named by when its row names several
+    /// (mitcad#949, the Standard filter's: `DIN 912`).
+    #[serde(default)]
+    standard: String,
 }
 
 impl LibraryInput {
@@ -37,6 +41,7 @@ impl LibraryInput {
             rev: self.rev,
             component: self.component,
             config: self.config,
+            standard: self.standard,
         }
     }
 }
@@ -280,6 +285,11 @@ impl<K: Kernel> LibrariesCrateOps<K> for Document<K> {
                     "supplier": row.supplier,
                     "part_number": row.part_number,
                     "supplier_url": row.supplier_url,
+                    // The suppliers' articles of its row (mitcad#949), and
+                    // as the parts list's column.
+                    "supplier_parts": row.supplier_parts,
+                    "supplier_parts_text":
+                        mitcad_model::library::supplier_parts_text(&row.supplier_parts),
                 });
                 // A component with options (mitcad#801).
                 if let Some(options) = super::component_options::options_json(self, row.component) {

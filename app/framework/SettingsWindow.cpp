@@ -129,6 +129,8 @@ void SettingsWindow::addPane(const QString& title, const QIcon& icon, QWidget* p
   // Margins of the pane; the stack is as large as its current page only.
   auto* frame = new QWidget;
   frame->setProperty("nativePaneTitle", title);
+  // The native selector shows the same icon above the name (mitcad#971).
+  frame->setProperty("nativePaneIcon", QVariant::fromValue(icon));
   auto* inner = new QVBoxLayout(frame);
   inner->setContentsMargins(24, 20, 24, 20);
   inner->addWidget(page);

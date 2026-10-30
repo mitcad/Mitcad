@@ -107,6 +107,7 @@ impl LinkResolver for Parts {
             part_number: None,
             supplier_url: None,
             build: None,
+            rows: Default::default(),
         })
     }
 }

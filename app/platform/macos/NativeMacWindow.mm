@@ -3682,17 +3682,41 @@ using namespace mitcad::mac;
   if (!cell) {
     cell = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
     cell.identifier = @"nativeListCell";
-    // NSTableCellView's outlet is non-owning. Retain the field locally until
-    // the cell owns it as a subview, including under optimized ARC builds.
+    // NSTableCellView's outlets are non-owning. Retain the views locally until
+    // the cell owns them as subviews, including under optimized ARC builds.
+    // The command's shared CAD icon at the shared search's 18 points, then
+    // its name and shortcut in the remaining width (mitcad#974).
+    NSImageView* icon = [[NSImageView alloc] initWithFrame:NSMakeRect(0, 0, 18, 18)];
+    icon.translatesAutoresizingMaskIntoConstraints = NO;
+    icon.imageScaling = NSImageScaleProportionallyDown;
     NSTextField* text = label(@"");
     text.lineBreakMode = NSLineBreakByTruncatingTail;
-    fill(text, cell, 6);
+    [text setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [cell addSubview:icon];
+    [cell addSubview:text];
+    [NSLayoutConstraint activateConstraints:@[
+      [icon.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:6],
+      [icon.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
+      [icon.widthAnchor constraintEqualToConstant:18],
+      [icon.heightAnchor constraintEqualToConstant:18],
+      [text.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:6],
+      [text.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor constant:-6],
+      [text.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor]
+    ]];
+    cell.imageView = icon;
     cell.textField = text;
   }
   QString title = command->label;
   if (!command->shortcut.isEmpty()) title += QStringLiteral("   ") + QKeySequence(command->shortcut).toString(QKeySequence::NativeText);
   cell.textField.stringValue = ns(title);
   cell.textField.textColor = command->enabled ? NSColor.labelColor : NSColor.tertiaryLabelColor;
+  // The same artwork as the ribbon and menus: coloured CAD icons follow the
+  // palette's light or dark rendering, masks stay templates that AppKit tints
+  // for the appearance and the selected row. A command without artwork keeps
+  // the slot empty, so the names stay aligned; one that cannot run is dimmed.
+  const bool artwork = !command->icon.isNull() || !command->symbol.isEmpty();
+  cell.imageView.image = artwork ? state->actionImage(*command, 18) : nil;
+  cell.imageView.alphaValue = command->enabled ? 1.0 : 0.4;
   cell.toolTip = ns(command->tooltip);
   cell.accessibilityIdentifier = ns(QStringLiteral("native.command.") + command->id);
   return cell;

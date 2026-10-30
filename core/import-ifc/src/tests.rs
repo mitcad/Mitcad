@@ -5,6 +5,7 @@
 //! in `core/model-tests/imports` (mitcad#831).
 
 use mitcad_ifc::IfcFile;
+use mitcad_ifc::geometry::TOO_MANY_ITEMS;
 use mitcad_ifc::testdata::{BUILDING, BUILDING_PRODUCTS};
 use mitcad_model::Document;
 use mitcad_model::testing::MockKernel;
@@ -168,4 +169,100 @@ fn scaled_and_mirrored_maps_are_copied() {
     assert_eq!(scaled.parametric, vec!["extrusion"]);
     assert_eq!(report.maps.len(), 1);
     assert_eq!(report.maps[0].occurrences, 1);
+}
+
+/// A building with one element, #20, whose body representation has the
+/// type and items `body`; with an extruded block #42, an operator #25
+/// that scales by 2 and the entities of `extra`.
+fn one_element(body: &str, extra: &str) -> String {
+    format!(
+        "ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('ViewDefinition [DesignTransferView]'),'2;1');
+FILE_NAME('limits.ifc','2026-10-29T00:00:00',(''),(''),'Mitcad test','Mitcad test','');
+FILE_SCHEMA(('IFC4'));
+ENDSEC;
+DATA;
+#1=IFCPROJECT('0PROJ00000000000000000',$,'Limits',$,$,$,$,$,#2);
+#2=IFCUNITASSIGNMENT((#3));
+#3=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);
+#10=IFCBUILDING('2BLDG00000000000000000',$,'Building',$,$,#11,$,$,.ELEMENT.,$,$,$);
+#11=IFCLOCALPLACEMENT($,#12);
+#12=IFCAXIS2PLACEMENT3D(#13,$,$);
+#13=IFCCARTESIANPOINT((0.,0.,0.));
+#14=IFCRELAGGREGATES('3AG0000000000000000000',$,$,$,#1,(#10));
+#15=IFCRELCONTAINEDINSPATIALSTRUCTURE('3CO0000000000000000000',$,$,$,(#20),#10);
+#20=IFCBUILDINGELEMENTPROXY('1PRX000000000000000000',$,'Nested',$,$,#11,#21,$,$);
+#21=IFCPRODUCTDEFINITIONSHAPE($,$,(#22));
+#22=IFCSHAPEREPRESENTATION($,'Body','{body});
+#25=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#13,2.,$);
+#42=IFCEXTRUDEDAREASOLID(#43,$,#45,100.);
+#43=IFCRECTANGLEPROFILEDEF(.AREA.,$,$,100.,100.);
+#45=IFCDIRECTION((0.,0.,1.));
+{extra}ENDSEC;
+END-ISO-10303-21;
+"
+    )
+}
+
+/// Imports `text` on the mock kernel, in under a second.
+fn import_quickly(text: &str) -> super::IfcReport {
+    let mut doc = Document::new(MockKernel::default());
+    let file = IfcFile::parse(text).expect("reads");
+    let started = std::time::Instant::now();
+    let report = import_ifc(&mut doc, &file, "limits.ifc", &IfcOptions::default());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    report
+}
+
+#[test]
+fn self_doubling_booleans_import_at_once() {
+    // mitcad#930: 40 booleans, each the union of the one below with
+    // itself, over one extruded block: 2^40 blocks if expanded.
+    let mut extra = "#101=IFCBOOLEANRESULT(.UNION.,#42,#42);\n".to_owned();
+    for k in 102..=140 {
+        extra += &format!("#{k}=IFCBOOLEANRESULT(.UNION.,#{},#{});\n", k - 1, k - 1);
+    }
+    let report = import_quickly(&one_element("CSG',(#140)", &extra));
+    let line = report.products.iter().find(|p| p.id == 20).expect("a line");
+    assert_eq!(line.outcome, Outcome::Failed, "{}", report.text());
+    assert!(
+        line.notes.iter().any(|n| n.contains(TOO_MANY_ITEMS)),
+        "{:?}",
+        line.notes
+    );
+}
+
+#[test]
+fn self_doubling_maps_import_at_once() {
+    // mitcad#930: 20 maps, each mapping the one below twice, over a map
+    // of one block: 2^16 blocks at the nesting limit if expanded. The
+    // scaled use is copied, not an occurrence.
+    let mut extra = "#40=IFCREPRESENTATIONMAP(#12,#41);\n\
+                     #41=IFCSHAPEREPRESENTATION($,'Body','SweptSolid',(#42));\n"
+        .to_owned();
+    let mut below = 40;
+    for k in 1..=20 {
+        let (map, rep, a, b) = (3000 + k, 2000 + k, 4000 + 2 * k, 4001 + 2 * k);
+        extra += &format!(
+            "#{map}=IFCREPRESENTATIONMAP(#12,#{rep});\n\
+             #{rep}=IFCSHAPEREPRESENTATION($,'Body','MappedRepresentation',(#{a},#{b}));\n\
+             #{a}=IFCMAPPEDITEM(#{below},#25);\n\
+             #{b}=IFCMAPPEDITEM(#{below},#25);\n"
+        );
+        below = map;
+    }
+    extra += &format!("#23=IFCMAPPEDITEM(#{below},#25);\n");
+    let report = import_quickly(&one_element("MappedRepresentation',(#23)", &extra));
+    let line = report.products.iter().find(|p| p.id == 20).expect("a line");
+    assert_eq!(line.outcome, Outcome::Failed, "{}", report.text());
+    assert!(
+        line.notes.iter().any(|n| n.contains(TOO_MANY_ITEMS)),
+        "{:?}",
+        line.notes
+    );
 }

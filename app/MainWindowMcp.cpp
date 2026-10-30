@@ -30,6 +30,7 @@
 #include "mcp/AgentFolders.hpp"
 #include "mcp/AgentIndicator.hpp"
 #include "mcp/AssistantSetup.hpp"
+#include "mcp/EndpointLimits.hpp"
 #include "mcp/LiveErrors.hpp"
 #include "mcp/ModalGuard.hpp"
 #ifdef MITCAD_MACOS_NATIVE_UI
@@ -44,14 +45,16 @@ namespace {
 const QString kAgentSuffix = QStringLiteral(" (agent)");
 
 [[noreturn]] void refuse(const QString& reason) {
-  qInfo().noquote() << QStringLiteral("MCP refused: %1").arg(reason);
+  // A refusal can repeat a client's text: its log line keeps the start
+  // (mitcad#935).
+  qInfo().noquote() << QStringLiteral("MCP refused: %1").arg(mcp::echoed(reason, mcp::kRefusalLogChars));
   throw std::runtime_error(reason.toStdString());
 }
 
 // A refusal with fields of its own beside the error (mitcad#689: which
 // entry of a command array).
 [[noreturn]] void refuseWith(const QString& reason, const QJsonObject& fields) {
-  qInfo().noquote() << QStringLiteral("MCP refused: %1").arg(reason);
+  qInfo().noquote() << QStringLiteral("MCP refused: %1").arg(mcp::echoed(reason, mcp::kRefusalLogChars));
   throw mcp::Refusal(reason, fields);
 }
 

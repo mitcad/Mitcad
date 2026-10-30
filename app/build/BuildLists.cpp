@@ -388,7 +388,8 @@ QStringList propertyKeys(const QString& typed) {
 QVector<ListTable> partsListTables(const QJsonObject& answer, const QJsonObject& cut, const QStringList& keys) {
   ListTable parts{QObject::tr("Parts list"),
                   {QObject::tr("Quantity"), QObject::tr("Part"), QObject::tr("Supplier"), QObject::tr("Part number"),
-                   QObject::tr("Library"), QObject::tr("Version"), QObject::tr("Licence")},
+                   QObject::tr("Supplier part numbers"), QObject::tr("Library"), QObject::tr("Version"),
+                   QObject::tr("Licence")},
                   {}};
   // Timber (mitcad#478): the material and grade of the cut list's timber
   // rows, by the components they list; the columns only with timber.
@@ -409,9 +410,15 @@ QVector<ListTable> partsListTables(const QJsonObject& answer, const QJsonObject&
   parts.columns << keys;
   for (const QJsonValue& value : answer.value(QStringLiteral("rows")).toArray()) {
     const QJsonObject row = value.toObject();
+    // The suppliers' articles of the part's row (mitcad#949): "Würth 0084 6
+    // 8 (8.8 zinc-plated); ...".
     QStringList cells{countText(row.value(QStringLiteral("quantity"))),
                       text(row, "designation").isEmpty() ? text(row, "name") : text(row, "designation"),
-                      text(row, "supplier"), text(row, "part_number"), text(row, "library"), text(row, "version"),
+                      text(row, "supplier"),
+                      text(row, "part_number"),
+                      text(row, "supplier_parts_text"),
+                      text(row, "library"),
+                      text(row, "version"),
                       text(row, "license")};
     if (timber) {
       const QJsonObject own = material.value(text(row, "component"));

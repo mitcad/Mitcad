@@ -1748,6 +1748,27 @@ pub trait Kernel: Send {
     fn shape_unpacker(&self) -> Result<ShapeUnpacker<Self::Shape>, KernelError> {
         Err(KernelError::Unsupported("unpacking stored shapes later"))
     }
+
+    // Feature inputs drawn where they were (mitcad#957): a Fillet's or a
+    // Chamfer's picked edges as polylines, kept with its result.
+
+    /// The edges `edges` names (every edge a name resolves to) and the
+    /// edges bounding the faces `faces` names, each edge once, as polylines
+    /// in the shape's coordinates: points along each edge's curve, its ends
+    /// included, no farther than `deflection` (mm) from it and turning by at
+    /// most `angle` (radians) from one piece to the next. A degenerate edge
+    /// is left out; a name the shape lacks is an error. The shape is left as
+    /// it is.
+    fn edge_polylines(
+        &self,
+        _shape: &Self::Shape,
+        _edges: &[EdgeName],
+        _faces: &[FaceName],
+        _deflection: f64,
+        _angle: f64,
+    ) -> Result<Vec<Vec<[f64; 3]>>, KernelError> {
+        Err(KernelError::Unsupported("edge polylines"))
+    }
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of

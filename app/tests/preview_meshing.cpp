@@ -27,6 +27,10 @@
 //                                        commit or a refinement meshes), median
 //                                        and p95 (MITCAD_MESH_TRACE=1 adds the
 //                                        meshings' phases and faces)
+//   test_preview_meshing --abandon-at-exit
+//                                        the process the checks start to quit
+//                                        with a cancelled meshing's face that
+//                                        never ends (mitcad#936)
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -48,7 +52,11 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QString>
+#include <QStringList>
+#include <QTemporaryDir>
 
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -75,7 +83,10 @@
 #include "framework/DisplayMeshes.hpp"
 #include "framework/Json.hpp"
 #include "framework/ModelWorker.hpp"
+#include "framework/ProcessEnd.hpp"
+#include "mitcad/geometry/guard.hpp"
 #include "mitcad/io/mesh.hpp"
+#include "report/CrashHandler.hpp"
 #include "view/ViewTessellation.hpp"
 
 namespace {
@@ -659,6 +670,10 @@ struct Endless {
   std::atomic<bool> release{false};
   std::atomic<bool> returned{false};
   std::atomic<int> others{0};
+  // Set by a static destructor while the face loops (abandonFaceAtExit):
+  // the face then aborts, as one inside OCCT crashes when the static
+  // destructors tear OCCT's state down under it (mitcad#936).
+  std::atomic<bool> tornDown{false};
 };
 
 class EndlessFace : public IMeshTools_MeshAlgo {
@@ -675,6 +690,10 @@ public:
     }
     m_state.entered = true;
     while (!m_state.release) {
+      if (m_state.tornDown) {
+        std::fprintf(stderr, "the endless face's state was torn down under it\n");
+        std::abort();
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     m_inner->Perform(face, parameters, Message_ProgressRange());
@@ -735,6 +754,7 @@ void testCancelEndlessFace() {
   CHECK(state.entered);
   CHECK(seconds < mitcad::io::kMeshAbandonSeconds + 5.0);
   CHECK(meshing.report.abandoned == 1);
+  CHECK(mitcad::io::abandoned_faces() >= 1);
   CHECK(meshing.incomplete == 1);
   CHECK(body->display_meshed());
   CHECK(!mitcad::viewMeshes(*body));
@@ -757,6 +777,12 @@ void testCancelEndlessFace() {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   CHECK(state.returned);
+  // Its worker leaves the process's abandoned faces once it ends
+  // (mitcad#936).
+  for (int i = 0; i < 2000 && mitcad::io::abandoned_faces() > 0; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  CHECK(mitcad::io::abandoned_faces() == 0);
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   TopLoc_Location location;
   CHECK(!round.IsNull() && BRep_Tool::Triangulation(round, location).IsNull());
@@ -767,6 +793,91 @@ void testCancelEndlessFace() {
   const mitcad::DisplayMeshing meshed = mitcad::meshForDisplay({next}, again, mitcad::DisplayTier::Final);
   CHECK(meshed.bodies == 1 && meshed.incomplete == 0 && meshed.report.abandoned == 0);
   CHECK(mitcad::io::has_triangulation(next->occt()));
+}
+
+// The endless face's state in abandonFaceAtExit: static, as OCCT's own
+// state is, so that the static destructors at the end of a process that
+// runs them tear it down under the face, which never ends.
+struct StaticEndless {
+  Endless state;
+  StaticEndless() = default;
+  StaticEndless(const StaticEndless&) = delete;
+  StaticEndless& operator=(const StaticEndless&) = delete;
+  ~StaticEndless() {
+    state.tornDown = true;
+    // Time for the face to see it, as the process's end would give a
+    // thread inside OCCT.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  }
+};
+
+// The process of testAbandonedFaceAtExit (--abandon-at-exit): the crash
+// reports and OCCT's handlers as the application installs them, then
+// testCancelEndlessFace's display meshing, cancelled while the face does
+// not end, which is never released. main then ends the process as the
+// application's does (framework/ProcessEnd.hpp) once this has returned and
+// its QCoreApplication is gone. Returns 1 when a check failed.
+int abandonFaceAtExit(int argc, char** argv) {
+  mitcad::crash::install("app", "test");
+  mitcad::geometry::catch_occt_crashes();
+  QCoreApplication app(argc, argv);
+  static StaticEndless held;
+  Endless& state = held.state;
+  mitcad::io::use_face_algorithms_for_tests(new EndlessCylinders(state, new BRepMesh_MeshAlgoFactory()));
+  mitcad::io::use_fast_plane_algorithms_for_tests(
+      new EndlessCylinders(state, new BRepMesh_DelabellaMeshAlgoFactory()));
+  const auto body = std::make_shared<mitcad::geometry::Shape>(BRepPrimAPI_MakeCylinder(10.0, 30.0).Shape());
+  mitcad::ModelJob job;
+  std::thread cancel([&state, &job] {
+    for (int i = 0; i < 6000 && !(state.entered && state.others >= 2); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    job.control().cancel();
+  });
+  const mitcad::DisplayMeshing meshing = mitcad::meshForDisplay({body}, job, mitcad::DisplayTier::Final);
+  cancel.join();
+  mitcad::io::use_face_algorithms_for_tests(occ::handle<IMeshTools_MeshAlgoFactory>());
+  mitcad::io::use_fast_plane_algorithms_for_tests(occ::handle<IMeshTools_MeshAlgoFactory>());
+  std::printf("display meshing with an endless face cancelled, never released: %s\n",
+              meshing.report.line().c_str());
+  CHECK(state.entered);
+  CHECK(!state.returned);
+  CHECK(meshing.report.abandoned == 1);
+  CHECK(mitcad::io::abandoned_faces() == 1);
+  std::fflush(stdout);
+  return failures > 0 ? 1 : 0;
+}
+
+// A display meshing cancelled while a face does not end, in a process that
+// then quits without the face ever ending (mitcad#936): the process ends
+// with its own exit code 0 and leaves no crash report in MITCAD_CRASH_DIR.
+// Its static destructors would run under the face (the stand-in's state
+// torn down under it aborts it, as OCCT's does to a face inside OCCT);
+// the process ends without them.
+void testAbandonedFaceAtExit() {
+  QTemporaryDir crashes;
+  CHECK(crashes.isValid());
+  QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+  environment.insert(QStringLiteral("MITCAD_CRASH_DIR"), crashes.path());
+  QProcess child;
+  child.setProcessEnvironment(environment);
+  child.setProcessChannelMode(QProcess::ForwardedChannels);
+  child.start(QCoreApplication::applicationFilePath(), QStringList{QStringLiteral("--abandon-at-exit")});
+  CHECK(child.waitForStarted(30000));
+  const bool finished = child.waitForFinished(120000);
+  CHECK(finished);
+  if (!finished) {
+    child.kill();
+    child.waitForFinished(10000);
+  }
+  const QStringList reports =
+      QDir(crashes.path()).entryList(QStringList{QStringLiteral("*.crash")}, QDir::Files);
+  std::printf("process with an abandoned face at its end: %s, exit code %d, %d crash report(s)\n",
+              child.exitStatus() == QProcess::NormalExit ? "ended" : "crashed", child.exitCode(),
+              static_cast<int>(reports.size()));
+  CHECK(child.exitStatus() == QProcess::NormalExit);
+  CHECK(child.exitCode() == 0);
+  CHECK(reports.isEmpty());
 }
 
 // The triangles of the shown bodies' faces.
@@ -1177,6 +1288,9 @@ void testMeshDuringRecompute() {
 } // namespace
 
 int main(int argc, char** argv) {
+  if (argc > 1 && std::strcmp(argv[1], "--abandon-at-exit") == 0) {
+    return mitcad::endProcess(abandonFaceAtExit(argc, argv));
+  }
   QCoreApplication app(argc, argv);
   bool benchmark = false;
   bool comparison = false;
@@ -1213,6 +1327,7 @@ int main(int argc, char** argv) {
   testCommitUndoEdit();
   testCancelFailureDestruction();
   testCancelEndlessFace();
+  testAbandonedFaceAtExit();
   testWarmOpen();
   testDeferredWrite();
   testMeshDuringRecompute();

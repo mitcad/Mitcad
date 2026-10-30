@@ -190,7 +190,8 @@ std::optional<PlaneFrame> frameOf(const SelectionItem& item, const CommandContex
 // An axis through an item (isAxial).
 std::optional<std::pair<gp_Pnt, gp_Dir>> axisOf(const SelectionItem& item,
                                                  const CommandContext& context);
-// The normal of the profiles' sketch at the profiles' middle.
+// The normal of the profiles' sketch at the profiles' middle, both in the
+// design: moved by the occurrences the profiles are seen at (mitcad#958).
 std::optional<std::pair<gp_Pnt, gp_Dir>> profileNormal(const Selection& profiles,
                                                        const CommandContext& context);
 // An arrow manipulator along a direction from a point.

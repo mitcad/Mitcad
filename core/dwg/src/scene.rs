@@ -122,8 +122,9 @@ pub fn ocs(extrusion: [f64; 3]) -> Affine {
 }
 
 /// The transforms an insert places its block with: one, or one per cell
-/// of an array. `base` is the block's base point.
-pub fn insert_transforms(insert: &Insert, base: [f64; 3]) -> Vec<Affine> {
+/// of an array, row by row. `base` is the block's base point. Made as they
+/// are taken: an array may have 32767 × 32767 cells (mitcad#931).
+pub fn insert_transforms(insert: &Insert, base: [f64; 3]) -> impl Iterator<Item = Affine> {
     let (s, c) = insert.rotation.sin_cos();
     let rotate = Affine {
         m: [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]],
@@ -140,20 +141,20 @@ pub fn insert_transforms(insert: &Insert, base: [f64; 3]) -> Vec<Affine> {
     let to_base = Affine::translation([-base[0], -base[1], -base[2]]);
     let local = rotate.after(&scale).after(&to_base);
     let ocs = ocs(insert.extrusion);
-    let mut out = Vec::new();
-    for row in 0..insert.rows.max(1) {
-        for col in 0..insert.columns.max(1) {
+    let p = insert.point;
+    let (column_spacing, row_spacing) = (insert.column_spacing, insert.row_spacing);
+    let columns = insert.columns.max(1);
+    (0..insert.rows.max(1)).flat_map(move |row| {
+        (0..columns).map(move |col| {
             let cell = rotate.apply([
-                f64::from(col) * insert.column_spacing,
-                f64::from(row) * insert.row_spacing,
+                f64::from(col) * column_spacing,
+                f64::from(row) * row_spacing,
                 0.0,
             ]);
-            let p = insert.point;
             let at = Affine::translation([p[0] + cell[0], p[1] + cell[1], p[2] + cell[2]]);
-            out.push(ocs.after(&at.after(&local)));
-        }
-    }
-    out
+            ocs.after(&at.after(&local))
+        })
+    })
 }
 
 /// A layer as the import uses it.
@@ -648,8 +649,16 @@ impl Scene {
         })
     }
 
-    /// The plan of components.
+    /// The plan of components, within [`PLAN_BUDGET`].
     pub fn plan(&self) -> Plan {
+        self.plan_within(PLAN_BUDGET)
+    }
+
+    /// The plan of components, placing at most `limit` bodies and
+    /// occurrences in the world (an occurrence's contents count once per
+    /// occurrence of it, at every level); what is left over is not planned,
+    /// with a warning.
+    pub fn plan_within(&self, limit: u64) -> Plan {
         let mut plan = Plan {
             nodes: vec![Node {
                 name: String::new(),
@@ -662,6 +671,12 @@ impl Scene {
         };
         let mut by_block: BTreeMap<u64, usize> = BTreeMap::new();
         let mut stack = vec![self.model_space];
+        let mut budget = Budget {
+            total: limit,
+            left: limit,
+            per_occurrence: BTreeMap::new(),
+            exhausted: false,
+        };
         self.fill(
             &mut plan,
             0,
@@ -670,7 +685,15 @@ impl Scene {
             None,
             &mut by_block,
             &mut stack,
+            &mut budget,
+            1,
         );
+        if budget.exhausted {
+            plan.warnings.push(format!(
+                "the drawing places more than {} bodies and occurrences (counting each occurrence's contents): the rest are not imported",
+                budget.total
+            ));
+        }
         // Blocks with bodies that model space does not insert: definitions
         // only, or a layout's content (paper space is not imported).
         let paper = |b: &Block| b.name.to_ascii_lowercase().starts_with("*paper_space");
@@ -721,7 +744,10 @@ impl Scene {
     }
 
     /// Adds a block's items to node `node`, moved by `at` (identity unless
-    /// the block is copied into the node).
+    /// the block is copied into the node). `copies` is how many times the
+    /// node is placed in the world so far (what each item added here costs
+    /// of the budget). Returns the instances the items place per
+    /// occurrence of the node.
     #[allow(clippy::too_many_arguments)]
     fn fill(
         &self,
@@ -732,16 +758,25 @@ impl Scene {
         by_block_color: Option<[u8; 3]>,
         by_block: &mut BTreeMap<u64, usize>,
         stack: &mut Vec<u64>,
-    ) {
+        budget: &mut Budget,
+        copies: u64,
+    ) -> u64 {
         let Some(b) = self.blocks.get(&block) else {
-            return;
+            return 0;
         };
+        let mut placed_here = 0u64;
         for (index, item) in b.items.iter().enumerate() {
+            if budget.exhausted {
+                break;
+            }
             let color = match item.color {
                 Color::ByBlock => by_block_color,
                 _ => self.item_color(item),
             };
             let ItemKind::Insert { insert, .. } = &item.kind else {
+                if !budget.take(copies) {
+                    break;
+                }
                 plan.nodes[node].bodies.push(PlacedItem {
                     block,
                     item: index,
@@ -749,6 +784,7 @@ impl Scene {
                     color,
                     layer: item.layer,
                 });
+                placed_here = placed_here.saturating_add(1);
                 continue;
             };
             let Some(inner) = self.blocks.get(&insert.block) else {
@@ -765,12 +801,27 @@ impl Scene {
                 continue;
             }
             stack.push(insert.block);
+            let mut copied_warned = false;
             for t in insert_transforms(insert, inner.base) {
+                if budget.exhausted {
+                    break;
+                }
                 let placed = at.after(&t);
                 if !inner.anonymous && placed.is_rigid() {
                     let child = match by_block.get(&insert.block) {
-                        Some(&c) => c,
+                        Some(&c) => {
+                            // Another occurrence: it places the node's
+                            // contents again.
+                            let inside = budget.per_occurrence.get(&c).copied().unwrap_or(0);
+                            if !budget.take(copies.saturating_mul(inside.saturating_add(1))) {
+                                break;
+                            }
+                            c
+                        }
                         None => {
+                            if !budget.take(copies) {
+                                break;
+                            }
                             let c = plan.nodes.len();
                             plan.nodes.push(Node {
                                 name: inner.name.clone(),
@@ -779,7 +830,7 @@ impl Scene {
                                 children: Vec::new(),
                             });
                             by_block.insert(insert.block, c);
-                            self.fill(
+                            let inside = self.fill(
                                 plan,
                                 c,
                                 insert.block,
@@ -787,27 +838,74 @@ impl Scene {
                                 color,
                                 by_block,
                                 stack,
+                                budget,
+                                copies,
                             );
+                            budget.per_occurrence.insert(c, inside);
                             c
                         }
                     };
                     plan.nodes[node]
                         .children
                         .push((child, placed.scaled(self.unit_mm)));
+                    let inside = budget.per_occurrence.get(&child).copied().unwrap_or(0);
+                    placed_here = placed_here.saturating_add(inside.saturating_add(1));
                 } else {
                     // Copied into this node, moved by the insert.
                     plan.flattened += 1;
-                    if !inner.anonymous {
+                    // Once per insert, not per cell of an array.
+                    if !inner.anonymous && !copied_warned {
+                        copied_warned = true;
                         plan.warnings.push(format!(
                             "an insert of {} scales or mirrors it: its contents are copied in place, not an occurrence",
                             inner.name
                         ));
                     }
-                    self.fill(plan, node, insert.block, placed, color, by_block, stack);
+                    let inside = self.fill(
+                        plan,
+                        node,
+                        insert.block,
+                        placed,
+                        color,
+                        by_block,
+                        stack,
+                        budget,
+                        copies,
+                    );
+                    placed_here = placed_here.saturating_add(inside);
                 }
             }
             stack.pop();
         }
+        placed_here
+    }
+}
+
+/// The most bodies and occurrences a plan places in the world (counting an
+/// occurrence's contents once per occurrence): an insert array may have
+/// 32767 × 32767 cells, and nested arrays multiply (mitcad#931).
+pub const PLAN_BUDGET: u64 = 1_000_000;
+
+/// What a plan may still place.
+struct Budget {
+    total: u64,
+    left: u64,
+    /// Per node: the instances one occurrence of it places (its bodies,
+    /// its occurrences and their contents).
+    per_occurrence: BTreeMap<usize, u64>,
+    /// Something did not fit: nothing more is planned.
+    exhausted: bool,
+}
+
+impl Budget {
+    /// Takes `n` instances; false, taking nothing, when they do not fit.
+    fn take(&mut self, n: u64) -> bool {
+        if self.exhausted || n > self.left {
+            self.exhausted = true;
+            return false;
+        }
+        self.left -= n;
+        true
     }
 }
 
@@ -1096,6 +1194,113 @@ mod tests {
             ),
             "{warnings:?}"
         );
+    }
+
+    /// The bodies and occurrences a plan places in the world: each node's
+    /// contents once per occurrence of it.
+    fn world_instances(plan: &Plan, node: usize) -> u64 {
+        let n = &plan.nodes[node];
+        n.bodies.len() as u64
+            + n.children
+                .iter()
+                .map(|(c, _)| 1 + world_instances(plan, *c))
+                .sum::<u64>()
+    }
+
+    /// The test drawing's scene, each insert of `block` in `owner` made an
+    /// array of `columns` × `rows` cells.
+    fn with_arrays(scene: &mut Scene, owner: u64, block: u64, columns: i16, rows: i16) {
+        for item in &mut scene.blocks.get_mut(&owner).unwrap().items {
+            if let ItemKind::Insert { insert, .. } = &mut item.kind
+                && insert.block == block
+            {
+                insert.columns = columns;
+                insert.rows = rows;
+            }
+        }
+    }
+
+    #[test]
+    fn the_budget_counts_each_occurrence_s_contents() {
+        let file =
+            crate::read(&testfile::write(&testfile::test_drawing(), Version::R2018)).unwrap();
+        let scene = Scene::of(&file);
+        // Root: 4 bodies; Segment twice (each its chord and two braces);
+        // Brace six times in the array: 4 + 2 × (1 + 5) + 6 × (1 + 1).
+        let plan = scene.plan();
+        assert_eq!(world_instances(&plan, 0), 28);
+        assert_eq!(scene.plan_within(28), plan);
+        let short = scene.plan_within(27);
+        assert!(
+            short
+                .warnings
+                .iter()
+                .any(|w| w.contains("more than 27 bodies and occurrences")),
+            "{:?}",
+            short.warnings
+        );
+        assert!(world_instances(&short, 0) <= 27);
+    }
+
+    #[test]
+    fn an_insert_of_10000_by_10000_cells_plans_within_the_budget() {
+        // Each cell's transform was made up front and planned (mitcad#931):
+        // 10^8 placements.
+        let file =
+            crate::read(&testfile::write(&testfile::test_drawing(), Version::R2018)).unwrap();
+        let mut scene = Scene::of(&file);
+        let model = scene.model_space;
+        with_arrays(&mut scene, model, testfile::BRACE, 10_000, 10_000);
+        let plan = scene.plan();
+        let entries: usize = plan
+            .nodes
+            .iter()
+            .map(|n| n.bodies.len() + n.children.len())
+            .sum();
+        assert!(entries as u64 <= PLAN_BUDGET, "{entries}");
+        assert!(world_instances(&plan, 0) <= PLAN_BUDGET);
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|w| w.contains("bodies and occurrences")),
+            "{:?}",
+            plan.warnings
+        );
+    }
+
+    #[test]
+    fn nested_arrays_multiply_within_the_budget() {
+        // Segment's braces in arrays of 100 × 100 and the Segments too: the
+        // contents multiply (2 × 10^4 × 2 × 10^4 braces); the plan's own
+        // entries stay few, its placements in the world within the budget.
+        let file =
+            crate::read(&testfile::write(&testfile::test_drawing(), Version::R2018)).unwrap();
+        let mut scene = Scene::of(&file);
+        let model = scene.model_space;
+        with_arrays(&mut scene, testfile::SEGMENT, testfile::BRACE, 100, 100);
+        with_arrays(&mut scene, model, testfile::SEGMENT, 100, 100);
+        let plan = scene.plan_within(100_000);
+        assert!(world_instances(&plan, 0) <= 100_000);
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|w| w.contains("more than 100000 bodies and occurrences")),
+            "{:?}",
+            plan.warnings
+        );
+        // Scaled arrays are copied in place, cell by cell: bounded too.
+        let mut scene = Scene::of(&file);
+        for item in &mut scene.blocks.get_mut(&model).unwrap().items {
+            if let ItemKind::Insert { insert, .. } = &mut item.kind {
+                insert.scale = [2.0; 3];
+                insert.columns = 1000;
+                insert.rows = 1000;
+            }
+        }
+        let plan = scene.plan_within(50_000);
+        assert!(world_instances(&plan, 0) <= 50_000);
+        assert!(plan.nodes[0].bodies.len() <= 50_000);
+        assert!(!plan.warnings.is_empty());
     }
 
     #[test]

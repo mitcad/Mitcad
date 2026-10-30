@@ -8,7 +8,10 @@
 //! sectors) and 4 (4096-byte sectors) are read.
 //!
 //! The reader checks every chain against the file's size and against
-//! cycles, so a damaged or hostile file gives an error, never a hang.
+//! cycles, so a damaged or hostile file gives an error, never a hang; the
+//! directory's nesting and its paths' total size are bounded
+//! ([`MAX_DEPTH`], [`MAX_PATH_BYTES`]), so its paths stay linear in its
+//! size.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -21,6 +24,17 @@ const MAX_REGULAR: u32 = 0xFFFF_FFFA;
 const END_OF_CHAIN: u32 = 0xFFFF_FFFE;
 /// No sibling or child in the directory.
 const NO_STREAM: u32 = 0xFFFF_FFFF;
+
+/// Deepest storage nesting the reader accepts: an entry's path has at most
+/// this many names. Real files are a handful deep; the bound keeps every
+/// path short (a name is at most 31 UTF-16 units), so a directory chained
+/// into one deep line cannot make the paths quadratic in its size.
+pub const MAX_DEPTH: usize = 64;
+
+/// Most bytes all entries' paths may take together. Real files' paths
+/// take kilobytes; a directory of many entries at the deepest level is
+/// refused before its paths take more memory than this.
+pub const MAX_PATH_BYTES: usize = 32 << 20;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CfbError {
@@ -335,12 +349,22 @@ impl CompoundFile {
     }
 
     /// Entry paths depth first, each storage's children in name order.
+    /// Storages nested deeper than [`MAX_DEPTH`] or paths longer than
+    /// [`MAX_PATH_BYTES`] together make the file corrupt.
     fn walk(&self, valid: &[bool]) -> Result<Vec<(String, usize)>, CfbError> {
         let mut out = vec![(String::new(), 0)];
+        let mut path_bytes = 0usize;
         let mut visited = vec![false; self.entries.len()];
         visited[0] = true;
-        let mut stack = vec![(String::new(), self.entries[0].child)];
-        while let Some((parent, child)) = stack.pop() {
+        // (the storage's path, its tree's top entry, the depth of its
+        // children: the root's are 1).
+        let mut stack = vec![(String::new(), self.entries[0].child, 1usize)];
+        while let Some((parent, child, depth)) = stack.pop() {
+            if child != NO_STREAM && depth > MAX_DEPTH {
+                return Err(CfbError::Corrupt(format!(
+                    "storages nested deeper than {MAX_DEPTH} levels"
+                )));
+            }
             let mut members = Vec::new();
             // The siblings of a storage's tree, in order (left, self, right).
             let mut pending = vec![child];
@@ -367,11 +391,18 @@ impl CompoundFile {
             members.sort_by(|&a, &b| self.entries[a].name.cmp(&self.entries[b].name));
             let mut storages = Vec::new();
             for index in members {
-                let path = format!("{parent}/{}", self.entries[index].name);
-                out.push((path.clone(), index));
-                if self.entries[index].kind == EntryKind::Storage {
-                    storages.push((path, self.entries[index].child));
+                let name = &self.entries[index].name;
+                path_bytes = path_bytes.saturating_add(parent.len() + 1 + name.len());
+                if path_bytes > MAX_PATH_BYTES {
+                    return Err(CfbError::Corrupt(format!(
+                        "the directory's paths take more than {MAX_PATH_BYTES} bytes"
+                    )));
                 }
+                let path = format!("{parent}/{name}");
+                if self.entries[index].kind == EntryKind::Storage {
+                    storages.push((path.clone(), self.entries[index].child, depth + 1));
+                }
+                out.push((path, index));
             }
             // Depth first, in name order.
             stack.extend(storages.into_iter().rev());
@@ -403,9 +434,13 @@ impl CompoundFile {
         } else {
             format!("/{path}")
         };
+        // The paths are sorted: the first exact match by binary search.
+        let at = self
+            .paths
+            .partition_point(|(p, _)| p.as_str() < path.as_str());
         self.paths
-            .iter()
-            .find(|(p, _)| *p == path)
+            .get(at)
+            .filter(|(p, _)| *p == path)
             .or_else(|| {
                 self.paths
                     .iter()
@@ -839,6 +874,228 @@ mod tests {
         let mut bad = good;
         bad[0x1E] = 12;
         assert!(matches!(CompoundFile::parse(bad), Err(CfbError::Header(_))));
+    }
+
+    /// One raw directory entry for [`raw_version3`].
+    struct RawEntry {
+        name: String,
+        /// 1 storage, 2 stream, 5 root.
+        kind: u8,
+        left: u32,
+        right: u32,
+        child: u32,
+    }
+
+    /// A 31-character entry name.
+    fn long_name(prefix: char, i: usize) -> String {
+        format!("{prefix}{i:030}")
+    }
+
+    /// The raw bytes of a version-3 compound file (512-byte sectors) with
+    /// the given directory: the header, the directory's sectors and the FAT
+    /// after them, no mini stream and no stream data. Built by hand rather
+    /// than with [`Writer`], whose sibling lookup is quadratic in the
+    /// number of entries.
+    fn raw_version3(entries: &[RawEntry]) -> Vec<u8> {
+        const SECTOR: usize = 512;
+        const FREE: u32 = 0xFFFF_FFFF;
+        const FATSECT: u32 = 0xFFFF_FFFD;
+        let mut dir = Vec::with_capacity(entries.len() * 128 + SECTOR);
+        for e in entries {
+            let mut raw = [0u8; 128];
+            let units: Vec<u16> = e.name.encode_utf16().take(31).collect();
+            for (slot, unit) in raw.as_chunks_mut::<2>().0.iter_mut().zip(&units) {
+                slot.copy_from_slice(&unit.to_le_bytes());
+            }
+            raw[0x40..0x42].copy_from_slice(&((units.len() as u16 + 1) * 2).to_le_bytes());
+            raw[0x42] = e.kind;
+            raw[0x43] = 1; // black
+            raw[0x44..0x48].copy_from_slice(&e.left.to_le_bytes());
+            raw[0x48..0x4C].copy_from_slice(&e.right.to_le_bytes());
+            raw[0x4C..0x50].copy_from_slice(&e.child.to_le_bytes());
+            // No data: the start ends the chain at once, the size is 0.
+            raw[0x74..0x78].copy_from_slice(&END_OF_CHAIN.to_le_bytes());
+            dir.extend_from_slice(&raw);
+        }
+        // Unused entries fill the last directory sector.
+        while dir.len() % SECTOR != 0 {
+            let mut raw = [0u8; 128];
+            raw[0x44..0x50].copy_from_slice(&[0xFF; 12]);
+            dir.extend_from_slice(&raw);
+        }
+        let dir_sectors = dir.len() / SECTOR;
+        let per_fat = SECTOR / 4;
+        let mut fat_sectors = 1;
+        while dir_sectors + fat_sectors > fat_sectors * per_fat {
+            fat_sectors += 1;
+        }
+        assert!(fat_sectors <= 109, "the header's FAT list holds them all");
+        let mut fat: Vec<u32> = (1..=dir_sectors as u32).collect();
+        fat[dir_sectors - 1] = END_OF_CHAIN;
+        fat.extend(std::iter::repeat_n(FATSECT, fat_sectors));
+        fat.resize(fat_sectors * per_fat, FREE);
+
+        let mut out = vec![0u8; SECTOR];
+        out[..8].copy_from_slice(&SIGNATURE);
+        out[0x18..0x1A].copy_from_slice(&0x3Eu16.to_le_bytes());
+        out[0x1A..0x1C].copy_from_slice(&3u16.to_le_bytes());
+        out[0x1C..0x1E].copy_from_slice(&0xFFFEu16.to_le_bytes());
+        out[0x1E..0x20].copy_from_slice(&9u16.to_le_bytes());
+        out[0x20..0x22].copy_from_slice(&6u16.to_le_bytes());
+        out[0x2C..0x30].copy_from_slice(&(fat_sectors as u32).to_le_bytes());
+        out[0x30..0x34].copy_from_slice(&0u32.to_le_bytes());
+        out[0x38..0x3C].copy_from_slice(&4096u32.to_le_bytes());
+        out[0x3C..0x40].copy_from_slice(&END_OF_CHAIN.to_le_bytes());
+        out[0x44..0x48].copy_from_slice(&END_OF_CHAIN.to_le_bytes());
+        for (i, slot) in out[0x4C..0x4C + 4 * 109]
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .enumerate()
+        {
+            let v = if i < fat_sectors {
+                (dir_sectors + i) as u32
+            } else {
+                FREE
+            };
+            slot.copy_from_slice(&v.to_le_bytes());
+        }
+        out.extend_from_slice(&dir);
+        for v in fat {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out
+    }
+
+    /// A root and `depth` storages, each the only child of the one before
+    /// (entry i + 1 is the child of entry i); the last storage's child is
+    /// `last_child`.
+    fn storage_chain(depth: usize, last_child: u32) -> Vec<RawEntry> {
+        let mut entries = vec![RawEntry {
+            name: "Root Entry".into(),
+            kind: 5,
+            left: NO_STREAM,
+            right: NO_STREAM,
+            child: if depth == 0 { last_child } else { 1 },
+        }];
+        for i in 1..=depth {
+            entries.push(RawEntry {
+                name: long_name('S', i),
+                kind: 1,
+                left: NO_STREAM,
+                right: NO_STREAM,
+                child: if i == depth { last_child } else { i as u32 + 1 },
+            });
+        }
+        entries
+    }
+
+    #[test]
+    fn refuses_a_deep_storage_chain_quickly() {
+        // 20 000 storages, each the only child of the one before: with every
+        // path materialised the paths alone would take gigabytes.
+        let data = raw_version3(&storage_chain(20_000, NO_STREAM));
+        let started = std::time::Instant::now();
+        let result = CompoundFile::parse(data);
+        let took = started.elapsed();
+        match result {
+            Err(CfbError::Corrupt(e)) => assert!(e.contains("nested deeper"), "{e}"),
+            Err(e) => panic!("expected a corrupt directory, got {e}"),
+            Ok(_) => panic!("a 20 000-deep directory was accepted"),
+        }
+        assert!(took < std::time::Duration::from_secs(1), "took {took:?}");
+    }
+
+    #[test]
+    fn reads_storages_nested_to_the_limit() {
+        // MAX_DEPTH names in the deepest path: a stream below
+        // MAX_DEPTH - 1 storages.
+        let mut entries = storage_chain(MAX_DEPTH - 1, MAX_DEPTH as u32);
+        entries.push(RawEntry {
+            name: "Leaf".into(),
+            kind: 2,
+            left: NO_STREAM,
+            right: NO_STREAM,
+            child: NO_STREAM,
+        });
+        let f = CompoundFile::parse(raw_version3(&entries)).unwrap();
+        assert_eq!(f.entries().count(), MAX_DEPTH + 1);
+        let storages: Vec<String> = (1..MAX_DEPTH).map(|i| long_name('S', i)).collect();
+        let deepest = format!("/{}", storages.join("/"));
+        let leaf = format!("{deepest}/Leaf");
+        assert_eq!(f.find(&leaf).map(|e| e.kind), Some(EntryKind::Stream));
+        assert_eq!(f.find(&leaf.to_lowercase()).map(|e| e.size), Some(0));
+        assert!(f.read_path(&leaf).unwrap().is_empty());
+        let children: Vec<&str> = f.children(&deepest).map(|(p, _)| p).collect();
+        assert_eq!(children, [leaf.as_str()]);
+
+        // One storage more puts the stream below the limit.
+        let mut deeper = storage_chain(MAX_DEPTH, MAX_DEPTH as u32 + 1);
+        deeper.push(RawEntry {
+            name: "Leaf".into(),
+            kind: 2,
+            left: NO_STREAM,
+            right: NO_STREAM,
+            child: NO_STREAM,
+        });
+        assert!(matches!(
+            CompoundFile::parse(raw_version3(&deeper)),
+            Err(CfbError::Corrupt(_))
+        ));
+        // An empty storage at the deepest level is no deeper entry.
+        assert!(CompoundFile::parse(raw_version3(&storage_chain(MAX_DEPTH, NO_STREAM))).is_ok());
+    }
+
+    #[test]
+    fn refuses_a_directory_whose_paths_grow_too_long() {
+        // Storages to the deepest level, then 20 000 streams there, chained
+        // as right siblings: each path takes about 2 KB, all together more
+        // than MAX_PATH_BYTES.
+        let depth = MAX_DEPTH - 1;
+        let streams = 20_000usize;
+        let first = depth as u32 + 1;
+        let mut entries = storage_chain(depth, first);
+        for k in 0..streams {
+            entries.push(RawEntry {
+                name: long_name('T', k),
+                kind: 2,
+                left: NO_STREAM,
+                right: if k + 1 == streams {
+                    NO_STREAM
+                } else {
+                    first + k as u32 + 1
+                },
+                child: NO_STREAM,
+            });
+        }
+        // Each stream's path: 64 names of 31 characters, each after a '/',
+        // so 2048 bytes; 20 000 of them are about 41 MB.
+        let started = std::time::Instant::now();
+        let result = CompoundFile::parse(raw_version3(&entries));
+        let took = started.elapsed();
+        match result {
+            Err(CfbError::Corrupt(e)) => assert!(e.contains("paths take more"), "{e}"),
+            Err(e) => panic!("expected a corrupt directory, got {e}"),
+            Ok(_) => panic!("the long paths were accepted"),
+        }
+        assert!(took < std::time::Duration::from_secs(5), "took {took:?}");
+    }
+
+    #[test]
+    fn finds_paths_by_binary_search_and_without_case() {
+        let mut w = Writer::new();
+        w.stream("B/x", b"1")
+            .stream("A", b"2")
+            .stream("C/D/y", b"3")
+            .stream("a2", b"4");
+        let f = CompoundFile::parse(w.finish()).unwrap();
+        assert_eq!(f.read_path("/A").unwrap(), b"2");
+        assert_eq!(f.read_path("a2").unwrap(), b"4");
+        assert_eq!(f.read_path("/B/x").unwrap(), b"1");
+        assert_eq!(f.read_path("/c/d/Y").unwrap(), b"3");
+        assert_eq!(f.find("").map(|e| e.kind), Some(EntryKind::Root));
+        assert!(f.find("/C/D/z").is_none());
+        assert!(f.find("/Z").is_none());
     }
 
     #[test]

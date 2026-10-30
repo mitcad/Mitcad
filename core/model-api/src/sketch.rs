@@ -666,13 +666,32 @@ fn code_fits(text: &SketchText) -> Result<(), String> {
     Ok(())
 }
 
-/// An SVG file read (mitcad#473).
+/// An SVG file read (mitcad#473); a panic of the reader is its error
+/// (mitcad#922: it runs in the application's process).
 fn read_svg(
     path: &str,
     options: &mitcad_model::sketch::svg::SvgOptions,
 ) -> Result<mitcad_model::sketch::svg::SvgDrawing, ApiError> {
-    let text = std::fs::read_to_string(path).map_err(|e| ApiError(format!("{path}: {e}")))?;
-    mitcad_model::sketch::svg::read(&text, options).map_err(|e| ApiError(format!("{path}: {e}")))
+    mitcad_model::reader_guard::catch_panic(
+        path,
+        || {
+            let text =
+                std::fs::read_to_string(path).map_err(|e| ApiError(format!("{path}: {e}")))?;
+            mitcad_model::sketch::svg::read(&text, options)
+                .map_err(|e| ApiError(format!("{path}: {e}")))
+        },
+        ApiError,
+    )
+}
+
+/// A DXF file read (P9); a panic of the reader is its error (mitcad#922:
+/// it runs in the application's process).
+fn read_dxf(path: &str) -> Result<mitcad_dxf::Drawing, ApiError> {
+    mitcad_model::reader_guard::catch_panic(
+        path,
+        || mitcad_dxf::read_file(path).map_err(|e| ApiError(format!("{path}: {e}"))),
+        ApiError,
+    )
 }
 
 /// The `svg_info` query (mitcad#473): what the Insert SVG dialog shows, the
@@ -694,7 +713,7 @@ pub(super) fn svg_info_json(path: &str) -> Result<Value, ApiError> {
 /// The `dxf_info` query (P9): what the Insert DXF dialog offers, its
 /// unit, its layers and where its entities lie.
 pub(super) fn dxf_info_json(path: &str) -> Result<Value, ApiError> {
-    let drawing = mitcad_dxf::read_file(path).map_err(|e| ApiError(format!("{path}: {e}")))?;
+    let drawing = read_dxf(path)?;
     let unit = match drawing.units {
         mitcad_dxf::Units::Unitless => Value::Null,
         units => json!(dxf_unit_name(units)),
@@ -1150,9 +1169,7 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
                 layers,
             } => {
                 let unitless = dxf_unit(unit.as_deref())?;
-                let mut drawing = mitcad_dxf::read_file(&path)
-                    .map_err(|e| ApiError(format!("{path}: {e}")))?
-                    .to_millimeters(unitless);
+                let mut drawing = read_dxf(&path)?.to_millimeters(unitless);
                 if let Some(layers) = layers {
                     let used = drawing.used_layers();
                     if let Some(missing) =

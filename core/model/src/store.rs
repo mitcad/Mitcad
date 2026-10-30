@@ -424,6 +424,10 @@ struct VariantHead {
     /// (mitcad#436).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     threaded_walls: Vec<crate::features::hole::ThreadedWall>,
+    /// A Fillet's or Chamfer's picked edges as polylines (mitcad#957), so
+    /// that a warm open shows them as a build does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    inputs: Option<crate::features::FeatureInputs>,
 }
 
 /// A stored result: its head and its shapes, zlib-compressed.
@@ -891,6 +895,7 @@ impl ResultStore {
                 split_pieces: output.split_pieces.as_deref().cloned(),
                 changed_pieces: output.changed_pieces.clone(),
                 threaded_walls: output.threaded_walls.clone(),
+                inputs: output.inputs.clone(),
             },
             shapes,
         };
@@ -1207,6 +1212,7 @@ fn restore<K: Kernel>(
         split_pieces: head.split_pieces.clone().map(std::sync::Arc::new),
         changed_pieces: head.changed_pieces.clone(),
         threaded_walls: head.threaded_walls.clone(),
+        inputs: head.inputs.clone(),
     })
 }
 

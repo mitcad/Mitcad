@@ -26,7 +26,7 @@ else()
 endif()
 
 project(Mitcad
-  VERSION 0.36.0
+  VERSION 0.37.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 
@@ -214,6 +214,32 @@ if(MITCAD_OCCT_RELEASE_IN_DEBUG AND NOT WIN32)
       set_target_properties(${occt_toolkit} PROPERTIES MAP_IMPORTED_CONFIG_DEBUG "Release")
     endif()
   endforeach()
+endif()
+
+# The automatic updates' test hooks (mitcad#921, docs/updates.md#the-test-hooks):
+# only a build with this option reads the tests' environment variables
+# (MITCAD_UPDATE_URL, MITCAD_UPDATE_RELEASES_URL, MITCAD_UPDATE_TEST_KEY,
+# MITCAD_UPDATE_TEST_CA, MITCAD_TEST_VERSION), which point it at another
+# server, trust another key and certificate, and change its version. Off by
+# default and in the release presets: a release must not let whoever can
+# set a user's environment sign its updates. On in the debug presets
+# (linux-debug, macos-debug), which the development builds and their update
+# tests use.
+option(MITCAD_UPDATE_TEST_HOOKS
+       "Automatic updates: read the tests' environment variables (a test build only, never a release)" OFF)
+# A release configure requires the render worker's CUDA device
+# (MITCAD_RENDER_REQUIRED_DEVICES naming CUDA, cmake/Render.cmake, as a
+# cache variable or from the environment on a fresh configure): it must
+# not have the hooks.
+set(mitcad_required_devices "${MITCAD_RENDER_REQUIRED_DEVICES};$ENV{MITCAD_RENDER_REQUIRED_DEVICES}")
+if(MITCAD_UPDATE_TEST_HOOKS AND "CUDA" IN_LIST mitcad_required_devices)
+  message(FATAL_ERROR "MITCAD_UPDATE_TEST_HOOKS is on in a release configure (MITCAD_RENDER_REQUIRED_DEVICES "
+                      "names CUDA): a release must not read the update tests' environment variables; configure "
+                      "it with -DMITCAD_UPDATE_TEST_HOOKS=OFF")
+endif()
+if(MITCAD_UPDATE_TEST_HOOKS)
+  message(STATUS "Automatic updates: this test build reads the tests' environment variables "
+                 "(MITCAD_UPDATE_TEST_HOOKS); not for a release")
 endif()
 
 if(WIN32)

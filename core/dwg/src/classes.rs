@@ -92,7 +92,10 @@ pub fn read(section: &[u8], version: Version, maintenance: u8) -> Result<Vec<Cla
     if section.get(..16) != Some(&CLASSES_SENTINEL[..]) {
         return Err(DwgError::Corrupt("the classes have no sentinel".into()));
     }
-    let size = u32::from_le_bytes([section[16], section[17], section[18], section[19]]) as usize;
+    let size = section
+        .get(16..20)
+        .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]) as usize)
+        .ok_or_else(|| DwgError::Corrupt("the classes end after their sentinel".into()))?;
     let mut start = 20;
     if (matches!(version, Version::R2010 | Version::R2013) && maintenance > 3)
         || version >= Version::R2018
@@ -234,4 +237,24 @@ pub fn write(classes: &[Class], v: Version) -> Vec<u8> {
     out.extend_from_slice(&crc.to_le_bytes());
     out.extend_from_slice(&crate::container::CLASSES_END_SENTINEL);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_section_of_the_sentinel_only_is_corrupt() {
+        // The size after the sentinel was indexed directly (mitcad#931):
+        // a panic.
+        assert!(matches!(
+            read(&CLASSES_SENTINEL, Version::R2000, 0),
+            Err(DwgError::Corrupt(_))
+        ));
+        let mut short = CLASSES_SENTINEL.to_vec();
+        short.extend([1, 2, 3]);
+        for v in Version::ALL {
+            assert!(read(&short, v, 0).is_err(), "{v}");
+        }
+    }
 }

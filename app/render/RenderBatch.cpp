@@ -180,9 +180,10 @@ Camera namedViewCamera(const QJsonObject& view, double aspect) {
   camera.up = vectorOf(view.value(QStringLiteral("up")));
   camera.perspective = view.value(QStringLiteral("perspective")).toBool();
   const double height = view.value(QStringLiteral("height")).toDouble(250.0);
-  // The 3D view's scale is its shorter side (Graphic3d_Camera::SetScale).
+  // The stored height is what the view shows from top to bottom at any
+  // aspect, as the 3D view sets it (view/CameraHeight.hpp, mitcad#959).
   camera.aspect = aspect > 0.0 ? aspect : 1.0;
-  camera.halfHeight = height / 2.0 * (camera.aspect < 1.0 ? 1.0 / camera.aspect : 1.0);
+  camera.halfHeight = height / 2.0;
   return camera;
 }
 

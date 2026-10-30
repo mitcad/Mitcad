@@ -104,12 +104,20 @@ pub fn project(curves: &[Curve3], frame: &SketchFrame) -> Vec<Projected> {
                 let (big, small, rotation) = principal_axes(ax, ay);
                 let size = big.max(1e-300);
                 if small <= 1e-9 * size {
-                    // Seen edge on: the extreme points of the curve.
-                    let ts: Vec<f64> = (0..=64)
-                        .map(|i| start + (end - start) * i as f64 / 64.0)
-                        .collect();
+                    // Seen edge on: the extreme points of the curve, its
+                    // ends or where it turns along the line (exactly:
+                    // sampled ones fell up to 1e-3 short of an arc's top,
+                    // mitcad#955).
                     let u = [rotation.cos(), rotation.sin()];
                     let along = |t: &f64| dot2(sub(at(*t), c), u);
+                    let (t0, t1) = (start.min(*end), start.max(*end));
+                    let turn = dot2(ay, u).atan2(dot2(ax, u));
+                    let mut ts = vec![t0, t1];
+                    let first = ((t0 - turn) / std::f64::consts::PI).ceil() as i64;
+                    let last = ((t1 - turn) / std::f64::consts::PI).floor() as i64;
+                    for k in first..=last.min(first + 8) {
+                        ts.push(turn + k as f64 * std::f64::consts::PI);
+                    }
                     let lo = ts
                         .iter()
                         .copied()
@@ -1867,5 +1875,32 @@ mod tests {
         assert_eq!(entities.iter().filter(|e| e.is_point()).count(), 4);
         assert_eq!(entities.iter().filter(|e| !e.is_point()).count(), 4);
         assert!(entities.iter().all(|e| e.fixed && e.reference));
+    }
+
+    #[test]
+    fn an_arc_seen_edge_on_reaches_its_exact_extreme() {
+        // (mitcad#955) An arc in the XY plane from -50 to 70 degrees, seen
+        // from XZ: the line from its far end to its exact top at 0 degrees,
+        // not to the nearest of sampled points.
+        let arc = Curve3::Conic {
+            center: [0.0; 3],
+            normal: [0.0, 0.0, 1.0],
+            x_axis: [1.0, 0.0, 0.0],
+            major: 25.0,
+            minor: 25.0,
+            start: (-50f64).to_radians(),
+            end: 70f64.to_radians(),
+            closed: false,
+        };
+        let out = project(std::slice::from_ref(&arc), &frame_xz());
+        let Projected::Curve(Curve2::Line { a, b }) = &out[0] else {
+            panic!("{out:?}");
+        };
+        let (lo, hi) = (a[0].min(b[0]), a[0].max(b[0]));
+        assert!((hi - 25.0).abs() < 1e-12, "{out:?}");
+        assert!(
+            (lo - 25.0 * 70f64.to_radians().cos()).abs() < 1e-12,
+            "{out:?}"
+        );
     }
 }

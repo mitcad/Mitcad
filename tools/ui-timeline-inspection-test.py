@@ -22,14 +22,20 @@ def main():
     commands.extend([
         {"cmd": "add_feature", "name": "Failed round", "def": {"type": "fillet",
             "body": "F3.b0", "edges": ["E{F3:side0|F3:side1}"], "radius": 100}},
+        # Outer's four vertical edges rounded: its picked edges are drawn
+        # where they were when it is selected (mitcad#957).
+        {"cmd": "add_feature", "name": "Fillet1", "def": {"type": "fillet",
+            "body": "F3.b0", "edges": ["E{F3:side0|F3:side1}", "E{F3:side1|F3:side2}",
+                                       "E{F3:side2|F3:side3}", "E{F3:side0|F3:side3}"],
+            "radius": 2}},
         {"cmd": "add_feature", "name": "Suppressed detail", "def": {
             "type": "box", "plane": "xy", "corner": [0, 0], "length": 8,
             "width": 8, "height": 8, "operation": "new_body"}},
-        {"cmd": "suppress_feature", "uid": "F5", "suppressed": True},
+        {"cmd": "suppress_feature", "uid": "F6", "suppressed": True},
         {"cmd": "add_feature", "name": "Later plane", "def": {"type": "construction_plane",
             "definition": {"type": "offset", "plane": "xy", "distance": 50}}},
         {"cmd": "group_features", "features": ["F1", "F2"], "name": "Inner details"},
-        {"cmd": "set_marker", "position": 5},
+        {"cmd": "set_marker", "position": 6},
     ])
     model = out / "model.json"
     model.write_text(json.dumps(commands), encoding="utf-8")
@@ -62,7 +68,8 @@ def main():
             if result.returncode or "TestDriver: done" not in text or errors:
                 raise RuntimeError(chrome + " timeline inspection failed (exit " + str(result.returncode)
                     + (", " + errors[0] if errors else "") + "); see " + str(out / (chrome + ".log")))
-    print("PASS: hidden-feature hover, selection, groups, tooltip and card in Floating/Docked")
+    print("PASS: hidden-feature hover, selection, groups, tooltip, card and a fillet's picked edges"
+          " in Floating/Docked")
 
 
 if __name__ == "__main__":

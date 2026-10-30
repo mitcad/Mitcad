@@ -33,6 +33,7 @@
 #include "../framework/MoveOccurrenceDialog.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
+#include "../files/Libraries.hpp"
 #include "../library/EditOptionsDialog.hpp"
 #include "../library/PartOptions.hpp"
 #include "DocumentHost.hpp"
@@ -42,6 +43,7 @@
 #include "ConfigurationBindingsPage.hpp"
 #include "ConfigurationBar.hpp"
 #include "ConfigurationsDialog.hpp"
+#include "FeatureStatus.hpp"
 #include "FindDialog.hpp"
 #include "ParametersDialog.hpp"
 #include "PolicyDialog.hpp"
@@ -147,20 +149,24 @@ BrowserController::BrowserController(DocumentHost& host, QWidget* window)
   m_timeline = new TimelineWidget(host.model(), window);
   m_failures = new QToolButton(window);
   m_failures->setObjectName(QStringLiteral("failuresBadge"));
-  m_failures->setAutoRaise(true);
   m_failures->setFocusPolicy(Qt::NoFocus);
   m_failures->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-  m_failures->setIcon(themeIcon(QStringLiteral("warning")));
-  setErrorStyleSheet(m_failures, QStringLiteral("QToolButton { color: %1; }"));
+  // The timeline's badges (mitcad#961): a red circle, an amber triangle.
+  m_failures->setIcon(featureStateIcon(FeatureState::Failed));
+  // A red capsule with white text, readable on any background (mitcad#961).
+  m_failures->setAutoRaise(false);
+  m_failures->setStyleSheet(issueBadgeStyle(FeatureState::Failed));
+  m_failures->setProperty(kSemanticTextToneProperty, QStringLiteral("error"));
   m_failures->hide();
   // Features with warnings, the import's among them (mitcad#170): yellow.
   m_warnings = new QToolButton(window);
   m_warnings->setObjectName(QStringLiteral("warningsBadge"));
-  m_warnings->setAutoRaise(true);
   m_warnings->setFocusPolicy(Qt::NoFocus);
   m_warnings->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-  m_warnings->setIcon(themeIcon(QStringLiteral("warning")));
-  setWarningStyleSheet(m_warnings, QStringLiteral("QToolButton { color: %1; }"));
+  m_warnings->setIcon(featureStateIcon(FeatureState::Warning));
+  m_warnings->setAutoRaise(false);
+  m_warnings->setStyleSheet(issueBadgeStyle(FeatureState::Warning));
+  m_warnings->setProperty(kSemanticTextToneProperty, QStringLiteral("warning"));
   m_warnings->hide();
   // The magnifier on the browser's title row (mitcad#350): Find in Design.
   m_findButton = new QToolButton(window);
@@ -361,7 +367,10 @@ void BrowserController::updateFailures() {
     badge << QStringLiteral("%1: %2").arg(feature->name, feature->error);
   }
   m_warnings->setVisible(!noted.isEmpty());
-  m_warnings->setText(tr("%n warning(s)", nullptr, static_cast<int>(noted.size())));
+  const int warnedCount = static_cast<int>(noted.size());
+  const QString warnedText = warnedCount == 1 ? tr("1 warning") : tr("%1 warnings").arg(warnedCount);
+  m_warnings->setText(m_compactBadges ? QString::number(warnedCount) : warnedText);
+  m_warnings->setAccessibleName(warnedText);
   m_warnings->setToolTip(badge.join(QLatin1Char('\n')));
   const QString badged = badge.join(QStringLiteral("; "));
   if (badged != m_loggedBadge) {
@@ -421,6 +430,12 @@ void BrowserController::reveal(const QString& uid) {
   }
   m_timeline->selectFeature(uid);
   m_browser->reveal(uid);
+  // Selected as a click on its cell selects it, so that the selection card
+  // names it and why it failed (mitcad#961); not into a running command's
+  // input.
+  if (m_host.activeCommandName().isEmpty()) {
+    pick(featureItems({uid}), m_host.takesFeatures() ? QStringList() : QStringList{uid});
+  }
   if (!feature->error.isEmpty()) {
     m_host.showStatus(QStringLiteral("%1: %2").arg(feature->name, feature->error), true);
   }
@@ -2609,6 +2624,34 @@ void BrowserController::editOptions(const QString& component, const QString& nam
   if (!canChange()) {
     return;
   }
+  // A library part's table at its version (mitcad#949): its rows'
+  // standards and suppliers' articles for the filters above the choosers.
+  QJsonObject libraryTable;
+  try {
+    const QJsonArray parts =
+        m_host.model().queryObject({{QStringLiteral("query"), QStringLiteral("library_parts")}}).value(
+            QStringLiteral("parts")).toArray();
+    for (const QJsonValue& value : parts) {
+      const QJsonObject part = value.toObject();
+      const QJsonObject library = part.value(QStringLiteral("library")).toObject();
+      if (part.value(QStringLiteral("component")).toString() != component || library.isEmpty()) {
+        continue;
+      }
+      const QJsonObject shown = libraryCommand({{QStringLiteral("cmd"), QStringLiteral("library_show")},
+                                                {QStringLiteral("url"), library.value(QStringLiteral("url"))},
+                                                {QStringLiteral("id"), library.value(QStringLiteral("library"))},
+                                                {QStringLiteral("rev"), library.value(QStringLiteral("rev"))}});
+      for (const QJsonValue& shownComponent : shown.value(QStringLiteral("components")).toArray()) {
+        const QJsonObject entry = shownComponent.toObject();
+        if (entry.value(QStringLiteral("id")).toString() == library.value(QStringLiteral("component")).toString()) {
+          libraryTable = entry.value(QStringLiteral("configurations")).toObject();
+          libraryTable.insert(QStringLiteral("standards"), entry.value(QStringLiteral("standards")));
+        }
+      }
+    }
+  } catch (const std::exception&) {
+    // Without the library: no filters.
+  }
   EditOptionsDialog dialog(
       [this](const QJsonObject& query) {
         try {
@@ -2618,7 +2661,7 @@ void BrowserController::editOptions(const QString& component, const QString& nam
                               QJsonObject{{QStringLiteral("message"), QString::fromUtf8(error.what())}}}};
         }
       },
-      component, name, m_window);
+      component, name, libraryTable, m_window);
   prepareModal(&dialog);
   qDebug().noquote() << QStringLiteral("Edit Options opened for %1").arg(name);
   if (execDialog(&dialog) != QDialog::Accepted || !dialog.hasOptions() || !canChange()) {

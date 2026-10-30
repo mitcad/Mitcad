@@ -194,6 +194,12 @@ public:
   // the returned guard lives, itemShape may read each sketch once for all
   // of its curves and points. The default batches nothing.
   virtual std::shared_ptr<void> itemShapeBatch() const { return nullptr; }
+  // A click is about to put `item` into a selection input of a command that
+  // makes a new feature (not an edit), before anything previews it
+  // (mitcad#960): the host may ask whether to activate the item's
+  // component (the Construct commands) and do so with
+  // CommandSession::runActivation. The default asks nothing.
+  virtual void pickComing(const CommandDef& /*def*/, const SelectionItem& /*item*/) {}
 };
 
 // A feature command from start to OK or Cancel: its inputs' state and
@@ -291,6 +297,11 @@ public:
   // was not drawn). False when the model refuses them, or while an
   // asynchronous command computes.
   bool runVisibility(const QJsonArray& commands, const QString& label);
+  // The picked geometry's component activated from CommandHost::pickComing
+  // (mitcad#960): run as a visibility change is, outside the command's undo
+  // range (its own undo step, kept on Cancel), and every cached preview
+  // dropped, since the same definition goes into another component now.
+  bool runActivation(const QJsonArray& commands, const QString& label);
   // Change Parameters while the panel is open (mitcad#564;
   // CommandSessionParameters.cpp): a command of the parameter table runs
   // as a light bulb's does, as its own undo step outside the command's

@@ -29,7 +29,7 @@ but not understood further.
 
 | Module | Contents |
 |---|---|
-| `cfb` | Compound files (MS-CFB): versions 3 and 4, FAT, DIFAT, mini stream, the directory's red-black trees. Chains are checked against the file size and loops. A writer for tests. The `mitcad-cfb` crate (`core/cfb`), shared with the `.rvt` reader and re-exported here as `cfb`. |
+| `cfb` | Compound files (MS-CFB): versions 3 and 4, FAT, DIFAT, mini stream, the directory's red-black trees. Chains are checked against the file size and loops; the directory walk refuses storages nested deeper than 64 levels and paths taking more than 32 MiB together (`MAX_DEPTH`, `MAX_PATH_BYTES`), so a hostile directory cannot make its paths quadratic in its size. A writer for tests. The `mitcad-cfb` crate (`core/cfb`), shared with the `.rvt` reader and re-exported here as `cfb`. |
 | `props` | Property set streams (MS-OLEPS): one or two sets per stream, the dictionary, the code page, typed values (integers, reals, booleans, strings, file times, class ids). A writer for tests. |
 | `rse` | The segment database: meta stream headers, record tables, record splitting, zlib and zstd. A writer for tests. |
 | `lib.rs` | `IptFile`: segments, property sets, document properties, B-rep records, the definitions segment; `read_bodies` converts the bodies with the `.f3d` reader's ASM code. |

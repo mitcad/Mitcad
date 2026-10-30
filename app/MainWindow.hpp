@@ -80,6 +80,7 @@ class UpdateController;
 class ReportCenter;
 class SectionWorker;
 class ViewController;
+class SpaceMouseController;
 #ifdef MITCAD_MACOS_NATIVE_UI
 namespace mac {
 class NativeMacWindow;
@@ -99,8 +100,13 @@ class SketchPalette;
 }
 namespace mcp {
 class AgentIndicator;
+class ChatGate;
 struct ConnectedAgent;
 } // namespace mcp
+namespace agent {
+class ChatController;
+class ChatPanel;
+} // namespace agent
 
 namespace drawings {
 class DrawingWorkspace;
@@ -130,6 +136,8 @@ public:
   void logLayout() const;
 
   OcctViewer* viewerWidget() const { return m_viewer; }
+  // The 3D mouse (mitcad#951): the test driver injects its input here.
+  SpaceMouseController* spaceMouse() const { return m_spaceMouse; }
   DocumentSession& documentSession() const { return *m_documentSession; }
 
   // Live MCP access runs on the UI thread and follows the same model and
@@ -156,6 +164,9 @@ public:
   void setMcpListener(const QString& instance, int port);
   void setMcpUnavailable(const QString& reason);
   const QStringList& mcpAgentNames() const { return m_mcpAgentNames; }
+  // The chat panel's approvals of its own agent's calls (mitcad#947,
+  // agent/MainWindowChat.cpp); null without the panel.
+  mcp::ChatGate* chatGate() const;
 
   // Sets a parameter's value (mm or rad, written in its unit), as typed in
   // the parameters dialog (--set).
@@ -247,10 +258,17 @@ public:
   // Parameter names picked from the view (mitcad#250;
   // MainWindowParameterPicks.cpp).
   std::vector<ShownSketch> shownSketches() const override;
+  // The Construct commands' question whether to activate the picked
+  // geometry's component (mitcad#960; MainWindowActivate.cpp).
+  void pickComing(const CommandDef& def, const SelectionItem& item) override;
 
   // SketchHost
   const Selection& selection() const override { return m_selection; }
   void setSelection(const Selection& items) override;
+  // Clears the selection and the timeline's with it (Esc, Clear Selection;
+  // mitcad#961): a feature selected on the timeline alone, as a failed one
+  // is, has nothing in the selection that would clear it.
+  void clearSelection();
   void pick(const Selection& items, Qt::KeyboardModifiers modifiers) override;
   void showError(const QString& message) override;
   bool sketchClickable(const SelectionItem& item, bool expanded) const override; // mitcad#217
@@ -596,6 +614,12 @@ private:
   // card's block naming it (empty for other items).
   TopoDS_Shape movedFacesShape(const QString& uid) const;
   QString moveFaceCard(const SelectionItem& item) const;
+  // Feature inputs where they were (mitcad#957, MainWindowFeatureInputs.cpp):
+  // a selected or hovered feature's picked edges as lines, from the
+  // polylines its build kept (`feature_inputs`, no geometry computed),
+  // placed in the item's occurrence; null when it kept none. `edges` gets
+  // how many.
+  TopoDS_Shape featureInputLines(const SelectionItem& item, int* edges = nullptr) const;
 
   // Sketches: Create Sketch picks the plane, then sketch mode until Finish
   // Sketch. Editing a sketch rolls the timeline back to it.
@@ -608,6 +632,20 @@ private:
   QString refreshSketchSupports();
   // Why a sketch cannot be made on this plane or face; empty when it can.
   QString sketchSupportRefusal(const SelectionItem& item) const;
+  // Create Sketch on a plane or face it takes (mitcad#960,
+  // MainWindowActivate.cpp): another component's asks first whether to
+  // activate that component (askToActivatePicked), then the sketch is made
+  // on the same pick (createSketch).
+  void createSketchOnPick(SelectionItem item); // a copy: activating rebuilds the selection
+  // The question for a pick of Create Sketch (`sketch`) or a Construct
+  // command: asked when the item is geometry of a component other than the
+  // active one and the preference asks (browser/ActivateQuestion.hpp),
+  // not while an agent's request picks (MCP). `refused`: the design
+  // policy's reason the pick is refused (no question then). Activated, the
+  // component is, as one undo step of its own; true then.
+  bool askToActivatePicked(const SelectionItem& item, const QString& refused, bool sketch);
+  // An agent's picks (mcpSelect) ask nothing.
+  bool m_mcpPicking = false;
   // Create Sketch's plane pick (MainWindowVisibility.cpp): with
   // MITCAD_LOG_PICKS the faces a click picks, logged again after a light
   // bulb changed what is shown (mitcad#295).
@@ -1244,6 +1282,7 @@ private:
   TitleBar* m_titleRow = nullptr;
   CommandSearch* m_search = nullptr;
   ViewController* m_viewController = nullptr;
+  SpaceMouseController* m_spaceMouse = nullptr; // 3D mice (mitcad#951)
   UpdateController* m_updates = nullptr; // automatic updates (mitcad#9)
   ReportCenter* m_reports = nullptr;     // feedback and error reports (mitcad#61, mitcad#62)
   sketch::SketchController* m_sketch = nullptr;
@@ -1297,6 +1336,15 @@ private:
   std::function<void(bool committed)>& m_commandFinished = m_documentSession->state().commandFinished;
   Selection& m_selection = m_documentSession->state().selection;
   QString m_loggedFeatureFaces = QStringLiteral("none"); // the selected features' faces (UI tests)
+  // The lines of features' inputs read since the scene was last refreshed,
+  // by feature uid (mitcad#957, featureInputLines), and the selected
+  // features' inputs as last logged (UI tests).
+  struct FeatureInputLines {
+    TopoDS_Shape lines; // in the component's coordinates; null: none kept
+    int edges = 0;
+  };
+  mutable QHash<QString, FeatureInputLines> m_featureInputLines;
+  QString m_loggedFeatureInputs = QStringLiteral("none");
   // The joint row under the pointer (a Feature item; invalid: none) and
   // the joint highlight's log lines last logged (mitcad#523).
   SelectionItem m_jointHover;
@@ -1426,6 +1474,16 @@ private:
   // on" in the project indicator, whose menu then has Open Log Folder and
   // Turn Off Debug Log.
   void registerDebugLogCommands();
+  // The chat panel (mitcad#947, agent/MainWindowChat.cpp): View › Chat
+  // (view.chat), a card on the right edge of the Floating layout or a dock
+  // of the Docked one; its conversation follows the open design.
+  void registerChatCommands();
+  void createChat();
+  void setChatShown(bool shown);
+  void noteChatDocument();
+  agent::ChatController* m_chat = nullptr;
+  agent::ChatPanel* m_chatPanel = nullptr;
+  QPointer<QWidget> m_chatContainer;
   void createDebugLog();
   void debugLogChanged(bool running);
   void openLogFolder();

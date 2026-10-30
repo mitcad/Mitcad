@@ -46,7 +46,8 @@ bool writeListPdf(const QString& path, const QString& title, const QString& subt
 // row, and the stock's size and stock lengths; without timber the tables
 // are as before.
 QVector<ListTable> cutListTables(const QJsonObject& answer);
-// The parts list's table from `parts_list`'s rows; with timber in the cut
+// The parts list's table from `parts_list`'s rows (with the suppliers' part
+// numbers of each row, mitcad#949); with timber in the cut
 // list (`cut`), the timber parts' material and grade; then a column per
 // property key (`keys`, mitcad#496: `Key` or `Set/Key`) with the rows'
 // `properties` (the `parts_list` query's `properties`).

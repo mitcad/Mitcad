@@ -310,3 +310,6 @@ pub mod tables_csv;
 pub use document::{TableCsvChange, TableCsvFailure, TableCsvImport};
 #[cfg(test)]
 mod tables_csv_tests;
+// Readers of files the user chose, a panic of theirs an error, not an
+// abort of the application (mitcad#922).
+pub use mitcad_model_base::reader_guard;

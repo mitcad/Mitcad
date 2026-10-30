@@ -208,6 +208,11 @@ void ProjectIndicator::refresh() {
       shown << tr("git missing");
       logged << QStringLiteral("git missing");
       tip << remote.problemMessage;
+    } else if (cls == QLatin1String("untrusted_config")) {
+      // The repository's own git configuration names programs (mitcad#920).
+      shown << tr("Not synced: untrusted git settings");
+      logged << QStringLiteral("untrusted git settings");
+      tip << remote.problemMessage;
     } else {
       if (remote.ahead > 0) {
         shown << up + QString::number(remote.ahead);

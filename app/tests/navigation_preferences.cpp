@@ -129,6 +129,29 @@ int navigationPreferencesTests() {
   CHECK(form.chosen().zoomSpeed == 1.5);
   CHECK(form.chosen().constrainedOrbit);
 
+  // The 3D mouse's tab (mitcad#951): its speed, a reversed axis, an axis
+  // off, a lock and a button's command go into the settings.
+  auto* spaceSpeed = form.findChild<QSlider*>(QStringLiteral("navigationSpaceMouseSpeed"));
+  auto* reverseTx = form.findChild<QCheckBox*>(QStringLiteral("navigationSpaceMouseReverse0"));
+  auto* rollOn = form.findChild<QCheckBox*>(QStringLiteral("navigationSpaceMouseAxis5"));
+  auto* lockRotation = form.findChild<QCheckBox*>(QStringLiteral("navigationSpaceMouseLockRotation"));
+  auto* firstButton = form.findChild<QComboBox*>(QStringLiteral("navigationSpaceMouseButton0"));
+  auto* secondButton = form.findChild<QComboBox*>(QStringLiteral("navigationSpaceMouseButton1"));
+  CHECK(spaceSpeed && reverseTx && rollOn && lockRotation && firstButton && secondButton);
+  if (firstButton && secondButton) {
+    CHECK(firstButton->currentData().toString() == QStringLiteral("view.fit"));
+    CHECK(secondButton->currentData().toString() == QStringLiteral("view.home"));
+    firstButton->setCurrentIndex(firstButton->findData(QStringLiteral("view.home")));
+    secondButton->setCurrentIndex(0); // None
+  }
+  if (spaceSpeed) spaceSpeed->setValue(200);
+  if (reverseTx) reverseTx->setChecked(true);
+  if (rollOn) rollOn->setChecked(false);
+  if (lockRotation) lockRotation->setChecked(true);
+  CHECK(form.chosen().spaceMouse.speed == 2.0 && form.chosen().spaceMouse.reversed[0] &&
+        !form.chosen().spaceMouse.axisOn[5] && form.chosen().spaceMouse.lockRotation);
+  CHECK(form.chosen().spaceMouse.buttons == (QStringList{QStringLiteral("view.home"), QString()}));
+
   // Save and reload the widget's actual choices in an isolated settings file.
   QTemporaryDir folder;
   CHECK(folder.isValid());
@@ -149,6 +172,11 @@ int navigationPreferencesTests() {
     }
     NavigationPreferences reopened(loaded, schemes);
     CHECK(reopened.chosen().zoomSpeed == 1.5);
+    CHECK(reopened.chosen().spaceMouse.speed == 2.0 && reopened.chosen().spaceMouse.reversed[0] &&
+          !reopened.chosen().spaceMouse.axisOn[5] && reopened.chosen().spaceMouse.lockRotation);
+    CHECK(reopened.chosen().spaceMouse.buttons == (QStringList{QStringLiteral("view.home"), QString()}));
+    auto* reopenedSecond = reopened.findChild<QComboBox*>(QStringLiteral("navigationSpaceMouseButton1"));
+    CHECK(reopenedSecond && reopenedSecond->currentIndex() == 0);
     CHECK(navigationAction(reopened.chosen(), NavigationInput::TrackpadScroll, Qt::ShiftModifier) == NavigationAction::Orbit);
     CHECK(navigationAction(reopened.chosen(), NavigationInput::LeftButton, Qt::NoModifier) == NavigationAction::None);
     CHECK(reopened.findChild<QComboBox*>(QStringLiteral("navigationScheme"))->currentData().toInt() == int(NavigationScheme::Custom));

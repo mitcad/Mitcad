@@ -44,7 +44,8 @@
 //! Other surfaces are kept by their class name: their faces' points come
 //! from the neighbouring faces' surfaces.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 use mitcad_vec3::{add, scale};
 use serde::Serialize;
@@ -426,6 +427,44 @@ struct Reader<'a> {
     /// The detail level its view conditions are met at (1 coarse, 2
     /// medium, 3 fine).
     detail: u64,
+    visit: RefCell<Visit>,
+    /// Edge steps one walk takes at most ([`MAX_EDGE_STEPS`]; lower in
+    /// tests).
+    max_edge_steps: usize,
+}
+
+/// Nodes (and bodies' faces) one walk of a record's node tree reads at
+/// most (mitcad#924). A real tree is a tree: each node and face its own
+/// object of the record, read once, so a walk reads at most the record's
+/// objects, and a million would take a record of tens of megabytes (a
+/// node or face is several objects of tens of bytes). Only nodes shared
+/// by several parents (numbered pointers to one object) multiply, which a
+/// crafted record can nest into an exponential count.
+const MAX_NODES: usize = 1_000_000;
+
+/// Edge steps (an edge's side taken in a face's loop) one walk of a
+/// record's node tree takes at most, over all its bodies (mitcad#942).
+/// A real tree reads each body once and each edge side of a body in one
+/// loop once, so a walk takes at most two steps per edge of the record:
+/// ten million would take five million edges, a record of hundreds of
+/// megabytes. Only bodies shared by several nodes multiply, as nodes do
+/// ([`MAX_NODES`] counts a body's faces, not its edges).
+const MAX_EDGE_STEPS: usize = 10_000_000;
+
+/// Where a walk of the node tree is.
+#[derive(Default)]
+struct Visit {
+    /// The pointees on the path from the walk's start: a node whose
+    /// sub-nodes name itself or an ancestor would not end.
+    path: Vec<usize>,
+    /// Nodes and faces read ([`MAX_NODES`]).
+    read: usize,
+    /// Edge steps taken in the bodies' loops ([`MAX_EDGE_STEPS`]).
+    edge_steps: usize,
+    /// The notes given, once each per walk: nested too deep, a node in
+    /// itself, too many nodes, a face's loop named again, too many edge
+    /// steps.
+    noted: [bool; 5],
 }
 
 /// Index of a pointee object (by address) in the record: from its offset
@@ -578,8 +617,33 @@ impl<'a> Reader<'a> {
             .collect()
     }
 
-    /// A `Geometry` node's B-rep.
-    fn solid(&self, g: &'a Object) -> Result<Solid, String> {
+    /// A note given once per walk (`which` indexes [`Visit::noted`]).
+    fn note_once(&self, which: usize, note: String, notes: &mut Vec<String>) {
+        let first = !std::mem::replace(&mut self.visit.borrow_mut().noted[which], true);
+        if first {
+            notes.push(note);
+        }
+    }
+
+    /// A `Geometry` node's B-rep, taking at most `left` edge steps (an
+    /// edge's side in a face's loop), counted in `steps` (mitcad#942).
+    ///
+    /// A body takes at most two edge steps per object of the record, and
+    /// fails past them: in a real body each side of an edge lies in one
+    /// loop of one face, and each edge is an object of the record, so the
+    /// steps are at most twice its edges (a loop that would take one side
+    /// twice never comes back to its first edge, and fails as not closing
+    /// already). A face's loop that names a loop already read on the face
+    /// ends the face's loops there, with a note once per walk (a real
+    /// face's loops end with a null).
+    fn solid(
+        &self,
+        g: &'a Object,
+        left: usize,
+        steps: &mut usize,
+        notes: &mut Vec<String>,
+    ) -> Result<Solid, String> {
+        let budget = self.record.pointees.len().saturating_mul(2).min(left);
         let faces: Vec<&Object> = self
             .list(g, "m_pFaces")
             .iter()
@@ -613,10 +677,21 @@ impl<'a> Reader<'a> {
         for (fi, f) in faces.iter().enumerate() {
             let mut lp = self.obj(f, "m_pFirstLoop");
             let mut guard = 0;
+            let mut seen: HashSet<usize> = HashSet::new();
             while let Some(l) = lp {
                 guard += 1;
                 if guard > 10_000 {
                     return Err("a face's loops do not end".into());
+                }
+                if let Some(i) = index_of(self.record, l)
+                    && !seen.insert(i)
+                {
+                    self.note_once(
+                        3,
+                        "a face's loop names a loop of the face again: its loops end there".into(),
+                        notes,
+                    );
+                    break;
                 }
                 let first = self
                     .obj(l, "m_next")
@@ -666,6 +741,13 @@ impl<'a> Reader<'a> {
                         edge_ids.len() - 1
                     });
                     uses.push((k, side));
+                    *steps += 1;
+                    if *steps > budget {
+                        return Err(format!(
+                            "its loops take more than {budget} edge steps \
+                             (two per object of the record)"
+                        ));
+                    }
                     if uses.len() > 100_000 {
                         return Err("a loop that does not close".into());
                     }
@@ -749,20 +831,77 @@ impl<'a> Reader<'a> {
 
     /// A node's geometry; under a filter not shown in 3D (`shown` false)
     /// only its curves (a profile's lines), not its bodies or placed types.
+    /// A node on its own path (a pointer back to itself or an ancestor)
+    /// is left out, as is everything after [`MAX_NODES`], each with a
+    /// note once per walk.
     fn node_shown(&self, n: &'a Object, out: &mut GRep, depth: usize, shown: bool) {
-        if depth > 64 {
-            out.notes.push("nodes nest too deep".into());
+        let pointee = index_of(self.record, n);
+        let refused = {
+            let mut visit = self.visit.borrow_mut();
+            if depth > 64 {
+                Some((0, "nodes nest too deep".to_string()))
+            } else if pointee.is_some_and(|i| visit.path.contains(&i)) {
+                Some((1, "a node holds itself: left out there".to_string()))
+            } else if visit.read >= MAX_NODES {
+                Some((
+                    2,
+                    format!("more than {MAX_NODES} nodes and faces: the rest are left out"),
+                ))
+            } else {
+                visit.read += 1;
+                if self.class(n) == "Geometry" && shown {
+                    visit.read += self.list(n, "m_pFaces").len();
+                }
+                visit.path.extend(pointee);
+                None
+            }
+        };
+        if let Some((which, note)) = refused {
+            self.note_once(which, note, &mut out.notes);
             return;
         }
+        self.node_read(n, out, depth, shown);
+        if pointee.is_some() {
+            self.visit.borrow_mut().path.pop();
+        }
+    }
+
+    /// A node's geometry by its class ([`Reader::node_shown`]).
+    fn node_read(&self, n: &'a Object, out: &mut GRep, depth: usize, shown: bool) {
         match self.class(n) {
             "Geometry" | "GInstance" if !shown => out.hidden += 1,
             "Geometry" => {
                 if self.list(n, "m_pFaces").is_empty() {
                     return;
                 }
-                match self.solid(n) {
+                // The edge steps the walk has left (mitcad#942): past
+                // them, this and the rest of the bodies are left out.
+                let left = self
+                    .max_edge_steps
+                    .saturating_sub(self.visit.borrow().edge_steps);
+                let walk_note = || {
+                    format!(
+                        "more than {} edge steps in the bodies: the rest are left out",
+                        self.max_edge_steps
+                    )
+                };
+                if left == 0 {
+                    self.note_once(4, walk_note(), &mut out.notes);
+                    return;
+                }
+                let mut steps = 0;
+                let read = self.solid(n, left, &mut steps, &mut out.notes);
+                let total = {
+                    let mut visit = self.visit.borrow_mut();
+                    visit.edge_steps = visit.edge_steps.saturating_add(steps);
+                    visit.edge_steps
+                };
+                match read {
                     Ok(s) if !s.faces.is_empty() => out.solids.push(s),
                     Ok(_) => {}
+                    Err(_) if total > self.max_edge_steps => {
+                        self.note_once(4, walk_note(), &mut out.notes);
+                    }
                     Err(e) => out.notes.push(format!("a body did not read: {e}")),
                 }
             }
@@ -839,6 +978,8 @@ pub fn solids(schema: &Schema, record: &Record, values: &[Value]) -> (Vec<Solid>
         schema,
         record,
         detail: 3,
+        visit: RefCell::default(),
+        max_edge_steps: MAX_EDGE_STEPS,
     };
     let mut out = GRep::default();
     for v in values {
@@ -863,6 +1004,8 @@ pub fn read(schema: &Schema, record: &Record) -> Option<GRep> {
             schema,
             record,
             detail,
+            visit: RefCell::default(),
+            max_edge_steps: MAX_EDGE_STEPS,
         };
         out = GRep::default();
         let b = r.get(&record.root, "m_bBox").map(Value::floats);
@@ -880,6 +1023,279 @@ pub fn read(schema: &Schema, record: &Record) -> Option<GRep> {
 #[cfg(test)]
 mod tests {
     use super::condition_in_3d;
+    use crate::schema::types::*;
+    use crate::schema::{Schema, SchemaWriter};
+    use crate::walk::{Record, Value, walk};
+
+    /// A record holding a list of `GGroup`s (as a family type holds its
+    /// void geometry), the groups' sub-nodes by object number: `subs[k]`
+    /// is group k + 1's (numbered from 1), the holder's list naming group
+    /// 1.
+    fn groups(subs: &[Vec<u32>]) -> (Schema, Record) {
+        let mut w = SchemaWriter::new();
+        let identifier = w.class("Identifier", None, &[("m_id64", word(U64))]);
+        w.class("ElementId", None, &[("m_id", object(identifier))]);
+        let group = w.class("GGroup", None, &[("m_subNodes", word(0x510e))]);
+        let holder = w.class("Holder", None, &[("m_complexCutGeoms", word(0x510e))]);
+        let schema = Schema::parse(&w.finish()).unwrap();
+        let mut data = holder.to_le_bytes().to_vec();
+        let pointers = |out: &mut Vec<u8>, numbers: &[u32]| {
+            out.extend((numbers.len() as u32).to_le_bytes());
+            for n in numbers {
+                out.extend(n.to_le_bytes());
+                out.extend(group.to_le_bytes());
+            }
+        };
+        pointers(&mut data, &[1]);
+        for sub in subs {
+            pointers(&mut data, sub);
+        }
+        let record = walk(&schema, &data).unwrap();
+        (schema, record)
+    }
+
+    #[test]
+    fn a_node_that_holds_itself_ends_with_one_note() {
+        // mitcad#924: a GGroup whose sub-nodes are itself, twice.
+        let (schema, record) = groups(&[vec![1, 1]]);
+        let list = record
+            .root
+            .get(&schema, "m_complexCutGeoms")
+            .unwrap()
+            .as_list()
+            .unwrap()
+            .to_vec();
+        let mut best = std::time::Duration::MAX;
+        for _ in 0..3 {
+            let started = std::time::Instant::now();
+            let (solids, notes) = super::solids(&schema, &record, &list);
+            best = best.min(started.elapsed());
+            assert!(solids.is_empty());
+            assert_eq!(notes.len(), 1, "{notes:?}");
+            assert!(notes[0].contains("holds itself"), "{notes:?}");
+        }
+        assert!(best.as_millis() < 10, "{best:?}");
+    }
+
+    #[test]
+    fn shared_nodes_stop_at_the_node_limit() {
+        // Thirty groups, each naming the next twice: 2^30 paths without
+        // a cycle; the walk stops at the limit with one note.
+        let mut subs: Vec<Vec<u32>> = (2..=30).map(|k| vec![k, k]).collect();
+        subs.push(Vec::new());
+        let (schema, record) = groups(&subs);
+        let list = record
+            .root
+            .get(&schema, "m_complexCutGeoms")
+            .unwrap()
+            .as_list()
+            .unwrap()
+            .to_vec();
+        let (_, notes) = super::solids(&schema, &record, &list);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("left out"), "{notes:?}");
+        // A tree of shared nodes within the limit reads without a note.
+        let mut subs: Vec<Vec<u32>> = (2..=10).map(|k| vec![k, k]).collect();
+        subs.push(Vec::new());
+        let (schema, record) = groups(&subs);
+        let list = record
+            .root
+            .get(&schema, "m_complexCutGeoms")
+            .unwrap()
+            .as_list()
+            .unwrap()
+            .to_vec();
+        assert!(super::solids(&schema, &record, &list).1.is_empty());
+    }
+
+    /// A record holding a list that names one `Geometry` `bodies` times
+    /// (mitcad#942): one face whose `loops` loops (each the previous one's
+    /// `m_nextLoop`; the last names itself when `self_named`) all name the
+    /// same closed cycle of `edges` edges, each edge's other side open.
+    fn body(edges: u32, loops: u32, self_named: bool, bodies: u32) -> (Schema, Record) {
+        fn put(out: &mut Vec<u8>, word: u32) {
+            out.extend(word.to_le_bytes());
+        }
+        fn pointer(out: &mut Vec<u8>, number: u32, tag: u16) {
+            put(out, number);
+            out.extend(tag.to_le_bytes());
+        }
+        // Reference pointers (kind 3), alone and in containers.
+        let reference = word(0x030e);
+        let references = word(0x530e);
+        let pointers = word(0x510e);
+        let mut w = SchemaWriter::new();
+        let identifier = w.class("Identifier", None, &[("m_id64", word(U64))]);
+        w.class("ElementId", None, &[("m_id", object(identifier))]);
+        let pnt = w.class("EdgePnt", None, &[("uv", matrix(2, 2))]);
+        let edge = w.class(
+            "Edge",
+            None,
+            &[
+                ("m_pFace", references.clone()),
+                ("m_next", references.clone()),
+                ("m_prev", references),
+                ("m_firstAndLastEdgePnts", pointers.clone()),
+            ],
+        );
+        let edge_loop = w.class(
+            "EdgeLoop",
+            None,
+            &[
+                ("m_next", reference.clone()),
+                ("m_prev", reference),
+                ("m_nextLoop", word(OWNED)),
+            ],
+        );
+        let face = w.class(
+            "Face",
+            None,
+            &[("m_pSurf", word(OWNED)), ("m_pFirstLoop", word(OWNED))],
+        );
+        let geometry = w.class(
+            "Geometry",
+            None,
+            &[
+                ("m_pFaces", pointers.clone()),
+                ("m_pEdges", pointers.clone()),
+            ],
+        );
+        let holder = w.class("Holder", None, &[("m_complexCutGeoms", pointers)]);
+        let schema = Schema::parse(&w.finish()).unwrap();
+        // Object numbers, each range apart from the others (a loop
+        // numbered as an edge would be read as that edge).
+        let (body_no, face_no, first_pnt, edge0) = (1, 2, 4, 1000);
+        let loop0 = edge0 + edges;
+        // The objects in the walk's order: the holder, the body, its face
+        // and edges, the first loop, the two end points (shared by all
+        // edges), the further loops.
+        let mut data = holder.to_le_bytes().to_vec();
+        put(&mut data, bodies);
+        for _ in 0..bodies {
+            pointer(&mut data, body_no, geometry);
+        }
+        put(&mut data, 1);
+        pointer(&mut data, face_no, face);
+        put(&mut data, edges);
+        for i in 0..edges {
+            pointer(&mut data, edge0 + i, edge);
+        }
+        put(&mut data, 0);
+        pointer(&mut data, loop0, edge_loop);
+        for i in 0..edges {
+            for (n, other) in [
+                (2, face_no),
+                (2, edge0 + (i + 1) % edges),
+                (2, edge0 + (i + edges - 1) % edges),
+            ] {
+                put(&mut data, n);
+                put(&mut data, other);
+                put(&mut data, 0);
+            }
+            put(&mut data, 2);
+            pointer(&mut data, first_pnt, pnt);
+            pointer(&mut data, first_pnt + 1, pnt);
+        }
+        let a_loop = |data: &mut Vec<u8>, k: u32| {
+            put(data, edge0);
+            put(data, edge0 + edges - 1);
+            if k + 1 < loops {
+                pointer(data, loop0 + k + 1, edge_loop);
+            } else if self_named {
+                pointer(data, loop0 + k, edge_loop);
+            } else {
+                put(data, 0);
+            }
+        };
+        a_loop(&mut data, 0);
+        for uv in [[0.0, 0.0, 1.0, 0.0], [1.0, 0.0, 1.0, 1.0]] {
+            for x in uv {
+                data.extend(f64::to_le_bytes(x));
+            }
+        }
+        for k in 1..loops {
+            a_loop(&mut data, k);
+        }
+        let record = walk(&schema, &data).unwrap();
+        (schema, record)
+    }
+
+    fn listed(schema: &Schema, record: &Record) -> Vec<Value> {
+        record
+            .root
+            .get(schema, "m_complexCutGeoms")
+            .unwrap()
+            .as_list()
+            .unwrap()
+            .to_vec()
+    }
+
+    #[test]
+    fn a_face_loop_that_names_itself_ends_with_one_note() {
+        // mitcad#942: the face's loop is its own next loop, its edges a
+        // closed cycle of 100,000; read once, the loops end there.
+        let (schema, record) = body(100_000, 1, true, 1);
+        let list = listed(&schema, &record);
+        let started = std::time::Instant::now();
+        let (solids, notes) = super::solids(&schema, &record, &list);
+        let took = started.elapsed();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].contains("names a loop of the face again"),
+            "{notes:?}"
+        );
+        assert_eq!(solids.len(), 1);
+        assert_eq!(solids[0].faces[0].loops.len(), 1);
+        assert_eq!(solids[0].faces[0].loops[0].len(), 100_000);
+        assert_eq!(solids[0].edges.len(), 100_000);
+        assert!(took.as_millis() < 500, "{took:?}");
+        // The same face whose loop ends with a null: no note.
+        let (schema, record) = body(1_000, 1, false, 1);
+        let (solids, notes) = super::solids(&schema, &record, &listed(&schema, &record));
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(solids[0].faces[0].loops[0].len(), 1_000);
+    }
+
+    #[test]
+    fn a_body_takes_two_edge_steps_per_object_at_most() {
+        // 10,000 loops, each naming the same 100,000-edge cycle: 10^9 steps
+        // unbounded; the body fails past twice the record's objects.
+        let (schema, record) = body(100_000, 10_000, false, 1);
+        let list = listed(&schema, &record);
+        let started = std::time::Instant::now();
+        let (solids, notes) = super::solids(&schema, &record, &list);
+        let took = started.elapsed();
+        assert!(solids.is_empty());
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("edge steps"), "{notes:?}");
+        assert!(took.as_millis() < 500, "{took:?}");
+    }
+
+    #[test]
+    fn a_walk_stops_at_its_edge_steps() {
+        // A body of 1,000 edges named five times, a walk of 2,500 steps:
+        // two bodies read, the rest left out with one note.
+        let (schema, record) = body(1_000, 1, false, 5);
+        let list = listed(&schema, &record);
+        let r = super::Reader {
+            schema: &schema,
+            record: &record,
+            detail: 3,
+            visit: Default::default(),
+            max_edge_steps: 2_500,
+        };
+        let mut out = super::GRep::default();
+        for v in &list {
+            r.node(record.deref(v).unwrap(), &mut out, 0);
+        }
+        assert_eq!(out.solids.len(), 2);
+        assert_eq!(out.notes.len(), 1, "{:?}", out.notes);
+        assert!(out.notes[0].contains("left out"), "{:?}", out.notes);
+        // Within the walk's default steps all five read.
+        let (solids, notes) = super::solids(&schema, &record, &list);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(solids.len(), 5);
+    }
 
     #[test]
     fn a_3d_view_shows_what_is_not_only_for_plans_cuts_or_other_detail_levels() {

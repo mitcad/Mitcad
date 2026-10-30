@@ -45,7 +45,7 @@ pub(super) struct FaceProfile {
 /// What a profile-based feature sweeps.
 pub(super) enum Swept {
     /// Regions of a sketch.
-    Sketch(Profile),
+    Sketch(Box<Profile>),
     /// A planar face of a body.
     Face(FaceProfile),
     /// Several planar faces (`AllowMultiFace`, mitcad#543): a feature per
@@ -189,7 +189,9 @@ impl<K: Kernel> Importer<'_, '_, K> {
             .cloned()
             .ok_or_else(|| format!("no {}", link.object))?;
         if super::is_sketch(&object.type_name) || link.subs.is_empty() {
-            return self.profile(o, "Profile", component).map(Swept::Sketch);
+            return self
+                .profile(o, "Profile", component)
+                .map(|p| Swept::Sketch(Box::new(p)));
         }
         // FreeCAD takes the first element unless the feature allows
         // several faces.

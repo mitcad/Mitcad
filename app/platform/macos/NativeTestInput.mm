@@ -77,6 +77,12 @@
 - (BOOL)pointerTracking;
 @end
 
+// Read the selection of this exact table's live shared presenter, even
+// when retained dialogs contain other controls with the same object name.
+@protocol MITCADNativeModelSelectionTest <NSObject>
+- (NSInteger)presenterSelectedRows;
+@end
+
 // NSEvent exposes magnification and phase as read-only properties and has
 // no public magnify factory. This in-process test double exercises the real
 // document NSWindow dispatch entry without injecting system-wide input.
@@ -2511,7 +2517,12 @@ bool select(const QString& identifier, QString& error, Qt::KeyboardModifiers mod
   }
   [table.window makeKeyAndOrderFront:nil];
   [table.window makeFirstResponder:table];
-  [table selectRowIndexes:[NSIndexSet indexSetWithIndex:NSUInteger(row)] byExtendingSelection:NO];
+  // The semantic selection helper already honours these modifiers for
+  // history items. Keep Command/Control-toggle selection for table rows too;
+  // otherwise a requested multi-body assignment silently becomes one body.
+  const bool toggle = bool(modifiers & Qt::ControlModifier);
+  if (toggle && [table.selectedRowIndexes containsIndex:NSUInteger(row)]) [table deselectRow:row];
+  else [table selectRowIndexes:[NSIndexSet indexSetWithIndex:NSUInteger(row)] byExtendingSelection:toggle];
   [table scrollRowToVisible:row];
   return true;
 }
@@ -3081,6 +3092,47 @@ bool sameColor(NSColor* actual, NSColor* expected, NSAppearance* appearance) {
   return same;
 }
 
+// A Command Search result row (mitcad#974): the command's shared icon at
+// 18 points or more, coloured artwork backed by Retina pixels, wholly in the
+// visible row and left of its name and shortcut, which have width of their
+// own; `enabled` or `disabled` also checks the row's dimming, `selected`
+// that the row is the table's selected one.
+bool searchResultIcon(NSView* view, const QStringList& states, QString& detail) {
+  NSTableCellView* cell = [view isKindOfClass:NSTableCellView.class] ? (NSTableCellView*)view : nil;
+  NSImageView* icon = cell.imageView;
+  NSTextField* text = cell.textField;
+  if (cell == nil || icon == nil || text == nil) { detail = QStringLiteral("no native result row with an icon and a name"); return false; }
+  [cell layoutSubtreeIfNeeded];
+  NSImage* picture = icon.image;
+  NSImageRep* pixels = picture.representations.firstObject;
+  const NSRect bounds = cell.bounds;
+  const NSRect iconFrame = icon.frame;
+  const NSRect textFrame = text.frame;
+  const bool sharp = picture.isTemplate || (CGFloat(pixels.pixelsWide) >= 2 * picture.size.width - 1 &&
+                                            CGFloat(pixels.pixelsHigh) >= 2 * picture.size.height - 1);
+  const bool artwork = picture != nil && !icon.hidden && picture.size.width >= 16 && picture.size.height >= 16 &&
+      NSWidth(iconFrame) >= 16 && NSHeight(iconFrame) >= 16 && sharp &&
+      NSContainsRect(NSInsetRect(bounds, -0.5, -0.5), iconFrame);
+  const bool apart = NSMinX(textFrame) >= NSMaxX(iconFrame) && NSWidth(textFrame) > 0 &&
+      text.stringValue.length > 0 && NSContainsRect(NSInsetRect(bounds, -0.5, -0.5), textFrame);
+  const bool labelText = [text.textColor isEqual:NSColor.labelColor];
+  bool matches = true;
+  if (states.contains(QStringLiteral("enabled"))) matches = labelText && icon.alphaValue > 0.99;
+  if (states.contains(QStringLiteral("disabled"))) matches = !labelText && icon.alphaValue < 0.99;
+  NSTableView* table = mac::owningTable(cell);
+  const NSInteger row = table != nil ? [table rowForView:cell] : -1;
+  const bool selected = row >= 0 && table.selectedRow == row;
+  if (states.contains(QStringLiteral("selected")) && !selected) matches = false;
+  detail = QStringLiteral("row %12 '%1'%13: image %2x%3 pt %4x%5 px template %6 at %7, alpha %8, name at %9, "
+                          "cell %10, visible %11")
+      .arg(qt(text.stringValue)).arg(picture.size.width).arg(picture.size.height)
+      .arg(pixels.pixelsWide).arg(pixels.pixelsHigh).arg(bool(picture.isTemplate))
+      .arg(qt(NSStringFromRect(iconFrame))).arg(icon.alphaValue).arg(qt(NSStringFromRect(textFrame)))
+      .arg(qt(NSStringFromRect(bounds))).arg(viewVisible(cell)).arg(row)
+      .arg(selected ? QStringLiteral(" (selected)") : QString());
+  return artwork && apart && matches && viewVisible(cell);
+}
+
 // The cell's own drawing at its leading edge, left of any text or icon:
 // its alpha, and whether it is a red tint.
 CGFloat cellFill(NSView* cell, bool* red) {
@@ -3170,10 +3222,65 @@ QHeaderView* sharedHeader(const QString& identifier) {
   return nullptr;
 }
 
+// The Settings section selector (mitcad#971): every section button shows
+// its template icon above its complete name, both within the visible
+// button, the icon at its points backed by Retina pixels; exactly one
+// section is chosen, the one whose page the tab view shows, and its name is
+// `chosen` when that is given.
+bool paneIcons(NSView* view, const QString& chosen, QString& detail) {
+  NSStackView* selector = [view isKindOfClass:NSStackView.class] ? (NSStackView*)view : nil;
+  if (selector == nil) { detail = QStringLiteral("no native section selector"); return false; }
+  NSTabView* pages = nil;
+  for (NSView* sibling in selector.superview.subviews) {
+    if ([sibling isKindOfClass:NSTabView.class]) pages = (NSTabView*)sibling;
+  }
+  const NSInteger shown = pages.selectedTabViewItem != nil ? [pages indexOfTabViewItem:pages.selectedTabViewItem] : -1;
+  QStringList sections;
+  NSInteger index = -1;
+  int selected = 0;
+  bool complete = true;
+  bool matches = chosen.isEmpty();
+  for (NSView* child in selector.arrangedSubviews) {
+    NSButton* button = [child isKindOfClass:NSButton.class] ? (NSButton*)child : nil;
+    if (button == nil) continue;
+    ++index;
+    NSImage* picture = button.image;
+    NSImageRep* pixels = picture.representations.firstObject;
+    const NSRect bounds = button.bounds;
+    const NSRect icon = [(NSButtonCell*)button.cell imageRectForBounds:bounds];
+    const NSRect caption = [(NSButtonCell*)button.cell titleRectForBounds:bounds];
+    NSFont* font = button.font != nil ? button.font : [NSFont systemFontOfSize:0];
+    const NSSize glyphs = [button.title sizeWithAttributes:@{NSFontAttributeName: font}];
+    const bool artwork = picture != nil && picture.isTemplate && button.imagePosition == NSImageAbove &&
+        picture.size.width >= 16 && picture.size.height >= 16 &&
+        CGFloat(pixels.pixelsWide) >= 2 * picture.size.width - 1 &&
+        CGFloat(pixels.pixelsHigh) >= 2 * picture.size.height - 1 &&
+        NSWidth(icon) >= 16 && NSHeight(icon) >= 16 && NSContainsRect(NSInsetRect(bounds, -0.5, -0.5), icon);
+    const bool readable = button.title.length > 0 && glyphs.width <= NSWidth(caption) + 0.5 &&
+        glyphs.height <= NSHeight(caption) + 0.5 && NSContainsRect(NSInsetRect(bounds, -0.5, -0.5), caption);
+    const bool on = button.state == NSControlStateValueOn;
+    if (on) {
+      ++selected;
+      if (index != shown) complete = false;
+      if (!chosen.isEmpty() && qt(button.title) == chosen) matches = true;
+    }
+    if (!artwork || !readable || !viewVisible(button)) complete = false;
+    sections << QStringLiteral("%1%2 [image %3x%4 pt %5x%6 px template %7 at %8, title %9x%10 in %11, visible %12]")
+        .arg(qt(button.title), on ? QStringLiteral(" (chosen)") : QString())
+        .arg(picture.size.width).arg(picture.size.height).arg(pixels.pixelsWide).arg(pixels.pixelsHigh)
+        .arg(bool(picture.isTemplate)).arg(qt(NSStringFromRect(icon)))
+        .arg(glyphs.width).arg(glyphs.height).arg(qt(NSStringFromRect(caption))).arg(viewVisible(button));
+  }
+  detail = QStringLiteral("%1 sections, %2 chosen, page %3 shown: %4")
+      .arg(index + 1).arg(selected).arg(shown).arg(sections.join(QStringLiteral("; ")));
+  return index >= 1 && selected == 1 && complete && matches;
+}
+
 } // namespace
 
 bool nativeStyle(const QString& identifier, const QStringList& states, QString& detail) {
   NSView* view = tableCell(identifier);
+  if (states.value(0) == QLatin1String("pane-icons")) return paneIcons(view, states.value(1), detail);
   if (states == QStringList{QStringLiteral("artwork")}) return mac::navigationGuideArtwork(view, detail);
   if (states == QStringList{QStringLiteral("caption")}) {
     NSButton* button = [view isKindOfClass:NSButton.class] ? (NSButton*)view : nil;
@@ -3199,6 +3306,7 @@ bool nativeStyle(const QString& identifier, const QStringList& states, QString& 
         .arg(viewVisible(button)).arg(fits);
     return displayed && viewVisible(button) && fits;
   }
+  if (states.value(0) == QLatin1String("result-icon")) return searchResultIcon(view, states, detail);
   if (states.contains(QStringLiteral("current-row"))) {
     NSTableView* table = mac::owningTable(view);
     const NSInteger row = table != nil ? [table rowForView:view] : -1;
@@ -3773,18 +3881,12 @@ bool selectedRow(const QString& outlineIdentifier, const QString& row, QString& 
       return false;
     }
     NSTableView* table = (NSTableView*)found;
-    qsizetype shared = -1;
-    int presenters = 0;
-    for (QWidget* widget : QApplication::allWidgets()) {
-      auto* view = qobject_cast<QAbstractItemView*>(widget);
-      if (view == nullptr || view->objectName() != outlineIdentifier || view->selectionModel() == nullptr) continue;
-      ++presenters;
-      shared = view->selectionModel()->selectedRows().size();
-    }
-    detail = QStringLiteral("table '%1': native selected %2/%3 rows, presenter selected %4 (%5 presenters)")
+    const NSInteger shared = [table respondsToSelector:@selector(presenterSelectedRows)]
+        ? [(id<MITCADNativeModelSelectionTest>)table presenterSelectedRows] : -1;
+    detail = QStringLiteral("table '%1': native selected %2/%3 rows, exact live presenter selected %4")
                  .arg(outlineIdentifier).arg(table.selectedRowIndexes.count).arg(table.numberOfRows)
-                 .arg(shared).arg(presenters);
-    return presenters == 1 && shared == expected && table.selectedRowIndexes.count == NSUInteger(expected);
+                 .arg(shared);
+    return shared == expected && table.selectedRowIndexes.count == NSUInteger(expected);
   }
   NSWindow* window = documentWindow();
   if (!active() || window == nil) return false;
@@ -4485,7 +4587,8 @@ NSView* buttonTitled(NSView* root, const QRegularExpression& expression, bool en
 
 // Real AppKit mouse input: the window hit-tests the press and the control
 // tracks the drags and release, as for input from the pointer.
-bool pointerEvents(NSView* view, NSPoint from, NSPoint to, QString& error, int clickCount = 1) {
+bool pointerEvents(NSView* view, NSPoint from, NSPoint to, QString& error, int clickCount = 1,
+                   bool centerVisible = false, const QString& identifier = {}) {
   NSWindow* window = view.window;
   if (window == nil) { error = QStringLiteral("the native pointer target has no window"); return false; }
   // Clear of a scrolled body's edges, where overlay scrollers appear.
@@ -4495,6 +4598,37 @@ bool pointerEvents(NSView* view, NSPoint from, NSPoint to, QString& error, int c
   [window layoutIfNeeded];
   NSView* content = window.contentView;
   [content layoutSubtreeIfNeeded];
+  if (centerVisible) {
+    // Preparing the window after the first press can replace its row views.
+    // Resolve the same identifier after that layout too, before hit-testing;
+    // a retained old cell must never receive the second press.
+    NSView* live = tableCell(identifier, &error);
+    if (live == nil || live.window != window) {
+      if (error.isEmpty()) error = QStringLiteral("the native double-click target '%1' lost its window during layout").arg(identifier);
+      return false;
+    }
+    if (live != view)
+      qInfo().noquote() << QStringLiteral("Native pointer live row resolved after layout: %1, old-window-live=%2")
+          .arg(identifier).arg(view.window == window);
+    view = live;
+    // A row can be taller than its short library viewport. Scroll/layout
+    // first, then aim at the part actually shown, rather than a stale full
+    // bounds centre hidden behind the surrounding form (mitcad#864).
+    const NSRect visible = NSIntersectionRect(view.bounds, view.visibleRect);
+    NSTableView* table = mac::owningTable(view);
+    if (view.window != window || !viewVisible(view) || NSIsEmptyRect(visible) ||
+        ([view isKindOfClass:NSControl.class] && !((NSControl*)view).enabled) ||
+        (table != nil && !table.enabled)) {
+      error = QStringLiteral("the native double-click target '%1' has no live visible enabled area (bounds %2, visible %3, same-window %4)")
+          .arg(identifier, qt(NSStringFromRect(view.bounds)), qt(NSStringFromRect(view.visibleRect)))
+          .arg(view.window == window);
+      return false;
+    }
+    from = to = NSMakePoint(NSMidX(visible), NSMidY(visible));
+    qInfo().noquote() << QStringLiteral("Native pointer visible centre: %1 bounds=%2 clipped=%3 point=%4")
+        .arg(qt(view.accessibilityIdentifier), qt(NSStringFromRect(view.bounds)),
+             qt(NSStringFromRect(visible)), qt(NSStringFromPoint(from)));
+  }
   // A release left queued by earlier input would end this control's
   // tracking at its press.
   const NSEventMask mouse = NSEventMaskLeftMouseDown | NSEventMaskLeftMouseUp | NSEventMaskLeftMouseDragged;
@@ -4502,8 +4636,28 @@ bool pointerEvents(NSView* view, NSPoint from, NSPoint to, QString& error, int c
   const NSPoint start = [view convertPoint:from toView:nil];
   const NSPoint end = [view convertPoint:to toView:nil];
   NSView* hit = [content hitTest:[content.superview convertPoint:start fromView:nil]];
-  if (hit != view && ![hit isDescendantOf:view]) {
-    error = QStringLiteral("the native pointer target is covered by %1").arg(qt(NSStringFromClass(hit.class)));
+  bool exactTableCellHit = false;
+  if (centerVisible && [view isKindOfClass:NSTableCellView.class]) {
+    // Display-only cells can leave mouse handling to their table. Qualify
+    // that actual hit by the exact live row/column and view identity;
+    // another cell or covering view cannot satisfy this check.
+    NSTableView* table = mac::owningTable(view);
+    if (table != nil && hit == table && table.enabled && table.window == window) {
+      const NSPoint at = [table convertPoint:start fromView:nil];
+      const NSInteger row = [table rowForView:view];
+      const NSInteger column = [table columnForView:view];
+      exactTableCellHit = row >= 0 && column >= 0 && [table rowAtPoint:at] == row &&
+          [table columnAtPoint:at] == column &&
+          [table viewAtColumn:column row:row makeIfNecessary:NO] == view;
+      if (exactTableCellHit)
+        qInfo().noquote() << QStringLiteral("Native pointer table cell hit: %1 row=%2 column=%3 live=1")
+            .arg(qt(view.accessibilityIdentifier)).arg(row).arg(column);
+    }
+  }
+  if (hit != view && ![hit isDescendantOf:view] && !exactTableCellHit) {
+    error = QStringLiteral("the native pointer target is covered by %1 (target %2 '%3', bounds %4, visible %5, local point %6)")
+        .arg(qt(NSStringFromClass(hit.class)), qt(NSStringFromClass(view.class)), qt(view.accessibilityIdentifier),
+             qt(NSStringFromRect(view.bounds)), qt(NSStringFromRect(view.visibleRect)), qt(NSStringFromPoint(from)));
     return false;
   }
   // Keep the second press later than the first click's queued release,
@@ -4700,6 +4854,25 @@ bool controlBounds(const QString& identifier, double minimumWidth, const QString
   }
   qInfo().noquote() << QStringLiteral("Native bounds: %1").arg(where);
   return true;
+}
+
+bool placeholderBounds(const QString& identifier, const QString& labelPattern, QString& error) {
+  NSView* view = findControl(identifier);
+  NSTextField* field = [view isKindOfClass:NSTextField.class] ? (NSTextField*)view : nil;
+  if (field == nil || field.window == nil || field.placeholderString.length == 0) {
+    error = QStringLiteral("no native text field '%1' with a placeholder").arg(identifier);
+    return false;
+  }
+  // The size AppKit's own cell needs for the whole placeholder, as if it
+  // were the field's text; a copy leaves the field and its text alone.
+  NSTextFieldCell* probe = [field.cell copy];
+  probe.stringValue = field.placeholderString;
+  const double needed = [probe cellSizeForBounds:NSMakeRect(0, 0, CGFLOAT_MAX, CGFLOAT_MAX)].width;
+  qInfo().noquote() << QStringLiteral("Native placeholder width: %1 '%2' needs %3, has %4")
+                           .arg(identifier, qt(field.placeholderString))
+                           .arg(needed, 0, 'f', 1)
+                           .arg(field.bounds.size.width, 0, 'f', 1);
+  return controlBounds(identifier, needed, labelPattern, error);
 }
 
 bool formLayout(const QStringList& entries, QString& error) {
@@ -4951,6 +5124,41 @@ bool spannedHeading(const QString& identifier, const QRegularExpression& pattern
   return true;
 }
 
+bool firstVisibleRow(const QString& identifier, const QRegularExpression& pattern, QString& detail) {
+  NSView* native = findControl(identifier);
+  NSScrollView* scroll = [native isKindOfClass:NSScrollView.class] ? (NSScrollView*)native : native.enclosingScrollView;
+  NSTableView* table = [scroll.documentView isKindOfClass:NSTableView.class] ? (NSTableView*)scroll.documentView : nil;
+  if (table == nil || !viewVisible(table)) {
+    detail = QStringLiteral("no visible native table '%1'").arg(identifier);
+    return false;
+  }
+  [scroll layoutSubtreeIfNeeded];
+  // The first row wholly inside the clip view, below the header and other
+  // insets; read only, nothing is scrolled.
+  NSClipView* clip = scroll.contentView;
+  NSRect shown = clip.bounds;
+  shown.origin.y += clip.contentInsets.top;
+  shown.size.height = std::max<CGFloat>(0, shown.size.height - clip.contentInsets.top - clip.contentInsets.bottom);
+  shown = [table convertRect:shown fromView:clip];
+  const NSRange rows = [table rowsInRect:shown];
+  const NSInteger column = std::max<NSInteger>(0, [table columnWithIdentifier:@"0"]);
+  for (NSUInteger row = rows.location; row < NSMaxRange(rows); ++row) {
+    const NSInteger number = static_cast<NSInteger>(row);
+    if (!NSContainsRect(NSInsetRect(shown, -0.5, -0.5), [table rectOfRow:number])) continue;
+    NSView* cell = [table viewAtColumn:column row:number makeIfNecessary:NO];
+    NSTextField* field = [cell isKindOfClass:NSTableCellView.class] ? ((NSTableCellView*)cell).textField : nil;
+    const QString text = field != nil ? qt(field.stringValue) : QString();
+    detail = QStringLiteral("native '%1' first visible row %2 is '%3' (rows %4..%5 in view)")
+                 .arg(identifier).arg(qlonglong(number)).arg(text)
+                 .arg(qulonglong(rows.location)).arg(qulonglong(NSMaxRange(rows)) - 1);
+    if (!pattern.match(text).hasMatch()) return false;
+    qInfo().noquote() << QStringLiteral("Native first visible row: %1").arg(detail);
+    return true;
+  }
+  detail = QStringLiteral("native '%1' shows no whole row").arg(identifier);
+  return false;
+}
+
 bool colorField(const QString& identifier, const QString& color, const QString& words, bool placeholder,
                 const QString& accessibilityLabel, QString& error) {
   NSView* view = findControl(identifier);
@@ -5122,12 +5330,12 @@ bool pointerDoubleClick(const QString& identifier, QString& error) {
           .arg(identifier); return false;
     }
     window = view.window;
-    const NSPoint point = NSMakePoint(NSMidX(view.bounds), NSMidY(view.bounds));
     qInfo().noquote() << QStringLiteral("Native pointer double click: %1 click-count=%2")
         .arg(identifier).arg(count);
-    // The window hit-tests both genuine down/up pairs. No selector,
-    // table selection or double-action is invoked by this helper.
-    if (!pointerEvents(view, point, point, error, count)) return false;
+    // The window hit-tests both genuine down/up pairs at the current
+    // visible centre, resolved after scrolling/layout for each press. No
+    // selector, table selection or double-action is invoked by this helper.
+    if (!pointerEvents(view, NSZeroPoint, NSZeroPoint, error, count, true, identifier)) return false;
   }
   return true;
 }

@@ -40,27 +40,47 @@ int connectionError(const QString& message) {
   return 1;
 }
 
-bool authenticate(QTcpSocket& socket, const mcp::Endpoint& endpoint, int timeoutMs) {
+bool authenticate(QTcpSocket& socket, const mcp::Endpoint& endpoint, int timeoutMs, const QString& chat = QString()) {
   socket.setReadBufferSize(kMaxFrameBytes + 1);
-  socket.connectToHost(QStringLiteral("127.0.0.1"), endpoint.port);
-  if (!socket.waitForConnected(timeoutMs)) {
-    return false;
-  }
-  const QByteArray authentication = mcp::encodeAuth(endpoint);
-  if (socket.write(authentication) != authentication.size()) {
-    return false;
-  }
   QElapsedTimer waiting;
   waiting.start();
-  while (!socket.canReadLine()) {
-    const qint64 remaining = timeoutMs - waiting.elapsed();
-    if (remaining <= 0 || !socket.waitForReadyRead(static_cast<int>(remaining)) ||
-        socket.bytesAvailable() > kMaxFrameBytes) {
+  // A connection the listener closed before it answered (it was among the
+  // oldest waiting ones while new connections came, mitcad#935) is opened
+  // again until the time is up; an answer, also a refusal, is final.
+  for (;;) {
+    const qint64 left = timeoutMs - waiting.elapsed();
+    if (left <= 0) {
       return false;
     }
+    socket.abort();
+    socket.connectToHost(QStringLiteral("127.0.0.1"), endpoint.port);
+    if (!socket.waitForConnected(static_cast<int>(left))) {
+      return false;
+    }
+    const QByteArray authentication = mcp::encodeAuth(endpoint, chat);
+    if (socket.write(authentication) != authentication.size()) {
+      return false;
+    }
+    bool closed = false;
+    while (!socket.canReadLine()) {
+      const qint64 remaining = timeoutMs - waiting.elapsed();
+      if (remaining <= 0 || socket.bytesAvailable() > kMaxFrameBytes) {
+        return false;
+      }
+      if (!socket.waitForReadyRead(static_cast<int>(remaining))) {
+        closed = socket.state() != QAbstractSocket::ConnectedState;
+        break;
+      }
+    }
+    if (closed) {
+      continue;
+    }
+    if (!socket.canReadLine()) {
+      return false;
+    }
+    const QJsonDocument answer = QJsonDocument::fromJson(socket.readLine(kMaxFrameBytes + 1));
+    return answer.isObject() && answer.object().value(QStringLiteral("authenticated")) == QJsonValue(true);
   }
-  const QJsonDocument answer = QJsonDocument::fromJson(socket.readLine(kMaxFrameBytes + 1));
-  return answer.isObject() && answer.object().value(QStringLiteral("authenticated")) == QJsonValue(true);
 }
 
 // Private records can survive a crash. Only the instance owning the
@@ -227,13 +247,16 @@ int mcpListInstances() {
   return 0;
 }
 
-int mcpConnect(const std::string& instance) {
+int mcpConnect(const std::string& instance, const std::string& chatSession) {
   int argc = 1;
   char name[] = "mitcad-cli";
   char* argv[] = {name, nullptr};
   QCoreApplication app(argc, argv);
   QString error;
   const QString requested = QString::fromUtf8(instance.data(), static_cast<qsizetype>(instance.size()));
+  // The chat panel's marker of its own connection (mitcad#947), sent with
+  // the token: the window asks its user before some of its calls.
+  const QString chat = QString::fromUtf8(chatSession.data(), static_cast<qsizetype>(chatSession.size()));
   QTcpSocket socket;
   // Connecting allows the GUI to finish a busy event-loop turn; a quick
   // listing probe must not classify that live instance as absent.
@@ -248,7 +271,7 @@ int mcpConnect(const std::string& instance) {
     if (endpoints.size() != 1) {
       return connectionError(QStringLiteral("Several Mitcad instances are running; use --list-instances and --instance ID"));
     }
-    if (!authenticate(socket, endpoints.front(), kConnectTimeoutMs)) {
+    if (!authenticate(socket, endpoints.front(), kConnectTimeoutMs, chat)) {
       return connectionError(QStringLiteral("Mitcad refused authentication; rediscover its running instances"));
     }
   } else {
@@ -260,7 +283,7 @@ int mcpConnect(const std::string& instance) {
     }
     const auto named = std::find_if(records.cbegin(), records.cend(),
                                     [&](const mcp::Endpoint& record) { return record.instance == requested; });
-    if (named == records.cend() || !authenticate(socket, *named, kConnectTimeoutMs)) {
+    if (named == records.cend() || !authenticate(socket, *named, kConnectTimeoutMs, chat)) {
       return connectionError(QStringLiteral("No running Mitcad instance '%1'").arg(requested));
     }
   }

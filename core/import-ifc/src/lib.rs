@@ -43,7 +43,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use mitcad_ifc::IfcFile;
-use mitcad_ifc::geometry::{Decoder, Item};
+use mitcad_ifc::geometry::{Decoder, Item, TOO_MANY_ITEMS};
 use mitcad_ifc::math::{self, Matrix};
 use mitcad_ifc::model::{Model, Product, Style};
 use mitcad_ifc::schema::ProductKind;
@@ -505,6 +505,10 @@ impl<K: Kernel> Importer<'_, K> {
     }
 
     /// The items of a map moved by `m` (its mapped items' maps too).
+    /// `visits` counts the items expanded for one product; past
+    /// [`MAX_EXPANDED_ITEMS`] nothing more is expanded (see
+    /// [`too_many_expanded`]).
+    #[allow(clippy::too_many_arguments)]
     fn expand(
         &self,
         map: u64,
@@ -512,8 +516,12 @@ impl<K: Kernel> Importer<'_, K> {
         style: Option<&Style>,
         product: Option<&Product>,
         depth: usize,
+        visits: &mut usize,
         out: &mut Vec<(Item, Option<Style>)>,
     ) {
+        if *visits > MAX_EXPANDED_ITEMS {
+            return;
+        }
         let decoder = Decoder::new(self.file, &self.model.units);
         let Some(rep) = self.model.map_representation(self.file, map) else {
             out.push((
@@ -527,6 +535,10 @@ impl<K: Kernel> Importer<'_, K> {
             return;
         };
         for i in rep.items {
+            *visits += 1;
+            if *visits > MAX_EXPANDED_ITEMS {
+                return;
+            }
             let item = decoder.item(i);
             let own = self.model.style(i, product).or(style).cloned();
             match item {
@@ -540,6 +552,7 @@ impl<K: Kernel> Importer<'_, K> {
                         own.as_ref(),
                         product,
                         depth + 1,
+                        visits,
                         out,
                     );
                 }
@@ -585,6 +598,8 @@ impl<K: Kernel> Importer<'_, K> {
         };
         let decoder = Decoder::new(self.file, &model.units);
         let mut items: Vec<(Item, Option<Style>)> = Vec::new();
+        // The items expanded from maps for this product and its openings.
+        let mut visits = 0;
         for i in &rep.items {
             let item = decoder.item(*i);
             let style = model.style(*i, Some(p)).cloned();
@@ -602,7 +617,7 @@ impl<K: Kernel> Importer<'_, K> {
                                 .push(format!("map #{map} as an occurrence: {e}; copied instead")),
                         }
                     }
-                    self.expand(map, &m, style.as_ref(), Some(p), 0, &mut items);
+                    self.expand(map, &m, style.as_ref(), Some(p), 0, &mut visits, &mut items);
                 }
                 other => items.push((moved(&other, &to_component), style)),
             }
@@ -626,6 +641,7 @@ impl<K: Kernel> Importer<'_, K> {
                                 None,
                                 Some(op),
                                 0,
+                                &mut visits,
                                 &mut inner,
                             );
                             shapes.extend(inner.into_iter().map(|(i, _)| i));
@@ -635,6 +651,11 @@ impl<K: Kernel> Importer<'_, K> {
                 }
             }
             tools.push((*o, shapes));
+        }
+        if visits > MAX_EXPANDED_ITEMS {
+            // Not a part of the shape: none of it.
+            items = vec![(too_many_expanded(p.id, &p.kind), None)];
+            tools.clear();
         }
         let made = self.build(component, &p.label(), &p.global_id, items, tools);
         self.finish_element(p, line, made);
@@ -904,7 +925,19 @@ impl<K: Kernel> Importer<'_, K> {
             .add_component(Some(&name), parent, transform)
             .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
-        self.expand(map, &math::IDENTITY, None, Some(product), 0, &mut items);
+        let mut visits = 0;
+        self.expand(
+            map,
+            &math::IDENTITY,
+            None,
+            Some(product),
+            0,
+            &mut visits,
+            &mut items,
+        );
+        if visits > MAX_EXPANDED_ITEMS {
+            items = vec![(too_many_expanded(map, "IFCREPRESENTATIONMAP"), None)];
+        }
         let made = self.build(component, &name, "", items, Vec::new());
         let mut notes = made.notes.clone();
         notes.extend(made.failed.iter().map(|f| format!("not built: {f}")));
@@ -1188,6 +1221,22 @@ impl<K: Kernel> Importer<'_, K> {
 pub fn is_miss(error: &str) -> bool {
     error.contains("does not cut into any participant body")
         || error.contains("there are no bodies in the extrude direction")
+}
+
+/// How many items one product (with its openings), or one map's
+/// component, may expand from its mapped items, nested maps included
+/// (mitcad#930: maps that each map the one below twice would expand 2^16
+/// items at the nesting limit). A file's products expand a few dozen.
+const MAX_EXPANDED_ITEMS: usize = 10_000;
+
+/// What is left of a product's or a map's items when expanding its maps
+/// passed [`MAX_EXPANDED_ITEMS`]: a note, not a part of the shape.
+fn too_many_expanded(id: u64, kind: &str) -> Item {
+    Item::Unsupported {
+        id,
+        kind: kind.to_owned(),
+        why: format!("{TOO_MANY_ITEMS} (more than {MAX_EXPANDED_ITEMS} mapped items)"),
+    }
 }
 
 /// An item moved into a component, or an unsupported one that says why

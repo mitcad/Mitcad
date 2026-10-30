@@ -169,6 +169,68 @@ int assistantSetupTests() {
     CHECK(claudeDesktopApplicationInWindowsFolders(other.path()));
     CHECK(claudeDesktopInWindowsFolders(other.path(), QString()));
   }
+  // Claude Code and Codex outside PATH (mitcad#956): Claude Code's own
+  // installer's `.local/bin` and npm's global folder under the roaming
+  // application data, with Windows' suffixes, tested on every platform
+  // through the suffix list; on Windows by assistantExecutable itself.
+  {
+    QTemporaryDir home;
+    CHECK(home.isValid());
+    const QDir root(home.path());
+    const QString roaming = root.filePath(QStringLiteral("AppData/Roaming"));
+    const auto executableFile = [](const QString& path) {
+      return QDir().mkpath(QFileInfo(path).absolutePath()) && put(path, QByteArrayLiteral("x")) &&
+          QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    };
+    const QString claudeExe = root.filePath(QStringLiteral(".local/bin/claude.exe"));
+    const QString codexCmd = root.filePath(QStringLiteral("AppData/Roaming/npm/codex.cmd"));
+    CHECK(executableFile(claudeExe));
+    CHECK(executableFile(codexCmd));
+    // Windows' suffixes in PATHEXT's order, only these three; Windows' own
+    // order without them; none elsewhere.
+    const QStringList windowsSuffixes = assistantExecutableSuffixes(true, QStringLiteral(".COM;.EXE;.BAT;.CMD;.VBS;.JS"));
+    CHECK(windowsSuffixes == QStringList({QStringLiteral(".exe"), QStringLiteral(".bat"), QStringLiteral(".cmd")}));
+    CHECK(assistantExecutableSuffixes(true, QStringLiteral(".cmd; .EXE")) ==
+          QStringList({QStringLiteral(".cmd"), QStringLiteral(".exe")}));
+    CHECK(assistantExecutableSuffixes(true, QString()) == windowsSuffixes);
+    CHECK(assistantExecutableSuffixes(false, QStringLiteral(".EXE")) == QStringList({QString()}));
+    // The folders after PATH, the stored PATH's last and only once.
+    const QString stored = root.filePath(QStringLiteral("stored"));
+    const QStringList folders = assistantFallbackFolders(home.path(), roaming, {stored, root.filePath(QStringLiteral(".local/bin"))});
+    CHECK(folders == QStringList({root.filePath(QStringLiteral(".local/bin")), QDir(roaming).filePath(QStringLiteral("npm")),
+                                  root.filePath(QStringLiteral(".cargo/bin")), stored}));
+    CHECK(!assistantFallbackFolders(home.path(), QString(), {}).contains(QDir(roaming).filePath(QStringLiteral("npm"))));
+    CHECK(findAssistantExecutable(QStringLiteral("claude"), folders, windowsSuffixes) == QFileInfo(claudeExe).canonicalFilePath());
+    CHECK(findAssistantExecutable(QStringLiteral("codex"), folders, windowsSuffixes) == QFileInfo(codexCmd).canonicalFilePath());
+    CHECK(findAssistantExecutable(QStringLiteral("claude"), folders, {QString()}).isEmpty());
+    // A folder's suffixes in their order; an earlier folder first.
+    CHECK(executableFile(QDir(stored).filePath(QStringLiteral("tool.cmd"))));
+    CHECK(executableFile(QDir(stored).filePath(QStringLiteral("tool.exe"))));
+    CHECK(findAssistantExecutable(QStringLiteral("tool"), folders, windowsSuffixes).endsWith(QStringLiteral("tool.exe")));
+    CHECK(findAssistantExecutable(QStringLiteral("tool"), folders, {QStringLiteral(".cmd"), QStringLiteral(".exe")})
+              .endsWith(QStringLiteral("tool.cmd")));
+    CHECK(executableFile(root.filePath(QStringLiteral(".cargo/bin/tool.bat"))));
+    CHECK(findAssistantExecutable(QStringLiteral("tool"), folders, windowsSuffixes).endsWith(QStringLiteral("tool.bat")));
+    // A stored PATH: quotes removed, `%NAME%` expanded, an unknown name kept.
+    qputenv("MITCAD_TEST_STORED_HOME", QByteArrayLiteral("C:\\Users\\Example"));
+    CHECK(expandWindowsVariables(QStringLiteral("%MITCAD_TEST_STORED_HOME%\\.local\\bin")) ==
+          QStringLiteral("C:\\Users\\Example\\.local\\bin"));
+    CHECK(expandWindowsVariables(QStringLiteral("%MITCAD_TEST_NOT_SET_956%\\bin")) == QStringLiteral("%MITCAD_TEST_NOT_SET_956%\\bin"));
+    CHECK(windowsPathEntries(QStringLiteral("\"%MITCAD_TEST_STORED_HOME%\\npm\";;C:\\Tools ; ")) ==
+          QStringList({QStringLiteral("C:/Users/Example/npm"), QStringLiteral("C:/Tools")}));
+    qunsetenv("MITCAD_TEST_STORED_HOME");
+#ifdef Q_OS_WIN
+    // The home's own folders: `.local\bin\claude.exe`, `AppData\Roaming\npm\codex.cmd`.
+    CHECK(assistantExecutable(QStringLiteral("claude"), home.path()) == QFileInfo(claudeExe).canonicalFilePath());
+    CHECK(assistantExecutable(QStringLiteral("codex"), home.path()) == QFileInfo(codexCmd).canonicalFilePath());
+#else
+    // No suffix here: the installer's `claude`, never `claude.exe`.
+    CHECK(assistantExecutable(QStringLiteral("claude"), home.path()).isEmpty());
+    CHECK(executableFile(root.filePath(QStringLiteral(".local/bin/claude"))));
+    CHECK(assistantExecutable(QStringLiteral("claude"), home.path()) ==
+          QFileInfo(root.filePath(QStringLiteral(".local/bin/claude"))).canonicalFilePath());
+#endif
+  }
 #ifndef Q_OS_WIN
   const QString linked = directory.filePath(QStringLiteral("linked.toml"));
   CHECK(QFile::link(path, linked));

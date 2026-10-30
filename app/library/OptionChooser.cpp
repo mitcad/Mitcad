@@ -38,6 +38,23 @@ constexpr double kWide = 1e9;
 OptionChooser::OptionChooser(QWidget* parent) : QWidget(parent) {
   auto* layout = new QVBoxLayout(this);
   layout->setContentsMargins(0, 0, 0, 0);
+  // The Standard and Supplier filters (mitcad#949), shown when the rows
+  // name standards or suppliers' articles.
+  m_filters = new QWidget;
+  auto* filterForm = new QFormLayout(m_filters);
+  filterForm->setContentsMargins(0, 0, 0, 0);
+  m_standardFilter = new QComboBox;
+  m_standardFilter->setObjectName(QStringLiteral("rowFilterStandard"));
+  m_standardFilter->setToolTip(tr("Only the sizes of this standard; it changes no part"));
+  m_supplierFilter = new QComboBox;
+  m_supplierFilter->setObjectName(QStringLiteral("rowFilterSupplier"));
+  m_supplierFilter->setToolTip(tr("Only the sizes this supplier sells; it changes no part"));
+  filterForm->addRow(tr("Standar&d:"), m_standardFilter);
+  filterForm->addRow(tr("Suppli&er:"), m_supplierFilter);
+  m_filters->hide();
+  layout->addWidget(m_filters);
+  connect(m_standardFilter, &QComboBox::currentIndexChanged, this, [this] { filterChosen(); });
+  connect(m_supplierFilter, &QComboBox::currentIndexChanged, this, [this] { filterChosen(); });
   m_form = new QFormLayout;
   m_form->setContentsMargins(0, 0, 0, 0);
   layout->addLayout(m_form);
@@ -82,6 +99,20 @@ void OptionChooser::say(const QString& text, bool problem) {
 }
 
 void OptionChooser::setTable(const QJsonObject& configurations, const QString& row, const QJsonObject& parameters) {
+  m_table = configurations;
+  m_tableParameters = parameters;
+  if (!m_ownFilterRows) {
+    m_filterRows = configurations.value(QStringLiteral("rows")).toArray();
+    m_filterOrder.clear();
+    for (const QJsonValue& value : configurations.value(QStringLiteral("standards")).toArray()) {
+      m_filterOrder << value.toString();
+    }
+  }
+  fillFilters();
+  applyTable(configurations, row, parameters);
+}
+
+void OptionChooser::applyTable(const QJsonObject& configurations, const QString& row, const QJsonObject& parameters) {
   m_filling = true;
   clear();
   say(QString(), false);
@@ -92,12 +123,22 @@ void OptionChooser::setTable(const QJsonObject& configurations, const QString& r
   m_wanted = QJsonObject();
   m_open = static_cast<bool>(m_query) && isOpenTable(configurations);
   if (!m_open) {
-    setRows(configurations, row);
+    // The rows the filters leave (mitcad#949).
+    const QJsonObject shown = filteredTable(configurations, m_filter);
+    m_rows = shown.value(QStringLiteral("rows")).toArray();
+    setRows(shown, row);
     return;
   }
   // The values to start with: the row asked for, else the default row's
-  // (`config` gives the starting values, docs/configurations.md).
-  const QString first = row.isEmpty() ? str(configurations, "default") : row;
+  // (`config` gives the starting values, docs/configurations.md); with a
+  // filter on, a row it leaves (mitcad#949).
+  QString first = row.isEmpty() ? str(configurations, "default") : row;
+  if (!m_filter.isAll() && !rowPasses(filterRow(first), m_filter)) {
+    const QJsonArray passing = filteredRows(m_filterRows, m_filter);
+    if (!passing.isEmpty()) {
+      first = str(passing.first().toObject(), "name");
+    }
+  }
   QJsonObject start;
   for (const QJsonValue& value : m_rows) {
     if (!first.isEmpty() && str(value.toObject(), "name") == first) {
@@ -114,7 +155,9 @@ void OptionChooser::setTable(const QJsonObject& configurations, const QString& r
                              .arg(m_logName, m_answer.ok() ? QStringLiteral("refused") : m_answer.error);
     m_open = false;
     m_filling = true;
-    setRows(configurations, row);
+    const QJsonObject shown = filteredTable(configurations, m_filter);
+    m_rows = shown.value(QStringLiteral("rows")).toArray();
+    setRows(shown, row);
   }
 }
 
@@ -158,6 +201,153 @@ QJsonObject OptionChooser::parameters() const {
                                                                      : constantExpression(option, option.valueText));
   }
   return out;
+}
+
+QList<QWidget*> OptionChooser::fields() const {
+  QList<QWidget*> out;
+  if (!m_filters->isHidden()) {
+    out << m_standardFilter << m_supplierFilter;
+  }
+  out << m_fields;
+  return out;
+}
+
+// --- The Standard and Supplier filters (mitcad#949)
+
+void OptionChooser::setFilterRows(const QJsonArray& rows, const QStringList& standards) {
+  m_ownFilterRows = true;
+  m_filterRows = rows;
+  m_filterOrder = standards;
+  fillFilters();
+}
+
+void OptionChooser::setSupplierFilter(const QString& supplier, bool apply) {
+  m_wantedSupplier = supplier;
+  if (!apply) {
+    return;
+  }
+  const int at = supplier.isEmpty() ? 0 : m_supplierFilter->findData(supplier);
+  if (at >= 0 && at != m_supplierFilter->currentIndex()) {
+    m_supplierFilter->setCurrentIndex(at); // filterChosen follows
+  }
+}
+
+QJsonObject OptionChooser::filterRow(const QString& name) const {
+  if (name.isEmpty()) {
+    return {};
+  }
+  for (const QJsonValue& value : m_filterRows) {
+    if (str(value.toObject(), "name") == name) {
+      return value.toObject();
+    }
+  }
+  return {};
+}
+
+void OptionChooser::fillFilters() {
+  const QStringList standards = rowStandards(m_filterRows, m_filterOrder);
+  const QList<RowSupplier> suppliers = rowSuppliers(m_filterRows);
+  const QString keepStandard = m_filter.standard;
+  // The supplier chosen last (here or in the part grid), also when the
+  // rows before had none of it.
+  const QString keepSupplier = m_wantedSupplier;
+  {
+    const QSignalBlocker standardBlocker(m_standardFilter);
+    const QSignalBlocker supplierBlocker(m_supplierFilter);
+    m_standardFilter->clear();
+    m_standardFilter->addItem(tr("All"), QString());
+    for (const QString& standard : standards) {
+      m_standardFilter->addItem(standard == nonStandardTag() ? tr("Non-standard") : standard, standard);
+    }
+    m_supplierFilter->clear();
+    m_supplierFilter->addItem(tr("All"), QString());
+    for (const RowSupplier& supplier : suppliers) {
+      m_supplierFilter->addItem(supplier.name, supplier.id);
+    }
+    m_standardFilter->setCurrentIndex(std::max(0, m_standardFilter->findData(keepStandard)));
+    m_supplierFilter->setCurrentIndex(std::max(0, m_supplierFilter->findData(keepSupplier)));
+  }
+  m_filter.standard = m_standardFilter->currentData().toString();
+  m_filter.supplier = m_supplierFilter->currentData().toString();
+  m_standardFilter->setEnabled(!standards.isEmpty());
+  m_supplierFilter->setEnabled(!suppliers.isEmpty());
+  m_filters->setVisible(!standards.isEmpty() || !suppliers.isEmpty());
+}
+
+void OptionChooser::filterChosen() {
+  RowFilter chosen;
+  chosen.standard = m_standardFilter->currentData().toString();
+  chosen.supplier = m_supplierFilter->currentData().toString();
+  if (chosen == m_filter) {
+    return;
+  }
+  if (chosen.supplier != m_filter.supplier) {
+    m_wantedSupplier = chosen.supplier;
+  }
+  m_filter = chosen;
+  qInfo().noquote() << QStringLiteral("%1 filter: %2: %3 of %4 rows")
+                           .arg(m_logName, rowFilterText(m_filter))
+                           .arg(filteredRows(m_filterRows, m_filter).size())
+                           .arg(m_filterRows.size());
+  if (!m_open) {
+    // A closed table: its rows that match, the row chosen kept when it is
+    // one of them.
+    if (!m_table.isEmpty()) {
+      applyTable(m_table, m_row, m_tableParameters);
+    }
+  } else {
+    // An open table: on a row that matches, else the first that does.
+    const QJsonObject current = filterRow(m_row);
+    if (!m_filter.isAll() && (current.isEmpty() || !rowPasses(current, m_filter))) {
+      const QJsonArray passing = filteredRows(m_filterRows, m_filter);
+      if (!passing.isEmpty()) {
+        const QJsonObject row = passing.first().toObject();
+        QJsonObject wanted = m_wanted;
+        for (const PartOption& option : m_answer.options) {
+          const QString text = rowOptionText(row, option.name);
+          if (!option.driven && !text.isEmpty()) {
+            wanted.insert(option.name, queryValue(option, text));
+          }
+        }
+        settle(wanted, static_cast<int>(m_answer.options.size()) - 1);
+      }
+    } else {
+      showAnswer(m_answer);
+    }
+  }
+  logChoices(0);
+  emit filterChanged();
+}
+
+OptionsAnswer OptionChooser::narrowed(const OptionsAnswer& answer) const {
+  OptionsAnswer out = answer;
+  narrowAnswer(out, m_filterRows, m_filter);
+  return out;
+}
+
+void OptionChooser::logChoices(int from) const {
+  if (m_filter.isAll()) {
+    return;
+  }
+  if (!m_open) {
+    for (int i = std::max(0, from); i < m_combos.size() && i < m_selectors.size(); ++i) {
+      QStringList values;
+      for (int k = 0; k < m_combos[i]->count(); ++k) {
+        values << m_combos[i]->itemText(k);
+      }
+      qInfo().noquote() << QStringLiteral("%1 %2 choices (%3): %4")
+                               .arg(m_logName, m_selectors[i], rowFilterText(m_filter), values.join(QStringLiteral(", ")));
+    }
+    return;
+  }
+  const OptionsAnswer shown = narrowed(m_answer);
+  for (int i = std::max(0, from); i < shown.options.size(); ++i) {
+    const PartOption& option = shown.options[i];
+    if (option.kind == PartOption::Kind::List && !option.driven) {
+      qInfo().noquote() << QStringLiteral("%1 %2 choices (%3): %4")
+                               .arg(m_logName, option.name, rowFilterText(m_filter), option.allowedText());
+    }
+  }
 }
 
 QString OptionChooser::summary() const {
@@ -243,6 +433,10 @@ void OptionChooser::fill(int from) {
     }
   }
   m_filling = filling;
+  // The choices the filters leave, for the UI tests (mitcad#949).
+  if (!filling && from > 0) {
+    logChoices(from);
+  }
 }
 
 void OptionChooser::choose() {
@@ -385,7 +579,9 @@ bool OptionChooser::settle(const QJsonObject& wanted, int changed) {
   return true;
 }
 
-void OptionChooser::showAnswer(const OptionsAnswer& shown) {
+void OptionChooser::showAnswer(const OptionsAnswer& answer) {
+  // The list values the Standard and Supplier filters leave (mitcad#949).
+  const OptionsAnswer shown = narrowed(answer);
   QStringList names;
   QStringList kinds;
   for (const PartOption& option : shown.options) {

@@ -4,14 +4,33 @@
 //! settings) and the package's other files (a slicer's settings files),
 //! for reading a slicer's print settings. Nothing is checked of the
 //! geometry, and files of other models, images and G-code are left out.
+//!
+//! A package's entries are read whole into memory, so their declared sizes
+//! are checked against a budget before anything is read (mitcad#927): a
+//! few-MB package must not be able to make the reader allocate gigabytes.
 
-use mitcad_zip::Archive;
+use mitcad_zip::{Archive, DEFAULT_ENTRY_LIMIT, Entry};
 use roxmltree::{Document, Node};
 
 use crate::{Error, MODEL_RELATIONSHIP};
 
-/// The largest file read.
+/// The largest file read into [`Package::files`] (larger ones are left
+/// out), and the largest relationships part.
 const MAX_FILE: u64 = 64 << 20;
+
+/// The largest model part read. It is read only for its metadata, but a
+/// slicer's project may keep the meshes in it (hundreds of MB for a large
+/// mesh), so it takes the zip reader's default entry limit rather than
+/// [`MAX_FILE`]; not the large limit a mesh import opts in to, since the
+/// part is parsed whole for a few lines of metadata.
+const MAX_MODEL_PART: u64 = DEFAULT_ENTRY_LIMIT;
+
+/// The most bytes of all files read into [`Package::files`] together.
+const MAX_FILES_TOTAL: u64 = 256 << 20;
+
+/// The most entries a package may have: a slicer's project holds a few
+/// files per plate and object, far fewer.
+const MAX_ENTRIES: usize = 4096;
 
 /// The usual model part, when the relationships name none.
 const MODEL_PART: &str = "3D/3dmodel.model";
@@ -58,13 +77,35 @@ fn element(node: &Node<'_, '_>, name: &str) -> bool {
     node.is_element() && node.tag_name().name() == name
 }
 
+/// Refuses, before it is read, an entry that declares more than `limit`.
+fn check_size(entry: &Entry, limit: u64) -> Result<(), Error> {
+    if entry.size > limit {
+        return Err(Error(format!(
+            "{} declares {} bytes, more than the package's limit of {limit}",
+            entry.name, entry.size
+        )));
+    }
+    Ok(())
+}
+
 /// Reads a package's metadata, objects' metadata and other files.
 pub fn read_package(data: &[u8]) -> Result<Package, Error> {
     let archive =
         Archive::new(data.to_vec()).map_err(|e| Error(format!("not a zip package: {e}")))?;
-    let model_part = archive
-        .read_by_name("_rels/.rels")
-        .ok()
+    if archive.entries().len() > MAX_ENTRIES {
+        return Err(Error(format!(
+            "the package has {} entries, more than the limit of {MAX_ENTRIES}",
+            archive.entries().len()
+        )));
+    }
+    let relationships = match archive.find("_rels/.rels") {
+        Some(entry) => {
+            check_size(entry, MAX_FILE)?;
+            archive.read_with_limit(entry, MAX_FILE).ok()
+        }
+        None => None,
+    };
+    let model_part = relationships
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .and_then(|text| {
             let document = Document::parse(&text).ok()?;
@@ -77,8 +118,36 @@ pub fn read_package(data: &[u8]) -> Result<Package, Error> {
                 .map(|t| t.trim_start_matches('/').to_owned())
         })
         .unwrap_or_else(|| MODEL_PART.to_owned());
+    // The other files: all but the model part, other models, images and
+    // G-code, each up to MAX_FILE; their sum is checked before any is read.
+    let files: Vec<&Entry> = archive
+        .entries()
+        .iter()
+        .filter(|entry| {
+            let lower = entry.name.to_ascii_lowercase();
+            let geometry_or_image = [".model", ".png", ".jpg", ".jpeg", ".gcode", ".stl"]
+                .iter()
+                .any(|e| lower.ends_with(e));
+            let left_out = entry.is_dir() || entry.name == model_part || entry.size > MAX_FILE;
+            !(left_out || geometry_or_image)
+        })
+        .collect();
+    let total: u64 = files.iter().map(|entry| entry.size).sum();
+    if total > MAX_FILES_TOTAL {
+        return Err(Error(format!(
+            "the package's files declare {total} bytes, more than the limit of \
+             {MAX_FILES_TOTAL} in all"
+        )));
+    }
     let mut package = Package::default();
-    if let Ok(bytes) = archive.read_by_name(&model_part) {
+    let model = match archive.find(&model_part) {
+        Some(entry) => {
+            check_size(entry, MAX_MODEL_PART)?;
+            archive.read_with_limit(entry, MAX_MODEL_PART).ok()
+        }
+        None => None,
+    };
+    if let Some(bytes) = model {
         let text =
             String::from_utf8(bytes).map_err(|_| Error(format!("{model_part} is not UTF-8")))?;
         let document = Document::parse(&text).map_err(|e| Error(format!("{model_part}: {e}")))?;
@@ -116,17 +185,9 @@ pub fn read_package(data: &[u8]) -> Result<Package, Error> {
             }
         }
     }
-    for entry in archive.entries() {
-        let lower = entry.name.to_ascii_lowercase();
-        let geometry_or_image = [".model", ".png", ".jpg", ".jpeg", ".gcode", ".stl"]
-            .iter()
-            .any(|e| lower.ends_with(e));
-        if entry.is_dir() || entry.name == model_part || entry.size > MAX_FILE || geometry_or_image
-        {
-            continue;
-        }
+    for entry in files {
         let bytes = archive
-            .read(entry)
+            .read_with_limit(entry, MAX_FILE)
             .map_err(|e| Error(format!("{}: {e}", entry.name)))?;
         package.files.push((entry.name.clone(), bytes));
     }

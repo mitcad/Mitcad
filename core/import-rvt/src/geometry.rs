@@ -31,6 +31,19 @@ const MAX_SPLITS: usize = 10;
 /// Types placed in types are followed this deep.
 const DEPTH: usize = 6;
 
+/// Types placed per element at most, nested ones counted (mitcad#924):
+/// each type follows its placed types six levels deep, so a crafted file
+/// of a few types each placing the next a thousand times would place
+/// 10^18. Real elements place one type (a family instance) or a few
+/// hundred (a family's nested arrays); railings, curtain walls and
+/// stairs place theirs as elements of their own.
+const MAX_PLACED: usize = 100_000;
+
+/// Triangles per element at most before no more types are placed: what
+/// the placements copy (a type's mesh is triangulated once, then copied
+/// per placement). Real elements' meshes stay below a million.
+const MAX_TRIANGLES: usize = 10_000_000;
+
 /// An element's mesh (mm).
 #[derive(Debug, Clone, Default)]
 pub struct ElementMesh {
@@ -44,6 +57,10 @@ pub struct ElementMesh {
     /// Whether every edge joins two triangles, and the volume (mm³) then.
     pub closed: bool,
     pub volume: Option<f64>,
+    /// Types placed (nested ones counted, [`MAX_PLACED`]), and whether
+    /// the limits left placements out.
+    pub placed: usize,
+    pub placed_capped: bool,
 }
 
 impl ElementMesh {
@@ -278,13 +295,24 @@ fn add_grep(
         out.bodies += 1;
     }
     if depth >= DEPTH {
-        if !g.instances.is_empty() {
-            out.notes
-                .push("types placed deeper than six levels are left out".into());
+        const DEEP: &str = "types placed deeper than six levels are left out";
+        // (Once: a crafted file can reach this level many times.)
+        if !g.instances.is_empty() && !out.notes.iter().any(|n| n == DEEP) {
+            out.notes.push(DEEP.into());
         }
         return;
     }
     for p in &g.instances {
+        if out.placed >= MAX_PLACED || out.triangles.len() >= MAX_TRIANGLES {
+            if !out.placed_capped {
+                out.placed_capped = true;
+                out.notes.push(format!(
+                    "more than {MAX_PLACED} placed types or {MAX_TRIANGLES} triangles: the rest are left out"
+                ));
+            }
+            return;
+        }
+        out.placed += 1;
         let placed = compose(t, &p.transform);
         if let Some(e) = &p.embedded {
             add_grep(model, e, &placed, depth + 1, seen, cache, out);
@@ -790,6 +818,55 @@ pub(crate) mod tests {
                 .unwrap()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn placed_types_that_fan_out_stop_at_the_limit() {
+        // mitcad#924: an element placing type 11 a hundred times, types 11
+        // to 15 each placing the next a hundred times, type 16 empty: 10^12
+        // placements without the limit.
+        let fan = |symbol: i64| GRep {
+            instances: (0..100)
+                .map(|k| mitcad_rvt::brep::Placed {
+                    symbol: Some(symbol),
+                    transform: [
+                        1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, k as f64, 0.0, 0.0,
+                    ],
+                    embedded: None,
+                })
+                .collect(),
+            ..GRep::default()
+        };
+        let mut model = Model::default();
+        model.geometry.insert(1, fan(11));
+        for s in 11..16 {
+            model.geometry.insert(s, fan(s + 1));
+        }
+        model.geometry.insert(16, GRep::default());
+        let started = std::time::Instant::now();
+        let why = element_mesh(&model, 1, &mut Cache::new(), &HashSet::new())
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            started.elapsed().as_secs_f64() < 1.0,
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(why.contains("placed types"), "{why}");
+        let mut out = ElementMesh::default();
+        let mut seen = HashSet::new();
+        add_grep(
+            &model,
+            &model.geometry[&1],
+            &IDENTITY,
+            0,
+            &mut seen,
+            &mut Cache::new(),
+            &mut out,
+        );
+        assert_eq!(out.placed, MAX_PLACED);
+        assert!(out.placed_capped);
+        assert_eq!(out.notes.len(), 1, "{:?}", out.notes);
     }
 
     #[test]

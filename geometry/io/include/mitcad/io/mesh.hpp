@@ -109,6 +109,17 @@ void use_face_algorithms_for_tests(const occ::handle<IMeshTools_MeshAlgoFactory>
 // (mitcad#846): a face still not done by then is abandoned (mesh_in_place).
 constexpr double kMeshAbandonSeconds = 2.0;
 
+// The workers of abandoned meshings (mesh_in_place, mitcad#846) that have
+// not ended yet, in the whole process: each was triangulating a face, or
+// about to take the next, when its meshing was abandoned, and goes on
+// inside OCCT's mesher until the face ends (it may never), then releases
+// the meshing's data. While this is not 0, a process must end without its
+// static destructors (std::_Exit), which would tear down OCCT's and the C++
+// runtime's state under them and crash the process at its end (mitcad#936,
+// as for the imports' abandoned threads, mitcad#82): the application,
+// mitcad-cli and mitcad-geomtool do.
+std::size_t abandoned_faces();
+
 // The smallest surface deviation (mm) that keeps a face's mesh within
 // about `face_triangles` triangles: proportional to the integral of the
 // square root of the surface's Gaussian curvature over the face (a
@@ -208,8 +219,15 @@ std::size_t presentation_faces_meshed();
 // the meshing waits that long for the faces under way; a face still not
 // done is abandoned: its thread goes on in the background with what it
 // needs, and its result is discarded when it ends, never written into the
-// shape (MeshReport::abandoned). Without such a range, OCCT's thread pool
-// as before.
+// shape (MeshReport::abandoned, abandoned_faces). Without such a range,
+// OCCT's thread pool as before.
+//
+// A face whose triangulation throws, whatever the exception (OCCT's, a
+// standard one, any other), is left failed (MeshReport::failed) and the
+// other faces are meshed (mitcad#936); when that was an allocation that
+// failed (std::bad_alloc, OCCT's Standard_OutOfMemory), the meshing then
+// throws Error "triangulation: out of memory" (so does triangulate's;
+// mesh_all_in_place takes it as any exception of its joint meshing).
 bool mesh_in_place(const TopoDS_Shape& shape, const MeshOptions& options,
                    const Message_ProgressRange& range = Message_ProgressRange(), MeshReport* report = nullptr);
 

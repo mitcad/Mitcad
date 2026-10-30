@@ -57,6 +57,9 @@ mod solidcraft_import;
 // The .dwg import (mitcad#453).
 mod dwg_import;
 use dwg_import::{dwg_report_passes, dwg_report_text, dwg_write_test_file};
+// The AI chat panel's logic (mitcad#947).
+mod chat;
+use chat::{ChatStream, agent_chat, new_chat_stream};
 
 use cxx::SharedPtr;
 use mitcad_model::{BodyUid, FeatureUid, RegionKey};
@@ -634,6 +637,24 @@ mod ffi {
         /// `timeout_ms` for one: JSON {"events": [...], "lost", "closed"};
         /// at once when the hub is closed.
         fn events(self: &LiveHub, timeout_ms: u32) -> String;
+    }
+
+    // The AI chat panel (mitcad#947, chat.rs; core/mcp/src/chat.rs): the
+    // agents' command lines and messages, approvals, the undo merge and the
+    // history format as JSON requests, and the agents' output as panel
+    // events.
+
+    extern "Rust" {
+        /// One request ({"op": ...}); JSON with "error" when it fails.
+        fn agent_chat(request: &str) -> String;
+        type ChatStream;
+        /// The output stream of an agent ("claude", "codex").
+        fn new_chat_stream(agent: &str) -> Result<Box<ChatStream>>;
+        /// The panel events of one output line, a JSON array.
+        fn feed_line(self: &mut ChatStream, line: &str) -> String;
+        /// A control of the stream (Codex: start, message, interrupt): its
+        /// panel events, a JSON array, or an object with "error".
+        fn control(self: &mut ChatStream, request: &str) -> String;
     }
 }
 

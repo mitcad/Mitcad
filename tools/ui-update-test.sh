@@ -6,10 +6,15 @@
 # made for the test (MITCAD_UPDATE_TEST_CA, MITCAD_UPDATE_TEST_KEY); no
 # other host is contacted. The app takes itself for version 0.0.0
 # (MITCAD_TEST_VERSION), so that the build's own version is the release:
+#   0. Only a test build (CMake option MITCAD_UPDATE_TEST_HOOKS, on in the
+#      debug presets; mitcad#921) reads these variables. A build without
+#      the option (a release's configuration) is checked to ignore them:
+#      its own version, GitHub's addresses, its built-in key only, no
+#      request; then the test ends.
 #   1. Checks off: with the setting off, with the administrator's switch
 #      (MITCAD_NO_UPDATE_CHECK, Help > Check for Updates too), and in a
 #      build without a release key (the placeholder), Mitcad makes no
-#      request at all.
+#      request at all, the test's key set or not (then the test ends).
 #   2. At start-up a development build finds the release (through a
 #      redirect, as GitHub's latest release redirects) and only announces
 #      it, with where checks are turned off; the request tells the version,
@@ -138,6 +143,27 @@ export MITCAD_UPDATE_RELEASES_URL=$BASE/releases.json
 export MITCAD_UPDATE_TEST_KEY=$PUBLIC MITCAD_UPDATE_TEST_CA=$WORK/cert.pem MITCAD_TEST_VERSION=0.0.0
 unset MITCAD_NO_UPDATE_CHECK
 
+# Whether the build reads the variables above (mitcad#921).
+HOOKS=$(ui_update_test_hooks "$REAL_APP")
+if [ "$HOOKS" = OFF ]; then
+  echo "--- 0. A build without MITCAD_UPDATE_TEST_HOOKS ignores the tests' variables"
+  fresh_settings
+  # Its check would go to GitHub: checks off, the source is logged anyway.
+  MITCAD_NO_UPDATE_CHECK=1 ui_start_app
+  ui_expect_log "Updates: Mitcad $VERSION for linux-x64, " "its own version, not MITCAD_TEST_VERSION"
+  ui_expect_log "Update source: manifest at https://github.com/mitcad/Mitcad/releases/latest/download/update-manifest.json, releases at https://api.github.com/repos/mitcad/Mitcad/releases?per_page=20, " \
+    "GitHub's addresses, not MITCAD_UPDATE_URL nor MITCAD_UPDATE_RELEASES_URL"
+  ui_expect_log "Update source: this build ignores MITCAD_UPDATE_URL, MITCAD_UPDATE_RELEASES_URL, MITCAD_UPDATE_TEST_KEY, MITCAD_UPDATE_TEST_CA, MITCAD_TEST_VERSION (MITCAD_UPDATE_TEST_HOOKS off)" \
+    "the tests' variables are ignored"
+  grep -qE "and the test key|test certificate" "$UI_LOG" && ui_fail "the build took the test's key or certificate"
+  echo "ok   the built-in key only, no test certificate"
+  no_requests 4 "no request to the test's server"
+  ui_stop_app
+  echo "note the update's own steps need a test build (-DMITCAD_UPDATE_TEST_HOOKS=ON, the debug presets)"
+  ui_finish "UI update test (a build without the test hooks)"
+  exit 0
+fi
+
 echo "--- 1. Checks off: no request"
 fresh_settings
 printf '[updates]\nautomatic=false\n' > "$SETTINGS"
@@ -157,21 +183,30 @@ no_requests 4 "no request, at start-up or asked"
 ui_stop_app
 unset MITCAD_NO_UPDATE_CHECK
 if ! grep -qE '^[0-9a-fA-F]{64}$' "$ROOT/packaging/update-key.txt"; then
-  # The placeholder: without the test's key the build has none.
+  # The placeholder: no request, though the test's key is set (only the
+  # built-in key counts, mitcad#921). Nothing else can be checked then.
   fresh_settings
-  MITCAD_UPDATE_TEST_KEY="" ui_start_app
+  ui_start_app
   ui_mark
   ui_step "check for updates (search)"   ui_command "Check for Updates"
   ui_expect_new "Update notice (error): This build of MitCad has no release key, so it cannot verify updates. [Close]" \
     "a build without a release key says so"
-  no_requests 4 "no request without a release key, at start-up or asked"
+  no_requests 4 "no request without a release key, at start-up or asked, the test's key set"
   ui_stop_app
+  echo "note the update's other steps need a release key in packaging/update-key.txt"
+  ui_finish "UI update test (a build without a release key)"
+  exit 0
 fi
 
 echo "--- 2. A development build announces the release"
 fresh_settings
 ui_start_app
 ui_expect_log "Updates: Mitcad 0.0.0 for linux-x64, announce only: not an AppImage" "a development build announces only"
+ui_expect_log "Update source: manifest at $BASE/redirect/stable/update-manifest.json, releases at $BASE/releases.json, " \
+  "the test build takes the test's addresses"
+ui_expect_log " built-in release key(s) and the test key" "and the test's key"
+ui_expect_log "Update source: this test build reads MITCAD_UPDATE_URL, MITCAD_UPDATE_RELEASES_URL, MITCAD_UPDATE_TEST_KEY, MITCAD_UPDATE_TEST_CA, MITCAD_TEST_VERSION (MITCAD_UPDATE_TEST_HOOKS)" \
+  "and says that it reads the tests' variables"
 ui_expect_log "Update request redirected to https://127.0.0.1" "the HTTPS redirect is followed"
 ui_expect_log "Update notice (offer): MitCad $VERSION is available (this is 0.0.0). Download it from its release page. MitCad checks for updates once a day; Tools › Preferences turns that off. [Release Notes, Skip This Version, Later]" \
   "the notice: no Install, the release page, where checks are turned off"

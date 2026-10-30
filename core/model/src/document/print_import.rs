@@ -23,14 +23,23 @@ use crate::properties::{PropertyOwner, Source};
 /// The library an import's copies name as their origin.
 pub const IMPORT_ORIGIN: &str = "3mf";
 
-/// Reads a slicer's settings file.
+/// Reads a slicer's settings file. A panic of the reader (of a 3MF
+/// package, a preset or a bundle) is its error (mitcad#922): it runs in
+/// the application's process.
 pub fn read_print_file(path: &str, dialect: Option<Dialect>) -> Result<Imported, ModelError> {
     let data = std::fs::read(path).map_err(|e| invalid(format!("cannot read {path}: {e}")))?;
     let name = Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(path);
-    print_files::read_file(name, &data, dialect).map_err(|e| invalid(format!("{name}: {e}")))
+    crate::reader_guard::catch_panic(
+        path,
+        || {
+            print_files::read_file(name, &data, dialect)
+                .map_err(|e| invalid(format!("{name}: {e}")))
+        },
+        ModelError::Invalid,
+    )
 }
 
 impl<K: Kernel> Document<K> {

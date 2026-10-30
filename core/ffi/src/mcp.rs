@@ -134,13 +134,16 @@ fn validate_command(request: &Value) -> Result<(), String> {
         Some(ApiClass::Model) => {}
         Some(ApiClass::FileIo) if classes::file_path_read(request).is_some() => {
             let path = classes::file_path_read(request).unwrap_or_default();
+            // The client's texts, cut (mitcad#935): refusals are logged.
+            let (kind, path) = (mitcad_mcp::echoed(kind), mitcad_mcp::echoed(&path));
             return Err(format!(
                 "command '{kind}' is not available through MCP: it would read the file '{path}'; use embedded image data, stored text outlines or an installed font instead"
             ));
         }
         Some(class) => {
             return Err(format!(
-                "command '{kind}' is not available through MCP: it is a {} command; use document_save or model_export for output",
+                "command '{}' is not available through MCP: it is a {} command; use document_save or model_export for output",
+                mitcad_mcp::echoed(kind),
                 class.name()
             ));
         }
@@ -154,7 +157,8 @@ fn validate_command(request: &Value) -> Result<(), String> {
         })?;
         if classes::feature_class_with(definition) != ApiClass::Model {
             return Err(format!(
-                "feature type '{feature}' is not available through MCP"
+                "feature type '{}' is not available through MCP",
+                mitcad_mcp::echoed(feature)
             ));
         }
     }
@@ -204,7 +208,10 @@ fn validate_query(request: &Value) -> Result<(), String> {
     if !classes::external_query_allowed(kind)
         || (kind == "cache" && request["disk"].as_bool() == Some(true))
     {
-        return Err(format!("query '{kind}' is not available through MCP"));
+        return Err(format!(
+            "query '{}' is not available through MCP",
+            mitcad_mcp::echoed(kind)
+        ));
     }
     Ok(())
 }

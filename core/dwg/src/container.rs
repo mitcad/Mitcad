@@ -73,16 +73,42 @@ fn corrupt(msg: impl Into<String>) -> DwgError {
     DwgError::Corrupt(msg.into())
 }
 
+/// The `len` bytes from `at`, None when they are not all in `b` (also
+/// when `at + len` overflows: both are often fields of the file).
+pub(crate) fn span(b: &[u8], at: usize, len: usize) -> Option<&[u8]> {
+    b.get(at..at.checked_add(len)?)
+}
+
+/// The most bytes a section or a page of a file may claim: 64 times the
+/// file, at least 1 MiB. A size beyond it is a damaged field, refused
+/// before anything is allocated for it.
+pub(crate) fn size_limit(file: &[u8]) -> usize {
+    file.len().saturating_mul(64).max(1 << 20)
+}
+
+/// The largest page of a data section the format writes (decompressed).
+pub const MAX_PAGE_SIZE: usize = 0x7400;
+
 fn le32(b: &[u8], at: usize) -> Result<u32, DwgError> {
-    b.get(at..at + 4)
+    span(b, at, 4)
         .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-        .ok_or_else(|| corrupt(format!("the file ends before byte {}", at + 4)))
+        .ok_or_else(|| {
+            corrupt(format!(
+                "the file ends before byte {}",
+                at.saturating_add(4)
+            ))
+        })
 }
 
 fn le64(b: &[u8], at: usize) -> Result<u64, DwgError> {
-    b.get(at..at + 8)
+    span(b, at, 8)
         .map(|s| u64::from_le_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
-        .ok_or_else(|| corrupt(format!("the file ends before byte {}", at + 8)))
+        .ok_or_else(|| {
+            corrupt(format!(
+                "the file ends before byte {}",
+                at.saturating_add(8)
+            ))
+        })
 }
 
 /// The version of a file by its first six bytes.
@@ -198,7 +224,7 @@ pub fn r2004_header(file: &[u8]) -> Result<R2004Header, DwgError> {
     }
     Ok(R2004Header {
         page_map_id: le32(&h, 0x50)?,
-        page_map_address: le64(&h, 0x54)? + 0x100,
+        page_map_address: le64(&h, 0x54)?.saturating_add(0x100),
         section_map_id: le32(&h, 0x5c)?,
         page_count: le32(&h, 0x40)?,
     })
@@ -213,11 +239,18 @@ fn system_page(file: &[u8], address: usize, kind: u32) -> Result<Vec<u8>, DwgErr
             "the system page at {address:#x} is of type {found:#x}, not {kind:#x}"
         )));
     }
+    // `le32` above found four bytes at `address`: the additions below do
+    // not overflow.
     let size = le32(file, address + 4)? as usize;
     let compressed = le32(file, address + 8)? as usize;
     let method = le32(file, address + 12)?;
-    let data = file
-        .get(address + 0x14..address + 0x14 + compressed)
+    if size > size_limit(file) {
+        return Err(corrupt(format!(
+            "the system page at {address:#x} claims {size} bytes from a file of {}",
+            file.len()
+        )));
+    }
+    let data = span(file, address + 0x14, compressed)
         .ok_or_else(|| corrupt(format!("the system page at {address:#x} runs past the end")))?;
     if method == 2 {
         let mut out = lz::decompress(data, size)?;
@@ -256,7 +289,8 @@ fn section_map(data: &[u8]) -> Result<Vec<SectionInfo>, DwgError> {
             .ok_or_else(|| corrupt("the section map ends early"))?;
         let name = crate::bits::latin1(name_bytes);
         at += 0x60;
-        let mut pages = Vec::with_capacity(page_count);
+        // Each page takes 16 bytes of the map: no more than it holds.
+        let mut pages = Vec::with_capacity(page_count.min(data.len() / 16));
         for _ in 0..page_count {
             pages.push((le32(data, at)?, le32(data, at + 4)?, le64(data, at + 8)?));
             at += 16;
@@ -298,7 +332,7 @@ fn read_r2004(file: &[u8]) -> Result<Sections, DwgError> {
         } else if number > 0 {
             addresses.insert(number as u32, (address, size));
         }
-        address += u64::from(size);
+        address = address.saturating_add(u64::from(size));
     }
     let (map_address, _) = addresses
         .get(&header.section_map_id)
@@ -344,7 +378,7 @@ fn section_data(
     addresses: &BTreeMap<u32, (u64, u32)>,
 ) -> Result<Vec<u8>, DwgError> {
     let size = usize::try_from(info.size).map_err(|_| corrupt("a section too large"))?;
-    if size > file.len().saturating_mul(64).max(1 << 20) {
+    if size > size_limit(file) {
         return Err(corrupt(format!(
             "the section {} claims {size} bytes from a file of {}",
             info.name,
@@ -360,9 +394,8 @@ fn section_data(
                 info.name
             ))
         })?;
-        let address = address as usize;
-        let raw = file
-            .get(address..address + 32)
+        let address = usize::try_from(address).unwrap_or(usize::MAX);
+        let raw = span(file, address, 32)
             .ok_or_else(|| corrupt(format!("{}: page {number} lies past the end", info.name)))?;
         let mask = 0x4164_536b_u32 ^ address as u32;
         let mut head = [0u32; 8];
@@ -377,8 +410,7 @@ fn section_data(
             )));
         }
         let data_size = head[2] as usize;
-        let data = file
-            .get(address + 32..address + 32 + data_size)
+        let data = span(file, address + 32, data_size)
             .ok_or_else(|| corrupt(format!("{}: page {number} runs past the end", info.name)))?;
         let start = usize::try_from(start).map_err(|_| corrupt("a page offset too large"))?;
         if start >= size {
@@ -386,7 +418,10 @@ fn section_data(
         }
         let want = page_size.min(size - start);
         let page = if info.compressed {
-            lz::decompress(data, page_size.max(want))?
+            // The page size the map gives is a field of the file: the
+            // output may reach the format's page size or what the section
+            // still takes, no more (mitcad#931).
+            lz::decompress(data, page_size.min(MAX_PAGE_SIZE).max(want))?
         } else {
             data.to_vec()
         };
@@ -406,6 +441,15 @@ mod tests {
         assert_eq!(&m[..8], &[0x29, 0x23, 0xBE, 0x84, 0xE1, 0x6C, 0xD6, 0xAE]);
         // The specification lists 92 bytes; its last four.
         assert_eq!(&m[88..92], &[0x6B, 0xC4, 0x30, 0xB7]);
+    }
+
+    #[test]
+    fn spans_past_the_end_or_overflowing_are_none() {
+        let b = [1u8, 2, 3, 4];
+        assert_eq!(span(&b, 1, 2), Some(&b[1..3]));
+        assert_eq!(span(&b, 3, 2), None);
+        assert_eq!(span(&b, usize::MAX, 2), None);
+        assert!(le32(&b, usize::MAX - 1).is_err());
     }
 
     #[test]

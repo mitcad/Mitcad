@@ -82,6 +82,8 @@ pub mod face_revolve;
 pub mod display_mesh;
 // C++ exceptions under bridge calls as errors, tested (mitcad#937).
 pub mod exception_probe;
+// A Fillet's or Chamfer's picked edges as polylines (mitcad#957).
+pub mod input_edges;
 
 use std::sync::Arc;
 
@@ -2525,6 +2527,31 @@ impl Kernel for OcctKernel {
             // made (and the kernel's operations refuse a null shape).
             stand_in: SharedPtr::null,
         })
+    }
+
+    // Feature inputs drawn where they were (mitcad#957; input_edges.rs,
+    // geometry's input_edges.hpp).
+
+    fn edge_polylines(
+        &self,
+        shape: &Self::Shape,
+        edges: &[EdgeName],
+        faces: &[FaceName],
+        deflection: f64,
+        angle: f64,
+    ) -> Result<Vec<Vec<[f64; 3]>>, KernelError> {
+        let lines = input_edges::ffi::edge_polylines(
+            occt(shape)?,
+            &names(edges),
+            &face_names(faces),
+            deflection,
+            angle,
+        )
+        .map_err(failed)?;
+        Ok(lines
+            .into_iter()
+            .map(|line| line.points.chunks(3).map(|p| [p[0], p[1], p[2]]).collect())
+            .collect())
     }
 }
 

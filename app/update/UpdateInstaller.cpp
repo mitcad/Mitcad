@@ -20,6 +20,9 @@
 #include <sys/mount.h>
 #include <sys/xattr.h>
 #endif
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "UpdateSettings.hpp"
 #include "UpdaterChecks.hpp"
@@ -272,6 +275,37 @@ void Installation::removeLeftovers() const {
   }
   // The fixed folder of earlier releases.
   QDir(QDir::temp().filePath(QStringLiteral("mitcad-update"))).removeRecursively();
+}
+
+bool processHasAdministratorRights() {
+#ifdef _WIN32
+  SID_IDENTIFIER_AUTHORITY authority = SECURITY_NT_AUTHORITY;
+  PSID administrators = nullptr;
+  if (!AllocateAndInitializeSid(&authority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0,
+                                0, &administrators)) {
+    return false;
+  }
+  BOOL member = FALSE;
+  if (!CheckTokenMembership(nullptr, administrators, &member)) {
+    member = FALSE;
+  }
+  FreeSid(administrators);
+  return member != FALSE;
+#else
+  return false;
+#endif
+}
+
+bool restrictToUserRights(Installation& installation, bool testSource, bool administrator) {
+  if (!testSource || administrator || installation.kind != Installation::Kind::WindowsInstaller ||
+      !installation.allUsers) {
+    return false;
+  }
+  installation.kind = Installation::Kind::NotifyOnly;
+  installation.reason = QStringLiteral("an update from a test's source (MITCAD_UPDATE_URL, MITCAD_UPDATE_RELEASES_URL, "
+                                       "MITCAD_UPDATE_TEST_KEY or MITCAD_UPDATE_TEST_CA) never asks for administrator "
+                                       "rights, and this installation for all users would need them");
+  return true;
 }
 
 QStringList windowsUpdaterArguments(const Installation& installation, const QString& file, const QString& sha256,

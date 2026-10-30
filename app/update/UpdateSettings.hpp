@@ -6,6 +6,7 @@
 
 #include <QDateTime>
 #include <QString>
+#include <QStringList>
 
 namespace mitcad {
 
@@ -35,29 +36,52 @@ struct UpdateSettings {
 // request at all, Help > Check for Updates neither.
 bool updatesDisabledByAdministrator();
 
+// Whether this build reads the tests' environment variables of the updates
+// (MITCAD_UPDATE_URL, MITCAD_UPDATE_RELEASES_URL, MITCAD_UPDATE_TEST_KEY,
+// MITCAD_UPDATE_TEST_CA, MITCAD_TEST_VERSION): only a test build configured
+// with the CMake option MITCAD_UPDATE_TEST_HOOKS does (mitcad#921); a
+// release ignores them (docs/updates.md#the-test-hooks).
+bool updateTestHooksBuiltIn();
+
 // Where the releases are and what is checked with what.
 struct UpdateSource {
   // The stable channel's manifest: GitHub's latest release (which skips
-  // pre-releases); MITCAD_UPDATE_URL instead (HTTPS; a mirror, or a test).
+  // pre-releases); in a test build MITCAD_UPDATE_URL instead (HTTPS).
   QString manifestUrl;
   // The pre-release channel: GitHub's list of releases (the REST API),
-  // whose newest has the manifest; MITCAD_UPDATE_RELEASES_URL instead.
+  // whose newest has the manifest; in a test build
+  // MITCAD_UPDATE_RELEASES_URL instead.
   QString releasesUrl;
-  // The public keys a manifest may be signed with, in hex: the release key
-  // built in (none while it is the placeholder, and then no request is
-  // made; docs/updates.md), and in tests MITCAD_UPDATE_TEST_KEY.
+  // The public keys a manifest may be signed with, in hex: the release keys
+  // built in (`builtInKeys`), and in a test build MITCAD_UPDATE_TEST_KEY.
   QString keys;
-  // A PEM certificate the update requests trust besides the system's
-  // (MITCAD_UPDATE_TEST_CA: a test's local HTTPS server).
+  // The release keys built in alone: none while the key file holds the
+  // placeholder, and then no request is made at all, whatever test key is
+  // set (docs/updates.md).
+  QString builtInKeys;
+  // A PEM certificate the update requests trust besides the system's (in a
+  // test build MITCAD_UPDATE_TEST_CA: a test's local HTTPS server).
   QString testCertificates;
-  // The version compared with the releases: this build's, or in tests
-  // MITCAD_TEST_VERSION (never passed on to the Mitcad an update starts).
+  // The version compared with the releases: this build's, or in a test
+  // build MITCAD_TEST_VERSION (never passed on to the MitCad an update
+  // starts).
   QString currentVersion;
   // The manifest's name of this build's platform: "windows-x64",
   // "linux-x64", ..., or empty (announce only).
   QString platform;
+  // The tests' variables set (not empty) in the environment, which a test
+  // build took and a release ignored (for the log).
+  QStringList testVariables;
+  // A test build took an address, a key or a certificate from the
+  // environment: such an update never installs with administrator rights
+  // it asks for (restrictToUserRights, mitcad#921).
+  bool testSource = false;
 
   static UpdateSource fromEnvironment();
+  // The log's lines of the source: "Update source: manifest at <url>,
+  // releases at <url>, <keys>", and with test variables set whether this
+  // build took or ignored them (the update tests read them).
+  QStringList describe() const;
 };
 
 // The environment variable of the tests' version, dropped for the Mitcad an

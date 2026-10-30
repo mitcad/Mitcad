@@ -381,6 +381,14 @@ ConnectAssistantDialog::ConnectAssistantDialog(Host host, QWidget* parent)
   // Not found is a guess: a quiet way to set it up all the same.
   auto* anywayRow = new QHBoxLayout;
   anywayRow->addStretch();
+  // After How to install: look again without reopening the dialog.
+  m_checkAgain = new QPushButton(tr("Check again"));
+  m_checkAgain->setObjectName(QStringLiteral("assistantCheckAgain"));
+  m_checkAgain->setAutoDefault(false);
+  m_checkAgain->setFlat(true);
+  m_checkAgain->setCursor(Qt::PointingHandCursor);
+  m_checkAgain->hide();
+  anywayRow->addWidget(m_checkAgain);
   m_connectAnyway = new QPushButton(tr("Connect anyway"));
   m_connectAnyway->setObjectName(QStringLiteral("assistantConnectAnyway"));
   m_connectAnyway->setAutoDefault(false);
@@ -498,6 +506,14 @@ ConnectAssistantDialog::ConnectAssistantDialog(Host host, QWidget* parent)
   connect(m_clients, &QButtonGroup::idClicked, this, [this] { updateClient(); });
   connect(m_config, &QLineEdit::editingFinished, this, [this] { updateClient(); });
   connect(m_setup, &QPushButton::clicked, this, [this] { primaryAction(); });
+  connect(m_checkAgain, &QPushButton::clicked, this, [this] {
+    refreshConnection();
+    // Still not found: the button says so for a moment.
+    if (m_checkAgain->isVisibleTo(this)) {
+      m_checkAgain->setText(tr("Not found yet"));
+      QTimer::singleShot(1500, m_checkAgain, [this] { m_checkAgain->setText(tr("Check again")); });
+    }
+  });
   connect(m_connectAnyway, &QPushButton::clicked, this, [this] { connectAssistant(); });
   connect(m_openDesktop, &QPushButton::clicked, this, [this] { openClaudeDesktop(); });
   connect(changeFolder, &QPushButton::clicked, this, [this] {
@@ -586,7 +602,7 @@ void ConnectAssistantDialog::applyStyles() {
   for (QAbstractButton* button : m_clients->buttons()) button->setStyleSheet(tile);
   m_advancedToggle->setStyleSheet(QStringLiteral(
       "QToolButton { border: none; background: transparent; padding: 2px 0; }"));
-  for (QPushButton* quiet : {m_connectAnyway, m_openDesktop}) {
+  for (QPushButton* quiet : {m_checkAgain, m_connectAnyway, m_openDesktop}) {
     quiet->setStyleSheet(QStringLiteral(
         "QPushButton { border: none; background: transparent; color: palette(link); padding: 0 2px; }"
         "QPushButton:hover { text-decoration: underline; }"));
@@ -611,6 +627,8 @@ bool ConnectAssistantDialog::eventFilter(QObject* watched, QEvent* event) {
 void ConnectAssistantDialog::changeEvent(QEvent* event) {
   QDialog::changeEvent(event);
   if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ApplicationPaletteChange) applyStyles();
+  // Back from an installer or a terminal: look again at once.
+  if (event->type() == QEvent::ActivationChange && m_clients && m_clients->checkedButton()) refreshConnection();
 }
 
 void ConnectAssistantDialog::showEvent(QShowEvent* event) {
@@ -698,14 +716,18 @@ void ConnectAssistantDialog::updateClient() {
   m_copyConfiguration->setVisible(selected != AssistantClient::Other);
   m_configuration->setPlainText(manualConfiguration().trimmed());
   fitConfigurationHeight();
-  // A Codex settings file the CLI cannot address takes the configuration
-  // only: no command.
+  refreshConnection();
+}
+
+// A Codex settings file the CLI cannot address takes the configuration
+// only: no command. A client found outside PATH is named by its full path.
+void ConnectAssistantDialog::updateCommand() {
   const QString command = manualCommand();
+  m_commandBox->setVisible(!command.isEmpty());
+  if (command == m_command->text()) return;
   m_command->setText(command);
   m_command->setCursorPosition(0);
   m_command->setToolTip(command);
-  m_commandBox->setVisible(!command.isEmpty());
-  refreshConnection();
 }
 
 // The configuration's lines without empty room below them, up to
@@ -740,7 +762,9 @@ QString ConnectAssistantDialog::manualCommand() const {
   if (selected == AssistantClient::Codex && !standardCodexFile(configPath())) return {};
   const QString bridge = QDir::toNativeSeparators(m_bridge);
   const bool registration = selected == AssistantClient::ClaudeCode || selected == AssistantClient::Codex;
-  const QString program = registration ? (selected == AssistantClient::ClaudeCode ? QStringLiteral("claude") : QStringLiteral("codex")) : bridge;
+  const QString program = registration
+      ? assistantProgram(selected == AssistantClient::ClaudeCode ? QStringLiteral("claude") : QStringLiteral("codex"))
+      : bridge;
   const QStringList arguments = registration ? assistantRegistration(selected, bridge)
       : QStringList{QStringLiteral("mcp"), QStringLiteral("--connect")};
   const QString command = assistantCommand(program, arguments, windows);
@@ -836,6 +860,7 @@ void ConnectAssistantDialog::refreshConnection() {
   m_config->setEnabled(!busy);
   for (QPushButton* copy : {m_copyConfiguration, m_copyCommand}) copy->setEnabled(!m_bridge.isEmpty());
   if (auto* button = findChild<QPushButton*>(QStringLiteral("assistantCopyWindowCommand"))) button->setEnabled(!m_bridge.isEmpty());
+  updateCommand();
   QString state, text, action;
   bool anyway = false;
   if (m_bridge.isEmpty()) {
@@ -931,6 +956,9 @@ void ConnectAssistantDialog::refreshConnection() {
       : tr("Connect"));
   // The extension's file in the tooltip as well (also shown below the line).
   m_setup->setToolTip(action == QStringLiteral("reveal") ? QDir::toNativeSeparators(m_bundleSaved) : QString());
+  // Check again goes with How to install (Claude Code, Codex).
+  const bool checkAgain = state == QStringLiteral("not-installed") && selected != AssistantClient::ClaudeDesktop;
+  m_checkAgain->setVisible(checkAgain);
   m_connectAnyway->setVisible(anyway);
   m_connectAnyway->setEnabled(!busy);
   const bool openDesktop = action == QStringLiteral("reveal");
@@ -943,7 +971,7 @@ void ConnectAssistantDialog::refreshConnection() {
   // window fits its contents again.
   const QString shown = state + text + m_setup->text() + others.join(QLatin1Char(',')) +
       QString::number(int(m_result->isVisibleTo(this))) + QString::number(int(folderLine)) + QString::number(int(anyway)) +
-      QString::number(int(openDesktop)) +
+      QString::number(int(openDesktop)) + QString::number(int(checkAgain)) +
       QString::number(int(m_advanced->isVisibleTo(this))) + QString::number(int(m_configRow->isVisibleTo(this))) +
       QString::number(int(m_commandBox->isVisibleTo(this))) + QString::number(int(m_windowsRow->isVisibleTo(this))) +
       QString::number(m_configuration->maximumHeight());
@@ -1290,5 +1318,7 @@ bool ConnectAssistantDialog::grantFolder() {
   qInfo().noquote() << QStringLiteral("Assistant setup: folder allowed");
   return true;
 }
+
+bool claudeDesktopOnComputer() { return claudeDesktopApplicationFound(); }
 
 } // namespace mitcad::mcp

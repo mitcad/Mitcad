@@ -36,6 +36,12 @@ pub struct ViewSpec {
     pub smooth: bool,
     /// Exact edges first; false: a triangulation's only.
     pub exact: bool,
+    /// With `exact`: the quick path where the exact edges are slow, on
+    /// bodies with free-form faces (mitcad#962): a fine triangulation's
+    /// edges, drawn as lines and arcs where they follow them (the
+    /// projection is then `polygonal`). Drawings' views take it; cut sheets
+    /// do not, as they write the curves as they are.
+    pub quick: bool,
     /// A section view: `toward_eye` is the plane's normal.
     pub section: Option<CutPlane>,
     /// The largest distance of a polyline from the curve it stands for, mm.

@@ -20,6 +20,7 @@
 
 #include "../framework/ModelShapes.hpp"
 #include "../framework/Numbers.hpp"
+#include "SketchNormal.hpp"
 
 namespace mitcad::cmd {
 namespace {
@@ -950,7 +951,26 @@ std::optional<std::pair<gp_Pnt, gp_Dir>> profileNormal(const Selection& profiles
     if (frame.isEmpty()) {
       return std::nullopt;
     }
-    return std::make_pair(*center, gp_Dir(vectorOf(frame.value(QStringLiteral("normal")))));
+    // The frame is in the sketch's component's coordinates: into the
+    // design through every occurrence on the path the profiles are seen
+    // at (mitcad#958: a sketch in a turned occurrence pointed its arrow
+    // along the component's normal).
+    const QString path = profilesOccurrence(profiles, context);
+    const QJsonArray occurrences =
+        path.isEmpty() ? QJsonArray() : componentsOf(context).value(QStringLiteral("occurrences")).toArray();
+    const std::optional<gp_Dir> normal = sketchNormalInDesign(frame, occurrences, path);
+    if (!normal) {
+      return std::nullopt;
+    }
+    gp_Pnt at = *center;
+    // A profile without its occurrence is shown unplaced by itemShape: its
+    // middle in the component's coordinates too.
+    if (profiles.first().occurrence.isEmpty()) {
+      if (const std::optional<gp_Trsf> world = occurrenceWorldIn(occurrences, path)) {
+        at.Transform(*world);
+      }
+    }
+    return std::make_pair(at, *normal);
   } catch (const std::exception&) {
     return std::nullopt;
   }

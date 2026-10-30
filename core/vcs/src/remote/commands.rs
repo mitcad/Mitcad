@@ -595,6 +595,9 @@ pub(crate) fn describe(name: &str, answer: &Value) -> Option<String> {
                     )
                 })
                 .collect();
+            if let Some(message) = answer["untrusted_config"]["message"].as_str() {
+                let _ = writeln!(out, "warning: {message}");
+            }
             if answer["name"].is_null() && !remotes.is_empty() {
                 let _ = writeln!(
                     out,

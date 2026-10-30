@@ -176,6 +176,20 @@ pub fn check_folder(dir: &Path, manifest: &Manifest, cache: Option<&LibraryCache
                 }
             }
         }
+        // The rows' standards and articles (mitcad#949): rows of the design.
+        if !c.rows.is_empty() {
+            let rows = fs::read_to_string(dir.join(&c.path))
+                .map(|text| row_names(&text))
+                .unwrap_or_default();
+            for row in c.rows.keys() {
+                if !rows.contains(row) {
+                    out.errors.push(format!(
+                        "{}: rows names {row}, which is no configuration row of {}",
+                        c.id, c.path
+                    ));
+                }
+            }
+        }
     }
     let mut resolve =
         |library: &str, id: &str| resolve_reference(dir, manifest, cache, library, id);
@@ -446,6 +460,9 @@ pub(super) fn add_command(command: &Value) -> Result<Value, VcsError> {
         supplier_url: kept("supplier_url", old.supplier_url),
         // A new design: the rows' pictures of the old one may not match it.
         row_previews: Default::default(),
+        // The rows' standards and suppliers' articles (mitcad#949) stay:
+        // `library check` names a row the new design lacks.
+        rows: old.rows,
         build,
         mounts: mount_frames,
     };

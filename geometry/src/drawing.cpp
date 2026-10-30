@@ -3,8 +3,14 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <exception>
+#include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -31,9 +37,12 @@
 #include <HLRBRep_HLRToShape.hxx>
 #include <HLRBRep_PolyAlgo.hxx>
 #include <HLRBRep_PolyHLRToShape.hxx>
+#include <NCollection_IndexedMap.hxx>
 #include <Precision.hxx>
 #include <Standard_Failure.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Edge.hxx>
@@ -54,6 +63,138 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kTurn = 2.0 * kPi;
+
+// --- The trace (mitcad#962) ----------------------------------------------------
+
+// MITCAD_DRAWING_TRACE: a "drawing-trace:" line per projected view on
+// standard error, with the parts' faces and edges and the milliseconds of
+// each phase. Its value may also ask for more work, done only to measure:
+// "compare" times the other algorithm on the same parts (its lines thrown
+// away), "parts" projects each part alone with the exact algorithm.
+struct TraceMode {
+  bool on = false;
+  bool compare = false;
+  bool parts = false;
+};
+
+const TraceMode& trace_mode() {
+  static const TraceMode mode = [] {
+    TraceMode m;
+    std::string text;
+#ifdef _MSC_VER
+    char* value = nullptr;
+    std::size_t length = 0;
+    if (_dupenv_s(&value, &length, "MITCAD_DRAWING_TRACE") != 0 || value == nullptr) {
+      return m;
+    }
+    text = value;
+    std::free(value);
+#else
+    const char* value = std::getenv("MITCAD_DRAWING_TRACE");
+    if (value == nullptr) {
+      return m;
+    }
+    text = value;
+#endif
+    m.on = true;
+    m.compare = text.find("compare") != std::string::npos;
+    m.parts = text.find("parts") != std::string::npos;
+    return m;
+  }();
+  return mode;
+}
+
+using Clock = std::chrono::steady_clock;
+
+std::string milliseconds(Clock::duration time) {
+  char text[32];
+  std::snprintf(text, sizeof text, "%.1f", std::chrono::duration<double, std::milli>(time).count());
+  return text;
+}
+
+// The phases of one projection, printed when it finishes (trace_mode()).
+class ViewTrace {
+public:
+  explicit ViewTrace(std::string what)
+      : m_on(trace_mode().on), m_what(std::move(what)), m_start(Clock::now()), m_last(m_start) {}
+  ~ViewTrace() {
+    try {
+      finish();
+    } catch (...) {
+      // A trace line that could not be printed.
+    }
+  }
+  ViewTrace(const ViewTrace&) = delete;
+  ViewTrace& operator=(const ViewTrace&) = delete;
+
+  bool on() const { return m_on; }
+  void mark(const char* phase) {
+    if (!m_on) {
+      return;
+    }
+    const Clock::time_point now = Clock::now();
+    m_line += std::string(" ") + phase + "=" + milliseconds(now - m_last);
+    m_last = now;
+  }
+  void note(const std::string& text) {
+    if (m_on) {
+      m_line += " " + text;
+    }
+  }
+  // Prints the line (once).
+  void finish() {
+    if (!m_on) {
+      return;
+    }
+    m_on = false;
+    std::fprintf(stderr, "drawing-trace: %s total=%s ms%s\n", m_what.c_str(),
+                 milliseconds(Clock::now() - m_start).c_str(), m_line.c_str());
+    std::fflush(stderr);
+  }
+
+private:
+  bool m_on;
+  std::string m_what;
+  std::string m_line;
+  Clock::time_point m_start;
+  Clock::time_point m_last;
+};
+
+// The parts' faces (planes, other analytic surfaces and free-form ones:
+// B-splines, sweeps, offsets) and edges, for the trace.
+std::string shape_counts(const std::vector<TopoDS_Shape>& parts) {
+  int planes = 0;
+  int analytic = 0;
+  int freeform = 0;
+  int edges = 0;
+  for (const TopoDS_Shape& part : parts) {
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+    TopExp::MapShapes(part, TopAbs_FACE, faces);
+    for (int i = 1; i <= faces.Extent(); ++i) {
+      const BRepAdaptor_Surface surface(TopoDS::Face(faces(i)), false);
+      switch (surface.GetType()) {
+      case GeomAbs_Plane:
+        ++planes;
+        break;
+      case GeomAbs_Cylinder:
+      case GeomAbs_Cone:
+      case GeomAbs_Sphere:
+      case GeomAbs_Torus:
+        ++analytic;
+        break;
+      default:
+        ++freeform;
+        break;
+      }
+    }
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edge_map;
+    TopExp::MapShapes(part, TopAbs_EDGE, edge_map);
+    edges += edge_map.Extent();
+  }
+  return "parts=" + std::to_string(parts.size()) + " faces=" + std::to_string(planes + analytic + freeform) +
+         " (planes=" + std::to_string(planes) + " analytic=" + std::to_string(analytic) +
+         " freeform=" + std::to_string(freeform) + ") edges=" + std::to_string(edges);
+}
 
 // The view's 2D coordinates of a model point.
 struct ViewFrame {
@@ -211,56 +352,519 @@ void add_compound(const TopoDS_Shape& compound, bool visible, DrawnKind kind, do
   }
 }
 
-template <class Output>
-void collect(Output& out, const DrawingViewSpec& spec, DrawnView& view) {
-  add_compound(out.VCompound(), true, DrawnKind::Sharp, spec.deflection, view);
-  add_compound(out.OutLineVCompound(), true, DrawnKind::Outline, spec.deflection, view);
-  if (spec.smooth) {
-    add_compound(out.Rg1LineVCompound(), true, DrawnKind::Smooth, spec.deflection, view);
+// --- The polygonal algorithm's lines as lines and arcs (mitcad#962) -----------
+
+using Segment = std::array<Point2, 2>;
+
+double cross2(const Point2& a, const Point2& b) { return a[0] * b[1] - a[1] * b[0]; }
+double dot2(const Point2& a, const Point2& b) { return a[0] * b[0] + a[1] * b[1]; }
+Point2 minus2(const Point2& a, const Point2& b) { return {a[0] - b[0], a[1] - b[1]}; }
+
+// Whether the points from `from` to `to` lie within `tolerance` of the
+// segment between the two, in order along it.
+bool on_line(const std::vector<Point2>& points, std::size_t from, std::size_t to, double tolerance) {
+  const Point2 d = minus2(points[to], points[from]);
+  const double length = std::hypot(d[0], d[1]);
+  if (length < 1e-12) {
+    return false;
   }
-  if (spec.hidden) {
-    add_compound(out.HCompound(), false, DrawnKind::Sharp, spec.deflection, view);
-    add_compound(out.OutLineHCompound(), false, DrawnKind::Outline, spec.deflection, view);
-    if (spec.smooth) {
-      add_compound(out.Rg1LineHCompound(), false, DrawnKind::Smooth, spec.deflection, view);
+  const Point2 u{d[0] / length, d[1] / length};
+  double before = 0.0;
+  for (std::size_t k = from + 1; k < to; ++k) {
+    const Point2 v = minus2(points[k], points[from]);
+    const double along = dot2(v, u);
+    if (std::abs(cross2(u, v)) > tolerance || along < before - tolerance || along > length + tolerance) {
+      return false;
     }
+    before = std::max(before, along);
+  }
+  return true;
+}
+
+struct Circle {
+  Point2 center{0.0, 0.0};
+  double radius = 0.0;
+};
+
+// The circle nearest the points from `from` to `to` (algebraic least
+// squares: x² + y² + Dx + Ey + F = 0), unless they lie on a line or nearly.
+bool fit_circle(const std::vector<Point2>& points, std::size_t from, std::size_t to, Circle& circle) {
+  // About the first point, for precision.
+  const Point2 o = points[from];
+  double sxx = 0.0, sxy = 0.0, syy = 0.0, sx = 0.0, sy = 0.0, sxz = 0.0, syz = 0.0, sz = 0.0;
+  double n = 0.0;
+  for (std::size_t k = from; k <= to; ++k) {
+    const double x = points[k][0] - o[0];
+    const double y = points[k][1] - o[1];
+    const double z = x * x + y * y;
+    sxx += x * x;
+    sxy += x * y;
+    syy += y * y;
+    sx += x;
+    sy += y;
+    sxz += x * z;
+    syz += y * z;
+    sz += z;
+    n += 1.0;
+  }
+  // [sxx sxy sx; sxy syy sy; sx sy n] (D, E, F) = -(sxz, syz, sz), by
+  // Cramer's rule.
+  const auto det3 = [](double a, double b, double c, double d, double e, double f, double g, double h, double i) {
+    return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+  };
+  const double det = det3(sxx, sxy, sx, sxy, syy, sy, sx, sy, n);
+  if (!(std::abs(det) > 0.0) || !std::isfinite(det)) {
+    return false;
+  }
+  const double d = det3(-sxz, sxy, sx, -syz, syy, sy, -sz, sy, n) / det;
+  const double e = det3(sxx, -sxz, sx, sxy, -syz, sy, sx, -sz, n) / det;
+  const double f = det3(sxx, sxy, -sxz, sxy, syy, -syz, sx, sy, -sz) / det;
+  const double r2 = (d * d + e * e) / 4.0 - f;
+  if (!std::isfinite(r2) || r2 <= 0.0) {
+    return false;
+  }
+  circle.center = {o[0] - d / 2.0, o[1] - e / 2.0};
+  circle.radius = std::sqrt(r2);
+  // A circle much larger than the points' span is a line.
+  const Point2 span = minus2(points[to], points[from]);
+  const double chord = std::hypot(span[0], span[1]);
+  return std::isfinite(circle.radius) && (chord < 1e-12 || circle.radius < 50.0 * chord);
+}
+
+// Whether the points from `from` to `to` follow an arc of one circle within
+// `tolerance`, turning one way, at most once round, each segment's sagitta
+// within it too; `sweep` is the signed angle they turn through.
+bool on_arc(const std::vector<Point2>& points, std::size_t from, std::size_t to, double tolerance, Circle& circle,
+            double& sweep) {
+  if (!fit_circle(points, from, to, circle)) {
+    return false;
+  }
+  for (std::size_t k = from; k <= to; ++k) {
+    const Point2 v = minus2(points[k], circle.center);
+    if (std::abs(std::hypot(v[0], v[1]) - circle.radius) > tolerance) {
+      return false;
+    }
+  }
+  double total = 0.0;
+  int turning = 0;
+  for (std::size_t k = from; k < to; ++k) {
+    const Point2 a = minus2(points[k], circle.center);
+    const Point2 b = minus2(points[k + 1], circle.center);
+    const double delta = std::atan2(cross2(a, b), dot2(a, b));
+    const int sign = delta > 0.0 ? 1 : (delta < 0.0 ? -1 : 0);
+    if (sign == 0 || (turning != 0 && sign != turning)) {
+      return false;
+    }
+    turning = sign;
+    if (circle.radius * (1.0 - std::cos(delta / 2.0)) > tolerance) {
+      return false;
+    }
+    total += delta;
+  }
+  if (std::abs(total) > kTurn + 1e-9) {
+    return false;
+  }
+  sweep = total;
+  return true;
+}
+
+// Chains of segments joined end to end: through the points where exactly
+// two of them meet; a closed one ends at its first point.
+struct Chain {
+  std::vector<Point2> points;
+  bool closed = false;
+};
+
+std::vector<Chain> chains_of(const std::vector<Segment>& segments) {
+  using Key = std::pair<long long, long long>;
+  const auto key_of = [](const Point2& p) { return Key{std::llround(p[0] * 1e7), std::llround(p[1] * 1e7)}; };
+  std::map<Key, std::size_t> ids;
+  std::vector<Point2> nodes;
+  std::vector<std::vector<std::size_t>> at; // the segments at each node
+  std::vector<std::array<std::size_t, 2>> ends;
+  std::set<std::pair<std::size_t, std::size_t>> seen;
+  const auto node_of = [&](const Point2& p) {
+    const auto found = ids.find(key_of(p));
+    if (found != ids.end()) {
+      return found->second;
+    }
+    ids.emplace(key_of(p), nodes.size());
+    nodes.push_back(p);
+    at.emplace_back();
+    return nodes.size() - 1;
+  };
+  for (const Segment& segment : segments) {
+    const std::size_t a = node_of(segment[0]);
+    const std::size_t b = node_of(segment[1]);
+    // Points and segments given twice once.
+    if (a == b || !seen.insert({std::min(a, b), std::max(a, b)}).second) {
+      continue;
+    }
+    at[a].push_back(ends.size());
+    at[b].push_back(ends.size());
+    ends.push_back({a, b});
+  }
+  std::vector<bool> used(ends.size(), false);
+  const auto walk = [&](std::size_t start, std::size_t first) {
+    Chain chain;
+    chain.points.push_back(nodes[start]);
+    std::size_t node = start;
+    std::size_t segment = first;
+    for (;;) {
+      used[segment] = true;
+      node = ends[segment][0] == node ? ends[segment][1] : ends[segment][0];
+      chain.points.push_back(nodes[node]);
+      if (at[node].size() != 2) {
+        break;
+      }
+      const std::size_t next = at[node][0] == segment ? at[node][1] : at[node][0];
+      if (used[next]) {
+        break;
+      }
+      segment = next;
+    }
+    chain.closed = node == start && chain.points.size() > 3;
+    return chain;
+  };
+  std::vector<Chain> chains;
+  for (std::size_t n = 0; n < nodes.size(); ++n) {
+    if (at[n].size() == 2) {
+      continue;
+    }
+    for (const std::size_t s : at[n]) {
+      if (!used[s]) {
+        chains.push_back(walk(n, s));
+      }
+    }
+  }
+  // The rest are loops.
+  for (std::size_t s = 0; s < ends.size(); ++s) {
+    if (!used[s]) {
+      chains.push_back(walk(ends[s][0], s));
+    }
+  }
+  return chains;
+}
+
+// A loop from its sharpest corner, so that a line or an arc is not cut
+// where the loop happens to start.
+void from_sharpest_corner(std::vector<Point2>& loop) {
+  const std::size_t n = loop.size() - 1; // the last point is the first
+  std::size_t best = 0;
+  double sharpest = -1.0;
+  for (std::size_t k = 0; k < n; ++k) {
+    const Point2 in = minus2(loop[k], loop[(k + n - 1) % n]);
+    const Point2 out = minus2(loop[(k + 1) % n], loop[k]);
+    const double turn = std::abs(std::atan2(cross2(in, out), dot2(in, out)));
+    if (turn > sharpest) {
+      sharpest = turn;
+      best = k;
+    }
+  }
+  const auto corner = loop.begin() + static_cast<std::ptrdiff_t>(best);
+  std::vector<Point2> rotated(corner, loop.begin() + static_cast<std::ptrdiff_t>(n));
+  rotated.insert(rotated.end(), loop.begin(), corner);
+  rotated.push_back(rotated.front());
+  loop = std::move(rotated);
+}
+
+// A chain as lines, arcs and polylines (fit_segments).
+void add_fitted(Chain chain, bool visible, DrawnKind kind, double tolerance, std::vector<DrawnCurve>& out) {
+  std::vector<Point2>& points = chain.points;
+  const auto curve = [&](DrawnCurve::Type type) {
+    DrawnCurve c;
+    c.visible = visible;
+    c.kind = kind;
+    c.type = type;
+    return c;
+  };
+  const auto add_arc = [&](const Circle& circle, double sweep, const Point2& first, const Point2& last) {
+    DrawnCurve c = curve(DrawnCurve::Type::Arc);
+    c.center = circle.center;
+    c.radius = circle.radius;
+    if (std::abs(sweep) > kTurn - 1e-6) {
+      c.start = 0.0;
+      c.end = kTurn;
+    } else {
+      // Counter-clockwise: from the first point when the chain turns that
+      // way, else from the last.
+      const Point2 from = minus2(sweep > 0.0 ? first : last, circle.center);
+      c.start = normalized_angle(std::atan2(from[1], from[0]));
+      c.end = c.start + std::abs(sweep);
+    }
+    out.push_back(std::move(c));
+  };
+  if (points.size() < 2) {
+    return;
+  }
+  if (chain.closed) {
+    Circle circle;
+    double sweep = 0.0;
+    if (points.size() > 4 && on_arc(points, 0, points.size() - 1, tolerance, circle, sweep) &&
+        std::abs(sweep) > kTurn - 1e-6) {
+      add_arc(circle, sweep, points.front(), points.back());
+      return;
+    }
+    from_sharpest_corner(points);
+  }
+  // Single segments, drawn as polylines broken at corners sharper than the
+  // triangulation turns between its chords (a polygon's sides are lines).
+  std::vector<Point2> loose;
+  const auto piece = [&](std::size_t from, std::size_t to) {
+    if (to == from + 1) {
+      DrawnCurve c = curve(DrawnCurve::Type::Line);
+      c.points = {loose[from], loose[to]};
+      out.push_back(std::move(c));
+    } else {
+      DrawnCurve c = curve(DrawnCurve::Type::Polyline);
+      c.points.assign(loose.begin() + static_cast<std::ptrdiff_t>(from),
+                      loose.begin() + static_cast<std::ptrdiff_t>(to) + 1);
+      out.push_back(std::move(c));
+    }
+  };
+  const auto flush = [&] {
+    constexpr double kCorner = 0.6; // radians
+    std::size_t start = 0;
+    for (std::size_t k = 1; k < loose.size(); ++k) {
+      bool corner = k + 1 == loose.size();
+      if (!corner) {
+        const Point2 in = minus2(loose[k], loose[k - 1]);
+        const Point2 onward = minus2(loose[k + 1], loose[k]);
+        corner = std::abs(std::atan2(cross2(in, onward), dot2(in, onward))) > kCorner;
+      }
+      if (corner) {
+        piece(start, k);
+        start = k;
+      }
+    }
+    loose.clear();
+  };
+  const std::size_t last = points.size() - 1;
+  std::size_t i = 0;
+  while (i < last) {
+    std::size_t line_end = i + 1;
+    while (line_end < last && on_line(points, i, line_end + 1, tolerance)) {
+      ++line_end;
+    }
+    // An arc of three segments at least.
+    std::size_t arc_end = i;
+    Circle circle;
+    double sweep = 0.0;
+    for (std::size_t j = i + 3; j <= last; ++j) {
+      Circle longer;
+      double turned = 0.0;
+      if (!on_arc(points, i, j, tolerance, longer, turned)) {
+        break;
+      }
+      arc_end = j;
+      circle = longer;
+      sweep = turned;
+    }
+    if (arc_end > line_end) {
+      flush();
+      add_arc(circle, sweep, points[i], points[arc_end]);
+      i = arc_end;
+    } else if (line_end > i + 1) {
+      flush();
+      DrawnCurve c = curve(DrawnCurve::Type::Line);
+      c.points = {points[i], points[line_end]};
+      out.push_back(std::move(c));
+      i = line_end;
+    } else {
+      if (loose.empty()) {
+        loose.push_back(points[i]);
+      }
+      loose.push_back(points[i + 1]);
+      ++i;
+    }
+  }
+  flush();
+}
+
+std::vector<DrawnCurve> fitted(const std::vector<Segment>& segments, bool visible, DrawnKind kind, double tolerance) {
+  std::vector<DrawnCurve> out;
+  for (Chain& chain : chains_of(segments)) {
+    add_fitted(std::move(chain), visible, kind, tolerance, out);
+  }
+  return out;
+}
+
+// A polygonal algorithm's compound: its segments fitted, any other edge as
+// it is.
+void add_polygonal(const TopoDS_Shape& compound, bool visible, DrawnKind kind, double deflection, double tolerance,
+                   DrawnView& view) {
+  if (compound.IsNull()) {
+    return;
+  }
+  std::vector<Segment> segments;
+  for (TopExp_Explorer it(compound, TopAbs_EDGE); it.More(); it.Next()) {
+    const TopoDS_Edge& edge = TopoDS::Edge(it.Current());
+    if (BRep_Tool::Degenerated(edge)) {
+      continue;
+    }
+    const BRepAdaptor_Curve curve(edge);
+    if (curve.GetType() != GeomAbs_Line) {
+      add_projected(edge, visible, kind, deflection, view);
+      continue;
+    }
+    const gp_Pnt a = curve.Value(curve.FirstParameter());
+    const gp_Pnt b = curve.Value(curve.LastParameter());
+    segments.push_back({Point2{a.X(), a.Y()}, Point2{b.X(), b.Y()}});
+  }
+  for (DrawnCurve& c : fitted(segments, visible, kind, tolerance)) {
+    view.curves.push_back(std::move(c));
   }
 }
 
+// The deviation the quick path's triangulation may have: a 2000th of the
+// shapes' size (the diagonal of their box), 0.06 mm on a 120 mm assembly,
+// a tenth of a thin line at the scale a sheet shows such a view; at least
+// the view's deflection.
+double quick_deflection(const std::vector<TopoDS_Shape>& parts, double deflection) {
+  Bnd_Box box;
+  for (const TopoDS_Shape& part : parts) {
+    BRepBndLib::Add(part, box);
+  }
+  const double size = box.IsVoid() ? 1.0 : std::sqrt(box.SquareExtent());
+  return std::max(deflection, size * 5e-4);
+}
+
+// Whether a face is free-form: not a plane, a cylinder, a cone, a sphere or
+// a torus. The exact algorithm is slow on such faces (mitcad#962: a modelled
+// thread's took seconds alone).
+bool has_free_form_faces(const std::vector<TopoDS_Shape>& parts) {
+  for (const TopoDS_Shape& part : parts) {
+    for (TopExp_Explorer it(part, TopAbs_FACE); it.More(); it.Next()) {
+      const BRepAdaptor_Surface surface(TopoDS::Face(it.Current()), false);
+      switch (surface.GetType()) {
+      case GeomAbs_Plane:
+      case GeomAbs_Cylinder:
+      case GeomAbs_Cone:
+      case GeomAbs_Sphere:
+      case GeomAbs_Torus:
+        break;
+      default:
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// The algorithm's lines (its compounds, made when they are asked for:
+// "extract" in the trace), then each as a drawn curve ("convert"): fitted
+// (add_polygonal) when `tolerance` is given.
+template <class Output>
+void collect(Output& out, const DrawingViewSpec& spec, DrawnView& view, ViewTrace& trace, double tolerance = 0.0) {
+  struct Lines {
+    TopoDS_Shape compound;
+    bool visible;
+    DrawnKind kind;
+  };
+  std::vector<Lines> lines;
+  lines.push_back({out.VCompound(), true, DrawnKind::Sharp});
+  lines.push_back({out.OutLineVCompound(), true, DrawnKind::Outline});
+  if (spec.smooth) {
+    lines.push_back({out.Rg1LineVCompound(), true, DrawnKind::Smooth});
+  }
+  if (spec.hidden) {
+    lines.push_back({out.HCompound(), false, DrawnKind::Sharp});
+    lines.push_back({out.OutLineHCompound(), false, DrawnKind::Outline});
+    if (spec.smooth) {
+      lines.push_back({out.Rg1LineHCompound(), false, DrawnKind::Smooth});
+    }
+  }
+  trace.mark("extract");
+  for (const Lines& l : lines) {
+    if (tolerance > 0.0) {
+      add_polygonal(l.compound, l.visible, l.kind, spec.deflection, tolerance, view);
+    } else {
+      add_compound(l.compound, l.visible, l.kind, spec.deflection, view);
+    }
+  }
+  trace.mark("convert");
+  trace.note("lines=" + std::to_string(view.curves.size()));
+}
+
 void project_exact(const std::vector<TopoDS_Shape>& parts, const HLRAlgo_Projector& projector,
-                   const DrawingViewSpec& spec, DrawnView& view) {
+                   const DrawingViewSpec& spec, DrawnView& view, ViewTrace& trace) {
   occ::handle<HLRBRep_Algo> algo = new HLRBRep_Algo();
   for (const TopoDS_Shape& part : parts) {
     algo->Add(part);
   }
   algo->Projector(projector);
+  trace.mark("load");
   algo->Update();
+  trace.mark("update");
   algo->Hide();
+  trace.mark("hide");
   HLRBRep_HLRToShape out(algo);
-  collect(out, spec, view);
+  collect(out, spec, view, trace);
 }
 
 // The polygonal algorithm works on triangles: of copies of the shapes, so
-// that the shapes themselves stay as they are.
+// that the shapes themselves stay as they are. The triangulation deviates
+// at most quick_deflection from the surfaces (their faces meshed in
+// parallel), and its lines are fitted within one and a half times that
+// (mitcad#962).
 void project_polygonal(const std::vector<TopoDS_Shape>& parts, const HLRAlgo_Projector& projector,
-                       const DrawingViewSpec& spec, DrawnView& view) {
+                       const DrawingViewSpec& spec, DrawnView& view, ViewTrace& trace) {
+  const double deflection = quick_deflection(parts, spec.deflection);
   occ::handle<HLRBRep_PolyAlgo> algo = new HLRBRep_PolyAlgo();
   for (const TopoDS_Shape& part : parts) {
     const bool mesh = detail::has_mesh_faces(part);
     TopoDS_Shape copy = BRepBuilderAPI_Copy(part, true, mesh).Shape();
     if (!mesh) {
-      Bnd_Box box;
-      BRepBndLib::Add(part, box);
-      const double size = box.IsVoid() ? 1.0 : std::sqrt(box.SquareExtent());
-      BRepMesh_IncrementalMesh mesher(copy, std::max(spec.deflection, size * 1e-3), false, 0.2, false);
+      BRepMesh_IncrementalMesh mesher(copy, deflection, false, 0.2, true);
     }
     algo->Load(copy);
   }
+  trace.mark("mesh");
   algo->Projector(projector);
   algo->Update();
+  trace.mark("update");
   HLRBRep_PolyHLRToShape out;
   out.Update(algo);
-  collect(out, spec, view);
+  collect(out, spec, view, trace, 1.5 * deflection);
+}
+
+// MITCAD_DRAWING_TRACE=compare: the time of the algorithm the view did not
+// use, on the same parts; its lines are thrown away.
+void trace_other(bool exact_used, const std::vector<TopoDS_Shape>& parts, const HLRAlgo_Projector& projector,
+                 const DrawingViewSpec& spec) {
+  ViewTrace trace(exact_used ? "compare polygonal" : "compare exact");
+  DrawnView scratch;
+  try {
+    if (exact_used) {
+      project_polygonal(parts, projector, spec, scratch, trace);
+    } else {
+      project_exact(parts, projector, spec, scratch, trace);
+    }
+  } catch (const Standard_Failure&) {
+    trace.note("failed");
+  } catch (const std::exception&) {
+    trace.note("failed");
+  }
+}
+
+// MITCAD_DRAWING_TRACE=parts: each part alone with the exact algorithm, its
+// index the shape's among those the view was given.
+void trace_parts(const std::vector<TopoDS_Shape>& parts, const std::vector<std::size_t>& indices,
+                 const HLRAlgo_Projector& projector, const DrawingViewSpec& spec) {
+  for (std::size_t i = 0; i < parts.size(); ++i) {
+    const std::vector<TopoDS_Shape> one{parts[i]};
+    ViewTrace trace("part " + std::to_string(indices[i]));
+    trace.note(shape_counts(one));
+    trace.mark("count");
+    DrawnView scratch;
+    try {
+      project_exact(one, projector, spec, scratch, trace);
+    } catch (const Standard_Failure&) {
+      trace.note("failed");
+    } catch (const std::exception&) {
+      trace.note("failed");
+    }
+  }
 }
 
 // The loops of the faces where the plane cuts the shape, in view
@@ -510,10 +1114,21 @@ DrawnView project_view(const std::vector<ShapePtr>& shapes, const DrawingViewSpe
     const gp_Ax2 axes(gp::Origin(), spec.toward_eye, spec.x_axis);
     const ViewFrame frame{axes.XDirection(), axes.YDirection()};
     const HLRAlgo_Projector projector(axes);
+    const TraceMode& mode = trace_mode();
+    ViewTrace trace("view");
+    if (trace.on()) {
+      char eye[96];
+      std::snprintf(eye, sizeof eye, "eye=(%.3f,%.3f,%.3f)", spec.toward_eye.X(), spec.toward_eye.Y(),
+                    spec.toward_eye.Z());
+      trace.note(std::string(eye) + " exact=" + (spec.exact ? "1" : "0") + " hidden=" + (spec.hidden ? "1" : "0") +
+                 " smooth=" + (spec.smooth ? "1" : "0") + " section=" + (spec.section ? "1" : "0"));
+    }
     DrawnView view;
     std::vector<TopoDS_Shape> parts;
+    std::vector<std::size_t> indices; // of the parts among the shapes, for the trace
     bool meshes = false;
-    for (const ShapePtr& shape : shapes) {
+    for (std::size_t i = 0; i < shapes.size(); ++i) {
+      const ShapePtr& shape = shapes[i];
       if (!shape) {
         continue;
       }
@@ -532,23 +1147,53 @@ DrawnView project_view(const std::vector<ShapePtr>& shapes, const DrawingViewSpe
       }
       meshes = meshes || detail::has_mesh_faces(part);
       parts.push_back(part);
+      indices.push_back(i);
     }
+    trace.mark("prepare");
     if (parts.empty()) {
       return view;
     }
-    if (spec.exact && !meshes) {
+    if (trace.on()) {
+      trace.note(shape_counts(parts));
+      trace.mark("count");
+    }
+    // The quick path where the exact algorithm is slow (mitcad#962).
+    const bool quick = spec.exact && spec.quick && !meshes && has_free_form_faces(parts);
+    if (spec.exact && !meshes && !quick) {
       DrawnView exact = view;
       try {
-        project_exact(parts, projector, spec, exact);
+        project_exact(parts, projector, spec, exact, trace);
+        trace.note("result=exact");
+        trace.finish();
+        if (mode.compare) {
+          trace_other(true, parts, projector, spec);
+        }
+        if (mode.parts) {
+          trace_parts(parts, indices, projector, spec);
+        }
         return exact;
       } catch (const Standard_Failure&) {
         // The polygonal algorithm below.
+        trace.mark("failed");
+        trace.note("exact-failed");
       }
     }
-    project_polygonal(parts, projector, spec, view);
+    project_polygonal(parts, projector, spec, view, trace);
     view.polygonal = true;
+    trace.note(quick ? "result=quick" : "result=polygonal");
+    trace.finish();
+    if (mode.compare && !meshes) {
+      trace_other(false, parts, projector, spec);
+    }
+    if (mode.parts && !meshes) {
+      trace_parts(parts, indices, projector, spec);
+    }
     return view;
   });
+}
+
+std::vector<DrawnCurve> fit_segments(const std::vector<std::array<Point2, 2>>& segments, double tolerance) {
+  return fitted(segments, true, DrawnKind::Sharp, tolerance);
 }
 
 std::vector<RoundHole> round_holes(const Shape& shape) {

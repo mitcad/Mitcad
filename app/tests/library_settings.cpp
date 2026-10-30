@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // The library sources' settings (mitcad#576): the defaults, Auto-update kept
 // with a source and read back, settings written before the key existed
-// (Auto-update off), the sources a start-up fetch takes, and added sources.
+// (Auto-update off), the sources a start-up fetch takes, added sources, and
+// the index's libraries an enabled source has left out (mitcad#949).
 #include "files/Libraries.hpp"
 
 #include <cstdio>
@@ -137,6 +138,46 @@ void addTests() {
   CHECK(normalLibraryUrl(text("https://example.invalid/a.git")) == QStringLiteral("https://example.invalid/a.git"));
 }
 
+// The index's libraries a browser lists (mitcad#949): an index library
+// whose repository is an enabled source's under another id is left out of
+// the part grid (the owner's duplicate Screws group), as are those the
+// search answer leaves out; the rest as before.
+void indexLibraryTests() {
+  using namespace mitcad;
+  const QJsonObject answer = QJsonDocument::fromJson(QByteArray(R"json({
+    "components": [{"id": "iso4762", "library": "mitcad-parts"}],
+    "libraries": [
+      {"id": "mitcad-fasteners", "url": "https://github.com/mitcad/parts/", "fetched": false},
+      {"id": "mitcad-parts", "url": "https://github.com/mitcad/parts.git", "fetched": true},
+      {"id": "brackets", "url": "https://example.invalid/brackets.git", "fetched": false}
+    ],
+    "left_out": [{"id": "old-nuts", "text": "old-nuts left out: superseded by mitcad-parts (https://github.com/mitcad/parts.git)"}]
+  })json")).object();
+  const QStringList sources{QStringLiteral("https://github.com/mitcad/parts.git"),
+                            QStringLiteral("https://github.com/mitcad/community-index.git")};
+  const auto ids = [](const QJsonArray& list) {
+    QStringList out;
+    for (const QJsonValue& value : list) {
+      out << value.toObject().value(QStringLiteral("id")).toString();
+    }
+    return out;
+  };
+  QStringList leftOut;
+  // Insert from Library: the fetched library's components are listed
+  // themselves; the old library under the parts repository is left out.
+  CHECK(ids(browserLibraries(answer, sources, false, &leftOut)) == QStringList{QStringLiteral("brackets")});
+  CHECK(leftOut.size() == 2);
+  CHECK(leftOut.contains(
+      QStringLiteral("mitcad-fasteners left out: same repository as https://github.com/mitcad/parts.git")));
+  CHECK(leftOut.first().startsWith(QStringLiteral("old-nuts left out: superseded by mitcad-parts")));
+  // The Community Library lists the fetched one too, never the old one.
+  CHECK(ids(browserLibraries(answer, sources, true)) ==
+        (QStringList{QStringLiteral("mitcad-parts"), QStringLiteral("brackets")}));
+  // The source disabled: the old library is offered again.
+  CHECK(ids(browserLibraries(answer, {sources.last()}, false)) ==
+        (QStringList{QStringLiteral("mitcad-fasteners"), QStringLiteral("brackets")}));
+}
+
 } // namespace
 
 int librarySettingsTests() {
@@ -155,6 +196,7 @@ int librarySettingsTests() {
   roundTripTests();
   oldSettingsTests();
   addTests();
+  indexLibraryTests();
   QSettings::setDefaultFormat(format);
   QCoreApplication::setOrganizationName(organization);
   QCoreApplication::setApplicationName(application);

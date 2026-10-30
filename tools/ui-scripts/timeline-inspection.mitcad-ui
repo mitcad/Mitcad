@@ -53,4 +53,18 @@ expect-timeline-hover none
 expect-timeline-tooltip '(?s)Later plane.*Rolled back.*No geometry to show'
 expect-view-image '${MITCAD_TEST_SHOTS}/baseline.png' same
 timeline-leave
+# A Fillet's picked edges are drawn where they were, its card names how
+# many, and they go with the selection (mitcad#957).
+mark
+click-logged '^Timeline Fillet1 at '
+timeline-leave
+expect-selection 1 0
+expect-log '^Feature inputs highlighted: Fillet1 edges 4$'
+expect-selection-info '(?s)Fillet: Fillet1.*4 edges'
+expect-view-image '${MITCAD_TEST_SHOTS}/baseline.png' changed
+screenshot '${MITCAD_TEST_SHOTS}/fillet-edges.png'
+key Escape
+expect-selection 0 0
+expect-log '^Feature inputs highlighted: none$'
+expect-view-image '${MITCAD_TEST_SHOTS}/baseline.png' same
 expect-never 'OCCT view event failed|The document was read while a job computes it|TestDriver: FAIL'

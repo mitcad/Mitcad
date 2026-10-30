@@ -169,6 +169,23 @@ void TitleBar::setAgentIndicator(QWidget* indicator) {
   update();
 }
 
+void TitleBar::setChatButton(QWidget* button) {
+  auto* row = qobject_cast<QHBoxLayout*>(layout());
+  if (row == nullptr || button == nullptr) {
+    return;
+  }
+  m_chatButton = button;
+  button->setParent(this);
+  button->setFixedHeight(kControlHeight);
+  row->insertWidget(row->indexOf(m_search), button);
+  button->show();
+  if (m_floatingRow) {
+    button->installEventFilter(this);
+    updateRowMask();
+  }
+  update();
+}
+
 void TitleBar::setFloatingRow(bool floating) {
   if (floating == m_floatingRow) {
     return;
@@ -182,7 +199,8 @@ void TitleBar::setFloatingRow(bool floating) {
   m_inset->setVisible(!floating);
   m_history->setCardMaterial(floating);
   for (QWidget* part :
-       std::initializer_list<QWidget*>{m_history, m_tabs, m_search, m_indicator.data(), m_agentIndicator.data()}) {
+       std::initializer_list<QWidget*>{m_history, m_tabs, m_search, m_indicator.data(), m_agentIndicator.data(),
+                                       m_chatButton.data()}) {
     if (part == nullptr) {
       continue;
     }
@@ -214,6 +232,7 @@ std::vector<std::pair<QString, QRect>> TitleBar::rowParts() const {
   add("titleTabs", m_tabs);
   add("titleIndicator", m_indicator.data());
   add("titleAgent", m_agentIndicator.data());
+  add("titleChat", m_chatButton.data());
   add("titleSearch", m_search);
   const QRect box = titleBox();
   if (!box.isEmpty()) {
@@ -359,7 +378,7 @@ TitleBar::TitleText TitleBar::titleText() const {
   const int freeLeft = m_tabs->geometry().right() + 16;
   // The leftmost of the indicators and the search field.
   const QWidget* right = m_search;
-  for (const QWidget* part : {m_agentIndicator.data(), m_indicator.data()}) {
+  for (const QWidget* part : {m_chatButton.data(), m_agentIndicator.data(), m_indicator.data()}) {
     if (part != nullptr && !part->isHidden()) {
       right = part;
     }

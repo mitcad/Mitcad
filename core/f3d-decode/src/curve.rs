@@ -99,6 +99,16 @@ fn p3_at(d: &[u8], p: usize) -> Option<P3> {
     Some([f64_at(d, p)?, f64_at(d, p + 8)?, f64_at(d, p + 16)?])
 }
 
+/// The highest spline degree read: the geometry kernel's B-spline curves
+/// go up to degree 25 (as the sketch splines' reader, `sketch::nurbs_at`),
+/// so a stored curve above it could not be built anyway (mitcad#934).
+const MAX_SPLINE_DEGREE: usize = 25;
+
+/// The most poles a stored spline may have (mitcad#934): with the degree
+/// capped, one evaluation (a span search over the poles, then de Boor's
+/// degree² steps) stays near 10^5 steps; an edge's spline has far fewer.
+const MAX_SPLINE_POLES: usize = 100_000;
+
 /// `u32 n | u32 n | u32 8 | n × (k × f64)` at `p`, and where it ends.
 fn array_at(d: &[u8], p: usize, k: usize) -> Option<(Vec<f64>, usize)> {
     let n = u32_at(d, p)? as usize;
@@ -154,8 +164,16 @@ fn parse(guid: &str, d: &[u8], p: usize) -> Option<(StoredCurve, usize)> {
                 return None;
             }
             let degree = u32_at(d, p + 2)? as usize;
+            // Each evaluation costs O(degree²) (de Boor): a crafted degree of
+            // 10^6 made one evaluation take minutes (mitcad#934).
+            if !(1..=MAX_SPLINE_DEGREE).contains(&degree) {
+                return None;
+            }
             let (knots, q) = array_at(d, p + 14, 1)?;
             let (weights, q) = array_at(d, q, 1)?;
+            if u32_at(d, q)? as usize > MAX_SPLINE_POLES {
+                return None;
+            }
             let (flat, q) = array_at(d, q, 3)?;
             let poles: Vec<P3> = flat.chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
             let range = [f64_at(d, q + 10)?, f64_at(d, q + 18)?];
@@ -889,5 +907,42 @@ mod tests {
         let mut bad = d.clone();
         bad[14] = 9;
         assert_eq!(whole(SPLINE, &bad), None);
+    }
+
+    /// A spline of a degree no stored curve has (10 000, with 10 001 poles
+    /// and consistent counts) is refused at once instead of being read and
+    /// evaluated at O(degree²) per point (mitcad#934).
+    #[test]
+    fn refuses_a_spline_of_a_huge_degree() {
+        // A Bézier curve of this degree along x: degree + 1 poles, the
+        // knots 0 and 1 each degree + 1 times.
+        let bezier = |degree: u32| {
+            let n = degree + 1;
+            let knots: Vec<f64> = (0..2 * n).map(|i| if i < n { 0.0 } else { 1.0 }).collect();
+            let poles: Vec<f64> = (0..n).flat_map(|i| [f64::from(i), 0.0, 0.0]).collect();
+            data(&[
+                &[0, 0],
+                &u(&[degree]),
+                &f(&[1e-9]),
+                &u(&[2 * n, 2 * n, 8]),
+                &f(&knots),
+                &u(&[0, 0, 8]),
+                &u(&[n, n, 8]),
+                &f(&poles),
+                &f(&[1e-12]),
+                &[1, 1],
+                &f(&[0.0, 1.0]),
+                &TRAILER,
+            ])
+        };
+        let huge = bezier(10_000);
+        let started = std::time::Instant::now();
+        assert_eq!(whole(SPLINE, &huge), None);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        // The same layout at degree 25 is read.
+        assert!(matches!(
+            whole(SPLINE, &bezier(25)),
+            Some(StoredCurve::Spline { degree: 25, .. })
+        ));
     }
 }

@@ -425,7 +425,7 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries) {
     add(meshAction);
   }
   menu.addSeparator();
-  addCall(QString(), tr("Clear Selection"), [this] { setSelection({}); });
+  addCall(QString(), tr("Clear Selection"), [this] { clearSelection(); });
   add(m_registry->action(QStringLiteral("edit.undo")));
 }
 

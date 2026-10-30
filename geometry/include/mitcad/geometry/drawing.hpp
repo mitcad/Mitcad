@@ -13,8 +13,11 @@
 // B-splines and Bézier curves come as their B-splines, other curves as
 // B-splines within 1e-6 mm, each with a polyline of it too; mitcad#853),
 // or HLRBRep_PolyAlgo on a triangulation
-// of copies of the shapes when the exact one is not asked for or fails.
-// The shapes are not modified.
+// of copies of the shapes when the exact one is not asked for or fails, or
+// on the quick path (DrawingViewSpec::quick). The polygonal algorithm's
+// segments are joined end to end and drawn as lines and arcs where they
+// follow one within the triangulation's deviation (mitcad#962). The shapes
+// are not modified.
 
 #include <array>
 #include <optional>
@@ -48,6 +51,12 @@ struct DrawingViewSpec {
   bool smooth = false;
   // The exact algorithm first; false: the polygonal one only.
   bool exact = true;
+  // With `exact`: the quick path where the exact algorithm is slow, on
+  // shapes with free-form faces (mitcad#962): the polygonal algorithm on a
+  // triangulation within a 2000th of the shapes' size, its lines joined
+  // and drawn as lines and arcs where they follow them within that
+  // deviation, as polylines elsewhere (DrawnView::polygonal).
+  bool quick = false;
   std::optional<DrawingSection> section;
   // The largest distance of a polyline from the curve it stands for.
   double deflection = 0.01;
@@ -92,6 +101,14 @@ struct DrawnView {
 // The edges of the shapes seen along the view. Throws std::runtime_error
 // when neither algorithm can project them.
 DrawnView project_view(const std::vector<ShapePtr>& shapes, const DrawingViewSpec& spec);
+
+// The polygonal algorithm's segments of one kind as project_view draws
+// them (mitcad#962): joined end to end, then lines where they run straight
+// within `tolerance`, arcs where at least three of them follow a circle
+// within it (each segment's sagitta too, so a polygon's corners are not
+// taken for a circle), polylines elsewhere. The curves are visible and
+// sharp.
+std::vector<DrawnCurve> fit_segments(const std::vector<std::array<Point2, 2>>& segments, double tolerance);
 
 // A round hole: coaxial cylindrical faces with the material all round
 // outside them (the pieces of a split cylinder taken together), the

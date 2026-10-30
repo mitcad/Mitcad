@@ -1003,6 +1003,7 @@ impl LinkResolver for TestLibrary {
             part_number: Some(part.part_number).filter(|p| !p.is_empty()),
             supplier_url: Some("https://example.org/shop".to_owned()),
             build: part.build,
+            rows: Default::default(),
         })
     }
 }

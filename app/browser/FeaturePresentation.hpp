@@ -42,6 +42,26 @@ inline QString featurePresentation(const DocumentSnapshot::Feature& feature,
   } catch (const std::exception&) {
     // The kind, name and state remain useful when a definition cannot load.
   }
+  // A Fillet's or a Chamfer's picked edges, as many as its build kept
+  // (mitcad#957: `feature_inputs` reads them, computing nothing).
+  if (feature.type == QLatin1String("fillet") || feature.type == QLatin1String("chamfer")) {
+    try {
+      const qsizetype edges = model.queryObject({{QStringLiteral("query"), QStringLiteral("feature_inputs")},
+                                                 {QStringLiteral("uid"), feature.uid}})
+                                  .value(QStringLiteral("edges"))
+                                  .toArray()
+                                  .size();
+      // Spelled out: without a translation loaded, "%n edge(s)" would show
+      // as written ("4 edge(s)").
+      if (edges > 0) {
+        dimensions.prepend((edges == 1 ? QObject::tr("1 edge")
+                                       : QObject::tr("%1 edges").arg(static_cast<int>(edges)))
+                               .toHtmlEscaped());
+      }
+    } catch (const std::exception&) {
+      // No count when the inputs cannot be read.
+    }
+  }
   if (heading) *heading = QStringLiteral("%1: %2").arg(kind, feature.name);
   QString result = QStringLiteral("<b>%1: %2</b><br>%3")
                        .arg(kind.toHtmlEscaped(), feature.name.toHtmlEscaped(),

@@ -45,7 +45,14 @@
 #      installed; the installation is still registered in its scope only.
 #      For all users, before that: a silent install with only /D= of the
 #      installation's folder (what an earlier release's updater runs) keeps
-#      it for all users.
+#      it for all users. Only a test build reads the tests' variables
+#      (the CMake option MITCAD_UPDATE_TEST_HOOKS in the build's
+#      CMakeCache.txt, mitcad#921); for all users its update elevates
+#      nothing, since the test has administrator rights (an update from a
+#      test's source never asks for them). A build without the option (a
+#      release's configuration) is checked instead to ignore them: its
+#      own version, GitHub's addresses, the built-in key only, no request
+#      to the test's server.
 #   6. the uninstaller removes the files and every registry key of its
 #      scope.
 # The installer registers the .mitcad file type under HKCU and HKLM and
@@ -89,6 +96,13 @@ if (-not $installer) {
   exit 1
 }
 Write-Host "Installer: $($installer.FullName) ($([math]::Round($installer.Length / 1MB, 1)) MB)"
+# Whether the build reads the update tests' environment variables (the
+# CMake option MITCAD_UPDATE_TEST_HOOKS, mitcad#921): only then does step 5
+# update; a build without it is checked to ignore them.
+$buildCache = Join-Path $Build 'CMakeCache.txt'
+$script:UpdateTestHooks = (Test-Path $buildCache) -and
+  (Select-String -Path $buildCache -Pattern '^MITCAD_UPDATE_TEST_HOOKS:BOOL=(ON|1|TRUE|YES|Y)\s*$' -Quiet)
+Write-Host "Update test hooks: $(if ($script:UpdateTestHooks) { 'on' } else { 'off (step 5 checks that the variables are ignored)' })"
 
 # The registry of each scope. The installer is 32-bit, so HKLM's keys of
 # its own are under WOW6432Node; HKLM\Software\Classes is shared.
@@ -420,6 +434,32 @@ function Test-Update([string]$In, [string]$Install, [string]$Work, [switch]$Full
     $env:MITCAD_TEST_VERSION = '0.0.0'
     $requests = Join-Path $Work 'requests.log'
 
+    if (-not $script:UpdateTestHooks) {
+      # A build without MITCAD_UPDATE_TEST_HOOKS (a release's configuration,
+      # mitcad#921): the installed MitCad ignores the tests' variables. Its
+      # check would go to GitHub, so checks stay off (Ui-StartApp without
+      # -Updates); the source is logged anyway.
+      Remove-Item -Recurse -Force $script:UiSettings -ErrorAction SilentlyContinue
+      $env:MITCAD_UPDATE_URL = "$base/good/update-manifest.json"
+      Ui-StartApp 'update-ignored'
+      Ui-ExpectLog "Updates: Mitcad $version for windows-x64, installed in " 'its own version, not MITCAD_TEST_VERSION'
+      Ui-ExpectLog ('Update source: manifest at https://github.com/mitcad/Mitcad/releases/latest/download/update-manifest.json, ' +
+                    'releases at https://api.github.com/repos/mitcad/Mitcad/releases?per_page=20, ') `
+        "GitHub's addresses, not MITCAD_UPDATE_URL"
+      Ui-ExpectLog ('Update source: this build ignores MITCAD_UPDATE_URL, MITCAD_UPDATE_TEST_KEY, MITCAD_UPDATE_TEST_CA, ' +
+                    'MITCAD_TEST_VERSION (MITCAD_UPDATE_TEST_HOOKS off)') "the update tests' variables are ignored"
+      $logText = "$(Ui-LogText)"
+      if ($logText.Contains('and the test key') -or $logText.Contains('test certificate')) {
+        Fail "the installed MitCad took the test's key or certificate"
+      } else { Pass 'the built-in key only, no test certificate' }
+      Start-Sleep -Seconds 4
+      if (@(Get-Content $requests -ErrorAction SilentlyContinue).Count -eq 0) { Pass "no request to the test's server" }
+      else { Fail "requests to the test's server: $(Get-Content $requests -Raw)" }
+      Ui-StopApp
+      Write-Host 'note the update itself needs a test build (-DMITCAD_UPDATE_TEST_HOOKS=ON)'
+      return
+    }
+
     if ($Full) {
       # The administrator's policy in the registry: no request, not even
       # for Check for Updates (F8 in the test's settings: menus do not open
@@ -484,6 +524,10 @@ function Test-Update([string]$In, [string]$Install, [string]$Work, [switch]$Full
     $env:MITCAD_UPDATE_URL = "$base/good/update-manifest.json"
     Ui-StartApp 'update' @('--open', $design, '--set', 'd3=35') -Updates
     Ui-ExpectLog "\Mitcad $($scopeLog[$In])" "the installation is $($scopeName[$In])"
+    # A test build reads the tests' variables; for all users the update
+    # elevates nothing, as the test runs with administrator rights
+    # (mitcad#921: a test's source never asks for them).
+    Ui-ExpectLog 'Update source: this test build reads MITCAD_UPDATE_URL, ' "a test build reads the update tests' variables"
     Ui-ExpectLog '[Release Notes, Install, Skip This Version, Later]' 'the start-up check offers Install' 30
     Ui-ExpectLog 'Update notice Install at ' 'the notice places Install'
     # The question to save is titled "MitCad"; hidden windows of the app

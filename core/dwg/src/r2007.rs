@@ -21,15 +21,37 @@ fn corrupt(msg: impl Into<String>) -> DwgError {
 }
 
 fn u64_at(b: &[u8], at: usize) -> Result<u64, DwgError> {
-    b.get(at..at + 8)
+    container::span(b, at, 8)
         .map(|s| u64::from_le_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
-        .ok_or_else(|| corrupt(format!("data ends before byte {}", at + 8)))
+        .ok_or_else(|| corrupt(format!("data ends before byte {}", at.saturating_add(8))))
+}
+
+fn u32_at(b: &[u8], at: usize) -> Result<u32, DwgError> {
+    container::span(b, at, 4)
+        .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+        .ok_or_else(|| {
+            corrupt(format!(
+                "the file ends before byte {}",
+                at.saturating_add(4)
+            ))
+        })
+}
+
+/// The bytes `len` from `at` in the file, after its 0x480 bytes of meta
+/// data and file header (`at` and `len` are fields of the file).
+fn page_bytes(file: &[u8], at: usize, len: usize) -> Option<&[u8]> {
+    container::span(file, at.checked_add(0x480)?, len)
 }
 
 /// The data bytes of `blocks` Reed-Solomon code words of (255, `k`):
 /// interleaved (byte j of block b at j * blocks + b) or one after another.
 fn rs_data(coded: &[u8], blocks: usize, k: usize, interleaved: bool) -> Result<Vec<u8>, DwgError> {
-    if coded.len() < blocks * 255 {
+    // `blocks` comes from a size the file gives: the products are checked
+    // (wrapped, a huge count could pass the length test).
+    let fits = blocks
+        .checked_mul(255)
+        .is_some_and(|coded_len| coded.len() >= coded_len);
+    if !fits || k > 255 {
         return Err(corrupt("a coded page ends early"));
     }
     let mut out = Vec::with_capacity(blocks * k);
@@ -214,9 +236,18 @@ impl Input<'_> {
     }
 }
 
-/// Decompresses R2007 data into `size` bytes.
+/// Decompresses R2007 data into `size` bytes (zeros after the data).
 pub fn decompress(src: &[u8], size: usize) -> Result<Vec<u8>, DwgError> {
-    let mut out: Vec<u8> = Vec::with_capacity(size);
+    let mut out = decompress_bounded(src, size)?;
+    out.resize(size, 0);
+    Ok(out)
+}
+
+/// Decompresses R2007 data into at most `size` bytes, without zeros after
+/// the data: memory as the data needs, whatever size the file claims.
+fn decompress_bounded(src: &[u8], size: usize) -> Result<Vec<u8>, DwgError> {
+    // Sized from the data, not from `size` (a field of the file).
+    let mut out: Vec<u8> = Vec::with_capacity(size.min(src.len().saturating_mul(4)));
     let mut input = Input { src, i: 0 };
     let mut length = 0;
     // An opcode 0x2X first: two bytes after it, then the byte whose low
@@ -274,7 +305,6 @@ pub fn decompress(src: &[u8], size: usize) -> Result<Vec<u8>, DwgError> {
             }
         }
     }
-    out.resize(size, 0);
     Ok(out)
 }
 
@@ -360,8 +390,9 @@ pub fn compress(data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// A system page: its data repeated `factor` times, coded (255, 239) and
-/// interleaved, compressed when `compressed < uncompressed`.
+/// A system page at `at` from the pages' start (0x480): its data repeated
+/// `factor` times, coded (255, 239) and interleaved, compressed when
+/// `compressed < uncompressed`.
 fn system_page(
     file: &[u8],
     at: usize,
@@ -369,11 +400,21 @@ fn system_page(
     uncompressed: usize,
     factor: usize,
 ) -> Result<Vec<u8>, DwgError> {
-    let aligned = compressed.div_ceil(8) * 8;
-    let blocks = (aligned * factor.max(1)).div_ceil(239);
-    let coded = file
-        .get(at..at + blocks * 255)
+    if uncompressed > container::size_limit(file) {
+        return Err(corrupt(format!(
+            "a system page claims {uncompressed} bytes from a file of {}",
+            file.len()
+        )));
+    }
+    let blocks = compressed
+        .div_ceil(8)
+        .checked_mul(8)
+        .and_then(|aligned| aligned.checked_mul(factor.max(1)))
+        .map(|n| n.div_ceil(239));
+    let coded = blocks
+        .and_then(|blocks| page_bytes(file, at, blocks.checked_mul(255)?))
         .ok_or_else(|| corrupt("a system page past the end"))?;
+    let blocks = coded.len() / 255;
     let data = rs_data(coded, blocks, 239, true)?;
     let data = &data[..compressed.min(data.len())];
     if compressed < uncompressed {
@@ -385,7 +426,7 @@ fn system_page(
 
 /// Reads the sections of an R2007 file.
 pub fn read(file: &[u8]) -> Result<Sections, DwgError> {
-    let security = u32::from_le_bytes([file[0x18], file[0x19], file[0x1a], file[0x1b]]);
+    let security = u32_at(file, 0x18)?;
     if security & 1 != 0 {
         return Err(DwgError::Unsupported(
             "a drawing saved with a password (its data is encrypted)".into(),
@@ -406,7 +447,7 @@ pub fn read(file: &[u8]) -> Result<Sections, DwgError> {
         decompress(&h[0x20..end], 0x110)?
     };
     let g = |at: usize| u64_at(&header, at).map(|v| v as usize);
-    let page_map = system_page(file, 0x480 + g(0x38)?, g(0x50)?, g(0x58)?, g(0x18)?)?;
+    let page_map = system_page(file, g(0x38)?, g(0x50)?, g(0x58)?, g(0x18)?)?;
     // The page map: sizes and ids; pages follow each other from 0x480.
     let mut pages: BTreeMap<i64, (usize, usize)> = BTreeMap::new();
     let mut offset = 0usize;
@@ -420,13 +461,19 @@ pub fn read(file: &[u8]) -> Result<Sections, DwgError> {
     let (map_at, _) = *pages
         .get(&section_map_id)
         .ok_or_else(|| corrupt("the page map has no section map page"))?;
-    let map = system_page(file, 0x480 + map_at, g(0xb0)?, g(0xc8)?, g(0xd8)?)?;
+    let map = system_page(file, map_at, g(0xb0)?, g(0xc8)?, g(0xd8)?)?;
 
     let mut s = Sections {
         maintenance: *file.get(11).unwrap_or(&0),
-        codepage: u16::from_le_bytes([file[0x13], file[0x14]]),
+        codepage: u16::from_le_bytes([
+            *file.get(0x13).unwrap_or(&0),
+            *file.get(0x14).unwrap_or(&0),
+        ]),
         ..Default::default()
     };
+    // No section or page holds more than this (a size claimed beyond it
+    // would only allocate).
+    let limit = container::size_limit(file);
     let mut at = 0;
     while at + 0x40 <= map.len() {
         let size = u64_at(&map, at)? as usize;
@@ -453,6 +500,9 @@ pub fn read(file: &[u8]) -> Result<Sections, DwgError> {
             .collect();
         let name = String::from_utf16_lossy(&units);
         let entries = name_at + name_length;
+        if entries + 56 * count > map.len() {
+            return Err(corrupt(format!("{name}: the page list past the map's end")));
+        }
         let mut list = Vec::with_capacity(count);
         for k in 0..count {
             let e = entries + 56 * k;
@@ -479,23 +529,33 @@ pub fn read(file: &[u8]) -> Result<Sections, DwgError> {
                 "the encrypted section {name}"
             )));
         }
-        if size > file.len().saturating_mul(64).max(1 << 20) {
+        if size > limit {
             return Err(corrupt(format!("the section {name} claims {size} bytes")));
         }
         let mut data = vec![0u8; size];
         for (offset, id, uncompressed, compressed) in list {
+            if uncompressed > limit {
+                return Err(corrupt(format!(
+                    "{name}: page {id} claims {uncompressed} bytes from a file of {}",
+                    file.len()
+                )));
+            }
             let (page_at, _) = *pages
                 .get(&id)
                 .ok_or_else(|| corrupt(format!("{name}: page {id} is not in the page map")))?;
-            let aligned = compressed.div_ceil(8) * 8;
-            let blocks = aligned.div_ceil(251);
-            let coded = file
-                .get(0x480 + page_at..0x480 + page_at + blocks * 255)
+            let blocks = compressed
+                .div_ceil(8)
+                .checked_mul(8)
+                .map(|aligned| aligned.div_ceil(251));
+            let coded = blocks
+                .and_then(|blocks| page_bytes(file, page_at, blocks.checked_mul(255)?))
                 .ok_or_else(|| corrupt(format!("{name}: page {id} past the end")))?;
-            let raw = rs_data(coded, blocks, 251, encoding == 4)?;
+            let raw = rs_data(coded, coded.len() / 255, 251, encoding == 4)?;
             let raw = &raw[..compressed.min(raw.len())];
+            // The page's data only: the section's bytes are zeros where
+            // the data ends.
             let page = if compressed < uncompressed {
-                decompress(raw, uncompressed)?
+                decompress_bounded(raw, uncompressed)?
             } else {
                 raw.to_vec()
             };
@@ -521,6 +581,18 @@ pub fn read(file: &[u8]) -> Result<Sections, DwgError> {
 /// (uncompressed), the page map, the data pages (compressed, coded and
 /// interleaved) and the section map.
 pub fn write(header: &HeaderVars, classes: &[Class], objects: &BTreeMap<u64, Vec<u8>>) -> Vec<u8> {
+    write_edited(header, classes, objects, &|_, _| {})
+}
+
+/// [`write`], each page entry of the section map (offset, page size, id,
+/// uncompressed and compressed size, two zeros) passed to `edit` with its
+/// section's name before it is written: damaged files for the tests.
+fn write_edited(
+    header: &HeaderVars,
+    classes: &[Class],
+    objects: &BTreeMap<u64, Vec<u8>>,
+    edit: &dyn Fn(&str, &mut [u64; 7]),
+) -> Vec<u8> {
     use crate::objmap::object_stream;
     let v = crate::Version::R2007;
     let (object_data, map) = object_stream(objects, Vec::new(), 0);
@@ -589,7 +661,7 @@ pub fn write(header: &HeaderVars, classes: &[Class], objects: &BTreeMap<u64, Vec
         }
         smap.extend_from_slice(&[0, 0]);
         for (offset, page_size, id, uncompressed, compressed) in list {
-            for v in [
+            let mut entry = [
                 *offset as u64,
                 *page_size as u64,
                 *id as u64,
@@ -597,7 +669,9 @@ pub fn write(header: &HeaderVars, classes: &[Class], objects: &BTreeMap<u64, Vec
                 *compressed as u64,
                 0,
                 0,
-            ] {
+            ];
+            edit(name.as_str(), &mut entry);
+            for v in entry {
                 smap.extend_from_slice(&v.to_le_bytes());
             }
         }
@@ -740,6 +814,65 @@ mod tests {
             sorted.sort_unstable();
             assert_eq!(sorted, (0..n as u8).collect::<Vec<u8>>(), "{n}");
         }
+    }
+
+    #[test]
+    fn a_file_of_its_version_id_only_is_corrupt() {
+        // The security flags were indexed directly (mitcad#931): a panic.
+        assert!(matches!(
+            crate::read(b"AC1021\0"),
+            Err(DwgError::Corrupt(_))
+        ));
+        for v in crate::Version::ALL {
+            let mut file = v.id().as_bytes().to_vec();
+            file.push(0);
+            assert!(crate::read(&file).is_err(), "{v}");
+        }
+    }
+
+    /// A small drawing's sections: the header variables, no classes, one
+    /// object.
+    fn small_file(edit: &dyn Fn(&str, &mut [u64; 7])) -> Vec<u8> {
+        let mut objects = BTreeMap::new();
+        objects.insert(1u64, vec![0u8; 40]);
+        write_edited(&HeaderVars::default(), &[], &objects, edit)
+    }
+
+    #[test]
+    fn a_page_claiming_2_pow_63_bytes_is_corrupt() {
+        assert!(read(&small_file(&|_: &str, _: &mut [u64; 7]| {})).is_ok());
+        // The header's page decompressed into 2^63 bytes: the capacity
+        // overflowed (mitcad#931).
+        let file = small_file(&|name: &str, entry: &mut [u64; 7]| {
+            if name == container::HEADER {
+                entry[3] = 1 << 63;
+            }
+        });
+        match read(&file) {
+            Err(DwgError::Corrupt(e)) => assert!(e.contains("claims"), "{e}"),
+            other => panic!("{other:?}"),
+        }
+        // Terabytes, below the overflow: refused as well.
+        let file = small_file(&|name: &str, entry: &mut [u64; 7]| {
+            if name == container::HEADER {
+                entry[3] = 1 << 40;
+            }
+        });
+        assert!(matches!(read(&file), Err(DwgError::Corrupt(_))));
+    }
+
+    #[test]
+    fn sizes_the_file_gives_allocate_nothing_up_front() {
+        // A page that claims more than it holds: the output as the data
+        // gives it.
+        let packed = compress(b"abcdefghij");
+        assert_eq!(
+            decompress_bounded(&packed, usize::MAX).unwrap(),
+            b"abcdefghij"
+        );
+        // A block count whose coded size overflows.
+        assert!(rs_data(&[0; 255], usize::MAX / 100, 251, true).is_err());
+        assert!(rs_data(&[0; 255], usize::MAX / 100, 251, false).is_err());
     }
 
     #[test]

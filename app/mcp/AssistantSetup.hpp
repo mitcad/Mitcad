@@ -10,7 +10,44 @@ namespace mitcad::mcp {
 enum class AssistantClient { ClaudeDesktop, ClaudeCode, Codex, Other };
 
 QString installedBridge(const QString& applicationDirectory);
+
+// Finding Claude Code (`claude`) and Codex (`codex`), the one lookup that
+// Connect AI Assistant and the chat panel (mitcad#947) share (mitcad#956):
+// PATH first, then the folders their installers use, which a PATH may not
+// have, or not yet in a running MitCad's environment.
+//
+// The suffixes of an executable's name: on Windows `.exe`, `.cmd` and `.bat`
+// (npm's shims) in PATHEXT's order, those three in Windows' order when
+// PATHEXT names none of them; elsewhere none.
+QStringList assistantExecutableSuffixes(bool windows, const QString& pathext);
+// `%NAME%` replaced by the environment's value, as Windows expands a stored
+// PATH; an unknown name stays as it is.
+QString expandWindowsVariables(const QString& text);
+// A PATH value's folders (`;`-separated, quotes removed, expanded).
+QStringList windowsPathEntries(const QString& value);
+// The user's PATH as stored (`HKCU\Environment`, `Path`), expanded: an
+// installer's change is there before a running MitCad's environment has it.
+// Empty outside Windows.
+QStringList storedUserPath();
+// The folders after PATH, in order: the home's `.local/bin` (Claude Code's
+// own installer), `npm` in the roaming application data when there is one
+// (npm's global installs on Windows), the home's `.cargo/bin`, then the
+// stored PATH's folders.
+QStringList assistantFallbackFolders(const QString& home, const QString& roamingAppData, const QStringList& storedPath);
+// The first executable file `name` + suffix, folder by folder, each folder's
+// suffixes in their order.
+QString findAssistantExecutable(const QString& name, const QStringList& folders, const QStringList& suffixes);
+// The client's executable: PATH, then assistantFallbackFolders with this
+// platform's suffixes (on Windows APPDATA and the stored PATH), then on macOS
+// the ChatGPT application's Codex. With `home`, only that home's folders (its
+// roaming application data at `AppData/Roaming` on Windows), no PATH or
+// registry: an isolated test. A test run (MITCAD_TEST_INPUT) looks only in
+// MITCAD_TEST_ASSISTANT_EXECUTABLES (`none`: nothing), then in the folders of
+// the home MITCAD_TEST_ASSISTANT_HOME, when either is set.
 QString assistantExecutable(const QString& name, const QString& home = {});
+// The program of a registration command: the bare name when PATH finds it,
+// else the full path where it was found, else the bare name.
+QString assistantProgram(const QString& name);
 QString codexConfigurationPath();
 // One word of a command for PowerShell (`windows`) or a POSIX shell, quoted
 // only when it needs it (or `always`).

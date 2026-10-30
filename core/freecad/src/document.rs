@@ -25,7 +25,7 @@ use serde::Serialize;
 
 use crate::placement::Placement;
 use crate::value::{LinkRef, ShapeRef, Value, parse_value};
-use crate::xml::{Node, attr, parse};
+use crate::xml::{Node, XML_DEPTH, attr, parse, shallow};
 
 /// A property: its name, FreeCAD type (`App::PropertyLength`) and value.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -190,7 +190,8 @@ pub struct Document {
 impl Document {
     /// Parses `Document.xml`.
     pub fn parse(text: &str) -> Result<Document, String> {
-        let xml = parse(text)?;
+        let (text, cut) = shallow(text);
+        let xml = parse(&text)?;
         let root = xml.root_element();
         if root.tag_name().name() != "Document" {
             return Err(format!(
@@ -209,6 +210,11 @@ impl Document {
             warnings: Vec::new(),
             index: HashMap::new(),
         };
+        if cut {
+            document.warnings.push(format!(
+                "elements nested deeper than {XML_DEPTH} levels are left out"
+            ));
+        }
         let mut data: HashMap<String, Node<'_, '_>> = HashMap::new();
         let mut dependencies: HashMap<String, Vec<String>> = HashMap::new();
         for section in root.children().filter(|n| n.is_element()) {

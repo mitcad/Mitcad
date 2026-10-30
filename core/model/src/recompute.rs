@@ -328,6 +328,9 @@ pub struct Output<S> {
     /// A tapped hole's walls whose modelled thread has its crest off them,
     /// as they were (mitcad#436, mitcad#628).
     pub threaded_walls: Vec<crate::features::hole::ThreadedWall>,
+    /// What the feature picked, where it was (a Fillet's or a Chamfer's
+    /// edges as polylines, mitcad#957): the `feature_inputs` query.
+    pub inputs: Option<crate::features::FeatureInputs>,
 }
 
 pub struct FeatureResult<S> {
@@ -2155,6 +2158,7 @@ fn evaluate<K: Kernel>(
             split_pieces,
             changed_pieces,
             threaded_walls: produced.threaded_walls,
+            inputs: produced.inputs,
         },
         Err(message) => Output {
             sheet_rules: None,
@@ -2188,6 +2192,7 @@ fn evaluate<K: Kernel>(
             split_pieces: None,
             changed_pieces: Vec::new(),
             threaded_walls: Vec::new(),
+            inputs: None,
         },
     };
     Arc::new(output)

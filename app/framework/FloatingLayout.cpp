@@ -355,8 +355,26 @@ void FloatingLayout::layoutCards() {
   // it.
   const int topLimit = rowsBottom >= 0 ? rowsBottom + kGap : barBottom + kMargin;
   int insetTop = rowsBottom >= 0 ? rowsBottom + kGap - view.top() : 0;
-  const QRect cubeCorner(view.right() + 1 - OcctViewer::kCubeArea, view.top() + insetTop, OcctViewer::kCubeArea,
-                         OcctViewer::kCubeArea);
+  // The panels on the right edge (the chat, mitcad#947): as high as the
+  // room from the rows to the bottom card; the upper right cards and the
+  // orientation cube left of them.
+  int rightEdge = view.right() + 1 - kMargin;
+  for (Entry& entry : m_entries) {
+    if (!visible(entry) || entry.anchor != Anchor::Right) {
+      continue;
+    }
+    const int width = std::min(entry.sizing.width > 0 ? entry.sizing.width : 340,
+                               std::max(1, (view.width() - 2 * kMargin) * 2 / 3));
+    const int height = std::max(entry.card->heightForContent(0), cardsBottom - topLimit);
+    entry.card->setSlot(QRect(rightEdge - width, topLimit, width, height));
+    entry.maxContent = std::max(0, height - entry.card->heightForContent(0));
+    rightEdge -= width + kGap;
+  }
+  // How far the cube and the upper right cards move left (0: none).
+  const int rightPanels = view.right() + 1 - kMargin - rightEdge;
+  const int cubeShift = rightPanels > 0 ? kMargin + rightPanels : 0;
+  const QRect cubeCorner(view.right() + 1 - cubeShift - OcctViewer::kCubeArea, view.top() + insetTop,
+                         OcctViewer::kCubeArea, OcctViewer::kCubeArea);
   // Several upper left cards (the Projects card and the Browser) stack in
   // the order they were added.
   int leftTop = topLimit;
@@ -377,7 +395,7 @@ void FloatingLayout::layoutCards() {
       insetTop = std::max(insetTop, entry.card->slot().bottom() + 1 + kGap - view.top());
     }
   }
-  int cubeRight = 0; // how far the cube moves left of a tall card on the right
+  int cubeRight = cubeShift; // how far the cube moves left of a tall card on the right
   for (Entry& entry : m_entries) {
     if (!visible(entry) || entry.anchor != Anchor::TopRight) {
       continue;
@@ -397,9 +415,9 @@ void FloatingLayout::layoutCards() {
       top = topLimit;
       limit = tallLimit;
       size = tall;
-      cubeRight = std::max(cubeRight, kMargin + size.width() + kGap);
+      cubeRight = std::max(cubeRight, kMargin + rightPanels + size.width() + kGap);
     }
-    entry.card->setSlot(QRect(view.right() + 1 - kMargin - size.width(), top, size.width(), size.height()));
+    entry.card->setSlot(QRect(rightEdge - size.width(), top, size.width(), size.height()));
     entry.maxContent = std::max(0, limit - entry.card->heightForContent(0));
   }
   if (m_pill != nullptr && m_pill->isShown()) {
@@ -414,7 +432,7 @@ void FloatingLayout::layoutCards() {
       freeLeft = std::max(freeLeft, view.left() + m_viewer->badgeWidth() + kGap);
     }
     for (const Entry& entry : m_entries) {
-      if (!visible(entry) || (entry.anchor != Anchor::TopLeft && entry.anchor != Anchor::TopRight)) {
+      if (!visible(entry) || entry.anchor == Anchor::Bottom) {
         continue;
       }
       const QRect slot = entry.card->slot();

@@ -623,7 +623,10 @@ whose SHA-256 is not the given `--sha256`, or without one (mitcad#603), and,
 with `-MesaDir`, renders a screenshot; for all users it reinstalls with
 only `/D=` as an earlier release's updater does. With `-MesaDir` it tests
 the automatic update in both scopes ([updates.md](updates.md#tests);
-`-NoUpdate` skips it). Then it uninstalls and checks that no key of that
+`-NoUpdate` skips it) in a build configured with
+`-DMITCAD_UPDATE_TEST_HOOKS=ON`; a build without it (the `dev` preset that
+inherits `windows-release`) is checked to ignore the update tests'
+variables ([updates.md](updates.md#the-test-hooks)). Then it uninstalls and checks that no key of that
 scope is left. It changes the `.mitcad` file type under `HKCU` and `HKLM`
 and replaces an installation of either scope: run it only in the VM.
 Session 0 cannot show a UAC prompt, so the test runs with administrator
@@ -655,8 +658,22 @@ icons, licences incl. `packaging/linux/THIRD-PARTY-NOTICES.txt`), then:
 - linuxdeploy copies needed libraries into `usr/lib` and gives every
   executable in `usr/bin` and every library an `$ORIGIN` RUNPATH, so
   none of them loads a system's Qt; its Qt plugin adds the X11/GLX platform, image formats, SVG
-  icons and TLS backends. glibc, libstdc++, X11/xcb, OpenGL, fontconfig,
-  FreeType and OpenSSL stay the system's.
+  icons and TLS backends. glibc, libstdc++, X11/xcb, OpenGL, fontconfig
+  and FreeType stay the system's.
+- OpenSSL comes as a pair of one build (mitcad#954): the render worker
+  links vcpkg's `libcrypto.so.3` (minizip-ng's), so `libssl.so.3` from
+  the same folder goes in too, and Qt's OpenSSL TLS backend, which loads
+  both by name at run time, finds them in `usr/lib` (libQt6Core's
+  `$ORIGIN` RUNPATH) before the system's. With libcrypto alone it took the
+  system's libssl on top of the bundled libcrypto, two OpenSSL builds in
+  one process, and on some distributions no TLS at all. The bundled
+  libcrypto's `ENGINESDIR` and `MODULESDIR`, vcpkg's install folder on the
+  build machine (they follow the install prefix), are rewritten to
+  `/nonexistent/…`, so no other OpenSSL's modules load into it;
+  `OPENSSLDIR` stays `/etc/ssl` (the system's `openssl.cnf`), and Qt reads
+  the system's CA certificates itself (Fedora's
+  `/etc/pki/tls/certs/ca-bundle.crt` among them). The header of
+  `make-appimage.sh` gives the reasons.
 - The render worker `mitcad-render` goes in
   with its libraries (and Open Image Denoise's CPU device module) and
   their licences ([rendering.md](rendering.md#appimage)).
@@ -690,9 +707,18 @@ static checks of seconds: no ELF needs a `GLIBC_`, `GLIBCXX_` or
 glibc and the libstdc++ of its `libstdc++6` package (GCC 14's), and every ELF that links Qt finds each `libQt6*` inside the AppImage,
 through its own `$ORIGIN` RUNPATH and in `ldd`'s view without
 `LD_LIBRARY_PATH`, never the system's Qt; it names the ELF that fails.
+`libssl.so.3` and `libcrypto.so.3` must be bundled both or neither, and
+no file may name a library folder of the build machine (vcpkg's install
+trees, the render libraries' prefix, the built executables' RUNPATHs).
 Then it runs the AppImage with an empty environment, renders with its
 render worker when it has one, and updates it to itself from a locally
-signed manifest.
+signed manifest, over the bundled OpenSSL: the log line
+`Update check: TLS OpenSSL <version> …` names the bundled libcrypto's
+version, and the running MitCad has loaded libssl and libcrypto from the
+AppImage only. That last step needs a build with the update test hooks
+(`-DMITCAD_UPDATE_TEST_HOOKS=ON`, on in the debug presets); a release's
+AppImage, without them, is checked to ignore the update tests' variables
+instead ([updates.md](updates.md#the-test-hooks)).
 
 ## Tests
 
@@ -912,6 +938,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_TEST_OCCT_CRASH=<operation>` | That kernel operation (e.g. `fillet`, or Section Analysis' `clip` and `section`) crashes like an access violation in OCCT; also in `mitcad-cli`. |
 | `MITCAD_TEST_OCCT_OUT_OF_MEMORY=<operation>` | An allocation in that kernel operation (e.g. `extrude`) fails with `std::bad_alloc`: the operation fails "out of memory" (mitcad#80). |
 | `MITCAD_TEST_OCCT_ALLOCATION_FAILS=<operation>` | An allocation of OCCT's collections fails in that kernel operation (e.g. `extrude`) or in the healing of a body built from B-rep data (`heal`), and is caught there as OCCT's checker catches its failures: only OCCT's count of failed allocations tells, and the operation or the body's build fails "out of memory" (mitcad#132). |
+| `MITCAD_DRAWING_TRACE=1` | Print a line per drawing view projected, sheet drawn and view added on standard error, with the phases of the hidden-line removal (`compare` and `parts` also time the other algorithm and each body alone; [performance](performance.md#drawing-views-mitcad962), mitcad#962). |
 | `MITCAD_CHECK_INPUTS=1` | Report operations that modify their input shapes ([architecture](architecture.md#geometry-kernel)). |
 | `MITCAD_NO_FAR_FEATURES=1` | Booleans on perforated bodies work on the whole body and cut a pattern's copies at once ([architecture](architecture.md#geometry-kernel)), for comparisons. |
 | `MITCAD_NO_PATTERN_RUNS=1` | Patterns of features join or cut each feature's copies on their own instead of a run of features in one boolean ([architecture](architecture.md#geometry-kernel), mitcad#855), for comparisons. |
@@ -931,11 +958,12 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_TEST_LIVE_RETRY_MS` | The live updates' first delay before connecting again to a broker (default one second, doubling up to five minutes; with this, up to 20 times it). |
 | `MITCAD_MOSQUITTO` | The mosquitto program for the live updates' tests, when it is not on `PATH` or in the usual places. |
 | `MITCAD_TEST_LIVE_CA` | A PEM file of certificate authorities the app's live updates trust besides the system's (the test broker's, `tools/ui-live-test.sh`). |
-| `MITCAD_NO_UPDATE_CHECK=1` | No update checks; update test variables: [updates.md](updates.md#tests). |
+| `MITCAD_NO_UPDATE_CHECK=1` | No update checks; update test variables, read only by a build with `MITCAD_UPDATE_TEST_HOOKS`: [updates.md](updates.md#the-test-hooks). |
 | `MITCAD_SKETCH_FIRST_DIMENSION_SCALE=0` | Preferences › Sketch › *Scale the sketch to its first dimension* is off until it is saved (mitcad#860); the UI test libraries set it, so that their drawn sketches keep their sizes. |
 | `MITCAD_TEST_LOG_URLS=1` | Addresses the app would open in the browser (a report's issue form) are logged, not opened; the UI test library sets it. |
 | `MITCAD_LOG_TYPED_TEXT=1` | Text fields are logged as they change: `File dialog <title>: <text>` (Qt's file dialog's file name), `Dialog field <title>: <text>` and `Panel field <input>: <text>` (typed into another dialog's field or a command panel's input; never a password); the UI test libraries set it (`app/framework/TypedTextLog.hpp`). |
 | `MITCAD_TEST_CRASH=app\|app-exception\|model-worker\|import-worker\|render-worker` | That process (or the model's worker thread) crashes as an access violation would (`app-exception`: the application throws an exception nothing catches, mitcad#773), for the crash reports' tests ([app/COMMANDS.md](../app/COMMANDS.md#feedback-and-error-reports)). |
+| `MITCAD_TEST_PARSER_PANIC=<file name or path>` | The reader of that file panics as a parser bug would (mitcad#922; `core/model-base/src/reader_guard.rs`): in the application's guarded readers (`dxf_info`, `svg_info`, the DXF and SVG inserts, the print settings' read) the panic becomes their error; in the import process's listings (`--list-references`, `--list-links`) it ends that process (`core.bridge`, `tools/ui-import-listing-test.sh`). |
 | `MITCAD_CRASH_DIR` | Where crash reports go instead of `crashes` in the local app data (the app sets it for its workers, with `MITCAD_CRASH_PARENT`). |
 | `MITCAD_CORE_DUMPS=1` | Linux: `mitcad-cli`, `mitcad_run_parallel` and the corpus tests may leave core dumps (see *Core dumps* below). |
 | `MITCAD_RENDER_SAMPLES`, `MITCAD_RENDER_TEST_SCENE=1`, `MITCAD_RENDER_WORKER` | The rendered view's samples per pixel; the fixed test scene instead of the document; another render worker than `mitcad-render` next to the app ([rendering.md](rendering.md)). |
@@ -1775,7 +1803,8 @@ runs one step after another. Build and lint use half the cores unless
 The headless server is implemented in `core/mcp` (stdio protocol and
 catalog), `core/ffi/src/mcp.rs` (native CAD tools and workspace paths),
 and `tools/cli/mcp.cpp` (command-line entry). Live GUI access adds
-`app/mcp/LiveServer.*`, the shared private endpoint discovery in
+`app/mcp/LiveServer.*` (its listening socket from
+`app/mcp/LoopbackListener.*`), the shared private endpoint discovery in
 `app/mcp/LocalEndpoint.*`, `app/MainWindowMcp.cpp`, the application's own
 tools in `app/MainWindowMcpUi.cpp` (mitcad#265) and the CLI's
 `tools/cli/mcp-connect.*` stdio bridge. Which commands and queries MCP

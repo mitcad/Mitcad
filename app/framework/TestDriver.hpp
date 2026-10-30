@@ -169,6 +169,8 @@
 //   expect-native-spanned-heading <table id> <caption regex>
 //                           verify a visible full-row caption and selection
 //                           policy against the shared tree, without scrolling
+//   expect-native-first-row <table id> <text regex>  the first whole row in
+//                           the native table's viewport, without scrolling
 //   native-pointer-click <id> [<x fraction> <y fraction>]
 //                           press a real, uncovered point within a control;
 //                           the default point is its centre
@@ -251,6 +253,10 @@
 //                           MITCAD_UI_REQUIRE_RETINA=1 additionally requires 2x
 //   capture-view-target <var> record actual OCCT camera target
 //   expect-view-pan <before> changed|unchanged compare target in mm
+//   space-mouse <tx> <ty> <tz> <rx> <ry> <rz> [ms] hold a 3D mouse's axes
+//                           (the view's frame, about ±1 at full deflection)
+//                           for ms (300), then release them (mitcad#951)
+//   space-mouse-button <n>  press and release a 3D mouse's button n (1..32)
 //   native-move <x> <y>     frame origin relative to the main screen's visible
 //                           origin; native.window.origin and native.window.size
 //                           expose the frame origin and content size as text
@@ -420,6 +426,9 @@
 //                           GPU may be blank in it)
 //   screenshot-dialog <png> the window focus-dialog chose (the main window
 //                           when none), as its widgets draw it
+//   screenshot-widget <name> <png>  `screenshot` cut to the visible widget
+//                           with that object name, such as timelineDock
+//                           (the timeline, mitcad#961)
 //   quit [code]             end at once, with exit code <code> (0)
 //   kill                    end the process at once, as a killed app would
 //                           (no cleanup, autosave files stay), exit code 0
@@ -545,7 +554,8 @@ private:
   void testFormulaBuilder();
   void openFormulaField(const QString& name);
   void sendWheel(const QPoint& windowPos, int notches, Qt::KeyboardModifiers modifiers);
-  bool saveScreenshot(const QString& path, bool viewOnly);
+  // The main window (or the 3D view only), cut to `crop` when given.
+  bool saveScreenshot(const QString& path, bool viewOnly, QWidget* crop = nullptr);
   // Card widths and windows within the screen (mitcad#818,
   // TestDriverWindowFit.cpp): runs the step if it is one of those.
   bool runWindowFitStep(const QString& name, const QStringList& a, int line);

@@ -58,6 +58,7 @@ fn view(name: ViewName, edges: Vec<ViewEdge>) -> ViewInput {
             hidden: false,
             smooth: false,
             exact: true,
+            quick: false,
             section: None,
             deflection: 0.01,
         },

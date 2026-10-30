@@ -413,3 +413,80 @@ planes, meshed in 4.7 s with the default insertion did not end in 40
 minutes with the checked Delabella, so the design could not be opened.
 The checked variant stays available to `mitcad-cli mesh-compare --b
 checked` until that hang is found.
+
+## Drawing views (mitcad#962)
+
+Adding a projected view to an assembly's drawing took about 33 s. A
+drawing keeps definitions only: each view is projected by the kernel
+(`Kernel::project_view`, `geometry/src/drawing.cpp`: OCCT's exact hidden
+line removal, `HLRBRep_Algo`, or the polygonal one on a triangulation) and
+kept in the document's projection cache by the bodies' versions and
+placements and the view's direction, style and section
+(`model-api/src/drawings.rs`, `view_key`), so a view whose bodies and
+direction did not change is taken from the cache when the sheet is drawn
+again, moved or rescaled. The views of a sheet are worked out one after
+another; `add_drawing_view` runs as a job off the UI thread, and the
+`drawing` query that redraws the sheet after it runs on the UI thread and
+finds the new view in the cache.
+
+`MITCAD_DRAWING_TRACE=1` prints `drawing-trace:` lines on standard error:
+
+- `view eye=(…) exact=1 hidden=0 smooth=0 section=0 total=… ms prepare=…
+  parts=27 faces=… (planes=… analytic=… freeform=…) edges=… count=… load=…
+  update=… hide=… extract=… convert=… lines=… result=exact`: one per
+  projection, from the kernel. `prepare` clips the parts of a section;
+  `count` is the trace's own counting; `load`, `update` and `hide` are the
+  exact algorithm's `Add`, `Update` and `Hide`; `extract` makes its
+  compounds of visible, outline, smooth and hidden lines
+  (`HLRBRep_HLRToShape`); `convert` turns their edges into drawn curves.
+  The polygonal algorithm's phases are `mesh` (copies of the parts
+  triangulated), `update`, `extract` and `convert`. An exact projection
+  that failed adds `failed=… exact-failed` before the polygonal phases.
+- `project 27 bodies exact: place=… kernel=… total=… ms; bodies 0 Body1, …`:
+  one per projection, from the model: the bodies placed where their
+  occurrences put them, and the kernel's call.
+- `views of sheet 0 of Drawing1: 4 views, 1 projected (… ms), 3 reused, 0
+  not drawn, … ms`: each time a sheet's views are worked out.
+- `draw sheet 0 of Drawing1 total=… ms views=… holes=… annotations=…
+  title=… compose=… rest=…`: the `drawing` query's sheet.
+- `add view to Drawing1 total=… ms define=… project=… place=… store=…`:
+  `add_drawing_view`.
+
+Two values do more work, only to measure: `MITCAD_DRAWING_TRACE=compare`
+also times the algorithm the view did not use on the same parts (`compare
+polygonal …` or `compare exact …`, its lines thrown away), and
+`MITCAD_DRAWING_TRACE=parts` projects each part alone with the exact
+algorithm (`part <i> parts=1 faces=… … total=…`, `i` the body's index in
+the `project` line), to show which bodies the time goes to. They combine
+(`compare,parts`).
+
+**Measured** (mitcad#962, the Windows build, a 26-body assembly with
+modelled threads: 1 154 faces, 260 of them free-form, 2 816 edges): the
+front, right, top and corner views took 34.9, 46.4, 20.3 and 5.3 s, of
+which the exact algorithm's `Hide` 34.1, 45.8, 19.4 and 4.8 s; `Update`
+0.5-0.8 s, the rest under 20 ms. Redrawing the sheet after each took
+3-70 ms: every other view came from the cache. The polygonal algorithm
+took 1.1-1.3 s for the same views (meshing 1.0 s of it). Alone, the
+bodies with threads took 2-12 s each in the views along an axis, and
+the others under 0.2 s: the hiding of the threads' helical edges and
+faces is the cost.
+
+**The quick path** (`ViewSpec::quick`, `DrawingViewSpec::quick`): a
+drawing's views of bodies with free-form faces (anything but planes,
+cylinders, cones, spheres and tori) are projected by the polygonal
+algorithm on a triangulation within a 2000th of the view's size (the
+diagonal of the bodies' box; at least the view's deflection, 0.01 mm),
+its faces meshed in parallel. The algorithm's segments are joined end
+to end where exactly two meet, and fitted within 1.5 times that
+deviation (`geometry::fit_segments`): lines where they run straight,
+arcs where at least three follow a circle (least squares, each
+segment's sagitta within the tolerance too, so a hexagon stays six
+lines), polylines elsewhere, broken at corners sharper than 0.6 rad.
+A circle's chords end on the edge itself, so its arc has the edge's
+centre and radius to the numerics. The view is `polygonal`. Cut sheets
+keep the exact edges (they write the curves as they are, mitcad#853),
+and bodies without free-form faces too. `test_drawing`'s "the quick
+path" checks the quick view of curved bodies with B-spline faces
+against the exact view of the same shapes within 0.1 mm, both ways, its
+circles as arcs. The trace says `result=quick`; with `compare` it times
+the exact algorithm too.

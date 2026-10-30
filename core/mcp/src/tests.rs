@@ -1391,3 +1391,87 @@ fn the_validator_takes_a_list_of_types() {
     assert!(catalog::validate(&json!([1]), &schema, "command").is_err());
     assert!(catalog::validate(&json!("x"), &schema, "command").is_err());
 }
+
+/// mitcad#935: a client's megabyte strings are refused by the catalog's
+/// `maxLength` before the application runs anything, and no error repeats
+/// them whole.
+#[test]
+fn long_client_strings_are_refused_and_never_echoed_whole() {
+    let mut session = ready_live();
+    let huge = "x".repeat(7 * 1024 * 1024);
+    for _ in 0..3 {
+        let arguments = json!({"document": "live-1",
+            "items": [{"kind": "face", "owner": huge.as_str(), "name": "x"}]});
+        let response =
+            live_response(session.prepare(call("ui_select", arguments)).unwrap()).unwrap();
+        assert_eq!(response["error"]["code"], -32602);
+        let message = response["error"]["message"].as_str().unwrap();
+        assert!(message.contains("owner must have at most"), "{message}");
+        assert!(message.len() < 256, "{}", message.len());
+    }
+    // The limits of the ids, the names and the paths.
+    for (name, arguments) in [
+        (
+            "ui_command",
+            json!({"document": "live-1", "id": "x".repeat(257)}),
+        ),
+        (
+            "ui_command",
+            json!({"document": "live-1", "edit": "F".repeat(257)}),
+        ),
+        (
+            "ui_select",
+            json!({"document": "x".repeat(257), "items": []}),
+        ),
+        (
+            "ui_select",
+            json!({"document": "live-1",
+                   "items": [{"kind": "face", "owner": "F2.b0", "name": "n".repeat(4097)}]}),
+        ),
+        (
+            "ui_select",
+            json!({"document": "live-1",
+                   "items": [{"kind": "body", "owner": "F2.b0", "occurrence": "O".repeat(1025)}]}),
+        ),
+        ("document_open", json!({"path": "p".repeat(4097)})),
+        ("model_reference", json!({"search": "s".repeat(1025)})),
+    ] {
+        let response =
+            live_response(session.prepare(call(name, arguments.clone())).unwrap()).unwrap();
+        assert_eq!(response["error"]["code"], -32602, "{name}");
+        assert!(response["error"]["message"].as_str().unwrap().len() < 256);
+    }
+    // At the limits they pass; a limit counts characters, not bytes.
+    for (name, arguments) in [
+        (
+            "ui_command",
+            json!({"document": "live-1", "id": "x".repeat(256)}),
+        ),
+        (
+            "ui_select",
+            json!({"document": "live-1",
+                   "items": [{"kind": "face", "owner": "ä".repeat(1024), "name": "n".repeat(4096)}]}),
+        ),
+    ] {
+        assert!(matches!(
+            session.prepare(call(name, arguments)).unwrap(),
+            PreparedMessage::Tool { .. }
+        ));
+        session.finish(json!({}), false).unwrap();
+    }
+    // An unknown argument's name is cut too.
+    let mut unknown = serde_json::Map::new();
+    unknown.insert("k".repeat(100_000), json!(1));
+    let response = live_response(
+        session
+            .prepare(call("ui_state", Value::Object(unknown)))
+            .unwrap(),
+    )
+    .unwrap();
+    let message = response["error"]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("Unknown argument arguments.kkk"),
+        "{message}"
+    );
+    assert!(message.len() < 512, "{}", message.len());
+}

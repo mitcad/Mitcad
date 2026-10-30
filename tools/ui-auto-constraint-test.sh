@@ -123,8 +123,10 @@ ui_expect_new "Added circle, diameter 20 mm at (0, 30)" "circle 3 as large"
 C=$(last_circle)
 expect_auto equal "$B" "$C" "Link to last: circle 3 equal to circle 2"
 ui_sync
-[ "$(sketch_dof)" = "$((dof1 + 4))" ] || ui_fail "DOF $(sketch_dof), expected $((dof1 + 4)): one equal each"
-echo "ok   one constraint for each new circle"
+# Circle 3's centre snapped onto the y axis and is held there (mitcad#948).
+[ "$(sketch_dof)" = "$((dof1 + 3))" ] ||
+  ui_fail "DOF $(sketch_dof), expected $((dof1 + 3)): one equal each, circle 3's centre on the y axis"
+echo "ok   one constraint for each new circle, circle 3's centre on the y axis"
 no_new "Auto constraint dialog" "no dialog when the constraints are added"
 
 echo "--- The reference highlighted while the pointer is over the section"

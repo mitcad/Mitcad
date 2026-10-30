@@ -3,6 +3,12 @@
 # check-all sources: app/update core/update tools/update-test-server.py
 # Run in the approved macOS guest only. All replacements are copies owned
 # by this test; the input bundle and Applications are never modified.
+# Only a test build reads the update tests' environment variables (the
+# CMake option MITCAD_UPDATE_TEST_HOOKS, on in macos-debug; mitcad#921;
+# UI_UPDATE_TEST_HOOKS from the ctest or the build's CMakeCache.txt tells).
+# A build without it (macos-release) is checked to ignore them instead,
+# after the atomic exchange: its own version, GitHub's addresses, the
+# built-in key only, no request to the test's server.
 # Usage: bash tools/ui-macos-update-test.sh <app executable> <mitcad-release> [out]
 set -eu
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -150,6 +156,28 @@ export MITCAD_UPDATE_URL=$base/update-manifest.json
 export MITCAD_UPDATE_RELEASES_URL=$base/releases.json
 export MITCAD_UPDATE_TEST_CA=$work/cert.pem MITCAD_UPDATE_TEST_KEY=$public MITCAD_TEST_VERSION=0.0.0
 
+hooks=$(ui_update_test_hooks "$original_app")
+if [ "$hooks" = OFF ]; then
+  echo "--- A build without MITCAD_UPDATE_TEST_HOOKS ignores the update tests' variables"
+  printf '%s\n' "wait-log '^Update source: this build ignores '" > "$work/ignored.script"
+  UI_APP=$original_app
+  fresh_settings
+  # Its check would go to GitHub: checks off, the source is logged anyway.
+  MITCAD_NO_UPDATE_CHECK=1 MITCAD_TEST_INPUT=$work/ignored.script run_app ignored --ui=qt --no-recovery
+  ui_expect_log "^Updates: Mitcad $version for macos-arm64, " 'its own version, not MITCAD_TEST_VERSION'
+  ui_expect_log '^Update source: manifest at https://github[.]com/mitcad/Mitcad/releases/latest/download/update-manifest[.]json, releases at https://api[.]github[.]com/repos/mitcad/Mitcad/releases[?]per_page=20, ' \
+    "GitHub's addresses, not MITCAD_UPDATE_URL nor MITCAD_UPDATE_RELEASES_URL"
+  ui_expect_log '^Update source: this build ignores MITCAD_UPDATE_URL, MITCAD_UPDATE_RELEASES_URL, MITCAD_UPDATE_TEST_KEY, MITCAD_UPDATE_TEST_CA, MITCAD_TEST_VERSION [(]MITCAD_UPDATE_TEST_HOOKS off[)]' \
+    "the update tests' variables are ignored"
+  ui_expect_no_log 'and the test key' 'the built-in key only'
+  ui_expect_no_log 'test certificate' 'no test certificate'
+  check_run ignored
+  if [ -s "$UI_OUT/requests.log" ]; then echo "FAIL: requests to the test's server"; exit 1; fi
+  echo "PASS: macOS automatic update (a build without the test hooks ignores the update tests' variables)"
+  echo "Logs: $UI_OUT"
+  exit 0
+fi
+
 echo '--- Build and sign a disk image of the test-owned new application'
 /usr/bin/ditto "$bundle" "$work/image/Mitcad.app"
 mkdir -p "$work/image/Mitcad.app/Contents/Resources"
@@ -212,6 +240,7 @@ fresh_settings
 before_requests=$(wc -l < "$UI_OUT/requests.log")
 MITCAD_TEST_INPUT=$work/reject.script run_app reject --ui=qt --no-recovery
 ui_expect_log '^Update rejected: .*SHA-256 differs' 'changed image rejected'
+ui_expect_log '^Update source: this test build reads MITCAD_UPDATE_URL, ' "a test build reads the update tests' variables"
 check_run reject
 after_requests=$(wc -l < "$UI_OUT/requests.log")
 [ "$((after_requests - before_requests))" -eq 2 ] || {

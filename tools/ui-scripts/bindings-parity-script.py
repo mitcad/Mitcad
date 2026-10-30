@@ -181,6 +181,11 @@ add("native-pointer-click formulaText" if native else "focus-widget formulaText"
     "key Ctrl+a", "type " + json.dumps(custom_formula))
 add("expect-native-text formulaText " + json.dumps('^' + re.escape(custom_formula) + '$') if native else
     "expect-widget-property formulaText plainText " + json.dumps(custom_formula))
+if native:
+    # AppKit can defer smart substitutions until focus leaves the editor.
+    # The actual formula must retain its literal quotes at that point too.
+    add("native-pointer-click formulaFunctionSearch",
+        "expect-native-text formulaText " + json.dumps('^' + re.escape(custom_formula) + '$'))
 press("OK")
 add("expect-native-dialog-gone '^Formula Editor$'" if native else "expect-dialog-gone '^Formula Editor$'",
     "focus-dialog '^Appearances$'",
@@ -204,7 +209,8 @@ add("focus-main", "key Escape")
 if native:
     add("native-select native.model.body:F1.b0@",
         "native-select native.model.body:F2.b0@ ctrl",
-        "native-select native.model.body:F3.b0@ ctrl")
+        "native-select native.model.body:F3.b0@ ctrl",
+        "expect-selection 3 0")
 else:
     add("click-logged 'Browser Root/Bodies/Body1'",
         "click-logged 'Browser Root/Bodies/Body2' left ctrl",

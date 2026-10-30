@@ -2917,6 +2917,20 @@ impl<K: Kernel> Document<K> {
             .map(|w| &w.cylinder)
     }
 
+    /// What a feature picked, where it was before it (a Fillet's or a
+    /// Chamfer's edges as polylines in its component's coordinates,
+    /// mitcad#957), as its last build kept it: no geometry is computed
+    /// here. None for a feature that kept none: not built (a document
+    /// opened without building), failed, suppressed, rolled back, or of a
+    /// kind without such inputs.
+    pub fn feature_inputs(&self, uid: FeatureUid) -> Option<&crate::features::FeatureInputs> {
+        let output = self.feature_result(uid)?.output.as_deref()?;
+        if output.result.is_err() {
+            return None;
+        }
+        output.inputs.as_ref()
+    }
+
     /// Projects model geometry into a sketch (Project): the curves
     /// of an edge, a face's boundary or a vertex of the bodies before the
     /// sketch, as fixed reference entities. A linked projection follows

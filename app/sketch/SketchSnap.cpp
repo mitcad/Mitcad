@@ -16,6 +16,8 @@ constexpr double kNearPixels = 40.0;
 // Body geometry is this much further than it is, so that the sketch's own
 // geometry wins ties (mitcad#258).
 constexpr double kBodyTiePixels = 1.0;
+// So are the sketch's axes (mitcad#948): a sketch curve along an axis wins.
+constexpr double kAxisTiePixels = 1.0;
 
 double screenDistance(const QPointF& a, const QPointF& b) { return std::hypot(a.x() - b.x(), a.y() - b.y()); }
 
@@ -54,6 +56,9 @@ QString Snap::describe() const {
   case Kind::Intersection:
     return QStringLiteral("intersection of %1 and %2").arg(curve, curve2);
   case Kind::OnCurve:
+    if (!axis.isEmpty()) {
+      return QStringLiteral("on the %1 axis (%2)").arg(axis, curve);
+    }
     return QStringLiteral("on %1").arg(curve);
   case Kind::BodyVertex:
     return QStringLiteral("body vertex %1").arg(bodyItem.source);
@@ -175,6 +180,39 @@ Snap snap(const SnapSettings& settings, const V2& raw, const QPointF& screen) {
     }
   }
 
+  // The x and y axes as lines across the view (mitcad#948), as curves to
+  // snap onto, a little further than they are: a sketch curve along an
+  // axis wins, and so do points, the origin and the special points.
+  // Along the axis the point keeps to the grid while grid snapping is on,
+  // as it would off the axis.
+  if (settings.axes) {
+    for (int i = 0; i < 2; ++i) {
+      const bool alongX = i == 0;
+      const QString axis = alongX ? QStringLiteral("x") : QStringLiteral("y");
+      const QString line = model.axisLine(axis);
+      const QString id = line.isEmpty() ? axisPick(axis) : line;
+      if (settings.skipCurves.contains(id)) {
+        continue;
+      }
+      const V2 foot = alongX ? V2{raw.x, 0.0} : V2{0.0, raw.y};
+      const double d = screenDistance(toScreen(foot), screen);
+      if (d > kCurvePixels) {
+        continue;
+      }
+      double along = alongX ? raw.x : raw.y;
+      if (settings.grid && settings.gridStep > 0.0) {
+        along = std::round(along / settings.gridStep) * settings.gridStep;
+      }
+      along += 0.0; // no -0 in logs and commands
+      Snap s;
+      s.kind = Snap::Kind::OnCurve;
+      s.at = alongX ? V2{along, 0.0} : V2{0.0, along};
+      s.curve = id;
+      s.axis = axis;
+      best.offer(2, d + kAxisTiePixels, s);
+    }
+  }
+
   // Body vertices as points and the middles of body lines and arcs as
   // midpoints (mitcad#258), a little further than they are: the sketch's
   // own point or midpoint at the same place wins.
@@ -223,6 +261,34 @@ Snap snap(const SnapSettings& settings, const V2& raw, const QPointF& screen) {
   }
   result.screen = screen;
   return result;
+}
+
+QString axesAt(const SketchModel& model, const Snap& snap) {
+  switch (snap.kind) {
+  case Snap::Kind::Origin:
+    return QStringLiteral("xy");
+  case Snap::Kind::OnCurve:
+    return snap.axis;
+  case Snap::Kind::Point:
+  case Snap::Kind::Center:
+    return model.pointAxes(snap.point);
+  default:
+    return QString();
+  }
+}
+
+std::optional<QJsonObject> axisHold(const QString& point, const Snap& snap,
+                                    const std::function<QString(const QString&)>& entity) {
+  if (snap.kind != Snap::Kind::OnCurve || snap.axis.isEmpty() || point.isEmpty()) {
+    return std::nullopt;
+  }
+  const QString line = entity(snap.curve);
+  if (line.isEmpty()) {
+    return std::nullopt;
+  }
+  return QJsonObject{{QStringLiteral("type"), QStringLiteral("coincident")},
+                     {QStringLiteral("point"), point},
+                     {QStringLiteral("entity"), line}};
 }
 
 } // namespace mitcad::sketch

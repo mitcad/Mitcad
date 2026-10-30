@@ -2902,6 +2902,19 @@ def make_part(ctx, mcp, entry):
     return component
 
 
+def kept_fields(out, fields):
+    """The `fields` of the manifest in `out` that it has (mitcad#949: the
+    fasteners' `suppliers`), for --merge."""
+    try:
+        with open(os.path.join(out, "mitcad-library.json"), encoding="utf-8") as f:
+            old = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(old, dict):
+        return {}
+    return {field: old[field] for field in fields if old.get(field)}
+
+
 def merged(out, components, categories, sources):
     """This run's components, categories and sources, then those of the
     manifest in `out` that this run does not make (as
@@ -3040,6 +3053,10 @@ def main():
         "categories": library_categories,
         "components": components,
     }
+    if args.merge:
+        # The fasteners' suppliers and the ids the library replaces
+        # (mitcad#949) stay.
+        manifest.update(kept_fields(ctx.out, ("suppliers", "replaces")))
     write(os.path.join(ctx.out, "mitcad-library.json"), json.dumps(manifest, indent=2) + "\n")
     write(os.path.join(ctx.out, "LICENSE"), MIT_TEXT)
     write(os.path.join(ctx.out, "SOURCES.md"), sources_text(made, entries, [] if only else left_out_files))

@@ -21,9 +21,9 @@ fn corrupt(msg: impl Into<String>) -> DwgError {
 }
 
 fn u32_at(b: &[u8], at: usize) -> Result<u32, DwgError> {
-    b.get(at..at + 4)
+    crate::container::span(b, at, 4)
         .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-        .ok_or_else(|| corrupt(format!("ends before byte {}", at + 4)))
+        .ok_or_else(|| corrupt(format!("ends before byte {}", at.saturating_add(4))))
 }
 
 fn u64_at(b: &[u8], at: usize) -> Result<u64, DwgError> {
@@ -42,8 +42,7 @@ struct Segment {
 }
 
 fn segment(data: &[u8], start: usize) -> Result<Segment, DwgError> {
-    let head = data
-        .get(start..start + SEGMENT_HEADER)
+    let head = crate::container::span(data, start, SEGMENT_HEADER)
         .ok_or_else(|| corrupt(format!("a segment at {start} past the end")))?;
     if u16::from_le_bytes([head[0], head[1]]) != SEGMENT_SIGNATURE {
         return Err(corrupt(format!("no segment signature at {start}")));
@@ -70,7 +69,8 @@ pub fn brep_records(data: &[u8]) -> Result<BTreeMap<u64, Vec<u8>>, DwgError> {
             index.name
         )));
     }
-    let mut segments = Vec::with_capacity(index_count);
+    // Each entry takes 12 bytes of the section: no more than it holds.
+    let mut segments = Vec::with_capacity(index_count.min(data.len() / 12));
     for i in 0..index_count {
         let at = index.start + SEGMENT_HEADER + 12 * i;
         let offset = u64_at(data, at)? as usize;
@@ -163,8 +163,7 @@ fn blob(
         let s = seg(index)?;
         let body = s.start + SEGMENT_HEADER;
         let size = u64_at(data, body + 24)? as usize;
-        let bytes = data
-            .get(body + 32..body + 32 + size)
+        let bytes = crate::container::span(data, body + 32, size)
             .ok_or_else(|| corrupt("a blob page past the end"))?;
         out.extend_from_slice(bytes);
     }

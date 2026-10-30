@@ -45,6 +45,7 @@
 #include <QGroupBox>
 #include <QHash>
 #include <QHeaderView>
+#include <QIcon>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QKeySequence>
@@ -66,6 +67,7 @@
 #include <QRadioButton>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -212,8 +214,10 @@ class NativeMenuPopup;
 @end
 
 @interface MitcadNativeTable : NSTableView
+- (NSInteger)presenterSelectedRows;
 @end
 @interface MitcadNativeOutline : NSOutlineView
+- (NSInteger)presenterSelectedRows;
 @end
 @interface MitcadNativeSpannedRowView : MitcadNativeCurrentRowView
 @end
@@ -233,6 +237,19 @@ class NativeMenuPopup;
 @end
 
 @interface MitcadNativeActionButton : NSButton
+@end
+
+// The Settings section selector (mitcad#971): each pane's shared icon above
+// its name, as the shared header shows them. A click selects the page in the
+// tab view, whose delegate shows the shared pane; sync follows the tab view.
+@interface MitcadNativePaneSelector : NSStackView
+@property(nonatomic, weak) NSTabView* pages;
+- (void)choose:(NSButton*)sender;
+- (void)sync;
+@end
+
+@interface MitcadNativePaneButton : NSButton
+@property(nonatomic) BOOL chosen;
 @end
 
 @interface MitcadNativeCompletionTable : NSTableView
@@ -347,6 +364,21 @@ NSImage* image(const QPixmap& pixmap) {
   pixmap.save(&buffer, "PNG");
   return [[NSImage alloc] initWithData:[NSData dataWithBytes:data.constData()
                                                     length:static_cast<NSUInteger>(data.size())]];
+}
+// A Settings pane's icon at the shared header's 24 points, drawn at twice
+// that for Retina screens. The header paints these icons as masks in its
+// text or accent colour, so the image is a template: AppKit tints it for the
+// appearance and the selection (mitcad#971).
+NSImage* paneImage(const QIcon& icon, const QString& name) {
+  constexpr int points = 24;
+  NSImage* result = icon.isNull() ? nil : image(icon.pixmap(QSize(points, points), 2.0));
+  if (result == nil) {
+    return nil;
+  }
+  result.size = NSMakeSize(points, points);
+  [result setTemplate:YES];
+  result.accessibilityDescription = name.toNSString();
+  return result;
 }
 NSStackView* stack(bool horizontal = false) {
   NSStackView* result = [[NSStackView alloc] initWithFrame:NSZeroRect];
@@ -1045,6 +1077,7 @@ public:
     // every binding has its final state, before a caller measures the form.
     mac::layout::updateVisibility(m_root);
     [m_root updateConstraintsForSubtreeIfNeeded];
+    for (Binding& binding : m_bindings) { followSharedScroll(binding); }
     m_refreshing = false;
     for (const Binding& binding : m_bindings) {
       if ([binding.text isKindOfClass:MitcadNativeTextView.class]) {
@@ -1328,9 +1361,11 @@ public:
   }
 
   void tabChanged(NSTabView* sender, NSTabViewItem* item) {
-    if (m_refreshing) { return; }
     const int id = qt(sender.identifier).toInt();
     if (id < 0 || static_cast<std::size_t>(id) >= m_bindings.size()) { return; }
+    // The section selector follows every change, a refresh's too.
+    [m_bindings[static_cast<std::size_t>(id)].panes sync];
+    if (m_refreshing) { return; }
     QWidget* widget = m_bindings[static_cast<std::size_t>(id)].widget;
     const int index = qt(item.identifier).toInt();
     if (auto* tabs = qobject_cast<QTabWidget*>(widget)) { tabs->setCurrentIndex(index); }
@@ -1341,6 +1376,14 @@ public:
   }
 
   int modelBinding(NSTableView* table) const { return qt(table.identifier).toInt(); }
+  NSInteger presenterSelectedRows(NSTableView* table) const {
+    const int id = modelBinding(table);
+    if (id < 0 || static_cast<std::size_t>(id) >= m_bindings.size()) return -1;
+    const Binding& binding = m_bindings[static_cast<std::size_t>(id)];
+    const auto* view = qobject_cast<QAbstractItemView*>(binding.widget);
+    if (binding.table != table || view == nullptr || view->selectionModel() == nullptr) return -1;
+    return view->selectionModel()->selectedRows().size();
+  }
   QAbstractItemView* currentRowPresenter(NSTableView* table) const {
     const int id = modelBinding(table);
     if (id < 0 || static_cast<std::size_t>(id) >= m_bindings.size()) return nullptr;
@@ -2110,6 +2153,7 @@ private:
     NSTextView* linkText = nil;
     NSLayoutConstraint* listHeight = nil;
     NSTabView* tabs = nil;
+    MitcadNativePaneSelector* panes = nil;
     NSTableView* table = nil;
     NSMutableArray<MitcadNativeModelNode*>* nodes = nil;
     QPointer<QAbstractItemModel> model;
@@ -2137,6 +2181,7 @@ private:
     bool selectionDirty = true;
     mac::NativeColumnState sections; // the shared header last applied to the columns
     int textTone = 0;                // a label's applied semantic tone (nativeTextToneKind)
+    bool scrollMoved = true;         // the shared view's vertical scroll moved (followSharedScroll)
   };
   void scheduleRefresh() {
     if (m_source != nullptr && !m_refreshTimer.isActive()) { m_refreshTimer.start(0); }
@@ -2612,6 +2657,14 @@ private:
       MitcadNativeTextView* view = [[MitcadNativeTextView alloc] initWithFrame:NSMakeRect(0, 0, 440, 130)];
       view.font = [NSFont systemFontOfSize:NSFont.systemFontSize];
       view.richText = NO;
+      if (dynamic_cast<NativeTextEditorCommands*>(widget) != nullptr) {
+        // Formula literals and operators must survive typing and focus loss
+        // verbatim; prose substitutions can change valid expressions.
+        view.automaticQuoteSubstitutionEnabled = NO;
+        view.automaticDashSubstitutionEnabled = NO;
+        view.automaticTextReplacementEnabled = NO;
+        view.automaticSpellingCorrectionEnabled = NO;
+      }
       view.delegate = m_target;
       view.verticallyResizable = YES;
       view.horizontallyResizable = NO;
@@ -2639,7 +2692,11 @@ private:
     if (auto* tabs = qobject_cast<QTabWidget*>(widget)) { return renderTabs(widget, tabs->count(), [tabs](int i) { return tabs->widget(i); }, [tabs](int i) { return tabs->tabText(i); }); }
     if (auto* pages = qobject_cast<QStackedWidget*>(widget)) {
       const bool named = pages->count() > 0 && !pages->widget(0)->property("nativePaneTitle").toString().isEmpty();
-      if (named) { return renderTabs(widget, pages->count(), [pages](int i) { return pages->widget(i); }, [pages](int i) { return pages->widget(i)->property("nativePaneTitle").toString(); }); }
+      if (named) {
+        return renderTabs(widget, pages->count(), [pages](int i) { return pages->widget(i); },
+                          [pages](int i) { return pages->widget(i)->property("nativePaneTitle").toString(); },
+                          [pages](int i) { return pages->widget(i)->property("nativePaneIcon").value<QIcon>(); });
+      }
       NSStackView* body = stack();
       bind(widget, body);
       for (int i = 0; i < pages->count(); ++i) { add(body, renderWidget(pages->widget(i))); }
@@ -2757,10 +2814,17 @@ private:
     }
     return result;
   }
-  NSView* renderTabs(QWidget* widget, int count, std::function<QWidget*(int)> page, std::function<QString(int)> name) {
+  NSView* renderTabs(QWidget* widget, int count, std::function<QWidget*(int)> page, std::function<QString(int)> name,
+                     std::function<QIcon(int)> icon = nullptr) {
     NSTabView* tabs = [[NSTabView alloc] initWithFrame:NSMakeRect(0, 0, 500, 340)];
-    const int id = bind(widget, tabs);
+    bool icons = false;
+    for (int i = 0; icon && i < count && !icons; ++i) { icons = !icon(i).isNull(); }
+    // Pages with the shared icons (the Settings panes) are chosen in a row
+    // of icons above names instead of text-only tabs (mitcad#971).
+    MitcadNativePaneSelector* panes = icons ? paneSelector(tabs) : nil;
+    const int id = bind(widget, panes != nil ? panes.superview : tabs);
     m_bindings[static_cast<std::size_t>(id)].tabs = tabs;
+    m_bindings[static_cast<std::size_t>(id)].panes = panes;
     tabs.identifier = ns(QString::number(id));
     int selected = 0;
     if (auto* source = qobject_cast<QTabWidget*>(widget)) { selected = source->currentIndex(); }
@@ -2770,10 +2834,69 @@ private:
       item.label = ns(title(name(i)));
       item.view = renderWidget(page(i));
       [tabs addTabViewItem:item];
+      if (panes != nil) {
+        MitcadNativePaneButton* button = [[MitcadNativePaneButton alloc] initWithFrame:NSZeroRect];
+        button.bordered = NO;
+        button.title = item.label;
+        button.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+        button.image = paneImage(icon(i), title(name(i)));
+        button.imagePosition = button.image != nil ? NSImageAbove : NSNoImage;
+        button.tag = i;
+        button.target = panes;
+        button.action = @selector(choose:);
+        button.toolTip = item.label;
+        button.accessibilityIdentifier = ns(QStringLiteral("native.settings.pane.%1").arg(i));
+        button.accessibilityRole = NSAccessibilityRadioButtonRole;
+        // Room for the icon and the tint around a short name (PaneButton).
+        [button.widthAnchor constraintGreaterThanOrEqualToConstant:64].active = YES;
+        [button.heightAnchor constraintEqualToConstant:52].active = YES;
+        [panes addArrangedSubview:button];
+      }
     }
     if (selected >= 0 && selected < count) { [tabs selectTabViewItemAtIndex:selected]; }
+    [panes sync];
     tabs.delegate = m_target;
-    return tabs;
+    return panes != nil ? panes.superview : tabs;
+  }
+  // The section row above a separator line and the pages, centred as in the
+  // shared header; the window is at least as wide as the complete row.
+  MitcadNativePaneSelector* paneSelector(NSTabView* tabs) {
+    tabs.tabViewType = NSNoTabsNoBorder;
+    tabs.translatesAutoresizingMaskIntoConstraints = NO;
+    MitcadNativePaneSelector* panes = [MitcadNativePaneSelector new];
+    panes.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    panes.alignment = NSLayoutAttributeCenterY;
+    panes.spacing = 4;
+    panes.edgeInsets = NSEdgeInsetsMake(8, 12, 8, 12);
+    panes.translatesAutoresizingMaskIntoConstraints = NO;
+    [panes setHuggingPriority:NSLayoutPriorityDefaultHigh forOrientation:NSLayoutConstraintOrientationHorizontal];
+    panes.pages = tabs;
+    panes.accessibilityIdentifier = @"native.settings.panes";
+    panes.accessibilityElement = YES;
+    panes.accessibilityRole = NSAccessibilityRadioGroupRole;
+    panes.accessibilityLabel = ns(tr("Settings category"));
+    NSBox* line = [NSBox new];
+    line.boxType = NSBoxSeparator;
+    line.translatesAutoresizingMaskIntoConstraints = NO;
+    NSView* container = [NSView new];
+    container.translatesAutoresizingMaskIntoConstraints = NO;
+    [container addSubview:panes];
+    [container addSubview:line];
+    [container addSubview:tabs];
+    [NSLayoutConstraint activateConstraints:@[
+      [panes.topAnchor constraintEqualToAnchor:container.topAnchor],
+      [panes.centerXAnchor constraintEqualToAnchor:container.centerXAnchor],
+      [panes.leadingAnchor constraintGreaterThanOrEqualToAnchor:container.leadingAnchor],
+      [panes.trailingAnchor constraintLessThanOrEqualToAnchor:container.trailingAnchor],
+      [line.topAnchor constraintEqualToAnchor:panes.bottomAnchor],
+      [line.leadingAnchor constraintEqualToAnchor:container.leadingAnchor],
+      [line.trailingAnchor constraintEqualToAnchor:container.trailingAnchor],
+      [tabs.topAnchor constraintEqualToAnchor:line.bottomAnchor],
+      [tabs.leadingAnchor constraintEqualToAnchor:container.leadingAnchor],
+      [tabs.trailingAnchor constraintEqualToAnchor:container.trailingAnchor],
+      [tabs.bottomAnchor constraintEqualToAnchor:container.bottomAnchor],
+    ]];
+    return panes;
   }
   NSView* renderModel(QAbstractItemView* view) {
     // Icon-mode lists are tile grids with their pictures (mitcad#813).
@@ -2842,6 +2965,17 @@ private:
     }
     const int id = bind(view, box);
     m_bindings[static_cast<std::size_t>(id)].table = table;
+    if (QScrollBar* bar = view->verticalScrollBar()) {
+      // The shared view's scroll requests reach the native viewport
+      // (followSharedScroll, mitcad#972).
+      const auto generation = m_generation;
+      m_bindings[static_cast<std::size_t>(id)].connections.push_back(
+          connect(bar, &QScrollBar::valueChanged, this, [this, id, generation] {
+            if (generation != m_generation || static_cast<std::size_t>(id) >= m_bindings.size()) { return; }
+            m_bindings[static_cast<std::size_t>(id)].scrollMoved = true;
+            scheduleRefresh();
+          }));
+    }
     if (boundedList) {
       // A shared compact list grows/shrinks after records or Clear. Do not
       // freeze its initially empty QWidget maximumHeight into the native view.
@@ -3015,6 +3149,67 @@ private:
       if (view->property("nativeSourceList").toBool() && binding.table.selectedRow >= 0)
         [binding.table scrollRowToVisible:binding.table.selectedRow];
     }
+  }
+  // The native viewport follows its shared view's own scroll requests, such
+  // as a presenter's scrollTo() of the first row worth showing (Settings >
+  // Navigation's first binding, mitcad#972): when the shared view's new top
+  // row is not wholly in the native view, it becomes the native top row.
+  // Only a move of the shared position counts, never the native one, so the
+  // user's own scrolling stays. A shared move that just keeps its current
+  // row in sight, as after native input chose a row the native view already
+  // shows, leaves the native position too.
+  void followSharedScroll(Binding& binding) {
+    NSTableView* table = binding.table;
+    auto* view = qobject_cast<QAbstractItemView*>(binding.widget.data());
+    if (!binding.scrollMoved || table == nil || view == nullptr) { return; }
+    // A reload or an edit still pending, or a table outside a window (a
+    // hidden tab), keeps the request for a later refresh.
+    if (binding.dirty || table.window == nil || mac::editedCellField(table) != nil) { return; }
+    binding.scrollMoved = false;
+    NSScrollView* scroll = table.enclosingScrollView;
+    if (scroll == nil || view->model() == nullptr || table.numberOfRows == 0) { return; }
+    const auto nativeRow = [&](const QModelIndex& index) -> NSInteger {
+      if (!index.isValid()) { return -1; }
+      const QModelIndex first = index.siblingAtColumn(0);
+      for (NSInteger row = 0; row < table.numberOfRows; ++row) {
+        MitcadNativeModelNode* node = nodeAt(table, row);
+        if (node != nil && node->index == first) { return row; }
+      }
+      return -1;
+    };
+    QModelIndex top;
+    if (auto* grid = qobject_cast<QTableView*>(view)) {
+      const int row = grid->rowAt(0);
+      if (row >= 0) { top = view->model()->index(row, 0, view->rootIndex()); }
+    } else {
+      top = view->indexAt(QPoint(0, 0));
+    }
+    const NSInteger target = nativeRow(top);
+    if (target < 0) { return; }
+    // The header and other insets cover the clip view's top.
+    [scroll tile];
+    NSClipView* clip = scroll.contentView;
+    const NSEdgeInsets insets = clip.contentInsets;
+    NSRect shown = clip.bounds;
+    shown.origin.y += insets.top;
+    shown.size.height = std::max<CGFloat>(0, shown.size.height - insets.top - insets.bottom);
+    shown = [table convertRect:shown fromView:clip];
+    if (NSContainsRect(NSInsetRect(shown, -0.5, -0.5), [table rectOfRow:target])) { return; }
+    const QModelIndex current = view->currentIndex();
+    const NSInteger currentRow = nativeRow(current);
+    const QRect currentRect = current.isValid() ? view->visualRect(current) : QRect();
+    if (currentRow >= 0 && NSIntersectsRect(shown, [table rectOfRow:currentRow]) && currentRect.isValid() &&
+        currentRect.bottom() >= 0 && currentRect.top() < view->viewport()->height()) { return; }
+    NSRect bounds = clip.bounds;
+    bounds.origin.y = NSMinY([clip convertRect:[table rectOfRow:target] fromView:table]) - insets.top;
+    const NSPoint origin = [clip constrainBoundsRect:bounds].origin;
+    if (std::abs(origin.y - clip.bounds.origin.y) < 0.5) { return; }
+    [clip scrollToPoint:origin];
+    [scroll reflectScrolledClipView:clip];
+    ++g_widgetPropertyWrites;
+    if (!qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT"))
+      qInfo().noquote() << QStringLiteral("Native table follows its view's scroll: %1 top row %2 (%3)")
+          .arg(view->objectName()).arg(qlonglong(target)).arg(top.data().toString());
   }
   void rebuild() {
     // An option row may be replaced while its catalogue search is being
@@ -4472,6 +4667,10 @@ BOOL tableKeyEquivalent(NSWindow* window, NSEvent* event) {
 @end
 
 @implementation MitcadNativeTable
+- (NSInteger)presenterSelectedRows {
+  MitcadNativeWidgetTarget* target = (MitcadNativeWidgetTarget*)self.delegate;
+  return target != nil && target->owner != nullptr ? target->owner->presenterSelectedRows(self) : -1;
+}
 - (void)rightMouseDown:(NSEvent*)event {
   MitcadNativeWidgetTarget* target = (MitcadNativeWidgetTarget*)self.delegate;
   if (target != nil && target->owner != nullptr) { target->owner->modelContext(self, [self convertPoint:event.locationInWindow fromView:nil]); }
@@ -4485,6 +4684,10 @@ BOOL tableKeyEquivalent(NSWindow* window, NSEvent* event) {
 @end
 
 @implementation MitcadNativeOutline
+- (NSInteger)presenterSelectedRows {
+  MitcadNativeWidgetTarget* target = (MitcadNativeWidgetTarget*)self.delegate;
+  return target != nil && target->owner != nullptr ? target->owner->presenterSelectedRows(self) : -1;
+}
 - (void)mouseDown:(NSEvent*)event {
   MitcadNativeWidgetTarget* target = (MitcadNativeWidgetTarget*)self.delegate;
   if (target != nil && target->owner != nullptr)
@@ -4616,6 +4819,49 @@ BOOL tableKeyEquivalent(NSWindow* window, NSEvent* event) {
     const QRect crop = QRect(point(from), point(to)).normalized().intersected(presenter->sourceImage().rect());
     if (crop.width() >= 8 && crop.height() >= 8) { presenter->setCropRect(crop); }
   }
+  self.needsDisplay = YES;
+}
+@end
+
+@implementation MitcadNativePaneSelector
+- (void)choose:(NSButton*)sender {
+  NSTabView* pages = self.pages;
+  if (pages != nil && sender.tag >= 0 && sender.tag < pages.numberOfTabViewItems) {
+    [pages selectTabViewItemAtIndex:sender.tag];
+  }
+  [self sync]; // also when the page kept the selection (a refused edit)
+}
+- (void)sync {
+  NSTabView* pages = self.pages;
+  const NSInteger shown = pages.selectedTabViewItem != nil ? [pages indexOfTabViewItem:pages.selectedTabViewItem] : -1;
+  for (NSView* view in self.arrangedSubviews) {
+    if (![view isKindOfClass:MitcadNativePaneButton.class]) continue;
+    MitcadNativePaneButton* button = (MitcadNativePaneButton*)view;
+    const BOOL on = button.tag == shown;
+    // A click toggles a button's own state; the tab view's page decides.
+    button.state = on ? NSControlStateValueOn : NSControlStateValueOff;
+    if (button.chosen == on && button.accessibilityValue != nil) continue;
+    // The shared header's chosen pane: its icon and name in the accent.
+    button.chosen = on;
+    button.contentTintColor = on ? NSColor.controlAccentColor : nil;
+    button.accessibilityValue = @(on ? 1 : 0);
+    button.needsDisplay = YES;
+  }
+}
+@end
+
+@implementation MitcadNativePaneButton
+- (BOOL)wantsUpdateLayer { return NO; }
+- (void)drawRect:(NSRect)dirty {
+  if (self.chosen) {
+    // The shared header's rounded accent tint behind the chosen pane.
+    [[NSColor.controlAccentColor colorWithAlphaComponent:0.16] setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 2, 2) xRadius:9 yRadius:9] fill];
+  }
+  [super drawRect:dirty];
+}
+- (void)viewDidChangeEffectiveAppearance {
+  [super viewDidChangeEffectiveAppearance];
   self.needsDisplay = YES;
 }
 @end

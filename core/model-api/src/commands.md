@@ -1031,7 +1031,9 @@ split. Reverting the edit restores the keys and removes the warning.
   `{"type": "angle", "angle": a}` (one side; negative turns the other
   way), `{"type": "full"}`, `{"type": "symmetric", "angle": a}` (a to each
   side, as .f3d designs measure it), `{"type": "two_sides", "angle1": a1,
-  "angle2": a2}` or `{"type": "to_object", "object": <object>}` (the
+  "angle2": a2}` (a1 not negative; a negative a2, mitcad#955, ends side
+  two past the profile: the turn runs from -a2 to a1, so a1 + a2 must be
+  more than zero; not for a body face) or `{"type": "to_object", "object": <object>}` (the
   positive way to the first face of the object reached; with a body's
   `"through": true`, mitcad#539, through the body to its last face, where
   the turn leaves it for the last time: the pieces of the turn are taken
@@ -4095,7 +4097,9 @@ made, in order) and `status` (as the `sketch` query: `dof`,
 The `sketch` query (`{"query": "sketch", "uid": "F1"}`) returns:
 
 - `uid`, `name`, `plane`, `frame` (`origin`, `x_axis`, `y_axis`, `normal`
-  in model coordinates, or null when the sketch did not evaluate),
+  in the coordinates of the sketch's component, moved into the design by
+  an occurrence's `world` placement, mitcad#958; or null when the sketch
+  did not evaluate),
   `solved`, `error`;
 - `warnings`: the sketch evaluation's (as the timeline's), such as linked
   projections that could not follow their sources;
@@ -5699,7 +5703,11 @@ What the document gets:
   Body's `Tip` before its last feature: the features after it are
   replayed, then suppressed; a suppressed feature (1.0's `Suppressed`):
   replayed and suppressed (`partial`). Bodies are named after FreeCAD's
-  objects, hidden and coloured as there (above).
+  objects, hidden and coloured as there (above). The sketch the import
+  makes for a binder of another component's sketch (a feature's profile
+  or hole sketch) lies on the bound sketch's own plane with the sketch's
+  `plane_link`, and a sketch attached to a face of such a binder on that
+  plane with its `plane_link` too (mitcad#963).
 
 | FreeCAD | MitCad | Readings tried |
 |---|---|---|
@@ -6282,7 +6290,10 @@ forms are a later ticket).
   the root, `<file> : <instance>`, placed by the instance's transform; the
   linked file (found by its name in `link_files`, else next to the
   project, at the relative path the project stores, or in `link_folder`)
-  comes in there the same way (its own links are not followed). A link
+  comes in there the same way (its own links are not followed). The name
+  and path come from the project, so only a bare file name is looked for
+  and a stored path only below the project's folder (no root, drive or
+  `..`; mitcad#924). A link
   not found leaves its component empty, the report naming it. A linked
   IFC model (a link whose file is an `.ifc`) comes in from its cached
   model (`<name>.ifc.RVT`) when found, else from the IFC file by the IFC
@@ -6896,6 +6907,35 @@ without git.
   before git runs, and every text shown or logged has URLs' user
   information and access tokens (`ghp_…`, `github_pat_…`, `glpat-…`)
   hidden.
+- A repository's own git configuration is untrusted (mitcad#920): no git
+  runs in a repository whose `.git/config` (or `config.worktree`) sets a
+  key that starts a program or sends the sign-in or the traffic elsewhere
+  (`core.sshCommand`, `core.gitProxy`, `core.askPass`, `core.worktree`,
+  `remote.<name>.uploadpack`, `receivepack`, `vcs`, `proxy`,
+  `credential.helper` and `credential.<url>.helper`, `url.<base>.insteadOf`
+  and `pushInsteadOf`, `http.*` except `postBuffer`, `lowSpeedLimit`,
+  `lowSpeedTime` and `version`, `protocol.*`, `filter.*`, `diff.external`,
+  `diff.<driver>.command` and `textconv`, `merge.<driver>.driver`, `gpg.*`,
+  `push.gpgSign`, `include.*`, `includeIf.*`, `init.templateDir`,
+  `alias.lfs`, git-lfs's custom transfer agents and extensions): the
+  answer's error is `untrusted_config`, whose message names the keys and
+  the files. Every run has `-c core.hooksPath=/dev/null -c core.fsmonitor=
+  -c fetch.recurseSubmodules=false -c push.recurseSubmodules=no -c
+  submodule.recurse=false`: no hooks (also none in `.git/hooks`), no file
+  system monitor, no submodules. A `fetch`, `push` or `ls-remote` of a
+  configured remote checks its `url` and `pushurl` as a typed URL is
+  checked: refused, the error is `invalid_url` ("The remote origin is not
+  used: …").
+- A remote in a folder (a path, relative or absolute, or a `file://` URL)
+  runs none of its repository's hooks (mitcad#940): git starts that
+  repository's own git for a push or a fetch, so a `push` to it runs
+  `git -c core.hooksPath=/dev/null -c core.fsmonitor= receive-pack` there
+  (`--receive-pack`), a `fetch`, `ls-remote` or `clone` the same
+  `upload-pack` (`--upload-pack`). When that repository's own
+  configuration sets one of the keys above (for example
+  `core.alternateRefsCommand`), the remote is not used: the error is
+  `untrusted_config` ("MitCad does not use the remote …"), naming the keys
+  and the file. Remotes on a server are run as before.
 
 These are commands of the version history's `Project` (`command(json)`,
 `command_text(json)`); `command_with(json, control)` runs one with a
@@ -6916,12 +6956,13 @@ versions the project lacks), `too_large` (GitHub's 100 MiB limit),
 `lfs_missing`, `not_a_project`, `unrelated` (another history),
 `timed_out`, `cancelled`, `conflict` (a sync needs a choice for files
 changed on both sides), `local_changes` (a sync would change files that
-have changes no version holds), `other`.
+have changes no version holds), `untrusted_config` (the repository's own
+git configuration names programs; git was not run), `other`.
 
 | Command | Fields | Result |
 |---|---|---|
 | `git_info` | | `path`, `version`, `lfs` (git-lfs's version or null), `supported` (2.34 or newer), `minimum`, `error` (`git_missing`) |
-| `remote_info` | `links` (default false) | `name` (the remote the branch follows, else `origin` when there is one; null: none), `url` (credentials hidden), `branch`, `upstream` (`origin/main`), `ahead` and `behind` (versions the remote lacks and the project lacks, by the remote-tracking reference; null before the first fetch or push), `last_fetch`, `last_push` and `last_sync` ({`time`, `date`, `error`}, kept in `.mitcad/local/remote.json`), `remotes` (every remote of the repository, sorted: {`name`, `url` (credentials hidden)}; with several and `name` null, none is followed: [Following a remote](#following-a-remote)), with `links` `external_links`: linked components whose files are outside the project ({`file`, `component`, `path`}), which other copies of the project do not have |
+| `remote_info` | `links` (default false) | `name` (the remote the branch follows, else `origin` when there is one; null: none), `url` (credentials hidden), `branch`, `upstream` (`origin/main`), `ahead` and `behind` (versions the remote lacks and the project lacks, by the remote-tracking reference; null before the first fetch or push), `last_fetch`, `last_push` and `last_sync` ({`time`, `date`, `error`}, kept in `.mitcad/local/remote.json`), `remotes` (every remote of the repository, sorted: {`name`, `url` (credentials hidden)}; with several and `name` null, none is followed: [Following a remote](#following-a-remote)), with `links` `external_links`: linked components whose files are outside the project ({`file`, `component`, `path`}), which other copies of the project do not have; `untrusted_config` (only when the repository's own git configuration sets refused keys: the error {`class`: `untrusted_config`, `message`, `detail`}; no git runs in the project, and the text answer starts with `warning:` and the message) |
 | `remote_check` | `url` | `url`, `reachable`, `empty`, `default_branch` (what the remote's HEAD names, else `main`, `master` or the only branch), `head` (its commit), `has_project` (`.mitcad/project.json` at its root), `related` (a version in common with the project's history; null when empty). A branch whose commit the project lacks is fetched without a reference to read it, then `git gc --auto` |
 | `remote_set` | `url`, `name` (default `origin`), `author`, `fallback_author` | `name`, `url`, `branch`, `upstream`, `commit` (the version `Configure project for sync`, or null), `written`: the remote added or its URL changed, the branch following its branch of the same name (unless it follows one of that remote), and the recommended `.gitattributes` (`*.mitcad text eol=lf merge=binary`) recorded when the project lacks it. No network |
 | `remote_remove` | `name` (default `origin`) | `name`, `removed` (false: there was none); git drops the remote-tracking references and the upstream of branches that followed it |
@@ -7830,6 +7871,66 @@ the checks, the BUILD search and `library_build_candidates`), ctest
 BUILD parts' generator on sections made in the test, its frames,
 fetch, search and candidates; needs git and Python) and
 `tools/ui-library-test.sh`.
+
+### Standards and suppliers of library rows
+
+A library's manifest may name each configuration row's standards and the
+suppliers' articles of it (mitcad#949; the format is in
+[docs/libraries.md](../../../docs/libraries.md#standards-and-suppliers-of-rows)):
+the component's `rows` (`{"M6x8": {"standards": ["DIN 912"],
+"supplier_parts": [{"supplier", "part_number", "material", "finish",
+"checked"}]}}`) and the library's `suppliers` (`[{"id", "name", "url"}]`).
+A library without them answers as before.
+
+- **`library_show`**: each row of a component's `configurations.rows`
+  has its `standards` and `supplier_parts` (each with `supplier_name`, the
+  supplier's name from `suppliers`) when the manifest gives them; a
+  component has `standards` (the standards its rows name, those of its
+  `standard` first in that order, `non-standard` last) and `suppliers`
+  (`[{"id", "name", "url"}]` with articles on its rows). The `manifest`
+  has `suppliers` and `replaces`.
+- **`library_configure`** takes `standard` (the Standard filter's: `DIN
+  912`): the `designation` of a row that names it is `DIN 912 M6x10`;
+  without it, or for a row without that standard, the row's first; a row
+  tagged `non-standard` is `M6x6 (non-standard)`. The answer adds
+  `rows` (each row's `name`, `select`, `standards`, `supplier_parts`),
+  `standard` (the standard the combination's row is named by, or null)
+  and `supplier_parts` (that row's).
+- **`library_search`**: a component's `standards` and `suppliers` as
+  above; `supplier` also finds a component whose rows a supplier sells
+  (its id or name), `part_number` a supplier's article number. With
+  `sources` (the enabled sources' URLs), a library an index offers, or a
+  fetched clone of one, is left out when an enabled source has its
+  repository under another id (the same URL, or the source's clone has
+  its newest commit or a version the index reviewed) or when a fetched
+  library's `replaces` names its id; `left_out` lists them (`id`, `url`,
+  `reason`, `text`: `mitcad-fasteners left out: same repository as
+  https://github.com/mitcad/parts.git`). Without `sources` every fetched
+  library counts as a source.
+- **`library_check`** refuses an article whose `supplier` is not one of
+  the library's `suppliers`, a `checked` that is no date (`YYYY-MM-DD`),
+  an article without a part number, a supplier without an id or a name,
+  and a row name the design's table lacks.
+- **`insert_component`** takes the library's `standard` (`{"id", "url",
+  "rev", "component", "config", "standard": "DIN 912"}`): the part is
+  named by it when its row has it. The component's `library` records
+  `standard` (the standard it is named by) and `supplier_parts` (its
+  row's articles, with the suppliers' names); `update_library_parts`
+  keeps the standard where the new row has it.
+- **`parts_list`**: each row adds `supplier_parts` and
+  `supplier_parts_text` (`Würth 0084 6 8 (8.8 zinc-plated); …`, the
+  parts lists' "Supplier part numbers" column).
+
+A part with options (inserted with `parameters`) is named by its
+component's `standard` as before.
+
+Tests: `core/vcs/src/tests/library_rows.rs` (the manifest read and
+checked, `library_show`, `library_configure` with `standard`,
+`library_search` by supplier, the index's library left out),
+`core/model-tests/links/src/library_tests.rs`
+(`library_parts_follow_the_rows_standards_and_list_supplier_parts`,
+`library_parts_without_row_blocks_read_as_before`) and
+`core/model/src/library.rs` (the designation).
 
 ## Configurations: options, rows and rules
 
@@ -10083,6 +10184,20 @@ boolean leaves faces out or puts the tool's pieces inside) is tried again
 with the smallest fuzzy value, as above, that gives a valid result of all
 its faces. A cut that works exactly is the exact one. Tests: `core/import`
 (`tests.rs`), and the named parts of mitcad#235.
+
+## Joins that lose volume (mitcad#964)
+
+A union never holds less than the bodies it joins, so a join of a
+feature's tool whose result holds less volume than a target it merged
+(by more than a millionth of the target's box, measured on the faces the
+two do not share) is wrong, with or without a join tolerance: it is
+tried again with the smallest fuzzy value from 1e-5 mm (up to the join
+tolerance where the design has one) whose result merges every target and
+loses none. Where none does, the exact result stands. Found on a reported
+FreeCAD model: OCCT's exact join of a pad flush with two tangent walls of
+the body (its faces merged by the earlier joins and cuts) took the pad's
+overlap with the body away; a fuzzy value of 1e-5 mm gives the union. A
+join that holds its targets is the exact one.
 
 ## Combine's joins within the join tolerance; the .rvt import's tolerance
 
@@ -12705,7 +12820,7 @@ holes from `Kernel::round_holes`, their threads from the `threads` query.
 | `title` | `Untitled` | the design's name in the title block |
 | `date` | today (UTC) | the date in the title block |
 | `per_body` | false | a sheet per body: pages of one PDF, or SVG, DXF and DWG files `<name>-2.svg`, … |
-| `exact` | true | exact edges; false: from a triangulation (quicker on large bodies; also the fallback when the exact projection fails, and for mesh bodies) |
+| `exact` | true | exact edges; false: from a triangulation (quicker on large bodies; also the fallback when the exact projection fails, and for mesh bodies). Views of bodies with free-form faces (not planes, cylinders, cones, spheres or tori) come from a triangulation within a 2000th of the bodies' size either way, their edges as lines and arcs where they follow them within 1.5 times that, polylines elsewhere (mitcad#962: exact edges took half a minute a view on modelled threads) |
 | `drawing` | none | a drawing kept in the design (`D1` or its name, *Drawings in the design*), written as it is: its sheets, views and title blocks; the fields above are then its own and refused, except `title` (where its sheets have none) |
 | `sheet` | all | with `drawing`: one sheet's index (0 the first) |
 
@@ -16083,7 +16198,9 @@ and a section view take their parent's when left out), `style`
 (`{"hidden_lines", "tangent_edges", "shaded", "polygonal"}`; a view other
 than a base view takes its parent's when left out; an isometric view and
 a section show no hidden edges; `shaded` fills the faces in grey under
-the lines from the kernel's triangles) and `label` (written under the
+the lines from the kernel's triangles; `polygonal` projects a
+triangulation, as every view of bodies with free-form faces is projected
+anyway, `export_drawing`'s `exact` above, mitcad#962) and `label` (written under the
 view; a section's `SECTION A-A` and a detail's `DETAIL B (2:1)` when left
 out). A base view's `subject`: `{"type": "design"}` (default: every shown
 body of the drawing's component and its occurrences),
@@ -17998,3 +18115,119 @@ defaults in text heights), `compose::tests`
 (`hole_callouts_write_their_holes_from_the_feature`: a simple, a through
 counterbored, a countersunk, a tapped, a partly tapped and a custom-thread
 hole, the drill's size changed; `a_hole_callout_takes_a_frame_and_breaks_with_its_hole`).
+
+## Readers of files in the application's process
+
+The application reads whole CAD files only in its import process
+(`mitcad --import-worker`), including the listings asked before an
+import (`list_references` of `import_f3d_timeline`, `list_links` of
+`import_rvt`; mitcad#922). The queries and commands that read a file the
+user chose in the application's own process run that reader guarded: a
+panic in it (a reader's bug that a broken or hostile file reaches) is
+the query's or command's error, `<file>: the file's reader failed (an
+internal error): <the panic's message>`, instead of an abort of the
+application at the bridge. Guarded: the `dxf_info` and `svg_info`
+queries, `sketch.import_dxf` and `sketch.import_svg`, and the read of
+`import_print_profile` (a 3MF project, a preset or a bundle), and the
+read of each installed preset `import_slicer_presets` imports (the
+preset with those it inherits from; a broken preset file is that
+command's error, not an abort). The
+readers return data of their own, so nothing of the document is half
+changed by such an error (`mitcad_model::reader_guard::catch_panic`).
+
+For tests, `MITCAD_TEST_PARSER_PANIC=<file name or path>` makes the
+reader of that file panic: the guarded readers return the error above,
+and the listings in the import process end that process.
+
+Tests: `reader_guard::tests` (`core.model_base`: a panic with its
+message, a result passed on), `test_reader_panic_is_an_error`
+(`core.bridge`: `dxf_info` with the hook returns the error, the process
+goes on and answers the query again), `tools/ui-import-listing-test.sh`.
+
+## Feature inputs
+
+mitcad#957 (`core/model/src/features/inputs.rs`,
+`core/model-api/src/feature_inputs.rs`; the kernel's
+`Kernel::edge_polylines`, `geometry/include/mitcad/geometry/input_edges.hpp`):
+what a feature picked and its result no longer shows, kept with the
+feature's result so that the application can draw it where it was when
+the feature is selected or hovered on the timeline (`app/COMMANDS.md`,
+"Timeline feature inspection"). Today a [Fillet](#fillet) and a
+[Chamfer](#chamfer) keep their picked edges: the edges their sets name and
+the edges bounding the faces their sets name (every edge of a set of every
+edge), each edge once, as polylines in the component's coordinates. The
+rounding or the bevel took those edges away, so the lines run where the
+edges were in the body before the feature.
+
+**Cheap by design.** The feature's build works the lines out once, from
+the body before it, with the names it has just resolved (one kernel call
+after the rounding or the bevel succeeded): each edge's curve cut into
+straight pieces within the view's display tolerance (0.01 mm from the
+curve, at most 5° between neighbouring pieces), a few kilobytes per
+feature. They are kept with the result in the memory cache and in the
+result store, so a warm open has them as a build does. The query only
+reads them: asking it runs no geometry operation and never starts a
+build. A kernel that cannot give them leaves the feature built as before,
+with none.
+
+| Query | Fields | Result |
+|---|---|---|
+| `feature_inputs` | `uid` (the feature) | `uid`, `name`, `stored` (whether the feature's last build kept inputs), `edges` (the picked edges, one polyline each: `[[x, y, z], …]`, millimetres in the feature's component; empty when none are kept) |
+
+None are kept (`stored` false, `edges` empty) for a feature not built since
+the document was read without building (its next build keeps them), one
+that failed, is suppressed or lies after the history marker, and a
+feature of a kind without picked inputs. A feature that does not exist is
+refused (`feature F99 does not exist`).
+
+The inputs are of kinds of their own, each a field of the answer, so
+that other kinds (the faces of a Shell or a Draft, a Hole's points) can
+follow beside `edges` without changing it.
+
+Tests: `core/model-tests/features-solid/src/feature_inputs_tests.rs`
+(a fillet of four edges keeps four polylines and the query, asked twice,
+makes no kernel call; a document read without building answers none and
+computes nothing, its next build keeps them; a chamfer of a face and an
+edge keeps each edge once; an extrude, a rolled-back, a suppressed and a
+failed fillet have none; a kernel that refuses the polylines still builds
+the fillet).
+
+## Joins that touch only another component's body
+
+A feature changes only the bodies of its own component (mitcad#958): a
+Join (an extrusion's, a revolution's, any feature whose `operation` is
+`join`) with `participants` empty works on all of its component's own
+bodies, and a body of another component listed there fails as before
+(`body F9.b0 (from Extrude1) belongs to Bracket; a feature works on the
+bodies of its own component …`). Joining into a component placed inside
+the feature's is not supported: the body belongs to that component's
+definition, which every occurrence of it shows.
+
+When the tool touches none of its participants (or the component has no
+bodies of its own) but touches a body of a component placed inside the
+feature's, through any occurrence on any depth, the error names it:
+
+```text
+the extrusion does not touch any participant body of Brace; it touches body F9.b0
+(from Extrude1) in Bracket:1, a body of another component, and a feature of Brace
+joins only Brace's own bodies: choose New Body, or activate Bracket and add the
+feature there
+```
+
+(`there is no body of Brace to join; …` for a component without bodies;
+at most three bodies are named, then `N more`). The bodies are each
+occurrence's under the feature's component, moved into its coordinates by
+the placements on the occurrence's path at the feature's point of the
+timeline; the test is the one Extrude's automatic operation makes
+(`Kernel::enclosing_box`, then `Kernel::tool_contacts`), and only a
+failed Join reads them. Without such a body the error stays `the
+extrusion does not touch any participant body`. The application's panel
+shows the message (app/COMMANDS.md, *Extrude in a turned occurrence*).
+Code: `core/model/src/features/join_elsewhere.rs`. Test:
+`core/model-tests/links/src/link_tests.rs`
+(`a_join_that_touches_only_a_child_occurrences_body_names_it`).
+
+The `sketch` query's `frame` is in the sketch's component's coordinates
+(as the bodies of the component are); a client that draws a direction
+from it in the design moves it by the `world` placement of the occurrence
+it shows the sketch at (the `components` query).

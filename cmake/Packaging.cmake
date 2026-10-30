@@ -164,17 +164,27 @@ set(MITCAD_RELEASE_URL "https://github.com/mitcad/Mitcad/releases" CACHE STRING
     "Where releases are published: <url>/download/v<version>/<file>, notes at <url>/tag/v<version>")
 # Not CPACK_PACKAGE_FILE_NAME: include(CPack) leaves the source package's name in it.
 set(mitcad_installer "${mitcad_package_name}.exe")
-add_custom_target(update-manifest
-  COMMAND "$<TARGET_FILE:mitcad-release>" manifest
-          --version "${PROJECT_VERSION}"
-          --notes "${MITCAD_RELEASE_URL}/tag/v${PROJECT_VERSION}"
-          --asset windows-x64 "${CMAKE_BINARY_DIR}/${mitcad_installer}"
-                  "${MITCAD_RELEASE_URL}/download/v${PROJECT_VERSION}/${mitcad_installer}"
-          --out "${CMAKE_BINARY_DIR}/update-manifest.json"
-  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-  COMMENT "Signing ${mitcad_installer}, writing update-manifest.json"
-  VERBATIM)
-add_dependencies(update-manifest mitcad-release)
+if(MITCAD_UPDATE_TEST_HOOKS)
+  # A test build reads the update tests' variables (mitcad#921): never
+  # signed as a release.
+  add_custom_target(update-manifest
+    COMMAND "${CMAKE_COMMAND}" -E echo
+            "update-manifest: this build has MITCAD_UPDATE_TEST_HOOKS on; sign a release built without it"
+    COMMAND "${CMAKE_COMMAND}" -E false
+    VERBATIM)
+else()
+  add_custom_target(update-manifest
+    COMMAND "$<TARGET_FILE:mitcad-release>" manifest
+            --version "${PROJECT_VERSION}"
+            --notes "${MITCAD_RELEASE_URL}/tag/v${PROJECT_VERSION}"
+            --asset windows-x64 "${CMAKE_BINARY_DIR}/${mitcad_installer}"
+                    "${MITCAD_RELEASE_URL}/download/v${PROJECT_VERSION}/${mitcad_installer}"
+            --out "${CMAKE_BINARY_DIR}/update-manifest.json"
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    COMMENT "Signing ${mitcad_installer}, writing update-manifest.json"
+    VERBATIM)
+  add_dependencies(update-manifest mitcad-release)
+endif()
 
 # The installer and the automatic update in ctest, with Mesa (a build VM):
 # tools/installer-windows-test.ps1 installs just for the current user and

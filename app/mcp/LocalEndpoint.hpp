@@ -26,7 +26,11 @@ void removeEndpoint(const Endpoint& endpoint);
 // running (a killed or crashed app, mitcad#437) is removed, not returned;
 // a returned record is live only once its token authenticates.
 QList<Endpoint> discover(QString* error = nullptr);
-QByteArray encodeAuth(const Endpoint& endpoint);
+// The authentication line; `chat`: the chat panel's marker of its own
+// bridge connection (mitcad#947), whose tool calls the panel approves.
+QByteArray encodeAuth(const Endpoint& endpoint, const QString& chat = QString());
+// The longest chat marker the listener takes.
+constexpr qsizetype kMaxChatMarker = 64;
 // Whether a process with this id is running, without waiting. True when
 // the system cannot tell (no right to query it), so that such a record is
 // still probed; false for an id no process can have.

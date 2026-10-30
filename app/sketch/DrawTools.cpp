@@ -273,6 +273,7 @@ public:
     m_snap = snap;
     if (m_state == State::First) {
       m_startSnap = snap;
+      m_startAxes = axesAt(m_c.model(), snap);
       m_start = snap.at;
       m_state = State::Chain;
       m_end = m_start;
@@ -525,12 +526,6 @@ private:
       startPoint = c->start;
       endPoint = c->end;
     }
-    if (m_startPoint.isEmpty() && !shares(m_startSnap)) {
-      op.constrain(startPoint, m_startSnap);
-    }
-    if (!shares(endSnap)) {
-      op.constrain(endPoint, endSnap);
-    }
     QString inferred;
     const auto angle = m_c.fieldValue(QStringLiteral("angle"));
     if (m_inference) {
@@ -543,7 +538,28 @@ private:
         }
       }
     }
-    if (inferred == QStringLiteral("horizontal") || inferred == QStringLiteral("vertical")) {
+    // A line along an axis both its ends lie on (mitcad#948): the end held
+    // on the axis and a horizontal or vertical constraint would say the
+    // same twice, and the model refuses the second. An end that snapped
+    // onto the axis is kept there by the direction from a start on it; at
+    // an existing point on the axis (the origin), the direction is the
+    // axis's already.
+    const QString endAxes = axesAt(m_c.model(), endSnap);
+    const QString along = inferred == QStringLiteral("horizontal") ? QStringLiteral("x")
+                          : inferred == QStringLiteral("vertical") ? QStringLiteral("y")
+                                                                   : QString();
+    const bool onAxis = !along.isEmpty() && m_startAxes.contains(along) && endAxes.contains(along);
+    const bool endOnAxis = onAxis && endSnap.kind == Snap::Kind::OnCurve;
+    if (m_startPoint.isEmpty() && !shares(m_startSnap)) {
+      op.constrain(startPoint, m_startSnap);
+    }
+    if (!shares(endSnap) && !endOnAxis) {
+      op.constrain(endPoint, endSnap);
+    }
+    if (onAxis && !endOnAxis) {
+      qDebug().noquote() << QStringLiteral("Line %1 lies on the sketch %2 axis: no %3 constraint")
+                                .arg(line, along, inferred);
+    } else if (inferred == QStringLiteral("horizontal") || inferred == QStringLiteral("vertical")) {
       op.addConstraint({{QStringLiteral("type"), inferred}, {QStringLiteral("line"), line}});
     } else if (!inferred.isEmpty()) {
       op.addConstraint({{QStringLiteral("type"), inferred},
@@ -589,6 +605,7 @@ private:
     m_prevArc = false;
     m_start = to;
     m_startPoint = endPoint;
+    m_startAxes = endAxes;
     if (m_chainStart.isEmpty()) {
       m_chainStart = startPoint;
     }
@@ -639,6 +656,7 @@ private:
     m_previous = arc;
     m_prevArc = true;
     m_startPoint = chainEnd;
+    m_startAxes = axesAt(m_c.model(), snap);
     m_end = m_start;
     m_c.setFields(fields());
     m_c.hint(QObject::tr("Line: click the end point; double-click or Esc ends the chain."));
@@ -662,6 +680,7 @@ private:
   V2 m_start;
   V2 m_end;
   QString m_startPoint; // the point the next line starts from
+  QString m_startAxes;  // the axes it lies on (axesAt, mitcad#948)
   QString m_chainStart;
   QString m_previous; // the chain's last curve
   V2 m_prevDir{1.0, 0.0};

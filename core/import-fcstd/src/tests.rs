@@ -4891,3 +4891,1728 @@ fn a_hole_drills_each_sketch_point_once() {
         .collect();
     assert_eq!(points, [json!([15.0, 10.0]), json!([35.0, 10.0])], "{def}");
 }
+
+// Binders and external geometry on sketches (mitcad#952).
+
+/// An `App::PropertyXLink` with a sub-element path.
+fn xlink_sub(name: &str, target: &str, sub: &str) -> String {
+    prop(
+        name,
+        "App::PropertyXLink",
+        &format!("<XLink file=\"\" stamp=\"\" name=\"{target}\" sub=\"{sub}\"/>"),
+    )
+}
+
+/// An `App::PropertyXLinkSubList` of (object, sub-element path).
+fn xlink_list(name: &str, targets: &[(&str, &str)]) -> String {
+    let items: String = targets
+        .iter()
+        .map(|(t, sub)| format!("<XLink file=\"\" stamp=\"\" name=\"{t}\" sub=\"{sub}\"/>"))
+        .collect();
+    prop(
+        name,
+        "App::PropertyXLinkSubList",
+        &format!(
+            "<XLinkSubList count=\"{}\">{items}</XLinkSubList>",
+            targets.len()
+        ),
+    )
+}
+
+/// A sketch's `ExternalGeometry`: (object, element) each.
+fn external_links(links: &[(&str, &str)]) -> String {
+    let items: String = links
+        .iter()
+        .map(|(o, sub)| format!("<Link obj=\"{o}\" sub=\"{sub}\"/>"))
+        .collect();
+    prop(
+        "ExternalGeometry",
+        "App::PropertyLinkSubList",
+        &format!(
+            "<LinkSubList count=\"{}\">{items}</LinkSubList>",
+            links.len()
+        ),
+    )
+}
+
+/// A sketch's copy of its external geometry (1.0): the H and V axes, then
+/// one geometry per link.
+fn external_copy(items: &[String]) -> String {
+    let axis = |x: f64, y: f64| {
+        format!(
+            "<Geometry type=\"Part::GeomLineSegment\"><LineSegment StartX=\"0\" StartY=\"0\" StartZ=\"0\" EndX=\"{x}\" EndY=\"{y}\" EndZ=\"0\"/><Construction value=\"1\"/></Geometry>"
+        )
+    };
+    prop(
+        "ExternalGeo",
+        "Part::PropertyGeometryList",
+        &format!(
+            "<GeometryList count=\"{}\">{}{}{}</GeometryList>",
+            items.len() + 2,
+            axis(1.0, 0.0),
+            axis(0.0, 1.0),
+            items.concat()
+        ),
+    )
+}
+
+/// The name of a mock stored shape's edge (`"<faces> <name>"` data).
+fn stored_edge_name(data: &[u8], index: usize) -> String {
+    let (stored, _) = MockKernel::default()
+        .import_brep(FeatureUid(0), data, 0)
+        .unwrap();
+    let (a, b) = &stored.edges[index];
+    mitcad_model::EdgeName::new(a.clone(), b.clone()).to_string()
+}
+
+/// A Body: a 40 × 30 rectangle sketch on XY (with its stored shape), a
+/// pad, a binder of the sketch whose `Context` names the Body (as FreeCAD
+/// writes it), and a sketch 10 mm up whose external geometry is the
+/// binder's first edge (the rectangle's bottom line), the sketch's second
+/// edge (its right side) and the sketch's first vertex (its far corner);
+/// a line of its own starts on the binder's edge and ends on it.
+fn binder_document() -> FcstdFile {
+    let side = format!(
+        "{}{}{}{}{}",
+        placement([0.0, 0.0, 10.0], [0.0, 0.0, 1.0], 0.0),
+        external_links(&[
+            ("Binder", "Edge1"),
+            ("Sketch", "Edge2"),
+            ("Sketch", "Vertex1")
+        ]),
+        external_copy(&[
+            segment([0.0, 0.0], [40.0, 0.0], true),
+            segment([40.0, 0.0], [40.0, 30.0], true),
+            sketch_point([40.0, 30.0], true),
+        ]),
+        geometry(&[segment([0.0, 0.0], [20.0, 0.0], false)]),
+        constraints(&[
+            constrain(1, 0.0, &[(0, 1), (-3, 1)], "", true),
+            constrain(13, 0.0, &[(0, 2), (-3, 0)], "", true),
+        ])
+    );
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Body",
+            format!(
+                "{}{}{}",
+                shape("Body.brp"),
+                links(
+                    "Group",
+                    "App::PropertyLinkList",
+                    &["Sketch", "Pad", "Binder", "Side"]
+                ),
+                link("Tip", "Pad")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Sketch",
+            format!(
+                "{}{}",
+                rectangle_sketch(0.0, 0.0, 40.0, 30.0),
+                shape("Sketch.brp")
+            ),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}{}",
+                link_sub("Profile", "Sketch", &[]),
+                float("Length", 10.0),
+                enumeration("Type", 0),
+                shape("Pad.brp")
+            ),
+        ),
+        (
+            "PartDesign::SubShapeBinder",
+            "Binder",
+            format!(
+                "{}{}{}",
+                xlink_sub("Context", "Body", "Binder."),
+                xlink_list("Support", &[("Sketch", "")]),
+                shape("Binder.brp")
+            ),
+        ),
+        ("Sketcher::SketchObject", "Side", side),
+    ]);
+    fcstd(
+        &xml,
+        None,
+        &[
+            ("Body.brp", b"6 body"),
+            ("Pad.brp", b"6 pad"),
+            ("Sketch.brp", b"4 sketch"),
+            ("Binder.brp", b"4 binder"),
+        ],
+    )
+}
+
+/// The mock kernel of [`binder_document`]: the stored shapes' first edge
+/// is the rectangle's bottom line, the second its right side (the sketch's
+/// and the binder's alike), the first vertex its far corner.
+fn binder_kernel() -> MockKernel {
+    use mitcad_model::Curve3;
+    let kernel = MockKernel::default();
+    kernel.named_curves.borrow_mut().extend([
+        (
+            stored_edge_name(b"4 binder", 0),
+            Curve3::Line {
+                start: [0.0, 0.0, 0.0],
+                end: [40.0, 0.0, 0.0],
+            },
+        ),
+        (
+            stored_edge_name(b"4 binder", 1),
+            Curve3::Line {
+                start: [40.0, 0.0, 0.0],
+                end: [40.0, 30.0, 0.0],
+            },
+        ),
+    ]);
+    kernel
+        .vertices
+        .borrow_mut()
+        .push(("corner".to_owned(), [40.0, 30.0, 0.0]));
+    kernel
+}
+
+#[test]
+fn a_binder_s_context_does_not_consume_its_body() {
+    // (mitcad#952) FreeCAD writes a binder's `Context` as the Body it is
+    // in: the Body stays a body with its features, not "used by" the
+    // binder; the binder itself is skipped.
+    let (doc, report) = import_with(binder_document(), Vec::new(), binder_kernel(), false);
+    let body = item(&report, "Body");
+    assert_eq!(body.outcome, ObjectOutcome::Body, "{body:?}");
+    assert_eq!(body.bodies.len(), 1, "{body:?}");
+    assert!(
+        !body.note.as_deref().unwrap_or_default().contains("used by"),
+        "{body:?}"
+    );
+    assert_eq!(doc.bodies().len(), 1);
+    let pad = feature(&report, "Pad");
+    assert_eq!(pad.outcome, ObjectOutcome::Parametric, "{pad:?}");
+    assert_eq!(def_of(&doc, &pad.features[0])["type"], "extrude");
+    let binder = feature(&report, "Binder");
+    assert_eq!(binder.outcome, ObjectOutcome::Skipped, "{binder:?}");
+    assert!(binder.notes[0].contains("a binder"), "{binder:?}");
+    // The sketch on the binder after the sketch it binds.
+    let order: Vec<&str> = report.sketches.iter().map(|s| s.object.as_str()).collect();
+    assert_eq!(order, ["Sketch", "Side"]);
+}
+
+#[test]
+fn external_geometry_of_a_binder_and_a_sketch_projects_the_sketch_s_entities() {
+    // (mitcad#952, mitcad#904) The binder's edge is the rectangle's bottom
+    // line: a linked projection of the sketch's curve; the sketch's own
+    // edge and vertex likewise of its curve and point; none fixed in place.
+    let (doc, report) = import_with(binder_document(), Vec::new(), binder_kernel(), false);
+    let side = report.sketches.iter().find(|s| s.object == "Side").unwrap();
+    assert_eq!(side.outcome, ObjectOutcome::Parametric, "{side:?}");
+    assert!(side.dropped.is_empty(), "{side:?}");
+    let sketch = report
+        .sketches
+        .iter()
+        .find(|s| s.object == "Sketch")
+        .unwrap();
+    let sketch_uid = sketch.feature.clone().unwrap();
+    let source = sketch_def(&doc, &report, "Sketch");
+    let entities = source["entities"].as_array().unwrap();
+    let at = |id: &serde_json::Value| -> [f64; 2] {
+        let e = entities.iter().find(|e| e["id"] == *id).unwrap();
+        [e["at"][0].as_f64().unwrap(), e["at"][1].as_f64().unwrap()]
+    };
+    let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) < 1e-9;
+    let line = |a: [f64; 2], b: [f64; 2]| {
+        entities
+            .iter()
+            .find(|e| {
+                e["type"] == "line"
+                    && (near(at(&e["start"]), a) && near(at(&e["end"]), b)
+                        || near(at(&e["start"]), b) && near(at(&e["end"]), a))
+            })
+            .unwrap_or_else(|| panic!("no line {a:?}-{b:?} in {source}"))["id"]
+            .clone()
+    };
+    let bottom = line([0.0, 0.0], [40.0, 0.0]);
+    let right = line([40.0, 0.0], [40.0, 30.0]);
+    let corner = entities
+        .iter()
+        .find(|e| e["type"] == "point" && near(at(&e["id"]), [40.0, 30.0]))
+        .unwrap_or_else(|| panic!("no corner in {source}"))["id"]
+        .clone();
+    let def = sketch_def(&doc, &report, "Side");
+    let projections = def["projections"].as_array().unwrap();
+    assert_eq!(projections.len(), 3, "{def}");
+    assert_eq!(
+        projections[0]["source"],
+        json!({"sketch": sketch_uid, "curve": bottom}),
+        "{def}"
+    );
+    assert_eq!(
+        projections[1]["source"],
+        json!({"sketch": sketch_uid, "curve": right}),
+        "{def}"
+    );
+    assert_eq!(
+        projections[2]["source"],
+        json!({"sketch": sketch_uid, "point": corner}),
+        "{def}"
+    );
+    assert!(projections.iter().all(|p| p.get("body").is_none()), "{def}");
+    // The constraints on the binder's edge are on the projected line.
+    let own = def["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "line" && e["reference"].is_null())
+        .unwrap();
+    let first = projections[0]["entities"].as_array().unwrap();
+    assert!(first.contains(&own["start"]), "{def}");
+    // The sketch evaluates with them.
+    let uid = feature_uid(side.feature.as_deref().unwrap());
+    assert!(
+        doc.status(uid).and_then(|s| s.error()).is_none(),
+        "{:?}",
+        doc.status(uid)
+    );
+}
+
+#[test]
+fn external_geometry_on_a_pad_s_edge_follows_the_pad_s_length() {
+    use mitcad_model::{Curve3, EdgeName};
+    // (mitcad#952) A sketch on XZ (FreeCAD's sketch y is +Z) projects the
+    // pad's top edge above the profile's bottom line (FreeCAD's Edge3 of
+    // the pad): linked to Mitcad's edge, it moves up when the pad gets
+    // longer.
+    let side = format!(
+        "{}{}{}{}{}",
+        placement([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], 90.0),
+        external_links(&[("Pad", "Edge3")]),
+        external_copy(&[segment([0.0, 10.0], [40.0, 10.0], true)]),
+        geometry(&[segment([0.0, 10.0], [20.0, 10.0], false)]),
+        constraints(&[
+            constrain(1, 0.0, &[(0, 1), (-3, 1)], "", true),
+            constrain(13, 0.0, &[(0, 2), (-3, 0)], "", true),
+        ])
+    );
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Body",
+            format!(
+                "{}{}{}",
+                shape("Body.brp"),
+                links("Group", "App::PropertyLinkList", &["Sketch", "Pad", "Side"]),
+                link("Tip", "Pad")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Sketch",
+            rectangle_sketch(0.0, 0.0, 40.0, 30.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}{}",
+                link_sub("Profile", "Sketch", &[]),
+                float("Length", 10.0),
+                enumeration("Type", 0),
+                shape("Pad.brp")
+            ),
+        ),
+        ("Sketcher::SketchObject", "Side", side),
+    ]);
+    let file = || {
+        fcstd(
+            &xml,
+            None,
+            &[("Body.brp", b"6 body"), ("Pad.brp", b"6 pad")],
+        )
+    };
+
+    // A first import gives Mitcad's names: the pad's top face and the side
+    // face of the profile's bottom line, the edge between them.
+    let (doc, report) = import_with(file(), Vec::new(), MockKernel::default(), false);
+    let pad = feature(&report, "Pad").features[0].clone();
+    let def = sketch_def(&doc, &report, "Sketch");
+    let entities = def["entities"].as_array().unwrap();
+    let at = |id: &serde_json::Value| -> [f64; 2] {
+        let e = entities.iter().find(|e| e["id"] == *id).unwrap();
+        [e["at"][0].as_f64().unwrap(), e["at"][1].as_f64().unwrap()]
+    };
+    let bottom = entities
+        .iter()
+        .find(|e| {
+            e["type"] == "line" && at(&e["start"])[1].abs() < 1e-6 && at(&e["end"])[1].abs() < 1e-6
+        })
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let body: mitcad_model::BodyUid = item(&report, "Body").bodies[0].parse().unwrap();
+    let faces: Vec<String> = doc
+        .body_shape(body)
+        .unwrap()
+        .faces
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    let top = faces
+        .iter()
+        .find(|f| f.starts_with(&format!("{pad}:end(")))
+        .unwrap_or_else(|| panic!("no top face in {faces:?}"));
+    let prefix = format!("{pad}:side({bottom}");
+    let side_face = faces
+        .iter()
+        .find(|f| f.starts_with(&format!("{prefix}[")) || **f == format!("{prefix})"))
+        .unwrap_or_else(|| panic!("no side face {prefix} in {faces:?}"));
+    let edge = EdgeName::new(side_face.parse().unwrap(), top.parse().unwrap()).to_string();
+
+    // Geometry: FreeCAD's Edge3 and Mitcad's edge are the top edge above
+    // the bottom line; every other edge is elsewhere.
+    let kernel = MockKernel::default();
+    kernel.curves.borrow_mut().push(Curve3::Line {
+        start: [500.0, 500.0, 500.0],
+        end: [501.0, 500.0, 500.0],
+    });
+    let top_edge = |z: f64| Curve3::Line {
+        start: [0.0, 0.0, z],
+        end: [40.0, 0.0, z],
+    };
+    kernel.named_curves.borrow_mut().extend([
+        (stored_edge_name(b"6 pad", 2), top_edge(10.0)),
+        (edge.clone(), top_edge(10.0)),
+    ]);
+    let (mut doc, report) = import_with(file(), Vec::new(), kernel, false);
+    let s = report.sketches.iter().find(|s| s.object == "Side").unwrap();
+    assert_eq!(s.outcome, ObjectOutcome::Parametric, "{s:?}");
+    assert!(s.dropped.is_empty(), "{s:?}");
+    let def = sketch_def(&doc, &report, "Side");
+    let projection = def["projections"][0].clone();
+    assert_eq!(projection["source"], edge, "{def}");
+    assert_eq!(projection["body"], body.to_string(), "{def}");
+
+    // The pad 15 mm long: its top edge (as the kernel then gives it) and
+    // the projection with it.
+    let pad_def = def_of(&doc, &feature(&report, "Pad").features[0]);
+    let length = pad_def["extent"]["distance"].as_str().unwrap().to_owned();
+    doc.kernel()
+        .named_curves
+        .borrow_mut()
+        .insert(edge.clone(), top_edge(15.0));
+    doc.set_parameter_expression(&length, "15 mm", None)
+        .unwrap();
+    let uid = feature_uid(s.feature.as_deref().unwrap());
+    assert!(
+        doc.status(uid).and_then(|st| st.error()).is_none(),
+        "{:?}",
+        doc.status(uid)
+    );
+    let output = doc.sketch_output(uid).unwrap();
+    let projected: u32 = projection["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|e| e.as_str()?.strip_prefix('c')?.parse().ok())
+        .unwrap();
+    let Some(mitcad_model::sketch::geometry::Curve2::Line { a, b }) = output
+        .solved
+        .curves
+        .get(&mitcad_model::EntityUid(projected))
+    else {
+        panic!("no projected line c{projected}: {def}");
+    };
+    for p in [a, b] {
+        let z = output.frame.point(*p)[2];
+        assert!((z - 15.0).abs() < 1e-9, "{z}: {def}");
+    }
+}
+
+#[test]
+fn external_geometry_on_another_body_s_sketch_is_linked_through_its_occurrence() {
+    use mitcad_model::Curve3;
+    use std::f64::consts::TAU;
+    // (mitcad#952) A Body 50 mm up (a component of its own) has a sketch
+    // whose external geometry is the outer of two concentric circles of a
+    // sketch in another Body (at the document's top): a linked projection
+    // of that circle (not of the inner one), seen through the occurrence.
+    let upper = format!(
+        "{}{}{}",
+        external_links(&[("Sketch", "Edge2")]),
+        external_copy(&[round([0.0, 0.0], 20.0)]),
+        geometry(&[segment([20.0, 0.0], [30.0, 0.0], false)])
+    );
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Base",
+            format!(
+                "{}{}{}",
+                shape("Base.brp"),
+                links("Group", "App::PropertyLinkList", &["Sketch", "Pad"]),
+                link("Tip", "Pad")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Sketch",
+            format!(
+                "{}{}",
+                geometry(&[round([0.0, 0.0], 10.0), round([0.0, 0.0], 20.0)]),
+                shape("Sketch.brp")
+            ),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}{}",
+                link_sub("Profile", "Sketch", &[]),
+                float("Length", 10.0),
+                enumeration("Type", 0),
+                shape("Pad.brp")
+            ),
+        ),
+        (
+            "PartDesign::Body",
+            "Top",
+            format!(
+                "{}{}{}",
+                shape("Top.brp"),
+                links("Group", "App::PropertyLinkList", &["Upper"]),
+                placement([0.0, 0.0, 50.0], [0.0, 0.0, 1.0], 0.0)
+            ),
+        ),
+        ("Sketcher::SketchObject", "Upper", upper),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("Base.brp", b"6 base"),
+            ("Pad.brp", b"6 pad"),
+            ("Top.brp", b"6 top"),
+            ("Sketch.brp", b"3 sketch"),
+        ],
+    );
+    // The sketch's stored edges: its inner circle, then its outer one.
+    let circle = |radius: f64| Curve3::Conic {
+        center: [0.0, 0.0, 0.0],
+        normal: [0.0, 0.0, 1.0],
+        x_axis: [1.0, 0.0, 0.0],
+        major: radius,
+        minor: radius,
+        start: 0.0,
+        end: TAU,
+        closed: true,
+    };
+    let kernel = MockKernel::default();
+    kernel.named_curves.borrow_mut().extend([
+        (stored_edge_name(b"3 sketch", 0), circle(10.0)),
+        (stored_edge_name(b"3 sketch", 1), circle(20.0)),
+    ]);
+    let (doc, report) = import_with(file, Vec::new(), kernel, false);
+    let s = report
+        .sketches
+        .iter()
+        .find(|s| s.object == "Upper")
+        .unwrap();
+    assert_eq!(s.outcome, ObjectOutcome::Parametric, "{s:?}");
+    assert!(s.dropped.is_empty(), "{s:?}");
+    assert!(s.component.is_some(), "{s:?}");
+    let source = report
+        .sketches
+        .iter()
+        .find(|s| s.object == "Sketch")
+        .unwrap();
+    let source_uid = source.feature.clone().unwrap();
+    let solved = doc.sketch_output(feature_uid(&source_uid)).unwrap();
+    let outer = solved
+        .solved
+        .radii
+        .iter()
+        .find(|(_, r)| (**r - 20.0).abs() < 1e-9)
+        .map(|(id, _)| id.0)
+        .unwrap();
+    let def = sketch_def(&doc, &report, "Upper");
+    let projection = &def["projections"][0];
+    assert_eq!(
+        projection["source"],
+        json!({"sketch": source_uid, "curve": format!("c{outer}")}),
+        "{def}"
+    );
+    // Seen from the root's sketch through the Body's occurrence.
+    assert!(projection["link"]["target"].is_string(), "{def}");
+    assert!(projection["link"].get("source").is_none(), "{def}");
+    let uid = feature_uid(s.feature.as_deref().unwrap());
+    assert!(
+        doc.status(uid).and_then(|st| st.error()).is_none(),
+        "{:?}",
+        doc.status(uid)
+    );
+}
+
+// A reported assembly's leftovers (mitcad#955).
+
+/// An arc of a circle from `start` to `end` (radians, counter-clockwise).
+fn arc(center: [f64; 2], radius: f64, start: f64, end: f64) -> String {
+    format!(
+        "<Geometry type=\"Part::GeomArcOfCircle\"><ArcOfCircle CenterX=\"{}\" CenterY=\"{}\" CenterZ=\"0\" NormalX=\"0\" NormalY=\"0\" NormalZ=\"1\" AngleXU=\"0\" Radius=\"{radius}\" StartAngle=\"{start}\" EndAngle=\"{end}\"/><Construction value=\"0\"/></Geometry>",
+        center[0], center[1]
+    )
+}
+
+#[test]
+fn distances_between_circles_arcs_lines_and_points_are_dimensions() {
+    use std::f64::consts::PI;
+    // A circle of radius 5 at the origin; a circle of radius 3 outside it
+    // (a gap of 12); an arc of radius 2 inside it (a gap of 2 to the
+    // outer circle); a line 5 below it; a point 3 above it; a line across
+    // it 4 from its centre (1 inside); a point inside it (2 from it).
+    let profile = format!(
+        "{}{}",
+        geometry(&[
+            round([0.0, 0.0], 5.0),
+            round([20.0, 0.0], 3.0),
+            arc([1.0, 0.0], 2.0, 0.0, PI),
+            segment([-10.0, -10.0], [10.0, -10.0], false),
+            sketch_point([0.0, 8.0], false),
+            segment([-10.0, 4.0], [10.0, 4.0], false),
+            sketch_point([3.0, 0.0], false),
+        ]),
+        constraints(&[
+            constrain(6, 12.0, &[(0, 0), (1, 0)], "gap", true),
+            constrain(6, 2.0, &[(0, 0), (2, 0)], "", true),
+            constrain(6, 5.0, &[(3, 0), (0, 0)], "", true),
+            constrain(6, 3.0, &[(4, 1), (0, 0)], "", true),
+            constrain(6, 1.0, &[(0, 0), (5, 0)], "", true),
+            constrain(6, 2.0, &[(0, 0), (6, 1)], "", false),
+        ])
+    );
+    let xml = document(&[("Sketcher::SketchObject", "Profile", profile)]);
+    let (doc, report) = import_with(
+        fcstd(&xml, None, &[]),
+        Vec::new(),
+        MockKernel::default(),
+        false,
+    );
+    let s = &report.sketches[0];
+    assert_eq!(s.outcome, ObjectOutcome::Parametric, "{s:?}");
+    assert!(s.dropped.is_empty(), "{s:?}");
+    assert!(s.error < 1e-9, "{s:?}");
+    let def = sketch_def(&doc, &report, "Profile");
+    let dims: Vec<&str> = def["dimensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        dims,
+        [
+            "concentric_distance",
+            "concentric_distance",
+            "tangent_distance",
+            "concentric_distance",
+            "concentric_distance",
+            "concentric_distance",
+        ],
+        "{def}"
+    );
+    // The reference distance stays driven, the named one keeps its name.
+    assert_eq!(def["dimensions"][5]["driven"], true, "{def}");
+    assert_eq!(s.dimension_sources[0].name, "gap");
+    // Each helper is a construction circle: one about the first circle
+    // touching the second, one about the arc touching the circle from
+    // inside, one through each point, one touching the line across.
+    let entities = def["entities"].as_array().unwrap();
+    let helpers = entities
+        .iter()
+        .filter(|e| e["type"] == "circle" && e["construction"] == true)
+        .count();
+    assert_eq!(helpers, 5, "{def}");
+    let kinds: Vec<&str> = def["constraints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds.iter().filter(|k| **k == "tangent").count(),
+        3,
+        "{def}"
+    );
+    assert_eq!(
+        kinds.iter().filter(|k| **k == "coincident").count(),
+        2,
+        "{def}"
+    );
+    // It solves where FreeCAD left it.
+    let uid = s.feature.as_deref().unwrap();
+    let FeatureDef::Sketch(sketch) = &doc.feature(feature_uid(uid)).unwrap().def else {
+        panic!("{uid} is not a sketch");
+    };
+    let params = doc.parameters();
+    sketch
+        .solve_with(
+            &mut |id| {
+                params
+                    .value(id)
+                    .ok_or_else(|| format!("parameter {} does not exist", params.name(id)))
+            },
+            &|id| params.name(id),
+        )
+        .unwrap_or_else(|e| panic!("{uid} does not solve: {}", e.message));
+
+    // A distance the geometry does not hold either way is left out with
+    // both readings.
+    let profile = format!(
+        "{}{}",
+        geometry(&[round([0.0, 0.0], 5.0), round([20.0, 0.0], 3.0)]),
+        constraints(&[constrain(6, 7.0, &[(0, 0), (1, 0)], "", true)])
+    );
+    let xml = document(&[("Sketcher::SketchObject", "Profile", profile)]);
+    let (_, report) = import_with(
+        fcstd(&xml, None, &[]),
+        Vec::new(),
+        MockKernel::default(),
+        false,
+    );
+    let s = &report.sketches[0];
+    assert_eq!(s.outcome, ObjectOutcome::Partial, "{s:?}");
+    assert!(
+        s.dropped[0].contains("12.000000 outside the circle"),
+        "{:?}",
+        s.dropped
+    );
+}
+
+#[test]
+fn a_revolution_over_a_full_turn_and_a_symmetric_pocket_up_to_a_face() {
+    // A block; a revolution of 100° and 280° (FreeCAD turns the profile
+    // back by 280° and revolves by 380°, which OCCT takes as 20°: from
+    // 80° to 100°); a pocket of a slot at z = 5 up to a sketch's plane at
+    // z = 8, symmetric (FreeCAD mirrors that side: 3 mm down too).
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Body",
+            format!(
+                "{}{}{}",
+                shape("Body.brp"),
+                links(
+                    "Group",
+                    "App::PropertyLinkList",
+                    &[
+                        "Block",
+                        "BlockPad",
+                        "RingSketch",
+                        "Ring",
+                        "Slot",
+                        "Level",
+                        "Cut"
+                    ]
+                ),
+                link("Tip", "Cut")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Block",
+            rectangle_sketch(0.0, 0.0, 20.0, 10.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "BlockPad",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Block", &[]),
+                float("Length", 10.0),
+                shape("BlockPad.brp")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "RingSketch",
+            rectangle_sketch(12.0, 0.0, 2.0, 2.0),
+        ),
+        (
+            "PartDesign::Revolution",
+            "Ring",
+            format!(
+                "{}{}{}{}{}{}{}",
+                link_sub("Profile", "RingSketch", &[]),
+                link_sub("ReferenceAxis", "RingSketch", &["V_Axis"]),
+                link("BaseFeature", "BlockPad"),
+                prop("Angle", "App::PropertyAngle", "<Float value=\"100\"/>"),
+                prop("Angle2", "App::PropertyAngle", "<Float value=\"280\"/>"),
+                enumeration("Type", 4),
+                shape("Ring.brp")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Slot",
+            format!(
+                "{}{}",
+                placement([0.0, 0.0, 5.0], [0.0, 0.0, 1.0], 0.0),
+                rectangle_sketch(5.0, 2.0, 4.0, 4.0)
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Level",
+            format!(
+                "{}{}",
+                placement([0.0, 0.0, 8.0], [0.0, 0.0, 1.0], 0.0),
+                geometry(&[segment([0.0, 0.0], [5.0, 0.0], false)])
+            ),
+        ),
+        (
+            "PartDesign::Pocket",
+            "Cut",
+            format!(
+                "{}{}{}{}{}{}",
+                link_sub("Profile", "Slot", &[]),
+                link("BaseFeature", "Ring"),
+                flag("Midplane", true),
+                enumeration("Type", 3),
+                link_sub("UpToFace", "Level", &[]),
+                shape("Cut.brp")
+            ),
+        ),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("Body.brp", b"14 body"),
+            ("BlockPad.brp", b"6 block"),
+            ("Ring.brp", b"10 ring"),
+            ("Cut.brp", b"14 cut"),
+        ],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    for name in ["Ring", "Cut"] {
+        assert_eq!(
+            feature(&report, name).outcome,
+            ObjectOutcome::Parametric,
+            "{name}: {:?}",
+            feature(&report, name)
+        );
+    }
+    // The revolution from 80° to 100°: side two ends 80° past the profile.
+    let def = &defs_of(&doc, &report, "Ring")[0];
+    assert_eq!(def["extent"]["type"], "two_sides", "{def}");
+    let angle = |key: &str| {
+        let v = &def["extent"][key];
+        v.as_f64().or_else(|| value_of(&doc, v)).unwrap()
+    };
+    assert!(
+        (angle("angle1") - 100f64.to_radians()).abs() < 1e-12,
+        "{def}"
+    );
+    assert!(
+        (angle("angle2") + 80f64.to_radians()).abs() < 1e-12,
+        "{def}"
+    );
+    // The symmetric pocket: up to the plane, and as far the other way.
+    let def = &defs_of(&doc, &report, "Cut")[0];
+    let extent = &def["extent"];
+    assert_eq!(extent["type"], "two_sides", "{def}");
+    assert_eq!(extent["side1"]["type"], "to_object", "{def}");
+    assert_eq!(extent["side1"]["object"]["type"], "plane", "{def}");
+    assert_eq!(extent["side2"]["type"], "distance", "{def}");
+    let side2 = &extent["side2"]["distance"];
+    assert!(
+        (side2.as_f64().or_else(|| value_of(&doc, side2)).unwrap() - 3.0).abs() < 1e-9,
+        "{def}"
+    );
+}
+
+#[test]
+fn an_extent_up_to_another_component_s_face_is_read_through_its_occurrence() {
+    // A Body 50 mm up (a component of its own) pads its sketch down to the
+    // top of another Body's pad (at the document's top): the face is read
+    // in its component through the two occurrences.
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Base",
+            format!(
+                "{}{}{}",
+                shape("Base.brp"),
+                links("Group", "App::PropertyLinkList", &["Sketch", "Pad"]),
+                link("Tip", "Pad")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Sketch",
+            rectangle_sketch(0.0, 0.0, 40.0, 30.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Sketch", &[]),
+                float("Length", 10.0),
+                shape("Pad.brp")
+            ),
+        ),
+        (
+            "PartDesign::Body",
+            "Top",
+            format!(
+                "{}{}{}{}",
+                shape("Top.brp"),
+                links("Group", "App::PropertyLinkList", &["Upper", "Reach"]),
+                link("Tip", "Reach"),
+                placement([0.0, 0.0, 50.0], [0.0, 0.0, 1.0], 0.0)
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Upper",
+            rectangle_sketch(5.0, 5.0, 10.0, 10.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "Reach",
+            format!(
+                "{}{}{}{}",
+                link_sub("Profile", "Upper", &[]),
+                enumeration("Type", 3),
+                link_sub("UpToFace", "Pad", &["Face2"]),
+                shape("Reach.brp")
+            ),
+        ),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("Base.brp", b"6 base"),
+            ("Pad.brp", b"6 pad"),
+            ("Top.brp", b"6 top"),
+            ("Reach.brp", b"6 reach"),
+        ],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let reach = feature(&report, "Reach");
+    assert_eq!(reach.outcome, ObjectOutcome::Parametric, "{reach:?}");
+    let def = &defs_of(&doc, &report, "Reach")[0];
+    let object = &def["extent"]["object"];
+    assert_eq!(object["type"], "face", "{def}");
+    let body = object["body"].as_str().unwrap();
+    // The pad's body, of the other component, linked.
+    let link = &def["object_links"][body];
+    assert!(link.is_object(), "{def}");
+    assert!(link["target"].is_string(), "{def}");
+    assert!(link.get("source").is_none(), "{def}");
+}
+
+#[test]
+fn binders_of_another_body_s_sketches_are_profiles_and_hole_sketches() {
+    // A Body at the document's top with a slot sketch and a sketch of a
+    // circle; a Body 50 mm up (a component of its own) pockets through
+    // a binder of the slot sketch and drills at a binder of the circle's
+    // sketch (FreeCAD's binders of a whole sketch of another Body, its
+    // path `Base` with `Slot.`). A sketch at the top is attached to an
+    // origin's plane named as the origin's element (FreeCAD 1.x).
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Base",
+            format!(
+                "{}{}{}",
+                shape("Base.brp"),
+                links(
+                    "Group",
+                    "App::PropertyLinkList",
+                    &["Sketch", "Pad", "Slot", "Spots"]
+                ),
+                link("Tip", "Pad")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Sketch",
+            rectangle_sketch(0.0, 0.0, 40.0, 30.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Sketch", &[]),
+                float("Length", 10.0),
+                shape("Pad.brp")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Slot",
+            rectangle_sketch(5.0, 5.0, 10.0, 10.0),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Spots",
+            geometry(&[round([30.0, 20.0], 2.0)]),
+        ),
+        (
+            "PartDesign::Body",
+            "Top",
+            format!(
+                "{}{}{}{}",
+                shape("Top.brp"),
+                links(
+                    "Group",
+                    "App::PropertyLinkList",
+                    &["Block", "TopPad", "SlotBinder", "Cut", "SpotBinder", "Bore"]
+                ),
+                link("Tip", "Bore"),
+                placement([0.0, 0.0, 50.0], [0.0, 0.0, 1.0], 0.0)
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Block",
+            rectangle_sketch(0.0, 0.0, 40.0, 30.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "TopPad",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Block", &[]),
+                float("Length", 5.0),
+                shape("TopPad.brp")
+            ),
+        ),
+        (
+            "PartDesign::SubShapeBinder",
+            "SlotBinder",
+            format!(
+                "{}{}{}",
+                xlink_sub("Context", "Top", "SlotBinder."),
+                xlink_list("Support", &[("Base", "Slot.")]),
+                shape("SlotBinder.brp")
+            ),
+        ),
+        (
+            "PartDesign::Pocket",
+            "Cut",
+            format!(
+                "{}{}{}{}",
+                link_sub("Profile", "SlotBinder", &[""]),
+                link("BaseFeature", "TopPad"),
+                enumeration("Type", 1),
+                shape("Cut.brp")
+            ),
+        ),
+        (
+            "PartDesign::SubShapeBinder",
+            "SpotBinder",
+            format!(
+                "{}{}{}",
+                xlink_sub("Context", "Top", "SpotBinder."),
+                xlink_list("Support", &[("Base", "Spots.")]),
+                shape("SpotBinder.brp")
+            ),
+        ),
+        (
+            "PartDesign::Hole",
+            "Bore",
+            format!(
+                "{}{}{}{}{}{}{}",
+                link_sub("Profile", "SpotBinder", &[""]),
+                link("BaseFeature", "Cut"),
+                float("Diameter", 3.0),
+                enumeration("DepthType", 1),
+                enumeration("DrillPoint", 1),
+                enumeration("HoleCutType", 0),
+                shape("Bore.brp")
+            ),
+        ),
+        (
+            "App::Origin",
+            "Origin",
+            links("OriginFeatures", "App::PropertyLinkList", &["XY_Plane"]),
+        ),
+        (
+            "App::Plane",
+            "XY_Plane",
+            prop(
+                "Role",
+                "App::PropertyString",
+                "<String value=\"XY_Plane\"/>",
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Attached",
+            format!(
+                "{}{}{}",
+                prop(
+                    "AttachmentSupport",
+                    "App::PropertyLinkSubList",
+                    "<LinkSubList count=\"1\"><Link obj=\"Origin\" sub=\"XY_Plane\"/></LinkSubList>"
+                ),
+                enumeration("MapMode", 5),
+                geometry(&[segment([0.0, 0.0], [5.0, 0.0], false)])
+            ),
+        ),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("Base.brp", b"6 base"),
+            ("Pad.brp", b"6 pad"),
+            ("Top.brp", b"14 top"),
+            ("TopPad.brp", b"6 toppad"),
+            ("SlotBinder.brp", b"1 slot,sheet"),
+            ("Cut.brp", b"10 cut"),
+            ("SpotBinder.brp", b"1 spot,sheet"),
+            ("Bore.brp", b"14 bore"),
+        ],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    for name in ["Cut", "Bore"] {
+        assert_eq!(
+            feature(&report, name).outcome,
+            ObjectOutcome::Parametric,
+            "{name}: {:?}",
+            feature(&report, name)
+        );
+    }
+    let slot = report.sketches.iter().find(|s| s.object == "Slot").unwrap();
+    let slot_uid = slot.feature.clone().unwrap();
+    // The pocket's profile: a sketch of the binder's in the upper Body's
+    // component, each of the slot's lines a projection of it seen through
+    // the two occurrences.
+    let cut = &defs_of(&doc, &report, "Cut")[0];
+    let sketch = cut["profiles"][0]["sketch"].as_str().unwrap().to_owned();
+    assert_ne!(sketch, slot_uid, "{cut}");
+    let binder_sketch = def_json(&doc, &sketch);
+    let projections = binder_sketch["projections"].as_array().unwrap();
+    assert_eq!(projections.len(), 4, "{binder_sketch}");
+    for p in projections {
+        assert_eq!(p["source"]["sketch"], slot_uid, "{binder_sketch}");
+        assert!(p["source"]["curve"].is_string(), "{binder_sketch}");
+        assert!(p["link"]["target"].is_string(), "{binder_sketch}");
+    }
+    let sketch_uid = feature_uid(&sketch);
+    assert!(
+        doc.status(sketch_uid).and_then(|s| s.error()).is_none(),
+        "{:?}",
+        doc.status(sketch_uid)
+    );
+    // Hidden: the pocket uses it.
+    assert_eq!(doc.feature_shown(sketch_uid), Some(false));
+    // The hole at the projection of the circle.
+    let bore = &defs_of(&doc, &report, "Bore")[0];
+    let placement = &bore["placement"];
+    assert_ne!(placement["sketch"], json!(slot_uid), "{bore}");
+    assert_eq!(placement["points"].as_array().unwrap().len(), 1, "{bore}");
+    // On the origin plane, not only parallel to it.
+    let attached = report
+        .sketches
+        .iter()
+        .find(|s| s.object == "Attached")
+        .unwrap();
+    assert_eq!(attached.plane, "on xy", "{attached:?}");
+    assert!(
+        !attached
+            .notes
+            .iter()
+            .any(|n| n.contains("its support is not imported")),
+        "{attached:?}"
+    );
+}
+
+#[test]
+fn external_geometry_whose_link_is_missing_is_fixed_from_its_copy() {
+    // FreeCAD keeps a copy of external geometry whose source is gone (no
+    // link in `ExternalGeometry`): fixed in place from the copy, and the
+    // constraint on it kept.
+    let profile = format!(
+        "{}{}{}",
+        external_copy(&[segment([0.0, 0.0], [40.0, 0.0], true)]),
+        geometry(&[segment([10.0, 0.0], [10.0, 20.0], false)]),
+        constraints(&[constrain(13, 0.0, &[(0, 1), (-3, 0)], "", true)])
+    );
+    let xml = document(&[("Sketcher::SketchObject", "Profile", profile)]);
+    let (doc, report) = import_with(
+        fcstd(&xml, None, &[]),
+        Vec::new(),
+        MockKernel::default(),
+        false,
+    );
+    let s = &report.sketches[0];
+    assert_eq!(s.outcome, ObjectOutcome::Partial, "{s:?}");
+    assert_eq!(
+        s.dropped,
+        ["external geometry 0: fixed in place (its link is missing in the file)"],
+        "{s:?}"
+    );
+    let def = sketch_def(&doc, &report, "Profile");
+    let kinds: Vec<&str> = def["constraints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["coincident"], "{def}");
+}
+
+// Binders of another Body's sketch (mitcad#963).
+
+#[test]
+fn a_pad_on_a_binder_of_another_body_s_sketch_pads_a_linked_projecting_sketch() {
+    // Two Bodies, each shown by a link (so each has a component of its
+    // own). The Slider's pad profiles a binder of the Frame's outline (a
+    // 40 × 30 rectangle whose bottom line's DistanceX is the named
+    // constraint Width), a sketch is attached to the binder's face, and a
+    // hole drills a binder of the Frame's sketch of one circle.
+    let corners = [[0.0, 0.0], [40.0, 0.0], [40.0, 30.0], [0.0, 30.0]];
+    let outline = format!(
+        "{}{}",
+        geometry(&[
+            segment(corners[0], corners[1], false),
+            segment(corners[1], corners[2], false),
+            segment(corners[2], corners[3], false),
+            segment(corners[3], corners[0], false),
+        ]),
+        constraints(&[
+            constrain(1, 0.0, &[(0, 2), (1, 1)], "", true),
+            constrain(1, 0.0, &[(1, 2), (2, 1)], "", true),
+            constrain(1, 0.0, &[(2, 2), (3, 1)], "", true),
+            constrain(1, 0.0, &[(3, 2), (0, 1)], "", true),
+            constrain(7, 40.0, &[(0, 0)], "Width", true),
+        ])
+    );
+    let binder = |body: &str, name: &str, bound: &str| {
+        let path = format!("{bound}.");
+        format!(
+            "{}{}{}",
+            xlink_sub("Context", body, &format!("{name}.")),
+            xlink_list("Support", &[("Frame", path.as_str())]),
+            shape(&format!("{name}.brp"))
+        )
+    };
+    let mark = format!(
+        "{}{}{}",
+        geometry(&[segment([105.0, -95.0], [115.0, -95.0], false)]),
+        enumeration("MapMode", 5),
+        prop(
+            "AttachmentSupport",
+            "App::PropertyLinkSubList",
+            "<LinkSubList count=\"1\"><Link obj=\"Bound\" sub=\"Face1\"/></LinkSubList>",
+        )
+    );
+    let objects = [
+        (
+            "PartDesign::Body",
+            "Frame".to_owned(),
+            format!(
+                "{}{}{}",
+                shape("Frame.brp"),
+                links(
+                    "Group",
+                    "App::PropertyLinkList",
+                    &["Outline", "FramePad", "Holes"]
+                ),
+                link("Tip", "FramePad")
+            ),
+        ),
+        ("Sketcher::SketchObject", "Outline".to_owned(), outline),
+        (
+            "PartDesign::Pad",
+            "FramePad".to_owned(),
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Outline", &[]),
+                float("Length", 10.0),
+                shape("FramePad.brp")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Holes".to_owned(),
+            geometry(&[round([10.0, 10.0], 3.0)]),
+        ),
+        (
+            "PartDesign::Body",
+            "Slider".to_owned(),
+            format!(
+                "{}{}{}",
+                shape("Slider.brp"),
+                links(
+                    "Group",
+                    "App::PropertyLinkList",
+                    &["Bound", "SliderPad", "Mark", "Drill", "Hole"]
+                ),
+                link("Tip", "Hole")
+            ),
+        ),
+        (
+            "PartDesign::SubShapeBinder",
+            "Bound".to_owned(),
+            binder("Slider", "Bound", "Outline"),
+        ),
+        (
+            "PartDesign::Pad",
+            "SliderPad".to_owned(),
+            format!(
+                "{}{}{}{}",
+                link_sub("Profile", "Bound", &[""]),
+                float("Length", 5.0),
+                enumeration("Type", 0),
+                shape("SliderPad.brp")
+            ),
+        ),
+        ("Sketcher::SketchObject", "Mark".to_owned(), mark),
+        (
+            "PartDesign::SubShapeBinder",
+            "Drill".to_owned(),
+            binder("Slider", "Drill", "Holes"),
+        ),
+        (
+            "PartDesign::Hole",
+            "Hole".to_owned(),
+            format!(
+                "{}{}{}{}{}{}{}",
+                link_sub("Profile", "Drill", &[""]),
+                link("BaseFeature", "SliderPad"),
+                float("Diameter", 6.0),
+                enumeration("DepthType", 1),
+                enumeration("DrillPoint", 1),
+                enumeration("HoleCutType", 0),
+                shape("Hole.brp")
+            ),
+        ),
+        (
+            "App::Link",
+            "FrameLink".to_owned(),
+            format!(
+                "{}{}",
+                xlink("", "Frame"),
+                placement([100.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.0)
+            ),
+        ),
+        (
+            "App::Link",
+            "SliderLink".to_owned(),
+            format!(
+                "{}{}",
+                xlink("", "Slider"),
+                placement([0.0, 100.0, 0.0], [0.0, 0.0, 1.0], 0.0)
+            ),
+        ),
+    ];
+    let objects: Vec<(&str, &str, String)> = objects
+        .iter()
+        .map(|(t, n, p)| (*t, n.as_str(), p.clone()))
+        .collect();
+    let xml = document(&objects);
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("Frame.brp", b"6 frame"),
+            ("FramePad.brp", b"6 frame pad"),
+            ("Slider.brp", b"7 slider"),
+            ("Bound.brp", b"1 bound"),
+            ("SliderPad.brp", b"6 slider pad"),
+            ("Drill.brp", b"1 drill"),
+            ("Hole.brp", b"7 hole"),
+        ],
+    );
+    let (mut doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    assert_eq!(item(&report, "Frame").component.as_deref(), Some("Frame"));
+    assert_eq!(item(&report, "Slider").component.as_deref(), Some("Slider"));
+    let outline_uid = report
+        .sketches
+        .iter()
+        .find(|s| s.object == "Outline")
+        .and_then(|s| s.feature.clone())
+        .unwrap();
+
+    // The pad profiles a sketch of the binder's in the Slider's component.
+    let pad = feature(&report, "SliderPad");
+    assert_eq!(pad.outcome, ObjectOutcome::Parametric, "{pad:?}");
+    let pad_def = &defs_of(&doc, &report, "SliderPad")[0];
+    let sketch_uid = pad_def["profiles"][0]["sketch"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{pad_def}"))
+        .to_owned();
+    assert_ne!(sketch_uid, outline_uid, "{pad_def}");
+    let sketch = feature_uid(&sketch_uid);
+    let slider_component = doc.feature(sketch).unwrap().component;
+    assert_eq!(doc.assembly().name(slider_component), "Slider");
+    // On the Frame's XY plane itself (not the Slider's plane parallel to
+    // it), seen through the two occurrences.
+    let def = def_json(&doc, &sketch_uid);
+    assert_eq!(def["plane"], "xy", "{def}");
+    let plane_link = def["plane_link"].clone();
+    let (source, target) = (
+        plane_link["source"].as_str().unwrap_or_default(),
+        plane_link["target"].as_str().unwrap_or_default(),
+    );
+    assert!(
+        !source.is_empty() && !target.is_empty() && source != target,
+        "{def}"
+    );
+    // Each of the outline's four lines a linked projection, not
+    // construction.
+    let projections = def["projections"].as_array().unwrap();
+    assert_eq!(projections.len(), 4, "{def}");
+    for p in projections {
+        assert_eq!(p["source"]["sketch"], outline_uid, "{def}");
+        assert!(p["source"]["curve"].is_string(), "{def}");
+        assert_eq!(p["link"], plane_link, "{def}");
+    }
+    let lines: Vec<&serde_json::Value> = def["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["type"] == "line")
+        .collect();
+    assert_eq!(lines.len(), 4, "{def}");
+    assert!(lines.iter().all(|e| e["construction"] != true), "{def}");
+
+    // The sketch on the binder's face lies on the same plane.
+    let s = report.sketches.iter().find(|s| s.object == "Mark").unwrap();
+    assert_eq!(s.plane, "on Outline's plane", "{s:?}");
+    assert!(
+        s.notes.iter().any(|n| n.contains("which Bound binds")),
+        "{s:?}"
+    );
+    let mark = sketch_def(&doc, &report, "Mark");
+    assert_eq!(mark["plane"], "xy", "{mark}");
+    assert_eq!(mark["plane_link"], plane_link, "{mark}");
+
+    // The hole drills the projected circle's centre of the sketch made for
+    // the other binder, which also lies on the Frame's XY plane.
+    let hole = feature(&report, "Hole");
+    assert_eq!(hole.outcome, ObjectOutcome::Parametric, "{hole:?}");
+    let hole_def = &defs_of(&doc, &report, "Hole")[0];
+    let drill_uid = hole_def["placement"]["sketch"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{hole_def}"))
+        .to_owned();
+    assert_ne!(drill_uid, sketch_uid, "{hole_def}");
+    let drilled = hole_def["placement"]["points"].as_array().unwrap();
+    assert_eq!(drilled.len(), 1, "{hole_def}");
+    let drill_def = def_json(&doc, &drill_uid);
+    assert_eq!(drill_def["plane"], "xy", "{drill_def}");
+    assert_eq!(drill_def["plane_link"], plane_link, "{drill_def}");
+    assert!(
+        drill_def["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["id"] == drilled[0] && e["type"] == "circle"),
+        "{drill_def}"
+    );
+
+    // The outline 50 mm wide: the binder's sketch follows it, and the pad
+    // with it.
+    let width = |doc: &Document<MockKernel>| -> f64 {
+        let output = doc.sketch_output(sketch).unwrap();
+        let xs: Vec<f64> = output
+            .solved
+            .curves
+            .values()
+            .flat_map(|c| match c {
+                mitcad_model::sketch::geometry::Curve2::Line { a, b } => vec![a[0], b[0]],
+                _ => Vec::new(),
+            })
+            .collect();
+        xs.iter().copied().fold(f64::MIN, f64::max) - xs.iter().copied().fold(f64::MAX, f64::min)
+    };
+    assert!((width(&doc) - 40.0).abs() < 1e-6, "{}", width(&doc));
+    doc.set_parameter_expression("Width", "50 mm", None)
+        .unwrap();
+    for uid in [sketch, feature_uid(&pad.features[0])] {
+        assert!(
+            doc.status(uid).and_then(|st| st.error()).is_none(),
+            "{:?}",
+            doc.status(uid)
+        );
+    }
+    assert!((width(&doc) - 50.0).abs() < 1e-6, "{}", width(&doc));
+}
+
+// A reported assembly's last two fallbacks (mitcad#964).
+
+/// An enumeration with the file's own list of values.
+fn custom_enum(name: &str, index: usize, values: &[&str]) -> String {
+    let items: String = values
+        .iter()
+        .map(|v| format!("<Enum value=\"{v}\"/>"))
+        .collect();
+    prop(
+        name,
+        "App::PropertyEnumeration",
+        &format!(
+            "<Integer value=\"{index}\" CustomEnum=\"true\"/><CustomEnumList count=\"{}\">{items}</CustomEnumList>",
+            values.len()
+        ),
+    )
+}
+
+#[test]
+fn a_modelled_thread_is_cut_at_every_centre_the_hole_drills() {
+    use mitcad_model::Curve3;
+    use std::f64::consts::TAU;
+    // A FreeCAD 1.1 hole with a modelled M3 thread drills its sketch's own
+    // circle and the circle of its defining external geometry (another
+    // sketch's circle, part of the sketch's shape): the thread's groove
+    // is cut about both centres, as FreeCAD threads both holes (before,
+    // only about the sketch's own circle).
+    let holes = format!(
+        "{}{}{}{}",
+        placement([0.0, 0.0, 10.0], [0.0, 0.0, 1.0], 0.0),
+        external_links(&[("Marks", "Edge1")]),
+        external_copy(&[round([40.0, 15.0], 1.5).replace(
+            "</Geometry>",
+            "<GeoExtensions count=\"1\"><GeoExtension type=\"Sketcher::ExternalGeometryExtension\" \
+             Ref=\"Marks.Edge1\" Flags=\"1\"/></GeoExtensions></Geometry>",
+        )]),
+        geometry(&[round([10.0, 15.0], 1.5)])
+    );
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Body",
+            format!(
+                "{}{}{}",
+                shape("Body.brp"),
+                links(
+                    "Group",
+                    "App::PropertyLinkList",
+                    &["Sketch", "Pad", "Marks", "Holes", "Hole"]
+                ),
+                link("Tip", "Hole")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Sketch",
+            rectangle_sketch(0.0, 0.0, 50.0, 30.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Sketch", &[""]),
+                float("Length", 10.0),
+                shape("Pad.brp")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Marks",
+            format!(
+                "{}{}{}",
+                placement([0.0, 0.0, 10.0], [0.0, 0.0, 1.0], 0.0),
+                geometry(&[round([40.0, 15.0], 1.5)]),
+                shape("Marks.brp")
+            ),
+        ),
+        ("Sketcher::SketchObject", "Holes", holes),
+        (
+            "PartDesign::Hole",
+            "Hole",
+            format!(
+                "{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
+                link_sub("Profile", "Holes", &[""]),
+                link("BaseFeature", "Pad"),
+                float("Diameter", 2.5),
+                float("Depth", 5.0),
+                float("ThreadDepth", 5.0),
+                enumeration("DepthType", 0),
+                enumeration("DrillPoint", 0),
+                enumeration("HoleCutType", 0),
+                flag("Threaded", true),
+                flag("ModelThread", true),
+                custom_enum("ThreadType", 1, &["None", "ISOMetricProfile"]),
+                custom_enum("ThreadSize", 1, &["M2.5", "M3x0.5", "M4"]),
+                custom_enum("ThreadClass", 0, &["6H"]),
+                shape("Hole.brp")
+            ),
+        ),
+    ])
+    .replace("1.0R39319", "1.1R1");
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("Body.brp", b"9 body"),
+            ("Pad.brp", b"6 pad"),
+            ("Marks.brp", b"1 marks"),
+            ("Hole.brp", b"9 hole"),
+        ],
+    );
+    let kernel = MockKernel::default();
+    kernel.named_curves.borrow_mut().insert(
+        stored_edge_name(b"1 marks", 0),
+        Curve3::Conic {
+            center: [40.0, 15.0, 10.0],
+            normal: [0.0, 0.0, 1.0],
+            x_axis: [1.0, 0.0, 0.0],
+            major: 1.5,
+            minor: 1.5,
+            start: 0.0,
+            end: TAU,
+            closed: true,
+        },
+    );
+    let (doc, report) = import_with(file, Vec::new(), kernel, false);
+    let hole = feature(&report, "Hole");
+    assert_eq!(hole.outcome, ObjectOutcome::Parametric, "{hole:?}");
+    let defs = defs_of(&doc, &report, "Hole");
+    // The hole drills both circles.
+    let drill = defs.iter().find(|d| d["type"] == "hole").unwrap();
+    assert_eq!(
+        drill["placement"]["points"].as_array().unwrap().len(),
+        2,
+        "{drill}"
+    );
+    // A groove about each of the two centres.
+    let mut centres: Vec<[f64; 2]> = defs
+        .iter()
+        .filter(|d| d["type"] == "helix")
+        .map(|d| {
+            let o = &d["axis"]["origin"];
+            [o[0].as_f64().unwrap(), o[1].as_f64().unwrap()]
+        })
+        .collect();
+    centres.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    assert_eq!(centres.len(), 2, "{defs:?}");
+    for (got, want) in centres.iter().zip([[10.0, 15.0], [40.0, 15.0]]) {
+        assert!(
+            (got[0] - want[0]).abs() < 1e-6 && (got[1] - want[1]).abs() < 1e-6,
+            "{centres:?}"
+        );
+    }
+}
+
+#[test]
+fn a_reversed_pad_along_its_sketch_s_normal_axis_pads_the_other_way() {
+    // FreeCAD keeps a Pad's Direction along its reference axis (here the
+    // sketch's normal) before Reversed turns it: Reversed with Direction
+    // along the normal pads against the normal, and that is the first
+    // reading (before, the pad went along the normal first).
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Body",
+            format!(
+                "{}{}{}",
+                shape("Body.brp"),
+                links("Group", "App::PropertyLinkList", &["Sketch", "Pad"]),
+                link("Tip", "Pad")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Sketch",
+            rectangle_sketch(0.0, 0.0, 40.0, 30.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}{}{}{}",
+                link_sub("Profile", "Sketch", &[""]),
+                link_sub("ReferenceAxis", "Sketch", &["N_Axis"]),
+                vector("Direction", [0.0, 0.0, 1.0]),
+                flag("Reversed", true),
+                float("Length", 2.1),
+                shape("Pad.brp")
+            ),
+        ),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[("Body.brp", b"6 body"), ("Pad.brp", b"6 pad")],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let pad = feature(&report, "Pad");
+    assert_eq!(pad.outcome, ObjectOutcome::Parametric, "{pad:?}");
+    assert!(!pad.notes.iter().any(|n| n.contains("reading")), "{pad:?}");
+    let def = &defs_of(&doc, &report, "Pad")[0];
+    assert_eq!(def["flip"], true, "{def}");
+}
+
+#[test]
+fn a_group_listing_an_object_twice_places_it_once() {
+    let group = |targets: &[&str]| links("Group", "App::PropertyLinkList", targets);
+    let xml = document(&[
+        (
+            "App::DocumentObjectGroup",
+            "Folder",
+            group(&["Part", "Box", "Part", "Box"]),
+        ),
+        ("App::Part", "Part", group(&["Cylinder", "Cylinder"])),
+        ("Part::Cylinder", "Cylinder", shape("Cylinder.brp")),
+        ("Part::Box", "Box", shape("Box.brp")),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[("Cylinder.brp", b"3 cylinder"), ("Box.brp", b"6 box")],
+    );
+    let (doc, report) = import(file, Vec::new());
+    // One component with one occurrence (the importer's
+    // `occurrences_of[Part]` has one), one instance of each body.
+    assert_eq!(report.components, 1);
+    assert_eq!(report.occurrences, 1);
+    assert_eq!(centres(&doc, "Cylinder").len(), 1);
+    assert_eq!(centres(&doc, "Box").len(), 1);
+}
+
+#[test]
+fn a_chain_of_groups_listing_the_next_many_times_is_walked_once() {
+    // Twenty folders, each listing the next ten times, a body in the last:
+    // walked as listed, 10^20 placements.
+    let count = 20;
+    let mut objects: Vec<(&str, String, String)> = (0..count)
+        .map(|i| {
+            let next = if i + 1 < count {
+                format!("Folder{}", i + 1)
+            } else {
+                "Box".to_owned()
+            };
+            let targets = [next.as_str(); 10];
+            (
+                "App::DocumentObjectGroup",
+                format!("Folder{i}"),
+                links("Group", "App::PropertyLinkList", &targets),
+            )
+        })
+        .collect();
+    objects.push(("Part::Box", "Box".to_owned(), shape("Box.brp")));
+    let list: Vec<(&str, &str, String)> = objects
+        .iter()
+        .map(|(t, n, p)| (*t, n.as_str(), p.clone()))
+        .collect();
+    let file = fcstd(&document(&list), None, &[("Box.brp", b"6 box")]);
+    let (doc, report) = import(file, Vec::new());
+    assert_eq!(centres(&doc, "Box").len(), 1);
+    assert_eq!(report.occurrences, 0);
+    assert_eq!(item(&report, "Folder19").outcome, ObjectOutcome::Included);
+}
