@@ -74,9 +74,11 @@ struct Grid {
 };
 
 // Renders a shared Qt layout. `render` makes the native view of a widget or
-// nested layout item; spacer items become empty views here.
+// nested layout item; spacer items become empty views here. A native grid
+// may give its first column the spare width while keeping later columns
+// content-sized, without modifying the shared Qt layout.
 NSView* build(QLayout* layout, const std::function<NSView*(QLayoutItem*)>& render, bool equalColumns,
-              bool responsive = false);
+              bool responsive = false, bool firstColumnStretch = false);
 
 // Suspend constraints below hidden ancestors as one batch, and invalidate
 // restored layouts. Call after a presenter's visibility updates and before

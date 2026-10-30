@@ -74,14 +74,21 @@ void SectionWorker::start(Kind kind, const QString& label, Work work, Done done)
     replace(m_waitingView);
     replace(m_waitingMeasure);
     m_waitingView = std::move(round);
-  } else {
+  } else if (kind == Kind::Measure) {
     replace(m_waitingMeasure);
     m_waitingMeasure = std::move(round);
+  } else {
+    replace(m_waitingPreview);
+    m_waitingPreview = std::move(round);
   }
-  // A View round stops whatever runs; a Measure round only the measurement
-  // before it, and waits for the view.
-  if (m_current && (kind == Kind::View || m_current->kind == Kind::Measure) &&
-      !m_current->stop->cancel_requested()) {
+  // A View round stops a View or Measure round that runs; a Measure round
+  // only the measurement before it, and waits for the view; a Preview
+  // round only the preview's before it (mitcad#943).
+  const bool stops = m_current && (kind == Kind::Preview
+                                       ? m_current->kind == Kind::Preview
+                                       : m_current->kind != Kind::Preview &&
+                                             (kind == Kind::View || m_current->kind == Kind::Measure));
+  if (stops && !m_current->stop->cancel_requested()) {
     m_current->stop->cancel();
     qDebug().noquote() << QStringLiteral("Section round %1 superseded").arg(m_current->label);
   }
@@ -98,8 +105,12 @@ SectionWorker::Stopped SectionWorker::stop() {
     stopped.measure = true;
     m_waitingMeasure.reset();
   }
+  if (m_waitingPreview) {
+    stopped.preview = true;
+    m_waitingPreview.reset();
+  }
   if (m_current) {
-    (m_current->kind == Kind::View ? stopped.view : stopped.measure) = true;
+    stoppedOf(stopped, m_current->kind) = true;
     m_current->stop->cancel();
     {
       // Not taken yet: it never runs. Taken: until the thread leaves it.
@@ -123,8 +134,8 @@ SectionWorker::Stopped SectionWorker::cancel() {
     stopped.measure = true;
     m_waitingMeasure.reset();
   }
-  if (m_current && !m_current->stop->cancel_requested()) {
-    (m_current->kind == Kind::View ? stopped.view : stopped.measure) = true;
+  if (m_current && m_current->kind != Kind::Preview && !m_current->stop->cancel_requested()) {
+    stoppedOf(stopped, m_current->kind) = true;
     m_current->stop->cancel();
     qDebug().noquote() << QStringLiteral("Section round %1 superseded").arg(m_current->label);
   }
@@ -135,14 +146,37 @@ bool SectionWorker::busyWith(Kind kind) const {
   if (m_current && m_current->kind == kind && !m_current->stop->cancel_requested()) {
     return true; // a round told to stop no longer counts: what comes next waits for it anyway
   }
-  return kind == Kind::View ? m_waitingView.has_value() : m_waitingMeasure.has_value();
+  switch (kind) {
+  case Kind::View:
+    return m_waitingView.has_value();
+  case Kind::Measure:
+    return m_waitingMeasure.has_value();
+  case Kind::Preview:
+    break;
+  }
+  return m_waitingPreview.has_value();
+}
+
+bool& SectionWorker::stoppedOf(Stopped& stopped, Kind kind) {
+  switch (kind) {
+  case Kind::View:
+    return stopped.view;
+  case Kind::Measure:
+    return stopped.measure;
+  case Kind::Preview:
+    break;
+  }
+  return stopped.preview;
 }
 
 void SectionWorker::postNext() {
   if (m_current) {
     return;
   }
-  std::optional<Round>& next = m_waitingView ? m_waitingView : m_waitingMeasure;
+  // The view first, then a preview's clips, then the measurement.
+  std::optional<Round>& next = m_waitingView      ? m_waitingView
+                               : m_waitingPreview ? m_waitingPreview
+                                                  : m_waitingMeasure;
   if (!next) {
     return;
   }

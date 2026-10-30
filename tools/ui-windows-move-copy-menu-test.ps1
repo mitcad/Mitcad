@@ -17,6 +17,12 @@
 #      keeps it selected and offers Move/Copy at the menu's top; it starts
 #      with Body1.
 #   4. The view: a face alone has no Move/Copy.
+#   5. In a design of its own, a right click on a face of a large body (a
+#      filleted bracket with modelled M6 tapped holes and a modelled M6
+#      threaded rod, in a placed occurrence) selects it, opens the menu and
+#      logs the click's timing (mitcad#981: the selection card measured a
+#      moved copy of the whole body, seconds on the UI thread). No time is
+#      asserted.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-move-copy-menu-test.ps1 [-App build\dev\mitcad.exe] [-Cli build\dev\tools\cli\mitcad-cli.exe] [-Out dir] [-QtBin dir]
 param(
@@ -27,7 +33,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'solid.offset_face' = 'F7' } -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
     ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -53,6 +59,33 @@ Set-Content -Encoding ascii $modelScript @'
 '@
 $made = & $Cli run $modelScript --save $design
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $design)) { Ui-Fail "mitcad-cli: $($made -join ' / ')" }
+
+# A design of its own (mitcad#981): a box 60 x 30 x 20 (F1) as
+# Component1:1 (O1, F1.b0), its edges filleted (F2), three modelled M6
+# tapped holes through it (F3), a 6 mm cylinder 60 high joined to it (F4)
+# with a modelled M6 thread (F5); the occurrence placed 50 mm along -Y.
+$bracketScript = Join-Path $work 'bracket.json'
+$bracket = Join-Path $work 'bracket.mitcad'
+Set-Content -Encoding ascii $bracketScript @'
+[
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0], "length": 60, "width": 30, "height": 20,
+    "operation": "new_component"}},
+  {"cmd": "activate_component", "component": "C1"},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F1.b0",
+    "sets": [{"all_edges": true, "size": {"type": "constant", "radius": 2}}]}},
+  {"cmd": "add_feature", "def": {"type": "hole",
+    "placement": {"type": "face", "body": "F1.b0", "face": "F1:top", "points": [[10, 15, 20], [22, 15, 20], [34, 15, 20]]},
+    "diameter": 5, "extent": {"type": "through_all"}, "thread": {"designation": "M6x1", "modeled": true}}},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [50, 15], "diameter": 6, "height": 60,
+    "operation": "join", "participants": ["F1.b0"]}},
+  {"cmd": "add_feature", "def": {"type": "thread", "faces": [{"body": "F1.b0", "face": "F4:side0"}],
+    "thread": {"designation": "M6x1"}, "modeled": true}},
+  {"cmd": "activate_component", "component": "C0"},
+  {"cmd": "set_occurrence_transform", "occurrence": "Component1:1", "transform": {"translation": [0, -50, 0]}}
+]
+'@
+$made = & $Cli run $bracketScript --save $bracket
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $bracket)) { Ui-Fail "mitcad-cli bracket: $($made -join ' / ')" }
 
 # Menu-Entries: the entries of the context menu logged last (the labels'
 # ellipsis as three dots).
@@ -156,6 +189,27 @@ Ui-Step 'right-click Body1 in the view'  { Ui-ClickLogged 'Body F2.b0' 3 }
 Ui-ExpectNew 'Selected: 1 face [face ' 'a face of Body1 selected'
 Ui-ExpectNew 'Context menu: ' 'the view''s menu'
 Expect-Entry 'Move/Copy' $false
+Ui-Step 'Escape (close the menu)'        { Ui-Key 'Escape' }
+
+if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
+
+Write-Host '--- The view: a face of a large body (modelled threads, placed)'
+Ui-StartApp 'move-copy-menu-bracket' @('--open', $bracket)
+Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
+Ui-ExpectLog 'Body F1.b0 in O1 at' 'the bracket is in the view' 30
+Ui-Mark
+Ui-Step 'offset face (F7)'               { Ui-Key 'F7' }
+Ui-ExpectNew 'Pick face F1.b0/F1:side0 at' 'where the bracket''s side is picked'
+$at = Ui-PickAt 'face F1.b0/F1:side0 at'
+Ui-Step 'cancel it (Esc)'                { Ui-Key 'Escape' }
+Ui-ExpectNew 'Command Offset Face cancelled' 'cancelled'
+Ui-Mark
+Ui-Step 'right-click the bracket''s side' { Ui-Click $at[0] $at[1] 3 }
+Ui-ExpectNew 'Selected: 1 face [face F1:side0 of F1.b0 in O1]' 'the bracket''s side selected'
+Ui-ExpectNew 'Selection timing: view ' 'the selection''s parts timed'
+Ui-ExpectNew 'Context menu timing: select ' 'the right click timed'
+Ui-ExpectNew 'Context menu: ' 'the view''s menu'
+Write-Host "     $(Ui-LastMatch '^(Context menu timing: .*)$')"
 Ui-Step 'Escape (close the menu)'        { Ui-Key 'Escape' }
 
 if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }

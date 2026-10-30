@@ -9,3 +9,5 @@ key ctrl+w
 expect-dialog-gone '^(Settings|Preferences)$'
 focus-main
 expect-setting view/navigationScheme custom
+expect-setting view/spaceMouseMode camera
+expect-setting view/spaceMouseLockHorizon true

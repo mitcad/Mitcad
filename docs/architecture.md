@@ -1469,7 +1469,10 @@ entities and constraints, shared by the UI and the imports.
   font are unchanged. Font files and shaping (mitcad#473,
   `sketch/fonts.rs`): a text's font may come from a file the model reads
   itself (skrifa; WOFF and WOFF2 decoded by wuff), its outlines stored
-  with the text; text in a font file, and right-to-left or joined
+  with the text. Only a file chosen in the session is read again
+  (`FontFile::chosen`, not saved, mitcad#929): a path that came with a
+  design needs the stored outlines, so a design file never makes the
+  model read a file it names; text in a font file, and right-to-left or joined
   scripts in an installed font (its file through `Kernel::font_source`),
   is shaped by harfrust in runs of one direction (unicode-bidi), the
   C++ side giving only the installed fonts' outlines and files; every
@@ -1581,9 +1584,12 @@ not recompute.
   camera's rates (`view/SpaceMouseNavigation.hpp`: speed, dead zone,
   reversed axes, locks, dominant axis; pan and zoom only in sketch mode)
   and runs the buttons' view commands through their actions;
-  `OcctViewer` moves the camera by the rates at each frame about the
-  mouse orbit's centre (`AIS_ViewController::GravityPoint`) with its Z
-  lock. The settings are part of `NavigationSettings`.
+  `OcctViewer` moves the camera by the rates at each frame in the 3D
+  mouse's Navigation mode (mitcad#978: Object and Camera about the mouse
+  orbit's centre, `AIS_ViewController::GravityPoint`, the one opposite to
+  the other; Fly about the eye in perspective) and with its own Lock
+  horizon, not the mouse's Constrained orbit. The settings are part of
+  `NavigationSettings`.
 - **Timeline inspection** (`app/browser/FeaturePresentation.hpp`): hover
   previews are independent of selection and exclude failed, suppressed
   and rolled-back features. A nonpickable dashed boundary on the Topmost
@@ -1956,7 +1962,8 @@ not recompute.
   the design meanwhile. The history is a JSON Lines file per design in the
   user's data folder. What does not need Qt (the agents' streams as panel
   events, command lines, the approval policy, the undo merge, the history
-  format, Codex's whole JSON-RPC exchange) is Rust, reached through
+  format, the tool calls' group rows, Codex's whole JSON-RPC exchange) is
+  Rust, reached through
   `agent_chat` requests and `ChatStream` (`feed_line`, and `control` for a
   protocol with state of its own: its events include the lines to write).
   The panel is Qt in both layouts (a `FloatingLayout::Anchor::Right` card,
@@ -2432,6 +2439,26 @@ reads). A library source's design text in the store is inflated to at
 most 512 MiB and `max_inflated` of its store file, and the sources'
 texts together to at most 2 GiB; a store file that decodes to more is
 "damaged" and leaves the source a reference with a warning.
+
+**Id numbers on reading** (mitcad#929, mitcad#944): a session hands out
+new ids by counting on from the largest its design holds: components
+(`C<n>`), occurrences (`O<n>`) and their numbers, features (`F<n>`),
+sketch points, curves and texts (`p<n>`, `c<n>`, `t<n>`) and constraints
+(`k<n>`), library sources (`S<n>`), drawings (`D<n>`), their views,
+annotations, cut-sheet parts and export counts. A file chooses those
+numbers, so reading refuses any of them in the top `ID_RESERVE` = 2^20
+numbers of its type (`core/model-base/src/ids.rs`: at most
+`LARGEST_U32_ID` = 4293918719, a feature at most `LARGEST_U64_ID` =
+18446744073708503039; `file/id_reserve.rs`), in the words of a malformed
+id: `components[0]: invalid component id 'C4293918720' (at most
+C4293918719: …)`. The id text forms themselves still refuse only the
+type's largest number, so commands name the ids a session handed out.
+This reserve was chosen over allocation that can fail at every counting
+site: one rule on reading covers them all, and every session keeps about
+a million ids of each kind, far more than it makes, so counting on never
+overflows (a panic in Debug, a wrap to duplicate ids in release before).
+A design that came in just below the bound and was saved with ids in the
+reserve is refused on reading like any other such file.
 
 Autosave publishes immutable snapshots named
 `<session UUID>.<generation UUID>.mitcad` in the user's recovery folder.
@@ -2976,6 +3003,13 @@ expressions). Formats: [libraries.md](libraries.md).
   history in the row. The table is a top-level field of the file and of
   the definition state (undoable, compared row by row); both are
   optional, so files without them are as before.
+- **Linked files stay in the project** (mitcad#929,
+  `document/components.rs` `followed_link`): `update_links` reads a
+  linked file only when its path, taken lexically against the design's
+  folder, stays in the design's project (its folder without one);
+  anything else is reported and not read, so a design file does not
+  choose files outside its project for the model to open. A new link
+  records a file in the project relative to the design's folder.
 - **Versions per part.** A part records the commit the user chose when
   inserting it; `update_links` reads that commit, never a newer one, and
   only `update_library_parts` (an undo step) moves a part to another

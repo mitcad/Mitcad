@@ -6,21 +6,26 @@
 //! `thread/resume`, `turn/start` per message, `turn/interrupt` for Stop, and
 //! the notifications of a turn until `turn/completed`.
 //!
-//! The message types here follow the documented protocol; the schema the
-//! installed CLI generates (`codex app-server generate-json-schema`) was not
-//! at hand when they were written. Everything of the protocol is in this one
-//! file, so that a change of it touches this file and its tests only.
+//! The message types follow the JSON Schema that `codex app-server
+//! generate-json-schema` writes (checked against codex-cli 0.157.1, its
+//! stable API without `--experimental`); the configuration keys follow the
+//! keys that version knows. Everything of the protocol is in this one file,
+//! so that a change of it touches this file and its tests only.
 //!
 //! MitCad's tools are the conversation's MCP server through the thread's
 //! configuration overrides (`config` of `thread/start` and `thread/resume`):
-//! `mcp_servers` replaced by the window's bridge alone, so that the user's
-//! other MCP servers stay out, the built-in shell, patch, picture and web
-//! search tools off and a read-only sandbox. Nothing is written into the
-//! user's `config.toml`. Codex itself asks nothing (`approvalPolicy`
-//! `never`): MitCad's approvals are enforced by the live server for the
-//! chat's bridge connection, as for Claude Code. A request Codex still sends
-//! is answered here: a confirmation of a call of MitCad's own server is
-//! accepted (the live server decides), every other approval is declined.
+//! `mcp_servers` given as the window's bridge alone, so that the user's
+//! other MCP servers stay out (Codex layers the overrides over the user's
+//! `config.toml`; whether a layer's table replaces the user's or merges with
+//! it is for a real run to show, so another server's start is logged), the
+//! built-in shell, picture and web search tools off and a read-only sandbox
+//! (which also keeps `apply_patch` from writing: no key of the current Codex
+//! removes that tool). Nothing is written into the user's `config.toml`.
+//! Codex itself asks nothing (`approvalPolicy` `never`): MitCad's approvals
+//! are enforced by the live server for the chat's bridge connection, as for
+//! Claude Code. A request Codex still sends is answered here: a confirmation
+//! of a call of MitCad's own server is accepted (the live server decides),
+//! every other approval is declined.
 //!
 //! The stream is driven from both sides: [`CodexStream::control`] (start, a
 //! message, an interrupt) and [`CodexStream::feed`] (a line Codex wrote)
@@ -38,6 +43,8 @@ use super::{MAX_RESULT_CHARS, MAX_TEXT_CHARS, cut, pictures, text_field, valid_m
 /// The oldest Codex the chat starts: the app server's thread and turn
 /// requests (`thread/start` with its `config` overrides, `thread/resume`,
 /// `turn/start` with pictures, `turn/interrupt`) and `codex login status`.
+/// The messages were checked against 0.157.1's schema only; that 0.80.0
+/// already has all of them is not checked.
 pub const CODEX_MINIMUM_VERSION: &str = "0.80.0";
 
 /// The live MCP server's name in Codex's configuration.
@@ -46,6 +53,8 @@ const SERVER: &str = "mitcad";
 /// user first waits for the card's answer.
 const TOOL_TIMEOUT_SECONDS: u64 = 900;
 const STARTUP_TIMEOUT_SECONDS: u64 = 60;
+/// Why a command or a file change of Codex's own was declined.
+const REFUSAL: &str = "MitCad's chat does not run commands or change files.";
 
 /// What a request of ours was, to read its answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,7 +149,12 @@ pub fn auth(exit_code: i64, output: &str) -> Value {
 }
 
 /// The thread's configuration overrides: MitCad's bridge as the only MCP
-/// server, Codex's own tools off, nothing written to the sandbox.
+/// server, Codex's own tools off, nothing written to the sandbox. Only keys
+/// the current Codex knows: the picture tool is `features.view_image` (not
+/// `tools.view_image`), web search the `web_search` mode (`tools.web_search`
+/// is a table of search settings now), and `include_apply_patch_tool` is
+/// gone. `features.web_search_request` is the web search switch of older
+/// versions, which the current one still reads as a deprecated feature.
 fn thread_config(bridge: &str, instance: &str, chat: &str) -> Value {
     json!({
         "mcp_servers": {SERVER: {
@@ -154,10 +168,8 @@ fn thread_config(bridge: &str, instance: &str, chat: &str) -> Value {
         "features.shell_tool": false,
         "features.unified_exec": false,
         "features.apply_patch_freeform": false,
+        "features.view_image": false,
         "features.web_search_request": false,
-        "include_apply_patch_tool": false,
-        "tools.web_search": false,
-        "tools.view_image": false,
         "web_search": "disabled",
     })
 }
@@ -197,10 +209,7 @@ fn result_text(result: &Value) -> String {
     if !text.is_empty() {
         return text;
     }
-    match result
-        .get("structuredContent")
-        .or_else(|| result.get("structured_content"))
-    {
+    match result.get("structuredContent") {
         Some(Value::Null) | None => String::new(),
         Some(structured) => structured.to_string(),
     }
@@ -409,7 +418,8 @@ impl CodexStream {
         }
         match asked {
             Asked::Initialize => {
-                let mut events = vec![write(json!({"method": "initialized", "params": {}}))];
+                // A notification without params (the schema has none).
+                let mut events = vec![write(json!({"method": "initialized"}))];
                 events.push(match self.resume.clone() {
                     Some(thread) => {
                         let mut params = self.thread_params();
@@ -456,7 +466,6 @@ impl CodexStream {
             Asked::Models => {
                 let models: Vec<Value> = result
                     .get("data")
-                    .or_else(|| result.get("models"))
                     .and_then(Value::as_array)
                     .map(Vec::as_slice)
                     .unwrap_or_default()
@@ -575,31 +584,35 @@ impl CodexStream {
                 let subtype = if retry { "retry" } else { "error" };
                 vec![json!({"kind": "status", "subtype": subtype, "text": cut(&text, 500)})]
             }
-            _ if method.starts_with("mcpServer/") && method.contains("tatus") => {
-                self.bridge_status(params)
+            "mcpServer/startupStatus/updated" => self.bridge_status(params),
+            // A setting Codex ignores or finds wrong, for the log.
+            "configWarning" => {
+                let mut text = string_of(params, "summary", 500);
+                let details = string_of(params, "details", 500);
+                if !details.is_empty() {
+                    text = format!("{text}: {details}");
+                }
+                vec![json!({"kind": "status", "subtype": "config_warning",
+                            "text": cut(&text, 500)})]
             }
             _ => Vec::new(),
         }
     }
 
-    /// An MCP server's start (`mcpServer/startupStatus/updated` and the
-    /// like): MitCad's bridge connected or failed.
+    /// An MCP server's start (`mcpServer/startupStatus/updated`: `name`,
+    /// `status` `starting`, `ready`, `failed` or `cancelled`, `error`):
+    /// MitCad's bridge connected or failed. Another server's start is only
+    /// said for the log: the thread should have no other.
     fn bridge_status(&self, params: &Value) -> Vec<Value> {
-        let name = [
-            params.get("name"),
-            params.get("server"),
-            params.get("serverName"),
-        ]
-        .into_iter()
-        .flatten()
-        .find_map(Value::as_str);
-        if name != Some(SERVER) {
-            return Vec::new();
+        let name = string_of(params, "name", 100);
+        let status = string_of(params, "status", 40);
+        if name != SERVER {
+            return vec![json!({"kind": "status", "subtype": "other_mcp_server",
+                               "text": format!("{name} {status}")})];
         }
-        let status = string_of(params, "status", 40).to_lowercase();
         let bridge = match status.as_str() {
-            "ready" | "connected" | "started" => "connected",
-            "starting" | "pending" => return Vec::new(),
+            "ready" => "connected",
+            "starting" => return Vec::new(),
             _ => "failed",
         };
         let error = params
@@ -708,16 +721,15 @@ impl CodexStream {
             "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
                 (json!({"decision": "decline"}), "declined")
             }
-            // The protocol's first approvals, by older app servers.
-            "execCommandApproval" | "applyPatchApproval" => {
-                (json!({"decision": "denied"}), "declined")
-            }
+            // The protocol's first approvals (its v1 API): a refusal is
+            // `{"denied": {"rejection"}}`, the turn goes on.
+            "execCommandApproval" | "applyPatchApproval" => (
+                json!({"decision": {"denied": {"rejection": REFUSAL}}}),
+                "declined",
+            ),
             "item/permissions/requestApproval" => (json!({"permissions": {}}), "declined"),
             "mcpServer/elicitation/request" => {
-                let server = [params.get("serverName"), params.get("server")]
-                    .into_iter()
-                    .flatten()
-                    .find_map(Value::as_str);
+                let server = params.get("serverName").and_then(Value::as_str);
                 let url = params.get("mode").and_then(Value::as_str) == Some("url");
                 if server == Some(SERVER) && !url {
                     (json!({"action": "accept", "content": {}}), "allowed")

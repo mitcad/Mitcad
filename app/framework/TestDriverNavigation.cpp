@@ -9,6 +9,8 @@
 #include <memory>
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QSlider>
@@ -64,6 +66,14 @@ void TestDriver::testNavigationControls(const QString& mode) {
     if (binding.input == NavigationInput::MiddleButton && binding.modifiers == Qt::NoModifier) middle = row;
   }
   if (!check(middle >= 0, QStringLiteral("middle-button navigation row is missing"))) return;
+  // The 3D Mouse tab's Navigation mode and Lock horizon (mitcad#978).
+  auto* spaceMode = controls->findChild<QComboBox*>(QStringLiteral("navigationSpaceMouseMode"));
+  auto* lockHorizon = controls->findChild<QCheckBox*>(QStringLiteral("navigationSpaceMouseLockHorizon"));
+  if (!check(spaceMode && lockHorizon && spaceMode->count() == 3 &&
+                 spaceMode->findData(int(SpaceMouseMode::Object)) >= 0 &&
+                 spaceMode->findData(int(SpaceMouseMode::Camera)) >= 0 &&
+                 spaceMode->findData(int(SpaceMouseMode::Fly)) >= 0,
+             QStringLiteral("the 3D Mouse tab has no Navigation mode or Lock horizon"))) return;
   if (mode == QStringLiteral("configure")) {
     scheme->setCurrentIndex(scheme->findData(int(NavigationScheme::MiddlePan)));
     auto* editor = qobject_cast<QComboBox*>(table->cellWidget(middle, 1));
@@ -71,6 +81,8 @@ void TestDriver::testNavigationControls(const QString& mode) {
     if (!check(scheme->currentData().toInt() == int(NavigationScheme::Custom),
                QStringLiteral("editing a preset did not select Custom"))) return;
     for (std::size_t i = 0; i < sliders.size(); ++i) sliders[i]->setValue(125 + int(i) * 25);
+    spaceMode->setCurrentIndex(spaceMode->findData(int(SpaceMouseMode::Camera)));
+    lockHorizon->setChecked(true);
   } else if (mode == QStringLiteral("reset")) {
     for (const char* name : names) {
       auto* reset = controls->findChild<QPushButton*>(QString::fromLatin1(name) + QStringLiteral("Reset"));
@@ -98,6 +110,14 @@ void TestDriver::testNavigationControls(const QString& mode) {
                    navigationAction(live, NavigationInput::MiddleButton, Qt::NoModifier) == NavigationAction::Orbit,
                QStringLiteral("custom navigation binding was not applied or restored"))) return;
   }
+  // Fresh settings: Object and no Lock horizon; chosen ones apply at once
+  // and survive a restart (a speed's reset leaves them).
+  const bool chosenSpace = mode != QStringLiteral("default");
+  const SpaceMouseMode expectedMode = chosenSpace ? SpaceMouseMode::Camera : SpaceMouseMode::Object;
+  if (!check(spaceMode->currentData().toInt() == int(expectedMode) && lockHorizon->isChecked() == chosenSpace &&
+                 chosen.spaceMouse.mode == expectedMode && live.spaceMouse.mode == expectedMode &&
+                 chosen.spaceMouse.lockHorizon == chosenSpace && live.spaceMouse.lockHorizon == chosenSpace,
+             QStringLiteral("the 3D mouse's Navigation mode or Lock horizon was not applied or restored"))) return;
   const std::array<double, 4> actual{{live.orbitSpeed, live.panSpeed, live.zoomSpeed, live.trackpadSpeed}};
   for (std::size_t i = 0; i < sliders.size(); ++i) {
     const int expected = mode == QStringLiteral("configure") || mode == QStringLiteral("restored")
@@ -105,7 +125,10 @@ void TestDriver::testNavigationControls(const QString& mode) {
     if (!check(sliders[i]->value() == expected && std::abs(actual[i] - expected / 100.0) < 1e-9,
                QStringLiteral("navigation speed was not applied or restored: %1").arg(QString::fromLatin1(names[i])))) return;
   }
-  qInfo().noquote() << QStringLiteral("Navigation controls: %1, reserved rows disabled, live speeds match, visual guide populated").arg(mode);
+  qInfo().noquote() << QStringLiteral("Navigation controls: %1, reserved rows disabled, live speeds match, visual guide populated, "
+                                      "3D mouse %2 mode, horizon %3")
+                            .arg(mode, QLatin1String(spaceMouseModeId(live.spaceMouse.mode)),
+                                 live.spaceMouse.lockHorizon ? QStringLiteral("locked") : QStringLiteral("free"));
 }
 
 void TestDriver::testNavigationRuntime() {

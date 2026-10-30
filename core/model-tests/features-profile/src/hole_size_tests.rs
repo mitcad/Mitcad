@@ -113,6 +113,36 @@ fn the_table_gives_clearance_holes_and_head_recesses() {
         json!({"diameter": 6.6, "angle": 90.0})
     );
 
+    // A tapped hole's thread (mitcad#980): its countersink from the size's
+    // major diameter, the screw size of its nominal diameter (M6: DIN
+    // 974-1's counterbore 11, 6.4 deep) and its bore D1. ISO 261's 5.5 has
+    // no screw size, nor has another standard's thread.
+    let m6x1 = query(
+        &b.doc,
+        json!({"query": "hole_sizes", "size": "M6",
+               "thread": {"standard": "iso_metric", "size": "6", "designation": "M6x1"}}),
+    );
+    assert_eq!(
+        m6x1["tapped_countersink"],
+        json!({"diameter": 6.6, "angle": 90.0})
+    );
+    assert_eq!(m6x1["thread_size"]["size"], "M6");
+    assert_eq!(
+        m6x1["thread_size"]["counterbore"],
+        json!({"diameter": 11.0, "depth": 6.4})
+    );
+    let bore = m6x1["thread_bore"].as_f64().unwrap();
+    assert!((bore - 4.917468).abs() < 1e-4, "{m6x1}");
+    for (standard, size) in [("iso_metric", "5.5"), ("unified", "1/4")] {
+        let other = query(
+            &b.doc,
+            json!({"query": "hole_sizes", "size": "M6",
+                   "thread": {"standard": standard, "size": size}}),
+        );
+        assert!(other.get("thread_size").is_none(), "{other}");
+        assert!(other.get("tapped_countersink").is_some(), "{other}");
+    }
+
     let error = b
         .doc
         .query(&json!({"query": "hole_sizes", "size": "M7"}).to_string())

@@ -12,10 +12,13 @@
 #      Auto-update is off and the start-up fetches nothing (mitcad#576).
 #   2b. Insert from Library (mitcad#317): empty, its text says to press
 #      Update; Update fetches both sources and lists the parts.
-#   3. Insert from Library: a search for 4762, the older version v1.0.0,
-#      the default size M5x16, linked: its volume; a nut copied.
+#   3. Insert from Library: a search for 4762, the default size M5x16's
+#      suppliers' articles in their table (Supplier Articles, mitcad#979:
+#      several articles, the columns they fill, Copy as TSV, Copy Part
+#      Number, Open Link), the older version v1.0.0, linked: its volume;
+#      a nut copied.
 #   4. Library Parts: the screw still at v1.0.0 with a newer version
-#      fetched; v1.1.0 chosen, Show Changes names the wider head, Update:
+#      fetched, its articles' table (mitcad#979); v1.1.0 chosen, Show Changes names the wider head, Update:
 #      the new volume; then another size (M6x20): renamed, its volume; the
 #      parts list with the designations and licences.
 #   5. Community Library: the index's library without a licence hidden
@@ -165,6 +168,27 @@ ui_step "search 4762"                      xdotool type --delay 40 "4762"
 ui_expect_new "Library search '4762': 1 components" "the search"
 ui_expect_new "Library browser selected mitcad-parts/iso4762: version v1.1.0 (" "the newest version first"
 ui_expect_new ", size M5x16, licence CC0-1.0" "the default size and the licence"
+# The suppliers' articles of M5x16 (the generator's Würth and Etra
+# articles) in their table, not as one line (mitcad#979).
+ui_mark
+ui_step "Supplier Articles (Alt+A)"        ui_key alt+a
+ui_focus_dialog '^Supplier Articles - ISO 4762 M5x16$'
+ui_expect_new "Supplier parts of M5x16: " "the table of M5x16's articles"
+ARTICLES=$(grep "^Supplier parts of M5x16: " "$UI_LOG" | tail -1)
+COUNT=$(sed -n 's/^Supplier parts of M5x16: \([0-9]*\) articles, .*$/\1/p' <<< "$ARTICLES")
+[ "${COUNT:-0}" -ge 2 ] || ui_fail "M5x16 has not several articles: '$ARTICLES'"
+[[ $ARTICLES == *", columns Supplier, Part number, Material, Finish, Checked" ]] ||
+  ui_fail "not the columns the articles fill: '$ARTICLES'"
+echo "ok   $ARTICLES"
+ui_step "Copy as TSV (Alt+T)"              ui_key alt+t
+ui_expect_new "Supplier articles copied: $COUNT rows" "every article copied"
+ui_step "Copy Part Number (Alt+P)"         ui_key alt+p
+ui_expect_new "Supplier part number copied: " "the first article's part number on its own"
+ui_step "Open Link (Alt+L)"                ui_key alt+l
+ui_expect_new "Supplier link opened: https://" "the supplier's site"
+ui_expect_new "Open URL (test, not opened): https://" "opened in the browser (logged in the tests)"
+ui_step "close (Escape)"                   ui_key Escape
+ui_focus_dialog '^Insert from Library$'
 ui_step "the older version (Alt+V, Down)"  eval 'ui_key alt+v; ui_sync; ui_key Down'
 ui_expect_new "Library browser selected mitcad-parts/iso4762: version v1.0.0 (" "v1.0.0 chosen"
 ui_step "Insert (Alt+I)"                   ui_key alt+i
@@ -188,6 +212,14 @@ ui_expect_new "Library part ISO 4762 M5x16: mitcad-parts v1.0.0 (" "the screw's 
 ui_expect_new "size M5x16, a newer version is fetched" "a newer version is there, not taken"
 ui_expect_new "Library part ISO 4032 M5: mitcad-parts v1.1.0 (" "the nut"
 ui_expect_new "a copy: does not follow the library" "the copy does not follow"
+# The screw's articles at its recorded version (mitcad#979).
+ui_mark
+ui_step "Supplier Articles (Alt+A)"        ui_key alt+a
+ui_focus_dialog '^Supplier Articles - '
+ui_expect_new "Supplier parts of M5x16: $COUNT articles, columns Supplier, Part number, Material, Finish, Checked" \
+  "the screw's articles in Library Parts"
+ui_step "close (Escape)"                   ui_key Escape
+ui_focus_dialog '^Library Parts$'
 ui_step "v1.1.0 (Alt+V, Up)"               eval 'ui_key alt+v; ui_sync; ui_key Up'
 ui_expect_new "size M5x16, to update" "the change waits"
 ui_step "Show Changes (Alt+S)"             ui_key alt+s

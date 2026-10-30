@@ -556,7 +556,11 @@ impl<'a> Parser<'a> {
     }
 
     /// A number in canonical form after `prefix`.
-    fn number<T: FromStr>(&mut self, prefix: &str, expected: &'static str) -> Result<T, TopoError> {
+    fn number<T: TryFrom<u128>>(
+        &mut self,
+        prefix: &str,
+        expected: &'static str,
+    ) -> Result<T, TopoError> {
         let digits = self.rest()[prefix.len().min(self.rest().len())..]
             .bytes()
             .take_while(u8::is_ascii_digit)

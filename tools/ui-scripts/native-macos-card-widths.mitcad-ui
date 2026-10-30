@@ -90,13 +90,28 @@ native-action solid.appearances
 expect-log 'Appearances dialog opened'
 focus-dialog '^Appearances$'
 expect-native-window-fits '^Appearances$'
+# A committed multiword name stays whole on the Name field's single line,
+# not wrapped onto an unseen second line that hid its last word, here and
+# in the lower screen frame in both appearances (mitcad#982).
+native-pointer-click appearance.paint_red
+native-pointer-click appearanceNew
+expect-log '^Created appearance .* \(Paint - Red Copy\) from paint_red$'
+native-type appearanceName 'Key test appearance'
+native-key-event Tab
+expect-log '^Appearance .* name = Key test appearance$'
+expect-native-text appearanceName '^Key test appearance$'
+expect-native-bounds appearanceName text '^Name:?$'
 screenshot '${MITCAD_TEST_WORK}/appearances.png'
 native-screen-limit 900 520
 expect-native-window-fits '^Appearances$'
+expect-native-text appearanceName '^Key test appearance$'
+expect-native-bounds appearanceName text '^Name:?$'
 screenshot '${MITCAD_TEST_WORK}/appearances-compact.png'
 native-appearance dark
 sleep 250
 expect-native-window-fits '^Appearances$'
+expect-native-text appearanceName '^Key test appearance$'
+expect-native-bounds appearanceName text '^Name:?$'
 screenshot '${MITCAD_TEST_WORK}/appearances-compact-dark.png'
 native-appearance light
 native-screen-limit 0 0

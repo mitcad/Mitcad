@@ -36,6 +36,9 @@ public:
     // A note row's button was clicked: the row's key and the button's index
     // (InputDef::onNoteAction, mitcad#655).
     std::function<void(const QString&, int)> noteAction;
+    // A value field's mark was clicked: the input's key (InputDef::onMark,
+    // mitcad#980: Reset to size).
+    std::function<void(const QString&)> markClicked;
     // A link in an inspection's result was clicked ("point:x,y,z": Print
     // Analysis' thinnest wall, mitcad#620).
     std::function<void(const QString&)> resultLinkActivated;

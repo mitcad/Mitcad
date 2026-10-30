@@ -15,6 +15,8 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+use super::thread_table::{self, ThreadStandard};
+
 /// ISO 273's series of clearance holes: Fine, Normal (the medium series)
 /// and Coarse.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,6 +231,38 @@ pub fn tapped_countersink(major: f64) -> f64 {
     rounded.max(((major + 0.1) * 10.0 - 1e-9).ceil() / 10.0)
 }
 
+/// The screw size of a tapped hole's thread size (mitcad#980): an ISO
+/// metric thread's size (`6`, its nominal diameter in mm, whatever its
+/// pitch) is the screw size of that nominal diameter (`M6`), whose
+/// counterbore and counterdrill the tapped hole takes; None for a size the
+/// table has no row for (`5.5`) and for every other standard.
+pub fn of_thread(standard: ThreadStandard, size: &str) -> Option<&'static ScrewSize> {
+    if standard != ThreadStandard::IsoMetric {
+        return None;
+    }
+    let d: f64 = size.trim().parse().ok()?;
+    sizes().iter().find(|s| (s.diameter - d).abs() < 1e-9)
+}
+
+/// A thread size's major diameter in mm (mitcad#980: a tapped hole's
+/// countersink from its size); None for a size the standard lacks.
+pub fn thread_major(standard: ThreadStandard, size: &str) -> Option<f64> {
+    let wanted = size.trim();
+    thread_table::sizes(standard)
+        .into_iter()
+        .find(|s| s.size == wanted)
+        .map(|s| s.major)
+}
+
+/// The bore of a tapped hole of a thread designation (mitcad#980): its
+/// basic minor diameter D1 in mm; None for a designation the standard
+/// lacks.
+pub fn thread_bore(standard: ThreadStandard, designation: &str) -> Option<f64> {
+    thread_table::lookup(standard, designation)
+        .ok()
+        .map(|data| data.minor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +299,25 @@ mod tests {
         // At least 0.1 over a small thread's.
         assert_eq!(tapped_countersink(1.0), 1.1);
         assert!((tapped_countersink(6.35) - 7.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_tapped_hole_takes_the_screw_size_of_its_thread() {
+        let metric = ThreadStandard::IsoMetric;
+        // Any pitch of an ISO metric size is the size's screw.
+        assert_eq!(of_thread(metric, "6").unwrap().size, "M6");
+        assert_eq!(of_thread(metric, " 1.6 ").unwrap().size, "M1.6");
+        let m10 = of_thread(metric, "10").unwrap();
+        assert_eq!(m10.counterbore, Some((18.0, 10.6)));
+        // ISO 261's sizes the table has no screw for, and other standards.
+        assert!(of_thread(metric, "5.5").is_none());
+        assert!(of_thread(metric, "30").is_none());
+        assert!(of_thread(ThreadStandard::Unified, "1/4").is_none());
+        assert!(of_thread(ThreadStandard::Custom, "6").is_none());
+        assert_eq!(thread_major(metric, "6"), Some(6.0));
+        assert_eq!(thread_major(metric, "7.5"), None);
+        let bore = thread_bore(metric, "M6x1").unwrap();
+        assert!((bore - (6.0 - 1.082532)).abs() < 1e-4, "{bore}");
+        assert_eq!(thread_bore(metric, "M7x3"), None);
     }
 }

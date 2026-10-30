@@ -151,6 +151,22 @@ int navigationPreferencesTests() {
   CHECK(form.chosen().spaceMouse.speed == 2.0 && form.chosen().spaceMouse.reversed[0] &&
         !form.chosen().spaceMouse.axisOn[5] && form.chosen().spaceMouse.lockRotation);
   CHECK(form.chosen().spaceMouse.buttons == (QStringList{QStringLiteral("view.home"), QString()}));
+  // Its Navigation mode and Lock horizon (mitcad#978): Object and off by
+  // default, Lock horizon apart from the mouse's Constrained orbit.
+  auto* spaceMode = form.findChild<QComboBox*>(QStringLiteral("navigationSpaceMouseMode"));
+  auto* lockHorizon = form.findChild<QCheckBox*>(QStringLiteral("navigationSpaceMouseLockHorizon"));
+  CHECK(spaceMode && lockHorizon);
+  if (spaceMode && lockHorizon) {
+    CHECK(spaceMode->count() == 3 && spaceMode->currentData().toInt() == int(SpaceMouseMode::Object));
+    CHECK(spaceMode->itemText(0) == QStringLiteral("Object") && spaceMode->itemText(1) == QStringLiteral("Camera") &&
+          spaceMode->itemText(2) == QStringLiteral("Fly"));
+    CHECK(!lockHorizon->isChecked() && lockHorizon->text() == QStringLiteral("Lock horizon"));
+    spaceMode->setCurrentIndex(spaceMode->findData(int(SpaceMouseMode::Camera)));
+    lockHorizon->setChecked(true);
+    if (constrained) constrained->setChecked(false);
+  }
+  CHECK(form.chosen().spaceMouse.mode == SpaceMouseMode::Camera && form.chosen().spaceMouse.lockHorizon &&
+        !form.chosen().constrainedOrbit);
 
   // Save and reload the widget's actual choices in an isolated settings file.
   QTemporaryDir folder;
@@ -175,6 +191,11 @@ int navigationPreferencesTests() {
     CHECK(reopened.chosen().spaceMouse.speed == 2.0 && reopened.chosen().spaceMouse.reversed[0] &&
           !reopened.chosen().spaceMouse.axisOn[5] && reopened.chosen().spaceMouse.lockRotation);
     CHECK(reopened.chosen().spaceMouse.buttons == (QStringList{QStringLiteral("view.home"), QString()}));
+    CHECK(reopened.chosen().spaceMouse.mode == SpaceMouseMode::Camera && reopened.chosen().spaceMouse.lockHorizon);
+    auto* reopenedMode = reopened.findChild<QComboBox*>(QStringLiteral("navigationSpaceMouseMode"));
+    auto* reopenedHorizon = reopened.findChild<QCheckBox*>(QStringLiteral("navigationSpaceMouseLockHorizon"));
+    CHECK(reopenedMode && reopenedMode->currentData().toInt() == int(SpaceMouseMode::Camera));
+    CHECK(reopenedHorizon && reopenedHorizon->isChecked());
     auto* reopenedSecond = reopened.findChild<QComboBox*>(QStringLiteral("navigationSpaceMouseButton1"));
     CHECK(reopenedSecond && reopenedSecond->currentIndex() == 0);
     CHECK(navigationAction(reopened.chosen(), NavigationInput::TrackpadScroll, Qt::ShiftModifier) == NavigationAction::Orbit);

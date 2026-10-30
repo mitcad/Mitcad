@@ -311,6 +311,9 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
   buttons->addButton(m_close, QDialogButtonBox::RejectRole);
   layout->addWidget(buttons);
   mac::styleDialogButtons(buttons, m_close);
+  // Return commits the active field; closing this editor is an explicit
+  // action. The native presenter follows the same default-button state.
+  mac::auxiliaryButton(m_close);
   mac::styleDialog(this);
 
   connect(m_close, &QPushButton::clicked, this, &QDialog::accept);
@@ -685,6 +688,7 @@ void AppearanceDialog::finishUse(const QString& sourceId, const TextureAsset& as
 void AppearanceDialog::addNumber(QFormLayout* form, const char* key, const QString& label, double low, double high,
                                  double step, const QString& tip) {
   auto* box = new QDoubleSpinBox;
+  box->setObjectName(QStringLiteral("appearance_") + QString::fromLatin1(key));
   box->setRange(low, high);
   box->setSingleStep(step);
   box->setDecimals(3);
@@ -705,6 +709,7 @@ void AppearanceDialog::addColor(QFormLayout* form, const char* key, const QStrin
   auto* button = new QToolButton;
   button->setToolTip(tr("Choose a colour"));
   auto* hex = new QLineEdit;
+  hex->setObjectName(QStringLiteral("appearance_") + QString::fromLatin1(key));
   hex->setToolTip(tr("sRGB as #rrggbb"));
   hex->setMaximumWidth(110);
   row->addWidget(button);

@@ -22,10 +22,14 @@ public:
   explicit UpdateNotice(QWidget* parent = nullptr);
 
   // A newer release; `installable`: Install, else the release page only.
-  void showOffer(const QString& text, bool installable);
-  // A download or check under way; total 0: no percentage.
-  void showProgress(const QString& text, qint64 received, qint64 total);
-  void showMessage(const QString& text, bool error = false);
+  // `html` is rich text: the caller escapes every value in it
+  // (toHtmlEscaped), as values come from the network (mitcad#938).
+  void showOffer(const QString& html, bool installable);
+  // A download or check under way; total 0: no percentage. Plain text.
+  void showProgress(const QString& plain, qint64 received, qint64 total);
+  // Plain text, shown as it is: an error may carry a server's text.
+  void showMessage(const QString& plain, bool error = false);
+  // The notice's text as shown, without markup.
   QString text() const;
 
 signals:
@@ -38,7 +42,7 @@ signals:
   void closed();
 
 private:
-  void present(const QString& state, const QString& text);
+  void present(const QString& state, const QString& html);
 
   QLabel* m_text = nullptr;
   QProgressBar* m_progress = nullptr;

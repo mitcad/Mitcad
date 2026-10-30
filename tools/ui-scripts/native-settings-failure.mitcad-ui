@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+wait-idle
+command tools.preferences.cloud
+focus-dialog '^Settings$'
+expect-model-bodies 2 48000

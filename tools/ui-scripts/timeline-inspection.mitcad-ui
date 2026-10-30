@@ -60,7 +60,7 @@ click-logged '^Timeline Fillet1 at '
 timeline-leave
 expect-selection 1 0
 expect-log '^Feature inputs highlighted: Fillet1 edges 4$'
-expect-selection-info '(?s)Fillet: Fillet1.*4 edges'
+expect-selection-info '(?s)Fillet: Fillet1.*4 edges; Radius: 2 mm'
 expect-view-image '${MITCAD_TEST_SHOTS}/baseline.png' changed
 screenshot '${MITCAD_TEST_SHOTS}/fillet-edges.png'
 key Escape

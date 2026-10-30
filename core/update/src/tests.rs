@@ -49,6 +49,7 @@ fn manifest(version: &str, file: &TempFile, signer: &SigningKey) -> Manifest {
         format: MANIFEST_FORMAT,
         version: version.into(),
         date: "2026-10-06".into(),
+        expires: None,
         notes: format!("https://example.invalid/releases/tag/v{version}"),
         assets: BTreeMap::from([("windows-x64".to_string(), asset)]),
     }
@@ -441,6 +442,168 @@ fn the_prerelease_channel_takes_the_newest_release() {
     );
     assert!(prerelease_manifest_url(b"[]").is_err());
     assert!(prerelease_manifest_url(b"{\"message\": \"API rate limit exceeded\"}").is_err());
+}
+
+/// mitcad#938: a validly signed manifest whose `expires` has passed offers
+/// nothing, though its version is newer; clocks a little ahead are
+/// tolerated, clocks behind never expire it.
+#[test]
+fn an_expired_manifest_offers_nothing() {
+    let release = key("release");
+    let file = TempFile::new("expired.exe", INSTALLER);
+    let mut expiring = manifest("0.2.0", &file, &release);
+    expiring.expires = Some("2026-11-30".into());
+    let signed = expiring.signed(&release);
+    assert!(signed.contains("\"expires\": \"2026-11-30\""), "{signed}");
+    let read = Manifest::read(signed.as_bytes(), &keys(&release)).unwrap();
+    assert_eq!(read.expires.as_deref(), Some("2026-11-30"));
+    let day = |text: &str| parse_date(text).unwrap();
+
+    // Before and on its last day, and within the clock tolerance after it.
+    for today in ["2026-10-06", "2026-11-30", "2026-12-14"] {
+        assert_eq!(
+            assess_on(&read, "0.1.0", Channel::Stable, "", day(today)),
+            Ok(Status::Available),
+            "{today}"
+        );
+    }
+    // A clock behind (a flat battery): never expired.
+    assert_eq!(
+        assess_on(&read, "0.1.0", Channel::Stable, "", day("1970-01-01")),
+        Ok(Status::Available)
+    );
+    // Past the tolerance: nothing, though 0.2.0 is newer.
+    assert_eq!(
+        assess_on(&read, "0.1.0", Channel::Stable, "", day("2026-12-15")),
+        Ok(Status::Current)
+    );
+    assert_eq!(
+        assess_on(
+            &read,
+            "0.1.0",
+            Channel::Prerelease,
+            "0.2.0",
+            day("2027-06-01")
+        ),
+        Ok(Status::Current)
+    );
+    // The application's check: current, and told why, with the date.
+    let offer: serde_json::Value = serde_json::from_str(
+        &check_on(
+            signed.as_bytes(),
+            &public_key(&release),
+            "0.1.0",
+            "windows-x64",
+            Channel::Stable,
+            "",
+            day("2027-01-01"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(offer["status"], "current", "{offer}");
+    assert_eq!(offer["expired"], true, "{offer}");
+    assert_eq!(offer["expires"], "2026-11-30", "{offer}");
+    assert_eq!(offer["version"], "0.2.0");
+    // Not newer: plainly current, no expiry to tell.
+    let offer: serde_json::Value = serde_json::from_str(
+        &check_on(
+            signed.as_bytes(),
+            &public_key(&release),
+            "0.2.0",
+            "windows-x64",
+            Channel::Stable,
+            "",
+            day("2027-01-01"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(offer["status"], "current", "{offer}");
+    assert_eq!(offer["expired"], false, "{offer}");
+    // By the real clock: a manifest that expired long ago.
+    let mut old = manifest("0.2.0", &file, &release);
+    old.date = "2020-01-06".into();
+    old.expires = Some("2020-02-01".into());
+    let read = Manifest::read(old.signed(&release).as_bytes(), &keys(&release)).unwrap();
+    assert_eq!(
+        assess(&read, "0.1.0", Channel::Stable, ""),
+        Ok(Status::Current)
+    );
+    // A manifest without an expiry (before mitcad#938) never expires, and
+    // its signed bytes have no `expires`.
+    let unexpiring = manifest("0.2.0", &file, &release);
+    let signed = unexpiring.signed(&release);
+    assert!(!signed.contains("expires"), "{signed}");
+    let read = Manifest::read(signed.as_bytes(), &keys(&release)).unwrap();
+    assert_eq!(
+        assess_on(&read, "0.1.0", Channel::Stable, "", day("2999-12-31")),
+        Ok(Status::Available)
+    );
+    let offer: serde_json::Value = serde_json::from_str(
+        &check(
+            signed.as_bytes(),
+            &public_key(&release),
+            "0.1.0",
+            "windows-x64",
+            Channel::Stable,
+            "",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(offer["expires"], serde_json::Value::Null);
+    assert_eq!(offer["expired"], false);
+}
+
+#[test]
+fn expiry_dates_are_checked() {
+    let release = key("release");
+    let file = TempFile::new("expiry-dates.exe", INSTALLER);
+    let refused = |expires: &str| {
+        let mut wrong = manifest("0.2.0", &file, &release);
+        wrong.expires = Some(expires.into());
+        Manifest::read(wrong.signed(&release).as_bytes(), &keys(&release)).unwrap_err()
+    };
+    for bad in [
+        "2026-02-30",
+        "2026-13-01",
+        "26-11-30",
+        "2026-11-3x",
+        "soon",
+        "",
+        "２026-11-30",
+    ] {
+        assert!(
+            refused(bad).to_string().contains("invalid expiry date"),
+            "{bad}"
+        );
+    }
+    assert!(
+        refused("2026-10-05")
+            .to_string()
+            .contains("before its release date 2026-10-06")
+    );
+    // The release day itself is a valid last day.
+    let mut same_day = manifest("0.2.0", &file, &release);
+    same_day.expires = Some("2026-10-06".into());
+    Manifest::read(same_day.signed(&release).as_bytes(), &keys(&release)).unwrap();
+
+    assert_eq!(parse_date("1970-01-01"), Some(0));
+    assert_eq!(parse_date("2000-03-01"), Some(11_017));
+    assert_eq!(
+        parse_date("2024-02-29").map(date_text).as_deref(),
+        Some("2024-02-29")
+    );
+    assert_eq!(parse_date("2100-02-29"), None);
+    assert_eq!(
+        parse_date("2000-02-29").map(date_text).as_deref(),
+        Some("2000-02-29")
+    );
+    for days in [-1, 0, 59, 365, 11_016, 20_000, 20_755, 2_932_896] {
+        assert_eq!(parse_date(&date_text(days)), Some(days), "{days}");
+    }
+    assert!(today() > parse_date("2026-01-01").unwrap());
 }
 
 #[test]

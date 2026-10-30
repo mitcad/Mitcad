@@ -137,6 +137,25 @@ focus-main
 mark
 command tools.preferences.navigation
 focus-dialog '^Settings$'
+# Check the first opening before any control is scrolled into view. The
+# whole Mouse and Trackpad page fits when the display has room (mitcad#992).
+expect-native-settings-layout initial
+# Two round trips retain the first rows' frames on each page. The short
+# page's trailing stretch owns the spare height; its axis columns and speed
+# caption stay aligned. The selector keeps 5 pt above its 24 pt icon.
+native-choice navigationTabs '3D Mouse'
+expect-native-settings-layout space
+sleep 250
+screenshot-screen '${MITCAD_TEST_WORK}/settings-3d-mouse-${MITCAD_TEST_APPEARANCE}.png'
+native-choice navigationTabs 'Mouse and Trackpad'
+expect-native-settings-layout mouse
+native-choice navigationTabs '3D Mouse'
+expect-native-settings-layout space
+native-choice navigationTabs 'Mouse and Trackpad'
+expect-native-settings-layout mouse
+sleep 250
+screenshot-screen '${MITCAD_TEST_WORK}/settings-initial-${MITCAD_TEST_APPEARANCE}.png'
+
 # The bindings open at the first active one, Option + Left drag, below the
 # reserved left drags, as the shared table's reveal asks (mitcad#972).
 expect-native-first-row navigationBindings '^Option \+ Left drag$'

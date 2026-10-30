@@ -233,6 +233,8 @@ mod project;
 pub mod settings;
 mod v1;
 mod v2;
+// The top id numbers a design file leaves free (mitcad#944).
+mod id_reserve;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -508,6 +510,9 @@ pub fn load_state(json: &str) -> Result<(DocState, Vec<String>), FileError> {
         1 => v1::load(json),
         _ => v2::load(value),
     }?;
+    // Ids in the top of their type would leave the session too few to
+    // hand out (mitcad#944).
+    id_reserve::check(&state)?;
     // Driven dimensions of older files get their reference parameters, and
     // stored ones their kind (mitcad#231).
     state

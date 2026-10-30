@@ -109,7 +109,9 @@ ChatGPT**) starts its own sign-in.
 - **Enter** sends, **Shift+Enter** starts a new line; **Selection** (on
   by default) and **View** say what goes with the message. While the
   agent works, the button is **Stop** (Esc).
-- The agent's calls are rows in the conversation; saving, opening,
+- The agent's calls are rows in the conversation; calls in a row between
+  two of its sentences are one row (**3 calls (1 failed) · *the latest
+  call***) that opens to them. Saving, opening,
   exporting and undoing what was there before the message ask first with
   a card: **Allow once**, **Always allow** or **Deny** (**Preferences › AI
   Assistants › Chat** sets what asks).
@@ -408,29 +410,43 @@ lights and Render Image.
 #### 3D mouse
 
 A 3D mouse (a 6-DOF device such as a SpaceMouse or a Space Navigator)
-moves the view. Orbit, pan and zoom work together, and the model
-follows the cap:
+moves the view. Orbit, pan and zoom work together. The **Navigation
+mode** sets what follows the cap:
 
-- Push the cap to the side or lift it, and the model moves the same way.
-- Pull the cap toward you, and the model comes closer. Push it away to
-  zoom out.
-- Tilt, twist or roll the cap, and the model turns the same way. It
-  turns about the same centre as the mouse's orbit. With a constrained
-  orbit, Z stays upright and the view does not roll.
+- **Object** (the default): the model follows the cap. Push the cap to
+  the side or lift it, and the model moves the same way. Pull the cap
+  toward you, and the model comes closer; push it away to zoom out.
+  Tilt, twist or roll the cap, and the model turns the same way, about
+  the same centre as the mouse's orbit.
+- **Camera**: the camera follows the cap. Push the cap to the right, and
+  the camera moves right (the model goes left). Push the cap away, and
+  the camera moves forward: in perspective it moves toward the model, in
+  orthographic it zooms in. Tilt or twist the cap, and the camera turns
+  the same way about the orbit's centre.
+- **Fly**: the camera moves as in Camera mode but turns in place, as
+  when you look around inside a building. In orthographic projection Fly
+  works as Camera.
 
-In sketch mode the 3D mouse only pans and zooms. The first button fits
-everything and the second button goes to the home view.
+With **Lock horizon** on, Z stays upright and the view does not roll:
+the roll axis does nothing. Lock horizon belongs to the 3D mouse alone;
+the mouse's **Constrained orbit (Z stays up)** does not change it.
+
+In sketch mode the 3D mouse only pans and zooms, in the direction of its
+Navigation mode. The first button fits everything and the second button
+goes to the home view.
 
 The **3D Mouse** tab of Tools › Preferences › Navigation has the
 settings:
 
 - **Use a 3D mouse** turns it on or off.
 - **3D mouse speed** sets how fast the view moves.
+- **Navigation mode** is Object, Camera or Fly.
 - For each axis, **On** lets the axis move the view, and **Reverse**
-  turns its direction around.
+  turns its direction around from what the Navigation mode does.
 - **Lock rotation** and **Lock translation** stop all turning or all
   panning and zooming. **Dominant axis only** uses only the axis that
-  you push the most.
+  you push the most. **Lock horizon** keeps Z upright. These work in
+  every Navigation mode.
 - The button table sets the command of each button: Fit, Home, a
   standard view, Look At, Orthographic or Perspective, or None.
 
@@ -510,7 +526,10 @@ OK, and Esc is Cancel. While you edit a feature, the timeline rolls
 back to before the feature.
 
 A value field takes an expression with units (`20`, `2 in`, `d1 * 2`).
-The value, or an error, shows below the field. Numbers take a decimal
+The value of an expression, or an error, shows below the field; a
+number, with or without its sign and unit (`-8 mm`), is its own value
+and shows nothing there, so the panel does not move while you drag an
+arrow past zero. Numbers take a decimal
 comma or a decimal point: `1,5 mm` is `1.5 mm` and shows as `1.5 mm`.
 A comma directly between two digits is a decimal comma. Any other comma
 separates the arguments of a function, and `;` always does. Thus
@@ -2539,11 +2558,12 @@ selected timeline features and their components and shows their main dimensions.
 
 A selected or hovered Fillet or Chamfer also shows the edges it picked, as
 blue lines where they were before the feature rounded or bevelled them
-away; the parts behind or inside the body are dashed. Its own faces are then
+away; the parts behind or inside the body are dashed. On a dark background
+the lines are a lighter blue with a dark outline. Its own faces are then
 shaded amber, so that they stand apart from the lines. The lines only show
 where the edges were: they cannot be clicked, and nothing is rolled back or
 rebuilt to show them. The selection card names how many edges the feature
-picked (for example, **12 edges**).
+picked and its size (for example, **12 edges; Radius: 2 mm**).
 
 **Selection.** A click on a feature selects what the feature made:
 
@@ -3140,177 +3160,322 @@ Suppress Features) ends it. **None** in Varies with or **Remove
 Condition** in the dialog ends it too and keeps the value it gave. Each change is one
 step to undo. A parameter that is followed cannot be deleted; renaming it
 changes the expressions.
+
 ## Configurations
 
-A configurable design stands for a family of products: a shelf in three
-colours and any length from 300 to 2000 mm, a screw in its sizes. You
-choose a value for each **option** (Color, Length, Size). **Rules** take
-away the values and combinations that are not allowed, and named **rows**
-are presets of option values. A configuration only sets parameters: an
-option is a user parameter, and everything that follows it (dimensions,
-other parameters through their expressions) changes with it.
+A configurable design stands for a family of products: a shelf in two
+colours and any length from 300 to 2000 mm, a screw in its sizes. Whoever
+uses the design chooses a value for each **option**, such as Color and
+Length. **Rows** are ready-made combinations of the options, with a
+designation and a part number. **Rules** take away the values and
+combinations that are not allowed. A configuration only sets parameters:
+an option is a user parameter, and everything that uses it (dimensions,
+features, other parameters through their expressions) changes with it.
 
-Open **Configurations…** from the Modify group of the Solid tab (beside
-**Change Parameters**) or from **Edit › Configurations…**. The window has
-three tabs: **Options**, **Rows** and **Rules**. Every change in it is one
-step to undo. A change that MitCad refuses stays in its cell in red, and
-the cell's tooltip and the line under the tabs say why. You cannot change
-the configuration while a sketch or a command panel is open.
+This chapter builds one example from the start to the end, a shelf:
 
-### Options
+| | |
+|---|---|
+| Options | **Color**: Black or White. **Length**: 300 mm to 2000 mm, in steps of 10 mm |
+| Row | **Standard**: White, 1200 mm |
+| Rule | **Black is short**: when Color is Black, Length is at most 1000 mm |
 
-The **Options** tab lists the options in their order. The order matters:
-when a change makes a later option's value not allowed, MitCad moves the
-later options first (see *Rules and the cascade* below), and the choosers
-show the options in this order. Drag an option to its place, or select it
-and click **Move Up** or **Move Down**.
+The steps say what you do, in the order you do it. What MitCad does
+behind them is in [How MitCad applies rules](#how-mitcad-applies-rules)
+at the end, and the window's other controls are in [More in the
+Configurations window](#more-in-the-configurations-window).
 
-- **Add Option…** makes a user parameter an option. Choose one of the
-  user parameters, or **New Parameter** and give its name, unit and value
-  (unit `Text` for a text such as a colour name).
-- **Remove Option** takes the option out of the configuration and out of
-  the rows. The parameter stays in the design.
+### 1. When you need configurations
+
+Use configurations when a design is made or sold in sizes or colours, and
+the choice must stay valid: a chooser for each option at the top of the
+browser, rows with their designation and part number for the parts list,
+and rules that keep out the combinations that are not made. A design that
+is inserted from a library offers the same choosers ([Components with
+options](#components-with-options)).
+
+If you only change a length now and then, you do not need them: change
+the parameter in **Change Parameters**
+([Parameters and expressions](#parameters-and-expressions)).
+
+A configuration starts from user parameters. The shelf is a board whose
+extrusion distance is the user parameter **Length** (`1500 mm`), and a
+text parameter **Color** (`'White'`, unit **Text**) that the board's
+appearance can follow ([Values that follow
+parameters](#values-that-follow-parameters)). Make them in Change
+Parameters first.
+
+![The Parameters window with the user parameters Color and Length](images/configurations/shelf-1-parameters.png)
+
+### 2. Make the options
+
+1. Open **Configurations…** from the Modify group of the Solid tab (beside
+   **Change Parameters**) or from **Edit › Configurations…**. The window
+   has the tabs **Options**, **Rows**, **Rules** and **Bindings**. Each tab
+   starts with a line that says what it is for; the Options tab's says
+   "Options are the choices a user of this design makes, such as Color or
+   Length. Each option is a user parameter." While the tab is empty, it
+   says "No options yet. Add Option… makes a parameter an option."
+2. Click **Add Option…**, choose **Color** and click **OK**. Do the same
+   for **Length**. (With **New Parameter** in the same list you can make a
+   new user parameter here: its name, unit and value.)
+3. Give each option the values it can have. Double-click its **Domain**
+   cell (or select the option and click **Edit Domain…**):
+   - Color: **List**, with `Black` and `White` on lines of their own.
+   - Length: **Range**, minimum `300 mm`, maximum `2000 mm`, step
+     `10 mm`.
+4. Keep the order: Color first, then Length. The options are chosen in
+   this order, and an option's value can limit only the options after it,
+   so put first the option that decides the most. Drag an option to its
+   place, or select it and click **Move Up** or **Move Down**.
+
+The domain is stored as the parameter's limits, so Change Parameters
+shows it too. **Default** is the option's own value (1500 mm for Length).
+
+![The Options tab with Color and Length and their domains](images/configurations/shelf-2-options.png)
+
+### 3. Choose in the Configuration bar
+
+Close the window. At the top of the browser, the **Configuration** bar
+now has a chooser for each option, in their order: a list for Color, and
+a field and a slider for Length. Type `1200` in the Length field and
+press Enter: the board is now 1200 mm long.
+
+Each choice is one step to undo, and the design is computed again at
+once.
+
+![The Configuration bar with Color White and Length 1200 mm](images/configurations/shelf-3-bar.png)
+
+### 4. Add a row
+
+A row saves a combination under a name, for the parts list and for a
+quick choice. The Rows tab's line says "A row is a ready-made combination
+of the options, with its designation and part number."; while the tab is
+empty, it says "No rows yet. Add Row saves the options' values as a row."
+
+1. Open **Configurations…** again and click the **Rows** tab.
+2. Click **Add Row**. The new row, **Row1**, has the options' values as
+   they are now: White and 1200 mm.
+3. Double-click its **Name**, type `Standard` and press Enter.
+4. Fill in **Designation**, **Part Number** and **Supplier URL** if the
+   parts list needs them. Type a text without quotes (`White`) and a
+   number with or without its unit (`1200` is `1200 mm` for a length).
+5. Select the row and click **Set as Default**: its name turns bold, and a
+   library component is inserted with this row.
+
+The first box of the Configuration bar now chooses a row: **Standard**
+sets White and 1200 mm at once. When the options match no row, the box
+says **No row**. The line above the sheet names the row that the options
+match now.
+
+![The Rows tab with the row Standard](images/configurations/shelf-4-rows.png)
+
+### 5. Add the rule
+
+The shelf is not made longer than 1000 mm in black. The rule **Black is
+short** says so. The Rules tab's line says "Rules take away values and
+combinations that are not allowed. Most designs need none."; while there
+are no rules, it says "No rules yet. A rule is, for example: when Color
+is Black, Length is at most 1000 mm."
+
+1. Click the **Rules** tab, then **Add** and **Empty rule**.
+2. The new rule's name is ready to be typed: type `Black is short` and
+   press Enter.
+3. Click the **Text** under the blocks (or press Alt+T). While the rule is
+   empty, the text shows an example made from your options. Type the
+   rule, one line per part, with **Shift+Enter** between the lines:
+
+   ```text
+   when Color == 'Black'
+   then Length max 1000 mm
+   ```
+
+   A text goes in single quotes (`'Black'`), and a number has its unit
+   (`1000 mm`).
+4. Press **Enter**. MitCad reads the lines and saves the rule, as one
+   step to undo. Leaving the text saves it too, and **Esc** brings back
+   the saved text instead.
+
+The blocks above the text show the same rule, and the list on the left
+shows it without a warning mark. If a line cannot be read (an option
+that the design does not have, a number without its unit), MitCad marks
+the line, the line under the blocks says where and why (for example
+*Line 2, column 17: 1000 needs a unit: Length is in mm (1000 mm)*), and
+nothing is saved until you correct it.
+
+You can also start from a template. **Add › Limit a range when…** makes a
+complete rule from the design's options at once, `when Color ==
+'Black'` and `then Length max 2000 mm`, named *Limit Length when Color is
+Black*, and saves it. Change `2000 mm` to `1000 mm` in the text and press
+Enter (or double-click the number's block), and rename the rule
+(double-click its name, or press F2). The other templates are in
+[Rules](#rules).
+
+![The Rules tab with the rule Black is short as text and as blocks](images/configurations/shelf-5-rule.png)
+
+### 6. When a choice breaks a rule
+
+Close the window and choose **Black** in the Configuration bar. Length
+was 1200 mm, which Black does not allow, so MitCad moves it to the
+nearest allowed value, 1000 mm. A notice under the choosers and the
+status bar say what moved and why: *Length 1200 mm → 1000 mm: Black is
+short*. The board follows, and the Length slider now ends at 1000 mm.
+The choice and its move are one step to undo.
+
+![The Configuration bar after choosing Black: Length moved to 1000 mm, with the notice](images/configurations/shelf-6-moved.png)
+
+- Choosing **White** again keeps 1000 mm: rules only take values away,
+  they never set one back. Choose the row **Standard** to get 1200 mm.
+- A value that a rule does not allow is not written. In the Rows tab, a
+  row with Black whose Length you type as `1500` keeps its old value; the
+  cell stays red, and its tooltip names the rule.
+- A row that breaks a rule (for example because the rule came later) is
+  marked in yellow in the cells the rule is about, with the rule in the
+  tooltip.
+- When no move can repair a choice (a rule that forbids a combination,
+  for example), the choice is refused, and the message names the rule.
+
+The shelf is done: two options, a row and a rule.
+
+### More in the Configurations window
+
+Every change in the window is one step to undo. A change that MitCad
+refuses stays in its cell in red, and the cell's tooltip and the line
+under the tabs say why. You cannot change the configuration while a
+sketch or a command panel is open. The **Bindings** tab lists what follows
+the options ([Values that follow parameters](#values-that-follow-parameters)).
+
+#### Options
+
+- **Add Option…** makes a user parameter an option, or makes a new one
+  with **New Parameter** (its name, unit and value; unit `Text` for a
+  text such as a colour name). **Remove Option** takes the option out of
+  the configuration and out of the rows; the parameter stays.
 - **Domain** is what the option can be before the rules: a **list** of
   values (`Black`, `White`; `300 mm`, `500 mm`, `800 mm`), a **range**
-  (a minimum, a maximum and a step), a **table column**, or **free**.
-  Double-click the cell or click **Edit Domain…**. A text option is a
-  list, a table column or free. The domain is stored as the parameter's
-  limits, so Change Parameters shows it too.
-- A **table column** domain takes the option's values from a column of
-  one of the design's tables (Change Parameters, Tables): choose **Table
-  Column** and the column, such as `Screws.Size`. The option can then be
-  each value in the column, and the Domain cell shows the column with its
-  values (`Screws.Size: M3, M4, M5`). A text option takes a text column, a
-  number option a number column. When you edit the table (or import it
-  from CSV) and the option's value is no longer in the column, the option
-  moves to the nearest value (for a text, to the default row's value or
-  the column's first), and the status bar says so.
+  (a minimum, a maximum and a step), a **table column**, or **free**. A
+  text option is a list, a table column or free.
+- A **table column** takes the option's values from a column of one of
+  the design's tables ([Tables](#tables)): choose **Table Column** and the
+  column, such as `Screws.Size`. The Domain cell then shows the column
+  with its values (`Screws.Size: M3, M4, M5`). A text option takes a text
+  column, a number option a number column. When you edit the table (or
+  import it from CSV) and the option's value is no longer in the column,
+  the option moves to the nearest value (for a text, to the default row's
+  value or the column's first), and the status bar says so.
 - **Default** is the option's own value: what the design has before a row
-  or a chooser changes it. Double-click it to change it.
-- **Comment** is the parameter's comment.
+  or a chooser changes it. **Comment** is the parameter's comment.
 - **Driven** marks an option whose expression is a formula of other
   parameters. Nothing chooses a driven option, and the rules never move
-  it.
+  it; the Configuration bar shows its value only.
 
-### Rows
+#### Rows
 
-The **Rows** tab is a sheet with one row per preset: its **Name**, a
-column for each option, and **Designation**, **Part Number** and
-**Supplier URL** for the parts list. Double-click a cell to edit it. Type
-a text without quotes (`Black`) and a number with or without its unit
-(`800` is `800 mm` for a length).
-
-- **Add Row** adds a row with the options' values as they are now.
 - **Generate Rows from Table…** adds a row for each value of a table's key
   column, named by the value, that sets an option to it: choose the table,
   its **Key column** and the **Option** (an option, or a user parameter
   that becomes one), and click **Generate**. MitCad offers first the
   column that an option's values come from, and that option. Running it
   again after the table changed updates the rows of the same name instead
-  of adding them twice, and keeps what you typed in them (designation,
-  part number, other values). It is one step to undo.
-- **Delete Row** deletes the selected row.
-- **Set as Default** makes the selected row the default (shown in bold):
-  a library component is inserted with it.
-- **Apply** sets the options to the selected row's values. When the rules
-  move other options, the line under the tabs and the status bar say so.
-- **Closed** allows only the rows' combinations. An open configuration
-  (the default) allows any combination that the rules allow; a row is then
-  only a preset.
+  of adding them twice, and keeps what you typed in them. It is one step
+  to undo.
+- **Delete Row** deletes the selected row. **Apply** sets the options to
+  the selected row's values; when the rules move other options, the line
+  under the tabs and the status bar say so.
+- **Closed** allows only the rows' combinations (see [Closed
+  tables](#closed-tables)).
 
-A value that a rule does not allow is not written: the cell stays red,
-and its tooltip names the rule. A row that breaks a rule (for example
-because a rule was added later) is marked in yellow in the cells the rule
-is about, with the rule in the tooltip. The line above the sheet names the
-row that the options match now.
+#### Rules
 
-### Rules and the cascade
+The list on the left has each rule's name, a check that turns it on or
+off, and a warning mark with the reason in its tooltip. **Duplicate**
+copies the selected rule and **Delete** removes it. Double-click a name,
+or press F2, to rename the rule.
 
-A rule says, for example, "when Color is Black, Length is at most
-1000 mm", or forbids a combination. Rules only narrow: they take values
-away, and they never set a computed parameter. They can also be set with
-the `set_configurations` command (from an AI assistant over MCP, or with
-`mitcad-cli run`).
+**Add** opens a menu of ready-made rules. Each one but the empty rule is
+complete at once, filled in from your options, and saved, and its name
+says what it does; you then change its values. For the shelf:
 
-The **Rules** tab has the list of rules on the left: each rule's name,
-a check that turns it on or off, and a warning mark with the reason in
-its tooltip. **Add** makes a new rule and lets you type its name at once
-(double-click a name, or press F2, to rename it), **Duplicate** copies the
-selected rule and **Delete** removes it.
+- **Limit a range when…**: `when Color == 'Black'` / `then Length max
+  2000 mm`, named *Limit Length when Color is Black*. It needs an option
+  that is a number.
+- **Allow only some values when…**: `when Color == 'Black'` / `then Length
+  only 300 mm`.
+- **Forbid a combination…**: `when and(Color == 'Black'; Length == 300 mm)`
+  / `then forbid: Black with 300 mm is not made`.
+- **Only the combinations of a table…**: `then combination in table Made
+  (Color = Color, Length = Length)`. It needs a table in the design.
+- **Empty rule**: a rule with nothing in it, to write yourself.
 
-On the right, the selected rule is built from blocks:
+Type the new rule's name at once, or press Esc to keep the one it got.
 
-- The **palette** has four groups. **Rule**: *when … then* gives the rule
-  a condition, *then (always)* takes it away (the rule always applies), and
-  *else* adds actions for when the condition does not hold. **Logic**:
-  *and*, *or*, *not*, *compare* (=, ≠, <, ≤, >, ≥) and *is one of*.
-  **Values**: an *option* or another *parameter*, a *number with unit*, a
-  *text*, a *table column* and a *formula*. **Actions**: *allow only*,
-  *exclude*, *min*, *max*, *step*, *require*, *forbid* and *combination in
-  table*.
-- *Combination in table* requires the options to be a row of a table:
-  with the table Made of colours and lengths, only the combinations it
-  lists are allowed, and each chooser offers only what the rows allow with
-  the options before it. When you put the block, type the table's name
-  (MitCad completes the names of the design's tables); each option is then
-  matched to the table's column of the same name. Click its columns to
-  choose another column of the table for an option.
+**The text** under the blocks is the quickest way to write a rule (Alt+T
+goes to it). It has a line per part: `when` and a condition, or `always`
+(or no first line) for a rule that always applies; a `then` line for each
+action; and `else` lines for the actions when the condition does not
+hold. A condition compares options and other parameters: `Color ==
+'Black'`, `Length > 1000 mm`, `and(Color == 'Black'; Length > 1000 mm)`,
+`or(…)`, `not(…)`. The actions are, for example:
+
+| Line | What it does |
+|---|---|
+| `then Length max 1000 mm` | at most 1000 mm (also `min` and `step`) |
+| `then Color only 'Black'; 'White'` | allows only the values listed (also written `allow only`) |
+| `then Color not 'Red'` | allows all but the values listed (also written `exclude`) |
+| `then require Depth >= Length / 4: the shelf is too shallow` | the combination must meet the condition, else the message shows |
+| `then forbid: Red is not made in XL` | the combination is refused with the message |
+| `then combination in table Made (Color = Color, Length = Length)` | the options must be a row of the table Made |
+
+Write a text in quotes (`'Black'`) and a length or an angle with its unit
+(`1000 mm`). **Enter** saves the rule, **Shift+Enter** starts a new line,
+**Esc** brings back the saved text, and leaving the text saves it too. A
+line that cannot be read is marked, the line under the blocks says where
+and why, and nothing is saved until you correct it. An empty rule's text
+shows an example made from your options.
+
+**The blocks** show the same rule, built from a palette of four groups.
+**Rule**: *when … then* gives the rule a condition, *then (always)* takes
+it away, and *else* adds actions for when the condition does not hold.
+**Logic**: *and*, *or*, *not*, *compare* (=, ≠, <, ≤, >, ≥) and *is one
+of*. **Values**: an *option* or another *parameter*, a *number with unit*,
+a *text*, a *table column* and a *formula*. **Actions**: *allow only*,
+*exclude*, *min*, *max*, *step*, *require*, *forbid* and *combination in
+table*. Hover over a block to see what it does, with an example, such as
+*max*: "Limits an option's largest value. Example: Length max 1000 mm."
+An action comes with its values filled in from your options (*max* with
+the option's largest value, *allow only* with its first value), so the
+rule is complete and saved at once; change the value afterwards.
+
 - Drag a block from the palette onto the rule. The place where it would
   go lights up on the way: a value or logic block fits only an empty
-  socket (or replaces a value), an action fits only between or after the
+  place (or replaces a value), an action only between or after the
   actions of *then* or *else*. Drag a block within the rule to move it, or
   onto the palette to delete it.
 - A new name, number or text block asks for its value at once; Enter
-  confirms it and Esc cancels. Double-click a block (or click a field, such
-  as an action's option or a comparison's operator) to change it. A
+  confirms it and Esc cancels. Double-click a block (or click a field,
+  such as an action's option or a comparison's operator) to change it. A
   formula block opens the **Formula Editor**; any part of a condition that
-  has no block of its own is shown as a formula block, so every rule can
-  be opened and nothing is lost.
-- With the keyboard: Alt+P goes to the palette, where the arrow keys or
-  the first letters choose a block and Enter puts it at the rule's focus
-  (an empty socket, or after the focused action). Alt+B goes to the rule:
-  the arrow keys move the focus, Enter edits it, Delete removes it, and the
-  menu key or Shift+F10 opens its menu (Edit, Edit as Formula…, Move Up,
-  Move Down, Delete; on the rule itself Add When, Apply Always, Add Else,
-  Remove Else).
+  has no block of its own is shown as a formula block, so every rule
+  opens and nothing is lost.
+- *Combination in table* asks for the table's name (MitCad completes the
+  names of the design's tables); each option is then matched to the
+  table's column of the same name. Click its columns to choose another
+  column for an option. With a table Made of colours and lengths, only
+  the combinations it lists are allowed, and each chooser offers only
+  what the rows allow with the options before it.
+- An edit in the blocks rewrites the text, and the text rewrites the
+  blocks.
 
-Each change is saved at once, as one step to undo. A rule with an empty
-socket, or an *else* without an action, is not saved yet: the list marks
-it, and it is saved as soon as it is complete (Ctrl+Z in the tab takes
-back such changes one by one). **View as Text** shows the selected rule in
-the expression language, such as `when Color == 'Black'` and `then Length
-max 1000 mm`. **Check Rules** goes through the combinations of the options
-and reports values that are never allowed, rules that never apply, rows
-that break a rule and combinations that cannot be repaired.
+A rule with an empty (dashed) place, or an *else* without an action, is
+not saved yet: the list marks it, and the line under the rule says, for
+example, "Rule 1 and Rule 2 are not saved yet: fill their dashed
+places." It is saved as soon as it is complete; Ctrl+Z in the tab takes
+back such changes one by one.
 
-When you change an option, MitCad goes through the options in their
-order. An option keeps its value when it is still allowed. Otherwise it
-moves to the nearest allowed value (to the only one, when only one is
-left). The change and its moves are one step to undo, and MitCad tells
-you what moved and why, for example *Length 1500 mm → 1000 mm: Black is
-short*. When a rule cannot be met by moving later options, the change is
-refused and the message names the rule.
+Rules can also be set with the `set_configurations` command (from an AI
+assistant over MCP, or with `mitcad-cli run`).
 
-### The Configuration bar
-
-At the top of the browser, the **Configuration** bar chooses the options
-without opening the window. It shows while the design has options or
-rows.
-
-- The first box chooses a **row**. It says **No row** when the options
-  match none.
-- Below it is a chooser for each option, in the options' order: a list
-  for an option with a list of values, a field and a slider for a range,
-  and a field for a free option. A driven option shows its value only.
-- The choosers offer only what the rules allow now. When a rule narrows a
-  range, the slider ends at the new limit.
-- When your choice moves other options, a notice under the choosers (and
-  the status bar) lists the moves with the rules that made them.
-
-Each choice is one step to undo, and the design is computed again at
-once.
-
-### Options in Change Parameters
+#### Options in Change Parameters
 
 In **Change Parameters**, an option has the configurations icon before
 its name, and its tooltip says that it is an option. When rules narrow an
@@ -3318,6 +3483,82 @@ option's range now, the narrowed minimum, maximum and step show in grey in
 the **Min**, **Max** and **Step** columns, as a feature's own limits do,
 and their tooltips name the rules. A value that you type there for an
 option goes through the same rules as a chooser.
+
+#### The Configuration bar
+
+The bar shows while the design has options or rows. Its first box
+chooses a row. Below it is a chooser for each option, in the options'
+order: a list for an option with a list of values, a field and a slider
+for a range, a field for a free option, and the value only for a driven
+option. The choosers offer only what the rules allow now; when a rule
+narrows a range, the slider ends at the new limit.
+
+### How MitCad applies rules
+
+**Rules only narrow.** A rule takes values away or refuses a
+combination; it never sets a computed parameter. An option's allowed
+values are its domain less what every rule that applies now takes away,
+so the order of the rules does not matter, and two rules cannot fight
+over a value. Computed values come from expressions (`if`, lookups in
+tables).
+
+**The choice order.** When you change an option (or a row, a parameter
+that a condition uses, a table, or parameters from a CSV file), MitCad
+goes through the options in the Options tab's order:
+
+- An option keeps its value while it is still allowed.
+- Otherwise it moves: a range to the nearest allowed value in its steps,
+  a list of numbers to the nearest listed value, a list of texts to the
+  default row's value when that is allowed, else to the first allowed
+  value. When only one value is left, the option takes it.
+- A driven option never moves; a rule that it breaks stays broken.
+
+The change and its moves are one step to undo, and MitCad tells you what
+moved and why (*Length 1500 mm → 1000 mm: Black is short*).
+
+**Refusals.** When a rule still fails after the moves (a *require*, a
+*forbid*, a *combination in table*, or a driven option), the change is
+refused, and the message names the rule and gives its message. Nothing
+changes.
+
+**Where rules hold.** Everywhere a value is chosen: the Configuration
+bar, the Configurations window's rows, Change Parameters, a CSV import,
+applying a row, inserting a component from a library, the Build tab's
+components, and the commands (MCP, `mitcad-cli`). An inserted component
+whose option is bound to the parent design's parameters and breaks one of
+the component's rules gets an error status that names the rule; the
+parent's change is not refused.
+
+#### Closed tables
+
+**Closed** (in the Rows tab) allows only the rows' combinations, as a
+table of sizes does: a screw comes only in the sizes listed. While the
+table is closed, the Rules tab says "This table is closed: only its rows
+are allowed, so rules are not needed." An open table (the default) allows
+any combination that the rules allow, and a row is then a ready-made
+combination only.
+
+#### Check Rules
+
+**Check Rules** (in the Rules tab) goes through the combinations of the
+options and reports values that are never allowed, rules that never
+apply, choices of earlier options that leave a later option no value,
+rows that break a rule, and combinations that cannot be repaired. Up to 100 000
+combinations are checked one by one; more are sampled, and the report
+says so. With changes not saved yet, it says that the saved rules were
+checked.
+
+#### The keyboard
+
+In the Rules tab, Alt+R goes to the list, Alt+A opens Add's templates,
+Alt+U duplicates the selected rule, Alt+T goes to the rule's text and
+Alt+K checks the rules. Alt+P goes to the palette, where the arrow keys or the first letters
+choose a block and Enter puts it at the rule's focus (an empty place, or
+after the focused action). Alt+B goes to the blocks: the arrow keys move
+the focus, Enter edits it, Delete removes it, and the menu key or
+Shift+F10 opens its menu (Edit, Edit as Formula…, Move Up, Move Down,
+Delete; on the rule itself Add When, Apply Always, Add Else, Remove
+Else).
 
 ## Appearances and rendering
 
@@ -3948,7 +4189,12 @@ face changes or when either component moves.
 Construct commands ask a question when you pick a face, a plane or an
 edge of a component that is not active. This includes a component that
 is placed in the active component. An example is "The face belongs to
-M6 rod bracket:1, but Corner brace:1 is active." Click **Activate M6 rod
+M6 rod bracket:1, but Corner brace:1 is active." A second line tells
+what each answer does: "If you activate it, the sketch goes into M6 rod
+bracket:1. If you keep Corner brace:1 active, the sketch goes into Corner
+brace:1." (A Construct command names the plane, axis or point instead.)
+The question opens beside the face that you picked, so that the face
+stays in sight. Click **Activate M6 rod
 bracket:1** (the default) to put the sketch or the construction feature
 into that component. MitCad activates the component, and the command
 continues with the same pick, at the occurrence that you picked. The activation is one
@@ -6245,11 +6491,27 @@ standard (`ISO 4762 M6x10`). A size of no standard is
 `M6x6 (non-standard)`. The component keeps the name, also in the parts
 list.
 
-Under the size, **Insert from Library** shows the designation and the
-suppliers' part numbers of the size, for example `Würth 0084 6 10 (8.8
-zinc-plated)`. **Library Parts** and **Edit Options...** show the part
-numbers too, and the parts lists have them in the column **Supplier part
-numbers** (also in CSV and PDF).
+Under the size, **Insert from Library** shows the designation of the
+size. When the suppliers sell the size, **Insert from Library**,
+**Library Parts** and **Edit Options...** show a button
+**Supplier Articles (n)...** (Alt+A), where n is the number of articles.
+It opens a table with one line per article: the supplier (a link to its
+site), the part number, the material, the finish, the date the article
+was checked and the product page, as far as the library gives them.
+Columns that no article fills are not shown.
+
+- Click a column heading to sort by that column.
+- **Copy as TSV** (Alt+T) copies the selected lines, or all lines, as
+  tab-separated text that a spreadsheet takes.
+- **Copy Part Number** (Alt+P) copies the part number of the current
+  line. Ctrl+C copies the selected cells; one cell is copied alone.
+- **Open Link** (Alt+L), a double click or Return on a link opens the
+  supplier's site or the product page in the browser.
+
+When the **Supplier** filter names a supplier, that supplier's articles
+come first in the table. The parts lists have the articles in the column
+**Supplier part numbers** (also in CSV and PDF), for example
+`Würth 0084 6 10 (8.8 zinc-plated)`.
 
 The grid has its own **Supplier** filter (Alt+R) beside the search. It
 hides the components that the supplier sells in no size. MitCad
@@ -6263,7 +6525,7 @@ second time.
 
 Some components are configurable: they have **options** (for example
 **Color** and **Length**) and **rules** that limit the combinations
-(refer to [docs/configurations.md](configurations.md)). For such a
+(refer to [Configurations](#configurations)). For such a
 component, **Insert from Library** shows a chooser per option instead of
 the size, in the options' order:
 
@@ -6532,7 +6794,11 @@ Each format is imported in its own way:
 - SVG is imported into a sketch in the same way (Insert SVG). Refer to
   the paragraph that follows.
 - Another MitCad design is imported as a component, linked or as a
-  copy (Insert Component).
+  copy (Insert Component). When a design opens, MitCad reads its linked
+  files again only from the design's project (without a project: from
+  the design's folder and the folders in it). A link to a file elsewhere
+  is not followed: its component keeps the bodies saved with the design,
+  and a message tells you so. Keep linked designs in the project.
 
 Insert SVG asks for these values:
 
@@ -8245,6 +8511,13 @@ the release page instead. If a download's signature does not match,
 MitCad deletes the download. MitCad never runs it. On Windows, the
 download goes to a private folder, and the updater checks the installer
 again right before it runs it.
+
+The update information of a release has a last day. When it has
+expired, the check at start-up offers nothing. **Help › Check for
+Updates** still shows the release, without **Install**, and says on
+which day its update information expired. If that day has not passed
+yet, the date of your computer is wrong: correct it, or get the release
+from its release page.
 
 The Updates page of Tools › Preferences sets the automatic check on or
 off, and if pre-releases are offered. With the setting off, MitCad

@@ -64,6 +64,10 @@ type 4
 native-key-event Tab
 expect-log 'Part picker option Offset chosen: 4 mm'
 expect-log 'Part picker chose test-profiles/p30-test.*with options Grade = B, Offset = 4 mm'
+# The committed field shows the shared option's unit suffix, whole on its
+# single line rather than wrapped out of sight (mitcad#975).
+expect-native-text partOption1 '^4[.,]0000 mm$'
+expect-native-bounds partOption1 text '^Offset:$'
 screenshot '${MITCAD_TEST_WORK}/picker-options-${MITCAD_TEST_COLOR_SCHEME}.png'
 
 # Pinned, the picker stays when the command ends (Escape reaches the
@@ -119,6 +123,10 @@ type p30-test
 expect-native-tiles count partPickerGrid 1
 expect-native-tiles current partPickerGrid 'Profile 30 test'
 expect-native-control-focus partPickerSearch
+# The reopened picker's new Offset field keeps its unit while the search
+# field has the keyboard (mitcad#975).
+expect-native-text partOption1 '^[0-9]+[.,]0000 mm$'
+expect-native-bounds partOption1 text '^Offset:$'
 native-key-event Escape
 expect-native-dialog-gone '^Part Picker'
 expect-native-tiles document

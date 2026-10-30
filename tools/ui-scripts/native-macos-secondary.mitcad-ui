@@ -217,7 +217,30 @@ native-click reportSection_diagnostics
 expect-log 'Report section diagnostics left out'
 screenshot '${MITCAD_TEST_WORK}/native-secondary.png'
 expect-file '${MITCAD_TEST_WORK}/native-secondary.png'
-button '^Cancel$'
+# Real pointer presses on the wide section checkbox aim at its box, not at
+# the inert middle of its stretched frame; the shared presenter's log and
+# the Qt group box record every transition (mitcad#987).
+mark
+native-pointer-click reportSection_diagnostics
+expect-log 'Report section diagnostics included'
+expect-log 'Native pointer active cell: reportSection_diagnostics point=\{[^}]*\} default'
+expect-widget-property reportSection_diagnostics checked true
+mark
+native-pointer-click reportSection_diagnostics
+expect-log 'Report section diagnostics left out'
+expect-widget-property reportSection_diagnostics checked false
+mark
+native-pointer-button '^Diagnostics$'
+expect-log 'Report section diagnostics included'
+expect-widget-property reportSection_diagnostics checked true
+# Explicit fractions inside the box remain a valid press.
+mark
+native-pointer-click reportSection_diagnostics 0.02 0.5
+expect-log 'Report section diagnostics left out'
+expect-widget-property reportSection_diagnostics checked false
+# A push button keeps the centre of its frame.
+mark
+native-pointer-button '^Cancel$'
 expect-log 'Report not sent: the preview was cancelled'
 focus-dialog '^Send Feedback$'
 button '^Cancel$'

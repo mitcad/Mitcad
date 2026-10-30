@@ -610,7 +610,10 @@ recovery data.
 **`ui_state`** reads the window. `read_only` comes with
 `read_only_reason`. `mode` is `idle`, `sketch`, `command` or
 `pick_plane`. `selection` lists the entities as `ui_select` takes them,
-with `geometry`, `reference` and `text`.
+with `geometry`, `reference` and `text`. The `measure` query takes such
+an entity unchanged as its selection `a` or `b` (faces, edges, vertices,
+bodies, planes, axes and points; `commands.md`, *Selections by names and
+as entities*, mitcad#985).
 
 `hint` and `hint_is_error` give the status line. While Create Sketch
 waits for a plane, `hint` gives the text of its banner. Then

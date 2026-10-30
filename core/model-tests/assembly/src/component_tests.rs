@@ -775,6 +775,162 @@ fn external_components_link_or_copy_other_files() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The link of a component by its name, as the design JSON holds it.
+fn set_link_path(json: &str, component: &str, path: &str) -> String {
+    let mut value: Value = serde_json::from_str(json).unwrap();
+    let c = value["components"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|c| c["name"] == component)
+        .unwrap();
+    c["link"]["path"] = json!(path);
+    value.to_string()
+}
+
+#[test]
+fn only_links_in_the_design_project_are_followed() {
+    // mitcad#929: the design file does not choose which files outside its
+    // project the application reads as the design opens.
+    let dir = std::env::temp_dir().join(format!("mitcad-929-links-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let project = dir.join("project");
+    mitcad_model::Project::init(&project).unwrap();
+    std::fs::create_dir_all(project.join("parts")).unwrap();
+    std::fs::create_dir_all(project.join("designs")).unwrap();
+    let designs = project.join("designs");
+    let mut part = Document::new(MockKernel::default());
+    small_block(&mut part);
+    let inside = project.join("parts").join("part.mitcad");
+    std::fs::write(&inside, part.to_json()).unwrap();
+    // A file beside the project, outside it.
+    let far = dir.join("far.mitcad");
+    std::fs::write(&far, part.to_json()).unwrap();
+
+    // Inserted by absolute paths (as the application inserts): a file in
+    // the project is recorded from the design's folder, one outside as
+    // given.
+    let mut doc = Document::new(MockKernel::default());
+    let options = InsertOptions {
+        base: Some(designs.clone()),
+        ..InsertOptions::default()
+    };
+    let (linked, _) = doc
+        .insert_component(inside.to_str().unwrap(), &options)
+        .unwrap();
+    let (outside, _) = doc
+        .insert_component(far.to_str().unwrap(), &options)
+        .unwrap();
+    let path_of = |doc: &Document<MockKernel>, c: ComponentUid| {
+        doc.assembly()
+            .component(c)
+            .unwrap()
+            .link
+            .clone()
+            .unwrap()
+            .path
+    };
+    assert_eq!(path_of(&doc, linked), "../parts/part.mitcad");
+    assert_eq!(path_of(&doc, outside), far.to_str().unwrap());
+    assert_eq!(doc.assembly().name(outside), "far");
+    let saved = doc.to_json();
+
+    // Both files change: only the one in the project is read again.
+    small_block(&mut part);
+    std::fs::write(&inside, part.to_json()).unwrap();
+    std::fs::write(&far, part.to_json()).unwrap();
+    let mut reopened = Document::from_json(&saved, MockKernel::default()).unwrap();
+    let messages = reopened.update_links(Some(&designs)).unwrap();
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert_eq!(messages[0], "part is updated from ../parts/part.mitcad");
+    assert_eq!(
+        messages[1],
+        format!(
+            "far: the link outside the project is not followed ({}); it keeps the bodies \
+             saved with the project",
+            far.display()
+        )
+    );
+    reopened.recompute();
+    assert_eq!(reopened.component_bodies(linked).len(), 2);
+    assert_eq!(reopened.component_bodies(outside).len(), 1);
+
+    // A `..` out of the project: refused before anything is read (the file
+    // does not exist, and the message is not a read error).
+    for path in ["../../outside.mitcad", "/no/such/folder/outside.mitcad"] {
+        let json = set_link_path(&saved, "part", path);
+        let mut opened = Document::from_json(&json, MockKernel::default()).unwrap();
+        let messages = opened.update_links(Some(&designs)).unwrap();
+        assert!(
+            messages[0].contains("link outside the project is not followed")
+                && messages[0].contains(path)
+                && !messages[0].contains("cannot read"),
+            "{messages:?}"
+        );
+        opened.recompute();
+        assert_eq!(opened.component_bodies(linked).len(), 1);
+    }
+    // A `..` that stays in the project is followed.
+    let json = set_link_path(&saved, "part", "../designs/../parts/./part.mitcad");
+    let mut opened = Document::from_json(&json, MockKernel::default()).unwrap();
+    let messages = opened.update_links(Some(&designs)).unwrap();
+    assert_eq!(
+        messages[0],
+        "part is updated from ../designs/../parts/./part.mitcad"
+    );
+    // A design without a folder follows no link.
+    let mut unsaved = Document::from_json(&saved, MockKernel::default()).unwrap();
+    let messages = unsaved.update_links(None).unwrap();
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert!(
+        messages
+            .iter()
+            .all(|m| m.contains("link outside the project is not followed")),
+        "{messages:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_design_in_no_project_follows_links_in_its_folder() {
+    // mitcad#929: without a project the design's folder is the limit.
+    let dir = std::env::temp_dir().join(format!("mitcad-929-folder-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let designs = dir.join("designs");
+    std::fs::create_dir_all(designs.join("sub")).unwrap();
+    let mut part = Document::new(MockKernel::default());
+    small_block(&mut part);
+    let path = designs.join("sub").join("part.mitcad");
+    std::fs::write(&path, part.to_json()).unwrap();
+    std::fs::write(dir.join("outside.mitcad"), part.to_json()).unwrap();
+    let mut doc = Document::new(MockKernel::default());
+    let options = InsertOptions {
+        base: Some(designs.clone()),
+        ..InsertOptions::default()
+    };
+    let (linked, _) = doc
+        .insert_component(path.to_str().unwrap(), &options)
+        .unwrap();
+    assert_eq!(
+        doc.assembly()
+            .component(linked)
+            .unwrap()
+            .link
+            .as_ref()
+            .unwrap()
+            .path,
+        "sub/part.mitcad"
+    );
+    let saved = set_link_path(&doc.to_json(), "part", "../outside.mitcad");
+    let mut opened = Document::from_json(&saved, MockKernel::default()).unwrap();
+    let messages = opened.update_links(Some(&designs)).unwrap();
+    assert!(
+        messages[0].contains("link outside the project is not followed (../outside.mitcad)"),
+        "{messages:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn placements_read_and_write_as_rows() {
     let t = shift(1.0, 2.0, 3.0);

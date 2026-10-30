@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+wait-idle
+command tools.preferences.cache
+focus-dialog '^Settings$'
+native-pointer-click cacheMemoryMegabytes
+key Ctrl+a
+type 1024
+key Ctrl+w
+expect-native-dialog-gone '^Settings$'
+expect-setting cache/memoryMegabytes 1024
+focus-main
+command tools.preferences.cache
+focus-dialog '^Settings$'
+expect-widget-property cacheMemoryMegabytes value 1024
+key Ctrl+w
+expect-native-dialog-gone '^Settings$'
+focus-main
+expect-model-bodies 1 48000

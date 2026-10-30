@@ -891,6 +891,90 @@ pub fn trust_host_keys(
     })
 }
 
+/// Trusts exactly the keys `shown` ([`HostKey::kind`] and [`HostKey::key`]
+/// of the scan the user was shown and approved, mitcad#938): each must be
+/// a host key that a new scan of `host` at `port` still gives and, for a
+/// service, one it publishes; else nothing is written and the answer is
+/// `host_key_unknown`. Keys the new scan gives beyond them are not
+/// written: a server (or someone between) that changed its answer after
+/// the user looked gets nothing trusted. `written`: a key was added.
+pub fn trust_shown_host_keys(
+    host: &str,
+    port: u16,
+    shown: &[(String, String)],
+    context: &Context,
+    log: &mut Vec<String>,
+) -> Result<Trusted, VcsError> {
+    let host = check_host(host)?;
+    if shown.is_empty() {
+        return Err(VcsError::Command(
+            "no host key to trust: \"keys\" is empty".into(),
+        ));
+    }
+    let mut wanted = Vec::new();
+    for (kind, key) in shown {
+        let blob = KEY_TYPES
+            .contains(&kind.as_str())
+            .then(|| key_blob(kind, key.trim()))
+            .flatten()
+            .ok_or_else(|| {
+                VcsError::Command(format!("'{kind}' with that key is not an SSH host key"))
+            })?;
+        wanted.push((kind.as_str(), base64(&blob, true)));
+    }
+    let scan = host_keys(&host, port, context, log)?;
+    let name = host_field(&host, port);
+    let mut found = Vec::new();
+    for (kind, key) in &wanted {
+        let Some(offered) = scan.keys.iter().find(|k| k.kind == *kind && k.key == *key) else {
+            return Err(failure(
+                ErrorClass::HostKeyUnknown,
+                format!(
+                    "{name} does not offer the {kind} key you were shown now: its keys changed \
+                     since you looked, so none was trusted. Look at its keys again and compare \
+                     their fingerprints"
+                ),
+            ));
+        };
+        if let Some((service, published)) = service_of(&host)
+            && !published.contains(&offered.fingerprint.as_str())
+        {
+            return Err(failure(
+                ErrorClass::HostKeyUnknown,
+                format!(
+                    "the key {name} sent ({}) is not one {service} publishes, so Mitcad does \
+                     not trust it: the network may be redirected. Check the connection \
+                     (another network, no proxy) and compare with {service}'s published \
+                     fingerprints",
+                    offered.fingerprint
+                ),
+            ));
+        }
+        if !found.contains(&offered) {
+            found.push(offered);
+        }
+    }
+    let extra = scan.keys.len() - found.len();
+    if extra > 0 {
+        log.push(format!(
+            "{name}: {extra} key(s) of the new scan were not shown, not trusted"
+        ));
+    }
+    let path = known_hosts_path(context)?;
+    let mut written = false;
+    for key in found {
+        let (known, _) = known_state(&read_known_hosts(&path), &name, std::slice::from_ref(key));
+        if !known {
+            append_line(&path, &format!("{name} {} {}\n", key.kind, key.key))?;
+            written = true;
+        }
+    }
+    Ok(Trusted {
+        path: path.to_string_lossy().into_owned(),
+        written,
+    })
+}
+
 /// Appends `line` to the file at `path`, after a line break when the file
 /// does not end with one; the folder (and the file) made for the user only
 /// when missing.

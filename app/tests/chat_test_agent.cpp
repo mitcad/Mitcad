@@ -9,6 +9,8 @@
 // chat's marker) and, for each user message, streams an answer and calls
 // MitCad's tools by the message's words:
 //
+//   "several"  three calls in a row (the second fails), a text, two calls
+//              and a text: two group rows of the panel (mitcad#983)
 //   "box"      two boxes (30 x 20 x 10 mm and 10 mm), two calls; with
 //              "slowly" it waits between them for continue.png in the work
 //              folder (the UI script's screenshot)
@@ -24,14 +26,16 @@
 //
 // Copied as `codex` it stands in for Codex the same way: `--version`,
 // `login status` and `login` (the file codex-signed-in), and `app-server`,
-// which speaks Codex's app-server JSON-RPC (core/mcp/src/chat/codex.rs):
-// initialize, model/list (two test models), thread/start and thread/resume
-// (it checks that MitCad's bridge is the only MCP server and that Codex's
-// own tools are off, and starts that bridge), turn/start (the same words as
-// above, as agentMessage deltas, mcpToolCall items and turn/completed) and
-// turn/interrupt ("wait" ends as interrupted). Its starts record the
-// thread requests' parameters (the model among them), its messages the
-// turn's model too.
+// which speaks Codex's app-server JSON-RPC (core/mcp/src/chat/codex.rs) in
+// the shapes of the JSON Schema `codex app-server generate-json-schema`
+// writes (codex-cli 0.157.1): initialize and the initialized notification
+// (without params), model/list (two test models), thread/start and
+// thread/resume (it checks that MitCad's bridge is the only MCP server and
+// that Codex's own tools are off with the keys the current Codex knows, and
+// starts that bridge), turn/start (the same words as above, as agentMessage
+// deltas, mcpToolCall items and turn/completed) and turn/interrupt ("wait"
+// ends as interrupted). Its starts record the thread requests' parameters
+// (the model among them), its messages the turn's model too.
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -45,6 +49,7 @@
 #include <utility>
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -235,6 +240,16 @@ QJsonObject box(const QString& document, int x, int length, int width, int heigh
                                                            {QStringLiteral("operation"), QStringLiteral("new_body")}}}}}};
 }
 
+// model_query's arguments: one query of a document.
+QJsonObject query(const QString& document, const QString& name) {
+  QJsonObject inner;
+  inner.insert(QStringLiteral("query"), name);
+  QJsonObject arguments;
+  arguments.insert(QStringLiteral("document"), document);
+  arguments.insert(QStringLiteral("query"), inner);
+  return arguments;
+}
+
 int printMode(const QStringList& args) {
   appendLine(QStringLiteral("chat-starts.jsonl"), {{QStringLiteral("argv"), QJsonArray::fromStringList(args)}});
   const auto value = [&args](const QString& option) {
@@ -313,7 +328,21 @@ int printMode(const QStringList& args) {
       continue;
     }
     bool error = false;
-    if (text.contains(QStringLiteral("box"))) {
+    if (text.contains(QStringLiteral("several"))) {
+      // Three calls in a row (the second fails: no such document), a text,
+      // two calls, a text: two group rows (mitcad#983).
+      conversation.answer(QStringLiteral("Looking at the design."));
+      const QString document = conversation.document();
+      conversation.call(QStringLiteral("model_query"), query(document, QStringLiteral("bodies")), &error);
+      conversation.call(QStringLiteral("model_query"), query(QStringLiteral("no-such-document"), QStringLiteral("bodies")),
+                        &error);
+      conversation.call(QStringLiteral("document_list"), QJsonObject(), &error);
+      conversation.answer(QStringLiteral("Two more calls."));
+      conversation.call(QStringLiteral("model_query"), query(document, QStringLiteral("timeline")), &error);
+      conversation.call(QStringLiteral("ui_state"), QJsonObject(), &error);
+      conversation.answer(QStringLiteral("Five calls made."));
+      conversation.end(false, QStringLiteral("success"), QStringLiteral("Five calls made."));
+    } else if (text.contains(QStringLiteral("box"))) {
       conversation.answer(QStringLiteral("Adding the boxes."));
       const QString document = conversation.document();
       conversation.call(QStringLiteral("model_command"), box(document, 0, 20, 30, 10), &error);
@@ -431,6 +460,50 @@ void notify(const QString& method, const QJsonObject& params) {
   emitLine({{QStringLiteral("method"), method}, {QStringLiteral("params"), params}});
 }
 
+qint64 nowMs() { return QDateTime::currentMSecsSinceEpoch(); }
+
+// A turn as the protocol's Turn: its items are not listed here.
+QJsonObject turnObject(const QString& id, const QString& status) {
+  return {{QStringLiteral("id"), id}, {QStringLiteral("items"), QJsonArray()}, {QStringLiteral("status"), status}};
+}
+
+// thread/start's and thread/resume's result, with the fields the schema
+// requires.
+QJsonObject threadResult(const QString& thread, const QString& model, const QString& cwd) {
+  const qint64 now = nowMs() / 1000;
+  const QJsonObject object{{QStringLiteral("id"), thread},
+                           {QStringLiteral("sessionId"), thread},
+                           {QStringLiteral("cliVersion"), QStringLiteral("0.157.1")},
+                           {QStringLiteral("createdAt"), now},
+                           {QStringLiteral("updatedAt"), now},
+                           {QStringLiteral("cwd"), cwd},
+                           {QStringLiteral("ephemeral"), false},
+                           {QStringLiteral("modelProvider"), QStringLiteral("openai")},
+                           {QStringLiteral("preview"), QString()},
+                           {QStringLiteral("projectId"), QJsonValue()},
+                           {QStringLiteral("source"), QStringLiteral("appServer")},
+                           {QStringLiteral("status"), QJsonObject{{QStringLiteral("type"), QStringLiteral("idle")}}},
+                           {QStringLiteral("turns"), QJsonArray()}};
+  return {{QStringLiteral("thread"), object},
+          {QStringLiteral("model"), model},
+          {QStringLiteral("modelProvider"), QStringLiteral("openai")},
+          {QStringLiteral("cwd"), cwd},
+          {QStringLiteral("approvalPolicy"), QStringLiteral("never")},
+          {QStringLiteral("approvalsReviewer"), QStringLiteral("user")},
+          {QStringLiteral("sandbox"), QJsonObject{{QStringLiteral("type"), QStringLiteral("readOnly")}}}};
+}
+
+QJsonObject testModel(const QString& id, const QString& name, bool isDefault) {
+  return {{QStringLiteral("id"), id},
+          {QStringLiteral("model"), id},
+          {QStringLiteral("displayName"), name},
+          {QStringLiteral("description"), QStringLiteral("A model of the test agent")},
+          {QStringLiteral("hidden"), false},
+          {QStringLiteral("isDefault"), isDefault},
+          {QStringLiteral("defaultReasoningEffort"), QStringLiteral("medium")},
+          {QStringLiteral("supportedReasoningEfforts"), QJsonArray()}};
+}
+
 class CodexTurn {
 public:
   CodexTurn(QString thread, QString turn, Bridge& bridge)
@@ -450,6 +523,7 @@ public:
     notify(QStringLiteral("item/completed"),
            {{QStringLiteral("threadId"), m_thread},
             {QStringLiteral("turnId"), m_turn},
+            {QStringLiteral("completedAtMs"), nowMs()},
             {QStringLiteral("item"), QJsonObject{{QStringLiteral("type"), QStringLiteral("agentMessage")},
                                                  {QStringLiteral("id"), item},
                                                  {QStringLiteral("text"), text}}}});
@@ -465,6 +539,7 @@ public:
                      {QStringLiteral("arguments"), arguments}};
     notify(QStringLiteral("item/started"), {{QStringLiteral("threadId"), m_thread},
                                             {QStringLiteral("turnId"), m_turn},
+                                            {QStringLiteral("startedAtMs"), nowMs()},
                                             {QStringLiteral("item"), item}});
     const QJsonObject result = m_bridge.tool(name, arguments, error);
     QJsonArray content;
@@ -480,12 +555,13 @@ public:
     }
     notify(QStringLiteral("item/completed"), {{QStringLiteral("threadId"), m_thread},
                                               {QStringLiteral("turnId"), m_turn},
+                                              {QStringLiteral("completedAtMs"), nowMs()},
                                               {QStringLiteral("item"), item}});
     return result;
   }
 
   void end(const QString& status, const QString& error) {
-    QJsonObject turn{{QStringLiteral("id"), m_turn}, {QStringLiteral("status"), status}};
+    QJsonObject turn = turnObject(m_turn, status);
     if (!error.isEmpty()) {
       turn.insert(QStringLiteral("error"), QJsonObject{{QStringLiteral("message"), error}});
     }
@@ -506,7 +582,8 @@ private:
 };
 
 // The thread's configuration as MitCad must give it: its bridge as the only
-// MCP server (with the chat's marker), Codex's own tools off, nothing asked.
+// MCP server (with the chat's marker), Codex's own tools off with the keys
+// the current Codex knows (none it dropped), nothing asked.
 bool expectedThread(const QJsonObject& params, QString* program, QStringList* arguments) {
   const QJsonObject config = params.value(QStringLiteral("config")).toObject();
   const QJsonObject servers = config.value(QStringLiteral("mcp_servers")).toObject();
@@ -515,9 +592,19 @@ bool expectedThread(const QJsonObject& params, QString* program, QStringList* ar
     arguments->append(argument.toString());
   }
   *program = server.value(QStringLiteral("command")).toString();
+  for (const char* off : {"features.shell_tool", "features.unified_exec", "features.view_image"}) {
+    if (config.value(QString::fromLatin1(off)) != QJsonValue(false)) {
+      return false;
+    }
+  }
+  for (const char* stale : {"include_apply_patch_tool", "tools.web_search", "tools.view_image"}) {
+    if (config.contains(QString::fromLatin1(stale))) {
+      return false;
+    }
+  }
   return servers.size() == 1 && !program->isEmpty() && arguments->contains(QStringLiteral("--chat-session")) &&
          params.value(QStringLiteral("approvalPolicy")).toString() == QStringLiteral("never") &&
-         config.value(QStringLiteral("features.shell_tool")) == QJsonValue(false) &&
+         config.value(QStringLiteral("web_search")).toString() == QStringLiteral("disabled") &&
          config.value(QStringLiteral("sandbox_mode")).toString() == QStringLiteral("read-only");
 }
 
@@ -530,6 +617,7 @@ int appServer(const QStringList& args) {
   Bridge bridge;
   bool connected = false;
   bool bridgeStarted = false;
+  bool initialized = false;
   QString thread;
   QString model;
   int turns = 0;
@@ -539,19 +627,23 @@ int appServer(const QStringList& args) {
     const QJsonValue id = message.value(QStringLiteral("id"));
     const QJsonObject params = message.value(QStringLiteral("params")).toObject();
     if (method == QStringLiteral("initialize")) {
-      reply(id, {{QStringLiteral("userAgent"), QStringLiteral("codex-test")}});
+      reply(id, {{QStringLiteral("codexHome"), QDir(work()).absoluteFilePath(QStringLiteral("codex-home"))},
+                 {QStringLiteral("platformFamily"), QStringLiteral("unix")},
+                 {QStringLiteral("platformOs"), QStringLiteral("linux")},
+                 {QStringLiteral("userAgent"), QStringLiteral("codex-test")}});
     } else if (method == QStringLiteral("initialized")) {
-      continue;
+      // The schema's notification has no params.
+      initialized = !message.contains(QStringLiteral("params"));
+      if (!initialized) {
+        std::fputs("test agent: initialized with params\n", stderr);
+      }
+    } else if (!initialized && !id.isUndefined()) {
+      replyError(id, QStringLiteral("Not initialized"));
     } else if (method == QStringLiteral("model/list")) {
       QJsonArray data;
-      data.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("test-codex-model")},
-                              {QStringLiteral("model"), QStringLiteral("test-codex-model")},
-                              {QStringLiteral("displayName"), QStringLiteral("Test model")},
-                              {QStringLiteral("isDefault"), true}});
-      data.append(QJsonObject{{QStringLiteral("id"), QStringLiteral("test-codex-large")},
-                              {QStringLiteral("model"), QStringLiteral("test-codex-large")},
-                              {QStringLiteral("displayName"), QStringLiteral("Test large")}});
-      reply(id, {{QStringLiteral("data"), data}});
+      data.append(testModel(QStringLiteral("test-codex-model"), QStringLiteral("Test model"), true));
+      data.append(testModel(QStringLiteral("test-codex-large"), QStringLiteral("Test large"), false));
+      reply(id, {{QStringLiteral("data"), data}, {QStringLiteral("nextCursor"), QJsonValue()}});
     } else if (method == QStringLiteral("thread/start") || method == QStringLiteral("thread/resume")) {
       appendLine(QStringLiteral("chat-starts.jsonl"), {{QStringLiteral("agent"), QStringLiteral("codex")},
                                                        {QStringLiteral("method"), method},
@@ -578,16 +670,20 @@ int appServer(const QStringList& args) {
         connected = bridge.start(program, arguments, QStringLiteral("codex-mcp-client"));
       }
       model = params.value(QStringLiteral("model")).toString(QStringLiteral("test-codex-model"));
-      reply(id, {{QStringLiteral("thread"), QJsonObject{{QStringLiteral("id"), thread}}}, {QStringLiteral("model"), model}});
-      notify(QStringLiteral("mcpServer/startupStatus/updated"),
-             {{QStringLiteral("name"), QStringLiteral("mitcad")},
-              {QStringLiteral("status"), connected ? QStringLiteral("ready") : QStringLiteral("failed")}});
+      reply(id, threadResult(thread, model, params.value(QStringLiteral("cwd")).toString(QDir::currentPath())));
+      QJsonObject status{{QStringLiteral("name"), QStringLiteral("mitcad")},
+                         {QStringLiteral("threadId"), thread},
+                         {QStringLiteral("status"), connected ? QStringLiteral("ready") : QStringLiteral("failed")}};
+      if (!connected) {
+        status.insert(QStringLiteral("error"), QStringLiteral("test agent: the bridge did not start"));
+      }
+      notify(QStringLiteral("mcpServer/startupStatus/updated"), status);
     } else if (method == QStringLiteral("turn/start")) {
       ++turns;
       const QString turnId = QStringLiteral("turn_%1").arg(turns);
-      reply(id, {{QStringLiteral("turn"), QJsonObject{{QStringLiteral("id"), turnId}, {QStringLiteral("status"), QStringLiteral("inProgress")}}}});
-      notify(QStringLiteral("turn/started"), {{QStringLiteral("threadId"), thread},
-                                              {QStringLiteral("turn"), QJsonObject{{QStringLiteral("id"), turnId}}}});
+      const QJsonObject started = turnObject(turnId, QStringLiteral("inProgress"));
+      reply(id, {{QStringLiteral("turn"), started}});
+      notify(QStringLiteral("turn/started"), {{QStringLiteral("threadId"), thread}, {QStringLiteral("turn"), started}});
       QFile known(threads.filePath(thread));
       if (!known.exists() && known.open(QIODevice::WriteOnly)) {
         known.close();

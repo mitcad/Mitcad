@@ -2625,7 +2625,9 @@ void BrowserController::editOptions(const QString& component, const QString& nam
     return;
   }
   // A library part's table at its version (mitcad#949): its rows'
-  // standards and suppliers' articles for the filters above the choosers.
+  // standards and suppliers' articles for the filters above the choosers,
+  // with the suppliers ({id, name, url}) and the component's
+  // `supplier_url` for the table of the row's articles (mitcad#979).
   QJsonObject libraryTable;
   try {
     const QJsonArray parts =
@@ -2646,6 +2648,19 @@ void BrowserController::editOptions(const QString& component, const QString& nam
         if (entry.value(QStringLiteral("id")).toString() == library.value(QStringLiteral("component")).toString()) {
           libraryTable = entry.value(QStringLiteral("configurations")).toObject();
           libraryTable.insert(QStringLiteral("standards"), entry.value(QStringLiteral("standards")));
+          // The suppliers' sites and the component's product page for the
+          // table of the row's articles (mitcad#979).
+          QJsonArray suppliers = shown.value(QStringLiteral("manifest"))
+                                     .toObject()
+                                     .value(QStringLiteral("suppliers"))
+                                     .toArray();
+          if (suppliers.isEmpty()) {
+            suppliers = entry.value(QStringLiteral("suppliers")).toArray();
+          }
+          libraryTable.insert(QStringLiteral("suppliers"), suppliers);
+          const QString page = entry.value(QStringLiteral("supplier_url")).toString();
+          libraryTable.insert(QStringLiteral("supplier_url"),
+                              page.isEmpty() ? library.value(QStringLiteral("supplier_url")).toString() : page);
         }
       }
     }

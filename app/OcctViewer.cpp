@@ -30,6 +30,7 @@
 #include "view/CameraHeight.hpp"
 #include "view/ViewCube.hpp"
 #include "view/ViewTessellation.hpp"
+#include "sketch/PointMarkers.hpp"
 #ifdef __APPLE__
 #include "render/MacFrameDisplay.hpp"
 #endif
@@ -37,6 +38,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <initializer_list>
 #include <iterator>
@@ -79,8 +81,10 @@
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <Bnd_Box.hxx>
 #include <Graphic3d_ArrayOfTriangles.hxx>
+#include <Graphic3d_AspectMarker3d.hxx>
 #include <Graphic3d_AspectFillArea3d.hxx>
 #include <Graphic3d_Group.hxx>
+#include <Graphic3d_MarkerImage.hxx>
 #include <Graphic3d_MaterialAspect.hxx>
 #include <Prs3d_Presentation.hxx>
 #include <gp_Pnt2d.hxx>
@@ -139,6 +143,14 @@ const Quantity_Color kSketchHaloDark(0.13, 0.14, 0.16, Quantity_TOC_sRGB);
 const Quantity_Color kSketchHaloLight(0.98, 0.98, 0.99, Quantity_TOC_sRGB);
 constexpr double kSketchLineWidth = 2.0;
 constexpr double kSketchHaloWidth = 6.0;
+// A feature's input lines on a dark background (mitcad#957): the
+// selection blue lightened, over the dark halo, so that it stands out
+// (about 4.6:1 against the dark background, where the plain selection
+// blue has about 2.6:1). On a light background the lines keep the plain
+// selection colour without a halo.
+const QColor kInputLineColorDark(0x66, 0xb2, 0xff);
+constexpr double kInputLineWidth = 3.5;
+constexpr double kInputLineHiddenWidth = 2.0;
 const Quantity_Color kReferenceColor(0.55, 0.20, 0.70, Quantity_TOC_RGB);
 const Quantity_Color kConstructionColor(0.85, 0.50, 0.10, Quantity_TOC_RGB);
 const Quantity_Color kProfileFill(0.55, 0.70, 0.95, Quantity_TOC_RGB);
@@ -530,6 +542,43 @@ void setPointStyle(const occ::handle<AIS_Shape>& object, const Quantity_Color& c
                    Aspect_TypeOfMarker marker, double scale) {
   object->SetColor(color);
   object->Attributes()->SetPointAspect(new Prs3d_PointAspect(marker, color, scale));
+}
+
+// A sketch point's marker or ball as an OCCT marker image (mitcad#946),
+// one shared image per look and size (`key`, sketch/PointMarkers.hpp): the
+// overlay paints the same over its highlights. Straight-alpha RGBA, as
+// OCCT's coloured marker images are; its hover draws the image's shape in
+// the hover colour.
+occ::handle<Graphic3d_MarkerImage> sketchMarkerImage(const QString& key, const QImage& image) {
+  static std::map<QString, occ::handle<Graphic3d_MarkerImage>> images;
+  const auto found = images.find(key);
+  if (found != images.end()) {
+    return found->second;
+  }
+  const QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
+  occ::handle<Image_PixMap> pixels = new Image_PixMap();
+  if (rgba.isNull() ||
+      !pixels->InitTrash(Image_Format_RGBA, static_cast<size_t>(rgba.width()), static_cast<size_t>(rgba.height()))) {
+    return occ::handle<Graphic3d_MarkerImage>();
+  }
+  pixels->SetTopDown(true);
+  for (int row = 0; row < rgba.height(); ++row) {
+    std::memcpy(pixels->ChangeRow(static_cast<size_t>(row)), rgba.constScanLine(row),
+                static_cast<size_t>(rgba.width()) * 4);
+  }
+  occ::handle<Graphic3d_MarkerImage> marker = new Graphic3d_MarkerImage(pixels);
+  images.emplace(key, marker);
+  return marker;
+}
+
+// A point drawn with a marker image: white as the object's colour, which
+// OCCT multiplies the image's colours by.
+void setPointImage(const occ::handle<AIS_Shape>& object, const occ::handle<Graphic3d_MarkerImage>& image) {
+  const Quantity_Color white(Quantity_NOC_WHITE);
+  object->SetColor(white);
+  occ::handle<Graphic3d_AspectMarker3d> aspect = new Graphic3d_AspectMarker3d(Aspect_TOM_USERDEFINED, white, 1.0);
+  aspect->SetMarkerImage(image);
+  object->Attributes()->SetPointAspect(new Prs3d_PointAspect(aspect));
 }
 
 // Highlights (mitcad#149): a material that only emits its colour (no
@@ -1190,6 +1239,33 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   images.SetEnableDepthTest(false);
   images.SetClearDepth(false);
   m_viewer->InsertLayerBefore(m_imageLayer, images, m_sketchHaloLayer);
+  // A feature's input lines where they were (mitcad#957), in two layers of
+  // their own after the top layer and the points' layer, before the
+  // topmost one. First their dashed copy, without depth: over the bodies,
+  // their edges and the top layer's see-through faces. Then the line in
+  // sight, against the scene's depth, which covers the copy where nothing
+  // hides it; only the parts a solid hides show dashed.
+  // The copy writes no depth: without the test OCCT draws with every depth
+  // passing and would write the hidden line's depth, through which faces
+  // behind the solid would show over it. Both are immediate, as the top
+  // layer is: OCCT lists (and picks by) the layers that are not immediate
+  // first, and one that writes no depth starts a new group for picking, so
+  // that layer before the top one split the bodies' group from the top
+  // layer's, whose selection highlights then won over the profiles and
+  // faces under them (the profile picks of tools/ui-profile-split-test.sh).
+  // Here the groups change only after the points' layer.
+  Graphic3d_ZLayerSettings inputLines;
+  inputLines.SetName("feature input lines, hidden");
+  inputLines.SetImmediate(true);
+  inputLines.SetEnableDepthTest(false);
+  inputLines.SetEnableDepthWrite(false);
+  inputLines.SetClearDepth(false);
+  m_viewer->InsertLayerBefore(m_inputLineLayer, inputLines, Graphic3d_ZLayerId_Topmost);
+  Graphic3d_ZLayerSettings inputLinesInSight;
+  inputLinesInSight.SetName("feature input lines, in sight");
+  inputLinesInSight.SetImmediate(true);
+  inputLinesInSight.SetClearDepth(false);
+  m_viewer->InsertLayerBefore(m_inputLineSightLayer, inputLinesInSight, Graphic3d_ZLayerId_Topmost);
   // The rendered view (docs/rendering.md, "Overlays in depth"): the bodies
   // in a layer of their own, then the rendered image over the whole view
   // without depth (it covers their colour, their depth stays), then the
@@ -2371,6 +2447,23 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
 }
 
 void OcctViewer::styleSketchEntity(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look) const {
+  if (look.point) {
+    // A light fill with an outline that tells the point's state, apart
+    // from the selection's blue on either background (mitcad#946); faded as
+    // the curves are.
+    const sketch::PointState state = look.reference      ? sketch::PointState::Reference
+                                     : look.construction ? sketch::PointState::Construction
+                                     : look.constrained  ? sketch::PointState::Constrained
+                                                         : sketch::PointState::Free;
+    const sketch::PointMarkerLook plain = sketch::pointMarkerLook(state, m_backgroundDark);
+    const sketch::PointMarkerLook marker = drawnInactive(object) ? sketch::fadedLook(plain, m_paper, kInactiveFade)
+                                           : look.temporary ? sketch::fadedLook(plain, m_paper, kTemporaryFade)
+                                                            : plain;
+    const double ratio = devicePixelRatioF();
+    setPointImage(object, sketchMarkerImage(sketch::pointMarkerKey(marker, ratio),
+                                            sketch::pointMarkerImage(marker, ratio)));
+    return;
+  }
   const Quantity_Color& own = look.reference      ? kReferenceColor
                               : look.construction ? kConstructionColor
                               : look.centerline   ? (m_backgroundDark ? kCenterlineColorDark : kCenterlineColor)
@@ -2381,14 +2474,10 @@ void OcctViewer::styleSketchEntity(const occ::handle<AIS_Shape>& object, const S
   const Quantity_Color color = drawnInactive(object) ? inactiveColor(own, m_paper)
                                : look.temporary      ? inactiveColor(own, m_paper, kTemporaryFade)
                                                      : own;
-  if (look.point) {
-    setPointStyle(object, color, Aspect_TOM_O_POINT, 1.0);
-  } else {
-    setEdgeStyle(object, color, kSketchLineWidth,
-                 look.construction ? Aspect_TOL_DASH
-                 : look.centerline ? Aspect_TOL_DOTDASH
-                                   : Aspect_TOL_SOLID);
-  }
+  setEdgeStyle(object, color, kSketchLineWidth,
+               look.construction ? Aspect_TOL_DASH
+               : look.centerline ? Aspect_TOL_DOTDASH
+                                 : Aspect_TOL_SOLID);
 }
 
 bool OcctViewer::hasSketchHalo(const SketchEntityLook& look) {
@@ -2459,19 +2548,23 @@ void OcctViewer::logSketchLayers() {
 }
 
 void OcctViewer::restyleSketchEntities() {
-  // Only fully constrained geometry and centre lines change colour.
+  // Only fully constrained geometry and centre lines change colour, and
+  // every point's marker (mitcad#946: its outline is light on a dark
+  // background), which the log does not count apart.
   int constrained = 0;
   int centerlines = 0;
   for (const occ::handle<AIS_Shape>& object : m_sketchEntities) {
     const auto look = m_sketchEntityLooks.find(object.get());
-    if (look == m_sketchEntityLooks.end() || look->second.reference || look->second.construction ||
-        !(look->second.centerline || look->second.constrained)) {
+    if (look == m_sketchEntityLooks.end()) {
       continue;
     }
-    if (look->second.centerline) {
-      ++centerlines;
-    } else {
-      ++constrained;
+    const bool recoloured = !look->second.reference && !look->second.construction &&
+                            (look->second.centerline || look->second.constrained);
+    if (!recoloured && !look->second.point) {
+      continue;
+    }
+    if (recoloured) {
+      ++(look->second.centerline ? centerlines : constrained);
     }
     styleSketchEntity(object, look->second);
     m_context->Redisplay(object, false);
@@ -2549,6 +2642,9 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
     remove(highlight);
   }
   m_highlights.clear();
+  if (&highlights != &m_shownHighlights) {
+    m_shownHighlights = highlights;
+  }
   QStringList bodies; // highlighted whole, for the log
   QStringList profiles; // "F1/r{...} 2 faces", for the log
   // Where faces, edges, vertices and datums are highlighted, for UI tests
@@ -2636,25 +2732,65 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
       mode = AIS_Shaded;
       break;
     }
+    case SelectKind::SketchPoint: {
+      // A filled ball in the highlight's colour with a thin light outline,
+      // apart from the plain marker and a curve's highlight (mitcad#946).
+      const double ratio = devicePixelRatioF();
+      setPointImage(object, sketchMarkerImage(sketch::pointBallKey(highlight.color, ratio),
+                                              sketch::pointBallImage(highlight.color, ratio)));
+      break;
+    }
     case SelectKind::Vertex:
-    case SelectKind::SketchPoint:
     case SelectKind::Point:
       setPointStyle(object, color, Aspect_TOM_BALL, 1.5);
       break;
     default:
-      setEdgeStyle(object, color, 3.5);
+      if (highlight.inputLines) {
+        // Lighter on a dark background, where the plain selection blue
+        // has little contrast (mitcad#957).
+        setEdgeStyle(object, m_backgroundDark ? occtColor(kInputLineColorDark) : color, kInputLineWidth);
+      } else {
+        setEdgeStyle(object, color, 3.5);
+      }
       break;
+    }
+    if (highlight.inputLines && m_backgroundDark) {
+      // The dark halo of a sketch's lines under the part in sight, against
+      // the scene's depth: the lines stand apart from the background and
+      // from the amber faces of their feature.
+      occ::handle<AIS_Shape> halo = new AIS_Shape(highlight.shape);
+      setEdgeStyle(halo, kSketchHaloDark, kSketchHaloWidth);
+      PickInfo haloInfo;
+      haloInfo.item = highlight.item;
+      haloInfo.highlight = true;
+      display(halo, AIS_WireFrame, std::move(haloInfo), false);
+      m_context->SetZLayer(halo, m_sketchHaloLayer);
+      m_highlights.push_back(halo);
     }
     if (highlight.throughSolid) {
       // Topmost disables depth testing. A subdued dashed boundary locates
       // enclosed and rear faces; the normal shaded overlay is left intact.
+      // A feature's input lines (mitcad#957) instead go to a layer of their
+      // own after the top one, in the selection colour: the line in sight,
+      // drawn after it, covers its copy, so only the hidden parts show
+      // dashed, over the model's own edges.
       occ::handle<AIS_Shape> hidden = new AIS_Shape(highlight.shape);
-      setEdgeStyle(hidden, occtColor(highlight.color.darker(135)), 1.5, Aspect_TOL_DASH);
+      if (highlight.inputLines) {
+        setEdgeStyle(hidden, color, kInputLineHiddenWidth, Aspect_TOL_DASH);
+      } else {
+        setEdgeStyle(hidden, occtColor(highlight.color.darker(135)), 1.5, Aspect_TOL_DASH);
+      }
+      // Boundaries only: no lines across the faces (OCCT's wireframe draws
+      // one U and one V iso line on each face by default, grey, which was
+      // drawn over the input lines in the same screen column).
+      const occ::handle<Prs3d_Drawer>& hiddenDrawer = hidden->Attributes();
+      hiddenDrawer->SetUIsoAspect(new Prs3d_IsoAspect(occtColor(highlight.color), Aspect_TOL_DASH, 1.0, 0));
+      hiddenDrawer->SetVIsoAspect(new Prs3d_IsoAspect(occtColor(highlight.color), Aspect_TOL_DASH, 1.0, 0));
       PickInfo hiddenInfo;
       hiddenInfo.item = highlight.item;
       hiddenInfo.highlight = true;
       display(hidden, AIS_WireFrame, std::move(hiddenInfo), false);
-      m_context->SetZLayer(hidden, Graphic3d_ZLayerId_Topmost);
+      m_context->SetZLayer(hidden, highlight.inputLines ? m_inputLineLayer : Graphic3d_ZLayerId_Topmost);
       m_highlights.push_back(hidden);
     }
     PickInfo info;
@@ -2670,8 +2806,11 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
       m_context->SetDisplayPriority(object, kSketchPointHighlightPriority);
       ++sketchPointHighlights;
     } else {
-      // A light tint stays with the bodies, under the highlights on top.
-      m_context->SetZLayer(object, highlight.light ? Graphic3d_ZLayerId_Default : Graphic3d_ZLayerId_Top);
+      // A light tint stays with the bodies, under the highlights on top;
+      // a feature's input line in sight over its dashed copy (mitcad#957).
+      m_context->SetZLayer(object, highlight.light        ? Graphic3d_ZLayerId_Default
+                                   : highlight.inputLines ? m_inputLineSightLayer
+                                                          : Graphic3d_ZLayerId_Top);
       if (kind == SelectKind::SketchCurve) {
         ++sketchCurveHighlights;
       }
@@ -4643,6 +4782,11 @@ void OcctViewer::setBackground(const QColor& top, const QColor& bottom, bool gra
     m_homeButton->setDark(m_backgroundDark);
     m_context->Redisplay(m_orientationCube, false);
     restyleSketchEntities();
+    // A feature's input lines have a variant for each tone (mitcad#957).
+    if (std::any_of(m_shownHighlights.cbegin(), m_shownHighlights.cend(),
+                    [](const HighlightDisplay& shown) { return shown.inputLines; })) {
+      setHighlights(m_shownHighlights);
+    }
     emit backgroundToneChanged();
   }
   if (paper != m_paper) {

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/platform/macos app/platform/NativeDialogs.hpp app/platform/NativeTestInput.hpp app/library/PartPicker
-# check-all sources: app/files/LibraryDialogs app/framework/TestDriver app/framework/TestDriverDialogs.cpp tools/libraries/make-fastener-library.py
+# check-all sources: app/files/LibraryDialogs app/framework/TestDriver app/framework/TestDriverDialogs.cpp tools/libraries/make-fastener-library.py app/library/SupplierPartsDialog
 # Native part catalogue (mitcad#813): Insert from Library and Community
 # Library as pictured tiles with the groups as a source list, search,
 # favourites, tile size, the hover card, insertion by pointer and keyboard,
-# and usable bounds at normal and narrow sizes, in light and dark
+# the screw's suppliers' articles in their table (mitcad#979), and
+# usable bounds at normal and narrow sizes, in light and dark
 # appearance. A local synthetic library of two pictured parts (a socket
 # screw and a nut, drawn previews); no network requests.
 # Usage: tools/ui-macos-native-library-test.sh <app> <mitcad-cli> <output>
@@ -47,7 +48,7 @@ for scheme in light dark; do
       'Unable to simultaneously satisfy constraints'; do
     ui_expect_no_log "$problem" "$scheme: no $problem"
   done
-  for shot in insert insert-narrow community; do
+  for shot in insert insert-narrow community supplier-articles; do
     [ -s "$MITCAD_TEST_WORK/$shot-$scheme.png" ] || ui_fail "$scheme: missing $shot capture"
   done
   if [ "$UI_FAILURES" -gt 0 ]; then

@@ -828,7 +828,7 @@ int abandonFaceAtExit(int argc, char** argv) {
       new EndlessCylinders(state, new BRepMesh_DelabellaMeshAlgoFactory()));
   const auto body = std::make_shared<mitcad::geometry::Shape>(BRepPrimAPI_MakeCylinder(10.0, 30.0).Shape());
   mitcad::ModelJob job;
-  std::thread cancel([&state, &job] {
+  std::thread cancel([&job] {
     for (int i = 0; i < 6000 && !(state.entered && state.others >= 2); ++i) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }

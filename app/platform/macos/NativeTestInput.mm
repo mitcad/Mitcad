@@ -4,6 +4,7 @@
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <QuartzCore/QuartzCore.h>
+#import <objc/runtime.h>
 
 #include <QApplication>
 #include <QComboBox>
@@ -81,6 +82,11 @@
 // when retained dialogs contain other controls with the same object name.
 @protocol MITCADNativeModelSelectionTest <NSObject>
 - (NSInteger)presenterSelectedRows;
+@optional
+// A plain list's presenter row maps 1:1 to the native row, so such a table
+// also names the presenter's first selected row (formula completions,
+// mitcad#984); -1 when none is selected.
+- (NSInteger)presenterSelectedRow;
 @end
 
 // NSEvent exposes magnification and phase as read-only properties and has
@@ -724,7 +730,10 @@ bool textOf(const QString& identifier, QString& value) {
   else if ([view isKindOfClass:NSTableCellView.class]) text = ((NSTableCellView*)view).textField.stringValue;
   else if ([view isKindOfClass:NSPopUpButton.class]) {
     NSPopUpButton* popup = (NSPopUpButton*)view;
-    text = popup.pullsDown ? popup.title : (popup.selectedItem != nil ? popup.titleOfSelectedItem : @"");
+    // Unset: the placeholder the popup draws, such as Slicer default (mitcad#976).
+    NSString* placeholder = popup.accessibilityPlaceholderValue;
+    text = popup.pullsDown ? popup.title
+           : popup.selectedItem != nil ? popup.titleOfSelectedItem : (placeholder != nil ? placeholder : @"");
   }
   // A read-only probe of the live control, independent of the Qt presenter.
   else if ([view isKindOfClass:NSSlider.class]) {
@@ -2454,7 +2463,8 @@ bool trackContextMenu(const QString& choice, const std::function<void()>& open, 
   return true;
 }
 
-bool contextMenu(const QString& identifier, const QString& choice, QString& error) {
+bool contextMenu(const QString& identifier, const QString& choice, QString& error,
+                 const std::function<void()>& onClosed) {
   NSTableView* table = nil;
   NSInteger row = -1;
   NSView* view = findControl(identifier, &table, &row);
@@ -2471,7 +2481,7 @@ bool contextMenu(const QString& identifier, const QString& choice, QString& erro
   return trackContextMenu(choice, [receiver, event] {
     NSMenu* menu = [receiver menuForEvent:event];
     if (menu) [NSMenu popUpContextMenu:menu withEvent:event forView:receiver];
-  }, error);
+  }, error, onClosed);
 }
 
 bool select(const QString& identifier, QString& error, Qt::KeyboardModifiers modifiers) {
@@ -3281,6 +3291,14 @@ bool paneIcons(NSView* view, const QString& chosen, QString& detail) {
 bool nativeStyle(const QString& identifier, const QStringList& states, QString& detail) {
   NSView* view = tableCell(identifier);
   if (states.value(0) == QLatin1String("pane-icons")) return paneIcons(view, states.value(1), detail);
+  if (states == QStringList{QStringLiteral("fading")} || states == QStringList{QStringLiteral("opaque")}) {
+    const bool shown = viewVisible(view);
+    CALayer* presented = view.layer.presentationLayer;
+    const double opacity = presented != nil ? presented.opacity : view.alphaValue;
+    detail = QStringLiteral("visible %1, model alpha %2, presented opacity %3").arg(shown).arg(view.alphaValue).arg(opacity);
+    return shown && (states.front() == QLatin1String("fading") ? opacity > 0.01 && opacity < 0.99
+                                                             : view.alphaValue >= 0.99 && opacity >= 0.99);
+  }
   if (states == QStringList{QStringLiteral("artwork")}) return mac::navigationGuideArtwork(view, detail);
   if (states == QStringList{QStringLiteral("caption")}) {
     NSButton* button = [view isKindOfClass:NSButton.class] ? (NSButton*)view : nil;
@@ -3374,6 +3392,10 @@ bool nativeStyle(const QString& identifier, const QStringList& states, QString& 
                           field.intrinsicContentSize.height <= NSHeight(field.bounds) + 1 &&
                           (!cell || (NSMinY(frame) >= -0.5 && NSMaxY(frame) <= NSHeight(cell.bounds) + 0.5));
   const bool truncated = field.cell.cellSize.width > NSWidth(field.bounds) + 1;
+  const CGFloat viewportWidth = table.enclosingScrollView.contentView.bounds.size.width;
+  const bool fillsRow = cell != nil && viewportWidth > 0 &&
+      cell.bounds.size.width >= viewportWidth - table.intercellSpacing.width - 2 &&
+      field.bounds.size.width >= cell.bounds.size.width - 24;
   bool inView = false;
   if (table) {
     const NSRect inTable = [field convertRect:field.bounds toView:table];
@@ -3394,6 +3416,8 @@ bool nativeStyle(const QString& identifier, const QStringList& states, QString& 
                .arg(qt(field.stringValue)).arg(redText).arg(orangeText).arg(double(fill), 0, 'f', 2).arg(redFill)
                .arg(weight.allBold()).arg(bool(field.editable)).arg(field.currentEditor != nil).arg(singleLine)
                .arg(truncated).arg(inView).arg(field.window != nil).arg(focused);
+  detail += QStringLiteral(", cell width=%1, viewport width=%2, fills row=%3")
+      .arg(cell != nil ? cell.bounds.size.width : 0).arg(viewportWidth).arg(fillsRow);
   detail += QStringLiteral(", displayed font runs bold=%1 regular=%2 unknown=%3, base bold=%4")
       .arg(qulonglong(weight.bold)).arg(qulonglong(weight.regular)).arg(qulonglong(weight.unknown))
       .arg(boldFont(field.font));
@@ -3420,6 +3444,8 @@ bool nativeStyle(const QString& identifier, const QStringList& states, QString& 
         state == QLatin1String("editing") ? field.currentEditor != nil :
         state == QLatin1String("not-editing") ? field.currentEditor == nil :
         state == QLatin1String("single-line") ? singleLine :
+        state == QLatin1String("elide-middle") ? field.lineBreakMode == NSLineBreakByTruncatingMiddle :
+        state == QLatin1String("full-row") ? fillsRow :
         state == QLatin1String("truncated") ? truncated :
         state == QLatin1String("untruncated") ? !truncated :
         state == QLatin1String("in-view") ? inView : false;
@@ -3886,7 +3912,14 @@ bool selectedRow(const QString& outlineIdentifier, const QString& row, QString& 
     detail = QStringLiteral("table '%1': native selected %2/%3 rows, exact live presenter selected %4")
                  .arg(outlineIdentifier).arg(table.selectedRowIndexes.count).arg(table.numberOfRows)
                  .arg(shared);
-    return shared == expected && table.selectedRowIndexes.count == NSUInteger(expected);
+    // Where the table names its presenter's row, the native row is that row.
+    bool sameRow = true;
+    if ([table respondsToSelector:@selector(presenterSelectedRow)]) {
+      const NSInteger sharedRow = [(id<MITCADNativeModelSelectionTest>)table presenterSelectedRow];
+      sameRow = table.selectedRow == sharedRow;
+      detail += QStringLiteral(" (native row %1, presenter row %2)").arg(table.selectedRow).arg(sharedRow);
+    }
+    return shared == expected && table.selectedRowIndexes.count == NSUInteger(expected) && sameRow;
   }
   NSWindow* window = documentWindow();
   if (!active() || window == nil) return false;
@@ -4061,9 +4094,43 @@ bool commandLayout(const QStringList& required, QString& error) {
   }
   const NSRect inputs = [scroll convertRect:scroll.bounds toView:card];
   const NSRect visible = [scroll.contentView convertRect:scroll.contentView.bounds toView:card];
+  const NSEdgeInsets footerInsets = [footer isKindOfClass:NSStackView.class]
+                                       ? ((NSStackView*)footer).edgeInsets : NSEdgeInsetsMake(0, 0, 0, 0);
+  NSRect footerArea = card.bounds;
+  footerArea.origin.x += footerInsets.left;
+  footerArea.size.width -= footerInsets.left + footerInsets.right;
+  if (!card.flipped) footerArea.origin.y += footerInsets.bottom;
+  footerArea.size.height -= footerInsets.bottom;
+  CGFloat radius = 0;
+  for (NSView* surface in card.subviews) {
+    if (@available(macOS 26.0, *)) {
+      if ([surface isKindOfClass:NSGlassEffectView.class]) {
+        radius = ((NSGlassEffectView*)surface).cornerRadius;
+      }
+    }
+    radius = std::max(radius, surface.layer.cornerRadius);
+  }
   // OK and Cancel: whole, under the scrolling inputs, real pointer targets.
   for (const QString& identifier : {QStringLiteral("commandCancel"), QStringLiteral("commandOk")}) {
     NSView* button = identifiedView(footer, identifier);
+    const NSRect buttonRect = button ? [button convertRect:button.bounds toView:card] : NSZeroRect;
+    bool inCorner = false;
+    for (CGFloat x : {NSMinX(card.bounds), NSMaxX(card.bounds) - radius}) {
+      for (CGFloat y : {NSMinY(card.bounds), NSMaxY(card.bounds) - radius}) {
+        inCorner = inCorner || (radius > 0 && NSIntersectsRect(buttonRect, NSMakeRect(x, y, radius, radius)));
+      }
+    }
+    if (button && (!wholeIn(button, card, footerArea) || inCorner)) {
+      NSView* host = identifiedView(card, QStringLiteral("native.inspector"));
+      NSView* footerHost = identifiedView(card, QStringLiteral("native.inspectorFooter"));
+      error = QStringLiteral("'%1' loses footer insets or enters a rounded corner: button %2, card %3, "
+                             "safe %4, inspector %5, body %6, footer host %7, footer %8, fitting height %9, bottom inset %10")
+                  .arg(identifier, describeRect(buttonRect), describeRect(card.bounds), describeRect(footerArea),
+                       describeIn(host, card), describeIn(host.superview, card), describeIn(footerHost, card),
+                       describeIn(footer, card))
+                  .arg(footer.fittingSize.height).arg(footerInsets.bottom);
+      return false;
+    }
     if (!viewVisible(button) || !wholeIn(button, card, card.bounds) ||
         NSIntersectsRect([button convertRect:button.bounds toView:card], inputs) || !reachable(button)) {
       error = QStringLiteral("'%1' is clipped, under the inputs or not a pointer target: %2 in a card of %3 x %4, inputs %5")
@@ -4137,12 +4204,22 @@ bool commandLayout(const QStringList& required, QString& error) {
       return false;
     }
   }
+  const auto bottomClearance = [card, footer](NSString* identifier) {
+    NSView* button = identifiedView(footer, qt(identifier));
+    const NSRect rect = [button convertRect:button.bounds toView:card];
+    return card.flipped ? NSMaxY(card.bounds) - NSMaxY(rect) : NSMinY(rect) - NSMinY(card.bounds);
+  };
   qInfo().noquote() << QStringLiteral("Native command layout: %1 captioned rows in aligned columns, OK and Cancel "
-                                      "whole under the inputs, %2 required controls in view, card %3 x %4 points")
+                                      "whole under the inputs, %2 required controls in view, card %3 x %4 points, "
+                                      "footer height %5, bottom clearances %6/%7 (inset %8)")
                            .arg(rows)
                            .arg(required.size())
                            .arg(card.bounds.size.width)
-                           .arg(card.bounds.size.height);
+                           .arg(card.bounds.size.height)
+                           .arg(NSHeight(footer.frame))
+                           .arg(bottomClearance(@"commandCancel"))
+                           .arg(bottomClearance(@"commandOk"))
+                           .arg(footerInsets.bottom);
   return true;
 }
 
@@ -4585,19 +4662,26 @@ NSView* buttonTitled(NSView* root, const QRegularExpression& expression, bool en
   });
 }
 
+// The target scrolled into view and its window in front and laid out, as
+// the press will find it. Repeating it changes nothing.
+void preparePointerTarget(NSView* view) {
+  NSWindow* window = view.window;
+  // Clear of a scrolled body's edges, where overlay scrollers appear.
+  [view scrollRectToVisible:NSInsetRect(view.bounds, -24, -40)];
+  [NSApp activate];
+  [window makeKeyAndOrderFront:nil];
+  [window layoutIfNeeded];
+  [window.contentView layoutSubtreeIfNeeded];
+}
+
 // Real AppKit mouse input: the window hit-tests the press and the control
 // tracks the drags and release, as for input from the pointer.
 bool pointerEvents(NSView* view, NSPoint from, NSPoint to, QString& error, int clickCount = 1,
                    bool centerVisible = false, const QString& identifier = {}) {
   NSWindow* window = view.window;
   if (window == nil) { error = QStringLiteral("the native pointer target has no window"); return false; }
-  // Clear of a scrolled body's edges, where overlay scrollers appear.
-  [view scrollRectToVisible:NSInsetRect(view.bounds, -24, -40)];
-  [NSApp activate];
-  [window makeKeyAndOrderFront:nil];
-  [window layoutIfNeeded];
+  preparePointerTarget(view);
   NSView* content = window.contentView;
-  [content layoutSubtreeIfNeeded];
   if (centerVisible) {
     // Preparing the window after the first press can replace its row views.
     // Resolve the same identifier after that layout too, before hit-testing;
@@ -4664,7 +4748,8 @@ bool pointerEvents(NSView* view, NSPoint from, NSPoint to, QString& error, int c
   // without pumping the next script step between a double-click's phases.
   const NSTimeInterval time = NSProcessInfo.processInfo.systemUptime + (clickCount - 1) * 0.02;
   const int steps = NSEqualPoints(start, end) ? 0 : 6;
-  const bool paced = [view isKindOfClass:NSSlider.class];
+  const bool slider = [view isKindOfClass:NSSlider.class];
+  const bool paced = slider || [view isKindOfClass:NSTableHeaderView.class];
   const auto postFollowup = [window, start, end, steps, clickCount](int step, NSTimeInterval timestamp) {
     const bool release = step > steps;
     const CGFloat part = release ? 1 : CGFloat(step) / CGFloat(steps);
@@ -4678,7 +4763,7 @@ bool pointerEvents(NSView* view, NSPoint from, NSPoint to, QString& error, int c
   if (paced) {
     // Focus acquisition during mouseDown may discard already queued mouse
     // events. Real future motion arrives after that transition, while the
-    // slider tracks; produce it there instead of pre-queuing future input.
+    // control tracks; produce it there instead of pre-queuing future input.
     trackingInput = [NSTimer timerWithTimeInterval:0.01 repeats:YES block:^(NSTimer* timer) {
       postFollowup(++delivered, NSProcessInfo.processInfo.systemUptime);
       if (delivered > steps) [timer invalidate];
@@ -4692,7 +4777,7 @@ bool pointerEvents(NSView* view, NSPoint from, NSPoint to, QString& error, int c
   if (paced) {
     // Retrieve this press through the application's real event queue, not
     // only sendEvent: (which can retain an older AppKit currentEvent).
-    // The driver timer stays paused; subsequent slider motion still comes
+    // The driver timer stays paused; subsequent tracking motion still comes
     // from the tracking-mode timer, and no control state is synthesized.
     [NSApp postEvent:down atStart:YES];
     NSEvent* queued = [NSApp nextEventMatchingMask:NSEventMaskLeftMouseDown untilDate:[NSDate distantPast]
@@ -4722,7 +4807,7 @@ bool pointerEvents(NSView* view, NSPoint from, NSPoint to, QString& error, int c
     if (view.window != window || !samePress(queued)) {
       [trackingInput invalidate];
       if (queued != nil) [NSApp postEvent:queued atStart:YES];
-      error = QStringLiteral("native slider press queue mismatch: %1").arg(fields);
+      error = QStringLiteral("native tracking press queue mismatch: %1").arg(fields);
       return false;
     }
     qInfo().noquote() << QStringLiteral("Native pointer queue fields: %1").arg(fields);
@@ -4739,7 +4824,7 @@ bool pointerEvents(NSView* view, NSPoint from, NSPoint to, QString& error, int c
   }
   if (paced)
     qInfo().noquote() << QStringLiteral("Native pointer tracking returned: %1 follow-up events=%2/%3 value=%4")
-        .arg(qt(view.accessibilityIdentifier)).arg(delivered).arg(steps + 1).arg(((NSSlider*)view).doubleValue);
+        .arg(qt(view.accessibilityIdentifier)).arg(delivered).arg(steps + 1).arg(slider ? ((NSSlider*)view).doubleValue : 0);
   // If tracking returned without consuming the sequence, finish through
   // ordinary window input before the next driver step. No control values
   // or responders are changed by this test helper.
@@ -4764,11 +4849,100 @@ bool pointerEvents(NSView* view, NSPoint from, NSPoint to, QString& error, int c
                                                       inMode:NSDefaultRunLoopMode dequeue:YES]) {
         [NSApp sendEvent:pending];
       }
-      error = QStringLiteral("native slider pointer input timed out after %1/%2 follow-up events")
+      error = QStringLiteral("native tracking pointer input timed out after %1/%2 follow-up events")
           .arg(delivered).arg(steps + 1);
       return false;
     }
   }
+  return true;
+}
+
+// A checkbox or radio button tracks a press only over its box (or circle)
+// and its title's glyphs. A frame stretched across a form leaves the rest
+// inert, so a press there changes nothing (mitcad#987). Push buttons and
+// other controls, also pane buttons with their image above the title, are
+// active over their whole frame: false, nothing measured.
+bool toggleCell(NSView* view, NSRect& active, NSRect& box, NSRect& title) {
+  if (![view isKindOfClass:NSButton.class] || ![((NSButton*)view).cell isKindOfClass:NSButtonCell.class]) return false;
+  NSButton* button = (NSButton*)view;
+  // The cell's role follows its button type, switch or radio. The view's
+  // own role can stay unknown while no assistive client has asked.
+  NSString* role = [button.cell accessibilityRole];
+  const NSCellImagePosition position = button.imagePosition;
+  if ((![role isEqualToString:NSAccessibilityCheckBoxRole] && ![role isEqualToString:NSAccessibilityRadioButtonRole]) ||
+      position == NSImageAbove || position == NSImageBelow || position == NSImageOverlaps) {
+    return false;
+  }
+  NSButtonCell* cell = (NSButtonCell*)button.cell;
+  const NSRect bounds = button.bounds;
+  box = NSIntersectionRect([cell imageRectForBounds:bounds], bounds);
+  title = button.title.length > 0 && position != NSImageOnly
+      ? NSIntersectionRect([cell titleRectForBounds:bounds], bounds) : NSZeroRect;
+  if (NSIsEmptyRect(box) && !NSIsEmptyRect(title)) {
+    // No measured glyph: the box is the wider strip beside the title.
+    const CGFloat leading = NSMinX(title) - NSMinX(bounds);
+    const CGFloat trailing = NSMaxX(bounds) - NSMaxX(title);
+    box = leading >= trailing ? NSMakeRect(NSMinX(bounds), NSMinY(bounds), leading, NSHeight(bounds))
+                              : NSMakeRect(NSMaxX(title), NSMinY(bounds), trailing, NSHeight(bounds));
+  }
+  if (!NSIsEmptyRect(title)) {
+    // The title area runs to the frame's far end; only the glyphs next to
+    // the box are active.
+    NSAttributedString* attributed = button.attributedTitle;
+    NSFont* font = button.font != nil ? button.font : [NSFont systemFontOfSize:0];
+    const CGFloat measured = attributed.length > 0 ? attributed.size.width
+        : [button.title sizeWithAttributes:@{NSFontAttributeName: font}].width;
+    const CGFloat glyphs = std::min(NSWidth(title), std::ceil(measured));
+    if (NSMidX(title) < NSMidX(box)) title.origin.x = NSMaxX(title) - glyphs;
+    title.size.width = glyphs;
+  }
+  active = NSIsEmptyRect(title) ? box : NSIsEmptyRect(box) ? title : NSUnionRect(box, title);
+  return true;
+}
+
+// The point within `view` a press aims at. Without a requested point it is
+// the centre of the bounds, or of a checkbox's or radio button's visible
+// box; a requested point on a checkbox or radio button must lie within its
+// visible active cell, or the press is refused rather than reported as an
+// activation that AppKit ignores (mitcad#987).
+bool aimPointer(NSView* view, const NSPoint* requested, NSPoint& point, QString& error) {
+  if (view.window == nil) { error = QStringLiteral("the native pointer target has no window"); return false; }
+  NSRect active = NSZeroRect;
+  NSRect box = NSZeroRect;
+  NSRect title = NSZeroRect;
+  if (!toggleCell(view, active, box, title)) {
+    point = requested != nullptr ? *requested : NSMakePoint(NSMidX(view.bounds), NSMidY(view.bounds));
+    return true;
+  }
+  // Measure what the press will find: scrolled into view and laid out.
+  preparePointerTarget(view);
+  toggleCell(view, active, box, title);
+  NSButton* button = (NSButton*)view;
+  const QString name = button.accessibilityIdentifier.length > 0 ? qt(button.accessibilityIdentifier)
+                                                                  : qt(button.title);
+  const NSRect visible = NSIntersectionRect(active, view.visibleRect);
+  const NSRect shownBox = NSIntersectionRect(box, view.visibleRect);
+  const QString cells = QStringLiteral("box %1, title glyphs %2, visible active cell %3, bounds %4")
+      .arg(qt(NSStringFromRect(box)), qt(NSStringFromRect(title)), qt(NSStringFromRect(visible)),
+           qt(NSStringFromRect(view.bounds)));
+  if (NSIsEmptyRect(visible)) {
+    error = QStringLiteral("the native checkbox or radio button '%1' shows no active cell (%2)").arg(name, cells);
+    return false;
+  }
+  if (requested == nullptr) {
+    const NSRect aim = NSIsEmptyRect(shownBox) ? visible : shownBox;
+    point = NSMakePoint(NSMidX(aim), NSMidY(aim));
+  } else if (!NSPointInRect(*requested, visible)) {
+    error = QStringLiteral("native pointer point %1 lies outside the active cell of checkbox or radio button '%2', "
+                           "where AppKit ignores a press (%3)")
+        .arg(qt(NSStringFromPoint(*requested)), name, cells);
+    return false;
+  } else {
+    point = *requested;
+  }
+  qInfo().noquote() << QStringLiteral("Native pointer active cell: %1 point=%2 %3, %4")
+      .arg(name, qt(NSStringFromPoint(point)), requested == nullptr ? QStringLiteral("default") : QStringLiteral("requested"),
+           cells);
   return true;
 }
 
@@ -4856,23 +5030,167 @@ bool controlBounds(const QString& identifier, double minimumWidth, const QString
   return true;
 }
 
-bool placeholderBounds(const QString& identifier, const QString& labelPattern, QString& error) {
+namespace {
+
+// controlBounds with the width AppKit's own cell needs for the whole
+// placeholder or current text, as if it were the field's text; a copy
+// leaves the field and its text alone.
+bool cellTextBounds(const QString& identifier, bool placeholder, const QString& labelPattern, QString& error) {
   NSView* view = findControl(identifier);
   NSTextField* field = [view isKindOfClass:NSTextField.class] ? (NSTextField*)view : nil;
-  if (field == nil || field.window == nil || field.placeholderString.length == 0) {
-    error = QStringLiteral("no native text field '%1' with a placeholder").arg(identifier);
+  NSString* text = field == nil ? nil : placeholder ? field.placeholderString : field.stringValue;
+  const QString kind = placeholder ? QStringLiteral("placeholder") : QStringLiteral("text");
+  if (field == nil || field.window == nil || text.length == 0) {
+    error = QStringLiteral("no native text field '%1' with %2").arg(identifier, kind);
     return false;
   }
-  // The size AppKit's own cell needs for the whole placeholder, as if it
-  // were the field's text; a copy leaves the field and its text alone.
   NSTextFieldCell* probe = [field.cell copy];
-  probe.stringValue = field.placeholderString;
+  probe.stringValue = text;
   const double needed = [probe cellSizeForBounds:NSMakeRect(0, 0, CGFLOAT_MAX, CGFLOAT_MAX)].width;
-  qInfo().noquote() << QStringLiteral("Native placeholder width: %1 '%2' needs %3, has %4")
-                           .arg(identifier, qt(field.placeholderString))
+  qInfo().noquote() << QStringLiteral("Native %1 width: %2 '%3' needs %4, has %5")
+                           .arg(kind, identifier, qt(text))
                            .arg(needed, 0, 'f', 1)
                            .arg(field.bounds.size.width, 0, 'f', 1);
   return controlBounds(identifier, needed, labelPattern, error);
+}
+
+} // namespace
+
+bool placeholderBounds(const QString& identifier, const QString& labelPattern, QString& error) {
+  return cellTextBounds(identifier, true, labelPattern, error);
+}
+
+bool textBounds(const QString& identifier, const QString& labelPattern, QString& error) {
+  return cellTextBounds(identifier, false, labelPattern, error);
+}
+
+// Check actual native controls before scrolling to them. Repeated calls
+// compare each page's first rows in page coordinates, across tab changes.
+bool settingsLayout(const QString& requested, QString& error) {
+  NSWindow* window = targetWindow();
+  NSView* body = window.contentView;
+  NSTabView* tabs = (NSTabView*)identifiedView(body, QStringLiteral("navigationTabs"));
+  if (![tabs isKindOfClass:NSTabView.class] || tabs.selectedTabViewItem == nil) {
+    error = QStringLiteral("Settings has no selected Navigation tab"); return false;
+  }
+  const QString pageName = requested == QLatin1String("initial") ? QStringLiteral("mouse") : requested;
+  const QString expected = pageName == QLatin1String("mouse") ? QStringLiteral("Mouse and Trackpad") : QStringLiteral("3D Mouse");
+  if ((pageName != QLatin1String("mouse") && pageName != QLatin1String("space")) || qt(tabs.selectedTabViewItem.label) != expected) {
+    error = QStringLiteral("Settings expected '%1', shows '%2'").arg(expected, qt(tabs.selectedTabViewItem.label)); return false;
+  }
+  [body layoutSubtreeIfNeeded];
+  NSView* page = tabs.selectedTabViewItem.view;
+  const auto rect = [page](NSView* view) { return [view convertRect:view.bounds toView:page]; };
+  const auto top = [page](NSRect r) { return page.flipped ? NSMinY(r) : NSMaxY(page.bounds) - NSMaxY(r); };
+  static __weak NSWindow* previous;
+  static QHash<QString, NSRect> remembered;
+  if (previous != window || requested == QLatin1String("initial")) { remembered.clear(); previous = window; }
+  QStringList failures, measurements;
+  QHash<QString, NSRect> observed;
+  NSButton* chosen = (NSButton*)identifiedView(body, QStringLiteral("native.settings.pane.1"));
+  if (![chosen isKindOfClass:NSButton.class]) {
+    error = QStringLiteral("Settings has no Navigation selector button"); return false;
+  }
+  const NSRect icon = [(NSButtonCell*)chosen.cell imageRectForBounds:chosen.bounds];
+  const CGFloat iconTop = chosen.flipped ? NSMinY(icon) - NSMinY(chosen.bounds) : NSMaxY(chosen.bounds) - NSMaxY(icon);
+  if (std::abs(NSHeight(chosen.bounds) - 58) > 0.5 || std::abs(iconTop - 7) > 0.5 ||
+      std::abs(NSWidth(icon) - 24) > 0.5 || std::abs(NSHeight(icon) - 24) > 0.5) {
+    failures << QStringLiteral("selector height %1, icon top %2 (tint gap %3), icon %4")
+                    .arg(NSHeight(chosen.bounds)).arg(iconTop).arg(iconTop - 2).arg(describeRect(icon));
+  }
+  const QStringList first = pageName == QLatin1String("mouse")
+      ? QStringList{QStringLiteral("navigationScheme"), QStringLiteral("navigationStartFrom"), QStringLiteral("navigationGuide")}
+      : QStringList{QStringLiteral("navigationSpaceMouseStatus"), QStringLiteral("navigationSpaceMouseOn"), QStringLiteral("navigationSpaceMouseSpeed")};
+  for (const QString& id : first) {
+    NSView* view = identifiedView(page, id);
+    if (view == nil) { failures << QStringLiteral("missing %1").arg(id); continue; }
+    const NSRect now = rect(view);
+    const QString key = pageName + QLatin1Char('/') + id;
+    if (remembered.contains(key)) {
+      const NSRect before = remembered.value(key);
+      if (std::abs(now.origin.x - before.origin.x) > 0.5 || std::abs(now.origin.y - before.origin.y) > 0.5 ||
+          std::abs(now.size.width - before.size.width) > 0.5 || std::abs(now.size.height - before.size.height) > 0.5) {
+        failures << QStringLiteral("%1 moved from %2 to %3").arg(id, describeRect(before), describeRect(now));
+      }
+    } else { observed.insert(key, now); }
+    measurements << QStringLiteral("%1=%2").arg(id, describeRect(now));
+  }
+  if (pageName == QLatin1String("mouse")) {
+    NSView* guide = identifiedView(page, QStringLiteral("navigationGuide"));
+    NSView* explanation = identifiedView(page, QStringLiteral("navigationGuideExplanation"));
+    NSScrollView* outer = tabs.enclosingScrollView;
+    NSScreen* screen = window.screen != nil ? window.screen : NSScreen.mainScreen;
+    const CGFloat chrome = NSHeight(window.frame) - NSHeight(body.bounds);
+    const CGFloat available = screen != nil ? NSHeight(screen.visibleFrame) - chrome : NSHeight(body.bounds);
+    const bool fitsScreen = outer != nil && NSHeight(outer.documentView.frame) <= available + 1;
+    if (outer == nil || (fitsScreen && (!wholeIn(guide, outer.contentView, outer.contentView.bounds) ||
+        !wholeIn(explanation, outer.contentView, outer.contentView.bounds) ||
+        NSHeight(outer.documentView.frame) > NSHeight(outer.contentView.bounds) + 1))) {
+      failures << QStringLiteral("initial Mouse and Trackpad page needs outer scrolling: document %1, viewport %2")
+                      .arg(NSHeight(outer.documentView.frame)).arg(NSHeight(outer.contentView.bounds));
+    }
+    measurements << QStringLiteral("body %1, viewport %2, screen room %3, fits screen %4")
+                        .arg(NSHeight(outer.documentView.frame)).arg(NSHeight(outer.contentView.bounds)).arg(available).arg(fitsScreen);
+  } else {
+    const auto field = [page](const QString& id) { return identifiedView(page, id); };
+    const auto caption = [page](const QString& text) {
+      return findView(page, [&text](NSView* v) {
+        return [v isKindOfClass:NSTextField.class] && qt(((NSTextField*)v).stringValue) == text;
+      });
+    };
+    NSView* status = field(QStringLiteral("navigationSpaceMouseStatus"));
+    NSView* on = field(QStringLiteral("navigationSpaceMouseOn"));
+    NSView* speed = field(QStringLiteral("navigationSpaceMouseSpeed"));
+    NSView* label = caption(QStringLiteral("3D mouse speed:"));
+    const CGFloat firstTop = top(rect(status));
+    const CGFloat gap = top(rect(on)) - top(rect(status)) - NSHeight(rect(status));
+    if (firstTop > 14 || gap > 20 || gap < 0) {
+      failures << QStringLiteral("spare height above/between first rows: top %1, gap %2").arg(firstTop).arg(gap);
+    }
+    if (label == nil || std::abs(NSMidY(rect(label)) - NSMidY(rect(speed))) > 4) {
+      failures << QStringLiteral("speed label %1 is not beside slider %2").arg(describeRect(rect(label)), describeRect(rect(speed)));
+    }
+    for (const QString& column : {QStringLiteral("On"), QStringLiteral("Reverse")}) {
+      NSView* header = caption(column);
+      for (int row = 0; row < 6; ++row) {
+        NSView* button = field(QStringLiteral("navigationSpaceMouse%1%2")
+                                   .arg(column == QLatin1String("On") ? QStringLiteral("Axis") : QStringLiteral("Reverse")).arg(row));
+        NSRect active, box, title;
+        if (header == nil || !toggleCell(button, active, box, title)) {
+          failures << QStringLiteral("missing %1 checkbox in row %2").arg(column).arg(row); continue;
+        }
+        box = [button convertRect:box toView:page];
+        if (std::abs(NSMinX(box) - NSMinX(rect(header))) > 6) {
+          failures << QStringLiteral("%1 row %2 glyph %3 is outside heading %4")
+                          .arg(column).arg(row).arg(describeRect(box), describeRect(rect(header)));
+        }
+      }
+    }
+    NSView* rotation = field(QStringLiteral("navigationSpaceMouseLockRotation"));
+    NSView* dominant = field(QStringLiteral("navigationSpaceMouseDominant"));
+    NSView* translation = field(QStringLiteral("navigationSpaceMouseLockTranslation"));
+    NSView* horizon = field(QStringLiteral("navigationSpaceMouseLockHorizon"));
+    if (rotation == nil || dominant == nil || translation == nil || horizon == nil ||
+        NSMinX(rect(translation)) <= std::max(NSMaxX(rect(rotation)), NSMaxX(rect(dominant))) ||
+        std::abs(NSMinX(rect(rotation)) - NSMinX(rect(dominant))) > 0.5 ||
+        std::abs(NSMinX(rect(translation)) - NSMinX(rect(horizon))) > 0.5 ||
+        std::abs(NSMidY(rect(rotation)) - NSMidY(rect(translation))) > 1) {
+      failures << QStringLiteral("lock controls do not keep their own two grid columns: %1 / %2")
+                      .arg(describeRect(rect(rotation)), describeRect(rect(translation)));
+    }
+    NSView* onHeading = caption(QStringLiteral("On"));
+    NSView* reverseHeading = caption(QStringLiteral("Reverse"));
+    if (onHeading == nil || reverseHeading == nil || NSMinX(rect(reverseHeading)) - NSMaxX(rect(onHeading)) > 24) {
+      failures << QStringLiteral("On and Reverse headings are separated: %1 / %2")
+                      .arg(describeRect(rect(onHeading)), describeRect(rect(reverseHeading)));
+    }
+  }
+  error = QStringLiteral("Settings %1: %2; %3").arg(pageName, failures.join(QStringLiteral("; ")), measurements.join(QStringLiteral("; ")));
+  if (!failures.isEmpty()) return false;
+  remembered.insert(observed);
+  qInfo().noquote() << QStringLiteral("Native Settings layout: %1, 58pt selector, 5pt tint gap, stable first rows; %2")
+                          .arg(pageName, measurements.join(QStringLiteral("; ")));
+  return true;
 }
 
 bool formLayout(const QStringList& entries, QString& error) {
@@ -5296,11 +5614,11 @@ bool focused(const QString& identifier) {
   return [responder isKindOfClass:NSView.class] && [(NSView*)responder isDescendantOf:view];
 }
 
-bool pointerClick(const QString& identifier, QString& error, double x, double y) {
-  if (!(x >= 0 && x <= 1 && y >= 0 && y <= 1)) {
-    error = QStringLiteral("native pointer coordinates must be fractions from 0 to 1");
-    return false;
-  }
+namespace {
+
+// A press at the fractions of the control's bounds, or without them at its
+// default point (aimPointer).
+bool pointerClickAt(const QString& identifier, QString& error, const NSPoint* fraction) {
   // Keep the same real hit/visibility checks for a cell addressed by its
   // table/row/column, rather than clicking the scroll view's empty area.
   NSView* view = tableCell(identifier, &error);
@@ -5309,9 +5627,27 @@ bool pointerClick(const QString& identifier, QString& error, double x, double y)
     error = QStringLiteral("native control '%1' is disabled").arg(identifier);
     return false;
   }
-  const NSPoint point = NSMakePoint(NSMinX(view.bounds) + NSWidth(view.bounds) * x,
-                                    NSMinY(view.bounds) + NSHeight(view.bounds) * y);
+  const NSPoint requested = fraction == nullptr ? NSZeroPoint
+      : NSMakePoint(NSMinX(view.bounds) + NSWidth(view.bounds) * fraction->x,
+                    NSMinY(view.bounds) + NSHeight(view.bounds) * fraction->y);
+  NSPoint point = NSZeroPoint;
+  if (!aimPointer(view, fraction != nullptr ? &requested : nullptr, point, error)) return false;
   return pointerEvents(view, point, point, error);
+}
+
+} // namespace
+
+bool pointerClick(const QString& identifier, QString& error) {
+  return pointerClickAt(identifier, error, nullptr);
+}
+
+bool pointerClick(const QString& identifier, QString& error, double x, double y) {
+  if (!(x >= 0 && x <= 1 && y >= 0 && y <= 1)) {
+    error = QStringLiteral("native pointer coordinates must be fractions from 0 to 1");
+    return false;
+  }
+  const NSPoint fraction = NSMakePoint(x, y);
+  return pointerClickAt(identifier, error, &fraction);
 }
 
 bool pointerDoubleClick(const QString& identifier, QString& error) {
@@ -5443,8 +5779,80 @@ bool pointerButton(const QRegularExpression& expression, QString& error) {
     error = QStringLiteral("no enabled native button matching '%1'").arg(expression.pattern());
     return false;
   }
-  const NSPoint centre = NSMakePoint(NSMidX(button.bounds), NSMidY(button.bounds));
-  return pointerEvents(button, centre, centre, error);
+  NSPoint point = NSZeroPoint;
+  if (!aimPointer(button, nullptr, point, error)) return false;
+  return pointerEvents(button, point, point, error);
+}
+
+namespace {
+
+char g_headerDragWidthKey;
+
+NSTableColumn* headerColumn(const QString& identifier, int logicalColumn, QString& error) {
+  NSView* view = findControl(identifier);
+  NSScrollView* scroll = [view isKindOfClass:NSScrollView.class] ? (NSScrollView*)view : view.enclosingScrollView;
+  NSTableView* table = [scroll.documentView isKindOfClass:NSTableView.class] ? (NSTableView*)scroll.documentView : nil;
+  NSTableColumn* column = [table tableColumnWithIdentifier:QString::number(logicalColumn).toNSString()];
+  if (table == nil || !table.enabled || table.headerView == nil || column == nil || column.hidden ||
+      (column.resizingMask & NSTableColumnUserResizingMask) == 0) {
+    error = QStringLiteral("native table '%1' has no visible interactive column %2").arg(identifier).arg(logicalColumn);
+    return nil;
+  }
+  return column;
+}
+
+} // namespace
+
+bool resizeHeader(const QString& identifier, int logicalColumn, double delta, QString& error) {
+  NSTableColumn* column = headerColumn(identifier, logicalColumn, error);
+  if (column == nil) return false;
+  NSTableView* table = column.tableView;
+  const NSInteger visual = static_cast<NSInteger>([table.tableColumns indexOfObjectIdenticalTo:column]);
+  [table scrollColumnToVisible:visual];
+  NSTableHeaderView* header = table.headerView;
+  [header.window.contentView layoutSubtreeIfNeeded];
+  const NSRect rect = [header headerRectOfColumn:visual];
+  const double before = column.width;
+  if (!std::isfinite(delta) || std::abs(delta) < 4 || std::abs(delta) > 300 ||
+      before + delta < column.minWidth || before + delta > column.maxWidth) {
+    error = QStringLiteral("native column %1 cannot resize from %2 by %3 within %4..%5")
+        .arg(logicalColumn).arg(before).arg(delta).arg(column.minWidth).arg(column.maxWidth);
+    return false;
+  }
+  // AppKit's divider hit region is at the right edge of the displayed
+  // header cell. These are real press/motion/release events, never a width setter.
+  const NSPoint start = NSMakePoint(NSMaxX(rect) - 1, NSMidY(rect));
+  const NSPoint end = NSMakePoint(start.x + delta, start.y);
+  if (!pointerEvents(header, start, end, error)) return false;
+  const double after = column.width;
+  // AppKit may consume the initial motion as its drag threshold. Qualify
+  // a real, substantial resize in the requested direction and record the
+  // observed width; subsequent refresh checks must retain that exact value.
+  const double moved = after - before;
+  if (column.tableView != table || moved * delta <= 0 || std::abs(moved) < 4 ||
+      std::abs(moved) > std::abs(delta) + 2) {
+    error = QStringLiteral("native header drag '%1' column %2: %3 -> %4, wanted delta %5")
+        .arg(identifier).arg(logicalColumn).arg(before).arg(after).arg(delta);
+    return false;
+  }
+  objc_setAssociatedObject(column, &g_headerDragWidthKey, @(after), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  qInfo().noquote() << QStringLiteral("Native header dragged: %1 column %2 width %3 -> %4, pointer delta %5")
+      .arg(identifier).arg(logicalColumn).arg(before).arg(after).arg(delta);
+  return true;
+}
+
+bool headerResizeRetained(const QString& identifier, int logicalColumn, QString& error) {
+  NSTableColumn* column = headerColumn(identifier, logicalColumn, error);
+  if (column == nil) return false;
+  NSNumber* expected = objc_getAssociatedObject(column, &g_headerDragWidthKey);
+  if (expected == nil || std::abs(column.width - expected.doubleValue) > 0.5) {
+    error = QStringLiteral("native header '%1' column %2 width %3, last dragged width %4 (recorded %5)")
+        .arg(identifier).arg(logicalColumn).arg(column.width).arg(expected.doubleValue).arg(expected != nil);
+    return false;
+  }
+  qInfo().noquote() << QStringLiteral("Native header resize retained: %1 column %2 width %3")
+      .arg(identifier).arg(logicalColumn).arg(column.width);
+  return true;
 }
 
 namespace {

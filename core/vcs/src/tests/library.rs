@@ -387,6 +387,110 @@ fn libraries_are_fetched_and_read_at_their_versions() {
     assert!(repo.dir().starts_with(&cache.root));
 }
 
+/// mitcad#938: the size limit holds for an update too. A library that grows
+/// past it upstream gives `too_large` on the next fetch; the clone keeps the
+/// versions fetched before, readable, and none of the new objects or
+/// references; with room again the update is taken.
+#[test]
+fn an_update_past_the_size_limit_is_not_taken() {
+    let Some(cli) = system_git() else {
+        return;
+    };
+    let scratch = Scratch::new("library-too-large");
+    let mut cache = LibraryCache::new(scratch.join("cache"));
+    assert_eq!(cache.max_size, crate::library::MAX_LIBRARY_SIZE);
+    let source = make_library(&scratch, &cache);
+    let url = file_url(&source);
+    let fetched = library_command(
+        &cache,
+        Some(&cli),
+        json!({"cmd": "library_fetch", "url": url}),
+    );
+    assert_eq!(fetched["error"], Value::Null, "{fetched}");
+    let dir = PathBuf::from(fetched["dir"].as_str().unwrap());
+    let size = crate::library::folder_size(&dir);
+    let (_, v1) = cache.find("test-pins", &url, "v1.0.0").unwrap();
+
+    // Upstream grows by a megabyte that does not compress, in a new tag.
+    let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut noise = Vec::with_capacity(1 << 20);
+    while noise.len() < 1 << 20 {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        noise.extend_from_slice(&seed.to_le_bytes());
+    }
+    fs::write(source.join("noise.bin"), &noise).unwrap();
+    git(&source, &["add", "-A"]).unwrap();
+    git(&source, &["commit", "-q", "-m", "A large file"]).unwrap();
+    git(&source, &["tag", "v2.0.0"]).unwrap();
+
+    cache.max_size = size + (256 << 10);
+    let refused = library_command(
+        &cache,
+        Some(&cli),
+        json!({"cmd": "library_fetch", "url": url}),
+    );
+    assert_eq!(error_class(&refused), "too_large", "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("the versions fetched before stay"),
+        "{refused}"
+    );
+    // The new objects are gone again, and no reference names them.
+    let after = crate::library::folder_size(&dir);
+    assert!(
+        after <= cache.max_size,
+        "{after} bytes of {size}: {refused}"
+    );
+    let refs = git(&dir, &["for-each-ref", "--format=%(refname)"]).unwrap();
+    assert!(!refs.contains("refs/incoming/"), "{refs}");
+    assert!(!refs.contains("v2.0.0"), "{refs}");
+    // The versions fetched before are read as before.
+    let repo = LibraryRepo::open(&dir).unwrap();
+    let labels: Vec<String> = repo
+        .versions()
+        .unwrap()
+        .into_iter()
+        .map(|v| v.label)
+        .collect();
+    assert_eq!(labels, ["v1.1.0", "v1.0.0"]);
+    let (found, commit) = cache.find("test-pins", &url, "v1.0.0").unwrap();
+    assert_eq!((found.dir(), commit), (dir.as_path(), v1));
+    assert!(found.manifest(commit).is_ok());
+    git(&dir, &["fsck", "--no-progress", "--no-dangling"]).unwrap();
+
+    // With room, the same update is taken: the tag and the branch's tip.
+    cache.max_size = crate::library::MAX_LIBRARY_SIZE;
+    let taken = library_command(
+        &cache,
+        Some(&cli),
+        json!({"cmd": "library_fetch", "url": url}),
+    );
+    assert_eq!(taken["error"], Value::Null, "{taken}");
+    let labels: Vec<&str> = taken["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(labels, ["v2.0.0", "v1.1.0", "v1.0.0"], "{taken}");
+    let refs = git(&dir, &["for-each-ref", "--format=%(refname)"]).unwrap();
+    assert!(!refs.contains("refs/incoming/"), "{refs}");
+    let tip = git(&source, &["rev-parse", "HEAD"]).unwrap();
+    assert_eq!(
+        LibraryRepo::open(&dir)
+            .unwrap()
+            .head()
+            .unwrap()
+            .unwrap()
+            .to_string(),
+        tip.trim()
+    );
+}
+
 #[test]
 fn fetches_refuse_what_is_no_library() {
     let Some(cli) = system_git() else {
@@ -646,4 +750,55 @@ fn parts_keep_resolving_after_their_library_is_renamed() {
     let mut reopened = Document::from_json(&saved, MockKernel::default()).unwrap();
     reopened.set_link_resolver(Some(resolver));
     assert_eq!(reopened.update_links(None).unwrap(), Vec::<String>::new());
+}
+
+/// mitcad#938: fetching a library again when nothing changed upstream (Fetch
+/// All) keeps its clone a repository. A fresh clone keeps its references in
+/// packed-refs only; moving the fetched references over once removed
+/// refs/heads/, refs/tags/ and refs/ with them, and the clone could not be
+/// opened any more. A new tag after that is still taken.
+#[test]
+fn fetching_an_unchanged_library_again_keeps_its_clone() {
+    let Some(cli) = system_git() else {
+        return;
+    };
+    let scratch = Scratch::new("library-again");
+    let cache = LibraryCache::new(scratch.join("cache"));
+    let source = make_library(&scratch, &cache);
+    let url = slashes(&source);
+    let fetch = || {
+        library_command(
+            &cache,
+            Some(&cli),
+            json!({"cmd": "library_fetch", "url": url}),
+        )
+    };
+    let first = fetch();
+    assert_eq!(first["error"], Value::Null, "{first}");
+    for _ in 0..2 {
+        let again = fetch();
+        assert_eq!(
+            (
+                again["error"].clone(),
+                again["cloned"].clone(),
+                again["versions"].clone()
+            ),
+            (Value::Null, json!(false), first["versions"].clone()),
+            "{again}"
+        );
+    }
+    let dir = PathBuf::from(first["dir"].as_str().unwrap());
+    assert!(dir.join("refs/heads").is_dir() && dir.join("refs/tags").is_dir());
+    assert!(!dir.join("refs/incoming").exists());
+
+    git(&source, &["tag", "v1.2.0"]).unwrap();
+    let tagged = fetch();
+    assert_eq!(tagged["error"], Value::Null, "{tagged}");
+    let labels: Vec<&str> = tagged["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v["label"].as_str())
+        .collect();
+    assert!(labels.contains(&"v1.2.0"), "{tagged}");
 }

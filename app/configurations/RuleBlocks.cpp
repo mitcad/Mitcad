@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "RuleBlocks.hpp"
 
+#include <algorithm>
 #include <utility>
 
 #include <QJsonArray>
@@ -1256,29 +1257,60 @@ std::vector<PaletteEntry> paletteEntries() {
   const QString logic = QStringLiteral("Logic");
   const QString values = QStringLiteral("Values");
   const QString actions = QStringLiteral("Actions");
+  // Each tip says what the block does, with an example in the rule's text
+  // form (mitcad#967).
   return {
-      {QStringLiteral("when"), QStringLiteral("when … then"), rule},
-      {QStringLiteral("always"), QStringLiteral("then (always)"), rule},
-      {QStringLiteral("else"), QStringLiteral("else"), rule},
-      {QStringLiteral("and"), QStringLiteral("and"), logic},
-      {QStringLiteral("or"), QStringLiteral("or"), logic},
-      {QStringLiteral("not"), QStringLiteral("not"), logic},
-      {QStringLiteral("compare"), QStringLiteral("compare"), logic},
-      {QStringLiteral("one_of"), QStringLiteral("is one of"), logic},
-      {QStringLiteral("option"), QStringLiteral("option"), values},
-      {QStringLiteral("parameter"), QStringLiteral("parameter"), values},
-      {QStringLiteral("number"), QStringLiteral("number with unit"), values},
-      {QStringLiteral("text"), QStringLiteral("text"), values},
-      {QStringLiteral("column"), QStringLiteral("table column"), values},
-      {QStringLiteral("formula"), QStringLiteral("formula"), values},
-      {QStringLiteral("allow_only"), QStringLiteral("allow only"), actions},
-      {QStringLiteral("exclude"), QStringLiteral("exclude"), actions},
-      {QStringLiteral("min"), QStringLiteral("min"), actions},
-      {QStringLiteral("max"), QStringLiteral("max"), actions},
-      {QStringLiteral("step"), QStringLiteral("step"), actions},
-      {QStringLiteral("require"), QStringLiteral("require"), actions},
-      {QStringLiteral("forbid"), QStringLiteral("forbid"), actions},
-      {QStringLiteral("in_table"), QStringLiteral("combination in table"), actions},
+      {QStringLiteral("when"), QStringLiteral("when … then"), rule,
+       QStringLiteral("Gives the rule a condition: its actions apply only while it holds. Example: when Color == "
+                      "'Black'.")},
+      {QStringLiteral("always"), QStringLiteral("then (always)"), rule,
+       QStringLiteral("Takes the condition away: the rule's actions always apply. Example: always then Length max "
+                      "2000 mm.")},
+      {QStringLiteral("else"), QStringLiteral("else"), rule,
+       QStringLiteral("Adds actions for when the condition does not hold. Example: else Length min 500 mm.")},
+      {QStringLiteral("and"), QStringLiteral("and"), logic,
+       QStringLiteral("True when all of its conditions hold. Example: and(Color == 'Red'; Size == 'XL').")},
+      {QStringLiteral("or"), QStringLiteral("or"), logic,
+       QStringLiteral("True when at least one of its conditions holds. Example: or(Size == 'XL'; Length > 1500 "
+                      "mm).")},
+      {QStringLiteral("not"), QStringLiteral("not"), logic,
+       QStringLiteral("True when its condition does not hold. Example: not(Tables == 0).")},
+      {QStringLiteral("compare"), QStringLiteral("compare"), logic,
+       QStringLiteral("Compares two values: equal, not equal, less or greater. Example: Length >= 1000 mm.")},
+      {QStringLiteral("one_of"), QStringLiteral("is one of"), logic,
+       QStringLiteral("True when the option has one of the listed values. Example: Color is one of 'Red', "
+                      "'Black'.")},
+      {QStringLiteral("option"), QStringLiteral("option"), values,
+       QStringLiteral("An option of this design, by its name. Example: Color.")},
+      {QStringLiteral("parameter"), QStringLiteral("parameter"), values,
+       QStringLiteral("Any parameter of the design, also one that is no option. Example: Wall.")},
+      {QStringLiteral("number"), QStringLiteral("number with unit"), values,
+       QStringLiteral("A number with its unit; a length or an angle needs one. Example: 1000 mm.")},
+      {QStringLiteral("text"), QStringLiteral("text"), values,
+       QStringLiteral("A text, such as a value of a text option. Example: Black, written 'Black' in the text.")},
+      {QStringLiteral("column"), QStringLiteral("table column"), values,
+       QStringLiteral("All the values of a column of one of the design's tables. Example: Screws.Size.")},
+      {QStringLiteral("formula"), QStringLiteral("formula"), values,
+       QStringLiteral("Any expression, written in the Formula Editor. Example: Length / 4.")},
+      {QStringLiteral("allow_only"), QStringLiteral("allow only"), actions,
+       QStringLiteral("Allows an option only the listed values. Example: Power only 0.")},
+      {QStringLiteral("exclude"), QStringLiteral("exclude"), actions,
+       QStringLiteral("Takes the listed values away from an option. Example: Color not 'Red'.")},
+      {QStringLiteral("min"), QStringLiteral("min"), actions,
+       QStringLiteral("Limits a number option's smallest value. Example: Length min 300 mm.")},
+      {QStringLiteral("max"), QStringLiteral("max"), actions,
+       QStringLiteral("Limits an option's largest value. Example: Length max 1000 mm.")},
+      {QStringLiteral("step"), QStringLiteral("step"), actions,
+       QStringLiteral("Lets a number option change only in steps of this size. Example: Length step 10 mm.")},
+      {QStringLiteral("require"), QStringLiteral("require"), actions,
+       QStringLiteral("The combination is allowed only while this holds; otherwise the message shows. Example: "
+                      "require Depth >= Length / 4: too shallow.")},
+      {QStringLiteral("forbid"), QStringLiteral("forbid"), actions,
+       QStringLiteral("Forbids the combination while the rule applies, with a message. Example: forbid: Red is "
+                      "not made in XL.")},
+      {QStringLiteral("in_table"), QStringLiteral("combination in table"), actions,
+       QStringLiteral("Allows only the combinations that are rows of a table. Example: combination in table "
+                      "Made.")},
   };
 }
 
@@ -1311,6 +1343,827 @@ bool applyRuleEntry(Rule& rule, const QString& id) {
     return true;
   }
   return false;
+}
+
+// Rules written as text (mitcad#965) and the rules Add makes (mitcad#966).
+
+namespace {
+
+const OptionInfo* findOption(const std::vector<OptionInfo>& options, const QString& name) {
+  for (const OptionInfo& option : options) {
+    if (option.name == name) {
+      return &option;
+    }
+  }
+  return nullptr;
+}
+
+QStringList optionNames(const std::vector<OptionInfo>& options) {
+  QStringList names;
+  for (const OptionInfo& option : options) {
+    names << option.name;
+  }
+  return names;
+}
+
+// A block read from text prints canonically: `=` as `==`, `!=` as `<>`,
+// `AND` as `and`.
+void canonicalize(Block& block) {
+  block.source.clear();
+  if (block.kind == BlockKind::Compare) {
+    if (block.text == QLatin1String("=")) {
+      block.text = QStringLiteral("==");
+    } else if (block.text == QLatin1String("!=")) {
+      block.text = QStringLiteral("<>");
+    }
+  } else if (block.kind == BlockKind::And || block.kind == BlockKind::Or || block.kind == BlockKind::Not) {
+    block.text = block.text.toLower();
+  }
+  for (Block& child : block.children) {
+    canonicalize(child);
+  }
+}
+
+Block canonicalExpression(const QString& text) {
+  Block block = parseExpression(text);
+  canonicalize(block);
+  return block;
+}
+
+// A mistake in an expression's text that its blocks would hide in a
+// formula block: a text that is not closed, a parenthesis without its pair,
+// the `…` of an empty place. The index in the text (-1 when none) and why.
+int expressionProblem(const QString& text, QString* reason) {
+  std::vector<int> opens;
+  for (const Token& token : tokenize(text)) {
+    if (token.type == Tok::Bad) {
+      *reason = QStringLiteral("a text is not closed: end it with %1").arg(text.at(token.start));
+      return token.start;
+    }
+    if (token.type != Tok::Op) {
+      continue;
+    }
+    if (token.text == QLatin1String("(")) {
+      opens.push_back(token.start);
+    } else if (token.text == QLatin1String(")")) {
+      if (opens.empty()) {
+        *reason = QStringLiteral("this ) has no ( before it");
+        return token.start;
+      }
+      opens.pop_back();
+    } else if (token.text == QStringLiteral("…")) {
+      *reason = QStringLiteral("a value is missing here");
+      return token.start;
+    }
+  }
+  if (!opens.empty()) {
+    *reason = QStringLiteral("this ( is not closed");
+    return opens.back();
+  }
+  return -1;
+}
+
+// The parts of a text between its `;` that are not in parentheses: each
+// part's start and end.
+std::vector<std::pair<int, int>> topLevelParts(const QString& text) {
+  std::vector<std::pair<int, int>> parts;
+  int depth = 0;
+  int start = 0;
+  for (const Token& token : tokenize(text)) {
+    if (token.type != Tok::Op) {
+      continue;
+    }
+    if (token.text == QLatin1String("(")) {
+      ++depth;
+    } else if (token.text == QLatin1String(")")) {
+      --depth;
+    } else if (depth == 0 && token.text == QLatin1String(";")) {
+      parts.emplace_back(start, token.start);
+      start = token.end;
+    }
+  }
+  parts.emplace_back(start, static_cast<int>(text.size()));
+  return parts;
+}
+
+bool hasUnit(const QString& number) {
+  for (const Token& token : tokenize(number)) {
+    if (token.type == Tok::Name && isUnit(token.text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The index of a name in an expression's text, as a name of its own (not in
+// a text); 0 when it is not found.
+int nameIndex(const QString& text, const QString& name) {
+  for (const Token& token : tokenize(text)) {
+    if (token.type == Tok::Name && token.text == name) {
+      return token.start;
+    }
+  }
+  return 0;
+}
+
+// Reads the lines of a rule (ruleFromText).
+class TextReader {
+public:
+  TextReader(const Rule& base, const std::vector<OptionInfo>& options, TextProblem* problem)
+      : m_base(base), m_options(options), m_problem(problem), m_usedThen(base.then.size(), false),
+        m_usedElse(base.otherwise.size(), false) {
+    for (const auto* list : {&base.then, &base.otherwise}) {
+      for (const Block& action : *list) {
+        m_nextGroup = std::max(m_nextGroup, action.group + 1);
+      }
+    }
+    m_firstNewGroup = m_nextGroup;
+    m_rule.name = base.name;
+    m_rule.enabled = base.enabled;
+    m_rule.enabledWritten = base.enabledWritten;
+    m_rule.extra = base.extra;
+  }
+
+  bool read(const QString& input) {
+    QString text = input;
+    text.replace(QChar(QChar::LineSeparator), QLatin1Char('\n'));
+    text.replace(QChar(QChar::ParagraphSeparator), QLatin1Char('\n'));
+    const QStringList lines = text.split(QLatin1Char('\n'));
+    bool started = false; // a when, always, then or else line was read
+    for (int i = 0; i < static_cast<int>(lines.size()); ++i) {
+      m_number = i + 1;
+      QString line = lines.at(i);
+      if (line.endsWith(QLatin1Char('\r'))) {
+        line.chop(1);
+      }
+      if (line.trimmed().isEmpty()) {
+        continue;
+      }
+      const std::vector<Token> tokens = tokenize(line);
+      const Token& first = tokens.front();
+      const QString word = first.type == Tok::Name ? first.text.toLower() : QString();
+      if (word == QLatin1String("when") || word == QLatin1String("always")) {
+        if (started) {
+          return fail(first.start, first.end - first.start,
+                      QStringLiteral("the when or always line comes first, and only once"));
+        }
+        started = true;
+        // `when … then <action>` (or `always then <action>`) on one line.
+        std::size_t thenAt = 0;
+        int depth = 0;
+        for (std::size_t k = 1; k < tokens.size() && thenAt == 0; ++k) {
+          const Token& token = tokens[k];
+          if (token.type == Tok::Op && token.text == QLatin1String("(")) {
+            ++depth;
+          } else if (token.type == Tok::Op && token.text == QLatin1String(")")) {
+            --depth;
+          } else if (depth == 0 && token.type == Tok::Name && token.text.toLower() == QLatin1String("then")) {
+            thenAt = k;
+          }
+        }
+        const int end = thenAt > 0 ? tokens[thenAt].start : static_cast<int>(line.size());
+        if (word == QLatin1String("always")) {
+          if (tokens.size() > 1 && thenAt != 1) {
+            return fail(tokens[1].start, tokens[1].end - tokens[1].start,
+                        QStringLiteral("always has no condition: write when <condition>, or the actions on then "
+                                       "lines"));
+          }
+          m_rule.hasWhen = false;
+        } else if (!readWhen(line, first.end, end)) {
+          return false;
+        }
+        if (thenAt > 0 && !readAction(line, tokens[thenAt].end, 1)) {
+          return false;
+        }
+      } else if (word == QLatin1String("then") || word == QLatin1String("else")) {
+        started = true;
+        const int section = word == QLatin1String("then") ? 1 : 2;
+        if (section == 2) {
+          m_rule.hasElse = true;
+        }
+        if (!readAction(line, first.end, section)) {
+          return false;
+        }
+      } else {
+        return fail(first.start, first.end - first.start,
+                    QStringLiteral("a line starts with when, always, then or else"));
+      }
+    }
+    return true;
+  }
+
+  const Rule& rule() const { return m_rule; }
+
+private:
+  bool fail(int index, int length, const QString& reason) {
+    if (m_problem != nullptr) {
+      m_problem->line = m_number;
+      m_problem->column = index + 1;
+      m_problem->length = std::max(1, length);
+      m_problem->reason = reason;
+    }
+    return false;
+  }
+
+  // The expression in line[from, to): read, canonical, checked.
+  bool expression(const QString& line, int from, int to, const QString& missing, Block* out) {
+    int start = from;
+    while (start < to && line.at(start).isSpace()) {
+      ++start;
+    }
+    const QString text = line.mid(start, to - start).trimmed();
+    if (text.isEmpty()) {
+      return fail(from, 1, missing);
+    }
+    QString reason;
+    if (const int bad = expressionProblem(text, &reason); bad >= 0) {
+      return fail(start + bad, 1, reason);
+    }
+    Block block = canonicalExpression(text);
+    if (!checkTexts(block, text, start)) {
+      return false;
+    }
+    *out = std::move(block);
+    return true;
+  }
+
+  // A text option compared with one of its values written without quotes
+  // (`Color == Black`): the value is a text.
+  bool checkTexts(const Block& block, const QString& text, int start) {
+    if ((block.kind == BlockKind::Compare || block.kind == BlockKind::OneOf) && !block.children.empty() &&
+        block.children.front().kind == BlockKind::Name) {
+      if (const OptionInfo* option = findOption(m_options, block.children.front().text);
+          option != nullptr && option->text) {
+        for (std::size_t i = 1; i < block.children.size(); ++i) {
+          const Block& compared = block.children[i];
+          if (compared.kind == BlockKind::Name && option->texts.contains(compared.text) &&
+              findOption(m_options, compared.text) == nullptr) {
+            return fail(start + nameIndex(text, compared.text), static_cast<int>(compared.text.size()),
+                        QStringLiteral("%1 is a text: write it in quotes, '%1'").arg(compared.text));
+          }
+        }
+      }
+    }
+    for (const Block& child : block.children) {
+      if (!checkTexts(child, text, start)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // A value of an action on `option`, in line[from, to).
+  bool value(const QString& line, int from, int to, const QString& missing, const OptionInfo* option, Block* out) {
+    if (!expression(line, from, to, missing, out)) {
+      return false;
+    }
+    if (option == nullptr) {
+      return true;
+    }
+    int start = from;
+    while (start < to && line.at(start).isSpace()) {
+      ++start;
+    }
+    const int length = static_cast<int>(line.mid(start, to - start).trimmed().size());
+    const Block& block = *out;
+    if (option->text && block.kind == BlockKind::Name && option->texts.contains(block.text) &&
+        findOption(m_options, block.text) == nullptr) {
+      return fail(start, length, QStringLiteral("%1 is a text: write it in quotes, '%1'").arg(block.text));
+    }
+    if (option->text && block.kind == BlockKind::Number) {
+      return fail(start, length, QStringLiteral("%1 is a text option: write its values in quotes").arg(option->name));
+    }
+    if (!option->text && block.kind == BlockKind::Text) {
+      return fail(start, length,
+                  QStringLiteral("%1 is a number option: '%2' is a text").arg(option->name, block.text));
+    }
+    if (!option->text && !option->unit.isEmpty() && block.kind == BlockKind::Number && !hasUnit(block.text)) {
+      return fail(start, length,
+                  QStringLiteral("%1 needs a unit: %2 is in %3 (%1 %3)").arg(block.text, option->name, option->unit));
+    }
+    return true;
+  }
+
+  bool readWhen(const QString& line, int from, int to) {
+    m_rule.hasWhen = true;
+    const QString condition = line.mid(from, to - from).trimmed();
+    // Unchanged: the base's condition as it was written.
+    if (m_base.hasWhen && !condition.isEmpty() && condition == printExpression(m_base.when).trimmed()) {
+      m_rule.when = m_base.when;
+      return true;
+    }
+    return expression(line, from, to, QStringLiteral("a condition is missing after when"), &m_rule.when);
+  }
+
+  bool readAction(const QString& line, int from, int section) {
+    std::vector<Block>& list = section == 1 ? m_rule.then : m_rule.otherwise;
+    const QString word = section == 1 ? QStringLiteral("then") : QStringLiteral("else");
+    int lead = from;
+    while (lead < static_cast<int>(line.size()) && line.at(lead).isSpace()) {
+      ++lead;
+    }
+    const QString text = line.mid(lead).trimmed();
+    if (text.isEmpty()) {
+      return fail(from, 1, QStringLiteral("an action is missing after %1").arg(word));
+    }
+    // Unchanged: the base's block as it was (its text, its JSON object).
+    const std::vector<Block>& baseList = section == 1 ? m_base.then : m_base.otherwise;
+    std::vector<bool>& used = section == 1 ? m_usedThen : m_usedElse;
+    for (std::size_t k = 0; k < baseList.size(); ++k) {
+      if (!used[k] && actionText(baseList[k]) == text) {
+        used[k] = true;
+        list.push_back(baseList[k]);
+        return true;
+      }
+    }
+    if (text.compare(QLatin1String("nothing"), Qt::CaseInsensitive) == 0) {
+      return true;
+    }
+    Block block;
+    if (text.startsWith(QLatin1Char('{'))) {
+      QJsonParseError error{};
+      const QJsonDocument document = QJsonDocument::fromJson(text.toUtf8(), &error);
+      if (!document.isObject()) {
+        return fail(lead, static_cast<int>(text.size()),
+                    QStringLiteral("this action is no JSON object: %1").arg(error.errorString()));
+      }
+      block = otherAction(document.object());
+    } else if (!readKnownAction(line, lead, text, word, &block)) {
+      return false;
+    }
+    // The option actions of one option written one after another are one
+    // JSON object, as the model writes them (`{"option", "min", "max"}`).
+    const bool joins = isOptionAction(block.kind) && !list.empty() && list.back().group >= m_firstNewGroup &&
+                       isOptionAction(list.back().kind) && list.back().text == block.text &&
+                       list.back().kind != block.kind;
+    block.group = joins ? list.back().group : m_nextGroup++;
+    list.push_back(std::move(block));
+    return true;
+  }
+
+  bool readKnownAction(const QString& line, int lead, const QString& text, const QString& section, Block* out) {
+    const std::vector<Token> tokens = tokenize(text);
+    const Token& first = tokens.front();
+    const QString word = first.type == Tok::Name ? first.text.toLower() : QString();
+    Block& block = *out;
+    if (word == QLatin1String("forbid")) {
+      int at = first.end;
+      if (tokens.size() > 1 && tokens[1].type == Tok::Op && tokens[1].text == QLatin1String(":")) {
+        at = tokens[1].end;
+      }
+      block.kind = BlockKind::Forbid;
+      block.message = text.mid(at).trimmed();
+      return true;
+    }
+    if (word == QLatin1String("require")) {
+      std::size_t colon = 0;
+      int depth = 0;
+      for (std::size_t k = 1; k < tokens.size() && colon == 0; ++k) {
+        if (tokens[k].type != Tok::Op) {
+          continue;
+        }
+        if (tokens[k].text == QLatin1String("(")) {
+          ++depth;
+        } else if (tokens[k].text == QLatin1String(")")) {
+          --depth;
+        } else if (depth == 0 && tokens[k].text == QLatin1String(":")) {
+          colon = k;
+        }
+      }
+      const int end = colon > 0 ? tokens[colon].start : static_cast<int>(text.size());
+      Block condition;
+      if (!expression(line, lead + first.end, lead + end, QStringLiteral("a condition is missing after require"),
+                      &condition)) {
+        return false;
+      }
+      block.kind = BlockKind::Require;
+      block.children.push_back(std::move(condition));
+      if (colon > 0) {
+        block.message = text.mid(tokens[colon].end).trimmed();
+        block.data.insert(QStringLiteral("message"), true);
+      }
+      return true;
+    }
+    if (word == QLatin1String("combination") || word == QLatin1String("in")) {
+      const std::size_t in = word == QLatin1String("combination") ? 1 : 0;
+      const auto isWord = [&tokens](std::size_t k, const char* expected) {
+        return k < tokens.size() && tokens[k].type == Tok::Name &&
+               tokens[k].text.toLower() == QLatin1String(expected);
+      };
+      if (!isWord(in, "in") || !isWord(in + 1, "table")) {
+        return fail(lead, static_cast<int>(text.size()), QStringLiteral("write combination in table <table>"));
+      }
+      const std::size_t at = in + 2;
+      if (at >= tokens.size() || (tokens[at].type != Tok::Name && tokens[at].type != Tok::Text)) {
+        return fail(lead + static_cast<int>(text.size()), 1, QStringLiteral("the table's name is missing"));
+      }
+      block.kind = BlockKind::InTable;
+      block.text = tokens[at].text;
+      const int after = tokens[at].end;
+      const QString columns = text.mid(after).trimmed();
+      if (columns.isEmpty()) {
+        return true;
+      }
+      const int columnsAt = lead + after + static_cast<int>(text.mid(after).indexOf(columns.at(0)));
+      if (!columns.startsWith(QLatin1Char('(')) || !columns.endsWith(QLatin1Char(')'))) {
+        return fail(columnsAt, static_cast<int>(columns.size()),
+                    QStringLiteral("the columns are written in parentheses: (Color = Color, Length = Length)"));
+      }
+      const QStringList pairs = columns.mid(1, columns.size() - 2).split(QLatin1Char(','));
+      for (const QString& pair : pairs) {
+        if (pair.trimmed().isEmpty()) {
+          continue;
+        }
+        const qsizetype equals = pair.indexOf(QLatin1Char('='));
+        const QString option = equals > 0 ? pair.left(equals).trimmed() : QString();
+        const QString column = equals > 0 ? pair.mid(equals + 1).trimmed() : QString();
+        if (option.isEmpty() || column.isEmpty()) {
+          return fail(columnsAt, static_cast<int>(columns.size()),
+                      QStringLiteral("a column is written <option> = <column>: %1").arg(pair.trimmed()));
+        }
+        if (!m_options.empty() && findOption(m_options, option) == nullptr) {
+          return fail(columnsAt, static_cast<int>(columns.size()), unknownOption(option));
+        }
+        block.data.insert(option, column);
+      }
+      return true;
+    }
+    // <option> <action> <values>
+    const QString actions = QStringLiteral("write min, max, step, only, not, require, forbid or combination in table");
+    if (first.type != Tok::Name) {
+      return fail(lead + first.start, first.end - first.start,
+                  QStringLiteral("an option or an action is missing after %1: %2").arg(section, actions));
+    }
+    const QString option = first.text;
+    const OptionInfo* info = findOption(m_options, option);
+    if (!m_options.empty() && info == nullptr) {
+      return fail(lead + first.start, first.end - first.start, unknownOption(option));
+    }
+    if (tokens.size() < 2) {
+      return fail(lead + first.end, 1, QStringLiteral("an action is missing after %1: %2").arg(option, actions));
+    }
+    const Token& verb = tokens[1];
+    const QString name = verb.text.toLower();
+    std::size_t valuesFrom = 2;
+    BlockKind kind = BlockKind::Empty;
+    if (verb.type == Tok::Name) {
+      if (name == QLatin1String("allow") && tokens.size() > 2 && tokens[2].type == Tok::Name &&
+          tokens[2].text.toLower() == QLatin1String("only")) {
+        kind = BlockKind::AllowOnly;
+        valuesFrom = 3;
+      } else if (name == QLatin1String("only")) {
+        kind = BlockKind::AllowOnly;
+      } else if (name == QLatin1String("not") || name == QLatin1String("exclude")) {
+        kind = BlockKind::Exclude;
+      } else if (name == QLatin1String("min")) {
+        kind = BlockKind::Min;
+      } else if (name == QLatin1String("max")) {
+        kind = BlockKind::Max;
+      } else if (name == QLatin1String("step")) {
+        kind = BlockKind::Step;
+      }
+    }
+    if (kind == BlockKind::Empty) {
+      return fail(lead + verb.start, verb.end - verb.start,
+                  QStringLiteral("%1 is no action: %2").arg(verb.text, actions));
+    }
+    const bool range = kind == BlockKind::Min || kind == BlockKind::Max || kind == BlockKind::Step;
+    if (range && info != nullptr && info->text) {
+      return fail(lead + verb.start, verb.end - verb.start,
+                  QStringLiteral("%1 is a text option: min, max and step are for numbers").arg(option));
+    }
+    const QString verbText = text.mid(verb.start, tokens[valuesFrom - 1].end - verb.start);
+    const int valuesAt = valuesFrom < tokens.size() ? tokens[valuesFrom].start : static_cast<int>(text.size());
+    block.kind = kind;
+    block.text = option;
+    const QString missing = QStringLiteral("a value is missing after %1").arg(verbText);
+    if (range) {
+      Block one;
+      if (!value(line, lead + valuesAt, lead + static_cast<int>(text.size()), missing, info, &one)) {
+        return false;
+      }
+      block.children.push_back(std::move(one));
+      return true;
+    }
+    const QString values = text.mid(valuesAt);
+    if (values.trimmed().isEmpty()) {
+      return fail(lead + valuesAt, 1, missing);
+    }
+    for (const auto& [from, to] : topLevelParts(values)) {
+      Block one;
+      if (!value(line, lead + valuesAt + from, lead + valuesAt + to,
+                 QStringLiteral("a value is missing between the ;"), info, &one)) {
+        return false;
+      }
+      block.children.push_back(std::move(one));
+    }
+    return true;
+  }
+
+  QString unknownOption(const QString& name) const {
+    return QStringLiteral("%1 is not an option of this design: the options are %2")
+        .arg(name, optionNames(m_options).join(QStringLiteral(", ")));
+  }
+
+  const Rule& m_base;
+  const std::vector<OptionInfo>& m_options;
+  TextProblem* m_problem = nullptr;
+  std::vector<bool> m_usedThen;
+  std::vector<bool> m_usedElse;
+  int m_nextGroup = 0;
+  int m_firstNewGroup = 0;
+  int m_number = 0;
+  Rule m_rule;
+};
+
+// What a template makes: its rule's text and name, or why it cannot.
+struct TemplatePlan {
+  QStringList lines;
+  QString name;
+  QString why;
+};
+
+TemplatePlan planTemplate(const QString& id, const std::vector<OptionInfo>& options, const QString& table,
+                          const QStringList& tableColumns) {
+  TemplatePlan plan;
+  const auto valued = [](const OptionInfo& option) { return !option.first.isEmpty(); };
+  // The condition's option: the first text option, else the first other
+  // option with a value, besides `other`.
+  const auto conditionBesides = [&options, &valued](const OptionInfo* other) -> const OptionInfo* {
+    for (const OptionInfo& option : options) {
+      if (option.text && valued(option) && &option != other) {
+        return &option;
+      }
+    }
+    for (const OptionInfo& option : options) {
+      if (valued(option) && &option != other) {
+        return &option;
+      }
+    }
+    return nullptr;
+  };
+  const auto otherThan = [&options, &valued](const OptionInfo* one) -> const OptionInfo* {
+    for (const OptionInfo& option : options) {
+      if (valued(option) && &option != one) {
+        return &option;
+      }
+    }
+    return nullptr;
+  };
+  const auto when = [](const OptionInfo& option) {
+    return QStringLiteral("when %1 == %2").arg(option.name, option.first);
+  };
+  const QString noOptions = QStringLiteral("The design has no options yet (the Options tab)");
+  if (id == QLatin1String("range")) {
+    const OptionInfo* number = nullptr;
+    for (const OptionInfo& option : options) {
+      if (!option.text && (!option.max.isEmpty() || valued(option))) {
+        number = &option;
+        break;
+      }
+    }
+    if (number == nullptr) {
+      plan.why = QStringLiteral("The design has no number option: a range is a number's");
+      return plan;
+    }
+    const OptionInfo* condition = conditionBesides(number);
+    if (condition != nullptr) {
+      plan.lines << when(*condition);
+    }
+    plan.lines << QStringLiteral("then %1 max %2").arg(number->name, number->max.isEmpty() ? number->first : number->max);
+    plan.name = condition != nullptr
+                    ? QStringLiteral("Limit %1 when %2 is %3").arg(number->name, condition->name, condition->firstText)
+                    : QStringLiteral("Limit %1").arg(number->name);
+  } else if (id == QLatin1String("allow")) {
+    const OptionInfo* condition = conditionBesides(nullptr);
+    if (condition == nullptr) {
+      plan.why = noOptions;
+      return plan;
+    }
+    if (const OptionInfo* target = otherThan(condition)) {
+      plan.lines << when(*condition) << QStringLiteral("then %1 only %2").arg(target->name, target->first);
+      plan.name = QStringLiteral("%1 only %2 when %3 is %4")
+                      .arg(target->name, target->firstText, condition->name, condition->firstText);
+    } else {
+      plan.lines << QStringLiteral("then %1 only %2").arg(condition->name, condition->first);
+      plan.name = QStringLiteral("%1 only %2").arg(condition->name, condition->firstText);
+    }
+  } else if (id == QLatin1String("forbid")) {
+    const OptionInfo* a = conditionBesides(nullptr);
+    if (a == nullptr) {
+      plan.why = noOptions;
+      return plan;
+    }
+    if (const OptionInfo* b = otherThan(a)) {
+      plan.lines << QStringLiteral("when and(%1 == %2; %3 == %4)").arg(a->name, a->first, b->name, b->first)
+                 << QStringLiteral("then forbid: %1 with %2 is not made").arg(a->firstText, b->firstText);
+      plan.name = QStringLiteral("No %1 with %2").arg(a->firstText, b->firstText);
+    } else {
+      plan.lines << when(*a) << QStringLiteral("then forbid: %1 is not made").arg(a->firstText);
+      plan.name = QStringLiteral("No %1").arg(a->firstText);
+    }
+  } else if (id == QLatin1String("table")) {
+    if (table.isEmpty()) {
+      plan.why = QStringLiteral("The design has no tables (Change Parameters, Tables)");
+      return plan;
+    }
+    const QJsonObject columns = inTableColumns(tableColumns, optionNames(options), QJsonObject());
+    QStringList pairs;
+    for (auto it = columns.begin(); it != columns.end(); ++it) {
+      pairs << QStringLiteral("%1 = %2").arg(it.key(), it.value().toString());
+    }
+    plan.lines << (pairs.isEmpty() ? QStringLiteral("then combination in table %1").arg(table)
+                                   : QStringLiteral("then combination in table %1 (%2)")
+                                         .arg(table, pairs.join(QStringLiteral(", "))));
+    plan.name = QStringLiteral("Combinations in %1").arg(table);
+  } else if (id == QLatin1String("empty")) {
+    plan.name = QStringLiteral("Rule");
+  } else {
+    plan.why = QStringLiteral("No such template");
+  }
+  return plan;
+}
+
+} // namespace
+
+QString TextProblem::text() const {
+  return QStringLiteral("Line %1, column %2: %3").arg(line).arg(column).arg(reason);
+}
+
+std::vector<OptionInfo> optionInfos(const QJsonObject& configureAnswer) {
+  std::vector<OptionInfo> infos;
+  const QJsonArray options = configureAnswer.value(QStringLiteral("options")).toArray();
+  for (const QJsonValue& entry : options) {
+    const QJsonObject option = entry.toObject();
+    OptionInfo info;
+    info.name = option.value(QStringLiteral("name")).toString();
+    if (info.name.isEmpty()) {
+      continue;
+    }
+    info.text = option.value(QStringLiteral("kind")).toString() == QLatin1String("text");
+    info.unit = info.text ? QString() : option.value(QStringLiteral("unit")).toString();
+    const QJsonObject domain = option.value(QStringLiteral("domain")).toObject();
+    const QString kind = domain.value(QStringLiteral("kind")).toString();
+    if (kind == QLatin1String("list")) {
+      double low = 0.0;
+      double high = 0.0;
+      bool any = false;
+      const QJsonArray values = domain.value(QStringLiteral("values")).toArray();
+      for (const QJsonValue& item : values) {
+        const QJsonObject listed = item.toObject();
+        const QString expression = listed.value(QStringLiteral("expression")).toString();
+        const QString shown = listed.value(QStringLiteral("text")).toString();
+        if (info.first.isEmpty()) {
+          info.first = expression;
+          info.firstText = shown.isEmpty() ? expression : shown;
+        }
+        info.texts << shown;
+        const QJsonValue number = listed.value(QStringLiteral("value"));
+        if (!info.text && number.isDouble()) {
+          const double x = number.toDouble();
+          if (!any || x < low) {
+            low = x;
+            info.min = expression;
+          }
+          if (!any || x > high) {
+            high = x;
+            info.max = expression;
+          }
+          any = true;
+        }
+      }
+    } else if (kind == QLatin1String("range")) {
+      info.min = domain.value(QStringLiteral("min_text")).toString();
+      info.max = domain.value(QStringLiteral("max_text")).toString();
+      info.step = domain.value(QStringLiteral("step_text")).toString();
+      info.first = info.min;
+      info.firstText = info.min;
+    }
+    if (info.first.isEmpty()) {
+      info.first = option.value(QStringLiteral("expression")).toString();
+      const QString shown = option.value(QStringLiteral("text")).toString();
+      info.firstText = shown.isEmpty() ? info.first : shown;
+    }
+    infos.push_back(std::move(info));
+  }
+  return infos;
+}
+
+bool ruleFromText(const QString& text, const Rule& base, const std::vector<OptionInfo>& options, Rule* rule,
+                  TextProblem* problem) {
+  TextReader reader(base, options, problem);
+  if (!reader.read(text)) {
+    return false;
+  }
+  if (rule != nullptr) {
+    *rule = reader.rule();
+  }
+  return true;
+}
+
+QStringList exampleRuleText(const std::vector<OptionInfo>& options) {
+  const OptionInfo* text = nullptr;
+  const OptionInfo* number = nullptr;
+  for (const OptionInfo& option : options) {
+    if (option.text && !option.first.isEmpty() && text == nullptr) {
+      text = &option;
+    } else if (!option.text && (!option.max.isEmpty() || !option.first.isEmpty()) && number == nullptr) {
+      number = &option;
+    }
+  }
+  return {text != nullptr ? QStringLiteral("when %1 == %2").arg(text->name, text->first)
+                          : QStringLiteral("when Color == 'Black'"),
+          number != nullptr
+              ? QStringLiteral("then %1 max %2").arg(number->name, number->max.isEmpty() ? number->first : number->max)
+              : QStringLiteral("then Length max 1000 mm")};
+}
+
+void fillSockets(Block& action, const std::vector<OptionInfo>& options) {
+  QString value;
+  const OptionInfo* option = findOption(options, action.text);
+  switch (action.kind) {
+  case BlockKind::Min:
+  case BlockKind::Max:
+  case BlockKind::Step:
+    if (option != nullptr && !option->text) {
+      if (action.kind == BlockKind::Min) {
+        value = option->min.isEmpty() ? option->first : option->min;
+      } else if (action.kind == BlockKind::Max) {
+        value = option->max.isEmpty() ? option->first : option->max;
+      } else {
+        value = !option->step.isEmpty() ? option->step
+                : option->unit.isEmpty() ? QStringLiteral("1")
+                                         : QStringLiteral("1 %1").arg(option->unit);
+      }
+    }
+    break;
+  case BlockKind::AllowOnly:
+  case BlockKind::Exclude:
+    if (option != nullptr) {
+      value = option->first;
+    }
+    break;
+  case BlockKind::Require:
+    for (const OptionInfo& first : options) {
+      if (!first.first.isEmpty()) {
+        value = QStringLiteral("%1 == %2").arg(first.name, first.first);
+        break;
+      }
+    }
+    break;
+  default:
+    break;
+  }
+  if (value.isEmpty()) {
+    return;
+  }
+  for (Block& child : action.children) {
+    if (child.kind == BlockKind::Empty) {
+      child = canonicalExpression(value);
+      return;
+    }
+  }
+}
+
+std::vector<RuleTemplate> ruleTemplates(const std::vector<OptionInfo>& options, const QString& table,
+                                        const QStringList& tableColumns) {
+  const std::pair<const char*, QString> entries[] = {
+      {"range", QStringLiteral("&Limit a range when…")},
+      {"allow", QStringLiteral("&Allow only some values when…")},
+      {"forbid", QStringLiteral("&Forbid a combination…")},
+      {"table", QStringLiteral("&Only the combinations of a table…")},
+      {"empty", QStringLiteral("&Empty rule")},
+  };
+  std::vector<RuleTemplate> templates;
+  for (const auto& [id, label] : entries) {
+    const TemplatePlan plan = planTemplate(QLatin1String(id), options, table, tableColumns);
+    RuleTemplate entry;
+    entry.id = QLatin1String(id);
+    entry.label = label;
+    entry.enabled = plan.why.isEmpty();
+    entry.why = plan.why;
+    entry.lines = plan.lines;
+    templates.push_back(std::move(entry));
+  }
+  return templates;
+}
+
+bool ruleFromTemplate(const QString& id, const std::vector<OptionInfo>& options, const QString& table,
+                      const QStringList& tableColumns, Rule* rule) {
+  const TemplatePlan plan = planTemplate(id, options, table, tableColumns);
+  if (!plan.why.isEmpty()) {
+    return false;
+  }
+  Rule base;
+  base.name = plan.name;
+  Rule made;
+  if (!ruleFromText(plan.lines.join(QLatin1Char('\n')), base, options, &made, nullptr)) {
+    return false;
+  }
+  if (rule != nullptr) {
+    *rule = std::move(made);
+  }
+  return true;
 }
 
 } // namespace mitcad::rules

@@ -19,13 +19,16 @@
 
 namespace mitcad {
 
-// Moves `camera` by `seconds` of `rates` about `pivot`; false (the camera
-// unchanged) at rest, or for a camera or a step that makes no view.
+// Moves `camera` by `seconds` of `rates` about `pivot` in the mode and
+// with the horizon lock of `style` (its projection is the camera's own);
+// false (the camera unchanged) at rest, or for a camera or a step that
+// makes no view.
 inline bool moveSpaceMouseCamera(Graphic3d_Camera& camera, const gp_Pnt& pivot, const SpaceMouseRates& rates,
-                                 double seconds, bool zUp) {
+                                 double seconds, SpaceMouseStyle style) {
   if (!rates.moving()) {
     return false;
   }
+  style.perspective = !camera.IsOrthographic();
   const auto vector = [](const gp_XYZ& value) { return SpaceMouseVec{{value.X(), value.Y(), value.Z()}}; };
   SpaceMousePose pose;
   pose.eye = vector(camera.Eye().XYZ());
@@ -33,7 +36,7 @@ inline bool moveSpaceMouseCamera(Graphic3d_Camera& camera, const gp_Pnt& pivot, 
   pose.up = vector(camera.Up().XYZ());
   pose.height = camera.Scale();
   pose.panHeight = camera.ViewDimensions().Y();
-  const SpaceMousePose moved = spaceMouseMove(pose, vector(pivot.XYZ()), rates, seconds, zUp);
+  const SpaceMousePose moved = spaceMouseMove(pose, vector(pivot.XYZ()), rates, seconds, style);
   if (moved.eye == pose.eye && moved.target == pose.target && moved.up == pose.up && moved.height == pose.height) {
     return false;
   }

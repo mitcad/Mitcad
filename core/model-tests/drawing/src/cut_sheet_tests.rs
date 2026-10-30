@@ -13,6 +13,7 @@
 use serde_json::{Value, json};
 
 use mitcad_model::Document;
+use mitcad_model::ids::LARGEST_U32_ID;
 use mitcad_model::testing::MockKernel;
 use mitcad_model_api::DocumentApi;
 
@@ -410,6 +411,40 @@ fn a_cut_sheet_is_kept_in_the_design_file() {
     let sheet = query(&loaded, json!({"query": "cut_sheet", "drawing": "Ribs"}));
     assert_eq!(sheet["parts"].as_array().unwrap().len(), 2);
     assert_eq!(sheet["parts"][1]["rotation"], json!(-90.0));
+}
+
+#[test]
+fn part_ids_in_the_file_leave_the_top_numbers_free() {
+    // mitcad#944: a design file's part ids stay below the reserve, so the
+    // next part's id exists.
+    let top = LARGEST_U32_ID;
+    let mut doc = plates();
+    command(
+        &mut doc,
+        json!({"cmd": "add_cut_sheet", "bodies": ["F1.b0"]}),
+    );
+    let mut file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    file["drawings"][0]["cut_sheet"]["parts"][0]["id"] = json!(top);
+    let mut loaded = Document::from_json(&file.to_string(), MockKernel::default()).unwrap();
+    loaded.kernel().box_faces.set(true);
+    // A design file is read unevaluated; its bodies come with recompute.
+    command(&mut loaded, json!({"cmd": "recompute"}));
+    let more = command(
+        &mut loaded,
+        json!({"cmd": "add_cut_sheet_parts", "drawing": "D1", "bodies": ["F2.b0"]}),
+    );
+    assert_eq!(more["parts"], json!([top + 1]));
+    // One past the largest is refused as the file is read.
+    file["drawings"][0]["cut_sheet"]["parts"][0]["id"] = json!(top + 1);
+    let Err(error) = Document::from_json(&file.to_string(), MockKernel::default()) else {
+        panic!("part {} was read", top + 1);
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("invalid cut-sheet part id '4293918720'"),
+        "{error}"
+    );
 }
 
 #[test]

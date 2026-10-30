@@ -336,7 +336,11 @@ decision 7):
   editor turns each expression into blocks. Any part that has no block
   is shown as a formula block, edited in the Formula Editor. Every rule
   therefore opens in the editor, and nothing is lost.
-- **View as Text** shows the rule in the expression language.
+- **The rule as text** (mitcad#965) is always in sight under the blocks
+  and is edited too: a line per part (`when Color == 'Black'`, `then
+  Length max 1000 mm`), read back and saved as a block edit is, a line that
+  does not read marked with its place and reason. **Add** (mitcad#966)
+  offers templates, each a complete rule made from the design's options.
 - Each edit is one undo step. Blocks can be focused and edited with the
   keyboard (arrows, Enter, Delete), as well as with the mouse.
 - The editor works in the Floating and Docked layouts on Windows, Linux

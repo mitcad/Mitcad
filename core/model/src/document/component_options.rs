@@ -16,7 +16,9 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::components::{check_transform, design_digest, file_label, resolve_path};
+use super::components::{
+    check_transform, design_digest, file_label, followed_link, recorded_link_path, resolve_path,
+};
 use super::mounts::{Inserted, MountFrame, listed_mounts};
 use super::{DocState, Document, InsertOptions, LibraryChange, LibraryPart, ModelError, invalid};
 use crate::assembly::ExternalLink;
@@ -344,12 +346,15 @@ impl<K: Kernel> Document<K> {
         let (design, _) = crate::file::load_state_at(&text, &resolved)
             .map_err(|e| invalid(format!("{path}: {e}")))?;
         let stem = file_stem(path);
+        // Recorded relative to the design when in its project (mitcad#929),
+        // as `update_links` reads it again.
+        let recorded = recorded_link_path(path, &resolved, options.base.as_deref());
         let insert = OptionsInsert {
-            source: file_source(path, &design, &stem)?,
+            source: file_source(&recorded, &design, &stem)?,
             config: None,
             library: false,
             policy: Some(design.assembly.root_policy),
-            path: path.to_owned(),
+            path: recorded,
             digest: design_digest(&text),
             label: Some(file_label(path)),
         };
@@ -901,7 +906,17 @@ impl<K: Kernel> Document<K> {
             let Some(part) = self.state.options_part(c.uid) else {
                 continue;
             };
-            let resolved = resolve_path(&link.path, base);
+            // Only a file in the design's project is read (mitcad#929).
+            let resolved = match followed_link(&link.path, base) {
+                Ok(resolved) => resolved,
+                Err(why) => {
+                    messages.push(format!(
+                        "{}: {why}; it keeps the design saved with the project",
+                        c.name
+                    ));
+                    continue;
+                }
+            };
             let text = match std::fs::read_to_string(&resolved) {
                 Ok(text) => text,
                 Err(e) => {

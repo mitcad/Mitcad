@@ -6,6 +6,7 @@
 #include <exception>
 
 #include <QComboBox>
+#include <QFontMetrics>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -155,6 +156,16 @@ void ConfigurationBar::rebuild() {
       row->setContentsMargins(0, 0, 0, 0);
       auto* field = new QLineEdit(holder);
       field->setObjectName(QStringLiteral("configurationField_%1").arg(name));
+      // Wide enough for the range's ends and the value as shown (`1200 mm`),
+      // so the slider beside it cannot squeeze a value out of sight
+      // (mitcad#969).
+      const QStringList shownTexts{option.allowed.minText, option.allowed.maxText, option.valueText};
+      int widestText = 0;
+      for (const QString& shown : std::as_const(shownTexts)) {
+        widestText = std::max(widestText, field->fontMetrics().horizontalAdvance(shown));
+      }
+      const int fieldWidth = widestText + 16; // the frame and the text margins
+      field->setMinimumWidth(fieldWidth);
       row->addWidget(field, 1);
       connect(field, &QLineEdit::editingFinished, this, [this, name, field] {
         if (!field->isModified()) {
@@ -176,7 +187,7 @@ void ConfigurationBar::rebuild() {
         slider->setProperty("nativeSliderOnRelease", true);
         slider->setRange(0, chooser.steps);
         slider->setFocusPolicy(Qt::StrongFocus);
-        field->setMaximumWidth(96);
+        field->setMaximumWidth(std::max(96, fieldWidth));
         row->addWidget(slider, 2);
         chooser.slider = slider;
         const int positions = chooser.steps;
@@ -252,6 +263,11 @@ void ConfigurationBar::showValues() {
     }
     if (chooser.field != nullptr) {
       chooser.field->setText(option->valueText);
+      if (!chooser.field->hasFocus()) {
+        // Shown from its start: a value wider than the field keeps its
+        // first digits in sight, not only its unit (mitcad#969).
+        chooser.field->setCursorPosition(0);
+      }
       chooser.field->setToolTip(why);
     }
     if (chooser.slider != nullptr) {

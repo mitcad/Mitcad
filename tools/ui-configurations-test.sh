@@ -3,11 +3,14 @@
 # check-all sources: app/browser/ConfigurationsDialog.cpp app/browser/ConfigurationBar.cpp app/browser/ConfigurationsData.cpp app/browser/BrowserPanel.cpp app/browser/BrowserController.cpp
 # check-all sources: app/MainWindow.cpp tools/cli core/model-base/src/configurations.rs core/model-base/src/configurations
 # check-all sources: core/model/src/document/configurations.rs core/model-api/src/configurations.rs
+# check-all sources: app/configurations/RulesPage.cpp app/configurations/RuleCanvas.cpp
 # Configurations (mitcad#807) through the real UI, on a design mitcad-cli
 # makes: a text parameter Color ('Black' or 'White', White) and Length
 # (300 mm … 2000 mm, step 10 mm, 1500 mm) that a 20 x 20 mm extrusion
 # takes as its distance; no configuration table yet.
-#   1. Configurations…: Add Option makes Color and then Length options.
+#   1. Configurations…: each tab's lead line and the empty states of the
+#      Options list, the Rows sheet and the Rules canvas (mitcad#967) are
+#      logged; Add Option makes Color and then Length options.
 #   2. Rows: Add Row (Row1, the current values), its Length edited to 800
 #      mm, Apply: the body is 800 mm long.
 #   3. The Configuration bar in the browser: Length = 1200 in its field;
@@ -102,6 +105,20 @@ ui_mark
 ui_step "Configurations (search)"        ui_command "Configurations"
 ui_expect_new "Configurations window opened" "the window opened"
 ui_expect_new "Configurations options: none" "no options yet"
+# The window explains itself (mitcad#967): a lead line per tab, and what an
+# empty list, sheet or canvas shows in its place.
+ui_expect_new "Configurations lead Options: Options are the choices a user of this design makes, such as Color or Length. Each option is a user parameter." \
+  "the Options tab's lead line"
+ui_expect_new "Configurations lead Rows: A row is a ready-made combination of the options, with its designation and part number." \
+  "the Rows tab's lead line"
+ui_expect_new "Configurations lead Rules: Rules take away values and combinations that are not allowed. Most designs need none." \
+  "the Rules tab's lead line"
+ui_expect_new "Configurations empty Options: No options yet. Add Option… makes a parameter an option." \
+  "the empty Options list says how to add one"
+ui_expect_new "Configurations empty Rows: No rows yet. Add Row saves the options' values as a row." \
+  "the empty Rows sheet says how to add one"
+ui_expect_new "Configurations empty Rules: No rules yet. A rule is, for example: when Color is Black, Length is at most 1000 mm." \
+  "the empty Rules canvas says what a rule is"
 ui_expect_new "Configurations add option at" "Add Option's place is logged"
 ui_mark
 ui_step "Add Option: Color"              add_option

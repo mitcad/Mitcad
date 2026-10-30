@@ -1261,14 +1261,17 @@ void ViewController::showPreferences(const QString& page) {
       m_settings.save();
     }
     qDebug().noquote() << QStringLiteral("Preferences: navigation %1, orbit speed %2, pan speed %3, "
-                                         "zoom speed %4, trackpad speed %5, 3D mouse %6 speed %7")
+                                         "zoom speed %4, trackpad speed %5, 3D mouse %6 speed %7, %8 mode, "
+                                         "horizon %9")
                               .arg(QLatin1String(schemeEntry(chosen.scheme).id))
                               .arg(chosen.orbitSpeed)
                               .arg(chosen.panSpeed)
                               .arg(chosen.zoomSpeed)
                               .arg(chosen.trackpadSpeed)
                               .arg(onOff(chosen.spaceMouse.enabled))
-                              .arg(chosen.spaceMouse.speed);
+                              .arg(chosen.spaceMouse.speed)
+                              .arg(QLatin1String(spaceMouseModeId(chosen.spaceMouse.mode)))
+                              .arg(chosen.spaceMouse.lockHorizon ? QStringLiteral("locked") : QStringLiteral("free"));
   };
   groups.insert(QStringLiteral("navigation"), navigationBox);
 

@@ -19,6 +19,15 @@ namespace mitcad {
 // that take expressions use it to give a bare number the field's unit.
 std::optional<double> parsePlainNumber(const QString& text, QString* normalized = nullptr);
 
+// Whether a value field's "= value" hint says more than the field
+// (mitcad#994): true for an expression that names a parameter
+// (`namesParameters`, the model's `references`) or has an operator
+// ("-8 mm + 2 mm", "-(4 mm)", "d1 * 2"); false for a plain number and for
+// a number with a leading sign and a unit ("-8 mm", "+3 mm", "-5°",
+// "-2,5 mm"), whose sign is part of the number. A dragged value is written
+// as such a number, so the hint does not come and go across zero.
+bool valueHintWorthShowing(const QString& text, bool namesParameters);
+
 // A spin box that takes a decimal comma as a point and shows a point in
 // every locale.
 class DecimalSpinBox : public QDoubleSpinBox {

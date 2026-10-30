@@ -21,7 +21,8 @@
 #      still folded when the browser opens again, then unfolded.
 #   6. The Standard filter (mitcad#949): a socket head cap screw whose rows
 #      name their standards; Standard = DIN 912 narrows the lengths of M6 to
-#      8 and 10, and the part inserted is named DIN 912 M6x8.
+#      8 and 10, the row's two supplier articles in their table (Supplier
+#      Articles, mitcad#979), and the part inserted is named DIN 912 M6x8.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-library-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -51,6 +52,8 @@ $env:GIT_CONFIG_GLOBAL = $gitConfig
 $env:GIT_CONFIG_NOSYSTEM = '1'
 # The fetched libraries of the test's own.
 $env:MITCAD_LIBRARIES_DIR = Join-Path $work 'cache'
+# A supplier's site logged, not opened (Open Link, mitcad#979).
+$env:MITCAD_TEST_LOG_URLS = '1'
 
 # A block (20 x 20 x 10) in a library of its own, recorded with git.
 $script = Join-Path $work 'block.json'
@@ -327,7 +330,9 @@ Set-Content -Encoding ascii (Join-Path $screws 'mitcad-library.json') @'
       "M6x6": {"standards": ["non-standard"]},
       "M6x8": {"standards": ["DIN 912"],
                "supplier_parts": [{"supplier": "acme", "part_number": "A 6 8", "material": "8.8",
-                                   "finish": "zinc-plated", "checked": "2026-10-30"}]},
+                                   "finish": "zinc-plated", "checked": "2026-10-30"},
+                                  {"supplier": "acme", "part_number": "A 6 8 S", "material": "A2",
+                                   "finish": "plain", "checked": "2026-10-30"}]},
       "M6x10": {"standards": ["ISO 4762", "DIN 912"]}}}]}
 '@
 Set-Content -Encoding ascii (Join-Path $screws 'LICENSE') 'MIT'
@@ -368,8 +373,20 @@ Ui-Mark
 # The first length (8): Home, as a typed 8 looks on from the current length.
 Ui-Step 'length 8 (Tab, Home)'           { Ui-Key 'Tab', 'Home' }
 Ui-ExpectNew 'Library size M6x8' 'M6x8 chosen'
-Ui-ExpectNew 'Library browser row M6x8: designation DIN 912 M6x8; supplier part numbers Acme A 6 8 (8.8 zinc-plated)' `
-  'the designation follows the standard; the supplier part number'
+Ui-ExpectNew 'Library browser row M6x8: designation DIN 912 M6x8; supplier part numbers Acme A 6 8 (8.8 zinc-plated); Acme A 6 8 S (A2 plain)' `
+  'the designation follows the standard; the supplier part numbers'
+# The row's articles in their table, not as one line (mitcad#979).
+Ui-Mark
+Ui-Step 'Supplier Articles (Alt+A)'      { Ui-Key 'alt+a' }
+Ui-FocusDialog '^Supplier Articles - DIN 912 M6x8$'
+Ui-ExpectNew 'Supplier parts of M6x8: 2 articles, columns Supplier, Part number, Material, Finish, Checked' `
+  'the table of the two articles and the columns they fill'
+Ui-Step 'Copy as TSV (Alt+T)'            { Ui-Key 'alt+t' }
+Ui-ExpectNew 'Supplier articles copied: 2 rows' 'both articles copied'
+Ui-Step 'Open Link (Alt+L)'              { Ui-Key 'alt+l' }
+Ui-ExpectNew 'Supplier link opened: https://acme.example.org' "the supplier's site"
+Ui-Step 'close (Escape)'                 { Ui-Key 'Escape' }
+Ui-FocusDialog '^Insert from Library$'
 Ui-Step 'Insert (Alt+I)'                 { Ui-Key 'alt+i' }
 Ui-FocusMain
 Ui-ExpectNew 'Inserted component DIN 912 M6x8 (linked) from test-screws' 'the part named by DIN 912'

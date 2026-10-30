@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+wait-idle
+window-resize 1280 820
+expect-model-bodies 1 48000
+mark
+command tools.preferences.cloud
+focus-dialog '^Settings$'
+expect-log 'Preferences: known brokers: .*a[.]invalid.*b[.]invalid'
+expect-native-columns cloudKnownBrokers any
+screenshot-dialog '${MITCAD_TEST_WORK}/cloud-header-original-${MITCAD_TEST_COLOR_SCHEME}-content.png'
+screenshot-screen '${MITCAD_TEST_WORK}/cloud-header-original-${MITCAD_TEST_COLOR_SCHEME}-own-windows.png'
+native-header-resize cloudKnownBrokers 0 40
+wait-idle
+expect-native-header-resize-retained cloudKnownBrokers 0
+native-pointer-click cloudKnownBrokers/1/0
+expect-log 'Native model selection applied: cloudKnownBrokers current=1,0 selected=1 rows=1'
+wait-idle
+sleep 300
+expect-native-style cloudKnownBrokers/1/0 row-selected
+expect-native-header-resize-retained cloudKnownBrokers 0
+screenshot-dialog '${MITCAD_TEST_WORK}/cloud-header-dragged-${MITCAD_TEST_COLOR_SCHEME}-content.png'
+screenshot-screen '${MITCAD_TEST_WORK}/cloud-header-dragged-${MITCAD_TEST_COLOR_SCHEME}-own-windows.png'
+native-header-resize cloudKnownBrokers 0 -40
+wait-idle
+expect-native-header-resize-retained cloudKnownBrokers 0
+expect-native-columns cloudKnownBrokers any
+screenshot-dialog '${MITCAD_TEST_WORK}/cloud-header-restored-${MITCAD_TEST_COLOR_SCHEME}-content.png'
+screenshot-screen '${MITCAD_TEST_WORK}/cloud-header-restored-${MITCAD_TEST_COLOR_SCHEME}-own-windows.png'
+key Ctrl+w
+expect-native-dialog-gone '^Settings$'
+focus-main
+expect-model-bodies 1 48000
+expect-setting remote/allowLive false

@@ -65,7 +65,7 @@ pub use create::{
 pub(crate) use hostkeys::hashed_host;
 pub use hostkeys::{
     HostKey, HostKeys, PublicKey, Published, Trusted, fingerprint, host_keys, parse_keyscan,
-    ssh_public_key, trust_host_key, trust_host_keys,
+    ssh_public_key, trust_host_key, trust_host_keys, trust_shown_host_keys,
 };
 pub(crate) use inspect::remotes_of;
 pub use inspect::{Design, FolderInfo, FolderKind, ProjectRemote, inspect_folder};
@@ -409,8 +409,13 @@ pub fn run(
         "trust_host_key" => {
             let host = text(&command, "host")?;
             let port = port_of(&command)?;
+            // `keys`: exactly the keys the user was shown (mitcad#938).
             // Without a key: every key the server gives.
             let trusted = match (optional(&command, "type"), optional(&command, "key")) {
+                _ if command.get("keys").is_some_and(|keys| !keys.is_null()) => {
+                    let shown = shown_keys(&command)?;
+                    trust_shown_host_keys(host, port, &shown, context, &mut log)
+                }
                 (None, None) => hostkeys::trust_host_keys(host, port, context, &mut log),
                 _ => {
                     let kind = text(&command, "type")?;
@@ -446,6 +451,29 @@ pub fn run(
     };
     value["log"] = json!(log);
     Ok((name, value, error))
+}
+
+/// `trust_host_key`'s `keys`: [{`type`, `key`}], the keys of the scan the
+/// user was shown (mitcad#938).
+fn shown_keys(command: &Value) -> Result<Vec<(String, String)>, VcsError> {
+    let invalid =
+        || VcsError::Command("\"keys\" takes the shown keys: [{\"type\": …, \"key\": …}]".into());
+    let keys = command
+        .get("keys")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid)?;
+    if keys.len() > 16 {
+        return Err(invalid());
+    }
+    keys.iter()
+        .map(|key| {
+            let field = |name: &str| key.get(name).and_then(Value::as_str).map(str::to_owned);
+            Ok((
+                field("type").ok_or_else(invalid)?,
+                field("key").ok_or_else(invalid)?,
+            ))
+        })
+        .collect()
 }
 
 /// A command's `port` (default 22).

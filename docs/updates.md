@@ -100,6 +100,16 @@ the size of a download does not match, MitCad deletes the download and
 reports the problem. MitCad never runs such a download. MitCad refuses a
 manifest with a bad signature.
 
+**An expired manifest:** a manifest is good until its signed `expires`
+day ([Manifest expiry](#manifest-expiry)). After it, the check at
+start-up offers nothing. *Check for Updates* announces the release
+without *Install* and gives the day the update information expired, so
+that a computer whose date is wrong is told why.
+
+The notice shows every text that comes from the network as plain text:
+an error that carries a server's answer cannot add markup to the bar
+(mitcad#938).
+
 **Report:** after an update, the new MitCad reports the result. The
 report comes from the settings in
 [Settings and turning checks off](#settings-and-turning-checks-off).
@@ -256,6 +266,7 @@ others). It loads no engine or provider module: TLS needs none
   "format": 1,
   "version": "0.2.0",
   "date": "2026-10-06",
+  "expires": "2027-01-04",
   "notes": "https://github.com/mitcad/Mitcad/releases/tag/v0.2.0",
   "assets": {
     "windows-x64": {
@@ -277,6 +288,10 @@ others). It loads no engine or provider module: TLS needs none
   anything else of the manifest.
 - `version`, `date` (`YYYY-MM-DD`) and `notes` (the release page,
   HTTPS).
+- `expires` (`YYYY-MM-DD`, not before `date`): the last day the manifest
+  is good for ([Manifest expiry](#manifest-expiry)). Manifests of
+  releases before mitcad#938 have none and never expire. Older MitCad
+  versions ignore the field.
 - `assets`: one entry per platform. `windows-x64` is the installer,
   `linux-x64` is the AppImage and `macos-arm64` is the disk image. Each
   entry gives the HTTPS address of the download, its size, its SHA-256
@@ -294,6 +309,51 @@ others). It loads no engine or provider module: TLS needs none
   *Install*.
 - Keys, signatures and digests are lowercase hex. `format` is 1. MitCad
   refuses a manifest of another format.
+
+### Manifest expiry
+
+Design choice (mitcad#938): without an expiry, a still validly signed
+manifest of release N+1 could be served again (by a compromised CDN, or
+a mirror set with `MITCAD_UPDATE_URL`) to users of release N after
+release N+2 fixed a fault in N+1, and hold them on N+1. Thus a manifest
+carries a signed `expires`, and MitCad offers nothing from a manifest
+past it:
+
+- **Expiry:** `mitcad-release manifest` writes `expires` 90 days after
+  the day it signs (`MANIFEST_VALIDITY_DAYS`), or `--expires
+  YYYY-MM-DD`. The release environment renews the latest release's
+  manifest well before then, for example monthly:
+  `mitcad-release renew --manifest update-manifest.json --out
+  update-manifest.json` signs it again with a new expiry, its version,
+  date, notes and downloads unchanged (the downloads' signatures do not
+  cover the expiry), and replaces the release's asset. A new release
+  replaces the latest manifest anyway.
+- **Clock tolerance:** a manifest counts as expired only more than 14
+  days after its `expires` (`CLOCK_TOLERANCE_DAYS`), by the computer's
+  clock in UTC.
+- **Automatic checks** offer nothing from an expired manifest: the same
+  as no newer release (`Update check: the manifest of Mitcad <version>
+  expired on <date>` in the log). A downgrade stays impossible as
+  before.
+- **Check for Updates** announces the release of an expired manifest
+  without *Install*, with *Release Notes* and the day its update
+  information expired.
+
+Clocks that are wrong in a harmless way lock nobody out:
+
+- A clock behind (a flat battery, 1970 or 2000, a wrong time zone)
+  never makes a manifest look expired. It only lets an old manifest
+  pass, as before mitcad#938.
+- A clock ahead by days or weeks: a fresh manifest has 90 days and 14
+  days of tolerance.
+- A clock far ahead: the automatic check is silent, but *Check for
+  Updates* still shows the release, its notes and the reason, and the
+  release page works. Correcting the date restores *Install*.
+
+What the expiry does not do: a server that serves nothing, or the
+latest manifest within its validity, is not detected. The bound is the
+validity: 90 days plus the tolerance after the last renewal. The core
+checks only `expires` and never the release `date` against the clock.
 
 ### Signing a release
 
@@ -354,6 +414,12 @@ repository. Its public half is built into MitCad.
    Never give the key on the command line.
 4. **Publish** the installers and `update-manifest.json` as the assets
    of the GitHub release.
+5. **Renew** the latest release's manifest before it expires
+   (`mitcad-release renew`, [Manifest expiry](#manifest-expiry)) and
+   replace its asset. The tests of the release tool and of the expiry
+   are in `core.update` (`an_expired_manifest_offers_nothing`,
+   `expiry_dates_are_checked`, `manifests_expire_and_are_renewed`) and
+   `tools/ui-update-test.sh` (step 3b).
 
 There is no Authenticode signature yet. Thus Windows SmartScreen can
 warn about a downloaded installer that you run by hand. MitCad itself

@@ -450,7 +450,7 @@ private:
       button.bezelStyle = NSBezelStyleRounded;
       [button setButtonType:NSButtonTypePushOnPushOff];
       button.frame = NSMakeRect(8, y, 150, 25);
-      button.toolTip = @"Choose at the focused socket, or drag onto a rule";
+      button.toolTip = ns(entry.tip); // what the block does (mitcad#967)
       [m_surface addSubview:button]; [m_buttons addObject:button]; y += 28;
     }
     m_surface.frame = NSMakeRect(0, 0, 166, y + 6);

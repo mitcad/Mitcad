@@ -533,3 +533,54 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND BASH_
   set_tests_properties(app.ui-macos-naming PROPERTIES
     TIMEOUT 240 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
 endif()
+
+# Appearance editor commit keys (mitcad#977).
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli
+   AND BASH_EXECUTABLE)
+  # Appearance field commits must not activate Close in either frontend.
+  add_test(NAME app.ui-macos-appearance-edit-keys
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-appearance-edit-keys-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-appearance-edit-keys" qt)
+  set_tests_properties(app.ui-macos-appearance-edit-keys PROPERTIES TIMEOUT 420 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
+  if(MITCAD_MACOS_NATIVE_UI)
+    add_test(NAME app.ui-macos-native-appearance-edit-keys
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-appearance-edit-keys-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-appearance-edit-keys" native)
+    set_tests_properties(app.ui-macos-native-appearance-edit-keys PROPERTIES TIMEOUT 420 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
+  endif()
+endif()
+
+# Texture-folder path presentation and selection (mitcad#988).
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli
+   AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-texture-folders
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-texture-folders-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-texture-folders" qt)
+  set_tests_properties(app.ui-macos-texture-folders PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
+  if(MITCAD_MACOS_NATIVE_UI)
+    add_test(NAME app.ui-macos-native-texture-folders
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-texture-folders-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-texture-folders" native)
+    set_tests_properties(app.ui-macos-native-texture-folders PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
+  endif()
+endif()
+
+# Native test contract lifetime and real Cloud header resizing (mitcad#989).
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
+   AND TARGET mitcad AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-native-contract-lifetime
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-contract-lifetime-test.sh"
+            "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-native-contract-lifetime")
+  set_tests_properties(app.ui-macos-native-contract-lifetime PROPERTIES
+    TIMEOUT 780 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
+endif()
+
+# Native presenter destruction must not commit a dying field (mitcad#990).
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND MITCAD_MACOS_NATIVE_UI
+   AND TARGET mitcad AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-native-failure-shutdown
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-native-failure-shutdown-test.sh"
+            "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-native-failure-shutdown")
+  set_tests_properties(app.ui-macos-native-failure-shutdown PROPERTIES
+    TIMEOUT 150 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
+endif()

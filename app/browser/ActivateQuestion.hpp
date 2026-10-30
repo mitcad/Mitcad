@@ -11,6 +11,11 @@
 // (any occurrence of it) or its origin planes, axes and point, nor for a
 // pick the design policy refuses. A preference turns it off.
 
+#include <optional>
+
+#include <QPoint>
+#include <QRect>
+#include <QSize>
 #include <QString>
 
 #include "../framework/Selection.hpp"
@@ -45,10 +50,29 @@ struct ActivateQuestion {
   QString active;
   // What was picked, in words: "face", "plane", "edge", ...
   QString kind;
+  // What the command makes, in words: "sketch" (Create Sketch), "plane",
+  // "axis" or "point" (Construct); set by the caller (madeBy).
+  QString made = QStringLiteral("sketch");
 
   // "The face belongs to M6 rod bracket:1, but Corner brace:1 is active."
   QString text() const;
+  // "If you activate it, the sketch goes into M6 rod bracket:1; if you
+  // keep it, into Corner brace:1."
+  QString detail() const;
 };
+
+// What a command makes, for ActivateQuestion::made: a construction
+// feature type ("construction_plane", "construction_axis",
+// "construction_point") gives "plane", "axis" or "point"; anything else
+// "sketch".
+QString madeBy(const QString& featureType);
+
+// Where the question goes (mitcad#960): a box of `size` inside `within`
+// (the main window, in global coordinates), clear of the pick (the
+// pointer at the pick, global) and the face around it: above the pick,
+// else below, to the right or to the left of it; when none keeps clear
+// inside `within`, the one that covers the least of it.
+QRect questionPlace(const QSize& size, const QPoint& pick, const QRect& within);
 
 // Whether `item` asks (ActivateQuestion::ask) and with what names.
 // `refused`: the design policy's reason the pick is refused (Create
@@ -66,7 +90,10 @@ struct ActivateAnswer {
 
 // The question as a modal message box ("Activate Component"), shown as the
 // application's other questions are (framework/Dialogs.hpp: a sheet on
-// macOS, the native dialog in the AppKit frontend).
-ActivateAnswer askToActivate(QWidget* parent, const ActivateQuestion& question);
+// macOS, the native dialog in the AppKit frontend). With a `pick` (global)
+// and a parent, the box is placed clear of it inside the parent's window
+// (questionPlace) rather than over the middle of the window.
+ActivateAnswer askToActivate(QWidget* parent, const ActivateQuestion& question,
+                             const std::optional<QPoint>& pick = std::nullopt);
 
 } // namespace mitcad

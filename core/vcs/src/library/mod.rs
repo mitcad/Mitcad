@@ -41,12 +41,15 @@ pub mod manifest;
 pub mod mounts;
 mod publish;
 
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
+use gix::refs::Target;
+use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 use mitcad_model::file::BREP_DIR;
 use mitcad_model::{BlobStore, LibraryRequest, LibrarySource, LinkResolver, MemoryStore, Sha256};
 use serde::Serialize;
@@ -475,6 +478,9 @@ pub struct LibraryCache {
     /// Folders of more libraries, read only (shipped with the
     /// application).
     pub extra: Vec<PathBuf>,
+    /// The largest clone a fetch keeps, a new one or an updated one
+    /// ([`MAX_LIBRARY_SIZE`]; tests set less).
+    pub max_size: u64,
 }
 
 impl Default for LibraryCache {
@@ -511,6 +517,7 @@ impl LibraryCache {
         Self {
             root: root.into(),
             extra: Vec::new(),
+            max_size: MAX_LIBRARY_SIZE,
         }
     }
 
@@ -665,7 +672,8 @@ impl LibraryCache {
     /// Clones `url` into the cache, or updates its clone: the branches and
     /// tags, without removing anything, so versions designs use stay. A
     /// new clone that is not a library or an index, or is too large, is
-    /// removed again.
+    /// removed again; an update that would make a clone too large is not
+    /// taken ([`LibraryCache::max_size`], mitcad#938).
     pub fn fetch(
         &self,
         url: &str,
@@ -679,9 +687,9 @@ impl LibraryCache {
             .map_err(|e| crate::io_error("make the folder", &self.root, e))?;
         let dir = self.dir_for(&url);
         let cloned = !dir.is_dir();
-        let target = dir.to_string_lossy().into_owned();
         // No hooks run in a bare clone; checked objects; no automatic gc,
-        // which would drop versions nothing refers to any more.
+        // which would drop versions nothing refers to any more (an update
+        // passes the same, `update_clone`).
         let safe = ["-c", "transfer.fsckObjects=true", "-c", "gc.auto=0"];
         if cloned {
             let temporary = self.root.join(format!(
@@ -706,14 +714,14 @@ impl LibraryCache {
                 return Err(e);
             }
             let size = folder_size(&temporary);
-            if size > MAX_LIBRARY_SIZE {
+            if size > self.max_size {
                 let _ = fs::remove_dir_all(&temporary);
                 return Err(RemoteError::new(
                     ErrorClass::TooLarge,
                     format!(
                         "{shown} is {} MB, more than the {} MB a library may have",
                         size >> 20,
-                        MAX_LIBRARY_SIZE >> 20
+                        self.max_size >> 20
                     ),
                 )
                 .into());
@@ -734,26 +742,7 @@ impl LibraryCache {
             }
             fs::rename(&temporary, &dir).map_err(|e| crate::io_error("rename", &temporary, e))?;
         } else {
-            let mut args: Vec<&str> = safe.to_vec();
-            args.extend([
-                "--git-dir",
-                &target,
-                "fetch",
-                "--progress",
-                "--no-write-fetch-head",
-                "--",
-                &url,
-                "+refs/heads/*:refs/heads/*",
-                "+refs/tags/*:refs/tags/*",
-            ]);
-            crate::remote::run_logged(
-                git,
-                &self.root,
-                &args,
-                control,
-                &format!("Fetching {shown}"),
-                log,
-            )?;
+            self.update_clone(&dir, &url, git, control, log)?;
         }
         let repo = LibraryRepo::open(&dir)?;
         let head = repo.head()?;
@@ -789,6 +778,231 @@ impl LibraryCache {
             problems,
         })
     }
+
+    /// Updates the clone in `dir` from `url` within [`LibraryCache::max_size`]
+    /// (mitcad#938): the branches and tags are fetched to [`INCOMING`]
+    /// first and move to `refs/heads/` and `refs/tags/` (replacing, never
+    /// removing) only when the clone is not too large then. A clone that
+    /// grew past the limit gets the error `too_large`, and the objects and
+    /// references the fetch brought are removed again, so the versions
+    /// fetched before stay as they were.
+    fn update_clone(
+        &self,
+        dir: &Path,
+        url: &str,
+        git: &GitCli,
+        control: Option<&Control>,
+        log: &mut Vec<String>,
+    ) -> Result<(), VcsError> {
+        let shown = redact(url);
+        let target = dir.to_string_lossy().into_owned();
+        // What an interrupted update left.
+        LibraryRepo::open(dir)?.drop_incoming()?;
+        let before = object_files(dir);
+        let heads = format!("+refs/heads/*:{INCOMING}heads/*");
+        let tags = format!("+refs/tags/*:{INCOMING}tags/*");
+        let args = [
+            "-c",
+            "transfer.fsckObjects=true",
+            "-c",
+            "gc.auto=0",
+            "--git-dir",
+            &target,
+            "fetch",
+            "--progress",
+            "--no-write-fetch-head",
+            // Tags only by the refspec: git's tag following would write
+            // them to refs/tags/ at once.
+            "--no-tags",
+            "--",
+            url,
+            &heads,
+            &tags,
+        ];
+        let fetched = crate::remote::run_logged(
+            git,
+            &self.root,
+            &args,
+            control,
+            &format!("Fetching {shown}"),
+            log,
+        );
+        let repo = LibraryRepo::open(dir)?;
+        if let Err(error) = fetched {
+            let _ = repo.drop_incoming();
+            return Err(error);
+        }
+        let size = folder_size(dir);
+        if size > self.max_size {
+            repo.drop_incoming()?;
+            // Closed first: Windows removes no file that is open.
+            drop(repo);
+            let removed = remove_new_objects(dir, &before);
+            log.push(format!(
+                "{shown}: {} MB after the fetch, more than {} MB: {removed} new object \
+                 file(s) removed, the versions fetched before kept",
+                size >> 20,
+                self.max_size >> 20
+            ));
+            return Err(RemoteError::new(
+                ErrorClass::TooLarge,
+                format!(
+                    "{shown} would be {} MB with its new versions, more than the {} MB a \
+                     library may have; the versions fetched before stay",
+                    size >> 20,
+                    self.max_size >> 20
+                ),
+            )
+            .into());
+        }
+        repo.accept_incoming()
+    }
+}
+
+/// Where an update of a clone fetches the branches and tags to first
+/// ([`LibraryCache::update_clone`]).
+const INCOMING: &str = "refs/incoming/";
+
+impl LibraryRepo {
+    /// The direct references whose names start with `prefix`, with the
+    /// objects they point to.
+    fn references_under(&self, prefix: &str) -> Result<Vec<(String, ObjectId)>, VcsError> {
+        let mut out = Vec::new();
+        for reference in self.repo.references()?.all()? {
+            let reference = reference?;
+            let name = reference.name().as_bstr().to_string();
+            if name.starts_with(prefix)
+                && let Some(id) = reference.try_id()
+            {
+                out.push((name, id.detach()));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Applies reference edits in one transaction.
+    fn edit_references(&self, edits: Vec<RefEdit>) -> Result<(), VcsError> {
+        if edits.is_empty() {
+            return Ok(());
+        }
+        let signature = gix::actor::Signature {
+            name: "Mitcad".into(),
+            email: "library-fetch@mitcad.invalid".into(),
+            time: gix::date::Time::now_local_or_utc(),
+        };
+        let mut time = Default::default();
+        let edited = self
+            .repo
+            .edit_references_as(edits, Some(signature.to_ref(&mut time)));
+        // gix removes the empty folders above a reference whose lock it
+        // releases without writing it, up to the repository's own folder: in
+        // a clone whose references are all in packed-refs, that took
+        // refs/heads/, refs/tags/ and then refs/ itself, and without refs/
+        // neither git nor gix opens the clone any more. The folders git makes
+        // in every repository stay.
+        for folder in ["refs/heads", "refs/tags"] {
+            let path = self.dir.join(folder);
+            fs::create_dir_all(&path).map_err(|e| crate::io_error("make the folder", &path, e))?;
+        }
+        edited?;
+        Ok(())
+    }
+
+    /// Removes the references of an update not taken ([`INCOMING`]).
+    fn drop_incoming(&self) -> Result<(), VcsError> {
+        let mut edits = Vec::new();
+        for (name, id) in self.references_under(INCOMING)? {
+            edits.push(reference_edit(
+                &name,
+                Change::Delete {
+                    expected: PreviousValue::MustExistAndMatch(Target::Object(id)),
+                    log: RefLog::AndReference,
+                },
+            )?);
+        }
+        self.edit_references(edits)
+    }
+
+    /// Moves the fetched references ([`INCOMING`]) over the branches and
+    /// tags, as a forced fetch would have set them; branches and tags the
+    /// remote no longer has stay.
+    fn accept_incoming(&self) -> Result<(), VcsError> {
+        let current: HashMap<String, ObjectId> = self
+            .references_under("refs/heads/")?
+            .into_iter()
+            .chain(self.references_under("refs/tags/")?)
+            .collect();
+        let mut edits = Vec::new();
+        for (name, id) in self.references_under(INCOMING)? {
+            let local = format!("refs/{}", &name[INCOMING.len()..]);
+            // A branch or tag the fetch found unchanged is not written again.
+            if current.get(&local) != Some(&id) {
+                edits.push(reference_edit(
+                    &local,
+                    Change::Update {
+                        log: LogChange {
+                            mode: RefLog::AndReference,
+                            force_create_reflog: false,
+                            message: "library fetch".into(),
+                        },
+                        expected: PreviousValue::Any,
+                        new: Target::Object(id),
+                    },
+                )?);
+            }
+            edits.push(reference_edit(
+                &name,
+                Change::Delete {
+                    expected: PreviousValue::MustExistAndMatch(Target::Object(id)),
+                    log: RefLog::AndReference,
+                },
+            )?);
+        }
+        self.edit_references(edits)
+    }
+}
+
+fn reference_edit(name: &str, change: Change) -> Result<RefEdit, VcsError> {
+    Ok(RefEdit {
+        change,
+        name: name
+            .try_into()
+            .map_err(|e| VcsError::Git(format!("{name}: {e}")))?,
+        deref: false,
+    })
+}
+
+/// The files under a clone's `objects` folder.
+fn object_files(dir: &Path) -> HashSet<PathBuf> {
+    let mut files = HashSet::new();
+    let mut pending = vec![dir.join("objects")];
+    while let Some(folder) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                pending.push(entry.path());
+            } else {
+                files.insert(entry.path());
+            }
+        }
+    }
+    files
+}
+
+/// Removes the files under `objects` that were not in `before` (what a
+/// fetch brought: new packs and loose objects; the objects already there
+/// are never in them); the number removed.
+fn remove_new_objects(dir: &Path, before: &HashSet<PathBuf>) -> usize {
+    object_files(dir)
+        .into_iter()
+        .filter(|path| !before.contains(path))
+        .filter(|path| fs::remove_file(path).is_ok())
+        .count()
 }
 
 /// A URL compared as written, without a trailing `/`.
@@ -819,7 +1033,7 @@ fn check_revision(rev: &str) -> Result<(), VcsError> {
 }
 
 /// The bytes of the files in a folder (not following links).
-fn folder_size(dir: &Path) -> u64 {
+pub(crate) fn folder_size(dir: &Path) -> u64 {
     let mut total = 0;
     let mut pending = vec![dir.to_path_buf()];
     while let Some(folder) = pending.pop() {

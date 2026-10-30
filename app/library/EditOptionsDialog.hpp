@@ -16,8 +16,9 @@
 //
 // Above the choosers, the Standard and Supplier filters of a library part
 // whose rows name standards or suppliers' articles (mitcad#949); under them
-// the row's supplier part numbers ("Edit Options supplier part numbers:
-// ..."). Logged for the UI tests: "Edit Options <option> expression at x,y" and
+// the row's articles behind Supplier Articles (n)… (Alt+A), which opens
+// their table (mitcad#979, SupplierPartsDialog.hpp; "Edit Options supplier
+// part numbers: ..." in the log). Logged for the UI tests: "Edit Options <option> expression at x,y" and
 // "Edit Options OK at x,y" (in the main window, as the panels' places;
 // Return in an expression field may take a suggestion instead of OK),
 // "Edit Options bound <option> =
@@ -25,12 +26,14 @@
 
 #include <QDialog>
 #include <QHash>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
 
 #include "PartOptions.hpp"
+#include "SupplierPartsDialog.hpp"
 
 class QFormLayout;
 class QLabel;
@@ -50,7 +53,9 @@ public:
   // `libraryTable` its library component's table as library_show gives it
   // (with the component's `standards`), when it has one: its rows' standards
   // and suppliers' articles make the Standard and Supplier filters above the
-  // choosers and the row's supplier part numbers under them (mitcad#949).
+  // choosers and the row's articles under them (mitcad#949); its
+  // `suppliers` ({id, name, url}) and `supplier_url` (the component's
+  // product page) go to the articles' table (mitcad#979).
   EditOptionsDialog(JsonRunner query, const QString& component, const QString& name,
                     const QJsonObject& libraryTable = QJsonObject(), QWidget* parent = nullptr);
 
@@ -71,7 +76,8 @@ protected:
 private:
   // The expressions' fields again from the chooser's answer.
   void fillExpressions();
-  // The combination's row's suppliers' part numbers (mitcad#949).
+  // The combination's row's suppliers' articles: the button's count and
+  // what its table shows (mitcad#949, mitcad#979).
   void showSupplierParts();
   void expressionEdited(const QString& option);
   void logPlaces() const;
@@ -80,7 +86,11 @@ private:
   OptionChooser* m_chooser = nullptr;
   QFormLayout* m_expressionsForm = nullptr;
   QLabel* m_intro = nullptr;
-  QLabel* m_supplierParts = nullptr;
+  QPushButton* m_supplierButton = nullptr;
+  SupplierPartsRequest m_supplierRequest;
+  QString m_name;
+  QJsonArray m_suppliers;  // the library's suppliers
+  QString m_productPage;   // the component's supplier_url
   QHash<QString, QLineEdit*> m_expressions;
   QStringList m_order;
   // The options bound to the design's parameters: option -> formula.

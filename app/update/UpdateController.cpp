@@ -195,6 +195,20 @@ void UpdateController::onChecked(const UpdateOffer& offer) {
   settings.lastCheck = QDateTime::currentDateTimeUtc();
   settings.save();
   const QString current = m_client->source().currentVersion;
+  if (offer.expired) {
+    // A newer release whose manifest has expired (mitcad#938): an
+    // automatic check offers nothing; asked, it is announced with why,
+    // without Install, so that a computer whose clock is wrong is not cut
+    // off from news of the release.
+    qInfo().noquote() << QStringLiteral("Update check: the manifest of Mitcad %1 expired on %2")
+                             .arg(offer.version, offer.expires);
+    if (m_manual) {
+      this->offer(offer);
+    } else {
+      hideNotice();
+    }
+    return;
+  }
   if (offer.status == QStringLiteral("current")) {
     qInfo().noquote() << QStringLiteral("Update check: Mitcad %1 is up to date").arg(current);
     if (m_manual) {
@@ -213,13 +227,21 @@ void UpdateController::onChecked(const UpdateOffer& offer) {
 }
 
 bool UpdateController::installable() const {
-  return m_installation.canInstall() && m_offer.hasDownload;
+  return m_installation.canInstall() && m_offer.hasDownload && !m_offer.expired;
 }
 
 void UpdateController::offer(const UpdateOffer& offer) {
-  QString text = tr("<b>MitCad %1</b> is available (this is %2).").arg(offer.version, m_client->source().currentVersion);
+  // Rich text for the bold version: every value escaped, as they come from
+  // the network (mitcad#938).
+  QString text = tr("<b>MitCad %1</b> is available (this is %2).")
+                     .arg(offer.version.toHtmlEscaped(), m_client->source().currentVersion.toHtmlEscaped());
   if (offer.prerelease) {
     text += QLatin1Char(' ') + tr("It is a pre-release.");
+  }
+  if (offer.expired) {
+    text += QLatin1Char(' ') + tr("Its update information expired on %1, so MitCad does not install it; if that "
+                                  "date has not passed, check the date of this computer.")
+                                   .arg(offer.expires.toHtmlEscaped());
   }
   if (!installable()) {
     text += QLatin1Char(' ') + tr("Download it from its release page.");

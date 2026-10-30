@@ -101,14 +101,49 @@ impl fmt::Display for IdError {
 
 impl std::error::Error for IdError {}
 
+/// How many numbers at the top of every id type a design file leaves free
+/// (mitcad#944). A session hands out ids by counting on from the largest
+/// one its design holds (components, occurrences and their numbers,
+/// features, sketch entities and constraints, drawings with their views,
+/// annotations and cut-sheet parts, library sources), so a design file
+/// whose largest id is in this reserve is refused as it is read: every
+/// session then has about a million ids of each kind to hand out, far more
+/// than one session makes, and counting on never overflows, whatever the
+/// build profile. Ids in commands are not limited: a session uses the ids
+/// it handed out.
+pub const ID_RESERVE: u32 = 1 << 20;
+
+/// The largest number a 32-bit id of a design file may have:
+/// `u32::MAX - ID_RESERVE` ([`ID_RESERVE`]).
+pub const LARGEST_U32_ID: u32 = u32::MAX - ID_RESERVE;
+
+/// The largest number a feature id of a design file may have:
+/// `u64::MAX - ID_RESERVE` ([`ID_RESERVE`]).
+pub const LARGEST_U64_ID: u64 = u64::MAX - ID_RESERVE as u64;
+
+/// Whether an id number read from a design file leaves the [`ID_RESERVE`]
+/// of its type free: at most [`LARGEST_U32_ID`] or [`LARGEST_U64_ID`].
+pub fn leaves_reserve<T: Into<u128> + TryFrom<u128>>(number: T) -> bool {
+    T::try_from(number.into() + u128::from(ID_RESERVE)).is_ok()
+}
+
 /// The number after `prefix`, in canonical form (no sign, no leading zero).
+/// The type's largest number is refused (mitcad#929): a design's next id is
+/// one past the largest it uses, so that one must exist for every id read.
+/// A design file's ids are kept below the [`ID_RESERVE`] as the file is
+/// read (mitcad#944), not here: commands name the ids a session handed out.
 #[doc(hidden)]
-pub fn parse_number<T: FromStr>(text: &str, prefix: &str) -> Option<T> {
+pub fn parse_number<T: TryFrom<u128>>(text: &str, prefix: &str) -> Option<T> {
     let digits = text.strip_prefix(prefix)?;
     let canonical = !digits.is_empty()
         && digits.bytes().all(|b| b.is_ascii_digit())
         && (digits == "0" || !digits.starts_with('0'));
-    if canonical { digits.parse().ok() } else { None }
+    if !canonical {
+        return None;
+    }
+    let number: u128 = digits.parse().ok()?;
+    T::try_from(number.checked_add(1)?).ok()?;
+    T::try_from(number).ok()
 }
 
 impl fmt::Display for FeatureUid {
@@ -292,5 +327,43 @@ mod tests {
             error.to_string().contains("invalid feature id 'Sketch1'"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn the_largest_number_of_a_type_is_refused() {
+        // The next id after any id read exists (mitcad#929).
+        assert_eq!("C4294967294".parse(), Ok(ComponentUid(u32::MAX - 1)));
+        assert!("C4294967295".parse::<ComponentUid>().is_err());
+        assert!("O4294967295".parse::<OccurrenceUid>().is_err());
+        assert_eq!(
+            "F18446744073709551614".parse(),
+            Ok(FeatureUid(u64::MAX - 1))
+        );
+        assert!("F18446744073709551615".parse::<FeatureUid>().is_err());
+        assert!("F3.b4294967295".parse::<BodyUid>().is_err());
+        assert!(EntityUid::parse_curve("c4294967295").is_err());
+        assert_eq!(parse_number::<u8>("n254", "n"), Some(254));
+        assert_eq!(parse_number::<u8>("n255", "n"), None);
+        assert_eq!(
+            parse_number::<u64>("n999999999999999999999999999999999999999999", "n"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_reserve_is_the_top_numbers_of_each_type() {
+        // mitcad#944: a design file's ids stay below the reserve.
+        assert_eq!(LARGEST_U32_ID, 4_293_918_719);
+        assert_eq!(LARGEST_U64_ID, 18_446_744_073_708_503_039);
+        assert!(leaves_reserve(0u32));
+        assert!(leaves_reserve(LARGEST_U32_ID));
+        assert!(!leaves_reserve(LARGEST_U32_ID + 1));
+        assert!(!leaves_reserve(u32::MAX));
+        assert!(leaves_reserve(LARGEST_U64_ID));
+        assert!(!leaves_reserve(LARGEST_U64_ID + 1));
+        assert!(!leaves_reserve(u64::MAX));
+        // Ids in the reserve still parse: commands name the ids a session
+        // handed out.
+        assert_eq!("C4293918720".parse(), Ok(ComponentUid(LARGEST_U32_ID + 1)));
     }
 }

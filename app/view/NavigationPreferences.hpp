@@ -389,8 +389,9 @@ private:
     grid->addWidget(box, row, column);
     connect(box, &QCheckBox::toggled, this, [this, field](bool value) { m_settings.*field = value; notify(); });
   }
-  // The 3D mouse's tab (mitcad#951): on or off, its speed, each axis on
-  // and reversed, the locks, the dominant axis and its buttons' commands.
+  // The 3D mouse's tab (mitcad#951): on or off, its speed, its Navigation
+  // mode, each axis on and reversed, the locks, the dominant axis, its
+  // Lock horizon (mitcad#978) and its buttons' commands.
   void addSpaceMouse(QVBoxLayout* layout) {
     auto* group = new QWidget;
     group->setObjectName(QStringLiteral("navigationSpaceMouse"));
@@ -427,7 +428,20 @@ private:
     speedRow->addWidget(speedValue);
     speedRow->addWidget(speedReset);
     speedForm->addRow(tr("3D mouse speed:"), speedRow);
+    // What follows the cap (mitcad#978).
+    auto* mode = new QComboBox;
+    mode->setObjectName(QStringLiteral("navigationSpaceMouseMode"));
+    mode->addItem(tr("Object"), int(SpaceMouseMode::Object));
+    mode->addItem(tr("Camera"), int(SpaceMouseMode::Camera));
+    mode->addItem(tr("Fly"), int(SpaceMouseMode::Fly));
+    mode->setCurrentIndex(std::max(0, mode->findData(int(m_settings.spaceMouse.mode))));
+    mode->setToolTip(tr("What follows the cap: the model (Object) or the camera (Camera, Fly)"));
+    speedForm->addRow(tr("Navigation mode:"), mode);
     box->addLayout(speedForm);
+    connect(mode, &QComboBox::currentIndexChanged, this, [this, mode] {
+      m_settings.spaceMouse.mode = static_cast<SpaceMouseMode>(mode->currentData().toInt());
+      notify();
+    });
     connect(slider, &QSlider::valueChanged, this, [this, speedValue](int position) {
       m_settings.spaceMouse.speed = position / 100.0;
       speedValue->setText(QStringLiteral("%1×").arg(m_settings.spaceMouse.speed, 0, 'f', 2));
@@ -476,10 +490,13 @@ private:
         m_settings.spaceMouse.*field = value;
         notify();
       });
+      return check;
     };
     lock(0, 0, tr("Lock rotation"), "navigationSpaceMouseLockRotation", &SpaceMouseSettings::lockRotation);
     lock(0, 1, tr("Lock translation"), "navigationSpaceMouseLockTranslation", &SpaceMouseSettings::lockTranslation);
     lock(1, 0, tr("Dominant axis only"), "navigationSpaceMouseDominant", &SpaceMouseSettings::dominantAxis);
+    lock(1, 1, tr("Lock horizon"), "navigationSpaceMouseLockHorizon", &SpaceMouseSettings::lockHorizon)
+        ->setToolTip(tr("Keeps Z upright and the view level; the roll axis does nothing"));
     box->addLayout(locks);
     // The buttons the device has, at least two, and those bound before.
     const int rows = std::clamp(std::max({2, int(m_settings.spaceMouse.buttons.size()), spaceMouseStatus().buttonsSeen}),

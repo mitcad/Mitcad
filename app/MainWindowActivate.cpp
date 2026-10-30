@@ -12,6 +12,7 @@
 
 #include <exception>
 
+#include <QCursor>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QtLogging>
@@ -29,16 +30,17 @@ QJsonObject activateCommand(const QString& component) {
 
 } // namespace
 
-bool MainWindow::askToActivatePicked(const SelectionItem& item, const QString& refused, bool sketch) {
+bool MainWindow::askToActivatePicked(const SelectionItem& item, const QString& refused, const QString& made) {
   // An agent's request is never held by a question it cannot answer.
   if (m_mcpRequestActive || m_mcpPicking) {
     return false;
   }
-  const ActivateQuestion question = activateQuestion(m_snapshot, item, refused, askToActivateComponent());
+  ActivateQuestion question = activateQuestion(m_snapshot, item, refused, askToActivateComponent());
   if (!question.ask) {
     return false;
   }
-  if (sketch) {
+  question.made = made;
+  if (made == QStringLiteral("sketch")) {
     // A component that takes no sketches (its design policy) would refuse
     // the sketch once active: nothing asked, the sketch goes as before.
     try {
@@ -57,7 +59,8 @@ bool MainWindow::askToActivatePicked(const SelectionItem& item, const QString& r
   }
   qDebug().noquote() << QStringLiteral("Activate component asked: %1 (active %2)")
                             .arg(question.picked, question.active);
-  const ActivateAnswer answer = askToActivate(this, question);
+  // Placed clear of the pick: the pointer is where the face was clicked.
+  const ActivateAnswer answer = askToActivate(this, question, QCursor::pos());
   const QString again = answer.dontAskAgain ? QStringLiteral(", don't ask again") : QString();
   if (answer.activate) {
     qDebug().noquote() << QStringLiteral("Activate component answer: activate %1%2").arg(question.picked, again);
@@ -94,7 +97,7 @@ void MainWindow::pickComing(const CommandDef& def, const SelectionItem& item) {
   if (def.group != QStringLiteral("CONSTRUCT") || !m_session) {
     return;
   }
-  askToActivatePicked(item, QString(), false);
+  askToActivatePicked(item, QString(), madeBy(def.featureType));
 }
 
 } // namespace mitcad

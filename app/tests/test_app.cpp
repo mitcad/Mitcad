@@ -520,6 +520,31 @@ void numberTests() {
   QString normalized;
   CHECK(parsePlainNumber(QStringLiteral(" 12,5"), &normalized) && normalized == QStringLiteral("12.5"));
 
+  // The "= value" hint under a value field (mitcad#994): a signed number,
+  // with or without its unit, is no more than the value; an operator or a
+  // parameter is.
+  using mitcad::valueHintWorthShowing;
+  for (const char* text : {"20", "-8", "11.5 mm", "-8 mm", "+3 mm", " -8 mm ", "- 8 mm", "-2,5 mm", "-1e-3 mm",
+                           "-5\xC2\xB0", "-5 deg", "-0.5 in"}) {
+    if (valueHintWorthShowing(QString::fromUtf8(text), false)) {
+      std::fprintf(stderr, "'%s' is a number: no hint\n", text);
+      ++failures;
+    }
+  }
+  for (const char* text :
+       {"-8 mm + 2 mm", "-(4 mm)", "8 mm - 2 mm", "--8 mm", "2 * 4 mm", "10 mm / 2", "2^3 mm", "(8 mm)"}) {
+    if (!valueHintWorthShowing(QString::fromUtf8(text), false)) {
+      std::fprintf(stderr, "'%s' is an expression: its hint shows\n", text);
+      ++failures;
+    }
+  }
+  // A parameter named (the model's references): the hint, signed or not.
+  CHECK(valueHintWorthShowing(QStringLiteral("d1"), true));
+  CHECK(valueHintWorthShowing(QStringLiteral("-d1"), true));
+  CHECK(valueHintWorthShowing(QStringLiteral("-width"), true));
+  // A plain number never, whatever the model says.
+  CHECK(!valueHintWorthShowing(QStringLiteral("-8"), true));
+
   mitcad::DecimalSpinBox box;
   box.setRange(0.0, 1000.0);
   box.setDecimals(2);
@@ -2564,6 +2589,9 @@ int cameraHeightTests();
 int sketchNormalTests();
 int activateQuestionTests();
 int featureStatusTests();
+int sketchPointMarkersTests();
+int holeSizesTests();
+int nativeStructureTests();
 
 int main(int argc, char* argv[]) {
   QApplication app(argc, argv);
@@ -2673,6 +2701,9 @@ int main(int argc, char* argv[]) {
     failures += sketchNormalTests();
     failures += activateQuestionTests();
     failures += featureStatusTests();
+    failures += sketchPointMarkersTests();
+    failures += holeSizesTests();
+    failures += nativeStructureTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

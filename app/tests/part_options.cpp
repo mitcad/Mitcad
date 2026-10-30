@@ -4,7 +4,8 @@
 // driven option, the row, the moves and a refusal), the requests sent for
 // a library component and an inserted one, the tables of library_show
 // (open, closed, the old form), the constants written, and the rows'
-// Standard and Supplier filters with the designation's standard (mitcad#949).
+// Standard and Supplier filters with the designation's standard (mitcad#949),
+// and the suppliers' articles as their table shows them (mitcad#979).
 #include "library/PartOptions.hpp"
 
 #include <cmath>
@@ -325,6 +326,78 @@ void rowFilterTests() {
   CHECK(supplierPartsText(QJsonArray()).isEmpty());
 }
 
+// The suppliers' articles as the table behind Supplier Articles (n)…
+// shows them (mitcad#979): the suppliers' sites, the columns some article
+// fills, the Supplier filter's supplier first, the tab-separated copy and
+// the log line.
+void supplierArticleTests() {
+  const QJsonArray parts = parse(R"({"parts": [
+      {"supplier": "wurth", "supplier_name": "Würth", "part_number": "0084 5 16", "material": "8.8",
+       "finish": "zinc-plated", "checked": "2026-10-30"},
+      {"supplier": "etra", "supplier_name": "Etra", "part_number": "E-516", "material": "A2",
+       "checked": "2026-10-29"},
+      {"supplier": "wurth", "part_number": "0084 5 16 A", "material": "10.9", "finish": "plain"},
+      {"supplier": "nobody", "part_number": "N 1"}]})")
+                               .value(QStringLiteral("parts"))
+                               .toArray();
+  const QJsonArray suppliers = parse(R"({"suppliers": [
+      {"id": "wurth", "name": "Würth", "url": "https://www.wurth.example"},
+      {"id": "etra", "name": "Etra"}]})")
+                                   .value(QStringLiteral("suppliers"))
+                                   .toArray();
+  // In the order given; the names from the articles, else the library's,
+  // else the id; the sites from the library.
+  const QList<SupplierArticle> all = supplierArticles(parts, suppliers, QString());
+  CHECK(all.size() == 4);
+  CHECK(all[0].supplierName == QStringLiteral("Würth") &&
+        all[0].supplierUrl == QStringLiteral("https://www.wurth.example"));
+  CHECK(all[1].supplierName == QStringLiteral("Etra") && all[1].supplierUrl.isEmpty());
+  CHECK(all[2].supplierName == QStringLiteral("Würth") && all[2].partNumber == QStringLiteral("0084 5 16 A"));
+  CHECK(all[3].supplierName == QStringLiteral("nobody"));
+  // No product page: its column is left out; the others are filled.
+  const QList<SupplierColumn> columns = supplierColumns(all);
+  CHECK(columns == (QList<SupplierColumn>{SupplierColumn::Supplier, SupplierColumn::PartNumber,
+                                          SupplierColumn::Material, SupplierColumn::Finish,
+                                          SupplierColumn::Checked}));
+  CHECK(supplierArticlesLog(QStringLiteral("M5x16"), all, columns) ==
+        QStringLiteral("Supplier parts of M5x16: 4 articles, columns Supplier, Part number, Material, Finish, Checked"));
+  // Only part numbers: the other columns left out.
+  const QList<SupplierArticle> bare =
+      supplierArticles(parse(R"({"p": [{"supplier": "acme", "part_number": "A 1"}]})")
+                           .value(QStringLiteral("p"))
+                           .toArray(),
+                       QJsonArray(), QString());
+  CHECK(supplierColumns(bare) == (QList<SupplierColumn>{SupplierColumn::Supplier, SupplierColumn::PartNumber}));
+  // The Supplier filter's supplier first, the rest in their order.
+  const QList<SupplierArticle> etraFirst = supplierArticles(parts, suppliers, QString(), QStringLiteral("ETRA"));
+  CHECK(etraFirst.size() == 4 && etraFirst[0].supplier == QStringLiteral("etra") &&
+        etraFirst[1].partNumber == QStringLiteral("0084 5 16") &&
+        etraFirst[2].partNumber == QStringLiteral("0084 5 16 A") && etraFirst[3].supplier == QStringLiteral("nobody"));
+  const QList<SupplierArticle> wurthFirst = supplierArticles(parts, suppliers, QString(), QStringLiteral("wurth"));
+  CHECK(wurthFirst[0].partNumber == QStringLiteral("0084 5 16") &&
+        wurthFirst[1].partNumber == QStringLiteral("0084 5 16 A") && wurthFirst[2].supplier == QStringLiteral("etra"));
+  // A product page: its column, and the cells' links.
+  const QList<SupplierArticle> paged = supplierArticles(parts, suppliers, QStringLiteral("https://shop.example/m5x16"));
+  CHECK(supplierColumns(paged).last() == SupplierColumn::ProductPage);
+  CHECK(supplierCellLink(paged[0], SupplierColumn::Supplier) == QStringLiteral("https://www.wurth.example"));
+  CHECK(supplierCellLink(paged[0], SupplierColumn::ProductPage) == QStringLiteral("https://shop.example/m5x16"));
+  CHECK(supplierCellLink(paged[0], SupplierColumn::PartNumber).isEmpty());
+  CHECK(supplierColumnName(SupplierColumn::ProductPage) == QStringLiteral("Product page"));
+  // The copy: the headings, a line per article, tabs between the cells;
+  // a tab or line break in a cell becomes a space.
+  CHECK(supplierArticlesTsv(all.mid(0, 2), columns) ==
+        QStringLiteral("Supplier\tPart number\tMaterial\tFinish\tChecked\n"
+                       "Würth\t0084 5 16\t8.8\tzinc-plated\t2026-10-30\n"
+                       "Etra\tE-516\tA2\t\t2026-10-29\n"));
+  SupplierArticle odd;
+  odd.supplierName = QStringLiteral("Odd");
+  odd.partNumber = QStringLiteral("X\t1\n2");
+  CHECK(supplierArticlesTsv({odd}, {SupplierColumn::PartNumber}) == QStringLiteral("Part number\nX 1 2\n"));
+  // No articles: no columns.
+  CHECK(supplierArticles(QJsonArray(), suppliers, QString()).isEmpty());
+  CHECK(supplierColumns({}).isEmpty());
+}
+
 } // namespace
 
 int partOptionsTests() {
@@ -333,5 +406,6 @@ int partOptionsTests() {
   tableTests();
   valueTests();
   rowFilterTests();
+  supplierArticleTests();
   return failures;
 }

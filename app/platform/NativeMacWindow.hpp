@@ -233,7 +233,8 @@ public:
   bool editProjectsRow(const QString& identifier, const QString& text,
                        std::function<void(const QString&, bool)> finished);
   void closeProjectsEditor();
-  void setStatus(const QString& message, bool error = false);
+  // The shared status pill supplies its lifetime; a new message restarts it.
+  void setStatus(const QString& message, bool error, int milliseconds);
   void setInspectorText(const QString& title, const QString& text);
   // The shell retains this NSView while installed. nullptr clears it. A
   // footer (a command form's OK and Cancel, mitcad#815) stays under the

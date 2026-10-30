@@ -2249,13 +2249,10 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                         None if font_changed => t.font_file = None,
                         None => {}
                     }
+                    // Only a file chosen in this session is read again
+                    // (mitcad#929).
                     if t.font_file.is_some() && !t.glyphs.as_ref().is_some_and(|g| g.fit(t)) {
-                        let path = t
-                            .font_file
-                            .as_ref()
-                            .map(|f| f.path.clone())
-                            .unwrap_or_default();
-                        mitcad_model::sketch::text::use_font_file(t, &path).map_err(|e| {
+                        mitcad_model::sketch::text::read_font_file_again(t).map_err(|e| {
                             format!(
                                 "text {id}: {e}; choose the font file again for a new \
                                  string or style"

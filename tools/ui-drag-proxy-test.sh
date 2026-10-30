@@ -3,6 +3,7 @@
 # check-all sources: app/framework/CommandSessionProxy.cpp app/framework/DragProxy.cpp
 # check-all sources: app/commands/ExtrudeDragProxy.cpp app/view/ProvisionalMesh.cpp
 # check-all sources: app/framework/CommandSession.cpp app/framework/ManipulatorOverlay.cpp app/OcctViewer.cpp
+# check-all sources: app/framework/Numbers.cpp
 # check-all sources: core/model/src/document.rs core/model-api/src/lib.rs tools/cli
 # Extrude's provisional drag presentation (mitcad#636) through the real UI,
 # with held drags of the distance's arrow: 180 mouse moves 16 ms apart
@@ -22,7 +23,9 @@
 #   - reach: the rectangle on a plane 10 mm over the block, 5 mm down: New
 #     Body. Dragged down into the block, the proxy shows the tool going in
 #     while the panel keeps New Body; the exact preview after the release
-#     makes it Cut, and OK commits a Cut of the last value.
+#     makes it Cut, and OK commits a Cut of the last value. The dragged
+#     negative values ("-17.5 mm") bring no "= value" line under the
+#     field (mitcad#994).
 #   - placed: the block and the rectangle in a component turned 90 degrees
 #     about Z and moved 60 mm along X, its boss's Join edited: the exact
 #     tool is drawn where the component is (no longer at its own
@@ -265,6 +268,10 @@ ui_expect_new "Drag proxy Extrude: shown for distance " "the proxy shows the too
 ui_expect_new "Extrude: automatic Operation = Cut" "an exact preview going into the block makes it Cut" 30
 ui_wait_idle
 ui_expect_new "Drag proxy Extrude: the exact preview of $value mm replaced it " "the exact preview replaces the proxy" 30
+# The drag wrote "-17.5 mm" and the like in the field: no "= -17.5 mm"
+# line came under it, so the panel kept its height (mitcad#994). (The
+# exact preview of the last value above came after its evaluation.)
+no_new "Panel Extrude distance hint:" "no '= value' line under the dragged negative distance"
 # Each operation the panel was given came with an exact preview that had
 # just been computed, none from the proxy.
 tail -n +$((UI_MARK + 1)) "$UI_LOG" |

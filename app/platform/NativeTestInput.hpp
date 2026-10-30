@@ -56,7 +56,8 @@ bool historyMarkerEvent(const QString& phase, int index, QString& error);
 bool historyWheel(QString& error);
 bool trackContextMenu(const QString& choice, const std::function<void()>& open, QString& error,
                       const std::function<void()>& onClosed = {}, const QString& screenshotPath = {});
-bool contextMenu(const QString& identifier, const QString& choice, QString& error);
+bool contextMenu(const QString& identifier, const QString& choice, QString& error,
+                 const std::function<void()>& onClosed = {});
 bool pinch(QOpenGLWidget* viewport, const QPointF& position, double magnification, QString& error);
 bool buttonExists(const QRegularExpression& expression);
 bool clickButton(const QRegularExpression& expression, QString& error);
@@ -128,9 +129,14 @@ bool controlBounds(const QString& identifier, double minimumWidth, const QString
 // controlBounds with the width the text field's own cell needs to show its
 // whole placeholder in its actual font and insets (mitcad#953).
 bool placeholderBounds(const QString& identifier, const QString& labelPattern, QString& error);
+// The same with the width for the field's whole current text, such as a
+// spin box value with its unit suffix (mitcad#975).
+bool textBounds(const QString& identifier, const QString& labelPattern, QString& error);
 // Simultaneous, read-only geometry: no scrolling individual controls into
 // view. Entries are identifiers, optionally followed by = and a label.
 bool formLayout(const QStringList& entries, QString& error);
+// Settings pane geometry and repeatable Navigation tab positions (mitcad#992).
+bool settingsLayout(const QString& page, QString& error);
 // Read-only configuration-card geometry, complete captions and slider
 // travel/knob exposure, plus one full reachable Browser row below it;
 // never scrolls a clipped control or row into view.
@@ -146,16 +152,26 @@ bool colorField(const QString& identifier, const QString& color, const QString& 
                 const QString& accessibilityLabel, QString& error);
 bool buttonOrder(const QStringList& patterns, QString& error);
 bool focused(const QString& identifier);
-// Optional normalized point within the control; still requires a real,
-// uncovered hit on that control or one of its descendants.
-bool pointerClick(const QString& identifier, QString& error, double x = 0.5, double y = 0.5);
+// A real press at the control's default point: the centre of its bounds,
+// or of a checkbox's or radio button's box, since AppKit ignores a press on
+// the rest of a stretched frame (mitcad#987). Requires a real, uncovered hit
+// on that control or one of its descendants.
+bool pointerClick(const QString& identifier, QString& error);
+// The same at fractions of the control's bounds; a point outside a checkbox's
+// or radio button's visible box and title glyphs is refused.
+bool pointerClick(const QString& identifier, QString& error, double x, double y);
 // Two real pointer clicks on the same guarded native control, with the
 // second press carrying AppKit's double-click count.
 bool pointerDoubleClick(const QString& identifier, QString& error);
 // Open a real NSPopUpButton by pointer, then navigate/commit in its actual
 // menu tracking loop. Keys are Up/Down followed by Return; never set a value.
 bool pointerChoice(const QString& identifier, const QString& expected, const QStringList& keys, QString& error);
+// A real press on the enabled button whose title matches, at its default
+// point as for pointerClick.
 bool pointerButton(const QRegularExpression& expression, QString& error);
+// Drag the actual header divider, then compare its width after ordinary UI refreshes.
+bool resizeHeader(const QString& identifier, int logicalColumn, double delta, QString& error);
+bool headerResizeRetained(const QString& identifier, int logicalColumn, QString& error);
 // Held sliders require their actual knob and guarded WindowServer input
 // with already granted posting access. Other controls use fractional starts.
 bool pointerDrag(const QString& identifier, double from, double to, QString& error, bool fromKnob = false);
@@ -198,7 +214,8 @@ inline bool historyWheel(QString&) { return false; }
 inline bool historyMarkerEvent(const QString&, int, QString&) { return false; }
 inline bool trackContextMenu(const QString&, const std::function<void()>&, QString&,
                              const std::function<void()>& = {}, const QString& = {}) { return false; }
-inline bool contextMenu(const QString&, const QString&, QString&) { return false; }
+inline bool contextMenu(const QString&, const QString&, QString&,
+                        const std::function<void()>& = {}) { return false; }
 inline bool pinch(QOpenGLWidget*, const QPointF&, double, QString&) { return false; }
 inline bool buttonExists(const QRegularExpression&) { return false; }
 inline bool clickButton(const QRegularExpression&, QString&) { return false; }
@@ -237,17 +254,22 @@ inline bool tileAction(const QStringList&, QString&) { return false; }
 inline bool tileCheck(const QStringList&, QString&) { return false; }
 inline bool controlBounds(const QString&, double, const QString&, QString&) { return false; }
 inline bool placeholderBounds(const QString&, const QString&, QString&) { return false; }
+inline bool textBounds(const QString&, const QString&, QString&) { return false; }
 inline bool formLayout(const QStringList&, QString&) { return false; }
+inline bool settingsLayout(const QString&, QString&) { return false; }
 inline bool configurationLayout(QString&) { return false; }
 inline bool spannedHeading(const QString&, const QRegularExpression&, QString&) { return false; }
 inline bool firstVisibleRow(const QString&, const QRegularExpression&, QString&) { return false; }
 inline bool colorField(const QString&, const QString&, const QString&, bool, const QString&, QString&) { return false; }
 inline bool buttonOrder(const QStringList&, QString&) { return false; }
 inline bool focused(const QString&) { return false; }
-inline bool pointerClick(const QString&, QString&, double = 0.5, double = 0.5) { return false; }
+inline bool pointerClick(const QString&, QString&) { return false; }
+inline bool pointerClick(const QString&, QString&, double, double) { return false; }
 inline bool pointerDoubleClick(const QString&, QString&) { return false; }
 inline bool pointerChoice(const QString&, const QString&, const QStringList&, QString&) { return false; }
 inline bool pointerButton(const QRegularExpression&, QString&) { return false; }
+inline bool resizeHeader(const QString&, int, double, QString&) { return false; }
+inline bool headerResizeRetained(const QString&, int, QString&) { return false; }
 inline bool pointerDrag(const QString&, double, double, QString&, bool = false) { return false; }
 inline bool resizeDialog(int, int, QString&) { return false; }
 inline bool layoutContract(QString&) { return false; }

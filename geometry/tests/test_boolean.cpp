@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -46,6 +49,7 @@
 
 #include "../src/history.hpp"
 #include "check.hpp"
+#include "mitcad/geometry/import.hpp"
 #include "mitcad/geometry/path_sweep.hpp"
 
 namespace test {
@@ -817,6 +821,92 @@ void test_split_by_curves_tangent_at_a_vertex() {
   }
 }
 
+// The folder of geometry cases kept outside the repository
+// (MITCAD_GEOMETRY_CASES: bodies cut from reported models, which are not
+// committed here); empty when it is not set.
+std::string geometry_cases() {
+#ifdef _MSC_VER
+  char* value = nullptr;
+  std::size_t length = 0;
+  std::string out;
+  if (_dupenv_s(&value, &length, "MITCAD_GEOMETRY_CASES") == 0 && value != nullptr) {
+    out = value;
+    std::free(value);
+  }
+  return out;
+#else
+  const char* value = std::getenv("MITCAD_GEOMETRY_CASES");
+  return value != nullptr ? std::string(value) : std::string();
+#endif
+}
+
+// A body of a geometry case read from its B-rep file, its faces named as
+// imported by `feature`; null when the file cannot be read.
+ShapePtr case_body(const std::string& path, const std::string& feature) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    return nullptr;
+  }
+  std::ostringstream data;
+  data << in.rdbuf();
+  const std::string bytes = data.str();
+  return import_body(read_brep_data(bytes.data(), bytes.size()), feature, 0);
+}
+
+void test_join_that_loses_volume_is_retried() {
+  // (mitcad#964) A reported model's pad, flush with two walls of its body
+  // that meet tangentially (the rim and a concave wall, merged faces of
+  // the body's earlier joins and cuts), over a pocket below it: OCCT's
+  // exact union takes the pad's overlap with the body away. The join
+  // finds that its result lost volume and is retried with a fuzzy value
+  // of 1e-5 mm: the pad adds what FreeCAD's adds, 134.754 mm3. The two
+  // bodies are the case `caliper-pad028` of MITCAD_GEOMETRY_CASES
+  // (`body.brep`, the body before the pad; `pad.brep`, the pad's tool);
+  // no synthetic layout reproduced OCCT's failure.
+  const std::string cases = geometry_cases();
+  if (cases.empty()) {
+    std::printf("test_join_that_loses_volume_is_retried: skipped (MITCAD_GEOMETRY_CASES is not set)\n");
+    return;
+  }
+  const std::string folder = cases + "/caliper-pad028/";
+  const ShapePtr body = case_body(folder + "body.brep", "F1");
+  const ShapePtr pad = case_body(folder + "pad.brep", "F2");
+  CHECK(body != nullptr && pad != nullptr);
+  if (body == nullptr || pad == nullptr) {
+    std::printf("test_join_that_loses_volume_is_retried: %sbody.brep or pad.brep not read\n", folder.c_str());
+    return;
+  }
+  const double before = volume(*body);
+  const double added = 134.75405463195966; // FreeCAD's result less its body before the pad
+  // The test's premise: OCCT's exact union adds less than that (on the
+  // inputs as they are: non-destructive, as the join's own).
+  const double exact = [&] {
+    BRepAlgoAPI_Fuse fuse;
+    NCollection_List<TopoDS_Shape> arguments;
+    NCollection_List<TopoDS_Shape> tools;
+    arguments.Append(body->occt());
+    tools.Append(pad->occt());
+    fuse.SetArguments(arguments);
+    fuse.SetTools(tools);
+    fuse.SetNonDestructive(true);
+    fuse.Build();
+    GProp_GProps props;
+    BRepGProp::VolumeProperties(fuse.Shape(), props);
+    return props.Mass();
+  }();
+  CHECK(exact < before + added - 1.0);
+  const BooleanResult joined = run(BooleanOp::Join, {body}, pad);
+  CHECK((joined.touched == std::vector<bool>{true}));
+  CHECK(joined.pieces.size() == 1);
+  if (joined.pieces.size() == 1) {
+    CHECK((joined.pieces[0].sources == std::vector<std::size_t>{0}));
+    const double after = volume(*joined.pieces[0].shape);
+    CHECK(after >= before);
+    CHECK_NEAR_TOL(after - before, added, 1e-6);
+    CHECK(BRepCheck_Analyzer(joined.pieces[0].shape->occt()).IsValid());
+  }
+}
+
 } // namespace
 
 void boolean_tests() {
@@ -841,6 +931,8 @@ void boolean_tests() {
   test_join_within_a_tolerance_rebuilds_lost_solids();
   test_cut_of_a_thread_in_a_bore_whose_seam_steps();
   test_join_within_a_tolerance_of_a_boss_touching_a_wall_tangentially();
+  // A join that loses volume (mitcad#964), on a reported model's bodies.
+  guarded("test_join_that_loses_volume_is_retried", test_join_that_loses_volume_is_retried);
 }
 
 } // namespace test

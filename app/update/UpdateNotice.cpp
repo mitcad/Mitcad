@@ -50,8 +50,8 @@ UpdateNotice::UpdateNotice(QWidget* parent) : QWidget(parent) {
   connect(m_later, &QPushButton::clicked, this, &UpdateNotice::closed);
 }
 
-void UpdateNotice::present(const QString& state, const QString& text) {
-  m_text->setText(text);
+void UpdateNotice::present(const QString& state, const QString& html) {
+  m_text->setText(html);
   QStringList buttons;
   for (QPushButton* b : {m_notes, m_install, m_skip, m_later, m_cancel, m_close}) {
     if (!b->isHidden()) {
@@ -78,7 +78,7 @@ void UpdateNotice::present(const QString& state, const QString& text) {
 
 QString UpdateNotice::text() const { return QTextDocumentFragment::fromHtml(m_text->text()).toPlainText(); }
 
-void UpdateNotice::showOffer(const QString& text, bool installable) {
+void UpdateNotice::showOffer(const QString& html, bool installable) {
   m_progress->hide();
   m_notes->show();
   m_install->setVisible(installable);
@@ -86,10 +86,12 @@ void UpdateNotice::showOffer(const QString& text, bool installable) {
   m_later->show();
   m_cancel->hide();
   m_close->hide();
-  present(QStringLiteral("offer"), text);
+  present(QStringLiteral("offer"), html);
 }
 
-void UpdateNotice::showProgress(const QString& text, qint64 received, qint64 total) {
+void UpdateNotice::showProgress(const QString& plain, qint64 received, qint64 total) {
+  // Plain text: a message can carry what a server sent (mitcad#938).
+  const QString html = plain.toHtmlEscaped();
   m_progress->show();
   if (total > 0) {
     m_progress->setRange(0, 1000);
@@ -97,23 +99,25 @@ void UpdateNotice::showProgress(const QString& text, qint64 received, qint64 tot
   } else {
     m_progress->setRange(0, 0);
   }
-  const bool changed = !m_cancel->isVisible() || m_text->text() != text;
+  const bool changed = !m_cancel->isVisible() || m_text->text() != html;
   for (QPushButton* b : {m_notes, m_install, m_skip, m_later, m_close}) {
     b->hide();
   }
   m_cancel->show();
   if (changed) {
-    present(QStringLiteral("progress"), text);
+    present(QStringLiteral("progress"), html);
   }
 }
 
-void UpdateNotice::showMessage(const QString& text, bool error) {
+void UpdateNotice::showMessage(const QString& plain, bool error) {
   m_progress->hide();
   for (QPushButton* b : {m_notes, m_install, m_skip, m_later, m_cancel}) {
     b->hide();
   }
   m_close->show();
-  present(error ? QStringLiteral("error") : QStringLiteral("message"), text);
+  // Plain text: an error carries what a server sent, which must not be
+  // read as markup (mitcad#938).
+  present(error ? QStringLiteral("error") : QStringLiteral("message"), plain.toHtmlEscaped());
 }
 
 } // namespace mitcad

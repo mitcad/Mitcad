@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/print app/files/MainWindowPrint.cpp app/platform/macos/NativeDialogs app/framework/Dialogs app/framework/CommandSession app/framework/Command.hpp app/framework/TestDriver tools/cli
+# check-all sources: app/print app/files/MainWindowPrint.cpp app/platform/macos/NativeDialogs app/platform/macos/NativeTestInput app/framework/Dialogs app/framework/CommandSession app/framework/Command.hpp app/framework/TestDriver tools/cli
 # Recent print UI (#828-#830): identical local synthetic profiles and presets
 # in Qt/AppKit, both appearances. No installed/user preset folder is read.
 # Usage: ui-macos-slicer-parity-test.sh <app> <cli> <output> [qt|native|both]

@@ -10,6 +10,7 @@
 #include <QAbstractScrollArea>
 #include <QAbstractSpinBox>
 #include <QBoxLayout>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFontMetrics>
@@ -23,6 +24,7 @@
 #include <QList>
 #include <QMargins>
 #include <QProgressBar>
+#include <QRadioButton>
 #include <QSizePolicy>
 #include <QSlider>
 #include <QSpacerItem>
@@ -145,9 +147,18 @@ Axis widgetAxis(const QWidget* widget, bool horizontal, Qt::Alignment alignment)
   axis.grows = (aligned || canGrow) && explicitMaximum > std::max(minimum, preferred);
   axis.expands = !aligned && axis.grows && (flags & QSizePolicy::ExpandFlag) != 0;
   axis.place = placement(alignment, horizontal);
+  const auto* button = qobject_cast<const QAbstractButton*>(widget);
+  const bool bareToggle = button != nullptr && button->text().isEmpty() &&
+      (qobject_cast<const QCheckBox*>(widget) != nullptr || qobject_cast<const QRadioButton*>(widget) != nullptr);
+  if (horizontal && bareToggle) {
+    // A titleless switch centres its glyph in a stretched grid column.
+    // Keep it under its heading; titled controls retain their reading width.
+    axis.cap = true;
+    axis.place = any(alignment, Qt::AlignHorizontal_Mask) ? axis.place : Place::Leading;
+  }
   // Labels keep Qt's vertically centred text, buttons their own height.
-  axis.fill = horizontal || (!aligned && canGrow && qobject_cast<const QLabel*>(widget) == nullptr &&
-                             qobject_cast<const QAbstractButton*>(widget) == nullptr);
+  axis.fill = horizontal ? !bareToggle : !aligned && canGrow && qobject_cast<const QLabel*>(widget) == nullptr &&
+                                    qobject_cast<const QAbstractButton*>(widget) == nullptr;
   return axis;
 }
 
@@ -578,13 +589,14 @@ void constrainAxis(NSView* host, const Grid& grid, const Guides& guides, bool ho
     const CGFloat minimum = std::max<CGFloat>(0, tracks[t].minimum);
     if (minimum > 0) { prefer([g.size constraintGreaterThanOrEqualToConstant:minimum], kLimit); }
     if (weight[t] <= 0) {
-      // A zero-stretch spacer must yield spare space to a sibling with
-      // positive Qt stretch. Otherwise its priority-2 hug absorbs that
+      // A zero-stretch track must yield spare space to a sibling with
+      // positive Qt stretch, also when it contains a nested form. Otherwise
+      // its priority-2 hug absorbs that
       // space to preserve the sibling control's intrinsic hugging (250),
       // leaving an expanding input at its tiny intrinsic width. Content
       // tracks keep their natural sizing; nonzero spacer hints/minima
       // still win at their preferred/limit priorities.
-      const NSLayoutPriority hug = stretch > 0 && occupied[t] == 0 ? kShare : kTrackHug;
+      const NSLayoutPriority hug = stretch > 0 ? kShare : kTrackHug;
       prefer([g.size constraintEqualToConstant:0], hug);
     } else if (t != base) {
       prefer([g.size constraintEqualToAnchor:track(base).size multiplier:weight[t] / weight[base]], kShare);
@@ -926,7 +938,8 @@ void updateVisibility(NSView* root) {
   if (removing.count > 0) [NSLayoutConstraint deactivateConstraints:removing];
 }
 
-NSView* build(QLayout* layout, const std::function<NSView*(QLayoutItem*)>& render, bool equalColumns, bool responsive) {
+NSView* build(QLayout* layout, const std::function<NSView*(QLayoutItem*)>& render, bool equalColumns,
+              bool responsive, bool firstColumnStretch) {
   if (layout == nullptr) { return nil; }
   Grid grid;
   if (auto* form = qobject_cast<QFormLayout*>(layout)) { addForm(form, render, grid); }
@@ -936,6 +949,7 @@ NSView* build(QLayout* layout, const std::function<NSView*(QLayoutItem*)>& rende
   const QMargins margins = layout->contentsMargins();
   grid.margins = NSEdgeInsetsMake(margins.top(), margins.left(), margins.bottom(), margins.right());
   grid.equalColumns = equalColumns;
+  if (firstColumnStretch && !grid.columns.empty()) grid.columns.front().stretch = 1;
   if (responsive && grid.columns.size() > 1) grid.wrapWidth = layout->sizeHint().width();
   MitcadNativeLayoutView* view = [[MitcadNativeLayoutView alloc] initWithFrame:NSZeroRect];
   [view applyGrid:grid];

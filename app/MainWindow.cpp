@@ -108,6 +108,7 @@
 #include "framework/ResultCache.hpp"
 #include "framework/Restart.hpp"
 #include "framework/Ribbon.hpp"
+#include "framework/SectionPreview.hpp"
 #include "framework/SectionWorker.hpp"
 #include "framework/SelectionCreate.hpp"
 #include "framework/TitleBar.hpp"
@@ -1625,13 +1626,14 @@ void MainWindow::updateCommandCard() {
 }
 
 void MainWindow::updateStatusPill(bool error) {
+  const int timeout = error ? 10000 : 6000;
 #ifdef MITCAD_MACOS_NATIVE_UI
   if (m_nativeWindow) {
-    m_nativeWindow->setStatus(m_statusLabel->text(), error);
+    m_nativeWindow->setStatus(m_statusLabel->text(), error, timeout);
   }
 #endif
   if (m_floating != nullptr) {
-    m_floating->showStatus(m_statusLabel->text(), error, error ? 10000 : 6000);
+    m_floating->showStatus(m_statusLabel->text(), error, timeout);
   }
 }
 
@@ -2265,7 +2267,13 @@ QJsonValue MainWindow::cutPlane() const {
                      {QStringLiteral("normal"), QJsonArray{normal.X(), normal.Y(), normal.Z()}}};
 }
 
-void MainWindow::showSectionCaps(const std::vector<BodyDisplay>& bodies) {
+void MainWindow::showSectionCapsOf(const std::vector<BodyDisplay>& bodies, bool preview) {
+  showSectionCaps(bodies, preview);
+}
+
+QJsonValue MainWindow::sectionCutPlane() const { return cutPlane(); }
+
+void MainWindow::showSectionCaps(const std::vector<BodyDisplay>& bodies, bool preview) {
   const QJsonValue cut = cutPlane();
   if (cut.isNull()) {
     m_viewer->setSectionCaps({}, gp_Ax3());
@@ -2292,72 +2300,48 @@ void MainWindow::showSectionCaps(const std::vector<BodyDisplay>& bodies) {
     const geometry::Frame& frame = m_sketch->model().frame;
     axes = gp_Ax3(frame.origin, frame.normal(), frame.x_axis);
   }
-  // The faces of a body that lie in the plane, in the body's coordinates.
-  const auto inPlane = [&](const TopoDS_Shape& shape, const TopLoc_Location& placement) {
-    std::vector<TopoDS_Face> found;
-    for (TopExp_Explorer faces(shape, TopAbs_FACE); faces.More(); faces.Next()) {
-      const TopoDS_Face& face = TopoDS::Face(faces.Current());
-      TopLoc_Location location;
-      if (BRep_Tool::Surface(face, location).IsNull()) {
-        continue; // a mesh body's triangles; a clipped one's caps are planar faces
-      }
-      const BRepAdaptor_Surface surface(face);
-      if (surface.GetType() != GeomAbs_Plane) {
-        continue;
-      }
-      const gp_Pln pln = surface.Plane();
-      const gp_Pnt at = pln.Location().Transformed(placement.Transformation());
-      gp_Dir axis = pln.Axis().Direction();
-      axis.Transform(placement.Transformation());
-      if (std::abs(axis.Dot(n)) > 1.0 - 1e-9 && std::abs(gp_Vec(origin, at).Dot(gp_Vec(n))) < 1e-6) {
-        found.push_back(face);
-      }
-    }
-    return found;
-  };
   // The caps: the clipped bodies' faces in the plane, but not those the
-  // whole body has there too (a sketch on a body's face). One compound per
-  // component, in the component's timeline colour (mitcad#382); the root's
-  // keep the default colour.
+  // shape the clip cut has there too (a sketch on a body's face), from what
+  // each body drawn says of its clip (BodyDisplay::sectioned and uncut), a
+  // preview's alike (mitcad#943), without reading the document. One
+  // compound per component, in the component's timeline colour
+  // (mitcad#382); the root's keep the default colour.
   std::map<int, TopoDS_Compound> groups;
   BRep_Builder builder;
   int count = 0;
-  const occ::handle<IntTools_Context> context = new IntTools_Context();
+  double area = 0.0;
   for (const BodyDisplay& body : bodies) {
-    const auto whole = idleDocument().body_shape(body.uid);
-    if (whole && whole->occt().IsSame(body.shape->occt())) {
+    if (!body.sectioned || !body.shape) {
       continue; // not cut
     }
-    const std::vector<TopoDS_Face> own = whole ? inPlane(whole->occt(), body.placement)
-                                               : std::vector<TopoDS_Face>();
-    for (const TopoDS_Face& face : inPlane(body.shape->occt(), body.placement)) {
-      gp_Pnt inside;
-      gp_Pnt2d uv;
-      const bool original =
-          !own.empty() && BOPTools_AlgoTools3D::PointInFace(face, inside, uv, context) == 0 &&
-          std::any_of(own.begin(), own.end(), [&](const TopoDS_Face& mine) {
-            return context->IsValidPointForFace(inside, mine, 1e-6);
-          });
-      if (!original) {
-        const int colour = componentColorIndex(m_snapshot.components, QString::fromStdString(body.component));
-        auto group = groups.find(colour);
-        if (group == groups.end()) {
-          group = groups.emplace(colour, TopoDS_Compound()).first;
-          builder.MakeCompound(group->second);
-        }
-        builder.Add(group->second, face.Moved(body.placement));
-        ++count;
-      }
+    const std::vector<TopoDS_Face> faces = sectionCapFaces(
+        body.shape->occt(), body.uncut ? body.uncut->occt() : TopoDS_Shape(), body.placement, origin, n);
+    if (faces.empty()) {
+      continue;
     }
+    const int colour = componentColorIndex(m_snapshot.components, QString::fromStdString(body.component));
+    auto group = groups.find(colour);
+    if (group == groups.end()) {
+      group = groups.emplace(colour, TopoDS_Compound()).first;
+      builder.MakeCompound(group->second);
+    }
+    for (const TopoDS_Face& face : faces) {
+      builder.Add(group->second, face.Moved(body.placement));
+      ++count;
+    }
+    area += facesArea(faces);
   }
   std::vector<OcctViewer::SectionCap> caps;
   for (const auto& [colour, faces] : groups) {
     caps.push_back({faces, colour >= 0 ? componentColor(colour) : QColor()});
   }
   m_viewer->setSectionCaps(caps, axes);
-  const QString logged = QStringLiteral("Section caps: %1 face(s) at %2")
+  // With their area (mm²), and "(preview)" for a feature preview's bodies
+  // with its clips (mitcad#943).
+  const QString logged = QStringLiteral("Section caps: %1 face(s) at %2, area %3%4")
                              .arg(count)
-                             .arg(QString::fromUtf8(compactJson(plane)));
+                             .arg(QString::fromUtf8(compactJson(plane)), QString::number(area, 'f', 1),
+                                  preview ? QStringLiteral(" (preview)") : QString());
   if (logged != m_loggedCaps) {
     m_loggedCaps = logged;
     qDebug().noquote() << logged;
@@ -3160,6 +3144,7 @@ void MainWindow::useClips(const SectionTargets& cut, std::vector<BodyDisplay>& b
     if (found != kept.clips.cend() && found->source == body.shape) {
       if (found->shape) {
         body.sectioned = !found->shape->occt().IsSame(body.shape->occt());
+        body.uncut = body.sectioned ? body.shape : nullptr; // for its caps (mitcad#943)
         body.shape = found->shape;
       }
       continue;
@@ -3182,6 +3167,7 @@ void MainWindow::useClips(const SectionTargets& cut, std::vector<BodyDisplay>& b
     if (shape) {
       // Cut, not left whole: drawn behind its caps (mitcad#784).
       body.sectioned = !shape->occt().IsSame(body.shape->occt());
+      body.uncut = body.sectioned ? body.shape : nullptr; // for its caps (mitcad#943)
       body.shape = shape;
     }
   }
@@ -4227,9 +4213,30 @@ void MainWindow::setSelection(const Selection& items) {
         summarize(items),
         names.isEmpty() ? QString() : QStringLiteral(" [%1]").arg(names.join(QStringLiteral("; "))));
   }
+  // Each part's time, so that a slow selection names its slow part
+  // (mitcad#981): the view's highlights and the card, the sketch, the
+  // browser and timeline.
+  QElapsedTimer selectionClock;
+  selectionClock.start();
+  m_idleHighlightMs = 0;
+  m_idleCardMs = 0;
+  m_idleMeasureMs = 0;
   updateIdleView();
+  const qint64 viewMs = selectionClock.restart();
   m_sketch->refreshView();
+  const qint64 sketchMs = selectionClock.restart();
   m_controller->showSelection(m_selection);
+  const qint64 browserMs = selectionClock.elapsed();
+  if (changed) {
+    qDebug().noquote() << QStringLiteral("Selection timing: view %1 ms (highlights %2, card %3, measure %4), "
+                                         "sketch %5 ms, browser %6 ms")
+                              .arg(viewMs)
+                              .arg(m_idleHighlightMs)
+                              .arg(m_idleCardMs)
+                              .arg(m_idleMeasureMs)
+                              .arg(sketchMs)
+                              .arg(browserMs);
+  }
 }
 
 void MainWindow::updateIdleView() {
@@ -4263,6 +4270,23 @@ void MainWindow::updateIdleView() {
     m_viewer->setPickFilter(idleFilter());
     applyAnnotationPickFilter(); // an annotation's pick waited for
   }
+  QElapsedTimer idleClock; // the Selection timing line's parts (mitcad#981)
+  idleClock.start();
+  m_idleMeasureMs = 0;
+  updateIdleHighlights();
+  m_idleHighlightMs = idleClock.restart();
+  updateIdleCard();
+  m_idleCardMs = idleClock.elapsed();
+  updateCommandCard();
+#ifdef MITCAD_MACOS_NATIVE_UI
+  refreshNativeInspector();
+#endif
+}
+
+// The view's highlights of the selection, the hovered and autoselected
+// items, the print bed face shown, joints and annotations (updateIdleView;
+// alone where only they change, mitcad#981).
+void MainWindow::updateIdleHighlights() {
   std::vector<HighlightDisplay> highlights;
   QStringList featureFaces; // "F4 1": a selected feature's faces (mitcad#28)
   QStringList featureInputs; // "Fillet1 edges 4": its picked edges (mitcad#957)
@@ -4377,7 +4401,12 @@ void MainWindow::updateIdleView() {
     m_loggedFeatureInputs = loggedInputs;
     qDebug().noquote() << QStringLiteral("Feature inputs highlighted: %1").arg(loggedInputs);
   }
+}
 
+// The idle card's text: the selection, its measurements (measured once per
+// selection, m_idleMeasurements) and the selected features' and joints'
+// cards (updateIdleView).
+void MainWindow::updateIdleCard() {
   QString text = tr("<b>No command</b><br>Press S to search for a command, or right-click the "
                     "selection for the commands that fit it.");
   QStringList jointCards; // the selected joints' lines of the card (mitcad#523)
@@ -4481,6 +4510,8 @@ void MainWindow::updateIdleView() {
         }
         const QString key = QString::fromUtf8(compactJson(reference));
         if (!m_idleMeasurements.contains(key)) {
+          QElapsedTimer measureClock;
+          measureClock.start();
           try {
             const QJsonObject answer = queryObject({{QStringLiteral("query"), QStringLiteral("measure")},
                                                     {QStringLiteral("a"), reference}});
@@ -4488,6 +4519,7 @@ void MainWindow::updateIdleView() {
           } catch (const std::exception&) {
             m_idleMeasurements.insert(key, tr("Measurements unavailable"));
           }
+          m_idleMeasureMs += measureClock.elapsed();
         }
         measurements = m_idleMeasurements.value(key);
       }
@@ -4577,10 +4609,6 @@ void MainWindow::updateIdleView() {
       qDebug().noquote() << QStringLiteral("Joint card: %1").arg(cards);
     }
   }
-  updateCommandCard();
-#ifdef MITCAD_MACOS_NATIVE_UI
-  refreshNativeInspector();
-#endif
 }
 
 void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionItem& item) {
@@ -4588,6 +4616,9 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
     qDebug() << "Context menu dropped: the model is computing";
     return; // asked for before a job began; a menu after it would surprise
   }
+  QElapsedTimer menuClock;
+  menuClock.start();
+  qint64 selectMs = 0;
   QMenu menu(this);
   QStringList entries;
   const auto add = [&menu, &entries](QAction* action) {
@@ -4762,18 +4793,31 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
     if (item.isValid() && !m_selection.contains(item) && !inSelected(item)) {
       // A right click on something not selected selects it.
       setSelection({item});
+      selectMs = menuClock.restart();
     }
     fillModelContextMenu(menu, entries);
   }
   menu.addSeparator();
   add(m_registry->action(QStringLiteral("view.fit")));
   add(m_registry->action(QStringLiteral("tools.search")));
+  // Until the menu shows (mitcad#981): the selection it made, the menu.
+  const qint64 menuMs = menuClock.elapsed();
+  qDebug().noquote() << QStringLiteral("Context menu timing: select %1 ms, menu %2 ms, total %3 ms")
+                            .arg(selectMs)
+                            .arg(menuMs)
+                            .arg(selectMs + menuMs);
   qDebug().noquote() << QStringLiteral("Context menu: %1").arg(entries.join(QStringLiteral(" | ")));
   execMenu(&menu, globalPosition);
   // The print bed face shown while the menu was open (mitcad#731).
   if (m_printBedShown.isValid()) {
     m_printBedShown = SelectionItem();
-    updateIdleView();
+    // Only the highlights change (mitcad#981); a command the menu started
+    // has the view as its own.
+    if (m_mode == Mode::Idle) {
+      updateIdleHighlights();
+    } else {
+      updateIdleView();
+    }
   }
 }
 
@@ -4929,7 +4973,7 @@ void MainWindow::createSketch(const QJsonObject& fields) {
 void MainWindow::createSketchOnPick(SelectionItem item) {
   // Another component's face or plane: activate that component first?
   // (mitcad#960, MainWindowActivate.cpp)
-  if (askToActivatePicked(item, sketchSupportRefusal(item), true)) {
+  if (askToActivatePicked(item, sketchSupportRefusal(item), QStringLiteral("sketch"))) {
     // What the newly active component's sketches may lie on.
     refreshSketchSupports();
   }

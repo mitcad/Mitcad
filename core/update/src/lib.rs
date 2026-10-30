@@ -14,6 +14,7 @@
 //!   "format": 1,
 //!   "version": "0.2.0",
 //!   "date": "2026-10-06",
+//!   "expires": "2027-01-04",
 //!   "notes": "https://github.com/mitcad/Mitcad/releases/tag/v0.2.0",
 //!   "assets": {
 //!     "windows-x64": {
@@ -37,6 +38,18 @@
 //! `linux-x64` (the AppImage) and `macos-arm64` (the disk image); a manifest
 //! may list any or none, and a version without a download for the platform
 //! is only announced.
+//!
+//! A manifest expires (mitcad#938): `expires` is the last day it is good
+//! for, signed like the rest. An expired manifest offers nothing to an
+//! automatic check, so that an old but validly signed manifest served again
+//! (a compromised mirror) cannot hold users on a release a later one fixed;
+//! the application still announces it, without Install, on a check the user
+//! asked for. Clocks that are wrong in a harmless way are no lockout: a
+//! clock behind never makes a manifest look expired, one ahead gets
+//! [`CLOCK_TOLERANCE_DAYS`], and the release tool signs a manifest for
+//! [`MANIFEST_VALIDITY_DAYS`] and renews the latest release's manifest
+//! (`mitcad-release renew`). A manifest without `expires` (before
+//! mitcad#938) never expires.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -62,6 +75,12 @@ const FILE_CONTEXT: &str = "mitcad-update-file";
 pub const MANIFEST_ASSET: &str = "update-manifest.json";
 /// The largest download a manifest may describe (4 GiB).
 pub const MAX_ASSET_SIZE: u64 = 4 << 30;
+/// How long the release tool signs a manifest for, from the day it signs
+/// (mitcad#938): the latest release's manifest is renewed before then.
+pub const MANIFEST_VALIDITY_DAYS: i64 = 90;
+/// How many days after its `expires` a manifest is still taken: a computer
+/// whose clock is a little ahead (a wrong day or month) still gets updates.
+pub const CLOCK_TOLERANCE_DAYS: i64 = 14;
 
 /// Why an update was not offered or a download was refused. The texts are
 /// for the user ("The update check failed: ...").
@@ -220,6 +239,83 @@ pub fn is_newer(version: &str, than: &str) -> Result<bool> {
 }
 
 // ---------------------------------------------------------------------------
+// Dates
+
+/// The days since 1970-01-01 of the date `year`-`month`-`day` (the
+/// proleptic Gregorian calendar; Howard Hinnant's algorithm).
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    // March is 0, so that the leap day is the last of the year.
+    let month_index = (month + 9) % 12;
+    let day_of_year = (153 * month_index + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// The days since 1970-01-01 of a date `YYYY-MM-DD`; None for anything
+/// else (another form, a day the month does not have).
+pub fn parse_date(text: &str) -> Option<i64> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 10 || !text.is_ascii() || bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
+    let number = |part: &str| -> Option<i64> {
+        if part.bytes().all(|b| b.is_ascii_digit()) {
+            part.parse().ok()
+        } else {
+            None
+        }
+    };
+    let (year, month, day) = (
+        number(&text[..4])?,
+        number(&text[5..7])?,
+        number(&text[8..])?,
+    );
+    if !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
+        return None;
+    }
+    Some(days_from_civil(year, month, day))
+}
+
+/// The date `YYYY-MM-DD` of a day counted from 1970-01-01.
+pub fn date_text(days: i64) -> String {
+    let days = days + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Today (UTC) by this computer's clock, in days since 1970-01-01; a clock
+/// before 1970 counts as 1970-01-01.
+pub fn today() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| (since.as_secs() / 86_400) as i64)
+}
+
+// ---------------------------------------------------------------------------
 // The manifest
 
 /// A download of a release for one platform.
@@ -241,6 +337,10 @@ pub struct Manifest {
     pub version: String,
     /// The release date, `YYYY-MM-DD`.
     pub date: String,
+    /// The last day the manifest is good for, `YYYY-MM-DD` (mitcad#938);
+    /// none in the manifests of earlier releases, which never expire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires: Option<String>,
     /// The release notes, the release's page (HTTPS).
     pub notes: String,
     pub assets: BTreeMap<String, Asset>,
@@ -317,6 +417,17 @@ impl Manifest {
             ));
         }
         parse_version(&self.version)?;
+        if let Some(expires) = &self.expires {
+            let Some(last) = parse_date(expires) else {
+                return invalid(format!("has an invalid expiry date '{expires}'"));
+            };
+            if parse_date(&self.date).is_some_and(|released| last < released) {
+                return invalid(format!(
+                    "expires on {expires}, before its release date {}",
+                    self.date
+                ));
+            }
+        }
         if !https(&self.notes) {
             return invalid("has no HTTPS address for the release notes".into());
         }
@@ -344,6 +455,16 @@ impl Manifest {
     /// The release's version (checked when read).
     pub fn release_version(&self) -> Version {
         parse_version(&self.version).unwrap_or_else(|_| Version::new(0, 0, 0))
+    }
+
+    /// Whether the manifest has expired on the day `today` (days since
+    /// 1970-01-01): more than [`CLOCK_TOLERANCE_DAYS`] after its `expires`.
+    /// A manifest without one never expires.
+    pub fn expired_on(&self, today: i64) -> bool {
+        self.expires
+            .as_deref()
+            .and_then(parse_date)
+            .is_some_and(|last| today > last + CLOCK_TOLERANCE_DAYS)
     }
 
     /// The manifest file: this manifest signed with `key`.
@@ -434,14 +555,39 @@ pub enum Status {
     Current,
 }
 
-/// What `manifest` offers version `current` on `channel`; `skipped` is the
-/// version the user skipped, or empty.
+/// What `manifest` offers version `current` on `channel` today by this
+/// computer's clock; `skipped` is the version the user skipped, or empty.
+/// An expired manifest offers nothing ([`assess_on`]).
 pub fn assess(
     manifest: &Manifest,
     current: &str,
     channel: Channel,
     skipped: &str,
 ) -> Result<Status> {
+    assess_on(manifest, current, channel, skipped, today())
+}
+
+/// [`assess`] on the day `today` (days since 1970-01-01): a manifest
+/// expired then ([`Manifest::expired_on`]) is [`Status::Current`] whatever
+/// its version, so that an old manifest served again holds no one on its
+/// release.
+pub fn assess_on(
+    manifest: &Manifest,
+    current: &str,
+    channel: Channel,
+    skipped: &str,
+    today: i64,
+) -> Result<Status> {
+    let status = offered(manifest, current, channel, skipped)?;
+    Ok(if manifest.expired_on(today) {
+        Status::Current
+    } else {
+        status
+    })
+}
+
+/// What the manifest's version means for `current`, its expiry aside.
+fn offered(manifest: &Manifest, current: &str, channel: Channel, skipped: &str) -> Result<Status> {
     let current = parse_version(current)?;
     let offered = manifest.release_version();
     if channel == Channel::Stable && !offered.pre.is_empty() {
@@ -461,6 +607,11 @@ struct Offer<'a> {
     status: Status,
     version: &'a str,
     date: &'a str,
+    /// The manifest's last day, or null.
+    expires: Option<&'a str>,
+    /// A newer version whose manifest has expired: `status` is `current`,
+    /// and the application announces it only when the user asked.
+    expired: bool,
     notes: &'a str,
     prerelease: bool,
     /// The download for the platform, or null: announce only.
@@ -469,10 +620,11 @@ struct Offer<'a> {
 
 /// The application's check (`update_check` of the C++ bridge): reads and
 /// verifies a manifest file with the keys (text, as [`TrustedKeys::parse`]
-/// takes) and tells what it offers the running version, as JSON
+/// takes) and tells what it offers the running version today, as JSON
 /// `{"status": "available" | "skipped" | "current", "version", "date",
-/// "notes", "prerelease", "asset": {"url", "size", "sha256", "signature"}
-/// or null}`.
+/// "expires" (or null), "expired", "notes", "prerelease", "asset": {"url",
+/// "size", "sha256", "signature"} or null}`. `expired` is true for a newer
+/// version whose manifest has expired; its status is then `current`.
 pub fn check(
     manifest: &[u8],
     keys: &str,
@@ -481,12 +633,28 @@ pub fn check(
     channel: Channel,
     skipped: &str,
 ) -> Result<String> {
+    check_on(manifest, keys, current, platform, channel, skipped, today())
+}
+
+/// [`check`] on the day `today` (days since 1970-01-01).
+pub fn check_on(
+    manifest: &[u8],
+    keys: &str,
+    current: &str,
+    platform: &str,
+    channel: Channel,
+    skipped: &str,
+    today: i64,
+) -> Result<String> {
     let manifest = Manifest::read(manifest, &TrustedKeys::parse(keys)?)?;
-    let status = assess(&manifest, current, channel, skipped)?;
+    let newer = offered(&manifest, current, channel, skipped)?;
+    let expired = newer != Status::Current && manifest.expired_on(today);
     let offer = Offer {
-        status,
+        status: if expired { Status::Current } else { newer },
         version: &manifest.version,
         date: &manifest.date,
+        expires: manifest.expires.as_deref(),
+        expired,
         notes: &manifest.notes,
         prerelease: !manifest.release_version().pre.is_empty(),
         asset: manifest.assets.get(platform),

@@ -8,7 +8,7 @@
 # Corner brace is active; Create Sketch on the block's top face asks
 #   "The face belongs to M6 rod bracket:1, but Corner brace:1 is active."
 # with Activate M6 rod bracket:1 (the default), Keep in Corner brace:1 and
-# Don't ask again. It saves a picture of the screen with the question as
+# Don't ask again, placed clear of the picked face. It saves a picture of the screen with the question as
 # <dir>/question.png, answers Activate, and checks that the sketch went
 # into M6 rod bracket. The design is <dir>/look.mitcad, the app's log
 # <dir>/look.log.
@@ -62,6 +62,7 @@ ui_step "create sketch (search)"           ui_command "Create Sketch"
 ui_expect_new "Pick face F4.b0/F4:end(" "the block's top face can be picked"
 ui_step "pick the block's top face"        ui_click_pick "face F4.b0/F4:end("
 ui_expect_new "Activate component asked: M6 rod bracket:1 (active Corner brace:1)" "the question"
+ui_expect_new "(clear of it)" "the question placed clear of the picked face"
 ui_focus_dialog '^Activate Component$'
 # The mouse off the window (no hover, no tooltip), the dialog drawn.
 xdotool mousemove 5000 5000

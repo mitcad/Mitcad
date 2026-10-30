@@ -14,10 +14,10 @@
 #      (Alt+T; Screws.Size is offered), OK: Size's values are the column.
 #   2. Rows: Generate Rows from Table… offers Screws.Size for Size; OK
 #      makes the rows M3, M4 and M5 (one undo step).
-#   3. Rules: Add, named "Made sizes"; the palette's combination in table
-#      put in its then from the keyboard; its table typed (Screws): the
-#      options' columns follow by their names, the rule is saved, and View
-#      as Text shows it.
+#   3. Rules: Add › Empty rule (Add offers a table's template too), named
+#      "Made sizes"; the palette's combination in table put in its then
+#      from the keyboard; its table typed (Screws): the options' columns
+#      follow by their names, the rule is saved, and its text shows it.
 #   4. Rows: M5 applied: Size is M5, and the rule moves Length to the only
 #      length of M5 in the table (16 → 20 mm); the body follows.
 #
@@ -112,6 +112,9 @@ ui_expect_new "Configurations page Rules" "the Rules page"
 ui_expect_new "Rules add at" "the page's buttons are logged"
 ui_mark
 ui_step "Add"                            ui_click_logged "Rules add"
+ui_expect_new "Only the combinations of a table… | Empty rule" "Add offers its templates, a table's among them"
+ui_sync
+ui_step "Empty rule (E)"                 ui_key e
 ui_expect_new "Rules saved: Add rule Rule 1" "a new rule, saved"
 ui_expect_new "Rules naming Rule 1" "its name to be typed"
 ui_step "type its name"                  xdotool type --delay 40 "Made sizes"
@@ -133,10 +136,8 @@ ui_expect_new "Rules saved: Set table of then.0 to Screws" "the rule is complete
 last_row=$(grep -o 'Rules row Made sizes: .*' "$UI_LOG" | tail -1)
 [ "$last_row" = "Rules row Made sizes: enabled, ok" ] && echo "ok   no mark in the list" ||
   ui_fail "no mark in the list: ${last_row:-no line of the row}"
-ui_mark
-ui_step "Alt+T (View as Text)"           ui_key alt+t
-ui_expect_new "Rule as text Made sizes: always / then combination in table Screws (Length = Length, Size = Size)" \
-  "View as Text shows the action"
+ui_expect_log "Rule as text Made sizes: always / then combination in table Screws (Length = Length, Size = Size)" \
+  "the rule's text shows the action"
 [ -n "$SHOT" ] && ui_capture "$SHOT"
 
 echo "--- 4. A generated row applied: the rule moves Length"

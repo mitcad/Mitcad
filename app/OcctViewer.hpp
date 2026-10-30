@@ -141,6 +141,10 @@ struct BodyDisplay {
   // Cut by a section's plane (Section Analysis, Hide Above Sketch): its
   // faces are drawn behind the section caps on its cut faces (mitcad#784).
   bool sectioned = false;
+  // The shape its clip cut, while `sectioned`: the caps are the clip's
+  // faces in the plane that this shape has not there (a feature preview's
+  // body, or the body at the marker; mitcad#943).
+  std::shared_ptr<geometry::Shape> uncut = nullptr;
 };
 
 // A sketch curve or point in model space.
@@ -285,8 +289,10 @@ public:
   const NavigationSettings& navigation() const { return m_navigation; }
   // A 3D mouse's motion (mitcad#951, view/SpaceMouseView.cpp): the camera
   // moves by these rates at each frame (the time between the frames)
-  // until they are zero, turning about the mouse orbit's centre with its
-  // Z lock. Zero rates end the motion and log "3D mouse motion: …".
+  // until they are zero, in the 3D mouse's Navigation mode (turning about
+  // the mouse orbit's centre, or about the eye in Fly) and with its Lock
+  // horizon (mitcad#978). Zero rates end the motion and log "3D mouse
+  // motion: …".
   void setSpaceMouseRates(const SpaceMouseRates& rates);
   // The background: a vertical gradient from top to bottom, or one colour.
   void setBackground(const QColor& top, const QColor& bottom, bool gradient);
@@ -1071,6 +1077,9 @@ private:
   QString m_loggedSketchColours;
   std::vector<occ::handle<AIS_Shape>> m_datums;
   std::vector<occ::handle<AIS_Shape>> m_highlights;
+  // What setHighlights() drew last: drawn again when the background's tone
+  // changes, as input lines have a variant for a dark one (mitcad#957).
+  std::vector<HighlightDisplay> m_shownHighlights;
   // The whole bodies highlighted, as last logged ("View body highlights:",
   // for UI tests: the bodies a command's selection input holds).
   QString m_loggedBodyHighlights = QStringLiteral("none");
@@ -1175,6 +1184,13 @@ private:
   // Image references drawn through the bodies, just before the halos
   // (mitcad#782).
   Graphic3d_ZLayerId m_imageLayer = Graphic3d_ZLayerId_UNKNOWN;
+  // A feature's input lines where they were (mitcad#957), after the top
+  // layer and the points' layer: their dashed copy drawn through the
+  // solids, writing no depth, then the line in sight against the scene's
+  // depth, which covers the copy, so that only the hidden parts show
+  // dashed, over the model's own edges.
+  Graphic3d_ZLayerId m_inputLineLayer = Graphic3d_ZLayerId_UNKNOWN;
+  Graphic3d_ZLayerId m_inputLineSightLayer = Graphic3d_ZLayerId_UNKNOWN;
   std::vector<occ::handle<AIS_Shape>> m_sectionCaps;
   std::vector<occ::handle<AIS_Shape>> m_sectionHatches;
   QStringList m_sectionLook;      // per cap group: colour, hatch colour, direction, lines

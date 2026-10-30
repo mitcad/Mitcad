@@ -112,6 +112,12 @@ public:
   // The options (in choice order) and those of them that are numbers, for
   // new actions and the option fields; the parameters for name blocks.
   void setOptions(const QStringList& options, const QStringList& numberOptions);
+  // The options' kinds and domains: an action put from the palette comes
+  // with its values filled from them (mitcad#966, `fillSockets`).
+  void setOptionInfos(std::vector<OptionInfo> infos);
+  // What the canvas says while it shows no rule (mitcad#967): the empty
+  // state when the design has no rules.
+  void setHint(const QString& hint);
   void setParameters(const QStringList& parameters);
   // The design's tables and their columns (mitcad#849): a "combination in
   // table" block's table is chosen among them (completed as it is typed;
@@ -219,6 +225,8 @@ private:
   int m_highlight = -1;
   QStringList m_options;
   QStringList m_numberOptions;
+  std::vector<OptionInfo> m_infos;
+  QString m_hint = QStringLiteral("Add a rule, or choose one in the list.");
   QStringList m_parameters;
   std::vector<SuggestedTable> m_tables;
   std::function<std::optional<QString>(const QString&, QWidget*)> m_formulaEditor;

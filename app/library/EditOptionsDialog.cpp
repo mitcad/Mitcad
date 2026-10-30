@@ -22,7 +22,9 @@ namespace mitcad {
 
 EditOptionsDialog::EditOptionsDialog(JsonRunner query, const QString& component, const QString& name,
                                      const QJsonObject& libraryTable, QWidget* parent)
-    : QDialog(parent), m_component(component) {
+    : QDialog(parent), m_component(component), m_name(name),
+      m_suppliers(libraryTable.value(QStringLiteral("suppliers")).toArray()),
+      m_productPage(libraryTable.value(QStringLiteral("supplier_url")).toString()) {
   setObjectName(QStringLiteral("editOptionsDialog"));
   setWindowTitle(tr("Edit Options - %1").arg(name));
   auto* layout = new QVBoxLayout(this);
@@ -45,12 +47,14 @@ EditOptionsDialog::EditOptionsDialog(JsonRunner query, const QString& component,
   }
   m_chooser->setFilterRows(libraryTable.value(QStringLiteral("rows")).toArray(), standards);
   layout->addWidget(m_chooser);
-  m_supplierParts = new QLabel;
-  m_supplierParts->setObjectName(QStringLiteral("editOptionsSupplierParts"));
-  m_supplierParts->setWordWrap(true);
-  m_supplierParts->setTextInteractionFlags(Qt::TextSelectableByMouse);
-  m_supplierParts->hide();
-  layout->addWidget(m_supplierParts);
+  // The row's suppliers' articles behind a button that opens their table
+  // (mitcad#979).
+  m_supplierButton = makeSupplierPartsButton();
+  layout->addWidget(m_supplierButton, 0, Qt::AlignLeft);
+  connect(m_supplierButton, &QPushButton::clicked, this, [this] {
+    m_supplierRequest.firstSupplier = m_chooser->rowFilter().supplier;
+    ::mitcad::showSupplierParts(this, m_supplierRequest);
+  });
   auto* heading = new QLabel(tr("<b>Expressions</b>"));
   layout->addWidget(heading);
   m_expressionsForm = new QFormLayout;
@@ -181,10 +185,18 @@ void EditOptionsDialog::expressionEdited(const QString& option) {
 }
 
 void EditOptionsDialog::showSupplierParts() {
-  const QString numbers =
-      supplierPartsText(m_chooser->filterRow(m_chooser->row()).value(QStringLiteral("supplier_parts")).toArray());
-  m_supplierParts->setText(tr("Supplier part numbers: %1").arg(numbers));
-  m_supplierParts->setVisible(!numbers.isEmpty());
+  const QJsonObject row = m_chooser->filterRow(m_chooser->row());
+  const QJsonArray parts = row.value(QStringLiteral("supplier_parts")).toArray();
+  const QString numbers = supplierPartsText(parts);
+  m_supplierRequest = SupplierPartsRequest();
+  m_supplierRequest.row = m_chooser->row();
+  m_supplierRequest.title = m_name;
+  m_supplierRequest.parts = parts;
+  m_supplierRequest.suppliers = m_suppliers;
+  m_supplierRequest.productPage =
+      row.value(QStringLiteral("supplier_url")).toString().isEmpty() ? m_productPage
+                                                                       : row.value(QStringLiteral("supplier_url")).toString();
+  setSupplierPartsCount(m_supplierButton, parts.size());
   if (!numbers.isEmpty()) {
     qInfo().noquote() << QStringLiteral("Edit Options supplier part numbers: %1").arg(numbers);
   }

@@ -83,6 +83,18 @@ new line). The answer streams in as the agent writes it, formatted
 did (`model_command · add_feature box`); a click opens it to the call's
 input and result. A failed call is marked.
 
+Calls that follow each other, with nothing else between them, are one
+group row, so that twenty calls between two sentences of the agent take
+one line: the number of calls (and of failed ones) and the latest call
+with its state, `18 calls (14 failed) · model_query · measure — running`.
+It changes as the calls come and finish, and takes the error colour only
+while its latest call failed. A click opens it to the calls' own rows.
+The agent's text ends a group, and so does an approval card, which shows
+at once below it, never inside it; the next call starts a new group. A
+single call is its own row. A design's stored history is shown grouped
+the same way (the history keeps each call as before;
+`core/mcp/src/chat/groups.rs` makes the groups).
+
 - **Selection** (on by default): the selected items go with the message,
   as `ui_state` gives them to an agent, so "round these edges" knows which.
 - **View**: a picture of the view goes with the message.
@@ -207,17 +219,20 @@ Codex's `config.toml`:
    "startup_timeout_sec": 60, "tool_timeout_sec": 900}},
  "approval_policy": "never", "sandbox_mode": "read-only",
  "features.shell_tool": false, "features.unified_exec": false,
- "features.apply_patch_freeform": false, "include_apply_patch_tool": false,
- "tools.web_search": false, "web_search": "disabled", "tools.view_image": false}
+ "features.apply_patch_freeform": false, "features.view_image": false,
+ "features.web_search_request": false, "web_search": "disabled"}
 ```
 
-`mcp_servers` replaces the whole table, so your other MCP servers are not
-started. Codex asks nothing itself (`approvalPolicy` `never`): the
-approvals are MitCad's, enforced by its listener for the chat's bridge
-connection as for Claude Code. If Codex still asks the panel something,
-a confirmation of one of MitCad's own tools is accepted (the listener
-then decides and asks you), and every request to run a command, change a
-file or widen its permissions is declined. A tool call may wait 15
+`mcp_servers` names MitCad's bridge alone, so that your other MCP
+servers are not started. Codex has no setting that removes its
+`apply_patch` tool; the read-only sandbox keeps it from changing files,
+and a request to change one is declined. Codex asks nothing itself
+(`approvalPolicy` `never`): the approvals are MitCad's, enforced by its
+listener for the chat's bridge connection as for Claude Code. If Codex
+still asks the panel something, a confirmation of one of MitCad's own
+tools is accepted (the listener then decides and asks you), and every
+request to run a command, change a file or widen its permissions is
+declined. A tool call may wait 15
 minutes for your answer to a card.
 
 **Stop** sends `turn/interrupt` on every platform; if the turn has not
@@ -225,18 +240,37 @@ ended 5 seconds later, the process is ended and the next message resumes
 the thread. Codex names its threads itself: the conversation goes on
 with the thread id that `thread/start` returns.
 
-The protocol messages are written from the app server's documentation
-(the JSON Schema the installed CLI generates, `codex app-server
-generate-json-schema`, is the reference to check them against). All of
-it is in `core/mcp/src/chat/codex.rs`, so that a change of the protocol
-touches that file and its tests only.
+The protocol messages were checked against the JSON Schema that `codex
+app-server generate-json-schema` writes for codex-cli 0.157.1 (its
+stable API, without `--experimental`), and the configuration keys
+against the keys that version knows; the scripted test agent speaks the
+same shapes. All of it is in `core/mcp/src/chat/codex.rs`, so that a
+change of the protocol touches that file and its tests only.
+
+What only a run with a real, signed-in Codex can show (the schema does
+not say it):
+
+- whether `mcp_servers` in the thread's `config` replaces the table of
+  your `config.toml` or is merged with it (Codex layers the overrides
+  over your configuration; another MCP server's start is logged as
+  `other_mcp_server`, a key Codex ignores as `config_warning`);
+- that the built-in tools are really gone from the thread (shell,
+  `view_image`, web search) and which tools of newer features are on by
+  default;
+- whether Codex calls MitCad's tools without asking under `approvalPolicy`
+  `never`, or declines them (then the bridge's
+  `default_tools_approval_mode = "approve"`, which 0.157.1 knows, is the
+  setting to add);
+- the text of `codex login status`, and that the oldest version the chat
+  starts, Codex 0.80.0, already has every message and key used here (only
+  0.157.1's schema was at hand).
 
 ### The parts
 
 The chat's own logic is in Rust (`core/mcp/src/chat.rs`): the agents'
 streams as panel events, the command lines and messages, Codex's whole
-JSON-RPC exchange, the approval policy, the undo merge and the history
-format. The panel, the processes and the files are the application's
+JSON-RPC exchange, the approval policy, the undo merge, the history
+format and the tool calls' group rows (`tool_groups`). The panel, the processes and the files are the application's
 (`app/agent/`). Each agent is a class behind one interface
 (`app/agent/ChatAgent.hpp`: `ClaudeCodeAgent`, `CodexAgent`), so that API
 endpoints and local models can plug in later without changing the panel.

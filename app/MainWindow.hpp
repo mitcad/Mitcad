@@ -240,6 +240,12 @@ public:
   std::vector<BodyDisplay> modelBodies() const override;
   void showSection(const QJsonValue& plane) override;
   QJsonValue section() const override { return m_section; }
+  // A feature preview cut at the view's plane (mitcad#943;
+  // MainWindowSection.cpp).
+  QJsonValue sectionCutPlane() const override;
+  std::shared_ptr<PreviewSection> sectionPreview(const std::vector<PreviewClipTarget>& targets, QObject* context,
+                                                 std::function<void()> ready) override;
+  void showSectionCapsOf(const std::vector<BodyDisplay>& bodies, bool preview) override;
   // Print Analysis (mitcad#620; MainWindowPrintAnalysis.cpp): the panel's
   // overlay, and its long queries as model jobs.
   void showPrintAnalysis(const QJsonObject& overlay) override;
@@ -571,6 +577,11 @@ private:
   // Selection outside commands.
   void onPicked(const Selection& items, Qt::KeyboardModifiers modifiers, bool window);
   void updateIdleView();
+  // Its two parts (mitcad#981): the view's highlights alone where only they
+  // change (the print bed face shown while a face's context menu is open),
+  // and the card's text.
+  void updateIdleHighlights();
+  void updateIdleCard();
   // The selection card's Create row (mitcad#619, MainWindowSelectionCreate.cpp):
   // the CREATE commands that fit the selection, Extrude first.
   void updateSelectionCreate();
@@ -637,13 +648,14 @@ private:
   // activate that component (askToActivatePicked), then the sketch is made
   // on the same pick (createSketch).
   void createSketchOnPick(SelectionItem item); // a copy: activating rebuilds the selection
-  // The question for a pick of Create Sketch (`sketch`) or a Construct
-  // command: asked when the item is geometry of a component other than the
-  // active one and the preference asks (browser/ActivateQuestion.hpp),
-  // not while an agent's request picks (MCP). `refused`: the design
-  // policy's reason the pick is refused (no question then). Activated, the
-  // component is, as one undo step of its own; true then.
-  bool askToActivatePicked(const SelectionItem& item, const QString& refused, bool sketch);
+  // The question for a pick of Create Sketch or a Construct command: asked
+  // when the item is geometry of a component other than the active one and
+  // the preference asks (browser/ActivateQuestion.hpp), not while an
+  // agent's request picks (MCP). `refused`: the design policy's reason the
+  // pick is refused (no question then). `made`: what the command makes, as
+  // the question names it ("sketch", "plane", "axis", "point"; madeBy).
+  // Activated, the component is, as one undo step of its own; true then.
+  bool askToActivatePicked(const SelectionItem& item, const QString& refused, const QString& made);
   // An agent's picks (mcpSelect) ask nothing.
   bool m_mcpPicking = false;
   // Create Sketch's plane pick (MainWindowVisibility.cpp): with
@@ -717,8 +729,9 @@ private:
   // Sketch is on and the sketch is shown, else Section Analysis' (null:
   // whole).
   QJsonValue cutPlane() const;
-  // The faces where the section cuts the shown bodies, for the view.
-  void showSectionCaps(const std::vector<BodyDisplay>& bodies);
+  // The faces where the section cuts the shown bodies, for the view
+  // (`preview`: a feature preview's bodies with its clips, mitcad#943).
+  void showSectionCaps(const std::vector<BodyDisplay>& bodies, bool preview = false);
   // Section Analysis off the UI thread (mitcad#438; MainWindowSection.cpp).
   // The bodies a plane cuts, as modelBodies collects them before their
   // clip: by index into its bodies, each with its target ({body,
@@ -1315,6 +1328,11 @@ private:
   QPointer<QWidget> m_panelScroll; // the running command's panel page
   QLabel* m_idleInfo = nullptr;
   QHash<QString, QString> m_idleMeasurements;
+  // How long the last updateIdleView took for its highlights and its card,
+  // in milliseconds (the "Selection timing:" log line, mitcad#981).
+  qint64 m_idleHighlightMs = 0;
+  qint64 m_idleCardMs = 0;
+  qint64 m_idleMeasureMs = 0; // of the card's time: its measure queries
   QWidget* m_idlePage = nullptr;
   AutoselectPanel* m_autoselect = nullptr;
   QStringList m_timelineSelection;

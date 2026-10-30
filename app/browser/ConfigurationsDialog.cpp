@@ -18,6 +18,8 @@
 #include <QJsonArray>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPaintEvent>
+#include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRadioButton>
@@ -52,8 +54,35 @@ bool isTextUnit(const QString& unit) {
   return unit.trimmed().compare(QStringLiteral("Text"), Qt::CaseInsensitive) == 0;
 }
 
+// The window explains itself (mitcad#967): a lead line at the top of each
+// tab, and what an empty view shows in its place. app/COMMANDS.md and the
+// user guide quote them; the Rules tab's are in configurations/RulesPage.
+const char* const kOptionsLead =
+    "Options are the choices a user of this design makes, such as Color or Length. Each option is a user parameter.";
+const char* const kRowsLead =
+    "A row is a ready-made combination of the options, with its designation and part number.";
+const char* const kNoOptions = "No options yet. Add Option… makes a parameter an option.";
+const char* const kNoRows = "No rows yet. Add Row saves the options' values as a row.";
+
+QLabel* leadLine(const char* text, const QString& tab) {
+  auto* lead = new QLabel(QString::fromUtf8(text));
+  lead->setObjectName(QStringLiteral("configurationsLead") + tab);
+  lead->setWordWrap(true);
+  qDebug().noquote() << QStringLiteral("Configurations lead %1: %2").arg(tab, lead->text());
+  return lead;
+}
+
+// The placeholder of an empty view, in its viewport's top left corner.
+void paintPlaceholder(QAbstractItemView* view, const char* text) {
+  QPainter painter(view->viewport());
+  painter.setPen(view->palette().color(QPalette::PlaceholderText));
+  painter.drawText(view->viewport()->rect().adjusted(12, 12, -12, -12),
+                   Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, QString::fromUtf8(text));
+}
+
 // The options as a tree of one level whose rows are dragged into their
-// order: `dropped` is called once the drop is done.
+// order: `dropped` is called once the drop is done. Empty, it says how to
+// add one.
 class OptionTree : public QTreeWidget {
 public:
   explicit OptionTree(std::function<void()> dropped) : m_dropped(std::move(dropped)) {}
@@ -64,8 +93,26 @@ protected:
     QTimer::singleShot(0, this, [this] { m_dropped(); });
   }
 
+  void paintEvent(QPaintEvent* event) override {
+    QTreeWidget::paintEvent(event);
+    if (topLevelItemCount() == 0) {
+      paintPlaceholder(this, kNoOptions);
+    }
+  }
+
 private:
   std::function<void()> m_dropped;
+};
+
+// The Rows sheet; empty, it says how to add a row.
+class RowsSheet : public QTableWidget {
+protected:
+  void paintEvent(QPaintEvent* event) override {
+    QTableWidget::paintEvent(event);
+    if (rowCount() == 0) {
+      paintPlaceholder(this, kNoRows);
+    }
+  }
 };
 
 // Add Option: an existing user parameter that is no option yet, or a new
@@ -602,6 +649,7 @@ ConfigurationsDialog::ConfigurationsDialog(DocumentHost& host, QWidget* parent) 
 QWidget* ConfigurationsDialog::makeOptionsPage() {
   auto* page = new QWidget;
   auto* layout = new QVBoxLayout(page);
+  layout->addWidget(leadLine(kOptionsLead, QStringLiteral("Options")));
   auto* tree = new OptionTree([this] { optionsDropped(); });
   m_options = tree;
   m_options->setObjectName(QStringLiteral("configurationsOptions"));
@@ -695,6 +743,7 @@ QWidget* ConfigurationsDialog::makeOptionsPage() {
 QWidget* ConfigurationsDialog::makeRowsPage() {
   auto* page = new QWidget;
   auto* layout = new QVBoxLayout(page);
+  layout->addWidget(leadLine(kRowsLead, QStringLiteral("Rows")));
   auto* top = new QHBoxLayout;
   m_closed = new QCheckBox(tr("Closed"));
   m_closed->setObjectName(QStringLiteral("configurationsClosed"));
@@ -704,7 +753,7 @@ QWidget* ConfigurationsDialog::makeRowsPage() {
   m_current->setObjectName(QStringLiteral("configurationsCurrentRow"));
   top->addWidget(m_current, 1);
   layout->addLayout(top);
-  m_rows = new QTableWidget;
+  m_rows = new RowsSheet;
   m_rows->setObjectName(QStringLiteral("configurationsRows"));
   m_rows->setSelectionMode(QAbstractItemView::SingleSelection);
   m_rows->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -977,7 +1026,11 @@ void ConfigurationsDialog::fillOptions() {
   if (text != m_loggedOptions) {
     m_loggedOptions = text;
     qDebug().noquote() << text;
+    if (logged.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Configurations empty Options: %1").arg(QString::fromUtf8(kNoOptions));
+    }
   }
+  m_options->viewport()->update(); // its placeholder
   const QString used = usage.join(QLatin1Char('\n'));
   if (used != m_loggedUsage) {
     m_loggedUsage = used;
@@ -1111,7 +1164,11 @@ void ConfigurationsDialog::fillRows() {
   if (text != m_loggedRows) {
     m_loggedRows = text;
     qDebug().noquote() << QStringLiteral("Configurations rows: %1").arg(text);
+    if (m_table.rows.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Configurations empty Rows: %1").arg(QString::fromUtf8(kNoRows));
+    }
   }
+  m_rows->viewport()->update(); // its placeholder
 }
 
 // ---------------------------------------------------------------------------

@@ -118,7 +118,7 @@ choice("ruleTableColumnLength", "Length [mm]", 3)
 press("OK", "ruleTableColumnsOK")
 add("expect-log '^Rules saved: Set columns of then.0 to Length=Length, Size=Size$'",
     "focus-dialog '^Configurations$'", "expect-undo-depth ${beforeColumns} 2")
-press("View as Text", "rulesViewText")
+# The rule's text is always shown under the blocks (mitcad#965).
 add("expect-log 'Rule as text Made sizes: always / then combination in table Screws \\(Length = Length, Size = Size\\)'",
     f"screenshot-dialog '${{MITCAD_TEST_WORK}}/table-rule-{frontend}-${{MITCAD_TEST_COLOR_SCHEME}}.png'")
 

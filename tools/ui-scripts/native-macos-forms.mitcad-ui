@@ -13,6 +13,49 @@ native-appearance ${MITCAD_FORMS_APPEARANCE}
 command view.fit
 sleep 400
 
+# A short Appearance form keeps its footer insets at the minimum card
+# height; its buttons must clear the rounded glass corners (mitcad#993).
+native-select native.model.body:F1.b0@
+command solid.appearance
+expect-log '^Command Appearance started$'
+wait-idle 30
+screenshot-screen '${MITCAD_TEST_WORK}/appearance-${MITCAD_FORMS_APPEARANCE}.png'
+expect-native-command-layout
+native-click commandCancel
+expect-log '^Command Appearance cancelled$'
+
+# The shared status lifetime: real Cancel, Done, a replacement during the
+# actual 400ms fade, explicit clear, and the longer error delay (mitcad#996).
+expect-native-text native.status '^Command cancelled[.]$'
+expect-native-visible native.statusCard true
+sleep 6500
+expect-native-visible native.statusCard false
+screenshot-screen '${MITCAD_TEST_WORK}/status-hidden-${MITCAD_FORMS_APPEARANCE}.png'
+test-status-message hint 'Done.'
+expect-native-text native.status '^Done[.]$'
+expect-native-style native.statusCard opaque
+expect-native-style native.statusCard fading
+test-status-message hint 'Replacement status'
+expect-native-text native.status '^Replacement status$'
+expect-native-style native.statusCard opaque
+sleep 500
+expect-native-visible native.statusCard true
+expect-native-style native.statusCard opaque
+screenshot-screen '${MITCAD_TEST_WORK}/status-replacement-${MITCAD_FORMS_APPEARANCE}.png'
+sleep 6000
+expect-native-visible native.statusCard false
+test-status-message error 'Status lifetime test error'
+expect-native-text native.status '^Status lifetime test error$'
+sleep 6500
+expect-native-visible native.statusCard true
+sleep 4000
+expect-native-visible native.statusCard false
+test-status-message hint 'Clear this status'
+expect-native-visible native.statusCard true
+test-status-message hint ''
+expect-native-visible native.statusCard false
+
+
 # The face's selection card: Extrude, Create Sketch and Hole, whole labels
 # and real pointer targets, nothing to scroll.
 mark
@@ -132,6 +175,38 @@ screenshot '${MITCAD_TEST_WORK}/print-narrow-${MITCAD_FORMS_APPEARANCE}.png'
 native-resize 1280 820
 native-click commandCancel
 expect-log '^Command 3D Print cancelled$'
+
+# Hole (mitcad#980): a Clearance hole's Countersink Diameter follows the
+# screw size; typed, it is kept when the size changes and marked beside
+# the field, and the mark's Reset to size makes it follow again.
+mark
+click-visible-face
+expect-selection 1 0
+expect-native-selection-card 3
+native-click selectionCreate2
+expect-log '^Selection card create chose Hole$'
+expect-log '^Command Hole started$'
+wait-idle 30
+native-choice input_type 'Countersink'
+native-choice input_tap 'Clearance'
+expect-log '^Hole sizes for M6 normal: diameter 6\.6 mm, .*cs_diameter 13\.44 mm'
+wait-idle 30
+native-type input_cs_diameter '17'
+expect-log '^Hole cs_diameter typed: kept when the size changes$'
+expect-log '^Panel Hole cs_diameter mark: Typed: does not follow the size$'
+screenshot '${MITCAD_TEST_WORK}/hole-marked-${MITCAD_FORMS_APPEARANCE}.png'
+expect-log '^Panel Hole mark cs_diameter at '
+wait-idle 30
+native-choice input_clearance_size 'M8'
+expect-log '^Hole sizes for M8 normal: .*; kept cs_diameter$'
+expect-no-log '^Panel Hole cs_diameter mark cleared$'
+wait-idle 30
+native-click mark_cs_diameter
+expect-log '^Hole cs_diameter reset: follows the size$'
+expect-log '^Hole sizes for M8 normal: .*cs_diameter 17\.92 mm'
+expect-log '^Panel Hole cs_diameter mark cleared$'
+native-click commandCancel
+expect-log '^Command Hole cancelled$'
 
 # Create Sketch from the card starts a sketch on the face.
 mark

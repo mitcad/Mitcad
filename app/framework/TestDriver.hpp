@@ -173,7 +173,13 @@
 //                           the native table's viewport, without scrolling
 //   native-pointer-click <id> [<x fraction> <y fraction>]
 //                           press a real, uncovered point within a control;
-//                           the default point is its centre
+//                           the default point is its centre, on a checkbox
+//                           or radio button the centre of its box (AppKit
+//                           ignores a press on the rest of a stretched
+//                           frame), and fractions outside the box and title
+//                           glyphs of one fail the step
+//   native-pointer-button <regex> the same at the default point of the
+//                           enabled native button whose title matches
 //   native-pointer-dblclick <id> two guarded native pointer clicks; the
 //                           second carries AppKit's double-click count
 //   native-pointer-popup <id> <choice> [capture path]
@@ -302,6 +308,8 @@
 //                           caption checks an NSButton's displayed single-line
 //                           title mode and full native title bounds, including
 //                           text-only and text-with-icon buttons (6 s)
+//   native-header-resize <id> <logical column> <delta points> drag the actual native header divider
+//   expect-native-header-resize-retained <id> <logical column> compare the last dragged width
 //   expect-native-columns <id> [fit|scroll|any] the native columns keep
 //                           the shared header's sizes, hidden sections and
 //                           stretching; content-sized headers fit their
@@ -316,7 +324,9 @@
 //   expect-native-selection <outline-id> <row-id|-|*> the native outline's
 //                           selected row, in sight, is its presenter's (6 s);
 //                           - none, * whichever the presenter selected;
-//                           <table-id> <count> checks both actual row counts
+//                           <table-id> <count> checks both actual row counts,
+//                           and for a plain list (formula completions) that
+//                           the native selected row is the presenter's
 //   expect-native-layout    full-window canvas, floating card geometry and
 //                           real AppKit hit testing above/around the canvas
 //   expect-native-history [uid...] compare horizontal native history icons,

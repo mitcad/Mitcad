@@ -16,9 +16,11 @@ discovery and chat folders:
             message with a picture of the view; Save As asks (Allow once)
             and saves; an undo past the message's start asks (Deny) and is
             refused; a user's change during a turn keeps the steps
-            separate; Stop ends a running turn; the next message goes on
-  reopen    the saved design opened again shows its conversation and the
-            agent resumes its session
+            separate; Stop ends a running turn; the next message goes on;
+            calls in a row are one group row (three calls, one failed, a
+            text, two calls: two groups) that opens to their rows
+  reopen    the saved design opened again shows its conversation, its
+            calls grouped as before, and the agent resumes its session
   docked    the Docked layout: installed and signed in, the model chosen
             (Sonnet, given as --model), one message, one undo step
   codex     Claude Code and Codex installed: the switcher shows both,
@@ -172,6 +174,16 @@ def main():
             "wait-log 'Chat panel: ready' 30",
             *send("hello again"),
             "wait-log 'Chat: turn ended \\(success\\)' 60",
+            # Calls in a row are one group row that opens to their rows; the
+            # agent's text starts the next group (mitcad#983).
+            *send("measure with several calls"),
+            "wait-log 'Chat tool group: 3 calls, 1 failed' 60",
+            "wait-log 'Chat: turn ended \\(success\\)' 60",
+            "button '^3 calls \\(1 failed\\) . document_list$' chatToolGroupHead",
+            "wait-log 'Chat tool group opened: 3 calls, 1 failed, 3 rows shown'",
+            "button '^2 calls . ui_state$' chatToolGroupHead",
+            "wait-log 'Chat tool group opened: 2 calls, 2 rows shown'",
+            "button '^model_query . bodies . failed$' chatToolHead",
             "screenshot '" + str(out / "chat-floating.png") + "'",
         ]
 
@@ -199,6 +211,10 @@ def main():
             "expect-ever 'Chat: history of [1-9][0-9]* entries shown, session " + session + " to resume'",
             "command view.chat",
             "wait-log 'Chat panel: ready' 60",
+            # The history's calls are grouped as they were (mitcad#983).
+            "expect-ever 'Chat tool group: 3 calls, 1 failed'",
+            "button '^3 calls \\(1 failed\\) . document_list$' chatToolGroupHead",
+            "wait-log 'Chat tool group opened: 3 calls, 1 failed, 3 rows shown'",
             *send("hello after reopening"),
             "wait-log 'Chat: Claude Code started \\(resuming session " + session + "\\)' 30",
             "wait-log 'Chat: turn ended \\(success\\)' 60",

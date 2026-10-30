@@ -3,7 +3,8 @@
 //! agents' stream protocols turned into one vocabulary of panel events,
 //! the agents' command lines and input messages, which tool calls of the
 //! chat's own bridge connection ask the user first, whether a message's
-//! undo steps merge into one, and the format of the conversation history.
+//! undo steps merge into one, the format of the conversation history and
+//! which tool calls the panel shows as one group row.
 //!
 //! The application (`app/agent/`) runs the agent processes, shows the
 //! panel, keeps the files and asks the window; it calls [`request`] with a
@@ -32,6 +33,7 @@
 
 mod claude;
 mod codex;
+mod groups;
 mod history;
 mod policy;
 mod undo;
@@ -150,6 +152,10 @@ pub(crate) fn pictures(request: &Value) -> Result<Vec<(&str, &str)>, String> {
 ///   `panel`, `message` → `merge`, `depth`, `label`, `reason`
 /// - `history_entry`: `entry` → `line`
 /// - `history_read`: `content`, `limit` → `entries`, `sessions`, `skipped`
+/// - `tool_groups`: `entries` (the panel's: `role`; a call's `name`,
+///   `summary`, `state` or `error`), `index` (optional) → `groups` (`first`,
+///   `last`, `count`, `failed`, `running`, `state`, `latest`, `head`) and
+///   `group`, the one holding `index` (the panel's group rows, mitcad#983)
 pub fn request(request: &Value) -> Result<Value, String> {
     let op = request
         .get("op")
@@ -186,6 +192,7 @@ pub fn request(request: &Value) -> Result<Value, String> {
                 .and_then(Value::as_u64)
                 .map_or(history::DEFAULT_LIMIT, |limit| limit as usize),
         )),
+        "tool_groups" => Ok(groups::groups(request)),
         other => Err(format!("unknown chat op '{}'", crate::echoed(other))),
     }
 }

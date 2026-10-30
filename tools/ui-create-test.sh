@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/commands app/sketch app/framework/HybridAssembly.cpp
+# check-all sources: app/framework/CommandPanel.cpp
 # The CREATE group (U4) through the real UI, with the volumes the model
 # reports (analytic, or tools/cli/tests/f1_*.json):
 #   - Extrude: a thin extrusion (walls centred on the profile), edited to
@@ -13,7 +14,9 @@
 #     edges typed (mitcad#656), edited to a counterbore through all, then to
 #     a Clearance hole for M6 (mitcad#903: Normal fills 6.6, its counterbore
 #     11 and 6.4; a typed depth of 8 stays when the size changes to M8 and
-#     back, and when the hole opens again), then to
+#     back, and when the hole opens again; a typed Countersink Diameter is
+#     marked and its Reset to size makes it follow the size, mitcad#980),
+#     then to
 #     a tapered counterdrill; a counterdrilled, tapered hole at a sketch's
 #     circle
 #     (as the FreeCAD import makes them) opens for editing with its values
@@ -334,6 +337,31 @@ ui_mark
 ui_step "Screw Size M6"                    ui_choose "Panel Hole input clearance_size" -1
 ui_expect_new "Hole sizes for M6 normal: diameter 6.6 mm, cb_diameter 11 mm, cs_diameter" "back to 6.6 and 11"
 ui_expect_new "; kept cb_depth" "the typed depth stays at M6"
+# A typed Countersink Diameter no longer follows the size (mitcad#980): it
+# is marked in its field, and the mark's Reset to size makes it follow
+# again; back to the counterbore for the volume.
+ui_mark
+ui_step "Countersink"                      ui_choose "Panel Hole input type" 1
+ui_expect_new "Hole: Hole Type = Countersink" "countersink chosen"
+ui_step "countersink 17"                   ui_type_in "Panel Hole input cs_diameter" "17"
+ui_expect_new "Hole cs_diameter typed: kept when the size changes" "the typed countersink is kept"
+ui_expect_new "Panel Hole cs_diameter mark: Typed: does not follow the size" "and marked"
+ui_expect_new "Panel Hole mark cs_diameter at " "its mark is in the field"
+ui_mark
+ui_step "Screw Size M8"                    ui_choose "Panel Hole input clearance_size" 1
+ui_expect_new "; kept cb_depth, cs_diameter" "the typed countersink stays at M8"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Panel Hole cs_diameter mark cleared" &&
+  ui_fail "the typed countersink lost its mark at M8"
+ui_mark
+ui_step "Reset to size"                    ui_click_logged "Panel Hole mark cs_diameter"
+ui_expect_new "Hole cs_diameter reset: follows the size" "Reset to size"
+ui_expect_new "cs_diameter 17.92 mm" "the countersink follows M8 again"
+ui_expect_new "Panel Hole cs_diameter mark cleared" "no longer marked"
+ui_mark
+ui_step "Screw Size M6"                    ui_choose "Panel Hole input clearance_size" -1
+ui_expect_new "cs_diameter 13.44 mm" "and M6"
+ui_step "Counterbore"                      ui_choose "Panel Hole input type" -1
+ui_expect_new "Hole: Hole Type = Counterbore" "the counterbore again"
 ui_expect_new "Preview Hole: ok" "previewed"
 ui_step "OK (Enter)"                       ui_key Return
 ui_expect_new "Edited F3" "Hole1 edited to a clearance hole"

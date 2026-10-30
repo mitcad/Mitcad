@@ -103,7 +103,6 @@ expect-log '^Rules saved: Set message of then\.1 to Temporary refusal'
 native-pointer-click 'rulePiece_then.1 block' 0.08 0.5
 key Delete
 expect-log '^Rules saved: Delete then\.1'
-native-pointer-button '^View as Text$'
 expect-log 'Rule as text Black is short: .*Length max 900 mm'
 screenshot-dialog '${MITCAD_TEST_WORK}/configuration-rules-${MITCAD_TEST_COLOR_SCHEME}.png'
 native-pointer-button '^Check Rules$'

@@ -27,6 +27,7 @@
 #include "AutoOperationPolicy.hpp"
 #include "Command.hpp"
 #include "CommandPanel.hpp"
+#include "SectionPreview.hpp"
 #include "mitcad_bridge/lib.h"
 
 namespace mitcad {
@@ -156,6 +157,22 @@ public:
   // it measured.
   virtual void inspectionRecorded(const CommandDef& /*def*/, const CommandState& /*state*/,
                                   const Inspection& /*result*/) {}
+  // Section Analysis or Hide Above Sketch over a feature preview
+  // (mitcad#943, SectionPreview.hpp). The plane the view cuts the bodies
+  // at now ({origin, normal}; null: whole).
+  virtual QJsonValue sectionCutPlane() const { return QJsonValue(); }
+  // The clips of a preview's bodies at that plane, started while the model
+  // holds the preview, off the UI thread as the section's rounds (a newer
+  // preview's clips supersede them); `ready` runs on the UI thread once the
+  // returned cut has them, unless `context` is gone. Null while the view
+  // shows the bodies whole.
+  virtual std::shared_ptr<PreviewSection> sectionPreview(const std::vector<PreviewClipTarget>& /*targets*/,
+                                                         QObject* /*context*/, std::function<void()> /*ready*/) {
+    return nullptr;
+  }
+  // The section caps of the bodies drawn: a preview's (`preview`: with its
+  // clips) or the bodies at the marker again.
+  virtual void showSectionCapsOf(const std::vector<BodyDisplay>& /*bodies*/, bool /*preview*/) {}
   // Soon (not inside the running command's call): cancels the command and
   // opens feature `uid` for editing, its input `input` taking the keyboard
   // (P6: a command whose inputs ask for another feature's edit).
@@ -391,6 +408,12 @@ private:
     // A provisional motion's basis (mitcad#838, CommandDef::dragMotion):
     // the motion of the inputs it was computed from.
     std::optional<DragMotion> motion;
+    // Shown cut by Section Analysis or Hide Above Sketch (mitcad#943): the
+    // bodies drawn with the preview's shapes or placements
+    // (previewBodyKey), and their clips at the plane; null while the view
+    // shows the bodies whole.
+    QSet<QString> previewed;
+    std::shared_ptr<PreviewSection> section;
   };
 
   // Every input (shown only: those shown now) in the panel's order.
@@ -449,6 +472,10 @@ private:
   // The inputs' row notes (InputDef::rowNote) read again and shown; true
   // when one changed.
   bool refreshRowNotes();
+  // The value fields' marks (InputDef::markFor, mitcad#980) logged where
+  // they changed: "Panel <command> <input> mark: <tooltip>", "... mark
+  // cleared".
+  void logMarks();
   void commandSequenceAsync(const QJsonArray& commands, CommandHost::AsyncCompletion completion,
                             int index = 0, std::function<bool()> aborted = {});
   void undoToDepthAsync(int depth, CommandHost::AsyncCompletion completion, int guard = -1);
@@ -468,6 +495,23 @@ private:
   void runPreview();
   bool previewReady(QString& message, bool& error);
   void showPreview(const Preview& preview, const QString& operation);
+  // Section Analysis or Hide Above Sketch over a preview (mitcad#943):
+  // the clips of its bodies `targets` started, each showing until they are
+  // ready the last clip drawn of it, else what it showed before the
+  // preview (`before`); the preview's bodies as drawn at the cut
+  // (`clipped`: with its ready clips); whether its clips cover the bodies
+  // it draws with its shapes (a preview drawn again over other bodies
+  // shown).
+  void startPreviewSection(Preview& preview, const std::vector<PreviewClipTarget>& targets,
+                           const QHash<QString, SectionedShape>& before);
+  std::vector<BodyDisplay> sectionedBodies(const Preview& preview, bool& clipped);
+  bool sectionCovers(const Preview& preview) const;
+  // A preview's clips are ready: the preview drawn again with them while
+  // it is the one shown.
+  void previewSectionReady(const std::shared_ptr<PreviewSection>& cut);
+  // The last clip drawn of each body in this command's previews (by
+  // previewBodyKey): what it shows while a newer preview's clips are made.
+  QHash<QString, SectionedShape> m_lastClips;
   // The tool overlays the preview draws while an input of consumed tools
   // is active (InputDef::toolOverlays, mitcad#561): each occurrence of a
   // picked body the preview removes where it is not picked itself.
@@ -606,6 +650,8 @@ private:
   QByteArray m_shownKey; // the command whose preview is shown
   QString m_shownNote;   // the command's note shown with it
   QHash<QString, QString> m_rowNotes; // the row notes shown, by input key
+  QHash<QString, QString> m_marks;    // the marks' tooltips logged, by input key
+  QHash<QString, QString> m_valueHints; // the value hints logged, by input key (mitcad#994)
   bool m_previewCancelled = false; // ... or whose preview was cancelled
   QHash<QByteArray, Preview> m_cache;
   QList<QByteArray> m_cacheOrder;

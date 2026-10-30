@@ -7,7 +7,10 @@
 //! faces, datum planes, either way round) also report their offset. Axes
 //! (mitcad#647): cylinders, a cone, circles and construction axes report
 //! their axes, the angles between them and planes or straight edges, and
-//! the axes' distances, also of parts placed as occurrences.
+//! the axes' distances, also of parts placed as occurrences. Selections
+//! (mitcad#985): errors list the paths that place a component placed
+//! several times, occurrence paths by names, origin datums by name, and
+//! the entity form `ui_state` lists.
 
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
@@ -571,4 +574,327 @@ fn axes_against_planes_edges_and_construction_axes() {
         "{text}"
     );
     assert!(text.contains("Axis distance: 10.000000 mm"), "{text}");
+}
+
+/// A face of a body placed by an occurrence is measured on the body as it
+/// is, its results moved into the design (mitcad#981): no moved copy of the
+/// whole body (the selection card measures every face selected, and a copy
+/// of a body with modelled threads took most of a second). Two faces of
+/// one occurrence are measured between in the body's coordinates, their
+/// points then placed; faces of two placements still each placed.
+#[test]
+fn a_placed_face_is_measured_without_a_moved_copy_of_its_body() {
+    let doc = nested();
+    let copies = doc.kernel().count("transform");
+    let block_top = face_in("F4.b0", &format!("F4:end({R})"), "O1/O2");
+    let block_bottom = face_in("F4.b0", &format!("F4:start({R})"), "O1/O2");
+
+    let single = measure(&doc, block_top.clone(), Value::Null);
+    assert_eq!(single["a"]["kind"], "face", "{single}");
+    near(&single["a"]["plane"]["origin"][2], 61.0);
+    near_point(&single["a"]["plane"]["normal"], [0.0, 0.0, 1.0]);
+    assert_eq!(doc.kernel().count("transform"), copies, "no moved copy");
+
+    // Top and bottom of the Block, which spans x 73 to 93, y 25 to 45 and
+    // z 41 to 61 in the design.
+    let own = between(&doc, block_top.clone(), block_bottom);
+    near_point(&own["on_a"], [83.0, 35.0, 61.0]);
+    near_point(&own["on_b"], [83.0, 35.0, 41.0]);
+    near(&own["distance"], 20.0);
+    near(&own["offset"], 20.0);
+    assert_eq!(doc.kernel().count("transform"), copies, "no moved copies");
+
+    // The root's top and the Block's: placed apart, measured placed.
+    let apart = between(&doc, face("F2.b0", &format!("F2:end({R})")), block_top);
+    near_point(&apart["on_b"], [73.0, 25.0, 61.0]);
+    assert!(doc.kernel().count("transform") > copies);
+}
+
+/// [`nested`] with the Block placed three times in the Assembly
+/// (mitcad#985): Block:1 (O1/O2) at (5, 7, 11), Block:2 (O1/O3) at
+/// (5, 47, 11) and Block:3 (O1/O4) at (5, 87, 11), all in the Assembly's
+/// coordinates. Block:2's origin is at (53, 25, 41) in the design, its x
+/// axis along the design's +Y.
+fn three_blocks() -> Document<MockKernel> {
+    let mut doc = nested();
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C1"}),
+    );
+    for (y, uid, name) in [(47, "O3", "Block:2"), (87, "O4", "Block:3")] {
+        let copy = command(
+            &mut doc,
+            json!({"cmd": "copy_occurrence", "occurrence": "O1/O2",
+                   "transform": {"translation": [5, y, 11]}}),
+        );
+        assert_eq!(copy["occurrence"], uid, "{copy}");
+        assert_eq!(copy["name"], name, "{copy}");
+    }
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C0"}),
+    );
+    doc
+}
+
+/// Where the Block of [`three_blocks`] is placed, as errors list it.
+const BLOCK_PATHS: &str = "O1/O2 (Assembly:1/Block:1), O1/O3 (Assembly:1/Block:2), \
+                           O1/O4 (Assembly:1/Block:3)";
+
+/// The error of measuring one selection.
+fn refused_alone(doc: &Document<MockKernel>, a: Value) -> String {
+    refused(doc, a, Value::Null)
+}
+
+#[test]
+fn errors_name_the_occurrences_that_place_a_selection() {
+    let mut doc = three_blocks();
+    let block_top = format!("F4:end({R})");
+    // No occurrence for a component placed three times: the three paths
+    // with their names.
+    let datum = refused_alone(&doc, json!({"datum": "F5"}));
+    assert!(
+        datum.contains(&format!(
+            "is in a component placed 3 times: {BLOCK_PATHS}; give one as occurrence"
+        )),
+        "{datum}"
+    );
+    let body = refused_alone(&doc, face("F4.b0", &block_top));
+    assert!(
+        body.contains(&format!(
+            "body F4.b0 is in a component placed 3 times: {BLOCK_PATHS}"
+        )),
+        "{body}"
+    );
+    // A path that does not place it, one through the wrong parent and an
+    // occurrence that does not exist: each names the paths that do.
+    for (occurrence, wrong) in [
+        ("O1", "occurrence 'O1' does not place"),
+        ("O3", "Block:2 is placed in Assembly, not in"),
+        ("O1/O9", "occurrence O9 does not exist"),
+    ] {
+        let error = refused_alone(&doc, json!({"datum": "F5", "occurrence": occurrence}));
+        assert!(error.contains(wrong), "{occurrence}: {error}");
+        assert!(
+            error.contains(&format!("is placed at {BLOCK_PATHS}")),
+            "{occurrence}: {error}"
+        );
+        let error = refused_alone(&doc, face_in("F4.b0", &block_top, occurrence));
+        assert!(error.contains(wrong), "{occurrence}: {error}");
+        assert!(
+            error.contains(&format!("body F4.b0 is placed at {BLOCK_PATHS}")),
+            "{occurrence}: {error}"
+        );
+    }
+    // A root body given an occurrence.
+    let root = refused_alone(&doc, face_in("F2.b0", &format!("F2:end({R})"), "O1"));
+    assert!(root.contains("does not place body F2.b0"), "{root}");
+    assert!(root.contains("body F2.b0 is in the root"), "{root}");
+
+    // At most ten paths, then how many more.
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C1"}),
+    );
+    for i in 0..9 {
+        command(
+            &mut doc,
+            json!({"cmd": "copy_occurrence", "occurrence": "O1/O2",
+                   "transform": {"translation": [5, 127 + 40 * i, 11]}}),
+        );
+    }
+    let many = refused_alone(&doc, json!({"datum": "F5"}));
+    assert!(many.contains("placed 12 times"), "{many}");
+    assert!(
+        many.contains("… and 2 more; the instances query lists them"),
+        "{many}"
+    );
+    assert!(many.contains("O1/O11 (Assembly:1/Block:10)"), "{many}");
+    assert!(!many.contains("Block:11"), "{many}");
+}
+
+#[test]
+fn occurrence_paths_are_taken_by_names() {
+    let doc = three_blocks();
+    let top = face("F2.b0", &format!("F2:end({R})"));
+    let block_top = format!("F4:end({R})");
+    let by_ids = measure(&doc, top.clone(), face_in("F4.b0", &block_top, "O1/O3"));
+    assert_eq!(by_ids["b"]["occurrence"], "O1/O3", "{by_ids}");
+    // By names as the components query gives them, in any case, a
+    // component's name alone where it is placed once, and mixed with ids:
+    // each answered as the ids.
+    for path in [
+        "Assembly:1/Block:2",
+        "assembly:1/block:2",
+        "Assembly/Block:2",
+        "O1/Block:2",
+        " Assembly:1 / Block:2 ",
+    ] {
+        let by_names = measure(&doc, top.clone(), face_in("F4.b0", &block_top, path));
+        assert_eq!(by_names, by_ids, "{path}");
+    }
+    let datum = measure(
+        &doc,
+        json!({"datum": "F5", "occurrence": "Assembly:1/Block:3"}),
+        Value::Null,
+    );
+    assert_eq!(datum["a"]["occurrence"], "O1/O4", "{datum}");
+    assert_eq!(
+        datum,
+        measure(
+            &doc,
+            json!({"datum": "F5", "occurrence": "O1/O4"}),
+            Value::Null
+        )
+    );
+    // An unknown name: the occurrences where the path has got to.
+    let unknown = refused_alone(
+        &doc,
+        json!({"datum": "F5", "occurrence": "Assembly:1/Block:9"}),
+    );
+    assert!(
+        unknown.contains(&format!(
+            "there is no occurrence 'Block:9' in Assembly; its occurrences are {BLOCK_PATHS}"
+        )),
+        "{unknown}"
+    );
+    let top_level = refused_alone(
+        &doc,
+        json!({"datum": "F5", "occurrence": "Frame:1/Block:1"}),
+    );
+    assert!(
+        top_level.contains("there is no occurrence 'Frame:1'"),
+        "{top_level}"
+    );
+    assert!(top_level.contains("O1 (Assembly:1)"), "{top_level}");
+    // An ambiguous one (the component placed three times there): the
+    // candidates.
+    let ambiguous = refused_alone(
+        &doc,
+        json!({"datum": "F5", "occurrence": "Assembly:1/Block"}),
+    );
+    assert!(
+        ambiguous.contains(&format!("'Block' in Assembly is any of {BLOCK_PATHS}")),
+        "{ambiguous}"
+    );
+}
+
+#[test]
+fn origin_datums_are_taken_by_name() {
+    let doc = three_blocks();
+    // In the root, in any case, as fields or as text.
+    for xy in [json!({"datum": "xy"}), json!({"datum": "XY"}), json!("XY")] {
+        let answer = measure(&doc, xy, Value::Null);
+        near_point(&answer["a"]["plane"]["origin"], [0.0, 0.0, 0.0]);
+        near_point(&answer["a"]["plane"]["normal"], [0.0, 0.0, 1.0]);
+    }
+    for x in [json!({"datum": "x"}), json!({"datum": "X"}), json!("X")] {
+        let answer = measure(&doc, x, Value::Null);
+        near_point(&answer["a"]["axis"]["origin"], [0.0, 0.0, 0.0]);
+        near_point(&answer["a"]["axis"]["direction"], [1.0, 0.0, 0.0]);
+    }
+    // In an occurrence: that occurrence's origin, the path by ids or names.
+    let xy = measure(
+        &doc,
+        json!({"datum": "XY", "occurrence": "O1/O3"}),
+        Value::Null,
+    );
+    near_point(&xy["a"]["plane"]["origin"], [53.0, 25.0, 41.0]);
+    near_point(&xy["a"]["plane"]["normal"], [0.0, 0.0, 1.0]);
+    assert_eq!(xy["a"]["occurrence"], "O1/O3", "{xy}");
+    assert_eq!(
+        xy,
+        measure(
+            &doc,
+            json!({"datum": "xy", "occurrence": "Assembly:1/Block:2"}),
+            Value::Null
+        )
+    );
+    let x = measure(
+        &doc,
+        json!({"datum": "x", "occurrence": "Assembly:1/Block:2"}),
+        Value::Null,
+    );
+    near_point(&x["a"]["axis"]["origin"], [53.0, 25.0, 41.0]);
+    near_point(&x["a"]["axis"]["direction"], [0.0, 1.0, 0.0]);
+    assert_eq!(x["a"]["occurrence"], "O1/O3", "{x}");
+    for id in ["Origin", "YZ", "Xz", "Z"] {
+        measure(
+            &doc,
+            json!({"datum": id, "occurrence": "O1/O3"}),
+            Value::Null,
+        );
+    }
+    // Neither a construction feature nor an origin datum.
+    let wrong = refused_alone(&doc, json!({"datum": "top", "occurrence": "O1/O3"}));
+    assert!(wrong.contains("invalid datum 'top'"), "{wrong}");
+    assert!(wrong.contains("\"xy\""), "{wrong}");
+}
+
+#[test]
+fn the_entity_form_measures_as_the_fields() {
+    let doc = three_blocks();
+    let top = face("F2.b0", &format!("F2:end({R})"));
+    let block_top = format!("F4:end({R})");
+    // As ui_state lists the selection, passed on unchanged.
+    let entity = json!({"kind": "face", "owner": "F4.b0", "name": block_top,
+        "occurrence": "O1/O3", "geometry": "plane",
+        "reference": {"body": "F4.b0", "face": block_top}, "text": "Face of F4.b0"});
+    assert_eq!(
+        measure(&doc, top.clone(), entity),
+        measure(&doc, top.clone(), face_in("F4.b0", &block_top, "O1/O3"))
+    );
+    for (entity, fields) in [
+        (
+            json!({"kind": "body", "owner": "F4.b0", "name": "", "occurrence": "O1/O4"}),
+            json!({"body": "F4.b0", "occurrence": "O1/O4"}),
+        ),
+        (
+            json!({"kind": "plane", "owner": "F5", "name": "", "occurrence": "O1/O2"}),
+            json!({"datum": "F5", "occurrence": "O1/O2"}),
+        ),
+        (
+            json!({"kind": "point", "owner": "origin", "name": "", "occurrence": "O1/O3"}),
+            json!({"datum": "origin", "occurrence": "O1/O3"}),
+        ),
+        (
+            json!({"kind": "axis", "owner": "z", "name": "", "occurrence": "Assembly:1/Block:3"}),
+            json!({"datum": "z", "occurrence": "O1/O4"}),
+        ),
+        (
+            json!({"kind": "face", "owner": "F2.b0", "name": format!("F2:end({R})"), "occurrence": ""}),
+            json!({"body": "F2.b0", "face": format!("F2:end({R})"), "occurrence": ""}),
+        ),
+    ] {
+        assert_eq!(
+            measure(&doc, top.clone(), entity.clone()),
+            measure(&doc, top.clone(), fields),
+            "{entity}"
+        );
+    }
+    let point = measure(
+        &doc,
+        json!({"kind": "point", "owner": "origin", "name": "", "occurrence": "O1/O3"}),
+        Value::Null,
+    );
+    assert_eq!(point["a"]["occurrence"], "O1/O3", "{point}");
+    // The entity form's errors.
+    let sketch = refused_alone(&doc, json!({"kind": "sketch", "owner": "F3", "name": ""}));
+    assert!(
+        sketch.contains("a sketch entity cannot be measured"),
+        "{sketch}"
+    );
+    let both = refused_alone(
+        &doc,
+        json!({"kind": "body", "owner": "F4.b0", "body": "F4.b0", "occurrence": "O1/O2"}),
+    );
+    assert!(both.contains("not both"), "{both}");
+    let named = refused_alone(
+        &doc,
+        json!({"kind": "edge", "owner": "F4.b0", "name": block_top, "occurrence": "O1/O2"}),
+    );
+    assert!(named.contains("is no edge name of body F4.b0"), "{named}");
+    // Placed three times without an occurrence: the same error as fields.
+    let placed = refused_alone(&doc, json!({"kind": "plane", "owner": "F5", "name": ""}));
+    assert!(placed.contains(BLOCK_PATHS), "{placed}");
 }

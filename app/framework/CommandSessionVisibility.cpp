@@ -284,6 +284,12 @@ bool CommandSession::redrawPreview() {
   if (missing) {
     return false;
   }
+  // Its clips at the view's plane (mitcad#943): computed again when they
+  // lack a body it draws now.
+  preview.section = earlier.section;
+  if (!sectionCovers(preview)) {
+    return false;
+  }
   preview.tool = earlier.tool;
   preview.toolShape = earlier.toolShape;
   preview.toolPlacements = earlier.toolPlacements;

@@ -583,10 +583,11 @@ RulePalette::RulePalette(QWidget* parent) : QTreeWidget(parent) {
     }
     auto* item = new QTreeWidgetItem(group, QStringList{entry.label});
     item->setData(0, kIdRole, entry.id);
-    item->setToolTip(0, entry.group == QLatin1String("Actions")
-                            ? QStringLiteral("Drag it into a then or else, or press Enter to add it there")
-                            : QStringLiteral("Drag it onto the rule, or press Enter to put it at the focus"));
+    // What the block does, with an example (mitcad#967); how to drag it
+    // is the palette's own tooltip.
+    item->setToolTip(0, entry.tip);
   }
+  setToolTip(QStringLiteral("Drag a block onto the rule, or choose one and press Enter to put it at the focus"));
   expandAll();
   // Every entry in sight: the palette is as tall as its rows (the window
   // grows to it), so that nothing has to be scrolled to.
@@ -773,6 +774,20 @@ void RuleCanvas::setOptions(const QStringList& options, const QStringList& numbe
   m_numberOptions = numberOptions;
 }
 
+void RuleCanvas::setOptionInfos(std::vector<OptionInfo> infos) {
+  m_infos = std::move(infos);
+}
+
+void RuleCanvas::setHint(const QString& hint) {
+  if (hint == m_hint) {
+    return;
+  }
+  m_hint = hint;
+  if (!m_hasRule) {
+    rebuild();
+  }
+}
+
 void RuleCanvas::setParameters(const QStringList& parameters) {
   m_parameters = parameters;
 }
@@ -795,11 +810,11 @@ void RuleCanvas::rebuild() {
   m_pieces.clear();
   m_highlight = -1;
   if (!m_hasRule) {
-    QGraphicsSimpleTextItem* hint = m_scene->addSimpleText(QStringLiteral("Add a rule, or choose one in the list."));
+    QGraphicsSimpleTextItem* hint = m_scene->addSimpleText(m_hint);
     hint->setBrush(palette().color(QPalette::PlaceholderText));
     hint->setPos(12.0, 12.0);
     m_focus = -1;
-    m_scene->setSceneRect(QRectF(0.0, 0.0, 300.0, 60.0));
+    m_scene->setSceneRect(QRectF(0.0, 0.0, std::max(300.0, hint->boundingRect().width() + 24.0), 60.0));
     logPlaces();
     return;
   }
@@ -1041,9 +1056,14 @@ BlockKind RuleCanvas::kindOf(const QString& paletteId) const {
 }
 
 bool RuleCanvas::put(const QString& paletteId, const Target& target) {
-  const Block block = newBlock(paletteId, optionFor(paletteId));
+  Block block = newBlock(paletteId, optionFor(paletteId));
   if (block.kind == BlockKind::Empty) {
     return false;
+  }
+  // An action comes complete: its values from its option's domain
+  // (mitcad#966), never an empty socket to fill first.
+  if (isAction(block.kind)) {
+    fillSockets(block, m_infos);
   }
   Rule changed = m_rule;
   if (!place(changed, target, block)) {
@@ -1208,6 +1228,19 @@ void RuleCanvas::apply(Rule changed, const QString& what, const std::optional<Bl
     if (m_pieces[i].role == Piece::Role::Socket && isPrefix(piece.path, m_pieces[i].path)) {
       setFocusIndex(static_cast<int>(i));
       return;
+    }
+  }
+  // Else, for an action that came with its values (mitcad#966), its first
+  // value: Enter edits it at once.
+  if (piece.role == Piece::Role::Block && isAction(piece.kind)) {
+    const BlockPath at = piece.path;
+    for (std::size_t i = 0; i < m_pieces.size(); ++i) {
+      const Piece& inner = m_pieces[i];
+      if (inner.role == Piece::Role::Block && isValue(inner.kind) &&
+          inner.path.indices.size() > at.indices.size() && isPrefix(at, inner.path)) {
+        setFocusIndex(static_cast<int>(i));
+        return;
+      }
     }
   }
 }

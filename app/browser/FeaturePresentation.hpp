@@ -31,12 +31,31 @@ inline QString featurePresentation(const DocumentSnapshot::Feature& feature,
       }
       definition.insert(QStringLiteral("uid"), feature.uid);
       editor->load(definition, state, model);
-      for (const InputDef& input : editor->inputs) {
+      // A value input's text as "Label: value"; false once three are shown.
+      const auto add = [&dimensions](const InputDef& input, const CommandState& in) {
         if (input.type != InputDef::Type::Value || input.id.startsWith(QStringLiteral("at_")) ||
-            (input.visible && !input.visible(state))) continue;
-        const QString value = state.text(input.id).trimmed();
-        if (!value.isEmpty()) dimensions << QStringLiteral("%1: %2").arg(input.labelIn(state), value).toHtmlEscaped();
-        if (dimensions.size() == 3) break;
+            (input.visible && !input.visible(in))) return true;
+        const QString value = in.text(input.id).trimmed();
+        if (!value.isEmpty()) dimensions << QStringLiteral("%1: %2").arg(input.labelIn(in), value).toHtmlEscaped();
+        return dimensions.size() < 3;
+      };
+      bool room = true;
+      for (const InputDef& input : editor->inputs) {
+        if (!room) break;
+        if (input.type != InputDef::Type::List) {
+          room = add(input, state);
+          continue;
+        }
+        // The sizes of a list's rows too: a Fillet's radius, a Chamfer's
+        // distances are in its edge sets (mitcad#957).
+        if (input.visible && !input.visible(state)) continue;
+        for (int r = 0; room && r < state.rows(input.id); ++r) {
+          const CommandState row = state.row(input.id, r);
+          for (const InputDef& child : input.children) {
+            room = add(child, row);
+            if (!room) break;
+          }
+        }
       }
     }
   } catch (const std::exception&) {

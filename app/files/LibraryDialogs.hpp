@@ -10,7 +10,8 @@
 //   (PartGrid, mitcad#418: groups, favourites, In this design), details
 //   with the licence and the attribution, the version and the size (with
 //   the Standard and Supplier filters, mitcad#949), the row's designation
-//   and suppliers' part numbers, linked or a copy; libraries a community
+//   and its suppliers' articles behind a button that opens their table
+//   (mitcad#979, SupplierPartsDialog.hpp), linked or a copy; libraries a community
 //   index lists are fetched from there, those an enabled source has under
 //   another id left out.
 // - LibraryPartsDialog: the design's library parts, each kept at the
@@ -34,6 +35,7 @@
 #include <QStringList>
 
 #include "../library/OptionChooser.hpp"
+#include "../library/SupplierPartsDialog.hpp"
 
 class QCheckBox;
 class QComboBox;
@@ -113,8 +115,9 @@ private:
   void search();
   void select();
   void showVersion();
-  // The chosen row's designation (following the Standard filter) and its
-  // suppliers' part numbers under the size (mitcad#949).
+  // The chosen row's designation (following the Standard filter) under the
+  // size (mitcad#949), and the button of its suppliers' articles
+  // (mitcad#979).
   void showRowDetails();
   // The size's or the options' fields in the tab order after the version.
   void orderFields();
@@ -141,6 +144,9 @@ private:
   QComboBox* m_version = nullptr;
   SizeChooser* m_size = nullptr;
   QLabel* m_rowDetails = nullptr;
+  // Supplier Articles (n)… and what its table shows (mitcad#979).
+  QPushButton* m_supplierButton = nullptr;
+  SupplierPartsRequest m_supplierRequest;
   QRadioButton* m_link = nullptr;
   QRadioButton* m_copy = nullptr;
   QPushButton* m_insert = nullptr;
@@ -185,8 +191,10 @@ private:
   QTableWidget* m_table = nullptr;
   QComboBox* m_version = nullptr;
   SizeChooser* m_size = nullptr;
-  // The chosen part's suppliers' part numbers (mitcad#949).
-  QLabel* m_supplierParts = nullptr;
+  // The chosen part's suppliers' articles behind a button (mitcad#949,
+  // mitcad#979) and what its table shows.
+  QPushButton* m_supplierButton = nullptr;
+  SupplierPartsRequest m_supplierRequest;
   QPlainTextEdit* m_changes = nullptr;
   QPushButton* m_update = nullptr;
   QPushButton* m_get = nullptr;

@@ -98,6 +98,18 @@ native-expand native.modelTree
 native-context-menu native.model.body:F1.b0@O1 Show
 expect-log 'Visibility .*Body1: shown' 30
 
+# A selected action can synchronously enter a modal dialog. Menu closure
+# must resume this driver before that action returns (mitcad#995).
+mark
+native-context-menu native.model.component@O1 'Design Policy…'
+focus-dialog '^Design Policy of Component1$'
+expect-log 'Design Policy dialog opened for Component1'
+button '^Cancel$'
+expect-native-dialog-gone '^Design Policy of Component1$'
+expect-log 'Design Policy dialog closed without a change'
+focus-main
+expect-model-bodies 1 1000
+
 capture-view-orientation before_history_menu
 view-pointer press 50 50 right
 native-context-menu native.history.F1 cancel

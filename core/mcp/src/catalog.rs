@@ -179,7 +179,7 @@ pub(crate) fn live_tools() -> Vec<Value> {
             }
             Some("model_query") => {
                 tool["description"] = json!(
-                    "Read the open document with one JSON model query, also while a sketch or command is open. Refused only while the model computes: the result then says busy and retry_after_ms. model_reference lists the query names and gives each one's arguments and result (identities and units too)."
+                    "Read the open document with one JSON model query, also while a sketch or command is open. Refused only while the model computes: the result then says busy and retry_after_ms. model_reference lists the query names and gives each one's arguments and result (identities and units too). measure's selections a and b also take an entity exactly as ui_state lists it (kind, owner, name, occurrence), origin datums by name (\"xy\", \"x\", \"origin\") and occurrence paths by ids or names (\"O1/O4\" or \"Arm:1/Pin:2\")."
                 );
             }
             Some("model_command") => {

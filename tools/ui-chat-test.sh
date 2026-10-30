@@ -8,7 +8,8 @@
 # chat_test_agent.cpp) in place of Claude Code and Codex, through the real
 # live MCP server and mitcad-cli bridge: setup (not installed, installed
 # meanwhile, sign-in), the privacy notice, one undo step per message, the
-# approval cards, a user's change during a turn, Stop, the history of a
+# approval cards, a user's change during a turn, Stop, the tool calls'
+# group rows, the history of a
 # reopened design and its resumed session, the Docked layout, Claude
 # Desktop only, the model choice, and Codex through its app server chosen
 # in the agent switcher (kept as the last used one).

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <QAbstractScrollArea>
+#include <QAction>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -682,6 +683,20 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       // Empty: the model works it out (mitcad#656), shown once a preview has it.
       row.edit->setPlaceholderText(tr("Auto"));
     }
+    if (input.type == InputDef::Type::Value && input.markFor) {
+      // A mark in the field (mitcad#980: a Hole field that no longer follows
+      // the screw size), shown by refreshRow; a click does its action.
+      row.mark = new QAction(row.edit);
+      row.mark->setObjectName(QStringLiteral("mark_") + key);
+      row.mark->setVisible(false);
+      row.edit->addAction(row.mark, QLineEdit::TrailingPosition);
+      connect(row.mark, &QAction::triggered, this, [this, key] {
+        auto call = CommandPresenter::actions().markClicked;
+        if (call) {
+          call(key);
+        }
+      });
+    }
     if (input.type == InputDef::Type::Value) {
       connect(row.edit, &QLineEdit::editingFinished, this, [this, key] { emit valueCommitted(key); });
       row.edit->installEventFilter(this); // its keyboard focus (mitcad#250)
@@ -1032,7 +1047,8 @@ void CommandPanel::refresh(const CommandState& state) {
   QStringList shown;
   for (const Row* row : orderedRows()) {
     if (!row->field->isHidden()) {
-      shown << row->key;
+      // A mark shown or gone (mitcad#980) is a place more or less.
+      shown << (row->mark != nullptr && row->mark->isVisible() ? row->key + QLatin1Char('*') : row->key);
     }
   }
   const QString layout = shown.join(QLatin1Char(','));
@@ -1182,6 +1198,21 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
         // The start of a long expression in sight, not its end (mitcad#656:
         // "shaft_bore_clearance", not "aft_bore_clearance").
         row.edit->setCursorPosition(0);
+      }
+    }
+    // A field that no longer follows what fills it (InputDef::markFor,
+    // mitcad#980): the mark's icon in it, its tooltip and action.
+    if (row.mark != nullptr) {
+      const FieldMark mark = input.markFor(scope);
+      if (mark != row.shownMark) {
+        row.shownMark = mark;
+        row.mark->setVisible(!mark.isEmpty());
+        if (!mark.isEmpty()) {
+          row.mark->setIcon(themeIcon(mark.icon));
+          row.mark->setText(mark.action.isEmpty() ? mark.tooltip : mark.action);
+          row.mark->setToolTip(mark.action.isEmpty() ? mark.tooltip
+                                                     : tr("%1\nClick: %2").arg(mark.tooltip, mark.action));
+        }
       }
     }
     // Its own parameter is not offered to it (mitcad#567).
@@ -1641,7 +1672,12 @@ QStringList CommandPanel::layoutLines() const {
       // The middle of where the text is typed: not on the field's trailing
       // buttons (the fx of a value, mitcad#656: a narrow distance field
       // beside its reference had its middle on it).
-      const int trailing = 22 * static_cast<int>(edit->actions().size());
+      // (A field's mark only while shown, mitcad#980.)
+      const QList<QAction*> buttons = edit->actions();
+      const int trailing =
+          22 * static_cast<int>(std::count_if(buttons.begin(), buttons.end(), [](const QAction* button) {
+            return button->isVisible();
+          }));
       area.setWidth(std::max(8, area.width() - trailing));
     }
     const QPoint center = GlassCard::mapToHost(widget, area.center());
@@ -1699,6 +1735,16 @@ QStringList CommandPanel::layoutLines() const {
                        .arg(m_def.name, row->key, item->data(0, Qt::UserRole).toString())
                        .arg(center.x())
                        .arg(center.y());
+        }
+      }
+      if (row->mark != nullptr && row->mark->isVisible()) {
+        // A value field's mark (InputDef::markFor, mitcad#980): its button
+        // in the field.
+        for (const QToolButton* button : row->edit->findChildren<QToolButton*>()) {
+          if (button->defaultAction() == row->mark && button->isVisibleTo(this)) {
+            lines << QStringLiteral("Panel %1 mark %2 at %3").arg(m_def.name, row->key, position(button));
+            break;
+          }
         }
       }
       if (row->button != nullptr) {

@@ -16,7 +16,7 @@ use super::*;
 use crate::projects::{
     self, ADOPT_MESSAGE, Context, CreateOptions, FolderKind, Published, check_remote,
     clone_project, create_project, fingerprint, host_keys, init_bare, inspect_folder,
-    parse_keyscan, ssh_public_key, trust_host_key,
+    parse_keyscan, ssh_public_key, trust_host_key, trust_shown_host_keys,
 };
 use crate::remote::{Control, ErrorClass, GitCli};
 
@@ -1397,6 +1397,121 @@ fn a_hosts_key_is_compared_and_trusted() {
         host_keys("-oProxyCommand=x", 22, &context, &mut log),
         Err(VcsError::Command(_))
     ));
+}
+
+/// mitcad#938: Trust This Server writes the keys the user was shown, not
+/// what a second scan gives. A server whose answer changes between the
+/// scan shown and the scan at Trust gets only the shown keys trusted, or
+/// nothing when a shown key is gone.
+#[test]
+fn only_the_shown_host_keys_are_trusted() {
+    let scratch = Scratch::new("hostkeys-shown");
+    let line = |key: &str| format!("[git.example.com]:2222 ssh-ed25519 {key}\n");
+    let Some(keyscan) = fake_keyscan(&scratch, "changing", &line(GITHUB_ED25519)) else {
+        return;
+    };
+    // The fake ssh-keyscan prints this file: what the server says now.
+    let answer_file = scratch.join("changing.txt");
+    let home = scratch.join("home");
+    let context = Context {
+        keyscan: Some(keyscan),
+        home: Some(home.clone()),
+        ..Context::default()
+    };
+    let known_hosts = home.join(".ssh/known_hosts");
+    let mut log = Vec::new();
+
+    // The scan the dialog shows.
+    let scan = projects_run(
+        json!({"cmd": "host_keys", "host": "git.example.com", "port": 2222}),
+        &context,
+    );
+    assert_eq!(scan["error"], Value::Null, "{scan}");
+    assert_eq!(scan["keys"].as_array().unwrap().len(), 1, "{scan}");
+    // What the application sends at Trust: the shown keys' types and keys.
+    let shown: Vec<Value> = scan["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|key| json!({"type": key["type"], "key": key["key"]}))
+        .collect();
+    let trust = json!({"cmd": "trust_host_key", "host": "git.example.com", "port": 2222,
+                       "keys": shown});
+
+    // Someone adds a key of their own before the second scan.
+    fs::write(
+        &answer_file,
+        format!("{}{}", line(GITLAB_ED25519), line(GITHUB_ED25519)),
+    )
+    .unwrap();
+    let trusted = projects_run(trust.clone(), &context);
+    assert_eq!(trusted["error"], Value::Null, "{trusted}");
+    assert_eq!(trusted["written"], true);
+    assert_eq!(
+        fs::read_to_string(&known_hosts).unwrap(),
+        line(GITHUB_ED25519),
+        "only the shown key"
+    );
+    assert!(
+        trusted["log"].as_array().unwrap().iter().any(|l| l
+            .as_str()
+            .unwrap()
+            .contains("1 key(s) of the new scan were not shown")),
+        "{trusted}"
+    );
+    // Again: nothing new.
+    let again = projects_run(trust.clone(), &context);
+    assert_eq!(
+        (&again["error"], &again["written"]),
+        (&Value::Null, &json!(false))
+    );
+
+    // The shown key replaced by another before the second scan: nothing.
+    fs::write(&answer_file, line(GITLAB_ED25519)).unwrap();
+    let other_home = scratch.join("other-home");
+    let other = Context {
+        home: Some(other_home.clone()),
+        ..context.clone()
+    };
+    let refused = projects_run(trust, &other);
+    assert_eq!(error_class(&refused), "host_key_unknown", "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("its keys changed since you looked"),
+        "{refused}"
+    );
+    assert!(!other_home.join(".ssh/known_hosts").exists());
+    // The same through the function.
+    let shown_keys = [("ssh-ed25519".to_owned(), GITHUB_ED25519.to_owned())];
+    assert_eq!(
+        class_of(trust_shown_host_keys(
+            "git.example.com",
+            2222,
+            &shown_keys,
+            &other,
+            &mut log
+        )),
+        ErrorClass::HostKeyUnknown
+    );
+    assert!(!other_home.join(".ssh/known_hosts").exists());
+
+    // A command without usable keys is refused as a command.
+    for keys in [json!([]), json!([{"type": "ssh-ed25519"}]), json!("all")] {
+        assert!(
+            projects::run(
+                &json!({"cmd": "trust_host_key", "host": "git.example.com", "port": 2222,
+                        "keys": keys})
+                .to_string(),
+                &other,
+                None
+            )
+            .is_err(),
+            "{keys}"
+        );
+    }
+    assert!(!other_home.join(".ssh/known_hosts").exists());
 }
 
 #[test]

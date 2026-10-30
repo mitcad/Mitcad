@@ -335,7 +335,13 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries) {
     if (!surfaces && !onBed && body.printBedError.isEmpty() && !body.printBedFaces.isEmpty()) {
       m_printBedShown = SelectionItem{SelectKind::Face, uid, body.printBedFaces.first(), QStringLiteral("plane"),
                                       first.occurrence};
-      updateIdleView();
+      // Only the highlights change; the card stays as the selection made
+      // it (mitcad#981: nothing of it computed twice per right click).
+      if (m_mode == Mode::Idle) {
+        updateIdleHighlights();
+      } else {
+        updateIdleView();
+      }
       qDebug().noquote() << QStringLiteral("Print bed face shown: %1/%2").arg(uid, m_printBedShown.name);
     }
   }

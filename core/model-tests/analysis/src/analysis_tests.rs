@@ -512,6 +512,78 @@ fn prepared_clips_and_sections_answer_as_the_document() {
     assert!(refused.contains("prepared query"), "{refused}");
 }
 
+/// A feature preview shown cut by Section Analysis (mitcad#943): the clips
+/// take the previewed command's bodies with `preview`, also one the
+/// preview makes, which is no body at the marker, placed by `transform`;
+/// without a preview there is nothing to clip. (The mock kernel cuts
+/// nothing: its answers are its errors.)
+#[test]
+fn clips_take_the_previewed_bodies() {
+    let mut doc = block();
+    let plane = json!({"origin": [10, 0, 0], "normal": [1, 0, 0]});
+    let errors = |doc: &Document<MockKernel>, bodies: Value| -> Vec<Option<String>> {
+        let request = json!({"plane": plane, "bodies": bodies}).to_string();
+        doc.analysis_clips(&request)
+            .unwrap()
+            .into_iter()
+            .map(|clip| clip.err().map(|e| e.to_string()))
+            .collect()
+    };
+    let before = errors(&doc, json!([{"body": "F2.b0", "preview": true}]));
+    assert!(
+        before[0]
+            .as_deref()
+            .is_some_and(|e| e.contains("not in the preview")),
+        "{before:?}"
+    );
+
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [40, 0], "width": 10, "height": 10},
+        ]),
+    );
+    let add = json!({"cmd": "add_feature", "def": {"type": "extrude",
+        "profiles": [{"sketch": "F3", "region": R}],
+        "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}});
+    let report: Value = serde_json::from_str(&doc.preview(&add.to_string()).unwrap()).unwrap();
+    assert_eq!(report["status"], "ok", "{report}");
+    let made = report["bodies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|body| body["uid"].as_str())
+        .find(|uid| *uid != "F2.b0")
+        .unwrap_or_else(|| panic!("no new body in {report}"))
+        .to_owned();
+    let moved = json!({"linear": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "translation": [5, 0, 0]});
+    let bodies = json!([
+        {"body": "F2.b0", "preview": true},
+        {"body": made, "preview": true, "transform": moved},
+    ]);
+    // Both reach the kernel's clip: the previewed bodies are there.
+    let clips = errors(&doc, bodies.clone());
+    assert_eq!(clips.len(), 2);
+    for clip in &clips {
+        assert!(
+            clip.as_deref().is_some_and(|e| !e.contains("preview")),
+            "{clips:?}"
+        );
+    }
+    let request = json!({"plane": plane, "bodies": bodies}).to_string();
+    let prepared = doc.prepare_clips(&request).unwrap();
+    assert!(prepared.input(0).is_some() && prepared.input(1).is_some());
+    // The new body is only in the preview.
+    let committed = errors(&doc, json!([{"body": made}]));
+    assert!(
+        committed[0]
+            .as_deref()
+            .is_some_and(|e| e.contains(made.as_str())),
+        "{committed:?}"
+    );
+}
+
 /// The `section_plane` query of a plane turned about an axis (mitcad#823).
 fn turned_section(doc: &Document<MockKernel>, mut query: Value) -> Result<Value, String> {
     query["query"] = json!("section_plane");

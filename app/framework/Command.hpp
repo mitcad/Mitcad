@@ -164,6 +164,23 @@ struct InputNote {
   bool isEmpty() const { return text.isEmpty() && actions.isEmpty(); }
 };
 
+// A mark in a value field (InputDef::markFor, mitcad#980: a Hole field
+// that no longer follows the screw size): a small icon (its name in
+// app/icons) in the field, `tooltip` saying why; with an `action` (its
+// name, "Reset to size") a click on the icon does it (InputDef::onMark).
+// No mark when the tooltip is empty.
+struct FieldMark {
+  QString tooltip;
+  QString icon;
+  QString action;
+
+  bool isEmpty() const { return tooltip.isEmpty(); }
+  bool operator==(const FieldMark& other) const {
+    return tooltip == other.tooltip && icon == other.icon && action == other.action;
+  }
+  bool operator!=(const FieldMark& other) const { return !(*this == other); }
+};
+
 // A small icon beside an option of a drop-down (InputDef::choiceIcon,
 // mitcad#655): its name in app/icons (none when empty) and what hovering
 // over it says.
@@ -455,6 +472,12 @@ struct InputDef {
   // its placeholder, read after each preview that succeeded ("Auto (24.5
   // mm)", the worked-out value; "Auto" when it returns nothing).
   std::function<QString(const CommandState&, const CommandContext&)> autoText;
+  // Value: a mark in the field in a state (FieldMark, mitcad#980), and
+  // what a click on it does: the field's input changed by it, the panel
+  // shown again as after a choice (onChange's way). A frontend without
+  // marks shows none.
+  std::function<FieldMark(const CommandState&)> markFor;
+  std::function<void(CommandState&, const CommandContext&)> onMark;
 
   InputDef& withTooltip(const QString& tip) {
     tooltip = tip;
@@ -656,6 +679,12 @@ struct InputDef {
   }
   InputDef& withButtonEnabled(std::function<bool(const CommandState&)> on) {
     buttonEnabled = std::move(on);
+    return *this;
+  }
+  InputDef& withMark(std::function<FieldMark(const CommandState&)> mark,
+                     std::function<void(CommandState&, const CommandContext&)> action) {
+    markFor = std::move(mark);
+    onMark = std::move(action);
     return *this;
   }
 

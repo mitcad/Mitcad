@@ -3,7 +3,9 @@
 //! MitCad's bridge as the only MCP server, the thread and its resume, the
 //! turns of the messages, the streamed answer, tool calls and turn ends,
 //! Stop (turn/interrupt), and the approvals Codex asks for answered so that
-//! the live server's gate stays the one that decides.
+//! the live server's gate stays the one that decides. The messages are those
+//! of the JSON Schema of `codex app-server generate-json-schema` (codex-cli
+//! 0.157.1).
 
 use serde_json::{Value, json};
 
@@ -46,14 +48,17 @@ fn shown(events: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+/// `initialize`'s result as the app server gives it.
+fn initialized() -> Value {
+    json!({"id": 0, "result": {"codexHome": "/home/u/.codex", "platformFamily": "unix",
+                               "platformOs": "linux", "userAgent": "codex/test"}})
+}
+
 /// A stream started, initialized and with its thread `thr_1`.
 fn ready() -> CodexStream {
     let mut stream = CodexStream::default();
     start(&mut stream, json!({}));
-    feed(
-        &mut stream,
-        json!({"id": 0, "result": {"userAgent": "codex/test"}}),
-    );
+    feed(&mut stream, initialized());
     feed(
         &mut stream,
         json!({"id": 1, "result": {"thread": {"id": "thr_1"}, "model": "gpt-test"}}),
@@ -71,9 +76,10 @@ fn the_start_gives_codex_the_bridge_only_and_its_own_tools_off() {
     assert_eq!(first[0]["params"]["clientInfo"]["name"], "mitcad");
     assert!(first[0].get("jsonrpc").is_none());
 
-    let events = feed(&mut stream, json!({"id": 0, "result": {}}));
+    let events = feed(&mut stream, initialized());
     let sent = written(&events);
-    assert_eq!(sent[0], json!({"method": "initialized", "params": {}}));
+    // A notification without params: the schema's `initialized` has none.
+    assert_eq!(sent[0], json!({"method": "initialized"}));
     assert_eq!(sent[1]["method"], "thread/start");
     let params = &sent[1]["params"];
     assert_eq!(params["approvalPolicy"], "never");
@@ -96,9 +102,8 @@ fn the_start_gives_codex_the_bridge_only_and_its_own_tools_off() {
         ])
     );
     assert!(servers["mitcad"]["tool_timeout_sec"].as_u64().unwrap() >= 600);
+    assert_eq!(config["approval_policy"], "never");
     assert_eq!(config["sandbox_mode"], "read-only");
-    assert_eq!(config["features.shell_tool"], false);
-    assert_eq!(config["tools.web_search"], false);
     assert_eq!(sent[2]["method"], "model/list");
 
     let init = feed(
@@ -115,15 +120,52 @@ fn the_start_gives_codex_the_bridge_only_and_its_own_tools_off() {
     let models = feed(
         &mut stream,
         json!({"id": 2, "result": {"data": [
-            {"id": "m1", "model": "gpt-test", "displayName": "GPT test", "isDefault": true},
-            {"id": "m2", "model": "gpt-hidden", "hidden": true},
-            {"id": "m3", "model": "--bad"}]}}),
+            {"id": "m1", "model": "gpt-test", "displayName": "GPT test", "isDefault": true,
+             "hidden": false, "description": "", "defaultReasoningEffort": "medium",
+             "supportedReasoningEfforts": []},
+            {"id": "m2", "model": "gpt-hidden", "displayName": "Hidden", "hidden": true,
+             "isDefault": false},
+            {"id": "m3", "model": "--bad", "displayName": "Bad", "hidden": false,
+             "isDefault": false}], "nextCursor": null}}),
     );
     assert_eq!(
         models,
         vec![json!({"kind": "models", "models": [
             {"id": "gpt-test", "name": "GPT test", "default": true}]})]
     );
+}
+
+#[test]
+fn the_thread_config_uses_only_keys_the_current_codex_knows() {
+    let mut stream = CodexStream::default();
+    start(&mut stream, json!({}));
+    let sent = written(&feed(&mut stream, initialized()));
+    let config = &sent[1]["params"]["config"];
+    // Shell (also its unified form), the freeform patch tool and pictures:
+    // features of the current Codex.
+    for feature in [
+        "features.shell_tool",
+        "features.unified_exec",
+        "features.apply_patch_freeform",
+        "features.view_image",
+        "features.web_search_request",
+    ] {
+        assert_eq!(config[feature], false, "{feature}");
+    }
+    // Web search is a mode ("disabled", "cached", "indexed", "live").
+    assert_eq!(config["web_search"], "disabled");
+    // Gone (`include_apply_patch_tool`), moved to features
+    // (`tools.view_image`), or a table now (`tools.web_search`).
+    for stale in [
+        "include_apply_patch_tool",
+        "tools.view_image",
+        "tools.web_search",
+    ] {
+        assert!(config.get(stale).is_none(), "{stale}");
+    }
+    let server = &config["mcp_servers"]["mitcad"];
+    assert_eq!(server["startup_timeout_sec"], 60);
+    assert_eq!(server["tool_timeout_sec"], 900);
 }
 
 #[test]
@@ -160,7 +202,7 @@ fn a_message_before_the_thread_waits_and_goes_as_a_turn() {
                          "images": [{"media_type": "image/png", "data": "iVBORw0KGgo="}]}))
         .unwrap();
     assert!(early.is_empty());
-    feed(&mut stream, json!({"id": 0, "result": {}}));
+    feed(&mut stream, initialized());
     let events = feed(
         &mut stream,
         json!({"id": 1, "result": {"thread": {"id": "thr_1"}}}),
@@ -407,7 +449,7 @@ fn a_thread_is_resumed_or_a_new_one_starts() {
         &mut stream,
         json!({"resume": true, "session": "019a0b1c-thread"}),
     );
-    let sent = written(&feed(&mut stream, json!({"id": 0, "result": {}})));
+    let sent = written(&feed(&mut stream, initialized()));
     assert_eq!(sent[1]["method"], "thread/resume");
     assert_eq!(sent[1]["params"]["threadId"], "019a0b1c-thread");
     assert_eq!(
@@ -424,7 +466,7 @@ fn a_thread_is_resumed_or_a_new_one_starts() {
     // The thread is gone: a new one, and init says so.
     let mut gone = CodexStream::default();
     start(&mut gone, json!({"resume": true, "session": "thr_old"}));
-    let sent = written(&feed(&mut gone, json!({"id": 0, "result": {}})));
+    let sent = written(&feed(&mut gone, initialized()));
     let events = feed(
         &mut gone,
         json!({"id": sent[1]["id"], "error": {"code": -32600, "message": "no rollout found for thread id thr_old"}}),
@@ -443,7 +485,7 @@ fn a_thread_is_resumed_or_a_new_one_starts() {
     // A conversation that cannot start ends the process.
     let mut refused = CodexStream::default();
     start(&mut refused, json!({}));
-    feed(&mut refused, json!({"id": 0, "result": {}}));
+    feed(&mut refused, initialized());
     let end = feed(
         &mut refused,
         json!({"id": 1, "error": {"code": -32600, "message": "not logged in"}}),
@@ -475,11 +517,27 @@ fn approvals_codex_asks_for_are_answered_so_that_the_live_server_decides() {
         patch,
         json!({"id": "41", "result": {"decision": "decline"}})
     );
-    let (old, _) = answer(
+    // The v1 approvals: `denied` is an object with the rejection now.
+    for (id, method) in [(42, "execCommandApproval"), (47, "applyPatchApproval")] {
+        let (old, said) = answer(
+            &mut stream,
+            json!({"id": id, "method": method, "params": {"conversationId": "thr_1"}}),
+        );
+        assert_eq!(old["id"], id);
+        let rejection = &old["result"]["decision"]["denied"]["rejection"];
+        assert!(rejection.as_str().is_some_and(|text| !text.is_empty()));
+        assert_eq!(said["subtype"], "declined");
+    }
+    let (permissions, _) = answer(
         &mut stream,
-        json!({"id": 42, "method": "execCommandApproval", "params": {}}),
+        json!({"id": 48, "method": "item/permissions/requestApproval",
+               "params": {"threadId": "thr_1", "turnId": "t", "itemId": "i",
+                          "permissions": {}, "cwd": "/", "startedAtMs": 0}}),
     );
-    assert_eq!(old["result"]["decision"], "denied");
+    assert_eq!(
+        permissions,
+        json!({"id": 48, "result": {"permissions": {}}})
+    );
     // A confirmation of MitCad's own tool: accepted, the gate decides.
     let (ours, said) = answer(
         &mut stream,
@@ -535,9 +593,44 @@ fn bridge_status_after_init() {
     assert!(
         feed(
             &mut stream,
-            json!({"method": "mcpServer/startupStatus/updated", "params": {"name": "other", "status": "failed"}})
+            json!({"method": "mcpServer/startupStatus/updated",
+                   "params": {"name": "mitcad", "status": "starting", "threadId": "thr_1"}})
         )
         .is_empty()
+    );
+    let cancelled = feed(
+        &mut stream,
+        json!({"method": "mcpServer/startupStatus/updated",
+               "params": {"name": "mitcad", "status": "cancelled", "error": null}}),
+    );
+    assert_eq!(
+        cancelled,
+        vec![json!({"kind": "bridge", "bridge": "failed", "bridge_error": null})]
+    );
+    // Another server: only for the log (the thread should have none).
+    let other = feed(
+        &mut stream,
+        json!({"method": "mcpServer/startupStatus/updated", "params": {"name": "other", "status": "ready"}}),
+    );
+    assert_eq!(
+        other,
+        vec![json!({"kind": "status", "subtype": "other_mcp_server", "text": "other ready"})]
+    );
+}
+
+#[test]
+fn a_config_warning_is_said_for_the_log() {
+    let mut stream = ready();
+    let warning = feed(
+        &mut stream,
+        json!({"method": "configWarning",
+               "params": {"summary": "Codex is ignoring 1 unrecognized configuration setting",
+                          "details": "tools.view_image", "path": null}}),
+    );
+    assert_eq!(
+        warning,
+        vec![json!({"kind": "status", "subtype": "config_warning",
+                    "text": "Codex is ignoring 1 unrecognized configuration setting: tools.view_image"})]
     );
 }
 

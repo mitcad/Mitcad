@@ -460,6 +460,11 @@ target_sources(mitcad PRIVATE
 target_sources(mitcad PRIVATE
   commands/SketchNormal.cpp
   commands/SketchNormal.hpp)
+# The Hole panel's fields that follow a screw size, their marks and Reset
+# to size (mitcad#903, mitcad#980).
+target_sources(mitcad PRIVATE
+  commands/HoleSizes.cpp
+  commands/HoleSizes.hpp)
 
 if(WIN32)
   # wglGetCurrentDC() in OcctViewer.cpp
@@ -522,6 +527,9 @@ if(APPLE)
     # The shared layout sizing contract and dialog button order (mitcad#812, #817).
     target_sources(mitcad PRIVATE platform/macos/NativeLayout.hpp platform/macos/NativeLayout.mm)
     set_source_files_properties(platform/macos/NativeLayout.mm PROPERTIES COMPILE_OPTIONS -fobjc-arc)
+    # The widget tree whose change rebuilds a presenter's native controls
+    # (mitcad#986): plain Qt Widgets.
+    target_sources(mitcad PRIVATE platform/NativeStructure.hpp platform/NativeStructure.cpp)
   endif()
 endif()
 
@@ -811,6 +819,14 @@ if(BUILD_TESTING)
   # A sketch's normal in turned, nested and oblique occurrences (mitcad#958):
   # Qt Core and OCCT's math.
   target_sources(test_app PRIVATE tests/sketch_normal.cpp commands/SketchNormal.cpp commands/SketchNormal.hpp)
+  # The Hole panel's fields that follow a screw size (mitcad#980): Qt Core
+  # and the command state, with a model of the size tables.
+  target_sources(test_app PRIVATE tests/hole_sizes.cpp commands/HoleSizes.cpp commands/HoleSizes.hpp)
+  # A scroll area's own children changing places rebuild no native
+  # presenter, a widget added or removed or reordered elsewhere does
+  # (mitcad#986): plain Qt Widgets.
+  target_sources(test_app PRIVATE tests/native_structure.cpp platform/NativeStructure.cpp
+                 platform/NativeStructure.hpp)
   target_link_libraries(test_app PRIVATE mitcad_geometry)
   target_include_directories(test_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(test_app PRIVATE Qt6::Widgets Qt6::Svg mitcad_warnings)
@@ -1302,6 +1318,11 @@ target_sources(mitcad PRIVATE
 if(BUILD_TESTING)
   target_sources(test_app PRIVATE tests/part_options.cpp library/PartOptions.cpp library/PartOptions.hpp)
 endif()
+# The suppliers' articles of a library part's row as a table behind a
+# button (mitcad#979): Insert from Library, Library Parts and Edit Options….
+target_sources(mitcad PRIVATE
+  library/SupplierPartsDialog.cpp
+  library/SupplierPartsDialog.hpp)
 # The web viewer's pages (mitcad#423, app/web, app/COMMANDS.md "Web
 # page"): a design as one self-contained HTML file, File > Export > Web
 # page. The viewer's files (app/web/viewer, its libraries in
@@ -1496,6 +1517,24 @@ if(BUILD_TESTING)
   # and the geometry's cancel.
   target_sources(test_app PRIVATE tests/section_worker.cpp framework/SectionWorker.cpp
                  framework/SectionWorker.hpp)
+endif()
+# Section Analysis and Hide Above Sketch over a feature preview
+# (mitcad#943): a preview's bodies clipped by the view's clip, the caps of
+# a cut body.
+target_sources(mitcad PRIVATE
+  framework/SectionPreview.cpp
+  framework/SectionPreview.hpp)
+if(BUILD_TESTING)
+  # A preview's clips and caps through the model's commands, as the window
+  # asks for them, without a window.
+  add_executable(test_section_preview tests/section_preview.cpp framework/SectionPreview.cpp)
+  target_include_directories(test_section_preview PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(test_section_preview PRIVATE Qt6::Core mitcad_ffi mitcad_geometry TKBO TKTopAlgo TKPrim
+    TKBRep mitcad_warnings)
+  add_test(NAME app.section_preview COMMAND test_section_preview)
+  set_tests_properties(app.section_preview PROPERTIES TIMEOUT 120
+    ENVIRONMENT "MITCAD_RESULT_STORE=off"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()
 
 # Native scheduling, pool initialization and exception-safe QoS restoration
@@ -2025,6 +2064,14 @@ if(BUILD_TESTING)
   target_link_libraries(test_chat_agent PRIVATE Qt6::Core mitcad_warnings)
   mitcad_utf8_code_page(test_chat_agent)
   add_dependencies(mitcad test_chat_agent)
+  # The tool calls' group rows (mitcad#983) as the panel asks for them, the
+  # chat's Rust logic through the bridge.
+  add_executable(test_chat_tool_groups tests/chat_tool_groups.cpp agent/ChatLogic.hpp)
+  target_include_directories(test_chat_tool_groups PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(test_chat_tool_groups PRIVATE mitcad_ffi Qt6::Core mitcad_warnings)
+  add_test(NAME app.chat_tool_groups COMMAND test_chat_tool_groups)
+  set_tests_properties(app.chat_tool_groups PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()
 
 # A stored view's height set as OCCT's camera scale through the view's
@@ -2055,4 +2102,10 @@ endif()
 target_sources(mitcad PRIVATE browser/FeatureStatus.cpp browser/FeatureStatus.hpp)
 if(BUILD_TESTING)
   target_sources(test_app PRIVATE tests/feature_status.cpp browser/FeatureStatus.cpp browser/FeatureStatus.hpp)
+endif()
+# The sketch points' markers and the overlay's highlights with the markers over
+# them (mitcad#946): plain Qt Gui, painted into images in the test.
+target_sources(mitcad PRIVATE sketch/PointMarkers.cpp sketch/PointMarkers.hpp)
+if(BUILD_TESTING)
+  target_sources(test_app PRIVATE tests/sketch_point_markers.cpp sketch/PointMarkers.cpp sketch/PointMarkers.hpp)
 endif()

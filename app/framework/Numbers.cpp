@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include <QLocale>
+#include <QRegularExpression>
 
 namespace mitcad {
 namespace {
@@ -29,6 +30,24 @@ std::optional<double> parsePlainNumber(const QString& text, QString* normalized)
     *normalized = number;
   }
   return value;
+}
+
+bool valueHintWorthShowing(const QString& text, bool namesParameters) {
+  if (parsePlainNumber(text)) {
+    return false;
+  }
+  if (namesParameters) {
+    return true;
+  }
+  // A number with an optional sign, decimal point or comma, exponent and
+  // one unit word after it ("-8 mm", "+3 mm", "-5°", "1e-3 mm").
+  static const QRegularExpression signedNumber(
+      QStringLiteral(R"(^\s*[-+]?\s*(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][-+]?\d+)?\s*[^\s\d+\-*/^(),;]*\s*$)"));
+  if (signedNumber.match(text).hasMatch()) {
+    return false;
+  }
+  static const QRegularExpression operatorCharacter(QStringLiteral("[-+*/^()]"));
+  return text.contains(operatorCharacter);
 }
 
 DecimalSpinBox::DecimalSpinBox(QWidget* parent) : QDoubleSpinBox(parent) {

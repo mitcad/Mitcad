@@ -47,6 +47,54 @@ struct NativeMacWindowState;
 - (BOOL)dispatchKeyboardEvent:(NSEvent*)event;
 @end
 
+// A status message has the shared pill's lifetime. Weak views and guarded
+// completions also cover a window closing or a replacement during its fade.
+@interface MITCADStatusLifetime : NSObject
+@property(nonatomic, weak) NSView* card;
+@property(nonatomic, strong) NSTimer* timer;
+@property(nonatomic) NSUInteger generation;
+- (void)clear;
+- (void)showForMilliseconds:(NSInteger)milliseconds;
+@end
+
+@implementation MITCADStatusLifetime
+- (void)cancelPendingFade {
+  ++self.generation;
+  [self.timer invalidate];
+  self.timer = nil;
+  [self.card.layer removeAllAnimations];
+  self.card.alphaValue = 1;
+}
+- (void)clear {
+  [self cancelPendingFade];
+  self.card.hidden = YES;
+}
+- (void)showForMilliseconds:(NSInteger)milliseconds {
+  [self cancelPendingFade];
+  self.card.hidden = NO;
+  const NSUInteger generation = self.generation;
+  __weak MITCADStatusLifetime* weakSelf = self;
+  self.timer = [NSTimer timerWithTimeInterval:std::max<NSInteger>(0, milliseconds) / 1000.0 repeats:NO
+      block:^(NSTimer* timer) {
+    (void)timer;
+    MITCADStatusLifetime* current = weakSelf;
+    if (current == nil || current.generation != generation) return;
+    current.timer = nil;
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext* context) {
+      context.duration = 0.4;
+      current.card.animator.alphaValue = 0;
+    } completionHandler:^{
+      MITCADStatusLifetime* finished = weakSelf;
+      if (finished == nil || finished.generation != generation) return;
+      finished.card.hidden = YES;
+      finished.card.alphaValue = 1;
+    }];
+  }];
+  [NSRunLoop.mainRunLoop addTimer:self.timer forMode:NSRunLoopCommonModes];
+}
+- (void)dealloc { [_timer invalidate]; }
+@end
+
 @interface MITCADViewportHost : NSView {
 @public
   mitcad::mac::NativeMacWindowState* state;
@@ -474,6 +522,7 @@ struct NativeMacWindowState {
   MITCADFloatingCard* __strong inspectorCard = nil;
   MITCADFloatingCard* __strong historyCard = nil;
   MITCADFloatingCard* __strong statusCard = nil;
+  MITCADStatusLifetime* __strong statusLifetime = nil;
   NSVisualEffectView* __strong ribbon = nil;
   NSScrollView* __strong ribbonScroll = nil;
   MITCADInspectorDocumentView* __strong ribbonGroups = nil;
@@ -537,6 +586,7 @@ struct NativeMacWindowState {
   ~NativeMacWindowState() {
     finishHistoryMarkerDrag();
     closing = true;
+    [statusLifetime clear];
     for (MITCADBindingBadge* badge in bindingBadges.allObjects) {
       badge->state = nullptr;
       [badge->hoverTimer invalidate];
@@ -1279,6 +1329,8 @@ struct NativeMacWindowState {
     status.lineBreakMode = NSLineBreakByTruncatingTail;
     status.accessibilityIdentifier = @"native.status";
     statusCard = floatingCard(@"native.statusCard");
+    statusLifetime = [MITCADStatusLifetime new];
+    statusLifetime.card = statusCard;
     statusCard.hidden = YES;
     fill(status, statusCard.body, 8);
     [canvasRoot addSubview:statusCard];
@@ -1433,7 +1485,9 @@ struct NativeMacWindowState {
     [inspectorHost layoutSubtreeIfNeeded];
     [inspectorHost layoutSubtreeIfNeeded];
     const CGFloat content = inspectorDocument ? NSHeight(inspectorDocument.frame) : inspectorContent.fittingSize.height;
-    const CGFloat footer = inspectorFooterContent ? inspectorFooterContent.fittingSize.height : 0;
+    // Use the space actually reserved by the footer's layout, including
+    // the button frames outside their alignment rectangles (mitcad#993).
+    const CGFloat footer = NSHeight(inspectorFooter.frame);
     return std::ceil(content + footer);
   }
 
@@ -2493,11 +2547,12 @@ void NativeMacWindow::setAgentStatus(const QString& text, const QString& tooltip
   }
 }
 void NativeMacWindow::setSketchMode(bool sketching) { m_state->sketching = sketching; }
-void NativeMacWindow::setStatus(const QString& message, bool error) {
+void NativeMacWindow::setStatus(const QString& message, bool error, int milliseconds) {
   m_state->status.stringValue = ns(message);
   m_state->status.textColor = error ? NSColor.systemRedColor : NSColor.secondaryLabelColor;
   m_state->status.toolTip = ns(message);
-  m_state->statusCard.hidden = message.isEmpty();
+  if (message.isEmpty()) [m_state->statusLifetime clear];
+  else [m_state->statusLifetime showForMilliseconds:milliseconds];
   m_state->layoutOverlays();
 }
 void NativeMacWindow::setInspectorText(const QString& title, const QString& text) {

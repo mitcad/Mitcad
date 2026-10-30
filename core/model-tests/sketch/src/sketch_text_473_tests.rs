@@ -319,6 +319,97 @@ fn a_font_file_that_is_not_a_font_is_refused() {
     assert!(why.contains("cannot be read"), "{why}");
 }
 
+/// The design JSON of a sketch text in a font file, with its font file's
+/// path set to `path` and, unless `glyphs`, its stored outlines left out.
+fn font_file_design(d: &Document<MockKernel>, path: &str, glyphs: bool) -> String {
+    let mut value: Value = serde_json::from_str(&d.to_json()).unwrap();
+    let text = &mut value["features"][0]["texts"][0];
+    assert!(text["glyphs"].is_object(), "{text}");
+    text["font_file"]["path"] = json!(path);
+    if !glyphs {
+        text.as_object_mut().unwrap().remove("glyphs");
+    }
+    value.to_string()
+}
+
+#[test]
+fn a_font_file_named_by_a_design_is_not_read() {
+    // mitcad#929: a font file path that came with a design file is never
+    // read; the text needs its stored outlines or the file chosen again.
+    let mut d = with_sketch();
+    let file = font("LiberationSans-Regular.ttf");
+    command(
+        &mut d,
+        json!({"cmd": "sketch.add_text", "sketch": "F1", "text": "MIT", "at": [0, 0],
+               "height": 10, "font_file": file}),
+    );
+    // Chosen in this session: a new string reads the file again.
+    command(
+        &mut d,
+        json!({"cmd": "sketch.edit_text", "sketch": "F1", "id": "t1", "text": "MITs"}),
+    );
+    assert_eq!(sketch(&d)["texts"][0]["has_glyphs"], true);
+    command(
+        &mut d,
+        json!({"cmd": "sketch.edit_text", "sketch": "F1", "id": "t1", "text": "MIT"}),
+    );
+
+    // A missing file and no outlines: the outlines are named, no read
+    // error (nothing was read).
+    let json = font_file_design(&d, "/nonexistent/x.ttf", false);
+    let mut opened = Document::from_json(&json, MockKernel::default()).unwrap();
+    opened.recompute();
+    let error = opened
+        .status(mitcad_model::ids::FeatureUid(1))
+        .and_then(|s| s.error())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        error.contains("t1: the text has no outlines stored for its font file x.ttf")
+            && error.contains("choose the font file again")
+            && !error.contains("cannot be read"),
+        "{error}"
+    );
+    // The same for a font file that is there: the design's path is not
+    // read either.
+    let json = font_file_design(&d, &file, false);
+    let mut opened = Document::from_json(&json, MockKernel::default()).unwrap();
+    opened.recompute();
+    let error = opened
+        .status(mitcad_model::ids::FeatureUid(1))
+        .and_then(|s| s.error())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        error.contains("no outlines stored for its font file LiberationSans-Regular.ttf"),
+        "{error}"
+    );
+
+    // With its outlines the text opens; a new string needs the file chosen
+    // again, even where the design's path names one.
+    let json = font_file_design(&d, &file, true);
+    let mut opened = Document::from_json(&json, MockKernel::default()).unwrap();
+    opened.recompute();
+    assert_eq!(sketch(&opened)["texts"][0]["stored_outlines"], true);
+    let why = rejected(
+        &mut opened,
+        json!({"cmd": "sketch.edit_text", "sketch": "F1", "id": "t1", "text": "MITs"}),
+    );
+    assert!(
+        why.contains("a font file named by the design is not read")
+            && why.contains("choose the font file again"),
+        "{why}"
+    );
+    // Chosen again, it is read.
+    command(
+        &mut opened,
+        json!({"cmd": "sketch.edit_text", "sketch": "F1", "id": "t1", "text": "MITs",
+               "font_file": file}),
+    );
+    let text = &sketch(&opened)["texts"][0];
+    assert_eq!(text["has_glyphs"], true, "{text}");
+}
+
 /// A region of the sketch query by key: area, centroid and loop count.
 fn region_of(s: &Value, key: &str) -> (f64, [f64; 2], usize) {
     let r = s["regions"]

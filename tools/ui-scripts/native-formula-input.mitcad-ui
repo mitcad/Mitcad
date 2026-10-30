@@ -18,6 +18,9 @@ focus-dialog '^Formula Editor$'
 native-pointer-click formulaText
 native-key-event Ctrl+a
 type '1 mm'
+# The function list's internal scroll-area children changing places
+# rebuild neither dialog's native controls (mitcad#986).
+mark
 native-key-event Return
 expect-widget-property formulaText blockCount 2
 expect-model-parameter result 1
@@ -35,6 +38,7 @@ native-pointer-dblclick formulaFunctions/0/0
 expect-native-text formulaText '^10 mm [+] MAX[(][)] [+] 5 mm$'
 expect-widget-property formulaText plainText '10 mm + MAX() + 5 mm'
 expect-native-focus formulaText
+expect-no-log 'Native presenter structure rebuild: (Formula Editor|Parameters) '
 screenshot-screen '${MITCAD_TEST_WORK}/function-${MITCAD_TEST_COLOR_SCHEME}.png'
 type '2 mm; 3 mm'
 expect-native-text formulaText '^10 mm [+] MAX[(]2 mm; 3 mm[)] [+] 5 mm$'
@@ -104,6 +108,26 @@ native-key-event Escape
 expect-native-visible formulaCompletions false
 expect-native-text formulaText '^pit$'
 expect-undo-depth ${formulaBaseline} 2
+# The native selected row stays the shared list's through Down and each
+# typed-prefix update, with Formula Text keeping the keyboard (mitcad#984).
+native-key-event Ctrl+a Backspace
+native-key-event c o
+expect-log 'Formula completions for "co": count, .*COS[(], COSH[(]'
+expect-native-visible formulaCompletions true
+expect-native-selection formulaCompletions 1
+expect-widget-property formulaCompletions currentRow 0
+native-key-event Down
+expect-native-selection formulaCompletions 1
+expect-widget-property formulaCompletions currentRow 1
+expect-native-focus formulaText
+native-key-event s
+expect-log 'Formula completions for "cos": COS[(], COSH[(]'
+expect-native-selection formulaCompletions 1
+expect-widget-property formulaCompletions currentRow 0
+expect-native-focus formulaText
+native-key-event Escape
+expect-native-visible formulaCompletions false
+expect-native-text formulaText '^cos$'
 native-key-event Ctrl+a Backspace
 native-key-event p i t
 expect-native-visible formulaCompletions true

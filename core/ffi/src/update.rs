@@ -15,8 +15,10 @@ mod ffi {
         /// manifest), and tells what it offers version `current` of
         /// `platform` ("windows-x64", "linux-x64") on the channel, the
         /// skipped version (or "") set apart: JSON {"status": "available" |
-        /// "skipped" | "current", "version", "date", "notes", "prerelease",
-        /// "asset": {"url", "size", "sha256", "signature"} or null}.
+        /// "skipped" | "current", "version", "date", "expires" (or null),
+        /// "expired" (a newer version whose manifest expired: status
+        /// "current", mitcad#938), "notes", "prerelease", "asset": {"url",
+        /// "size", "sha256", "signature"} or null}.
         fn update_check(
             manifest: &[u8],
             keys: &str,

@@ -4,7 +4,7 @@ resolver = "3"
 members = ["model", "ffi", "solver", "f3d", "dxf", "import", "vcs", "zip", "freecad", "3mf", "update", "ipt", "mcp", "usdz", "ifc", "cfb", "rvt", "solidcraft", "dwg", "vec3", "dump", "asm", "f3d-names", "f3d-file", "f3d-design", "expr", "print-keys", "import-base", "import-ifc", "import-rvt", "import-fcstd", "model-api", "model-tests/support", "model-tests/api", "model-tests/appearance", "model-tests/analysis", "model-tests/sketch", "model-tests/sketch-refs", "model-tests/features-profile", "model-tests/features-solid", "model-tests/parts", "model-tests/sheet", "model-tests/assembly", "model-tests/joints", "model-tests/links", "model-tests/drawing", "model-tests/drawing-views", "model-tests/print", "model-tests/files", "model-tests/build-frames", "model-tests/build-timber", "model-base", "model-testkit", "model-build", "model-diff", "model-drawing", "sketch", "f3d-decode", "import-solidcraft", "import-replay", "import-joints", "import-sheet", "import-primitives", "../tools/testrun", "import-appearances", "ffi-staticlib", "model-tests/imports"]
 
 [workspace.package]
-version = "0.37.0"
+version = "0.38.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.88"

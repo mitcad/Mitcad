@@ -38,6 +38,8 @@ TexturePreferencesBox::TexturePreferencesBox(QWidget* parent)
   m_folders->setAccessibleName(tr("Texture folders"));
   title->setBuddy(m_folders);
   m_folders->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  m_folders->setTextElideMode(Qt::ElideMiddle);
+  m_folders->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   m_folders->setMinimumHeight(90);
   for (const QString& folder : std::as_const(m_settings.folders)) {
     m_folders->addItem(QDir::toNativeSeparators(folder));
@@ -50,6 +52,7 @@ TexturePreferencesBox::TexturePreferencesBox(QWidget* parent)
   m_add->setObjectName(QStringLiteral("textureFolderAdd"));
   m_add->setToolTip(tr("Chooses a folder to add"));
   m_remove = new QPushButton(tr("Remove"));
+  m_remove->setObjectName(QStringLiteral("textureFolderRemove"));
   m_remove->setToolTip(tr("Removes the selected folders from the list (the files stay)"));
   m_remove->setEnabled(false);
   for (QPushButton* button : {m_add, m_remove}) {

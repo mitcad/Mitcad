@@ -11,10 +11,14 @@
 // keeps drawing what it showed.
 //
 // One round runs at a time, and a newer one supersedes what is left: a
-// View round (the clips for the view) stops the running round and replaces
-// every round waiting; a Measure round (the panel's numbers) stops a
-// running Measure round, replaces a waiting one, and waits for the View
-// round before it. A stopped or replaced round's result is never shown, and
+// View round (the clips for the view) stops the running View or Measure
+// round and replaces the View and Measure rounds waiting; a Measure round
+// (the panel's numbers) stops a running Measure round, replaces a waiting
+// one, and waits for the View round before it. A Preview round (the clips
+// of a feature preview's bodies, mitcad#943) stops only a running Preview
+// round and replaces a waiting one; the other kinds neither stop nor
+// replace it, a View round waits for one that runs, and a Measure round
+// waits for both. A stopped or replaced round's result is never shown, and
 // requests never pile up: at most one round runs and one of each kind
 // waits. A round stops through the geometry's cancel (geometry/cancel.hpp):
 // its thread's operations, OCCT's thread pool's tasks too, are told to stop
@@ -26,8 +30,9 @@
 // vertex with the bodies the plane may reach, and of the others only the
 // box they keep), so the view's meshes and a model job's, which write into
 // the bodies' sub-shapes, may be made beside a round. A model job still
-// tells the rounds to stop (cancel()), as what they would show may be stale
-// after it.
+// tells the View and Measure rounds to stop (cancel()), as what they would
+// show may be stale after it; a Preview round goes on: what it clips is the
+// preview that asked for it, which a job does not change.
 //
 // Each round logs "Computing section <label> started" when it starts and
 // "... done in <n> ms" or "... cancelled after <n> ms" when it ends, as
@@ -61,7 +66,7 @@ class CancelSource;
 // the UI thread.
 class SectionWorker : public QObject {
 public:
-  enum class Kind { View, Measure };
+  enum class Kind { View, Measure, Preview };
   // Runs on the worker thread, its operations stopping when `stop` says so
   // (a CancelScope of it is entered); what it computes goes where `Done`
   // finds it. It must not use the document or anything the UI thread
@@ -75,6 +80,7 @@ public:
   struct Stopped {
     bool view = false;
     bool measure = false;
+    bool preview = false;
   };
 
   explicit SectionWorker(QObject* parent = nullptr, WorkerThreadStarter starter = {});
@@ -90,13 +96,14 @@ public:
   // worker thread has left the running round (the destructor's). None of
   // their Done runs.
   Stopped stop();
-  // stop() without the wait: the running round is told to stop and ends
-  // as cancelled when its thread leaves it (a plane that needs no round, a
-  // model job).
+  // stop() without the wait, of the View and Measure rounds only: the
+  // running one is told to stop and ends as cancelled when its thread
+  // leaves it (a plane that needs no round, a model job). Preview rounds
+  // run on.
   Stopped cancel();
   // Whether a round of the kind runs (and was not told to stop) or waits.
   bool busyWith(Kind kind) const;
-  bool idle() const { return !m_current && !m_waitingView && !m_waitingMeasure; }
+  bool idle() const { return !m_current && !m_waitingView && !m_waitingMeasure && !m_waitingPreview; }
 
 private:
   struct Round {
@@ -117,6 +124,8 @@ private:
     QElapsedTimer clock;
   };
 
+  // The flag of a kind in what stop() or cancel() say.
+  static bool& stoppedOf(Stopped& stopped, Kind kind);
   void postNext();
   void finished(std::uint64_t id, const QString& error);
   void ended(const Current& round, bool cancelled) const;
@@ -127,6 +136,7 @@ private:
   std::optional<Current> m_current;
   std::optional<Round> m_waitingView;
   std::optional<Round> m_waitingMeasure;
+  std::optional<Round> m_waitingPreview;
 
   // Shared with the worker thread, under the mutex.
   std::mutex m_mutex;

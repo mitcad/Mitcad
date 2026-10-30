@@ -755,12 +755,22 @@ bool askTrustServer(QWidget* parent, const QString& host, int port) {
     qInfo().noquote() << QStringLiteral("Trust This Server cancelled");
     return false;
   }
-  // Every key a new scan still gives (a short wait, on a thread).
+  // Exactly the keys shown, each only if a new scan still gives it (a
+  // short wait, on a thread): never what the second scan adds (mitcad#938).
+  QJsonArray shownKeys;
+  for (const QJsonValue& value : scan.value(QStringLiteral("keys")).toArray()) {
+    const QJsonObject key = value.toObject();
+    QJsonObject shownKey;
+    shownKey.insert(QStringLiteral("type"), key.value(QStringLiteral("type")));
+    shownKey.insert(QStringLiteral("key"), key.value(QStringLiteral("key")));
+    shownKeys.append(shownKey);
+  }
   QObject waiting;
   bool finished = false;
   RemoteTask* trustTask = RemoteTask::projects({{QStringLiteral("cmd"), QStringLiteral("trust_host_key")},
                                                 {QStringLiteral("host"), host},
-                                                {QStringLiteral("port"), port}},
+                                                {QStringLiteral("port"), port},
+                                                {QStringLiteral("keys"), shownKeys}},
                                                nullptr);
   const QPointer<RemoteTask> pending = trustTask;
   QObject::connect(trustTask, &RemoteTask::finished, &waiting, [&finished] { finished = true; });

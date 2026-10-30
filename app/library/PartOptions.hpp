@@ -228,4 +228,53 @@ QString supplierPartsText(const QJsonArray& parts);
 // "Standard DIN 912, Supplier All" for the log.
 QString rowFilterText(const RowFilter& filter);
 
+// --- The suppliers' articles as a table (mitcad#979; app/COMMANDS.md,
+// "Options of library parts")
+//
+// Insert from Library, Library Parts and Edit Options… show a row's
+// articles behind a button (SupplierPartsDialog.hpp): a table with one line
+// per article and the columns its articles fill. The data below is what
+// that table shows.
+
+// One article as the table shows it.
+struct SupplierArticle {
+  QString supplier;     // the supplier's id ("wurth")
+  QString supplierName; // its name for people ("Würth"; else the id)
+  QString supplierUrl;  // the supplier's own site, from the library's `suppliers`
+  QString partNumber;
+  QString material;
+  QString finish;
+  QString checked;      // the date the article was read ("2026-10-30")
+  QString productPage;  // the row's or the component's `supplier_url`
+};
+
+// The table's columns, in their order.
+enum class SupplierColumn { Supplier, PartNumber, Material, Finish, Checked, ProductPage };
+
+// The articles of a row's `supplier_parts`, with each supplier's site from
+// `suppliers` (the library's `suppliers` or the component's: {id, name,
+// url}) and the row's product page. Those of `firstSupplier` (the Supplier
+// filter's id, compared without case; empty: All) come first; otherwise
+// the order given.
+QList<SupplierArticle> supplierArticles(const QJsonArray& parts, const QJsonArray& suppliers,
+                                        const QString& productPage, const QString& firstSupplier = QString());
+// The columns that some article fills, in their order: a column no article
+// fills is left out.
+QList<SupplierColumn> supplierColumns(const QList<SupplierArticle>& articles);
+// A column's heading: "Supplier", "Part number", "Material", "Finish",
+// "Checked", "Product page".
+QString supplierColumnName(SupplierColumn column);
+// An article's text in a column.
+QString supplierCell(const SupplierArticle& article, SupplierColumn column);
+// The address a cell links to: the supplier's site in Supplier, the
+// product page in Product page; empty for the others and for none.
+QString supplierCellLink(const SupplierArticle& article, SupplierColumn column);
+// Tab-separated text: the headings, then a line per article (each ending
+// with a line break); a tab or line break in a cell becomes a space.
+QString supplierArticlesTsv(const QList<SupplierArticle>& articles, const QList<SupplierColumn>& columns);
+// "Supplier parts of M5x16: 8 articles, columns Supplier, Part number,
+// Material, Finish, Checked" for the log.
+QString supplierArticlesLog(const QString& row, const QList<SupplierArticle>& articles,
+                            const QList<SupplierColumn>& columns);
+
 } // namespace mitcad

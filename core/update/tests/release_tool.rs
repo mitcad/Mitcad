@@ -156,6 +156,104 @@ fn signs_a_release_the_application_accepts() {
     );
 }
 
+/// mitcad#938: a manifest expires 90 days after it is signed unless
+/// `--expires` says otherwise, and `renew` signs the latest release's
+/// manifest again with a new expiry, its downloads as they were.
+#[test]
+fn manifests_expire_and_are_renewed() {
+    let dir = work_dir("release-tool-expiry");
+    let seed = test_seed();
+    let installer = dir.join("mitcad-0.2.0-windows-x64.exe");
+    fs::write(&installer, b"an installer for the expiry test").unwrap();
+    let public = {
+        let output = tool()
+            .arg("public-key")
+            .env("MITCAD_RELEASE_KEY", &seed)
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    let keys = TrustedKeys::parse(&public).unwrap();
+    let sign = |extra: &[&str], out: &PathBuf| {
+        tool()
+            .args(["manifest", "--version", "0.2.0", "--notes"])
+            .arg("https://example.invalid/releases/tag/v0.2.0")
+            .args(extra)
+            .args(["--asset", "windows-x64"])
+            .arg(&installer)
+            .arg("https://example.invalid/v0.2.0/mitcad-0.2.0-windows-x64.exe")
+            .arg("--out")
+            .arg(out)
+            .env("MITCAD_RELEASE_KEY", &seed)
+            .output()
+            .unwrap()
+    };
+
+    let manifest = dir.join("update-manifest.json");
+    let output = sign(&[], &manifest);
+    assert!(output.status.success(), "{}", text(&output));
+    let read = Manifest::read(&fs::read(&manifest).unwrap(), &keys).unwrap();
+    let today = mitcad_update::today();
+    assert_eq!(
+        read.expires.as_deref().and_then(mitcad_update::parse_date),
+        Some(today + mitcad_update::MANIFEST_VALIDITY_DAYS),
+        "{}",
+        text(&output)
+    );
+    assert_eq!(read.date, mitcad_update::date_text(today));
+
+    // An expiry given; a malformed one is a usage error.
+    let output = sign(&["--expires", "2099-12-31"], &manifest);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("expires 2099-12-31"),
+        "{}",
+        text(&output)
+    );
+    let output = sign(&["--expires", "next year"], &dir.join("bad.json"));
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(!dir.join("bad.json").exists());
+
+    // Renewed: the same release and downloads, a new expiry, signed again.
+    let renewed = dir.join("renewed.json");
+    let output = tool()
+        .args(["renew", "--manifest"])
+        .arg(&manifest)
+        .args(["--expires", "2100-01-31", "--out"])
+        .arg(&renewed)
+        .env("MITCAD_RELEASE_KEY", &seed)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    let before = Manifest::read(&fs::read(&manifest).unwrap(), &keys).unwrap();
+    let after = Manifest::read(&fs::read(&renewed).unwrap(), &keys).unwrap();
+    assert_eq!(after.expires.as_deref(), Some("2100-01-31"));
+    assert_eq!(
+        (&after.version, &after.date, &after.notes, &after.assets),
+        (&before.version, &before.date, &before.notes, &before.assets)
+    );
+    verify_download(
+        &fs::read(&renewed).unwrap(),
+        &public,
+        "windows-x64",
+        &installer,
+    )
+    .unwrap();
+
+    // Only a manifest of the release key is renewed.
+    let output = tool()
+        .args(["renew", "--manifest"])
+        .arg(&manifest)
+        .arg("--out")
+        .arg(dir.join("foreign.json"))
+        .env("MITCAD_RELEASE_KEY", "11".repeat(32))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(text(&output).contains("signature"), "{}", text(&output));
+    assert!(!dir.join("foreign.json").exists());
+}
+
 #[test]
 fn needs_a_key_from_the_environment() {
     let dir = work_dir("release-tool-no-key");

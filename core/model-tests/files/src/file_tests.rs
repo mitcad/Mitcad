@@ -6,10 +6,13 @@ use serde_json::{Value, json};
 use mitcad_model::expr::LengthUnit;
 use mitcad_model::features::SketchPlane;
 use mitcad_model::file::FileError;
-use mitcad_model::ids::{BodyUid, FeatureUid};
+use mitcad_model::ids::{
+    BodyUid, ComponentUid, FeatureUid, LARGEST_U32_ID, LARGEST_U64_ID, OccurrenceUid,
+};
 use mitcad_model::test_support::{Block, block, corner, def, extrude, num, side, top_edge};
 use mitcad_model::testing::MockKernel;
 use mitcad_model::topo::EdgeName;
+use mitcad_model::transform::Transform;
 use mitcad_model::{Document, FeatureStatus};
 use mitcad_model_api::{DocumentApi, ReportApi};
 
@@ -1143,4 +1146,166 @@ fn parameters_named_like_functions_in_another_case_are_renamed() {
     assert_eq!((d4.expression(), d4.value()), ("Max_1 / 10 + 0 mm", 2.0));
     assert!(doc.recompute().error.is_none());
     assert_eq!(histories(&doc)[0].2, "fillet(prism(F2:0..20),2)");
+}
+
+#[test]
+fn id_numbers_at_the_type_maximum_are_refused() {
+    // mitcad#929: a design's next id is one past its largest, so the
+    // largest number of an id's type is refused as the file is read, in
+    // every build profile (no overflow when the next id is worked out).
+    let error = rejected(&edited(EXAMPLE, |v| {
+        v["components"] = json!([{"uid": "C4294967295", "name": "Part"}]);
+    }));
+    assert_message(error, &["invalid component id 'C4294967295'"]);
+    let error = rejected(&edited(EXAMPLE, |v| {
+        v["components"] = json!([{"uid": "C1", "name": "Part"}]);
+        v["occurrences"] =
+            json!([{"uid": "O4294967295", "component": "C1", "parent": "C0", "number": 1}]);
+    }));
+    assert_message(error, &["invalid occurrence id 'O4294967295'"]);
+    let error = rejected(&edited(EXAMPLE, |v| {
+        v["features"][2]["uid"] = json!("F18446744073709551615");
+        v["parameters"][3]["owner"] = json!("F18446744073709551615");
+    }));
+    assert_message(error, &["invalid feature id 'F18446744073709551615'"]);
+    // One below is in the reserve of mitcad#944.
+    let error = rejected(&edited(EXAMPLE, |v| {
+        v["components"] = json!([{"uid": "C4294967294", "name": "Part"}]);
+    }));
+    assert_invalid(error, &["invalid component id 'C4294967294'"]);
+}
+
+/// EXAMPLE whose largest ids are `top`: a component and its occurrence,
+/// the occurrence's number, Sketch1's last point and dimension; and
+/// Fillet1's feature id `feature`.
+fn with_largest_ids(top: u32, feature: u64) -> String {
+    edited(EXAMPLE, |v| {
+        let component = format!("C{top}");
+        v["components"] = json!([{"uid": component.as_str(), "name": "Part"}]);
+        v["occurrences"] = json!([{"uid": format!("O{top}"), "component": component.as_str(),
+                                   "parent": "C0", "number": top}]);
+        let fillet = format!("F{feature}");
+        v["features"][2]["uid"] = json!(fillet.as_str());
+        v["parameters"][3]["owner"] = json!(fillet.as_str());
+        let point = format!("p{top}");
+        let sketch = &mut v["features"][0];
+        sketch["entities"][7]["id"] = json!(point.as_str());
+        sketch["entities"][2]["end"] = json!(point.as_str());
+        sketch["entities"][3]["start"] = json!(point.as_str());
+        sketch["dimensions"][1]["id"] = json!(format!("k{top}"));
+    })
+}
+
+#[test]
+fn a_session_hands_out_ids_after_the_largest_a_design_file_may_use() {
+    // mitcad#944: a design file leaves the top ID_RESERVE numbers of every
+    // id type free, so the ids a session counts on from its largest ones
+    // exist: nothing overflows, in Debug and release alike.
+    let top = LARGEST_U32_ID;
+    let mut doc = load(&with_largest_ids(top, LARGEST_U64_ID)).unwrap();
+    assert_eq!(doc.assembly().name(ComponentUid(top)), "Part");
+    // A new component and its occurrence.
+    let (component, occurrence) = doc
+        .create_component(Some("Next"), Transform::IDENTITY, false)
+        .unwrap();
+    assert_eq!(component, ComponentUid(top + 1));
+    assert_eq!(occurrence, OccurrenceUid(top + 1));
+    // The component of the file placed again: the next occurrence id and
+    // the number after the file's.
+    let again = doc
+        .add_occurrence(ComponentUid(top), ComponentUid::ROOT, Transform::IDENTITY)
+        .unwrap();
+    assert_eq!(again, OccurrenceUid(top + 2));
+    assert_eq!(doc.assembly().occurrence(again).unwrap().number, top + 1);
+    // A new feature.
+    let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    assert_eq!(sketch, FeatureUid(LARGEST_U64_ID + 1));
+    // New entities, constraints and dimensions in the file's sketch.
+    let rectangle = doc
+        .add_rectangle(FeatureUid(1), [100.0, 0.0], &num(10.0), &num(5.0))
+        .unwrap();
+    let report = &rectangle.report;
+    assert!(!report.entities.is_empty() && !report.dimensions.is_empty());
+    assert!(
+        report.entities.iter().all(|e| e.uid().0 > top),
+        "{:?}",
+        report.entities
+    );
+    assert!(
+        report
+            .constraints
+            .iter()
+            .chain(&report.dimensions)
+            .all(|k| k.0 > top),
+        "{report:?}"
+    );
+}
+
+#[test]
+fn ids_in_the_reserve_are_refused_as_the_file_is_read() {
+    // mitcad#944: one past the largest id a design file may use is
+    // refused, in the words of a malformed id (mitcad#929).
+    assert_eq!(LARGEST_U32_ID, 4_293_918_719);
+    assert!(load(&with_largest_ids(LARGEST_U32_ID, LARGEST_U64_ID)).is_ok());
+    type Edit = Box<dyn Fn(&mut Value)>;
+    let cases: Vec<(Edit, &str)> = vec![
+        (
+            Box::new(|v| v["components"] = json!([{"uid": "C4293918720", "name": "Part"}])),
+            "components[0]: invalid component id 'C4293918720' (at most C4293918719",
+        ),
+        (
+            Box::new(|v| {
+                v["components"] = json!([{"uid": "C1", "name": "Part"}]);
+                v["occurrences"] = json!([{"uid": "O4293918720", "component": "C1",
+                                           "parent": "C0", "number": 1}]);
+            }),
+            "occurrences[0]: invalid occurrence id 'O4293918720' (at most O4293918719",
+        ),
+        (
+            Box::new(|v| {
+                v["components"] = json!([{"uid": "C1", "name": "Part"}]);
+                v["occurrences"] = json!([{"uid": "O1", "component": "C1",
+                                           "parent": "C0", "number": 4_293_918_720_u32}]);
+            }),
+            "occurrences[0]: invalid occurrence number '4293918720' (at most 4293918719",
+        ),
+        (
+            Box::new(|v| {
+                v["features"][2]["uid"] = json!("F18446744073708503040");
+                v["parameters"][3]["owner"] = json!("F18446744073708503040");
+            }),
+            "features[2] (Fillet1): invalid feature id 'F18446744073708503040' \
+             (at most F18446744073708503039",
+        ),
+        (
+            Box::new(|v| {
+                let sketch = &mut v["features"][0];
+                sketch["entities"][7]["id"] = json!("p4293918720");
+                sketch["entities"][2]["end"] = json!("p4293918720");
+                sketch["entities"][3]["start"] = json!("p4293918720");
+            }),
+            "features[0] (Sketch1): invalid sketch entity id 'p4293918720'",
+        ),
+        (
+            Box::new(|v| v["features"][0]["dimensions"][1]["id"] = json!("k4293918720")),
+            "features[0] (Sketch1): invalid constraint id 'k4293918720'",
+        ),
+    ];
+    for (edit, message) in cases {
+        assert_invalid(rejected(&edited(EXAMPLE, edit)), &[message]);
+    }
+    // A library source's id: S<n>, counted on as BUILD places parts.
+    let mut file: Value = serde_json::from_str(&block().doc.to_json()).unwrap();
+    file["version"] = json!(3);
+    file["library_sources"] = json!([{
+        "id": "S4293918720",
+        "library": {"library": "parts", "url": "https://example.org/parts.git",
+                    "rev": "0123456789abcdef0123456789abcdef01234567",
+                    "component": "bolt", "path": "bolt.mitcad"},
+        "design": {"sha256": "0".repeat(64)}
+    }]);
+    assert_invalid(
+        rejected(&file.to_string()),
+        &["library_sources[0]: invalid library source id 'S4293918720' (at most S4293918719"],
+    );
 }

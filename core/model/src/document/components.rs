@@ -1183,7 +1183,7 @@ impl<K: Kernel> Document<K> {
                     let added = state.add_feature_in(&FeatureDef::Base(base), None, made)?;
                     let frames = super::mounts::add_linked_mounts(state, made, &mounts)?;
                     state.assembly.component_mut(made).expect("made").link = Some(ExternalLink {
-                        path: path.to_owned(),
+                        path: recorded_link_path(path, &resolved, options.base.as_deref()),
                         digest: digest(&text),
                         feature: added.uid,
                     });
@@ -1422,7 +1422,16 @@ impl<K: Kernel> Document<K> {
         let sources = self.options_file_updates(base, &mut messages);
         for (component, link) in links {
             let name = self.state.assembly.name(component);
-            let resolved = resolve_path(&link.path, base);
+            // Only a file in the design's project is read (mitcad#929).
+            let resolved = match followed_link(&link.path, base) {
+                Ok(resolved) => resolved,
+                Err(why) => {
+                    messages.push(format!(
+                        "{name}: {why}; it keeps the bodies saved with the project"
+                    ));
+                    continue;
+                }
+            };
             let text = match std::fs::read_to_string(&resolved) {
                 Ok(text) => text,
                 Err(e) => {
@@ -1503,6 +1512,96 @@ pub(super) fn resolve_path(path: &str, base: Option<&Path>) -> PathBuf {
         Some(base) if p.is_relative() => base.join(p),
         _ => p.to_path_buf(),
     }
+}
+
+/// What a linked component's file must be in (mitcad#929): the project of
+/// the design in `base`, its folder when it is in no project.
+fn link_root(base: &Path) -> Option<PathBuf> {
+    let base = normalized(&std::path::absolute(base).ok()?);
+    // `find` looks from a file's folder upwards: a name in `base`.
+    Some(match crate::Project::find(&base.join("design")) {
+        Some(project) => normalized(project.root()),
+        None => base,
+    })
+}
+
+/// The file a saved link is followed to when a design opens (mitcad#929):
+/// its path against the design's folder `base`, when it stays in the
+/// design's project (or, for a design in no project, its folder). A link
+/// elsewhere, an absolute path or a `..` that leaves the project, is not
+/// followed, and nothing is read from it: the design file does not choose
+/// which files outside its project the application opens. Without a
+/// folder (a design not saved) no link is followed.
+pub(super) fn followed_link(path: &str, base: Option<&Path>) -> Result<PathBuf, String> {
+    let refused = || format!("the link outside the project is not followed ({path})");
+    let base = base.ok_or_else(refused)?;
+    let root = link_root(base).ok_or_else(refused)?;
+    let joined = std::path::absolute(base.join(path)).map_err(|_| refused())?;
+    let target = normalized(&joined);
+    if target != root && target.starts_with(&root) {
+        Ok(target)
+    } else {
+        Err(refused())
+    }
+}
+
+/// The path a new link records (mitcad#929): relative to the design's
+/// folder when the file is in the design's project, so that the link is
+/// followed when the design opens again (also on another computer, or
+/// with the project moved); otherwise the path as given.
+pub(super) fn recorded_link_path(path: &str, resolved: &Path, base: Option<&Path>) -> String {
+    let Some(base) = base else {
+        return path.to_owned();
+    };
+    let (Some(root), Ok(folder)) = (link_root(base), std::path::absolute(base)) else {
+        return path.to_owned();
+    };
+    let target = normalized(resolved);
+    if !target.starts_with(&root) {
+        return path.to_owned();
+    }
+    relative_path(&target, &normalized(&folder)).unwrap_or_else(|| path.to_owned())
+}
+
+/// `target` relative to the folder `from`, with `/` between the names;
+/// None when they share no root.
+fn relative_path(target: &Path, from: &Path) -> Option<String> {
+    use std::path::Component;
+    let target: Vec<Component> = target.components().collect();
+    let from: Vec<Component> = from.components().collect();
+    let common = target.iter().zip(&from).take_while(|(a, b)| a == b).count();
+    if common == 0 || common == target.len() {
+        return None;
+    }
+    let mut names = vec!["..".to_owned(); from.len() - common];
+    for c in &target[common..] {
+        match c {
+            Component::Normal(name) => names.push(name.to_str()?.to_owned()),
+            _ => return None,
+        }
+    }
+    Some(names.join("/"))
+}
+
+/// A path without `.` and `..` (taken away lexically, without reading the
+/// file system; `..` at the root stays at the root).
+fn normalized(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => match out.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                Some(Component::ParentDir) | None => out.push(".."),
+                Some(_) => {}
+            },
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// The file name of a path, for labels.

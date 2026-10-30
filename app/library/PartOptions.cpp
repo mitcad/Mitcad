@@ -659,4 +659,136 @@ QString rowFilterText(const RowFilter& filter) {
            filter.supplier.isEmpty() ? QStringLiteral("All") : filter.supplier);
 }
 
+QList<SupplierArticle> supplierArticles(const QJsonArray& parts, const QJsonArray& suppliers,
+                                        const QString& productPage, const QString& firstSupplier) {
+  QList<SupplierArticle> first;
+  QList<SupplierArticle> rest;
+  for (const QJsonValue& value : parts) {
+    const QJsonObject part = value.toObject();
+    SupplierArticle article;
+    article.supplier = textOf(part, "supplier").trimmed();
+    article.supplierName = textOf(part, "supplier_name").trimmed();
+    for (const QJsonValue& entry : suppliers) {
+      const QJsonObject supplier = entry.toObject();
+      if (textOf(supplier, "id").trimmed().compare(article.supplier, Qt::CaseInsensitive) != 0) {
+        continue;
+      }
+      article.supplierUrl = textOf(supplier, "url").trimmed();
+      if (article.supplierName.isEmpty()) {
+        article.supplierName = textOf(supplier, "name").trimmed();
+      }
+    }
+    if (article.supplierName.isEmpty()) {
+      article.supplierName = article.supplier;
+    }
+    article.partNumber = textOf(part, "part_number").trimmed();
+    article.material = textOf(part, "material").trimmed();
+    article.finish = textOf(part, "finish").trimmed();
+    article.checked = textOf(part, "checked").trimmed();
+    article.productPage = productPage.trimmed();
+    const bool chosen = !firstSupplier.trimmed().isEmpty() &&
+                        article.supplier.compare(firstSupplier.trimmed(), Qt::CaseInsensitive) == 0;
+    (chosen ? first : rest).append(article);
+  }
+  return first + rest;
+}
+
+QList<SupplierColumn> supplierColumns(const QList<SupplierArticle>& articles) {
+  static const SupplierColumn kAll[] = {SupplierColumn::Supplier, SupplierColumn::PartNumber,
+                                        SupplierColumn::Material, SupplierColumn::Finish,
+                                        SupplierColumn::Checked,  SupplierColumn::ProductPage};
+  QList<SupplierColumn> out;
+  for (const SupplierColumn column : kAll) {
+    const bool filled = std::any_of(articles.cbegin(), articles.cend(), [column](const SupplierArticle& article) {
+      return !supplierCell(article, column).isEmpty();
+    });
+    if (filled) {
+      out.append(column);
+    }
+  }
+  return out;
+}
+
+QString supplierColumnName(SupplierColumn column) {
+  switch (column) {
+  case SupplierColumn::Supplier:
+    return QStringLiteral("Supplier");
+  case SupplierColumn::PartNumber:
+    return QStringLiteral("Part number");
+  case SupplierColumn::Material:
+    return QStringLiteral("Material");
+  case SupplierColumn::Finish:
+    return QStringLiteral("Finish");
+  case SupplierColumn::Checked:
+    return QStringLiteral("Checked");
+  case SupplierColumn::ProductPage:
+    return QStringLiteral("Product page");
+  }
+  return QString();
+}
+
+QString supplierCell(const SupplierArticle& article, SupplierColumn column) {
+  switch (column) {
+  case SupplierColumn::Supplier:
+    return article.supplierName;
+  case SupplierColumn::PartNumber:
+    return article.partNumber;
+  case SupplierColumn::Material:
+    return article.material;
+  case SupplierColumn::Finish:
+    return article.finish;
+  case SupplierColumn::Checked:
+    return article.checked;
+  case SupplierColumn::ProductPage:
+    return article.productPage;
+  }
+  return QString();
+}
+
+QString supplierCellLink(const SupplierArticle& article, SupplierColumn column) {
+  if (column == SupplierColumn::Supplier) {
+    return article.supplierUrl;
+  }
+  if (column == SupplierColumn::ProductPage) {
+    return article.productPage;
+  }
+  return QString();
+}
+
+QString supplierArticlesTsv(const QList<SupplierArticle>& articles, const QList<SupplierColumn>& columns) {
+  static const QRegularExpression kBreaks(QStringLiteral("[\\t\\r\\n]+"));
+  const auto line = [](const QStringList& cells) {
+    QStringList clean;
+    for (const QString& cell : cells) {
+      clean << QString(cell).replace(kBreaks, QStringLiteral(" "));
+    }
+    return clean.join(QLatin1Char('\t')) + QLatin1Char('\n');
+  };
+  QStringList headings;
+  for (const SupplierColumn column : columns) {
+    headings << supplierColumnName(column);
+  }
+  QString out = line(headings);
+  for (const SupplierArticle& article : articles) {
+    QStringList cells;
+    for (const SupplierColumn column : columns) {
+      cells << supplierCell(article, column);
+    }
+    out += line(cells);
+  }
+  return out;
+}
+
+QString supplierArticlesLog(const QString& row, const QList<SupplierArticle>& articles,
+                            const QList<SupplierColumn>& columns) {
+  QStringList names;
+  for (const SupplierColumn column : columns) {
+    names << supplierColumnName(column);
+  }
+  return QStringLiteral("Supplier parts of %1: %2 articles, columns %3")
+      .arg(row.isEmpty() ? QStringLiteral("-") : row)
+      .arg(articles.size())
+      .arg(names.join(QStringLiteral(", ")));
+}
+
 } // namespace mitcad

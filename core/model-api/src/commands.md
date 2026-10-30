@@ -502,8 +502,15 @@ millimetres, angles radians. Build sketches with the
   style changes: while they fit the text, the text is laid out from them
   and the file is not read, so the design is the same on every computer
   (`stored_outlines` is true). Outlines that do not fit are read from the
-  file again; a file that is not there then fails the sketch with "choose
-  the font file again". The model reads the file itself (`skrifa`; `wuff`
+  file again only when the file was chosen in this session (`font_file`
+  of `sketch.add_text` or `sketch.edit_text`); a file that is not there
+  then fails the sketch with "choose the font file again". A path that
+  came with a design file (opened, or a definition given as JSON) is never
+  read (mitcad#929): without fitting outlines the sketch fails with "the
+  text has no outlines stored for its font file …; choose the font file
+  again", and a new string or style of `sketch.edit_text` without
+  `font_file` is refused the same way, so a design cannot make the
+  application read a file it names. The model reads the file itself (`skrifa`; `wuff`
   decodes WOFF and WOFF2), not through the kernel. A font file is one
   face: `bold` does not change it, `italic` slants an upright face by 0.2
   of the height.
@@ -3815,11 +3822,14 @@ The `faces` and `edges` queries tell where each face and edge is
   `densities[uid]`, else the body's material, else `density` for bodies
   without one, else steel.
 - A selection is `{"body": "F2.b0"}` with an optional `"face"`, `"edge"`
-  or `"vertex"`, `{"datum": "F5"}`, either with an optional
-  `"occurrence"` (a path from the root, `"O1/O4"`; *Measure in the
-  design*), or text: `"Body1"`, `"F2.b0"`,
-  `"Body1/F2:end(r{c5})"`, `"xy"`, `"F5"`. A section `plane` is a plane
-  reference.
+  or `"vertex"`, `{"datum": "F5"}` (or an origin datum, `"xy"`, `"x"`,
+  `"origin"`, in any case), either with an optional
+  `"occurrence"` (a path from the root by ids, `"O1/O4"`, or by names,
+  `"Arm:1/Pin:2"`; *Measure in the design*), an entity as `ui_state`
+  lists the selection (`{"kind": "face", "owner": "F2.b0", "name": …,
+  "occurrence": …}`; *Selections by names and as entities*), or text:
+  `"Body1"`, `"F2.b0"`, `"Body1/F2:end(r{c5})"`, `"xy"`, `"F5"`. A
+  section `plane` is a plane reference.
 - Kernels without an analysis answer with an error (`the geometry kernel
   does not support …`).
 - `Document::analysis(query, json)` (C++ `analysis`) answers
@@ -3911,6 +3921,27 @@ all); a body the plane passes and keeps is its own shape, as with
 Both stop when the running thread's geometry is told to
 (`geometry/cancel.hpp`): the bodies not started by then fail as
 cancelled.
+
+### Section Analysis over a feature preview (mitcad#943)
+
+A body of the `analysis_clips` and `prepare_clips` requests takes two
+more fields: `"preview": true` clips the body as the previewed command
+leaves it (`Document::preview`'s result, as `preview_body_shape` gives
+it) instead of the body at the marker, also a body the preview makes,
+which is no body at the marker (an error `body … is not in the preview`
+when the preview has no such body, or there is no preview); and
+`"transform": {"linear": [[…], […], […]], "translation": [x, y, z]}`,
+the rigid placement that puts the body in the design where the view
+draws it (a preview's moved occurrence, a body the preview makes), takes
+the plane into the body's coordinates by its inverse instead of by
+`occurrence` (which it replaces; the body's component is not checked).
+`{"plane": {"origin": [10, 0, 0], "normal": [1, 0, 0]}, "bodies":
+[{"body": "F2.b0", "preview": true, "transform": {"linear": [[1, 0, 0],
+[0, 1, 0], [0, 0, 1]], "translation": [0, 0, 0]}}]}`. The application
+clips the bodies a feature preview draws with their new shapes or
+placements this way while Section Analysis or Hide Above Sketch is on
+(`app/framework/SectionPreview.hpp`), prepared while the document holds
+the preview and run on the section worker.
 
 ### Section Analysis past every body (mitcad#824)
 
@@ -4059,7 +4090,7 @@ made, in order) and `status` (as the `sketch` query: `dof`,
 | `sketch.ellipse` | `center` (point input), `major` (end of the major axis), `minor_radius`, `start` and `end` (point inputs; an elliptical arc), `construction` | |
 | `sketch.spline` | `points` (point inputs), `degree` (optional), `closed` (optional, mitcad#783), `construction` | without `degree` a cubic through the points; with it, a B-spline with these control points; `closed` (fit points only, at least three): the cubic runs on from the last point back to the first and is smooth through it |
 | `sketch.add_text` | `text`, `at` (or `frame`), `height`, `angle`, `font`, `bold`, `italic`, `align`, `valign`, `spacing`, `frame` (three point ids, or `{"corner": [x, y], "diagonal": [x, y]}`: a new construction rectangle, turned by `angle`), `path`, `flip_x`, `flip_y`, `cap_height`, `wrap`, `line_spacing`, `pen_align`, `ink_top`, `glyphs` (stored outlines, see the sketch definition's `texts`), `font_file` (a font file's path instead of `font`, mitcad#473: the file's family becomes `font`, its outlines of the text are stored; a file that cannot be read or is not a font is refused), `value` (a text parameter's name or a text expression the text follows, [Text parameters](#text-parameters); `text` may then be left out) | the glyphs bound profiles |
-| `sketch.edit_text` | `id`, and any of `text`, `at`, `height`, `angle`, `font`, `bold`, `italic`, `align`, `valign`, `spacing`, `path`, `flip_x`, `flip_y`, `cap_height`, `wrap`, `line_spacing`, `pen_align`, `ink_top`, `font_file` (a font file's path; `""` leaves the file for `font`), `value` (a text parameter's name or a text expression the text follows; `""` stops it following one, [Text parameters](#text-parameters)) | a new `text`, `font`, `bold` or `italic` drops the text's stored `glyphs`; for a text in a font file it stores the file's outlines again (refused when the file is not there), and another `font` leaves the file |
+| `sketch.edit_text` | `id`, and any of `text`, `at`, `height`, `angle`, `font`, `bold`, `italic`, `align`, `valign`, `spacing`, `path`, `flip_x`, `flip_y`, `cap_height`, `wrap`, `line_spacing`, `pen_align`, `ink_top`, `font_file` (a font file's path; `""` leaves the file for `font`), `value` (a text parameter's name or a text expression the text follows; `""` stops it following one, [Text parameters](#text-parameters)) | a new `text`, `font`, `bold` or `italic` drops the text's stored `glyphs`; for a text in a font file it stores the file's outlines again (refused when the file is not there, or when its path came with the design and no `font_file` is given, mitcad#929), and another `font` leaves the file |
 | `sketch.add_constraint` | `constraint`: as in the definition, without `id` | a `coincident` between the end points of two curves merges them into one point (see [Points that become one](#points-that-become-one)): the result has no new constraint, `removed` lists the removed point (and what the merge dropped), and `merged` is `{"kept": "p3", "removed": "p7"}`; a constraint that older geometric constraints imply in part replaces them: `removed` lists them and `implied_removed` is `[{"constraint": "k1", "type": "horizontal"}]` (see [A constraint that replaces one it makes redundant](#a-constraint-that-replaces-one-it-makes-redundant)) |
 | `sketch.add_dimension` | `dimension`: as in the definition, without `id`, `value`, `driven`; `value` (default: what it measures now), `driven`, `text` [x, y] | |
 | `sketch.set_dimension` | `dimension` (`k3`), `value` | a number or an expression changes the dimension's own parameter; a parameter name makes the dimension use that parameter; `name = expression` renames its parameter and sets it (see [Values](#values)); a driven dimension becomes driving (its reference parameter becomes its parameter, under the same name) |
@@ -4579,7 +4610,17 @@ Examples: `tools/cli/tests/f6_*.json`.
   design file's directory as `base` for relative paths) reads the linked
   files again and takes the bodies of those that changed; a missing file
   keeps the saved bodies. Callers run it when they open a design (no
-  undo step; what changed is a load warning).
+  undo step; what changed is a load warning). Only files in the design's
+  project are followed (mitcad#929; for a design in no project, its
+  folder and the folders in it): a link whose path is absolute outside it,
+  or whose `..` leads out of it, is not read at all, and its component
+  keeps the saved bodies with the message "<component>: the link outside
+  the project is not followed (<path>); it keeps the bodies saved with
+  the project". Without `base` no link is followed. So that links stay
+  followed, `insert_component` records a file in the project by its path
+  relative to `base` (`../parts/plate.mitcad`, with `/`), whatever form
+  `path` had; a file outside the project keeps `path` as given, and its
+  link is not followed when the design opens again.
 - **Deleting.** `delete_occurrence` deletes an occurrence; the last one
   of a component deletes the component with its features, the feature
   that made it and what depends on them, and the components only it
@@ -7141,7 +7182,7 @@ new project was to be made).
 | `clone_project` | `url`, `dir` (new or empty: `not_empty`; not in a project: `inside_project`), `adopt` (default false), `author` (optional) | the bridge's `clone_project` answer (`root`, `url`, `branch`, `head`, `files`), and `adopted`, `commit` (the first version as a project, or null) and `push` (`push`'s answer, or null). With `adopt` a remote with files but no project is cloned, made a project (marker, `.gitattributes`, `.gitignore`; first version `Make this repository a Mitcad project` by `author`, else git's configured author) and pushed; without, it is `not_a_project` and nothing stays. An empty remote is always `not_a_project` (`create_project` with `url` makes a project there). `author`, when given, is written to the repository's own configuration. A failure before the first version leaves no folder (an empty one that was there stays, empty); a failed push is `error`, the project made |
 | `init_bare` | `dir` | `dir`, `created` (false: it was a bare repository already): a missing or empty folder (files the system leaves count as empty) made a bare repository with the branch `main`, for a shared folder as a remote; a folder with anything else (a work tree too) is `not_empty` |
 | `host_keys` | `host`, `port` (default 22) | `host` (lowercase), `port`, `keys` ([{`type`, `key` (base64), `fingerprint` (`SHA256:…`)}]), `service` (`GitHub`, `GitLab` or `Codeberg` for github.com, gitlab.com and codeberg.org, else null), `published` (`verified`: every key is one the service publishes; `mismatch`: one is not; null for other servers), `known` (a key of the host is in `~/.ssh/known_hosts`, also under a hashed name), `changed` (`known_hosts` has another key of the same type for the host), `known_hosts` (its path), `dropped` (lines of the output not read). Below |
-| `trust_host_key` | `host`, `port`, `type`, `key` | `path`, `written` (false: it was there): the key appended to `~/.ssh/known_hosts` (the folder and the file made, readable by the user only, when missing) as `host`, or `[host]:port` for another port than 22, only when a new scan still gives it (else `host_key_unknown`) and it is one the service publishes (a `mismatch` is `host_key_unknown`, never written). Without `type` and `key`, every key a new scan gives (none when one is a mismatch) |
+| `trust_host_key` | `host`, `port`, `type`, `key`; or `keys` | `path`, `written` (false: it was there): the key appended to `~/.ssh/known_hosts` (the folder and the file made, readable by the user only, when missing) as `host`, or `[host]:port` for another port than 22, only when a new scan still gives it (else `host_key_unknown`) and it is one the service publishes (a `mismatch` is `host_key_unknown`, never written). `keys` ([{`type`, `key`}], 1 to 16, from the `host_keys` answer the user was shown; mitcad#938): exactly those keys, after one new scan; when a shown key is not in it (or not published) nothing is written (`host_key_unknown`), and keys the new scan adds are never written. Trust This Server sends `keys`. Without `keys`, `type` and `key`, every key a new scan gives (none when one is a mismatch; `mitcad-cli host-keys --trust`) |
 | `ssh_public_key` | | `path` and `text` of the first of `~/.ssh/id_ed25519.pub`, `id_ecdsa.pub`, `id_rsa.pub` that holds a public key (at most 16 KiB), or both null |
 | `git_info` | | as the bridge's `git_info`, and `credential_helper` ({`configured`, `name`}: the `credential.helper` of git's system and user configuration that applies, credentials hidden) and `author` ({`name`, `email`}: git's configured `user.name` and `user.email`, which New Project shows first; null when git has none) |
 
@@ -7834,7 +7875,7 @@ with `error` (`class`, `message`, `detail`, as the remote commands') and
 
 | Command | Fields | Result |
 |---|---|---|
-| `library_fetch` | `url` (https, ssh, a file:// URL or a folder; never with credentials) | `kind` (`library`, `index`), `id`, `name`, `url`, `dir`, `cloned`, `head`, `versions`, `problems` (`errors`, `warnings`), `error`, `log`: a bare clone into the cache (`git clone --bare`), or new branches and tags fetched into it; a repository that is neither, or larger than 200 MB, is refused and leaves nothing |
+| `library_fetch` | `url` (https, ssh, a file:// URL or a folder; never with credentials) | `kind` (`library`, `index`), `id`, `name`, `url`, `dir`, `cloned`, `head`, `versions`, `problems` (`errors`, `warnings`), `error`, `log`: a bare clone into the cache (`git clone --bare`), or new branches and tags fetched into it; a repository that is neither, or larger than 200 MB, is refused and leaves nothing. An update that would make the clone larger than 200 MB is `too_large` and is not taken: its references (fetched to `refs/incoming/` first) and new object files are removed, the versions fetched before stay (mitcad#938) |
 | `library_list` | | `root`, `libraries`: `dir`, `url`, `kind`, `versions`, and a library's `id`, `name`, `description`, `license`, `authors`, `components` (count), `problems`, an index's `name`, `entries` |
 | `library_show` | `url` or `id`, `rev` (default: the newest version) | `dir`, `url`, `rev`, `labels`, `versions`; a library's `manifest`, `problems` and `components` (`id`, `name`, `path`, `category` (its home category), `categories` (every one, the home first), `groups` (per category `{"category", "path", "order"}`: the group's names from the top and each name's place in the manifest's list, [Groups](../../../docs/libraries.md#groups), mitcad#527), `standard`, `description`, `keywords`, `license`, `license_note`, `preview`, `designation`, `supplier`, `part_number`, `supplier_url`, `build` (as the manifest has it, or null), `mounts` (likewise, mitcad#525), `configurations`: `selectors`, `selector_values`, `default`, `rows` with `name`, `select` and, when the row has them, its own `part_number`, `supplier_url` and `designation`); an index's `name`, `description`, `entries` |
 | `library_search` | `text` (words that must all match name, id, standard, description, categories, keywords, supplier, part number, the library), `role` and `system` (BUILD parts only, [BUILD parts](../../../docs/libraries.md#build-parts): the role, and the slot system as `{"type", "slot", "grid"}` or text `B/8/30`, a series left out matching any; a linear part's `kind` and `size`), `supplier` (the same, without case), `part_number` (the component's or a row's own, without case), `licenses` (SPDX ids an item may have; left out: any), `unlicensed` (default false: items without a licence are hidden), `category` (any of a component's categories), `libraries` (ids or URLs) | `components` (of fetched libraries at their newest versions: as `library_show`'s with `library`, `library_name`, `url`, `rev`, `version`, `authors`), `libraries` (index entries with `index`, `index_url`, `fetched`, `license_note`), `hidden` (left out for their licence) |
@@ -10197,7 +10238,10 @@ loses none. Where none does, the exact result stands. Found on a reported
 FreeCAD model: OCCT's exact join of a pad flush with two tangent walls of
 the body (its faces merged by the earlier joins and cuts) took the pad's
 overlap with the body away; a fuzzy value of 1e-5 mm gives the union. A
-join that holds its targets is the exact one.
+join that holds its targets is the exact one. Test: `geometry`
+(`test_boolean.cpp`, `test_join_that_loses_volume_is_retried`, on that
+model's two bodies from `MITCAD_GEOMETRY_CASES`; no synthetic layout
+reproduced OCCT's failure).
 
 ## Combine's joins within the join tolerance; the .rvt import's tolerance
 
@@ -14875,15 +14919,24 @@ occurrence (`world`):
 
 - **Occurrence.** A selection given as fields takes an optional
   `occurrence`: the path of occurrences from the root that places its body
-  or datum (`"O1/O4"`; `""` or none for the root). The body's shape is
-  moved by that path's transform (a copy; the body is not changed), and
-  a datum likewise (a construction feature's datum is in its component's
+  or datum (`"O1/O4"`; `""` or none for the root). The body is placed by
+  that path's transform (the body is not changed): a selection alone,
+  and two of one placement, are measured on the body as it is and their
+  points, circles and closest points moved by the transform when it is a
+  rigid motion (mitcad#981: a moved copy of a body with modelled threads
+  took seconds, each time the selection card measured a face of it);
+  otherwise, and for two placed apart, on a moved copy. A datum is placed
+  likewise (a construction feature's datum is in its component's
   coordinates; an origin datum with an occurrence is that occurrence's
-  origin). Without `occurrence`, a body or construction feature of a
-  component placed exactly once is placed there; one placed more than once
-  is refused (`... is in a component placed 2 times: give the occurrence
-  to measure it in`), and an occurrence that does not place it as well
-  (`occurrence 'O1' does not place body F4.b0`). Text selections
+  origin). The path can also name the occurrences (`"Arm:1/Pin:2"`,
+  *Selections by names and as entities*). Without `occurrence`, a body
+  or construction feature of a component placed exactly once is placed
+  there; one placed more than once is refused with the paths that place
+  it (`body F4.b0 is in a component placed 2 times: O1/O2
+  (Assembly:1/Block:1), O3/O2 (Assembly:2/Block:1); give one as
+  occurrence`), and an occurrence that does not place it as well
+  (`occurrence 'O1' does not place body F4.b0; body F4.b0 is placed at
+  O1/O2 (Assembly:1/Block:1), …`). Text selections
   (`"Body1/…"`, `"F5"`) take the only placement the same way. The root's bodies
   and datums are measured as before, without a copy.
 - **Design coordinates.** `point`, `circle.center` and `circle.axis` of
@@ -14919,6 +14972,67 @@ mock kernel's measure of the selections' boxes
 (`MockKernel::measures_selections`); `tools/cli/tests/construction.json`
 (the offset of two faces and of a face and a construction plane on the
 OCCT kernel); `tools/ui-inspect-test.sh` (the panel's offset line).
+
+## Selections by names and as entities
+
+The `measure` query's selections (*Analysis queries*, *Measure in the
+design*) also take what an agent has at hand without looking up ids
+first, and every refusal names the values that would be taken
+(mitcad#985; `api::analysis` `resolve_selection`, `occurrence_path`,
+`selection_transform`):
+
+- **Occurrence paths by names.** `occurrence` is a path from the root by
+  occurrence ids (`"O1/O4"`), by the occurrences' names as the
+  `components` query gives them (`"Arm:1/Pin:2"`), or
+  both mixed (`"O1/Pin:2"`); spaces around the `/` do not
+  matter. A name matches in any case, and a component's name alone
+  (`"Arm/Pin:2"`) matches its occurrence where that
+  component is placed only once. The answer gives the path resolved, by
+  ids: `a.occurrence` and `b.occurrence` (`"O1/O4"`) for each selection
+  that gave one. A name that matches nothing where the path has got to is
+  refused with the occurrences there (`invalid occurrence path '…':
+  there is no occurrence 'Block:9' in Assembly; its occurrences are
+  O1/O2 (Assembly:1/Block:1), O1/O3 (Assembly:1/Block:2)`), and one that
+  matches several likewise (`'Block' in Assembly is any of …`).
+- **Errors name the placements.** A body or construction feature of a
+  component placed more than once, without an occurrence, is refused
+  with each path that places it and its names (`Plane1 is in a
+  component placed 3 times: O1/O2 (Arm:1/Pin:1),
+  O1/O3 (Arm:1/Pin:2), O1/O4 (Arm:1/Pin:3); give one as occurrence`). An occurrence that
+  does not place it, a path through the wrong parent (`Pin:2 is
+  placed in Arm, not in …`) and an occurrence that does not
+  exist (`occurrence O9 does not exist`) are refused with the same list
+  (`…; Plane1 is placed at O1/O2 (Arm:1/Pin:1), …`); a root body or
+  datum given another occurrence: `… is in the root: give no occurrence,
+  or ""`. At most ten paths are listed, then `… and n more; the instances
+  query lists them`. Measurement objects' picks (*Measurement objects*)
+  are placed by the same code and refused with the same texts, and a
+  body of Section Analysis's shapes (`section`, `clip`) given an occurrence
+  that does not own it lists the paths that do.
+- **Origin datums by name.** `datum` (and a text selection) takes the
+  origin datums by id or name in any case: `"xy"`, `"XY"`, `"xz"`,
+  `"yz"`, `"x"`, `"y"`, `"z"`, `"origin"`; with `occurrence` it is that
+  occurrence's own origin datum. Anything else that is no construction
+  feature is refused as `invalid datum 'top': a construction feature
+  ("F5") or an origin datum ("xy", "xz", "yz", "x", "y", "z", "origin")`.
+  The `datum` query takes them the same way.
+- **The entity form.** A selection can be an entity as `ui_state` lists
+  the selection and `ui_select` takes it: `kind`, `owner`, `name`,
+  `occurrence` (its `geometry`, `reference` and `text` are taken and not
+  used, so an entity can be passed on unchanged). `face`, `edge` and
+  `vertex` are `{"body": owner, kind: name}`, `body` is `{"body":
+  owner}`, `plane`, `axis` and `point` are `{"datum": owner}` (`name`
+  empty), each with the entity's `occurrence`; so `{"kind": "point",
+  "owner": "origin", "name": "", "occurrence": "O1/O3"}` is that
+  occurrence's origin point. Other kinds (sketch curves, profiles,
+  components, sketches, features) are refused (`a sketch entity cannot be
+  measured: …`), as is an entity that also gives `body`, `face`, `edge`,
+  `vertex` or `datum`.
+
+Tests: `api::measure_tests` (`errors_name_the_occurrences_that_place_a_selection`,
+`occurrence_paths_are_taken_by_names`, `origin_datums_are_taken_by_name`,
+`the_entity_form_measures_as_the_fields`: a component placed three times
+in a nested assembly, and twelve times for the list's limit).
 
 ## Bounded face separation
 
@@ -17993,7 +18107,7 @@ one section per standard, each naming it:
 
 | Query | Fields | Result |
 |---|---|---|
-| `hole_sizes` | `size` (`M6`, case and spaces ignored; every size when left out), `major` (a thread's major diameter, mm) | `sizes` (smallest first): `size`, `diameter` (the thread's nominal d), `clearance` (`fine`, `normal`, `coarse`), `counterbore` (`diameter`, `depth`), `counterdrill` (`diameter`, `depth`, `angle` 90), `countersink` (`diameter`, `angle` 90; left out for M24), `iso_10642_head` and `iso_15065` (the two diameters the countersink is the larger of, where the standard has the size); `fits` (`fit`, `title`: `fine` Fine, `normal` Normal, `coarse` Coarse), `default_fit` (`normal`), `default_size` (`M6`), `standards` (the sections' titles: `clearance`, `counterbore`, `countersink_head`, `countersink`); with `major` also `tapped_countersink` (`diameter`, `angle` 90). A size the table lacks is refused (`no clearance hole for the screw size M7: the sizes are M1.6, …`), and so is a `major` not greater than zero |
+| `hole_sizes` | `size` (`M6`, case and spaces ignored; every size when left out), `major` (a thread's major diameter, mm), `thread` (a tapped hole's thread as `thread_sizes` names it, mitcad#980: `standard`, `iso_metric` when left out, `size` (`6`) and `designation` (`M6x1`, optional)) | `sizes` (smallest first): `size`, `diameter` (the thread's nominal d), `clearance` (`fine`, `normal`, `coarse`), `counterbore` (`diameter`, `depth`), `counterdrill` (`diameter`, `depth`, `angle` 90), `countersink` (`diameter`, `angle` 90; left out for M24), `iso_10642_head` and `iso_15065` (the two diameters the countersink is the larger of, where the standard has the size); `fits` (`fit`, `title`: `fine` Fine, `normal` Normal, `coarse` Coarse), `default_fit` (`normal`), `default_size` (`M6`), `standards` (the sections' titles: `clearance`, `counterbore`, `countersink_head`, `countersink`); with `major` also `tapped_countersink` (`diameter`, `angle` 90); with `thread` also `tapped_countersink` (from the size's major diameter unless `major` is given), `thread_size` (the screw size of an ISO metric size's nominal diameter, `6` is `M6`, as an entry of `sizes`: a tapped hole's counterbore and counterdrill; left out for a size the table lacks, `5.5`, and for the other standards) and `thread_bore` (the designation's basic minor diameter D1, the tapped hole's bore; left out without a designation the standard has). A size the table lacks is refused (`no clearance hole for the screw size M7: the sizes are M1.6, …`), and so is a `major` not greater than zero |
 
 Lengths are millimetres, angles degrees. A hole stores the values the
 panel filled in as plain values, and names its size and fit in
@@ -18002,8 +18116,9 @@ panel filled in as plain values, and names its size and fit in
 Tests: `features::hole_sizes::tests` and
 `features::hole::tests::clearance_holes_keep_their_size_and_fit`
 (`core.model`), `core/model-tests/features-profile/src/hole_size_tests.rs`
-(the query for M2, M6 and M24; a clearance hole with a counterbore, a
-typed value kept, the refusals), `tools/cli/tests/f1_hole.json` (the
+(the query for M2, M6 and M24, a tapped M6x1's `thread_size` and
+`thread_bore`; a clearance hole with a counterbore, a typed value kept,
+the refusals), `features::hole_sizes::tests::a_tapped_hole_takes_the_screw_size_of_its_thread`, `tools/cli/tests/f1_hole.json` (the
 volumes of M6 clearance holes counterbored, Normal and Fine, and
 countersunk, through a 60 x 40 x 20 block).
 

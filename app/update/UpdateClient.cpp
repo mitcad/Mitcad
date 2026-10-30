@@ -263,6 +263,8 @@ void UpdateClient::readManifest(const QByteArray& data) {
     offer.status = answer.value(QStringLiteral("status")).toString();
     offer.version = answer.value(QStringLiteral("version")).toString();
     offer.date = answer.value(QStringLiteral("date")).toString();
+    offer.expires = answer.value(QStringLiteral("expires")).toString();
+    offer.expired = answer.value(QStringLiteral("expired")).toBool();
     offer.notes = answer.value(QStringLiteral("notes")).toString();
     offer.prerelease = answer.value(QStringLiteral("prerelease")).toBool();
     const QJsonObject asset = answer.value(QStringLiteral("asset")).toObject();
@@ -276,7 +278,9 @@ void UpdateClient::readManifest(const QByteArray& data) {
     return;
   }
   qInfo().noquote() << QStringLiteral("Update manifest: Mitcad %1 of %2 (%3)%4")
-                           .arg(offer.version, offer.date, offer.status,
+                           .arg(offer.version, offer.date,
+                                offer.expired ? QStringLiteral("%1, expired on %2").arg(offer.status, offer.expires)
+                                              : offer.status,
                                 offer.hasDownload ? QStringLiteral(", %1 bytes for %2").arg(offer.size).arg(m_source.platform)
                                                   : QStringLiteral(", no download for this platform"));
   emit checked(offer);

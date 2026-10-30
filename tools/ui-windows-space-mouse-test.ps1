@@ -2,11 +2,13 @@
 # check-all sources: app/view/SpaceMouseController.cpp app/view/SpaceMouseController.hpp
 # check-all sources: app/view/SpaceMouseNavigation.hpp app/view/SpaceMouseView.cpp app/platform/SpaceMouseDevice.hpp
 # check-all sources: app/platform/windows/SpaceMouseWindows.cpp app/framework/TestDriver.cpp tools/ui-scripts/space-mouse.mitcad-ui
+# check-all sources: app/view/NavigationPreferences.hpp app/view/SpaceMouseCamera.hpp
 # A 3D mouse (mitcad#951) in the build VM, through the test driver's input
 # (tools/ui-scripts/space-mouse.mitcad-ui, the same script as the Linux
 # test's): no device logs "3D mouse: none" (Raw Input finds none in the
 # VM), a spin turns the view, a push pans it, a pull zooms in and the first
-# button runs Fit.
+# button runs Fit, in Object mode; the 3D Mouse tab of Preferences has its
+# Navigation mode and Lock horizon (mitcad#978).
 param(
   [string]$App,
   [string]$Out = (Join-Path $env:TEMP 'mitcad-ui-windows-space-mouse'),

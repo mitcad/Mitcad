@@ -820,6 +820,28 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
         },
         false);
   };
+  // A value field's mark (InputDef::onMark, mitcad#980: a Hole field's
+  // Reset to size): once the model is idle, as a choice's change does: the
+  // inputs it set shown again, those it left without a value evaluated.
+  actions.markClicked = [this](const QString& key) {
+    inputAction([this, key] {
+      const auto slot = slotOf(key);
+      if (!slot || !slot->def->onMark || !slot->def->markFor || slot->def->markFor(m_state).action.isEmpty()) {
+        return;
+      }
+      qDebug().noquote() << QStringLiteral("%1: %2 mark clicked").arg(m_def.name, key);
+      slot->def->onMark(m_state, m_host);
+      if (m_presenter) {
+        m_presenter->refresh(m_state);
+      }
+      for (const Slot& other : slotsOf(true)) {
+        if (other.def->type == InputDef::Type::Value && std::isnan(m_state.value(other.key))) {
+          evaluate(other.key);
+        }
+      }
+      inputsChanged();
+    });
+  };
   actions.detached = [this] { presenterDetached(); };
   // A link of an inspection's result ("point:x,y,z", Print Analysis'
   // thinnest wall, mitcad#620): the view shows that point of the design,
@@ -862,6 +884,7 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
   }
   activateFirstNeeded();
   m_presenter->refresh(m_state);
+  logMarks(); // an edited feature's fields that do not follow (mitcad#980)
   if (m_def.inspect) {
     m_sectionBefore = m_host.section();
   }
@@ -1526,9 +1549,9 @@ void CommandSession::evaluate(const QString& key) {
       const QString normalized = isNumber && space > 0 ? expression + shown.mid(space) // "20" -> "20 mm"
                                                        : expression;
       m_state.setExpression(key, rename.isEmpty() ? normalized : QStringLiteral("%1 = %2").arg(rename, normalized));
-      // Only worth showing when the expression is more than the value.
-      if (!isNumber && (!answer.value(QStringLiteral("references")).toArray().isEmpty() ||
-                        text.contains(QRegularExpression(QStringLiteral("[-+*/^()]"))))) {
+      // Only worth showing when the expression is more than the value: a
+      // signed number ("-8 mm", as a drag writes it) is not (mitcad#994).
+      if (valueHintWorthShowing(text, !answer.value(QStringLiteral("references")).toArray().isEmpty())) {
         hint = QStringLiteral("= %1").arg(shown);
       }
     } catch (const std::exception& e) {
@@ -1545,6 +1568,13 @@ void CommandSession::evaluate(const QString& key) {
   if (m_presenter) {
     m_presenter->setInputError(key, problem);
     m_presenter->setValueHint(key, hint);
+  }
+  // The line under the field, when it comes, changes or goes (mitcad#994):
+  // the rows below move with it.
+  if (m_valueHints.value(key) != hint) {
+    m_valueHints.insert(key, hint);
+    qDebug().noquote() << (hint.isEmpty() ? QStringLiteral("Panel %1 %2 hint cleared").arg(m_def.name, key)
+                                          : QStringLiteral("Panel %1 %2 hint: %3").arg(m_def.name, key, hint));
   }
   qDebug().noquote() << QStringLiteral("%1 %2: %3 %4")
                             .arg(m_def.name, input.labelIn(scopeOf(*slot)), text,
@@ -1589,6 +1619,22 @@ void CommandSession::inputsChanged() {
   updateHoverChain(); // Tangent Chain turned on or off (mitcad#290)
   updateCursorBox();  // its input shown or hidden, its text (mitcad#375)
   followActiveKinds(); // what the active input takes now (mitcad#394)
+  logMarks();          // a field that no longer follows (mitcad#980)
+}
+
+void CommandSession::logMarks() {
+  for (const InputDef& input : m_def.inputs) {
+    if (!input.markFor) {
+      continue;
+    }
+    const QString tooltip = input.markFor(m_state).tooltip;
+    if (m_marks.value(input.id) == tooltip) {
+      continue;
+    }
+    m_marks.insert(input.id, tooltip);
+    qDebug().noquote() << (tooltip.isEmpty() ? QStringLiteral("Panel %1 %2 mark cleared").arg(m_def.name, input.id)
+                                             : QStringLiteral("Panel %1 %2 mark: %3").arg(m_def.name, input.id, tooltip));
+  }
 }
 
 void CommandSession::updateManipulators() {
@@ -2244,10 +2290,28 @@ CommandSession::Preview CommandSession::previewFromReport(
       }
       shown.push_back({QString::fromStdString(display.uid), QString::fromStdString(display.occurrence), rows});
     }
+    // The bodies drawn with the preview's shapes or placements, for their
+    // clips while the view shows the bodies cut (mitcad#943), and what each
+    // showed before.
+    std::vector<PreviewClipTarget> clipTargets;
+    QHash<QString, SectionedShape> before;
     for (const PreviewBody& body : previewBodies(preview.report, shown)) {
       BodyDisplay display = body.shown >= 0 ? displays[static_cast<std::size_t>(body.shown)] : BodyDisplay();
       display.uid = body.uid.toStdString();
       display.occurrence = body.occurrence.toStdString();
+      const bool anew = body.previewShape || body.placed;
+      const QString key = previewBodyKey(display.uid, display.occurrence);
+      if (anew) {
+        if (body.shown >= 0) {
+          before.insert(key, SectionedShape{display.shape, display.uncut, display.sectioned});
+        }
+        // Whole, as its clip at the marker cut it: clipped again below.
+        if (display.sectioned && display.uncut) {
+          display.shape = display.uncut;
+        }
+        display.sectioned = false;
+        display.uncut = nullptr;
+      }
       if (body.previewShape) {
         display.shape = shapeOf ? shapeOf(display.uid) : m_host.previewBodyShape(display.uid);
       }
@@ -2257,7 +2321,21 @@ CommandSession::Preview CommandSession::previewFromReport(
       if (body.made) {
         display.style = BodyDisplay::Style::New;
       }
+      if (anew && display.shape) {
+        preview.previewed.insert(key);
+        PreviewClipTarget target;
+        target.key = key;
+        target.uid = display.uid;
+        target.preview = body.previewShape;
+        target.placement = display.placement;
+        clipTargets.push_back(std::move(target));
+      }
       preview.bodies.push_back(std::move(display));
+    }
+    // Clipped from the model's preview, which is this one only without
+    // `shapeOf` (a preview drawn again keeps its clips, redrawPreview).
+    if (!shapeOf && !clipTargets.empty()) {
+      startPreviewSection(preview, clipTargets, before);
     }
     // What it removes where the view shows it: a consumed tool's
     // occurrences, drawn as tool overlays while its input is active
@@ -2294,6 +2372,100 @@ CommandSession::Preview CommandSession::previewFromReport(
     }
   }
   return preview;
+}
+
+void CommandSession::startPreviewSection(Preview& preview, const std::vector<PreviewClipTarget>& targets,
+                                         const QHash<QString, SectionedShape>& before) {
+  // The callback finds the cut it belongs to once it is made.
+  auto started = std::make_shared<std::weak_ptr<PreviewSection>>();
+  preview.section = m_host.sectionPreview(targets, this, [this, started] { previewSectionReady(started->lock()); });
+  if (!preview.section) {
+    return; // the bodies whole
+  }
+  *started = preview.section;
+  for (const PreviewClipTarget& target : targets) {
+    const auto last = m_lastClips.constFind(target.key);
+    const auto earlier = before.constFind(target.key);
+    if (last != m_lastClips.cend()) {
+      preview.section->meanwhile.insert(target.key, last.value());
+    } else if (earlier != before.cend()) {
+      preview.section->meanwhile.insert(target.key, earlier.value());
+    }
+  }
+  // The clips of an older preview not ready yet were superseded by these:
+  // such a preview is computed again when its inputs come back, not drawn
+  // without its clips.
+  for (auto entry = m_cache.begin(); entry != m_cache.end();) {
+    const std::shared_ptr<PreviewSection>& cut = entry.value().section;
+    if (cut && !cut->ready && cut != preview.section) {
+      m_cacheOrder.removeAll(entry.key());
+      entry = m_cache.erase(entry);
+    } else {
+      ++entry;
+    }
+  }
+}
+
+std::vector<BodyDisplay> CommandSession::sectionedBodies(const Preview& preview, bool& clipped) {
+  clipped = false;
+  const PreviewSection* cut = preview.section.get();
+  if (cut == nullptr || preview.previewed.isEmpty() || cut->plane != m_host.sectionCutPlane()) {
+    return preview.bodies; // whole, or cut at another plane since: as computed
+  }
+  std::vector<BodyDisplay> bodies;
+  bodies.reserve(preview.bodies.size());
+  for (const BodyDisplay& body : preview.bodies) {
+    const QString key = previewBodyKey(body.uid, body.occurrence);
+    if (!preview.previewed.contains(key) || !cut->keys.contains(key)) {
+      bodies.push_back(body);
+      continue;
+    }
+    SectionedShape shown;
+    if (cut->ready) {
+      shown = sectionedShape(body.shape, cut->uncut.value(key), cut->left.value(key));
+      m_lastClips.insert(key, shown);
+      clipped = true;
+    } else {
+      const auto meanwhile = cut->meanwhile.constFind(key);
+      if (meanwhile == cut->meanwhile.cend()) {
+        continue; // made by the preview: drawn once its clip is ready
+      }
+      shown = meanwhile.value();
+    }
+    BodyDisplay drawn = body;
+    drawn.shape = shown.shape;
+    drawn.uncut = shown.uncut;
+    drawn.sectioned = shown.sectioned;
+    bodies.push_back(std::move(drawn));
+  }
+  return bodies;
+}
+
+bool CommandSession::sectionCovers(const Preview& preview) const {
+  if (preview.previewed.isEmpty() || m_host.sectionCutPlane().isNull()) {
+    return true;
+  }
+  const PreviewSection* cut = preview.section.get();
+  if (cut == nullptr || cut->plane != m_host.sectionCutPlane()) {
+    return false;
+  }
+  for (const QString& key : preview.previewed) {
+    if (!cut->keys.contains(key)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void CommandSession::previewSectionReady(const std::shared_ptr<PreviewSection>& cut) {
+  if (m_done || !cut || !m_previewOk || m_previewCancelled) {
+    return;
+  }
+  const auto shown = m_cache.constFind(m_shownKey);
+  if (shown == m_cache.cend() || shown.value().section != cut) {
+    return; // another preview is shown now
+  }
+  showPreview(shown.value(), m_shownOperation);
 }
 
 bool CommandSession::refreshRowNotes() {
@@ -2441,11 +2613,15 @@ void CommandSession::showPreview(const Preview& preview, const QString& operatio
   m_shownOperation = operation;
   const InputDef* active = activeInput();
   m_toolOverlaysShown = active != nullptr && active->toolOverlays;
-  std::vector<BodyDisplay> bodies = preview.bodies;
+  // Cut at the view's plane with their clips, or until they are ready as
+  // before (mitcad#943).
+  bool clipped = false;
+  std::vector<BodyDisplay> bodies = sectionedBodies(preview, clipped);
   for (BodyDisplay& overlay : toolOverlays(preview, operation)) {
     bodies.push_back(std::move(overlay));
   }
   viewer.setBodies(bodies);
+  m_host.showSectionCapsOf(bodies, clipped);
   if (timingLogged()) {
     qDebug().noquote() << QStringLiteral("Preview installed: %1, dragging=%2")
         .arg(m_def.name).arg(m_manipulators && m_manipulators->isDragging());
@@ -2863,7 +3039,9 @@ void CommandSession::clearPreview() {
   m_proxyBasis.reset();
   hideDragProxy(QStringLiteral("no exact preview is shown"), true);
   m_host.clearModelPreview();
-  m_host.viewer().setBodies(m_host.modelBodies());
+  const std::vector<BodyDisplay> modelShown = m_host.modelBodies();
+  m_host.viewer().setBodies(modelShown);
+  m_host.showSectionCapsOf(modelShown, false); // the caps of the bodies at the marker again (mitcad#943)
   m_host.viewer().setPreview(TopoDS_Shape());
   if (!m_shownReport.isEmpty()) {
     m_shownReport = {};

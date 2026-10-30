@@ -18,6 +18,7 @@
 #include <QRegularExpression>
 #include <QSet>
 
+#include "PointMarkers.hpp"
 #include "SketchController.hpp"
 #include "SketchTool.hpp"
 
@@ -1143,57 +1144,163 @@ void SketchOverlay::paintDimension(QPainter& painter, const DimensionShape& plac
   painter.drawText(rect, Qt::AlignCenter, shape.text);
 }
 
-void SketchOverlay::paintEntityHighlight(QPainter& painter, const QString& entity,
-                                         const QColor& color) const {
+std::vector<std::pair<QString, QColor>> SketchOverlay::idleHighlights() const {
+  std::vector<std::pair<QString, QColor>> highlighted;
+  // The selected curves and points, over OCCT's highlight, which only
+  // recolours them in lines one pixel wide on macOS. A tool takes the
+  // clicks and the view shows no selection then.
+  if (m_c.tool() == nullptr) {
+    for (const SelectionItem& item : m_c.host().selection()) {
+      if (item.owner == m_c.uid() &&
+          (item.kind == SelectKind::SketchCurve || item.kind == SelectKind::SketchPoint)) {
+        highlighted.emplace_back(item.name, kSelectedColor);
+      }
+    }
+  }
+  // The axes a command's input holds (Mirror's line, mitcad#876), which
+  // the view's highlight cannot show.
+  for (const QString& axis : m_c.host().sketchAxisPicks()) {
+    highlighted.emplace_back(axis, kSelectedColor);
+  }
+  // What a picking tool points at and has picked.
+  for (const QString& entity : m_c.picked()) {
+    highlighted.emplace_back(entity, kPickColor);
+  }
+  if (!m_c.hover().isEmpty()) {
+    highlighted.emplace_back(m_c.hover(), kHoverColor);
+  }
+  return highlighted;
+}
+
+HighlightLayers SketchOverlay::highlightLayers(const std::vector<std::pair<QString, QColor>>& entities,
+                                               HighlightSummary* summary) const {
   const SketchModel& model = m_c.model();
   // A body edge or vertex in the sketch plane (mitcad#256) as a sketch entity.
   const BodyGeometry& body = m_c.bodyGeometryShown();
-  const bool onBody = BodyGeometry::isBodyId(entity);
-  painter.setPen(QPen(color, 4.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-  painter.setBrush(Qt::NoBrush);
-  // The sketch's origin and axes as picks (mitcad#500): the origin before
-  // it has a point, an axis across the view.
-  if (entity == originPick()) {
-    painter.setBrush(color);
-    painter.drawEllipse(m_c.toScreen(V2{}), 4.5, 4.5);
-    return;
-  }
-  if (const QString axis = onBody ? QString() : model.axisOf(entity); !axis.isEmpty()) {
-    const QPointF origin = m_c.toScreen(V2{});
-    const double step = 100.0 * m_c.pixel();
-    const QPointF along = m_c.toScreen(axis == QStringLiteral("x") ? V2{step, 0.0} : V2{0.0, step}) - origin;
-    if (std::hypot(along.x(), along.y()) >= 1.0) {
-      if (const std::optional<QLineF> line = lineAcross(origin, along, rect())) {
-        painter.drawLine(*line);
+  HighlightLayers layers;
+  QStringList stroked;    // the entities drawn as strokes, once each
+  QStringList balled;     // the entities drawn as balls, once each
+  QStringList curves;     // the sketch curves among them, whose points get markers
+  QSet<QString> points;   // the sketch points highlighted: their balls, no plain marker
+  const auto strokeOf = [&layers, &stroked](const QString& id, const QPolygonF& path, const QColor& tone) {
+    layers.strokes.push_back({path, tone, false});
+    if (!stroked.contains(id)) {
+      stroked << id;
+    }
+  };
+  const auto ballOf = [&layers, &balled](const QString& id, const QPointF& at, const QColor& tone) {
+    layers.balls.push_back({at, tone});
+    if (!balled.contains(id)) {
+      balled << id;
+    }
+  };
+  for (const auto& [entity, color] : entities) {
+    const bool onBody = BodyGeometry::isBodyId(entity);
+    // The sketch's origin and axes as picks (mitcad#500): the origin before
+    // it has a point, an axis across the view.
+    if (entity == originPick()) {
+      ballOf(entity, m_c.toScreen(V2{}), color);
+      continue;
+    }
+    if (const QString axis = onBody ? QString() : model.axisOf(entity); !axis.isEmpty()) {
+      const QPointF origin = m_c.toScreen(V2{});
+      const double step = 100.0 * m_c.pixel();
+      const QPointF along = m_c.toScreen(axis == QStringLiteral("x") ? V2{step, 0.0} : V2{0.0, step}) - origin;
+      if (std::hypot(along.x(), along.y()) >= 1.0) {
+        if (const std::optional<QLineF> line = lineAcross(origin, along, rect())) {
+          QPolygonF across;
+          across << line->p1() << line->p2();
+          strokeOf(entity, across, color);
+        }
+      }
+      continue;
+    }
+    // A body edge or vertex out of the plane (mitcad#866): where it is, thin
+    // and dashed, and below what it projects to, as for one in the plane.
+    if (const BodyItem* item = onBody ? body.item(entity) : nullptr; item != nullptr && !item->inPlane) {
+      layers.strokes.push_back({m_c.bodyPath(*item), color, true});
+    }
+    if (const auto p = onBody ? body.pointAt(entity) : model.pointAt(entity)) {
+      ballOf(entity, m_c.toScreen(*p), color);
+      if (!onBody) {
+        points.insert(entity);
+      }
+      continue;
+    }
+    const CurveData* c = onBody ? nullptr : model.curve(entity);
+    if (const Curve2* curve = onBody ? body.curve(entity) : c != nullptr ? &c->curve : nullptr) {
+      QPolygonF polyline;
+      for (const V2& at : curve->sample(2.0 * m_c.pixel())) {
+        polyline << m_c.toScreen(at);
+      }
+      strokeOf(entity, polyline, color);
+      if (c != nullptr && !curves.contains(entity)) {
+        curves << entity;
       }
     }
+  }
+  // The highlighted curves' end, centre, fit and control points as the view
+  // shows them (ModelShapes' sketchEntities: not an axis line's far end, of
+  // a derived offset's spline only its ends), each once, unless highlighted
+  // itself.
+  const bool dark = m_c.viewer().backgroundDark();
+  QSet<QString> marked;
+  for (const QString& id : curves) {
+    const CurveData* c = model.curve(id);
+    if (c == nullptr) {
+      continue;
+    }
+    for (const QString& pointId : c->points) {
+      const PointData* point = model.point(pointId);
+      if (point == nullptr || marked.contains(pointId) || points.contains(pointId) || !point->axis.isEmpty() ||
+          (point->derived && pointId != c->start && pointId != c->end && pointId != c->center)) {
+        continue;
+      }
+      marked.insert(pointId);
+      const PointState state = point->reference      ? PointState::Reference
+                               : point->construction ? PointState::Construction
+                               : point->constrained  ? PointState::Constrained
+                                                     : PointState::Free;
+      layers.markers.push_back({m_c.toScreen(point->at), pointMarkerLook(state, dark)});
+    }
+  }
+  if (summary != nullptr) {
+    summary->curves = static_cast<int>(stroked.size());
+    summary->points = static_cast<int>(balled.size());
+    summary->markers = static_cast<int>(layers.markers.size());
+    // The order paintHighlightLayers paints in.
+    summary->markersOver = markersOverHighlights(highlightPassOrder());
+  }
+  return layers;
+}
+
+void SketchOverlay::paintHighlights(QPainter& painter,
+                                    const std::vector<std::pair<QString, QColor>>& entities) const {
+  paintHighlightLayers(painter, highlightLayers(entities, nullptr));
+}
+
+void SketchOverlay::logHighlights() {
+  if (!m_c.isActive()) {
     return;
   }
-  // A body edge or vertex out of the plane (mitcad#866): where it is, thin
-  // and dashed, and below what it projects to, as for one in the plane.
-  if (const BodyItem* item = onBody ? body.item(entity) : nullptr; item != nullptr && !item->inPlane) {
-    const QPolygonF path = m_c.bodyPath(*item);
-    painter.save();
-    painter.setPen(QPen(color, 1.5, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin));
-    if (path.size() == 1) {
-      painter.drawEllipse(path.front(), 3.0, 3.0);
-    } else {
-      painter.drawPolyline(path);
-    }
-    painter.restore();
-  }
-  if (const auto p = onBody ? body.pointAt(entity) : model.pointAt(entity)) {
-    painter.setBrush(color);
-    painter.drawEllipse(m_c.toScreen(*p), 4.5, 4.5);
-    return;
-  }
-  const CurveData* c = onBody ? nullptr : model.curve(entity);
-  if (const Curve2* curve = onBody ? body.curve(entity) : c != nullptr ? &c->curve : nullptr) {
-    QPolygonF polyline;
-    for (const V2& p : curve->sample(2.0 * m_c.pixel())) {
-      polyline << m_c.toScreen(p);
-    }
-    painter.drawPolyline(polyline);
+  HighlightSummary summary;
+  highlightLayers(idleHighlights(), &summary);
+  logHighlightSummary(summary);
+}
+
+void SketchOverlay::logHighlightSummary(const HighlightSummary& summary) {
+  const QString line =
+      QStringLiteral("point markers %1 highlights; %2 curve%3, %4 point%5 highlighted, %6 marker%7 over them")
+          .arg(summary.markersOver ? QStringLiteral("over") : QStringLiteral("under"))
+          .arg(summary.curves)
+          .arg(summary.curves == 1 ? QString() : QStringLiteral("s"))
+          .arg(summary.points)
+          .arg(summary.points == 1 ? QString() : QStringLiteral("s"))
+          .arg(summary.markers)
+          .arg(summary.markers == 1 ? QString() : QStringLiteral("s"));
+  if (line != m_loggedHighlights) {
+    m_loggedHighlights = line;
+    qDebug().noquote() << QStringLiteral("Sketch overlay: %1").arg(line);
   }
 }
 
@@ -1407,29 +1514,13 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
   }
   painter.restore();
 
-  // The selected curves and points, over OCCT's highlight, which only
-  // recolours them in lines one pixel wide on macOS. A tool takes the
-  // clicks and the view shows no selection then.
-  if (m_c.tool() == nullptr) {
-    for (const SelectionItem& item : m_c.host().selection()) {
-      if (item.owner == m_c.uid() &&
-          (item.kind == SelectKind::SketchCurve || item.kind == SelectKind::SketchPoint)) {
-        paintEntityHighlight(painter, item.name, kSelectedColor);
-      }
-    }
-  }
-  // The axes a command's input holds (Mirror's line, mitcad#876), which
-  // the view's highlight cannot show.
-  for (const QString& axis : m_c.host().sketchAxisPicks()) {
-    paintEntityHighlight(painter, axis, kSelectedColor);
-  }
-  // What a picking tool points at and has picked.
-  for (const QString& entity : m_c.picked()) {
-    paintEntityHighlight(painter, entity, kPickColor);
-  }
-  if (!m_c.hover().isEmpty()) {
-    paintEntityHighlight(painter, m_c.hover(), kHoverColor);
-  }
+  // The selection's, the picks' and the hover's highlights, with the
+  // highlighted curves' point markers over them (paintHighlights,
+  // mitcad#946): painted after OCCT's scene, a highlight would cover the
+  // view's markers whatever OCCT's layers are.
+  HighlightSummary summary;
+  paintHighlightLayers(painter, highlightLayers(idleHighlights(), &summary));
+  logHighlightSummary(summary);
 
   const QString hover = m_c.hoverAnnotation();
   if (m_c.showDimensions()) {
@@ -1496,7 +1587,9 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
     if (m_c.autoHover()) {
       const QString reference = m_c.autoReference();
       if (!reference.isEmpty()) {
-        paintEntityHighlight(painter, reference, kPickColor);
+        std::vector<std::pair<QString, QColor>> referenced;
+        referenced.emplace_back(reference, kPickColor);
+        paintHighlights(painter, referenced);
       }
     }
     ToolPreview preview;
@@ -1509,9 +1602,11 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
   // dashed in the remove colour, over the trimmed lines highlighted.
   const SketchController::StalePreview& stale = m_c.stalePreview();
   if (!stale.empty()) {
+    std::vector<std::pair<QString, QColor>> trimmed;
     for (const QString& line : stale.trimmed) {
-      paintEntityHighlight(painter, line, kPickColor);
+      trimmed.emplace_back(line, kPickColor);
     }
+    paintHighlights(painter, trimmed);
     ToolPreview removal;
     for (const Curve2& curve : stale.removed) {
       removal.curve(curve, 2.0 * m_c.pixel(), ToolPreview::Style::Remove);
@@ -1675,6 +1770,7 @@ void SketchOverlay::paintAxes(QPainter& painter) const {
 void SketchOverlay::hideEvent(QHideEvent* event) {
   QWidget::hideEvent(event);
   m_loggedAxes.clear(); // the next sketch edit logs its axes again
+  m_loggedHighlights.clear(); // and its highlights
   if (auto* viewer = qobject_cast<OcctViewer*>(parentWidget())) {
     viewer->setBadgeWidth(0); // no badge: the status pill may use the corner
   }

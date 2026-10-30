@@ -3,6 +3,7 @@
 # check-all sources: core/cpp/bridge/analysis.cpp core/cpp/bridge/analysis.hpp
 # check-all sources: app/MainWindow.cpp app/OcctViewer.cpp
 # check-all sources: app/MainWindowSection.cpp app/framework/SectionWorker.cpp app/framework/CommandSession.cpp
+# check-all sources: app/framework/SectionPreview.cpp app/framework/SectionPreview.hpp
 # Input-driven Windows UI test of picks on clipped bodies (mitcad#233), on
 # a design mitcad-cli makes: Body1 (F2.b0) 30 x 20 x 10 on XY and Body2
 # (F5.b0) 10 x 10 x 10 on a plane 5 above XY, beside Body1, and an empty
@@ -13,7 +14,11 @@
 #      Body2, which the cut kept, both by the bodies' own names, and the
 #      sketch gets both projections.
 #   2. Section Analysis at x = 15: Fillet picks the top face of what is
-#      left of Body1 by its own name.
+#      left of Body1 by its own name. A feature preview at the section
+#      (mitcad#943): Chamfer on the cut Body1's top front edge; the
+#      preview's body is clipped at the plane on the section worker's
+#      thread and the caps follow it (area 199.5 instead of 200); Escape
+#      brings back the caps at the marker.
 #   3. The clips off the UI thread (mitcad#438), each view round made to
 #      wait 4 s: a new distance typed while the round at x = 0 runs stops
 #      it; the bodies are clipped and meshed at x = 15 on the section
@@ -30,7 +35,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'view.iso' = 'Shift+F3'; 'inspect.section' = 'Shift+F4' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'view.iso' = 'Shift+F3'; 'inspect.section' = 'Shift+F4'; 'solid.chamfer' = 'Shift+F5' } -StepPause 0
 $work = Join-Path $script:UiOut 'files'
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $work | Out-Null
@@ -134,6 +139,40 @@ Ui-ExpectNew 'Pick face F2.b0/F2:end(' "the cut Body1's top face can be picked b
 Ui-Step "pick the cut Body1's top face"     { Ui-ClickPick 'face F2.b0/F2:end(' }
 Ui-ExpectNew 'Fillet Edges: 1 face' 'the face picked by its own name'
 Ui-Step 'cancel (Esc)'                      { Ui-Key 'Escape' }
+Ui-ExpectNew 'Command Fillet cancelled' 'Fillet cancelled'
+Ui-WaitIdle
+
+Write-Host '--- A feature preview at the section (mitcad#943)'
+# Chamfer on the top front edge of the cut Body1: the preview's body is
+# clipped at x = 15 on the section worker's thread, and its caps follow it:
+# 199.5 mm² with the 1 mm bevel across the cut, 200 without.
+Ui-Mark
+Ui-Step 'chamfer (Shift+F5)'                { Ui-Key 'shift+F5' }
+Ui-ExpectNew 'Pick places:' 'Chamfer logs where its picks are'
+Ui-Step "pick the cut Body1's top front edge" {
+  $at = Pick-PlaceOf 'edge F2.b0/E{F2:end(' 'F2:side(c1[c4,c2])'
+  Ui-Click $at[0] $at[1]
+}
+Ui-ExpectNew 'Chamfer Edges: 1 edge' "the cut Body1's edge picked"
+Ui-ExpectNew 'Preview Chamfer: ok' 'previewed'
+Ui-ExpectNew 'Section preview ready at ' "the preview's body clipped and handed to the view" 12
+Ui-ExpectNew ', area 199.5 (preview)' 'the caps follow the preview'
+$since = @(Ui-LogLines | Select-Object -Skip $script:UiMark)
+if (-not ($since | Where-Object {
+      $_ -match '^Section preview clips at .* off the UI thread \(section worker\): 1 bodies, 1 new' })) {
+  Ui-Fail "the chamfered body was not clipped on the section worker's thread"
+}
+if (-not ($since | Where-Object { $_.StartsWith('Section caps: 1 face(s) at') -and $_.EndsWith('(preview)') })) {
+  Ui-Fail "the preview's caps are not Body1's cut"
+}
+if ($since | Where-Object { $_.StartsWith('Section: F2.b0 shown whole') }) {
+  Ui-Fail "the preview's clip failed"
+}
+Write-Host "ok   the chamfered Body1 drawn cut, its caps the preview's"
+Ui-Mark
+Ui-Step 'cancel (Esc)'                      { Ui-Key 'Escape' }
+Ui-ExpectNew 'Command Chamfer cancelled' 'the chamfer cancelled'
+Ui-ExpectNew ', area 200.0' "the caps of Body1 at the marker again"
 
 # Line-Of "text": the index, among the lines logged since the mark, of the
 # first one that has the text; -1 when none has.

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/MainWindow.cpp app/MainWindowContextMenu.cpp app/browser app/commands/MoveCommands.cpp
 # check-all sources: app/framework/Command.cpp app/framework/Command.hpp tools/cli
+# check-all sources: core/model-api/src/analysis.rs
 # Move/Copy in the context menus (mitcad#735) through the real UI, on a
 # design with a body of the root (Body1, F2.b0) and a component placed
 # twice, Component1:1 (O1) and Component1:2 (O2), each with Body2 (F3.b0):
@@ -16,6 +17,12 @@
 #     selected, a right click on its body offers Move/Copy for the
 #     component.
 #   - A face alone has no Move/Copy.
+#   - In a design of its own, a right click on a face of a large body (a
+#     filleted bracket with modelled M6 tapped holes and a modelled M6
+#     threaded rod, in a placed occurrence) selects it, opens the menu and
+#     logs the click's timing (mitcad#981: the selection card measured a
+#     moved copy of the whole body, seconds on the UI thread). No time is
+#     asserted.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-move-copy-menu-test.sh
@@ -46,6 +53,30 @@ cat > "$WORK/model.json" << EOF
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
+# A design of its own (mitcad#981): a box 60 x 30 x 20 (F1) as
+# Component1:1 (O1, F1.b0), its edges filleted (F2), three modelled M6
+# tapped holes through it (F3), a 6 mm cylinder 60 high joined to it (F4)
+# with a modelled M6 thread (F5); the occurrence placed 50 mm along -Y.
+BRACKET=$WORK/bracket.mitcad
+cat > "$WORK/bracket.json" << 'EOF'
+[
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0], "length": 60, "width": 30, "height": 20,
+    "operation": "new_component"}},
+  {"cmd": "activate_component", "component": "C1"},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F1.b0",
+    "sets": [{"all_edges": true, "size": {"type": "constant", "radius": 2}}]}},
+  {"cmd": "add_feature", "def": {"type": "hole",
+    "placement": {"type": "face", "body": "F1.b0", "face": "F1:top", "points": [[10, 15, 20], [22, 15, 20], [34, 15, 20]]},
+    "diameter": 5, "extent": {"type": "through_all"}, "thread": {"designation": "M6x1", "modeled": true}}},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [50, 15], "diameter": 6, "height": 60,
+    "operation": "join", "participants": ["F1.b0"]}},
+  {"cmd": "add_feature", "def": {"type": "thread", "faces": [{"body": "F1.b0", "face": "F4:side0"}],
+    "thread": {"designation": "M6x1"}, "modeled": true}},
+  {"cmd": "activate_component", "component": "C0"},
+  {"cmd": "set_occurrence_transform", "occurrence": "Component1:1", "transform": {"translation": [0, -50, 0]}}
+]
+EOF
+"$CLI" run "$WORK/bracket.json" --save "$BRACKET" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli bracket"; }
 
 # The entries of the last "Context menu<name>: ..." line since the mark,
 # " | " around each.
@@ -176,6 +207,29 @@ ui_step "right-click Body1 in the view"  ui_click_logged "Body F2.b0" 3
 ui_expect_new "Selected: 1 face [face " "a face of Body1 selected"
 ui_expect_new "Context menu: " "the view's menu"
 lacks "Move/Copy"
+ui_step "Escape (close the menu)"        ui_key Escape
+ui_step "Escape (clear the selection)"   ui_key Escape
+
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+echo "--- The view: a face of a large body (modelled threads, placed)"
+ui_stop_app
+ui_start_app --open "$BRACKET"
+ui_step "fit (F6)"                       ui_key F6
+ui_expect_log "Body F1.b0 in O1 at" "the bracket is in the view"
+ui_mark
+ui_step "offset face (search)"           ui_command "Offset Face"
+ui_expect_new "Pick face F1.b0/F1:side0 " "where the bracket's side is picked"
+at=$(ui_pick_at "face F1.b0/F1:side0 ")
+ui_step "cancel it (Esc)"                ui_key Escape
+ui_expect_new "Command Offset Face cancelled" "cancelled"
+ui_mark
+ui_step "right-click the bracket's side" xdotool mousemove $at click 3
+ui_expect_new "Selected: 1 face [face F1:side0 of F1.b0 in O1]" "the bracket's side selected"
+ui_expect_new "Selection timing: view " "the selection's parts timed"
+ui_expect_new "Context menu timing: select " "the right click timed"
+ui_expect_new "Context menu: " "the view's menu"
+echo "     $(grep "^Context menu timing: " "$UI_LOG" | tail -1)"
 ui_step "Escape (close the menu)"        ui_key Escape
 ui_step "Escape (clear the selection)"   ui_key Escape
 

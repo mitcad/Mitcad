@@ -1,22 +1,30 @@
 // SPDX-License-Identifier: MIT
 #include "RulesPage.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <utility>
 
 #include <QAbstractItemView>
+#include <QAction>
 #include <QApplication>
 #include <QDebug>
 #include <QDialog>
+#include <QFocusEvent>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
+#include <QMenu>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSplitter>
 #include <QStyle>
+#include <QTextBlock>
+#include <QTextCursor>
+#include <QTextDocument>
+#include <QTextEdit>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -58,10 +66,37 @@ QWidget* labelled(QLabel* label, QWidget* buddy) {
   return label;
 }
 
+// The page's own words (mitcad#966, #967; app/COMMANDS.md and the user
+// guide quote them).
+const char* const kLead = "Rules take away values and combinations that are not allowed. Most designs need none.";
+const char* const kClosed = "This table is closed: only its rows are allowed, so rules are not needed.";
+const char* const kNoRules = "No rules yet. A rule is, for example: when Color is Black, Length is at most 1000 mm.";
+const char* const kChoose = "Add a rule, or choose one in the list.";
+const char* const kTextHint = "Enter saves the rule, Shift+Enter starts a new line, Esc restores it.";
+
+// The status line of rules not saved yet: "Rule 1 and Rule 2 are not
+// saved yet: fill their dashed places." (mitcad#967).
+QString waitingText(const QStringList& names) {
+  if (names.size() == 1) {
+    return QStringLiteral("%1 is not saved yet: fill its dashed places.").arg(names.front());
+  }
+  QStringList first = names;
+  const QString last = first.takeLast();
+  return QStringLiteral("%1 and %2 are not saved yet: fill their dashed places.")
+      .arg(first.join(QStringLiteral(", ")), last);
+}
+
 } // namespace
 
 RulesPage::RulesPage(RulesSource source, QWidget* parent) : QWidget(parent), m_source(std::move(source)) {
   setObjectName(QStringLiteral("rulesPage"));
+  m_lead = new QLabel(QString::fromUtf8(kLead));
+  m_lead->setObjectName(QStringLiteral("rulesLead"));
+  m_lead->setWordWrap(true);
+  m_closedNote = new QLabel(QString::fromUtf8(kClosed));
+  m_closedNote->setObjectName(QStringLiteral("rulesClosedNote"));
+  m_closedNote->setWordWrap(true);
+  m_closedNote->hide();
   m_list = new QTreeWidget;
   m_list->setObjectName(QStringLiteral("rulesList"));
   m_list->setColumnCount(2);
@@ -75,6 +110,12 @@ RulesPage::RulesPage(RulesSource source, QWidget* parent) : QWidget(parent), m_s
   m_list->installEventFilter(this);
   m_add = new QPushButton(QStringLiteral("&Add"));
   m_add->setObjectName(QStringLiteral("rulesAdd"));
+  m_add->setToolTip(QStringLiteral("A new rule from a template, complete and saved at once: replace its values"));
+  // The templates (mitcad#966), filled in refresh().
+  m_addMenu = new QMenu(m_add);
+  m_addMenu->setObjectName(QStringLiteral("rulesAddMenu"));
+  m_addMenu->setToolTipsVisible(true);
+  m_add->setMenu(m_addMenu);
   m_duplicate = new QPushButton(QStringLiteral("D&uplicate"));
   m_duplicate->setObjectName(QStringLiteral("rulesDuplicate"));
   m_delete = new QPushButton(QStringLiteral("&Delete"));
@@ -100,10 +141,6 @@ RulesPage::RulesPage(RulesSource source, QWidget* parent) : QWidget(parent), m_s
   m_canvas->setDeleteArea(m_palette);
   m_palette->installEventFilter(this);
   m_canvas->installEventFilter(this);
-  m_viewText = new QPushButton(QStringLiteral("View as &Text"));
-  m_viewText->setObjectName(QStringLiteral("rulesViewText"));
-  m_viewText->setCheckable(true);
-  m_viewText->setAutoDefault(false);
   m_check = new QPushButton(QStringLiteral("Chec&k Rules"));
   m_check->setObjectName(QStringLiteral("rulesCheck"));
   m_check->setAutoDefault(false);
@@ -111,11 +148,22 @@ RulesPage::RulesPage(RulesSource source, QWidget* parent) : QWidget(parent), m_s
   m_status->setObjectName(QStringLiteral("rulesStatus"));
   m_status->setWordWrap(true);
   m_status->hide();
+  // The rule as text (mitcad#965): always in sight under the blocks, and
+  // edited as they are. A line per part, so a long one scrolls rather than
+  // wraps (a problem's line and column are the lines as typed).
   m_text = new QPlainTextEdit;
   m_text->setObjectName(QStringLiteral("ruleText"));
-  m_text->setReadOnly(true);
-  m_text->setMaximumHeight(110);
-  m_text->hide();
+  m_text->setLineWrapMode(QPlainTextEdit::NoWrap);
+  m_text->setTabChangesFocus(true);
+  m_text->setToolTip(QStringLiteral("The rule as text, a line per part: when <condition> (or always), then "
+                                    "<action>, else <action>"));
+  const int lineHeight = m_text->fontMetrics().lineSpacing();
+  m_text->setMinimumHeight(lineHeight * 4 + 12);
+  m_text->setMaximumHeight(lineHeight * 7 + 12);
+  m_text->installEventFilter(this);
+  auto* textHint = new QLabel(QString::fromUtf8(kTextHint));
+  textHint->setObjectName(QStringLiteral("ruleTextHint"));
+  textHint->setForegroundRole(QPalette::PlaceholderText);
   m_report = new QPlainTextEdit;
   m_report->setObjectName(QStringLiteral("rulesReport"));
   m_report->setReadOnly(true);
@@ -133,7 +181,6 @@ RulesPage::RulesPage(RulesSource source, QWidget* parent) : QWidget(parent), m_s
   auto* tools = new QHBoxLayout;
   tools->addWidget(labelled(new QLabel(QStringLiteral("&Blocks")), m_canvas));
   tools->addStretch(1);
-  tools->addWidget(m_viewText);
   tools->addWidget(m_check);
   canvasLayout->addLayout(tools);
   canvasLayout->addWidget(m_canvas, 1);
@@ -148,6 +195,11 @@ RulesPage::RulesPage(RulesSource source, QWidget* parent) : QWidget(parent), m_s
   rightLayout->setContentsMargins(0, 0, 0, 0);
   rightLayout->addWidget(editor, 1);
   rightLayout->addWidget(m_status);
+  auto* textRow = new QHBoxLayout;
+  textRow->addWidget(labelled(new QLabel(QStringLiteral("&Text")), m_text));
+  textRow->addStretch(1);
+  textRow->addWidget(textHint);
+  rightLayout->addLayout(textRow);
   rightLayout->addWidget(m_text);
   rightLayout->addWidget(m_report);
 
@@ -159,7 +211,11 @@ RulesPage::RulesPage(RulesSource source, QWidget* parent) : QWidget(parent), m_s
   split->setSizes({200, 660});
   auto* layout = new QVBoxLayout(this);
   layout->setContentsMargins(0, 0, 0, 0);
-  layout->addWidget(split);
+  layout->addWidget(m_lead);
+  layout->addWidget(m_closedNote);
+  layout->addWidget(split, 1);
+  // Logged as the window's other tabs log theirs (ConfigurationsDialog).
+  qDebug().noquote() << QStringLiteral("Configurations lead Rules: %1").arg(m_lead->text());
 
   if (m_source.parameters.parameters) {
     m_canvas->setFormulaEditor([this](const QString& text, QWidget* owner) -> std::optional<QString> {
@@ -176,11 +232,31 @@ RulesPage::RulesPage(RulesSource source, QWidget* parent) : QWidget(parent), m_s
     });
   }
 
-  connect(m_add, &QPushButton::clicked, this, [this] { addRule(); });
+  connect(m_addMenu, &QMenu::aboutToShow, this, [this] {
+    QStringList entries;
+    const QList<QAction*> actions = m_addMenu->actions();
+    for (const QAction* action : actions) {
+      if (action->isSeparator()) {
+        continue;
+      }
+      QString label = action->text();
+      label.remove(QLatin1Char('&'));
+      entries << (action->isEnabled() ? label : QStringLiteral("%1 (disabled: %2)").arg(label, action->toolTip()));
+    }
+    qDebug().noquote() << QStringLiteral("Rules add menu: %1").arg(entries.join(QStringLiteral(" | ")));
+  });
   connect(m_duplicate, &QPushButton::clicked, this, [this] { duplicateRule(); });
   connect(m_delete, &QPushButton::clicked, this, [this] { deleteRule(); });
   connect(m_check, &QPushButton::clicked, this, [this] { checkRules(); });
-  connect(m_viewText, &QPushButton::toggled, this, [this](bool shown) { setTextShown(shown); });
+  connect(m_text, &QPlainTextEdit::textChanged, this, [this] {
+    if (m_settingText) {
+      return;
+    }
+    m_textDirty = true;
+    if (!m_text->extraSelections().isEmpty()) {
+      m_text->setExtraSelections({});
+    }
+  });
   connect(m_list, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) {
     if (m_building) {
       return;
@@ -225,17 +301,23 @@ void RulesPage::refresh() {
   m_table = answer.value(QStringLiteral("configurations")).toObject();
   m_problems = strings(answer.value(QStringLiteral("problems")));
   const QStringList options = strings(m_table.value(QStringLiteral("options")));
+  m_infos = m_source.configure ? optionInfos(m_source.configure()) : std::vector<OptionInfo>();
   QStringList numbers;
-  if (m_source.configure) {
-    const QJsonArray reports = m_source.configure().value(QStringLiteral("options")).toArray();
-    for (const QJsonValue& report : reports) {
-      const QJsonObject option = report.toObject();
-      if (option.value(QStringLiteral("kind")).toString() == QLatin1String("number")) {
-        numbers << option.value(QStringLiteral("name")).toString();
-      }
+  for (const OptionInfo& info : m_infos) {
+    if (!info.text) {
+      numbers << info.name;
     }
   }
   m_canvas->setOptions(options, numbers);
+  m_canvas->setOptionInfos(m_infos);
+  m_text->setPlaceholderText(exampleRuleText(m_infos).join(QLatin1Char('\n')));
+  // A closed table allows only its rows: rules are not needed (mitcad#966).
+  const bool closed = m_table.value(QStringLiteral("closed")).toBool();
+  if (m_closedNote->isHidden() == closed) {
+    m_closedNote->setVisible(closed);
+    qDebug().noquote() << QStringLiteral("Rules closed note: %1")
+                              .arg(closed ? m_closedNote->text() : QStringLiteral("none"));
+  }
   QStringList parameters;
   if (m_source.parameters.parameters) {
     try {
@@ -251,9 +333,19 @@ void RulesPage::refresh() {
     }
   }
   m_canvas->setParameters(parameters);
+  m_tableName.clear();
+  m_tableColumns.clear();
   if (m_source.tables) {
-    m_canvas->setTables(suggestedTables(m_source.tables()));
+    std::vector<SuggestedTable> tables = suggestedTables(m_source.tables());
+    if (!tables.empty()) {
+      m_tableName = tables.front().name;
+      for (const SuggestedTable::Column& column : tables.front().columns) {
+        m_tableColumns << column.name;
+      }
+    }
+    m_canvas->setTables(std::move(tables));
   }
+  updateAddMenu();
   const QJsonArray rules = m_table.value(QStringLiteral("rules")).toArray();
   // Nothing to show anew (the window refreshes the page after every change
   // of the design): an open editor of a name or a block stays open.
@@ -296,7 +388,7 @@ QString RulesPage::problemOf(int index) const {
     if (rule.hasElse && rule.otherwise.empty()) {
       return QStringLiteral("Not saved: its else has no action");
     }
-    return QStringLiteral("Not saved: fill its empty sockets");
+    return QStringLiteral("Not saved yet: fill its dashed places");
   }
   if (!m_drafts.empty() && !m_refusal.isEmpty() && (m_refusal.contains(rule.name) || index == m_current)) {
     return QStringLiteral("Not saved: %1").arg(m_refusal);
@@ -347,6 +439,16 @@ void RulesPage::fillList() {
   }
   m_duplicate->setEnabled(m_current >= 0);
   m_delete->setEnabled(m_current >= 0);
+  // The empty state (mitcad#967): the canvas says what a rule is.
+  const bool none = m_rules.empty();
+  m_canvas->setHint(QString::fromUtf8(none ? kNoRules : kChoose));
+  const QString empty = none ? QString::fromUtf8(kNoRules) : QString();
+  if (empty != m_loggedEmpty) {
+    m_loggedEmpty = empty;
+    if (none) {
+      qDebug().noquote() << QStringLiteral("Configurations empty Rules: %1").arg(empty);
+    }
+  }
   updateStatus();
   QTimer::singleShot(0, this, [this] { logPlaces(); });
 }
@@ -370,32 +472,54 @@ void RulesPage::updateStatus() {
     }
   }
   QString text;
-  if (!waiting.isEmpty()) {
-    text = QStringLiteral("The rules are saved once every rule is complete: %1.").arg(waiting.join(QStringLiteral(", ")));
+  if (!m_textProblem.isEmpty()) {
+    text = QStringLiteral("Not saved: %1").arg(m_textProblem);
+  } else if (!waiting.isEmpty()) {
+    text = waitingText(waiting);
   } else if (!m_drafts.empty() && !m_refusal.isEmpty()) {
     text = QStringLiteral("Not saved: %1").arg(m_refusal);
   }
   m_status->setText(text);
   m_status->setVisible(!text.isEmpty());
-  if (!m_drafts.empty() && !m_refusal.isEmpty()) {
+  if (!m_textProblem.isEmpty() || (!m_drafts.empty() && !m_refusal.isEmpty())) {
     setErrorStyleSheet(m_status);
   } else {
     setWarningStyleSheet(m_status);
   }
+  if (text != m_loggedStatus) {
+    m_loggedStatus = text;
+    qDebug().noquote() << QStringLiteral("Rules status: %1").arg(text.isEmpty() ? QStringLiteral("none") : text);
+  }
 }
 
 void RulesPage::updateText() {
-  if (!m_text->isVisible() && !m_viewText->isChecked()) {
-    return;
-  }
   QStringList lines;
   QString name;
-  if (m_current >= 0 && m_current < static_cast<int>(m_rules.size())) {
+  const bool shown = m_current >= 0 && m_current < static_cast<int>(m_rules.size());
+  bool empty = false;
+  if (shown) {
     const Rule& rule = m_rules[static_cast<std::size_t>(m_current)];
     lines = ruleText(rule);
     name = rule.name;
+    empty = !rule.hasWhen && rule.then.empty() && !rule.hasElse;
   }
-  m_text->setPlainText(lines.join(QLatin1Char('\n')));
+  // What is being typed stays; anything else shows the rule as it is (an
+  // empty rule as nothing, so that the example lines show).
+  if (!(m_textDirty && m_text->hasFocus())) {
+    const QString text = shown && !empty ? lines.join(QLatin1Char('\n')) : QString();
+    if (m_text->toPlainText() != text) {
+      m_settingText = true;
+      m_text->setPlainText(text);
+      m_settingText = false;
+    }
+    m_textDirty = false;
+    if (!m_textProblem.isEmpty() || !m_text->extraSelections().isEmpty()) {
+      m_textProblem.clear();
+      m_text->setExtraSelections({});
+      updateStatus();
+    }
+  }
+  m_text->setReadOnly(!shown);
   const QString logged = QStringLiteral("Rule as text %1: %2").arg(name, lines.join(QStringLiteral(" / ")));
   if (logged != m_loggedText) {
     m_loggedText = logged;
@@ -403,16 +527,72 @@ void RulesPage::updateText() {
   }
 }
 
-void RulesPage::setTextShown(bool shown) {
-  if (m_viewText->isChecked() != shown) {
-    m_viewText->setChecked(shown); // toggled() comes back here
-    return;
+bool RulesPage::applyText() {
+  if (m_current < 0 || m_current >= static_cast<int>(m_rules.size())) {
+    return false;
   }
-  m_text->setVisible(shown);
-  if (shown) {
-    m_loggedText.clear();
+  const Rule current = m_rules[static_cast<std::size_t>(m_current)];
+  Rule read;
+  TextProblem problem;
+  if (!ruleFromText(m_text->toPlainText(), current, m_infos, &read, &problem)) {
+    m_textProblem = problem.text();
+    markText(problem);
+    qDebug().noquote() << QStringLiteral("Rule text not read: %1").arg(m_textProblem);
+    updateStatus();
+    return false;
+  }
+  m_textProblem.clear();
+  m_textDirty = false;
+  m_text->setExtraSelections({});
+  if (ruleToJson(read) == ruleToJson(current)) {
+    // The same rule (spaces, a line as it was): its text as it prints.
     updateText();
+    updateStatus();
+    return true;
   }
+  std::vector<Rule> changed = m_rules;
+  changed[static_cast<std::size_t>(m_current)] = std::move(read);
+  commit(std::move(changed), QStringLiteral("Edit %1 as text").arg(current.name));
+  return true;
+}
+
+void RulesPage::restoreText() {
+  m_textDirty = false;
+  m_textProblem.clear();
+  m_text->setExtraSelections({});
+  updateText();
+  updateStatus();
+  qDebug().noquote() << QStringLiteral("Rule text restored");
+}
+
+void RulesPage::markText(const TextProblem& problem) {
+  QList<QTextEdit::ExtraSelection> marks;
+  const QTextBlock block = m_text->document()->findBlockByNumber(problem.line - 1);
+  if (block.isValid()) {
+    const QColor error = errorColor(palette());
+    QColor fill = error;
+    fill.setAlpha(40);
+    QTextEdit::ExtraSelection line;
+    line.format.setBackground(fill);
+    line.format.setProperty(QTextFormat::FullWidthSelection, true);
+    line.cursor = QTextCursor(block);
+    marks.append(line);
+    // The place itself, underlined; the caret goes there.
+    const int end = block.length() - 1;
+    const int start = std::min(std::max(problem.column - 1, 0), end);
+    QTextCursor place(block);
+    place.setPosition(block.position() + start);
+    place.setPosition(block.position() + std::min(start + problem.length, end), QTextCursor::KeepAnchor);
+    QTextEdit::ExtraSelection underline;
+    underline.format.setUnderlineStyle(QTextCharFormat::WaveUnderline);
+    underline.format.setUnderlineColor(error);
+    underline.cursor = place;
+    marks.append(underline);
+    QTextCursor caret(block);
+    caret.setPosition(block.position() + start);
+    m_text->setTextCursor(caret);
+  }
+  m_text->setExtraSelections(marks);
 }
 
 QString RulesPage::uniqueName(const QString& base, int first) const {
@@ -432,10 +612,55 @@ QString RulesPage::uniqueName(const QString& base, int first) const {
   }
 }
 
-void RulesPage::addRule() {
-  std::vector<Rule> changed = m_rules;
+QString RulesPage::freeName(const QString& base) const {
+  for (const Rule& rule : m_rules) {
+    if (rule.name == base) {
+      return uniqueName(base, 2);
+    }
+  }
+  return base;
+}
+
+void RulesPage::updateAddMenu() {
+  const std::vector<RuleTemplate> templates = ruleTemplates(m_infos, m_tableName, m_tableColumns);
+  QStringList state;
+  for (const RuleTemplate& entry : templates) {
+    state << QStringLiteral("%1:%2:%3").arg(entry.id, entry.enabled ? entry.lines.join(QLatin1Char('/')) : entry.why);
+  }
+  const QString joined = state.join(QLatin1Char('|'));
+  if (joined == m_menuState) {
+    return;
+  }
+  m_menuState = joined;
+  m_addMenu->clear();
+  for (const RuleTemplate& entry : templates) {
+    if (entry.id == QLatin1String("empty")) {
+      m_addMenu->addSeparator(); // the empty rule apart, last
+    }
+    QAction* action = m_addMenu->addAction(entry.label);
+    action->setObjectName(QStringLiteral("rulesAdd_") + entry.id);
+    action->setData(entry.id);
+    action->setEnabled(entry.enabled);
+    // What it makes, as text; or why it cannot.
+    action->setToolTip(!entry.enabled          ? entry.why
+                       : entry.lines.isEmpty() ? QStringLiteral("A rule with no condition and no action yet")
+                                               : entry.lines.join(QLatin1Char('\n')));
+    const QString id = entry.id;
+    // After the menu has closed: the new rule's name editor keeps the focus.
+    connect(action, &QAction::triggered, this,
+            [this, id] { QTimer::singleShot(0, this, [this, id] { addRule(id); }); });
+  }
+}
+
+bool RulesPage::addRule(const QString& templateId) {
   Rule rule;
-  rule.name = uniqueName(QStringLiteral("Rule"));
+  if (!ruleFromTemplate(templateId, m_infos, m_tableName, m_tableColumns, &rule)) {
+    qDebug().noquote() << QStringLiteral("Rules add %1: not for this design").arg(templateId);
+    return false;
+  }
+  // A template's name says what the rule does; the empty rule is numbered.
+  rule.name = templateId == QLatin1String("empty") ? uniqueName(rule.name) : freeName(rule.name);
+  std::vector<Rule> changed = m_rules;
   changed.push_back(rule);
   m_current = static_cast<int>(changed.size()) - 1;
   const QString name = rule.name;
@@ -447,6 +672,7 @@ void RulesPage::addRule() {
     m_list->editItem(item, 0);
     qDebug().noquote() << QStringLiteral("Rules naming %1").arg(name);
   }
+  return true;
 }
 
 void RulesPage::duplicateRule() {
@@ -638,6 +864,35 @@ void RulesPage::checkRules() {
 }
 
 bool RulesPage::eventFilter(QObject* watched, QEvent* event) {
+  // The text (mitcad#965): Enter reads and saves it, Shift+Enter starts a
+  // new line, Esc restores it while it has changes, and leaving it reads it.
+  if (watched == m_text) {
+    if (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress) {
+      auto* key = static_cast<QKeyEvent*>(event);
+      const bool enter = key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter;
+      const bool escape = key->key() == Qt::Key_Escape && key->modifiers() == Qt::NoModifier &&
+                          (m_textDirty || !m_textProblem.isEmpty());
+      if ((enter && !m_text->isReadOnly()) || escape) {
+        event->accept();
+        if (event->type() == QEvent::KeyPress) {
+          if (escape) {
+            restoreText();
+          } else if (key->modifiers().testFlag(Qt::ShiftModifier)) {
+            QTextCursor cursor = m_text->textCursor();
+            cursor.insertText(QStringLiteral("\n"));
+            m_text->setTextCursor(cursor);
+          } else {
+            applyText();
+          }
+        }
+        return true;
+      }
+    } else if (event->type() == QEvent::FocusOut && m_textDirty &&
+               static_cast<QFocusEvent*>(event)->reason() != Qt::PopupFocusReason) {
+      applyText();
+    }
+    return QWidget::eventFilter(watched, event);
+  }
   if (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress) {
     auto* key = static_cast<QKeyEvent*>(event);
     const bool undoKey = key->matches(QKeySequence::Undo);
@@ -662,7 +917,7 @@ bool RulesPage::eventFilter(QObject* watched, QEvent* event) {
     if (watched == m_list && event->type() == QEvent::KeyPress && !editingIn(m_list) &&
         key->modifiers() == Qt::NoModifier) {
       if (key->key() == Qt::Key_Insert) {
-        addRule();
+        m_add->showMenu(); // the templates, as Add
         return true;
       }
       if (key->key() == Qt::Key_Delete) {
@@ -699,7 +954,7 @@ void RulesPage::logPlaces() {
   const QPoint origin = top->mapToGlobal(QPoint(0, 0));
   QStringList lines;
   const std::pair<const char*, QWidget*> widgets[] = {
-      {"add", m_add}, {"duplicate", m_duplicate}, {"delete", m_delete}, {"text", m_viewText}, {"check", m_check}};
+      {"add", m_add}, {"duplicate", m_duplicate}, {"delete", m_delete}, {"text", m_text}, {"check", m_check}};
   for (const auto& [name, widget] : widgets) {
     const QPoint at = widget->mapToGlobal(widget->rect().center()) - origin;
     lines << QStringLiteral("Rules %1 at %2,%3").arg(QLatin1String(name)).arg(at.x()).arg(at.y());

@@ -1990,6 +1990,8 @@ void SketchController::setHover(const QString& entity) {
   if (entity != m_hover) {
     m_hover = entity;
     m_overlay->update();
+    // Also where the view never paints (Windows session 0, mitcad#946).
+    m_overlay->logHighlights();
   }
 }
 
@@ -2132,6 +2134,9 @@ void SketchController::setPicked(const QStringList& entities) {
 
 void SketchController::refreshView() {
   m_overlay->update();
+  // The selection's highlights (mitcad#946), also where the view never
+  // paints (Windows session 0).
+  m_overlay->logHighlights();
   updateConvertAction();
 }
 

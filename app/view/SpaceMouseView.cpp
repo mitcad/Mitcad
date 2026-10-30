@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // The 3D view's side of a 3D mouse (mitcad#951): OcctViewer's camera moved
 // at each frame by SpaceMouseController's rates (moveSpaceMouseCamera,
-// SpaceMouseCamera.hpp, through the pure spaceMouseMove).
+// SpaceMouseCamera.hpp, through the pure spaceMouseMove) in the 3D mouse's
+// Navigation mode and with its Lock horizon (mitcad#978).
 #include "../OcctViewer.hpp"
 
 #include <algorithm>
@@ -47,12 +48,16 @@ void OcctViewer::endSpaceMouse() {
     // the zoom is the camera's own, its scale before over its scale now.
     const double scale = m_view->Camera()->Scale();
     const double zoom = scale > 0.0 && m_spaceMouseStartScale > 0.0 ? m_spaceMouseStartScale / scale : 1.0;
+    // The mode and the horizon lock it moved in (mitcad#978).
+    const SpaceMouseSettings& settings = m_navigation.spaceMouse;
     qDebug().noquote() << QStringLiteral("3D mouse motion: %1 frame(s), turned %2 degrees, panned %3 view "
-                                         "heights, zoom %4x")
+                                         "heights, zoom %4x, %5 mode%6")
                               .arg(m_spaceMouseFrames)
                               .arg(m_spaceMouseTurned, 0, 'f', 1)
                               .arg(m_spaceMousePanned, 0, 'f', 2)
-                              .arg(zoom, 0, 'f', 2);
+                              .arg(zoom, 0, 'f', 2)
+                              .arg(QLatin1String(spaceMouseModeId(settings.mode)),
+                                   settings.lockHorizon ? QStringLiteral(", horizon locked") : QString());
   }
   m_spaceMouseFrames = 0;
 }
@@ -75,13 +80,16 @@ void OcctViewer::stepSpaceMouse() {
       AbortViewAnimation(); // the device takes over from an animated move
       m_spaceMouseStartScale = camera->Scale();
     }
-    if (m_spaceMouse.turning() && !m_spaceMousePivot) {
+    SpaceMouseStyle style;
+    style.mode = m_navigation.spaceMouse.mode;
+    style.lockHorizon = m_navigation.spaceMouse.lockHorizon; // not the mouse's Constrained orbit (mitcad#978)
+    const bool aboutEye = style.mode == SpaceMouseMode::Fly && !camera->IsOrthographic();
+    if (m_spaceMouse.turning() && !m_spaceMousePivot && !aboutEye) {
       // The orbit's centre, taken as the motion begins, as a mouse orbit
-      // takes it when its drag begins.
+      // takes it when its drag begins (Fly turns about the eye instead).
       m_spaceMousePivot = GravityPoint(m_context, m_view);
     }
-    moveSpaceMouseCamera(*camera, m_spaceMousePivot.value_or(camera->Center()), m_spaceMouse, seconds,
-                         m_navigation.constrainedOrbit);
+    moveSpaceMouseCamera(*camera, m_spaceMousePivot.value_or(camera->Center()), m_spaceMouse, seconds, style);
   } catch (const Standard_Failure& failure) {
     qWarning().noquote() << QStringLiteral("3D mouse motion failed: %1").arg(QString::fromUtf8(failure.what()));
     m_spaceMouse = SpaceMouseRates();
@@ -89,7 +97,7 @@ void OcctViewer::stepSpaceMouse() {
     return;
   }
   const SpaceMouseRates& rates = m_spaceMouse;
-  const double turn = m_navigation.constrainedOrbit ? std::hypot(rates.pitch, rates.yaw)
+  const double turn = m_navigation.spaceMouse.lockHorizon ? std::hypot(rates.pitch, rates.yaw)
                                                     : std::sqrt(rates.pitch * rates.pitch + rates.yaw * rates.yaw +
                                                                 rates.roll * rates.roll);
   ++m_spaceMouseFrames;

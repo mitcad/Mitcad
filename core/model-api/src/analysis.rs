@@ -19,7 +19,7 @@ use mitcad_model::analysis::{
 use mitcad_model::datum::{CurveGeometry, Datum, DatumPlane, OriginDatum, SurfaceGeometry, Vec3};
 use mitcad_model::features::OccurrencePath;
 use mitcad_model::features::geom_ref::GeomRef;
-use mitcad_model::ids::{BodyUid, ComponentUid, FeatureUid};
+use mitcad_model::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use mitcad_model::internal::fingerprint::Fingerprint;
 use mitcad_model::internal::joints::path_component;
 use mitcad_model::kernel::{Kernel, KernelError, Plane};
@@ -78,13 +78,36 @@ pub(super) struct SelectionInput {
     edge: Option<EdgeName>,
     #[serde(default)]
     vertex: Option<VertexName>,
+    /// A construction feature (`F5`) or an origin datum by its id or name
+    /// in any case (`xy`, `XY`, `origin`; mitcad#985).
     #[serde(default)]
     datum: Option<String>,
     /// The occurrence that places the body or datum in the design, a path
-    /// from the root (`"O1/O4"`, mitcad#646); left out, the owner's only
+    /// from the root (`"O1/O4"`, mitcad#646), also by the occurrences'
+    /// names (`"Arm:1/Pin:2"`, mitcad#985); left out, the owner's only
     /// placement (none in the root).
     #[serde(default)]
-    occurrence: Option<OccurrencePath>,
+    occurrence: Option<String>,
+    /// The entity form `ui_state` lists the selection in and `ui_select`
+    /// takes (mitcad#985): `kind` (`face`, `edge`, `vertex`, `body`,
+    /// `plane`, `axis` or `point`), `owner` (the body or the datum) and
+    /// `name` (the face, edge or vertex name; empty otherwise), with
+    /// `occurrence`. In place of `body`, `face`, `edge`, `vertex` and
+    /// `datum`.
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    owner: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    /// What `ui_state` adds to an entity, taken and not used, so that an
+    /// entity can be passed on unchanged.
+    #[serde(default, rename = "geometry")]
+    _geometry: Option<Value>,
+    #[serde(default, rename = "reference")]
+    _reference: Option<Value>,
+    #[serde(default, rename = "text")]
+    _text: Option<Value>,
 }
 
 /// A selection as fields, or as text: a datum (`xy`, `F5`), or a body
@@ -232,6 +255,17 @@ struct ClipTarget {
     body: BodyUid,
     #[serde(default)]
     occurrence: Option<OccurrencePath>,
+    /// The body as the previewed command leaves it (mitcad#943), in place
+    /// of the body at the marker: a feature preview shown cut by Section
+    /// Analysis or Hide Above Sketch.
+    #[serde(default)]
+    preview: bool,
+    /// Where the view places the body in the design (a preview's moved
+    /// occurrence, a body the preview makes): the plane is taken into the
+    /// body's coordinates by this rigid placement instead of by
+    /// `occurrence` (mitcad#943).
+    #[serde(default)]
+    transform: Option<Transform>,
 }
 
 /// A query `analysis` answers as text.
@@ -339,6 +373,13 @@ impl SelectionInput {
         if let Some(datum) = &self.datum {
             return datum.clone();
         }
+        if let Some(kind) = &self.kind {
+            let owner = self.owner.as_deref().unwrap_or_default();
+            return match self.name.as_deref().filter(|name| !name.is_empty()) {
+                Some(name) => format!("{owner} {kind} {name}"),
+                None => format!("{kind} {owner}"),
+            };
+        }
         let body = self.body.map(|b| b.to_string()).unwrap_or_default();
         match (&self.face, &self.edge, &self.vertex) {
             (Some(face), _, _) => format!("{body} face {face}"),
@@ -349,14 +390,26 @@ impl SelectionInput {
     }
 }
 
-/// A selection resolved to a shape in the design's coordinates (placed by
-/// its occurrence, mitcad#646) and a name in it, with its plane, axis,
-/// line or point in the design's coordinates where it has one
-/// (mitcad#647).
+/// A selection resolved to a shape and a name in it, with the motion that
+/// places the shape in the design's coordinates (its occurrence's,
+/// mitcad#646), and its plane, axis, line or point in the design's
+/// coordinates where it has one (mitcad#647).
+///
+/// The shape is the body's own, not a moved copy (mitcad#981): a copy of
+/// a body with thousands of faces (modelled threads) took a large part of
+/// a second for each face the selection card measured, while a face's
+/// area, an edge's length and their circles move with the motion.
+/// [`placed_shape`] moves it where a measurement needs it placed.
 struct Resolved<S> {
     shape: S,
     name: Option<TopoName>,
     element: Option<Element>,
+    /// From the shape's coordinates into the design's; the identity for
+    /// the root's bodies and for datums (made where they are).
+    placed: Transform,
+    /// The occurrence the selection gave, by ids (mitcad#985: a path
+    /// given by names is answered as ids).
+    occurrence: Option<OccurrencePath>,
 }
 
 impl<S> Resolved<S> {
@@ -366,6 +419,83 @@ impl<S> Resolved<S> {
             name: self.name.as_ref(),
         }
     }
+}
+
+/// The resolved shape moved into the design's coordinates: itself when
+/// nothing moves it, else a moved copy of the whole body.
+fn placed_shape<K: Kernel>(
+    kernel: &K,
+    resolved: &Resolved<K::Shape>,
+    what: &str,
+) -> Result<K::Shape, ApiError> {
+    if resolved.placed.is_identity() {
+        return Ok(resolved.shape.clone());
+    }
+    kernel
+        .transform_shape(&resolved.shape, &resolved.placed, None)
+        .map_err(kernel_error(what))
+}
+
+/// One selection measured (mitcad#981): in its body's coordinates, its
+/// point and circle then moved into the design's, when a rigid motion
+/// places it (sizes stay as they are); else on a placed copy.
+fn measure_resolved<K: Kernel>(
+    kernel: &K,
+    resolved: &Resolved<K::Shape>,
+    what: &str,
+) -> Result<Measurement, ApiError> {
+    let t = resolved.placed;
+    if t.is_rigid() {
+        let mut found = kernel
+            .measure(&resolved.selection())
+            .map_err(kernel_error(what))?;
+        if !t.is_identity() {
+            found.point = found.point.map(|p| t.apply_point(p));
+            if let Some(circle) = found.circle.as_mut() {
+                circle.center = t.apply_point(circle.center);
+                circle.axis = t.apply_vector(circle.axis);
+            }
+        }
+        return Ok(found);
+    }
+    let shape = placed_shape(kernel, resolved, what)?;
+    kernel
+        .measure(&Selection {
+            shape: &shape,
+            name: resolved.name.as_ref(),
+        })
+        .map_err(kernel_error(what))
+}
+
+/// Two selections in one frame, to measure between them (mitcad#981):
+/// their bodies' own shapes when one rigid motion places both (two faces
+/// of one body or occurrence), with that motion to move the points found
+/// into the design's coordinates; else each placed in the design, with
+/// the identity.
+fn common_frame<K: Kernel>(
+    kernel: &K,
+    a: &Resolved<K::Shape>,
+    b: &Resolved<K::Shape>,
+    what: &str,
+) -> Result<(K::Shape, K::Shape, Transform), ApiError> {
+    if a.placed == b.placed && a.placed.is_rigid() {
+        return Ok((a.shape.clone(), b.shape.clone(), a.placed));
+    }
+    Ok((
+        placed_shape(kernel, a, what)?,
+        placed_shape(kernel, b, what)?,
+        Transform::IDENTITY,
+    ))
+}
+
+/// What the kernel found between two selections in a common frame, moved
+/// into the design's coordinates by `t` (distances and angles stay).
+fn moved_separation(mut found: Separation, t: &Transform) -> Separation {
+    if !t.is_identity() {
+        found.on_a = t.apply_point(found.on_a);
+        found.on_b = t.apply_point(found.on_b);
+    }
+    found
 }
 
 /// What [`Document::measure_picks`] finds for a measurement object
@@ -450,8 +580,27 @@ fn selection_arg(pick: &MeasurePick) -> SelectionArg {
         edge: pick.edge.clone(),
         vertex: pick.vertex.clone(),
         datum: pick.datum.clone(),
-        occurrence: pick.occurrence.clone(),
+        occurrence: pick.occurrence.as_ref().map(ToString::to_string),
+        ..SelectionInput::default()
     }))
+}
+
+/// How many placements or occurrences an error lists at most
+/// (mitcad#985).
+const LISTED: usize = 10;
+
+/// An origin datum by its id or its name, in any case (`xy`, `XY`, `x`,
+/// `Origin`; mitcad#985).
+fn origin_datum(id: &str) -> Option<OriginDatum> {
+    let id = id.trim();
+    OriginDatum::ALL
+        .into_iter()
+        .find(|origin| origin.id().eq_ignore_ascii_case(id))
+}
+
+/// Two names the same but for case.
+fn same_name(a: &str, b: &str) -> bool {
+    a == b || a.to_lowercase() == b.to_lowercase()
 }
 
 /// A document's analyses for the application: Section Analysis and its
@@ -877,29 +1026,33 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
     }
 
     fn measure_json(&self, query: &MeasureQuery) -> Result<Value, ApiError> {
+        let kernel = self.kernel();
         let a = self.resolve_selection(&query.a)?;
         let mut value = json!({
-            "a": measurement_json(
-                &self.kernel().measure(&a.selection()).map_err(kernel_error(&query.a.describe()))?
-            ),
+            "a": measurement_json(&measure_resolved(kernel, &a, &query.a.describe())?),
         });
         add_axis_json(&mut value["a"], a.element.as_ref());
         add_plane_json(&mut value["a"], a.element.as_ref());
+        add_occurrence_json(&mut value["a"], a.occurrence.as_ref());
         if let Some(b_input) = &query.b {
             let b = self.resolve_selection(b_input)?;
-            value["b"] = measurement_json(
-                &self
-                    .kernel()
-                    .measure(&b.selection())
-                    .map_err(kernel_error(&b_input.describe()))?,
-            );
+            value["b"] = measurement_json(&measure_resolved(kernel, &b, &b_input.describe())?);
             add_axis_json(&mut value["b"], b.element.as_ref());
             add_plane_json(&mut value["b"], b.element.as_ref());
-            let between = self
-                .kernel()
-                .measure_between(&a.selection(), &b.selection())
+            add_occurrence_json(&mut value["b"], b.occurrence.as_ref());
+            let (shape_a, shape_b, placed) = common_frame(kernel, &a, &b, "measure")?;
+            let in_frame_a = Selection {
+                shape: &shape_a,
+                name: a.name.as_ref(),
+            };
+            let in_frame_b = Selection {
+                shape: &shape_b,
+                name: b.name.as_ref(),
+            };
+            let between = kernel
+                .measure_between(&in_frame_a, &in_frame_b)
                 .map_err(kernel_error("measure"))?;
-            value["between"] = separation_json(&between);
+            value["between"] = separation_json(&moved_separation(between, &placed));
             if query.face_range {
                 if value["a"]["kind"] != "face" || value["b"]["kind"] != "face" {
                     return Err(ApiError("face_range needs two faces".into()));
@@ -907,8 +1060,8 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
                 // A failure to compute the optional maximum must not discard
                 // the exact minimum, nor return an old maximum to the caller.
                 value["between"]["maximum_distance"] = json!(
-                    self.kernel()
-                        .maximum_face_gap(&a.selection(), &b.selection())
+                    kernel
+                        .maximum_face_gap(&in_frame_a, &in_frame_b)
                         .ok()
                         .flatten()
                 );
@@ -1083,8 +1236,35 @@ trait AnalysisLocal<K: Kernel> {
     /// The bodies asked for, or all at the marker; each must exist there.
     fn chosen_bodies(&self, uids: &[BodyUid]) -> Result<Vec<BodyView<'_, K::Shape>>, ApiError>;
 
-    /// The fields of a selection given as text.
+    /// The fields of a selection given as text, or in the entity form
+    /// (mitcad#985).
     fn selection_fields(&self, arg: &SelectionArg) -> Result<SelectionInput, ApiError>;
+
+    /// A body by its uid (`F2.b0`) or its name at the marker.
+    fn body_by_text(&self, text: &str) -> Result<BodyUid, ApiError>;
+
+    /// The fields of a selection given in the entity form `ui_state` lists
+    /// (`kind`, `owner`, `name`, `occurrence`; mitcad#985); the selection
+    /// itself when given as fields.
+    fn entity_fields(&self, input: &SelectionInput) -> Result<SelectionInput, ApiError>;
+
+    /// An occurrence path from the root by occurrence ids (`O1/O4`), by
+    /// the occurrences' names as the `components` query gives them
+    /// (`Arm:1/Pin:2`), or both mixed (mitcad#985); `""` is the root. Ids
+    /// alone are taken as they are (`selection_transform` checks them); a
+    /// name that matches no occurrence where the path has got to, or
+    /// several, is refused with the occurrences there. A name matches in
+    /// any case, and a component's name alone matches its only occurrence
+    /// there.
+    fn occurrence_path(&self, text: &str) -> Result<OccurrencePath, ApiError>;
+
+    /// Paths from the root for an error (mitcad#985): `O1/O4 (Arm:1/Pin:2)`
+    /// each, at most [`LISTED`], then how many more.
+    fn placements_text(&self, paths: &[Vec<OccurrenceUid>]) -> String;
+
+    /// Where `what` of the component `owner` is placed, for an error
+    /// (mitcad#985).
+    fn placed_at(&self, owner: ComponentUid, what: &str) -> String;
 
     /// The transform of a selection's owner into the design (mitcad#646):
     /// that of the occurrence given (which must place `owner`), else of the
@@ -1097,9 +1277,10 @@ trait AnalysisLocal<K: Kernel> {
         what: &str,
     ) -> Result<Transform, ApiError>;
 
-    /// A selection in the design's coordinates (mitcad#646): a body's shape
-    /// moved by its occurrence's transform, a datum moved likewise, with
-    /// its plane, axis, line or point (mitcad#647).
+    /// A selection placed in the design (mitcad#646): a body's shape with
+    /// its occurrence's transform (not applied: [`Resolved::placed`],
+    /// mitcad#981), a datum moved, with its plane, axis, line or point in
+    /// the design's coordinates (mitcad#647).
     fn resolve_selection(&self, arg: &SelectionArg) -> Result<Resolved<K::Shape>, ApiError>;
 
     /// The plane, axis, line or point of a face, edge or vertex for Measure
@@ -1159,14 +1340,19 @@ trait AnalysisLocal<K: Kernel> {
 
 impl<K: Kernel> AnalysisLocal<K> for Document<K> {
     fn datum_by_id(&self, id: &str) -> Result<(String, String, Datum), ApiError> {
-        if let Some(origin) = OriginDatum::parse(id) {
+        if let Some(origin) = origin_datum(id) {
             return Ok((
                 origin.id().to_owned(),
                 origin.display_name().to_owned(),
                 origin.datum(),
             ));
         }
-        let uid: FeatureUid = id.parse().map_err(|e| ApiError(format!("{e}")))?;
+        let uid: FeatureUid = id.trim().parse().map_err(|_| {
+            ApiError(format!(
+                "invalid datum '{id}': a construction feature (\"F5\") or an origin datum \
+                 (\"xy\", \"xz\", \"yz\", \"x\", \"y\", \"z\", \"origin\")"
+            ))
+        })?;
         let entry = self
             .feature(uid)
             .ok_or_else(|| ApiError(format!("feature {uid} does not exist")))?;
@@ -1196,10 +1382,10 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
 
     fn selection_fields(&self, arg: &SelectionArg) -> Result<SelectionInput, ApiError> {
         let text = match arg {
-            SelectionArg::Fields(fields) => return Ok(SelectionInput::clone(fields)),
+            SelectionArg::Fields(fields) => return self.entity_fields(fields),
             SelectionArg::Text(text) => text,
         };
-        if OriginDatum::parse(text).is_some() || text.parse::<FeatureUid>().is_ok() {
+        if origin_datum(text).is_some() || text.trim().parse::<FeatureUid>().is_ok() {
             return Ok(SelectionInput {
                 datum: Some(text.clone()),
                 ..SelectionInput::default()
@@ -1209,19 +1395,8 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
             Some((body, name)) => (body, Some(name)),
             None => (text.as_str(), None),
         };
-        let uid = match body.parse::<BodyUid>() {
-            Ok(uid) => uid,
-            Err(_) => self
-                .bodies()
-                .iter()
-                .find(|b| b.name == body)
-                .map(|b| b.uid)
-                .ok_or_else(|| {
-                    ApiError(format!("there is no body '{body}' at the timeline marker"))
-                })?,
-        };
         let mut fields = SelectionInput {
-            body: Some(uid),
+            body: Some(self.body_by_text(body)?),
             ..SelectionInput::default()
         };
         match name.map(str::parse::<TopoName>).transpose() {
@@ -1234,6 +1409,216 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
         Ok(fields)
     }
 
+    fn body_by_text(&self, text: &str) -> Result<BodyUid, ApiError> {
+        let text = text.trim();
+        match text.parse::<BodyUid>() {
+            Ok(uid) => Ok(uid),
+            Err(_) => self
+                .bodies()
+                .iter()
+                .find(|b| b.name == text)
+                .map(|b| b.uid)
+                .ok_or_else(|| {
+                    ApiError(format!("there is no body '{text}' at the timeline marker"))
+                }),
+        }
+    }
+
+    fn entity_fields(&self, input: &SelectionInput) -> Result<SelectionInput, ApiError> {
+        let Some(kind) = input.kind.as_deref().map(str::trim) else {
+            if input.owner.is_some() || input.name.is_some() {
+                return Err(ApiError(
+                    "a selection's \"owner\" and \"name\" go with its \"kind\" (the entity \
+                     form ui_state lists)"
+                        .to_owned(),
+                ));
+            }
+            return Ok(input.clone());
+        };
+        if input.body.is_some()
+            || input.face.is_some()
+            || input.edge.is_some()
+            || input.vertex.is_some()
+            || input.datum.is_some()
+        {
+            return Err(ApiError(
+                "a selection is an entity (\"kind\", \"owner\", \"name\", \"occurrence\") or \
+                 fields (\"body\" with \"face\", \"edge\" or \"vertex\", or \"datum\", with \
+                 \"occurrence\"), not both"
+                    .to_owned(),
+            ));
+        }
+        let owner = input
+            .owner
+            .as_deref()
+            .map(str::trim)
+            .filter(|owner| !owner.is_empty())
+            .ok_or_else(|| ApiError(format!("the {kind} entity has no \"owner\"")))?;
+        let name = input.name.as_deref().map(str::trim).unwrap_or_default();
+        let mut fields = SelectionInput {
+            occurrence: input.occurrence.clone(),
+            ..SelectionInput::default()
+        };
+        match kind {
+            "face" | "edge" | "vertex" => {
+                fields.body = Some(self.body_by_text(owner)?);
+                let wrong = || {
+                    ApiError(format!(
+                        "the {kind} entity's \"name\" '{name}' is no {kind} name of body {owner}"
+                    ))
+                };
+                match (kind, name.parse::<TopoName>().map_err(|_| wrong())?) {
+                    ("face", TopoName::Face(face)) => fields.face = Some(face),
+                    ("edge", TopoName::Edge(edge)) => fields.edge = Some(edge),
+                    ("vertex", TopoName::Vertex(vertex)) => fields.vertex = Some(vertex),
+                    _ => return Err(wrong()),
+                }
+            }
+            "body" | "plane" | "axis" | "point" if !name.is_empty() => {
+                return Err(ApiError(format!(
+                    "a {kind} entity has an empty \"name\", not '{name}'"
+                )));
+            }
+            "body" => fields.body = Some(self.body_by_text(owner)?),
+            "plane" | "axis" | "point" => fields.datum = Some(owner.to_owned()),
+            other => {
+                return Err(ApiError(format!(
+                    "a {other} entity cannot be measured: a selection is a face, edge, vertex, \
+                     body, plane, axis or point"
+                )));
+            }
+        }
+        Ok(fields)
+    }
+
+    fn occurrence_path(&self, text: &str) -> Result<OccurrencePath, ApiError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(OccurrencePath::default());
+        }
+        let parts: Vec<&str> = text.split('/').map(str::trim).collect();
+        if let Ok(ids) = parts
+            .iter()
+            .map(|part| part.parse::<OccurrenceUid>())
+            .collect::<Result<Vec<_>, _>>()
+        {
+            return Ok(OccurrencePath(ids));
+        }
+        let assembly = self.assembly();
+        let mut parent = ComponentUid::ROOT;
+        let mut path: Vec<OccurrenceUid> = Vec::new();
+        for part in parts {
+            let children: Vec<(OccurrenceUid, ComponentUid)> = assembly
+                .children(parent)
+                .map(|o| (o.uid, o.component))
+                .collect();
+            let matching = |same: &dyn Fn(OccurrenceUid, ComponentUid) -> bool| {
+                children
+                    .iter()
+                    .copied()
+                    .filter(|(uid, component)| same(*uid, *component))
+                    .collect::<Vec<_>>()
+            };
+            let mut found = matching(&|uid: OccurrenceUid, _: ComponentUid| {
+                uid.to_string() == part || assembly.occurrence_name(uid) == part
+            });
+            if found.is_empty() {
+                found = matching(&|uid: OccurrenceUid, _: ComponentUid| {
+                    same_name(&assembly.occurrence_name(uid), part)
+                });
+            }
+            if found.is_empty() {
+                // A component's name alone: its only occurrence there.
+                found = matching(&|_: OccurrenceUid, component: ComponentUid| {
+                    same_name(&assembly.name(component), part)
+                });
+            }
+            let listed = |among: &[(OccurrenceUid, ComponentUid)]| {
+                let paths: Vec<Vec<OccurrenceUid>> = among
+                    .iter()
+                    .map(|(uid, _)| {
+                        let mut full = path.clone();
+                        full.push(*uid);
+                        full
+                    })
+                    .collect();
+                self.placements_text(&paths)
+            };
+            match found.as_slice() {
+                [(uid, component)] => {
+                    path.push(*uid);
+                    parent = *component;
+                }
+                [] if children.is_empty() => {
+                    return Err(ApiError(format!(
+                        "invalid occurrence path '{text}': there is no occurrence '{part}', \
+                         {} places no occurrences",
+                        assembly.name(parent)
+                    )));
+                }
+                [] => {
+                    return Err(ApiError(format!(
+                        "invalid occurrence path '{text}': there is no occurrence '{part}' in \
+                         {}; its occurrences are {}",
+                        assembly.name(parent),
+                        listed(&children)
+                    )));
+                }
+                several => {
+                    return Err(ApiError(format!(
+                        "invalid occurrence path '{text}': '{part}' in {} is any of {}; give \
+                         one by its name or id",
+                        assembly.name(parent),
+                        listed(several)
+                    )));
+                }
+            }
+        }
+        Ok(OccurrencePath(path))
+    }
+
+    fn placements_text(&self, paths: &[Vec<OccurrenceUid>]) -> String {
+        let assembly = self.assembly();
+        let listed: Vec<String> = paths
+            .iter()
+            .take(LISTED)
+            .map(|path| {
+                if path.is_empty() {
+                    "\"\" (the root)".to_owned()
+                } else {
+                    format!(
+                        "{} ({})",
+                        OccurrencePath(path.clone()),
+                        assembly.path_name(path)
+                    )
+                }
+            })
+            .collect();
+        let text = listed.join(", ");
+        if paths.len() > LISTED {
+            format!(
+                "{text}, … and {} more; the instances query lists them",
+                paths.len() - LISTED
+            )
+        } else {
+            text
+        }
+    }
+
+    fn placed_at(&self, owner: ComponentUid, what: &str) -> String {
+        if owner.is_root() {
+            return format!("{what} is in the root: give no occurrence, or \"\"");
+        }
+        let paths = self.assembly().paths_to(owner);
+        if paths.is_empty() {
+            return format!(
+                "{what} is in {}, which is placed nowhere in the design",
+                self.assembly().name(owner)
+            );
+        }
+        format!("{what} is placed at {}", self.placements_text(&paths))
+    }
+
     fn selection_transform(
         &self,
         owner: Option<ComponentUid>,
@@ -1241,14 +1626,20 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
         what: &str,
     ) -> Result<Transform, ApiError> {
         if let Some(path) = occurrence {
-            let component =
-                path_component(self.assembly(), ComponentUid::ROOT, &path.0).map_err(ApiError)?;
-            if owner.is_some_and(|owner| owner != component) {
-                return Err(ApiError(format!(
-                    "occurrence '{path}' does not place {what}"
-                )));
-            }
-            return Ok(self.path_transform(&path.0));
+            // A path that does not exist, runs through the wrong parent or
+            // ends elsewhere: the error names where the owner is placed
+            // (mitcad#985).
+            let wrong = match path_component(self.assembly(), ComponentUid::ROOT, &path.0) {
+                Ok(component) if owner.is_none_or(|owner| owner == component) => {
+                    return Ok(self.path_transform(&path.0));
+                }
+                Ok(_) => format!("occurrence '{path}' does not place {what}"),
+                Err(e) => e,
+            };
+            return Err(ApiError(match owner {
+                Some(owner) => format!("{wrong}; {}", self.placed_at(owner, what)),
+                None => format!("{wrong}; the components query lists the occurrences"),
+            }));
         }
         let Some(owner) = owner.filter(|owner| !owner.is_root()) else {
             return Ok(Transform::IDENTITY);
@@ -1257,14 +1648,21 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
             [] => Ok(Transform::IDENTITY),
             [path] => Ok(self.path_transform(path)),
             paths => Err(ApiError(format!(
-                "{what} is in a component placed {} times: give the occurrence to measure it in",
-                paths.len()
+                "{what} is in a component placed {} times: {}; give one as occurrence",
+                paths.len(),
+                self.placements_text(paths)
             ))),
         }
     }
 
     fn resolve_selection(&self, arg: &SelectionArg) -> Result<Resolved<K::Shape>, ApiError> {
         let input = &self.selection_fields(arg)?;
+        // By ids or names (mitcad#985); answered as ids.
+        let occurrence = input
+            .occurrence
+            .as_deref()
+            .map(|text| self.occurrence_path(text))
+            .transpose()?;
         let names = [
             input.face.as_ref().map(|f| TopoName::Face(f.clone())),
             input.edge.as_ref().map(|e| TopoName::Edge(e.clone())),
@@ -1283,12 +1681,12 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
                 // A construction feature's datum is in its component's
                 // coordinates; an origin datum in the occurrence's given.
                 let owner = id
+                    .trim()
                     .parse::<FeatureUid>()
                     .ok()
                     .and_then(|uid| self.feature(uid))
                     .map(|entry| entry.component);
-                let transform =
-                    self.selection_transform(owner, input.occurrence.as_ref(), &label)?;
+                let transform = self.selection_transform(owner, occurrence.as_ref(), &label)?;
                 let datum = moved_datum(&datum, &transform);
                 let shape = self
                     .kernel()
@@ -1306,13 +1704,15 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
                     shape,
                     name: None,
                     element,
+                    placed: Transform::IDENTITY,
+                    occurrence,
                 })
             }
             (None, Some(body)) => {
                 let local = self.require_body(body)?;
                 let transform = self.selection_transform(
                     self.body_component(body),
-                    input.occurrence.as_ref(),
+                    occurrence.as_ref(),
                     &format!("body {body}"),
                 )?;
                 // The pick's plane, axis, line or point in its body's
@@ -1321,22 +1721,20 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
                     .as_ref()
                     .and_then(|name| self.measure_element(local, name))
                     .and_then(|element| moved_element(&element, &transform));
-                let shape = if transform.is_identity() {
-                    local.clone()
-                } else {
-                    self.kernel()
-                        .transform_shape(local, &transform, None)
-                        .map_err(kernel_error(&input.describe()))?
-                };
+                // The body itself, placed only where a measurement needs it
+                // (placed_shape, mitcad#981).
                 Ok(Resolved {
-                    shape,
+                    shape: local.clone(),
                     name,
                     element,
+                    placed: transform,
+                    occurrence,
                 })
             }
             _ => Err(ApiError(
                 "a selection is {\"body\": ...} with an optional \"face\", \"edge\" or \
-                 \"vertex\", or {\"datum\": ...}"
+                 \"vertex\", or {\"datum\": ...}, each with an optional \"occurrence\", or an \
+                 entity as ui_state lists it ({\"kind\", \"owner\", \"name\", \"occurrence\"})"
                     .to_owned(),
             )),
         }
@@ -1426,11 +1824,9 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
     ) -> Result<MeasuredPicks, ApiError> {
         let a_arg = selection_arg(a);
         let ra = self.resolve_selection(&a_arg)?;
+        let kernel = self.kernel();
         let Some(b) = b else {
-            let single = self
-                .kernel()
-                .measure(&ra.selection())
-                .map_err(kernel_error(&a_arg.describe()))?;
+            let single = measure_resolved(kernel, &ra, &a_arg.describe())?;
             let (extent, faces) = self.pick_surroundings(&[a]);
             return Ok(MeasuredPicks {
                 single: Some(single),
@@ -1442,10 +1838,20 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
             });
         };
         let rb = self.resolve_selection(&selection_arg(b))?;
-        let between = self
-            .kernel()
-            .measure_between(&ra.selection(), &rb.selection())
+        let (shape_a, shape_b, placed) = common_frame(kernel, &ra, &rb, "measure")?;
+        let between = kernel
+            .measure_between(
+                &Selection {
+                    shape: &shape_a,
+                    name: ra.name.as_ref(),
+                },
+                &Selection {
+                    shape: &shape_b,
+                    name: rb.name.as_ref(),
+                },
+            )
             .map_err(kernel_error("measure"))?;
+        let between = moved_separation(between, &placed);
         let (extent, faces) = self.pick_surroundings(&[a, b]);
         Ok(MeasuredPicks {
             single: None,
@@ -1572,10 +1978,18 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
         let Some(path) = occurrence else {
             return self.plane_of(input);
         };
-        let owner =
-            path_component(self.assembly(), ComponentUid::ROOT, &path.0).map_err(ApiError)?;
+        // As a selection's occurrence, the error names where the body is
+        // placed (mitcad#985).
+        let placed = |wrong: String| match self.body_component(body) {
+            Some(component) => ApiError(format!(
+                "{wrong}; {}",
+                self.placed_at(component, &format!("body {body}"))
+            )),
+            None => ApiError(wrong),
+        };
+        let owner = path_component(self.assembly(), ComponentUid::ROOT, &path.0).map_err(placed)?;
         if self.body_component(body) != Some(owner) {
-            return Err(ApiError(format!(
+            return Err(placed(format!(
                 "occurrence {path} does not own body {body}"
             )));
         }
@@ -1678,15 +2092,35 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
         let mut items: Vec<Result<ClipInput<K>, ApiError>> = request
             .bodies
             .iter()
-            .map(|target| {
-                self.analysis_body_plane(&request.plane, target.body, target.occurrence.as_ref())
-                    .and_then(|plane| {
-                        self.require_body(target.body).map(|shape| ClipInput {
-                            shape: shape.clone(),
-                            plane,
-                            detached: false,
-                        })
-                    })
+            .map(|target| -> Result<ClipInput<K>, ApiError> {
+                let plane = match &target.transform {
+                    Some(placement) => {
+                        let plane = self.plane_of(&request.plane)?;
+                        let inverse = mitcad_model::assembly::inverse(placement);
+                        DatumPlane {
+                            origin: inverse.apply_point(plane.origin),
+                            x_axis: inverse.apply_vector(plane.x_axis),
+                            y_axis: inverse.apply_vector(plane.y_axis),
+                        }
+                    }
+                    None => self.analysis_body_plane(
+                        &request.plane,
+                        target.body,
+                        target.occurrence.as_ref(),
+                    )?,
+                };
+                let shape = if target.preview {
+                    self.preview_body(target.body).ok_or_else(|| {
+                        ApiError(format!("body {} is not in the preview", target.body))
+                    })?
+                } else {
+                    self.require_body(target.body)?
+                };
+                Ok(ClipInput {
+                    shape: shape.clone(),
+                    plane,
+                    detached: false,
+                })
             })
             .collect();
         if detach {
@@ -2002,6 +2436,14 @@ fn add_plane_json(value: &mut Value, element: Option<&Element>) {
         // + 0.0 turns -0.0 into 0.0.
         let v = |v: &Vec3| v.map(|x| x + 0.0);
         value["plane"] = json!({"origin": v(origin), "normal": v(normal)});
+    }
+}
+
+/// The occurrence a selection gave, as ids (mitcad#985): a path given by
+/// names is answered resolved.
+fn add_occurrence_json(value: &mut Value, occurrence: Option<&OccurrencePath>) {
+    if let Some(path) = occurrence {
+        value["occurrence"] = json!(path);
     }
 }
 

@@ -7,6 +7,7 @@
 #include "NativeNavigationGuide.hpp"
 #include "NativeLayout.hpp"
 #include "../NativeDialogs.hpp"
+#include "../NativeStructure.hpp"
 #include "NativeControls.hpp"
 #include "NativeColorField.hpp"
 
@@ -39,6 +40,7 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFont>
+#include <QFontMetrics>
 #include <QFocusEvent>
 #include <QFrame>
 #include <QGridLayout>
@@ -234,6 +236,9 @@ class NativeMenuPopup;
 @property(nonatomic) BOOL pointerTracking;
 @end
 @interface MitcadNativePopup : NSPopUpButton
+// The shared combo's placeholderText, drawn while no item is selected
+// (mitcad#976), as a QComboBox shows it at currentIndex -1.
+@property(nonatomic, copy) NSString* placeholderString;
 @end
 
 @interface MitcadNativeActionButton : NSButton
@@ -248,11 +253,17 @@ class NativeMenuPopup;
 - (void)sync;
 @end
 
+@interface MitcadNativePaneCell : NSButtonCell
+@end
+
 @interface MitcadNativePaneButton : NSButton
 @property(nonatomic) BOOL chosen;
 @end
 
 @interface MitcadNativeCompletionTable : NSTableView
+- (QListWidget*)sharedList;
+- (NSInteger)presenterSelectedRows;
+- (NSInteger)presenterSelectedRow;
 @end
 
 @interface MitcadNativeTextView : NSTextView <NSTableViewDataSource, NSTableViewDelegate> {
@@ -397,6 +408,15 @@ NSTextField* label(const QString& text, bool interpretRichText = true) {
   [result setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
   return result;
+}
+// One scrolling line, as Qt's line edit and spin box editor. A text field
+// made in code wraps: a narrow one moved a spin box's unit suffix (" mm")
+// and a line edit's trailing words onto an unseen second line (mitcad#975,
+// mitcad#982).
+void singleScrollingLine(NSTextField* field) {
+  field.usesSingleLineMode = YES;
+  field.cell.wraps = NO;
+  field.cell.scrollable = YES;
 }
 NSFont* labelFont(const QFont& font, const QFont& reference) {
   CGFloat size = NSFont.systemFontSize;
@@ -554,7 +574,12 @@ public:
     if (source->property("nativeCompactPanel").toBool()) m_root.distribution = NSStackViewDistributionFill;
     m_root.accessibilityIdentifier = ns(compact ? QStringLiteral("native.cell.") + source->objectName()
                                                : source->objectName());
-    connect(source, &QObject::destroyed, this, [this] { m_root.hidden = YES; });
+    connect(source, &QObject::destroyed, this, [this] {
+      // Hiding ends AppKit field editing. The presenter is already being
+      // destroyed: retire its callbacks before that can emit editingFinished.
+      retire();
+      m_root.hidden = YES;
+    });
     m_refreshTimer.setSingleShot(true);
     connect(&m_refreshTimer, &QTimer::timeout, this, [this] { refreshPresenters(); });
     rebuild();
@@ -565,11 +590,13 @@ public:
     connect(&m_timer, &QTimer::timeout, this, [this] { checkModelPresentation(); refreshPresenters(); });
     m_timer.start();
   }
-  ~AppKitWidgetView() override {
+  ~AppKitWidgetView() override { retire(); }
+  void retire() {
     m_timer.stop();
     m_refreshTimer.stop();
     m_target->owner = nullptr;
     for (MitcadNativeModelCell* cell in m_cells) { cell->owner = nullptr; }
+    for (auto& embedded : m_cellViews) { embedded.second->retire(); }
     detachBindings();
   }
   void detachBindings() {
@@ -739,7 +766,9 @@ public:
   }
   // The presenter widgets this view shows. Child windows (context menus,
   // message boxes) never are: their coming and going must not replace the
-  // native controls and their keyboard focus (mitcad#816).
+  // native controls and their keyboard focus (mitcad#816). A scroll area's
+  // own children come as a set: an item view's header, viewport and scroll
+  // bar containers changing places is no change (mitcad#986).
   QList<QWidget*> structureWidgets() const {
     QList<QWidget*> widgets = m_source->findChildren<QWidget*>();
     const QWidget* window = m_source->window();
@@ -750,7 +779,7 @@ public:
       }
       return false;
     });
-    return widgets;
+    return nativeStructureOrder(m_source, widgets);
   }
   void refreshPresenters() {
     if (m_source == nullptr || m_refreshing) {
@@ -769,6 +798,11 @@ public:
         mac::logNativeCellEdit("a presenter structure change waits for the edit", m_root);
       } else {
         m_structureDirty = false;
+        if (changed && !qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT")) {
+          qInfo().noquote() << QStringLiteral("Native presenter structure rebuild: %1 (%2 widgets, was %3)")
+              .arg(m_source->window()->windowTitle()).arg(qlonglong(widgets.size()))
+              .arg(qlonglong(m_widgetTree.size()));
+        }
         if (changed) { rebuild(); }
       }
     }
@@ -806,6 +840,7 @@ public:
           ++g_widgetPropertyWrites;
         }
         if (field.currentEditor == nil) { NATIVE_STRING(field, stringValue, edit->text()); }
+        presentLineText(binding, edit);
       } else if (auto* button = qobject_cast<QAbstractButton*>(widget)) {
         NSButton* native = (NSButton*)binding.control;
         const auto* tool = qobject_cast<QToolButton*>(button);
@@ -888,7 +923,13 @@ public:
             ++g_widgetPropertyWrites;
           } else if (combo->currentIndex() < 0 && native.selectedItem != nil) {
             [native selectItem:nil];
+            native.needsDisplay = YES; // the placeholder replaces the last title
             ++g_widgetPropertyWrites;
+          }
+          // Unset shows the shared placeholder ("Slicer default") without an
+          // item for it: the choices keep their indices (mitcad#976).
+          if ([native isKindOfClass:MitcadNativePopup.class]) {
+            NATIVE_STRING(((MitcadNativePopup*)native), placeholderString, combo->placeholderText());
           }
         }
         binding.items = items;
@@ -975,9 +1016,7 @@ public:
         NATIVE_SET(binding.stepper, autorepeat, YES);
         NATIVE_SET(binding.stepper, doubleValue, spin->value());
         NATIVE_SET(binding.stepper, enabled, spin->isEnabled() && !spin->isReadOnly());
-        NSTextField* field = (NSTextField*)binding.control;
-        NATIVE_SET(field, editable, !spin->isReadOnly());
-        if (field.currentEditor == nil) { NATIVE_STRING(field, stringValue, spin->text()); }
+        presentSpinText(binding, spin);
       } else if (auto* spin = qobject_cast<QDoubleSpinBox*>(widget)) {
         NATIVE_SET(binding.stepper, minValue, spin->minimum());
         NATIVE_SET(binding.stepper, maxValue, spin->maximum());
@@ -986,9 +1025,7 @@ public:
         NATIVE_SET(binding.stepper, autorepeat, YES);
         NATIVE_SET(binding.stepper, doubleValue, spin->value());
         NATIVE_SET(binding.stepper, enabled, spin->isEnabled() && !spin->isReadOnly());
-        NSTextField* field = (NSTextField*)binding.control;
-        NATIVE_SET(field, editable, !spin->isReadOnly());
-        if (field.currentEditor == nil) { NATIVE_STRING(field, stringValue, spin->text()); }
+        presentSpinText(binding, spin);
       } else if (auto* slider = qobject_cast<QSlider*>(widget)) {
         MitcadNativeSlider* native = (MitcadNativeSlider*)binding.control;
         if (native.pointerTracking && native.integerValue != slider->value() &&
@@ -1079,11 +1116,8 @@ public:
     [m_root updateConstraintsForSubtreeIfNeeded];
     for (Binding& binding : m_bindings) { followSharedScroll(binding); }
     m_refreshing = false;
-    for (const Binding& binding : m_bindings) {
-      if ([binding.text isKindOfClass:MitcadNativeTextView.class]) {
-        [(MitcadNativeTextView*)binding.text refreshCompletions];
-      }
-    }
+    // The editor takes the keyboard before its completion list is presented:
+    // the list opens only beside the editor that has it.
     if (m_textFocusRequested) {
       const QPointer<QPlainTextEdit> requested = m_textFocusRequested;
       m_textFocusRequested.clear();
@@ -1092,6 +1126,11 @@ public:
           [binding.text.window makeFirstResponder:binding.text];
           break;
         }
+      }
+    }
+    for (const Binding& binding : m_bindings) {
+      if ([binding.text isKindOfClass:MitcadNativeTextView.class]) {
+        [(MitcadNativeTextView*)binding.text refreshCompletions];
       }
     }
   }
@@ -1228,6 +1267,12 @@ public:
         QMetaObject::invokeMethod(edit, "textEdited", Qt::DirectConnection, Q_ARG(QString, value));
       } else if (edit->hasAcceptableInput()) {
         QMetaObject::invokeMethod(edit, "editingFinished", Qt::DirectConnection);
+        if (alive == nullptr || pointer == nullptr) { return true; }
+        // The shared handler can normalize or reject the committed text.
+        // Refresh normally preserves an active editor, so reflect that
+        // completed validation here, as for spin boxes below.
+        NATIVE_STRING(((NSTextField*)sender), stringValue, edit->text());
+        scheduleRefresh();
       } else { return false; }
     } else if (auto* spin = qobject_cast<QAbstractSpinBox*>(widget)) {
       // Interpret through the presenter's virtual validator/valueFromText
@@ -1238,6 +1283,14 @@ public:
         if (spin->keyboardTracking() || finished) { spin->interpretText(); }
         if (alive == nullptr || pointer == nullptr) { return true; }
         if (finished) { QMetaObject::invokeMethod(spin, "editingFinished", Qt::DirectConnection); }
+        if (alive == nullptr || pointer == nullptr) { return true; }
+        // The finished field shows the presenter's own text with its prefix
+        // and suffix, also when the value did not change and no refresh
+        // follows; Qt reformats its editor the same way (mitcad#975).
+        if (finished) {
+          NATIVE_STRING(((NSTextField*)sender), stringValue, spin->text());
+          scheduleRefresh();
+        }
       }
     } else if (auto* combo = qobject_cast<QComboBox*>(widget)) {
       combo->setEditText(value);
@@ -2146,6 +2199,8 @@ private:
     NSView* view = nil;
     NSControl* control = nil;
     NSStepper* stepper = nil;
+    NSLayoutConstraint* fieldWidth = nil; // a spin box or line edit field's minimum width
+    QString fieldMeasured;                // the shared text fieldWidth last measured
     NSImageView* image = nil;
     NSLayoutConstraint* imageHeight = nil;
     NSProgressIndicator* progress = nil;
@@ -2185,6 +2240,43 @@ private:
   };
   void scheduleRefresh() {
     if (m_source != nullptr && !m_refreshTimer.isActive()) { m_refreshTimer.start(0); }
+  }
+  // The field widens to its own cell's size for the whole text, in its
+  // actual font, bezel and padding, up to limit, and does not narrow again
+  // while the text changes, as Qt's fixed hint.
+  static void widenToText(Binding& binding, const QString& text, CGFloat limit) {
+    if (binding.fieldWidth == nil || binding.fieldMeasured == text) { return; }
+    binding.fieldMeasured = text;
+    NSTextFieldCell* probe = [((NSTextField*)binding.control).cell copy];
+    probe.stringValue = ns(text);
+    CGFloat needed = std::ceil([probe cellSizeForBounds:NSMakeRect(0, 0, CGFLOAT_MAX, CGFLOAT_MAX)].width);
+    needed = std::min(needed, limit);
+    if (needed > binding.fieldWidth.constant) {
+      binding.fieldWidth.constant = needed;
+      ++g_widgetPropertyWrites;
+    }
+  }
+  // A spin box's shared text keeps its prefix and suffix, such as an
+  // option's " mm", whole (mitcad#975).
+  void presentSpinText(Binding& binding, const QAbstractSpinBox* spin) {
+    NSTextField* field = (NSTextField*)binding.control;
+    NATIVE_SET(field, editable, !spin->isReadOnly());
+    const QString text = spin->text();
+    if (field.currentEditor == nil) { NATIVE_STRING(field, stringValue, text); }
+    widenToText(binding, text, CGFLOAT_MAX);
+  }
+  // A line edit's text that fits its presenter's Qt hint stays whole, as
+  // in its Qt field, such as a committed multiword appearance name; AppKit
+  // draws it in its own font and cell insets, which can need a few points
+  // more than the shared 17-character width (mitcad#982). A longer text
+  // keeps the shared width and scrolls on its single line, as in Qt.
+  void presentLineText(Binding& binding, const QLineEdit* edit) {
+    const QString text = edit->text();
+    if (edit->echoMode() != QLineEdit::Normal || text.isEmpty() ||
+        QFontMetrics(edit->font()).horizontalAdvance(text) > edit->sizeHint().width()) {
+      return;
+    }
+    widenToText(binding, text, static_cast<CGFloat>(edit->maximumWidth()));
   }
   void observeModel(Binding& binding, QAbstractItemModel* model, int id) {
     if (binding.model == model) { return; }
@@ -2333,8 +2425,13 @@ private:
     if (!m_source->isWindow() && !m_source->property("nativeLayoutContract").toBool()) {
       return renderStackLayout(layout);
     }
+    // The axis names take the spare width; On and Reverse keep adjacent,
+    // content-sized columns. This native adapter leaves the Qt grid intact.
+    auto* axes = qobject_cast<QGridLayout*>(layout);
+    const bool axisColumns = axes != nullptr && axes->columnCount() == 3 &&
+        axes->parentWidget() != nullptr && axes->parentWidget()->objectName() == QStringLiteral("navigationSpaceMouse");
     return mac::layout::build(layout, [this](QLayoutItem* item) { return renderItem(item); }, false,
-                              m_source->property("nativeResponsiveLayout").toBool());
+                              m_source->property("nativeResponsiveLayout").toBool(), axisColumns);
   }
   NSView* renderStackLayout(QLayout* layout) {
     if (auto* grid = qobject_cast<QGridLayout*>(layout)) {
@@ -2478,11 +2575,18 @@ private:
       NSTextField* field = edit->echoMode() != QLineEdit::Normal
                                ? [[NSSecureTextField alloc] initWithFrame:NSZeroRect]
                                : [[NSTextField alloc] initWithFrame:NSZeroRect];
+      singleScrollingLine(field);
       field.stringValue = ns(edit->text());
       field.delegate = m_target;
       field.editable = !edit->isReadOnly();
       field.placeholderString = ns(edit->placeholderText());
-      bind(widget, field, field);
+      const int id = bind(widget, field, field);
+      Binding& binding = m_bindings[static_cast<std::size_t>(id)];
+      // Below required, as the shared layout's own limits: a window that
+      // cannot widen keeps the field at its width instead of breaking.
+      binding.fieldWidth = [field.widthAnchor constraintGreaterThanOrEqualToConstant:0];
+      binding.fieldWidth.priority = NSLayoutPriorityRequired - 1;
+      binding.fieldWidth.active = YES;
       return field;
     }
     if (auto* edit = qobject_cast<QKeySequenceEdit*>(widget)) {
@@ -2567,14 +2671,17 @@ private:
       NSStackView* row = stack(true);
       NSTextField* field = [[NSTextField alloc] initWithFrame:NSZeroRect];
       field.delegate = m_target;
+      singleScrollingLine(field);
       NSStepper* stepper = [[NSStepper alloc] initWithFrame:NSZeroRect];
       add(row, field);
       add(row, stepper);
       const int id = bind(widget, row, field);
-      m_bindings[static_cast<std::size_t>(id)].stepper = stepper;
+      Binding& binding = m_bindings[static_cast<std::size_t>(id)];
+      binding.stepper = stepper;
       stepper.tag = id;
       target(stepper);
-      [field.widthAnchor constraintGreaterThanOrEqualToConstant:80].active = YES;
+      binding.fieldWidth = [field.widthAnchor constraintGreaterThanOrEqualToConstant:80];
+      binding.fieldWidth.active = YES;
       return row;
     }
     if (auto* slider = qobject_cast<QSlider*>(widget)) {
@@ -2836,6 +2943,7 @@ private:
       [tabs addTabViewItem:item];
       if (panes != nil) {
         MitcadNativePaneButton* button = [[MitcadNativePaneButton alloc] initWithFrame:NSZeroRect];
+        button.cell = [[MitcadNativePaneCell alloc] initTextCell:@""];
         button.bordered = NO;
         button.title = item.label;
         button.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
@@ -2849,7 +2957,7 @@ private:
         button.accessibilityRole = NSAccessibilityRadioButtonRole;
         // Room for the icon and the tint around a short name (PaneButton).
         [button.widthAnchor constraintGreaterThanOrEqualToConstant:64].active = YES;
-        [button.heightAnchor constraintEqualToConstant:52].active = YES;
+        [button.heightAnchor constraintEqualToConstant:58].active = YES;
         [panes addArrangedSubview:button];
       }
     }
@@ -3005,6 +3113,14 @@ private:
         outline.indentationPerLevel = tree->indentation();
       }
       mac::applyNativeColumns(table, view, m_bindings[static_cast<std::size_t>(id)].sections);
+      mac::followNativeColumns(table);
+    }
+    if (qobject_cast<QListView*>(view) != nullptr && count == 1 && !view->property("nativeSourceList").toBool()) {
+      // A one-column list uses its viewport, rather than retaining the
+      // generic initial width after the surrounding form grows.
+      table.columnAutoresizingStyle = NSTableViewNoColumnAutoresizing;
+      table.tableColumns.firstObject.resizingMask = NSTableColumnAutoresizingMask;
+      mac::fitNativeColumns(table);
       mac::followNativeColumns(table);
     }
     if (const QHeaderView* header = mac::nativeHeader(view)) {
@@ -3224,6 +3340,12 @@ private:
     const auto edits = identifier.isEmpty() ? QList<QLineEdit*>() : m_source->findChildren<QLineEdit*>(identifier);
     const QPointer<QLineEdit> keptEdit = edits.size() == 1 ? edits.first() : nullptr;
     const NSRange selection = editor != nil ? editor.selectedRange : NSMakeRange(0, 0);
+    // A multiline editor (Formula Text) keeps the keyboard likewise. Its
+    // presenter already holds the text and selection; the refresh presents
+    // them in the new view and then hands that view the focus (mitcad#984).
+    if ([responder isKindOfClass:MitcadNativeTextView.class] && [(NSView*)responder isDescendantOf:m_root]) {
+      if (auto* text = qobject_cast<QPlainTextEdit*>(textPresenter((NSTextView*)responder))) m_textFocusRequested = text;
+    }
     detachBindings();
     for (MitcadNativeModelCell* cell in m_cells) { cell->owner = nullptr; }
     m_cellViews.clear();
@@ -3319,7 +3441,17 @@ public:
     NSView* view = (__bridge NSView*)m_view->nativeView();
     const QSize requested = widget->size().expandedTo(widget->sizeHint());
     const CGFloat width = std::clamp<CGFloat>(requested.width(), 380, 1000);
-    const CGFloat height = std::clamp<CGFloat>(requested.height(), 140, 740);
+    // Settings keeps the chosen shared pane's natural request. The native
+    // window fitter also measures its body and caps it to the real screen;
+    // a prototype 740pt cap here can discard a pane's last rows (mitcad#992).
+    const bool settings = qobject_cast<SettingsWindow*>(widget) != nullptr;
+    const CGFloat height = settings ? std::max<CGFloat>(requested.height(), 140)
+                                    : std::clamp<CGFloat>(requested.height(), 140, 740);
+    if (settings) {
+      qInfo().noquote() << QStringLiteral("Native Settings initial size: hidden presenter %1 x %2, hint %3 x %4, request %5 x %6")
+          .arg(widget->width()).arg(widget->height()).arg(widget->sizeHint().width()).arg(widget->sizeHint().height())
+          .arg(width).arg(height);
+    }
     // A modeless utility presenter (the part picker) floats in a panel that
     // leaves the keyboard with the document (mitcad#819).
     m_window = widget->property("nativeUtilityWindow").toBool() && !modal
@@ -4160,6 +4292,23 @@ QAction* execNativeMenu(QMenu* menu, const QPoint& point) {
 
 @implementation MitcadNativeCompletionTable
 - (BOOL)acceptsFirstResponder { return NO; }
+// The live shared list this table shows: the selection probe reads its
+// presenter's selection through the table itself (mitcad#984).
+- (QListWidget*)sharedList {
+  id source = self.dataSource;
+  return [source isKindOfClass:MitcadNativeTextView.class] ? [(MitcadNativeTextView*)source sharedCompletions] : nullptr;
+}
+- (NSInteger)presenterSelectedRows {
+  QListWidget* list = [self sharedList];
+  if (list == nullptr || list->selectionModel() == nullptr) return -1;
+  return static_cast<NSInteger>(list->selectionModel()->selectedRows().size());
+}
+- (NSInteger)presenterSelectedRow {
+  QListWidget* list = [self sharedList];
+  if (list == nullptr || list->selectionModel() == nullptr) return -1;
+  const QModelIndexList rows = list->selectionModel()->selectedRows();
+  return rows.isEmpty() ? -1 : static_cast<NSInteger>(rows.first().row());
+}
 @end
 
 @implementation MitcadNativeTextView
@@ -4222,9 +4371,15 @@ QAction* execNativeMenu(QMenu* menu, const QPoint& point) {
   completionTable.tableColumns.firstObject.width = width;
   [completionTable reloadData];
   [completionTable setFrameSize:NSMakeSize(width, std::max(height, list->count() * completionTable.rowHeight))];
-  if (list->currentRow() >= 0) {
-    [completionTable selectRowIndexes:[NSIndexSet indexSetWithIndex:list->currentRow()] byExtendingSelection:NO];
-    [completionTable scrollRowToVisible:list->currentRow()];
+  // The native selection follows the shared current row after every filter
+  // change and Up/Down move, and is cleared with it, so it never keeps a
+  // row of an earlier prefix (mitcad#984).
+  const int current = list->currentRow();
+  if (current >= 0 && current < list->count()) {
+    [completionTable selectRowIndexes:[NSIndexSet indexSetWithIndex:NSUInteger(current)] byExtendingSelection:NO];
+    [completionTable scrollRowToVisible:current];
+  } else {
+    [completionTable deselectAll:nil];
   }
   completionPopover.contentSize = NSMakeSize(width, height);
   if (!completionPopover.shown && self.window.firstResponder == self) {
@@ -4850,6 +5005,29 @@ BOOL tableKeyEquivalent(NSWindow* window, NSEvent* event) {
 }
 @end
 
+// The same icon and caption bands as the shared Settings header. AppKit's
+// NSImageAbove centres the pair and loses the tint's top gap (mitcad#992).
+@implementation MitcadNativePaneCell
+- (NSRect)imageRectForBounds:(NSRect)bounds {
+  const CGFloat y = self.controlView.flipped ? NSMinY(bounds) + 7 : NSMaxY(bounds) - 7 - 24;
+  return NSMakeRect(NSMidX(bounds) - 12, y, 24, 24);
+}
+- (NSRect)titleRectForBounds:(NSRect)bounds {
+  const CGFloat y = self.controlView.flipped ? NSMinY(bounds) + 34 : NSMaxY(bounds) - 34 - 18;
+  return NSMakeRect(NSMinX(bounds), y, NSWidth(bounds), 18);
+}
+- (void)drawInteriorWithFrame:(NSRect)frame inView:(NSView*)view {
+  [self drawImage:self.image withFrame:[self imageRectForBounds:frame] inView:view];
+  NSColor* tint = ((NSButton*)view).contentTintColor;
+  NSColor* ink = self.enabled ? (tint != nil ? tint : NSColor.labelColor) : NSColor.disabledControlTextColor;
+  NSMutableParagraphStyle* centered = [NSMutableParagraphStyle new];
+  centered.alignment = NSTextAlignmentCenter;
+  NSAttributedString* caption = [[NSAttributedString alloc] initWithString:self.title
+      attributes:@{NSFontAttributeName: self.font, NSForegroundColorAttributeName: ink, NSParagraphStyleAttributeName: centered}];
+  [self drawTitle:caption withFrame:[self titleRectForBounds:frame] inView:view];
+}
+@end
+
 @implementation MitcadNativePaneButton
 - (BOOL)wantsUpdateLayer { return NO; }
 - (void)drawRect:(NSRect)dirty {
@@ -4906,6 +5084,56 @@ BOOL tableKeyEquivalent(NSWindow* window, NSEvent* event) {
 @end
 
 @implementation MitcadNativePopup
+@synthesize placeholderString = _placeholderString;
+- (void)setPlaceholderString:(NSString*)text {
+  if ([_placeholderString isEqualToString:text] || (_placeholderString.length == 0 && text.length == 0)) return;
+  _placeholderString = [text copy];
+  // VoiceOver and the native probes read what an unset popup shows.
+  self.accessibilityPlaceholderValue = text.length > 0 ? text : nil;
+  [self invalidateIntrinsicContentSize];
+  self.needsDisplay = YES;
+}
+// A detached cell with the placeholder as its only, selected item: AppKit's
+// own title geometry for this popup's font, size and bezel. The popup's menu
+// gets no such item, so the user can never choose it.
+- (NSPopUpButtonCell*)placeholderCell {
+  NSPopUpButtonCell* own = (NSPopUpButtonCell*)self.cell;
+  NSPopUpButtonCell* cell = [[NSPopUpButtonCell alloc] initTextCell:@"" pullsDown:NO];
+  [cell addItemWithTitle:_placeholderString];
+  [cell selectItemAtIndex:0];
+  cell.font = self.font;
+  cell.controlSize = own.controlSize;
+  cell.bezelStyle = own.bezelStyle;
+  cell.bordered = own.bordered;
+  cell.arrowPosition = own.arrowPosition;
+  return cell;
+}
+- (NSSize)intrinsicContentSize {
+  NSSize size = [super intrinsicContentSize];
+  // "Slicer default" stays whole beside short choices such as Yes and No.
+  if (_placeholderString.length > 0) size.width = std::max<CGFloat>(size.width, std::ceil([self placeholderCell].cellSize.width));
+  return size;
+}
+- (void)drawRect:(NSRect)dirtyRect {
+  [super drawRect:dirtyRect];
+  if (self.selectedItem != nil || _placeholderString.length == 0) return;
+  NSFont* font = self.font != nil ? self.font
+                                  : [NSFont systemFontOfSize:[NSFont systemFontSizeForControlSize:self.controlSize]];
+  const NSRect title = [[self placeholderCell] titleRectForBounds:self.bounds];
+  const CGFloat line = std::ceil(font.ascender - font.descender + font.leading);
+  NSMutableParagraphStyle* paragraph = [NSMutableParagraphStyle new];
+  paragraph.lineBreakMode = NSLineBreakByTruncatingTail;
+  // The theme's placeholder grey in either appearance, as the shared combo
+  // and the native colour field draw an unset value.
+  NSColor* ink = self.enabled ? NSColor.placeholderTextColor : NSColor.disabledControlTextColor;
+  [_placeholderString drawInRect:NSMakeRect(NSMinX(title), NSMidY(title) - line / 2, NSWidth(title), line)
+                  withAttributes:@{NSFontAttributeName: font, NSForegroundColorAttributeName: ink,
+                                   NSParagraphStyleAttributeName: paragraph}];
+}
+- (void)viewDidChangeEffectiveAppearance {
+  [super viewDidChangeEffectiveAppearance];
+  self.needsDisplay = YES;
+}
 - (BOOL)acceptsFirstResponder { return self.enabled; }
 - (void)mouseDown:(NSEvent*)event {
   // Choosing a value with the pointer also establishes the next Tab stop.

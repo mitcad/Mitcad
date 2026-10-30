@@ -3,10 +3,12 @@
 # check-all sources: app/platform/macos app/platform/NativeForms.hpp app/platform/NativeMacWindow.hpp app/platform/NativeTestInput.hpp
 # check-all sources: app/framework/SelectionCreate app/framework/ParameterField app/framework/ParameterSuggest app/framework/FormulaEditor app/framework/TestDriver.cpp
 # check-all sources: app/MainWindow.cpp app/MainWindowNative.cpp app/MainWindowParameterEdits.cpp app/files/MainWindowPrint.cpp app/commands/ExtrudeCommands.cpp tools/cli
+# check-all sources: app/commands/HoleCommands.cpp app/commands/HoleSizes app/framework/CommandSession.cpp
 # Compact AppKit selection and command cards (mitcad#815): the selection
 # card's whole Create actions as pointer targets, Extrude's aligned rows
-# with OK/Cancel and Local bodies in view, the fx expression tools, and
-# 3D Print's Send/Cancel, at the normal and a narrow window, light and dark.
+# with OK/Cancel and Local bodies in view, the fx expression tools,
+# 3D Print's Send/Cancel, and a Hole field's mark and Reset to size
+# (mitcad#980), at the normal and a narrow window, light and dark.
 set -u
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/ui-macos-lib.sh"
@@ -30,7 +32,7 @@ for scheme in light dark; do
   MITCAD_FORMS_APPEARANCE=$scheme MITCAD_TEST_INPUT=$here/ui-scripts/native-macos-forms.mitcad-ui \
     ui_run_app "forms-$scheme" --ui=native --no-recovery --no-mcp --open "$MITCAD_TEST_WORK/body.mitcad"
   ui_expect_log 'Native UI: AppKit shell with embedded OCCT viewport' "$scheme: native AppKit shell was used"
-  ui_expect_log 'TestDriver: done' "$scheme: selection card, Extrude, fx tools and 3D Print passed"
+  ui_expect_log 'TestDriver: done' "$scheme: selection card, Extrude, fx tools, 3D Print and Hole passed"
   for problem in 'TestDriver: FAIL' 'Native Mac canvas:' 'OCCT view event failed' \
                  'Unable to simultaneously satisfy constraints'; do
     ui_expect_no_log "$problem" "$scheme: no $problem"

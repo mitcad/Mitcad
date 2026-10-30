@@ -538,8 +538,11 @@ across both columns. Hidden inputs hide their grid rows, so no row's
 layout depends on views that AppKit detaches. Selections show their
 colour swatch and a compact clear control, Flip the shared flip artwork
 as a toggle, a choice's `onButton` its small icon (3D Print's Edit), note
-rows their icon buttons, text buttons and links, and `labelFor`,
-`enabled` and `autoText` follow the state. OK and Cancel (3D Print's Send)
+rows their icon buttons, text buttons and links, a value field's mark
+(`markFor`, mitcad#980: a Hole field that no longer follows the screw
+size) an icon button beside the field with the shared mark's icon,
+tooltip and action (Reset to size), and `labelFor`, `enabled` and
+`autoText` follow the state. OK and Cancel (3D Print's Send)
 are a footer that the window keeps under the inputs, which scroll above
 it, as the shared panel's page does.
 
@@ -561,8 +564,19 @@ visible caret. The Formula Editor opts into `NativeTextEditorCommands`:
 its existing key handler owns completion, Escape and Command+Return,
 while AppKit retains ordinary text editing, composition, clipboard and
 undo. A native popover presents the same completion items and current row;
-clicks call the shared completion action. Other multiline editors do not
-opt into these formula commands.
+its selected row follows the shared current row after every filter change
+and Up/Down move, and is cleared with it (mitcad#984). Clicks call the
+shared completion action. Other multiline editors do not
+opt into these formula commands. When a presenter's widget tree changes
+and the native dialog is rebuilt, a focused multiline editor gets the
+keyboard back in its new view with the presenter's text and selection,
+as a focused single-line field keeps its edit (mitcad#984). A scroll
+area's own children (an item view's header, viewport and scroll bar
+containers) count as a set in that widget tree: Qt reordering them as it
+lays out the function list or the parameter table rebuilds nothing, while
+a widget added or removed, or children reordered in any other container,
+still does (mitcad#986). With `MITCAD_TEST_INPUT` set, each such rebuild
+logs `Native presenter structure rebuild:` and its window's title.
 
 `app.ui-macos-native-forms` opens a synthetic box in light and dark
 appearance. At 1280 × 820 and 900 × 640 points it checks that a face's
@@ -1224,7 +1238,22 @@ the minimum; New Project and Project Settings check their Author email
 field with it (mitcad#953).
 The number editor's inner native text field is checked separately against
 its adapter's 80-point minimum; a compound editor's full Qt width also
-includes its stepper. The shared probe reads sizes without resizing or
+includes its stepper. The field shows the presenter's own text with its
+prefix and suffix, such as an option's ` mm`, on one scrolling line, and
+widens past that minimum to its own cell's size for the whole text; it
+does not narrow again while values change. A finished edit takes the
+presenter's reformatted text even when the value did not change.
+`expect-native-bounds <identifier> text [label regex]` takes the cell's
+size for the field's whole current text as the minimum; the Part Picker
+regression checks Offset's unit after its Tab commit and in the reopened
+picker (mitcad#975). A line edit's field is the same single scrolling
+line: a longer text scrolls with the caret, as in Qt, instead of wrapping
+its last words onto an unseen second line. A text that fits the
+presenter's Qt hint stays whole, so the field widens to its cell's size
+for it, below the required priority and without narrowing again; the card
+widths regression checks a committed `Key test appearance` in the
+Appearances Name field at the ordinary and the lower screen frame, light
+and dark (mitcad#982). The shared probe reads sizes without resizing or
 focusing either frontend.
 
 Noneditable combo popups take keyboard focus on a real mouse press before
@@ -1255,6 +1284,23 @@ the last owned point. The six-second path records received input and actual
 pressed-button state. It has no local-event fallback for held sliders;
 ordinary controls retain their local AppKit event path.
 
+A checkbox or radio button tracks a press only over its box (or circle)
+and its title's glyphs; the rest of a frame stretched across a form is
+inert, and a press there changes nothing. `native-pointer-click <id>`
+without fractions and `native-pointer-button <title regex>` therefore aim
+at the centre of the visible box of such a button (a button whose role is
+checkbox or radio and whose image sits beside its title), not at the centre
+of its frame; push buttons, pane buttons and other controls keep the
+centre. Explicit fractions that put the point outside the visible box and
+title glyphs fail the step instead of reporting a press that AppKit
+ignores. The visibility, covering and hit-test guards and the real event
+path are unchanged, and the test log records the measured box, title
+glyphs and chosen point (`Native pointer active cell:`). The secondary
+regression toggles the Review Report's wide Diagnostics section both ways
+by identifier and by title, checks the shared presenter's log for each
+transition, and still closes the report with a pointer press on Cancel
+(mitcad#987).
+
 Actual Tab/Shift+Tab in a noneditable popup follows its shared Qt focus
 chain to the next mapped native control, skipping hidden, disabled and
 non-Tab-focus fields. Focus proxies and a spin box's inner line editor map
@@ -1281,6 +1327,15 @@ as Qt. Converted popup buttons anchor their menus at the actual AppKit
 control while the presenter action runs. Nested dialogs keep their own
 anchors. The native popup regression driver resumes its script when menu
 tracking ends, including when the chosen action enters a modal dialog.
+
+An unset choice or yes/no setting keeps its shared combo at index -1 and
+shows the combo's placeholder, Slicer default, as Qt does (mitcad#976). The
+noneditable popup draws it in the theme's placeholder colour while no item
+is selected, at AppKit's own title position, and reports it as its
+accessibility placeholder; its menu holds only the real choices, so no item
+can commit it and the indices stay the shared ones. Its preferred width
+keeps the whole placeholder beside short choices. The native slicer parity
+case checks the text before a choice, after it and after its undo.
 
 `tools/ui-macos-slicer-parity-test.sh` exercises the New printer/process
 choices, profile category and field edits, file import with Details, and

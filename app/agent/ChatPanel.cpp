@@ -9,8 +9,12 @@
 #include <QEvent>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QHash>
+#include <QJsonArray>
+#include <QJsonValue>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLayout>
 #include <QLineEdit>
 #include <QMenu>
 #include <QPlainTextEdit>
@@ -31,6 +35,7 @@
 #include "../mcp/ConnectAssistantDialog.hpp"
 #include "../report/ReportCenter.hpp"
 #include "ChatController.hpp"
+#include "ChatLogic.hpp"
 
 namespace mitcad::agent {
 namespace {
@@ -49,6 +54,48 @@ QLabel* wrapped(const QString& objectName) {
 }
 
 QString role(const QJsonObject& entry) { return entry.value(QStringLiteral("role")).toString(); }
+
+// A group's rows, indented below its head.
+constexpr int kGroupIndent = 16;
+
+// A tool call's or a group's head (mitcad#983): its text from the left on
+// every platform and the error colour only while `failed`. Every head has a
+// style sheet, so that every one is drawn the same way (a platform style
+// centres a tool button's text, which an error-coloured head did not).
+void setHeadTone(QToolButton* head, bool failed) {
+  const QString tone = failed ? QStringLiteral("failed") : QStringLiteral("plain");
+  if (head->property("headTone").toString() == tone) {
+    return;
+  }
+  head->setProperty("headTone", tone);
+  setErrorStyleSheet(head, failed ? QStringLiteral("color: %1;") : QStringLiteral("color: palette(button-text);"));
+}
+
+// A head that opens what is below it.
+QToolButton* rowHead(const QString& objectName) {
+  auto* head = new QToolButton;
+  head->setObjectName(objectName);
+  head->setCheckable(true);
+  head->setAutoRaise(true);
+  head->setArrowType(Qt::RightArrow);
+  head->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  // Its text is cut, not the panel widened (the tooltip has all of it).
+  head->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+  setHeadTone(head, false);
+  return head;
+}
+
+// The rows of a group's calls that show.
+int shownRows(const QWidget* calls) {
+  int shown = 0;
+  const QList<QWidget*> rows = calls->findChildren<QWidget*>(QStringLiteral("chatTool"), Qt::FindDirectChildrenOnly);
+  for (const QWidget* row : rows) {
+    if (row->isVisible()) {
+      ++shown;
+    }
+  }
+  return shown;
+}
 
 } // namespace
 
@@ -263,7 +310,7 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
   connect(&m_chat, &ChatController::setupChanged, this, &ChatPanel::updateState);
   connect(&m_chat, &ChatController::activityChanged, this, &ChatPanel::updateState);
   connect(&m_chat, &ChatController::conversationReset, this, &ChatPanel::rebuild);
-  connect(&m_chat, &ChatController::entryAdded, this, &ChatPanel::addRow);
+  connect(&m_chat, &ChatController::entryAdded, this, [this](int index) { addRow(index); });
   connect(&m_chat, &ChatController::entryChanged, this, [this](int index) {
     if (index >= 0 && index < m_chat.entries().size() && role(m_chat.entries()[index]) == QStringLiteral("assistant")) {
       // Streamed: drawn a few times a second.
@@ -345,16 +392,33 @@ void ChatPanel::send(const QString& text) {
 
 void ChatPanel::rebuild() {
   for (QWidget* row : std::as_const(m_rows)) {
-    if (row != nullptr) {
+    // A tool call's row goes with its group.
+    if (row != nullptr && row->parentWidget() == m_list) {
       m_listLayout->removeWidget(row);
       row->hide();
       row->deleteLater();
     }
   }
+  for (const ToolGroup& group : std::as_const(m_groups)) {
+    m_listLayout->removeWidget(group.widget);
+    group.widget->hide();
+    group.widget->deleteLater();
+  }
   m_rows.clear();
+  m_groups.clear();
   m_dirty.clear();
+  // The groups of a whole conversation (a design's history) asked once.
+  QHash<int, QJsonObject> groupOf;
+  const QJsonArray groups = toolGroups(m_chat.entries());
+  for (const QJsonValue& value : groups) {
+    const QJsonObject group = value.toObject();
+    for (int index = group.value(QStringLiteral("first")).toInt(); index <= group.value(QStringLiteral("last")).toInt();
+         ++index) {
+      groupOf.insert(index, group);
+    }
+  }
   for (int index = 0; index < m_chat.entries().size(); ++index) {
-    addRow(index);
+    addRow(index, groupOf.value(index));
   }
   updateState();
   keepAtEnd(true);
@@ -369,14 +433,7 @@ QWidget* ChatPanel::makeRow(const QJsonObject& entry) {
     auto* rowColumn = new QVBoxLayout(row);
     rowColumn->setContentsMargins(0, 0, 0, 0);
     rowColumn->setSpacing(2);
-    auto* head = new QToolButton;
-    head->setObjectName(QStringLiteral("chatToolHead"));
-    head->setCheckable(true);
-    head->setAutoRaise(true);
-    head->setArrowType(Qt::RightArrow);
-    head->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    // Its text is cut, not the panel widened (the tooltip has all of it).
-    head->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    QToolButton* head = rowHead(QStringLiteral("chatToolHead"));
     auto* details = wrapped(QStringLiteral("chatToolDetails"));
     details->setTextFormat(Qt::PlainText);
     details->hide();
@@ -486,9 +543,7 @@ void ChatPanel::fillRow(QWidget* row, const QJsonObject& entry) {
     head->setText(text);
     head->setToolTip(text);
     row->setProperty("toolState", state);
-    if (state == QStringLiteral("failed")) {
-      setErrorStyleSheet(head);
-    }
+    setHeadTone(head, state == QStringLiteral("failed"));
     QStringList lines;
     const QString input = entry.value(QStringLiteral("input")).toString();
     if (!input.isEmpty()) {
@@ -524,15 +579,23 @@ void ChatPanel::fillRow(QWidget* row, const QJsonObject& entry) {
   label->setText(entry.value(QStringLiteral("text")).toString());
 }
 
-void ChatPanel::addRow(int index) {
+void ChatPanel::addRow(int index, const QJsonObject& group) {
   if (index < 0 || index >= m_chat.entries().size()) {
     return;
   }
   const QJsonObject& entry = m_chat.entries()[index];
   QWidget* row = makeRow(entry);
   fillRow(row, entry);
-  // Before the stretch at the end.
-  m_listLayout->insertWidget(m_listLayout->count() - 1, row);
+  if (role(entry) == QStringLiteral("tool")) {
+    // Into its group, after the calls before it.
+    const QJsonObject holding = group.isEmpty() ? toolGroupOf(m_chat.entries(), index) : group;
+    ToolGroup& into = toolGroup(holding.value(QStringLiteral("first")).toInt(index));
+    into.calls->layout()->addWidget(row);
+    applyGroup(holding);
+  } else {
+    // Before the stretch at the end.
+    m_listLayout->insertWidget(m_listLayout->count() - 1, row);
+  }
   while (m_rows.size() < index) {
     m_rows.append(nullptr);
   }
@@ -552,7 +615,84 @@ void ChatPanel::updateRow(int index) {
     return;
   }
   fillRow(m_rows[index], m_chat.entries()[index]);
+  if (role(m_chat.entries()[index]) == QStringLiteral("tool")) {
+    // Its group's head follows its latest call.
+    applyGroup(toolGroupOf(m_chat.entries(), index));
+  }
   keepAtEnd(false);
+}
+
+ChatPanel::ToolGroup& ChatPanel::toolGroup(int first) {
+  const auto found = m_groups.find(first);
+  if (found != m_groups.end()) {
+    return found.value();
+  }
+  ToolGroup group;
+  group.widget = new QWidget;
+  group.widget->setObjectName(QStringLiteral("chatToolGroup"));
+  auto* groupColumn = new QVBoxLayout(group.widget);
+  groupColumn->setContentsMargins(0, 0, 0, 0);
+  groupColumn->setSpacing(2);
+  group.head = rowHead(QStringLiteral("chatToolGroupHead"));
+  // Shown once the group has a second call.
+  group.head->hide();
+  group.calls = new QWidget;
+  group.calls->setObjectName(QStringLiteral("chatToolGroupCalls"));
+  auto* callColumn = new QVBoxLayout(group.calls);
+  callColumn->setContentsMargins(0, 0, 0, 0);
+  callColumn->setSpacing(2);
+  groupColumn->addWidget(group.head);
+  groupColumn->addWidget(group.calls);
+  // Before the stretch at the end.
+  m_listLayout->insertWidget(m_listLayout->count() - 1, group.widget);
+  QToolButton* head = group.head;
+  QWidget* calls = group.calls;
+  connect(head, &QToolButton::toggled, group.widget, [head, calls](bool open) {
+    head->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
+    calls->setVisible(open);
+    const QString counts = head->property("toolCounts").toString();
+    if (open) {
+      qInfo().noquote() << QStringLiteral("Chat tool group opened: %1, %2 rows shown").arg(counts).arg(shownRows(calls));
+    } else {
+      qInfo().noquote() << QStringLiteral("Chat tool group closed: %1").arg(counts);
+    }
+  });
+  return m_groups.insert(first, group).value();
+}
+
+void ChatPanel::applyGroup(const QJsonObject& group) {
+  if (group.isEmpty()) {
+    return;
+  }
+  ToolGroup& shown = toolGroup(group.value(QStringLiteral("first")).toInt());
+  const int count = group.value(QStringLiteral("count")).toInt();
+  const int failed = group.value(QStringLiteral("failed")).toInt();
+  const QString state = group.value(QStringLiteral("state")).toString();
+  const QString head = group.value(QStringLiteral("head")).toString();
+  // One call is its own row; more are the group's head, closed until it
+  // is opened.
+  const bool single = count < 2;
+  shown.head->setVisible(!single);
+  shown.calls->setVisible(single || shown.head->isChecked());
+  shown.calls->layout()->setContentsMargins(single ? 0 : kGroupIndent, 0, 0, 0);
+  if (shown.head->text() != head) {
+    shown.head->setText(head);
+    shown.head->setToolTip(head);
+  }
+  setHeadTone(shown.head, state == QStringLiteral("failed"));
+  shown.widget->setProperty("toolState", state);
+  shown.widget->setProperty("toolCount", count);
+  shown.widget->setProperty("toolFailed", failed);
+  if (single) {
+    return;
+  }
+  const QString counts = failed > 0 ? QStringLiteral("%1 calls, %2 failed").arg(count).arg(failed)
+                                    : QStringLiteral("%1 calls").arg(count);
+  shown.head->setProperty("toolCounts", counts);
+  if (counts != shown.logged) {
+    shown.logged = counts;
+    qInfo().noquote() << QStringLiteral("Chat tool group: %1").arg(counts);
+  }
 }
 
 void ChatPanel::keepAtEnd(bool force) {

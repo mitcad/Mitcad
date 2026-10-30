@@ -518,3 +518,41 @@ fn a_linked_design_with_options_follows_the_design_and_its_file() {
     assert!(error.contains("insert it linked"), "{error}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_linked_design_with_options_outside_the_project_is_not_read() {
+    // mitcad#929: a link out of the design's folder (in no project) is not
+    // followed; the design saved with the project stays.
+    let dir = std::env::temp_dir().join(format!("mitcad-929-options-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("board.mitcad"), board().to_json()).unwrap();
+    let mut doc = shelf();
+    let answer = command(
+        &mut doc,
+        json!({"cmd": "insert_component", "path": dir.join("board.mitcad").to_string_lossy(),
+               "base": dir.to_string_lossy(), "parameters": {"Length": "Shelf_W / 2"}}),
+    )
+    .unwrap();
+    let board_uid = uid(&answer);
+    // Recorded from the design's folder.
+    let link = doc
+        .assembly()
+        .component(board_uid)
+        .unwrap()
+        .link
+        .clone()
+        .unwrap();
+    assert_eq!(link.path, "board.mitcad");
+    let mut value: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    for c in value["components"].as_array_mut().unwrap() {
+        if c["name"] == "board" {
+            c["link"]["path"] = json!("../../outside.mitcad");
+        }
+    }
+    let mut reopened = Document::from_json(&value.to_string(), MockKernel::default()).unwrap();
+    let messages = reopened.update_links(Some(&dir)).unwrap();
+    let refused = "board: the link outside the project is not followed (../../outside.mitcad); \
+                   it keeps the design saved with the project";
+    assert_eq!(messages, [refused]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

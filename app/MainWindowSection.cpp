@@ -3,7 +3,9 @@
 // shown, their meshes for the view and the panel's area and length worked
 // out by the section worker (framework/SectionWorker.hpp) from what the
 // model prepared while the document was idle; the view shows them when they
-// are ready, and the panel's numbers come after the view's update.
+// are ready, and the panel's numbers come after the view's update. A
+// feature preview's bodies are clipped the same way (mitcad#943,
+// framework/SectionPreview.hpp).
 #include "MainWindow.hpp"
 
 #include <chrono>
@@ -15,6 +17,8 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QElapsedTimer>
+#include <QJsonArray>
+#include <QPointer>
 #include <QThread>
 #include <QtLogging>
 
@@ -25,6 +29,7 @@
 
 #include "framework/Diagnostics.hpp"
 #include "framework/Json.hpp"
+#include "framework/SectionPreview.hpp"
 #include "framework/SectionWorker.hpp"
 #include "mitcad/geometry/cancel.hpp"
 #include "mitcad/io/mesh.hpp"
@@ -88,9 +93,12 @@ namespace {
 // The view round's work, on the worker's thread: the prepared clips (each
 // body the plane cuts on a copy of its own), then the new shapes meshed as
 // the view meshes them, all together, so that the view finds them meshed.
-// What it makes shares no sub-shape with the bodies the view draws.
+// What it makes shares no sub-shape with the bodies the view draws. Logged
+// as "<what> at <plane> off the UI thread ...": "Section clips" for the
+// bodies at the marker, "Section preview clips" for a feature preview's
+// (mitcad#943).
 template <class Round>
-void clipForView(Round& round, const QJsonValue& plane, const geometry::CancelSource& stop) {
+void clipForView(Round& round, const QJsonValue& plane, const geometry::CancelSource& stop, const QString& what) {
   for (int waited = 0; waited < testSectionDelay() && !stop.cancel_requested(); waited += 10) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
@@ -124,8 +132,8 @@ void clipForView(Round& round, const QJsonValue& plane, const geometry::CancelSo
     // The view meshes them when it draws them.
   } catch (const std::exception&) {
   }
-  qDebug().noquote() << QStringLiteral("Section clips at %1 %2: %3 bodies, %4 new, %5 meshed in %6 ms")
-                            .arg(QString::fromUtf8(compactJson(QJsonObject{{QStringLiteral("plane"), plane}})),
+  qDebug().noquote() << QStringLiteral("%1 at %2 %3: %4 bodies, %5 new, %6 meshed in %7 ms")
+                            .arg(what, QString::fromUtf8(compactJson(QJsonObject{{QStringLiteral("plane"), plane}})),
                                  threadOfWork())
                             .arg(round.sources.size())
                             .arg(fresh.size())
@@ -133,7 +141,85 @@ void clipForView(Round& round, const QJsonValue& plane, const geometry::CancelSo
                             .arg(clock.elapsed());
 }
 
+// A preview round's clips into its cut, on the UI thread once it is done
+// (mitcad#943): a body whose clip failed, or every body when the round
+// failed, is drawn whole with its warning (mitcad#392).
+template <class Round>
+void fillPreviewSection(const Round& round, const QJsonValue& plane, const QString& error, PreviewSection& cut) {
+  const bool clipped = error.isEmpty() && round.clipped.size() == round.sources.size();
+  for (std::size_t i = 0; i < round.sources.size(); ++i) {
+    const qsizetype at = static_cast<qsizetype>(i);
+    const std::shared_ptr<geometry::Shape> shape = clipped ? round.clipped[i] : nullptr;
+    cut.left.insert(round.keys.value(at), shape);
+    if (!shape) {
+      const QString why = clipped ? round.errors.value(at) : error.isEmpty() ? QStringLiteral("no clips") : error;
+      qWarning().noquote() << QStringLiteral("Section: %1 shown whole: %2").arg(round.uids.value(at), why);
+    }
+  }
+  cut.ready = true;
+  qDebug().noquote() << QStringLiteral("Section preview ready at %1: %2 bodies from the section worker")
+                            .arg(QString::fromUtf8(compactJson(QJsonObject{{QStringLiteral("plane"), plane}})))
+                            .arg(round.sources.size());
+}
+
 } // namespace
+
+std::shared_ptr<PreviewSection> MainWindow::sectionPreview(const std::vector<PreviewClipTarget>& targets,
+                                                           QObject* context, std::function<void()> ready) {
+  const QJsonValue plane = cutPlane();
+  if (plane.isNull() || targets.empty() || m_sectionWorker == nullptr) {
+    return nullptr; // whole
+  }
+  if (modelBusy()) {
+    qWarning().noquote() << QStringLiteral("Section: the preview not clipped: the model computes");
+    return nullptr;
+  }
+  auto cut = std::make_shared<PreviewSection>();
+  cut->plane = plane;
+  auto round = std::make_shared<SectionRound>();
+  QJsonArray bodies;
+  for (const PreviewClipTarget& target : targets) {
+    // The shape the clip cuts, kept for the caps: the model's preview of
+    // the body, or the body at the marker that the preview places anew.
+    const std::shared_ptr<geometry::Shape> uncut =
+        target.preview ? idleDocument().preview_body_shape(target.uid) : idleDocument().body_shape(target.uid);
+    if (!uncut) {
+      continue;
+    }
+    const QString uid = QString::fromStdString(target.uid);
+    cut->keys.insert(target.key);
+    cut->uncut.insert(target.key, uncut);
+    round->keys << target.key;
+    round->uids << uid;
+    round->sources.push_back(uncut);
+    bodies.append(previewClipTarget(uid, target.preview, target.placement));
+  }
+  if (round->sources.empty()) {
+    cut->ready = true;
+    return cut;
+  }
+  try {
+    round->prepared.emplace(idleDocument().prepare_clips(
+        rustStr(compactJson({{QStringLiteral("plane"), plane}, {QStringLiteral("bodies"), bodies}}))));
+  } catch (const std::exception& e) {
+    // Drawn whole, as a clip that failed.
+    fillPreviewSection(*round, plane, errorText(e), *cut);
+    return cut;
+  }
+  const QPointer<QObject> owner(context);
+  m_sectionWorker->start(
+      SectionWorker::Kind::Preview, QStringLiteral("preview"),
+      [round, plane](const geometry::CancelSource& stop) {
+        clipForView(*round, plane, stop, QStringLiteral("Section preview clips"));
+      },
+      [round, plane, cut, owner, ready = std::move(ready)](const QString& error) {
+        fillPreviewSection(*round, plane, error, *cut);
+        if (owner && ready) {
+          ready();
+        }
+      });
+  return cut;
+}
 
 bool MainWindow::startSectionRound() {
   if (m_sectionWorker == nullptr || m_section.isNull() || modelBusy() || cutPlane() != m_section) {
@@ -177,7 +263,9 @@ bool MainWindow::startSectionRound() {
   const QJsonValue plane = cut.plane;
   m_sectionWorker->start(
       SectionWorker::Kind::View, QStringLiteral("view"),
-      [round, plane](const geometry::CancelSource& stop) { clipForView(*round, plane, stop); },
+      [round, plane](const geometry::CancelSource& stop) {
+        clipForView(*round, plane, stop, QStringLiteral("Section clips"));
+      },
       [this, round, plane](const QString& error) { showSectionRound(*round, plane, error); });
   return true;
 }

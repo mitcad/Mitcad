@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/commands/ExtrudeCommands.cpp app/commands/CommandSupport.cpp
 # check-all sources: app/framework/CommandSession.cpp app/framework/CommandSessionAuto.cpp
+# check-all sources: app/framework/Numbers.cpp
 # check-all sources: app/framework/AutoOperationPolicy.hpp app/framework/Command.hpp
 # check-all sources: core/model/src/document/auto_operation.rs core/model-api/src/lib.rs
 # check-all sources: geometry/src/contact.cpp geometry/src/boolean.cpp tools/cli
@@ -12,7 +13,9 @@
 # (Sketch2, F3) and a square on XY far from it (Sketch3, F4).
 #   1. Extrude of the far square: New Body, nothing chosen automatically.
 #   2. Extrude of the square on the block's face: Join at once; a negative
-#      distance makes it Cut, a positive one Join again; OK joins.
+#      distance makes it Cut, a positive one Join again; OK joins. A typed
+#      "-5 mm" has no "= -5 mm" line under the field, an expression has
+#      one (mitcad#994).
 #   3. Undone; Extrude of the same square with New Body chosen by hand:
 #      the choice stays when the distance goes into the block; OK adds a
 #      new body.
@@ -84,9 +87,18 @@ ui_step "distance -5"                    ui_type_in "Panel Extrude input distanc
 ui_expect_new "Extrude: automatic Operation = Cut" "Cut going into the block"
 ui_expect_new "Preview Extrude: ok" "the cut previewed"
 [ -n "$SHOT" ] && ui_capture "$SHOT"
+# The "= value" line under the field (mitcad#994): none for a signed
+# number with its unit, as a drag of the arrow writes it; an expression's.
+ui_mark
+ui_step "distance -5 mm"                 ui_type_in "Panel Extrude input distance" "-5 mm"
+ui_expect_new "Extrude Distance: -5 mm = -5 mm" "-5 mm evaluated"
+no_new "Panel Extrude distance hint:" "no '= -5 mm' line under the field: the panel keeps its height"
+ui_step "distance -4 mm - 1 mm"          ui_type_in "Panel Extrude input distance" "-4 mm - 1 mm"
+ui_expect_new "Panel Extrude distance hint: = -5 mm" "the expression's value shown under the field"
 ui_mark
 ui_step "distance 5"                     ui_type_in "Panel Extrude input distance" "5"
 ui_expect_new "Extrude: automatic Operation = Join" "Join again coming out"
+ui_expect_new "Panel Extrude distance hint cleared" "a plain number: the line under the field goes"
 ui_expect_new "Preview Extrude: ok" "the join previewed again"
 ui_focus_main
 ui_mark

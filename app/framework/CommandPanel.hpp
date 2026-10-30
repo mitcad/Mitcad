@@ -135,6 +135,10 @@ private:
     QListWidget* order = nullptr; // an ordered selection's items
     QLineEdit* edit = nullptr;
     int leftAt = -1; // the cursor as the field lost the keyboard
+    // A value field's mark (InputDef::markFor, mitcad#980), in the field;
+    // the mark it shows.
+    QAction* mark = nullptr;
+    FieldMark shownMark;
     QComboBox* combo = nullptr;
     QToolButton* button = nullptr; // beside the combo (InputDef::onButton)
     QToolButton* tile = nullptr;   // a choice shown as a tile (InputDef::choiceTile)

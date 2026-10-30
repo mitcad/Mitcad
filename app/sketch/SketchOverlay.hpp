@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include <QColor>
 #include <QLineF>
 #include <QPointF>
 #include <QPolygonF>
@@ -22,6 +23,7 @@
 #include <QString>
 #include <QWidget>
 
+#include "PointMarkers.hpp"
 #include "SketchModel.hpp"
 
 class QPainter;
@@ -117,6 +119,13 @@ public:
   // bulb says). Called when the overlay paints and with the "Sketch view"
   // line, as a session without a desktop may never paint it.
   void logAxes();
+  // Logs "Sketch overlay: point markers over highlights; 1 curve, 0 points
+  // highlighted, 3 markers over them" when it changes, for the UI tests
+  // (mitcad#946): the highlights of the selection, picks and hover and the
+  // point markers painted over them. Called when the overlay paints and
+  // when the selection or the hover changes, as a session without a
+  // desktop may never paint it.
+  void logHighlights();
 
 protected:
   void paintEvent(QPaintEvent* event) override;
@@ -170,7 +179,28 @@ private:
                       bool inactive = false) const;
   void paintPreview(QPainter& painter, const ToolPreview& preview) const;
   void paintSnap(QPainter& painter) const;
-  void paintEntityHighlight(QPainter& painter, const QString& entity, const QColor& color) const;
+  // What highlightLayers gives to paint: the entities drawn as strokes
+  // (curves, lines, axes) and as balls (points), the plain point markers
+  // over them, and whether they are painted after the strokes.
+  struct HighlightSummary {
+    int curves = 0;
+    int points = 0;
+    int markers = 0;
+    bool markersOver = false;
+  };
+  // The highlights with no tool or a picking tool running: the selection's
+  // curves and points, the axes a command's input holds, a tool's picks and
+  // the hover, each in its colour, later ones over earlier ones.
+  std::vector<std::pair<QString, QColor>> idleHighlights() const;
+  // Sketch entities (and body geometry as sketch entities, mitcad#256)
+  // highlighted, in view pixels: a curve's or an axis's 4 px line, a
+  // point's ball, and the plain markers of the highlighted curves' points,
+  // which paintHighlightLayers (sketch/PointMarkers.hpp) paints over the
+  // lines (mitcad#946).
+  HighlightLayers highlightLayers(const std::vector<std::pair<QString, QColor>>& entities,
+                                  HighlightSummary* summary) const;
+  void paintHighlights(QPainter& painter, const std::vector<std::pair<QString, QColor>>& entities) const;
+  void logHighlightSummary(const HighlightSummary& summary);
   // An equal spacing's anchors joined in order and numbered (mitcad#221).
   void paintChain(QPainter& painter, const QStringList& anchors, const QColor& color) const;
   bool isSelected(const QString& kind, const QString& id) const;
@@ -183,6 +213,8 @@ private:
   // The last "Sketch axes drawn:" line logged (mitcad#739); cleared when
   // the overlay hides, so that every sketch edit logs it again.
   QString m_loggedAxes;
+  // The last "Sketch overlay:" line logged (mitcad#946).
+  QString m_loggedHighlights;
 };
 
 } // namespace mitcad::sketch

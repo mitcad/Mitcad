@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+wait-idle
+expect-native-layout-contract
+expect-log 'Native button order contract: role order, gaps, keys, helpers and changes verified'
+expect-model-bodies 1 48000

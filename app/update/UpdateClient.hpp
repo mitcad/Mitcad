@@ -28,6 +28,11 @@ struct UpdateOffer {
   QString status; // "available", "skipped" or "current"
   QString version;
   QString date;
+  // The manifest's last day, or empty (mitcad#938).
+  QString expires;
+  // A newer version whose manifest has expired: status "current"; a check
+  // the user asked for announces it, without Install.
+  bool expired = false;
   QString notes; // the release's page
   bool prerelease = false;
   // The download for this platform; without one the release is announced

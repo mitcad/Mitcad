@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/commands/ExtrudeCommands.cpp app/commands/CommandSupport.cpp
 # check-all sources: app/framework/CommandSession.cpp app/framework/CommandSessionAuto.cpp
+# check-all sources: app/framework/Numbers.cpp
 # check-all sources: app/framework/AutoOperationPolicy.hpp app/framework/Command.hpp
 # check-all sources: core/model/src/document/auto_operation.rs core/model-api/src/lib.rs
 # check-all sources: geometry/src/contact.cpp geometry/src/boolean.cpp tools/cli
@@ -13,7 +14,9 @@
 # a square on XY far from it (Sketch3, F4).
 #   1. Extrude of the far square: New Body, nothing chosen automatically.
 #   2. Extrude of the square on the block's face: Join at once; a negative
-#      distance makes it Cut, a positive one Join again; OK joins.
+#      distance makes it Cut, a positive one Join again; OK joins. A typed
+#      "-5 mm" has no "= -5 mm" line under the field, an expression has
+#      one (mitcad#994).
 #   3. Undone; Extrude of the same square with New Body chosen by hand (the
 #      drop-down's wheel: its list cannot open in session 0): the choice
 #      stays when the distance goes into the block; OK adds a new body.
@@ -93,9 +96,18 @@ Ui-Mark
 Ui-Step 'distance -5'                    { Ui-TypeIn 'Panel Extrude input distance' '-5' }
 Ui-ExpectNew 'Extrude: automatic Operation = Cut' 'Cut going into the block' 30
 Ui-ExpectNew 'Preview Extrude: ok' 'the cut previewed' 30
+# The "= value" line under the field (mitcad#994): none for a signed
+# number with its unit, as a drag of the arrow writes it; an expression's.
+Ui-Mark
+Ui-Step 'distance -5 mm'                 { Ui-TypeIn 'Panel Extrude input distance' '-5 mm' }
+Ui-ExpectNew 'Extrude Distance: -5 mm = -5 mm' '-5 mm evaluated' 30
+Expect-NoNew 'Panel Extrude distance hint:' 'no ''= -5 mm'' line under the field: the panel keeps its height'
+Ui-Step 'distance -4 mm - 1 mm'          { Ui-TypeIn 'Panel Extrude input distance' '-4 mm - 1 mm' }
+Ui-ExpectNew 'Panel Extrude distance hint: = -5 mm' 'the expression''s value shown under the field' 30
 Ui-Mark
 Ui-Step 'distance 5'                     { Ui-TypeIn 'Panel Extrude input distance' '5' }
 Ui-ExpectNew 'Extrude: automatic Operation = Join' 'Join again coming out' 30
+Ui-ExpectNew 'Panel Extrude distance hint cleared' 'a plain number: the line under the field goes' 30
 Ui-ExpectNew 'Preview Extrude: ok' 'the join previewed again' 30
 Ui-Mark
 Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }

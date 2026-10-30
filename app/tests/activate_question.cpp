@@ -190,6 +190,44 @@ void decisionTests() {
 
   // Geometry of no component (a preview's body): nothing asked.
   CHECK(!activateQuestion(snapshot, face(QStringLiteral("F99.b0"), QStringLiteral("O9")), QString(), true).ask);
+
+  // The second line names what the command makes: the sketch (Create
+  // Sketch, the default), or a Construct command's plane, axis or point.
+  ActivateQuestion made = activateQuestion(snapshot, face(QStringLiteral("F4.b0"), QStringLiteral("O1/O2")),
+                                           QString(), true);
+  CHECK(made.detail() == QStringLiteral("If you activate it, the sketch goes into M6 rod bracket:1. If you keep "
+                                        "Corner brace:1 active, the sketch goes into Corner brace:1."));
+  CHECK(madeBy(QStringLiteral("construction_plane")) == QStringLiteral("plane"));
+  CHECK(madeBy(QStringLiteral("construction_axis")) == QStringLiteral("axis"));
+  CHECK(madeBy(QStringLiteral("construction_point")) == QStringLiteral("point"));
+  CHECK(madeBy(QString()) == QStringLiteral("sketch"));
+  made.made = madeBy(QStringLiteral("construction_axis"));
+  CHECK(made.detail() == QStringLiteral("If you activate it, the axis goes into M6 rod bracket:1. If you keep "
+                                        "Corner brace:1 active, the axis goes into Corner brace:1."));
+}
+
+// Where the question goes: clear of the pick (80 px around it) inside the
+// window; above the pick first, else below, right or left of it.
+void placeTests() {
+  const QRect window(0, 0, 1280, 800);
+  const QSize box(460, 160);
+  const QRect keep(500 - 80, 450 - 80, 161, 161);
+  // A pick in the middle: above it, centred on it.
+  const QRect middle = questionPlace(box, QPoint(500, 450), window);
+  CHECK(middle == QRect(QPoint(270, 450 - 80 - 160), box));
+  CHECK(!middle.intersects(keep));
+  // A pick near the top: below it.
+  const QRect top = questionPlace(box, QPoint(500, 100), window);
+  CHECK(top.top() == 100 + 81);
+  CHECK(!top.intersects(QRect(420, 20, 161, 161)));
+  // Near the window's edge: moved inside the window, still clear.
+  const QRect corner = questionPlace(box, QPoint(1250, 450), window);
+  CHECK(window.contains(corner));
+  CHECK(!corner.intersects(QRect(1170, 370, 161, 161)));
+  // A window too small to keep clear: inside it, covering the least.
+  const QRect small(0, 0, 500, 200);
+  const QRect crowded = questionPlace(box, QPoint(250, 100), small);
+  CHECK(crowded == QRect(QPoint(20, 0), box)); // above, pushed down into it
 }
 
 // The message box: its texts, Activate the default, and the answers.
@@ -206,8 +244,18 @@ void dialogTests() {
       }
       seen = true;
       CHECK(box->objectName() == QStringLiteral("activateComponentQuestion"));
+#ifdef Q_OS_MACOS
+      // QMessageBox ignores window titles on macOS, including with the
+      // offscreen plugin; keep checking the platform's exact behavior.
+      CHECK(box->windowTitle().isEmpty());
+#else
       CHECK(box->windowTitle() == QStringLiteral("Activate Component"));
+#endif
+      CHECK(box->icon() == QMessageBox::Question);
       CHECK(box->text() == QStringLiteral("The face belongs to M6 rod bracket:1, but Corner brace:1 is active."));
+      CHECK(box->informativeText() ==
+            QStringLiteral("If you activate it, the sketch goes into M6 rod bracket:1. If you keep Corner brace:1 "
+                           "active, the sketch goes into Corner brace:1."));
       QPushButton* activateButton = nullptr;
       QPushButton* keepButton = nullptr;
       for (QAbstractButton* button : box->buttons()) {
@@ -219,6 +267,7 @@ void dialogTests() {
       }
       CHECK(activateButton != nullptr && keepButton != nullptr);
       CHECK(box->defaultButton() == activateButton);
+      CHECK(box->escapeButton() == keepButton);
       CHECK(box->checkBox() != nullptr && box->checkBox()->text() == QStringLiteral("&Don't ask again"));
       CHECK(box->checkBox() != nullptr && !box->checkBox()->isChecked());
       if (box->checkBox() != nullptr) {
@@ -246,6 +295,7 @@ void dialogTests() {
 int activateQuestionTests() {
   failures = 0;
   decisionTests();
+  placeTests();
   dialogTests();
   return failures;
 }

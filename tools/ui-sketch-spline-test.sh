@@ -14,6 +14,9 @@
 #      points in a layer after the curves and their highlights, against
 #      the scene's depth; the spline selected has its curve highlighted,
 #      a fit point selected its ball, in that layer over the markers.
+#      The overlay paints its own highlight of a selected curve (4 px,
+#      over OCCT's scene) and then the curve's point markers over it, a
+#      selected point as a ball over them (mitcad#946).
 #   1. Tangent: the spline picked near its start and the first line, then
 #      near its end and the second line: each tangent records the end it
 #      was picked at (p2, p4), so one spline is tangent at both ends.
@@ -63,6 +66,8 @@ ui_mark
 ui_step "select the spline"              ui_sketch_click -22 -24.32
 ui_expect_new "Selected: 1 sketch curve" "the spline selected"
 ui_expect_new "Sketch highlights: 1 curve, 0 points" "its highlight in the curves' layer, under its fit points"
+ui_expect_new "Sketch overlay: point markers over highlights; 1 curve, 0 points highlighted, 3 markers over them" \
+  "the overlay paints the spline's three fit points over its highlight"
 ui_sync
 if [ -n "$SHOT" ]; then
   ui_capture "$SHOT"
@@ -72,6 +77,8 @@ ui_mark
 ui_step "select its middle fit point"    ui_sketch_click -10 -20
 ui_expect_new "Selected: 1 sketch point" "the fit point selected"
 ui_expect_new "Sketch highlights: 0 curves, 1 point" "its ball in the points' layer, over the marker"
+ui_expect_new "Sketch overlay: point markers over highlights; 0 curves, 1 point highlighted, 0 markers over them" \
+  "the overlay paints the fit point's ball"
 ui_mark
 # Off the x axis, which a click selects (mitcad#899).
 ui_step "click where nothing is"         ui_sketch_click 45 15

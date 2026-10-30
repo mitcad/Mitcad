@@ -464,3 +464,102 @@ fn requests_in_text() {
     let invalid: Value = serde_json::from_str(&request_text("[")).unwrap();
     assert!(invalid["error"].is_string());
 }
+
+fn call(name: &str, summary: &str, state: &str) -> Value {
+    json!({"role": "tool", "name": name, "summary": summary, "state": state})
+}
+
+#[test]
+fn tool_calls_group_between_the_agents_texts_and_cards() {
+    // mitcad#983: text, 3 calls (one failed), a card, 2 calls, text.
+    let mut entries = vec![
+        json!({"role": "user", "text": "measure it"}),
+        json!({"role": "assistant", "text": "Looking."}),
+        call("model_query", "bodies", "done"),
+        call("model_query", "faces", "failed"),
+        call("model_command", "add_feature box", "running"),
+        json!({"role": "card", "kind": "edit", "state": "open"}),
+        call("document_list", "", "done"),
+        call("model_query", "measure", "done"),
+        json!({"role": "assistant", "text": "Done."}),
+    ];
+    let answer = request(&json!({"op": "tool_groups", "entries": entries, "index": 3})).unwrap();
+    let groups = answer["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0]["first"], 2);
+    assert_eq!(groups[0]["last"], 4);
+    assert_eq!(groups[0]["count"], 3);
+    assert_eq!(groups[0]["failed"], 1);
+    assert_eq!(groups[0]["running"], 1);
+    assert_eq!(groups[0]["state"], "running");
+    assert_eq!(
+        groups[0]["head"],
+        "3 calls (1 failed) · model_command · add_feature box — running"
+    );
+    assert_eq!(groups[1]["first"], 6);
+    assert_eq!(groups[1]["last"], 7);
+    assert_eq!(groups[1]["head"], "2 calls · model_query · measure");
+    assert_eq!(groups[1]["state"], "done");
+    assert_eq!(answer["group"]["first"], 2);
+    let text = request(&json!({"op": "tool_groups", "entries": entries, "index": 5})).unwrap();
+    assert!(text["group"].is_null());
+
+    // The head follows the latest call: failed, then a new running call.
+    entries[4]["state"] = json!("failed");
+    let failed = request(&json!({"op": "tool_groups", "entries": entries, "index": 4})).unwrap();
+    assert_eq!(failed["group"]["state"], "failed");
+    assert_eq!(
+        failed["group"]["head"],
+        "3 calls (2 failed) · model_command · add_feature box — failed"
+    );
+    entries.insert(5, call("ui_state", "", "running"));
+    let more = request(&json!({"op": "tool_groups", "entries": entries, "index": 5})).unwrap();
+    assert_eq!(more["group"]["count"], 4);
+    assert_eq!(more["group"]["state"], "running");
+    assert_eq!(
+        more["group"]["head"],
+        "4 calls (2 failed) · ui_state — running"
+    );
+
+    // One call is its own line; nothing to group, no groups.
+    let single =
+        request(&json!({"op": "tool_groups", "entries": [call("ui_log", "", "done")]})).unwrap();
+    assert_eq!(single["groups"][0]["head"], "ui_log");
+    assert_eq!(single["groups"][0]["count"], 1);
+    let none = request(&json!({"op": "tool_groups", "entries": []})).unwrap();
+    assert!(none["groups"].as_array().unwrap().is_empty());
+    assert!(none["group"].is_null());
+}
+
+#[test]
+fn history_tool_calls_group_the_same_way() {
+    // The stored history (mitcad#983): its calls carry `error`, not a state;
+    // a recorded answer of a card is a notice, which ends a group too.
+    let mut content = String::new();
+    for entry in [
+        json!({"role": "user", "text": "measure it"}),
+        json!({"role": "assistant", "text": "Looking."}),
+        json!({"role": "tool", "name": "model_query", "summary": "bodies", "error": false}),
+        json!({"role": "tool", "name": "model_query", "summary": "faces", "error": true}),
+        json!({"role": "tool", "name": "document_list", "error": false}),
+        json!({"role": "notice", "text": "Allow Once: edit"}),
+        json!({"role": "tool", "name": "model_command", "summary": "add_feature box", "error": true}),
+        json!({"role": "tool", "name": "model_command", "summary": "add_feature box", "error": true}),
+        json!({"role": "assistant", "text": "Done."}),
+    ] {
+        content += request(&json!({"op": "history_entry", "entry": entry})).unwrap()["line"]
+            .as_str()
+            .unwrap();
+    }
+    let read = request(&json!({"op": "history_read", "content": content})).unwrap();
+    let grouped = request(&json!({"op": "tool_groups", "entries": read["entries"]})).unwrap();
+    let groups = grouped["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0]["head"], "3 calls (1 failed) · document_list");
+    assert_eq!(groups[0]["state"], "done");
+    assert_eq!(
+        groups[1]["head"],
+        "2 calls (2 failed) · model_command · add_feature box — failed"
+    );
+    assert_eq!(groups[1]["state"], "failed");
+}

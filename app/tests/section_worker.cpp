@@ -3,7 +3,9 @@
 // the round's stop as its thread's geometry cancel; a newer View round
 // stops the running one and replaces those waiting, and only its result is
 // delivered; a Measure round waits for the View round before it and is
-// superseded by a newer Measure round; stop() waits for the round that runs
+// superseded by a newer Measure round; a Preview round (mitcad#943) is
+// superseded only by a newer Preview round, not by cancel(), and a View
+// round waits for it; stop() waits for the round that runs
 // and delivers nothing; cancel() does not wait; the log lines of each
 // round pair up ("Computing section <label> started", then "done in" or
 // "cancelled after").
@@ -234,6 +236,43 @@ int sectionWorkerTests() {
     later.release = true;
     CHECK(waitUntil([&] { return later.delivered; }));
     CHECK(older.left && !older.delivered);
+
+    // A feature preview's clips (mitcad#943): a newer preview round stops
+    // the running one and only its result arrives; a model job's cancel()
+    // leaves it running, and a view round waits for it.
+    Blocking firstPreview;
+    Blocking newerPreview;
+    Blocking viewAfter;
+    worker.start(SectionWorker::Kind::Preview, QStringLiteral("preview"), firstPreview.work(ui), firstPreview.done());
+    CHECK(worker.busyWith(SectionWorker::Kind::Preview));
+    CHECK(!worker.busyWith(SectionWorker::Kind::View));
+    CHECK(waitUntil([&] { return firstPreview.started.load(); }));
+    worker.start(SectionWorker::Kind::Preview, QStringLiteral("preview"), newerPreview.work(ui), newerPreview.done());
+    CHECK(waitUntil([&] { return firstPreview.left.load() && newerPreview.started.load(); }));
+    CHECK(firstPreview.geometryStopped);
+    const SectionWorker::Stopped untouched = worker.cancel();
+    CHECK(!untouched.view && !untouched.measure && !untouched.preview);
+    CHECK(worker.busyWith(SectionWorker::Kind::Preview));
+    worker.start(SectionWorker::Kind::View, QStringLiteral("view"), viewAfter.work(ui), viewAfter.done());
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    QCoreApplication::processEvents();
+    CHECK(!newerPreview.left && !viewAfter.started);
+    newerPreview.release = true;
+    CHECK(waitUntil([&] { return newerPreview.delivered && viewAfter.started.load(); }));
+    viewAfter.release = true;
+    CHECK(waitUntil([&] { return viewAfter.delivered; }));
+    CHECK(!firstPreview.delivered && !newerPreview.geometryStopped);
+    CHECK(count(QStringLiteral("^Section round preview superseded$")) == 1);
+    CHECK(waitUntil([&] { return worker.idle(); }));
+    // stop() drops a preview round waiting behind a view round.
+    Blocking viewFirst;
+    Blocking dropped;
+    worker.start(SectionWorker::Kind::View, QStringLiteral("view"), viewFirst.work(ui), viewFirst.done());
+    CHECK(waitUntil([&] { return viewFirst.started.load(); }));
+    worker.start(SectionWorker::Kind::Preview, QStringLiteral("preview"), dropped.work(ui), dropped.done());
+    const SectionWorker::Stopped both = worker.stop();
+    CHECK(both.view && both.preview && !both.measure);
+    CHECK(worker.idle() && !dropped.started);
 
     // stop(): the running round has ended when it returns, nothing is
     // delivered, and what was dropped is said.

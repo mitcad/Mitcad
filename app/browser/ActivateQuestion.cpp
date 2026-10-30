@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: MIT
 #include "ActivateQuestion.hpp"
 
+#include <algorithm>
+
 #include <QCheckBox>
+#include <QDebug>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
 #include <QStringList>
+#include <QTimer>
 #include <QVector>
 
 #include "../framework/Dialogs.hpp"
@@ -106,6 +110,58 @@ QString ActivateQuestion::text() const {
   return QObject::tr("The %1 belongs to %2, but %3 is active.").arg(kind, picked, active);
 }
 
+QString ActivateQuestion::detail() const {
+  return QObject::tr("If you activate it, the %1 goes into %2. If you keep %3 active, the %1 goes into %3.")
+      .arg(made, picked, active);
+}
+
+QString madeBy(const QString& featureType) {
+  if (featureType == QLatin1String("construction_plane")) {
+    return QStringLiteral("plane");
+  }
+  if (featureType == QLatin1String("construction_axis")) {
+    return QStringLiteral("axis");
+  }
+  if (featureType == QLatin1String("construction_point")) {
+    return QStringLiteral("point");
+  }
+  return QStringLiteral("sketch");
+}
+
+QRect questionPlace(const QSize& size, const QPoint& pick, const QRect& within) {
+  // The pick and the face around it, which the box keeps clear of.
+  constexpr int kClear = 80;
+  const QRect keep(pick.x() - kClear, pick.y() - kClear, 2 * kClear + 1, 2 * kClear + 1);
+  const auto inside = [&within](QRect place) {
+    place.moveLeft(std::clamp(place.left(), within.left(), std::max(within.left(), within.right() + 1 - place.width())));
+    place.moveTop(std::clamp(place.top(), within.top(), std::max(within.top(), within.bottom() + 1 - place.height())));
+    return place;
+  };
+  const int w = size.width();
+  const int h = size.height();
+  const QRect candidates[] = {
+      QRect(QPoint(pick.x() - w / 2, keep.top() - h), size),    // above
+      QRect(QPoint(pick.x() - w / 2, keep.bottom() + 1), size), // below
+      QRect(QPoint(keep.right() + 1, pick.y() - h / 2), size),  // to the right
+      QRect(QPoint(keep.left() - w, pick.y() - h / 2), size),   // to the left
+  };
+  QRect least;
+  qint64 leastCovered = -1;
+  for (const QRect& candidate : candidates) {
+    const QRect place = inside(candidate);
+    const QRect covered = place.intersected(keep);
+    if (covered.isEmpty()) {
+      return place;
+    }
+    const qint64 area = static_cast<qint64>(covered.width()) * covered.height();
+    if (leastCovered < 0 || area < leastCovered) {
+      least = place;
+      leastCovered = area;
+    }
+  }
+  return least;
+}
+
 ActivateQuestion activateQuestion(const DocumentSnapshot& snapshot, const SelectionItem& item,
                                   const QString& refused, bool enabled) {
   ActivateQuestion question;
@@ -155,12 +211,11 @@ ActivateQuestion activateQuestion(const DocumentSnapshot& snapshot, const Select
   return question;
 }
 
-ActivateAnswer askToActivate(QWidget* parent, const ActivateQuestion& question) {
+ActivateAnswer askToActivate(QWidget* parent, const ActivateQuestion& question, const std::optional<QPoint>& pick) {
   QMessageBox box(QMessageBox::Question, QObject::tr("Activate Component"), question.text(), QMessageBox::NoButton,
                   parent);
   box.setObjectName(QStringLiteral("activateComponentQuestion"));
-  box.setInformativeText(QObject::tr("Activated, what the command makes goes into %1; kept, into %2.")
-                             .arg(question.picked, question.active));
+  box.setInformativeText(question.detail());
   QPushButton* activate =
       box.addButton(QObject::tr("&Activate %1").arg(literal(question.picked)), QMessageBox::AcceptRole);
   QPushButton* keep = box.addButton(QObject::tr("&Keep in %1").arg(literal(question.active)), QMessageBox::RejectRole);
@@ -170,6 +225,31 @@ ActivateAnswer askToActivate(QWidget* parent, const ActivateQuestion& question) 
   box.setDefaultButton(activate);
   box.setEscapeButton(keep);
   prepareModal(&box);
+  if (pick && parent != nullptr) {
+    // Clear of the picked face rather than over the middle of the window,
+    // which is where the pick usually is. Placed by its estimated size
+    // before it shows, then once more by the size it shows with (the
+    // message box sizes itself when shown); logged for the tests.
+    const QRect within = parent->window()->frameGeometry();
+    const QPoint at = *pick;
+    box.adjustSize();
+    box.move(questionPlace(box.frameGeometry().size(), at, within).topLeft());
+    QTimer::singleShot(0, &box, [&box, at, within] {
+      const QRect place = questionPlace(box.frameGeometry().size(), at, within);
+      if (place.topLeft() != box.frameGeometry().topLeft()) {
+        box.move(place.topLeft());
+      }
+      const QRect shown = box.frameGeometry();
+      qDebug().noquote() << QStringLiteral("Activate component question at %1,%2 %3x%4, the pick at %5,%6 (%7)")
+                                .arg(shown.x())
+                                .arg(shown.y())
+                                .arg(shown.width())
+                                .arg(shown.height())
+                                .arg(at.x())
+                                .arg(at.y())
+                                .arg(shown.contains(at) ? QStringLiteral("over it") : QStringLiteral("clear of it"));
+    });
+  }
   execDialog(&box);
   ActivateAnswer answer;
   answer.activate = box.clickedButton() == activate;

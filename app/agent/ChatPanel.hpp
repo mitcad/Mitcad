@@ -10,7 +10,10 @@
 //   the conversation: your messages, the answers (Markdown, streamed),
 //     the tool calls as rows that open to their input and result (failed
 //     ones marked), approval cards (Allow once, Always allow, Deny),
-//     notices
+//     notices; calls that follow each other are one group row
+//     (mitcad#983): "3 calls (1 failed) · the latest call", which opens
+//     to their rows; the agent's text, a card or a notice starts the next
+//     group (core/mcp/src/chat/groups.rs)
 //   one state line
 //   the setup's one action (Install Claude Code, Sign in to Claude, ...)
 //   or the message field with Selection and View (what goes with the
@@ -26,13 +29,16 @@
 // notice); its controls have object names (chatInput, chatSend,
 // chatAttachSelection, chatAttachView, chatSetup, chatNew, chatAllowOnce,
 // chatAlwaysAllow, chatDeny, chatContinue, chatAgentChoice,
-// chatModelChoice).
+// chatModelChoice, chatToolGroupHead); the log lines "Chat tool group: 3
+// calls, 1 failed" (when a group's counts change) and "Chat tool group
+// opened: 3 calls, 1 failed, 3 rows shown" ("closed") follow the groups.
 //
 // The agent choice lists the agents found on this computer (and the chosen
 // one); choosing another starts a new conversation in it. The model choice
 // offers the agent's default, the models it names (Codex's once it ran) and
 // any name typed in; it is kept per agent.
 
+#include <QHash>
 #include <QJsonObject>
 #include <QList>
 #include <QSet>
@@ -75,9 +81,24 @@ protected:
   void hideEvent(QHideEvent* event) override;
 
 private:
+  // A group row of tool calls (mitcad#983): its head (hidden while it has
+  // one call) and the calls' rows below it.
+  struct ToolGroup {
+    QWidget* widget = nullptr;
+    QToolButton* head = nullptr;
+    QWidget* calls = nullptr;
+    QString logged; // the counts last logged
+  };
+
   void rebuild();
-  void addRow(int index);
+  // `group`: the tool call's group when known (tool_groups), else asked.
+  void addRow(int index, const QJsonObject& group = QJsonObject());
   void updateRow(int index);
+  // The group row that starts at entry `first`, made at the end of the
+  // conversation when it is new.
+  ToolGroup& toolGroup(int first);
+  // A group's head, its rows shown or not, its log line.
+  void applyGroup(const QJsonObject& group);
   void fillRow(QWidget* row, const QJsonObject& entry);
   QWidget* makeRow(const QJsonObject& entry);
   void updateState();
@@ -102,7 +123,8 @@ private:
   QScrollArea* m_scroll = nullptr;
   QWidget* m_list = nullptr;
   QVBoxLayout* m_listLayout = nullptr;
-  QList<QWidget*> m_rows;
+  QList<QWidget*> m_rows; // a tool call's row sits in its group's widget
+  QHash<int, ToolGroup> m_groups; // by the index of their first call
 
   QLabel* m_state = nullptr;
   QFrame* m_notice = nullptr; // the privacy notice before the first message

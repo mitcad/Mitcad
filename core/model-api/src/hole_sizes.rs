@@ -3,12 +3,14 @@
 //! the head recesses (counterbore, countersink, counterdrill) of the ISO
 //! metric screw sizes, from `core/model/data/hole_sizes.json`, which the
 //! Hole panel fills its fields from; with a thread's `major` diameter, also
-//! a tapped hole's countersink.
+//! a tapped hole's countersink, and with its `thread` the screw size its
+//! counterbore and counterdrill come from (mitcad#980).
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::ApiError;
+use mitcad_model::features::ThreadStandard;
 use mitcad_model::features::hole_sizes::{
     self, COUNTERSINK_ANGLE_DEGREES, ClearanceFit, ScrewSize,
 };
@@ -23,6 +25,23 @@ pub(crate) struct HoleSizesQuery {
     /// countersink too.
     #[serde(default)]
     major: Option<f64>,
+    /// A tapped hole's thread (mitcad#980): the answer has its tapped
+    /// hole's countersink (from the size's major diameter, unless `major`
+    /// is given), the screw size of its nominal diameter and its bore.
+    #[serde(default)]
+    thread: Option<TappedThread>,
+}
+
+/// A thread as the `thread_sizes` query names it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TappedThread {
+    #[serde(default)]
+    standard: ThreadStandard,
+    size: String,
+    /// `M6x1`: the bore (`thread_bore`) is its basic minor diameter.
+    #[serde(default)]
+    designation: Option<String>,
 }
 
 fn size_json(size: &ScrewSize) -> Value {
@@ -75,7 +94,20 @@ pub(super) fn hole_sizes_json(query: &HoleSizesQuery) -> Result<Value, ApiError>
             "countersink": countersink,
         },
     });
-    if let Some(major) = query.major {
+    let mut major = query.major;
+    if let Some(thread) = &query.thread {
+        if let Some(size) = hole_sizes::of_thread(thread.standard, &thread.size) {
+            answer["thread_size"] = size_json(size);
+        }
+        let designation = thread.designation.as_deref().unwrap_or_default();
+        if let Some(bore) = hole_sizes::thread_bore(thread.standard, designation) {
+            answer["thread_bore"] = json!(bore);
+        }
+        if major.is_none() {
+            major = hole_sizes::thread_major(thread.standard, &thread.size);
+        }
+    }
+    if let Some(major) = major {
         if !(major.is_finite() && major > 0.0) {
             return Err(ApiError(format!(
                 "a thread's major diameter must be greater than zero, got {major}"

@@ -6,16 +6,22 @@
 // from the device's six axes to the camera, which the unit tests check.
 //
 // The device's axes come in the view's frame (platform/SpaceMouseDevice.hpp).
-// The model follows the cap ("object mode"): pushed to the right it moves
-// to the right, lifted it moves up, pulled toward the user it comes closer
-// (zooms in), and turned it turns the same way, about the same centre as
-// the mouse's orbit and with the orbit's Z lock. A flat view (sketch mode)
-// takes the pan and the zoom only.
+// Its Navigation mode (mitcad#978) says what follows the cap. Object (the
+// default): the model, pushed to the right it moves to the right, lifted
+// it moves up, pulled toward the user it comes closer (zooms in), and
+// turned it turns the same way about the mouse orbit's centre. Camera:
+// the camera, every motion the other way round, still about the orbit's
+// centre. Fly: the camera as in Camera, but turning about the eye (in
+// perspective; in orthographic as Camera). The 3D mouse's own Lock horizon
+// keeps world Z upright and takes no roll, whatever the mouse's
+// Constrained orbit. A flat view (sketch mode) takes the pan and the zoom
+// only, in the mode's direction.
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <initializer_list>
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -27,9 +33,40 @@
 
 namespace mitcad {
 
+// What follows the cap (mitcad#978): the model, the camera turning about
+// the orbit's centre, or the camera turning about the eye.
+enum class SpaceMouseMode { Object, Camera, Fly };
+
+// The modes' names in the settings and the log.
+inline const char* spaceMouseModeId(SpaceMouseMode mode) {
+  switch (mode) {
+  case SpaceMouseMode::Camera:
+    return "camera";
+  case SpaceMouseMode::Fly:
+    return "fly";
+  case SpaceMouseMode::Object:
+    break;
+  }
+  return "object";
+}
+
+inline SpaceMouseMode spaceMouseModeFromId(const QString& id) {
+  for (const SpaceMouseMode mode : {SpaceMouseMode::Camera, SpaceMouseMode::Fly}) {
+    if (id == QLatin1String(spaceMouseModeId(mode))) {
+      return mode;
+    }
+  }
+  return SpaceMouseMode::Object;
+}
+
 struct SpaceMouseSettings {
   bool enabled = true;
   double speed = 1.0;
+  SpaceMouseMode mode = SpaceMouseMode::Object;
+  // World Z stays upright and the roll axis does nothing (mitcad#978; not
+  // the mouse's Constrained orbit, whose value it takes only when the
+  // settings have none of their own).
+  bool lockHorizon = false;
   // Per axis (tx, ty, tz, rx, ry, rz): whether it moves the view, and
   // whether its direction is reversed.
   std::array<bool, 6> axisOn{{true, true, true, true, true, true}};
@@ -66,6 +103,12 @@ inline void loadSpaceMouseSettings(const QSettings& store, SpaceMouseSettings& s
     settings.axisOn[axis] = !off.contains(key);
     settings.reversed[axis] = reversed.contains(key);
   }
+  settings.mode = spaceMouseModeFromId(store.value(prefix + QStringLiteral("Mode")).toString());
+  // Before mitcad#978 the 3D mouse kept the horizon with the mouse's
+  // Constrained orbit: settings from then keep doing so.
+  settings.lockHorizon =
+      store.value(prefix + QStringLiteral("LockHorizon"), store.value(QStringLiteral("view/constrainedOrbit"), false))
+          .toBool();
   settings.lockRotation = store.value(prefix + QStringLiteral("LockRotation"), false).toBool();
   settings.lockTranslation = store.value(prefix + QStringLiteral("LockTranslation"), false).toBool();
   settings.dominantAxis = store.value(prefix + QStringLiteral("DominantAxis"), false).toBool();
@@ -102,6 +145,8 @@ inline void saveSpaceMouseSettings(QSettings& store, const SpaceMouseSettings& s
   }
   store.setValue(prefix + QStringLiteral("AxesOff"), off);
   store.setValue(prefix + QStringLiteral("AxesReversed"), reversed);
+  store.setValue(prefix + QStringLiteral("Mode"), QLatin1String(spaceMouseModeId(settings.mode)));
+  store.setValue(prefix + QStringLiteral("LockHorizon"), settings.lockHorizon);
   store.setValue(prefix + QStringLiteral("LockRotation"), settings.lockRotation);
   store.setValue(prefix + QStringLiteral("LockTranslation"), settings.lockTranslation);
   store.setValue(prefix + QStringLiteral("DominantAxis"), settings.dominantAxis);
@@ -164,7 +209,9 @@ inline SpaceMouseAxes spaceMouseFiltered(const SpaceMouseSettings& settings, con
   return result;
 }
 
-// What the camera does per second, the model following the cap.
+// What the camera does per second, as the cap asks for it in Object mode
+// (the model following the cap); spaceMouseMove turns it round for the
+// other modes.
 struct SpaceMouseRates {
   double panX = 0.0;  // view heights per second, the model moving right
   double panY = 0.0;  // view heights per second, the model moving up
@@ -236,14 +283,35 @@ inline void turn(SpaceMousePose& pose, const SpaceMouseVec& pivot, const SpaceMo
 }
 } // namespace spacemouse_detail
 
+// How spaceMouseMove follows the cap (mitcad#978): the Navigation mode, the
+// 3D mouse's Lock horizon, and whether the view is in perspective (Fly
+// turns about the eye only then).
+struct SpaceMouseStyle {
+  SpaceMouseMode mode = SpaceMouseMode::Object;
+  bool lockHorizon = false;
+  bool perspective = true;
+};
+
 // The camera after `seconds` of `rates`: panned across the view, turned
-// about `pivot` (the orbit's centre) and zoomed. With `zUp` (the
-// constrained orbit) it turns about Z and across the view only, never
+// and zoomed. Object mode moves the camera opposite to the cap, the model
+// following it; Camera and Fly move it with the cap. Object and Camera
+// turn about `pivot` (the orbit's centre), Fly in perspective about the
+// eye. With Lock horizon it turns about Z and across the view only, never
 // rolls, and stops a degree short of looking straight along Z. A pose
 // that makes no view comes back unchanged.
 inline SpaceMousePose spaceMouseMove(const SpaceMousePose& pose, const SpaceMouseVec& pivot,
-                                     const SpaceMouseRates& rates, double seconds, bool zUp) {
+                                     const SpaceMouseRates& asked, double seconds, const SpaceMouseStyle& style) {
   using namespace spacemouse_detail;
+  // The camera with the cap: every rate the other way round. An axis's
+  // Reverse (spaceMouseRates) turns it round again.
+  SpaceMouseRates rates = asked;
+  if (style.mode != SpaceMouseMode::Object) {
+    for (double* rate : {&rates.panX, &rates.panY, &rates.zoom, &rates.pitch, &rates.yaw, &rates.roll}) {
+      *rate = -*rate;
+    }
+  }
+  const bool aboutEye = style.mode == SpaceMouseMode::Fly && style.perspective;
+  const bool zUp = style.lockHorizon;
   const SpaceMouseVec toTarget = sub(pose.target, pose.eye);
   const double distance = length(toTarget);
   if (!(distance > 0.0) || !std::isfinite(distance) || !(pose.height > 0.0) || !std::isfinite(seconds) ||
@@ -260,20 +328,23 @@ inline SpaceMousePose spaceMouseMove(const SpaceMousePose& pose, const SpaceMous
   const SpaceMouseVec right = cross(direction, up);
   SpaceMousePose result = pose;
   result.up = up;
-  // The model moves with the cap: the camera the other way.
+  // The model moves with the cap: the camera the other way (in Object
+  // mode; the rates are turned round for the others).
   const SpaceMouseVec offset =
       scale(add(scale(right, rates.panX), scale(up, rates.panY)),
             -seconds * (pose.panHeight > 0.0 && std::isfinite(pose.panHeight) ? pose.panHeight : pose.height));
   result.eye = add(result.eye, offset);
   result.target = add(result.target, offset);
+  // Fly turns in place: about the eye, which the turns then keep.
+  const SpaceMouseVec centre = aboutEye ? result.eye : pivot;
   if (zUp) {
     const SpaceMouseVec z{{0.0, 0.0, dot(up, SpaceMouseVec{{0.0, 0.0, 1.0}}) < 0.0 ? -1.0 : 1.0}};
-    turn(result, pivot, z, -rates.yaw * seconds);
+    turn(result, centre, z, -rates.yaw * seconds);
     SpaceMousePose pitched = result;
     const SpaceMouseVec turnedRight = cross(scale(sub(result.target, result.eye), 1.0 / distance), result.up);
     const double sideways = length(turnedRight);
     if (sideways > 1e-12) {
-      turn(pitched, pivot, scale(turnedRight, 1.0 / sideways), -rates.pitch * seconds);
+      turn(pitched, centre, scale(turnedRight, 1.0 / sideways), -rates.pitch * seconds);
       const auto along = [&distance](const SpaceMousePose& p) {
         return std::abs(sub(p.target, p.eye)[2]) / distance;
       };
@@ -285,13 +356,13 @@ inline SpaceMousePose spaceMouseMove(const SpaceMousePose& pose, const SpaceMous
     }
   } else {
     // The model turns by (pitch, yaw, roll) about the view's axes; the
-    // camera by the opposite about the pivot.
+    // camera by the opposite about the centre.
     const SpaceMouseVec toward = scale(direction, -1.0);
     const SpaceMouseVec spin =
         add(add(scale(right, rates.pitch), scale(up, rates.yaw)), scale(toward, rates.roll));
     const double rate = length(spin);
     if (rate > 0.0) {
-      turn(result, pivot, scale(spin, 1.0 / rate), -rate * seconds);
+      turn(result, centre, scale(spin, 1.0 / rate), -rate * seconds);
     }
   }
   result.height = pose.height * std::exp(-rates.zoom * seconds);

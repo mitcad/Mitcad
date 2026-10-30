@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use mitcad_model::Document;
 use mitcad_model::datum::Vec3;
-use mitcad_model::ids::ComponentUid;
+use mitcad_model::ids::{ComponentUid, LARGEST_U32_ID};
 use mitcad_model::internal::profile::{cross, dot};
 use mitcad_model::testing::MockKernel;
 use mitcad_model_api::DocumentApi;
@@ -1385,4 +1385,62 @@ fn a_base_views_automatic_scale_fits_and_a_details_circle_moves() {
     assert_eq!(point(&detail["circle"]["center"]), [80.0, 120.0]);
     assert_eq!(point(&detail["place"]), [300.0, 60.0]);
     assert_eq!(undo_label(&doc), format!("Edit view {id} of Drawing1"));
+}
+
+#[test]
+fn a_drawings_ids_leave_the_top_numbers_free() {
+    // mitcad#944: a design file's drawing, view and annotation ids and
+    // export counts stay below the reserve, so the next ones exist.
+    let top = LARGEST_U32_ID;
+    let mut doc = drawn();
+    command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "type": "text", "at": [20, 20],
+               "text": "NOTE"}),
+    );
+    let mut file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    let drawing = &mut file["drawings"][0];
+    drawing["uid"] = json!(format!("D{top}"));
+    drawing["exported"] = json!(top);
+    drawing["sheets"][0]["views"][1]["id"] = json!(top);
+    drawing["sheets"][0]["notes"][0]["id"] = json!(top);
+    let mut loaded = Document::from_json(&file.to_string(), MockKernel::default()).unwrap();
+    // A design file is read unevaluated; its bodies come with recompute.
+    command(&mut loaded, json!({"cmd": "recompute"}));
+    let d = format!("D{top}");
+    let added = command(&mut loaded, json!({"cmd": "add_drawing", "size": "A3"}));
+    assert_eq!(added["drawing"], format!("D{}", top + 1));
+    let view = command(
+        &mut loaded,
+        json!({"cmd": "add_drawing_view", "drawing": d.as_str(), "type": "base",
+               "direction": "top", "at": [300, 120], "scale": "1:1"}),
+    );
+    assert_eq!(view["view"], top + 1);
+    let note = command(
+        &mut loaded,
+        json!({"cmd": "add_drawing_annotation", "drawing": d.as_str(), "type": "text",
+               "at": [20, 40], "text": "NEXT"}),
+    );
+    assert_eq!(note["annotation"], top + 1);
+    // One past the largest is refused as the file is read.
+    let above = top + 1;
+    for (field, message) in [
+        ("uid", "invalid drawing id 'D4293918720'"),
+        ("exported", "invalid export count '4293918720'"),
+        ("view", "invalid view id '4293918720'"),
+        ("note", "invalid annotation id '4293918720'"),
+    ] {
+        let mut bad = file.clone();
+        let kept = &mut bad["drawings"][0];
+        match field {
+            "uid" => kept["uid"] = json!(format!("D{above}")),
+            "exported" => kept["exported"] = json!(above),
+            "view" => kept["sheets"][0]["views"][1]["id"] = json!(above),
+            _ => kept["sheets"][0]["notes"][0]["id"] = json!(above),
+        }
+        let Err(error) = Document::from_json(&bad.to_string(), MockKernel::default()) else {
+            panic!("{field} {above} was read");
+        };
+        assert!(error.to_string().contains(message), "{error}");
+    }
 }

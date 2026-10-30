@@ -152,6 +152,7 @@ const StepSpec kSpecs[] = {
     {"expect-profiles", 1, 1, kIdle},
     {"type-in", 2, 2, kInputOfMain},
     {"command", 1, 1, kInputOfMain},
+    {"test-status-message", 2, 2, kInputOfMain},
     {"open-file", 1, 1, kInputOfMain},
     {"open-file-now", 1, 1, kPlain},
     {"file-dialog", 2, 4, kInputOfMain},
@@ -312,12 +313,15 @@ const StepSpec kSpecs[] = {
     {"expect-native-button-order", 1, -1, kIdle},
     {"expect-native-control-focus", 1, 1, kIdle},
     {"expect-native-layout-contract", 0, 0, kIdle},
+    {"expect-native-settings-layout", 1, 1, kIdle},
     {"native-pointer-click", 1, 3, kInputOfTarget},
     {"native-pointer-popup", 2, 3, kInputOfTarget},
     {"native-pointer-dblclick", 1, 1, kInputOfTarget},
     {"native-pointer-choice", 4, 34, kInputOfTarget},
     {"native-pointer-button", 1, 1, kInputOfTarget},
     {"native-pointer-drag", 3, 3, kInputOfTarget},
+    {"native-header-resize", 3, 3, kInputOfTarget},
+    {"expect-native-header-resize-retained", 2, 2, kIdle},
     {"native-dialog-resize", 2, 2, kInputOfTarget},
     // A 3D mouse's axes and buttons (mitcad#951).
     {"space-mouse", 6, 7, kInputOfMain},
@@ -2078,7 +2082,9 @@ void TestDriver::run(const Step& step) {
             name == QLatin1String("native-pointer-popup") && a.size() == 3 ? a.at(2) : QString());
         if (!clickError.isEmpty()) fail(line, clickError);
         else if (!tracked) fail(line, error);
-      } else if (!mac::test::contextMenu(a.at(0), a.at(1), error)) fail(line, error);
+      } else if (!mac::test::contextMenu(a.at(0), a.at(1), error, [this] {
+                   if (!m_finished) m_timer->start();
+                 })) fail(line, error);
       if (!m_finished) m_timer->start();
     });
   } else if (name == QLatin1String("context-menu-logged")) {
@@ -2435,6 +2441,33 @@ void TestDriver::run(const Step& step) {
     if (!passed) {
       fail(line, error.isEmpty() ? QStringLiteral("widget refresh requires the native UI") : error);
     }
+  } else if (name == QLatin1String("native-header-resize") ||
+             name == QLatin1String("expect-native-header-resize-retained")) {
+    if (!mac::test::active()) { fail(line, QStringLiteral("native header steps require the native UI")); return; }
+    bool validColumn = false;
+    const int column = a.at(1).toInt(&validColumn);
+    double delta = 0;
+    const bool drag = name == QLatin1String("native-header-resize");
+    if (!validColumn || column < 0 || (drag && (!toNumber(a.at(2), delta) || !std::isfinite(delta) ||
+                                              std::abs(delta) < 4 || std::abs(delta) > 300))) {
+      fail(line, QStringLiteral("native header steps need a logical column and resize delta of 4..300 points")); return;
+    }
+    const QString id = a.at(0);
+    if (drag) {
+      whenReady([this, id] { return mac::test::controlExists(id, &m_waitDetail); }, 6,
+                QStringLiteral("no native table '%1'").arg(id), [this, line, id, column, delta] {
+        queue([this, line, id, column, delta] {
+          m_timer->stop();
+          QString detail;
+          const bool passed = mac::test::resizeHeader(id, column, delta, detail);
+          if (!m_finished) m_timer->start();
+          if (!passed) fail(line, detail);
+        });
+      });
+    } else {
+      whenReady([this, id, column] { return mac::test::headerResizeRetained(id, column, m_waitDetail); }, 6,
+                QStringLiteral("native header '%1' column %2 lost its dragged width").arg(id).arg(column));
+    }
   } else if (name == QLatin1String("expect-native-duplicate-choices")) {
     auto* window = qobject_cast<MainWindow*>(m_main.data());
     QString error;
@@ -2577,7 +2610,8 @@ void TestDriver::run(const Step& step) {
                 QStringLiteral("native '%1' does not select '%2' as its presenter does").arg(outline, row));
     }
   } else if (name == QLatin1String("expect-native-bounds") || name == QLatin1String("expect-native-button-order") ||
-             name == QLatin1String("expect-native-form-layout") || name == QLatin1String("expect-native-configuration-layout") ||
+             name == QLatin1String("expect-native-form-layout") || name == QLatin1String("expect-native-settings-layout") ||
+             name == QLatin1String("expect-native-configuration-layout") ||
              name == QLatin1String("expect-native-spanned-heading") || name == QLatin1String("expect-native-first-row") ||
              name == QLatin1String("expect-native-control-focus") || name == QLatin1String("expect-native-layout-contract") ||
              name == QLatin1String("native-pointer-click") || name == QLatin1String("native-pointer-dblclick") ||
@@ -2591,9 +2625,11 @@ void TestDriver::run(const Step& step) {
     if (name == QLatin1String("expect-native-bounds")) {
       double minimum = 0;
       // "placeholder": the minimum is the AppKit cell's size for its whole
-      // placeholder, read from the actual field when the check runs (mitcad#953).
+      // placeholder, read from the actual field when the check runs (mitcad#953);
+      // "text" the same for its whole current text (mitcad#975).
       const bool placeholder = a.at(1) == QLatin1String("placeholder");
-      if (!placeholder && a.at(1) == QLatin1String("shared")) {
+      const bool wholeText = a.at(1) == QLatin1String("text");
+      if (!placeholder && !wholeText && a.at(1) == QLatin1String("shared")) {
         // Read the same populated presenter that owns the native control.
         // Native modeless windows keep their Qt windows hidden, so lookup
         // cannot depend on QApplication's active Qt window or hasFocus().
@@ -2637,14 +2673,15 @@ void TestDriver::run(const Step& step) {
         qInfo().noquote() << QStringLiteral("Native shared bounds: %1 minimum=%2 hint=%3 explicit=%4 policy=%5 formGrowth=%6 required=%7")
             .arg(a.at(0)).arg(least).arg(hint).arg(field->minimumWidth()).arg(int(policy))
             .arg(form ? int(form->fieldGrowthPolicy()) : -1).arg(minimum);
-      } else if (!placeholder && (!toNumber(a.at(1), minimum) || minimum < 0)) {
-        fail(line, QStringLiteral("expect-native-bounds <identifier> <minimum width|shared|placeholder> [label regex]"));
+      } else if (!placeholder && !wholeText && (!toNumber(a.at(1), minimum) || minimum < 0)) {
+        fail(line, QStringLiteral("expect-native-bounds <identifier> <minimum width|shared|placeholder|text> [label regex]"));
         return;
       }
       const QString id = a.at(0);
       const QString label = a.size() > 2 ? a.at(2) : QString();
-      const auto check = [id, minimum, label, placeholder](QString& error) {
+      const auto check = [id, minimum, label, placeholder, wholeText](QString& error) {
         return placeholder ? mac::test::placeholderBounds(id, label, error)
+               : wholeText ? mac::test::textBounds(id, label, error)
                            : mac::test::controlBounds(id, minimum, label, error);
       };
       QString detail;
@@ -2684,9 +2721,18 @@ void TestDriver::run(const Step& step) {
       const QString id = a.at(0);
       whenReady([id] { return mac::test::focused(id); }, 6,
                 QStringLiteral("native control '%1' does not have keyboard focus").arg(id));
+    } else if (name == QLatin1String("expect-native-settings-layout")) {
+      const QString page = a.at(0);
+      whenReady([this, page] { return mac::test::settingsLayout(page, m_waitDetail); }, 6,
+                QStringLiteral("Settings layout does not satisfy the %1 page contract").arg(page));
     } else if (name == QLatin1String("expect-native-layout-contract")) {
+      // Its synthetic dialogs pump events while they are mounted. Later
+      // steps, including finish(), must wait until every fixture is gone.
+      m_timer->stop();
       QString detail;
-      if (!mac::test::layoutContract(detail)) fail(line, detail);
+      const bool passed = mac::test::layoutContract(detail);
+      if (!m_finished) m_timer->start();
+      if (!passed) fail(line, detail);
     } else if (name == QLatin1String("native-dialog-resize")) {
       double width = 0;
       double height = 0;
@@ -2721,7 +2767,9 @@ void TestDriver::run(const Step& step) {
       const bool byTitle = name == QLatin1String("native-pointer-button");
       QRegularExpression re;
       if (byTitle && !regex(target, re)) return;
-      const auto perform = [this, line, name, target, re, from, to, fromKnob, x, y] {
+      // Without fractions a click aims at the control's default point.
+      const bool atFractions = name == QLatin1String("native-pointer-click") && a.size() == 3;
+      const auto perform = [this, line, name, target, re, from, to, fromKnob, x, y, atFractions] {
         // Keep later steps outside a held drag. Button actions can open
         // modal dialogs that the following script steps must still drive.
         const bool heldDrag = name == QLatin1String("native-pointer-drag");
@@ -2730,7 +2778,8 @@ void TestDriver::run(const Step& step) {
         const bool ok = name == QLatin1String("native-pointer-button") ? mac::test::pointerButton(re, detail)
                         : name == QLatin1String("native-pointer-drag") ? mac::test::pointerDrag(target, from, to, detail, fromKnob)
                         : name == QLatin1String("native-pointer-dblclick") ? mac::test::pointerDoubleClick(target, detail)
-                                                                       : mac::test::pointerClick(target, detail, x, y);
+                        : atFractions ? mac::test::pointerClick(target, detail, x, y)
+                                      : mac::test::pointerClick(target, detail);
         if (!ok) fail(line, detail.isEmpty() ? QStringLiteral("native pointer input failed for '%1'").arg(target) : detail);
         if (heldDrag && !m_finished) m_timer->start();
       };
@@ -3545,6 +3594,15 @@ void TestDriver::run(const Step& step) {
         mainWindow);
 
     // --- Commands, menus and buttons
+  } else if (name == QLatin1String("test-status-message")) {
+    // Exercise the ordinary status path without manufacturing a model
+    // failure just to obtain an error's longer lifetime (mitcad#996).
+    auto* window = qobject_cast<MainWindow*>(mainWindow);
+    if (window == nullptr || (a.at(0) != QLatin1String("hint") && a.at(0) != QLatin1String("error"))) {
+      fail(line, QStringLiteral("test-status-message requires hint|error and the main window")); return;
+    }
+    if (a.at(0) == QLatin1String("error")) window->showError(a.at(1));
+    else window->showHint(a.at(1));
   } else if (name == QLatin1String("command")) {
     QAction* action = mainWindow->findChild<QAction*>(QStringLiteral("command_") + a.at(0));
     if (action == nullptr) {

@@ -1281,6 +1281,11 @@ in the distro only:
   `core/freecad/tests/sketch_corpus.rs` compares every
   sketch with FreeCAD's reading. Example:
   `MITCAD_FCSTD_CORPUS=~/fcstd-models:~/fcstd-examples ctest -R freecad`.
+- `MITCAD_GEOMETRY_CASES` (a folder): geometry kernel cases made of
+  bodies cut from reported models, which are not committed, each in a
+  folder of its own as B-rep files. `geometry/tests/test_boolean.cpp`
+  reads `caliper-pad028/body.brep` and `pad.brep` (a join that loses
+  volume, mitcad#964); skipped with a message without the variable.
 
 ### SolidCraft designs
 

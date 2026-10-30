@@ -166,6 +166,17 @@ sizes to the rows that match. The part grid's Supplier filter hides the
 components that the supplier sells in no size
 ([the user guide](user-guide.md#component-libraries)).
 
+**What MitCad shows.** The same three dialogs show the chosen row's
+articles behind a button, **Supplier Articles (n)…**, shown only when
+the row has articles. It opens a table with one line per article and
+the columns Supplier (the supplier's `name`, a link to its `url`), Part
+number, Material, Finish, Checked and Product page (the row's or the
+component's `supplier_url`). A column that no article fills is hidden,
+so the table shows what the library gives and nothing more. When the
+Supplier filter names a supplier, its articles come first; the others
+follow. The parts lists keep one text per part in their column
+Supplier part numbers (`Würth 0084 6 10 (8.8 zinc-plated); …`).
+
 **Checks.** `library check` refuses an article of a supplier that
 `suppliers` does not list, a `checked` that is no date, an article
 without a part number, a supplier without an id or a name, and a row
@@ -1803,6 +1814,15 @@ missing. The CLI and the MCP server do not fetch at start-up.
 Updates add branches and tags. They remove nothing. Git's automatic
 garbage collection is off there. Thus the versions that designs use
 stay readable.
+
+A clone may have at most 200 MB, a new one and an updated one alike
+(mitcad#938). An update fetches the branches and tags under
+`refs/incoming/` first. Only when the clone is 200 MB or less then do
+they replace `refs/heads/` and `refs/tags/`. A larger clone gives the
+error `too_large` ("the versions fetched before stay"): the fetched
+references and the object files the fetch brought are removed again, so
+the clone has the versions it had before, and the next fetch (also an
+Auto-update at start-up) tries again.
 
 A design whose library is not on the computer keeps the bodies saved
 with it, and says so. Library Parts › Get Missing Libraries shows their

@@ -5,6 +5,8 @@
 # check-all sources: app/framework/CommandSession.cpp app/framework/DocumentSession.cpp app/commands/InspectCommands.cpp
 # check-all sources: core/cpp/bridge/analysis.cpp core/model-api/src/analysis.rs core/ffi/src/lib.rs geometry/io/src/mesh.cpp
 # check-all sources: core/model/src/document/analyses.rs
+# check-all sources: app/framework/SectionPreview.cpp app/framework/SectionPreview.hpp
+# check-all sources: app/framework/CommandSessionVisibility.cpp app/commands/FilletCommands.cpp
 # The caps of Section Analysis through the real UI (mitcad#382), on a design
 # of the root and two components, each with a block:
 #   - Each component's caps take its timeline colour (the band under its
@@ -12,6 +14,12 @@
 #     hatched in a darker shade of its own, in turn at 45 and 135 degrees.
 #   - The caps keep their colours and their hatch in other visual styles and
 #     with the bodies drawn in component colours.
+#   - A feature preview at the section (mitcad#943): with Part active,
+#     Chamfer on the top front edge of its cut block; the preview's body is
+#     clipped at the plane on the section worker's thread and the caps
+#     follow the preview (area 599.5 instead of 600: the bevel across the
+#     cut); Escape brings back the caps of the blocks at the marker, and the
+#     root is activated again.
 #   - Remove Section Analysis takes the caps away.
 #   - The clips off the UI thread (mitcad#438), each view round made to wait
 #     3 s: the window takes a new distance while the round at x = 0 runs,
@@ -110,6 +118,55 @@ ui_expect_new "bodies in component colours" "the bodies in component colours"
 CAPS_NOW=$(grep "Section caps: 3 colour(s)" "$UI_LOG" | tail -1 | sed 's/\] in.*/]/')
 [ "$CAPS_NOW" = "$(echo "$CAPS" | sed 's/\] in.*/]/')" ] || ui_fail "the caps changed with the bodies' colours: $CAPS_NOW"
 echo "ok   the caps keep their colours and hatch"
+
+# pick_where "start" "part"...: clicks where the newest "Pick <start>..."
+# line since the last "Pick places:" that has every part too was logged.
+pick_where() {
+  local start at px py lines part
+  start=$(grep -n "Pick places:" "$UI_LOG" | tail -1 | cut -d: -f1)
+  lines=$(tail -n +"${start:-1}" "$UI_LOG" | grep -F "Pick $1")
+  shift
+  for part in "$@"; do
+    lines=$(echo "$lines" | grep -F -- "$part")
+  done
+  at=$(echo "$lines" | tail -1 | sed -n 's/.* at \([0-9]*\),\([0-9]*\)$/\1 \2/p')
+  [ -n "$at" ] || ui_fail "no pick place logged for '$*'"
+  read -r px py <<< "$at"
+  xdotool mousemove $((X + px * UI_SCALE)) $((Y + py * UI_SCALE)) click 1
+}
+
+# A feature preview at the section (mitcad#943): Chamfer on the top front
+# edge of Part's block, which the plane at x = 10 cuts. The preview's body
+# is clipped at the plane too, off the UI thread, and its caps follow it:
+# 600 mm² at the marker, 599.5 with the 1 mm bevel across the cut.
+echo "--- A feature preview cut at the section's plane"
+# A feature works on the bodies of the active component: Part first.
+ui_mark
+ui_step "activate Part (radio)"            ui_click_logged "Browser radio Root/Part:1"
+ui_expect_new "Activated Part" "Part active"
+ui_mark
+ui_step "chamfer (search)"                 ui_command "Chamfer"
+ui_expect_new "Pick places:" "Chamfer logs where its picks are"
+ui_step "pick Part's top front edge"       pick_where "edge F2.b0/E{" "F2:side(c1[c4,c2])" "F2:end("
+ui_expect_new "Chamfer Edges: 1 edge" "the cut block's edge picked"
+ui_expect_new "Preview Chamfer: ok" "previewed"
+ui_expect_new "Section preview ready at " "the preview's body clipped and handed to the view" 10
+ui_expect_new ", area 599.5 (preview)" "the caps follow the preview"
+since=$(tail -n +$((UI_MARK + 1)) "$UI_LOG")
+echo "$since" | grep -qE '^Section preview clips at .* off the UI thread \(section worker\): 1 bodies, 1 new' ||
+  ui_fail "the chamfered body was not clipped on the section worker's thread"
+echo "$since" | grep -qF 'Section caps: 3 face(s) at' || ui_fail "no caps logged for the preview"
+echo "$since" | grep -E '^Section caps: .*\(preview\)$' | grep -qvF 'Section caps: 3 face(s) at' &&
+  ui_fail "the preview's caps are not the three blocks' cuts: $(echo "$since" | grep -E '\(preview\)$')"
+echo "$since" | grep -q '^Section: F2.b0 shown whole' && ui_fail "the preview's clip failed"
+echo "ok   the chamfered block drawn cut, its caps the preview's"
+ui_mark
+ui_step "cancel (Escape)"                  ui_key Escape
+ui_expect_new "Command Chamfer cancelled" "the chamfer cancelled"
+ui_expect_new ", area 600.0" "the caps of the blocks at the marker again"
+ui_mark
+ui_step "activate Root (radio)"            ui_click_logged "Browser radio Root"
+ui_expect_new "Activated Root" "the root active again"
 
 echo "--- Remove"
 ui_mark

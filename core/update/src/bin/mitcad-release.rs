@@ -8,11 +8,10 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use mitcad_update::{
-    MANIFEST_FORMAT, Manifest, TrustedKeys, assess, parse_version, public_key, sign_file,
-    signing_key,
+    MANIFEST_FORMAT, MANIFEST_VALIDITY_DAYS, Manifest, TrustedKeys, assess, date_text, parse_date,
+    parse_version, public_key, sign_file, signing_key, today,
 };
 
 const USAGE: &str = "\
@@ -20,10 +19,15 @@ Usage:
   mitcad-release public-key
       Prints the public key of the release key (to build into Mitcad).
   mitcad-release manifest --version VERSION --notes URL [--date YYYY-MM-DD]
+                          [--expires YYYY-MM-DD]
                           [--asset PLATFORM FILE URL]... --out FILE
       Signs each file as the download for its platform (windows-x64,
       linux-x64) at URL and writes the signed manifest. The date defaults
-      to today (UTC).
+      to today (UTC), the expiry to 90 days from today.
+  mitcad-release renew --manifest FILE [--expires YYYY-MM-DD] --out FILE
+      Signs a release's manifest again with a new expiry (90 days from
+      today by default), after checking it against the release key; run it
+      for the latest release before its manifest expires.
   mitcad-release verify --manifest FILE --key PUBLIC-KEY [--asset PLATFORM FILE]...
       Checks a manifest and files against a public key.
 
@@ -65,6 +69,7 @@ fn run(args: &[String]) -> Result<(), Failure> {
             Ok(())
         }
         "manifest" => manifest(rest),
+        "renew" => renew(rest),
         "verify" => verify(rest),
         "help" | "--help" | "-h" => {
             println!("{USAGE}");
@@ -132,6 +137,7 @@ fn manifest(args: &[String]) -> Result<(), Failure> {
             ("--version", 1),
             ("--notes", 1),
             ("--date", 1),
+            ("--expires", 1),
             ("--asset", 3),
             ("--out", 1),
         ],
@@ -146,8 +152,9 @@ fn manifest(args: &[String]) -> Result<(), Failure> {
     let out = required("--out")?;
     let date = match single(&found, "--date") {
         Some(date) => date.to_string(),
-        None => today(),
+        None => date_text(today()),
     };
+    let expires = expiry(&found)?;
     let key = release_key()?;
     let mut assets = BTreeMap::new();
     for (_, values) in found.iter().filter(|(option, _)| *option == "--asset") {
@@ -165,23 +172,68 @@ fn manifest(args: &[String]) -> Result<(), Failure> {
         format: MANIFEST_FORMAT,
         version,
         date,
+        expires: Some(expires),
         notes: notes.to_string(),
         assets,
     };
-    let signed = manifest.signed(&key);
+    write_signed(&manifest, &key, out)
+}
+
+/// `--expires`, checked, or the default validity from today.
+fn expiry(found: &[(&str, &[String])]) -> Result<String, Failure> {
+    match single(found, "--expires") {
+        Some(date) if parse_date(date).is_some() => Ok(date.to_string()),
+        Some(date) => Err(Failure::Usage(format!(
+            "--expires takes a date YYYY-MM-DD, not '{date}'"
+        ))),
+        None => Ok(date_text(today() + MANIFEST_VALIDITY_DAYS)),
+    }
+}
+
+/// Signs `manifest` with `key` and writes it to `out`, once the
+/// application's checks accept it.
+fn write_signed(
+    manifest: &Manifest,
+    key: &ed25519_dalek::SigningKey,
+    out: &str,
+) -> Result<(), Failure> {
+    let signed = manifest.signed(key);
     // Signed is not enough: what the application reads must pass its checks.
     Manifest::read(
         signed.as_bytes(),
-        &TrustedKeys::parse(&public_key(&key)).map_err(error)?,
+        &TrustedKeys::parse(&public_key(key)).map_err(error)?,
     )
     .map_err(error)?;
     fs::write(out, signed).map_err(|e| error(format!("cannot write {out}: {e}")))?;
     println!(
-        "{out}: Mitcad {} signed with {}",
+        "{out}: Mitcad {} signed with {}, expires {}",
         manifest.version,
-        public_key(&key)
+        public_key(key),
+        manifest.expires.as_deref().unwrap_or("never")
     );
     Ok(())
+}
+
+/// The latest release's manifest signed again with a new expiry: its
+/// version, date, notes and downloads as they are, after its signature
+/// is checked against the release key.
+fn renew(args: &[String]) -> Result<(), Failure> {
+    let found = options(args, &[("--manifest", 1), ("--expires", 1), ("--out", 1)])?;
+    let required = |name: &str| {
+        single(&found, name).ok_or_else(|| Failure::Usage(format!("{name} is required")))
+    };
+    let path = required("--manifest")?;
+    let out = required("--out")?;
+    let expires = expiry(&found)?;
+    let key = release_key()?;
+    let data = fs::read(path).map_err(|e| error(format!("cannot read {path}: {e}")))?;
+    let mut manifest = Manifest::read(
+        &data,
+        &TrustedKeys::parse(&public_key(&key)).map_err(error)?,
+    )
+    .map_err(|e| error(format!("{path}: {e}")))?;
+    manifest.expires = Some(expires);
+    write_signed(&manifest, &key, out)
 }
 
 fn verify(args: &[String]) -> Result<(), Failure> {
@@ -203,9 +255,14 @@ fn verify(args: &[String]) -> Result<(), Failure> {
     let data = fs::read(path).map_err(|e| error(format!("cannot read {path}: {e}")))?;
     let manifest = Manifest::read(&data, &keys).map_err(error)?;
     println!(
-        "{path}: Mitcad {} of {}, signature good",
-        manifest.version, manifest.date
+        "{path}: Mitcad {} of {}, expires {}, signature good",
+        manifest.version,
+        manifest.date,
+        manifest.expires.as_deref().unwrap_or("never")
     );
+    if manifest.expired_on(today()) {
+        println!("{path}: expired: renew it (mitcad-release renew)");
+    }
     for (_, values) in found.iter().filter(|(option, _)| *option == "--asset") {
         manifest
             .verify_file(&values[0], Path::new(&values[1]), &keys)
@@ -218,28 +275,4 @@ fn verify(args: &[String]) -> Result<(), Failure> {
         println!("for {current}: {status:?}");
     }
     Ok(())
-}
-
-/// Today's date (UTC), `YYYY-MM-DD`.
-fn today() -> String {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
-    let days = (seconds / 86_400) as i64 + 719_468;
-    let era = days.div_euclid(146_097);
-    let day_of_era = days.rem_euclid(146_097);
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_index = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 {
-        month_index + 3
-    } else {
-        month_index - 9
-    };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}")
 }

@@ -1680,7 +1680,7 @@ pub enum CodeEcc {
 
 /// A font file a text uses (mitcad#473; `fonts.rs`): where it was read and
 /// what its licence says, kept with the design.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FontFile {
     /// The file's path when it was read (`.ttf`, `.otf`, `.ttc`, `.woff`
@@ -1692,6 +1692,19 @@ pub struct FontFile {
     /// The font's copyright and licence notes (its name table).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub licence: String,
+    /// The file was chosen in this session (`text::use_font_file`), so it
+    /// may be read again for a new string or style. A path read from a
+    /// design file never is (mitcad#929): such a text needs its stored
+    /// outlines, or the font file chosen again. Not saved, and not part of
+    /// the equality: the same file whether chosen now or before.
+    #[serde(skip)]
+    pub chosen: bool,
+}
+
+impl PartialEq for FontFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && self.index == other.index && self.licence == other.licence
+    }
 }
 
 impl FontFile {

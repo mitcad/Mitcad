@@ -314,6 +314,16 @@ public:
                           forOrientation:NSLayoutConstraintOrientationHorizontal];
       [control.widthAnchor constraintGreaterThanOrEqualToConstant:64].active = YES;
       [m_footer addArrangedSubview:control];
+      // A horizontal stack's optional centre alignment can discard its
+      // vertical padding. Preserve the whole button frame within the
+      // declared insets, including AppKit's alignment outsets (mitcad#993).
+      const NSEdgeInsets alignment = control.alignmentRectInsets;
+      [NSLayoutConstraint activateConstraints:@[
+        [control.topAnchor constraintGreaterThanOrEqualToAnchor:m_footer.topAnchor
+                                                       constant:m_footer.edgeInsets.top + alignment.top],
+        [control.bottomAnchor constraintLessThanOrEqualToAnchor:m_footer.bottomAnchor
+                                                      constant:-(m_footer.edgeInsets.bottom + alignment.bottom)]
+      ]];
     }
     int colorIndex = 0;
     for (const InputDef& input : m_def.inputs) {
@@ -404,6 +414,9 @@ public:
       case InputDef::Type::Text:
         if (qtString(row.edit.stringValue) != scope.text(input.id)) {
           row.edit.stringValue = nativeString(scope.text(input.id));
+        }
+        if (row.mark != nil) {
+          refreshMark(row, input.markFor(scope));
         }
         // What the feature's own parameter is, as a sketch dimension's
         // tooltip says (mitcad#250).
@@ -622,6 +635,15 @@ public:
       qDebug().noquote() << QStringLiteral("Panel %1 input %2 at %3,%4%5")
                                 .arg(m_def.name, row.key).arg(x).arg(y)
                                 .arg(shown(row) ? QString() : QStringLiteral(" (hidden)"));
+      if (row.mark != nil && !row.mark.hidden && shown(row)) {
+        // A value field's mark (mitcad#980).
+        const NSPoint point = [row.mark convertPoint:NSMakePoint(NSMidX(row.mark.bounds), NSMidY(row.mark.bounds))
+                                              toView:nil];
+        qDebug().noquote() << QStringLiteral("Panel %1 mark %2 at %3,%4")
+                                  .arg(m_def.name, row.key)
+                                  .arg(static_cast<int>(point.x))
+                                  .arg(static_cast<int>(content.bounds.size.height - point.y));
+      }
       for (NSButton* button in row.choiceButtons) {
         const NSPoint point = [button convertPoint:NSMakePoint(NSMidX(button.bounds), NSMidY(button.bounds))
                                             toView:nil];
@@ -709,6 +731,10 @@ public:
     } else if (kind == QStringLiteral("note")) {
       auto call = actions().noteAction;
       if (call) { call(key, parts.value(2).toInt()); }
+    } else if (kind == QStringLiteral("mark")) {
+      // A value field's mark (InputDef::onMark, mitcad#980: Reset to size).
+      auto call = actions().markClicked;
+      if (call) { call(key); }
     } else if (kind == QStringLiteral("tile")) {
       // The choice tile's button (InputDef::onButton): BUILD's part picker.
       auto call = actions().buttonClicked;
@@ -807,6 +833,10 @@ private:
     std::shared_ptr<NativeWidgetView> targetsView;
     // A value field's fx tools (mitcad#815).
     std::shared_ptr<NativeExpressionField> expression;
+    // A value field's mark (InputDef::markFor, mitcad#980) beside it, and
+    // the mark it shows.
+    NSButton* __strong mark = nil;
+    FieldMark shownMark;
     // A choice shown as a tile (InputDef::choiceTile with onButton,
     // mitcad#819): the chosen option's picture, name and detail.
     NSButton* __strong tile = nil;
@@ -1057,6 +1087,15 @@ private:
       controls.spacing = 2;
       controls.distribution = NSStackViewDistributionFill;
       [controls addArrangedSubview:row.edit];
+      if (input.type == InputDef::Type::Value && input.markFor) {
+        // A mark beside the field (mitcad#980: a Hole field that no longer
+        // follows the screw size), as the shared panel's in it: hidden until
+        // refreshMark shows one; a click does its action.
+        row.mark = iconButton(nil, QString(), QStringLiteral("mark|") + key);
+        row.mark.accessibilityIdentifier = nativeString(QStringLiteral("mark_") + key);
+        row.mark.hidden = YES;
+        [controls addArrangedSubview:row.mark];
+      }
       if (input.type == InputDef::Type::Value && !m_expressionHost.isNull()) {
         // The shared expression tools beside the field (mitcad#815).
         row.expression = std::make_shared<NativeExpressionField>(m_expressionHost.data(), row.edit,
@@ -1407,6 +1446,26 @@ private:
       [item addArrangedSubview:remove];
       addFullWidth(row.order, item);
     }
+  }
+
+  // A value field's mark (InputDef::markFor, mitcad#980): its icon, the
+  // tooltip saying why and what a click does.
+  void refreshMark(Row& row, const FieldMark& mark) {
+    if (mark == row.shownMark) {
+      return;
+    }
+    row.shownMark = mark;
+    row.mark.hidden = mark.isEmpty();
+    if (mark.isEmpty()) {
+      return;
+    }
+    const QString tip =
+        mark.action.isEmpty() ? mark.tooltip : QObject::tr("%1\nClick: %2").arg(mark.tooltip, mark.action);
+    if (NSImage* image = iconImage(themeIcon(mark.icon), 16, tip)) {
+      row.mark.image = image;
+    }
+    row.mark.toolTip = nativeString(tip);
+    row.mark.accessibilityLabel = nativeString(mark.action.isEmpty() ? mark.tooltip : mark.action);
   }
 
   // A note row's text and buttons (NoteRow, mitcad#655): the text and the

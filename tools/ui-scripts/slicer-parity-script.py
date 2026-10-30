@@ -73,6 +73,13 @@ for depth, (kind, label) in enumerate([("process", "Process"), ("printer", "Prin
     add(f"expect-log '3D Print {kind} new: {label} 1'", "focus-dialog '^Printers and Processes$'",
         f"expect-log 'Profile selected: {kind} {label} 1'", "expect-model-bodies 1 4000",
         f"expect-undo-depth ${{profilesBaseline}} {depth}")
+    if native and kind == "process":
+        # A new process leaves its choices unset: the popup shows the shared
+        # placeholder without a guessed item (mitcad#976). This runs before
+        # the file chooser, which needs event-posting access.
+        add("native-choice settingsTabs Quality", "expect-native-visible printSetting_seam_position true",
+            "expect-widget-property printSetting_seam_position currentIndex -1",
+            "expect-native-text printSetting_seam_position '^Slicer default$'")
     press("Close")
     add("focus-main")
 add("key Escape", "expect-log '^Command 3D Print cancelled$'", "wait-idle",
@@ -132,6 +139,17 @@ press("Advanced")
 press("Advanced")
 field("printSetting_layer_height", "0.25")
 add("expect-undo-depth ${baseline} 3", "expect-model-bodies 1 4000")
+if native:
+    # An unset choice shows the shared placeholder without a guessed item
+    # (mitcad#976); a real choice replaces it and its undo restores it.
+    add("expect-widget-property printSetting_seam_position currentIndex -1",
+        "expect-native-text printSetting_seam_position '^Slicer default$'",
+        "mark", "native-choice printSetting_seam_position Aligned",
+        "expect-log 'Profile Standard \\(design\\) seam_position = Aligned'",
+        "expect-undo-depth ${baseline} 4", "expect-native-text printSetting_seam_position '^Aligned$'",
+        "native-action edit.undo", "expect-undo-depth ${baseline} 3",
+        "expect-native-text printSetting_seam_position '^Slicer default$'",
+        "expect-widget-property printSetting_seam_position currentIndex -1")
 press("Close")
 add("focus-main", "command edit.undo", "command edit.undo", "expect-undo-depth ${baseline} 1",
     "command make.printers", "focus-dialog '^Printers and Processes$'")

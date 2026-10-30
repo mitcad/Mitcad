@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Native part catalogue (mitcad#813): Insert from Library and Community
 # Library keep the shared picture tiles, captions, groups, search,
-# favourites, tile size and activation, in usable bounds. The library is
+# favourites, tile size and activation, in usable bounds; the screw's
+# suppliers' articles in their table (mitcad#979). The library is
 # the test's local synthetic one (a socket screw and a nut, both pictured).
 expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
 wait-idle
@@ -96,6 +97,21 @@ focus-main
 command insert.library_component
 focus-dialog '^Insert from Library$'
 expect-native-tiles count libraryResults 2
+
+# The screw's suppliers' articles behind a button, in a table with the
+# columns they fill (mitcad#979).
+native-tiles click libraryResults iso4762
+expect-native-tiles current libraryResults iso4762
+mark
+button '^Supplier Articles \('
+focus-dialog '^Supplier Articles - '
+expect-log 'Supplier parts of M5x16: [0-9]+ articles, columns Supplier, Part number, Material, Finish, Checked'
+screenshot-dialog '${MITCAD_TEST_WORK}/supplier-articles-${MITCAD_TEST_COLOR_SCHEME}.png'
+button '^Copy as TSV$'
+expect-log 'Supplier articles copied: [0-9]+ rows'
+button '^Close$'
+expect-native-dialog-gone '^Supplier Articles - '
+focus-dialog '^Insert from Library$'
 mark
 native-tiles dblclick libraryResults iso4762
 expect-log 'Part picker chose mitcad-parts/iso4762'

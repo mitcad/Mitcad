@@ -46,7 +46,8 @@
 #      one opens from the timeline (a double-click), and a typed taper keeps
 #      its counterdrill; edited to a Clearance hole for M6 (mitcad#903) the
 #      size fills its diameter and counterdrill, and a typed depth stays
-#      when the size changes.
+#      when the size changes; a typed Countersink Diameter is marked and
+#      its Reset to size makes it follow the size again (mitcad#980).
 #  13. Joints (mitcad#55) on a design mitcad-cli makes: a pin on a revolute
 #      joint dragged in the view turns about its joint (one undo step); Joint
 #      (J) puts a cap's top face onto a plate's, flipped, the preview showing
@@ -570,6 +571,29 @@ Ui-Mark
 Ui-Step 'Screw Size M6 (wheel)'          { Ui-WheelLogged 'Panel Hole input clearance_size' 1 }
 Ui-ExpectNew 'Hole sizes for M6 normal: diameter 6.6 mm, cb_diameter 11 mm' 'back to 6.6 and 11'
 Ui-ExpectNew '; kept cd_depth' 'the typed depth stays at M6'
+# A typed Countersink Diameter no longer follows the size (mitcad#980): it
+# is marked in its field, and the mark's Reset to size makes it follow
+# again; back to the counterdrill for the volume.
+Ui-Mark
+Ui-Step 'Countersink (wheel)'            { Ui-WheelLogged 'Panel Hole input type' 1 }
+Ui-ExpectNew 'Hole: Hole Type = Countersink' 'countersink chosen'
+Ui-Step 'countersink 17'                 { Ui-TypeIn 'Panel Hole input cs_diameter' '17' }
+Ui-ExpectNew 'Hole cs_diameter typed: kept when the size changes' 'the typed countersink is kept'
+Ui-ExpectNew 'Panel Hole cs_diameter mark: Typed: does not follow the size' 'and marked'
+Ui-ExpectNew 'Panel Hole mark cs_diameter at ' 'its mark is in the field'
+Ui-Mark
+Ui-Step 'Screw Size M8 (wheel)'          { Ui-WheelLogged 'Panel Hole input clearance_size' -1 }
+Ui-ExpectNew '; kept cs_diameter, cd_depth' 'the typed countersink stays at M8'
+Ui-Mark
+Ui-Step 'Reset to size'                  { Ui-ClickLogged 'Panel Hole mark cs_diameter' }
+Ui-ExpectNew 'Hole cs_diameter reset: follows the size' 'Reset to size'
+Ui-ExpectNew 'cs_diameter 17.92 mm' 'the countersink follows M8 again'
+Ui-ExpectNew 'Panel Hole cs_diameter mark cleared' 'no longer marked'
+Ui-Mark
+Ui-Step 'Screw Size M6 (wheel)'          { Ui-WheelLogged 'Panel Hole input clearance_size' 1 }
+Ui-ExpectNew 'cs_diameter 13.44 mm' 'and M6'
+Ui-Step 'Counterdrill (wheel)'           { Ui-WheelLogged 'Panel Hole input type' -1 }
+Ui-ExpectNew 'Hole: Hole Type = Counterdrill' 'the counterdrill again'
 Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
 Ui-ExpectNew 'Edited F5' 'the hole edited to a clearance hole' 30
 # The block less an 11 mm cylinder 8 deep, the 90 degree cone down to the

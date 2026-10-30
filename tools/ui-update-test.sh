@@ -22,9 +22,12 @@
 #      the next start makes no request (once a day); Check for Updates
 #      offers the skipped version; Later.
 #   3. Refused: a tampered manifest, one signed with another key, a redirect
-#      to HTTP; an older release is no update.
+#      to HTTP; an older release is no update. An expired manifest
+#      (mitcad#938) offers nothing to the automatic check; asked, its
+#      release is announced with why, without Install.
 #   4. Preferences: the pre-release channel finds a beta through GitHub's
-#      list of releases.
+#      list of releases; an error carrying markup from the list is shown
+#      as text (mitcad#938).
 #   5. A per-user AppImage (a script that stands for one, setting APPIMAGE
 #      as the AppImage runtime does): a tampered download is refused and
 #      deleted; Install downloads and verifies the release, asks to save the
@@ -258,6 +261,26 @@ ui_expect_new "Update notice (error): The update check failed: The release serve
   "a redirect to HTTP is not followed"
 ui_stop_app
 
+echo "--- 3b. An expired manifest (mitcad#938)"
+mkdir -p "$WWW/expired"
+MITCAD_RELEASE_KEY=$SEED "$RELEASE_TOOL" manifest --version "$VERSION" --date 2020-01-06 --expires 2020-02-01 \
+  --notes "$BASE/expired/notes.html" --out "$WWW/expired/update-manifest.json" > /dev/null ||
+  ui_fail "mitcad-release could not sign the expired manifest"
+fresh_settings
+MITCAD_UPDATE_URL=$BASE/expired/update-manifest.json ui_start_app
+ui_expect_log "Update manifest: Mitcad $VERSION of 2020-01-06 (current, expired on 2020-02-01), no download for this platform" \
+  "the automatic check reads the expired manifest"
+ui_expect_log "Update check: the manifest of Mitcad $VERSION expired on 2020-02-01" "and offers nothing"
+sleep 1
+grep -qF "Update notice (offer)" "$UI_LOG" && ui_fail "an automatic check offered the release of an expired manifest"
+echo "ok   no notice"
+ui_mark
+ui_step "check for updates (search)"     ui_command "Check for Updates"
+ui_expect_new "Update notice (offer): MitCad $VERSION is available (this is 0.0.0). Its update information expired on 2020-02-01, so MitCad does not install it; if that date has not passed, check the date of this computer. Download it from its release page." \
+  "asked, the release is announced with why, without Install"
+ui_expect_new "[Release Notes, Skip This Version, Later]" "no Install"
+ui_stop_app
+
 echo "--- 4. The pre-release channel"
 # Above the build's own version, whatever it is: a beta, and a newer draft
 # that is not taken
@@ -290,6 +313,14 @@ ui_expect_new "Update notice (offer): MitCad $BETA is available (this is 0.0.0).
 grep -qxF "GET /releases.json ua=Mitcad/0.0.0 (linux-x64; prerelease) lang=* cookie=-" "$WORK/requests.log" ||
   ui_fail "the list of releases was not asked for: $(cat "$WORK/requests.log")"
 echo "ok   the list of releases, then the beta's manifest"
+# A list whose error message carries markup: shown as text (mitcad#938).
+cat > "$WWW/releases.json" << 'EOF'
+[{"tag_name": "v9.0.0", "draft": "<b>X</b>", "assets": []}]
+EOF
+ui_mark
+ui_step "check for updates (search)"     ui_command "Check for Updates"
+ui_expect_new 'Update notice (error): The update check failed: The list of releases could not be read: the list of releases is not GitHub'"'"'s (invalid type: string "<b>X</b>", expected a boolean' \
+  "a server's text in an error is shown literally, not as markup"
 ui_stop_app
 
 echo "--- 5. A per-user AppImage updates itself"

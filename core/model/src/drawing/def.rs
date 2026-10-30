@@ -816,7 +816,7 @@ impl Drawing {
 
     /// The ids of its annotations, text notes and what is drawn outside
     /// the model (mitcad#729), sheet by sheet.
-    fn annotation_ids(&self) -> impl Iterator<Item = u32> + '_ {
+    pub(crate) fn annotation_ids(&self) -> impl Iterator<Item = u32> + '_ {
         self.sheets.iter().flat_map(|s| {
             s.views
                 .iter()

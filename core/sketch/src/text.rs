@@ -173,6 +173,7 @@ pub fn use_font_file(text: &mut SketchText, path: &str) -> Result<(), String> {
             path: path.to_owned(),
             index: 0,
             licence: String::new(),
+            chosen: true,
         }
         .name()
         .to_owned()
@@ -183,6 +184,7 @@ pub fn use_font_file(text: &mut SketchText, path: &str) -> Result<(), String> {
         path: path.to_owned(),
         index: 0,
         licence: font.licence(),
+        chosen: true,
     });
     let glyphs = font.shape(&text.text, text.italic).glyphs;
     text.glyphs = Some(to_stored(text, &glyphs));
@@ -195,14 +197,31 @@ pub fn file_font(text: &SketchText, file: &FontFile) -> Result<FontGlyphs, Strin
     Ok(font.shape(&text.text, text.italic).glyphs)
 }
 
+/// The error of a text whose font file is not read (mitcad#929): its
+/// path came with the design, and the outlines stored with the text are
+/// not the text's as it is now (or there are none).
+fn unstored(text: &SketchText, file: &FontFile) -> String {
+    format!(
+        "t{}: the text has no outlines stored for its font file {}; choose the font file \
+         again",
+        text.id.0,
+        file.name()
+    )
+}
+
 /// The glyphs of a text whose font is a file (mitcad#473): the outlines
 /// stored with it while they are the text's as it is now, so the design
-/// is the same on every computer; otherwise the file's, read again. None
-/// for a text of an installed font. The flag tells stored outlines.
+/// is the same on every computer; otherwise the file's, read again, but
+/// only a file chosen in this session (mitcad#929: a path in a design
+/// file is never read; the font file is chosen again instead). None for
+/// a text of an installed font. The flag tells stored outlines.
 pub fn font_file_glyphs(text: &SketchText) -> Option<Result<(FontGlyphs, bool), String>> {
     let file = text.font_file.as_ref()?;
     if let Some(stored) = text.glyphs.as_ref().filter(|g| g.fit(text)) {
         return Some(Ok((stored_font(stored), true)));
+    }
+    if !file.chosen {
+        return Some(Err(unstored(text, file)));
     }
     Some(file_font(text, file).map(|g| (g, false)).map_err(|e| {
         format!(
@@ -210,6 +229,24 @@ pub fn font_file_glyphs(text: &SketchText) -> Option<Result<(FontGlyphs, bool), 
             text.id.0
         )
     }))
+}
+
+/// Stores the outlines of a text's font file again after its string or
+/// style changed (mitcad#473): read from the file when it was chosen in
+/// this session, refused for a path that came with the design
+/// (mitcad#929).
+pub fn read_font_file_again(text: &mut SketchText) -> Result<(), String> {
+    let Some(file) = text.font_file.clone() else {
+        return Ok(());
+    };
+    if !file.chosen {
+        return Err(format!(
+            "the text has no outlines stored for its font file {} as it is now, and a font \
+             file named by the design is not read",
+            file.name()
+        ));
+    }
+    use_font_file(text, &file.path)
 }
 
 /// The Bézier control points of a piece raised to `degree`.
