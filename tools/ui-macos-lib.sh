@@ -39,6 +39,9 @@ UI_GUI_LOCK_FD_OPEN=0
 UI_GUI_LOCK_HELD=0
 UI_GUI_LOCK_WAITER=""
 UI_STATS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ui-image-stats.py
+# How the AppKit frontend presents the widgets that paint themselves
+# (docs/native-macos-ui.md, Coverage).
+UI_COVERAGE_LIST=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/app/platform/macos/native-coverage.txt
 # Seconds the app may take for one run (a screenshot run exits after 2 s
 # plus the start-up and the recompute; the first start can be slow).
 UI_TIMEOUT=${UI_TIMEOUT:-120}
@@ -289,6 +292,25 @@ ui_run_app() {
     ui_fail "$name: exit code $UI_EXIT"
     ui_log_tail
   fi
+  ui_expect_presented "$name"
+}
+
+# ui_expect_presented name: the AppKit presenter of the last run showed every
+# widget it was given, or the widget's class is pending in the coverage list
+# (app/platform/macos/native-coverage.txt). A widget it cannot present would
+# otherwise be lost without a word (docs/native-macos-ui.md, Coverage).
+ui_expect_presented() {
+  local line class
+  [ -f "$UI_LOG_FILE" ] || return 0
+  while IFS= read -r line; do
+    class=${line#*unpresented widget }
+    class=${class%% *}
+    class=${class##*::}
+    if ! grep -Eq "^$class[[:space:]]+pending([[:space:]]|\$)" "$UI_COVERAGE_LIST" 2> /dev/null; then
+      ui_fail "$1: the AppKit frontend cannot present ${line#*unpresented widget }; present it, or mark $class pending in app/platform/macos/native-coverage.txt"
+    fi
+  done < <(grep -E '^Native presenter: unpresented widget ' "$UI_LOG_FILE")
+  return 0
 }
 
 # ui_expect_log pattern description: the last run's log has a line matching

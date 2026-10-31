@@ -22,7 +22,8 @@
 //!   z axis), scaled along the axes by `Radius3 / Radius2` and
 //!   `Radius1 / Radius2` (`scale`, non-uniform, as FreeCAD scales a part of
 //!   a sphere), moved to the placement (`move`) and, in a Body, joined to
-//!   or cut from its body (`combine`).
+//!   or cut from its bodies (`combine`; of a Body of several solids those
+//!   its box reaches, mitcad#1004).
 //!
 //! Sizes and angles that go into features' values are the properties'
 //! parameters or expressions, and so are a cone's radii and height and a
@@ -30,8 +31,10 @@
 //! (the first corner fixed at the axis, the sides along the axes
 //! horizontal or vertical). The other sections' sketches are numbers.
 
+use std::borrow::Cow;
+
 use mitcad_freecad::Object;
-use mitcad_model::{Kernel, Transform};
+use mitcad_model::{BodyUid, BoundingBox, Kernel, Transform};
 use serde_json::{Value, json};
 
 use super::Importer;
@@ -189,6 +192,25 @@ fn region_of(index: usize) -> Value {
 /// Whether two angles in degrees are the same.
 fn same(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-9
+}
+
+/// The box of the box `-half..half` about the origin placed by `p`
+/// (mitcad#1004: what an ellipsoid may reach).
+pub(super) fn placed_box(p: &Transform, half: [f64; 3]) -> BoundingBox {
+    let local = BoundingBox {
+        min: half.map(|h| -h),
+        max: half,
+    };
+    let corners: Vec<[f64; 3]> = local.corners().map(|c| p.apply_point(c)).collect();
+    BoundingBox {
+        min: std::array::from_fn(|k| corners.iter().map(|c| c[k]).fold(f64::INFINITY, f64::min)),
+        max: std::array::from_fn(|k| {
+            corners
+                .iter()
+                .map(|c| c[k])
+                .fold(f64::NEG_INFINITY, f64::max)
+        }),
+    }
 }
 
 impl<K: Kernel> Importer<'_, '_, K> {
@@ -530,7 +552,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
     /// An ellipsoid: a sphere of `Radius2` (a part of one: its section
     /// turned about the z axis, as FreeCAD scales a part of a sphere)
     /// scaled along the axes, moved to the placement, then combined with
-    /// the Body's body.
+    /// the Body's bodies it reaches.
     fn ellipsoid(
         &mut self,
         o: &Object,
@@ -620,22 +642,74 @@ impl<K: Kernel> Importer<'_, '_, K> {
         // Body's first solid (then the sphere is named after the label).
         let mut operation = json!({});
         operate(&mut operation);
+        let mut defs: Vec<(Value, Cow<'static, str>)> = defs
+            .into_iter()
+            .map(|(def, suffix)| (def, Cow::Borrowed(suffix)))
+            .collect();
         match (operation["operation"].as_str(), body) {
             (Some("join" | "cut"), Some((additive, target))) => {
-                let target = self.body(target)?;
-                defs.push((
-                    json!({"type": "combine", "target": target.to_string(), "tools": [made],
-                           "operation": if additive { "join" } else { "cut" }, "keep_tools": false}),
-                    "",
-                ));
+                let first = *target.current.first().ok_or("the Body has no solid yet")?;
+                // FreeCAD fuses it with (cuts it from) the Body's whole
+                // shape, which may be several solids, each a MitCad body
+                // (mitcad#1004): those its box reaches, joined with it into
+                // the first of them (the first body when it reaches none:
+                // a solid of its own), or each cut.
+                let ry = o.f64("Radius3").filter(|r| *r > 1e-7).unwrap_or(r2.value);
+                let reach = placed_box(p, [r2.value, ry, r1.value]);
+                let reached: Vec<BodyUid> = if target.current.len() < 2 {
+                    target.current.clone()
+                } else {
+                    target
+                        .current
+                        .iter()
+                        .copied()
+                        .filter(|b| {
+                            self.doc
+                                .body_shape(*b)
+                                .and_then(|s| self.doc.kernel().bounding_box(s).ok().flatten())
+                                .is_none_or(|bb| bb.overlaps(&reach, 1e-6))
+                        })
+                        .collect()
+                };
+                if additive {
+                    let (into, others) = match reached.split_first() {
+                        Some((into, others)) => (*into, others.to_vec()),
+                        None => (first, Vec::new()),
+                    };
+                    let mut tools = vec![json!(made)];
+                    tools.extend(others.iter().map(|b| json!(b.to_string())));
+                    defs.push((
+                        json!({"type": "combine", "target": into.to_string(), "tools": tools,
+                               "operation": "join", "keep_tools": false}),
+                        Cow::Borrowed(""),
+                    ));
+                } else {
+                    let cut = if reached.is_empty() {
+                        vec![first]
+                    } else {
+                        reached
+                    };
+                    for (i, b) in cut.iter().enumerate() {
+                        let suffix: Cow<'static, str> = if i == 0 {
+                            Cow::Borrowed("")
+                        } else {
+                            Cow::Owned(format!(" (body {})", i + 1))
+                        };
+                        defs.push((
+                            json!({"type": "combine", "target": b.to_string(), "tools": [made],
+                                   "operation": "cut", "keep_tools": i + 1 < cut.len()}),
+                            suffix,
+                        ));
+                    }
+                }
             }
-            _ => defs[sphere].1 = "",
+            _ => defs[sphere].1 = Cow::Borrowed(""),
         }
         let note = if whole {
             "an ellipsoid: a sphere scaled along its axes"
         } else {
             "a part of an ellipsoid: a part of a sphere (its section turned) scaled along its axes"
         };
-        Ok(vec![Candidate::several(defs).note(note)])
+        Ok(vec![Candidate::several_named(defs).note(note)])
     }
 }

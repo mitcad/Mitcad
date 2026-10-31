@@ -1,0 +1,160 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets and chamfers: a corner's sharp edge is limited only by a common
+point that lies on it (mitcad#1005).
+
+The case: an L bracket, a floor with a wall at its back; the floor's top
+edge along one end (convex) and its edge along the wall (concave) are
+chamfered 1. At their common vertex the wall's vertical edge goes on up,
+sharp. PerformTwoCornerbyInter finds the two bevels' common points on
+different arcs and hands the corner to PerformMoreThreeCorner, which takes
+it as OnSame + OnDiff: PerformOneCorner(prepare) moves the convex bevel's
+OnSame common point from the floor's far vertical edge, where its contact
+ran to, onto the prolongation of the wall's sharp edge below the vertex,
+keeping the arc and the parameter of the far edge. The plate's limit on
+the sharp edge is then taken from the bevels' two common points beside it,
+the nearer to the vertex, cp2 of equal distances; both lie 1 from the
+vertex, and at one end of the bracket rounding made the moved point the
+nearer. Its parameter on the far edge (36, measured from the wall's top)
+was read on the sharp edge's curve: the plate was bounded 31 above the
+floor on the wall, a B-spline of degree 8 over 122 mm2 waving across the
+bracket's end, and the body was 16.6 mm3 short there. Meshed for display at
+0.01 mm, that face took 86 000 triangles and 4 s (8 s and more under load)
+where the same corner at the other end takes about a thousand triangles and
+a few milliseconds.
+
+- PerformMoreThreeCorner, where a sharp edge is limited by a common point
+  (ParameterOnSharpEdge): a common point counts only where it lies on that
+  edge, with its parameter on its arc where the arc is the edge, otherwise
+  with that of its point projected on the edge within the point's
+  tolerance, between the edge's ends. A common point on another arc no
+  longer gives the edge a parameter of that arc's curve.
+- Of two common points at equal distances, cp2 is taken as before unless
+  it lies on another arc and cp1 on the edge: then cp1. The bracket's two
+  ends, either edge given first, now get the same corner: the convex
+  bevel's end 1 before the wall, the concave bevel's reaching the end face, a
+  plate of 1.85 mm2 between them, and the body within 0.03 mm3 of the two
+  bevels' prisms at each corner.
+
+Corners whose common points both lie on the sharp edge are unchanged.
+
+Upstream: new.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+index c7a31b93..8c11bf2b 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+@@ -73,6 +73,7 @@
+ #include <Geom_Curve.hxx>
+ #include <Geom_Surface.hxx>
+ #include <GeomAdaptor_Surface.hxx>
++#include <GeomAPI_ProjectPointOnCurve.hxx>
+ #include <GeomInt_IntSS.hxx>
+ #include <GeomLib.hxx>
+ #include <GeomPlate_BuildPlateSurface.hxx>
+@@ -220,6 +221,40 @@ static void Calcul_Orientation(const occ::handle<ChFiDS_Stripe>& stripe,
+ 
+ //=================================================================================================
+ 
++// The parameter on the sharp edge E of the common point CP of a stripe beside
++// it, where CP lies on E: its parameter on its arc where that arc is E,
++// otherwise that of its point projected on E, within the point's tolerance
++// and between E's ends. A common point on another arc (one an OnSame end
++// moved onto the prolongation of E past the vertex, its arc and parameter
++// still those of the arc its contact ran to) has no parameter on E: its
++// parameter on its arc is not one of E's curve (mitcad#1005).
++static bool ParameterOnSharpEdge(const ChFiDS_CommonPoint& CP, const TopoDS_Edge& E, double& W)
++{
++  if (!CP.IsOnArc())
++  {
++    return false;
++  }
++  if (CP.Arc().IsSame(E))
++  {
++    W = CP.ParameterOnArc();
++    return true;
++  }
++  double                        f = 0., l = 0.;
++  const occ::handle<Geom_Curve> C = BRep_Tool::Curve(E, f, l);
++  if (C.IsNull())
++  {
++    return false;
++  }
++  GeomAPI_ProjectPointOnCurve aProj(CP.Point(), C, f, l);
++  if (aProj.NbPoints() == 0
++      || aProj.LowerDistance() > std::max(CP.Tolerance(), BRep_Tool::Tolerance(E)))
++  {
++    return false;
++  }
++  W = aProj.LowerDistanceParameter();
++  return true;
++}
++
+ static void RemoveSD(occ::handle<ChFiDS_Stripe>& Stripe, const int num1, const int num2)
+ {
+   NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& Seq =
+@@ -2320,14 +2355,20 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+         {
+           samecompoint = cp1.Point().Distance(cp2.Point()) < tolapp;
+         }
++        // (Only a common point on the edge limits it: ParameterOnSharpEdge.)
++        const TopoDS_Edge& Esharp = TopoDS::Edge(Evive.Value(ic));
++        double             w1 = 0., w2 = 0.;
++        const bool         on1 = !sharp.Value(icplus) && ParameterOnSharpEdge(cp1, Esharp, w1);
++        const bool         on2 = !sharp.Value(icmoins) && ParameterOnSharpEdge(cp2, Esharp, w2);
+         if ((dS < d1 || dS < d2) && !samecompoint)
+         {
+           // step back till Common Points
+           // without leaving the Edge ??
+-          if (d2 < d1 && cp1.IsOnArc())
++          // (Of equal distances cp2, unless it lies on another arc.)
++          if (on1 && (d2 < d1 || (cp2.IsOnArc() && !on2)))
+           {
+             // cp1 is chosen
+-            p.SetValue(ic, icmoins, cp1.ParameterOnArc());
++            p.SetValue(ic, icmoins, w1);
+             p.SetValue(ic, icplus, p.Value(ic, icmoins));
+             isfirst = (sens.Value(icplus) == 1);
+             jfp     = 3 - jf.Value(icplus);
+@@ -2338,10 +2379,10 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+               tolcp = cp1.Tolerance();
+             }
+           }
+-          else if (cp2.IsOnArc())
++          else if (on2)
+           {
+             // cp2 is chosen
+-            p.SetValue(ic, icmoins, cp2.ParameterOnArc());
++            p.SetValue(ic, icmoins, w2);
+             p.SetValue(ic, icplus, p.Value(ic, icmoins));
+             isfirst = (sens.Value(icmoins) == 1);
+             Calcul_Param(CD.Value(icmoins), jf.Value(icmoins), i.Value(icmoins, ic), isfirst, para);
+@@ -2357,11 +2398,10 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+           // step back till Common Point only if it is very close
+           if (!sharp.Value(icplus))
+           {
+-            if ((cp1.Point().Distance(PE) < cp1.Tolerance() || samecompoint || nconges == 1)
+-                && cp1.IsOnArc())
++            if ((cp1.Point().Distance(PE) < cp1.Tolerance() || samecompoint || nconges == 1) && on1)
+             {
+               // it is very close to cp1
+-              p.SetValue(ic, icmoins, cp1.ParameterOnArc());
++              p.SetValue(ic, icmoins, w1);
+               ponctuel.SetValue(ic, true);
+               p.SetValue(ic, icplus, p.Value(ic, icmoins));
+               isfirst = (sens.Value(icplus) == 1);
+@@ -2376,12 +2416,11 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+           }
+           if (!sharp.Value(icmoins))
+           {
+-            if ((cp2.Point().Distance(PE) < cp2.Tolerance() || samecompoint || nconges == 1)
+-                && cp2.IsOnArc())
++            if ((cp2.Point().Distance(PE) < cp2.Tolerance() || samecompoint || nconges == 1) && on2)
+             {
+               // it is very close to cp2
+               ponctuel.SetValue(icmoins, true);
+-              p.SetValue(ic, icmoins, cp2.ParameterOnArc());
++              p.SetValue(ic, icmoins, w2);
+               p.SetValue(ic, icplus, p.Value(ic, icmoins));
+               isfirst = (sens.Value(icmoins) == 1);
+               Calcul_Param(CD.Value(icmoins),

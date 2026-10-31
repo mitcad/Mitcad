@@ -112,6 +112,11 @@ pub struct MockKernel {
     pub out_of_memory: RefCell<BTreeSet<&'static str>>,
     /// Which targets a boolean touches, by index; all when None.
     pub touch: RefCell<Option<Vec<bool>>>,
+    /// Which solids of a join's target made of several the tool reaches,
+    /// by index of its solids; all when None. The others come out as
+    /// pieces of their own with the target as their source, before the
+    /// joined piece, as the kernel gives them (mitcad#1003).
+    pub join_parts: RefCell<Option<Vec<bool>>>,
     /// Pieces a cut or intersection leaves of each touched target: 1 unless
     /// set, 0 removes the target.
     pub split: Cell<Option<usize>>,
@@ -897,7 +902,26 @@ impl Kernel for MockKernel {
         if op == BooleanOp::Join {
             let sources: Vec<usize> = (0..targets.len()).filter(|i| touched[*i]).collect();
             if !sources.is_empty() {
-                let mut inputs: Vec<&MockShape> = sources.iter().map(|i| targets[*i]).collect();
+                let reached = self.join_parts.borrow().clone();
+                let mut inputs: Vec<&MockShape> = Vec::new();
+                for i in &sources {
+                    let target = targets[*i];
+                    match &reached {
+                        Some(reached) if !target.parts.is_empty() => {
+                            for (k, part) in target.parts.iter().enumerate() {
+                                if reached.get(k).copied().unwrap_or(true) {
+                                    inputs.push(part);
+                                } else {
+                                    pieces.push(BooleanPiece {
+                                        shape: part.clone(),
+                                        sources: vec![*i],
+                                    });
+                                }
+                            }
+                        }
+                        _ => inputs.push(target),
+                    }
+                }
                 inputs.push(tool);
                 let history = format!(
                     "join({})",
@@ -2803,6 +2827,7 @@ impl Kernel for MockKernel {
             boolean_fail_tools: self.boolean_fail_tools.clone(),
             out_of_memory: self.out_of_memory.clone(),
             touch: self.touch.clone(),
+            join_parts: self.join_parts.clone(),
             split: self.split.clone(),
             lose: self.lose.clone(),
             voids: self.voids.clone(),
@@ -4892,6 +4917,61 @@ impl Kernel for MockKernel {
                 })
             })
             .collect()
+    }
+
+    /// A dogbone's reliefs (mitcad#1011): `dogbone`, `dogbone_start` and
+    /// `dogbone_end` keyed by each picked edge (which must be the body's),
+    /// by each picked face (the body's) or, for the whole body, without a
+    /// key; within the body's bounds. The call is in `specs`; "dogbone" in
+    /// `fail` fails it.
+    fn dogbone_tool(
+        &self,
+        spec: &mitcad_model_base::kernel::DogboneSpec<'_, MockShape>,
+    ) -> Result<MockShape, KernelError> {
+        self.call("dogbone")?;
+        let list = |names: Vec<String>| names.join(", ");
+        self.specs.borrow_mut().push(format!(
+            "dogbone {} diameter {} extra {} {:?} axis {:?} edges [{}] faces [{}]",
+            spec.feature,
+            number(spec.diameter),
+            number(spec.extra),
+            spec.kind,
+            spec.axis,
+            list(spec.edges.iter().map(ToString::to_string).collect()),
+            list(spec.faces.iter().map(ToString::to_string).collect())
+        ));
+        let mut keys: Vec<Option<RoleKey>> = Vec::new();
+        for edge in spec.edges {
+            if spec.body.matching_edges(edge).is_empty() {
+                return Err(KernelError::failed(format!("the body has no edge {edge}")));
+            }
+            keys.push(Some(RoleKey::Edge(Box::new(edge.clone()))));
+        }
+        for face in spec.faces {
+            if !spec.body.has_face(face) {
+                return Err(KernelError::failed(format!("the body has no face {face}")));
+            }
+            keys.push(Some(RoleKey::Face(Box::new(face.clone()))));
+        }
+        if keys.is_empty() {
+            keys.push(None);
+        }
+        let mut faces = Vec::new();
+        let mut edges = Vec::new();
+        for key in keys {
+            let [side, start, end] = ["dogbone", "dogbone_start", "dogbone_end"]
+                .map(|role| FaceName::new(spec.feature, role, key.clone()));
+            edges.push((side.clone(), start.clone()));
+            edges.push((side.clone(), end.clone()));
+            faces.extend([side, start, end]);
+        }
+        Ok(MockShape {
+            history: format!("dogbone({}:{})", spec.feature, number(spec.diameter / 2.0)),
+            faces,
+            edges,
+            bounds: spec.body.bounds,
+            parts: Vec::new(),
+        })
     }
 }
 

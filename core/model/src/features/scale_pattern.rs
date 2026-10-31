@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 use super::geom_ref::GeomRef;
 use super::mapping::map_params;
 use super::pattern::{
-    ComputeOption, PatternObjects, ScaleRule, ScaleSpec, active, add_scale_references,
-    check_options, check_scale_values, check_suppressed, is_adjust, map_scales, none, quantity,
-    repeat, scale_elements,
+    Combine, ComputeOption, PatternObjects, ScaleRule, ScaleSpec, active, add_scale_references,
+    check_combine_any, check_options, check_scale_values, check_suppressed, is_adjust, map_scales,
+    none, quantity, repeat, scale_elements,
 };
 use super::{
     CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References, is_false,
@@ -44,6 +44,9 @@ pub struct ScalePatternDef<P = ParamId> {
     /// only.
     #[serde(default, skip_serializing_if = "is_false")]
     pub combine: bool,
+    /// As a pattern's `combine_any` (mitcad#1006).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub combine_any: bool,
     /// Elements left out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suppressed_elements: Vec<u32>,
@@ -71,6 +74,7 @@ impl<P> ScalePatternDef<P> {
             compute: copy,
             original_bodies: copy,
             combine: copy,
+            combine_any: copy,
             suppressed_elements: clone,
             scales: with(map_scales),
             scale_center: clone,
@@ -102,6 +106,7 @@ impl FeatureInfo for ScalePatternDef {
 
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
         self.objects.check(ctx)?;
+        check_combine_any(self.combine, self.combine_any)?;
         check_options(
             ctx,
             &self.objects,
@@ -135,7 +140,7 @@ impl<K: Kernel> Evaluate<K> for ScalePatternDef {
             self.compute,
             self.original_bodies,
             &elements,
-            self.combine,
+            Combine::of(self.combine, self.combine_any),
             scaling.as_ref(),
             &self.skipped_copies,
         )

@@ -3,8 +3,9 @@
 // finished measurement of the Measure panel (one or two picks with a
 // result, Inspection::record) is a row, newest first, kept while the design
 // is open, also when the panel closes and opens again; not saved with the
-// design. Each Measure panel shows it above its result
-// (CommandPanel::addSection), in both layouts. A row clicked is measured
+// design. Each Measure panel shows it at its bottom, folded, under its
+// result and its actions (CommandPanel::addSection, mitcad#1010), in both
+// layouts. A row clicked is measured
 // again: its picks go back into the panel's inputs, which highlight them
 // and draw its line; a row whose picks the view no longer has is grey.
 #include "MainWindow.hpp"
@@ -54,8 +55,9 @@ MeasureHistoryView* MainWindow::createMeasureHistory(const CommandDef& def, QWid
   checkMeasureHistory();
   auto* view = new MeasureHistoryView(m_measureHistory, parent);
   m_measureShown.clear();
-  // Keep and Keep Row (mitcad#649, MainWindowMeasurements.cpp).
-  // Note…, Annotations…, Datum Label… and Frame… (mitcad#702,
+  // Keep as Dimension, also in a history row's menu (mitcad#649,
+  // MainWindowMeasurements.cpp). Annotate's Note…, Annotations…, Datum
+  // Label…, Frame… and Hole Callout (mitcad#702,
   // MainWindowMeasurements.cpp).
   view->setActions({[this](int number) { showMeasurement(number); }, [this] { clearMeasureHistory(); },
                     [this] { keepMeasurement(m_measureShown, QStringLiteral("shown")); },
@@ -95,6 +97,8 @@ void MainWindow::inspectionRecorded(const CommandDef& def, const CommandState& s
   MeasureHistory::Row row;
   row.picked = result.record.picked;
   row.values = result.record.values;
+  row.main = result.record.main;
+  row.kinds = result.record.kinds;
   QStringList identity;
   for (const QString& key : result.record.inputs) {
     const Selection& items = state.items(key);

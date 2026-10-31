@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Measurement objects (mitcad#649), now annotations (mitcad#702;
-// app/COMMANDS.md "Measurement objects" and "Annotations"): Keep in the
-// Measure panel and on a row of its history adds the picks as a dimension
-// of the design (the model's add_annotation, whose default kind and name
-// the model chooses, in the plane and with the places the view suggests),
-// Note…, Datum Label… and Frame… a leader note, a datum label or a feature
-// control frame on the one pick shown; all outside the panel's undo
+// app/COMMANDS.md "Measurement objects" and "Annotations"): Keep as
+// Dimension in the Measure panel and in a history row's menu adds the
+// picks as a dimension of the design (the model's add_annotation, whose
+// default kind and name the model chooses, in the plane and with the
+// places the view suggests), the Annotate menu's Note…, Datum Label…,
+// Frame… and Hole Callout a leader note, a datum label, a feature control
+// frame or a hole callout on the one pick shown; all outside the panel's undo
 // range, as a light bulb's change is (CommandSession::runVisibility). The
 // shown ones are drawn in their planes in the view after every refresh
 // (OcctViewer::setMeasurements) and listed in the Annotations window

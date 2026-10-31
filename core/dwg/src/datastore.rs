@@ -132,7 +132,14 @@ pub fn brep_records(data: &[u8]) -> Result<BTreeMap<u64, Vec<u8>>, DwgError> {
             let bytes = if size == BLOB_REFERENCE {
                 blob(data, at + 4, &seg)?
             } else if (size as usize) + 4 <= max {
-                data[at + 4..at + 4 + size as usize].to_vec()
+                // The space ends at the next record or the segment's
+                // declared end, which may lie past the section's bytes
+                // (mitcad#939, a fuzz finding): the record must be in them.
+                crate::container::span(data, at + 4, size as usize)
+                    .ok_or_else(|| {
+                        corrupt(format!("the record of handle {handle:X} lies past the end"))
+                    })?
+                    .to_vec()
             } else {
                 return Err(corrupt(format!(
                     "the record of handle {handle:X} is larger than its space"
@@ -165,9 +172,14 @@ fn blob(
         let size = u64_at(data, body + 24)? as usize;
         let bytes = crate::container::span(data, body + 32, size)
             .ok_or_else(|| corrupt("a blob page past the end"))?;
-        out.extend_from_slice(bytes);
+        // At most the blob's total: a page count may repeat one page far
+        // beyond it (mitcad#939).
+        let take = bytes.len().min(total - out.len());
+        out.extend_from_slice(&bytes[..take]);
+        if out.len() == total {
+            break;
+        }
     }
-    out.truncate(total);
     Ok(out)
 }
 

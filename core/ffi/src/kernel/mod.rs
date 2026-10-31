@@ -84,6 +84,8 @@ pub mod display_mesh;
 pub mod exception_probe;
 // A Fillet's or Chamfer's picked edges as polylines (mitcad#957).
 pub mod input_edges;
+// Dogbones: the relief cylinders at a body's inside corners (mitcad#1011).
+pub mod dogbone;
 
 use std::sync::Arc;
 
@@ -2552,6 +2554,25 @@ impl Kernel for OcctKernel {
             .into_iter()
             .map(|line| line.points.chunks(3).map(|p| [p[0], p[1], p[2]]).collect())
             .collect())
+    }
+
+    // Dogbones: relief cuts at a body's inside corners (mitcad#1011;
+    // dogbone.rs, geometry's dogbone.hpp).
+
+    fn dogbone_tool(
+        &self,
+        spec: &mitcad_model::kernel::DogboneSpec<'_, Self::Shape>,
+    ) -> Result<Self::Shape, KernelError> {
+        let dogbone = dogbone::ffi::Dogbone {
+            feature: spec.feature.to_string(),
+            edges: names(spec.edges),
+            faces: face_names(spec.faces),
+            axis: spec.axis,
+            diameter: spec.diameter,
+            extra: spec.extra,
+            along_side: spec.kind == mitcad_model::kernel::DogboneKind::AlongSide,
+        };
+        dogbone::ffi::dogbone_tool(occt(spec.body)?, &dogbone).map_err(failed)
     }
 }
 

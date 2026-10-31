@@ -7,10 +7,13 @@
 
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QEvent>
 #include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QShowEvent>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QtLogging>
 
@@ -33,24 +36,85 @@ QString kindOf(const PartOption& option) {
 // A number field's limits in the option's unit (none: a wide range).
 constexpr double kWide = 1e9;
 
+// The label widgets of a form's rows (mitcad#1007).
+QList<QWidget*> formLabels(const QFormLayout* form) {
+  QList<QWidget*> out;
+  if (form == nullptr) {
+    return out;
+  }
+  for (int row = 0; row < form->rowCount(); ++row) {
+    QLayoutItem* const item = form->itemAt(row, QFormLayout::LabelRole);
+    if (item != nullptr && item->widget() != nullptr) {
+      out << item->widget();
+    }
+  }
+  return out;
+}
+
+// Whether a form's widgets wait for their queued show: added to a shown
+// parent, not yet shown and not hidden on purpose (mitcad#1007).
+bool waitsToShow(const QFormLayout* form) {
+  if (form == nullptr || form->parentWidget() == nullptr || !form->parentWidget()->isVisible()) {
+    return false;
+  }
+  for (int i = 0; i < form->count(); ++i) {
+    QWidget* const widget = form->itemAt(i) != nullptr ? form->itemAt(i)->widget() : nullptr;
+    if (widget != nullptr && widget->isHidden() && !widget->testAttribute(Qt::WA_WState_ExplicitShowHide)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// One form's rows shown in `top` as "Version 96" (the label's text without
+// its mnemonic and colon, the field's left edge in `top`).
+void appendFieldEdges(QStringList& out, const QFormLayout* form, QWidget* top) {
+  if (form == nullptr) {
+    return;
+  }
+  for (int row = 0; row < form->rowCount(); ++row) {
+    QLayoutItem* const labelItem = form->itemAt(row, QFormLayout::LabelRole);
+    QLayoutItem* const fieldItem = form->itemAt(row, QFormLayout::FieldRole);
+    if (labelItem == nullptr || fieldItem == nullptr) {
+      continue;
+    }
+    auto* label = qobject_cast<QLabel*>(labelItem->widget());
+    QWidget* const field = fieldItem->widget();
+    if (label == nullptr || field == nullptr || !field->isVisibleTo(top)) {
+      continue;
+    }
+    QString name = label->text();
+    name.remove(QLatin1Char('&'));
+    if (name.endsWith(QLatin1Char(':'))) {
+      name.chop(1);
+    }
+    out << QStringLiteral("%1 %2").arg(name).arg(field->mapTo(top, QPoint(0, 0)).x());
+  }
+}
+
 } // namespace
 
 OptionChooser::OptionChooser(QWidget* parent) : QWidget(parent) {
+  // The "fields at x" line once the layout is done (mitcad#1007).
+  m_edgeTimer = new QTimer(this);
+  m_edgeTimer->setSingleShot(true);
+  m_edgeTimer->setInterval(0);
+  connect(m_edgeTimer, &QTimer::timeout, this, [this] { logFieldEdges(); });
   auto* layout = new QVBoxLayout(this);
   layout->setContentsMargins(0, 0, 0, 0);
   // The Standard and Supplier filters (mitcad#949), shown when the rows
   // name standards or suppliers' articles.
   m_filters = new QWidget;
-  auto* filterForm = new QFormLayout(m_filters);
-  filterForm->setContentsMargins(0, 0, 0, 0);
+  m_filterForm = new QFormLayout(m_filters);
+  m_filterForm->setContentsMargins(0, 0, 0, 0);
   m_standardFilter = new QComboBox;
   m_standardFilter->setObjectName(QStringLiteral("rowFilterStandard"));
   m_standardFilter->setToolTip(tr("Only the sizes of this standard; it changes no part"));
   m_supplierFilter = new QComboBox;
   m_supplierFilter->setObjectName(QStringLiteral("rowFilterSupplier"));
   m_supplierFilter->setToolTip(tr("Only the sizes this supplier sells; it changes no part"));
-  filterForm->addRow(tr("Standar&d:"), m_standardFilter);
-  filterForm->addRow(tr("Suppli&er:"), m_supplierFilter);
+  m_filterForm->addRow(tr("Standar&d:"), m_standardFilter);
+  m_filterForm->addRow(tr("Suppli&er:"), m_supplierFilter);
   m_filters->hide();
   layout->addWidget(m_filters);
   connect(m_standardFilter, &QComboBox::currentIndexChanged, this, [this] { filterChosen(); });
@@ -58,11 +122,121 @@ OptionChooser::OptionChooser(QWidget* parent) : QWidget(parent) {
   m_form = new QFormLayout;
   m_form->setContentsMargins(0, 0, 0, 0);
   layout->addLayout(m_form);
+  // One label column with the choosers' rows (mitcad#1007): the forms keep
+  // to the left (a style that centres a form would move each by its own
+  // fields' widths).
+  m_filterForm->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+  m_form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
   m_notice = new QLabel;
   m_notice->setObjectName(QStringLiteral("partOptionsNotice"));
   m_notice->setWordWrap(true);
   m_notice->hide();
   layout->addWidget(m_notice);
+  alignLabels();
+}
+
+// --- One label column (mitcad#1007)
+
+void OptionChooser::alignLabelsWith(QFormLayout* form) {
+  if (form == nullptr || m_alignedForms.contains(form)) {
+    return;
+  }
+  form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+  m_alignedForms << form;
+  alignLabels();
+}
+
+void OptionChooser::alignLabels() {
+  QList<QWidget*> labels;
+  for (const QPointer<QFormLayout>& form : m_alignedForms) {
+    labels += formLabels(form);
+  }
+  labels += formLabels(m_filterForm);
+  labels += formLabels(m_form);
+  // The widest label's own width: the minimum set here before taken off
+  // first (a label's size hint grows with its minimum, and QLabel keeps
+  // its hint until a property such as the indent is set again), so the
+  // column narrows when the long labels go.
+  for (QWidget* label : labels) {
+    label->setMinimumWidth(0);
+    if (auto* asLabel = qobject_cast<QLabel*>(label)) {
+      asLabel->setIndent(asLabel->indent());
+    }
+  }
+  int widest = 0;
+  for (QWidget* label : labels) {
+    widest = std::max(widest, label->sizeHint().width());
+  }
+  for (QWidget* label : labels) {
+    label->setMinimumWidth(widest);
+  }
+  logFieldEdgesLater();
+}
+
+void OptionChooser::showEvent(QShowEvent* event) {
+  QWidget::showEvent(event);
+  // The labels' fonts are the style's once shown.
+  alignLabels();
+}
+
+void OptionChooser::changeEvent(QEvent* event) {
+  QWidget::changeEvent(event);
+  if (event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange) {
+    alignLabels();
+  }
+}
+
+void OptionChooser::logFieldEdgesLater() {
+  if (!isVisible()) {
+    return;
+  }
+  // Restarted on each change, so the line comes after the last of them.
+  m_edgeWaits = 0;
+  m_edgeTimer->start();
+}
+
+void OptionChooser::logFieldEdges() {
+  if (!isVisible()) {
+    return;
+  }
+  // A field added to a shown chooser is shown by a queued call
+  // (QLayout::addChildWidget), and the layout gives a hidden one no place:
+  // wait a few passes for it.
+  bool waiting = false;
+  for (const QPointer<QFormLayout>& form : m_alignedForms) {
+    waiting = waiting || waitsToShow(form);
+  }
+  waiting = waiting || waitsToShow(m_filterForm) || waitsToShow(m_form);
+  if (waiting && m_edgeWaits < 20) {
+    ++m_edgeWaits;
+    m_edgeTimer->start();
+    return;
+  }
+  // The layouts done now, from the window down to the filters, so the
+  // fields are where they will be drawn.
+  QWidget* const top = window();
+  QList<QWidget*> chain;
+  for (QWidget* widget = this; widget != nullptr; widget = widget->parentWidget()) {
+    chain.prepend(widget);
+    if (widget == top) {
+      break;
+    }
+  }
+  chain << m_filters;
+  for (QWidget* widget : chain) {
+    if (widget->layout() != nullptr) {
+      widget->layout()->activate();
+    }
+  }
+  QStringList edges;
+  for (const QPointer<QFormLayout>& form : m_alignedForms) {
+    appendFieldEdges(edges, form, top);
+  }
+  appendFieldEdges(edges, m_filterForm, top);
+  appendFieldEdges(edges, m_form, top);
+  if (!edges.isEmpty()) {
+    qInfo().noquote() << QStringLiteral("%1 fields at x: %2").arg(m_logName, edges.join(QStringLiteral(", ")));
+  }
 }
 
 void OptionChooser::clear() {
@@ -86,6 +260,8 @@ void OptionChooser::clear() {
   m_fields.clear();
   m_names.clear();
   m_kinds.clear();
+  // The column for the rows left (the new rows align again).
+  alignLabels();
 }
 
 void OptionChooser::say(const QString& text, bool problem) {
@@ -272,6 +448,8 @@ void OptionChooser::fillFilters() {
   m_standardFilter->setEnabled(!standards.isEmpty());
   m_supplierFilter->setEnabled(!suppliers.isEmpty());
   m_filters->setVisible(!standards.isEmpty() || !suppliers.isEmpty());
+  // The fields where they are with the filters shown or hidden (mitcad#1007).
+  logFieldEdgesLater();
 }
 
 void OptionChooser::filterChosen() {
@@ -405,6 +583,7 @@ void OptionChooser::setRows(const QJsonObject& configurations, const QString& ro
       m_combos[i]->setCurrentText(rowOptionText(start, m_selectors[i]));
     }
   }
+  alignLabels();
   m_filling = false;
   choose();
 }
@@ -678,6 +857,7 @@ void OptionChooser::build() {
     m_form->addRow(m_names[i] + QLatin1Char(':'), field);
     m_fields << field;
   }
+  alignLabels();
 }
 
 void OptionChooser::setOption(const QString& option, const QJsonValue& value) {

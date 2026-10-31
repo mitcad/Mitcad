@@ -556,6 +556,13 @@ fn turn_fields(
         }
         // An extrusion's own direction (mitcad#539).
         FeatureDef::Extrude(extrude) => some(&mut extrude.direction),
+        // A dogbone's tool axis, the component's Z without one (mitcad#1011).
+        FeatureDef::Dogbone(dogbone) => {
+            let axis = dogbone
+                .axis
+                .unwrap_or(crate::features::dogbone::DEFAULT_AXIS);
+            dogbone.axis = Some(turn.vector(axis));
+        }
         _ => {}
     }
     // Joint origins: geometry and frame overrides are in the component

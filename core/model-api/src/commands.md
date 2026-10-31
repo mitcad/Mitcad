@@ -448,14 +448,21 @@ millimetres, angles radians. Build sketches with the
   source is gone). An entity the same as another of its projection follows
   the same curve. `"section": true` marks section curves: where the
   sketch's plane cuts the source face, or the points where it crosses
-  the source edge (mitcad#736; [Section curves in
-  sketches](#section-curves-in-sketches)). `"chain": ["E{…}", …]` (an
+  the source edge or another sketch's curve (mitcad#736, mitcad#998;
+  [Section curves in sketches](#section-curves-in-sketches)).
+  `"chain": ["E{…}", …]` (an
   import's, mitcad#389): the edges the source edge continues into, in
   order; the entities are one curve, the projection of the edges joined
   end to end into one B-spline (exactly, a line raised to the splines'
   degree; a curve the model splits into pieces, such as a thread's helix
   of an edge per turn). A piece gone, or pieces that no longer meet
-  within 1e-4 mm, lose the source.
+  within 1e-4 mm, lose the source. `"after": "F7"` (an import's,
+  mitcad#998; with `body` and a face, edge or vertex as `source`): the
+  source as the earlier feature F7 left the body (the shape the last
+  feature up to and including F7 set), not as the features after it
+  changed it before the sketch, as FreeCAD's external geometry names an
+  element of a feature's own shape; a body no feature up to F7 set loses
+  the source, and F7 must come before the sketch.
 - `texts`: `{"id": "t9", "text": "…", "at": [x, y], "height": h,
   "angle": a, "font": "…", "bold": false, "italic": false}`, optional
   `align` (`left`, `center`, `right`), `valign` (`baseline`, `bottom`,
@@ -832,6 +839,15 @@ not reach (an intersection leaves nothing of those), and only the other
 pieces of a lump the cut splits are new bodies; before, every piece of such a
 body was a body of its own. A join, cut or intersection that reaches no
 participant fails.
+
+A join works on a body of several lumps lump by lump as well
+(mitcad#1003): the lumps it reaches are fused with the tool, the lumps
+it does not reach stay in the body, and a body left with several solids
+holds them together; a body merged into another brings all its lumps.
+The same holds for the joins of primitives, patterns, mirrors and the
+other features that combine a tool with bodies. Before, the body kept
+only one of the solids the kernel gave back for it and the others were
+dropped.
 
 #### Assembly scope for Extrude Cut
 
@@ -2481,6 +2497,29 @@ Patterns, mirrors, combine, moves and primitives: modules `pattern.rs`,
   `combine`; the body keeps its id, a copy that touches nothing stays a
   body of its own. A pattern of that body then copies it with the copies
   joined to it (FreeCAD's MultiTransform of the whole body).
+- `combine_any` (optional, with `combine`; bodies and patterns of bodies,
+  as `combine`; rectangular, circular, path and scale patterns and
+  mirrors; mitcad#1006): a copy joins every body of the pattern it
+  touches, not only the body it is a copy of: the patterned bodies as
+  the copies before left them (of a pattern of patterns of bodies, those
+  of the inner patterns' bodies still there) and the copies before it
+  that stayed bodies of their own. The copies are made of the bodies as
+  they were before the pattern, the bodies in their order, each at every
+  element. The bodies a copy reaches are found by their boxes and, where
+  the boxes of several meet, by the kernel's contact test
+  (`Kernel::tool_contacts`). A copy that touches one body is joined with
+  it as `combine` joins it (a mirror image's near-copy join too); one
+  that touches several joins them in one join (of their lumps, as a join
+  of a body of several solids), into the first of them, the patterned
+  bodies first: the bodies merged into it are removed. A copy that
+  touches none is the body it is without `combine`
+  (`<pattern>.b<k>`, k = (element − 1) · (number of bodies) + (body's
+  position); of a pattern of patterns, k counting such bodies in order);
+  solids of a copy that touch nothing while the rest of it joins are new
+  bodies after those. The FreeCAD import sets it on the transformations
+  of the whole shape of a Body of several solids, as FreeCAD fuses a copy
+  with whichever solid it reaches. `combine_any` without `combine` is
+  refused (`combine_any needs combine`).
 - `scale_copies` (optional, with `scale`; mitcad#542): the N copies the
   runs are counted over, run g = ⌊j · groups / N⌋ (default P · n, the
   pattern's own copies; at least those): a pattern inside a pattern of
@@ -2723,7 +2762,8 @@ existing pairs during an edit preview; unchanged shared body IDs stay in `bodies
 
 A pattern of one copy, element 1 (`<mirror>:inst1(<face>)`). Mirrored
 bodies are new bodies; `combine` joins each to its original when they
-touch. Mirrored features reflect their finished tool (never a rebuilt
+touch, and with `combine_any` (mitcad#1006, as for patterns) to every
+mirrored body or image before it that it touches. Mirrored features reflect their finished tool (never a rebuilt
 one); `original_bodies`, and fillets and chamfers among the features, as
 for patterns. `scale` and `scale_groups` (mitcad#539) as for patterns
 with two elements: the image scaled by the factor about its own centre
@@ -4116,7 +4156,7 @@ made, in order) and `status` (as the `sketch` query: `dof`,
 | `sketch.circular_pattern` | `entities`, `center` (point input; a new point is fixed), `count` (originals included), `angle` (value, default a full turn) | a `patterns` record; result `constraints` [the pattern's id] |
 | `sketch.rectangular_pattern` | `entities`, `direction` (default [1, 0]), `count` [n1, n2], `spacing` [s1, s2] (values, signed: a negative spacing goes against its direction, mitcad#447; not zero), `symmetric` ([bool, bool], default none: per direction the originals are the middle instance, an odd count, and the copies lie on both sides) | as above |
 | `sketch.edit_pattern` | `pattern` (`k5`), and any of `count` (n, or [n1, n2]), `angle`, `spacing`, `direction`, `center`, `entities` (the originals) | the copies follow |
-| `sketch.project` | `source`: an edge, a face (its boundary) or a vertex of the bodies before the sketch (left out only for a section of a whole `body`, mitcad#736), or a curve or point of an earlier sketch, `{"sketch": "F1", "curve": "c4"}` / `{"point": "p3"}`, or `{"sketch": "F1"}` for all its curves (see [Projecting another sketch's curves and points](#projecting-another-sketchs-curves-and-points), mitcad#904), `body` (optional; none for a sketch's geometry), `linked` (default false), `occurrence` and `context` (optional: geometry of another component, see [Geometry of other components](#geometry-of-other-components)), `section` (default false: a face's or a body's section curves, or an edge's crossing points, instead; see [Section curves in sketches](#section-curves-in-sketches)) | fixed reference entities, a curve or point the same as another of the source once; a planar B-spline seen edge on is the line between its extreme points (mitcad#389), as a conic is; a linked projection follows its source when the model changes, each entity the fresh curve of its kind most like it (`by_geometry` in its record, since 0.4.1); a projection without it (files of earlier versions, imports) follows only a source whose curves come back of the same kinds, in the same order and joined the same way, and otherwise keeps its geometry and warns (mitcad#249); joined to the projected geometry already in the sketch, see [Projected outlines and their offsets](#projected-outlines-and-their-offsets) |
+| `sketch.project` | `source`: an edge, a face (its boundary) or a vertex of the bodies before the sketch (left out only for a section of a whole `body`, mitcad#736), or a curve or point of an earlier sketch, `{"sketch": "F1", "curve": "c4"}` / `{"point": "p3"}`, or `{"sketch": "F1"}` for all its curves (see [Projecting another sketch's curves and points](#projecting-another-sketchs-curves-and-points), mitcad#904), `body` (optional; none for a sketch's geometry), `linked` (default false), `occurrence` and `context` (optional: geometry of another component, see [Geometry of other components](#geometry-of-other-components)), `section` (default false: a face's or a body's section curves, or the crossing points of an edge or of another sketch's curves, instead; see [Section curves in sketches](#section-curves-in-sketches)) | fixed reference entities, a curve or point the same as another of the source once; a planar B-spline seen edge on is the line between its extreme points (mitcad#389), as a conic is; a linked projection follows its source when the model changes, each entity the fresh curve of its kind most like it (`by_geometry` in its record, since 0.4.1); a projection without it (files of earlier versions, imports) follows only a source whose curves come back of the same kinds, in the same order and joined the same way, and otherwise keeps its geometry and warns (mitcad#249); joined to the projected geometry already in the sketch, see [Projected outlines and their offsets](#projected-outlines-and-their-offsets) |
 | `sketch.import_dxf` | `path` (.dxf), `unit` (of a drawing that names none: `mm` default, `cm`, `m`, `in`, `ft`), `at` (the sketch point the drawing's origin goes to, default [0, 0]), `layers` (only the entities on these layers; all when left out; a layer with nothing on it is refused) | as other edits, and `curves`, `points` (shared points made), `text_count`, `warnings`; undo step `Insert DXF into Sketch1`; see [DXF](#dxf-into-sketches) |
 | `sketch.import_svg` | `path` (.svg), `scale`, `at`, `stroke_outline` (mitcad#473) | see [SVG](#svg-into-sketches) |
 | `sketch.add_code` | `text` (the content), `at` (the lower left corner, default [0, 0]), `module` (mm, default 1), `angle`, `kind` (`qr`), `ecc` (`L`, `M` default, `Q`, `H`) (mitcad#473) | a text with `code` (see the sketch definition's `texts`), `texts` [its id]; undo step `Add QR Code to Sketch1`; a content no QR code holds (too long for the level) or a module of no size is refused |
@@ -5087,6 +5127,21 @@ constraints.
   (`… has only empty bodies (n): nothing to import`). The
   [shape API](#base-features-from-shapes) and the importers' fallbacks
   still refuse an empty body, as their bodies are counted by index.
+- STEP names in a code page (mitcad#1002): a name written with STEP's
+  escapes (`\X2\…\X0\`) or as raw UTF-8 bytes is read as it is. A name
+  whose raw bytes are not valid UTF-8 (written in the writer's own code
+  page) is decoded with one code page for the whole file: the first of
+  GBK, Shift-JIS and CP1252 that decodes every such name of the file
+  without an error, else the one that decodes the most; a name that one
+  cannot decode stays as read. The choice goes to the log when a name is
+  not ASCII: `STEP names: GBK (12 of 40 names not ASCII)` counts the
+  file's non-empty texts (names, ids, descriptions); `2 in UTF-8` and
+  `1 not decoded, kept as read` follow after a semicolon when there are
+  such (`STEP names: GBK (14 of 40 names not ASCII; 2 in UTF-8)`). As the order
+  says, Shift-JIS bytes that also make GBK characters, or CP1252 bytes
+  that also make GBK or Shift-JIS ones, are read in the earlier code page
+  unless another name of the file rules it out. Test: `geometry.io`
+  (`test_step_name_code_pages`).
 - `export` writes the bodies with their display names and colours
   (`colors`, else the colours of imported bodies; for STEP, IGES, OBJ,
   3MF; USDZ writes the bodies' appearances, [USDZ](#usdz)). Mesh bodies go
@@ -5757,7 +5812,7 @@ What the document gets:
 | Fillet | `fillet`, constant radius, on the edges and faces (an edge FreeCAD merged: MitCad's pieces along it, by the two faces each lies between where every edge between them is a piece, mitcad#793); `UseAllEdges` → a set of `all_edges` (every edge of the body when the fillet is computed, so edges a sketch edit adds are rounded too) | |
 | Chamfer | `chamfer` `equal_distance`, `two_distances` (Size, Size2), `distance_angle` (Size, Angle); edges as for Fillet (`UseAllEdges` → `all_edges`) | `flip` both ways |
 | Hole | `hole` at the profile sketch's circles' and arcs' centres (`sketch_points`), Diameter, depth (DrillForDepth taken off) or through all, flat or angled point, counterbore, countersink, counterdrill, Tapered → `taper` (90° less TaperedAngle; FreeCAD's drill point is as high as the straight hole's: the tip angle from the wall's end that gives it); a cosmetic ISO metric, Unified (UNC, UNF, UNEF: `1/4-20 UNC`), Whitworth (BSW, BSF: `1/4-20 BSW`; BSP: `G 1/4`), NPT (`1/4-18 NPT`) or tyre valve (ISOTyre, `5V1`) thread over the hole's depth → a cosmetic `thread` on the walls (the size from the version's list for the thread type, `ThreadSize[ISOMetricProfile]` in `data/enums.json`; the hole keeps FreeCAD's diameter), other threads left out (`partial`); a modelled ISO metric or Unified thread → first as FreeCAD cuts it: per hole a fixed `construction_plane` through the axis, a `sketch` of the groove's section (60° flanks, the root P/8 wide at the major diameter plus the class's clearance; 1.1's quadrilateral, the older hexagon) and a `helix` cutting it from a pitch above the top as deep as FreeCAD's thread runs (through all: two pitches past the body), then the `hole`; then a modelled `thread` (MitCad's basic profile cut from FreeCAD's bore); both stay 1.3e-6 to 2e-6 (the groove) off FreeCAD's thread, so these fall back; Whitworth and NPT ones and those FreeCAD did not model fall back at once, tyre valve ones (FreeCAD rounds their crests) after the thread is tried | `flip` both ways |
-| Mirrored, LinearPattern, PolarPattern | `mirror`, `rectangular_pattern` (1.1's second direction too), `circular_pattern` of the originals' MitCad features (`identical`), or of the body (TransformMode whole shape: `combine`, the copies joined to it); planes and axes as above (a sketch's V axis as a mirror plane: the plane through it along the normal); extent or spacing | the distance's or angle's sign |
+| Mirrored, LinearPattern, PolarPattern | `mirror`, `rectangular_pattern` (1.1's second direction too), `circular_pattern` of the originals' MitCad features (`identical`), or of the body (TransformMode whole shape: `combine`, the copies joined to it; of a Body of several solids also `combine_any`, each copy joined to every body it touches, mitcad#1006); planes and axes as above (a sketch's V axis as a mirror plane: the plane through it along the normal); extent or spacing | the distance's or angle's sign |
 | MultiTransform | of the originals' features: one transformation as that feature; two LinearPatterns → one `rectangular_pattern` of two directions; two Mirrored → both `mirror`s, a `construction_axis` where their planes meet (`two_planes`) and a `circular_pattern` of 2 about it (the half turn); otherwise (any sequence of Mirrored, LinearPattern and PolarPattern) each transformation a `mirror` or pattern of the one before (patterns of patterns). A Scaled transformation (mitcad#539): first (or alone) → a `scale_pattern` of the originals (Occurrences, Factor), the transformations after it patterns of it; after others → the `scale` (Factor) of the pattern or mirror before it, with `scale_groups` (Occurrences) unless it has as many elements: FreeCAD scales the copies before it in that many runs, each about its own centre; more runs than that one's elements (mitcad#542) → the same scale counted over all the copies before it (`scale_copies`) on that one and on the patterns before it (after two LinearPatterns also one `rectangular_pattern` of two directions with `scale`); several Scaled transformations → their scales on the patterns before each (`scales` where one scales already), the factors multiplying. FreeCAD 1.0 and 1.1 leave out every copy but the original whose factor is 1 once a Scaled transformation follows others (0.21 keeps them; mitcad#542, measured): those readings, first for 1.0 and 1.1, give each pattern the `skipped_copies` of its own such copies (the patterns after it still copy them). Of the whole body (TransformMode whole shape, 1.0 and 1.1; mitcad#539, mitcad#547) → the first transformation a `mirror` or pattern of the body, each next one of the one before (a pattern of patterns of the body: the body as it was at every product of the elements, FreeCAD's product of the transformations), all with `combine`; Scaled ones there as above (`scale_pattern` of the body first; scales, runs and `skipped_copies` of the body's copies), with `scale_center` the Body's origin (FreeCAD's centre in body mode, carried with each copy). Its transformations are no features of their own | the signs of the directions |
 | Scaled (alone, not in a MultiTransform) | `scale_pattern` of the originals' features (Occurrences, Factor) | |
 | Boolean | `combine` join / cut / intersect of the Body's body with the other Bodies' bodies | |
@@ -11599,6 +11654,19 @@ name without `#k`) instead of the face's projected boundary:
   ends of an edge or a piece of it lying in the plane. Linked, the record
   is a projection with `"section": true` whose source is the edge, and
   its points follow the fresh crossings.
+- Another sketch's curve or point (mitcad#998): `source` as in
+  [Projecting another sketch's curves and
+  points](#projecting-another-sketchs-curves-and-points), without `body`;
+  the entities are the points where the plane crosses the curve where
+  its sketch solved it (`sketch::project::plane_crossings`: lines and
+  conics exactly, splines and helices by sign changes refined by
+  bisection; a curve lying in the plane gives its ends, a point on the
+  plane itself), in the curve's order. A single curve the plane does not
+  cross is refused (`the sketch's plane does not cross c4 of Sketch1`);
+  of a whole sketch, the curves it does not cross are left out. Linked,
+  each is a projection with `"section": true` whose source is the curve,
+  and its points follow the fresh crossings when the source sketch
+  changes. One edit, one undo step (`Section Curves to Sketch2`).
 - A whole body (Intersect, mitcad#736): no `source`, `body` given. The
   kernel cuts all of the body's faces (`section_curves` without a face)
   and the pieces come in grouped by the face they lie on: each face's
@@ -11615,7 +11683,10 @@ name without `#k`) instead of the face's projected boundary:
   not cut the body`); `sketch.project` without `source` and without
   `section` (`needs a source`).
 
-Tests: `core/model-tests/sketch-refs/src/section_curve_tests.rs` (mock kernel: the section
+Tests: `core/model-tests/sketch-refs/src/sketch_projection_tests.rs`
+(`a_section_of_another_sketchs_curves_gives_where_its_plane_crosses_them`),
+`core/sketch/src/tests.rs` (`plane_crossings_of_lines_conics_splines_and_points`),
+`core/model-tests/sketch-refs/src/section_curve_tests.rs` (mock kernel: the section
 of a face is where the plane cuts the body's bounds; a whole body's
 section puts side k of it on the body's face k; an edge's crossing is
 where the plane crosses its line in `named_curves`);
@@ -11669,8 +11740,10 @@ geometry](#references-to-geometry) give sketch entities:
   projection whose source the timeline later puts after it fails the
   sketch's check, as a reference to a later feature does. The sketch's
   own geometry is refused (`a sketch does not project its own geometry`),
-  as is an entity the sketch does not have (`Sketch1 has no c99`), a
-  `body` with a sketch's geometry, and `"section": true` with it.
+  as is an entity the sketch does not have (`Sketch1 has no c99`) and a
+  `body` with a sketch's geometry. With `"section": true` (mitcad#998)
+  the entities are where the sketch's plane crosses the curves ([Section
+  curves in sketches](#section-curves-in-sketches)).
 - Another component's sketch, and a sketch of a component placed more
   than once, come through `occurrence` and `context` as its bodies' edges
   do ([Geometry of other components](#geometry-of-other-components)): the
@@ -18346,3 +18419,132 @@ The `sketch` query's `frame` is in the sketch's component's coordinates
 (as the bodies of the component are); a client that draws a direction
 from it in the design moves it by the `world` placement of the occurrence
 it shows the sketch at (the `components` query).
+
+## Dogbone
+
+```json
+{"type": "dogbone", "body": "F1.b0", "edges": ["E{F2:side0|F2:side1}"],
+ "faces": ["F2:bottom"], "diameter": "6.35 mm", "extra": "0.1 mm",
+ "dogbone_type": "along_side", "axis": [0, 0, 1]}
+```
+
+Relief cuts at a body's inside corners, so that a router bit of the
+tool's diameter clears the sharp corner a square part fits into
+(mitcad#1011). For each inside (concave) corner edge it takes, a cylinder
+of the tool's diameter runs along the whole edge, parallel to it, placed
+so that its circle passes `extra` beyond the sharp corner, and is cut from
+the body; the body keeps its id, and its faces keep their names.
+
+- `edges`: inside corner edges, taken whatever their direction. Each must
+  be straight and an inside corner: an edge that is not fails the feature
+  with the reason (`edge E{F1:side0|F1:side1} is not an inside (concave)
+  corner`, `edge E{F4:side0|F4:top} is not straight`).
+- `faces`: of each face, its edges that are straight inside corners
+  parallel to the tool axis (a pocket's wall: its two corners); of a
+  planar face across the axis (a pocket's floor, a top face), every such
+  edge of the body that ends on the face.
+- Neither `edges` nor `faces`: every straight inside corner edge of the
+  body parallel to the tool axis. Picks that give no corner fail (`the
+  body has no inside corner along the tool axis`).
+- `diameter` (> 0, default 6.35 mm) and `extra` (>= 0, default 0.1 mm):
+  value slots `diameter` and `extra`; without them the defaults.
+- `dogbone_type`: `diagonal` (the default) puts the cylinder's centre on
+  the corner's bisector, `diameter / 2 - extra` from the corner;
+  `along_side` (a T-bone) keeps it `diameter / 2` off one face of the
+  corner and moves it `extra` beyond the corner along that face, so that
+  it notches only the other face: the picked face (in `faces`) the edge
+  came from, otherwise the longer of the corner's two faces (the one that
+  reaches farther from the edge).
+- `axis`: the router bit's axis in the component's coordinates (any
+  length, not zero), `[0, 0, 1]` by default; it chooses the corners of
+  `faces` and of the body.
+
+The reliefs' faces are named `<feature>:dogbone(<edge>)` along each
+cylinder and `dogbone_start(<edge>)`, `dogbone_end(<edge>)` at its ends,
+`<edge>` the corner's edge name (`Kernel::dogbone_tool`). The preview's
+tool is the cylinders; the timeline shows the picked edges and faces
+([Feature inputs](#feature-inputs)). A mesh body is refused as in the
+other surface operations.
+
+Code: `core/model/src/features/dogbone.rs`, `geometry/src/dogbone.cpp`
+(the corners: each edge's faces' outward normals across it, an inside
+corner told by a point beside the edge inside the material). Tests:
+`core/model-tests/features-solid/src/dogbone_tests.rs` (mock kernel),
+`tools/cli/tests/dogbone.json` (ctest `cli.dogbone`, OCCT: a pocket's
+four corners in a block, analytic volumes of both types), the UI tests
+`tools/ui-dogbone-test.sh` and `app.ui-windows-dogbone`.
+
+## Mortise and Tenon
+
+A `mortise_tenon` feature (mitcad#1012,
+`core/model/src/features/mortise_tenon.rs`) grows a tenon out of a
+planar end face of one body and cuts its mortise into another body where
+the tenon reaches. The application's command is Mortise and Tenon in
+SOLID > MODIFY ([app/COMMANDS.md](../../../app/COMMANDS.md#notes-on-particular-commands)).
+
+```json
+{"type": "mortise_tenon", "body": "F1.b0", "face": "F1:side1", "mortise_body": "F2.b0",
+ "width": 40, "thickness": 8, "length": 25, "offset_width": 5, "offset_thickness": -2,
+ "turned": true, "clearance": 0.1, "corners": "rounded", "tool_diameter": 6}
+{"type": "mortise_tenon", "body": "F4.b0", "face": "F4:side1", "mortise_body": "F5.b0",
+ "width": 40, "thickness": 8, "through": true}
+```
+
+- **The tenon** is a rectangle `width` x `thickness` on `face` (planar)
+  of `body`, grown `length` along the face's outward normal; with
+  `through` (and no `length`) up to where the mortise body's material
+  ends last along the line out of the tenon's middle: flush with the
+  mortise body's far face. Its width runs along the face's longest
+  straight edge (across the normal; the face's normal × X, or × Y for a
+  normal near X, when the face has no straight edge), turned to point
+  along its largest component's positive direction; with `turned` the
+  width runs across that edge. The thickness runs along normal × width.
+- **Its place:** the middle of the face's extent along those two axes
+  (the face's edges projected on them), moved by `offset_width` and
+  `offset_thickness` (default 0: centred). What the face leaves round the
+  tenon are the shoulders.
+- **The mortise** is the tenon grown by `clearance` (default 0.1 mm) on
+  every side and past the tenon's tip: `width + 2 clearance` x
+  `thickness + 2 clearance`, `length + clearance` deep from the end
+  face's plane (a through mortise runs on 1 mm past the mortise body, so
+  that its end lies on none of the body's faces). Its volume in the body
+  is therefore the tenon's plus the clearance's.
+- **Corners:** `square` (default) or `rounded`: the mortise's corners
+  round by `tool_diameter` / 2, as the cutter leaves them, and the
+  tenon's four edges along its length round by that radius less the
+  clearance (square when the clearance is as large), so that the mortise
+  is the tenon grown by the clearance there too.
+
+The tenon starts a little inside its body (5 % of its length, 0.001 to
+0.5 mm) and joins it; the mortise cuts the other body (a piece a mortise
+splits off becomes a body of the feature, as a cut's pieces do). Both
+bodies keep their ids and names; the input shapes are not modified, and
+an edit of any value builds both again. The feature's tool (for
+previews) is the mortise.
+
+Face names: the tenon's sides `side(c1)` … `side(c4)` counter-clockwise
+from the side along the width at -thickness / 2 (rounded: the lines
+`c1`, `c3`, `c5`, `c7` and the rounds `c2`, `c4`, `c6`, `c8`), its tip
+`end(…)`; the mortise's walls `side(c11)` … `side(c14)` (`c11` … `c18`)
+in the same order and its bottom `end(…)`.
+
+Refused when the feature is added: the same body for both, a size not
+above 0, a negative clearance, a blind tenon without `length`, rounded
+corners without `tool_diameter` or with a tool not narrower than the
+mortise (`the tool diameter (9 mm) must be smaller than the mortise's
+thickness (8.2 mm)`). Refused when it is built, with the reason in the
+timeline: an end face that is not planar, a tenon larger than the end
+face (`the tenon (70 x 8 mm) is larger than the end face (60 x 20 mm)`),
+one an offset takes past the face's edge (`… (shoulders 25, -5, 6, 6
+mm)`), and a tenon that does not reach the mortise body (`the tenon does
+not reach body F12.b0`: the blind mortise cuts nothing of it, or nothing
+of a through tenon's mortise body lies ahead of the tenon's middle).
+
+Uses only the existing `Kernel` methods (`face_plane`, `curves_of`,
+`extrude_feature`, `boolean`, and `bounding_box` with
+`segment_crossings` for a through tenon). Tests:
+`core/model-tests/parts/src/mortise_tenon_tests.rs` (mock kernel),
+`cli.mortise_tenon` (`tools/cli/tests/mortise_tenon.json`: OCCT volumes
+of crossing boards, blind, through and rounded, edited, refusals),
+`tools/ui-mortise-tenon-test.sh` and `app.ui-windows-mortise-tenon`
+(`tools/ui-windows-mortise-tenon-test.ps1`).

@@ -7,11 +7,14 @@
 // them for each part (`groups`: the names from the top group down, each
 // with its place in its library's list). Groups of several libraries with
 // the same names are one group; a part in several groups is listed in
-// each, and a group lists its subgroups' parts too. Plain Qt Core, so that
-// the unit tests (tests/part_picker_data.cpp) build it on its own.
+// each, and a group lists its subgroups' parts too. Each group's row ends
+// with its count under the search and the filters, and empty groups hide
+// (mitcad#1015, groupCounts and hiddenGroups). Plain Qt Core, so that the
+// unit tests (tests/part_picker_data.cpp) build it on its own.
 
 #include <QHash>
 #include <QList>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
@@ -70,5 +73,25 @@ private:
   QHash<QString, Node> m_nodes;
   QStringList m_top;
 };
+
+// The groups' counts under the search and the filters (mitcad#1015).
+//
+// The parts in each group by its key: `parts` holds the groups of each part
+// the search and the filters leave. A group counts its own parts and its
+// subgroups', a part in several of them once (as inGroup lists them); a
+// group with none has no key.
+QHash<QString, int> groupCounts(const QList<QList<PartGroupPath>>& parts);
+// The rows to hide: a group of the tree with no part (`counts`, a missing
+// key counting none: a parent with only empty subgroups is empty too) and,
+// while `filtering` (a search, or a filter off its "all" choice), a row of
+// `special` (the picker's own rows, Favourites and the others) with none.
+// Never the chosen group or a group above it: the chosen one stays with
+// (0) so that the search goes on in it (mitcad#418) until another is chosen.
+QSet<QString> hiddenGroups(const PartGroupTree& tree, const QHash<QString, int>& counts, const QString& chosen,
+                           bool filtering, const QStringList& special);
+// The grid's own search (the pickers'; Insert from Library searches with
+// library_search): whether a part's fields, joined, have every word of the
+// search, ignoring case.
+bool searchMatches(const QString& fields, const QString& search);
 
 } // namespace mitcad

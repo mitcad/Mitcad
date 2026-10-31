@@ -406,8 +406,25 @@ public:
   // from under them; the picking of the cube follows. Logs "View overlay
   // insets" when it changes.
   void setOverlayInsets(const QMargins& insets);
-  // AppKit provides the general view controls in its native toolbar.
+  // AppKit provides the general view controls in its native toolbar, and
+  // the orientation cube's arrows as its own buttons over the view.
   void setNativeControls(bool native);
+  // The orientation cube's arrows for a frontend with native controls:
+  // each one's id (pressCubeArrow), tooltip, SF Symbol and place in the
+  // widget, as the Qt arrows would show; none while the view is not face
+  // on. cubeArrowsChanged follows a change.
+  struct CubeArrow {
+    QString id;
+    QString toolTip;
+    QString symbol;
+    QRect geometry;
+    bool operator==(const CubeArrow& other) const {
+      return id == other.id && toolTip == other.toolTip && symbol == other.symbol && geometry == other.geometry;
+    }
+  };
+  const std::vector<CubeArrow>& shownCubeArrows() const { return m_shownCubeArrows; }
+  // A click on the cube's arrow `id` (up, down, left, right, cw, ccw).
+  void pressCubeArrow(const QString& id);
   QMargins overlayInsets() const { return m_overlayInsets; }
   // The width that the sketch's badge takes at the bottom left, margin
   // included (0: none), so that the floating status pill keeps clear of it.
@@ -668,7 +685,17 @@ public:
   // in window coordinates.
   void lookAtSketchPlane(bool saveCamera = true, const TopoDS_Shape& face = TopoDS_Shape());
   void restoreCamera();
+  // Fits what the view shows, on the next frame; with nothing to fit (an
+  // empty design's origin is hidden), frames the origin (setOriginBox).
   void fitAll();
+  // A new, empty design (mitcad#1000): on the next frame, the isometric
+  // view of the origin planes' box at the same share of the view's height
+  // whatever the view's size, logged "View: new design framed, scale <mm>
+  // mm per view height at <w>x<h>". A resize keeps the visible height.
+  void frameNewDesign();
+  // The box the origin planes take when shown: what a fit frames when the
+  // view shows nothing to fit (mitcad#1000).
+  void setOriginBox(const Bnd_Box& box) { m_originBox = box; }
   // Fits the view to a box (model coordinates) as Fit fits everything:
   // along the current view direction, with Fit's margin, in the part of the
   // view no card covers; at once (mitcad#405).
@@ -793,6 +820,9 @@ signals:
   void shiftChanged(bool held);
   // setNavigation() applied new settings (the 3D mouse's among them).
   void navigationChanged();
+  // The orientation cube's arrows for native controls (shownCubeArrows)
+  // appeared, moved or went.
+  void cubeArrowsChanged();
 
 protected:
   // Shift anywhere in the window widens a scope's clicks (setPickScope).
@@ -900,6 +930,17 @@ private:
   // Starts a smooth camera move to `end` (or jumps when not animating).
   void moveCamera(const occ::handle<Graphic3d_Camera>& end);
   void fitCamera(const occ::handle<Graphic3d_Camera>& camera) const;
+  // The origin planes' box (m_originBox) in the camera's direction, at a
+  // visible height that does not depend on the view's size or the cards
+  // (mitcad#1000), moved to the middle of the free area.
+  void frameOrigin(const occ::handle<Graphic3d_Camera>& camera) const;
+  // The pending fit (m_fitPending) on a camera: a new design's framing or
+  // fitCamera; and made on the view's camera, as the next frame does.
+  void fitPending(const occ::handle<Graphic3d_Camera>& camera) const;
+  void applyPendingFit();
+  // The model height the view shows at the target, mm (the camera's
+  // ViewDimensions().Y(); OCCT's scale only in a view wider than tall).
+  double visibleHeight() const;
   // turnTo's work, which runViewOperation guards.
   void turnCameraTo(const gp_Dir& direction, const gp_Dir& up);
   // Runs a camera change that a button, a command or a slot starts
@@ -960,6 +1001,8 @@ private:
   // the curved arrows roll it 90 degrees about the line of sight.
   void placeCubeArrows();
   void updateCubeArrows();
+  // With native controls: shownCubeArrows from the Qt arrows' places.
+  void publishCubeArrows();
   void turnCube(const QString& arrow);
   // Logs the camera, and with MITCAD_LOG_PICKS where the cube's faces,
   // edges and corners can be clicked, once the camera rests.
@@ -1125,6 +1168,13 @@ private:
   QString m_sketchToolIcon;
   bool m_sketchSnapping = false;
   bool m_fitPending = false;
+  // mitcad#1000: the pending fit is a new design's framing (frameNewDesign);
+  // a fit was made (the start-up size then keeps it); the origin planes'
+  // box (setOriginBox); a resize to log once the view rests.
+  bool m_framingNewDesign = false;
+  bool m_fitMade = false;
+  Bnd_Box m_originBox;
+  bool m_resizeToLog = false;
   FirstBodiesFit m_firstFit; // the design's first bodies fitted once (expectFirstBodies)
   bool m_directFrameQueued = false; // requestFrame() in an unexposed window
   bool m_painting = false;          // in paintGL()
@@ -1273,6 +1323,8 @@ private:
   CubeProjection m_cubeProjection = CubeProjection::FollowView; // mitcad#774
   // up, down, left, right, cw, ccw
   std::vector<std::pair<QString, QToolButton*>> m_cubeArrows;
+  bool m_cubeFaceOn = false; // the view looks straight at a face
+  std::vector<CubeArrow> m_shownCubeArrows; // publishCubeArrows
   QTimer* m_restTimer = nullptr;
   QString m_loggedCamera;
   QString m_restedView; // the eye and scale when the camera last rested

@@ -967,6 +967,193 @@ pub fn transform_curve(t: &Transform, curve: &Curve3) -> Curve3 {
     }
 }
 
+/// How far from a plane (mm) a point of a curve may be and still lie on
+/// it, for [`plane_crossings`].
+const ON_PLANE: f64 = 1e-7;
+
+/// Where a model curve crosses the plane through `origin` with the unit
+/// `normal` (mitcad#998: the section of another sketch's curve, as
+/// `Kernel::section_points` gives an edge's): a point where it passes
+/// through or touches the plane, in the curve's order; a curve lying in
+/// the plane gives its ends (none for a closed one); a point on the plane
+/// itself. Lines and conics exactly; splines and helices by their sign
+/// changes refined by bisection (a touch between samples is missed).
+pub fn plane_crossings(curve: &Curve3, origin: [f64; 3], normal: [f64; 3]) -> Vec<[f64; 3]> {
+    let side = |p: [f64; 3]| dot(mitcad_vec3::sub(p, origin), normal);
+    let on = |d: f64| d.abs() <= ON_PLANE;
+    let mut out: Vec<[f64; 3]> = Vec::new();
+    match curve {
+        Curve3::Point(p) => {
+            if on(side(*p)) {
+                out.push(*p);
+            }
+        }
+        Curve3::Line { start, end } => {
+            let (a, b) = (side(*start), side(*end));
+            if on(a) {
+                out.push(*start);
+            }
+            if !on(a) && !on(b) && (a < 0.0) != (b < 0.0) {
+                out.push(mitcad_vec3::add_scaled(
+                    *start,
+                    mitcad_vec3::sub(*end, *start),
+                    a / (a - b),
+                ));
+            }
+            if on(b) {
+                out.push(*end);
+            }
+        }
+        Curve3::Conic {
+            center,
+            normal: axis,
+            x_axis,
+            major,
+            minor,
+            start,
+            end,
+            closed,
+        } => {
+            // side(t) = c + p cos t + q sin t = c + r cos(t − φ).
+            let y_axis = cross(*axis, *x_axis);
+            let c = side(*center);
+            let p = major * dot(*x_axis, normal);
+            let q = minor * dot(y_axis, normal);
+            let r = p.hypot(q);
+            let at = |t: f64| {
+                mitcad_model_base::curves::conic_point(*center, *axis, *x_axis, (*major, *minor), t)
+            };
+            let tau = std::f64::consts::TAU;
+            if r <= ON_PLANE {
+                // Parallel to the plane: lying in it, its ends.
+                if on(c) && !closed {
+                    out.push(at(*start));
+                    out.push(at(*end));
+                }
+            } else if c.abs() <= r + ON_PLANE {
+                let phi = q.atan2(p);
+                let a = (-c / r).clamp(-1.0, 1.0).acos();
+                let mut ts: Vec<f64> = Vec::new();
+                for t in [phi + a, phi - a] {
+                    // Its parameter from the start, within one turn.
+                    let from = (t - start).rem_euclid(tau);
+                    // At the start, from below.
+                    let from = if tau - from <= 1e-9 { 0.0 } else { from };
+                    if *closed || from <= end - start + 1e-9 {
+                        ts.push(start + from);
+                    }
+                }
+                ts.sort_by(f64::total_cmp);
+                out.extend(ts.into_iter().map(at));
+            }
+        }
+        Curve3::BSpline {
+            degree,
+            poles,
+            weights,
+            knots,
+        } => {
+            let d = *degree as usize;
+            if poles.len() <= d || knots.len() != poles.len() + d + 1 {
+                return Vec::new();
+            }
+            let at = |t: f64| mitcad_model_base::curves::bspline_point(d, poles, weights, knots, t);
+            // Samples: each knot span cut in 16.
+            let (t0, t1) = (knots[d], knots[poles.len()]);
+            let mut ts: Vec<f64> = Vec::new();
+            for w in knots[d..=poles.len()].windows(2) {
+                if w[1] > w[0] {
+                    ts.extend((0..16).map(|k| w[0] + (w[1] - w[0]) * f64::from(k) / 16.0));
+                }
+            }
+            ts.push(t1);
+            if t1 > t0 {
+                out = sampled_crossings(&ts, &at, &side);
+            }
+        }
+        Curve3::Helix {
+            center,
+            axis,
+            x_axis,
+            radius,
+            pitch,
+            start,
+            end,
+        } => {
+            let at = |t: f64| {
+                mitcad_model_base::curves::helix_point(
+                    *center,
+                    *axis,
+                    *x_axis,
+                    (*radius, *pitch),
+                    t,
+                )
+            };
+            // Samples: 64 a turn.
+            let steps = (((end - start) / std::f64::consts::TAU) * 64.0)
+                .ceil()
+                .max(1.0);
+            let n = steps.min(1e6) as usize;
+            let ts: Vec<f64> = (0..=n)
+                .map(|k| start + (end - start) * k as f64 / n as f64)
+                .collect();
+            out = sampled_crossings(&ts, &at, &side);
+        }
+    }
+    // A crossing at a point found twice (a tangent, an end) once.
+    let mut kept: Vec<[f64; 3]> = Vec::new();
+    for p in out {
+        if !kept.iter().any(|k| distance(*k, p) <= ON_PLANE) {
+            kept.push(p);
+        }
+    }
+    kept
+}
+
+/// The crossings of a curve with a plane from samples of its parameter
+/// (`ts`, rising): samples on the plane, and a point found by bisection
+/// between two samples on either side of it. A curve whose samples all lie
+/// on the plane gives its ends.
+fn sampled_crossings(
+    ts: &[f64],
+    at: &dyn Fn(f64) -> [f64; 3],
+    side: &dyn Fn([f64; 3]) -> f64,
+) -> Vec<[f64; 3]> {
+    let values: Vec<f64> = ts.iter().map(|t| side(at(*t))).collect();
+    let on = |d: f64| d.abs() <= ON_PLANE;
+    if values.iter().all(|d| on(*d)) {
+        return match (ts.first(), ts.last()) {
+            (Some(a), Some(b)) => vec![at(*a), at(*b)],
+            _ => Vec::new(),
+        };
+    }
+    let mut out = Vec::new();
+    for (i, t) in ts.iter().enumerate() {
+        if on(values[i]) {
+            out.push(at(*t));
+            continue;
+        }
+        let Some(&next) = values.get(i + 1) else {
+            continue;
+        };
+        if on(next) || (values[i] < 0.0) == (next < 0.0) {
+            continue;
+        }
+        let (mut lo, mut hi) = (*t, ts[i + 1]);
+        let low_side = values[i] < 0.0;
+        for _ in 0..100 {
+            let mid = 0.5 * (lo + hi);
+            if (side(at(mid)) < 0.0) == low_side {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        out.push(at(0.5 * (lo + hi)));
+    }
+    out
+}
+
 /// How a linked projection followed its source at an evaluation, when
 /// anything of it did not (mitcad#232).
 #[derive(Debug, Clone, PartialEq, Default)]

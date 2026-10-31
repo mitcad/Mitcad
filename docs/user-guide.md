@@ -586,6 +586,24 @@ Help › Keyboard and Mouse Overview lists all
 shortcuts. Commands without a shortcut are in command search (S) and in
 the menus of the groups.
 
+**Pinned commands.** A command you use often can be pinned to the
+toolbar, so that you need not look for it in a group's menu. In a group's
+menu (Create, Modify, …, also in their submenus) each command's row shows
+a ⋮ button at its right while the pointer is on the row; click it, or
+right-click the row, or choose the row with the arrow keys and press the
+Menu key (Shift+F10). Its menu has **Pin to Toolbar** and **Change
+Keyboard Shortcut…**, which opens Tools › Keyboard Shortcuts at that
+command (press Enter and the new key). The commands you pin show as
+buttons in a group of their own, **Pinned**, at the end of the tab you
+pinned them on (Solid, Build or Sketch), in the order you pinned them;
+drag a button along the group to put it elsewhere. To unpin a command,
+choose **Unpin from Toolbar** in its row's menu or right-click its pinned
+button. The pins are kept for each tab across sessions. In a narrow
+window the groups fold to their names from the right, the Pinned group
+before Create and Modify. (With
+menus that macOS draws natively, the rows have no ⋮ button; a pinned
+button's right-click menu works there too.)
+
 ### Shortcuts
 
 | Command | Key | Action |
@@ -695,6 +713,8 @@ submenus.
 - Align
 - Delete Face
 - Appearance ([Appearances](#appearances))
+- Dogbone ([Dogbone](#dogbone))
+- Mortise and Tenon ([Mortise and Tenon](#mortise-and-tenon))
 - Edit Appearances ([Appearances](#appearances))
 - Edit Materials ([Materials](#materials))
 - Change Parameters ([Parameters and
@@ -1244,6 +1264,38 @@ measured on. That face is the Reference Face, or else the edge's first
 face. Flip takes the other face. The arrow of Distance 2 runs along the
 other face. You type the angle.
 
+### Dogbone
+
+**Dogbone** cuts reliefs at the inside corners of a body, for parts cut
+with a router (CNC). A round router bit cannot cut a sharp inside
+corner: it leaves material of its own radius there, and a square part
+then does not fit into the pocket. A dogbone removes that material with a
+cylinder of the bit's diameter at each corner, so the bit reaches the
+sharp corner.
+
+Pick in *Corners*:
+
+- inside corner edges (straight edges where the material turns inwards);
+- faces: the inside corners along the tool axis on each face. A face
+  across the tool axis, such as the floor of a pocket, takes the inside
+  corners that end on it;
+- a body (in the browser): all of its inside corners along the tool axis.
+
+*Tool Diameter* is the bit's diameter (6.35 mm, a quarter inch, by
+default). *Extra* moves each relief that much beyond the sharp corner
+(0.1 mm by default). *Type* sets where the relief goes:
+
+- Diagonal: along the corner's bisector, into the corner;
+- Along a Side (a T-bone): along one face of the corner, so that the
+  relief notches the other face only. This is the longer face, or the
+  face that you picked.
+
+*Tool Axis* (Z, Y or X of the component) shows when you pick faces or a
+body. Edges that you pick are taken in every direction. An edge that is
+not straight or not an inside corner makes the feature fail, and the
+message gives the reason. The body keeps its name, and you can edit the
+values later.
+
 ### Tangent Chain
 
 *Tangent Chain* is an option of Fillet, Chamfer, Shell, Draft and
@@ -1298,6 +1350,20 @@ pick two parallel planar faces or planes, Measure also shows their
 *Offset*: the distance between the two planes. The distance can be
 longer than the offset when the faces do not overlap.
 
+The Measure panel reads from top to bottom in the order you work: what
+you pick, the result, what to do with it, and the history. The result
+comes right under the picks. Between two picks their values come first,
+the *Distance* in a larger type, then the *Angle*, the *Offset*, the
+*Axis distance* and the *Centre distance*; hover over the distance to see
+the points it is measured between and its Δx, Δy and Δz. Under them each pick
+has a group titled by what it is, for example *Selection 1: cylindrical
+face*, with its *Diameter*, *Radius*, *Area*, *Length*, *Volume*,
+*Position*, *Axis through* and *Axis direction* as they apply. Click a
+group's title to fold it. Right-click a value and choose *Copy* to copy
+its number and unit. Under the result are *Keep as Dimension* and the
+*Annotate* menu, and at the bottom the history. *Close* (or Enter or
+Esc) closes the panel.
+
 The *Selection Filter* of the Measure panel says what a click picks.
 With *Faces, Edges and Vertices* (the default), the bodies come first:
 where a shown sketch's point or line lies on a body's corner, edge or
@@ -1321,28 +1387,35 @@ Between two circles or arcs, Measure also shows the distance of their
 centres.
 
 The Measure panel keeps a *History* of the measurements you take, newest
-first. Each row shows what you picked and the main values. Click a row to
-show that measurement again. *Copy* copies the row you clicked, *Copy All*
-copies all rows as tab-separated text, for example into a spreadsheet.
-*Clear* empties the history. The history stays while the design is open,
+first. It is folded at the bottom of the panel: click *History* to open
+it. Each row is one line: its number, its main value and what you picked
+(`3.  6.843 mm   Face ↔ Face`); hover over a row to see all of it. Click
+a row to show that measurement again. Right-click a row for *Show*,
+*Keep as Dimension* and *Copy*, which copies the row as tab-separated
+text, for example into a spreadsheet. The *⋯* button at the end of the
+history's title has *Copy All*, which copies all rows, and *Clear*,
+which empties the history. The history stays while the design is open,
 also when you close and open Measure again. It is not saved with the
 design. A row whose geometry is gone is grey.
 
-**Annotations.** To keep a measurement in the design, click *Keep* in
-the Measure panel, or click a row of the history and then *Keep Row*.
+**Annotations.** To keep a measurement in the design, click *Keep as
+Dimension* in the Measure panel, or right-click a row of the history and
+choose *Keep as Dimension*.
 The measurement becomes an *annotation*: a dimension drawn in the view
 as on a drawing
 (ISO 129 style, millimetres). MitCad names it after
 what it shows (`Distance1`, `Angle1`, `Offset1`, `Diameter1`, …).
-Sketch curves and points cannot be kept: with them picked, *Keep* is
-greyed out and its tooltip says so; pick the body's corners or edges
-instead. With
-one face, edge or vertex picked, *Note…* adds a *leader note* instead:
-an arrow to the pick and a text of one or more lines.
+Sketch curves and points cannot be kept: with them picked, *Keep as
+Dimension* is greyed out and its tooltip says so; pick the body's
+corners or edges instead. The *Annotate* menu beside it adds other
+annotations on the one face, edge or vertex picked: *Note…* adds a
+*leader note*, an arrow to the pick and a text of one or more lines;
+*Datum Label…*, *Frame…* and *Hole Callout* are below. Its last entry,
+*Annotations…*, opens the Annotations window.
 
 **Hole callouts.** Pick a hole in the Measure panel — its wall, its
-counterbore's or countersink's face, or its rim — and click *Hole
-Callout*. MitCad writes the hole as a drawing does, from the hole
+counterbore's or countersink's face, or its rim — and choose *Annotate ›
+Hole Callout*. MitCad writes the hole as a drawing does, from the hole
 feature, in the symbols of ISO 129-1: how many holes the feature has
 (`4x`), the drill's diameter (`Ø6.6`) or a tapped hole's thread (`M8x1.25
 - 6H`, a custom thread's size and number of starts), `THRU` or the depth
@@ -1355,7 +1428,7 @@ drawing, select it in the Annotations window and click *Add Frame…*.
 
 **Datum labels and feature control frames.** For geometric tolerances
 (ISO 1101), pick one face, edge, datum plane or datum axis in the
-Measure panel and click *Datum Label…* or *Frame…* (not a vertex or a
+Measure panel and choose *Annotate › Datum Label…* or *Annotate › Frame…* (not a vertex or a
 point: they mark a feature). *Datum Label…* adds a *datum label*: a
 letter in a square on a leader that ends in a filled triangle on the
 pick (ISO 5459). MitCad
@@ -1470,8 +1543,9 @@ dimension stands in the dimension's place; to put it on a leader, set
 stood on a vertex, a point or a whole body, MitCad asks you to pick the
 face, edge or axis its leader points at first.
 
-The **Annotations** window (*View › Annotations…*, *Annotations…* in the
-Measure panel, or the browser's *Annotations* folder) lists every
+The **Annotations** window (*View › Annotations…*, *Annotate ›
+Annotations…* in the Measure panel, or the browser's *Annotations*
+folder) lists every
 annotation: name, kind, value, tolerance, own text, colour, group and
 whether it is shown. Search it, filter it by kind or group, and sort it
 by any column. Select several rows to change their colour, group,
@@ -3537,6 +3611,37 @@ table is closed, the Rules tab says "This table is closed: only its rows
 are allowed, so rules are not needed." An open table (the default) allows
 any combination that the rules allow, and a row is then a ready-made
 combination only.
+
+**Parameter columns.** A closed table's rows can set other parameters as
+well as the options: these are its parameter columns, after the options'
+columns in the Rows tab. A library screw is an example: its option Size
+chooses the row, and the row sets the columns d, P, s and k (the
+diameter, the pitch, the width across flats and the head height), which
+the screw's features use.
+
+| Name | Size | d | P | s | k |
+|---|---|---|---|---|---|
+| M4 | M4 | 4 mm | 0.7 mm | 7 mm | 2.8 mm |
+| M5 | M5 | 5 mm | 0.8 mm | 8 mm | 3.5 mm |
+| M6 | M6 | 6 mm | 1 mm | 10 mm | 4 mm |
+
+- **Add Column…** (in the Rows tab) chooses a user parameter that is no
+  option, or **New Parameter** (a name, a unit and a value). Every row
+  then sets it: each row's cell starts with the parameter's current value
+  or expression, and you type a row's own value into its cell as into an
+  option's. An open table becomes closed with its first column (an open
+  table's rows set options only); the window says so.
+- **Remove Column** takes out the column of the selected cell (click a
+  cell of the column first). The parameter stays, with the value it has.
+- Each is one step to undo. **Apply** (or the Configuration bar's row)
+  sets the row's options and its columns' values together.
+
+The other way to the same result is a table in Change Parameters with a
+formula per parameter: the option Size chooses the size, and `d` is
+`XLOOKUP(Size; Screws.Size; Screws.d)` ([Tables](#tables)). The rows of a
+closed table keep each size's values in the Configurations window; a
+table with lookups keeps them in one place that formulas share, and the
+options can then be an open table.
 
 #### Check Rules
 
@@ -5762,6 +5867,44 @@ All three features keep the body a sheet. The sheet unfolds, refolds and
 has a Flat Pattern like any other sheet. The details are in
 `sheet-metal.md` in the docs folder, a developer document.
 
+### Mortise and Tenon
+
+**Mortise and Tenon** (Solid tab, Modify group) joins two bodies, for
+example two boards that cross. It adds a tenon to the end of one body
+and cuts the mortise for it into the other body. One feature changes
+both bodies. The bodies keep their names.
+
+1. Click the **End Face**: the flat face that the tenon stands on, for
+   example the end of a rail.
+2. Select the **Mortise Body**: the body that the tenon goes into, for
+   example a post.
+3. Set the size of the tenon:
+   - **Width** goes along the longest straight edge of the end face.
+     **Turned** puts the width across that edge.
+   - **Thickness** goes across the width.
+   - **Length** is how far the tenon goes out of the end face. With
+     **Through**, the tenon goes to the far face of the mortise body
+     and the mortise goes through the body.
+   - **Offset Along Width** and **Offset Along Thickness** move the
+     tenon from the middle of the end face. At 0 the tenon is in the
+     middle. The parts of the end face around the tenon are the
+     shoulders.
+4. Set the fit:
+   - **Clearance** (default 0.1 mm) makes the mortise larger than the
+     tenon on each side and at the bottom.
+   - **Corners**: **Square**, or **Rounded** for a mortise that a
+     router cuts. With Rounded, the corners of the mortise have the
+     radius of the **Tool Diameter**. The edges of the tenon are
+     rounded to match, so the clearance is the same all around.
+5. Click OK.
+
+When you change a size later, MitCad builds both bodies again. MitCad
+refuses a tenon that is larger than the end face, a tenon that an
+offset moves past the edge of the end face, and a tenon that does not
+reach the mortise body. The timeline shows the reason. The model's
+definition is in
+[commands.md](../core/model-api/src/commands.md#mortise-and-tenon).
+
 ## Files and projects
 
 MitCad saves a design as a `.mitcad` file. A design is a single file, or
@@ -6657,12 +6800,22 @@ keyboard. The picker remembers the fold. The libraries of others put
 their groups beside these groups, or into the same groups by their
 names.
 
+Each group shows how many parts it has, its subgroups included:
+`Wood fasteners (12)`. The number counts only the parts that the search
+and the filters (**Supplier**, **System**, and the licence in **Insert
+from Library**) show. The numbers change as you type a search or change
+a filter. While a search or a filter is on, the groups with no parts
+are not shown, and neither is a group whose subgroups are all empty.
+The group that you selected stays, greyed with `(0)`, so that you can
+change the search in it. It goes when you select another group.
+
 Above the grid are these controls:
 
 | Control | Function |
 |---|---|
 | **Search** | Searches by name, standard, size, supplier or part number |
 | **System** | Filters by the slot system of Build parts |
+| **Supplier** | Shows only the parts that one supplier sells |
 | **Tiles** | Sets the size of the pictures |
 
 Put the mouse pointer on a tile to see a larger picture. The larger
@@ -7799,9 +7952,17 @@ ANSI on ANSI B in third-angle projection. MitCad names the drawing
 Drawing1, Drawing2 and so on, opens it and starts **Base View**: click
 where the first view goes.
 
-**Opening one.** Double-click the drawing in the browser. The sheet
-takes the place of the 3D view. **Close Drawing** at the top left
-shows the 3D view again; only Close Drawing closes the drawing. Esc
+**Opening one.** Double-click the drawing in the browser. The drawing
+takes the whole workspace: the sheet fills the area of the 3D view from
+edge to edge, and the ribbon shows the **Drawing** tab with the
+drawing's tools instead of Solid and Build. Above the sheet, one row
+shows the drawing's name, its sheets as tabs, **+**, **Sheet…** and
+**Add Revision…**. The browser stays, so you can open another drawing
+from it; in the Floating layout the other cards (the timeline, the
+Projects card, the Command card) are hidden while the drawing is open.
+**Close Drawing**, the first button of the Drawing tab, shows the 3D
+view again, with Solid and Build back and the tab you opened the drawing
+from shown; only Close Drawing closes the drawing. Esc
 ends the active tool, then clears the selection, and leaves the
 drawing open. A command chosen on the ribbon also leads back to the
 model, but the single-key shortcuts of the model's commands (E for
@@ -7827,12 +7988,13 @@ Moving a view, or changing its scale or label, projects nothing again.
 
 #### Views
 
-The bar over the sheet has the drawing's tools in groups, each with its
-caption: **Create** (the views' tools below), **Geometry** (centre marks,
-centrelines, lines and arcs, centre patterns and edge extensions),
-**Dimensions**, **Text**, **Symbols** (datum labels,
+The ribbon's Drawing tab has the drawing's tools in groups, after
+Close Drawing: **Create** (the views' tools below), **Geometry** (centre
+marks, centrelines, lines and arcs, centre patterns and edge
+extensions), **Dimensions**, **Text**, **Symbols** (datum labels,
 feature control frames, surface finish symbols), **Tables** and
-**Export**.
+**Export**. Each group's name opens a menu of its tools, as on the
+other tabs; the active tool's button shows pressed.
 
 | Tool | What it makes |
 |---|---|
@@ -8035,7 +8197,7 @@ dimensions and tables (the design's, or millimetres, inches and others),
 and the title block's title, drawing number, author and date. Without a drawing number, the title block names the bodies.
 Without a date, it shows the date of the day.
 
-**Export…** writes the drawing as PDF (all sheets), SVG, DXF or DWG (a file
+The Drawing tab's **Export** menu writes the drawing as PDF (all sheets), SVG, DXF or DWG (a file
 per sheet). The command line writes a drawing of the design too, all
 its sheets or one (`--sheet 2`: the second):
 
@@ -8105,7 +8267,7 @@ the material's **Width** and **Height** (600 × 300 mm unless changed).
 MitCad names it CutSheet1, CutSheet2 and so on, adds the selected bodies
 as parts and opens it.
 
-**Parts.** **Add Parts…** lists the bodies: choose one or several
+**Parts.** While a cut sheet is open the ribbon shows its **Cut Sheet** tab: Close Drawing, **Add Parts…** and Export. **Add Parts…** lists the bodies: choose one or several
 (Ctrl+click) and a **Count** (2 for two parts of each body). Each part is
 its body seen square on to its largest flat face: the outer boundary of
 the whole body and the holes and cut-outs that go right through it. A
@@ -8122,7 +8284,7 @@ A part that overlaps another or reaches past the material's edge is
 named in the panel and in the status bar. A part whose body is deleted
 keeps a red box on the sheet until it is deleted or the body comes back.
 
-**Writing the file.** **Export…** › **DXF…** or **SVG…** writes the
+**Writing the file.** The Cut Sheet tab's **Export** › **DXF…** or **SVG…** writes the
 parts at 1:1 in millimetres. Outer boundaries are on the layer
 `CUT_OUTER` and holes on `CUT_INNER`, as the sheet-metal Flat Pattern's
 DXF names them; arcs and circles stay arcs and circles, and curved

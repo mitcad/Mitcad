@@ -281,6 +281,13 @@ pub use inputs::FeatureInputs;
 // What a Join touches in child occurrences when it touches none of its
 // participants (mitcad#958).
 mod join_elsewhere;
+// Dogbone: relief cuts at a body's inside corners for a router bit
+// (mitcad#1011).
+pub mod dogbone;
+pub use dogbone::{DogboneDef, DogboneKind};
+// Mortise and Tenon: a tenon on one body and its mortise in another (mitcad#1012).
+pub mod mortise_tenon;
+pub use mortise_tenon::MortiseTenonDef;
 
 use crate::assembly::Assembly;
 use crate::datum::Datum;
@@ -447,6 +454,10 @@ feature_types! {
     Pulley(PulleyDef),
     // Printable bearings (mitcad#577).
     PrintableBearing(PrintableBearingDef),
+    // Dogbone: relief cuts at a body's inside corners (mitcad#1011).
+    Dogbone(DogboneDef),
+    // Mortise and Tenon (mitcad#1012).
+    MortiseTenon(MortiseTenonDef),
 }
 
 /// Brings a feature definition in an earlier form up to date before it is

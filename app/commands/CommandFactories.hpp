@@ -104,4 +104,10 @@ CommandDef gearPairCommand(const CommandContext& context, DocumentHost& host);
 CommandDef beltDriveCommand(const CommandContext& context);
 void linkLater(DocumentHost& host, const QString& editing);
 
+// DogboneCommands.cpp (mitcad#1011): relief cuts at inside corners.
+CommandDef dogboneCommand(const CommandContext& context);
+// MortiseTenonCommands.cpp (mitcad#1012): a tenon on one body's end face
+// and its mortise in another body.
+CommandDef mortiseTenonCommand(const CommandContext& context);
+
 } // namespace mitcad::cmd

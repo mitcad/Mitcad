@@ -997,8 +997,9 @@ Ui-ExpectNew 'Part picker tile test-profiles/p30-test at ' "the tiles' places"
 # it has one again.
 Ui-ExpectNew 'Part picker groups: ' 'the groups logged'
 $groupsTree = Ui-LastMatch '^Part picker groups: (.*)$'
-if ("$groupsTree" -notlike '*All parts, Slot profile, Slot profile/Profiles') {
-  Ui-Fail "the groups are '$groupsTree', not Slot profile with its Profiles"
+# Each with its count (mitcad#1015).
+if ("$groupsTree" -notlike '*All parts (2), Slot profile (2), Slot profile/Profiles (2)') {
+  Ui-Fail "the groups are '$groupsTree', not Slot profile with its Profiles, two profiles each"
 }
 Write-Host "ok   the groups as a tree: $groupsTree"
 Ui-ExpectNew 'Part picker place group fold Slot profile at ' "the fold's place"
@@ -1030,7 +1031,8 @@ while (-not $tilesBefore -and $clock.ElapsedMilliseconds -lt 6000) {
   $tilesBefore = Ui-LastMatch '^Part picker tiles: (.*)$'
   if (-not $tilesBefore) { Start-Sleep -Milliseconds 50 }
 }
-$groupsBefore = Ui-LastMatch '^Part picker groups: (.*)$'
+# The groups by name: the kept line has no counts (mitcad#1015).
+$groupsBefore = (Ui-LastMatch '^Part picker groups: (.*)$') -replace ' \(\d+\)', ''
 # The 20 profile (with its uses in the design) then the 30 profile.
 if ("$tilesBefore" -notmatch '^test-profiles/p20-test.*, test-profiles/p30-test$') {
   Ui-Fail "the tiles before the star are '$tilesBefore', not the 20 profile then the 30 profile"
@@ -1050,7 +1052,7 @@ Ui-Mark
 Ui-Step 'Profiles again (the group row)' { Picker-Click 'Part picker group row Slot profile/Profiles' }
 Ui-ExpectNew 'Part picker group Slot profile/Profiles: 2 parts, first test-profiles/p30-test' 'the starred profile first now'
 # A group's star changes only the star too: its row stays where it is.
-$groupsBefore = Ui-LastMatch '^Part picker groups: (.*)$'
+$groupsBefore = (Ui-LastMatch '^Part picker groups: (.*)$') -replace ' \(\d+\)', ''
 Ui-Mark
 Ui-Step 'star the group (its star)'      { Picker-Click 'Part picker place group star Slot profile/Profiles' }
 Ui-ExpectNew 'Part picker group star slot profile/profiles on' 'the group Profiles starred'

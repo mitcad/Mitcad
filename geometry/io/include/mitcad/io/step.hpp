@@ -34,6 +34,11 @@ void write_step(const std::string& path, const std::vector<Body>& bodies,
 // otherwise from the part (with " (2)", " (3)", ... for the further solids).
 // Colours of instances, solids and parts are read in that priority; a body
 // without one takes the colour most of its faces have.
+// Names written as raw bytes that are not UTF-8 are decoded with one code
+// page for the file, the first of GBK, Shift-JIS and CP1252 that decodes
+// them all (else the one that decodes the most); names in UTF-8 and STEP's
+// escapes are read as they are. The choice goes to stderr
+// ("STEP names: GBK (12 of 40 names not ASCII)") when a name is not ASCII.
 std::vector<Body> read_step(const std::string& path);
 
 } // namespace mitcad::io

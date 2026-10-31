@@ -6,8 +6,11 @@
 # Linux, on the design of tools/ui-windows-measure-test.ps1: two cylinders
 # of radius 5, 20 high (Body1 about Z through the origin, Body2 through
 # (30, 40)) and a block (Body3).
-#   1. Keep in the Measure panel: the round faces kept as AxisDistance1.
-#   2. Keep Row in the history: Body1's top rim kept as Diameter1.
+#   1. Keep as Dimension in the Measure panel: the round faces kept as
+#      AxisDistance1; the Annotate menu's entries, its Annotations...
+#      opening the window; Close (mitcad#1010).
+#   2. Keep as Dimension in a history row's menu: Body1's top rim shown
+#      again from its row's menu (Show) and kept as Diameter1.
 #   3. Export Snapshot (F9 here) at 4 x the view, transparent: a PNG of
 #      four times the view's size with an alpha channel.
 #   4. Saved, opened again: both measured and drawn.
@@ -64,43 +67,108 @@ function Wait-Enabled([string]$Place) {
   Ui-Fail "'$Place' is not enabled: $last"
 }
 
+# The labels' ellipsis as three dots, for the log's lines.
+$ellipsis = [string][char]0x2026
+# Menu-Entries: the entries of the context menu logged last.
+function Menu-Entries {
+  return @("$(Ui-LastMatch '^Context menu: (.*)$')" -split ' \| ' | ForEach-Object { $_.Replace($ellipsis, '...') })
+}
+# Menu-Choose "entry": the entry chosen with the keys, as the menu opens
+# with nothing active.
+function Menu-Choose([string]$Entry) {
+  $entries = Menu-Entries
+  $index = [array]::IndexOf($entries, $Entry)
+  if ($index -lt 0) { Ui-Fail "'$Entry' is not in the context menu: $($entries -join ' | ')" }
+  Ui-Step "choose $Entry" {
+    for ($i = 0; $i -le $index; $i++) { Ui-Key 'Down' }
+    Ui-Key 'Return'
+  }
+}
+# Annotate-Entries: the Annotate menu's entries that can be chosen, as
+# logged last.
+function Annotate-Entries { return "$(Ui-LastMatch '^Measure Annotate entries: (.*)$')".Replace($ellipsis, '...') }
+
 Ui-StartApp 'measurement-objects' @('--open', $design)
 Ui-ExpectLog 'Annotations: none' 'no annotations yet'
 Ui-Step 'fit (F6)'                         { Ui-Key 'F6' }
 Ui-ExpectLog 'Bodies shown: F2.b0' 'the cylinders shown'
 
-Write-Host '--- 1. Keep in the Measure panel'
+Write-Host '--- 1. Keep as Dimension in the Measure panel'
 Ui-Mark
 Ui-Step 'measure (I)'                      { Ui-Key 'i' }
 Ui-ExpectNew 'Command Measure started' 'measure started'
-Ui-ExpectNew 'Measure Keep at' 'the panel has Keep'
+Ui-ExpectNew 'Measure Keep as Dimension at' 'the panel has Keep as Dimension'
+Ui-ExpectNew 'Measure Annotate at' 'and Annotate beside it'
 Ui-Step 'pick Body1''s round face'         { Ui-ClickPick 'face F2.b0/F2:side(c1)' }
+Ui-ExpectNew 'Measure Annotate entries: Note' 'one face picked: the leaders can be chosen'
+if ((Annotate-Entries) -ne 'Note..., Datum Label..., Frame..., Hole Callout, Annotations...') {
+  Ui-Fail "not every Annotate entry for a face: $(Annotate-Entries)"
+}
+Write-Host 'ok   every Annotate entry for a face'
 Ui-Step 'pick Body2''s round face'         { Ui-ClickPick 'face F4.b0/F4:side(c1)' }
 Ui-ExpectNew 'distance 40, angle 0 deg, axis distance 50, axis lines 2' 'the axes 50 apart'
-Ui-ExpectNew 'Measure Keep enabled' 'Keep enabled for the model''s picks'
-Wait-Enabled 'Measure Keep'
+Ui-ExpectNew 'Measure Keep as Dimension enabled' 'Keep as Dimension enabled for the model''s picks'
+Wait-Enabled 'Measure Keep as Dimension'
+if ((Annotate-Entries) -ne 'Annotations...') { Ui-Fail "two picks, yet a leader can be chosen: $(Annotate-Entries)" }
+Write-Host 'ok   two picks: no leader, only Annotations...'
+# At the panel's default width (mitcad#1010): no control's text clipped,
+# every result row on one line.
+Ui-Sync
+$width = [int](Ui-LastMatch '^Panel Measure width (\d+) of')
+if ($width -le 0 -or $width -gt 300) { Ui-Fail "the panel is $width wide, not within the default 300" }
+if ("$(Ui-LastLineWith 'Measure controls')" -ne 'Measure controls: none clipped') {
+  Ui-Fail "a control's text is clipped at ${width}: $(Ui-LastLineWith 'Measure controls')"
+}
+if ("$(Ui-LastLineWith 'Panel Measure inputs')" -ne 'Panel Measure inputs: none clipped') {
+  Ui-Fail "a pick's label or the filter's text is clipped at ${width}: $(Ui-LastLineWith 'Panel Measure inputs')"
+}
+if ("$(Ui-LastLineWith 'Panel Measure result: ')" -notmatch 'rows, one line each$') {
+  Ui-Fail "a result row does not fit its line: $(Ui-LastLineWith 'Panel Measure result: ')"
+}
+Write-Host "ok   no control clipped, every result row on one line at $width"
 Ui-Mark
-Ui-Step 'Keep'                             { Ui-ClickLogged 'Measure Keep' }
-Ui-ExpectNew 'Measure Keep clicked' 'Keep clicked'
+Ui-Step 'Keep as Dimension'                { Ui-ClickLogged 'Measure Keep as Dimension' }
+Ui-ExpectNew 'Measure Keep as Dimension clicked' 'Keep as Dimension clicked'
 Ui-ExpectNew 'Annotation kept: AxisDistance1' 'kept as the axes'' distance'
 Ui-ExpectNew 'Annotations drawn: AxisDistance1 = 50 (auto)' 'drawn in Auto'
-Ui-Step 'close (Enter)'                    { Ui-Key 'Return' }
+Ui-Mark
+Ui-Step 'Annotate'                         { Ui-ClickLogged 'Measure Annotate' }
+Ui-ExpectNew 'Measure Annotate clicked' 'Annotate clicked'
+Ui-ExpectNew 'Context menu: ' 'its menu'
+if (((Menu-Entries) -join ' | ') -ne 'Note... | Datum Label... | Frame... | Hole Callout | Annotations...') {
+  Ui-Fail "not the Annotate menu's entries: $((Menu-Entries) -join ' | ')"
+}
+Write-Host 'ok   the leaders, then Annotations...'
+Ui-Step 'Annotations... (A)'               { Ui-Key 'a' }
+Ui-ExpectNew 'Measure Annotations clicked' 'Annotations... chosen'
+Ui-ExpectNew 'Annotations window opened: 1 annotation(s)' 'the window opened from the panel'
+Ui-Step 'close the window (Escape)'        { Ui-FocusDialog '^Annotations$'; Ui-Key 'Escape'; Ui-FocusMain }
+Ui-Mark
+Ui-Step 'Close'                            { Ui-ClickLogged 'Panel Measure Close' }
 Ui-ExpectNew 'Closed Measure' 'measure closed'
 Ui-ExpectLog 'Browser Root/Annotations at' 'the browser has the Annotations folder'
 
-Write-Host '--- 2. Keep Row in the history'
+Write-Host '--- 2. Keep as Dimension in a history row''s menu'
 Ui-Mark
 Ui-Step 'measure (I)'                      { Ui-Key 'i' }
 Ui-Step 'pick Body1''s top rim'            { Ui-ClickPick 'edge F2.b0/E{F2:end(r{c1})|' }
 Ui-ExpectNew 'Inspect Measure: length 31.416, radius 5, diameter 10' 'the rim measured'
 Ui-ExpectNew 'Measure history row 2: Edge of Body1' 'its row in the history'
+Ui-ExpectNew 'Measure history at' 'the history''s header laid out'
+Ui-Step 'unfold the history'               { Ui-ClickLogged 'Measure history' }
+Ui-ExpectNew 'Measure history opened' 'unfolded'
 Ui-ExpectNew 'Measure history row 2 at' 'its row laid out'
-Ui-Step 'show the rim''s row again'        { Ui-ClickLogged 'Measure history row 2' }
-Ui-ExpectNew 'Measure history showed row 2' 'shown again'
-Wait-Enabled 'Measure history Keep'
 Ui-Mark
-Ui-Step 'Keep Row'                         { Ui-ClickLogged 'Measure history Keep' }
-Ui-ExpectNew 'Measure history Keep clicked: row 2' 'Keep Row clicked'
+Ui-Step 'right-click the rim''s row'       { Ui-ClickLogged 'Measure history row 2' 3 }
+Ui-ExpectNew 'Context menu: Show | Keep as Dimension | Copy' 'its menu'
+Menu-Choose 'Show'
+Ui-ExpectNew 'Measure history showed row 2' 'shown again'
+Ui-Sync
+Ui-Mark
+Ui-Step 'right-click the rim''s row'       { Ui-ClickLogged 'Measure history row 2' 3 }
+Ui-ExpectNew 'Context menu: Show | Keep as Dimension | Copy' 'its menu again'
+Menu-Choose 'Keep as Dimension'
+Ui-ExpectNew 'Measure history Keep as Dimension clicked: row 2' 'Keep as Dimension chosen for the row'
 Ui-ExpectNew 'Annotation kept: Diameter1' 'kept as the rim''s diameter'
 Ui-ExpectNew "Annotations drawn: AxisDistance1 = 50 (auto) | Diameter1 = $([char]0x00D8)10 (auto)" 'both drawn'
 Ui-Step 'close (Enter)'                    { Ui-Key 'Return' }

@@ -12,6 +12,9 @@
 #     faces are nearer the eye than the edge, and on two outside (convex)
 #     edges. The hover there highlights the edge, as the click picks it.
 #   - A click in a face's middle still picks the face.
+#   - In Fillet and Chamfer, a picked face leaves its edges available
+#     (mitcad#669); each click waits for the preview's final display meshes,
+#     and the previews' times are printed ("time ...", mitcad#1005).
 # Runs at device pixel ratio 1 and again at 2 (UI_SCALE, QT_SCALE_FACTOR).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -130,17 +133,37 @@ for face in F1:top F2:side0; do
 done
 
 ui_step "cancel (Esc)"                     ui_key Escape
+
+# preview_shown tool what: waits for the preview and for its final display
+# meshes, which the model computes a quarter of a second after the preview
+# is shown: a click while it does is not taken (mitcad#1005), so the next
+# click waits for them. The sync waits for that delay's timer, so a
+# refinement has started by then; a preview whose bodies were meshed to the
+# end before (the same fillet earlier) has none. Prints the preview's times
+# from the application's log.
+preview_shown() {
+  ui_expect_new "Preview $1: ok" "the $2 is shown"
+  ui_sync
+  if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Preview $1: refining the display meshes"; then
+    ui_expect_new "Preview $1: display meshes refined" "the $2's final meshes are shown"
+  fi
+  ui_wait_idle
+  tail -n +$((UI_MARK + 1)) "$UI_LOG" |
+    grep -E "^(Computing preview done in|Display meshes of preview( refinement)?:)" |
+    sed "s/^/time $1 $2: /"
+}
+
 echo "--- Selected faces leave their edges available (mitcad#669)"
 for tool in Fillet Chamfer; do
   ui_mark
   ui_step "$tool" ui_command "$tool"
   ui_step "pick the floor face" ui_click_pick "face F1.b0/F1:top"
   ui_expect_new "$tool Edges: 1 face" "the face picked"
-  ui_expect_new "Preview $tool: ok" "the face preview is shown"
+  preview_shown "$tool" "face preview"
   ui_mark
   ui_step "click 4 px inside the face off its edge" xdotool mousemove $(edge_off "$INSIDE" "$OFF") click 1
   ui_expect_new "$tool Edges: 1 face, 1 edge" "edge added without taking the face out"
-  ui_expect_new "Preview $tool: ok" "the combined preview is shown"
+  preview_shown "$tool" "combined preview"
   ui_mark
   ui_step "click the face middle" ui_click_pick "face F1.b0/F1:top"
   ui_expect_new "$tool Edges: 1 edge [edge $INSIDE of F1.b0]" "only the face taken out"

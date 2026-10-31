@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Buttons at the end of a command panel's title row (mitcad#564: Change
 // Parameters, which opens the parameter table while the panel stays open),
-// and sections of a command's own above the result (mitcad#648: Measure's
-// history).
+// and sections of a command's own under the result (mitcad#648,
+// mitcad#1010: Measure's actions and history).
 #include "CommandPanel.hpp"
 
 #include <functional>
@@ -22,6 +22,7 @@
 #include <QtLogging>
 
 #include "Command.hpp"
+#include "CommandMessage.hpp"
 #include "GlassCard.hpp"
 #include "TestSync.hpp"
 
@@ -103,10 +104,11 @@ void CommandPanel::addSection(QWidget* section, std::function<QStringList()> pla
   if (section == nullptr || box == nullptr) {
     return;
   }
-  // Above the result: its rows stay where they are while the result's
-  // lines come and go.
-  const int at = box->indexOf(m_result);
-  box->insertWidget(at < 0 ? box->count() : at, section);
+  // Under the result and the message, above the buttons: the panel in the
+  // order of the task, the picks, what they measure, what to do with it
+  // (mitcad#1010).
+  const int at = box->indexOf(m_message);
+  box->insertWidget(at < 0 ? box->count() : at + 1, section);
   // Its moves move what it logs (mitcad#528), as the rows' do.
   section->installEventFilter(this);
   if (places) {

@@ -405,6 +405,8 @@ LibraryBrowser::LibraryBrowser(bool community, QWidget* parent) : QDialog(parent
   form->addRow(tr("&Version:"), m_version);
   side->addLayout(form);
   m_size = new SizeChooser;
+  // Version, the filters and the size's rows in one label column (mitcad#1007).
+  m_size->alignLabelsWith(form);
   side->addWidget(m_size);
   // The row's designation (mitcad#949) and its suppliers' articles behind
   // a button that opens their table (mitcad#979).
@@ -586,6 +588,15 @@ void LibraryBrowser::select() {
   m_get->setEnabled(false);
   m_shown = {};
   if (row < 0 || row >= m_items.size()) {
+    // Parts found, but none in the group shown under the search and the
+    // filters (mitcad#1015): say so, not that nothing is fetched or found.
+    const QString reason = m_grid->emptyReason();
+    if (!reason.isEmpty()) {
+      m_details->setText(tr("<p>%1 Choose another group, or change the search or the filters.</p>")
+                             .arg(reason.toHtmlEscaped()));
+      qInfo().noquote() << QStringLiteral("Library browser empty: %1").arg(reason);
+      return;
+    }
     // No enabled source fetched yet (a fresh install): Update fetches them
     // (mitcad#317); Libraries... adds sources.
     if (!anySourceFetched()) {
@@ -927,6 +938,8 @@ LibraryPartsDialog::LibraryPartsDialog(const QJsonArray& parts, const QJsonArray
   editor->addRow(tr("&Version:"), m_version);
   page->addLayout(editor);
   m_size = new SizeChooser;
+  // Version, the filters and the size's rows in one label column (mitcad#1007).
+  m_size->alignLabelsWith(editor);
   page->addWidget(m_size);
   // The chosen part's suppliers' articles (mitcad#949) behind a button that
   // opens their table (mitcad#979).

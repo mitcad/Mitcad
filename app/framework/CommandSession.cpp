@@ -2011,7 +2011,7 @@ void CommandSession::runInspection() {
 void CommandSession::acceptInspection(const Inspection& result) {
   if (m_done || !m_presenter) { return; }
   m_failed = !result.error.isEmpty();
-  m_presenter->setResult(result.text);
+  m_presenter->setInspection(result);
   m_presenter->setMessage(result.error, m_failed);
   m_host.viewer().setPreview(result.shape, result.red ? OcctViewer::PreviewStyle::Remove
                                                       : OcctViewer::PreviewStyle::Add);

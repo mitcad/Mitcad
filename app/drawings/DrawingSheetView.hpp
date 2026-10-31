@@ -36,6 +36,7 @@
 #include <QJsonObject>
 #include <QLineF>
 #include <QList>
+#include <QMargins>
 #include <QPixmap>
 #include <QPoint>
 #include <QPointF>
@@ -152,8 +153,12 @@ public:
   // there were none.
   bool cancelPicks();
 
-  // The whole sheet in the widget.
+  // The whole sheet in the widget, less its covered margins.
   void fit();
+  // What covers the widget at its sides (mitcad#1008: the Floating
+  // layout's browser card over the sheet's left): the sheet is fitted
+  // beside it; a sheet shown as fitted is fitted again.
+  void setFitMargins(const QMargins& margins);
   QPointF toSheet(const QPointF& widget) const;
   QPointF toWidget(const QPointF& sheet) const;
   // How many times the sheet itself (the paper and the groups' lines,
@@ -266,6 +271,7 @@ private:
   // Fitted once: a later sheet of the same size keeps the zoom and the pan
   // (mitcad#751).
   bool m_everFitted = false;
+  QMargins m_fitMargins; // setFitMargins
   // The paper with the groups' items, as painted last (mitcad#759).
   QPixmap m_sheetPicture;
   bool m_sheetPainted = false;

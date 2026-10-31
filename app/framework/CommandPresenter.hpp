@@ -67,6 +67,10 @@ public:
   virtual void setPlaceholder(const QString& /*key*/, const QString& /*text*/) {}
   virtual void setMessage(const QString& message, bool error) = 0;
   virtual void setResult(const QString& text) = 0;
+  // An inspection's answer as a whole: its rows of names and values where
+  // it has them (Inspection::values and groups, mitcad#1010), else its
+  // text. A frontend without rows shows the text.
+  virtual void setInspection(const Inspection& result) { setResult(result.text); }
   virtual void setOkEnabled(bool enabled) = 0;
   virtual QColor colorOf(const QString& key) const = 0;
   virtual bool focusFirstValue() = 0;

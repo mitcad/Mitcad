@@ -13,9 +13,9 @@ use serde::{Deserialize, Serialize};
 use super::geom_ref::{GeomRef, Want};
 use super::mapping::map_params;
 use super::pattern::{
-    ComputeOption, Element, PatternObjects, ScaleRule, ScaleSpec, add_scale_references,
-    check_options, check_scale_values, map_scale, map_scale_copies, map_scale_groups, map_scales,
-    none, repeat, scale_elements,
+    Combine, ComputeOption, Element, PatternObjects, ScaleRule, ScaleSpec, add_scale_references,
+    check_combine_any, check_options, check_scale_values, map_scale, map_scale_copies,
+    map_scale_groups, map_scales, none, repeat, scale_elements,
 };
 use super::{
     CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References, is_false,
@@ -33,6 +33,11 @@ pub struct MirrorDef<P = ParamId> {
     /// (`isCombine` in .f3d designs); bodies only.
     #[serde(default, skip_serializing_if = "is_false")]
     pub combine: bool,
+    /// With `combine`: each image joins every body of the mirror it
+    /// touches (the mirrored bodies and the images before it), not only
+    /// its original, as a pattern's `combine_any` (mitcad#1006).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub combine_any: bool,
     #[serde(default, skip_serializing_if = "is_adjust")]
     pub compute: ComputeOption,
     /// Copies of features act only on the bodies each feature changed
@@ -80,6 +85,7 @@ impl<P> MirrorDef<P> {
             objects: clone,
             plane: clone,
             combine: copy,
+            combine_any: copy,
             compute: copy,
             original_bodies: copy,
             scale: with(map_scale),
@@ -118,6 +124,7 @@ impl FeatureInfo for MirrorDef {
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
         self.objects.check(ctx)?;
         self.plane.check(ctx, Want::Plane)?;
+        check_combine_any(self.combine, self.combine_any)?;
         check_options(
             ctx,
             &self.objects,
@@ -159,7 +166,7 @@ impl<K: Kernel> Evaluate<K> for MirrorDef {
             self.compute,
             self.original_bodies,
             &[element],
-            self.combine,
+            Combine::of(self.combine, self.combine_any),
             scaling.as_ref(),
             &self.skipped_copies,
         )

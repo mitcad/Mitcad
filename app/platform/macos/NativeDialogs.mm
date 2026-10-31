@@ -215,10 +215,15 @@ class NativeMenuPopup;
 - (void)cancel:(id)sender;
 @end
 
-@interface MitcadNativeTable : NSTableView
+// The shared view's hint while it has no rows (NativeEmptyTextProperty),
+// a label over the table's rows area that the table keeps in place.
+@protocol MitcadNativeEmptyText
+@property(nonatomic, strong) NSTextField* emptyLabel;
+@end
+@interface MitcadNativeTable : NSTableView <MitcadNativeEmptyText>
 - (NSInteger)presenterSelectedRows;
 @end
-@interface MitcadNativeOutline : NSOutlineView
+@interface MitcadNativeOutline : NSOutlineView <MitcadNativeEmptyText>
 - (NSInteger)presenterSelectedRows;
 @end
 @interface MitcadNativeSpannedRowView : MitcadNativeCurrentRowView
@@ -538,6 +543,41 @@ QHash<const QAbstractItemView*, NativeRowMoves>& rowMovesRegistry() {
   return moves;
 }
 NSPasteboardType const kNativeRowDragType = @"org.mitcad.native-row";
+
+// A widget the bridge presents as nothing: no control it maps, no layout
+// and no child widgets. A plain QWidget or QFrame is a spacer or an empty
+// box; any other class (one that paints itself, a Qt control the bridge
+// does not map) loses what it shows. Logged once per class and name; the
+// native UI tests fail on the line unless native-coverage.txt marks the
+// class pending (docs/native-macos-ui.md, Coverage).
+void reportUnpresented(const QWidget* widget) {
+  const QMetaObject* meta = widget->metaObject();
+  if (meta == &QWidget::staticMetaObject || meta == &QFrame::staticMetaObject) {
+    return;
+  }
+  static QSet<QString> reported;
+  const QString className = QString::fromLatin1(meta->className());
+  if (reported.contains(className + QLatin1Char('/') + widget->objectName())) {
+    return;
+  }
+  reported.insert(className + QLatin1Char('/') + widget->objectName());
+  const QWidget* window = widget->window();
+  qWarning().noquote() << QStringLiteral("Native presenter: unpresented widget %1 '%2' in %3 '%4'")
+                              .arg(className, widget->objectName(),
+                                   QString::fromLatin1(window->metaObject()->className()), window->windowTitle());
+}
+
+// An empty view's hint where the shared view paints it: 12 points inside
+// the visible part of the rows, wrapped to its width.
+void placeEmptyLabel(NSTableView* table, NSTextField* hint) {
+  if (hint == nil || hint.hidden) return;
+  const NSRect visible = table.enclosingScrollView != nil ? table.enclosingScrollView.contentView.bounds : table.bounds;
+  const CGFloat width = std::max<CGFloat>(40, NSWidth(visible) - 24);
+  hint.preferredMaxLayoutWidth = width;
+  const NSSize size = [hint.cell cellSizeForBounds:NSMakeRect(0, 0, width, CGFLOAT_MAX)];
+  const NSRect frame = NSMakeRect(NSMinX(visible) + 12, 12, width, std::ceil(size.height));
+  if (!NSEqualRects(hint.frame, frame)) hint.frame = frame;
+}
 
 } // namespace
 
@@ -2877,6 +2917,7 @@ private:
       NSStackView* contents = stack();
       const auto children = widget->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
       for (QWidget* child : children) { add(contents, renderWidget(child)); }
+      if (children.isEmpty()) { reportUnpresented(widget); }
       view = contents;
     }
     bind(widget, view);
@@ -3073,6 +3114,16 @@ private:
     }
     const int id = bind(view, box);
     m_bindings[static_cast<std::size_t>(id)].table = table;
+    if (view->property(NativeEmptyTextProperty).isValid()) {
+      // refreshModel shows it while the model has no rows.
+      NSTextField* hint = [NSTextField wrappingLabelWithString:@""];
+      hint.textColor = NSColor.placeholderTextColor;
+      hint.selectable = NO;
+      hint.hidden = YES;
+      hint.accessibilityIdentifier = ns(view->objectName() + QStringLiteral(".empty"));
+      [table addSubview:hint];
+      ((NSTableView<MitcadNativeEmptyText>*)table).emptyLabel = hint;
+    }
     if (QScrollBar* bar = view->verticalScrollBar()) {
       // The shared view's scroll requests reach the native viewport
       // (followSharedScroll, mitcad#972).
@@ -3231,6 +3282,15 @@ private:
       }
       if (refocus && [binding.table.window isKindOfClass:MitcadNativeSecondaryWindow.class]) {
         [binding.table.window makeFirstResponder:binding.table];
+      }
+    }
+    if ([binding.table conformsToProtocol:@protocol(MitcadNativeEmptyText)]) {
+      if (NSTextField* hint = ((NSTableView<MitcadNativeEmptyText>*)binding.table).emptyLabel) {
+        // The shared view's hint while its model has no rows, as it paints it.
+        const bool empty = view->model() == nullptr || view->model()->rowCount(view->rootIndex()) == 0;
+        NATIVE_STRING(hint, stringValue, view->property(NativeEmptyTextProperty).toString());
+        NATIVE_SET(hint, hidden, BOOL(!empty));
+        placeEmptyLabel(binding.table, hint);
       }
     }
     // AppKit ends a cell's edit when it selects rows: the shared selection
@@ -4822,6 +4882,15 @@ BOOL tableKeyEquivalent(NSWindow* window, NSEvent* event) {
 @end
 
 @implementation MitcadNativeTable
+@synthesize emptyLabel = _emptyLabel;
+- (void)tile {
+  [super tile];
+  mitcad::placeEmptyLabel(self, _emptyLabel);
+}
+- (void)setFrameSize:(NSSize)size {
+  [super setFrameSize:size];
+  mitcad::placeEmptyLabel(self, _emptyLabel);
+}
 - (NSInteger)presenterSelectedRows {
   MitcadNativeWidgetTarget* target = (MitcadNativeWidgetTarget*)self.delegate;
   return target != nil && target->owner != nullptr ? target->owner->presenterSelectedRows(self) : -1;
@@ -4839,6 +4908,15 @@ BOOL tableKeyEquivalent(NSWindow* window, NSEvent* event) {
 @end
 
 @implementation MitcadNativeOutline
+@synthesize emptyLabel = _emptyLabel;
+- (void)tile {
+  [super tile];
+  mitcad::placeEmptyLabel(self, _emptyLabel);
+}
+- (void)setFrameSize:(NSSize)size {
+  [super setFrameSize:size];
+  mitcad::placeEmptyLabel(self, _emptyLabel);
+}
 - (NSInteger)presenterSelectedRows {
   MitcadNativeWidgetTarget* target = (MitcadNativeWidgetTarget*)self.delegate;
   return target != nil && target->owner != nullptr ? target->owner->presenterSelectedRows(self) : -1;

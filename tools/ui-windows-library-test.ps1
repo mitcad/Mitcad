@@ -18,11 +18,17 @@
 #      parent by id) and the other's Wood/Sheets one group listing both
 #      libraries' parts, a screw in two groups (Slot profile/Screws and
 #      General fasteners/Screws) and once in Favourites, Wood folded and
-#      still folded when the browser opens again, then unfolded.
-#   6. The Standard filter (mitcad#949): a socket head cap screw whose rows
+#      still folded when the browser opens again, then unfolded; each
+#      group with its count (mitcad#1015).
+#   6. The grid's Supplier filter on Acme (mitcad#1015): the groups'
+#      counts under it, the groups with none of its parts hidden, shown
+#      again with All suppliers.
+#      The Standard filter (mitcad#949): a socket head cap screw whose rows
 #      name their standards; Standard = DIN 912 narrows the lengths of M6 to
 #      8 and 10, the row's two supplier articles in their table (Supplier
 #      Articles, mitcad#979), and the part inserted is named DIN 912 M6x8.
+#      The fields of Version, Standard, Supplier, Size and Length start at
+#      one x (one label column, mitcad#1007).
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-library-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -244,10 +250,13 @@ Ui-Step 'close the warning (Return)'     { Ui-Key 'Return' }
 Ui-FocusDialog '^Insert from Library$'
 Ui-ExpectNew ', Wood/Sheets' "the groups as a tree, the other library's Sheets in the same Wood"
 $groupsTree = Ui-LastMatch '^Part picker groups: (.*)$'
+# By name, then Wood's count of both libraries' parts (mitcad#1015).
+$groupNames = "$groupsTree" -replace ' \(\d+\)', ''
 foreach ($group in @('Wood', 'Wood/Beams', 'Wood/Sheets', 'Slot profile', 'Slot profile/Screws',
                      'General fasteners', 'General fasteners/Screws', 'Blocks')) {
-  if (", $groupsTree, " -notlike "*, $group, *") { Ui-Fail "no group $group in '$groupsTree'" }
+  if (", $groupNames, " -notlike "*, $group, *") { Ui-Fail "no group $group in '$groupsTree'" }
 }
+if (", $groupsTree, " -notlike '*, Wood (2), *') { Ui-Fail "Wood has not its two parts in '$groupsTree'" }
 Write-Host "ok   the groups as a tree: $groupsTree"
 Ui-Mark
 Ui-Step 'the group Wood (Alt+O, W)'      { Ui-Key 'alt+o'; Type-Ahead 'W' }
@@ -279,7 +288,7 @@ Ui-FocusMain
 Ui-Mark
 Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
 Ui-FocusDialog '^Insert from Library$'
-Ui-ExpectNew 'Wood (folded)' 'the fold remembered'
+Ui-ExpectNew 'Wood (2) (folded)' 'the fold remembered'
 $groupsTree = Ui-LastMatch '^Part picker groups: (.*)$'
 if ("$groupsTree" -like '*Wood/Beams*') { Ui-Fail "a folded group's subgroups are shown: '$groupsTree'" }
 Ui-Mark
@@ -359,12 +368,53 @@ Ui-FocusDialog '^Fetch Libraries$'
 Ui-Step 'close the warning (Return)'     { Ui-Key 'Return' }
 Ui-FocusDialog '^Insert from Library$'
 Ui-Step 'All parts (Alt+O, A)'           { Ui-Key 'alt+o'; Type-Ahead 'A' }
+# The Supplier filter (mitcad#1015): the groups' counts under it; the
+# groups with none of Acme's parts (Wood, Slot profile, Blocks and
+# Favourites) hidden, General fasteners with the screw kept.
+Ui-Mark
+Ui-Step 'Supplier Acme (Alt+R, Ac)'      { Ui-Key 'alt+r'; Type-Ahead 'Ac' }
+Ui-ExpectNew 'Part picker supplier acme' 'the Supplier filter on Acme'
+Ui-ExpectNew 'Part picker groups: ' 'the groups with their counts under the filter'
+$groupsFiltered = Ui-LastMatch '^Part picker groups: (.*)$'
+foreach ($group in @('General fasteners (1)', 'General fasteners/Screws (1)')) {
+  if (", $groupsFiltered, " -notlike "*, $group, *") { Ui-Fail "no group $group under Acme in '$groupsFiltered'" }
+}
+foreach ($group in @('Wood', 'Slot profile', 'Blocks', 'Favourites')) {
+  if (", $groupsFiltered" -like "*, $group*") { Ui-Fail "the empty $group is shown under Acme: '$groupsFiltered'" }
+}
+Write-Host "ok   the groups under Acme: $groupsFiltered"
+Ui-Mark
+Ui-Step 'All suppliers (Alt+R, All)'     { Ui-Key 'alt+r'; Type-Ahead 'All' }
+Ui-ExpectNew 'Part picker supplier all' 'the Supplier filter off'
+Ui-ExpectNew ', Wood (2), ' 'Wood shown again with its parts'
 Ui-Mark
 Ui-Step 'search the screw (Alt+S)'       { Ui-Key 'alt+s'; Ui-Type 'socket head' }
 Ui-ExpectNew 'Library browser selected test-screws/iso4762: version ' 'the socket head cap screw'
 Ui-Mark
 Ui-Step 'Standard DIN 912 (Alt+D)'       { Ui-Key 'alt+d'; Type-Ahead 'DIN' }
 Ui-ExpectNew 'Library filter: Standard DIN 912, Supplier All: 3 of 4 rows' 'the Standard filter narrows the rows'
+# One label column (mitcad#1007): the fields of Version, the filters and the
+# size start at one x ("Library fields at x: Version 96, Standard 96, ...").
+Ui-ExpectNew 'Library fields at x: Version ' 'the browser logs where its fields start'
+# The last line, waited for until it names the size's rows too.
+$clock = [Diagnostics.Stopwatch]::StartNew()
+do {
+  $edges = (Ui-LastLineWith 'Library fields at x: ' -Start).Substring('Library fields at x: '.Length)
+  $fieldNames = @()
+  $fieldXs = @()
+  foreach ($entry in $edges -split ', ') {
+    $at = $entry.LastIndexOf(' ')
+    $fieldNames += $entry.Substring(0, $at)
+    $fieldXs += $entry.Substring($at + 1)
+  }
+  if (($fieldNames -join ', ') -eq 'Version, Standard, Supplier, Size, Length') { break }
+  Start-Sleep -Milliseconds 200
+} while ($clock.ElapsedMilliseconds -lt 6000)
+if (($fieldNames -join ', ') -ne 'Version, Standard, Supplier, Size, Length') {
+  Ui-Fail "the fields are '$($fieldNames -join ', ')', not Version, Standard, Supplier, Size, Length: '$edges'"
+}
+if (@($fieldXs | Select-Object -Unique).Count -ne 1) { Ui-Fail "the fields start at different x: '$edges'" }
+Write-Host "ok   Version, Standard, Supplier, Size and Length start at x $($fieldXs[0])"
 Ui-Mark
 # Size M6: the field before Length, which is before Linked.
 Ui-Step 'size M6 (Alt+L, Shift+Tab twice)' { Ui-Key 'alt+l', 'shift+Tab', 'shift+Tab'; Ui-Type 'M6' }

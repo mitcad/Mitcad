@@ -44,6 +44,7 @@
 #include "../framework/Dialogs.hpp"
 #include "../framework/Icons.hpp"
 #include "../framework/Numbers.hpp"
+#include "../framework/PlaceWatcher.hpp"
 #include "../view/AnnotationDialogs.hpp"
 #include "DrawingSheetView.hpp"
 
@@ -175,13 +176,16 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
   auto* column = new QVBoxLayout(this);
   column->setContentsMargins(0, 0, 0, 0);
   column->setSpacing(0);
+  m_column = column;
 
   // The bar, two rows: Close Drawing, the drawing's name, the sheets,
   // Sheet… and Add Revision…; under them the tools in their groups, each
   // with its caption, and Export… last (mitcad#725). In one row the tools
   // left the sheets' tabs too little room once the annotations' tools
   // came: the tab bar was squeezed and a second tab went under its scroll
-  // buttons.
+  // buttons. With the window's ribbon (setRibbonTools, mitcad#1008) the
+  // first row alone, without Close Drawing: the ribbon's DRAWING tab has
+  // it and the tools.
   m_bar = new QWidget;
   m_bar->setObjectName(QStringLiteral("drawingBar"));
   auto* rows = new QVBoxLayout(m_bar);
@@ -335,16 +339,16 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
   cutFormats->addAction(tr("DXF…"), this, [this] { exportDrawing(QStringLiteral("dxf")); });
   cutFormats->addAction(tr("SVG…"), this, [this] { exportDrawing(QStringLiteral("svg")); });
   cutFormats->addSeparator();
-  QAction* labels = cutFormats->addAction(tr("Part Names on the LABEL Layer"));
-  labels->setCheckable(true);
-  connect(labels, &QAction::toggled, this, [this](bool on) {
-    m_cutLabels = on;
-    qDebug().noquote() << QStringLiteral("Cut sheet labels: %1").arg(on ? QStringLiteral("on") : QStringLiteral("off"));
-  });
+  m_cutLabelsAction = cutFormats->addAction(tr("Part Names on the LABEL Layer"));
+  m_cutLabelsAction->setCheckable(true);
+  connect(m_cutLabelsAction, &QAction::toggled, this, [this](bool on) { setCutLabels(on); });
   m_cutExport->setMenu(cutFormats);
   cutRow->addWidget(m_cutExport);
   cutRow->addStretch(1);
   column->addWidget(m_bar);
+  // The bar moves in the workspace (the rows over the view's top grew or
+  // shrank, a card beside it): its places logged again.
+  new PlaceWatcher(m_bar, [this] { logButtons(); });
 
   // The sheet and the panel beside it.
   auto* body = new QHBoxLayout;
@@ -429,6 +433,14 @@ bool DrawingWorkspace::open(const QString& uid) {
   place();
   show();
   raise();
+  // The view's own controls (the home button, the cube's arrows) raise
+  // themselves when the view's insets change: the drawing goes back above
+  // them (mitcad#1008: the home button showed over Sheet…).
+  for (QWidget* overlay : m_viewer->findChildren<QWidget*>(Qt::FindDirectChildrenOnly)) {
+    if (overlay != this) {
+      overlay->installEventFilter(this);
+    }
+  }
   refresh();
   if (!isOpen()) {
     return false;
@@ -461,6 +473,7 @@ void DrawingWorkspace::closeDrawing() {
   m_sheetView->setHint(QString());
   hide();
   qDebug().noquote() << QStringLiteral("Drawing closed");
+  emit toolChanged(QString());
   emit closed();
 }
 
@@ -500,8 +513,9 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
   const bool cut = answer.value(QStringLiteral("kind")).toString() == QStringLiteral("cut_sheet");
   if (cut != m_cutSheet) {
     m_cutSheet = cut;
-    m_toolRow->setVisible(!cut);
-    m_cutRow->setVisible(cut);
+    // The ribbon's tab shows them instead (setRibbonTools).
+    m_toolRow->setVisible(!cut && !m_ribbonPlace);
+    m_cutRow->setVisible(cut && !m_ribbonPlace);
     m_addSheet->setVisible(!cut);
     m_addRevision->setVisible(!cut);
     m_tabs->setVisible(!cut);
@@ -609,6 +623,7 @@ void DrawingWorkspace::setTool(const DrawingToolDef* tool) {
   for (auto it = m_toolButtons.begin(); it != m_toolButtons.end(); ++it) {
     it.value()->setChecked(tool != nullptr && it.key() == tool->id);
   }
+  emit toolChanged(tool != nullptr ? tool->id : QString());
   m_sheetView->setPick(tool != nullptr ? tool->pick : SheetPick::None, tool != nullptr && tool->place);
   // A projected view comes from the view selected before, when there is one.
   if (tool != nullptr && tool->pick == SheetPick::OutOfView && m_sheetView->selectedView() != 0) {
@@ -2385,37 +2400,81 @@ void DrawingWorkspace::setStatus(const QString& text, bool error) {
 }
 
 void DrawingWorkspace::place() {
+  // The whole view, edge to edge (mitcad#1008): no 3D view shows around the
+  // drawing. Its bar and sheet start below the rows that float over the
+  // view's top (the Floating layout's title row and toolbar) and keep clear
+  // of the view's other overlays (overlayInsets); what is above and beside
+  // them is the drawing's background.
+  const QRect whole = m_viewer->rect();
   const QMargins insets = m_viewer->overlayInsets();
-  QRect area = m_viewer->rect().marginsRemoved(insets);
-  // The cards floating at the view's sides (the Floating layout's browser,
-  // a command's panel) cover the bar where they reach its row: the drawing
-  // starts beside them, so that Close Drawing and the tools stay
-  // clickable (mitcad#725: Close Drawing lay under the browser).
+  const QRect area = whole.marginsRemoved(insets);
+  // The cards floating at the view's sides (the Floating layout's browser)
+  // cover the bar where they reach its row: its controls start beside
+  // them, so that they stay clickable (mitcad#725: Close Drawing lay under
+  // the browser). The sheet goes on under them, fitted beside them.
   const int band = std::max(m_bar->sizeHint().height(), 40);
   const QRect barRow(area.left(), area.top(), area.width(), band);
+  const QRect body(area.left(), area.top() + band, area.width(), std::max(0, area.height() - band));
   constexpr int kEdge = 24; // how near a side a card stands to count
   constexpr int kGap = 8;
   QRect room = area;
+  int coveredLeft = 0; // of the sheet, from its left
   for (const QRect& card : m_viewer->coveredRects()) {
-    if (!card.intersects(barRow)) {
-      continue;
+    const bool atLeft = card.left() <= area.left() + kEdge && card.right() < area.center().x();
+    const bool atRight = card.right() >= area.right() - kEdge && card.left() > area.center().x();
+    if (card.intersects(barRow)) {
+      if (atLeft) {
+        room.setLeft(std::max(room.left(), card.right() + 1 + kGap));
+      } else if (atRight) {
+        room.setRight(std::min(room.right(), card.left() - 1 - kGap));
+      }
     }
-    if (card.left() <= area.left() + kEdge && card.right() < area.center().x()) {
-      room.setLeft(std::max(room.left(), card.right() + 1 + kGap));
-    } else if (card.right() >= area.right() - kEdge && card.left() > area.center().x()) {
-      room.setRight(std::min(room.right(), card.left() - 1 - kGap));
+    if (atLeft && card.intersects(body)) {
+      coveredLeft = std::max(coveredLeft, card.right() + 1 + kGap - area.left());
     }
   }
-  if (room.width() >= area.width() / 2) {
-    area = room;
+  if (room.width() < area.width() / 2) {
+    room = area;
   }
-  fitTools(area.width());
-  if (area != geometry()) {
-    setGeometry(area);
+  m_column->setContentsMargins(insets);
+  m_bar->layout()->setContentsMargins(6 + room.left() - area.left(), 4, 6 + area.right() - room.right(), 4);
+  m_sheetView->setFitMargins(QMargins(std::min(coveredLeft, body.width() / 2), 0, 0, 0));
+  fitTools(room.width());
+  if (whole != geometry()) {
+    setGeometry(whole);
   }
 }
 
+void DrawingWorkspace::setRibbonTools(std::function<QWidget*(const QString&)> buttonOf) {
+  m_ribbonPlace = std::move(buttonOf);
+  const bool own = !m_ribbonPlace;
+  m_close->setVisible(own);
+  m_toolRow->setVisible(own && !m_cutSheet);
+  m_cutRow->setVisible(own && m_cutSheet);
+  m_toolsWidth = -1;
+  if (isVisible()) {
+    place();
+  }
+}
+
+void DrawingWorkspace::setCutLabels(bool on) {
+  if (on != m_cutLabelsAction->isChecked()) {
+    m_cutLabelsAction->setChecked(on); // comes back here
+    return;
+  }
+  if (on == m_cutLabels) {
+    return;
+  }
+  m_cutLabels = on;
+  qDebug().noquote() << QStringLiteral("Cut sheet labels: %1").arg(on ? QStringLiteral("on") : QStringLiteral("off"));
+}
+
+void DrawingWorkspace::logPlaces() { logButtons(); }
+
 void DrawingWorkspace::fitTools(int width) {
+  if (m_ribbonPlace) {
+    return; // the ribbon's tab has the tools
+  }
   if (width == m_toolsWidth) {
     return; // as fitted for this width (place runs on every frame)
   }
@@ -2500,6 +2559,15 @@ bool DrawingWorkspace::eventFilter(QObject* watched, QEvent* event) {
   if (watched == m_viewer && event->type() == QEvent::Resize && isVisible()) {
     place();
   }
+  // Another of the view's children came above the drawing (open): back
+  // under it, once that raise is done.
+  if (watched != m_viewer && event->type() == QEvent::ZOrderChange && isVisible()) {
+    QTimer::singleShot(0, this, [this] {
+      if (isVisible()) {
+        raise();
+      }
+    });
+  }
   // The 3D view under the sheet can have the keyboard (a click on the strip
   // between the floating cards): its keys are the drawing's then too, as
   // escapeDrawing has it, so a model shortcut does not leave the drawing
@@ -2561,19 +2629,43 @@ void DrawingWorkspace::logButtons() {
     const QPoint p = widget->mapTo(window(), widget->rect().center());
     return QStringLiteral("%1,%2").arg(p.x()).arg(p.y());
   };
-  lines << QStringLiteral("Drawing Close Drawing at %1").arg(at(m_close));
+  // The drawing's area and the 3D view's, in the window (mitcad#1008: the
+  // same rectangle).
+  const auto rectAt = [this](const QWidget* widget, const QRect& box) {
+    const QPoint p = widget->mapTo(window(), box.topLeft());
+    return QStringLiteral("%1,%2 %3x%4").arg(p.x()).arg(p.y()).arg(box.width()).arg(box.height());
+  };
+  lines << QStringLiteral("Drawing area %1, view %2").arg(rectAt(this, rect()), rectAt(m_viewer, m_viewer->rect()));
+  // A control of the bar, or its button on the ribbon's tab (by the
+  // command's id, or a group's "DRAWING/EXPORT") with setRibbonTools: a
+  // line when it is in sight.
+  const auto add = [this, &lines, &at](const QString& what, const QWidget* own, const QString& onRibbon) {
+    const QWidget* widget = m_ribbonPlace ? m_ribbonPlace(onRibbon) : own;
+    if (widget != nullptr) {
+      lines << QStringLiteral("Drawing %1 at %2").arg(what, at(widget));
+    }
+  };
+  const QString ribbonTab = m_cutSheet ? QStringLiteral("CUT SHEET") : QStringLiteral("DRAWING");
+  add(QStringLiteral("Close Drawing"), m_close, QStringLiteral("drawing.close"));
   lines << QStringLiteral("Drawing Add Sheet at %1").arg(at(m_addSheet));
   lines << QStringLiteral("Drawing Sheet at %1").arg(at(m_sheetButton));
-  lines << QStringLiteral("Drawing Export at %1").arg(at(m_cutSheet ? m_cutExport : m_export));
+  add(QStringLiteral("Export"), m_cutSheet ? m_cutExport : m_export, ribbonTab + QStringLiteral("/EXPORT"));
   if (m_cutSheet) {
-    lines << QStringLiteral("Drawing Add Parts at %1").arg(at(m_addParts));
+    add(QStringLiteral("Add Parts"), m_addParts, QStringLiteral("drawing.add_parts"));
   }
   lines << QStringLiteral("Drawing Add Revision at %1").arg(at(m_addRevision));
   for (const DrawingToolDef& tool : drawingTools()) {
-    lines << QStringLiteral("Drawing tool %1 at %2").arg(tool.name, at(m_toolButtons.value(tool.id)));
+    add(QStringLiteral("tool ") + tool.name, m_toolButtons.value(tool.id), tool.id);
   }
-  for (const QLabel* caption : std::as_const(m_groupCaptions)) {
-    lines << QStringLiteral("Drawing group %1 at %2").arg(caption->text(), at(caption));
+  if (m_ribbonPlace) {
+    for (int g = 0; g < kToolGroups; ++g) {
+      add(QStringLiteral("group ") + toolGroupName(g), nullptr, ribbonTab + QLatin1Char('/') + toolGroupId(g));
+    }
+    add(QStringLiteral("group ") + tr("Export"), nullptr, ribbonTab + QStringLiteral("/EXPORT"));
+  } else {
+    for (const QLabel* caption : std::as_const(m_groupCaptions)) {
+      lines << QStringLiteral("Drawing group %1 at %2").arg(caption->text(), at(caption));
+    }
   }
   for (int i = 0; i < m_tabs->count(); ++i) {
     const QPoint p = m_tabs->mapTo(window(), m_tabs->tabRect(i).center());

@@ -36,10 +36,14 @@
 #      libraries' parts, a screw in two groups (Slot profile/Screws and
 #      General fasteners/Screws, beside the ISO screw) and once in
 #      Favourites, Wood folded and still folded when the browser opens
-#      again, then unfolded.
+#      again, then unfolded. Each group with its count; Supplier Würth
+#      on: the counts under it, Wood and Slot profile (no part of
+#      Würth's) hidden, shown again with All suppliers (mitcad#1015).
 #   9. The Standard filter (mitcad#949): Standard = DIN 912 on the socket
 #      head cap screw narrows its lengths (M6x8 offered, the non-standard
-#      M6x6 not), and the part inserted is named DIN 912 M6x8.
+#      M6x6 not), and the part inserted is named DIN 912 M6x8. The fields
+#      of Version, Standard, Supplier, Size and Length start at one x (one
+#      label column, mitcad#1007; Library Parts' too, in part 4).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-library-test.sh
@@ -63,6 +67,45 @@ INDEX=$WORK/index
 MINE=$WORK/mine
 BARE=$WORK/mine-remote.git
 g() { git -C "$1" -c user.name=T -c user.email=t@example.invalid "${@:2}" > /dev/null; }
+
+# field_names "edges": "Version, Standard, ..." of "Version 96, Standard 96, ...".
+field_names() {
+  local names="" entry
+  local -a entries
+  IFS=',' read -ra entries <<< "$1"
+  for entry in "${entries[@]}"; do
+    entry=${entry# }
+    names+="${names:+, }${entry% *}"
+  done
+  echo "$names"
+}
+
+# check_field_edges "names" "what": the last "Library fields at x: Version
+# 96, Standard 96, ..." line names these fields (a pattern), in this order
+# (waited for: the rows may come after the first line), and their left
+# edges are one x (one label column, mitcad#1007).
+check_field_edges() {
+  local edges="" names="" first="" entry
+  local -a entries
+  for _ in $(seq 30); do
+    edges=$(grep "^Library fields at x: " "$UI_LOG" | tail -1 | sed 's/^Library fields at x: //')
+    names=$(field_names "$edges")
+    # shellcheck disable=SC2053 # $1 is a pattern
+    [[ $names == $1 ]] && break
+    sleep 0.2
+  done
+  # shellcheck disable=SC2053
+  [[ $names == $1 ]] || ui_fail "$2: the fields are '$names', not '$1'"
+  IFS=',' read -ra entries <<< "$edges"
+  for entry in "${entries[@]}"; do
+    entry=${entry# }
+    if [ -z "$first" ]; then
+      first=${entry##* }
+    fi
+    [ "${entry##* }" = "$first" ] || ui_fail "$2: ${entry% *} starts at x ${entry##* }, not at $first: '$edges'"
+  done
+  echo "ok   $2: $names start at x $first"
+}
 
 # The parts library's fasteners: v1.0.0, then v1.1.0 with the M5 heads 8.7 mm wide.
 python3 "$ROOT/tools/libraries/make-fastener-library.py" --cli "$CLI" --out "$LIB" --sizes M5,M6 \
@@ -232,6 +275,9 @@ ui_expect_volume "Body ISO 4762 M5x16 ([^)]*): volume 560.146 -> \([0-9.]*\) mm3
 ui_mark
 ui_step "Library Parts again"              ui_command "Library Parts"
 ui_focus_dialog '^Library Parts$'
+ui_expect_new "Library fields at x: Version " "Library Parts logs where its fields start"
+check_field_edges "Version, Standard, Supplier, Size, Length" \
+  "Library Parts: Version, the filters and the size's fields line up (mitcad#1007)"
 ui_step "size M6 x 20"                     eval 'ui_key alt+v; ui_sync; ui_key Tab; xdotool type --delay 80 "M6";
   ui_sync; ui_key Tab; xdotool type --delay 80 "20"'
 ui_expect_new "Library size M6x20" "the size chosen"
@@ -412,14 +458,41 @@ ui_step "close the warning (Return)"       ui_key Return
 ui_focus_dialog '^Insert from Library$'
 ui_expect_new ", Wood/Sheets" "the groups as a tree, the other library's Sheets in the same Wood"
 GROUPS_TREE=$(grep "^Part picker groups: " "$UI_LOG" | tail -1 | sed 's/^Part picker groups: //')
-for group in "Wood" "Wood/Beams" "Wood/Sheets" "Slot profile" "Slot profile/Screws" "General fasteners" \
-             "General fasteners/Screws" "General fasteners/Nuts"; do
+# Each with its count (mitcad#1015): Wood with both libraries' parts, the
+# slot screw beside the ISO screw in General fasteners/Screws.
+for group in "Wood (2)" "Wood/Beams (1)" "Wood/Sheets (1)" "Slot profile (1)" "Slot profile/Screws (1)" \
+             "General fasteners (3)" "General fasteners/Screws (2)" "General fasteners/Nuts (1)"; do
   [[ ", $GROUPS_TREE, " == *", $group, "* ]] || ui_fail "no group $group in '$GROUPS_TREE'"
 done
 echo "ok   the groups as a tree: $GROUPS_TREE"
 ui_mark
 ui_step "the group Wood (Alt+O, W)"        eval 'ui_key alt+o; ui_sync; ui_type_ahead "W"'
 ui_expect_new "Part picker group Wood: 2 parts" "Wood lists its subgroups' parts, of both libraries"
+# The Supplier filter (mitcad#1015): the counts under it, the groups with
+# none of the supplier's parts hidden (the test libraries' Slot profile
+# and Wood's subgroups: their parts have no supplier), the fasteners'
+# kept; the chosen Wood stays with (0), and the details say why it is
+# empty; All suppliers shows them again.
+ui_mark
+ui_step "Supplier Würth (Alt+R, W)"        eval 'ui_key alt+r; ui_sync; ui_type_ahead "W"'
+ui_expect_new "Part picker supplier wurth" "the Supplier filter on Würth"
+ui_expect_new "Part picker groups: " "the groups with their counts under the filter"
+ui_expect_new "Library browser empty: No parts in Wood with this search and these filters." \
+  "the empty Wood: no parts with these filters, not 'nothing fetched'"
+GROUPS_FILTERED=$(grep "^Part picker groups: " "$UI_LOG" | tail -1 | sed 's/^Part picker groups: //')
+for group in "Favourites (1)" "Wood (0)" "General fasteners (2)" "General fasteners/Screws (1)" \
+             "General fasteners/Nuts (1)"; do
+  [[ ", $GROUPS_FILTERED, " == *", $group, "* ]] || ui_fail "no group $group under Würth in '$GROUPS_FILTERED'"
+done
+for group in "Wood/Beams" "Wood/Sheets" "Slot profile"; do
+  [[ ", $GROUPS_FILTERED" != *", $group"* ]] || ui_fail "the empty $group is shown under Würth: '$GROUPS_FILTERED'"
+done
+echo "ok   the groups under Würth: $GROUPS_FILTERED"
+ui_mark
+ui_step "All suppliers (Alt+R, All)"       eval 'ui_key alt+r; ui_sync; ui_type_ahead "All"'
+ui_expect_new "Part picker supplier all" "the Supplier filter off"
+ui_expect_new ", Wood (2), Wood/" "Wood and its subgroups shown again"
+ui_expect_new "Part picker group Wood: 2 parts" "Wood's tiles again"
 ui_mark
 # Typed apart from the W above (ui_type_ahead): Qt would look for "WSlot".
 ui_step "Slot profile's Screws (Alt+O, Slot, Down)" \
@@ -454,7 +527,7 @@ ui_focus_main
 ui_mark
 ui_step "Insert from Library again"        ui_command "Insert from Library"
 ui_focus_dialog '^Insert from Library$'
-ui_expect_new "Wood (folded)" "the fold remembered"
+ui_expect_new "Wood (2) (folded)" "the fold remembered"
 GROUPS_TREE=$(grep "^Part picker groups: " "$UI_LOG" | tail -1)
 [[ $GROUPS_TREE != *"Wood/Beams"* ]] || ui_fail "a folded group's subgroups are shown: '$GROUPS_TREE'"
 ui_mark
@@ -478,6 +551,10 @@ ui_expect_new "Library browser selected mitcad-parts/iso4762: version v1.1.0 (" 
 ui_mark
 ui_step "Standard DIN 912 (Alt+D)"         eval 'ui_key alt+d; ui_sync; ui_type_ahead "DIN"'
 ui_expect_new "Library filter: Standard DIN 912, Supplier All: " "the Standard filter narrows the rows"
+# One label column (mitcad#1007): the fields of Version, the filters and the
+# size start at one x.
+ui_expect_new "Library fields at x: Version " "the browser logs where its fields start"
+check_field_edges "Version, Standard, Supplier, Size, Length" "Version, Standard, Supplier, Size and Length line up"
 ui_mark
 # Size M6: the field before Length, which is before Linked.
 ui_step "size M6 (Alt+L, Shift+Tab twice)" eval 'ui_key alt+l; ui_sync; ui_key shift+Tab; ui_sync; ui_key shift+Tab;

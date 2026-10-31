@@ -123,7 +123,11 @@ public:
 
   // Shown (or about to be, for a windowed card whose host window is not
   // shown yet) in the sense of !isHidden().
-  bool isShown() const { return m_windowed ? m_wanted : !isHidden(); }
+  bool isShown() const { return !m_suppressed && (m_windowed ? m_wanted : !isHidden()); }
+  // Hidden whatever is asked meanwhile (mitcad#1008: the cards over the 3D
+  // view while a drawing takes it); then shown or hidden as last asked.
+  void setSuppressed(bool suppressed);
+  bool isSuppressed() const { return m_suppressed; }
   // A windowed card follows its host window: it is shown only while the
   // host is, and again when the host comes back.
   void hostVisibilityChanged(bool hostVisible);
@@ -220,6 +224,8 @@ private:
   Backdrop m_backdrop = Backdrop::Painted;
   bool m_windowed = false;
   bool m_wanted = false; // windowed: shown() asked for
+  bool m_suppressed = false; // setSuppressed
+  bool m_shownAfter = false; // setSuppressed: shown again when it ends
   QRect m_slot;
   qreal m_opacity = 1.0;
 

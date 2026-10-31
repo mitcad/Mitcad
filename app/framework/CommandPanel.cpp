@@ -49,6 +49,7 @@
 #include "Icons.hpp"
 #include "NoteRow.hpp"
 #include "ParameterField.hpp"
+#include "ResultRows.hpp"
 #include "TestSync.hpp"
 #include "Theme.hpp"
 
@@ -490,7 +491,16 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
     }
   });
   layout->addWidget(m_result);
-  m_result->setVisible(static_cast<bool>(def.inspect));
+  // (A panel with only Close shows it once there is a text, mitcad#1010.)
+  m_result->setVisible(static_cast<bool>(def.inspect) && !def.closeOnly);
+  // The answer as rows of names and values in its place, when the
+  // inspection gives them (Measure, mitcad#1010).
+  m_resultRows = new ResultRows(def.name, this);
+  m_resultRows->setFloatingStyle(chromeStyle() == ChromeStyle::Floating);
+  layout->addWidget(m_resultRows);
+  // A group folded or unfolded moves its rows and what is under them: the
+  // places again (mitcad#528).
+  m_resultRows->installEventFilter(this);
 
   // Errors and hints (mitcad#198): within the panel's width however long
   // their words, scrolling after a few lines, hidden when there is none.
@@ -500,28 +510,43 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
 
   auto* buttons = new QDialogButtonBox;
   m_buttonBox = buttons;
-  m_ok = new QPushButton(def.okLabel.isEmpty() ? tr("OK") : def.okLabel);
-  m_ok->setObjectName(QStringLiteral("commandOk"));
-  // A command that repeats (BUILD's Place, mitcad#375) keeps what it
-  // applied: its Cancel only closes it.
-  auto* cancel = new QPushButton(def.repeats ? tr("Close") : tr("Cancel"));
-  cancel->setObjectName(QStringLiteral("commandCancel"));
-  for (QPushButton* button : {m_ok, cancel}) {
-    // The keyboard stays in the value fields; Enter and Esc work anywhere.
-    button->setFocusPolicy(Qt::NoFocus);
-    button->setAutoDefault(false);
-  }
-  // In a floating card OK is the accent-coloured default button.
-  m_ok->setDefault(chromeStyle() == ChromeStyle::Floating);
-  m_ok->setToolTip(def.apply                 ? tr("%1 (Enter)").arg(def.okLabel.isEmpty() ? tr("OK") : def.okLabel)
-                   : def.inspect             ? tr("Close (Enter)")
-                   : def.okLabel.isEmpty()   ? tr("Create the feature (Enter)")
+  if (def.closeOnly) {
+    // A panel that only shows something (Measure, mitcad#1010): Close,
+    // which OK and Cancel both were; Enter and Esc close it too.
+    m_ok = new QPushButton(tr("Close"));
+    m_ok->setObjectName(QStringLiteral("commandClose"));
+    m_ok->setFocusPolicy(Qt::NoFocus);
+    m_ok->setAutoDefault(false);
+    m_ok->setToolTip(tr("Close (Enter, Esc)"));
+    connect(m_ok, &QPushButton::clicked, this, [this] {
+      qDebug().noquote() << QStringLiteral("Panel %1 Close clicked").arg(m_def.name);
+      emit accepted();
+    });
+    buttons->addButton(m_ok, QDialogButtonBox::AcceptRole);
+  } else {
+    m_ok = new QPushButton(def.okLabel.isEmpty() ? tr("OK") : def.okLabel);
+    m_ok->setObjectName(QStringLiteral("commandOk"));
+    // A command that repeats (BUILD's Place, mitcad#375) keeps what it
+    // applied: its Cancel only closes it.
+    auto* cancel = new QPushButton(def.repeats ? tr("Close") : tr("Cancel"));
+    cancel->setObjectName(QStringLiteral("commandCancel"));
+    for (QPushButton* button : {m_ok, cancel}) {
+      // The keyboard stays in the value fields; Enter and Esc work anywhere.
+      button->setFocusPolicy(Qt::NoFocus);
+      button->setAutoDefault(false);
+    }
+    // In a floating card OK is the accent-coloured default button.
+    m_ok->setDefault(chromeStyle() == ChromeStyle::Floating);
+    m_ok->setToolTip(def.apply               ? tr("%1 (Enter)").arg(def.okLabel.isEmpty() ? tr("OK") : def.okLabel)
+                     : def.inspect           ? tr("Close (Enter)")
+                     : def.okLabel.isEmpty() ? tr("Create the feature (Enter)")
                                              : tr("%1 (Enter)").arg(def.okLabel));
-  cancel->setToolTip(def.repeats ? tr("Close; what was placed stays (Esc)") : tr("Close without changes (Esc)"));
-  connect(m_ok, &QPushButton::clicked, this, &CommandPanel::accepted);
-  connect(cancel, &QPushButton::clicked, this, &CommandPanel::rejected);
-  buttons->addButton(m_ok, QDialogButtonBox::AcceptRole);
-  buttons->addButton(cancel, QDialogButtonBox::RejectRole);
+    cancel->setToolTip(def.repeats ? tr("Close; what was placed stays (Esc)") : tr("Close without changes (Esc)"));
+    connect(m_ok, &QPushButton::clicked, this, &CommandPanel::accepted);
+    connect(cancel, &QPushButton::clicked, this, &CommandPanel::rejected);
+    buttons->addButton(m_ok, QDialogButtonBox::AcceptRole);
+    buttons->addButton(cancel, QDialogButtonBox::RejectRole);
+  }
   layout->addWidget(buttons);
   layout->addStretch();
 
@@ -950,7 +975,13 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
     // A disclosure button carries its label itself.
     row.label = new QLabel(input.disclosure ? QString() : input.label);
     row.label->setToolTip(input.tooltip);
-    if (form != nullptr) {
+    if (form != nullptr && input.fieldBelow && !input.disclosure) {
+      // The field under its label, across the panel (mitcad#1010): shown
+      // and hidden with it as a title row.
+      row.title = row.label;
+      form->addRow(row.label);
+      form->addRow(container);
+    } else if (form != nullptr) {
       form->addRow(row.label, container);
     }
   }
@@ -1551,9 +1582,33 @@ void CommandPanel::logFit() const {
   }
 }
 
-void CommandPanel::setResult(const QString& text) { m_result->setText(text); }
+void CommandPanel::setResult(const QString& text) {
+  Inspection result;
+  result.text = text;
+  setInspection(result);
+}
 
-void CommandPanel::setOkEnabled(bool enabled) { m_ok->setEnabled(enabled); }
+void CommandPanel::setInspection(const Inspection& result) {
+  // The text all the same: the panel's state for live MCP (shownState).
+  m_result->setText(result.text);
+  const bool rows = !result.values.empty() || !result.groups.empty();
+  // The text's box while there are no rows; a panel with only Close
+  // (Measure, mitcad#1010) shows no empty box between its picks and its
+  // actions.
+  const bool box = static_cast<bool>(m_def.inspect) && !rows && (!m_def.closeOnly || !result.text.isEmpty());
+  if (m_result->isVisibleTo(this) != box) {
+    m_result->setVisible(box);
+    scheduleLogLayout();
+  }
+  if (!rows && m_resultRows->isEmpty()) {
+    return;
+  }
+  m_resultRows->set(result);
+  // The rows' places, and the section's under them, again.
+  scheduleLogLayout();
+}
+
+void CommandPanel::setOkEnabled(bool enabled) { m_ok->setEnabled(enabled || m_def.closeOnly); }
 
 QWidget* CommandPanel::takeButtons() {
   QWidget* buttons = m_buttonBox;
@@ -1784,14 +1839,56 @@ QStringList CommandPanel::layoutLines() const {
       }
     }
   }
-  // The sections' own places (addSection, mitcad#648).
+  // The answer's rows (mitcad#1010), then the sections' own places
+  // (addSection, mitcad#648).
+  lines << m_resultRows->places();
   for (const auto& places : m_sectionPlaces) {
     lines << places();
   }
-  lines << QStringLiteral("Panel %1 OK at %2").arg(m_def.name, position(m_ok));
+  lines << QStringLiteral("Panel %1 %2 at %3")
+               .arg(m_def.name, m_def.closeOnly ? QStringLiteral("Close") : QStringLiteral("OK"), position(m_ok));
   // Wider than the page would cut its right side off (mitcad#198).
   const QWidget* page = parentWidget() != nullptr ? parentWidget() : this;
   lines << QStringLiteral("Panel %1 width %2 of %3").arg(m_def.name).arg(width()).arg(page->width());
+  // Whether an input's label or a choice's text is cut at the panel's
+  // width (mitcad#1010): "Panel Measure inputs: none clipped", or "Panel
+  // Measure inputs clipped: filter label (95 of 70)".
+  QStringList clipped;
+  for (const Row* row : orderedRows()) {
+    if (!row->field->isVisibleTo(this)) {
+      continue;
+    }
+    for (const QWidget* widget : {static_cast<const QWidget*>(row->label), static_cast<const QWidget*>(row->title)}) {
+      const auto* label = qobject_cast<const QLabel*>(widget);
+      if (label != nullptr && label->isVisibleTo(this) && !label->wordWrap() && !label->text().isEmpty() &&
+          label->width() < label->sizeHint().width()) {
+        clipped << QStringLiteral("%1 label (%2 of %3)").arg(row->key).arg(label->sizeHint().width()).arg(label->width());
+        break;
+      }
+    }
+    if (row->combo != nullptr && row->combo->isVisibleTo(this)) {
+      // The current text in the combo's text area, its icon before it.
+      QStyleOptionComboBox option;
+      option.initFrom(row->combo);
+      option.editable = row->combo->isEditable();
+      option.frame = row->combo->hasFrame();
+      option.currentText = row->combo->currentText();
+      option.currentIcon = row->combo->itemIcon(row->combo->currentIndex());
+      option.iconSize = row->combo->iconSize();
+      const int room =
+          row->combo->style()->subControlRect(QStyle::CC_ComboBox, &option, QStyle::SC_ComboBoxEditField, row->combo).width();
+      int needed = row->combo->fontMetrics().horizontalAdvance(option.currentText);
+      if (!option.currentIcon.isNull()) {
+        needed += option.iconSize.width() + 4;
+      }
+      if (room < needed) {
+        clipped << QStringLiteral("%1 choice (%2 of %3)").arg(row->key).arg(needed).arg(room);
+      }
+    }
+  }
+  lines << (clipped.isEmpty() ? QStringLiteral("Panel %1 inputs: none clipped").arg(m_def.name)
+                              : QStringLiteral("Panel %1 inputs clipped: %2")
+                                    .arg(m_def.name, clipped.join(QStringLiteral(", "))));
   // What a long panel's page shows of it: a place outside the view is
   // scrolled away, and a wheel over the bar scrolls it (UI tests in a low
   // window; MainWindow logs the places again when it scrolls).

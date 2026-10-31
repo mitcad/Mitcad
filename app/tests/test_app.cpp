@@ -2592,6 +2592,8 @@ int featureStatusTests();
 int sketchPointMarkersTests();
 int holeSizesTests();
 int nativeStructureTests();
+int partStarTests();
+int toolbarPinsTests();
 
 int main(int argc, char* argv[]) {
   QApplication app(argc, argv);
@@ -2704,6 +2706,8 @@ int main(int argc, char* argv[]) {
     failures += sketchPointMarkersTests();
     failures += holeSizesTests();
     failures += nativeStructureTests();
+    failures += partStarTests();
+    failures += toolbarPinsTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

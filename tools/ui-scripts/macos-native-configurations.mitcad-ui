@@ -48,6 +48,13 @@ screenshot '${MITCAD_TEST_WORK}/configuration-bar-${MITCAD_TEST_COLOR_SCHEME}.pn
 # The actual Configurations dialog, with the existing rule selected.
 native-action solid.configurations
 focus-dialog '^Configurations$'
+# With options and rows, neither view shows its empty hint
+# (macos-native-configurations-empty.mitcad-ui shows them).
+expect-native-visible configurationsOptions true
+expect-native-visible configurationsOptions.empty false
+native-choice configurationsTabs Rows
+expect-native-visible configurationsRows true
+expect-native-visible configurationsRows.empty false
 native-choice configurationsTabs Rules
 expect-log 'Configurations page Rules'
 expect-native-visible ruleCanvas true

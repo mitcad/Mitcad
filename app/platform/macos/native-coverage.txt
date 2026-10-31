@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT
+# How the AppKit frontend presents each widget class of app/ that paints
+# itself (docs/native-macos-ui.md, Coverage). The generic bridge
+# (renderWidget, NativeDialogs.mm) maps Qt's own controls to AppKit ones and
+# shows a widget it does not know only through its children: a widget's own
+# painting is lost unless its line here says how it is shown. The ctest
+# repo.native-coverage (tools/native-coverage) checks the list.
+#
+# One line per class: Class status detail
+#   native SYMBOL    an AppKit view presents it; SYMBOL is that view's code
+#                    in the AppKit frontend (app/platform/macos,
+#                    app/MainWindowNative.cpp)
+#   replaced SYMBOL  the Qt frontend's own chrome; the AppKit frontend shows
+#                    SYMBOL in its place
+#   shared REASON    Qt draws it in both frontends: the OCCT view and what
+#                    is drawn over it
+#   pending REASON   the AppKit frontend does not show it yet; none may be
+#                    left when AppKit becomes the only macOS frontend
+# The native UI tests fail when the bridge logs a widget it cannot present
+# ("Native presenter: unpresented widget"), unless its class is pending here.
+
+AgentIndicator replaced MITCADAgentButton: the toolbar's agent button
+AutoselectPanel native renderWidget: a QGroupBox; its painting only drops the frame under a section title
+CapsuleButton native renderWidget: the Sketch Palette's QToolButton, as an AppKit button
+CapsuleFrame replaced setRibbon: the capsule behind the Qt ribbon's groups and title row controls
+CardShadow replaced MITCADFloatingCard: the Floating cards' shadow
+ColorFieldButton native NativeColorField: the print settings' colour swatch (NativeColorFieldProperty)
+CommandSearch replaced showCommandSearch: the toolbar's command search
+Divider replaced MITCADNativeWindowDelegate: between the Qt title row's controls; the AppKit toolbar
+DrawingSheetView shared the drawing sheet, in the drawing workspace over the 3D view
+DrawingWorkspace pending the ribbon's DRAWING and CUT SHEET tabs (mitcad#1008): the AppKit ribbon (setRibbon) gets SOLID, BUILD and SKETCH only, so in the AppKit frontend the drawing keeps its own two-row bar with Close Drawing, the tools' groups and Export, and the toolbar keeps Solid and Build while a drawing is open
+GlassButton native setCubeArrows: the orientation cube's turn arrows, round AppKit buttons over the canvas at the hidden Qt arrows' places
+GlassCard replaced MITCADFloatingCard: the Floating chrome's cards
+GroupCaption replaced setRibbon: the AppKit ribbon's group captions
+GroupMenu pending the ⋮ button of a group menu's command rows (Pin to Toolbar, Change Keyboard Shortcut…, mitcad#1001): the AppKit ribbon's group menus (setRibbon) list the commands without it, and its ribbon has no Pinned group
+GroupSeparator replaced setRibbon: the AppKit ribbon's separators
+LinkButton replaced createNativeCommandForm: a note's link in the Qt Command panel
+ManipulatorOverlay shared the command's handles over the 3D view
+MeasurementOverlay shared the measurements over the 3D view
+MiddleElideComboBox replaced createNativeCommandForm: a choice with icons in the Qt Command panel
+ModeBanner shared the mode's banner over the 3D view
+NavigationGuide native createNativeNavigationGuide: the Navigation settings' mouse pictures
+NoteText replaced createNativeCommandForm: a note's text in the Qt Command panel
+OptionTree native MitcadNativeEmptyText: the empty Options tree's hint (kNoOptions, Configurations) in the bridge's outline (NativeEmptyTextProperty)
+PaneButton native MitcadNativePaneButton: the Settings window's pane buttons
+PanelTitleBar replaced MITCADFloatingCard: a Docked panel's title
+ParameterPicker shared the parameter labels over the 3D view
+PillTabBar replaced setRibbon: the AppKit ribbon's workspace tabs
+ProjectIndicator replaced setProjectStatus: the toolbar's project status
+RenderFrameOverlay shared the render frame over the 3D view
+RenderLightsOverlay shared the lights over the 3D view
+Ribbon replaced setRibbon: the AppKit ribbon
+RibbonButton replaced setRibbon: the AppKit ribbon's buttons
+RowsSheet native MitcadNativeEmptyText: the empty Rows sheet's hint (kNoRows, Configurations) in the bridge's table (NativeEmptyTextProperty)
+ScreenshotView native MitcadNativeScreenshot: the report's screenshot crop
+SectionTitle replaced renderWidget: the Docked Command panel's section titles; the bridge shows the group box's title
+SegmentedTabBar replaced setRibbon: the AppKit ribbon's workspace tabs
+SelectionCreatePanel native renderWidget: a QGroupBox; its painting only drops the frame under a section title
+SketchOverlay shared the sketch over the 3D view
+TimelineStrip replaced MITCADHistoryStrip: the history card
+TitleBar replaced MITCADNativeWindowDelegate: the Qt title row; the AppKit toolbar
+TitleButton replaced MITCADNativeWindowDelegate: the Qt title row's buttons and a Docked panel's float and close buttons; the AppKit toolbar and cards
+TreeRenameEdit replaced renameTree: inline renaming in the Qt trees; AppKit outlines edit their own cells
+ViewCubeHomeButton replaced view.home: the Qt view's Home button; the toolbar's Home

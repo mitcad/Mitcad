@@ -7,7 +7,7 @@
 # two cylinders of radius 5, 20 high (Body1 about Z through the origin,
 # Body2 through (30, 40)), with an offset Gone of a block that is deleted
 # (broken):
-#   - Keep in the Measure panel: the round faces kept as AxisDistance1
+#   - Keep as Dimension in the Measure panel: the round faces kept as AxisDistance1
 #     (50), Body1's top rim as Diameter1 (Ø10).
 #   - A double-click on AxisDistance1's text in the view: its editor; a ±
 #     tolerance (0.1).
@@ -117,8 +117,8 @@ ui_expect_new "Command Measure started" "measure started"
 ui_step "pick Body1's round face"          ui_click_pick "face F2.b0/F2:side(c1)"
 ui_step "pick Body2's round face"          ui_click_pick "face F4.b0/F4:side(c1)"
 ui_expect_new "axis distance 50" "the axes 50 apart"
-wait_enabled "Measure Keep"
-ui_step "Keep"                             ui_click_logged "Measure Keep"
+wait_enabled "Measure Keep as Dimension"
+ui_step "Keep as Dimension"                ui_click_logged "Measure Keep as Dimension"
 ui_expect_new "Annotation kept: AxisDistance1" "kept as the axes' distance"
 ui_step "close (Enter)"                    ui_key Return
 ui_expect_new "Closed Measure" "measure closed"
@@ -127,8 +127,8 @@ ui_step "measure (I)"                      ui_key i
 ui_expect_new "Command Measure started" "measure started again"
 ui_step "pick Body1's top rim"             ui_click_pick "edge F2.b0/E{F2:end(r{c1})|"
 ui_expect_new "Inspect Measure: length 31.416, radius 5, diameter 10" "the rim measured"
-wait_enabled "Measure Keep"
-ui_step "Keep"                             ui_click_logged "Measure Keep"
+wait_enabled "Measure Keep as Dimension"
+ui_step "Keep as Dimension"                ui_click_logged "Measure Keep as Dimension"
 ui_expect_new "Annotation kept: Diameter1" "kept as the rim's diameter"
 ui_expect_new "Annotations drawn: AxisDistance1 = 50 (auto) | Diameter1 = Ø10 (auto)" "both drawn, in Auto"
 ui_step "close (Enter)"                    ui_key Return
@@ -347,9 +347,11 @@ ui_mark
 ui_step "measure (I)"                      ui_key i
 ui_expect_new "Command Measure started" "measure started"
 ui_step "pick Body1's top face"            ui_click_pick "face F2.b0/F2:end(r{c1})"
-wait_enabled "Measure Datum Label"
+ui_expect_new "Measure Annotate entries: Note…, Datum Label…, Frame…, Hole Callout" "a face picked: its leaders offered"
 ui_mark
-ui_step "Datum Label…"                           ui_click_logged "Measure Datum Label"
+ui_step "Annotate"                         ui_click_logged "Measure Annotate"
+ui_expect_new "Context menu: Note… | Datum Label…" "Annotate's menu"
+ui_step "Datum Label… (D)"                 ui_key d
 ui_expect_new "Datum Label dialog opened: face F2:end(r{c1}) of F2.b0 A" "the first free letter offered"
 ui_focus_dialog '^Datum Label$'
 ui_step "OK (Enter)"                       ui_key Return
@@ -363,9 +365,11 @@ ui_mark
 ui_step "measure (I)"                      ui_key i
 ui_expect_new "Command Measure started" "measure started again"
 ui_step "pick Body2's round face"          ui_click_pick "face F4.b0/F4:side(c1)"
-wait_enabled "Measure Frame"
+ui_expect_new "Measure Annotate entries: Note…, Datum Label…, Frame…, Hole Callout" "a face picked: its leaders offered"
 ui_mark
-ui_step "Frame…"                           ui_click_logged "Measure Frame"
+ui_step "Annotate"                         ui_click_logged "Measure Annotate"
+ui_expect_new "Context menu: Note… | Datum Label… | Frame…" "Annotate's menu"
+ui_step "Frame… (F)"                       ui_key f
 ui_expect_new "Feature Control Frame dialog opened: face F4:side(c1) of F4.b0 {}" "the frame asked for"
 ui_focus_dialog '^Feature Control Frame$'
 ui_step "Perpendicularity (Down x7)"       ui_key Down Down Down Down Down Down Down
@@ -721,9 +725,11 @@ ui_mark
 ui_step "measure (I)"                      ui_key i
 ui_expect_new "Command Measure started" "measure started"
 ui_step "pick a hole's counterbore wall"   ui_click_pick "face F2.b0/F3:hole0.cbore_wall"
-wait_enabled "Measure Hole Callout"
+ui_expect_new "Measure Annotate entries: Note…, Datum Label…, Frame…, Hole Callout" "a hole picked: its leaders offered"
 ui_mark
-ui_step "Hole Callout"                     ui_click_logged "Measure Hole Callout"
+ui_step "Annotate"                         ui_click_logged "Measure Annotate"
+ui_expect_new "Context menu: Note… | Datum Label… | Frame… | Hole Callout" "Annotate's menu"
+ui_step "Hole Callout (C)"                 ui_key c
 ui_expect_new "Measure Hole Callout clicked" "Hole Callout clicked"
 ui_expect_new "Annotation kept: HoleCallout1" "the hole callout added"
 ui_expect_new "Annotations drawn: HoleCallout1 = 4x Ø6.6 THRU / ⌴ Ø11 ↧ 6.8 (auto)" \

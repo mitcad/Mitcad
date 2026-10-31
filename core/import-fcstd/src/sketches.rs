@@ -44,7 +44,7 @@ use mitcad_freecad::{Object, Placement};
 use mitcad_model::features::{FrameDef, SketchPlane};
 use mitcad_model::sketch::Entity;
 use mitcad_model::sketch::geometry::Curve2;
-use mitcad_model::sketch::project::{Projected, entities, project};
+use mitcad_model::sketch::project::{Projected, entities, plane_crossings, project};
 use mitcad_model::{
     BodyUid, ComponentUid, Curve3, ElementKind, EntityUid, FaceName, FeatureDef, FeatureUid,
     Kernel, OccurrenceUid, SketchFrame, Transform, ValueInput,
@@ -77,6 +77,84 @@ struct External {
     next: u32,
     dropped: Vec<String>,
     notes: Vec<String>,
+}
+
+/// One link of a sketch's external geometry, or one part of it, to make
+/// ([`Importer::external_link`]).
+struct LinkInput<'a> {
+    sketch: &'a fc::Sketch,
+    frame: &'a SketchFrame,
+    component: ComponentUid,
+    link: &'a fc::ExternalLink,
+    /// The linked element: its kind and index.
+    element: Option<(ElementKind, usize)>,
+    /// FreeCAD's external geometry made of it.
+    geos: &'a [usize],
+    /// Its intersection with the sketch's plane (1.1's `ExternalTypes`),
+    /// not its projection.
+    section: bool,
+}
+
+/// How far from the sketch's plane (mm) an element may be and still lie in
+/// it: its intersection with the plane is then itself (mitcad#998).
+const IN_PLANE: f64 = 1e-6;
+
+/// Whether model curves lie in a sketch's plane (a B-spline by its poles).
+fn lies_in(curves: &[Curve3], frame: &SketchFrame) -> bool {
+    let normal = frame.normal();
+    let on = |p: [f64; 3]| dot(sub(p, frame.origin), normal).abs() <= IN_PLANE;
+    curves.iter().all(|c| match c {
+        Curve3::Point(p) => on(*p),
+        Curve3::Line { start, end } => on(*start) && on(*end),
+        Curve3::Conic {
+            center,
+            normal: axis,
+            ..
+        } => on(*center) && norm(cross(*axis, normal)) <= 1e-9,
+        Curve3::BSpline { poles, .. } => poles.iter().all(|p| on(*p)),
+        Curve3::Helix { .. } => false,
+    })
+}
+
+/// The points where a sketch's plane crosses model curves, in their order
+/// (the model's section of a sketch's curve, mitcad#998).
+fn crossings(curves: &[Curve3], frame: &SketchFrame) -> Vec<Curve3> {
+    let normal = frame.normal();
+    curves
+        .iter()
+        .flat_map(|c| plane_crossings(c, frame.origin, normal))
+        .map(Curve3::Point)
+        .collect()
+}
+
+/// Another sketch's curves as the sections of the sketch's plane with
+/// them (1.1's intersection of an edge, mitcad#998): each piece the points
+/// where the plane crosses its curve, its record a section; a curve lying
+/// in the plane is itself (its projection). Only an edge's: a face's pieces
+/// are curves of the face's outline, not the face. None when the plane
+/// crosses none of them.
+fn sketch_sections(
+    pieces: EntityPieces,
+    kind: ElementKind,
+    frame: &SketchFrame,
+) -> Option<EntityPieces> {
+    if kind != ElementKind::Edge {
+        return Some(pieces);
+    }
+    let mut out = Vec::new();
+    for (mut record, curves) in pieces {
+        if lies_in(&curves, frame) {
+            out.push((record, curves));
+            continue;
+        }
+        let points = crossings(&curves, frame);
+        if points.is_empty() {
+            continue;
+        }
+        record["section"] = json!(true);
+        out.push((record, points));
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// How a FreeCAD object's stored shape is placed in a component.
@@ -1110,15 +1188,19 @@ impl<K: Kernel> Importer<'_, '_, K> {
 
     /// An element of an object as the element of a body of the import:
     /// the projection's record without its entities (`source`, `body`, and
-    /// the `link` of another component's body, mitcad#952) and the
-    /// element's curves in the sketch's component; Err with the reason
-    /// when the body has no such element.
+    /// the `link` of another component's body, mitcad#952; `after` the
+    /// object's last feature where later features changed the element,
+    /// mitcad#998) and the element's curves in the sketch's component; with
+    /// `section` (the sketch's frame), where its plane cuts the element
+    /// instead (`section` in the record). Err with the reason when the body
+    /// has no such element.
     fn body_source(
         &mut self,
         object: &str,
         kind: ElementKind,
         index: usize,
         component: ComponentUid,
+        section: Option<&SketchFrame>,
     ) -> Result<(Value, Vec<Curve3>), String> {
         let prefix = match kind {
             ElementKind::Face => "Face",
@@ -1134,26 +1216,82 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let source = name
             .parse::<mitcad_model::TopoName>()
             .map_err(|e| format!("{name}: {e}"))?;
-        let shape = self
+        let mut shape = self
             .doc
             .body_shape(body)
+            .cloned()
             .ok_or_else(|| format!("{object}: its body is gone"))?;
-        let curves = self
-            .doc
-            .kernel()
-            .curves_of(shape, &source)
+        // FreeCAD's external geometry is of the object's own shape: an
+        // element later features of its body changed before the sketch (a
+        // face a pocket split, mitcad#998) is read as the object's last
+        // feature left the body.
+        let mut after = None;
+        if let Some(made) = self.replay.results.get(object)
+            && let Some((_, then)) = made.bodies.iter().find(|(b, _)| *b == body)
+            && let Some(last) = self
+                .replay
+                .features
+                .get(object)
+                .and_then(|f| f.last())
+                .copied()
+        {
+            let kernel = self.doc.kernel();
+            let earlier = kernel.curves_of(then, &source).unwrap_or_default();
+            let now = kernel.curves_of(&shape, &source).unwrap_or_default();
+            if !earlier.is_empty() && !same_curves(&earlier, &now) {
+                after = Some(last);
+                shape = then.clone();
+            }
+        }
+        let kernel = self.doc.kernel();
+        let mut curves = kernel
+            .curves_of(&shape, &source)
             .map_err(|e| format!("{name}: {e}"))?;
         if curves.is_empty() {
             return Err(format!("{name} has no curves"));
+        }
+        let moved = |c: &Curve3| transform_curve(c, &into);
+        // An intersection with the sketch's plane (mitcad#998): where it
+        // cuts a face, where it crosses an edge, as the model's section
+        // finds them in the body's coordinates; an element lying in the
+        // plane is itself.
+        let mut cut = false;
+        if let Some(frame) = section
+            && !lies_in(&curves.iter().map(moved).collect::<Vec<_>>(), frame)
+        {
+            let back = mitcad_model::assembly::inverse(&into);
+            let plane = mitcad_model::datum::DatumPlane {
+                origin: back.apply_point(frame.origin),
+                x_axis: back.apply_vector(frame.x_axis),
+                y_axis: back.apply_vector(frame.y_axis),
+            };
+            curves = match &source {
+                mitcad_model::TopoName::Edge(edge) => kernel
+                    .section_points(&shape, edge, &plane)
+                    .map(|found| found.into_iter().map(Curve3::Point).collect())
+                    .map_err(|e| format!("section of {name}: {e}"))?,
+                mitcad_model::TopoName::Face(face) => kernel
+                    .section_curves(&shape, Some(face), &plane)
+                    .map(|found| found.into_iter().map(|c| c.curve).collect())
+                    .map_err(|e| format!("section of {name}: {e}"))?,
+                mitcad_model::TopoName::Vertex(_) => curves,
+            };
+            if curves.is_empty() {
+                return Err(format!("the sketch's plane does not cut {name}"));
+            }
+            cut = !matches!(source, mitcad_model::TopoName::Vertex(_));
         }
         let mut record = json!({"source": name, "body": body.to_string()});
         if let Some(link) = link {
             record["link"] = link;
         }
-        Ok((
-            record,
-            curves.iter().map(|c| transform_curve(c, &into)).collect(),
-        ))
+        if cut {
+            record["section"] = json!(true);
+        }
+        if let Some(after) = after {
+            record["after"] = json!(after.to_string());
+        }
+        Ok((record, curves.iter().map(moved).collect()))
     }
 
     /// The sketches a sketch or a binder stands for: the sketch itself, or
@@ -1395,10 +1533,6 @@ impl<K: Kernel> Importer<'_, '_, K> {
             if geos.is_empty() {
                 continue;
             }
-            let what = format!(
-                "external geometry {} ({}.{})",
-                geos[0], link.object, link.element
-            );
             let element = [
                 ("Edge", ElementKind::Edge),
                 ("Vertex", ElementKind::Vertex),
@@ -1406,111 +1540,42 @@ impl<K: Kernel> Importer<'_, '_, K> {
             ]
             .into_iter()
             .find_map(|(prefix, kind)| Some((kind, element_index(&link.element, prefix)?)));
-            let defining = geos
-                .iter()
-                .any(|k| sketch.external[*k].as_ref().is_some_and(|g| g.defining));
-            // Linked: to a body's element (also another component's, through
-            // its occurrence), to an earlier sketch's curve or point (also
-            // through a binder of it, mitcad#952, mitcad#904), or to the
-            // element of a body a binder binds. Why not, for the report.
-            let mut why = "not an element".to_owned();
-            if let Some((kind, index)) = element {
-                let exists = self.sources[0].object(&link.object).is_some();
-                let attempts: Vec<Result<EntityPieces, String>> =
-                    match self.sketch_entity(&link.object, kind, index, component) {
-                        Some(found) => {
-                            let mut attempts = vec![found];
-                            // A binder of a body's result.
-                            if let Some((support, i)) =
-                                self.binder_support_element(&link.object, kind, index)
-                            {
-                                attempts.push(
-                                    self.body_source(&support, kind, i, component)
-                                        .map(|one| vec![one]),
-                                );
-                            }
-                            attempts
-                        }
-                        None if !exists => {
-                            vec![Err(format!("no object {}", link.object))]
-                        }
-                        None => vec![
-                            self.body_source(&link.object, kind, index, component)
-                                .map(|one| vec![one]),
-                        ],
-                    };
-                let mut linked = false;
-                for attempt in attempts {
-                    match attempt {
-                        Ok(pieces) => {
-                            if push_pieces(&mut out, sketch, &geos, frame, defining, &pieces) {
-                                linked = true;
-                                break;
-                            }
-                            let Some((record, _)) = pieces.first() else {
-                                continue;
-                            };
-                            let source = &record["source"];
-                            let named = match source.as_str() {
-                                Some(name) => name.to_owned(),
-                                None => format!(
-                                    "{} of the sketch {}",
-                                    source["curve"]
-                                        .as_str()
-                                        .or_else(|| source["point"].as_str())
-                                        .unwrap_or_default(),
-                                    source["sketch"].as_str().unwrap_or_default()
-                                ),
-                            };
-                            out.notes.push(format!(
-                                "{what}: its projection of {named} does not match FreeCAD's"
-                            ));
-                            why = format!("its projection of {named} does not match FreeCAD's");
-                        }
-                        Err(e) => why = e,
-                    }
+            // What the link makes (1.1's ExternalTypes, mitcad#998): its
+            // projection, its intersection with the sketch's plane, or both
+            // (FreeCAD's curves the projection's, its points the
+            // intersection's). A vertex's intersection is the vertex where it
+            // lies on the plane: its projection.
+            let parts: Vec<(Vec<usize>, bool)> = match (sketch.link_type(l), element) {
+                (_, Some((ElementKind::Vertex, _))) | (fc::ExternalType::Projection, _) => {
+                    vec![(geos.clone(), false)]
                 }
-                if linked {
-                    continue;
+                (fc::ExternalType::Intersection, _) => vec![(geos.clone(), true)],
+                (fc::ExternalType::Both, _) => {
+                    let (points, curves): (Vec<usize>, Vec<usize>) = geos.iter().partition(|k| {
+                        matches!(
+                            sketch.external[**k].as_ref().map(|g| &g.curve),
+                            Some(Curve::Point { .. })
+                        )
+                    });
+                    [(curves, false), (points, true)]
+                        .into_iter()
+                        .filter(|(part, _)| !part.is_empty())
+                        .collect()
                 }
-            }
-            // Fixed: from the stored shape (another component's moved
-            // here), else from the sketch's copy.
-            let mut projected = None;
-            if let Some((kind, index)) = element
-                && let Some((from, curves)) = self.stored_element_own(&link.object, kind, index)
-                && let Some((into, _)) = self.seen_in(from, component)
-                && !curves.is_empty()
-            {
-                let curves: Vec<Curve3> =
-                    curves.iter().map(|c| transform_curve(c, &into)).collect();
-                projected = Some(project(&curves, frame));
-            }
-            let mut result = projected.and_then(|p| map_external(sketch, &geos, &p, out.next));
-            if result.is_none() {
-                let copies: Option<Vec<Projected>> = geos
-                    .iter()
-                    .map(|k| {
-                        sketch.external[*k]
-                            .as_ref()
-                            .and_then(|g| projected_of(&g.curve))
-                    })
-                    .collect();
-                result = copies.and_then(|p| map_external(sketch, &geos, &p, out.next));
-            }
-            match result {
-                Some((made, maps)) => {
-                    out.next += made.len() as u32;
-                    push_entities(&mut out.entities, &made, defining);
-                    for (k, map) in geos.iter().zip(maps) {
-                        out.maps[*k] = Some(map);
-                    }
-                    out.dropped
-                        .push(format!("{what}: fixed in place (not linked: {why})"));
-                }
-                None => out
-                    .dropped
-                    .push(format!("{what}: could not be made (not linked: {why})")),
+            };
+            for (part, section) in parts {
+                self.external_link(
+                    &mut out,
+                    LinkInput {
+                        sketch,
+                        frame,
+                        component,
+                        link,
+                        element,
+                        geos: &part,
+                        section,
+                    },
+                );
             }
         }
         // External geometry whose link the file no longer has (FreeCAD
@@ -1542,6 +1607,152 @@ impl<K: Kernel> Importer<'_, '_, K> {
             }
         }
         out
+    }
+
+    /// One link's external geometry `geos` (mitcad#998: one part of a link
+    /// that makes both its projection and its intersection): a linked
+    /// projection or section, else fixed reference geometry, with FreeCAD's
+    /// external points and curves mapped to them.
+    fn external_link(&mut self, out: &mut External, input: LinkInput<'_>) {
+        let LinkInput {
+            sketch,
+            frame,
+            component,
+            link,
+            element,
+            geos,
+            section,
+        } = input;
+        let geos = geos.to_vec();
+        let what = format!(
+            "external geometry {} ({}.{})",
+            geos[0], link.object, link.element
+        );
+        let defining = geos
+            .iter()
+            .any(|k| sketch.external[*k].as_ref().is_some_and(|g| g.defining));
+        // Linked: to a body's element (also another component's, through
+        // its occurrence), to an earlier sketch's curve or point (also
+        // through a binder of it, mitcad#952, mitcad#904), or to the
+        // element of a body a binder binds. Why not, for the report.
+        let mut why = "not an element".to_owned();
+        if let Some((kind, index)) = element {
+            let exists = self.sources[0].object(&link.object).is_some();
+            // An intersection: where the sketch's plane cuts the element
+            // (mitcad#998).
+            let cut = section.then_some(frame);
+            let attempts: Vec<Result<EntityPieces, String>> =
+                match self.sketch_entity(&link.object, kind, index, component) {
+                    Some(found) => {
+                        let found = match cut {
+                            Some(frame) => found.and_then(|pieces| {
+                                sketch_sections(pieces, kind, frame).ok_or_else(|| {
+                                    format!("the sketch's plane cuts no curve of {}", link.object)
+                                })
+                            }),
+                            None => found,
+                        };
+                        let mut attempts = vec![found];
+                        // A binder of a body's result.
+                        if let Some((support, i)) =
+                            self.binder_support_element(&link.object, kind, index)
+                        {
+                            attempts.push(
+                                self.body_source(&support, kind, i, component, cut)
+                                    .map(|one| vec![one]),
+                            );
+                        }
+                        attempts
+                    }
+                    None if !exists => {
+                        vec![Err(format!("no object {}", link.object))]
+                    }
+                    None => vec![
+                        self.body_source(&link.object, kind, index, component, cut)
+                            .map(|one| vec![one]),
+                    ],
+                };
+            let mut linked = false;
+            for attempt in attempts {
+                match attempt {
+                    Ok(pieces) => {
+                        if push_pieces(out, sketch, &geos, frame, defining, &pieces) {
+                            linked = true;
+                            break;
+                        }
+                        let Some((record, _)) = pieces.first() else {
+                            continue;
+                        };
+                        let source = &record["source"];
+                        let named = match source.as_str() {
+                            Some(name) => name.to_owned(),
+                            None => format!(
+                                "{} of the sketch {}",
+                                source["curve"]
+                                    .as_str()
+                                    .or_else(|| source["point"].as_str())
+                                    .unwrap_or_default(),
+                                source["sketch"].as_str().unwrap_or_default()
+                            ),
+                        };
+                        let made = if record["section"] == true {
+                            "section"
+                        } else {
+                            "projection"
+                        };
+                        out.notes.push(format!(
+                            "{what}: its {made} of {named} does not match FreeCAD's"
+                        ));
+                        why = format!("its {made} of {named} does not match FreeCAD's");
+                    }
+                    Err(e) => why = e,
+                }
+            }
+            if linked {
+                return;
+            }
+        }
+        // Fixed: from the stored shape (another component's moved
+        // here), else from the sketch's copy.
+        let mut projected = None;
+        if let Some((kind, index)) = element
+            && let Some((from, curves)) = self.stored_element_own(&link.object, kind, index)
+            && let Some((into, _)) = self.seen_in(from, component)
+            && !curves.is_empty()
+        {
+            let mut curves: Vec<Curve3> =
+                curves.iter().map(|c| transform_curve(c, &into)).collect();
+            if section && !lies_in(&curves, frame) {
+                curves = crossings(&curves, frame);
+            }
+            projected = Some(project(&curves, frame));
+        }
+        let mut result = projected.and_then(|p| map_external(sketch, &geos, &p, out.next));
+        if result.is_none() {
+            let copies: Option<Vec<Projected>> = geos
+                .iter()
+                .map(|k| {
+                    sketch.external[*k]
+                        .as_ref()
+                        .and_then(|g| projected_of(&g.curve))
+                })
+                .collect();
+            result = copies.and_then(|p| map_external(sketch, &geos, &p, out.next));
+        }
+        match result {
+            Some((made, maps)) => {
+                out.next += made.len() as u32;
+                push_entities(&mut out.entities, &made, defining);
+                for (k, map) in geos.iter().zip(maps) {
+                    out.maps[*k] = Some(map);
+                }
+                out.dropped
+                    .push(format!("{what}: fixed in place (not linked: {why})"));
+            }
+            None => out
+                .dropped
+                .push(format!("{what}: could not be made (not linked: {why})")),
+        }
     }
 
     /// A binder of one whole sketch as a feature's sketch (a `Profile`, a

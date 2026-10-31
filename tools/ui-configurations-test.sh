@@ -5,9 +5,10 @@
 # check-all sources: core/model/src/document/configurations.rs core/model-api/src/configurations.rs
 # check-all sources: app/configurations/RulesPage.cpp app/configurations/RuleCanvas.cpp
 # Configurations (mitcad#807) through the real UI, on a design mitcad-cli
-# makes: a text parameter Color ('Black' or 'White', White) and Length
-# (300 mm … 2000 mm, step 10 mm, 1500 mm) that a 20 x 20 mm extrusion
-# takes as its distance; no configuration table yet.
+# makes: a text parameter Color ('Black' or 'White', White), Length
+# (300 mm … 2000 mm, step 10 mm, 1500 mm) and Extra (0 mm): a 20 x 20 mm
+# extrusion takes Length + Extra as its distance; no configuration table
+# yet.
 #   1. Configurations…: each tab's lead line and the empty states of the
 #      Options list, the Rows sheet and the Rules canvas (mitcad#967) are
 #      logged; Add Option makes Color and then Length options.
@@ -22,6 +23,10 @@
 #      the bar's range ends at 1000 mm.
 #   5. Rows: a new row (Black, 1000 mm) whose Length is typed as 1500 is
 #      refused with the rule's name.
+#   6. Rows: Add Column… (mitcad#999) makes Extra a column of the table,
+#      which becomes closed, each row's value 0 mm; Row1's Extra typed as
+#      100 and Row1 applied: the body is 900 mm long. Remove Column takes
+#      it out again, and the parameter stays (Add Column offers it).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-configurations-test.sh [screenshot.png]
@@ -41,10 +46,11 @@ cat > "$WORK/model.json" << EOF
    "values": ["'Black'", "'White'"]},
   {"cmd": "add_parameter", "name": "Length", "unit": "mm", "expression": "1500 mm",
    "min": "300 mm", "max": "2000 mm", "step": "10 mm"},
+  {"cmd": "add_parameter", "name": "Extra", "unit": "mm", "expression": "0 mm"},
   {"cmd": "sketch.create"},
   {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 20},
   {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "$R"}],
-    "extent": {"type": "distance", "distance": "Length"}, "operation": "new_body"}}
+    "extent": {"type": "distance", "distance": "Length + Extra"}, "operation": "new_body"}}
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
@@ -96,6 +102,13 @@ add_option() {
   ui_key Return
 }
 
+# open_add_column: Add Column... (mitcad#999), the dialog focused.
+open_add_column() {
+  ui_focus_dialog '^Configurations$'
+  ui_click_logged "Configurations add column"
+  ui_focus_dialog '^Add Column$'
+}
+
 ui_start_display
 ui_start_app --open "$FILE" --no-native-dialogs
 ui_expect_log "Browser Root at" "the design is open"
@@ -122,11 +135,11 @@ ui_expect_new "Configurations empty Rules: No rules yet. A rule is, for example:
 ui_expect_new "Configurations add option at" "Add Option's place is logged"
 ui_mark
 ui_step "Add Option: Color"              add_option
-ui_expect_new "Add Option dialog opened: Color, Length, New Parameter" "the user parameters are offered"
+ui_expect_new "Add Option dialog opened: Color, Length, Extra, New Parameter" "the user parameters are offered"
 ui_expect_new "Configurations added option Color" "Color is an option"
 ui_mark
 ui_step "Add Option: Length"             add_option
-ui_expect_new "Add Option dialog opened: Length, New Parameter" "Color is no longer offered"
+ui_expect_new "Add Option dialog opened: Length, Extra, New Parameter" "Color is no longer offered"
 ui_expect_new "Configurations added option Length" "Length is an option"
 ui_expect_new "Configurations options: Color (Black, White) = White; Length (300 mm" \
   "two options in their order, with their domains"
@@ -209,6 +222,41 @@ ui_mark
 ui_step "Row2 Length = 1500"             edit_row_cell "Row2 Length" "1500"
 ui_expect_new "Configurations row Row2 Length: 1500 refused: " "the value is refused"
 ui_expect_new "Black is short" "with the rule's name"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+echo "--- 6. A parameter column (mitcad#999): added, a row's value typed, applied, removed"
+ui_mark
+ui_step "Add Column…"                    open_add_column
+ui_expect_new "Add Column dialog opened: Extra, New Parameter" "the user parameters that are no option are offered"
+ui_step "OK: Extra"                      ui_key Return
+ui_expect_new "Configurations: column Extra added" "Extra is a column"
+ui_expect_new "Configurations rows: closed, " "the table is closed with it"
+ui_expect_new "Row1: Color = White, Length = 800 mm, Extra = 0 mm; Row2: Color = Black, Length = 1000 mm, Extra = 0 mm" \
+  "each row has Extra's current value"
+ui_expect_new "Configurations row Row1 Extra at" "the column's cells' places are logged"
+ui_mark
+ui_step "Row1 Extra = 100"               edit_row_cell "Row1 Extra" "100"
+ui_expect_new "Configurations row Row1 Extra: 100" "the cell is a model command"
+ui_expect_new "Row1: Color = White, Length = 800 mm, Extra = 100 mm" "Row1 sets Extra to 100 mm"
+ui_mark
+ui_focus_dialog '^Configurations$'
+ui_step "select Row1"                    ui_click_logged "Configurations row Row1 Name"
+ui_step "Apply"                          ui_click_logged "Configurations apply"
+ui_expect_new "Configurations applied Row1" "Row1 applied"
+expect_volume 360000 "20 x 20 x (800 + 100): the design follows the row's Extra"
+ui_mark
+ui_focus_dialog '^Configurations$'
+ui_step "a cell of Extra"                ui_click_logged "Configurations row Row1 Extra"
+ui_step "Remove Column"                  ui_click_logged "Configurations remove column"
+ui_expect_new "Configurations: column Extra removed" "the column is out"
+ui_expect_new "Row1: Color = White, Length = 800 mm; Row2: Color = Black, Length = 1000 mm" \
+  "the rows no longer set Extra"
+ui_mark
+ui_step "Add Column… again"              open_add_column
+ui_expect_new "Add Column dialog opened: Extra, New Parameter" "the parameter stays: it is offered again"
+ui_step "cancel (Esc)"                   ui_key Escape
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Configurations: column .* added" &&
+  ui_fail "the cancelled Add Column added a column"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 
 ui_finish "UI configurations test"

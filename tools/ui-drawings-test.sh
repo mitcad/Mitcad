@@ -6,6 +6,7 @@
 # check-all sources: core/model-api/src/drawing_tables.rs core/model-api/src/drawing_templates.rs app/print
 # check-all sources: core/dwg/src/write.rs
 # check-all sources: core/model-api/src/cut_sheets.rs app/browser/DocumentHost.hpp
+# check-all sources: app/framework/Ribbon.cpp app/framework/FloatingLayout.cpp app/framework/GlassCard.cpp
 # Drawings kept in the design (mitcad#707) through the real UI, in the
 # Docked layout, on a 40 x 30 x 20 block with a 10 mm hole through it from
 # the top that mitcad-cli makes (Body1, F2.b0):
@@ -13,6 +14,11 @@
 #     template, A3 landscape, first angle: the template's), Drawing1 in the
 #     root's Drawings folder, its sheet over the 3D view, its title block
 #     the design's, the tools in captioned groups; Base View on at once.
+#     The drawing takes the whole workspace (mitcad#1008): the ribbon's
+#     DRAWING tab alone (Solid and Build hidden) with Close Drawing and the
+#     tools' groups, the drawing's area the 3D view's; Close Drawing brings
+#     back Solid and Build with the tab the drawing was opened from shown
+#     (Solid, then Build).
 #   - Model shortcuts (E, H) on the sheet do nothing (mitcad#725).
 #   - Base View: the front view where the sheet is clicked, at 2:1; then
 #     Projected View: a click right of it places the view projected from
@@ -58,7 +64,9 @@
 #     title block's material follows; Add Revision: the revision table and
 #     the title block show it; Export… PDF with them.
 #   - An assembly mitcad-cli makes (Component1 placed twice, Component2
-#     once), in the Floating layout: a front view, a parts list with its
+#     once), in the Floating layout (the DRAWING tab's group cards, the sheet
+#     over the whole view, no card but the browser's, mitcad#1008): a
+#     front view, a parts list with its
 #     balloons (undone), a parts list without and a balloon on
 #     Component1's second placement; the front view dragged with its parts
 #     list selected: the list moves too (mitcad#752), undone; Export… SVG
@@ -68,7 +76,8 @@
 #   - File › Export Drawing twice: a new drawing, a note added to it by
 #     hand, then the same drawing written as it is, the note kept (mitcad#725).
 #   - A cut sheet (mitcad#853) on a plate and a disk mitcad-cli makes:
-#     Create Drawing's Kind Cut Sheet (600 x 300), Add Parts… with both
+#     Create Drawing's Kind Cut Sheet (600 x 300) on its CUT SHEET tab
+#     (mitcad#1008), Add Parts… with both
 #     bodies, Export… DXF: the outlines on CUT_OUTER, the disk a circle.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -191,6 +200,45 @@ settled() {
   ui_fail "the place of '$1' did not settle"
 }
 
+# area_is_view: the drawing's area, as logged last ("Drawing area x,y WxH,
+# view x,y WxH"), is the 3D view's (mitcad#1008: edge to edge).
+area_is_view() {
+  local line area view
+  for _ in $(seq 1 20); do
+    line=$(grep -o "Drawing area .*" "$UI_LOG" | tail -1)
+    area=$(sed 's/^Drawing area \(.*\), view .*$/\1/' <<< "$line")
+    view=$(sed 's/^.*, view //' <<< "$line")
+    if [ -n "$line" ] && [ "$area" = "$view" ]; then
+      echo "ok   the drawing takes the whole view: $area"
+      return 0
+    fi
+    ui_sync
+    sleep 0.2
+  done
+  ui_fail "the drawing's area is not the view's: ${line:-none logged}"
+}
+
+# floating_cards with|without name: the last "Floating cards" line, waited
+# for, has the card or has not (mitcad#1008: while a drawing is open only
+# the browser's card is shown).
+floating_cards() {
+  local line
+  for _ in $(seq 1 30); do
+    line=$(grep -o "Floating cards: .*" "$UI_LOG" | tail -1)
+    if [ "$1" = with ] && grep -qF " $2 " <<< "$line"; then
+      echo "ok   $2 shown"
+      return 0
+    fi
+    if [ "$1" = without ] && [ -n "$line" ] && ! grep -qF " $2 " <<< "$line"; then
+      echo "ok   $2 hidden"
+      return 0
+    fi
+    ui_sync
+    sleep 0.2
+  done
+  ui_fail "the cards are not $1 $2: $line"
+}
+
 # no_refusal: no drawing command refused since the mark.
 no_refusal() {
   grep -q "Drawing command refused" <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "a drawing command was refused"
@@ -221,6 +269,13 @@ for group in Create Geometry Dimensions Text Symbols Tables Export; do
   ui_expect_new "Drawing group $group at" "the $group group's caption"
 done
 ui_expect_new "Drawing sheet view " "the sheet placed"
+# The drawing takes the whole workspace (mitcad#1008): the ribbon's DRAWING
+# tab alone, Close Drawing on it, the sheet's area the 3D view's.
+ui_expect_new "Ribbon tabs: DRAWING (shown DRAWING)" "the DRAWING tab alone: Solid and Build hidden"
+ui_expect_new "Ribbon tab DRAWING at" "the DRAWING tab shown"
+ui_expect_new "Ribbon button drawing.close at" "Close Drawing on the ribbon"
+ui_expect_new "Drawing Close Drawing at" "its place logged as the drawing's"
+area_is_view
 ui_expect_log "Browser Root/Drawings/Drawing1 at" "the browser lists it under Drawings"
 ui_expect_log "Drawing title block (iso): TITLE=block" "the template's title block, the design's name"
 # A new drawing starts with Base View (mitcad#725).
@@ -674,6 +729,8 @@ before=$(view_y 1)
 ui_mark
 ui_step "Close Drawing"                    ui_click_logged "Drawing Close Drawing"
 ui_expect_new "Drawing closed" "the 3D view again"
+# Solid and Build back, Solid shown, as before the drawing (mitcad#1008).
+ui_expect_new "Ribbon tabs: SOLID, BUILD (shown SOLID)" "the model's tabs back, the one it was opened from shown"
 ui_mark
 ui_step "edit Extrude1 (double-click)"     ui_double_click_logged "Timeline Extrude1"
 ui_expect_new " with Extrude" "editing Extrude1"
@@ -705,9 +762,14 @@ ui_mark
 ui_step "Extrude2's menu (the hole)"       ui_click_logged "Timeline Extrude2" 3
 ui_step "choose Suppress Features"         ui_menu_choose "Suppress Features"
 ui_expect_new "Suppressed Extrude2" "the hole suppressed"
+# Opened from the Build tab, the drawing closes back to it (mitcad#1008).
+ui_mark
+ui_step "the Build tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_expect_new "Ribbon BUILD/PROFILE at" "the Build tab shown"
 ui_mark
 ui_step "open Drawing1 (double-click)"     ui_double_click_logged "Browser Root/Drawings/Drawing1"
 ui_expect_new "Drawing opened: D1 Drawing1, sheet 1 of 1" "the drawing opened again"
+ui_expect_new "Ribbon tabs: DRAWING (shown DRAWING)" "the DRAWING tab alone"
 ui_expect_new "Drawing annotations drawn:" "its annotations"
 annotations_drawn | grep -qF "2 broken" || ui_fail "the diameter of the hole that is gone is not broken: $(annotations_drawn)"
 annotations_drawn | grep -qF "1 = 35 ±0.1" || ui_fail "the dimension of the block broke too: $(annotations_drawn)"
@@ -720,6 +782,7 @@ echo "--- Saved and opened again"
 ui_mark
 ui_step "back to the model (Close Drawing)" ui_click_logged "Drawing Close Drawing"
 ui_expect_new "Drawing closed" "closed"
+ui_expect_new "Ribbon tabs: SOLID, BUILD (shown BUILD)" "back on the Build tab it was opened from"
 ui_focus_main
 ui_step "save (Ctrl+S)"                    ui_key ctrl+s
 ui_expect_log "Saved $FILE" "saved"
@@ -835,8 +898,15 @@ ui_focus_dialog '^Create Drawing$'
 ui_step "OK"                               ui_key Return
 ui_focus_main
 ui_expect_new "Drawing opened: D1 Drawing1, sheet 1 of 1" "its sheet over the view"
-ui_expect_new "Drawing tool Parts List at" "the tables' tools on the bar"
+ui_expect_new "Drawing tool Parts List at" "the tables' tools on the ribbon"
 ui_expect_new "Drawing tool: Base View" "Base View on for the new drawing"
+# In the Floating layout too (mitcad#1008): the DRAWING tab's group cards,
+# the sheet over the whole view, of the cards only the browser's.
+ui_expect_new "Ribbon tabs: DRAWING (shown DRAWING)" "the DRAWING tab alone"
+area_is_view
+floating_cards without timelineDock
+floating_cards with browserDock
+floating_cards with ribbonGroup_DRAWING/CLOSE_DRAWING
 ui_mark
 ui_step "click the sheet at 120, 120"      sheet_click 120 120
 ui_expect_new "Drawing view 1 at" "the front view drawn"
@@ -956,6 +1026,9 @@ ui_mark
 settled "Drawing Close Drawing"
 ui_step "Close Drawing"                    ui_click_logged "Drawing Close Drawing"
 ui_expect_new "Drawing closed" "the 3D view again"
+# The model's tabs and the cards back (mitcad#1008).
+ui_expect_new "Ribbon tabs: SOLID, BUILD (shown SOLID)" "Solid and Build back"
+floating_cards with timelineDock
 ui_focus_main
 ui_mark
 ui_step "Export Drawing (search)"          ui_command "Export Drawing"
@@ -1027,7 +1100,11 @@ ui_expect_new "Create Drawing dialog: cut sheet 600 x 300" "a cut sheet of 600 x
 ui_expect_new "Drawing created: D1 CutSheet1 in C0" "CutSheet1 in the root's folder"
 ui_expect_new "Drawing opened: D1 CutSheet1, sheet 1 of 1" "its sheet over the view"
 ui_expect_new "Drawing sheet drawn: 0 views" "no parts yet"
-ui_expect_new "Drawing Add Parts at" "Add Parts… on the bar"
+# A cut sheet's tab of its own (mitcad#1008): Add Parts… and its Export.
+ui_expect_new "Ribbon tabs: CUT SHEET (shown CUT SHEET)" "the CUT SHEET tab alone"
+ui_expect_new "Ribbon button drawing.add_parts at" "Add Parts… on the ribbon"
+ui_expect_new "Drawing Add Parts at" "its place logged as the drawing's"
+area_is_view
 ui_mark
 settled "Drawing Add Parts"
 ui_step "Add Parts…"                       ui_click_logged "Drawing Add Parts"

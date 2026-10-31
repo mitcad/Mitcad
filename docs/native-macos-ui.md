@@ -27,6 +27,46 @@ Qt remains the normal macOS build and release default. Explicit native test
 builds do not change that policy. The interaction sections below describe
 implementation and validation progress, not an assertion of complete parity.
 
+## Coverage
+
+New UI reaches the AppKit frontend without a native counterpart of its own
+when it is built from declarative commands ([COMMANDS.md](../app/COMMANDS.md))
+or from Qt's own controls: `createNativeCommandForm` presents the commands,
+and the generic bridge (`renderWidget` in `NativeDialogs.mm`) maps the
+controls of dialogs, cards and panels. Two things escape the bridge, and
+two checks keep them from being lost without a word:
+
+- A widget that paints itself (overrides `paintEvent`): the bridge shows
+  only its children. Every such class of `app/` has a line in
+  [native-coverage.txt](../app/platform/macos/native-coverage.txt) saying how
+  the AppKit frontend shows it: `native` (an AppKit view presents it),
+  `replaced` (Qt chrome the AppKit frontend replaces), `shared` (drawn by Qt
+  over the 3D view in both frontends) or `pending` (not shown yet). Each
+  `native` and `replaced` line names its AppKit code, which must exist.
+  `pending` lines are the gaps to close before AppKit becomes the only macOS
+  frontend. What such a widget paints can often be given to the bridge as
+  data (`app/platform/NativeDialogs.hpp`): an item view's hint while it has
+  no rows is its `NativeEmptyTextProperty`, a colour button's swatch its
+  `NativeColorFieldProperty`.
+- A dialog, message box or menu that Qt shows itself (`QDialog::exec`,
+  `QMessageBox::warning`, `QFileDialog::getOpenFileName`, `QMenu::exec`):
+  it goes through `app/framework/Dialogs.hpp` instead (`execDialog`,
+  `sheetWarning`, `dialogOpenFileName`, `execMenu`, ...), which hands it to
+  the AppKit presenter.
+
+The ctest `repo.native-coverage` (`tools/native-coverage`) checks both from
+the source text on every platform, so a change made on Linux or Windows
+meets it in its own scoped check. It reads the build's macOS branches only
+(`#ifdef Q_OS_WIN` and the `#else` of `#ifdef Q_OS_MACOS` are left out)
+and does not see painting done in event filters or item delegates.
+
+At run time the bridge logs `Native presenter: unpresented widget <class>`
+for a widget it presents as nothing: one of a class other than plain
+`QWidget` or `QFrame` with no control it maps, no layout and no children.
+Every macOS UI test (`ui_run_app` in `tools/ui-macos-lib.sh`, so the parity
+audit too) fails on that line unless the coverage list marks the class
+`pending`.
+
 ## Building the experimental frontend
 
 ```bash
@@ -71,6 +111,11 @@ the frontend is selected by default. `--ui=native` selects it explicitly;
   on macOS 26 and newer, with NSVisualEffectView on earlier supported systems.
   Rounded edges and shadows stay within the document window, with
   unobstructed canvas gaps around the cards.
+- The orientation cube stays the shared OCCT one. Its arrows, which turn the
+  view to the face beside the one in sight or roll it by 90 degrees while
+  a face is in sight, are round AppKit buttons in the cards' material at
+  the Qt arrows' places, with the same SF Symbols and tooltips, over the
+  canvas and under the cards.
 - Trackpad magnification, rotation and smart zoom enter through the native
   document window and reach the shared CAD viewer with explicit local
   coordinates. A gesture starting on a floating card stays outside the
@@ -954,7 +999,9 @@ canvas, cube, Browser and history menus, and tests both cancellation and
 selected actions. A stale viewport press must already be cleared when a
 native menu closes, before hover recovery could hide the failure. Browser
 visibility and feature suppression actions are verified against owner
-logs and actual model volumes.
+logs and actual model volumes. Face on, real presses on the native cube
+arrows turn and roll the camera as the Qt arrows do in
+`tools/ui-view-test.sh`, and the arrows go once the view is off a face.
 
 The native cancellation test exercises stale previews, Return during a
 pending preview, cancellation during commit, preservation of a prior redo
@@ -1215,6 +1262,10 @@ input interval, and drag sources. Selection scrolls into view; Return
 inserts it, while Tab keeps ordinary focus traversal. The canvas accepts
 palette drops, block moves,
 context menus and Delete. Both panes scroll independently.
+On a new design the native Options tree and Rows sheet show the shared
+views' hints (`NativeEmptyTextProperty`) as placeholder-coloured labels in
+their rows' top left corner, and hide them while there are rows
+(`app.ui-macos-native-configuration-parity`).
 The pointer regression selects a block's exposed word when its centre is
 covered by a child field. The in-process driver's optional normalized click
 point retains the same AppKit hit test and coverage checks as centre clicks.

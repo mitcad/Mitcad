@@ -387,6 +387,15 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
       m_mcpDocumentId(QUuid::createUuid().toString(QUuid::WithoutBraces)),
       m_viewer(new OcctViewer(this)), m_statusLabel(new QLabel(this)),
       m_rendererLabel(new QLabel(this)) {
+  // What a fit frames in a view with nothing to fit, and a new design's
+  // first view (mitcad#1000): the box of the origin planes, as showDatums
+  // draws them (kDatumSize, centred on the origin).
+  {
+    Bnd_Box originBox;
+    const double half = kDatumSize / 2.0;
+    originBox.Update(-half, -half, -half, half, half, half);
+    m_viewer->setOriginBox(originBox);
+  }
   m_documentSession->setWaitHandler([this](const QString& label, ModelJob& job, const QElapsedTimer& clock,
                                           bool& logged) { waitForJob(label, job, clock, logged); });
   // Section Analysis off the UI thread (mitcad#438): its rounds read only
@@ -628,9 +637,11 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
 #endif
 
   recompute();
-  // The untitled design at the start is a new design too (mitcad#898).
+  // The untitled design at the start is a new design too (mitcad#898),
+  // framed as every new design is (mitcad#1000).
   if (!demo) {
     logNewDesignActive();
+    m_viewer->frameNewDesign();
   }
   showHint(m_registry->shortcutWarnings().isEmpty()
                ? tr("Create a sketch to start modelling. %1 finds commands.")
@@ -1292,7 +1303,11 @@ void MainWindow::createRibbon() {
   QAction* sketchFilter = createSketchFilterAction();
   m_ribbon->addGroupExtras(QStringLiteral("SKETCH"), QStringLiteral("SELECT"),
                            {windowAction, sketchFilter, clearAction}, {sketchFilter});
+  // A cut sheet's tab (mitcad#1008).
+  addDrawingRibbonExtras();
   m_ribbon->build();
+  // A group menu row's Change Keyboard Shortcut… (mitcad#1001).
+  connect(m_ribbon, &Ribbon::shortcutRequested, this, [this](const QString& id) { editShortcuts(id); });
   if (m_nativeUi) {
     // AppKit presents the commands; retain only the shared filter state.
     m_ribbon->hide();
@@ -1717,8 +1732,9 @@ void MainWindow::trigger(const QString& id) {
   }
   m_locks->activity();
   // A command of the 3D view leads back to the model from a drawing
-  // (mitcad#707); the menus' commands (Undo, Save, Export) do not.
-  if (def->kind == CommandDef::Kind::Feature || !def->tab.isEmpty()) {
+  // (mitcad#707); the menus' commands (Undo, Save, Export) and the
+  // drawing's own tabs' (mitcad#1008) do not.
+  if (def->kind == CommandDef::Kind::Feature || (!def->tab.isEmpty() && !isDrawingCommand(*def))) {
     leaveDrawing();
   }
   if (def->kind == CommandDef::Kind::Feature) {
@@ -2109,8 +2125,11 @@ void MainWindow::openCommandSearch() {
   m_search->popup(m_viewer->mapToGlobal(m_viewer->rect().center()));
 }
 
-void MainWindow::editShortcuts() {
+void MainWindow::editShortcuts(const QString& id) {
   ShortcutDialog dialog(*m_registry, this);
+  if (!id.isEmpty()) {
+    dialog.showCommand(id);
+  }
   prepareModal(&dialog);
   if (execDialog(&dialog) == QDialog::Accepted) {
     updateActions(); // refresh the native menu and its effective shortcut list
@@ -2626,6 +2645,7 @@ bool MainWindow::reportRecompute(const QJsonObject& result, double milliseconds)
   }
   const int recomputed = result.value(QStringLiteral("recomputed")).toInt();
   setErrorStyleSheet(m_statusLabel, QString());
+  m_statusIsHint = true;
   m_statusLabel->setText(tr("Recomputed %n feature(s) in %1 ms", nullptr, recomputed)
                              .arg(milliseconds, 0, 'f', 1));
   qDebug().noquote() << m_statusLabel->text();
@@ -4053,11 +4073,13 @@ void MainWindow::setOriginShown(bool shown) {
 void MainWindow::showHint(const QString& message) {
   setErrorStyleSheet(m_statusLabel, QString());
   m_statusLabel->setText(message);
+  m_statusIsHint = true;
   updateStatusPill(false);
 }
 
 void MainWindow::showWarning(const QString& message) {
   // A warning, not an error (mitcad#655: 3D Print's export warnings).
+  m_statusIsHint = false;
   setWarningStyleSheet(m_statusLabel);
   m_statusLabel->setText(message);
   updateStatusPill(false);
@@ -4065,6 +4087,7 @@ void MainWindow::showWarning(const QString& message) {
 }
 
 void MainWindow::showError(const QString& message) {
+  m_statusIsHint = false;
   setErrorStyleSheet(m_statusLabel);
   m_statusLabel->setText(message);
   updateStatusPill(true);
@@ -5895,7 +5918,13 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
     logNewDesignActive();
   }
   if (!m_keepView) {
-    m_viewer->fitAll();
+    // A new design is empty: its first view frames the origin the same way
+    // whatever the window's size and the design before (mitcad#1000).
+    if (newDesign) {
+      m_viewer->frameNewDesign();
+    } else {
+      m_viewer->fitAll();
+    }
   }
   // Its edit lock (mitcad#89): taken, or the same design's kept.
   m_locks->designOpened(path, readOnlyOpen);

@@ -50,6 +50,8 @@ impl FeatureInfo for SketchDef {
             if let Some(body) = projection.body {
                 references.body(body);
             }
+            // The earlier feature whose state it reads (mitcad#998).
+            references.features.extend(projection.after);
         }
         references
     }
@@ -90,6 +92,10 @@ impl FeatureInfo for SketchDef {
             }
             if let Some(body) = projection.body {
                 ctx.body(body)?;
+            }
+            if let Some(after) = projection.after {
+                ctx.feature(after)
+                    .map_err(|e| format!("projection of {}: {e}", projection.source))?;
             }
         }
         Ok(())
@@ -133,6 +139,7 @@ impl LinkedReferences for SketchDef {
                 if let Some(body) = projection.body {
                     features.insert(body.feature);
                 }
+                features.extend(projection.after);
                 out.extend(features.into_iter().map(|uid| (uid, link)));
             }
         }
@@ -266,7 +273,17 @@ fn source_curves<K: Kernel>(
     let source = match &projection.source {
         ProjectionSource::Topo(name) => name,
         ProjectionSource::Sketch(entity) => {
-            return sketch_entity_curves(entity, projection.link.as_ref(), ctx);
+            let curves = sketch_entity_curves(entity, projection.link.as_ref(), ctx)?;
+            if !projection.section {
+                return Ok(curves);
+            }
+            // Where the sketch's plane crosses the curve (mitcad#998).
+            let normal = frame.normal();
+            return Ok(curves
+                .iter()
+                .flat_map(|c| project::plane_crossings(c, frame.origin, normal))
+                .map(Curve3::Point)
+                .collect());
         }
     };
     let what = if projection.section {
@@ -295,9 +312,15 @@ fn source_curves<K: Kernel>(
             None => plane,
         }
     });
-    let shapes = match projection.body {
-        Some(body) => vec![(body, ctx.body_in(component, body)?)],
-        None => ctx.bodies_in(component),
+    let shapes = match (projection.body, projection.after) {
+        // As an earlier feature left the body (mitcad#998).
+        // A body no feature up to it set: a lost source.
+        (Some(body), Some(after)) => match ctx.body_after(after, body) {
+            Some(shape) => vec![(body, shape)],
+            None => return Ok(Vec::new()),
+        },
+        (Some(body), None) => vec![(body, ctx.body_in(component, body)?)],
+        (None, _) => ctx.bodies_in(component),
     };
     let curves_of = |kernel: &K, shape: &K::Shape, name: &TopoName| match &plane {
         Some(plane) => match name {

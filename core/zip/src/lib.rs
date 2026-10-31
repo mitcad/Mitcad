@@ -141,18 +141,21 @@ pub const MAX_EXPANSION_RATIO: u64 = 1032;
 /// into a dozen bytes.
 const RATIO_CHECK_FLOOR: u64 = 1 << 20;
 
+// The positions come from the file (a ZIP64 locator's or extra field's
+// 64-bit offsets), so the end of a field is added with a check: a
+// position near the top of the address space is no field (mitcad#939).
 fn u16_at(data: &[u8], pos: usize) -> Option<u16> {
-    data.get(pos..pos + 2)
+    data.get(pos..pos.checked_add(2)?)
         .map(|b| u16::from_le_bytes([b[0], b[1]]))
 }
 
 fn u32_at(data: &[u8], pos: usize) -> Option<u32> {
-    data.get(pos..pos + 4)
+    data.get(pos..pos.checked_add(4)?)
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
 fn u64_at(data: &[u8], pos: usize) -> Option<u64> {
-    data.get(pos..pos + 8).map(|b| {
+    data.get(pos..pos.checked_add(8)?).map(|b| {
         let mut a = [0u8; 8];
         a.copy_from_slice(b);
         u64::from_le_bytes(a)

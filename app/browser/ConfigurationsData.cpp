@@ -475,4 +475,39 @@ QString keyOption(const QString& table, const QString& column, const QStringList
   return options.isEmpty() ? QString() : options.first();
 }
 
+QStringList columnCandidates(const Table& table, const QStringList& userParameters) {
+  QStringList out;
+  for (const QString& name : userParameters) {
+    if (!table.options.contains(name) && !table.parameters.contains(name)) {
+      out << name;
+    }
+  }
+  return out;
+}
+
+Table withColumn(const Table& table, const QString& parameter, const QString& expression) {
+  if (parameter.isEmpty() || table.options.contains(parameter) || table.parameters.contains(parameter)) {
+    return table;
+  }
+  Table out = table;
+  out.closed = true; // an open table's rows set options only
+  out.parameters.append(parameter);
+  for (Row& row : out.rows) {
+    row.setValue(parameter, expression);
+  }
+  return out;
+}
+
+Table withoutColumn(const Table& table, const QString& parameter) {
+  if (!table.parameters.contains(parameter)) {
+    return table;
+  }
+  Table out = table;
+  out.parameters.removeAll(parameter);
+  for (Row& row : out.rows) {
+    row.setValue(parameter, QString());
+  }
+  return out;
+}
+
 } // namespace mitcad::configurations

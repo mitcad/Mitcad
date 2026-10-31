@@ -1030,6 +1030,15 @@ impl CopyReferences<'_> {
                     copy.body = original
                         .body
                         .map(|b| if internal { self.body(b) } else { b });
+                    // The earlier feature's state it is read in (mitcad#998):
+                    // that feature's copy when it is copied too.
+                    copy.after = original.after.map(|f| {
+                        if internal {
+                            self.uids.get(&f).copied().unwrap_or(f)
+                        } else {
+                            f
+                        }
+                    });
                 }
             }
             _ => {}

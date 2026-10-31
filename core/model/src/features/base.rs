@@ -28,7 +28,7 @@ use super::{
     References, is_false,
 };
 use crate::ids::BodyUid;
-use crate::kernel::{BooleanOp, Kernel};
+use crate::kernel::{BooleanOp, BooleanPiece, Kernel};
 use crate::parameters::ParamId;
 use crate::sha256::Sha256;
 
@@ -283,9 +283,10 @@ const NEGLIGIBLE: f64 = 1e-6;
 
 /// The body changes of a join, cut or intersect of a tool with participant
 /// bodies, as an extrusion makes them: joined bodies merge into the first
-/// participant they touch and tool solids that touch nothing become new
-/// bodies; a cut or intersection keeps each body for its first piece, makes
-/// new bodies of the other pieces and removes a body it leaves nothing of.
+/// participant they touch (with every solid of theirs, [`join_pieces`])
+/// and tool solids that touch nothing become new bodies; a cut or
+/// intersection keeps each body for its first piece, makes new bodies of
+/// the other pieces and removes a body it leaves nothing of.
 /// `what` names the tool in errors ("the base feature does not touch ...").
 pub(crate) fn apply_tool<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
@@ -309,16 +310,14 @@ pub(crate) fn apply_tool<K: Kernel>(
         }
         return Err(format!("there is no body to {verb}"));
     }
-    // A cut or intersection works on each lump of a body of several (its
-    // disjoint solids, as a combine of bodies apart makes it), so that the
-    // body keeps its lumps and only a lump the tool splits gives new bodies
-    // (mitcad#658).
+    // A join, cut or intersection works on each lump of a body of several
+    // (its disjoint solids, as a combine of bodies apart makes it), so that
+    // the body keeps its lumps and only a lump the tool splits gives new
+    // bodies (mitcad#658); a join keeps the lumps it does not reach
+    // (mitcad#1003).
     let lumps: Vec<Vec<K::Shape>> = participants
         .iter()
-        .map(|(_, s)| match op {
-            BooleanOp::Join => vec![s.clone()],
-            BooleanOp::Cut | BooleanOp::Intersect => body_lumps(ctx.kernel, s),
-        })
+        .map(|(_, s)| body_lumps(ctx.kernel, s))
         .collect();
     let targets: Vec<&K::Shape> = lumps.iter().flatten().collect();
     let result = ctx.boolean(op, &targets, tool).map_err(|e| e.to_string())?;
@@ -339,14 +338,14 @@ pub(crate) fn apply_tool<K: Kernel>(
     let mut changes = Vec::new();
     match op {
         BooleanOp::Join => {
-            for piece in result.pieces {
-                match piece.sources.split_first() {
-                    None => changes.push(BodyChange::Set(ctx.new_body(), piece.shape)),
-                    Some((first, merged)) => {
-                        changes.push(BodyChange::Set(participants[*first].0, piece.shape));
-                        for i in merged {
-                            changes.push(BodyChange::Remove(participants[*i].0));
-                        }
+            for joined in join_pieces(ctx.kernel, result.pieces, &lumps, &result.touched) {
+                match joined {
+                    Joined::Body(i, shape) => {
+                        changes.push(BodyChange::Set(participants[i].0, shape));
+                    }
+                    Joined::Merged(i) => changes.push(BodyChange::Remove(participants[i].0)),
+                    Joined::Stray(shape) | Joined::Apart(shape) => {
+                        changes.push(BodyChange::Set(ctx.new_body(), shape));
                     }
                 }
             }
@@ -416,10 +415,133 @@ pub(crate) fn apply_tool<K: Kernel>(
     Ok(changes)
 }
 
-/// The lumps of a body for a cut or intersection: its solids where it has
-/// several and they hold all of its faces, else the body (one solid, or
-/// sheet faces beside its solids).
-fn body_lumps<K: Kernel>(kernel: &K, shape: &K::Shape) -> Vec<K::Shape> {
+/// What a join makes of one participant body ([`join_pieces`]).
+pub(crate) enum Joined<S> {
+    /// Participant i's new shape: the pieces of it and of the participants
+    /// merged into it, with the lumps of theirs the tool does not reach;
+    /// several solids in one compound.
+    Body(usize, S),
+    /// Participant i, merged into another.
+    Merged(usize),
+    /// A tool solid that touches no participant.
+    Stray(S),
+    /// A solid of a participant's that the kernel could not put in one
+    /// compound with the others (a kernel without compounds): a body of
+    /// its own rather than dropped.
+    Apart(S),
+}
+
+/// The bodies a join of a tool with the lumps of participant bodies makes
+/// ([`body_lumps`]; `lumps[i]` participant i's, the boolean's targets in
+/// that order, `touched` by target), in the order of the pieces. A piece
+/// goes to the participant of its first source; the participants a piece
+/// merges go into the first of them, with all their pieces; each keeps the
+/// lumps the tool does not reach, and a participant left with several
+/// solids holds them in one compound. No solid of a participant is
+/// dropped: before, a participant's pieces were set one after another and
+/// the last one won (mitcad#1003).
+pub(crate) fn join_pieces<K: Kernel>(
+    kernel: &K,
+    pieces: Vec<BooleanPiece<K::Shape>>,
+    lumps: &[Vec<K::Shape>],
+    touched: &[bool],
+) -> Vec<Joined<K::Shape>> {
+    // The participant of each target (lump).
+    let owner: Vec<usize> = lumps
+        .iter()
+        .enumerate()
+        .flat_map(|(i, l)| std::iter::repeat_n(i, l.len()))
+        .collect();
+    // Each participant's root: the first participant of the ones the
+    // pieces merge it with.
+    fn root(roots: &[usize], mut i: usize) -> usize {
+        while roots[i] != i {
+            i = roots[i];
+        }
+        i
+    }
+    let mut roots: Vec<usize> = (0..lumps.len()).collect();
+    for piece in &pieces {
+        if let Some((first, merged)) = piece.sources.split_first() {
+            for other in merged {
+                let a = root(&roots, owner[*first]);
+                let b = root(&roots, owner[*other]);
+                roots[a.max(b)] = a.min(b);
+            }
+        }
+    }
+    let roots: Vec<usize> = (0..lumps.len()).map(|i| root(&roots, i)).collect();
+    // The solids of each root, and what to give back in the pieces' order.
+    enum Slot<S> {
+        Body(usize),
+        Merged(usize),
+        Stray(S),
+    }
+    let mut groups: Vec<(usize, Vec<K::Shape>)> = Vec::new();
+    let mut slots: Vec<Slot<K::Shape>> = Vec::new();
+    let mut merged = vec![false; lumps.len()];
+    for piece in pieces {
+        let Some(first) = piece.sources.first() else {
+            slots.push(Slot::Stray(piece.shape));
+            continue;
+        };
+        let to = roots[owner[*first]];
+        match groups.iter().position(|(r, _)| *r == to) {
+            Some(k) => groups[k].1.push(piece.shape),
+            None => {
+                slots.push(Slot::Body(groups.len()));
+                groups.push((to, vec![piece.shape]));
+            }
+        }
+        for source in &piece.sources {
+            let i = owner[*source];
+            if roots[i] != i && !merged[i] {
+                merged[i] = true;
+                slots.push(Slot::Merged(i));
+            }
+        }
+    }
+    // The lumps the tool does not reach stay with their participant's
+    // root (a participant the join does not reach at all is unchanged).
+    let reached: Vec<bool> = (0..lumps.len())
+        .map(|i| owner.iter().zip(touched).any(|(o, t)| *o == i && *t))
+        .collect();
+    for (k, lump) in lumps.iter().flatten().enumerate() {
+        let i = owner[k];
+        if reached[i]
+            && touched.get(k) != Some(&true)
+            && let Some(group) = groups.iter_mut().find(|(r, _)| *r == roots[i])
+        {
+            group.1.push(lump.clone());
+        }
+    }
+    let mut joined = Vec::new();
+    for slot in slots {
+        match slot {
+            Slot::Stray(shape) => joined.push(Joined::Stray(shape)),
+            Slot::Merged(i) => joined.push(Joined::Merged(i)),
+            Slot::Body(k) => {
+                let to = groups[k].0;
+                let solids = std::mem::take(&mut groups[k].1);
+                if solids.len() == 1 {
+                    joined.extend(solids.into_iter().map(|s| Joined::Body(to, s)));
+                } else if let Ok(body) = kernel.compound(&solids) {
+                    joined.push(Joined::Body(to, body));
+                } else {
+                    let mut each = solids.into_iter();
+                    joined.extend(each.next().map(|s| Joined::Body(to, s)));
+                    joined.extend(each.map(Joined::Apart));
+                }
+            }
+        }
+    }
+    joined
+}
+
+/// The lumps of a body for a boolean: its solids where it has several and
+/// they hold all of its faces, else the body (one solid, or sheet faces
+/// beside its solids).
+pub(crate) fn body_lumps<K: Kernel>(kernel: &K, shape: &K::Shape) -> Vec<K::Shape> {
     // (Without making a shape of a large body's one solid, where the
     // kernel counts them.)
     if kernel.solid_count(shape).is_ok_and(|n| n < 2) {

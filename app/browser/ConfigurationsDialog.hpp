@@ -65,7 +65,8 @@ struct BindingActions;
 //   parameter of a closed table), Designation, Part Number and Supplier
 //   URL; Closed, Add Row (the current values), Generate Rows from Table…
 //   (a row per key of a table's column, mitcad#849), Delete Row, Set as
-//   Default and Apply. A value a rule refuses is not written: its cell keeps it in
+//   Default, Add Column… and Remove Column (a closed table's parameter
+//   columns, mitcad#999) and Apply. A value a rule refuses is not written: its cell keeps it in
 //   red with the rule's name; a row that breaks a rule is marked in its
 //   cells with the rule in the tooltip.
 // - Rules: makeConfigurationRulesPage.
@@ -126,6 +127,12 @@ private:
   void setDefaultRow();
   void applyRow();
   QString selectedRow() const;
+  // A closed table's parameter columns (mitcad#999).
+  void addColumn();
+  void removeColumn();
+  // The parameter of the current cell's column when it is a parameter
+  // column (not an option's); empty otherwise.
+  QString selectedColumn() const;
 
   // Calls `call` once the table's own handling of an edit is over and no
   // job computes the model.
@@ -139,8 +146,9 @@ private:
   void refuse(const QString& key, const QString& what, const QString& typed, const QString& reason);
   // A new table: set_configurations, then the window shows the model's.
   // `key` names the cell the edit came from ("row|column"), whose typed
-  // text stays in red with the reason when the model refuses it.
-  void submitTable(const configurations::Table& table, const QString& key, const QString& typed,
+  // text stays in red with the reason when the model refuses it. True when
+  // the model took the table.
+  bool submitTable(const configurations::Table& table, const QString& key, const QString& typed,
                    const QString& what);
   bool isText(const QString& parameter) const;
   QString unitOf(const QString& parameter) const;
@@ -166,6 +174,8 @@ private:
   QPushButton* m_deleteRow = nullptr;
   QPushButton* m_defaultRow = nullptr;
   QPushButton* m_apply = nullptr;
+  QPushButton* m_addColumn = nullptr;    // mitcad#999
+  QPushButton* m_removeColumn = nullptr;
 
   ConfigurationPage* m_rules = nullptr;
   ConfigurationBindingsPage* m_bindings = nullptr; // mitcad#862

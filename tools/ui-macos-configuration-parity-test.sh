@@ -17,6 +17,22 @@ ui_init "$1" "$3"
 UI_TIMEOUT=240
 export MITCAD_TEST_WORK=$UI_OUT/files
 mkdir -p "$MITCAD_TEST_WORK"
+# A new design's empty Options and Rows hints (NativeEmptyTextProperty),
+# first: they need no WindowServer input, which the slider drag below does.
+if [ "$frontend" = native ]; then
+  for scheme in light dark; do
+    rm -rf "$MITCAD_SETTINGS_DIR"
+    mkdir -p "$MITCAD_SETTINGS_DIR"
+    MITCAD_TEST_COLOR_SCHEME=$scheme MITCAD_TEST_STEP_MS=70 \
+      MITCAD_TEST_INPUT=$here/ui-scripts/macos-native-configurations-empty.mitcad-ui \
+      ui_run_app "native-empty-$scheme" --ui=native --no-recovery --no-mcp
+    ui_expect_log '^TestDriver: done' "native/$scheme: the empty Options and Rows show their hints"
+    for problem in 'TestDriver: FAIL' 'Unable to simultaneously satisfy constraints' 'Native Mac canvas:'; do
+      ui_expect_no_log "$problem" "native/$scheme empty: no $problem"
+    done
+    [ "$UI_FAILURES" = 0 ] || exit 1
+  done
+fi
 for scheme in light dark; do
   rm -rf "$MITCAD_SETTINGS_DIR"
   mkdir -p "$MITCAD_SETTINGS_DIR"

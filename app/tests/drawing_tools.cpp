@@ -81,6 +81,12 @@ int drawingToolsTests() {
         toolGroupName(2) == QStringLiteral("Dimensions") && toolGroupName(3) == QStringLiteral("Text") &&
         toolGroupName(4) == QStringLiteral("Symbols") && toolGroupName(5) == QStringLiteral("Tables"));
   CHECK(toolGroupName(kToolGroups).isEmpty());
+  // The ribbon's DRAWING tab's groups (mitcad#1008): each group's name in
+  // capitals.
+  for (int g = 0; g < kToolGroups; ++g) {
+    CHECK(toolGroupId(g) == toolGroupName(g).toUpper());
+  }
+  CHECK(toolGroupId(kToolGroups).isEmpty());
   // The command search's other words (mitcad#725).
   CHECK(toolKeywords(QStringLiteral("drawing.note")).contains(QStringLiteral("leader")));
   CHECK(toolKeywords(QStringLiteral("drawing.baseline")).contains(QStringLiteral("chain")));

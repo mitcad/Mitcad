@@ -14,3 +14,5 @@ mod renamed_tests;
 mod surface_modelling_tests;
 // A Fillet's and a Chamfer's picked edges kept with the result (mitcad#957).
 mod feature_inputs_tests;
+// Dogbone: relief cuts at a body's inside corners (mitcad#1011).
+mod dogbone_tests;

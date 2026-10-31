@@ -693,7 +693,9 @@ private:
   void undo();
   void redo();
   void openCommandSearch();
-  void editShortcuts();
+  // Tools > Keyboard Shortcuts; at a command's row when `id` is given (a
+  // group menu row's Change Keyboard Shortcut…, mitcad#1001).
+  void editShortcuts(const QString& id = QString());
   // Look At (U5): the sketch plane in sketch mode, else the selected plane,
   // planar face, profile or sketch.
   void lookAtSelection();
@@ -1117,8 +1119,20 @@ private:
   drawings::DrawingWorkspace* drawingWorkspace();
   QString drawingTitle() const;
   bool drawingOpen() const;
-  // The drawing tools and Close Drawing as commands (drawing.*).
+  // The drawing tools and Close Drawing as commands (drawing.*), on the
+  // ribbon's DRAWING tab (mitcad#1008).
   void registerDrawingCommands();
+  // The CUT SHEET tab's entries that are not its commands (mitcad#1008):
+  // Close Drawing, the DXF and SVG exports and the labels' check box.
+  void addDrawingRibbonExtras();
+  // A drawing opened or closed (mitcad#1008): the ribbon's DRAWING tab
+  // alone while one is open, and in the Floating layout no card but the
+  // browser; the AppKit frontend keeps the drawing's own bar.
+  void updateDrawingChrome();
+  // Whether a command is one of an open drawing's (the DRAWING and CUT
+  // SHEET tabs'): it does not lead back to the 3D view.
+  static bool isDrawingCommand(const CommandDef& def);
+  QAction* m_cutLabelsAction = nullptr;
   // Esc (cancel) while a drawing is open and the keyboard is with no other
   // control: the drawing's Esc; false when it is not the drawing's.
   bool escapeDrawing();
@@ -1342,6 +1356,9 @@ private:
   SelectionCreatePanel* m_selectionCreate = nullptr; // the card's Create row (mitcad#619)
   QString m_loggedSelectionCreate = QStringLiteral("none"); // its log line last logged (UI tests)
   QLabel* m_statusLabel = nullptr;
+  // What the status shows is a hint (showHint), not a warning or an error:
+  // an open drawing clears it (mitcad#1008, updateDrawingChrome).
+  bool m_statusIsHint = true;
   QLabel* m_rendererLabel = nullptr;
   FloatingLayout* m_floating = nullptr; // the central widget in Floating chrome
   GlassCard* m_commandCard = nullptr;

@@ -8,8 +8,9 @@
 //! one stays; a removed source curve is a lost projection with a warning;
 //! a later sketch, the sketch itself and another component's sketch picked
 //! outside its occurrence are refused; a whole sketch gives all its
-//! curves; the design file keeps the links, and a projection of model
-//! geometry is stored as before.
+//! curves; as a section, the points where the sketch's plane crosses them
+//! (mitcad#998); the design file keeps the links, and a projection of
+//! model geometry is stored as before.
 
 use serde_json::{Value, json};
 
@@ -390,7 +391,7 @@ fn unlinked_copies_stay_and_a_removed_source_is_a_broken_reference() {
 #[test]
 fn only_earlier_sketches_and_not_the_sketch_itself() {
     let mut doc = Document::new(MockKernel::default());
-    let s = source(&mut doc);
+    source(&mut doc);
     let target = command(&mut doc, json!({"cmd": "sketch.create"}))["uid"]
         .as_str()
         .unwrap()
@@ -416,20 +417,13 @@ fn only_earlier_sketches_and_not_the_sketch_itself() {
                "source": {"sketch": "F3", "curve": later_line}, "linked": true}),
     );
     assert!(error.contains("its own geometry"), "{error}");
-    // A curve the sketch does not have, and a sketch's geometry as a
-    // section, are refused too.
+    // A curve the sketch does not have is refused too.
     let error = rejected(
         &mut doc,
         json!({"cmd": "sketch.project", "sketch": target,
                "source": {"sketch": "F1", "curve": "c99"}, "linked": true}),
     );
     assert!(error.contains("has no c99"), "{error}");
-    let error = rejected(
-        &mut doc,
-        json!({"cmd": "sketch.project", "sketch": target,
-               "source": {"sketch": "F1", "curve": s.line}, "section": true}),
-    );
-    assert!(error.contains("not a sketch's geometry"), "{error}");
     // Nothing was added to the target.
     assert_eq!(sketch(&doc, &target)["entities"], json!([]));
 }
@@ -465,6 +459,67 @@ fn a_whole_sketch_gives_all_its_curves() {
     }
     // The loose point is no curve.
     assert!(!sources.contains(&json!({"sketch": "F1", "point": s.point})));
+}
+
+#[test]
+fn a_section_of_another_sketchs_curves_gives_where_its_plane_crosses_them() {
+    // mitcad#998: Sketch1's circle round (0, 40) of radius 10 crosses the
+    // YZ plane at (0, 30) and (0, 50), its line from (0, 0) touches it at
+    // its start; the arc round (50, 0) misses it.
+    let mut doc = Document::new(MockKernel::default());
+    let s = source(&mut doc);
+    let target = command(&mut doc, json!({"cmd": "sketch.create", "plane": "yz"}))["uid"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for curve in [&s.circle, &s.line] {
+        command(
+            &mut doc,
+            json!({"cmd": "sketch.project", "sketch": target,
+                   "source": {"sketch": "F1", "curve": curve}, "linked": true,
+                   "section": true}),
+        );
+    }
+    let error = rejected(
+        &mut doc,
+        json!({"cmd": "sketch.project", "sketch": target,
+               "source": {"sketch": "F1", "curve": s.arc}, "section": true}),
+    );
+    assert!(error.contains("does not cross"), "{error}");
+    let cut = sketch(&doc, &target);
+    // Points only, each where the plane crosses its curve.
+    assert_eq!(count(&cut, "point"), 3, "{cut}");
+    assert_eq!(cut["entities"].as_array().unwrap().len(), 3, "{cut}");
+    for at in [[0.0, 30.0, 0.0], [0.0, 50.0, 0.0], [0.0, 0.0, 0.0]] {
+        assert!(
+            has_point_at(&cut, on(&cut, at)),
+            "no point at {at:?} in {cut}"
+        );
+    }
+    let projections = cut["projections"].as_array().unwrap();
+    assert_eq!(projections.len(), 2, "{cut}");
+    assert_eq!(projections[0]["section"], true, "{cut}");
+    assert_eq!(
+        projections[0]["source"],
+        json!({"sketch": "F1", "curve": s.circle})
+    );
+    let uid = target.parse().unwrap();
+    assert!(doc.status(uid).unwrap().is_ok(), "{:?}", doc.status(uid));
+    assert_eq!(doc.warnings(uid), Vec::<String>::new());
+
+    // The circle grows to radius 15: its crossings follow.
+    command(
+        &mut doc,
+        json!({"cmd": "set_parameter", "name": s.diameter, "value": 30}),
+    );
+    let followed = sketch(&doc, &target);
+    for at in [[0.0, 25.0, 0.0], [0.0, 55.0, 0.0], [0.0, 0.0, 0.0]] {
+        assert!(
+            has_point_at(&followed, on(&followed, at)),
+            "no point at {at:?} in {followed}"
+        );
+    }
+    assert_eq!(doc.warnings(uid), Vec::<String>::new());
 }
 
 #[test]

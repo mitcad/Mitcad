@@ -3004,7 +3004,12 @@ impl<K: Kernel> Document<K> {
     /// follows it when the source sketch changes, and keeps its last
     /// geometry with a warning once the entity is gone; unlinked, they are
     /// fixed copies. Another component's sketch comes through the link of
-    /// `occurrence` (seen at `context`), as its bodies' edges do.
+    /// `occurrence` (seen at `context`), as its bodies' edges do. With
+    /// `section` (mitcad#998), each entity gives the points where the
+    /// sketch's plane crosses it instead
+    /// ([`crate::sketch::project::plane_crossings`]); one the plane does not
+    /// cross is refused.
+    #[allow(clippy::too_many_arguments)]
     pub fn project_sketch_geometry(
         &mut self,
         sketch: FeatureUid,
@@ -3013,6 +3018,7 @@ impl<K: Kernel> Document<K> {
         linked: bool,
         occurrence: Option<&[OccurrenceUid]>,
         context: Option<&[OccurrenceUid]>,
+        section: bool,
     ) -> Result<EditReport, ModelError> {
         use crate::sketch::project::SourceCurves;
         use crate::sketch::{ProjectionSource, SketchEntityRef};
@@ -3074,18 +3080,59 @@ impl<K: Kernel> Document<K> {
         if picked.is_empty() {
             return Err(fail(format!("{} has no curves to project", entry.name)));
         }
+        // A section's plane where the source sketch is: the sketch's moved
+        // back by the link.
+        let plane = section.then(|| {
+            let normal = target.frame.normal();
+            match &target.to_sketch {
+                Some(t) => {
+                    let back = crate::assembly::inverse(t);
+                    (
+                        back.apply_point(target.frame.origin),
+                        back.apply_vector(normal),
+                    )
+                }
+                None => (target.frame.origin, normal),
+            }
+        });
         let mut groups = Vec::with_capacity(picked.len());
         for entity in picked {
             let curve = crate::features::sketch::sketch_entity_curve(output, entity)
                 .ok_or_else(|| fail(format!("{} has no {entity}", entry.name)))?;
+            let curves = match plane {
+                Some((origin, normal)) => {
+                    let crossings: Vec<crate::kernel::Curve3> =
+                        crate::sketch::project::plane_crossings(&curve, origin, normal)
+                            .into_iter()
+                            .map(crate::kernel::Curve3::Point)
+                            .collect();
+                    if crossings.is_empty() && entities.is_some() {
+                        return Err(fail(format!(
+                            "the sketch's plane does not cross {entity} of {}",
+                            entry.name
+                        )));
+                    }
+                    crossings
+                }
+                None => vec![curve],
+            };
+            if curves.is_empty() {
+                continue;
+            }
             groups.push(SourceCurves {
                 source: Some(ProjectionSource::Sketch(SketchEntityRef {
                     sketch: source,
                     entity,
                 })),
                 chain: Vec::new(),
-                curves: vec![curve],
+                curves,
             });
+        }
+        if groups.is_empty() {
+            return Err(fail(format!(
+                "the sketch's plane does not cross {}",
+                entry.name
+            )));
         }
         let ProjectionTarget {
             frame,
@@ -3102,8 +3149,12 @@ impl<K: Kernel> Document<K> {
                 body: None,
                 link,
                 linked,
-                section: false,
-                label: "Project to {sketch}",
+                section,
+                label: if section {
+                    "Section Curves to {sketch}"
+                } else {
+                    "Project to {sketch}"
+                },
             },
         )
     }
@@ -3401,6 +3452,7 @@ impl<K: Kernel> Document<K> {
                         by_geometry: true,
                         section,
                         chain: group.chain,
+                        after: None,
                     });
                 }
             }

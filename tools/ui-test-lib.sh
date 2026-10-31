@@ -555,8 +555,19 @@ ui_browser_reveal() {
 # scrolls) and logs them again when it scrolls (MainWindow). Nothing for a
 # panel that does not scroll or a hidden input.
 ui_panel_reveal() {
-  [[ $1 =~ ^Panel\ (.+)\ input\ [^\ ]+$ ]] || return 0
-  local view="Panel ${BASH_REMATCH[1]} view y " line place top bottom bx by y count synced=0 margin=12 i j
+  local panel
+  # Also a row of an inspection's result ("Panel <command> result <name>",
+  # mitcad#1010) and the places of the Measure panel's own section
+  # ("Measure Keep as Dimension"), logged with the panel's; not its
+  # buttons, which stay in view under the page.
+  if [[ $1 =~ ^Panel\ (.+)\ input\ [^\ ]+$ ]] || [[ $1 =~ ^Panel\ (.+)\ result\  ]]; then
+    panel=${BASH_REMATCH[1]}
+  elif [[ $1 == "Measure "* ]]; then
+    panel=Measure
+  else
+    return 0
+  fi
+  local view="Panel $panel view y " line place top bottom bx by y count synced=0 margin=12 i j
   for i in $(seq 1 30); do
     line=$(grep -F -- "$view" "$UI_LOG" | tail -1)
     [[ $line =~ \ view\ y\ (-?[0-9]+)\ to\ (-?[0-9]+),\ scrolled\ [0-9]+\ of\ [0-9]+,\ bar\ at\ ([0-9]+),([0-9]+)$ ]] ||
@@ -595,7 +606,7 @@ ui_logged_at() {
   local last at px py
   case $1 in
     "Browser "*) ui_browser_reveal "$1" ;;
-    "Panel "*" input "*) ui_panel_reveal "$1" ;;
+    "Panel "*" input "*|"Panel "*" result "*|"Measure "*) ui_panel_reveal "$1" ;;
   esac
   # (A single ellipsis and three dots match each other, mitcad#645.)
   last=$(sed "s/…/.../g" "$UI_LOG" | grep -F -e "${1//…/...} at " -e "${1//…/...} out of sight" | tail -1)

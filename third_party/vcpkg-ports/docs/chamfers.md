@@ -1,4 +1,4 @@
-# Chamfers wider than a face beside them: 0140–0149, 0380, 0381, 0480, 0481, 0530, 0531
+# Chamfers wider than a face beside them: 0140–0149, 0380, 0381, 0480, 0481, 0530, 0531, 1090
 
 The edge overflow of [0010 to 0019 and 0050 to 0077](fillet-edge-overflow.md)
 for chamfers (mitcad#240, mitcad#263). `geometry/tests/test_chamfer_overflow.cpp`
@@ -25,6 +25,9 @@ chamfer alone. Later chamfer cases from stored designs: 0440 in
   of its chain, the faces beyond that face growing down to it, and end a
   chamfer stopped where its edges turn by its blend run on past the vertex
   (mitcad#263).
+- **1090** limits a corner's sharp edge only by a common point that lies on
+  it: a convex and a concave chamfer meeting where a sharp edge goes on got
+  a corner 32 mm high at one end of a bracket (mitcad#1005).
 
 ## 0140 to 0149: chamfers wider than a face beside them
 
@@ -268,6 +271,39 @@ the face beyond the crease, up to where its other contact reaches that face
 chamfers do not ("PerformSurf Not Implemented"). Only chamfers that failed
 so, or whose walk left a face mid-spine, take the new paths.
 
+## 1090: a corner's sharp edge limited by a common point on it
+
+### 1090-chfi3d-sharp-edge-limited-only-by-a-common-point-on-it
+
+An L bracket, a floor with a wall at its back: the floor's top edge along
+one end (convex) and its edge along the wall (concave) chamfered 1, the
+wall's vertical edge going on up sharp from their common vertex. The two
+bevels' common points lie on different arcs, so the corner is
+`PerformMoreThreeCorner`'s, as OnSame + OnDiff: `PerformOneCorner`'s
+preparation moves the convex bevel's OnSame common point from the floor's
+far vertical edge, where its contact ran to, onto the prolongation of the
+sharp edge below the vertex, but keeps that far edge as its arc, with its
+parameter there. The plate's limit on the sharp edge comes from the nearer
+of the bevels' two common points beside it, the second of equal
+distances; both lie 1 from the vertex, and at one end of the bracket
+rounding made the moved point the nearer. Its parameter on the far edge
+was read on the sharp edge's curve: the plate reached 31 above the floor
+up the wall, a B-spline of degree 8 over 122 mm² waving across the
+bracket's end, and the body was 16.6 mm³ short. Meshed for display at
+0.01 mm that face took 86 000 triangles and 4 s, 8 to 10 s under load
+(the `ui-pick` UI test's Chamfer preview, whose click on the face was lost
+while the model was busy).
+
+A common point now limits the sharp edge only where it lies on it
+(`ParameterOnSharpEdge`): with its parameter on its arc where that arc is
+the edge, otherwise with that of its point projected on the edge within
+the point's tolerance, between the edge's ends. Of equal distances the
+second point is taken as before, unless it lies on another arc and the
+first on the edge. Both ends of the bracket, either edge given first, get
+the same corner, a plate of 1.85 mm² meshed in about a thousand triangles,
+the body within 0.03 mm³ of the two bevels' prisms at each corner. Corners
+whose common points both lie on the sharp edge are unchanged.
+
 ## Reports and tests
 
 - 0140 to 0149: mitcad#240, mitcad#263 and
@@ -281,3 +317,7 @@ so, or whose walk left a face mid-spine, take the new paths.
   its tip's chamfer in `geometry/tests/test_chamfer_overflow.cpp` (the
   chamfer's volume from its sections, cut by the foot's chamfer, swept
   along the edge).
+- 1090: mitcad#1005 and `geometry/tests/test_chamfer_sharp_corner.cpp`
+  (both ends of the bracket, either edge first, and the floor's whole top
+  face: the corner within the bevels' reach and a few thousand triangles at
+  most, the ends' volumes equal; one end fails without it).

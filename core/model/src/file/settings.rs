@@ -157,7 +157,10 @@ impl BrokerAddress {
 }
 
 fn strip_prefix_ignore_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
-    (text.len() >= prefix.len() && text[..prefix.len()].eq_ignore_ascii_case(prefix))
+    // `get`: the prefix's length may end inside a character of the text
+    // (mitcad#939, a fuzz finding), which is no match.
+    text.get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
         .then(|| &text[prefix.len()..])
 }
 
@@ -730,6 +733,28 @@ mod tests {
             "mqtts://exa mple.com",
         ] {
             assert!(BrokerAddress::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// The scheme's length ending inside a character is no scheme, not a
+    /// panic (mitcad#939: the `project_settings` fuzz target's finding,
+    /// "mqtt:/[" and a two-byte character across byte 8).
+    #[test]
+    fn broker_addresses_cut_inside_a_character_are_refused() {
+        for bad in [
+            "mqtt:/[\u{4e4}::1]:1883",
+            "mqtt:/\u{4e4}",
+            "mqtt\u{4e4}\u{4e4}",
+            "\u{1f600}\u{1f600}",
+        ] {
+            assert!(BrokerAddress::parse(bad).is_err(), "{bad}");
+        }
+        let value = serde_json::json!({
+            "live": {"mode": "broker", "broker": "mqtt:/[\u{4e4}::1]:1883", "prefix": "a"},
+        });
+        for strict in [false, true] {
+            let _ = LocalSettings::from_json(&value, strict);
+            let _ = SharedSettings::from_json(&value, strict);
         }
     }
 

@@ -34,10 +34,12 @@
 //!   modelled one (ISO metric or Unified) cut as Mitcad cuts threads.
 //! - Mirrored, LinearPattern, PolarPattern → `mirror`,
 //!   `rectangular_pattern`, `circular_pattern` of the original features'
-//!   Mitcad features (or of the body joining its copies, `TransformMode`
-//!   whole shape); MultiTransform → those of one transformation, of two
-//!   linear patterns (one pattern of two directions) or of two mirrors
-//!   (and a half turn), and for any sequence of mirrors and patterns each
+//!   Mitcad features (or of the Body's bodies, `TransformMode` whole
+//!   shape, mitcad#1004: the copies joined to the bodies they touch, of a
+//!   Body of several bodies to any of them, `combine_any`, mitcad#1006);
+//!   MultiTransform → those of
+//!   one transformation, of two linear patterns (one pattern of two
+//!   directions) or of two mirrors (and a half turn), and for any sequence of mirrors and patterns each
 //!   transformation a pattern or mirror of the one before (patterns of
 //!   patterns; of the whole body each one of the body with the copies
 //!   before); a Scaled transformation the `scale` (and `scale_groups`) of
@@ -46,9 +48,12 @@
 //!   the copies FreeCAD 1.0 and 1.1 leave out and Scaled transformations
 //!   of the whole body (about the Body's origin) as in
 //!   `chained_candidates` (mitcad#542).
-//! - Boolean → `combine` with the other Bodies' bodies.
+//! - Boolean → `combine` with the other Bodies' bodies (of a Body of
+//!   several solids, the bodies they reach: joined into one, or each cut
+//!   or intersected, the others of a common removed; mitcad#1004).
 //! - Draft → `draft` (a pull direction along the neutral plane's normal),
-//!   Thickness → `shell` (Pipe and RectoVerso as Skin), AdditiveLoft →
+//!   Thickness → `shell` (Pipe and RectoVerso as Skin), one per body their
+//!   faces are on (mitcad#1004), AdditiveLoft →
 //!   `loft`, AdditivePipe → `sweep` (with sections: a `loft` along the
 //!   spine; the modes Standard, Fixed as the parallel orientation, Frenet,
 //!   Auxiliary and Binormal (a constant binormal turned by the pipe's
@@ -60,6 +65,8 @@
 //!
 //! The lengths, angles, sizes and counts are the properties' parameters or
 //! expressions where FreeCAD's are parametric ([`super::params`]).
+
+use std::borrow::Cow;
 
 use mitcad_freecad::sketch::{self as fc, Curve};
 use mitcad_freecad::{LinkRef, Object, Value as FcValue};
@@ -102,6 +109,39 @@ impl Dressed {
 
 fn uids(bodies: &[BodyUid]) -> Vec<String> {
     bodies.iter().map(ToString::to_string).collect()
+}
+
+/// A transformation of the Body's whole shape (`objects` its bodies): its
+/// copies joined to them (`combine`), as FreeCAD fuses them. FreeCAD fuses
+/// a copy with whichever solid of the Body it reaches, so on a Body of
+/// several bodies a copy joins every one of them it touches, not only the
+/// one it is a copy of (`combine_any`, mitcad#1006).
+fn combine_whole(def: &mut Value, objects: &Value) {
+    def["combine"] = json!(true);
+    if objects["bodies"].as_array().is_some_and(|b| b.len() > 1) {
+        def["combine_any"] = json!(true);
+    }
+}
+
+/// One dress-up's definitions, one per body it works on (mitcad#997): the
+/// first named after the object, the others `" (body 2)"` and on.
+fn per_body(defs: Vec<Value>) -> Candidate {
+    if defs.len() == 1 {
+        return Candidate::new(defs.into_iter().next().unwrap_or_default());
+    }
+    Candidate::several_named(
+        defs.into_iter()
+            .enumerate()
+            .map(|(i, def)| {
+                let suffix: Cow<'static, str> = if i == 0 {
+                    Cow::Borrowed("")
+                } else {
+                    Cow::Owned(format!(" (body {})", i + 1))
+                };
+                (def, suffix)
+            })
+            .collect(),
+    )
 }
 
 /// The copies a transformation of a MultiTransform makes, the original's
@@ -269,9 +309,21 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
     }
 
-    /// The bounding box of the Body's one body, when it has one.
+    /// The bounding box of the Body's bodies together (FreeCAD's Body may be
+    /// several solids, mitcad#997), when it has any.
     fn body_box(&self, target: &Target) -> Option<mitcad_model::BoundingBox> {
-        let body = self.body(target).ok()?;
+        target
+            .current
+            .iter()
+            .filter_map(|b| self.box_of(*b))
+            .reduce(|a, b| mitcad_model::BoundingBox {
+                min: [0, 1, 2].map(|k| a.min[k].min(b.min[k])),
+                max: [0, 1, 2].map(|k| a.max[k].max(b.max[k])),
+            })
+    }
+
+    /// The bounding box of one body.
+    fn box_of(&self, body: BodyUid) -> Option<mitcad_model::BoundingBox> {
         let shape = self.doc.body_shape(body)?;
         self.doc.kernel().bounding_box(shape).ok().flatten()
     }
@@ -317,13 +369,40 @@ impl<K: Kernel> Importer<'_, '_, K> {
         )
     }
 
-    /// The Body's one body a dress-up works on.
-    pub(super) fn body(&self, target: &Target) -> Result<BodyUid, String> {
-        match target.current.as_slice() {
-            [b] => Ok(*b),
-            [] => Err("the Body has no solid yet".to_owned()),
-            _ => Err("the Body is several bodies here".to_owned()),
+    /// Of the Body's bodies, those the tool bodies touch or reach into
+    /// (FreeCAD's Body may be several solids, each a MitCad body,
+    /// mitcad#1004): boxes apart are apart; where they meet the kernel's
+    /// contact test tells, and a kernel without one counts them as
+    /// touching. All of them when the Body is one body.
+    fn reached_by(&self, tools: &[BodyUid], bodies: &[BodyUid]) -> Vec<BodyUid> {
+        if bodies.len() < 2 {
+            return bodies.to_vec();
         }
+        let kernel = self.doc.kernel();
+        bodies
+            .iter()
+            .copied()
+            .filter(|body| {
+                let Some(shape) = self.doc.body_shape(*body) else {
+                    return false;
+                };
+                let around = self.box_of(*body);
+                tools.iter().any(|tool| {
+                    let Some(tool_shape) = self.doc.body_shape(*tool) else {
+                        return false;
+                    };
+                    if let (Some(a), Some(b)) = (&around, self.box_of(*tool))
+                        && !a.overlaps(&b, 1e-6)
+                    {
+                        return false;
+                    }
+                    match kernel.tool_contacts(tool_shape, &[shape]) {
+                        Ok(contacts) => contacts.first() != Some(&mitcad_model::ToolContact::Apart),
+                        Err(_) => true,
+                    }
+                })
+            })
+            .collect()
     }
 
     /// The imported sketch a feature refers to, in the feature's component.
@@ -1068,54 +1147,72 @@ impl<K: Kernel> Importer<'_, '_, K> {
     /// feature is computed (`all_edges`, mitcad#793), so that the edges an
     /// edit upstream adds are rounded too. An edge FreeCAD merged is named
     /// by the faces along it where it can ([`super::elements`]).
-    fn dressed(&mut self, o: &Object, target: &Target) -> Result<Dressed, String> {
-        let body = self.body(target)?;
-        let mut edges = Vec::new();
-        let mut faces = Vec::new();
+    ///
+    /// FreeCAD's Body may be several solids, each a Mitcad body here
+    /// (mitcad#997): the edges and faces are grouped by the body they are
+    /// on, in the order the link names them, one dress-up per body (with
+    /// `UseAllEdges`, one per body of the Body).
+    fn dressed(&mut self, o: &Object, target: &Target) -> Result<Vec<Dressed>, String> {
+        if target.current.is_empty() {
+            return Err("the Body has no solid yet".to_owned());
+        }
         if o.bool("UseAllEdges") == Some(true) {
-            self.doc.body_shape(body).ok_or("the body is gone")?;
-            return Ok(Dressed {
-                body,
-                edges,
-                faces,
-                all: true,
-            });
+            let mut all = Vec::new();
+            for body in &target.current {
+                self.doc.body_shape(*body).ok_or("the body is gone")?;
+                all.push(Dressed {
+                    body: *body,
+                    edges: Vec::new(),
+                    faces: Vec::new(),
+                    all: true,
+                });
+            }
+            return Ok(all);
         }
         let link = o.link("Base").ok_or("no edges")?.clone();
+        let mut dressed: Vec<Dressed> = Vec::new();
         for sub in &link.subs {
             let name = sub_name(sub);
             let (b, names) = self.element_names(&link.object, name)?;
-            if b != body {
+            if !target.current.contains(&b) {
                 return Err(format!("{}.{name} is on another body", link.object));
             }
+            let at = match dressed.iter().position(|d| d.body == b) {
+                Some(at) => at,
+                None => {
+                    dressed.push(Dressed {
+                        body: b,
+                        edges: Vec::new(),
+                        faces: Vec::new(),
+                        all: false,
+                    });
+                    dressed.len() - 1
+                }
+            };
             if name.starts_with("Face") {
-                faces.extend(names);
+                dressed[at].faces.extend(names);
             } else if name.starts_with("Edge") {
-                edges.extend(names);
+                dressed[at].edges.extend(names);
             } else {
                 return Err(format!("{name}: not an edge or a face"));
             }
         }
-        if edges.is_empty() && faces.is_empty() {
+        if dressed.is_empty() {
             return Err("no edges".to_owned());
         }
-        Ok(Dressed {
-            body,
-            edges,
-            faces,
-            all: false,
-        })
+        Ok(dressed)
     }
 
     fn fillet_candidates(&mut self, o: &Object, target: &Target) -> Result<Vec<Candidate>, String> {
         let dressed = self.dressed(o, target)?;
         o.f64("Radius").ok_or("no radius")?;
         let radius = self.prop(o, "Radius", Kind::Length, 0.0);
-        let mut set = json!({"size": {"type": "constant", "radius": radius.json()}});
-        dressed.select(&mut set);
-        Ok(vec![Candidate::new(
-            json!({"type": "fillet", "body": dressed.body.to_string(), "sets": [set]}),
-        )])
+        let defs = dressed.iter().map(|d| {
+            let mut set = json!({"size": {"type": "constant", "radius": radius.json()}});
+            d.select(&mut set);
+            json!({"type": "fillet", "body": d.body.to_string(), "sets": [set]})
+        });
+        Ok(vec![per_body(defs.collect())])
     }
 
     fn chamfer_candidates(
@@ -1154,11 +1251,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
         Ok(flips
             .iter()
             .map(|flip| {
-                let mut set = json!({"size": size_def, "flip": flip});
-                dressed.select(&mut set);
-                Candidate::new(
-                    json!({"type": "chamfer", "body": dressed.body.to_string(), "sets": [set]}),
-                )
+                let defs = dressed.iter().map(|d| {
+                    let mut set = json!({"size": size_def, "flip": flip});
+                    d.select(&mut set);
+                    json!({"type": "chamfer", "body": d.body.to_string(), "sets": [set]})
+                });
+                per_body(defs.collect())
             })
             .collect())
     }
@@ -1395,16 +1493,26 @@ impl<K: Kernel> Importer<'_, '_, K> {
             }
             _ => point,
         };
+        let radius = diameter.value / 2.0;
         let diameter = diameter.json();
         let point = point.json();
-        let current = self.body(target)?;
+        // FreeCAD cuts the hole from the Body's whole shape, which may be
+        // several solids (mitcad#997): each solid a hole reaches is drilled.
+        // So the hole works on all the Body's bodies; the model cuts those
+        // it reaches.
+        let participants: Vec<BodyUid> = match target.current.as_slice() {
+            [] => return Err("the Body has no solid yet".to_owned()),
+            bodies => bodies.to_vec(),
+        };
+        let boxes: Vec<Option<mitcad_model::BoundingBox>> =
+            participants.iter().map(|b| self.box_of(*b)).collect();
         let reversed = o.bool("Reversed").unwrap_or(false);
         let mut out = Vec::new();
         for flip in [reversed, !reversed] {
             let mut def = json!({"type": "hole",
                 "placement": {"type": "sketch_points", "sketch": sketch.uid.to_string(), "points": points},
                 "diameter": diameter, "kind": kind, "extent": extent, "flip": flip,
-                "participants": [current.to_string()]});
+                "participants": uids(&participants)});
             if angled {
                 def["tip_angle"] = point.clone();
             } else {
@@ -1414,7 +1522,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 def["taper"] = t.json();
             }
             if let Some(Ok(g)) = &groove {
-                out.push(g.candidate(def.clone(), flip, current));
+                out.push(g.candidate(def.clone(), flip, &participants));
             }
             let mut candidate = Candidate::new(def);
             if let Some(Err(why)) = &groove {
@@ -1422,11 +1530,32 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     candidate.note(format!("FreeCAD's thread groove is not rebuilt: {why}"));
             }
             if let Some(thread) = &thread {
-                // (Only the holes that reach the body have walls.)
-                let faces: Vec<Value> = (0..points.len())
-                    .filter(|i| reached[*i])
-                    .map(|i| json!({"body": current.to_string(), "face": format!("$0:hole{i}.wall")}))
-                    .collect();
+                // (Only the holes that reach the body have walls; of several
+                // bodies, those the hole's drilled length meets.)
+                let drill = scale(normal, if flip { 1.0 } else { -1.0 });
+                let length = if extent["type"] == "distance" {
+                    depth_value + radius
+                } else {
+                    f64::INFINITY
+                };
+                let mut faces: Vec<Value> = Vec::new();
+                for (i, start) in positions.iter().enumerate() {
+                    if !reached[i] {
+                        continue;
+                    }
+                    for (body, bb) in participants.iter().zip(&boxes) {
+                        let meets = participants.len() == 1
+                            || match (start, bb) {
+                                (Some(p), Some(bb)) => meets_box(*p, drill, length, radius, bb),
+                                _ => true,
+                            };
+                        if meets {
+                            faces.push(
+                                json!({"body": body.to_string(), "face": format!("$0:hole{i}.wall")}),
+                            );
+                        }
+                    }
+                }
                 candidate = candidate.then(
                     json!({"type": "thread", "faces": faces, "thread": thread, "modeled": modeled}),
                     " (thread)",
@@ -1665,9 +1794,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         // the sketch plane (the same result, a shorter helix).
         let mut length = length;
         if depth_type == "ThroughAll"
-            && let Ok(body) = self.body(target)
-            && let Some(shape) = self.doc.body_shape(body)
-            && let Ok(Some(b)) = self.doc.kernel().bounding_box(shape)
+            && let Some(b) = self.body_box(target)
         {
             let reach = (0..8)
                 .map(|k| {
@@ -1702,8 +1829,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
         );
         let originals = o.links("Originals");
         if whole || originals.is_empty() {
-            let body = self.body(target)?;
-            return Ok(json!({"type": "bodies", "bodies": [body.to_string()]}));
+            // FreeCAD transforms the Body's whole shape, which may be several
+            // solids, each a MitCad body (mitcad#1004): all of them, each
+            // copy joined to every one of them it touches (mitcad#1006,
+            // `combine_whole`).
+            if target.current.is_empty() {
+                return Err("the Body has no solid yet".to_owned());
+            }
+            return Ok(json!({"type": "bodies", "bodies": uids(&target.current)}));
         }
         let mut features = Vec::new();
         for link in originals {
@@ -1741,7 +1874,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let plane = self.plane_ref(&link, component)?;
         let mut def = json!({"type": "mirror", "objects": objects, "plane": plane});
         if objects["type"] == "bodies" {
-            def["combine"] = json!(true);
+            combine_whole(&mut def, objects);
         }
         Ok(def)
     }
@@ -2021,7 +2154,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                         "quantity": groups.json(), "scale": factor.json(),
                         "compute": "identical"});
                     if let Some(center) = center {
-                        def["combine"] = json!(true);
+                        combine_whole(&mut def, objects);
                         def["scale_center"] = center.clone();
                     }
                     readings.push(vec![def]);
@@ -2041,7 +2174,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             });
             if whole && let Some(defs) = readings.last_mut() {
                 for def in defs {
-                    def["combine"] = json!(true);
+                    combine_whole(def, objects);
                 }
             }
             counts.push(elements_of(step));
@@ -2238,7 +2371,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
         // The whole body: its copies joined to it, as FreeCAD fuses them.
         if objects["type"] == "bodies" {
-            def["combine"] = json!(true);
+            combine_whole(&mut def, objects);
         }
         let mut flipped = def.clone();
         flipped["direction1"]["distance"] = distance.signed(-sign).json();
@@ -2283,11 +2416,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
             1.0
         };
         // The whole body: its copies joined to it, as FreeCAD fuses them.
-        let combine = objects["type"] == "bodies";
         let def = |s: f64| {
-            json!({"type": "circular_pattern", "objects": objects, "axis": axis,
-                   "quantity": quantity.json(), "angle": angle.signed(s).json(),
-                   "compute": "identical", "combine": combine})
+            let mut value = json!({"type": "circular_pattern", "objects": objects,
+                   "axis": axis, "quantity": quantity.json(), "angle": angle.signed(s).json(),
+                   "compute": "identical", "combine": false});
+            if objects["type"] == "bodies" {
+                combine_whole(&mut value, objects);
+            }
+            value
         };
         Ok(vec![def(sign), def(-sign)])
     }
@@ -2299,14 +2435,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
         o: &Object,
         target: &Target,
     ) -> Result<Vec<Candidate>, String> {
-        let body = self.body(target)?;
+        let first = *target.current.first().ok_or("the Body has no solid yet")?;
         let operation = match self.enum_text(o, "Type").as_deref().unwrap_or("Fuse") {
             "Fuse" => "join",
             "Cut" => "cut",
             "Common" => "intersect",
             other => return Err(format!("a boolean {other}")),
         };
-        let mut tools = Vec::new();
+        let mut tool_bodies: Vec<BodyUid> = Vec::new();
         for link in o.links("Group") {
             let bodies = self
                 .replay
@@ -2318,41 +2454,128 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 if self.doc.body_component(b) != Some(target.place.component) {
                     return Err(format!("{} is in another component", link.object));
                 }
-                tools.push(b.to_string());
+                tool_bodies.push(b);
             }
         }
-        if tools.is_empty() {
+        if tool_bodies.is_empty() {
             return Err("no bodies to combine with".to_owned());
         }
-        Ok(vec![Candidate::new(
+        let tools = uids(&tool_bodies);
+        let combine = |body: BodyUid, with: &[String], operation: &str, keep: bool| {
             json!({"type": "combine", "target": body.to_string(),
-            "tools": tools, "operation": operation, "keep_tools": false}),
-        )])
+            "tools": with, "operation": operation, "keep_tools": keep})
+        };
+        // FreeCAD combines the Body's whole shape with the other Bodies',
+        // and the Body may be several solids, each a MitCad body
+        // (mitcad#1004): the bodies the tools reach are joined with them
+        // into one (the first of them), cut by them or intersected with
+        // them; the others stay as they are (a common leaves nothing of
+        // them).
+        let reached = self.reached_by(&tool_bodies, &target.current);
+        match operation {
+            "join" => {
+                let (into, others) = match reached.split_first() {
+                    Some((into, others)) => (*into, others.to_vec()),
+                    None => (first, Vec::new()),
+                };
+                let mut all = tools;
+                all.extend(uids(&others));
+                let mut candidate = Candidate::new(combine(into, &all, "join", false));
+                if reached.is_empty() && target.current.len() > 1 {
+                    candidate = candidate.note(
+                        "the Boolean's bodies touch none of the Body's bodies: joined to its \
+                         first body as solids of their own",
+                    );
+                }
+                Ok(vec![candidate])
+            }
+            "cut" => {
+                // A cut that reaches none changes nothing; the tools go.
+                let cut = if reached.is_empty() {
+                    vec![first]
+                } else {
+                    reached
+                };
+                let defs = cut
+                    .iter()
+                    .enumerate()
+                    .map(|(i, b)| combine(*b, &tools, "cut", i + 1 < cut.len()))
+                    .collect();
+                Ok(vec![per_body(defs)])
+            }
+            _ => {
+                if reached.is_empty() {
+                    return Err("the Boolean's bodies reach none of the Body's bodies".to_owned());
+                }
+                let mut defs: Vec<(Value, Cow<'static, str>)> = reached
+                    .iter()
+                    .enumerate()
+                    .map(|(i, b)| {
+                        let suffix: Cow<'static, str> = if i == 0 {
+                            Cow::Borrowed("")
+                        } else {
+                            Cow::Owned(format!(" (body {})", i + 1))
+                        };
+                        (
+                            combine(*b, &tools, "intersect", i + 1 < reached.len()),
+                            suffix,
+                        )
+                    })
+                    .collect();
+                let outside: Vec<BodyUid> = target
+                    .current
+                    .iter()
+                    .copied()
+                    .filter(|b| !reached.contains(b))
+                    .collect();
+                if !outside.is_empty() {
+                    defs.push((
+                        json!({"type": "remove_body", "bodies": uids(&outside)}),
+                        Cow::Borrowed(" (outside)"),
+                    ));
+                }
+                Ok(vec![Candidate::several_named(defs)])
+            }
+        }
     }
 
     // Draft and Thickness.
 
-    fn faces_of(&mut self, o: &Object, target: &Target) -> Result<(BodyUid, Vec<String>), String> {
-        let body = self.body(target)?;
+    /// The faces a Draft or Thickness names, grouped by the body they are
+    /// on, in the order the link names them: FreeCAD's Body may be several
+    /// solids, each a MitCad body (mitcad#1004).
+    fn faces_of(
+        &mut self,
+        o: &Object,
+        target: &Target,
+    ) -> Result<Vec<(BodyUid, Vec<String>)>, String> {
+        if target.current.is_empty() {
+            return Err("the Body has no solid yet".to_owned());
+        }
         let link = o.link("Base").ok_or("no faces")?.clone();
-        let mut faces = Vec::new();
+        let mut out: Vec<(BodyUid, Vec<String>)> = Vec::new();
         for sub in &link.subs {
             let name = sub_name(sub);
             if !name.starts_with("Face") {
                 continue;
             }
             let (b, names) = self.element_names(&link.object, name)?;
-            if b != body {
+            if !target.current.contains(&b) {
                 return Err(format!("{}.{name} is on another body", link.object));
             }
-            faces.extend(names);
+            match out.iter_mut().find(|(body, _)| *body == b) {
+                Some((_, faces)) => faces.extend(names),
+                None => out.push((b, names)),
+            }
         }
-        Ok((body, faces))
+        Ok(out)
     }
 
+    /// FreeCAD drafts the faces of the Body's whole shape: one draft per
+    /// body they are on (mitcad#1004).
     fn draft_candidates(&mut self, o: &Object, target: &Target) -> Result<Vec<Candidate>, String> {
-        let (body, faces) = self.faces_of(o, target)?;
-        if faces.is_empty() {
+        let grouped = self.faces_of(o, target)?;
+        if grouped.is_empty() {
             return Err("no faces".to_owned());
         }
         let link = o.link("NeutralPlane").ok_or("no neutral plane")?.clone();
@@ -2360,8 +2583,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let angle = self.prop(o, "Angle", Kind::Angle, 0.0);
         let reversed = o.bool("Reversed").unwrap_or(false);
         let def = |flip: bool, a: &Q| {
-            json!({"type": "draft", "body": body.to_string(), "faces": faces, "plane": plane,
-                   "angle": a.json(), "flip": flip})
+            let defs = grouped
+                .iter()
+                .map(|(body, faces)| {
+                    json!({"type": "draft", "body": body.to_string(), "faces": faces,
+                           "plane": plane, "angle": a.json(), "flip": flip})
+                })
+                .collect();
+            per_body(defs)
         };
         // Mitcad pulls along the neutral plane's normal: a pull direction
         // along it, either way, is the same draft (the check tells).
@@ -2376,19 +2605,25 @@ impl<K: Kernel> Importer<'_, '_, K> {
         };
         let opposite = angle.neg();
         Ok(vec![
-            pulled(Candidate::new(def(reversed, &angle))),
-            pulled(Candidate::new(def(!reversed, &angle))),
-            pulled(Candidate::new(def(reversed, &opposite))),
-            pulled(Candidate::new(def(!reversed, &opposite))),
+            pulled(def(reversed, &angle)),
+            pulled(def(!reversed, &angle)),
+            pulled(def(reversed, &opposite)),
+            pulled(def(!reversed, &opposite)),
         ])
     }
 
+    /// FreeCAD thickens the solids of the Body's whole shape that its faces
+    /// are on, each opened at its own faces: one shell per body they are on
+    /// (mitcad#1004). Without faces, every body is hollowed closed.
     fn thickness_candidates(
         &mut self,
         o: &Object,
         target: &Target,
     ) -> Result<Vec<Candidate>, String> {
-        let (body, faces) = self.faces_of(o, target)?;
+        let mut grouped = self.faces_of(o, target)?;
+        if grouped.is_empty() {
+            grouped = target.current.iter().map(|b| (*b, Vec::new())).collect();
+        }
         // FreeCAD's Pipe and RectoVerso modes thicken a solid as Skin does
         // (the check tells when they do not).
         let mode = self
@@ -2407,14 +2642,20 @@ impl<K: Kernel> Importer<'_, '_, K> {
             } else {
                 (json!(0.0), value.clone())
             };
-            json!({"type": "shell", "body": body.to_string(), "faces": faces, "inside": i,
-                   "outside": out, "rounded": rounded})
+            let defs = grouped
+                .iter()
+                .map(|(body, faces)| {
+                    json!({"type": "shell", "body": body.to_string(), "faces": faces,
+                           "inside": i, "outside": out, "rounded": rounded})
+                })
+                .collect();
+            per_body(defs)
         };
         Ok(vec![
-            Candidate::new(def(inward, arc && !inward)),
-            Candidate::new(def(!inward, arc && inward)),
-            Candidate::new(def(inward, !(arc && !inward))),
-            Candidate::new(def(!inward, !(arc && inward))),
+            def(inward, arc && !inward),
+            def(!inward, arc && inward),
+            def(inward, !(arc && !inward)),
+            def(!inward, !(arc && inward)),
         ])
     }
 
@@ -3067,7 +3308,7 @@ impl ThreadGroove {
     /// For each centre a fixed plane through the axis, the groove's section
     /// on it and a helix cutting it into the material, then the hole `hole`
     /// (drilling along the sketch normal's reverse unless `flip`).
-    fn candidate(&self, hole: Value, flip: bool, body: BodyUid) -> Candidate {
+    fn candidate(&self, hole: Value, flip: bool, bodies: &[BodyUid]) -> Candidate {
         // FreeCAD's direction out of the material and its perpendicular.
         let z = if flip {
             scale(self.normal, -1.0)
@@ -3107,7 +3348,7 @@ impl ThreadGroove {
                 "profiles": [{"sketch": format!("${}", at + 1), "region": format!("${}:region", at + 1)}],
                 "axis": {"origin": center, "direction": z}, "pitch": self.pitch,
                 "revolutions": self.revolutions, "left_handed": self.left_handed, "flip": true,
-                "operation": "cut", "participants": [body.to_string()]});
+                "operation": "cut", "participants": uids(bodies)});
             defs.push((plane, " (thread plane)"));
             defs.push((section, " (thread section)"));
             defs.push((helix, " (thread)"));
@@ -3119,15 +3360,32 @@ impl ThreadGroove {
     }
 }
 
-/// Whether the line through `p` along `n` misses the box: a hole there
-/// cuts nothing.
-fn misses_box(p: [f64; 3], n: [f64; 3], b: &mitcad_model::BoundingBox) -> bool {
+/// Whether the cylinder of `radius` about the segment from `p` along the
+/// unit `n` for `length` (infinite for through all) meets the box: a hole
+/// drilled there may reach the body inside it (mitcad#997).
+pub(super) fn meets_box(
+    p: [f64; 3],
+    n: [f64; 3],
+    length: f64,
+    radius: f64,
+    b: &mitcad_model::BoundingBox,
+) -> bool {
+    let grown = mitcad_model::BoundingBox {
+        min: b.min.map(|v| v - radius),
+        max: b.max.map(|v| v + radius),
+    };
+    line_span(p, n, &grown).is_some_and(|(lo, hi)| hi >= -1e-6 && lo <= length + 1e-6)
+}
+
+/// The parameters along the line through `p` along `n` where it is inside
+/// the box (within 1e-6), when it meets it.
+fn line_span(p: [f64; 3], n: [f64; 3], b: &mitcad_model::BoundingBox) -> Option<(f64, f64)> {
     let tol = 1e-6;
     let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
     for k in 0..3 {
         if n[k].abs() < 1e-12 {
             if p[k] < b.min[k] - tol || p[k] > b.max[k] + tol {
-                return true;
+                return None;
             }
         } else {
             let a = (b.min[k] - tol - p[k]) / n[k];
@@ -3136,5 +3394,11 @@ fn misses_box(p: [f64; 3], n: [f64; 3], b: &mitcad_model::BoundingBox) -> bool {
             hi = hi.min(a.max(c));
         }
     }
-    lo > hi
+    (lo <= hi).then_some((lo, hi))
+}
+
+/// Whether the line through `p` along `n` misses the box: a hole there
+/// cuts nothing.
+fn misses_box(p: [f64; 3], n: [f64; 3], b: &mitcad_model::BoundingBox) -> bool {
+    line_span(p, n, b).is_none()
 }

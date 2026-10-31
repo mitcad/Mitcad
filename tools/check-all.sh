@@ -27,7 +27,11 @@
 #          [--corpus auto|always|never] [--corpus-tests N] [--corpus-jobs N]
 #          [--memory SIZE|auto] [--overlap auto|off] [--fresh] [--only STEP,...]
 #   --full          the full check, before a release build: --ctest all,
-#                   --corpus always, --ui all (--release is the same).
+#                   --corpus always, --ui all (--release is the same), and
+#                   at the end each fuzz target of core/fuzz for 60 s
+#                   ($MITCAD_FUZZ_SECONDS) when cargo-fuzz and a nightly
+#                   toolchain are installed (skipped with a note
+#                   otherwise; mitcad#939).
 #   --ui-jobs N     UI tests at once (default $MITCAD_UI_JOBS, else 4). The
 #                   longest ones start first, by their last times in the
 #                   history. The app runs without gdb (UI_GDB=0, its own
@@ -79,8 +83,9 @@
 #                   ~/.mitcad/test-profiles.json. "off", or when it is not
 #                   built or does not finish: ctest -j in a test slot.
 #   --corpus MODE   the corpus group: f3d.corpus*, f3d.models_loft (the
-#                   reference models replayed), freecad.corpus,
-#                   ipt.corpus, iam.corpus*, ifc.corpus and solidcraft.corpus, after
+#                   reference models replayed), freecad.corpus*,
+#                   freecad.reported, ipt.corpus, iam.corpus*, ifc.corpus and
+#                   solidcraft.corpus, after
 #                   ctest's other tests, several at once, each importing
 #                   several files at once in child processes (mitcad#70).
 #                   "always", "never",
@@ -150,8 +155,8 @@
 #   --fresh         configure from scratch (cmake --fresh), as after
 #                   changes of CMake files.
 #   --only STEPS    only these steps: configure, build, fmt, clippy, deps,
-#                   ctest, corpus, ui, or single UI tests (ui-sketch) or
-#                   ctests (ctest:core.model).
+#                   ctest, corpus, ui, fuzz (with --full), or single UI
+#                   tests (ui-sketch) or ctests (ctest:core.model).
 #   --dry-run       builds and runs nothing: lists the ctests, the corpus
 #                   and the UI tests that would run for the working tree as
 #                   it is (against the last configure's targets), and why.
@@ -199,7 +204,7 @@ UI_TIMEOUT=${UI_TIMEOUT:-1800}
 # crates of other parts too).
 # The OCCT port counts, its docs (third_party/vcpkg-ports/README.md, docs/)
 # do not (mitcad#794).
-CORPUS_TESTS='^(f3d\.corpus|f3d\.models_loft$|freecad\.corpus$|ipt\.corpus$|iam\.corpus|ifc\.corpus$|solidcraft\.corpus$)'
+CORPUS_TESTS='^(f3d\.corpus|f3d\.models_loft$|freecad\.corpus|freecad\.reported$|ipt\.corpus$|iam\.corpus|ifc\.corpus$|solidcraft\.corpus$)'
 CORPUS_SOURCES=(core/f3d core/import core/freecad core/zip core/ipt core/tests
   core/ffi/src/kernel core/ffi/src/*_import.rs core/ffi/src/ipt_history.rs core/ffi/src/exchange.rs
   core/ffi/src/memory.rs core/cpp core/CMakeLists.txt geometry tools/cli/import.cpp tools/cli/import.hpp
@@ -230,6 +235,8 @@ CORPUS_CRATES+=(mitcad-import-solidcraft mitcad-import-replay mitcad-import-join
   mitcad-import-primitives)
 # The appearances family above the replay's core (mitcad#791).
 CORPUS_SOURCES+=(core/import-appearances)
+# FreeCAD documents reported with import faults (mitcad#998).
+CORPUS_SOURCES+=(tools/cli/fcstd-reported.cmake)
 CORPUS_CRATES+=(mitcad-import-appearances)
 CORPUS_PASSED=${XDG_CACHE_HOME:-$HOME/.cache}/mitcad/corpus-passed
 # The build files every UI test depends on, what the application is built
@@ -1224,6 +1231,42 @@ fi
 
 # The corpus group when no UI test ran beside it.
 bg_join corpus
+
+# --- The fuzz targets of the file readers (mitcad#939, core/fuzz), with
+# --full only: the synthetic seeds written, then each target for
+# FUZZ_SECONDS ($MITCAD_FUZZ_SECONDS, else 60) on them, one after another.
+# They need cargo-fuzz and a nightly toolchain; without them the step is
+# skipped with a note. A finding fails the target's row
+# (check-logs/fuzz:<target>.log); its input is in
+# core/fuzz/artifacts/<target>/.
+FUZZ_SECONDS=${MITCAD_FUZZ_SECONDS:-60}
+fuzz_list() { (cd core && cargo +nightly fuzz list --fuzz-dir fuzz); }
+fuzz_build() { (cd core && cargo +nightly fuzz build --fuzz-dir fuzz -O); }
+# fuzz_run target: one target for FUZZ_SECONDS.
+fuzz_run() {
+  (cd core && cargo +nightly fuzz run --fuzz-dir fuzz -O "$1" -- \
+    -max_total_time="$FUZZ_SECONDS" -timeout=20 -rss_limit_mb=2048)
+}
+if [ "$FULL" = 1 ] && wanted fuzz; then
+  if [ "$DRY" = 1 ]; then
+    echo "   would run every fuzz target of core/fuzz for $FUZZ_SECONDS s"
+  elif ! cargo +nightly --version > /dev/null 2>&1 || ! cargo +nightly fuzz --version > /dev/null 2>&1; then
+    echo "== fuzz: skipped: cargo-fuzz or the nightly toolchain is not installed" \
+      "(docs/development.md, \"Fuzz targets of the file readers\")"
+    record fuzz 0 skipped
+  elif step fuzz-seeds cargo run -q --manifest-path core/fuzz/Cargo.toml --example write_seeds &&
+    step fuzz-build fuzz_build; then
+    mapfile -t FUZZ_TARGETS < <(fuzz_list 2> /dev/null)
+    echo "== fuzz: ${#FUZZ_TARGETS[@]} targets, $FUZZ_SECONDS s each"
+    if [ ${#FUZZ_TARGETS[@]} -eq 0 ]; then
+      record "fuzz list" 0 FAIL
+    fi
+    for target in "${FUZZ_TARGETS[@]}"; do
+      step "fuzz:$target" fuzz_run "$target"
+    done
+  fi
+fi
+
 record total "$(seconds_since "$RUN_START")" -
 echo
 column -t -s $'\t' "$TIMINGS" 2> /dev/null || cat "$TIMINGS"

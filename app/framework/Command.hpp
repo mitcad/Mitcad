@@ -460,6 +460,11 @@ struct InputDef {
   // edge it is measured from, Flip beside Offset), hidden and shown on
   // its own. A frontend without such lines shows it as a row of its own.
   bool besidePrevious = false;
+  // Its field on a line of its own under its label, across the panel, so
+  // that a long choice's text is whole at the panel's width (mitcad#1010:
+  // Measure's Selection Filter). A frontend without such lines shows the
+  // label beside the field.
+  bool fieldBelow = false;
   // Value: its handle stays in the view while the input is hidden (folded
   // away under More, mitcad#656: a placement's Offset and Angle).
   bool handleWhenHidden = false;
@@ -858,12 +863,35 @@ struct Inspection {
   // what was picked ("Face of Body1 ↔ Edge of Body2"), its main values
   // ("Distance 40 mm", "Angle 90°") and the selection inputs that hold the
   // picks; none when `picked` is empty.
+  // Also the main value alone ("40 mm") and the picks' kinds ("Face ↔
+  // Face"), for the history's one-line rows (mitcad#1010).
   struct Record {
     QString picked;
     QStringList values;
     QStringList inputs;
+    QString main;
+    QString kinds;
   };
   Record record;
+  // The answer as rows of a name and a value (Measure, mitcad#1010): the
+  // pair's values first (`values`, the `main` one shown larger), then a
+  // group for each pick titled by its kind ("Selection 1: cylindrical
+  // face"). A panel that can shows these instead of `text`; `text` stays
+  // the whole answer for the others. A value is its number and unit as
+  // shown and copied ("6.843 mm"); `tip` adds what does not fit on its
+  // line (the points a distance is measured between).
+  struct Value {
+    QString name;
+    QString value;
+    bool main = false;
+    QString tip;
+  };
+  struct Group {
+    QString title;
+    std::vector<Value> values;
+  };
+  std::vector<Value> values;
+  std::vector<Group> groups;
 };
 
 // The rigid motion a command's handles drive (Move/Copy, mitcad#838;
@@ -996,6 +1024,9 @@ struct CommandDef {
   // named Close: what was applied stays; else it closes.
   std::function<bool(CommandState&, const CommandContext&)> apply;
   bool repeats = false;
+  // A panel that only shows something (Measure, mitcad#1010): one Close
+  // button in place of OK and Cancel; Enter and Esc close it too.
+  bool closeOnly = false;
   QVector<InputDef> inputs;
   // Fills the inputs from the selection made before the command, instead
   // of each item going to the first input that takes it (3D Print: a face

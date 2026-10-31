@@ -72,12 +72,14 @@ QLabel* leadLine(const char* text, const QString& tab) {
   return lead;
 }
 
-// The placeholder of an empty view, in its viewport's top left corner.
-void paintPlaceholder(QAbstractItemView* view, const char* text) {
+// The placeholder of an empty view, in its viewport's top left corner: its
+// NativeEmptyTextProperty, which the AppKit frontend shows as well.
+void paintPlaceholder(QAbstractItemView* view) {
   QPainter painter(view->viewport());
   painter.setPen(view->palette().color(QPalette::PlaceholderText));
   painter.drawText(view->viewport()->rect().adjusted(12, 12, -12, -12),
-                   Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, QString::fromUtf8(text));
+                   Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
+                   view->property(NativeEmptyTextProperty).toString());
 }
 
 // The options as a tree of one level whose rows are dragged into their
@@ -85,7 +87,9 @@ void paintPlaceholder(QAbstractItemView* view, const char* text) {
 // add one.
 class OptionTree : public QTreeWidget {
 public:
-  explicit OptionTree(std::function<void()> dropped) : m_dropped(std::move(dropped)) {}
+  explicit OptionTree(std::function<void()> dropped) : m_dropped(std::move(dropped)) {
+    setProperty(NativeEmptyTextProperty, QString::fromUtf8(kNoOptions));
+  }
 
 protected:
   void dropEvent(QDropEvent* event) override {
@@ -96,7 +100,7 @@ protected:
   void paintEvent(QPaintEvent* event) override {
     QTreeWidget::paintEvent(event);
     if (topLevelItemCount() == 0) {
-      paintPlaceholder(this, kNoOptions);
+      paintPlaceholder(this);
     }
   }
 
@@ -106,11 +110,14 @@ private:
 
 // The Rows sheet; empty, it says how to add a row.
 class RowsSheet : public QTableWidget {
+public:
+  RowsSheet() { setProperty(NativeEmptyTextProperty, QString::fromUtf8(kNoRows)); }
+
 protected:
   void paintEvent(QPaintEvent* event) override {
     QTableWidget::paintEvent(event);
     if (rowCount() == 0) {
-      paintPlaceholder(this, kNoRows);
+      paintPlaceholder(this);
     }
   }
 };
@@ -206,6 +213,130 @@ private:
 
   DocumentHost& m_host;
   cfg::Table m_table;
+  QComboBox* m_parameter = nullptr;
+  QLineEdit* m_name = nullptr;
+  QComboBox* m_unit = nullptr;
+  QLineEdit* m_value = nullptr;
+  QLabel* m_message = nullptr;
+  QString m_added;
+};
+
+// Add Column (mitcad#999): a user parameter that is neither an option nor
+// a column yet, or a new one (name, unit, value), becomes a column of the
+// closed table: another parameter every row sets, each row's value its
+// current expression. An open table becomes closed with it (an open
+// table's rows set options only), which the dialog says. The parameter
+// and the table are one undo step.
+class AddColumnDialog : public QDialog {
+public:
+  AddColumnDialog(DocumentHost& host, cfg::Table table, const QStringList& candidates,
+                  QHash<QString, QJsonObject> parameters, QWidget* parent)
+      : QDialog(parent), m_host(host), m_table(std::move(table)), m_parameters(std::move(parameters)) {
+    setObjectName(QStringLiteral("addColumnDialog"));
+    setWindowTitle(tr("Add Column"));
+    auto* form = new QFormLayout(this);
+    auto* about = new QLabel(tr("A parameter that every row sets, as d, P, s and k of a screw size."));
+    about->setWordWrap(true);
+    form->addRow(about);
+    m_parameter = new QComboBox;
+    m_parameter->setObjectName(QStringLiteral("addColumnParameter"));
+    for (const QString& name : candidates) {
+      m_parameter->addItem(name, name);
+    }
+    m_parameter->addItem(tr("New Parameter"), QString());
+    m_parameter->setToolTip(tr("A user parameter that is no option; or a new parameter"));
+    m_name = new QLineEdit;
+    m_name->setObjectName(QStringLiteral("addColumnName"));
+    m_unit = new QComboBox;
+    m_unit->setObjectName(QStringLiteral("addColumnUnit"));
+    m_unit->setEditable(true);
+    m_unit->addItems({QStringLiteral("mm"), QStringLiteral("cm"), QStringLiteral("m"), QStringLiteral("in"),
+                      QStringLiteral("deg"), QStringLiteral("Text"), QString()});
+    m_value = new QLineEdit(QStringLiteral("0"));
+    m_value->setObjectName(QStringLiteral("addColumnValue"));
+    m_value->setToolTip(tr("The parameter's value, which every row then has: a number (with its unit) or a text"));
+    form->addRow(tr("Parameter:"), m_parameter);
+    form->addRow(tr("Name:"), m_name);
+    form->addRow(tr("Unit:"), m_unit);
+    form->addRow(tr("Value:"), m_value);
+    if (!m_table.closed) {
+      auto* closes = new QLabel(tr("The table becomes closed: only its rows' combinations are allowed."));
+      closes->setObjectName(QStringLiteral("addColumnCloses"));
+      closes->setWordWrap(true);
+      form->addRow(closes);
+    }
+    m_message = new QLabel;
+    m_message->setWordWrap(true);
+    setErrorStyleSheet(m_message);
+    form->addRow(m_message);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    QPushButton* ok = buttons->button(QDialogButtonBox::Ok);
+    ok->setObjectName(QStringLiteral("addColumnOK"));
+    ok->setDefault(true);
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, this, [this] { tryAccept(); });
+    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    connect(m_parameter, &QComboBox::currentIndexChanged, this, [this] { updateFields(); });
+    updateFields();
+    m_parameter->setFocus();
+  }
+
+  QString added() const { return m_added; }
+
+private:
+  void updateFields() {
+    const bool fresh = m_parameter->currentData().toString().isEmpty();
+    for (QWidget* field : {static_cast<QWidget*>(m_name), static_cast<QWidget*>(m_unit),
+                           static_cast<QWidget*>(m_value)}) {
+      field->setEnabled(fresh);
+    }
+  }
+
+  void tryAccept() {
+    QString name = m_parameter->currentData().toString();
+    QString expression;
+    QJsonArray commands;
+    if (name.isEmpty()) {
+      name = m_name->text().trimmed();
+      const QString unit = m_unit->currentText().trimmed();
+      const bool text = isTextUnit(unit);
+      expression = cfg::rowExpression(text, text ? QString() : unit, m_value->text());
+      if (expression.isEmpty()) {
+        expression = text ? QStringLiteral("''") : QStringLiteral("0");
+      }
+      QJsonObject add{{QStringLiteral("cmd"), QStringLiteral("add_parameter")},
+                      {QStringLiteral("name"), name},
+                      {QStringLiteral("expression"), expression}};
+      if (!unit.isEmpty()) {
+        add.insert(QStringLiteral("unit"), unit);
+      }
+      commands.append(add);
+    } else {
+      // Each row's value: the parameter's expression as it is now.
+      expression = m_parameters.value(name).value(QStringLiteral("expression")).toString();
+    }
+    if (const QString readOnly = m_host.readOnlyReason(); !readOnly.isEmpty()) {
+      m_message->setText(readOnly);
+      return;
+    }
+    if (!m_host.canChangeModel()) {
+      m_message->setText(m_host.changeBlockedReason());
+      return;
+    }
+    commands.append(cfg::setTableCommand(cfg::withColumn(m_table, name, expression)));
+    if (m_host.runModelCommands(commands, tr("Add Column %1").arg(name))) {
+      m_added = name;
+      qDebug().noquote() << QStringLiteral("Configurations: column %1 added").arg(name);
+      accept();
+    } else if (!m_host.lastCancelled()) {
+      m_message->setText(m_host.lastError());
+      qDebug().noquote() << QStringLiteral("Configurations add column %1 refused: %2").arg(name, m_host.lastError());
+    }
+  }
+
+  DocumentHost& m_host;
+  cfg::Table m_table;
+  QHash<QString, QJsonObject> m_parameters;
   QComboBox* m_parameter = nullptr;
   QLineEdit* m_name = nullptr;
   QComboBox* m_unit = nullptr;
@@ -777,7 +908,12 @@ QWidget* ConfigurationsDialog::makeRowsPage() {
   m_apply = new QPushButton(tr("Apply"));
   m_apply->setObjectName(QStringLiteral("configurationsApply"));
   m_apply->setToolTip(tr("Set the options to the selected row's values"));
-  for (QPushButton* button : {m_addRow, m_generateRows, m_deleteRow, m_defaultRow}) {
+  // A closed table's parameter columns (mitcad#999).
+  m_addColumn = new QPushButton(themeIcon(QStringLiteral("add")), tr("Add Column…"));
+  m_addColumn->setObjectName(QStringLiteral("configurationsAddColumn"));
+  m_removeColumn = new QPushButton(themeIcon(QStringLiteral("delete")), tr("Remove Column"));
+  m_removeColumn->setObjectName(QStringLiteral("configurationsRemoveColumn"));
+  for (QPushButton* button : {m_addRow, m_generateRows, m_deleteRow, m_defaultRow, m_addColumn, m_removeColumn}) {
     button->setAutoDefault(false);
     buttons->addWidget(button);
   }
@@ -802,6 +938,8 @@ QWidget* ConfigurationsDialog::makeRowsPage() {
   connect(m_deleteRow, &QPushButton::clicked, this, [this] { later([this] { deleteRow(); }); });
   connect(m_defaultRow, &QPushButton::clicked, this, [this] { later([this] { setDefaultRow(); }); });
   connect(m_apply, &QPushButton::clicked, this, [this] { later([this] { applyRow(); }); });
+  connect(m_addColumn, &QPushButton::clicked, this, [this] { later([this] { addColumn(); }); });
+  connect(m_removeColumn, &QPushButton::clicked, this, [this] { later([this] { removeColumn(); }); });
   connect(m_rows, &QTableWidget::itemChanged, this, &ConfigurationsDialog::rowEdited);
   connect(m_rows, &QTableWidget::itemSelectionChanged, this, [this] {
     const bool selected = !selectedRow().isEmpty();
@@ -809,6 +947,10 @@ QWidget* ConfigurationsDialog::makeRowsPage() {
       button->setEnabled(selected);
     }
   });
+  // Remove Column takes the current cell's column: enabled on a parameter
+  // column's cell.
+  connect(m_rows, &QTableWidget::currentCellChanged, this,
+          [this] { m_removeColumn->setEnabled(!selectedColumn().isEmpty()); });
   return page;
 }
 
@@ -850,6 +992,15 @@ QString ConfigurationsDialog::selectedOption() const {
 QString ConfigurationsDialog::selectedRow() const {
   const QList<QTableWidgetItem*> items = m_rows->selectedItems();
   return items.isEmpty() ? QString() : items.first()->data(kNameRole).toString();
+}
+
+QString ConfigurationsDialog::selectedColumn() const {
+  const QVector<RowColumn> columns = rowColumns();
+  const int c = m_rows->currentColumn();
+  if (m_rows->currentRow() < 0 || c < 0 || c >= columns.size() || columns.at(c).kind != RowColumn::Parameter) {
+    return {};
+  }
+  return columns.at(c).parameter;
 }
 
 // ---------------------------------------------------------------------------
@@ -912,6 +1063,15 @@ void ConfigurationsDialog::refresh() {
     button->setEnabled(row);
   }
   m_addRow->setEnabled(!m_table.options.isEmpty() || m_table.closed);
+  // mitcad#999: an open table becomes closed with its first column.
+  m_addColumn->setToolTip(m_table.closed
+                              ? tr("Another parameter that every row sets, as d, P, s and k of a screw size")
+                              : tr("Another parameter that every row sets; the table becomes closed"));
+  m_removeColumn->setEnabled(!selectedColumn().isEmpty());
+  m_removeColumn->setToolTip(m_table.parameters.isEmpty()
+                                 ? tr("The table has no parameter columns")
+                                 : tr("Take the current cell's parameter column out of the table; the parameter "
+                                      "stays"));
   m_generateRows->setEnabled(!m_tables.empty());
   m_generateRows->setToolTip(m_tables.empty()
                                  ? tr("The design has no tables (Change Parameters, Tables)")
@@ -1201,9 +1361,10 @@ void ConfigurationsDialog::refuse(const QString& key, const QString& what, const
   qDebug().noquote() << QStringLiteral("Configurations %1: %2 refused: %3").arg(what, typed, reason);
 }
 
-void ConfigurationsDialog::submitTable(const cfg::Table& table, const QString& key, const QString& typed,
+bool ConfigurationsDialog::submitTable(const cfg::Table& table, const QString& key, const QString& typed,
                                        const QString& what) {
-  if (run(cfg::setTableCommand(table))) {
+  const bool done = run(cfg::setTableCommand(table));
+  if (done) {
     m_refused.remove(key);
     showMessage(QString(), false);
     qDebug().noquote() << QStringLiteral("Configurations %1: %2").arg(what, typed);
@@ -1211,6 +1372,7 @@ void ConfigurationsDialog::submitTable(const cfg::Table& table, const QString& k
     refuse(key, what, typed, m_reason);
   }
   refresh();
+  return done;
 }
 
 void ConfigurationsDialog::addOption() {
@@ -1527,6 +1689,39 @@ void ConfigurationsDialog::applyRow() {
   refresh();
 }
 
+void ConfigurationsDialog::addColumn() {
+  if (const QString readOnly = m_host.readOnlyReason(); !readOnly.isEmpty()) {
+    showMessage(readOnly, true);
+    return;
+  }
+  if (!m_host.canChangeModel()) {
+    showMessage(m_host.changeBlockedReason(), true);
+    return;
+  }
+  const QStringList candidates = cfg::columnCandidates(m_table, m_userParameters);
+  AddColumnDialog dialog(m_host, m_table, candidates, m_parameters, this);
+  qDebug().noquote() << QStringLiteral("Add Column dialog opened: %1")
+                            .arg((candidates + QStringList{QStringLiteral("New Parameter")}).join(QStringLiteral(", ")));
+  prepareModal(&dialog);
+  execDialog(&dialog);
+  if (!dialog.added().isEmpty()) {
+    showMessage(QString(), false);
+  }
+  refresh();
+}
+
+void ConfigurationsDialog::removeColumn() {
+  const QString name = selectedColumn();
+  if (name.isEmpty()) {
+    showMessage(tr("Select a cell of the parameter column to remove."), true);
+    return;
+  }
+  // The rows no longer set it; the parameter keeps its value.
+  if (submitTable(cfg::withoutColumn(m_table, name), QString(), name, QStringLiteral("removed column"))) {
+    qDebug().noquote() << QStringLiteral("Configurations: column %1 removed").arg(name);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The log, for UI tests
 
@@ -1549,7 +1744,8 @@ void ConfigurationsDialog::logLayout() {
       {"add option", m_addOption},   {"remove option", m_removeOption}, {"edit domain", m_editDomain},
       {"move up", m_up},             {"move down", m_down},            {"closed", m_closed},
       {"add row", m_addRow},         {"delete row", m_deleteRow},      {"set as default", m_defaultRow},
-      {"apply", m_apply},            {"generate rows", m_generateRows}};
+      {"apply", m_apply},            {"generate rows", m_generateRows}, {"add column", m_addColumn},
+      {"remove column", m_removeColumn}};
   for (const auto& [name, widget] : buttons) {
     if (widget->isVisible()) {
       place(QStringLiteral("Configurations %1").arg(QLatin1String(name)), widget, widget->rect().center());

@@ -30,6 +30,10 @@ public:
     QString picked;
     // The main values: "Distance 40 mm", "Angle 90°".
     QStringList values;
+    // The row's one line in the panel (mitcad#1010): the main value alone
+    // ("40 mm") and the picks' kinds ("Face ↔ Face").
+    QString main;
+    QString kinds;
     // The selection inputs' picks and the choices they were made with
     // (Measure's Selection Filter), to show the measurement again.
     QHash<QString, Selection> inputs;

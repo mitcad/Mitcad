@@ -111,7 +111,9 @@ corrosion_add_cxxbridge(mitcad_bridge CRATE mitcad_ffi_bridges_sources FILES
   # C++ exceptions under bridge calls as errors, tested (mitcad#937).
   kernel/exception_probe.rs
   # A Fillet's or Chamfer's picked edges as polylines (mitcad#957).
-  kernel/input_edges.rs)
+  kernel/input_edges.rs
+  # Dogbones: the relief cylinders at a body's inside corners (mitcad#1011).
+  kernel/dogbone.rs)
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/boolean.cpp
   cpp/bridge/boolean.hpp
@@ -273,6 +275,10 @@ target_sources(mitcad_bridge PRIVATE
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/input_edges.cpp
   cpp/bridge/input_edges.hpp)
+# Dogbones: the relief cylinders at a body's inside corners (mitcad#1011).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/dogbone.cpp
+  cpp/bridge/dogbone.hpp)
 target_include_directories(mitcad_bridge PUBLIC cpp)
 # What corrosion_add_cxxbridge links for a CRATE that Corrosion imported
 # (mitcad#792): the bridge with the Rust library, both ways.

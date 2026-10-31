@@ -1001,8 +1001,9 @@ ui_focus_dialog '^Part Picker - Profile$'
 # it has one again.
 ui_expect_new "Part picker groups: " "the groups logged"
 GROUPS_TREE=$(grep "^Part picker groups: " "$UI_LOG" | tail -1)
-[[ $GROUPS_TREE == *"All parts, Slot profile, Slot profile/Profiles" ]] ||
-  ui_fail "the groups are '$GROUPS_TREE', not Slot profile with its Profiles"
+# Each with its count (mitcad#1015).
+[[ $GROUPS_TREE == *"All parts (2), Slot profile (2), Slot profile/Profiles (2)" ]] ||
+  ui_fail "the groups are '$GROUPS_TREE', not Slot profile with its Profiles, two profiles each"
 expect_picker_place "Part picker place group fold Slot profile" "the fold's place"
 ui_mark
 ui_step "the group Slot profile"           ui_click_logged "Part picker group row Slot profile"
@@ -1046,7 +1047,8 @@ ui_expect_new "Part picker group Slot profile/Profiles: 2 parts" "both profiles 
 # applies when the list is made again.
 ui_expect_new "Part picker tiles: " "the tiles' order logged"
 TILES_BEFORE=$(grep "^Part picker tiles: " "$UI_LOG" | tail -1 | sed 's/^Part picker tiles: //')
-GROUPS_BEFORE=$(grep "^Part picker groups: " "$UI_LOG" | tail -1 | sed 's/^Part picker groups: //')
+# The groups by name: the kept line has no counts (mitcad#1015).
+GROUPS_BEFORE=$(grep "^Part picker groups: " "$UI_LOG" | tail -1 | sed 's/^Part picker groups: //; s/ ([0-9]*)//g')
 # The 20 profile (with its uses in the design) then the 30 profile.
 [[ $TILES_BEFORE == "test-profiles/p20-test"*", test-profiles/p30-test" ]] ||
   ui_fail "the tiles before the star are '$TILES_BEFORE', not the 20 profile then the 30 profile"
@@ -1065,7 +1067,7 @@ ui_mark
 ui_step "Profiles again (the group row)"   ui_click_logged "Part picker group row Slot profile/Profiles"
 ui_expect_new "Part picker group Slot profile/Profiles: 2 parts, first test-profiles/p30-test" "the starred profile first now"
 # A group's star changes only the star too: its row stays where it is.
-GROUPS_BEFORE=$(grep "^Part picker groups: " "$UI_LOG" | tail -1 | sed 's/^Part picker groups: //')
+GROUPS_BEFORE=$(grep "^Part picker groups: " "$UI_LOG" | tail -1 | sed 's/^Part picker groups: //; s/ ([0-9]*)//g')
 ui_mark
 ui_step "star the group (its star)"        ui_click_logged "Part picker place group star Slot profile/Profiles"
 ui_expect_new "Part picker group star slot profile/profiles on" "the group Profiles starred"

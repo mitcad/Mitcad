@@ -1,11 +1,17 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/sketch app/MainWindow.cpp app/MainWindowVisibility.cpp app/browser app/projects tools/cli
+# check-all sources: app/OcctViewer.cpp app/OcctViewer.hpp
 # Input-driven Windows UI test of the sketch's own origin and axes in a new
 # design, whose Origin folder's light bulb is off (mitcad#739), in the
 # build VM (tools/ui-windows-lib.ps1 says how the input is posted); the
 # Linux test is tools/ui-sketch-origin-test.sh:
 #   1. A new design starts with the design's origin hidden in the view and
-#      the Origin folder's light bulb off.
+#      the Origin folder's light bulb off. Its first view is framed and
+#      logged ("View: new design framed, scale <mm> mm per view height at
+#      <w>x<h>", mitcad#1000); the window resized smaller, larger (within
+#      the screen) and taller than wide, maximized and restored (where the
+#      window station maximizes it) and back keeps that scale ("View:
+#      resized to ...").
 #   2. Create Sketch on XY, XZ and YZ: the origin planes shown for the pick
 #      only; in the sketch the design's origin is hidden again, while the
 #      sketch draws its origin in the view and its x and y axes across it
@@ -139,6 +145,108 @@ function Free-Line([string]$Description) {
 Write-Host "--- A new design: the origin hidden, the Origin folder's light bulb off"
 Ui-StartApp 'sketch-origin'
 Ui-ExpectLog $hidden 'a new design starts with its origin hidden'
+
+Write-Host "--- A new design's framing kept when the window is resized (mitcad#1000)"
+# The window resized as a user would drag its frame (the outer size),
+# maximized and restored.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class FramingTestWindow {
+    [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy,
+                                                               uint flags);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hwnd, int command);
+    [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hwnd);
+    const uint SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10;
+
+    public static bool Resize(IntPtr hwnd, int width, int height) {
+        return SetWindowPos(hwnd, IntPtr.Zero, 0, 0, width, height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    public static int[] Size(IntPtr hwnd) {
+        Rect rect;
+        if (!GetWindowRect(hwnd, out rect)) { return null; }
+        return new int[] { rect.Right - rect.Left, rect.Bottom - rect.Top };
+    }
+    [DllImport("user32.dll")] static extern bool SystemParametersInfo(uint action, uint param, out Rect rect, uint ini);
+    // The primary screen's work area (SPI_GETWORKAREA): its size without
+    // the taskbar.
+    public static int[] WorkArea() {
+        Rect rect;
+        if (!SystemParametersInfo(0x30, 0, out rect, 0)) { return new int[] { 1024, 768 }; }
+        return new int[] { rect.Right - rect.Left, rect.Bottom - rect.Top };
+    }
+    public static void Maximize(IntPtr hwnd) { ShowWindow(hwnd, 3); } // SW_MAXIMIZE
+    public static void Restore(IntPtr hwnd) { ShowWindow(hwnd, 9); }  // SW_RESTORE
+}
+'@
+
+Ui-ExpectLog 'View: new design framed, scale ' "a new design's first view is logged"
+$framed = Ui-LastMatch 'View: new design framed, scale ([0-9.]+) mm'
+if (-not $framed) { Ui-Fail 'no scale in the new design''s framing line' }
+$framedScale = [double]::Parse($framed, [Globalization.CultureInfo]::InvariantCulture)
+
+# Expect-Framing "description" [-Optional]: within six seconds a "View:
+# resized to" line since the mark, with the new design's scale per view
+# height (within the logged 0.001 mm). -Optional: no line is no failure
+# (a window station that does not maximize the window).
+function Expect-Framing([string]$Description, [switch]$Optional) {
+  $line = $null
+  for ($i = 0; $i -lt 30; $i++) {
+    Ui-Sync
+    $line = Ui-NewLines | Where-Object { $_.Contains('View: resized to ') } | Select-Object -Last 1
+    if ($line) { break }
+    Start-Sleep -Milliseconds 200
+  }
+  if (-not $line) {
+    if ($Optional) { Write-Host "skip ${Description}: the window's size did not change"; return }
+    Ui-Fail "${Description}: no 'View: resized to' line since the mark"
+  }
+  if ("$line" -notmatch 'scale ([0-9.]+) mm per view height') { Ui-Fail "${Description}: no scale in '$line'" }
+  $scale = [double]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture)
+  if ([Math]::Abs($scale - $framedScale) -gt 0.001) {
+    Ui-Fail "${Description}: '$line', expected the new design's scale $framed mm per view height"
+  }
+  Write-Host "ok   ${Description}: $line"
+}
+
+$size = [FramingTestWindow]::Size($script:UiWindow)
+if (-not $size) { Ui-Fail 'the window''s size is not known' }
+# Every size within the screen's work area: Windows keeps a window within
+# about the screen's size (its largest tracking size), so in session 0's
+# 1024x768 desktop the window, which asks for more at the start, cannot grow
+# and a larger size changed nothing. Smaller first, then as large as the
+# work area allows, then narrow and as high as the work area (the view
+# taller than wide; a window narrower than that is held at its minimum
+# width, which changed nothing); maximized and restored from that narrow
+# window, so that each step changes the view's size.
+$area = [FramingTestWindow]::WorkArea()
+$fit = @([Math]::Min($size[0], $area[0]), [Math]::Min($size[1], $area[1]))
+Ui-Mark
+Ui-Step 'a smaller window'                 { if (-not [FramingTestWindow]::Resize($script:UiWindow, $fit[0] - 300, $fit[1] - 150)) { Ui-Fail 'the window was not resized' } }
+Expect-Framing 'a smaller window'
+Ui-Mark
+Ui-Step 'a larger window'                  { if (-not [FramingTestWindow]::Resize($script:UiWindow, $fit[0], $fit[1])) { Ui-Fail 'the window was not resized' } }
+Expect-Framing 'a larger window'
+Ui-Mark
+Ui-Step 'a window taller than wide'        { if (-not [FramingTestWindow]::Resize($script:UiWindow, $fit[0] - 300, $fit[1])) { Ui-Fail 'the window was not resized' } }
+Expect-Framing 'a window taller than wide'
+Ui-Mark
+Ui-Step 'the window maximized'             { [FramingTestWindow]::Maximize($script:UiWindow) }
+$zoomed = [FramingTestWindow]::IsZoomed($script:UiWindow)
+Expect-Framing 'the window maximized' -Optional:(-not $zoomed)
+Ui-Mark
+Ui-Step 'the window restored'              { [FramingTestWindow]::Restore($script:UiWindow) }
+Expect-Framing 'the window restored' -Optional:(-not $zoomed)
+Ui-Mark
+Ui-Step "the window's size again"          { if (-not [FramingTestWindow]::Resize($script:UiWindow, $size[0], $size[1])) { Ui-Fail 'the window was not resized' } }
+Expect-Framing "the window's size again"
+# After maximize and restore in session 0 the main window's shortcuts no
+# longer fire (F7 was logged and started nothing, also after a click on
+# it), so the sketches start in a new design of their own.
+Ui-StartApp 'sketch-origin-sketches'
 
 foreach ($plane in @('xy', 'xz', 'yz')) {
   $name = $plane.ToUpperInvariant()

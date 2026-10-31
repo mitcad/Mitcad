@@ -654,6 +654,12 @@ QString toolGroupName(int group) {
   }
 }
 
+QString toolGroupId(int group) {
+  static const QStringList ids = {QStringLiteral("CREATE"), QStringLiteral("GEOMETRY"), QStringLiteral("DIMENSIONS"),
+                                  QStringLiteral("TEXT"),   QStringLiteral("SYMBOLS"),  QStringLiteral("TABLES")};
+  return ids.value(group);
+}
+
 QStringList toolKeywords(const QString& id) {
   QStringList out{QStringLiteral("drawing"), QStringLiteral("sheet")};
   if (id == QStringLiteral("drawing.note")) {

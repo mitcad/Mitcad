@@ -284,7 +284,10 @@ void ChatController::notice(const QString& text, bool keep) {
 }
 
 int ChatController::toolIndex(const QString& id) const {
-  for (int index = int(m_entries.size()) - 1; index >= 0; --index) {
+  // Only the running process's calls: a call id is unique only within the
+  // agent's process, and a new process (after Stop on Windows, a crash or a
+  // resumed session) may number its calls from the start again.
+  for (int index = int(m_entries.size()) - 1; index >= m_toolsFrom; --index) {
     const QJsonObject& entry = m_entries[index];
     if (entry.value(QStringLiteral("role")).toString() == QStringLiteral("tool") &&
         entry.value(QStringLiteral("id")).toString() == id) {
@@ -324,6 +327,7 @@ void ChatController::record(QJsonObject entry) {
 
 void ChatController::loadHistory() {
   m_entries.clear();
+  m_toolsFrom = 0;
   m_answer = -1;
   m_sessions = QJsonObject();
   m_session.clear();
@@ -415,6 +419,7 @@ void ChatController::startOver(bool mark) {
   m_resumable = false;
   m_sessions = QJsonObject();
   m_entries.clear();
+  m_toolsFrom = 0;
   m_answer = -1;
   if (mark) {
     record({{QStringLiteral("role"), QStringLiteral("notice")},
@@ -498,6 +503,7 @@ bool ChatController::startAgent(QString* error) {
   }
   m_resuming = m_resumable;
   m_sawInit = false;
+  m_toolsFrom = int(m_entries.size());
   m_model.clear();
   setActivity(Activity::Starting);
   return true;

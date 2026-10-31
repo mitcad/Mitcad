@@ -568,3 +568,41 @@ fn a_package_whose_files_declare_too_much_in_all_is_refused() {
         Some(&b"{}"[..])
     );
 }
+
+/// Damaged files (mitcad#939): every cut of a package is refused or reads
+/// the model as written, and what is no zip archive is refused, by both
+/// readers, never with a panic.
+#[test]
+fn cut_packages_and_other_files_are_refused() {
+    let model = Model {
+        name: "Cut".to_owned(),
+        parts: vec![part(
+            "Body1",
+            cube([0.0; 3], 10.0),
+            Some([1.0, 0.5, 0.0]),
+            vec![Placement::IDENTITY],
+        )],
+        files: vec![(
+            "Metadata/project_settings.config".to_owned(),
+            b"{\"layer_height\": \"0.2\"}".to_vec(),
+        )],
+        ..Model::default()
+    };
+    let data = write(&model).unwrap();
+    let whole = read(&data).unwrap();
+    for cut in 0..data.len() {
+        let prefix = &data[..cut];
+        if let Ok(back) = read(prefix) {
+            assert_eq!(back.parts, whole.parts, "cut at {cut}");
+        }
+        let _ = read_package(prefix);
+    }
+    for other in [
+        &b""[..],
+        b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR",
+        b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1\0\0",
+    ] {
+        assert!(read(other).is_err());
+        assert!(read_package(other).is_err());
+    }
+}

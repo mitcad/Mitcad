@@ -106,6 +106,24 @@ checks.
   with `Sketch072.`); a face is the sketch's curves around it, one
   projection for each of FreeCAD's curves. A binder of a feature's result
   is that feature's element, found by its geometry.
+- 1.1's `ExternalTypes` (mitcad#998) say what each link makes: its
+  projection (0), its intersection with the sketch's plane (1) or both
+  (2). An edge's intersection is a linked section (`"section": true`):
+  the points where the plane crosses the edge, of a body by the kernel's
+  `section_points`, of another sketch's curve by the model's own
+  crossings; a face's the curves where the plane cuts it
+  (`section_curves`). An element lying in the plane is its own
+  intersection, so it stays a projection, as is a vertex. Both: FreeCAD's
+  curves are the projection's, its points the intersection's. (Before,
+  every link was projected: a circle crossing the plane became a line
+  across it, an extra curve of a sketch whose external geometry is
+  defining.)
+- A FreeCAD link names an element of the object's own shape. When later
+  features of its Body changed that element before the sketch (a face a
+  pocket split, mitcad#998), the projection reads the body as the
+  object's last MitCad feature left it (`"after"` in its record, see
+  [commands.md](../../model-api/src/commands.md), `sketch` definition's
+  `projections`), not as the body is at the sketch.
 - A body's element of a result of several solids is looked for in each of
   their bodies. Geometry of another component (a Body with a component of
   its own, at a placement or shown by links) is projected through the
@@ -469,6 +487,47 @@ cells.
   centre (its axis missing the body's box, or no edge of FreeCAD's stored
   result about its axis) gets no modelled thread groove and no thread on
   its wall.
+- A Body whose result is several solids at a feature (a pad of two
+  profiles apart, a pad just clear of the solid before it) is that many
+  MitCad bodies (mitcad#997). A Pad or Pocket joins with or cuts all of
+  them (a tool touching none is a body of its own, as FreeCAD keeps it a
+  solid of its own). A Hole drills all of them, as FreeCAD cuts the
+  Body's whole shape: each solid its holes reach is drilled, and its
+  modelled thread groove cuts all of them too; a Mitcad thread on the
+  walls names the walls of the bodies the hole's drilled length meets
+  (their boxes grown by its radius). A Fillet or Chamfer is one feature
+  per body its edges and faces are on (`<label> (body 2)`, …), with
+  `UseAllEdges` one per body. (Before, these fell back with "the Body is
+  several bodies here", and the fallback's one body of FreeCAD's solids
+  then lost all but one of its solids in the next join: a reported
+  model's cog pad gave 2 solids against FreeCAD's 3.)
+- The other features that worked on the Body's one body take all its
+  bodies too, as FreeCAD applies them to the Body's whole shape
+  (mitcad#1004). A Mirrored, LinearPattern, PolarPattern or
+  MultiTransform of the whole shape (`TransformMode` whole shape, or no
+  originals) copies each of the bodies, each copy joined to every one of
+  them it touches, as FreeCAD fuses a copy with whichever solid of the
+  Body it reaches (`combine` with `combine_any`, mitcad#1006): a copy
+  that reaches only another of the bodies joins that one, one that
+  touches several joins them into one (the first of them), one that
+  touches none stays a body of its own, and a later copy joins those too.
+  (Before mitcad#1006 a copy joined only the body it is a copy of, so a
+  mirror image reaching the other solid stayed apart and the Mirrored
+  fell back on the solid count.) The whole shape of a Body of one body
+  keeps `combine` alone. A Boolean works on the
+  bodies the other Bodies' bodies reach (their boxes meet, and the
+  kernel's contact test does not find them apart): a Fuse joins them
+  with the tools into the first of them (with none reached, the tools
+  join the first body as solids of their own), a Cut cuts each (with
+  none reached, the first: nothing changes and the tools go), a Common
+  intersects each and removes the others (`remove_body`), as FreeCAD's
+  common leaves nothing of them. A Draft is one draft per body its faces
+  are on, a Thickness one shell per body its faces are on (without
+  faces, each body is hollowed closed). An additive or subtractive
+  Ellipsoid is joined with the bodies its box reaches, into the first of
+  them, or cut from each of them (the other primitives join or cut all
+  the bodies as a Pad does). Before, all of these fell back with "the
+  Body is several bodies here".
 - A circle or arc seen edge on (a sketch square to its plane) projects to
   the line between its exact extremes, as FreeCAD's copy holds it; a
   sketch point at a line's end is not the edge along that line.
@@ -706,7 +765,12 @@ fell back gets its fallbacks by group on its line (`fallbacks: 1 missing,
 in a child process of its own, several at once (`mitcad_run_parallel`;
 `MITCAD_CORPUS_JOBS`, `MITCAD_CORPUS_MEMORY`, `MITCAD_CORPUS_TIMEOUT` as
 for the `.f3d` corpus; `MITCAD_CORPUS_JOBS=1` checks them one after
-another), and the lines come in the documents' order. A full run for
+another), and the lines come in the documents' order. The ctest
+`freecad.corpus_designs` (`tools/cli/fcstd-designs.cmake`, mitcad#997)
+checks single documents found by their content ids under those folders
+and the folders beside them (reported documents): no fallback, and the
+Body's volume within the bounds it gives (FreeCAD's within 1e-6
+relative). A full run for
 numbers before and after a change:
 `MITCAD_CORPUS_JOBS=8 ctest --test-dir build/dev -R freecad.corpus -V`,
 or with a release build's CLI

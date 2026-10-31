@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# The native Configurations window of a new design: the empty Options tree
+# and Rows sheet say how to add one, as the Qt views paint it (OptionTree,
+# RowsSheet, NativeEmptyTextProperty).
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+wait-idle
+native-appearance '${MITCAD_TEST_COLOR_SCHEME}'
+native-resize 1280 820
+mark
+native-action solid.configurations
+focus-dialog '^Configurations$'
+expect-log '^Configurations empty Options: '
+expect-native-visible configurationsOptions true
+expect-native-visible configurationsOptions.empty true
+expect-native-text configurationsOptions.empty '^No options yet\. Add Option… makes a parameter an option\.$'
+screenshot-dialog '${MITCAD_TEST_WORK}/configuration-options-empty-${MITCAD_TEST_COLOR_SCHEME}.png'
+native-choice configurationsTabs Rows
+expect-log '^Configurations empty Rows: '
+expect-native-visible configurationsRows true
+expect-native-visible configurationsRows.empty true
+expect-native-text configurationsRows.empty '^No rows yet\. Add Row saves the options. values as a row\.$'
+screenshot-dialog '${MITCAD_TEST_WORK}/configuration-rows-empty-${MITCAD_TEST_COLOR_SCHEME}.png'
+native-pointer-button '^Close$'
+expect-native-dialog-gone '^Configurations$'
+focus-main

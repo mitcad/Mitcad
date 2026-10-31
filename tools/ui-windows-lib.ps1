@@ -405,7 +405,7 @@ function Ui-Init([string]$App, [string]$Out, [string]$QtBin = '', [hashtable]$Sh
 # or -DefaultChrome leaves it to the preference and the default (Floating
 # since mitcad#429).
 function Ui-StartApp([string]$Name, [string[]]$Arguments = @(), [switch]$Recovery, [switch]$Updates,
-                     [switch]$DefaultChrome) {
+                     [switch]$DefaultChrome, [int]$ViewSeconds = 6) {
   Ui-StopApp
   $script:UiLog = Join-Path $script:UiOut "$Name.log"
   Remove-Item -Force $script:UiLog -ErrorAction SilentlyContinue
@@ -462,8 +462,9 @@ function Ui-StartApp([string]$Name, [string[]]$Arguments = @(), [switch]$Recover
   $window = $clock.ElapsedMilliseconds
   $script:UiWindow = $windows[0]
   $script:UiTarget = $script:UiWindow
-  # The view logs its area once it is laid out and drawn.
-  Ui-ExpectLog 'View area' 'the 3D view is up' | Out-Null
+  # The view logs its area once it is laid out and drawn; a design that
+  # computes long at the start (modelled threads) waits longer.
+  Ui-ExpectLog 'View area' 'the 3D view is up' $ViewSeconds | Out-Null
   $view = $clock.ElapsedMilliseconds
   # Then the app has handled its start (what it set going, such as the
   # window's first layouts, logged) and computes nothing, as the Linux
@@ -671,6 +672,8 @@ $script:UiKeys = @{
   'Return' = 0x0D; 'Escape' = 0x1B; 'Tab' = 0x09; 'BackSpace' = 0x08; 'Delete' = 0x2E; 'space' = 0x20
   'Up' = 0x26; 'Down' = 0x28; 'Left' = 0x25; 'Right' = 0x27; 'Home' = 0x24; 'End' = 0x23
   'F2' = 0x71; 'F3' = 0x72; 'F4' = 0x73; 'F5' = 0x74; 'F6' = 0x75; 'F7' = 0x76; 'F8' = 0x77; 'F9' = 0x78; 'F11' = 0x7A; 'F12' = 0x7B
+  # The context-menu key (VK_APPS; xdotool's Menu).
+  'Menu' = 0x5D
 }
 
 # Ui-Key "ctrl+z" ["Return" ...]: key presses with modifiers, to the window
@@ -847,10 +850,16 @@ function Ui-LoggedAt([string]$Text) {
 # (Timber's frame with its fasteners), and a click on a place scrolled away
 # hits whatever is there instead. The panel logs its view with its places
 # ("Panel <command> view y A to B, scrolled S of M, bar at x,y"; the bar
-# only while it scrolls) and logs them again when it scrolls.
+# only while it scrolls) and logs them again when it scrolls. Also a row of
+# an inspection's result ("Panel <command> result <name>", mitcad#1010) and
+# the places of the Measure panel's own section ("Measure Keep as
+# Dimension", "Measure history row 2"), which it logs with its own; not
+# its buttons, which stay in view under the page.
 function Ui-PanelReveal([string]$Text) {
-  if ($Text -notmatch '^Panel (.+) input \S+$') { return }
-  $view = "Panel $($Matches[1]) view y "
+  if ($Text -match '^Panel (.+) input \S+$' -or $Text -match '^Panel (.+?) result ') { $panel = $Matches[1] }
+  elseif ($Text.StartsWith('Measure ')) { $panel = 'Measure' }
+  else { return }
+  $view = "Panel $panel view y "
   $synced = $false
   for ($i = 0; $i -lt 30; $i++) {
     $line = Ui-LastLineWith $view -Start

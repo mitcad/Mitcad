@@ -295,6 +295,40 @@ gp_Dir upAcross(const gp_Dir& direction, const gp_XYZ& wanted) {
 // usable distance (mm; a fit follows).
 constexpr double kTurnDistance = 1000.0;
 
+// How far a turn about `centre` puts the eye from it: the camera's
+// distance, unless it is no number or too short for the direction from the
+// eye to the centre to come out to the last digits; OCCT keeps the old
+// direction for an eye on the centre. An orthographic fit makes the
+// distance the depth of the fitted box, none for a flat one seen face on (a
+// sketch seen square on), and entering a sketch afterwards kept the old,
+// oblique direction (mitcad#1009).
+bool turnsAt(double distance, const gp_Pnt& centre) {
+  const double shortest = std::max(Precision::Confusion(), 1e-6 * centre.XYZ().Modulus());
+  return std::isfinite(distance) && distance > shortest;
+}
+
+double turnDistance(double distance, const gp_Pnt& centre) {
+  return turnsAt(distance, centre) ? distance : std::max(kTurnDistance, 1e-3 * centre.XYZ().Modulus());
+}
+
+// After a fit: an orthographic camera's eye kept off its centre (see
+// turnDistance), which shows the same; the orbits, the 3D mouse and the
+// turns all need a direction from the eye to the centre (mitcad#1009).
+void keepEyeOffCentre(Graphic3d_Camera& camera) {
+  if (camera.IsOrthographic() && isFinite(camera.Center().XYZ()) && !turnsAt(camera.Distance(), camera.Center())) {
+    camera.SetDistance(turnDistance(camera.Distance(), camera.Center()));
+  }
+}
+// The share of the view's height the origin planes' box takes when the view
+// frames the origin (a new design, a fit with nothing shown; mitcad#1000):
+// about what a fit into the floating cards' free area gives in a window
+// some 1500 pixels wide, but the same at any size, so that a new design's
+// origin looks the same however large the window is.
+constexpr double kOriginShare = 0.7;
+
+// "1480x900", the view's size in the log lines of mitcad#1000.
+QString viewSizeText(const QWidget& view) { return QStringLiteral("%1x%2").arg(view.width()).arg(view.height()); }
+
 // The icon of a cube arrow by its id.
 QString arrowIconName(const QString& id) {
   const bool roll = id == QStringLiteral("cw") || id == QStringLiteral("ccw");
@@ -1452,9 +1486,7 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
     arrow->setAutoRaise(true);
     arrow->setFocusPolicy(Qt::NoFocus);
     arrow->hide();
-    connect(arrow, &QToolButton::clicked, this, [this, name] {
-      runViewOperation(QStringLiteral("cube arrow ") + name, [this, name] { turnCube(name); });
-    });
+    connect(arrow, &QToolButton::clicked, this, [this, name] { pressCubeArrow(name); });
     m_cubeArrows.emplace_back(name, arrow);
   }
   applyDevicePixelRatio(); // the ratio of the screen the view starts on
@@ -1792,6 +1824,7 @@ void OcctViewer::setBodies(const std::vector<BodyDisplay>& bodies) {
   m_bodies = std::move(kept);
   if (m_firstFit.shown(wasEmpty, designBodies(m_bodies))) {
     m_fitPending = true;
+    m_framingNewDesign = false; // the bodies, not the origin
   }
   logInactiveGhosts();
   sceneChanged();
@@ -3817,12 +3850,14 @@ void OcctViewer::lookAtSketchPlane(bool saveCamera, const TopoDS_Shape& face) {
     }
   }
   // Turned to the plane about that point (the view looks against the
-  // normal, the sketch's y up), at the same distance; then that point is
-  // moved to the middle of the free area as a fit moves it there, without
-  // the fit's zoom. Never an exception out of the Sketch Palette's Look At
-  // button's slot (mitcad#773).
+  // normal, the sketch's y up), at the same distance (one of its own for an
+  // eye on its centre, mitcad#1009); then that point is moved to the middle
+  // of the free area as a fit moves it there, without the fit's zoom. Never
+  // an exception out of the Sketch Palette's Look At button's slot
+  // (mitcad#773).
   runViewOperation(QStringLiteral("look at the sketch"), [this, &camera, &centre, &normal] {
-    camera->SetEyeAndCenter(centre.Translated(gp_Vec(normal) * camera->Distance()), centre);
+    const double distance = turnDistance(camera->Distance(), centre);
+    camera->SetEyeAndCenter(centre.Translated(gp_Vec(normal) * distance), centre);
     camera->SetUp(m_sketchPlane.YDirection());
     camera->OrthogonalizeUp();
     const gp_Vec move = freeAreaShift(camera);
@@ -3854,8 +3889,22 @@ void OcctViewer::restoreCamera() {
 
 void OcctViewer::fitAll() {
   m_fitPending = true;
+  m_framingNewDesign = false;
   requestFrame();
 }
+
+void OcctViewer::frameNewDesign() {
+  // The isometric view from the front right, Z up, as Home without a
+  // document's home view and the view at the start; the framing waits for
+  // the next frame, so that it is made at the view's size then.
+  AbortViewAnimation();
+  m_view->SetProj(V3d_TypeOfOrientation_Zup_AxoRight);
+  m_fitPending = true;
+  m_framingNewDesign = true;
+  requestFrame();
+}
+
+double OcctViewer::visibleHeight() const { return m_view->Camera()->ViewDimensions().Y(); }
 
 void OcctViewer::frameBox(const Bnd_Box& box) {
   if (box.IsVoid()) {
@@ -3863,11 +3912,13 @@ void OcctViewer::frameBox(const Bnd_Box& box) {
   }
   AbortViewAnimation();
   m_fitPending = false;
+  m_framingNewDesign = false;
   occ::handle<Graphic3d_Camera> fitted = new Graphic3d_Camera();
   fitted->Copy(m_view->Camera());
   if (!m_view->FitMinMax(fitted, box, 0.15, 10.0 * Precision::Confusion())) {
     return;
   }
+  keepEyeOffCentre(*fitted);
   fitToFreeArea(fitted);
   m_view->Camera()->Copy(fitted);
   m_view->Invalidate();
@@ -3964,15 +4015,33 @@ void OcctViewer::settleCamera() {
     cameraMoved();
   }
   if (m_fitPending) {
-    // As the next frame would (paintGL).
-    m_view->FitAll(0.15, false);
-    fitToFreeArea(m_view->Camera());
-    m_view->ZFitAll();
-    m_view->Invalidate();
-    m_fitPending = false;
+    applyPendingFit(); // as the next frame would (paintGL)
     cameraMoved();
   }
   requestFrame();
+}
+
+void OcctViewer::fitPending(const occ::handle<Graphic3d_Camera>& camera) const {
+  if (m_framingNewDesign) {
+    frameOrigin(camera);
+  } else {
+    fitCamera(camera);
+  }
+}
+
+void OcctViewer::applyPendingFit() {
+  fitPending(m_view->Camera());
+  m_view->ZFitAll();
+  m_view->Invalidate();
+  m_fitPending = false;
+  m_fitMade = true;
+  if (m_framingNewDesign) {
+    m_framingNewDesign = false;
+    // For reports and UI tests (mitcad#1000): the same scale at any size.
+    qInfo().noquote() << QStringLiteral("View: new design framed, scale %1 mm per view height at %2")
+                             .arg(visibleHeight(), 0, 'f', 3)
+                             .arg(viewSizeText(*this));
+  }
 }
 
 double OcctViewer::fieldOfView() const { return m_view->Camera()->FOVy(); }
@@ -3992,7 +4061,15 @@ void OcctViewer::fitCamera(const occ::handle<Graphic3d_Camera>& fitted) const {
   // What FitAll fits: the shown objects, without the orientation cube.
   m_viewStep = "the shown objects' box";
   const Bnd_Box box = m_view->View()->MinMaxValues();
-  if (box.IsVoid() || box.IsWhole()) {
+  if (box.IsVoid()) {
+    // Nothing to fit: an empty design, whose origin is hidden. OCCT's fit
+    // would keep the camera as it was (the previous design's or the
+    // start's), and the fit into the free area zoomed it out further on
+    // each Fit (mitcad#1000); the origin is framed instead.
+    frameOrigin(fitted);
+    return;
+  }
+  if (box.IsWhole()) {
     return;
   }
   // OCCT leaves out boxes beyond float range, not those that are no number
@@ -4010,9 +4087,41 @@ void OcctViewer::fitCamera(const occ::handle<Graphic3d_Camera>& fitted) const {
     return;
   }
   m_viewStep = "the fit";
-  m_view->FitMinMax(fitted, box, 0.15, 10.0 * Precision::Confusion());
+  if (!m_view->FitMinMax(fitted, box, 0.15, 10.0 * Precision::Confusion())) {
+    // A box with no size (a point shown at the origin): framed as nothing.
+    frameOrigin(fitted);
+    return;
+  }
   m_viewStep = "the fit to the free area";
+  keepEyeOffCentre(*fitted);
   fitToFreeArea(fitted);
+}
+
+void OcctViewer::frameOrigin(const occ::handle<Graphic3d_Camera>& camera) const {
+  if (m_originBox.IsVoid()) {
+    return; // no origin known: the camera stays as it is
+  }
+  m_viewStep = "the origin's framing";
+  // Fitted as in a view at least as wide as tall: the visible height then
+  // depends only on the box and the direction, not on the view's size, and
+  // a view that is narrow for a moment (a window being maximized) frames it
+  // as the wide view it becomes.
+  const double aspect = camera->Aspect();
+  occ::handle<Graphic3d_Camera> wide = new Graphic3d_Camera();
+  wide->Copy(camera);
+  wide->SetAspect(std::max(1.0, aspect));
+  if (!wide->FitMinMax(m_originBox, 10.0 * Precision::Confusion(), false)) {
+    return;
+  }
+  const double height = wide->ViewDimensions().Y() / kOriginShare;
+  camera->Copy(wide);
+  camera->SetAspect(aspect);
+  setVisibleHeight(*camera, height);
+  // In the middle of the cards' free area, without the zoom out of a fit
+  // into it (that depends on the cards' share of the view).
+  m_viewStep = "the origin's move to the free area";
+  const gp_Vec move = freeAreaShift(camera);
+  camera->SetEyeAndCenter(camera->Eye().Translated(move), camera->Center().Translated(move));
 }
 
 QRectF OcctViewer::freeArea() const {
@@ -4115,10 +4224,7 @@ void OcctViewer::turnCameraTo(const gp_Dir& direction, const gp_Dir& up) {
   if (!isFinite(center.XYZ())) {
     center = gp_Pnt(0.0, 0.0, 0.0);
   }
-  double distance = end->Distance();
-  if (!std::isfinite(distance) || distance <= Precision::Confusion()) {
-    distance = kTurnDistance;
-  }
+  const double distance = turnDistance(end->Distance(), center);
   end->SetEyeAndCenter(center.Translated(gp_Vec(direction) * -distance), center);
   end->SetUp(upAcross(direction, up.XYZ()));
   end->OrthogonalizeUp();
@@ -4303,19 +4409,22 @@ void OcctViewer::placeCubeArrows() {
     arrow->move(at - QPoint(arrow->width() / 2, arrow->height() / 2));
     arrow->raise();
   }
+  publishCubeArrows();
 }
 
 void OcctViewer::updateCubeArrows() {
-  if (m_nativeControls) {
-    for (const auto& arrow : m_cubeArrows) {
-      arrow.second->hide();
-    }
-    return;
-  }
   // Only while the view looks straight at a face.
   const gp_Dir direction = m_view->Camera()->Direction();
   const double along = std::max({std::abs(direction.X()), std::abs(direction.Y()), std::abs(direction.Z())});
   const bool faceOn = along > 1.0 - 1e-6;
+  m_cubeFaceOn = faceOn;
+  if (m_nativeControls) {
+    for (const auto& arrow : m_cubeArrows) {
+      arrow.second->hide();
+    }
+    publishCubeArrows();
+    return;
+  }
   bool changed = false;
   for (const auto& [id, arrow] : m_cubeArrows) {
     changed = changed || arrow->isHidden() == faceOn;
@@ -4341,6 +4450,26 @@ void OcctViewer::setNativeControls(bool native) {
       arrow.second->hide();
     }
   }
+  publishCubeArrows();
+}
+
+void OcctViewer::publishCubeArrows() {
+  // The hidden Qt arrows keep their places (placeCubeArrows): the native
+  // ones take them, the same buttons in the same spots around the cube.
+  std::vector<CubeArrow> arrows;
+  if (m_nativeControls && m_cubeFaceOn) {
+    for (const auto& [id, arrow] : m_cubeArrows) {
+      arrows.push_back({id, arrow->toolTip(), overlaySymbol(id), arrow->geometry()});
+    }
+  }
+  if (arrows != m_shownCubeArrows) {
+    m_shownCubeArrows = std::move(arrows);
+    emit cubeArrowsChanged();
+  }
+}
+
+void OcctViewer::pressCubeArrow(const QString& id) {
+  runViewOperation(QStringLiteral("cube arrow ") + id, [this, id] { turnCube(id); });
 }
 
 void OcctViewer::turnCube(const QString& arrow) {
@@ -4393,6 +4522,19 @@ void OcctViewer::logCamera() {
     return;
   }
   const occ::handle<Graphic3d_Camera>& current = m_view->Camera();
+  if (m_resizeToLog) {
+    // The view's size and the height it shows once a resize rests, with
+    // the window's state (mitcad#1000): a report's framing read from the
+    // log.
+    m_resizeToLog = false;
+    const Qt::WindowStates state = window()->windowState();
+    const QString stateText = state.testFlag(Qt::WindowFullScreen) ? QStringLiteral(", full screen")
+                                : state.testFlag(Qt::WindowMaximized) ? QStringLiteral(", maximized")
+                                                                      : QString();
+    qInfo().noquote() << QStringLiteral("View: resized to %1%2, scale %3 mm per view height")
+                             .arg(viewSizeText(*this), stateText)
+                             .arg(visibleHeight(), 0, 'f', 3);
+  }
   const QString text = QStringLiteral("Camera direction %1 up %2 (%3)")
                            .arg(vectorText(current->Direction().XYZ()), vectorText(current->Up().XYZ()),
                                 isPerspective() ? QStringLiteral("perspective")
@@ -4596,7 +4738,7 @@ CameraState OcctViewer::pendingCamera() const {
     pending->Copy(animation->CameraEnd());
   }
   if (m_fitPending) {
-    fitCamera(pending);
+    fitPending(pending);
   }
   return {pending->Eye(), pending->Center(), pending->Up(),
           pending->ProjectionType() == Graphic3d_Camera::Projection_Perspective,
@@ -5229,9 +5371,17 @@ void OcctViewer::initializeGL() {
     window = new Aspect_NeutralWindow();
     window->SetVirtual(true);
   }
+  // A surface made again (a re-parenting, a full screen switch) may come at
+  // another size: the view keeps the height it shows, as a resize does
+  // (mitcad#1000); OCCT would keep the shorter side.
+  // The first window keeps a framing made before it (settleCamera).
+  const double shownHeight = (firstTime && !m_fitMade) ? 0.0 : visibleHeight();
   window->SetNativeHandle(occtDrawable());
   window->SetSize(viewWidth, viewHeight);
   m_view->SetWindow(window, glContext->RenderingContext());
+  if (shownHeight > 0.0 && std::isfinite(shownHeight)) {
+    setVisibleHeight(*m_view->Camera(), shownHeight);
+  }
 
 #ifdef __APPLE__
   QObject::disconnect(m_renderedContextCleanup);
@@ -5240,7 +5390,11 @@ void OcctViewer::initializeGL() {
 #endif
 
   if (firstTime) {
-    m_view->SetSize(250.0); // an empty scene shows about 250 mm
+    if (!m_fitMade) {
+      // Until a fit or a new design's framing (mitcad#1000) is made: one
+      // made before the view had its window (settleCamera) stays.
+      m_view->SetSize(250.0); // an empty scene shows about 250 mm
+    }
     m_context->Display(m_orientationCube, 0, 0, false);
     updateGrid(true);
     const auto* renderer =
@@ -5387,17 +5541,26 @@ void OcctViewer::paintGL() {
                          .arg(qEnvironmentVariableIntValue("MITCAD_VIEWPORT_SYNC") != 0 ? 1 : 0));
   }
   if (newSize != oldSize) {
+    // A resize keeps the framing of what the view shows (mitcad#1000): its
+    // centre (OCCT keeps the camera's) and the height it shows. OCCT keeps
+    // its scale, the shorter side, so a view that became taller than wide
+    // on the way (a window being maximized or put to full screen) would
+    // show another height afterwards.
+    const double shownHeight = visibleHeight();
     window->SetSize(newSize.x(), newSize.y());
     m_view->MustBeResized();
+    if (oldSize.x() > 0 && oldSize.y() > 0 && shownHeight > 0.0 && std::isfinite(shownHeight)) {
+      setVisibleHeight(*m_view->Camera(), shownHeight);
+    }
     m_view->Invalidate();
+    // Logged once the view rests (logCamera): a dragged frame resizes in
+    // many steps.
+    m_resizeToLog = true;
+    m_restTimer->start();
   }
 
   if (m_fitPending) {
-    m_view->FitAll(0.15, false);
-    fitToFreeArea(m_view->Camera());
-    m_view->ZFitAll();
-    m_view->Invalidate();
-    m_fitPending = false;
+    applyPendingFit();
   }
 
   // A 3D mouse moves the camera by the time since its last frame

@@ -103,6 +103,15 @@ void FloatingLayout::setCardWidth(GlassCard* card, int width) {
   }
 }
 
+void FloatingLayout::showOnlyCards(const QStringList& names) {
+  for (const Entry& entry : m_entries) {
+    if (entry.card != nullptr) {
+      entry.card->setSuppressed(!names.isEmpty() && !names.contains(entry.card->objectName()));
+    }
+  }
+  requestLayout();
+}
+
 void FloatingLayout::requestLayout() {
   if (m_layoutQueued || m_inLayout) {
     return;

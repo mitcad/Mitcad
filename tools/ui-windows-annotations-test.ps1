@@ -75,6 +75,17 @@ function Wait-Enabled([string]$Place) {
   Ui-Fail "'$Place' is not enabled: $last"
 }
 
+# Annotate "letter" "entry": once the Measure panel offers the leaders for
+# its pick, its Annotate menu opened and the entry chosen by its letter
+# (mitcad#1010).
+function Annotate([string]$Letter, [string]$Entry) {
+  Ui-ExpectNew 'Measure Annotate entries: Note' 'the pick''s leaders offered'
+  Ui-Mark
+  Ui-Step 'Annotate'                       { Ui-ClickLogged 'Measure Annotate' }
+  Ui-ExpectNew 'Context menu: Note' 'Annotate''s menu'
+  Ui-Step "$Entry ($Letter)"               { Ui-Key $Letter }
+}
+
 # Keys to the Annotations window.
 function Window-Keys([string[]]$Keys) {
   Ui-FocusDialog '^Annotations$'
@@ -96,8 +107,8 @@ Ui-ExpectNew 'Command Measure started' 'measure started'
 Ui-Step 'pick Body1''s round face'         { Ui-ClickPick 'face F2.b0/F2:side(c1)' }
 Ui-Step 'pick Body2''s round face'         { Ui-ClickPick 'face F4.b0/F4:side(c1)' }
 Ui-ExpectNew 'axis distance 50' 'the axes 50 apart'
-Wait-Enabled 'Measure Keep'
-Ui-Step 'Keep'                             { Ui-ClickLogged 'Measure Keep' }
+Wait-Enabled 'Measure Keep as Dimension'
+Ui-Step 'Keep as Dimension'                { Ui-ClickLogged 'Measure Keep as Dimension' }
 Ui-ExpectNew 'Annotation kept: AxisDistance1' 'kept as the axes'' distance'
 Ui-Step 'close (Enter)'                    { Ui-Key 'Return' }
 Ui-ExpectNew 'Closed Measure' 'measure closed'
@@ -107,8 +118,8 @@ Ui-Step 'measure (I)'                      { Ui-Key 'i' }
 Ui-ExpectNew 'Command Measure started' 'measure started again'
 Ui-Step 'pick Body1''s top rim'            { Ui-ClickPick 'edge F2.b0/E{F2:end(r{c1})|' }
 Ui-ExpectNew 'Inspect Measure: length 31.416, radius 5, diameter 10' 'the rim measured'
-Wait-Enabled 'Measure Keep'
-Ui-Step 'Keep'                             { Ui-ClickLogged 'Measure Keep' }
+Wait-Enabled 'Measure Keep as Dimension'
+Ui-Step 'Keep as Dimension'                { Ui-ClickLogged 'Measure Keep as Dimension' }
 Ui-ExpectNew 'Annotation kept: Diameter1' 'kept as the rim''s diameter'
 Ui-ExpectNew "Annotations drawn: AxisDistance1 = 50 (auto) | Diameter1 = ${o}10 (auto)" 'both drawn, in Auto'
 Ui-Step 'close (Enter)'                    { Ui-Key 'Return' }
@@ -236,9 +247,7 @@ Ui-Mark
 Ui-Step 'measure (I)'                      { Ui-Key 'i' }
 Ui-ExpectNew 'Command Measure started' 'measure started'
 Ui-Step 'pick Body1''s top face'           { Ui-ClickPick 'face F2.b0/F2:end(r{c1})' }
-Wait-Enabled 'Measure Datum Label'
-Ui-Mark
-Ui-Step 'Datum Label'                          { Ui-ClickLogged 'Measure Datum Label' }
+Annotate 'd' 'Datum Label'
 Ui-ExpectNew 'Datum Label dialog opened: face F2:end(r{c1}) of F2.b0 A' 'the first free letter offered'
 Ui-Step 'OK (Enter)'                       { Ui-FocusDialog '^Datum Label$'; Ui-Key 'Return'; Ui-FocusMain }
 Ui-ExpectNew 'Annotation kept: DatumA' 'the datum label added'
@@ -248,9 +257,7 @@ Ui-Mark
 Ui-Step 'measure (I)'                      { Ui-Key 'i' }
 Ui-ExpectNew 'Command Measure started' 'measure started again'
 Ui-Step 'pick Body2''s round face'         { Ui-ClickPick 'face F4.b0/F4:side(c1)' }
-Wait-Enabled 'Measure Frame'
-Ui-Mark
-Ui-Step 'Frame'                            { Ui-ClickLogged 'Measure Frame' }
+Annotate 'f' 'Frame'
 Ui-ExpectNew 'Feature Control Frame dialog opened: face F4:side(c1) of F4.b0 {}' 'the frame asked for'
 Ui-Step 'perpendicularity, cylindrical, maximum material, to A' {
   Ui-FocusDialog '^Feature Control Frame$'
@@ -328,9 +335,7 @@ Ui-Mark
 Ui-Step 'measure (I)'                      { Ui-Key 'i' }
 Ui-ExpectNew 'Command Measure started' 'measure started'
 Ui-Step 'pick a hole''s counterbore wall' { Ui-ClickPick 'face F2.b0/F3:hole0.cbore_wall' }
-Wait-Enabled 'Measure Hole Callout'
-Ui-Mark
-Ui-Step 'Hole Callout'                     { Ui-ClickLogged 'Measure Hole Callout' }
+Annotate 'c' 'Hole Callout'
 Ui-ExpectNew 'Measure Hole Callout clicked' 'Hole Callout clicked'
 Ui-ExpectNew 'Annotation kept: HoleCallout1' 'the hole callout added'
 Ui-ExpectNew "Annotations drawn: HoleCallout1 = 4x ${o}6.6 THRU / $cbore ${o}11 $depth 6.8 (auto)" 'written from the hole''s feature'

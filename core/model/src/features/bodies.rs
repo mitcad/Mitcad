@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use super::base::{Joined, body_lumps, join_pieces};
 use super::{BodyChange, EvalContext, FeatureEntry, Operation};
 use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::{BooleanOp, Kernel};
@@ -133,8 +134,9 @@ pub(crate) fn verb(op: BooleanOp) -> &'static str {
 
 /// Combines a tool with bodies as an extrude does: New Body makes a body
 /// of each solid; Join fuses the tool with every participant it touches
-/// (merged bodies go into the first, a tool solid touching nothing becomes
-/// a body); Cut and Intersect work on each participant they reach (a body
+/// (merged bodies go into the first, a body of several solids keeps those
+/// the tool does not reach, a tool solid touching nothing becomes a body);
+/// Cut and Intersect work on each participant they reach (a body
 /// cut away is removed, pieces after the first become bodies). Empty
 /// `participants` means all bodies. Returns false when a Join, Cut or
 /// Intersect reaches no participant; the bodies are then unchanged.
@@ -178,36 +180,37 @@ pub(crate) fn apply_tool_strays<K: Kernel>(
     } else {
         participants.to_vec()
     };
-    let mut targets = Vec::with_capacity(uids.len());
+    // A join works on each lump of a body of several and keeps the lumps it
+    // does not reach, as an extrusion's does (mitcad#1003).
+    let mut lumps = Vec::with_capacity(uids.len());
     for uid in &uids {
         let shape = bodies
             .get(*uid)
             .cloned()
             .ok_or_else(|| format!("body {uid} does not exist at this point of the timeline"))?;
         ctx.require_surfaces(*uid, &shape)?;
-        targets.push(shape);
+        lumps.push(match op {
+            BooleanOp::Join => body_lumps(ctx.kernel, &shape),
+            BooleanOp::Cut | BooleanOp::Intersect => vec![shape],
+        });
     }
-    if targets.is_empty() {
+    if lumps.is_empty() {
         return Err(format!("there is no body to {}", verb(op)));
     }
-    let refs: Vec<&K::Shape> = targets.iter().collect();
+    let refs: Vec<&K::Shape> = lumps.iter().flatten().collect();
     let result = ctx.boolean(op, &refs, tool).map_err(|e| e.to_string())?;
     if !result.touched.iter().any(|t| *t) {
         return Ok(false);
     }
     if op == BooleanOp::Join {
-        for piece in result.pieces {
-            match piece.sources.split_first() {
-                None if !strays => {}
-                None => {
+        for joined in join_pieces(ctx.kernel, result.pieces, &lumps, &result.touched) {
+            match joined {
+                Joined::Body(i, shape) => bodies.set(uids[i], shape),
+                Joined::Merged(i) => bodies.remove(uids[i]),
+                Joined::Stray(_) if !strays => {}
+                Joined::Stray(shape) | Joined::Apart(shape) => {
                     let uid = ctx.new_body();
-                    bodies.set(uid, piece.shape);
-                }
-                Some((first, merged)) => {
-                    bodies.set(uids[*first], piece.shape);
-                    for i in merged {
-                        bodies.remove(uids[*i]);
-                    }
+                    bodies.set(uid, shape);
                 }
             }
         }
@@ -270,6 +273,28 @@ impl<K: Kernel> EvalContext<'_, K> {
     pub(crate) fn body_before(&mut self, before: FeatureUid, body: BodyUid) -> Option<K::Shape> {
         let at = self.env.history.iter().position(|r| r.uid == before)?;
         let result = self.env.history[..at]
+            .iter()
+            .rev()
+            .find(|r| r.status.is_ok() && r.shape_set(body).is_some())?;
+        self.reads.push(Read::Output(
+            result.uid,
+            result.output.as_ref().map(|o| o.version),
+        ));
+        result.shape_set(body).cloned()
+    }
+
+    /// A body as an earlier feature `after` left it (mitcad#998): the shape
+    /// the last feature up to and including it set; None when `after` is
+    /// not before this feature or no feature up to it set the body. The
+    /// reads cover `after`'s result and that feature's.
+    pub(crate) fn body_after(&mut self, after: FeatureUid, body: BodyUid) -> Option<K::Shape> {
+        let history = self.env.history;
+        let at = history.iter().position(|r| r.uid == after)?;
+        self.reads.push(Read::Output(
+            after,
+            history[at].output.as_ref().map(|o| o.version),
+        ));
+        let result = history[..=at]
             .iter()
             .rev()
             .find(|r| r.status.is_ok() && r.shape_set(body).is_some())?;

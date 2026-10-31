@@ -762,6 +762,22 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-space-mouse"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-space-mouse PROPERTIES TIMEOUT 300)
+    # Dogbone (mitcad#1011): the command on a pocket's body picked in the
+    # browser, OK, four reliefs cut and Dogbone1 in the timeline.
+    add_test(NAME app.ui-windows-dogbone
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-dogbone-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-dogbone"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-dogbone PROPERTIES TIMEOUT 300)
+    # Mortise and Tenon (mitcad#1012): a tenon on a rail's end face and its
+    # mortise in a post, both bodies changed, then edited.
+    add_test(NAME app.ui-windows-mortise-tenon
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-mortise-tenon-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-mortise-tenon"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-mortise-tenon PROPERTIES TIMEOUT 300)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

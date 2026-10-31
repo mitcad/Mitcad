@@ -70,6 +70,9 @@ qt_add_executable(mitcad
   framework/CommandMessage.hpp
   framework/CommandPanel.cpp
   framework/CommandPanel.hpp
+  # An inspection's answer as rows of names and values (mitcad#1010).
+  framework/ResultRows.cpp
+  framework/ResultRows.hpp
   framework/CutTargetsPanel.cpp
   framework/CutTargetsPanel.hpp
   framework/CommandRegistry.cpp
@@ -2108,4 +2111,25 @@ endif()
 target_sources(mitcad PRIVATE sketch/PointMarkers.cpp sketch/PointMarkers.hpp)
 if(BUILD_TESTING)
   target_sources(test_app PRIVATE tests/sketch_point_markers.cpp sketch/PointMarkers.cpp sketch/PointMarkers.hpp)
+endif()
+# Commands pinned to the toolbar (mitcad#1001, app/COMMANDS.md "Pinned
+# commands"): the user's pins per tab, kept in the settings; the Ribbon
+# shows them as the Pinned group at the end of the tab.
+target_sources(mitcad PRIVATE framework/ToolbarPins.cpp framework/ToolbarPins.hpp)
+if(BUILD_TESTING)
+  # Pin, reorder, unpin and the settings read back: plain Qt Core.
+  target_sources(test_app PRIVATE tests/toolbar_pins.cpp framework/ToolbarPins.cpp framework/ToolbarPins.hpp)
+endif()
+# Dogbone in the SOLID tab's MODIFY group (mitcad#1011): relief cuts at a
+# body's inside corners.
+target_sources(mitcad PRIVATE commands/DogboneCommands.cpp)
+# Mortise and Tenon: a tenon on one body's end face and its mortise in
+# another body (mitcad#1012).
+target_sources(mitcad PRIVATE commands/MortiseTenonCommands.cpp)
+# The part picker's stars (mitcad#1014): the tile's empty star on a disc of
+# its own over the picture, visible on the selected tile; plain Qt Gui,
+# painted into images in the test.
+target_sources(mitcad PRIVATE library/PartStar.cpp library/PartStar.hpp)
+if(BUILD_TESTING)
+  target_sources(test_app PRIVATE tests/part_star.cpp library/PartStar.cpp library/PartStar.hpp)
 endif()

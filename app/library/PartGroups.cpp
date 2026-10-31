@@ -2,6 +2,9 @@
 #include "PartGroups.hpp"
 
 #include <algorithm>
+#include <utility>
+
+#include <QRegularExpression>
 
 namespace mitcad {
 
@@ -131,6 +134,61 @@ QStringList PartGroupTree::subtree(const QString& key) const {
     keys << subtree(child);
   }
   return keys;
+}
+
+QHash<QString, int> groupCounts(const QList<QList<PartGroupPath>>& parts) {
+  QHash<QString, int> counts;
+  for (const QList<PartGroupPath>& groups : parts) {
+    // The part's groups and every group above them, each once.
+    QSet<QString> keys;
+    for (const PartGroupPath& group : groups) {
+      const QString own = groupKey(group.names);
+      if (own.isEmpty()) {
+        continue;
+      }
+      keys.insert(own);
+      for (qsizetype at = own.indexOf(QLatin1Char('/')); at >= 0; at = own.indexOf(QLatin1Char('/'), at + 1)) {
+        keys.insert(own.left(at));
+      }
+    }
+    for (const QString& key : std::as_const(keys)) {
+      ++counts[key];
+    }
+  }
+  return counts;
+}
+
+QSet<QString> hiddenGroups(const PartGroupTree& tree, const QHash<QString, int>& counts, const QString& chosen,
+                           bool filtering, const QStringList& special) {
+  // The chosen group and the groups above it stay.
+  QSet<QString> kept{chosen};
+  for (const PartGroupTree::Node* at = tree.node(chosen); at != nullptr; at = tree.node(at->parent)) {
+    kept.insert(at->key);
+  }
+  QSet<QString> hidden;
+  for (const QString& top : tree.top()) {
+    const QStringList keys = tree.subtree(top);
+    for (const QString& key : keys) {
+      if (counts.value(key) <= 0 && !kept.contains(key)) {
+        hidden.insert(key);
+      }
+    }
+  }
+  if (filtering) {
+    for (const QString& key : special) {
+      if (counts.value(key) <= 0 && !kept.contains(key)) {
+        hidden.insert(key);
+      }
+    }
+  }
+  return hidden;
+}
+
+bool searchMatches(const QString& fields, const QString& search) {
+  const QString haystack = fields.toLower();
+  static const QRegularExpression spaces(QStringLiteral("\\s+"));
+  const QStringList words = search.toLower().split(spaces, Qt::SkipEmptyParts);
+  return std::all_of(words.begin(), words.end(), [&haystack](const QString& word) { return haystack.contains(word); });
 }
 
 } // namespace mitcad

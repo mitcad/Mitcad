@@ -28,6 +28,10 @@ target_sources(mitcad_geometry_io PRIVATE
 target_sources(mitcad_geometry_io PRIVATE
   src/mesh_store.cpp
   include/mitcad/io/mesh_store.hpp)
+# STEP names in raw bytes of another code page than UTF-8 (mitcad#1002).
+target_sources(mitcad_geometry_io PRIVATE
+  src/step_names.cpp
+  src/step_names.hpp)
 target_include_directories(mitcad_geometry_io PUBLIC include)
 target_link_libraries(mitcad_geometry_io
   PUBLIC TKernel TKMath TKG3d TKBRep TKMesh

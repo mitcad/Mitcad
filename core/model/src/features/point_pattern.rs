@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::FeatureEntry;
 use super::geom_ref::{GeomRef, Resolver, Want, resolve_axis, resolve_point};
 use super::mapping::map_params;
-use super::pattern::{ComputeOption, Element, PatternObjects, repeat};
+use super::pattern::{Combine, ComputeOption, Element, PatternObjects, repeat};
 use super::{
     CheckContext, Datum, EvalContext, Evaluate, FeatureDef, FeatureInfo, FeatureOutput,
     OccurrencePath, PlacementChange, References, SketchOutput,
@@ -524,7 +524,7 @@ impl<K: Kernel> Evaluate<K> for PointPatternDef {
             self.compute,
             false,
             &elements[1..],
-            false,
+            Combine::No,
             None,
             &[],
         )

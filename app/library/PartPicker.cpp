@@ -31,6 +31,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScreen>
+#include <QScrollBar>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -52,11 +53,11 @@
 #include "OptionChooser.hpp"
 #include "PartFavourites.hpp"
 #include "PartOptions.hpp"
+#include "PartStar.hpp"
 
 namespace mitcad {
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 constexpr int kMinTile = 48;
 constexpr int kMaxTile = 192;
 constexpr int kDefaultTile = 96;
@@ -92,8 +93,6 @@ void setGroupFolded(const QString& key, bool folded) {
   keys.sort();
   QSettings().setValue(kFoldedKey, QJsonDocument(QJsonArray::fromStringList(keys)).toJson(QJsonDocument::Compact));
 }
-
-QColor starColour() { return QColor(232, 170, 0); }
 
 // "<library>|<component>": how the design's parts know a part (a star
 // knows a tile's row too, starredTile).
@@ -213,47 +212,11 @@ QString partDetails(const PickerPart& shown, int uses, bool rich) {
   return text;
 }
 
-// A five-pointed star in `box`.
-QPainterPath starPath(const QRectF& box) {
-  QPainterPath path;
-  const QPointF centre = box.center();
-  const double outer = std::min(box.width(), box.height()) / 2.0;
-  const double inner = outer * 0.45;
-  for (int i = 0; i < 10; ++i) {
-    const double radius = i % 2 == 0 ? outer : inner;
-    const double angle = -kPi / 2.0 + i * kPi / 5.0;
-    const QPointF point(centre.x() + radius * std::cos(angle), centre.y() + radius * std::sin(angle));
-    if (i == 0) {
-      path.moveTo(point);
-    } else {
-      path.lineTo(point);
-    }
-  }
-  path.closeSubpath();
-  return path;
-}
-
-// A filled star when on, else its outline.
-void paintStar(QPainter* painter, const QRectF& box, bool on, const QColor& outline) {
-  painter->save();
-  painter->setRenderHint(QPainter::Antialiasing);
-  const QPainterPath path = starPath(box.adjusted(1.0, 1.0, -1.0, -1.0));
-  if (on) {
-    painter->fillPath(path, starColour());
-    painter->setPen(QPen(starColour().darker(130), 1.0));
-  } else {
-    painter->setPen(QPen(outline, 1.2));
-  }
-  painter->setBrush(Qt::NoBrush);
-  painter->drawPath(path);
-  painter->restore();
-}
-
 QIcon starIcon(bool on, const QColor& outline) {
   QPixmap pixmap(16, 16);
   pixmap.fill(Qt::transparent);
   QPainter painter(&pixmap);
-  paintStar(&painter, QRectF(0.0, 0.0, 16.0, 16.0), on, outline);
+  paintPartStar(&painter, QRectF(0.0, 0.0, 16.0, 16.0), on, outline);
   painter.end();
   return QIcon(pixmap);
 }
@@ -262,6 +225,27 @@ QIcon blankIcon() {
   QPixmap pixmap(16, 16);
   pixmap.fill(Qt::transparent);
   return QIcon(pixmap);
+}
+
+// A group's row: its count under the search and the filters, and whether
+// it has none, so that it is greyed (mitcad#1015).
+constexpr int kGroupCountRole = Qt::UserRole + 72;
+constexpr int kEmptyGroupRole = Qt::UserRole + 73;
+
+// The row of a group with no part under the search and the filters (the
+// chosen one kept, mitcad#1015) greyed, also while it is the current one.
+void greyEmptyGroup(QStyleOptionViewItem* option, const QModelIndex& index) {
+  if (!index.data(kEmptyGroupRole).toBool()) {
+    return;
+  }
+  QPalette& colours = option->palette;
+  colours.setColor(QPalette::Text, colours.color(QPalette::PlaceholderText));
+  // Selected: the highlighted text halfway to the highlight.
+  const QColor text = colours.color(QPalette::HighlightedText);
+  const QColor band = colours.color(QPalette::Highlight);
+  colours.setColor(QPalette::HighlightedText,
+                   QColor((text.red() + band.red()) / 2, (text.green() + band.green()) / 2,
+                          (text.blue() + band.blue()) / 2));
 }
 
 #ifdef Q_OS_MACOS
@@ -282,6 +266,19 @@ protected:
                          ? starIcon(starred.toBool(), option->palette.color(QPalette::PlaceholderText))
                          : blankIcon();
     }
+    greyEmptyGroup(option, index);
+  }
+};
+#else
+// The groups' rows: an empty one greyed (mitcad#1015).
+class GroupDelegate final : public QStyledItemDelegate {
+public:
+  using QStyledItemDelegate::QStyledItemDelegate;
+
+protected:
+  void initStyleOption(QStyleOptionViewItem* option, const QModelIndex& index) const override {
+    QStyledItemDelegate::initStyleOption(option, index);
+    greyEmptyGroup(option, index);
   }
 };
 #endif
@@ -402,7 +399,9 @@ public:
     }
     const QVariant starred = index.data(PartGridModel::kStarRole);
     if (starred.isValid()) {
-      paintStar(painter, QRectF(starRect(tile, size)), starred.toBool(), faint);
+      // Over the picture: on a disc of its own whether the tile is
+      // selected or not (mitcad#1014).
+      paintTileStar(painter, QRectF(starRect(tile, size)), starred.toBool(), palette);
     }
     painter->restore();
   }
@@ -787,8 +786,8 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
   m_groups->setMaximumWidth(240);
   m_groups->setToolTip(tr("A group lists its subgroups' parts; its star stars them all and puts them first (Ctrl+Shift+D)"));
   mac::styleListTree(m_groups);
-#ifdef Q_OS_MACOS
   m_groups->setItemDelegate(new GroupDelegate(m_groups));
+#ifdef Q_OS_MACOS
   m_groups->setMouseTracking(true);
 #endif
   auto* groupsLabel = new QLabel(tr("Gr&oups:"));
@@ -905,6 +904,8 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
   m_view->setProperty("nativeTileBadgeRole", PartGridModel::kCountRole);
   m_view->setProperty("nativeTileDisabledRole", PartGridModel::kRefusedRole);
   m_groups->setProperty("nativeGroupKeyRole", int(Qt::UserRole));
+  // A group with no part under the filters, greyed (mitcad#1015).
+  m_groups->setProperty("nativeGroupDimmedRole", kEmptyGroupRole);
 #ifdef Q_OS_MACOS
   m_groups->setProperty("nativeStarRole", kGroupStarRole);
   m_groups->setProperty("nativeStarMethod", QByteArray("toggleGroupStar"));
@@ -951,7 +952,11 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
       m_group = chosen;
       const PartGroupTree::Node* node = m_tree.node(chosen);
       m_groupPath = node != nullptr ? node->group : PartGroupPath();
+      // An empty group chosen before hides now (mitcad#1015): its row
+      // goes after the click.
+      m_choosingGroup = true;
       refill(true);
+      m_choosingGroup = false;
     }
   });
   connect(m_groups, &QTreeWidget::itemCollapsed, this, [this](QTreeWidgetItem* item) { groupFolded(item, true); });
@@ -1025,9 +1030,10 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
 
 void PartGrid::setParts(const QList<PickerPart>& parts) {
   m_parts = parts;
-  fillGroups();
+  // The filters first: the groups' counts are under them (mitcad#1015).
   fillSystems();
   fillSuppliers();
+  fillGroups();
   refill(false);
 }
 
@@ -1187,6 +1193,14 @@ QStringList PartGrid::shownKeys() const {
   return keys;
 }
 
+QString PartGrid::emptyReason() const {
+  if (m_model->rowCount() > 0 || m_parts.isEmpty()) {
+    return QString();
+  }
+  return filtering() ? tr("No parts in %1 with this search and these filters.").arg(groupName(m_group))
+                     : tr("No parts in %1.").arg(groupName(m_group));
+}
+
 void PartGrid::toggleStar() {
   if (!m_current.isEmpty()) {
     star(m_current);
@@ -1280,32 +1294,27 @@ int PartGrid::countOf(const PickerPart& part) const {
 
 void PartGrid::fillGroups() {
   m_tree.clear();
-  bool libraries = false;
-  bool other = false;
-  bool inDesign = false;
+  m_anyLibraries = false;
+  m_anyOther = false;
+  m_anyInDesign = false;
   for (const PickerPart& listed : m_parts) {
     if (listed.libraryEntry) {
-      libraries = true;
+      m_anyLibraries = true;
       continue;
     }
-    inDesign = inDesign || countOf(listed) > 0;
+    m_anyInDesign = m_anyInDesign || countOf(listed) > 0;
     if (listed.groups.isEmpty()) {
-      other = true;
+      m_anyOther = true;
     }
     for (const PartGroupPath& group : listed.groups) {
       m_tree.add(group);
     }
   }
   // The chosen group stays while a search or a filter empties it, so that
-  // the search goes on inside it (mitcad#418).
+  // the search goes on inside it (mitcad#418); In this design, Other and
+  // Libraries to get likewise (shownGroups).
   const bool special = m_group.startsWith(QLatin1Char(':'));
-  if (m_group == kInDesign) {
-    inDesign = true;
-  } else if (m_group == kOther) {
-    other = true;
-  } else if (m_group == kLibraries) {
-    libraries = true;
-  } else if (!special && !m_tree.contains(m_group) && groupKey(m_groupPath.names) == m_group) {
+  if (!special && !m_tree.contains(m_group) && groupKey(m_groupPath.names) == m_group) {
     m_tree.add(m_groupPath);
   }
   m_tree.finish();
@@ -1317,53 +1326,149 @@ void PartGrid::fillGroups() {
   if (const PartGroupTree::Node* node = m_tree.node(m_group)) {
     m_groupPath = node->group;
   }
+  showGroups(countGroups());
+  m_groupsLogged = groupsText(true);
+  qInfo().noquote() << QStringLiteral("Part picker groups: %1").arg(m_groupsLogged);
+}
+
+bool PartGrid::filtering() const {
+  return !m_search->text().trimmed().isEmpty() || !supplierFilter().isEmpty() ||
+         !m_system->currentData().toString().isEmpty();
+}
+
+QHash<QString, int> PartGrid::countGroups() const {
+  QHash<QString, int> counts;
+  QList<QList<PartGroupPath>> grouped;
+  const auto count = [this, &counts](const PickerPart& part, const QString& group) {
+    if (inGroupOf(part, group)) {
+      ++counts[group];
+    }
+  };
+  for (const PickerPart& listed : m_parts) {
+    if (!passesFilters(listed)) {
+      continue;
+    }
+    count(listed, kFavourites);
+    count(listed, kInDesign);
+    count(listed, kAll);
+    count(listed, kOther);
+    count(listed, kLibraries);
+    if (!listed.libraryEntry) {
+      grouped.append(listed.groups);
+    }
+  }
+  // The libraries' groups, each with its subgroups' parts.
+  const QHash<QString, int> inGroups = groupCounts(grouped);
+  for (auto it = inGroups.cbegin(); it != inGroups.cend(); ++it) {
+    counts.insert(it.key(), it.value());
+  }
+  return counts;
+}
+
+QSet<QString> PartGrid::shownGroups(const QHash<QString, int>& counts) const {
+  QSet<QString> shown{kFavourites, kAll};
+  if (m_anyInDesign || m_group == kInDesign) {
+    shown.insert(kInDesign);
+  }
+  if (m_anyOther || m_group == kOther) {
+    shown.insert(kOther);
+  }
+  if (m_anyLibraries || m_group == kLibraries) {
+    shown.insert(kLibraries);
+  }
+  for (const QString& top : m_tree.top()) {
+    const QStringList keys = m_tree.subtree(top);
+    for (const QString& key : keys) {
+      shown.insert(key);
+    }
+  }
+  // All parts always: the place a group none of the parts has goes back to.
+  const QSet<QString> hidden =
+      hiddenGroups(m_tree, counts, m_group, filtering(), QStringList{kFavourites, kInDesign, kOther, kLibraries});
+  for (const QString& key : hidden) {
+    shown.remove(key);
+  }
+  return shown;
+}
+
+QString PartGrid::rowName(const QString& group) const {
+  if (group.startsWith(QLatin1Char(':'))) {
+    return groupName(group);
+  }
+  const PartGroupTree::Node* node = m_tree.node(group);
+  return node != nullptr ? node->name : groupLabel(group);
+}
+
+void PartGrid::showCount(QTreeWidgetItem* item, const QHash<QString, int>& counts) const {
+  const QString key = item->data(0, Qt::UserRole).toString();
+  const int count = counts.value(key);
+  const QString text = QStringLiteral("%1 (%2)").arg(rowName(key), QString::number(count));
+  if (item->text(0) != text) {
+    item->setText(0, text);
+  }
+  if (item->data(0, kGroupCountRole).toInt() != count || !item->data(0, kGroupCountRole).isValid()) {
+    item->setData(0, kGroupCountRole, count);
+  }
+  if (item->data(0, kEmptyGroupRole).toBool() != (count <= 0)) {
+    item->setData(0, kEmptyGroupRole, count <= 0);
+  }
+}
+
+void PartGrid::showGroups(const QHash<QString, int>& counts) {
+  const QSet<QString> shown = shownGroups(counts);
   const QColor outline = palette().color(QPalette::PlaceholderText);
-  // Starred groups first on each level, each class in the tree's order.
-  const auto ordered = [this](const QStringList& keys) {
+  // Starred groups first on each level, each class in the tree's order;
+  // the empty ones left out (mitcad#1015).
+  const auto ordered = [this, &shown](const QStringList& keys) {
     QStringList starred;
     QStringList rest;
     for (const QString& key : keys) {
-      (groupStarred(key) ? starred : rest).append(key);
+      if (shown.contains(key)) {
+        (groupStarred(key) ? starred : rest).append(key);
+      }
     }
     return starred + rest;
   };
   const std::function<QTreeWidgetItem*(const QString&)> made = [&](const QString& key) {
     const PartGroupTree::Node* node = m_tree.node(key);
-    auto* item = new QTreeWidgetItem(QStringList{node != nullptr ? node->name : groupLabel(key)});
+    auto* item = new QTreeWidgetItem;
     item->setData(0, Qt::UserRole, key);
+    showCount(item, counts);
     item->setIcon(0, starIcon(groupStarred(key), outline));
 #ifdef Q_OS_MACOS
     item->setData(0, kGroupStarRole, groupStarred(key));
 #endif
     if (node != nullptr) {
-      for (const QString& child : ordered(node->children)) {
+      const QStringList children = ordered(node->children);
+      for (const QString& child : children) {
         item->addChild(made(child));
       }
     }
     return item;
   };
-  const auto addSpecial = [this](const QString& id, const QIcon& icon) {
-    auto* item = new QTreeWidgetItem(QStringList{groupName(id)});
+  const auto addSpecial = [this, &shown, &counts](const QString& id, const QIcon& icon) {
+    if (!shown.contains(id)) {
+      return;
+    }
+    auto* item = new QTreeWidgetItem;
     item->setData(0, Qt::UserRole, id);
+    showCount(item, counts);
     item->setIcon(0, icon);
     m_groups->addTopLevelItem(item);
   };
+  const bool filling = m_filling;
   m_filling = true;
   m_groups->clear();
   addSpecial(kFavourites, starIcon(true, outline));
-  if (inDesign) {
-    addSpecial(kInDesign, blankIcon());
-  }
+  addSpecial(kInDesign, blankIcon());
   addSpecial(kAll, blankIcon());
-  for (const QString& key : ordered(m_tree.top())) {
+  const QStringList tops = ordered(m_tree.top());
+  for (const QString& key : tops) {
     m_groups->addTopLevelItem(made(key));
   }
-  if (other) {
-    addSpecial(kOther, blankIcon());
-  }
-  if (libraries) {
-    addSpecial(kLibraries, blankIcon());
-  }
+  addSpecial(kOther, blankIcon());
+  addSpecial(kLibraries, blankIcon());
+  m_groupRows = shown;
   // Folded as the user left them (mitcad#527); unfolded by default.
   const QSet<QString> folded = foldedGroups();
   for (QTreeWidgetItemIterator it(m_groups); *it != nullptr; ++it) {
@@ -1378,8 +1483,37 @@ void PartGrid::fillGroups() {
     }
     m_groups->setCurrentItem(current);
   }
-  m_filling = false;
-  qInfo().noquote() << QStringLiteral("Part picker groups: %1").arg(groupsText());
+  m_filling = filling;
+}
+
+void PartGrid::updateGroups() {
+  const QHash<QString, int> counts = countGroups();
+  if (shownGroups(counts) != m_groupRows) {
+    if (m_choosingGroup) {
+      // Not under the click that chooses a group: its row stays where the
+      // click found it until the click is done.
+      QTimer::singleShot(0, this, [this] { updateGroups(); });
+      return;
+    }
+    // The rows again, the list where it was.
+    const int scrolled = m_groups->verticalScrollBar()->value();
+    showGroups(counts);
+    m_groups->doItemsLayout();
+    m_groups->verticalScrollBar()->setValue(scrolled);
+    if (QTreeWidgetItem* current = m_groups->currentItem()) {
+      m_groups->scrollToItem(current);
+    }
+    emit placesChanged();
+  } else {
+    for (QTreeWidgetItemIterator it(m_groups); *it != nullptr; ++it) {
+      showCount(*it, counts);
+    }
+  }
+  const QString text = groupsText(true);
+  if (text != m_groupsLogged) {
+    m_groupsLogged = text;
+    qInfo().noquote() << QStringLiteral("Part picker groups: %1").arg(text);
+  }
 }
 
 void PartGrid::fillSystems() {
@@ -1433,29 +1567,29 @@ void PartGrid::setSupplierFilter(const QString& supplier) {
   }
 }
 
-bool PartGrid::passes(const PickerPart& part) const {
-  if (m_group == kFavourites) {
-    if (part.libraryEntry || !starredTile(part)) {
-      return false;
-    }
-  } else if (m_group == kInDesign) {
-    if (part.libraryEntry || countOf(part) <= 0) {
-      return false;
-    }
-  } else if (m_group == kLibraries) {
-    if (!part.libraryEntry) {
-      return false;
-    }
-  } else if (m_group == kOther) {
-    if (part.libraryEntry || !part.groups.isEmpty()) {
-      return false;
-    }
-  } else if (m_group != kAll) {
-    // The group's parts and its subgroups' (mitcad#527).
-    if (!inShownGroup(part)) {
-      return false;
-    }
+bool PartGrid::passes(const PickerPart& part) const { return inGroupOf(part, m_group) && passesFilters(part); }
+
+bool PartGrid::inGroupOf(const PickerPart& part, const QString& group) const {
+  if (group == kAll) {
+    return true;
   }
+  if (group == kFavourites) {
+    return !part.libraryEntry && starredTile(part);
+  }
+  if (group == kInDesign) {
+    return !part.libraryEntry && countOf(part) > 0;
+  }
+  if (group == kLibraries) {
+    return part.libraryEntry;
+  }
+  if (group == kOther) {
+    return !part.libraryEntry && part.groups.isEmpty();
+  }
+  // The group's parts and its subgroups' (mitcad#527).
+  return !part.libraryEntry && inGroup(part.groups, group);
+}
+
+bool PartGrid::passesFilters(const PickerPart& part) const {
   // The supplier (mitcad#949): a library's entry has none to compare.
   if (!part.libraryEntry && !soldBy(part.suppliers, m_supplier->currentData().toString())) {
     return false;
@@ -1471,17 +1605,13 @@ bool PartGrid::passes(const PickerPart& part) const {
   }
   if (!m_externalSearch) {
     // The fields library_search matches.
-    const QString haystack =
+    const QString fields =
         QStringList{part.name, part.component, part.standard, part.description, part.categories.join(QLatin1Char(' ')),
                     part.keywords.join(QLatin1Char(' ')), part.supplier, part.partNumber, part.library,
                     part.libraryName, part.designation, part.sizes, part.system, part.config}
-            .join(QLatin1Char(' '))
-            .toLower();
-    static const QRegularExpression spaces(QStringLiteral("\\s+"));
-    for (const QString& word : m_search->text().toLower().split(spaces, Qt::SkipEmptyParts)) {
-      if (!haystack.contains(word)) {
-        return false;
-      }
+            .join(QLatin1Char(' '));
+    if (!searchMatches(fields, m_search->text())) {
+      return false;
     }
   }
   return true;
@@ -1524,6 +1654,9 @@ void PartGrid::refill(bool notify) {
   m_filling = true;
   m_model->setShown(shown, uses);
   m_filling = false;
+  // The groups' counts under the search and the filters (mitcad#1015),
+  // logged before the tiles.
+  updateGroups();
   qInfo().noquote() << QStringLiteral("Part picker group %1: %2 parts, first %3")
                            .arg(groupName(m_group))
                            .arg(shown.size())
@@ -1542,9 +1675,12 @@ void PartGrid::refill(bool notify) {
 void PartGrid::refreshStars() {
   // Only the stars: the groups keep their order and their rows, the tiles
   // their places and the current one its selection (mitcad#517).
+  // Favourites' count follows the star in its place (mitcad#1015).
   const QColor outline = palette().color(QPalette::PlaceholderText);
+  const QHash<QString, int> counts = countGroups();
   for (QTreeWidgetItemIterator it(m_groups); *it != nullptr; ++it) {
     const QString id = (*it)->data(0, Qt::UserRole).toString();
+    showCount(*it, counts);
     if (!id.startsWith(QLatin1Char(':'))) {
       (*it)->setIcon(0, starIcon(groupStarred(id), outline));
 #ifdef Q_OS_MACOS
@@ -1555,7 +1691,8 @@ void PartGrid::refreshStars() {
   m_model->refreshStars();
   refreshStarButton();
   logTiles(true);
-  qInfo().noquote() << QStringLiteral("Part picker groups kept: %1").arg(groupsText());
+  // By name, without the counts: the rows stay where they were.
+  qInfo().noquote() << QStringLiteral("Part picker groups kept: %1").arg(groupsText(false));
   emit starsChanged();
 }
 
@@ -1572,7 +1709,7 @@ void PartGrid::refreshStarButton() {
 #endif
 }
 
-QString PartGrid::groupsText() const {
+QString PartGrid::groupsText(bool counts) const {
   QStringList names;
   for (QTreeWidgetItemIterator it(m_groups); *it != nullptr; ++it) {
     const QTreeWidgetItem* item = *it;
@@ -1584,6 +1721,9 @@ QString PartGrid::groupsText() const {
       continue;
     }
     QString name = groupName(item->data(0, Qt::UserRole).toString());
+    if (counts) {
+      name += QStringLiteral(" (%1)").arg(item->data(0, kGroupCountRole).toInt());
+    }
     if (item->childCount() > 0 && !item->isExpanded()) {
       name += QStringLiteral(" (folded)");
     }

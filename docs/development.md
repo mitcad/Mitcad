@@ -827,6 +827,90 @@ Run in the isolated environments:
   keyring and `dbus-daemon` are installed, with one in a D-Bus session of
   the test's own.
 
+### Fuzz targets of the file readers
+
+`core/fuzz` (mitcad#939) holds cargo-fuzz targets for every reader of a
+file MitCad opens or imports, one per entry point, each on arbitrary
+bytes. Like `core/vcs/fuzz` it is a workspace of its own, outside
+`core/Cargo.toml`, `core/Cargo.lock` and cargo-deny, and nothing of it is
+built into MitCad. Each target asserts that an input is read, refused or
+reported within a budget of 10 s (`core/fuzz/src/lib.rs`) and that it
+never panics; a panic, an overflow (the fuzz build keeps debug
+assertions), an allocation over libFuzzer's limit or a timeout is a
+finding.
+
+| Target | Entry point |
+|---|---|
+| `zip_archive` | `mitcad_zip::Archive::new` and `read` of every entry |
+| `cfb_compound` | `mitcad_cfb::CompoundFile::parse` and `read` of every stream |
+| `dxf_read` | `mitcad_dxf::read` (bytes) |
+| `package_3mf` | `mitcad_3mf::read_package` and `mitcad_3mf::read` |
+| `design_file` | `Document::from_json` (the mock kernel, nothing evaluated) |
+| `project_settings` | `SharedSettings::from_json` and `LocalSettings::from_json` |
+| `rvt_schema` | `mitcad_rvt::schema::Schema::parse` |
+| `rvt_walk` | `mitcad_rvt::walk` of one record (the first byte picks the schema of a synthetic project, family or building file) |
+| `rvt_file` | `RvtFile::parse`, the schema and `elements::Model::read` |
+| `asm_blob` | `AsmFile::parse`, its history and `convert::convert_file` |
+| `ipt_file` | `IptFile::parse` and what the `.ipt`/`.iam` worker reads before it builds geometry |
+| `dwg_file` | `mitcad_dwg::read`, the scene and its plan, the solids' ASM bodies |
+| `ifc_text` | `IfcFile::read`, `model::Model::read` and the decoder's items |
+| `freecad_document` | `Document::parse` and `GuiDocument::parse`, sketches, sheets and expressions |
+| `freecad_file` | `FcstdFile::from_bytes` and each object's shape data |
+| `f3d_file` | `F3dFile::from_bytes`, its segments and body blobs, nested documents |
+| `solidcraft_file` | `SolidcraftFile::from_bytes` and each feature's inputs |
+
+The `.ipt`, `.dwg`, IFC and FreeCAD targets stop where the import workers
+hand the data to OCCT: the geometry built from it is the kernel's.
+
+They need a nightly toolchain and cargo-fuzz. The full check
+(`tools/check-all.sh --full`, [the check script](#the-check-script))
+runs each target for 60 s (`MITCAD_FUZZ_SECONDS`) after its other steps
+when both are installed, each target a row of the table, and skips them
+with a note when they are not; the scoped check never runs them. By
+hand, from `core/` (`--fuzz-dir fuzz`: cargo-fuzz does not take the core
+workspace's manifest as the project whose `fuzz/` it looks for):
+
+```bash
+rustup toolchain install nightly --profile minimal
+cargo install cargo-fuzz
+cd core
+cargo run --manifest-path fuzz/Cargo.toml --example write_seeds
+cargo +nightly fuzz list --fuzz-dir fuzz
+cargo +nightly fuzz run --fuzz-dir fuzz -O zip_archive -- -max_total_time=60 -timeout=20 -rss_limit_mb=2048
+```
+
+`-max_total_time=60` runs a target for 60 seconds; `-timeout` stops an
+input that never returns and `-rss_limit_mb` (also the largest single
+allocation) one that takes too much memory. A finding is saved under
+`core/fuzz/artifacts/<target>/`; `cargo +nightly fuzz run --fuzz-dir fuzz
+<target> <file>` runs it again, and a fix gets a unit test of the reader
+with the same input made small or built from the reader's own synthetic
+files (the first findings: a `.dwg` data storage record sliced past the
+section's end, `every_cut_of_a_data_storage_is_refused_or_read`; a broker
+address whose scheme's length ended inside a character,
+`broker_addresses_cut_inside_a_character_are_refused`).
+
+The seed corpora are synthetic: `core/fuzz/examples/write_seeds.rs`
+writes them with the readers' own writers and the crates' test builders
+(`mitcad_zip::Writer`, `mitcad_cfb::Writer`, `mitcad_3mf::write`, the
+DXF writer, the model's `test_support` fixtures and the documented
+version 1 example, `mitcad_rvt::testfile`, `mitcad_asm::testdata`,
+`mitcad_ipt::testdata` and `testassembly`, `mitcad_dwg::testfile`,
+`mitcad_ifc::testdata`, the FreeCAD reader's `tests/data` documents and
+the `.solidcraft` reader's `tests/designs`), never model files. They go
+to `core/fuzz/corpus/<target>/seed-*`, the corpus cargo-fuzz reads and
+adds what it finds to; the folder is git-ignored, so neither the seeds
+nor what a run adds are committed (the gate refuses model files and files
+over 3 MB anyway). `write_seeds` takes another folder as its argument.
+
+Beside the fuzz targets, the readers have unit tests of damaged input:
+every cut of a synthetic file, a wrong signature, and lengths or counts
+declared beyond what the file holds, in `tests/malformed.rs` of the
+`zip`, `cfb`, `dxf`, `rvt`, `ipt`, `dwg`, `ifc`, `freecad` and
+`solidcraft` crates and in the 3MF reader's
+`cut_packages_and_other_files_are_refused`; the design file's are
+`model-tests/files` (`malformed_files_are_rejected`, `limits_tests.rs`).
+
 ### The test runner (mitcad-testrun)
 
 `mitcad-testrun` (`tools/testrun`, mitcad#790; built with the project
@@ -1277,7 +1361,10 @@ in the distro only:
   import-fcstd`, compares with the dump (`--reference`) and replays
   variants (`--set`), each file in a child process of its own
   (`mitcad_run_parallel`, the options above through the environment;
-  `MITCAD_CORPUS_JOBS=1` checks them in the script's process).
+  `MITCAD_CORPUS_JOBS=1` checks them in the script's process). The ctest
+  `freecad.corpus_designs` (`tools/cli/fcstd-designs.cmake`) checks single
+  documents, found by their content ids under those folders and their
+  parent folders, against their expectations (no fallback, the volume).
   `core/freecad/tests/sketch_corpus.rs` compares every
   sketch with FreeCAD's reading. Example:
   `MITCAD_FCSTD_CORPUS=~/fcstd-models:~/fcstd-examples ctest -R freecad`.
@@ -1374,14 +1461,19 @@ It checks at two depths:
 - **`--full`** (or `--release`), the check before a release build, runs
   everything: every ctest (`--ctest all`, with the release builds'
   doctests and `app.appimage`), the corpus (`--corpus always`) and every
-  UI test (`--ui all`). Release builds are checked only this way.
+  UI test (`--ui all`), and at the end each fuzz target of the file
+  readers for 60 s (`MITCAD_FUZZ_SECONDS`; rows `fuzz-seeds`,
+  `fuzz-build`, `fuzz:<target>`) when cargo-fuzz and a nightly toolchain
+  are installed, a skipped `fuzz` row with a note otherwise
+  ([the fuzz targets](#fuzz-targets-of-the-file-readers)). Release
+  builds are checked only this way.
 
 | Step | |
 |---|---|
 | configure, build | Compiler warnings fail the check (an incremental build only shows those of what it compiled). |
 | fmt, clippy, deps | Beside the ctest step (`--overlap auto`, below). clippy's target dir is `build/dev/clippy`, kept across syncs, or, where `build/dev/cargo` links into a persistent cargo folder (`MITCAD_CARGO_TARGET_DIR`, as in the release builds, whose build folder starts fresh), `clippy/` beside it there, so that a release does not check every crate from nothing. |
 | ctest | The tests whose sources changed (below), without the corpus group, through the test runner (below); `cli.perf_*` run serially. The Linux UI ctests (`app.ui-linux-*`, each on a hidden X server of its own) run beside the others, within the runner's UI entries at once (mitcad#832). The geometry suite runs as one ctest per part (`geometry.suite.<part>`). |
-| corpus | `f3d.corpus*`, `f3d.models_loft`, `freecad.corpus`, `ipt.corpus`, several at once (`--corpus-tests`), each importing several files at once (`--corpus-jobs`, `MITCAD_CORPUS_JOBS`). By default the test runner gives each corpus test its files at once from its profile (`mitcad-testrun --corpus-children`, mitcad#832; [tools/testrun/README.md](../tools/testrun/README.md#corpus-tests)): every run records each file's time and peak, and the next starts the longest files first and shares the machine's cores and the run's memory budget among the corpus tests by their work, a long test more children and a short one fewer, each child's memory limit twice its test's largest file's peak, never below `MITCAD_CORPUS_MEMORY` (1536M). A test without that history yet, every test with `--corpus-jobs`, and ctest -j without the runner take the fixed plan: all their children together fit the run's memory limit less 1G at `MITCAD_CORPUS_MEMORY` each, and the cores of a test slot; about the square root of that many tests run at once (12G, 32 cores and three slots: two tests, three files each). Each child runs within 300 s (`MITCAD_CORPUS_TIMEOUT`); `f3d.corpus_designs` checks its designs one after another in one process since 0.32.0 (at once, under the full check's load in the Linux release's build root, an item ran out of its item time), and a debug build's imports try an item from its own start, the route tried first, three times as long (`--own-start-time-scale`, mitcad#847); the runner then plans it by its own history, not by children (mitcad#872). With the budget from the free memory (`--memory auto` on bare metal, below) a child beside others starts only while the memory available exceeds the reserve by the child's file's last peak (`MITCAD_CORPUS_RESERVE`). The corpus step runs beside the UI tests (`--overlap auto`). Every corpus test is a row of the table. `auto` runs them only when `CORPUS_SOURCES` or the corpus files differ from every passing run on the machine (`~/.cache/mitcad/corpus-passed`). `CORPUS_SOURCES`: the readers and the import, the bridge's kernel and import files (`core/ffi/src/kernel`, `*_import.rs`, `ipt_history.rs`, `exchange.rs`, `memory.rs`, `core/cpp`; not `lib.rs` or other families' files), the geometry, `mitcad-cli`'s imports (`tools/cli/import.cpp`, not `main.cpp`), the build files, the OCCT port, and the resolved dependencies of the import's crates (`cargo tree` of `CORPUS_CRATES`, instead of `Cargo.toml` and `Cargo.lock`, so a crate added for something else does not count). Changes in `core/model` alone don't trigger it: use `--corpus always` when they may affect imports. |
+| corpus | `f3d.corpus*`, `f3d.models_loft`, `freecad.corpus*`, `ipt.corpus`, several at once (`--corpus-tests`), each importing several files at once (`--corpus-jobs`, `MITCAD_CORPUS_JOBS`). By default the test runner gives each corpus test its files at once from its profile (`mitcad-testrun --corpus-children`, mitcad#832; [tools/testrun/README.md](../tools/testrun/README.md#corpus-tests)): every run records each file's time and peak, and the next starts the longest files first and shares the machine's cores and the run's memory budget among the corpus tests by their work, a long test more children and a short one fewer, each child's memory limit twice its test's largest file's peak, never below `MITCAD_CORPUS_MEMORY` (1536M). A test without that history yet, every test with `--corpus-jobs`, and ctest -j without the runner take the fixed plan: all their children together fit the run's memory limit less 1G at `MITCAD_CORPUS_MEMORY` each, and the cores of a test slot; about the square root of that many tests run at once (12G, 32 cores and three slots: two tests, three files each). Each child runs within 300 s (`MITCAD_CORPUS_TIMEOUT`); `f3d.corpus_designs` checks its designs one after another in one process since 0.32.0 (at once, under the full check's load in the Linux release's build root, an item ran out of its item time), and a debug build's imports try an item from its own start, the route tried first, three times as long (`--own-start-time-scale`, mitcad#847); the runner then plans it by its own history, not by children (mitcad#872). With the budget from the free memory (`--memory auto` on bare metal, below) a child beside others starts only while the memory available exceeds the reserve by the child's file's last peak (`MITCAD_CORPUS_RESERVE`). The corpus step runs beside the UI tests (`--overlap auto`). Every corpus test is a row of the table. `auto` runs them only when `CORPUS_SOURCES` or the corpus files differ from every passing run on the machine (`~/.cache/mitcad/corpus-passed`). `CORPUS_SOURCES`: the readers and the import, the bridge's kernel and import files (`core/ffi/src/kernel`, `*_import.rs`, `ipt_history.rs`, `exchange.rs`, `memory.rs`, `core/cpp`; not `lib.rs` or other families' files), the geometry, `mitcad-cli`'s imports (`tools/cli/import.cpp`, not `main.cpp`), the build files, the OCCT port, and the resolved dependencies of the import's crates (`cargo tree` of `CORPUS_CRATES`, instead of `Cargo.toml` and `Cargo.lock`, so a crate added for something else does not count). Changes in `core/model` alone don't trigger it: use `--corpus always` when they may affect imports. |
 | `ui-<name>` | The `tools/ui-*-test.sh` whose sources changed (below), `--ui-jobs` at a time (below), longest first, 30 min limit each (`UI_TIMEOUT`); with the test runner the machine's learnt cap within `MITCAD_UI_JOBS`, and each test's learnt room (`mitcad-testrun --ui-rooms`: the most other UI tests it may have beside it after it failed beside more and passed alone) is kept: such a test waits until few enough run, while the others go on (mitcad#872). The tests' waits for a log line (`ui_expect_log`, `ui_expect_new`) do not count the time the application computes (a job logged `Computing ... started` and not its end), up to 60 s more, so that a preview that takes longer under load is not a failure. `ui-compute` runs alone at the end (flaky under load), after the corpus step that ran beside the others. A test that fails among the others without crashing runs once more alone after them: a pass shows as `ok-again` and counts, so load flakiness stays visible without failing the check; a second failure, or a crash, fails it (mitcad#657). |
 
 ctests by what changed (`--ctest auto`, the default; mitcad#134): each
@@ -1624,6 +1716,14 @@ runs one step after another. Build and lint use half the cores unless
   shortcut hint ("Place timber members (Enter places)") is allowed and
   counts. The detail goes into the [user guide](user-guide.md). The ctest
   `repo.tooltips` (`tools/tooltip-check`) checks the texts in `app/`.
+- New UI keeps working in the AppKit frontend
+  ([coverage](native-macos-ui.md#coverage)): a widget class that paints
+  itself (overrides `paintEvent`) gets a line in
+  `app/platform/macos/native-coverage.txt` saying how that frontend shows
+  it, and dialogs, message boxes and menus go through
+  `app/framework/Dialogs.hpp` (`execDialog`, `sheetWarning`, `execMenu`,
+  ...), never Qt's own `exec()` or static dialog functions. The ctest
+  `repo.native-coverage` checks both.
 - Metric defaults everywhere ([architecture](architecture.md#units)).
 - A dialog that holds its form in a scroll area uses `FittingScrollArea`
   and sizes itself with `fitWindowToContents`
@@ -1749,6 +1849,12 @@ runs one step after another. Build and lint use half the cores unless
 - If GPL components are ever included, the distribution becomes
   GPL-3.0-or-later; keep such components behind replaceable interfaces.
 - Rust dependencies are checked by cargo-deny (`core/deny.toml`).
+- The fuzz crates (`core/fuzz`, `core/vcs/fuzz`) are development tools in
+  workspaces of their own, outside `core/Cargo.lock` and cargo-deny:
+  `libfuzzer-sys` (its Rust code MIT OR Apache-2.0, the libFuzzer sources
+  it builds under the LLVM project's permissive licence) and `arbitrary`
+  (MIT OR Apache-2.0, which `libfuzzer-sys` depends on and re-exports).
+  Neither is linked into or shipped with MitCad.
 - ccache (GPL-3.0-or-later) and sccache (MPL-2.0) are development tools
   invoked as separate processes. Neither is linked into or shipped with
   MitCad, and neither adds a Cargo or native library dependency.

@@ -24,7 +24,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
-#include <QMessageBox>
 #include <QPainter>
 #include <QPalette>
 #include <QPixmap>
@@ -1212,7 +1211,7 @@ void ParameterField::openFormulaEditor() {
     if (dialog.limitsChanged() && source->addParameter) {
       QString error;
       if (!source->addParameter(dialog.parameterCommand(),&error)) {
-        QMessageBox::warning(&dialog,tr("Parameter Limits"),error);
+        sheetWarning(&dialog,tr("Parameter Limits"),error);
         continue;
       }
     }

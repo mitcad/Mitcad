@@ -32,6 +32,7 @@ namespace mitcad {
 class CommandMessage;
 class CutTargetsPanel;
 class NoteRow;
+class ResultRows;
 
 // The panel of a feature command, generated from its inputs: a title, one
 // row per input, a message line and OK and Cancel. It shows the state;
@@ -60,8 +61,13 @@ public:
   void setPlaceholder(const QString& key, const QString& text) override;
   // The command's status line: an error, or a hint when `error` is false.
   void setMessage(const QString& message, bool error) override;
-  // An inspection's answer (Measure, Interference).
+  // An inspection's answer (Measure, Interference): its text, or its rows
+  // of names and values where it has them (Measure, mitcad#1010:
+  // ResultRows, right under the inputs).
   void setResult(const QString& text) override;
+  void setInspection(const Inspection& result) override;
+  // OK's; a panel with only Close (CommandDef::closeOnly) keeps Close
+  // enabled.
   void setOkEnabled(bool enabled) override;
   // OK and Cancel, for a page that keeps them in view under the inputs it
   // scrolls (mitcad#655: 3D Print's Send and Cancel in the Floating card);
@@ -84,9 +90,10 @@ public:
   // (mitcad#564: Change Parameters while the panel stays open;
   // CommandPanelHeader.cpp).
   void addHeaderAction(QAction* action);
-  // A section of the command's own under the inputs, above the result
-  // (Measure's history, mitcad#648; CommandPanelHeader.cpp): `places`
-  // gives the lines logLayout adds for it ("<what> at x,y").
+  // A section of the command's own under the result and the message,
+  // above the buttons (Measure's actions and history, mitcad#648,
+  // mitcad#1010; CommandPanelHeader.cpp): `places` gives the lines
+  // logLayout adds for it ("<what> at x,y").
   void addSection(QWidget* section, std::function<QStringList()> places = {});
 
 signals:
@@ -180,6 +187,9 @@ private:
   QFormLayout* m_form = nullptr;
   CommandMessage* m_message = nullptr;
   QLabel* m_result = nullptr;
+  // The answer as rows, when the inspection gives them (mitcad#1010); the
+  // label above keeps its text, hidden then.
+  ResultRows* m_resultRows = nullptr;
   QPushButton* m_ok = nullptr;
   QWidget* m_buttonBox = nullptr; // OK and Cancel until takeButtons
   std::vector<std::unique_ptr<Row>> m_rows;

@@ -3,6 +3,7 @@
 # check-all sources: app/framework/CommandPanel.cpp app/framework/CommandSession.cpp
 # check-all sources: core/model/src/features/pattern.rs tools/cli
 # check-all sources: app/framework/Ribbon.cpp app/commands/CreateCommands.cpp
+# check-all sources: app/framework/ToolbarPins.cpp app/framework/ToolbarPins.hpp
 # Input-driven Windows UI test of the patterns' Direction Type and Distance
 # Type (mitcad#545) in the build VM (tools/ui-windows-lib.ps1 says how the
 # input is posted), on a design mitcad-cli makes: a 10 mm cube with its
@@ -11,6 +12,11 @@
 #      separators, the Pattern submenu with Mirror after it, the Machine
 #      Elements submenu last; the ribbon's buttons as before (Create
 #      Sketch, Extrude, Revolve, Hole), no split buttons for the submenus.
+#      Pin to Toolbar (mitcad#1001), as tools/ui-sketch-create-menu-test.sh
+#      does with the mouse on Linux: Sweep's row of the menu, the Menu key,
+#      Pin to Toolbar; the Pinned group at the end of the SOLID tab shows
+#      Sweep and its button starts Sweep; Unpin from Toolbar from the
+#      button's right-click, the group gone.
 #   1. Rectangular Pattern starts with the defaults (spacing, one
 #      direction). Distance Type Extent relabels the length rows Extent;
 #      direction 1 along X Symmetric hides its Flip, 3 over 40 mm (20 mm
@@ -133,6 +139,35 @@ Write-Host 'ok   no split buttons for the Pattern and Machine Elements submenus'
 # The menu stays open in session 0 and takes the keys: closed before F7
 # (with it open, F7 started nothing).
 Ui-Step 'close the menu (Esc)'           { Ui-Key 'Escape' }
+Ui-Sync
+
+Write-Host '--- 0b. Pin to Toolbar (mitcad#1001)'
+# The menu takes the keys in session 0: Sweep is its fourth row (the
+# separator is skipped); the Menu key opens the row's menu with Pin to
+# Toolbar chosen.
+Ui-Mark
+Ui-Step 'the CREATE menu'                { Ui-ClickLogged 'Ribbon SOLID/CREATE' }
+Ui-ExpectNew 'Ribbon menu SOLID/CREATE: ' 'the CREATE menu opened'
+Ui-Step 'Sweep''s row, the Menu key'      { Ui-Key 'Down', 'Down', 'Down', 'Down', 'Menu' }
+Ui-ExpectNew 'Toolbar menu SOLID/CREATE solid.sweep: Pin to Toolbar | ' 'Sweep''s row menu by the Menu key'
+Ui-Step 'Pin to Toolbar (Enter)'         { Ui-Key 'Return' }
+Ui-ExpectNew 'Pinned to toolbar: Sweep (Solid)' 'Sweep pinned'
+Ui-ExpectNew 'Ribbon group SOLID/PINNED: solid.sweep' 'the Pinned group with Sweep'
+Ui-Sync
+Ui-ExpectNew 'Ribbon SOLID/PINNED at ' 'the Pinned group''s caption'
+Ui-ExpectNew 'Ribbon pinned SOLID/solid.sweep at ' 'Sweep''s button in the Pinned group'
+Ui-Mark
+Ui-Step 'click the pinned Sweep'         { Ui-ClickLogged 'Ribbon pinned SOLID/solid.sweep' }
+Ui-ExpectNew 'Command Sweep started' 'the pinned button starts Sweep'
+Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
+Ui-ExpectNew 'Command Sweep cancelled' 'Sweep cancelled'
+# The button's right-click menu opens with nothing chosen.
+Ui-Mark
+Ui-Step 'right-click the pinned Sweep'   { Ui-ClickLogged 'Ribbon pinned SOLID/solid.sweep' 3 }
+Ui-ExpectNew 'Toolbar menu SOLID/PINNED solid.sweep: Unpin from Toolbar | ' 'the pinned button''s menu'
+Ui-Step 'Unpin from Toolbar'             { Ui-Key 'Down', 'Return' }
+Ui-ExpectNew 'Unpinned: Sweep (Solid)' 'Sweep unpinned'
+Ui-ExpectNew 'Ribbon group SOLID/PINNED gone' 'the Pinned group is gone'
 Ui-Sync
 
 Write-Host '--- 1. A rectangular pattern: symmetric along X, by extent'

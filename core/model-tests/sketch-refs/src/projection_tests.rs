@@ -1036,3 +1036,46 @@ fn a_stale_line_is_trimmed_to_the_users_line_that_bounds_the_profile() {
     assert_eq!(s["warnings"], json!([]), "{s}");
     assert_eq!(feature(&d, &extrusion)["status"], "ok");
 }
+
+#[test]
+fn a_projection_after_an_earlier_feature_reads_the_body_as_it_left_it() {
+    // mitcad#998: an import's projection of a face as F2 left its body,
+    // though F3 takes the body away before the sketch.
+    let mut d = block();
+    *d.kernel().curves.borrow_mut() = square(60.0, 0);
+    command(
+        &mut d,
+        json!({"cmd": "add_feature", "def": {"type": "remove_body", "bodies": ["F2.b0"]}}),
+    );
+    let def = |after: &str| {
+        json!({"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy",
+               "entities": [
+                   {"id": "p1", "type": "point", "at": [0.0, 0.0], "fixed": true, "reference": true},
+                   {"id": "p2", "type": "point", "at": [60.0, 0.0], "fixed": true, "reference": true},
+                   {"id": "p3", "type": "point", "at": [60.0, 40.0], "fixed": true, "reference": true},
+                   {"id": "c4", "type": "line", "start": "p1", "end": "p2", "fixed": true, "reference": true},
+                   {"id": "c5", "type": "line", "start": "p2", "end": "p3", "fixed": true, "reference": true}],
+               "projections": [{"source": FACE, "body": "F2.b0", "by_geometry": true,
+                                "after": after, "entities": ["p1", "p2", "p3", "c4", "c5"]}]}})
+    };
+    command(&mut d, def("F2"));
+    assert_eq!(feature(&d, "F4")["status"], "ok", "{}", feature(&d, "F4"));
+    // Only a feature before the sketch.
+    let error = rejected(&mut d, def("F9"));
+    assert!(error.contains("F9"), "{error}");
+    let s = sketch(&d, "F4");
+    assert_eq!(s["projections"][0]["after"], "F2", "{s}");
+    assert_eq!(s["warnings"], json!([]), "{s}");
+    // It follows the face as F2 makes it.
+    widen(&mut d, square(80.0, 0));
+    let s = sketch(&d, "F4");
+    at_close(&s, "p2", [80.0, 0.0]);
+    at_close(&s, "p3", [80.0, 40.0]);
+    assert_eq!(feature(&d, "F4")["status"], "ok");
+    // The design file keeps it.
+    let saved = d.to_json();
+    let loaded = Document::from_json(&saved, MockKernel::default()).unwrap();
+    assert_eq!(loaded.to_json(), saved);
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    assert!(file.to_string().contains("\"after\":\"F2\""), "{saved}");
+}

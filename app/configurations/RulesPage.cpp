@@ -29,6 +29,7 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
+#include "../framework/Dialogs.hpp"
 #include "../framework/FormulaEditor.hpp"
 #include "../framework/ParameterSuggest.hpp"
 #include "../framework/Theme.hpp"
@@ -225,7 +226,7 @@ RulesPage::RulesPage(RulesSource source, QWidget* parent) : QWidget(parent), m_s
       options.create = false;
       options.label = QStringLiteral("rule condition");
       FormulaEditor dialog(m_source.parameters, options, text, owner);
-      if (dialog.exec() != QDialog::Accepted) {
+      if (execDialog(&dialog) != QDialog::Accepted) {
         return std::nullopt;
       }
       return dialog.expression();

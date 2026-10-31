@@ -1290,3 +1290,72 @@ fn tangent_corners_of_offsets_are_those_whose_sources_touch_by_definition() {
         [(1, results[1].0, results[2].0, at)]
     );
 }
+
+#[test]
+fn plane_crossings_of_lines_conics_splines_and_points() {
+    // mitcad#998: where the plane y = 0 crosses model curves.
+    use crate::kernel::Curve3;
+    use crate::project::plane_crossings;
+    let (origin, normal) = ([0.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+    let near = |a: [f64; 3], b: [f64; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-9);
+    let same = |found: Vec<[f64; 3]>, want: &[[f64; 3]]| {
+        found.len() == want.len() && found.iter().zip(want).all(|(a, b)| near(*a, *b))
+    };
+    // A line through the plane, one touching it at its start, one lying
+    // in it (its ends) and one beside it.
+    let line = |start, end| Curve3::Line { start, end };
+    let found = plane_crossings(&line([1.0, -2.0, 0.0], [1.0, 2.0, 4.0]), origin, normal);
+    assert!(same(found.clone(), &[[1.0, 0.0, 2.0]]), "{found:?}");
+    let found = plane_crossings(&line([3.0, 0.0, 0.0], [3.0, 5.0, 0.0]), origin, normal);
+    assert!(same(found.clone(), &[[3.0, 0.0, 0.0]]), "{found:?}");
+    let found = plane_crossings(&line([0.0, 0.0, 0.0], [5.0, 0.0, 1.0]), origin, normal);
+    assert!(
+        same(found.clone(), &[[0.0, 0.0, 0.0], [5.0, 0.0, 1.0]]),
+        "{found:?}"
+    );
+    assert!(plane_crossings(&line([0.0, 1.0, 0.0], [5.0, 2.0, 0.0]), origin, normal).is_empty());
+    // A circle of radius 10 on XY round (0, 0): at x = 10 and x = −10, in
+    // its order from its start; the quarter arc from 0 to 90° only at its
+    // start; a circle on XZ lies in the plane, closed: no ends.
+    let conic = |normal, start: f64, end: f64, closed| Curve3::Conic {
+        center: [0.0, 0.0, 0.0],
+        normal,
+        x_axis: [1.0, 0.0, 0.0],
+        major: 10.0,
+        minor: 10.0,
+        start,
+        end,
+        closed,
+    };
+    let circle = conic([0.0, 0.0, 1.0], 0.0, 2.0 * PI, true);
+    let found = plane_crossings(&circle, origin, normal);
+    assert!(
+        same(found.clone(), &[[10.0, 0.0, 0.0], [-10.0, 0.0, 0.0]]),
+        "{found:?}"
+    );
+    let quarter = conic([0.0, 0.0, 1.0], 0.0, PI / 2.0, false);
+    let found = plane_crossings(&quarter, origin, normal);
+    assert!(same(found.clone(), &[[10.0, 0.0, 0.0]]), "{found:?}");
+    let upper = conic([0.0, 0.0, 1.0], PI / 4.0, 3.0 * PI / 4.0, false);
+    assert!(plane_crossings(&upper, origin, normal).is_empty());
+    let lying = conic([0.0, 1.0, 0.0], 0.0, 2.0 * PI, true);
+    assert!(plane_crossings(&lying, origin, normal).is_empty());
+    // A cubic spline from y = −1 to y = 3 crosses once; a point on the
+    // plane is itself.
+    let spline = Curve3::BSpline {
+        degree: 3,
+        poles: vec![
+            [0.0, -1.0, 0.0],
+            [1.0, -1.0, 0.0],
+            [2.0, 3.0, 0.0],
+            [3.0, 3.0, 0.0],
+        ],
+        weights: Vec::new(),
+        knots: vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+    };
+    let found = plane_crossings(&spline, origin, normal);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0][1].abs() < 1e-9, "{found:?}");
+    let found = plane_crossings(&Curve3::Point([4.0, 0.0, 1.0]), origin, normal);
+    assert!(same(found, &[[4.0, 0.0, 1.0]]));
+}

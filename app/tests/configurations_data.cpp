@@ -4,7 +4,8 @@
 // not edit (the rules) kept, the options' reports of the `configure`
 // query, the moves' notice, the values typed into the choosers and the
 // Rows sheet, and the options a refusal names; rows generated from a
-// table and an option's values from a column (mitcad#849).
+// table and an option's values from a column (mitcad#849); a closed
+// table's parameter columns added and removed (mitcad#999).
 #include "browser/ConfigurationsData.hpp"
 
 #include <cstdio>
@@ -246,6 +247,79 @@ void tableColumnTests() {
   CHECK(keyOption(QStringLiteral("Screws"), QStringLiteral("dk"), {}, users, parameters).isEmpty());
 }
 
+// A closed table's parameter columns (mitcad#999): Add Column puts a user
+// parameter among `parameters` with each row's current value, Remove
+// Column takes it out of the table and keeps the parameter.
+void parameterColumnTests() {
+  using namespace mitcad::configurations;
+  const Table screws = readTable(parse(R"({"configurations": {
+      "options": ["Size"], "closed": true, "parameters": ["d"],
+      "rows": [{"name": "M3", "values": {"Size": "'M3'", "d": "3 mm"}},
+               {"name": "M4", "values": {"Size": "'M4'", "d": "4 mm"}}],
+      "default": "M4"}})"));
+  const QStringList users{QStringLiteral("Size"), QStringLiteral("d"), QStringLiteral("P"), QStringLiteral("k")};
+  // Neither an option nor a column already, in the model's order.
+  CHECK(columnCandidates(screws, users) == QStringList({QStringLiteral("P"), QStringLiteral("k")}));
+
+  const Table added = withColumn(screws, QStringLiteral("P"), QStringLiteral("0.5 mm"));
+  CHECK(added.closed);
+  CHECK(added.parameters == QStringList({QStringLiteral("d"), QStringLiteral("P")}));
+  CHECK(added.rows.size() == 2);
+  for (const Row& row : added.rows) {
+    CHECK(row.value(QStringLiteral("P")) == QStringLiteral("0.5 mm"));
+    CHECK(!row.value(QStringLiteral("d")).isEmpty()); // the other column's values stay
+  }
+  CHECK(added.defaultRow == QStringLiteral("M4"));
+  // As set_configurations takes it: in `parameters` and in every row's values.
+  const QJsonObject json = setTableCommand(added).value(QStringLiteral("configurations")).toObject();
+  CHECK(json.value(QStringLiteral("parameters")).toArray().size() == 2);
+  CHECK(json.value(QStringLiteral("parameters")).toArray().last().toString() == QStringLiteral("P"));
+  CHECK(json.value(QStringLiteral("closed")).toBool());
+  for (const QJsonValue& row : json.value(QStringLiteral("rows")).toArray()) {
+    CHECK(row.toObject().value(QStringLiteral("values")).toObject().value(QStringLiteral("P")).toString() ==
+          QStringLiteral("0.5 mm"));
+  }
+  CHECK(columnCandidates(added, users) == QStringList{QStringLiteral("k")});
+  // An option or a column already: unchanged.
+  CHECK(withColumn(screws, QStringLiteral("Size"), QStringLiteral("'M5'")).toJson() == screws.toJson());
+  CHECK(withColumn(screws, QStringLiteral("d"), QStringLiteral("5 mm")).toJson() == screws.toJson());
+
+  // An open table becomes closed with its first column.
+  Table open = screws;
+  open.closed = false;
+  open.parameters.clear();
+  for (Row& row : open.rows) {
+    row.setValue(QStringLiteral("d"), QString());
+  }
+  const Table closed = withColumn(open, QStringLiteral("k"), QStringLiteral("d * 0.6"));
+  CHECK(closed.closed);
+  CHECK(closed.parameters == QStringList{QStringLiteral("k")});
+  CHECK(closed.rows.first().value(QStringLiteral("k")) == QStringLiteral("d * 0.6"));
+
+  // Remove Column: out of `parameters` and the rows; the options' values,
+  // the other columns and the parameter itself stay (nothing but the table
+  // is sent, and Add Column offers it again).
+  const Table removed = withoutColumn(added, QStringLiteral("d"));
+  CHECK(removed.parameters == QStringList{QStringLiteral("P")});
+  CHECK(removed.closed);
+  for (const Row& row : removed.rows) {
+    CHECK(row.value(QStringLiteral("d")).isEmpty());
+    CHECK(row.value(QStringLiteral("P")) == QStringLiteral("0.5 mm"));
+    CHECK(!row.value(QStringLiteral("Size")).isEmpty());
+  }
+  const QJsonObject command = setTableCommand(removed);
+  CHECK(command.value(QStringLiteral("cmd")).toString() == QStringLiteral("set_configurations"));
+  const QJsonObject removedJson = command.value(QStringLiteral("configurations")).toObject();
+  for (const QJsonValue& row : removedJson.value(QStringLiteral("rows")).toArray()) {
+    CHECK(!row.toObject().value(QStringLiteral("values")).toObject().contains(QStringLiteral("d")));
+  }
+  CHECK(columnCandidates(removed, users) == QStringList({QStringLiteral("d"), QStringLiteral("k")}));
+  // The last column out: no `parameters` field at all.
+  CHECK(!withoutColumn(removed, QStringLiteral("P")).toJson().contains(QStringLiteral("parameters")));
+  // No such column: unchanged.
+  CHECK(withoutColumn(screws, QStringLiteral("Size")).toJson() == screws.toJson());
+}
+
 } // namespace
 
 int configurationsDataTests() {
@@ -254,6 +328,7 @@ int configurationsDataTests() {
   reportTests();
   rowValueTests();
   tableColumnTests();
+  parameterColumnTests();
   if (failures == 0) {
     std::printf("configurations data tests passed\n");
   }

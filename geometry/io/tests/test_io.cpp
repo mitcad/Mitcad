@@ -289,6 +289,84 @@ void test_step_multi_solid_part() {
   }
 }
 
+// Writes a STEP file of a box per name, each named by a placeholder whose
+// literals are then replaced by the name's raw bytes, and reads the names
+// back.
+std::vector<std::string> names_read_from_raw_bytes(const std::string& path,
+                                                   const std::vector<std::string>& raw_names) {
+  std::vector<Body> bodies;
+  for (std::size_t i = 0; i < raw_names.size(); ++i) {
+    const double x = 20.0 * static_cast<double>(i);
+    const std::string placeholder = std::string("MITCADRAWNAME") + static_cast<char>('A' + i);
+    bodies.push_back(Body{placeholder, BRepPrimAPI_MakeBox(gp_Pnt(x, 0.0, 0.0), 10.0, 10.0, 10.0).Shape(),
+                          std::nullopt, {}});
+  }
+  mitcad::io::write_step(path, bodies);
+  std::string text = read_text(path);
+  for (std::size_t i = 0; i < raw_names.size(); ++i) {
+    const std::string literal = "'" + bodies[i].name + "'";
+    const std::string raw_literal = "'" + raw_names[i] + "'";
+    std::size_t replaced = 0;
+    std::size_t at = 0;
+    while ((at = text.find(literal, at)) != std::string::npos) {
+      text.replace(at, literal.size(), raw_literal);
+      at += raw_literal.size();
+      ++replaced;
+    }
+    CHECK(replaced > 0);
+  }
+  {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    file << text;
+  }
+  std::vector<std::string> names;
+  for (const Body& body : mitcad::io::read_step(path)) {
+    names.push_back(body.name);
+  }
+  return names;
+}
+
+void test_step_name_code_pages(const std::string& dir) {
+  // Names written as raw bytes (mitcad#1002). Each string literal below is
+  // split where a hexadecimal escape would take the next character in.
+
+  // GBK, UTF-8 and ASCII in one file: the UTF-8 name is read as UTF-8, the
+  // one that is not UTF-8 as GBK, the first code page that decodes it.
+  const std::string gbk_raw = "\xB4\xF3\xCD\xB7\xB5\xE6\xC6\xAC" "-1.5";
+  const std::string gbk_name = "\xE5\xA4\xA7\xE5\xA4\xB4\xE5\x9E\xAB\xE7\x89\x87" "-1.5";
+  const std::string utf8_name = "\xE5\x9E\xAB\xE7\x89\x87" " " "\xC3\x9C" "n" "\xC3\xAF";
+  const std::string ascii_name = "Washer M6";
+  const std::vector<std::string> mixed =
+      names_read_from_raw_bytes(dir + "/names-gbk.step", {gbk_raw, utf8_name, ascii_name});
+  CHECK(mixed.size() == 3);
+  if (mixed.size() == 3) {
+    CHECK(mixed[0] == gbk_name);
+    CHECK(mixed[1] == utf8_name);
+    CHECK(mixed[2] == ascii_name);
+  }
+
+  // Shift-JIS: half-width katakana before a hyphen is no GBK, so the file
+  // takes Shift-JIS, which decodes both names (the second ends in a byte
+  // 0x5C, a backslash in ASCII).
+  const std::vector<std::string> shift_jis = names_read_from_raw_bytes(
+      dir + "/names-shift-jis.step", {"\xC5\xAF\xC4" "-M6", "\x95\x94\x95\x69\x95\x5C"});
+  CHECK(shift_jis.size() == 2);
+  if (shift_jis.size() == 2) {
+    CHECK(shift_jis[0] == "\xEF\xBE\x85\xEF\xBD\xAF\xEF\xBE\x84" "-M6");
+    CHECK(shift_jis[1] == "\xE9\x83\xA8\xE5\x93\x81\xE8\xA1\xA8");
+  }
+
+  // CP1252: GBK decodes only the second name and Shift-JIS only the first,
+  // CP1252 both, so it decodes the most.
+  const std::vector<std::string> cp1252 = names_read_from_raw_bytes(
+      dir + "/names-cp1252.step", {"\xD8" "20 Rohr", "Gr\xF6\xDF" "e"});
+  CHECK(cp1252.size() == 2);
+  if (cp1252.size() == 2) {
+    CHECK(cp1252[0] == "\xC3\x98" "20 Rohr");
+    CHECK(cp1252[1] == "Gr\xC3\xB6\xC3\x9F" "e");
+  }
+}
+
 void test_iges(const std::string& dir) {
   const std::vector<Body> bodies = sample_bodies();
   for (const bool solids : {true, false}) {
@@ -1928,6 +2006,7 @@ int main(int argc, char** argv) {
     test_step(dir);
     test_step_units(dir);
     test_step_multi_solid_part();
+    test_step_name_code_pages(dir);
     test_iges(dir);
     test_triangulate_keeps_original();
     test_building_scale_sphere(dir);

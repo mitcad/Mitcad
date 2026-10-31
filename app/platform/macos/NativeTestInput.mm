@@ -3028,13 +3028,19 @@ bool screenshot(const QString& path, QOpenGLWidget* viewport) {
     // OpenGL framebuffer; separate-window exclusion alone is insufficient.
     const CGFloat scaleX = viewport->width() / host.bounds.size.width;
     const CGFloat scaleY = viewport->height() / host.bounds.size.height;
-    for (NSString* identifier in @[@"native.projectsCard", @"native.sidebar", @"native.inspectorCard", @"native.historyCard", @"native.ribbon", @"native.statusCard"]) {
-      NSView* overlay = identifiedView(content, qt(identifier));
-      if (!viewVisible(overlay)) continue;
+    const auto cover = [&](NSView* overlay) {
+      if (!viewVisible(overlay)) return;
       NSRect rect = [overlay convertRect:overlay.bounds toView:host];
       if (!host.flipped) rect.origin.y = NSMaxY(host.bounds) - NSMaxY(rect);
       covered += QRect(origin.x() + qFloor(rect.origin.x * scaleX), origin.y() + qFloor(rect.origin.y * scaleY),
                        qCeil(rect.size.width * scaleX), qCeil(rect.size.height * scaleY));
+    };
+    for (NSString* identifier in @[@"native.projectsCard", @"native.sidebar", @"native.inspectorCard", @"native.historyCard", @"native.ribbon", @"native.statusCard"]) {
+      cover(identifiedView(content, qt(identifier)));
+    }
+    // The orientation cube's arrows, beside the viewport host.
+    for (NSView* sibling in host.superview.subviews) {
+      if ([sibling.accessibilityIdentifier hasPrefix:@"native.cubeArrow."]) cover(sibling);
     }
   }
   QPainter painter(&shot);

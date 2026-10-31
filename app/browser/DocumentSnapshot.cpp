@@ -570,6 +570,10 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("rest"), QStringLiteral("plastic")},
       // Body transfers (mitcad#465).
       {QStringLiteral("body_transfer"), QStringLiteral("component")},
+      // Dogbones (mitcad#1011).
+      {QStringLiteral("dogbone"), QStringLiteral("dogbone")},
+      // Mortise and Tenon (mitcad#1012).
+      {QStringLiteral("mortise_tenon"), QStringLiteral("mortise-tenon")},
   };
   return icons.value(type, QStringLiteral("feature"));
 }

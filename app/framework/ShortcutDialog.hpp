@@ -35,6 +35,12 @@ class ShortcutDialog : public QDialog {
 public:
   explicit ShortcutDialog(CommandRegistry& registry, QWidget* parent = nullptr);
 
+  // Opens at a command (a group menu row's Change Keyboard Shortcut…,
+  // mitcad#1001): its row selected and in sight, the search cleared, the
+  // keyboard on the rows (Enter records its key); logged as "Keyboard
+  // Shortcuts at Sweep".
+  void showCommand(const QString& id);
+
   void accept() override;
 
 protected:

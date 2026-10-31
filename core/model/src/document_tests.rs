@@ -321,6 +321,95 @@ fn a_cut_keeps_a_body_of_several_lumps_together() {
     assert!(!history.starts_with("compound("), "{history}");
 }
 
+/// Body1 combined with a second block apart (Extrude3, F3): one body of
+/// two solids.
+fn two_solid_body() -> crate::test_support::Block {
+    let mut b = block();
+    let second = b
+        .doc
+        .add_feature(&extrude(b.sketch, &[&b.region], 3.0, "new_body", &[]), None)
+        .unwrap()
+        .uid;
+    let combine = b
+        .doc
+        .add_feature(
+            &def(json!({"type": "combine", "target": b.body,
+                        "tools": [BodyUid::new(second, 0)], "operation": "join"})),
+            None,
+        )
+        .unwrap()
+        .uid;
+    assert_eq!(b.status(combine), FeatureStatus::Ok);
+    assert_eq!(b.doc.bodies().len(), 1);
+    assert_eq!(b.doc.body_shape(b.body).unwrap().parts.len(), 2);
+    b
+}
+
+/// The histories of a body's solids.
+fn solids(b: &crate::test_support::Block) -> Vec<String> {
+    let shape = b.doc.body_shape(b.body).expect("the body");
+    if shape.parts.is_empty() {
+        vec![shape.history.clone()]
+    } else {
+        shape.parts.iter().map(|s| s.history.clone()).collect()
+    }
+}
+
+#[test]
+fn a_join_keeps_every_solid_of_a_body_of_several() {
+    let mut b = two_solid_body();
+    // The tool reaches the first solid only. Joined as one target, the
+    // kernel gives the second solid as a piece of its own beside the
+    // joined one, and the body kept only the last piece (mitcad#1003).
+    b.doc.kernel().touch.replace(Some(vec![true, false]));
+    b.doc.kernel().join_parts.replace(Some(vec![true, false]));
+    let join = b.circle_extrude("join", &[b.body]);
+    assert_eq!(b.status(join), FeatureStatus::Ok);
+    assert_eq!(b.doc.bodies().len(), 1);
+    let kept = solids(&b);
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    assert!(kept[0].starts_with("join(prism(F2:0..20),"), "{kept:?}");
+    assert_eq!(kept[1], "prism(F3:0..3)");
+    b.doc.undo();
+    // A join that reaches both solids fuses them with the tool into one.
+    b.doc.kernel().touch.replace(None);
+    b.doc.kernel().join_parts.replace(None);
+    let bridge = b.circle_extrude("join", &[b.body]);
+    assert_eq!(b.status(bridge), FeatureStatus::Ok);
+    let fused = solids(&b);
+    assert_eq!(fused.len(), 1, "{fused:?}");
+    assert!(
+        fused[0].starts_with("join(prism(F2:0..20),prism(F3:0..3),"),
+        "{fused:?}"
+    );
+}
+
+#[test]
+fn a_primitive_join_keeps_every_solid_of_a_body_of_several() {
+    // The features that combine their tool with bodies one step after
+    // another (primitives, patterns, mirrors) keep the solids a join does
+    // not reach too (mitcad#1003).
+    let mut b = two_solid_body();
+    b.doc.kernel().touch.replace(Some(vec![true, false]));
+    b.doc.kernel().join_parts.replace(Some(vec![true, false]));
+    let boss = b
+        .doc
+        .add_feature(
+            &def(json!({"type": "box", "plane": "xy", "corner": [20, 10],
+                        "length": 20, "width": 20, "height": 30,
+                        "operation": "join", "participants": [b.body]})),
+            None,
+        )
+        .unwrap()
+        .uid;
+    assert_eq!(b.status(boss), FeatureStatus::Ok);
+    assert_eq!(b.doc.bodies().len(), 1);
+    let kept = solids(&b);
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    assert!(kept[0].starts_with("join(prism(F2:0..20),"), "{kept:?}");
+    assert_eq!(kept[1], "prism(F3:0..3)");
+}
+
 #[test]
 fn join_merges_the_bodies_it_touches() {
     let mut b = block();

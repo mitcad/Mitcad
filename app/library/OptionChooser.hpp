@@ -32,12 +32,21 @@
 // Length = 800 mm (no row)", "<prefix> option Length allowed 300 mm … 1000
 // mm, step 10 mm (Black is short)", "<prefix> option moves: Length 1200 mm
 // → 1000 mm: Black is short" and "<prefix> option refused: <why>".
+//
+// One label column (mitcad#1007): the filters' rows, the choosers' rows and
+// the rows of the forms given to alignLabelsWith (the dialog's Version row
+// above the chooser) have labels of one width, so their fields start at the
+// same x, in every dialog the chooser is in. Logged while shown, once the
+// layout is done after the rows change: "<prefix> fields at x: Version 96,
+// Standard 96, Supplier 96, Size 96, Length 96" (the fields shown, their
+// left edges in the window).
 
 #include <utility>
 
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QList>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -45,8 +54,11 @@
 #include "PartOptions.hpp"
 
 class QComboBox;
+class QEvent;
 class QFormLayout;
 class QLabel;
+class QShowEvent;
+class QTimer;
 
 namespace mitcad {
 
@@ -115,6 +127,11 @@ public:
   QList<QComboBox*> combos() const { return m_combos; }
   // "Color = Black, Length = 800 mm (no row)"; a closed table's row.
   QString summary() const;
+  // A form beside the chooser (above it: the Version row of Insert from
+  // Library and Library Parts) whose label column lines up with the
+  // filters' and the choosers' (mitcad#1007); its rows come first in the
+  // "fields at x" line.
+  void alignLabelsWith(QFormLayout* form);
 
 signals:
   void rowChanged(const QString& row);
@@ -123,7 +140,18 @@ signals:
   // The Standard or Supplier filter changed (mitcad#949).
   void filterChanged();
 
+protected:
+  void showEvent(QShowEvent* event) override;
+  void changeEvent(QEvent* event) override;
+
 private:
+  // One label column (mitcad#1007): every label of the filters, the
+  // choosers and the forms aligned with them as wide as the widest; then
+  // the fields' left edges logged.
+  void alignLabels();
+  // Logs where the fields start once the layout is done (while shown).
+  void logFieldEdgesLater();
+  void logFieldEdges();
   void clear();
   // The filters' choices from the rows; hidden when they name no standard
   // and no article.
@@ -169,6 +197,7 @@ private:
   QJsonObject m_wanted;    // the values chosen (option -> query value)
   // The Standard and Supplier filters (mitcad#949).
   QWidget* m_filters = nullptr;
+  QFormLayout* m_filterForm = nullptr;
   QComboBox* m_standardFilter = nullptr;
   QComboBox* m_supplierFilter = nullptr;
   RowFilter m_filter;
@@ -178,6 +207,12 @@ private:
   QString m_wantedSupplier;    // setSupplierFilter's, until rows have it
   QJsonObject m_table;         // the table as given, all rows
   QJsonObject m_tableParameters;
+  // The forms whose label column lines up with the chooser's (mitcad#1007).
+  QList<QPointer<QFormLayout>> m_alignedForms;
+  // The "fields at x" line's timer (restarted on each change) and how many
+  // passes it has waited for fields just added to be shown.
+  QTimer* m_edgeTimer = nullptr;
+  int m_edgeWaits = 0;
 };
 
 } // namespace mitcad

@@ -26,6 +26,8 @@ void registerModifyCommands(CommandRegistry& registry, const CommandContext& con
   registry.add(alignCommand(context));
   registry.add(deleteFaceCommand(context));
   registry.add(appearanceCommand(context));
+  registry.add(dogboneCommand(context)); // mitcad#1011
+  registry.add(mortiseTenonCommand(context)); // mitcad#1012
 }
 
 } // namespace mitcad

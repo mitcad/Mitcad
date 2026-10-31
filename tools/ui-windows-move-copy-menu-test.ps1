@@ -194,7 +194,7 @@ Ui-Step 'Escape (close the menu)'        { Ui-Key 'Escape' }
 if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
 
 Write-Host '--- The view: a face of a large body (modelled threads, placed)'
-Ui-StartApp 'move-copy-menu-bracket' @('--open', $bracket)
+Ui-StartApp 'move-copy-menu-bracket' @('--open', $bracket) -ViewSeconds 120
 Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
 Ui-ExpectLog 'Body F1.b0 in O1 at' 'the bracket is in the view' 30
 Ui-Mark

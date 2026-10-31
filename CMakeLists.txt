@@ -26,7 +26,7 @@ else()
 endif()
 
 project(Mitcad
-  VERSION 0.38.0
+  VERSION 0.39.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 
@@ -286,6 +286,9 @@ if(BUILD_TESTING)
   endif()
   # Every tooltip of the app is one short line (tools/tooltip-check).
   add_subdirectory(tools/tooltip-check)
+  # Every widget of the app that paints itself names its AppKit
+  # presentation (tools/native-coverage).
+  add_subdirectory(tools/native-coverage)
   # The hypothesis tester of the .f3d import's learning dump (mitcad#96) and
   # the comparison with the API reference dumps (apiref.py).
   find_package(Python3 COMPONENTS Interpreter QUIET)

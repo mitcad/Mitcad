@@ -9,6 +9,7 @@
 #include <QPointer>
 #include <QRect>
 #include <QString>
+#include <QStringList>
 #include <QWidget>
 
 class QLabel;
@@ -111,6 +112,12 @@ public:
   // The content's size hints decide the cards' sizes: its layout requests
   // place the cards again.
   void watchContent(QWidget* content);
+
+  // Only the anchored cards of these object names are shown (mitcad#1008:
+  // the browser while a drawing takes the view), the others hidden until
+  // it is called with none, then shown or hidden as they were asked to be
+  // meanwhile (GlassCard::setSuppressed). The rows at the top stay.
+  void showOnlyCards(const QStringList& names);
 
   // Places the cards again (queued: many changes make one layout).
   void requestLayout();

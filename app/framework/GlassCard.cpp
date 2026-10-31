@@ -481,12 +481,30 @@ QPoint GlassCard::mapToHost(const QWidget* widget, const QPoint& point) {
 }
 
 void GlassCard::hostVisibilityChanged(bool hostVisible) {
-  if (m_windowed && m_wanted) {
+  if (m_windowed && m_wanted && !m_suppressed) {
     QWidget::setVisible(hostVisible);
   }
 }
 
+void GlassCard::setSuppressed(bool suppressed) {
+  if (suppressed == m_suppressed) {
+    return;
+  }
+  if (suppressed) {
+    m_shownAfter = m_windowed ? m_wanted : !isHidden();
+    m_suppressed = true;
+    QWidget::setVisible(false);
+  } else {
+    m_suppressed = false;
+    setVisible(m_shownAfter);
+  }
+}
+
 void GlassCard::setVisible(bool visible) {
+  if (m_suppressed) {
+    m_shownAfter = visible; // once the suppression ends
+    return;
+  }
   if (!m_windowed) {
     QWidget::setVisible(visible);
     return;

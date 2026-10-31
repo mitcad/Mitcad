@@ -1527,6 +1527,13 @@ pub struct Projection {
     /// ([`project::join_curves`]). Each name gives one curve.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chain: Vec<TopoName>,
+    /// The source as an earlier feature left its body (mitcad#998): the
+    /// body's shape right after that feature, not as the features after
+    /// it changed it before the sketch (an import's: a FreeCAD sketch's
+    /// external geometry on an earlier feature's face). Only with a body
+    /// element (`source` a face, an edge or a vertex) and `body`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<crate::ids::FeatureUid>,
 }
 
 /// A sketch text whose text is a text parameter's value (mitcad#664):

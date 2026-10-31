@@ -226,6 +226,7 @@ vcpkg_from_github(
         1070-brepmesh-delabella-exact-signs.patch
         1080-brepmesh-delabella-exact-signs-in-place.patch
         1081-brepmesh-face-checker-wire-boxes.patch
+        1090-chfi3d-sharp-edge-limited-only-by-a-common-point-on-it.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

@@ -52,6 +52,39 @@ expect-view-buttons none
 expect-log 'Camera direction .*\(perspective\)' 30
 native-action view.orthographic
 
+# The cube's arrows (GlassButton in the Qt view) are AppKit buttons over the
+# canvas while a face is in sight. Real presses on them turn the shared
+# camera as the Qt arrows do (tools/ui-view-test.sh); off a face they go.
+mark
+click-logged '^Orientation cube front at '
+expect-log '^Camera direction 0 1 0 up 0 0 1 ' 30
+expect-log '^Native cube arrows: up, down, left, right, cw, ccw$'
+expect-native-visible orientationCube_up true
+expect-native-visible orientationCube_ccw true
+screenshot '${MITCAD_TEST_WORK}/cube-arrows.png'
+mark
+native-pointer-click orientationCube_up
+expect-log '^Orientation cube arrow up$'
+expect-log '^Camera direction 0 0 -1 up 0 1 0 ' 30
+mark
+native-pointer-click orientationCube_down
+expect-log '^Camera direction 0 1 0 up 0 0 1 ' 30
+mark
+native-pointer-click orientationCube_cw
+expect-log '^Camera direction 0 1 0 up -1 0 0 ' 30
+mark
+native-pointer-click orientationCube_ccw
+expect-log '^Camera direction 0 1 0 up 0 0 1 ' 30
+mark
+native-pointer-click orientationCube_right
+expect-log '^Camera direction -1 0 0 up 0 0 1 ' 30
+expect-native-visible orientationCube_left true
+expect-view-buttons none
+mark
+native-action view.home
+expect-log '^Native cube arrows hidden$' 30
+expect-native-visible orientationCube_up false
+
 # A body supplies real native browser and history menu targets and makes
 # action dispatch observable in the actual document, independently of input.
 # A new design models in its active Component1 (mitcad#220): the body's

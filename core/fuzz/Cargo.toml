@@ -1,0 +1,175 @@
+# SPDX-License-Identifier: MIT
+# Fuzz targets for the readers of the files MitCad opens and imports
+# (mitcad#939): the zip and compound file containers, DXF, 3MF, the design
+# file and the project settings, and the .rvt, ASM, .ipt, .dwg, IFC,
+# FreeCAD, .f3d and .solidcraft readers, each on arbitrary bytes. Each
+# target asserts that an input is read, refused or reported within a
+# budget (`src/lib.rs`) and never panics. Not part of the core workspace; the
+# seed corpora are synthetic, written by the readers' own writers and test
+# builders (`examples/write_seeds.rs`), never model files. cargo-fuzz needs
+# a nightly toolchain:
+#
+#   rustup toolchain install nightly --profile minimal && cargo install cargo-fuzz
+#   cd core
+#   cargo run --manifest-path fuzz/Cargo.toml --example write_seeds
+#   cargo +nightly fuzz list --fuzz-dir fuzz
+#   cargo +nightly fuzz run --fuzz-dir fuzz -O zip_archive -- -max_total_time=60 -timeout=20 -rss_limit_mb=2048
+#
+# The seeds go to fuzz/corpus/<target>/, the corpus cargo-fuzz reads and
+# adds to. A crash is saved under fuzz/artifacts/<target>/;
+# `cargo +nightly fuzz run --fuzz-dir fuzz <target> <file>` repeats it.
+# tools/check-all.sh --full runs each target for 60 s. docs/development.md
+# ("Fuzz targets of the file readers") has the list and the details.
+[package]
+name = "mitcad-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+# Its `fuzz_target!` and the `arbitrary` crate it re-exports (MIT OR
+# Apache-2.0; development only, nothing of it is shipped).
+libfuzzer-sys = "0.4"
+serde_json = "1.0.151"
+mitcad-zip = { path = "../zip" }
+mitcad-cfb = { path = "../cfb" }
+mitcad-dxf = { path = "../dxf" }
+mitcad-3mf = { path = "../3mf" }
+# The mock kernel and the test fixtures (`testing`): a design file loads
+# without a geometry kernel.
+mitcad-model = { path = "../model", features = ["testing"] }
+mitcad-rvt = { path = "../rvt" }
+mitcad-asm = { path = "../asm" }
+mitcad-ipt = { path = "../ipt" }
+mitcad-dwg = { path = "../dwg" }
+mitcad-ifc = { path = "../ifc" }
+mitcad-freecad = { path = "../freecad" }
+mitcad-f3d-file = { path = "../f3d-file" }
+mitcad-solidcraft = { path = "../solidcraft" }
+
+# A workspace of its own, outside the core's.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "zip_archive"
+path = "fuzz_targets/zip_archive.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cfb_compound"
+path = "fuzz_targets/cfb_compound.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dxf_read"
+path = "fuzz_targets/dxf_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "package_3mf"
+path = "fuzz_targets/package_3mf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "design_file"
+path = "fuzz_targets/design_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "project_settings"
+path = "fuzz_targets/project_settings.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rvt_schema"
+path = "fuzz_targets/rvt_schema.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rvt_walk"
+path = "fuzz_targets/rvt_walk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rvt_file"
+path = "fuzz_targets/rvt_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "asm_blob"
+path = "fuzz_targets/asm_blob.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ipt_file"
+path = "fuzz_targets/ipt_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dwg_file"
+path = "fuzz_targets/dwg_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ifc_text"
+path = "fuzz_targets/ifc_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "freecad_document"
+path = "fuzz_targets/freecad_document.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "freecad_file"
+path = "fuzz_targets/freecad_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "f3d_file"
+path = "fuzz_targets/f3d_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "solidcraft_file"
+path = "fuzz_targets/solidcraft_file.rs"
+test = false
+doc = false
+bench = false

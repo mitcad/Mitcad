@@ -211,6 +211,29 @@ ShortcutDialog::ShortcutDialog(CommandRegistry& registry, QWidget* parent)
   qDebug() << "Keyboard Shortcuts opened";
 }
 
+void ShortcutDialog::showCommand(const QString& id) {
+  const CommandDef* def = m_registry.find(id);
+  if (def == nullptr) {
+    qDebug().noquote() << QStringLiteral("Keyboard Shortcuts at: no command %1").arg(id);
+    return;
+  }
+  m_search->clear();
+  QTreeWidgetItem* item = m_items.value(def->id);
+  if (item == nullptr && m_contextFilter->currentIndex() != 0) {
+    // Not a command of the context shown: all of them.
+    m_contextFilter->setCurrentIndex(0);
+    item = m_items.value(def->id);
+  }
+  if (item == nullptr) {
+    qDebug().noquote() << QStringLiteral("Keyboard Shortcuts at: %1 is not listed").arg(def->name);
+    return;
+  }
+  m_tree->setCurrentItem(item);
+  m_tree->scrollToItem(item);
+  m_tree->setFocus();
+  qDebug().noquote() << QStringLiteral("Keyboard Shortcuts at %1").arg(def->name);
+}
+
 void ShortcutDialog::fill(bool defaults) {
   m_keys.clear();
   for (const auto& def : m_registry.commands()) {

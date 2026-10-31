@@ -4,6 +4,7 @@
 # check-all sources: app/commands/SketchCommands.cpp app/commands/CreateCommands.cpp
 # check-all sources: app/commands/PatternCommands.cpp app/commands/PointPatternCommands.cpp
 # check-all sources: app/commands/GearCommands.cpp app/commands/PulleyCommands.cpp app/commands/BearingCommands.cpp
+# check-all sources: app/framework/ToolbarPins.cpp app/framework/ToolbarPins.hpp app/framework/ShortcutDialog.cpp
 # The sketch CREATE group in submenus (mitcad#222), through the real UI, in
 # the Docked and the Floating layout:
 #   - the CREATE menu: Line, Rectangles, Circles, Arcs, Other Geometry,
@@ -22,6 +23,14 @@
 #     Pattern submenu and Mirror; the Machine Elements submenu (Gear, Gear
 #     Pair, Pulley, Belt Drive, Bearing), from which Gear starts by the
 #     keyboard.
+#   - Pin to Toolbar (mitcad#1001), in both layouts, with a rectangle
+#     sketched first (Sweep needs a profile): Sweep pinned from the
+#     ⋮ button of its row in the SOLID CREATE menu, the Pinned group at the
+#     end of the SOLID tab shows it and it starts Sweep; Loft pinned by the
+#     Menu key on its row; Loft dragged before Sweep; Sweep unpinned from
+#     its button's right-click, Loft from its row's menu, the group gone;
+#     the preference follows each step (toolbarPins/SOLID). Docked also
+#     Change Keyboard Shortcut…: Keyboard Shortcuts at Sweep.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sketch-create-menu-test.sh
@@ -149,6 +158,120 @@ check_layout() {
   ui_expect_new "Sketch finished" "$layout: sketch left"
 }
 
+# pins_saved "ids" description: the settings' toolbarPins/SOLID is the ids
+# ("" none).
+pins_saved() {
+  local conf=$XDG_CONFIG_HOME/Mitcad/Mitcad.conf value
+  value=$(sed -n '/^\[toolbarPins\]/,/^\[/p' "$conf" 2> /dev/null | sed -n 's/^SOLID=//p' | tr -d '" ')
+  [ "$value" = "$1" ] || ui_fail "$2: toolbarPins/SOLID is '$value', not '$1'"
+  echo "ok   $2: toolbarPins/SOLID '$1'"
+}
+
+# row_menu "path" id "entry": the ⋮ of the command's row in the open menu
+# "path" (logged as the menu shows), then the entry of the row's menu.
+row_menu() {
+  ui_expect_new "Ribbon menu dots $1 $2 at" "the ⋮ of $2's row"
+  ui_mark
+  ui_step "the ⋮ of $2"                  ui_click_logged "Ribbon menu dots $1 $2"
+  ui_expect_new "Toolbar menu $1 $2: " "$2's row menu"
+  ui_expect_new "Toolbar menu entry $3 at" "its $3"
+  ui_step "$3"                             ui_click_logged "Toolbar menu entry $3"
+}
+
+# a_profile layout: a rectangle in a sketch on XY, so that Sweep (which
+# needs a profile) is enabled.
+a_profile() {
+  ui_mark
+  ui_create_sketch xy
+  ui_step "rectangle tool (R)"             ui_key r
+  ui_step "first corner at the origin"     ui_sketch_click 0 0
+  ui_step "opposite corner"                ui_sketch_click 40 20
+  ui_expect_new "Added rectangle" "$1: a rectangle, a profile for Sweep"
+  ui_step "end the tool (Esc)"             ui_key Escape
+  ui_step "finish the sketch (Ctrl+Enter)" ui_key ctrl+Return
+  ui_expect_new "Sketch finished" "$1: the sketch finished"
+}
+
+# pin_toolbar layout: Pin to Toolbar and the Pinned group (mitcad#1001).
+pin_toolbar() {
+  local layout=$1
+  echo "--- $layout: Pin to Toolbar"
+  a_profile "$layout"
+  pins_saved "" "$layout: no pins at the start"
+  ui_mark
+  ui_step "open the SOLID CREATE menu"     ui_click_logged "Ribbon SOLID/CREATE"
+  row_menu "SOLID/CREATE" solid.sweep "Pin to Toolbar"
+  ui_expect_new "Toolbar menu SOLID/CREATE solid.sweep: Pin to Toolbar | Change Keyboard Shortcut…" \
+    "$layout: Sweep's row menu: Pin to Toolbar, Change Keyboard Shortcut…"
+  ui_expect_new "Pinned to toolbar: Sweep (Solid)" "$layout: Sweep pinned"
+  ui_expect_new "Ribbon group SOLID/PINNED: solid.sweep" "$layout: the Pinned group with Sweep"
+  ui_sync
+  ui_expect_new "Ribbon SOLID/PINNED at " "$layout: the Pinned group's caption"
+  ui_expect_new "Ribbon pinned SOLID/solid.sweep at " "$layout: Sweep's button in it"
+  pins_saved "solid.sweep" "$layout: saved"
+  ui_mark
+  ui_step "click the pinned Sweep"         ui_click_logged "Ribbon pinned SOLID/solid.sweep"
+  ui_expect_new "Command Sweep started" "$layout: the pinned button starts Sweep"
+  ui_step "cancel (Esc)"                   ui_key Escape
+  ui_expect_new "Command Sweep cancelled" "$layout: Sweep cancelled"
+
+  # Loft by the keys: its row (the fifth), the Menu key, its first entry.
+  ui_mark
+  ui_step "open the SOLID CREATE menu"     ui_click_logged "Ribbon SOLID/CREATE"
+  ui_expect_new "Ribbon menu SOLID/CREATE: " "$layout: the menu opened"
+  ui_step "Loft's row, the Menu key"       ui_key Down Down Down Down Down Menu
+  ui_expect_new "Toolbar menu SOLID/CREATE solid.loft: Pin to Toolbar | " "$layout: Loft's row menu by the Menu key"
+  ui_step "Pin to Toolbar (Enter)"         ui_key Return
+  ui_expect_new "Pinned to toolbar: Loft (Solid)" "$layout: Loft pinned"
+  ui_expect_new "Ribbon group SOLID/PINNED: solid.sweep, solid.loft" "$layout: Loft after Sweep"
+  ui_sync
+  ui_expect_new "Ribbon pinned SOLID/solid.loft at " "$layout: Loft's button"
+  pins_saved "solid.sweep,solid.loft" "$layout: in the order pinned"
+
+  # Loft dragged before Sweep.
+  ui_mark
+  ui_step "drag Loft before Sweep"         ui_drag_logged "Ribbon pinned SOLID/solid.loft" "Ribbon pinned SOLID/solid.sweep" -12
+  ui_expect_new "Pinned order (Solid): Loft, Sweep" "$layout: Loft dragged before Sweep"
+  ui_expect_new "Ribbon group SOLID/PINNED: solid.loft, solid.sweep" "$layout: the group in the new order"
+  pins_saved "solid.loft,solid.sweep" "$layout: the new order saved"
+  tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Command Loft started" && ui_fail "$layout: the drag started Loft"
+  echo "ok   $layout: the drag started no command"
+
+  # Sweep unpinned from its button's right-click.
+  ui_sync
+  ui_mark
+  ui_step "right-click the pinned Sweep"   ui_click_logged "Ribbon pinned SOLID/solid.sweep" 3
+  ui_expect_new "Toolbar menu SOLID/PINNED solid.sweep: Unpin from Toolbar | Change Keyboard Shortcut…" \
+    "$layout: the pinned button's menu"
+  ui_expect_new "Toolbar menu entry Unpin from Toolbar at" "its Unpin from Toolbar"
+  ui_step "Unpin from Toolbar"             ui_click_logged "Toolbar menu entry Unpin from Toolbar"
+  ui_expect_new "Unpinned: Sweep (Solid)" "$layout: Sweep unpinned"
+  ui_expect_new "Ribbon group SOLID/PINNED: solid.loft" "$layout: Loft left"
+  pins_saved "solid.loft" "$layout: Sweep no longer saved"
+
+  # Loft unpinned from its row in the CREATE menu: the group is gone.
+  ui_mark
+  ui_step "open the SOLID CREATE menu"     ui_click_logged "Ribbon SOLID/CREATE"
+  row_menu "SOLID/CREATE" solid.loft "Unpin from Toolbar"
+  ui_expect_new "Unpinned: Loft (Solid)" "$layout: Loft unpinned from its row"
+  ui_expect_new "Ribbon group SOLID/PINNED gone" "$layout: the Pinned group is gone"
+  pins_saved "" "$layout: no pins saved"
+  ui_sync
+  [ "$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -c "Ribbon group SOLID/PINNED: ")" = 0 ] ||
+    ui_fail "$layout: the Pinned group came back"
+
+  [ "$layout" = Docked ] || return 0
+  echo "--- $layout: Change Keyboard Shortcut…"
+  ui_mark
+  ui_step "open the SOLID CREATE menu"     ui_click_logged "Ribbon SOLID/CREATE"
+  row_menu "SOLID/CREATE" solid.sweep "Change Keyboard Shortcut…"
+  ui_expect_new "Keyboard Shortcuts opened" "$layout: Keyboard Shortcuts opened"
+  ui_expect_new "Keyboard Shortcuts at Sweep" "$layout: at Sweep's row"
+  ui_focus_dialog '^Keyboard Shortcuts$'
+  ui_step "close it (Esc)"                 ui_key Escape
+  ui_focus_main
+}
+
 # narrow_window: the Floating layout's groups in a narrow window, the ones
 # at the right as their names only (Ribbon::fitGroups), all within it.
 narrow_window() {
@@ -194,9 +317,11 @@ for id in solid.rectangular_pattern solid.mirror solid.gear solid.pulley solid.b
 done
 echo "ok   no buttons for the patterns, Mirror, Plastic Feature and the machine elements"
 
+pin_toolbar "Docked"
 check_layout "Docked"
 ui_stop_app
 ui_start_app --chrome=floating
+pin_toolbar "Floating"
 check_layout "Floating"
 narrow_window
 

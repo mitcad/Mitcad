@@ -335,6 +335,9 @@ void MainWindow::createNativeWindow() {
     m_viewer->setOverlayInsets(insets);
     m_viewer->setCoveredRects(covered);
   };
+  callbacks.cubeArrow = [this](const QString& id) {
+    QTimer::singleShot(0, this, [this, id] { m_viewer->pressCubeArrow(id); });
+  };
   callbacks.cardWidthChosen = rememberNativeCardWidth;
   // The focused Projects outline's keys are the shared panel's (mitcad#816).
   callbacks.projectsKey = [this](int key) { return m_projectsPanel != nullptr && m_projectsPanel->treeKey(key); };
@@ -343,6 +346,18 @@ void MainWindow::createNativeWindow() {
     throw std::runtime_error(m_nativeWindow->embeddingError().toStdString());
   }
   restoreNativeCardWidths(*m_nativeWindow);
+  // The orientation cube's arrows are AppKit buttons at the hidden Qt
+  // arrows' places.
+  const auto showCubeArrows = [this] {
+    QList<mac::NativeMacCubeArrow> arrows;
+    for (const OcctViewer::CubeArrow& arrow : m_viewer->shownCubeArrows()) {
+      arrows.append({arrow.id, arrow.toolTip, arrow.symbol,
+                     QRect(m_viewer->mapTo(this, arrow.geometry.topLeft()), arrow.geometry.size())});
+    }
+    m_nativeWindow->setCubeArrows(arrows);
+  };
+  connect(m_viewer, &OcctViewer::cubeArrowsChanged, this, showCubeArrows);
+  showCubeArrows();
   setNativeDialogWindow(m_nativeWindow->nativeWindow());
   connect(m_controller->browser(), &BrowserPanel::contentHeightChanged, this, [this] {
     m_nativeSnapshotKey.clear();

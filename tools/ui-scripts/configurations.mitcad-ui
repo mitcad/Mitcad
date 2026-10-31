@@ -2,8 +2,9 @@
 # Configurations (mitcad#807) on Windows and macOS (and wherever the test
 # driver runs), on configurations.json: Color and Length as options, the row
 # Short and the rule Black is short. The Configurations window opens with
-# its options and rows, and a choice in the browser's Configuration bar
-# changes the body.
+# its options and rows, a choice in the browser's Configuration bar
+# changes the body, and a parameter column added in the Rows tab
+# (mitcad#999) drives the body when its row is applied.
 expect-ever 'View area'
 wait-idle
 expect-ever 'Configuration bar: Color = White \(Black \| White\); Length = 1500 mm'
@@ -32,3 +33,58 @@ expect-log 'Configuration bar: Color = White \(Black \| White\); Length = 1200 m
 wait-idle
 expect-model-bodies 1 480000
 expect-undo-depth ${before} 1
+
+# A parameter column (mitcad#999): the row Short applied first (a closed
+# table allows only its rows' combinations), then Add Column… makes Extra
+# a column, the table closed with it, in one undo step; Short's Extra typed
+# as 100 and Short applied: the body follows (20 x 20 x (800 + 100)).
+# Remove Column takes it out in one undo step; the parameter keeps 100 mm.
+mark
+command solid.configurations
+focus-dialog '^Configurations$'
+expect-log 'Configurations window opened'
+dialog-click-logged 'Configurations tab Rows'
+expect-log 'Configurations add column at'
+dialog-click-logged 'Configurations row Short Name'
+button '^Apply$' configurationsApply
+expect-log 'Configurations applied Short'
+wait-idle
+expect-model-bodies 1 320000
+capture-undo-depth column
+mark
+# The driver matches a button's label without its & and trailing "…"
+# (TestDriver's plainText): "Add Column…" is "Add Column" here.
+button '^Add Column$' configurationsAddColumn
+focus-dialog '^Add Column$'
+expect-log 'Add Column dialog opened: Extra, New Parameter'
+key Return
+focus-dialog '^Configurations$'
+expect-log 'Configurations: column Extra added'
+expect-log 'Configurations rows: closed, .*Short: Color = White, Length = 800 mm, Extra = 0 mm'
+expect-undo-depth ${column} 1
+expect-log 'Configurations row Short Extra at'
+mark
+dialog-dblclick-logged 'Configurations row Short Extra'
+key ctrl+a
+type 100
+key Return
+expect-log 'Configurations row Short Extra: 100'
+expect-log 'Short: Color = White, Length = 800 mm, Extra = 100 mm'
+dialog-click-logged 'Configurations row Short Name'
+button '^Apply$' configurationsApply
+expect-log 'Configurations applied Short'
+wait-idle
+expect-model-bodies 1 360000
+expect-model-parameter Extra 100
+capture-undo-depth removing
+mark
+dialog-click-logged 'Configurations row Short Extra'
+button '^Remove Column$' configurationsRemoveColumn
+expect-log 'Configurations: column Extra removed'
+expect-log 'Configurations rows: closed, .*Short: Color = White, Length = 800 mm$'
+expect-undo-depth ${removing} 1
+expect-model-parameter Extra 100
+wait-idle
+expect-model-bodies 1 360000
+button '^Close$'
+focus-main

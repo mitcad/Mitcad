@@ -1769,6 +1769,22 @@ pub trait Kernel: Send {
     ) -> Result<Vec<Vec<[f64; 3]>>, KernelError> {
         Err(KernelError::Unsupported("edge polylines"))
     }
+
+    // Dogbones: relief cuts at a body's inside corners for a router bit
+    // (mitcad#1011; `features::dogbone`).
+
+    /// The reliefs of a dogbone ([`DogboneSpec`]) as one tool shape, a
+    /// cylinder of the tool's diameter along each inside corner edge it
+    /// takes, placed so that the tool reaches the sharp corner: the tool a
+    /// dogbone cuts from the body. The body is left as it is. A picked edge
+    /// that is not straight or not an inside (concave) corner is an error
+    /// that says so; picks that hold no such edge are an error too.
+    fn dogbone_tool(
+        &self,
+        _spec: &DogboneSpec<'_, Self::Shape>,
+    ) -> Result<Self::Shape, KernelError> {
+        Err(KernelError::Unsupported("dogbones"))
+    }
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of
@@ -2796,4 +2812,55 @@ pub struct FaceRevolveSpec<'a, S> {
     pub axis: Axis,
     pub angle1: f64,
     pub angle2: Option<f64>,
+}
+
+// Dogbones (mitcad#1011).
+
+/// Where a dogbone's relief lies at its corner ([`DogboneSpec`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DogboneKind {
+    /// Along the corner's bisector: the tool moved into the corner until
+    /// its circle passes through the sharp corner.
+    #[default]
+    Diagonal,
+    /// Along a side (a T-bone): the tool kept on one face of the corner
+    /// and moved along it until its circle passes through the sharp
+    /// corner, notching the other face.
+    AlongSide,
+}
+
+/// Input of [`Kernel::dogbone_tool`]. The edges the dogbone takes: the
+/// edges `edges` names (each must be a straight inside corner); of the
+/// faces `faces` names, their edges that are straight inside corners
+/// parallel to `axis`, and, of a planar face across `axis` (a pocket's
+/// floor, a top face), every such edge of the body with an end on the
+/// face; without edges and faces, every such edge of the body. For each
+/// edge a cylinder of radius `diameter / 2` runs along the whole edge,
+/// its axis parallel to the edge:
+///
+/// - [`DogboneKind::Diagonal`]: its centre on the corner's bisector,
+///   `diameter / 2 - extra` from the corner, so that its circle passes
+///   `extra` beyond the sharp corner;
+/// - [`DogboneKind::AlongSide`]: its centre `diameter / 2` off one face of
+///   the corner (into the corner's opening) and `extra` beyond the corner
+///   along that face: the face picked when the edge came from a picked face
+///   of the corner, otherwise the longer of the two faces (the one that
+///   reaches farther from the edge).
+///
+/// Faces are named after `feature`: `dogbone(<edge>)` along the cylinder,
+/// `dogbone_start(<edge>)` and `dogbone_end(<edge>)` its ends, `<edge>`
+/// the edge's name in the body (its index among the body's edges when it
+/// has none). The cylinders are one compound, which may overlap.
+#[derive(Debug, Clone, Copy)]
+pub struct DogboneSpec<'a, S> {
+    pub feature: FeatureUid,
+    pub body: &'a S,
+    pub edges: &'a [EdgeName],
+    pub faces: &'a [FaceName],
+    /// The router bit's axis, a unit vector.
+    pub axis: [f64; 3],
+    pub diameter: f64,
+    pub extra: f64,
+    pub kind: DogboneKind,
 }

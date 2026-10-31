@@ -3,8 +3,10 @@
 # check-all sources: app/MainWindow.cpp app/framework/TestDriver.cpp tools/cli core/model-api/src/configurations.rs
 # Configurations (mitcad#807) in the build VM, through the test driver
 # (tools/ui-scripts/configurations.mitcad-ui, the same script as the macOS
-# test's): the Configurations window opens with its options and row, and a
-# choice in the browser's Configuration bar changes the body.
+# test's): the Configurations window opens with its options and row, a
+# choice in the browser's Configuration bar changes the body, and a
+# parameter column added in the Rows tab (mitcad#999) drives the body when
+# its row is applied.
 param(
   [string]$App,
   [string]$Cli,
@@ -26,6 +28,8 @@ $exitCode = $script:UiProcess.ExitCode
 if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "configurations driver failed (exit code $exitCode)"
 }
-Ui-ExpectLog 'TestDriver: done' 'the window opened and the bar''s choice changed the body'
+Ui-ExpectLog 'TestDriver: done' 'the window opened, the bar''s choice changed the body and a parameter column drove it'
+Ui-ExpectLog 'Configurations: column Extra added' 'Add Column made Extra a column'
+Ui-ExpectLog 'Configurations: column Extra removed' 'Remove Column took it out'
 Ui-StopApp
 Write-Host 'PASS: configurations'

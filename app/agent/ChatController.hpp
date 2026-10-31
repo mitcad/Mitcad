@@ -196,6 +196,7 @@ private:
   Turn m_turn;
   int m_answer = -1; // the assistant entry being streamed
   QList<QJsonObject> m_entries;
+  int m_toolsFrom = 0; // the first entry since the agent's process started (its call ids are its own)
   std::vector<Card> m_cards;
   int m_messages = 0; // sent in this run, for the log
   QJsonObject m_sessions; // the history's last session of each agent

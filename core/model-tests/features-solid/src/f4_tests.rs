@@ -2174,6 +2174,88 @@ fn patterns_of_bodies_join_their_copies_with_combine() {
     assert!(error.to_string().contains("bodies only"), "{error}");
 }
 
+/// A pattern along x of the block (A, F2.b0) and the peg (B, F4.b0)
+/// together, with `combine` and the given extra options.
+fn block_and_peg_row(distance: f64, extra: Value) -> Value {
+    let mut value = x_pattern(2.0, distance, extra);
+    value["objects"] = json!({"type": "bodies", "bodies": ["F2.b0", "F4.b0"]});
+    value["combine"] = json!(true);
+    value
+}
+
+fn sorted(mut items: Vec<String>) -> Vec<String> {
+    items.sort();
+    items
+}
+
+#[test]
+fn combine_any_joins_a_copy_with_every_patterned_body_it_touches() {
+    // mitcad#1006: the block A (x 0..60) and the peg B (about x = 100) in
+    // one pattern, 70 along x: A's copy (x 70..130) stays away from A but
+    // reaches B; B's copy (x about 170) reaches nothing.
+    let mut b = block();
+    let peg = peg(&mut b.doc);
+    assert_eq!(peg.to_string(), "F4");
+    // With `combine` alone a copy joins only its own original: A's copy
+    // does not touch A (the mock's join is told so) and stays a body.
+    *b.doc.kernel().touch.borrow_mut() = Some(vec![false]);
+    let row = add(&mut b.doc, block_and_peg_row(70.0, json!({})));
+    *b.doc.kernel().touch.borrow_mut() = None;
+    assert_eq!(status(&b.doc, row), FeatureStatus::Ok);
+    assert_eq!(sorted(uids(&b.doc)), ["F2.b0", "F4.b0", "F5.b0", "F5.b1"]);
+    // With `combine_any` A's copy joins B, the body it reaches.
+    b.doc
+        .edit_feature(
+            row,
+            &def(block_and_peg_row(70.0, json!({"combine_any": true}))),
+        )
+        .unwrap();
+    assert_eq!(status(&b.doc, row), FeatureStatus::Ok);
+    assert_eq!(sorted(uids(&b.doc)), ["F2.b0", "F4.b0", "F5.b1"]);
+    let joined = shape(&b.doc, "F4.b0").history;
+    assert!(joined.starts_with("join("), "{joined}");
+    assert!(joined.contains("inst1"), "{joined}");
+    assert!(!shape(&b.doc, "F2.b0").history.starts_with("join("));
+    let reach = bounds(&b.doc, "F4.b0");
+    assert!((reach.min[0] - 70.0).abs() < 1e-9, "{reach:?}");
+    assert!((reach.max[0] - 130.0).abs() < 1e-9, "{reach:?}");
+    // 50 along x A's copy (x 50..110) touches A and reaches B: all three
+    // join into A, the first patterned body, and B goes.
+    b.doc
+        .edit_feature(
+            row,
+            &def(block_and_peg_row(50.0, json!({"combine_any": true}))),
+        )
+        .unwrap();
+    assert_eq!(status(&b.doc, row), FeatureStatus::Ok);
+    assert_eq!(sorted(uids(&b.doc)), ["F2.b0", "F5.b1"]);
+    let merged = shape(&b.doc, "F2.b0");
+    assert!(merged.history.starts_with("join("), "{}", merged.history);
+    assert!(merged.history.contains("inst1"), "{}", merged.history);
+    assert!(
+        merged
+            .faces
+            .iter()
+            .any(|f| f.to_string().starts_with("F4:")),
+        "{:?}",
+        merged.faces
+    );
+    assert_bounds(
+        &b.doc,
+        "F2.b0",
+        [0.0, bounds(&b.doc, "F2.b0").min[1], 0.0],
+        [110.0, 40.0, 20.0],
+    );
+    // `combine_any` needs `combine`.
+    let mut alone = block_and_peg_row(50.0, json!({"combine_any": true}));
+    alone["combine"] = json!(false);
+    let error = b.doc.add_feature(&def(alone), None).unwrap_err();
+    assert!(
+        error.to_string().contains("combine_any needs combine"),
+        "{error}"
+    );
+}
+
 #[test]
 fn scale_groups_scale_runs_of_elements_alike() {
     let mut b = block();

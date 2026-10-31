@@ -166,7 +166,7 @@ QPixmap pixmapOf(const QVariant& value, int side) {
   }
 }
 
-// The shared star colour of the part picker (PartPicker.cpp, starColour).
+// The shared star colour of the part picker (PartStar.cpp, partStarColour).
 NSColor* starColour() { return [NSColor colorWithSRGBRed:232.0 / 255.0 green:170.0 / 255.0 blue:0.0 alpha:1.0]; }
 
 void showStar(NSButton* button, bool on) {
@@ -1058,6 +1058,7 @@ public:
   explicit NativeGroupList(QTreeView* tree) : m_tree(tree) {
     m_keyRole = roleOf(tree, "nativeGroupKeyRole", Qt::DisplayRole);
     m_starRole = roleOf(tree, "nativeStarRole", -1);
+    m_dimmedRole = roleOf(tree, "nativeGroupDimmedRole", -1);
     m_starMethod = tree->property("nativeStarMethod").toByteArray();
     m_target = [MitcadNativeGroupTarget new];
     m_target->owner = this;
@@ -1159,6 +1160,11 @@ public:
     text.translatesAutoresizingMaskIntoConstraints = NO;
     [text setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
+    // A group with no part under the filters, kept as the chosen one:
+    // greyed (PartGrid, mitcad#1015).
+    if (m_dimmedRole >= 0 && index.data(m_dimmedRole).toBool()) {
+      text.textColor = NSColor.secondaryLabelColor;
+    }
     [view addSubview:text];
     view.textField = text;
     NSView* mark = nil;
@@ -1372,6 +1378,7 @@ private:
   std::vector<QMetaObject::Connection> m_connections;
   int m_keyRole = Qt::DisplayRole;
   int m_starRole = -1;
+  int m_dimmedRole = -1;
   QByteArray m_starMethod;
   bool m_syncing = false;
   MitcadNativeGroupTarget* m_target = nil;

@@ -110,6 +110,9 @@ if(BUILD_TESTING)
             --bodies F1.b0,F1.b1,F1.b2,F1.b3,F1.b4,F1.b5,F1.b6,F1.b7,F1.b8,F1.b9,F1.b10,F1.b11)
   set_tests_properties(cli.bearings_3mf PROPERTIES FIXTURES_REQUIRED cli_bearings PASS_REGULAR_EXPRESSION
     "\"format\":\"3mf\",\"meshes\":\\[{\"body\":\"F1\\.b0\"[^]]*\"body\":\"F1\\.b1\"[^]]*\"body\":\"F1\\.b11\"[^]]*\\]")
+  # Mortise and Tenon (mitcad#1012): crossing boards, blind, through and with
+  # rounded corners, the mortise the tenon grown by the clearance; refusals.
+  add_test(NAME cli.mortise_tenon COMMAND mitcad-cli run "${scripts}/mortise_tenon.json")
 
   # Components and occurrences (F6): placements, subassemblies, timeline
   # moves, components made by features and copies, with world-space
@@ -643,6 +646,22 @@ if(BUILD_TESTING)
     COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DRUNNER=$<TARGET_FILE:mitcad_run_parallel>"
             "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fcstd-corpus" -P "${CMAKE_CURRENT_SOURCE_DIR}/fcstd-corpus.cmake")
   set_tests_properties(freecad.corpus PROPERTIES SKIP_REGULAR_EXPRESSION "FreeCAD corpus: skipped")
+  # Single FreeCAD documents, found by their content ids under the folders
+  # of MITCAD_FCSTD_CORPUS and the folders beside them (reported ones):
+  # no fallback and the Body's volume as FreeCAD's within 1e-6 relative
+  # (mitcad#997); skipped without them.
+  add_test(NAME freecad.corpus_designs
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fcstd-designs" -P "${CMAKE_CURRENT_SOURCE_DIR}/fcstd-designs.cmake")
+  set_tests_properties(freecad.corpus_designs PROPERTIES SKIP_REGULAR_EXPRESSION "FreeCAD designs: skipped")
+  # FreeCAD documents reported with import faults, found by their content
+  # ids under MITCAD_FCSTD_CORPUS and its `reported` folders: the objects
+  # each fault was about come in as the report expects (mitcad#998);
+  # skipped without the files.
+  add_test(NAME freecad.reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fcstd-reported" -P "${CMAKE_CURRENT_SOURCE_DIR}/fcstd-reported.cmake")
+  set_tests_properties(freecad.reported PROPERTIES SKIP_REGULAR_EXPRESSION "reported FreeCAD files: skipped")
 
   # Designs saved by earlier versions under MITCAD_DESIGN_CORPUS (project
   # folders): every one opens with no sketch failing (mitcad#249); skipped
@@ -1368,6 +1387,17 @@ if(BUILD_TESTING)
   add_test(NAME cli.cut_sheet COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/cut_sheet.json")
   if(WIN32)
     set_property(TEST cli.cut_sheet APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Dogbones (mitcad#1011): relief cuts at a pocket's inside corners with
+# analytic volumes, diagonal and along a side, picked by the body, a face
+# and edges; outside and round edges refused.
+if(BUILD_TESTING)
+  add_test(NAME cli.dogbone COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/dogbone.json")
+  if(WIN32)
+    set_property(TEST cli.dogbone APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
 endif()

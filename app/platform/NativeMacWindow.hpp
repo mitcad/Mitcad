@@ -124,6 +124,16 @@ struct NativeMacHistoryItem {
   int bindings = 0;
 };
 
+// An arrow of the orientation cube (GlassButton in the Qt view): a round
+// button over the canvas that turns the view to the face beside the one in
+// sight or rolls it.
+struct NativeMacCubeArrow {
+  QString id; // up, down, left, right, cw, ccw (OcctViewer::pressCubeArrow)
+  QString toolTip;
+  QString symbol; // SF Symbol
+  QRect geometry; // Logical viewport coordinates, origin at its top-left corner.
+};
+
 struct NativeMacWindowCallbacks {
   std::function<void(const QString&)> action;
   std::function<void(const QStringList&)> selection;
@@ -182,6 +192,8 @@ struct NativeMacWindowCallbacks {
   // buttons and document shortcuts; true when the shared panel took it:
   // Return opens, F2 renames, Delete deletes (mitcad#816).
   std::function<bool(int)> projectsKey;
+  // An orientation cube arrow clicked: its NativeMacCubeArrow::id.
+  std::function<void(const QString&)> cubeArrow;
 };
 
 #ifdef Q_OS_MACOS
@@ -255,6 +267,9 @@ public:
   // A side card's remembered width (mitcad#818), named as cardWidthChosen
   // names it; placed within the canvas as a dragged width is.
   void setCardWidth(const QString& card, int width);
+  // The orientation cube's arrows over the canvas, under the cards; none
+  // hides them. Logs "Native cube arrows" when they change.
+  void setCubeArrows(const QList<NativeMacCubeArrow>& arrows);
 
 private:
   std::unique_ptr<NativeMacWindowState> m_state;

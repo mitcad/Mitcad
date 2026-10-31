@@ -54,6 +54,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use super::base::{Joined, body_lumps, join_pieces};
 use super::bodies::{BodySet, apply_tool, apply_tool_strays};
 use super::dressup_copies::{copied_features, is_dressup, repeat_dressup};
 use super::face_refs::UNSUPPORTED;
@@ -66,7 +67,9 @@ use super::{
 use mitcad_vec3::{add, cross, dot, scale as scaled, sub};
 
 use crate::ids::{BodyUid, FeatureUid};
-use crate::kernel::{BooleanOp, BooleanOutput, BoundingBox, Kernel, KernelError};
+use crate::kernel::{
+    BooleanOp, BooleanOutput, BooleanPiece, BoundingBox, Kernel, KernelError, ToolContact,
+};
 use crate::parameters::ParamId;
 use crate::recompute::Read;
 use crate::topo::FaceName;
@@ -171,6 +174,10 @@ pub struct RectangularPatternDef<P = ParamId> {
     /// mirror's `combine` (mitcad#539); bodies only.
     #[serde(default, skip_serializing_if = "is_false")]
     pub combine: bool,
+    /// With `combine`: a copy joins every body of the pattern it touches,
+    /// not only its original ([`Combine::Any`], mitcad#1006).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub combine_any: bool,
     /// The copies the scale's runs are counted over (mitcad#542; default
     /// the pattern's own: the inner patterns' copies times its elements):
     /// more for a pattern inside a pattern of patterns whose runs a later
@@ -229,6 +236,9 @@ pub struct CircularPatternDef<P = ParamId> {
     /// As [`RectangularPatternDef::combine`].
     #[serde(default, skip_serializing_if = "is_false")]
     pub combine: bool,
+    /// As [`RectangularPatternDef::combine_any`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub combine_any: bool,
     /// As [`RectangularPatternDef::scale_copies`].
     #[serde(default = "none", skip_serializing_if = "Option::is_none")]
     pub scale_copies: Option<P>,
@@ -291,6 +301,10 @@ pub struct PathPatternDef<P = ParamId> {
     /// body) join the body of the features, where they touch it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub combine: bool,
+    /// As [`RectangularPatternDef::combine_any`]; bodies and patterns of
+    /// bodies only.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub combine_any: bool,
     /// As [`RectangularPatternDef::scale_copies`].
     #[serde(default = "none", skip_serializing_if = "Option::is_none")]
     pub scale_copies: Option<P>,
@@ -429,6 +443,7 @@ impl<P> RectangularPatternDef<P> {
             scale: map_scale(&self.scale, f)?,
             scale_groups: map_scale_groups(&self.scale_groups, f)?,
             combine: self.combine,
+            combine_any: self.combine_any,
             scale_copies: map_scale_copies(&self.scale_copies, f)?,
             scales: map_scales(&self.scales, f)?,
             scale_center: self.scale_center.clone(),
@@ -454,6 +469,7 @@ impl<P> CircularPatternDef<P> {
             scale: with(map_scale),
             scale_groups: with(map_scale_groups),
             combine: copy,
+            combine_any: copy,
             scale_copies: with(map_scale_copies),
             scales: with(map_scales),
             scale_center: clone,
@@ -484,6 +500,7 @@ impl<P> PathPatternDef<P> {
             scale: with(map_scale),
             scale_groups: with(map_scale_groups),
             combine: copy,
+            combine_any: copy,
             scale_copies: with(map_scale_copies),
             scales: with(map_scales),
             scale_center: clone,
@@ -1063,13 +1080,20 @@ fn source_body<K: Kernel>(
 /// the place's own elements (`own`, scaled and skipped as the pattern
 /// says). With `combine` a copy that touches its body joins it (the body
 /// as the patterns before made it), else it is a new body
-/// `<pattern>.b<k>`, k counting the copies in order.
+/// `<pattern>.b<k>`, k counting the copies in order. With `combine_any`
+/// a copy joins every body it touches of those the patterns' bodies are
+/// now (the ones still there) and of the copies before it that stayed
+/// bodies of their own ([`join_any`], mitcad#1006).
 fn repeat_body_places<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     places: &[Placed],
     own: &[Vec<Element>],
-    combine: bool,
+    combine: Combine,
 ) -> Result<FeatureOutput<K::Shape>, String> {
+    if combine == Combine::Any {
+        return repeat_body_places_joining_any(ctx, places, own);
+    }
+    let combine = combine.joins();
     let mut changes = Vec::new();
     let mut merged: Vec<(BodyUid, K::Shape)> = Vec::new();
     let mut next = 0u32;
@@ -1121,6 +1145,70 @@ fn repeat_body_places<K: Kernel>(
     }
     Ok(FeatureOutput {
         changes,
+        ..FeatureOutput::default()
+    })
+}
+
+/// [`repeat_body_places`] with `combine_any` (mitcad#1006): the bodies of
+/// the patterns that are still there are the bodies the copies join to
+/// begin with; a copy that touches none is the new body
+/// `<pattern>.b<k>`, k counting such bodies in order.
+fn repeat_body_places_joining_any<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    places: &[Placed],
+    own: &[Vec<Element>],
+) -> Result<FeatureOutput<K::Shape>, String> {
+    let mut listed: Vec<BodyUid> = Vec::new();
+    for place in places {
+        for body in body_leaf(ctx, place.feature)?.unwrap_or_default() {
+            if !listed.contains(&body) {
+                listed.push(body);
+            }
+        }
+    }
+    // A body an earlier pattern merged into another is no longer there.
+    let mut start = Vec::new();
+    for body in listed {
+        if ctx.env.bodies.contains_key(&body) {
+            let shape = ctx.body(body)?;
+            // Copies of a mesh body are not joined (mitcad#399).
+            ctx.require_surfaces(body, &shape)?;
+            start.push((body, shape));
+        }
+    }
+    let mut joining = Joining::new(ctx.kernel, start);
+    let mut next = 0u32;
+    for (place, elements) in places.iter().zip(own) {
+        let bodies = body_leaf(ctx, place.feature)?.unwrap_or_default();
+        for body in bodies {
+            let source = source_body(ctx, place.feature, body)?;
+            ctx.require_surfaces(body, &source)?;
+            for element in elements {
+                let instance = Instance {
+                    feature: ctx.uid,
+                    index: element.index,
+                };
+                let copy = placed_copy(
+                    ctx,
+                    &source,
+                    &place.steps,
+                    &element.transform,
+                    instance,
+                    false,
+                )?;
+                let pieces = match join_any(ctx, &mut joining, &copy)? {
+                    Some(strays) => strays,
+                    None => vec![copy],
+                };
+                for piece in pieces {
+                    joining.add(ctx.kernel, BodyUid::new(ctx.uid, next), piece);
+                    next += 1;
+                }
+            }
+        }
+    }
+    Ok(FeatureOutput {
+        changes: joining.changes(),
         ..FeatureOutput::default()
     })
 }
@@ -1622,9 +1710,41 @@ impl PathPatternDef {
     }
 }
 
+/// How a pattern's or mirror's copies of bodies join bodies (`combine`,
+/// `combine_any`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Combine {
+    /// Each copy is a new body.
+    No,
+    /// A copy joins the body it is a copy of where they touch (`combine`).
+    Own,
+    /// A copy joins every body of the pattern it touches (`combine_any`,
+    /// mitcad#1006): the patterned bodies and the copies before it that
+    /// stayed bodies of their own ([`join_any`]), as FreeCAD fuses the
+    /// copies of a Body's whole shape with whatever they reach.
+    Any,
+}
+
+impl Combine {
+    /// From a definition's `combine` and `combine_any`.
+    pub(crate) fn of(combine: bool, any: bool) -> Self {
+        match (combine, any) {
+            (false, _) => Self::No,
+            (true, false) => Self::Own,
+            (true, true) => Self::Any,
+        }
+    }
+
+    /// Whether copies join bodies at all.
+    fn joins(self) -> bool {
+        self != Self::No
+    }
+}
+
 /// Places copies of the objects at the elements: the evaluation shared by
 /// patterns and mirrors. `combine` joins copies of bodies to their
-/// originals when they touch (a mirror's `combine`). `scaling`: the
+/// originals when they touch (a mirror's `combine`), or to every body of
+/// the pattern they touch ([`Combine::Any`]). `scaling`: the
 /// pattern's scale, for the copies of the copies patterns among the
 /// features make ([`Scaling`]; the elements are scaled for the originals'
 /// own copies). `skipped`: the copies of features not made, by their
@@ -1636,7 +1756,7 @@ pub(crate) fn repeat<K: Kernel>(
     compute: ComputeOption,
     original_bodies: bool,
     elements: &[Element],
-    combine: bool,
+    combine: Combine,
     scaling: Option<&Scaling>,
     skipped: &[u32],
 ) -> Result<FeatureOutput<K::Shape>, String> {
@@ -1646,7 +1766,11 @@ pub(crate) fn repeat<K: Kernel>(
     };
     match objects {
         PatternObjects::Components { .. } => Err("components require Pattern at Points".to_owned()),
+        PatternObjects::Bodies { bodies } if combine == Combine::Any => {
+            repeat_bodies_joining_any(ctx, bodies, elements, skipped)
+        }
         PatternObjects::Bodies { bodies } => {
+            let combine = combine.joins();
             let mut changes = Vec::new();
             let count = bodies.len() as u32;
             for (j, body) in bodies.iter().enumerate() {
@@ -1893,7 +2017,7 @@ pub(crate) fn repeat<K: Kernel>(
                 }
                 Err(e) => return Err(e),
             }
-            if combine {
+            if combine.joins() {
                 join_copies(ctx, &mut set, &places)?;
             }
             Ok(FeatureOutput {
@@ -2715,20 +2839,287 @@ const NEAR_COPY_SLACK: f64 = 0.1;
 /// pair of faces (minutes for free-form faces, mitcad#88): such a copy is
 /// joined only where it differs from the body by more than
 /// [`NEAR_COPY_SLACK`] ([`Kernel::join_near_copy`]); any other copy, and
-/// with a kernel without it, the whole shapes.
+/// with a kernel without it, the whole shapes. A body of several solids is
+/// joined lump by lump and keeps the lumps the copy does not reach; the
+/// result has at most one piece of the body (its solids in one compound),
+/// so no solid of it is dropped (mitcad#1003).
 fn combined<K: Kernel>(
     ctx: &EvalContext<'_, K>,
     body: &K::Shape,
     copy: &K::Shape,
 ) -> Result<BooleanOutput<K::Shape>, String> {
-    match ctx.kernel.join_near_copy(body, copy, NEAR_COPY_SLACK) {
-        Ok(Some(result)) => return Ok(result),
-        Ok(None) | Err(KernelError::Unsupported(_)) => {}
-        Err(e) => return Err(e.to_string()),
+    let lumps = body_lumps(ctx.kernel, body);
+    let result = if lumps.len() > 1 {
+        let refs: Vec<&K::Shape> = lumps.iter().collect();
+        ctx.kernel.boolean(BooleanOp::Join, &refs, copy)
+    } else {
+        match ctx.kernel.join_near_copy(body, copy, NEAR_COPY_SLACK) {
+            Ok(Some(result)) => Ok(result),
+            Ok(None) | Err(KernelError::Unsupported(_)) => {
+                ctx.kernel.boolean(BooleanOp::Join, &[body], copy)
+            }
+            Err(e) => Err(e),
+        }
     }
-    ctx.kernel
-        .boolean(BooleanOp::Join, &[body], copy)
-        .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    let touched = result.touched.iter().any(|t| *t);
+    let mut pieces = Vec::new();
+    for joined in join_pieces(ctx.kernel, result.pieces, &[lumps], &result.touched) {
+        match joined {
+            Joined::Body(_, shape) => pieces.push(BooleanPiece {
+                shape,
+                sources: vec![0],
+            }),
+            Joined::Stray(shape) => pieces.push(BooleanPiece {
+                shape,
+                sources: Vec::new(),
+            }),
+            // (Not with one body.)
+            Joined::Merged(_) => {}
+            Joined::Apart(_) => {
+                return Err(
+                    "the join leaves the body in several solids the kernel cannot hold in one body"
+                        .to_owned(),
+                );
+            }
+        }
+    }
+    Ok(BooleanOutput {
+        pieces,
+        touched: vec![touched],
+    })
+}
+
+/// Boxes this far apart still meet (mm) when the bodies a copy reaches
+/// are found ([`Joining::reached`]), as for the automatic operation.
+const CONTACT_BOX_SLACK: f64 = 1.0e-5;
+
+/// The bodies a pattern's copies join with `combine_any` (mitcad#1006), as
+/// the pattern changes them.
+struct Joining<S> {
+    /// The bodies a copy may join, each with its shape so far and its box:
+    /// those there before the pattern first, in their order, then the
+    /// bodies the pattern made.
+    bodies: Vec<(BodyUid, S, Option<BoundingBox>)>,
+    /// The bodies there before the pattern.
+    before: Vec<BodyUid>,
+    /// The bodies the pattern set, in the order it first set them.
+    set: Vec<BodyUid>,
+}
+
+impl<S: Clone> Joining<S> {
+    fn new<K: Kernel<Shape = S>>(kernel: &K, bodies: Vec<(BodyUid, S)>) -> Self {
+        Self {
+            before: bodies.iter().map(|(uid, _)| *uid).collect(),
+            bodies: bodies
+                .into_iter()
+                .map(|(uid, shape)| {
+                    let around = kernel.bounding_box(&shape).ok().flatten();
+                    (uid, shape, around)
+                })
+                .collect(),
+            set: Vec::new(),
+        }
+    }
+
+    /// A body the pattern makes.
+    fn add<K: Kernel<Shape = S>>(&mut self, kernel: &K, uid: BodyUid, shape: S) {
+        let around = kernel.bounding_box(&shape).ok().flatten();
+        self.bodies.push((uid, shape, around));
+        self.set.push(uid);
+    }
+
+    /// Body i's new shape.
+    fn reshape<K: Kernel<Shape = S>>(&mut self, kernel: &K, i: usize, shape: S) {
+        let around = kernel.bounding_box(&shape).ok().flatten();
+        let uid = self.bodies[i].0;
+        self.bodies[i].1 = shape;
+        self.bodies[i].2 = around;
+        if !self.set.contains(&uid) {
+            self.set.push(uid);
+        }
+    }
+
+    /// Takes out the bodies merged into others, by their positions.
+    fn remove(&mut self, mut merged: Vec<usize>) {
+        merged.sort_unstable();
+        merged.dedup();
+        for i in merged.into_iter().rev() {
+            self.bodies.remove(i);
+        }
+    }
+
+    /// Of the bodies, those a copy (with its box) touches or reaches into:
+    /// boxes apart are apart; where the boxes of several meet, the kernel's
+    /// contact test tells, and without one they all count (the join then
+    /// tells).
+    fn reached<K: Kernel<Shape = S>>(
+        &self,
+        kernel: &K,
+        copy: &S,
+        around: Option<BoundingBox>,
+    ) -> Vec<usize> {
+        let near: Vec<usize> = self
+            .bodies
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, _, body))| match (&around, body) {
+                (Some(a), Some(b)) => a.overlaps(b, CONTACT_BOX_SLACK),
+                _ => true,
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if near.len() < 2 {
+            return near;
+        }
+        let shapes: Vec<&S> = near.iter().map(|i| &self.bodies[*i].1).collect();
+        match kernel.tool_contacts(copy, &shapes) {
+            Ok(contacts) if contacts.len() == near.len() => near
+                .into_iter()
+                .zip(contacts)
+                .filter(|(_, contact)| *contact != ToolContact::Apart)
+                .map(|(i, _)| i)
+                .collect(),
+            _ => near,
+        }
+    }
+
+    /// Sets of the bodies the pattern changed or made that are still there,
+    /// in the order it first set them, then removals of the bodies there
+    /// before it that it merged into others.
+    fn changes(self) -> Vec<BodyChange<S>> {
+        let mut changes: Vec<BodyChange<S>> = self
+            .set
+            .iter()
+            .filter_map(|uid| {
+                self.bodies
+                    .iter()
+                    .find(|(b, _, _)| b == uid)
+                    .map(|(b, shape, _)| BodyChange::Set(*b, shape.clone()))
+            })
+            .collect();
+        changes.extend(
+            self.before
+                .iter()
+                .filter(|uid| !self.bodies.iter().any(|(b, _, _)| b == *uid))
+                .map(|uid| BodyChange::Remove(*uid)),
+        );
+        changes
+    }
+}
+
+/// Joins a copy with every body of `joining` it touches (`combine_any`,
+/// mitcad#1006): with one of them as `combine` joins a copy with its
+/// original ([`combined`]: a mirror image's near-copy join too); with
+/// several in one join of their lumps, the bodies it joins together going
+/// into the first of them (the bodies there before the pattern first).
+/// None when it touches none; else the solids of the copy that touch none,
+/// to be bodies of their own.
+fn join_any<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    joining: &mut Joining<K::Shape>,
+    copy: &K::Shape,
+) -> Result<Option<Vec<K::Shape>>, String> {
+    let around = ctx.kernel.bounding_box(copy).ok().flatten();
+    let reached = joining.reached(ctx.kernel, copy, around);
+    let mut strays = Vec::new();
+    match reached[..] {
+        [] => return Ok(None),
+        [i] => {
+            let result = combined(ctx, &joining.bodies[i].1, copy)?;
+            if !result.touched[0] {
+                return Ok(None);
+            }
+            let mut joined = None;
+            for piece in result.pieces {
+                if piece.sources.is_empty() {
+                    strays.push(piece.shape);
+                } else {
+                    joined = Some(piece.shape);
+                }
+            }
+            if let Some(shape) = joined {
+                joining.reshape(ctx.kernel, i, shape);
+            }
+        }
+        _ => {
+            let mut lumps = Vec::with_capacity(reached.len());
+            for i in &reached {
+                lumps.push(body_lumps(ctx.kernel, &joining.bodies[*i].1));
+            }
+            let refs: Vec<&K::Shape> = lumps.iter().flatten().collect();
+            let result = ctx
+                .kernel
+                .boolean(BooleanOp::Join, &refs, copy)
+                .map_err(|e| e.to_string())?;
+            if !result.touched.iter().any(|t| *t) {
+                return Ok(None);
+            }
+            let mut merged = Vec::new();
+            for joined in join_pieces(ctx.kernel, result.pieces, &lumps, &result.touched) {
+                match joined {
+                    Joined::Body(k, shape) => joining.reshape(ctx.kernel, reached[k], shape),
+                    Joined::Merged(k) => merged.push(reached[k]),
+                    Joined::Stray(shape) | Joined::Apart(shape) => strays.push(shape),
+                }
+            }
+            joining.remove(merged);
+        }
+    }
+    Ok(Some(strays))
+}
+
+/// A pattern or mirror of bodies with `combine_any` (mitcad#1006): the
+/// copies of each body as it was before the pattern at the elements (the
+/// bodies in their order, each at every element), each joined with every
+/// body of the pattern it touches ([`join_any`]). A copy that touches none
+/// is the body `<pattern>.b<k>` it is without `combine`; solids of a copy
+/// that touch none while the rest of it does are bodies after those.
+fn repeat_bodies_joining_any<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    bodies: &[BodyUid],
+    elements: &[Element],
+    skipped: &[u32],
+) -> Result<FeatureOutput<K::Shape>, String> {
+    let count = bodies.len() as u32;
+    let mut originals = Vec::with_capacity(bodies.len());
+    for body in bodies {
+        let shape = ctx.body(*body)?;
+        // Copies of a mesh body are not joined (mitcad#399).
+        ctx.require_surfaces(*body, &shape)?;
+        originals.push((*body, shape));
+    }
+    let mut joining = Joining::new(ctx.kernel, originals.clone());
+    let mut next = elements.iter().map(|e| e.index).max().unwrap_or(0) * count;
+    for (j, (_, shape)) in originals.iter().enumerate() {
+        // Skipped copies (mitcad#547): their numbers are the elements'.
+        for element in elements.iter().filter(|e| !skipped.contains(&e.index)) {
+            let instance = Instance {
+                feature: ctx.uid,
+                index: element.index,
+            };
+            let copy = ctx
+                .kernel
+                .transform_shape(shape, &element.transform, Some(instance))
+                .map_err(|e| e.to_string())?;
+            match join_any(ctx, &mut joining, &copy)? {
+                None => {
+                    let uid = BodyUid::new(ctx.uid, (element.index - 1) * count + j as u32);
+                    joining.add(ctx.kernel, uid, copy);
+                }
+                Some(strays) => {
+                    for stray in strays {
+                        joining.add(ctx.kernel, BodyUid::new(ctx.uid, next), stray);
+                        next += 1;
+                    }
+                }
+            }
+        }
+    }
+    Ok(FeatureOutput {
+        changes: joining.changes(),
+        ..FeatureOutput::default()
+    })
 }
 
 /// Adjust's copies of a feature's tool applied in one boolean operation
@@ -3207,6 +3598,15 @@ pub(super) fn check_options(
     Ok(())
 }
 
+/// `combine_any` comes with `combine` (mitcad#1006); what it joins is
+/// checked as `combine`'s ([`check_options`]).
+pub(super) fn check_combine_any(combine: bool, any: bool) -> Result<(), String> {
+    if any && !combine {
+        return Err("combine_any needs combine".to_owned());
+    }
+    Ok(())
+}
+
 /// The references of the scale options (its centre).
 pub(super) fn add_scale_references(spec: &ScaleSpec<'_>, references: &mut References) {
     if let Some(center) = spec.center {
@@ -3253,6 +3653,7 @@ impl FeatureInfo for RectangularPatternDef {
         if let Some(direction) = &self.direction2 {
             direction.axis.check(ctx, Want::Axis)?;
         }
+        check_combine_any(self.combine, self.combine_any)?;
         check_options(
             ctx,
             &self.objects,
@@ -3288,6 +3689,7 @@ impl FeatureInfo for CircularPatternDef {
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
         self.objects.check(ctx)?;
         self.axis.check(ctx, Want::Axis)?;
+        check_combine_any(self.combine, self.combine_any)?;
         check_options(
             ctx,
             &self.objects,
@@ -3334,10 +3736,11 @@ impl FeatureInfo for PathPatternDef {
         if self.combine && matches!(self.objects, PatternObjects::Faces { .. }) {
             return Err("combine applies to bodies and features only".to_owned());
         }
+        check_combine_any(self.combine, self.combine_any)?;
         check_options(
             ctx,
             &self.objects,
-            self.combine && !features,
+            (self.combine && !features) || self.combine_any,
             &self.scale_spec(),
             &self.skipped_copies,
         )?;
@@ -3364,7 +3767,7 @@ impl<K: Kernel> Evaluate<K> for RectangularPatternDef {
             self.compute,
             self.original_bodies,
             &elements,
-            self.combine,
+            Combine::of(self.combine, self.combine_any),
             scaling.as_ref(),
             &self.skipped_copies,
         )
@@ -3380,7 +3783,7 @@ impl<K: Kernel> Evaluate<K> for CircularPatternDef {
             self.compute,
             self.original_bodies,
             &elements,
-            self.combine,
+            Combine::of(self.combine, self.combine_any),
             scaling.as_ref(),
             &self.skipped_copies,
         )
@@ -3396,7 +3799,7 @@ impl<K: Kernel> Evaluate<K> for PathPatternDef {
             self.compute,
             self.original_bodies,
             &elements,
-            self.combine,
+            Combine::of(self.combine, self.combine_any),
             scaling.as_ref(),
             &self.skipped_copies,
         )

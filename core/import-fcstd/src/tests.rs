@@ -6616,3 +6616,866 @@ fn a_chain_of_groups_listing_the_next_many_times_is_walked_once() {
     assert_eq!(report.occurrences, 0);
     assert_eq!(item(&report, "Folder19").outcome, ObjectOutcome::Included);
 }
+
+#[test]
+fn a_hole_and_a_chamfer_on_a_body_of_several_solids_replay() {
+    // (mitcad#997) A Body whose Pad is two solids apart (a sketch of two
+    // rectangles): each is a Mitcad body. A hole with a modelled thread
+    // over one of them is drilled into the Body's bodies (FreeCAD cuts its
+    // whole shape, so the solids the holes reach), and a chamfer of all
+    // edges chamfers each body; before, both fell back with "the Body is
+    // several bodies here".
+    let left = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+    let right = [[20.0, 0.0], [30.0, 0.0], [30.0, 10.0], [20.0, 10.0]];
+    let mut segments = Vec::new();
+    let mut joins = Vec::new();
+    for (k, p) in [left, right].iter().enumerate() {
+        let first = (4 * k) as i32;
+        for i in 0..4 {
+            segments.push(segment(p[i], p[(i + 1) % 4], false));
+            let next = first + (i as i32 + 1) % 4;
+            joins.push(constrain(
+                1,
+                0.0,
+                &[(first + i as i32, 2), (next, 1)],
+                "",
+                true,
+            ));
+        }
+    }
+    let sketch = format!("{}{}", geometry(&segments), constraints(&joins));
+    let holes = format!(
+        "{}{}",
+        placement([0.0, 0.0, 10.0], [0.0, 0.0, 1.0], 0.0),
+        geometry(&[round([5.0, 5.0], 1.5)])
+    );
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Body",
+            format!(
+                "{}{}{}",
+                shape("Body.brp"),
+                links(
+                    "Group",
+                    "App::PropertyLinkList",
+                    &["Sketch", "Pad", "Holes", "Hole", "Chamfer"]
+                ),
+                link("Tip", "Chamfer")
+            ),
+        ),
+        ("Sketcher::SketchObject", "Sketch", sketch),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Sketch", &[""]),
+                float("Length", 10.0),
+                shape("Pad.brp")
+            ),
+        ),
+        ("Sketcher::SketchObject", "Holes", holes),
+        (
+            "PartDesign::Hole",
+            "Hole",
+            format!(
+                "{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
+                link_sub("Profile", "Holes", &[""]),
+                link("BaseFeature", "Pad"),
+                float("Diameter", 2.5),
+                float("Depth", 5.0),
+                float("ThreadDepth", 5.0),
+                enumeration("DepthType", 0),
+                enumeration("DrillPoint", 0),
+                enumeration("HoleCutType", 0),
+                flag("Threaded", true),
+                flag("ModelThread", true),
+                custom_enum("ThreadType", 1, &["None", "ISOMetricProfile"]),
+                custom_enum("ThreadSize", 1, &["M2.5", "M3x0.5", "M4"]),
+                custom_enum("ThreadClass", 0, &["6H"]),
+                shape("Hole.brp")
+            ),
+        ),
+        (
+            "PartDesign::Chamfer",
+            "Chamfer",
+            format!(
+                "{}{}{}{}",
+                link_sub("Base", "Hole", &["Edge1"]),
+                flag("UseAllEdges", true),
+                float("Size", 0.5),
+                shape("Chamfer.brp")
+            ),
+        ),
+    ])
+    .replace("1.0R39319", "1.1R1");
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("Body.brp", b"30 body"),
+            ("Pad.brp", b"12 pad"),
+            ("Hole.brp", b"15 hole"),
+            ("Chamfer.brp", b"30 chamfer"),
+        ],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let pad = defs_of(&doc, &report, "Pad");
+    let mut solids: Vec<String> = doc
+        .bodies()
+        .iter()
+        .filter(|b| b.uid.feature == feature_uid(&report_feature_uid(&report, "Pad", 0)))
+        .map(|b| b.uid.to_string())
+        .collect();
+    solids.sort();
+    assert_eq!(solids.len(), 2, "{pad:?}");
+    let sorted = |v: &serde_json::Value| {
+        let mut all: Vec<String> = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_owned())
+            .collect();
+        all.sort();
+        all
+    };
+    // The hole: on both bodies, its groove too.
+    let hole = feature(&report, "Hole");
+    assert_eq!(hole.outcome, ObjectOutcome::Parametric, "{hole:?}");
+    let defs = defs_of(&doc, &report, "Hole");
+    let drill = defs.iter().find(|d| d["type"] == "hole").unwrap();
+    assert_eq!(sorted(&drill["participants"]), solids, "{drill}");
+    for groove in defs.iter().filter(|d| d["type"] == "helix") {
+        assert_eq!(sorted(&groove["participants"]), solids, "{groove}");
+    }
+    // The chamfer: one per body, each of all its edges.
+    let chamfer = feature(&report, "Chamfer");
+    assert_eq!(chamfer.outcome, ObjectOutcome::Parametric, "{chamfer:?}");
+    let defs = defs_of(&doc, &report, "Chamfer");
+    let mut bodies: Vec<String> = defs
+        .iter()
+        .map(|d| {
+            assert_eq!(d["type"], "chamfer", "{d}");
+            assert_eq!(d["sets"][0]["all_edges"], true, "{d}");
+            d["body"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    bodies.sort();
+    assert_eq!(bodies, solids, "{defs:?}");
+}
+
+#[test]
+fn a_hole_s_walls_are_threaded_in_the_bodies_its_drilled_length_meets() {
+    // (mitcad#997) Of several bodies, a hole's thread goes on the walls of
+    // those its drilled length (with the hole's radius) meets: from z = 10
+    // down 5 mm at (5, 5), radius 1.25.
+    let below = BoundingBox {
+        min: [0.0, 0.0, 0.0],
+        max: [10.0, 10.0, 10.0],
+    };
+    let beside = BoundingBox {
+        min: [20.0, 0.0, 0.0],
+        max: [30.0, 10.0, 10.0],
+    };
+    let deeper = BoundingBox {
+        min: [0.0, 0.0, -20.0],
+        max: [10.0, 10.0, -6.0],
+    };
+    let down = [0.0, 0.0, -1.0];
+    let at = [5.0, 5.0, 10.0];
+    assert!(features::meets_box(at, down, 5.0, 1.25, &below));
+    assert!(!features::meets_box(at, down, 5.0, 1.25, &beside));
+    assert!(!features::meets_box(at, down, 5.0, 1.25, &deeper));
+    // Through all it reaches the deeper one, but never the one above.
+    assert!(features::meets_box(at, down, f64::INFINITY, 1.25, &deeper));
+    assert!(!features::meets_box(
+        at,
+        [0.0, 0.0, 1.0],
+        5.0,
+        1.25,
+        &deeper
+    ));
+    // Its radius reaches a body just beside the axis.
+    let near = BoundingBox {
+        min: [6.0, 0.0, 0.0],
+        max: [10.0, 10.0, 10.0],
+    };
+    assert!(features::meets_box(at, down, 5.0, 1.25, &near));
+}
+
+/// (mitcad#1004) A document whose Body's Pad is two solids apart (a sketch
+/// of two 10 mm squares, x 0 to 10 and 20 to 30, padded 10 mm), each a
+/// MitCad body; `features` follow the Pad in the Body (the last its tip),
+/// `others` are more objects of the document.
+fn several_solids(
+    features: &[(&'static str, &'static str, String)],
+    others: &[(&'static str, &'static str, String)],
+) -> String {
+    two_solids_at(0.0, 20.0, features, others)
+}
+
+/// [`several_solids`] with the two squares from x = `left` and `right`.
+fn two_solids_at(
+    left: f64,
+    right: f64,
+    features: &[(&'static str, &'static str, String)],
+    others: &[(&'static str, &'static str, String)],
+) -> String {
+    let square = |x: f64| [[x, 0.0], [x + 10.0, 0.0], [x + 10.0, 10.0], [x, 10.0]];
+    let (left, right) = (square(left), square(right));
+    let mut segments = Vec::new();
+    let mut joins = Vec::new();
+    for (k, p) in [left, right].iter().enumerate() {
+        let first = (4 * k) as i32;
+        for (i, corner) in p.iter().enumerate() {
+            segments.push(segment(*corner, p[(i + 1) % 4], false));
+            let next = first + (i as i32 + 1) % 4;
+            joins.push(constrain(
+                1,
+                0.0,
+                &[(first + i as i32, 2), (next, 1)],
+                "",
+                true,
+            ));
+        }
+    }
+    let sketch = format!("{}{}", geometry(&segments), constraints(&joins));
+    let mut group: Vec<&str> = vec!["Sketch", "Pad"];
+    group.extend(features.iter().map(|(_, name, _)| *name));
+    let tip = group.last().copied().unwrap_or("Pad");
+    let mut objects: Vec<(&str, &str, String)> = vec![
+        (
+            "PartDesign::Body",
+            "Body",
+            format!(
+                "{}{}{}",
+                shape("Body.brp"),
+                links("Group", "App::PropertyLinkList", &group),
+                link("Tip", tip)
+            ),
+        ),
+        ("Sketcher::SketchObject", "Sketch", sketch),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Sketch", &[""]),
+                float("Length", 10.0),
+                shape("Pad.brp")
+            ),
+        ),
+    ];
+    objects.extend(features.iter().cloned());
+    objects.extend(others.iter().cloned());
+    document(&objects)
+}
+
+/// The Pad's bodies at the end of the import, by id.
+fn pad_solids(doc: &Document<MockKernel>, report: &FcstdReport) -> Vec<String> {
+    let pad = feature_uid(&report_feature_uid(report, "Pad", 0));
+    let mut solids: Vec<String> = doc
+        .bodies()
+        .iter()
+        .filter(|b| b.uid.feature == pad)
+        .map(|b| b.uid.to_string())
+        .collect();
+    solids.sort();
+    solids
+}
+
+/// A JSON list of ids, sorted.
+fn sorted_ids(v: &serde_json::Value) -> Vec<String> {
+    let mut all: Vec<String> = v
+        .as_array()
+        .unwrap_or_else(|| panic!("not a list: {v}"))
+        .iter()
+        .map(|s| s.as_str().unwrap().to_owned())
+        .collect();
+    all.sort();
+    all
+}
+
+/// A Body of its own (`name`) whose pad of a 10 mm high rectangle from
+/// (x, 0), `width` by 10, is a tool of a Boolean.
+fn tool_body(name: &'static str, x: f64, width: f64) -> Vec<(&'static str, &'static str, String)> {
+    let (sketch, pad, brep, pad_brep): (&'static str, &'static str, &'static str, &'static str) =
+        match name {
+            "Tool" => ("ToolSketch", "ToolPad", "Tool.brp", "ToolPad.brp"),
+            _ => ("CutterSketch", "CutterPad", "Cutter.brp", "CutterPad.brp"),
+        };
+    vec![
+        (
+            "PartDesign::Body",
+            name,
+            format!(
+                "{}{}{}",
+                shape(brep),
+                links("Group", "App::PropertyLinkList", &[sketch, pad]),
+                link("Tip", pad)
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            sketch,
+            rectangle_sketch(x, 0.0, width, 10.0),
+        ),
+        (
+            "PartDesign::Pad",
+            pad,
+            format!(
+                "{}{}{}",
+                link_sub("Profile", sketch, &[""]),
+                float("Length", 10.0),
+                shape(pad_brep)
+            ),
+        ),
+    ]
+}
+
+#[test]
+fn a_whole_body_mirror_and_pattern_on_a_body_of_several_solids_copy_every_body() {
+    // (mitcad#1004) A Mirrored and a LinearPattern of the whole shape
+    // (no originals) of a Body of two solids: FreeCAD transforms the
+    // Body's whole shape, so both copy both bodies, each copy joined to its
+    // own; before, they fell back with "the Body is several bodies here".
+    let xml = several_solids(
+        &[
+            (
+                "PartDesign::Mirrored",
+                "Mirror",
+                format!(
+                    "{}{}",
+                    link_sub("MirrorPlane", "Sketch", &["V_Axis"]),
+                    link("BaseFeature", "Pad")
+                ),
+            ),
+            (
+                "PartDesign::LinearPattern",
+                "Row",
+                format!(
+                    "{}{}{}{}",
+                    link_sub("Direction", "Sketch", &["H_Axis"]),
+                    float("Length", 80.0),
+                    integer("Occurrences", 2),
+                    link("BaseFeature", "Mirror")
+                ),
+            ),
+        ],
+        &[],
+    );
+    let file = fcstd(
+        &xml,
+        None,
+        &[("Body.brp", b"48 body"), ("Pad.brp", b"12 pad")],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let solids = pad_solids(&doc, &report);
+    assert_eq!(solids.len(), 2, "{:?}", report.features);
+    // The Mirror in x = 0: the left solid's image (x -10 to 0) touches the
+    // left solid and joins it; the right one's (x -30 to -20) touches
+    // nothing and stays a solid of its own, as in FreeCAD's fuse of the
+    // whole shape (mitcad#1006: it joins every body it touches, and none
+    // here). The Row then copies the Body's three bodies.
+    let mirror = report_feature_uid(&report, "Mirror", 0);
+    let image = format!("{mirror}.b1");
+    let mut after_mirror = solids.clone();
+    after_mirror.push(image.clone());
+    after_mirror.sort();
+    for (name, kind, objects) in [
+        ("Mirror", "mirror", &solids),
+        ("Row", "rectangular_pattern", &after_mirror),
+    ] {
+        let made = feature(&report, name);
+        assert_eq!(made.outcome, ObjectOutcome::Parametric, "{made:?}");
+        let defs = defs_of(&doc, &report, name);
+        assert_eq!(defs.len(), 1, "{defs:?}");
+        let def = &defs[0];
+        assert_eq!(def["type"], kind, "{def}");
+        assert_eq!(def["objects"]["type"], "bodies", "{def}");
+        assert_eq!(&sorted_ids(&def["objects"]["bodies"]), objects, "{def}");
+        assert_eq!(def["combine"], true, "{def}");
+        assert_eq!(def["combine_any"], true, "{def}");
+    }
+}
+
+#[test]
+fn a_boolean_on_a_body_of_several_solids_combines_the_bodies_its_tools_reach() {
+    // (mitcad#1004) A Body of two solids: a Boolean fuses another Body
+    // that touches only the second (x 25 to 35), then one cuts a third
+    // that reaches into both (x 5 to 25). FreeCAD combines the Body's whole
+    // shape: the fuse joins the tool with the one body it touches (the
+    // other stays apart), the cut cuts both (the tool kept for the second
+    // cut); before, both fell back with "the Body is several bodies here".
+    let mut others = tool_body("Tool", 25.0, 10.0);
+    others.extend(tool_body("Cutter", 5.0, 20.0));
+    let xml = several_solids(
+        &[
+            (
+                "PartDesign::Boolean",
+                "Fuse",
+                format!(
+                    "{}{}",
+                    links("Group", "App::PropertyLinkList", &["Tool"]),
+                    link("BaseFeature", "Pad")
+                ),
+            ),
+            (
+                "PartDesign::Boolean",
+                "Cut",
+                format!(
+                    "{}{}{}",
+                    links("Group", "App::PropertyLinkList", &["Cutter"]),
+                    link("BaseFeature", "Fuse"),
+                    custom_enum("Type", 1, &["Fuse", "Cut", "Common"])
+                ),
+            ),
+        ],
+        &others,
+    );
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("Body.brp", b"30 body"),
+            ("Pad.brp", b"12 pad"),
+            ("Tool.brp", b"6 tool"),
+            ("ToolPad.brp", b"6 tool"),
+            ("Cutter.brp", b"6 cutter"),
+            ("CutterPad.brp", b"6 cutter"),
+        ],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let solids = pad_solids(&doc, &report);
+    assert_eq!(solids.len(), 2, "{:?}", report.features);
+    // The fuse: one of the bodies, joined with the tool's body alone.
+    let fuse = feature(&report, "Fuse");
+    assert_eq!(fuse.outcome, ObjectOutcome::Parametric, "{fuse:?}");
+    let defs = defs_of(&doc, &report, "Fuse");
+    assert_eq!(defs.len(), 1, "{defs:?}");
+    let def = &defs[0];
+    assert_eq!(def["type"], "combine", "{def}");
+    assert_eq!(def["operation"], "join", "{def}");
+    let target = def["target"].as_str().unwrap().to_owned();
+    assert!(solids.contains(&target), "{def}");
+    let tools = sorted_ids(&def["tools"]);
+    assert_eq!(tools.len(), 1, "{def}");
+    assert!(!solids.contains(&tools[0]), "{def}");
+    // The cut: each body cut, the tool consumed by the last.
+    let cut = feature(&report, "Cut");
+    assert_eq!(cut.outcome, ObjectOutcome::Parametric, "{cut:?}");
+    let defs = defs_of(&doc, &report, "Cut");
+    assert_eq!(defs.len(), 2, "{defs:?}");
+    let mut targets: Vec<String> = defs
+        .iter()
+        .map(|d| {
+            assert_eq!(d["type"], "combine", "{d}");
+            assert_eq!(d["operation"], "cut", "{d}");
+            d["target"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    targets.sort();
+    assert_eq!(targets, solids, "{defs:?}");
+    assert_eq!(defs[0]["keep_tools"], true, "{}", defs[0]);
+    // (`keep_tools` false is left out of the definition.)
+    assert_ne!(defs[1]["keep_tools"], true, "{}", defs[1]);
+    assert_eq!(defs[0]["tools"], defs[1]["tools"], "{defs:?}");
+}
+
+#[test]
+fn a_draft_on_a_body_of_several_solids_drafts_the_body_its_faces_are_on() {
+    // (mitcad#1004) A Draft of a face of a Body of two solids: one draft,
+    // on the body the face is on; before, it fell back with "the Body is
+    // several bodies here".
+    let xml = several_solids(
+        &[(
+            "PartDesign::Draft",
+            "Draft",
+            format!(
+                "{}{}{}{}",
+                link_sub("Base", "Pad", &["Face1"]),
+                link_sub("NeutralPlane", "Sketch", &[""]),
+                float("Angle", 5.0),
+                link("BaseFeature", "Pad")
+            ),
+        )],
+        &[],
+    );
+    let file = fcstd(
+        &xml,
+        None,
+        &[("Body.brp", b"12 body"), ("Pad.brp", b"12 pad")],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let solids = pad_solids(&doc, &report);
+    assert_eq!(solids.len(), 2, "{:?}", report.features);
+    let draft = feature(&report, "Draft");
+    assert_eq!(draft.outcome, ObjectOutcome::Parametric, "{draft:?}");
+    let defs = defs_of(&doc, &report, "Draft");
+    assert_eq!(defs.len(), 1, "{defs:?}");
+    let def = &defs[0];
+    assert_eq!(def["type"], "draft", "{def}");
+    assert!(
+        solids.contains(&def["body"].as_str().unwrap().to_owned()),
+        "{def}"
+    );
+    assert_eq!(def["faces"].as_array().map(Vec::len), Some(1), "{def}");
+}
+
+#[test]
+fn a_thickness_on_a_body_of_several_solids_shells_each_body() {
+    // (mitcad#1004) A Thickness without faces to open of a Body of two
+    // solids hollows each of them: one shell per body; before, it fell
+    // back with "the Body is several bodies here".
+    let xml = several_solids(
+        &[(
+            "PartDesign::Thickness",
+            "Thickness",
+            format!(
+                "{}{}{}",
+                link_sub("Base", "Pad", &[]),
+                float("Value", 1.0),
+                link("BaseFeature", "Pad")
+            ),
+        )],
+        &[],
+    );
+    let file = fcstd(
+        &xml,
+        None,
+        &[("Body.brp", b"24 body"), ("Pad.brp", b"12 pad")],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let solids = pad_solids(&doc, &report);
+    assert_eq!(solids.len(), 2, "{:?}", report.features);
+    let thickness = feature(&report, "Thickness");
+    assert_eq!(
+        thickness.outcome,
+        ObjectOutcome::Parametric,
+        "{thickness:?}"
+    );
+    let defs = defs_of(&doc, &report, "Thickness");
+    let mut bodies: Vec<String> = defs
+        .iter()
+        .map(|d| {
+            assert_eq!(d["type"], "shell", "{d}");
+            // (No faces to open: none in the definition.)
+            assert_eq!(d["faces"].as_array().map_or(0, Vec::len), 0, "{d}");
+            d["body"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    bodies.sort();
+    assert_eq!(bodies, solids, "{defs:?}");
+}
+
+#[test]
+fn an_ellipsoid_on_a_body_of_several_solids_combines_with_the_bodies_it_reaches() {
+    // (mitcad#1004) A Body of two solids: an additive ellipsoid on the
+    // second (about x = 25, radii 2) joins that body alone, a subtractive
+    // one between them (about x = 15, 7 along x) cuts both. FreeCAD
+    // combines it with the Body's whole shape; before, both fell back
+    // with "the Body is several bodies here".
+    let xml = several_solids(
+        &[
+            (
+                "PartDesign::AdditiveEllipsoid",
+                "Bump",
+                format!(
+                    "{}{}{}{}",
+                    float("Radius1", 2.0),
+                    float("Radius2", 2.0),
+                    placement([25.0, 5.0, 5.0], [0.0, 0.0, 1.0], 0.0),
+                    link("BaseFeature", "Pad")
+                ),
+            ),
+            (
+                "PartDesign::SubtractiveEllipsoid",
+                "Dent",
+                format!(
+                    "{}{}{}{}",
+                    float("Radius1", 3.0),
+                    float("Radius2", 7.0),
+                    placement([15.0, 5.0, 5.0], [0.0, 0.0, 1.0], 0.0),
+                    link("BaseFeature", "Bump")
+                ),
+            ),
+        ],
+        &[],
+    );
+    let file = fcstd(
+        &xml,
+        None,
+        &[("Body.brp", b"14 body"), ("Pad.brp", b"12 pad")],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let solids = pad_solids(&doc, &report);
+    assert_eq!(solids.len(), 2, "{:?}", report.features);
+    let combines = |name: &str| -> Vec<serde_json::Value> {
+        let made = feature(&report, name);
+        assert_eq!(made.outcome, ObjectOutcome::Parametric, "{made:?}");
+        defs_of(&doc, &report, name)
+            .into_iter()
+            .filter(|d| d["type"] == "combine")
+            .collect()
+    };
+    // The bump: joined to one body, with the ellipsoid's body alone.
+    let bump = combines("Bump");
+    assert_eq!(bump.len(), 1, "{bump:?}");
+    assert_eq!(bump[0]["operation"], "join", "{}", bump[0]);
+    let target = bump[0]["target"].as_str().unwrap().to_owned();
+    assert!(solids.contains(&target), "{}", bump[0]);
+    let tools = sorted_ids(&bump[0]["tools"]);
+    assert_eq!(tools.len(), 1, "{}", bump[0]);
+    assert!(!solids.contains(&tools[0]), "{}", bump[0]);
+    // The dent: cut from both, the ellipsoid kept for the second cut.
+    let dent = combines("Dent");
+    assert_eq!(dent.len(), 2, "{dent:?}");
+    let mut targets: Vec<String> = dent
+        .iter()
+        .map(|d| {
+            assert_eq!(d["operation"], "cut", "{d}");
+            d["target"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    targets.sort();
+    assert_eq!(targets, solids, "{dent:?}");
+    assert_eq!(dent[0]["keep_tools"], true, "{}", dent[0]);
+    assert_ne!(dent[1]["keep_tools"], true, "{}", dent[1]);
+}
+
+#[test]
+fn an_ellipsoid_s_reach_is_its_box_placed() {
+    // (mitcad#1004) The box an ellipsoid of half sizes 2, 3 and 4 reaches,
+    // turned a quarter round z about (10, 0, 0): x and y swap.
+    let p = transform(&Placement::from_axis_angle(
+        [10.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+        std::f64::consts::FRAC_PI_2,
+    ));
+    let b = primitives::placed_box(&p, [2.0, 3.0, 4.0]);
+    let close = |a: [f64; 3], b: [f64; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-9);
+    assert!(close(b.min, [7.0, -2.0, -4.0]), "{b:?}");
+    assert!(close(b.max, [13.0, 2.0, 4.0]), "{b:?}");
+}
+
+// External geometry that is an intersection with the sketch's plane
+// (1.1's `ExternalTypes`, mitcad#998).
+
+/// A defining external point of 1.1's `ExternalGeo`, made from the
+/// element `reference` names.
+fn defining_point(at: [f64; 2], reference: &str) -> String {
+    format!(
+        "<Geometry type=\"Part::GeomPoint\" ref=\"{reference}\"><GeoExtensions count=\"1\"><GeoExtension type=\"Sketcher::ExternalGeometryExtension\" Ref=\"{reference}\" Flags=\"1\"/></GeoExtensions><GeomPoint X=\"{}\" Y=\"{}\" Z=\"0\"/><Construction value=\"1\"/></Geometry>",
+        at[0], at[1]
+    )
+}
+
+#[test]
+fn an_intersection_with_another_sketch_s_circle_is_the_section_points() {
+    use mitcad_model::Curve3;
+    // A circle of radius 10 round the origin on XY, and a sketch on XZ
+    // whose external geometry is the circle's intersection with its plane
+    // (ExternalTypes 1): FreeCAD's two defining points at x = ±10, two
+    // lines of the sketch's own from them to (0, 5). It is a linked
+    // section of the circle, points only: no projected line across the
+    // circle, which would be a curve of the sketch's profile.
+    let ring = format!(
+        "{}{}",
+        geometry(&[round([0.0, 0.0], 10.0)]),
+        shape("Ring.brp")
+    );
+    let reference = "Ring.;g1;SKT";
+    let cut = format!(
+        "{}{}{}{}{}{}",
+        placement([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], 90.0),
+        prop(
+            "ExternalGeometry",
+            "App::PropertyLinkSubList",
+            "<LinkSubList count=\"1\"><Link obj=\"Ring\" sub=\"Edge1\" shadow=\";g1;SKT.Edge1\"/></LinkSubList>",
+        ),
+        prop(
+            "ExternalTypes",
+            "App::PropertyIntegerList",
+            "<IntegerList count=\"1\"><I v=\"1\"/></IntegerList>",
+        ),
+        external_copy(&[
+            defining_point([10.0, 0.0], reference),
+            defining_point([-10.0, 0.0], reference),
+        ]),
+        geometry(&[
+            segment([10.0, 0.0], [0.0, 5.0], false),
+            segment([0.0, 5.0], [-10.0, 0.0], false),
+        ]),
+        constraints(&[
+            constrain(1, 0.0, &[(0, 1), (-3, 1)], "", true),
+            constrain(1, 0.0, &[(0, 2), (1, 1)], "", true),
+            constrain(1, 0.0, &[(1, 2), (-4, 1)], "", true),
+        ])
+    );
+    let xml = document(&[
+        ("Sketcher::SketchObject", "Ring", ring),
+        ("Sketcher::SketchObject", "Cut", cut),
+    ]);
+    let kernel = MockKernel::default();
+    kernel.named_curves.borrow_mut().insert(
+        stored_edge_name(b"4 ring", 0),
+        Curve3::Conic {
+            center: [0.0, 0.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            x_axis: [1.0, 0.0, 0.0],
+            major: 10.0,
+            minor: 10.0,
+            start: 0.0,
+            end: std::f64::consts::TAU,
+            closed: true,
+        },
+    );
+    let file = fcstd(&xml, None, &[("Ring.brp", b"4 ring")]);
+    let (doc, report) = import_with(file, Vec::new(), kernel, false);
+    let s = report.sketches.iter().find(|s| s.object == "Cut").unwrap();
+    assert_eq!(s.outcome, ObjectOutcome::Parametric, "{s:?}");
+    assert!(s.dropped.is_empty(), "{s:?}");
+    let ring = report.sketches.iter().find(|s| s.object == "Ring").unwrap();
+    let ring_uid = ring.feature.clone().unwrap();
+    let def = sketch_def(&doc, &report, "Cut");
+    let projections = def["projections"].as_array().unwrap();
+    assert_eq!(projections.len(), 1, "{def}");
+    assert_eq!(projections[0]["section"], true, "{def}");
+    assert_eq!(projections[0]["source"]["sketch"], ring_uid, "{def}");
+    let linked = projections[0]["entities"].as_array().unwrap();
+    assert_eq!(linked.len(), 2, "{def}");
+    assert!(
+        linked.iter().all(|e| e.as_str().unwrap().starts_with('p')),
+        "{def}"
+    );
+    // The sketch's curves are its own two lines.
+    let lines: Vec<&serde_json::Value> = def["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["type"] != "point")
+        .collect();
+    assert_eq!(lines.len(), 2, "{def}");
+    assert!(lines.iter().all(|e| e["reference"].is_null()), "{def}");
+    let uid = feature_uid(s.feature.as_deref().unwrap());
+    assert!(
+        doc.status(uid).and_then(|s| s.error()).is_none(),
+        "{:?}",
+        doc.status(uid)
+    );
+    assert_eq!(doc.warnings(uid), Vec::<String>::new());
+}
+
+#[test]
+fn a_whole_body_mirror_joins_each_image_with_the_other_solid_it_reaches() {
+    // (mitcad#1006) A Body of two solids, x -12 to -2 and 5 to 15,
+    // mirrored as a whole in its sketch's V axis (x = 0): each image
+    // reaches the other solid and not its own (the left one's image is at
+    // x 2 to 12, the right one's at -15 to -5). FreeCAD fuses each image
+    // with the solid it reaches; before, an image joined only the body it
+    // is a copy of, stayed apart and the Mirrored fell back on the solid
+    // count.
+    let xml = two_solids_at(
+        -12.0,
+        5.0,
+        &[(
+            "PartDesign::Mirrored",
+            "Mirror",
+            format!(
+                "{}{}",
+                link_sub("MirrorPlane", "Sketch", &["V_Axis"]),
+                link("BaseFeature", "Pad")
+            ),
+        )],
+        &[],
+    );
+    let file = fcstd(
+        &xml,
+        None,
+        &[("Body.brp", b"24 body"), ("Pad.brp", b"12 pad")],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let solids = pad_solids(&doc, &report);
+    assert_eq!(solids.len(), 2, "{:?}", report.features);
+    let made = feature(&report, "Mirror");
+    assert_eq!(made.outcome, ObjectOutcome::Parametric, "{made:?}");
+    let defs = defs_of(&doc, &report, "Mirror");
+    assert_eq!(defs.len(), 1, "{defs:?}");
+    let def = &defs[0];
+    assert_eq!(def["type"], "mirror", "{def}");
+    assert_eq!(sorted_ids(&def["objects"]["bodies"]), solids, "{def}");
+    assert_eq!(def["combine"], true, "{def}");
+    assert_eq!(def["combine_any"], true, "{def}");
+    // Each image joined the other solid: two bodies, the Pad's, each with
+    // an image in it, and no body of the mirror's own.
+    let all: Vec<String> = doc.bodies().iter().map(|b| b.uid.to_string()).collect();
+    let mut sorted_all = all.clone();
+    sorted_all.sort();
+    assert_eq!(sorted_all, solids, "{all:?}");
+    for body in doc.bodies() {
+        let shape = doc.body_shape(body.uid).expect("shape");
+        assert!(shape.history.starts_with("join("), "{}", shape.history);
+        assert!(shape.history.contains("inst1"), "{}", shape.history);
+        let reach = shape.bounds.expect("bounds");
+        // One on each side of the plane: the image joined the other solid.
+        assert!(reach.max[0] < 0.0 || reach.min[0] > 0.0, "{reach:?}");
+    }
+}
+
+#[test]
+fn a_whole_body_pattern_of_a_single_solid_body_joins_only_its_own_copies() {
+    // (mitcad#1006) The whole body of one solid: `combine` alone, as
+    // before (combine_any is for a Body of several solids).
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Body",
+            format!(
+                "{}{}{}",
+                shape("Body.brp"),
+                links(
+                    "Group",
+                    "App::PropertyLinkList",
+                    &["Sketch", "Pad", "Mirror"]
+                ),
+                link("Tip", "Mirror")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Sketch",
+            rectangle_sketch(5.0, 0.0, 10.0, 10.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Sketch", &[""]),
+                float("Length", 10.0),
+                shape("Pad.brp")
+            ),
+        ),
+        (
+            "PartDesign::Mirrored",
+            "Mirror",
+            format!(
+                "{}{}",
+                link_sub("MirrorPlane", "Sketch", &["V_Axis"]),
+                link("BaseFeature", "Pad")
+            ),
+        ),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[("Body.brp", b"12 body"), ("Pad.brp", b"6 pad")],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let defs = defs_of(&doc, &report, "Mirror");
+    assert_eq!(defs.len(), 1, "{defs:?}");
+    let def = &defs[0];
+    assert_eq!(def["combine"], true, "{def}");
+    assert!(def.get("combine_any").is_none(), "{def}");
+}

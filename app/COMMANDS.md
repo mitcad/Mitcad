@@ -16,7 +16,7 @@ CommandDef chamfer(const CommandContext& context) {
   def.icon = "chamfer";                // app/icons/chamfer.svg
   def.tooltip = QObject::tr("Bevels edges"); // one short line, at most 80 characters
   def.shortcut = QKeySequence();       // none by default
-  def.tab = "SOLID";                   // SOLID, BUILD or SKETCH; empty: menus only
+  def.tab = "SOLID";                   // SOLID, BUILD, SKETCH or DRAWING; empty: menus only
   def.group = "MODIFY";                // see Ribbon::groups()
   def.pinned = true;                   // a button besides the group menu entry
   def.subgroup = "";                   // a submenu of the group's menu, see below
@@ -635,7 +635,12 @@ Three other kinds of panels:
   Floating card).- `inspect(state, context)` instead of `build`: an `Inspection` (rich
   text, a log line, a shape drawn over the view, red for a problem, a
   section plane) computed while inputs change; OK closes the panel
-  (Measure, Interference, Section Analysis). With `keepsSection` the
+  (Measure, Interference, Section Analysis). An inspection may also give
+  its answer as rows of a name and a value (`Inspection::values` and
+  `groups`, mitcad#1010), which the panel shows in place of the text
+  (`CommandPresenter::setInspection`, `framework/ResultRows`; *Measure's
+  panel*). `closeOnly` gives the panel one **Close** in place of OK and
+  Cancel (Enter and Esc close it too; Measure). With `keepsSection` the
   section stays after OK; with `build` too, OK keeps it in the document
   as an analysis (mitcad#41): `add_analysis` with `build`'s definition,
   or `edit_analysis` (shown) when the panel edits one
@@ -1102,59 +1107,207 @@ S then
 searches in the model and draws the spline in a sketch, where F3
 searches.
 
+### Pinned commands
+
+Any command of a group's menu can be pinned to the toolbar (mitcad#1001).
+Every command row of a group's menu and of its submenus (`Ribbon`'s
+`GroupMenu`) has a ⋮ button in a column at the right of the rows, drawn
+on the row under the mouse (also a disabled command's: pinning needs no
+enabled command) or chosen with the keys; the button, a right-click on
+the row and the Menu key (or Shift+F10) open the row's menu:
+
+- **Pin to Toolbar** (**Unpin from Toolbar** when the command is pinned on
+  this tab);
+- **Change Keyboard Shortcut…**: Tools > Keyboard Shortcuts opens at the
+  command's row, selected and in sight with the search cleared (all
+  contexts shown when the context filter hid it), the keyboard on the rows
+  so that Enter records its key (`ShortcutDialog::showCommand`,
+  `MainWindow::editShortcuts(id)`; logged as `Keyboard Shortcuts at
+  Sweep`).
+
+Opened by the keys, the row's menu has its first entry chosen. Rows that
+are not commands (the submenus themselves, the Select group's filters)
+have no ⋮. Where the platform shows a group's menu natively (macOS's
+`NSMenu`, `mac::showMenuImages`), the ⋮ column, the right-click and the
+Menu key of `GroupMenu` do not reach its rows; the pinned buttons' own
+menu works there.
+
+The commands pinned on a tab (Solid, Build, Sketch) are a group of their
+own, **Pinned** (`PINNED`: `ribbonGroup_<TAB>/PINNED`, `ribbonMenu_<TAB>/
+PINNED`), at the end of that tab, in the order they were pinned: a button
+per command (the same action as everywhere: icon, tooltip, enabled state)
+and the group's caption menu with their rows. A pinned button runs its
+command; its right-click menu has Unpin from Toolbar and Change Keyboard
+Shortcut…; dragged along the group, it takes the place where it is
+dropped (the others make room while it moves). In a narrow window the
+groups collapse to their names from the right, the Pinned group after
+the others but before the tab's first two (Create and Modify), Create
+last (`Ribbon::fitGroups`). Without pins a tab has no Pinned group. Both chrome
+layouts show it: Docked after a separator line, Floating as a card of its
+own. The native AppKit ribbon (`MainWindowNative`, the experimental
+macOS frontend) lists the fixed groups of `Ribbon::groups` and does not
+show the Pinned group yet.
+
+The pins are the user's preference (`framework/ToolbarPins`): the setting
+`toolbarPins/<TAB>` is the tab's command ids in order, joined by commas
+(`toolbarPins/SOLID=solid.sweep,solid.loft`); a tab without pins has no
+key. Each pin, unpin and drag is saved at once and kept across sessions.
+When the toolbar is built, an id that names no command any more is dropped
+with a log line (`Toolbar pins: dropped solid.gone from SOLID: no such
+command`), an old id of a command (`CommandRegistry::alias`) becomes the
+command's, and the setting is written again without them.
+
+Log lines: `Pinned to toolbar: Sweep (Solid)`, `Unpinned: Sweep (Solid)`,
+`Pinned order (Solid): Loft, Sweep` (after a drag), `Ribbon group
+SOLID/PINNED: solid.sweep, solid.loft` (the group made with these
+buttons) and `Ribbon group SOLID/PINNED gone`, and for UI tests the places
+in [Logs that UI tests read](#logs-that-ui-tests-read). Tests:
+`toolbarPinsTests` in `test_app` (pin, reorder and unpin update the
+setting; an unknown id is dropped), `tools/ui-sketch-create-menu-test.sh`
+(both layouts: Sweep pinned from its row's ⋮, the Pinned group shows it
+and its button starts Sweep, Loft pinned by the Menu key, dragged before
+Sweep, Sweep unpinned from its button's right-click, Loft from its row,
+the group gone; Change Keyboard Shortcut…) and
+`tools/ui-windows-pattern-options-test.ps1` (the keyboard: Sweep's row,
+the Menu key, Pin to Toolbar; the button; Unpin from its right-click).
+`tools/ui-pinned-toolbar-look.sh <dir>` pictures the Solid tab with a
+Pinned group in both layouts, light and dark (a one-off visual check).
+
+### Measure's panel
+
+The Measure panel is one layout in the order of the task, top to bottom,
+in the Floating and the Docked layout, at the default width (300) and a
+width the user dragged (mitcad#1010, mitcad#529):
+
+1. **Picks**: the Selection Filter, its choices on a line of their own
+   under its label so that `Faces, Edges and Vertices` is whole at the
+   default width (`InputDef::fieldBelow`), and the selections.
+2. **Result**, right under the picks (`Inspection::values` and `groups`,
+   shown by `framework/ResultRows` in place of the text,
+   `CommandPanel::setInspection`): the pair's values first, the main one,
+   **Distance**, in a larger type (its tooltip: the points it is measured
+   between and Δx, Δy, Δz), then **Angle**, **Offset**, **Axis distance**
+   (its tooltip: where it is measured) and **Centre distance**; then a
+   group for each pick, titled by its kind (`Selection 1: cylindrical
+   face`, `Selection 2: straight edge`, `Selection 1: sketch arc`, `Body
+   1: body`; a face's or an edge's geometry from its shape), its values as
+   name and value rows: **Diameter**, **Radius**, **Area**, **Length**,
+   **Volume**, **Position**, **Axis through** and **Axis direction**, a
+   circle without an axis its **Centre**. A group's header folds it
+   (kept folded for the panel's next answers). A row is one line, its
+   name in its group's column and its value beside it, neither wrapped
+   nor cut; where the panel is too narrow for both (coordinates far from
+   the origin) the value goes on a line of its own under its name
+   (`ValueLine`). Each row's context menu has **Copy**, its value's number and unit
+   (`40 mm`). The macOS AppKit form shows the text as before.
+3. **Actions** on one row: **Keep as Dimension** and **Annotate ▾**, a
+   menu of Note…, Datum Label…, Frame…, Hole Callout, then Annotations…
+   (*Measurement objects* below; their letters choose them from the
+   keyboard).
+4. **History** at the bottom, folded when the panel opens (*Measure's
+   history*); unfolded, the panel's page scrolls its rows into sight
+   (`QScrollArea::ensureWidgetVisible`) in a low window.
+5. **Close** (`CommandDef::closeOnly`) in place of OK and Cancel, which
+   did the same; Enter and Esc close it too. What Keep as Dimension and
+   Annotate add are undo steps of their own outside the panel's range.
+
+No text explains the layout. The section under the result
+(`commands/MeasureHistoryView`) is added under the result and the message
+(`CommandPanel::addSection`).
+
+- **Log.** `Panel Measure result values: Distance = 40 mm, Angle = 0°, …`
+  and `Panel Measure result Selection 1: cylindrical face: Diameter = 10
+  mm, …` as the rows are set; with the panel's places `Panel Measure
+  result <name> at x,y` (a group's rows `Panel Measure result <n> <name>
+  at x,y`, `… out of sight` folded), `Panel Measure result group <n> at
+  x,y` (` (folded)`) and `Panel Measure result: <n> rows, one line each`
+  (or `…, under their names: <name>, …` and `…, cut: <name> (<needed> of
+  <width>)`); `Measure Keep as Dimension
+  at x,y` (` (disabled)`), `Measure Annotate at x,y`, `Measure history at
+  x,y (open|folded)`, `Measure history menu at x,y` (` (disabled)`),
+  `Measure controls: none clipped` (or `Measure controls clipped: <name>
+  (<needed> of <width>)`), `Panel Measure Close at x,y` and, as every
+  panel logs it, `Panel Measure inputs: none clipped` (or `Panel <command>
+  inputs clipped: <key> label|choice (<needed> of <width>)`: an input's
+  label or a choice's current text cut). Clicks:
+  `Panel Measure result group <n> folded|unfolded`, `Context menu: Copy`
+  and `Panel Measure result copied <name>: <value>`, `Measure Annotate
+  clicked` and `Context menu: Note… | Datum Label… | Frame… | Hole
+  Callout | Annotations…`, `Measure Annotate entries: <the entries that
+  can be chosen>` when they change, `Panel Measure Close clicked`.
+
+Tests: `tools/ui-measure-test.sh` and `tools/ui-windows-measure-test.ps1`
+(the order top to bottom, the panel at most 300 wide with no control's
+text clipped and every result row on one line, in both layouts; the
+groups' titles and rows; the distance copied; a group folded; Close and
+Esc), `tools/ui-measurement-objects-test.sh` and
+`tools/ui-windows-measurement-objects-test.ps1` (Keep as Dimension,
+Annotate's entries and Annotations…, a history row's menu, Close).
+
 ### Measure's history
 
 Each finished measurement of the Measure panel (one or two picks with a
 result) is a row of its history (mitcad#648; `commands/MeasureHistory`,
 `commands/MeasureHistoryView`, `MainWindowMeasureHistory.cpp`). The
 inspection gives the row (`Inspection::record`: what was picked, its main
-values, the inputs that hold the picks) and the session hands it to the
-host when the panel shows it (`CommandHost::inspectionRecorded`); the
-window keeps the rows and the panel shows them above its result
-(`CommandPanel::addSection`), in the Floating and the Docked layout.
+values, the main value alone and the picks' kinds, the inputs that hold
+the picks) and the session hands it to the host when the panel shows it
+(`CommandHost::inspectionRecorded`); the window keeps the rows and the
+panel shows them at its bottom (*Measure's panel*), in the Floating and
+the Docked layout.
 
-- **Rows.** Newest first, each with its number, what was picked (`Face of
-  Body1 ↔ Edge of Body2`; a body's name, a construction feature's name,
-  `Plane XY` for the origin's) and its main values (`Distance 40 mm`,
-  `Angle 90°`, `Offset`, `Axis distance`, `Centre distance`, the circles'
-  `Radius` and `Diameter`; of a single pick also its `Length`, `Area`,
-  `Volume` or `Position`). The first pick's row becomes the pair's when the
-  second pick follows in the same panel; a pick that replaces the second
-  makes a new row; the same picks again (a row shown again) update their
-  row in place. The list scrolls past four rows, so the panel does not
-  grow past the screen.
-- **Show again.** A click on a row puts its picks back into the panel's
-  inputs (`CommandSession::restoreInputs`, with the Selection Filter they
-  were made with): the panel measures them again, highlights them and
-  draws its lines. A row whose picks the view no longer has (a body or a
-  face gone) is grey and says `The geometry is not there any more.`; a
-  click on it measures nothing. The rows are checked when a Measure panel
-  opens and when one is clicked (not while the model computes).
-- **Copy, Copy All, Clear.** Copy puts the row clicked last on the
-  clipboard as tab-separated text (number, picks, each value), Copy All
-  every row, one per line, newest first; Clear empties the history and
-  its numbers start from 1 again.
+- **Header.** `History (<n>)` folds and unfolds the list; it is folded
+  when a panel opens (mitcad#1010). Its **⋯** menu has **Copy All** and
+  **Clear** (disabled without rows).
+- **Rows.** Newest first, one line each: its number, its main value and
+  the picks' kinds (`3.  6.843 mm   Face ↔ Face`; of two picks the
+  distance, of one its volume, diameter, length, area or position);
+  cut at the panel's width, the row's tooltip has what was picked in full
+  (`Face of Body1 ↔ Edge of Body2`; a body's name, a construction
+  feature's name, `Plane XY` for the origin's) and its main values
+  (`Distance 40 mm`, `Angle 90°`, `Offset`, `Axis distance`, `Centre
+  distance`, the circles' `Radius` and `Diameter`; of a single pick also
+  its `Length`, `Area`, `Volume` or `Position`). The first pick's row
+  becomes the pair's when the second pick follows in the same panel; a
+  pick that replaces the second makes a new row; the same picks again (a
+  row shown again) update their row in place. The list scrolls past four
+  rows, so the panel does not grow past the screen.
+- **Show again.** A click on a row, or its context menu's **Show**, puts
+  its picks back into the panel's inputs (`CommandSession::restoreInputs`,
+  with the Selection Filter they were made with): the panel measures them
+  again, highlights them and draws its lines. A row whose picks the view
+  no longer has (a body or a face gone) is grey and its tooltip says `The
+  geometry is not there any more.`; a click on it measures nothing. The
+  rows are checked when a Measure panel opens and when one is clicked
+  (not while the model computes).
+- **A row's context menu.** **Show**, **Keep as Dimension** (the row kept
+  as an annotation, *Measurement objects*; disabled for a grey row) and
+  **Copy** (the row on the clipboard as tab-separated text: number,
+  picks, each value). Copy All copies every row, one per line, newest
+  first; Clear empties the history and its numbers start from 1 again.
 - **Lifetime.** The history lasts while the design is open, also across
   closing and opening the panel; opening or creating another design
-  empties it. It is not saved with the design. The macOS AppKit form
-  (`MITCAD_MACOS_NATIVE_UI`) has no history.
+  empties it. It is not saved with the design.
 - **Log.** `Measure history: <n> rows` and `Measure history row <n>:
   <picks>: <values>` (` (gone)`) whenever the rows change; their places
-  `Measure history row <n> at x,y` (`… out of sight` scrolled away) and
-  `Measure history Copy|Copy All|Clear at x,y` (` (disabled)`) with the
-  panel's places; `Measure history showed row <n>`, `Measure history row
-  <n>: gone`, `Measure history copied row <n>: <text>` and `Measure
+  `Measure history row <n> at x,y` (`… out of sight` folded or scrolled
+  away) with the panel's places; `Measure history opened|closed`,
+  `Measure history row <n> menu` with `Context menu: Show | Keep as
+  Dimension | Copy`, `Measure history menu clicked` with `Context menu:
+  Copy All | Clear`; `Measure history showed row <n>`, `Measure history
+  row <n>: gone`, `Measure history copied row <n>: <text>` and `Measure
   history copied <n> rows: <text>` (tabs as ` | `, lines as ` / `),
-  `Measure history cleared`.
+  `Measure history Clear clicked`, `Measure history cleared`.
 
 Tests: `app/tests/measure_history.cpp` (the rows' rules),
 `tools/ui-measure-test.sh` and `tools/ui-windows-measure-test.ps1` (three
-measurements, three rows, the first shown again, copied, cleared; one row
+measurements, three rows, the history unfolded, a row copied from its
+menu, all rows copied and cleared from ⋯, the first shown again; one row
 in the Floating layout). `tools/ui-measure-test.sh` also checks the
 picks' preference (mitcad#869): with a shown sketch in the middle plane
 of a symmetric extrusion, seen from the top, two corners give two body
-vertices and Keep is enabled; with Sketch Curves and Points two sketch
-points, and Keep greyed out with its reason.
+vertices and Keep as Dimension is enabled; with Sketch Curves and Points
+two sketch points, and Keep as Dimension greyed out with its reason.
 
 ### Measurement objects
 
@@ -1165,7 +1318,8 @@ annotation, *Annotations* below; the model's *Measurement objects* and
 `view/MeasurementOverlay`, `view/Snapshot.cpp`, `view/SnapshotDialog`,
 `view/ViewSnapshot.cpp`).
 
-- **Keep.** The Measure panel's history section has **Keep** at its top:
+- **Keep as Dimension.** The Measure panel's actions row under its result
+  (*Measure's panel*) has **Keep as Dimension**:
   the measurement the panel shows becomes an annotation (`add_annotation`
   with its picks, their occurrences and the view — its direction, up and
   a pixel's size at its centre, `MainWindow::annotationView` — so that a
@@ -1173,14 +1327,16 @@ annotation, *Annotations* below; the model's *Measurement objects* and
   view's upper side; the model chooses the kind — a round pick's
   diameter, an arc's radius, of two picks their offset, axis distance,
   centre distance, distance or angle — the name `Distance1`, `Angle1`, …
-  and the next of six colours). **Keep Row** beside it keeps the history
-  row clicked last (its picks as the row has them). Keep is enabled once
+  and the next of six colours). A history row's context menu has **Keep
+  as Dimension** too: the row's picks as the row has them. Keep as
+  Dimension is enabled once
   the panel shows a result of the model's picks: sketch curves and points,
   which the panel measures itself, cannot be kept (a hint says so). Greyed
-  out for them, Keep's tooltip gives the reason instead of what it does
+  out for them, its tooltip gives the reason instead of what it does
   (mitcad#869: "Sketch geometry cannot be kept as an annotation: pick the
   body's corners or edges"; `MeasureHistoryView::setKeepable`).
-  **Annotations…** beside them opens the Annotations window. Under them
+  **Annotate ▾** beside it is a menu (mitcad#1010): **Annotations…**, its
+  last entry, opens the Annotations window; above it
   **Note…**, **Datum Label…** and **Frame…** (enabled with one face, edge
   or vertex of a body or one datum plane, axis or point picked) put a
   leader on that pick, pointing where it was clicked (`SelectionItem::at`,
@@ -1190,7 +1346,7 @@ annotation, *Annotations* below; the model's *Measurement objects* and
   **Datum Label** dialog, the model's `next_datum_letter` offered: A to Z
   without I, O and Q, then AA …; kept, no `letter` is sent and the model
   chooses it), Frame… for a feature control frame (the **Feature Control
-  Frame** dialog, *Annotations* below). **Hole Callout** beside them
+  Frame** dialog, *Annotations* below). **Hole Callout** after them
   (mitcad#902; enabled as Datum Label…) puts a hole callout on the hole
   picked — its round face (a wall, a counterbore's or countersink's face)
   or a rim — without a dialog: the model writes its text from the hole's
@@ -1201,9 +1357,10 @@ annotation, *Annotations* below; the model's *Measurement objects* and
   frame and a hole callout stand on a feature: on a vertex or a datum
   point a hint says so and no dialog opens (the model refuses them too). The change runs outside the panel's
   undo range as a light bulb's does (`CommandSession::runVisibility`): it stays when the panel
-  is cancelled and is an undo step of its own. The macOS AppKit form
-  (`MITCAD_MACOS_NATIVE_UI`), which has no history, has no Keep either;
-  the window, the view and the snapshot work there.
+  is closed with Esc and is an undo step of its own. The macOS AppKit form
+  (`MITCAD_MACOS_NATIVE_UI`) adapts the panel's section to native views
+  and keeps its own OK and Cancel and the result as text (mitcad#1010
+  left it as it was); the window, the view and the snapshot work there.
 - **Browser.** The root's **Annotations** folder is one row, shown while
   there are any; its tooltip counts them and the broken ones (the row in
   the failure colour with the warning icon then). A double-click and its
@@ -1226,14 +1383,16 @@ annotation, *Annotations* below; the model's *Measurement objects* and
   through the render's camera (`renderViewProjection` of the job's view).
 - **Log.** `Annotations: <name> <kind>[ (hidden)][ in <group>] | <name>
   broken: <why>` (`none`) when they change; `Annotation kept: <name>`;
-  `Measure Keep enabled|disabled[: <reason>]`, `Measure Note enabled|disabled` (Datum
-  Label…, Frame… and Hole Callout with it), `Measure Keep at x,y` (` (disabled)`),
-  `Measure Note at x,y`, `Measure Datum Label at x,y`, `Measure Frame at
-  x,y`, `Measure Hole Callout at x,y`, `Measure Annotations at x,y` and `Measure history Keep at x,y`
-  with the panel's places; `Measure Keep clicked`, `Measure Note
-  clicked`, `Measure Datum Label clicked`, `Measure Frame clicked`,
-  `Measure Annotations clicked`,
-  `Measure history Keep clicked: row <n>`, `Measurement not kept (<what>):
+  `Measure Keep as Dimension enabled|disabled[: <reason>]`, `Measure
+  Annotate entries: Note…, Datum Label…, Frame…, Hole Callout,
+  Annotations…` (the entries that can be chosen, when they change),
+  `Measure Keep as Dimension at x,y` (` (disabled)`) and `Measure Annotate
+  at x,y` with the panel's places; `Measure Keep as Dimension clicked`,
+  `Measure Annotate clicked` with `Context menu: Note… | Datum Label… |
+  Frame… | Hole Callout | Annotations…`, then the entry chosen: `Measure
+  Note clicked`, `Measure Datum Label clicked`, `Measure Frame clicked`,
+  `Measure Hole Callout clicked`, `Measure Annotations clicked`;
+  `Measure history Keep as Dimension clicked: row <n>`, `Measurement not kept (<what>):
   <why>`, `Leader note|datum|frame not added: <why>`; `Note dialog opened:
   <pick>`, `Note dialog: <lines joined by " / ">`, `Datum Label dialog
   opened: <pick> <letter>`, `Datum Label dialog: <letter>`, `Feature
@@ -1251,7 +1410,8 @@ annotation, *Annotations* below; the model's *Measurement objects* and
 Tests: `tools/ui-measurement-objects-test.sh` and
 `tools/ui-windows-measurement-objects-test.ps1`
 (`app.ui-windows-measurement-objects`: two round faces kept from the
-panel, a rim's row kept from the history, the browser's folder, a 4 ×
+panel, Annotate's entries and its Annotations…, a rim's row shown and
+kept from its menu in the history, the browser's folder, a 4 ×
 snapshot with a transparent background written, saved and opened again).
 
 ### Annotations
@@ -1266,7 +1426,7 @@ feature control frames* in `core/model-api/src/commands.md`;
 `add_annotation`, `edit_annotation` and `delete_annotation`, each one
 undo step outside a panel's undo range as a light bulb's (`runVisibilityCommands`). Showing
 and hiding works in every mode, as a light bulb does; other changes too
-while a command's panel is open (the Measure panel's Annotations… opens
+while a command's panel is open (the Measure panel's Annotate ▾ > Annotations… opens
 the window there, mitcad#764), and are refused with the reason (`Annotation
 command refused: <why>`) only in Create Sketch's plane pick and a
 read-only window.
@@ -1439,7 +1599,7 @@ read-only window.
   lists of the design's datum letters, in order; none for a form
   tolerance, at least one where it needs one).
 - **The Annotations window** (`AnnotationsWindow`; View menu and command
-  search `view.annotations`, the Measure panel's Annotations…, the
+  search `view.annotations`, the Measure panel's Annotate ▾ > Annotations…, the
   browser's folder): a search field, **Kind** and **Group** filters (All
   groups, No group, each group) with **Show Group** and **Hide Group**
   (the chosen group's annotations, one step), a sortable table — Name
@@ -1537,7 +1697,7 @@ label and a frame from the Measure panel, listed and filtered, a row
 highlighting its pick, a frame added under a dimension and edited, a
 datum label's pick and a frame's plane picked again in the view (a
 click on nothing waiting on, Esc cancelling), saved; a hole callout on a
-plate's counterbored holes from the Measure panel's Hole Callout,
+plate's counterbored holes from the Measure panel's Annotate ▾ > Hole Callout,
 written from the hole's feature in the bundled lettering, saved
 (mitcad#902); the Windows test without the broken one, the filters, the
 line drag and the picks again).
@@ -3753,8 +3913,25 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
     `generate_configuration_rows`, one undo step, and the message line says
     which rows it added or updated, with any moves; disabled while the
     design has no tables), Delete Row, Set as Default (the default row's
-    name is bold) and Apply (`apply_configuration`; the moves in the message
-    line and the status bar). A cell edit is `set_configurations` with the table; a typed
+    name is bold), Add Column… and Remove Column (mitcad#999, below) and
+    Apply (`apply_configuration`; the moves in the message
+    line and the status bar). **Add Column…** (the window `Add Column`)
+    makes another parameter a column of a closed table, as the d, P, s
+    and k of a library screw: it offers the user parameters that are
+    neither an option nor a column (`configurations::columnCandidates`) and
+    New Parameter (name, unit, value, as Add Option…), and sends
+    `add_parameter` (for a new one) and `set_configurations` with the
+    parameter appended to `parameters` and each row's value the
+    parameter's current expression (`configurations::withColumn`), as one
+    undo step (`Add Column <name>` with a new parameter, else `Edit
+    Configurations`). An open table becomes closed with it (an open
+    table's rows set options only): the dialog says so, and the button's
+    tooltip. The column's cells are edited as an option's (a bare number
+    gets the parameter's unit). **Remove Column** takes the current
+    cell's parameter column out of `parameters` and the rows
+    (`configurations::withoutColumn`, one `set_configurations`); the
+    parameter stays with its value. It is enabled while the current cell
+    is in a parameter column (not an option's). A cell edit is `set_configurations` with the table; a typed
     text gets quotes for a text option and the unit for a bare number
     (`configurations::rowExpression`). Before an option's value is written,
     the row's combination is tried with the `configure` query's `values`
@@ -5233,7 +5410,9 @@ settings in the user's settings (`ViewSettings`, group `view`);
   Create Sketch's plane pick points keep away from the cube
   (`cubeArea`, `planePickPoint`), and the datums' logged pick places are
   where no other datum lies. The arrows shown when looking straight at a
-  face: `OcctViewer::turnCube`.
+  face: `OcctViewer::turnCube`; the AppKit frontend shows them as its own
+  round buttons at the same places (`OcctViewer::shownCubeArrows`,
+  `NativeMacWindow::setCubeArrows`).
   Its projection (mitcad#774, Preferences › Display › **Orientation
   cube**, `view/cubeProjection`: `follow-view`, `orthographic`,
   `perspective`; `OcctViewer::setCubeProjection`, applied at once): **Follow
@@ -5279,6 +5458,36 @@ settings in the user's settings (`ViewSettings`, group `view`);
   them. Before, that fit framed the one body shown first and left the
   bodies shown after it out of sight (found in the bundle check of
   mitcad#529/#530; `tools/ui-browser-test.sh` checks the places).
+- **A new design's first view and resizes** (mitcad#1000): a new, empty
+  design (the untitled design at the start, New, New Design in a project,
+  Close) opens in the isometric view framing the origin planes' box
+  (`OcctViewer::frameNewDesign`, `frameOrigin`; the box `MainWindow` sets
+  with `setOriginBox`, the planes' 100 mm centred on the origin), on the
+  next frame: the box takes 70 % of the view's height
+  (`kOriginShare`), fitted as in a view at least as wide as tall and
+  moved to the middle of the cards' free area without the fit's zoom out
+  for the cards, so the visible height is the same at any window size and
+  however the window got there (start-up maximized or not, full screen on
+  and off). Fit, Home and the standard views frame the origin the same way
+  when the view shows nothing to fit (an empty design hides its origin)
+  or only a point. Before, a new design's origin was hidden, so its fit
+  found nothing and OCCT kept the camera as it was: the start's 250 mm
+  across the view at the aspect the view had when OpenGL started (a
+  maximized start showed the origin planes filling the view) or the
+  previous design's framing (tiny after a large one); and the fit into
+  the free area zoomed out further on each fit of an empty view. A resize
+  keeps the framing of what is shown: the camera's centre and the height
+  the view shows (OCCT keeps its scale, the shorter side, so a view
+  taller than wide on the way showed another height afterwards), also when
+  the view's surface is made again. Logged: `View: new design framed,
+  scale 233.285 mm per view height at 1480x900` when the framing is made,
+  and `View: resized to 1920x1080, maximized, scale 233.285 mm per view
+  height` (`, full screen`; nothing for a normal window) once a resize
+  rests; the scale is the model height the view shows at the target.
+  Tests: `tools/ui-sketch-origin-test.sh` and
+  `tools/ui-windows-sketch-origin-test.ps1` (larger, taller than wide and
+  back; maximized and restored on Windows, where the window station
+  maximizes it).
 - **Camera changes never end the application** (mitcad#773): a click on a
   cube arrow or Home in a sketch with a constraint selected ended it on
   Windows with a C++ exception out of the button's slot. The view's own
@@ -5852,7 +6061,8 @@ UI thread.
 | `framework/CommandSession.*` | a running feature command: state, panel, selections in the view, previews, OK and Cancel, editing |
 | `framework/CommandPanel.*` | the panel generated from the inputs |
 | `framework/CommandRegistry.*` | every command with its `QAction`; shortcuts saved in the settings, per context where they differ (mitcad#720), the actions' keys of the current context (`setShortcutContext`); `alias(oldId, id)` keeps a renamed command's saved shortcut and `find`, `action`, `trigger` working for its old id (`file.move_to_project`, mitcad#503) |
-| `framework/Ribbon.*` | the toolbar: tabs, groups, group menus |
+| `framework/Ribbon.*` | the toolbar: tabs, groups, group menus, the Pinned group (mitcad#1001) |
+| `framework/ToolbarPins.*` | the commands pinned to the toolbar per tab, kept in the settings (mitcad#1001) |
 | `framework/CommandSearch.*` | the command search (S) |
 | `framework/ShortcutDialog.*` | Tools > Keyboard Shortcuts: a tree of commands with their context and key, a row per context for a command of several (mitcad#720), a context filter, the reserved keys as read-only rows (mitcad#730) |
 | `AboutDialog.*` | Help > About MitCad: version, licence, third-party credits (OCCT and Qt versions) |
@@ -7153,7 +7363,10 @@ before it was done`, `Library source <url>: auto-update on|off` (the
 check box), `Library browser: libraries updated in the background`,
 `Part picker refreshed: <n> parts for <command>`, `Library browser update: <n> enabled
 source(s)`, `Library browser empty: nothing fetched yet, press Update` (or
-`nothing found`), `Library browser kept the selection <key>`, `Library source <url> (on|off):
+`nothing found`; or, when parts are found but the group shown has none
+under the search and the filters, mitcad#1015, `No parts in <group> with
+this search and these filters.`, the details panel saying so and to
+choose another group or change the search or the filters), `Library browser kept the selection <key>`, `Library source <url> (on|off):
 <what>; versions ...; auto-update on|off`, `Library source added|removed: <url>`, `Library
 search '<text>': <n> components, <m> libraries, <k> hidden by the
 licence`, `Library browser selected <library>/<component>: version ...,
@@ -7217,6 +7430,23 @@ Profile, Panel, Linear Part and Connector).
   the group shown open to show it, the setting kept. Shipped libraries'
   main groups: Wood, Slot profile, Motion, General fasteners, Hardware,
   Workshop ([docs/libraries.md](../docs/libraries.md#mitcads-parts-library)).
+- **The groups' counts** (mitcad#1015, `groupCounts`, `hiddenGroups`):
+  every row ends with the number of tiles it would show under the search
+  and the filters, its subgroups' included and a part in two of them
+  once (`Wood (12)`; Favourites, In this design, All parts, Other and
+  Libraries to get too): the grid's search (or, in Insert from Library,
+  the parts `library_search` found with the licence filter), Supplier
+  and System. A library's group with none is hidden, and so is a parent
+  with only empty subgroups; while a search or a filter is off its "all"
+  choice (a search text, a supplier, a system) the picker's own rows
+  with none hide too, except All parts. The chosen group stays while a
+  search or a filter empties it (mitcad#418), shown greyed with `(0)`,
+  with the groups above it; once another group is chosen, it hides. A
+  row with `(0)` is greyed. The counts follow every change of the
+  search, the filters, the parts and the design's parts, and a star
+  (Favourites' count, in its place, mitcad#517); the rows are made again
+  only when the rows to show change (after the click when a group is
+  chosen), keeping the folds and the stars.
 - Above the grid: Search (Alt+S; the words `library_search`
   matches: name, id, standard, description, categories, keywords,
   supplier, part number, library), the slot System (Alt+Y; only when a
@@ -7302,10 +7532,13 @@ group, a search, the system, the parts; not a star, mitcad#517; a
 subgroup by its path, `General fasteners/Screws`), `Part
 picker tiles: <tile>[ x<uses>], ...` (the same moments: the first 24
 tiles in order with their use counts, mitcad#518; a tile of a row as
-`<library>/<component> (<row>)`), `Part picker groups: <group>, ...`
-(the groups in the tree's order, whenever they are made: subgroups by
-their paths, a folded group as `<group> (folded)` without its
-subgroups), `Part picker group <group> folded|unfolded` (by the user,
+`<library>/<component> (<row>)`), `Part picker groups: <group> (<count>), ...`
+(the groups shown in the tree's order with their counts, mitcad#1015,
+whenever they are made and whenever a search, a filter or the parts
+change them, before the group's line: subgroups by their paths, a
+folded group as `<group> (<count>) (folded)` without its subgroups,
+e.g. `Favourites (1), All parts (4), General fasteners (2), General
+fasteners/Screws (1)`), `Part picker group <group> folded|unfolded` (by the user,
 kept), `Part picker search
 '<text>'` (searched by the grid), `Part picker system <system|all>`,
 `Part picker in this design: <n> parts: <library>/<component> x<count>[
@@ -7313,8 +7546,8 @@ kept), `Part picker search
 on|off` and `Part picker group star <key> on|off` (the group's key,
 `slot profile/profiles`; each followed by
 `Part picker tiles kept: <tiles as above>; current <tile|none>` and
-`Part picker groups kept: <groups>`: the star changed, the order did
-not), `Part picker chose <library>/<component>[ (<row>)]`, `Part
+`Part picker groups kept: <groups>` (by name, without the counts): the
+star changed, the order did not), `Part picker chose <library>/<component>[ (<row>)]`, `Part
 picker refused <library>/<component>: <reason>`, `Part picker shows the
 part chosen: <library>/<component>` (`ask` scrolled to it and highlighted
 it, mitcad#452; before it, when needed, `Part picker group <group> has
@@ -7332,11 +7565,14 @@ and `Part picker tile <library>/<component> at ...` (the tiles in sight, up to
 the picker's own (the Windows tests post their clicks to its window); a
 row inside a folded group has no place.
 Tests: the data in `tests/part_picker_data.cpp` (test_app; the groups'
-tree of two libraries, mitcad#527), Insert from
-Library in `tools/ui-library-test.sh` (part 7; the tree in part 8) and
+tree of two libraries, mitcad#527; the groups' counts under a supplier
+and a search, the groups hidden and the chosen empty one kept,
+mitcad#1015), Insert from
+Library in `tools/ui-library-test.sh` (part 7; the tree in part 8, with
+the Supplier filter's counts and hidden groups, mitcad#1015) and
 `tools/ui-windows-library-test.ps1` (part 4; the tree in part 5: one
 Wood of two libraries, a part in two groups and once in Favourites, a
-fold kept), BUILD in
+fold kept; the Supplier filter's counts in part 6), BUILD in
 `tools/ui-build-test.sh` (part 8; part 9, the part a command starts with,
 mitcad#452) and `tools/ui-windows-build-test.ps1`
 (part 8; both with the tree for Profile's role: Slot profile with its
@@ -7417,6 +7653,20 @@ linked design whose configuration table is **open** (`options`, not
   the part (`library_show` at its version) for its filters. Tab goes from
   Version through the filters to the size choosers in the browser; in
   Library Parts the size choosers stay right after Version.
+- **One label column** (mitcad#1007, `OptionChooser::alignLabelsWith`):
+  Version, Standard, Supplier, Size and every option row share one label
+  column, so their fields start at the same x: in the browser's side
+  panel, in Library Parts, and (the filters with the choosers) in Edit
+  Options… and BUILD's part picker. The rows stay in their own forms
+  (the dialog's Version form, the filters', the choosers'); each label is
+  given the widest label's width, again whenever the rows change, and the
+  forms keep to the left (`Qt::AlignLeft`, also where a style would
+  centre them). Logged while shown, once the layout is done: `Library
+  fields at x: Version 96, Standard 96, Supplier 96, Size 96, Length 96`
+  (the fields shown, their left edges in the window; the chooser's log
+  prefix). Tests: `tools/ui-library-test.sh` parts 4 and 9,
+  `tools/ui-windows-library-test.ps1` part 6; pictures:
+  `tools/ui-library-fields-look.sh <dir>`.
 - **Supplier Articles** (mitcad#979, `library/SupplierPartsDialog.*`, the
   data in `library/PartOptions.*`): Insert from Library, Library Parts
   and Edit Options… show the chosen row's suppliers' articles behind a
@@ -8874,6 +9124,23 @@ SVG at several sizes (`themeIcon`).
   export unchanged, delete and undo), the unit test
   `app/tests/print_analysis.cpp`; the model's tests in
   `core/model` (commands.md).
+- **Mortise and Tenon** (`solid.mortise_tenon`, `MortiseTenonCommands.cpp`,
+  mitcad#1012; SOLID > MODIFY after Appearance): the model's
+  `mortise_tenon` (commands.md, *Mortise and Tenon*). End Face takes one
+  planar face (`withAccepts(isPlanar)`), Mortise Body one body, both
+  without meshes; the panel refuses the tenon's own body as the mortise
+  body and a mortise body picked in another occurrence than the face
+  (the feature reads both in its own component, without links). Width
+  (20 mm), Thickness (6 mm), Length (20 mm, hidden with Through),
+  Offset Along Width and Offset Along Thickness (left out at 0), Turned,
+  Clearance (0.1 mm, always written), Corners Square or Rounded and Tool
+  Diameter (6 mm, shown for Rounded). Enabled with two bodies or more.
+  An end face the panel cannot show is not editable. Logged `Added
+  mortise and tenon (blind|through)`. Tests:
+  `tools/ui-mortise-tenon-test.sh` and `app.ui-windows-mortise-tenon`
+  (`tools/ui-windows-mortise-tenon-test.ps1`): the end face of a rail
+  clicked, a post picked, Width and Length typed, OK: both bodies'
+  volumes change by the tenon and the mortise; edited, both again.
 
 ## Known limitations
 
@@ -8940,9 +9207,13 @@ next screenshot.
 |---|---|
 | `View area x y w h` | the 3D view's place in the window (`ui_view_click`) |
 | `Ribbon SOLID/CREATE at x,y`, `Ribbon tab BUILD at x,y` | group menus and the workspace tabs (wherever the tab bar is: the ribbon's, the title bar's), when the ribbon or its tab bar is shown, moves or is resized (`PlaceWatcher`, when the places changed), and when another tab is shown (`ui_click_logged`) |
+| `Ribbon tabs: DRAWING (shown DRAWING)`, `Ribbon tabs: SOLID, BUILD (shown BUILD)` | a drawing opened (its DRAWING tab alone, CUT SHEET for a cut sheet) or closed (the model's tabs back, the one it was opened from shown; mitcad#1008, [Drawings](#drawings)) |
 | `Window layout: window 1280x800, minimum 484x315; menu 6,0 1268x22; central 252,126 716x593; QStatusBar 6,771 1268x29; browserDock 6,126 240x593; commandDock 974,126 300x593; ribbonToolbar 6,22 1268x104; timelineDock 6,725 1268x46` | the main window's size and minimum size and the geometry of its menu bar, central widget (the 3D view) and visible docks, toolbars and status bar (by object name, else class), once the window shows and again whenever its size changes after that (mitcad#560: the docks' content never makes the window grow; `tools/ui-docked-height-test.sh`, `app.ui-windows-docked-height`; not with the native UI); `tools/ui-layout.sh` prints it and `tools/check-all.sh` reruns every UI test when it changes (mitcad#412) |
 | `Ribbon split SKETCH/CREATE/Circles at x,y`, `Ribbon split SKETCH/CREATE/Circles arrow at x,y` | a subgroup's split button: the part that starts its default, the arrow that opens the submenu (mitcad#222; logged with the group menus) |
 | `Ribbon menu SKETCH/CREATE: Line \| Rectangles > [2-Point Rectangle \| …] \| … \| Sketch Dimension`, `Ribbon menu SKETCH/CREATE/Circles: Center Diameter Circle \| …` | a group menu or a subgroup's submenu as it opens (`-` a separator, a submenu as `Name > [its entries]`; the SOLID CREATE menu: `Create Sketch \| - \| Extrude \| … \| - \| Pattern > [Rectangular Pattern \| …] \| Mirror \| - \| Machine Elements > [Gear | Pulley | Bearing]`, mitcad#579)\| Pulley]`, mitcad#579) |
+| `Ribbon pinned SOLID/solid.sweep at x,y`, `Ribbon SOLID/PINNED at x,y` | a pinned command's button and the Pinned group's caption (mitcad#1001; logged with the group menus) |
+| `Ribbon menu dots SOLID/CREATE solid.sweep at x,y` | the ⋮ button of each command row of a group menu or submenu, as it shows (mitcad#1001) |
+| `Toolbar menu SOLID/CREATE solid.sweep: Pin to Toolbar \| Change Keyboard Shortcut…`, `Toolbar menu entry Pin to Toolbar at x,y` | a command row's menu (`SOLID/PINNED` from a pinned button) and its entries' places, as it opens (mitcad#1001) |
 | `Panel <command> input <id> at x,y [(hidden)]`, `Panel <command> OK at x,y` | a panel opened; again whenever its places move (mitcad#528: the panel, a row's field or a widget it is in moved or was resized, a tile's picture read, the dock laid out again: 50 ms after it settles, a timer the sync waits for, only when a place differs from those logged last), so the last line logged is where the input is; the part picker's places likewise when its window moves or is resized; the in-process test driver's `click-logged` (macOS) waits for these timers (`TestSync::settling`, up to 5 s) before it reads a place |
 | `Panel <command> view y 160 to 668, scrolled 0 of 297, bar at 1015,414` | with a panel's places: the part of the window its page shows, how far it is scrolled, and its scroll bar while it scrolls (a long panel in a low window); the places are logged again when it scrolls (`Ui-PanelReveal` in `tools/ui-windows-lib.ps1`) |
 | `Datum xy at x,y`, `Sketch entity F1/c4 at x,y` | an input that takes them became active; the datum places are tried again with each input (a placement input puts the planes behind the model and the axes, mitcad#656), and an origin plane covered along its diagonals by an axis gets a place off them |
@@ -9035,7 +9306,7 @@ next screenshot.
 | `Parameters dialog opened`, `Parameters: d1 = width + 5 mm (35 mm); …`, `Parameters d1 expression at x,y` (name, unit, expression, comment), `Parameters add/delete/OK at x,y`, `Added parameter width = 30 mm`, `Parameter d1 expression: width + 5 mm = 35 mm`, `Parameter width expression: d2 / 2 refused: <reason>`, `Delete parameter w refused: <reason>` | Change Parameters (places in the main window's coordinates) |
 | `Parameters d1 min\|max\|step\|strict at x,y`, `Parameters d1 slider at x,y`, `Parameters d1 slider handle at x,y`, `Parameters only limited at x,y`, `Parameter d1 max: 50 = 50 mm`, `Parameter d1 limited: <the model's limit_message>`, `Parameters: d1 = 60 mm (50 mm ▲max); …`, `Parameters limited: d1 = 60 mm → 50 mm ▲max (<the Value cell's tooltip, lines joined with "; ">)` / `none`, `Parameter d1 typed 70 mm: d1: 70 mm will be limited to 50 mm (▲max)` (`within its limits`, `will be refused: <reason>`), `Parameter d1 slider: 40 mm = 40 mm`, `Parameters only limited: on: d1` | Change Parameters' limits (mitcad#665); `tools/ui-parameter-limits-test.sh` |
 | `Parameters during command Extrude editing Extrude1`, `Parameters closed: back to Extrude`, `Panel Extrude parameters at x,y`, `Sketch Sketch1 dimensions after the parameter change: width 50.000, d2 40.000`, `Extrude: parameter depth changed; the preview follows`, `Command Extrude: 1 parameter change(s) kept`, `Parameter d3 is held by the open panel of Extrude1` | Change Parameters while a sketch or a feature is edited (mitcad#564, [Browser, timeline and parameters](#browser-timeline-and-parameters)) |
-| `Configurations window opened`, `Configurations page Rows`, `Configurations lead Options: <the tab's lead line>` (`Rows`, `Rules`), `Configurations empty Options: <the empty list's text>` (`Rows`, `Rules`), `Configurations options: Color (Black, White) = White; Length (300 mm … 2000 mm, step 10 mm) = 1500 mm` / `none`, `Configurations rows: open, default none, current Row1: Row1: Color = White, Length = 1500 mm`, `Configurations row issues: Row2: <the refusal>` / `none`, `Configurations tab Rows at x,y`, `Configurations add option\|remove option\|edit domain\|move up\|move down\|closed\|add row\|delete row\|set as default\|apply at x,y`, `Configurations option Length domain\|default\|comment at x,y`, `Configurations row Row1 Length at x,y` (a cell: the row and the column's header), `Add Option dialog opened: Color, Length, New Parameter`, `Configurations added option Color`, `Configurations added row: Row1`, `Configurations row Row1 Length: 800`, `Configurations row Row2 Length: 1500 refused: <reason>`, `Configurations option Length default: 1200`, `Configurations applied Row1; moves: <notice>`, `Option Length domain: range 300 mm … 2000 mm, step 10 mm` (`column Screws.Size`), `Option Domain dialog opened for Size`, `Configurations generate rows at x,y`, `Generate Rows dialog opened: Screws.Size for Size`, `Configurations generated rows from Screws.Size for Size: 3 rows from Screws: added M3, M4, M5` (`; updated M4`, `all up to date`), `Configurations generate rows from Screws.Size for Size refused: <reason>` | the Configurations window (mitcad#807, #849; places in the main window's coordinates) |
+| `Configurations window opened`, `Configurations page Rows`, `Configurations lead Options: <the tab's lead line>` (`Rows`, `Rules`), `Configurations empty Options: <the empty list's text>` (`Rows`, `Rules`), `Configurations options: Color (Black, White) = White; Length (300 mm … 2000 mm, step 10 mm) = 1500 mm` / `none`, `Configurations rows: open, default none, current Row1: Row1: Color = White, Length = 1500 mm`, `Configurations row issues: Row2: <the refusal>` / `none`, `Configurations tab Rows at x,y`, `Configurations add option\|remove option\|edit domain\|move up\|move down\|closed\|add row\|delete row\|set as default\|apply at x,y`, `Configurations option Length domain\|default\|comment at x,y`, `Configurations row Row1 Length at x,y` (a cell: the row and the column's header), `Add Option dialog opened: Color, Length, New Parameter`, `Configurations added option Color`, `Configurations added row: Row1`, `Configurations row Row1 Length: 800`, `Configurations row Row2 Length: 1500 refused: <reason>`, `Configurations option Length default: 1200`, `Configurations applied Row1; moves: <notice>`, `Option Length domain: range 300 mm … 2000 mm, step 10 mm` (`column Screws.Size`), `Option Domain dialog opened for Size`, `Configurations generate rows at x,y`, `Generate Rows dialog opened: Screws.Size for Size`, `Configurations generated rows from Screws.Size for Size: 3 rows from Screws: added M3, M4, M5` (`; updated M4`, `all up to date`), `Configurations generate rows from Screws.Size for Size refused: <reason>`, `Configurations add column\|remove column at x,y`, `Add Column dialog opened: Extra, New Parameter`, `Configurations: column Extra added`, `Configurations add column Extra refused: <reason>`, `Configurations: column Extra removed` (mitcad#999) | the Configurations window (mitcad#807, #849, #999; places in the main window's coordinates) |
 | `Configuration bar: Color = White (Black \| White); Length = 1200 mm (300 mm … 2000 mm, step 10 mm); row none` / `none`, `Configuration bar row at x,y`, `Configuration bar Length at x,y`, `Configuration bar Length slider at x,y`, `Configuration chosen: Color = Black`, `Configuration row chosen: Row1`, `Configuration moves: Length 1200 mm → 1000 mm: Black is short`, `Configuration refused: <why>`, `Parameters options: Color; Length (narrowed by Black is short: 300 mm … 1000 mm, step 10 mm)` / `none` | the Configuration bar in the browser and the options in Change Parameters (mitcad#807) |
 | `Rules: 2`, `Rules row Black is short: enabled, ok` (`disabled`; `Not saved yet: fill its dashed places`, a problem), `Rules add\|duplicate\|delete\|text\|check at x,y` (`text`: the rule's text), `Rules row Black is short at x,y`, `Rules add menu: Limit a range when… \| … \| Only the combinations of a table… (disabled: <why>) \| Empty rule`, `Rules add range: not for this design`, `Rules naming Rule 1`, `Rules status: Rule 1 is not saved yet: fill its dashed places.` (`none` when it empties), `Rules closed note: This table is closed: …` (`none`), `Rule text not read: Line 2, column 13: <reason>`, `Rule text restored`, `Rules saved: <edit>`, `Rules not saved yet: <edit>`, `Rules refused: <edit>: <reason>`, `Rules rename refused: <reason>`, `Rules undo: the last change not saved` (`the design's last step`), `Rule palette compare at x,y` (each entry by its id: `when`, `always`, `else`, `and`, `or`, `not`, `compare`, `one_of`, `option`, `parameter`, `number`, `text`, `column`, `formula`, `allow_only`, `exclude`, `min`, `max`, `step`, `require`, `forbid`, `in_table`), `Rule palette drag max`, `Rule palette chooses for then.1 slot`, `Rule canvas when.0 socket at x,y` (each place: `rule frame`, `when label`, `then label`, `when block`, `when socket`, `when.2 add`, `then.1 slot`, `then.0 option`, `when op`, `then.1 message`, `then.0 table`, `then.0 columns`; `… out of sight` scrolled away), `Rule canvas target when socket`, `Rule canvas drag then.0 block`, `Rule canvas focus then.0.0 socket`, `Rule canvas editing then.0.0 block: 1000 mm` (`… cancelled`), `Rule canvas formula when: <text>`, `Rule edited Black is short: Put max in then.0` (`Rule when`, `Set when.1 to 'Black'`, `Move …`, `Delete …`), `Rule as text Black is short: when Color == 'Black' / then Length max 1000 mm`, `Rule canvas columns of Screws: Length=Length, Size=Size` (`none`), `Rule canvas columns dialog for then.0 of Screws`, `Check Rules: <line>`, `Check Rules never allowed: Length 2500 mm`, `Context menu: Edit \| Edit as Formula… \| Delete` | the Rules tab and its block editor (mitcad#808, [The rule block editor](#the-rule-block-editor); places in the main window's coordinates); `tools/ui-configuration-rules-test.sh` |
 | `Property Sets opened for F2.b0, O1`, `Property sets of Body Panel, Occurrence Wall:1, Component Wall: N properties`, `Property sets row: component Identity/Mark = W-12 (user)` (`(user, inherited)`, `(ifc, edited)`, `(computed)`), `Property sets <level> <set>/<key> value at x,y`, `Property sets add\|remove\|types\|computed\|close at x,y`, `Editing property <level> <set>/<key>` (`as a choice: EI30 \| EI60 \| EI90`), `Property sets choice at x,y`, `Property <level> <set>/<key> set: W-20`, `… chosen: EI60`, `…: <text> refused: <reason>`, `Added property <set>/<key> (<type>)`, `Removed property …`, `Property type defined: <name> (<base>)`, `Property type removed: <name>`, `Find in Design property search: <reason>` | Property Sets and its property search (mitcad#496; places in the main window's coordinates); `tools/ui-property-sets-test.sh`, `tools/ui-windows-property-sets-test.ps1` |
@@ -9064,6 +9335,8 @@ next screenshot.
 | `Physical properties: Body1 volume … mass … center (…)` | the Properties dialog opened |
 | `Done <command>` | a model command panel's OK |
 | `Camera direction -0.577 0.577 -0.577 up … (orthographic)` | the camera came to rest after it moved (direction from the eye to the model) |
+| `View: new design framed, scale 233.285 mm per view height at 1480x900` | a new design's first view framed (mitcad#1000): the model height the view shows, and the view's size |
+| `View: resized to 1920x1080, maximized, scale 233.285 mm per view height` (`, full screen`; no state for a normal window) | the view's size changed and came to rest (mitcad#1000); a resize keeps the height the view shows |
 | `View navigation: 24 frame(s), 0 repaint(s) of widgets over the view, Print Analysis overlay set 0 time(s)` (the widgets' object names in brackets after their count when there are any, `(parameterPicker, viewHome)`; the overlay's count only while a Print Analysis is drawn) | a navigation of the view ended (`OcctViewer::navigationFinished`: a drag released, a wheel burst or an animation over): the frames drawn meanwhile, how often a widget over the view was painted again (each repaint makes Qt compose the window's whole area under the view again at that frame, which costs milliseconds per million pixels of the view: mitcad#768), and how often the Print Analysis overlay was set (a camera move computes nothing again) |
 | `3D mouse: Raw Input connected (SpaceMouse Compact (HID 256f:c635))` (`spacenavd connected (/var/run/spnav.sock)`, `IOKit HID connected (…)`; also when a device comes later), `3D mouse: none` (no device or daemon at start; the backend keeps listening), `3D mouse: off` (Preferences has it off), `3D mouse: Raw Input disconnected`, `3D mouse: button 1 runs view.fit` (debug; `3D mouse: button 3 has no command`, `3D mouse: view.look_at is not available now`), `3D mouse motion: 42 frame(s), turned 12.3 degrees, panned 0.41 view heights, zoom 1.25x, object mode` (debug; when the cap comes to rest: what the motion did, a zoom above 1 closer, and the Navigation mode, `camera mode` or `fly mode`, then `, horizon locked` with Lock horizon; mitcad#978) | a 3D mouse (mitcad#951, `view/SpaceMouseController.*`, `view/SpaceMouseView.cpp`); the test driver's `space-mouse` and `space-mouse-button` steps give the same input |
 | `Layout grid 5 mm, major 25 mm, 18.2 px apart` | the layout grid's spacing changed, logged when the camera rests |
@@ -9799,23 +10072,63 @@ drawing commands; it computes no geometry of its own.
   an undo step, and open the new drawing (`DocumentHost::createDrawing`;
   logged `Drawing created: D1 Drawing1 in C0`) with Base View on
   (mitcad#725).
-- **The drawing's view** (`drawings/DrawingWorkspace`): a child of the 3D
-  view inside the cards over it (`OcctViewer::overlayInsets`, as the mode
-  banner), so the Docked, Floating and native layouts show it alike;
-  beside the cards at the view's sides whose rectangles reach its bar's row
-  (`coveredRects`, followed through `OcctViewer::coveredChanged`: the
-  Floating layout's browser opened or folded), so that Close Drawing and
-  the tools are never under a card (mitcad#725). Where the bar is then
-  narrower than its row, the views' tools show their icons only, their
-  names in their tooltips (`fitTools`, logged `Drawing tools: icons`,
-  `names`), and the places are logged again. It
+- **The drawing's view** (`drawings/DrawingWorkspace`): a drawing takes
+  the whole workspace (mitcad#1008). It is a child of the 3D view and
+  covers all of it, edge to edge (no grid of the 3D view around it;
+  logged `Drawing area x,y WxH, view x,y WxH`, the same rectangle); its
+  bar and sheet start below the rows floating over the view's top
+  (`OcctViewer::overlayInsets`: the Floating layout's title row and
+  toolbar), what is above and beside them is the drawing's background.
+  Where a card at the view's side reaches the bar's row (`coveredRects`,
+  followed through `OcctViewer::coveredChanged`: the Floating layout's
+  browser opened or folded), the bar's controls start beside it, so that
+  they are never under a card (mitcad#725); the sheet goes on under the
+  card and is fitted beside it (`DrawingSheetView::setFitMargins`). The
+  Docked, Floating and native layouts show it alike.
+  - **The ribbon's DRAWING tab** (`Ribbon::setDrawingMode`, as
+    `setSketchMode` is for a sketch): while a drawing is open the ribbon
+    has its DRAWING tab alone (CUT SHEET for a cut sheet), SOLID and
+    BUILD hidden until it closes, so the toolbar is one row; closed, they
+    come back with the tab the drawing was opened from shown (logged
+    `Ribbon tabs: DRAWING (shown DRAWING)`, `Ribbon tabs: SOLID, BUILD
+    (shown BUILD)`). Its groups: **Close Drawing** first (`drawing.close`),
+    then the tools' groups (`drawings::toolGroupId`): Create, Geometry,
+    Dimensions, Text, Symbols, Tables, each tool a pinned button and an
+    entry of its group's menu (the tool on shows checked), and
+    **Export** last, its caption's menu PDF…, SVG…, DXF…, DWG…
+    (`drawing.export_pdf`, `_svg`, `_dxf`, `_dwg`). A cut sheet's tab:
+    Close Drawing, **Parts** (Add Parts…, `drawing.add_parts`) and
+    Export (DXF…, SVG…, Part Names on the LABEL Layer;
+    `MainWindow::addDrawingRibbonExtras`). The drawing's places are
+    logged as its own (`Drawing tool Base View at x,y`, `Drawing Close
+    Drawing at`, `Drawing Export at`, `Drawing group Create at`: the
+    ribbon's buttons and captions, `Ribbon::placeOf`) and again when the
+    ribbon logs its places (`Ribbon::placesLogged`). The AppKit frontend,
+    whose ribbon has no DRAWING tab yet
+    (`app/platform/macos/native-coverage.txt`), keeps the drawing's own
+    two-row bar (`DrawingWorkspace::setRibbonTools` unset): Close
+    Drawing and the tools' groups under the first row, where a narrow bar
+    shows the views' tools as icons (`fitTools`, logged `Drawing tools:
+    icons`, `names`).
+  - **The cards**: in the Floating layout only the browser's card stays
+    while a drawing is open, from which another drawing opens; the
+    timeline, the Projects card, the command card and the chat are
+    hidden until it closes, then shown as they were asked to be
+    (`FloatingLayout::showOnlyCards`, `GlassCard::setSuppressed`). The
+    Docked layout's panels stay docked beside the view. The model's idle
+    hint in the status (the Floating layout's pill: "Create a sketch to
+    start modelling…") goes when a drawing opens; a warning or an error
+    stays, and the drawing's own messages show there as before
+    (`MainWindow::m_statusIsHint`).
+  It
   covers the 3D view until **Close Drawing** (also the command
   `drawing.close`) or a command of the ribbon chosen there or in the
   command search (`MainWindow::trigger`: a feature command or one with a
-  tab leads back; the menus' commands such as Undo, Save and Export do
-  not). Esc never closes it (the owner, mitcad#725).
+  tab other than the drawing's own (`isDrawingCommand`) leads back; the
+  menus' commands such as Undo, Save and Export do not). Esc never closes
+  it (the owner, mitcad#725).
   It cannot open while a command or a sketch is open
-  (`changeBlockedReason`). Its bar has two rows: Close Drawing, the drawing's name
+  (`changeBlockedReason`). Its bar is one row above the sheet: the drawing's name
   (`Component › Drawing1` in a component), the sheets as tabs (a tab's
   menu: Rename…, Delete Sheet, **Save as Template…**: a name and the User
   or Project library, `save_drawing_template`, for a sheet with a
@@ -9829,15 +10142,15 @@ drawing commands; it computes no geometry of its own.
   Date; `edit_drawing_sheet`, with `template` only when another one is
   chosen), **Add Revision…** (also the command `drawing.add_revision`: a
   dialog, **Add Revision**: Description, needed, Date, today's when empty,
-  By; `add_drawing_revision`); under them the tools in groups, each over
-  its caption and after a line (`toolGroup`, `toolGroupName`, mitcad#725):
-  Create (the views'), Geometry (Center Mark, Centerline, Line, Arc,
-  Center Pattern, Edge Extension; mitcad#729), Dimensions
-  (Dimension, Ordinate, Baseline), Text (Text, Note), Symbols (Datum
-  Label, Feature Control Frame, Surface Finish), Tables (Hole Table,
-  Parts List, Balloon) and Export: **Export…** (PDF…, SVG…, DXF…, DWG…: a save
-  dialog in the Export folder, then `export_drawing` with `drawing` and
-  the design's name as `title`), so the tabs keep their room. The tab
+  By; `add_drawing_revision`). The tools are the ribbon's DRAWING tab's,
+  in groups (`toolGroup`, `toolGroupName`, mitcad#725): Create (the
+  views'), Geometry (Center Mark, Centerline, Line, Arc, Center Pattern,
+  Edge Extension; mitcad#729), Dimensions (Dimension, Ordinate,
+  Baseline), Text (Text, Note), Symbols (Datum Label, Feature Control
+  Frame, Surface Finish), Tables (Hole Table, Parts List, Balloon) and
+  Export (PDF…, SVG…, DXF…, DWG…: a save dialog in the Export folder,
+  then `export_drawing` with `drawing` and the design's name as
+  `title`), so the sheets' tabs keep their room. The tab
   bar is at most as wide as its tabs and at least as its first three
   (`Maximum` policy and a minimum set in `showSheet`): many sheets scroll
   under its buttons instead of pushing the bar past the view, a few never
@@ -10101,7 +10414,10 @@ drawing commands; it computes no geometry of its own.
   selection cleared`, `Drawing hint: <text>`, `Drawing placing view`,
   `Drawing tool <name> at x,y`, `Drawing Close Drawing at x,y`, `Drawing
   Add Sheet at`, `Drawing Sheet at`, `Drawing Export at`, `Drawing Add
-  Revision at`, `Drawing title block (iso): TITLE=block | MATERIAL=Steel
+  Revision at` (the ribbon's buttons and captions where the DRAWING tab
+  has them, a line only for those in sight), `Drawing area x,y WxH, view
+  x,y WxH` (mitcad#1008), `Ribbon tabs: DRAWING (shown DRAWING)`,
+  `Drawing title block (iso): TITLE=block | MATERIAL=Steel
   | … | REV=A` (`simple` for the simple block; the sheet's fields as drawn,
   when they change), `Drawing revisions: A First release; B Hole moved`
   (`none`), `Drawing revision dialog opened: Add Revision`, `Drawing Sheet
@@ -10197,8 +10513,10 @@ drawing commands; it computes no geometry of its own.
   `cut_sheet`): its parts are the sheet's views (`type` `part`), dragged
   to move them (`edit_drawing_view` `move`), deleted with Delete; the bar
   shows **Material…** (the material's width and height, `edit_cut_sheet`)
-  instead of Sheet…, no sheet tabs, + or Add Revision…, and instead of the
-  tools **Add Parts…** (logged `Drawing Add Parts at x,y`: a dialog of the
+  instead of Sheet…, no sheet tabs, + or Add Revision…, and the ribbon its
+  CUT SHEET tab instead of the DRAWING tab (mitcad#1008; the AppKit
+  frontend: the bar's row instead of the tools) with **Add Parts…**
+  (`drawing.add_parts`; logged `Drawing Add Parts at x,y`: a dialog of the
   bodies of the cut sheet's component, those selected in the model chosen
   first, Ctrl+click or Ctrl+A for several, and a **Count**;
   `add_cut_sheet_parts`; logged `Cut sheet Add Parts dialog opened: 2
@@ -10725,3 +11043,34 @@ the window's live MCP server.
   calls, a card, two calls, text) and the pictures of
   `tools/ui-chat-groups-look.sh <dir>` (closed and opened, light and
   dark; a one-off look, no check runs it).
+
+## Dogbone
+
+**Dogbone** (`solid.dogbone`, `commands/DogboneCommands.cpp`, mitcad#1011;
+the model's `dogbone`, `core/model-api/src/commands.md` "Dogbone") is the
+last command of the SOLID tab's MODIFY group (registered after
+Appearance), not pinned, found by the search also as `cnc`, `router`,
+`relief`, `t-bone` and `corner`. Its icon `dogbone` is the timeline's
+too (`featureIcon`).
+
+- Inputs: *Corners* (`picks`: edges, faces or a body, any number, of one
+  body; no mesh bodies; an edge only when straight), *Tool Diameter*
+  (`diameter`, `6.35 mm`), *Extra* (`extra`, `0.1 mm`), *Type*
+  (`dogbone_type`: Diagonal or Along a Side) and *Tool Axis* (`axis`: Z,
+  Y or X), shown while a face or the body is picked.
+- `build`: the body of the picks; a picked body sends neither `edges` nor
+  `faces` (every corner of the body), otherwise the picked edges and
+  faces; `diameter` and `extra` always, `dogbone_type` only for Along a
+  Side, `axis` only for faces or a body about Y or X (`[0, 1, 0]`,
+  `[1, 0, 0]`).
+- `load`: edges and faces back as picks, the body when there are none;
+  the values (the inputs' defaults where the definition has none, which
+  are the model's); an `axis` that is no positive axis of the component
+  is not editable (`canEdit`).
+- Logged: `Dogbone Corners: 1 body [body F1.b0]` as any selection,
+  `Preview Dogbone: ok`, and on OK `Added dogbone (Diagonal), tool
+  diameter 6.35` (`Along a Side`).
+- Tests: `tools/ui-dogbone-test.sh` (Linux, Xvfb) and
+  `app.ui-windows-dogbone` (`tools/ui-windows-dogbone-test.ps1`): the
+  command on a pocket's body picked in the browser, OK, the body's volume
+  with four diagonal reliefs, `Dogbone1` in the timeline.

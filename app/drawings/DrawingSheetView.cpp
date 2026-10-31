@@ -17,11 +17,16 @@
 #include <QWheelEvent>
 #include <QtLogging>
 
+#include "../framework/Theme.hpp"
+
 namespace mitcad::drawings {
 namespace {
 
-// The paper's grey under the view, the selection's blue.
+// The paper's grey under the view (a dark one on a dark theme, mitcad#1008:
+// a light grey made the sheet a window in the dark window), the
+// selection's blue.
 const QColor kBackground(0xd9, 0xdc, 0xe0);
+const QColor kDarkBackground(0x2c, 0x2f, 0x34);
 const QColor kSelected(0x1c, 0x7e, 0xd6);
 const QColor kHovered(0x8c, 0xc1, 0xf0);
 const QColor kBroken(0xc9, 0x2a, 0x2a);
@@ -634,14 +639,31 @@ int DrawingSheetView::viewAt(const QPointF& sheet) const {
 
 void DrawingSheetView::fit() {
   const double margin = 24.0;
-  const double w = std::max(1.0, width() - 2.0 * margin);
-  const double h = std::max(1.0, height() - 2.0 * margin);
+  // Beside what covers it, unless that leaves too little.
+  QRect room = rect().marginsRemoved(m_fitMargins);
+  if (room.width() < width() / 2 || room.height() < height() / 2) {
+    room = rect();
+  }
+  const double w = std::max(1.0, room.width() - 2.0 * margin);
+  const double h = std::max(1.0, room.height() - 2.0 * margin);
   m_zoom = std::max(0.05, std::min(w / m_width, h / m_height));
-  m_origin = QPointF((width() - m_width * m_zoom) / 2.0, (height() + m_height * m_zoom) / 2.0);
+  m_origin = QPointF(room.left() + (room.width() - m_width * m_zoom) / 2.0,
+                     room.top() + (room.height() + m_height * m_zoom) / 2.0);
   m_fitted = true;
   m_everFitted = true;
   logPlaces();
   sheetMoved();
+}
+
+void DrawingSheetView::setFitMargins(const QMargins& margins) {
+  if (margins == m_fitMargins) {
+    return;
+  }
+  m_fitMargins = margins;
+  if (m_fitted) {
+    fit();
+    update();
+  }
 }
 
 QPointF DrawingSheetView::toSheet(const QPointF& widget) const {
@@ -712,7 +734,7 @@ void DrawingSheetView::resetPicks() {
 void DrawingSheetView::paintSheet(const QSize& pixels, qreal ratio) {
   m_sheetPicture = QPixmap(pixels.expandedTo(QSize(1, 1)));
   m_sheetPicture.setDevicePixelRatio(ratio);
-  m_sheetPicture.fill(kBackground);
+  m_sheetPicture.fill(isDarkPalette(palette()) ? kDarkBackground : kBackground);
   QPainter painter(&m_sheetPicture);
   painter.setRenderHint(QPainter::Antialiasing);
   painter.setFont(font());

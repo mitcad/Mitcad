@@ -3,21 +3,24 @@
 # check-all sources: core/model-api/src/drawings.rs core/model-api/src/drawing.rs core/model/src/document/drawings.rs tools/cli
 # check-all sources: core/model-api/src/drawing_annotations.rs core/model-api/src/drawing_tables.rs
 # check-all sources: core/model-api/src/drawing_templates.rs
+# check-all sources: app/framework/Ribbon.cpp app/framework/FloatingLayout.cpp app/framework/GlassCard.cpp
 # Input-driven Windows UI test of drawings kept in the design (mitcad#707)
 # in the build VM (tools/ui-windows-lib.ps1 says how the input is posted),
 # as tools/ui-drawings-test.sh does on Linux, on a 40 x 30 x 20 block
 # mitcad-cli makes (Body1, F2.b0):
 #   1. Create Drawing (a shortcut of the test's): its dialog (the ISO
 #      template), Drawing1 in the root's Drawings folder, its sheet over
-#      the 3D view.
+#      the 3D view: the whole of it, with the ribbon's DRAWING tab alone
+#      (Solid and Build hidden, mitcad#1008).
 #   2. Base View at a click (the front at 2:1), a projected view right of
 #      it, a section across it and a detail of its corner, each placed by
 #      a click; a break; the detail deleted (Delete) and back (Ctrl+Z); a
 #      second sheet (+); a dimension of the block's height picked on its
 #      edges and placed by a click (phase 2).
-#   3. Close Drawing; Extrude1 made 35 high in its panel (the dimension
-#      follows: 35); the drawing
-#      opened again from the browser: the front view has grown upward.
+#   3. Close Drawing (Solid and Build back, Solid shown); Extrude1 made 35
+#      high in its panel (the dimension follows: 35); the drawing opened
+#      again from the browser on the Build tab: the front view has grown
+#      upward; Close Drawing goes back to Build (mitcad#1008).
 #   4. Saved and opened again: the drawing with its four views.
 #   5. Export... PDF: a PDF of the two sheets; Export... DWG: an R2000
 #      DWG file per sheet (mitcad#728); Add Revision: the revision
@@ -97,6 +100,63 @@ function Settled([string]$Text) {
   Ui-Fail "the place of '$Text' did not settle"
 }
 
+# Drawing-Tool "name" "group": the drawing tool started from the ribbon's
+# DRAWING tab (mitcad#1008), by its button when the tab shows it, else by
+# its row in its group's menu. In session 0's 1024x768 desktop the ribbon
+# collapses its right groups (Dimensions, Tables, ...) to their names
+# (Ribbon::fitGroups): the drawing then logs no place for their tools, only
+# the group's ("Drawing group Dimensions at x,y"), whose menu has them
+# ("Ribbon menu DRAWING/DIMENSIONS: Dimension | Ordinate | Baseline"). The
+# drawing logs all its places together, from "Drawing area", whenever one
+# changes: the last such lines say what the tab shows now.
+function Drawing-Tool([string]$Name, [string]$Group) {
+  Settled "Drawing group $Group"
+  $lines = @(Ui-LogLines)
+  $start = -1
+  for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+    if ($lines[$i].Contains('Drawing area ')) { $start = $i; break }
+  }
+  $shown = $start -ge 0 -and @($lines | Select-Object -Skip $start | Where-Object { $_.Contains("Drawing tool $Name at ") }).Count -gt 0
+  if ($shown) {
+    # Not $Name in the action: Ui-Step's own parameter of that name hides it.
+    $button = "Drawing tool $Name"
+    Settled $button
+    Ui-Step $Name                           { Ui-ClickLogged $button }
+    return
+  }
+  $path = 'DRAWING/' + $Group.ToUpperInvariant()
+  Ui-Step "the $Group menu (the group shows its name only)" { Ui-ClickLogged "Drawing group $Group" }
+  Ui-ExpectNew "Ribbon menu ${path}: " "the $Group group's menu"
+  $menu = "$(Ui-LastLineWith "Ribbon menu ${path}: ")"
+  $entries = $menu.Substring($menu.IndexOf("Ribbon menu ${path}: ") + "Ribbon menu ${path}: ".Length)
+  # Its rows as the keys go through them (no separators); the drawing's Parts
+  # List is "Parts List (Drawing)" there (mitcad#718).
+  $rows = @($entries -split ' \| ' | Where-Object { $_ -ne '-' })
+  $row = -1
+  for ($i = 0; $i -lt $rows.Count; $i++) {
+    if ($rows[$i] -eq $Name -or $rows[$i].StartsWith("$Name (")) { $row = $i; break }
+  }
+  if ($row -lt 0) { Ui-Fail "no $Name in the $Group group's menu: $entries" }
+  Ui-Step "$Name (Down x$($row + 1), Enter)" { Ui-Key (@('Down') * ($row + 1)); Ui-Key 'Return' }
+}
+
+# Area-IsView: the drawing's area, as logged last ("Drawing area x,y WxH,
+# view x,y WxH"), is the 3D view's (mitcad#1008: edge to edge), as the
+# Linux test's area_is_view.
+function Area-IsView {
+  $line = $null
+  for ($i = 0; $i -lt 20; $i++) {
+    $line = Ui-LastLineWith 'Drawing area '
+    if ($line -and $line -match 'Drawing area (\S+ \S+), view (\S+ \S+)' -and $Matches[1] -eq $Matches[2]) {
+      Write-Host "ok   the drawing takes the whole view: $($Matches[1])"
+      return
+    }
+    Ui-Sync
+    Start-Sleep -Milliseconds 200
+  }
+  Ui-Fail "the drawing's area is not the view's: $line"
+}
+
 Ui-StartApp 'drawings' @('--open', $design)
 Ui-ExpectLog 'block.mitcad' 'the design opened'
 
@@ -110,6 +170,11 @@ Ui-ExpectNew 'Drawing created: D1 Drawing1 in C0' "Drawing1 in the root's folder
 Ui-ExpectNew 'Drawing opened: D1 Drawing1, sheet 1 of 1' 'its sheet over the view'
 Ui-ExpectNew 'Drawing tool Base View at' 'the tools laid out'
 Ui-ExpectNew 'Drawing sheet view ' 'the sheet placed'
+# The drawing takes the whole workspace (mitcad#1008): the ribbon's DRAWING
+# tab alone, Close Drawing on it, the drawing's area the 3D view's.
+Ui-ExpectNew 'Ribbon tabs: DRAWING (shown DRAWING)' 'the DRAWING tab alone: Solid and Build hidden'
+Ui-ExpectNew 'Ribbon button drawing.close at' 'Close Drawing on the ribbon'
+Area-IsView
 
 Write-Host '--- 2. Views'
 Ui-ExpectNew 'Drawing tool: Base View' 'Base View on for the new drawing (mitcad#725)'
@@ -170,8 +235,7 @@ if (Ui-LogLines | Where-Object { $_.Contains('Drawing command refused') }) { Ui-
 # A dimension of the block's height, picked on the front view's bottom and
 # top edges (y 100 and 140 on the sheet at 2:1) and placed by a click.
 Ui-Mark
-Settled 'Drawing tool Dimension'
-Ui-Step 'Dimension'                       { Ui-ClickLogged 'Drawing tool Dimension' }
+Drawing-Tool 'Dimension' 'Dimensions'
 Ui-ExpectNew 'Drawing tool: Dimension' 'the dimension tool is on'
 Ui-Step 'the bottom edge'                 { Sheet-Click 95 100.5 }
 Ui-ExpectNew 'Drawing picked line (1)' 'the bottom edge picked'
@@ -188,6 +252,7 @@ $before = View-Y 1
 Ui-Mark
 Ui-Step 'Close Drawing'                   { Ui-ClickLogged 'Drawing Close Drawing' }
 Ui-ExpectNew 'Drawing closed' 'the 3D view again'
+Ui-ExpectNew 'Ribbon tabs: SOLID, BUILD (shown SOLID)' "the model's tabs back, the one it was opened from shown"
 Ui-Mark
 Ui-Step 'edit Extrude1 (double-click)'    { Ui-DoubleClickLogged 'Timeline Extrude1' }
 Ui-ExpectNew ' with Extrude' 'editing Extrude1'
@@ -195,9 +260,14 @@ Ui-Step 'distance 35'                     { Ui-TypeIn 'Panel Extrude input dista
 Ui-WaitIdle
 Ui-Step 'OK (Enter)'                      { Ui-Key 'Return' }
 Ui-ExpectNew 'Edited F' 'Extrude1 edited'
+# Opened from the Build tab, the drawing closes back to it (mitcad#1008).
+Ui-Mark
+Ui-Step 'the Build tab'                   { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-ExpectNew 'Ribbon BUILD/PROFILE at' 'the Build tab shown'
 Ui-Mark
 Ui-Step 'open Drawing1 (double-click)'    { Ui-DoubleClickLogged 'Browser Root/Drawings/Drawing1' }
 Ui-ExpectNew 'Drawing opened: D1 Drawing1, sheet 1 of 2' 'the drawing opened again'
+Ui-ExpectNew 'Ribbon tabs: DRAWING (shown DRAWING)' 'the DRAWING tab alone'
 Ui-ExpectNew 'Drawing sheet drawn: 4 views' 'its four views'
 Ui-ExpectNew 'Drawing view 1 at' 'the front view placed'
 $after = View-Y 1
@@ -209,6 +279,7 @@ Write-Host '--- 4. Saved and opened again'
 Ui-Mark
 Ui-Step 'back to the model'               { Ui-ClickLogged 'Drawing Close Drawing' }
 Ui-ExpectNew 'Drawing closed' 'closed'
+Ui-ExpectNew 'Ribbon tabs: SOLID, BUILD (shown BUILD)' 'back on the Build tab it was opened from'
 Ui-Step 'save (Ctrl+S)'                   { Ui-Key 'ctrl+s' }
 Ui-ExpectNew 'Saved ' 'saved'
 if (-not (Select-String -Path $design -Pattern '"drawings"' -Quiet)) { Ui-Fail 'the design file has no drawings' }
@@ -283,7 +354,7 @@ Ui-Step 'Create Drawing (F9)'             { Ui-Key 'F9' }
 Ui-ExpectNew 'Create Drawing dialog opened' 'its dialog'
 Ui-Step 'OK'                              { Ui-FocusDialog '^Create Drawing$'; Ui-Key 'Return'; Ui-FocusMain }
 Ui-ExpectNew 'Drawing opened: D1 Drawing1, sheet 1 of 1' 'its sheet over the view'
-Ui-ExpectNew 'Drawing tool Parts List at' "the tables' tools on the bar"
+Ui-ExpectNew 'Drawing group Tables at' "the tables' group on the ribbon"
 Ui-ExpectNew 'Drawing sheet view ' 'the sheet placed'
 Ui-ExpectNew 'Drawing tool: Base View' 'Base View on for the new drawing (mitcad#725)'
 Ui-Mark
@@ -294,8 +365,7 @@ Ui-Mark
 Ui-Step 'end the tool (Esc)'              { Ui-Key 'Escape' }
 Ui-ExpectNew 'Drawing tool: selection' 'back to the selection'
 Ui-Mark
-Settled 'Drawing tool Parts List'
-Ui-Step 'Parts List'                      { Ui-ClickLogged 'Drawing tool Parts List' }
+Drawing-Tool 'Parts List' 'Tables'
 Ui-ExpectNew 'Drawing tool: Parts List' 'the parts list tool is on'
 # Its balloons off (on by default, mitcad#725): the balloon by hand below.
 Ui-ExpectNew 'Drawing panel drawingOption_balloons at' 'its Balloons option'
@@ -308,8 +378,7 @@ Ui-Step 'where the list goes'             { Sheet-Click 150 190 }
 Ui-ExpectNew '"type":"parts_list"' 'a parts list asked for'
 Ui-ExpectNew '1 = 1 Component1 x2; 2 Component2 x1' 'sorted, numbered and counted'
 Ui-Mark
-Settled 'Drawing tool Balloon'
-Ui-Step 'Balloon'                         { Ui-ClickLogged 'Drawing tool Balloon' }
+Drawing-Tool 'Balloon' 'Tables'
 Ui-ExpectNew 'Drawing tool: Balloon' 'the balloon tool is on'
 Ui-Step "Component1:2's right side"       { Sheet-Click 154.8 117.5 }
 Ui-ExpectNew 'Drawing picked line (1)' 'its edge picked'

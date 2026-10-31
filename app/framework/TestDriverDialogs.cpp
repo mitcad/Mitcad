@@ -118,8 +118,16 @@ void TestDriver::testDialogControls(const QString& kind) {
     }
   }
   // The print windows save each field at Enter: no button takes it
-  // (mitcad#655).
-  if (kind != QStringLiteral("settings") && kind != QStringLiteral("materials")) {
+  // (mitcad#655). Appearances commits a field at Return and stays open, so
+  // none of its buttons takes Return either (mitcad#977).
+  if (kind == QStringLiteral("appearances")) {
+    check(defaults == 0, QStringLiteral("expected no visible dialog default, found %1").arg(defaults));
+    for (QPushButton* button : window->findChildren<QPushButton*>()) {
+      if (button->isVisibleTo(window)) {
+        check(!button->autoDefault(), QStringLiteral("button can take Return: %1").arg(button->text()));
+      }
+    }
+  } else if (kind != QStringLiteral("settings") && kind != QStringLiteral("materials")) {
     check(defaults == 1, QStringLiteral("expected one visible dialog default, found %1").arg(defaults));
   }
   for (QTableView* table : window->findChildren<QTableView*>()) {

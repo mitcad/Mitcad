@@ -1116,20 +1116,14 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
                     _ => None,
                 };
                 let report = match (&source, section) {
-                    // Another sketch's geometry (mitcad#904).
-                    (Some(ProjectSource::Sketch { .. }), true) => {
-                        return Err(ApiError(
-                            "a section's source is a face, an edge or a body, not a sketch's \
-                             geometry"
-                                .to_owned(),
-                        ));
-                    }
+                    // Another sketch's geometry (mitcad#904); as a section,
+                    // where the plane crosses it (mitcad#998).
                     (
                         Some(ProjectSource::Sketch {
                             sketch: from,
                             entity,
                         }),
-                        false,
+                        _,
                     ) => {
                         if body.is_some() {
                             return Err(ApiError(
@@ -1144,6 +1138,7 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
                             linked,
                             occurrence,
                             context,
+                            section,
                         )?
                     }
                     (_, true) => {

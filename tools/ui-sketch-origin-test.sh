@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/sketch app/MainWindow.cpp app/MainWindowVisibility.cpp app/browser app/projects tools/cli
+# check-all sources: app/OcctViewer.cpp app/OcctViewer.hpp
 # The sketch's own origin and axes in a new design, whose Origin folder's
 # light bulb is off (mitcad#739), through the real UI:
 #   - A new design starts with the design's origin hidden in the view and
 #     the Origin folder's light bulb off.
+#   - Its first view is framed and logged ("View: new design framed,
+#     scale <mm> mm per view height at <w>x<h>", mitcad#1000); the window
+#     resized larger, taller than wide and back keeps that scale ("View:
+#     resized to ...").
 #   - Create Sketch on XY, XZ and YZ: the origin planes shown for the pick
 #     only; in the sketch the design's origin is hidden again, while the
 #     sketch draws its origin in the view and its x and y axes across it
@@ -131,6 +136,40 @@ ui_start_app
 
 echo "--- A new design: the origin hidden, the Origin folder's light bulb off"
 ui_expect_log "$HIDDEN" "a new design starts with its origin hidden"
+
+echo "--- A new design's framing kept when the window is resized (mitcad#1000)"
+ui_expect_log "View: new design framed, scale " "a new design's first view is logged"
+FRAMED=$(grep -o "View: new design framed, scale [0-9.]* mm" "$UI_LOG" | tail -1 | grep -o "[0-9][0-9.]*")
+[ -n "$FRAMED" ] || ui_fail "no scale in the new design's framing line"
+# expect_framing description: within six seconds a "View: resized to" line
+# since the mark, with the new design's scale per view height (within the
+# logged 0.001 mm).
+expect_framing() {
+  local line scale
+  for _ in $(seq 1 30); do
+    ui_sync
+    line=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -o "View: resized to .*" | tail -1)
+    [ -n "$line" ] && break
+    sleep 0.2
+  done
+  [ -n "$line" ] || ui_fail "$1: no 'View: resized to' line since the mark"
+  scale=$(grep -o "scale [0-9.]* mm per view height" <<< "$line" | grep -o "[0-9][0-9.]*")
+  awk -v a="$scale" -v b="$FRAMED" 'BEGIN { exit !(a != "" && (a - b) ^ 2 <= 1e-6) }' ||
+    ui_fail "$1: '$line', expected the new design's scale $FRAMED mm per view height"
+  echo "ok   $1: $line"
+}
+# Larger, taller than wide (OCCT alone would keep the width then), and
+# back; Xvfb has no window manager to maximize the window, which the
+# Windows test does.
+ui_mark
+ui_step "a larger window"                  xdotool windowsize "$UI_WINDOW" $((WIDTH + 300 * UI_SCALE)) $((HEIGHT + 150 * UI_SCALE))
+expect_framing "a larger window"
+ui_mark
+ui_step "a window taller than wide"        xdotool windowsize "$UI_WINDOW" $((760 * UI_SCALE)) $((960 * UI_SCALE))
+expect_framing "a window taller than wide"
+ui_mark
+ui_step "the window's size again"          xdotool windowsize "$UI_WINDOW" "$WIDTH" "$HEIGHT"
+expect_framing "the window's size again"
 
 for plane in xy xz yz; do
   echo "--- Create Sketch on ${plane^^}: the sketch's origin and axes drawn (mitcad#739)"

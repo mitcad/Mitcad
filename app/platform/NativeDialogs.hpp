@@ -65,6 +65,11 @@ inline constexpr char NativeListRowLimitProperty[] = "nativeListRowLimit";
 inline constexpr char NativeColorFieldProperty[] = "nativeColorField";
 inline constexpr char NativeColorFieldTextProperty[] = "nativeColorFieldText";
 inline constexpr char NativeColorFieldPlaceholderProperty[] = "nativeColorFieldPlaceholder";
+// Optional QString on a QAbstractItemView that paints a hint in place of
+// rows while its model has none ("No rows yet. ..."): the native table or
+// outline shows the same text, in its rows' top left corner, then. Its
+// label is identified as the view's objectName plus ".empty".
+inline constexpr char NativeEmptyTextProperty[] = "nativeEmptyText";
 
 // An optional multiline editor's own key commands and completion list.
 // AppKit keeps ordinary editing/IME; the shared editor gets first refusal

@@ -32,7 +32,11 @@
 //!   entry with the reference it was made from (`ref`, the link's mapped
 //!   name) and flags (bit 0: defining, part of the sketch's profiles).
 //!   0.21 keeps only the links: one geometry each, projected when FreeCAD
-//!   opens the file.
+//!   opens the file. 1.1's `ExternalTypes` (one per link; 0 when missing)
+//!   says what each link makes: 0 its projection onto the sketch's plane,
+//!   1 its intersection with the plane (the points where an edge crosses
+//!   it, the curves where a face does; an element lying in the plane is
+//!   itself), 2 both ([`ExternalType`]).
 
 use mitcad_vec3::{cross, unit_div_above};
 use serde::Serialize;
@@ -703,6 +707,30 @@ pub struct ExternalLink {
     pub mapped: Option<String>,
 }
 
+/// What one link of `ExternalGeometry` makes in the sketch (1.1's
+/// `ExternalTypes`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalType {
+    /// The element projected onto the sketch's plane.
+    #[default]
+    Projection,
+    /// The element's intersection with the sketch's plane.
+    Intersection,
+    /// Both.
+    Both,
+}
+
+impl ExternalType {
+    fn from_index(value: i64) -> ExternalType {
+        match value {
+            1 => ExternalType::Intersection,
+            2 => ExternalType::Both,
+            _ => ExternalType::Projection,
+        }
+    }
+}
+
 /// A sketch's content.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Sketch {
@@ -715,6 +743,10 @@ pub struct Sketch {
     /// For each external geometry, the link it was made from (an index
     /// into `links`).
     pub external_links: Vec<Option<usize>>,
+    /// What each link makes (1.1; empty before): as many as `links`, or
+    /// more where the file keeps types of links it no longer has.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub link_types: Vec<ExternalType>,
     /// Expressions bound to constraints: constraint index and expression.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub expressions: Vec<(usize, String)>,
@@ -776,6 +808,9 @@ impl Sketch {
                 sketch.external_links = (0..sketch.links.len()).map(Some).collect();
             }
         }
+        if let Some(Value::IntegerList(types)) = object.value("ExternalTypes") {
+            sketch.link_types = types.iter().map(|t| ExternalType::from_index(*t)).collect();
+        }
         if let Some(Value::Expressions(list)) = object.value("ExpressionEngine") {
             for e in list {
                 if let Some(i) = sketch.constraint_of_path(&e.path) {
@@ -806,6 +841,11 @@ impl Sketch {
         }
         let k = GeoRef::new(geo, PointPos::None).external()?;
         self.external.get(k)?.as_ref()
+    }
+
+    /// What the link `l` (an index into `links`) makes.
+    pub fn link_type(&self, l: usize) -> ExternalType {
+        self.link_types.get(l).copied().unwrap_or_default()
     }
 
     /// The expression bound to a constraint.

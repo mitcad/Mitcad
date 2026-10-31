@@ -529,6 +529,128 @@ void supplierFilterTests() {
   CHECK(savedSupplierFilter().isEmpty());
 }
 
+// The groups' counts under the filters (mitcad#1015): each group counts
+// the parts the Supplier filter and the search leave, its subgroups'
+// included and a part in two of them once; the empty groups hide (a parent
+// with only empty subgroups too, the picker's own rows only while
+// filtering), the chosen group and the groups above it stay.
+void groupCountTests() {
+  CHECK(searchMatches(QStringLiteral("Hexagon nut M5"), QStringLiteral("m5  NUT")));
+  CHECK(!searchMatches(QStringLiteral("Hexagon nut M5"), QStringLiteral("m6")));
+  CHECK(searchMatches(QStringLiteral("Hexagon nut M5"), QString()));
+
+  struct Part {
+    QList<PartGroupPath> groups;
+    QList<PartSupplier> suppliers;
+    QString fields;
+  };
+  const PartSupplier wurth{QStringLiteral("wurth"), QStringLiteral("Würth")};
+  const PartSupplier etra{QStringLiteral("etra"), QStringLiteral("Etra")};
+  const QStringList fasteners{QStringLiteral("General fasteners")};
+  const auto in = [](const QStringList& names) { return group(QString(), names, QList<int>{0, 0}); };
+  const QList<Part> parts{
+      // 0: a beam of no supplier
+      {{in({QStringLiteral("Wood"), QStringLiteral("Beams")})}, {}, QStringLiteral("Beam timber")},
+      // 1: plywood of one supplier
+      {{in({QStringLiteral("Wood"), QStringLiteral("Sheets")})}, {etra}, QStringLiteral("Plywood sheet")},
+      // 2: a slot screw in two groups
+      {{in({QStringLiteral("Slot profile"), QStringLiteral("Screws")}), in(fasteners + QStringList{QStringLiteral("Screws")})},
+       {wurth},
+       QStringLiteral("Slot screw M5")},
+      // 3: a socket head cap screw of both suppliers
+      {{in(fasteners + QStringList{QStringLiteral("Screws")})}, {wurth, etra}, QStringLiteral("Socket head cap screw M5")},
+      // 4: a nut
+      {{in(fasteners + QStringList{QStringLiteral("Nuts")})}, {etra}, QStringLiteral("Hexagon nut M5")},
+      // 5: a clamp of no group (Other)
+      {{}, {}, QStringLiteral("Clamp")},
+      // 6: a kit in two subgroups of General fasteners
+      {{in(fasteners + QStringList{QStringLiteral("Screws")}), in(fasteners + QStringList{QStringLiteral("Nuts")})},
+       {wurth},
+       QStringLiteral("Kit M6")},
+  };
+  PartGroupTree tree;
+  for (const Part& part : parts) {
+    for (const PartGroupPath& one : part.groups) {
+      tree.add(one);
+    }
+  }
+  tree.finish();
+  const QString other = QStringLiteral(":other");
+  const QString favourites = QStringLiteral(":favourites");
+  // The counts of the parts the supplier and the search leave, Other's too.
+  const auto counted = [&parts, &other](const QString& supplier, const QString& search) {
+    QList<QList<PartGroupPath>> grouped;
+    int others = 0;
+    for (const Part& part : parts) {
+      if (soldBy(part.suppliers, supplier) && searchMatches(part.fields, search)) {
+        grouped.append(part.groups);
+        others += part.groups.isEmpty() ? 1 : 0;
+      }
+    }
+    QHash<QString, int> counts = groupCounts(grouped);
+    if (others > 0) {
+      counts.insert(other, others);
+    }
+    return counts;
+  };
+  const QStringList special{favourites, other};
+  const auto hidden = [&tree, &special](const QHash<QString, int>& counts, const QString& chosen, bool filtering) {
+    QStringList keys = hiddenGroups(tree, counts, chosen, filtering, special).values();
+    keys.sort();
+    return keys;
+  };
+
+  // No filter: every group with its subgroups' parts, the kit once in
+  // General fasteners; nothing hidden, Favourites (0) neither.
+  const QHash<QString, int> all = counted(QString(), QString());
+  CHECK(all.value(QStringLiteral("wood")) == 2);
+  CHECK(all.value(QStringLiteral("wood/beams")) == 1);
+  CHECK(all.value(QStringLiteral("slot profile")) == 1);
+  CHECK(all.value(QStringLiteral("general fasteners")) == 4);
+  CHECK(all.value(QStringLiteral("general fasteners/screws")) == 3);
+  CHECK(all.value(QStringLiteral("general fasteners/nuts")) == 2);
+  CHECK(all.value(other) == 1);
+  CHECK(hidden(all, QStringLiteral(":all"), false).isEmpty());
+
+  // Supplier Etra: Wood has its sheets, Beams and Slot profile none and
+  // hide (Slot profile with its only, empty subgroup), so do Favourites
+  // and Other.
+  const QHash<QString, int> byEtra = counted(QStringLiteral("etra"), QString());
+  CHECK(byEtra.value(QStringLiteral("wood")) == 1);
+  CHECK(byEtra.value(QStringLiteral("wood/sheets")) == 1);
+  CHECK(byEtra.value(QStringLiteral("general fasteners")) == 2);
+  CHECK(byEtra.value(QStringLiteral("general fasteners/screws")) == 1);
+  CHECK(byEtra.value(QStringLiteral("general fasteners/nuts")) == 1);
+  CHECK(!byEtra.contains(QStringLiteral("wood/beams")) && !byEtra.contains(QStringLiteral("slot profile")));
+  CHECK(hidden(byEtra, QStringLiteral(":all"), true) ==
+        (QStringList{favourites, other, QStringLiteral("slot profile"), QStringLiteral("slot profile/screws"),
+                     QStringLiteral("wood/beams")}));
+
+  // Etra and the search "m5": only the screw and the nut. The chosen
+  // Beams stays with (0), and Wood above it; Sheets hides.
+  const QHash<QString, int> searched = counted(QStringLiteral("etra"), QStringLiteral("m5"));
+  CHECK(searched.value(QStringLiteral("general fasteners")) == 2);
+  CHECK(searched.value(QStringLiteral("wood/beams")) == 0 && searched.value(QStringLiteral("wood")) == 0);
+  CHECK(hidden(searched, QStringLiteral("wood/beams"), true) ==
+        (QStringList{favourites, other, QStringLiteral("slot profile"), QStringLiteral("slot profile/screws"),
+                     QStringLiteral("wood/sheets")}));
+  // Another group chosen: Beams and Wood hide too.
+  CHECK(hidden(searched, QStringLiteral("general fasteners/nuts"), true) ==
+        (QStringList{favourites, other, QStringLiteral("slot profile"), QStringLiteral("slot profile/screws"),
+                     QStringLiteral("wood"), QStringLiteral("wood/beams"), QStringLiteral("wood/sheets")}));
+  // Other chosen while it is empty: it stays.
+  CHECK(!hidden(searched, other, true).contains(other));
+
+  // Würth: the slot screw in both of its groups, the kit once in General
+  // fasteners and in each of its subgroups.
+  const QHash<QString, int> byWurth = counted(QStringLiteral("wurth"), QString());
+  CHECK(byWurth.value(QStringLiteral("general fasteners")) == 3);
+  CHECK(byWurth.value(QStringLiteral("general fasteners/screws")) == 3);
+  CHECK(byWurth.value(QStringLiteral("general fasteners/nuts")) == 1);
+  CHECK(byWurth.value(QStringLiteral("slot profile/screws")) == 1);
+  CHECK(!byWurth.contains(QStringLiteral("wood")));
+}
+
 } // namespace
 
 int partPickerDataTests() {
@@ -548,6 +670,7 @@ int partPickerDataTests() {
   rowTests();
   groupTreeTests();
   supplierFilterTests();
+  groupCountTests();
   QSettings::setDefaultFormat(format);
   QCoreApplication::setOrganizationName(organization);
   QCoreApplication::setApplicationName(application);

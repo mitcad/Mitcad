@@ -13,16 +13,24 @@
 #   - A round face against the block's top: square to it, no axis
 #     distance.
 #   - Two top rims: the axes' and the centres' distance.
-# The history (mitcad#648): the three measurements as three rows, newest
-# first, in the next panel; the first shown again (its picks back, its
-# lines drawn, no new row); one row and all rows copied; cleared. In the
+# The panel's layout (mitcad#1010), in the Docked and the Floating layout
+# at the default width: top to bottom the picks, the result, Keep as
+# Dimension and Annotate on one row, the history, Close; no control's text
+# clipped, every result row on one line; the pair's values first (the
+# distance), then a group per pick titled by its kind; a value copied from
+# its context menu; Close and Esc close it.
+# The history (mitcad#648): folded, unfolded from its header; the three
+# measurements as three rows, newest first, in the next panel; the first
+# shown again (its picks back, its lines drawn, no new row); one row copied
+# from its context menu, all rows and Clear from the ⋯ menu. In the
 # Floating layout, after the design is opened again: no rows, then one
 # measurement's row shown again in the next panel.
 # Tools/ui-windows-measure-test.ps1 does the same in the Windows VM.
 # The picks' preference (mitcad#869), on a block extruded to both sides of
 # its shown sketch, from the top: the two corners where the sketch's points
-# lie give the body's vertices and Keep is enabled; with Sketch Curves and
-# Points the two sketch points, and Keep greyed out with the reason.
+# lie give the body's vertices and Keep as Dimension is enabled; with
+# Sketch Curves and Points the two sketch points, and Keep as Dimension
+# greyed out with the reason.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-measure-test.sh [screenshot.png]
@@ -54,6 +62,46 @@ EOF
 "$CLI" run "$WORK/axes.json" --save "$WORK/axes.mitcad" > "$WORK/cli.log" 2>&1 ||
   { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
 
+# logged_y "text": the y of the last "<text> at x,y".
+logged_y() { grep -F "$1 at " "$UI_LOG" | tail -1 | sed -n 's/.* at [0-9]*,\([0-9]*\).*/\1/p'; }
+
+# expect_layout: the panel in the order of the task (mitcad#1010), top to
+# bottom the picks, the result, the actions, the history and Close; at
+# most the default 300 wide; no control's text clipped; every result row
+# on one line.
+expect_layout() {
+  ui_sync
+  local pick result keep history close width
+  pick=$(logged_y "Panel Measure input b")
+  result=$(logged_y "Panel Measure result Distance")
+  keep=$(logged_y "Measure Keep as Dimension")
+  history=$(logged_y "Measure history")
+  close=$(logged_y "Panel Measure Close")
+  [ -n "$pick" ] && [ -n "$result" ] && [ -n "$keep" ] && [ -n "$history" ] && [ -n "$close" ] ||
+    ui_fail "a place is not logged: picks $pick, result $result, actions $keep, history $history, Close $close"
+  [ "$pick" -lt "$result" ] && [ "$result" -lt "$keep" ] && [ "$keep" -lt "$history" ] ||
+    ui_fail "not in the task's order: picks $pick, result $result, actions $keep, history $history"
+  # Close at the bottom, under the page that scrolls (mitcad#655): below
+  # the panel's view when it is logged, else below the history.
+  local bottom=$history view
+  view=$(grep "^Panel Measure view y " "$UI_LOG" | tail -1 | sed -n 's/^Panel Measure view y -\{0,1\}[0-9]* to \(-\{0,1\}[0-9]*\),.*/\1/p')
+  [ -n "$view" ] && bottom=$view
+  [ "$close" -gt "$bottom" ] || ui_fail "Close is not at the bottom: Close $close, the panel's view or the history ending at $bottom"
+  echo "ok   top to bottom: picks $pick, result $result, actions $keep, history $history, Close $close (under $bottom)"
+  [ "$(logged_y "Measure Annotate")" = "$keep" ] || ui_fail "Annotate is not on Keep as Dimension's row"
+  echo "ok   Keep as Dimension and Annotate on one row"
+  width=$(grep -o "Panel Measure width [0-9]* of" "$UI_LOG" | tail -1 | sed 's/[^0-9]//g')
+  [ -n "$width" ] && [ "$width" -le 300 ] || ui_fail "the panel is '$width' wide, not within the default 300"
+  grep -F "Measure controls" "$UI_LOG" | tail -1 | grep -qF "Measure controls: none clipped" ||
+    ui_fail "a control's text is clipped at $width: $(grep -F "Measure controls" "$UI_LOG" | tail -1)"
+  grep -F "Panel Measure inputs" "$UI_LOG" | tail -1 | grep -qF "Panel Measure inputs: none clipped" ||
+    ui_fail "a pick's label or the filter's text is clipped at $width: $(grep -F "Panel Measure inputs" "$UI_LOG" | tail -1)"
+  echo "ok   no control's text clipped at $width, the picks' labels and the filter's text whole"
+  grep -F "Panel Measure result: " "$UI_LOG" | tail -1 | grep -q "rows, one line each$" ||
+    ui_fail "a result row does not fit its line: $(grep -F "Panel Measure result: " "$UI_LOG" | tail -1)"
+  echo "ok   $(grep -F "Panel Measure result: " "$UI_LOG" | tail -1 | sed 's/.*: //') at $width"
+}
+
 ui_start_display
 ui_start_app --open "$WORK/axes.mitcad"
 ui_step "fit (F6)"                         ui_key F6
@@ -73,8 +121,28 @@ ui_step "pick Body2's round face"          ui_click_pick "face F4.b0/F4:side(c1)
 ui_expect_new "axis (30, 40, 10) along (0, 0, " "the second axis"
 ui_expect_new "distance 40, angle 0 deg, axis distance 50, axis lines 2" \
   "the surfaces 40 apart, the axes parallel and 50 apart, both drawn"
+
+echo "--- The panel's layout (mitcad#1010)"
+ui_expect_new "Panel Measure result values: Distance = 40 mm, Angle = 0°, Axis distance = 50 mm" \
+  "the pair's values first, the distance first"
+ui_expect_new "Panel Measure result Selection 1: cylindrical face: Diameter = 10 mm, Radius = 5 mm, Area = 628.319 mm²" \
+  "then the first pick's group, titled by its kind"
+ui_expect_new ", Axis through = (0, 0, 10), Axis direction = (0, 0, " "its axis as two rows"
+ui_expect_new "Panel Measure result Selection 2: cylindrical face: Diameter = 10 mm" "and the second pick's"
+ui_expect_new "Panel Measure result 2 Axis direction at" "its rows laid out"
+ui_expect_new "Measure history at" "the history under the actions"
+grep -F "Measure history at " "$UI_LOG" | tail -1 | grep -q "(folded)$" || ui_fail "the history is not folded"
+echo "ok   the history folded"
+expect_layout
 [ -n "$SHOT" ] && ui_capture "$SHOT"
-ui_step "close (Enter)"                    ui_key Return
+ui_mark
+ui_step "right-click the distance"         ui_click_logged "Panel Measure result Distance" 3
+ui_expect_new "Context menu: Copy" "its context menu"
+ui_step "Copy"                             ui_menu_choose "Copy"
+ui_expect_new "Panel Measure result copied Distance: 40 mm" "its number and unit copied"
+ui_mark
+ui_step "Close"                            ui_click_logged "Panel Measure Close"
+ui_expect_new "Panel Measure Close clicked" "Close clicked"
 ui_expect_new "Closed Measure" "measure closed"
 
 echo "--- A round face against a plane"
@@ -94,8 +162,9 @@ ui_step "pick Body1's top rim"             ui_click_pick "edge F2.b0/E{F2:end(r{
 ui_expect_new "Inspect Measure: length 31.416, radius 5, diameter 10, axis (0, 0, 20) along" "the rim's axis"
 ui_step "pick Body2's top rim"             ui_click_pick "edge F4.b0/E{F4:end(r{c1})|"
 ui_expect_new "axis distance 50, center distance 50, axis lines 2" "the axes and the centres 50 apart"
-ui_step "close (Enter)"                    ui_key Return
-ui_expect_new "Closed Measure" "measure closed"
+ui_expect_new "Panel Measure result Selection 1: circular edge: Diameter = 10 mm" "a rim's group"
+ui_step "close (Esc)"                      ui_key Escape
+ui_expect_new "Command Measure cancelled" "Esc closes it"
 
 echo "--- The history (mitcad#648)"
 # The three measurements above, each a row (a pick's own row became the
@@ -115,21 +184,48 @@ ui_expect_new "Face of Body2: Radius 5 mm, Diameter 10 mm, Radius 5 mm, Diameter
   "with their values"
 grep "Measure history row 1: " "$UI_LOG" | tail -1 | grep -q ", Axis distance 50 mm" ||
   ui_fail "row 1 has no axis distance"
-ui_expect_new "Measure history row 1 at" "its row laid out"
+ui_expect_new "Measure history row 1 out of sight" "the history folded as the panel opens"
+ui_expect_new "Measure history at" "its header laid out"
+ui_mark
+ui_step "unfold the history"               ui_click_logged "Measure history"
+ui_expect_new "Measure history opened" "unfolded"
+ui_expect_new "Measure history row 1 at" "its rows laid out"
+# The rows' menus while the panel has no result yet, as the Windows test
+# does in its low window.
+ui_mark
+ui_step "right-click the first row"        ui_click_logged "Measure history row 1" 3
+ui_expect_new "Measure history row 1 menu" "its context menu"
+ui_expect_new "Context menu: Show | Keep as Dimension | Copy" "Show, Keep as Dimension and Copy"
+ui_step "Copy"                             ui_menu_choose "Copy"
+ui_expect_new "Measure history copied row 1: 1 | Face of Body1" "the row copied as tab-separated text"
+ui_mark
+ui_step "the history's ⋯ menu"             ui_click_logged "Measure history menu"
+ui_expect_new "Context menu: Copy All | Clear" "Copy All and Clear"
+ui_step "Copy All"                         ui_menu_choose "Copy All"
+ui_expect_new "Measure history copied 3 rows: 3 | Edge of Body1" "every row, newest first"
+ui_expect_new " / 1 | Face of Body1" "down to the first"
 ui_mark
 ui_step "show the first again"             ui_click_logged "Measure history row 1"
 ui_expect_new "Measure history showed row 1" "shown again"
 ui_expect_new "Measure Selection 2: 1 face" "its picks back in the inputs"
 ui_expect_new "distance 40, angle 0 deg, axis distance 50, axis lines 2" "measured again, its lines drawn"
 grep -q "Measure history: 4 rows" "$UI_LOG" && ui_fail "showing a row again added one"
+expect_layout
 [ -n "$SHOT" ] && ui_capture "${SHOT%.png}-history.png"
+# The picks' groups folded: the history comes up again.
 ui_mark
-ui_step "copy its row"                     ui_click_logged "Measure history Copy"
-ui_expect_new "Measure history copied row 1: 1 | Face of Body1" "the row copied as tab-separated text"
-ui_step "copy every row"                   ui_click_logged "Measure history Copy All"
-ui_expect_new "Measure history copied 3 rows: 3 | Edge of Body1" "every row, newest first"
-ui_expect_new " / 1 | Face of Body1" "down to the first"
-ui_step "clear"                            ui_click_logged "Measure history Clear"
+ui_step "fold the first pick's group"      ui_click_logged "Panel Measure result group 1"
+ui_expect_new "Panel Measure result group 1 folded" "folded"
+ui_expect_new "Panel Measure result 1 Diameter out of sight" "its rows hidden"
+ui_sync
+ui_step "fold the second pick's group"     ui_click_logged "Panel Measure result group 2"
+ui_expect_new "Panel Measure result group 2 folded" "folded"
+ui_sync
+ui_mark
+ui_step "the history's ⋯ menu"             ui_click_logged "Measure history menu"
+ui_expect_new "Context menu: Copy All | Clear" "its menu again"
+ui_step "Clear"                            ui_menu_choose "Clear"
+ui_expect_new "Measure history Clear clicked" "Clear chosen"
 ui_expect_new "Measure history cleared" "cleared"
 ui_expect_new "Measure history: 0 rows" "no rows"
 ui_step "close (Enter)"                    ui_key Return
@@ -159,17 +255,24 @@ ui_expect_new "Measure history: 0 rows" "a design opened: no rows"
 ui_step "pick Body1's round face"          ui_click_pick "face F2.b0/F2:side(c1)"
 ui_step "pick Body2's round face"          ui_click_pick "face F4.b0/F4:side(c1)"
 ui_expect_new "axis distance 50, axis lines 2" "measured"
+ui_expect_new "Panel Measure result Distance at" "the result laid out"
+expect_layout
 ui_step "close (Enter)"                    ui_key Return
 ui_expect_new "Closed Measure" "measure closed"
 ui_mark
 ui_step "measure (I)"                      ui_key i
 ui_expect_new "Measure history: 1 rows" "one row"
 ui_expect_new "Measure history row 1: Face of Body1" "the parallel faces"
+ui_expect_new "Measure history at" "its header laid out"
+ui_step "unfold the history"               ui_click_logged "Measure history"
+ui_expect_new "Measure history opened" "unfolded"
 ui_expect_new "Measure history row 1 at" "its row laid out"
 ui_step "show it again"                    ui_click_logged "Measure history row 1"
 ui_expect_new "Measure history showed row 1" "shown again"
 ui_expect_new "distance 40, angle 0 deg, axis distance 50, axis lines 2" "measured again"
-ui_step "close (Enter)"                    ui_key Return
+expect_layout
+ui_mark
+ui_step "Close"                            ui_click_logged "Panel Measure Close"
 ui_expect_new "Closed Measure" "measure closed"
 
 echo "--- A shown sketch in the body's middle plane (mitcad#869)"
@@ -177,7 +280,7 @@ echo "--- A shown sketch in the body's middle plane (mitcad#869)"
 # seen from the top, the sketch's corner points lie on the block's top
 # corners and its lines on the top edges. Faces, Edges and Vertices takes
 # the body's vertex there; Sketch Curves and Points the sketch's points,
-# which Keep cannot keep: its tooltip says why.
+# which Keep as Dimension cannot keep: its tooltip says why.
 cat > "$WORK/middle.json" << EOF
 [
   {"cmd": "sketch.create"},
@@ -228,11 +331,11 @@ ui_expect_new "Measure Selection 1: 1 vertex" "the body's vertex, not the sketch
 ui_step "pick the other top corner"        xdotool mousemove $((X + c2x * UI_SCALE)) $((Y + c2y * UI_SCALE)) click 1
 ui_expect_new "Measure Selection 2: 1 vertex" "the other body vertex"
 ui_expect_new "distance 120" "the corners 120 apart"
-ui_expect_new "Measure Keep enabled" "Keep enabled for the body's corners"
+ui_expect_new "Measure Keep as Dimension enabled" "Keep as Dimension enabled for the body's corners"
 ui_sync
 tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Measure Selection [12]: 1 sketch point" && ui_fail "a sketch point was picked"
-tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -E "Measure Keep (enabled|disabled)" | tail -1 | grep -q "Measure Keep enabled" ||
-  ui_fail "Keep is not enabled with both corners picked"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -E "Measure Keep as Dimension (enabled|disabled)" | tail -1 |
+  grep -q "Measure Keep as Dimension enabled" || ui_fail "Keep as Dimension is not enabled with both corners picked"
 ui_step "close (Enter)"                    ui_key Return
 ui_expect_new "Closed Measure" "measure closed"
 ui_mark
@@ -245,8 +348,9 @@ ui_expect_new "Measure Selection 1: 1 sketch point" "the sketch point"
 ui_step "pick its corner p6"               ui_click_logged "Sketch entity F1/p6"
 ui_expect_new "Measure Selection 2: 1 sketch point" "the other sketch point"
 ui_expect_new "distance 120" "the points 120 apart"
-ui_expect_new "Measure Keep disabled: Sketch geometry cannot be kept as an annotation" \
-  "Keep greyed out, its tooltip gives the reason"
+ui_expect_new "Measure Keep as Dimension disabled: Sketch geometry cannot be kept as an annotation" \
+  "Keep as Dimension greyed out, its tooltip gives the reason"
+ui_expect_new "Panel Measure result Selection 1: sketch point: Position = (" "the sketch points' groups"
 ui_step "close (Enter)"                    ui_key Return
 ui_expect_new "Closed Measure" "measure closed"
 

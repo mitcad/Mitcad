@@ -260,6 +260,10 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/input_edges.cpp
   include/mitcad/geometry/input_edges.hpp)
+# Dogbones: relief cylinders at a body's inside corners (mitcad#1011).
+target_sources(mitcad_geometry PRIVATE
+  src/dogbone.cpp
+  include/mitcad/geometry/dogbone.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -632,6 +636,13 @@ if(BUILD_TESTING)
   target_link_libraries(test_fillet_corner_past_wall PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.fillet_corner_past_wall COMMAND test_fillet_corner_past_wall)
   set_tests_properties(geometry.fillet_corner_past_wall PROPERTIES TIMEOUT 60)
+  # A convex and a concave edge chamfered at a vertex where a sharp edge goes
+  # on, the corner the same at both ends of the bracket, with the port's
+  # patch 1090 (mitcad#1005).
+  add_executable(test_chamfer_sharp_corner tests/test_chamfer_sharp_corner.cpp)
+  target_link_libraries(test_chamfer_sharp_corner PRIVATE mitcad_geometry mitcad_geometry_io mitcad_warnings)
+  add_test(NAME geometry.chamfer_sharp_corner COMMAND test_chamfer_sharp_corner)
+  set_tests_properties(geometry.chamfer_sharp_corner PROPERTIES TIMEOUT 60)
 endif()
 
 # Data exchange and analysis services, separate libraries on top of OCCT.

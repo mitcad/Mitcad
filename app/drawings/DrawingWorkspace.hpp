@@ -23,8 +23,16 @@
 // the focus is in it, so a stray key does not close the drawing (the
 // window's menus' shortcuts, Undo, Redo and Save, still work).
 //
-// It is a child of the 3D view, inside the cards that float over it
-// (OcctViewer::overlayInsets), so it shows the same in every layout.
+// It is a child of the 3D view and covers all of it, edge to edge
+// (mitcad#1008): its bar and sheet start below the rows that float over the
+// view's top (OcctViewer::overlayInsets), the bar's controls beside a card
+// at the view's side (the Floating layout's browser), and the sheet goes on
+// under that card, fitted beside it; so it shows the same in every layout.
+// While it is open the window shows the ribbon's DRAWING tab and, in the
+// Floating layout, no card but the browser (MainWindow).
+//
+// Logs "Drawing area x,y WxH, view x,y WxH": its rectangle and the 3D
+// view's in the window.
 //
 // Logs: "Drawing opened: D1 Drawing1, sheet 1 of 2", "Drawing closed",
 // "Drawing tool: Section View" (or "selection"), "Drawing selection
@@ -64,8 +72,10 @@
 #include "DrawingTemplates.hpp"
 #include "DrawingTools.hpp"
 
+class QAction;
 class QFormLayout;
 class QKeyEvent;
+class QVBoxLayout;
 class QLabel;
 class QTabBar;
 class QTimer;
@@ -118,9 +128,32 @@ public:
   // of each.
   void addParts();
   bool isCutSheet() const { return m_cutSheet; }
+  // Export… of the bar and the ribbon's (mitcad#1008): the drawing as
+  // "pdf", "svg", "dxf" or "dwg" (a cut sheet's: "dxf" or "svg"), its file
+  // asked for.
+  void exportDrawing(const QString& format);
+  // A cut sheet's export puts the parts' names on the layer LABEL; logs
+  // "Cut sheet labels: on".
+  void setCutLabels(bool on);
+  bool cutLabels() const { return m_cutLabels; }
+
+  // The window's ribbon has the tools (mitcad#1008): its DRAWING tab (CUT
+  // SHEET for a cut sheet) holds Close Drawing, the tools' groups and
+  // Export, so the bar is one row (the drawing's name, the sheets, +,
+  // Sheet…, Add Revision…). `buttonOf` finds a control there, by a
+  // command's id or a group's "DRAWING/EXPORT", for the logged places
+  // ("Drawing tool Base View at x,y" is the ribbon's button); null when it
+  // is not in sight. Unset (the AppKit frontend, which has no DRAWING tab
+  // yet): the bar's own two rows.
+  void setRibbonTools(std::function<QWidget*(const QString&)> buttonOf);
+  // The places logged again (the ribbon's moved), when they changed.
+  void logPlaces();
 
 signals:
   void closed();
+  // The tool on (its id, "drawing.base_view"), or none (empty): the
+  // ribbon's buttons show it checked.
+  void toolChanged(const QString& id);
 
 protected:
   bool event(QEvent* event) override;
@@ -209,7 +242,6 @@ private:
   // (mitcad#759).
   void dropPicks();
   void sheetMenu(int index, const QPoint& at);
-  void exportDrawing(const QString& format);
   // A revision of the table edited (or deleted) in its dialog.
   void editRevision(const QString& letter);
   // Save as Template… of a sheet tab's menu: the sheet's template under a
@@ -264,6 +296,9 @@ private:
   // (mitcad#753).
   bool m_hoverWaits = false;
 
+  QVBoxLayout* m_column = nullptr; // the bar over the sheet and the panel
+  std::function<QWidget*(const QString&)> m_ribbonPlace; // setRibbonTools
+  QAction* m_cutLabelsAction = nullptr;
   QWidget* m_bar = nullptr;
   QLabel* m_titleLabel = nullptr;
   QTabBar* m_tabs = nullptr;

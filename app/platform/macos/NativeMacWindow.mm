@@ -129,13 +129,15 @@ struct NativeMacWindowState;
 // The outer view owns the shadow; the system material owns its content.
 @interface MITCADFloatingCard : NSView
 @property(nonatomic, strong) NSView* body;
+@property(nonatomic) CGFloat cornerRadius;
 @end
 
 @implementation MITCADFloatingCard
 - (BOOL)isFlipped { return YES; }
 - (NSView*)hitTest:(NSPoint)point {
   NSPoint local = [self convertPoint:point fromView:self.superview];
-  if (![[NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:14 yRadius:14] containsPoint:local]) return nil;
+  if (![[NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:self.cornerRadius yRadius:self.cornerRadius]
+          containsPoint:local]) return nil;
   return [super hitTest:point];
 }
 @end
@@ -217,6 +219,7 @@ struct NativeMacWindowState;
 - (void)changeWorkspace:(id)sender;
 - (void)collapseProjects:(id)sender;
 - (void)collapseBrowser:(id)sender;
+- (void)turnCube:(id)sender;
 - (void)showBrowserIssues:(id)sender;
 - (void)openSearch:(id)sender;
 - (void)chooseSearch:(id)sender;
@@ -362,9 +365,11 @@ void fill(NSView* child, NSView* parent, CGFloat inset = 0) {
   ]];
 }
 
-MITCADFloatingCard* floatingCard(NSString* identifier) {
+// A card of the given corner radius; half its side makes it round.
+MITCADFloatingCard* floatingCard(NSString* identifier, CGFloat radius = 14) {
   MITCADFloatingCard* card = [[MITCADFloatingCard alloc] initWithFrame:NSZeroRect];
   card.accessibilityIdentifier = identifier;
+  card.cornerRadius = radius;
   card.wantsLayer = YES;
   card.layer.shadowColor = NSColor.blackColor.CGColor;
   card.layer.shadowOpacity = 0.15;
@@ -375,7 +380,7 @@ MITCADFloatingCard* floatingCard(NSString* identifier) {
   if (@available(macOS 26.0, *)) {
     NSGlassEffectView* glass = [[NSGlassEffectView alloc] initWithFrame:NSZeroRect];
     glass.style = NSGlassEffectViewStyleRegular;
-    glass.cornerRadius = 14;
+    glass.cornerRadius = radius;
     glass.contentView = body;
     fill(glass, card);
     return card;
@@ -385,7 +390,7 @@ MITCADFloatingCard* floatingCard(NSString* identifier) {
   material.blendingMode = NSVisualEffectBlendingModeWithinWindow;
   material.state = NSVisualEffectStateFollowsWindowActiveState;
   material.wantsLayer = YES;
-  material.layer.cornerRadius = 14;
+  material.layer.cornerRadius = radius;
   material.layer.masksToBounds = YES;
   fill(material, card);
   fill(body, material);
@@ -523,6 +528,9 @@ struct NativeMacWindowState {
   MITCADFloatingCard* __strong historyCard = nil;
   MITCADFloatingCard* __strong statusCard = nil;
   MITCADStatusLifetime* __strong statusLifetime = nil;
+  // The orientation cube's arrows (setCubeArrows), by their ids.
+  QList<NativeMacCubeArrow> cubeArrowPresentation;
+  NSMutableDictionary<NSString*, MITCADFloatingCard*>* __strong cubeArrows = nil;
   NSVisualEffectView* __strong ribbon = nil;
   NSScrollView* __strong ribbonScroll = nil;
   MITCADInspectorDocumentView* __strong ribbonGroups = nil;
@@ -1334,6 +1342,7 @@ struct NativeMacWindowState {
     statusCard.hidden = YES;
     fill(status, statusCard.body, 8);
     [canvasRoot addSubview:statusCard];
+    cubeArrows = [NSMutableDictionary dictionary];
 
     historyCard = floatingCard(@"native.historyCard");
     historyCard.hidden = NO;
@@ -1598,7 +1607,72 @@ struct NativeMacWindowState {
       callbacks.viewportOverlays(QMargins(0, 0, cubeRight, bottom), covered);
     }
     syncViewport();
+    placeCubeArrows();
     layingOut = false;
+  }
+
+  // The Qt view's round glass buttons around the cube (GlassButton): cards
+  // of the floating cards' material, as large as the circle Qt draws in
+  // the button's place, with the arrow's SF Symbol.
+  void setCubeArrows(const QList<NativeMacCubeArrow>& arrows) {
+    QStringList shown;
+    for (const NativeMacCubeArrow& arrow : arrows) {
+      NSString* key = ns(arrow.id);
+      MITCADFloatingCard* card = cubeArrows[key];
+      if (card == nil) {
+        const CGFloat side = std::max(1, std::min(arrow.geometry.width(), arrow.geometry.height()) - 4);
+        card = floatingCard(ns(QStringLiteral("native.cubeArrow.") + arrow.id), side / 2);
+        card.layer.shadowRadius = 3;
+        card.layer.shadowOffset = CGSizeMake(0, -1);
+        MITCADCommandButton* button = [MITCADCommandButton buttonWithImage:symbol(arrow.symbol)
+                                                                    target:delegate
+                                                                    action:@selector(turnCube:)];
+        button.bordered = NO;
+        button.refusesFirstResponder = YES;
+        button.imagePosition = NSImageOnly;
+        button.symbolConfiguration = [NSImageSymbolConfiguration configurationWithPointSize:11
+                                                                                      weight:NSFontWeightSemibold];
+        button.representedObject = key;
+        // The Qt arrow's name, so that tests address either frontend's.
+        button.accessibilityIdentifier = ns(QStringLiteral("orientationCube_") + arrow.id);
+        fill(button, card.body);
+        // Over the canvas, under the cards that float over it.
+        [canvasRoot addSubview:card positioned:NSWindowAbove relativeTo:viewportHost];
+        cubeArrows[key] = card;
+      }
+      for (NSView* child in card.body.subviews) {
+        if (![child isKindOfClass:MITCADCommandButton.class]) continue;
+        child.toolTip = ns(arrow.toolTip);
+        child.accessibilityLabel = ns(arrow.toolTip);
+      }
+      card.hidden = NO;
+      shown.append(arrow.id);
+    }
+    bool gone = false;
+    for (NSString* key in cubeArrows) {
+      MITCADFloatingCard* card = cubeArrows[key];
+      if (!card.hidden && !shown.contains(qt(key))) {
+        gone = true;
+        card.hidden = YES;
+      }
+    }
+    const bool changed = gone || cubeArrowPresentation.size() != arrows.size();
+    cubeArrowPresentation = arrows;
+    placeCubeArrows();
+    if (changed) {
+      qInfo().noquote() << (shown.isEmpty() ? QStringLiteral("Native cube arrows hidden")
+                                            : QStringLiteral("Native cube arrows: %1").arg(shown.join(QStringLiteral(", "))));
+    }
+  }
+
+  // At the Qt arrows' places in the viewport, inset to the circle drawn.
+  void placeCubeArrows() {
+    const NSPoint origin = viewportHost.frame.origin;
+    for (const NativeMacCubeArrow& arrow : cubeArrowPresentation) {
+      const QRect& at = arrow.geometry;
+      cubeArrows[ns(arrow.id)].frame =
+          NSInsetRect(NSMakeRect(origin.x + at.x(), origin.y + at.y(), at.width(), at.height()), 2, 2);
+    }
   }
 
   void setCardVisible(NSView* card, bool shown) {
@@ -2617,6 +2691,10 @@ void NativeMacWindow::setCardWidth(const QString& card, int width) {
   m_state->layoutOverlays();
 }
 
+void NativeMacWindow::setCubeArrows(const QList<NativeMacCubeArrow>& arrows) {
+  m_state->setCubeArrows(arrows);
+}
+
 bool nativeWindowRefreshContract(void* nativeWindow, QString& error) {
   MITCADDocumentWindow* window = (__bridge MITCADDocumentWindow*)nativeWindow;
   if (![window isKindOfClass:MITCADDocumentWindow.class] || !window->state) {
@@ -3291,6 +3369,11 @@ using namespace mitcad::mac;
   state->browserScroll.hidden = state->browserCollapsed;
   ((NSButton*)sender).image = symbol(state->browserCollapsed ? QStringLiteral("chevron.right") : QStringLiteral("chevron.down"));
   state->layoutOverlays();
+}
+- (void)turnCube:(id)sender {
+  if (!state || state->nativeModalBlocked() || !state->callbacks.cubeArrow ||
+      ![sender isKindOfClass:MITCADCommandButton.class]) return;
+  state->callbacks.cubeArrow(qt(((MITCADCommandButton*)sender).representedObject));
 }
 - (void)performAction:(id)sender {
   if (!state) return;

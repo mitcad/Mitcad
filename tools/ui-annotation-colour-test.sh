@@ -16,7 +16,7 @@
 #     the view and the window show the new colours at once; Offset2's own
 #     colour offered as it is by Colour…; Undo and Redo take Offset2's back
 #     and again.
-#   - Measure open (its panel's Annotations…): Offset1 made Black and
+#   - Measure open (its panel's Annotate ▾ > Annotations…): Offset1 made Black and
 #     Offset2 #862e9c through Custom…; shown at once; kept when the panel
 #     closes; Undo and Redo after it; saved, the design file has them.
 #   - The Annotations window's Text Height… (mitcad#894): Auto (2.5 mm for
@@ -164,8 +164,10 @@ echo "--- Measure open"
 ui_mark
 ui_step "measure (I)"                      ui_key i
 ui_expect_new "Command Measure started" "measure started"
-wait_enabled "Measure Annotations"
-ui_step "Annotations…"                     ui_click_logged "Measure Annotations"
+ui_expect_new "Measure Annotate at" "the panel has Annotate"
+ui_step "Annotate"                         ui_click_logged "Measure Annotate"
+ui_expect_new "Context menu: Note… | Datum Label… | Frame… | Hole Callout | Annotations…" "Annotate's menu"
+ui_step "Annotations… (A)"                 ui_key a
 ui_expect_new "Annotations window opened: 2 annotation(s)" "the window opened from the panel"
 # Its rows where they were laid out before (logged when they move).
 ui_sync

@@ -232,6 +232,11 @@ public:
   QListView* view() const { return m_view; }
   // The keys of the tiles shown, in order.
   QStringList shownKeys() const;
+  // Why no tile is shown although parts are listed (mitcad#1015): the
+  // group shown has none of them, under the search and the filters while
+  // they are on ("No parts in Wood with this search and these
+  // filters."). Empty while tiles are shown or no part is listed.
+  QString emptyReason() const;
   // Stars the current part, or turns its star off. Only the star changes
   // (mitcad#517): the tiles and the groups stay where they are, the
   // starred-first order applies the next time the list is made again.
@@ -270,7 +275,27 @@ protected:
   void hideEvent(QHideEvent* event) override;
 
 private:
+  // The groups' tree from the parts, then its rows (showGroups); logs
+  // "Part picker groups: ...".
   void fillGroups();
+  // The groups' rows (mitcad#1015): each ends with its count under the
+  // search and the filters ("Wood (12)"), a row with none greyed; the
+  // empty ones hidden (hiddenGroups), the chosen one kept.
+  void showGroups(const QHash<QString, int>& counts);
+  // After a search, a filter or another group (refill): the rows again
+  // when the rows to show changed (later when a group is being chosen,
+  // so that the click finds its row), else only their counts; logs the
+  // groups when they changed.
+  void updateGroups();
+  // The parts each row would show under the search and the filters, by the
+  // row's key (kFavourites, ..., a group's key with its subgroups').
+  QHash<QString, int> countGroups() const;
+  // The keys of the rows shown with these counts.
+  QSet<QString> shownGroups(const QHash<QString, int>& counts) const;
+  // A row's name with its count, and the count for the log and the grey.
+  void showCount(QTreeWidgetItem* item, const QHash<QString, int>& counts) const;
+  // A search or a filter off its "all" choice: empty groups hide.
+  bool filtering() const;
   void fillSystems();
   // The Supplier filter's choices from the parts (mitcad#949).
   void fillSuppliers();
@@ -285,9 +310,10 @@ private:
   // "Part picker tiles[ kept]: <tile> [xN], ..." for UI tests: the tiles in
   // their order (the first 24) with their use counts.
   void logTiles(bool kept) const;
-  // The groups in the order shown, by name, for the log; a folded one with
+  // The groups in the order shown, by name, for the log; with `counts`
+  // each with its count (mitcad#1015: "Wood (2)"); a folded one with
   // " (folded)", its subgroups left out.
-  QString groupsText() const;
+  QString groupsText(bool counts) const;
   void star(const QString& key);
   void starGroup(const QString& group);
   // A library's group starred: by its key, or (kept before mitcad#527) by
@@ -304,7 +330,14 @@ private:
   void showHover(const QModelIndex& index, const QPoint& global);
   void hideHover();
   QString groupName(const QString& group) const;
+  // The name on the group's row (without its count).
+  QString rowName(const QString& group) const;
   bool passes(const PickerPart& part) const;
+  // Whether the part is listed in the group (kFavourites, ..., or a group's
+  // key with its subgroups), before the search and the filters.
+  bool inGroupOf(const PickerPart& part, const QString& group) const;
+  // Whether the part passes the Supplier and System filters and the search.
+  bool passesFilters(const PickerPart& part) const;
   // The design's uses of the part: of its configuration row for a tile of
   // one (mitcad#518; the default row's include the uses placed without a
   // row), else of its component.
@@ -317,6 +350,17 @@ private:
   // empties it (mitcad#527).
   PartGroupPath m_groupPath;
   PartGroupTree m_tree;
+  // What the parts have besides the tree's groups: In this design, Other,
+  // Libraries to get (their rows, mitcad#418).
+  bool m_anyInDesign = false;
+  bool m_anyOther = false;
+  bool m_anyLibraries = false;
+  // The keys of the groups' rows made, and the groups last logged.
+  QSet<QString> m_groupRows;
+  QString m_groupsLogged;
+  // A group is being chosen (its row's click): the rows are made again
+  // after it.
+  bool m_choosingGroup = false;
   QString m_current;
   bool m_externalSearch = false;
   bool m_filling = false;

@@ -41,7 +41,7 @@ reports and tests last. The [index](#index) below lists every patch.
 | [fillet-edge-overflow.md](docs/fillet-edge-overflow.md) | 0010–0019, 0050–0077 | mitcad#121 | the rolling ball fillet where a contact leaves its face |
 | [fillet-crashes.md](docs/fillet-crashes.md) | 0020–0026 | mitcad#122, mitcad#133 | crashes, exceptions and wrong shapes of the fillet |
 | [fillet-corners.md](docs/fillet-corners.md) | 0130, 0210, 0211, 0280–0283, 0290, 0291, 0340–0342, 0400, 0401, 0410, 0430–0432, 0450, 0460, 0490, 0540 | mitcad#236, mitcad#330, mitcad#339, mitcad#341, mitcad#342 | the corners where a rounding ends |
-| [chamfers.md](docs/chamfers.md) | 0140–0149, 0380, 0381, 0480, 0481, 0530, 0531 | mitcad#240, mitcad#263 | chamfers wider than a face beside them |
+| [chamfers.md](docs/chamfers.md) | 0140–0149, 0380, 0381, 0480, 0481, 0530, 0531, 1090 | mitcad#240, mitcad#263, mitcad#1005 | chamfers wider than a face beside them; a corner's sharp edge limited by a common point on it |
 | [fillet-results.md](docs/fillet-results.md) | 0150–0153, 0200, 0230, 0240, 0241, 0270, 0271, 0300 | mitcad#239 | roundings whose results were invalid or failed |
 | [fillet-walks-and-contours.md](docs/fillet-walks-and-contours.md) | 0160, 0180, 0190, 0250, 0260, 0840, 0860, 0861, 0920 | mitcad#238, mitcad#241, mitcad#261, mitcad#307, mitcad#308, mitcad#434, mitcad#441, mitcad#464 | walks over a rounded rim; which edges a contour takes, with what radius |
 | [fillet-rolling-ball.md](docs/fillet-rolling-ball.md) | 0170–0172, 0390, 0391, 0500–0503 | mitcad#237, mitcad#378 | the blend rolling on an edge as a true rolling ball |
@@ -321,3 +321,4 @@ mitcad#77 and mitcad#79; their column names each one's report.
 | [1070](docs/meshing.md#1070-brepmesh-delabella-exact-signs) | mitcad#846 | Delabella: exact in-circle and orientation signs; an inconsistent hull fails instead of crashing or looping |
 | [1080](docs/meshing.md#1080-brepmesh-delabella-exact-signs-in-place) | mitcad#884 | Delabella: 1070's exact signs without the heap, and from exact differences directly |
 | [1081](docs/meshing.md#1081-brepmesh-face-checker-wire-boxes) | mitcad#884 | the healer's wire check: wires whose boxes are apart not searched against each other |
+| [1090](docs/chamfers.md#1090-chfi3d-sharp-edge-limited-only-by-a-common-point-on-it) | mitcad#1005 | a corner's sharp edge limited only by a common point that lies on it |

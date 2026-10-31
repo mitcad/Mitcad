@@ -119,6 +119,9 @@ const DrawingToolDef* drawingTool(const QString& id);
 constexpr int kToolGroups = 6;
 int toolGroup(const DrawingToolDef& tool);
 QString toolGroupName(int group);
+// The group's name as the window's ribbon has it (mitcad#1008: the
+// DRAWING tab's groups), "CREATE" … "TABLES"; empty past the last.
+QString toolGroupId(int group);
 
 // The command search's other words for a tool (mitcad#725): "leader" for
 // Note, "chain" for Baseline, "datum identifier" for Datum Label,

@@ -4,12 +4,14 @@
 // component's menu) with its sheet's size, orientation and projection
 // method, a drawing opened in its own view over the 3D view
 // (DrawingWorkspace) and back, the drawing tools as commands of the
-// window, and the view following the model.
+// window on the ribbon's DRAWING tab (mitcad#1008), and the view following
+// the model.
 #include "../MainWindow.hpp"
 
 #include <algorithm>
 #include <optional>
 
+#include <QAction>
 #include <QApplication>
 #include <QComboBox>
 #include <QDialog>
@@ -20,6 +22,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QKeySequence>
+#include <QLabel>
 #include <QtLogging>
 
 #include <gp_Dir.hxx>
@@ -27,6 +30,8 @@
 #include "../OcctViewer.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/Dialogs.hpp"
+#include "../framework/FloatingLayout.hpp"
+#include "../framework/Ribbon.hpp"
 #include "DrawingTemplates.hpp"
 #include "DrawingTools.hpp"
 #include "DrawingWorkspace.hpp"
@@ -173,9 +178,10 @@ drawings::DrawingWorkspace* MainWindow::drawingWorkspace() {
         m_viewer, *this, [this] { return drawingTitle(); }, [this] { return cameraOf(*m_viewer); },
         [this](const QKeySequence& key) {
           // A shortcut of the model's commands (a feature, a command of a
-          // ribbon tab), which would leave the drawing (trigger, mitcad#725).
+          // ribbon tab other than the drawing's), which would leave the
+          // drawing (trigger, mitcad#725).
           for (const auto& def : m_registry->commands()) {
-            if ((def->kind == CommandDef::Kind::Feature || !def->tab.isEmpty()) &&
+            if ((def->kind == CommandDef::Kind::Feature || (!def->tab.isEmpty() && !isDrawingCommand(*def))) &&
                 m_registry->effectiveShortcuts(def->id).contains(key)) {
               return true;
             }
@@ -185,10 +191,79 @@ drawings::DrawingWorkspace* MainWindow::drawingWorkspace() {
     connect(m_drawingWorkspace, &drawings::DrawingWorkspace::closed, this, [this] {
       m_drawingDesign.clear();
       m_viewer->setFocus(Qt::OtherFocusReason);
+      updateDrawingChrome();
       updateActions();
     });
+    // The tool on shows checked on the ribbon's DRAWING tab (mitcad#1008).
+    connect(m_drawingWorkspace, &drawings::DrawingWorkspace::toolChanged, this, [this](const QString& active) {
+      for (const drawings::DrawingToolDef& tool : drawings::drawingTools()) {
+        if (QAction* action = m_registry->action(tool.id)) {
+          action->setCheckable(true);
+          action->setChecked(tool.id == active);
+        }
+      }
+    });
+    if (m_cutLabelsAction != nullptr) {
+      m_drawingWorkspace->setCutLabels(m_cutLabelsAction->isChecked());
+    }
+    // The tools are the ribbon's (mitcad#1008), except in the AppKit
+    // frontend, whose ribbon has no DRAWING tab yet (native-coverage.txt):
+    // there the drawing keeps its own bar.
+    if (!m_nativeUi && m_ribbon != nullptr) {
+      m_drawingWorkspace->setRibbonTools([this](const QString& name) { return m_ribbon->placeOf(name); });
+      connect(m_ribbon, &Ribbon::placesLogged, m_drawingWorkspace, &drawings::DrawingWorkspace::logPlaces);
+    }
   }
   return m_drawingWorkspace;
+}
+
+bool MainWindow::isDrawingCommand(const CommandDef& def) {
+  return def.tab == QStringLiteral("DRAWING") || def.tab == QStringLiteral("CUT SHEET");
+}
+
+void MainWindow::updateDrawingChrome() {
+  const bool open = drawingOpen();
+  // The model's idle hint ("Create a sketch to start modelling…") says
+  // nothing about the drawing: it goes; a warning or an error stays, and
+  // the drawing's own messages come in the same place (mitcad#1008).
+  if (open && m_statusIsHint && !m_statusLabel->text().isEmpty()) {
+    showHint(QString());
+  }
+  if (m_nativeUi || m_ribbon == nullptr) {
+    return; // the AppKit frontend: the drawing's own bar
+  }
+  m_ribbon->setDrawingMode(open, open && m_drawingWorkspace->isCutSheet());
+  // The sheet takes the whole view: of the cards over it only the browser
+  // stays, from which another drawing is opened (mitcad#1008).
+  if (m_floating != nullptr) {
+    m_floating->showOnlyCards(open ? QStringList{QStringLiteral("browserDock")} : QStringList());
+  }
+}
+
+void MainWindow::addDrawingRibbonExtras() {
+  // A cut sheet's tab (mitcad#853, mitcad#1008): Close Drawing as the
+  // drawing's, and its Export: DXF…, SVG… and whether the parts' names go
+  // on the layer LABEL.
+  QAction* closeAction = m_registry->action(QStringLiteral("drawing.close"));
+  QAction* dxfAction = m_registry->action(QStringLiteral("drawing.export_dxf"));
+  QAction* svgAction = m_registry->action(QStringLiteral("drawing.export_svg"));
+  m_cutLabelsAction = new QAction(tr("Part Names on the LABEL Layer"), this);
+  m_cutLabelsAction->setCheckable(true);
+  connect(m_cutLabelsAction, &QAction::toggled, this, [this](bool on) {
+    if (m_drawingWorkspace != nullptr) {
+      m_drawingWorkspace->setCutLabels(on);
+    }
+  });
+  auto* separator = new QAction(this);
+  separator->setSeparator(true);
+  if (closeAction != nullptr) {
+    m_ribbon->addGroupExtras(QStringLiteral("CUT SHEET"), QStringLiteral("CLOSE DRAWING"), {closeAction},
+                             {closeAction});
+  }
+  if (dxfAction != nullptr && svgAction != nullptr) {
+    m_ribbon->addGroupExtras(QStringLiteral("CUT SHEET"), QStringLiteral("EXPORT"),
+                             {dxfAction, svgAction, separator, m_cutLabelsAction});
+  }
 }
 
 QString MainWindow::drawingTitle() const {
@@ -198,11 +273,14 @@ QString MainWindow::drawingTitle() const {
 bool MainWindow::drawingOpen() const { return m_drawingWorkspace != nullptr && m_drawingWorkspace->isOpen(); }
 
 void MainWindow::registerDrawingCommands() {
-  // The drawing tools and Close Drawing as the window's commands: the
-  // command search and the shortcuts find them, enabled while a drawing
-  // is open. On no ribbon tab: the drawing's own bar shows them, and a
-  // command with a tab would lead back to the 3D view (trigger).
+  // The drawing tools, Close Drawing and the exports as the window's
+  // commands: the command search and the shortcuts find them, enabled
+  // while a drawing is open. On the ribbon's DRAWING tab (mitcad#1008),
+  // shown only while a drawing is open; a command of the drawing's tabs
+  // does not lead back to the 3D view (trigger, isDrawingCommand).
+  // `when`: for a drawing ("drawing"), a cut sheet ("cut") or either ("").
   const auto add = [this](const QString& id, const QString& name, const QString& icon, const QString& tooltip,
+                          const QString& tab, const QString& group, bool pinned, const QString& when,
                           std::function<void()> run) {
     CommandDef def;
     def.id = id;
@@ -211,29 +289,68 @@ void MainWindow::registerDrawingCommands() {
     def.tooltip = tooltip;
     def.kind = CommandDef::Kind::Action;
     def.mode = CommandDef::Mode::Model;
-    def.tab.clear();
+    def.tab = tab;
+    def.group = group;
+    def.pinned = pinned;
     // The tools' other words (Leader, Chain, BOM, …; mitcad#725).
     def.keywords = drawings::toolKeywords(id);
     def.run = std::move(run);
-    def.enabled = [this] { return drawingOpen(); };
+    def.enabled = [this, when] {
+      if (!drawingOpen()) {
+        return false;
+      }
+      return when.isEmpty() || m_drawingWorkspace->isCutSheet() == (when == QStringLiteral("cut"));
+    };
     m_registry->add(def);
   };
+  const QString drawingTab = QStringLiteral("DRAWING");
+  add(QStringLiteral("drawing.close"), tr("Close Drawing"), QStringLiteral("view-arrow-left"),
+      tr("Shows the 3D model again"), drawingTab, QStringLiteral("CLOSE DRAWING"), true, QString(),
+      [this] { leaveDrawing(); });
   for (const drawings::DrawingToolDef& tool : drawings::drawingTools()) {
     const QString id = tool.id;
     // The drawing's Parts List is told apart from the Build tab's in the
-    // command search (mitcad#718); on the drawing's bar it keeps its name.
+    // command search (mitcad#718).
     const QString name = id == QStringLiteral("drawing.parts_list") ? tr("Parts List (Drawing)") : tool.name;
-    add(id, name, tool.icon, tool.tooltip, [this, id] {
-      if (drawingOpen()) {
-        m_drawingWorkspace->startTool(id);
-      }
-    });
+    add(id, name, tool.icon, tool.tooltip, drawingTab, drawings::toolGroupId(drawings::toolGroup(tool)), true,
+        QStringLiteral("drawing"), [this, id] {
+          if (drawingOpen()) {
+            m_drawingWorkspace->startTool(id);
+          }
+        });
   }
-  add(QStringLiteral("drawing.close"), tr("Close Drawing"), QStringLiteral("view-arrow-left"),
-      tr("Shows the 3D model again"), [this] { leaveDrawing(); });
-  // A row of the drawing's revision table (mitcad#707 phase 4).
+  // Export: the menu of the group's caption, as the bar's Export… had it;
+  // DXF and SVG also a cut sheet's (its tab's extras, addDrawingRibbonExtras).
+  struct ExportFormat {
+    const char* format;
+    const char* label;
+    const char* kind;
+  };
+  static const ExportFormat formats[] = {
+      {"pdf", "PDF…", "drawing"}, {"svg", "SVG…", ""}, {"dxf", "DXF…", ""}, {"dwg", "DWG…", "drawing"}};
+  for (const ExportFormat& exported : formats) {
+    const QString suffix = QString::fromLatin1(exported.format);
+    add(QStringLiteral("drawing.export_") + suffix, tr(exported.label), QStringLiteral("export"),
+        tr("Writes the drawing as a %1 file").arg(suffix.toUpper()), drawingTab, QStringLiteral("EXPORT"), false,
+        QString::fromLatin1(exported.kind), [this, suffix] {
+          if (drawingOpen()) {
+            m_drawingWorkspace->exportDrawing(suffix);
+          }
+        });
+  }
+  // A cut sheet's Add Parts… (mitcad#853), on its CUT SHEET tab.
+  add(QStringLiteral("drawing.add_parts"), tr("Add Parts…"), QStringLiteral("add"),
+      tr("Adds bodies as flat parts, each seen along its largest planar face"), QStringLiteral("CUT SHEET"),
+      QStringLiteral("PARTS"), true, QStringLiteral("cut"), [this] {
+        if (drawingOpen()) {
+          m_drawingWorkspace->addParts();
+        }
+      });
+  // A row of the drawing's revision table (mitcad#707 phase 4): the bar's
+  // button above the sheet, no tab's.
   add(QStringLiteral("drawing.add_revision"), tr("Add Revision…"), QStringLiteral("version-history"),
-      tr("Adds a row to the drawing's revision table"), [this] {
+      tr("Adds a row to the drawing's revision table"), QString(), QStringLiteral("CREATE"), false,
+      QStringLiteral("drawing"), [this] {
         if (drawingOpen()) {
           m_drawingWorkspace->addRevision();
         }
@@ -250,6 +367,7 @@ void MainWindow::openDrawing(const QString& uid) {
     m_drawingDesign.clear();
     showStatus(tr("There is no drawing %1.").arg(uid), true);
   }
+  updateDrawingChrome();
   updateActions();
 }
 

@@ -204,4 +204,19 @@ QString keyOption(const QString& table, const QString& column, const QStringList
 // order; the cells the Rows sheet marks.
 QStringList optionsNamed(const QStringList& options, const Refusal& refusal);
 
+// A closed table's parameter columns (mitcad#999): the other parameters
+// its rows set, as the d, P, s and k of a library screw.
+
+// The user parameters Add Column offers: those that are neither an option
+// nor a column already, in the model's order.
+QStringList columnCandidates(const Table& table, const QStringList& userParameters);
+// Add Column: the table, closed, with `parameter` among its `parameters`
+// and every row's value of it `expression` (the parameter's current
+// expression). An option or a column already gives the table unchanged.
+Table withColumn(const Table& table, const QString& parameter, const QString& expression);
+// Remove Column: the table without the column and the rows' values of it;
+// the parameter itself stays. A parameter that is no column gives the
+// table unchanged.
+Table withoutColumn(const Table& table, const QString& parameter);
+
 } // namespace mitcad::configurations

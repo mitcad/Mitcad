@@ -903,6 +903,19 @@ design in a project.
   command computes the result and refuses it unless every body and
   occurrence is where the turn takes it
   ([commands.md](../core/model-api/src/commands.md), "Reorient Design").
+- **Mortise and Tenon** (mitcad#1012,
+  `core/model/src/features/mortise_tenon.rs`): no kernel method of its
+  own. The model places the tenon on the end face from the face's plane
+  and edges (`Kernel::face_plane`, `Kernel::curves_of`: the width along
+  the longest straight edge, the face's extent for the centring and the
+  fit), builds the tenon and the mortise (the tenon grown by the
+  clearance, its corners round by the tool's radius) as regions in code
+  extruded by `Kernel::extrude_feature`, and changes two bodies in one
+  feature: the mortise cut first (a tenon that reaches nothing is refused
+  as such), then the tenon joined. A through tenon's length is where the
+  mortise body ends along the tenon's middle (`Kernel::segment_crossings`)
+  ([commands.md](../core/model-api/src/commands.md), "Mortise and
+  Tenon").
 
 ### Units
 
@@ -2281,8 +2294,11 @@ same panels, so object names and the positions the UI tests click are
 the same in both. The ribbon's workspace tabs are Solid and Build
 (mitcad#375: slot-profile assemblies, whose commands call only the
 model's BUILD commands and queries; app/COMMANDS.md, *BUILD*), with Sketch
-after them while a sketch is edited; the AppKit frontend lists BUILD's
-commands in a menu.
+after them while a sketch is edited; while a drawing is open the Drawing
+tab alone (Cut Sheet for a cut sheet) holds the drawing's tools and the
+drawing covers the whole 3D view (mitcad#1008; app/COMMANDS.md,
+*Drawings*); the AppKit frontend lists BUILD's commands in a menu and
+keeps a drawing's tools on its own bar.
 
 Docked has a look of its own, `WindowStyle` (`app/framework/WindowStyle`,
 mitcad#251), the same on every platform and in both themes: the docks and
@@ -2981,7 +2997,8 @@ wired in `files/MainWindowLive.cpp`):
   open design (`open`) itself. Tests run against a broker in the test process and against
 mosquitto (a test tool from the dev-env setup scripts, not shipped) when
 it is installed; fuzz targets for the decoder and the readers are in
-`core/vcs/fuzz` (nightly, by hand).
+`core/vcs/fuzz` (nightly, by hand), those of the file readers in
+`core/fuzz` ([development.md](development.md#fuzz-targets-of-the-file-readers)).
 
 ### Component libraries
 

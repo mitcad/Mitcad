@@ -1,12 +1,13 @@
 [
   {"comment": "SPDX-License-Identifier: MIT"},
-  {"comment": "Configurations (mitcad#807): Color and Length as options, a 20 x 20 mm extrusion Length long, one row and the rule Black is short."},
+  {"comment": "Configurations (mitcad#807): Color and Length as options, a 20 x 20 mm extrusion Length + Extra long (Extra 0 mm, no option: a parameter column of mitcad#999), one row and the rule Black is short."},
   {"cmd": "add_parameter", "name": "Color", "unit": "Text", "expression": "'White'", "values": ["'Black'", "'White'"]},
   {"cmd": "add_parameter", "name": "Length", "unit": "mm", "expression": "1500 mm", "min": "300 mm", "max": "2000 mm", "step": "10 mm"},
+  {"cmd": "add_parameter", "name": "Extra", "unit": "mm", "expression": "0 mm"},
   {"cmd": "sketch.create"},
   {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 20},
   {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
-    "extent": {"type": "distance", "distance": "Length"}, "operation": "new_body"}},
+    "extent": {"type": "distance", "distance": "Length + Extra"}, "operation": "new_body"}},
   {"cmd": "set_configurations", "configurations": {
     "options": ["Color", "Length"], "closed": false,
     "rows": [{"name": "Short", "values": {"Color": "'White'", "Length": "800 mm"}}],
