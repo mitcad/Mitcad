@@ -258,8 +258,7 @@ fn a_new_body_in_a_hidden_occurrence_is_reported_hidden() {
 
 #[test]
 fn a_linked_components_bodies_keep_their_occurrences_in_a_preview() {
-    let dir = std::env::temp_dir().join(format!("mitcad-preview-placement-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("preview-placement");
     let mut part = Document::new(MockKernel::default());
     block(&mut part, 6.0);
     std::fs::write(dir.join("part.mitcad"), part.to_json()).unwrap();

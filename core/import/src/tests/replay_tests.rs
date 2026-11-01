@@ -121,7 +121,7 @@ fn input_provenance_keeps_unknowns_and_reports_the_last_sketch_default() {
     assert!(
         guessed
             .text()
-            .contains("modelling inputs: 0 read, 1 inferred, 0 unknown")
+            .contains("modeling inputs: 0 read, 1 inferred, 0 unknown")
     );
 }
 
@@ -173,7 +173,7 @@ fn sketches_and_extrudes_replay_with_parameters() {
             .note
             .as_deref()
             .unwrap()
-            .contains("PolygonConstraint: a polygon needs its corners and centre")
+            .contains("PolygonConstraint: a polygon needs its corners and center")
     );
     let sketch = doc.feature(FeatureUid(1)).unwrap();
     assert_eq!(sketch.name, "Sketch1");

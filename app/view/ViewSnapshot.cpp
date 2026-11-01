@@ -43,13 +43,13 @@ void ViewController::exportSnapshot() {
     const QImage image = m_viewer.snapshot(chosen.size, chosen.transparent, chosen.measurements, chosen.group);
     const QString shownPath = QDir::toNativeSeparators(chosen.path);
     if (image.isNull() || !image.save(chosen.path)) {
-      m_host.showStatus(tr("The snapshot cannot be saved as %1.").arg(shownPath), true);
+      m_host.showStatus(tr("The snapshot cannot be saved as %1.").arg(shownPath), NoticeLevel::Error);
       qWarning().noquote() << QStringLiteral("Snapshot not saved: %1 (%2)")
                                   .arg(chosen.path, image.isNull() ? QStringLiteral("the view rendered no picture")
                                                                    : QStringLiteral("the file cannot be written"));
       return;
     }
-    m_host.showStatus(tr("Snapshot saved as %1.").arg(shownPath), false);
+    m_host.showStatus(tr("Snapshot saved as %1.").arg(shownPath), NoticeLevel::Information);
     int drawn = 0;
     if (chosen.measurements) {
       for (const MeasurementDisplay& m : m_viewer.measurements()) {

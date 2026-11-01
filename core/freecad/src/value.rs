@@ -343,7 +343,7 @@ pub(crate) fn parse_value(property: &Node<'_, '_>) -> Result<Value, String> {
 
 fn packed(node: &Node<'_, '_>, key: &str) -> Result<u32, String> {
     let value = attr_i64(node, key)?;
-    u32::try_from(value).map_err(|_| format!("{key}=\"{value}\" is not a packed colour"))
+    u32::try_from(value).map_err(|_| format!("{key}=\"{value}\" is not a packed color"))
 }
 
 /// The child elements of `node` named `name`.

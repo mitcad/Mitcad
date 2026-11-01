@@ -29,11 +29,24 @@
 //! tenon larger than the end face or offset past its edge, a tenon that
 //! does not reach the mortise body.
 //!
+//! With a `count` above 1 (mitcad#1063) the feature makes that many
+//! tenons, each with its mortise, spaced evenly along the face's long
+//! direction (its longest straight edge, whether or not `turned`): the
+//! first tenon's side `start_offset` from the face's end where that
+//! direction starts, the last one's `end_offset` from the other end
+//! (default 0 both), the same gap between each two. The offset along that
+//! direction is not used then (nor the start and end offsets at a count of
+//! 1); the other offset moves them all. Refused: a count that is not a
+//! whole number from 1 to [`MAX_TENONS`], negative offsets, offsets that
+//! leave less than a tenon, and tenons whose mortises would overlap or
+//! touch.
+//!
 //! Face names: the tenon's sides `side(c1)` … `side(c4)` (rounded: lines
 //! `c1`, `c3`, `c5`, `c7` and the round edges `c2`, `c4`, `c6`, `c8`),
 //! counter-clockwise from the side along the width at -thickness / 2; its
 //! tip `end(…)`. The mortise's walls `side(c11)` … (`c11` … `c18`) in the
-//! same order and its bottom `end(…)`.
+//! same order and its bottom `end(…)`. Tenon `k` of several (from 0, from
+//! the start) has the curves `20 k` on: `c21` …, its mortise `c31` ….
 
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +77,12 @@ const THROUGH_PAST: f64 = 1.0;
 
 /// Slack of the fit checks, mm.
 const SLACK: f64 = 1e-6;
+
+/// The most tenons of one feature.
+pub const MAX_TENONS: f64 = 100.0;
+
+/// How far apart the curve ids of two tenons (and of their mortises) are.
+const CURVE_STRIDE: u32 = 20;
 
 const NO_LENGTH: &str = "a tenon that is not through needs a length";
 const NO_TOOL: &str = "rounded corners need a tool diameter";
@@ -123,6 +142,17 @@ pub struct MortiseTenonDef<P = ParamId> {
     /// The cutter's diameter of rounded corners.
     #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
     pub tool_diameter: Option<P>,
+    /// How many tenons along the face's long direction; default 1
+    /// (mitcad#1063).
+    #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+    pub count: Option<P>,
+    /// Of several tenons: the first one's side from the face's end where
+    /// its long direction starts; default 0.
+    #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+    pub start_offset: Option<P>,
+    /// The last one's side from the other end; default 0.
+    #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+    pub end_offset: Option<P>,
 }
 
 impl<P> MortiseTenonDef<P> {
@@ -144,6 +174,9 @@ impl<P> MortiseTenonDef<P> {
             clearance: option,
             corners: copy,
             tool_diameter: option,
+            count: option,
+            start_offset: option,
+            end_offset: option,
         }
     }
 }
@@ -159,6 +192,10 @@ struct Sizes {
     clearance: f64,
     /// The mortise's corner radius; 0 for square corners.
     radius: f64,
+    /// How many tenons; 1 or more.
+    count: usize,
+    /// Of several tenons: the start and end offsets along the face.
+    ends: [f64; 2],
 }
 
 impl Sizes {
@@ -185,6 +222,22 @@ impl Sizes {
             Corners::Square => 0.0,
             Corners::Rounded => optional(def.tool_diameter)?.ok_or(NO_TOOL)? / 2.0,
         };
+        let count = optional(def.count)?.unwrap_or(1.0);
+        if !count.is_finite()
+            || (count - count.round()).abs() > 1e-9
+            || !(1.0..=MAX_TENONS).contains(&count.round())
+        {
+            return Err(mitcad_model_base::internal::parameters::count_error(
+                format!(
+                    "the count of tenons must be a whole number from 1 to {MAX_TENONS}, got {count}"
+                ),
+                count,
+            ));
+        }
+        let ends = [
+            optional(def.start_offset)?.unwrap_or(0.0),
+            optional(def.end_offset)?.unwrap_or(0.0),
+        ];
         let sizes = Sizes {
             width,
             thickness,
@@ -192,6 +245,8 @@ impl Sizes {
             offset,
             clearance,
             radius,
+            count: count.round() as usize,
+            ends,
         };
         sizes.check(def.corners)?;
         Ok(sizes)
@@ -206,6 +261,13 @@ impl Sizes {
         for offset in self.offset {
             if !offset.is_finite() {
                 return Err(format!("the tenon's offset must be a length, got {offset}"));
+            }
+        }
+        for (what, offset) in ["start", "end"].into_iter().zip(self.ends) {
+            if offset < 0.0 || !offset.is_finite() {
+                return Err(format!(
+                    "the {what} offset must not be negative, got {offset}"
+                ));
             }
         }
         if self.clearance < 0.0 || !self.clearance.is_finite() {
@@ -301,34 +363,56 @@ impl<K: Kernel> Evaluate<K> for MortiseTenonDef {
             .curves_of(&tenon_body, &TopoName::Face(face.clone()))
             .map_err(kernel_error)?;
         let end = EndFace::new(plane.origin, z, &curves, self.turned)?;
-        let frame = end.tenon_frame(&sizes)?;
-        let length = match sizes.length {
-            Some(length) => length,
-            None => through_length(ctx.kernel, &mortise_body, frame.origin, z)
-                .map_err(kernel_error)?
-                .ok_or_else(|| not_reaching(self.mortise_body))?,
-        };
+        // The first tenon's frame and every tenon's middle in it.
+        let (frame, centres) = end.tenon_frames(&sizes)?;
+        let mut lengths = Vec::with_capacity(centres.len());
+        for centre in &centres {
+            lengths.push(match sizes.length {
+                Some(length) => length,
+                None => through_length(ctx.kernel, &mortise_body, frame.point(*centre), z)
+                    .map_err(kernel_error)?
+                    .ok_or_else(|| not_reaching(self.mortise_body))?,
+            });
+        }
+        // Tenons one after another of one length are extruded together.
+        let mut groups: Vec<(f64, Vec<usize>)> = Vec::new();
+        for (k, &length) in lengths.iter().enumerate() {
+            let same = groups
+                .last()
+                .is_some_and(|(first, _)| (first - length).abs() <= SLACK);
+            if !same {
+                groups.push((length, Vec::new()));
+            }
+            if let Some((_, members)) = groups.last_mut() {
+                members.push(k);
+            }
+        }
+        let stride = |k: usize| CURVE_STRIDE * k as u32;
         let c = sizes.clearance;
-        // The mortise first: a tenon that does not reach the body is
+        // The mortises first: a tenon that does not reach the body is
         // refused as such.
-        let depth = if self.through {
-            length + c + THROUGH_PAST
-        } else {
-            length + c
-        };
-        let mortise = extrude(
-            ctx,
-            frame,
-            rectangle(
-                11,
-                sizes.width + 2.0 * c,
-                sizes.thickness + 2.0 * c,
-                sizes.radius,
-            ),
-            z,
-            0.0,
-            depth,
-        )?;
+        let mut mortises = Vec::with_capacity(groups.len());
+        for (length, members) in &groups {
+            let depth = if self.through {
+                length + c + THROUGH_PAST
+            } else {
+                length + c
+            };
+            let regions: Vec<ProfileRegion> = members
+                .iter()
+                .map(|k| {
+                    rectangle(
+                        11 + stride(*k),
+                        sizes.width + 2.0 * c,
+                        sizes.thickness + 2.0 * c,
+                        sizes.radius,
+                        centres[*k],
+                    )
+                })
+                .collect();
+            mortises.push(extrude(ctx, frame, &regions, z, 0.0, depth)?);
+        }
+        let mortise = one_shape(ctx.kernel, mortises)?;
         // (apply_tool's words for a tool that touches none of its bodies.)
         let missed = "the mortise does not cut into any participant body";
         let mut changes = apply_tool(
@@ -345,17 +429,26 @@ impl<K: Kernel> Evaluate<K> for MortiseTenonDef {
                 e
             }
         })?;
-        // The tenon starts a little inside its body, so that it overlaps
-        // the body instead of touching it.
-        let delta = (length * 0.05).clamp(1e-3, 0.5);
-        let tenon = extrude(
-            ctx,
-            frame,
-            rectangle(1, sizes.width, sizes.thickness, sizes.tenon_radius()),
-            z,
-            -delta,
-            length + delta,
-        )?;
+        // The tenons start a little inside their body, so that they
+        // overlap the body instead of touching it.
+        let mut tenons = Vec::with_capacity(groups.len());
+        for (length, members) in &groups {
+            let delta = (length * 0.05).clamp(1e-3, 0.5);
+            let regions: Vec<ProfileRegion> = members
+                .iter()
+                .map(|k| {
+                    rectangle(
+                        1 + stride(*k),
+                        sizes.width,
+                        sizes.thickness,
+                        sizes.tenon_radius(),
+                        centres[*k],
+                    )
+                })
+                .collect();
+            tenons.push(extrude(ctx, frame, &regions, z, -delta, length + delta)?);
+        }
+        let tenon = one_shape(ctx.kernel, tenons)?;
         changes.extend(apply_tool(
             ctx,
             BooleanOp::Join,
@@ -375,11 +468,19 @@ fn not_reaching(body: BodyUid) -> String {
     format!("the tenon does not reach body {body}")
 }
 
-/// The extrusion of `region` along `z` from `start` for `distance`.
+/// One shape of several: the only one, or their compound.
+fn one_shape<K: Kernel>(kernel: &K, mut shapes: Vec<K::Shape>) -> Result<K::Shape, String> {
+    if shapes.len() == 1 {
+        return Ok(shapes.remove(0));
+    }
+    kernel.compound(&shapes).map_err(kernel_error)
+}
+
+/// The extrusion of `regions` along `z` from `start` for `distance`.
 fn extrude<K: Kernel>(
     ctx: &EvalContext<'_, K>,
     frame: SketchFrame,
-    region: ProfileRegion,
+    regions: &[ProfileRegion],
     z: [f64; 3],
     start: f64,
     distance: f64,
@@ -388,7 +489,7 @@ fn extrude<K: Kernel>(
         .extrude_feature(&ExtrudeFeatureSpec {
             feature: ctx.uid,
             frame,
-            regions: std::slice::from_ref(&region),
+            regions,
             direction: z,
             start: ExtrudeStart::Offset(start),
             side1: ExtrudeSide {
@@ -435,6 +536,8 @@ struct EndFace {
     y: [f64; 3],
     min: [f64; 2],
     max: [f64; 2],
+    /// x runs across the longest edge, -y along it.
+    turned: bool,
 }
 
 impl EndFace {
@@ -492,17 +595,19 @@ impl EndFace {
             y,
             min,
             max,
+            turned,
         })
     }
 
-    /// The tenon's frame: its middle on the face, x along its width, y
-    /// along its thickness; refused when the tenon does not fit.
-    fn tenon_frame(&self, sizes: &Sizes) -> Result<SketchFrame, String> {
+    /// The first tenon's frame (its middle on the face, x along its width,
+    /// y along its thickness) and every tenon's middle in that frame (the
+    /// first at the origin); refused when the tenons do not fit.
+    fn tenon_frames(&self, sizes: &Sizes) -> Result<(SketchFrame, Vec<[f64; 2]>), String> {
         let size = [self.max[0] - self.min[0], self.max[1] - self.min[1]];
         let tenon = [sizes.width, sizes.thickness];
         if tenon[0] > size[0] + SLACK || tenon[1] > size[1] + SLACK {
             return Err(format!(
-                "the tenon ({} x {} mm) is larger than the end face ({} x {} mm)",
+                "the tenon ({} × {} mm) is larger than the end face ({} × {} mm)",
                 short_number(tenon[0]),
                 short_number(tenon[1]),
                 short_number(size[0]),
@@ -511,12 +616,24 @@ impl EndFace {
         }
         let middle: [f64; 2] =
             std::array::from_fn(|i| (self.min[i] + self.max[i]) / 2.0 + sizes.offset[i]);
-        // The shoulders: what the face leaves on each side of the tenon.
+        let middles = if sizes.count > 1 {
+            self.spaced(sizes, middle)?
+        } else {
+            vec![middle]
+        };
+        // The shoulders: what the face leaves on each side of the tenons.
+        let low = |i: usize| middles.iter().map(|m| m[i]).fold(f64::INFINITY, f64::min);
+        let high = |i: usize| {
+            middles
+                .iter()
+                .map(|m| m[i])
+                .fold(f64::NEG_INFINITY, f64::max)
+        };
         let shoulders = [
-            middle[0] - tenon[0] / 2.0 - self.min[0],
-            self.max[0] - middle[0] - tenon[0] / 2.0,
-            middle[1] - tenon[1] / 2.0 - self.min[1],
-            self.max[1] - middle[1] - tenon[1] / 2.0,
+            low(0) - tenon[0] / 2.0 - self.min[0],
+            self.max[0] - high(0) - tenon[0] / 2.0,
+            low(1) - tenon[1] / 2.0 - self.min[1],
+            self.max[1] - high(1) - tenon[1] / 2.0,
         ];
         if shoulders.iter().any(|s| *s < -SLACK) {
             return Err(format!(
@@ -528,14 +645,75 @@ impl EndFace {
                     .join(", ")
             ));
         }
-        Ok(SketchFrame {
+        let first = middles[0];
+        let frame = SketchFrame {
             origin: add(
                 self.origin,
-                add(scale(self.x, middle[0]), scale(self.y, middle[1])),
+                add(scale(self.x, first[0]), scale(self.y, first[1])),
             ),
             x_axis: self.x,
             y_axis: self.y,
-        })
+        };
+        let centres = middles
+            .iter()
+            .map(|m| [m[0] - first[0], m[1] - first[1]])
+            .collect();
+        Ok((frame, centres))
+    }
+
+    /// The middles of several tenons spaced evenly along the face's long
+    /// direction between the start and end offsets, `middle` across it.
+    fn spaced(&self, sizes: &Sizes, middle: [f64; 2]) -> Result<Vec<[f64; 2]>, String> {
+        // The long direction is x, or -y when turned; `u` runs along it.
+        let (along, sign) = if self.turned { (1, -1.0) } else { (0, 1.0) };
+        let (u_min, u_max) = if self.turned {
+            (-self.max[along], -self.min[along])
+        } else {
+            (self.min[along], self.max[along])
+        };
+        let a = if self.turned {
+            sizes.thickness
+        } else {
+            sizes.width
+        };
+        let [start, end] = sizes.ends;
+        let first = u_min + start + a / 2.0;
+        let last = u_max - end - a / 2.0;
+        if last < first - SLACK {
+            return Err(format!(
+                "the start and end offsets ({} and {} mm) leave less than a tenon's {} mm of \
+                 the end face ({} mm)",
+                short_number(start),
+                short_number(end),
+                short_number(a),
+                short_number(u_max - u_min)
+            ));
+        }
+        let n = sizes.count;
+        let pitch = (last - first).max(0.0) / (n - 1) as f64;
+        let mortise = a + 2.0 * sizes.clearance;
+        if pitch < a + SLACK {
+            return Err(format!(
+                "the {n} tenons overlap: {} mm along the face each, their middles {} mm apart",
+                short_number(a),
+                short_number(pitch)
+            ));
+        }
+        if pitch < mortise + SLACK {
+            return Err(format!(
+                "the mortises of the {n} tenons overlap: {} mm along the face each with the \
+                 clearance, their middles {} mm apart",
+                short_number(mortise),
+                short_number(pitch)
+            ));
+        }
+        Ok((0..n)
+            .map(|k| {
+                let mut m = middle;
+                m[along] = sign * (first + k as f64 * pitch);
+                m
+            })
+            .collect())
     }
 }
 
@@ -587,11 +765,11 @@ fn curve(n: u32) -> EntityUid {
     EntityUid(n)
 }
 
-/// A rectangle `a` along x and `b` along y centred on the origin, its
+/// A rectangle `a` along x and `b` along y centred on `centre`, its
 /// corners rounded by `radius` (none at 0): lines `c<first>` … `c<first +
 /// 3>`, or with round corners lines and arcs `c<first>` … `c<first + 7>`,
 /// counter-clockwise from the side at -b / 2.
-fn rectangle(first: u32, a: f64, b: f64, radius: f64) -> ProfileRegion {
+fn rectangle(first: u32, a: f64, b: f64, radius: f64, centre: [f64; 2]) -> ProfileRegion {
     let (x, y) = (a / 2.0, b / 2.0);
     let geometries: Vec<SegmentGeometry> = if radius <= 0.0 {
         let corners = [[-x, -y], [x, -y], [x, y], [-x, y]];
@@ -636,12 +814,30 @@ fn rectangle(first: u32, a: f64, b: f64, radius: f64) -> ProfileRegion {
     };
     let n = geometries.len() as u32;
     let id = |i: u32| curve(first + (i % n));
+    let moved = |p: [f64; 2]| [p[0] + centre[0], p[1] + centre[1]];
     let segments: Vec<ProfileSegment> = geometries
         .into_iter()
         .zip(0..n)
         .map(|(geometry, i)| ProfileSegment {
             key: SegmentKey::between(id(i), id(i + n - 1), id(i + 1)),
-            geometry,
+            geometry: match geometry {
+                SegmentGeometry::Line { start, end } => SegmentGeometry::Line {
+                    start: moved(start),
+                    end: moved(end),
+                },
+                SegmentGeometry::Arc {
+                    center,
+                    radius,
+                    start_angle,
+                    end_angle,
+                } => SegmentGeometry::Arc {
+                    center: moved(center),
+                    radius,
+                    start_angle,
+                    end_angle,
+                },
+                other => other,
+            },
         })
         .collect();
     let key = RegionKey::new(segments.iter().map(|s| s.key.clone())).expect("a loop has segments");
@@ -678,6 +874,8 @@ mod tests {
             offset,
             clearance: 0.1,
             radius: 0.0,
+            count: 1,
+            ends: [0.0, 0.0],
         }
     }
 
@@ -696,17 +894,19 @@ mod tests {
     #[test]
     fn a_tenon_is_centred_offset_or_refused_when_it_does_not_fit() {
         let face = end_face(false);
-        let frame = face.tenon_frame(&sizes(40.0, 8.0, [0.0, 0.0])).unwrap();
+        let frame = face.tenon_frames(&sizes(40.0, 8.0, [0.0, 0.0])).unwrap().0;
         assert_eq!(frame.origin, [0.0, 10.0, 30.0]);
-        let frame = face.tenon_frame(&sizes(40.0, 8.0, [10.0, 6.0])).unwrap();
+        let frame = face.tenon_frames(&sizes(40.0, 8.0, [10.0, 6.0])).unwrap().0;
         assert_eq!(frame.origin, [0.0, 4.0, 40.0]);
-        let error = face.tenon_frame(&sizes(70.0, 8.0, [0.0, 0.0])).unwrap_err();
+        let error = face
+            .tenon_frames(&sizes(70.0, 8.0, [0.0, 0.0]))
+            .unwrap_err();
         assert_eq!(
             error,
-            "the tenon (70 x 8 mm) is larger than the end face (60 x 20 mm)"
+            "the tenon (70 × 8 mm) is larger than the end face (60 × 20 mm)"
         );
         let error = face
-            .tenon_frame(&sizes(40.0, 8.0, [11.0, 0.0]))
+            .tenon_frames(&sizes(40.0, 8.0, [11.0, 0.0]))
             .unwrap_err();
         assert_eq!(
             error,
@@ -714,9 +914,72 @@ mod tests {
         );
     }
 
+    fn several(width: f64, thickness: f64, count: usize, ends: [f64; 2]) -> Sizes {
+        Sizes {
+            count,
+            ends,
+            ..sizes(width, thickness, [0.0, 0.0])
+        }
+    }
+
+    #[test]
+    fn several_tenons_are_spaced_from_the_start_of_the_long_direction() {
+        // Along z from 5 to 55: middles at z = 10, 30 and 50.
+        let face = end_face(false);
+        let (frame, centres) = face
+            .tenon_frames(&several(10.0, 8.0, 3, [5.0, 5.0]))
+            .unwrap();
+        assert_eq!(frame.origin, [0.0, 10.0, 10.0]);
+        assert_eq!(centres, vec![[0.0, 0.0], [20.0, 0.0], [40.0, 0.0]]);
+        // Turned: the thickness along z, which is -y; from z = 5 to 45,
+        // middles at z = 10, 25 and 40.
+        let turned = end_face(true);
+        let (frame, centres) = turned
+            .tenon_frames(&several(8.0, 10.0, 3, [5.0, 15.0]))
+            .unwrap();
+        assert_eq!(frame.origin, [0.0, 10.0, 10.0]);
+        assert_eq!(centres, vec![[0.0, 0.0], [0.0, -15.0], [0.0, -30.0]]);
+        // The offset across still moves them; the one along is not used.
+        let mut moved = several(10.0, 8.0, 3, [5.0, 5.0]);
+        moved.offset = [7.0, 2.0];
+        let (frame, _) = face.tenon_frames(&moved).unwrap();
+        assert_eq!(frame.origin, [0.0, 8.0, 10.0]);
+    }
+
+    #[test]
+    fn several_tenons_that_do_not_fit_are_refused() {
+        let face = end_face(false);
+        let refused = |sizes: Sizes| face.tenon_frames(&sizes).unwrap_err();
+        assert_eq!(
+            refused(several(20.0, 8.0, 3, [5.0, 5.0])),
+            "the 3 tenons overlap: 20 mm along the face each, their middles 15 mm apart"
+        );
+        // Touching tenons are refused too, and mortises that overlap.
+        assert_eq!(
+            refused(several(20.0, 8.0, 3, [0.0, 0.0])),
+            "the 3 tenons overlap: 20 mm along the face each, their middles 20 mm apart"
+        );
+        assert_eq!(
+            refused(several(19.9, 8.0, 3, [0.0, 0.0])),
+            "the mortises of the 3 tenons overlap: 20.1 mm along the face each with the \
+             clearance, their middles 20.05 mm apart"
+        );
+        assert_eq!(
+            refused(several(10.0, 8.0, 2, [30.0, 25.0])),
+            "the start and end offsets (30 and 25 mm) leave less than a tenon's 10 mm of the \
+             end face (60 mm)"
+        );
+        let mut across = several(10.0, 8.0, 3, [5.0, 5.0]);
+        across.offset = [0.0, 7.0];
+        assert_eq!(
+            refused(across),
+            "the tenon's offset takes it past the end face's edge (shoulders 5, 5, 13, -1 mm)"
+        );
+    }
+
     #[test]
     fn rounded_rectangles_have_lines_and_quarter_arcs() {
-        let region = rectangle(11, 40.2, 8.2, 3.0);
+        let region = rectangle(11, 40.2, 8.2, 3.0, [0.0, 0.0]);
         let segments = &region.loops[0].segments;
         assert_eq!(segments.len(), 8);
         assert_eq!(
@@ -727,7 +990,12 @@ mod tests {
             segments[1].geometry,
             SegmentGeometry::Arc { radius, .. } if radius == 3.0
         ));
-        assert_eq!(rectangle(1, 40.0, 8.0, 0.0).loops[0].segments.len(), 4);
+        assert_eq!(
+            rectangle(1, 40.0, 8.0, 0.0, [0.0, 0.0]).loops[0]
+                .segments
+                .len(),
+            4
+        );
     }
 
     #[test]

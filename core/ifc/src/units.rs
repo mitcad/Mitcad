@@ -122,14 +122,14 @@ impl Units {
         let Some(project) = project.first() else {
             units
                 .notes
-                .push("the file has no IfcProject: metres and radians assumed".to_owned());
+                .push("the file has no IfcProject: meters and radians assumed".to_owned());
             return units;
         };
         // IfcContext: (..., RepresentationContexts, UnitsInContext) at 7, 8.
         let Some(assignment) = file.deref(project.arg(8)) else {
             units
                 .notes
-                .push("the project assigns no units: metres and radians assumed".to_owned());
+                .push("the project assigns no units: meters and radians assumed".to_owned());
             return units;
         };
         let mut seen_length = false;
@@ -171,7 +171,7 @@ impl Units {
         if !seen_length {
             units
                 .notes
-                .push("no length unit is assigned: metres assumed".to_owned());
+                .push("no length unit is assigned: meters assumed".to_owned());
         }
         units
     }

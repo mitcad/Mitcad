@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/platform/macos app/platform/NativeDialogs.hpp app/platform/NativeTestInput.hpp app/library/PartPicker
 # check-all sources: app/commands/BuildCommands.cpp app/framework/Dialogs.cpp app/framework/TestDriver tools/cli
-# Native Part Picker (mitcad#819): BUILD Profile's real Part tile opens the
+# Native Component Picker (mitcad#819): BUILD Profile's real Part tile opens the
 # shared picker in an AppKit utility panel with its pictured grid and
 # groups, never a Qt window; a click chooses the part while the keyboard
 # stays with the command; pinning keeps it over the command's end and the
 # next Profile takes it over; open-table options below the grid keep their
 # cascade, text-field commit and command choice; Close and Command-W return the keyboard to
-# the document, where the command goes on; light and dark appearance.
+# the document, where the command goes on; the focused accessibility
+# element stays on a live tile and, after a cancelled command, on the canvas
+# (mitcad#1025, mitcad#1026); light and dark appearance.
 # A local synthetic library of two pictured slot profiles, made here with
 # mitcad-cli (no supplier's files, no network).
 # Usage: tools/ui-macos-native-part-picker-test.sh <app> <mitcad-cli> <output>
@@ -166,7 +168,7 @@ for scheme in light dark; do
   MITCAD_TEST_COLOR_SCHEME=$scheme MITCAD_TEST_INPUT=$here/ui-scripts/native-macos-part-picker.mitcad-ui \
     ui_run_app "picker-$scheme" --ui=native --no-recovery --open "$MITCAD_TEST_WORK/start.mitcad"
   ui_expect_log 'Native UI: AppKit shell with embedded OCCT viewport' "$scheme: the native AppKit shell was used"
-  ui_expect_log 'TestDriver: done' "$scheme: the native Part Picker workflow completed"
+  ui_expect_log 'TestDriver: done' "$scheme: the native Component Picker workflow completed"
   ui_expect_log 'Part picker chose test-profiles/p30-test' "$scheme: a click on a tile chose the part"
   for problem in 'TestDriver: FAIL' 'Native Mac canvas:' 'OCCT view event failed' \
       'Unable to simultaneously satisfy constraints'; do
@@ -178,4 +180,4 @@ for scheme in light dark; do
     exit 1
   fi
 done
-echo "PASS: native Part Picker: production BUILD entry, pictured grid, focus, pin, close and reopen; $UI_OUT"
+echo "PASS: native Component Picker: production BUILD entry, pictured grid, focus, pin, close and reopen; $UI_OUT"

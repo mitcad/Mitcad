@@ -1136,7 +1136,7 @@ fn thread<K: Kernel>(
     }
     if t.modeled {
         notes.push(
-            "the modelled thread's profile is ISO 68-1's at the size's basic diameters".to_owned(),
+            "the modeled thread's profile is ISO 68-1's at the size's basic diameters".to_owned(),
         );
     }
     im.add(&def, Some(&f.name), component)?;
@@ -1188,7 +1188,7 @@ fn pattern<K: Kernel>(
                 let back = reversed ^ (alignment.as_deref() == Some("left"));
                 if symmetric && reversed {
                     notes.push(
-                        "a centred direction keeps its extra copy on the positive side".to_owned(),
+                        "a centered direction keeps its extra copy on the positive side".to_owned(),
                     );
                 }
                 let distance = if back && !symmetric {

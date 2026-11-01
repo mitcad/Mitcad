@@ -23,5 +23,6 @@ std::shared_ptr<geometry::Shape> chamfer(rust::Str feature, const geometry::Shap
                                          rust::Slice<const ChamferSet> sets, ChamferCornerKind corner);
 
 rust::Vec<rust::String> shape_notes(const geometry::Shape& shape);
+rust::Vec<rust::String> shape_infos(const geometry::Shape& shape);
 
 } // namespace mitcad::bridge

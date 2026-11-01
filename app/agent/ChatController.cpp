@@ -274,12 +274,21 @@ int ChatController::addEntry(const QJsonObject& entry) {
   return index;
 }
 
-void ChatController::notice(const QString& text, bool keep) {
+void ChatController::notice(const QString& text, NoticeLevel level, bool keep) {
   closeAnswer();
-  addEntry({{QStringLiteral("role"), QStringLiteral("notice")}, {QStringLiteral("text"), text}});
-  qInfo().noquote() << QStringLiteral("Chat notice: %1").arg(text);
+  QJsonObject entry{{QStringLiteral("role"), QStringLiteral("notice")}, {QStringLiteral("text"), text}};
+  // Its level (mitcad#1040): an error does not look like information.
+  if (level != NoticeLevel::Information) {
+    entry.insert(QStringLiteral("level"), noticeLevelName(level));
+  }
+  addEntry(entry);
+  if (level == NoticeLevel::Information) {
+    qInfo().noquote() << QStringLiteral("Chat notice: %1").arg(text);
+  } else {
+    qInfo().noquote() << QStringLiteral("Chat notice (%1): %2").arg(noticeLevelName(level), text);
+  }
   if (keep) {
-    record({{QStringLiteral("role"), QStringLiteral("notice")}, {QStringLiteral("text"), text}});
+    record(entry);
   }
 }
 
@@ -512,7 +521,7 @@ bool ChatController::startAgent(QString* error) {
 void ChatController::dispatch(const ChatAgent::Message& message, const QString& shown, bool retry) {
   QString error;
   if (!m_agent->running() && !startAgent(&error)) {
-    notice(tr("The message was not sent: %1").arg(error));
+    notice(tr("The message was not sent: %1").arg(error), NoticeLevel::Error);
     setActivity(Activity::Idle);
     return;
   }
@@ -526,7 +535,7 @@ void ChatController::dispatch(const ChatAgent::Message& message, const QString& 
   m_turn.startSketch = state.value(QStringLiteral("sketch")).toBool();
   if (!m_agent->send(message, &error)) {
     m_turn.active = false;
-    notice(tr("The message was not sent: %1").arg(error));
+    notice(tr("The message was not sent: %1").arg(error), NoticeLevel::Error);
     return;
   }
   ++m_messages;
@@ -570,12 +579,14 @@ void ChatController::onEvent(const QJsonObject& event) {
       m_session = session;
     }
     if (event.value(QStringLiteral("resume_failed")).toBool()) {
-      notice(tr("%1 could not go on with the earlier conversation; a new one started.").arg(m_agent->name()));
+      notice(tr("%1 could not go on with the earlier conversation; a new one started.").arg(m_agent->name()),
+             NoticeLevel::Warning);
     }
     if (bridge != QStringLiteral("connected") && bridge != QStringLiteral("pending")) {
       const QString why = event.value(QStringLiteral("bridge_error")).toString();
       notice(tr("MitCad's tools did not start in %1: %2")
-                 .arg(m_agent->name(), why.isEmpty() ? tr("the bridge is %1").arg(bridge) : why));
+                 .arg(m_agent->name(), why.isEmpty() ? tr("the bridge is %1").arg(bridge) : why),
+             NoticeLevel::Error);
     }
     if (m_activity == Activity::Starting) {
       setActivity(m_turn.active ? Activity::Working : Activity::Idle);
@@ -634,7 +645,8 @@ void ChatController::onEvent(const QJsonObject& event) {
       notice(tr("Stopped."));
     } else if (event.value(QStringLiteral("error")).toBool()) {
       const QString text = event.value(QStringLiteral("text")).toString();
-      notice(text.isEmpty() ? tr("%1 ended the message with an error (%2).").arg(m_agent->name(), subtype) : text);
+      notice(text.isEmpty() ? tr("%1 ended the message with an error (%2).").arg(m_agent->name(), subtype) : text,
+             NoticeLevel::Error);
     }
     endTurn(true);
     setActivity(Activity::Idle);
@@ -650,7 +662,8 @@ void ChatController::onEvent(const QJsonObject& event) {
     if (bridge == QStringLiteral("failed")) {
       const QString why = event.value(QStringLiteral("bridge_error")).toString();
       notice(tr("MitCad's tools did not start in %1: %2")
-                 .arg(m_agent->name(), why.isEmpty() ? tr("the bridge is %1").arg(bridge) : why));
+                 .arg(m_agent->name(), why.isEmpty() ? tr("the bridge is %1").arg(bridge) : why),
+             NoticeLevel::Error);
     }
   } else if (kind == QStringLiteral("status")) {
     qInfo().noquote() << QStringLiteral("Chat: %1 says %2 %3")
@@ -680,21 +693,22 @@ void ChatController::onExited(int code, const QString& errors, bool stopped) {
       m_resumable = false;
       m_resuming = false;
       setActivity(Activity::Idle);
-      notice(tr("%1 could not go on with the earlier conversation; a new one started.").arg(m_agent->name()));
+      notice(tr("%1 could not go on with the earlier conversation; a new one started.").arg(m_agent->name()),
+             NoticeLevel::Warning);
       dispatch(m_inFlight.first, m_inFlight.second, true);
       return;
     }
     if (stopped) {
       notice(tr("Stopped."));
     } else {
-      notice(tr("%1 ended: %2").arg(m_agent->name(), errors.isEmpty() ? tr("exit status %1").arg(code) : errors));
+      notice(tr("%1 ended: %2").arg(m_agent->name(), errors.isEmpty() ? tr("exit status %1").arg(code) : errors), NoticeLevel::Error);
     }
     endTurn(true);
   } else if (!stopped && !m_sawInit) {
-    notice(tr("%1 ended: %2").arg(m_agent->name(), errors.isEmpty() ? tr("exit status %1").arg(code) : errors));
+    notice(tr("%1 ended: %2").arg(m_agent->name(), errors.isEmpty() ? tr("exit status %1").arg(code) : errors), NoticeLevel::Error);
   }
   if (!m_queue.isEmpty()) {
-    notice(tr("%n waiting message(s) were not sent.", nullptr, int(m_queue.size())));
+    notice(tr("%n waiting message(s) were not sent.", nullptr, int(m_queue.size())), NoticeLevel::Warning);
     m_queue.clear();
   }
   setActivity(Activity::Idle);
@@ -708,7 +722,7 @@ void ChatController::stop() {
   qInfo().noquote() << QStringLiteral("Chat: Stop");
   denyCards(tr("The user stopped the message."));
   if (!m_queue.isEmpty()) {
-    notice(tr("%n waiting message(s) were not sent.", nullptr, int(m_queue.size())));
+    notice(tr("%n waiting message(s) were not sent.", nullptr, int(m_queue.size())), NoticeLevel::Warning);
     m_queue.clear();
   }
   setActivity(Activity::Stopping);

@@ -67,7 +67,7 @@ TextureUse textureUseCommand(const QString& sourceId, const TextureAsset& asset,
   TextureUse use;
   const QString base = files.maps.value(QStringLiteral("base_color"));
   if (base.isEmpty()) {
-    use.error = QObject::tr("%1 has no base colour image.").arg(asset.name);
+    use.error = QObject::tr("%1 has no base color image.").arg(asset.name);
     return use;
   }
   QJsonObject texture;

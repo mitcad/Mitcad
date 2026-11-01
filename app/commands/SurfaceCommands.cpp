@@ -366,7 +366,7 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
       checkInput(QStringLiteral("closed"), QObject::tr("Closed"), false)
           .withTooltip(QObject::tr("From the last section back to the first")),
       checkInput(QStringLiteral("ruled"), QObject::tr("Ruled"), false)
-          .withTooltip(QObject::tr("Straight between neighbouring sections")),
+          .withTooltip(QObject::tr("Straight between neighboring sections")),
   };
   def.enabled = [&context] { return hasSketches(context); };
   def.build = [](const CommandState& state, const CommandContext&) {

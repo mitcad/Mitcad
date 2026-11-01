@@ -241,7 +241,7 @@ pub(super) fn polygon(c: &SketchConstraint, s: &mut Sketch<'_>) -> Result<Group,
     let (center, corners) = names
         .split_last()
         .filter(|(c, rest)| c.1 == Kind::Point && rest.len() >= 3)
-        .ok_or("a polygon needs its corners and centre")?;
+        .ok_or("a polygon needs its corners and center")?;
     if corners.iter().any(|(_, k)| *k != Kind::Point) {
         return Err("a polygon's corners are points".to_owned());
     }
@@ -387,14 +387,14 @@ pub(super) fn circular_pattern(c: &SketchConstraint, s: &mut Sketch<'_>) -> Resu
         .and_then(|p| p.get("centerPoint"))
         .and_then(Value::as_str)
         .map(|id| RefOf::Local(id.to_owned()))
-        .ok_or("no centre point")?;
+        .ok_or("no center point")?;
     let center = s.names(&[center])?.remove(0).0;
     let (originals, created) = pattern_entities(c, s, Some(&center))?;
     let (_, quantity) = param(props, "quantity", s.params).ok_or("no quantity")?;
     let (angle_name, angle) = param(props, "totalAngle", s.params).ok_or("no angle")?;
     let count = quantity.round() as u32;
     if !(2..=1000).contains(&count) || angle == 0.0 {
-        return Err(format!("{count} instances over {angle} rad"));
+        return Err(format!("{count} copies over {angle} rad"));
     }
     let full = (angle.abs() - std::f64::consts::TAU).abs() < 1e-9;
     let step = if full {
@@ -471,7 +471,7 @@ pub(super) fn rectangular_pattern(
         let n = n.round() as u32;
         // (Symmetric about the originals: an odd count.)
         if sym && n.is_multiple_of(2) {
-            return Err(format!("a symmetric pattern of {n} instances"));
+            return Err(format!("a symmetric pattern of {n} copies"));
         }
         dirs.push((n, name, mm(dist), u, sym));
     }
@@ -481,7 +481,7 @@ pub(super) fn rectangular_pattern(
     }
     let (n1, n2) = (dirs[0].0, dirs[1].0);
     if n1 < 2 || n2 < 1 || u64::from(n1) * u64::from(n2) > 1000 {
-        return Err(format!("{n1} × {n2} instances"));
+        return Err(format!("{n1} × {n2} copies"));
     }
     // The originals' place among the instances.
     let origin = [

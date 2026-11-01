@@ -2,17 +2,20 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/commands app/framework app/browser app/view core/model-api/src core/model/src/document tools/cli
 # check-all sources: app/MainWindowMeasurements.cpp app/MainWindowMeasureHistory.cpp app/MainWindowAnnotations.cpp
+# check-all sources: app/MainWindowMake.cpp app/framework/Ribbon.cpp
 # Measurement objects (mitcad#649), now annotations (mitcad#702), through
 # the real UI, in the Docked layout, on two cylinders of radius 5, 20 high
 # (Body1 about Z through the origin, Body2 through (30, 40)) and a block
 # (Body3):
-#   - Keep as Dimension in the Measure panel: the two round faces kept as
-#     AxisDistance1 (the axes 50 apart), drawn in its plane in Auto
-#     (mitcad#894); the Annotate menu's entries, its Annotations… opening
-#     the window; Close (mitcad#1010).
-#   - Keep as Dimension in a history row's menu: Body1's top rim shown
-#     again from its row's menu (Show) and kept as Diameter1 (Ø10), in
-#     Auto too.
+#   - The Measure panel measures the two round faces (the axes 50 apart)
+#     without keeping anything: no Keep as Dimension or Annotate there any
+#     more (mitcad#1049); Close (mitcad#1010).
+#   - Dimension on the Make tab: the two round faces kept as AxisDistance1,
+#     drawn in its plane in Auto (mitcad#894); the Annotate group's
+#     Annotations… opening the window.
+#   - Body1's top rim shown again from its Measure history row's menu
+#     (Show, Copy: no Keep as Dimension) and kept with Dimension as
+#     Diameter1 (Ø10), in Auto too.
 #   - The browser's Annotations folder lists them in one row.
 #   - View > Export Snapshot at 4 x the view with a transparent background:
 #     a PNG of four times the view's width with an alpha channel, the shown
@@ -74,23 +77,17 @@ ui_start_app --open "$WORK/axes.mitcad"
 ui_expect_log "Annotations: none" "no annotations yet"
 ui_step "fit (F6)"                         ui_key F6
 
-echo "--- Keep as Dimension in the Measure panel"
+echo "--- Measure measures (mitcad#1049)"
 ui_mark
 ui_step "measure (I)"                      ui_key i
 ui_expect_new "Command Measure started" "measure started"
-ui_expect_new "Measure Keep as Dimension at" "the panel has Keep as Dimension"
-ui_expect_new "Measure Annotate at" "and Annotate beside it"
-ui_expect_new "Measure Annotate entries: Annotations…" "nothing picked: only Annotations… in its menu"
+ui_expect_new "Measure history at" "its history laid out"
 ui_step "pick Body1's round face"          ui_click_pick "face F2.b0/F2:side(c1)"
-ui_expect_new "Measure Annotate entries: Note…, Datum Label…, Frame…, Hole Callout, Annotations…" \
-  "one face picked: every entry"
 ui_step "pick Body2's round face"          ui_click_pick "face F4.b0/F4:side(c1)"
 ui_expect_new "distance 40, angle 0 deg, axis distance 50, axis lines 2" "the axes 50 apart"
-ui_expect_new "Measure Keep as Dimension enabled" "Keep as Dimension enabled for the model's picks"
-wait_enabled "Measure Keep as Dimension"
-grep -F "Measure Annotate entries: " "$UI_LOG" | tail -1 | grep -q "entries: Annotations…$" ||
-  ui_fail "two picks, yet a leader can be chosen: $(grep -F "Measure Annotate entries: " "$UI_LOG" | tail -1)"
-echo "ok   two picks: no leader, only Annotations…"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qE "Measure (Keep as Dimension|Annotate)" &&
+  ui_fail "the Measure panel still keeps: $(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -E "Measure (Keep|Annotate)" | tail -1)"
+echo "ok   no Keep as Dimension or Annotate in the Measure panel"
 # At the panel's default width (mitcad#1010): no control's text clipped,
 # every result row on one line.
 ui_sync
@@ -104,30 +101,34 @@ grep -F "Panel Measure result: " "$UI_LOG" | tail -1 | grep -q "rows, one line e
   ui_fail "a result row does not fit its line: $(grep -F "Panel Measure result: " "$UI_LOG" | tail -1)"
 echo "ok   no control clipped, every result row on one line at $width"
 ui_mark
-ui_step "Keep as Dimension"                ui_click_logged "Measure Keep as Dimension"
-ui_expect_new "Measure Keep as Dimension clicked" "Keep as Dimension clicked"
+ui_step "Close"                            ui_click_logged "Panel Measure Close"
+ui_expect_new "Closed Measure" "measure closed"
+grep -q "Annotation kept: " <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "Measure kept an annotation"
+
+echo "--- Dimension on the Make tab"
+ui_mark
+ui_step "the Make tab"                     ui_click_logged "Ribbon tab MAKE"
+ui_expect_new "Ribbon button make.dimension at" "the Make tab's Dimension"
+ui_step "Dimension"                        ui_click_logged "Ribbon button make.dimension"
+ui_expect_new "Command Dimension started" "Dimension started"
+ui_step "pick Body1's round face"          ui_click_pick "face F2.b0/F2:side(c1)"
+ui_step "pick Body2's round face"          ui_click_pick "face F4.b0/F4:side(c1)"
+ui_expect_new "Dimension Selection 2: 1 face" "both round faces picked"
+ui_step "add (Enter)"                      ui_key Return
 ui_expect_new "Annotation kept: AxisDistance1" "kept as the axes' distance"
 ui_expect_new "Annotations: AxisDistance1 axis_distance" "listed by the model"
 ui_expect_new "Annotations drawn: AxisDistance1 = 50 (auto)" "drawn in its plane, in Auto"
 ui_expect_new "Annotation label AxisDistance1 at" "its label placed in the view"
+ui_expect_new "Done Dimension" "the panel closed"
 ui_mark
-ui_step "Annotate"                         ui_click_logged "Measure Annotate"
-ui_expect_new "Measure Annotate clicked" "Annotate clicked"
-ui_expect_new "Context menu: Note… | Datum Label… | Frame… | Hole Callout | Annotations…" \
-  "its menu: the leaders, then Annotations…"
-ui_step "Annotations… (A)"                 ui_key a
-ui_expect_new "Measure Annotations clicked" "Annotations… chosen"
-ui_expect_new "Annotations window opened: 1 annotation(s)" "the window opened from the panel"
+ui_step "Annotations… (the Annotate group's button)" ui_click_logged "Ribbon button view.annotations"
+ui_expect_new "Annotations window opened: 1 annotation(s)" "the window opened from the Make tab"
 ui_focus_dialog '^Annotations$'
 ui_step "close the window (Escape)"        ui_key Escape
 ui_focus_main
-ui_mark
-ui_step "Close"                            ui_click_logged "Panel Measure Close"
-ui_expect_new "Closed Measure" "measure closed"
-grep -q "Annotations: none" <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "closing the panel took the annotation back"
 ui_expect_log "Browser Root/Annotations at" "the browser has the Annotations folder"
 
-echo "--- Keep as Dimension in a history row's menu"
+echo "--- A history row shown again, kept with Dimension"
 ui_mark
 ui_step "measure (I)"                      ui_key i
 ui_step "pick Body1's top rim"             ui_click_pick "edge F2.b0/E{F2:end(r{c1})|"
@@ -139,21 +140,23 @@ ui_expect_new "Measure history opened" "unfolded"
 ui_expect_new "Measure history row 2 at" "its row laid out"
 ui_mark
 ui_step "right-click the rim's row"        ui_click_logged "Measure history row 2" 3
-ui_expect_new "Context menu: Show | Keep as Dimension | Copy" "its menu"
+ui_expect_new "Context menu: Show | Copy" "its menu: Show and Copy, no Keep as Dimension"
 ui_step "Show"                             ui_menu_choose "Show"
 ui_expect_new "Measure history showed row 2" "shown again"
 ui_sync
+ui_step "close (Enter)"                    ui_key Return
+ui_expect_new "Closed Measure" "measure closed"
 ui_mark
-ui_step "right-click the rim's row"        ui_click_logged "Measure history row 2" 3
-ui_expect_new "Context menu: Show | Keep as Dimension | Copy" "its menu again"
-ui_step "Keep as Dimension"                ui_menu_choose "Keep as Dimension"
-ui_expect_new "Measure history Keep as Dimension clicked: row 2" "Keep as Dimension chosen for the row"
+ui_step "Dimension"                        ui_click_logged "Ribbon button make.dimension"
+ui_expect_new "Command Dimension started" "Dimension started"
+ui_step "pick Body1's top rim"             ui_click_pick "edge F2.b0/E{F2:end(r{c1})|"
+ui_expect_new "Dimension Selection 1: 1 edge" "the rim picked"
+ui_step "add (Enter)"                      ui_key Return
 ui_expect_new "Annotation kept: Diameter1" "kept as the rim's diameter"
 ui_expect_new "Annotations drawn: AxisDistance1 = 50 (auto) | Diameter1 = Ø10 (auto)" \
   "both drawn, in Auto"
+ui_expect_new "Done Dimension" "the panel closed"
 [ -n "$SHOT" ] && ui_capture "$SHOT"
-ui_step "close (Enter)"                    ui_key Return
-ui_expect_new "Closed Measure" "measure closed"
 
 echo "--- Export Snapshot: 4 x the view, transparent"
 read -r _ _ _ _ vw vh <<< "$(grep -o "View area [0-9]* [0-9]* [0-9]* [0-9]*" "$UI_LOG" | tail -1)"

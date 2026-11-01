@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Shapes with their names as bytes (P7d): a shape read back has the same
-// faces, face, edge and vertex names, notes, volume and what it had measured, and
+// faces, face, edge and vertex names, notes and infos, volume and what it had measured, and
 // later operations find their references on it; damaged bytes are refused.
 
 #include <array>
@@ -139,11 +139,13 @@ void test_round_trip_keeps_names_and_measures() {
 
 void test_notes_and_unnamed_faces() {
   const ShapePtr block = extrude("F2", {rectangle(1, 0, 0, 10, 10)}, 0, 5);
-  // Faces without names stay without; notes come back.
+  // Faces without names stay without; notes and infos come back.
   Shape plain(block->occt());
-  plain.add_note("built 0.1 % smaller");
+  plain.add_note("built as rings");
+  plain.add_info("built 0.1 % smaller");
   const ShapePtr copy = deserialize_shape(serialize_shape(plain));
   CHECK(copy->notes() == plain.notes());
+  CHECK(copy->infos() == plain.infos());
   for (int i = 0; i < copy->face_count(); ++i) {
     CHECK(copy->face_names(i).empty());
   }

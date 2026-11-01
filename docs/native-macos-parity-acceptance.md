@@ -111,8 +111,8 @@ preserves its evidence and all unrun inventory. Never overwrite a failed run.
 | 5 | `libraries` | Libraries: production entry; source rows, checkboxes and actions |
 | 6 | `new-project` | New Project: production entry; compact form, labels and normal/narrow fields |
 | 7 | `parameters` | Parameters: production entry; hierarchy, invalid Return/Tab, refusal and correction |
-| 8 | `parts-fixture` | Library Parts fixture: separate synthetic presenter and versions/parts list |
-| 9 | `picker-fixture` | Part Picker fixture, then actual BUILD Profile picker and configuration options |
+| 8 | `parts-fixture` | Library Components fixture: separate synthetic presenter and versions/bill of materials |
+| 9 | `picker-fixture` | Component Picker fixture, then actual BUILD Profile picker and configuration options |
 | 10 | `project-settings` | Project Settings: shared entry adapter with synthetic data; fields and storage choices |
 | 11 | `projects` | Actual selected Projects design + Return, then Open a Project fixture |
 | 12 | `publish` | Publish to Library: production entry; helper actions and footer |
@@ -131,7 +131,7 @@ preserves its evidence and all unrun inventory. Never overwrite a failed run.
 | 25 | `export` | Export: production entry; format choices and action order; no file exported |
 | 26 | `find` | Find in Design: production entry; fields, results and document ownership |
 | 27 | `overview` | Keyboard and Mouse Overview: production entry; text hierarchy and scrolling |
-| 28 | `parts-production` | Library Parts production entry after actual synthetic fastener insertion |
+| 28 | `parts-production` | Library Components production entry after actual synthetic fastener insertion |
 
 The JSON report distinguishes `planned`, `running`, `captured`, `failed` and
 `not-selected` scenarios. A completed diagnostic subset remains `incomplete`.
@@ -181,3 +181,86 @@ reviewed findings. Record maintainer acceptance of the resulting iteration
 explicitly. Record physical trackpad, VoiceOver/accessibility and the oldest
 supported macOS runtime separately, as passed, failed or pending with a
 concrete reason. VM runs do not certify physical input or unavailable runtimes.
+
+## Operator acceptance on 31 October 2026
+
+The remaining manual checks in #917 and #918 use the retained AppKit candidate
+`bd12f12593aed709aea599ec1c7a7304c5f950d5`, integrated on main as
+`ed89fe274408e8f1bbe34184398a5edfdf35c060`. This candidate includes the later
+inventory corrections through #996. Its 4,069 tracked source files were checked
+against the Git objects, accounting for the Windows script checkout line endings
+required by `.gitattributes`. The retained AppKit and Qt executable, CLI and CMake
+cache hashes match their previously built and tested producer records. No rebuild
+or full inventory rerun was performed for these operator checks.
+
+The AppKit executable SHA-256 is
+`824bf2535261e7620093b73c6ad70ec8612f83c7f6b2ac10d5c88b34e844da43`.
+Its CMake cache enables `MITCAD_MACOS_NATIVE_UI`, its launch explicitly selects
+`--ui=native`, and its startup log confirms the AppKit shell. The runtime is
+macOS 27.0.1, arm64, with the Apple M1 Max renderer. The earlier `a6159618a`
+paired inventory remains separate and unchanged.
+
+| Acceptance | Status | Evidence and remaining work |
+| --- | --- | --- |
+| Maintainer review, #917 | Passed | After both operator test rounds, the maintainer explicitly accepted this tested AppKit candidate. |
+| Physical trackpad, #917 | Passed | Using a built-in or directly connected physical trackpad, the operator passed pan, Option-scroll orbit including momentum, pinch/Shift-scroll zoom, secondary-window scrolling and context-menu focus recovery. The production Profile picker passed pictured part selection, Grade/Offset editing and Tab commit, pin/cancel/reuse, unpin/close/reopen, search/Escape and document selection/camera recovery. The controls remained usable after narrowing and restoring the document window. |
+| VoiceOver and keyboard, #918 | Tested; failed | Actual VoiceOver read Browser/Projects, command fields, Parameters and its refused-length reason, and the inline fx menu. Edit Formula activation and Escape returned to the same inline field. The production Component Picker is reachable and readable, and closing it returns naturally to the document Part button. Moving from the first tile to the second loses the VoiceOver cursor and falls back to the window close button; reproduced twice and tracked in ready follow-up #1025. After the picker closes, cancelling Profile also leaves a dead Part-button reference; ready follow-up #1026 tracks that separate focus-return defect. This acceptance cell remains failed until both defects are corrected and retested. |
+| Oldest supported runtime, #919 | Passed for `a6159618a` | The separate #919 closing record documents macOS 14.4 (23E214), arm64, fresh Qt-OFF and explicit Native-ON builds of frozen `a6159618a`, 11 passing bounded GUI runs and 32 reviewed original captures. That result belongs to its recorded source and producers. The manual candidate above was exercised on macOS 27.0.1. |
+
+Operator testing uses isolated settings and synthetic designs and library components.
+The maintainer supplied the physical trackpad input. VoiceOver scenario
+preparation used ordinary OS keyboard and pointer events. Qt remains the default
+macOS frontend; accepting an experimental candidate does not change that default
+or establish the remaining parent acceptance items.
+
+The #918 observations use actual VoiceOver commander commands and its emitted
+last-phrase/cursor data, with owned foreground process checks around every
+command. Scenario preparation and foreground reactivation between batches do
+not count as VoiceOver navigation or focus-return evidence. These observations
+do not claim human listening. The earlier `a6159618a` partial observations are
+separate from this candidate.
+
+The operator authorized temporary AppleScript control of VoiceOver. After the
+operator completed macOS authentication, an independent Accessibility query
+verified that the control checkbox was off and `NSWorkspace.isVoiceOverEnabled`
+remained true. The owned test application was stopped and the shared GUI lock
+was released. The bounded test work in #918 is complete with the failed result
+and ready follow-ups #1025 and #1026 recorded above.
+
+
+## VoiceOver follow-up acceptance on 1 November 2026
+
+The bounded follow-ups #1025 and #1026 were retested with actual VoiceOver on
+`03fbb2233642b5e23f97fdffcd768fd79264c0d8` from dev, which includes their
+`3afbe0da8` integration. All 4,337 tracked build-mirror files were verified.
+The macOS 27.0.1 arm64 build compiled both frontends with
+`MITCAD_MACOS_NATIVE_UI=ON` without compiler warnings. Its application SHA-256
+is `7eb704a73de0323834e295f3b811ffb8b1eed2da5918bf4e8e74a53a5c0f7d66`.
+Runtime `--ui=native` and the startup log establish the AppKit test path.
+Ordinary startup without a frontend selector separately reports
+`Frontend: qt (default)` and passes normal command creation/cancellation.
+
+| Check | Result |
+| --- | --- |
+| #1025: live picker tiles | Passed. Actual VoiceOver Right/Left reads Profile 20 test and Profile 30 test, retains their nonempty live bounds, and synchronises to the same keyboard-focused tile. Its selection-reading command reports one selected item in both positions. VoiceOver activation and Return choose the second component through the production handler. Closing/reopening, Search focus/Escape and Grade/Offset navigation remain usable. Actual Grade B activation limits Offset from 8 mm to 5 mm, which VoiceOver reads. |
+| #1026: command retirement | Passed. Closing the picker returns naturally to the live Component button. Escape from that button announces the focused `3D view` group with nonempty bounds. The independent repeat never enters the tile collection. Direct cancellation from the command field and from the canvas also retains the live 3D view. No keyboard focus is forced after cancellation; subsequent Browser/view navigation remains usable. |
+| Short #918 surface revisit | Passed. Browser rows and disclosure state are read; Return on the selected synthetic Projects design opens that design. Parameters reads the actual name, unit, expression and value, and Escape returns to the live document. The inline fx menu is traversed with actual VoiceOver, its Edit Formula action opens the formula editor, and Escape returns to the same live Width field. |
+
+VoiceOver commander commands, emitted phrases, cursor text/bounds and owned
+foreground process checks establish these observations. In-process test input
+only prepares the synthetic scenarios; it is not counted as VoiceOver evidence.
+One exploratory fx traversal entered Functions and then sent Return without
+opening the editor. The retained corrected run uses VoiceOver's actual action
+on Edit Formula and verifies the editor and its natural focus return. The
+historical paired inventory and physical-input/runtime records above retain
+their own sources; no full inventory, human listening or hardware rerun is
+claimed here.
+
+The native picker CTest passes in light/dark (134 steps per theme, 42.41 s),
+and `app.unit` passes (6.65 s). Four original picker captures were individually
+reviewed. The supplemental Qt Docked busy-preview Exit CTest fails before the
+expected save question (23.84 s), separately retained in ready follow-up #1125;
+that failure is not waived or reported as a passing Qt test.
+
+The bounded follow-up results supersede the failed #1025/#1026 outcomes in the
+31 October record; that historical result is preserved. Qt remains the default.

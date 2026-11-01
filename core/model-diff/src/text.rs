@@ -104,6 +104,15 @@ pub(super) fn field(field: &str, from: &Value, to: &Value) -> String {
             }
             .to_owned();
         }
+        // mitcad#1093.
+        "transparent" => {
+            return if to.as_bool() == Some(true) {
+                "transparent"
+            } else {
+                "opaque"
+            }
+            .to_owned();
+        }
         "name" => return format!("renamed from {}", value(from)),
         _ => {}
     }
@@ -297,7 +306,7 @@ fn sketch_text(sketch: &SketchChange) -> String {
 }
 
 /// An occurrence's placement change: `placement moved by [10, 0, 0] mm and
-/// turned 90 deg`.
+/// turned 90°`.
 pub(super) fn transform(a: &Transform, b: &Transform) -> String {
     let (angle, shift) = motion(a, b);
     let mut parts = Vec::new();
@@ -306,10 +315,7 @@ pub(super) fn transform(a: &Transform, b: &Transform) -> String {
         parts.push(format!("moved by [{}] mm", shift.join(", ")));
     }
     if angle > 1e-9 {
-        parts.push(format!(
-            "turned {} deg",
-            format_number(angle.to_degrees(), 3)
-        ));
+        parts.push(format!("turned {}°", format_number(angle.to_degrees(), 3)));
     }
     if parts.is_empty() {
         "placement changed".to_owned()

@@ -8,6 +8,8 @@
 #include <QIcon>
 #include <QString>
 
+#include "Theme.hpp"
+
 namespace mitcad {
 
 // What an icon is drawn on, which decides its colours: the widgets' palette
@@ -19,7 +21,8 @@ enum class IconBackdrop { Palette, Light, Dark };
 // The colour roles of the icons (mitcad#230). All the icons are one family:
 // every #rrggbb of their sources stands for one role, whatever the file, and
 // each role has one colour and opacity per theme (iconRoleColour). Status
-// colours (errors, done, the swatches of Appearance) keep their colour.
+// colours (errors, done, warnings) take the role table's; the others
+// (a projection, the swatches of Appearance) keep their colour.
 enum class IconRole {
   Outline,          // the line work
   TopFace,          // a solid's lit top face
@@ -43,9 +46,16 @@ std::optional<IconRole> iconRole(const QColor& source);
 
 // The colour of a role on a light or a dark theme, with its opacity in the
 // colour's alpha; fills and strokes differ for the construction roles and the
-// pencil. A status colour stays itself, only made brighter on a dark theme
-// where it has less than 3:1 contrast with the dark surface.
+// pencil. A status colour of an error, a success or a warning is drawn in its
+// role of the role table (iconStatusRole, mitcad#1041); any other stays
+// itself, only made brighter on a dark theme where it has less than 3:1
+// contrast with the dark surface.
 QColor iconRoleColour(IconRole role, bool dark, bool stroke, const QColor& source = QColor());
+
+// The role of the role table a status source colour is drawn in: the
+// error's ring red, the success's green, the warning's yellow; none for the
+// status colours that keep their own (a projection, Appearance's swatches).
+std::optional<ColorRole> iconStatusRole(const QColor& source);
 
 // An icon's SVG source with the colours of a theme: each fill, stroke and
 // gradient stop gets its role's colour, and its opacity as fill-opacity,

@@ -115,7 +115,7 @@ pub fn check(
         }
         let points = anchor_points(index, *r).ok_or_else(|| {
             format!(
-                "{what}: {r} is a {}; anchors are points, circles and arcs (their centres) and \
+                "{what}: {r} is a {}; anchors are points, circles and arcs (their centers) and \
                  lines (their midpoints)",
                 entity.kind.type_name()
             )

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/sketch app/MainWindow.cpp app/MainWindowVisibility.cpp app/browser app/projects tools/cli
 # check-all sources: app/OcctViewer.cpp app/OcctViewer.hpp
+# check-all sources: app/framework/TypedTextLog.cpp app/platform/windows/WindowsTestSync.cpp
 # Input-driven Windows UI test of the sketch's own origin and axes in a new
 # design, whose Origin folder's light bulb is off (mitcad#739), in the
 # build VM (tools/ui-windows-lib.ps1 says how the input is posted); the
@@ -11,7 +12,9 @@
 #      <w>x<h>", mitcad#1000); the window resized smaller, larger (within
 #      the screen) and taller than wide, maximized and restored (where the
 #      window station maximizes it) and back keeps that scale ("View:
-#      resized to ...").
+#      resized to ..."). The sketches below are on the same run: the
+#      window is made the active one again after the restore (Ui-Activate,
+#      mitcad#1016).
 #   2. Create Sketch on XY, XZ and YZ: the origin planes shown for the pick
 #      only; in the sketch the design's origin is hidden again, while the
 #      sketch draws its origin in the view and its x and y axes across it
@@ -39,6 +42,9 @@ param(
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
 Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7' } -StepPause 0
+# What decides whether a shortcut takes a key, and the window's activation,
+# in the log of a failed run (mitcad#1016; framework/TypedTextLog.hpp).
+$env:MITCAD_LOG_SHORTCUTS = '1'
 
 $hidden = "Design origin hidden in the view; the Origin folder's light bulb off"
 $shown = "Design origin shown in the view; the Origin folder's light bulb off"
@@ -240,13 +246,13 @@ Expect-Framing 'the window maximized' -Optional:(-not $zoomed)
 Ui-Mark
 Ui-Step 'the window restored'              { [FramingTestWindow]::Restore($script:UiWindow) }
 Expect-Framing 'the window restored' -Optional:(-not $zoomed)
+# In session 0 the maximize and restore left the app inactive with no
+# foreground window, and its shortcuts take no key then (mitcad#1016):
+# the window made the active one again, as a user's click would.
+Ui-Activate
 Ui-Mark
 Ui-Step "the window's size again"          { if (-not [FramingTestWindow]::Resize($script:UiWindow, $size[0], $size[1])) { Ui-Fail 'the window was not resized' } }
 Expect-Framing "the window's size again"
-# After maximize and restore in session 0 the main window's shortcuts no
-# longer fire (F7 was logged and started nothing, also after a click on
-# it), so the sketches start in a new design of their own.
-Ui-StartApp 'sketch-origin-sketches'
 
 foreach ($plane in @('xy', 'xz', 'yz')) {
   $name = $plane.ToUpperInvariant()

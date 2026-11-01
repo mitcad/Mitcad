@@ -45,16 +45,20 @@ fn a_fallback_stands_in_for_its_items_with_their_reasons() {
         .map(|f| timeline_item(&doc, &f.name))
         .collect();
     assert!(!bases.is_empty(), "{text}");
+    // The note is information on the feature (mitcad#1040): it stays ok;
+    // the import's own notices carry the fallback as a warning.
     for base in &bases {
-        assert_eq!(base["status"], "warning", "{base}");
+        assert_eq!(base["status"], "ok", "{base}");
+        assert_eq!(base["level"], "info", "{base}");
         assert!(
-            base["error"]
+            base["import"]
                 .as_str()
                 .unwrap()
                 .starts_with("Stands in for "),
             "{base}"
         );
-        assert_eq!(base["import"], base["error"], "{base}");
+        assert_eq!(base["notices"][0]["message"], base["import"], "{base}");
+        assert_eq!(base["error"], Value::Null, "{base}");
     }
     for item in fallbacks {
         let note = item.note.as_deref().unwrap();
@@ -63,15 +67,23 @@ fn a_fallback_stands_in_for_its_items_with_their_reasons() {
         assert!(
             bases
                 .iter()
-                .any(|b| b["error"].as_str().unwrap().contains(&named)),
+                .any(|b| b["import"].as_str().unwrap().contains(&named)),
             "{named} in {bases:?}\n{text}"
         );
     }
+    let design_notices = report.notices();
+    assert!(
+        design_notices
+            .iter()
+            .any(|n| n.level == mitcad_model::NoticeLevel::Warning
+                && n.message == "2 items replaced by the file's bodies"),
+        "{design_notices:?}"
+    );
     // The partial sketch says what was left out, as the report does.
     let sketch = timeline_item(&doc, "Sketch1");
-    assert_eq!(sketch["status"], "warning", "{sketch}");
+    assert_eq!(sketch["level"], "info", "{sketch}");
     assert_eq!(
-        sketch["error"],
+        sketch["import"],
         format!(
             "Partly imported: {}",
             report.items[0].note.as_deref().unwrap()
@@ -103,7 +115,7 @@ fn a_parametric_item_has_no_note_and_an_edit_clears_one() {
     // The partial sketch: its dimension edited, it builds, and its note
     // goes.
     let sketch = item(&doc, "Sketch1");
-    assert_eq!(sketch["status"], "warning", "{sketch}");
+    assert_eq!(sketch["level"], "info", "{sketch}");
     doc.set_parameter("d1", 45.0).unwrap();
     assert_eq!(item(&doc, "Sketch1")["status"], "ok", "{text}");
     assert!(item(&doc, "Sketch1").get("import").is_none());
@@ -148,15 +160,17 @@ fn items_suppressed_or_failed_in_the_file_become_placeholders() {
     let fillet = timeline_item(&doc, "Fillet1");
     assert_eq!(fillet["type"], "placeholder", "{fillet}");
     assert_eq!(fillet["status"], "suppressed", "{fillet}");
+    // A state is no severity: the note is information (mitcad#1040).
+    assert_eq!(fillet["level"], "info", "{fillet}");
     assert_eq!(
-        fillet["error"],
+        fillet["import"],
         mitcad_import_replay::internal::timeline_notes::sentence(
             report.items[2].note.as_deref().unwrap()
         ),
         "{text}"
     );
     assert!(
-        fillet["error"]
+        fillet["import"]
             .as_str()
             .unwrap()
             .starts_with("The file keeps no result for it"),
@@ -166,7 +180,7 @@ fn items_suppressed_or_failed_in_the_file_become_placeholders() {
     assert_eq!(extrude3["type"], "placeholder");
     assert_eq!(extrude3["suppressed"], true);
     assert_eq!(
-        extrude3["error"],
+        extrude3["import"],
         "Suppressed in the file; its definition did not come in: ExtrudeFeature: no details \
          decoded"
     );

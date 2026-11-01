@@ -817,3 +817,108 @@ fn check_rules_reports_values_never_allowed_and_rules_that_never_apply() {
     assert_eq!(report["sampled"], true);
     assert_eq!(report["checked"], 4);
 }
+
+#[test]
+fn rule_problems_name_their_rule_and_place() {
+    // mitcad#1064: the rule editor marks the block that is wrong.
+    let mut doc = shelf();
+    let rules = json!([
+        {"name": "Black is short", "when": "Color = 'Black'",
+         "then": [{"option": "Length", "max": "1000 mm"}]},
+        {"name": "Wrong", "when": "Colour = 'Black'",
+         "then": [{"option": "Size", "values": ["'S'"]},
+                  {"option": "Length", "values": ["300 mm", "Nope"]}],
+         "else": [{"option": "Color", "values": ["'Black'", "'Green'"]},
+                  {"option": "Length", "step": "-10 mm"},
+                  {"option": "Length", "min": "2500 mm"}]},
+        {"name": "", "then": [{"forbid": "never"}]}
+    ]);
+    // Rules not set yet are checked as set_configurations would check
+    // them, and nothing changes.
+    let answer = query(
+        &doc,
+        json!({"query": "configurations", "rules": rules.clone()}),
+    );
+    let problems = answer["rule_problems"].as_array().unwrap();
+    let places: Vec<(u64, Value, &str)> = problems
+        .iter()
+        .map(|p| {
+            (
+                p["index"].as_u64().unwrap(),
+                p["place"].clone(),
+                p["level"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        places,
+        [
+            (1, json!("when"), "error"),
+            (1, json!("then.0.option"), "error"),
+            (1, json!("then.1.values.1"), "error"),
+            (1, json!("else.0.values.1"), "warning"),
+            (1, json!("else.1.step"), "error"),
+            (1, json!("else.2.min"), "warning"),
+            (2, Value::Null, "error"),
+        ],
+        "{answer}"
+    );
+    assert_eq!(problems[0]["rule"], "Wrong");
+    assert_eq!(
+        problems[1]["message"],
+        "the rule Wrong: Size is not an option of the configurations"
+    );
+    assert_eq!(
+        problems[3]["message"],
+        "the rule Wrong: values: Green is not one of the values of Color"
+    );
+    assert_eq!(
+        problems[4]["message"],
+        "the rule Wrong: the step must be positive"
+    );
+    assert_eq!(
+        problems[5]["message"],
+        "the rule Wrong: min: 2500 mm is above the largest value of Length, 2000 mm"
+    );
+    assert_eq!(problems[6]["message"], "rule 3 has no name");
+    // The errors are the table's problems, in their words; the warnings
+    // are none of them.
+    let errors: Vec<Value> = problems
+        .iter()
+        .filter(|p| p["level"] == "error")
+        .map(|p| p["message"].clone())
+        .collect();
+    assert_eq!(answer["problems"], Value::Array(errors.clone()));
+    let own = query(&doc, json!({"query": "configurations"}));
+    assert!(
+        own["configurations"]["rules"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "{own}"
+    );
+    assert_eq!(own["rule_problems"], json!([]));
+    assert_eq!(own["problems"], json!([]));
+    // set_configurations refuses them with the first.
+    let mut table = own["configurations"].clone();
+    table["rules"] = rules;
+    let e = refused(
+        &mut doc,
+        json!({"cmd": "set_configurations", "configurations": table}),
+    );
+    assert!(e.contains(errors[0].as_str().unwrap()), "{e}");
+    // A value outside its option's domain alone refuses nothing.
+    table["rules"] = json!([{"name": "No green",
+                             "then": [{"option": "Color", "exclude": ["'Green'"]}]}]);
+    command(
+        &mut doc,
+        json!({"cmd": "set_configurations", "configurations": table}),
+    );
+    let answer = query(&doc, json!({"query": "configurations"}));
+    assert_eq!(answer["problems"], json!([]));
+    assert_eq!(
+        answer["rule_problems"],
+        json!([{"index": 0, "rule": "No green", "place": "then.0.exclude.0",
+                "level": "warning",
+                "message": "the rule No green: exclude: Green is not one of the values of Color"}])
+    );
+}

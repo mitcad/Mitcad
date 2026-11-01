@@ -32,7 +32,7 @@ public:
   MoveOccurrenceDialog(QWidget* parent, const HybridModel& model, const QString& occurrence)
       : QDialog(parent), m_model(model), m_occurrence(occurrence) {
     setObjectName(QStringLiteral("moveOccurrenceDialog"));
-    setWindowTitle(tr("Move Component"));
+    setWindowTitle(tr("Move to Component"));
     resize(620, 600);
     auto* layout = new QVBoxLayout(this);
     m_heading = new QLabel;

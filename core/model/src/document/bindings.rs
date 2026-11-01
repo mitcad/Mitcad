@@ -102,7 +102,7 @@ fn text_of(state: &DocState, text: &str) -> Result<String, String> {
     match evaluate(state, text)? {
         Value::Text(name) => Ok(name),
         Value::Number(_) => Err(format!(
-            "'{text}' gives a number; it must give a text: an id or a name"
+            "“{text}” gives a number; it must give a text: an id or a name"
         )),
     }
 }
@@ -112,7 +112,7 @@ fn holds(state: &DocState, text: &str) -> Result<bool, String> {
     match evaluate(state, text)? {
         Value::Number(q) => Ok(q.value != 0.0),
         Value::Text(_) => Err(format!(
-            "'{text}' gives a text; a condition gives a number (true when not 0)"
+            "“{text}” gives a text; a condition gives a number (true when not 0)"
         )),
     }
 }
@@ -121,9 +121,9 @@ fn holds(state: &DocState, text: &str) -> Result<bool, String> {
 fn unique(ids: &[&str], what: &str, text: &str) -> Result<String, String> {
     match ids {
         [id] => Ok((*id).to_owned()),
-        [] => Err(format!("there is no {what} '{text}'")),
+        [] => Err(format!("there is no {what} {text}")),
         _ => Err(format!(
-            "'{text}' names {} {what}s ({})",
+            "{text} names {} {what}s ({})",
             ids.len(),
             ids.join(", ")
         )),

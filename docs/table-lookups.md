@@ -71,7 +71,7 @@ document beside `configurations`, in a new module
 
 `Table.Column` (no spaces around the dot) is a **column reference**. The
 lexer makes `.` a token only between a name and a name start; today that
-text is an error (`unexpected character '.'`), so the language stays a
+text is an error (`unexpected character “.”`), so the language stays a
 superset and every expression that parses now parses the same. A column
 reference is a list of cells and is accepted only as an argument of the
 functions below; anywhere else it is an error ("Screws.dk is a column:
@@ -222,7 +222,7 @@ expression that does not evaluate.
 
 ## UI
 
-A **Tables** tab in Change Parameters (open question 5), since tables
+A **Tables** tab in Edit Parameters (open question 5), since tables
 are edited together with the parameters that use them, and the dialog
 already works during sketch and feature edits:
 
@@ -334,7 +334,7 @@ For two keys, use a combined key column (`M5x16`) and
      `;`-separated file with decimal commas, units in cells, inferred
      columns, renamed column names, refused cells, and an import refused
      because a used key disappears.
-4. **Tables tab in Change Parameters and Formula Editor completion**
+4. **Tables tab in Edit Parameters and Formula Editor completion**
    (app). Depends on 2 and 3.
    - Done when: a UI test creates a table, types cells (a wrong one
      stays red with its reason), drives a dimension through XLOOKUP,
@@ -358,7 +358,7 @@ Answered on 2026-10-27: the owner took every recommendation.
 4. **Texts in lookups: case-sensitive or not?** Recommended: case-sensitive,
    as `=` already compares texts in MitCad (rule 28). Spreadsheets ignore
    case, so `'m5'` would not find `M5`.
-5. **Where are tables edited: a Tables tab in Change Parameters, or a
+5. **Where are tables edited: a Tables tab in Edit Parameters, or a
    dialog of their own?** Recommended: the tab, next to the parameters
    that use the tables, and available during sketch and feature edits.
 6. **Do configurations stay separate from tables?** Recommended: yes.

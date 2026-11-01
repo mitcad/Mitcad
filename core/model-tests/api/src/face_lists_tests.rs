@@ -345,6 +345,80 @@ fn a_bare_number_of_more_than_one_turn_in_a_rotation_warns() {
 }
 
 #[test]
+fn only_a_typed_number_of_more_than_one_turn_warns() {
+    // mitcad#1092: the warning is for a number read in the wrong unit; an
+    // angle computed from parameters may pass a turn.
+    let mut doc = box_document();
+    command(
+        &mut doc,
+        json!({"cmd": "add_parameter", "name": "step", "expression": "450", "unit": "deg"}),
+    );
+    let rotate = |angle: Value| {
+        json!({"type": "move", "bodies": ["F1.b0"],
+               "transform": {"type": "rotate", "axis": "x", "angle": angle}})
+    };
+    let added = command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": rotate(json!("450 deg"))}),
+    );
+    let name = added["name"].as_str().unwrap().to_owned();
+    let uid = added["uid"].as_str().unwrap().to_owned();
+    assert_eq!(
+        added["warnings"],
+        json!([format!("{name} angle: 450° is more than one turn")]),
+        "{added}"
+    );
+    let plain = command(
+        &mut doc,
+        json!({"cmd": "edit_feature", "uid": uid, "def": rotate(json!(90))}),
+    );
+    assert_eq!(
+        plain["warnings"],
+        json!([format!(
+            "{name} angle: 90 is read as radians (5156.6°); write \"90 deg\" for degrees"
+        )]),
+        "{plain}"
+    );
+    for computed in ["step", "step + 30 deg"] {
+        let edited = command(
+            &mut doc,
+            json!({"cmd": "edit_feature", "uid": uid, "def": rotate(json!(computed))}),
+        );
+        assert!(edited.get("warnings").is_none(), "{computed}: {edited}");
+        let feature = query(&doc, json!({"query": "feature", "uid": uid}));
+        assert_eq!(feature["status"], "ok", "{computed}: {feature}");
+        assert!(feature.get("warnings").is_none(), "{computed}: {feature}");
+    }
+}
+
+#[test]
+fn construction_planes_stepping_past_a_turn_do_not_warn() {
+    let mut doc = box_document();
+    command(
+        &mut doc,
+        json!({"cmd": "add_parameter", "name": "step", "expression": "400", "unit": "deg"}),
+    );
+    let mut planes = Vec::new();
+    for angle in ["step", "step + 45 deg"] {
+        let plane = command(
+            &mut doc,
+            json!({"cmd": "add_feature", "def": {"type": "construction_plane",
+                   "definition": {"type": "angle", "line": "x", "angle": angle,
+                                  "plane": "xy"}}}),
+        );
+        assert!(plane.get("warnings").is_none(), "{angle}: {plane}");
+        planes.push(plane["uid"].as_str().unwrap().to_owned());
+    }
+    // As when the design is opened: every feature computed again.
+    command(&mut doc, json!({"cmd": "recompute"}));
+    for uid in planes {
+        let feature = query(&doc, json!({"query": "feature", "uid": uid}));
+        assert_eq!(feature["status"], "ok", "{feature}");
+        assert!(feature.get("warnings").is_none(), "{feature}");
+    }
+}
+
+#[test]
 fn a_helix_of_several_turns_does_not_warn() {
     let mut doc = box_document();
     let sketch = command(&mut doc, json!({"cmd": "sketch.create"}));

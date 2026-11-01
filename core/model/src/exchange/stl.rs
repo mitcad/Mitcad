@@ -37,7 +37,7 @@ pub(super) fn write(mesh: &TriangleMesh, name: &str, ascii: bool) -> Vec<u8> {
     // An 80-byte header that does not start with "solid" (text STL), the
     // count, then 50 bytes per triangle.
     let mut data = Vec::with_capacity(84 + 50 * mesh.triangles.len());
-    let mut header = format!("Mitcad {} binary STL", env!("CARGO_PKG_VERSION")).into_bytes();
+    let mut header = format!("MitCad {} binary STL", env!("CARGO_PKG_VERSION")).into_bytes();
     header.resize(80, b' ');
     data.extend_from_slice(&header);
     let count = u32::try_from(mesh.triangles.len()).unwrap_or(u32::MAX);

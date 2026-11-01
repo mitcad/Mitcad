@@ -44,17 +44,14 @@
 #include "../platform/NativeDialogs.hpp"
 #include "../materials/TextureBrowser.hpp"
 #include "../materials/TextureUse.hpp"
+#include "../print/PrintLibrary.hpp"
 #include "../platform/MacDialogs.hpp"
-#include "AssignmentPanel.hpp"
-#include "Bindings.hpp"
 #include "DocumentHost.hpp"
 
 namespace mitcad {
 namespace {
 
 constexpr int kIdRole = Qt::UserRole;
-constexpr int kBodyRole = Qt::UserRole + 1;
-constexpr int kFaceRole = Qt::UserRole + 2;
 constexpr int kPreviewSize = 120;
 constexpr double kDegree = 3.14159265358979323846 / 180.0;
 // The largest image the design file embeds (core/model's
@@ -84,8 +81,8 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
   auto* layout = new QVBoxLayout(this);
   // The body scrolls on a screen too low for it, so that the dialog fits
   // the screen and the buttons below the body stay visible (mitcad#818).
-  // Keep this boundary in both frontends: the assignment panel below it
-  // and the dialog buttons must remain outside the long material form.
+  // Keep this boundary in both frontends: the dialog buttons must remain
+  // outside the long material form.
   auto* scroll = new FittingScrollArea;
   scroll->setObjectName(QStringLiteral("appearanceBody"));
   scroll->setWidgetResizable(true);
@@ -143,7 +140,17 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
   m_name = new QLineEdit;
   m_name->setObjectName(QStringLiteral("appearanceName"));
   form->addRow(tr("Name"), m_name);
-  addColor(form, "base_color", tr("Base colour"));
+  // What it is a look of (mitcad#1102): a material's Add… and the
+  // Appearance tool offer the material's class first. The library's have
+  // theirs.
+  m_class = new QComboBox;
+  m_class->setObjectName(QStringLiteral("appearanceClass"));
+  for (const QString& materialClass : materialClasses()) {
+    m_class->addItem(materialClassTitle(materialClass), materialClass);
+  }
+  m_class->setToolTip(tr("What it is a look of: the pickers offer a material's class first"));
+  form->addRow(tr("Class"), m_class);
+  addColor(form, "base_color", tr("Base color"));
   addNumber(form, "metalness", tr("Metalness"), 0.0, 1.0, 0.05, tr("0 for plastics, paint and glass, 1 for metals"));
   addNumber(form, "roughness", tr("Roughness"), 0.0, 1.0, 0.05, tr("0 for a mirror finish, 1 for a fully matt one"));
   addNumber(form, "specular", tr("Specular"), 0.0, 1.0, 0.05, tr("The strength of a non-metal's reflection"));
@@ -153,7 +160,7 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
   addNumber(form, "coat", tr("Coat"), 0.0, 1.0, 0.05, tr("A clear lacquer over the surface"));
   addNumber(form, "coat_roughness", tr("Coat roughness"), 0.0, 1.0, 0.05, QString());
   addNumber(form, "emission", tr("Emission"), 0.0, 1000.0, 0.5, tr("Light the surface gives off; 0 for none"));
-  addColor(form, "emission_color", tr("Emission colour"));
+  addColor(form, "emission_color", tr("Emission color"));
   addNumber(form, "opacity", tr("Opacity"), 0.0, 1.0, 0.05, tr("Less than 1 makes the surface a see-through cut-out"));
 
   // The texture (mitcad#53).
@@ -166,10 +173,10 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
   m_texturePath = new QLineEdit;
   m_texturePath->setPlaceholderText(tr("No image"));
   m_texturePath->setToolTip(
-      tr("A PNG or JPEG image for the base colour, relative to the design's folder or absolute"));
+      tr("A PNG or JPEG image for the base color, relative to the design's folder or absolute"));
   m_textureChoose = new QPushButton(tr("Choose…"));
   m_textureRemove = new QPushButton(tr("Remove"));
-  m_textureRemove->setToolTip(tr("No texture: the base colour only"));
+  m_textureRemove->setToolTip(tr("No texture: the base color only"));
   // Enter in a field changes it, it does not press these.
   m_textureChoose->setAutoDefault(false);
   m_textureRemove->setAutoDefault(false);
@@ -220,57 +227,6 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
   right->addWidget(m_info);
   right->addStretch(1);
 
-  // Faces with appearances of their own (mitcad#53).
-  auto* facesRow = new QHBoxLayout;
-  auto* facesTitle = new QLabel(tr("Faces with their own appearance"));
-  facesRow->addWidget(facesTitle, 1);
-  m_clearFaces = new QPushButton(tr("Clear"));
-  m_clearFaces->setAutoDefault(false);
-  m_clearFaces->setToolTip(tr("The selected faces show their body's appearance again"));
-  facesRow->addWidget(m_clearFaces);
-  bodyLayout->addLayout(facesRow);
-  m_faces = new QListWidget;
-  m_faces->setSelectionMode(QAbstractItemView::ExtendedSelection);
-  m_faces->setMaximumHeight(110);
-  // Two rows at least: the assignment panel's table does not squeeze it
-  // away (the body scrolls instead, mitcad#861).
-  m_faces->setMinimumHeight(2 * (kIconSize + 4) + 2 * m_faces->frameWidth());
-  bodyLayout->addWidget(m_faces);
-
-  // The assignment panel (mitcad#861): what the targets have, and whether
-  // it varies with an option; Assign and a double-click fill its rows then.
-  AssignmentPanel::Host panelHost;
-  panelHost.model = [this]() -> const CommandContext& { return m_host.model(); };
-  panelHost.runCommand = [this](const QJsonObject& command) { return m_host.runModelCommand(command); };
-  panelHost.runCommands = [this](const QJsonArray& commands, const QString& label) {
-    return m_host.runModelCommands(commands, label);
-  };
-  panelHost.lastError = [this] { return m_host.lastError(); };
-  panelHost.canChange = [this] { return canChange(); };
-  panelHost.describe = [this](const QString& text) {
-    // By id, else by name.
-    AssignmentPanel::Result result;
-    const Appearance* found = findAppearance(m_appearances, text);
-    for (int i = 0; found == nullptr && i < m_appearances.size(); ++i) {
-      if (m_appearances.at(i).name == text) {
-        found = &m_appearances.at(i);
-      }
-    }
-    if (found != nullptr) {
-      result.id = found->id;
-      result.name = found->name;
-      result.icon = QIcon(QPixmap::fromImage(appearanceSwatch(*found, kIconSize, devicePixelRatioF())));
-    }
-    return result;
-  };
-  panelHost.openConfigurations = [this] {
-    if (openConfigurations) {
-      openConfigurations();
-    }
-  };
-  m_panel = new AssignmentPanel(AssignmentPanel::Kind::Appearance, QStringLiteral("Appearances"), panelHost);
-  layout->addWidget(m_panel);
-
   m_message = new QLabel;
   m_message->setWordWrap(true);
   setErrorStyleSheet(m_message);
@@ -282,14 +238,9 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
   m_new->setToolTip(tr("A copy of the selected appearance in this design, to edit"));
   m_delete = new QPushButton(themeIcon(QStringLiteral("delete")), tr("Delete"));
   m_delete->setToolTip(tr("Delete the selected appearance of this design; its bodies get the default look"));
-  m_assign = new QPushButton(themeIcon(QStringLiteral("appearance")), tr("Assign"));
-  m_assign->setObjectName(QStringLiteral("appearanceAssign"));
-  m_assignBodies = new QPushButton(themeIcon(QStringLiteral("appearance")), tr("Assign to Bodies"));
-  m_assignBodies->setToolTip(tr("Give the appearance to the bodies the selected faces belong to"));
-  m_assignBodies->setVisible(false); // only while the selection holds faces (mitcad#346)
   m_close = new QPushButton(tr("Close"));
   m_close->setObjectName(QStringLiteral("appearanceClose"));
-  for (QPushButton* button : {m_new, m_delete, m_assign, m_assignBodies, m_close}) {
+  for (QPushButton* button : {m_new, m_delete, m_close}) {
     button->setAutoDefault(false);
   }
 #ifdef Q_OS_MACOS
@@ -305,9 +256,6 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
 #endif
   mac::styleListButtons(m_new, m_delete);
   mac::stylePreview(m_list);
-  mac::stylePreview(m_faces);
-  buttons->addButton(m_assign, QDialogButtonBox::ActionRole);
-  buttons->addButton(m_assignBodies, QDialogButtonBox::ActionRole);
   buttons->addButton(m_close, QDialogButtonBox::RejectRole);
   layout->addWidget(buttons);
   mac::styleDialogButtons(buttons, m_close);
@@ -319,23 +267,6 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
   connect(m_close, &QPushButton::clicked, this, &QDialog::accept);
   connect(m_new, &QPushButton::clicked, this, &AppearanceDialog::newAppearance);
   connect(m_delete, &QPushButton::clicked, this, &AppearanceDialog::deleteAppearance);
-  connect(m_assign, &QPushButton::clicked, this, &AppearanceDialog::assign);
-  connect(m_assignBodies, &QPushButton::clicked, this, &AppearanceDialog::assignToBodies);
-  connect(m_panel, &AssignmentPanel::assignTextChanged, this, &AppearanceDialog::updateAssign);
-  // A double-click assigns as Assign does (mitcad#861): the selection's, or
-  // the panel's rows while the appearance varies with an option.
-  connect(m_list, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
-    const QString id = item != nullptr ? item->data(kIdRole).toString() : QString();
-    if (id.isEmpty() || m_targets.isEmpty()) {
-      return;
-    }
-    if (id != m_current) {
-      m_current = id;
-      showCurrent();
-    }
-    qDebug().noquote() << QStringLiteral("Appearances double-click: %1").arg(id);
-    assign();
-  });
   connect(m_list, &QListWidget::currentItemChanged, this, [this](QListWidgetItem* item) {
     if (m_building || item == nullptr || item->data(kIdRole).toString().isEmpty()) {
       return;
@@ -384,9 +315,13 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
       embedTexture(embed);
     }
   });
-  connect(m_faces, &QListWidget::itemSelectionChanged, this,
-          [this] { m_clearFaces->setEnabled(!m_faces->selectedItems().isEmpty()); });
-  connect(m_clearFaces, &QPushButton::clicked, this, &AppearanceDialog::clearFaces);
+  connect(m_class, &QComboBox::activated, this, [this](int index) {
+    const Appearance* a = current();
+    const QString chosen = m_class->itemData(index).toString();
+    if (!m_building && a != nullptr && !a->library && chosen != a->materialClass) {
+      change(QStringLiteral("class"), chosen);
+    }
+  });
   connect(m_name, &QLineEdit::editingFinished, this, [this] {
     const Appearance* a = current();
     if (!m_building && a != nullptr && !a->library && m_name->text().trimmed() != a->name) {
@@ -414,7 +349,6 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
   connect(m_textures, &TextureBrowser::placesChanged, this,
           [this] { TestSync::singleShot(0, this, [this] { logLayout(); }); });
   loadSources();
-  setTargets({});
   refresh();
 }
 
@@ -672,17 +606,8 @@ void AppearanceDialog::finishUse(const QString& sourceId, const TextureAsset& as
                             .arg(files.maps.size())
                             .arg(use.sent)
                             .arg(use.shared);
-  m_textures->setMessage(m_targets.isEmpty()
-                             ? tr("%1 is now an appearance of this design.").arg(name)
-                             : tr("%1 is now an appearance of this design: Assign gives it to the selection.")
-                                   .arg(name),
-                         false);
+  m_textures->setMessage(tr("%1 is now an appearance of this design.").arg(name), false);
   refresh();
-  if (m_panel->varies()) {
-    // Into the active row at once (mitcad#861).
-    const QString made = quotedText(m_current);
-    m_panel->fill(made);
-  }
 }
 
 void AppearanceDialog::addNumber(QFormLayout* form, const char* key, const QString& label, double low, double high,
@@ -707,7 +632,7 @@ void AppearanceDialog::addNumber(QFormLayout* form, const char* key, const QStri
 void AppearanceDialog::addColor(QFormLayout* form, const char* key, const QString& label) {
   auto* row = new QHBoxLayout;
   auto* button = new QToolButton;
-  button->setToolTip(tr("Choose a colour"));
+  button->setToolTip(tr("Choose a color"));
   auto* hex = new QLineEdit;
   hex->setObjectName(QStringLiteral("appearance_") + QString::fromLatin1(key));
   hex->setToolTip(tr("sRGB as #rrggbb"));
@@ -726,7 +651,7 @@ void AppearanceDialog::addColor(QFormLayout* form, const char* key, const QStrin
     }
     const QColor color(field.hex->text().trimmed());
     if (!color.isValid()) {
-      m_message->setText(tr("'%1' is no colour: write it as #rrggbb.").arg(field.hex->text()));
+      m_message->setText(tr("“%1” is no color: write it as #rrggbb.").arg(field.hex->text()));
       showCurrent();
       return;
     }
@@ -735,143 +660,6 @@ void AppearanceDialog::addColor(QFormLayout* form, const char* key, const QStrin
       change(QString::fromLatin1(field.key), colorJson(color));
     }
   });
-}
-
-void AppearanceDialog::setTargets(const Selection& targets) {
-  m_targets = targets;
-  QStringList bodies;
-  QVector<QPair<QString, QString>> faces;
-  for (const SelectionItem& item : targets) {
-    if (item.kind == SelectKind::Face) {
-      faces.append({item.owner, item.name});
-    } else if (!bodies.contains(item.owner)) {
-      bodies << item.owner;
-    }
-  }
-  // Assign to N bodies: the bodies that own the selected faces and the selected
-  // bodies, each once (mitcad#346); shown while the selection holds faces.
-  const QStringList owners = targetBodies();
-  m_hasFaces = !faces.isEmpty();
-  m_assignBodies->setText(owners.size() == 1 ? tr("Assign to 1 body") : tr("Assign to %1 bodies").arg(owners.size()));
-  if (targets.isEmpty()) {
-    m_assignText = tr("Assign");
-    m_assignTip = tr("Select bodies or faces first, or use a body's context menu");
-  } else {
-    if (faces.isEmpty()) {
-      m_assignText = bodies.size() == 1 ? tr("Assign to %1").arg(m_host.model().bodyName(bodies.first()))
-                                        : tr("Assign to %1 Bodies").arg(bodies.size());
-    } else if (bodies.isEmpty()) {
-      m_assignText = faces.size() == 1 ? tr("Assign to Face") : tr("Assign to %1 Faces").arg(faces.size());
-    } else {
-      m_assignText = tr("Assign to %1 Items").arg(targets.size());
-    }
-    m_assignTip = faces.isEmpty() ? tr("Give the bodies the selected appearance")
-                                  : tr("Give the bodies and faces the selected appearance; a face's "
-                                       "appearance overrides its body's");
-  }
-  // The targets' own appearance, when they share one: a face's own, else
-  // its body's.
-  QString shared;
-  bool same = !targets.isEmpty();
-  bool first = true;
-  try {
-    for (const QJsonValue& value : m_host.model().queryArray(QStringLiteral("bodies"))) {
-      const QJsonObject body = value.toObject();
-      const QString uid = body.value(QStringLiteral("uid")).toString();
-      const QString own = body.value(QStringLiteral("appearance")).toString();
-      QStringList looks;
-      if (bodies.contains(uid)) {
-        looks << own;
-      }
-      for (const auto& [owner, face] : std::as_const(faces)) {
-        if (owner != uid) {
-          continue;
-        }
-        QString look = own;
-        for (const QJsonValue& entry : body.value(QStringLiteral("face_appearances")).toArray()) {
-          const QJsonObject faceLook = entry.toObject();
-          bool named = faceLook.value(QStringLiteral("face")).toString() == face;
-          for (const QJsonValue& name : faceLook.value(QStringLiteral("faces")).toArray()) {
-            named = named || name.toString() == face;
-          }
-          if (named) {
-            look = faceLook.value(QStringLiteral("appearance")).toString();
-          }
-        }
-        looks << look;
-      }
-      for (const QString& look : std::as_const(looks)) {
-        if (first) {
-          shared = look;
-          first = false;
-        } else if (look != shared) {
-          same = false;
-        }
-      }
-    }
-  } catch (const std::exception&) {
-    same = false;
-  }
-  if (same && findAppearance(m_appearances, shared) != nullptr) {
-    select(shared);
-  } else {
-    shared.clear();
-  }
-  qDebug().noquote() << QStringLiteral("Appearances for bodies: %1%2")
-                            .arg(bodies.isEmpty() ? QStringLiteral("none") : bodies.join(QStringLiteral(", ")),
-                                 shared.isEmpty() || !faces.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(shared));
-  if (!faces.isEmpty()) {
-    QStringList named;
-    for (const auto& [owner, face] : std::as_const(faces)) {
-      named << QStringLiteral("%1 %2").arg(owner, face);
-    }
-    qDebug().noquote() << QStringLiteral("Appearances for faces: %1%2")
-                              .arg(named.join(QStringLiteral(", ")),
-                                   shared.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(shared));
-  }
-  showFaces();
-  // What the targets have, and whether it varies with an option
-  // (mitcad#861); Assign follows the panel.
-  m_panel->setTargets(bodies, faces);
-  updateAssign();
-}
-
-void AppearanceDialog::updateAssign() {
-  if (m_panel->varies()) {
-    // Assign fills the panel's selected rows: "Assign to Red".
-    const QString text = m_panel->assignText();
-    if (text != m_assign->text()) {
-      m_assign->setText(text);
-      qDebug().noquote() << QStringLiteral("Appearances assign label: %1").arg(text);
-    }
-    // None after the last row was filled: a row is to be clicked first.
-    m_assign->setToolTip(m_panel->assignTip());
-    m_assign->setEnabled(current() != nullptr && m_panel->canFill());
-    m_assignBodies->setVisible(false);
-  } else {
-    m_assign->setText(m_assignText);
-    m_assign->setToolTip(m_assignTip);
-    m_assign->setEnabled(!m_targets.isEmpty());
-    // Assign to N bodies only while the selection holds faces (mitcad#346).
-    m_assignBodies->setVisible(m_hasFaces);
-  }
-  growForPanel();
-  TestSync::singleShot(0, this, [this] { logLayout(); });
-}
-
-void AppearanceDialog::growForPanel() {
-  // The window grows by the assignment panel when it shows or gets taller
-  // (its header with targets, its table), so that the body keeps its
-  // height where the screen has room (mitcad#861); never by the panel
-  // twice, so a size the user chose stays.
-  const int panel = m_panel->isVisibleTo(this) ? m_panel->sizeHint().height() : 0;
-  if (panel <= m_panelHeight) {
-    return;
-  }
-  m_panelHeight = panel;
-  if (isVisible() && !testAttribute(Qt::WA_DontShowOnScreen)) {
-    fitWindowToContents(this, FitMode::GrowOnly);
-  }
 }
 
 const Appearance* AppearanceDialog::current() const { return findAppearance(m_appearances, m_current); }
@@ -957,9 +745,6 @@ void AppearanceDialog::refresh() {
   filterList();
   select(m_current);
   showCurrent();
-  showFaces();
-  // The targets' state again (mitcad#861): undo, a parameter, a fill.
-  m_panel->reload();
 }
 
 void AppearanceDialog::showCurrent() {
@@ -968,6 +753,10 @@ void AppearanceDialog::showCurrent() {
   const bool editable = a != nullptr && !a->library;
   m_name->setEnabled(editable);
   m_name->setText(a != nullptr ? a->name : QString());
+  m_class->setEnabled(editable);
+  // Other for one from a model before classes.
+  const QString shownClass = a == nullptr || a->materialClass.isEmpty() ? QStringLiteral("other") : a->materialClass;
+  m_class->setCurrentIndex(a == nullptr ? -1 : m_class->findData(shownClass));
   for (const NumberField& field : std::as_const(m_numbers)) {
     field.box->setEnabled(editable);
     if (a == nullptr) {
@@ -1053,7 +842,7 @@ void AppearanceDialog::pickColor(const ColorField& field) {
   }
   const bool base = qstrcmp(field.key, "base_color") == 0;
   const QColor color = dialogColor(base ? a->baseColor : a->emissionColor, this,
-                                              base ? tr("Base Colour") : tr("Emission Colour"));
+                                              base ? tr("Base Color") : tr("Emission Color"));
   if (color.isValid()) {
     change(QString::fromLatin1(field.key), colorJson(color));
   }
@@ -1084,11 +873,6 @@ void AppearanceDialog::newAppearance() {
   m_current = result.value(QStringLiteral("id")).toString();
   qDebug().noquote() << QStringLiteral("Created appearance %1 (%2) from %3").arg(m_current, name, base);
   refresh();
-  if (m_panel->varies()) {
-    // Into the active row at once (mitcad#861).
-    const QString made = quotedText(m_current);
-    m_panel->fill(made);
-  }
   m_name->setFocus();
   m_name->selectAll();
 }
@@ -1106,156 +890,6 @@ void AppearanceDialog::deleteAppearance() {
   m_message->clear();
   qDebug().noquote() << QStringLiteral("Deleted appearance %1").arg(id);
   m_current.clear();
-  refresh();
-}
-
-void AppearanceDialog::assign() {
-  const Appearance* a = current();
-  if (a != nullptr && m_panel->varies()) {
-    // The rows of the option the appearance varies with (mitcad#861).
-    const QString result = quotedText(a->id);
-    m_panel->fill(result);
-    return;
-  }
-  if (a == nullptr || m_targets.isEmpty() || !canChange()) {
-    return;
-  }
-  const QString id = a->id;
-  QJsonArray commands;
-  QStringList described;
-  // Faces by body: one command each (mitcad#53).
-  QStringList owners;
-  QHash<QString, QJsonArray> faces;
-  for (const SelectionItem& item : std::as_const(m_targets)) {
-    if (item.kind == SelectKind::Face) {
-      if (!owners.contains(item.owner)) {
-        owners << item.owner;
-      }
-      faces[item.owner].append(item.name);
-      described << QStringLiteral("%1 %2").arg(item.owner, item.name);
-    } else {
-      commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("set_body_appearance")},
-                                  {QStringLiteral("uid"), item.owner},
-                                  {QStringLiteral("appearance"), id}});
-      described << item.owner;
-    }
-  }
-  for (const QString& owner : std::as_const(owners)) {
-    commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("set_face_appearance")},
-                                {QStringLiteral("uid"), owner},
-                                {QStringLiteral("faces"), faces.value(owner)},
-                                {QStringLiteral("appearance"), id}});
-  }
-  if (!m_host.runModelCommands(commands, tr("Appearance"))) {
-    m_message->setText(m_host.lastError());
-    return;
-  }
-  m_message->clear();
-  qDebug().noquote() << QStringLiteral("Assigned appearance %1 to %2").arg(id, described.join(QStringLiteral(", ")));
-  refresh();
-}
-
-void AppearanceDialog::assignToBodies() {
-  const Appearance* a = current();
-  if (a == nullptr || m_targets.isEmpty() || !canChange()) {
-    return;
-  }
-  // Copies: the model's sync during runModelCommands refreshes the dialog and
-  // replaces m_appearances, so `a` dangles afterwards (mitcad#384).
-  const QString id = a->id;
-  const QString name = a->name;
-  const QStringList bodies = targetBodies();
-  QJsonArray commands;
-  for (const QString& uid : bodies) {
-    commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("set_body_appearance")},
-                                {QStringLiteral("uid"), uid},
-                                {QStringLiteral("appearance"), id}});
-  }
-  if (!m_host.runModelCommands(commands, tr("Appearance"))) {
-    m_message->setText(m_host.lastError());
-    return;
-  }
-  m_message->clear();
-  qDebug().noquote() << QStringLiteral("Appearance %1 assigned to %2 bodies (from faces)").arg(name).arg(bodies.size());
-  refresh();
-}
-
-QStringList AppearanceDialog::targetBodies() const {
-  QStringList bodies;
-  for (const SelectionItem& item : m_targets) {
-    if (!bodies.contains(item.owner)) {
-      bodies << item.owner;
-    }
-  }
-  return bodies;
-}
-
-void AppearanceDialog::showFaces() {
-  const QStringList bodies = targetBodies();
-  m_faces->clear();
-  try {
-    for (const QJsonValue& value : m_host.model().queryArray(QStringLiteral("bodies"))) {
-      const QJsonObject body = value.toObject();
-      const QString uid = body.value(QStringLiteral("uid")).toString();
-      if (!bodies.contains(uid)) {
-        continue;
-      }
-      for (const QJsonValue& entry : body.value(QStringLiteral("face_appearances")).toArray()) {
-        const QJsonObject face = entry.toObject();
-        const QString name = face.value(QStringLiteral("face")).toString();
-        const QString id = face.value(QStringLiteral("appearance")).toString();
-        const Appearance* look = findAppearance(m_appearances, id);
-        const bool found = !face.value(QStringLiteral("faces")).toArray().isEmpty();
-        auto* item = new QListWidgetItem(QStringLiteral("%1: %2 — %3%4")
-                                             .arg(body.value(QStringLiteral("name")).toString(), name,
-                                                  look != nullptr ? look->name : id,
-                                                  found ? QString() : tr(" (the face is not found)")),
-                                         m_faces);
-        if (look != nullptr) {
-          item->setIcon(QIcon(QPixmap::fromImage(appearanceSwatch(*look, kIconSize, devicePixelRatioF()))));
-        }
-        item->setData(kBodyRole, uid);
-        item->setData(kFaceRole, name);
-        item->setData(kIdRole, id);
-      }
-    }
-  } catch (const std::exception& e) {
-    m_message->setText(QString::fromUtf8(e.what()));
-  }
-  m_faces->setToolTip(bodies.isEmpty() ? tr("Open the dialog on bodies or faces to see their faces' appearances")
-                                       : QString());
-  m_clearFaces->setEnabled(!m_faces->selectedItems().isEmpty());
-}
-
-void AppearanceDialog::clearFaces() {
-  const QList<QListWidgetItem*> selected = m_faces->selectedItems();
-  if (selected.isEmpty() || !canChange()) {
-    return;
-  }
-  QStringList owners;
-  QHash<QString, QJsonArray> faces;
-  QStringList described;
-  for (const QListWidgetItem* item : selected) {
-    const QString owner = item->data(kBodyRole).toString();
-    if (!owners.contains(owner)) {
-      owners << owner;
-    }
-    faces[owner].append(item->data(kFaceRole).toString());
-    described << QStringLiteral("%1 %2").arg(owner, item->data(kFaceRole).toString());
-  }
-  QJsonArray commands;
-  for (const QString& owner : std::as_const(owners)) {
-    commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("set_face_appearance")},
-                                {QStringLiteral("uid"), owner},
-                                {QStringLiteral("faces"), faces.value(owner)},
-                                {QStringLiteral("appearance"), QJsonValue()}});
-  }
-  if (!m_host.runModelCommands(commands, tr("Clear Face Appearances"))) {
-    m_message->setText(m_host.lastError());
-    return;
-  }
-  m_message->clear();
-  qDebug().noquote() << QStringLiteral("Cleared face appearances of %1").arg(described.join(QStringLiteral(", ")));
   refresh();
 }
 
@@ -1279,14 +913,14 @@ void AppearanceDialog::showTexture(const Appearance* a, bool editable) {
   m_building = false;
   m_textureInfo->setToolTip(QString());
   if (!has) {
-    m_textureInfo->setText(editable ? tr("No texture: choose a PNG or JPEG image for the base colour.") : QString());
+    m_textureInfo->setText(editable ? tr("No texture: choose a PNG or JPEG image for the base color.") : QString());
   } else if (!texture.missing.isEmpty()) {
-    m_textureInfo->setText(tr("The texture is not drawn: %1. The rendered view shows the base colour.")
+    m_textureInfo->setText(tr("The texture is not drawn: %1. The rendered view shows the base color.")
                                .arg(texture.missing));
     qDebug().noquote() << QStringLiteral("Appearance %1 texture missing: %2").arg(a->id, texture.missing);
   } else {
     m_textureInfo->setText((texture.embedded ? tr("The image is embedded in the design. ") : QString()) +
-                           tr("The rendered view draws the texture; the shaded view shows the base colour."));
+                           tr("The rendered view draws the texture; the shaded view shows the base color."));
   }
   if (!has) {
     return;
@@ -1301,7 +935,7 @@ void AppearanceDialog::showTexture(const Appearance* a, bool editable) {
   const QJsonObject source = texture.json.value(QStringLiteral("source")).toObject();
   QStringList lines;
   if (!maps.isEmpty()) {
-    lines << tr("Maps: base colour, %1%2.")
+    lines << tr("Maps: base color, %1%2.")
                  .arg(maps.join(QStringLiteral(", ")), texture.embedded ? tr(" (embedded)") : QString());
   }
   if (!source.isEmpty()) {
@@ -1483,8 +1117,7 @@ void AppearanceDialog::logLayout() {
     QListWidgetItem* item = m_list->item(i);
     const QString id = item->data(kIdRole).toString();
     const QRect rect = m_list->visualItemRect(item);
-    // In sight in the list and in the body, which scrolls on a low screen
-    // or while the assignment panel's table takes room (mitcad#861).
+    // In sight in the list and in the body, which scrolls on a low screen.
     const QPoint inBody = m_list->viewport()->mapTo(m_bodyView, rect.center());
     if (!id.isEmpty() && !item->isHidden() && m_list->viewport()->rect().contains(rect.center()) &&
         m_bodyView->rect().contains(inBody)) {
@@ -1522,28 +1155,13 @@ void AppearanceDialog::logLayout() {
                                     {"texture_remove", m_textureRemove}}) {
     lines << QStringLiteral("Appearances field %1 at %2").arg(QString::fromLatin1(name), at(field, field->rect().center()));
   }
-  for (int i = 0; i < m_faces->count(); ++i) {
-    QListWidgetItem* item = m_faces->item(i);
-    const QRect rect = m_faces->visualItemRect(item);
-    if (m_faces->viewport()->rect().contains(rect.center())) {
-      lines << QStringLiteral("Appearances face %1 %2 %3 at %4")
-                   .arg(item->data(kBodyRole).toString(), item->data(kFaceRole).toString(),
-                        item->data(kIdRole).toString(), at(m_faces->viewport(), rect.center()));
-    }
-  }
   for (const auto& [name, button] : {std::pair<const char*, QPushButton*>{"new", m_new},
                                      {"delete", m_delete},
-                                     {"assign", m_assign},
-                                     {"assign_bodies", m_assignBodies},
-                                     {"clear_faces", m_clearFaces},
                                      {"close", m_close}}) {
     if (!button->isVisibleTo(this)) {
-      continue; // Assign to N bodies shows only for faces (mitcad#346)
+      continue;
     }
     lines << QStringLiteral("Appearances %1 at %2").arg(QString::fromLatin1(name), at(button, button->rect().center()));
-  }
-  if (m_assignBodies->isVisibleTo(this)) {
-    lines << QStringLiteral("Appearances assign_bodies label: %1").arg(m_assignBodies->text());
   }
   const QString logged = lines.join(QLatin1Char('\n'));
   if (logged != m_logged) {

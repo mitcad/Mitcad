@@ -352,7 +352,7 @@ def check_hostile_input(bridge, pid, say=print):
         if "busy" not in error or time.monotonic() > deadline:
             break
         time.sleep(0.5)
-    check("unknown command 'ccc" in error and "c" * 1000 not in error and len(error) < 1024 * 1024,
+    check("unknown command ccc" in error and "c" * 1000 not in error and len(error) < 1024 * 1024,
           "The refusal of a 7 MiB command name: " + error[:500])
     for _ in range(4):
         select_once()
@@ -373,7 +373,7 @@ def check_hostile_input(bridge, pid, say=print):
     log = bridge.tool("ui_log", {"limit": 2000})
     sizes = [len(line["text"].encode("utf-8")) for line in log["lines"]]
     check(max(sizes) < 4096, "A ui_log line of %d bytes" % max(sizes))
-    check(any("MCP refused: unknown command 'ccc" in line["text"] for line in log["lines"]),
+    check(any("MCP refused: unknown command ccc" in line["text"] for line in log["lines"]),
           "ui_log lacks the refusals of the long command name")
     say("ok   every ui_log line is under 4 KiB")
 
@@ -414,7 +414,7 @@ def run_flow(bridge, design, say=print):
     check("| `faces` |" in row["text"] and row["permitted"], "model_reference's row of faces: " + repr(row))
     document = bridge.tool("document_list", {})["documents"][0]["document"]
     unknown = bridge.tool("model_query", {"document": document, "query": {"query": "bbox"}}, error=True)
-    check("unknown query 'bbox'" in unknown["error"] and "bodies" in unknown["error"],
+    check("unknown query bbox" in unknown["error"] and "bodies" in unknown["error"],
           "An unknown query does not list the queries: " + repr(unknown))
 
     # Refusals must preserve the complete live camera, including FOV. The

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! Body attributes: visibility (the browser's light bulb), physical material and
+//! Body attributes: visibility (the browser's light bulb), transparency
+//! (mitcad#1093), physical material and
 //! appearance of each body, the appearances of single faces (mitcad#53)
 //! and the print bed face (mitcad#731, `print_bed.rs`). They are part of the definition state, so they are saved
 //! with the body's name and undo restores them; they do not change the
@@ -54,6 +55,9 @@ pub struct BodyAttributes {
     /// Appearances of single faces from expressions, by the face's
     /// topological name as assigned (canonical text).
     pub face_appearance_exprs: BTreeMap<String, String>,
+    /// Drawn see-through (mitcad#1093): a display state like `visible`,
+    /// independent of it; the appearance and material stay as they are.
+    pub transparent: bool,
 }
 
 impl Default for BodyAttributes {
@@ -68,6 +72,7 @@ impl Default for BodyAttributes {
             material_expr: None,
             visible_when: None,
             face_appearance_exprs: BTreeMap::new(),
+            transparent: false,
         }
     }
 }
@@ -108,6 +113,36 @@ impl<K: Kernel> Document<K> {
             a.visible = visible;
             a.visible_when = None;
             Ok(())
+        })
+    }
+
+    /// Makes a body transparent or opaque again at the timeline marker
+    /// (mitcad#1093): one undo step (`Make Body1 Transparent`, `Make Body1
+    /// Opaque`) that recomputes nothing, none when nothing changes. Its
+    /// visibility, appearance and material stay as they are.
+    pub fn set_body_transparent(
+        &mut self,
+        uid: BodyUid,
+        transparent: bool,
+    ) -> Result<(), ModelError> {
+        if self.body_shape(uid).is_none() {
+            return Err(invalid(format!(
+                "body {uid} does not exist at the timeline marker"
+            )));
+        }
+        let mut attributes = self.body_attributes(uid);
+        if attributes.transparent == transparent {
+            return Ok(());
+        }
+        attributes.transparent = transparent;
+        let label = transparency_label(&self.body_name(uid), transparent);
+        self.apply_with(|state| {
+            if attributes.is_default() {
+                state.body_attributes.remove(&uid);
+            } else {
+                state.body_attributes.insert(uid, attributes);
+            }
+            Ok((label, (), false))
         })
     }
 
@@ -197,7 +232,7 @@ impl<K: Kernel> Document<K> {
         let mut names = Vec::with_capacity(faces.len());
         for face in faces {
             let name = FaceName::from_str(face.trim())
-                .map_err(|e| invalid(format!("'{face}' is no face name: {e}")))?;
+                .map_err(|e| invalid(format!("{face} is no face name: {e}")))?;
             match self.kernel().count_faces(shape, &name) {
                 Ok(0) => {
                     return Err(invalid(format!(
@@ -353,6 +388,13 @@ impl<K: Kernel> Document<K> {
             Ok((label, ()))
         })
     }
+}
+
+/// The undo label of a change of transparency (mitcad#1093): `Make Body1
+/// Transparent`, `Make Bracket:1 Opaque`.
+pub(super) fn transparency_label(name: &str, transparent: bool) -> String {
+    let state = if transparent { "Transparent" } else { "Opaque" };
+    format!("Make {name} {state}")
 }
 
 /// `Face` or `3 Faces`, for undo labels.

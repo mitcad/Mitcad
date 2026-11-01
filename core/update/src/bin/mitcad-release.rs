@@ -17,7 +17,7 @@ use mitcad_update::{
 const USAGE: &str = "\
 Usage:
   mitcad-release public-key
-      Prints the public key of the release key (to build into Mitcad).
+      Prints the public key of the release key (to build into MitCad).
   mitcad-release manifest --version VERSION --notes URL [--date YYYY-MM-DD]
                           [--expires YYYY-MM-DD]
                           [--asset PLATFORM FILE URL]... --out FILE
@@ -206,7 +206,7 @@ fn write_signed(
     .map_err(error)?;
     fs::write(out, signed).map_err(|e| error(format!("cannot write {out}: {e}")))?;
     println!(
-        "{out}: Mitcad {} signed with {}, expires {}",
+        "{out}: MitCad {} signed with {}, expires {}",
         manifest.version,
         public_key(key),
         manifest.expires.as_deref().unwrap_or("never")
@@ -255,7 +255,7 @@ fn verify(args: &[String]) -> Result<(), Failure> {
     let data = fs::read(path).map_err(|e| error(format!("cannot read {path}: {e}")))?;
     let manifest = Manifest::read(&data, &keys).map_err(error)?;
     println!(
-        "{path}: Mitcad {} of {}, expires {}, signature good",
+        "{path}: MitCad {} of {}, expires {}, signature good",
         manifest.version,
         manifest.date,
         manifest.expires.as_deref().unwrap_or("never")

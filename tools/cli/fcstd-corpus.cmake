@@ -11,7 +11,7 @@
 # in FreeCAD) is imported again with those parameters changed
 # (import-fcstd --set) and compared with the variant's dump. Prints a line
 # per file; skipped without the corpus. A file whose history fell back
-# says how many fallbacks of each group (mitcad#539: missing in Mitcad, no
+# says how many fallbacks of each group (mitcad#539: missing in MitCad, no
 # parametric counterpart, other; the report's `fallback_group`), and the
 # last line has the totals, so that a regression shows.
 #
@@ -46,7 +46,7 @@ function(check_file file)
   string(REGEX MATCH "reference: [^\n]*" reference "${out}")
   # The fallbacks by group (the report's line "fallbacks by group: …").
   set(groups "")
-  if(out MATCHES "fallbacks by group: ([0-9]+) missing in Mitcad, ([0-9]+) without a parametric counterpart, ([0-9]+) other")
+  if(out MATCHES "fallbacks by group: ([0-9]+) missing in MitCad, ([0-9]+) without a parametric counterpart, ([0-9]+) other")
     if(NOT "${CMAKE_MATCH_1}${CMAKE_MATCH_2}${CMAKE_MATCH_3}" STREQUAL "000")
       set(groups "; fallbacks: ${CMAKE_MATCH_1} missing, ${CMAKE_MATCH_2} no counterpart, ${CMAKE_MATCH_3} other")
     endif()
@@ -195,7 +195,7 @@ else()
 endif()
 list(LENGTH failed failures)
 message("FreeCAD corpus: ${count} files, ${compared} with a dump, ${failures} failed; "
-        "fallbacks: ${total_missing} missing in Mitcad, ${total_none} without a parametric "
+        "fallbacks: ${total_missing} missing in MitCad, ${total_none} without a parametric "
         "counterpart, ${total_other} other")
 if(failed)
   message(FATAL_ERROR "failed: ${failed}")

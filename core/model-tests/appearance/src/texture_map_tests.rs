@@ -136,7 +136,7 @@ fn a_full_map_set_is_created_edited_saved_loaded_and_undone() {
         json!({"query": "appearance_image", "id": "oak", "map": "bump"}),
     )
     .unwrap_err();
-    assert!(error.contains("'bump' is no map"), "{error}");
+    assert!(error.contains("“bump” is no map"), "{error}");
 
     // The listed form sent back keeps every image: a change of the size.
     let before_edit = doc.state().clone();

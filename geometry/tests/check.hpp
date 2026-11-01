@@ -233,5 +233,7 @@ void move_faces_tests();
 void face_extrude_tests();
 // A planar face of a body revolved as a profile (mitcad#539).
 void face_revolve_tests();
+// Fillets and chamfers that take a face away exactly (mitcad#1106).
+void dressup_takes_face_tests();
 
 } // namespace test

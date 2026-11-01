@@ -7,7 +7,9 @@
 #include <stdexcept>
 #include <vector>
 
+#include <QApplication>
 #include <QCoreApplication>
+#include <QEvent>
 #include <QDateTime>
 #include <QHostAddress>
 #include <QJsonDocument>
@@ -81,6 +83,18 @@ struct LiveServer::State {
 
   State(LiveServer* object, MainWindow* documentWindow) : owner(object), window(documentWindow) {}
 
+  void publishWindow() {
+    if (!published || !window) return;
+    endpoint.title = window->windowTitle();
+    QString error;
+    if (!publishWindowState(endpoint, &error)) qWarning().noquote() << error;
+  }
+
+  void activated() {
+    endpoint.activatedAt = QDateTime::currentMSecsSinceEpoch();
+    publishWindow();
+  }
+
   // The window shows whether agents are connected and can disconnect them
   // (mitcad#265), all or some (mitcad#706).
   void updateAgents() {
@@ -90,6 +104,11 @@ struct LiveServer::State {
         agents.append({client->displayName, client->version, client->since, client->id, !client->chat.isEmpty()});
       }
     }
+    endpoint.agents.clear();
+    for (const ConnectedAgent& agent : agents) {
+      if (!endpoint.agents.contains(agent.name)) endpoint.agents.append(agent.name.left(256));
+    }
+    publishWindow();
     if (window) {
       window->setMcpAgents(agents, [this](const QStringList& ids) { disconnectClients(ids); });
     }
@@ -419,7 +438,20 @@ struct LiveServer::State {
 };
 
 LiveServer::LiveServer(MainWindow* window, QObject* parent)
-    : QObject(parent), m_state(std::make_unique<State>(this, window)) {}
+    : QObject(parent), m_state(std::make_unique<State>(this, window)) {
+  window->installEventFilter(this);
+  connect(window, &QWidget::windowTitleChanged, this, [this] { m_state->publishWindow(); });
+  // The native macOS shell has its own NSWindow. Its process activation
+  // still reaches Qt even when the retained main QWidget is hidden.
+  connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
+    if (state == Qt::ApplicationActive) m_state->activated();
+  });
+}
+
+bool LiveServer::eventFilter(QObject* watched, QEvent* event) {
+  if (watched == m_state->window && event->type() == QEvent::WindowActivate) m_state->activated();
+  return QObject::eventFilter(watched, event);
+}
 
 LiveServer::~LiveServer() {
   m_state->listener.close();
@@ -466,6 +498,8 @@ bool LiveServer::start(QString* error) {
     return false;
   }
   m_state->published = true;
+  if (m_state->window && QGuiApplication::applicationState() == Qt::ApplicationActive) m_state->activated();
+  else m_state->publishWindow();
   connect(&m_state->listener, &QTcpServer::newConnection, this, [this] { m_state->accept(); });
   qInfo().noquote() << "MCP live instance:" << endpoint.instance << "127.0.0.1:" << endpoint.port;
   // The agent indicator names them (mitcad#710).

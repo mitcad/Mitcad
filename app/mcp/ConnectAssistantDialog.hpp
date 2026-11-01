@@ -7,6 +7,8 @@
 #include <functional>
 #include <QDateTime>
 #include <QDialog>
+#include <QHash>
+#include <QSet>
 #include <QList>
 #include <QStringList>
 
@@ -42,6 +44,8 @@ public:
     // Ends these clients' connections (ConnectedAgent::id).
     std::function<void(const QStringList& ids)> disconnect;
     QString suggestedFolder;
+    // Labels of clients initialized in this run, including before this dialog opened.
+    std::function<QStringList()> previousClients;
   };
   explicit ConnectAssistantDialog(Host host, QWidget* parent = nullptr);
 
@@ -86,6 +90,7 @@ private:
   void fitConfigurationHeight();
   void refreshConnection();
   void refreshWindows();
+  void verifyWindow(const QString& instance, quint16 port, const QString& token);
   // The window's height to its contents, both ways; its width only grows.
   void refit();
   void primaryAction();
@@ -110,11 +115,17 @@ private:
   QString m_bridge;
   QString m_folderPath;
   QString m_ownInstance;
+  // Only a listener that authenticated its endpoint may advertise a remote
+  // connection. Probes are asynchronous and expire on the next failed check.
+  QHash<QString, QString> m_verifiedWindows;
+  QHash<QString, qint64> m_windowChecked;
+  QSet<QString> m_windowChecking;
   QString m_bundleSaved; // the extension saved for a Claude Desktop that no application opened it in
   QString m_shownState;  // the state whose look is applied (the error colour)
   QString m_shownLayout; // which rows were shown at the last fit
   QString m_loggedState;  // the choice and state line logged last
   QString m_loggedPlaces; // the choices' places logged last
+  QStringList m_previousClients;
   QButtonGroup* m_clients = nullptr;
   QLineEdit* m_config = nullptr;
   QWidget* m_configRow = nullptr;

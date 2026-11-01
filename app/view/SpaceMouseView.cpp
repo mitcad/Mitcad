@@ -2,7 +2,9 @@
 // The 3D view's side of a 3D mouse (mitcad#951): OcctViewer's camera moved
 // at each frame by SpaceMouseController's rates (moveSpaceMouseCamera,
 // SpaceMouseCamera.hpp, through the pure spaceMouseMove) in the 3D mouse's
-// Navigation mode and with its Lock horizon (mitcad#978).
+// Navigation mode and with its Lock horizon (mitcad#978), each frame's
+// step paced and the motion's timing logged by SpaceMouseTiming.hpp
+// (mitcad#1023).
 #include "../OcctViewer.hpp"
 
 #include <algorithm>
@@ -32,7 +34,9 @@ void OcctViewer::setSpaceMouseRates(const SpaceMouseRates& rates) {
   if (!wasMoving) {
     m_spaceMouseClock.invalidate();
     m_spaceMousePivot.reset();
-    m_spaceMouseFrames = 0;
+    m_spaceMousePacer.reset();
+    m_spaceMouseTiming = SpaceMouseTiming();
+    m_spaceMouseGridRebuilds = m_gridRebuilds;
     m_spaceMouseTurned = 0.0;
     m_spaceMousePanned = 0.0;
     m_spaceMouseStartScale = 0.0;
@@ -43,40 +47,51 @@ void OcctViewer::setSpaceMouseRates(const SpaceMouseRates& rates) {
 void OcctViewer::endSpaceMouse() {
   m_spaceMouseClock.invalidate();
   m_spaceMousePivot.reset();
-  if (m_spaceMouseFrames > 0) {
+  if (m_spaceMouseTiming.frames > 0) {
+    // The last frame's grid rebuild (it comes after the frame's step).
+    m_spaceMouseTiming.gridRebuilds += m_gridRebuilds - m_spaceMouseGridRebuilds;
     // For UI tests and support (app/COMMANDS.md, "Logs that UI tests read"):
-    // the zoom is the camera's own, its scale before over its scale now.
+    // the frames' timing (mitcad#1023: an uneven motion shows as a low
+    // rate or a long frame, and whether a grid rebuild fell in it); the
+    // zoom is the camera's own, its scale before over its scale now.
     const double scale = m_view->Camera()->Scale();
     const double zoom = scale > 0.0 && m_spaceMouseStartScale > 0.0 ? m_spaceMouseStartScale / scale : 1.0;
     // The mode and the horizon lock it moved in (mitcad#978).
     const SpaceMouseSettings& settings = m_navigation.spaceMouse;
-    qDebug().noquote() << QStringLiteral("3D mouse motion: %1 frame(s), turned %2 degrees, panned %3 view "
-                                         "heights, zoom %4x, %5 mode%6")
-                              .arg(m_spaceMouseFrames)
+    qDebug().noquote() << QStringLiteral("3D mouse motion: %1 frame(s), %2, turned %3 degrees, panned %4 view "
+                                         "heights, zoom %5x, %6 mode%7")
+                              .arg(m_spaceMouseTiming.frames)
+                              .arg(m_spaceMouseTiming.text())
                               .arg(m_spaceMouseTurned, 0, 'f', 1)
                               .arg(m_spaceMousePanned, 0, 'f', 2)
                               .arg(zoom, 0, 'f', 2)
                               .arg(QLatin1String(spaceMouseModeId(settings.mode)),
                                    settings.lockHorizon ? QStringLiteral(", horizon locked") : QString());
   }
-  m_spaceMouseFrames = 0;
+  m_spaceMouseTiming = SpaceMouseTiming();
 }
 
 void OcctViewer::stepSpaceMouse() {
   if (!m_spaceMouse.moving()) {
     return;
   }
-  // The time since the motion's last frame: its first frame takes one of
-  // 60 Hz, a frame after a stall at most 50 ms, so that the view never
-  // jumps.
-  double seconds = 1.0 / 60.0;
+  // The time since the motion's last frame (none for its first), and the
+  // step it moves the camera by: the mean of the last frames' times, so
+  // that frames begun at uneven times move the view by even amounts, and
+  // a stall is not made up (SpaceMouseTiming.hpp, mitcad#1023).
+  double interval = -1.0;
   if (m_spaceMouseClock.isValid()) {
-    seconds = std::clamp(static_cast<double>(m_spaceMouseClock.nsecsElapsed()) / 1.0e9, 0.0, 0.05);
+    interval = std::max(static_cast<double>(m_spaceMouseClock.nsecsElapsed()) / 1.0e9, 0.0);
   }
   m_spaceMouseClock.start();
+  const double seconds = m_spaceMousePacer.step(interval);
+  // A grid rebuild in the previous frame fell in this interval.
+  const int rebuilt = m_spaceMouseTiming.frames > 0 ? m_gridRebuilds - m_spaceMouseGridRebuilds : 0;
+  m_spaceMouseGridRebuilds = m_gridRebuilds;
+  m_spaceMouseTiming.gridRebuilds += rebuilt;
   try {
     const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
-    if (m_spaceMouseFrames == 0) {
+    if (m_spaceMouseTiming.frames == 0) {
       AbortViewAnimation(); // the device takes over from an animated move
       m_spaceMouseStartScale = camera->Scale();
     }
@@ -100,7 +115,7 @@ void OcctViewer::stepSpaceMouse() {
   const double turn = m_navigation.spaceMouse.lockHorizon ? std::hypot(rates.pitch, rates.yaw)
                                                     : std::sqrt(rates.pitch * rates.pitch + rates.yaw * rates.yaw +
                                                                 rates.roll * rates.roll);
-  ++m_spaceMouseFrames;
+  m_spaceMouseTiming.frame(interval, rebuilt > 0);
   m_spaceMouseTurned += turn * seconds * 180.0 / 3.14159265358979323846;
   m_spaceMousePanned += std::hypot(rates.panX, rates.panY) * seconds;
   m_view->Invalidate();

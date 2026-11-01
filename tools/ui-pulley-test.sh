@@ -220,7 +220,7 @@ ui_expect_new "Pick edge F2.b0/E{F2:side0|F2:top} at" "the second shaft's top ed
 ui_mark
 ui_step "the second shaft"                 ui_click_pick "edge F2.b0/E{F2:side0|F2:top} at"
 ui_expect_new "Belt Drive candidates: " "the model's candidates" 30
-ui_expect_new "centre distance 60 mm" "the axes 60 mm apart"
+ui_expect_new "center distance 60 mm" "the axes 60 mm apart"
 ui_expect_new "Panel Belt Drive options candidate: " "the rows listed" 30
 grep "^Panel Belt Drive options candidate: " "$UI_LOG" | tail -1 | cut -c1-160 | sed 's/^/     /'
 ui_mark
@@ -285,6 +285,7 @@ MITCAD_TEST_RECOMPUTE_DELAY_MS=0,preview=2500 ui_start_app --open "$WORK/inch.mi
 ui_mark
 ui_step "Pulley"                           ui_command "Pulley"
 ui_expect_new "Command Pulley started" "the panel opened" 30
+ui_show_origin
 ui_mark
 ui_step "Place On: the XY plane"           ui_click_logged "Datum xy"
 ui_expect_new "Place Pulley: face plane xy, " "placed on the XY plane" 30

@@ -82,7 +82,7 @@ impl DocState {
         table.check().map_err(invalid)?;
         let name = table.name.clone();
         if self.parameters.find(&name).is_some() {
-            return Err(invalid(format!("'{name}' is the name of a parameter")));
+            return Err(invalid(format!("{name} is the name of a parameter")));
         }
         // A column a parameter uses stays; its unit or kind may change, which
         // the re-evaluation checks.
@@ -125,7 +125,7 @@ impl DocState {
             return Err(invalid(format!("table {new} already exists")));
         }
         if self.parameters.find(new).is_some() {
-            return Err(invalid(format!("'{new}' is the name of a parameter")));
+            return Err(invalid(format!("{new} is the name of a parameter")));
         }
         let tables = self.tables.renamed(old, new);
         tables.get(new).expect("renamed").check().map_err(invalid)?;
@@ -133,7 +133,7 @@ impl DocState {
             .parameters
             .rename_table_references(tables.source(), old, None, new)?;
         self.tables = tables;
-        self.rename_in_configurations(old, None, new);
+        self.rename_in_table_expressions(old, None, new);
         Ok(rewritten)
     }
 
@@ -155,7 +155,7 @@ impl DocState {
         }
         if !is_column_name(new) {
             return Err(invalid(format!(
-                "'{new}' is not a valid column name: use letters, digits and '_', starting with \
+                "{new} is not a valid column name: use letters, digits and '_', starting with \
                  a letter"
             )));
         }
@@ -168,7 +168,7 @@ impl DocState {
             self.parameters
                 .rename_table_references(tables.source(), table, Some(old), new)?;
         self.tables = tables;
-        self.rename_in_configurations(table, Some(old), new);
+        self.rename_in_table_expressions(table, Some(old), new);
         Ok(rewritten)
     }
 
@@ -205,9 +205,14 @@ impl DocState {
         })
     }
 
-    /// The configuration rows' values with the table `table` (`column`
-    /// None) or its column renamed.
-    fn rename_in_configurations(&mut self, table: &str, column: Option<&str>, new: &str) {
+    /// Bindings and configuration expressions with the table `table`
+    /// (`column` None) or its column renamed.
+    fn rename_in_table_expressions(&mut self, table: &str, column: Option<&str>, new: &str) {
+        self.edit_binding_texts(|expression| {
+            if let Ok(expr) = Expr::parse(expression) {
+                *expression = replace_table_references(expression, &expr, table, column, new);
+            }
+        });
         // The rules' `in_table` actions and column lists (mitcad#806).
         match column {
             None => self.configurations.rename_table(table, new),

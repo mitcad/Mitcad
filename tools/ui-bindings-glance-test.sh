@@ -19,7 +19,8 @@
 #      title with the options' values now and one readable line per
 #      property (the current case marked ●, the condition with "shown now",
 #      the face's expression with what it gives); Esc closes it. Edit… of
-#      Appearance opens the Appearance window for Body1.
+#      Appearance opens the Appearance tool for Body1 with its binding
+#      (mitcad#1059).
 #   2. Board:1's card (an occurrence), and Box2's from the timeline's badge
 #      (a feature suppressed by a condition); its link opens Configurations
 #      on the Bindings tab.
@@ -135,11 +136,9 @@ ui_expect_new "Bindings card Edit Appearance at" "the card is pinned again"
 ui_mark
 ui_step "Edit... of Appearance"            ui_click_logged "Bindings card Edit Appearance"
 ui_expect_new "Bindings card Edit Appearance of Body1" "Edit... of the appearance"
-ui_expect_new "Appearances dialog opened" "the Appearance window opened"
-ui_expect_new "Appearances for bodies: F2.b0" "for Body1"
-ui_focus_dialog '^Appearances$'
-ui_step "close it (Esc)"                   ui_key Escape
-ui_focus_main
+ui_expect_new "Appearance tool for F2.b0" "the Appearance tool for Body1"
+ui_expect_new "Appearance tool: the targets follow switch(Color; " "with Body1's binding"
+ui_step "Cancel (Esc)"                     ui_key Escape
 
 echo "--- 2. An occurrence's card, a feature's from the timeline"
 ui_mark
@@ -168,7 +167,7 @@ ui_expect_new "Configurations binding Body1 Appearance: Color: Black → Paint -
 ui_expect_new "Configurations binding Body1 Shown: when Holes = No; now shown" "Body1's Show When"
 ui_expect_new "Configurations binding Body1 Face 1 (side): Color: Black → Paint - White, Red → Paint - Yellow; now Paint - White" \
   "Body1's face"
-ui_expect_new "Configurations binding Body2 Appearance: Color: Black → Paint - Black, Red → paint_purple; now Paint - Black; warning no appearance \"paint_purple\"" \
+ui_expect_new "Configurations binding Body2 Appearance: Color: Black → Paint - Black, Red → paint_purple; now Paint - Black; warning no appearance “paint_purple”" \
   "Body2's appearance, with a warning about the result that names nothing"
 ui_expect_new "Configurations binding Box2 Suppressed: when Holes = Yes; now not suppressed" "the feature"
 ui_expect_new "Configurations binding Board:1 Shown: when Color ≠ Red; now shown" "the occurrence"
@@ -203,7 +202,7 @@ ui_expect_new "Revealed Box2" "Box2 is selected and shown"
 ui_mark
 ui_focus_dialog '^Configurations$'
 ui_step "select Body2's appearance"        ui_click_logged "Configurations binding Body2 Appearance"
-ui_expect_new "Configurations bindings selected warning: no appearance \"paint_purple\"" \
+ui_expect_new "Configurations bindings selected warning: no appearance “paint_purple”" \
   "the selected row's warning is in the status line"
 ui_step "Remove Binding"                   ui_click_logged "Configurations bindings remove"
 ui_expect_new "Configurations binding removed: Body2 Appearance" "the binding is removed"

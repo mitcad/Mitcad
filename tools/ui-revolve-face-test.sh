@@ -68,6 +68,7 @@ ui_expect_new "Command Revolve started" "Revolve started"
 ui_expect_new "Revolve Profiles: 1 face [face $FRONT of F2.b0" "the face is the profile"
 no_new "Revolve Profiles: 1 profile" "the unused square does not stand in"
 ui_step "the axis input"                   ui_click_logged "Panel Revolve input axis"
+ui_show_origin
 ui_step "pick the Z axis"                  ui_click_logged "Datum z"
 ui_expect_new "Revolve Axis: 1 axis [axis z]" "Z axis picked"
 ui_step "Angle"                            ui_choose "Panel Revolve input type" 1

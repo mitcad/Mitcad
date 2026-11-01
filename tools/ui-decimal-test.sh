@@ -6,7 +6,7 @@
 #   - A sketch dimension typed as 42,5 is 42.5 mm.
 #   - An extrude distance typed as 12,5 is 12.5 mm and shows as 12.5 mm
 #     once the field is left; the body is 42.5 x 20 x 12.5 mm.
-#   - Change Parameters lists both with points; an entry of 7,5 is 7.5 mm,
+#   - Edit Parameters lists both with points; an entry of 7,5 is 7.5 mm,
 #     and max(1,5) is refused with the hint to write max(1; 5).
 # The model's rule: core/expr/src/lib.rs and its tests.
 #
@@ -57,9 +57,9 @@ ui_expect_new "Extrude Distance: 12.5 mm = 12.5 mm" "the field shows 12.5 mm onc
 ui_step "OK (Enter)"                     ui_key Return
 ui_expect_volume "New body Body1 (F2.b0): volume \([0-9.]*\) mm3" 10625 "42.5 x 20 x 12.5 mm"
 
-echo "--- Change Parameters"
+echo "--- Edit Parameters"
 ui_mark
-ui_step "Change Parameters (search)"     ui_command "Change Parameters"
+ui_step "Edit Parameters (search)"     ui_command "Edit Parameters"
 ui_expect_new "Parameters: d1 = 42.5 mm (42.5 mm); d2 = 12.5 mm (12.5 mm)" \
   "the expressions are kept with points"
 ui_expect_new "Parameters d2 expression at" "its cells are logged"
@@ -71,7 +71,7 @@ ui_expect_volume "Body Body1 (F2.b0): volume [0-9.]* -> \([0-9.]*\) mm3" 6375 "4
 ui_mark
 ui_step "d2 = max(1,5)"                  edit_cell "d2 expression" "max(1,5)"
 ui_expect_new "Parameter d2 expression: max(1,5) refused: " "max(1,5) is max(1.5): refused"
-tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "or a space after the comma: 'max(1; 5)'" ||
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "or a space after the comma: “max(1; 5)”" ||
   ui_fail "the refusal does not say to write max(1; 5)"
 echo "ok   the refusal says to write max(1; 5)"
 ui_step "close the parameters (Esc)"     ui_key Escape

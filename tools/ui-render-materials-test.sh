@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/render app/framework/Appearances.cpp app/framework/Appearances.hpp
+# check-all sources: app/render app/framework/Appearances.cpp app/framework/Appearances.hpp app/commands/MaterialCommands.cpp
 # Appearances in the rendered view (mitcad#46, docs/rendering.md): a box in
 # red plastic and a sphere in chrome, rendered through the real UI:
 #   - The scene sent to the worker names each body's appearance.
@@ -8,13 +8,14 @@
 #     of its material: the plastic's near its base colour (red, its hue
 #     kept), the chrome's a neutral grey with brighter and darker
 #     reflections; the two differ.
-#   - A copy of the plastic made, assigned and edited in Edit Appearances
-#     while rendering: a change of its look sends the worker a new scene
+#   - A copy of the plastic made in Edit Appearances, assigned by the
+#     Appearance tool (mitcad#1059) and edited in Edit Appearances while
+#     rendering: a change of its look sends the worker a new scene
 #     (also one of the roughness alone), and the box renders in the copy's
 #     colour.
 #   - mitcad#538: an embedded textured appearance (base colour, normal,
 #     roughness and occlusion images) swapped in and out while rendering,
-#     in one worker session: assigned (Edit Appearances), undone, redone,
+#     in one worker session: assigned (the Appearance tool), undone, redone,
 #     its texture removed (edit_appearance "texture": null) and that undone;
 #     after each change the box renders in the colours it should (the
 #     texture's orange, the copy's teal, the appearance's own white), never
@@ -186,15 +187,37 @@ dialog_type() {
   xdotool type --delay 40 -- "$2"
   ui_key Return
 }
+# dialog_search text id: the Appearances window's search narrowed to the
+# text, the appearance `id` selected.
+dialog_search() {
+  ui_focus_dialog '^Appearances$'
+  ui_step "click the search field"      ui_click_logged "Appearances search"
+  ui_key ctrl+a
+  ui_step "type $1"                     xdotool type --delay 40 -- "$1"
+  ui_expect_new "Appearances item $2 at" "$2 is in sight"
+  ui_step "select $2"                   ui_click_logged "Appearances item $2"
+}
+ui_mark
+ui_step "Edit Appearances (search)"     ui_command "Edit Appearances"
+ui_expect_new "Appearances dialog opened" "the window opened"
+dialog_search "Plastic - Red" plastic_red
+ui_mark
+ui_step "New"                           ui_click_logged "Appearances new"
+ui_expect_new "Created appearance custom1 (Plastic - Red Copy) from plastic_red" "a copy of the plastic"
+ui_step "Close"                         ui_click_logged "Appearances close"
+ui_focus_main
 ui_mark
 ui_step "right-click Body1"             ui_click_logged "Browser Root/Bodies/Body1" 3
 ui_step "choose Appearance..."          ui_menu_choose "Appearance..."
-ui_expect_new "Appearances for bodies: F1.b0 (plastic_red)" "the dialog shows the box's appearance"
-ui_focus_dialog '^Appearances$'
-ui_step "New"                           ui_click_logged "Appearances new"
-ui_expect_new "Created appearance custom1 (Plastic - Red Copy) from plastic_red" "a copy of the plastic"
-ui_step "Assign to Body1"               ui_click_logged "Appearances assign"
-ui_expect_new "Assigned appearance custom1 to F1.b0" "assigned (the same look: no new scene)"
+ui_expect_new "Appearance tool for F1.b0" "the Appearance tool for the box"
+ui_step "the picker: the copy"          ui_picker_choose "Panel Appearance input value" "Appearance picker" "Plastic - Red Copy"
+ui_mark
+ui_step "OK (Enter)"                    ui_key Return
+ui_expect_new "Appearance custom1 for 1 body(ies)" "assigned (the same look: no new scene)"
+ui_mark
+ui_step "Edit Appearances (search)"     ui_command "Edit Appearances"
+ui_expect_new "Appearances dialog opened" "the window opened again"
+dialog_search "Plastic - Red Copy" custom1
 ui_mark
 ui_step "base colour #1a8c99"           dialog_type base_color "#1a8c99"
 ui_expect_new "Appearance custom1 base_color = #1a8c99" "the base colour changed"
@@ -275,21 +298,12 @@ swapped() {
 ui_mark
 ui_step "right-click Body1"             ui_click_logged "Browser Root/Bodies/Body1" 3
 ui_step "choose Appearance..."          ui_menu_choose "Appearance..."
-ui_expect_new "Appearances for bodies: F1.b0 (custom1)" "the dialog shows the copy"
-ui_focus_dialog '^Appearances$'
-ui_step "click the search field"        ui_click_logged "Appearances search"
-ui_step "type Test Ply"                 xdotool type --delay 40 -- "Test Ply"
-ui_expect_new 'Appearances filtered "Test Ply" (All Categories): 1 shown' "the search lists the textured appearance"
-ui_expect_new "Appearances item test_ply at" "it is in sight"
-ui_step "select Test Ply"               ui_click_logged "Appearances item test_ply"
-ui_expect_new "Appearance selected: test_ply" "it is selected"
+ui_expect_new "Appearance tool for F1.b0" "the Appearance tool for the box"
+ui_step "the picker: Test Ply"          ui_picker_choose "Panel Appearance input value" "Appearance picker" "Test Ply"
 ui_mark
-ui_step "Assign to Body1"               ui_click_logged "Appearances assign"
-ui_expect_new "Assigned appearance test_ply to F1.b0" "the box gets the textured appearance"
+ui_step "OK (Enter)"                    ui_key Return
+ui_expect_new "Appearance test_ply for 1 body(ies)" "the box gets the textured appearance"
 ui_expect_new "Render body F1.b0: appearance test_ply" "the render gets it"
-ui_step "Close"                         ui_click_logged "Appearances close"
-ui_focus_main
-ui_step "Escape (clear the selection)"  ui_key Escape
 swapped "the textured appearance assigned"
 shot textured
 expect_box textured orange "the box renders with the texture's colours"
@@ -311,10 +325,10 @@ shot redone
 expect_box redone orange "the box renders with the texture's colours again, not black"
 
 ui_mark
-ui_step "right-click Body1"             ui_click_logged "Browser Root/Bodies/Body1" 3
-ui_step "choose Appearance..."          ui_menu_choose "Appearance..."
-ui_expect_new "Appearances for bodies: F1.b0 (test_ply)" "the dialog shows the textured appearance"
-ui_focus_dialog '^Appearances$'
+ui_step "Edit Appearances (search)"     ui_command "Edit Appearances"
+ui_expect_new "Appearances dialog opened" "the window opened"
+dialog_search "Test Ply" test_ply
+ui_expect_new "Appearance selected: test_ply" "the textured appearance is selected"
 ui_mark
 ui_step "Remove (the texture)"          ui_click_logged "Appearances field texture_remove"
 ui_expect_new "Appearance test_ply texture removed" "the texture is removed"

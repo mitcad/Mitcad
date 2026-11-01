@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser app/MainWindowContextMenu.cpp app/MainWindow.cpp core/model/src/document/bindings.rs tools/cli
+# check-all sources: app/browser app/MainWindowContextMenu.cpp app/MainWindow.cpp core/model/src/document/bindings.rs tools/cli app/files/FileCommands.cpp app/framework/QuickAccessGroup.cpp
 # Show When and the browser's light bulbs (mitcad#863, after mitcad#809)
 # through the real UI:
 #   - A design (mitcad-cli): Box1 (Body1) and Box2 (Body2) in the root,
@@ -48,11 +48,10 @@ expect_file() {
   echo "ok   $3"
 }
 
+# (Nothing to save when a step changed nothing: the file holds the design.)
 save() {
   ui_focus_main
-  ui_mark
-  ui_key ctrl+s
-  ui_expect_new "Saved $FILE" "saved"
+  ui_save_if_changed "$FILE"
 }
 
 # expect_none "text" description: no line since the mark has the text.

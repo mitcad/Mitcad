@@ -729,8 +729,8 @@ pub fn sketch(
                     Some(m) => [m[0][0] * dx + m[0][1] * dy, m[1][0] * dx + m[1][1] * dy],
                     None => [dx, dy],
                 };
-                let center = center.ok_or("an ellipse without its centre")?;
-                let c_at = *at.get(&center).ok_or("its centre was not read")?;
+                let center = center.ok_or("an ellipse without its center")?;
+                let c_at = *at.get(&center).ok_or("its center was not read")?;
                 if !(major.is_finite() && minor.is_finite() && minor > 0.0 && major >= minor)
                     || ((dx * dx + dy * dy).sqrt() - 1.0).abs() > 1e-6
                 {
@@ -761,8 +761,8 @@ pub fn sketch(
                 let center = tail.reference().map_err(|err| err.to_string())?;
                 let radius = tail.f64().map_err(|err| err.to_string())?;
                 let full = tail.u8().map_err(|err| err.to_string())? == 1;
-                let center = center.ok_or("a circle without its centre")?;
-                let c_at = *at.get(&center).ok_or("its centre was not read")?;
+                let center = center.ok_or("a circle without its center")?;
+                let c_at = *at.get(&center).ok_or("its center was not read")?;
                 if !(radius.is_finite() && radius > 0.0) {
                     return Err(format!("radius {radius}"));
                 }

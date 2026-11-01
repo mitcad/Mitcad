@@ -7,6 +7,12 @@
 # printers managed without a design, on a design of one box that must not
 # change. My library is the test's own folder (MITCAD_PRINT_LIBRARY_DIR),
 # which mitcad-cli gives a printer, Bench X.
+#   0. Edit Materials (a shortcut of the test's), Edit Library of the
+#      Materials window (after Delete, left of Close, mitcad#1019): My
+#      Library's first opening logs its parts' times ("My
+#      Library timing: ..."), the panels fill when the items were read off
+#      the UI thread ("My Library loaded: ..."; mitcad#1018). The times are
+#      printed, none asserted.
 #   1. My Library (a shortcut of the test's): Duplicate of the built-in
 #      PLA Plastic makes PLA Plastic (copy) in My library (its file), renamed
 #      Bench PLA, its density 1.3, each written to the file; Delete asks
@@ -25,7 +31,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'tools.my_library' = 'F8' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'tools.my_library' = 'F8'; 'solid.materials' = 'F9' } -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
     ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -112,11 +118,47 @@ function Click-InLibrary([string]$Text) {
 
 Ui-StartApp 'my-library' @('--open', $design)
 
+Write-Host '--- 0. My Library from the Materials window: its first opening, timed (mitcad#1018)'
+Ui-Mark
+Ui-Step 'Edit Materials (F9)'            { Ui-Key 'F9' }
+Ui-ExpectNew 'Materials opened' 'the Materials window opened'
+Ui-ExpectNew 'Materials timing: ' "the Materials window logs its opening's time"
+Ui-ExpectNew 'Materials edit_library at ' 'Edit Library has its place'
+Ui-ExpectNew 'Materials close at ' 'Close has its place'
+# Edit Library (mitcad#1019): after Delete in the row under the list, left
+# of Close; no result button.
+$editAt = Ui-LoggedAt 'Materials edit_library'
+$deleteAt = Ui-LoggedAt 'Materials delete'
+$closeAt = Ui-LoggedAt 'Materials close'
+if ($editAt[1] -ne $deleteAt[1] -or $editAt[1] -ne $closeAt[1] -or $editAt[0] -le $deleteAt[0] -or $editAt[0] -ge $closeAt[0]) {
+  Ui-Fail "Edit Library at $($editAt -join ',') is not after Delete ($($deleteAt -join ',')) and before Close ($($closeAt -join ','))"
+}
+Write-Host 'ok   Edit Library after Delete, left of Close'
+Ui-FocusDialog '^Materials$'
+Ui-Mark
+Ui-Step 'Edit Library...'                { Click-InLibrary 'Materials edit_library' }
+Ui-ExpectNew 'Materials: Edit Library' 'the button'
+Ui-ExpectNew 'My Library opened' 'My Library opened'
+Ui-ExpectNew 'My Library timing: ' "its first opening logs each part's time"
+Ui-ExpectNew 'My Library loaded: ' 'the panels filled when the items were read' 60
+# The times as logged, for the record; none is asserted.
+foreach ($text in @('Materials timing: ', 'My Library timing: ', 'My Library loaded: ')) {
+  $line = Ui-LogLines | Where-Object { $_.Contains($text) } | Select-Object -Last 1
+  Write-Host "     $($line.Substring($line.IndexOf($text)))"
+}
+Ui-FocusDialog '^My Library$'
+Ui-Mark
+Ui-Step 'close My Library (Esc)'         { Ui-Key 'Escape' }
+Ui-ExpectNew 'My Library closed' 'closed'
+Ui-FocusDialog '^Materials$'
+Ui-Step 'close Materials (Esc)'          { Ui-Key 'Escape' }
+Ui-FocusMain
+
 Write-Host '--- 1. My Library: a built-in material duplicated, renamed, its density changed, deleted'
 Ui-Mark
 Ui-Step 'My Library (F8)'                { Ui-Key 'F8' }
 Ui-ExpectNew 'My Library opened' 'the window opened'
-Ui-ExpectNew 'My Library materials row: plastics/pla PLA Plastic (mitcad)' 'PLA is listed, built in'
+Ui-ExpectNew 'My Library materials row: fdm_plastics/pla PLA Plastic (mitcad)' 'PLA is listed, built in'
 Ui-ExpectNew 'My Library tab printers at ' 'the tabs have their places'
 Ui-ExpectNew 'My Library materials item PLA Plastic at ' 'its row has its place'
 Ui-FocusDialog '^My Library$'

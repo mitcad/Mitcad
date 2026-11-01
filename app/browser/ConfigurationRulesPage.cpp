@@ -59,9 +59,14 @@ rules::RulesSource sourceFor(DocumentHost& host, QWidget* page) {
       return true;
     }
     if (error != nullptr) {
-      *error = host.lastCancelled() ? QStringLiteral("The computation was cancelled.") : host.lastError();
+      *error = host.lastCancelled() ? QStringLiteral("The computation was canceled.") : host.lastError();
     }
     return false;
+  };
+  source.tryRules = [&host](const QJsonArray& rules) {
+    QJsonObject query = configurations::configurationsQuery();
+    query.insert(QStringLiteral("rules"), rules);
+    return queryOrError(host, query);
   };
   source.checkRules = [&host] { return queryOrError(host, {{QStringLiteral("query"), QStringLiteral("check_rules")}}); };
   source.tables = [&host] {

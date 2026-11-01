@@ -79,11 +79,11 @@ fn unknown(kind: &str, plural: &str, name: &str, names: &[String]) -> String {
     let name = echoed(name);
     if names.is_empty() {
         return format!(
-            "unknown {kind} '{name}'; model_reference without arguments lists the {plural}"
+            "unknown {kind} {name}; model_reference without arguments lists the {plural}"
         );
     }
     format!(
-        "unknown {kind} '{name}'; the {plural} MCP permits: {}. model_reference {{\"{}\": \"<name>\"}} gives one's fields",
+        "unknown {kind} {name}; the {plural} MCP permits: {}. model_reference {{\"{}\": \"<name>\"}} gives one's fields",
         names.join(", "),
         kind.split(' ').next().unwrap_or(kind)
     )
@@ -118,20 +118,17 @@ pub fn missing_name(request: &Value, key: &str) -> String {
         })
         .unwrap_or_default();
     let found = if request.get(key).is_some() {
-        format!("its '{key}' is not a nonempty string")
+        format!("its {key} is not a nonempty string")
     } else if fields.is_empty() {
         "this one is empty".to_owned()
     } else if count > fields.len() {
         format!(
-            "this one has no '{key}' (its fields: {}, and {} more)",
+            "this one has no {key} (its fields: {}, and {} more)",
             fields.join(", "),
             count - fields.len()
         )
     } else {
-        format!(
-            "this one has no '{key}' (its fields: {})",
-            fields.join(", ")
-        )
+        format!("this one has no {key} (its fields: {})", fields.join(", "))
     };
     format!(
         "{form}, for example {example}; {found}. model_reference without arguments lists the {plural}"
@@ -542,7 +539,7 @@ fn section(name: &str, offset: usize) -> Result<Value, String> {
     let found = reference.find_sections(name);
     let Some(heading) = found.first() else {
         return Err(format!(
-            "no section '{name}' in the reference; model_reference without arguments lists the sections, and with search finds a text"
+            "no section {name} in the reference; model_reference without arguments lists the sections, and with search finds a text"
         ));
     };
     let mut answer = reference.section_answer(heading, offset, LIMIT)?;
@@ -732,7 +729,7 @@ pub(crate) fn explain_refusal(arguments: &Value, value: &mut Value) {
         }
         (
             format!(
-                "the fields of the feature type '{kind}' and an example are in reference; model_reference {{\"feature\": \"{kind}\"}} gives its whole section"
+                "the fields of the feature type {kind} and an example are in reference; model_reference {{\"feature\": \"{kind}\"}} gives its whole section"
             ),
             entry,
             reference.text(heading),
@@ -740,7 +737,7 @@ pub(crate) fn explain_refusal(arguments: &Value, value: &mut Value) {
     } else if !rows.is_empty() {
         (
             format!(
-                "the fields of '{name}' are in reference; model_reference {{\"command\": \"{name}\"}} gives them"
+                "the fields of {name} are in reference; model_reference {{\"command\": \"{name}\"}} gives them"
             ),
             json!({"command": name}),
             rows,

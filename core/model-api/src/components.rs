@@ -172,6 +172,24 @@ named_enum! {
             #[serde(default)]
             config: Option<String>,
         },
+        // Save Component as Design (mitcad#1057): the component written as
+        // a design of its own, optionally replaced by a link to it.
+        "save_component_as_design" => SaveComponentAsDesign {
+            component: String,
+            /// The design file to write.
+            path: String,
+            /// The component becomes a linked component of the file.
+            #[serde(default)]
+            replace: bool,
+            /// The folder of this design's file (relative link paths).
+            #[serde(default)]
+            base: Option<String>,
+        },
+        // An occurrence drawn see-through with what it contains (mitcad#1093).
+        "set_occurrence_transparent" => SetOccurrenceTransparent {
+            occurrence: String,
+            transparent: bool,
+        },
     }
 }
 
@@ -187,6 +205,29 @@ pub(crate) struct ReparentQuery {
     occurrence: String,
     #[serde(default)]
     parent: Option<String>,
+}
+
+/// The `save_component_as_design` query (mitcad#1057): what saving a
+/// component as a design of its own would freeze or leave out.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SaveComponentQuery {
+    component: String,
+}
+
+/// The references a saved component could not carry, as the command and
+/// the query list them.
+fn cut_references_json(references: &[mitcad_model::CutReference]) -> Value {
+    Value::Array(
+        references
+            .iter()
+            .map(|r| {
+                json!({"feature": r.feature, "feature_name": r.feature_name,
+                       "kind": r.kind.as_str(), "target": r.target, "frozen": r.frozen,
+                       "message": r.message()})
+            })
+            .collect(),
+    )
 }
 
 /// The `instances` query.
@@ -235,6 +276,10 @@ pub(crate) trait ComponentsCrateOps<K: Kernel> {
 
     /// The `instances` query: the bodies as placed in the design.
     fn instances_json(&self, query: &InstancesQuery) -> Result<Value, ApiError>;
+
+    /// The `save_component_as_design` query (mitcad#1057): the references
+    /// of the component to things outside it, or why it cannot be saved.
+    fn save_component_json(&self, query: &SaveComponentQuery) -> Result<Value, ApiError>;
 }
 
 impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
@@ -442,6 +487,23 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                 let changed = self.set_component_parameters(&change)?;
                 super::component_options::changed_json(self, &changed)
             }
+            ComponentCommand::SaveComponentAsDesign {
+                component,
+                path,
+                replace,
+                base,
+            } => {
+                let uid = self.component_ref(&component)?;
+                let options = mitcad_model::SaveComponentOptions {
+                    replace,
+                    base: base.map(PathBuf::from),
+                };
+                let saved =
+                    self.save_component_as_design(uid, std::path::Path::new(&path), &options)?;
+                json!({"component": uid, "path": saved.path.to_string_lossy(),
+                       "references": cut_references_json(&saved.references),
+                       "replaced": saved.link.is_some(), "link": saved.link})
+            }
             ComponentCommand::UpdateLinks { base } => {
                 let base = base.map(PathBuf::from);
                 let messages = self.update_links(base.as_deref())?;
@@ -458,6 +520,14 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                        "path": OccurrencePath(path.clone()), "path_name": a.path_name(&path),
                        "parent": plan.destination, "updated": plan.updates,
                        "features": features})
+            }
+            ComponentCommand::SetOccurrenceTransparent {
+                occurrence,
+                transparent,
+            } => {
+                let uid = self.occurrence_ref(&occurrence)?;
+                self.set_occurrence_transparent(uid, transparent)?;
+                json!({})
             }
         })
     }
@@ -616,6 +686,10 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                 "visible": i.visible,
                 "transform": matrix4(&i.transform),
             });
+            // The body or an occurrence on its path (mitcad#1093).
+            if i.transparent {
+                value["transparent"] = json!(true);
+            }
             if query.properties {
                 let error =
                     |e: mitcad_model::kernel::KernelError| ApiError(format!("{}: {e}", i.name));
@@ -640,6 +714,18 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
             out.push(value);
         }
         Ok(Value::Array(out))
+    }
+
+    fn save_component_json(&self, query: &SaveComponentQuery) -> Result<Value, ApiError> {
+        let uid = self.component_ref(&query.component)?;
+        let name = self.assembly().name(uid);
+        Ok(match self.component_design_references(uid) {
+            Ok(references) => json!({"component": uid, "name": name,
+                                     "references": cut_references_json(&references),
+                                     "blocked": null}),
+            Err(e) => json!({"component": uid, "name": name, "references": [],
+                             "blocked": e.to_string()}),
+        })
     }
 }
 
@@ -711,6 +797,10 @@ impl<K: Kernel> ComponentsLocal<K> for Document<K> {
                     "visible": o.visible,
                     "children": self.occurrence_tree(o.component, &path, world),
                 });
+                // Drawn see-through with its contents (mitcad#1093).
+                if o.transparent {
+                    value["transparent"] = json!(true);
+                }
                 // The condition it is shown under (mitcad#800), the
                 // parameters it uses, and why it does not hold.
                 if let Some(text) = self.occurrence_visible_when(o.uid) {

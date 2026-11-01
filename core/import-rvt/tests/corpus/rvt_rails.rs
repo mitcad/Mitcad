@@ -120,7 +120,7 @@ fn a_rail_s_twisting_corner_follows_its_stored_hermite_faces() {
     let rail = model.element(1270819).unwrap();
     let p = plan(&model, rail).unwrap();
     assert!(
-        !p.notes.iter().any(|n| n.contains("mitred")),
+        !p.notes.iter().any(|n| n.contains("mitered")),
         "{:?}",
         p.notes
     );

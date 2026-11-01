@@ -30,6 +30,10 @@
 #   9. After New Design, sketches on XY, XZ and YZ show their origin in the
 #      middle of the free area between the cards, in the Floating and the
 #      Docked layout (mitcad#738: the turn kept the fit's shift).
+#  10. Those sketches are seen from the view cube's TOP, FRONT and RIGHT
+#      (mitcad#1060: XZ from FRONT, the design's +X to the right), on
+#      entering them and after Isometric View and the Sketch Palette's
+#      Look At.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-sketch-view-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -40,7 +44,7 @@ param(
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
 Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'view.environment.dark' = 'F8'; 'view.environment.light' = 'F9';
-  'view.front' = 'F11' } -StepPause 0
+  'view.front' = 'F11'; 'view.iso' = 'F12' } -StepPause 0
 
 # Expect-Recoloured "dark|light": the sketch entities shown were recoloured
 # for that background, the rectangle's four lines among the fully
@@ -405,10 +409,31 @@ function Sketch-OnOrigin([string]$Plane) {
   Ui-ExpectNew "Sketch started on $Plane" "sketch started on $Plane" | Out-Null
 }
 
+# Expect-Side "description" side "along": since the mark the view turned to
+# the sketch plane from that side of the view cube, looking along that
+# direction (mitcad#1060).
+function Expect-Side([string]$Description, [string]$Side, [string]$Along) {
+  Ui-ExpectNew "Sketch plane seen from $Side (along $Along)" "${Description}: seen from $Side"
+}
+
+# Expect-LookAtAgain "description" side "along": Isometric View turns the view
+# away from the sketch, then the Sketch Palette's Look At turns it back to
+# the same side.
+function Expect-LookAtAgain([string]$Description, [string]$Side, [string]$Along) {
+  Ui-Mark
+  Ui-Step 'isometric view (F12)'          { Ui-Key 'F12' }
+  Ui-ExpectNew 'Camera direction' "${Description}: the view turned away" 8
+  Ui-ExpectLog 'Palette Look At at' "${Description}: the palette's Look At is laid out"
+  Ui-Mark
+  Ui-Step 'Look At (palette)'             { Ui-ClickLogged 'Palette Look At' }
+  Expect-Side "$Description after Look At" $Side $Along
+}
+
 # Centred-Round layout chrome: New Design (its fit centres the design in the
 # free area, which moves the camera's centre off the origin once the cards
 # are laid out), then sketches on XY, XZ and YZ in turn; each shows its
-# origin in the middle of the free area.
+# origin in the middle of the free area and is seen from the view cube's
+# TOP, FRONT and RIGHT, also after Look At (mitcad#1060).
 function Centred-Round([string]$Layout, [string]$Chrome) {
   Ui-StartApp "sketch-view-centred-$Chrome" @("--chrome=$Chrome")
   Ui-Mark
@@ -420,6 +445,10 @@ function Centred-Round([string]$Layout, [string]$Chrome) {
     $name = $plane.ToUpperInvariant()
     Ui-Step "${Layout}: create sketch on $name (F7)" { Sketch-OnOrigin $plane }
     Expect-Centred "$Layout, $name"
+    $side = @{ 'xy' = 'TOP'; 'xz' = 'FRONT'; 'yz' = 'RIGHT' }[$plane]
+    $along = @{ 'xy' = '0 0 -1'; 'xz' = '0 1 0'; 'yz' = '-1 0 0' }[$plane]
+    Expect-Side "$Layout, $name" $side $along
+    Expect-LookAtAgain "$Layout, $name" $side $along
     Ui-Mark
     Ui-Step "${Layout}: finish sketch (Ctrl+Enter)" { Ui-Key 'ctrl+Return' }
     Ui-ExpectNew 'Sketch finished' "${Layout}: the $name sketch finished"

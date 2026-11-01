@@ -42,11 +42,14 @@ if scenario == 'measure':
         add(f"expect-native-enabled {identifier} {str(enabled).lower()}" if native else
             f"expect-widget-property {identifier} enabled {str(enabled).lower()}")
 
-    def measure_press(identifier, label, place):
-        if native:
-            add(f"expect-native-text {identifier} '^{label}$'", f'native-pointer-click {identifier}')
-        else:
-            add(f"expect-widget-property {identifier} text '{label}'", f"click-logged '^{place} at '")
+    # The Make tab's Dimension (mitcad#1049): the two corners kept as a
+    # dimension, OK by Enter.
+    def keep_dimension():
+        add('mark', 'command make.dimension', "expect-log 'Command Dimension started'",
+            "click-logged '^Sketch entity F1/p5 at '", "expect-log 'Dimension Selection 1: 1 vertex'",
+            'native-pointer-click input_b' if native else "click-logged '^Panel Dimension input b at '",
+            "click-logged '^Sketch entity F1/p8 at '", "expect-log 'Dimension Selection 2: 1 vertex'",
+            'key Return', "expect-log '^Done Dimension$'")
 
     # A history row's context menu, and the history's menu at the end of
     # its header (mitcad#1010).
@@ -74,20 +77,20 @@ if scenario == 'measure':
         "click-logged '^Sketch entity F1/p5 at '", "expect-log 'Measure Selection 1: 1 vertex'",
         'native-pointer-click input_b' if native else "click-logged '^Panel Measure input b at '",
         "click-logged '^Sketch entity F1/p8 at '", "expect-log 'Measure Selection 2: 1 vertex'",
-        "expect-log 'distance 70'", "expect-log 'Measure Keep as Dimension enabled'",
+        "expect-log 'distance 70'",
         "expect-log '^Measure history row 1: .*: Distance 70 mm$'")
-    measure_enabled('measureKeep', True)
     # One line a row: its number, its main value and the picks' kinds.
     if native:
         add("expect-native-text measureHistory.row.1 '^1[.] +70 mm +Vertex ↔ Vertex$'")
     else:
         add('expect-widget-property measureHistoryRows count 1')
-    add("screenshot-screen '${MITCAD_TEST_WORK}/measure-body-corners.png'", 'mark')
-    measure_press('measureKeep', 'Keep as Dimension', 'Measure Keep as Dimension')
-    add("expect-log '^Measure Keep as Dimension clicked$'", "expect-log '^Annotation kept: Distance1$'",
+    add("screenshot-screen '${MITCAD_TEST_WORK}/measure-body-corners.png'", 'mark',
+        'key Escape', 'wait-idle 30', 'expect-undo-depth ${baseline} 0')
+    # Measure measures: keeping is the Make tab's Dimension (mitcad#1049).
+    keep_dimension()
+    add("expect-log '^Annotation kept: Distance1$'",
         "expect-log '^Annotations: Distance1 distance$'", 'expect-undo-depth ${baseline} 1',
-        'mark', 'key Escape', 'wait-idle 30', 'expect-undo-depth ${baseline} 1',
-        "expect-no-log '^Annotations: none$'", 'expect-model-bodies 1 252000', 'mark',
+        'wait-idle 30', "expect-no-log '^Annotations: none$'", 'expect-model-bodies 1 252000', 'mark',
         'command inspect.measure', "expect-log 'Command Measure started'",
         "expect-log '^Measure history row 1: .*: Distance 70 mm$'")
     # History belongs to the document, but its presenter and selection are
@@ -106,11 +109,14 @@ if scenario == 'measure':
     add("expect-log '^Measure history copied row 1: 1 .*Distance 70 mm$'", 'mark')
     history_menu('Copy All')
     add("expect-log '^Measure history copied 1 rows: 1 .*Distance 70 mm$'", 'mark')
-    row_menu('Keep as Dimension')
-    add("expect-log '^Measure history Keep as Dimension clicked: row 1$'", "expect-log '^Annotation kept: Distance2$'",
+    # A row's menu shows it again or copies it; keeping is the Dimension
+    # panel's.
+    row_menu('Show')
+    add("expect-log '^Measure history showed row 1$'", 'mark', 'key Escape', 'wait-idle 30')
+    keep_dimension()
+    add("expect-log '^Annotation kept: Distance2$'",
         "expect-log '^Annotations: Distance1 distance \\| Distance2 distance$'",
-        'expect-undo-depth ${baseline} 2', 'mark', 'key Escape', 'wait-idle 30',
-        'expect-undo-depth ${baseline} 2', "expect-no-log '^Annotations: none$'",
+        'expect-undo-depth ${baseline} 2', 'wait-idle 30', "expect-no-log '^Annotations: none$'",
         'command edit.undo', 'expect-undo-depth ${baseline} 1',
         "expect-log '^Annotations: Distance1 distance$'", 'mark', 'command edit.undo',
         'expect-undo-depth ${baseline} 0', "expect-log '^Annotations: none$'", 'mark',
@@ -120,16 +126,11 @@ if scenario == 'measure':
         "click-logged '^Sketch entity F1/p5 at '", "expect-log 'Measure Selection 1: 1 sketch point'",
         'native-pointer-click input_sketch_b' if native else "click-logged '^Panel Measure input sketch_b at '",
         "click-logged '^Sketch entity F1/p8 at '", "expect-log 'Measure Selection 2: 1 sketch point'",
-        "expect-log 'distance 70'",
-        "expect-log 'Measure Keep as Dimension disabled: Sketch geometry cannot be kept as an annotation'")
-    measure_enabled('measureKeep', False)
-    add('expect-log "^Measure Keep as Dimension disabled: Sketch geometry cannot be kept as an annotation: '
-        'pick the body\'s corners or edges$"')
+        "expect-log 'distance 70'")
     add("screenshot-screen '${MITCAD_TEST_WORK}/measure-sketch-points.png'", 'mark')
     choice('Bodies', 'Up')
     add("expect-log 'Measure: Selection Filter = Bodies'", "click-logged '^Body F2.b0 at '",
-        "expect-log 'Measure Body 1: 1 body'", "expect-log 'Measure Keep as Dimension enabled'")
-    measure_enabled('measureKeep', True)
+        "expect-log 'Measure Body 1: 1 body'")
     add("screenshot-screen '${MITCAD_TEST_WORK}/measure-body.png'", 'mark')
     history_menu('Clear')
     add("expect-log '^Measure history Clear clicked$'", "expect-log '^Measure history cleared$'",
@@ -141,7 +142,6 @@ if scenario == 'measure':
         add('expect-widget-property measureHistoryRows count 0')
     add('key Escape', 'wait-idle 30', 'mark', 'command inspect.measure',
         "expect-log 'Command Measure started'", "expect-log '^Measure history: 0 rows$'")
-    measure_enabled('measureKeep', False)
     add('key Escape', 'wait-idle 30',
         'expect-model-bodies 1 252000', 'expect-undo-depth ${baseline} 0')
 else:

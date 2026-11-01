@@ -494,7 +494,7 @@ CommandDef loftCommand(const CommandContext& context) {
       checkInput(QStringLiteral("closed"), QObject::tr("Closed"), false)
           .withTooltip(QObject::tr("From the last section back to the first")),
       checkInput(QStringLiteral("ruled"), QObject::tr("Ruled"), false)
-          .withTooltip(QObject::tr("Straight between neighbouring sections")),
+          .withTooltip(QObject::tr("Straight between neighboring sections")),
   };
   def.inputs += operationInputs();
   def.enabled = [&context] { return hasProfiles(context) || hasBodies(context); };
@@ -687,13 +687,13 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
       selectionInput(QStringLiteral("curves"), QObject::tr("Curves"), SelectKind::SketchCurve, 1, 0)
           .withTooltip(QObject::tr("Open sketch curves of one sketch")),
       checkInput(QStringLiteral("chain"), QObject::tr("Chain Selection"), false),
-      choiceInput(QStringLiteral("location"), QObject::tr("Thickness Options"),
+      choiceInput(QStringLiteral("location"), QObject::tr("Thickness Side"),
                   {{QStringLiteral("symmetric"), QStringLiteral("Symmetric")},
                    {QStringLiteral("side1"), QStringLiteral("Side 1")},
                    {QStringLiteral("side2"), QStringLiteral("Side 2")}},
                   QStringLiteral("symmetric")),
       valueInput(QStringLiteral("thickness"), QObject::tr("Thickness"), ValueKind::Length, QStringLiteral("2 mm")),
-      choiceInput(QStringLiteral("depth_type"), QObject::tr("Depth Options"),
+      choiceInput(QStringLiteral("depth_type"), QObject::tr("Depth Type"),
                   {{QStringLiteral("to_next"), QStringLiteral("To Next")},
                    {QStringLiteral("depth"), QStringLiteral("Depth")}},
                   QStringLiteral("to_next")),

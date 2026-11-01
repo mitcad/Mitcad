@@ -1622,7 +1622,7 @@ fn section(model: &Model, e: &Element, symbol: i64) -> Result<(Profile, &'static
         return one(rect(wd, d), Vec::new(), "rectangular");
     }
     Err(format!(
-        "the section of family '{}' is none of the known (rectangular, round, I, L, U, hollow)",
+        "the section of family {} is none of the known (rectangular, round, I, L, U, hollow)",
         e.family_name.as_deref().unwrap_or("?")
     ))
 }
@@ -2186,9 +2186,9 @@ fn trimmed_ends(
     let mut planes = [Vec::new(), Vec::new()];
     let mut notes = Vec::new();
     let by_rule = |k: usize, kind: &str, cuts: &[EndCut]| match cuts {
-        [] => format!("end {k} square (its trim's neighbour in line, or a cut through it)"),
-        [_] => format!("end {k} trimmed to its neighbour ({kind})"),
-        _ => format!("end {k} trimmed to its neighbour's two pieces ({kind})"),
+        [] => format!("end {k} square (its trim's neighbor in line, or a cut through it)"),
+        [_] => format!("end {k} trimmed to its neighbor ({kind})"),
+        _ => format!("end {k} trimmed to its neighbor's two pieces ({kind})"),
     };
     let mut decoded = decoded_mullion_ends(b, m, start, d, length);
     for t in &m.trims {
@@ -2200,7 +2200,7 @@ fn trimmed_ends(
             .as_ref()
             .and_then(|s| s.as_ref().ok())
             .map(|s| s[k].clone());
-        let kind = if t.flags & 2 != 0 { "mitre" } else { "butt" };
+        let kind = if t.flags & 2 != 0 { "miter" } else { "butt" };
         match (decoded, stored) {
             (Ok(cut), Some(kept)) => {
                 let off = ends_apart(&cut, &kept, start, a, across, d, k, length);
@@ -2500,7 +2500,7 @@ pub fn decoded_mullion_end(
     length: f64,
 ) -> Result<Vec<EndCut>, String> {
     let Curve::Line { .. } = t.path else {
-        return Err("its neighbour's path is not a line".into());
+        return Err("its neighbor's path is not a line".into());
     };
     let n = math::normalize(m.normal).ok_or("no normal")?;
     let a = math::normalize(math::cross(n, d)).ok_or("a normal along the path")?;
@@ -2519,9 +2519,9 @@ pub fn decoded_mullion_end(
     // A piece of the neighbour and its strip.
     let piece = |c: &Curve| -> Result<Option<NeighbourPiece>, String> {
         let Curve::Line { start: q0, end: q1 } = *c else {
-            return Err("its neighbour's path is not a line".into());
+            return Err("its neighbor's path is not a line".into());
         };
-        let e = math::normalize(math::sub(q1, q0)).ok_or("a neighbour's path of no length")?;
+        let e = math::normalize(math::sub(q1, q0)).ok_or("a neighbor's path of no length")?;
         if math::dot(math::cross(d, e), n).abs() < 1e-9 {
             return Ok(None);
         }
@@ -2536,10 +2536,10 @@ pub fn decoded_mullion_end(
         if m.profile != "SysRectMullionProfile" {
             return Err(format!("a trimmed mullion of class {}", m.profile));
         }
-        let nbr = nbr.ok_or("its neighbour's type gives no mullion profile")?;
+        let nbr = nbr.ok_or("its neighbor's type gives no mullion profile")?;
         // The neighbour's strip, along `across` (square to its path in the
         // curtain's plane).
-        let across = math::normalize(math::cross(n, e)).ok_or("a neighbour along the normal")?;
+        let across = math::normalize(math::cross(n, e)).ok_or("a neighbor along the normal")?;
         let (lo, hi) = if let Some(reach) = match nbr.profile.as_str() {
             // A corner neighbour (its flag 1 set too): half its depth, an L
             // its leg's length, either side of its path.
@@ -2574,7 +2574,7 @@ pub fn decoded_mullion_end(
         } else {
             match nbr.profile.as_str() {
                 "SysRectMullionProfile" => (-nbr.widths[1], nbr.widths[1]),
-                other => return Err(format!("a neighbour of class {other}")),
+                other => return Err(format!("a neighbor of class {other}")),
             }
         };
         Ok(Some(NeighbourPiece {
@@ -2610,7 +2610,7 @@ pub fn decoded_mullion_end(
     let mut bent = None;
     for c in &t.more {
         let Some(p) = piece(c)? else {
-            return Err("a neighbour's piece in line with the mullion".into());
+            return Err("a neighbor's piece in line with the mullion".into());
         };
         if math::length(math::cross(p.e, first.e)) > 1e-9 {
             bent = Some(p);
@@ -2618,10 +2618,10 @@ pub fn decoded_mullion_end(
     }
     if let Some(second) = bent {
         if t.flags & 2 != 0 {
-            return Err("a mitre with a neighbour bending at the joint".into());
+            return Err("a miter with a neighbor bending at the joint".into());
         }
         let (Some(away1), Some(away2)) = (first.away, second.away) else {
-            return Err("a neighbour's piece running on past the joint".into());
+            return Err("a neighbor's piece running on past the joint".into());
         };
         let ((p1, o1), (p2, o2)) = (near(&first), near(&second));
         // Where the two near sides cross, in the curtain's plane.
@@ -2637,7 +2637,7 @@ pub fn decoded_mullion_end(
         };
         let (s1, s2) = (side(away1), side(away2));
         if math::dot(s1, s2) > 0.0 {
-            return Err("a neighbour's two pieces on one side of the mullion".into());
+            return Err("a neighbor's two pieces on one side of the mullion".into());
         }
         return Ok(vec![
             EndCut {
@@ -2669,7 +2669,7 @@ pub fn decoded_mullion_end(
         math::add(c, math::scale(d, s))
     };
     if t.flags & 2 != 0 {
-        let away = away.ok_or("a mitre with a neighbour running on past the joint")?;
+        let away = away.ok_or("a miter with a neighbor running on past the joint")?;
         let along = math::add(inward, away);
         let corners = [
             crossing(own.0, lo),
@@ -2685,7 +2685,7 @@ pub fn decoded_mullion_end(
             return Err("no corners".into());
         };
         let normal =
-            math::normalize(math::cross(math::sub(*hi, *lo), n)).ok_or("a mitre of no length")?;
+            math::normalize(math::cross(math::sub(*hi, *lo), n)).ok_or("a miter of no length")?;
         Ok(vec![EndCut::whole(*lo, out(normal))])
     } else {
         let (p, o) = near(&first);
@@ -3133,7 +3133,7 @@ fn spiral_run(model: &Model, e: &Element, r: &building::StairRun) -> Result<Plan
     let s = r
         .layout
         .as_ref()
-        .ok_or("a spiral run whose centre, radii and riser lines do not read")?;
+        .ok_or("a spiral run whose center, radii and riser lines do not read")?;
     let parts = e
         .type_id
         .and_then(|t| model.building.stair_parts.get(&t))
@@ -3193,7 +3193,7 @@ fn spiral_run(model: &Model, e: &Element, r: &building::StairRun) -> Result<Plan
     };
     // The arc of a circle about the centre from a to b, turning `turn`.
     let arc = |a: P3, b: P3, radius: f64, turn: f64| -> Result<Curve, String> {
-        let x = math::normalize(math::sub(a, c)).ok_or("a point at the centre")?;
+        let x = math::normalize(math::sub(a, c)).ok_or("a point at the center")?;
         let y = math::scale(math::cross(up, x), turn);
         let v = math::sub(b, c);
         let end = math::dot(v, y)
@@ -3282,7 +3282,7 @@ fn spiral_run(model: &Model, e: &Element, r: &building::StairRun) -> Result<Plan
         attached: Vec::new(),
         openings: Vec::new(),
         notes: vec![format!(
-            "a spiral run of {n} risers: {treads} treads{} about its centre",
+            "a spiral run of {n} risers: {treads} treads{} about its center",
             if nosing_profile.is_some() {
                 " with their nosings"
             } else {
@@ -4388,19 +4388,19 @@ fn sweep(model: &Model, e: &Element, s: &building::Sweep, with_cuts: bool) -> Re
         let left = unfilleted / mirrors.len();
         if left > 0 {
             notes.push(format!(
-                "{left} of its corners mitred: their fillets do not fit between them"
+                "{left} of its corners mitered: their fillets do not fit between them"
             ));
         }
         let left = not_planar / mirrors.len();
         if left > 0 {
             notes.push(format!(
-                "{left} of its corners mitred: its path is not planar and has elliptical pieces"
+                "{left} of its corners mitered: its path is not planar and has elliptical pieces"
             ));
         }
         let left = twisting / mirrors.len();
         if left > 0 {
             notes.push(format!(
-                "{left} of its corners mitred: the profile would twist round their fillets"
+                "{left} of its corners mitered: the profile would twist round their fillets"
             ));
         }
     }
@@ -6186,7 +6186,7 @@ mod tests {
         assert!(
             p.notes
                 .iter()
-                .any(|n| n.contains("off its trim's mitre") && n.contains("stored face")),
+                .any(|n| n.contains("off its trim's miter") && n.contains("stored face")),
             "{:?}",
             p.notes
         );
@@ -6822,7 +6822,7 @@ mod tests {
         assert!(
             p.notes
                 .iter()
-                .any(|n| n == "end 0 trimmed to its neighbour (mitre)"),
+                .any(|n| n == "end 0 trimmed to its neighbor (miter)"),
             "{:?}",
             p.notes
         );
@@ -6863,7 +6863,7 @@ mod tests {
         assert!(
             p.notes
                 .iter()
-                .any(|n| n == "end 1 trimmed to its neighbour (butt)"),
+                .any(|n| n == "end 1 trimmed to its neighbor (butt)"),
             "{:?}",
             p.notes
         );
@@ -6936,7 +6936,7 @@ mod tests {
         assert!(
             p.notes
                 .iter()
-                .any(|n| n == "end 1 trimmed to its neighbour's two pieces (butt)"),
+                .any(|n| n == "end 1 trimmed to its neighbor's two pieces (butt)"),
             "{:?}",
             p.notes
         );

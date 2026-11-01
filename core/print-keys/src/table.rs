@@ -126,7 +126,7 @@ pub(super) static KEYS: &[KeyDef] = &[
         Process,
         "enable_mixed_color_sublayer",
         Kind::Boolean,
-        "Mixed colour sublayers",
+        "Mixed color sublayers",
         LayerHeight,
         advanced,
         [d!(B | O | Q, "enable_mixed_color_sublayer"),]
@@ -1691,7 +1691,7 @@ pub(super) static KEYS: &[KeyDef] = &[
         Process,
         "top_color_penetration_layers",
         Kind::Integer(Unit::None),
-        "Top colour depth",
+        "Top color depth",
         TopAndBottomShells,
         advanced,
         [d!(B | O | Q, "top_color_penetration_layers"),]
@@ -1700,7 +1700,7 @@ pub(super) static KEYS: &[KeyDef] = &[
         Process,
         "bottom_color_penetration_layers",
         Kind::Integer(Unit::None),
-        "Bottom colour depth",
+        "Bottom color depth",
         TopAndBottomShells,
         advanced,
         [d!(B | O | Q, "bottom_color_penetration_layers"),]
@@ -4805,7 +4805,7 @@ pub(super) static KEYS: &[KeyDef] = &[
         Filament,
         "filament_colour",
         Kind::Color,
-        "Filament colour",
+        "Filament color",
         FilamentBasics,
         common,
         [

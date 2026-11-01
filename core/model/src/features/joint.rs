@@ -633,7 +633,7 @@ impl MountSpec {
     pub fn check(&self) -> Result<(), String> {
         if !valid_mount_name(&self.name) {
             return Err(format!(
-                "'{}' is no mount frame name (1 to 64 of letters, digits, _ - + .)",
+                "“{}” is no mount frame name (1 to 64 of letters, digits, _ - + .)",
                 self.name
             ));
         }

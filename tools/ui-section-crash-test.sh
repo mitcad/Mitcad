@@ -59,7 +59,8 @@ section_at_x10() {
   ui_expect_log "Bodies shown: " "the blocks shown"
   ui_mark
   ui_step "section analysis (search)"        ui_command "Section Analysis"
-  ui_step "pick YZ"                          ui_click_logged "Datum yz"
+  # YZ from the browser: the hidden origin stays hidden (mitcad#1030).
+  ui_pick_origin_row YZ
   ui_expect_new "Section Analysis Faces/Plane: 1 plane [plane yz]" "YZ picked"
   ui_step "10 along X"                       ui_type_in "Panel Section Analysis input offset" "10"
 }

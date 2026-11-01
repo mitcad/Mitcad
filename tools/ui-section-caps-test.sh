@@ -83,7 +83,8 @@ ui_expect_log "Bodies shown: " "the blocks shown"
 echo "--- Section Analysis at x = 10"
 ui_mark
 ui_step "section analysis (search)"        ui_command "Section Analysis"
-ui_step "pick YZ"                          ui_click_logged "Datum yz"
+# YZ from the browser: the hidden origin stays hidden (mitcad#1030).
+ui_pick_origin_row YZ
 ui_expect_new "Section Analysis Faces/Plane: 1 plane [plane yz]" "YZ picked"
 ui_step "10 along X"                       ui_type_in "Panel Section Analysis input offset" "10"
 ui_expect_log "Section caps: 3 face(s) at" "three blocks cut"
@@ -192,7 +193,7 @@ ui_step "fit (F6)"                         ui_key F6
 ui_expect_log "Bodies shown: " "the blocks shown"
 ui_mark
 ui_step "section analysis (search)"        ui_command "Section Analysis"
-ui_step "pick YZ"                          ui_click_logged "Datum yz"
+ui_pick_origin_row YZ
 ui_expect_new "Section Analysis Faces/Plane: 1 plane [plane yz]" "YZ picked"
 ui_expect_new "Computing section view started" "the clips at x = 0 run"
 # While they run: the window takes the distance (the field logs it).
@@ -260,11 +261,11 @@ ui_step "fit (F6)"                         ui_key F6
 ui_expect_log "Bodies shown: " "the cube shown"
 ui_mark
 ui_step "section analysis (search)"        ui_command "Section Analysis"
-ui_step "pick YZ"                          ui_click_logged "Datum yz"
+ui_pick_origin_row YZ
 ui_expect_new "Section Analysis Faces/Plane: 1 plane [plane yz]" "YZ picked"
 ui_expect_new "Inspect Section Analysis: area 100, length 40" "the cube cut square across at x = 0" 10
 ui_step "the Axis input"                   ui_click_logged "Panel Section Analysis input axis"
-ui_step "pick the Z axis"                  ui_click_logged "Datum z"
+ui_pick_origin_row Z
 ui_expect_new "Section Analysis Axis: 1 axis [axis z]" "Z the axis"
 ui_expect_new "Manipulator Section Analysis angle at" "a ring about the axis"
 ui_mark

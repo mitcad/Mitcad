@@ -220,13 +220,13 @@ fn mount_frames_are_written_from_the_design_and_checked() {
     let (errors, warnings) = check(&cache, &dir);
     let has = |text: &str| errors.iter().any(|e| e.contains(text));
     for expected in [
-        "bin1x1: bins/bin1x1.mitcad: the mount frame foot is foot (rigid), 2 x 1 footprint, pitch \
-         42 x 42 mm in the manifest and foot (rigid), 1 x 1 footprint, pitch 42 x 42 mm in the \
+        "bin1x1: bins/bin1x1.mitcad: the mount frame foot is foot (rigid), 2 × 1 footprint, pitch \
+         42 × 42 mm in the manifest and foot (rigid), 1 × 1 footprint, pitch 42 × 42 mm in the \
          design",
         "baseplate: mount frame grid: a grid gives its cells",
         "lamp: mount frame base is listed twice",
         "lamp: lamps/lamp.mitcad: the mount frame wall is no joint origin of the design",
-        "plain: mount frame x: kind 'pin' is none of face, hole, shaft, grid, foot",
+        "plain: mount frame x: kind pin is none of face, hole, shaft, grid, foot",
         "block: mount frame base: a face frame's joint is rigid, planar, revolute, not \
          cylindrical",
     ] {
@@ -249,7 +249,7 @@ fn mount_frames_are_written_from_the_design_and_checked() {
     )
     .unwrap_err()
     .to_string();
-    assert!(refused.contains("kind 'box' is none of"), "{refused}");
+    assert!(refused.contains("kind box is none of"), "{refused}");
 }
 
 #[test]

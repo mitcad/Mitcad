@@ -22,6 +22,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <unistd.h>
 #include "render/MacFrameDisplay.hpp"
 #include "render/MacFrameMetal.hpp"
 #include "render/RenderImage.hpp"
@@ -284,6 +285,9 @@ int main(int argc, char** argv) {
     std::string error;
     if (!surfaces->create(16, 8, error) || !light->wrap(surfaces->surface(0), error) ||
         !catcher->wrap(surfaces->surface(0, 1), error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
+    std::printf("Metal-to-GL allocation: base=%p allocation=%zu page=%ld packedRow=%zu\n",
+        IOSurfaceGetBaseAddress(surfaces->surface(0)), IOSurfaceGetAllocSize(surfaces->surface(0)),
+        sysconf(_SC_PAGESIZE), IOSurfaceGetBytesPerRow(surfaces->surface(0)));
     id<MTLBuffer> lightBuffer = (__bridge id<MTLBuffer>)light->handle();
     id<MTLBuffer> catcherBuffer = (__bridge id<MTLBuffer>)catcher->handle();
     if (lightBuffer.device.registryID != catcherBuffer.device.registryID) return 1;

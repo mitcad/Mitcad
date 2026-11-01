@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: MIT
+# The AppKit timeline's hover, tooltips and groups (mitcad#1076,
+# mitcad#1077), as timeline-inspection.mitcad-ui and the timeline group
+# steps of tools/ui-timeline-test.sh check the Qt timeline's. Run by
+# tools/ui-macos-native-timeline-test.sh on its design: Inner (F1) and
+# Inner detail (F2) wholly inside Outer (F3), grouped as Inner details;
+# Failed round (F4) failed, Fillet1 (F5) on Outer's four vertical edges,
+# Suppressed detail (F6) suppressed, Later plane (F7) rolled back.
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+wait-idle 30
+native-resize 1280 900
+native-appearance light
+expect-native-history
+expect-ever '^Timeline group Inner details at '
+expect-native-visible 'native.history.group.Inner details' true
+expect-selection 0 0
+
+# Hovering a cell previews its feature through the solids that enclose it,
+# without selecting it; leaving ends the preview. The cell's tooltip is the
+# shared feature details (mitcad#1076).
+mark
+native-hover native.history.F1 enter
+expect-log '^Timeline hover highlighted: F1 6$'
+expect-timeline-hover F1
+expect-native-tooltip native.history.F1 '(?s)Box: Inner.*Component: Root.*Length: 10.*Width: 10.*Height: 10'
+expect-selection 0 0
+native-hover native.history.F1 leave
+expect-log '^Timeline hover highlighted: none$'
+expect-timeline-hover none
+
+# A Fillet's picked edges are previewed with it (mitcad#957).
+mark
+native-hover native.history.F5 enter
+expect-log '^Timeline hover highlighted: F5 \d+ \(edges 4\)$'
+expect-timeline-hover F5
+expect-native-tooltip native.history.F5 '(?s)Fillet: Fillet1.*4 edges.*Radius: 2'
+native-hover native.history.F5 leave
+expect-log '^Timeline hover highlighted: none$'
+expect-timeline-hover none
+
+# Failed, suppressed and rolled-back cells preview nothing; their tooltips
+# say why.
+native-hover native.history.F4 enter
+expect-timeline-hover none
+expect-native-tooltip native.history.F4 '(?s)Fillet: Failed round.*No geometry to show'
+native-hover native.history.F4 leave
+expect-native-tooltip native.history.F6 '(?s)Box: Suppressed detail.*Suppressed.*No geometry to show'
+expect-native-tooltip native.history.F7 '(?s)Later plane.*Rolled back.*No geometry to show'
+
+# Dragging the marker ends the preview.
+mark
+native-hover native.history.F1 enter
+expect-log '^Timeline hover highlighted: F1 6$'
+mark
+native-history-drag begin
+expect-log '^Timeline hover highlighted: none$'
+expect-timeline-hover none
+native-history-drag end
+expect-native-history
+
+# A click on the group's band folds it into one folder cell; hovering that
+# cell previews both its features and selects nothing (mitcad#1077).
+mark
+native-pointer-click 'native.history.group.Inner details'
+expect-log '^Timeline group Inner details collapsed$'
+expect-log '^Timeline group Inner details at '
+expect-native-visible native.history.F1 false
+expect-native-visible native.history.F2 false
+expect-native-history
+expect-selection 0 0
+mark
+native-hover 'native.history.group.Inner details' enter
+expect-log '^Timeline hover highlighted: F1 6, F2 6$'
+expect-timeline-hover F1,F2
+expect-native-tooltip 'native.history.group.Inner details' '(?s)Inner details.*2 feature'
+expect-selection 0 0
+native-hover 'native.history.group.Inner details' leave
+expect-log '^Timeline hover highlighted: none$'
+
+# A double-click on the folder cell opens the group again.
+mark
+native-pointer-dblclick 'native.history.group.Inner details'
+expect-log '^Timeline group Inner details expanded$'
+expect-native-visible native.history.F1 true
+expect-native-visible native.history.F2 true
+expect-native-history
+
+# A right click on the group: the shared group menu folds, opens, renames
+# and ungroups it.
+mark
+native-context-menu 'native.history.group.Inner details' 'Collapse Group'
+expect-log '^Timeline group Inner details collapsed$'
+expect-native-visible native.history.F1 false
+mark
+native-context-menu 'native.history.group.Inner details' 'Expand Group'
+expect-log '^Timeline group Inner details expanded$'
+expect-native-visible native.history.F1 true
+mark
+native-context-menu 'native.history.group.Inner details' 'Rename Group'
+focus-dialog '^Rename Group$'
+key Ctrl+a
+type 'Inner pair'
+button '^OK$'
+expect-log '^Renamed group Inner details to Inner pair$' 30
+focus-main
+expect-native-visible 'native.history.group.Inner pair' true
+expect-native-present 'native.history.group.Inner details' false
+mark
+native-context-menu 'native.history.group.Inner pair' 'Ungroup'
+expect-log '^Ungrouped Inner pair$' 30
+expect-native-present 'native.history.group.Inner pair' false
+expect-native-visible native.history.F1 true
+expect-native-history
+expect-never 'The document was read while a job computes it|Native Mac canvas:|OCCT view event failed|TestDriver:[ ]FAIL'

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # The checks before a commit, in the Linux build environment (run from any
 # directory; it works in the checkout it belongs to): configure and build
-# with the dev preset, cargo fmt and clippy, the dependency check, ctest,
+# with the dev preset, cargo fmt and clippy, the dependency check, the
+# user guide's table of contents (tools/check-guide-contents.py), ctest,
 # the ctests, the corpus tests and the UI tests (tools/ui-*-test.sh) whose
 # sources changed, several at once.
 #
@@ -146,16 +147,17 @@
 #                   memory, ballooning), "auto" is the fixed 12G as before.
 #                   The run's first lines say which applied.
 #   --overlap MODE  "auto" (default, $MITCAD_CHECK_OVERLAP) or "off": with
-#                   "auto" the lint steps (fmt, clippy, deps) run beside the
-#                   ctest step and the corpus step beside the UI tests (the
-#                   UI tests run alone again only after the corpus step),
+#                   "auto" the lint steps (fmt, clippy, deps, guide) run
+#                   beside the ctest step and the corpus step beside the UI
+#                   tests (the UI tests run alone again only after the corpus
+#                   step),
 #                   each group in the background with its output printed
 #                   when it ends (check-logs/<group>.out), when the test
 #                   runner runs the tests; "off": one step after another.
 #   --fresh         configure from scratch (cmake --fresh), as after
 #                   changes of CMake files.
 #   --only STEPS    only these steps: configure, build, fmt, clippy, deps,
-#                   ctest, corpus, ui, fuzz (with --full), or single UI
+#                   guide, ctest, corpus, ui, fuzz (with --full), or single UI
 #                   tests (ui-sketch) or ctests (ctest:core.model).
 #   --dry-run       builds and runs nothing: lists the ctests, the corpus
 #                   and the UI tests that would run for the working tree as
@@ -453,7 +455,7 @@ unset MITCAD_UI_VISIBLE
 
 wanted() {
   if [ "$DRY" = 1 ]; then
-    case $1 in configure | build | fmt | clippy | deps) return 1 ;; esac
+    case $1 in configure | build | fmt | clippy | deps | guide) return 1 ;; esac
   fi
   [ -z "$ONLY" ] || [[ ",$ONLY," == *",$1,"* ]]
 }
@@ -893,10 +895,16 @@ lint() {
   if wanted deps; then
     step deps tools/check-dependencies.sh
   fi
+  # The user guide's table of contents against its headings (mitcad#1032):
+  # the script's self-test, then the guide.
+  if wanted guide; then
+    step guide guide_contents
+  fi
 }
+guide_contents() { python3 tools/check-guide-contents.py --self-test && python3 tools/check-guide-contents.py; }
 # Beside the ctest step when it runs (--overlap auto), else before it.
 if overlapping && { wanted ctest || [ -n "$(ctest_named)" ]; } &&
-  { wanted fmt || wanted clippy || wanted deps; }; then
+  { wanted fmt || wanted clippy || wanted deps || wanted guide; }; then
   bg_start lint lint
 else
   lint

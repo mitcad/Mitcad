@@ -113,10 +113,7 @@ pub(crate) struct PropertySearchQuery {
 fn base_type(name: &str) -> Result<BaseType, ApiError> {
     BaseType::parse(name).ok_or_else(|| {
         let names: Vec<&str> = BaseType::ALL.iter().map(|t| t.as_str()).collect();
-        ApiError(format!(
-            "'{name}' is no standard type ({})",
-            names.join(", ")
-        ))
+        ApiError(format!("{name} is no standard type ({})", names.join(", ")))
     })
 }
 
@@ -165,7 +162,7 @@ impl<K: Kernel> PropertiesCrateOps<K> for Document<K> {
             .iter()
             .find(|b| b.name == text)
             .map(|b| PropertyOwner::Body(b.uid))
-            .ok_or_else(|| ApiError(format!("no component, occurrence or body '{text}'")))
+            .ok_or_else(|| ApiError(format!("no component, occurrence or body “{text}”")))
     }
 
     fn run_property_command(&mut self, command: PropertyCommand) -> Result<Value, ApiError> {
@@ -297,7 +294,7 @@ impl<K: Kernel> PropertiesCrateOps<K> for Document<K> {
         let body = match &query.body {
             Some(text) => match self.property_owner_ref(text)? {
                 PropertyOwner::Body(b) => Some(b),
-                _ => return Err(ApiError(format!("'{text}' is no body"))),
+                _ => return Err(ApiError(format!("“{text}” is no body"))),
             },
             None => None,
         };

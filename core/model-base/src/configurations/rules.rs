@@ -102,6 +102,28 @@ impl RuleViolation {
     }
 }
 
+/// A problem of a rule with its place in the rule (mitcad#1064), for the
+/// block editor to mark the block that is wrong
+/// ([`Configurations::placed_rule_problems`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleProblem {
+    /// The rule's index in the table's rules.
+    pub index: usize,
+    /// The rule's name (empty for a rule without one).
+    pub rule: String,
+    /// Where in the rule: `when`; an action of its then or else as
+    /// `then.0` or `else.1`, with the part of it when there is one:
+    /// `then.0.option`, `then.0.values.2`, `then.0.exclude.0`, `then.0.min`,
+    /// `then.0.max`, `then.0.step`, `then.0.require`. None for the rule
+    /// itself (its name).
+    pub place: Option<String>,
+    /// A warning (a value outside its option's domain) does not refuse the
+    /// table: it is none of [`Configurations::rule_problems`].
+    pub warning: bool,
+    /// The problem in words, as [`Configurations::rule_problems`] gives it.
+    pub message: String,
+}
+
 /// The name a closed table's restriction goes by in moves and refusals.
 pub const CLOSED_TABLE: &str = "the configuration table is closed";
 
@@ -1021,74 +1043,163 @@ impl Configurations {
 
     /// What is wrong with the rules: names, actions, options, expressions
     /// that do not evaluate. Empty intersections depend on the values and
-    /// are violations ([`Configurations::violations`]).
+    /// are violations ([`Configurations::violations`]). The errors of
+    /// [`Configurations::placed_rule_problems`], in its words.
     pub fn rule_problems(&self, parameters: &Parameters) -> Vec<String> {
+        self.placed_rule_problems(parameters)
+            .into_iter()
+            .filter(|p| !p.warning)
+            .map(|p| p.message)
+            .collect()
+    }
+
+    /// What is wrong with the rules, each problem with its rule and its
+    /// place in the rule (mitcad#1064): the errors of
+    /// [`Configurations::rule_problems`], and as warnings the values of an
+    /// action that are outside its option's domain (a value that is no
+    /// value of the option, a bound beyond all of them).
+    pub fn placed_rule_problems(&self, parameters: &Parameters) -> Vec<RuleProblem> {
         let mut out = Vec::new();
         let mut names = BTreeSet::new();
         for (i, rule) in self.rules.iter().enumerate() {
+            let problem = |place: Option<String>, warning: bool, message: String| RuleProblem {
+                index: i,
+                rule: rule.name.clone(),
+                place,
+                warning,
+                message,
+            };
             let label = if rule.name.trim().is_empty() {
-                out.push(format!("rule {} has no name", i + 1));
+                out.push(problem(None, false, format!("rule {} has no name", i + 1)));
                 format!("rule {}", i + 1)
             } else {
                 format!("the rule {}", rule.name)
             };
             if !rule.name.trim().is_empty() && !names.insert(rule.name.as_str()) {
-                out.push(format!("{label}: another rule has the same name"));
+                out.push(problem(
+                    None,
+                    false,
+                    format!("{label}: another rule has the same name"),
+                ));
             }
             if let Some(when) = &rule.when
                 && let Err(e) = holds(parameters, when)
             {
-                out.push(format!("{label}: when: {e}"));
+                out.push(problem(
+                    Some("when".to_owned()),
+                    false,
+                    format!("{label}: when: {e}"),
+                ));
             }
-            for action in rule.actions() {
+            let actions = rule
+                .then
+                .iter()
+                .enumerate()
+                .map(|(k, action)| (format!("then.{k}"), action))
+                .chain(
+                    rule.otherwise
+                        .iter()
+                        .enumerate()
+                        .map(|(k, action)| (format!("else.{k}"), action)),
+                );
+            for (place, action) in actions {
+                let at = |part: &str| Some(format!("{place}.{part}"));
                 let other = action.in_table.is_some() || action.columns.is_some();
                 let kinds = usize::from(action.is_restriction())
                     + usize::from(action.require.is_some())
                     + usize::from(action.forbid.is_some())
                     + usize::from(other);
                 if kinds > 1 {
-                    out.push(format!(
-                        "{label}: an action has two kinds: an option's values, require, forbid \
-                         and in_table go in actions of their own"
+                    out.push(problem(
+                        Some(place.clone()),
+                        false,
+                        format!(
+                            "{label}: an action has two kinds: an option's values, require, \
+                             forbid and in_table go in actions of their own"
+                        ),
                     ));
                     continue;
                 }
                 if kinds == 0 || other {
-                    if let Some(problem) = self.other_action_problem(action, parameters) {
-                        out.push(format!("{label}: {problem}"));
+                    if let Some(message) = self.other_action_problem(action, parameters) {
+                        out.push(problem(
+                            Some(place.clone()),
+                            false,
+                            format!("{label}: {message}"),
+                        ));
                     }
                     continue;
                 }
                 if let Some(condition) = &action.require
                     && let Err(e) = holds(parameters, condition)
                 {
-                    out.push(format!("{label}: require: {e}"));
+                    out.push(problem(
+                        at("require"),
+                        false,
+                        format!("{label}: require: {e}"),
+                    ));
                 }
                 if !action.is_restriction() {
                     continue;
                 }
                 let Some(option) = action.option.as_deref() else {
-                    out.push(format!("{label}: an action restricts no option"));
+                    out.push(problem(
+                        Some(place.clone()),
+                        false,
+                        format!("{label}: an action restricts no option"),
+                    ));
                     continue;
                 };
                 if !self.is_option(option) {
-                    out.push(format!(
-                        "{label}: {option} is not an option of the configurations"
+                    out.push(problem(
+                        at("option"),
+                        false,
+                        format!("{label}: {option} is not an option of the configurations"),
                     ));
                     continue;
                 }
                 let Ok(opt) = option_info(parameters, option) else {
                     continue;
                 };
-                if opt.text
-                    && (action.min.is_some() || action.max.is_some() || action.step.is_some())
-                {
-                    out.push(format!(
-                        "{label}: {option} is a text option: it has no minimum, maximum or step"
-                    ));
-                    continue;
+                if opt.text {
+                    let bound = [
+                        ("min", &action.min),
+                        ("max", &action.max),
+                        ("step", &action.step),
+                    ]
+                    .into_iter()
+                    .find(|(_, text)| text.is_some());
+                    if let Some((what, _)) = bound {
+                        out.push(problem(
+                            at(what),
+                            false,
+                            format!(
+                                "{label}: {option} is a text option: it has no minimum, maximum \
+                                 or step"
+                            ),
+                        ));
+                        continue;
+                    }
                 }
-                for (what, text) in action.expressions() {
+                // The action's expressions as `expressions` gives them, each
+                // with its place: a list's by its index.
+                let mut parts: Vec<(&str, String, &str)> = Vec::new();
+                for (what, list) in [("values", &action.values), ("exclude", &action.exclude)] {
+                    for (k, text) in list.iter().flatten().enumerate() {
+                        parts.push((what, format!("{what}.{k}"), text.as_str()));
+                    }
+                }
+                for (what, text) in [
+                    ("min", &action.min),
+                    ("max", &action.max),
+                    ("step", &action.step),
+                ] {
+                    if let Some(text) = text {
+                        parts.push((what, what.to_owned(), text.as_str()));
+                    }
+                }
+                let domain = Set::domain(parameters, &opt);
+                for (what, part, text) in parts {
                     // A list that is a table column (mitcad#806).
                     if matches!(what, "values" | "exclude")
                         && let Some(Err(e)) = super::from_tables::list_values(
@@ -1098,25 +1209,99 @@ impl Configurations {
                             std::slice::from_ref(&text.to_owned()),
                         )
                     {
-                        out.push(format!("{label}: {what}: {e}"));
+                        out.push(problem(at(&part), false, format!("{label}: {what}: {e}")));
                         continue;
                     }
                     if super::from_tables::column_reference(text).is_some() {
                         continue;
                     }
-                    if let Err(e) = eval_val(parameters, &opt, text) {
-                        out.push(format!("{label}: {what}: {e}"));
+                    match eval_val(parameters, &opt, text) {
+                        Err(e) => {
+                            out.push(problem(at(&part), false, format!("{label}: {what}: {e}")));
+                        }
+                        Ok(value) => {
+                            if let Some(outside) = outside_domain(&domain, what, &value, &opt) {
+                                out.push(problem(
+                                    at(&part),
+                                    true,
+                                    format!("{label}: {what}: {outside}"),
+                                ));
+                            }
+                        }
                     }
                 }
                 if let Some(step) = &action.step
                     && let Ok(Val::Num(v)) = eval_val(parameters, &opt, step)
                     && v <= 0.0
                 {
-                    out.push(format!("{label}: the step must be positive"));
+                    out.push(problem(
+                        at("step"),
+                        false,
+                        format!("{label}: the step must be positive"),
+                    ));
                 }
             }
         }
         out
+    }
+}
+
+/// Why a value of a rule's action is outside its option's domain
+/// (mitcad#1064): a value listed in `values` or `exclude` that is no value
+/// of the option, a `min` above all of its values, a `max` below all of
+/// them. None when it is inside, and for a domain that is free.
+fn outside_domain(domain: &Set, what: &str, value: &Val, opt: &Opt) -> Option<String> {
+    let text = value.text(opt.unit);
+    match what {
+        "values" | "exclude" => (!domain.contains(value))
+            .then(|| format!("{text} is not one of the values of {}", opt.name)),
+        "min" | "max" => {
+            let Val::Num(v) = value else {
+                return None;
+            };
+            // The domain's smallest and largest value: a list's numbers, or
+            // the range's bounds.
+            let (low, high) = match &domain.list {
+                Some(list) => {
+                    let numbers: Vec<f64> = list
+                        .iter()
+                        .filter_map(|v| match v {
+                            Val::Num(n) => Some(*n),
+                            Val::Text(_) => None,
+                        })
+                        .collect();
+                    (
+                        numbers.iter().copied().reduce(f64::min),
+                        numbers.iter().copied().reduce(f64::max),
+                    )
+                }
+                None => (domain.min, domain.max),
+            };
+            if what == "min"
+                && let Some(high) = high
+                && *v > high
+                && !near(*v, high)
+            {
+                return Some(format!(
+                    "{text} is above the largest value of {}, {}",
+                    opt.name,
+                    Val::Num(high).text(opt.unit)
+                ));
+            }
+            if what == "max"
+                && let Some(low) = low
+                && *v < low
+                && !near(*v, low)
+            {
+                return Some(format!(
+                    "{text} is below the smallest value of {}, {}",
+                    opt.name,
+                    Val::Num(low).text(opt.unit)
+                ));
+            }
+            None
+        }
+        _ => None,
     }
 }
 

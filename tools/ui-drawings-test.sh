@@ -22,10 +22,12 @@
 #   - Model shortcuts (E, H) on the sheet do nothing (mitcad#725).
 #   - Base View: the front view where the sheet is clicked, at 2:1; then
 #     Projected View: a click right of it places the view projected from
-#     that side.
+#     that side. Each view's projection is logged (mitcad#1033): the
+#     kernel's when it is added, then from the cache.
 #   - Section View: a line across the front view, then a click where the
 #     section goes; Detail View: a circle on its corner, then its place;
-#     the detail's circle dragged on its parent (mitcad#715).
+#     the detail moved (nothing projected again, mitcad#1033) and its
+#     circle dragged on its parent (mitcad#715).
 #   - Break: a band out of the front view; the section's hatching off in
 #     the view panel; the detail deleted (Delete) and back (Ctrl+Z).
 #   - A second sheet (+); the sheets switched by clicks on their tabs; the
@@ -60,7 +62,7 @@
 #     annotations.
 #   - Export… PDF: a PDF of the sheet with the note and the dimension;
 #     Export… DWG: an R2000 DWG file of it (mitcad#728).
-#   - Templates and revisions (phase 4): Body1 made PLA (Material...), the
+#   - Templates and revisions (phase 4): Body1 made PLA (the Material tool), the
 #     title block's material follows; Add Revision: the revision table and
 #     the title block show it; Export… PDF with them.
 #   - An assembly mitcad-cli makes (Component1 placed twice, Component2
@@ -77,7 +79,7 @@
 #     hand, then the same drawing written as it is, the note kept (mitcad#725).
 #   - A cut sheet (mitcad#853) on a plate and a disk mitcad-cli makes:
 #     Create Drawing's Kind Cut Sheet (600 x 300) on its CUT SHEET tab
-#     (mitcad#1008), Add Parts… with both
+#     (mitcad#1008), Add Components… with both
 #     bodies, Export… DXF: the outlines on CUT_OUTER, the disk a circle.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -245,6 +247,30 @@ no_refusal() {
   return 0
 }
 
+# projection_logged view bodies how: since the mark, the log's line of the
+# view's projection (mitcad#1033) with its bodies and milliseconds, "how"
+# being "projected exactly" or "projected from a triangulation" (the
+# kernel's) or "from the cache".
+projection_logged() {
+  local pattern="^Drawing projection of view $1: $2 bodies, [0-9]+\.[0-9] ms, $3\$"
+  for _ in $(seq 1 30); do
+    if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qE "$pattern"; then
+      echo "ok   view $1's projection logged: $2 bodies, $3"
+      return 0
+    fi
+    ui_sync
+    sleep 0.2
+  done
+  ui_fail "no line of view $1's projection ($2 bodies, $3) in the log"
+}
+
+# nothing_projected: no view projected since the mark (mitcad#1033).
+nothing_projected() {
+  grep -E "^Drawing projection of view [0-9]+: .*, projected [a-z ]+$" <(tail -n +$((UI_MARK + 1)) "$UI_LOG") &&
+    ui_fail "a view was projected again"
+  echo "ok   nothing projected again"
+}
+
 ui_start_display
 # A redo takes 1.5 s longer in this run (mitcad#753), whatever it changes.
 MITCAD_TEST_JOB_SLEEP_MS=redo=1500 ui_start_app --open "$FILE" --no-native-dialogs
@@ -296,6 +322,10 @@ ui_mark
 ui_step "click the sheet at 120, 120"      sheet_click 120 120
 ui_expect_new '"type":"base"' "the base view asked for"
 ui_expect_new "Drawing view 1 at" "the front view drawn"
+# Its projection logged (mitcad#1033): the kernel's, then the sheet drawn
+# from the cache.
+projection_logged 1 1 "projected exactly"
+projection_logged 1 1 "from the cache"
 ui_expect_new "Drawing tool: Projected View" "projected views follow"
 ui_mark
 ui_step "click right of it"                sheet_click 215 120
@@ -335,6 +365,9 @@ ui_step "drag the detail up" sheet_drag "Drawing view 4" 230 170
 ui_expect_new "Drawing view 4 dragged by" "the detail dragged"
 ui_expect_new '"move":[' "moved on the sheet"
 ui_expect_new "Drawing view 4 at" "drawn at its new place"
+# A move projects nothing again (mitcad#1033).
+projection_logged 4 1 "from the cache"
+nothing_projected
 # The detail (selected by the drag) has its circle dragged on its parent
 # (mitcad#715).
 ui_mark
@@ -730,7 +763,7 @@ ui_mark
 ui_step "Close Drawing"                    ui_click_logged "Drawing Close Drawing"
 ui_expect_new "Drawing closed" "the 3D view again"
 # Solid and Build back, Solid shown, as before the drawing (mitcad#1008).
-ui_expect_new "Ribbon tabs: SOLID, BUILD (shown SOLID)" "the model's tabs back, the one it was opened from shown"
+ui_expect_new "Ribbon tabs: SOLID, BUILD, MAKE (shown SOLID)" "the model's tabs back, the one it was opened from shown"
 ui_mark
 ui_step "edit Extrude1 (double-click)"     ui_double_click_logged "Timeline Extrude1"
 ui_expect_new " with Extrude" "editing Extrude1"
@@ -782,7 +815,7 @@ echo "--- Saved and opened again"
 ui_mark
 ui_step "back to the model (Close Drawing)" ui_click_logged "Drawing Close Drawing"
 ui_expect_new "Drawing closed" "closed"
-ui_expect_new "Ribbon tabs: SOLID, BUILD (shown BUILD)" "back on the Build tab it was opened from"
+ui_expect_new "Ribbon tabs: SOLID, BUILD, MAKE (shown BUILD)" "back on the Build tab it was opened from"
 ui_focus_main
 ui_step "save (Ctrl+S)"                    ui_key ctrl+s
 ui_expect_log "Saved $FILE" "saved"
@@ -828,13 +861,10 @@ ui_expect_new "Drawing closed" "the 3D view again"
 ui_focus_main
 ui_mark
 ui_step "right-click Body1"                ui_click_logged "Browser Root/Bodies/Body1" 3
-ui_step "choose Material..."               ui_menu_choose "Material..."
-ui_focus_dialog '^Materials$'
-ui_expect_new "Materials item PLA Plastic at" "PLA is listed"
-ui_step "choose PLA Plastic"               ui_click_logged "Materials item PLA Plastic"
-ui_expect_new "Material selected: PLA Plastic (" "PLA is selected"
-ui_step "Assign"                           ui_click_logged "Materials assign"
-ui_focus_main
+ui_step "choose Material > More..."     ui_menu_choose "Material" "More..."
+ui_expect_new "Panel Material input material at" "the Material tool is open"
+ui_step "the picker: PLA Plastic"          ui_picker_choose "Panel Material input material" "Material picker" "PLA Plastic"
+ui_step "OK (Enter)"                       ui_key Return
 ui_expect_new "Material pla set for 1 body(ies)" "Body1 is PLA"
 ui_mark
 ui_step "open Drawing1 (double-click)"     ui_double_click_logged "Browser Root/Drawings/Drawing1"
@@ -898,7 +928,7 @@ ui_focus_dialog '^Create Drawing$'
 ui_step "OK"                               ui_key Return
 ui_focus_main
 ui_expect_new "Drawing opened: D1 Drawing1, sheet 1 of 1" "its sheet over the view"
-ui_expect_new "Drawing tool Parts List at" "the tables' tools on the ribbon"
+ui_expect_new "Drawing tool Bill of Materials at" "the tables' tools on the ribbon"
 ui_expect_new "Drawing tool: Base View" "Base View on for the new drawing"
 # In the Floating layout too (mitcad#1008): the DRAWING tab's group cards,
 # the sheet over the whole view, of the cards only the browser's.
@@ -915,9 +945,9 @@ ui_step "end the tool (Esc)"               ui_key Escape
 ui_expect_new "Drawing tool: selection" "back to the selection"
 # A parts list places its balloons, on by default (mitcad#725).
 ui_mark
-settled "Drawing tool Parts List"
-ui_step "Parts List"                       ui_click_logged "Drawing tool Parts List"
-ui_expect_new "Drawing tool: Parts List" "the parts list tool is on"
+settled "Drawing tool Bill of Materials"
+ui_step "Bill of Materials"                       ui_click_logged "Drawing tool Bill of Materials"
+ui_expect_new "Drawing tool: Bill of Materials" "the parts list tool is on"
 ui_expect_new "Drawing panel drawingOption_balloons at" "its Balloons option"
 ui_step "the front view"                   ui_click_logged "Drawing view 1"
 ui_expect_new "Drawing placing view" "its place is clicked next"
@@ -932,9 +962,9 @@ ui_step "undo (Ctrl+Z)"                    ui_key ctrl+z
 ui_expect_new "Drawing annotations drawn: none" "the list and its balloons gone in one step"
 # Without them, the balloon placed by hand.
 ui_mark
-settled "Drawing tool Parts List"
-ui_step "Parts List again"                 ui_click_logged "Drawing tool Parts List"
-ui_expect_new "Drawing tool: Parts List" "the parts list tool is on"
+settled "Drawing tool Bill of Materials"
+ui_step "Bill of Materials again"                 ui_click_logged "Drawing tool Bill of Materials"
+ui_expect_new "Drawing tool: Bill of Materials" "the parts list tool is on"
 settled "Drawing panel drawingOption_balloons"
 ui_step "Balloons off"                     ui_click_logged "Drawing panel drawingOption_balloons"
 ui_expect_new "Drawing option balloons: off" "no balloons"
@@ -998,7 +1028,7 @@ ui_step "SVG… (Down, Down, Enter)"         ui_key Down Down Return
 ui_step "type the path, Enter"             ui_type_path "Export Drawing" "$WORK/assembly.svg"
 ui_focus_main
 ui_expect_new "Exported $WORK/assembly.svg: drawing Drawing1, 1 sheets" "the SVG written" 30
-grep -q "PARTS LIST" "$WORK/assembly.svg" || ui_fail "the SVG has no parts list"
+grep -q "BILL OF MATERIALS" "$WORK/assembly.svg" || ui_fail "the SVG has no parts list"
 grep -q "Component2" "$WORK/assembly.svg" || ui_fail "the SVG's parts list has no Component2"
 echo "ok   the SVG has the parts list"
 # The second placement deleted: one Component1, its balloon broken.
@@ -1027,7 +1057,7 @@ settled "Drawing Close Drawing"
 ui_step "Close Drawing"                    ui_click_logged "Drawing Close Drawing"
 ui_expect_new "Drawing closed" "the 3D view again"
 # The model's tabs and the cards back (mitcad#1008).
-ui_expect_new "Ribbon tabs: SOLID, BUILD (shown SOLID)" "Solid and Build back"
+ui_expect_new "Ribbon tabs: SOLID, BUILD, MAKE (shown SOLID)" "Solid and Build back"
 floating_cards with timelineDock
 ui_focus_main
 ui_mark
@@ -1100,16 +1130,16 @@ ui_expect_new "Create Drawing dialog: cut sheet 600 x 300" "a cut sheet of 600 x
 ui_expect_new "Drawing created: D1 CutSheet1 in C0" "CutSheet1 in the root's folder"
 ui_expect_new "Drawing opened: D1 CutSheet1, sheet 1 of 1" "its sheet over the view"
 ui_expect_new "Drawing sheet drawn: 0 views" "no parts yet"
-# A cut sheet's tab of its own (mitcad#1008): Add Parts… and its Export.
+# A cut sheet's tab of its own (mitcad#1008): Add Components… and its Export.
 ui_expect_new "Ribbon tabs: CUT SHEET (shown CUT SHEET)" "the CUT SHEET tab alone"
-ui_expect_new "Ribbon button drawing.add_parts at" "Add Parts… on the ribbon"
+ui_expect_new "Ribbon button drawing.add_parts at" "Add Components… on the ribbon"
 ui_expect_new "Drawing Add Parts at" "its place logged as the drawing's"
 area_is_view
 ui_mark
 settled "Drawing Add Parts"
-ui_step "Add Parts…"                       ui_click_logged "Drawing Add Parts"
+ui_step "Add Components…"                       ui_click_logged "Drawing Add Parts"
 ui_expect_new "Cut sheet Add Parts dialog opened: 2 bodies" "its dialog lists both bodies"
-ui_focus_dialog '^Add Parts$'
+ui_focus_dialog '^Add Components$'
 ui_step "both bodies (Ctrl+A), OK"         ui_key ctrl+a Return
 ui_focus_main
 ui_expect_new '"cmd":"add_cut_sheet_parts"' "the parts asked for"

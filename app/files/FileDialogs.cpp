@@ -329,7 +329,7 @@ std::optional<DxfChoice> askDxfInsert(QWidget* parent, const QString& file,
   auto* group = new QButtonGroup(anchors);
   const std::pair<const char*, QString> kAnchors[] = {{"origin", QObject::tr("Drawing origin")},
                                                      {"lower_left", QObject::tr("Lower left corner")},
-                                                     {"center", QObject::tr("Centre")}};
+                                                     {"center", QObject::tr("Center")}};
   std::vector<QRadioButton*> anchorButtons;
   for (const auto& [id, label] : kAnchors) {
     auto* button = new QRadioButton(label);
@@ -401,7 +401,7 @@ std::optional<DxfChoice> askDxfInsert(QWidget* parent, const QString& file,
   };
   const auto updateSize = [box, size] {
     const auto b = box();
-    size->setText(b ? QObject::tr("%1 x %2 mm").arg(b->width(), 0, 'g', 6).arg(b->height(), 0, 'g', 6)
+    size->setText(b ? QObject::tr("%1 × %2 mm").arg(b->width(), 0, 'g', 6).arg(b->height(), 0, 'g', 6)
                     : QObject::tr("nothing"));
   };
   QObject::connect(layers, &QListWidget::itemChanged, &dialog, [updateSize] { updateSize(); });
@@ -500,7 +500,7 @@ std::optional<DxfChoice> askSvgInsert(QWidget* parent, const QString& file,
   scale->setRange(1e-6, 1e6);
   scale->setDecimals(4);
   scale->setValue(1.0);
-  scale->setToolTip(QObject::tr("Millimetres in the sketch per millimetre of the drawing"));
+  scale->setToolTip(QObject::tr("Millimeters in the sketch per millimeter of the drawing"));
   form->addRow(QObject::tr("Scale:"), scale);
   const auto coordinate = [] {
     auto* box = new DecimalSpinBox;
@@ -523,7 +523,7 @@ std::optional<DxfChoice> askSvgInsert(QWidget* parent, const QString& file,
   auto* size = new QLabel;
   form->addRow(QObject::tr("Size:"), size);
   const auto updateSize = [size, scale, drawn] {
-    size->setText(QObject::tr("%1 x %2 mm")
+    size->setText(QObject::tr("%1 × %2 mm")
                       .arg(drawn.at(0).toDouble() * scale->value(), 0, 'g', 6)
                       .arg(drawn.at(1).toDouble() * scale->value(), 0, 'g', 6));
   };
@@ -538,8 +538,10 @@ std::optional<DxfChoice> askSvgInsert(QWidget* parent, const QString& file,
   layout->addWidget(buttons);
   scale->setFocus();
   scale->selectAll();
-  qDebug().noquote() << QStringLiteral("Insert SVG dialog opened: %1, %2 filled, %3 stroked, %4 texts")
-                            .arg(size->text())
+  // The log keeps its own form of the size, whatever the label says.
+  qDebug().noquote() << QStringLiteral("Insert SVG dialog opened: %1 x %2 mm, %3 filled, %4 stroked, %5 texts")
+                            .arg(drawn.at(0).toDouble() * scale->value(), 0, 'g', 6)
+                            .arg(drawn.at(1).toDouble() * scale->value(), 0, 'g', 6)
                             .arg(info.value(QStringLiteral("filled")).toInt())
                             .arg(info.value(QStringLiteral("stroked")).toInt())
                             .arg(info.value(QStringLiteral("texts")).toInt());
@@ -1187,7 +1189,7 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
                              .arg(body.value(QStringLiteral("source")).toString());
     auto* item = new QTreeWidgetItem(
         items, {QString::number(++bodyIndex), made.value(QStringLiteral("name")).toString(),
-                body.value(QStringLiteral("solid")).toBool() ? QObject::tr("solid") : QObject::tr("sheet"),
+                body.value(QStringLiteral("solid")).toBool() ? QObject::tr("solid") : QObject::tr("surface"),
                 (iptHistory ? QObject::tr("body of %1") : QObject::tr("base feature %1"))
                     .arg(body.value(QStringLiteral("feature")).toString()),
                 note});

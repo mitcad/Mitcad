@@ -27,6 +27,7 @@
 #include <QDateTime>
 #include <QList>
 #include <QString>
+#include <QStringList>
 #include <QToolButton>
 
 class QMenu;
@@ -79,6 +80,8 @@ public:
 
   State state() const;
   const QList<ConnectedAgent>& agents() const { return m_agents; }
+  // Clients initialized in this run, also while the setup dialog was closed.
+  const QStringList& previousClients() const { return m_previousClients; }
   // The listener's instance id (empty while there is none) and why there is
   // none (the chat panel, mitcad#947).
   const QString& listenerInstance() const { return m_instance; }
@@ -123,6 +126,7 @@ private:
   bool m_unavailable = false;
   QString m_reason;
   QList<ConnectedAgent> m_agents;
+  QStringList m_previousClients;
   QString m_chatWorking;
   QMenu* m_menu = nullptr;
   QString m_logged;

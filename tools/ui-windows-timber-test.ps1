@@ -40,7 +40,7 @@
 #   7. Every size a tile of its own (mitcad#484): the picker lists the 48
 #      member's three rows and the 28 one, the families as groups, a row's
 #      own picture; starring 48x148 stars that size only (mitcad#491): it
-#      comes first and Favourites lists it alone; a search by 48x148 finds
+#      comes first and Favorites lists it alone; a search by 48x148 finds
 #      its tile, which places that row with its section. The star changes
 #      only the star: the tiles stay where they are until the list is made
 #      again (mitcad#517). The use count is per size (mitcad#518): only the
@@ -167,8 +167,8 @@ Ui-Mark
 Ui-Step "the member's side"              { Ui-Click $at[0] $at[1] }
 Ui-ExpectNew 'Inspect Timber: place side' 'on its side'
 Ui-ExpectNew '; set of ' 'the set counted'
-Ui-ExpectNew 'centre distance 400 mm' 'at 400 mm'
-$at400 = Set-Previewed 'centre distance 400 mm' 'at 400 mm'
+Ui-ExpectNew 'center distance 400 mm' 'at 400 mm'
+$at400 = Set-Previewed 'center distance 400 mm' 'at 400 mm'
 # Once picked the set stays there while the mouse moves (mitcad#508); a
 # click on another face moves it once, a click at the first place back.
 $setOther = $null
@@ -180,11 +180,11 @@ else {
 }
 if (-not $setOther) { Ui-Fail "no other face of the member ($beam) or the post ($post) to click" }
 Keeps-Place 'Timber' $at $setOtherBody $setOther
-$back400 = Set-Previewed 'centre distance 400 mm' 'at the first place again'
+$back400 = Set-Previewed 'center distance 400 mm' 'at the first place again'
 if ($back400 -ne $at400) { Ui-Fail "the set at the first place again previewed $back400 members, not the $at400 before" }
 Ui-Mark
 Ui-Step 'a distance of 200'              { Ui-TypeIn 'Panel Timber input distance' '200' }
-$at200 = Set-Previewed 'centre distance 200' 'at 200'
+$at200 = Set-Previewed 'center distance 200' 'at 200'
 if ($at200 -le $at400) { Ui-Fail "200 mm previewed $at200 members, not more than the $at400 at 400 mm" }
 # The Offset typed after the click moves the set (mitcad#492): from its
 # reference it starts 300 mm in, fewer members; back to 0, as before.
@@ -202,7 +202,7 @@ Ui-Step 'From End A'                     {
 Ui-Sync
 Ui-Mark
 Ui-Step 'an offset of 300'               { Ui-TypeIn 'Panel Timber input offset' '300' }
-Expect-Inspect 'Timber' @(' at 300.0 mm from a', 'centre distance 200') 'the set previewed 300 mm from end A'
+Expect-Inspect 'Timber' @(' at 300.0 mm from a', 'center distance 200') 'the set previewed 300 mm from end A'
 $at300 = Set-Previewed ' at 300.0 mm from a' 'offset 300'
 if ($at300 -ge $at200) { Ui-Fail "offset 300 previewed $at300 members, not fewer than the $at200 at offset 0" }
 Ui-Mark
@@ -257,7 +257,7 @@ Ui-ExpectNew 'Cut list row: ' "the cut list's rows"
 Ui-ExpectNew 'x Timber 48x98 test' 'the members in it'
 Ui-ExpectNew 'Cut list timber: ' 'the timber columns and totals'
 Ui-ExpectNew 'Cut list timber row: Timber 48x98 test' "a member's material and sizes"
-Ui-ExpectNew 'columns Quantity, Part, Length (mm)' 'the timber columns after the others'
+Ui-ExpectNew 'columns Quantity, Component, Length (mm)' 'the timber columns after the others'
 Ui-Step 'close (Escape)'                 { Ui-Key 'Escape' }
 Ui-FocusMain
 
@@ -266,9 +266,9 @@ Ui-Mark
 Ui-Step 'Timber (F4)'                    { Ui-Key 'F4' }
 Ui-ExpectNew 'Command Timber started' 'Timber again'
 Ui-Mark
-Ui-Step 'the part picker (the Part tile)' { Ui-ClickLogged 'Panel Timber input part' }
+Ui-Step 'the part picker (the Component tile)' { Ui-ClickLogged 'Panel Timber input part' }
 Ui-ExpectNew 'Part picker opened: 4 parts for build.timber' 'the picker lists every size'
-Ui-ExpectNew 'Part picker group All parts: 4 parts, first test-timber/timber-48-test (48x98)' 'all four sizes, the standard ones first'
+Ui-ExpectNew 'Part picker group All components: 4 parts, first test-timber/timber-48-test (48x98)' 'all four sizes, the standard ones first'
 # The use count is per size (mitcad#518): the design's members are all
 # 48x98, so only that tile has a count, not every size of the family.
 $tiles = $null
@@ -300,14 +300,14 @@ Ui-Step 'star it (Star)'                 { Picker-Click 'Part picker place star'
 Ui-ExpectNew 'Part picker star timber-48-test (48x148) on' 'the size 48x148 starred'
 # A star changes only the star (mitcad#517): the tiles stay where they are
 # and the selection on the starred one; the size comes first once the list
-# is made again (Favourites, then All parts below).
+# is made again (Favorites, then All components below).
 Ui-ExpectNew "Part picker tiles kept: $tilesBefore; current test-timber/timber-48-test (48x148)" 'the tiles stay in their places, the selection on the size'
 Ui-Mark
-Ui-Step 'Favourites'                     { Picker-Click 'Part picker group row Favourites' }
-Ui-ExpectNew 'Part picker group Favourites: 1 parts, first test-timber/timber-48-test (48x148)' 'Favourites lists that size alone'
+Ui-Step 'Favorites'                     { Picker-Click 'Part picker group row Favorites' }
+Ui-ExpectNew 'Part picker group Favorites: 1 parts, first test-timber/timber-48-test (48x148)' 'Favorites lists that size alone'
 Ui-Mark
-Ui-Step 'All parts'                      { Picker-Click 'Part picker group row All parts' }
-Ui-ExpectNew 'Part picker group All parts: 4 parts, first test-timber/timber-48-test (48x148)' 'every size again'
+Ui-Step 'All components'                      { Picker-Click 'Part picker group row All components' }
+Ui-ExpectNew 'Part picker group All components: 4 parts, first test-timber/timber-48-test (48x148)' 'every size again'
 Ui-ExpectNew 'Part picker tile test-timber/timber-48-test (48x98) at ' "48x98's tile after the starred one"
 Ui-Mark
 Ui-Step 'the 48x98 tile again'           { Picker-Click 'Part picker tile test-timber/timber-48-test (48x98)' }
@@ -349,7 +349,7 @@ Ui-Mark
 Ui-Step 'Timber (F4)'                    { Ui-Key 'F4' }
 Ui-ExpectNew 'Command Timber started' 'Timber again'
 Ui-Mark
-Ui-Step 'the part picker (the Part tile)' { Ui-ClickLogged 'Panel Timber input part' }
+Ui-Step 'the part picker (the Component tile)' { Ui-ClickLogged 'Panel Timber input part' }
 Ui-ExpectNew 'Part picker opened: 4 parts for build.timber' 'the picker again'
 # The search 48x148 above stays in the picker (it shows the part chosen):
 # cleared, every size is a tile again.
@@ -357,7 +357,7 @@ Ui-Step 'the search field'               { Picker-Click 'Part picker place searc
 Ui-Mark
 Ui-Step 'clear the search'               { Picker-Keys @(0x23) 1; Picker-Keys @(0x08) 6 }
 Ui-ExpectNew "Part picker search ''" 'the search cleared'
-Ui-ExpectNew 'Part picker group All parts: 4 parts' 'every size again'
+Ui-ExpectNew 'Part picker group All components: 4 parts' 'every size again'
 $tiles = $null
 for ($i = 0; $i -lt 120 -and "$tiles" -notmatch 'timber-48-test \(48x148\) x1'; $i++) {
   $tiles = Ui-LastMatch '^Part picker tiles: (.*)$'

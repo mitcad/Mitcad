@@ -316,7 +316,7 @@ fn templates_are_chosen_per_sheet_and_travel_with_the_drawing() {
         &mut doc,
         json!({"cmd": "edit_drawing_sheet", "drawing": "D1", "template": "din"}),
     );
-    assert!(error.contains("no built-in template 'din'"), "{error}");
+    assert!(error.contains("no built-in template din"), "{error}");
     let error = refused(
         &mut doc,
         json!({"cmd": "add_drawing", "template": {"id": "x", "name": "X"}}),
@@ -767,4 +767,67 @@ fn a_components_drawing_takes_the_default_material_of_the_components_between() {
         field_of(&doc, &frame, "MATERIAL"),
         material_name(&doc, "nylon")
     );
+}
+
+#[test]
+fn a_title_block_falls_back_to_the_design_summary() {
+    // mitcad#1088: File › Design Properties…'s summary (the root's set
+    // Summary) fills the title, the author and the description where the
+    // sheet and the component give none.
+    let mut doc = templated();
+    command(
+        &mut doc,
+        json!({"cmd": "set_design_summary", "title": "Gearbox housing", "author": "A. Maker",
+               "comments": "Cast, then machined"}),
+    );
+    assert_eq!(field(&doc, 0, "TITLE"), "Gearbox housing");
+    assert_eq!(field(&doc, 0, "DRAWN BY"), "A. Maker");
+    // The description: a template field of its own.
+    let mut ours = query(&doc, json!({"query": "drawing_templates"}))["templates"][0].clone();
+    ours["id"] = json!("described");
+    ours["name"] = json!("Described");
+    ours["library"] = json!("user");
+    ours.as_object_mut().unwrap().remove("choice");
+    for f in ours["title_block"]["fields"].as_array_mut().unwrap() {
+        if f["label"] == "PART NO." {
+            f["text"] = json!("{description}");
+        }
+    }
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_sheet", "drawing": "D1", "template": ours}),
+    );
+    assert_eq!(field(&doc, 0, "PART NO."), "Cast, then machined");
+    // A property Description of the component comes first.
+    command(
+        &mut doc,
+        json!({"cmd": "set_property", "owner": "C0", "set": "Identity", "key": "Description",
+               "value": "Housing"}),
+    );
+    assert_eq!(field(&doc, 0, "PART NO."), "Housing");
+    // The sheet's own title and author come first.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_sheet", "drawing": "D1",
+               "title_block": {"author": "JD", "title": "Housing, left"}}),
+    );
+    assert_eq!(field(&doc, 0, "TITLE"), "Housing, left");
+    assert_eq!(field(&doc, 0, "DRAWN BY"), "JD");
+
+    // A component's drawing: titled by its name (the summary names the
+    // design), its author the design's.
+    command(&mut doc, json!({"cmd": "create_component", "name": "Lid"}));
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C0"}),
+    );
+    let lid = command(
+        &mut doc,
+        json!({"cmd": "add_drawing", "component": "Lid", "template": "iso"}),
+    )["drawing"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(field_of(&doc, &lid, "TITLE"), "Lid");
+    assert_eq!(field_of(&doc, &lid, "DRAWN BY"), "A. Maker");
 }

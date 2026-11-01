@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include "SketchSnap.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
+
+#include <QRegularExpression>
+#include <QStringList>
 
 namespace mitcad::sketch {
 namespace {
@@ -46,7 +50,7 @@ QString Snap::describe() const {
   case Kind::Point:
     return QStringLiteral("point %1").arg(point);
   case Kind::Center:
-    return QStringLiteral("centre %1").arg(point);
+    return QStringLiteral("center %1").arg(point);
   case Kind::Origin:
     return QStringLiteral("origin");
   case Kind::Midpoint:
@@ -289,6 +293,184 @@ std::optional<QJsonObject> axisHold(const QString& point, const Snap& snap,
   return QJsonObject{{QStringLiteral("type"), QStringLiteral("coincident")},
                      {QStringLiteral("point"), point},
                      {QStringLiteral("entity"), line}};
+}
+
+// ---------------------------------------------------------------------------
+// What a drawing tool adds automatically (mitcad#1024)
+
+namespace {
+
+// How near an end must lie to a curve, and how nearly the two must run the
+// same way there (the sine of the angle between them), to be tried as a
+// tangent: the model's own check (no point moves more than 1e-9 mm) has
+// the last word.
+constexpr double kTouchOn = 1e-6;
+constexpr double kTouchSine = 1e-6;
+// Coordinates this close are the same for an axis alignment.
+constexpr double kAligned = 1e-9;
+
+// The model's curve `id`, looked up here: test_app links SketchSnap.cpp
+// without SketchModel.cpp (SketchModel::curve).
+const CurveData* curveOf(const SketchModel& model, const QString& id) {
+  for (const CurveData& c : model.curves) {
+    if (c.id == id) {
+      return &c;
+    }
+  }
+  return nullptr;
+}
+
+QJsonObject relation(const QString& type, const QString& a, const QString& b) {
+  return {{QStringLiteral("type"), type}, {QStringLiteral("a"), a}, {QStringLiteral("b"), b}};
+}
+
+} // namespace
+
+QString axisAlignment(const V2& a, const V2& b) {
+  const V2 d = b - a;
+  if (norm(d) <= kAligned) {
+    return QString();
+  }
+  if (std::abs(d.y) <= kAligned) {
+    return QStringLiteral("horizontal");
+  }
+  if (std::abs(d.x) <= kAligned) {
+    return QStringLiteral("vertical");
+  }
+  return QString();
+}
+
+std::vector<QJsonObject> quadrantHold(const SketchModel& model, const QString& point, const Snap& snap) {
+  std::vector<QJsonObject> hold;
+  if (snap.kind != Snap::Kind::Quadrant || point.isEmpty() || snap.curve.isEmpty()) {
+    return hold;
+  }
+  hold.push_back({{QStringLiteral("type"), QStringLiteral("coincident")},
+                  {QStringLiteral("point"), point},
+                  {QStringLiteral("entity"), snap.curve}});
+  const CurveData* curve = curveOf(model, snap.curve);
+  if (curve == nullptr || curve->center.isEmpty() || curve->center == point) {
+    return hold;
+  }
+  // Level or plumb with the centre: exactly so for a circle or an arc; an
+  // ellipse turned off the axes has its quadrants elsewhere.
+  const V2 d = snap.at - curve->curve.center;
+  const double size = std::max(1.0, norm(d));
+  if (std::abs(d.y) <= kAligned * size) {
+    hold.push_back(relation(QStringLiteral("horizontal_points"), point, curve->center));
+  } else if (std::abs(d.x) <= kAligned * size) {
+    hold.push_back(relation(QStringLiteral("vertical_points"), point, curve->center));
+  }
+  return hold;
+}
+
+std::optional<Snap> tangentTouch(const SketchModel& model, const V2& from, const V2& cursor, double tolerance,
+                                 const QSet<QString>& skip) {
+  std::optional<Snap> best;
+  double bestDistance = tolerance;
+  const double sides[] = {-1.0, 1.0};
+  for (const CurveData& c : model.curves) {
+    if (!c.isCircular() || !c.axis.isEmpty() || skip.contains(c.id)) {
+      continue;
+    }
+    const V2 offset = from - c.curve.center;
+    const double d = norm(offset);
+    const double r = c.curve.radius;
+    if (r <= 0.0 || d <= r * (1.0 + 1e-9)) {
+      continue; // on or inside: no line from there touches it
+    }
+    const double spread = std::acos(r / d);
+    const double toward = angleOf(offset);
+    for (const double side : sides) {
+      const double angle = toward + side * spread;
+      if (!c.curve.contains(angle)) {
+        continue;
+      }
+      const V2 touch = c.curve.center + polar(angle, r);
+      const double off = dist(touch, cursor);
+      if (off <= bestDistance) {
+        bestDistance = off;
+        Snap s;
+        s.kind = Snap::Kind::OnCurve;
+        s.at = touch;
+        s.curve = c.id;
+        best = s;
+      }
+    }
+  }
+  return best;
+}
+
+std::vector<QJsonObject> tangentCandidates(const SketchModel& model, const QString& curve) {
+  std::vector<QJsonObject> candidates;
+  const CurveData* made = curveOf(model, curve);
+  if (made == nullptr || !(made->isLine() || made->isArc())) {
+    return candidates;
+  }
+  // Curves already tangent to it.
+  QSet<QString> taken;
+  for (const ConstraintData& k : model.constraints) {
+    if (k.type == QStringLiteral("tangent") && k.refs.contains(curve)) {
+      for (const QString& ref : k.refs) {
+        taken.insert(ref);
+      }
+    }
+  }
+  const double ends[] = {made->curve.t0(), made->curve.t1()};
+  for (const double t : ends) {
+    const V2 p = made->curve.at(t);
+    const V2 direction = unit(made->curve.tangent(t));
+    for (const CurveData& other : model.curves) {
+      if (other.id == curve || !other.axis.isEmpty() || taken.contains(other.id)) {
+        continue;
+      }
+      const bool round = other.isCircular();
+      if (!round && !(other.isLine() && made->isArc())) {
+        continue;
+      }
+      // An arc on the same circle touches nothing.
+      if (round && made->isArc() && dist(other.curve.center, made->curve.center) <= kTouchOn) {
+        continue;
+      }
+      double at = 0.0;
+      const V2 foot = other.curve.nearest(p, &at);
+      if (dist(foot, p) > kTouchOn) {
+        continue;
+      }
+      const V2 along = unit(other.curve.tangent(at));
+      if (std::abs(cross(direction, along)) > kTouchSine) {
+        continue;
+      }
+      candidates.push_back(relation(QStringLiteral("tangent"), other.id, curve));
+      taken.insert(other.id);
+    }
+  }
+  return candidates;
+}
+
+QString constraintText(const QJsonObject& constraint) {
+  const QString type = constraint.value(QStringLiteral("type")).toString();
+  if (type == QStringLiteral("coincident")) {
+    return QStringLiteral("coincident %1 on %2")
+        .arg(constraint.value(QStringLiteral("point")).toString(),
+             constraint.value(QStringLiteral("entity")).toString());
+  }
+  QStringList parts{type};
+  const char* const keys[] = {"point", "line", "curve", "a", "b", "entity"};
+  for (const char* key : keys) {
+    const QJsonValue value = constraint.value(QLatin1String(key));
+    if (value.isString()) {
+      parts << value.toString();
+    }
+  }
+  return parts.join(QLatin1Char(' '));
+}
+
+QString autoConstraintReason(const QString& error) {
+  static const QRegularExpression reason(QStringLiteral("auto constraint(?: k\\d+)?: (.+)$"),
+                                         QRegularExpression::DotMatchesEverythingOption);
+  const QRegularExpressionMatch match = reason.match(error);
+  return match.hasMatch() ? match.captured(1).trimmed() : error.trimmed();
 }
 
 } // namespace mitcad::sketch

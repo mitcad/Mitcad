@@ -20,7 +20,7 @@
 #   - Edit Sketch1: k5's existing dimension completed to width + thickness
 #     (34 mm); a new dimension on the free line: `2 * thicknes`, Down to
 #     thickness2, Enter, Enter: 2 * thickness2.
-#   - Change Parameters: d3's expression completed to 3 * thickness (12
+#   - Edit Parameters: d3's expression completed to 3 * thickness (12
 #     mm); thickness2 renamed rim; d3's editor then lists rim, says when
 #     nothing matches, and Esc closes the list before the cell.
 #
@@ -163,7 +163,7 @@ grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 echo "--- The parameter table's expressions"
 ui_focus_main
 ui_mark
-ui_step "Change Parameters (search)"     ui_command "Change Parameters"
+ui_step "Edit Parameters (search)"     ui_command "Edit Parameters"
 ui_expect_new "Parameters dialog opened" "the dialog opened"
 ui_expect_new "Parameters d3 expression at" "its cells are logged"
 ui_focus_dialog '^Parameters$'

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Timeline items as Mitcad feature definitions (`commands.md`; the IR
+//! Timeline items as MitCad feature definitions (`commands.md`; the IR
 //! field mappings of the F1, F2 and F4 import tables).
 //!
 //! Each item gives candidates, best first. What the dump leaves open (the
@@ -119,7 +119,7 @@ fn is_direct(r: &Reference) -> bool {
 /// (mitcad#43); the history's states stand in for them.
 fn not_translated(object_type: &str) -> Option<&'static str> {
     Some(match object_type {
-        "FlangeFeature" => "a sheet metal flange: not translated (Mitcad has no sheet metal)",
+        "FlangeFeature" => "a sheet metal flange: not translated (MitCad has no sheet metal)",
         "PCBFeature" => "an electronics board: not translated",
         "DraftFeature" => "a draft: not translated (its faces and plane are not decoded)",
         "MirrorComponent" => {
@@ -376,7 +376,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         for level in 0..3 {
             // Reference curves locked (with the linked ones that follow an
             // edge as projections, then without), then free with the points
-            // that hold the own curves pinned, then free; offsets Mitcad
+            // that hold the own curves pinned, then free; offsets MitCad
             // derives from their chains (round corners), then without those.
             for (unlocked, pin, keep_derived, project) in [
                 (false, false, true, true),
@@ -565,7 +565,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                             }
                             if !keep_derived {
                                 notes.push(
-                                    "left out: an offset whose corners Mitcad's offset does not make \
+                                    "left out: an offset whose corners MitCad's offset does not make \
                                      as the file's"
                                         .to_owned(),
                                 );
@@ -1064,7 +1064,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 }
                 if let Some(f) = self.value(&def.distance) {
                     // From the other end too (the path's direction is
-                    // Mitcad's own); kept only where the plane is the file's.
+                    // MitCad's own); kept only where the plane is the file's.
                     let other = match (&f, physical) {
                         (_, true) => None,
                         (Value::String(s), false) => Some(json!(format!("1 - ({s})"))),
@@ -1590,7 +1590,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
 
     /// A construction axis (mitcad#186): through two points, along an edge
     /// or sketch line, through a round face, or where two planes meet, as
-    /// its definition says, the direction as Mitcad has it and then
+    /// its definition says, the direction as MitCad has it and then
     /// reversed (the one in the file's direction is kept); else fixed.
     fn axis_datum(
         &mut self,
@@ -1953,7 +1953,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             // the other profiles' is a guess. Without one,
             // a union of regions of that area and centroid (a line that
             // bounds another feature's profile splits this one in
-            // Mitcad's sketch), tried before the sets found without the
+            // MitCad's sketch), tried before the sets found without the
             // measures.
             let mut order: Vec<&Region> = regions.iter().collect();
             order.sort_by(|a, b| b.area.total_cmp(&a.area));
@@ -2053,7 +2053,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         }
         let n = profiles.len().max(1);
         // Construction curves are not decoded, so the file's profiles may be
-        // unions of Mitcad's regions: the regions whose material the next
+        // unions of MitCad's regions: the regions whose material the next
         // history states change, probed in both directions, come first.
         let mut probed = if probe {
             self.probed_sets(info.uid, frame, regions, depth)
@@ -2064,7 +2064,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         order.sort_by(|a, b| b.area.total_cmp(&a.area));
         // The sets of any number of regions whose area is the one the
         // history's change asks for (the file's profiles may be unions of
-        // Mitcad's regions where construction lines split them, so the
+        // MitCad's regions where construction lines split them, so the
         // decoded count is no limit).
         if let Some(target) = target_area {
             let areas: Vec<f64> = order.iter().map(|r| r.area).collect();
@@ -2410,7 +2410,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
     /// history's state changed only bodies they name) and the
     /// history's guess. The guess stays even where the file names every
     /// body: a join there changes only the bodies its material overlaps,
-    /// while Mitcad's also takes in those it only touches.
+    /// while MitCad's also takes in those it only touches.
     pub fn participant_options(
         &mut self,
         index: i64,
@@ -4435,7 +4435,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         })
     }
 
-    /// An emboss (mitcad#458): Mitcad's emboss of the decoded profiles on
+    /// An emboss (mitcad#458): MitCad's emboss of the decoded profiles on
     /// the face the file names, sunk where the file's depth is negative.
     /// Profiles moved or turned on the face (the item's horizontal and
     /// vertical distances and rotation) have no counterpart.
@@ -4450,7 +4450,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 .is_some_and(|v| v.abs() > 1e-12)
             {
                 return Err(format!(
-                    "its profiles are {what}, which Mitcad's emboss has no option for"
+                    "its profiles are {what}, which MitCad's emboss has no option for"
                 ));
             }
         }
@@ -4509,7 +4509,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
 
     /// A coil that sweeps profiles of a sketch along a helix about an axis
     /// (the `.ipt` import's coils: `profile` and `axis` in the detail),
-    /// as Mitcad's helix: the pitch and the turns (a height divided by the
+    /// as MitCad's helix: the pitch and the turns (a height divided by the
     /// pitch), right-handed and along the axis first (against it where
     /// the detail's `flip` says so), then the other hand and direction as
     /// guesses.
@@ -4587,7 +4587,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         if growths.iter().any(Option::is_none) && growths.len() > 1 {
             return Err("the taper's growth could not be given".to_owned());
         }
-        // Flat ends (mitcad#235): their transition and flat angles. Mitcad's
+        // Flat ends (mitcad#235): their transition and flat angles. MitCad's
         // turns are those at the full pitch; the file's may count the ends
         // too (not decoded): as given first, then less the ends' angles.
         let end_of = |key: &str| -> Option<Value> {
@@ -5714,7 +5714,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
     /// A two-distance chamfer's sides in a definition made of `edges`
     /// (mitcad#96): the file's first distance is taken to lie on the face
     /// on the left of the edge's own direction in the file (the face whose
-    /// coedge runs along the edge), Mitcad's on the first face of the edge's
+    /// coedge runs along the edge), MitCad's on the first face of the edge's
     /// name unless `flip` ([`refs::first_face_on_left`]). A distance and
     /// angle lie on that face too where the file's flag (`isFlipped`, the
     /// set's `flip` as decoded) is off and on the other face where it is on

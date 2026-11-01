@@ -231,7 +231,7 @@ fn tables_refuse_what_they_cannot_be() {
         (
             json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 2,
                    "type": "hole_table", "at": [250, 270], "table": {"columns": ["colour"]}}),
-            "not 'colour'",
+            "not colour",
         ),
         (
             json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 2,
@@ -353,7 +353,7 @@ fn a_parts_list_and_its_balloons_follow_the_design() {
         json!(["item", "quantity", "name", "description", "material"])
     );
     let all = texts(&doc);
-    for text in ["PARTS LIST", "ITEM", "QTY", "Plate", "Pin"] {
+    for text in ["BILL OF MATERIALS", "ITEM", "QTY", "Plate", "Pin"] {
         assert!(all.iter().any(|t| t == text), "{text}: {all:?}");
     }
     // Balloons on Plate's second placement and on Pin: their rows' numbers.
@@ -442,17 +442,18 @@ fn a_parts_list_and_its_balloons_follow_the_design() {
     command(&mut doc, json!({"cmd": "undo"}));
 
     // The export draws them.
-    let svg = std::env::temp_dir().join(format!("mitcad-parts-list-{}.svg", std::process::id()));
+    let dir = mitcad_model::testing::unique_temp_dir("parts-list");
+    let svg = dir.join("parts-list.svg");
     command(
         &mut doc,
         json!({"cmd": "export_drawing", "drawing": "D1", "path": svg.to_string_lossy()}),
     );
     let text = std::fs::read_to_string(&svg).unwrap();
     assert!(
-        text.contains("PARTS LIST") && text.contains("Plate"),
+        text.contains("BILL OF MATERIALS") && text.contains("Plate"),
         "{text}"
     );
-    let _ = std::fs::remove_file(&svg);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

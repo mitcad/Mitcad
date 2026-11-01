@@ -89,7 +89,7 @@ pub struct TableSettings {
     /// A parts list's.
     #[serde(default, skip_serializing_if = "is_default")]
     pub levels: Levels,
-    /// Over it; `HOLES (mm)` and `PARTS LIST` when left out.
+    /// Over it; `HOLES (mm)` and `BILL OF MATERIALS` when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
@@ -142,7 +142,7 @@ impl TableSettings {
             if !known(column) {
                 return Err(if holes {
                     format!(
-                        "a hole table's columns are {}, not '{column}'",
+                        "a hole table's columns are {}, not {column}",
                         HOLE_COLUMNS.join(", ")
                     )
                 } else {
@@ -150,7 +150,7 @@ impl TableSettings {
                 });
             }
             if self.columns[..i].contains(column) {
-                return Err(format!("the column '{column}' is there twice"));
+                return Err(format!("the column {column} is there twice"));
             }
         }
         if let Some(sort) = &self.sort {
@@ -160,7 +160,7 @@ impl TableSettings {
                 PARTS_COLUMNS.contains(&sort.as_str()) || self.columns.contains(sort)
             };
             if !sortable {
-                return Err(format!("the table has no column '{sort}' to sort by"));
+                return Err(format!("the table has no column {sort} to sort by"));
             }
         }
         if !holes && (self.tags != TagStyle::default() || self.origin != TableOrigin::default()) {

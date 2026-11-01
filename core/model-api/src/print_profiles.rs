@@ -15,6 +15,7 @@ use super::prelude::*;
 use mitcad_model::ids::ComponentUid;
 use mitcad_model::internal::document::writable_library;
 use mitcad_model::kernel::Kernel;
+use mitcad_model::print_files::filaments::PrinterChoice;
 use mitcad_model::print_files::installed::{self, PresetEnv, SlicerFolder};
 use mitcad_model::print_keys::Dialect;
 use mitcad_model::print_library::{ItemKind, LibraryKind};
@@ -108,8 +109,28 @@ named_enum! {
             into: Option<String>,
             #[serde(default)]
             project: Option<String>,
+            /// The printers and nozzles in use (mitcad#1054): only the
+            /// filament presets and variants of these come in; all when
+            /// left out.
+            #[serde(default)]
+            printers: Option<Vec<PrinterArg>>,
+            /// Merges the target's separate materials of one filament
+            /// first (mitcad#1054, `slicer_presets`' `merge`).
+            #[serde(default)]
+            merge_separate: Option<bool>,
         },
     }
+}
+
+/// A printer and nozzle of `import_slicer_presets`' `printers`
+/// (mitcad#1054).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PrinterArg {
+    printer: String,
+    /// The nozzle diameter in mm; null or left out: any.
+    #[serde(default)]
+    nozzle: Option<f64>,
 }
 
 /// A preset of `import_slicer_presets` (mitcad#830).
@@ -158,7 +179,7 @@ fn bambu_dialect(id: &str) -> Result<Dialect, ApiError> {
         .filter(|d| d.bambu_family())
         .ok_or_else(|| {
             ApiError(format!(
-                "'{id}' is no slicer whose presets Mitcad reads: bambu_studio, orcaslicer or qidi_studio"
+                "{id} is no slicer whose presets MitCad reads: bambu_studio, orcaslicer or qidi_studio"
             ))
         })
 }
@@ -194,14 +215,14 @@ pub(crate) struct LibraryItemsQuery {
 fn item_kind(text: &str) -> Result<ItemKind, ApiError> {
     ItemKind::parse(text).ok_or_else(|| {
         ApiError(format!(
-            "'{text}' is no kind of library item: material, printer or process"
+            "“{text}” is no kind of library item: material, printer or process"
         ))
     })
 }
 
 fn library_kind(text: &str) -> Result<LibraryKind, ApiError> {
     LibraryKind::parse(text)
-        .ok_or_else(|| ApiError(format!("'{text}' is no library: base, user or project")))
+        .ok_or_else(|| ApiError(format!("“{text}” is no library: base, user or project")))
 }
 
 /// The `print_settings` query: a body (in an occurrence path), an
@@ -283,7 +304,7 @@ impl<K: Kernel> PrintProfilesCrateOps<K> for Document<K> {
                         .map(|text| {
                             ProfileKind::parse(text).ok_or_else(|| {
                                 ApiError(format!(
-                                    "'{text}' is no kind of profile: printer or process"
+                                    "“{text}” is no kind of profile: printer or process"
                                 ))
                             })
                         })
@@ -306,7 +327,7 @@ impl<K: Kernel> PrintProfilesCrateOps<K> for Document<K> {
                 let libraries = self.print_libraries(project.as_deref().map(Path::new));
                 let item = libraries.find(library, kind, &id).ok_or_else(|| {
                     ApiError(format!(
-                        "{} has no {} '{id}'",
+                        "{} has no {} {id}",
                         library.map_or("no library".to_owned(), |l| format!(
                             "the {} library",
                             l.id()
@@ -351,7 +372,7 @@ impl<K: Kernel> PrintProfilesCrateOps<K> for Document<K> {
                     .map(|id| {
                         Dialect::from_id(id).ok_or_else(|| {
                             ApiError(format!(
-                                "'{id}' is no slicer: bambu_studio, orcaslicer, qidi_studio, prusaslicer or cura"
+                                "{id} is no slicer: bambu_studio, orcaslicer, qidi_studio, prusaslicer or cura"
                             ))
                         })
                     })
@@ -374,7 +395,18 @@ impl<K: Kernel> PrintProfilesCrateOps<K> for Document<K> {
                 presets,
                 into,
                 project,
+                printers,
+                merge_separate,
             } => {
+                let printers: Option<Vec<PrinterChoice>> = printers.map(|chosen| {
+                    chosen
+                        .into_iter()
+                        .map(|p| PrinterChoice {
+                            printer: p.printer,
+                            nozzle: p.nozzle,
+                        })
+                        .collect()
+                });
                 let dialect = bambu_dialect(&dialect)?;
                 let into = import_target(into.as_deref())?;
                 let choices = presets
@@ -385,7 +417,7 @@ impl<K: Kernel> PrintProfilesCrateOps<K> for Document<K> {
                             Some("override") => SameName::Override,
                             Some(other) => {
                                 return Err(ApiError(format!(
-                                    "'{other}' is no choice for a preset of a name the target has: copy or override"
+                                    "“{other}” is no choice for a preset of a name the target has: copy or override"
                                 )));
                             }
                         };
@@ -401,6 +433,8 @@ impl<K: Kernel> PrintProfilesCrateOps<K> for Document<K> {
                     &choices,
                     into,
                     project.as_deref().map(Path::new),
+                    printers.as_deref(),
+                    merge_separate.unwrap_or(false),
                 )?
             }
         })
@@ -418,7 +452,7 @@ impl<K: Kernel> PrintProfilesCrateOps<K> for Document<K> {
         if let Some(text) = &query.body {
             let body = match self.property_owner_ref(text)? {
                 PropertyOwner::Body(b) => b,
-                _ => return Err(ApiError(format!("'{text}' is no body"))),
+                _ => return Err(ApiError(format!("“{text}” is no body"))),
             };
             return Ok(PrintTarget::Body(body, path));
         }

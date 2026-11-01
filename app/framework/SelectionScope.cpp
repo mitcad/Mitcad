@@ -205,6 +205,14 @@ SelectionScope SelectionScope::project() {
                                                     {FilterRow::OtherSketchGeometry, FilterState::Window}});
 }
 
+SelectionScope SelectionScope::intersect() {
+  return SelectionScope(QStringLiteral("intersect"), {{FilterRow::VisibleEdges, FilterState::Window},
+                                                      {FilterRow::OccludedEdges, FilterState::Off},
+                                                      {FilterRow::Faces, FilterState::Click},
+                                                      {FilterRow::Bodies, FilterState::Click},
+                                                      {FilterRow::OtherSketchGeometry, FilterState::Window}});
+}
+
 bool SelectionScope::has(FilterRow row) const { return m_rows.contains(row); }
 
 FilterState SelectionScope::state(FilterRow row) const {
@@ -288,8 +296,8 @@ std::optional<FilterRow> filterRowOf(const SelectionItem& item, const QString& a
                                      const SketchRowOf& sketchRow) {
   if (isSketchKind(item.kind) && item.owner != activeSketch) {
     // Another sketch's curves and points: a row of their own, which only
-    // Project's scope has (mitcad#904); its profiles, dimensions and
-    // constraints never.
+    // Project's and Intersect's scopes have (mitcad#904, mitcad#1031); its
+    // profiles, dimensions and constraints never.
     if (item.kind == SelectKind::SketchCurve || item.kind == SelectKind::SketchPoint) {
       return FilterRow::OtherSketchGeometry;
     }
@@ -341,6 +349,9 @@ bool scopeAccepts(const SelectionScope& scope, const SelectionItem& item, const 
 std::optional<SelectionScope> commandSelectionScope(const QString& commandId) {
   if (commandId == QStringLiteral("sketch.project")) {
     return SelectionScope::project();
+  }
+  if (commandId == QStringLiteral("sketch.intersect")) {
+    return SelectionScope::intersect();
   }
   return std::nullopt;
 }

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include "Theme.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
 #include <optional>
+#include <vector>
 
 #include <QEvent>
 #include <QObject>
@@ -27,9 +31,9 @@ public:
     widget->installEventFilter(this);
   }
 
-  void setFormat(const QString& format, bool warning) {
+  void setFormat(const QString& format, ColorRole role) {
     m_format = format;
-    m_warning = warning;
+    m_role = role;
     m_applied.reset();
     apply();
   }
@@ -77,7 +81,7 @@ private:
         break;
       }
     }
-    return m_format.arg((m_warning ? warningColor(palette) : errorColor(palette)).name());
+    return m_format.arg(themeColor(m_role, palette).name());
   }
 
   void apply() {
@@ -90,12 +94,12 @@ private:
 
   QWidget* m_widget;
   QString m_format;
-  bool m_warning = false;
+  ColorRole m_role = ColorRole::ErrorText;
   bool m_pending = false; // a stale sheet seen in a paint, set again after it
   std::optional<QString> m_applied;
 };
 
-void setThemedStyleSheet(QWidget* widget, const QString& format, bool warning) {
+void setThemedStyleSheet(QWidget* widget, const QString& format, ColorRole role) {
   if (widget == nullptr) {
     return;
   }
@@ -109,12 +113,14 @@ void setThemedStyleSheet(QWidget* widget, const QString& format, bool warning) {
   if (watcher == nullptr) {
     watcher = new ThemeWatcher(widget);
   }
-  watcher->setFormat(format, warning);
+  watcher->setFormat(format, role);
   // The state, not the colour, for presenters without style sheets.
   static const QRegularExpression textColour(QStringLiteral("(^|[\\s;{])color\\s*:\\s*%1"));
-  const QVariant tone = textColour.match(format).hasMatch()
-                            ? QVariant(warning ? QStringLiteral("warning") : QStringLiteral("error"))
-                            : QVariant();
+  const bool status = role == ColorRole::ErrorText || role == ColorRole::WarningText;
+  const QVariant tone =
+      status && textColour.match(format).hasMatch()
+          ? QVariant(role == ColorRole::WarningText ? QStringLiteral("warning") : QStringLiteral("error"))
+          : QVariant();
   if (widget->property(kSemanticTextToneProperty) != tone) {
     widget->setProperty(kSemanticTextToneProperty, tone);
   }
@@ -122,16 +128,227 @@ void setThemedStyleSheet(QWidget* widget, const QString& format, bool warning) {
 
 } // namespace
 
+namespace {
+
+// The role table (mitcad#1041). Values are sRGB, except those written with
+// linear(): the 3D view's own colors, given in OCCT's linear RGB as they
+// always were and converted here, so that they show as before.
+QColor hex(unsigned rgb, int alpha = 255) {
+  return QColor(static_cast<int>((rgb >> 16) & 0xff), static_cast<int>((rgb >> 8) & 0xff),
+                static_cast<int>(rgb & 0xff), alpha);
+}
+
+double encode(double value) {
+  return value <= 0.0031308 ? 12.92 * value : 1.055 * std::pow(value, 1.0 / 2.4) - 0.055;
+}
+
+QColor linear(double r, double g, double b) {
+  return QColor::fromRgbF(static_cast<float>(encode(r)), static_cast<float>(encode(g)),
+                          static_cast<float>(encode(b)));
+}
+
+struct RoleEntry {
+  ColorRole role;
+  const char* name;
+  QColor light;
+  QColor dark;
+  ColorUse use;
+  ColorRole partner;
+};
+
+#define MITCAD_ROLE(name, light, dark, use, partner)                                                           \
+  RoleEntry { ColorRole::name, #name, light, dark, ColorUse::use, ColorRole::partner }
+#define MITCAD_SAME(name, value, use) MITCAD_ROLE(name, value, value, use, name)
+
+const std::vector<RoleEntry>& roleTable() {
+  static const std::vector<RoleEntry> table = {
+      // Status: the levels of mitcad#1040. Text at least 4.5:1 on the light
+      // and dark windows and on the Floating card (#464748, mitcad#961);
+      // the warning's hue is yellow (mitcad#852 C2): its text the darkest
+      // yellow that reads on a light window.
+      MITCAD_ROLE(ErrorText, hex(0xb00020), hex(0xff9c9c), Text, ErrorText),
+      MITCAD_ROLE(ErrorBorder, hex(0xd02020), hex(0xff5a5a), Indicator, ErrorBorder),
+      MITCAD_ROLE(ErrorFill, hex(0xfbe3e3), hex(0x4a2025), Fill, Text),
+      MITCAD_ROLE(ErrorBadge, hex(0xd32f2f), hex(0xd32f2f), Badge, BadgeMark),
+      MITCAD_SAME(BadgeMark, hex(0xffffff), View),
+      MITCAD_ROLE(WarningText, hex(0x8a5a00), hex(0xe6b450), Text, WarningText),
+      MITCAD_ROLE(WarningBorder, hex(0xa87d00), hex(0xf2c230), Indicator, WarningBorder),
+      MITCAD_ROLE(WarningFill, hex(0xfff1c8), hex(0x4a3a14), Fill, Text),
+      MITCAD_ROLE(WarningBadge, hex(0xf5c400), hex(0xf5c400), Badge, WarningMark),
+      MITCAD_SAME(WarningMark, hex(0x2a2000), View),
+      MITCAD_ROLE(SuccessText, hex(0x16702f), hex(0x6ccf86), Text, SuccessText),
+      MITCAD_ROLE(SuccessBadge, hex(0x1a7f37), hex(0x1a7f37), Badge, BadgeMark),
+      MITCAD_ROLE(InfoText, hex(0x4c525c), hex(0xb4b8be), Text, InfoText),
+      MITCAD_ROLE(InfoBadge, hex(0x1a6ee0), hex(0x1a6ee0), Badge, BadgeMark),
+      // Interaction. The 3D view's selection is one fixed blue (C3); the
+      // chrome's follows the system's accent on macOS (accentColor).
+      MITCAD_ROLE(Action, hex(0x1a6ee0), hex(0x5aa2ff), Indicator, Action),
+      MITCAD_SAME(Select, hex(0x1f7aff), View),
+      // About 4.6:1 against the dark background, where the plain blue has
+      // about 2.6:1 (mitcad#957).
+      MITCAD_ROLE(SelectLine, hex(0x1f7aff), hex(0x66b2ff), View, SelectLine),
+      MITCAD_SAME(Hover, hex(0x2f9bff), View),
+      MITCAD_ROLE(HoverFill, hex(0xe9f1fc), hex(0x343c48), Fill, Text),
+      MITCAD_ROLE(SearchMatch, hex(0x00838f), hex(0x4dd0e1), Indicator, SearchMatch),
+      MITCAD_ROLE(DropAllowed, hex(0x1a7f37), hex(0x6ccf86), Indicator, DropAllowed),
+      MITCAD_ROLE(DropRefused, hex(0xd02020), hex(0xff5a5a), Indicator, DropRefused),
+      // Neutral: the Docked chrome's tokens (WindowColors), Floating's too.
+      MITCAD_ROLE(Window, hex(0xe4e7ec), hex(0x141518), View, Window),
+      MITCAD_ROLE(Surface, hex(0xf8f9fb), hex(0x1f2024), View, Surface),
+      MITCAD_ROLE(Raised, hex(0xe9ecf1), hex(0x2a2c31), View, Raised),
+      MITCAD_ROLE(Text, hex(0x1d2026), hex(0xe6e8ec), Text, Text),
+      MITCAD_ROLE(TextSecondary, hex(0x4c525c), hex(0xb4b8be), Text, TextSecondary),
+      MITCAD_ROLE(TextHidden, hex(0x4c525c), hex(0xb4b8be), Text, TextHidden),
+      MITCAD_ROLE(TitleText, hex(0x5f6670), hex(0x9098a3), Text, TitleText),
+      MITCAD_ROLE(Line, hex(0x000000, 22), hex(0xffffff, 18), View, Line),
+      MITCAD_ROLE(AccentText, hex(0xffffff), hex(0x0b1220), View, AccentText),
+      MITCAD_ROLE(TimelineMarker, hex(0x2b3a4a), hex(0xc8d0da), Indicator, TimelineMarker),
+      MITCAD_SAME(GroupBand, hex(0x7d8c9e), View),
+      MITCAD_SAME(ViewInk, hex(0x2b3a4a), View),
+      // Object states.
+      MITCAD_ROLE(BoundText, hex(0x174ea6), hex(0xd6e4ff), Text, BoundText),
+      MITCAD_ROLE(BoundFill, hex(0xdce8fb), hex(0x1e3a66), Fill, BoundText),
+      // Command feedback in the 3D view: the four inputs, one table for Qt
+      // and AppKit.
+      MITCAD_SAME(Input1, hex(0x1f7aff), View),
+      MITCAD_SAME(Input2, hex(0xff8c00), View),
+      MITCAD_SAME(Input3, hex(0x2ca02c), View),
+      MITCAD_SAME(Input4, hex(0x9b30ff), View),
+      MITCAD_SAME(PreviewAdd, linear(0.30, 0.55, 0.95), View),
+      MITCAD_SAME(PreviewRemove, linear(0.90, 0.20, 0.15), View),
+      MITCAD_ROLE(PreviewFailed, hex(0xd02020), hex(0xff5a5a), View, PreviewFailed),
+      MITCAD_SAME(PreviewTarget, hex(0x00a6b4), View),
+      MITCAD_SAME(ExtendedTool, hex(0xff8c00), View),
+      MITCAD_ROLE(Interference, hex(0xd02020), hex(0xff5a5a), View, Interference),
+      MITCAD_SAME(Handle, hex(0xe07b1a), View),
+      MITCAD_SAME(Provisional, linear(0.95, 0.62, 0.12), View),
+      MITCAD_SAME(ProvisionalEdge, linear(0.80, 0.42, 0.02), View),
+      MITCAD_SAME(FeatureFaces, hex(0xf5a524), View),
+      MITCAD_SAME(FeatureFacesHover, hex(0xffcf86), View),
+      // The 3D view's own objects.
+      MITCAD_SAME(Body, linear(0.70, 0.74, 0.80), View),
+      MITCAD_SAME(Edge, linear(0.12, 0.13, 0.15), View),
+      MITCAD_SAME(HiddenEdge, linear(0.45, 0.48, 0.54), View),
+      MITCAD_SAME(Thread, linear(0.30, 0.33, 0.40), View),
+      MITCAD_SAME(BuildVolume, linear(0.25, 0.45, 0.75), View),
+      MITCAD_SAME(PrintBed, hex(0x2eb872), View),
+      MITCAD_SAME(SectionCap, hex(0xf29e1a), View),
+      MITCAD_SAME(DatumPlane, linear(0.95, 0.70, 0.35), View),
+      MITCAD_SAME(DatumAxis, linear(0.85, 0.45, 0.10), View),
+      MITCAD_SAME(ProfileFill, linear(0.55, 0.70, 0.95), View),
+      // Sketch: one value for the 3D view and the overlay.
+      MITCAD_SAME(SketchFree, linear(0.10, 0.35, 0.85), View),
+      MITCAD_ROLE(SketchFixed, linear(0.08, 0.09, 0.11), linear(0.88, 0.90, 0.94), View, SketchFixed),
+      MITCAD_ROLE(SketchCenterline, linear(0.25, 0.30, 0.40), linear(0.60, 0.66, 0.76), View, SketchCenterline),
+      MITCAD_SAME(SketchConstruction, linear(0.85, 0.50, 0.10), View),
+      MITCAD_SAME(SketchProjected, linear(0.55, 0.20, 0.70), View),
+      MITCAD_ROLE(SketchInactive, hex(0xd63c8f), hex(0xf29cc8), View, SketchInactive),
+      MITCAD_SAME(SketchInactiveFill, hex(0xfde4f1, 0xe6), View),
+      MITCAD_ROLE(SketchDriven, hex(0x707680), hex(0xa0a8b4), View, SketchDriven),
+      MITCAD_ROLE(SketchDimension, hex(0x2a303a), hex(0xd8dee8), View, SketchDimension),
+      // The sketch's axes in the overlay as the origin's axes in the view.
+      MITCAD_SAME(SketchAxis, linear(0.85, 0.45, 0.10), View),
+      MITCAD_SAME(SketchPicked, hex(0x2ca02c), View),
+      MITCAD_SAME(SketchPreview, hex(0x266ee8), View),
+      MITCAD_SAME(SketchGuide, hex(0x808896), View),
+      MITCAD_SAME(SketchTrim, hex(0xe03020), View),
+      MITCAD_ROLE(SketchHalo, QColor::fromRgbF(0.98f, 0.98f, 0.99f), QColor::fromRgbF(0.13f, 0.14f, 0.16f), View,
+                  SketchHalo),
+      // Domain palettes. The components' without a red or an olive, which
+      // read as an error and a warning (mitcad#852 C4).
+      MITCAD_SAME(Component0, hex(0xe0892a), View),
+      MITCAD_SAME(Component1, hex(0x3aa35b), View),
+      MITCAD_SAME(Component2, hex(0x8e5bd0), View),
+      MITCAD_SAME(Component3, hex(0x2aa7a7), View),
+      MITCAD_SAME(Component4, hex(0x5560c8), View),
+      MITCAD_SAME(Component5, hex(0x8d6e63), View),
+      MITCAD_SAME(Component6, hex(0xc45a9a), View),
+      MITCAD_SAME(Component7, hex(0x3d8bd9), View),
+      MITCAD_SAME(AxisX, hex(0xe84f4f), View),
+      MITCAD_SAME(AxisY, hex(0x4cb05e), View),
+      MITCAD_SAME(AxisZ, hex(0x3f8cff), View),
+      MITCAD_SAME(JointA, hex(0xf28c28), View),
+      MITCAD_SAME(JointB, hex(0x2ab57d), View),
+      MITCAD_SAME(JointOrigin, hex(0x17a2b8), View),
+      // Print Analysis' categories, violet and magenta, by the view's
+      // background.
+      MITCAD_ROLE(PrintOverhang, hex(0x7e3fd0), hex(0xb48cff), View, PrintOverhang),
+      MITCAD_ROLE(PrintThin, hex(0xc2188b), hex(0xff6ec7), View, PrintThin),
+      // Rule blocks: category hues no status uses, each at least 4.5:1
+      // under white text, the same on both themes.
+      MITCAD_ROLE(RuleFrame, hex(0x7b55bd), hex(0x7b55bd), Badge, RuleText),
+      MITCAD_ROLE(RuleName, hex(0x23766f), hex(0x23766f), Badge, RuleText),
+      MITCAD_ROLE(RuleLiteral, hex(0x904a7c), hex(0x904a7c), Badge, RuleText),
+      MITCAD_ROLE(RuleFormula, hex(0x69707a), hex(0x69707a), Badge, RuleText),
+      MITCAD_ROLE(RuleLogic, hex(0x3d6bc2), hex(0x3d6bc2), Badge, RuleText),
+      MITCAD_ROLE(RuleAction, hex(0x8b4f3a), hex(0x8b4f3a), Badge, RuleText),
+      MITCAD_SAME(RuleText, hex(0xffffff), View),
+  };
+  return table;
+}
+
+#undef MITCAD_SAME
+#undef MITCAD_ROLE
+
+const RoleEntry& entry(ColorRole role) { return roleTable()[static_cast<std::size_t>(role)]; }
+
+double luminance(const QColor& color) {
+  const auto channel = [](double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); };
+  const QColor rgb = color.toRgb();
+  return 0.2126 * channel(rgb.redF()) + 0.7152 * channel(rgb.greenF()) + 0.0722 * channel(rgb.blueF());
+}
+
+} // namespace
+
+const std::vector<ColorRole>& allColorRoles() {
+  static const std::vector<ColorRole> roles = [] {
+    std::vector<ColorRole> all;
+    for (const RoleEntry& row : roleTable()) {
+      all.push_back(row.role);
+    }
+    return all;
+  }();
+  return roles;
+}
+
+QString colorRoleName(ColorRole role) { return QString::fromLatin1(entry(role).name); }
+
+ColorUse colorRoleUse(ColorRole role) { return entry(role).use; }
+
+ColorRole colorRolePartner(ColorRole role) { return entry(role).partner; }
+
+QColor themeColor(ColorRole role, const QPalette& palette) { return themeColor(role, isDarkPalette(palette)); }
+
+QColor themeColor(ColorRole role, bool dark) { return dark ? entry(role).dark : entry(role).light; }
+
+QColor viewColor(ColorRole role, bool darkBackground) { return themeColor(role, darkBackground); }
+
+QColor componentPaletteColor(int index) {
+  static const ColorRole palette[] = {ColorRole::Component0, ColorRole::Component1, ColorRole::Component2,
+                                      ColorRole::Component3, ColorRole::Component4, ColorRole::Component5,
+                                      ColorRole::Component6, ColorRole::Component7};
+  return themeColor(palette[((index % 8) + 8) % 8], false);
+}
+
+QColor commandInputColor(int index) {
+  static const ColorRole inputs[] = {ColorRole::Input1, ColorRole::Input2, ColorRole::Input3, ColorRole::Input4};
+  return themeColor(inputs[((index % 4) + 4) % 4], false);
+}
+
+double contrastRatio(const QColor& a, const QColor& b) {
+  const double la = luminance(a);
+  const double lb = luminance(b);
+  return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+}
+
 bool isDarkPalette(const QPalette& palette) { return palette.color(QPalette::Window).lightness() < 128; }
 
 QColor errorColor(const QPalette& palette) {
   // At least 4.5:1 on a dark window, panel or Floating card (#464748, mitcad#961).
-  return isDarkPalette(palette) ? QColor(0xff, 0x9c, 0x9c) : QColor(0xb0, 0x00, 0x20);
+  return themeColor(ColorRole::ErrorText, palette);
 }
 
-QColor warningColor(const QPalette& palette) {
-  return isDarkPalette(palette) ? QColor(0xe6, 0xb4, 0x50) : QColor(0x8a, 0x5a, 0x00);
-}
+QColor warningColor(const QPalette& palette) { return themeColor(ColorRole::WarningText, palette); }
 
 QColor accentColor(const QPalette& palette) {
 #ifdef Q_OS_MACOS
@@ -141,9 +358,7 @@ QColor accentColor(const QPalette& palette) {
 #endif
 }
 
-QColor actionColor(const QPalette& palette) {
-  return isDarkPalette(palette) ? QColor(0x5a, 0xa2, 0xff) : QColor(0x1a, 0x6e, 0xe0);
-}
+QColor actionColor(const QPalette& palette) { return themeColor(ColorRole::Action, palette); }
 
 QColor cardFillColor(const QPalette& palette) {
   QColor color = palette.color(QPalette::Window);
@@ -159,8 +374,16 @@ QColor cardShadowColor(const QPalette& palette) {
   return QColor(0, 0, 0, isDarkPalette(palette) ? 115 : 46);
 }
 
-void setErrorStyleSheet(QWidget* widget, const QString& format) { setThemedStyleSheet(widget, format, false); }
+void setErrorStyleSheet(QWidget* widget, const QString& format) {
+  setThemedStyleSheet(widget, format, ColorRole::ErrorText);
+}
 
-void setWarningStyleSheet(QWidget* widget, const QString& format) { setThemedStyleSheet(widget, format, true); }
+void setWarningStyleSheet(QWidget* widget, const QString& format) {
+  setThemedStyleSheet(widget, format, ColorRole::WarningText);
+}
+
+void setRoleStyleSheet(QWidget* widget, ColorRole role, const QString& format) {
+  setThemedStyleSheet(widget, format, role);
+}
 
 } // namespace mitcad

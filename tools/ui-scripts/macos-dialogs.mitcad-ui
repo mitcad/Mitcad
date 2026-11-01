@@ -46,11 +46,11 @@ key Escape
 focus-main
 expect-no-log '^Command search chose '
 
-# Open Change Parameters by searching and accepting the selected result.
+# Open Edit Parameters by searching and accepting the selected result.
 command tools.search
 focus-widget commandSearchInput
-type 'Change Parameters'
-expect-command-search 'Change Parameters' solid.parameters
+type 'Edit Parameters'
+expect-command-search 'Edit Parameters' solid.parameters
 key Return
 focus-dialog '^Parameters$'
 expect-dialog-appearance '${MITCAD_TEST_COLOR_SCHEME}'

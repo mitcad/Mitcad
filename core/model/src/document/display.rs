@@ -35,6 +35,19 @@ pub struct DisplayState {
     /// Only these are shown (Isolate); none: everything.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub isolated: Vec<Isolated>,
+    /// The Center of Mass marker (mitcad#1094): there or not, and shown
+    /// or hidden by its light bulb.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center_of_mass: Option<CenterOfMassMarker>,
+}
+
+/// The Center of Mass marker of the browser's row under Origin
+/// (mitcad#1094): the view draws it at the center of mass of the design's
+/// bodies as placed (the `center_of_mass` query) while it is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CenterOfMassMarker {
+    pub visible: bool,
 }
 
 impl DisplayState {
@@ -48,7 +61,7 @@ fn path_uids(path: &str) -> Result<Vec<OccurrenceUid>, String> {
     path.split('/')
         .map(|part| {
             part.parse::<OccurrenceUid>()
-                .map_err(|_| format!("'{path}' is not an occurrence path such as O1/O4"))
+                .map_err(|_| format!("{path} is not an occurrence path such as O1/O4"))
         })
         .collect()
 }
@@ -155,5 +168,56 @@ impl<K: Kernel> Document<K> {
         self.parameters()
             .find(name)
             .is_some_and(|id| self.state.favorites.contains(&id))
+    }
+
+    // The Center of Mass marker (mitcad#1094): display state as the Origin
+    // folder is, each change an undo step that recomputes nothing.
+
+    /// Adds the Center of Mass marker, shown (`Add Center of Mass`); a
+    /// hidden one is shown (`Show Center of Mass`), a shown one stays as
+    /// it is.
+    pub fn add_center_of_mass(&mut self) -> Result<(), ModelError> {
+        let label = match self.state.display.center_of_mass {
+            Some(CenterOfMassMarker { visible: true }) => return Ok(()),
+            Some(_) => "Show Center of Mass",
+            None => "Add Center of Mass",
+        };
+        self.apply_with(|state| {
+            state.display.center_of_mass = Some(CenterOfMassMarker { visible: true });
+            Ok((label.to_owned(), (), false))
+        })
+    }
+
+    /// Shows or hides the Center of Mass marker (`Show Center of Mass`,
+    /// `Hide Center of Mass`) unless nothing changes; refused while there
+    /// is none.
+    pub fn set_center_of_mass_visible(&mut self, visible: bool) -> Result<(), ModelError> {
+        let Some(marker) = self.state.display.center_of_mass else {
+            return Err(invalid("the design has no Center of Mass marker"));
+        };
+        if marker.visible == visible {
+            return Ok(());
+        }
+        let label = if visible {
+            "Show Center of Mass"
+        } else {
+            "Hide Center of Mass"
+        };
+        self.apply_with(|state| {
+            state.display.center_of_mass = Some(CenterOfMassMarker { visible });
+            Ok((label.to_owned(), (), false))
+        })
+    }
+
+    /// Deletes the Center of Mass marker (`Delete Center of Mass`);
+    /// refused while there is none.
+    pub fn delete_center_of_mass(&mut self) -> Result<(), ModelError> {
+        if self.state.display.center_of_mass.is_none() {
+            return Err(invalid("the design has no Center of Mass marker"));
+        }
+        self.apply_with(|state| {
+            state.display.center_of_mass = None;
+            Ok(("Delete Center of Mass".to_owned(), (), false))
+        })
     }
 }

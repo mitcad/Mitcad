@@ -13,7 +13,7 @@
 #   2. Signed distances checked in the palette: p1 to p3, a horizontal
 #      distance r * cos(a) and a vertical one r * sin(a), both signed; the
 #      values show their signs (+25.98, +15.00).
-#   3. a stepped through the quadrants in Change Parameters (120, 210, 300
+#   3. a stepped through the quadrants in Edit Parameters (120, 210, 300
 #      deg): each time the sketch opens with the signed values that put p3
 #      in that quadrant, no recompute fails.
 #   4. At 300 deg the context menu makes the vertical distance unsigned
@@ -97,10 +97,10 @@ expect_texts() {
   echo "ok   the values show $1 and $2"
 }
 
-# set_angle degrees: a = <degrees> deg in Change Parameters.
+# set_angle degrees: a = <degrees> deg in Edit Parameters.
 set_angle() {
   ui_mark
-  ui_step "Change Parameters (search)"   ui_command "Change Parameters"
+  ui_step "Edit Parameters (search)"   ui_command "Edit Parameters"
   ui_expect_new "Parameters dialog opened" "the dialog opened"
   # Its cells are logged as it is first laid out.
   ui_expect_log "Parameters a expression at" "the dialog lists a"

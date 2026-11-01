@@ -9,7 +9,7 @@ face's appearance as a physically based material with its texture
 (mitcad#46, mitcad#53, [Materials](#materials)), and the light, background, ground
 and exposure of the document's render settings (mitcad#47,
 [Environment](#environment)) with lights of the user's own and the
-bodies' coloured reflections on the ground (mitcad#54, [Lights](#lights)). Render Image (the MAKE group) and `mitcad-cli render`
+bodies' coloured reflections on the ground (mitcad#54, [Lights](#lights)). Render Image (the Solid tab's Render group) and `mitcad-cli render`
 render a finished image to a file at a chosen size and quality
 (mitcad#48, [Final render](#final-render)). It is
 part of every build on every platform (mitcad#141): there is no option to
@@ -1085,7 +1085,7 @@ Decisions and limits:
 
 ## Final render
 
-Render Image (`file.render_image`, the ribbon's MAKE group and View >
+Render Image (`file.render_image`, the Solid tab's Render group (`RENDER`) and View >
 Visual Style) and `mitcad-cli render` render the visible bodies to an
 image file at the size and quality of the render settings' `output` section (commands.md
 "Render output"): the same scene, environment, ground and film as the
@@ -2620,7 +2620,7 @@ scope; they are not inferred from the M1 tests. Qt remains the default UI.
   in the Qt UI, selects CPU rendering and denoising, checks progressive
   shared-memory frames through 16 samples and the rendered viewport
   screenshot, then leaves the mode and checks that the bundled worker ends.
-- `tools/ui-render-image-test.sh`: Render Image (the MAKE group) on the red block
+- `tools/ui-render-image-test.sh`: Render Image (the Solid tab's Render group) on the red block
   (no ground): a size preset of 3840 x 2160 with 65536 samples renders in
   the worker's batch mode while the app stays usable, and Cancel ends the
   worker; then 320 x 240, 8 samples, a transparent background: the view

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser app/framework/Appearances.cpp app/framework/Appearances.hpp
+# check-all sources: app/browser app/framework/Appearances.cpp app/framework/Appearances.hpp app/commands/MaterialCommands.cpp
 # Edit Appearances (mitcad#46) through the real UI, on a 40 x 30 x 20 mm box:
-#   - The dialog opens for the body selected in the browser, lists the
-#     library with swatches, and shows a library appearance read-only.
+#   - The dialog lists the library with swatches, and shows a library
+#     appearance read-only; it assigns nothing (mitcad#1059).
 #   - New copies Chrome into the design; its name, roughness and base
 #     colour are edited in the dialog, each an undo step.
-#   - Assign gives the body the appearance: the shaded view shows it in its
-#     base colour, the project file keeps the appearance and the body's id.
-#   - The body's browser context menu opens the dialog for it; Delete
-#     removes the appearance and the body gets the default look; undo
-#     takes the steps back.
+#   - The Appearance tool gives the selected body the appearance, chosen in
+#     its picker: the shaded view shows it in its base colour, the project
+#     file keeps the appearance and the body's id.
+#   - Edit Appearances again: Delete removes the appearance and the body
+#     gets the default look; undo takes the steps back.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-appearance-test.sh [screenshot of the dialog.png]
@@ -75,7 +75,6 @@ ui_mark
 ui_step "select Body1 in the browser"   ui_click_logged "Browser Root/Bodies/Body1"
 ui_step "Edit Appearances (search)"     ui_command "Edit Appearances"
 ui_expect_new "Appearances dialog opened" "the dialog opened"
-ui_expect_new "Appearances for bodies: F1.b0" "for the selected body"
 ui_expect_new "Appearances item steel_satin at" "the library is listed"
 ui_focus_dialog '^Appearances$'
 ui_mark
@@ -98,12 +97,16 @@ ui_step "base colour #d02020"           dialog_type base_color "#d02020"
 ui_expect_new "Appearance custom1 base_color = #d02020" "base colour changed"
 [ -n "$SHOT" ] && ui_capture "$SHOT"
 
-echo "--- Assign"
-ui_mark
-ui_step "Assign to Body1"               ui_click_logged "Appearances assign"
-ui_expect_new "Assigned appearance custom1 to F1.b0" "assigned"
+echo "--- The Appearance tool assigns it"
 ui_step "Close"                         ui_click_logged "Appearances close"
 ui_focus_main
+ui_mark
+ui_step "Appearance (search)"           ui_command "Appearance"
+ui_expect_new "Appearance Bodies: 1 body [body F1.b0]" "the tool takes the selected Body1"
+ui_step "the picker: Red Chrome"        ui_picker_choose "Panel Appearance input value" "Appearance picker" "Red Chrome"
+ui_mark
+ui_step "OK (Enter)"                    ui_key Return
+ui_expect_new "Appearance custom1 for 1 body(ies)" "assigned"
 ui_step "clear the selection (Esc)"     ui_key Escape
 after=$(warm_pixels)
 [ "$after" -gt $((before + 1000)) ] || ui_fail "the box is not shown red ($before -> $after red pixels)"
@@ -117,12 +120,10 @@ expect_file '[round(c * 255) for c in doc["appearances"][0]["base_color"]]' "[20
   "with its base colour"
 expect_file 'doc["bodies"][0]["appearance"]' "custom1" "and the body's appearance"
 
-echo "--- The context menu, Delete and undo"
+echo "--- Edit Appearances, Delete and undo"
 ui_mark
-ui_step "right-click Body1"             ui_click_logged "Browser Root/Bodies/Body1" 3
-ui_step "choose Appearance..."          ui_menu_choose "Appearance..."
+ui_step "Edit Appearances (search)"     ui_command "Edit Appearances"
 ui_expect_new "Appearances dialog opened" "the dialog opened again"
-ui_expect_new "Appearances for bodies: F1.b0 (custom1)" "for the body, showing its appearance"
 ui_focus_dialog '^Appearances$'
 ui_mark
 ui_step "Delete"                        ui_click_logged "Appearances delete"

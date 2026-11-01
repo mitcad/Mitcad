@@ -259,8 +259,7 @@ fn sheet_profile_slots_survive_reordering_removal_and_readdition() {
 #[test]
 fn sheet_results_store_and_fork_restore_shape_and_state_as_one_result() {
     let (mut doc, _, body, _) = fixture();
-    let dir = std::env::temp_dir().join(format!("mitcad-sheet-store-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = mitcad_model::testing::unique_temp_path("sheet-store");
     let store = ResultStore::new(&dir, "sheet-test");
     doc.set_result_store(Some(store.clone()));
     let saved = doc.to_json();
@@ -273,7 +272,7 @@ fn sheet_results_store_and_fork_restore_shape_and_state_as_one_result() {
     assert_eq!(state(&opened, body), expected);
     assert_eq!(opened.body_shape(body), doc.body_shape(body));
     assert_eq!(state(&doc.fork().unwrap(), body), expected);
-    std::fs::remove_dir_all(dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -378,9 +377,7 @@ fn sheet_failed_store_entry_restores_footprint_without_blocking_unrelated_body()
     normal.recompute();
     assert_eq!(state(&normal, body), expected);
     assert_eq!(state(&normal, other)["status"], "valid");
-    let dir =
-        std::env::temp_dir().join(format!("mitcad-sheet-failed-store-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = mitcad_model::testing::unique_temp_path("sheet-failed-store");
     let store = ResultStore::new(&dir, "sheet-failed-test");
     doc.set_result_store(Some(store.clone()));
     doc.persist_results(std::time::Duration::ZERO);
@@ -409,7 +406,7 @@ fn sheet_failed_store_entry_restores_footprint_without_blocking_unrelated_body()
     assert_eq!(state(&restored, body)["status"], "valid");
     restored.undo();
     assert_eq!(state(&restored, body), expected);
-    std::fs::remove_dir_all(dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]

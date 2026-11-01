@@ -52,7 +52,7 @@ void read(const QString& key, QObject* context,
                          done(Read::Found, *credentials, QString());
                          return;
                        }
-                       qInfo().noquote() << QStringLiteral("Keychain: read %1: not Mitcad's entry").arg(key);
+                       qInfo().noquote() << QStringLiteral("Keychain: read %1: not MitCad's entry").arg(key);
                        done(Read::NotFound, {}, QString());
                        return;
                      }

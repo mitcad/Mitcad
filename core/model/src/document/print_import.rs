@@ -14,6 +14,7 @@ use super::{Document, ModelError, invalid};
 use crate::ids::ComponentUid;
 use crate::kernel::Kernel;
 use crate::material::MaterialOrigin;
+use crate::print_files::installed::{self, PresetEnv};
 use crate::print_files::{self, Imported};
 use crate::print_keys::Dialect;
 use crate::print_library::{ItemData, ItemKind, LibraryKind, item_path};
@@ -25,7 +26,10 @@ pub const IMPORT_ORIGIN: &str = "3mf";
 
 /// Reads a slicer's settings file. A panic of the reader (of a 3MF
 /// package, a preset or a bundle) is its error (mitcad#922): it runs in
-/// the application's process.
+/// the application's process. A Bambu-family preset that inherits from
+/// another (`inherits`) is read with every value of its chain filled in
+/// (mitcad#1053): from the slicer data folder it lies in, else from the
+/// installed slicers' system presets ([`installed::resolve_preset_file`]).
 pub fn read_print_file(path: &str, dialect: Option<Dialect>) -> Result<Imported, ModelError> {
     let data = std::fs::read(path).map_err(|e| invalid(format!("cannot read {path}: {e}")))?;
     let name = Path::new(path)
@@ -35,11 +39,41 @@ pub fn read_print_file(path: &str, dialect: Option<Dialect>) -> Result<Imported,
     crate::reader_guard::catch_panic(
         path,
         || {
-            print_files::read_file(name, &data, dialect)
-                .map_err(|e| invalid(format!("{name}: {e}")))
+            let resolved = if inherits_another(name, &data) {
+                let folders = installed::slicer_folders(&PresetEnv::current());
+                installed::resolve_preset_file(Path::new(path), &folders, dialect)
+                    .map_err(|e| invalid(format!("{name}: {e}")))?
+            } else {
+                None
+            };
+            let Some(resolved) = resolved else {
+                return print_files::read_file(name, &data, dialect)
+                    .map_err(|e| invalid(format!("{name}: {e}")));
+            };
+            let text = Value::Object(resolved.map).to_string();
+            let mut imported = print_files::read_file(name, text.as_bytes(), dialect)
+                .map_err(|e| invalid(format!("{name}: {e}")))?;
+            for note in &mut imported.report.filaments {
+                note.inherits.clone_from(&resolved.chain);
+                note.missing.clone_from(&resolved.missing);
+            }
+            Ok(imported)
         },
         ModelError::Invalid,
     )
+}
+
+/// Whether a file is a Bambu-family preset (`.json`) that names a preset
+/// it inherits from.
+fn inherits_another(name: &str, data: &[u8]) -> bool {
+    if !name.to_ascii_lowercase().ends_with(".json") {
+        return false;
+    }
+    serde_json::from_slice::<serde_json::Map<String, Value>>(data).is_ok_and(|map| {
+        map.get("inherits")
+            .and_then(Value::as_str)
+            .is_some_and(|base| !base.trim().is_empty())
+    })
 }
 
 impl<K: Kernel> Document<K> {
@@ -56,7 +90,10 @@ impl<K: Kernel> Document<K> {
         project: Option<&Path>,
         choose: bool,
     ) -> Result<Value, ModelError> {
-        let imported = read_print_file(path, dialect)?;
+        let mut imported = read_print_file(path, dialect)?;
+        // One filament's presets (a bundle's) as one material with a
+        // variant per printer and nozzle (mitcad#1054).
+        imported.merge_filaments(None);
         if imported.printers.is_empty()
             && imported.processes.is_empty()
             && imported.materials.is_empty()
@@ -72,7 +109,7 @@ impl<K: Kernel> Document<K> {
         let dialect_id = imported.dialect.map(|d| d.id());
         match into {
             Some(LibraryKind::Base) => Err(invalid(
-                "the base library is Mitcad's parts library: import into the user's or the project's",
+                "the base library is MitCad's component library: import into the user's or the project's",
             )),
             Some(library) => {
                 let libraries = self.print_libraries(project);
@@ -94,7 +131,7 @@ impl<K: Kernel> Document<K> {
                         .into_iter()
                         .map(|(material, appearance)| ItemData::Material {
                             material,
-                            appearance,
+                            appearances: appearance.into_iter().collect(),
                         }),
                 );
                 let mut written = Vec::new();
@@ -153,7 +190,7 @@ impl<K: Kernel> Document<K> {
                     let mut materials = Vec::new();
                     for (mut material, appearance) in imported.materials {
                         material.origin = Some(origin.clone());
-                        materials.push(state.put_material(material, appearance.as_ref(), false));
+                        materials.push(state.put_material(material, appearance.as_slice(), false));
                     }
                     // The project's purge table: its materials' pairs set by
                     // hand (mitcad#705).

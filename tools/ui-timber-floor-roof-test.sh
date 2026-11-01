@@ -39,7 +39,7 @@ choose_in_picker() {
   ui_step "the $2 tile"                    ui_click_logged "Panel $1 input $2"
   ui_expect_new "Part picker opened: " "the part picker for $1's $2"
   ui_expect_new "Part picker tile $3 at " "$3's tile in the picker"
-  ui_focus_dialog "^Part Picker - "
+  ui_focus_dialog "^Component Picker - "
   ui_mark
   ui_step "$3 in the picker"               ui_click_logged "Part picker tile $3"
   ui_expect_new "Part picker chose $3" "$3 chosen in the picker"
@@ -65,11 +65,11 @@ ui_expect_log "Panel Floor / Roof input frame_kind=floor at" "the Kind's Floor b
 ! tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qE "^Panel Floor / Roof input (frame_height|frame_corner|frame_top) at [0-9]+,[0-9]+$" ||
   ui_fail "Floor / Roof shows a wall's inputs"
 echo "ok   no wall's inputs"
-expect_inspect "Floor / Roof" "frame floor Floor 1, floor 4000 x 3000 mm" "4 rim joist" \
+expect_inspect "Floor / Roof" "frame floor Floor 1, floor 4000 × 3000 mm" "4 rim joist" \
   "a floor from the origin: rim joists all round, joists between them"
 ui_mark
 ui_step "Blocking"                         ui_click_logged "Panel Floor / Roof input frame_blocking"
-expect_inspect "Floor / Roof" "frame floor Floor 1, floor 4000 x 3000 mm" " blocking" "a row of blocking"
+expect_inspect "Floor / Roof" "frame floor Floor 1, floor 4000 × 3000 mm" " blocking" "a row of blocking"
 ui_mark
 ui_step "Place (Enter)"                    ui_key Return
 ui_expect_new "Placed frame Floor 1 (floor, lead C" "the floor placed" 60
@@ -98,7 +98,7 @@ ui_start_app --no-native-dialogs
 start_wall
 ui_mark
 ui_step "no fasteners"                     ui_click_logged "Panel Wall input frame_fasteners"
-expect_inspect Wall "frame wall Wall 1, wall 3600 x 2400 mm" "fasteners no" "a wall from the origin, no fasteners"
+expect_inspect Wall "frame wall Wall 1, wall 3600 × 2400 mm" "fasteners no" "a wall from the origin, no fasteners"
 ui_mark
 ui_step "Place (Enter)"                    ui_key Return
 ui_expect_new "Placed frame Wall 1 (wall, lead C" "Wall 1 placed" 60
@@ -180,7 +180,7 @@ fi
 choose_in_picker "Floor / Roof" fastener test-timber/ring-nail-test
 ui_mark
 ui_step "two at each junction"             ui_type_in "Panel Floor / Roof input fastener_count" "2"
-expect_inspect "Floor / Roof" "frame roof Roof 1, gable roof" "fasteners yes" "fastener 2 x Ring nail test" \
+expect_inspect "Floor / Roof" "frame roof Roof 1, gable roof" "fasteners yes" "fastener 2 × Ring nail test" \
   "the gable roof with two ring nails at each junction"
 ui_mark
 ui_step "Place (Enter)"                    ui_key Return

@@ -12,8 +12,10 @@
 //! a component that chooses a profile prints with that profile's values
 //! whatever the root set, unless the component sets a value itself. The
 //! filament is the body's material's (`document/materials.rs`): its
-//! filament values, its density as `filament_density` and, when the
-//! material sets no colour, its appearance's colour as `filament_colour`.
+//! filament values, its density as `filament_density` and the colour of
+//! the appearance it prints with as `filament_colour` (mitcad#1055: the
+//! body's appearance, one of its material's; a material keeps no colour
+//! of its own).
 //!
 //! Without an occurrence path a body inherits from its own component and
 //! the root, as its material does. Nothing else of #496 changes: the
@@ -29,7 +31,7 @@ use super::library_items::profile_title;
 use super::{DocState, Document, ModelError, invalid};
 use crate::ids::{BodyUid, ComponentUid, OccurrenceUid};
 use crate::kernel::Kernel;
-use crate::material::{DEFAULT_MATERIAL, Material};
+use crate::material::{DEFAULT_MATERIAL, Material, VariantMatch};
 use crate::print_keys::{self, Dialect, KeyDef, PrintSet};
 use crate::print_library::{BasedOn, ItemData, ItemKind};
 use crate::print_profile::{
@@ -84,6 +86,15 @@ pub struct EffectivePrint {
     pub material: String,
     pub material_name: String,
     pub filament: BTreeMap<String, (Value, PrintFrom)>,
+    /// The appearance it prints with (mitcad#1055): the body's, else its
+    /// component's for its material, else the material's default. Its
+    /// colour is the filament's `filament_colour`; a material and an
+    /// appearance are one filament slot of an export.
+    pub appearance: Option<String>,
+    /// The material's variant the printer picked (mitcad#1054): its index
+    /// in the material's variants and how it was picked; none: its own
+    /// values.
+    pub variant: Option<(usize, VariantMatch)>,
     /// Slicers' own keys by slicer id.
     pub slicer: BTreeMap<String, BTreeMap<String, (String, PrintFrom)>>,
     /// The printer profile's raw blocks by slicer id.
@@ -180,6 +191,17 @@ fn value_text(def: &KeyDef, value: &Value) -> String {
         Ok(v) => v.to_string(),
         Err(_) => value.to_string(),
     }
+}
+
+/// A material's variant as the queries give it (mitcad#1054): its
+/// printer, nozzle, name for people and how the printer picked it.
+pub(crate) fn variant_json(variant: &crate::material::MaterialVariant, how: VariantMatch) -> Value {
+    json!({
+        "printer": variant.printer,
+        "nozzle": variant.nozzle,
+        "label": variant.label(),
+        "match": how.id(),
+    })
 }
 
 /// Whether a point is in an outline (on its edges too, within `tolerance`).
@@ -336,7 +358,7 @@ impl<K: Kernel> Document<K> {
             .profile_name_taken(&profile.name, profile.kind, own)
         {
             return Err(invalid(format!(
-                "a {} profile is named '{}'",
+                "a {} profile is named {}",
                 profile.kind.id(),
                 profile.name
             )));
@@ -359,7 +381,7 @@ impl<K: Kernel> Document<K> {
                 let mut base = self
                     .print_profile(id)
                     .cloned()
-                    .ok_or_else(|| invalid(format!("there is no profile '{id}'")))?;
+                    .ok_or_else(|| invalid(format!("there is no profile {id}")))?;
                 base.based_on = Some(id.to_owned());
                 base.origin = None;
                 base.version = None;
@@ -439,7 +461,7 @@ impl<K: Kernel> Document<K> {
             (None, None) => format!("{}{free}", kind.id()),
         };
         if self.print_profile(&new.id).is_some() {
-            return Err(invalid(format!("a profile '{}' exists", new.id)));
+            return Err(invalid(format!("a profile {} exists", new.id)));
         }
         self.check_profile(&new, None)?;
         let label = format!("Create Profile {}", new.name);
@@ -480,7 +502,7 @@ impl<K: Kernel> Document<K> {
             .print_profiles
             .iter()
             .position(|p| p.id == id)
-            .ok_or_else(|| invalid(format!("there is no profile '{id}'")))?;
+            .ok_or_else(|| invalid(format!("there is no profile {id}")))?;
         if change
             .kind
             .is_some_and(|k| k != self.state.print_profiles[i].kind)
@@ -513,7 +535,7 @@ impl<K: Kernel> Document<K> {
             .print_profiles
             .iter()
             .position(|p| p.id == id)
-            .ok_or_else(|| invalid(format!("there is no profile '{id}'")))?;
+            .ok_or_else(|| invalid(format!("there is no profile {id}")))?;
         let set = self.state.print_profiles[i].kind.set().property_set();
         let chosen = PropertyValue::Text(id.to_owned());
         let owners: Vec<PropertyOwner> = self
@@ -590,7 +612,7 @@ impl<K: Kernel> Document<K> {
                             .map(|p| p.id.as_str())
                             .collect();
                         return Err(invalid(format!(
-                            "there is no {} profile '{id}' (the design's: {})",
+                            "there is no {} profile {id} (the design's: {})",
                             kind.id(),
                             if ids.is_empty() {
                                 "none".to_owned()
@@ -620,7 +642,7 @@ impl<K: Kernel> Document<K> {
                     .filter(|d| d.set == layer)
                     .ok_or_else(|| {
                         invalid(format!(
-                            "'{key}' is no key of the {} set (the print_keys query lists them)",
+                            "{key} is no key of the {} set (the print_keys query lists them)",
                             layer.property_set()
                         ))
                     })?;
@@ -749,42 +771,47 @@ impl<K: Kernel> Document<K> {
     }
 
     /// The material of the nearest component level that has a default,
-    /// else the built-in default.
-    fn levels_material(&self, levels: &[PropertyOwner]) -> &Material {
+    /// else the built-in default, with that component's appearance
+    /// (mitcad#1055; none: the material's default).
+    fn levels_material(&self, levels: &[PropertyOwner]) -> (&Material, Option<&str>) {
         levels
             .iter()
             .filter_map(|o| match o {
                 PropertyOwner::Component(c) => Some(*c),
                 _ => None,
             })
-            .find_map(|c| self.component_material(c).and_then(|id| self.material(id)))
-            .or_else(|| self.material(DEFAULT_MATERIAL))
+            .find_map(|c| {
+                self.component_material(c)
+                    .and_then(|id| self.material(id))
+                    .map(|m| (m, self.component_appearance(c)))
+            })
+            .or_else(|| self.material(DEFAULT_MATERIAL).map(|m| (m, None)))
             .expect("the default material is built in")
     }
 
-    /// A material's filament values: its own, its density as
-    /// `filament_density` and its appearance's colour as `filament_colour`
-    /// when it sets none.
+    /// A material's filament values: its own with its variant's
+    /// (`variant`, an index of its variants, mitcad#1054) over them, its
+    /// density as `filament_density` and the colour of the appearance it
+    /// prints with (`look`, mitcad#1055) as `filament_colour`: always that
+    /// appearance's, never a colour of the material's own.
     pub(crate) fn filament_values(
         &self,
         material: &Material,
+        variant: Option<usize>,
+        look: Option<&str>,
     ) -> BTreeMap<String, (Value, PrintFrom)> {
         let from = || PrintFrom::Material(material.id.clone());
-        let mut out: BTreeMap<String, (Value, PrintFrom)> = material
-            .filament
-            .iter()
-            .map(|(k, v)| (k.clone(), (v.clone(), from())))
-            .collect();
+        let (values, _) = material.values_with(variant);
+        let mut out: BTreeMap<String, (Value, PrintFrom)> =
+            values.into_iter().map(|(k, v)| (k, (v, from()))).collect();
         out.insert(
             "filament_density".to_owned(),
             (json!(material.density), from()),
         );
-        if !out.contains_key("filament_colour")
-            && let Some(color) = material
-                .appearance
-                .as_deref()
-                .and_then(|a| self.appearance(a))
-                .map(|a| a.display_color())
+        out.remove("filament_colour");
+        if let Some(color) = look
+            .and_then(|a| self.appearance(a))
+            .map(|a| a.display_color())
         {
             out.insert(
                 "filament_colour".to_owned(),
@@ -897,10 +924,17 @@ impl<K: Kernel> Document<K> {
         }
         // The filament: the body's material, else the nearest component's
         // default.
-        let material = match target {
-            PrintTarget::Body(body, path) => self.body_material(*body, path.as_deref()).0,
-            _ => self.levels_material(&levels),
+        let (material, look) = match target {
+            PrintTarget::Body(body, path) => (
+                self.body_material(*body, path.as_deref()).0,
+                self.body_look(*body, path.as_deref()),
+            ),
+            _ => {
+                let (material, own) = self.levels_material(&levels);
+                (material, own.or(material.appearance.as_deref()))
+            }
         };
+        out.appearance = look.map(str::to_owned);
         out.material = material.id.clone();
         out.material_name = material.name.clone();
         out.printer_name = out
@@ -913,8 +947,19 @@ impl<K: Kernel> Document<K> {
             .as_ref()
             .and_then(|(id, _)| self.print_profile(id))
             .map(|p| p.name.clone());
-        out.filament = self.filament_values(material);
-        for (dialect, keys) in &material.slicer {
+        // Its variant for the printer (mitcad#1054): the one of the
+        // printer and its nozzle, else of the printer, else none.
+        let printer = out
+            .printer
+            .as_ref()
+            .and_then(|(id, _)| self.print_profile(id))
+            .map(PrintProfile::printer_key)
+            .unwrap_or_default();
+        out.variant = material.variant_for(&printer);
+        let variant = out.variant.map(|(i, _)| i);
+        out.filament = self.filament_values(material, variant, look);
+        let (_, material_slicer) = material.values_with(variant);
+        for (dialect, keys) in &material_slicer {
             let mine = out.slicer.entry(dialect.clone()).or_default();
             for (key, text) in keys {
                 mine.entry(key.clone())
@@ -1012,6 +1057,22 @@ impl<K: Kernel> Document<K> {
             })
             .collect();
         let material = self.material(&effective.material);
+        // The variant the printer picked (mitcad#1054), and the values it
+        // gives marked with it.
+        let used = material.and_then(|m| {
+            let (i, how) = effective.variant?;
+            Some((m.variants.get(i)?, how))
+        });
+        let mut filament_values =
+            layer(PrintSet::Filament, &effective.filament, None)["values"].clone();
+        if let (Some((variant, _)), Value::Array(entries)) = (used, &mut filament_values) {
+            for entry in entries.iter_mut() {
+                let key = entry["key"].as_str().unwrap_or_default().to_owned();
+                if variant.filament.contains_key(&key) {
+                    entry["variant"] = json!(variant.label());
+                }
+            }
+        }
         json!({
             "levels": self
                 .print_levels(target)
@@ -1022,7 +1083,11 @@ impl<K: Kernel> Document<K> {
             "process": layer(PrintSet::Process, &effective.values, effective.process.as_ref()),
             "filament": {
                 "material": {"id": effective.material, "name": material.map(|m| m.name.clone())},
-                "values": layer(PrintSet::Filament, &effective.filament, None)["values"].clone(),
+                // The appearance it prints with, its colour (mitcad#1055).
+                "appearance": effective.appearance,
+                "variant": used.map(|(v, how)| variant_json(v, how)),
+                "variants": material.map_or(0, |m| m.variants.len()),
+                "values": filament_values,
             },
             "slicer": slicer,
         })

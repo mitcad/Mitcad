@@ -181,7 +181,11 @@ expression (`"d1 / 2 + 5 mm"`, `"30 deg"`; syntax and unit rules in
   the `add_feature` or `edit_feature` result's `warnings`), or a failed
   feature's error ends with it. A value that is not a short number in
   radians (`"720 deg"`) says `Revolve1 angle: 720° is more than one turn`.
-  Helices, coils, a sweep's twist and other slots that take several turns
+  Only a number as typed warns, with or without a sign and a unit (`90`,
+  `-7`, `"450 deg"`, mitcad#1092): an angle computed from parameters or
+  functions (`"d1"`, `"d660 + step"`, `"d1 + 30 deg"`), such as
+  construction planes stepping round an axis, may pass a turn without a
+  warning. Helices, coils, a sweep's twist and other slots that take several turns
   never warn (`parameters::one_turn_slot`, `recompute::turn_warnings`).
 - Parameters are evaluated in dependency order. Cycles, unknown names,
   syntax errors and unit mismatches reject the command. Renaming a
@@ -329,12 +333,23 @@ Shared rules:
   failed is suppressed with that note ([The import's outcomes on the
   timeline](#the-imports-outcomes-on-the-timeline)).
 - A feature that succeeds with a caveat has warnings (`timeline` status
-  `warning`): a fillet or chamfer built 0.1 % smaller than asked (at the
-  exact size it takes a face away, which OCCT cannot build) or built as
-  rings about its circles ([fillet](#fillet)), a sketch
-  text whose font is not installed. Evaluators call `EvalContext::warn`;
-  `Kernel::notes` gives what the geometry gave up
-  (`geometry::Shape::notes`).
+  `warning`): a fillet or chamfer built as rings about its circles
+  ([fillet](#fillet)), a sketch text whose font is not installed.
+  Evaluators call `EvalContext::warn`; `Kernel::notes` gives what the
+  geometry gave up (`geometry::Shape::notes`).
+- What is worth knowing of how a feature was built but needs no action is
+  information (mitcad#1106): its status stays `ok`, its `level` is `info`,
+  each an `info` notice after the warnings, listed in the `feature` query's
+  `infos` and a preview's `infos` (beside its `warnings`). A fillet or
+  chamfer built 0.1 % smaller than asked says so: where OCCT fails at the
+  exact size because the dressup takes a face away and builds 0.1 %
+  smaller, which leaves a strip of 1e-3 of the size where the face was,
+  the strip is removed (its neighbours extended to meet, the dressup's face
+  taking its names) and the info stays. A dressup that takes a face away
+  and that OCCT builds at its size (the port's patch 1100: a pocket's walls
+  as high as the bevel of their top edges) has no note. Evaluators call
+  `EvalContext::inform`; `Kernel::infos` gives the geometry's
+  (`geometry::Shape::infos`).
 
 ### sketch
 
@@ -435,8 +450,15 @@ millimetres, angles radians. Build sketches with the
   vertex>", "body": "F2.b0", "entities": ["p7", "p8", "c9", …]}`; the entities
   follow the source when the model changes (`sketch.project`). The stored
   positions are those of the last edit of the sketch; the evaluation moves
-  them (in steps, so that geometry constrained to them keeps its side), the
-  `sketch` query shows them moved and the next edit stores them. The
+  them (a large move in steps), the `sketch` query shows them moved and the
+  next edit stores them. Geometry constrained to them keeps the side it
+  has in the stored sketch, whatever the size of the move (mitcad#1047):
+  the solve takes every orientation choice where the stored positions
+  have the geometry (the side of a `point_line_distance`, `line_distance`
+  or `tangent_distance`, of an offset's distances and of a tangency, an
+  angle's quadrant) and starts from the moved projection, so that a point
+  0.5 mm from a projected edge that moved 0.5 mm toward it follows the
+  edge instead of ending up on its other side. The
   entities are listed as `sketch.project` makes them, each curve after
   its points (a line's start and end in the source's direction, an arc's
   centre, start and end); a circle keeps its `start_angle` (an import's
@@ -2993,6 +3015,47 @@ between faces of two components lies where the design places them and
 follows when they move. Without a link another component's body is
 out of reach and the plane fails.
 
+Construction axes and points take the same `links` (mitcad#1029): an
+axis through an edge of another component, a point at its vertex, an
+axis or point on its face are read in that component and moved into the
+axis's or point's coordinates by the placements, so that they lie where
+the design shows the geometry and follow when its occurrence moves. The
+application's Construct commands send a link for each face, edge or
+vertex picked in an occurrence of another component than the one the
+datum is made in (the active one, or an edited datum's own), with
+`target` the occurrence the view shows that component at, so the other
+component does not have to be activated.
+
+A construction plane, axis or point of another component is made in
+that component's coordinates, so without a link a construction feature
+that names one in its definition (`"plane": "F5"`) is refused, as any
+feature using another component's sketch or construction geometry (F6:
+"Plane1 is in Motor; a feature of Frame cannot use it"). `"datum_links":
+{"F5": {"source": "O1", "target": "O2"}}` (an `OccurrenceLink` per datum
+feature, mitcad#1035) lets it through and moves the datum into the
+plane's, axis's or point's coordinates by the placements, as `links`
+moves a body, so that an offset plane from another component's plane or
+an axis through its axis lies where the design shows it and follows when
+its occurrence moves. A link whose source occurrence shows another
+component than the datum's is refused ("Plane1 is in Motor, not in
+Frame, where the link O2 leads"; at recompute, after later edits, the
+feature fails). The application's Construct commands send a link for
+each construction datum of another component than the one the new datum
+is made in. The links follow reparenting, copies and moves as `links` do
+and count as references for the design policy.
+
+A sketch of another component named in the definition (a sketch line,
+point or path, `{"sketch": "F3", "curve": "c1"}`) is likewise made in
+its own component's coordinates and refused without a link (F6).
+`datum_links` takes a link keyed by the sketch too (`"datum_links":
+{"F3": {"source": "O1", "target": "O2"}}`, mitcad#1039): it lets the
+sketch through, and the sketch's frame is moved by the placements, its
+curves and points with it, so an axis along another component's sketch
+line, a point at its sketch point or a plane along its sketch curve lies
+where the design shows that sketch. A link whose source shows another
+component than the sketch's is refused as for a datum. The Construct
+commands send a link for each sketch of another component.
+
 | Feature | `definition.type` | Fields | Result |
 |---|---|---|---|
 | plane | `offset` | `plane`, `distance` | the plane moved along its normal |
@@ -3288,6 +3351,35 @@ results](#failed-features-in-command-results)).
   Saved as `"groups": [{"name", "features"}]`; a favourite parameter as
   `"favorite": true`.
 
+#### Feature names are not unique (mitcad#1107)
+
+Features may share a name: a sketch and the extrude made from it can both
+be named `Holder` (`add_feature`, `sketch.create` and `rename_feature`
+take a name in use; an empty name is refused). Default names
+(`Extrude3`) still skip the names in use. The model's own references,
+the timeline and the application go by uid; other names stay unique as
+before (bodies, components, parameters, annotations, drawings).
+
+A field that takes a feature by uid or name (a script's `feature` and
+`sketch` expectations, `export_sketch`'s `sketch`, the `joint` of
+`drive_joint` (also previewed), `add_motion_link`, `add_motion_study`,
+`edit_motion_study`, `set_study_key` and `remove_study_key`) reads it so:
+
+- the uid of an existing feature is that feature;
+- a name one feature has is that feature (a field of one kind then says
+  when it is not of that kind: `Holder is not a joint`);
+- a name several features have is refused with their uids and kinds,
+  `Holder names several features: F1 (sketch), F2 (extrude); give the
+  uid`, unless the field takes only one kind and exactly one of them is
+  of that kind: a `sketch` field and one sketch named Holder find that
+  sketch.
+
+An import that names a feature after the item of the file keeps that
+name, also one another feature has (before, it took the default name).
+A design file saves and opens features of one name; only a version 1
+file, whose features refer to each other by name, still needs each name
+once.
+
 ### Undo, revisions and the saved state
 
 | Command | Fields | Result |
@@ -3374,6 +3466,34 @@ results](#failed-features-in-command-results)).
   there at the marker; none left isolates nothing.
 - Occurrences have `set_occurrence_visible` ([Components and
   occurrences](#components-and-occurrences)).
+
+#### Transparent bodies and occurrences (mitcad#1093)
+
+| Command | Fields | Result |
+|---|---|---|
+| `set_body_transparent` | `uid`, `transparent` | undo step `Make Body1 Transparent` / `Make Body1 Opaque` unless nothing changes; nothing recomputed; the body must exist at the marker |
+| `set_occurrence_transparent` | `occurrence` (uid, name or path, as for `set_occurrence_visible`), `transparent` | undo step `Make Bracket:1 Transparent` / `Make Bracket:1 Opaque` unless nothing changes; nothing recomputed |
+
+- Transparency is kept like visibility: per body (in every occurrence
+  that places it) and per occurrence, in the definition state, so it is
+  saved with the design and undo restores it. It is independent of the
+  light bulb: a hidden transparent body or occurrence is transparent
+  again when it is shown. It changes no appearance or material.
+- An occurrence's transparency applies to its contents, the bodies of
+  its component and of the occurrences inside it.
+- The `bodies` query lists `"transparent": true` for a body set so, the
+  `components` query's occurrences `"transparent": true` for an
+  occurrence set so, and the `instances` query `"transparent": true` for
+  a placed body that is transparent itself or lies in a transparent
+  occurrence (left out otherwise). The design file keeps
+  `"transparent": true` on the body and on the occurrence (left out when
+  false). A copy of an occurrence (Paste) starts opaque, as it starts
+  shown; Paste New copies the transparency of the occurrences inside it.
+  The design comparison lists a change as `transparent` or `opaque`.
+- The application draws a transparent body as a faint shaded surface
+  with its edges in its own appearance's colour, and a click goes
+  through it to what lies behind ([app/COMMANDS.md](../../../app/COMMANDS.md),
+  "Transparent bodies and components").
 
 ### Named views
 
@@ -3487,6 +3607,7 @@ the design file. A body names its appearance by id
 | `emission`, `emission_color` | 0–1000, sRGB | 0, [1, 1, 1] | emitted light: 1 is the colour's own radiance |
 | `opacity` | 0–1 | 1 | a cut-out (glass transmits instead) |
 | `texture` | `{"path", "size": [w, h] mm (default 100 x 100), "rotation" rad, "projection": "box" (default) or "planar", "data", "normal", "roughness", "metalness", "occlusion", "source"}` | none | an image for the base colour (PNG or JPEG), with the other maps of its set and where it came from ([Texture map sets](#texture-map-sets)), projected in the body's coordinates: `planar` along Z, `box` from the axis each point of the surface faces most; one repeat of the image is `size`, turned by `rotation` about the projection's axis. `path` is relative to the design file's folder or absolute; `data` (base64 of the image file, at most 32 MB) embeds the image in the design file ([Textures](#textures)). The rendered view draws it, the shaded view shows the base colour |
+| `class` | `metal`, `plastic` (General Plastic), `fdm_plastic`, `resin`, `other` | none: `other` | what it is a look of (mitcad#1102): a material's Add… and the Appearance tool offer the appearances of the material's class first. Set by the user (`null` or `other` takes it away), or on a filament's colour (`fdm_plastic`: a material's own colour, a printer profile's or a 3MF import's filament); the library's come from their ids and are never written |
 
 | Command | Fields | Result |
 |---|---|---|
@@ -3500,6 +3621,8 @@ the design file. A body names its appearance by id
   application's order, then the document's: `id`, `name`, the
   parameters, `library` (true for the built-in ones), `display_color`
   (sRGB: the colour of the shaded view and exports; the base colour),
+  `class` (its own, a library appearance's by its id, else `other`;
+  mitcad#1102),
   `bodies` (the uids of bodies that use it, also those not at the marker)
   and `faces` (`{"body", "face"}` of faces that use it).
 - Library: `steel_satin`, `aluminum_anodized`, `brass_polished`, `copper`,
@@ -3508,7 +3631,15 @@ the design file. A body names its appearance by id
   `rubber`, `glass`, `wood_oak` (their colours as before mitcad#46),
   `chrome`, `gold_polished`, `steel_polished`, `plastic_red`,
   `plastic_white`, `plastic_blue`, `plastic_clear`, `glass_clear`,
-  `glass_frosted`, `wood_walnut`, `wood_maple`, `emissive_white`.
+  `glass_frosted`, `wood_walnut`, `wood_maple`, `emissive_white`,
+  `resin_grey`, `resin_white`, `resin_clear` (mitcad#1102). Their classes
+  (mitcad#1102): the steels, `aluminum_anodized`, `brass_polished`,
+  `copper`, `cast_iron`, `chrome` and `gold_polished` `metal`; the
+  `plastic_*` ones `plastic` (General Plastic); the `resin_*` ones
+  `resin`; the paints, `rubber`, the glasses, the woods and
+  `emissive_white` `other`. An appearance of the design or a library
+  without a `class` is `other`, as are those of the `.f3d`, `.FCStd` and
+  `.ipt` imports.
 - A body without an appearance, or with an id in neither list (an
   imported one), has the default look. A material carries an appearance
   (mitcad#640): setting a body's material sets the body's appearance to
@@ -3520,6 +3651,9 @@ the design file. A body names its appearance by id
   parameters...}]` (left out when there are none; parameters left out of
   a file are the defaults; files without it have none), and the
   comparison of versions lists them by id.
+- **Older versions** (before mitcad#1102) open a design or a library
+  file unless it holds an appearance with a `class` (an unknown field, as
+  embedded images); one is written only when set.
 
 ### Appearances of faces
 
@@ -3758,8 +3892,8 @@ timeline marker.
 | Query | Fields | Result |
 |---|---|---|
 | `document` | | `features`, `marker`, `bodies` (count), `undo`, `redo` (labels or null), `undo_depth`, `units` {`length`, `angle`}, `warnings` (what loading the file changed, such as renamed parameters), `revision`, `modified` (not the state last marked saved), `display` {`origin`, `isolated`}; with components `components`, `occurrences` (counts), `active_component` |
-| `timeline` | | `marker`, `groups` (when any: `name`, `features` in timeline order) and `features`: `uid`, `name`, `type`, `suppressed`, `status` (`ok`, `warning`, `error`, `suppressed`, `rolled_back`, `pending` before the first recompute), `error` (the error, or the import note and the warnings joined with `; `), `import` (what the importer said about it, when it did: a fallback, a partial item, a placeholder; see [The import's outcomes on the timeline](#the-imports-outcomes-on-the-timeline)), `component` (when not the root), for a sketch before the marker `dof` (0 when fully constrained), for a sketch or construction feature `visible` and `visible_set` (its light bulb was set), for a feature that uses sketches `sketches` (their uids in timeline order: profiles, paths, guides, curves or points it refers to, also while it is suppressed or after the marker; the browser lists the feature under each, mitcad#177) |
-| `feature` | `uid` | `uid`, `name`, `type`, `suppressed`, `status`, `error`, `visible`, `visible_set`, `warnings` (when any), `import` (the import note, when any), `def` (parameters by name) |
+| `timeline` | | `marker`, `groups` (when any: `name`, `features` in timeline order) and `features`: `uid`, `name`, `type`, `suppressed`, `status` (`ok`, `warning`, `error`, `suppressed`, `rolled_back`, `pending` before the first recompute), `error` (only the error of a failed feature, mitcad#1040; null otherwise), `level` (`error`, `warning`, `info` for an import note alone, or null) and `notices` (when any: the error, the warnings and the import note with their levels; see [Notices](#notices)), `import` (what the importer said about it, when it did: a fallback, a partial item, a placeholder; see [The import's outcomes on the timeline](#the-imports-outcomes-on-the-timeline)), `component` (when not the root), for a sketch before the marker `dof` (0 when fully constrained), for a sketch or construction feature `visible` and `visible_set` (its light bulb was set), for a feature that uses sketches `sketches` (their uids in timeline order: profiles, paths, guides, curves or points it refers to, also while it is suppressed or after the marker; the browser lists the feature under each, mitcad#177) |
+| `feature` | `uid` | `uid`, `name`, `type`, `suppressed`, `status`, `error` (only a failure), `level`, `notices` (when any), `visible`, `visible_set`, `warnings` (when any; also as notices), `import` (the import note, when any), `def` (parameters by name) |
 | `parameters` | | `name`, `expression`, `unit` (`""` for unitless), `value` (mm or rad), `text` (the value in its unit, `"12.5 mm"`), `comment`, `kind` (`user`, `model`, `reference`: a driven dimension's, read-only), `owner` (the feature of a model or reference parameter), `dependencies` (names its expression and its limits use), `favorite`; with limits also `limits`, `unclamped`, `unclamped_text`, `limited`, `limit_message`, `limit_references`, and `intrinsic` for a feature's own limits ([Parameter limits](#parameter-limits)) |
 | `evaluate` | `expression`, `kind`: `length` (default), `angle` or `unitless`; `parameter` (optional, [Parameter limits](#parameter-limits)) | `value` (mm or rad), `text` (in the document's unit, `"40 mm"`), `references` (parameter names used), `expression` (with decimal points: `"d1 * 1,5"` gives `"d1 * 1.5"`); with `parameter` also `limited`, `limited_value`, `limited_text` |
 | `appearances` | | the library's and the document's appearances with their parameters ([Appearances](#appearances)) |
@@ -3852,15 +3986,16 @@ The `faces` and `edges` queries tell where each face and edge is
 |---|---|---|
 | `datums` | `origin` (also the origin datums) | per datum: `uid`, `name`, `type` and its geometry |
 | `datum` | `uid` (`F3` or `xy`) | `type` `plane`: `origin`, `normal`, `x_axis`, `y_axis`; `axis`: `origin`, `direction`; `point`: `point` |
-| `properties` | `bodies` (default all), `density`, `densities` {uid: g/cm³} | `bodies`: `uid`, `name`, `material`, `density`, `volume`, `area`, `mass`, `center_of_mass`, `inertia` (3 × 3, at the centre of mass), `principal_moments`, `principal_axes`; `total`: `volume`, `area`, `mass`, `center_of_mass`, `inertia` |
+| `properties` | `bodies` (default all), `components` ([Physical Properties' extent](#physical-properties-extent-mitcad1095)), `density`, `densities` {uid: g/cm³} | `bodies`, one entry per placement of a body ([placed bodies](#physical-properties-extent-mitcad1095)): `uid`, `name`, `occurrence` (a body of a component), `material`, `density`, `volume`, `area`, `mass`, `center_of_mass` (design coordinates), `inertia` (3 × 3, at the centre of mass, along the design's axes), `principal_moments`, `principal_axes`, `bbox` {`min`, `max`, `size`} along the design's axes, `faces`, `edges`, `vertices`; `total`: `volume`, `area`, `mass`, `center_of_mass`, `inertia`, `bbox`, `faces`, `edges`, `vertices`; with `components` also `components`: `uid`, `name`, `occurrence` |
 | `measure` | `a`, `b` (optional) selections | `a`, `b`: `kind` and `volume`, `area`, `length`, `point`, `circle` {`center`, `axis`, `radius`, `sweep`}, `axis` {`origin`, `direction`} (*Measure with axes*), `plane` {`origin`, `normal`} of a planar face or a datum plane (the middle of the face on its plane, the normal out of the material; mitcad#714) as they apply; with `b` also `between`: `distance`, `on_a`, `on_b`, `inside`, `angle` (null unless both have a normal, a direction or an axis), `offset` (only for two parallel planes, *Measure in the design*), `axis_distance`, `axis_points`, `center_distance` (*Measure with axes*) |
 | `interference` | `bodies` (default all), `min_volume` (mm³, default 1e-6) | `bodies` (count), `pairs`: `a`, `b`, `names`, `volume` |
 | `section` | `plane`, `bodies` (default all), `world` (default false) | `plane`, per body `edges`, `faces`, `length`, `area`, `clip`, and the totals with `cut`, `kept` and `removed` ([Section Analysis past every body](#section-analysis-past-every-body-mitcad824)) |
 | `compare_step` | `file`, `bodies`, `step_body` (name or index), `samples`, `fuzzy`, `max_deviation`, `max_relative` | `step_bodies`, `volume`, `step_volume`, `volume_only_mitcad`, `volume_only_step`, `relative_difference`, `max_deviation`, `mitcad_to_step` and `step_to_mitcad` {`max`, `rms`, `at`, `samples`}, `bounds_difference`; with limits `pass` and `exceeded` |
 
 - Units: mm, mm², mm³, g/cm³, kg, kg mm², radians. Density:
-  `densities[uid]`, else the body's material, else `density` for bodies
-  without one, else steel.
+  `densities[uid]`, else the body's material (its own, else the nearest
+  component default up the occurrence path that places it), else
+  `density` for bodies without one, else steel.
 - A selection is `{"body": "F2.b0"}` with an optional `"face"`, `"edge"`
   or `"vertex"`, `{"datum": "F5"}` (or an origin datum, `"xy"`, `"x"`,
   `"origin"`, in any case), either with an optional
@@ -4002,6 +4137,71 @@ same: the boxes are read when it is prepared. The text answer
 kept whole, <m> removed whole` then. Section Analysis' panel shows a
 warning instead of the zero totals in that case (`app/COMMANDS.md`).
 
+### Physical Properties' extent (mitcad#1095)
+
+The `properties` query places the bodies as the design places them and
+also gives each body's overall size and its topology, and their totals
+(`physical_extent.rs`):
+
+- **Placed bodies** (mitcad#1110): a body counts once per occurrence that
+  places it, as the [Center of Mass](#center-of-mass) query counts it.
+  `bodies` has one entry per placement, in the document's order of the
+  bodies and the assembly's order of the occurrences; the entry of a
+  body of a component has `occurrence`, the path's name (`Arm:2`,
+  `Frame:1/Arm:2`), and the root's bodies have none. Each entry's
+  `center_of_mass`, `inertia` and `principal_axes` are in the design's
+  coordinates, moved and turned by its occurrence (mass, volume, area and
+  the principal moments do not change with a rigid placement), and its
+  `material` and `density` are what the body has on that occurrence
+  path: its own material, else the nearest component default up the
+  path, else the root's, else steel. Each body's properties are computed
+  once per density. A body asked for in `bodies` and also in a component
+  of `components` counts once per occurrence. The total adds every entry,
+  so a component placed twice counts twice; over every body (neither
+  `bodies` nor `components`) its `mass`, `volume` and `center_of_mass`
+  are the `center_of_mass` query's. A body that no occurrence places (a
+  component placed nowhere) has one entry, in its own coordinates; the
+  `center_of_mass` query leaves it out.
+- `bbox` {`min`, `max`, `size`}: the axis-aligned box along the design's
+  axes, of the body at its entry's placement; the total's is the box
+  around all the entries'.
+- `faces`, `edges`, `vertices`: how many distinct faces, edges and
+  vertices the body has (`Kernel::topology_counts`: an edge two faces
+  share counts once, a seam edge once); the total's are the sums over the
+  entries, a body counted once per placement (as its mass is). A **mesh body** (STL,
+  OBJ, an imported model's mesh) has its box but no counts: its faces are
+  groups of triangles, not faces on surfaces, so the three fields are
+  left out, and the total sums the other bodies (it has no counts when no
+  body has them).
+- `components`: components whose bodies count, those of their
+  sub-components included, besides `bodies`. An entry is a component's
+  uid or name (`"C2"`, `"Arm"`: every placement of it counts), or
+  `{"component": …, "occurrence": …}` with either or both: `occurrence`
+  (a path from the root by uids, `"O1/O4"`, or by names, `"Arm:1/Pin:2"`)
+  takes the component only as placed there, the way the app's selection
+  of a component in the view or the browser names it. The root component
+  is the whole design. The answer then lists `components` (`uid`, `name`,
+  and `occurrence`, the path's name, when one was given), which Physical
+  Properties' window names in its title. An unknown component or
+  occurrence, or an occurrence that places another component, is an
+  error. With neither `bodies` nor `components`, every body counts, with
+  all its placements.
+- A kernel without boxes or topology counts leaves the fields out.
+- The text answer (`Document::analysis`, `mitcad-cli`) names an entry's
+  occurrence after the body (`Body1 (F4.b0) in Arm:2: Steel, …`) and adds
+  a body's `bounding box [min] to [max], size X x Y x Z mm` and `F faces,
+  E edges, V vertices`, and the totals' before the `Total:` line.
+
+Tests: `physical_properties_tests` (core/model-tests/analysis: two boxes,
+one in a turned component, along the design's axes; the counts; a
+component's bodies with its sub-component's; a component placed twice
+and moved, an entry per occurrence with the total the `center_of_mass`
+query's; an occurrence in a component with a default material), the
+unit test of the turned inertia tensor in `physical_extent.rs`, `cli.analysis`
+(`tools/cli/tests/analysis.json`, on the OCCT kernel), the Physical
+Properties steps of `tools/ui-modify-test.sh` and
+`tools/ui-windows-workflow-test.ps1`.
+
 ## Preview
 
 `preview` takes an `add_feature` or `edit_feature` command and evaluates
@@ -4085,9 +4285,9 @@ check the document after the steps before them. Examples:
 | `"total_volume"` | all bodies |
 | `"occurrence"` (a path, or an occurrence placed once) with `"body"` | the body as placed: `volume`, `area`, `center`, `bbox`, `min`, `max` |
 | `"instances"`, `"world_volume"` | the visible placed bodies: count, sum of volumes |
-| `"feature": "Fillet1"` (name or uid) | `"status"`, `"error_contains"` |
+| `"feature": "Fillet1"` (name or uid; a name several features share is refused, [Feature names are not unique](#feature-names-are-not-unique-mitcad1107)) | `"status"`, `"error_contains"` |
 | `"parameter": "d3"` | `"value"` |
-| `"sketch": "Sketch1"` (name or uid) | `"regions"` (its region keys in any order), `"dof"` |
+| `"sketch": "Sketch1"` (name or uid; of a shared name the only sketch) | `"regions"` (its region keys in any order), `"dof"` |
 | `"query": {…}` | `"result"`: the query's answer contains it (objects: the keys given; arrays: element by element; numbers within the relative `"tolerance"`, default 1e-6), e.g. `{"expect": {"query": {"query": "datum", "uid": "F3"}, "result": {"origin": [0, 0, 30]}}}` |
 
 The first failing step stops the script: `steps[4]: expected Body1 to have
@@ -4131,7 +4331,7 @@ made, in order) and `status` (as the `sketch` query: `dof`,
 | `sketch.spline` | `points` (point inputs), `degree` (optional), `closed` (optional, mitcad#783), `construction` | without `degree` a cubic through the points; with it, a B-spline with these control points; `closed` (fit points only, at least three): the cubic runs on from the last point back to the first and is smooth through it |
 | `sketch.add_text` | `text`, `at` (or `frame`), `height`, `angle`, `font`, `bold`, `italic`, `align`, `valign`, `spacing`, `frame` (three point ids, or `{"corner": [x, y], "diagonal": [x, y]}`: a new construction rectangle, turned by `angle`), `path`, `flip_x`, `flip_y`, `cap_height`, `wrap`, `line_spacing`, `pen_align`, `ink_top`, `glyphs` (stored outlines, see the sketch definition's `texts`), `font_file` (a font file's path instead of `font`, mitcad#473: the file's family becomes `font`, its outlines of the text are stored; a file that cannot be read or is not a font is refused), `value` (a text parameter's name or a text expression the text follows, [Text parameters](#text-parameters); `text` may then be left out) | the glyphs bound profiles |
 | `sketch.edit_text` | `id`, and any of `text`, `at`, `height`, `angle`, `font`, `bold`, `italic`, `align`, `valign`, `spacing`, `path`, `flip_x`, `flip_y`, `cap_height`, `wrap`, `line_spacing`, `pen_align`, `ink_top`, `font_file` (a font file's path; `""` leaves the file for `font`), `value` (a text parameter's name or a text expression the text follows; `""` stops it following one, [Text parameters](#text-parameters)) | a new `text`, `font`, `bold` or `italic` drops the text's stored `glyphs`; for a text in a font file it stores the file's outlines again (refused when the file is not there, or when its path came with the design and no `font_file` is given, mitcad#929), and another `font` leaves the file |
-| `sketch.add_constraint` | `constraint`: as in the definition, without `id` | a `coincident` between the end points of two curves merges them into one point (see [Points that become one](#points-that-become-one)): the result has no new constraint, `removed` lists the removed point (and what the merge dropped), and `merged` is `{"kept": "p3", "removed": "p7"}`; a constraint that older geometric constraints imply in part replaces them: `removed` lists them and `implied_removed` is `[{"constraint": "k1", "type": "horizontal"}]` (see [A constraint that replaces one it makes redundant](#a-constraint-that-replaces-one-it-makes-redundant)) |
+| `sketch.add_constraint` | `constraint`: as in the definition, without `id` | a `coincident` between the end points of two curves merges them into one point (see [Points that become one](#points-that-become-one)): the result has no new constraint, `removed` lists the removed point (and what the merge dropped), and `merged` is `{"kept": "p3", "removed": "p7"}`; a constraint that older geometric constraints imply in part replaces them: `removed` lists them and `implied_removed` is `[{"constraint": "k1", "type": "horizontal"}]` (see [A constraint that replaces one it makes redundant](#a-constraint-that-replaces-one-it-makes-redundant)); `auto` (default false): only when safe, nothing else changes (see [Constraints a drawing tool adds automatically](#constraints-a-drawing-tool-adds-automatically)) |
 | `sketch.add_dimension` | `dimension`: as in the definition, without `id`, `value`, `driven`; `value` (default: what it measures now), `driven`, `text` [x, y] | |
 | `sketch.set_dimension` | `dimension` (`k3`), `value` | a number or an expression changes the dimension's own parameter; a parameter name makes the dimension use that parameter; `name = expression` renames its parameter and sets it (see [Values](#values)); a driven dimension becomes driving (its reference parameter becomes its parameter, under the same name) |
 | `sketch.set_driven` | `dimension`, `driven` (default true) | driving again keeps the measured value; driven, its own parameter becomes its reference parameter |
@@ -4432,17 +4632,32 @@ plane's frame unless they ask.
   sketch is not mirrored; x = y × normal. The screen's horizontal stays
   the sketch's x, so Horizontal and Vertical constraints, the grid and
   the dimensions stay horizontal and vertical on the screen.
-- Results: XY keeps its frame (x = +X, y = +Y). XZ gets x = -X, y = +Z
-  (the plane's own frame has y = -Z). YZ gets x = +Y, y = +Z (the plane's
-  own x = -Z). A face facing ±X or ±Y gets y = +Z whichever way it faces;
-  a top face y = +Y, x = +X, a bottom face y = +Y, x = -X.
+- The XZ origin plane has no outside, and its own normal (+Y) would show
+  it from the view cube's BACK with the design's +X to the left. A new
+  upright sketch on it is seen from FRONT instead (mitcad#1060): its
+  normal is -Y, and x = y × normal is +X, still not mirrored. An extrude
+  of such a sketch takes -Y (towards the front) as its positive
+  direction; a sketch on XZ without `upright` (the plane's own frame) and
+  every XZ sketch made before keep +Y. XY (normal +Z, seen from TOP) and
+  YZ (normal +X, seen from RIGHT) need no turn; a face is always seen
+  from outside it.
+- Results: XY keeps its frame (x = +X, y = +Y). XZ gets x = +X, y = +Z,
+  normal -Y (the plane's own frame has y = -Z, normal +Y; before
+  mitcad#1060 the upright frame was x = -X, y = +Z, normal +Y). YZ gets
+  x = +Y, y = +Z (the plane's own x = -Z). A face facing ±X or ±Y gets
+  y = +Z whichever way it faces; a top face y = +Y, x = +X, a bottom face
+  y = +Y, x = -X.
 - The design's axes are taken where the sketch is shown: in the
   coordinates of its component through the occurrence `context` or
   `occurrence` names (else the component's first occurrence).
 - The frame is stored only when it differs from the plane's: a sketch on
   XY or a top face has none. The sketch keeps it as any own frame, also
-  when its plane moves later; existing and imported sketches keep theirs.
-  The command stays one undo step (`Add Sketch2`).
+  when its plane moves later; existing and imported sketches keep theirs
+  (an XZ sketch with the earlier upright frame, x = -X, opens from BACK
+  as before, and its extrudes keep their direction). The command stays
+  one undo step (`Add Sketch2`). `sketch.redefine_plane` with `upright`
+  gives a sketch moved to a new plane the same frame, XZ's seen from
+  FRONT too.
 
 ### Projected outlines and their offsets
 
@@ -4717,6 +4932,118 @@ Examples: `tools/cli/tests/f6_*.json`.
   when it is not the root. Files without them load with every feature in
   the root component.
 
+## Saving a component as a design
+
+Save Component as Design (mitcad#1057, `document/save_component.rs`)
+writes a component as a design file of its own: the component's
+definition becomes the new design's root. Insert Component's unlinked
+insert does the same the other way round, and the same copy does the work
+(`copy.rs`), so the new design holds the component's features and
+timeline (before the timeline marker; the features keep their names), its
+sketches and construction geometry, the design's parameters its
+expressions use (as the new design's own, with the tables they look
+values up in), the components placed in it with their occurrences,
+placements and joints, its materials, appearances, property sets,
+drawings and design policy, in the design's units. Linked components and
+library components inside it stay linked: a link's path is recorded from
+the new file's folder.
+
+| Command | Fields | Result |
+|---|---|---|
+| `save_component_as_design` | `component` (uid or name), `path` (the design file to write), `replace` (default false), `base` (the folder of this design's file, for link paths; the folder it was read from or saved to when left out) | `component`, `path` (absolute), `references` (below), `replaced`, `link` (the path this design records for the new file, with `replace`; else null) |
+
+| Query | Fields | Result |
+|---|---|---|
+| `save_component_as_design` | `component` | `component`, `name`, `references`, `blocked` (why it cannot be saved, or null) |
+
+- **Refused** for the root (it is the design: Save As), a linked
+  component (`… is linked from part.mitcad, a design of its own
+  already`) and a library component. The query answers with `blocked`
+  instead of an error, for the application's dialog.
+- **References outside it.** What the component's features (and those of
+  the components inside it) refer to outside it cannot be carried. Each
+  reference is frozen at its current geometry in the new design, the way
+  a broken link keeps what it last had; this design does not change:
+  - a sketch on another component's face or plane lies on that plane,
+    fixed: the XY plane with the sketch's frame (`frame`) where the plane
+    is now;
+  - a projection of another component's geometry keeps its curves where
+    their sources are now, unlinked, as fixed references (as Clean Up
+    Stale Projections unlinks one);
+  - a construction plane, axis or point on other components' geometry
+    (`links`, `datum_links`) becomes a `fixed` one where it is now;
+  - bodies of other components a feature reads (a combine's tools, an
+    extrusion's or revolution's objects, a sweep's path and guide
+    surfaces, a split's tools, a derive's bodies, a pulley's, gear's or
+    bearing's shaft) become hidden copies of those bodies as they are
+    before the feature, in a base feature of the feature's component
+    just before it; the feature reads the copies, and the references to
+    their faces, edges and vertices (in it and in the features after it)
+    name the copies' faces (`<base>:import(<k>)`). A body transfer from
+    outside becomes such a base feature of the bodies it moved in,
+    shown, and the transfer goes;
+  - the bodies a feature of another component made in it (a
+    new-component operation, Create Components from Bodies) become a base
+    feature of the component before its first feature, as they are after
+    that feature, and its features' references to their faces follow;
+  - a move's points and axes (`from_occurrence`, `to_occurrence`,
+    `point_occurrence`, `axis_occurrence`; Move, Move of occurrences, Move
+    Face) and a point pattern's target and anchor points (`occurrence`)
+    picked on another component (mitcad#1069) become `fixed` points and
+    axes in the feature's component's coordinates, without an occurrence:
+    where the feature last found them (the points and axis its motion was
+    worked out from, the pattern's anchor moved by each element's
+    translation), or, for a move along an axis and a feature without a
+    result, where the geometry and its occurrence are at the timeline
+    marker. One that cannot be found at all stays as it is and is listed
+    as left out (the feature then fails in the new design, as it does in
+    this one);
+  - an assembly cut's targets in other components (`cut_scope`) are left
+    out;
+  - joints, rigid groups, motion links and assembly constraints of other
+    components that join an occurrence inside it stay in this design and
+    are listed as left out.
+- `references`, in timeline order: `feature` and `feature_name` (the
+  feature that refers; for made bodies and joints the one outside),
+  `kind` (`sketch_plane`, `projection`, `construction`, `body`,
+  `made_bodies`, `cut_target`, `joint`, `point`, `axis`), `target` (where
+  it points: an
+  occurrence path's name such as `Plate:1`, or the component a feature
+  outside is in), `frozen` (false: left out) and `message`, one line for
+  the user (`Sketch2: its projection of Plate:1, frozen at its current
+  geometry`; `Move3: its point on Plate:1, frozen at its current
+  geometry`).
+- A joint, bound length or pattern of the component's own that names an
+  occurrence outside it cannot be frozen: the command is refused, naming
+  them (`Box cannot be saved as a design: Joint3 refers to Plate:1; edit
+  them to refer to geometry inside it first`).
+- The file is a single-file design (version 2), written whole or not at
+  all. Without `replace` nothing in this design changes and there is no
+  undo step.
+- **Replace with a link** (`replace`): after the file is written, the
+  component in this design becomes a linked component of it (as
+  `insert_component` links one), in one undo step (`Replace Box with a
+  Link to Box.mitcad`): its features and the components only it holds go,
+  with the occurrences placed in it; a base feature where its first
+  feature was holds the bodies it shows (the visible bodies of it and of
+  the components inside it, where its first occurrence places them, in
+  its coordinates, keeping their materials and appearances); the feature
+  of another component that made it goes (a new-component operation) or
+  takes its bodies out of the design (`remove_body`, for Create
+  Components from Bodies), and so does a body transfer's source. Its
+  occurrences, their placements, grounding and visibility stay. What
+  refers to its bodies from outside (joints and their origins, links of
+  other components' sketches and features) follows: body ids become the
+  base feature's, face, edge and vertex names its faces', and an
+  occurrence path through it ends at its occurrence. Refused while a
+  feature of it is after the timeline marker, for a component a combine
+  made, and for one without bodies to show. The link's path is relative
+  to `base` when the file is in the design's project (or, for a design
+  in no project, in its folder), so that it is followed when the design
+  opens ([Components and occurrences](#components-and-occurrences)).
+- Tests: `core/model-tests/assembly/src/save_component_tests.rs`,
+  `core/model/src/document/save_component.rs` (the renames).
+
 ## Joints
 
 Joints connect occurrences and say how they may move against each other
@@ -4920,7 +5247,7 @@ feature and moves nothing.
 | `add_joint` | `kind`, `slide_axis`, `a`, `b` (origins; `occurrence` by uids or names from the component), `offset`, `angle`, `flip`, `limits`, `position`, `name`, `component` (the active one when left out) | `uid`, `name`, `parameters` (created), `state`, `solved` |
 | `add_as_built_joint` | `kind`, `slide_axis`, `a`, `b` (occurrence paths), `origin`, `limits`, `position`, `name`, `component` | the same; `relative` recorded from the placements at the marker |
 | `add_rigid_group` | `occurrences` (two or more, placed in the component), `name`, `component` | `uid`, `name` |
-| `drive_joint` | `joint` (uid or name), `values` (per motion a [value](#values), or null to take the position away) | `uid`, `parameters` (created), `state`, `values`; one undo step `Drive Joint1` |
+| `drive_joint` | `joint` (uid or name; of a shared name the only joint, [Feature names are not unique](#feature-names-are-not-unique-mitcad1107)), `values` (per motion a [value](#values), or null to take the position away) | `uid`, `parameters` (created), `state`, `values`; one undo step `Drive Joint1` |
 | `drag_occurrence` | `occurrence` (uid, name or path), `point` (in the parent component's coordinates, moving with the occurrence; its origin when left out), `target` | as `joint_drag`; one undo step `Drag Pin:1` |
 
 ```json
@@ -5114,8 +5441,8 @@ constraints.
 | Command | Fields | Result |
 |---|---|---|
 | `import_file` | `path` (.step/.stp, .iges/.igs, .brep/.brp, .stl, .obj), `name` (of the feature, optional), `unit_mm` (STL and OBJ: mm per file unit, default 1) | `uid`, `name`, `bodies`: `uid`, `name`, `kind`; `warnings` when empty bodies were left out |
-| `export` | `path`, `bodies` (uids or names; all at the marker when left out), `format` (by extension when left out: `step`, `iges`, `stl`, `obj`, `brep`, `3mf`, `usdz`), `schema` (`ap214` default, `ap242`), `unit` (STEP, IGES, STL, OBJ, 3MF: `mm` default, `cm`, `m`, `in`, `ft`; [Mesh files](#mesh-files-in-a-unit-with-a-longest-edge)), `refinement` (STL, OBJ, 3MF, USDZ: `low`, `medium` default, `high` or `{"deviation": mm, "angle": radians, "face_triangles": n, "max_edge": mm}`; see [Mesh refinement](#mesh-refinement)), `ascii` (STL), `colors` (body uid or name: sRGB in [0, 1]), `coordinates` (`design` default, `component`), `occurrence` (a path), `design_folder` (USDZ: the folder relative texture paths are relative to, the design file's), `dialect` (3MF: the slicer whose print settings go with the bodies, [Print profiles](#print-profiles)), `on_bed` (3MF, STL, OBJ: on the print bed faces, [Print bed faces](#print-bed-faces)), `occurrences` and `whole` (3MF: the placements written and the occurrences sent whole, [Export by occurrences](#export-by-occurrences)) | `path`, `format`, `bodies` (uids); 3MF also `meshes`, `skipped`, and with `dialect` `dialect`, `filaments`, `warnings`; USDZ also `materials`, `skipped`, `warnings` |
-| `export_sketch` | `sketch` (uid or name), `path` (.dxf), `version` (`r2000` default, `r12`) | `path`, `entities` |
+| `export` | `path`, `bodies` (uids or names; all at the marker when left out), `format` (by extension when left out: `step`, `iges`, `stl`, `obj`, `brep`, `3mf`, `usdz`), `schema` (`ap214` default, `ap242`), `unit` (STEP, IGES, STL, OBJ, 3MF: `mm` default, `cm`, `m`, `in`, `ft`; [Mesh files](#mesh-files-in-a-unit-with-a-longest-edge)), `refinement` (STL, OBJ, 3MF, USDZ: `low`, `medium` default, `high` or `{"deviation": mm, "angle": radians, "face_triangles": n, "max_edge": mm}`; see [Mesh refinement](#mesh-refinement)), `ascii` (STL), `colors` (body uid or name: sRGB in [0, 1]), `coordinates` (`design` default, `component`), `occurrence` (a path), `design_folder` (USDZ: the folder relative texture paths are relative to, the design file's), `dialect` (3MF: the slicer whose print settings go with the bodies, [Print profiles](#print-profiles)), `on_bed` (3MF, STL, OBJ: on the print bed faces, [Print bed faces](#print-bed-faces)), `center`, `drop` and `auto_orient` (on the bed, each true by default: [Centered, dropped and oriented on the bed](#centered-dropped-and-oriented-on-the-bed)), `occurrences` and `whole` (3MF: the placements written and the occurrences sent whole, [Export by occurrences](#export-by-occurrences)) | `path`, `format`, `bodies` (uids); 3MF also `meshes`, `skipped`, and with `dialect` `dialect`, `filaments`, `warnings`, `printed` ([Print profiles](#print-profiles), mitcad#1052); USDZ also `materials`, `skipped`, `warnings` |
+| `export_sketch` | `sketch` (uid or name; of a shared name the only sketch, [Feature names are not unique](#feature-names-are-not-unique-mitcad1107)), `path` (.dxf), `version` (`r2000` default, `r12`) | `path`, `entities` |
 
 - `import_file` adds one base feature: a body per STEP part or solid,
   IGES solid, BRep compound member or OBJ object, one mesh body for STL.
@@ -6559,7 +6886,7 @@ a drawing keeps no history.
   is left out there with a warning.
 - **Features:** the bodies of a component on one layer are one base
   feature named `Layer <name>` (in a component `<component> layer
-  <name>`; feature names are unique), source `<file>, layer <name>`; bodies are
+  <name>`, so that each has a name of its own), source `<file>, layer <name>`; bodies are
   named `Solid n`, `Mesh n` (the block's name when a component has one
   body) and coloured by the entity, its layer or the inserting entity
   (`BYBLOCK`; a block placed more than once takes its first insert's).
@@ -6729,7 +7056,7 @@ another body; `checkTank`: a tank's turn in the view, kept) and
 
 ### Mesh files in a unit with a longest edge
 
-The application's Save As Mesh (mitcad#734; a body's or a component's
+The application's Save as Mesh (mitcad#734; a body's or a component's
 context menu, [user guide](../../../docs/user-guide.md#save-as-mesh))
 writes STL, OBJ and 3MF files with `export`; these are its options:
 
@@ -7412,7 +7739,7 @@ so a project opens everywhere.
 |---|---|---|
 | `project_tree` | `session` (optional: the application's lock session), `author`, `fallback_author` (optional: who `same_owner` compares with) | below; no network and no writes |
 | `create_folder` | `path` | the folder (and those above it) with an empty placeholder, `.gitkeep` (git records files, not folders; never listed), recorded as `Add folder <path>` |
-| `new_design` | `path` (ends with `.mitcad`), `text` (optional: the design; default an empty design, `mitcad_model::file::empty_design()`) | the design (folders above it made), recorded as `Add <path>` |
+| `new_design` | `path` (ends with `.mitcad`), `text` (optional: the design; default an empty design, `mitcad_model::file::empty_design()`), `units` (optional, not with `text`: the empty design's length unit, `mm` when left out; [New designs in other units](#new-designs-in-other-units)) | the design (folders above it made), recorded as `Add <path>` |
 | `move` | `from`, `to` | a design (to a design's name) or a folder with everything in it, recorded as one version, `Move <from> to <to>`; folders above `to` made |
 | `delete` | `path`, `force` (default false) | a design or a folder with everything in it, deleted from the folder and recorded as `Delete <path>`; the history keeps what its versions hold (restoring deleted designs is a later ticket) |
 
@@ -7905,7 +8232,7 @@ designation unless `name` is given; the undo step is `Insert <name>`.
 - **Updates are explicit.** `update_library_parts` with `changes`:
   [{`component` (uid or name), `rev` (another version), `config`
   (another row)}] changes linked parts as one undo step (`Update <name>
-  to v1.1.0, M5x20` or `Update Library Parts`) and returns `changes`
+  to v1.1.0, M5x20` or `Update Library Components`) and returns `changes`
   (`ISO 4762 M5x16: version v1.0.0 (3f9a2c1) -> v1.1.0 (7d0e5b2)`, `...
   size M5x16 -> M6x20`). A part named after its designation, and its
   body, take the new designation. A copied part is refused (it does not
@@ -7933,15 +8260,15 @@ with `error` (`class`, `message`, `detail`, as the remote commands') and
 | `library_fetch` | `url` (https, ssh, a file:// URL or a folder; never with credentials) | `kind` (`library`, `index`), `id`, `name`, `url`, `dir`, `cloned`, `head`, `versions`, `problems` (`errors`, `warnings`), `error`, `log`: a bare clone into the cache (`git clone --bare`), or new branches and tags fetched into it; a repository that is neither, or larger than 200 MB, is refused and leaves nothing. An update that would make the clone larger than 200 MB is `too_large` and is not taken: its references (fetched to `refs/incoming/` first) and new object files are removed, the versions fetched before stay (mitcad#938) |
 | `library_list` | | `root`, `libraries`: `dir`, `url`, `kind`, `versions`, and a library's `id`, `name`, `description`, `license`, `authors`, `components` (count), `problems`, an index's `name`, `entries` |
 | `library_show` | `url` or `id`, `rev` (default: the newest version) | `dir`, `url`, `rev`, `labels`, `versions`; a library's `manifest`, `problems` and `components` (`id`, `name`, `path`, `category` (its home category), `categories` (every one, the home first), `groups` (per category `{"category", "path", "order"}`: the group's names from the top and each name's place in the manifest's list, [Groups](../../../docs/libraries.md#groups), mitcad#527), `standard`, `description`, `keywords`, `license`, `license_note`, `preview`, `designation`, `supplier`, `part_number`, `supplier_url`, `build` (as the manifest has it, or null), `mounts` (likewise, mitcad#525), `configurations`: `selectors`, `selector_values`, `default`, `rows` with `name`, `select` and, when the row has them, its own `part_number`, `supplier_url` and `designation`); an index's `name`, `description`, `entries` |
-| `library_search` | `text` (words that must all match name, id, standard, description, categories, keywords, supplier, part number, the library), `role` and `system` (BUILD parts only, [BUILD parts](../../../docs/libraries.md#build-parts): the role, and the slot system as `{"type", "slot", "grid"}` or text `B/8/30`, a series left out matching any; a linear part's `kind` and `size`), `supplier` (the same, without case), `part_number` (the component's or a row's own, without case), `licenses` (SPDX ids an item may have; left out: any), `unlicensed` (default false: items without a licence are hidden), `category` (any of a component's categories), `libraries` (ids or URLs) | `components` (of fetched libraries at their newest versions: as `library_show`'s with `library`, `library_name`, `url`, `rev`, `version`, `authors`), `libraries` (index entries with `index`, `index_url`, `fetched`, `license_note`), `hidden` (left out for their licence) |
+| `library_search` | `text` (words that must all match name, id, standard, description, categories, keywords, supplier, part number, the library), `role` and `system` (BUILD parts only, [BUILD parts](../../../docs/libraries.md#build-components): the role, and the slot system as `{"type", "slot", "grid"}` or text `B/8/30`, a series left out matching any; a linear part's `kind` and `size`), `supplier` (the same, without case), `part_number` (the component's or a row's own, without case), `licenses` (SPDX ids an item may have; left out: any), `unlicensed` (default false: items without a licence are hidden), `category` (any of a component's categories), `libraries` (ids or URLs) | `components` (of fetched libraries at their newest versions: as `library_show`'s with `library`, `library_name`, `url`, `rev`, `version`, `authors`), `libraries` (index entries with `index`, `index_url`, `fetched`, `license_note`), `hidden` (left out for their licence) |
 | `library_preview` | `url` or `id`, `rev`, `component`, `config` (a row: its own preview when it has one, `row_previews`, mitcad#484) | `png` (base64) or null |
 | `library_diff` | `id`, `url`, `from`, `to`, `parts` ([{`component`, `config`}]) | `from`, `to` (commits), `from_labels`, `to_labels`, `library` (licence and version changes), `parts`: `changed`, `missing` (the component or row is not in `to`), `lines` (the row's value changes), `text`, `design` (the comparison of the design without its table) |
-| `library_check` | `dir` (a library folder) | `id`, `components`, `ok`, `errors`, `warnings`: the manifest, the files it names (there, no symbolic links, designs that open and link no other files, PNG previews of at most 512 KB), a licence file; for BUILD parts the block's rules ([BUILD parts](../../../docs/libraries.md#build-parts)), the design's parameters and `mount:<name>` joint origins, a profile's layout, and library references that resolve (in the folder, else in the fetched libraries; one not fetched is a warning); a component's `mounts` against its rules and the design's mount frames ([Mount frames](../../../docs/libraries.md#mount-frames)) |
+| `library_check` | `dir` (a library folder) | `id`, `components`, `ok`, `errors`, `warnings`: the manifest, the files it names (there, no symbolic links, designs that open and link no other files, PNG previews of at most 512 KB), a licence file; for BUILD parts the block's rules ([BUILD parts](../../../docs/libraries.md#build-components)), the design's parameters and `mount:<name>` joint origins, a profile's layout, and library references that resolve (in the folder, else in the fetched libraries; one not fetched is a warning); a component's `mounts` against its rules and the design's mount frames ([Mount frames](../../../docs/libraries.md#mount-frames)) |
 | `library_init` | `dir`, `id`, `name`, `description`, `license`, `authors`, `homepage` | `dir`, `id`, `written`: the manifest, a `LICENSE` note naming the licence, a README, and a MitCad project with a git repository (no version yet) |
 | `library_add` | `dir`, `text` (a single-file design), `id`, `name`, `category` (an id, or a list of them, the first its home; `categories` adds more), `category_name` and `category_parent` (a new home category's name, which may be a path, `Wood/Boards`, and its parent's id; the other new categories are named by their ids), `standard`, `description`, `keywords`, `license`, `designation`, `preview` (a PNG, base64), `path` (default `<category>/<id>.mitcad`), `supplier`, `part_number`, `supplier_url`, `build` (left out: those of the component it replaces), `mounts` (left out: the design's mount frames for a part without `build`, [Mount frames](#mount-frames)) | `component`, `written`, `errors`, `warnings` (a check of the folder); a component of the same id is replaced |
 | `index_entry` | `dir`, `url` (where the library is published), `rev` (default HEAD) | `path` (`libraries/<id>.json`), `rev`, `labels`, `entry`, `text` |
 | `licenses` | | `licenses`: the SPDX ids a community index accepts with a `note` for users |
-| `library_build_candidates` | `junction` (one of the `build_junctions` query's: `kind`, `systems` of its profiles, `space`), or `role` with `system` (for Profile, Panel and Linear Part pickers; a part made for no system fits any) with a linear part's `kind` and `size` (a carriage for a rail's size; a part without a size fits any), `text`, `libraries`, `licenses`, `unlicensed` | `components` (as `library_search`'s, with `build`, `supplier`, `part_number`, `supplier_url`, and its `configurations` as `library_show` gives them, each row with `preview: true` when it has a picture of its own: every row a part of the pickers, mitcad#484) that fit, best first: a connector's `junctions`, `systems` and `space` against the junction's ([BUILD](#build-profile-assemblies)); `refused` (those that nearly fit, one thing wrong, for the picker's greyed rows: each `{"id", "name", "library", "reason"}`), `hidden`. A connector fits more closely when it names the profiles' series and goes on one junction kind only; a connector with an `envelope` needs that room in the junction's inner corner |
+| `library_build_candidates` | `junction` (one of the `build_junctions` query's: `kind`, `systems` of its profiles, `space`), or `role` with `system` (for Profile, Panel and Linear Component pickers; a part made for no system fits any) with a linear part's `kind` and `size` (a carriage for a rail's size; a part without a size fits any), `text`, `libraries`, `licenses`, `unlicensed` | `components` (as `library_search`'s, with `build`, `supplier`, `part_number`, `supplier_url`, and its `configurations` as `library_show` gives them, each row with `preview: true` when it has a picture of its own: every row a part of the pickers, mitcad#484) that fit, best first: a connector's `junctions`, `systems` and `space` against the junction's ([BUILD](#build-profile-assemblies)); `refused` (those that nearly fit, one thing wrong, for the picker's greyed rows: each `{"id", "name", "library", "reason"}`), `hidden`. A connector fits more closely when it names the profiles' series and goes on one junction kind only; a connector with an `envelope` needs that room in the junction's inner corner |
 
 `mitcad-cli library fetch|list|show|search|candidates|diff|init|add|check|index-entry`
 and `mitcad-cli parts <file>` (the parts list); inserting and updating
@@ -8113,11 +8440,11 @@ the other limits).
   listed value (the lower one of two as near), and `limited` is `values`
   (`Length is limited to its allowed value 500 mm (its expression gives
   520 mm)`); a **strict** parameter refuses it instead (`parameter
-  'Length': 520 mm is not one of its allowed values 300 mm, 500 mm, 800
+  Length: 520 mm is not one of its allowed values 300 mm, 500 mm, 800
   mm`). With `min`, `max` or `step` as well, the result is clamped and
   snapped first, then snapped to the list.
 - A **text** whose result is not in the list is always refused (`parameter
-  'Color': 'Green' is not one of its allowed values 'Black', 'White'`): a
+  Color: 'Green' is not one of its allowed values 'Black', 'White'`): a
   text has no nearest value. `values` is the only limit a text parameter
   can have.
 - `add_parameter` and `set_parameter` take `values` as a list of
@@ -8181,7 +8508,7 @@ optional `else` (lists of actions).
   Color).
 - **Renames and deletes.** Renaming a parameter rewrites the rules'
   conditions and action expressions and `option` names; a parameter that
-  a rule uses cannot be deleted (`parameter 'Wall' is used by the rule
+  a rule uses cannot be deleted (`parameter Wall is used by the rule
   Thick walls`), nor an option or a row's parameter (`configurations:
   option Color of the table does not exist`, as before mitcad#799). The
   rules are checked first: an option that a rule uses is refused with the
@@ -8195,6 +8522,25 @@ not an option of the table, a range action on a text option, a step
 that is not positive, an expression that does not parse or evaluate. An
 empty intersection depends on the values: it is a broken rule (the
 `configure` query's `problems`, a refusal), not a problem of the table.
+
+**Where a rule problem is** (mitcad#1064): the `configurations` query's
+`rule_problems` gives each rule problem as `index` (the rule's index in
+`rules`), `rule` (its name), `place`, `level` and `message` (the words of
+`problems`). `place` is `when`; an action of the then or else as
+`then.0` or `else.1` (an action of two kinds or of none, an action that
+names no option, an `in_table` problem); or the part of an action:
+`then.0.option` (no option of the table), `then.0.values.2` and
+`then.0.exclude.0` (a listed value, by its index), `then.0.min`,
+`then.0.max`, `then.0.step`, `then.0.require`. It is null for the rule
+itself (no name, a name another rule has). `level` is `error` for the
+problems above, and `warning` for a value outside its option's domain,
+which is no problem of the table and refuses nothing: a value of
+`values` or `exclude` that is no value of the option (`the rule Colors:
+values: Green is not one of the values of Color`), a `min` above all of
+its values or a `max` below all of them. The rule editor marks the block
+at the place. With `rules`, the query checks rules that are not set yet,
+as `set_configurations` would (the editor asks it where a refused rule is
+wrong).
 
 ### The cascade
 
@@ -8250,7 +8596,7 @@ are refused.
 
 | Query | Fields | Result |
 |---|---|---|
-| `configurations` | | `configurations` (the table or null), `selector_values` ({option: the rows' values as texts in natural order: `M2.5`, `M3`, `M10`}), `current` (the row the parameters have, or null), `problems` |
+| `configurations` | `rules` (optional: rules to check in place of the table's; the answer is the table's with them, and nothing changes) | `configurations` (the table or null), `selector_values` ({option: the rows' values as texts in natural order: `M2.5`, `M3`, `M10`}), `current` (the row the parameters have, or null), `problems`, `rule_problems` (each rule problem with its place, below) |
 | `configure` | `values` (optional: values to try, as `configure`'s; nothing changes) | `options` (each option in order, after the cascade of `values`: `name`, `kind` (`number` or `text`), `unit`, `value` (mm or rad, or the text), `text`, `expression`, `driven`, `domain`, `allowed`, `restricted_by` (the rules that narrow it now)), `row` (the combination's row, or null), `designation_values` ({option: text} as a designation pattern takes them), `moves`, `refused` (as `configure`'s), `problems` |
 | `check_rules` | `limit` (optional, default 100000) | the report below |
 
@@ -8453,7 +8799,7 @@ values of some options to be a row of a table:
 
 | Command | Fields | Result |
 |---|---|---|
-| `generate_configuration_rows` | `table`, `column`, `option` (a user parameter) | `rows` (the rows of the column's keys, in the table's order), `added`, `updated` (row names), `moves`; undo step `Generate Rows from Screws`, nothing recomputed |
+| `generate_configuration_rows` | `table`, `column`, `option` (a user parameter), `columns` (optional: other columns of the table as parameter columns, [Filling a closed table](#filling-a-closed-table)) | `rows` (the rows of the column's keys, in the table's order), `added`, `updated` (row names), `created` (the parameters the columns made), `moves`; undo step `Generate Rows from Screws`, nothing recomputed |
 
 One row per distinct non-empty key of the column, named by the key (a
 text's text, `M5`; a number in its column's unit without the unit, `16`),
@@ -8461,10 +8807,10 @@ whose `values` set the option to it (`'M5'`, `16 mm`). A row of the same
 name is updated, not duplicated: it keeps its other values, designation,
 part number and supplier URL, and is listed in `updated` only when its
 value changed. The option becomes an option of the table when it is not
-one. Refused when the option is not a user parameter or is one of a
-closed table's other `parameters`, when the column cannot give it values,
-when the column has none, and with the table's first problem afterwards
-(a closed table's new row without a value for another option).
+one; a closed table's parameter column chosen as the option moves to the
+options with its rows' values (mitcad#1044). Refused when the option is
+not a user parameter, when the column cannot give it values, when the
+column has none, and with the table's first problem afterwards.
 
 Rust: `mitcad_model::configurations::{TableColumns, TableColumn, Cell,
 InTable, GeneratedRows, ColumnMove, column_domain, column_reference,
@@ -8515,7 +8861,7 @@ application's worker:
   import with the timeline](#f3d-import-with-the-timeline)).
 - A cancelled preview leaves no preview (`preview_body_shape` is null).
 - An array of commands stops at the cancelled one as at any error
-  (`commands[2]: the computation was cancelled`); the commands before it
+  (`commands[2]: the computation was canceled`); the commands before it
   stay done.
 - Results evaluated before the cancel stay in the cache, so trying again
   continues where it stopped. An evaluation that returns after the
@@ -8961,8 +9307,8 @@ references and the carried features together.
 
 Occurrence paths that lead through the moved occurrence follow it in the
 same step: sketch planes and projections linked to other components,
-combine, sweep, split and extrude body links, construction plane links,
-cut scopes, joints and assembly constraints (their paths are relative to
+combine, sweep, split and extrude body links, construction plane, axis
+and point links (`links` and `datum_links`), cut scopes, joints and assembly constraints (their paths are relative to
 their component), section analyses, Isolate, the model's annotations, and
 the drawings (mitcad#743): their views' occurrence subjects, chosen
 bodies' occurrences and the picks of their dimensions, notes, symbols and
@@ -9880,7 +10226,7 @@ and `assembly` presets are the stricter choices.
 - **References** are every other link to another owner's geometry: linked
   projections, an extrusion's or revolution's `object_links`, a combine's tools in
   occurrences, a combine's or split's `tool_links`, a sweep's `body_links`
-  and a construction plane's `links`.
+  and a construction plane's, axis's or point's `links` and `datum_links`.
   The consumer's `reference_others` and the source's
   `references_from_others` must allow them. An unlinked projection
   (`"linked": false`) keeps no link and is never refused. Joints and
@@ -9905,7 +10251,9 @@ feature goes into Component1, Component1 takes components, and a
 component's sketches may lie on Component1's faces. Component1 is named
 as any new component is (`Component1`, `Component2`, …; mitcad#711):
 designs made before keep their `Part1`, as the name is stored in the
-file. Neither policy is stored, as they are the defaults. `Document::new`
+file. Neither policy is stored, as they are the defaults. They are in
+millimetres unless made in another unit (`Document::new_design_in`,
+[New designs in other units](#new-designs-in-other-units)). `Document::new`
 (and so the importers and `mitcad-cli`) has the
 general defaults everywhere. Components get the general defaults when
 made (`create_component` takes `policy`, a preset name or settings; the
@@ -10392,7 +10740,7 @@ always the one explicitly committed.
 ## BUILD: profile assemblies
 
 The BUILD tab (mitcad#375; the app: `app/COMMANDS.md`, *BUILD*) places
-library parts with a `build` block ([docs/libraries.md](../../../docs/libraries.md#build-parts)):
+library parts with a `build` block ([docs/libraries.md](../../../docs/libraries.md#build-components)):
 slot profiles, connectors and their nuts and screws, panels and linear
 parts. Everything it makes is ordinary design content: components,
 occurrences, features, joints and parameters on the one timeline,
@@ -10740,6 +11088,7 @@ points*).
 | `build_connect` | `junction` (an id from `build_junctions`), `part` (as `build_place`'s), `fasteners` (default true), `machining` (default true), `name` | `component`, `occurrence`, `adds`, `warnings` (a fastener that cannot be read is left out with a warning); undo step `Connect <designation>` |
 | `build_panel` | `at` (`{"occurrence", "geometry", "point"}`: a face or a slot frame of one of the frame's profiles), `part`, `thickness` (for a part whose thickness is a parameter), `parameters`, `name` | `component`, `occurrence`, `bound`, `fits` (false, with `reason`, when a fixed-width sheet is too narrow or too wide), `adds` (the clamps of a surface panel); undo step `Place <designation>` |
 | `build_remove` | `component` | `removed`: `components` (it and what it `adds`), `features` (its bound lengths, its holes in other parts, and what depends on them) and `detached` (the bound lengths of other parts that end on it or start from it, detached first, so those parts keep their lengths); the parts placed on it keep where they are; undo step `Remove <name>` |
+| `build_upgrade` | | `upgraded` (the connectors and fasteners placed again) and `count`: the slot connectors and their fasteners that the first placing rule placed, placed by the current one (*Where a connector goes*, mitcad#1115); undo step `Place connectors by the current rule`, none when nothing changes. The application runs it when it opens a design |
 
 `at` says where the part goes: `{"occurrence", "geometry", "point",
 "place", "offset", "from", "direction", "snap"}`.
@@ -10992,6 +11341,34 @@ no library. `build_connect` refuses a connector whose `junctions` or
 `systems` do not fit, or whose `envelope` is larger than the junction's
 `space`.
 
+**Where a connector goes** (mitcad#1115). Its first mate's frame slides
+on profile `a`'s frame of the mate's kind that faces most into b (a
+`slider` joint, flipped): at an L on b's side, towards b's farther end,
+so that at every corner of a frame, the opposite and mirrored ones too,
+the connector lies inside the frame. Along a slot its corner seats where
+b's face towards a crosses that slot (a's end on b's side; at a shared
+mitre b's inner face, half b's section further in), and its first mate
+lies its distance from the second mate's face beyond that (`tx` an
+expression of a's length when the end is a's end B). Its fasteners get
+`rigid` joints on their frames: a nut by its `slot` frame, **not
+flipped** (the nut's frame and the connector's both point into the
+profile, so the nut lies in the slot), a screw or a washer by its
+design's origin (a screw's head underside, a washer's face), flipped
+(its shank into the profile), with a `frame_override` `shift` that moves
+it back by the connector's wall: the head bears on the wall's outer
+face, on a washer when there is one. The wall is measured on the
+connector's own shape (`Kernel::segment_crossings`): segments along the
+frame's -z, from half a millimetre in front of it, at eight points nine
+tenths of the head's radius around the frame's origin (beside the hole),
+the nearest exit of those that enter the material at the frame. A fastener whose library row the
+design already holds as a source is taken from it without reading the
+library. The records of such connectors and fasteners have `rule: 2`;
+those without it were placed by the first rule (on a's side facing b's
+own axis, a nut flipped, a screw's head on the profile's face), and
+`build_upgrade` places them again: a connector only while it is where
+the first rule put it (one moved along its slot since stays), a fastener
+only while its joint is as the first rule made it.
+
 **Panels.** A panel in slots is placed from a picked inner face (or slot
 frame) of a frame's profile: the slot there, the profile across the
 frame whose slot faces it in the same plane, and those beside to the left
@@ -11037,7 +11414,7 @@ commands; the Profile picker lists no timber. Code: `core/model/src/build/meta.r
 
 ### Library metadata the model reads
 
-The library's format is in [docs/libraries.md](../../../docs/libraries.md#build-parts)
+The library's format is in [docs/libraries.md](../../../docs/libraries.md#build-components)
 (*Timber*). The model reads these fields of a source's `build` block,
 leniently (unknown fields are ignored, a value is a number in mm, kg,
 kg/m³ or % or a text with its unit):
@@ -11335,7 +11712,7 @@ the members' sections and places it on their outer faces:
 - `fit.section` `[a, b]`: the member that is carried (`a`; the post) has
   that section, either way round, within 1 mm; `fit.width` `[min, max]`:
   its smaller section dimension is within it. Otherwise refused (`the
-  hanger fits 48 x 148, C5 is 48 x 123`). A slot connector at a junction
+  hanger fits 48 × 148, C5 is 48 × 123`). A slot connector at a junction
   of members, or an outer one at a junction of slot profiles, is refused.
 - The connector's first mate's frame (`mount`; its `to`, `face` or `end`,
   is not read) is placed by a `rigid` joint, flipped, on `b`'s (the
@@ -11666,7 +12043,9 @@ name without `#k`) instead of the face's projected boundary:
   of a whole sketch, the curves it does not cross are left out. Linked,
   each is a projection with `"section": true` whose source is the curve,
   and its points follow the fresh crossings when the source sketch
-  changes. One edit, one undo step (`Section Curves to Sketch2`).
+  changes. One edit, one undo step (`Section Curves to Sketch2`). The
+  app's Intersect sends it for another sketch's curves and points, or a
+  whole sketch picked in the browser (mitcad#1031).
 - A whole body (Intersect, mitcad#736): no `source`, `body` given. The
   kernel cuts all of the body's faces (`section_curves` without a face)
   and the pieces come in grouped by the face they lie on: each face's
@@ -12937,7 +13316,7 @@ holes from `Kernel::round_holes`, their threads from the `threads` query.
 | `title` | `Untitled` | the design's name in the title block |
 | `date` | today (UTC) | the date in the title block |
 | `per_body` | false | a sheet per body: pages of one PDF, or SVG, DXF and DWG files `<name>-2.svg`, … |
-| `exact` | true | exact edges; false: from a triangulation (quicker on large bodies; also the fallback when the exact projection fails, and for mesh bodies). Views of bodies with free-form faces (not planes, cylinders, cones, spheres or tori) come from a triangulation within a 2000th of the bodies' size either way, their edges as lines and arcs where they follow them within 1.5 times that, polylines elsewhere (mitcad#962: exact edges took half a minute a view on modelled threads) |
+| `exact` | true | exact edges; false: from a triangulation (quicker on large bodies; also the fallback when the exact projection fails, and for mesh bodies). Views of bodies with free-form faces (not planes, cylinders, cones, spheres or tori), or with many edges on B-splines against many faces (mitcad#1033), come from a triangulation within a 2000th of the bodies' size either way, their edges as lines and arcs where they follow them within 1.5 times that, polylines elsewhere (mitcad#962: exact edges took half a minute a view on modelled threads) |
 | `drawing` | none | a drawing kept in the design (`D1` or its name, *Drawings in the design*), written as it is: its sheets, views and title blocks; the fields above are then its own and refused, except `title` (where its sheets have none) |
 | `sheet` | all | with `drawing`: one sheet's index (0 the first) |
 
@@ -12955,9 +13334,12 @@ projection method (third angle: the top view above the front view, the right
 view on its right, the isometric view top right, the section right of the
 right view; first angle the other way), aligned with each other, each with
 room for its dimensions; the views are centred in what the title block and
-the table leave. Lines after ISO 128 (visible 0.5 mm, hidden 0.35 mm dashed,
-dimensions, leaders and tangent edges 0.25 mm, hatching 0.18 mm, the cutting
-plane long dash dotted with its arrows and letter); dimensions after ISO 129
+the table leave. Lines after ISO 128's 0.35 series (mitcad#1112; one table,
+`Pen::width` in `core/model-drawing/src/sheet.rs`, for the PDF and SVG
+writers and the application's sheet: visible 0.35 mm; dimensions, leaders,
+tangent edges and a thread's roots 0.18 mm; hidden edges 0.18 mm dashed, as
+ISO 128 draws hidden outlines narrow; hatching 0.13 mm; the frame 0.5 mm; the
+cutting plane 0.18 mm long dash dotted with its arrows and letter); dimensions after ISO 129
 (30° closed filled arrowheads, text 3.5 mm above the dimension line, reading
 from below or from the right); text in Helvetica (sans serif, as ISO 3098).
 A hole is coaxial cylindrical faces with the material all round outside
@@ -12966,6 +13348,51 @@ meets it on the side it opens to its counterbore or countersink; an end is
 closed when material lies on the axis within twice its diameter beyond it.
 A view shows a hole end on when it looks along the axis from the side it
 opens to (a hole open at both ends from either side).
+
+Details smaller than the pen (mitcad#1112, `core/model-drawing/src/convention.rs`,
+`simplified`): lines closer than twice the visible line's width (0.7 mm on
+the sheet, ISO 128-20's least spacing) merge into a blot, so a view is drawn
+simplified at its scale. A fillet or chamfer whose size on the sheet is
+below 0.7 mm (an arc of a smaller radius, the polyline or short lines a
+triangulation made of it, a chamfer's shorter line, between two other
+edges) is drawn as a sharp corner: it is left out with the tangent edges
+that end at it, and the edges on either side are extended to where they
+meet. A tangent edge that lies within 0.7 mm of other edges all along is
+left out, and so is any edge shorter than its pen is wide. This works on the
+projected lines, so the exact and the triangulated views alike; what a
+click picks on a view is still the view's own edges.
+
+Threads by ISO 6410 (`convention::with_threads`): every thread the `threads`
+query lists on a body a view shows, modelled or cosmetic (a hole or a shaft
+with a thread's designation and no flanks), is drawn by convention instead
+of its geometry. In a view across its axis the crests (an external thread's
+major diameter, an internal one's minor) are drawn with the visible pen,
+the roots with the narrow one, and the thread's end with a visible line
+across the major diameter where no face ends it; looking along its axis the
+crest circle is drawn whole and the root circle as a narrow three-quarter
+arc (open at the upper right). The thread's own lines (crests, helices,
+flanks, the curves where its end chamfers cut them) are left out; the
+faces' edges across the thread stay (its end faces, a groove's), and in
+a pictorial view the circles about its axis. Only the threaded body's own
+lines are left out and replaced: the kernel's projection records each
+line's body (`ViewEdge::source`, the index of the shape among those
+projected; OCCT's hidden-line removal is asked for each shape's lines on
+their own), so every other body's lines (a nut's bore and faces, a pin in
+front of the thread) stay as the kernel drew them. Hidden-line removal: each part
+of the convention's lines takes, along the axis, the visibility the
+kernel's hidden-line removal gave the lines it replaces, so where a nut, a
+wall or another body hides the thread its lines are hidden (dashed when the
+view shows hidden edges, else left out); end on, the crest and root circles
+each take that of the lines near them. A view at an angle to the axis
+(isometric; ISO 6410 has no pictorial representation, so the simplified one
+ISO 128 allows there) draws the thread on its cylinder the same way: the
+crests' outlines wide, the roots' narrow, and where no face ends it the
+thread's end as the half of its crest circle the eye sees. A taper pipe
+thread (the query's `taper`) is drawn with its crest and root lines
+following the taper from the diameters where it starts: an external one
+widens away from its narrow end, an internal one narrows away from its
+mouth (which end, from the lines it replaces, else from the face that ends
+it); end on, its circles are those where it starts.
 
 Files: SVG in millimetres (`width="420mm"`), a `<g class="…">` per group:
 `view` (`id="view-front"`, `view-top`, `view-right`, `view-iso`,
@@ -12995,7 +13422,7 @@ bodies to draw. File IO (`classes.rs`); MCP's `model_export` writes one
 with `format: "pdf"` or `"svg"` (or `"dxf"` with `drawing`), the options in
 `drawing` (`docs/mcp.md`); `mitcad-cli export-drawing` runs it. Tests:
 `geometry.drawing` (the views, section and holes of a counterbored block),
-`core/model-tests/drawing/src/drawing_tests.rs` and `core/model-tests/drawing/src/dwg_tests.rs`, `core.dwg` (the DWG writer), `cli.export_drawing`, `app.ui-windows-drawing`.
+`core/model-tests/drawing/src/drawing_tests.rs` and `core/model-tests/drawing/src/dwg_tests.rs`, `core/model-drawing/src/convention_tests.rs` (the line set, details smaller than the pen, threads), `core.dwg` (the DWG writer), `cli.export_drawing`, `app.ui-windows-drawing`.
 
 ## Gears
 
@@ -13810,7 +14237,7 @@ the first time something refers to them:
 ```
 
 - `axis`: `"x"`, `"y"` or `"origin"` (anything else is refused:
-  `unknown axis 'z' (x, y or origin)`).
+  `unknown axis “z” (x, y or origin)`).
 - **The origin** is the sketch's fixed point stored at [0, 0] (the one
   drawing makes when it snaps to the origin, mitcad#355): the first such
   point that is not projected. Without one, `sketch.axis` makes it.
@@ -14031,8 +14458,8 @@ foot's joint to the same grid covers (its `shift`, `angle` and footprint)
 are taken: a placement onto one is refused (`the cell (0, 1) of
 Baseplate:1's grid is taken by Bin 2x1:1`; several: `the cells (0, 0)
 and (1, 0) ... are taken by A and B`). A foot whose `pitch` is not the
-grid's (`Bin 1x1 stands on a grid of 40 x 40 mm; Baseplate:1's grid is 42
-x 42 mm`), a footprint larger than the grid, a pick the frame does not
+grid's (`Bin 1x1 stands on a grid of 40 × 40 mm; Baseplate:1's grid is 42
+× 42 mm`), a footprint larger than the grid, a pick the frame does not
 take (`Lamp lies on a face: pick a flat face or a plane, not a round
 one`, `Screw goes into a hole or onto a shaft: pick its round face or its
 rim`) and a frame the part has not (`Lamp has no mount frame wall (its
@@ -14533,10 +14960,17 @@ What bodies are made of (mitcad#640; `core/model/src/material.rs`,
 its `id`, `name`, `density` (g/cm³), the `appearance` a body gets with it
 (an id of the [appearances](#appearances)), an optional `filament` (values
 of the `Print Filament` set of the [print key map](#print-settings-key-map)
-by key: `filament_type`, `temperature`, `filament_colour`, ...; the
-density is the material's own, not a `filament_density`; a key that names
+by key: `filament_type`, `temperature`, ...; no `filament_colour`, which
+is its appearance's ([A filament's colour is its
+appearance](#a-filaments-colour-is-its-appearance)); the density is the
+material's own, not a `filament_density`; a key that names
 a slicer's own preset, `filament_settings_id`, holds `{"<slicer id>":
-"<name>", ...}`), `slicer` (a slicer's filament settings the key map does
+"<name>", ...}`: the slicer's filament preset the material is based on,
+which a 3MF export writes as the filament's preset and as the preset it
+inherits from: in `inherits_group` for the Bambu Studio family, in
+PrusaSlicer's `inherits_cummulative` (mitcad#1065); a
+material without one is written under its own name, inheriting from
+nothing, mitcad#1062, `print_files_tests`), `slicer` (a slicer's filament settings the key map does
 not have, by slicer id: its keys as text, written back only to that
 slicer; [Print profiles](#print-profiles)), `based_on` (the material it
 was made from), `version` (its version in its library) and `origin`
@@ -14549,8 +14983,23 @@ library's or an import's, [Print profiles](#print-profiles)).
   `steel_polished`, `cast_iron`, `aluminum` `aluminum_anodized`, `copper`,
   `brass` `brass_polished`, `titanium` `steel_satin`, `abs`
   `plastic_black`, `pla` `plastic_white`, `nylon` `plastic_white`,
-  `polycarbonate` `plastic_clear`, `glass` `glass_clear`; `water` none) and
-  the plastics with a `filament_type` (`ABS`, `PLA`, `PA`, `PC`).
+  `polycarbonate` `plastic_clear`, `glass` `glass_clear`; `water` none;
+  `resin_standard`, Resin - Standard, 1.15 g/cm³, `resin_grey`,
+  mitcad#1102) and the plastics with a `filament_type` (`ABS`, `PLA`,
+  `PA`, `PC`), which makes them FDM plastics.
+- **Classes** (mitcad#655, mitcad#1102): `metal`, `plastic` (General
+  Plastic: moulded, cast, machined or sheet plastic; the id and its group
+  `plastics` as before, so library parts and scripts that name it are
+  unchanged), `fdm_plastic` (FDM Plastic, the filaments), `resin` (the
+  photopolymer resins of resin printers) and `other`, listed in that
+  order. A material with print settings (`filament` values, `slicer`
+  keys or `variants`) is an FDM plastic whatever class it stores (a
+  filament stores `plastic` or none), worked out when read: the file is not rewritten,
+  and a filament made or edited keeps `plastic`. `fdm_plastic` and
+  `resin` are written only when chosen (for a material without print
+  settings, `fdm_plastic`). Older versions (before mitcad#1102) open a
+  design or a library file unless it holds a material of class
+  `fdm_plastic` or `resin` (an unknown value, as embedded images).
 - **The design's materials** are kept in the design file. One with a
   built-in's id takes that built-in's place in the design (a library's
   copy of `pla` with its filament values); deleting it brings the
@@ -14572,7 +15021,7 @@ library's or an import's, [Print profiles](#print-profiles)).
 
 | Command | Fields | Result |
 |---|---|---|
-| `create_material` | `id` (the next free `custom<n>` when left out), `name` (`Material 1`, `Material 2`, ... when left out, never `New …`, mitcad#828; a copy `<its source's name> (copy)`, `(copy 2)`, ..., a copy of a copy counted on from its source's name, mitcad#655, mitcad#828; free among the design's and the libraries' names), `density`, `appearance`, `filament`, `class` (`metal`, `plastic` or `other`, mitcad#655: stored on the material; left out, a copy keeps its source's class and a new one is stored as worked out, see `library_items`), `based_on` (a material whose fields it starts from, by id, or a library's item `{library, id}`: Duplicate, with the appearance it carries; 1 g/cm³ and nothing else without it), `version`, `origin`, `project`; with `library` see *Items where they live* ([Print profiles](#print-profiles)) | `id`; undo step `Create Material Acme PETG` (with a library item's appearance, one step) |
+| `create_material` | `id` (the next free `custom<n>` when left out), `name` (`Material 1`, `Material 2`, ... when left out, never `New …`, mitcad#828; a copy `<its source's name> (copy)`, `(copy 2)`, ..., a copy of a copy counted on from its source's name, mitcad#655, mitcad#828; free among the design's and the libraries' names), `density`, `appearance`, `filament`, `class` (`metal`, `plastic`, `fdm_plastic`, `resin` or `other`, mitcad#655, mitcad#1102: stored on the material, but `plastic` for `fdm_plastic` when the material has print settings, which make it an FDM plastic anyway; left out, a copy keeps its source's class and a new one is stored as worked out, see `library_items`), `based_on` (a material whose fields it starts from, by id, or a library's item `{library, id}`: Duplicate, with the appearance it carries; 1 g/cm³ and nothing else without it), `version`, `origin`, `project`; with `library` see *Items where they live* ([Print profiles](#print-profiles)) | `id`; undo step `Create Material Acme PETG` (with a library item's appearance, one step) |
 | `edit_material` | `id`, and the fields that change: `name`, `density`, `appearance` (null: none), `filament` (its keys are set, a key with null removed), `class`, `version`, `origin`; with `library` see *Items where they live* ([Print profiles](#print-profiles)) | undo step `Edit Material Acme PETG` unless nothing changes; a built-in one is refused (`create_material` with `based_on`, or with its id, makes one the design can change) |
 | `delete_material` | `id`; with `library` see *Items where they live* ([Print profiles](#print-profiles)) | `bodies` and `components` that named it: they use the built-in of the same id when the deleted one took its place, else none of their own; undo step `Delete Material Acme PETG` |
 | `set_component_material` | `component` (uid, `C0` the root, or name), `material` (an id, or null: none of its own), `library` (`base`, `user`, `project`: `material` is that library's item), `project` | undo step `Set Default Material of Arm` unless nothing changes; a library's item is copied in first (or the design's copy of it reused) in the same step |
@@ -14580,13 +15029,14 @@ library's or an import's, [Print profiles](#print-profiles)).
 
 | Query | Fields | Result |
 |---|---|---|
-| `materials` | | the built-in materials the design does not replace, in their order, then the design's: the fields above, `built_in`, `replaces_built_in` (a design's material with a built-in's id), `class` (its own or worked out, as in `library_items`), `display_color` (its appearance's), `bodies` (uids of bodies that name it) and `components` (whose default it is) |
+| `materials` | | the built-in materials the design does not replace, in their order, then the design's: the fields above, `built_in`, `replaces_built_in` (a design's material with a built-in's id), `class` (its own or worked out, as in `library_items`), `class_fixed` (true when print settings make it an FDM plastic, mitcad#1102), `display_color` (its appearance's), `bodies` (uids of bodies that name it) and `components` (whose default it is) |
 | `body_material` | `body`, `occurrence` (the path that places it, `O1/O4` or names) | the material's fields and `source`: `body`, `component` (with `component`, whose default it is) or `default`; `appearance_set_by_hand` |
 | `material_conflicts` | `bodies`, `material` (null: their components' default) | `bodies`: `{uid, name, appearance}` of those whose appearance was set by hand and would change |
 
 The design file keeps the design's materials as `"materials": [{"id",
-"name", "density", "appearance", "filament", "based_on", "version",
-"origin"}]` (fields left out when not set) and the components' defaults
+"name", "density", "appearance", "appearances", "filament", "slicer",
+"variants", "based_on", "class", "version", "origin"}]` (fields left out
+when not set) and the components' defaults
 as `"component_materials": [{"component", "material"}]`, both left out
 when there are none (files without them have none); a body's
 `"material"` may name either. Copies of components into another design
@@ -14754,7 +15204,10 @@ the nearest wins (project, user, base); the others are listed as
 shadowed. The design keeps complete copies of the items it uses, with
 their `origin` (`{"library", "id", "version"}`, and `declined`: a library version the design kept its own values over; an import's `3mf` and the
 file's name), so that a library change never changes the design by
-itself; a material's appearance comes with it as a design appearance.
+itself; a material's appearances (its default and the others of its
+list, mitcad#1067, [A filament's colour is its
+appearance](#a-filaments-colour-is-its-appearance)) come with it as design
+appearances.
 
 | Command | Fields | Result |
 |---|---|---|
@@ -14842,7 +15295,17 @@ built-in (read-only) or the user's own, saved in a library or not yet.
 
 | Query | Fields | Result |
 |---|---|---|
-| `library_items` | `kind` (`material`, `printer` or `process`), `project` | `items`, each row: `kind`, `id` (where it lives: the library's id, else the design's), `name`, `place` (`mitcad`, `user`, `project`, `design`), `library` (`base`, `user`, `project`; null for a built-in material and the design's own: give its id alone), `read_only` (the `mitcad` place), `in_design` (the design's copy's id, null when it has none; a built-in material's own id), `changed` (the library item was changed elsewhere: see above), `chosen` (a profile the design, the root, chose), `item` (its fields: the design copy's when it has one, else the library's; a profile's without `raw`); a material also `class` (`metal`, `plastic`, `other`: the material's own; without one, in a design or library file from before classes, a built-in metal or a material based on one is `metal`, one with filament settings or based on a built-in plastic `plastic`, else `other`) and `group`, its class's (`metals`, `plastics` with the filaments, `other`; print settings never move an item), `display_color`, `bodies` and `components` (that use the design's copy); a profile also `chosen_by` (the owners that chose the design's copy), the design's chosen one `overrides` (mitcad#655: the owners below the root that set values of its set, `{owner, name, keys, values}`); for `printer` and `process` also `print_overrides`, the same owners whatever the design chose (mitcad#747: also with Slicer default, when no row is chosen; the export writes their values all the same); `problems` (library files that could not be read) |
+| `library_items` | `kind` (`material`, `printer` or `process`), `project` | `items`, each row: `kind`, `id` (where it lives: the library's id, else the design's), `name`, `place` (`mitcad`, `user`, `project`, `design`), `library` (`base`, `user`, `project`; null for a built-in material and the design's own: give its id alone), `read_only` (the `mitcad` place), `in_design` (the design's copy's id, null when it has none; a built-in material's own id), `changed` (the library item was changed elsewhere: see above), `chosen` (a profile the design, the root, chose), `item` (its fields: the design copy's when it has one, else the library's; a profile's without `raw`); a material also `class` (`metal`, `plastic`, `fdm_plastic`, `resin`, `other`, mitcad#1102: `fdm_plastic` for a material with print settings, `filament` values, `slicer` keys or `variants`, whatever it stores; else the material's own; without one, in a design or library file from before classes, a built-in metal or resin or a material based on one is `metal` or `resin`, one based on a built-in plastic `plastic`, else `other`), `class_fixed` (true when print settings make it an FDM plastic: the Class cannot change) and `group`, its class's (`metals`, `plastics` (General Plastic), `fdm_plastics` with the filaments, `resins`, `other`), `display_color`, `bodies` and `components` (that use the design's copy); a profile also `chosen_by` (the owners that chose the design's copy), the design's chosen one `overrides` (mitcad#655: the owners below the root that set values of its set, `{owner, name, keys, values}`); for `printer` and `process` also `print_overrides`, the same owners whatever the design chose (mitcad#747: also with Slicer default, when no row is chosen; the export writes their values all the same); `problems` (library files that could not be read) |
+
+**The parts of a profile's name** (mitcad#1108: the 3D Print panel's
+Printer and Process picker). A printer row of `library_items` also gives
+`bare_name`, its name without the nozzle it ends with (`Acme X1 0.4
+nozzle` and `Acme X1 (0.4 nozzle)` are `Acme X1`), and `name_nozzle`, the
+diameter that nozzle says (null without one; `nozzle` stays the
+profile's `nozzle_diameter`); a process row `bare_name`, its name before
+its `@` (`0.20mm Standard @Acme X1C` is `0.20mm Standard`), and
+`for_printer`, what follows the `@` (null without one). Names without
+those parts give themselves as `bare_name`.
 
 **Import.** `import_print_profile` reads a slicer's settings, never its
 geometry:
@@ -14864,7 +15327,23 @@ Each gives a printer and a process profile (named after the presets) and
 a material per filament: named after its preset, its density the
 filament's (else the built-in of its type's), a plastic appearance in the
 filament's colour, `based_on` the built-in of its type, the rest its
-filament values. Keys the map has become MitCad's values; other keys are
+filament values. Every filament gets an appearance (mitcad#1053): its
+`filament_colour`, else the Bambu family's `default_filament_colour` (a
+preset of that family keeps no `filament_colour`: the slicer takes it
+from the project), else, when no colour is found anywhere, a neutral
+light grey plastic (`#BFBFBF`) named for the material (`<name> color`).
+The material's colour is its appearance's from then on: the material
+keeps no `filament_colour` of its own, and the export writes the
+appearance's colour. A Bambu-family preset file that `inherits` from
+another is read with every value of the chain filled in, as an installed
+slicer's presets are (below): from the slicer data folder the file lies
+in, else from the installed slicers' system presets (those of the
+dialect first); when none has its base, the values it inherits are
+reported as left out. The report's `log` has a line per filament,
+`Slicer import: <preset> inherits <chain>, colour <#RRGGBB|none>` (the
+chain the nearest first, `A > B`, a base not found as `C (missing)`,
+`nothing` when it inherits nothing); the application writes them to its
+log. Keys the map has become MitCad's values; other keys are
 kept per slicer as text in the layer their name tells; a Bambu-family
 project's printer block is also kept whole (`raw`) with the preset it
 inherits from and the project's filament presets in its order.
@@ -14873,7 +15352,7 @@ bodies: the report counts them as left out.
 
 | Command | Fields | Result |
 |---|---|---|
-| `import_print_profile` | `path`, `dialect`, `into` (`design` the default, `user`, `project`), `project`, `choose` (into the design: the root chooses the printer and process read; true by default) | into the design (one undo step `Import Print Settings plate.3mf`): `printers`, `processes`, `materials` (`id`, `name`), `chosen`; into a library: `items` (`kind`, `id`, `name`, `version`, `path`); both `dialect` and `report`: `mapped`, `mapped_keys`, `kept`, `kept_keys`, `left_out`, `problems` |
+| `import_print_profile` | `path`, `dialect`, `into` (`design` the default, `user`, `project`), `project`, `choose` (into the design: the root chooses the printer and process read; true by default) | into the design (one undo step `Import Print Settings plate.3mf`): `printers`, `processes`, `materials` (`id`, `name`), `chosen`; into a library: `items` (`kind`, `id`, `name`, `version`, `path`); both `dialect` and `report`: `mapped`, `mapped_keys`, `kept`, `kept_keys`, `left_out`, `problems`, `log` |
 
 **An installed slicer's presets** (mitcad#830,
 `print_files/installed.rs`, `document/slicer_presets.rs`). The user
@@ -14900,11 +15379,13 @@ config. A preset's `inherits` is filled in from
 the user's own presets of its account and the slicer's `system/` presets
 (those of its vendor folder first), up the chain, the nearer value
 winning; a base that is missing stays
-named and the report says so (as for a preset file). A ticked preset
+named and the report says so (as for a preset file). Every key comes
+through the chain, the filament's colour and temperatures as much as
+the rest (mitcad#1053). A ticked preset
 whose kind and name the target has (`same`) either overrides that item
 (`same_name: override`: into a library its next version, as
 `edit_print_profile` / `edit_material` with `library`; into the design
-the design's item of that name) or comes in as a copy under the next
+the design's item of that name; a filament's appearance with it) or comes in as a copy under the next
 free name (`copy`, the default: `Fine 2`, `Fine 3`, ...); two of one name
 in one import make the second a copy. New items get ids no library has
 for their kind, version 1. Into the design the whole import is one undo
@@ -14921,16 +15402,50 @@ nothing.
 
 **Export.** `export` of a 3MF with `dialect` (`bambu_studio`,
 `orcaslicer`, `qidi_studio`, `prusaslicer`, `cura`; [3MF](#3mf)) writes
-each body's effective settings (`print_settings` of its first shown
-placement): the printer and process values every body shares as the
-project's, the others per part, a filament slot per distinct material in
-the order of first use (more materials than the printer's filament slots
-is a warning). The result adds `dialect`, `filaments` (each body's slot
-from 1) and `warnings` (values a slicer does not take). A value out of
+each body's effective settings (`print_settings` of its placements
+written, a part per group that prints alike: below): the printer and
+process values every part shares as the project's, the others per part,
+a filament slot per distinct material in the order of first use (more
+materials than the printer's filament slots is a warning). The result
+adds `dialect`, `filaments` (each part's slot from 1) and `warnings` (values a slicer does not take). A value out of
 the range a dialect takes (Bambu Studio's -1 for "automatic" in
 `raft_first_layer_expansion`, `tree_support_wall_count`, which OrcaSlicer
 refuses; the key map's `range` of the dialect key) is left out of that
 dialect's file, and the slicer keeps its default, with a warning.
+
+**Filament values some materials set** (mitcad#1052). A slicer reads
+every filament's value of a key from one list, an entry per filament: a
+key no material of the written slots sets stays the slicer's, but one
+that some set is written for every slot, so that each value reaches its
+own filament (a PETG HF part's nozzle temperature beside a part of the
+default material). A slot whose material does not set it takes the value
+of MitCad's generic filament of its type (PLA, PETG, ABS, ASA, TPU, PA:
+the base library's diameter, nozzle and bed temperatures and the first
+layer's, and fan speed; a slot without a type is written as PLA), else
+the first slot's that sets it, with a warning per slot (`Steel (filament
+2) sets no nozzle temperature, bed temperature: written as generic
+PLA's`). The type, the colour, a preset's name and a filament's override
+of the printer's extruder settings (`nil`) keep their own rules. The
+result's `printed` gives each written part's `body`, `name` (the
+part's), `material` (its id) and `own_values` (its material's filament
+values the slicer has keys for and the printer and process values it
+does not share with the other parts).
+
+**A part per settings group** (mitcad#1061). A body's settings are
+those of each placement written (of the `occurrences` picked, when some
+are). A body whose placements all print alike (the same material,
+values and slicers' own keys, wherever each comes from) is one part,
+named after the body. One whose placements print otherwise (a material
+or a value of an occurrence or of a component up their path) is one
+part per group of placements that print alike, in the order of each
+group's first placement: each part has its group's placements, its
+filament slot (by its material, as any part's) and its own values, and
+is named after the body and the group's occurrences, the first three
+named (`Body2 (Box:2)`, `Body2 (Box:1, Box:3)`, `Body2 (Box:1, Box:3,
+Box:4 and 2 more)`). The parts share the body's mesh; `bodies` and
+`meshes` still list the body once, `filaments` and `printed` each part.
+On the print bed, the pieces and the build's objects take each
+placement in its part, as they are put on the bed.
 
 - **The Bambu Studio family**: `Metadata/project_settings.config` (JSON;
   lists per filament, each with exactly one entry per written filament
@@ -14957,7 +15472,11 @@ dialect's file, and the slicer keeps its default, with a warning.
   extruders; lists as PrusaSlicer writes them: strings `;`-separated and
   quoted only where an entry needs it, numbers, yes/no and choices
   `,`-separated and unquoted, `uniform_cooling,uniform_cooling`, since
-  PrusaSlicer refuses a quoted choice) and
+  PrusaSlicer refuses a quoted choice; `inherits_cummulative` (PrusaSlicer's
+  spelling) names the presets the process, each filament and the printer
+  inherit from: the process's and printer's PrusaSlicer preset names the
+  profiles keep and each material's PrusaSlicer filament preset, empty
+  where there is none, left out when all are) and
   `Metadata/Slic3r_PE_model.config` (PrusaSlicer makes each
   mesh object an object of its own: each its extruder, its own values and
   its one volume), and `slic3rpe:Version3mf` 1.
@@ -15008,7 +15527,7 @@ occurrence (`world`):
   it (`body F4.b0 is in a component placed 2 times: O1/O2
   (Assembly:1/Block:1), O3/O2 (Assembly:2/Block:1); give one as
   occurrence`), and an occurrence that does not place it as well
-  (`occurrence 'O1' does not place body F4.b0; body F4.b0 is placed at
+  (`occurrence O1 does not place body F4.b0; body F4.b0 is placed at
   O1/O2 (Assembly:1/Block:1), …`). Text selections
   (`"Body1/…"`, `"F5"`) take the only placement the same way. The root's bodies
   and datums are measured as before, without a copy.
@@ -15063,8 +15582,8 @@ first, and every refusal names the values that would be taken
   component is placed only once. The answer gives the path resolved, by
   ids: `a.occurrence` and `b.occurrence` (`"O1/O4"`) for each selection
   that gave one. A name that matches nothing where the path has got to is
-  refused with the occurrences there (`invalid occurrence path '…':
-  there is no occurrence 'Block:9' in Assembly; its occurrences are
+  refused with the occurrences there (`invalid occurrence path “…”:
+  there is no occurrence Block:9 in Assembly; its occurrences are
   O1/O2 (Assembly:1/Block:1), O1/O3 (Assembly:1/Block:2)`), and one that
   matches several likewise (`'Block' in Assembly is any of …`).
 - **Errors name the placements.** A body or construction feature of a
@@ -15086,7 +15605,7 @@ first, and every refusal names the values that would be taken
   origin datums by id or name in any case: `"xy"`, `"XY"`, `"xz"`,
   `"yz"`, `"x"`, `"y"`, `"z"`, `"origin"`; with `occurrence` it is that
   occurrence's own origin datum. Anything else that is no construction
-  feature is refused as `invalid datum 'top': a construction feature
+  feature is refused as `invalid datum top: a construction feature
   ("F5") or an origin datum ("xy", "xz", "yz", "x", "y", "z", "origin")`.
   The `datum` query takes them the same way.
 - **The entity form.** A selection can be an entity as `ui_state` lists
@@ -15642,7 +16161,7 @@ dimension (`kind` one of the measurement kinds) or a leader note (`kind`
 
 | Command | Fields | Result |
 |---|---|---|
-| `add_annotation` | `a`, `b`, `kind` (as `add_measurement` chooses it when left out; `note` when a `text` is given), `name`, `color`, `group`, `visible`, the fields above, and `view` | `name`, `kind`; undo step `Add Distance1` |
+| `add_annotation` | `a`, `b`, `kind` (as `add_measurement` chooses it when left out; `note` when a `text` is given), `name`, `color`, `group`, `visible`, the fields above, `view`, and `preview` | `name`, `kind`; undo step `Add Distance1`; with `preview`, the annotation it would add (below), nothing stored |
 | `edit_annotation` | `name`, or `names` of several; any of `new_name`, `kind`, `color`, `group`, `visible`, `a`, `b`, `plane`, `line_offset`, `text_offset`, `format` (only the format's fields given change), `tolerance`, `text`, `at`; `null` sets a field back to its default | `changed`; one undo step `Edit Distance1` / `Edit 3 annotations`, none when nothing changes |
 | `delete_annotation` | `name`, or `names` of several | one undo step `Delete Distance1` / `Delete 3 annotations` |
 
@@ -15663,6 +16182,18 @@ dimension (`kind` one of the measurement kinds) or a leader note (`kind`
   `plane` and `line_offset`. The other places are left to the defaults,
   in text heights, which follow the design's text height (mitcad#902: none
   in the view's pixels frozen when an annotation is added).
+- **A preview** (mitcad#1097). `add_annotation` with `"preview": true`
+  checks and places the annotation as it would be added (the same
+  checks, the same refusals, the same view's suggestion) and returns it
+  as the `annotations` query will list it once added — its `name` (the
+  next free one), `kind`, `label`, `drawing` laid out after the
+  annotations there, its texts' height with it among them — with
+  `"preview": true`, without storing anything: the document and the
+  undo stack stay as they were (one that would be broken at once is
+  refused with why). The Make tab's Annotate panels draw it,
+  dimmed, before Add, so the preview and the annotation added come from
+  the same code (`core/model-tests/analysis/src/annotation_tests.rs`,
+  `a_preview_is_what_add_annotation_adds_and_changes_nothing`).
 - **Checked.** A note points at one pick, which gives it a point (a body
   picked without `at` gives none), and needs a text; it has no format or
   tolerance, a dimension no `text`; a note stays a note and a dimension a
@@ -15794,7 +16325,7 @@ and a note keep their kind (`a frame stays a frame, a dimension a
 dimension`); a letter in use is refused (`datum A exists`). Files keep
 them as `annotations`; a file with one letter on two labels is refused
 on load as an edit would refuse it (`annotations[1]: datum A is
-lettered on 'DatumA' and on 'DatumB'`, mitcad#713). A frame under a
+lettered on DatumA and on DatumB`, mitcad#713). A frame under a
 dimension whose pick is a vertex, a datum point or a whole body goes
 onto a leader with another pick in the same edit (`"on": null, "a": …,
 "at": …`): the check takes the new pick.
@@ -15883,10 +16414,10 @@ a bound or a step is not limited. When a limit clamps the value, `limited`
 is `min` or `max` even if the step also moved it.
 
 A **strict** parameter refuses a result outside [min, max] or off its steps
-instead, as it refuses a wrong unit: `parameter 'count': 12 is above the
+instead, as it refuses a wrong unit: `parameter count: 12 is above the
 maximum 10`, `… 0 is below the minimum 1`, `… 2.5 is not on a step of 1`.
 Limits that are wrong are refused for every parameter: a limit that does
-not parse or evaluate, or of another kind (`parameter 'b': minimum: …`), a
+not parse or evaluate, or of another kind (`parameter b: minimum: …`), a
 minimum above the maximum (`the minimum 20 mm is above the maximum 10
 mm`), a step that is not positive.
 
@@ -16232,8 +16763,10 @@ mm³, which the 3MF export writes for the slicers that keep one.
   apply to it. Resetting it gives the computed volume again.
 - **The slots** are those the 3MF export makes: the bodies in their order
   (sheet and empty bodies are not printed), a slot per distinct material
-  in the order of first use, each body's material and settings in the
-  occurrence that shows it first.
+  in the order of first use, each body's material and settings in each
+  placement written (the shown ones, all when none is shown): a body
+  whose placements print otherwise is in the slot of each of their
+  materials (mitcad#1061).
 - **Export** (`export` with a `dialect`): the Bambu family (Bambu Studio,
   OrcaSlicer, QIDI Studio) gets `flush_volumes_matrix` (the table divided
   by the multiplier, which the slicer applies; one table per extruder, as
@@ -16356,6 +16889,24 @@ lower left corner.
 The commands change no geometry and recompute nothing; nothing changed is
 no undo step.
 
+**The views' projections in answers** (mitcad#1033). A drawing command
+(above, and the annotation, revision and template commands) and the
+`drawing` query answer with `projections` when their work asked for any
+view's projection: one entry per view, `{"view": 1, "bodies": 1, "ms":
+2252.7, "cached": false, "polygonal": false}`: how many bodies the view
+shows (a view of the
+design: its shown bodies only, hidden ones are never projected),
+whether the kernel projected them (`cached` false, its milliseconds) or
+the projection came from the document's projection cache (`cached` true,
+the lookup's milliseconds), and whether the projection was made from a
+triangulation (`polygonal`: the quick path, `exact` above, or the
+`polygonal` style) instead of the exact edges. A move projects nothing: the cache's key is
+the bodies' shape versions and placements and the view's direction and
+style, never its place on the sheet. The application writes one line of
+each to its log (`Drawing projection of view 1: 1 bodies, 2252.7 ms,
+projected exactly`, `…, projected from a triangulation`, or `…, from the
+cache`).
+
 **Sheets.** `size`: `A4` (default) … `A0`, `ANSI_A` … `ANSI_E`;
 `orientation`: `landscape` (default) or `portrait`; `projection`:
 `third_angle` (default) or `first_angle`; `title_block`: `title` (the
@@ -16386,8 +16937,9 @@ and a section view take their parent's when left out), `style`
 than a base view takes its parent's when left out; an isometric view and
 a section show no hidden edges; `shaded` fills the faces in grey under
 the lines from the kernel's triangles; `polygonal` projects a
-triangulation, as every view of bodies with free-form faces is projected
-anyway, `export_drawing`'s `exact` above, mitcad#962) and `label` (written under the
+triangulation, as every view of bodies with free-form faces or many
+B-spline edges is projected anyway, `export_drawing`'s `exact` above,
+mitcad#962, mitcad#1033) and `label` (written under the
 view; a section's `SECTION A-A` and a detail's `DETAIL B (2:1)` when left
 out). A base view's `subject`: `{"type": "design"}` (default: every shown
 body of the drawing's component and its occurrences),
@@ -16455,7 +17007,9 @@ with `geometry` its `groups` as the export writes them (`class`, `id`,
 "start", "end"}, "pen"}`, `{"polyline": points, "closed", "pen"}`,
 `{"fill": points}`, `{"shade": points, "grey"}`, `{"text", "at",
 "height", "angle", "anchor"}`; pens `thick`, `thin`, `hidden`, `hatch`,
-`chain`, `frame`). Groups: `view` (`id` `view-front`, … by its direction,
+`chain`, `frame`) and `pens`, the writers' widths and dashes of those pens
+in sheet millimetres (`{"thick": {"width": 0.35, "dashes": []}, …}`,
+mitcad#1112: the application draws the sheet with them). Groups: `view` (`id` `view-front`, … by its direction,
 `view-section`, `view-detail`, else `view-V<id>`), `view-label`,
 `section-line`, `detail-circle`, the automatic annotations' groups,
 `frame`, `title-block`.
@@ -16874,14 +17428,14 @@ design whenever the sheet is drawn, so the block follows the design:
 
 | Name | Value |
 |---|---|
-| `title` | the sheet's title (`title_block.title`), else the component's or the design's name (the `drawing` query's `title`) |
+| `title` | the sheet's title (`title_block.title`), else the component's property `Title` (the root's is the design's summary, `Summary/Title`, mitcad#1088), else the component's or the design's name (the `drawing` query's `title`) |
 | `name` | the component's or the design's name |
 | `drawing` | the drawing's name |
 | `number` | the sheet's drawing number, else the component's part number |
-| `part_number`, `description` | the component's properties `Part number`, `Description` |
+| `part_number`, `description` | the component's properties `Part number`, `Description`; a description without one is `Summary/Comments`, the component's, else the design's (mitcad#1088) |
 | `material` | the component's property `Material`, else the materials of the bodies it shows, each once: a body without its own takes the nearest default up its path from the component, then the component's and those above it where it is first placed, then the root's (mitcad#758) |
 | `mass` | the component's property `Mass` (stored or its library's, not the one worked out; mitcad#722), else the bodies the component shows, each where it is placed: their volumes (kept by shape version) times their materials' densities, in the design's mass unit |
-| `author` | the sheet's (`title_block.author`), else the property `Author` |
+| `author` | the sheet's (`title_block.author`), else the property `Author`, else the design's summary's `Summary/Author` (mitcad#1088) |
 | `date` | the sheet's, else today's |
 | `scale` | the sheet's first base view's |
 | `sheet`, `sheet_number`, `sheets` | `1/2`, `1`, `2` |
@@ -17193,10 +17747,12 @@ body. A body has one; setting another replaces it.
     `occurrences` picks them puts each on its face instead, [Export by
     occurrences](#export-by-occurrences); a face named in `bed_face`
     turns them onto it, [Print bed face chosen](#print-bed-face-chosen));
-    with none, as the design has them;
+    with none, the automatic orientation's face, else as the design has
+    them ([Centered, dropped and oriented on the
+    bed](#centered-dropped-and-oriented-on-the-bed));
   - a bed face that is gone or not planar is reported, and its body is
-    written as the design has it (−Z down) unless another body's face
-    turns the piece;
+    written as the design has it (−Z down), or by the automatic
+    orientation, unless another body's face turns the piece;
   - the bed faces of bodies that are not printed (surface bodies, which
     3MF leaves out) count for nothing.
 
@@ -17315,7 +17871,9 @@ and the export turns the piece onto the face named. `export` with
 - `plan`: true gives only how the bodies would lie, before anything is
   written: the result's `bed` as the export would give it (a 3MF piece's
   `transform` is its turn alone, without the move onto the bed), and no
-  file is written or meshed. Without `on_bed` it is refused.
+  file is written or meshed (only the automatic orientation meshes the
+  faces of a piece without a usable bed face, coarsely, mitcad#1109).
+  Without `on_bed` it is refused.
 
 The result's `bed`, and each of its `objects`, has `choices`: the faces a
 piece kept as assembled for several bed faces could lie on, one per
@@ -17339,6 +17897,84 @@ differently three, one face none; either face chosen puts the piece on
 it at z = 0 with the bodies together, whole or not; the refusals),
 `tools/ui-print-test.sh` (3D Print asks, a click sends on that face, Esc
 as assembled).
+
+## Centered, dropped and oriented on the bed
+
+Send to Slicer puts every piece on the plate (mitcad#1109): a body
+without a print bed face is no longer written where the design has it,
+off the plate. `export` with `on_bed` (3MF, STL and OBJ) takes, each
+`true` when left out and refused without `on_bed`:
+
+- `center`: the middle of each piece's box over the plate's center (the
+  design's printer's `bed_shape`, else (128, 128)); false keeps its X and
+  Y.
+- `drop`: each piece's lowest point onto the bed (z = 0); false keeps its
+  Z.
+- `auto_orient`: a piece without a usable print bed face (none, or only
+  faces that are gone or not planar, which are still reported) is turned
+  onto the face the automatic orientation finds; false leaves it as the
+  design has it (−Z down). A body's own print bed face, one chosen in
+  `bed_face`, and the several faces of a piece kept as assembled
+  ([Print bed face chosen](#print-bed-face-chosen)) always come first:
+  the automatic face is computed again on every export and never stored.
+
+`center` and `drop` apply after the turn to every piece: turned onto a
+face, oriented automatically, kept as assembled or as designed; the
+bodies of a piece keep their places to each other. The 3MF objects of
+[Export by occurrences](#export-by-occurrences) are set side by side
+along X only while `center` is on. A piece neither turned nor moved has
+no `transform`; with `plan` the transform is the turn alone (null for a
+piece not turned).
+
+**The automatic orientation** (`core/model/src/exchange/orient.rs`)
+looks at the piece as a whole, its printed bodies' faces where its
+placements put them (the kernel's `face_meshes` at the `low`
+refinement):
+
+- candidates are the named planar faces whose plane supports the piece's
+  convex hull: every vertex lies on the plane or on its inner side, so
+  the piece lies on it without going below; coplanar faces are one
+  candidate, named by the largest; curved faces and a mesh body's
+  triangles are none;
+- each candidate is scored (smaller is better, each term without a unit):
+  the overhang area after the turn (triangles facing down within 45° of
+  straight down, those on the bed left out) over the whole area, weight
+  1; minus the contact area with the bed over the whole area, weight
+  0.5; plus the height after the turn over the box's diagonal, weight
+  0.1;
+- scores within 1e-9 are alike: the face whose normal is nearest to −Z
+  in the design wins (a piece already lying well keeps its orientation),
+  then the face listed first;
+- no candidate: the piece stays as the design has it.
+
+The result's `bed` (and each of its `objects`) adds `auto` (true when
+the face is the automatic orientation's, not a print bed face; such a
+face does not count in `on_faces`) and `occurrence` and
+`occurrence_name` (the placement whose face lies on the bed, as in
+`choices`; null without a face), and `bed` adds `center` and `drop` as
+used. A problem's warning then drops `printed as in the design`.
+
+```json
+{"cmd": "export", "path": "print.3mf", "bodies": ["F2.b0"], "on_bed": true}
+→ {"bed": {"body": "F2.b0", "name": "Body1", "face": "F2:start(…)", "auto": true,
+           "occurrence": "", "occurrence_name": "", "center": true, "drop": true,
+           "transform": [[1, 0, 0, 98], [0, 1, 0, 108], [0, 0, 1, 0]], "plate": [128, 128], …}, …}
+{"cmd": "export", "path": "print.stl", "bodies": ["F2.b0"], "on_bed": true,
+ "center": false, "drop": false, "auto_orient": false}
+```
+
+Tests: `api::print_bed_tests` (a body without a bed face far from the
+origin written at z = 0 centered on the plate, as designed with both
+off, dropped only with `center` off, in an STL file too; a standing
+block laid on its largest face, the plan the same, standing without
+`auto_orient`; a body's own face over the automatic one; a gone or
+non-planar face oriented automatically; a piece kept as assembled
+centered and dropped), `api::print_orient_tests` (a lying tube with a
+square flange on the flange, not on a narrow side nor its end; a block
+on its largest face; a cube on its bottom; no planar face, no
+orientation), `tools/ui-print-bed-test.sh` and
+`tools/ui-windows-print-bed-test.ps1` (Send to Slicer's Bed Face filled,
+a face picked stored, its highlight).
 
 ## Copy and paste of sketch geometry
 
@@ -17642,15 +18278,15 @@ in a design without configurations. Code:
   was, with a warning.
 - **Parameters.** Renames rewrite the expressions (in the rename's undo
   step). A parameter that a binding uses cannot be deleted: `parameter
-  'Color' is used by the appearance of Body1`. A feature's own parameter
+  Color is used by the appearance of Body1`. A feature's own parameter
   that a binding uses stays as a user parameter when the feature is
   deleted.
 - **Queries.**
   - `bodies`: `appearance_expr`, `material_expr`, `visible_when` and
     `face_appearance_exprs` (`{face name: expression}`) when bound, with
     `dependencies` (the parameters the body's bindings use) and
-    `warnings` (one line each, `appearance: there is no appearance 'Gloss
-    Purple'; the body has the default look`).
+    `warnings` (one line each, `appearance: there is no appearance Gloss
+    Purple; the body has the default look`).
   - `timeline` and `feature`: `suppressed_when`, `dependencies` and,
     when the condition cannot be evaluated, `binding_warning`.
   - `components`: each occurrence of the tree has `visible_when`,
@@ -18488,6 +19124,8 @@ SOLID > MODIFY ([app/COMMANDS.md](../../../app/COMMANDS.md#notes-on-particular-c
  "turned": true, "clearance": 0.1, "corners": "rounded", "tool_diameter": 6}
 {"type": "mortise_tenon", "body": "F4.b0", "face": "F4:side1", "mortise_body": "F5.b0",
  "width": 40, "thickness": 8, "through": true}
+{"type": "mortise_tenon", "body": "F7.b0", "face": "F7:side1", "mortise_body": "F8.b0",
+ "width": 10, "thickness": 8, "length": 25, "count": 3, "start_offset": 5, "end_offset": 5}
 ```
 
 - **The tenon** is a rectangle `width` x `thickness` on `face` (planar)
@@ -18522,11 +19160,32 @@ bodies keep their ids and names; the input shapes are not modified, and
 an edit of any value builds both again. The feature's tool (for
 previews) is the mortise.
 
+**Several tenons** (mitcad#1063): `count` (unitless, a whole number from
+1 to 100; default 1) tenons, each with its mortise, in the one feature.
+They are spaced evenly along the face's long direction (its longest
+straight edge as above, pointing along its largest component's positive
+direction, whether or not `turned`): the first tenon's side lies
+`start_offset` from the face's end where that direction starts, the
+last one's `end_offset` from the other end (both default 0, not
+negative), with the same gap between each two. Width, thickness, length
+(or `through`), clearance and corners apply to every tenon; the offset
+along the long direction (`offset_width`, or `offset_thickness` when
+`turned`) is not used then, the other one moves them all. At a count of
+1 the start and end offsets are not used, and a definition without
+`count` (every design saved before it) is the single tenon as before.
+Through tenons each run to where the mortise body ends along their own
+middle; tenons one after another of one length are extruded together
+(one extrusion of their regions), and the extrusions of several lengths
+make one compound tool. The feature's tool is the mortises.
+
 Face names: the tenon's sides `side(c1)` … `side(c4)` counter-clockwise
 from the side along the width at -thickness / 2 (rounded: the lines
 `c1`, `c3`, `c5`, `c7` and the rounds `c2`, `c4`, `c6`, `c8`), its tip
 `end(…)`; the mortise's walls `side(c11)` … `side(c14)` (`c11` … `c18`)
-in the same order and its bottom `end(…)`.
+in the same order and its bottom `end(…)`. Of several tenons, tenon `k`
+(from 0, the first at the start) has the same names with the curve
+numbers raised by `20 k`: the second tenon `side(c21)` …, its mortise
+`side(c31)` ….
 
 Refused when the feature is added: the same body for both, a size not
 above 0, a negative clearance, a blind tenon without `length`, rounded
@@ -18534,17 +19193,720 @@ corners without `tool_diameter` or with a tool not narrower than the
 mortise (`the tool diameter (9 mm) must be smaller than the mortise's
 thickness (8.2 mm)`). Refused when it is built, with the reason in the
 timeline: an end face that is not planar, a tenon larger than the end
-face (`the tenon (70 x 8 mm) is larger than the end face (60 x 20 mm)`),
+face (`the tenon (70 × 8 mm) is larger than the end face (60 × 20 mm)`),
 one an offset takes past the face's edge (`… (shoulders 25, -5, 6, 6
 mm)`), and a tenon that does not reach the mortise body (`the tenon does
 not reach body F12.b0`: the blind mortise cuts nothing of it, or nothing
 of a through tenon's mortise body lies ahead of the tenon's middle).
+Of several tenons: a count that is not a whole number from 1 to 100 or
+a negative start or end offset when the feature is added (`the count of
+tenons must be a whole number from 1 to 100, got 2.5: use floor(…) or
+round(…) for a whole number`, `the start offset must not be negative,
+got -1`); when it is built, offsets that leave less than a tenon (`the
+start and end offsets (30 and 25 mm) leave less than a tenon's 10 mm of
+the end face (60 mm)`), tenons that overlap or touch (`the 3 tenons
+overlap: 20 mm along the face each, their middles 15 mm apart`) and
+mortises that would (`the mortises of the 3 tenons overlap: 20.1 mm
+along the face each with the clearance, their middles 20.05 mm apart`).
 
 Uses only the existing `Kernel` methods (`face_plane`, `curves_of`,
 `extrude_feature`, `boolean`, and `bounding_box` with
 `segment_crossings` for a through tenon). Tests:
 `core/model-tests/parts/src/mortise_tenon_tests.rs` (mock kernel),
 `cli.mortise_tenon` (`tools/cli/tests/mortise_tenon.json`: OCCT volumes
-of crossing boards, blind, through and rounded, edited, refusals),
+of crossing boards, blind, through and rounded, edited, three tenons,
+two through tenons of different lengths, refusals),
 `tools/ui-mortise-tenon-test.sh` and `app.ui-windows-mortise-tenon`
 (`tools/ui-windows-mortise-tenon-test.ps1`).
+
+## Constraints a drawing tool adds automatically
+
+The sketch tools add the constraints the geometry they have just drawn
+already satisfies (mitcad#1024; `app/COMMANDS.md`): an end at a
+circle's quadrant is held on the circle and level or plumb with its
+centre, a line drawn level gets `horizontal`, a line ending where it
+touches a circle gets `tangent`. They add them with
+`sketch.add_constraint` and `"auto": true`, which adds the constraint
+only when that is safe (`SketchEdit::add_constraint_if_safe`,
+`core/sketch/src/auto.rs`):
+
+- the others do not imply it, in full or in part: the redundant count
+  does not rise. Unlike a plain `sketch.add_constraint`, no older
+  constraint is removed in its favour ([A constraint that replaces one it
+  makes redundant](#a-constraint-that-replaces-one-it-makes-redundant)),
+  no Symmetry is fitted, and a `coincident` of two curve ends is refused
+  instead of joining them into one point;
+- the sketch still solves with it (no conflict);
+- the solve moves no point and changes no radius by more than 1e-9 mm
+  (`AUTO_CONSTRAINT_TOLERANCE`): the geometry stays as drawn.
+
+Otherwise the command is refused and nothing changes; the message says
+why after `auto constraint k<n>: `: `redundant`, `conflict: <the
+solver's reason>` or `moves p3 by 1.000e-2 mm` (the point or curve that
+moved most). The tools skip such a constraint without a hint and log
+the reason. Accepted, the result is that of any `sketch.add_constraint`
+(`constraints`: the new id). Order matters for a tangent: a line end
+first held on a circle (`coincident`) is then tangent there, at the
+shared point; the tools add the end holds first.
+
+Example: a circle of radius 10 about the origin and a line from
+(-20, 10) to (0, 10). `coincident` of the line's end with the circle,
+`vertical_points` of that end and the centre, and `tangent` of the
+circle and the line are added; a `horizontal` of the line is then
+refused as `redundant` (the end above the centre on the circle and the
+tangent make the line level), and so is the same tangent again. A
+`horizontal` of a line 0.01 mm off level is refused as `moves p… by
+5.000e-3 mm`, where a plain `sketch.add_constraint` would level it.
+
+Tests: `core/model-tests/sketch/src/sketch_auto_1024_tests.rs` (mock
+kernel); the application's use in `app/tests/sketch_snap.cpp`
+(`autoConstraintTests`), step 7 of `tools/ui-sketch-tools-test.sh` and
+`app.ui-windows-sketch-auto-constraints`.
+
+## New designs in other units
+
+A design's length unit is its own (`set_units`, [Timeline and
+parameters](#timeline-and-parameters)), and a new design starts in
+millimetres. The application's Preferences › General › Default units for
+new designs (mitcad#1036) makes new designs start in another unit, as
+their initial state rather than a change: no undo step, and the design
+is not modified, as a new design in millimetres is not. Three ways make
+one:
+
+- `Document::new_design_in(kernel, length)`: as `Document::new_design`
+  (the root and an active `Component1`, [Design policy](#design-policy)),
+  with `length` as the document's length unit; bare numbers in its
+  expressions are read in it (`1` is 25.4 mm in inches). The bridge's
+  `new_design_document_in(unit)` takes the unit's name and refuses a name
+  that is not a length unit.
+- A project's `new_design` with `units` ([Folders and designs](#folders-and-designs)):
+  the file `mitcad_model::file::empty_design_in(length)` writes, the same
+  as `Document::new_design_in(..).to_json()`; a name that is not a length
+  unit, a value that is not a string, or `units` with `text` is refused
+  and nothing is written; `null` is as left out.
+- `mitcad_model::file::parse_length_unit(text)` reads the unit's name as
+  `set_units` does (`mm`, `cm`, `m`, `in`, `ft`, …).
+
+The unit is saved in the file's `units` as any design's; a design opened
+or imported keeps the units of its file, and an open design is never
+changed by these.
+
+Tests: `a_new_design_can_start_in_other_units`
+(`core/model-tests/api/src/metric_defaults_tests.rs`, mock kernel),
+`a_new_design_takes_the_units_given` (`core/vcs/src/tests/folders.rs`);
+the application's in `tools/ui-units-test.sh` and
+`app.ui-windows-default-units`.
+
+## Filling a closed table
+
+A closed table with parameter columns (mitcad#999) is the classic design
+table: a row per size, a column per parameter the row sets. Its rows are
+filled whole from a table of the design or from a CSV file (mitcad#1044;
+[docs/configurations.md](../../../docs/configurations.md), "Filling a
+closed table", decision 12). The logic is
+`mitcad_model::configurations::{RowSource, RowFields, NewParameter}` and
+`Configurations::fill_rows` (`core/model-base/src/configurations/fill.rs`);
+the CSV is `document/configuration_rows_csv.rs` and `api/configuration_rows_csv.rs`.
+
+**Generated rows with columns.** `generate_configuration_rows` takes
+`columns`, other columns of the table ([Configurations and
+tables](#configurations-and-tables)):
+
+```json
+{"cmd": "generate_configuration_rows", "table": "Screws", "column": "Size",
+ "option": "Size", "columns": ["d", "k"]}
+```
+
+- Each column sets the parameter of its name in every row, from the first
+  row of the table with the row's key (a column of the option's kind and
+  dimension, or a unitless one read in the parameter's unit, as for the
+  key). A parameter that is an option of the table takes it as the
+  option's value; any other becomes a parameter column of the table
+  (`parameters`), and the table becomes closed. An empty cell takes the
+  row's value of that parameter out.
+- A parameter the design lacks is made with the column's unit (`Text` for
+  a text column, none for a unitless one), its expression the value of the
+  row the options choose now, else of the first row; `created` lists them.
+  A column whose name no parameter can have (`in`, `m`) is refused.
+- A row of the same name is updated (listed in `updated` when a value
+  changed), the others added. In a closed table, a row without a value of
+  an option takes the option's current value (its constant expression).
+- The parameters, the rows and the table are one undo step (`Generate
+  Rows from Screws`); undo takes the parameters made back too.
+
+**The rows as CSV.**
+
+| | Fields | Result |
+|---|---|---|
+| query `configuration_rows_csv` | none | `csv`: the rows as CSV, `rows`: their number |
+| query `configuration_rows_csv_preview` | `csv` | what `import_configuration_rows_csv` would do; nothing changes |
+| command `import_configuration_rows_csv` | `csv` | what it did, as the preview, and `moves` (the cascade's, as `generate_configuration_rows`'s; empty when nothing changed); one undo step `Import Configuration Rows`, none when the table is already as the file has it; nothing recomputed |
+
+The file is read as a table CSV is ([Tables as CSV](#tables-as-csv): UTF-8,
+RFC 4180 quoting, semicolons, units in the header's brackets, decimal
+commas, inferred columns, free names, at most 10 000 rows and 100
+columns).
+
+- `Name`, `Designation`, `Part Number` and `Supplier URL` (in any case,
+  with or without spaces, `_` or `-`) fill the rows' fields; an empty cell
+  clears a field. A row without a name is named by its key. A field
+  twice is refused.
+- The first other column is the **key option** (made with its column's
+  unit when the design lacks it); every other column sets the parameter of
+  its name (its free name when the file's cannot be used), as the columns
+  of a generated row do, one row per line. A row twice in the file is
+  refused (`the row M4 is in the file twice`); a file without a column of
+  values too.
+- A cell of a number column that is a formula (`d * 0.6`; the tables CSV
+  reader refuses it as a cell) is kept as the row's expression of a
+  parameter column. Any other refused cell refuses the import.
+- Rows of the same name are updated, others added, and the table's rows
+  the file does not have are kept (`kept`). The import is refused, and
+  nothing changes, with the table's first problem afterwards (`problem`).
+- **Export** writes the options' and the parameter columns' values in
+  their parameters' units (a text without quotes, a formula as its text),
+  then `Name`, then `Designation`, `Part Number` and `Supplier URL` when a
+  row has one: `size [Text],d [mm],k [mm],Name [Text]`. Export and import
+  give the same rows.
+
+The preview and the import answer:
+
+| Field | |
+|---|---|
+| `key` | the key option |
+| `columns` | in the file's order: `name` (the file's), `renamed` (the parameter's, when the file's cannot be used), `unit`, `inferred`, `role` (`key`, `option`, `parameter`, `name`, `designation`, `part_number`, `supplier_url`) |
+| `rows` | the cells as the file has them (numbers in their column's unit, texts, a formula as its text, null for an empty or refused cell) |
+| `refused` | cells, as a table CSV's: `line`, `column`, `text`, `reason` |
+| `added`, `updated`, `kept` | row names |
+| `created` | the parameters the import makes |
+| `closed` | the table is closed after the import |
+| `unchanged` | the table is already as the file has it |
+| `problem` | the table's first problem afterwards, which refuses the import (left out when none) |
+| `summary` | `3 rows from the file: added M3, M4, M5; updated M2; made the parameters size, d; kept Old; 1 cell refused` (`all up to date` when nothing changes) |
+
+```json
+{"query": "configuration_rows_csv"}
+{"query": "configuration_rows_csv_preview", "csv": "size,d [mm],k [mm]\r\nM3,3,1.86\r\n"}
+{"cmd": "import_configuration_rows_csv", "csv": "size,d [mm],k [mm]\r\nM3,3,1.86\r\n"}
+```
+
+**Add Option on a closed table with rows** is `set_configurations` with
+the option in `options` and every row's value of it (the application gives
+each row the parameter's current value, a parameter column keeps its
+rows' values): a closed table refuses an option that a row has no value of
+(`M3: no value for Color`).
+
+Tests: `core/model-base/src/configurations/fill.rs` (generated rows with
+columns, a parameter column as the option, a new option's current value
+in a closed table, a file's names, fields and formulas, refusals),
+`core/model-tests/api/src/closed_table_fill_tests.rs` (the commands: rows
+generated with columns and undone, the rows CSV's round trip, preview,
+update and refusals, an option added to a closed table with rows),
+`app/tests/configurations_data.cpp` (Add Option's candidates and rows'
+values, a pasted block), `tools/ui-configuration-rows-test.sh` and
+`app.ui-windows-configuration-rows`.
+
+## A filament's variants per printer and nozzle
+
+One filament is one material (mitcad#1054; `core/model/src/material.rs`,
+`print_files/filaments.rs`, `document/material_variants.rs`). Its settings
+for different printers and nozzles are the material's **variants**, not
+separate materials: the user picks "this filament", and the right values
+follow from the printer and nozzle in use.
+
+- **Variants.** A [material](#materials) keeps its own filament values
+  (its base) and `variants`: `[{"printer", "nozzle", "filament",
+  "slicer"}]`, each holding only the filament values (and a slicer's own
+  keys) that differ from the base. `printer` names the printer as its
+  printer profiles do: a profile's printer model (`printer_model`), else
+  its name without the nozzle ("Bench X 0.4 nozzle" is Bench X; "(0.4
+  nozzle)", "0.4mm nozzle" too); `nozzle` is the diameter in mm, left out
+  for any nozzle of the printer. One level: a variant inherits nothing
+  but the base. A variant never sets `filament_colour`: a filament whose
+  colours print differently is a material per colour, each with its
+  colour. Two variants of one printer and nozzle are refused.
+- **Resolution.** What a body prints with ([Print profiles](#print-profiles),
+  `print_settings`, the export) takes the material's values with the
+  variant its printer picks over them: the variant of the printer and its
+  nozzle (`match` `exact`), else one of the printer for any nozzle, else
+  the printer's of the nearest nozzle (`printer`), else none (the base).
+  The printer profile's names (its printer model, its name and its
+  slicers' preset names, each also without the nozzle) and its
+  `nozzle_diameter` (else the nozzle its name says) are what is matched,
+  in any case and spacing.
+- **The nozzle.** A printer profile's `nozzle_diameter` (the key map's
+  [printer key](#print-settings-key-map)) is its nozzle: read from the
+  slicers' printer presets on import and edited as any of its values.
+  `library_items` of printers gives each row's `variant_printer` and
+  `nozzle`: the printer and nozzle a material's variant names for it.
+- **Import.** `import_print_profile` and `import_slicer_presets` merge the
+  presets of one filament into one material: the same name before its
+  `@` (any case: "Shop PLA @Bench X", "Shop PLA @Bench Y 0.6 nozzle") and
+  the same colour. A preset is for the printers it is compatible with
+  (its slicer's `compatible_printers`), else for the printer its name's
+  `@` part names ("@Bench X 0.6 nozzle", "@MK4 0.6"), else for any. A
+  preset for any printer is the base and the others its variants with
+  the values that differ from it; without one the base is the values all
+  of them share and each preset's other values its variants. A preset for
+  several printers gives each a variant. Two presets for any printer, and
+  a filament of one preset, stay as they were. The merged material is
+  named as the filament; each variant keeps its preset's own
+  `filament_settings_id`, so that a slicer finds its preset. A project's
+  purge volumes follow its merged materials.
+- **The printers in use.** `import_slicer_presets`' `printers`
+  (`[{"printer", "nozzle"}]`, a nozzle null or left out for any) keeps
+  only the presets and variants of those printers and nozzles; a preset
+  for any printer always comes in. All when left out.
+- **Materials kept apart.** Designs and libraries from before have one
+  material per preset ("Shop PLA @Bench X" and "Shop PLA @Bench Y"); they
+  load unchanged, without variants. `slicer_presets`' `merge` lists the
+  target's groups of them (two or more plastics of one filament and
+  colour, one of them for a printer, that can be merged: `[{"name",
+  "items": [{"id", "name"}]}]`), `import_slicer_presets` with
+  `merge_separate` merges them first in the same undo step (`merged` in
+  its answer; `presets` may then be empty), and `merge_materials` merges
+  some by id.
+
+| Command | Fields | Result |
+|---|---|---|
+| `edit_material` | as in [Materials](#materials), and `variants` (every variant, in the place of those it has), `variant` (one: `{"printer", "nozzle", "filament"}` sets its values, a key with null removed, and makes it when the material has none of that printer and nozzle; `{"printer", "nozzle", "remove": true}` removes it), `slicer` (a slicer's own keys by slicer id, a key with null removed); also with `library` | as `edit_material` |
+| `create_material` | as in [Materials](#materials), with `variants` and `slicer` too | as `create_material` |
+| `merge_materials` | `ids` (two or more: the first takes the others), `library` (`user` or `project`: that library's items), `project` | `id` (the first's). In the design the first takes the merged values and the filament's name (unless another material shows it), the others go and the bodies and components that named them name it; one undo step `Merge Materials Shop PLA`. In a library the first item's file takes them (its next version) and the others' files go, one undo step; the design's copies of those that bodies use stay as the design's own. Refused for materials two of which are for any printer |
+| `import_slicer_presets` | as in [Print profiles](#print-profiles), and `printers`, `merge_separate` | as there, `merged` (`[{"id", "name", "from"}]`, `from` the ids merged) with `merge_separate` |
+
+| Query | Fields | Result |
+|---|---|---|
+| `print_settings` | as in [Print profiles](#print-profiles) | `filament` also gives `variant` (`{"printer", "nozzle", "label", "match"}`, `label` "Bench X, 0.4 mm nozzle", `match` `exact` or `printer`; null: the base) and `variants` (how many the material has); a value the variant gives is marked with its `variant` (its label) |
+| `body_material` | as in [Materials](#materials) | also `variant` (as `print_settings`', null: the base) for a material with variants |
+| `slicer_presets` | as in [Print profiles](#print-profiles) | a filament's preset also `filament` (its name before the `@`) and `printers` (`[{"printer", "nozzle"}]` it is for: its own `compatible_printers`, else those of the enabled preset it inherits from, else its name's); a filament of several presets has `same` for the filament's name; each slicer `printers` (those of its filament presets, in their order); `merge` |
+
+The design file and a library's item file keep a material's `variants`
+when it has any; files from before have none and read as they were.
+
+Tests: `filament_variants_tests` (`core/model-tests/print`: the
+resolution per printer and nozzle and for an unknown printer, three
+presets of one filament for two printers imported as one material with
+the shared values in its base, the same design exported with two
+printers, a library's separate materials offered and merged, the
+design's merged with its bodies following), `material::tests`,
+`print_files::filaments::tests`; the application's in
+`tools/ui-filament-variants-test.sh`, `app.ui-windows-filament-variants`
+and `app.ui-macos-filament-variants`.
+
+## Notices
+
+What the model tells the user has a level (mitcad#1040,
+`docs/ui-conventions.md` "Messages and severity"): a notice is
+`{"level": "error" | "warning" | "info", "message": …, "target": …}`
+(`mitcad_model::notice::Notice`; `target` only when it is about something:
+a feature's uid, an annotation's name or id, a sketch item). *Error*: the
+result is missing, the work stopped; *warning*: it ran, but something is
+wrong or left out; *info*: a neutral fact. Success, hints and progress are
+the application's own; states (suppressed, rolled back, inactive, hidden,
+pending, driven) are no level.
+
+- **Features.** The `timeline` and `feature` queries, and the `joints`
+  query's joints, links, constraint sets and rigid groups, give a
+  feature's `level` (null when it has nothing to say) and its `notices`
+  (when any), from one function (`feature_level`, `feature_notices`):
+  failed an error (its error), built with warnings a warning (one notice
+  per warning), built with infos information (one notice per info,
+  mitcad#1106), an import note information (the last notice). An import
+  note or infos alone no longer make the status `warning`: the feature is
+  `ok` with the `info` level. `error` carries only a failure; until mitcad#1040 it
+  also carried the warnings and the import note, joined with `; `.
+
+  ```json
+  {"uid": "F3", "name": "Fillet1", "status": "warning", "error": null,
+   "level": "warning",
+   "notices": [{"level": "warning", "message": "the fillet is built as rings about its circles", "target": "F3"}]}
+  ```
+
+- **Command and query results.** A result with `warnings` lists them in
+  `notices` as warnings too (`notice::add_notices`, in the command and
+  query dispatch and for the bridge's imports); notices a result gives
+  itself come first. The `warnings` key stays beside them **for one
+  release**, for readers of that key; new readers read `notices`.
+- **Imports.** The `import_f3d`, `import_fcstd`, `import_ifc` and
+  `import_solidcraft` results have `notices` from their items' outcomes
+  (one per outcome that is a warning or an error, with a count, the worst
+  first; `notice::outcome_notices`), then the report's warnings:
+
+  | Import | Information | Warning | Error |
+  |---|---|---|---|
+  | `.f3d` (replay) | parametric | partial, fallback, skipped | |
+  | FreeCAD | body, component, occurrence, included, parametric | partial, fallback, skipped | |
+  | IFC | parametric, stored, mesh, mixed, occurrence, component, axes, cut | partial, not imported | failed |
+  | SolidCraft | parametric, skipped (nothing to bring in) | partial, unmapped | failed |
+
+  Each outcome keeps its own word in the report's rows (`Outcome::level`
+  gives its level). The other imports' `warnings` are warnings.
+
+  The `import_ipt`, `import_iam`, `import_rvt` and `import_dwg` results
+  (and their reports) have `notices` the same way (mitcad#1051), then the
+  report's warnings:
+
+  | Import | Information | Warning | Error |
+  |---|---|---|---|
+  | `.ipt` bodies (`BodyOutcome`) | imported | a solid that is not valid | not built |
+  | `.iam` files (`FileOutcome`) | part replayed, part as its stored bodies (asked, or no history), sub-assembly placed | a part's replay that fell back to its stored bodies, a file not found (its component empty), a sub-assembly that contains itself | a part not imported |
+  | `.rvt` elements (`mitcad_import_rvt::Outcome`) | features, parts, mesh, reference body | box | not built |
+  | `.dwg` entities (`EntityOutcome`) | taken, 2D entities left out by design | a 3D entity left out, a body that is not valid | a body not built |
+
+  An `.ipt` part replayed with its history has the replay's notices (as
+  `.f3d`) with its bodies'; the watchdog's notes are warnings. An `.iam`
+  import's placements that do not agree with the displayed ones
+  and parts' bodies outside their stored range boxes are warnings with
+  their counts; an `.rvt` import's elements of the kinds built as features
+  that came in otherwise, its walls' missing openings and its links whose
+  models were not found are warnings too. The enums are in
+  `mitcad_import_base::outcomes` (`.ipt`, `.iam`, `.dwg`, built in
+  `mitcad-ffi`) and `core/import-rvt/src/outcome.rs`.
+- **Annotations.** A broken annotation is a warning: its entry in the
+  `annotations` and `drawing` queries has `level` `warning` and a
+  `notices` entry about it, its `error` the reason as before; one laid out
+  with a caveat (`warning`) likewise.
+- **Sheet metal.** The `sheet_state` query's `notices`: what invalidated
+  the sheet an error, what blocks it a warning, each about its feature.
+- **Sketches.** The `sketch` query's `notices`: a solve that did not
+  converge or conflicting constraints (its `error`) an error, redundant
+  constraints a warning (`Redundant constraints (they follow from the
+  others): k3`), unmet inactive constraints information (`Inactive
+  constraints the geometry does not meet: k5`); the sketch's warnings as
+  warnings.
+
+Tests: `core/model-base/src/notice.rs` (the type, the warnings read,
+`add_notices`, `outcome_notices`), `a_feature_s_level_is_its_worst_notice`
+(`core/model/src/document/import_notes.rs`), the importers'
+`outcomes_map_onto_the_levels` (with `core/import-base/src/outcomes.rs` and
+`core/import-rvt/src/outcome.rs` for the `.ipt`, `.iam`, `.dwg` and `.rvt`
+imports, and the `.rvt` house project's box and missing openings in
+`the_house_wall_attached_to_its_roof_names_it`), `a_solve_s_states_have_their_levels`
+(`core/model-api/src/sketch.rs`), `an_import_note_is_information_with_its_message`
+(`core/model-tests/files/src/import_notes_tests.rs`), the broken
+annotations of `core/model-tests/analysis/src/annotation_tests.rs` and
+`core/model-tests/drawing-views/src/drawing_annotation_tests.rs`.
+
+## Material and process notes
+
+mitcad#1049 (`core/model-api/src/body_notes.rs`,
+`core/model-api/src/annotations.rs`): two kinds of
+[annotation](#annotations) whose text is written from the body they point
+at, for the application's Make tab.
+
+An annotation of the `kind` `material` (a **material note**, `name`
+`Material1`, …) or `process_note` (a **process note**, `ProcessNote1`,
+…) points at a body: its `a` is a body with an optional face, edge or
+vertex (with `at` where it was clicked, as a note's). It is a leader as a
+note is (no value, format, tolerance or text of its own), stored and
+listed as the other annotations, edited and deleted by the same commands;
+no feature control frame stands under it. `add_annotation` needs its
+`kind`; a pick that is no body's (a datum) is refused (`a material note
+points at a body`, `a process note points at a body`), and so is a `text`
+(`a material has no text of its own`).
+
+Its `label` is `{"text": …, "lines": […]}`, worked out whenever the
+annotations are asked for, so that it follows the design:
+
+- A material note: the name of the material the body is made of, as
+  `body_material` gives it (its own, else its component's default along
+  the pick's `occurrence`, else the root's): `["PLA"]`.
+- A process note: `Printer: <profile>` and `Process: <profile>`, the
+  printer and process profiles the body prints with (the nearest level's
+  choice, `Slicer default` when none chose one), then each printer or
+  process value set on the body, its occurrences or its components
+  rather than taken from a profile, as `print_settings` gives it, in the
+  key map's order: `["Printer: Bench", "Process: Standard", "Walls: 5"]`.
+
+A pick whose body is gone makes it broken (`a pick is not there: …`), as
+any annotation. Its `drawing` is a note's; on a face its leader ends in a
+dot.
+
+Tests: `a_material_note_writes_the_body_s_material_and_follows_it`,
+`a_process_note_writes_the_profiles_and_the_values_set_on_the_body`,
+`a_material_or_process_note_points_at_a_body_and_breaks_when_it_goes`
+(`core/model-tests/analysis/src/body_note_tests.rs`, mock kernel),
+`a_material_or_process_note_points_at_a_body_and_has_no_text`
+(`core/model/src/document/annotations.rs`) and
+`a_process_note_lists_the_profiles_and_the_values_set_on_levels`
+(`core/model-api/src/body_notes.rs`).
+
+## Export Face as DXF
+
+mitcad#1049 (`core/model-api/src/cut_sheets.rs`): the Make tab's Export
+Face as DXF writes one body's outline for a laser, waterjet or plasma
+cutter, without a cut sheet:
+
+```json
+{"cmd": "export_face_dxf", "body": "F2.b0", "face": "F2:top",
+ "occurrence": "O1", "path": "plate.dxf"}
+```
+
+The body is seen square on to its planar face `face` from outside, in the
+occurrence that places it (`occurrence`, uids or names; wherever it is
+shown when left out), and its outline is worked out as a
+[cut sheet](#cut-sheets)'s part has it: the silhouette of the projection
+along the face's normal, outer loops on the layer `CUT_OUTER`, holes on
+`CUT_INNER`, at 1:1 in millimetres with the lower left corner of its box
+at the origin. Nothing is added to the design and nothing is an undo
+step (class file IO). The answer: `path`, `body`, `name` (the body's),
+`face`, `outer` and `inner` (the loops written), `width` and `height`
+(the outline's box, mm). A face that is not one of the body's planar
+faces, or a body that is gone, is refused with the reason
+(`F7:top is no planar face of Body1`).
+
+Test: `a_face_s_outline_is_written_at_full_size_from_the_origin`
+(`core/model-tests/drawing/src/face_dxf_tests.rs`, mock kernel).
+
+## Bodies that differ from their component
+
+mitcad#1049 (`core/model-api/src/body_notes.rs`): the Make tab marks the
+Browser rows of the bodies whose material or print settings differ from
+their component's. The query `{"query": "make_differences"}` lists them:
+
+```json
+[{"body": "F2.b0", "name": "Body1", "material": "ABS",
+  "print": ["Walls", "Process profile", "gcode_comments (PrusaSlicer)"]}]
+```
+
+- `material`: the name of the body's own material when it is not the one
+  its component gives (its component's default, else the root's, else
+  the built-in default); null when it has none of its own or the same.
+- `print`: what the body itself sets of its print settings, in its
+  property sets' order: a printer or process value by its plain name
+  (`Walls`), a profile choice as `Printer profile` or `Process profile`,
+  a slicer's own key with the slicer's name. `Print Filament` is the
+  material's and is not listed.
+
+A body with neither is left out; a design without such bodies gives
+`[]`. Test: `the_bodies_whose_material_or_print_settings_differ_are_listed`
+(`core/model-tests/analysis/src/body_note_tests.rs`).
+
+## A filament's colour is its appearance
+
+A filament gets its colour from its appearance (mitcad#1055;
+`core/model/src/material.rs`, `document/materials.rs`,
+`document/print_settings.rs`, `print_files/mod.rs`): filaments are matte,
+glossy or translucent, so the appearance is the colour, and a colour
+alone does not exist. A material offers several appearances, and a body
+has a material and one of its appearances.
+
+- **A material's appearances.** A [material](#materials) keeps its
+  default `appearance` and `appearances`: the others it offers, in their
+  order (PLA Basic: Bright Green, then Black, White, Translucent Blue).
+  The `materials` query gives each material's `appearances`: every one it
+  offers, its default first (the default alone without a list, none
+  without an appearance). `create_material` and `edit_material` take
+  `appearances`, every appearance it offers in order, in the place of its
+  list: the default stays when it is among them, else the first is the
+  default (none for an empty list); each must exist. `appearance` alone
+  makes one of the list the default (the old default staying in the
+  list), or replaces the default with another one as before; with
+  `appearances` too, it is the default and the list keeps the others.
+  `library_items` gives a material row's `appearances` too.
+- **No colour of its own.** A material keeps no `filament_colour`: the
+  export writes the colour of the appearance a body prints with, and a
+  colour the material sets is never written. One from before becomes an
+  appearance of its list: when a design file loads, when a library's item
+  or an import comes into the design, and when `create_material` or
+  `edit_material` sets it. An appearance of its list of that colour is
+  used, else a new plastic appearance of the design (`<name> color`, as an
+  import's). Set by `create_material` or `edit_material` without an
+  `appearance`, it becomes the default (the colour is what is to print;
+  the old default stays in the list); with an `appearance` in the same
+  command, and from a file, a library's item or an import, it is the
+  default only when the material has none, so that a design keeps the
+  look it showed. The key is then gone. A slicer import makes every filament's appearance itself
+  (mitcad#1053).
+- **A body's appearance.** A body has a material and one of its
+  appearances: `set_body_material` takes `appearance_id`, the appearance
+  for the body (Material ▸ PLA Basic ▸ Black), in the place of
+  `appearance` (`replace` or `keep`, refused together). Without it,
+  `replace` (and the default unless the body's appearance was set by
+  hand) keeps the body's appearance when the new material offers it, else
+  gives the material's default. An appearance is set by hand when the
+  material the body is made of does not offer it; `material_conflicts`
+  lists the bodies whose appearance was set by hand and the new material
+  does not offer.
+- **A component's appearance.** `set_component_material` takes
+  `appearance_id` too: the appearance of the component's default material
+  that its bodies without one of their own print with (left out: the
+  material's default; refused without a material). The design file keeps
+  it in the component's `component_materials` entry (`appearance`); the
+  `materials` query gives a material's `component_appearances`
+  (`{"C2": "plastic_black"}`, only the components that chose one).
+- **Outside the list.** An appearance a body gets outside the list of the
+  design's material it is made of joins that list for the design, in the
+  same undo step: `set_body_appearance` (the Appearance command; not an
+  `expression`), `set_body_material` and `set_component_material` with an
+  `appearance_id`. A built-in material cannot change in a design: its list
+  stays, and the body's appearance counts as set by hand. The model's own
+  `set_body_appearance` (imports) adds nothing.
+- **What prints.** The appearance a body prints with is its own, else
+  that of the component whose default material it is made of, else the
+  material's default; `print_settings`' `filament` gives it as
+  `appearance`, and its colour is the filament's `filament_colour`.
+  The [export](#print-profiles) makes a filament slot per material and
+  appearance in the order of first use: two bodies of one material in two
+  colours are two slots with the same values (the material's and its
+  variant's) and different colours, as the slicer's colour map and an
+  automatic material system take them. The `purge_volumes` query makes
+  the same slots (each with its `appearance`, a material in two slots
+  named `PLA Basic (Black)`); between two colours of one material the
+  volume is their colours', never one set by hand (the design's volumes
+  are by material). The warning for more filaments than the printer has
+  slots counts these slots.
+- **Deleting an appearance** takes it out of the materials' lists and the
+  components' choices too.
+
+| Command | Fields | Result |
+|---|---|---|
+| `create_material`, `edit_material` | as in [Materials](#materials), and `appearances` (every appearance it offers, in order) | as there |
+| `set_body_material` | as in [Visibility and display](#visibility-and-display), and `appearance_id` | `{}`; one undo step `Set Material of Body1` (with the material's list when it grows) |
+| `set_component_material` | as in [Materials](#materials), and `appearance_id` | `{}`; one undo step `Set Default Material of Arm` |
+| `set_body_appearance` | as in [Appearances](#appearances) | `{}`; one undo step `Set Appearance of Body1`, with the material's list when the appearance joins it |
+
+- **A library's material** (mitcad#1067; `print_library.rs`,
+  `document/print_library.rs`, `document/library_items.rs`) keeps its
+  whole list: its file carries every appearance of the list that is not
+  the library's, the default's in `appearance` as before and the others
+  in `appearances` (in the list's order; left out when there are none, so
+  a material of one appearance is written as before). `save_to_print_library`,
+  `create_material` and `edit_material` with a `library` carry them from
+  the design (or from the item duplicated). Inserting the item into a
+  design (`copy_from_print_library`, a `library` named by
+  `set_body_material` or `set_component_material`,
+  `update_from_print_library`, `create_material` based on it) brings the
+  whole list: a carried appearance the design does not have is added; one
+  the design has of the same id and look is used; one of the same id and
+  another look comes under a free id (`translucent_blue_1`) in its place of
+  the list, and counts as the same when a newer version is compared. A
+  default that is neither the library's nor carried nor the design's is
+  refused as before; another of the list that is none of these is left
+  out. `library_items` gives a library material row's
+  `carried_appearances` (`id`, `name`, `base_color`, `display_color`), so
+  that its appearances are named and coloured before the design has them.
+- **Replace Appearance** (the application's question when a material is
+  assigned, `app/COMMANDS.md`) asks only about a body whose appearance was
+  set by hand and is not one the new material offers, as `replace` keeps
+  one it offers.
+
+Designs and library files from before load unchanged: a material without
+`appearances` offers its default alone, and one with a `filament_colour`
+gets that colour as an appearance of its list; a library file without
+`appearances` carries its default appearance alone.
+
+Tests: `filament_appearance_tests` (`core/model-tests/print`: a material
+of three appearances, two bodies in two of them exported as two slots of
+the same values and the right colours read back from the 3MF; an old
+design's `filament_colour` loaded as an appearance of the list; the list
+edited; a colour given at `create_material` the default and the purge
+table's colours; the Appearance command and `appearance_id` growing the
+list; a component's appearance printed; a material of three appearances
+saved into a library and inserted into a new design with the same three,
+`a_library_material_brings_its_whole_list_of_appearances`),
+`material::tests`, `print_library::tests` (the item file's two fields);
+the Replace Appearance condition in the application's unit test
+`tests/material_menu.cpp`; the application's in
+`tools/ui-filament-appearance-test.sh`, `app.ui-windows-filament-appearance`
+and `app.ui-macos-filament-appearance`.
+
+## Center of Mass
+
+The Center of Mass marker (mitcad#1094; `core/model/src/document/display.rs`,
+`core/model-api/src/center_of_mass.rs`; the application's *Center of Mass*
+in `app/COMMANDS.md`): the center of mass of the whole design, drawn as a
+marker, with a row under the root's Origin folder.
+
+| Command | Fields | Result |
+|---|---|---|
+| `add_center_of_mass` | | undo step `Add Center of Mass`; a hidden marker is shown (`Show Center of Mass`), a shown one stays as it is (no undo step) |
+| `set_center_of_mass_visible` | `visible` | undo step `Show Center of Mass` / `Hide Center of Mass` unless nothing changes; refused without a marker (`the design has no Center of Mass marker`) |
+| `delete_center_of_mass` | | undo step `Delete Center of Mass`; refused without a marker |
+
+| Query | Fields | Result |
+|---|---|---|
+| `center_of_mass` | | `center_of_mass` (mm, design coordinates; null without bodies), `mass` (kg), `volume` (mm³), `bodies` (counted, one per placement), `default_material` (how many of them have no material and count as steel), `marker`: `{"visible": bool}`, or null without a marker |
+
+- **Display state**, as the Origin folder is ([Visibility and
+  display](#visibility-and-display)): the commands recompute nothing, a
+  project does not version them, and the design file keeps the marker in
+  its display state, `"display": {"center_of_mass": {"visible": false}}`
+  (left out without a marker). The `document` query's `display` has
+  `center_of_mass` (`{"visible": bool}`) while there is a marker.
+- **Placed bodies.** The query counts the bodies the `properties` query
+  counts, each once per occurrence that places it, at the occurrence's
+  place in the design and with the material it has there: its own, else
+  the nearest component default up the occurrence path, else steel
+  (7.85 g/cm³). Each body's properties are computed once per density and
+  their centers moved by the placements, so a component placed twice
+  counts twice and moving a component moves the center. It is the
+  `properties` query's total over every body (mitcad#1110): both walk
+  the bodies' placements the same way and give each the same material
+  ([Physical Properties' extent](#physical-properties-extent-mitcad1095),
+  placed bodies); only a body that no occurrence places counts in
+  `properties` and not here. A body the kernel cannot measure
+  fails the query with its name.
+
+Tests: `center_of_mass_tests` (`core/model-tests/api`: the total of two
+bodies of different materials, one in a component, moved with its
+occurrence by its share of the mass, a material of its own counted; the
+marker added, shown, hidden, saved, read back, deleted, refused without a
+marker, undone).
+
+## Design properties
+
+The design's summary and statistics (mitcad#1088; File › Design
+Properties…, `api/design_properties.rs`, `document/design_summary.rs`,
+`file/statistics.rs`).
+
+**Summary.** Title, Subject, Author, Keywords and Comments are the root
+component's property set `Summary` (keys `Title`, `Subject`, `Author`,
+`Keywords`, `Comments`): the set and keys the `.ipt` import fills
+([Properties](#properties)), so an imported summary shows in Design
+Properties… and a summary set there shows in Property Sets…, Find in
+Design and the title blocks like any property. A drawing's title block
+falls back to them ([Drawing templates and
+revisions](#drawing-templates-and-revisions)): `title` to the root's
+`Title` (a component's drawing keeps its own `Title` or its name),
+`author` to `Summary/Author`, `description` to `Summary/Comments`, where
+the sheet and the component give none. A version's description (Save
+with Description) is no part of it.
+
+**Statistics.** When the design was created and last saved, by whom and
+with which MitCad, written by the application's Save into the design
+file's `statistics` (`created`, `last_saved` as UTC
+`YYYY-MM-DDTHH:MM:SSZ`; `last_saved_by`, the operating system's user
+name; `last_saved_with`, `MitCad 0.18.0`); each left out while unknown.
+They are kept beside the design's definition, not in it: undo leaves
+them, a design comparison does not see them, and the commands do not
+change them.
+
+- A save changes them only when the file changes: one that would write
+  the bytes the file holds (nothing changed, or only the display state
+  of a design in a project) leaves them and the file as they were, so it
+  records no version.
+- `created` is set by a new design's first save (also of a design an
+  import made, recovered unsaved work, or a project's new empty design).
+  A design whose file was saved before MitCad kept statistics has it
+  unknown, and keeps it unknown when saved again.
+- `mitcad-cli` and the MCP server's `document_save` write the
+  statistics as the design has them, without stamping them.
+
+| Command | Fields | Result |
+|---|---|---|
+| `set_design_summary` | `title`, `subject`, `author`, `keywords`, `comments` (each optional: a field left out keeps its value; an empty or blank text removes the property) | `changed` (how many changed), `summary` as below. One undo step, `Design Properties`; none when nothing changes. A user's text over an imported one keeps the import's value beside it (`edited` in `property_sets`) |
+
+| Query | Fields | Result |
+|---|---|---|
+| `design_properties` | | `set` (`Summary`), `summary`: `title`, `subject`, `author`, `keywords`, `comments` (empty where not set), `statistics`: `created`, `last_saved`, `last_saved_by`, `last_saved_with` (null where not known) |
+
+Tests: `core/model-tests/files/src/design_properties_tests.rs` (the
+summary saved and read back, one undo step, an imported value kept; the
+statistics written by a stamped save, kept by a save that changes
+nothing, an old file read with `created` unknown, an empty design's file
+created at its first save), `template_tests::a_title_block_falls_back_to_the_design_summary`
+(`core/model-tests/drawing`), `file::statistics::tests`;
+`tools/ui-property-sets-test.sh` and `app.ui-windows-property-sets`
+(Design Properties… sets Title and Author, Property Sets shows them on
+the root).

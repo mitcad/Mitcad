@@ -19,7 +19,7 @@ cat >> "$UI_OUT/docked.mitcad-ui" <<'DRIVER'
 # titlebar margins, without changing the physical display resolution.
 fit-main-frame 916 394
 expect-main-frame 916 394
-expect-ribbon-labels Solid Build
+expect-ribbon-labels Solid Build Make
 expect-projects-layout ${MITCAD_TEST_PROJECT_COUNT}
 focus-widget projectsTree
 key Home Right
@@ -30,26 +30,26 @@ expect-widget-property ribbonScrollLeft enabled false
 focus-widget ribbonScrollRight
 key Space
 expect-widget-property ribbonScrollLeft enabled true
-expect-ribbon-labels Solid Build
+expect-ribbon-labels Solid Build Make
 focus-widget ribbonScrollLeft
 key Space
 expect-widget-property ribbonScrollLeft enabled false
-expect-ribbon-labels Solid Build
+expect-ribbon-labels Solid Build Make
 screenshot ${MITCAD_TEST_SHOTS}/short-frame.png
 # Below the width of all group captions, overflow must work through ordinary
 # keyboard input and leave every complete group menu reachable.
 fit-main-frame 500 394
 expect-main-frame 500 394
-expect-ribbon-labels Solid Build
+expect-ribbon-labels Solid Build Make
 expect-widget-property ribbonScrollLeft enabled false
 focus-widget ribbonScrollRight
 key Space
 expect-widget-property ribbonScrollLeft enabled true
-expect-ribbon-labels Solid Build
+expect-ribbon-labels Solid Build Make
 focus-widget ribbonScrollLeft
 key Space
 expect-widget-property ribbonScrollLeft enabled false
-expect-ribbon-labels Solid Build
+expect-ribbon-labels Solid Build Make
 screenshot ${MITCAD_TEST_SHOTS}/ribbon-overflow.png
 DRIVER
 for chrome in floating docked; do
@@ -96,6 +96,12 @@ for count in 0 1 24; do
         mkdir -p "$MITCAD_SETTINGS_DIR"
         if [ "$count" = 0 ]; then
           export MITCAD_TEST_INPUT=$UI_OUT/empty-$chrome.mitcad-ui
+        else
+          # Shown at the start, as for a user who turned it on (mitcad#1020:
+          # hidden until then, also with projects configured), in the
+          # macOS settings file nocodo.fi/Mitcad.ini.
+          mkdir -p "$MITCAD_SETTINGS_DIR/nocodo.fi"
+          printf '[projects]\npanel=true\n' > "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"
         fi
         export MITCAD_TEST_SHOTS=$UI_OUT/$count-$chrome-${scale}x-$scheme
         mkdir -p "$MITCAD_TEST_SHOTS"

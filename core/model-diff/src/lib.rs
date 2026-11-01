@@ -1450,7 +1450,7 @@ fn occurrence_changes(a: &Assembly, b: &Assembly) -> Vec<ItemChange> {
                     assembly.occurrence_name(o.uid),
                     json!({"component": o.component, "parent": o.parent, "number": o.number,
                            "transform": matrix_rows(&o.transform), "grounded": o.grounded,
-                           "visible": o.visible}),
+                           "visible": o.visible, "transparent": o.transparent}),
                 )
             })
             .collect()
@@ -1505,7 +1505,8 @@ fn body_changes(a: &DocState, b: &DocState) -> Vec<ItemChange> {
                                    "appearance_expr": attributes.appearance_expr,
                                    "material_expr": attributes.material_expr,
                                    "visible_when": attributes.visible_when,
-                                   "face_appearance_exprs": attributes.face_appearance_exprs});
+                                   "face_appearance_exprs": attributes.face_appearance_exprs,
+                                   "transparent": attributes.transparent});
                 (uid, name, value)
             })
             .collect()
@@ -1862,7 +1863,7 @@ fn table_fields(
             field: "comment".to_owned(),
             from: json!(x.comment),
             to: json!(y.comment),
-            text: format!("comment '{}' -> '{}'", x.comment, y.comment),
+            text: format!("comment “{}” -> “{}”", x.comment, y.comment),
         });
     }
     let unit_text = |unit: mitcad_model::expr::Unit| {

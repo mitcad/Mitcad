@@ -32,7 +32,7 @@ values continue to reach the model through the existing sketch commands.
 | `core/model-tests/<area>` (`mitcad-model-tests-<area>`) | Rust | The model's tests through the JSON api, a small crate per area (sketch, features, parts, assembly, joints, drawing, print, BUILD, the imports' tests that need the api, ...; ctest `core.model.<area>`), so that a new test recompiles only its own crate ([README](../core/model-tests/README.md)); `support` holds BUILD's test library. |
 | `core/model-base` (`mitcad-model-base`) | Rust | Below the model's core (mitcad#777): the `Kernel` trait with the data it takes and gives (exchange options and meshes, drawing views, sheet metal charts, named segments), and the base data that needs nothing of the core: ids, topological names, profiles, datums, transforms, sweep and surface specifications, parameters, properties, configurations, appearances, render settings, the recompute monitor, fingerprints, hashes ([README](../core/model-base/README.md)). The model re-exports every module at its old path (`mitcad_model::kernel`, `mitcad_model::topo`, ...). |
 | `core/model-testkit` (`mitcad-model-testkit`) | Rust | The mock geometry kernel of the model's tests (`MockKernel`, `MockShape`) on `mitcad-model-base` alone, so that an edit in it rebuilds only test binaries ([README](../core/model-testkit/README.md)). The model's own tests use it as a dev-dependency; its `testing` feature re-exports it as `mitcad_model::testing`. |
-| `core/model-drawing` (`mitcad-model-drawing`) | Rust | The drawing layout and writers above the model (mitcad#777): sheets laid out with their views, dimensions, annotations, hole tables, parts lists, frame and title block from a sheet template, written as PDF, SVG, DXF and DWG; the built-in templates and the template libraries; the projection cache (`DrawingCache`, in the document's side cache). What a design file keeps of a drawing stays in the model (`core/model/src/drawing`: `def.rs`, `annotate_def.rs`, `tables_def.rs`, `template_def.rs`), which this crate re-exports under the same paths ([README](../core/model-drawing/README.md)). |
+| `core/model-drawing` (`mitcad-model-drawing`) | Rust | The drawing layout and writers above the model (mitcad#777): sheets laid out with their views, dimensions, annotations, hole tables, bills of materials, frame and title block from a sheet template, written as PDF, SVG, DXF and DWG; the built-in templates and the template libraries; the projection cache (`DrawingCache`, in the document's side cache). What a design file keeps of a drawing stays in the model (`core/model/src/drawing`: `def.rs`, `annotate_def.rs`, `tables_def.rs`, `template_def.rs`), which this crate re-exports under the same paths ([README](../core/model-drawing/README.md)). |
 | `core/sketch` (`mitcad-sketch`) | Rust | The general sketch below the model's core (mitcad#780): 2D geometry, entities, constraints and dimensions, the solve, profile regions, projections, offsets, patterns, equal spacing, texts, fonts, QR codes, SVG and DXF drawings, the sketch edits (`SketchEdit`) and the sketch feature's definition (`def.rs`: `SketchDef`, `SketchOutput`), on `mitcad-model-base`, `mitcad-expr`, `mitcad-solver` and `mitcad-dxf` ([README](../core/sketch/README.md)). The model re-exports it as `mitcad_model::sketch` and the definition as `mitcad_model::features::sketch`, where the feature's references, checks against the timeline and evaluation stay. |
 | `core/import` (`mitcad-import`) | Rust | Replays `.f3d` dumps (also those `core/ipt` makes of `.ipt` parts) as MitCad commands, checked against the file's stored results ([README](../core/import/README.md)): the replay's core (`mitcad-import-replay`) with its families (`mitcad-import-joints`, `mitcad-import-sheet`, `mitcad-import-primitives`, `mitcad-import-appearances`) put together, and the replay's tests (mitcad#785); `.solidcraft` designs through `mitcad-import-solidcraft`. Above `core/model`, not the api (mitcad#778): it asks the model for sheet states, joint frames and constraint rows directly, and runs the JSON commands a cut and paste needs through `Options::commands`, which `core/ffi` fills with the api's `command` (`mitcad_import::Commands`). |
 | `core/import-base` (`mitcad-import-base`) | Rust | What the imports share: the import's `Progress` (one per process, for the watchdog, the memory guard and the kernel's cancel check), vector helpers, the bodies of one replay, planar faces, the candidate core, the notes' texts, the sketch helpers ([README](../core/import-base/README.md)). No reader. |
@@ -341,7 +341,7 @@ design in a project.
   the material's filament (`print_settings`, `build_volume`).
 - **Print libraries** (`core/model/src/print_library.rs`,
   `document/print_library.rs`): materials and profiles are JSON items of
-  the base library (the parts library's manifest lists them; read through
+  the base library (the component library's manifest lists them; read through
   the library resolver, `LinkResolver::print_library`), the user's folder
   and the project's folder; the design keeps complete copies with their
   origin and takes a newer version only on request.
@@ -365,7 +365,11 @@ design in a project.
   colour: an image file or one embedded in the design file, mitcad#53,
   with normal, roughness, metalness and occlusion maps and the set's
   source, mitcad#313; an embedded image is kept once per design by its
-  SHA-256, shared in memory and in the file).
+  SHA-256, shared in memory and in the file), and a class, the
+  materials' (`core/model-base/src/material_class.rs`, mitcad#1102:
+  Metal, General Plastic, FDM Plastic, Resin, Other; a library
+  appearance's from its id, never written), by which the pickers offer a
+  material's class first.
   The library is built into the model; a document's own appearances are
   in the definition state and the design file, changed by undoable
   commands that recompute nothing. Bodies refer to one by id, and so do
@@ -469,7 +473,13 @@ design in a project.
   lies behind (the view's frame grabbed once the camera rests,
   `MeasurementBackdrop`; lines and terminators piece by piece, text and
   frames one ink each; no casing or halo), and
-  pictures in the tone of their own background.
+  pictures in the tone of their own background. Since mitcad#1097
+  `add_annotation` with `"preview": true` returns the annotation as the
+  `annotations` query will list it once added, laid out after the others
+  by the same code (`Document::annotation_to_add`, `laid_out` with the
+  annotation to add), and stores nothing; the Make tab's Annotate panels
+  draw it dimmed before Add (`CommandDef::acceptPreview`,
+  `OcctViewer::setMeasurementPreview`).
 - **Drawings in the design** (mitcad#707, `core/model/src/drawing/def.rs`,
   `document/drawings.rs`, `api/drawings.rs`): drawings kept in the
   definition state in the root's and components' Drawings folders, each
@@ -484,10 +494,13 @@ design in a project.
   the document's projection cache (`mitcad_model_drawing::ProjectionCache`, by shape
   versions, placements and the view's spec); details and breaks are cut
   in Rust in the view's plane (`core/model-drawing/src/clip.rs`), shaded views from
-  `Kernel::triangle_mesh`; the sheet is drawn by the export's
+  `Kernel::triangle_mesh`; threads are drawn by ISO 6410 before that and
+  details smaller than the pen simplified when the view is drawn
+  (`core/model-drawing/src/convention.rs`, mitcad#1112); the sheet is drawn by the export's
   `compose::render` (`core/model-drawing`). A view's place is where the component's
   origin lies on the sheet, so views in line share a coordinate. The
-  application paints the query's groups in a sheet view of its own
+  application paints the query's groups with the query's pens (the
+  writers' line widths) in a sheet view of its own
   ([app/COMMANDS.md](../app/COMMANDS.md), "Drawings"). Annotations on
   views (phase 2, stored in `core/model/src/drawing/annotate_def.rs`,
   laid out by `core/model-drawing/src/annotate.rs`,
@@ -535,7 +548,7 @@ design in a project.
   `document/parameters_csv.rs`, `api/parameters_csv.rs`): MitCad's
   parameter table and the `.f3d` application's parameter table CSV are
   read and written in Rust; the queries and the command carry the CSV
-  text, and the app only reads and writes the file (Change Parameters'
+  text, and the app only reads and writes the file (Edit Parameters'
   Import and Export). An import works on a copy of the definition state
   row by row in dependency order, as the `.f3d` import does, and is one
   undo step; its preview runs the same rows on a copy that is dropped.
@@ -789,7 +802,7 @@ design in a project.
   `Kernel::revolve_face`, `geometry/src/face_revolve.cpp`; the FreeCAD
   import's face profiles), by angles only.
 - **BUILD** (mitcad#375, `core/model/src/build/` for what the design
-  file keeps, the planning in the crate `core/model-build/`): the library parts the
+  file keeps, the planning in the crate `core/model-build/`): the library components the
   BUILD tab places are kept once as the design's **library sources**
   (`library_sources`: the library record, the design's text, inside a
   single file or in a project's store, and the manifest's `build`
@@ -884,11 +897,21 @@ design in a project.
   design file (`property_types`, `properties`); its commands are undo
   steps that recompute nothing. Values keep canonical units and their
   source (`user`, an import, `library`, `computed`); computed values
-  (volume, area, mass, a BUILD member's length) and a library part's data
+  (volume, area, mass, a BUILD member's length) and a library component's data
   are worked out at query time and never stored, so a recompute never
   changes the file. Importers add theirs with `Document::import_properties`
   (one step, merged into the import's); copies of components take theirs
   along ([commands.md](../core/model-api/src/commands.md), "Properties").
+- **Design properties** (mitcad#1088, `document/design_summary.rs`,
+  `file/statistics.rs`): the design's summary is the root's property set
+  `Summary` (no state of its own); its statistics (created, last saved,
+  by whom, with which MitCad) are the one part of the design file kept
+  beside the definition state, not in it (`Document::statistics`, read
+  apart from the definition in `file::load_parts`): undo, design
+  comparisons and plain saves leave them, and only a stamped save
+  (`Document::save_file_stamped`, the application's Save) that changes
+  the file sets them ([commands.md](../core/model-api/src/commands.md),
+  "Design properties").
 - **Reorient Design** (mitcad#502, `core/model/src/reorient.rs`,
   `document/reorient.rs`): the whole design turned by quarter turns as a
   rewrite of its definition, every component but linked ones in its own
@@ -913,7 +936,11 @@ design in a project.
   extruded by `Kernel::extrude_feature`, and changes two bodies in one
   feature: the mortise cut first (a tenon that reaches nothing is refused
   as such), then the tenon joined. A through tenon's length is where the
-  mortise body ends along the tenon's middle (`Kernel::segment_crossings`)
+  mortise body ends along the tenon's middle (`Kernel::segment_crossings`).
+  A count of tenons (mitcad#1063) spaces them along the face's long
+  direction: their regions go into one extrusion per run of equal
+  lengths (a compound of the runs for through tenons of different
+  lengths), so the feature still cuts once and joins once
   ([commands.md](../core/model-api/src/commands.md), "Mortise and
   Tenon").
 
@@ -922,7 +949,10 @@ design in a project.
 The default is metric wherever a unit is chosen: document (mm), import and
 export units, thread and hole tables (ISO first), materials and mass
 properties, grid and settings. Inches only by choice. An imported file's
-own units are kept.
+own units are kept. New designs start in the user's default units for new
+designs (Preferences › General, mm by default, mitcad#1036): the unit is
+the new document's initial state (`Document::new_design_in`, a project's
+`new_design` with `units`), with no undo step and no modified mark.
 
 ## Geometry kernel
 
@@ -1237,7 +1267,8 @@ the `Shape` type.
   other curves as polylines; `HLRBRep_PolyAlgo` on a triangulated copy
   when asked or when the exact one fails, for mesh bodies, and for a
   drawing's views of bodies with free-form faces, where the exact one
-  took half a minute a view (`ViewSpec::quick`, mitcad#962; its segments
+  took half a minute a view, or with many B-spline edges against many
+  faces (mitcad#1033) (`ViewSpec::quick`, mitcad#962; its segments
   fitted back into lines and arcs, `docs/performance.md`) and a
   section's cut faces (Section Analysis' `analysis::clip` and
   `analysis::section`), `Kernel::round_holes` the holes (coaxial
@@ -1408,7 +1439,7 @@ is the crate `core/sketch`, mitcad#780) is stored; its evaluation
 
 Evaluation: resolve the frame; compute projections (linked ones follow
 their sources by topological name); solve from the stored positions;
-report DOF, fully defined entities, conflicting and redundant
+report DOF, fully constrained entities, conflicting and redundant
 constraints (a conflict is an error, the last geometry is still shown);
 cut profile regions from the planar arrangement of non-construction
 curves (half-edge structure, leftmost turn; islands are separate regions;
@@ -1435,9 +1466,18 @@ keys come from the current evaluation, so edits and undo cannot leave
 cached candidates. The application owns per-item toggles and hover
 previews, and passes normal profile preselection to commands.
 
-A linked projection that moved is solved in steps from where the stored
-definition has it, so geometry constrained to it keeps its side (as the
-solver's continuation does for a dimension change). The stored definition
+A linked projection that moved is solved as if dragged from where the
+stored definition has it (`project::solve_followed`): the solver system is
+built at the stored positions, where each constraint takes its orientation
+choices (the side of a signed distance or tangency, an angle's quadrant),
+and then moved to the followed positions to start the solve
+(`SketchDef::solve_oriented`, `solve::Extra::oriented`; mitcad#1047). So
+geometry constrained to the projection keeps the side it has in the stored
+sketch whatever the size of the move; before, the sides came from the moved
+start, and a point dimensioned 0.5 mm from a projected edge that moved
+0.5 mm lay on the edge and took a side by chance. A large move is also
+solved in steps (as the solver's continuation does for a dimension
+change). The stored definition
 keeps the positions of the last edit; the evaluation's moved entities
 (`SketchOutput::moved`) are what the `sketch` query shows and what the
 next edit starts from (and then stores).
@@ -1524,7 +1564,7 @@ and AST provide partial-call signatures, source ranges, lexical `LET` context
 and sub-expression evaluation through the read-only `formula_help` query.
 The Qt `FormulaEditor` shares this query with value fields and returns ordinary
 formula text and normal parameter-limit edits; it stores no additional design
-state. Both the fx browser and Change Parameters open the same editor.
+state. Both the fx browser and Edit Parameters open the same editor.
 
 The app uses the model only through JSON commands and queries
 ([commands.md](../core/model-api/src/commands.md)); geometry comes back as
@@ -1619,7 +1659,7 @@ not recompute.
   construction geometry, components and their folders work in every mode;
   during a command they run outside its undo range (a cancelled command
   leaves them, a committed one is an undo step of its own after them;
-  `CommandSession::runVisibility`, mitcad#295). Change Parameters works
+  `CommandSession::runVisibility`, mitcad#295). Edit Parameters works
   the same way while a panel is open (`CommandSession::runParameter`,
   mitcad#564): the panel's values are evaluated again and its preview
   computed again, and an edited feature's own parameters stay the
@@ -1627,7 +1667,9 @@ not recompute.
   sketch is read again. Create Sketch shows the
   origin planes for its pick in every design, behind the model's faces
   for picking, without touching the Origin folder's light bulb
-  (mitcad#844, replacing mitcad#294). A command shows
+  (mitcad#844, replacing mitcad#294); a command's input that takes
+  construction geometry shows the origin only as the light bulb does,
+  its rows in the browser picked instead (mitcad#1030). A command shows
   the sketches it uses for its time, as if their light bulbs were on (an
   edited feature's `sketches`, a new command's starting profiles; a view
   state of the window, `view/CommandSketches.hpp`, never a model command:
@@ -1980,7 +2022,12 @@ not recompute.
   `agent_chat` requests and `ChatStream` (`feed_line`, and `control` for a
   protocol with state of its own: its events include the lines to write).
   The panel is Qt in both layouts (a `FloatingLayout::Anchor::Right` card,
-  a dock); the native AppKit panel comes later.
+  a dock). The AppKit frontend (mitcad#1075) shows the same panel, its Qt
+  widget hidden, through the presenter bridge in a card of its own
+  (`platform/macos/NativeChatCard.mm`, placed by `NativeMacWindow`): the
+  panel says when it changed (`ChatPanel::contentChanged`) and is told
+  when it is shown (`setPresented`); its message field's keys come from
+  the AppKit text view (`NativeTextEditorCommands`).
 - **Logging** (`app/mcp/LogRing`, `app/framework/DebugLog`, mitcad#269):
   one message handler for the whole run, installed by `main()` after the
   UI test driver's and passing every message on to it: a ring of the
@@ -2064,7 +2111,7 @@ not recompute.
   body is a face or edge named by its material domain; the model's
   `sheet_reference` and `sheet_seam` queries turn it into the semantic
   panel, bend, boundary or corner the definition stores. The browser lists a
-  sheet body's rules and Flat Pattern from `sheet_bodies`; a Flat Pattern
+  sheet metal body's rules and Flat Pattern from `sheet_bodies`; a Flat Pattern
   shown flat replaces the body's display with its developed solid
   (`analysis_shape` `flat_pattern`), and its DXF is written by the model from
   the evaluated outline (`export_flat_pattern_dxf`, [sheet-metal.md](sheet-metal.md)).
@@ -2193,9 +2240,13 @@ the main window taller, up to past the screen (mitcad#412, mitcad#560). No
 dock's content may raise its minimum height with what it shows; the window
 logs its layout again whenever its size changes after it shows.
 
-With `MITCAD_MACOS_NATIVE_UI=ON`, macOS starts the AppKit frontend by
-default. `--ui=qt` selects the retained Qt frontend; `--chrome` also selects
-Qt. `--ui=native` requires the native build option. The native frontend keeps
+With `MITCAD_MACOS_NATIVE_UI=ON` (the macOS presets and releases), macOS
+builds carry both frontends and start Qt by default (mitcad#1056). The
+preference `appearance/nativeMacInterface` (Settings › General) starts the
+AppKit frontend; `main()` reads it before the application object exists.
+`--ui=native|qt` overrides it for one run; `--chrome` without `--ui` also
+selects Qt. `--ui=native` requires the native build option. The start-up's
+`Frontend:` line names the frontend and what chose it. The native frontend keeps
 the single-document workflow and the macOS 14.4 deployment target.
 
 `NativeMacWindow` owns an `NSWindow`, configurable `NSToolbar`, model
@@ -2298,7 +2349,7 @@ after them while a sketch is edited; while a drawing is open the Drawing
 tab alone (Cut Sheet for a cut sheet) holds the drawing's tools and the
 drawing covers the whole 3D view (mitcad#1008; app/COMMANDS.md,
 *Drawings*); the AppKit frontend lists BUILD's commands in a menu and
-keeps a drawing's tools on its own bar.
+shows the Drawing and Cut Sheet tabs the same way (mitcad#1073).
 
 Docked has a look of its own, `WindowStyle` (`app/framework/WindowStyle`,
 mitcad#251), the same on every platform and in both themes: the docks and
@@ -2332,15 +2383,23 @@ Floating is a full-window 3D view with the panels over it:
   card, the ribbon masked to them) and the notices (`noticeCard`) are rows
   of cards over the view's top (`FloatingLayout::addTopRow`).
 - `GlassCard`: the rounded Browser, Command and Timeline cards and the
-  status pill. The Command card shows only while it has something to say.
-  There is no status bar; messages go to the pill.
+  message band's card. The Command card shows only while it has something
+  to say. There is no status bar; messages go to the message band right
+  above the timeline (mitcad#1042: `MessageCenter` keeps the session's
+  messages and what the band shows, by `MessageLog`'s rules; `MessageBand`
+  is the band's content, `MessageHistory` the history over the window;
+  `FloatingLayout::setMessageBand` keeps the band's row below the other
+  cards). Docked keeps its status bar, with a button for the same history.
 - `FloatingLayout`, the central widget, owns all card geometry: cards are
   anchored to the view's corners (Browser upper left, Command upper right
   under the orientation cube, Timeline along the bottom), sized by their
   content up to a share of the view, laid out in one queued pass. A
   Command card taller than the room under the cube grows up to the top
   first, the cube moving to its left (the right inset), before it scrolls
-  (mitcad#655). It gives
+  (mitcad#655). The upper left cards (Projects, Configuration, Browser)
+  are one column (mitcad#1020): they share its height, each at most its
+  content's, the rest evenly or by the user's split, which a drag of the
+  gap between two of them sets (`shareColumn`, `floating/leftSplit`). It gives
   the view the free margins (`OcctViewer::setOverlayInsets`) and covered
   rectangles (`setCoveredRects`): the cube and its buttons stay clear of
   cards, picks and logged click positions avoid them, and Fit, Home and the
@@ -2377,7 +2436,7 @@ macOS Preferences is `SettingsWindow`, a pane per Preferences page whose
 changes apply as they are made, and About is the standard About panel.
 
 The default Qt frontend also uses macOS presentation for Command Search
-and Change Parameters. Their platform helpers use the system font, SF
+and Edit Parameters. Their platform helpers use the system font, SF
 Symbols, native search fields and buttons, and palette-derived table and
 selection colours. Layout dimensions are logical pixels, so the controls
 and their icons follow the display's backing scale. Parameter editing and
@@ -2466,7 +2525,7 @@ numbers, so reading refuses any of them in the top `ID_RESERVE` = 2^20
 numbers of its type (`core/model-base/src/ids.rs`: at most
 `LARGEST_U32_ID` = 4293918719, a feature at most `LARGEST_U64_ID` =
 18446744073708503039; `file/id_reserve.rs`), in the words of a malformed
-id: `components[0]: invalid component id 'C4293918720' (at most
+id: `components[0]: invalid component id C4293918720 (at most
 C4293918719: …)`. The id text forms themselves still refuse only the
 type's largest number, so commands name the ids a session handed out.
 This reserve was chosen over allocation that can fail at every counting
@@ -2794,10 +2853,11 @@ just made).
   `LockController::designSaved`); deleting it closes it. Renames and new
   names are typed in place (`QTreeWidget` editors), drags are the tree's
   own mouse handling (no system drag and drop: nothing leaves the panel).
-  In the Docked layout it is a dock split above the browser's (the view
-  keeps its width); in the Floating one a card, which `FloatingLayout`
-  stacks above the browser's card (upper left cards stack in the order
-  added). The rows give the names the width (mitcad#529): the state as
+  In the Docked layout it is a dock split above the Configuration dock and
+  the browser's (the view keeps its width); in the Floating one a card,
+  which `FloatingLayout` stacks above the Configuration and browser cards
+  (upper left cards stack in the order added; mitcad#1020). It starts
+  hidden until the user shows it. The rows give the names the width (mitcad#529): the state as
   compact marks (`projects/ProjectRowText`), a name that does not fit
   elided in the middle by the rows' delegate, and the width dragged by the
   panel's edge and remembered (the card's grip,
@@ -3013,7 +3073,7 @@ expressions). Formats: [libraries.md](libraries.md).
   gives a library component's text and B-rep data at a version;
   `mitcad-vcs`'s `LibraryResolver` reads them from the cache, the bridge
   installs it for the process (`configure_libraries`), tests give a
-  document one in memory. A library part is a component with a
+  document one in memory. A library component is a component with a
   `LibraryRef` (library, URL, commit, tag, component, path, row, licence,
   authors, designation); linked, its bodies are a base feature as for a
   linked file (`document/library_parts.rs`), copied, it is the design's
@@ -3060,7 +3120,7 @@ expressions). Formats: [libraries.md](libraries.md).
   component's `build` block (role, slot systems, length, mount frames,
   connector, panel and linear data) and its supplier fields are kept in
   the manifest as written; `library check` holds them and the design
-  against the rules of [libraries.md](libraries.md#build-parts), and
+  against the rules of [libraries.md](libraries.md#build-components), and
   `library_build_candidates` fits connectors to a junction the model
   found (`build_junctions`) and parts to a picker's role and system. The
   model never reads a library for this: the app asks the library side for
@@ -3078,11 +3138,11 @@ expressions). Formats: [libraries.md](libraries.md).
 In the app (`app/files/MainWindowLibraries.cpp`, `LibraryDialogs.cpp`)
 fetches run as `RemoteTask`s on their own thread with Cancel; the other
 library commands are local and run on the UI thread; inserts and updates
-are model commands (jobs on the model worker). The part picker
+are model commands (jobs on the model worker). The component picker
 (`app/library/`, mitcad#418) shows the library's parts as pictures for
 Insert from Library and the part-choosing commands: previews are read a
 few at a time while the UI is idle, only for tiles in sight; the user's
-favourites are app settings, not design data; the design's library parts
+favourites are app settings, not design data; the design's library components
 come from the model's `library_usage` query. Its groups are a tree
 (mitcad#527): the libraries' answers give each component its groups'
 names from the top (`groups`, from the categories' `parent` and path
@@ -3090,6 +3150,18 @@ names), and the app merges groups of the same names across libraries
 (`PartGroupTree`). A part with mount frames is placed by Place Component
 (`app/commands/MountCommands.cpp`), a panel of the framework whose
 preview is the model's `mount_preview`.
+
+### Live assistant window selection
+
+Each document window's live MCP listener publishes its authenticated
+endpoint and a separate token-free, owner-only window state beside it
+(`app/mcp/LocalEndpoint.*`). The state contains the latest UTC activation
+time, title and initialized client names. The CLI authenticates the live
+endpoints before choosing the one active last; an explicit `--instance`
+chooses that instance only. The bridge holds that socket for the entire
+session. Connect AI Assistant reads the window states to name local and
+other-window connections; the assistant indicator retains only local
+clients. Stale endpoint cleanup and ordinary shutdown remove both files.
 
 ### Autosave
 

@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: MIT
+# The AppKit frontend's navigation bar (mitcad#1099), run by
+# tools/ui-macos-native-test.sh navigation-bar with an empty new design:
+# the bar at the bottom centre of the view with the Qt bar's five buttons
+# and Fit's shortcut (⌘0 on macOS) in its tooltip; Snap to Grid in the bar
+# and View › Grid and Snaps › Snap to Grid in step both ways; the Visual
+# Style pop-up's Wireframe is the View menu's style; in a sketch on XZ,
+# after Isometric View, the bar's Look At looks at the sketch plane, and
+# the Sketch Palette's Snap to grid is the bar's.
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+expect-ever 'View area'
+wait-idle
+native-resize 1280 820
+expect-ever 'Native navigation bar shown at [0-9]+,[0-9]+ [0-9]+x[0-9]+'
+expect-native-visible navigationBar true
+expect-native-visible navigationBar_view.look_at true
+expect-native-visible navigationBar_view.fit true
+expect-native-visible navigationBar_view.visual_style true
+expect-native-visible navigationBar_view.grid true
+expect-native-visible navigationBar_view.snap_grid true
+expect-ever 'Native navigation bar tooltips: Look At.* \| Fit \([^)]+\) \| Visual Style: .* \| Layout Grid.* \| Snap to Grid'
+expect-ever 'Native navigation bar states: .*Layout Grid on \(View menu on\), Snap to Grid on \(View menu on\), Visual Style Shaded with Visible Edges Only'
+screenshot '${MITCAD_TEST_WORK}/native-navigation-bar.png'
+
+# Snap to Grid: the bar's button turns the View menu's item off, the View
+# menu's item turns the bar's button on again.
+mark
+native-click navigationBar_view.snap_grid
+wait-log 'Snap to grid off'
+wait-log 'Native navigation bar states: .*Snap to Grid off \(View menu off\)'
+mark
+native-action view.snap_grid
+wait-log 'Snap to grid on'
+wait-log 'Native navigation bar states: .*Snap to Grid on \(View menu on\)'
+
+# Visual Style: the pop-up lists the styles, Wireframe chosen there is the
+# View menu's style; the View menu's default style is the bar's again.
+mark
+native-popup navigationBar_view.visual_style 'Wireframe'
+wait-log 'Native navigation bar styles: Shaded \| Shaded with Visible Edges Only \| Shaded with Hidden Edges \| Wireframe \| Wireframe with Hidden Edges'
+wait-log 'Visual style Wireframe'
+wait-log 'Native navigation bar states: .*Visual Style Wireframe$'
+mark
+native-action view.style.visible_edges
+wait-log 'Native navigation bar states: .*Visual Style Shaded with Visible Edges Only$'
+
+# In a sketch on XZ: Look At after Isometric View looks at its plane.
+mark
+native-action sketch.create
+expect-log 'Create Sketch: select a plane'
+click-logged 'Datum xz'
+wait-log 'Sketch started on xz'
+wait-log 'Sketch plane seen from FRONT \(along 0 1 0\)'
+expect-native-visible navigationBar true
+mark
+native-action view.iso
+wait-log 'Camera direction'
+mark
+native-click navigationBar_view.look_at
+wait-log 'Look at sketch'
+wait-log 'Sketch plane seen from FRONT \(along 0 1 0\)'
+
+# The Sketch Palette's Snap to grid is the bar's Snap to Grid.
+mark
+native-click paletteGrid
+wait-log 'Snap to grid off'
+wait-log 'Native navigation bar states: .*Snap to Grid off \(View menu off\)'
+mark
+native-click navigationBar_view.snap_grid
+wait-log 'Snap to grid on'
+wait-log 'Native navigation bar states: .*Snap to Grid on \(View menu on\)'
+screenshot '${MITCAD_TEST_WORK}/native-navigation-bar-sketch.png'

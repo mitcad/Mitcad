@@ -233,7 +233,7 @@ impl Definitions {
                 r.skip(if self.major >= 28 { 18 } else { 14 })?;
                 let owner = r
                     .reference()?
-                    .ok_or_else(|| DcError("no labelled record".to_owned()))?;
+                    .ok_or_else(|| DcError("no labeled record".to_owned()))?;
                 r.skip(12)?;
                 let children = r.references()?;
                 let name = r.text()?;

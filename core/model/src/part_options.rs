@@ -222,7 +222,7 @@ fn set_values(
             PartValue::Number(number) => value_to_expression(*number, param.unit()),
             PartValue::Text(text) if !param.unit().is_text() => {
                 return Err(format!(
-                    "{name} of {label} is a number, not the text '{text}'"
+                    "{name} of {label} is a number, not the text “{text}”"
                 ));
             }
             PartValue::Text(text) => text_literal(text),

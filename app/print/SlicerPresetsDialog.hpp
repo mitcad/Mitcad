@@ -8,6 +8,7 @@
 #include <QString>
 #include <QStringList>
 
+class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
@@ -67,19 +68,46 @@ namespace mitcad {
 // moved), "Slicer presets focus: <name> choice" (a row's choice has the
 // keyboard), and the places "Slicer presets <what> at x,y" (`slicer`,
 // `same_all`, `import`, `cancel`, `item <name>`: a row's box).
+//
+// One filament, its presets as variants (mitcad#1054): the presets of a
+// filament with two or more in a group (the same name before its `@`,
+// `slicer_presets`' `filament`) are one material row named as the
+// filament, its box ticking all of them, its same-name choice theirs, and
+// under it a row per preset named by the printers and nozzles it is for
+// ("Bench X, 0.6 mm nozzle"; the preset's name as its tooltip). Then the
+// list starts with Printers and nozzles in use: a box per printer and
+// nozzle the slicer's filaments are for (`slicer_presets`' `printers`),
+// ticked at first; an unticked one disables and unticks the variant rows
+// of it alone, and the import (`printers`) leaves its variants out. When
+// the target keeps one filament's presets as separate materials from
+// before (`slicer_presets`' `merge`), a box under the list offers to merge
+// them ("Merge the separate materials of 1 filament", unticked; the
+// filaments and their materials as its tooltip): ticked, the import merges
+// them first (`merge_separate`), also with no preset ticked (the button is
+// then Merge). A variant row's name in the logs is "<filament> › <row>".
+// Logs "Slicer presets printer: <label>, ticked|unticked" for each
+// printer row and "Slicer presets printer tick: <label> ticked|unticked"
+// for a change, "Slicer presets merge offered: <n>: <filament> (<material>,
+// ...); ..." and "Slicer presets merge: ticked|unticked", and the places
+// "Slicer presets printer <label> at x,y" and "Slicer presets merge at".
 class SlicerPresetsDialog : public QDialog {
   Q_OBJECT
 
 public:
   // `slicers` from `slicer_presets`, `index` the one shown first, `into`
-  // the target (`design`, `user`, `project`), which the tooltips name.
-  SlicerPresetsDialog(const QJsonArray& slicers, int index, const QString& into, QWidget* parent = nullptr);
+  // the target (`design`, `user`, `project`), which the tooltips name;
+  // `merge` the target's separate materials of one filament (its `merge`).
+  SlicerPresetsDialog(const QJsonArray& slicers, int index, const QString& into, QWidget* parent = nullptr,
+                      const QJsonArray& merge = QJsonArray());
 
   // The `import_slicer_presets` command of the ticked presets (`dialect`,
-  // `folder`, `presets` with `same_name`), without its target.
+  // `folder`, `presets` with `same_name`; the printers and nozzles in use
+  // and `merge_separate` when the list has them), without its target.
   QJsonObject command() const;
   // How many presets are ticked.
   int tickedCount() const;
+  // Whether the separate materials are to be merged (mitcad#1054).
+  bool mergeChosen() const;
   // The ticked presets' names, in the list's order.
   QStringList tickedNames() const;
   // The slicer shown ("Bambu Studio").
@@ -107,6 +135,11 @@ private:
   void ticksChanged();
   // Shows the rows the filter matches (all without one).
   void applyFilter();
+  // The variant rows of the printers and nozzles unticked disabled and
+  // unticked, the others enabled (mitcad#1054).
+  void applyPrinters();
+  // Adds a same-name choice beside `row` (a preset's or a filament's).
+  void addSameChoice(QTreeWidgetItem* row, const QString& kind, const QString& name, const QJsonObject& same);
   void logRows();
   void scheduleLogPlaces();
   void logPlaces();
@@ -114,12 +147,14 @@ private:
   QJsonArray m_slicers;
   int m_index = 0;
   QString m_into;
+  QJsonArray m_merge; // the target's separate materials of one filament
   QComboBox* m_slicer = nullptr;
   QLabel* m_slicerLabel = nullptr;
   QLabel* m_sameLabel = nullptr;
   QComboBox* m_sameAll = nullptr;
   QLineEdit* m_filter = nullptr;
   QTreeWidget* m_list = nullptr;
+  QCheckBox* m_mergeBox = nullptr;
   QPushButton* m_import = nullptr;
   QPushButton* m_cancel = nullptr;
   QHash<QObject*, QTreeWidgetItem*> m_boxRows; // a same-name row's choice, its row

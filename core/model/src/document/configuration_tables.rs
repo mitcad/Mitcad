@@ -8,10 +8,11 @@
 
 use super::{DocState, Document, ModelError, invalid};
 use crate::configurations::{
-    ConfigurationMove, GeneratedRows, TableColumns, columns_of, tables_of,
+    ConfigurationMove, GeneratedRows, NewParameter, TableColumns, columns_of, tables_of,
 };
+use crate::expr::ParamSpec;
 use crate::kernel::Kernel;
-use crate::parameters::ChangeSet;
+use crate::parameters::{ChangeSet, Parameters};
 use crate::tables::Tables;
 
 /// The design's tables as configurations read them
@@ -52,18 +53,37 @@ pub(crate) fn move_off_removed_values(
     Ok((changed, moves.into_iter().map(|m| m.change).collect()))
 }
 
+/// Adds the user parameters a fill of the rows makes (mitcad#1044), in
+/// their order; refused with the parameter's name.
+pub(crate) fn add_new_parameters(
+    parameters: &mut Parameters,
+    created: &[NewParameter],
+) -> Result<(), ModelError> {
+    for new in created {
+        parameters
+            .add(ParamSpec::user(&new.name, &new.expression, new.unit), None)
+            .map_err(|e| invalid(format!("parameter {}: {e}", new.name)))?;
+    }
+    Ok(())
+}
+
 impl<K: Kernel> Document<K> {
     /// Makes one configuration row per key of a table column (`Screws.Size`),
     /// named by the key and setting `option` to it (the
     /// `generate_configuration_rows` command). Rows of the same name are
     /// updated, not duplicated; the option becomes an option of the table
-    /// when it is not one yet. One undo step (`Generate Rows from Screws`)
-    /// that recomputes nothing; refused with the table's first problem.
+    /// when it is not one yet (a parameter column moves to the options).
+    /// `columns` (mitcad#1044) are other columns of the table that become
+    /// the closed table's parameter columns, each row set from its key's
+    /// row; the parameters the design lacks are made with the columns'
+    /// units. One undo step (`Generate Rows from Screws`) that recomputes
+    /// nothing; refused with the table's first problem.
     pub fn generate_configuration_rows(
         &mut self,
         table: &str,
         column: &str,
         option: &str,
+        columns: &[String],
     ) -> Result<GeneratedRows, ModelError> {
         let mut configurations = self.state.configurations.clone();
         let generated = configurations
@@ -73,15 +93,22 @@ impl<K: Kernel> Document<K> {
                 table,
                 column,
                 option,
+                columns,
             )
             .map_err(invalid)?;
-        if let Some(problem) = configurations.problems(&self.state.parameters).first() {
-            return Err(invalid(problem.clone()));
-        }
-        if configurations == self.state.configurations {
-            return Ok(generated);
+        if generated.created.is_empty() {
+            if let Some(problem) = configurations.problems(&self.state.parameters).first() {
+                return Err(invalid(problem.clone()));
+            }
+            if configurations == self.state.configurations {
+                return Ok(generated);
+            }
         }
         self.apply_with(|state| {
+            add_new_parameters(&mut state.parameters, &generated.created)?;
+            if let Some(problem) = configurations.problems(&state.parameters).first() {
+                return Err(invalid(problem.clone()));
+            }
             state.configurations = configurations;
             Ok((format!("Generate Rows from {table}"), generated, false))
         })

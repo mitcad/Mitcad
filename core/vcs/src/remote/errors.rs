@@ -315,12 +315,16 @@ fn redact_userinfo(text: &str) -> String {
         let (head, tail) = rest.split_at(at + 3);
         out.push_str(head);
         let before = &head[..head.len() - 3];
+        // After the character before the scheme, which may take more than
+        // one byte (a curly quote).
         let scheme_start = before
-            .rfind(|c: char| !(c.is_ascii_alphanumeric() || "+-.".contains(c)))
-            .map_or(0, |i| i + 1);
+            .char_indices()
+            .rev()
+            .find(|&(_, c)| !(c.is_ascii_alphanumeric() || "+-.".contains(c)))
+            .map_or(0, |(i, c)| i + c.len_utf8());
         let scheme = &before[scheme_start..];
         let end = tail
-            .find(|c: char| c == '/' || c.is_whitespace() || "'\"<>()`".contains(c))
+            .find(|c: char| c == '/' || c.is_whitespace() || "'\"<>()`\u{201c}\u{201d}".contains(c))
             .unwrap_or(tail.len());
         let authority = &tail[..end];
         match authority.rfind('@') {
@@ -398,7 +402,7 @@ pub fn check_url(url: &str) -> Result<String, RemoteError> {
     let invalid = |why: &str| {
         RemoteError::new(
             ErrorClass::InvalidUrl,
-            format!("'{url}' cannot be used as a remote: {why}"),
+            format!("“{url}” cannot be used as a remote: {why}"),
         )
     };
     if url.is_empty() {

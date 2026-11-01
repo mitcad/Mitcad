@@ -59,10 +59,26 @@ QImage filtered(const QImage& image, int width, int height) {
 
 bool controlOwnership() {
   std::string error;
+  const auto page = sysconf(_SC_PAGESIZE);
+  if (page <= 0) return false;
+  // Small, exact-page and multi-page pixel extents all retain packed rows;
+  // padding belongs to the allocation, never to the rendered pixel stride.
+  for (const auto height : {8u, 128u, 129u}) {
+    render::MacFrameSurfaces allocation;
+    if (!allocation.create(16, height, error)) return false;
+    for (std::uint32_t slot = 0; slot < render::kFrameSlots; ++slot) {
+      for (std::uint32_t plane = 0; plane < render::kFramePlanes; ++plane) {
+        const auto surface = allocation.surface(slot, plane);
+        if (IOSurfaceGetWidth(surface) != 16 || IOSurfaceGetHeight(surface) != height ||
+            IOSurfaceGetBytesPerRow(surface) != 128 || IOSurfaceGetAllocSize(surface) < render::planeBytes(16, height) ||
+            IOSurfaceGetAllocSize(surface) % std::size_t(page) != 0 || !IOSurfaceGetBaseAddress(surface) ||
+            reinterpret_cast<std::uintptr_t>(IOSurfaceGetBaseAddress(surface)) % std::size_t(page) != 0) return false;
+      }
+    }
+  }
   auto surfaces = std::make_shared<render::MacFrameSurfaces>();
   auto memory = std::make_shared<render::FrameMemory>();
   if (!surfaces->create(16, 8, error) || !memory->create(sizeof(render::MacFrameControl), error)) return false;
-  const auto page = sysconf(_SC_PAGESIZE);
   struct stat storage{};
   if (page <= 0 || fstat(memory->descriptor(), &storage) != 0 || storage.st_size < 0 ||
       !render::validMacFrameStorage(static_cast<std::size_t>(storage.st_size), static_cast<std::size_t>(page))) return false;

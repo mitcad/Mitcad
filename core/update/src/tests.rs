@@ -222,7 +222,7 @@ fn the_wrong_key_verifies_nothing() {
     assert_eq!(
         read.verify_file("windows-x64", &file.0, &keys(&release)),
         Err(UpdateError::File(
-            "its signature does not match Mitcad's release key".into()
+            "its signature does not match MitCad's release key".into()
         ))
     );
     // The manifest's signature cannot stand for a file's: their contexts

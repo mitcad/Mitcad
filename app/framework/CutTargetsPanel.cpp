@@ -233,7 +233,7 @@ CutTargetsPanel::CutTargetsPanel(QWidget* parent) : QWidget(parent) {
   m_tree->header()->setStretchLastSection(true);
   layout->addWidget(m_tree);
   auto* buttons = new QHBoxLayout;
-  m_all = new QPushButton(tr("Select all"));
+  m_all = new QPushButton(tr("Select All"));
   m_all->setObjectName(QStringLiteral("cut_targets_all"));
   m_none = new QPushButton(tr("Select none"));
   m_none->setObjectName(QStringLiteral("cut_targets_none"));

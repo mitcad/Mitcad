@@ -1,0 +1,62 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets and chamfers: two blends that take away the faces at a concave
+edge and meet at its far end (mitcad#1106).
+
+The case: a tray whose walls are as high as the bevel or rounding of their
+inner top edges (2 high, a chamfer or fillet of 2 on the edges along the
+top). Each blend takes its wall's inner face away, its contact on that face
+running along the floor's edge. At a corner of the pocket the two blends
+meet: PerformTwoCornerbyInter takes the pocket's vertical concave edge as
+the pivot, and both blends' common points on it lie at its lower end, the
+floor's corner, a vertex of the shape (ChFiDS_CommonPoint::IsVertex). The
+data structure holds such a point as that vertex, a shape
+(ChFi3d_IndexPointInDS), but the corner then set the tolerance of the
+point with that index, as of a point of its own, and
+TopOpeBRepDS_DataStructure::Point threw: the corner failed, and so did the
+whole dressup wherever two such walls meet. A straight wall without
+corners built.
+
+- PerformTwoCornerbyInter: the tolerance of the common point on the pivot
+  is set only where it is not a vertex, in both branches, as the other
+  corners and the stripe ends do (a vertex keeps its own tolerance).
+
+The trays' bevels and roundings now build at their size: the walls' top
+and inner faces gone, the blends meeting the floor and, on walls as thick
+as the blend, the outer walls, at one edge each, and the bodies' volumes
+those of the exact shapes.
+
+Upstream: new.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx
+index 4b4b4474..acebc51b 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx
+@@ -440,7 +440,14 @@ bool ChFi3d_Builder::PerformTwoCornerbyInter(const int Index)
+     }
+     const ChFiDS_CommonPoint& cparc = Fd1->Vertex(isfirst1, IFaArc1);
+     ChFi3d_EnlargeBox(cparc.Arc(), myEFMap(cparc.Arc()), cparc.ParameterOnArc(), barc);
+-    ChFi3d_SetPointTolerance(DStr, barc, Corner1->IndexPoint(isfirst1, IFaArc1));
++    // (The point on the pivot is a vertex of the shape where the blends
++    // meet at the pivot's end, their contacts running along the edges of
++    // the faces they take away: the vertex keeps its own tolerance, and its
++    // index in the data structure is a shape's, not a point's.)
++    if (!cparc.IsVertex())
++    {
++      ChFi3d_SetPointTolerance(DStr, barc, Corner1->IndexPoint(isfirst1, IFaArc1));
++    }
+     ChFi3d_SetPointTolerance(DStr, bco, Corner1->IndexPoint(isfirst1, IFaCo1));
+   }
+   else
+@@ -799,7 +806,10 @@ bool ChFi3d_Builder::PerformTwoCornerbyInter(const int Index)
+ 
+     ChFi3d_SetPointTolerance(DStr, bco, SmaCD->IndexPoint(isfirstSma, IFaCoSma));
+     ChFi3d_SetPointTolerance(DStr, bmil, SmaCD->IndexPoint(isfirstSma, IFaArcSma));
+-    ChFi3d_SetPointTolerance(DStr, barc, BigCD->IndexPoint(isfirstBig, IFaArcBig));
++    if (!cparc.IsVertex())
++    {
++      ChFi3d_SetPointTolerance(DStr, barc, BigCD->IndexPoint(isfirstBig, IFaArcBig));
++    }
+   }
+   done = true;
+ 

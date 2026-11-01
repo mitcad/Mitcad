@@ -22,6 +22,7 @@
 #include <QPointer>
 #include <QPolygonF>
 #include <QRectF>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
@@ -29,6 +30,7 @@
 #include <gp_Trsf.hxx>
 
 #include "../framework/CommandSession.hpp"
+#include "../framework/NoticeLevel.hpp"
 #include "AutoConstraint.hpp"
 #include "SketchModel.hpp"
 #include "SketchSnap.hpp"
@@ -51,6 +53,9 @@ public:
   // remove).
   virtual void pick(const Selection& items, Qt::KeyboardModifiers modifiers) = 0;
   virtual void showError(const QString& message) = 0;
+  // A message on the status line at its level (mitcad#1051; the main
+  // window's DocumentHost::showStatus).
+  virtual void showStatus(const QString& message, NoticeLevel level) = 0;
   // Starts a command of the registry (an edit panel opened by a
   // double-click).
   virtual void trigger(const QString& id) = 0;
@@ -134,6 +139,17 @@ public:
   // first).
   void constrain(const QString& point, const Snap& snap);
   void addConstraint(const QJsonObject& constraint);
+  // A constraint the drawn geometry already satisfies (mitcad#1024), added
+  // only when safe (`sketch.add_constraint` with `auto`: the others do not
+  // imply it, the sketch solves and nothing moves); otherwise skipped
+  // without a hint. Logged either way ("Constraint added automatically:
+  // coincident p7 on c2 (quadrant)", "Auto constraint skipped: tangent c3
+  // c5: redundant"); `why` names the source in parentheses. The same
+  // constraint is tried once per action.
+  bool addAuto(const QJsonObject& constraint, const QString& why = QString());
+  // The tangents the new line or arc `curve` already satisfies at its ends
+  // on circles and arcs (tangentCandidates), each added by addAuto.
+  void addTangents(const QString& curve);
   // A dimension with a typed value; refused ones are left out.
   void addDimension(const QJsonObject& dimension, const QString& value);
   // A body edge or vertex in the sketch plane projected into the sketch,
@@ -182,6 +198,7 @@ private:
   bool m_finished = false;
   bool m_stale = false;
   QHash<QString, ProjectedItem> m_projected; // by source, body and occurrence
+  QSet<QString> m_autoTried; // addAuto's constraints so far (constraintText)
 };
 
 class SketchController : public QObject {
@@ -371,8 +388,10 @@ public:
   void hint(const QString& message);
   // A hint about what an action did (a constraint refused or replaced,
   // mitcad#287), logged, and kept in front of the next prompt hint so a
-  // tool's prompt does not hide it at once.
-  void notice(const QString& message);
+  // tool's prompt does not hide it at once. At a level of its own
+  // (mitcad#1051): a warning (a dimension added as driven instead of
+  // over-constraining the sketch) stays a warning with the prompt after it.
+  void notice(const QString& message, NoticeLevel level = NoticeLevel::Hint);
   void error(const QString& message);
 
   // Values typed in the view.
@@ -554,8 +573,10 @@ private:
   Snap m_snap;
   QPointF m_cursor;
   bool m_cursorValid = false;
-  // The last notice(), until the next prompt hint has shown it.
+  // The last notice(), until the next prompt hint has shown it, and its
+  // level (mitcad#1051).
   QString m_notice;
+  NoticeLevel m_noticeLevel = NoticeLevel::Hint;
   // The pointer's place (pointerText()), the last one shown, and the one
   // last logged ("Sketch pointer x 12.00, y -29.00 mm", once the pointer
   // rests: logPointer()).

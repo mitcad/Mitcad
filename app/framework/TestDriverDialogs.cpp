@@ -165,15 +165,55 @@ void TestDriver::testDialogControls(const QString& kind) {
     auto* table = window->findChild<QTableWidget*>(QStringLiteral("librarySources"));
     if (!check(table != nullptr && table->rowCount() == 2, QStringLiteral("source fixture rows missing"))) { return; }
     const QModelIndex index = table->model()->index(0, 1);
+    // The table has the keyboard focus, as when the user tabs to it: the
+    // view then paints its current cell as the focused one (mitcad#973).
+    if (QApplication::activeWindow() != window) {
+      QT_WARNING_PUSH
+      QT_WARNING_DISABLE_DEPRECATED
+      QApplication::setActiveWindow(window);
+      QT_WARNING_POP
+    }
+    table->setFocus(Qt::TabFocusReason);
     table->setCurrentIndex(index);
+    check(table->hasFocus(), QStringLiteral("source table did not take the keyboard focus"));
     const QVariant before = index.data(Qt::CheckStateRole);
     QKeyEvent key(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
     QApplication::sendEvent(table, &key);
     check(index.data(Qt::CheckStateRole) != before, QStringLiteral("Space did not toggle source Auto-update"));
     QStyleOptionViewItem option;
     option.initFrom(table);
-    option.rect = table->visualRect(index);
     option.features = QStyleOptionViewItem::HasCheckIndicator;
+    // The lightest and darkest grey within a cell's indicator as the table
+    // paints it; -1 when nothing was grabbed.
+    const auto indicatorContrast = [table, &option](const QModelIndex& cell, Qt::CheckState state) {
+      option.rect = table->visualRect(cell);
+      option.checkState = state;
+      const QRect indicator = table->style()->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &option, table);
+      const QImage pixels = table->viewport()->grab(indicator).toImage();
+      if (pixels.isNull()) { return -1; }
+      int darkest = 255;
+      int lightest = 0;
+      for (int y = 0; y < pixels.height(); ++y) {
+        for (int x = 0; x < pixels.width(); ++x) {
+          const int shade = qGray(pixels.pixel(x, y));
+          darkest = std::min(darkest, shade);
+          lightest = std::max(lightest, shade);
+        }
+      }
+      return lightest - darkest;
+    };
+    // Auto-update checked by Space in the selected row's focused current
+    // cell, and On beside it: both checked indicators visible (mitcad#973,
+    // where Auto-update's box and checkmark left a plain selected cell).
+    for (const QModelIndex& on : {index, table->model()->index(0, 0)}) {
+      check(on.data(Qt::CheckStateRole).toInt() == Qt::Checked && table->selectionModel()->isSelected(on),
+            QStringLiteral("source fixture row is not checked and selected"));
+      const int contrast = indicatorContrast(on, Qt::Checked);
+      check(contrast > 24, QStringLiteral("checked source indicator in the selected row is not visible"));
+      qInfo() << "Dialog checked checkbox contrast" << on.row() << on.column() << contrast
+              << "focused" << (on == table->currentIndex() && table->hasFocus());
+    }
+    option.rect = table->visualRect(index);
     option.checkState = Qt::CheckState(index.data(Qt::CheckStateRole).toInt());
     const QPoint point = table->style()->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &option, table).center();
     const QPointF local(point);
@@ -184,22 +224,9 @@ void TestDriver::testDialogControls(const QString& kind) {
     QApplication::sendEvent(table->viewport(), &up);
     check(index.data(Qt::CheckStateRole) == before, QStringLiteral("mouse did not restore source Auto-update"));
     for (const QModelIndex& off : {table->model()->index(0, 1), table->model()->index(1, 0)}) {
-      option.rect = table->visualRect(off);
-      option.checkState = Qt::Unchecked;
-      const QRect indicator = table->style()->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &option, table);
-      const QImage pixels = table->viewport()->grab(indicator).toImage();
-      int darkest = 255;
-      int lightest = 0;
-      for (int y = 0; y < pixels.height(); ++y) {
-        for (int x = 0; x < pixels.width(); ++x) {
-          const int shade = qGray(pixels.pixel(x, y));
-          darkest = std::min(darkest, shade);
-          lightest = std::max(lightest, shade);
-        }
-      }
-      check(!pixels.isNull() && lightest - darkest > 12,
-            QStringLiteral("unchecked source indicator has no visible outline"));
-      qInfo() << "Dialog unchecked checkbox contrast" << off.row() << off.column() << lightest - darkest;
+      const int contrast = indicatorContrast(off, Qt::Unchecked);
+      check(contrast > 12, QStringLiteral("unchecked source indicator has no visible outline"));
+      qInfo() << "Dialog unchecked checkbox contrast" << off.row() << off.column() << contrast;
     }
     qInfo() << "Dialog source checkboxes: keyboard and mouse toggled";
   }

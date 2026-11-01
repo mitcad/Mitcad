@@ -56,10 +56,7 @@ fn two_bodies() -> Document<MockKernel> {
 
 /// A folder of the test's own for the files it writes.
 fn folder(name: &str) -> std::path::PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("mitcad-mesh-export-{}-{name}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    mitcad_model::testing::unique_temp_dir(&format!("mesh-export-{name}"))
 }
 
 fn path_in(dir: &std::path::Path, name: &str) -> String {
@@ -161,7 +158,7 @@ fn mesh_files_are_written_in_the_unit() {
         doc.kernel().write_units.borrow().last(),
         Some(&LengthUnit::Foot)
     );
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -227,7 +224,7 @@ fn a_longest_edge_splits_the_mesh_keeping_its_shape() {
         json!({"cmd": "export", "path": stl, "refinement": {"deviation": 0.03, "angle": 0.26, "max_edge": -1}}),
     );
     assert!(error.contains("maximum edge length"), "{error}");
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -286,7 +283,7 @@ fn an_obj_file_lies_on_the_print_bed_face() {
         json!({"cmd": "export", "path": path_in(&dir, "print.usdz"), "on_bed": true}),
     );
     assert!(error.contains("only 3MF, STL and OBJ"), "{error}");
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -330,5 +327,5 @@ fn a_file_per_body_puts_each_body_on_its_own_print_bed_face() {
             "{body}: {min:?} {max:?}"
         );
     }
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }

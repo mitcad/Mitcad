@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-<!-- Mitcad icon: 24 x 24, dark outline, blue solids, orange actions. A profile turned a quarter turn about its axis. -->
+<!-- MitCad icon: 24 x 24, dark outline, blue solids, orange actions. A profile turned a quarter turn about its axis. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2b3a4a" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
   <rect x="7.5" y="7.5" width="9" height="9" fill="#9cc0ec"/>
   <path d="M10.5 7.5 V9.5 H13.5 V7.5 M16.5 10.5 H14.5 V13.5 H16.5"/>

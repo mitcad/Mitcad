@@ -37,4 +37,23 @@ void installTypedTextLogIfRequested();
 // later), so a fixed wait could release them too early (mitcad#271).
 void installKeyLogIfRequested();
 
+// The shortcut diagnosis in the log (MITCAD_LOG_SHORTCUTS=1, mitcad#1016:
+// on Windows a key was logged but started nothing after a UI test had
+// maximized and restored the window in session 0, which left the app with
+// no active window; tools/ui-windows-lib.ps1, Ui-Activate). For each key
+// press: "Shortcut check
+// <key> to <receiver>: active window ..., focus window ..., focus widget
+// ..., popup ..., modal ..., application <state>" (on Windows also the
+// native active, focus and foreground windows), one "Shortcut <key>:
+// action|shortcut ..." per action or shortcut that has the key (enabled,
+// its context, whether its window is the active one), then "Shortcut event
+// <key> to ..." when a shortcut took it or "Shortcut none for <key>: a key
+// press to ..." when it went on as a key. Also "Window activated|
+// deactivated: ...", "Window state <window>: maximized (was normal)",
+// "Focus window: ...", "Application state: ..." and on Windows the native
+// activation, focus, enabling and size messages ("Native WM_ACTIVATE
+// inactive: <window> (other <window>)"). "Shortcut log on" says it is
+// installed.
+void installShortcutLogIfRequested();
+
 } // namespace mitcad

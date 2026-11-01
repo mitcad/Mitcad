@@ -62,6 +62,33 @@ impl Expr {
         self.reference_spans().is_empty() && self.column_reference_spans().is_empty()
     }
 
+    /// Whether the expression is one number as typed (mitcad#1092): a
+    /// literal with or without a sign and a unit, such as `90`, `-7.5`,
+    /// `450 deg` or `(-1.5) rad`. A parameter name, a constant, a function
+    /// call or any operator other than the leading sign makes it something
+    /// computed.
+    pub fn is_plain_number(&self) -> bool {
+        fn number(node: &Node) -> bool {
+            matches!(node.kind, NodeKind::Number(_))
+        }
+        fn signed(node: &Node) -> bool {
+            match &node.kind {
+                NodeKind::Neg(inner) => number(inner),
+                _ => number(node),
+            }
+        }
+        match &self.root.kind {
+            // `-450 deg`: the sign before the unit.
+            NodeKind::Neg(inner) => match &inner.kind {
+                NodeKind::WithUnit { value, .. } => number(value),
+                _ => number(inner),
+            },
+            // `450 deg` or `(-450) deg`.
+            NodeKind::WithUnit { value, .. } => signed(value),
+            _ => number(&self.root),
+        }
+    }
+
     /// The table columns the expression uses (mitcad#667), as `(table,
     /// column)` pairs, each once, in order of first appearance: `Screws.dk`
     /// is `("Screws", "dk")`. Parameter names are [`Expr::references`].

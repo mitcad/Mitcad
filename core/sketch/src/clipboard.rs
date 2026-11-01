@@ -537,7 +537,7 @@ impl SketchEdit<'_> {
     pub fn paste(&mut self, fragment: &Fragment, by: P2) -> Result<Pasted, String> {
         if fragment.version > FRAGMENT_VERSION {
             return Err(format!(
-                "the copied geometry is of a newer version of Mitcad (fragment version {})",
+                "the copied geometry is of a newer version of MitCad (fragment version {})",
                 fragment.version
             ));
         }

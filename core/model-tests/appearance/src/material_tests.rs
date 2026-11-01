@@ -193,7 +193,7 @@ fn a_hand_set_appearance_is_kept_unless_replaced() {
         json!({"cmd": "set_body_material", "uid": "F2.b0", "material": "cheese"}),
     );
     assert!(
-        error.contains("unknown material 'cheese' (known: steel,"),
+        error.contains("unknown material cheese (known: steel,"),
         "{error}"
     );
     // The model's own call keeps the appearance (imports set both).
@@ -234,19 +234,19 @@ fn document_materials_are_made_edited_and_deleted() {
         ),
         (
             json!({"cmd": "create_material", "appearance": "nowhere"}),
-            "there is no appearance 'nowhere'",
+            "there is no appearance nowhere",
         ),
         (
             json!({"cmd": "create_material", "name": "Acme PETG"}),
-            "a material is named 'Acme PETG'",
+            "a material is named Acme PETG",
         ),
         (
             json!({"cmd": "create_material", "name": "Nylon"}),
-            "a material is named 'Nylon'",
+            "a material is named Nylon",
         ),
         (
             json!({"cmd": "create_material", "id": "acme/petg"}),
-            "a material 'acme/petg' exists",
+            "a material acme/petg exists",
         ),
         (
             json!({"cmd": "create_material", "density": 0}),
@@ -440,7 +440,7 @@ fn components_give_their_bodies_a_default_material() {
         &mut doc,
         json!({"cmd": "set_component_material", "component": "Arm", "material": "cheese"}),
     );
-    assert!(error.contains("unknown material 'cheese'"), "{error}");
+    assert!(error.contains("unknown material cheese"), "{error}");
     let error = refused(
         &mut doc,
         json!({"cmd": "set_component_material", "component": "Nothing", "material": "abs"}),
@@ -513,7 +513,7 @@ fn materials_survive_the_design_file_and_are_compared() {
         (
             "materials",
             json!([{"id": "a", "name": "A", "density": 1}, {"id": "a", "name": "B", "density": 1}]),
-            "materials[1]: material 'a' is listed more than once",
+            "materials[1]: material a is listed more than once",
         ),
         (
             "materials",
@@ -523,7 +523,7 @@ fn materials_survive_the_design_file_and_are_compared() {
         (
             "component_materials",
             json!([{"component": "C0", "material": "cheese"}]),
-            "component_materials[0]: unknown material 'cheese'",
+            "component_materials[0]: unknown material cheese",
         ),
         (
             "component_materials",

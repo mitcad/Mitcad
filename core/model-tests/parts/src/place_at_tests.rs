@@ -837,13 +837,14 @@ fn a_refused_pair_keeps_the_undo_and_redo_steps() {
                    "second": pair_gear(json!({"seat": {"shaft": "z", "offset": 20}}))}),
             "not placed by a mesh too",
         ),
-        // A belt drive whose second pulley has the name the first took.
+        // A belt drive whose second pulley has an empty name (a name the
+        // first took is allowed, mitcad#1107).
         (
             json!({"cmd": "add_belt_drive",
                    "first": pair_pulley(json!({"at": {"axis": "z"}})),
                    "second": pair_pulley(json!({"at": {"axis": "z"}})),
-                   "names": ["Drive", "Drive"]}),
-            "already named 'Drive'",
+                   "names": ["Drive", " "]}),
+            "the feature name is empty",
         ),
     ];
     for (refused, expected) in refusals {

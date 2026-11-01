@@ -944,7 +944,7 @@ impl<K: Kernel> WoodCrateOps<K> for Document<K> {
             };
             if !same(section, size) {
                 return Err(refuse(format!(
-                    "the {} fits {} x {}, {} is {} x {}",
+                    "the {} fits {} × {}, {} is {} × {}",
                     if fit.kind.is_empty() {
                         "connector"
                     } else {

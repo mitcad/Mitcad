@@ -206,7 +206,7 @@ pub fn write(sheets: &[Sheet], title: &str) -> Vec<u8> {
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"
             .to_vec(),
     );
-    let mut info = b"<< /Producer (Mitcad) /Title ".to_vec();
+    let mut info = b"<< /Producer (MitCad) /Title ".to_vec();
     info.extend_from_slice(&pdf_string(title));
     info.extend_from_slice(b" >>");
     objects.push(info);

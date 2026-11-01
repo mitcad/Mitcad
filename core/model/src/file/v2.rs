@@ -142,6 +142,11 @@ struct FileOut<'a> {
     // when there are any.
     #[serde(skip_serializing_if = "crate::tables::Tables::is_empty")]
     tables: &'a crate::tables::Tables,
+    // The design's statistics (mitcad#1088), when anything of them is
+    // known. Read apart from the definition (`file/mod.rs`, `load_parts`),
+    // so not in `TOP_FIELDS`.
+    #[serde(skip_serializing_if = "super::DesignStatistics::is_empty")]
+    statistics: &'a super::DesignStatistics,
 }
 
 /// A component's default material (mitcad#640).
@@ -150,6 +155,10 @@ struct FileOut<'a> {
 struct ComponentMaterial {
     component: ComponentUid,
     material: String,
+    /// The appearance of the material its bodies get (mitcad#1055); left
+    /// out: the material's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    appearance: Option<String>,
 }
 
 /// A Flat Pattern: its body and settings.
@@ -211,6 +220,9 @@ struct OccurrenceOut {
     // The condition it is shown under (mitcad#800).
     #[serde(skip_serializing_if = "Option::is_none")]
     visible_when: Option<String>,
+    // Drawn see-through (mitcad#1093).
+    #[serde(skip_serializing_if = "is_false")]
+    transparent: bool,
 }
 
 fn is_root(component: &ComponentUid) -> bool {
@@ -303,9 +315,18 @@ struct BodyOut<'a> {
     visible_when: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     face_appearance_exprs: Option<&'a BTreeMap<String, String>>,
+    // Drawn see-through (mitcad#1093).
+    #[serde(skip_serializing_if = "is_false")]
+    transparent: bool,
 }
 
 pub(super) fn save(state: &DocState) -> String {
+    save_with(state, &super::DesignStatistics::default())
+}
+
+/// [`save`] with the design's statistics (mitcad#1088), left out while
+/// nothing of them is known.
+pub(super) fn save_with(state: &DocState, statistics: &super::DesignStatistics) -> String {
     let (appearances, images) = appearances_out(&state.appearances);
     let parameters = &state.parameters;
     let context = parameters.context();
@@ -375,6 +396,7 @@ pub(super) fn save(state: &DocState) -> String {
                 visible: (!o.visible).then_some(false),
                 pattern: o.pattern.clone(),
                 visible_when: state.bindings.occurrence_visible_when.get(&o.uid).cloned(),
+                transparent: o.transparent,
             })
             .collect(),
         active_component: (!assembly.active.is_root()).then_some(assembly.active),
@@ -421,6 +443,7 @@ pub(super) fn save(state: &DocState) -> String {
                     face_appearance_exprs: attributes
                         .map(|a| &a.face_appearance_exprs)
                         .filter(|faces| !faces.is_empty()),
+                    transparent: attributes.is_some_and(|a| a.transparent),
                 }
             })
             .collect(),
@@ -463,6 +486,7 @@ pub(super) fn save(state: &DocState) -> String {
             .map(|(c, m)| ComponentMaterial {
                 component: *c,
                 material: m.clone(),
+                appearance: state.component_appearances.get(c).cloned(),
             })
             .collect(),
         print_profiles: &state.print_profiles,
@@ -486,6 +510,7 @@ pub(super) fn save(state: &DocState) -> String {
             .collect(),
         image_references: &state.image_references,
         tables: &state.tables,
+        statistics,
     };
     let mut json =
         serde_json::to_string_pretty(&file).expect("the design file schema always serializes");
@@ -698,6 +723,9 @@ struct BodyIn {
     visible_when: Option<String>,
     #[serde(default)]
     face_appearance_exprs: BTreeMap<String, String>,
+    // Drawn see-through (mitcad#1093).
+    #[serde(default)]
+    transparent: bool,
 }
 
 fn visible() -> bool {
@@ -739,6 +767,9 @@ struct OccurrenceIn {
     pattern: Option<crate::features::point_pattern::PatternInstance>,
     #[serde(default)]
     visible_when: Option<String>,
+    // Drawn see-through (mitcad#1093).
+    #[serde(default)]
+    transparent: bool,
 }
 
 struct FeatureIn {
@@ -987,6 +1018,7 @@ fn assembly_in(
             transform,
             grounded: o.grounded,
             visible: o.visible,
+            transparent: o.transparent,
             number: o.number,
             pattern: o.pattern,
         });
@@ -1225,7 +1257,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     for (i, profile) in print_profiles.iter().enumerate() {
         if print_profiles[..i].iter().any(|p| p.id == profile.id) {
             return Err(invalid(format!(
-                "print_profiles[{i}]: profile '{}' is listed more than once",
+                "print_profiles[{i}]: profile {} is listed more than once",
                 profile.id
             )));
         }
@@ -1244,7 +1276,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
                 .map_err(|e| invalid(format!("{key}[{i}]: {e}")))?;
             if annotations.iter().any(|m| m.name == annotation.name) {
                 return Err(invalid(format!(
-                    "{key}[{i}]: annotation '{}' is listed more than once",
+                    "{key}[{i}]: annotation {} is listed more than once",
                     annotation.name
                 )));
             }
@@ -1255,7 +1287,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
                     .find(|m| m.letter.as_ref() == Some(letter))
             {
                 return Err(invalid(format!(
-                    "{key}[{i}]: datum {letter} is lettered on '{}' and on '{}'",
+                    "{key}[{i}]: datum {letter} is lettered on {} and on {}",
                     other.name, annotation.name
                 )));
             }
@@ -1330,7 +1362,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             .any(|d| d.component == drawing.component && d.name == drawing.name)
         {
             return Err(invalid(format!(
-                "drawings[{i}]: two drawings of {} are named '{}'",
+                "drawings[{i}]: two drawings of {} are named {}",
                 drawing.component, drawing.name
             )));
         }
@@ -1352,7 +1384,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     for (i, image) in image_references.iter().enumerate() {
         if image_references[..i].iter().any(|o| o.name == image.name) {
             return Err(invalid(format!(
-                "image_references[{i}]: image reference '{}' is listed more than once",
+                "image_references[{i}]: image reference {} is listed more than once",
                 image.name
             )));
         }
@@ -1387,10 +1419,9 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     let mut warnings = Vec::new();
     let renamed = load_parameters(&mut state, context, &parameters, &features, &mut warnings)?;
 
-    // Uids and names first, so references can tell a missing feature from a
-    // later one.
+    // Uids first, so references can tell a missing feature from a later
+    // one. Names may repeat (mitcad#1107): references go by uid.
     let mut uids = HashSet::new();
-    let mut names = HashSet::new();
     for (i, f) in features.iter().enumerate() {
         if !uids.insert(f.uid) {
             return Err(invalid(format!(
@@ -1400,12 +1431,6 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
         }
         if f.name.trim().is_empty() {
             return Err(invalid(format!("features[{i}]: the name is empty")));
-        }
-        if !names.insert(f.name.as_str()) {
-            return Err(invalid(format!(
-                "features[{i}]: feature name '{}' is used more than once",
-                f.name
-            )));
         }
     }
     let mut entries = Vec::with_capacity(features.len());
@@ -1417,7 +1442,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
                 let actual = renamed.get(name).unwrap_or(name);
                 params
                     .find(actual)
-                    .ok_or_else(|| format!("{slot}: parameter '{name}' does not exist"))
+                    .ok_or_else(|| format!("{slot}: parameter {name} does not exist"))
             })
             .map_err(|e| invalid(format!("features[{i}] ({}): {e}", f.name)))?;
         // A growing helix of a file written before mitcad#83 is FreeCAD's.
@@ -1532,7 +1557,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             )));
         }
         if let Some(id) = body.material.as_deref().filter(|id| !known_material(id)) {
-            return Err(invalid(format!("bodies[{i}]: unknown material '{id}'")));
+            return Err(invalid(format!("bodies[{i}]: unknown material {id}")));
         }
         if let Some(face) = body
             .face_appearances
@@ -1540,7 +1565,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             .find(|face| face.parse::<crate::topo::FaceName>().is_err())
         {
             return Err(invalid(format!(
-                "bodies[{i}]: '{face}' is no face name in face_appearances"
+                "bodies[{i}]: {face} is no face name in face_appearances"
             )));
         }
         if let Some(face) = body
@@ -1549,7 +1574,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             .find(|face| face.parse::<crate::topo::FaceName>().is_err())
         {
             return Err(invalid(format!(
-                "bodies[{i}]: '{face}' is no face name in face_appearance_exprs"
+                "bodies[{i}]: {face} is no face name in face_appearance_exprs"
             )));
         }
         if let Some(face) = body
@@ -1558,7 +1583,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             .filter(|face| face.parse::<crate::topo::FaceName>().is_err())
         {
             return Err(invalid(format!(
-                "bodies[{i}]: '{face}' is no face name in print_bed_face"
+                "bodies[{i}]: {face} is no face name in print_bed_face"
             )));
         }
         let attributes = BodyAttributes {
@@ -1571,6 +1596,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             material_expr: body.material_expr.filter(|t| !t.trim().is_empty()),
             visible_when: body.visible_when.filter(|t| !t.trim().is_empty()),
             face_appearance_exprs: body.face_appearance_exprs,
+            transparent: body.transparent,
         };
         if !attributes.is_default() {
             state.body_attributes.insert(body.uid, attributes);
@@ -1595,7 +1621,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     for (i, view) in views.iter().enumerate() {
         if views[..i].iter().any(|v| v.name == view.name) {
             return Err(invalid(format!(
-                "views[{i}]: named view '{}' is listed more than once",
+                "views[{i}]: named view {} is listed more than once",
                 view.name
             )));
         }
@@ -1621,7 +1647,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     for (i, analysis) in analyses.iter().enumerate() {
         if analyses[..i].iter().any(|a| a.name == analysis.name) {
             return Err(invalid(format!(
-                "analyses[{i}]: analysis '{}' is listed more than once",
+                "analyses[{i}]: analysis {} is listed more than once",
                 analysis.name
             )));
         }
@@ -1632,7 +1658,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     for (i, study) in motion_studies.iter().enumerate() {
         if motion_studies[..i].iter().any(|s| s.name == study.name) {
             return Err(invalid(format!(
-                "motion_studies[{i}]: motion study '{}' is listed more than once",
+                "motion_studies[{i}]: motion study {} is listed more than once",
                 study.name
             )));
         }
@@ -1651,7 +1677,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     for (i, set) in contact_sets.iter().enumerate() {
         if contact_sets[..i].iter().any(|s| s.name == set.name) {
             return Err(invalid(format!(
-                "contact_sets[{i}]: contact set '{}' is listed more than once",
+                "contact_sets[{i}]: contact set {} is listed more than once",
                 set.name
             )));
         }
@@ -1668,17 +1694,17 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
         let id = &appearance.id;
         if !crate::appearance::valid_id(id) {
             return Err(invalid(format!(
-                "appearances[{i}]: '{id}' is no appearance id"
+                "appearances[{i}]: {id} is no appearance id"
             )));
         }
         if crate::appearance::library_appearance(id).is_some() {
             return Err(invalid(format!(
-                "appearances[{i}]: '{id}' is a library appearance's id"
+                "appearances[{i}]: {id} is a library appearance's id"
             )));
         }
         if appearances[..i].iter().any(|a| a.id == *id) {
             return Err(invalid(format!(
-                "appearances[{i}]: appearance '{id}' is listed more than once"
+                "appearances[{i}]: appearance {id} is listed more than once"
             )));
         }
     }
@@ -1688,7 +1714,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     for (i, material) in materials.iter().enumerate() {
         if materials[..i].iter().any(|m| m.id == material.id) {
             return Err(invalid(format!(
-                "materials[{i}]: material '{}' is listed more than once",
+                "materials[{i}]: material {} is listed more than once",
                 material.id
             )));
         }
@@ -1702,9 +1728,12 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
         }
         if !known_material(&c.material) {
             return Err(invalid(format!(
-                "component_materials[{i}]: unknown material '{}'",
+                "component_materials[{i}]: unknown material {}",
                 c.material
             )));
+        }
+        if let Some(look) = c.appearance {
+            state.component_appearances.insert(c.component, look);
         }
         if state
             .component_materials
@@ -1718,6 +1747,20 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
         }
     }
     state.materials = materials;
+    // A material's own filament colour from before (mitcad#1055): an
+    // appearance of its list.
+    let coloured: Vec<usize> = state
+        .materials
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.filament.contains_key("filament_colour"))
+        .map(|(i, _)| i)
+        .collect();
+    for i in coloured {
+        let mut material = state.materials[i].clone();
+        state.adopt_filament_colour(&mut material, false);
+        state.materials[i] = material;
+    }
     state.print_profiles = print_profiles;
     state.annotations = annotations;
     state.annotation_text_height = annotation_text_height;
@@ -1892,7 +1935,7 @@ fn settle_unitless_slots(state: &mut DocState, warnings: &mut Vec<String>) {
             || state.configurations.parameters.contains(&name)
         {
             warnings.push(format!(
-                "{feature} {slot}: parameter '{name}' is {} ({}) in a slot that takes a \
+                "{feature} {slot}: parameter {name} is {} ({}) in a slot that takes a \
                  unitless number; the slot reads it as {}: give the parameter no unit, or use \
                  another one",
                 describe(param.unit()),
@@ -1913,15 +1956,15 @@ fn settle_unitless_slots(state: &mut DocState, warnings: &mut Vec<String>) {
         // Limits in a length unit (mitcad#665) keep it a length.
         if let Err(error) = state.parameters.update(id, new, Unit::NONE) {
             warnings.push(format!(
-                "{feature} {slot}: parameter '{name}' keeps its unit in a slot that takes a \
+                "{feature} {slot}: parameter {name} keeps its unit in a slot that takes a \
                  unitless number ({error}); the slot reads it as {number}"
             ));
             continue;
         }
         if !same && references {
             warnings.push(format!(
-                "{feature} {slot}: parameter '{name}' is now unitless with the number it gave, \
-                 {number}; its expression '{expression}' gives another number without a unit"
+                "{feature} {slot}: parameter {name} is now unitless with the number it gave, \
+                 {number}; its expression “{expression}” gives another number without a unit"
             ));
         }
     }
@@ -1949,7 +1992,7 @@ fn units_context(units: &UnitsIn) -> Result<EvalContext, FileError> {
                 (Some((unit, 1)), None) => Some(unit),
                 _ => None,
             })
-            .ok_or_else(|| invalid(format!("units: '{text}' is not a length unit")))?;
+            .ok_or_else(|| invalid(format!("units: “{text}” is not a length unit")))?;
     }
     if let Some(text) = &units.angle {
         context.default_angle_unit = Unit::parse(text)
@@ -1958,7 +2001,7 @@ fn units_context(units: &UnitsIn) -> Result<EvalContext, FileError> {
                 (None, Some((unit, 1))) => Some(unit),
                 _ => None,
             })
-            .ok_or_else(|| invalid(format!("units: '{text}' is not an angle unit")))?;
+            .ok_or_else(|| invalid(format!("units: “{text}” is not an angle unit")))?;
     }
     Ok(context)
 }
@@ -1993,7 +2036,7 @@ fn load_parameters(
             return Err(at("the name is empty".to_owned()));
         }
         if !seen.insert(p.name.as_str()) {
-            return Err(at(format!("parameter '{}' already exists", p.name)));
+            return Err(at(format!("parameter {} already exists", p.name)));
         }
         // A name that is now reserved: in files from before expressions a
         // unit, function or constant (`m`, `E`); with an expression only a
@@ -2008,7 +2051,7 @@ fn load_parameters(
         let name = match legacy {
             Some(new) => {
                 warnings.push(format!(
-                    "parameter '{}' is renamed to '{new}': '{}' is a unit, function \
+                    "parameter {} is renamed to {new}: {} is a unit, function \
                      or constant in expressions",
                     p.name, p.name
                 ));

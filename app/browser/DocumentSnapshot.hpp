@@ -12,6 +12,7 @@
 #include <QVector>
 
 #include "../framework/Command.hpp"
+#include "../framework/NoticeLevel.hpp"
 
 namespace mitcad {
 
@@ -24,7 +25,12 @@ struct DocumentSnapshot {
     QString name;
     QString type;   // sketch, extrude, construction_plane, ...
     QString status; // ok, warning (ok with warnings, P9), error, suppressed, rolled_back, pending
-    QString error;  // the error, or the import note and the warnings
+    // The error, or the import note and the warnings: its notices' messages
+    // (mitcad#1040).
+    QString error;
+    // Its level from the model (mitcad#1040): error, warning, info (an
+    // import note only), or empty when it has nothing to say.
+    QString level;
     // What the importer that made it said (mitcad#170): a fallback, an item
     // that came in partly, a placeholder of a skipped item; also in `error`.
     QString importNote;
@@ -45,6 +51,11 @@ struct DocumentSnapshot {
     // The condition it is suppressed under (mitcad#800); empty: none.
     QString suppressedWhen;
 
+    // Whether it has something to tell as information: an import note, or
+    // infos of a feature that built (mitcad#1106: a fillet built 0.1 %
+    // smaller than asked), its level `info`.
+    bool noted() const { return !importNote.isEmpty() || level == QStringLiteral("info"); }
+
     bool isSketch() const { return type == QStringLiteral("sketch"); }
     bool isConstruction() const { return type.startsWith(QStringLiteral("construction_")); }
     // Joints, as-built joints, joint origins and rigid groups (mitcad#55):
@@ -58,6 +69,9 @@ struct DocumentSnapshot {
     bool isMotionLink() const { return type == QStringLiteral("motion_link"); }
     // Evaluated without an error (perhaps with warnings).
     bool succeeded() const { return status == QStringLiteral("ok") || status == QStringLiteral("warning"); }
+    // Its level for the UI (mitcad#1040): Error, Warning, Information, or
+    // Hint when it has nothing to say.
+    NoticeLevel noticeLevel() const { return noticeLevelFromModel(level, NoticeLevel::Hint); }
     // Before the marker and not suppressed: its result exists.
     bool isActive() const { return succeeded() || status == QStringLiteral("error"); }
   };
@@ -68,6 +82,7 @@ struct DocumentSnapshot {
     QString component; // C1
     bool grounded = false;
     bool visible = true;
+    bool transparent = false; // drawn see-through with its contents (mitcad#1093)
     // Where it places its component in the design: 4 rows of 4 numbers.
     QJsonArray world;
     QVector<Occurrence> children;
@@ -88,6 +103,7 @@ struct DocumentSnapshot {
     QString name;
     QString component;
     bool visible = true;
+    bool transparent = false; // drawn see-through (mitcad#1093)
     bool mesh = false; // triangles without surfaces (mitcad#399)
     // The face that lies on the print bed (mitcad#731): its name as
     // assigned (empty: none), the faces it finds at the marker, and why it
@@ -166,6 +182,11 @@ struct DocumentSnapshot {
   // the view is isolated to (bodies and occurrences; none: everything).
   bool originShown = false;
   Selection isolation;
+  // The Center of Mass marker (mitcad#1094): the `center_of_mass` query's
+  // answer while the design has one (its `marker` with the light bulb;
+  // `error` when the query failed), else empty. Read only while there is
+  // a marker (view/CenterOfMass.hpp reads it).
+  QJsonObject centerOfMass;
   // The values of the parameters that Show When conditions use
   // (mitcad#863), by name, as an expression writes them ('No', 12.5 mm):
   // the light bulbs' tooltips of conditioned rows. Read only while a body

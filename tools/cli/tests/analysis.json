@@ -33,6 +33,15 @@
     "total": {"mass": 0.3984, "volume": 56000}}}},
   {"expect": {"query": {"query": "properties", "bodies": ["F2.b0"], "densities": {"F2.b0": 1}},
     "result": {"bodies": [{"material": null, "mass": 0.048}]}}},
+  {"comment": "Physical Properties' boxes along the design's axes and the bodies' faces, edges and vertices, each and in total, with the total area (mitcad#1095)."},
+  {"expect": {"query": {"query": "properties"}, "tolerance": 1e-6, "result": {
+    "bodies": [
+      {"uid": "F2.b0", "bbox": {"min": [0, 0, 0], "max": [60, 40, 20], "size": [60, 40, 20]},
+       "faces": 6, "edges": 12, "vertices": 8},
+      {"uid": "F4.b0", "bbox": {"min": [50, 30, 0], "max": [70, 50, 20], "size": [20, 20, 20]},
+       "faces": 6, "edges": 12, "vertices": 8}],
+    "total": {"area": 11200, "bbox": {"min": [0, 0, 0], "max": [70, 50, 20], "size": [70, 50, 20]},
+      "faces": 12, "edges": 24, "vertices": 16}}}},
 
   {"comment": "Hiding a body is an attribute; the analysis still sees it."},
   {"cmd": "set_body_visible", "uid": "F2.b0", "visible": false},

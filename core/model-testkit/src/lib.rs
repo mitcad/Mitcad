@@ -39,6 +39,10 @@ use mitcad_model_base::sweeps::{LoftEndKind, PathCurve};
 use mitcad_model_base::topo::{EdgeName, FaceName, RoleKey, SegmentKey};
 use mitcad_model_base::transform::{Instance, PrimitiveShape, PrimitiveSpec, Transform};
 
+/// Temporary folders of a test's own (mitcad#1017).
+pub mod temp;
+pub use temp::{remove_temp, unique_temp_dir, unique_temp_path};
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MockShape {
     /// The operations that built the shape, e.g. `cut(prism(F2:0..20),prism(F4:0..30))`.
@@ -141,6 +145,8 @@ pub struct MockKernel {
     /// Notes of the results of operations (P9): "fillet" -> what a smaller
     /// fillet would say; `notes` gives them for shapes the operation made.
     pub notes: RefCell<BTreeMap<&'static str, String>>,
+    /// Infos of the results of operations (mitcad#1106), as `notes`.
+    pub infos: RefCell<BTreeMap<&'static str, String>>,
     /// Profile features: what the extrude, revolve, hole and thread calls
     /// were asked for, one line each.
     pub specs: RefCell<Vec<String>>,
@@ -256,6 +262,13 @@ pub struct MockKernel {
     /// behind a section's plane of each box and gives where the plane cuts
     /// it as a cut face; every edge whole and no cut faces otherwise.
     pub cuts_sections: Cell<bool>,
+    /// Drawings (mitcad#1033): the histories of the shapes each
+    /// `project_view` call was given, in order.
+    pub projected: RefCell<Vec<Vec<String>>>,
+    /// Drawings (mitcad#1033): `project_view` marks its projections as
+    /// made from a triangulation (`polygonal`), as the kernel's quick path
+    /// does; otherwise as exact.
+    pub projects_polygonal: Cell<bool>,
     /// Section Analysis (mitcad#824): `section` cuts the bounds as
     /// `section_curves` does (one edge per side of the polygon, one face
     /// when there are edges, the polygon's perimeter and area); otherwise
@@ -2594,6 +2607,15 @@ impl Kernel for MockKernel {
             .collect()
     }
 
+    fn infos(&self, shape: &MockShape) -> Vec<String> {
+        self.infos
+            .borrow()
+            .iter()
+            .filter(|(op, _)| shape.history.starts_with(&format!("{op}(")))
+            .map(|(_, info)| info.clone())
+            .collect()
+    }
+
     // The result store (P7d): a shape as JSON.
 
     fn shape_bytes(&self, shape: &MockShape) -> Result<Vec<u8>, KernelError> {
@@ -2834,6 +2856,7 @@ impl Kernel for MockKernel {
             surfaces: self.surfaces.clone(),
             files: self.files.clone(),
             notes: self.notes.clone(),
+            infos: self.infos.clone(),
             curves: self.curves.clone(),
             named_curves: self.named_curves.clone(),
             edge_curves: self.edge_curves.clone(),
@@ -3723,7 +3746,8 @@ impl Kernel for MockKernel {
     }
 
     /// Drawings (mitcad#471): the twelve edges of each shape's box, all
-    /// seen; a section's (mitcad#717) what lies behind its plane of them,
+    /// seen, each with its shape's index as its source (mitcad#1112); a
+    /// section's (mitcad#717) what lies behind its plane of them,
     /// and where the plane cuts the box as its cut face.
     fn project_view(
         &self,
@@ -3732,7 +3756,13 @@ impl Kernel for MockKernel {
     ) -> Result<mitcad_model_base::drawing_view::ViewProjection, KernelError> {
         use mitcad_model_base::drawing_view::{ViewCurve, ViewEdge, ViewEdgeKind, ViewProjection};
         self.call("project_view")?;
-        let mut projection = ViewProjection::default();
+        self.projected
+            .borrow_mut()
+            .push(shapes.iter().map(|s| s.history.clone()).collect());
+        let mut projection = ViewProjection {
+            polygonal: self.projects_polygonal.get(),
+            ..ViewProjection::default()
+        };
         let section = spec.section.filter(|_| self.cuts_sections.get());
         let side = |p: [f64; 3]| {
             section.map_or(-1.0, |c| {
@@ -3744,7 +3774,7 @@ impl Kernel for MockKernel {
         let lerp = |a: [f64; 3], b: [f64; 3], t: f64| -> [f64; 3] {
             std::array::from_fn(|k| a[k] + (b[k] - a[k]) * t)
         };
-        for shape in shapes {
+        for (index, shape) in shapes.iter().enumerate() {
             let Some(b) = shape.bounds else { continue };
             let corner = |i: usize| {
                 [
@@ -3777,6 +3807,7 @@ impl Kernel for MockKernel {
                         visible: true,
                         kind: ViewEdgeKind::Sharp,
                         curve: ViewCurve::Line(spec.project(p), spec.project(q)),
+                        source: Some(index),
                     });
                 }
             }
@@ -4971,6 +5002,26 @@ impl Kernel for MockKernel {
             edges,
             bounds: spec.body.bounds,
             parts: Vec::new(),
+        })
+    }
+
+    // Topology counts for Physical Properties (mitcad#1095).
+
+    /// The faces and face-pair edges of the shape (of each solid of a
+    /// shape of several), and the vertices by Euler's formula for closed
+    /// shells without holes (V = E - F + 2 per solid): 6, 12 and 8 for a
+    /// box.
+    fn topology_counts(
+        &self,
+        shape: &MockShape,
+    ) -> Result<mitcad_model_base::kernel::TopologyCounts, KernelError> {
+        let solids = shape.parts.len().max(1);
+        let faces = shape.faces.len();
+        let edges = shape.edges.len();
+        Ok(mitcad_model_base::kernel::TopologyCounts {
+            faces,
+            edges,
+            vertices: (edges + 2 * solids).saturating_sub(faces),
         })
     }
 }

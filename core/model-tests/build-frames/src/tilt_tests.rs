@@ -237,6 +237,6 @@ fn tilts_are_refused_off_a_side_beyond_the_limit_and_with_a_mitre() {
         json!({"part": {"source": "S1"}, "at": side, "length": 300, "tilt": "20 deg",
                "mitre": {"cut": "new", "angle": "10 deg"}}),
     );
-    assert!(e.contains("takes no mitre"), "{e}");
+    assert!(e.contains("takes no miter"), "{e}");
     assert_eq!(doc.revision(), revision);
 }

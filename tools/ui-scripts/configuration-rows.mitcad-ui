@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: MIT
+# Filling a closed table (mitcad#1044) wherever the test driver runs (the
+# Windows test tools/ui-windows-configuration-rows-test.ps1), on
+# configuration-rows.json: a 10 x 10 mm extrusion k high (k = 2 mm). The
+# Rows tab's Import CSV… reads ${MITCAD_ROWS_CSV} (size, d [mm], k [mm]:
+# M3 3 3, M4 4 4, M5 5 5) through its preview into a closed table in one
+# undo step, Add Option… moves the parameter column d to the options, and
+# a size chosen on the Configuration bar sets k: the body follows.
+expect-ever 'View area'
+wait-idle
+expect-model-bodies 1 200
+
+# Import CSV… in the Rows tab.
+mark
+command solid.configurations
+focus-dialog '^Configurations$'
+expect-log 'Configurations window opened'
+dialog-click-logged 'Configurations tab Rows'
+expect-log 'Configurations import csv at'
+capture-undo-depth before
+mark
+# The driver matches a button's label without its & and trailing "…".
+button '^Import CSV$' configurationsImportRows
+focus-dialog '^Import Rows from CSV$'
+key ctrl+a
+type ${MITCAD_ROWS_CSV}
+key Return
+focus-dialog '^Import Rows$'
+expect-log 'Rows import preview of screws.csv: 3 rows from the file: added M3, M4, M5; made the parameters size, d'
+expect-log 'Rows import column size \[Text\]: key option, a new parameter'
+expect-log 'Rows import column k \[mm\]: parameter column'
+key Return
+focus-dialog '^Configurations$'
+expect-log 'Configurations imported rows from screws.csv: '
+expect-log 'Configurations rows: closed, default none, current M3: M3: size = M3, d = 3 mm, k = 3 mm; M4: size = M4, d = 4 mm, k = 4 mm; M5: size = M5, d = 5 mm, k = 5 mm'
+expect-undo-depth ${before} 1
+# The options are the row M3: the cascade after the import sets k to 3 mm.
+wait-idle
+expect-model-bodies 1 300
+
+# Add Option… on the closed table with rows: the parameter column d moves
+# to the options with its rows' values, in one undo step.
+capture-undo-depth option
+mark
+dialog-click-logged 'Configurations tab Options'
+expect-log 'Configurations add option at'
+button '^Add Option$' configurationsAddOption
+focus-dialog '^Add Option$'
+expect-log 'Add Option dialog opened: '
+key d
+key Return
+focus-dialog '^Configurations$'
+expect-log 'Configurations added option d'
+expect-log 'Configurations option d moved from the parameter columns'
+expect-undo-depth ${option} 1
+button '^Close$'
+focus-main
+
+# A size on the Configuration bar sets the row's parameter columns.
+expect-ever 'Configuration bar: size = M3 \(M3 \| M4 \| M5\)'
+mark
+focus-widget configurationChooser_size
+key Space
+key Home
+key Down
+key Down
+key Return
+expect-log 'Configuration chosen: size = M5'
+wait-idle
+expect-model-parameter k 5
+expect-model-bodies 1 500

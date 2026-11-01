@@ -108,7 +108,7 @@ protected:
     QPainterPath inside;
     inside.addRect(m_frame);
     painter.fillPath(outside.subtracted(inside), QColor(0, 0, 0, 60));
-    painter.setPen(QPen(QColor(224, 123, 26), 1.5, Qt::DashLine));
+    painter.setPen(QPen(themeColor(ColorRole::Handle, false), 1.5, Qt::DashLine)); // the handles' orange
     painter.drawRect(m_frame.adjusted(0.5, 0.5, -0.5, -0.5));
   }
 
@@ -334,8 +334,8 @@ RenderImageDialog::RenderImageDialog(DocumentHost& host, OcctViewer& viewer, QWi
   });
   connect(m_job, &render::FinalRender::cancelled, this, [this, noImage] {
     setRendering(false);
-    noImage(tr("Cancelled."));
-    m_status->setText(tr("Cancelled."));
+    noImage(tr("Canceled."));
+    m_status->setText(tr("Canceled."));
     qInfo().noquote() << "Render image cancelled";
   });
   m_viewerFilter.install(&m_viewer);
@@ -581,6 +581,7 @@ void RenderImageDialog::renderScene() {
     scene.shape = body.shape->occt();
     scene.placement = body.placement.Transformation();
     scene.appearance = body.appearance;
+    scene.transparent = body.transparent; // mitcad#1093
     looks.push_back(&body.appearance);
     for (const BodyDisplay::FaceLook& look : body.faceLooks) {
       scene.faces.push_back({look.faces, look.appearance});
@@ -642,14 +643,14 @@ void RenderImageDialog::cancelRender() {
   if (m_waiting) {
     m_waiting = false;
     setRendering(false);
-    m_preview->setText(tr("Cancelled."));
-    m_status->setText(tr("Cancelled."));
+    m_preview->setText(tr("Canceled."));
+    m_status->setText(tr("Canceled."));
     qInfo().noquote() << "Render image cancelled";
     return;
   }
   if (m_job->isRunning()) {
     qDebug().noquote() << "Render image cancelling";
-    m_status->setText(tr("Cancelling…"));
+    m_status->setText(tr("Canceling…"));
     m_job->cancel();
   }
 }

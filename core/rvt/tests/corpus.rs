@@ -211,7 +211,7 @@ fn compare_elements(id8: &str, model: &Model, reference: &Value, tally: &mut Tal
                     ((c >> 8) & 0xff) as u8,
                     ((c >> 16) & 0xff) as u8,
                 ];
-                tally.check("material colour", m.color == Some(theirs), false, || {
+                tally.check("material color", m.color == Some(theirs), false, || {
                     format!("{id}: {:?} vs {theirs:?}", m.color)
                 });
             }

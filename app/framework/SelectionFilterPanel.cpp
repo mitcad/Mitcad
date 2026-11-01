@@ -145,7 +145,11 @@ SelectionFilterPanel::SelectionFilterPanel(std::function<SelectionScope*()> scop
 void SelectionFilterPanel::refresh() {
   SelectionScope* scope = m_scope ? m_scope() : nullptr;
   const bool project = scope != nullptr && scope->name() == QStringLiteral("project");
-  m_title->setText(project ? tr("Selection Filter: Project Sources") : tr("Selection Filter"));
+  // Intersect's sources (mitcad#1031) have a context of their own too.
+  const bool intersect = scope != nullptr && scope->name() == QStringLiteral("intersect");
+  m_title->setText(project     ? tr("Selection Filter: Project Sources")
+                   : intersect ? tr("Selection Filter: Intersect Sources")
+                               : tr("Selection Filter"));
   const QColor color = palette().color(QPalette::WindowText);
   for (int i = 0; i < kFilterRowCount; ++i) {
     const auto row = static_cast<FilterRow>(i);
@@ -168,8 +172,9 @@ void SelectionFilterPanel::refresh() {
     button->setAccessibleDescription(QStringLiteral("%1: %2").arg(stateSymbolName(state), meaning));
   }
   m_reset->setEnabled(scope != nullptr && !scope->isDefault());
-  m_reset->setToolTip(project ? tr("Project's sources as they are when Project starts")
-                              : tr("The filter as it is when sketch editing starts"));
+  m_reset->setToolTip(project     ? tr("Project's sources as they are when Project starts")
+                      : intersect ? tr("Intersect's sources as they are when Intersect starts")
+                                  : tr("The filter as it is when sketch editing starts"));
 }
 
 void SelectionFilterPanel::cycle(FilterRow row) {

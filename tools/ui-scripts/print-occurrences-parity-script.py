@@ -28,9 +28,9 @@ def select(kind, path, label):
 
 def send(number, selected, count, on_faces, answer=None):
     stage = "escape" if answer == "escape" else str(number)
-    bodies = f"^3D Print Bodies: {count} " + ("body" if count == 1 else "bodies")
+    bodies = f"^Send to Slicer Bodies: {count} " + ("body" if count == 1 else "bodies")
     add(f"capture-undo-depth beforeSend{number}", "mark", "command make.print3d",
-        "expect-log '^Command 3D Print started$'",
+        "expect-log '^Command Send to Slicer started$'",
         f"expect-log '^3D Print panel: 1 {selected}: Pin; format 3mf, refinement high, slicer Fixture slicer'",
         f"expect-log {shlex.quote(bodies)}")
     # The panel must confirm the recording program before Send: Folder
@@ -39,8 +39,8 @@ def send(number, selected, count, on_faces, answer=None):
     if answer:
         question = "Not sent yet: Pair:1 has 2 print bed faces. Click the green one to put on the bed."
         add("expect-log '^3D Print bed face to choose for the file: 2 faces: Pin F1:top in Pair:1/Pin:1; Pin F1:top in Pair:1/Pin:2$'",
-            f"expect-log {shlex.quote('^Panel 3D Print asks: ' + re.escape(question) + '$')}",
-            "expect-log '^3D Print marks: face F1.b0/F1:top in O1/O2, face F1.b0/F1:top in O1/O3$'",
+            f"expect-log {shlex.quote('^Panel Send to Slicer asks: ' + re.escape(question) + '$')}",
+            "expect-log '^Send to Slicer marks: face F1.b0/F1:top in O1/O2, face F1.b0/F1:top in O1/O3$'",
             f"expect-files '${{MITCAD_TEST_WORK}}/receipts' '*.started' {number - 1}",
             f"expect-files '${{MITCAD_TEST_WORK}}/receipts' '*.json' {number - 1}",
             "expect-no-log '^3D Print: started |^3D Print: [0-9]+ bodies as '")
@@ -53,7 +53,7 @@ def send(number, selected, count, on_faces, answer=None):
                 "expect-native-visible commandMessage false")
         else:
             add("expect-widget-property select_bed_face text Select", "expect-widget-property commandOk enabled false",
-                f"expect-log {shlex.quote('^Panel 3D Print note bed_question: ' + re.escape(question) + '$')}",
+                f"expect-log {shlex.quote('^Panel Send to Slicer note bed_question: ' + re.escape(question) + '$')}",
                 "expect-widget-property input_bed_question visible true",
                 "expect-widget-property commandMessage visible false")
         add(f"screenshot-screen '${{MITCAD_TEST_WORK}}/print-bed-choice-{stage}-{frontend}-${{MITCAD_TEST_COLOR_SCHEME}}.png'", "mark")
@@ -65,10 +65,10 @@ def send(number, selected, count, on_faces, answer=None):
             # the native form's Cancel button; a direct action misses it.
             add("native-key-event Escape" if native else "key Escape",
                 "expect-log '^3D Print bed face of the file: not asked any more \\(Esc\\)$'",
-                "expect-log '^3D Print marks: none$'", "wait-idle",
+                "expect-log '^Send to Slicer marks: none$'", "wait-idle",
                 f"expect-files '${{MITCAD_TEST_WORK}}/receipts' '*.started' {number - 1}",
                 f"expect-files '${{MITCAD_TEST_WORK}}/receipts' '*.json' {number - 1}",
-                "expect-no-log '^3D Print: started |^3D Print: [0-9]+ bodies as |^Done 3D Print$|^Command 3D Print cancelled$'",
+                "expect-no-log '^3D Print: started |^3D Print: [0-9]+ bodies as |^Done Send to Slicer$|^Command Send to Slicer cancelled$'",
                 "expect-model-bodies 1 1000")
             if native:
                 add("expect-native-visible input_bed_face false", "expect-native-visible note_bed_question false",
@@ -80,11 +80,11 @@ def send(number, selected, count, on_faces, answer=None):
                     "expect-widget-property commandOk visible true", "expect-widget-property commandOk enabled true")
             add(f"screenshot-screen '${{MITCAD_TEST_WORK}}/print-bed-escape-{frontend}-${{MITCAD_TEST_COLOR_SCHEME}}.png'",
                 "mark", "native-key-event Escape" if native else "key Escape",
-                "expect-log '^Command 3D Print cancelled$'", "wait-idle", "focus-main",
+                "expect-log '^Command Send to Slicer cancelled$'", "wait-idle", "focus-main",
                 "expect-model-bodies 1 1000", f"expect-undo-depth ${{beforeSend{number}}} 0",
                 f"expect-files '${{MITCAD_TEST_WORK}}/receipts' '*.started' {number - 1}",
                 f"expect-files '${{MITCAD_TEST_WORK}}/receipts' '*.json' {number - 1}",
-                "expect-no-log '^3D Print: started |^3D Print: [0-9]+ bodies as |^Done 3D Print$'")
+                "expect-no-log '^3D Print: started |^3D Print: [0-9]+ bodies as |^Done Send to Slicer$'")
             return
         else:
             add("click-pick 'occurrence face F1.b0/F1:top in O1/O3 at'",
@@ -99,11 +99,11 @@ def send(number, selected, count, on_faces, answer=None):
     if native:
         add(f"expect-native-text native.status {shlex.quote('^' + re.escape(status) + '$')}")
     else:
-        add(f"expect-widget-property statusPillText text {shlex.quote(status)}")
+        add(f"expect-widget-property messageBand message {shlex.quote(status)}")
     add("expect-model-bodies 1 1000", f"expect-undo-depth ${{beforeSend{number}}} 0",
         f"screenshot-screen '${{MITCAD_TEST_WORK}}/print-occurrences-{number}-{frontend}-${{MITCAD_TEST_COLOR_SCHEME}}.png'")
     if answer:
-        add("expect-log '^View highlight places: none$'", "expect-no-log '^Command 3D Print cancelled$'")
+        add("expect-log '^View highlight places: none$'", "expect-no-log '^Command Send to Slicer cancelled$'")
         if native:
             add("expect-native-visible input_bed_face false", "expect-native-visible commandMessage false")
 

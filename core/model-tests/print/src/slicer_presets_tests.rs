@@ -42,7 +42,7 @@ fn write(path: &Path, value: &Value) {
 /// user's My X (inherits the Acme printer), Fine (a process of its own)
 /// and My PLA (inherits Acme PLA).
 fn slicer_folder(name: &str) -> (PathBuf, PathBuf) {
-    let dir = std::env::temp_dir().join(format!("mitcad-presets-{name}-{}", std::process::id()));
+    let dir = mitcad_model::testing::unique_temp_path(&format!("presets-{name}"));
     let slicer = dir.join("BambuStudio");
     let system = slicer.join("system").join("Acme");
     write(

@@ -447,11 +447,20 @@ not a corpus, viewport-meshing or rendering speedup claim.
 
 ## macOS: bundle and native UI
 
-- Configure `cmake --preset dev -DMITCAD_MACOS_NATIVE_UI=ON` to build
-  the AppKit frontend. It starts by default in that build; `--ui=qt`
-  runs the retained frontend and `--ui=native` explicitly selects AppKit.
-  The native sources are confined to `app/platform/macos/` and compiled
+- The macOS presets (`macos-debug`, so the VM's `dev`, and
+  `macos-release`) build the AppKit frontend beside Qt
+  (`MITCAD_MACOS_NATIVE_UI=ON`, mitcad#1056); `-DMITCAD_MACOS_NATIVE_UI=OFF`
+  builds Qt alone. Qt is the default frontend in every build; Settings ›
+  General › Native macOS interface (experimental) chooses AppKit for the
+  next starts, and `--ui=native|qt` overrides it for one run. The start-up
+  logs `Frontend: qt|native (default|preference|--ui|--chrome)`. The
+  native sources are confined to `app/platform/macos/` and compiled
   with ARC. Shared command/session changes also build without this option.
+- UI tests pass `--ui=native` or `--ui=qt` explicitly. The tests of the
+  AppKit frontend carry the label `app.ui-macos-native-smoke` (the
+  release's subset) or `app.ui-macos-native-full` (the rest, left out of
+  the release's run); merge checks run both
+  ([native-macos-ui.md](native-macos-ui.md#releases-and-the-preference)).
 - `app.ui-macos-native` drives real native menu items, fields, buttons,
   history and command search in process, verifies model volumes and saves
   a composed screenshot. The older `app.ui-macos` and
@@ -755,7 +764,10 @@ Run in the isolated environments:
   on Windows each run has `TMP` and `TEMP` in a folder of its own under
   `%LOCALAPPDATA%\mitcad-tests`, removed when it passes, as Storage Sense
   deletes the empty folders of git repositories just made in the
-  system's temporary folder);
+  system's temporary folder; the folder is named after the ctest, the
+  package and the arguments, so `core.model.assembly` and
+  `core.model.assembly.workers`, the same binary at the same time, do not
+  remove each other's, mitcad#1017);
   `core.doctests` and `core.doctests_release` run the documentation tests.
   The fixtures limit cargo's jobs by the memory available and sweep the
   stale units from their target folder after the build (see
@@ -989,7 +1001,17 @@ tools/test-macos.sh --build build/macos-release --measure -R '^tools.testrun$'
 The default is `--schedule`, at most four tests, an 85% memory budget and
 90% CPU gate. Aqua UI tests (`app.ui-*`) are timing-sensitive from the
 start: at most one, below 70% load. `--measure` defaults to one test at a
-time. Selections and other runner arguments pass through; there is no
+time. Desktop tests share the `macos_desktop` resource lock, rather than
+stopping all tests with `RUN_SERIAL`; model, geometry and offscreen unit
+tests can run beside them. The shell harness also holds its per-user GUI
+file lock across separate test runs and checkouts. Headless XPC tests need
+neither desktop exclusion nor full serial execution. The Metal surface
+tests retain their existing serial execution; their parallel execution
+has not been validated.
+Cargo test builds remain serial because their process-tree memory is not
+bounded on macOS; timed Metal scene acceptance also runs alone.
+`repo.macos-test-resources` checks the configured desktop-lock coverage.
+Selections and other runner arguments pass through; there is no
 second test list. The machine profile file remains outside the build
 (default `~/.mitcad/test-profiles.json`). macOS records rusage CPU time
 and the largest process's peak RSS, without a hard per-test memory limit;
@@ -1044,6 +1066,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_TEST_LIVE_CA` | A PEM file of certificate authorities the app's live updates trust besides the system's (the test broker's, `tools/ui-live-test.sh`). |
 | `MITCAD_NO_UPDATE_CHECK=1` | No update checks; update test variables, read only by a build with `MITCAD_UPDATE_TEST_HOOKS`: [updates.md](updates.md#the-test-hooks). |
 | `MITCAD_SKETCH_FIRST_DIMENSION_SCALE=0` | Preferences › Sketch › *Scale the sketch to its first dimension* is off until it is saved (mitcad#860); the UI test libraries set it, so that their drawn sketches keep their sizes. |
+| `MITCAD_REMEMBER_PANEL_VALUES=0` | Command panels start from their definitions' defaults and keep nothing on OK: no remembered Fillet Radius or Chamfer Distance (mitcad#1028, [app/COMMANDS.md](../app/COMMANDS.md#remembered-values)); the UI test libraries set it, so that a value one step gives never changes where a later step's panel starts. |
 | `MITCAD_TEST_LOG_URLS=1` | Addresses the app would open in the browser (a report's issue form) are logged, not opened; the UI test library sets it. |
 | `MITCAD_LOG_TYPED_TEXT=1` | Text fields are logged as they change: `File dialog <title>: <text>` (Qt's file dialog's file name), `Dialog field <title>: <text>` and `Panel field <input>: <text>` (typed into another dialog's field or a command panel's input; never a password); the UI test libraries set it (`app/framework/TypedTextLog.hpp`). |
 | `MITCAD_TEST_CRASH=app\|app-exception\|model-worker\|import-worker\|render-worker` | That process (or the model's worker thread) crashes as an access violation would (`app-exception`: the application throws an exception nothing catches, mitcad#773), for the crash reports' tests ([app/COMMANDS.md](../app/COMMANDS.md#feedback-and-error-reports)). |
@@ -1427,10 +1450,37 @@ texture coordinates and transforms). The format was checked once with
 OpenUSD's own validators when the export was written (mitcad#123); no USD
 library is needed to build or test.
 
+## Branches
+
+The development repository has three long-lived branches, so that large
+features do not hold up fixes and fixes reach releases without waiting
+for features:
+
+```
+feature branch ─────────► features ──► dev ──► main ──► release/X.Y.Z
+fix or improvement branch ───────────► dev
+release fix ─────────────────────────────────► main ──► dev ──► features
+```
+
+- **dev** takes bug fixes, small improvements, chores, documentation and
+  tests. Start such a branch from `dev`, and open its pull request
+  against `dev`.
+- **features** takes new capabilities and large rewrites. Start them from
+  `features` and open their pull requests against `features`. A change
+  that grows into a rewrite moves to `features` before it is merged.
+  `features` is merged into `dev` when it passes the full check, at least
+  once a day.
+- **main** is the last release plus its fixes. `dev` is merged into it
+  when a release starts, and the release branch `release/X.Y.Z` is cut
+  from it. A fix found while a release is being built goes to `main`
+  first and then flows back into `dev` and from there into `features`.
+
+Releases are published as before: one snapshot commit per version tag.
+
 ## Before a commit
 
-For development and merges to main the check is scoped and fast; an
-occasional miss is accepted:
+For development and merges into `dev`, `features` or `main` the check is
+scoped and fast; an occasional miss is accepted:
 
 1. On Linux: `tools/check-all.sh` in its default mode (add `--fresh`
    when CMake files changed), e.g. in the distro after `sync-to-wsl.sh`:
@@ -1472,6 +1522,7 @@ It checks at two depths:
 |---|---|
 | configure, build | Compiler warnings fail the check (an incremental build only shows those of what it compiled). |
 | fmt, clippy, deps | Beside the ctest step (`--overlap auto`, below). clippy's target dir is `build/dev/clippy`, kept across syncs, or, where `build/dev/cargo` links into a persistent cargo folder (`MITCAD_CARGO_TARGET_DIR`, as in the release builds, whose build folder starts fresh), `clippy/` beside it there, so that a release does not check every crate from nothing. |
+| guide | The user guide's table of contents against its `##` and `###` headings (`tools/check-guide-contents.py`, mitcad#1032): its self-test, then the guide; a table that differs fails the step, which prints the expected table. After a heading of `docs/user-guide.md` changes, `tools/check-guide-contents.py --write` writes the table. Beside the ctest step with fmt, clippy and deps. |
 | ctest | The tests whose sources changed (below), without the corpus group, through the test runner (below); `cli.perf_*` run serially. The Linux UI ctests (`app.ui-linux-*`, each on a hidden X server of its own) run beside the others, within the runner's UI entries at once (mitcad#832). The geometry suite runs as one ctest per part (`geometry.suite.<part>`). |
 | corpus | `f3d.corpus*`, `f3d.models_loft`, `freecad.corpus*`, `ipt.corpus`, several at once (`--corpus-tests`), each importing several files at once (`--corpus-jobs`, `MITCAD_CORPUS_JOBS`). By default the test runner gives each corpus test its files at once from its profile (`mitcad-testrun --corpus-children`, mitcad#832; [tools/testrun/README.md](../tools/testrun/README.md#corpus-tests)): every run records each file's time and peak, and the next starts the longest files first and shares the machine's cores and the run's memory budget among the corpus tests by their work, a long test more children and a short one fewer, each child's memory limit twice its test's largest file's peak, never below `MITCAD_CORPUS_MEMORY` (1536M). A test without that history yet, every test with `--corpus-jobs`, and ctest -j without the runner take the fixed plan: all their children together fit the run's memory limit less 1G at `MITCAD_CORPUS_MEMORY` each, and the cores of a test slot; about the square root of that many tests run at once (12G, 32 cores and three slots: two tests, three files each). Each child runs within 300 s (`MITCAD_CORPUS_TIMEOUT`); `f3d.corpus_designs` checks its designs one after another in one process since 0.32.0 (at once, under the full check's load in the Linux release's build root, an item ran out of its item time), and a debug build's imports try an item from its own start, the route tried first, three times as long (`--own-start-time-scale`, mitcad#847); the runner then plans it by its own history, not by children (mitcad#872). With the budget from the free memory (`--memory auto` on bare metal, below) a child beside others starts only while the memory available exceeds the reserve by the child's file's last peak (`MITCAD_CORPUS_RESERVE`). The corpus step runs beside the UI tests (`--overlap auto`). Every corpus test is a row of the table. `auto` runs them only when `CORPUS_SOURCES` or the corpus files differ from every passing run on the machine (`~/.cache/mitcad/corpus-passed`). `CORPUS_SOURCES`: the readers and the import, the bridge's kernel and import files (`core/ffi/src/kernel`, `*_import.rs`, `ipt_history.rs`, `exchange.rs`, `memory.rs`, `core/cpp`; not `lib.rs` or other families' files), the geometry, `mitcad-cli`'s imports (`tools/cli/import.cpp`, not `main.cpp`), the build files, the OCCT port, and the resolved dependencies of the import's crates (`cargo tree` of `CORPUS_CRATES`, instead of `Cargo.toml` and `Cargo.lock`, so a crate added for something else does not count). Changes in `core/model` alone don't trigger it: use `--corpus always` when they may affect imports. |
 | `ui-<name>` | The `tools/ui-*-test.sh` whose sources changed (below), `--ui-jobs` at a time (below), longest first, 30 min limit each (`UI_TIMEOUT`); with the test runner the machine's learnt cap within `MITCAD_UI_JOBS`, and each test's learnt room (`mitcad-testrun --ui-rooms`: the most other UI tests it may have beside it after it failed beside more and passed alone) is kept: such a test waits until few enough run, while the others go on (mitcad#872). The tests' waits for a log line (`ui_expect_log`, `ui_expect_new`) do not count the time the application computes (a job logged `Computing ... started` and not its end), up to 60 s more, so that a preview that takes longer under load is not a failure. `ui-compute` runs alone at the end (flaky under load), after the corpus step that ran beside the others. A test that fails among the others without crashing runs once more alone after them: a pass shows as `ok-again` and counts, so load flakiness stays visible without failing the check; a second failure, or a crash, fails it (mitcad#657). |
@@ -1707,8 +1758,17 @@ runs one step after another. Build and lint use half the cores unless
   `mitcad_utf8_code_page(<target>)` (`cmake/Utf8CodePage.cmake`), so that
   its `argv` and file names are UTF-8 too.
 - Match the surrounding style and comment density.
-- Terms (project, design, component, occurrence, body) and the names of
-  controls in user-facing text follow [naming](naming.md).
+- Terms (project, design, component, occurrence, body), the names of
+  controls and the style of every user-facing text (capitalization,
+  ellipsis, American spelling, messages, severity, colors) follow the
+  [UI conventions](ui-conventions.md); the ctest `repo.ui-strings`
+  checks what a pattern can (retired words, Title Case's short words,
+  "×" and "°", AppKit texts through `tr()`, the core's `'{x}'` quoting).
+- A color the user sees is a role of the role table
+  (`themeColor`, `viewColor` in `app/framework/Theme.hpp`), never a
+  literal: the ctest `repo.ui-colors` (`tools/ui-colors-check`) fails on
+  a hex color or a `QColor(r, g, b)` in `app/` outside the table and its
+  recorded exceptions (`kAllowed`, each with its reason).
 - A tooltip says in one short line what the control is or does: a
   command's (`CommandDef::tooltip`, the ribbon and the menus) at most 80
   characters, an input's or any other control's at most 100. No usage
@@ -1716,6 +1776,10 @@ runs one step after another. Build and lint use half the cores unless
   shortcut hint ("Place timber members (Enter places)") is allowed and
   counts. The detail goes into the [user guide](user-guide.md). The ctest
   `repo.tooltips` (`tools/tooltip-check`) checks the texts in `app/`.
+- The user guide's table of contents is written by
+  `tools/check-guide-contents.py --write`, never by hand: after adding,
+  renaming or moving a `##` or `###` heading, run it; check-all's step
+  `guide` fails until the table matches.
 - New UI keeps working in the AppKit frontend
   ([coverage](native-macos-ui.md#coverage)): a widget class that paints
   itself (overrides `paintEvent`) gets a line in

@@ -38,10 +38,21 @@
 // chamfers, at whose two vertices two roundings end; mitcad#299). A result that OCCT's checker rejects only where the input
 // already was invalid, away from the dressup, is taken as it is.
 //
-// OCCT fails where a rounding or bevel takes a neighbouring face away
-// exactly (a radius as large as the face is wide). A fillet or chamfer that
-// fails is therefore built once more with its sizes 1e-3 (relative)
-// smaller, which leaves a strip that narrow where the face was. When that
+// OCCT builds most roundings and bevels that take a neighbouring face away
+// exactly (a radius as large as the face is wide) at their size, the
+// pocket's corners where two of them take the walls away included (the
+// port's patch 1100, mitcad#1106). A fillet of constant radius whose
+// roundings each take a face away along a straight edge between planes
+// (the ball rolling on that face's far edge) round a loop of such edges,
+// two meeting at each corner as mirror images (a tray's outer top edges
+// after its walls were bevelled all across), whose corners OCCT cannot
+// join, is built at its size as swept sections mitred at the corners
+// (src/mitred_dressup.hpp, mitcad#1118). Where it still fails, a fillet or
+// chamfer is built once more with its sizes 1e-3 (relative) smaller, which
+// leaves a strip that narrow where the face was; the strip is then removed
+// (OCCT's defeaturing extends the faces round it to meet, the dressup's
+// face takes its names), and the result has an info, not a warning, that
+// it is 0.1 % smaller (Shape::infos). When that
 // fails too and every selected edge is a whole circle between two faces of
 // revolution about its axis with straight sections, the dressup is built
 // as rings (src/ring_dressup.hpp): its cross-section turned about the

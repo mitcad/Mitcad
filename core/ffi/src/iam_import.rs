@@ -45,6 +45,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use mitcad_import::outcomes::FileOutcome;
 use mitcad_ipt::assembly::{Assembly, Occurrence, Reference};
 use mitcad_model::assembly::from_rows;
 use mitcad_model::{ComponentUid, Kernel, OccurrenceUid, Transform};
@@ -937,7 +938,7 @@ impl Import<'_> {
                     .sqrt();
                 self.centers.add(difference, tolerance, || {
                     format!(
-                        "{name}: the placed box centre is {difference:.3} mm from the stored one"
+                        "{name}: the placed box center is {difference:.3} mm from the stored one"
                     )
                 });
                 out["center_difference"] = json!(difference);
@@ -1067,6 +1068,29 @@ impl Document {
                 })
             })
             .collect();
+        // The levels of the files' outcomes, of the checks that did not
+        // pass and of the warnings (mitcad#1051).
+        let mut counts_by_outcome: BTreeMap<FileOutcome, usize> = BTreeMap::new();
+        for outcome in files.iter().filter_map(file_outcome) {
+            *counts_by_outcome.entry(outcome).or_default() += 1;
+        }
+        let mut problems = Vec::new();
+        if display.agree < display.compared {
+            problems.push(format!(
+                "{} of {} placements do not agree with the displayed ones",
+                display.compared - display.agree,
+                display.compared
+            ));
+        }
+        if boxes.agree < boxes.compared {
+            problems.push(format!(
+                "{} of {} parts' bodies do not lie within their stored range boxes",
+                boxes.compared - boxes.agree,
+                boxes.compared
+            ));
+        }
+        problems.extend(warnings.iter().cloned());
+        let notices = FileOutcome::notices(counts_by_outcome, &problems);
         let report = json!({
             "file": name,
             "format": "iam",
@@ -1096,6 +1120,7 @@ impl Document {
             "pass": boxes.agree == boxes.compared && display.agree == display.compared,
             "occurrence_list": list,
             "warnings": warnings,
+            "notices": mitcad_model::notice::to_json(&notices),
             "seconds": started.elapsed().as_secs_f64(),
         });
         if let Some(path) = &options.report_path {
@@ -1138,9 +1163,43 @@ impl Document {
         Ok(json!({
             "file": report["file"],
             "occurrences": report["occurrences"]["placed"],
+            // Its outcomes' and warnings' levels (mitcad#1051).
+            "notices": report["notices"],
             "report": report,
         }))
     }
+}
+
+/// How a referenced file came in (mitcad#1051), from its status and its
+/// part's summary; None for a file that was not placed.
+fn file_outcome(file: &File) -> Option<FileOutcome> {
+    if file.found == Found::Missing {
+        return Some(FileOutcome::Missing);
+    }
+    if file.status.starts_with("a cycle") {
+        return Some(FileOutcome::Cycle);
+    }
+    if file.status.starts_with("failed") {
+        return Some(FileOutcome::Failed);
+    }
+    if file.status != "imported" {
+        return None;
+    }
+    if file.assembly {
+        return Some(FileOutcome::Assembly);
+    }
+    let part = file.part.as_ref()?;
+    if part["outcome"] == "replayed" {
+        return Some(FileOutcome::Replayed);
+    }
+    // Its stored bodies: as asked or for want of a history, or instead of a
+    // replay that failed or hung.
+    let reason = part["reason"].as_str().unwrap_or_default();
+    Some(if reason.starts_with("the replay") {
+        FileOutcome::Fallback
+    } else {
+        FileOutcome::Bodies
+    })
 }
 
 /// The watchdog's notes in a part's import report: the geometry kernel
@@ -1217,7 +1276,7 @@ fn summary(report: &Value) -> String {
             "stale_boxes",
             "parts saved after the assembly lie within their stored range boxes",
         ),
-        ("centers", "stored box centres agree"),
+        ("centers", "stored box centers agree"),
     ] {
         let c = &report[key];
         text += &format!(

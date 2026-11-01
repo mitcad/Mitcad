@@ -120,6 +120,10 @@ rust::Box<mitcad::Document> open_document(const std::string& path, const StoreOp
   const auto start = std::chrono::steady_clock::now();
   const std::string recomputed(document->command(R"({"cmd": "recompute"})"));
   const std::chrono::duration<double, std::milli> recompute_ms = std::chrono::steady_clock::now() - start;
+  // Slot connectors and their nuts and screws placed by the first BUILD
+  // rule are placed by the current one, as the application opens them
+  // (mitcad#1115).
+  document->command(R"({"cmd": "build_upgrade"})");
   if (!store.dir.empty()) {
     const std::string persisted(document->persist_results(store.min_ms));
     if (log != nullptr) {

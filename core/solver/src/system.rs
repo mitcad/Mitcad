@@ -663,6 +663,21 @@ impl System {
         }
     }
 
+    /// Sets the minor radius of an ellipse or elliptical arc (for example
+    /// to start from where a linked curve is now, mitcad#1047).
+    pub fn set_minor_radius(&mut self, e: EntityId, radius: f64) -> Result<(), Error> {
+        match *self.ent(e)? {
+            EntityData::Ellipse { b, .. } | EntityData::EllipticalArc { b, .. } => {
+                self.params[b] = radius;
+                Ok(())
+            }
+            _ => Err(Error::WrongEntityKind {
+                entity: e,
+                expected: "an ellipse or an elliptical arc",
+            }),
+        }
+    }
+
     pub fn entity_kind(&self, e: EntityId) -> Option<EntityKind> {
         self.ent(e).ok().map(|d| d.kind())
     }

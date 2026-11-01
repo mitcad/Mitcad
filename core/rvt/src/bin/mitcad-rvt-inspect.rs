@@ -30,7 +30,7 @@ const USAGE: &str = "usage: mitcad-rvt-inspect <command> ...
                                   without --all the text lists placed
                                   elements with a box only
   levels <file>                   the levels with their elevations (feet)
-  materials <file>                the materials: name, colour, transparency
+  materials <file>                the materials: name, color, transparency
   record <file> <id> [--all]      an element's header and object records
                                   walked by the schema, as JSON (--all: from
                                   every partition that has one)
@@ -436,7 +436,7 @@ fn cmd_materials(path: &str) -> Result<(), String> {
     let model = model_of(&f, &schema)?;
     for m in &model.materials {
         println!(
-            "{:>10} {:<40} colour {:?} transparency {:?}",
+            "{:>10} {:<40} color {:?} transparency {:?}",
             m.id, m.name, m.color, m.transparency
         );
     }

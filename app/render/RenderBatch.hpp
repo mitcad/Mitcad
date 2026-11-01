@@ -46,6 +46,8 @@ struct SceneBody {
   gp_Trsf placement;
   Appearance appearance;
   std::vector<SceneFaces> faces = {};
+  // Transparent (mitcad#1093): drawn with seeThrough's opacity.
+  bool transparent = false;
 };
 
 // A body's appearance as the renderer's material (mitcad#46); the default
@@ -57,6 +59,12 @@ MaterialData materialOf(const Appearance& appearance);
 
 // The materials of faces with appearances of their own.
 std::vector<FaceMaterial> faceMaterialsOf(const std::vector<SceneFaces>& faces);
+
+// A transparent body (mitcad#1093) as the rendered view shows it: the
+// opacity of its material and of its faces' materials times
+// kTransparentOpacity, its appearances otherwise as they are.
+constexpr float kTransparentOpacity = 0.3f;
+void seeThrough(BodyData& body);
 
 // Which images of the appearances' textures are not drawn, and why ("Wood:
 // the image ... is missing, its base colour is shown", "Wood: the normal

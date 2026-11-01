@@ -628,7 +628,7 @@ void RemoteController::shutDown() {
   m_checkTimer->stop();
   m_retryTimer->stop();
   if (m_task != nullptr) {
-    qInfo().noquote() << QStringLiteral("Remote task %1 stopped: Mitcad closes").arg(m_task->name());
+    qInfo().noquote() << QStringLiteral("Remote task %1 stopped: MitCad closes").arg(m_task->name());
     delete m_task; // cancels and waits
   }
 }
@@ -970,7 +970,7 @@ void RemoteController::sync() {
   // Versions of files someone else holds the edit lock of (mitcad#89).
   if (m_host.confirmSend && !m_host.confirmSend()) {
     qInfo().noquote() << QStringLiteral("Sync cancelled");
-    m_host.status(tr("Sync cancelled: nothing was sent."), false);
+    m_host.status(tr("Sync canceled: nothing was sent."), false);
     return;
   }
   if (m_bar != nullptr) {
@@ -1125,7 +1125,7 @@ void RemoteController::syncFinished(const QString& author, const QJsonObject& an
   }
   publishState();
   if (cls == QLatin1String("cancelled")) {
-    m_host.status(tr("Sync cancelled."), false);
+    m_host.status(tr("Sync canceled."), false);
     return;
   }
   if (!cls.isEmpty()) {

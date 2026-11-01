@@ -54,32 +54,10 @@ MeasureHistoryView* MainWindow::createMeasureHistory(const CommandDef& def, QWid
   m_measureHistory.beginRun();
   checkMeasureHistory();
   auto* view = new MeasureHistoryView(m_measureHistory, parent);
-  m_measureShown.clear();
-  // Keep as Dimension, also in a history row's menu (mitcad#649,
-  // MainWindowMeasurements.cpp). Annotate's Note…, Annotations…, Datum
-  // Label…, Frame… and Hole Callout (mitcad#702,
-  // MainWindowMeasurements.cpp).
-  view->setActions({[this](int number) { showMeasurement(number); }, [this] { clearMeasureHistory(); },
-                    [this] { keepMeasurement(m_measureShown, QStringLiteral("shown")); },
-                    [this](int number) { keepMeasurementRow(number); },
-                    [this] {
-                      const QHash<QString, Selection> inputs = m_measureShown;
-                      keepNote(inputs);
-                    },
-                    [this] { openAnnotations(); },
-                    [this] {
-                      const QHash<QString, Selection> inputs = m_measureShown;
-                      keepLeader(inputs, QStringLiteral("datum"));
-                    },
-                    [this] {
-                      const QHash<QString, Selection> inputs = m_measureShown;
-                      keepLeader(inputs, QStringLiteral("frame"));
-                    },
-                    // Hole Callout (mitcad#902).
-                    [this] {
-                      const QHash<QString, Selection> inputs = m_measureShown;
-                      keepLeader(inputs, QStringLiteral("hole_callout"));
-                    }});
+  // A row shown again, the history cleared. Keeping a measurement as an
+  // annotation is the Make tab's Annotate group (mitcad#1049,
+  // MainWindowMake.cpp).
+  view->setActions({[this](int number) { showMeasurement(number); }, [this] { clearMeasureHistory(); }});
   m_measureHistoryView = view;
   return view;
 }
@@ -116,24 +94,6 @@ void MainWindow::inspectionRecorded(const CommandDef& def, const CommandState& s
     if (input.type == InputDef::Type::Choice) {
       row.choices.insert(input.id, state.choice(input.id));
     }
-  }
-  // What Keep keeps (mitcad#649): the picks shown, when they are the
-  // model's and measured something.
-  m_measureShown = row.inputs;
-  QJsonObject probe;
-  QString why;
-  const bool modelPicks = measurementPicks(row.inputs, probe, why);
-  const bool keepable = !row.values.isEmpty() && modelPicks;
-  // A note (mitcad#702) on the one pick shown; a datum label or a frame
-  // on it when it is a feature.
-  QJsonObject notePicked;
-  QJsonValue noteAt;
-  const bool noteable = notePick(row.inputs, notePicked, noteAt);
-  if (auto* view = static_cast<MeasureHistoryView*>(m_measureHistoryView.data())) {
-    // Greyed out for sketch geometry with the reason as its tooltip
-    // (mitcad#869).
-    view->setKeepable(keepable, modelPicks ? QString() : why);
-    view->setNoteable(noteable, markablePick(row.inputs));
   }
   if (m_measureHistory.record(std::move(row))) {
     refreshMeasureHistory();

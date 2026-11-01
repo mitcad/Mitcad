@@ -7,6 +7,13 @@ sleep 800
 native-resize 1280 820
 expect-native-visible autoselectPanel false
 
+# The view shows the origin only as its light bulb does (mitcad#1030): on
+# for the clicks on its planes below.
+mark
+native-expand native.modelTree
+native-click native.model.eye.origin
+expect-log 'Visibility Root/Origin: shown'
+
 mark
 native-action solid.box
 expect-log 'Command Box started'

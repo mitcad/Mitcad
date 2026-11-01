@@ -126,26 +126,23 @@ private:
 WindowColors windowColors(const QPalette& palette) {
   WindowColors colors;
   colors.dark = isDarkPalette(palette);
+#ifdef Q_OS_MACOS
+  // The chrome's selection and focus follow the system's accent on macOS
+  // (mitcad#852 C3); the 3D view keeps its fixed blue.
+  colors.accent = palette.color(QPalette::Accent);
+#else
   colors.accent = actionColor(palette);
-  if (colors.dark) {
-    colors.window = QColor(0x14, 0x15, 0x18);
-    colors.surface = QColor(0x1f, 0x20, 0x24);
-    colors.raised = QColor(0x2a, 0x2c, 0x31);
-    colors.text = QColor(0xe6, 0xe8, 0xec);
-    colors.secondaryText = QColor(0xa3, 0xaa, 0xb4);
-    colors.titleText = QColor(0x7f, 0x86, 0x92);
-    colors.line = QColor(0xff, 0xff, 0xff, 18);
-    colors.accentText = QColor(0x0b, 0x12, 0x20);
-  } else {
-    colors.window = QColor(0xe4, 0xe7, 0xec);
-    colors.surface = QColor(0xf8, 0xf9, 0xfb);
-    colors.raised = QColor(0xe9, 0xec, 0xf1);
-    colors.text = QColor(0x1d, 0x20, 0x26);
-    colors.secondaryText = QColor(0x4c, 0x52, 0x5c);
-    colors.titleText = QColor(0x6b, 0x72, 0x7d);
-    colors.line = QColor(0x00, 0x00, 0x00, 22);
-    colors.accentText = QColor(0xff, 0xff, 0xff);
-  }
+#endif
+  // The neutral roles of the role table (mitcad#1041).
+  const auto role = [&colors](ColorRole r) { return themeColor(r, colors.dark); };
+  colors.window = role(ColorRole::Window);
+  colors.surface = role(ColorRole::Surface);
+  colors.raised = role(ColorRole::Raised);
+  colors.text = role(ColorRole::Text);
+  colors.secondaryText = role(ColorRole::TextSecondary);
+  colors.titleText = role(ColorRole::TitleText);
+  colors.line = role(ColorRole::Line);
+  colors.accentText = role(ColorRole::AccentText);
   return colors;
 }
 

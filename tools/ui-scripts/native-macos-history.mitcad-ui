@@ -11,6 +11,13 @@ sleep 800
 native-resize 1280 820
 native-appearance light
 
+# The view shows the origin only as its light bulb does (mitcad#1030): on
+# for the clicks on its XY plane below.
+mark
+native-expand native.modelTree
+native-click native.model.eye.origin
+expect-log 'Visibility Root/Origin: shown'
+
 # Independent features make rollback and non-contiguous Cmd selection
 # observable without dependencies between their bodies.
 mark
@@ -267,7 +274,7 @@ native-type input_name 'EmptyTimeline'
 native-click commandOk
 # The root has modelled bodies: asked first (mitcad#171).
 expect-log 'Hybrid assembly question: Root has' 30
-focus-dialog '^Root has modelled bodies \('
+focus-dialog '^Root has modeled bodies \('
 button '^Continue as Is$'
 focus-main
 expect-log 'New component EmptyTimeline' 30

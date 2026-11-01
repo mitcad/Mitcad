@@ -442,7 +442,7 @@ fn part_ids_in_the_file_leave_the_top_numbers_free() {
     assert!(
         error
             .to_string()
-            .contains("invalid cut-sheet part id '4293918720'"),
+            .contains("invalid cut-sheet part id 4293918720"),
         "{error}"
     );
 }
@@ -454,8 +454,7 @@ fn the_dxf_and_svg_files_read_back_with_their_layers_and_sizes() {
         &mut doc,
         json!({"cmd": "add_cut_sheet", "bodies": ["F1.b0", "F2.b0"]}),
     );
-    let dir = std::env::temp_dir().join(format!("mitcad-cut-sheet-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("cut-sheet");
     let dxf = dir.join("parts.dxf").to_string_lossy().into_owned();
     let written = command(
         &mut doc,

@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <utility>
 
+#include <QObject>
+
 namespace {
 
 // fitCardOutline's measure of an outline style's insets around its columns.
@@ -200,8 +202,10 @@ NSView* addCardWidthHandle(NSView* card, NativeCard which, std::function<void(CG
   handle->dragged = std::move(dragged);
   handle.accessibilityElement = YES;
   handle.accessibilityRole = NSAccessibilitySplitterRole;
-  handle.accessibilityLabel = which == NativeCard::Projects ? @"Projects width"
-                              : which == NativeCard::Browser ? @"Browser width" : @"Inspector width";
+  handle.accessibilityLabel = (which == NativeCard::Projects  ? QObject::tr("Projects width")
+                               : which == NativeCard::Browser ? QObject::tr("Browser width")
+                                                              : QObject::tr("Command panel width"))
+                                  .toNSString();
   handle.accessibilityIdentifier = [card.accessibilityIdentifier stringByAppendingString:@".width"];
   [card addSubview:handle positioned:NSWindowAbove relativeTo:nil];
   return handle;

@@ -23,7 +23,7 @@ fn sync_options(command: &Value) -> Result<SyncOptions, VcsError> {
     let choice = |text: &str| {
         Resolution::parse(text).ok_or_else(|| {
             VcsError::Command(format!(
-                "'{text}' is not a choice for a file changed on both sides: mine, theirs or copy"
+                "“{text}” is not a choice for a file changed on both sides: mine, theirs or copy"
             ))
         })
     };
@@ -548,7 +548,7 @@ pub(crate) fn describe_git(info: &Value) -> String {
     if info["supported"].as_bool() != Some(true) {
         let _ = writeln!(
             out,
-            "warning: Mitcad's remote repositories are tested with git {} or newer",
+            "warning: MitCad's remote repositories are tested with git {} or newer",
             info["minimum"].as_str().unwrap_or("")
         );
     }
@@ -645,9 +645,9 @@ pub(crate) fn describe(name: &str, answer: &Value) -> Option<String> {
                 );
             } else {
                 let project = if answer["has_project"].as_bool() == Some(true) {
-                    "a Mitcad project"
+                    "a MitCad project"
                 } else {
-                    "no Mitcad project"
+                    "no MitCad project"
                 };
                 let history = if answer["related"].as_bool() == Some(true) {
                     "this project's history"

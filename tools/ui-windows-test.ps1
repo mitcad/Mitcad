@@ -37,6 +37,12 @@
 #      a circle's pixels over the section cap are its line's or its halo's,
 #      not the cap's, in the view the sketch opened in, after two zooms, from the isometric view
 #      and in the perspective view; from below, the block hides them.
+#  10. A hidden body's row when the theme switches (mitcad#1104): the demo in
+#      the Floating layout, Body1 hidden by its light bulb in the light theme
+#      (its name in TextHidden #4c525c), then the test driver's color-scheme
+#      dark after the row was styled: its name in the dark theme's #b4b8be
+#      ("Browser row colours: ..."), the light one's again after the switch
+#      back.
 # The app renders into an offscreen framebuffer and --screenshot reads it
 # back, so this works over SSH, in session 0 without a desktop.
 #
@@ -232,6 +238,8 @@ function Invoke-Mitcad([string]$Name, [string[]]$Arguments, [hashtable]$Environm
   $info.EnvironmentVariables['MITCAD_RESULT_STORE'] = 'off'
   # No update checks (mitcad#9): the tests make no network requests.
   $info.EnvironmentVariables['MITCAD_NO_UPDATE_CHECK'] = '1'
+  # Panels start from their defaults, not remembered values (mitcad#1028).
+  $info.EnvironmentVariables['MITCAD_REMEMBER_PANEL_VALUES'] = '0'
   foreach ($variable in $Environment.GetEnumerator()) {
     $info.EnvironmentVariables[$variable.Key] = $variable.Value
   }
@@ -315,6 +323,32 @@ else { Fail "the window frame was not applied again after the switch to ${theme}
 $refused = @(Frame-Lines $log | Where-Object { $_ -notmatch $applied })
 if ($refused.Count -eq 0) { Pass "the window frame was never refused ($theme)" }
 else { Fail "the window frame was refused ($theme): '$($refused -join ' | ')'" }
+
+Write-Host "--- A hidden body's row when the theme switches (mitcad#1104)"
+# Light first (the session's scheme may be either), Body1 hidden by its
+# light bulb, then dark and light again after its row was styled.
+$hiddenScript = Join-Path $Out 'hidden-row.script'
+@'
+expect-ever 'Browser eye Root/Bodies/Body1 at' 30
+color-scheme light
+expect-ever 'Browser row colours: light, ' 30
+sleep 500
+mark
+click-logged 'Browser eye Root/Bodies/Body1 at'
+expect-log 'Browser row colours: light, hidden #4c525c: [^;]*Root/Bodies/Body1' 10
+mark
+color-scheme dark
+expect-log 'Browser row colours: dark, hidden #b4b8be: [^;]*Root/Bodies/Body1' 10
+mark
+color-scheme light
+expect-log 'Browser row colours: light, hidden #4c525c: [^;]*Root/Bodies/Body1' 10
+'@ | Set-Content -Encoding ascii $hiddenScript
+$log = Invoke-Mitcad 'hidden-row' @('--chrome=floating', '--demo') @{ 'MITCAD_TEST_INPUT' = $hiddenScript }
+$rowColours = @($log -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -like 'Browser row colours: *' })
+$rowColours | Select-Object -Last 4 | ForEach-Object { Write-Host "     $_" }
+Expect-Log $log 'TestDriver: done' "Hidden row: the script ran"
+Expect-Log $log 'Browser row colours: dark, hidden #b4b8be: [^;\r\n]*Root/Bodies/Body1' `
+  "Hidden row: Body1's name in the dark theme's TextHidden after the switch"
 
 Write-Host '--- Component colors and appearance restoration'
 $colorScript = Join-Path $Out 'component-colors.script'
@@ -557,7 +591,9 @@ Write-Host '--- A fillet whose edges a sketch change renamed (mitcad#272)'
 # lines next to the arc; then the arc goes and the circle c15 takes its
 # place, which renames the lines' faces. Opened, the fillet finds its edges
 # under their new names and the timeline and the warnings badge show its
-# warning.
+# warning. A plane at 90 radians warns too: the warning's level is the same
+# in its Browser row, the status line and
+# the Floating pill (mitcad#1040).
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $App) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $cli) { Fail "no mitcad-cli.exe beside $App" }
@@ -591,7 +627,10 @@ else {
   {"expect": {"feature": "Fillet1", "status": "ok"}},
   {"cmd": "sketch.remove", "sketch": "F1", "items": ["c11"]},
   {"cmd": "sketch.add_circle", "sketch": "F1", "center": [0, 40], "diameter": 12},
-  {"expect": {"feature": "Fillet1", "status": "warning"}}
+  {"expect": {"feature": "Fillet1", "status": "warning"}},
+  {"cmd": "add_feature", "name": "Tilted", "def": {"type": "construction_plane",
+    "definition": {"type": "angle", "line": "z", "angle": 90, "plane": "xz"}}},
+  {"expect": {"feature": "Tilted", "status": "warning"}}
 ]
 '@ | Set-Content -Encoding ascii $commands
   $made = & $cli run $commands --save $renamed
@@ -602,11 +641,16 @@ else {
 expect-log 'Feature warnings: .*Fillet1: edge E\{F2:side\(c14\[c9,c8\]\)\|F2:side\(c9\[c14,c11\]\)\} found as E\{F2:side\(c14\[c9,c8\]\)\|F2:side\(c9\[c14,c15\]\)\} after a change in Sketch1' 30
 expect-log 'Warnings badge: .*Fillet1: edge E\{F2:side\(c14\[c9,c8\]\)\|F2:side\(c9\[c14,c11\]\)\} found as ' 30
 expect-log 'found as E\{F2:side\(c10\[c15,c12\]\)\|F2:side\(c12\[c7,c10\]\)\} after a change in Sketch1' 30
+expect-ever 'Browser level .*/Tilted: warning'
+test-status-message warning 'A warning stays a warning'
+expect-log 'Status warning: A warning stays a warning' 10
+test-status-message error 'An error is an error'
+expect-log 'Status error: An error is an error' 10
 '@ | Set-Content -Encoding ascii $driver
     $log = Invoke-Mitcad 'renamed' @('--no-recovery', '--open', $renamed) @{ 'MITCAD_TEST_INPUT' = $driver }
     Expect-Log $log 'Opened .*renamed\.mitcad' 'the design with the renamed faces opened'
     if ($log.Contains('Recompute failed')) { Fail 'a recompute of the design with the renamed faces failed' }
-    Expect-Log $log 'TestDriver: done' 'the timeline and the warnings badge show the fillet that found its renamed edges'
+    Expect-Log $log 'TestDriver: done' 'the timeline and the warnings badge show the fillet that found its renamed edges; one level per surface'
   }
 }
 

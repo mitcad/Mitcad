@@ -19,6 +19,7 @@ fn line(a: P2, b: P2) -> ViewEdge {
         visible: true,
         kind: ViewEdgeKind::Sharp,
         curve: ViewCurve::Line(a, b),
+        source: None,
     }
 }
 
@@ -32,6 +33,7 @@ fn arc(center: P2, radius: f64, start: f64, end: f64) -> ViewEdge {
             start,
             end,
         },
+        source: None,
     }
 }
 
@@ -390,6 +392,7 @@ fn curved_plate() -> (Vec<ViewEdge>, Spline2) {
             visible: true,
             kind: ViewEdgeKind::Sharp,
             curve: ViewCurve::Spline(curve.clone()),
+            source: None,
         });
         edges.push(line([0.0, 60.0], [0.0, 0.0]));
     }

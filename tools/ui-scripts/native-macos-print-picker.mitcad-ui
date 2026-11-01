@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: MIT
+wait-idle
+window-resize 1280 820
+focus-main
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+expect-model-bodies 1 4000
+capture-undo-depth baseline
+command make.print3d
+expect-log '^Panel Send to Slicer input printer shows: Slicer default$'
+native-pointer-click input_printer
+focus-dialog '^Printer Picker$'
+expect-log '^Native picker libraryPicker at input_printer: '
+expect-log 'Printer picker sections: Acme Lab 2'
+expect-native-focus libraryPickerSearch '^$'
+key Down
+key Escape
+focus-main
+expect-undo-depth ${baseline} 0
+native-pointer-click input_printer
+focus-dialog '^Printer Picker$'
+type 'X1'
+expect-native-focus libraryPickerSearch '^X1$'
+expect-log '^Printer picker search: X1, first X1 Carbon · 0.4 mm nozzle$'
+screenshot-screen '${MITCAD_TEST_WORK}/printer-search.png'
+key Return
+focus-main
+expect-log '^3D Print printer: design/acme-lab-x1-carbon-0-4-nozzle$'
+expect-log '^Panel Send to Slicer input printer shows: X1 Carbon · 0.4 mm nozzle$'
+expect-native-text input_printer '^X1 Carbon · 0.4 mm nozzle$'
+expect-undo-depth ${baseline} 1
+native-pointer-click input_printer
+focus-dialog '^Printer Picker$'
+expect-log 'entries, current X1 Carbon · 0.4 mm nozzle'
+key Escape
+focus-main
+native-pointer-click input_process
+focus-dialog '^Process Picker$'
+type 'Fine'
+expect-log '^Process picker search: Fine, first Fine$'
+native-pointer-click libraryPickerList.item.Fine
+focus-main
+expect-log '^3D Print process: design/fine-acme-lab-x1-carbon-0-4-nozzle$'
+expect-undo-depth ${baseline} 2
+native-click commandCancel
+expect-log '^Command Send to Slicer cancelled$'
+command edit.undo
+command edit.undo
+expect-undo-depth ${baseline} 0
+expect-model-bodies 1 4000
+command make.print3d
+native-pointer-click input_process
+focus-dialog '^Process Picker$'
+type 'New process'
+key Return
+focus-dialog '^Printers and Processes$'
+expect-log '^3D Print process new: Process 1 '
+native-pointer-button '^Close$'
+focus-main
+native-click commandCancel
+command edit.undo
+expect-undo-depth ${baseline} 0
+expect-model-bodies 1 4000

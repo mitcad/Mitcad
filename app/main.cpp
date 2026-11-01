@@ -43,6 +43,34 @@
 
 namespace {
 
+// The names Qt keys the settings on, and the UI tests' own settings. Before
+// the application object exists: main() reads the frontend preference
+// before it makes one (mitcad#1056).
+void useStoredSettings() {
+  // The stored names (Mitcad/Mitcad), not the program's name MitCad: the
+  // settings and the data folders are keyed on them (mitcad#822).
+  QCoreApplication::setOrganizationName(mitcad::storedApplicationName());
+#ifdef Q_OS_MACOS
+  // macOS names the settings file after the reversed domain
+  // (fi.nocodo.Mitcad.plist, not com.Mitcad.Mitcad.plist); it should match
+  // the bundle identifier fi.nocodo.mitcad (MITCAD_BUNDLE_ID in
+  // app/packaging/macos). Windows and Linux key their settings on the
+  // organization name, so the domain stays unset there.
+  const QString kOrganizationDomain = QStringLiteral("nocodo.fi");
+  QCoreApplication::setOrganizationDomain(kOrganizationDomain);
+#endif
+  QCoreApplication::setApplicationName(mitcad::storedApplicationName());
+  // UI tests keep their settings (shortcuts, recent files, preferences)
+  // apart from the user's: an INI file in a directory of their own. Linux
+  // tests can use XDG_CONFIG_HOME; on Windows the settings are otherwise in
+  // the registry.
+  const QString settingsDir = qEnvironmentVariable("MITCAD_SETTINGS_DIR");
+  if (!settingsDir.isEmpty()) {
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDir);
+  }
+}
+
 // The application, or its import worker; main ends the process with what
 // this returns (framework/ProcessEnd.hpp).
 int runApplication(int argc, char* argv[]) {
@@ -94,20 +122,38 @@ int runApplication(int argc, char* argv[]) {
   QSurfaceFormat::setDefaultFormat(mitcad::macSurfaceFormat());
 #endif
 
+  useStoredSettings();
+  // The frontend (mitcad#1056): Qt by default, also in a build with the
+  // AppKit frontend; Settings › General's native macOS interface chooses
+  // AppKit for the next starts, and --ui=native|qt for one run. --chrome
+  // chooses a Qt layout, so Qt too. The start-up's Frontend: line says
+  // which decided.
+  QString frontendSource = QStringLiteral("default");
 #ifdef MITCAD_MACOS_NATIVE_UI
-  bool nativeUiRequested = true;
+  bool nativeUiRequested = mitcad::nativeUiPreference();
+  if (nativeUiRequested) {
+    frontendSource = QStringLiteral("preference");
+  }
   // Keep Qt's application delegate and activation handling while the shell
   // owns the menu bar. Plugin mode would suppress that delegate entirely.
   // The full parser below validates these options.
+  bool uiGiven = false;
+  bool chromeGiven = false;
   for (int index = 1; index < argc; ++index) {
     const QString argument = QString::fromLocal8Bit(argv[index]);
     if (argument.startsWith(QStringLiteral("--ui="))) {
+      uiGiven = true;
       nativeUiRequested = argument.mid(5) == QStringLiteral("native");
     } else if (argument == QStringLiteral("--ui") && index + 1 < argc) {
+      uiGiven = true;
       nativeUiRequested = QString::fromLocal8Bit(argv[++index]) == QStringLiteral("native");
     } else if (argument.startsWith(QStringLiteral("--chrome"))) {
-      nativeUiRequested = false;
+      chromeGiven = true;
     }
+  }
+  if (!uiGiven && chromeGiven && nativeUiRequested) {
+    nativeUiRequested = false;
+    frontendSource = QStringLiteral("--chrome");
   }
   QCoreApplication::setAttribute(Qt::AA_DontUseNativeMenuBar, nativeUiRequested);
 #else
@@ -121,19 +167,9 @@ int runApplication(int argc, char* argv[]) {
   // The key presses the Windows UI tests post, with their modifiers
   // (MITCAD_LOG_KEYS, mitcad#271).
   mitcad::installKeyLogIfRequested();
-  // The stored names (Mitcad/Mitcad), not the program's name MitCad: the
-  // settings and the data folders are keyed on them (mitcad#822).
-  QApplication::setOrganizationName(mitcad::storedApplicationName());
-#ifdef Q_OS_MACOS
-  // macOS names the settings file after the reversed domain
-  // (fi.nocodo.Mitcad.plist, not com.Mitcad.Mitcad.plist); it should match
-  // the bundle identifier fi.nocodo.mitcad (MITCAD_BUNDLE_ID in
-  // app/packaging/macos). Windows and Linux key their settings on the
-  // organization name, so the domain stays unset there.
-  const QString kOrganizationDomain = QStringLiteral("nocodo.fi");
-  QApplication::setOrganizationDomain(kOrganizationDomain);
-#endif
-  QApplication::setApplicationName(mitcad::storedApplicationName());
+  // What decides whether a shortcut takes a key (MITCAD_LOG_SHORTCUTS,
+  // mitcad#1016).
+  mitcad::installShortcutLogIfRequested();
   QApplication::setApplicationVersion(QStringLiteral(MITCAD_VERSION));
   // Every rendered size, so that the title bar and the taskbar each get the
   // one drawn for them (the small ones are simplified).
@@ -145,15 +181,6 @@ int runApplication(int argc, char* argv[]) {
   // The desktop file whose icon the desktop shows (packaging/linux).
   QGuiApplication::setDesktopFileName(QStringLiteral("mitcad"));
   mitcad::integrateDesktop();
-  // UI tests keep their settings (shortcuts, recent files, preferences)
-  // apart from the user's: an INI file in a directory of their own. Linux
-  // tests can use XDG_CONFIG_HOME; on Windows the settings are otherwise in
-  // the registry.
-  const QString settingsDir = qEnvironmentVariable("MITCAD_SETTINGS_DIR");
-  if (!settingsDir.isEmpty()) {
-    QSettings::setDefaultFormat(QSettings::IniFormat);
-    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDir);
-  }
   // Where crash reports go, also the workers' (mitcad#62).
   mitcad::ReportCenter::prepareCrashReports();
 
@@ -178,9 +205,11 @@ int runApplication(int argc, char* argv[]) {
   QCommandLineParser parser;
   parser.addHelpOption();
   parser.addVersionOption();
-  const QCommandLineOption uiOption(QStringLiteral("ui"),
-                                    QStringLiteral("User interface: native (AppKit, when built) or qt."),
-                                    QStringLiteral("native|qt"));
+  const QCommandLineOption uiOption(
+      QStringLiteral("ui"),
+      QStringLiteral("User interface for this run: qt (the default) or native (AppKit, when built; Settings > "
+                     "General can choose it for every start)."),
+      QStringLiteral("native|qt"));
   parser.addOption(uiOption);
   const QCommandLineOption screenshotOption(
       QStringLiteral("screenshot"),
@@ -258,7 +287,12 @@ int runApplication(int argc, char* argv[]) {
 #endif
   const mitcad::DebugLogRequest debugLog =
       mitcad::debugLogRequest(arguments, qEnvironmentVariable("MITCAD_DEBUG_LOG"));
+  // --version and the parser's errors print the application name: the
+  // program's name MitCad there ("MitCad 1.2.3", mitcad#1043), the stored
+  // name again for everything after (the settings and folders).
+  QApplication::setApplicationName(mitcad::programName());
   parser.process(arguments);
+  QApplication::setApplicationName(mitcad::storedApplicationName());
 
   if (parser.isSet(uiOption)) {
     const QString ui = parser.value(uiOption);
@@ -273,11 +307,14 @@ int runApplication(int argc, char* argv[]) {
     }
 #endif
     nativeUiRequested = ui == QStringLiteral("native");
+    frontendSource = QStringLiteral("--ui");
     if (nativeUiRequested && parser.isSet(chromeOption)) {
       qCritical() << "--chrome selects a Qt layout; use --ui=qt with it";
       return 2;
     }
   }
+  qInfo().noquote() << QStringLiteral("Frontend: %1 (%2)")
+                           .arg(nativeUiRequested ? QStringLiteral("native") : QStringLiteral("qt"), frontendSource);
 
   // The layout (mitcad#419): --chrome for this run, else Preferences' Layout,
   // else the platform's. The native macOS frontend has a layout of its own.

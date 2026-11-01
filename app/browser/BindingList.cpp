@@ -34,7 +34,7 @@ QColor colorOf(const QJsonValue& value) {
 }
 
 // A warning without the property it names ("appearance: there is no
-// appearance 'X'; …" gives "there is no appearance 'X'; …"), when it
+// appearance X; …" gives "there is no appearance X; …"), when it
 // names that property.
 bool takeWarning(const QString& warning, const QString& prefix, QStringList* into) {
   if (!warning.startsWith(prefix)) {
@@ -698,7 +698,7 @@ ReadableBinding readBinding(const BindingEntry& entry, const BindingLookup& look
       matched = true;
     }
     if (!c.known) {
-      const QString warning = tr("no %1 \"%2\"").arg(what, c.resultText);
+      const QString warning = tr("no %1 “%2”").arg(what, c.resultText);
       if (!readable.warnings.contains(warning)) {
         readable.warnings << warning;
       }

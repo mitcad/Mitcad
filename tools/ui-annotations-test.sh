@@ -3,19 +3,21 @@
 # check-all sources: app/commands app/framework app/browser app/view core/model-api/src core/model/src/document tools/cli
 # check-all sources: app/MainWindowMeasurements.cpp app/MainWindowMeasureHistory.cpp app/MainWindowAnnotations.cpp core/model-base/src/iso286.rs app/MainWindowVisibility.cpp
 # check-all sources: core/model-drawing/src third_party/fonts/iso-lettering
+# check-all sources: app/MainWindowMake.cpp app/framework/Ribbon.cpp
 # Annotations (mitcad#702) through the real UI, in the Docked layout, on
 # two cylinders of radius 5, 20 high (Body1 about Z through the origin,
 # Body2 through (30, 40)), with an offset Gone of a block that is deleted
-# (broken):
-#   - Keep as Dimension in the Measure panel: the round faces kept as AxisDistance1
-#     (50), Body1's top rim as Diameter1 (Ø10).
+# (broken, a warning: the Annotations folder's Browser row and Gone's row
+# in the Annotations window at the warning level, mitcad#1051):
+#   - Dimension on the Make tab (mitcad#1049): the round faces kept as
+#     AxisDistance1 (50), Body1's top rim as Diameter1 (Ø10).
 #   - A double-click on AxisDistance1's text in the view: its editor; a ±
 #     tolerance (0.1).
 #   - Its text dragged along its dimension line, then the line dragged:
 #     moved, kept relative to its picks.
 #   - The Annotations window (command search): Gone marked broken;
 #     Diameter1's row double-clicked, an H7 fit; the kind filter and the
-#     search; both rows selected and changed together (Dark Grey, kept
+#     search; both rows selected and changed together (Dark Gray, kept
 #     selected through the refresh, two decimals, the group Shop);
 #     Diameter1 put in the group Inspect; the group Shop hidden and shown
 #     again.
@@ -23,8 +25,9 @@
 #   - Saved and opened again: groups, tolerances and the text's place kept;
 #     limits typed as sizes come back as exact deviations, and a colour
 #     changed alone leaves the tolerance untouched.
-#   - Datum Label… on Body1's top face (DatumA) and Frame… on Body2's round face
-#     (Frame1: perpendicularity, Ø0.05 Ⓜ, to A) in the Measure panel;
+#   - Datum Label on Body1's top face (DatumA) and Feature Control Frame on
+#     Body2's round face (Frame1: perpendicularity, Ø0.05 Ⓜ, to A) from the
+#     Make tab's Annotate group;
 #     both listed, the kind filter on frames, DatumA's row highlighting
 #     its face; Add Frame… under AxisDistance1 (Frame2: parallelism to A,
 #     in its group and colour); Frame1's zone narrowed in its editor.
@@ -43,7 +46,7 @@
 #   - 40 annotations on a block (mitcad#759): the Annotations window
 #     scrolled to its last row, a light bulb there clicked off; the list
 #     stays where it was after the refresh.
-#   - Hole Callout in the Measure panel (mitcad#902) on a plate with four
+#   - Hole Callout from the Annotate group (mitcad#902) on a plate with four
 #     counterbored through holes: HoleCallout1 "4x Ø6.6 THRU / ⌴ Ø11 ↧ 6.8"
 #     written from the hole's feature, drawn in the bundled lettering, saved.
 # tools/ui-windows-annotations-test.ps1 does the editor (Diameter1's
@@ -105,34 +108,46 @@ logged_place() {
 # focus_window: the Annotations window takes the keyboard.
 focus_window() { ui_focus_dialog '^Annotations$'; }
 
+# annotate downs "Name": the Make tab's Annotate group (mitcad#1049): its
+# menu's entry that many down, started.
+annotate() {
+  ui_step "the Make tab"                   ui_click_logged "Ribbon tab MAKE"
+  ui_step "open the Annotate menu"         ui_click_logged "Ribbon MAKE/ANNOTATE"
+  ui_expect_new "Ribbon menu MAKE/ANNOTATE: " "the Annotate menu"
+  xdotool key --delay 80 --repeat "$1" Down
+  ui_key Return
+  ui_expect_new "Command $2 started" "$2 started"
+}
+
 ui_start_display
 ui_start_app --open "$WORK/axes.mitcad"
 ui_expect_log "Annotations: Gone broken: a pick is not there" "only the broken one yet"
+# A broken annotation is a warning (mitcad#1051): the Annotations folder's
+# Browser row at the warning level.
+ui_expect_log "/Annotations: warning" "the Annotations folder's Browser row is a warning"
 ui_step "fit (F6)"                         ui_key F6
 
-echo "--- Keep a measurement"
+echo "--- Dimensions from the Make tab (mitcad#1049)"
 ui_mark
-ui_step "measure (I)"                      ui_key i
-ui_expect_new "Command Measure started" "measure started"
+ui_step "the Make tab"                     ui_click_logged "Ribbon tab MAKE"
+ui_expect_new "Ribbon button make.dimension at" "the Make tab's Dimension"
+ui_step "Dimension"                        ui_click_logged "Ribbon button make.dimension"
+ui_expect_new "Command Dimension started" "Dimension started"
 ui_step "pick Body1's round face"          ui_click_pick "face F2.b0/F2:side(c1)"
 ui_step "pick Body2's round face"          ui_click_pick "face F4.b0/F4:side(c1)"
-ui_expect_new "axis distance 50" "the axes 50 apart"
-wait_enabled "Measure Keep as Dimension"
-ui_step "Keep as Dimension"                ui_click_logged "Measure Keep as Dimension"
+ui_expect_new "Dimension Selection 2: 1 face" "both round faces picked"
+ui_step "add (Enter)"                      ui_key Return
 ui_expect_new "Annotation kept: AxisDistance1" "kept as the axes' distance"
-ui_step "close (Enter)"                    ui_key Return
-ui_expect_new "Closed Measure" "measure closed"
+ui_expect_new "Done Dimension" "the panel closed"
 ui_mark
-ui_step "measure (I)"                      ui_key i
-ui_expect_new "Command Measure started" "measure started again"
+ui_step "Dimension"                        ui_click_logged "Ribbon button make.dimension"
+ui_expect_new "Command Dimension started" "Dimension started again"
 ui_step "pick Body1's top rim"             ui_click_pick "edge F2.b0/E{F2:end(r{c1})|"
-ui_expect_new "Inspect Measure: length 31.416, radius 5, diameter 10" "the rim measured"
-wait_enabled "Measure Keep as Dimension"
-ui_step "Keep as Dimension"                ui_click_logged "Measure Keep as Dimension"
+ui_expect_new "Dimension Selection 1: 1 edge" "the rim picked"
+ui_step "add (Enter)"                      ui_key Return
 ui_expect_new "Annotation kept: Diameter1" "kept as the rim's diameter"
 ui_expect_new "Annotations drawn: AxisDistance1 = 50 (auto) | Diameter1 = Ø10 (auto)" "both drawn, in Auto"
-ui_step "close (Enter)"                    ui_key Return
-ui_expect_new "Closed Measure" "measure closed"
+ui_expect_new "Done Dimension" "the panel closed"
 
 echo "--- A ± tolerance from the editor, opened in the view"
 ui_wait_idle
@@ -195,6 +210,7 @@ ui_expect_new "Annotations window opened: 3 annotation(s)" "the window opened"
 ui_expect_new "Annotations row Diameter1: diameter, Ø10, -, -, auto, shown" "Diameter1 listed"
 ui_expect_new "Annotations row AxisDistance1: axis_distance, 50 ±0.1, ±0.1, -, auto, shown" "AxisDistance1 listed"
 ui_expect_new "Annotations row Gone: offset, Broken, -, -, auto, broken: a pick is not there" "Gone marked broken"
+ui_expect_new "Annotations level Gone: warning" "Gone's row is a warning, with its badge (mitcad#1051)"
 ui_expect_new "Annotations row Diameter1 at" "its rows laid out"
 ui_double_click_expect "Annotations row Diameter1" "Edit Annotation dialog opened: Diameter1 diameter" \
   "a double-click on a row opens its editor"
@@ -234,10 +250,10 @@ ui_expect_new "Annotations selected: AxisDistance1, Diameter1" "both rows select
 ui_expect_new "Annotations highlighted: AxisDistance1, Diameter1" "both highlighted in the view"
 ui_mark
 ui_step "Colour… (Alt+C)"                  ui_key alt+c
-ui_expect_new "Annotation Colour dialog opened: 2 annotation(s) auto (Auto | Black | Dark Grey | Custom…)" \
+ui_expect_new "Annotation Colour dialog opened: 2 annotation(s) auto (Auto | Black | Dark Gray | Custom…)" \
   "the colours offered: a technical drawing's, no bright presets (mitcad#902)"
-ui_focus_dialog '^Annotation Colour$'
-ui_step "Dark Grey (Down x2, Enter)"       ui_key Down Down Return
+ui_focus_dialog '^Annotation Color$'
+ui_step "Dark Gray (Down x2, Enter)"       ui_key Down Down Return
 ui_expect_new "Annotations drawn: AxisDistance1 = 50 ±0.1 (#495057) | Diameter1 = Ø10 H7 (#495057)" "both dark grey"
 ui_expect_new "Annotations row Diameter1: diameter, Ø10 H7, H7, -, #495057, shown" "the rows refreshed"
 # The refresh keeps both rows selected.
@@ -342,34 +358,21 @@ focus_window
 ui_step "close the window (Escape)"        ui_key Escape
 ui_focus_main
 
-echo "--- A datum label and a feature control frame from the Measure panel"
+echo "--- A datum label and a feature control frame from the Make tab's Annotate group"
 ui_mark
-ui_step "measure (I)"                      ui_key i
-ui_expect_new "Command Measure started" "measure started"
+annotate 3 "Datum Label"
 ui_step "pick Body1's top face"            ui_click_pick "face F2.b0/F2:end(r{c1})"
-ui_expect_new "Measure Annotate entries: Note…, Datum Label…, Frame…, Hole Callout" "a face picked: its leaders offered"
-ui_mark
-ui_step "Annotate"                         ui_click_logged "Measure Annotate"
-ui_expect_new "Context menu: Note… | Datum Label…" "Annotate's menu"
-ui_step "Datum Label… (D)"                 ui_key d
-ui_expect_new "Datum Label dialog opened: face F2:end(r{c1}) of F2.b0 A" "the first free letter offered"
-ui_focus_dialog '^Datum Label$'
-ui_step "OK (Enter)"                       ui_key Return
-ui_focus_main
-ui_expect_new "Datum Label dialog: A" "A chosen"
-ui_expect_new "Annotation kept: DatumA" "the datum label added"
+ui_expect_new "Datum Label Pick: 1 face" "the top face picked"
+ui_step "add (Enter)"                      ui_key Return
+ui_expect_new "Annotation kept: DatumA" "the datum label added with the first free letter"
 ui_expect_new "| DatumA = A (auto)" "drawn with its letter, in Auto"
-ui_step "close (Enter)"                    ui_key Return
-ui_expect_new "Closed Measure" "measure closed"
+ui_expect_new "Done Datum Label" "the panel closed"
 ui_mark
-ui_step "measure (I)"                      ui_key i
-ui_expect_new "Command Measure started" "measure started again"
+annotate 4 "Feature Control Frame"
 ui_step "pick Body2's round face"          ui_click_pick "face F4.b0/F4:side(c1)"
-ui_expect_new "Measure Annotate entries: Note…, Datum Label…, Frame…, Hole Callout" "a face picked: its leaders offered"
-ui_mark
-ui_step "Annotate"                         ui_click_logged "Measure Annotate"
-ui_expect_new "Context menu: Note… | Datum Label… | Frame…" "Annotate's menu"
-ui_step "Frame… (F)"                       ui_key f
+ui_expect_new "Feature Control Frame Pick: 1 face" "the round face picked"
+ui_expect_new "Panel Feature Control Frame action tolerance.0 at" "Tolerance… placed"
+ui_step "Tolerance…"                       ui_click_logged "Panel Feature Control Frame action tolerance.0"
 ui_expect_new "Feature Control Frame dialog opened: face F4:side(c1) of F4.b0 {}" "the frame asked for"
 ui_focus_dialog '^Feature Control Frame$'
 ui_step "Perpendicularity (Down x7)"       ui_key Down Down Down Down Down Down Down
@@ -380,10 +383,10 @@ ui_step "OK (Alt+M, Enter)"                ui_key alt+m Return
 ui_focus_main
 ui_expect_new 'Feature Control Frame dialog: {"characteristic":"perpendicularity","datums":["A"],"diameter":true,"modifier":"M","value":0.05}' \
   "perpendicularity, a cylindrical zone of 0.05 at maximum material, to A"
+ui_step "add (Enter)"                      ui_key Return
 ui_expect_new "Annotation kept: Frame1" "the frame added"
 ui_expect_new "| Frame1 = ⟂ | Ø0.05 Ⓜ | A (auto)" "drawn in its cells"
-ui_step "close (Enter)"                    ui_key Return
-ui_expect_new "Closed Measure" "measure closed"
+ui_expect_new "Done Feature Control Frame" "the panel closed"
 
 echo "--- Listed and filtered, its picks highlighted, a frame under a dimension, edited"
 ui_mark
@@ -437,6 +440,14 @@ ui_focus_main
 [ -n "$SHOT" ] && ui_sync && ui_capture "${SHOT%.png}-frames.png"
 
 echo "--- A datum label's pick and a frame's plane picked again in the view"
+# The vertices' pick places as Measure logs them (the Annotate panels
+# before pick faces and edges only, mitcad#1049).
+ui_mark
+ui_step "measure (I)"                      ui_key i
+ui_expect_new "Command Measure started" "measure started"
+ui_expect_new "Pick vertex F4.b0/" "Body2's vertices have pick places"
+ui_step "close (Enter)"                    ui_key Return
+ui_expect_new "Closed Measure" "measure closed"
 ui_wait_idle
 ui_double_click_expect "Annotation label DatumA" "Edit Annotation dialog opened: DatumA datum" \
   "a double-click on its letter opens its editor"
@@ -699,7 +710,7 @@ focus_window
 ui_step "close the window (Escape)"        ui_key Escape
 ui_focus_main
 
-echo "--- A hole callout from the Measure panel (mitcad#902)"
+echo "--- A hole callout from the Make tab's Annotate group (mitcad#902)"
 # A 60 x 40 x 10 plate with four counterbored through holes (the hole
 # feature F3): Hole Callout on one hole's counterbore writes all four.
 cat > "$WORK/holes.json" << EOF
@@ -722,15 +733,10 @@ ui_start_app --open "$WORK/holes.mitcad"
 ui_expect_log "Annotations: none" "the plate opened without annotations"
 ui_step "fit (F6)"                         ui_key F6
 ui_mark
-ui_step "measure (I)"                      ui_key i
-ui_expect_new "Command Measure started" "measure started"
+annotate 5 "Hole Callout"
 ui_step "pick a hole's counterbore wall"   ui_click_pick "face F2.b0/F3:hole0.cbore_wall"
-ui_expect_new "Measure Annotate entries: Note…, Datum Label…, Frame…, Hole Callout" "a hole picked: its leaders offered"
-ui_mark
-ui_step "Annotate"                         ui_click_logged "Measure Annotate"
-ui_expect_new "Context menu: Note… | Datum Label… | Frame… | Hole Callout" "Annotate's menu"
-ui_step "Hole Callout (C)"                 ui_key c
-ui_expect_new "Measure Hole Callout clicked" "Hole Callout clicked"
+ui_expect_new "Hole Callout Hole: 1 face" "the hole picked"
+ui_step "add (Enter)"                      ui_key Return
 ui_expect_new "Annotation kept: HoleCallout1" "the hole callout added"
 ui_expect_new "Annotations drawn: HoleCallout1 = 4x Ø6.6 THRU / ⌴ Ø11 ↧ 6.8 (auto)" \
   "written from the hole's feature: the count, THRU, the counterbore"
@@ -742,8 +748,7 @@ if [ -e "$(dirname "$UI_APP")/fonts/lettering.ttf" ]; then
   echo "ok   drawn in the bundled technical lettering"
 fi
 ui_expect_new "Annotation label HoleCallout1 at" "its text placed in the view"
-ui_step "close (Enter)"                    ui_key Return
-ui_expect_new "Closed Measure" "measure closed"
+ui_expect_new "Done Hole Callout" "the panel closed"
 ui_mark
 ui_step "save (Ctrl+S)"                    ui_key ctrl+s
 ui_expect_new "Saved $WORK/holes.mitcad" "saved"

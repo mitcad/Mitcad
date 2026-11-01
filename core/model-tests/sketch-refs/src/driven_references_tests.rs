@@ -130,7 +130,7 @@ fn a_reference_is_renamed_but_never_set() {
             .extend(change.as_object().unwrap().clone());
         let error = rejected(&mut d, cmd);
         assert!(
-            error.contains("'side'") && error.contains("cannot be set"),
+            error.contains("parameter side is") && error.contains("cannot be set"),
             "{error}"
         );
     }
@@ -168,7 +168,7 @@ fn a_reference_is_used_only_after_its_sketch() {
     // In its own sketch.
     let error = rejected(&mut d, set_dimension("k5", "d3 * 2"));
     assert!(
-        error.contains("'d3'") && error.contains("Sketch1 itself"),
+        error.contains("d3 is what") && error.contains("Sketch1 itself"),
         "{error}"
     );
     // A plane after the sketch may; moved before it, it may not.
@@ -178,7 +178,7 @@ fn a_reference_is_used_only_after_its_sketch() {
         json!({"cmd": "reorder_feature", "uid": "F2", "index": 0}),
     );
     assert!(
-        error.contains("'d3'") && error.contains("Plane1, before Sketch1"),
+        error.contains("d3 is what") && error.contains("Plane1, before Sketch1"),
         "{error}"
     );
     let can = query(&d, json!({"query": "can_reorder", "uid": "F2", "index": 0}));
@@ -198,7 +198,8 @@ fn a_reference_is_used_only_after_its_sketch() {
         json!({"cmd": "set_parameter", "name": "half", "expression": "d3 / 2"}),
     );
     assert!(
-        error.contains("'d3'") && error.contains("through parameter 'half'"),
+        error.contains("d3 is what the driven dimension")
+            && error.contains("through parameter half"),
         "{error}"
     );
     let error = rejected(
@@ -207,7 +208,7 @@ fn a_reference_is_used_only_after_its_sketch() {
                "definition": {"type": "offset", "plane": "xy", "distance": "d3"}}}),
     );
     assert!(
-        error.contains("'d3'") && error.contains("before Sketch1"),
+        error.contains("d3 is what") && error.contains("before Sketch1"),
         "{error}"
     );
     // A user parameter no feature uses may.
@@ -348,6 +349,6 @@ fn a_user_parameter_an_earlier_feature_uses_is_no_reference() {
     );
     plane(&mut d, "side");
     let error = rejected(&mut d, sketch_naming("side"));
-    assert!(error.contains("'side'"), "{error}");
+    assert!(error.contains("side is what"), "{error}");
     assert_eq!(parameter(&d, "side").unwrap()["kind"], "user");
 }

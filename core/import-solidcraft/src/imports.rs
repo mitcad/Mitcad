@@ -21,9 +21,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 "the Import feature keeps no STEP text".to_owned(),
             ));
         }
+        // A file name of this read's own: imports running at the same time
+        // in one process (tests on parallel threads) may each have an
+        // Import feature of the same id (mitcad#1017).
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("mitcad-solidcraft-{}", std::process::id()));
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let path = dir.join(format!("import-{}.step", f.id));
+        let path = dir.join(format!("import-{}-{n}.step", f.id));
         std::fs::write(&path, i.step.as_bytes()).map_err(|e| e.to_string())?;
         let read = self.doc.kernel().read_file(
             &path.to_string_lossy(),

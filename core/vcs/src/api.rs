@@ -252,7 +252,7 @@ impl ProjectRepo {
             }
             other => {
                 return Err(invalid(format!(
-                    "unknown version history command '{other}'"
+                    "unknown version history command “{other}”"
                 )));
             }
         };

@@ -273,7 +273,7 @@ void addCircularPattern(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.circular_pattern", QObject::tr("Circular Pattern"),
                                  "circular-pattern", "CREATE/Patterns", CommandDef::Kind::Feature);
   def.sketchCommand = true;
-  def.tooltip = QObject::tr("Copies around a centre point (the origin when none is picked)");
+  def.tooltip = QObject::tr("Copies around a center point (the origin when none is picked)");
   def.inputs = {
       selectionInput(QStringLiteral("entities"), QObject::tr("Objects"),
                      SelectKind::SketchCurve | SelectKind::SketchPoint, 1, 0)
@@ -490,29 +490,45 @@ void addProject(CommandRegistry& registry, SketchController& c) {
 // edges: `sketch.project` with `section`, a body without a `source`. Linked
 // by default, as Project; another component's geometry through its
 // occurrence. A pick the plane does not reach fails the preview with the
-// model's reason in the panel.
+// model's reason in the panel. Curves and points of earlier sketches, or a
+// whole sketch picked in the browser (mitcad#1031), give the points where
+// the plane crosses them (the model's section of a sketch's curves,
+// mitcad#998), linked as well; they are pickable through the same
+// selection filter row as Project's, and the edited sketch's own never.
 void addIntersect(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.intersect", QObject::tr("Intersect"), "sketch-intersect",
                                  "CREATE/References", CommandDef::Kind::Feature);
   def.sketchCommand = true;
-  def.tooltip = QObject::tr("Curves and points where the sketch plane cuts bodies, faces and edges");
+  def.tooltip = QObject::tr("Where the sketch plane cuts bodies, faces, edges and other sketches' curves");
   def.keywords = {QStringLiteral("section"), QStringLiteral("cut"), QStringLiteral("reference"),
                   QStringLiteral("project")};
   def.inputs = {
       selectionInput(QStringLiteral("geometry"), QObject::tr("Geometry"),
-                     SelectKind::Body | SelectKind::Face | SelectKind::Edge, 1, 0),
+                     SelectKind::Body | SelectKind::Face | SelectKind::Edge | SelectKind::SketchCurve |
+                         SelectKind::SketchPoint | SelectKind::Sketch,
+                     1, 0)
+          .withAccepts([&c](const SelectionItem& item) {
+            // Not the edited sketch's own geometry, nor the sketch itself.
+            return !projectsSketchGeometry(item) || item.owner != c.uid();
+          }),
       checkInput(QStringLiteral("linked"), QObject::tr("Projection Link"), true)
-          .withTooltip(QObject::tr("The curves follow the model when the design changes")),
+          .withTooltip(QObject::tr("The curves follow the design when it changes")),
   };
   def.build = [&c](const CommandState& s, const CommandContext&) -> Built {
     QJsonArray commands;
     for (const SelectionItem& item : s.items(QStringLiteral("geometry"))) {
       QJsonObject cmd = base(c, "sketch.project");
-      // A whole body: every face the plane cuts.
-      if (item.kind != SelectKind::Body) {
-        cmd.insert(QStringLiteral("source"), item.name);
+      if (projectsSketchGeometry(item)) {
+        // Another sketch's curve or point, or all its curves: where the
+        // plane crosses them, no body.
+        cmd.insert(QStringLiteral("source"), item.reference());
+      } else {
+        // A whole body: every face the plane cuts.
+        if (item.kind != SelectKind::Body) {
+          cmd.insert(QStringLiteral("source"), item.name);
+        }
+        cmd.insert(QStringLiteral("body"), item.owner);
       }
-      cmd.insert(QStringLiteral("body"), item.owner);
       cmd.insert(QStringLiteral("linked"), s.checked(QStringLiteral("linked")));
       cmd.insert(QStringLiteral("section"), true);
       cmd.insert(QStringLiteral("occurrence"), item.occurrence);
@@ -521,7 +537,16 @@ void addIntersect(CommandRegistry& registry, SketchController& c) {
     return Built::of(QJsonObject{{QStringLiteral("commands"), commands}});
   };
   def.describe = [](const CommandState& s, const CommandContext&) {
-    return QStringLiteral("Intersected %1 item(s)").arg(s.items(QStringLiteral("geometry")).size());
+    const Selection& items = s.items(QStringLiteral("geometry"));
+    // Other sketches' geometry by name, as Project's log (mitcad#1031).
+    QStringList sketched;
+    for (const SelectionItem& item : items) {
+      if (projectsSketchGeometry(item)) {
+        sketched << item.describe();
+      }
+    }
+    return QStringLiteral("Intersected %1 item(s)").arg(items.size()) +
+           (sketched.isEmpty() ? QString() : QStringLiteral(": ") + sketched.join(QStringLiteral(", ")));
   };
   registry.add(def);
 }
@@ -1252,17 +1277,17 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
        draw(sketch::rectangleTool, "three_point"), none, false,
        QObject::tr("A rectangle at any angle: a side, then the opposite side")});
   add({"sketch.rectangle_center", QObject::tr("Center Rectangle"), "rectangle-center", "CREATE/Rectangles",
-       draw(sketch::rectangleTool, "center"), none, false, QObject::tr("A rectangle from its centre and a corner")});
+       draw(sketch::rectangleTool, "center"), none, false, QObject::tr("A rectangle from its center and a corner")});
   // Rounded corners (mitcad#867): four tangent arcs, Equal, one radius.
   add({"sketch.rectangle_rounded", QObject::tr("2-Point Rounded Rectangle"), "rectangle-rounded",
        "CREATE/Rectangles", draw(sketch::roundedRectangleTool, "two_point"), none, false,
        QObject::tr("A rectangle with rounded corners from two opposite corners and a corner radius")});
   add({"sketch.rectangle_rounded_center", QObject::tr("Center Rounded Rectangle"), "rectangle-rounded-center",
        "CREATE/Rectangles", draw(sketch::roundedRectangleTool, "center"), none, false,
-       QObject::tr("A rectangle with rounded corners from its centre, a corner and a corner radius")});
+       QObject::tr("A rectangle with rounded corners from its center, a corner and a corner radius")});
   add({"sketch.circle", QObject::tr("Center Diameter Circle"), "circle", "CREATE/Circles",
        draw(sketch::circleTool, "center"), QKeySequence(Qt::Key_C), true,
-       QObject::tr("A circle from its centre and a point on it")});
+       QObject::tr("A circle from its center and a point on it")});
   add({"sketch.circle_2pt", QObject::tr("2-Point Circle"), "circle-2pt", "CREATE/Circles",
        draw(sketch::circleTool, "two_point"), none, false, QObject::tr("A circle from the ends of a diameter")});
   add({"sketch.circle_3pt", QObject::tr("3-Point Circle"), "circle-3pt", "CREATE/Circles",
@@ -1274,33 +1299,33 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   add({"sketch.arc", QObject::tr("3-Point Arc"), "arc-3pt", "CREATE/Arcs", draw(sketch::arcTool, "three_point"),
        none, true, QObject::tr("An arc from its start and end through a third point")});
   add({"sketch.arc_center", QObject::tr("Center Point Arc"), "arc-center", "CREATE/Arcs",
-       draw(sketch::arcTool, "center"), none, false, QObject::tr("An arc around a centre, from its start to its end")});
+       draw(sketch::arcTool, "center"), none, false, QObject::tr("An arc around a center, from its start to its end")});
   add({"sketch.arc_tangent", QObject::tr("Tangent Arc"), "arc-tangent", "CREATE/Arcs",
        draw(sketch::arcTool, "tangent"), none, false, QObject::tr("An arc that continues a line or an arc smoothly")});
   // No natural default: the submenu has no button of its own.
   add({"sketch.ellipse", QObject::tr("Ellipse"), "ellipse", "CREATE/Other Geometry",
        [&c] { c.startTool(sketch::ellipseTool(c)); }, none, false,
-       QObject::tr("An ellipse: the centre, the end of the major axis, a point on it")});
+       QObject::tr("An ellipse: the center, the end of the major axis, a point on it")});
   add({"sketch.polygon", QObject::tr("Circumscribed Polygon"), "polygon", "CREATE/Other Geometry",
        draw(sketch::polygonTool, "circumscribed"), none, false,
-       QObject::tr("A regular polygon around a circle: the centre, then a side's middle")});
+       QObject::tr("A regular polygon around a circle: the center, then a side's middle")});
   add({"sketch.polygon_inscribed", QObject::tr("Inscribed Polygon"), "polygon-inscribed", "CREATE/Other Geometry",
        draw(sketch::polygonTool, "inscribed"), none, false,
-       QObject::tr("A regular polygon in a circle: the centre, then a corner")});
+       QObject::tr("A regular polygon in a circle: the center, then a corner")});
   add({"sketch.polygon_edge", QObject::tr("Edge Polygon"), "polygon-edge", "CREATE/Other Geometry",
        draw(sketch::polygonTool, "edge"), none, false, QObject::tr("A regular polygon from one of its sides")});
   add({"sketch.slot", QObject::tr("Center to Center Slot"), "slot", "CREATE/Other Geometry",
-       draw(sketch::slotTool, "center_to_center"), none, false, QObject::tr("A slot between the centres of its ends")});
+       draw(sketch::slotTool, "center_to_center"), none, false, QObject::tr("A slot between the centers of its ends")});
   add({"sketch.slot_overall", QObject::tr("Overall Slot"), "slot", "CREATE/Other Geometry",
        draw(sketch::slotTool, "overall"), none, false, QObject::tr("A slot from end to end")});
   add({"sketch.slot_center", QObject::tr("Center Point Slot"), "slot", "CREATE/Other Geometry",
        draw(sketch::slotTool, "center_point"), none, false,
-       QObject::tr("A slot from its centre and the centre of an end")});
+       QObject::tr("A slot from its center and the center of an end")});
   add({"sketch.slot_arc", QObject::tr("Three Point Arc Slot"), "slot-arc", "CREATE/Other Geometry",
        draw(sketch::slotTool, "three_point_arc"), none, false, QObject::tr("A curved slot along a 3-point arc")});
   add({"sketch.slot_arc_center", QObject::tr("Center Point Arc Slot"), "slot-arc", "CREATE/Other Geometry",
        draw(sketch::slotTool, "center_point_arc"), none, false,
-       QObject::tr("A curved slot along an arc around a centre")});
+       QObject::tr("A curved slot along an arc around a center")});
   add({"sketch.spline", QObject::tr("Fit Point Spline"), "spline-fit", "CREATE/Other Geometry",
        [&c] { c.startTool(sketch::splineTool(c, false)); }, none, false,
        QObject::tr("A smooth curve through points; Enter or a double-click ends it, a click on its first "
@@ -1353,7 +1378,7 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
                    "new geometry is construction geometry")},
       CommandDef::Kind::Action);
   add({"sketch.centerline", QObject::tr("Centerline"), "centerline", "MODIFY", [&c] { c.toggleCenterline(); }, none,
-       false, QObject::tr("Turns the selected lines into centre lines and back")},
+       false, QObject::tr("Turns the selected lines into center lines and back")},
       CommandDef::Kind::Action);
   addConvertProjected(registry, c);
   add({"sketch.delete", QObject::tr("Delete"), "delete", "MODIFY", [&c] { c.deleteSelection(); },

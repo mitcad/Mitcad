@@ -10,20 +10,20 @@
 //! 1e-9 of the shape's size. A part's or an assembly's shape is a compound
 //! FreeCAD makes of moved copies of its objects, whose measures differ from
 //! the objects' own by up to about 1e-6: 1e-6 relative there. A body the
-//! history's replay made is Mitcad's own build of FreeCAD's definitions
+//! history's replay made is MitCad's own build of FreeCAD's definitions
 //! (from sketches solved within 1e-4 mm of FreeCAD's points): the replay's
 //! tolerance, 1e-6 relative, there too.
 //!
 //! Where FreeCAD's shape is invalid, or FreeCAD's measures disagree with
 //! FreeCAD's own mesh of the shape by more than 1 % (surface integrals OCCT
-//! gets wrong on some faces), or, for a replayed body, with Mitcad's
+//! gets wrong on some faces), or, for a replayed body, with MitCad's
 //! measures of the shape FreeCAD stored, which the body agrees with
 //! (FreeCAD's default integration of B-spline surfaces is off by up to
 //! about 1e-3), FreeCAD's measures are no reference: a difference there is
 //! listed as not compared. So is a difference at a place of shapes the
 //! import brought in as FreeCAD stored them, where FreeCAD's measures are
 //! those the kernel's plain fixed-point integration gives the same shapes:
-//! FreeCAD measures so, while Mitcad integrates faces bounded by B-splines
+//! FreeCAD measures so, while MitCad integrates faces bounded by B-splines
 //! of many spans more exactly (mitcad#139). Objects with faces in FreeCAD
 //! that the import left out for want of faces are differences.
 //!
@@ -47,7 +47,7 @@ const GROUP_RELATIVE: f64 = 1e-6;
 const ABSOLUTE: f64 = 1e-6;
 /// FreeCAD's measures against its mesh of the shape.
 const MESH_AGREEMENT: f64 = 1e-2;
-/// Sketches: Mitcad's solution and integration against FreeCAD's measures
+/// Sketches: MitCad's solution and integration against FreeCAD's measures
 /// of its stored edges.
 const SKETCH_RELATIVE: f64 = 1e-6;
 
@@ -60,7 +60,7 @@ fn point(v: &Value) -> Option<[f64; 3]> {
     Some([number(a.first()?)?, number(a.get(1)?)?, number(a.get(2)?)?])
 }
 
-/// A value FreeCAD computed (dump.py's `quantity`) in Mitcad's units:
+/// A value FreeCAD computed (dump.py's `quantity`) in MitCad's units:
 /// millimetres and radians; None for other units.
 fn freecad_quantity(v: &Value) -> Option<f64> {
     if v["other"] == true {
@@ -126,7 +126,7 @@ fn unreliable(expected: &Value) -> Option<String> {
 }
 
 /// Why FreeCAD's measures of a replayed body are no reference, if they
-/// are not: they differ from Mitcad's measures of the very shape FreeCAD
+/// are not: they differ from MitCad's measures of the very shape FreeCAD
 /// stored, which the replayed body agrees with (FreeCAD integrates some
 /// surfaces, B-splines among them, less exactly).
 fn stored_apart(
@@ -151,7 +151,7 @@ fn stored_apart(
         || theirs_center.is_some_and(|c| !near(c, stored.center));
     (agrees && apart).then(|| {
         format!(
-            "FreeCAD's measures of its stored shape differ from Mitcad's of the same shape (volume {} against {}, area {} against {}), which the import agrees with",
+            "FreeCAD's measures of its stored shape differ from MitCad's of the same shape (volume {} against {}, area {} against {}), which the import agrees with",
             expected["volume"], stored.volume, expected["area"], stored.area
         )
     })
@@ -162,7 +162,7 @@ fn stored_apart(
 /// measures of the kernel's plain fixed-point integration of the same shapes
 /// ([`super::report::PlacedReport::fixed`]), as FreeCAD measures, which do
 /// not follow a face's boundary curves that are B-splines of many spans;
-/// Mitcad integrates those faces more exactly (mitcad#139).
+/// MitCad integrates those faces more exactly (mitcad#139).
 fn fixed_apart(
     place: &super::report::PlacedReport,
     expected: &Value,
@@ -172,7 +172,7 @@ fn fixed_apart(
     (!place.replayed && freecad_has(expected, &fixed, relative)).then(|| {
         format!(
             "FreeCAD's measures are those of fixed-point integration (volume {}, area {}), \
-             which Mitcad's integration of faces bounded by B-splines of many spans refines",
+             which MitCad's integration of faces bounded by B-splines of many spans refines",
             fixed.volume, fixed.area
         )
     })
@@ -254,12 +254,12 @@ pub(crate) fn check(report: &FcstdReport, dump: &Value) -> ReferenceReport {
                 let far = (0..3).any(|k| (place.center[k] - c[k]).abs() > tolerance);
                 if far {
                     differences.push(format!(
-                        "{what}: centre {:?} against FreeCAD's {:?}",
+                        "{what}: center {:?} against FreeCAD's {:?}",
                         place.center, c
                     ));
                 }
             }
-            None => differences.push(format!("{what}: the reference has no world centre")),
+            None => differences.push(format!("{what}: the reference has no world center")),
         }
         // A difference from measures FreeCAD itself does not get right is
         // no difference of the import.
@@ -332,12 +332,12 @@ pub(crate) fn check(report: &FcstdReport, dump: &Value) -> ReferenceReport {
             });
             if (0..3).any(|k| (mine[k] - theirs[k]).abs() > ABSOLUTE + SKETCH_RELATIVE * size) {
                 out.differences.push(format!(
-                    "{what}: centre {mine:?} against FreeCAD's {theirs:?}"
+                    "{what}: center {mine:?} against FreeCAD's {theirs:?}"
                 ));
             }
         }
     }
-    // Parameters: Mitcad's values against FreeCAD's (cells, VarSets' and
+    // Parameters: MitCad's values against FreeCAD's (cells, VarSets' and
     // bound properties, constraints).
     for p in &report.parameters {
         let (Some(mine), Some(o)) = (p.value, objects.get(p.object.as_str())) else {

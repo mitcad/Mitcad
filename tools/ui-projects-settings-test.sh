@@ -5,8 +5,10 @@
 # The Projects panel's defaults and its projects' settings through the real
 # UI (mitcad#151, #152, #153, #173), without a network:
 #   1. A fresh profile without projects starts with the panel hidden; with
-#      projects configured (no choice made yet) it starts shown, in the
-#      Floating card and in the Docked dock.
+#      projects configured (no choice made yet) it starts hidden too
+#      (mitcad#1020: File > Open from Project does its job); shown with
+#      View > Projects in the Floating card, it stays shown at the next
+#      start, in the Docked dock.
 #   2. A flat tree: no row above a project, the projects sorted by the name
 #      shown. A Cloud project's row shows its repository's address
 #      (github.com/owner/repository), a Local one the folder's name. A
@@ -104,10 +106,14 @@ cli project new-design "$GRIPPER" arm.mitcad --author "$AUTHOR"
 git -C "$GRIPPER" remote add origin git@github.com:acme/gripper.git
 echo "ok   projects made"
 
-echo "--- Floating: shown by default in its card; a flat tree; a double-click opens the settings"
+echo "--- Floating: hidden by default, shown in its card; a flat tree; a double-click opens the settings"
 ui_start_app --chrome=floating
 UI_MARK=0
-ui_expect_log "Projects panel at the start: shown (no choice yet, projects configured)" "shown by default"
+ui_expect_log "Projects panel at the start: hidden (no choice yet, projects configured)" \
+  "hidden by default, also with projects configured"
+ui_mark
+ui_step "projects panel (search)"        ui_command "Projects"
+ui_expect_new "Projects panel: shown at the next start" "shown, the choice remembered"
 # No row above a project (mitcad#173): the projects are the top rows, by
 # the name shown.
 ui_expect_log "Projects top rows: gripper-work | Shop" "only the projects at the top, by the name shown" 20
@@ -152,10 +158,10 @@ grep -q '"Workshop (team)"' "$GRIPPER/.mitcad/local/name.json" || ui_fail "the d
 echo "ok   the folder, the repository and the versions are untouched"
 quit
 
-echo "--- Docked: shown by default; the display name stays; the settings button"
+echo "--- Docked: shown as chosen; the display name stays; the settings button"
 ui_start_app
 UI_MARK=0
-ui_expect_log "Projects panel at the start: shown (no choice yet, projects configured)" "still shown by default"
+ui_expect_log "Projects panel at the start: shown (as chosen)" "shown at the next start, as the user chose"
 ui_expect_log "Projects names: Shop = Shop | gripper-work = Workshop (team) (set)" \
   "the display name after a restart" 20
 ui_expect_log "Projects top rows: Shop | gripper-work" "only the projects at the top" 20

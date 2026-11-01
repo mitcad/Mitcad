@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-//! Joints (SolidCraft's `crates/doc/src/joints.rs`) as Mitcad joint
+//! Joints (SolidCraft's `crates/doc/src/joints.rs`) as MitCad joint
 //! features of the root, after the timeline.
 //!
 //! - Kinds: rigid, revolute, slider, cylindrical, pin slot, planar and
-//!   ball are Mitcad's; the relations that tie only some directions
+//!   ball are MitCad's; the relations that tie only some directions
 //!   (parallel, perpendicular, angle, point on a plane or a line, line on
 //!   a plane) have no counterpart and are listed.
 //! - Origins: a face centre is the planar face at the pick (its middle and
@@ -13,14 +13,14 @@
 //!   the straight edge's middle. Picks are in the occurrence's component's
 //!   coordinates.
 //! - SolidCraft mates the origins (B's z against A's) unless `flip`;
-//!   Mitcad's z axes point the same way unless `flip`: the flip is turned
-//!   over. The joint's values are its position, its limits Mitcad's.
+//!   MitCad's z axes point the same way unless `flip`: the flip is turned
+//!   over. The joint's values are its position, its limits MitCad's.
 //! - The occurrences keep the placements the file gives them: a joint that
 //!   does not hold there (frames found otherwise than SolidCraft finds
 //!   them) comes in as an as-built joint of the placements, with a note.
 //! - Contact sets and motion studies (SolidCraft's `motion.rs`) are
-//!   Mitcad's (mitcad#454): see [`contact_sets`] and [`motion_studies`].
-//!   Motion links are Mitcad's `motion_link` features (mitcad#466, see
+//!   MitCad's (mitcad#454): see [`contact_sets`] and [`motion_studies`].
+//!   Motion links are MitCad's `motion_link` features (mitcad#466, see
 //!   [`motion_links`]); exploded views are listed as not mapped.
 
 use mitcad_model::features::OccurrencePath;
@@ -34,7 +34,7 @@ use super::Importer;
 use super::report::{JointReport, Outcome};
 use mitcad_import_base::geom::{distance, dot, scale, sub};
 
-/// SolidCraft's names of a kind's values, and Mitcad's motions for them.
+/// SolidCraft's names of a kind's values, and MitCad's motions for them.
 fn motions(kind: &str) -> Option<(&'static str, &'static [&'static str])> {
     Some(match kind {
         "rigid" => ("rigid", &[]),
@@ -93,13 +93,13 @@ fn joint_features<K: Kernel>(
     joints
 }
 
-/// The file's motion links (`joints.rs`, `MotionLink`) as Mitcad's
+/// The file's motion links (`joints.rs`, `MotionLink`) as MitCad's
 /// `motion_link` features (mitcad#466): b's value follows a's by the
 /// coupling (a plain ratio without one; gears, a rack and pinion and a
 /// screw by their sizes as numbers, expressions or picked round faces; a
-/// cam by its profile, follower and tip). The offset is Mitcad's own, the
-/// one that keeps the joints where the file places the parts (Mitcad's
-/// joint values count from Mitcad's frames). A link whose joints did not
+/// cam by its profile, follower and tip). The offset is MitCad's own, the
+/// one that keeps the joints where the file places the parts (MitCad's
+/// joint values count from MitCad's frames). A link whose joints did not
 /// come in, or that does not fit, is left out with a note.
 fn motion_links<K: Kernel>(im: &mut Importer<'_, '_, K>) {
     let joints = joint_features(im, true);
@@ -362,7 +362,7 @@ fn profile_face<K: Kernel>(
         .ok_or_else(|| "the cam's picked edges bound no planar face".to_owned())
 }
 
-/// The file's contact sets as Mitcad's (`motion.rs`, `ContactSet`): each
+/// The file's contact sets as MitCad's (`motion.rs`, `ContactSet`): each
 /// set's occurrences by their paths from the root, suppressed as in the
 /// file; with contact off in the file every set comes in suppressed, and
 /// "all contact" (every occurrence against every other) is a set of every
@@ -419,7 +419,7 @@ fn contact_sets<K: Kernel>(im: &mut Importer<'_, '_, K>) {
                     .push(format!("{label}: occurrence {id} left out: {e}")),
             }
         }
-        // Mitcad's names are its own: a taken name gets the next number.
+        // MitCad's names are its own: a taken name gets the next number.
         let mut unique = name.trim().to_owned();
         if !unique.is_empty() {
             let base = unique.clone();
@@ -442,7 +442,7 @@ fn contact_sets<K: Kernel>(im: &mut Importer<'_, '_, K>) {
     }
 }
 
-/// The file's motion studies as Mitcad's (`motion.rs`, `MotionStudy`):
+/// The file's motion studies as MitCad's (`motion.rs`, `MotionStudy`):
 /// a key's joint is the joint feature the file's joint became, its value
 /// index the kind's motion in SolidCraft's order (`motions`); values are
 /// in millimetres and radians in both. Keys of joints that came in as
@@ -587,10 +587,10 @@ fn joint<K: Kernel>(im: &mut Importer<'_, '_, K>, j: &Value) -> JointReport {
     let Some((mitcad_kind, dofs)) = motions(&kind) else {
         report.outcome = Outcome::Unmapped;
         report.notes.push(format!(
-            "a {kind} relation (it ties only some directions or points) has no Mitcad counterpart"
+            "a {kind} relation (it ties only some directions or points) has no MitCad counterpart"
         ));
         im.report.notes.push(format!(
-            "joint {name}: {kind} relations have no Mitcad counterpart"
+            "joint {name}: {kind} relations have no MitCad counterpart"
         ));
         return report;
     };
@@ -660,7 +660,7 @@ fn joint<K: Kernel>(im: &mut Importer<'_, '_, K>, j: &Value) -> JointReport {
             _ => false,
         })
     };
-    // Driven at the file's values; else with its values free (Mitcad's
+    // Driven at the file's values; else with its values free (MitCad's
     // frames may turn otherwise about z than SolidCraft's, so the same
     // placement has other values); else as built.
     let mut tries = vec![(def.clone(), None)];
@@ -669,7 +669,7 @@ fn joint<K: Kernel>(im: &mut Importer<'_, '_, K>, j: &Value) -> JointReport {
         free["position"] = json!({});
         tries.push((
             free,
-            Some("its values are free (at the file's values the frames as Mitcad finds them would move the parts)"),
+            Some("its values are free (at the file's values the frames as MitCad finds them would move the parts)"),
         ));
     }
     let mut why = String::new();
@@ -728,7 +728,7 @@ fn same(a: &Transform, b: &Transform) -> bool {
     })
 }
 
-/// A joint origin (`{"occurrence": id, "snap": …}`) as Mitcad's: the
+/// A joint origin (`{"occurrence": id, "snap": …}`) as MitCad's: the
 /// occurrence path from the root and the geometry in its component.
 fn origin<K: Kernel>(
     im: &mut Importer<'_, '_, K>,
@@ -749,15 +749,15 @@ fn origin<K: Kernel>(
     let mut out = json!({"occurrence": path});
     match snap.get("type").and_then(Value::as_str).unwrap_or("") {
         "face_center" => {
-            let pick = vec3(&snap["pick"]).ok_or("a face centre without its pick")?;
+            let pick = vec3(&snap["pick"]).ok_or("a face center without its pick")?;
             let (body, face) = im.face_at(component, None, pick)?;
             out["geometry"] = json!({"body": body.to_string(), "face": face});
             if snap.get("x").is_some_and(|x| !x.is_null()) {
-                notes.push("the turn of the origin's frame about z is Mitcad's".to_owned());
+                notes.push("the turn of the origin's frame about z is MitCad's".to_owned());
             }
         }
         "circle_center" => {
-            let pick = vec3(&snap["pick"]).ok_or("a circle centre without its pick")?;
+            let pick = vec3(&snap["pick"]).ok_or("a circle center without its pick")?;
             let (body, face) = im.face_at(component, None, pick)?;
             let shape = im.doc.body_shape(body).ok_or("the body is gone")?;
             let kernel = im.doc.kernel();
@@ -831,7 +831,7 @@ fn origin<K: Kernel>(
 }
 
 /// The occurrence path from the root to the file's occurrence, and the
-/// Mitcad component it places.
+/// MitCad component it places.
 fn occurrence_path<K: Kernel>(
     im: &Importer<'_, '_, K>,
     occurrence: u64,

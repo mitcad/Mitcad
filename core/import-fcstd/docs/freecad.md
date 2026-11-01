@@ -602,7 +602,7 @@ mitcad#539), so that the corpus test shows which kind grows:
   within the check (or an input of it was not found).
 
 The readable report adds the group to each fallback's line and the counts
-(`fallbacks by group: 1 missing in Mitcad, 4 without a parametric
+(`fallbacks by group: 1 missing in MitCad, 4 without a parametric
 counterpart, 0 other`); `freecad.corpus` prints them per file and in
 total.
 
@@ -749,6 +749,27 @@ models leave these out.
   along a spline in no plane, of an open Part arc and a warped Part
   polygon into surfaces, along a PartDesign block's top edge; variant
   WireRadius).
+
+## Pipes along a Body's edges, holes at a feature's circles (mitcad#1087)
+
+- A PartDesign pipe's spine (or auxiliary spine) of edges of a feature of
+  its own Body (`(Pocket001, [Edge2, Edge1, …])`, as FreeCAD 1.x saves a
+  pipe along edges of the solid it adds to): the path of the body's edges
+  by name (`{"body", "edges"}`), found in the body as it is before the
+  pipe, as a Part sweep's spine of a body's edges is
+  (`Importer::body_edge_path`). A spine of a whole object that is not a
+  sketch still falls back.
+- A Hole's `Profile` of circular edges of a feature (`(Pad, [Edge47,
+  Edge44])`: FreeCAD 1.x drills at circles of the Body's shape): the
+  imported sketch whose circles or arcs those edges are (the same centre,
+  radius and plane, to 1e-6), the feature's own profile sketch first,
+  then the component's other sketches; the hole's points are those curves
+  (`sketch_points`), so it follows the sketch. Edges that are not circles
+  of one imported sketch fall back.
+- A `ShapeBinder` with an empty `Support` holds only a stored copy of a
+  shape; like every binder it is skipped (MitCad has no binder), and a
+  sketch attached to its face comes in where FreeCAD placed it, on an
+  origin plane parallel to it.
 
 ## Tests
 

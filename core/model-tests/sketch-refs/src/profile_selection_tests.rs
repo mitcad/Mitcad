@@ -506,7 +506,15 @@ fn a_region_a_change_splits_selects_all_its_pieces() {
             .unwrap_or_else(|| panic!("no warning for {}: {warnings:?}", old.region));
         assert!(warning.contains("} + r{"), "{warning}");
         assert!(warning.ends_with("after a change in Sketch1"), "{warning}");
-        assert!(entry["error"].as_str().unwrap().contains(*warning));
+        // Each a warning notice of the timeline's entry (mitcad#1040).
+        assert!(
+            entry["notices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n["level"] == "warning" && n["message"].as_str() == Some(*warning)),
+            "{entry}"
+        );
     }
 
     // Back to 620: the old keys are the regions' own again, no warning.
@@ -603,7 +611,11 @@ fn a_region_found_by_the_best_match_warns() {
     );
     let entry = timeline_entry(&doc, "F2");
     assert_eq!(entry["status"], json!("warning"), "{entry}");
-    assert_eq!(entry["error"], json!(expected));
+    assert_eq!(entry["error"], Value::Null);
+    assert_eq!(
+        entry["notices"],
+        json!([{"level": "warning", "message": expected, "target": "F2"}])
+    );
     let feature = query(&doc, json!({"query": "feature", "uid": "F2"}));
     assert_eq!(feature["warnings"], json!([expected]));
     assert_eq!(bodies(&doc).len(), 1);

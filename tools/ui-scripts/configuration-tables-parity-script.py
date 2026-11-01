@@ -76,7 +76,16 @@ choice("generateRowsOption", "Size", 0)
 press("Cancel")
 add("focus-dialog '^Configurations$'", "expect-undo-depth ${beforeRows} 0", "mark")
 press("Generate Rows from Table…", "configurationsGenerateRows")
-add("focus-dialog '^Generate Rows from Table$'")
+add("focus-dialog '^Generate Rows from Table$'",
+    "expect-log 'Generate Rows columns: dk, Length; checked: dk, Length'")
+# The key only (mitcad#1044): the other columns are unchecked, so the
+# lookups and the rule below do the rest.
+for column in ("dk", "Length"):
+    add(f"native-pointer-click 'generateRowsColumn_{column}'" if native else
+        f"focus-widget generateRowsColumn_{column}")
+    if not native:
+        add("key Space")
+add("expect-log 'Generate Rows columns: dk, Length; checked: none'")
 press("Generate", "generateRowsOK")
 add("expect-log 'Configurations generated rows from Screws.Size for Size: 3 rows from Screws: added M3, M4, M5'",
     "expect-log 'M3: Size = M3, Length = ; M4: Size = M4, Length = ; M5: Size = M5, Length = '",

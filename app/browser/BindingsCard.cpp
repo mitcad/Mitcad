@@ -271,7 +271,7 @@ bool BindingsCard::rebuild() {
         QPalette marked = caseText->palette();
         marked.setColor(QPalette::WindowText, warning);
         caseText->setPalette(marked);
-        caseText->setToolTip(tr("No appearance or material is named \"%1\"").arg(c.resultText));
+        caseText->setToolTip(tr("No appearance or material is named “%1”").arg(c.resultText));
       }
       row->addWidget(caseText);
       if (c.current) {

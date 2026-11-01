@@ -3,18 +3,20 @@
 //!
 //! Three libraries complement each other:
 //!
-//! - **base**: Mitcad's parts library (`mitcad-parts`), whose manifest
+//! - **base**: MitCad's parts library (`mitcad-parts`), whose manifest
 //!   lists its materials, printers and processes; read through the
 //!   library resolver ([`crate::library::LinkResolver::print_library`])
 //!   from its newest version on this computer;
-//! - **user**: a folder in Mitcad's data folder, beside `libraries`
+//! - **user**: a folder in MitCad's data folder, beside `libraries`
 //!   ([`set_user_library`], `MITCAD_PRINT_LIBRARY_DIR`);
 //! - **project**: the folder `print-library` of the project the design is
 //!   in, versioned with it.
 //!
 //! Each holds one JSON file per item ([`ItemFile`]) in `materials/`,
-//! `print/printers/` and `print/processes/`: a material with its
-//! appearance inline, or a printer or process profile; a vendor's item
+//! `print/printers/` and `print/processes/`: a material with the
+//! appearances of its list that are not the library's inline (its default
+//! and, mitcad#1067, the others), or a printer or process profile; a
+//! vendor's item
 //! `<vendor>/<product>` is a file in a folder of the vendor's. The same
 //! kind and id in several libraries: the nearest wins (project, then
 //! user, then base); the others are listed as shadowed.
@@ -45,7 +47,7 @@ pub const PROJECT_LIBRARY_DIR: &str = "print-library";
 /// The largest item file read.
 pub const MAX_ITEM: usize = 1 << 20;
 
-/// The base library's id: Mitcad's parts library.
+/// The base library's id: MitCad's parts library.
 pub const BASE_LIBRARY: &str = "mitcad-parts";
 
 /// Which library an item is in.
@@ -72,7 +74,7 @@ impl LibraryKind {
     }
 
     /// The place the interface names (mitcad#655): the base library is
-    /// Mitcad's, with the built-in materials.
+    /// MitCad's, with the built-in materials.
     pub fn place(self) -> &'static str {
         match self {
             LibraryKind::Base => "mitcad",
@@ -168,8 +170,8 @@ impl BasedOn {
     }
 }
 
-/// An item file: a material (with its appearance when it is not one of
-/// the library's appearances) or a profile.
+/// An item file: a material (with the appearances of its list that are
+/// not the library's appearances) or a profile.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ItemFile {
@@ -177,8 +179,14 @@ pub struct ItemFile {
     pub version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<Material>,
+    /// The material's default appearance when the item carries it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appearance: Option<Appearance>,
+    /// The other appearances of its list the item carries (mitcad#1067),
+    /// in the list's order. Files from before have none; a file of a
+    /// material that offers one appearance stays as it was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub appearances: Vec<Appearance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<PrintProfile>,
 }
@@ -189,10 +197,27 @@ pub struct ItemFile {
 pub enum ItemData {
     Material {
         material: Material,
-        /// Its appearance when the item carries it inline.
-        appearance: Option<Appearance>,
+        /// The appearances of its list the item carries inline (those
+        /// that are not the library's; mitcad#1067), in the list's order,
+        /// the default's first when it carries it.
+        appearances: Vec<Appearance>,
     },
     Profile(PrintProfile),
+}
+
+/// A material item without appearances of its own: a built-in material,
+/// a design's material shown in a list.
+pub fn material_item(material: Material) -> ItemData {
+    ItemData::Material {
+        material,
+        appearances: Vec::new(),
+    }
+}
+
+/// The appearance `id` among those an item carries.
+pub fn carried<'a>(appearances: &'a [Appearance], id: Option<&str>) -> Option<&'a Appearance> {
+    let id = id?;
+    appearances.iter().find(|a| a.id == id)
 }
 
 impl ItemData {
@@ -236,18 +261,32 @@ impl ItemData {
 
     /// The item as its file has it.
     pub fn file(&self) -> ItemFile {
-        let (material, appearance, profile) = match self {
+        let (material, appearance, appearances, profile) = match self {
             ItemData::Material {
                 material,
-                appearance,
-            } => (Some(material.clone()), appearance.clone(), None),
-            ItemData::Profile(p) => (None, None, Some(p.clone())),
+                appearances,
+            } => {
+                // The default's as before (mitcad#640), the others in a
+                // list of their own (mitcad#1067).
+                let default = material.appearance.as_deref();
+                let (mine, others): (Vec<&Appearance>, Vec<&Appearance>) = appearances
+                    .iter()
+                    .partition(|a| Some(a.id.as_str()) == default);
+                (
+                    Some(material.clone()),
+                    mine.into_iter().next().cloned(),
+                    others.into_iter().cloned().collect(),
+                    None,
+                )
+            }
+            ItemData::Profile(p) => (None, None, Vec::new(), Some(p.clone())),
         };
         ItemFile {
             format: ITEM_FORMAT.to_owned(),
             version: 1,
             material,
             appearance,
+            appearances,
             profile,
         }
     }
@@ -287,13 +326,13 @@ pub fn parse_item(path: &str, data: &[u8]) -> Result<ItemData, String> {
         serde_json::from_slice(data).map_err(|e| format!("{path}: not an item file: {e}"))?;
     if file.format != ITEM_FORMAT {
         return Err(format!(
-            "{path}: the format is '{}', not '{ITEM_FORMAT}'",
+            "{path}: the format is {}, not {ITEM_FORMAT}",
             file.format
         ));
     }
     if file.version != 1 {
         return Err(format!(
-            "{path}: version {} of the item format is not one this Mitcad reads (1)",
+            "{path}: version {} of the item format is not one this MitCad reads (1)",
             file.version
         ));
     }
@@ -309,13 +348,30 @@ pub fn parse_item(path: &str, data: &[u8]) -> Result<ItemData, String> {
                     ));
                 }
             }
+            let mut appearances: Vec<Appearance> = file.appearance.into_iter().collect();
+            for appearance in file.appearances {
+                appearance.check().map_err(|e| format!("{path}: {e}"))?;
+                if !material.appearances.contains(&appearance.id) {
+                    return Err(format!(
+                        "{path}: the appearance {} is not one of the material's others",
+                        appearance.id
+                    ));
+                }
+                if appearances.iter().any(|a| a.id == appearance.id) {
+                    return Err(format!(
+                        "{path}: the appearance {} is there twice",
+                        appearance.id
+                    ));
+                }
+                appearances.push(appearance);
+            }
             ItemData::Material {
                 material,
-                appearance: file.appearance,
+                appearances,
             }
         }
         (None, Some(profile)) => {
-            if file.appearance.is_some() {
+            if file.appearance.is_some() || !file.appearances.is_empty() {
                 return Err(format!("{path}: a profile has no appearance"));
             }
             profile.check().map_err(|e| format!("{path}: {e}"))?;
@@ -499,13 +555,58 @@ mod tests {
                 appearance: Some("plastic_white".to_owned()),
                 filament: BTreeMap::from([("filament_type".to_owned(), serde_json::json!("PLA"))]),
                 slicer: BTreeMap::new(),
+                variants: Vec::new(),
+                appearances: Vec::new(),
                 based_on: None,
                 class: None,
                 version: Some(version),
                 origin: None,
             },
-            appearance: None,
+            appearances: Vec::new(),
         }
+    }
+
+    fn look(id: &str) -> Appearance {
+        Appearance {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            ..Appearance::default()
+        }
+    }
+
+    #[test]
+    fn a_material_carries_its_list_of_appearances() {
+        // The default and two others of the design it was saved from
+        // (mitcad#1067): the default's in `appearance` as before, the
+        // others in `appearances`.
+        let ItemData::Material { mut material, .. } = pla(1) else {
+            unreachable!()
+        };
+        material.appearance = Some("green".to_owned());
+        material.appearances = vec!["plastic_black".to_owned(), "blue".to_owned()];
+        let item = ItemData::Material {
+            material,
+            appearances: vec![look("green"), look("blue")],
+        };
+        let file = item.file();
+        assert_eq!(
+            file.appearance.as_ref().map(|a| a.id.as_str()),
+            Some("green")
+        );
+        assert_eq!(file.appearances, vec![look("blue")]);
+        let path = item_path(ItemKind::Material, "pla");
+        assert_eq!(parse_item(&path, item.text().as_bytes()).unwrap(), item);
+        // A file of one appearance is written as before.
+        assert!(!pla(1).text().contains("appearances"));
+        // An appearance the material does not offer is refused.
+        let mut file = item.file();
+        file.appearances.push(look("red"));
+        let text = serde_json::to_string(&file).unwrap();
+        let error = parse_item(&path, text.as_bytes()).unwrap_err();
+        assert!(
+            error.contains("not one of the material's others"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -521,7 +622,7 @@ mod tests {
         assert!(error.contains("belongs in materials/pla.json"), "{error}");
         let error =
             parse_item("materials/pla.json", b"{\"format\": \"x\", \"version\": 1}").unwrap_err();
-        assert!(error.contains("the format is 'x'"), "{error}");
+        assert!(error.contains("the format is x"), "{error}");
         let profile = ItemData::Profile(PrintProfile::new("draft", "Draft", ProfileKind::Process));
         assert_eq!(
             parse_item("print/processes/draft.json", profile.text().as_bytes()).unwrap(),
@@ -531,7 +632,7 @@ mod tests {
 
     #[test]
     fn the_nearest_library_wins() {
-        let dir = std::env::temp_dir().join(format!("mitcad-print-library-{}", std::process::id()));
+        let dir = crate::testing::unique_temp_path("print-library");
         let user = dir.join("user");
         let project = dir.join("project");
         for (root, version) in [(&user, 3), (&project_library(&project), 4)] {

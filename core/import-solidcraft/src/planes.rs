@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! The file's planes (`PlaneRef`) as Mitcad plane references, and the
+//! The file's planes (`PlaneRef`) as MitCad plane references, and the
 //! frame a sketch on one has.
 //!
-//! - The origin planes are Mitcad's (XY and XZ have the same axes in both;
+//! - The origin planes are MitCad's (XY and XZ have the same axes in both;
 //!   YZ's sketch axes differ, which the sketch's frame takes up).
 //! - An offset plane, a plane turned about a line in it and a construction
 //!   plane are construction planes, so they follow their parameters; their
@@ -15,9 +15,9 @@
 //!   fixed where they are now (the report says so).
 //!
 //! A sketch's frame: SolidCraft's frame of the plane (origin and axes,
-//! component coordinates) expressed in the frame Mitcad gives the plane.
+//! component coordinates) expressed in the frame MitCad gives the plane.
 //! Where SolidCraft's frame is not stored or derived exactly (a midplane's
-//! or a tangent plane's), Mitcad's frame is taken, with a note.
+//! or a tangent plane's), MitCad's frame is taken, with a note.
 
 use mitcad_model::{ComponentUid, Datum, GeomRef, Kernel};
 use mitcad_solidcraft::Feature;
@@ -122,7 +122,7 @@ fn origin_frame(name: &str) -> Option<(&'static str, Frame)> {
     }
 }
 
-/// A plane made: its Mitcad reference and SolidCraft's frame of it.
+/// A plane made: its MitCad reference and SolidCraft's frame of it.
 pub(crate) struct PlaneMade {
     pub geom: Value,
     pub world: Option<Frame>,
@@ -150,7 +150,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             Some(w) => w,
             None => {
                 made.notes
-                    .push("the sketch's frame on its plane is Mitcad's".to_owned());
+                    .push("the sketch's frame on its plane is MitCad's".to_owned());
                 mitcad
             }
         };
@@ -162,7 +162,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         })
     }
 
-    /// Mitcad's frame of a plane reference now.
+    /// MitCad's frame of a plane reference now.
     pub(super) fn mitcad_frame(&self, geom: &Value) -> Result<Frame, String> {
         let g: GeomRef =
             serde_json::from_value(geom.clone()).map_err(|e| format!("plane {geom}: {e}"))?;
@@ -174,7 +174,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         })
     }
 
-    /// A plane as a Mitcad reference; `final_name` names the construction
+    /// A plane as a MitCad reference; `final_name` names the construction
     /// plane it becomes, when it is the feature of the file itself (else
     /// helpers are hidden). `names` are the parameter names of the plane's
     /// offsets and angles, outermost first.
@@ -265,7 +265,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 notes.extend(base.notes);
                 let a = self.params.value(self.doc, angle.as_str(), Kind::Angle)?;
                 let world = base.world.map(|w| w.rotated(*axis_origin, *axis_dir, a));
-                // Mitcad turns a plane about a line in it.
+                // MitCad turns a plane about a line in it.
                 let in_plane = base.world.is_some_and(|w| {
                     let n = w.normal();
                     dot(sub(*axis_origin, w.o), n).abs() < 1e-6
@@ -439,7 +439,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         Ok(made)
     }
 
-    /// A construction plane of a Mitcad definition, with Mitcad's frame.
+    /// A construction plane of a MitCad definition, with MitCad's frame.
     fn constructed(
         &mut self,
         definition: Value,
@@ -462,7 +462,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             });
         let mut notes = notes;
         if final_name.is_none() {
-            notes.push("the frame of the plane is Mitcad's".to_owned());
+            notes.push("the frame of the plane is MitCad's".to_owned());
         }
         Ok(PlaneMade {
             geom: json!(uid),
@@ -545,7 +545,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             .ok_or_else(|| format!("no feature {name}"))
     }
 
-    /// A construction reference as a Mitcad reference.
+    /// A construction reference as a MitCad reference.
     pub(super) fn geo(
         &mut self,
         g: &GeoRef,
@@ -602,7 +602,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         })
     }
 
-    /// A path (an edge or a sketch curve) as a Mitcad path reference.
+    /// A path (an edge or a sketch curve) as a MitCad path reference.
     pub(super) fn path_of(
         &mut self,
         g: &GeoRef,

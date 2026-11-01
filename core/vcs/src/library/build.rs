@@ -83,7 +83,7 @@ pub fn quantity(value: &Value, kind: Kind) -> Result<f64, String> {
     let number: f64 = number
         .replace(',', ".")
         .parse()
-        .map_err(|_| format!("'{text}' is no value"))?;
+        .map_err(|_| format!("“{text}” is no value"))?;
     let factor = match (kind, unit.trim()) {
         (Kind::Length, "" | "mm") => 1.0,
         (Kind::Length, "cm") => 10.0,
@@ -100,13 +100,11 @@ pub fn quantity(value: &Value, kind: Kind) -> Result<f64, String> {
                 Kind::Mass => "a mass",
                 Kind::Angle => "an angle",
             };
-            return Err(format!(
-                "'{text}' is not {what} ('{unit}' is no unit of it)"
-            ));
+            return Err(format!("“{text}” is not {what} ({unit} is no unit of it)"));
         }
     };
     if !number.is_finite() {
-        return Err(format!("'{text}' is no value"));
+        return Err(format!("“{text}” is no value"));
     }
     Ok(number * factor)
 }
@@ -165,7 +163,7 @@ impl System {
         };
         if system.kind != "I" && system.kind != "B" {
             return Err(format!(
-                "{value} is no slot system: its type is '{}', not I or B",
+                "{value} is no slot system: its type is {}, not I or B",
                 system.kind
             ));
         }
@@ -439,7 +437,7 @@ pub fn check_component(
     let role = part.role();
     if !ROLES.contains(&role) {
         out.error(format!(
-            "{label}: build.role '{role}' is none of {}",
+            "{label}: build.role {role} is none of {}",
             list(&ROLES)
         ));
     }
@@ -591,7 +589,7 @@ fn check_length(length: &Value, label: &str, out: &mut Problems) {
     match length.get("parameter").and_then(Value::as_str) {
         Some(name) if mitcad_model::expr::is_valid_name(name) => {}
         Some(name) => out.error(format!(
-            "{label}: build.length.parameter '{name}' is no parameter name"
+            "{label}: build.length.parameter {name} is no parameter name"
         )),
         None => out.error(format!(
             "{label}: build.length names the design's parameter that sets the length \
@@ -666,7 +664,7 @@ fn check_frames(part: &BuildPart<'_>, role: &str, label: &str, out: &mut Problem
         };
         if !valid_frame_name(name) {
             out.error(format!(
-                "{label}: frame '{name}' is no frame name (letters, digits, _ - + .)"
+                "{label}: frame “{name}” is no frame name (letters, digits, _ - + .)"
             ));
         } else if !names.insert(name) {
             out.error(format!("{label}: frame {name} is listed twice"));
@@ -674,7 +672,7 @@ fn check_frames(part: &BuildPart<'_>, role: &str, label: &str, out: &mut Problem
         let kind = frame.get("kind").and_then(Value::as_str).unwrap_or("");
         if !FRAME_KINDS.contains(&kind) {
             out.error(format!(
-                "{label}: frame {name}: kind '{kind}' is none of {}",
+                "{label}: frame {name}: kind {kind} is none of {}",
                 list(&FRAME_KINDS)
             ));
         }
@@ -710,13 +708,11 @@ fn check_frames(part: &BuildPart<'_>, role: &str, label: &str, out: &mut Problem
             }
             if slot.is_some() && kind != "slot" {
                 out.error(format!(
-                    "{label}: frame {name} is a slot frame of kind '{kind}'"
+                    "{label}: frame {name} is a slot frame of kind {kind}"
                 ));
             }
             if matches!(name, "end_a" | "end_b") && kind != "end" {
-                out.error(format!(
-                    "{label}: frame {name} is of kind '{kind}', not end"
-                ));
+                out.error(format!("{label}: frame {name} is of kind {kind}, not end"));
             }
         }
     }
@@ -764,7 +760,7 @@ fn check_connector(part: &BuildPart<'_>, connector: &Value, label: &str, out: &m
     let space = connector.get("space").and_then(Value::as_str).unwrap_or("");
     if !SPACES.contains(&space) {
         out.error(format!(
-            "{label}: build.connector.space '{space}' is none of {}",
+            "{label}: build.connector.space {space} is none of {}",
             list(&SPACES)
         ));
     }
@@ -800,7 +796,7 @@ fn check_connector(part: &BuildPart<'_>, connector: &Value, label: &str, out: &m
         let to = mate.get("to").and_then(Value::as_str).unwrap_or("");
         if !FRAME_KINDS.contains(&to) {
             out.error(format!(
-                "{label}: build.connector.mates[{i}].to '{to}' is no frame kind ({})",
+                "{label}: build.connector.mates[{i}].to {to} is no frame kind ({})",
                 list(&FRAME_KINDS)
             ));
         }
@@ -863,13 +859,13 @@ fn check_connector(part: &BuildPart<'_>, connector: &Value, label: &str, out: &m
         let on = machining.get("on").and_then(Value::as_str).unwrap_or("");
         if on != "a" && on != "b" {
             out.error(format!(
-                "{label}: build.connector.machining[{i}].on '{on}' is neither a nor b"
+                "{label}: build.connector.machining[{i}].on {on} is neither a nor b"
             ));
         }
         let frame = machining.get("frame").and_then(Value::as_str).unwrap_or("");
         if frame != "end" && frame != "slot" {
             out.error(format!(
-                "{label}: build.connector.machining[{i}].frame '{frame}' is neither end nor slot"
+                "{label}: build.connector.machining[{i}].frame {frame} is neither end nor slot"
             ));
         }
         match machining.get("hole").filter(|h| h.is_object()) {
@@ -900,7 +896,7 @@ fn check_panel(panel: &Value, label: &str, out: &mut Problems) {
     let mount = panel.get("mount").and_then(Value::as_str).unwrap_or("");
     if !matches!(mount, "slot" | "surface" | "face") {
         out.error(format!(
-            "{label}: build.panel.mount '{mount}' is none of slot, surface, face"
+            "{label}: build.panel.mount {mount} is none of slot, surface, face"
         ));
     }
     // A sheet's sizes sold: [[width, height], ...].
@@ -959,7 +955,7 @@ fn check_linear(part: &BuildPart<'_>, linear: &Value, label: &str, out: &mut Pro
     let kind = linear.get("kind").and_then(Value::as_str).unwrap_or("");
     if !LINEAR_KINDS.contains(&kind) {
         out.error(format!(
-            "{label}: build.linear.kind '{kind}' is none of {}",
+            "{label}: build.linear.kind {kind} is none of {}",
             list(&LINEAR_KINDS)
         ));
     }
@@ -999,14 +995,14 @@ fn check_linear(part: &BuildPart<'_>, linear: &Value, label: &str, out: &mut Pro
         let on = mate.get("on").and_then(Value::as_str).unwrap_or("");
         if !FRAME_KINDS.contains(&on) {
             out.error(format!(
-                "{label}: build.linear.mate.on '{on}' is no frame kind ({})",
+                "{label}: build.linear.mate.on {on} is no frame kind ({})",
                 list(&FRAME_KINDS)
             ));
         }
         let joint = mate.get("joint").and_then(Value::as_str).unwrap_or("");
         if !JOINT_KINDS.contains(&joint) {
             out.error(format!(
-                "{label}: build.linear.mate.joint '{joint}' is none of {}",
+                "{label}: build.linear.mate.joint {joint} is none of {}",
                 list(&JOINT_KINDS)
             ));
         }
@@ -1234,7 +1230,7 @@ fn check_timber_block(block: &Value, role: &str, path: &str, label: &str, out: &
             let kind = fit.get("kind").and_then(Value::as_str).unwrap_or("");
             if !FIT_KINDS.contains(&kind) {
                 out.error(format!(
-                    "{label}: build.{path}connector.fit.kind '{kind}' is none of {}",
+                    "{label}: build.{path}connector.fit.kind {kind} is none of {}",
                     list(&FIT_KINDS)
                 ));
             }
@@ -1313,7 +1309,7 @@ fn fit_outer(part: &BuildPart<'_>, junction: &Value, wood: &Value) -> Fit {
             let same = |x: f64, y: f64| (x - y).abs() <= 1.0;
             if !((same(s[0], a[0]) && same(s[1], a[1])) || (same(s[0], a[1]) && same(s[1], a[0]))) {
                 return Err(format!(
-                    "it fits {} x {}, the member is {} x {}",
+                    "it fits {} × {}, the member is {} × {}",
                     trim_number(s[0]),
                     trim_number(s[1]),
                     trim_number(a[0]),
@@ -1565,7 +1561,7 @@ pub fn check_design(
             && !url.starts_with("https://")
         {
             out.error(format!(
-                "{label}: {}: row {}: the supplier_url '{url}' is no https:// address",
+                "{label}: {}: row {}: the supplier_url {url} is no https:// address",
                 component.path, row.name
             ));
         }
@@ -1955,7 +1951,7 @@ pub fn fit_junction(component: &ManifestComponent, junction: &Value) -> Fit {
     }
 }
 
-/// What a picker asks for (Profile, Panel, Linear Part; or a part to go
+/// What a picker asks for (Profile, Panel, Linear Component; or a part to go
 /// with another, as a carriage with its rail).
 #[derive(Debug, Clone, Default)]
 pub struct Picker<'a> {

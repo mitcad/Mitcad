@@ -21,6 +21,7 @@
 
 #include "../framework/Command.hpp"
 #include "../framework/DialogFolders.hpp"
+#include "../framework/Json.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
@@ -51,8 +52,12 @@ bool runSlicerImport(PrintItemsHost& host, const QString& path, const QString& i
   return runPrintImport(host, command, QFileInfo(path).fileName(), into, log, result, error);
 }
 
-QJsonArray installedSlicers(PrintItemsHost& host, const QString& into) {
-  QJsonObject query{{QStringLiteral("query"), QStringLiteral("slicer_presets")}, {QStringLiteral("into"), into}};
+namespace {
+
+// The `slicer_presets` query for an import into `into`; false when the
+// test's folders are not valid.
+bool slicersQuery(const PrintItemsHost& host, const QString& into, QJsonObject* query) {
+  *query = QJsonObject{{QStringLiteral("query"), QStringLiteral("slicer_presets")}, {QStringLiteral("into"), into}};
   // A UI regression can name synthetic preset folders through the same
   // query argument as the API tests, without reading the user's presets.
   const QByteArray testFolders = qgetenv("MITCAD_TEST_SLICER_FOLDERS");
@@ -60,16 +65,30 @@ QJsonArray installedSlicers(PrintItemsHost& host, const QString& into) {
     const QJsonDocument folders = QJsonDocument::fromJson(testFolders);
     if (!folders.isArray()) {
       qWarning() << "Invalid MITCAD_TEST_SLICER_FOLDERS: expected a JSON array";
-      return {};
+      return false;
     }
-    query.insert(QStringLiteral("folders"), folders.array());
+    query->insert(QStringLiteral("folders"), folders.array());
   }
   const QString project = host.projectFolder();
   if (!project.isEmpty() && into != QStringLiteral("user")) {
-    query.insert(QStringLiteral("project"), project);
+    query->insert(QStringLiteral("project"), project);
+  }
+  return true;
+}
+
+} // namespace
+
+QJsonArray installedSlicers(PrintItemsHost& host, const QString& into, QJsonArray* merge) {
+  QJsonObject query;
+  if (!slicersQuery(host, into, &query)) {
+    return {};
   }
   try {
-    return host.model().queryObject(query).value(QStringLiteral("slicers")).toArray();
+    const QJsonObject answer = host.model().queryObject(query);
+    if (merge != nullptr) {
+      *merge = answer.value(QStringLiteral("merge")).toArray();
+    }
+    return answer.value(QStringLiteral("slicers")).toArray();
   } catch (const std::exception& e) {
     qDebug().noquote() << QStringLiteral("Installed slicers not read: %1").arg(QString::fromUtf8(e.what()));
     return {};
@@ -104,6 +123,13 @@ bool runPrintImport(PrintItemsHost& host, QJsonObject command, const QString& fi
   done.answer = answer;
   done.summary = printImportSummary(done.file, into, answer, &keys);
   const PrintImportSummary& summary = done.summary;
+  // Each filament's chain and colour (mitcad#1053): `Slicer import: <preset>
+  // inherits <chain>, colour <hex|none>`.
+  const QJsonArray filamentLog =
+      answer.value(QStringLiteral("report")).toObject().value(QStringLiteral("log")).toArray();
+  for (const QJsonValue& line : filamentLog) {
+    qInfo().noquote() << line.toString();
+  }
   if (into == QStringLiteral("design")) {
     const auto names = [&answer](const char* field) {
       QStringList list;
@@ -135,6 +161,16 @@ bool runPrintImport(PrintItemsHost& host, QJsonObject command, const QString& fi
                               .arg(log, into, items.isEmpty() ? QStringLiteral("nothing") : items.join(QStringLiteral(", ")));
     qDebug().noquote() << QStringLiteral("%1 import: %2").arg(log, summary.line);
   }
+  // One filament's separate materials merged first (mitcad#1054).
+  for (const QJsonValue& value : answer.value(QStringLiteral("merged")).toArray()) {
+    const QJsonObject merged = value.toObject();
+    QStringList from;
+    for (const QJsonValue& id : merged.value(QStringLiteral("from")).toArray()) {
+      from << id.toString();
+    }
+    qDebug().noquote() << QStringLiteral("%1 merged: %2 (%3)")
+                              .arg(log, merged.value(QStringLiteral("name")).toString(), from.join(QStringLiteral(", ")));
+  }
   if (result != nullptr) {
     *result = std::move(done);
   }
@@ -146,7 +182,7 @@ SlicerImportBar::SlicerImportBar(PrintItemsHost& host, const QString& logName, Q
   m_row = new QHBoxLayout(this);
   m_row->setContentsMargins(0, 0, 0, 0);
   m_line = new QLabel;
-  m_line->setStyleSheet(QStringLiteral("color: gray;"));
+  setRoleStyleSheet(m_line, ColorRole::TextSecondary);
   m_line->hide();
   m_details = new QPushButton(tr("Details…"));
   m_details->setObjectName(QStringLiteral("slicerImportDetails"));
@@ -177,8 +213,37 @@ void SlicerImportBar::clear() {
 
 void SlicerImportBar::findSlicers() {
   // An installed Bambu-family slicer's presets (mitcad#830): the button
-  // opens a menu of a file or a slicer's presets.
-  m_slicers = installedSlicers(m_host, into());
+  // opens a menu of a file or a slicer's presets. A look ahead under way
+  // is older.
+  ++m_finds;
+  showSlicers(installedSlicers(m_host, into(), &m_merge));
+}
+
+void SlicerImportBar::findSlicersAhead() {
+  // Off the UI thread (mitcad#1018): an installed slicer's presets are
+  // many files. For the button's text only; a click looks again.
+  QJsonObject query;
+  if (!slicersQuery(m_host, into(), &query)) {
+    return;
+  }
+  const int finding = ++m_finds;
+  const QByteArray key = compactJson(query);
+  QVector<QJsonObject> requests;
+  requests.append(query);
+  readAhead(this, requests, [this, finding, key](const QueryAnswers& answers, qint64 readMs) {
+    if (finding != m_finds) {
+      return;
+    }
+    const QJsonArray slicers = answers.value(key).toObject().value(QStringLiteral("slicers")).toArray();
+    m_merge = answers.value(key).toObject().value(QStringLiteral("merge")).toArray();
+    qDebug().noquote() << QStringLiteral("%1 slicers: read %2 ms, %3 found").arg(m_log).arg(readMs).arg(slicers.size());
+    showSlicers(slicers);
+    scheduleLogPlaces();
+  });
+}
+
+void SlicerImportBar::showSlicers(const QJsonArray& slicers) {
+  m_slicers = slicers;
   m_import->setText(m_slicers.isEmpty() ? tr("Import from Slicer…") : tr("Import from Slicer ▾"));
 }
 
@@ -187,7 +252,8 @@ void SlicerImportBar::importClicked() {
     showRefusal(m_host.changeBlockedReason());
     return;
   }
-  // Looked for again: a slicer may have come or gone since.
+  // Looked for again, in the files: a slicer may have come or gone since.
+  m_host.readAgain();
   findSlicers();
   if (m_slicers.isEmpty()) {
     importFile();
@@ -230,17 +296,20 @@ void SlicerImportBar::importPresets(int index) {
   if (index < 0 || index >= m_slicers.size()) {
     return;
   }
-  SlicerPresetsDialog dialog(m_slicers, index, into(), window());
+  SlicerPresetsDialog dialog(m_slicers, index, into(), window(), m_merge);
   prepareModal(&dialog);
-  if (execDialog(&dialog) != QDialog::Accepted || dialog.tickedCount() == 0) {
+  if (execDialog(&dialog) != QDialog::Accepted || (dialog.tickedCount() == 0 && !dialog.mergeChosen())) {
     qDebug().noquote() << QStringLiteral("Slicer presets cancelled");
     return;
   }
   // "3 presets" in the line and the report: "3 presets imported into My
   // library", "Imported 3 presets (Bambu Studio) into this design."; one
-  // preset by its name: "Fine imported into My library".
+  // preset by its name: "Fine imported into My library"; a merge alone
+  // (mitcad#1054): "Separate materials".
   const QStringList names = dialog.tickedNames();
-  const QString what = names.size() == 1 ? names.first() : tr("%1 presets").arg(names.size());
+  const QString what = names.isEmpty()       ? tr("Separate materials")
+                       : names.size() == 1 ? names.first()
+                                           : tr("%1 presets").arg(names.size());
   SlicerImportResult result;
   QString error;
   if (!runPrintImport(m_host, dialog.command(), what, into(), m_log, &result, &error)) {
@@ -255,7 +324,7 @@ void SlicerImportBar::importPresets(int index) {
 void SlicerImportBar::showImported(const SlicerImportResult& result) {
   m_summary = result.summary;
   m_line->setText(m_summary.line);
-  m_line->setStyleSheet(QStringLiteral("color: gray;"));
+  setRoleStyleSheet(m_line, ColorRole::TextSecondary);
   m_line->show();
   m_details->setVisible(!m_summary.details.isEmpty());
   // A running command's panel (3D Print's) follows the design.
@@ -274,7 +343,7 @@ void SlicerImportBar::showRefusal(const QString& error) {
 
 void SlicerImportBar::showEvent(QShowEvent* event) {
   QWidget::showEvent(event);
-  findSlicers();
+  findSlicersAhead();
   m_loggedPlaces.clear();
   scheduleLogPlaces();
 }

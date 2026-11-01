@@ -331,7 +331,7 @@ fn existing_parameters_change_as_their_rows_say() {
     assert_eq!(d1.limits.as_ref().unwrap().min.as_deref(), Some("40"));
     assert_eq!(
         d1.notes,
-        ["a model parameter keeps its unit mm, its comment, its favourite"]
+        ["a model parameter keeps its unit mm, its comment, its favorite"]
     );
     assert!(!doc.is_favorite_parameter("d1"));
     assert!(close(value(doc, "d1"), 50.0));
@@ -375,7 +375,7 @@ fn existing_parameters_change_as_their_rows_say() {
     assert_eq!(bad.action, CsvAction::Refuse);
     assert_eq!(
         bad.reason.as_deref(),
-        Some("parameter 'bad': the minimum 20 mm is above the maximum 10 mm")
+        Some("parameter bad: the minimum 20 mm is above the maximum 10 mm")
     );
     assert_eq!(bad.limits.as_ref().unwrap().max.as_deref(), Some("10 mm"));
     assert!(doc.parameters().find("bad").is_none());
@@ -452,7 +452,7 @@ fn text_parameters_go_out_and_come_back() {
 fn a_table_that_is_not_a_parameter_csv_is_refused() {
     let mut doc = Document::new(MockKernel::default());
     let error = doc.import_parameters_csv("a,b\n1,2\n").unwrap_err();
-    assert!(error.to_string().contains("no 'name' column"), "{error}");
+    assert!(error.to_string().contains("no name column"), "{error}");
     let error = doc
         .preview_parameters_csv("Name,Expression\n\"open,1\n")
         .unwrap_err();

@@ -16,6 +16,9 @@
 #      horizontal. Undo makes it inactive again, its symbol placed anew.
 #   4. Delete (its context menu) removes it; the saved design has no
 #      constraint and no dimension.
+#   5. Sketch2 (F2): two horizontal lines and a parallel between them that
+#      their horizontals imply. Edited, the Sketch Palette shows the
+#      redundant constraint as a warning (mitcad#1051).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sketch-inactive-test.sh [screenshot.png]
@@ -44,7 +47,19 @@ cat > "$WORK/model.json" << 'EOF'
   {"expect": {"query": {"query": "sketch", "uid": "F1"}, "result": {
     "constraints": [{"id": "k1", "type": "horizontal", "active": false}],
     "dimensions": [{"id": "k2", "type": "vertical_distance", "measured": 20}],
-    "unmet_inactive": ["k1"]}}}
+    "unmet_inactive": ["k1"]}}},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy",
+    "entities": [
+      {"id": "p1", "type": "point", "at": [0, -30]},
+      {"id": "p2", "type": "point", "at": [30, -30]},
+      {"id": "c3", "type": "line", "start": "p1", "end": "p2"},
+      {"id": "p4", "type": "point", "at": [0, -40]},
+      {"id": "p5", "type": "point", "at": [30, -40]},
+      {"id": "c6", "type": "line", "start": "p4", "end": "p5"}],
+    "constraints": [
+      {"id": "k7", "type": "horizontal", "line": "c3"},
+      {"id": "k8", "type": "horizontal", "line": "c6"},
+      {"id": "k9", "type": "parallel", "a": "c3", "b": "c6"}]}}
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
@@ -119,5 +134,16 @@ EOF2
 "$CLI" run "$WORK/check.json" --open "$FILE" > "$WORK/check.log" 2>&1 ||
   { cat "$WORK/check.log"; ui_fail "the saved sketch"; }
 echo "ok   no constraint and no dimension saved"
+
+echo "--- Redundant constraints: a warning (mitcad#1051)"
+read -r tx ty <<< "$(ui_logged_at "Timeline Sketch2")"
+ui_mark
+ui_step "double-click Sketch2"           double_click_at "$tx" "$ty"
+ui_expect_new "Editing sketch F2 (Sketch2)" "Sketch2 edited"
+ui_expect_new "Sketch Palette solve: warning: Redundant constraints (they follow from the others): k" \
+  "the Sketch Palette shows the redundant constraint as a warning"
+ui_mark
+ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
+ui_expect_new "Sketch finished" "Sketch2 finished"
 
 ui_finish "UI sketch inactive constraint test"

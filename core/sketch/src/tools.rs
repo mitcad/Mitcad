@@ -150,7 +150,7 @@ impl SketchEdit<'_> {
         centerline: bool,
     ) -> Result<EntityUid, String> {
         if construction && centerline {
-            return Err("a line is construction geometry or a centre line, not both".to_owned());
+            return Err("a line is construction geometry or a center line, not both".to_owned());
         }
         let id = self.id();
         let (s, e) = (self.point(start)?, self.point(end)?);

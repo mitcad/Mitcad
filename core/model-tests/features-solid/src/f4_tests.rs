@@ -2789,7 +2789,7 @@ fn a_length_or_angle_in_a_count_says_how_to_write_a_number() {
         .edit_feature(added.uid, &def(pattern_with("rectangular", json!("d1"))))
         .unwrap_err()
         .to_string();
-    assert!(error.contains("'d1' is a length"), "{error}");
+    assert!(error.contains("d1 is a length"), "{error}");
 
     // In an inch document the hint is in inches.
     let mut b = block();

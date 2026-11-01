@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# --ui=qt overrides Settings' native macOS interface for a run (mitcad#1056,
+# tools/ui-macos-native-frontend-test.sh): Settings › General shows the
+# preference on; turning it off saves Qt for the next start.
+expect-ever '^Frontend: qt \(--ui\)$'
+wait-idle
+expect-model-bodies 1 48000
+expect-setting appearance/nativeMacInterface true
+focus-main
+key ctrl+,
+focus-dialog '^Settings$'
+command tools.preferences.general
+focus-dialog '^Settings$'
+expect-widget-property nativeMacInterface checked true
+mark
+focus-widget nativeMacInterface
+key Space
+expect-log '^Preferences: native macOS interface off \(at the next start\)$'
+expect-setting appearance/nativeMacInterface false
+key ctrl+w
+expect-dialog-gone '^Settings$'

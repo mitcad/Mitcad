@@ -111,7 +111,7 @@ face=$(sed -n 's/^Pick face F1\.b0\/\(F1:[a-z_]*([0-9]*)\) at [0-9]*,[0-9]*$/\1/
 [ -n "$face" ] || ui_fail "no face of Gear1 to pick"
 ui_mark
 ui_step "click $face"                      ui_click_pick "face F1.b0/$face at"
-ui_expect_new "Panel Gear note: Pitch line 62.8319 mm, centre distance 20 mm" \
+ui_expect_new "Panel Gear note: Pitch line 62.8319 mm, center distance 20 mm" \
   "the rack's pitch line and centre distance shown" 30
 ui_mark
 ui_step "OK (Enter)"                       ui_key Return
@@ -165,7 +165,7 @@ ui_expect_new "Pick edge F2.b0/E{F2:side0|F2:top} at" "the second shaft's top ed
 ui_mark
 ui_step "the second shaft"                 ui_click_pick "edge F2.b0/E{F2:side0|F2:top} at"
 ui_expect_new "Gear Pair candidates: " "the model's candidates" 30
-ui_expect_new "centre distance 60 mm" "the axes 60 mm apart"
+ui_expect_new "center distance 60 mm" "the axes 60 mm apart"
 ui_expect_new "Panel Gear Pair options candidate: 2 mm, 20:40" "no correction and the fewest teeth first" 30
 ui_mark
 ui_step "operation: New Body"              ui_choose "Panel Gear Pair input operation" 1
@@ -221,7 +221,7 @@ ui_expect_new "Pick edge F2.b0/E{F2:side0|F2:top} at" "the root's shaft top edge
 ui_mark
 ui_step "the root's shaft second"          ui_click_pick "edge F2.b0/E{F2:side0|F2:top} at"
 ui_expect_new "Gear Pair candidates: " "the model's candidates" 30
-ui_expect_new "centre distance 60 mm" "the axes 60 mm apart, where the occurrence puts the shaft"
+ui_expect_new "center distance 60 mm" "the axes 60 mm apart, where the occurrence puts the shaft"
 ui_mark
 ui_step "operation: New Body"              ui_choose "Panel Gear Pair input operation" 1
 ui_expect_new "Preview Gear Pair: ok" "the pair previewed" 30

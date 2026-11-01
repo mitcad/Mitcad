@@ -3,7 +3,8 @@
 // panel as a card on the right edge of the Floating layout or as a dock of
 // the Docked one, and what the conversation needs of the window: the
 // document's undo depth and revision, merge_undo, the selection, a picture
-// of the view, the live MCP listener, the agent indicator.
+// of the view, the live MCP listener, the agent indicator. The AppKit
+// frontend shows the same panel in its Chat card (mitcad#1075).
 #include "../MainWindow.hpp"
 
 #include <QAction>
@@ -15,6 +16,7 @@
 #include <QJsonObject>
 #include <QKeySequence>
 #include <QMenu>
+#include <QTimer>
 #include <QToolBar>
 #include <QUrl>
 #include <QtLogging>
@@ -28,6 +30,10 @@
 #include "../framework/TitleBar.hpp"
 #include "../mcp/AgentIndicator.hpp"
 #include "../report/ReportCenter.hpp"
+#ifdef MITCAD_MACOS_NATIVE_UI
+#include "../platform/NativeDialogs.hpp"
+#include "../platform/NativeMacWindow.hpp"
+#endif
 #include "ChatController.hpp"
 #include "ChatPanel.hpp"
 
@@ -52,7 +58,7 @@ void MainWindow::registerChatCommands() {
       showHint(tr("The chat is not in this window's layout yet."));
       return;
     }
-    setChatShown(m_chatContainer->isHidden());
+    setChatShown(m_nativeUi ? !m_nativeChatShown : m_chatContainer->isHidden());
   };
   m_registry->add(chat);
 }
@@ -114,17 +120,19 @@ void MainWindow::createChat() {
     action->setCheckable(true);
   }
   noteChatDocument();
-  if (m_nativeUi) {
-    // The native panel comes with the native window's work; the
-    // conversation's approvals still answer the live server.
-    return;
-  }
   m_chatPanel = new agent::ChatPanel(*m_chat);
   connect(m_chatPanel, &agent::ChatPanel::connectAssistantRequested, this,
           [this] { trigger(QStringLiteral("help.connect_assistant")); });
   connect(m_chatPanel, &agent::ChatPanel::preferencesRequested, this,
           [this] { trigger(QStringLiteral("tools.preferences.agents")); });
-  if (chromeStyle() == ChromeStyle::Floating && m_floating != nullptr) {
+  if (m_nativeUi) {
+    // The AppKit window's Chat card presents the panel through the bridge
+    // (createNativeChat, once that window is made); its Qt widget stays
+    // hidden.
+    m_chatPanel->setParent(this);
+    m_chatPanel->hide();
+    m_chatContainer = m_chatPanel;
+  } else if (chromeStyle() == ChromeStyle::Floating && m_floating != nullptr) {
     auto* card = new GlassCard;
     card->setObjectName(QStringLiteral("chatCard"));
     card->setTitle(tr("Chat"));
@@ -149,10 +157,12 @@ void MainWindow::createChat() {
       bar->addAction(action);
     }
   }
-  if (QMenu* view = findChild<QMenu*>(QStringLiteral("viewMenu"))) {
+  // The AppKit frontend's View menu and toolbar button come with its window
+  // (createNativeChat).
+  if (QMenu* view = m_nativeUi ? nullptr : findChild<QMenu*>(QStringLiteral("viewMenu"))) {
     view->addAction(action);
   }
-  if (auto* titleBar = findChild<TitleBar*>()) {
+  if (auto* titleBar = m_nativeUi ? nullptr : findChild<TitleBar*>()) {
     // Beside the agent indicator in the title bar row.
     auto* button = new CapsuleFrame(-1);
     button->setObjectName(QStringLiteral("titleChat"));
@@ -165,8 +175,8 @@ void MainWindow::createChat() {
   // Looked for again when MitCad comes to the front: an agent installed or
   // signed in meanwhile is used without a restart.
   connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
-    if (state == Qt::ApplicationActive && m_chatContainer != nullptr && !m_chatContainer->isHidden() &&
-        m_chat->agent()->readiness() != agent::ChatAgent::Readiness::Ready) {
+    const bool shown = m_nativeUi ? m_nativeChatShown : m_chatContainer != nullptr && !m_chatContainer->isHidden();
+    if (state == Qt::ApplicationActive && shown && m_chat->agent()->readiness() != agent::ChatAgent::Readiness::Ready) {
       m_chat->refreshSetup(true);
     }
   });
@@ -176,18 +186,62 @@ void MainWindow::setChatShown(bool shown) {
   if (m_chatContainer == nullptr) {
     return;
   }
-  m_chatContainer->setVisible(shown);
-  if (m_floating != nullptr) {
-    m_floating->requestLayout();
+  if (m_nativeUi) {
+    // The AppKit Chat card (mitcad#1075): the panel's Qt widget stays
+    // hidden; the card shows its native view and gives the message field
+    // the keyboard.
+    m_nativeChatShown = shown;
+    m_chatPanel->setPresented(shown);
+#ifdef MITCAD_MACOS_NATIVE_UI
+    if (m_nativeWindow) {
+      if (m_nativeChatForm) {
+        m_nativeChatForm->refresh();
+      }
+      m_nativeWindow->showChat(shown);
+    }
+#endif
+  } else {
+    m_chatContainer->setVisible(shown);
+    if (m_floating != nullptr) {
+      m_floating->requestLayout();
+    }
   }
   if (QAction* action = m_registry->action(QStringLiteral("view.chat"))) {
     action->setChecked(shown);
   }
   qInfo().noquote() << QStringLiteral("Chat %1").arg(shown ? QStringLiteral("shown") : QStringLiteral("hidden"));
-  if (shown && m_chatPanel != nullptr) {
+  if (shown && m_chatPanel != nullptr && !m_nativeUi) {
     m_chatPanel->focusInput();
   }
 }
+
+#ifdef MITCAD_MACOS_NATIVE_UI
+void MainWindow::createNativeChat() {
+  if (m_chatPanel == nullptr || !m_nativeWindow) {
+    return;
+  }
+  // View › Chat, after the native window's Browser and Timeline: last, as
+  // in the Qt frontend's View menu.
+  if (QMenu* view = findChild<QMenu*>(QStringLiteral("viewMenu"))) {
+    view->addAction(m_registry->action(QStringLiteral("view.chat")));
+  }
+  m_nativeChatForm = createNativeWidgetView(m_chatPanel);
+  m_nativeWindow->setChatView(m_nativeChatForm ? m_nativeChatForm->nativeView() : nullptr);
+  // What the hidden panel changes (rows, streamed answers, its state)
+  // reaches the card on the next turn, once for a burst of changes; the
+  // card then keeps the conversation's end in sight.
+  auto* refresh = new QTimer(this);
+  refresh->setSingleShot(true);
+  refresh->setInterval(0);
+  connect(refresh, &QTimer::timeout, this, [this] {
+    if (m_nativeChatForm && m_nativeWindow) {
+      m_nativeChatForm->refresh();
+      m_nativeWindow->setChatView(m_nativeChatForm->nativeView());
+    }
+  });
+  connect(m_chatPanel, &agent::ChatPanel::contentChanged, refresh, qOverload<>(&QTimer::start));
+}
+#endif
 
 void MainWindow::noteChatDocument() {
   if (m_chat != nullptr) {

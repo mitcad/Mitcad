@@ -267,12 +267,12 @@ fn cycles_through_limits_are_refused() {
         &mut doc,
         json!({"cmd": "set_parameter", "name": "b", "min": "30 deg"}),
     );
-    assert!(error.contains("parameter 'b': minimum:"), "{error}");
+    assert!(error.contains("parameter b: minimum:"), "{error}");
     let error = refused(
         &mut doc,
         json!({"cmd": "set_parameter", "name": "b", "min": "nothing"}),
     );
-    assert!(error.contains("parameter 'b': minimum:"), "{error}");
+    assert!(error.contains("parameter b: minimum:"), "{error}");
     let error = refused(
         &mut doc,
         json!({"cmd": "set_parameter", "name": "b", "min": "20 mm"}),
@@ -305,7 +305,7 @@ fn strict_parameters_refuse_values_outside_their_limits() {
         json!({"cmd": "set_parameter", "name": "count", "expression": "12"}),
     );
     assert!(
-        error.contains("parameter 'count': 12 is above the maximum 10"),
+        error.contains("parameter count: 12 is above the maximum 10"),
         "{error}"
     );
     let error = refused(
@@ -545,5 +545,5 @@ fn limits_of_an_unknown_parameter_are_refused() {
         &mut doc,
         json!({"cmd": "set_parameter", "name": "nothing", "max": 3}),
     );
-    assert!(error.contains("unknown parameter 'nothing'"), "{error}");
+    assert!(error.contains("unknown parameter nothing"), "{error}");
 }

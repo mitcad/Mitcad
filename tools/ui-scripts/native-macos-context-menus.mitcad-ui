@@ -85,6 +85,13 @@ native-action view.home
 expect-log '^Native cube arrows hidden$' 30
 expect-native-visible orientationCube_up false
 
+# The view shows the origin only as its light bulb does (mitcad#1030): on
+# for the click on its XY plane below.
+mark
+native-expand native.modelTree
+native-click native.model.eye.origin
+expect-log 'Visibility Root/Origin: shown'
+
 # A body supplies real native browser and history menu targets and makes
 # action dispatch observable in the actual document, independently of input.
 # A new design models in its active Component1 (mitcad#220): the body's
@@ -130,6 +137,20 @@ mark
 native-expand native.modelTree
 native-context-menu native.model.body:F1.b0@O1 Show
 expect-log 'Visibility .*Body1: shown' 30
+
+# Material ▸ (mitcad#1046) is the Qt submenu carried into the AppKit menu:
+# its entries are made when it opens, Steel (what Body1 is made of) checked;
+# a pick assigns without the Materials window, one undo step.
+mark
+native-expand native.modelTree
+native-context-menu native.model.body:F1.b0@O1 'Material/Steel'
+expect-log '^Context menu Material: Steel \| More…$' 30
+expect-log '^Context menu Material checked: Steel$' 30
+expect-log '^Material assigned from menu: Steel to 1 bodies$' 30
+expect-no-log 'Materials opened'
+mark
+native-action edit.undo
+expect-log 'Undo: Set Material of Body1' 30
 
 # A selected action can synchronously enter a modal dialog. Menu closure
 # must resume this driver before that action returns (mitcad#995).

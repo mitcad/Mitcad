@@ -7,7 +7,7 @@
 //!
 //! Nothing changes before what the remote holds is known, and a cancel or
 //! a failure before the first version leaves the folder as it was (a
-//! folder made for the project is removed, the files Mitcad wrote into one
+//! folder made for the project is removed, the files MitCad wrote into one
 //! that was there are taken out again). After the first version the
 //! project stays: a failed push leaves its versions waiting (`ahead`).
 
@@ -117,7 +117,7 @@ fn refuse_projects(dir: &Path) -> Result<(), VcsError> {
         return Err(failure(
             ErrorClass::InsideProject,
             format!(
-                "{} is a Mitcad project already: open it (Open Project)",
+                "{} is a MitCad project already: open it (Open Project)",
                 dir.display()
             ),
         ));
@@ -126,7 +126,7 @@ fn refuse_projects(dir: &Path) -> Result<(), VcsError> {
         return Err(failure(
             ErrorClass::InsideProject,
             format!(
-                "{} is inside the Mitcad project {}: make the new project in a folder outside it",
+                "{} is inside the MitCad project {}: make the new project in a folder outside it",
                 dir.display(),
                 project.root().display()
             ),
@@ -155,12 +155,12 @@ fn repository_root_at(dir: &Path) -> bool {
 struct Before {
     dir: PathBuf,
     existed: bool,
-    /// Files Mitcad writes or extends, with what they held.
+    /// Files MitCad writes or extends, with what they held.
     files: Vec<(PathBuf, Option<Vec<u8>>)>,
     mitcad: bool,
     local: bool,
     git: bool,
-    /// The first design, when Mitcad wrote it.
+    /// The first design, when MitCad wrote it.
     design: Option<PathBuf>,
 }
 
@@ -238,7 +238,7 @@ fn check_design(
     let first = path.split('/').next().unwrap_or("");
     if !valid_relative(path) || first == ".git" || first == ".mitcad" {
         return Err(VcsError::InvalidPath(format!(
-            "'{path}' is not a path for a design in the project (relative, with /)"
+            "{path} is not a path for a design in the project (relative, with /)"
         )));
     }
     let full = dir.join(path);
@@ -452,7 +452,7 @@ fn has_project(shown: &str) -> VcsError {
     failure(
         ErrorClass::HasProject,
         format!(
-            "{shown} holds a Mitcad project: open it (Open from Cloud, mitcad-cli clone) instead \
+            "{shown} holds a MitCad project: open it (Open from Cloud, mitcad-cli clone) instead \
              of making a new one"
         ),
     )
@@ -598,7 +598,7 @@ pub fn clone_project(
         return Err(failure(
             ErrorClass::NotAProject,
             format!(
-                "{} holds no Mitcad project ({PROJECT_MARKER} at its root): open it with \
+                "{} holds no MitCad project ({PROJECT_MARKER} at its root): open it with \
                  \"adopt\" (Make It a Project) to make it one",
                 cloned.url
             ),

@@ -655,7 +655,7 @@ impl PulleyDef<f64> {
             }
         }
         if let Some(belt) = &self.belt_with {
-            positive(belt.center_distance, "centre distance")?;
+            positive(belt.center_distance, "center distance")?;
             finite(belt.angle, "belt angle")?;
         }
         Ok(())
@@ -707,7 +707,7 @@ pub fn belt_drive(
     }
     if distance.is_nan() || distance <= ra + rb {
         return Err(format!(
-            "the pulleys' pitch circles overlap: the centre distance must be more than {:.4} mm, got {distance}",
+            "the pulleys' pitch circles overlap: the center distance must be more than {:.4} mm, got {distance}",
             ra + rb
         ));
     }
@@ -1045,7 +1045,7 @@ impl FeatureInfo for PulleyDef {
         if let Some(at) = &self.at {
             if self.plane.is_some() || !is_origin(&self.center) || self.seat.is_some() {
                 return Err(
-                    "a pulley placed by at takes no plane, centre or seat of its own".to_owned(),
+                    "a pulley placed by at takes no plane, center or seat of its own".to_owned(),
                 );
             }
             if self.belt_with.is_some() {
@@ -1063,7 +1063,7 @@ impl FeatureInfo for PulleyDef {
         if let Some(seat) = &self.seat {
             if self.plane.is_some() || !is_origin(&self.center) {
                 return Err(
-                    "a pulley on a shaft takes its plane and centre from the shaft".to_owned(),
+                    "a pulley on a shaft takes its plane and center from the shaft".to_owned(),
                 );
             }
             if self.belt_with.is_some() {
@@ -1109,7 +1109,7 @@ impl FeatureInfo for PulleyDef {
                 }
                 if !is_origin(&self.center) {
                     return Err(
-                        "a pulley on a belt with another takes its centre from it".to_owned()
+                        "a pulley on a belt with another takes its center from it".to_owned()
                     );
                 }
                 Ok(())

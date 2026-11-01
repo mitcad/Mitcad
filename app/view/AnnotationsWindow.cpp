@@ -25,7 +25,9 @@
 #include <QtLogging>
 
 #include "../framework/Icons.hpp"
+#include "../framework/NoticeLevel.hpp"
 #include "../framework/TestSync.hpp"
+#include "../framework/Theme.hpp"
 #include "../platform/MacDialogs.hpp"
 #include "AnnotationDialogs.hpp"
 #include "MeasurementDrawing.hpp"
@@ -42,19 +44,23 @@ const std::pair<const char*, const char*> kKinds[] = {
     {"angle", QT_TRANSLATE_NOOP("Annotations", "Angle")},
     {"offset", QT_TRANSLATE_NOOP("Annotations", "Offset")},
     {"axis_distance", QT_TRANSLATE_NOOP("Annotations", "Axis distance")},
-    {"center_distance", QT_TRANSLATE_NOOP("Annotations", "Centre distance")},
+    {"center_distance", QT_TRANSLATE_NOOP("Annotations", "Center distance")},
     {"radius", QT_TRANSLATE_NOOP("Annotations", "Radius")},
     {"diameter", QT_TRANSLATE_NOOP("Annotations", "Diameter")},
     {"note", QT_TRANSLATE_NOOP("Annotations", "Note")},
     {"datum", QT_TRANSLATE_NOOP("Annotations", "Datum label")},
     {"frame", QT_TRANSLATE_NOOP("Annotations", "Feature control frame")},
-    {"hole_callout", QT_TRANSLATE_NOOP("Annotations", "Hole callout")}};
+    {"hole_callout", QT_TRANSLATE_NOOP("Annotations", "Hole callout")},
+    {"material", QT_TRANSLATE_NOOP("Annotations", "Material")},
+    {"process_note", QT_TRANSLATE_NOOP("Annotations", "Process note")}};
 
-// A note, a datum label, a feature control frame or a hole callout: on a
-// leader, without a value of its own.
+// A note, a datum label, a feature control frame, a hole callout, a
+// material or process note (mitcad#1049): on a leader, without a value of
+// its own.
 bool isLeader(const QString& kind) {
   return kind == QLatin1String("note") || kind == QLatin1String("datum") || kind == QLatin1String("frame") ||
-         kind == QLatin1String("hole_callout");
+         kind == QLatin1String("hole_callout") || kind == QLatin1String("material") ||
+         kind == QLatin1String("process_note");
 }
 
 // What a feature control frame can stand under: a dimension or a hole
@@ -146,7 +152,7 @@ AnnotationsWindow::AnnotationsWindow(QWidget* parent) : QDialog(parent) {
   m_table = new QTableWidget(0, kColumns, this);
   m_table->setObjectName(QStringLiteral("annotationsTable"));
   m_table->setHorizontalHeaderLabels(
-      {tr("Name"), tr("Kind"), tr("Value"), tr("Tolerance"), tr("Text"), tr("Colour"), tr("Group"), tr("Shown")});
+      {tr("Name"), tr("Kind"), tr("Value"), tr("Tolerance"), tr("Text"), tr("Color"), tr("Group"), tr("Shown")});
   m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
   m_table->setSelectionMode(QAbstractItemView::ExtendedSelection);
   m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -160,7 +166,7 @@ AnnotationsWindow::AnnotationsWindow(QWidget* parent) : QDialog(parent) {
 
   auto* buttons = new QHBoxLayout;
   m_edit = new QPushButton(tr("&Edit…"), this);
-  m_colour = new QPushButton(tr("&Colour…"), this);
+  m_colour = new QPushButton(tr("&Color…"), this);
   m_groupButton = new QPushButton(tr("G&roup…"), this);
   m_decimals = new QPushButton(tr("&Decimals…"), this);
   m_tolerance = new QPushButton(tr("&Tolerance…"), this);
@@ -343,6 +349,10 @@ void AnnotationsWindow::fill() {
                   .arg(name, own, valueText, tolerance.isEmpty() ? QStringLiteral("-") : tolerance,
                        ownGroup.isEmpty() ? QStringLiteral("-") : ownGroup,
                        a.value(QStringLiteral("color")).toString(), state);
+    if (!error.isEmpty()) {
+      // Its level as every surface logs it (mitcad#1051).
+      logged << QStringLiteral("Annotations level %1: %2").arg(name, noticeLevelName(NoticeLevel::Warning));
+    }
     if (!kind.isEmpty() && own != kind) {
       continue;
     }
@@ -361,9 +371,9 @@ void AnnotationsWindow::fill() {
     nameItem->setData(kNameRole, name);
     const QColor colour(a.value(QStringLiteral("color")).toString());
     if (!error.isEmpty()) {
-      // Broken: marked, with the reason.
-      nameItem->setIcon(themeIcon(QStringLiteral("warning")));
-      nameItem->setToolTip(tr("%1: broken: %2").arg(name, error));
+      // Broken: a warning (mitcad#1040), with its icon and the reason.
+      nameItem->setIcon(noticeIcon(NoticeLevel::Warning));
+      nameItem->setToolTip(noticeLevelText(NoticeLevel::Warning, tr("%1 is broken: %2").arg(name, error)));
     } else {
       nameItem->setIcon(measurementSwatch(colour));
     }
@@ -372,7 +382,8 @@ void AnnotationsWindow::fill() {
     QTableWidgetItem* valueItem = cell(valueText);
     if (!error.isEmpty()) {
       valueItem->setToolTip(error);
-      valueItem->setForeground(QColor(0xc9, 0x2a, 0x2a));
+      // A warning's colour, as its name's badge (mitcad#1051).
+      valueItem->setForeground(noticeColor(NoticeLevel::Warning, m_table->palette()));
     } else if (label.contains(QStringLiteral("warning"))) {
       valueItem->setToolTip(label.value(QStringLiteral("warning")).toString());
     }

@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
@@ -45,6 +46,19 @@ bool privatePath(const QFileInfo& info) {
 
 QString endpointPath(const Endpoint& endpoint) {
   return QDir(discoveryDirectory()).filePath(endpoint.instance + QStringLiteral(".json"));
+}
+
+QString windowPath(const Endpoint& endpoint) {
+  return QDir(discoveryDirectory()).filePath(endpoint.instance + QStringLiteral(".window"));
+}
+
+// Window metadata is not authentication material, but follows exactly the
+// record's owner-only file and directory rules. Never follow a symlink.
+QJsonObject readWindowState(const Endpoint& endpoint) {
+  QFile file(windowPath(endpoint));
+  if (!privatePath(QFileInfo(file)) || file.size() > 16384 || !file.open(QIODevice::ReadOnly)) return {};
+  const QJsonObject object = QJsonDocument::fromJson(file.readAll()).object();
+  return object.value(QStringLiteral("pid")).toInteger() == endpoint.pid ? object : QJsonObject();
 }
 
 bool hex(const QString& value, int length) {
@@ -121,6 +135,34 @@ bool publishEndpoint(const Endpoint& endpoint, QString* error) {
   return true;
 }
 
+bool publishWindowState(const Endpoint& endpoint, QString* error) {
+  if (!prepareDiscoveryDirectory(error)) return false;
+  const QString path = windowPath(endpoint);
+  if (QFileInfo(path).isSymLink()) return fail(error, QStringLiteral("MCP window state must not be a symbolic link"));
+  QSaveFile file(path);
+  file.setDirectWriteFallback(false);
+  if (!file.open(QIODevice::WriteOnly) || !file.setPermissions(QFile::ReadOwner | QFile::WriteOwner)) {
+    return fail(error, QStringLiteral("Could not write private MCP window state"));
+  }
+  const QByteArray bytes = QJsonDocument(QJsonObject{{QStringLiteral("pid"), endpoint.pid},
+      {QStringLiteral("activated_at"), endpoint.activatedAt}, {QStringLiteral("title"), endpoint.title.left(512)},
+      {QStringLiteral("agents"), QJsonArray::fromStringList(endpoint.agents)}}).toJson(QJsonDocument::Compact);
+  if (bytes.size() > 16384 || file.write(bytes) != bytes.size() || !file.commit()) {
+    return fail(error, QStringLiteral("Could not publish MCP window state"));
+  }
+#ifdef Q_OS_WIN
+  if (!secureWindowsEndpointPath(path, false)) {
+    QFile::remove(path);
+    return fail(error, QStringLiteral("Could not secure MCP window state"));
+  }
+#endif
+  if (!privatePath(QFileInfo(path))) {
+    QFile::remove(path);
+    return fail(error, QStringLiteral("MCP window state is not private to this user"));
+  }
+  return true;
+}
+
 void removeEndpoint(const Endpoint& endpoint) {
   // Do not remove another process's replacement record.
   QFile file(endpointPath(endpoint));
@@ -131,6 +173,7 @@ void removeEndpoint(const Endpoint& endpoint) {
   file.close();
   if (object.value(QStringLiteral("token")).toString() == endpoint.token) {
     file.remove();
+    QFile::remove(windowPath(endpoint));
   }
 }
 
@@ -177,6 +220,12 @@ QList<Endpoint> discover(QString* error) {
       file.close();
       removeEndpoint(endpoint);
       continue;
+    }
+    const QJsonObject state = readWindowState(endpoint);
+    endpoint.activatedAt = qMax<qint64>(0, state.value(QStringLiteral("activated_at")).toInteger());
+    endpoint.title = state.value(QStringLiteral("title")).toString().left(512);
+    for (const auto& agent : state.value(QStringLiteral("agents")).toArray()) {
+      if (agent.isString() && endpoint.agents.size() < 64) endpoint.agents.append(agent.toString().left(256));
     }
     endpoints.append(endpoint);
   }

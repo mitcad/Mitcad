@@ -22,6 +22,7 @@
 #include <QLayout>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QTimer>
@@ -69,6 +70,20 @@ int spareHeight(QWidget* dialog) {
 }
 
 void TestDriver::testAssistantSetup(const QString& mode) {
+  if (mode == QStringLiteral("window-activate")) {
+    if (!m_main) { fail(m_line, QStringLiteral("main window missing")); return; }
+    m_main->setWindowTitle(qEnvironmentVariable("MITCAD_MCP_WINDOW_LABEL"));
+    m_main->raise();
+    m_main->activateWindow();
+#ifdef Q_OS_WIN
+    // Session 0 has no foreground desktop: deliver the activation event
+    // that the ordinary window system sends after activateWindow().
+    QEvent activation(QEvent::WindowActivate);
+    QCoreApplication::sendEvent(m_main, &activation);
+#endif
+    qInfo().noquote() << "Assistant window activated";
+    return;
+  }
   mcp::ConnectAssistantDialog* dialog = nullptr;
   for (QWidget* top : QApplication::topLevelWidgets()) {
     if (top->isVisible()) {
@@ -91,7 +106,25 @@ void TestDriver::testAssistantSetup(const QString& mode) {
     const QString folder = QFileInfo(dialog->folder()).canonicalFilePath();
     return !folder.isEmpty() && mcp::savedAgentFolders().contains(folder);
   };
-  if (mode == QStringLiteral("other")) {
+  if (mode == QStringLiteral("window-stale")) {
+    chooseAssistant(dialog, mcp::AssistantClient::Codex);
+    if (stateOf(status) == QStringLiteral("connected-elsewhere")) {
+      fail(m_line, QStringLiteral("an unauthenticated stale window advertised a connected assistant")); return;
+    }
+  } else if (mode == QStringLiteral("window-local") || mode == QStringLiteral("window-other")) {
+    chooseAssistant(dialog, mcp::AssistantClient::ClaudeCode);
+    const bool local = mode == QStringLiteral("window-local");
+    auto* indicator = m_main ? m_main->findChild<mcp::AgentIndicator*>(QStringLiteral("agentIndicator")) : nullptr;
+    whenReady([indicator, status, setup, local] {
+      return indicator && (indicator->state() == mcp::AgentIndicator::State::Connected) == local &&
+          stateOf(status) == (local ? QStringLiteral("connected") : QStringLiteral("connected-elsewhere")) &&
+          status->text().contains(local ? QStringLiteral("in this window") : QStringLiteral("in Second design")) &&
+          (actionOf(setup) == QStringLiteral("disconnect")) == local;
+    }, 6, QStringLiteral("assistant connection did not identify its own window"), [mode] {
+      qInfo().noquote() << QStringLiteral("Assistant setup UI: %1").arg(mode);
+    });
+    return;
+  } else if (mode == QStringLiteral("other")) {
     chooseAssistant(dialog, mcp::AssistantClient::Other);
     // Copy configuration is the primary button only, not again under Advanced.
     auto* advancedCopy = dialog->findChild<QPushButton*>(QStringLiteral("assistantCopyConfiguration"));
@@ -250,6 +283,59 @@ void TestDriver::testAssistantSetup(const QString& mode) {
         }
       }
     });
+  } else if (mode == QStringLiteral("reconnect-start") || mode == QStringLiteral("reconnect-again")) {
+    // An actual scripted MCP client through the real bridge (mitcad#1123).
+    // Settings were registered by the preceding Claude Code setup step.
+    chooseAssistant(dialog, mcp::AssistantClient::ClaudeCode);
+    const bool again = mode == QStringLiteral("reconnect-again");
+    if (stateOf(status) != QStringLiteral("waiting") ||
+        status->text().contains(QStringLiteral("/mcp")) != again) {
+      fail(m_line, QStringLiteral("Claude Code's initial/reconnect step is wrong: ") + status->text()); return;
+    }
+    auto* bridge = new QProcess(dialog);
+    bridge->setObjectName(QStringLiteral("assistantReconnectClient"));
+    connect(bridge, &QProcess::started, bridge, [bridge] {
+      bridge->write("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{"
+                    "\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},"
+                    "\"clientInfo\":{\"name\":\"claude-code\",\"version\":\"test\"}}}\n"
+                    "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n");
+    });
+    bridge->start(mcp::installedBridge(QCoreApplication::applicationDirPath()),
+                  {QStringLiteral("mcp"), QStringLiteral("--connect")});
+    whenReady([status, setup] {
+      return stateOf(status) == QStringLiteral("connected") && actionOf(setup) == QStringLiteral("disconnect") &&
+          status->text().contains(QStringLiteral("Claude Code"));
+    }, 10, QStringLiteral("the scripted Claude Code client did not connect"));
+  } else if (mode == QStringLiteral("reconnect-disconnect") || mode == QStringLiteral("reconnect-eof")) {
+    auto* bridge = dialog->findChild<QProcess*>(QStringLiteral("assistantReconnectClient"));
+    if (!bridge || bridge->state() == QProcess::NotRunning || stateOf(status) != QStringLiteral("connected")) {
+      fail(m_line, QStringLiteral("the scripted assistant is not connected")); return;
+    }
+    if (mode == QStringLiteral("reconnect-disconnect")) {
+      if (!setup->toolTip().contains(QStringLiteral("keeps your assistant setup"))) {
+        fail(m_line, QStringLiteral("Disconnect does not explain that setup is kept")); return;
+      }
+      setup->click();
+    } else {
+      bridge->closeWriteChannel(); // the client went away, rather than Disconnect
+    }
+    whenReady([bridge, status, setup] {
+      return bridge->state() == QProcess::NotRunning && stateOf(status) == QStringLiteral("waiting") &&
+          status->text().contains(QStringLiteral("/mcp › mitcad › Reconnect")) && actionOf(setup).isEmpty();
+    }, 10, QStringLiteral("disconnect did not show Claude Code's reconnect step"), [bridge] { bridge->deleteLater(); });
+  } else if (mode == QStringLiteral("reconnect-line")) {
+    // A new dialog restores the runtime history and remembered choice;
+    // the indicator's Connect action is one click away after disconnect.
+    bool claudeChosen = false;
+    for (QAbstractButton* button : assistantChoices(dialog)) {
+      if (button->isChecked() && button->property("assistantClient").toInt() == int(mcp::AssistantClient::ClaudeCode)) {
+        claudeChosen = true;
+      }
+    }
+    if (!claudeChosen || stateOf(status) != QStringLiteral("waiting") ||
+        !status->text().contains(QStringLiteral("/mcp › mitcad › Reconnect"))) {
+      fail(m_line, QStringLiteral("reopening setup lost the selected assistant or reconnect step")); return;
+    }
   } else if (mode == QStringLiteral("bundle")) {
     auto* anyway = dialog->findChild<QPushButton*>(QStringLiteral("assistantConnectAnyway"));
     chooseAssistant(dialog, mcp::AssistantClient::ClaudeDesktop);
@@ -500,7 +586,7 @@ void TestDriver::testAssistantSetup(const QString& mode) {
         [connected](const QStringList& ids) {
           connected->removeIf([&ids](const mcp::ConnectedAgent& agent) { return ids.contains(agent.id); });
         },
-        work};
+        work, {}};
     std::unique_ptr<mcp::ConnectAssistantDialog> own(new mcp::ConnectAssistantDialog(std::move(host)));
     auto* ownSetup = own->findChild<QPushButton*>(QStringLiteral("assistantSetup"));
     auto* ownStatus = own->findChild<QLabel*>(QStringLiteral("assistantConnectionState"));

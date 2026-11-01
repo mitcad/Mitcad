@@ -51,7 +51,7 @@ void MainWindow::showPreviewPlacements(const QJsonObject& report, const std::vec
 
 void MainWindow::openMotionStudy(const QString& name) {
   if (m_mode != Mode::Idle || m_session) {
-    showStatus(tr("Close the command to open a motion study."), true);
+    showStatus(tr("Close the command to open a motion study."), NoticeLevel::Error);
     return;
   }
   if (m_motionStudy) {
@@ -81,7 +81,9 @@ void MainWindow::openMotionStudy(const QString& name) {
     }
   };
   host.ready = [this] { return m_mode == Mode::Idle && !m_session && !modelBusy(); };
-  host.status = [this](const QString& message, bool error) { showStatus(message, error); };
+  host.status = [this](const QString& message, bool error) {
+    showStatus(message, error ? NoticeLevel::Error : NoticeLevel::Information);
+  };
   auto* dialog = new MotionStudyDialog(std::move(host), name, this);
   m_motionStudy = dialog;
   // The design changed while it was open (a key, Keep): the bodies shown

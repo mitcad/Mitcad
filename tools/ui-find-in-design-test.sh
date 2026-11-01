@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser app/MainWindow.cpp app/framework/GlassCard.cpp tools/cli
+# check-all sources: app/browser app/MainWindow.cpp app/framework/GlassCard.cpp app/commands/MaterialCommands.cpp tools/cli
 # Find in Design (mitcad#350) through the real UI, on a design with nested
 # components and bodies of the same name in several places: "Plate" in the
 # root, "Plate Frame" and "Plate Leg" in the component Frame, which is placed
@@ -11,7 +11,8 @@
 #     rows, 3 bodies); the wildcard text "pl?te*leg" lists two rows.
 #   - Hide hides exactly those 3 bodies and no other, one undo step
 #     restores them; with the filter "Hidden only" the hidden ones are found.
-#   - Appearance... gives all 3 bodies one appearance in one undo step.
+#   - Appearance... starts the Appearance tool with the 3 bodies, which
+#     gives them one appearance in one undo step (mitcad#1059).
 #   - A component search ("leg", Bodies off) finds the two occurrences;
 #     Hide hides them and Show shows them again; Select selects them.
 #   - Selecting a row selects it in the view; a double-click on a row reveals
@@ -146,16 +147,11 @@ echo "--- Appearance..."
 ui_mark
 ui_step "Appearance..."                  ui_click_logged "Find in Design appearance"
 ui_expect_new "Find in Design: appearance for 3 bodies" "the three bodies are the targets"
-ui_expect_new "Appearances for bodies: F2.b0, F4.b0, F8.b0" "Edit Appearances opened for them"
-ui_focus_dialog '^Appearances$'
-# The design's own appearances are last in the list.
-ui_step "the list"                       ui_click_logged "Appearances item plastic_white"
-ui_step "Red Copy (End)"                 ui_key End
-ui_expect_new "Appearance selected: red_copy" "Red Copy is selected"
+ui_expect_new "Appearance tool for F2.b0, F4.b0, F8.b0" "the Appearance tool for them"
+ui_step "the picker: Red Copy"           ui_picker_choose "Panel Appearance input value" "Appearance picker" "Red Copy"
 ui_mark
-ui_step "Assign"                         ui_click_logged "Appearances assign"
-ui_expect_new "Assigned appearance red_copy to F2.b0, F4.b0, F8.b0" "all three got it"
-ui_step "Close"                          ui_click_logged "Appearances close"
+ui_step "OK (Enter)"                     ui_key Return
+ui_expect_new "Appearance red_copy for 3 body(ies)" "all three got it"
 save
 expect_file '[.bodies[] | .appearance]' '["red_copy","red_copy",null,"red_copy"]' "one appearance for the three bodies, Rod untouched"
 ui_mark

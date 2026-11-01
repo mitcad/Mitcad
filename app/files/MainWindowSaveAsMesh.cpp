@@ -87,7 +87,7 @@ void saveOptions(const SaveMeshOptions& options) {
 std::optional<SaveMeshOptions> askOptions(QWidget* parent, const MeshPlan& plan) {
   SaveMeshOptions options = loadOptions();
   QDialog dialog(parent);
-  dialog.setWindowTitle(QObject::tr("Save As Mesh"));
+  dialog.setWindowTitle(QObject::tr("Save as Mesh"));
   auto* layout = new QVBoxLayout(&dialog);
   auto* form = new QFormLayout;
   layout->addLayout(form);
@@ -238,7 +238,7 @@ QString MainWindow::saveAsMeshBlocked(const Selection& items) const { return sav
 void MainWindow::saveAsMesh(const Selection& items) {
   const MeshPlan plan = saveAsMeshPlan(items);
   if (!plan.blocked.isEmpty()) {
-    showStatus(plan.blocked, true);
+    showStatus(plan.blocked, NoticeLevel::Error);
     return;
   }
   const std::optional<SaveMeshOptions> options = askOptions(this, plan);
@@ -261,7 +261,7 @@ void MainWindow::saveAsMesh(const Selection& items) {
       }
     }
     if (!existing.isEmpty() &&
-        sheetQuestion(this, tr("Save As Mesh"),
+        sheetQuestion(this, tr("Save as Mesh"),
                       tr("%1 in %2 exist. Replace them?")
                           .arg(existing.join(QStringLiteral(", ")), QDir::toNativeSeparators(folder))) !=
             QMessageBox::Yes) {
@@ -294,7 +294,7 @@ void MainWindow::saveAsMesh(const Selection& items) {
       const QString occurrence = options->perBody ? plan.occurrences[i] : plan.occurrence;
       QJsonObject result;
       if (!runCommand(meshExportCommand(paths[i], bodies, occurrence, *options, colors), &result)) {
-        sheetWarning(this, tr("Save As Mesh"),
+        sheetWarning(this, tr("Save as Mesh"),
                      tr("Could not write %1:\n%2").arg(QDir::toNativeSeparators(paths[i]), m_lastError));
         return;
       }

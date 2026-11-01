@@ -46,6 +46,7 @@ use mitcad_model::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use mitcad_model::internal::drawing::DIMENSION_TEXT;
 use mitcad_model::internal::fingerprint::Fingerprint;
 use mitcad_model::kernel::{Kernel, KernelError};
+use mitcad_model::notice::Notice;
 use mitcad_model::topo::{EdgeName, FaceName};
 use mitcad_model::transform::Transform;
 use mitcad_model::{AnnotationFormat, Document, GeometricTolerance, MeasureKind, Tolerance};
@@ -810,7 +811,7 @@ fn cut_line(
 /// Its name in undo steps: a dimension, a centre mark, a note, ….
 fn noun(kind: AnnotationType) -> &'static str {
     match kind {
-        AnnotationType::CenterMark => "centre mark",
+        AnnotationType::CenterMark => "center mark",
         AnnotationType::Centerline => "centreline",
         AnnotationType::Note => "note",
         AnnotationType::Datum => "datum label",
@@ -819,7 +820,7 @@ fn noun(kind: AnnotationType) -> &'static str {
         AnnotationType::HoleTable => "hole table",
         AnnotationType::PartsList => "parts list",
         AnnotationType::Balloon => "balloon",
-        AnnotationType::CenterPattern => "centre pattern",
+        AnnotationType::CenterPattern => "center pattern",
         AnnotationType::EdgeExtension => "edge extension",
         _ => "dimension",
     }
@@ -1178,7 +1179,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         }
         let kind: AnnotationType = serde_json::from_value(json!(c.kind)).map_err(|_| {
             ApiError(format!(
-                "unknown annotation type '{}': {}, text, line or arc",
+                "unknown annotation type {}: {}, text, line or arc",
                 c.kind,
                 AnnotationType::ALL.map(AnnotationType::key).join(", ")
             ))
@@ -1926,13 +1927,17 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                         entry["label"] = json!(text);
                         if let Some(warning) = warning {
                             entry["warning"] = json!(warning);
+                            add_annotation_notice(&mut entry, &annotation.id, &warning);
                         }
                         entry["box"] = bounds_json(&laid.bounds);
                         out.groups.push(laid.group);
                     }
                     Err(error) => {
                         entry["broken"] = json!(true);
+                        // A broken annotation is a warning (mitcad#1040):
+                        // `error` keeps the reason for its readers.
                         entry["error"] = json!(error);
+                        add_annotation_notice(&mut entry, &annotation.id, &error);
                         let at = broken_at;
                         entry["box"] = json!([[at[0], at[1] - 6.0], [at[0] + 14.0, at[1]]]);
                         broken_at = [at[0], at[1] - 8.0];
@@ -2643,7 +2648,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             ..
         } = found.seen
         else {
-            return Err("a centre pattern starts from a circle the view sees end on".to_owned());
+            return Err("a center pattern starts from a circle the view sees end on".to_owned());
         };
         let tolerance = 1e-6 * radius.max(1.0);
         let mut centers = vec![center];
@@ -2918,6 +2923,21 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
     }
 }
 
+/// Gives an annotation's entry in the `drawing` query its notice
+/// (mitcad#1040): a broken annotation, or one laid out with a caveat, is a
+/// warning about it (`level` and `notices`).
+pub(crate) fn add_annotation_notice(
+    entry: &mut Value,
+    id: &impl ToString,
+    message: &impl ToString,
+) {
+    let notice = Notice::warning(message.to_string()).with_target(id.to_string());
+    entry["level"] = json!(notice.level.as_str());
+    let mut notices = entry["notices"].as_array().cloned().unwrap_or_default();
+    notices.push(notice.to_json());
+    entry["notices"] = Value::Array(notices);
+}
+
 /// A line's, an arc's or a text's entry in the `drawing` query
 /// (mitcad#729): its file form with its view (null on the sheet), its
 /// words and its box.
@@ -2964,7 +2984,7 @@ fn sketch_item(
         "arc" => {
             let [center, start, end] = points else {
                 return Err(ApiError(
-                    "an arc takes its centre, start and end on the sheet, `points`".to_owned(),
+                    "an arc takes its center, start and end on the sheet, `points`".to_owned(),
                 ));
             };
             let (c, s, e) = (local(*center), local(*start), local(*end));

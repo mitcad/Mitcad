@@ -6,9 +6,11 @@
 #include <utility>
 
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QLabel>
 #include <QPoint>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -55,6 +57,11 @@ MyLibraryDialog::MyLibraryDialog(QWidget* parent) : QDialog(parent) {
   m_importBar = new SlicerImportBar(m_host, QStringLiteral("My Library"));
   m_importBar->target = [this] { return place(); };
   m_importBar->row()->insertWidget(0, m_place);
+  // While the items are read (mitcad#1018).
+  m_reading = new QLabel;
+  setRoleStyleSheet(m_reading, ColorRole::TextSecondary);
+  m_reading->hide();
+  m_importBar->row()->insertWidget(1, m_reading);
   layout->addWidget(m_importBar);
 
   // The panels of the design's windows, on the library.
@@ -80,9 +87,10 @@ MyLibraryDialog::MyLibraryDialog(QWidget* parent) : QDialog(parent) {
   m_processes->addButton(makeClose(), QStringLiteral("close"));
   mac::styleDialog(this);
 
-  m_materials->setLibrary(QStringLiteral("user"));
-  m_printers->setLibrary(QStringLiteral("user"));
-  m_processes->setLibrary(QStringLiteral("user"));
+  // In My library, its items not read yet: read() reads them.
+  m_materials->setLibrary(QStringLiteral("user"), false);
+  m_printers->setLibrary(QStringLiteral("user"), false);
+  m_processes->setLibrary(QStringLiteral("user"), false);
 
   const auto changed = [this] { m_changed = true; };
   connect(m_materials, &MaterialsPanel::changed, this, changed);
@@ -114,16 +122,81 @@ QString MyLibraryDialog::place() const {
 
 void MyLibraryDialog::setProjectFolder(const QString& folder) {
   m_host.setProjectFolder(folder);
-  // The project's library only in a project; My library else.
+  // The project's library only in a project; My library else (read()
+  // reads it).
   m_place->setVisible(!folder.isEmpty());
   if (folder.isEmpty() && m_place->currentIndex() != 0) {
     const QSignalBlocker block(m_place);
     m_place->setCurrentIndex(0);
-    placeChosen();
+    m_importBar->clear();
   }
 }
 
+void MyLibraryDialog::read() {
+  const QString library = place();
+  const int reading = ++m_reads;
+  // Read again: the files may have changed since the last opening.
+  m_host.readAgain();
+  m_reading->setText(tr("Reading %1…").arg(placeName(library)));
+  m_reading->show();
+  // What the panels ask of the model, as they ask it (queryLibraryItems,
+  // their refresh): the place's and the built-in items, the libraries,
+  // the print keys, and the empty design's rest.
+  const QString project = library == QStringLiteral("user") ? QString() : m_host.projectFolder();
+  QVector<QJsonObject> requests;
+  const char* const kinds[] = {"material", "printer", "process"};
+  for (const char* kind : kinds) {
+    QJsonObject request{{QStringLiteral("query"), QStringLiteral("library_items")},
+                        {QStringLiteral("kind"), QLatin1String(kind)}};
+    if (!project.isEmpty()) {
+      request.insert(QStringLiteral("project"), project);
+    }
+    requests.append(request);
+  }
+  QJsonObject libraryRequest{{QStringLiteral("query"), QStringLiteral("print_library")}};
+  if (!project.isEmpty()) {
+    libraryRequest.insert(QStringLiteral("project"), project);
+  }
+  requests.append(libraryRequest);
+  const char* const asked[] = {"print_keys", "materials", "appearances", "bodies", "print_settings", "print_profiles"};
+  for (const char* name : asked) {
+    requests.append(QJsonObject{{QStringLiteral("query"), QLatin1String(name)}});
+  }
+  readAhead(this, requests, [this, reading, library](const QueryAnswers& answers, qint64 readMs) {
+    // A later reading, a place chosen since or an import shows its own.
+    if (reading == m_reads && library == place()) {
+      fill(library, answers, readMs);
+    }
+  });
+}
+
+void MyLibraryDialog::fill(const QString& library, const QueryAnswers& answers, qint64 readMs) {
+  m_host.setAnswers(answers);
+  m_reading->hide();
+  QElapsedTimer timer;
+  timer.start();
+  qint64 shown[3] = {0, 0, 0};
+  m_materials->setLibrary(library, false);
+  m_materials->refresh();
+  shown[0] = timer.restart();
+  m_printers->setLibrary(library, false);
+  m_printers->refresh();
+  shown[1] = timer.restart();
+  m_processes->setLibrary(library, false);
+  m_processes->refresh();
+  shown[2] = timer.restart();
+  qDebug().noquote() << QStringLiteral("My Library loaded: read %1 ms, materials %2 ms, printers %3 ms, processes %4 ms")
+                            .arg(readMs)
+                            .arg(shown[0])
+                            .arg(shown[1])
+                            .arg(shown[2]);
+  scheduleLogPlaces();
+}
+
 void MyLibraryDialog::refresh() {
+  // Read now: a reading under way shows nothing older.
+  ++m_reads;
+  m_reading->hide();
   m_materials->refresh();
   m_printers->refresh();
   m_processes->refresh();
@@ -156,9 +229,7 @@ void MyLibraryDialog::placeChosen() {
   const QString library = place();
   qDebug().noquote() << QStringLiteral("My Library place: %1").arg(library);
   m_importBar->clear();
-  m_materials->setLibrary(library);
-  m_printers->setLibrary(library);
-  m_processes->setLibrary(library);
+  read();
   scheduleLogPlaces();
 }
 

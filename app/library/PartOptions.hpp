@@ -229,9 +229,9 @@ QString supplierPartsText(const QJsonArray& parts);
 QString rowFilterText(const RowFilter& filter);
 
 // --- The suppliers' articles as a table (mitcad#979; app/COMMANDS.md,
-// "Options of library parts")
+// "Options of library components")
 //
-// Insert from Library, Library Parts and Edit Options… show a row's
+// Insert from Library, Library Components and Edit Options… show a row's
 // articles behind a button (SupplierPartsDialog.hpp): a table with one line
 // per article and the columns its articles fill. The data below is what
 // that table shows.
@@ -261,8 +261,8 @@ QList<SupplierArticle> supplierArticles(const QJsonArray& parts, const QJsonArra
 // The columns that some article fills, in their order: a column no article
 // fills is left out.
 QList<SupplierColumn> supplierColumns(const QList<SupplierArticle>& articles);
-// A column's heading: "Supplier", "Part number", "Material", "Finish",
-// "Checked", "Product page".
+// A column's heading: "Supplier", "Supplier Part Number", "Material", "Finish",
+// "Checked", "Product Page".
 QString supplierColumnName(SupplierColumn column);
 // An article's text in a column.
 QString supplierCell(const SupplierArticle& article, SupplierColumn column);
@@ -272,7 +272,7 @@ QString supplierCellLink(const SupplierArticle& article, SupplierColumn column);
 // Tab-separated text: the headings, then a line per article (each ending
 // with a line break); a tab or line break in a cell becomes a space.
 QString supplierArticlesTsv(const QList<SupplierArticle>& articles, const QList<SupplierColumn>& columns);
-// "Supplier parts of M5x16: 8 articles, columns Supplier, Part number,
+// "Supplier parts of M5x16: 8 articles, columns Supplier, Supplier Part Number,
 // Material, Finish, Checked" for the log.
 QString supplierArticlesLog(const QString& row, const QList<SupplierArticle>& articles,
                             const QList<SupplierColumn>& columns);

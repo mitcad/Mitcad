@@ -176,6 +176,7 @@ struct GeneratedRows {
   QStringList rows;    // the rows of the column's keys, in the table's order
   QStringList added;   // new rows
   QStringList updated; // rows of the same name whose value changed
+  QStringList created; // parameters the columns made (mitcad#1044)
   QVector<Move> moves;
 
   // "3 rows from Screws: added M3, M4, M5", "4 rows from Screws: added M6;
@@ -218,5 +219,70 @@ Table withColumn(const Table& table, const QString& parameter, const QString& ex
 // the parameter itself stays. A parameter that is no column gives the
 // table unchanged.
 Table withoutColumn(const Table& table, const QString& parameter);
+
+// Filling a closed table (mitcad#1044; docs/configurations.md, "Filling a
+// closed table", decision 12).
+
+// The user parameters Add Option offers: every one that is no option yet,
+// a closed table's parameter columns among them, in the model's order.
+QStringList optionCandidates(const Table& table, const QStringList& userParameters);
+// A parameter's current value as the constant a row keeps: its expression
+// when it names no other parameter or table, else its value as shown
+// (`8.5 mm`, a text in quotes). `parameter` is an entry of the
+// `parameters` query.
+QString currentConstant(const QJsonObject& parameter);
+// Add Option: the table with `parameter` appended to its options. A
+// parameter column moves to the options with its rows' values; every row
+// without a value of it takes `expression` (the parameter's current
+// value, currentConstant), so that a closed table with rows takes it.
+// An option already gives the table unchanged.
+Table withOption(const Table& table, const QString& parameter, const QString& expression);
+
+// Generate Rows from Table… with the table's other columns as the closed
+// table's parameter columns (`columns`; empty: the key only).
+QJsonObject generateRowsCommand(const QString& table, const QString& column, const QString& option,
+                                const QStringList& columns);
+
+// The rows as CSV: the export (`configuration_rows_csv`), the preview of an
+// import and the import (`configuration_rows_csv_preview`,
+// `import_configuration_rows_csv`).
+QJsonObject rowsCsvQuery();
+QJsonObject rowsCsvPreviewQuery(const QString& csv);
+QJsonObject importRowsCsvCommand(const QString& csv);
+
+// A block of cells as spreadsheets copy it: rows by line, cells by tab; a
+// cell with a tab, a line break or a leading quote in quotes, quotes
+// doubled. readBlock leaves out the line break at the end.
+QVector<QStringList> readBlock(const QString& text);
+QString writeBlock(const QVector<QStringList>& block);
+
+// What a column of the Rows sheet sets.
+struct SheetColumn {
+  enum class Kind { Name, Option, Parameter, Designation, PartNumber, SupplierUrl };
+  Kind kind = Kind::Name;
+  QString parameter; // an option's or a parameter column's
+  bool text = false; // a text parameter
+  QString unit;      // a number parameter's, for a bare number
+};
+
+// A block pasted into the Rows sheet.
+struct Paste {
+  Table table;
+  QStringList added;                   // rows the paste added, as their names
+  QVector<QPair<QString, int>> cells;  // each pasted cell: its row's name and its column
+  int beyond = 0;                      // cells right of the last column, left out
+};
+
+// Pastes `block` with its top left cell at (`row`, `column`) of the sheet
+// whose columns are `columns`: each cell as typed into it (a text gets its
+// quotes, a bare number its parameter's unit, an empty cell takes an
+// option's or a parameter's value out; an empty name is left as it is).
+// Rows below the last are added as needed, each a copy of `fresh` (the
+// options' values as they are now) named as Add Row names it.
+Paste pasteBlock(const Table& table, const QVector<SheetColumn>& columns, int row, int column,
+                 const QVector<QStringList>& block, const Row& fresh);
+// Delete in the Rows sheet: the cells (row index, column) emptied; a name
+// stays.
+Table clearCells(const Table& table, const QVector<SheetColumn>& columns, const QVector<QPair<int, int>>& cells);
 
 } // namespace mitcad::configurations

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <QHash>
 #include <QString>
 #include <QStringList>
 #include <QSet>
@@ -42,6 +43,9 @@ bool textMatches(const QString& identifier, const QRegularExpression& expression
 bool enabled(const QString& identifier, bool expected);
 bool visible(const QString& identifier, bool expected);
 bool present(const QString& identifier, bool expected);
+// The visible control `identifier` of a popover directly above or below
+// the visible document control `anchor` that opened it (mitcad#1021).
+bool attached(const QString& identifier, const QString& anchor, bool above, QString& detail);
 bool toolbarItemPresent(const QString& identifier, bool expected);
 bool configureToolbarItem(const QString& identifier, const QString& operation, QString& error);
 bool resizeDocument(int width, int height, QString& error);
@@ -50,8 +54,10 @@ bool setDocumentState(const QString& state, QString& error);
 QString documentState();
 bool setAppearance(const QString& name, QString& error);
 bool floatingLayout(QString& error);
+// `folded`: the features in folded timeline groups (mitcad#1077) and
+// their groups' names, whose folder cell stands for them.
 bool historyLayout(const QJsonObject& timeline, const QSet<QString>& filtered, const QStringList& selected,
-                   bool checkSelection, QString& error);
+                   bool checkSelection, QString& error, const QHash<QString, QString>& folded = {});
 bool historyMarkerEvent(const QString& phase, int index, QString& error);
 bool historyWheel(QString& error);
 bool trackContextMenu(const QString& choice, const std::function<void()>& open, QString& error,
@@ -177,6 +183,16 @@ bool headerResizeRetained(const QString& identifier, int logicalColumn, QString&
 bool pointerDrag(const QString& identifier, double from, double to, QString& error, bool fromKnob = false);
 bool resizeDialog(int width, int height, QString& error);
 bool layoutContract(QString& error);
+// The tooltip AppKit would show for a control: its toolTip, or the text
+// its tooltip owner supplies when shown (the timeline's cells, mitcad#1076).
+bool toolTipOf(const QString& identifier, QString& text);
+// The left column (mitcad#1020): a drag of the boundary handle `handle`
+// (native.columnSplit.<above>.<below>) with AppKit mouse events until the
+// card above it is `height` points high, or a double-click on it (height
+// -1); a card's height within minimum..maximum, or (minimum -1) reaching
+// the bottom of the free column, above the timeline.
+bool dragColumnSplit(const QString& handle, int height, QString& error);
+bool cardHeight(const QString& card, int minimum, int maximum, QString& detail);
 #else
 inline bool active() { return false; }
 inline bool nativeFocused() { return false; }
@@ -201,6 +217,7 @@ inline bool textMatches(const QString&, const QRegularExpression&) { return fals
 inline bool enabled(const QString&, bool) { return false; }
 inline bool visible(const QString&, bool) { return false; }
 inline bool present(const QString&, bool) { return false; }
+inline bool attached(const QString&, const QString&, bool, QString&) { return false; }
 inline bool toolbarItemPresent(const QString&, bool) { return false; }
 inline bool configureToolbarItem(const QString&, const QString&, QString&) { return false; }
 inline bool resizeDocument(int, int, QString&) { return false; }
@@ -209,7 +226,8 @@ inline bool setDocumentState(const QString&, QString&) { return false; }
 inline QString documentState() { return {}; }
 inline bool setAppearance(const QString&, QString&) { return false; }
 inline bool floatingLayout(QString&) { return false; }
-inline bool historyLayout(const QJsonObject&, const QSet<QString>&, const QStringList&, bool, QString&) { return false; }
+inline bool historyLayout(const QJsonObject&, const QSet<QString>&, const QStringList&, bool, QString&,
+                          const QHash<QString, QString>& = {}) { return false; }
 inline bool historyWheel(QString&) { return false; }
 inline bool historyMarkerEvent(const QString&, int, QString&) { return false; }
 inline bool trackContextMenu(const QString&, const std::function<void()>&, QString&,
@@ -273,6 +291,9 @@ inline bool headerResizeRetained(const QString&, int, QString&) { return false; 
 inline bool pointerDrag(const QString&, double, double, QString&, bool = false) { return false; }
 inline bool resizeDialog(int, int, QString&) { return false; }
 inline bool layoutContract(QString&) { return false; }
+inline bool toolTipOf(const QString&, QString&) { return false; }
+inline bool dragColumnSplit(const QString&, int, QString&) { return false; }
+inline bool cardHeight(const QString&, int, int, QString&) { return false; }
 #endif
 
 } // namespace mitcad::mac::test

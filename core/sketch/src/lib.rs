@@ -83,6 +83,9 @@ pub mod internal;
 pub mod spline_points;
 // Scaling a sketch, and the first dimension that scales it (mitcad#860).
 pub mod scale;
+// Constraints a drawing tool adds automatically, only when safe
+// (mitcad#1024).
+pub mod auto;
 
 #[cfg(test)]
 mod tests;

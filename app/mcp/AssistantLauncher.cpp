@@ -30,7 +30,7 @@ std::wstring quote(const wchar_t* argument) {
 int wmain(int argc, wchar_t** argv) {
   if (argc != 4 || !std::filesystem::path(argv[1]).is_absolute() ||
       std::wstring(argv[2]) != L"mcp" || std::wstring(argv[3]) != L"--connect") {
-    std::fputs("Mitcad MCP launcher: invalid installed bridge arguments\n", stderr); return 2;
+    std::fputs("MitCad MCP launcher: invalid installed bridge arguments\n", stderr); return 2;
   }
   std::wstring command;
   for (int i = 1; i < argc; ++i) { if (i > 1) command += L' '; command += quote(argv[i]); }
@@ -44,7 +44,7 @@ int wmain(int argc, wchar_t** argv) {
   PROCESS_INFORMATION process{};
   if (!CreateProcessW(argv[1], command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
                       nullptr, nullptr, &startup, &process)) {
-    std::fputs("Mitcad MCP launcher: installed bridge could not start\n", stderr); return 1;
+    std::fputs("MitCad MCP launcher: installed bridge could not start\n", stderr); return 1;
   }
   CloseHandle(process.hThread);
   WaitForSingleObject(process.hProcess, INFINITE);
@@ -57,10 +57,10 @@ int wmain(int argc, wchar_t** argv) {
 int main(int argc, char** argv) {
   if (argc != 4 || !std::filesystem::path(argv[1]).is_absolute() ||
       std::string(argv[2]) != "mcp" || std::string(argv[3]) != "--connect") {
-    std::fputs("Mitcad MCP launcher: invalid installed bridge arguments\n", stderr); return 2;
+    std::fputs("MitCad MCP launcher: invalid installed bridge arguments\n", stderr); return 2;
   }
   execv(argv[1], argv + 1);
-  std::perror("Mitcad MCP launcher: installed bridge could not start");
+  std::perror("MitCad MCP launcher: installed bridge could not start");
   return 1;
 }
 #endif

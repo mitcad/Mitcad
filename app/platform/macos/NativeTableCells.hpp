@@ -9,13 +9,16 @@
 #import <AppKit/AppKit.h>
 
 #include <cstddef>
+#include <map>
 #include <vector>
 
 #include <QtCore/qnamespace.h>
 
 class QAbstractItemView;
 class QHeaderView;
+class QIcon;
 class QModelIndex;
+class QString;
 class QWidget;
 
 // A checklist's cursor keeps warning colours intact by framing the current
@@ -100,5 +103,37 @@ void selectEditedText(NSTextField* field);
 // change, with the calling frames ("Native cell edit: ..."), so that a test
 // shows what ended an edit; nothing otherwise.
 void logNativeCellEdit(const char* what, NSView* view);
+
+// An item's or a header's icon as an image at most `points` high, drawn at
+// twice that for Retina screens; nil for none.
+NSImage* nativeIconImage(const QIcon& icon, CGFloat points);
+
+// A table's vertical header (mitcad#1078): a QTableView that sets
+// NativeRowHeaderProperty and does not hide its vertical header shows it as
+// a leading column of row labels with their icons (headerData(row,
+// Qt::Vertical) and its DecorationRole), as Purge Volumes' "From PLA" rows. A label's identifier is its header's
+// NativeControlIdentifierRole, else the view's objectName plus ".row.<row>".
+// The column's identifier is no model column's.
+bool nativeRowHeaderShown(const QAbstractItemView* view);
+bool isNativeRowHeader(NSTableColumn* column);
+NSTableColumn* createNativeRowHeader();
+NSView* nativeRowHeaderCell(const QAbstractItemView* view, int row);
+// The leading column as wide as its widest label.
+void fitNativeRowHeader(NSTableView* table, const QAbstractItemView* view);
+
+// Numbers on a decimal axis (NativeDecimalColumnsProperty, mitcad#1080):
+// where a column's decimal separators and units are, in points from its
+// texts' start, measured over all of the view's rows in tabular digits,
+// as DecimalAlignDelegate places them.
+struct NativeDecimalColumn {
+  CGFloat axis = 0;
+  CGFloat unitStart = 0;
+};
+std::map<int, NativeDecimalColumn> nativeDecimalColumns(const QAbstractItemView* view);
+// A cell's text on its column's axis, in `font`'s tabular digits; nil when
+// it is not one number with an optional unit. Its string is the text as it
+// is: the indent and the unit's place are attributes.
+NSAttributedString* nativeDecimalText(const QString& text, const NativeDecimalColumn& column, NSFont* font,
+                                      NSColor* color, NSLineBreakMode mode);
 
 } // namespace mitcad::mac

@@ -18,8 +18,10 @@ use serde_json::{Value, json};
 use super::library_items::{FileWrite, free_name, library_folder};
 use super::print_import::IMPORT_ORIGIN;
 use super::{Document, ModelError, invalid};
+use crate::appearance::Appearance;
 use crate::kernel::Kernel;
-use crate::material::{MaterialChange, MaterialOrigin};
+use crate::material::{self, Material, MaterialChange, MaterialOrigin, same_nozzle, same_printer};
+use crate::print_files::filaments::{self, PrinterChoice};
 use crate::print_files::installed::{self, SlicerFolder};
 use crate::print_files::{self, ImportReport};
 use crate::print_keys::{Dialect, PrintSet};
@@ -92,6 +94,15 @@ fn slicer_change(
         .collect()
 }
 
+/// Whether two nozzles (none: any) are the same.
+fn same_nozzle_option(a: Option<f64>, b: Option<f64>) -> bool {
+    match (a, b) {
+        (Some(x), Some(y)) => same_nozzle(x, y),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 /// An item read from a preset, with the preset's file name.
 struct PresetItem {
     item: ItemData,
@@ -160,7 +171,13 @@ impl<K: Kernel> Document<K> {
     /// The `slicer_presets` query: the user presets of each slicer data
     /// folder in `folders`, then the system presets the user enabled there
     /// (`system`, with their `vendor`), each with the item of its kind and
-    /// name the target has (`same`: `into` None is the design).
+    /// name the target has (`same`: `into` None is the design). A
+    /// filament's preset names its filament and the printers and nozzles
+    /// it is for (mitcad#1054: `filament`, `printers` `[{printer,
+    /// nozzle}]`), its filament's name the target has as `same`; each
+    /// slicer lists the printers and nozzles its presets are for
+    /// (`printers`); `merge` the target's separate materials of one
+    /// filament ([`Document::separate_filaments_json`]).
     pub fn slicer_presets_json(
         &self,
         folders: &[SlicerFolder],
@@ -173,26 +190,81 @@ impl<K: Kernel> Document<K> {
             .map(|slicer| {
                 // The user's, then the slicer's own the user enabled
                 // (mitcad#871).
-                let presets: Vec<Value> = installed::user_presets(&slicer.folder)
+                let found: Vec<installed::FoundPreset> = installed::user_presets(&slicer.folder)
                     .into_iter()
                     .chain(installed::system_presets(&slicer.folder, slicer.dialect))
+                    .collect();
+                // A filament's printers: its own compatible printers, else
+                // those of the enabled preset it inherits from, else its
+                // name's (mitcad#1054).
+                let printers_of = |preset: &installed::FoundPreset| {
+                    let mut compatible = preset.compatible.clone();
+                    if compatible.is_empty()
+                        && let Some(base) = &preset.inherits
+                        && let Some(found_base) = found
+                            .iter()
+                            .find(|p| p.set == PrintSet::Filament && &p.name == base)
+                    {
+                        compatible = found_base.compatible.clone();
+                    }
+                    filaments::preset_printers(&preset.name, &compatible)
+                };
+                // The filaments of two presets or more: a material each.
+                let filament_of =
+                    |preset: &installed::FoundPreset| material::split_filament_name(&preset.name).0;
+                let mut presets_of: BTreeMap<String, usize> = BTreeMap::new();
+                for preset in found.iter().filter(|p| p.set == PrintSet::Filament) {
+                    *presets_of
+                        .entry(filament_of(preset).to_lowercase())
+                        .or_default() += 1;
+                }
+                let mut all_printers: Vec<filaments::PrinterNozzle> = Vec::new();
+                let presets: Vec<Value> = found
+                    .iter()
                     .map(|preset| {
                         let kind = item_kind(preset.set);
-                        let same = self
-                            .same_named(&libraries, into, kind, &preset.name)
-                            .map(|e| json!({"id": e.id, "name": e.name, "place": e.place}));
-                        let system = preset.vendor.is_some();
-                        let account = (!system).then_some(preset.account);
-                        json!({
+                        let mut entry = json!({
                             "kind": kind.id(),
                             "name": preset.name,
                             "path": preset.path.to_string_lossy(),
-                            "account": account,
+                            "account": (preset.vendor.is_none()).then_some(&preset.account),
                             "inherits": preset.inherits,
-                            "system": system,
+                            "system": preset.vendor.is_some(),
                             "vendor": preset.vendor,
-                            "same": same,
-                        })
+                        });
+                        let mut same_as = preset.name.clone();
+                        if preset.set == PrintSet::Filament {
+                            let filament = filament_of(preset);
+                            let siblings = presets_of
+                                .get(&filament.to_lowercase())
+                                .copied()
+                                .unwrap_or(0);
+                            let printers = printers_of(preset);
+                            for place in &printers {
+                                if !all_printers.iter().any(|p| {
+                                    same_printer(&p.0, &place.0) && same_nozzle_option(p.1, place.1)
+                                }) {
+                                    all_printers.push(place.clone());
+                                }
+                            }
+                            // A filament of several presets comes in as one
+                            // material of its name.
+                            if siblings > 1 {
+                                same_as = filament.clone();
+                            }
+                            entry["filament"] = json!(filament);
+                            entry["printers"] = json!(
+                                printers
+                                    .iter()
+                                    .map(|(p, n)| json!({"printer": p, "nozzle": n}))
+                                    .collect::<Vec<_>>()
+                            );
+                        }
+                        entry["same"] = self
+                            .same_named(&libraries, into, kind, &same_as)
+                            .map(|e| json!({"id": e.id, "name": e.name, "place": e.place}))
+                            .unwrap_or(Value::Null);
+                        entry
                     })
                     .collect();
                 json!({
@@ -201,10 +273,17 @@ impl<K: Kernel> Document<K> {
                     "folder": slicer.folder.to_string_lossy(),
                     "flatpak": slicer.flatpak,
                     "presets": presets,
+                    "printers": all_printers
+                        .iter()
+                        .map(|(p, n)| json!({"printer": p, "nozzle": n}))
+                        .collect::<Vec<_>>(),
                 })
             })
             .collect();
-        json!({"slicers": slicers})
+        json!({
+            "slicers": slicers,
+            "merge": self.separate_filaments_json(&libraries, into),
+        })
     }
 
     /// Imports the presets `presets` (user or system ones) of the slicer
@@ -215,6 +294,15 @@ impl<K: Kernel> Document<K> {
     /// make the second a copy. The answer lists what came in and what was
     /// overridden, as `import_print_profile`'s, with `overridden` and
     /// `copied`.
+    ///
+    /// The filament presets of one filament come in as one material with
+    /// a variant per printer and nozzle (mitcad#1054,
+    /// [`filaments::merge_filaments`]); with `printers` only the presets
+    /// and variants of those printers and nozzles. With `merge_separate`
+    /// the target's separate materials of one filament are merged first,
+    /// in the same undo step (`merged` in the answer); then `presets` may
+    /// be empty.
+    #[allow(clippy::too_many_arguments)]
     pub fn import_slicer_presets(
         &mut self,
         dialect: Dialect,
@@ -222,18 +310,49 @@ impl<K: Kernel> Document<K> {
         presets: &[PresetChoice],
         into: Option<LibraryKind>,
         project: Option<&Path>,
+        printers: Option<&[PrinterChoice]>,
+        merge_separate: bool,
     ) -> Result<Value, ModelError> {
         if !dialect.bambu_family() {
             return Err(invalid(format!(
-                "{} keeps no presets Mitcad reads from its folder",
+                "{} keeps no presets MitCad reads from its folder",
                 dialect.name()
             )));
         }
-        if presets.is_empty() {
+        if presets.is_empty() && !merge_separate {
             return Err(invalid("no presets to import"));
         }
+        if !merge_separate {
+            return self.import_presets_now(dialect, folder, presets, into, project, printers);
+        }
+        self.as_one_step(|doc| {
+            let merged = doc.merge_separate_filaments(into, project)?;
+            let mut answer = if presets.is_empty() {
+                json!({"dialect": dialect.id(), "into": into.map_or("design", |l| l.id())})
+            } else {
+                doc.import_presets_now(dialect, folder, presets, into, project, printers)?
+            };
+            answer["merged"] = merged;
+            Ok(answer)
+        })
+    }
+
+    /// [`Document::import_slicer_presets`] of the presets themselves.
+    fn import_presets_now(
+        &mut self,
+        dialect: Dialect,
+        folder: &Path,
+        presets: &[PresetChoice],
+        into: Option<LibraryKind>,
+        project: Option<&Path>,
+        printers: Option<&[PrinterChoice]>,
+    ) -> Result<Value, ModelError> {
         let mut report = ImportReport::default();
         let mut read = Vec::new();
+        // The filaments' materials, merged after all are read (mitcad#1054),
+        // each with its preset's file and choice.
+        let mut materials: Vec<(Material, Option<Appearance>)> = Vec::new();
+        let mut material_files: Vec<(String, SameName)> = Vec::new();
         for choice in presets {
             let file = choice
                 .path
@@ -246,10 +365,18 @@ impl<K: Kernel> Document<K> {
             let imported = crate::reader_guard::catch_panic(
                 &choice.path.to_string_lossy(),
                 || {
-                    let map = installed::resolved_preset(folder, &choice.path).map_err(invalid)?;
-                    let text = Value::Object(map).to_string();
-                    print_files::read_file(&file, text.as_bytes(), Some(dialect))
-                        .map_err(|e| invalid(format!("{file}: {e}")))
+                    let resolved =
+                        installed::resolve_preset(folder, &choice.path).map_err(invalid)?;
+                    let text = Value::Object(resolved.map).to_string();
+                    let mut imported =
+                        print_files::read_file(&file, text.as_bytes(), Some(dialect))
+                            .map_err(|e| invalid(format!("{file}: {e}")))?;
+                    // The chain its values came from (mitcad#1053).
+                    for note in &mut imported.report.filaments {
+                        note.inherits.clone_from(&resolved.chain);
+                        note.missing.clone_from(&resolved.missing);
+                    }
+                    Ok(imported)
                 },
                 ModelError::Invalid,
             )?;
@@ -257,20 +384,12 @@ impl<K: Kernel> Document<K> {
             report.kept.extend(imported.report.kept);
             report.left_out.extend(imported.report.left_out);
             report.problems.extend(imported.report.problems);
+            report.filaments.extend(imported.report.filaments);
             let items = imported
                 .printers
                 .into_iter()
                 .chain(imported.processes)
-                .map(ItemData::Profile)
-                .chain(
-                    imported
-                        .materials
-                        .into_iter()
-                        .map(|(material, appearance)| ItemData::Material {
-                            material,
-                            appearance,
-                        }),
-                );
+                .map(ItemData::Profile);
             for item in items {
                 read.push(PresetItem {
                     item,
@@ -278,6 +397,37 @@ impl<K: Kernel> Document<K> {
                     same: choice.same,
                 });
             }
+            for material in imported.materials {
+                materials.push(material);
+                material_files.push((file.clone(), choice.same));
+            }
+        }
+        // One filament's presets as one material, only the printers chosen
+        // (mitcad#1054); each with the file and the choice of its first.
+        let (merged, into_merged) = filaments::merge_filaments(materials, printers);
+        let mut firsts: Vec<Option<(String, SameName)>> = vec![None; merged.len()];
+        for (i, slot) in into_merged.iter().enumerate() {
+            if let Some(m) = slot
+                && firsts[*m].is_none()
+            {
+                firsts[*m] = Some(material_files[i].clone());
+            }
+        }
+        for ((material, appearance), first) in merged.into_iter().zip(firsts) {
+            let (file, same) = first.unwrap_or_default();
+            read.push(PresetItem {
+                item: ItemData::Material {
+                    material,
+                    appearances: appearance.into_iter().collect(),
+                },
+                file,
+                same,
+            });
+        }
+        if read.is_empty() {
+            return Err(invalid(
+                "none of the presets is for the printers and nozzles chosen",
+            ));
         }
         let libraries = self.print_libraries(project);
         // Which override an existing item, which come in (copies renamed).
@@ -352,12 +502,29 @@ impl<K: Kernel> Document<K> {
                             },
                         )?;
                     }
-                    ItemData::Material { material, .. } => {
+                    ItemData::Material {
+                        material,
+                        appearances,
+                    } => {
+                        // Its appearance too (mitcad#1053): the colour is
+                        // the appearance's, the one an imported filament
+                        // carries (mitcad#1067's list of one).
+                        let appearance = appearances.into_iter().next();
+                        let look = match appearance {
+                            Some(look) => Some(doc.apply_with(|state| {
+                                let id = state.add_item_appearance(&look);
+                                Ok((format!("Edit Material {}", existing.name), id, false))
+                            })?),
+                            None => None,
+                        };
                         doc.edit_material(
                             &existing.id,
                             &MaterialChange {
                                 density: Some(material.density),
+                                appearance: look.map(Some),
                                 filament: Some(material.filament),
+                                variants: (!material.variants.is_empty())
+                                    .then_some(material.variants),
                                 ..MaterialChange::default()
                             },
                         )?;
@@ -385,10 +552,10 @@ impl<K: Kernel> Document<K> {
                         }
                         ItemData::Material {
                             mut material,
-                            appearance,
+                            appearances,
                         } => {
                             material.origin = Some(origin);
-                            state.put_material(material, appearance.as_ref(), false)
+                            state.put_material(material, &appearances, false)
                         }
                     };
                     ids.push((kind, id));
@@ -484,16 +651,52 @@ impl<K: Kernel> Document<K> {
                             ..ProfileChange::default()
                         },
                     )?,
-                    ItemData::Material { material, .. } => doc.edit_library_material(
-                        libraries,
-                        library,
-                        &existing.id,
-                        &MaterialChange {
-                            density: Some(material.density),
-                            filament: Some(material.filament),
-                            ..MaterialChange::default()
-                        },
-                    )?,
+                    ItemData::Material {
+                        material,
+                        appearances,
+                    } => {
+                        // Its appearance too (mitcad#1053), carried by the
+                        // library's file (the one of mitcad#1067's list an
+                        // imported filament carries); the design's copies
+                        // of the item need it in the design.
+                        let appearance = appearances.into_iter().next();
+                        let copies = !doc
+                            .state
+                            .copies_of(library, ItemKind::Material, &existing.id)
+                            .is_empty();
+                        let (look, carried) = match appearance {
+                            Some(look) if copies => {
+                                let id = doc.apply_with(|state| {
+                                    let id = state.add_item_appearance(&look);
+                                    Ok((format!("Edit Material {}", existing.name), id, false))
+                                })?;
+                                // The design's (under a free id when the
+                                // design had another of its id), over the
+                                // one the file carried.
+                                let placed = doc.appearance(&id).cloned();
+                                (Some(id), placed)
+                            }
+                            Some(look) => (Some(look.id.clone()), Some(look)),
+                            None => (None, None),
+                        };
+                        doc.edit_library_material_carrying(
+                            libraries,
+                            library,
+                            &existing.id,
+                            &MaterialChange {
+                                density: Some(material.density),
+                                appearance: look.map(Some),
+                                filament: Some(material.filament),
+                                // The variants per printer and nozzle
+                                // (mitcad#1054) as the merged preset gives
+                                // them.
+                                variants: (!material.variants.is_empty())
+                                    .then_some(material.variants),
+                                ..MaterialChange::default()
+                            },
+                            carried.as_ref(),
+                        )?
+                    }
                 };
                 overridden.push(json!({
                     "kind": kind.id(),

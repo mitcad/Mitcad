@@ -106,10 +106,10 @@ echo "--- --debug-log <file>: the header and the start-up"
 ui_start_app --debug-log "$FILE"
 ui_expect_log "Debug log on: $FILE (--debug-log)" "the debug log started"
 [ -f "$FILE" ] || ui_fail "no file $FILE"
-file_has '^Mitcad debug log$' "the header, once the view knows its graphics"
-[ "$(head -1 "$FILE")" = "Mitcad debug log" ] || ui_fail "the file does not begin with its header: $(head -1 "$FILE")"
+file_has '^MitCad debug log$' "the header, once the view knows its graphics"
+[ "$(head -1 "$FILE")" = "MitCad debug log" ] || ui_fail "the file does not begin with its header: $(head -1 "$FILE")"
 echo "ok   the file begins with its header"
-file_has '^Version: Mitcad [0-9]' "the version"
+file_has '^Version: MitCad [0-9]' "the version"
 file_has '^Build: (release|debug), ' "the build"
 file_has '^System: ' "the system"
 expect_graphics "$FILE" "the GPU and renderer in the header of a log started before the view"
@@ -166,7 +166,7 @@ case $NEW in
   "$XDG_DATA_HOME"/*/logs/mitcad-[0-9]*-[0-9]*-[0-9]*.log) echo "ok   in the log folder: $NEW" ;;
   *) ui_fail "the new log is not mitcad-<date>-<time>-<pid>.log in the log folder: '$NEW'" ;;
 esac
-[ "$(head -1 "$NEW")" = "Mitcad debug log" ] || ui_fail "the new file does not begin with its header"
+[ "$(head -1 "$NEW")" = "MitCad debug log" ] || ui_fail "the new file does not begin with its header"
 file_has '^Switches: debug log \(Preferences\)' "switched on in Preferences" "$NEW"
 expect_graphics "$NEW" "the GPU and renderer in the header"
 file_has '^--- The newest [0-9]+ lines from before the debug log started:$' "the lines kept from before" "$NEW"

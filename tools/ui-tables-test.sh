@@ -7,7 +7,7 @@
 # check-all sources: core/expr/src core/model/src/tables.rs core/model/src/document/tables.rs
 # check-all sources: core/model/src/tables_csv.rs core/model/src/document/tables_csv.rs
 # check-all sources: core/model-api/src/tables.rs core/model-api/src/tables_csv.rs
-# Tables in Change Parameters (mitcad#667, docs/table-lookups.md), on the
+# Tables in Edit Parameters (mitcad#667, docs/table-lookups.md), on the
 # demo block (60 x 40 x 20 mm: d1, d2, d3), with Qt's own file dialogs
 # (--no-native-dialogs):
 #   - The Tables tab: New makes the table Screws (a Key column of texts, a
@@ -76,7 +76,7 @@ edit_header() {
 ui_start_display
 ui_start_app --demo --no-native-dialogs
 ui_mark
-ui_step "Change Parameters (search)"     ui_command "Change Parameters"
+ui_step "Edit Parameters (search)"     ui_command "Edit Parameters"
 ui_expect_new "Parameters dialog opened" "the dialog opened"
 ui_expect_new "Parameters tab Tables at" "the Tables tab's place is logged"
 

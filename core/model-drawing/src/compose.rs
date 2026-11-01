@@ -547,7 +547,7 @@ pub fn hole_text(h: &HoleInput, units: Units) -> HoleText {
             units.length(depth)
         )),
         (None, Some((d, angle))) => Some(format!(
-            "CSK Ø{} x {}°",
+            "CSK Ø{} × {}°",
             units.length(d),
             super::trim_number(angle.to_degrees(), 1)
         )),
@@ -567,7 +567,7 @@ pub fn hole_text(h: &HoleInput, units: Units) -> HoleText {
 
 /// How a hole callout writes its depths and its counterbore or countersink
 /// (mitcad#902): in the exported drawing's words (`10`, `CBORE Ø11 DEPTH
-/// 6.8`, `CSK Ø12 x 90°`), or in ISO 129-1's symbols as the annotations on
+/// 6.8`, `CSK Ø12 × 90°`), or in ISO 129-1's symbols as the annotations on
 /// the model have them (`↧ 10`, `⌴ Ø11 ↧ 6.8`, `⌵ Ø12 × 90°`). `THRU` either
 /// way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -630,7 +630,7 @@ pub fn hole_callout(
             Some(format!("⌴ Ø{} ↧ {}", units.length(d), units.length(depth)))
         }
         (None, Some((d, angle)), false) => Some(format!(
-            "CSK Ø{} x {}°",
+            "CSK Ø{} × {}°",
             units.length(d),
             super::trim_number(angle.to_degrees(), 1)
         )),
@@ -1108,11 +1108,12 @@ pub fn compose(options: &DrawingOptions, units: Units, input: &SheetInput) -> Co
     )
 }
 
-/// The pen of an edge.
-fn edge_pen(visible: bool, kind: ViewEdgeKind) -> Pen {
+/// The pen of an edge: a thread's roots (ISO 6410) and tangent edges
+/// narrow, other visible edges wide.
+pub(crate) fn edge_pen(visible: bool, kind: ViewEdgeKind) -> Pen {
     match (visible, kind) {
         (false, _) => Pen::Hidden,
-        (true, ViewEdgeKind::Smooth) => Pen::Thin,
+        (true, ViewEdgeKind::Smooth | ViewEdgeKind::ThreadRoot) => Pen::Thin,
         (true, _) => Pen::Thick,
     }
 }
@@ -1178,7 +1179,8 @@ pub fn render(
                 hatch(&mut g, &loops);
             }
         }
-        for edge in &view.projection.edges {
+        // Details smaller than the pen as sharp corners (mitcad#1112).
+        for edge in &super::convention::simplified(&view.projection.edges, place.scale) {
             let pen = edge_pen(edge.visible, edge.kind);
             g.items.push(match &edge.curve {
                 ViewCurve::Line(p, q) => Item::Line {
@@ -1801,7 +1803,7 @@ fn title_block(
     );
     let (label, value) = match &title.author {
         Some(author) => ("DRAWN BY", author.as_str()),
-        None => ("MADE WITH", "Mitcad"),
+        None => ("MADE WITH", "MitCad"),
     };
     cell(label, value, third[2], right, y0, row2, DIMENSION_TEXT);
     projection_symbol(&mut g, setup.projection, [third[1], y0 + 3.5]);
@@ -1902,7 +1904,7 @@ mod tests {
         sunk.hole.countersink = Some((10.0, std::f64::consts::FRAC_PI_2));
         assert_eq!(
             hole_callout(&sunk, 1, None, Units::MM, CalloutStyle::Words),
-            ["Ø5 12", "CSK Ø10 x 90°"]
+            ["Ø5 12", "CSK Ø10 × 90°"]
         );
         assert_eq!(
             hole_callout(&sunk, 1, None, Units::MM, CalloutStyle::Symbols),

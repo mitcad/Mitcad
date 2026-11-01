@@ -14,9 +14,10 @@
 #   4. The card follows its rows (mitcad#425; 30 sketches more, Sketches
 #      folded at the start, no Projects card): folding Bodies shrinks it,
 #      opening it grows it, and the rows do not scroll while it ends above
-#      the timeline; opening Sketches grows it down to the timeline's top
-#      less the gap, the rows scroll, and the scroll bar is at the card's
-#      left, left of the rows.
+#      the timeline; opening Sketches grows it down to the top of the
+#      message band's row above the timeline (mitcad#1042; the timeline's
+#      top without a message) less the gap, the rows scroll, and the
+#      scroll bar is at the card's left, left of the rows.
 #   5. Back to Card: the place is gone and the plate is not picked there.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-browser-rows-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
@@ -92,6 +93,16 @@ function Card-Rect([string]$Name) {
   if (-not $match.Success) { Ui-Fail "no $Name in '$line'" }
   return @([int]$match.Groups[1].Value, [int]$match.Groups[2].Value, [int]$match.Groups[3].Value,
            [int]$match.Groups[4].Value)
+}
+
+# Column-Floor: where the left column ends, plus the gap: the top of the
+# message band's row (mitcad#1042), or of the timeline while no message
+# was shown.
+function Column-Floor {
+  $line = [string](Ui-LogLines | Where-Object { $_.StartsWith('Floating cards: ') } | Select-Object -Last 1)
+  $match = [regex]::Match($line, '; messageBandRow (-?\d+),(-?\d+) ')
+  if ($match.Success) { return [int]$match.Groups[2].Value }
+  return (Card-Rect 'timelineDock')[1]
 }
 
 # Browser-HeightBecomes lt|gt height description: waits until the Browser
@@ -184,7 +195,7 @@ Ui-Step 'open Bodies'                       { Ui-ClickLogged 'Browser arrow Root
 Ui-ExpectNew 'Browser Root/Bodies/Body1 at' 'Body1 in sight again'
 Browser-HeightBecomes 'gt' $h1 'the card grows as a row opens' | Out-Null
 $browser = Card-Rect 'browserDock'
-$timelineTop = (Card-Rect 'timelineDock')[1]
+$timelineTop = Column-Floor
 if ($browser[1] + $browser[3] -ge $timelineTop - 8) {
   Ui-Fail "the card reaches the timeline ($($browser[1]) + $($browser[3]), timeline at $timelineTop)"
 }
@@ -196,6 +207,7 @@ Ui-Step 'open Sketches'                     { Ui-ClickLogged 'Browser arrow Root
 Ui-ExpectNew 'Browser Root/Sketches/Sketch1 at' 'the sketches in sight'
 for ($i = 0; $i -lt 25; $i++) {
   $browser = Card-Rect 'browserDock'
+  $timelineTop = Column-Floor
   if ($browser[1] + $browser[3] -eq $timelineTop - 8) { break }
   Start-Sleep -Milliseconds 200
 }

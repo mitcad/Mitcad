@@ -110,7 +110,7 @@ impl EmbeddedImage {
         let header = image_header::read(&bytes)?;
         if header.format != self.format || [header.width, header.height] != self.pixels() {
             return Err(format!(
-                "the image is a {} x {} {} file, not the {} x {} {} it says",
+                "the image is a {} × {} {} file, not the {} × {} {} it says",
                 header.width, header.height, header.format, self.width, self.height, self.format
             ));
         }
@@ -290,7 +290,7 @@ impl ImageReference {
         }
         if !self.angle.is_finite() || !self.center.iter().all(|c| c.is_finite()) {
             return Err(format!(
-                "{}: the centre and the angle must be finite",
+                "{}: the center and the angle must be finite",
                 self.name
             ));
         }
@@ -477,7 +477,7 @@ impl<K: Kernel> Document<K> {
                 .expect("a free name"),
         };
         if self.image_index(&name).is_ok() {
-            return Err(invalid(format!("an image reference '{name}' exists")));
+            return Err(invalid(format!("an image reference {name} exists")));
         }
         let plane = self
             .image_plane(&target.plane, target.occurrence.as_ref())
@@ -622,7 +622,7 @@ impl<K: Kernel> Document<K> {
             return Ok(());
         }
         if self.image_index(new_name).is_ok() {
-            return Err(invalid(format!("an image reference '{new_name}' exists")));
+            return Err(invalid(format!("an image reference {new_name} exists")));
         }
         let label = format!("Rename {name}");
         let new_name = new_name.to_owned();
@@ -646,7 +646,7 @@ impl<K: Kernel> Document<K> {
             .image_references
             .iter()
             .position(|image| image.name == name)
-            .ok_or_else(|| invalid(format!("there is no image reference '{name}'")))
+            .ok_or_else(|| invalid(format!("there is no image reference {name}")))
     }
 }
 

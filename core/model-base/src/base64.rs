@@ -59,7 +59,7 @@ pub fn decode(text: &str) -> Result<Vec<u8>, String> {
             } else {
                 value(*byte).ok_or_else(|| {
                     format!(
-                        "invalid base64 character '{}' at {}",
+                        "invalid base64 character “{}” at {}",
                         char::from(*byte).escape_default(),
                         q * 4 + i
                     )
@@ -107,9 +107,9 @@ mod tests {
         for (text, expected) in [
             ("Zm9", "multiple of 4"),
             ("Zm9v\n", "multiple of 4"),
-            ("Zm9-", "invalid base64 character '-' at 3"),
+            ("Zm9-", "invalid base64 character “-” at 3"),
             ("Z===", "padding"),
-            ("Zg==Zm9v", "invalid base64 character '=' at 2"),
+            ("Zg==Zm9v", "invalid base64 character “=” at 2"),
         ] {
             let error = decode(text).unwrap_err();
             assert!(error.contains(expected), "{text}: {error}");

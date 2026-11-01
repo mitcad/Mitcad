@@ -30,7 +30,7 @@ use std::borrow::Cow;
 
 use mitcad_freecad::{LinkRef, Object};
 use mitcad_model::sketch::project::{entities, project};
-use mitcad_model::{Curve3, ElementKind, EntityUid, Kernel, SketchFrame};
+use mitcad_model::{ComponentUid, Curve3, ElementKind, EntityUid, Kernel, SketchFrame};
 use serde_json::{Value, json};
 
 use super::Importer;
@@ -128,13 +128,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             return Ok(helix.path);
         }
         // Edges of a body here: the body's edges by name.
-        if let Some(body) = self.body_of_object(&link.object) {
-            if self.doc.body_component(body) != Some(component) {
-                return Err(format!(
-                    "the spine {} is another component's body",
-                    link.object
-                ));
-            }
+        if self.body_of_object(&link.object).is_some() {
             let names: Vec<String> = if link.subs.is_empty() {
                 let count = self
                     .stored_elements(&link.object, target, ElementKind::Edge)?
@@ -143,21 +137,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             } else {
                 link.subs.iter().map(|s| sub_name(s).to_owned()).collect()
             };
-            let mut edges = Vec::new();
-            for name in &names {
-                if !name.starts_with("Edge") {
-                    return Err(format!(
-                        "a spine of {}.{name} (not an edge) is not translated",
-                        link.object
-                    ));
-                }
-                let (of, pieces) = self.element_names(&link.object, name)?;
-                if of != body {
-                    return Err(format!("{}.{name} is in another body", link.object));
-                }
-                edges.extend(pieces);
-            }
-            return Ok(json!({"body": body.to_string(), "edges": edges}));
+            return self.body_edge_path(&link.object, &names, component);
         }
         // Edges of an object without a body: a fixed line, or a sketch of
         // them.
@@ -196,6 +176,39 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 Ok(json!({"sketch": format!("${sketch}"), "curves": curves}))
             }
         }
+    }
+
+    /// A spine of edges (`Edge2`, …) of an object with a body here: the
+    /// body's edges by name, as a path (`{"body", "edges"}`). A Part
+    /// sweep's spine of a Box's edges; a PartDesign pipe's spine of edges
+    /// of its Body's earlier result (mitcad#1087), found in the body as it
+    /// is before the pipe.
+    pub(super) fn body_edge_path(
+        &mut self,
+        object: &str,
+        names: &[String],
+        component: ComponentUid,
+    ) -> Result<Value, String> {
+        let body = self
+            .body_of_object(object)
+            .ok_or_else(|| format!("{object} has no body here"))?;
+        if self.doc.body_component(body) != Some(component) {
+            return Err(format!("the spine {object} is another component's body"));
+        }
+        let mut edges = Vec::new();
+        for name in names {
+            if !name.starts_with("Edge") {
+                return Err(format!(
+                    "a spine of {object}.{name} (not an edge) is not translated"
+                ));
+            }
+            let (of, pieces) = self.element_names(object, name)?;
+            if of != body {
+                return Err(format!("{object}.{name} is in another body"));
+            }
+            edges.extend(pieces);
+        }
+        Ok(json!({"body": body.to_string(), "edges": edges}))
     }
 
     /// A Part sweep's section (`number` from 1) as a loft's section: a

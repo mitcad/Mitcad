@@ -200,4 +200,13 @@ QList<QPair<QString, QString>> penChoices();
 // "Center Mark", "Note", … for the model's type.
 QString annotationName(const QString& type);
 
+// The log's lines of the views' projections a drawing command or the
+// `drawing` query answered with (its `projections`, mitcad#1033), one per
+// view: "Drawing projection of view 1: 1 bodies, 2252.7 ms, projected
+// exactly" when the kernel projected them with the exact edges, "…,
+// projected from a triangulation" when from a triangulation (the quick
+// path, the polygonal style), "…, from the cache" when it did not project
+// them.
+QStringList projectionLines(const QJsonArray& projections);
+
 } // namespace mitcad::drawings

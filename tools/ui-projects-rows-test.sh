@@ -118,6 +118,11 @@ cli lock take "$SHOP/$LONG.mitcad" --author "$AUTHOR"
 cli lock status "$SHOP"
 echo "ok   the project is made"
 
+# The panel shown at the start, as for a user who turned it on (mitcad#1020:
+# hidden until then).
+mkdir -p "$UI_CONFIG/Mitcad"
+printf '[projects]\npanel=true\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
+
 ui_start_display
 
 echo "--- 1. Floating: the long name elided in the middle, a lock as its mark"

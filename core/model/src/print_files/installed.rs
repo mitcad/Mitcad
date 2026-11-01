@@ -229,6 +229,27 @@ pub struct FoundPreset {
     pub inherits: Option<String>,
     /// A system preset's vendor folder (`BBL`); None for a user preset.
     pub vendor: Option<String>,
+    /// The printer presets it names as compatible (`compatible_printers`;
+    /// a user preset's own only), for a filament's variants (mitcad#1054).
+    pub compatible: Vec<String>,
+}
+
+/// A preset's `compatible_printers`: a list of names, or `"a";"b"`.
+fn compatible_of(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty())
+            .collect(),
+        Some(Value::String(text)) => text
+            .split(';')
+            .map(|t| t.trim().trim_matches('"').to_owned())
+            .filter(|t| !t.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// The sorted entries of a folder.
@@ -304,6 +325,7 @@ pub fn user_presets(folder: &Path) -> Vec<FoundPreset> {
                     account: account_name.clone(),
                     inherits: text_of(&map, "inherits"),
                     vendor: None,
+                    compatible: compatible_of(map.get("compatible_printers")),
                 });
             }
         }
@@ -441,20 +463,7 @@ impl SystemIndex {
 
     /// The printers a preset is for: none named is every printer.
     fn compatible(&self, i: usize) -> Vec<String> {
-        match self.field(i, "compatible_printers") {
-            Some(Value::Array(items)) => items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(|t| t.trim().to_owned())
-                .filter(|t| !t.is_empty())
-                .collect(),
-            Some(Value::String(text)) => text
-                .split(';')
-                .map(|t| t.trim().trim_matches('"').to_owned())
-                .filter(|t| !t.is_empty())
-                .collect(),
-            _ => Vec::new(),
-        }
+        compatible_of(self.field(i, "compatible_printers"))
     }
 
     /// Whether preset `i` is for one of `printers`.
@@ -630,6 +639,7 @@ pub fn system_presets(folder: &Path, dialect: Dialect) -> Vec<FoundPreset> {
                     .map(|t| t.trim().to_owned())
                     .filter(|t| !t.is_empty()),
                 vendor: Some(preset.vendor.clone()),
+                compatible: index.compatible(i),
             });
         }
     }
@@ -701,47 +711,113 @@ impl Bases {
 /// The deepest chain of `inherits` followed.
 const MAX_INHERITS: usize = 16;
 
+/// A preset with the values it inherits filled in ([`resolve_preset`]),
+/// and the chain of presets they came from (mitcad#1053).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedPreset {
+    /// The preset's keys with those of its chain (see [`resolved_preset`]).
+    pub map: Map<String, Value>,
+    /// The presets it inherits from that were found, the nearest first.
+    pub chain: Vec<String>,
+    /// The base the chain names last but that was not found.
+    pub missing: Option<String>,
+}
+
+impl ResolvedPreset {
+    /// The chain as the import's log line names it: `A > B`, a missing
+    /// base last as `C (missing)`, `nothing` when the preset inherits
+    /// nothing.
+    pub fn chain_text(&self) -> String {
+        chain_text(&self.chain, self.missing.as_deref())
+    }
+}
+
+/// A chain of presets as the import's log line names it (see
+/// [`ResolvedPreset::chain_text`]).
+pub fn chain_text(chain: &[String], missing: Option<&str>) -> String {
+    let mut names: Vec<String> = chain.to_vec();
+    if let Some(base) = missing {
+        names.push(format!("{base} (missing)"));
+    }
+    if names.is_empty() {
+        "nothing".to_owned()
+    } else {
+        names.join(" > ")
+    }
+}
+
+/// A preset's name: its `name`, else its file's.
+fn preset_name(own: &Map<String, Value>, path: &Path) -> String {
+    text_of(own, "name").unwrap_or_else(|| {
+        path.file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    })
+}
+
 /// A user or system preset of a slicer's data folder `folder` with the
 /// values it inherits filled in: from the preset it names in `inherits`
 /// (the user's own of its account, else a system preset, one of the
 /// vendor folder the chain is in first), and so on up the chain, the
-/// nearer preset's value winning. The result is named as the preset and
-/// says its kind (`type` and the slicer's id key of its kind), and has no
-/// `inherits` when the whole chain was found; a base that is missing
-/// leaves `inherits` naming it, so that the import reports the values
-/// not read.
+/// nearer preset's value winning, for every key. The result is named as
+/// the preset and says its kind (`type` and the slicer's id key of its
+/// kind), and has no `inherits` when the whole chain was found; a base
+/// that is missing leaves `inherits` naming it, so that the import
+/// reports the values not read.
 pub fn resolved_preset(folder: &Path, path: &Path) -> Result<Map<String, Value>, String> {
+    resolve_preset(folder, path).map(|resolved| resolved.map)
+}
+
+/// [`resolved_preset`] with the chain it followed (mitcad#1053).
+pub fn resolve_preset(folder: &Path, path: &Path) -> Result<ResolvedPreset, String> {
     let shown = path.display();
     let own = read_preset_file(path).ok_or_else(|| format!("{shown} is no preset file"))?;
-    let set = set_of(folder, path);
     let account = path
         .strip_prefix(folder.join(USER_DIR))
         .ok()
         .and_then(|r| r.components().next())
         .map(|c| folder.join(USER_DIR).join(c.as_os_str()));
-    let name = text_of(&own, "name").unwrap_or_else(|| {
-        path.file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    });
+    let name = preset_name(&own, path);
+    resolve_in(
+        folder,
+        own,
+        name,
+        set_of(folder, path),
+        account.as_deref(),
+        vendor_dir(folder, path),
+    )
+}
+
+/// Fills in what `own` (named `name`, of kind `set` when known) inherits
+/// from the presets of the data folder `folder`: the user's of `account`
+/// first, then the system presets, those of `vendor` first.
+fn resolve_in(
+    folder: &Path,
+    own: Map<String, Value>,
+    name: String,
+    set: Option<PrintSet>,
+    account: Option<&Path>,
+    mut vendor: Option<PathBuf>,
+) -> Result<ResolvedPreset, String> {
     let mut chain = vec![own];
+    let mut names = Vec::new();
     let mut bases: Option<Bases> = None;
     let mut missing = None;
-    // A system preset's bases in its own vendor's folder first.
-    let mut vendor = vendor_dir(folder, path);
     while let Some(base) = chain.last().and_then(|m| text_of(m, "inherits")) {
         if chain.len() > MAX_INHERITS {
             return Err(format!(
                 "{name}: the presets it inherits from inherit in a loop"
             ));
         }
-        let index = bases.get_or_insert_with(|| Bases::of(folder, account.as_deref()));
+        let index = bases.get_or_insert_with(|| Bases::of(folder, account));
         let found = index.find(&base, vendor.as_deref()).map(Path::to_path_buf);
         match found.as_deref().and_then(read_preset_file) {
             Some(map) => {
+                // A system preset's bases in its own vendor's folder first.
                 if let Some(dir) = found.as_deref().and_then(|p| vendor_dir(folder, p)) {
                     vendor = Some(dir);
                 }
+                names.push(base);
                 chain.push(map);
             }
             None => {
@@ -758,7 +834,7 @@ pub fn resolved_preset(folder: &Path, path: &Path) -> Result<Map<String, Value>,
         }
     }
     merged.insert("name".to_owned(), json!(name));
-    match missing {
+    match &missing {
         Some(base) => {
             merged.insert("inherits".to_owned(), json!(base));
         }
@@ -775,7 +851,65 @@ pub fn resolved_preset(folder: &Path, path: &Path) -> Result<Map<String, Value>,
         merged.insert("type".to_owned(), json!(kind));
         merged.insert(id_key.to_owned(), id);
     }
-    Ok(merged)
+    Ok(ResolvedPreset {
+        map: merged,
+        chain: names,
+        missing,
+    })
+}
+
+/// The slicer data folder a preset file lies in: the folder whose
+/// `user/<account>/<kind>/` or `system/<vendor>/<kind>/` holds it, when
+/// that folder has system presets.
+pub fn data_folder_of(path: &Path) -> Option<PathBuf> {
+    for dir in path.ancestors().skip(1) {
+        let Some(own) = dir.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if own != USER_DIR && own != SYSTEM_DIR {
+            continue;
+        }
+        let below = path.strip_prefix(dir).ok()?.components().count();
+        let Some(data) = dir.parent() else {
+            continue;
+        };
+        if below >= 3 && data.join(SYSTEM_DIR).is_dir() {
+            return Some(data.to_path_buf());
+        }
+    }
+    None
+}
+
+/// A preset file with what it inherits filled in (mitcad#1053): one in a
+/// slicer's data folder through that folder ([`resolve_preset`]), another
+/// (a preset exported or copied elsewhere) through the system presets of
+/// the data folders `folders` (the installed slicers'), those of
+/// `dialect` first, the first that has the preset's base. None when the
+/// file inherits nothing, or no folder has its base: then it is read as
+/// it is and the import reports the values it inherits as not read.
+pub fn resolve_preset_file(
+    path: &Path,
+    folders: &[SlicerFolder],
+    dialect: Option<Dialect>,
+) -> Result<Option<ResolvedPreset>, String> {
+    let shown = path.display();
+    let own = read_preset_file(path).ok_or_else(|| format!("{shown} is no preset file"))?;
+    if text_of(&own, "inherits").is_none() {
+        return Ok(None);
+    }
+    if let Some(folder) = data_folder_of(path) {
+        return resolve_preset(&folder, path).map(Some);
+    }
+    let name = preset_name(&own, path);
+    let mine = folders.iter().filter(|f| Some(f.dialect) == dialect);
+    let others = folders.iter().filter(|f| Some(f.dialect) != dialect);
+    for slicer in mine.chain(others) {
+        let resolved = resolve_in(&slicer.folder, own.clone(), name.clone(), None, None, None)?;
+        if !resolved.chain.is_empty() {
+            return Ok(Some(resolved));
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -866,10 +1000,7 @@ mod tests {
 
     /// A fake home with the slicers' folders, in the test's own folder.
     fn scratch(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("mitcad-installed-{name}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+        crate::testing::unique_temp_dir(&format!("installed-{name}"))
     }
 
     fn write(path: &Path, value: &Value) {
@@ -1203,5 +1334,112 @@ mod tests {
         // With no printer enabled there is nothing to import: not offered.
         std::fs::write(folder.join("QIDIStudio.conf"), r#"{"models": []}"#).unwrap();
         assert!(slicer_folders(&linux).is_empty());
+    }
+
+    /// mitcad#1053: the chain a preset's values come from, several levels
+    /// up, a missing base, and a preset file outside any data folder
+    /// resolved through the installed slicers' system presets.
+    #[test]
+    fn the_chain_is_named_and_an_outside_preset_resolves_through_installed_slicers() {
+        let root = scratch("chain");
+        let folder = root.join("OrcaSlicer");
+        write(
+            &folder.join("system/Acme/filament/fdm_filament_common.json"),
+            &json!({"type": "filament", "name": "fdm_filament_common", "instantiation": "false",
+                    "filament_density": ["1.24"], "nozzle_temperature": ["200"]}),
+        );
+        write(
+            &folder.join("system/Acme/filament/Acme PLA @base.json"),
+            &json!({"type": "filament", "name": "Acme PLA @base", "instantiation": "false",
+                    "inherits": "fdm_filament_common", "filament_colour": ["#FF8000"]}),
+        );
+        write(
+            &folder.join("system/Acme/filament/Acme PLA.json"),
+            &json!({"type": "filament", "name": "Acme PLA", "inherits": "Acme PLA @base",
+                    "nozzle_temperature": ["220"]}),
+        );
+        let mine = folder.join("user/default/filament/My PLA.json");
+        write(
+            &mine,
+            &json!({"name": "My PLA", "inherits": "Acme PLA", "from": "User",
+                    "nozzle_temperature_initial_layer": ["215"]}),
+        );
+        let lost = folder.join("user/default/filament/Lost.json");
+        write(
+            &lost,
+            &json!({"name": "Lost", "inherits": "Gone PLA", "nozzle_temperature": ["230"]}),
+        );
+
+        let resolved = resolve_preset(&folder, &mine).unwrap();
+        assert_eq!(
+            resolved.chain,
+            vec!["Acme PLA", "Acme PLA @base", "fdm_filament_common"]
+        );
+        assert_eq!(resolved.missing, None);
+        assert_eq!(
+            resolved.chain_text(),
+            "Acme PLA > Acme PLA @base > fdm_filament_common"
+        );
+        assert_eq!(resolved.map["filament_colour"], json!(["#FF8000"]));
+        assert_eq!(resolved.map["nozzle_temperature"], json!(["220"]));
+        assert_eq!(resolved.map["filament_density"], json!(["1.24"]));
+        let gone = resolve_preset(&folder, &lost).unwrap();
+        assert!(gone.chain.is_empty());
+        assert_eq!(gone.missing.as_deref(), Some("Gone PLA"));
+        assert_eq!(gone.chain_text(), "Gone PLA (missing)");
+        assert_eq!(chain_text(&[], None), "nothing");
+
+        // In a data folder: found from the file's place.
+        assert_eq!(data_folder_of(&mine), Some(folder.clone()));
+        let found = resolve_preset_file(&mine, &[], None).unwrap().unwrap();
+        assert_eq!(found.chain.len(), 3);
+
+        // A copy elsewhere: through the folders given, the dialect's first,
+        // the first that has its base.
+        let outside = root.join("Downloads").join("My PLA.json");
+        write(
+            &outside,
+            &json!({"name": "My PLA", "inherits": "Acme PLA",
+                    "nozzle_temperature_initial_layer": ["215"]}),
+        );
+        assert_eq!(data_folder_of(&outside), None);
+        let empty = root.join("BambuStudio");
+        std::fs::create_dir_all(empty.join("system")).unwrap();
+        let folders = [
+            SlicerFolder {
+                dialect: Dialect::OrcaSlicer,
+                folder: folder.clone(),
+                flatpak: false,
+            },
+            SlicerFolder {
+                dialect: Dialect::BambuStudio,
+                folder: empty,
+                flatpak: false,
+            },
+        ];
+        let found = resolve_preset_file(&outside, &folders, Some(Dialect::BambuStudio))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            found.chain,
+            vec!["Acme PLA", "Acme PLA @base", "fdm_filament_common"]
+        );
+        assert_eq!(found.map["filament_colour"], json!(["#FF8000"]));
+        assert_eq!(
+            found.map["nozzle_temperature_initial_layer"],
+            json!(["215"])
+        );
+        assert!(!found.map.contains_key("inherits"));
+        // No folder has the base, or nothing to inherit: read as it is.
+        assert_eq!(
+            resolve_preset_file(&outside, &folders[1..], None).unwrap(),
+            None
+        );
+        let plain = root.join("Downloads").join("Plain.json");
+        write(
+            &plain,
+            &json!({"name": "Plain", "nozzle_temperature": ["200"]}),
+        );
+        assert_eq!(resolve_preset_file(&plain, &folders, None).unwrap(), None);
     }
 }

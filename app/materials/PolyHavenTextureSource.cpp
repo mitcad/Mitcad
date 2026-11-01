@@ -109,19 +109,19 @@ QByteArray readFile(const QString& path) {
 // Writes `data` to `path` whole or not at all; an error as a sentence.
 QString writeFile(const QString& path, const QByteArray& data) {
   if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
-    return PolyHavenTextureSource::tr("Cannot make the folder %1.")
+    return PolyHavenTextureSource::tr("Could not make the folder %1.")
         .arg(QDir::toNativeSeparators(QFileInfo(path).absolutePath()));
   }
   QSaveFile file(path);
   if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit()) {
-    return PolyHavenTextureSource::tr("Cannot write %1: %2").arg(QDir::toNativeSeparators(path), file.errorString());
+    return PolyHavenTextureSource::tr("Could not write %1: %2").arg(QDir::toNativeSeparators(path), file.errorString());
   }
   return QString();
 }
 
 QString mapShownName(const QString& map) {
   if (map == QLatin1String("base_color")) {
-    return PolyHavenTextureSource::tr("base colour");
+    return PolyHavenTextureSource::tr("base color");
   }
   return map;
 }
@@ -260,7 +260,7 @@ PolyHavenFiles parsePolyHavenFiles(const QByteArray& json) {
   std::sort(files.resolutions.begin(), files.resolutions.end(),
             [](const QString& a, const QString& b) { return resolutionPixels(a) < resolutionPixels(b); });
   if (files.resolutions.isEmpty()) {
-    files.error = unexpected(PolyHavenTextureSource::tr("no base colour images in the list of files"));
+    files.error = unexpected(PolyHavenTextureSource::tr("no base color images in the list of files"));
   }
   return files;
 }

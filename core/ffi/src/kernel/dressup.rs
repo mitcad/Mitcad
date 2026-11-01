@@ -86,7 +86,10 @@ pub mod ffi {
         ) -> Result<SharedPtr<Shape>>;
 
         /// What the operation that made a shape gave up (P9: a fillet or
-        /// chamfer built 0.1 % smaller), for the feature's warnings.
+        /// chamfer built as rings), for the feature's warnings.
         fn shape_notes(shape: &Shape) -> Vec<String>;
+        /// What is worth knowing of how it was made (mitcad#1106: a fillet
+        /// or chamfer built 0.1 % smaller), for the feature's information.
+        fn shape_infos(shape: &Shape) -> Vec<String>;
     }
 }

@@ -1462,7 +1462,7 @@ pub fn refused(code: u8) -> LiveError {
         ),
         5 => LiveError::new(
             LiveErrorClass::AuthFailed,
-            "the broker refused the connection: not authorised",
+            "the broker refused the connection: not authorized",
         ),
         3 => LiveError::new(
             LiveErrorClass::Network,

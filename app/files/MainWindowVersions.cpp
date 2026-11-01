@@ -244,7 +244,7 @@ std::optional<bool> MainWindow::askVersionConflict(const Project& project, const
   // A change in the folder that no version holds yet.
   const bool unrecorded = fileChanged && !file.isEmpty() && file != head;
   const QString name = QFileInfo(path).fileName();
-  qInfo().noquote() << QStringLiteral("Save conflict: %1 changed outside Mitcad (%2)")
+  qInfo().noquote() << QStringLiteral("Save conflict: %1 changed outside MitCad (%2)")
                            .arg(path, newer ? QStringLiteral("a newer version") : QStringLiteral("the file"));
   for (;;) {
     const std::optional<ExternalChange> choice = askExternalChange(this, name, newer, unrecorded);
@@ -262,7 +262,7 @@ std::optional<bool> MainWindow::askVersionConflict(const Project& project, const
         const VersionRecord recorded =
             recordVersion(project, path, {path}, tr("Save %1 as changed outside MitCad").arg(name), author);
         if (!recorded.preserved) {
-          failure = tr("Could not preserve the external changes of %1. Save cancelled. %2")
+          failure = tr("Could not preserve the external changes of %1. Save canceled. %2")
                         .arg(name, recorded.failure);
           return std::nullopt;
         }
@@ -608,7 +608,7 @@ void MainWindow::openVersion(const QString& file, const FileVersion& version) {
   if (!installDocument(name, QString(), read, error)) {
     if (error.isEmpty()) {
       qInfo().noquote() << QStringLiteral("Opening %1 cancelled").arg(name);
-      showHint(tr("Opening %1 cancelled.").arg(name));
+      showHint(tr("Opening %1 canceled.").arg(name));
     } else {
       const QString message =
           tr("Could not open %1 of %2:\n%3").arg(version.label(), QFileInfo(file).fileName(), error);
@@ -654,12 +654,12 @@ void MainWindow::restoreVersion(const QString& file, const FileVersion& version,
       if (!writeFile(file, QString(), &saved)) {
         if (saved.failure.isEmpty()) {
           qInfo().noquote() << QStringLiteral("Restore: cancelled while saving the changes");
-          showHint(tr("Restore cancelled."));
+          showHint(tr("Restore canceled."));
         } else if (!isModified()) {
-          showError(tr("Restore cancelled: your changes are saved in %1, but not as a version. %2")
+          showError(tr("Restore canceled: your changes are saved in %1, but not as a version. %2")
                         .arg(name, saved.failure));
         } else {
-          showError(tr("Restore cancelled: your changes could not be saved. %1").arg(saved.failure));
+          showError(tr("Restore canceled: your changes could not be saved. %1").arg(saved.failure));
         }
         return;
       }
@@ -677,7 +677,7 @@ void MainWindow::restoreVersion(const QString& file, const FileVersion& version,
   m_remote->waitForBranch();
   const std::optional<QString> author = versionAuthor(**project);
   if (!author) {
-    showHint(tr("Restore cancelled."));
+    showHint(tr("Restore canceled."));
     return;
   }
   try {
@@ -689,14 +689,14 @@ void MainWindow::restoreVersion(const QString& file, const FileVersion& version,
       const VersionRecord recorded =
           recordVersion(**project, file, {file}, tr("Save %1 as changed outside MitCad").arg(name), *author);
       if (!recorded.preserved) {
-        showError(tr("Could not preserve the external changes of %1. Restore cancelled. %2")
+        showError(tr("Could not preserve the external changes of %1. Restore canceled. %2")
                       .arg(name, recorded.failure));
         return;
       }
-      qInfo().noquote() << QStringLiteral("Restore: %1 changed outside Mitcad, recorded first").arg(name);
+      qInfo().noquote() << QStringLiteral("Restore: %1 changed outside MitCad, recorded first").arg(name);
     }
   } catch (const std::exception& e) {
-    showError(tr("Could not check %1 before restoring: %2. Restore cancelled.").arg(name, errorText(e)));
+    showError(tr("Could not check %1 before restoring: %2. Restore canceled.").arg(name, errorText(e)));
     return;
   }
   const QString message = tr("Restore %1 of %2 (%3)").arg(version.label(), name, version.shortId);
@@ -748,7 +748,7 @@ void MainWindow::restoreVersion(const QString& file, const FileVersion& version,
   if (loadDesign(file, error)) {
     saveVersionThumbnail(version.blob);
   } else if (error.isEmpty()) {
-    status += QLatin1Char(' ') + tr("Opening it was cancelled: open %1 to see it.").arg(name);
+    status += QLatin1Char(' ') + tr("Opening it was canceled: open %1 to see it.").arg(name);
     problem = true;
   } else {
     status += QLatin1Char(' ') + tr("It could not be opened: %1").arg(error);

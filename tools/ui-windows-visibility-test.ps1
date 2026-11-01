@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser app/framework app/MainWindow.cpp app/MainWindowVisibility.cpp tools/cli
+# check-all sources: app/browser app/framework app/MainWindow.cpp app/MainWindowVisibility.cpp tools/cli app/OcctViewer.cpp
 # Input-driven Windows UI test of the browser's light bulbs in every mode
 # (mitcad#295) and Create Sketch's origin planes (mitcad#844) in the build
 # VM (tools/ui-windows-lib.ps1 says how the input is posted); the Linux test
@@ -9,7 +9,10 @@
 #      beside them. Create Sketch shows the origin planes, no face of Body1
 #      can be picked; Body2 hidden by its light bulb while the plane is
 #      asked for, Body1's top face can be picked and the sketch starts on
-#      it.
+#      it. Transparent (mitcad#1093) on Body2 from its Browser row: the row
+#      shows the half-open eye, a click where Body1 lies inside Body2
+#      selects a face of Body1, the menu has Transparent checked; one undo
+#      step makes Body2 opaque, and the click takes Body2 again.
 #   2. Extrude of the square, Body1 hidden meanwhile: the preview drawn
 #      again without Body1, not computed again; Cancel keeps Body1 hidden
 #      (the change is the last undo step).
@@ -17,6 +20,11 @@
 #      extrusion back and leaves Body1 hidden; the next one shows it.
 #   4. Edit of Extrude2 (the timeline rolled back), Body1 hidden meanwhile,
 #      Cancel: Body1 stays hidden, the last undo step (no marker move left).
+#      Then the Origin folder's light bulb off: Offset Plane's plane input
+#      and Extrude's Start Object leave the origin hidden (mitcad#1030), and
+#      XY picked from the browser's Origin folder goes to the input; with
+#      the light bulb on, the origin stays shown during and after Offset
+#      Plane, and XY is picked in the view.
 #   5. The same design with a component (Part, its body across the origin)
 #      and the root active: Create Sketch shows the origin planes too, the
 #      Origin folder's light bulb off and unchanged, behind the bodies for
@@ -38,7 +46,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'construct.offset_plane' = 'F8' } -StepPause 0
 
 # The view's origin and the Origin folder's light bulb (mitcad#739).
 $originShown = "Design origin shown in the view; the Origin folder's light bulb off"
@@ -53,6 +61,16 @@ function Ui-ExpectNone([string]$Text, [string]$Description) {
     Ui-Fail "${Description}: '$Text' is in the log"
   }
   Write-Host "ok   $Description"
+}
+
+# Menu-Choose "entry": the entry of the context menu logged last ("Context
+# menu: A | B"), chosen with the keys as the menu opens with nothing active.
+function Menu-Choose([string]$Entry) {
+  $entries = @("$(Ui-LastMatch '^Context menu: (.*)$')" -split ' \| ')
+  $index = [array]::IndexOf($entries, $Entry)
+  if ($index -lt 0) { Ui-Fail "'$Entry' is not in the context menu: $($entries -join ' | ')" }
+  for ($i = 0; $i -le $index; $i++) { Ui-Key 'Down' }
+  Ui-Key 'Return'
 }
 
 # Last-Line "text": the last line logged that has the text.
@@ -188,6 +206,34 @@ Ui-Step 'show Body2'                     { Ui-ClickLogged 'Browser eye Root/Bodi
 Ui-ExpectNew 'Visibility Root/Bodies/Body2: shown' 'Body2 shown again'
 Ui-ExpectNone '(during' 'no command runs'
 
+Write-Host '--- Transparent (mitcad#1093): Body2 from its Browser row; a click goes through it to Body1'
+Ui-Mark
+Ui-Step 'right-click Body2''s row'       { Ui-ClickLogged 'Browser Root/Bodies/Body2' 3 }
+Ui-ExpectNew 'Context menu: ' 'the row''s menu'
+Ui-Step 'Transparent'                    { Menu-Choose 'Transparent' }
+Ui-ExpectNew 'Transparent: Body2' 'Body2 made transparent'
+Ui-ExpectNew 'Browser eye Root/Bodies/Body2: transparent' 'its row shows the half-open eye'
+Ui-ExpectNew 'View transparent: 1 body' 'the view draws Body2 see-through'
+Ui-Step 'Escape (clear the selection)'   { Ui-Key 'Escape' }
+Ui-Mark
+Ui-Step 'click where Body1 lies inside Body2' { Ui-ClickLogged 'Body F2.b0' }
+Ui-ExpectNew 'Selected: 1 face [face F2:' 'the click goes through Body2 to Body1 behind it'
+Ui-Step 'Escape (clear the selection)'   { Ui-Key 'Escape' }
+Ui-Mark
+Ui-Step 'right-click Body2''s row'       { Ui-ClickLogged 'Browser Root/Bodies/Body2' 3 }
+Ui-ExpectNew 'Context menu checked: Transparent' 'Transparent is checked on its row'
+Ui-Step 'Escape (close the menu)'        { Ui-Key 'Escape' }
+Ui-Step 'Escape (clear the selection)'   { Ui-Key 'Escape' }
+Ui-Mark
+Ui-Step 'undo (Ctrl+Z)'                  { Ui-Key 'ctrl+z' }
+Ui-ExpectNew 'Undo: Make Body2 Transparent' 'one undo step makes Body2 opaque again'
+Ui-ExpectNew 'Browser eye Root/Bodies/Body2: opaque' 'its eye is open again'
+Ui-ExpectNew 'View transparent: none' 'the view draws Body2 as before'
+Ui-Mark
+Ui-Step 'click there again'              { Ui-ClickLogged 'Body F2.b0' }
+Ui-ExpectNew 'Selected: 1 face [face F4:' 'opaque, Body2 takes the click'
+Ui-Step 'Escape (clear the selection)'   { Ui-Key 'Escape' }
+
 Write-Host '--- Extrude, Body1 hidden meanwhile, Cancel'
 Extrude-Square
 Hide-Body1 'Extrude'
@@ -233,6 +279,45 @@ Ui-Mark
 Ui-Step 'undo (Ctrl+Z)'                  { Ui-Key 'ctrl+z' }
 Ui-ExpectNew 'Undo: Hide Body1' 'the light bulb is the last undo step, no marker move left'
 Ui-ExpectNew 'Bodies shown: F2.b0, F4.b0' 'Body1 shown by the undo'
+
+Write-Host '--- Offset Plane and Extrude: a hidden origin stays hidden, picked from the browser (mitcad#1030)'
+Ui-Mark
+Ui-Step 'offset plane (F8)'              { Ui-Key 'F8' }
+Ui-ExpectNew 'Command Offset Plane started' 'Offset Plane started'
+Ui-ExpectNone $originShown 'the hidden origin stays hidden for the plane input'
+Ui-ExpectNone 'Datum xy at' 'no origin plane in the view'
+Ui-PickOriginRow 'XY'
+Ui-ExpectNew 'Offset Plane Plane: 1 plane [plane xy]' 'XY picked from the browser while the origin is hidden'
+Ui-ExpectNone $originShown 'the origin still hidden after the pick'
+Ui-Mark
+Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
+Ui-ExpectNew 'Command Offset Plane cancelled' 'Offset Plane cancelled'
+Extrude-Square
+Ui-Step 'Start: Offset (wheel)'          { Ui-WheelLogged 'Panel Extrude input start' -1 }
+Ui-Step 'Start: Object (wheel)'          { Ui-WheelLogged 'Panel Extrude input start' -1 }
+Ui-ExpectNew 'Extrude: Start = Object' 'the start is an object' 30
+Ui-ExpectNone $originShown 'the hidden origin stays hidden for Start Object'
+Ui-ExpectNone 'Datum xy at' 'no origin plane in the view'
+Ui-PickOriginRow 'XY'
+Ui-ExpectNew 'Extrude Start Object: 1 plane [plane xy]' 'XY picked from the browser as the start'
+Ui-ExpectNone $originShown 'the origin still hidden after the pick'
+Ui-Mark
+Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
+Ui-ExpectNew 'Command Extrude cancelled' 'Extrude cancelled'
+
+Write-Host '--- Offset Plane: a shown origin stays shown, picked in the view (mitcad#1030)'
+Ui-Mark
+Ui-Step 'show the origin'                { Click-Row 'Browser eye Root/Origin' }
+Ui-ExpectNew 'Visibility Root/Origin: shown' 'the Origin folder''s light bulb on'
+Ui-ExpectNew $originOn 'the origin shown'
+Ui-Mark
+Ui-Step 'offset plane (F8)'              { Ui-Key 'F8' }
+Ui-ExpectNew 'Command Offset Plane started' 'Offset Plane started'
+Ui-Step 'pick XY in the view'            { Ui-ClickLogged 'Datum xy' }
+Ui-ExpectNew 'Offset Plane Plane: 1 plane [plane xy]' 'XY picked in the view'
+Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
+Ui-ExpectNew 'Command Offset Plane cancelled' 'Offset Plane cancelled'
+Ui-ExpectNone 'Design origin hidden in the view' 'the shown origin stayed shown during and after the command'
 if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
 Ui-StopApp
 

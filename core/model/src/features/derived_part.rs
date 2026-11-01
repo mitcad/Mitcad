@@ -180,7 +180,7 @@ pub struct PartCut<P = ParamId> {
 
 impl<P> DerivedPartDef<P> {
     pub const TYPE: &'static str = "derived_part";
-    pub const BASE_NAME: &'static str = "Part";
+    pub const BASE_NAME: &'static str = "DerivedComponent";
 
     // Written by hand: parameters, ends and cuts map under computed slots.
     pub fn map_params<Q, E>(
@@ -257,7 +257,7 @@ impl FeatureInfo for DerivedPartDef {
             .keys()
             .find(|n| !crate::expr::is_valid_name(n))
         {
-            return Err(format!("'{name}' is no parameter name"));
+            return Err(format!("{name} is no parameter name"));
         }
         Ok(())
     }
@@ -663,7 +663,7 @@ fn cut_end<K: Kernel>(
         .boolean(BooleanOp::Cut, &[body], &tool)
         .map_err(failed)?;
     if !output.touched.first().copied().unwrap_or(false) {
-        ctx.warn(format!("end {key}: the cut does not meet the part"));
+        ctx.warn(format!("end {key}: the cut does not meet the component"));
         return Ok(body.clone());
     }
     let mut pieces = output
@@ -673,7 +673,7 @@ fn cut_end<K: Kernel>(
         .map(|p| p.shape);
     let first = pieces
         .next()
-        .ok_or_else(|| format!("end {key}: the cut leaves nothing of the part"))?;
+        .ok_or_else(|| format!("end {key}: the cut leaves nothing of the component"))?;
     if pieces.next().is_some() {
         ctx.warn(format!(
             "end {key}: the cut parts the body; its first piece is kept"
@@ -719,7 +719,7 @@ fn cut_box<K: Kernel>(
         .boolean(BooleanOp::Cut, &[body], &tool)
         .map_err(failed)?;
     if !output.touched.first().copied().unwrap_or(false) {
-        ctx.warn(format!("the {kind} cut does not meet the part"));
+        ctx.warn(format!("the {kind} cut does not meet the component"));
         return Ok(body.clone());
     }
     output
@@ -727,7 +727,7 @@ fn cut_box<K: Kernel>(
         .into_iter()
         .find(|p| p.sources.contains(&0))
         .map(|p| p.shape)
-        .ok_or_else(|| format!("the {kind} cut leaves nothing of the part"))
+        .ok_or_else(|| format!("the {kind} cut leaves nothing of the component"))
 }
 
 /// The tool an end's cut takes away: a box beyond the plane `(point,

@@ -816,7 +816,7 @@ fn a_bearing_on_a_shaft_takes_the_size_whose_bore_fits() {
                "operation": "new_body"}),
     );
     assert!(
-        message.contains("takes its plane and centre from it"),
+        message.contains("takes its plane and center from it"),
         "{message}"
     );
     let message = rejected(&mut doc, bearing(json!({"fit_clearance": 1})));

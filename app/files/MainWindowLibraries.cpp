@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Component libraries in the main window (mitcad#64, mitcad#63): Insert
 // from Library (the INSERT group, the File menu), and in Tools > Libraries:
-// Libraries..., Library Parts... (versions, sizes, updates, the parts
+// Libraries..., Library Components... (versions, sizes, updates, the parts
 // list), Community Library... and Publish to Library....
 #include "../MainWindow.hpp"
 
@@ -49,11 +49,12 @@ void MainWindow::registerLibraryCommands() {
                      QStringLiteral("bolt"), QStringLiteral("nut"), QStringLiteral("washer"),
                      QStringLiteral("standard part"), QStringLiteral("iso")};
   m_registry->add(insert);
-  CommandDef parts = def("tools.library_parts", tr("Library Parts…"), "parts-list",
-                         tr("The design's library parts: versions, sizes, updates and the parts list"),
+  CommandDef parts = def("tools.library_parts", tr("Library Components…"), "parts-list",
+                         tr("The design's library components: versions, sizes, updates, bill of materials"),
                          [this] { showLibraryParts(); });
   parts.keywords = {QStringLiteral("update library"), QStringLiteral("bill of materials"), QStringLiteral("bom"),
-                    QStringLiteral("parts list"), QStringLiteral("licence"), QStringLiteral("attribution")};
+                    QStringLiteral("parts"), QStringLiteral("license"), QStringLiteral("licence"),
+                    QStringLiteral("attribution")};
   m_registry->add(parts);
   CommandDef libraries = def("tools.libraries", tr("Libraries…"), "library",
                              tr("The component libraries and community indexes to use; fetch them"),
@@ -93,7 +94,7 @@ void MainWindow::createLibraryMenu(QMenu* tools) {
   menu->setObjectName(QStringLiteral("librariesMenu"));
   const std::pair<const char*, QString> entries[] = {
       {"insert.library_component", tr("&Insert from Library…")},
-      {"tools.library_parts", tr("Library &Parts…")},
+      {"tools.library_parts", tr("Library Com&ponents…")},
       {"tools.community_library", tr("&Community Library…")},
       {"tools.publish_library", tr("P&ublish to Library…")},
       {"tools.libraries", tr("&Libraries…")}};
@@ -206,7 +207,7 @@ void MainWindow::showLibraryParts() {
       described << line.toString();
     }
     qInfo().noquote() << QStringLiteral("Updated library parts: %1").arg(described.join(QStringLiteral("; ")));
-    showHint(tr("Updated %n library part(s).", nullptr, int(changes.size())));
+    showHint(tr("Updated %n library component(s).", nullptr, int(changes.size())));
   }
 }
 

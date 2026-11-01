@@ -12,7 +12,8 @@ struct TimelineSearchItem {
   QString type;      // sketch, fillet, construction_plane, ...
   QString component; // the component's name
   bool failed = false;
-  bool warned = false; // built with warnings, or an import note (mitcad#170)
+  bool warned = false; // built with warnings
+  bool noted = false;  // an import note (mitcad#170): information (mitcad#1040)
   bool suppressed = false;
   bool rolledBack = false; // after the history marker
 };
@@ -22,13 +23,13 @@ struct TimelineSearchItem {
 // "quoted phrase" is one word), and filters. `in:<component>` (or
 // `component:`) keeps the features of the components whose names contain
 // it, `in:"Two words"` with quotes; `is:<status>` (or `status:`) those of a
-// status: failed (error), warning (note: the import's notes too),
-// suppressed, rolled-back (rolledback). A status may be abbreviated (is:f,
-// is:sup). Filters of one kind are alternatives, of different kinds all
-// apply. A filter without a value is ignored while it is typed; a status
-// it does not know matches nothing.
+// status: failed (error), warning, info (note: the import's notes,
+// information since mitcad#1040), suppressed, rolled-back (rolledback). A
+// status may be abbreviated (is:f, is:sup). Filters of one kind are
+// alternatives, of different kinds all apply. A filter without a value is
+// ignored while it is typed; a status it does not know matches nothing.
 struct TimelineQuery {
-  enum Status { Failed = 1, Warning = 2, Suppressed = 4, RolledBack = 8 };
+  enum Status { Failed = 1, Warning = 2, Suppressed = 4, RolledBack = 8, Info = 16 };
 
   QStringList words;      // lower case
   QStringList components; // lower case

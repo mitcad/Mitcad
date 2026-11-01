@@ -147,7 +147,7 @@ fn block() -> Block {
             let corner = [s, e]
                 .into_iter()
                 .find(|p| *p == s2 || *p == e2)
-                .expect("neighbouring sides share a corner");
+                .expect("neighboring sides share a corner");
             for (z, cap) in [(20.0, &top), (0.0, &bottom)] {
                 vertices.push((vertex(&[cap, side, other]), at(corner, z)));
             }

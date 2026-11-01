@@ -134,9 +134,7 @@ impl<P> PointPatternDef<P> {
                         .take_while(|f| f.uid != entry.uid)
                         .any(|f| f.uid == instance.feature);
                     if instance.feature == entry.uid || !before {
-                        return Err(
-                            "a pattern cannot depend on its own or a later instance".to_owned()
-                        );
+                        return Err("a pattern cannot depend on its own or a later copy".to_owned());
                     }
                 }
             }

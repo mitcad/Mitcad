@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Native Projects keys, row editor and drags (mitcad#816): the shared panel's
 # actions through the focused AppKit outline, light and then dark appearance.
-expect-ever 'Projects panel at the start: shown \(no choice yet, projects configured\)'
+# Hidden at the start until the user shows it (mitcad#1020).
+expect-ever 'Projects panel at the start: hidden \(no choice yet, projects configured\)'
+menu 'View/Projects'
+expect-log 'Projects panel: shown at the next start' 10
 wait-log 'Projects panel: 2 projects' 30
 native-resize 1280 820
 native-appearance light
@@ -93,7 +96,7 @@ expect-native-focus 'projects.row.Nested (new)' '^Folder1$'
 type 'bad/name'
 key Return
 expect-log 'Projects panel: new folder refused: the name "bad/name"' 10
-expect-log '"bad/name" cannot be a name' 10
+expect-log '“bad/name” cannot be a name' 10
 expect-native-text native.status 'cannot be a name'
 expect-native-focus projectsTree
 

@@ -67,7 +67,7 @@ ui_start_app --no-native-dialogs
 
 echo "--- 1. Wall: a wall from the origin"
 start_wall
-expect_inspect Wall "frame wall Wall 1, wall 3600 x 2400 mm, 9 member(s)" "1 bottom plate, 7 stud, 1 top plate" \
+expect_inspect Wall "frame wall Wall 1, wall 3600 × 2400 mm, 9 member(s)" "1 bottom plate, 7 stud, 1 top plate" \
   "fasteners yes" "the wall from the origin along +X: plates and seven studs at 600, screws at the junctions"
 
 echo "--- 2. The Openings window (mitcad#519): a window and a door"
@@ -81,7 +81,7 @@ ui_mark
 ui_step "Add window"                       ui_click_logged "Openings place add_window"
 ui_expect_new "Openings added a window as row 1" "a window's row"
 ui_expect_new "Openings rows: 600 900x1200 900" "the row written into Wall's openings"
-expect_inspect Wall "frame wall Wall 1, wall 3600 x 2400 mm, 13 member(s)" \
+expect_inspect Wall "frame wall Wall 1, wall 3600 × 2400 mm, 13 member(s)" \
   "1 bottom plate, 2 cripple stud, 1 flat header, 2 king stud, 1 sill, 5 stud, 1 top plate" \
   "; openings 1, non-load-bearing, opening 1 marked" \
   "a partition's window: king studs, one flat header, a sill and cripple studs, no trimmers; marked in the view"
@@ -96,7 +96,7 @@ ui_mark
 ui_step "Add door"                         ui_click_logged "Openings place add_door"
 ui_expect_new "Openings added a door as row 2" "a door's row"
 ui_expect_new "Openings rows: 600 900x1200 900; 2100 900x2100" "the door after the window, no sill"
-expect_inspect Wall "frame wall Wall 1, wall 3600 x 2400 mm, 16 member(s)" "2 flat header" "4 king stud" \
+expect_inspect Wall "frame wall Wall 1, wall 3600 × 2400 mm, 16 member(s)" "2 flat header" "4 king stud" \
   "; openings 2, non-load-bearing, opening 2 marked" "the door framed too: its own king studs and flat header"
 # A row outside the wall is flagged on the row as it is typed.
 ui_mark
@@ -111,7 +111,7 @@ ui_expect_new "Openings rows ok" "the row fits again"
 ui_mark
 ui_step "Load-bearing"                     ui_choose "Openings place bearing" 1
 ui_expect_new "Openings bearing: load-bearing" "the wall made load-bearing"
-expect_inspect Wall "frame wall Wall 1, wall 3600 x 2400 mm, 22 member(s)" "4 header" "4 trimmer stud" \
+expect_inspect Wall "frame wall Wall 1, wall 3600 × 2400 mm, 22 member(s)" "4 header" "4 trimmer stud" \
   "; openings 2, load-bearing" "load-bearing: trimmer studs and headers of two plies on edge"
 
 echo "--- 3. Place"
@@ -169,7 +169,7 @@ ui_stop_app
 export MITCAD_LOG_ORIENTATION_CUBE=1
 ui_start_app --no-native-dialogs
 start_wall
-expect_inspect Wall "frame wall Wall 1, wall 3600 x 2400 mm" "; corner butt" "a wall, Corner Butt by default"
+expect_inspect Wall "frame wall Wall 1, wall 3600 × 2400 mm" "; corner butt" "a wall, Corner Butt by default"
 ui_mark
 ui_step "Place (Enter)"                    ui_key Return
 ui_expect_new "Placed frame Wall 1 (wall, lead C" "the wall frame placed" 60
@@ -197,7 +197,7 @@ ui_expect_new "View hint Wall: Click where the wall ends, or press Enter: Length
   "the end next, else Length square to the wall"
 ui_mark
 ui_step "3000 mm long"                     ui_type_in "Panel Wall input frame_length" 3000
-expect_inspect Wall "frame wall Wall 2, wall 3000 x 2400 mm" "; Wall 2: from Wall 1's side, flush with end A (butt)" \
+expect_inspect Wall "frame wall Wall 2, wall 3000 × 2400 mm" "; Wall 2: from Wall 1's side, flush with end A (butt)" \
   "; corner butt" "; length typed" "Wall 2 previewed flush with end A, the length typed"
 # An Offset typed moves the preview, once: nothing follows the mouse.
 ui_mark
@@ -230,7 +230,7 @@ echo "--- 6. A wall whose run meets the wall opposite ends there (mitcad#515)"
 ui_stop_app
 ui_start_app --no-native-dialogs
 start_wall
-expect_inspect Wall "frame wall Wall 1, wall 3600 x 2400 mm" "; corner butt" "a wall, Corner Butt"
+expect_inspect Wall "frame wall Wall 1, wall 3600 × 2400 mm" "; corner butt" "a wall, Corner Butt"
 ui_mark
 ui_step "Place (Enter)"                    ui_key Return
 ui_expect_new "Placed frame Wall 1 (wall, lead C" "the wall frame placed" 60
@@ -252,7 +252,7 @@ ui_step "the start on Wall 2's side"       click_place "$side"
 ui_expect_new "BUILD frame start click: From " "the click fills From and Offset"
 ui_expect_new "View hint Wall: Click where the wall ends, or press Enter: to Wall 3's side" \
   "the end next, else to the wall the run meets"
-expect_inspect Wall "frame wall Wall 4, wall 3453 x 2400 mm" "; Wall 4: from Wall 2's side, " \
+expect_inspect Wall "frame wall Wall 4, wall 3453 × 2400 mm" "; Wall 4: from Wall 2's side, " \
   ", to Wall 3's side (butt), 3404 mm" "; length auto" "Wall 4 previewed between Wall 2 and Wall 3, no End clicked"
 ui_mark
 ui_step "Place (Enter)"                    ui_key Return
@@ -268,10 +268,10 @@ ui_stop_app
 unset MITCAD_LOG_ORIENTATION_CUBE
 ui_start_app --no-native-dialogs
 start_wall
-expect_inspect Wall "frame wall Wall 1, wall 3600 x 2400 mm" "; corner butt" "a wall, Corner Butt the first time"
+expect_inspect Wall "frame wall Wall 1, wall 3600 × 2400 mm" "; corner butt" "a wall, Corner Butt the first time"
 ui_mark
 ui_step "Corner: Lapped plates"            ui_click_logged "Panel Wall input frame_corner=lapped"
-expect_inspect Wall "frame wall Wall 1, wall 3600 x 2400 mm" "; corner lapped" "Corner Lapped plates"
+expect_inspect Wall "frame wall Wall 1, wall 3600 × 2400 mm" "; corner lapped" "Corner Lapped plates"
 ui_mark
 ui_step "Place (Enter)"                    ui_key Return
 ui_expect_new "Placed frame Wall 1 (wall, lead C" "the wall frame placed" 60
@@ -379,8 +379,8 @@ ui_start_app --open "$FILE" --no-native-dialogs
 start_wall
 # The faces of the room's body clicked in turn until one runs across the
 # room (a long wall's inner face; the others run 10000 mm or meet nothing).
-solid_face "frame wall Wall 1, wall 7819 x 2400 mm" "a wall from a long wall's inner face, across the room"
-expect_inspect Wall "frame wall Wall 1, wall 7819 x 2400 mm" "2 bottom plate" "2 top plate" \
+solid_face "frame wall Wall 1, wall 7819 × 2400 mm" "a wall from a long wall's inner face, across the room"
+expect_inspect Wall "frame wall Wall 1, wall 7819 × 2400 mm" "2 bottom plate" "2 top plate" \
   "; length auto" "; Length Auto: the run met a face of " ", the wall 7819 mm" \
   "; spliced top plate 4200, bottom plate 4200" \
   "previewed across the room, the run's end named, each plate two pieces over the stud at 4200"
@@ -389,7 +389,7 @@ expect_inspect Wall ", to a face of " ", 7819 mm" ", base on " "the junction: to
 # still names the wall, its length and what the run met.
 ui_mark
 ui_step "7000 mm high"                     ui_type_in "Panel Wall input frame_height" 7000
-ui_expect_new "Frame preview refused: frame wall Wall 1, wall 7819 x 7000 mm, 0 member(s)" \
+ui_expect_new "Frame preview refused: frame wall Wall 1, wall 7819 × 7000 mm, 0 member(s)" \
   "the refused preview names the wall and the length worked out"
 line=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Frame preview refused: " | tail -1)
 [[ $line == *"; Length Auto: the run met a face of "* ]] || ui_fail "the refused preview without the run's end: $line"
@@ -397,7 +397,7 @@ line=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Frame preview refused: " |
 echo "ok   refused, with what the run met and why"
 ui_mark
 ui_step "2400 mm high again"               ui_type_in "Panel Wall input frame_height" 2400
-expect_inspect Wall "frame wall Wall 1, wall 7819 x 2400 mm" "; spliced top plate 4200, bottom plate 4200" \
+expect_inspect Wall "frame wall Wall 1, wall 7819 × 2400 mm" "; spliced top plate 4200, bottom plate 4200" \
   "2400 mm high again: previewed"
 ui_mark
 ui_step "Place (Enter)"                    ui_key Return

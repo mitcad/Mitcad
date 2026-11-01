@@ -503,7 +503,7 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
       const double pitch = values.value(QStringLiteral("pitch_angle")).toDouble() * 180.0 / 3.14159265358979323846;
       parts << QObject::tr("pitch angle %1").arg(number(std::round(pitch * 100.0) / 100.0) + QChar(0x00B0));
     }
-    add("centre_distance", QObject::tr("centre distance %1"));
+    add("centre_distance", QObject::tr("center distance %1"));
     // The bore a shaft gives (mitcad#578).
     const QString shaft = shaftNote(values, model);
     if (!shaft.isEmpty()) {

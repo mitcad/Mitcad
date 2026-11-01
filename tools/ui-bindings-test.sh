@@ -1,30 +1,28 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser app/print app/MainWindowContextMenu.cpp core/model/src/document/bindings.rs tools/cli
-# Bindings (mitcad#809, mitcad#861; the model's mitcad#800) through the real
-# UI:
+# check-all sources: app/browser app/print app/MainWindowContextMenu.cpp app/commands/MaterialCommands.cpp app/commands/MaterialBinding.cpp core/model/src/document/bindings.rs tools/cli
+# Bindings (mitcad#809, mitcad#861; the model's mitcad#800; the tools' fx
+# since mitcad#1059) through the real UI:
 #   - A design (mitcad-cli): Box1, Box2 and Box3 (Body1, Body2, Body3); the
 #     text parameters Color ('Black', allowed values 'Black' and 'Red') and
 #     Holes ('No'). No menu has Follow Option any more.
-#   - Body1's Appearance...: the window's assignment panel shows None and
-#     what Body1 has; Varies with lists Color (allowed values) and not Holes.
-#     Color chosen: a row per value, prefilled, nothing written; the row
-#     Black filled by a double-click on Paint - Black writes switch(Color;
-#     ...) at once and makes Red the active row ("Assign to row Red"),
-#     which the next double-click (Paint - Red) fills; after the last row no
-#     row is active and Assign waits for a click.
-#   - Change Parameters: Color = 'Red' turns Body1 red (the saved design);
-#     Body1's menu marks Appearance... with fx.
-#   - Body2's Material...: the material varies with Color the same way in
-#     the Materials window (ABS Plastic, PLA Plastic).
-#   - Body1's Appearance... again: the binding is shown (Red marked as the
-#     value now); None keeps Paint - Red as the appearance set by hand, in
-#     one undo step; undo brings the binding back.
-#   - Body1, Body2 and Body3 selected (bound, an appearance from Body2's
-#     material, none of its own): the Mixed notice; the first fill writes
-#     the shown table to all three in one undo step, and undo restores each.
+#   - Body1's Appearance… starts the Appearance tool; its fx on, Varies With
+#     lists Color (allowed values) and not Holes; Color chosen: a row per
+#     value, Black the value now; Paint - Black for Black and Paint - Red
+#     for Red; OK writes switch(Color; ...).
+#   - Edit Parameters: Color = 'Red' turns Body1 red (the saved design);
+#     Body1's menu marks Appearance… with fx.
+#   - Body2's Material ▸ More…: the Material tool binds the material to
+#     Color the same way (ABS Plastic, PLA Plastic, Steel for any other
+#     value).
+#   - Body1's Appearance… again: the binding is shown (Red marked as the
+#     value now); the fx off and OK keep Paint - Red as the appearance set
+#     by hand, in one undo step; undo brings the binding back.
+#   - Body1, Body2 and Body3 selected: the tool shows Body1's table; a row
+#     changed and OK write the table to all three in one undo step, and
+#     undo restores each.
 #   - Box2 in the timeline: Suppress When... Holes == 'No' suppresses it;
-#     Holes == 'Yes' in Change Parameters brings it back.
+#     Holes == 'Yes' in Edit Parameters brings it back.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-bindings-test.sh
@@ -66,11 +64,11 @@ expect_exact_since() {
   echo "ok   $2"
 }
 
-# set_text name text: the parameter's expression in Change Parameters,
+# set_text name text: the parameter's expression in Edit Parameters,
 # the table closed again.
 set_text() {
   ui_mark
-  ui_step "Change Parameters (search)"     ui_command "Change Parameters"
+  ui_step "Edit Parameters (search)"     ui_command "Edit Parameters"
   ui_expect_new "Parameters dialog opened" "the table opened"
   ui_expect_log "Parameters $1 expression at" "$1's cells are logged"
   ui_focus_dialog '^Parameters$'
@@ -114,7 +112,7 @@ no_follow_option "the view's menu"
 ui_key Escape
 ui_focus_main
 
-echo "--- Body1's appearance varies with Color (the Appearances window)"
+echo "--- Body1's appearance varies with Color (the Appearance tool)"
 ui_mark
 ui_step "right-click Body1"                ui_click_logged "Browser Root/Bodies/Body1" 3
 ui_expect_new "Context menu: " "the row's menu"
@@ -122,50 +120,41 @@ last_menu | grep -qF "Show When" || ui_fail "Show When... is not in the body's m
 echo "ok   the body's menu has Show When..."
 no_follow_option "the body's menu"
 ui_step "choose Appearance..."             ui_menu_choose "Appearance..."
-ui_focus_dialog '^Appearances$'
-ui_expect_new "Appearances panel: Assign to Body1; varies with None (Steel - Satin)" \
-  "the panel shows None and what Body1 has"
-ui_expect_new "Appearances varies with: None | Color" "Varies with lists Color (allowed values), not Holes"
-ui_expect_new "Appearances varies at" "Varies with is logged"
+ui_expect_new "Appearance tool for F1.b0" "the Appearance tool for Body1"
+ui_expect_new "Panel Appearance input value_fx at" "the fx button is logged"
+ui_step "fx"                               ui_click_logged "Panel Appearance input value_fx"
+ui_expect_new "Appearance: Varies with an option = on" "the fx is on"
+ui_expect_new "Panel Appearance options varies: None | Color" "Varies With lists Color (allowed values), not Holes"
+ui_expect_new "Panel Appearance input varies at" "Varies With is logged"
 ui_mark
-ui_step "Varies with: Color"               ui_choose "Appearances varies" 1
-ui_expect_new "Appearances varies with Color: 2 rows, not written yet" "Color chosen, nothing written"
-ui_expect_new "Appearances value Black: Steel - Satin (now) (active)" "Black prefilled, the value now, active"
-ui_expect_new "Appearances value Red: Steel - Satin" "Red prefilled"
-ui_expect_new "Appearances assign label: Assign to row Black" "Assign names the active row"
-ui_expect_new "Appearances value Red at" "the rows' places are logged"
-if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Appearances binding of"; then
+ui_step "Varies With: Color"               ui_choose "Panel Appearance input varies" 1
+ui_expect_new "Appearance tool varies with Color: 2 rows" "a row per value"
+ui_expect_new "Panel Appearance label row0: Black (now)" "Black, the value now"
+ui_expect_new "Panel Appearance label row1: Red" "Red"
+ui_expect_new "Panel Appearance input row1 at" "the rows' places are logged"
+if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Appearance switch("; then
   ui_fail "choosing Color wrote a binding"
 fi
 echo "ok   nothing written yet"
-ui_step "click the search field"           ui_click_logged "Appearances search"
-ui_step "type paint"                       xdotool type --delay 60 "paint"
-ui_expect_new 'Appearances filtered "paint"' "the paints in sight"
-ui_expect_new "Appearances item paint_black at" "Paint - Black is listed"
-ui_double_click_expect "Appearances item paint_black" "Appearances filled Black with 'paint_black'" \
-  "a double-click fills the row Black"
-ui_expect_new "Appearances binding of Body1: switch(Color; 'Black'; 'paint_black'; 'Red'; 'steel_satin')" \
-  "written at once"
-ui_expect_new "Appearances assign label: Assign to row Red" "Red is the active row now"
-ui_expect_new "Appearances value Red: Steel - Satin (active)" "Red marked active"
-ui_double_click_expect "Appearances item paint_red" "Appearances filled Red with 'paint_red'" \
-  "the next double-click fills the row Red"
-ui_expect_new "Appearances binding of Body1: $SWITCH_1" "the whole switch() written again"
-ui_expect_new "Appearances active row: none" "after the last row no row is active"
-expect_exact_since "Appearances assign label: Assign" "Assign waits for a row to be clicked"
-ui_expect_new "Appearances panel: Assign to Body1; varies with Color (bound)" "the panel shows the binding"
-ui_step "Close"                            ui_click_logged "Appearances close"
-ui_focus_main
+ui_mark
+ui_step "Black: Paint - Black"             ui_choose_text "Panel Appearance input row0" "Paint - Bla"
+ui_expect_new " = Paint - Black" "Paint - Black for Black"
+ui_mark
+ui_step "Red: Paint - Red"                 ui_choose_text "Panel Appearance input row1" "Paint - R"
+ui_expect_new " = Paint - Red" "Paint - Red for Red"
+ui_mark
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Appearance $SWITCH_1 for 1 body(ies)" "the binding written"
 save
 expect_file '.bodies[0] | [.appearance, .appearance_expr]' "[\"paint_black\",\"$SWITCH_1\"]" \
   "Body1 is black and follows Color"
 
-echo "--- Change Parameters: Color = 'Red'"
+echo "--- Edit Parameters: Color = 'Red'"
 set_text Color Red
 save
 expect_file '.bodies[0].appearance' '"paint_red"' "Body1 turned red"
 
-echo "--- Body2's material varies with Color (the Materials window)"
+echo "--- Body2's material varies with Color (the Material tool)"
 ui_mark
 ui_step "right-click Body2"                ui_click_logged "Browser Root/Bodies/Body2" 3
 ui_expect_new "Context menu: " "the row's menu"
@@ -173,44 +162,44 @@ if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Context menu fx"; then
   ui_fail "Body2's menu marks a binding it does not have"
 fi
 echo "ok   no fx mark without a binding"
-ui_step "choose Material..."               ui_menu_choose "Material..."
-ui_focus_dialog '^Materials$'
-ui_expect_new "Materials panel: Assign to Body2; varies with None (Steel)" "the panel shows what Body2 is made of"
-ui_expect_new "Materials varies at" "Varies with is logged"
+ui_step "choose Material > More..."        ui_menu_choose "Material" "More..."
+ui_expect_new "Material tool for bodies F2.b0" "the Material tool for Body2"
+ui_expect_new "Panel Material bodies note: 1 body: Steel" "the panel notes what Body2 is made of"
+ui_step "fx"                               ui_click_logged "Panel Material input material_fx"
+ui_expect_new "Panel Material input varies at" "Varies With is logged"
 ui_mark
-ui_step "Varies with: Color"               ui_choose "Materials varies" 1
-ui_expect_new "Materials varies with Color: 2 rows, not written yet" "Color chosen, nothing written"
-ui_expect_new "Materials value Red: Steel (now)" "Red is the value now"
-ui_expect_new "Materials value Black at" "the rows' places are logged"
-ui_expect_new "Materials item ABS Plastic at" "ABS is listed"
-ui_double_click_expect "Materials item ABS Plastic" "Materials filled Black with 'abs'" \
-  "a double-click fills the row Black"
-ui_expect_new "Materials binding of Body2: switch(Color; 'Black'; 'abs'; 'Red'; 'steel')" "written at once"
-ui_expect_new "Materials assign label: Assign to row Red" "Red is the active row now"
-ui_double_click_expect "Materials item PLA Plastic" "Materials filled Red with 'pla'" \
-  "the next double-click fills the row Red"
-ui_expect_new "Materials binding of Body2: switch(Color; 'Black'; 'abs'; 'Red'; 'pla')" "written again"
-ui_step "Close"                            ui_click_logged "Materials close"
-ui_focus_main
+ui_step "Varies With: Color"               ui_choose "Panel Material input varies" 1
+ui_expect_new "Material tool varies with Color: 2 rows" "a row per value"
+ui_expect_new "Panel Material label row1: Red (now)" "Red is the value now"
+ui_expect_new "Panel Material input row1 at" "the rows' places are logged"
+ui_mark
+ui_step "Black: ABS Plastic"               ui_choose_text "Panel Material input row0" "ABS"
+ui_expect_new " = ABS Plastic" "ABS Plastic for Black"
+ui_mark
+ui_step "Red: PLA Plastic"                 ui_choose_text "Panel Material input row1" "PLA P"
+ui_expect_new " = PLA Plastic" "PLA Plastic for Red"
+ui_mark
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Material tool: varies with Color to 1 bodies: switch(Color; 'Black'; 'abs'; 'Red'; 'pla'; 'steel')" \
+  "the binding written"
 save
 expect_file '.bodies[1] | [.material, .material_expr]' \
-  "[\"pla\",\"switch(Color; 'Black'; 'abs'; 'Red'; 'pla')\"]" "Body2 is PLA and follows Color"
+  "[\"pla\",\"switch(Color; 'Black'; 'abs'; 'Red'; 'pla'; 'steel')\"]" "Body2 is PLA and follows Color"
 
-echo "--- Body1: back to None keeps the appearance shown; undo brings the binding back"
+echo "--- Body1: the fx off keeps the appearance shown; undo brings the binding back"
 ui_mark
 ui_step "right-click Body1"                ui_click_logged "Browser Root/Bodies/Body1" 3
 ui_expect_new "Context menu fx: Appearance..." "the menu marks Appearance... (fx)"
 ui_step "choose Appearance..."             ui_menu_choose "Appearance..."
-ui_focus_dialog '^Appearances$'
-ui_expect_new "Appearances panel: Assign to Body1; varies with Color (bound)" "the window shows Body1's binding"
-ui_expect_new "Appearances value Red: Paint - Red (now)" "Red is marked as the value now"
-ui_expect_new "Appearances varies at" "Varies with is logged"
+ui_expect_new "Appearance tool: the targets follow $SWITCH_1" "the tool shows Body1's binding"
+ui_expect_new "Panel Appearance label row1: Red (now)" "Red is marked as the value now"
+ui_expect_new "Panel Appearance tile value: Paint - Red (" "the picker shows what Body1 has now"
 ui_mark
-ui_step "Varies with: None"                ui_choose "Appearances varies" -1
-ui_expect_new "Appearances back to None: paint_red for Body1" "None sets the shown appearance by hand"
-ui_expect_new "Appearances panel: Assign to Body1; varies with None (Paint - Red)" "the panel shows None"
-ui_step "Close"                            ui_click_logged "Appearances close"
-ui_focus_main
+ui_step "fx off"                           ui_click_logged "Panel Appearance input value_fx"
+ui_expect_new "Appearance: Varies with an option = off" "the fx is off"
+ui_mark
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Appearance paint_red for 1 body(ies)" "the shown appearance set by hand"
 save
 expect_file '.bodies[0] | [.appearance, .appearance_expr]' '["paint_red",null]' \
   "Body1 keeps red, the binding gone"
@@ -221,12 +210,7 @@ save
 expect_file '.bodies[0] | [.appearance, .appearance_expr]' "[\"paint_red\",\"$SWITCH_1\"]" \
   "undo brings the binding back"
 
-echo "--- Three bodies of different assignments: Mixed, and the first fill writes to all"
-# Body1 is still selected from its right-click: a click on it would change
-# nothing (and log nothing), so the selection is cleared first.
-ui_mark
-ui_step "Escape (clear the selection)"     ui_key Escape
-ui_expect_new "Browser selected: nothing" "nothing selected"
+echo "--- Three bodies of different assignments: one table written to all"
 ui_mark
 ui_step "click Body1"                      ui_click_logged "Browser Root/Bodies/Body1"
 ui_expect_new "Browser selected: Root/Bodies/Body1" "Body1 selected"
@@ -237,21 +221,15 @@ ui_expect_new "Browser selected: Root/Bodies/Body1, Root/Bodies/Body2, Root/Bodi
 ui_mark
 ui_step "right-click Body1"                ui_click_logged "Browser Root/Bodies/Body1" 3
 ui_step "choose Appearance..."             ui_menu_choose "Appearance..."
-ui_focus_dialog '^Appearances$'
-ui_expect_new "Appearances panel: Assign to 3 Bodies; varies with Color (bound)" "the table shows Body1's state"
-ui_expect_new "Appearances mixed: Mixed: Body1 follows Color, Body2 has Plastic - White, Body3 has Steel - Satin" \
-  "the Mixed notice names each state"
-ui_expect_new "Filling a row gives all 3 bodies this table." "and says what the first fill does"
-ui_expect_new "Appearances assign label: Assign to row Black (3 bodies)" "Assign names the row and the bodies"
-ui_expect_new "Appearances value Black: Paint - Black" "Body1's table"
-ui_expect_new "Appearances item paint_white at" "Paint - White is listed"
-ui_double_click_expect "Appearances item paint_white" "Appearances filled Black with 'paint_white'" \
-  "the first fill"
-ui_expect_new "Appearances binding of Body1, Body2 and Body3: switch(Color; 'Black'; 'paint_white'; 'Red'; 'paint_red')" \
+ui_expect_new "Appearance tool: the targets follow $SWITCH_1" "the table shows Body1's state"
+ui_expect_new "Panel Appearance input row0 at" "the rows' places are logged"
+ui_mark
+ui_step "Black: Paint - White"             ui_choose_text "Panel Appearance input row0" "Paint - W"
+ui_expect_new " = Paint - White" "Paint - White for Black"
+ui_mark
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Appearance switch(Color; 'Black'; 'paint_white'; 'Red'; 'paint_red') for 3 body(ies)" \
   "written to all three"
-ui_step "Close"                            ui_click_logged "Appearances close"
-ui_focus_main
-ui_step "Escape (clear the selection)"     ui_key Escape
 save
 expect_file '[.bodies[] | .appearance_expr]' \
   "[\"switch(Color; 'Black'; 'paint_white'; 'Red'; 'paint_red')\",\"switch(Color; 'Black'; 'paint_white'; 'Red'; 'paint_red')\",\"switch(Color; 'Black'; 'paint_white'; 'Red'; 'paint_red')\"]" \
@@ -259,7 +237,7 @@ expect_file '[.bodies[] | .appearance_expr]' \
 expect_file '[.bodies[] | .appearance]' '["paint_red","paint_red","paint_red"]' "all three are red (Color = 'Red')"
 ui_mark
 ui_step "undo"                             ui_key ctrl+z
-ui_expect_new "Undo: Appearance of Body1, Body2 and Body3" "one undo step, named for all three"
+ui_expect_new "Undo: Appearance" "one undo step"
 save
 expect_file '[.bodies[] | .appearance_expr]' "[\"$SWITCH_1\",null,null]" "undo restores each body's state"
 

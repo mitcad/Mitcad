@@ -37,8 +37,13 @@ struct Paint {
 // role is the one to draw new icons with; the others are shades of it that
 // some icons use.
 struct SourceColour {
+  // A status colour drawn as a role of the role table (mitcad#1041): shown
+  // in `shown`'s light or dark value instead of itself; kNone (the window
+  // text, never an icon's status) keeps the source's own colour.
+  static constexpr ColorRole kNone = ColorRole::Text;
   QRgb rgb;
   IconRole role;
+  ColorRole shown = kNone;
 };
 
 constexpr SourceColour kSourceColours[] = {
@@ -69,19 +74,21 @@ constexpr SourceColour kSourceColours[] = {
     {0x1f5fc0, IconRole::Sketch},
     {0xf2c14e, IconRole::Pencil},
     {0x9aa3ad, IconRole::Muted},
-    // Status: errors and removal, done and adding, a projection, a warning
-    // and the swatches of Appearance.
-    {0xe03020, IconRole::Status},
-    {0xe05a3a, IconRole::Status},
-    {0xc02a1a, IconRole::Status},
-    {0xc82828, IconRole::Status},
-    {0xc0392b, IconRole::Status},
-    {0x3aa35b, IconRole::Status},
-    {0x2e9e3e, IconRole::Status},
-    {0x3a9a48, IconRole::Status},
+    // Status: errors and removal (the error's red), done and adding (the
+    // success's green), a warning (the warning's yellow): the role table's,
+    // mitcad#1041; a projection's blue
+    // and the swatches of Appearance keep their own.
+    {0xe03020, IconRole::Status, ColorRole::ErrorBorder},
+    {0xe05a3a, IconRole::Status, ColorRole::ErrorBorder},
+    {0xc02a1a, IconRole::Status, ColorRole::ErrorBorder},
+    {0xc82828, IconRole::Status, ColorRole::ErrorBorder},
+    {0xc0392b, IconRole::Status, ColorRole::ErrorBorder},
+    {0x3aa35b, IconRole::Status, ColorRole::DropAllowed},
+    {0x2e9e3e, IconRole::Status, ColorRole::DropAllowed},
+    {0x3a9a48, IconRole::Status, ColorRole::DropAllowed},
     {0x2a5cc0, IconRole::Status},
     {0x8a3cc8, IconRole::Status},
-    {0xf0b429, IconRole::Status},
+    {0xf0b429, IconRole::Status, ColorRole::WarningBadge},
 };
 
 // The dark surface the status colours of the dark theme are checked against.
@@ -117,9 +124,21 @@ QRgb readableOnDark(QRgb rgb) {
   return color.rgb() & 0xffffff;
 }
 
+// The role a status source is drawn in; kNone when it keeps its own colour.
+ColorRole statusRole(QRgb source) {
+  for (const SourceColour& colour : kSourceColours) {
+    if (colour.rgb == source) {
+      return colour.shown;
+    }
+  }
+  return SourceColour::kNone;
+}
+
+QRgb roleRgb(ColorRole role, bool dark) { return themeColor(role, dark).rgb() & 0xffffff; }
+
 Paint rolePaint(IconRole role, bool dark, bool stroke, QRgb source) {
   const QRgb outline = dark ? 0xc9d8ee : 0x34507a;
-  const QRgb blue = dark ? 0x5aa2ff : 0x1a6ee0;
+  const QRgb blue = roleRgb(ColorRole::Action, dark); // the icons' action blue (mitcad#230)
   const QRgb amber = dark ? 0xd6b46a : 0xb07800;
   switch (role) {
   case IconRole::Outline:
@@ -149,6 +168,10 @@ Paint rolePaint(IconRole role, bool dark, bool stroke, QRgb source) {
     return {outline, 0.5};
   case IconRole::Status:
     break;
+  }
+  const ColorRole shown = statusRole(source);
+  if (shown != SourceColour::kNone) {
+    return {roleRgb(shown, dark), 1.0};
   }
   return {dark ? readableOnDark(source) : source, 1.0};
 }
@@ -255,6 +278,11 @@ private:
 };
 
 } // namespace
+
+std::optional<ColorRole> iconStatusRole(const QColor& source) {
+  const ColorRole shown = statusRole(source.rgb() & 0xffffff);
+  return shown != SourceColour::kNone ? std::optional<ColorRole>(shown) : std::nullopt;
+}
 
 std::optional<IconRole> iconRole(const QColor& source) {
   const QRgb rgb = source.rgb() & 0xffffff;

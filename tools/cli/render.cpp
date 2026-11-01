@@ -293,6 +293,8 @@ int render(int argc, char* argv[], const OpenPart& open) {
     body.shape = shape->occt();
     body.placement = trsfOf(instance.value(QStringLiteral("transform")).toArray());
     body.appearance = looks.value(uid);
+    // The body's or an occurrence's on its path (mitcad#1093).
+    body.transparent = instance.value(QStringLiteral("transparent")).toBool();
     // The faces by their names, grouped by appearance (a face named twice
     // takes the later one).
     std::map<int, QString> byFace;

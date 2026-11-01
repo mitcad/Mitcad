@@ -25,15 +25,15 @@ void showAboutDialog(QWidget* parent) {
   // What the About box says besides the name and version.
   const QString body =
       QStringLiteral("<p>%1</p>")
-          .arg(QObject::tr("A parametric desktop CAD application with a history-based modelling workflow.")) +
+          .arg(QObject::tr("A parametric desktop CAD application with a history-based modeling workflow.")) +
       QStringLiteral("<p>%1</p>")
-          .arg(QObject::tr("Licensed under the MIT licence. Copyright (c) 2026 MitCad contributors.")) +
+          .arg(QObject::tr("Licensed under the MIT license. Copyright (c) 2026 MitCad contributors.")) +
       QStringLiteral("<p>%1</p><ul>").arg(QObject::tr("Built with:")) +
       QStringLiteral("<li>%1</li>")
           .arg(QObject::tr("Open CASCADE Technology %1 (LGPL-2.1 with the Open CASCADE exception)")
                    .arg(occt.toHtmlEscaped())) +
       QStringLiteral("<li>%1</li>").arg(QObject::tr("Qt %1 (LGPL-3.0)").arg(qt.toHtmlEscaped())) +
-      QStringLiteral("<li>%1</li>").arg(QObject::tr("FreeType (FreeType Licence)")) +
+      QStringLiteral("<li>%1</li>").arg(QObject::tr("FreeType (FreeType License)")) +
       QStringLiteral("<li>%1</li>").arg(QObject::tr("Droid Sans fonts, Google Corporation (Apache-2.0)")) +
       QStringLiteral("</ul>") +
       QStringLiteral("<p>%1</p>")

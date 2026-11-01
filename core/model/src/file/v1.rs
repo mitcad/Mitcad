@@ -153,7 +153,7 @@ pub(super) fn load(json: &str) -> Result<(DocState, Vec<String>), FileError> {
         let name = match legacy_name(&p.name, &taken) {
             Some(new) => {
                 warnings.push(format!(
-                    "parameter '{}' is renamed to '{new}': '{}' is a unit, function or \
+                    "parameter {} is renamed to {new}: {} is a unit, function or \
                      constant in expressions",
                     p.name, p.name
                 ));
@@ -180,7 +180,7 @@ pub(super) fn load(json: &str) -> Result<(DocState, Vec<String>), FileError> {
         }
         if positions.insert(f.name(), i).is_some() {
             return Err(invalid(format!(
-                "feature name '{}' is used more than once",
+                "feature name {} is used more than once",
                 f.name()
             )));
         }
@@ -267,15 +267,15 @@ impl Converter<'_> {
         self.state
             .parameters
             .find(actual)
-            .ok_or_else(|| format!("parameter '{name}' does not exist"))
+            .ok_or_else(|| format!("parameter {name} does not exist"))
     }
 
     /// A feature before the one being converted.
     fn earlier(&self, name: &str) -> Result<usize, String> {
         match self.positions.get(name) {
-            None => Err(format!("feature '{name}' does not exist")),
+            None => Err(format!("feature {name} does not exist")),
             Some(&index) if index >= self.state.features.len() => Err(format!(
-                "feature '{name}' does not come before this feature in the history"
+                "feature {name} does not come before this feature in the history"
             )),
             Some(&index) => Ok(index),
         }
@@ -294,7 +294,7 @@ impl Converter<'_> {
                 ..
             } => Ok(index),
             _ => Err(format!(
-                "'{}' is not a new_body extrude, so it is not a body",
+                "{} is not a new_body extrude, so it is not a body",
                 self.name(index)
             )),
         }
@@ -358,7 +358,7 @@ impl Converter<'_> {
             } => {
                 let sketch = self.earlier(sketch)?;
                 if !matches!(self.features[sketch], FileFeature::Sketch { .. }) {
-                    return Err(format!("'{}' is not a sketch", self.name(sketch)));
+                    return Err(format!("{} is not a sketch", self.name(sketch)));
                 }
                 let shape = self.shapes[sketch]
                     .get(*profile)

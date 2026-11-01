@@ -55,6 +55,8 @@ expect_hidden() {
 # camera rests, also after a zoom (mitcad#546).
 show_axes() {
   local area vx vy vw vh axis line px py inside count
+  # The axis input shows the origin only as its light bulb does (mitcad#1030).
+  ui_show_origin
   area=$(grep -o "View area [0-9]* [0-9]* [0-9]* [0-9]*" "$UI_LOG" | tail -1)
   [ -n "$area" ] || ui_fail "$1: the app did not log its view area"
   read -r _ _ vx vy vw vh <<< "$area"

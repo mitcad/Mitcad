@@ -13,6 +13,7 @@
 #include <QJsonDocument>
 #include <QtLogging>
 
+#include "AppSettings.hpp"
 #include "CommandSession.hpp"
 #include "Diagnostics.hpp"
 #include "DisplayMeshes.hpp"
@@ -43,7 +44,12 @@ struct DocumentSession::AsyncJob {
   Completion completion;
 };
 
-DocumentSession::State::State(bool demo) : document(demo ? new_demo_document() : new_design_document()) {}
+rust::Box<Document> newDesignDocument() {
+  const QString units = GeneralSettings::load().newDesignUnits;
+  return new_design_document_in(rustStr(units.toUtf8()));
+}
+
+DocumentSession::State::State(bool demo) : document(demo ? new_demo_document() : newDesignDocument()) {}
 
 DocumentSession::DocumentSession(bool demo, QObject* parent)
     : QObject(parent), m_state(demo), m_worker(std::make_unique<ModelWorker>()) {
@@ -254,8 +260,15 @@ QJsonObject DocumentSession::command(const QJsonObject& request) {
   // The bodies the view will draw are meshed in the job (DisplayMeshes.hpp,
   // mitcad#398); a sketch's own commands do not change them.
   const bool display = !name.startsWith(QStringLiteral("sketch."));
+  // An export's plan (`plan`: what it would write, mitcad#1109: Send to
+  // Slicer's bed face as its panel opens) is a job of its own name, apart
+  // from an export that writes, so that logs and the tests' job delays
+  // (MITCAD_TEST_JOB_SLEEP_MS=export=…, mitcad#888) tell them apart.
+  const QString label = name == QStringLiteral("export") && request.value(QStringLiteral("plan")).toBool()
+                            ? QStringLiteral("export plan")
+                            : name;
   DisplayMeshing meshing;
-  const bool done = runJob(name, commandStage(name), [&document, &json, &answer, display, &meshing](ModelJob& job) {
+  const bool done = runJob(label, commandStage(name), [&document, &json, &answer, display, &meshing](ModelJob& job) {
     // The bodies as the view shows them before the command: the meshes of
     // the faces it leaves as they were (mitcad#635).
     const DisplayShapes before = display ? shownBodyShapes(document) : DisplayShapes();

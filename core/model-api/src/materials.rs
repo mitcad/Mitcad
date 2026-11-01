@@ -42,9 +42,25 @@ named_enum! {
             component: String,
             #[serde(default)]
             material: Option<String>,
+            /// One of the material's appearances for the component's bodies
+            /// without one of their own (mitcad#1055); left out: the
+            /// material's default.
+            #[serde(default)]
+            appearance_id: Option<String>,
             /// `base`, `user` or `project`: the material is that library's
             /// item, copied in (or the design's copy reused) in the same
             /// undo step (mitcad#655).
+            #[serde(default)]
+            library: Option<String>,
+            #[serde(default)]
+            project: Option<String>,
+        },
+        // One filament's separate materials as one with variants
+        // (mitcad#1054).
+        "merge_materials" => MergeMaterials {
+            /// The materials, two or more: the first takes the others.
+            ids: Vec<String>,
+            /// `user` or `project`: the library's items are merged.
             #[serde(default)]
             library: Option<String>,
             #[serde(default)]
@@ -144,10 +160,12 @@ impl<K: Kernel> MaterialsCrateOps<K> for Document<K> {
             MaterialCommand::SetComponentMaterial {
                 component,
                 material,
+                appearance_id,
                 library,
                 project,
             } => {
                 let uid = self.component_ref(&component)?;
+                let look = appearance_id.as_deref();
                 match (library.as_deref(), material) {
                     (Some(library), Some(material)) => {
                         let library = library_kind(library)?;
@@ -159,7 +177,7 @@ impl<K: Kernel> MaterialsCrateOps<K> for Document<K> {
                                 ItemKind::Material,
                                 &material,
                             )?;
-                            doc.set_component_material(uid, Some(id.as_str()))
+                            doc.set_component_material_look(uid, Some(id.as_str()), look)
                         })?;
                     }
                     (Some(_), None) => {
@@ -167,10 +185,27 @@ impl<K: Kernel> MaterialsCrateOps<K> for Document<K> {
                             "a library is given with the material it has".to_owned(),
                         ));
                     }
-                    (None, material) => self.set_component_material(uid, material.as_deref())?,
+                    (None, material) => {
+                        self.set_component_material_look(uid, material.as_deref(), look)?
+                    }
                 }
                 json!({})
             }
+            MaterialCommand::MergeMaterials {
+                ids,
+                library,
+                project,
+            } => match library.as_deref() {
+                Some(library) => {
+                    let library = writable_library(library)?;
+                    let libraries = self.print_libraries(project.as_deref().map(Path::new));
+                    let (id, path, version) =
+                        self.merge_library_materials(&libraries, library, &ids)?;
+                    json!({"id": id, "library": library.id(), "version": version,
+                           "path": path.to_string_lossy()})
+                }
+                None => json!({"id": self.merge_materials(&ids)?}),
+            },
         })
     }
 }
@@ -247,7 +282,7 @@ pub(super) fn print_keys_json(query: &PrintKeysQuery) -> Result<Value, ApiError>
                 .find(|s| s.id() == text)
                 .ok_or_else(|| {
                     ApiError(format!(
-                        "'{text}' is no set of print settings: printer, process or filament"
+                        "“{text}” is no set of print settings: printer, process or filament"
                     ))
                 })?,
         ),

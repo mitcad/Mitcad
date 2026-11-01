@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! Parameters and expressions (stage 4): FreeCAD's quantities as Mitcad
-//! parameters, and its expressions as Mitcad expressions of them.
+//! Parameters and expressions (stage 4): FreeCAD's quantities as MitCad
+//! parameters, and its expressions as MitCad expressions of them.
 //!
 //! - Parameters, made before the timeline in the order of their
 //!   dependencies: every spreadsheet cell with an alias (named after it)
@@ -11,7 +11,7 @@
 //!   expression refers to (`<label>_<property>`, `Pad_Length`; the feature
 //!   made of it uses the parameter and adopts it), of the objects whose
 //!   values the import carries over (features of the history, sketches;
-//!   an architecture model's walls' expressions make none). A name Mitcad
+//!   an architecture model's walls' expressions make none). A name MitCad
 //!   cannot take, or one several of these share, gets its owner's label in
 //!   front (`<owner>_<name>`), else a number. A parameter's expression is
 //!   FreeCAD's translated, else FreeCAD's value (a cell keeps no value: one
@@ -20,7 +20,7 @@
 //!   lengths, angles, sizes and counts, sketches' dimensions, cones'
 //!   sizes, attachment offsets along a sketch's or a datum plane's normal,
 //!   a sketch's turn about its support's x or y axis) become those values'
-//!   expressions (Mitcad's dimension parameters of them).
+//!   expressions (MitCad's dimension parameters of them).
 //! - Translation ([`Importer::mitcad_text`]): references to the
 //!   parameters' names, units (`gon` as `grad`, `thou` as `mil`, `"` and
 //!   `'` as `in` and `ft`, others by their factor), `pi` and `e` as `PI`
@@ -82,7 +82,7 @@ impl Kind {
         }
     }
 
-    /// FreeCAD's number of a property (millimetres, degrees) in Mitcad's
+    /// FreeCAD's number of a property (millimetres, degrees) in MitCad's
     /// units (millimetres, radians).
     pub fn canonical(self, freecad: f64) -> f64 {
         match self {
@@ -143,8 +143,8 @@ impl fmt::Display for Source {
     }
 }
 
-/// A value of a definition: FreeCAD's number in Mitcad's units (mm,
-/// radians, or as it is), and the Mitcad expression it comes from when
+/// A value of a definition: FreeCAD's number in MitCad's units (mm,
+/// radians, or as it is), and the MitCad expression it comes from when
 /// FreeCAD's is parametric.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Q {
@@ -298,7 +298,7 @@ struct Wanted {
     kind: Option<Kind>,
     /// FreeCAD's expression and the object it belongs to.
     expression: Option<(String, String)>,
-    /// FreeCAD's value in Mitcad's units, when the file keeps one.
+    /// FreeCAD's value in MitCad's units, when the file keeps one.
     stored: Option<f64>,
     deps: Vec<Source>,
     /// For the parameter's comment and the report.
@@ -320,7 +320,7 @@ pub(super) struct Params {
     pub changed: bool,
 }
 
-/// Mitcad's precedence levels for printing (higher binds tighter).
+/// MitCad's precedence levels for printing (higher binds tighter).
 const COMPARE: u8 = 1;
 const ADD: u8 = 2;
 const MUL: u8 = 3;
@@ -336,7 +336,7 @@ fn paren(text: String, level: u8, needed: u8) -> String {
     }
 }
 
-/// A FreeCAD unit as Mitcad's unit and the factor into it.
+/// A FreeCAD unit as MitCad's unit and the factor into it.
 fn mitcad_unit(name: &str) -> Option<(&'static str, f64)> {
     Some(match name {
         "mm" => ("mm", 1.0),
@@ -403,7 +403,7 @@ fn turn_of(p: &mitcad_freecad::Placement) -> (Option<[f64; 3]>, f64) {
 
 /// A translated expression of an integer property: FreeCAD rounds its
 /// result to the nearest integer, halves away from zero (`Count / 2` with
-/// a count of 5 is 3), as Mitcad's `round` does. The expression as it is
+/// a count of 5 is 3), as MitCad's `round` does. The expression as it is
 /// when it already gives FreeCAD's value.
 fn rounded(text: String, value: Quantity, stored: f64, integer: bool) -> (String, Quantity) {
     if integer
@@ -420,7 +420,7 @@ fn rounded(text: String, value: Quantity, stored: f64, integer: bool) -> (String
     }
 }
 
-/// A FreeCAD name as a Mitcad parameter name, or None when it cannot be
+/// A FreeCAD name as a MitCad parameter name, or None when it cannot be
 /// one as it is.
 fn valid(name: &str) -> Option<String> {
     mitcad_model::expr::is_valid_name(name).then(|| name.to_owned())
@@ -443,7 +443,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 .objects
                 .iter()
                 .find(|o| o.label() == label)
-                .ok_or_else(|| format!("{r}: no object labelled {label}"))?;
+                .ok_or_else(|| format!("{r}: no object labeled {label}"))?;
             (o, &r.path[..])
         } else if r.relative {
             (owner, &r.path[..])
@@ -509,7 +509,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         Ok(Source::property(&object.name, &parts.join(".")))
     }
 
-    /// The kind and FreeCAD's value (in Mitcad's units) of a quantity.
+    /// The kind and FreeCAD's value (in MitCad's units) of a quantity.
     fn stored(&self, source: &Source) -> Result<(Option<Kind>, Option<f64>), String> {
         let doc = self.fc_document();
         match source {
@@ -585,7 +585,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
 
     // Translation.
 
-    /// FreeCAD's expression in Mitcad's language, with the parameters made
+    /// FreeCAD's expression in MitCad's language, with the parameters made
     /// so far: the text and its precedence level.
     fn mitcad_text(&self, owner: &Object, e: &Expr) -> Result<(String, u8), String> {
         let text = |e: &Expr, needed: u8| -> Result<String, String> {
@@ -611,7 +611,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     format!("{name}^{}", unit.power)
                 };
                 // A number with its unit binds tighter than any operator,
-                // but as the base of a power it needs parentheses: Mitcad
+                // but as the base of a power it needs parentheses: MitCad
                 // reads `3 mm^2` as a unit's power.
                 match inner.as_ref() {
                     Expr::Number(v) => (
@@ -648,7 +648,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 let (level, left, right) = match op {
                     BinaryOp::Add | BinaryOp::Sub => (ADD, ADD, MUL),
                     BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => (MUL, MUL, UNARY),
-                    // Mitcad's powers are right-associative.
+                    // MitCad's powers are right-associative.
                     BinaryOp::Pow => (POWER, POWER + 1, UNARY),
                     _ => (COMPARE, COMPARE, ADD),
                 };
@@ -792,12 +792,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 | "log10" | "mod" | "hypot" | "cath" | "cbrt" | "trunc",
                 _,
             ) => return wrong(),
-            (other, _) => return Err(format!("{other}() has no Mitcad equivalent")),
+            (other, _) => return Err(format!("{other}() has no MitCad equivalent")),
         })
     }
 
     /// Translates FreeCAD's expression of `owner` and evaluates it with the
-    /// document's parameters: Mitcad's text and its value. With a kind, a
+    /// document's parameters: MitCad's text and its value. With a kind, a
     /// result without a unit gets the kind's unit, and another unit is an
     /// error.
     pub(super) fn translate(
@@ -1132,7 +1132,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         })
     }
 
-    /// Mitcad names for the quantities: their own where Mitcad can take
+    /// MitCad names for the quantities: their own where MitCad can take
     /// it and no other quantity wants it, else with the owner's label in
     /// front; unique among the document's parameters.
     fn parameter_names(&self, list: &[Wanted]) -> Vec<String> {
@@ -1215,7 +1215,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                         Some(u) => u,
                         None => {
                             row.outcome = ExpressionOutcome::Skipped;
-                            row.note = Some(format!("{text}: a unit Mitcad has not"));
+                            row.note = Some(format!("{text}: a unit MitCad has not"));
                             self.report.parameters.push(row);
                             return;
                         }
@@ -1281,7 +1281,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
 
     /// The value of a quantity for a definition: its parameter, else its
     /// bound expression translated (checked against FreeCAD's `stored`
-    /// value, Mitcad's units), else the number.
+    /// value, MitCad's units), else the number.
     pub(super) fn quantity(&mut self, source: Source, kind: Kind, stored: f64) -> Q {
         if let Some(q) = self.params.quantities.get(&source) {
             return q.clone();
@@ -1457,7 +1457,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
     }
 
     /// Adopts the parameters made of an object's properties that its
-    /// Mitcad features use as they are.
+    /// MitCad features use as they are.
     pub(super) fn adopt_properties(&mut self, object: &str, features: &[FeatureUid]) {
         let names: Vec<String> = self
             .params
@@ -1558,7 +1558,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
     }
 
     /// A bound property's expression that the import cannot carry over
-    /// (it drives nothing Mitcad has): FreeCAD's value, and why.
+    /// (it drives nothing MitCad has): FreeCAD's value, and why.
     pub(super) fn kept_value(&mut self, o: &Object, path: &str, why: &str) {
         let source = Source::property(&o.name, path);
         if let Some(b) = self.params.bindings.get(&source)
@@ -1592,7 +1592,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 o,
                 path,
                 "a turn of the attachment offset about an axis out of the support's plane, or \
-                 with a shift: Mitcad's planes turn about lines in them (an angle plane), and a \
+                 with a shift: MitCad's planes turn about lines in them (an angle plane), and a \
                  turn about another axis (which also turns the plane within itself) has no \
                  parametric plane; the plane is fixed at FreeCAD's placement",
             );

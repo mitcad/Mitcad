@@ -23,6 +23,7 @@ use serde_json::{Map, Value, json};
 
 use super::ApiError;
 use super::analysis::{MeasureCache, MeasuredPicks};
+use super::drawing_annotations::add_annotation_notice;
 use super::measure_axes::Element;
 use super::measurements::{
     Drawn, Found, across, add_drawn, check_kind, default_kind, no_single_value, values_of,
@@ -147,6 +148,10 @@ pub(super) struct NewAnnotation {
     frame: Option<GeometricTolerance>,
     #[serde(default)]
     on: Option<String>,
+    /// Only what it would add (mitcad#1097): the annotation as the
+    /// `annotations` query would give it once added, nothing stored.
+    #[serde(default)]
+    preview: bool,
 }
 
 /// `edit_annotation`: the annotation's `name` (or `names`, several at
@@ -710,11 +715,19 @@ impl<K: Kernel> AnnotationsOps<K> for Document<K> {
             self.hole_callout_lines(&annotation.a, &picks, units.drawing())
                 .map_err(ApiError)?;
         }
+        // A material or process note needs a body to write (mitcad#1049).
+        if kind.is_body_note() {
+            self.body_note_lines(kind, &annotation.a)
+                .map_err(ApiError)?;
+        }
         if let Some(on) = &annotation.on {
             self.dimension_to_stand_under(on.trim()).map_err(ApiError)?;
         }
         if let Some(view) = &new.view {
             self.place_for_view(&mut annotation, &picks, view)?;
+        }
+        if new.preview {
+            return self.annotation_preview(annotation);
         }
         let name = self.add_annotation(annotation)?;
         Ok(json!({"name": name, "kind": kind}))
@@ -916,7 +929,7 @@ impl<K: Kernel> AnnotationsOps<K> for Document<K> {
         // (mitcad#758); all of them stay measured.
         self.side_cache::<MeasureCache>()
             .hold(2 * self.annotations().len());
-        Value::Array(self.laid_out(units, measure_hidden).0)
+        Value::Array(self.laid_out(units, measure_hidden, None).0)
     }
 
     fn annotation_text_height_json(&self) -> Value {
@@ -970,8 +983,22 @@ trait AnnotationsLocal<K: Kernel> {
 
     /// Every annotation of the `annotations` query in order, and the
     /// lengths' dimension lines laid out: each laid out after those before
-    /// it, the frames under dimensions last.
-    fn laid_out(&self, units: Units, measure_hidden: bool) -> (Vec<Value>, Vec<Taken>);
+    /// it, the frames under dimensions last. With `extra`, an annotation
+    /// about to be added, laid out last of all as it will be once added
+    /// (mitcad#1097).
+    fn laid_out(
+        &self,
+        units: Units,
+        measure_hidden: bool,
+        extra: Option<&Annotation>,
+    ) -> (Vec<Value>, Vec<Taken>);
+
+    /// `add_annotation`'s preview (mitcad#1097): the annotation as the
+    /// `annotations` query will give it once added — its name, label and
+    /// drawing laid out after the others — with `"preview": true`; nothing
+    /// is stored, no undo step made. Why it would be refused, as the add's
+    /// error; why one that would be broken at once cannot be drawn.
+    fn annotation_preview(&self, annotation: Annotation) -> Result<Value, ApiError>;
 
     /// The size of the design (mitcad#894, mitcad#902): the diagonal of the
     /// box of the bodies the shown annotations' picks are on, with
@@ -1021,6 +1048,8 @@ impl<K: Kernel> AnnotationsLocal<K> for Document<K> {
                 | MeasureKind::Datum
                 | MeasureKind::Frame
                 | MeasureKind::HoleCallout
+                | MeasureKind::Material
+                | MeasureKind::ProcessNote
                 | MeasureKind::Diameter
         );
         let transform = self.pick_transform(&annotation.a)?;
@@ -1056,7 +1085,7 @@ impl<K: Kernel> AnnotationsLocal<K> for Document<K> {
             millimetres: unit_of.millimetres(),
         };
         let taken = match shape {
-            Shape::Ends(_) => self.laid_out(units, false).1,
+            Shape::Ends(_) => self.laid_out(units, false, None).1,
             _ => Vec::new(),
         };
         let height = self.text_height_in_use(Some(picks));
@@ -1132,6 +1161,24 @@ impl<K: Kernel> AnnotationsLocal<K> for Document<K> {
             let letters = self.all_datum_letters();
             let datums: Vec<&str> = letters.iter().map(String::as_str).collect();
             value["label"] = leader_label(annotation, units, &datums).to_json();
+        }
+        // A material or process note's words, written from its body as the
+        // design is now (mitcad#1049); a pick that is no body's breaks it.
+        if annotation.kind.is_body_note() {
+            match self.body_note_lines(annotation.kind, &annotation.a) {
+                Ok(lines) => {
+                    value["label"] = Label {
+                        text: lines.join(" / "),
+                        lines,
+                        ..Label::default()
+                    }
+                    .to_json();
+                }
+                Err(error) => {
+                    value["error"] = json!(error);
+                    return value;
+                }
+            }
         }
         // Hidden: not drawn, so not measured unless asked for (mitcad#716);
         // whether its picks are there is known without the kernel. A frame
@@ -1273,7 +1320,12 @@ impl<K: Kernel> AnnotationsLocal<K> for Document<K> {
         // a hole callout's in an arrow on the hole's edge.
         match annotation.kind {
             MeasureKind::Datum => drawing["terminator"] = json!("datum"),
-            MeasureKind::Note | MeasureKind::Frame if annotation.a.face.is_some() => {
+            MeasureKind::Note
+            | MeasureKind::Frame
+            | MeasureKind::Material
+            | MeasureKind::ProcessNote
+                if annotation.a.face.is_some() =>
+            {
                 drawing["terminator"] = json!("dot");
             }
             _ => {}
@@ -1317,10 +1369,20 @@ impl<K: Kernel> AnnotationsLocal<K> for Document<K> {
         }
     }
 
-    fn laid_out(&self, units: Units, measure_hidden: bool) -> (Vec<Value>, Vec<Taken>) {
-        let annotations = self.annotations();
+    fn laid_out(
+        &self,
+        units: Units,
+        measure_hidden: bool,
+        extra: Option<&Annotation>,
+    ) -> (Vec<Value>, Vec<Taken>) {
+        let annotations: Vec<&Annotation> = self.annotations().iter().chain(extra).collect();
+        // The texts' height with the one to be added among the shown ones
+        // (`annotated_size` counts those on their own picks).
+        let extra_picks = extra
+            .filter(|a| a.visible && a.on.is_none())
+            .and_then(|a| self.measure_picks(&a.a, a.b.as_ref()).ok());
         let mut laid = Laid {
-            height: self.text_height_in_use(None),
+            height: self.text_height_in_use(extra_picks.as_ref()),
             ..Laid::default()
         };
         let mut values = vec![Value::Null; annotations.len()];
@@ -1328,13 +1390,42 @@ impl<K: Kernel> AnnotationsLocal<K> for Document<K> {
         // text as it was laid out.
         let under = |a: &Annotation| a.kind == MeasureKind::Frame && a.on.is_some();
         for pass in [false, true] {
-            for (value, annotation) in values.iter_mut().zip(annotations) {
+            for (value, annotation) in values.iter_mut().zip(annotations.iter().copied()) {
                 if under(annotation) == pass {
                     *value = self.annotation_json(annotation, units, measure_hidden, &mut laid);
+                    // A broken annotation is a warning about it
+                    // (mitcad#1040); `error` keeps the reason.
+                    if let Some(error) = value["error"].as_str().map(str::to_owned) {
+                        add_annotation_notice(value, &annotation.name, &error);
+                    }
                 }
             }
         }
         (values, laid.taken)
+    }
+
+    fn annotation_preview(&self, annotation: Annotation) -> Result<Value, ApiError> {
+        // As add_annotation stores it (its name, colour, group, frame), so
+        // that what is shown is what is added.
+        let annotation = self.annotation_to_add(annotation)?;
+        let unit = self.parameters().context().default_length_unit;
+        let units = Units::new(unit.symbol(), unit.millimetres());
+        // As the `annotations` query holds them once it is added.
+        self.side_cache::<MeasureCache>()
+            .hold(2 * (self.annotations().len() + 1));
+        let mut value = self
+            .laid_out(units, false, Some(&annotation))
+            .0
+            .pop()
+            .expect("the annotation previewed is laid out last");
+        // One that would be broken at once has nothing to show: why, as
+        // the preview's error (a command's answer keeps no `error` of its
+        // own).
+        if let Some(error) = value["error"].as_str() {
+            return Err(ApiError(error.to_owned()));
+        }
+        value["preview"] = json!(true);
+        Ok(value)
     }
 
     fn annotated_size(&self, extra: Option<&MeasuredPicks>) -> Option<f64> {

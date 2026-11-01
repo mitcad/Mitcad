@@ -25,7 +25,9 @@
 #      the root's cross on the origin's XZ plane around the origin shown,
 #      the view shows only the cross: seen from the front, a fit of it has no depth, which put an
 #      orthographic camera's eye on its centre. Orbited, Create Sketch on
-#      the origin's XZ plane looks against its normal, along (0, -1, 0).
+#      the origin's XZ plane gives the upright frame seen from the front,
+#      normal (0, -1, 0) (mitcad#1060), and looks against it, along
+#      (0, 1, 0).
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-occurrence-face-sketch-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -266,9 +268,9 @@ Orbit 'origin plane'
 Ui-CreateSketch 'F7' 'xz'
 Ui-ExpectNew 'Sketch view along' "origin plane: the view's direction logged"
 if ((New-Line 'Sketch frame in the design') -notmatch ' normal \(([^)]*)\)') { Ui-Fail 'origin plane: no frame' }
-Within (Xyz $Matches[1]) @(0, 1, 0) 1e-6 "origin plane: the XZ plane's normal"
+Within (Xyz $Matches[1]) @(0, -1, 0) 1e-6 "origin plane: the XZ sketch's normal towards the front"
 if ((New-Line 'Sketch view along') -notmatch 'along \(([^)]*)\)') { Ui-Fail 'origin plane: no view direction' }
-Within (Xyz $Matches[1]) @(0, -1, 0) 1e-6 "origin plane: Look At against the plane's normal"
+Within (Xyz $Matches[1]) @(0, 1, 0) 1e-6 "origin plane: Look At against the sketch's normal, from the front"
 Ui-Mark
 Ui-Step 'finish sketch (Ctrl+Enter)'     { Ui-Key 'ctrl+Return' }
 Ui-ExpectNew 'Sketch finished' 'origin plane: sketch finished'

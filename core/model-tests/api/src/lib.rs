@@ -30,3 +30,15 @@ mod view_file_tests;
 mod configurations_tests;
 // Tables in configurations (mitcad#806).
 mod configuration_tables_tests;
+// Filling a closed table: generated rows with parameter columns, the rows
+// as CSV (mitcad#1044).
+mod closed_table_fill_tests;
+// The Center of Mass marker and its query (mitcad#1094).
+mod center_of_mass_tests;
+// Features that share a name: lookups by name refuse it with the uids
+// (mitcad#1107).
+mod shared_feature_names_tests;
+// Allowed-value formulas in independent component copies (mitcad#1129).
+mod copy_allowed_values_tests;
+// Table references in bindings and rule expressions (mitcad#1131).
+mod table_reference_rename_tests;

@@ -823,7 +823,7 @@ fn tangent_line_circle_keeps_side() {
     })
     .unwrap();
     solve_ok(&mut s);
-    assert_near(pt(&s, c)[1], -3.0, "centre below the line at r");
+    assert_near(pt(&s, c)[1], -3.0, "center below the line at r");
 }
 
 #[test]
@@ -890,7 +890,7 @@ fn tangent_arcs_at_shared_end() {
     s.add_constraint(Tangent(a1, a2)).unwrap();
     solve_ok(&mut s);
     let v = pt(&s, c2);
-    assert_near(v[0], 0.0, "centres collinear with the joint");
+    assert_near(v[0], 0.0, "centers collinear with the joint");
     let an = s.analyze();
     assert!(an.redundant.is_empty() && an.conflicts.is_empty(), "{an:?}");
 }

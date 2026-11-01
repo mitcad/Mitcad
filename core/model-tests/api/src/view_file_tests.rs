@@ -59,7 +59,7 @@ fn named_views_are_added_renamed_deleted_with_undo_and_saved() {
     );
 
     // A name in use is refused unless the view replaces it.
-    assert!(refused(&mut doc, camera("Detail", 10.0)).contains("a named view 'Detail' exists"));
+    assert!(refused(&mut doc, camera("Detail", 10.0)).contains("a named view Detail exists"));
     let mut replace = camera("Detail", 10.0);
     replace["replace"] = json!(true);
     command(&mut doc, replace);
@@ -109,7 +109,7 @@ fn named_views_are_added_renamed_deleted_with_undo_and_saved() {
             &mut doc,
             json!({"cmd": "delete_named_view", "name": "Nope"})
         )
-        .contains("there is no named view 'Nope'")
+        .contains("there is no named view Nope")
     );
     assert_eq!(
         command(&mut doc, json!({"cmd": "recompute"}))["recomputed"],
@@ -158,8 +158,7 @@ const DRAWING: &str = "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n5\n0\nENDSEC\n\
 
 #[test]
 fn a_dxf_drawing_goes_into_a_sketch_as_one_undo_step() {
-    let dir = std::env::temp_dir().join(format!("mitcad-dxf-insert-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("dxf-insert");
     let path = dir.join("plate.dxf");
     std::fs::write(&path, DRAWING).unwrap();
 

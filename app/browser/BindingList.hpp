@@ -142,7 +142,7 @@ struct ReadableBinding {
   QString text;                // Condition: when Holes = Yes; Expression: the expression; Plain: Steel, set by hand
   QString now;                 // what it gives now: Paint - Black, hidden, suppressed
   QColor nowColor;             // the colour of what it gives now (invalid: none)
-  QStringList warnings;        // results that name nothing (no appearance "X") and the model's
+  QStringList warnings;        // results that name nothing (no appearance “X”) and the model's
   QStringList options;         // the parameters it uses
 
   // In one line: `Color: Black → Paint - Black, Red → Paint - Red,

@@ -1,4 +1,4 @@
-# Chamfers wider than a face beside them: 0140–0149, 0380, 0381, 0480, 0481, 0530, 0531, 1090
+# Chamfers wider than a face beside them: 0140–0149, 0380, 0381, 0480, 0481, 0530, 0531, 1090, 1100, 1110
 
 The edge overflow of [0010 to 0019 and 0050 to 0077](fillet-edge-overflow.md)
 for chamfers (mitcad#240, mitcad#263). `geometry/tests/test_chamfer_overflow.cpp`
@@ -28,6 +28,14 @@ chamfer alone. Later chamfer cases from stored designs: 0440 in
 - **1090** limits a corner's sharp edge only by a common point that lies on
   it: a convex and a concave chamfer meeting where a sharp edge goes on got
   a corner 32 mm high at one end of a bracket (mitcad#1005).
+- **1100** builds the corner of two bevels or roundings that take away the
+  faces at a concave edge and meet at its far end, a vertex of the shape:
+  a pocket whose walls are as high as the bevel of their top edges
+  (mitcad#1106).
+- **1110** snaps either end of a contact hatched on its face's boundary
+  onto the copy of a closed edge's vertex nearest it on a periodic face,
+  as 0149 did for the end snapped second only: a blind hole's rim
+  bevelled or rounded as deep as the hole (mitcad#1117).
 
 ## 0140 to 0149: chamfers wider than a face beside them
 
@@ -304,6 +312,71 @@ the same corner, a plate of 1.85 mm² meshed in about a thousand triangles,
 the body within 0.03 mm³ of the two bevels' prisms at each corner. Corners
 whose common points both lie on the sharp edge are unchanged.
 
+## 1100: two blends meeting at a vertex of their pivot
+
+### 1100-chfi3d-two-corner-common-points-at-a-vertex-of-the-pivot
+
+A tray whose walls are 2 thick and 2 high, its inner top edges chamfered
+or filleted 2: each blend takes its wall's inner face away (and, at that
+thickness, the top face), its contact on the inner face running along the
+floor's edge. At a corner of the pocket `PerformTwoCornerbyInter` takes
+the pocket's vertical concave edge as the pivot; both blends' common
+points on it lie at its lower end, the floor's corner, a vertex of the
+shape. `ChFi3d_IndexPointInDS` keeps such a point as that vertex, a shape
+of the data structure, but the corner then set the tolerance of the point
+with that index (`ChFi3d_SetPointTolerance`), as of a point of its own,
+and `TopOpeBRepDS_DataStructure::Point` threw: the corner failed, and the
+model built the whole chamfer 0.1 % smaller (its 1e-3 retry), leaving a
+strip 2 µm wide where the faces were and a later rounding along the bevel
+and the outer wall failing on it. A straight wall without corners built.
+
+The tolerance of the common point on the pivot is now set only where it
+is not a vertex, in both branches, as the other corners and the stripe
+ends do. The tray's bevels and roundings build at their size, the walls'
+top and inner faces gone, the volumes those of the exact shapes (the
+bevels' prisms and the roundings' sections along their centroids' paths
+within 1e-7), and a rounding of 1.5 along a bevel's edge with the outer
+wall builds.
+
+## 1110: a blind hole's rim as deep as the hole
+
+### 1110-chfi3d-first-end-snapped-onto-a-closed-edges-vertex-on-a-periodic-face
+
+A plate with a blind hole of radius 5, 2 deep, its rim chamfered or
+filleted 2: the blend takes the hole's wall away, its contact on the wall
+running along the wall's bottom edge, a whole circle closed at the seam's
+vertex. `ChFi3d_KParticular` accepts the plane and the cylinder and
+`ChFiKPart_ComputeData` computes the blend. `SplitKPart` hatches the
+contact, a line on the cylinder lying on the face's boundary, a little
+inside the face (`HatchOnBoundary`, 0014 and 0140): one domain from the
+seam to the seam, once round, both of whose ends lie beside the seam's
+vertex and are snapped onto it (`SnapToVertex`). The vertex's parameters
+on the wall are those of one of the seam's two sides, and projected onto
+the line they give the parameter of the end on that side. 0149 takes the
+vertex a period on where its projection lands on the other end, but
+compares with that end's parameter, which is the hatched one only at the
+end snapped second; at the end snapped first it is still the data's own.
+Where the vertex lay on the second end's side, the first end got the
+second end's parameter, the piece had no length and was dropped:
+`SplitKPart` returned success with no piece, the walk that followed failed
+(`StartsolFailure`), and the model built the blend 0.1 % smaller (its
+1e-3 retry, without its strip since mitcad#1106, with an info). A boss's
+wall consumed the same way (0149's case) built where the vertex's
+parameters lay on the first end's side.
+
+On a line hatched on the boundary (`HatchOnBoundary` and
+`HatchOffConcaveEdges`, whose ends `FillSD` snaps with their wider
+tolerance) the vertex's copies a period apart on a periodic face are now
+tried at either end. As in 0149, a copy is taken only where it projects
+nearer this end's hatched parameter at no greater distance from the line:
+a snap moves an end by its tolerance at most, so where the vertex's own
+projection is already the nearest, as on every line that is not closed
+round a periodic face and at every end 0149 already got right, nothing
+changes. Ends snapped within a vertex's own tolerance (lines hatched
+inside the face) are as before. The blind hole's bevel and rounding build
+at their size: the wall gone, the blend meeting the hole's floor at its
+edge, the volumes those of the exact shapes.
+
 ## Reports and tests
 
 - 0140 to 0149: mitcad#240, mitcad#263 and
@@ -321,3 +394,11 @@ whose common points both lie on the sharp edge are unchanged.
   (both ends of the bracket, either edge first, and the floor's whole top
   face: the corner within the bevels' reach and a few thousand triangles at
   most, the ends' volumes equal; one end fails without it).
+- 1100: mitcad#1106 and `geometry/tests/test_dressup_takes_face.cpp` (the
+  tray's corner with OCCT's chamfer and fillet alone fails without it; the
+  tray's four edges at their size, the volumes exact, and the rounding
+  along the outer wall after the chamfer).
+- 1110: mitcad#1117 and `geometry/tests/test_dressup_takes_face.cpp` (the
+  blind hole's rim chamfered and filleted 2 with OCCT alone, valid and
+  with the exact volume, fails without it; the model's chamfer and fillet
+  at their size, no info, the volumes within 1e-6).

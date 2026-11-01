@@ -121,16 +121,16 @@ impl FitCode {
         ];
         if !known.contains(&letters) {
             return Err(format!(
-                "'{code}' is no fit code covered: the holes C, D, E, F, G, H, JS, K, M, N, P, R, S \
+                "{code} is no fit code covered: the holes C, D, E, F, G, H, JS, K, M, N, P, R, S \
                  and the shafts c to s with a grade, as H7 or g6"
             ));
         }
         let grade: u8 = grade
             .parse()
-            .map_err(|_| format!("'{code}' has no grade: a fit code is as H7 or g6"))?;
+            .map_err(|_| format!("{code} has no grade: a fit code is as H7 or g6"))?;
         if !GRADES.contains(&grade) {
             return Err(format!(
-                "'{code}': the grades covered are IT{} to IT{}",
+                "{code}: the grades covered are IT{} to IT{}",
                 GRADES.start(),
                 GRADES.end()
             ));

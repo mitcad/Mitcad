@@ -3357,6 +3357,8 @@ impl Document {
             "design": design.label,
             "items": design.items.len(),
             "counts": counts,
+            // What the outcomes left out and the warnings (mitcad#1040).
+            "notices": mitcad_model::notice::to_json(&design.notices()),
             "report": serde_json::to_value(&report).expect("the report serializes"),
         }))
     }

@@ -4,6 +4,7 @@
 //! counts, the components and joints, the bodies measured after the
 //! import, and the check against expected values when given.
 
+use mitcad_model::notice::{self, Notice, NoticeLevel};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -11,14 +12,14 @@ use serde_json::{Value, json};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
-    /// As Mitcad features with its parameters.
+    /// As MitCad features with its parameters.
     Parametric,
-    /// As Mitcad features, with something of it left out or fixed (the
+    /// As MitCad features, with something of it left out or fixed (the
     /// notes say what).
     Partial,
-    /// Mitcad has no counterpart: a suppressed placeholder holds its place.
+    /// MitCad has no counterpart: a suppressed placeholder holds its place.
     Unmapped,
-    /// Translated, but the Mitcad feature failed: a suppressed placeholder
+    /// Translated, but the MitCad feature failed: a suppressed placeholder
     /// holds its place.
     Failed,
     /// Nothing to bring in (folders of the file's own, a body transfer
@@ -36,6 +37,18 @@ impl Outcome {
             Outcome::Skipped => "skipped",
         }
     }
+
+    /// The outcome's level (mitcad#1040): a feature that came in as asked,
+    /// or that had nothing to bring in, is information; one that came in
+    /// partly or has no counterpart is a warning; one whose feature failed
+    /// is an error (its result is missing).
+    pub fn level(self) -> NoticeLevel {
+        match self {
+            Outcome::Parametric | Outcome::Skipped => NoticeLevel::Info,
+            Outcome::Partial | Outcome::Unmapped => NoticeLevel::Warning,
+            Outcome::Failed => NoticeLevel::Error,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -46,9 +59,9 @@ pub struct FeatureReport {
     /// The file's kind (`extrude`, `surface_loft`, …).
     pub kind: String,
     pub outcome: Outcome,
-    /// The Mitcad features it became (`F7`), in timeline order.
+    /// The MitCad features it became (`F7`), in timeline order.
     pub features: Vec<String>,
-    /// Suppressed in the file (and so in Mitcad).
+    /// Suppressed in the file (and so in MitCad).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub suppressed: bool,
     /// After the file's timeline marker (rolled back).
@@ -60,10 +73,10 @@ pub struct FeatureReport {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ParameterReport {
     pub name: String,
-    /// The file's expression and Mitcad's.
+    /// The file's expression and MitCad's.
     pub expression: String,
     pub mitcad: String,
-    /// The Mitcad parameter's name when it differs (a reserved name).
+    /// The MitCad parameter's name when it differs (a reserved name).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub renamed: Option<String>,
     /// A user parameter, a sketch dimension's or a feature input's.
@@ -89,7 +102,7 @@ pub struct SketchReport {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct BodyReport {
-    /// The file's body name (the Mitcad body's display name).
+    /// The file's body name (the MitCad body's display name).
     pub name: String,
     pub body: String,
     /// The occurrence path it is placed by (empty: the root's).
@@ -139,7 +152,7 @@ pub struct SolidcraftReport {
     /// number in the file.
     pub links: Vec<JointReport>,
     pub bodies: Vec<BodyReport>,
-    /// Kinds of the file without a Mitcad counterpart, each with its count.
+    /// Kinds of the file without a MitCad counterpart, each with its count.
     pub unmapped: Vec<(String, usize)>,
     /// Parameters changed after the import (`set_parameters`).
     pub changed: Vec<(String, String)>,
@@ -262,7 +275,7 @@ impl SolidcraftReport {
                 .iter()
                 .map(|(k, n)| format!("{k} ({n})"))
                 .collect();
-            out += &format!("without a Mitcad counterpart: {}\n", kinds.join(", "));
+            out += &format!("without a MitCad counterpart: {}\n", kinds.join(", "));
         }
         for b in &self.bodies {
             out += &format!(
@@ -315,7 +328,68 @@ impl SolidcraftReport {
             "items": self.features.len(),
             "bodies": self.bodies.len(),
             "counts": counts,
+            // What the outcomes left out (mitcad#1040).
+            "notices": notice::to_json(&self.notices()),
             "report": serde_json::to_value(self).expect("the report serializes"),
         })
+    }
+
+    /// The import's notices (mitcad#1040): what its features' outcomes
+    /// left out or could not build, the worst first.
+    pub fn notices(&self) -> Vec<Notice> {
+        let features = |n| notice::count(n, "feature", "features");
+        notice::outcome_notices(self.counts(), Outcome::level, |o, n| match o {
+            Outcome::Partial => format!("{} imported partly", features(n)),
+            Outcome::Unmapped => format!(
+                "{} without a counterpart, kept as placeholders",
+                features(n)
+            ),
+            Outcome::Failed => format!("{} failed, kept as placeholders", features(n)),
+            Outcome::Parametric | Outcome::Skipped => format!("{} imported", features(n)),
+        })
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::*;
+
+    fn feature(outcome: Outcome) -> FeatureReport {
+        FeatureReport {
+            id: 1,
+            name: "Extrude1".to_owned(),
+            kind: "extrude".to_owned(),
+            outcome,
+            features: Vec::new(),
+            suppressed: false,
+            rolled_back: false,
+            notes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn outcomes_map_onto_the_levels() {
+        assert_eq!(Outcome::Parametric.level(), NoticeLevel::Info);
+        assert_eq!(Outcome::Skipped.level(), NoticeLevel::Info);
+        assert_eq!(Outcome::Partial.level(), NoticeLevel::Warning);
+        assert_eq!(Outcome::Unmapped.level(), NoticeLevel::Warning);
+        assert_eq!(Outcome::Failed.level(), NoticeLevel::Error);
+        let report = SolidcraftReport {
+            features: vec![
+                feature(Outcome::Parametric),
+                feature(Outcome::Unmapped),
+                feature(Outcome::Unmapped),
+                feature(Outcome::Failed),
+            ],
+            ..SolidcraftReport::default()
+        };
+        assert_eq!(
+            report.notices(),
+            vec![
+                Notice::error("1 feature failed, kept as placeholders"),
+                Notice::warning("2 features without a counterpart, kept as placeholders"),
+            ]
+        );
+        assert_eq!(report.command_result()["notices"][0]["level"], "error");
     }
 }

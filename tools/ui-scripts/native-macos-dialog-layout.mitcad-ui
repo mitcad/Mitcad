@@ -310,15 +310,15 @@ native-pointer-button '^Close$'
 expect-native-dialog-gone '^Render Image$'
 focus-main
 
-# Library Parts: its helpers left of Update, and its own Close row.
+# Library Components: its helpers left of Update, and its own Close row.
 mark
 command tools.library_parts
-focus-dialog '^Library Parts$'
+focus-dialog '^Library Components$'
 expect-native-button-order '^Check for Newer Versions$' '^Get Missing Libraries$' '^Show Changes$' '^Update$'
 expect-native-button-order '^Close$'
 screenshot '${MITCAD_TEST_WORK}/library-parts-${MITCAD_TEST_APPEARANCE}.png'
 native-pointer-button '^Close$'
-expect-native-dialog-gone '^Library Parts$'
+expect-native-dialog-gone '^Library Components$'
 focus-main
 
 # The same sheets over a narrow document window.

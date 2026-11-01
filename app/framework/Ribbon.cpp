@@ -53,12 +53,16 @@ const QString kBuild = QStringLiteral("BUILD");
 // BUILD; a cut sheet's (mitcad#853) has a page of its own.
 const QString kDrawing = QStringLiteral("DRAWING");
 const QString kCutSheet = QStringLiteral("CUT SHEET");
+// Making a design (mitcad#1049): materials, annotations and the
+// manufacturing methods' groups, always shown after SOLID and BUILD.
+const QString kMake = QStringLiteral("MAKE");
 // The tabs' data: the index of their page.
 constexpr int kSolidPage = 0;
 constexpr int kSketchPage = 1;
 constexpr int kBuildPage = 2;
 constexpr int kDrawingPage = 3;
 constexpr int kCutSheetPage = 4;
+constexpr int kMakePage = 5;
 // The tabs of a mode (a sketch, a drawing): their names in the accent colour.
 bool isModeTab(int page) { return page == kSketchPage || page == kDrawingPage || page == kCutSheetPage; }
 // A page's tab by its internal name.
@@ -72,6 +76,8 @@ const QString& tabName(int page) {
     return kDrawing;
   case kCutSheetPage:
     return kCutSheet;
+  case kMakePage:
+    return kMake;
   default:
     return kSolid;
   }
@@ -355,8 +361,8 @@ public:
     m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     page->layout()->setSizeConstraint(QLayout::SetMinimumSize);
     m_scroll->setWidget(page);
-    m_back = arrow(Qt::LeftArrow, tr("Scroll ribbon left"), QStringLiteral("ribbonScrollLeft"));
-    m_next = arrow(Qt::RightArrow, tr("Scroll ribbon right"), QStringLiteral("ribbonScrollRight"));
+    m_back = arrow(Qt::LeftArrow, tr("Scroll toolbar left"), QStringLiteral("ribbonScrollLeft"));
+    m_next = arrow(Qt::RightArrow, tr("Scroll toolbar right"), QStringLiteral("ribbonScrollRight"));
     row->addWidget(m_back);
     row->addWidget(m_scroll, 1);
     row->addWidget(m_next);
@@ -441,16 +447,13 @@ QToolButton* commandButton(QAction* action, bool mac) {
   return button;
 }
 
-// The pinned commands' group (mitcad#1001): its internal name ("Pinned"
-// shown), and its buttons' tab and command.
-const QString kPinned = QStringLiteral("PINNED");
+// A pinned command's button (mitcad#1001, in its own group since
+// mitcad#1084): its tab, its command and its group ("SOLID/CREATE").
 const char* const kPinTabProperty = "mitcadPinTab";
 const char* const kPinIdProperty = "mitcadPinId";
+const char* const kPinGroupProperty = "mitcadPinGroup";
 // The column of the ⋮ buttons at the right of a group menu's rows.
 constexpr int kRowDotsWidth = 22;
-// The tab's first groups (Create and Modify), which collapse after the
-// Pinned group in a narrow window.
-constexpr int kKeptGroups = 2;
 
 // The command a menu row runs (its action's "command_<id>",
 // CommandRegistry), or "" for a submenu, a separator or an entry that is
@@ -658,10 +661,19 @@ private:
 
 } // namespace
 
+void Ribbon::addTabRowWidget(QWidget* widget) {
+  if (m_tabRow == nullptr || widget == nullptr) {
+    return;
+  }
+  m_tabRow->insertWidget(m_tabRow->indexOf(m_tabs) + 1, widget, 0, Qt::AlignVCenter);
+}
+
 QString displayName(const QString& name) {
   QStringList words = name.toLower().split(QLatin1Char(' '), Qt::SkipEmptyParts);
   for (QString& word : words) {
-    word[0] = word.at(0).toUpper();
+    // A word that starts with a digit is a term in capitals ("3D PRINT" is
+    // "3D Print", mitcad#1049).
+    word = word.at(0).isDigit() ? word.toUpper() : word.at(0).toUpper() + word.mid(1);
   }
   return words.join(QLatin1Char(' '));
 }
@@ -794,9 +806,15 @@ Ribbon::Ribbon(CommandRegistry& registry, Presentation presentation, QWidget* pa
     setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   } else {
     layout->setContentsMargins(4, 2, 4, 2);
-    // The Docked chrome's pills (mitcad#251).
+    // The Docked chrome's pills (mitcad#251), in a row that may hold the
+    // quick-access group after them (addTabRowWidget, mitcad#1090).
     m_tabs = new PillTabBar;
-    layout->addWidget(m_tabs);
+    m_tabRow = new QHBoxLayout;
+    m_tabRow->setContentsMargins(0, 0, 0, 0);
+    m_tabRow->setSpacing(8);
+    m_tabRow->addWidget(m_tabs);
+    m_tabRow->addStretch();
+    layout->addLayout(m_tabRow);
     // In the toolbar the ribbon takes the width there is and clips the
     // groups at its right rather than asking for all of them: a toolbar
     // moves a widget that does not fit into its overflow menu, which hid
@@ -812,6 +830,9 @@ Ribbon::Ribbon(CommandRegistry& registry, Presentation presentation, QWidget* pa
       m_pages->setCurrentIndex(m_tabs->tabData(index).toInt());
       // The shown page's group menus, for UI tests (BUILD, mitcad#375).
       TestSync::singleShot(0, this, [this] { logLayout(); });
+      // What the window shows for the tab (the Make tab's body card and
+      // Browser markers, mitcad#1049).
+      emit tabChanged(currentTab());
     }
   });
   // The places logged again when the ribbon or the tab bar is shown or
@@ -828,13 +849,14 @@ Ribbon::Ribbon(CommandRegistry& registry, Presentation presentation, QWidget* pa
 }
 
 const QStringList& Ribbon::groups(const QString& tab) {
-  // MAKE: 3D Print (mitcad#13). ASSEMBLE: joints (mitcad#55). SURFACE:
+  // RENDER: Render Image (mitcad#175; the group was MAKE until mitcad#1070,
+  // the Make tab has that name). ASSEMBLE: joints (mitcad#55). SURFACE:
   // mitcad#455. SHEET METAL:
   // mitcad#210.
   static const QStringList solid = {QStringLiteral("CREATE"),  QStringLiteral("MODIFY"),
                                     QStringLiteral("SHEET METAL"), QStringLiteral("SURFACE"), QStringLiteral("ASSEMBLE"), QStringLiteral("CONSTRUCT"),
                                     QStringLiteral("INSPECT"), QStringLiteral("INSERT"),
-                                    QStringLiteral("MAKE"),    QStringLiteral("SELECT")};
+                                    QStringLiteral("RENDER"),  QStringLiteral("SELECT")};
   static const QStringList sketch = {QStringLiteral("CREATE"),       QStringLiteral("MODIFY"),
                                      QStringLiteral("CONSTRAINTS"),  QStringLiteral("INSPECT"),
                                      QStringLiteral("INSERT"),       QStringLiteral("SELECT"),
@@ -852,6 +874,11 @@ const QStringList& Ribbon::groups(const QString& tab) {
                                       QStringLiteral("TABLES"),        QStringLiteral("EXPORT")};
   static const QStringList cutSheet = {QStringLiteral("CLOSE DRAWING"), QStringLiteral("PARTS"),
                                        QStringLiteral("EXPORT")};
+  // mitcad#1049: what every method needs first (the materials, the
+  // annotations), then a group per manufacturing method. CNC comes with
+  // CAM's commands (mitcad#1013): a group without commands is not listed.
+  static const QStringList make = {QStringLiteral("MATERIALS"), QStringLiteral("ANNOTATE"),
+                                   QStringLiteral("3D PRINT"), QStringLiteral("LASER")};
   if (tab == kBuild) {
     return build;
   }
@@ -860,6 +887,9 @@ const QStringList& Ribbon::groups(const QString& tab) {
   }
   if (tab == kCutSheet) {
     return cutSheet;
+  }
+  if (tab == kMake) {
+    return make;
   }
   return tab == kSketch ? sketch : solid;
 }
@@ -882,11 +912,15 @@ void Ribbon::addGroupExtras(const QString& tab, const QString& group, const QLis
 }
 
 void Ribbon::build() {
-  // The user's pinned commands (mitcad#1001); one that no longer exists is
-  // dropped (logged by ToolbarPins).
-  m_pins = ToolbarPins::load([this](const QString& id) {
+  // The user's pinned commands (mitcad#1001), each in its own group
+  // (mitcad#1084); one that no longer exists is dropped, one kept under
+  // another tab goes to its own (logged by ToolbarPins).
+  m_pins = ToolbarPins::load([this](const QString& id) -> ToolbarPins::Command {
     const CommandDef* def = m_registry.find(id);
-    return def != nullptr && m_registry.action(def->id) != nullptr ? def->id : QString();
+    if (def == nullptr || m_registry.action(def->id) == nullptr) {
+      return {};
+    }
+    return {def->id, def->tab, def->group};
   });
   m_pages->addWidget(createPage(kSolid));
   m_sketchPage = createPage(kSketch);
@@ -895,17 +929,42 @@ void Ribbon::build() {
   // A drawing's and a cut sheet's (mitcad#1008), shown while one is open.
   m_pages->addWidget(createPage(kDrawing));
   m_pages->addWidget(createPage(kCutSheet));
+  // MAKE (mitcad#1049), the page after them.
+  m_pages->addWidget(createPage(kMake));
   addModelTabs();
 }
 
 void Ribbon::addModelTabs() {
   const int solid = m_tabs->insertTab(0, displayName(kSolid));
   m_tabs->setTabData(solid, kSolidPage);
-  m_tabs->setTabToolTip(solid, tr("Solid modelling"));
+  m_tabs->setTabToolTip(solid, tr("Solid modeling"));
   // BUILD (mitcad#375) beside SOLID; SKETCH comes after them while sketching.
   const int build = m_tabs->insertTab(1, displayName(kBuild));
   m_tabs->setTabData(build, kBuildPage);
-  m_tabs->setTabToolTip(build, tr("Build: frames of slot profiles with their connectors, panels and linear parts"));
+  m_tabs->setTabToolTip(build, tr("Build: frames of slot profiles with their connectors, panels and linear components"));
+  // MAKE (mitcad#1049) after them: making the design, by manufacturing
+  // method.
+  const int make = m_tabs->insertTab(2, displayName(kMake));
+  m_tabs->setTabData(make, kMakePage);
+  m_tabs->setTabToolTip(make, tr("Make: materials, annotations, 3D printing and laser cutting"));
+}
+
+QString Ribbon::currentTab() const {
+  const int index = m_tabs != nullptr ? m_tabs->currentIndex() : -1;
+  return index >= 0 ? tabName(m_tabs->tabData(index).toInt()) : QString();
+}
+
+bool Ribbon::hasEntries(const QString& tab, const QString& group) const {
+  const Extras extras = m_extras.value(key(tab, group));
+  if (!extras.menu.isEmpty() || !extras.pinned.isEmpty()) {
+    return true;
+  }
+  for (const auto& def : m_registry.commands()) {
+    if (def->tab == tab && def->group == group && m_registry.action(def->id) != nullptr) {
+      return true;
+    }
+  }
+  return false;
 }
 
 int Ribbon::tabOfPage(int page) const {
@@ -928,6 +987,11 @@ QWidget* Ribbon::createPage(const QString& tab) {
   bool first = true;
   QList<GroupInfo>& infos = m_groupsOfPage[page];
   for (const QString& group : groups(tab)) {
+    // A group without commands is not shown (mitcad#1049: CNC until CAM;
+    // the Solid tab's Render group in a build without the render worker).
+    if (!hasEntries(tab, group)) {
+      continue;
+    }
     if (!first && !mac) {
       row->addWidget(new GroupSeparator);
     }
@@ -937,10 +1001,8 @@ QWidget* Ribbon::createPage(const QString& tab) {
     infos.push_back(info);
   }
   row->addStretch();
-  // The pinned commands at the end of the tab (mitcad#1001), before the
-  // stretch.
+  // The page whose groups take the tab's pinned commands (mitcad#1084).
   m_pageOfTab.insert(tab, page);
-  updatePinnedGroup(tab, false);
   if (!mac) {
     auto* overflow = new ClassicRibbonPage(page);
     m_classicPages.insert(page, overflow);
@@ -1064,6 +1126,12 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
     buttons->addWidget(commandButton(action, mac));
     ++pinnedCount;
   }
+  // The commands the user pinned in this group, after its own buttons
+  // (mitcad#1084).
+  info->tab = tab;
+  info->group = group;
+  info->ownButtons = pinnedCount;
+  pinnedCount += addPinnedButtons(tab, group, row, false);
   return finishGroup(widget, row, menuButton, menu, pinnedCount, tab, group, info);
 }
 
@@ -1073,9 +1141,6 @@ QWidget* Ribbon::finishGroup(QWidget* widget, QWidget* row, QToolButton* menuBut
   auto* column = static_cast<QVBoxLayout*>(widget->layout());
   if (menu->isEmpty()) {
     menu->addAction(tr("No commands yet"))->setEnabled(false);
-  }
-  if (pinnedCount == 0) {
-    row->setMinimumWidth(kIconSize + 8);
   }
 
   if (!mac) {
@@ -1104,17 +1169,9 @@ QWidget* Ribbon::finishGroup(QWidget* widget, QWidget* row, QToolButton* menuBut
     // A card of its own in the Floating layout's group cards (mitcad#425).
     widget->setObjectName(QStringLiteral("ribbonGroup_") + key(tab, group));
     const int caption = menuButton->sizeHint().width() + 16;
-    // The capsule is as wide as its caption at least.
-    widget->setMinimumWidth(caption);
     info->capsule = widget;
     info->buttons = row;
-    info->collapsible = pinnedCount > 0;
     info->collapsedWidth = caption + 8;
-    info->fullWidth = std::max(caption, row->layout()->sizeHint().width() + 16);
-    row->setVisible(pinnedCount > 0);
-    if (pinnedCount == 0) {
-      widget->setMinimumWidth(info->collapsedWidth);
-    }
   } else {
     // Preserve the complete caption and its menu indicator. The page can
     // scroll if even the caption-only groups cannot fit in the viewport.
@@ -1125,11 +1182,55 @@ QWidget* Ribbon::finishGroup(QWidget* widget, QWidget* row, QToolButton* menuBut
     widget->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
     info->capsule = widget;
     info->buttons = row;
-    info->collapsible = pinnedCount > 0;
     info->collapsedWidth = caption + margins;
-    info->fullWidth = std::max(info->collapsedWidth, row->layout()->sizeHint().width() + margins);
   }
+  sizeGroup(info, pinnedCount);
   return widget;
+}
+
+void Ribbon::sizeGroup(GroupInfo* info, int buttonCount) {
+  const bool mac = m_presentation == Presentation::Mac;
+  QWidget* row = info->buttons;
+  // A row without buttons keeps a button's room (Classic; hidden in Mac).
+  row->setMinimumWidth(buttonCount == 0 ? kIconSize + 8 : 0);
+  info->collapsible = buttonCount > 0;
+  // The user's pinned buttons, which fold first (mitcad#1111). They are
+  // all shown here (new ones), so the row's width counts them.
+  QLayout* rowLayout = row->layout();
+  info->pinButtons.clear();
+  info->pinWidths.clear();
+  int pinned = 0;
+  for (int i = 0; i < rowLayout->count(); ++i) {
+    auto* button = qobject_cast<QToolButton*>(rowLayout->itemAt(i)->widget());
+    if (button != nullptr && button->property(kPinIdProperty).isValid()) {
+      const int pinWidth = rowLayout->itemAt(i)->sizeHint().width();
+      info->pinButtons.append(button);
+      info->pinWidths.append(pinWidth);
+      pinned += pinWidth;
+    }
+  }
+  info->ownRowWidth = std::max(0, rowLayout->sizeHint().width() - pinned);
+  if (mac) {
+    const int caption = info->collapsedWidth - 8;
+    info->minWidth = caption;
+    info->rowMargins = 16;
+    row->setVisible(buttonCount > 0);
+    // The capsule is as wide as its caption at least.
+    info->capsule->setMinimumWidth(buttonCount > 0 ? caption : info->collapsedWidth);
+  } else {
+    const QMargins margins = info->capsule->layout()->contentsMargins();
+    info->minWidth = info->collapsedWidth;
+    info->rowMargins = margins.left() + margins.right();
+  }
+  info->fullWidth = groupWidth(*info, static_cast<int>(info->pinButtons.size()));
+}
+
+int Ribbon::groupWidth(const GroupInfo& info, int pins) {
+  int row = info.ownRowWidth;
+  for (int i = 0; i < pins && i < info.pinWidths.size(); ++i) {
+    row += info.pinWidths[i];
+  }
+  return std::max(info.minWidth, row + info.rowMargins);
 }
 
 QMenu* Ribbon::createGroupMenu(const QString& tab, const QString& path, QWidget* parent) {
@@ -1145,8 +1246,15 @@ QMenu* Ribbon::showRowMenu(QWidget* over, const QString& tab, const QString& pla
   menu->setObjectName(QStringLiteral("ribbonRowMenu"));
   // Gone once it closes (a chosen entry hides it without closing it).
   connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
-  const bool pinned = m_pins.isPinned(tab, id);
+  // The command is pinned in its own group, on its own tab (mitcad#1084).
+  const CommandDef* def = m_registry.find(id);
+  const QString own = def != nullptr ? def->tab : tab;
+  const bool pinned = m_pins.isPinned(own, id);
   QAction* pinAction = menu->addAction(pinned ? tr("Unpin from Toolbar") : tr("Pin to Toolbar"));
+  // A command that is already a button of its group has nothing to pin.
+  if (!pinned && hasOwnButton(own, id)) {
+    pinAction->setEnabled(false);
+  }
   QAction* shortcutAction = menu->addAction(tr("Change Keyboard Shortcut…"));
   // The menus closed first; then the change, which may remake the group
   // the menu was opened from.
@@ -1167,7 +1275,7 @@ QMenu* Ribbon::showRowMenu(QWidget* over, const QString& tab, const QString& pla
   qDebug().noquote() << QStringLiteral("Toolbar menu %1 %2: %3").arg(place, id, menuEntries(menu));
   menu->popup(global);
   if (keyboard) {
-    menu->setActiveAction(pinAction);
+    menu->setActiveAction(pinAction->isEnabled() ? pinAction : shortcutAction);
   }
   // Its entries' places, for UI tests: "Toolbar menu entry Pin to Toolbar
   // at x,y" in the main window's coordinates.
@@ -1180,103 +1288,72 @@ QMenu* Ribbon::showRowMenu(QWidget* over, const QString& tab, const QString& pla
   return menu;
 }
 
-QWidget* Ribbon::createPinnedGroup(const QString& tab, GroupInfo* info) {
+bool Ribbon::hasOwnButton(const QString& tab, const QString& id) const {
+  const QWidget* page = m_pageOfTab.value(tab);
+  return page != nullptr && page->findChild<QToolButton*>(QStringLiteral("ribbon_") + id) != nullptr;
+}
+
+int Ribbon::addPinnedButtons(const QString& tab, const QString& group, QWidget* row, bool show) {
   const bool mac = m_presentation == Presentation::Mac;
-  QWidget* widget = mac ? new CapsuleFrame : new QWidget;
-  auto* column = new QVBoxLayout(widget);
-  column->setContentsMargins(mac ? QMargins(8, 6, 8, 5) : QMargins(2, 0, 2, 0));
-  column->setSpacing(0);
-  if (mac) {
-    widget->setMinimumHeight(6 + kMacButtonSize + kMacCaptionHeight + 5);
-  }
-  auto* row = new QWidget;
-  row->setFixedHeight(mac ? kMacButtonSize : kIconSize + 10);
-  auto* buttons = new QHBoxLayout(row);
-  buttons->setContentsMargins(0, 0, 0, 0);
-  buttons->setSpacing(0);
-  QToolButton* menuButton = mac ? new GroupCaption(displayName(kPinned)) : new QToolButton;
-  const QString path = key(tab, kPinned);
-  QMenu* menu = createGroupMenu(tab, path, menuButton);
+  auto* buttons = static_cast<QHBoxLayout*>(row->layout());
+  const QString place = key(tab, group);
   int count = 0;
-  for (const QString& id : m_pins.pins(tab)) {
+  for (const QString& id : m_pins.pins(tab, group)) {
     QAction* action = m_registry.action(id);
-    if (action == nullptr) {
+    // A command that is a button of the group already (a pin kept from an
+    // earlier version) is not shown twice.
+    if (action == nullptr || row->findChild<QToolButton*>(QStringLiteral("ribbon_") + id) != nullptr) {
       continue;
     }
-    menu->addAction(action);
     QToolButton* button = commandButton(action, mac);
     button->setObjectName(QStringLiteral("ribbonPinned_") + id);
     button->setProperty(kPinTabProperty, tab);
     button->setProperty(kPinIdProperty, id);
-    // Its right-click: Unpin from Toolbar; a drag: another place.
+    button->setProperty(kPinGroupProperty, place);
+    // Its right-click: Unpin from Toolbar; a drag: another place among the
+    // group's pinned buttons.
     button->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(button, &QToolButton::customContextMenuRequested, this, [this, button, tab, path, id](const QPoint& at) {
-      showRowMenu(button, tab, path, id, button->mapToGlobal(at), false);
+    connect(button, &QToolButton::customContextMenuRequested, this, [this, button, tab, place, id](const QPoint& at) {
+      showRowMenu(button, tab, place, id, button->mapToGlobal(at), false);
     });
     button->installEventFilter(this);
     buttons->addWidget(button);
+    if (show) {
+      button->show(); // now, for the group's widths (not a queued show)
+    }
     ++count;
   }
-  connect(menu, &QMenu::aboutToShow, menu, [menu, path] {
-    qDebug().noquote() << QStringLiteral("Ribbon menu %1: %2").arg(path, menuEntries(menu));
-  });
-  QWidget* group = finishGroup(widget, row, menuButton, menu, count, tab, kPinned, info);
-  info->pinnedGroup = true;
-  return group;
+  return count;
 }
 
-void Ribbon::updatePinnedGroup(const QString& tab, bool changed) {
+void Ribbon::updatePinnedButtons(const QString& tab, const QString& group) {
   QWidget* page = m_pageOfTab.value(tab);
   if (page == nullptr) {
     return;
   }
-  auto* row = static_cast<QHBoxLayout*>(page->layout());
   QList<GroupInfo>& infos = m_groupsOfPage[page];
-  const QString name = key(tab, kPinned);
-  const bool had = m_pinnedGroups.contains(tab);
-  if (QWidget* old = m_pinnedGroups.take(tab)) {
-    infos.erase(std::remove_if(infos.begin(), infos.end(), [old](const GroupInfo& info) { return info.capsule == old; }),
-                infos.end());
-    m_groupButtons.remove(name);
-    row->removeWidget(old);
-    old->hide();
-    old->deleteLater();
+  const auto found = std::find_if(infos.begin(), infos.end(),
+                                  [&tab, &group](const GroupInfo& info) { return info.tab == tab && info.group == group; });
+  if (found == infos.end()) {
+    return; // the group is not shown (no commands of its own)
   }
-  if (QWidget* separator = m_pinnedSeparators.take(tab)) {
-    row->removeWidget(separator);
-    separator->hide();
-    separator->deleteLater();
-  }
-  const QStringList pinned = m_pins.pins(tab);
-  if (!pinned.isEmpty()) {
-    const bool mac = m_presentation == Presentation::Mac;
-    // After the last group, before the stretch.
-    if (!mac) {
-      auto* separator = new GroupSeparator;
-      row->insertWidget(row->count() - 1, separator);
-      separator->show();
-      m_pinnedSeparators.insert(tab, separator);
+  GroupInfo& info = *found;
+  // The pinned buttons made again after the group's own, in the pins' order.
+  QLayout* buttons = info.buttons->layout();
+  for (QToolButton* old : info.buttons->findChildren<QToolButton*>(QString(), Qt::FindDirectChildrenOnly)) {
+    if (old->property(kPinIdProperty).isValid()) {
+      buttons->removeWidget(old);
+      old->hide();
+      old->deleteLater();
     }
-    GroupInfo info;
-    QWidget* group = createPinnedGroup(tab, &info);
-    row->insertWidget(row->count() - 1, group);
-    group->show(); // now, for the layout below (not a queued show)
-    infos.push_back(info);
-    m_pinnedGroups.insert(tab, group);
-    if (m_groupCards) {
-      if (auto* frame = qobject_cast<CapsuleFrame*>(group)) {
-        frame->setCardMaterial(true);
-      }
-      group->installEventFilter(this);
-    }
-    qDebug().noquote() << QStringLiteral("Ribbon group %1: %2").arg(name, pinned.join(QStringLiteral(", ")));
-  } else if (had) {
-    qDebug().noquote() << QStringLiteral("Ribbon group %1 gone").arg(name);
   }
-  if (!changed) {
-    return; // building: the ribbon fits and logs its groups when it shows
-  }
-  row->activate();
+  const int count = addPinnedButtons(tab, group, info.buttons, true);
+  sizeGroup(&info, info.ownButtons + count);
+  const QStringList pinned = m_pins.pins(tab, group);
+  qDebug().noquote() << QStringLiteral("Ribbon group %1 pinned: %2")
+                            .arg(key(tab, group), pinned.isEmpty() ? QStringLiteral("none") : pinned.join(QStringLiteral(", ")));
+  buttons->activate();
+  page->layout()->activate();
   fitGroups();
   updateGroupMask();
   // Logged once the scroll area and the cards have followed the new size.
@@ -1288,39 +1365,52 @@ void Ribbon::updatePinnedGroup(const QString& tab, bool changed) {
 
 void Ribbon::pin(const QString& tab, const QString& id) {
   const CommandDef* def = m_registry.find(id);
-  if (def == nullptr || m_registry.action(def->id) == nullptr || !m_pins.pin(tab, def->id)) {
+  if (def == nullptr || m_registry.action(def->id) == nullptr) {
     return;
   }
-  qDebug().noquote() << QStringLiteral("Pinned to toolbar: %1 (%2)").arg(def->name, displayName(tab));
-  updatePinnedGroup(tab, true);
-  emit pinsChanged(tab);
+  // In the command's own group, on its tab (mitcad#1084).
+  const QString own = def->tab.isEmpty() ? tab : def->tab;
+  if (!m_pins.pin(own, def->id)) {
+    return;
+  }
+  qDebug().noquote() << QStringLiteral("Pinned to toolbar: %1 (%2)").arg(def->name, displayName(own));
+  updatePinnedButtons(own, def->group);
+  emit pinsChanged(own);
 }
 
 void Ribbon::unpin(const QString& tab, const QString& id) {
   const CommandDef* def = m_registry.find(id);
   const QString command = def != nullptr ? def->id : id;
-  if (!m_pins.unpin(tab, command)) {
+  const QString own = def != nullptr && !def->tab.isEmpty() ? def->tab : tab;
+  if (!m_pins.unpin(own, command)) {
     return;
   }
-  qDebug().noquote() << QStringLiteral("Unpinned: %1 (%2)").arg(def != nullptr ? def->name : id, displayName(tab));
-  updatePinnedGroup(tab, true);
-  emit pinsChanged(tab);
+  qDebug().noquote() << QStringLiteral("Unpinned: %1 (%2)").arg(def != nullptr ? def->name : id, displayName(own));
+  if (def != nullptr) {
+    updatePinnedButtons(own, def->group);
+  }
+  emit pinsChanged(own);
 }
 
 void Ribbon::movePin(const QString& tab, const QString& id, int index) {
-  const bool moved = m_pins.move(tab, id, index);
+  const CommandDef* def = m_registry.find(id);
+  if (def == nullptr) {
+    return;
+  }
+  const QString own = def->tab.isEmpty() ? tab : def->tab;
+  const bool moved = m_pins.moveInGroup(own, def->id, index);
   if (moved) {
     QStringList names;
-    for (const QString& pinned : m_pins.pins(tab)) {
-      const CommandDef* def = m_registry.find(pinned);
-      names.append(def != nullptr ? def->name : pinned);
+    for (const QString& pinned : m_pins.pins(own, def->group)) {
+      const CommandDef* other = m_registry.find(pinned);
+      names.append(other != nullptr ? other->name : pinned);
     }
-    qDebug().noquote() << QStringLiteral("Pinned order (%1): %2").arg(displayName(tab), names.join(QStringLiteral(", ")));
+    qDebug().noquote() << QStringLiteral("Pinned order %1: %2").arg(key(own, def->group), names.join(QStringLiteral(", ")));
   }
   // Also when it is where it was: the buttons in the pins' order again.
-  updatePinnedGroup(tab, true);
+  updatePinnedButtons(own, def->group);
   if (moved) {
-    emit pinsChanged(tab);
+    emit pinsChanged(own);
   }
 }
 
@@ -1349,20 +1439,29 @@ bool Ribbon::dragPinned(QToolButton* button, QEvent* event) {
       button->setDown(false);
       button->setCursor(Qt::ClosedHandCursor);
     }
-    // The button among the others where the mouse is, while it moves.
+    // The button among the group's other pinned buttons where the mouse
+    // is, while it moves; the group's own buttons stay first.
     QWidget* row = button->parentWidget();
     auto* rowLayout = static_cast<QHBoxLayout*>(row->layout());
     const int x = row->mapFromGlobal(global).x();
+    int first = -1; // the first pinned button's place in the row
     int target = 0;
     for (int i = 0; i < rowLayout->count(); ++i) {
       const QWidget* other = rowLayout->itemAt(i)->widget();
-      if (other != nullptr && other != button && other->geometry().center().x() < x) {
+      if (other == nullptr || !other->property(kPinIdProperty).isValid()) {
+        continue;
+      }
+      if (first < 0) {
+        first = i;
+      }
+      // Folded ones (mitcad#1111, after the shown ones) are not in sight.
+      if (other != button && !other->isHidden() && other->geometry().center().x() < x) {
         ++target;
       }
     }
-    if (rowLayout->indexOf(button) != target) {
+    if (first >= 0 && rowLayout->indexOf(button) != first + target) {
       rowLayout->removeWidget(button);
-      rowLayout->insertWidget(target, button);
+      rowLayout->insertWidget(first + target, button);
     }
     return true;
   }
@@ -1379,10 +1478,22 @@ bool Ribbon::dragPinned(QToolButton* button, QEvent* event) {
     }
     button->unsetCursor();
     button->setDown(false);
-    const int index = button->parentWidget()->layout()->indexOf(button);
+    // Its place among the group's pinned buttons.
+    QLayout* rowLayout = button->parentWidget()->layout();
+    int index = 0;
+    for (int i = 0; i < rowLayout->count(); ++i) {
+      const QWidget* other = rowLayout->itemAt(i)->widget();
+      if (other == button) {
+        break;
+      }
+      if (other != nullptr && other->property(kPinIdProperty).isValid()) {
+        ++index;
+      }
+    }
     const QString tab = button->property(kPinTabProperty).toString();
     const QString id = button->property(kPinIdProperty).toString();
-    // Not while the button's own event is handled: the group is made again.
+    // Not while the button's own event is handled: its buttons are made
+    // again.
     TestSync::singleShot(0, this, [this, tab, id, index] { movePin(tab, id, index); });
     return true;
   }
@@ -1420,47 +1531,22 @@ void Ribbon::showEvent(QShowEvent* event) {
 }
 
 void Ribbon::fitGroups() {
-  // The groups that may collapse, from the right; the PINNED group
-  // (mitcad#1001) after the others but before the tab's first two (Create
-  // and Modify), which stay in sight the longest, Create the longest.
-  const auto collapseOrder = [](const QList<GroupInfo>& list) {
-    std::vector<int> order;
-    for (int i = static_cast<int>(list.size()) - 1; i >= kKeptGroups; --i) {
-      if (!list[i].pinnedGroup) order.push_back(i);
-    }
-    for (int i = static_cast<int>(list.size()) - 1; i >= 0; --i) {
-      if (list[i].pinnedGroup) order.push_back(i);
-    }
-    for (int i = std::min(kKeptGroups, static_cast<int>(list.size())) - 1; i >= 0; --i) {
-      if (!list[i].pinnedGroup) order.push_back(i);
-    }
-    return order;
-  };
   if (m_presentation == Presentation::Classic) {
     const QMargins outside = layout()->contentsMargins();
     const int available = std::max(0, width() - outside.left() - outside.right());
     for (auto it = m_groupsOfPage.begin(); it != m_groupsOfPage.end(); ++it) {
       QLayout* row = it.key()->layout();
       const QMargins margins = row->contentsMargins();
-      int total = margins.left() + margins.right() + std::max(0, row->spacing()) * std::max(0, row->count() - 2);
+      int fixed = margins.left() + margins.right() + std::max(0, row->spacing()) * std::max(0, row->count() - 2);
       for (int item = 0; item < row->count(); ++item) {
         if (QWidget* child = row->itemAt(item)->widget()) {
-          if (dynamic_cast<GroupSeparator*>(child)) total += child->minimumWidth();
+          if (dynamic_cast<GroupSeparator*>(child)) fixed += child->minimumWidth();
         }
       }
-      const QList<GroupInfo>& infos = it.value();
-      for (const GroupInfo& info : infos) total += info.fullWidth;
-      std::vector<bool> collapsed(static_cast<std::size_t>(infos.size()), false);
-      for (const int i : collapseOrder(infos)) {
-        if (total <= available) break;
-        if (infos[i].collapsible && infos[i].fullWidth > infos[i].collapsedWidth) {
-          total -= infos[i].fullWidth - infos[i].collapsedWidth;
-          collapsed[static_cast<std::size_t>(i)] = true;
-        }
+      for (const GroupInfo& info : std::as_const(it.value())) {
+        if (!info.collapsible) fixed += info.fullWidth;
       }
-      for (int i = 0; i < infos.size(); ++i) {
-        if (infos[i].collapsible) infos[i].buttons->setVisible(!collapsed[static_cast<std::size_t>(i)]);
-      }
+      fitPage(it.value(), fixed, available);
       row->activate();
       if (QWidget* overflow = m_classicPages.value(it.key())) {
         static_cast<ClassicRibbonPage*>(overflow)->updateOverflow();
@@ -1476,27 +1562,82 @@ void Ribbon::fitGroups() {
   constexpr int kSpacing = 8;
   for (auto it = m_groupsOfPage.begin(); it != m_groupsOfPage.end(); ++it) {
     QList<GroupInfo>& infos = it.value();
-    int total = pageMargins + kSpacing * std::max<int>(0, static_cast<int>(infos.size()) - 1);
-    for (const GroupInfo& info : infos) {
-      total += info.collapsible ? info.fullWidth : info.collapsedWidth;
+    int fixed = pageMargins + kSpacing * std::max<int>(0, static_cast<int>(infos.size()) - 1);
+    for (const GroupInfo& info : std::as_const(infos)) {
+      if (!info.collapsible) fixed += info.collapsedWidth;
     }
-    // Collapse from the right while the groups do not fit, only groups that
-    // get narrower: a group whose buttons fit under its name (FINISH SKETCH)
-    // is no wider with them, and collapsing it hid Finish Sketch in a
-    // 1024-wide window for nothing (mitcad#696).
-    std::vector<bool> collapsed(static_cast<std::size_t>(infos.size()), false);
-    for (const int i : collapseOrder(infos)) {
-      if (total <= width()) break;
-      if (infos[i].collapsible && infos[i].fullWidth > infos[i].collapsedWidth) {
-        total -= infos[i].fullWidth - infos[i].collapsedWidth;
-        collapsed[static_cast<std::size_t>(i)] = true;
+    fitPage(infos, fixed, width());
+  }
+}
+
+void Ribbon::fitPage(QList<GroupInfo>& infos, int fixed, int available) {
+  const auto count = static_cast<std::size_t>(infos.size());
+  std::vector<bool> collapsed(count, false);
+  std::vector<int> shown(count, 0);  // the pinned buttons shown
+  std::vector<int> widths(count, 0); // the groups' widths as they fold
+  int total = fixed;
+  for (std::size_t i = 0; i < count; ++i) {
+    const GroupInfo& info = infos[static_cast<int>(i)];
+    if (info.collapsible) {
+      shown[i] = static_cast<int>(info.pinButtons.size());
+      widths[i] = info.fullWidth;
+      total += widths[i];
+    }
+  }
+  // From the right, so that the tab's first groups (Create, Modify) stay in
+  // sight the longest, Create the longest. In each group the commands the
+  // user pinned fold first, the last one first (mitcad#1111: a pinned
+  // command never hides its group's own buttons); the group collapses only
+  // when its own buttons do not fit either, and only when it gets narrower:
+  // a group whose buttons fit under its name (FINISH SKETCH) is no wider
+  // with them, and collapsing it hid Finish Sketch in a 1024-wide window for
+  // nothing (mitcad#696).
+  for (std::size_t i = count; i-- > 0 && total > available;) {
+    const GroupInfo& info = infos[static_cast<int>(i)];
+    if (!info.collapsible) {
+      continue;
+    }
+    // A pin folds only when the group gets narrower without it (not where
+    // the buttons fit under the group's name).
+    while (total > available && shown[i] > 0 && groupWidth(info, shown[i] - 1) < widths[i]) {
+      --shown[i];
+      const int narrower = groupWidth(info, shown[i]);
+      total -= widths[i] - narrower;
+      widths[i] = narrower;
+    }
+    if (shown[i] == 0 && info.ownButtons == 0) {
+      // Nothing of its own left in the row: its name alone.
+      total -= widths[i] - info.collapsedWidth;
+      collapsed[i] = true;
+    } else if (total > available && widths[i] > info.collapsedWidth) {
+      total -= widths[i] - info.collapsedWidth;
+      collapsed[i] = true;
+    }
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    GroupInfo& info = infos[static_cast<int>(i)];
+    if (!info.collapsible) {
+      continue;
+    }
+    info.buttons->setVisible(!collapsed[i]);
+    // The folded pinned buttons leave the row; the group's menu lists their
+    // commands as it lists all of its commands.
+    QStringList folded;
+    for (int pin = 0; pin < info.pinButtons.size(); ++pin) {
+      QToolButton* button = info.pinButtons[pin];
+      if (button == nullptr) {
+        continue;
+      }
+      button->setVisible(pin < shown[i]);
+      if (pin >= shown[i]) {
+        folded << button->property(kPinIdProperty).toString();
       }
     }
-    for (int i = 0; i < infos.size(); ++i) {
-      const GroupInfo& info = infos[i];
-      if (info.collapsible) {
-        info.buttons->setVisible(!collapsed[static_cast<std::size_t>(i)]);
-      }
+    if (folded != info.folded) {
+      info.folded = folded;
+      qDebug().noquote() << QStringLiteral("Ribbon pinned folded %1: %2")
+                                .arg(key(info.tab, info.group),
+                                     folded.isEmpty() ? QStringLiteral("none") : folded.join(QStringLiteral(", ")));
     }
   }
 }
@@ -1747,16 +1888,19 @@ QStringList Ribbon::layoutLines() const {
     lines << QStringLiteral("Ribbon split %1 at %2,%3").arg(it.key()).arg(direct.x()).arg(direct.y());
     lines << QStringLiteral("Ribbon split %1 arrow at %2,%3").arg(it.key()).arg(arrow.x()).arg(arrow.y());
   }
-  // The pinned commands' buttons (mitcad#1001), "Ribbon pinned
-  // SOLID/solid.sweep at x,y".
-  for (auto it = m_pinnedGroups.cbegin(); it != m_pinnedGroups.cend(); ++it) {
-    for (const QToolButton* button : it.value()->findChildren<QToolButton*>()) {
+  // The shown page's pinned commands' buttons (mitcad#1001), in their own
+  // groups (mitcad#1084): "Ribbon pinned SOLID/CREATE/solid.sweep at x,y".
+  if (const QWidget* page = m_pages->currentWidget()) {
+    for (const QToolButton* button : page->findChildren<QToolButton*>()) {
       const QString id = button->property(kPinIdProperty).toString();
       if (id.isEmpty() || !button->isVisible()) {
         continue;
       }
       const QPoint center = button->mapTo(window(), button->rect().center());
-      lines << QStringLiteral("Ribbon pinned %1/%2 at %3,%4").arg(it.key(), id).arg(center.x()).arg(center.y());
+      lines << QStringLiteral("Ribbon pinned %1/%2 at %3,%4")
+                   .arg(button->property(kPinGroupProperty).toString(), id)
+                   .arg(center.x())
+                   .arg(center.y());
     }
   }
   // The shown page's command buttons (mitcad#478: BUILD's Timber), "Ribbon

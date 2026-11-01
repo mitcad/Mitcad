@@ -12,8 +12,9 @@
 #     into sight; a click on a listed match goes to it.
 #   - Esc closes the search: the selection and the scroll position from
 #     before it come back.
-#   - Ctrl+F in the browser opens it too; the filters: is:warning finds the
-#     import-noted extrude, "plane in:cover" Cover's planes only,
+#   - Ctrl+F in the browser opens it too; the filters: is:note finds the
+#     import-noted extrude (information, mitcad#1040),
+#     "plane in:cover" Cover's planes only,
 #     is:suppressed the suppressed plane; an unknown status is reported.
 #     Emptying the field without a step changes nothing.
 #   - The floating layout: the same search, steps and restore.
@@ -133,7 +134,7 @@ ui_start_display
 ui_start_app --open "$FILE"
 ui_step "fit (F6)"                         ui_key F6
 ui_expect_log "Timeline Rounded Edge 2 at" "the timeline is logged"
-ui_expect_log "Warnings badge: Extrude2: Partly imported: left out: 2 constraints" "the import note is a warning"
+ui_expect_log "Timeline cell Extrude2: info, badge" "the import note is information: its badge (mitcad#1040)"
 
 echo "--- Ctrl+F in the timeline; steps through the matches"
 ui_mark
@@ -151,8 +152,8 @@ ui_step "click Part:1 in the browser"      ui_click_logged "Browser Root/Part:1"
 ui_step "Ctrl+F"                           ui_key ctrl+f
 ui_expect_new "Timeline search opened" "Ctrl+F in the browser opens it"
 ui_mark
-ui_step "type is:warning"                  xdotool type --delay 40 "is:warning"
-ui_expect_new 'Timeline search "is:warning": 1 match: Extrude2 (Cover)' "is:warning: the import-noted extrude"
+ui_step "type is:note"                     xdotool type --delay 40 "is:note"
+ui_expect_new 'Timeline search "is:note": 1 match: Extrude2 (Cover)' "is:note: the import-noted extrude"
 ui_mark
 ui_step "select all, type plane in:cover"  ui_key ctrl+a
 ui_step "type"                             xdotool type --delay 40 "plane in:cover"

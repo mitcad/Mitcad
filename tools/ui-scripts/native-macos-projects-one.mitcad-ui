@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: MIT
-expect-ever 'Projects panel at the start: shown \(no choice yet, projects configured\)'
+# Hidden at the start until the user shows it (mitcad#1020), also with a
+# project configured.
+expect-ever 'Projects panel at the start: hidden \(no choice yet, projects configured\)'
+menu 'View/Projects'
+expect-log 'Projects panel: shown at the next start' 10
 wait-log 'Projects panel: 1 project' 30
 native-resize 1280 820
 expect-native-visible native.projectsCard true

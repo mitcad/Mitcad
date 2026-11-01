@@ -592,7 +592,7 @@ impl FeatureInfo for HoleDef {
             if thread.modeled {
                 super::thread::check_modeled(thread.standard, thread.taper)?;
             } else if thread.radial_clearance.is_some() || thread.flank_clearance.is_some() {
-                return Err("only a modelled thread has extra clearance".to_owned());
+                return Err("only a modeled thread has extra clearance".to_owned());
             }
             check_custom(&thread.size(), thread.custom.is_some())?;
             if thread.custom.is_none() {

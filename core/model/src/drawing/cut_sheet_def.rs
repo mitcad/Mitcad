@@ -124,7 +124,7 @@ pub fn check_size(width: f64, height: f64) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "a cut sheet's material is more than 0 and at most {MAX_SIZE} mm each way, not {width} x {height}"
+            "a cut sheet's material is more than 0 and at most {MAX_SIZE} mm each way, not {width} × {height}"
         ))
     }
 }

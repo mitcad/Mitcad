@@ -79,7 +79,7 @@ endif()
 
 # Version 3 needs a project.
 cli(fail convert "${v3}" "${WORK}/outside.mitcad" --format v3)
-if(NOT out MATCHES "is not in a Mitcad project")
+if(NOT out MATCHES "is not in a MitCad project")
   message(FATAL_ERROR "convert --format v3 outside a project: ${out}")
 endif()
 

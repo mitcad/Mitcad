@@ -37,9 +37,9 @@ pub mod document {
     pub use crate::document::ResultVersions;
     pub use crate::document::{
         Carried, DocResolver, FrameAt, MoveDestination, MovedDestination, ReparentPlan,
-        TimelineBefore, check_minimum_wall, check_overhang_angle, deleted_views, library_kind,
-        normalized_color, noted_message, noted_status, print_material, purge_defaults_json,
-        status_message, status_text, writable_library,
+        TimelineBefore, check_minimum_wall, check_overhang_angle, deleted_views, feature_level,
+        feature_notices, library_kind, normalized_color, noted_message, noted_status,
+        print_material, purge_defaults_json, status_message, status_text, writable_library,
     };
 }
 

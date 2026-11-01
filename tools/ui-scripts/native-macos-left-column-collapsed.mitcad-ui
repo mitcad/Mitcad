@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# The AppKit left column after another relaunch
+# (tools/ui-macos-native-left-column-test.sh): Configuration folded as it
+# was left, then disclosed again.
+expect-ever 'Configuration panel: collapsed \(remembered\)'
+wait-idle
+native-resize 1280 820
+native-appearance dark
+expect-native-card-height native.configurationCard 30
+mark
+native-click native.configuration.disclosure
+expect-log '^Configuration panel: expanded, remembered$'
+expect-native-card-height native.configurationCard 100 190
+expect-native-configuration-layout
+screenshot '${MITCAD_TEST_WORK}/left-column-dark.png'
+native-appearance light

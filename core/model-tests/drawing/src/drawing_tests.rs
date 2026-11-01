@@ -23,6 +23,7 @@ fn line(a: P2, b: P2, visible: bool) -> ViewEdge {
         visible,
         kind: ViewEdgeKind::Sharp,
         curve: ViewCurve::Line(a, b),
+        source: None,
     }
 }
 
@@ -45,6 +46,7 @@ fn circle(center: P2, radius: f64) -> ViewEdge {
             start: 0.0,
             end: std::f64::consts::TAU,
         },
+        source: None,
     }
 }
 
@@ -195,9 +197,17 @@ fn a_plate_has_three_views_their_sizes_hole_callouts_and_a_hole_table() {
     assert_eq!(tags.len(), 5);
     // The title block.
     let title: Vec<String> = sheet.groups_of("title-block").flat_map(texts).collect();
-    for text in ["Plate", "2:1", "mm", "2026-10-20", "A3", "Mitcad"] {
+    for text in ["Plate", "2:1", "mm", "2026-10-20", "A3", "MitCad"] {
         assert!(title.iter().any(|t| t == text), "{text}: {title:?}");
     }
+    // Without an author, the corner cell names the program by its name
+    // (docs/naming.md): its label, then its value (mitcad#1037).
+    let corner = title.iter().position(|t| t == "MADE WITH");
+    assert_eq!(
+        corner.and_then(|i| title.get(i + 1)).map(String::as_str),
+        Some("MitCad"),
+        "{title:?}"
+    );
 
     // The views line up: the top view above the front view, the right
     // view beside it (third angle).
@@ -507,8 +517,7 @@ fn two_blocks() -> Document<MockKernel> {
 #[test]
 fn export_drawing_writes_the_shown_bodies_on_one_sheet_or_one_each() {
     let mut doc = two_blocks();
-    let dir = std::env::temp_dir().join(format!("mitcad-drawing-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("drawing");
     let svg_path = dir.join("blocks.svg").to_string_lossy().into_owned();
     let result = run(
         &mut doc,
@@ -577,7 +586,7 @@ fn export_drawing_writes_the_shown_bodies_on_one_sheet_or_one_each() {
         ),
         (
             json!({"cmd": "export_drawing", "path": svg_path, "units": "furlong"}),
-            "unknown length unit 'furlong'",
+            "unknown length unit “furlong”",
         ),
         (
             json!({"cmd": "export_drawing", "path": svg_path, "views": []}),
@@ -585,11 +594,11 @@ fn export_drawing_writes_the_shown_bodies_on_one_sheet_or_one_each() {
         ),
         (
             json!({"cmd": "export_drawing", "path": svg_path, "section": {"analysis": "Nope"}}),
-            "there is no analysis 'Nope'",
+            "there is no analysis Nope",
         ),
         (
             json!({"cmd": "export_drawing", "path": svg_path, "bodies": ["Nobody"]}),
-            "no body at the timeline marker is named 'Nobody'",
+            "no body at the timeline marker is named Nobody",
         ),
     ] {
         let error = run(&mut doc, command).unwrap_err();

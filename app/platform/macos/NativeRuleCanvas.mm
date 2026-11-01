@@ -69,7 +69,7 @@ public:
     m_surface = [[MitcadRuleSurface alloc] initWithFrame:NSMakeRect(0, 0, 400, 200)];
     m_surface->owner = this;
     m_surface.accessibilityIdentifier = ns(source->objectName());
-    m_surface.accessibilityLabel = m_canvas ? @"Rule blocks" : @"Rule palette";
+    m_surface.accessibilityLabel = ns(m_canvas ? QObject::tr("Rule blocks") : QObject::tr("Rule palette"));
     m_target = [MitcadRuleTarget new];
     m_target->owner = this;
     m_scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
@@ -398,7 +398,9 @@ private:
   void refreshPieces() {
     if (m_pieces == nil) m_pieces = [NSMutableDictionary new];
     NSMutableSet<NSString*>* live = [NSMutableSet new];
-    for (const auto& piece : m_canvas->pieces()) {
+    const auto& pieces = m_canvas->pieces();
+    for (std::size_t index = 0; index < pieces.size(); ++index) {
+      const auto& piece = pieces[index];
       NSString* key = ns(piece.name());
       [live addObject:key];
       MitcadRulePiece* button = m_pieces[key];
@@ -419,6 +421,14 @@ private:
       }
       NSString* caption = ns(piece.text.isEmpty() ? piece.name() : piece.text);
       if (![button.accessibilityLabel isEqualToString:caption]) button.accessibilityLabel = caption;
+      // A marked block's problem (mitcad#1064): the scene draws its outline,
+      // the hit target above it carries its tooltip and tells VoiceOver.
+      const QString problem = m_canvas->pieceProblem(index);
+      NSString* tip = problem.isEmpty() ? nil : ns(problem);
+      if (!(tip == button.toolTip || [tip isEqualToString:button.toolTip])) {
+        button.toolTip = tip;
+        button.accessibilityHelp = tip;
+      }
       const QRectF rect = piece.rect;
       button.frame = NSMakeRect(rect.x(), rect.y(), rect.width(), rect.height());
     }

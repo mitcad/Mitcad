@@ -23,14 +23,14 @@ screenshot-dialog '${MITCAD_STYLE_SHOTS}/community-${MITCAD_TEST_COLOR_SCHEME}.p
 key Escape
 focus-main
 show-dialog-style-fixture parts
-focus-dialog '^Library Parts$'
+focus-dialog '^Library Components$'
 expect-dialog-appearance '${MITCAD_TEST_COLOR_SCHEME}'
 test-dialog-controls parts
 screenshot-dialog '${MITCAD_STYLE_SHOTS}/parts-${MITCAD_TEST_COLOR_SCHEME}.png'
 key Escape
 focus-main
 show-dialog-style-fixture picker
-focus-dialog '^Part Picker'
+focus-dialog '^Component Picker'
 expect-dialog-appearance '${MITCAD_TEST_COLOR_SCHEME}'
 test-dialog-controls picker
 screenshot-dialog '${MITCAD_STYLE_SHOTS}/picker-${MITCAD_TEST_COLOR_SCHEME}.png'

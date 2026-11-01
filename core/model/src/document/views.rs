@@ -38,7 +38,7 @@ impl NamedView {
         }
         let numbers = self.eye.iter().chain(&self.target).chain(&self.up);
         if !numbers.copied().all(f64::is_finite) {
-            return Err(format!("view '{}': the camera must be finite", self.name));
+            return Err(format!("view {}: the camera must be finite", self.name));
         }
         let sight = [
             self.target[0] - self.eye[0],
@@ -48,7 +48,7 @@ impl NamedView {
         let (along, up) = (norm(sight), norm(self.up));
         if along <= 1e-9 || up <= 1e-12 {
             return Err(format!(
-                "view '{}': the eye must differ from the target, and up must not be zero",
+                "view {}: the eye must differ from the target, and up must not be zero",
                 self.name
             ));
         }
@@ -56,13 +56,13 @@ impl NamedView {
             (sight[0] * self.up[0] + sight[1] * self.up[1] + sight[2] * self.up[2]) / (along * up);
         if dot.abs() > 1.0 - 1e-9 {
             return Err(format!(
-                "view '{}': up must not be along the line of sight",
+                "view {}: up must not be along the line of sight",
                 self.name
             ));
         }
         if !(self.height.is_finite() && self.height > 0.0) {
             return Err(format!(
-                "view '{}': the height must be positive, got {}",
+                "view {}: the height must be positive, got {}",
                 self.name, self.height
             ));
         }
@@ -98,7 +98,7 @@ impl<K: Kernel> Document<K> {
             .iter()
             .position(|v| v.name == view.name);
         if existing.is_some() && !replace {
-            return Err(invalid(format!("a named view '{}' exists", view.name)));
+            return Err(invalid(format!("a named view {} exists", view.name)));
         }
         if existing.is_some_and(|i| self.state.named_views[i] == view) {
             return Ok(view.name);
@@ -137,7 +137,7 @@ impl<K: Kernel> Document<K> {
             return Ok(());
         }
         if self.state.named_views.iter().any(|v| v.name == new_name) {
-            return Err(invalid(format!("a named view '{new_name}' exists")));
+            return Err(invalid(format!("a named view {new_name} exists")));
         }
         let label = format!("Rename Named View {name}");
         let new_name = new_name.to_owned();
@@ -152,6 +152,6 @@ impl<K: Kernel> Document<K> {
             .named_views
             .iter()
             .position(|v| v.name == name)
-            .ok_or_else(|| invalid(format!("there is no named view '{name}'")))
+            .ok_or_else(|| invalid(format!("there is no named view {name}")))
     }
 }

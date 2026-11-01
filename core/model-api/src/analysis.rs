@@ -11,6 +11,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::measure_axes::{self, Element};
+use super::physical_extent::{
+    ComponentArg, Extent, PhysicalExtentOps, PlacedProperties, Placement,
+};
 use super::prelude::*;
 use super::{ApiError, parse, read_json};
 use mitcad_model::analysis::{
@@ -64,6 +67,10 @@ pub(super) struct PropertiesQuery {
     /// g/cm³ per body, overriding everything else.
     #[serde(default)]
     densities: BTreeMap<BodyUid, f64>,
+    /// Components whose bodies count, sub-components' included, besides
+    /// `bodies` (mitcad#1095, `physical_extent.rs`).
+    #[serde(default)]
+    components: Vec<ComponentArg>,
 }
 
 /// A body, a face, edge or vertex of it, or a datum.
@@ -184,7 +191,7 @@ pub(super) struct SectionQuery {
 pub(super) struct CompareStepQuery {
     /// Path of the STEP file.
     file: String,
-    /// Mitcad's side; empty for all bodies at the marker.
+    /// MitCad's side; empty for all bodies at the marker.
     #[serde(default)]
     bodies: Vec<BodyUid>,
     /// A body of the file by name or index; all bodies of the file when
@@ -666,9 +673,10 @@ impl<K: Kernel> AnalysisApi<K> for Document<K> {
                     properties_text(&mut text, body);
                 }
                 let total = &result["total"];
+                extent_text(&mut text, "Total ", total);
                 let _ = writeln!(
                     text,
-                    "Total: mass {:.6} kg, volume {:.3} mm3, centre of mass {}",
+                    "Total: mass {:.6} kg, volume {:.3} mm3, center of mass {}",
                     total["mass"].as_f64().unwrap_or(0.0),
                     total["volume"].as_f64().unwrap_or(0.0),
                     point(vec3(&total["center_of_mass"]))
@@ -693,7 +701,7 @@ impl<K: Kernel> AnalysisApi<K> for Document<K> {
                         }
                     );
                     if let Some(angle) = between["angle"].as_f64() {
-                        let _ = writeln!(text, "Angle: {:.6} deg", angle.to_degrees());
+                        let _ = writeln!(text, "Angle: {:.6}°", angle.to_degrees());
                     }
                     if let Some(offset) = between["offset"].as_f64() {
                         let _ = writeln!(text, "Offset: {offset:.6} mm");
@@ -707,7 +715,7 @@ impl<K: Kernel> AnalysisApi<K> for Document<K> {
                         );
                     }
                     if let Some(d) = between["center_distance"].as_f64() {
-                        let _ = writeln!(text, "Centre distance: {d:.6} mm");
+                        let _ = writeln!(text, "Center distance: {d:.6} mm");
                     }
                 }
             }
@@ -950,42 +958,71 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
         }
         let mut bodies = Vec::new();
         let mut all = Vec::new();
-        for BodyView { uid, name, shape } in self.chosen_bodies(&query.bodies)? {
-            // Its own material, else its component's default (mitcad#640);
-            // `density` stands for the default.
-            let (made_of, source) = self.body_material(uid, None);
-            let (material, density) = match query.densities.get(&uid) {
-                Some(density) if *density > 0.0 && density.is_finite() => (Value::Null, *density),
-                Some(density) => {
-                    return Err(ApiError(format!(
-                        "the density of {uid} must be greater than zero, got {density}"
-                    )));
-                }
-                None => match (source, query.density) {
-                    (mitcad_model::MaterialSource::Default, Some(density)) => {
-                        (Value::Null, density)
-                    }
-                    _ => (json!(made_of.id), made_of.density),
-                },
+        // One entry per placement of a body, its properties, box and
+        // material where the occurrence places it (mitcad#1095, #1110).
+        let scope = self.properties_scope(&query.bodies, &query.components)?;
+        let mut computed = PlacedProperties::new(self);
+        let mut extent = Extent::default();
+        let own = [Placement::OWN];
+        for (BodyView { uid, name, shape }, placements) in &scope.bodies {
+            let (uid, name, shape) = (*uid, name.as_str(), *shape);
+            let placements = if placements.is_empty() {
+                &own[..]
+            } else {
+                placements.as_slice()
             };
-            let properties = self
-                .kernel()
-                .physical_properties(shape, density)
-                .map_err(kernel_error(&name))?;
-            let mut value = properties_json(&properties);
-            value["uid"] = json!(uid);
-            value["name"] = json!(name);
-            value["material"] = material;
-            value["density"] = json!(density);
-            bodies.push(value);
-            all.push(properties);
+            let counts = self.body_counts(shape, name)?;
+            for placement in placements {
+                // Its own material, else the nearest component default up
+                // its occurrence path (mitcad#640); `density` stands for
+                // the default.
+                let (made_of, source) = self.body_material(uid, placement.material_path());
+                let (material, density) = match query.densities.get(&uid) {
+                    Some(density) if *density > 0.0 && density.is_finite() => {
+                        (Value::Null, *density)
+                    }
+                    Some(density) => {
+                        return Err(ApiError(format!(
+                            "the density of {uid} must be greater than zero, got {density}"
+                        )));
+                    }
+                    None => match (source, query.density) {
+                        (mitcad_model::MaterialSource::Default, Some(density)) => {
+                            (Value::Null, density)
+                        }
+                        _ => (json!(made_of.id), made_of.density),
+                    },
+                };
+                let properties = computed.at(uid, shape, name, density, placement)?;
+                let mut value = properties_json(&properties);
+                value["uid"] = json!(uid);
+                value["name"] = json!(name);
+                if !placement.path_name.is_empty() {
+                    value["occurrence"] = json!(placement.path_name);
+                }
+                value["material"] = material;
+                value["density"] = json!(density);
+                let placed = Extent {
+                    bbox: self.placed_extent(shape, &placement.transform, name)?,
+                    counts,
+                };
+                placed.write(&mut value);
+                extent.add(&placed);
+                bodies.push(value);
+                all.push(properties);
+            }
         }
         let total = analysis::combine(&all);
-        Ok(json!({
+        let mut result = json!({
             "bodies": bodies,
             "total": {"volume": total.volume, "area": total.area, "mass": total.mass,
                       "center_of_mass": total.center_of_mass, "inertia": total.inertia},
-        }))
+        });
+        extent.write(&mut result["total"]);
+        if !scope.components.is_empty() {
+            result["components"] = Value::Array(scope.components);
+        }
+        Ok(result)
     }
 
     fn pick_transform(&self, pick: &MeasurePick) -> Result<Transform, ApiError> {
@@ -1176,6 +1213,10 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
         if !attributes.visible {
             value["visible"] = json!(false);
         }
+        // Drawn see-through (mitcad#1093).
+        if attributes.transparent {
+            value["transparent"] = json!(true);
+        }
         if let Some(material) = &attributes.material {
             value["material"] = json!(material);
         }
@@ -1349,7 +1390,7 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
         }
         let uid: FeatureUid = id.trim().parse().map_err(|_| {
             ApiError(format!(
-                "invalid datum '{id}': a construction feature (\"F5\") or an origin datum \
+                "invalid datum {id}: a construction feature (\"F5\") or an origin datum \
                  (\"xy\", \"xz\", \"yz\", \"x\", \"y\", \"z\", \"origin\")"
             ))
         })?;
@@ -1419,7 +1460,7 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
                 .find(|b| b.name == text)
                 .map(|b| b.uid)
                 .ok_or_else(|| {
-                    ApiError(format!("there is no body '{text}' at the timeline marker"))
+                    ApiError(format!("there is no body “{text}” at the timeline marker"))
                 }),
         }
     }
@@ -1464,7 +1505,7 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
                 fields.body = Some(self.body_by_text(owner)?);
                 let wrong = || {
                     ApiError(format!(
-                        "the {kind} entity's \"name\" '{name}' is no {kind} name of body {owner}"
+                        "the {kind} entity's \"name\" {name} is no {kind} name of body {owner}"
                     ))
                 };
                 match (kind, name.parse::<TopoName>().map_err(|_| wrong())?) {
@@ -1476,7 +1517,7 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
             }
             "body" | "plane" | "axis" | "point" if !name.is_empty() => {
                 return Err(ApiError(format!(
-                    "a {kind} entity has an empty \"name\", not '{name}'"
+                    "a {kind} entity has an empty \"name\", not {name}"
                 )));
             }
             "body" => fields.body = Some(self.body_by_text(owner)?),
@@ -1551,14 +1592,14 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
                 }
                 [] if children.is_empty() => {
                     return Err(ApiError(format!(
-                        "invalid occurrence path '{text}': there is no occurrence '{part}', \
+                        "invalid occurrence path “{text}”: there is no occurrence {part}, \
                          {} places no occurrences",
                         assembly.name(parent)
                     )));
                 }
                 [] => {
                     return Err(ApiError(format!(
-                        "invalid occurrence path '{text}': there is no occurrence '{part}' in \
+                        "invalid occurrence path “{text}”: there is no occurrence {part} in \
                          {}; its occurrences are {}",
                         assembly.name(parent),
                         listed(&children)
@@ -1566,7 +1607,7 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
                 }
                 several => {
                     return Err(ApiError(format!(
-                        "invalid occurrence path '{text}': '{part}' in {} is any of {}; give \
+                        "invalid occurrence path “{text}”: {part} in {} is any of {}; give \
                          one by its name or id",
                         assembly.name(parent),
                         listed(several)
@@ -1633,7 +1674,7 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
                 Ok(component) if owner.is_none_or(|owner| owner == component) => {
                     return Ok(self.path_transform(&path.0));
                 }
-                Ok(_) => format!("occurrence '{path}' does not place {what}"),
+                Ok(_) => format!("occurrence {path} does not place {what}"),
                 Err(e) => e,
             };
             return Err(ApiError(match owner {
@@ -2471,9 +2512,14 @@ fn properties_text(text: &mut String, body: &Value) {
         Some(id) => analysis::material(id).map_or(id, |m| m.name).to_owned(),
         None => "custom".to_owned(),
     };
+    // A body of a component: where its occurrence places it (mitcad#1110).
+    let placed = body["occurrence"]
+        .as_str()
+        .map(|path| format!(" in {path}"))
+        .unwrap_or_default();
     let _ = writeln!(
         text,
-        "{} ({}): {material}, density {} g/cm3",
+        "{} ({}){placed}: {material}, density {} g/cm3",
         body["name"].as_str().unwrap_or_default(),
         body["uid"].as_str().unwrap_or_default(),
         number("density")
@@ -2487,13 +2533,13 @@ fn properties_text(text: &mut String, body: &Value) {
     );
     let _ = writeln!(
         text,
-        "    centre of mass {}",
+        "    center of mass {}",
         point(vec3(&body["center_of_mass"]))
     );
     let inertia = &body["inertia"];
     let _ = writeln!(
         text,
-        "    inertia at the centre of mass (kg mm2): Ixx {:.6}, Iyy {:.6}, Izz {:.6}, Ixy {:.6}, Iyz {:.6}, Ixz {:.6}",
+        "    inertia at the center of mass (kg mm2): Ixx {:.6}, Iyy {:.6}, Izz {:.6}, Ixy {:.6}, Iyz {:.6}, Ixz {:.6}",
         round(inertia[0][0].as_f64().unwrap_or(0.0)),
         round(inertia[1][1].as_f64().unwrap_or(0.0)),
         round(inertia[2][2].as_f64().unwrap_or(0.0)),
@@ -2507,6 +2553,35 @@ fn properties_text(text: &mut String, body: &Value) {
         "    principal moments (kg mm2): {:.6}, {:.6}, {:.6}",
         moments[0], moments[1], moments[2]
     );
+    extent_text(text, "    ", body);
+}
+
+/// A body's or the total's box and counts (mitcad#1095), where the answer
+/// has them.
+fn extent_text(text: &mut String, indent: &str, value: &Value) {
+    let bbox = &value["bbox"];
+    if bbox.is_object() {
+        let size = vec3(&bbox["size"]);
+        let _ = writeln!(
+            text,
+            "{indent}bounding box {} to {}, size {:.3} x {:.3} x {:.3} mm",
+            point(vec3(&bbox["min"])),
+            point(vec3(&bbox["max"])),
+            round(size[0]),
+            round(size[1]),
+            round(size[2])
+        );
+    }
+    if let (Some(faces), Some(edges), Some(vertices)) = (
+        value["faces"].as_u64(),
+        value["edges"].as_u64(),
+        value["vertices"].as_u64(),
+    ) {
+        let _ = writeln!(
+            text,
+            "{indent}{faces} faces, {edges} edges, {vertices} vertices"
+        );
+    }
 }
 
 fn measurement_text(text: &mut String, label: &str, m: &Value) {
@@ -2523,7 +2598,7 @@ fn measurement_text(text: &mut String, label: &str, m: &Value) {
         // The diameter (mitcad#194) from the radius before rounding.
         let radius = circle["radius"].as_f64().unwrap_or(0.0);
         parts.push(format!(
-            "radius {radius:.6} mm, diameter {:.6} mm, centre {}",
+            "radius {radius:.6} mm, diameter {:.6} mm, center {}",
             2.0 * radius,
             point(vec3(&circle["center"]))
         ));
@@ -2567,7 +2642,7 @@ fn comparison_text(text: &mut String, c: &Value) {
         Some(relative) => {
             let _ = writeln!(
                 text,
-                "Only in Mitcad {:.6} mm3, only in STEP {:.6} mm3, relative difference {:.3e}",
+                "Only in MitCad {:.6} mm3, only in STEP {:.6} mm3, relative difference {:.3e}",
                 number("volume_only_mitcad").unwrap_or(0.0),
                 number("volume_only_step").unwrap_or(0.0),
                 relative
@@ -2579,7 +2654,7 @@ fn comparison_text(text: &mut String, c: &Value) {
     }
     let _ = writeln!(
         text,
-        "Max deviation: {:.6} mm (Mitcad to STEP {:.6} mm, STEP to Mitcad {:.6} mm)",
+        "Max deviation: {:.6} mm (MitCad to STEP {:.6} mm, STEP to MitCad {:.6} mm)",
         number("max_deviation").unwrap_or(0.0),
         c["mitcad_to_step"]["max"].as_f64().unwrap_or(0.0),
         c["step_to_mitcad"]["max"].as_f64().unwrap_or(0.0)
@@ -2628,4 +2703,13 @@ fn datum_text(text: &mut String, datum: &Value) {
         ),
         _ => writeln!(text, "{label} at {}", point(vec3(&datum["point"]))),
     };
+}
+
+/// The bodies a query names (all when empty), for `physical_extent.rs`
+/// (mitcad#1095), which cannot reach the local trait.
+pub(super) fn chosen_bodies<'a, K: Kernel>(
+    doc: &'a Document<K>,
+    uids: &[BodyUid],
+) -> Result<Vec<BodyView<'a, K::Shape>>, ApiError> {
+    doc.chosen_bodies(uids)
 }

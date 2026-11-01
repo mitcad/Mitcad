@@ -35,6 +35,7 @@
 #include <QScrollBar>
 #include <QStyledItemDelegate>
 #include <QSet>
+#include <QSize>
 #include <QStyle>
 #include <QTimer>
 #include <QTreeWidget>
@@ -924,7 +925,17 @@ void PropertySetsDialog::createNativePrintCells() {
       });
       editor = value;
     } else {
+      // A colour's swatch beside its name, as the tree's icon (mitcad#1080);
+      // set by hand, it has no name and would leave the cell empty.
+      const QIcon icon = row->icon(kValue);
+      if (!icon.isNull()) {
+        auto* swatch = new QLabel(cell);
+        swatch->setObjectName(id + QStringLiteral(".swatch"));
+        swatch->setPixmap(icon.pixmap(QSize(18, 12)));
+        layout->addWidget(swatch);
+      }
       auto* caption = new QLabel(row->text(kValue), cell);
+      caption->setObjectName(id + QStringLiteral(".value"));
       caption->setFont(row->font(kValue));
       if (row->foreground(kValue).style() != Qt::NoBrush) {
         QPalette palette = caption->palette();

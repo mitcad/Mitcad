@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <unistd.h>
 
 namespace {
 struct Completion {
@@ -23,15 +24,24 @@ int main() {
       std::puts("SKIP: the default Metal device has no unified-memory buffer support");
       return 77;
     }
+    const auto systemPage = sysconf(_SC_PAGESIZE);
+    if (systemPage <= 0) return 1;
+    const auto page = static_cast<std::size_t>(systemPage);
+    constexpr std::size_t pixels = 16 * 8 * 8;
+    const auto allocation = pixels + (pixels % page == 0 ? 0 : page - pixels % page);
     NSDictionary* properties = @{
         (NSString*)kIOSurfaceWidth: @16, (NSString*)kIOSurfaceHeight: @8,
         (NSString*)kIOSurfaceBytesPerElement: @8, (NSString*)kIOSurfaceBytesPerRow: @128,
-        (NSString*)kIOSurfacePixelFormat: @0x52476841};
+        (NSString*)kIOSurfacePixelFormat: @0x52476841, (NSString*)kIOSurfaceAllocSize: @(allocation)};
     IOSurfaceRef surface = IOSurfaceCreate((CFDictionaryRef)properties);
     if (!surface) return 1;
+    std::fprintf(stderr, "Metal fixture: base=%p allocation=%zu page=%zu packedRow=%zu\n",
+        IOSurfaceGetBaseAddress(surface), IOSurfaceGetAllocSize(surface), page, IOSurfaceGetBytesPerRow(surface));
+    if (IOSurfaceGetBytesPerRow(surface) != 128 || IOSurfaceGetAllocSize(surface) < allocation ||
+        IOSurfaceGetAllocSize(surface) % page != 0) { CFRelease(surface); return 1; }
     auto owner = std::make_unique<mitcad::render::MacFrameMetalBuffer>();
     std::string error;
-    if (!owner->wrap(surface, error) || owner->size() < 16 * 8 * 8) {
+    if (!owner->wrap(surface, error) || owner->size() != IOSurfaceGetAllocSize(surface)) {
       std::fprintf(stderr, "IOSurface Metal wrap failed: %s\n", error.c_str()); CFRelease(surface); return 2;
     }
     if (owner->wrap(surface, error)) { CFRelease(surface); return 3; }

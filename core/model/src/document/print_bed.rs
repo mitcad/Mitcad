@@ -150,7 +150,7 @@ impl<K: Kernel> Document<K> {
             )));
         }
         let name = FaceName::from_str(face.trim())
-            .map_err(|e| invalid(format!("'{face}' is no face name: {e}")))?;
+            .map_err(|e| invalid(format!("{face} is no face name: {e}")))?;
         match self.kernel().count_faces(shape, &name) {
             Ok(0) => {
                 return Err(invalid(format!(

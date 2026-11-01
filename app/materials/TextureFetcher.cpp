@@ -44,7 +44,7 @@ void TextureFetcher::later(const QPointer<QObject>& context, std::function<void(
 
 QString TextureFetcher::refusal(const QUrl& url) const {
   if (!(m_allowed ? m_allowed() : TextureSettings::load().allowNetwork)) {
-    return tr("Texture sources on the internet are off: Preferences, Textures allows them.");
+    return tr("Texture sources on the internet are off: the Textures page of Tools › Preferences allows them.");
   }
   if (!url.isValid() || url.scheme() != QLatin1String("https") || url.host().isEmpty()) {
     return tr("Textures are fetched over HTTPS only, not from %1.").arg(url.toString());
@@ -54,7 +54,7 @@ QString TextureFetcher::refusal(const QUrl& url) const {
 
 QString NetworkTextureFetcher::userAgent() {
   const QString version = QCoreApplication::applicationVersion();
-  return QStringLiteral("Mitcad/%1").arg(version.isEmpty() ? QStringLiteral("dev") : version);
+  return QStringLiteral("MitCad/%1").arg(version.isEmpty() ? QStringLiteral("dev") : version);
 }
 
 void NetworkTextureFetcher::get(const QUrl& url, qint64 maxBytes, QObject* context, Progress progress, Done done) {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/browser app/framework/ParameterEdits.cpp
-# Parameter limits (mitcad#665) in Change Parameters, through the real UI
+# Parameter limits (mitcad#665) in Edit Parameters, through the real UI
 # on the demo block (60 x 40 x 20 mm: d1, d2, d3), with the volumes the
 # model reports:
 #   - d1's Max = 50: d1 = 60 mm is limited to 50 mm; its Value cell is
@@ -52,7 +52,7 @@ edit_cell() {
 ui_start_display
 ui_start_app --demo
 ui_mark
-ui_step "Change Parameters (search)"     ui_command "Change Parameters"
+ui_step "Edit Parameters (search)"     ui_command "Edit Parameters"
 ui_expect_new "Parameters dialog opened" "the dialog opened"
 ui_expect_new "Parameters d1 max at" "the limits' cells are logged"
 ui_expect_new "Parameters only limited at" "the filter's place is logged"

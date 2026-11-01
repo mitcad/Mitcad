@@ -1,5 +1,5 @@
 [
-  {"comment": "Model warnings (P9): a rib 2 mm wide, 40 long and 20 high (F2.b0). Rounding all four top edges by 1 mm (a full round, the rib's ends rounded too) or bevelling them by 1 mm takes the top face away, which OCCT cannot build at the rib's ends: the geometry builds them 0.1 % smaller, and the feature succeeds with a warning (yellow in the timeline). (The two long top edges alone build exactly since the OCCT port's patch 0950.)"},
+  {"comment": "Model warnings (P9): a rib 2 mm wide, 40 long and 20 high (F2.b0). Rounding all four top edges by 1 mm (a full round, the rib's ends rounded too) or bevelling them by 1 mm takes the top face away, which OCCT cannot build at the rib's ends: the geometry builds them 0.1 % smaller, without the strip that leaves, and the feature succeeds with that as information, not a warning (mitcad#1106: status ok, level info). (The two long top edges alone build exactly since the OCCT port's patch 0950.) A real warning last: a plane at 90 radians."},
   {"cmd": "sketch.create"},
   {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 2, "height": 40},
   {"cmd": "add_feature", "def": {"type": "extrude",
@@ -13,16 +13,19 @@
               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c3[c2,c4])}",
               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c4[c3,c1])}"], "radius": 1}},
   {"comment": "The end edges' roundings meet the long ones where their cylinders cross: the top 1 mm at height t a rectangle 2 s by 38 + 2 s, s = sqrt(1 - t^2), so 19 pi + 8/3 of the slab's 80 mm3 kept (built 0.1 % smaller: 0.035 mm3 more)."},
-  {"expect": {"feature": "Fillet1", "status": "warning", "error_contains": "0.1 % smaller",
-    "body": "Body1", "volume": 1582.356927077, "tolerance": 1e-4}},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body1", "volume": 1582.356927077, "tolerance": 1e-4}},
+  {"expect": {"query": {"query": "feature", "uid": "F3"}, "result": {"status": "ok", "level": "info",
+    "infos": ["the fillet is built 0.1 % smaller than asked: at its exact size it takes a face away, which the geometry kernel cannot build"],
+    "notices": [{"level": "info", "message": "the fillet is built 0.1 % smaller than asked: at its exact size it takes a face away, which the geometry kernel cannot build", "target": "F3"}]}}},
 
-  {"comment": "Half the radius builds exactly: no warning."},
+  {"comment": "Half the radius builds exactly: no info."},
   {"cmd": "set_parameter", "name": "d4", "value": 0.5},
   {"expect": {"feature": "Fillet1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F3"}, "result": {"status": "ok", "level": null}}},
   {"cmd": "undo"},
-  {"expect": {"feature": "Fillet1", "status": "warning"}},
+  {"expect": {"query": {"query": "feature", "uid": "F3"}, "result": {"status": "ok", "level": "info"}}},
 
-  {"comment": "A chamfer as wide as the rib on all four top edges: also a warning. The top 1 mm at height t a rectangle (2 - 2t) by (40 - 2t): 80 - 42 + 4/3 mm3 kept."},
+  {"comment": "A chamfer as wide as the rib on all four top edges: also information. The top 1 mm at height t a rectangle (2 - 2t) by (40 - 2t): 80 - 42 + 4/3 mm3 kept."},
   {"cmd": "suppress_feature", "uid": "F3", "suppressed": true},
   {"cmd": "add_feature", "def": {"type": "chamfer", "body": "F2.b0",
     "edges": ["E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}",
@@ -30,13 +33,21 @@
               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c3[c2,c4])}",
               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c4[c3,c1])}"],
     "size": {"type": "equal_distance", "distance": 1}}},
-  {"expect": {"feature": "Chamfer1", "status": "warning", "error_contains": "the chamfer is built 0.1 % smaller",
-    "body": "Body1", "volume": 1559.333333333, "tolerance": 1e-4}},
+  {"expect": {"feature": "Chamfer1", "status": "ok", "body": "Body1", "volume": 1559.333333333, "tolerance": 1e-4}},
+  {"expect": {"query": {"query": "feature", "uid": "F4"}, "result": {"status": "ok", "level": "info",
+    "infos": ["the chamfer is built 0.1 % smaller than asked: at its exact size it takes a face away, which the geometry kernel cannot build"]}}},
 
   {"comment": "The two long top edges alone: the full round and the bevel build at their size (port patch 0950), no warning."},
   {"cmd": "suppress_feature", "uid": "F4", "suppressed": true},
   {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
     "edges": ["E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c2[c1,c3])}",
               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c4[c3,c1])}"], "radius": 1}},
-  {"expect": {"feature": "Fillet2", "status": "ok", "body": "Body1", "volume": 1582.831853072, "tolerance": 1e-6}}
+  {"expect": {"feature": "Fillet2", "status": "ok", "body": "Body1", "volume": 1582.831853072, "tolerance": 1e-6}},
+  {"expect": {"query": {"query": "feature", "uid": "F5"}, "result": {"status": "ok", "level": null}}},
+
+  {"comment": "A feature that succeeds with a warning (yellow in the timeline): a plane at 90 radians, an angle typed as a number of more than one turn (mitcad#714)."},
+  {"cmd": "add_feature", "name": "Tilted", "def": {"type": "construction_plane",
+    "definition": {"type": "angle", "line": "z", "angle": 90, "plane": "xz"}}},
+  {"expect": {"feature": "Tilted", "status": "warning", "error_contains": "is read as radians"}},
+  {"expect": {"query": {"query": "feature", "uid": "F6"}, "result": {"status": "warning", "level": "warning"}}}
 ]

@@ -177,7 +177,7 @@ void MainWindow::createProjectsPanel() {
   }
 }
 
-void MainWindow::dockProjectsPanel(QDockWidget* browserDock) {
+void MainWindow::dockProjectsPanel(QDockWidget* below) {
   createProjectsPanel();
   if (m_projectsPanel == nullptr) {
     return;
@@ -186,8 +186,9 @@ void MainWindow::dockProjectsPanel(QDockWidget* browserDock) {
   dock->setObjectName(QStringLiteral("projectsDock"));
   dock->setWidget(m_projectsPanel);
   addDockWidget(Qt::LeftDockWidgetArea, dock);
-  // Above the browser, in the same column: the view keeps its width.
-  splitDockWidget(dock, browserDock, Qt::Vertical);
+  // Above the browser, in the same column: the view keeps its width (the
+  // Configuration dock goes between them, mitcad#1020).
+  splitDockWidget(dock, below, Qt::Vertical);
   m_projectsContainer = dock;
   m_projectsPanel->watchContainer(dock);
   const bool shown = projectsPanelShownAtStart();
@@ -243,10 +244,12 @@ void MainWindow::addProjectsCard() {
     qInfo().noquote() << QStringLiteral("Projects panel: card width %1 remembered").arg(settings.cardWidth);
   });
   const bool shown = projectsPanelShownAtStart();
-  // Above the browser's card (FloatingLayout stacks the upper left cards).
+  // Above the browser's card (FloatingLayout stacks the upper left cards),
+  // sharing the left column with it (mitcad#1020: no cap of its own; it
+  // had 40 % of the view).
   m_floating->addCard(card, FloatingLayout::Anchor::TopLeft,
                       {remembered > 0 ? std::max(remembered, ProjectsPanel::kMinimumCardWidth) : 260,
-                       [panel = m_projectsPanel] { return panel->contentHeight(); }, 0.4, shown});
+                       [panel = m_projectsPanel] { return panel->contentHeight(); }, 1.0, shown});
   connect(m_projectsPanel, &ProjectsPanel::contentHeightChanged, m_floating, &FloatingLayout::requestLayout);
   m_projectsContainer = card;
   m_projectsPanel->watchContainer(card);
@@ -262,11 +265,13 @@ bool MainWindow::projectsPanelShownAtStart() const {
                              .arg(*settings.panelShown ? QStringLiteral("shown") : QStringLiteral("hidden"));
     return *settings.panelShown;
   }
-  // No choice yet (mitcad#151): shown when there is a project to list.
+  // No choice yet: hidden (owner 31.10.2026, mitcad#1020: File > Open from
+  // Project does the same job; mitcad#151 showed it when there was a
+  // project to list). Logged with whether there is one.
   const bool any = anyProjectConfigured(settings.known, projectsDirectory(), settings.hidden);
-  qInfo().noquote() << (any ? QStringLiteral("Projects panel at the start: shown (no choice yet, projects configured)")
+  qInfo().noquote() << (any ? QStringLiteral("Projects panel at the start: hidden (no choice yet, projects configured)")
                             : QStringLiteral("Projects panel at the start: hidden (no choice yet, no projects)"));
-  return any;
+  return false;
 }
 
 bool MainWindow::projectsPanelShown() const {
@@ -514,8 +519,14 @@ void MainWindow::createDesignInProject(const QString& root, const QString& path)
     qInfo().noquote() << QStringLiteral("New Design cancelled");
     return;
   }
+  // In the default units for new designs (Preferences > General,
+  // mitcad#1036): the file is made in them, and opens in them.
+  const QString units = GeneralSettings::load().newDesignUnits;
   const std::optional<QJsonObject> answer =
-      projectWrite(root, {{QStringLiteral("cmd"), QStringLiteral("new_design")}, {QStringLiteral("path"), path}},
+      projectWrite(root,
+                   {{QStringLiteral("cmd"), QStringLiteral("new_design")},
+                    {QStringLiteral("path"), path},
+                    {QStringLiteral("units"), units}},
                    tr("New Design"));
   refreshProjectsPanel();
   if (!answer) {
@@ -523,7 +534,7 @@ void MainWindow::createDesignInProject(const QString& root, const QString& path)
     m_locks->designOpened(m_filePath, wasReadOnly);
     return;
   }
-  qInfo().noquote() << QStringLiteral("New Design: made %1").arg(file);
+  qInfo().noquote() << QStringLiteral("New Design: made %1 in %2").arg(file, units);
   QString error;
   // With its Component1 active, as the file stores it (mitcad#844): its
   // first sketch and feature go into it, as in the untitled new design.

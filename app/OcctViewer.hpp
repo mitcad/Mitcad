@@ -32,6 +32,7 @@
 #include <AIS_ViewCube.hxx>
 #include <Bnd_Box.hxx>
 #include <Graphic3d_Camera.hxx>
+#include <Graphic3d_Structure.hxx>
 #include <Graphic3d_Texture2D.hxx>
 #include <Graphic3d_ZLayerId.hxx>
 #include <SelectMgr_EntityOwner.hxx>
@@ -51,12 +52,14 @@
 #include "framework/Appearances.hpp"
 #include "framework/Selection.hpp"
 #include "framework/SelectionScope.hpp"
+#include "framework/Theme.hpp"
 #include "mitcad/geometry/shape.hpp"
 #include "view/FirstBodiesFit.hpp"
 #include "view/ImageReferences.hpp"
 #include "view/MeasurementDrawing.hpp"
 #include "view/ViewMatch.hpp"
 #include "view/ViewNavigation.hpp"
+#include "view/SpaceMouseTiming.hpp"
 #include "view/Navigation.hpp"
 
 class QNativeGestureEvent;
@@ -138,6 +141,15 @@ struct BodyDisplay {
   std::vector<FaceLook> faceLooks = {};
   // Owning component, shared by all its bodies and occurrences.
   std::string component;
+  // Its index into the component palette (componentColorIndex): the colour
+  // Component Colors gives it, as the timeline's band and the section caps
+  // (mitcad#1041); -1 for the root, drawn in its section caps' colour.
+  int componentColor = -1;
+  // Transparent (mitcad#1093: the body's or an occurrence's display state):
+  // a normal body in the shaded styles is drawn as a faint surface with
+  // its edges in its own colour, hides nothing, and is picked only where
+  // nothing else lies under the cursor (PickContext.hpp's setPickLast).
+  bool transparent = false;
   // Cut by a section's plane (Section Analysis, Hide Above Sketch): its
   // faces are drawn behind the section caps on its cut faces (mitcad#784).
   bool sectioned = false;
@@ -194,6 +206,10 @@ struct HighlightDisplay {
   // while a command preview replaces the displayed body.
   std::shared_ptr<geometry::Shape> body = nullptr;
   bool throughSolid = false; // feature inspection: boundaries remain visible behind solids
+  // The hover's look (mitcad#1041: the timeline's hover as the Browser's,
+  // setBrowserHover): faces as the view's hover draws them in sight, and
+  // fainter through what hides them, their boundaries opaque; not pickable.
+  bool hoverLook = false;
   // A feature's inputs where they were (mitcad#957): the shape is lines (a
   // Fillet's picked edges), drawn as edges in the colour whatever the
   // item's kind. With throughSolid, dashed where a solid hides them.
@@ -273,6 +289,8 @@ public:
     Failed, // red outline: the feature fails
     Datum,  // blue, nearly opaque, over picked references: a construction
             // feature's plane, axis or point (mitcad#446)
+    Interference, // overlapping volume an inspection found: a problem, in the
+                  // error's colour, apart from the cut's red (mitcad#1041)
     ExtendedTool, // orange, see-through: a split's or trim's tool as the
                   // feature extends it (mitcad#712)
   };
@@ -319,24 +337,42 @@ public:
   // thin-wall triangles drawn over the bodies in their colours, not
   // pickable, a marker and a label at the thinnest point and the legend in
   // the lower left corner; an empty overlay clears them. Logs "Print
-  // overlay: …" when it changes.
+  // overlay: …" when it changes. The overlay's colours are its categories'
+  // roles for the view's background (mitcad#1041), drawn again when the
+  // background turns from light to dark or back.
   void setPrintOverlay(const PrintOverlay& overlay);
   // Show Build Volume (mitcad#640, view/BuildVolume.cpp): the design
   // printer's bed and printable height as lines, and the boxes of the bodies
-  // that do not fit in `warning`; not pickable. Null shapes clear them.
-  void setBuildVolume(const TopoDS_Shape& frame, const TopoDS_Shape& outside, const QColor& warning);
+  // that do not fit in the warning's colour for the view's background
+  // (mitcad#1041); not pickable. Null shapes clear them.
+  void setBuildVolume(const TopoDS_Shape& frame, const TopoDS_Shape& outside);
   // Image references (mitcad#782, view/ImageReferenceView.cpp): each image
   // of `shown` drawn on its plane by its corners, see-through by its
   // opacity, hidden behind the bodies or, `through`, over them; never
   // picked. The pictures come by their digest from `images` (one missing
   // is not drawn). Logs "Image references drawn: …" when it changes.
   void setImageReferences(const std::vector<ImageReferenceShown>& shown, const QHash<QString, QImage>& images);
+  // The Center of Mass marker (mitcad#1094, view/CenterOfMassView.cpp): a
+  // crossed circle of constant size on screen at `at` (design coordinates,
+  // mm), drawn over the bodies and never picked, in the colors of the
+  // view's background (drawn again when it turns from light to dark or
+  // back); `tip` is its tooltip when the pointer rests on it. None takes it
+  // away. Logs "Center of Mass drawn: x, y, z on a light|dark background"
+  // or "Center of Mass drawn: none" when that changes.
+  void setCenterOfMass(const std::optional<gp_Pnt>& at, const QString& tip);
   // Annotations (mitcad#649, mitcad#702; view/MeasurementOverlay.cpp): the
   // shown ones drawn in their planes (MeasurementOverlay), in their colours
   // over the halo tone; logs "Annotations drawn: …" when that changes and
   // their labels' and lines' places when those change.
   void setMeasurements(const std::vector<MeasurementDisplay>& measurements);
   const std::vector<MeasurementDisplay>& measurements() const { return m_measurements; }
+  // A panel's preview of the annotation its Add makes (mitcad#1097): drawn
+  // dimmed over the shown ones, never picked, left out of snapshots and
+  // pictures; none when empty. Logs "Annotation preview drawn: <name> =
+  // <label>" (or "none") when it changes and "Annotation preview label
+  // <name> at x,y" with the others' places.
+  void setMeasurementPreview(const std::vector<MeasurementDisplay>& preview);
+  const std::vector<MeasurementDisplay>& measurementPreview() const { return m_measurementPreview; }
   // For UI tests: "Annotation label <name> at x,y" and "Annotation line
   // <name> at x,y" in the window's coordinates, when they changed since
   // last logged; after setMeasurements and whenever the view's size or the
@@ -658,6 +694,20 @@ public:
   // edge or face under the mouse, drawn as the hover draws that one (edges
   // in a compound) and not pickable; null takes it away.
   void setHoverChain(const TopoDS_Shape& shape);
+  // The bodies a browser row under the pointer stands for (mitcad#1022):
+  // the body `body` placed by `occurrence`, or with an empty `body` every
+  // body of the occurrence and of the occurrences in it; none when `shown`
+  // is false. They are drawn in the hover colour over the scene, those
+  // parts other bodies hide too, fainter (an x-ray look, their face
+  // boundaries showing where they are). Nothing is meshed or computed: each
+  // body's presentation as the view draws it now is shown again through a
+  // shadow of it (OCCT's Prs3d_PresentationShadow, which draws the
+  // presentation's own triangles and lines) in two layers, the top one
+  // against the scene's depth and one of its own without depth. A body
+  // drawn anew or placed elsewhere meanwhile is shown so again with the
+  // next scene change. The selection, the picks and the camera stay as
+  // they are. Returns how many bodies are highlighted.
+  int setBrowserHover(const QString& body, const QString& occurrence, bool shown);
 
   // While a sketch tool draws, the left button is the tool's (sketch mode
   // handles it), not the view's: no picking or window selection. The
@@ -863,6 +913,7 @@ private:
   struct BodyEntry {
     std::string uid;
     std::string component;
+    int componentColor = -1;
     std::string occurrence;
     occ::handle<AIS_Shape> object;
     std::shared_ptr<geometry::Shape> shape;
@@ -876,6 +927,8 @@ private:
     // Outside the active component (setActiveScope): a normal body is drawn
     // as a ghost that stays pickable (`style` stays Normal).
     bool inactive = false;
+    // BodyDisplay::transparent.
+    bool transparent = false;
     // BodyDisplay::sectioned.
     bool sectioned = false;
     // The hidden-edge styles' edges: dashed through faces, solid in sight.
@@ -921,6 +974,12 @@ private:
   void styleProfile(const occ::handle<AIS_Shape>& profile) const;
   int styleDatum(const occ::handle<AIS_Shape>& object, SelectKind kind) const;
   void logInactiveGhosts();
+  // Whether a picked item is a transparent body's (BodyDisplay::transparent),
+  // or one of its faces, edges or vertices, or their highlight.
+  bool isTransparentPick(const SelectionItem& item) const;
+  // Logs "View transparent: <n> bodies" or "View transparent: none" when
+  // that changes.
+  void logTransparent();
   // The rendered mode's layer for a body, and its edges hidden under a
   // rendered image.
   void applyRenderedVisibility(BodyEntry& entry);
@@ -1100,6 +1159,10 @@ private:
   QString m_sketchKept;              // its sketch that keeps its place
   std::set<const AIS_InteractiveObject*> m_inactiveObjects;
   QString m_loggedInactiveGhosts = QStringLiteral("none");
+  // Transparent bodies (mitcad#1093): "<uid>@<occurrence>" of each shown
+  // one, for the pick order, and the log line last written.
+  std::set<std::string> m_transparentBodies;
+  QString m_loggedTransparent = QStringLiteral("none");
   std::map<ProfileKey, occ::handle<AIS_Shape>> m_profiles;
   std::vector<occ::handle<AIS_Shape>> m_sketchEntities;
   // The shown sketch entities by "<sketch>/<id>@<occurrence>", with their
@@ -1255,9 +1318,14 @@ private:
   occ::handle<AIS_Shape> m_buildFrame;
   occ::handle<AIS_Shape> m_buildOutside;
   PrintOverlayLabels* m_printLabels = nullptr;
+  // The overlay's categories in their roles for the background's tone
+  // (mitcad#1041), after the background turned light or dark.
+  void recolorPrintOverlay();
   QString m_loggedPrintOverlay = QStringLiteral("Print overlay: none");
   // Measurement objects (setMeasurements, mitcad#649).
   std::vector<MeasurementDisplay> m_measurements;
+  std::vector<MeasurementDisplay> m_measurementPreview; // mitcad#1097
+  QString m_loggedMeasurementPreview = QStringLiteral("Annotation preview drawn: none");
   MeasurementOverlay* m_measurementOverlay = nullptr;
   QString m_loggedMeasurements = QStringLiteral("Annotations drawn: none");
   // Annotations (mitcad#702): what clicks on them do, and those
@@ -1271,6 +1339,7 @@ private:
   occ::handle<LayoutGrid> m_grid;
   gp_Ax3 m_gridPlane;
   Graphic3d_ZLayerId m_gridLayer = Graphic3d_ZLayerId_UNKNOWN;
+  int m_gridRebuilds = 0; // updateGrid's rebuilds so far (a 3D mouse motion's log counts them)
   std::optional<CameraState> m_home;
   // The step of a camera change under way (runViewOperation), which a
   // failure names: set by fitCamera too, hence mutable.
@@ -1338,8 +1407,28 @@ private:
   bool m_hoverMoved = false;
   // The hover's colour, and the rest of the hovered tangent chain
   // (setHoverChain, mitcad#290).
-  QColor m_hoverColor = QColor(0x2f, 0x9b, 0xff);
+  QColor m_hoverColor = viewColor(ColorRole::Hover, false);
   occ::handle<AIS_Shape> m_hoverChain;
+  // setBrowserHover (mitcad#1022): what the row stands for, the shadows
+  // drawn of the bodies' presentations (in sight and through the others),
+  // and what they were made from (each presentation with its placement),
+  // to make them again when a body was drawn anew or moved.
+  struct BrowserHover {
+    bool shown = false;
+    std::string body;
+    std::string occurrence;
+  };
+  BrowserHover m_browserHover;
+  std::vector<occ::handle<Graphic3d_Structure>> m_browserHoverShadows;
+  std::vector<std::pair<const void*, const void*>> m_browserHoverSources;
+  Graphic3d_ZLayerId m_browserHoverLayer = Graphic3d_ZLayerId_UNKNOWN;
+  // The presentations setBrowserHover shows now, with their sources.
+  std::vector<occ::handle<Graphic3d_Structure>> browserHoverPresentations(
+      std::vector<std::pair<const void*, const void*>>& sources) const;
+  // The shadows made again from them; how many bodies they show.
+  int drawBrowserHover();
+  // After a scene change: drawn again when a body shown changed.
+  void refreshBrowserHover();
   // The image references drawn and their textures, by digest and opacity
   // (setImageReferences, mitcad#782).
   std::vector<occ::handle<AIS_InteractiveObject>> m_imageReferences;
@@ -1347,17 +1436,28 @@ private:
   QString m_loggedImageReferences = QStringLiteral("Image references drawn: none");
   bool m_loggedImageLayer = false;
   // A 3D mouse's motion (setSpaceMouseRates, mitcad#951): its rates, the
-  // clock between its frames, the orbit's centre taken as it began, and
-  // what it did so far (logged when it ends).
+  // clock between its frames and their pacing (mitcad#1023), the orbit's
+  // centre taken as it began, and what it did so far (logged when it ends).
   void stepSpaceMouse();
   void endSpaceMouse();
   SpaceMouseRates m_spaceMouse;
   QElapsedTimer m_spaceMouseClock;
+  SpaceMouseFramePacer m_spaceMousePacer;
+  SpaceMouseTiming m_spaceMouseTiming; // its frames, as logged
+  int m_spaceMouseGridRebuilds = 0; // m_gridRebuilds as its previous frame began
   std::optional<gp_Pnt> m_spaceMousePivot;
-  int m_spaceMouseFrames = 0;
   double m_spaceMouseTurned = 0.0; // degrees
   double m_spaceMousePanned = 0.0; // view heights
   double m_spaceMouseStartScale = 0.0; // the camera's scale as it began (the zoom logged)
+  // The Center of Mass marker (setCenterOfMass, mitcad#1094): the point
+  // drawn and its tooltip, the marker, and the image's tone and ratio.
+  void paintCenterOfMass();
+  bool centerOfMassToolTip(const QPoint& at, const QPoint& global);
+  std::optional<gp_Pnt> m_centerOfMassAt;
+  QString m_centerOfMassTip;
+  occ::handle<AIS_Shape> m_centerOfMass;
+  bool m_centerOfMassFollowsTone = false;
+  QString m_loggedCenterOfMass = QStringLiteral("Center of Mass drawn: none");
 };
 
 } // namespace mitcad

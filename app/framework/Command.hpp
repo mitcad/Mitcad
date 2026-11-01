@@ -32,6 +32,7 @@
 #include <gp_Trsf.hxx>
 
 #include "DragProxy.hpp"
+#include "NoticeLevel.hpp"
 #include "Selection.hpp"
 #include "mitcad/geometry/shape.hpp"
 
@@ -160,8 +161,16 @@ struct InputNote {
   // The text on one line, elided, its whole text the tooltip (mitcad#655:
   // 3D Print's Materials summary); else wrapped.
   bool oneLine = false;
+  // A notice under the text and its icon buttons, at its level
+  // (mitcad#1062: 3D Print's Materials row says which materials name no
+  // preset of the slicer, a warning): an error or a warning in the level's
+  // highlight box with its icon and word, as the panel's message
+  // (docs/ui-conventions.md, "Messages and severity"); any other level
+  // plain grey text. Empty: none.
+  QString notice{};
+  NoticeLevel noticeLevel = NoticeLevel::Information;
 
-  bool isEmpty() const { return text.isEmpty() && actions.isEmpty(); }
+  bool isEmpty() const { return text.isEmpty() && actions.isEmpty() && notice.isEmpty(); }
 };
 
 // A mark in a value field (InputDef::markFor, mitcad#980: a Hole field
@@ -187,6 +196,18 @@ struct FieldMark {
 struct ChoiceIcon {
   QString icon;
   QString tooltip;
+};
+
+// An option of a choice as its picker lists it (InputDef::choicePicker,
+// mitcad#1108): under a heading (none when empty), by a short label
+// (empty: the option's own) with a small tag at its right; the search
+// also matches `search`.
+struct ChoicePickerRow {
+  QString value;
+  QString heading;
+  QString shortLabel;
+  QString tag;
+  QString search;
 };
 
 // A choice whose value starts with this is a heading of the options after
@@ -239,10 +260,6 @@ struct InputDef {
   // The order of the picks matters (loft sections): the panel lists them
   // with buttons that move them.
   bool ordered = false;
-  // Whether the origin's planes and axes are shown while the input takes
-  // construction geometry (Measure leaves them hidden: they would cover
-  // the model; construction features and a shown origin still count).
-  bool showsOrigin = true;
   // A pick of an item already selected keeps it (and still reaches
   // onPick): a face clicked again adds another hole position.
   bool keepOnRepick = false;
@@ -326,6 +343,13 @@ struct InputDef {
   // The model's printed-fit table supplies this field's initial name.
   // Empty for ordinary fields; used only for a new command's defaults.
   QString printedFitFeature;
+  // Value: a new feature's panel starts with what was given in the field
+  // on the command's last OK, from any design, instead of `defaultText`
+  // (mitcad#1028, framework/RememberedValues.hpp: Fillet's Radius); the
+  // default when nothing is kept or it does not evaluate in the design.
+  // For a list's input, the first row's value is kept. Editing a feature
+  // and Cancel keep nothing.
+  bool remembered = false;
   // A handle in the view that drags the value; none when it returns none.
   std::function<std::optional<Manipulator>(const CommandState&, const CommandContext&)>
       manipulator;
@@ -413,6 +437,14 @@ struct InputDef {
   // value), its tooltip on the option (mitcad#655: the place of a printer,
   // a lock for Mitcad's own). A frontend without icons shows the labels.
   std::function<ChoiceIcon(const QString&)> choiceIcon;
+  // Choice shown as a drop-down: opened, a searchable picker instead of its
+  // list (mitcad#1108: Send to Slicer's Printer and Process), a window
+  // titled "<label> Picker" as wide as its names need. It lists the
+  // options in their order with the rows' headings, short labels and tags
+  // (an option without a row by its label, without a heading); the closed
+  // field shows the chosen row's short label, its whole label the
+  // tooltip. A frontend without such a picker shows the drop-down.
+  std::function<QVector<ChoicePickerRow>(const CommandState&)> choicePicker;
   // Note (mitcad#655): what the row shows in a state, and what a click on
   // its button `action` (the index in InputNote::actions) does, with the
   // row's state and the model; the panel shows the inputs again afterwards
@@ -433,6 +465,14 @@ struct InputDef {
   // mitcad#394) that opens the inputs below it whose `visible` follows it;
   // a frontend without one shows a check box.
   bool disclosure = false;
+  // Check: shown as a small "fx" button, pressed while checked, with the
+  // label as its tooltip (mitcad#1059: the Material and Appearance tools'
+  // value bound to an option, usually besidePrevious); a frontend without
+  // one shows a check box.
+  bool fxToggle = false;
+  // Choice: the size of each option's picture (choiceImage) in the
+  // drop-down, in pixels (mitcad#1059: a material's swatch).
+  int choiceImageSize = 48;
 
   // List: the inputs of a row, by their own ids (CommandState::row).
   std::vector<InputDef> children;
@@ -490,6 +530,10 @@ struct InputDef {
   }
   InputDef& withPrintedFit(const QString& feature) {
     printedFitFeature = feature;
+    return *this;
+  }
+  InputDef& withRemembered() {
+    remembered = true;
     return *this;
   }
   InputDef& withHeading(const QString& text) {
@@ -630,6 +674,10 @@ struct InputDef {
     disclosure = true;
     return *this;
   }
+  InputDef& withFxToggle() {
+    fxToggle = true;
+    return *this;
+  }
   InputDef& withButton(const QString& text, const QString& tip,
                        std::function<void(const CommandState&, const CommandContext&)> call) {
     buttonText = text;
@@ -672,6 +720,10 @@ struct InputDef {
   }
   InputDef& withChoiceIcon(std::function<ChoiceIcon(const QString&)> icon) {
     choiceIcon = std::move(icon);
+    return *this;
+  }
+  InputDef& withChoicePicker(std::function<QVector<ChoicePickerRow>(const CommandState&)> rows) {
+    choicePicker = std::move(rows);
     return *this;
   }
   InputDef& withButtonIcon(const QString& icon) {
@@ -1013,6 +1065,14 @@ struct CommandDef {
   // model changes independently committed by its choices or companion
   // editors; there is no provisional model preview to take back.
   std::function<bool(const CommandState&, const CommandContext&)> accept;
+  // An application panel's own preview of what OK does (mitcad#1097: the
+  // Annotate panels' annotation, drawn dimmed): called with `build`'s
+  // definition once it is complete, while the model is idle, and with an
+  // empty one when the inputs are not complete and when the panel ends, to
+  // take it away. It returns why there is nothing to show (the panel then
+  // shows it as its error, OK disabled), empty when the preview is shown.
+  // Not with asynchronous commands (no preview there).
+  std::function<QString(const QJsonObject& def)> acceptPreview;
   // The OK button's text when it is not "OK" (3D Print: Send).
   QString okLabel;
   // Commands that run model commands of their own (BUILD, mitcad#375),
@@ -1061,6 +1121,11 @@ struct CommandDef {
   // mitcad#857); a click on one picks it as on the item. Asked whenever
   // the highlights are drawn again (CommandSession::ask).
   std::function<std::vector<std::pair<SelectionItem, QColor>>(const CommandState&)> marks;
+  // Whether the marks are drawn alone, with only the active input's picks
+  // beside them (unset: always, mitcad#857 review). 3D Print's bed face in
+  // use (mitcad#1109) is drawn beside the bodies' picks, alone only while
+  // a face is asked for.
+  std::function<bool(const CommandState&)> marksAlone;
   // Esc while the panel is open (mitcad#857: 3D Print's bed face choice,
   // where Esc ends the question, nothing sent): true when the command took
   // it (the inputs follow, as after a change); otherwise Esc cancels.
@@ -1133,6 +1198,10 @@ struct CommandDef {
   // Actions and tools.
   std::function<void()> run;
   std::function<bool()> enabled; // besides the mode; always when unset
+  // Why `enabled` says no, for a disabled button's tooltip (the quick-access
+  // group, mitcad#1090: Save's "no unsaved changes"); a generic reason when
+  // unset.
+  std::function<QString()> disabledReason;
   // Also while a command's panel is open (U5: the view's commands, which
   // change no model: Fit, standard views, styles, ...).
   bool duringCommands = false;

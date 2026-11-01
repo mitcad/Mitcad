@@ -861,6 +861,9 @@ pub struct EvalContext<'a, K: Kernel> {
     pub(crate) reads: Vec<Read>,
     /// What the feature built with caveats (P9: yellow in the timeline).
     pub(crate) warnings: Vec<String>,
+    /// What is worth knowing of how it was built, needing no action
+    /// (mitcad#1106: information in the feature's details).
+    pub(crate) infos: Vec<String>,
     /// A pattern's elements, suppressed ones too (P9: the panel shows a
     /// toggle at each), by element number; element 0 is the original.
     pub(crate) elements: Vec<Transform>,
@@ -878,6 +881,11 @@ pub struct EvalContext<'a, K: Kernel> {
     /// to is on, by their links (a construction plane's, mitcad#196): read
     /// in their components and moved into the feature's coordinates.
     pub(crate) geom_links: std::collections::BTreeMap<BodyUid, crate::links::OccurrenceLink>,
+    /// The construction features and sketches of other components that the
+    /// feature's references name, by their links (a construction feature's
+    /// `datum_links`, mitcad#1035, mitcad#1039): their datums and sketch
+    /// frames are moved into the feature's coordinates.
+    pub(crate) datum_links: std::collections::BTreeMap<FeatureUid, crate::links::OccurrenceLink>,
     next_body: u32,
     /// The pieces of bodies it splits (mitcad#408).
     pub(crate) pieces: pieces::PieceState,
@@ -897,6 +905,7 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             env,
             reads: Vec::new(),
             warnings: Vec::new(),
+            infos: Vec::new(),
             elements: Vec::new(),
             pattern_anchor: None,
             cut_targets: None,
@@ -904,6 +913,7 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             move_basis: None,
             objects_before: None,
             geom_links: std::collections::BTreeMap::new(),
+            datum_links: std::collections::BTreeMap::new(),
             next_body: 0,
             unpack_time: std::time::Duration::ZERO,
         }
@@ -970,11 +980,23 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
         }
     }
 
+    /// Information about the feature that needs no action (mitcad#1106).
+    pub fn inform(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        if !self.infos.contains(&message) {
+            self.infos.push(message);
+        }
+    }
+
     /// Warns about what the geometry gave up to build a shape
-    /// ([`Kernel::notes`]).
+    /// ([`Kernel::notes`]), and tells what else is worth knowing of how it
+    /// was built ([`Kernel::infos`]).
     pub fn warn_notes(&mut self, shape: &K::Shape) {
         for note in self.kernel.notes(shape) {
             self.warn(note);
+        }
+        for info in self.kernel.infos(shape) {
+            self.inform(info);
         }
     }
 
@@ -1397,7 +1419,7 @@ mod tests {
             ),
             (
                 r#"{"type": "fillet", "body": "Extrude1", "edges": [], "radius": "d2"}"#,
-                "invalid body id 'Extrude1'",
+                "invalid body id Extrude1",
             ),
         ] {
             let error = serde_json::from_str::<FeatureDef<String>>(json).unwrap_err();

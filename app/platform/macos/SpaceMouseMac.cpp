@@ -7,7 +7,8 @@
 // installed and running, may hold the device for itself; then no values
 // reach Mitcad (docs/user-guide.md says so). The axes are HID's, as on
 // Windows (SpaceMouseDevice.hpp maps them); input counts only while Mitcad
-// is the active application.
+// is the active application. IOKit gives each axis's value on its own, so
+// how a device splits its reports (mitcad#1034) does not matter here.
 
 #include "../SpaceMouseDevice.hpp"
 

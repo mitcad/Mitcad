@@ -66,7 +66,9 @@ struct BindingActions;
 //   URL; Closed, Add Row (the current values), Generate Rows from Table…
 //   (a row per key of a table's column, mitcad#849), Delete Row, Set as
 //   Default, Add Column… and Remove Column (a closed table's parameter
-//   columns, mitcad#999) and Apply. A value a rule refuses is not written: its cell keeps it in
+//   columns, mitcad#999), Import CSV… and Export CSV… (the rows as CSV,
+//   mitcad#1044) and Apply; blocks of cells are copied, pasted and emptied
+//   as in a spreadsheet. A value a rule refuses is not written: its cell keeps it in
 //   red with the rule's name; a row that breaks a rule is marked in its
 //   cells with the rule in the tooltip.
 // - Rules: makeConfigurationRulesPage.
@@ -133,6 +135,18 @@ private:
   // The parameter of the current cell's column when it is a parameter
   // column (not an option's); empty otherwise.
   QString selectedColumn() const;
+  // Filling a closed table (mitcad#1044): the sheet's columns as the data
+  // layer reads them, Copy, Paste and Delete on blocks of cells, and the
+  // rows as CSV.
+  QVector<configurations::SheetColumn> sheetColumns() const;
+  // A new row as Add Row makes it, without its name: the options' values
+  // as they are now, a closed table's other parameters' expressions.
+  configurations::Row freshRow() const;
+  void copyCells();
+  void pasteCells();
+  void clearCells();
+  void importRows();
+  void exportRows();
 
   // Calls `call` once the table's own handling of an edit is over and no
   // job computes the model.
@@ -176,6 +190,8 @@ private:
   QPushButton* m_apply = nullptr;
   QPushButton* m_addColumn = nullptr;    // mitcad#999
   QPushButton* m_removeColumn = nullptr;
+  QPushButton* m_importRows = nullptr; // mitcad#1044
+  QPushButton* m_exportRows = nullptr;
 
   ConfigurationPage* m_rules = nullptr;
   ConfigurationBindingsPage* m_bindings = nullptr; // mitcad#862
@@ -203,6 +219,9 @@ private:
   QString m_loggedOptions;
   QString m_loggedRows;
   QString m_loggedIssues;
+  // The cells marked at a level, as last logged (mitcad#1051).
+  QString m_loggedOptionMarks;
+  QString m_loggedRowMarks;
 };
 
 } // namespace mitcad

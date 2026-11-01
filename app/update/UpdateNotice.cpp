@@ -20,9 +20,9 @@ UpdateNotice::UpdateNotice(QWidget* parent) : QWidget(parent) {
   setObjectName(QStringLiteral("updateNotice"));
   auto* layout = new QHBoxLayout(this);
   layout->setContentsMargins(8, 2, 8, 2);
-  auto* icon = new QLabel;
-  icon->setPixmap(themeIcon(QStringLiteral("update")).pixmap(20, 20));
-  layout->addWidget(icon);
+  m_icon = new QLabel;
+  m_icon->setPixmap(themeIcon(QStringLiteral("update")).pixmap(20, 20));
+  layout->addWidget(m_icon);
   m_text = new QLabel;
   m_text->setTextFormat(Qt::RichText);
   m_text->setWordWrap(true);
@@ -51,6 +51,9 @@ UpdateNotice::UpdateNotice(QWidget* parent) : QWidget(parent) {
 }
 
 void UpdateNotice::present(const QString& state, const QString& html) {
+  if (state == QStringLiteral("offer") || state == QStringLiteral("progress")) {
+    m_icon->setPixmap(themeIcon(QStringLiteral("update")).pixmap(20, 20));
+  }
   m_text->setText(html);
   QStringList buttons;
   for (QPushButton* b : {m_notes, m_install, m_skip, m_later, m_cancel, m_close}) {
@@ -109,15 +112,26 @@ void UpdateNotice::showProgress(const QString& plain, qint64 received, qint64 to
   }
 }
 
-void UpdateNotice::showMessage(const QString& plain, bool error) {
+void UpdateNotice::showMessage(const QString& plain, NoticeLevel level) {
   m_progress->hide();
   for (QPushButton* b : {m_notes, m_install, m_skip, m_later, m_cancel}) {
     b->hide();
   }
   m_close->show();
+  // An error does not look like a success (mitcad#1040): the level's icon
+  // and colour; information keeps the update icon.
+  const QIcon icon = level == NoticeLevel::Information ? QIcon() : noticeIcon(level);
+  m_icon->setPixmap((icon.isNull() ? themeIcon(QStringLiteral("update")) : icon).pixmap(20, 20));
   // Plain text: an error carries what a server sent, which must not be
   // read as markup (mitcad#938).
-  present(error ? QStringLiteral("error") : QStringLiteral("message"), plain.toHtmlEscaped());
+  QString html = plain.toHtmlEscaped();
+  if (isProblem(level)) {
+    html = QStringLiteral("<span style=\"color:%1\">%2</span>").arg(noticeColor(level, palette()).name(), html);
+  }
+  const QString state = level == NoticeLevel::Error     ? QStringLiteral("error")
+                        : level == NoticeLevel::Warning ? QStringLiteral("warning")
+                                                        : QStringLiteral("message");
+  present(state, html);
 }
 
 } // namespace mitcad

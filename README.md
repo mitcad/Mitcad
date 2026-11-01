@@ -1,15 +1,15 @@
 # MitCad
 
 MitCad is an open-source parametric desktop CAD application. It runs on
-Windows, Linux and macOS (Apple Silicon, macOS 14.4 or newer). Its licence
-is the [MIT licence](LICENSE).
+Windows, Linux and macOS (Apple Silicon, macOS 14.4 or newer). Its license
+is the [MIT license](LICENSE).
 
-- **Parametric modelling with a history.** You draw sketches with
+- **Parametric modeling with a history.** You draw sketches with
   constraints and dimensions. Features go on a timeline. Parameters hold
   expressions. When you change a dimension or edit a feature, MitCad
   rebuilds the model.
 - **Visual workflow.** The window has a tabbed toolbar, command panels
-  with a live preview and drag handles, a model browser, a timeline and a
+  with a live preview and drag handles, the Browser, the Timeline and a
   command search.
 - **Many CAD formats.** FreeCAD, `.f3d`, SolidCraft and `.ipt` files open
   with their history. IFC and `.rvt` building models open with their
@@ -26,7 +26,7 @@ How to install and use MitCad: [the user guide](docs/user-guide.md).
 Website: [mitcad.org](https://mitcad.org/). Downloads:
 [the releases](https://github.com/mitcad/Mitcad/releases).
 
-[![A pillow block modelled in MitCad from an empty design, then a dimension changed: watch the demo on mitcad.org](https://mitcad.org/assets/video/mitcad-demo-poster.webp)](https://mitcad.org/#showcase)
+[![A pillow block modeled in MitCad from an empty design, then a dimension changed: watch the demo on mitcad.org](https://mitcad.org/assets/video/mitcad-demo-poster.webp)](https://mitcad.org/#showcase)
 
 <table>
   <tr>
@@ -45,7 +45,7 @@ Website: [mitcad.org](https://mitcad.org/). Downloads:
 
 The world did not have a CAD application that is easy to use, imports
 many file formats and also runs on Linux. MitCad was started to be that
-application. It is free to use, change and share under the MIT licence.
+application. It is free to use, change and share under the MIT license.
 
 If a file does not import correctly, please
 [open an issue](https://github.com/mitcad/Mitcad/issues).
@@ -53,11 +53,11 @@ If a file does not import correctly, please
 ## Status
 
 MitCad is under active development. Each release has a Windows installer,
-a Linux AppImage and a macOS disk image. Part modelling, sketches,
+a Linux AppImage and a macOS disk image. Solid modeling, sketches,
 assemblies with joints that move their components, analysis, the file
 formats of the user guide and the version history of projects work.
 
-Known gaps: direct modelling without a history, and some loft
+Known gaps: direct modeling without a history, and some loft
 combinations.
 
 ## Updates
@@ -164,9 +164,11 @@ ssh <user>@<guest> "cd ~/src/mitcad && cmake --preset dev && cmake --build --pre
 
 The application is `build/dev/app/mitcad.app`. Packaging as a disk image:
 [docs/development.md](docs/development.md#macos-bundle-and-native-ui).
-The AppKit frontend is built with `-DMITCAD_MACOS_NATIVE_UI=ON`; that build
-uses a native window, toolbar, browser, inspector and dialogs by default.
-`--ui=qt` selects the retained Qt frontend. Details and validation:
+The macOS presets also build the experimental AppKit frontend
+(`MITCAD_MACOS_NATIVE_UI=ON`): a native window, toolbar, browser, inspector
+and dialogs. Qt stays the default; Settings › General › Native macOS
+interface (experimental) chooses AppKit for the next starts, and
+`--ui=native|qt` chooses for one run. Details and validation:
 [native macOS UI](docs/native-macos-ui.md).
 
 ## Tests
@@ -199,8 +201,8 @@ corpus setup: [docs/development.md](docs/development.md#the-check-script).
 | `geometry` | C++ facade over OCCT |
 | `app` | Qt application ([app/COMMANDS.md](app/COMMANDS.md)) |
 | `tools` | `mitcad-cli`, UI tests, dev environment scripts, FreeCAD export macros, macOS packaging |
-| `docs` | [Architecture](docs/architecture.md), [development](docs/development.md), [user guide](docs/user-guide.md), [updates](docs/updates.md), [rendering](docs/rendering.md), [naming](docs/naming.md) |
-| `third_party` | Third-party files with their own licences |
+| `docs` | [Architecture](docs/architecture.md), [development](docs/development.md), [user guide](docs/user-guide.md), [updates](docs/updates.md), [rendering](docs/rendering.md), [UI conventions](docs/ui-conventions.md) |
+| `third_party` | Third-party files with their own licenses |
 
 ## Contributions
 
@@ -226,7 +228,7 @@ Issues made entirely by an AI agent are welcome, with these conditions:
   accepted for this work.
 - Before writing an issue, the agent finds the code the issue concerns
   and refers to it in the issue (files, functions, the current
-  behaviour). This confirms that it has understood the context and the
+  behavior). This confirms that it has understood the context and the
   target correctly; an issue written without looking at the code is not
   accepted.
 
@@ -235,9 +237,9 @@ Issues made entirely by an AI agent are welcome, with these conditions:
 ### Can RTX cards render faster? Can MitCad use OptiX?
 
 No. The renderer can use the ray tracing cores of NVIDIA's RTX cards
-only through NVIDIA OptiX, and the OptiX licence does not fit open source
+only through NVIDIA OptiX, and the OptiX license does not fit open source
 software. The OptiX SDK headers would be compiled into MitCad's renderer.
-NVIDIA's licence permits the distribution of such a program only in
+NVIDIA's license permits the distribution of such a program only in
 binary form, only for NVIDIA hardware, and only when an enforceable
 agreement binds every recipient to NVIDIA's terms. Open source software
 that anyone can download, build, change and pass on cannot meet those
@@ -246,18 +248,18 @@ Cycles' CUDA device, which needs no such terms. The CUDA device does not
 use the RT cores, so RTX cards render slower than they could
 ([docs/rendering.md](docs/rendering.md#devices)).
 
-## Licence
+## License
 
 MIT ([LICENSE](LICENSE)). Qt and OCCT are LGPL and linked dynamically.
-Licence policy: [docs/development.md](docs/development.md#licence-policy).
+License policy: [docs/development.md](docs/development.md#licence-policy).
 
 ## Model Context Protocol
 
 `mitcad-cli mcp --workspace /absolute/path/to/designs` starts a headless
 MCP server over stdio for a local AI client. The server can make and open
-documents, run native modelling commands and queries, save editable
+documents, run native modeling commands and queries, save editable
 `.mitcad` files, and export geometry inside the workspace. Add
 `--read-only` to inspect existing designs. `mitcad-cli mcp --connect`
 connects an agent to the open desktop application instead. Client setup,
-a modelling example, the error rules and the current limits:
+a modeling example, the error rules and the current limits:
 [docs/mcp.md](docs/mcp.md).

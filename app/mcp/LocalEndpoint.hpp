@@ -4,6 +4,7 @@
 #include <QByteArray>
 #include <QList>
 #include <QString>
+#include <QStringList>
 
 namespace mitcad::mcp {
 
@@ -16,12 +17,17 @@ struct Endpoint {
   qint64 pid = 0;
   quint16 port = 0;
   QString token;
+  // Token-free window metadata, stored beside the private endpoint record.
+  qint64 activatedAt = 0; // UTC milliseconds; zero means not recorded
+  QString title;
+  QStringList agents;
 };
 
 QString discoveryDirectory();
 bool prepareDiscoveryDirectory(QString* error);
 bool publishEndpoint(const Endpoint& endpoint, QString* error);
 void removeEndpoint(const Endpoint& endpoint);
+bool publishWindowState(const Endpoint& endpoint, QString* error = nullptr);
 // The current user's private records. A record whose process is no longer
 // running (a killed or crashed app, mitcad#437) is removed, not returned;
 // a returned record is live only once its token authenticates.

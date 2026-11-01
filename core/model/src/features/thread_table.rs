@@ -687,7 +687,7 @@ fn standard_name(standard: ThreadStandard) -> &'static str {
         ThreadStandard::Unified => "Unified",
         ThreadStandard::Whitworth => "Whitworth",
         ThreadStandard::Npt => "NPT",
-        ThreadStandard::TyreValve => "tyre valve",
+        ThreadStandard::TyreValve => "tire valve",
         ThreadStandard::FormingScrew => "forming screw",
         ThreadStandard::Trapezoidal => "trapezoidal",
         ThreadStandard::IsoTaper => "ISO 7-1 taper pipe",
@@ -775,12 +775,12 @@ impl ThreadStandard {
             | Self::Trapezoidal
             | Self::Custom => Ok(()),
             Self::Whitworth => Err(
-                "a Whitworth thread cannot be modelled: Mitcad cuts the 60-degree and the \
+                "a Whitworth thread cannot be modeled: Mitcad cuts the 60-degree and the \
                  trapezoidal profiles; make it cosmetic"
                     .to_owned(),
             ),
             Self::IsoTaper => Err(
-                "an ISO 7-1 taper pipe thread cannot be modelled: Mitcad cuts the 60-degree and \
+                "an ISO 7-1 taper pipe thread cannot be modeled: Mitcad cuts the 60-degree and \
                  the trapezoidal profiles; make it cosmetic"
                     .to_owned(),
             ),

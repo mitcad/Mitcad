@@ -109,10 +109,10 @@ OptionChooser::OptionChooser(QWidget* parent) : QWidget(parent) {
   m_filterForm->setContentsMargins(0, 0, 0, 0);
   m_standardFilter = new QComboBox;
   m_standardFilter->setObjectName(QStringLiteral("rowFilterStandard"));
-  m_standardFilter->setToolTip(tr("Only the sizes of this standard; it changes no part"));
+  m_standardFilter->setToolTip(tr("Only the sizes of this standard; it changes no component"));
   m_supplierFilter = new QComboBox;
   m_supplierFilter->setObjectName(QStringLiteral("rowFilterSupplier"));
-  m_supplierFilter->setToolTip(tr("Only the sizes this supplier sells; it changes no part"));
+  m_supplierFilter->setToolTip(tr("Only the sizes this supplier sells; it changes no component"));
   m_filterForm->addRow(tr("Standar&d:"), m_standardFilter);
   m_filterForm->addRow(tr("Suppli&er:"), m_supplierFilter);
   m_filters->hide();

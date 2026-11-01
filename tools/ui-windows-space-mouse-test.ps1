@@ -2,13 +2,15 @@
 # check-all sources: app/view/SpaceMouseController.cpp app/view/SpaceMouseController.hpp
 # check-all sources: app/view/SpaceMouseNavigation.hpp app/view/SpaceMouseView.cpp app/platform/SpaceMouseDevice.hpp
 # check-all sources: app/platform/windows/SpaceMouseWindows.cpp app/framework/TestDriver.cpp tools/ui-scripts/space-mouse.mitcad-ui
-# check-all sources: app/view/NavigationPreferences.hpp app/view/SpaceMouseCamera.hpp
+# check-all sources: app/view/NavigationPreferences.hpp app/view/SpaceMouseCamera.hpp app/view/SpaceMouseTiming.hpp
 # A 3D mouse (mitcad#951) in the build VM, through the test driver's input
 # (tools/ui-scripts/space-mouse.mitcad-ui, the same script as the Linux
 # test's): no device logs "3D mouse: none" (Raw Input finds none in the
 # VM), a spin turns the view, a push pans it, a pull zooms in and the first
-# button runs Fit, in Object mode; the 3D Mouse tab of Preferences has its
-# Navigation mode and Lock horizon (mitcad#978).
+# button runs Fit, in Object mode, each motion's log line with its
+# duration, frame rate, longest frame and grid rebuilds (mitcad#1023); the
+# 3D Mouse tab of Preferences has its Navigation mode and Lock horizon
+# (mitcad#978).
 param(
   [string]$App,
   [string]$Out = (Join-Path $env:TEMP 'mitcad-ui-windows-space-mouse'),
@@ -27,5 +29,7 @@ if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "3D mouse driver failed (exit code $exitCode)"
 }
 Ui-ExpectLog 'TestDriver: done' 'the 3D mouse turned, panned and zoomed the view and its button ran Fit'
+Ui-ExpectLog ' fps, longest frame ' "the 3D mouse motion's log line gives its frame rate and longest frame"
+Ui-ExpectLog ' grid rebuild(s), turned ' "the 3D mouse motion's log line counts its grid rebuilds"
 Ui-StopApp
 Write-Host 'PASS: space-mouse'

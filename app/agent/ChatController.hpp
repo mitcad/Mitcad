@@ -38,6 +38,7 @@
 #include "../mcp/ChatGate.hpp"
 #include "ChatAgent.hpp"
 #include "ChatHistoryStore.hpp"
+#include "../framework/NoticeLevel.hpp"
 
 namespace mitcad::agent {
 
@@ -158,7 +159,10 @@ private:
   void mergeTurn(const Turn& turn, const QJsonObject& now);
   void closeAnswer();
   int addEntry(const QJsonObject& entry);
-  void notice(const QString& text, bool keep = true);
+  // A notice in the chat at its level (mitcad#1040): an error (the message
+  // was not sent, the agent ended with an error), a warning, or information
+  // ("Stopped."); kept in the history with its level.
+  void notice(const QString& text, NoticeLevel level = NoticeLevel::Information, bool keep = true);
   int toolIndex(const QString& id) const;
   // A history line of an entry, appended to the design's file (or kept
   // until an untitled design has a path).

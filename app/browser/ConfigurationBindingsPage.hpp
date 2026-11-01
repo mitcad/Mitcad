@@ -34,7 +34,7 @@ struct BindingActions {
 // table (Item, Property, Follows, Now), filtered by Driven by (All options
 // or one option: the parameters the bindings use) and by an item search.
 // A binding whose results name no appearance or material, or that the
-// model warns about, is a warning row (`no appearance "paint_purple"`).
+// model warns about, is a warning row (`no appearance “paint_purple”`).
 // Edit… (or a double-click), Select in Browser, and Remove Binding (the
 // command with an empty expression: it keeps the value it gave, one undo
 // step). The status line counts them (`7 bindings`, `2 of 7 bindings`,

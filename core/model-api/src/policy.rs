@@ -60,11 +60,8 @@ pub(crate) fn changed_policy(
     settings: Option<&Map<String, Value>>,
 ) -> Result<Policy, ApiError> {
     let mut policy = match preset {
-        Some(name) => Policy::preset(name).ok_or_else(|| {
-            ApiError(format!(
-                "unknown preset '{name}' (hybrid, part or assembly)"
-            ))
-        })?,
+        Some(name) => Policy::preset(name)
+            .ok_or_else(|| ApiError(format!("unknown preset {name} (hybrid, part or assembly)")))?,
         None => base,
     };
     for (key, value) in settings.into_iter().flatten() {

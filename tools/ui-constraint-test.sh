@@ -7,7 +7,7 @@
 # mitcad-cli makes: Plate:1 (a 40 x 40 x 10 block with a hole of diameter
 # 16 through its middle, grounded) and Pin:1 (a cylinder of diameter 16 and
 # height 30 beside it):
-#   - Constraint: the pin's top rim, then the hole's top rim: the pin is
+#   - Assembly Constraint: the pin's top rim, then the hole's top rim: the pin is
 #     a ghost until the hole is picked, the row's type follows the picks
 #     (Automatic (Insert)), Flip turns the rims the same way, and OK
 #     inserts the pin through the hole.
@@ -77,25 +77,25 @@ ui_expect_log "Body F4.b0 in O2 at" "the pin is shown"
 
 echo "--- Insert: the pin's top rim into the hole's top rim"
 ui_mark
-ui_step "constraint (search)"            ui_command "Constraint"
-ui_expect_new "Command Constraint started" "Constraint started"
+ui_step "constraint (search)"            ui_command "Assembly Constraint"
+ui_expect_new "Command Assembly Constraint started" "Constraint started"
 ui_expect_new "Pick $PIN_TOP" "the pin's top rim can be picked"
 ui_mark
 ui_step "pick the pin's top rim"         ui_click_pick "$PIN_TOP"
-ui_expect_new "Constraint Geometry 1: 1 edge" "geometry 1 on the pin"
+ui_expect_new "Assembly Constraint Geometry 1: 1 edge" "geometry 1 on the pin"
 ui_expect_new "View ghosts: O2 (1 body)" "the pin is a ghost until geometry 2 is picked"
 ui_expect_new "Pick $HOLE_TOP" "the hole's rim can be picked"
 ui_mark
 ui_step "pick the hole's top rim"        ui_click_pick "$HOLE_TOP"
-ui_expect_new "Constraint Geometry 2: 1 edge" "geometry 2 on the plate"
+ui_expect_new "Assembly Constraint Geometry 2: 1 edge" "geometry 2 on the plate"
 ui_expect_new "View ghosts: none" "with both picks the pin is shown normally"
 ui_expect_new "options rows.0.type: Automatic (Insert) |" "two circles: an insert"
-ui_expect_new "Preview Constraint: ok" "previewed"
-ui_expect_new "Preview Constraint moves O2" "the preview shows the pin where the row puts it"
+ui_expect_new "Preview Assembly Constraint: ok" "previewed"
+ui_expect_new "Preview Assembly Constraint moves O2" "the preview shows the pin where the row puts it"
 ui_mark
-ui_step "flip"                           ui_click_logged "Panel Constraint input rows.0.flip"
-ui_expect_new "Constraint: Flip = on" "the rims the same way: the pin through the hole"
-ui_expect_new "Preview Constraint: ok" "previewed"
+ui_step "flip"                           ui_click_logged "Panel Assembly Constraint input rows.0.flip"
+ui_expect_new "Assembly Constraint: Flip = on" "the rims the same way: the pin through the hole"
+ui_expect_new "Preview Assembly Constraint: ok" "previewed"
 [ -n "$SHOT" ] && ui_capture "$SHOT"
 ui_mark
 ui_step "OK (Enter)"                     ui_key Return
@@ -109,8 +109,8 @@ ui_mark
 ui_step "undo (Ctrl+Z)"                  ui_key ctrl+z
 ui_expect_new "Undo: Add Constraint1" "the insert taken back"
 ui_mark
-ui_step "constraint (search)"            ui_command "Constraint"
-ui_expect_new "Command Constraint started" "Constraint started"
+ui_step "constraint (search)"            ui_command "Assembly Constraint"
+ui_expect_new "Command Assembly Constraint started" "Constraint started"
 ui_expect_new "Pick $PIN_TOP" "the pin's top rim can be picked"
 ui_mark
 ui_step "pick the pin's top rim"         ui_click_pick "$PIN_TOP"
@@ -119,14 +119,14 @@ ui_expect_new "Pick $HOLE_FACE" "the hole's face can be picked"
 ui_mark
 ui_step "pick the hole's face"           ui_click_pick "$HOLE_FACE"
 ui_expect_new "options rows.0.type: Automatic (Insert (Axis)) |" "a circle and a hole: an axis insert"
-ui_expect_new "Preview Constraint: ok" "previewed"
+ui_expect_new "Preview Assembly Constraint: ok" "previewed"
 ui_mark
-ui_step "add a row"                      ui_click_logged "Panel Constraint add rows"
-ui_expect_new "Constraint: added rows row 2" "a second row, without closing the panel"
-ui_expect_new "Panel Constraint input rows.1.a at" "its inputs shown"
+ui_step "add a row"                      ui_click_logged "Panel Assembly Constraint add rows"
+ui_expect_new "Assembly Constraint: added rows row 2" "a second row, without closing the panel"
+ui_expect_new "Panel Assembly Constraint input rows.1.a at" "its inputs shown"
 ui_mark
-ui_step "remove it"                      ui_click_logged "Panel Constraint remove rows.1"
-ui_expect_new "Preview Constraint: ok" "one row again"
+ui_step "remove it"                      ui_click_logged "Panel Assembly Constraint remove rows.1"
+ui_expect_new "Preview Assembly Constraint: ok" "one row again"
 ui_mark
 ui_step "OK (Enter)"                     ui_key Return
 ui_expect_new "Added constraint Constraint1: insert_axis placed, moved O2; DOF 2" \

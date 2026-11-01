@@ -37,7 +37,7 @@ fn references(v: Option<&Value>) -> Vec<Reference> {
         .unwrap_or_default()
 }
 
-/// The dump's compute option as Mitcad's.
+/// The dump's compute option as MitCad's.
 /// References the stream decoder named (`_f3d`), every one of them.
 fn named(refs: &[Reference]) -> bool {
     !refs.is_empty()
@@ -247,7 +247,7 @@ fn lattices(
             }
         }
     }
-    // Mitcad's patterns have at most 10,000 elements.
+    // MitCad's patterns have at most 10,000 elements.
     out.retain(|l| l.copies() < 10_000);
     out
 }
@@ -743,7 +743,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
     }
 
     /// A mirror of features without decoded inputs: sets of up to four of
-    /// the features before the item that Mitcad can mirror (they make a
+    /// the features before the item that MitCad can mirror (they make a
     /// tool body), whose volume changes in the history add up to the next
     /// state's change, about the decoded plane, else each origin plane
     /// (guesses the history checks, the closest sums first).
@@ -1198,7 +1198,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
 
     /// A circular pattern's angle the way round the file turns: negated
     /// where the axis resolves in the replay against the file's stored axis
-    /// (`_f3d_axis`, the line the file turns about). Mitcad's axis of a
+    /// (`_f3d_axis`, the line the file turns about). MitCad's axis of a
     /// circular edge and its origin axes point the way of their largest
     /// coordinate, whichever way the file's entity faces (mitcad#719: an
     /// arc edge and the origin Y axis stored as (0, -1, 0), the copies
@@ -2085,7 +2085,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 }
                 let mut candidates = vec![first];
                 // The file's split leaves a selected body the tool does not
-                // divide as it is, Mitcad's fails: each body alone after
+                // divide as it is, MitCad's fails: each body alone after
                 // (mitcad#96).
                 if bodies.len() > 1 {
                     for b in &bodies {
@@ -2147,7 +2147,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 Ok(vec![c])
             }
             // Faces moved by a rigid motion, their neighbours following
-            // (mitcad#343): Mitcad's move_face per body, the motion the
+            // (mitcad#343): MitCad's move_face per body, the motion the
             // decoded matrix (its translation in cm) as a free move's.
             "MoveFaceFeature" => {
                 let faces = references(get("faces"));
@@ -2217,7 +2217,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         let path = self.path_of(get("path"), "path")?;
         if path.get("body").is_some() {
             return Err(
-                "its path is a chain of edges: Mitcad's path pattern follows sketch curves only"
+                "its path is a chain of edges: MitCad's path pattern follows sketch curves only"
                     .to_owned(),
             );
         }
@@ -2318,7 +2318,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         Ok(out)
     }
 
-    /// A split's tool as Mitcad's: an origin or construction plane (by its
+    /// A split's tool as MitCad's: an origin or construction plane (by its
     /// geometry where it is no origin plane), a face or a body.
     fn split_tool(&self, tool: Reference) -> Result<Value, String> {
         Ok(match tool {
@@ -3051,7 +3051,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
 
     /// Threads on cylindrical faces (F1 import table). The end a partial
     /// thread is measured from is the file's: where the axis of the face's
-    /// cylinder points as the file has it (`threadLocation`), which Mitcad's
+    /// cylinder points as the file has it (`threadLocation`), which MitCad's
     /// cylinder may have the other way round; faces whose cylinders run
     /// the other way get a thread of their own.
     ///
@@ -3102,7 +3102,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 .map(mm)
         };
         let (major, minor) = (diameter("majorDiameter"), diameter("minorDiameter"));
-        // Each face with the end its thread starts from, in Mitcad's
+        // Each face with the end its thread starts from, in MitCad's
         // terms, its cylinder, and the radius the file sizes it to.
         let mut threaded: Vec<(BodyUid, String, bool, Cylinder, Option<f64>)> = Vec::new();
         // Per face, where the file's helix starts: the file's axis and the
@@ -3282,7 +3282,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         // representation, not its inputs. A phase measured from later
         // states is an inferred input even when that phase is zero.
         // A thread whose faces the stream decoder named, whose handedness it
-        // read and whose class Mitcad lists has every input read, a modelled
+        // read and whose class MitCad lists has every input read, a modelled
         // one when its start angle was read from the file too (the seam of a
         // whole cylinder, [`thread_phase`]) and not found in later states.
         let faces_named = faces
@@ -3431,7 +3431,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
     }
 
     /// The angle of a modelled thread on a face (`Cylinder`) as the next
-    /// history states show it, in Mitcad's terms (`ThreadSpec`): with the
+    /// history states show it, in MitCad's terms (`ThreadSpec`): with the
     /// axis pointing up from the face's low end that way, where the groove
     /// lies at the pitch diameter at four angles about the axis, over a
     /// pitch about `middle` (along the face's own axis). The material
@@ -3593,7 +3593,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
     /// A tapped hole's thread on the walls of the holes of the `k`-th
     /// definition of its candidate (`count` holes): a thread feature, so
     /// that the hole keeps its own bore (the hole's `thread` would make it
-    /// Mitcad's basic minor diameter). A partial thread runs from the
+    /// MitCad's basic minor diameter). A partial thread runs from the
     /// hole's start (the low end of its wall's cylinder). None for an
     /// untapped hole.
     fn hole_thread(
@@ -3982,7 +3982,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
     /// (`sourceFaces` is read when a dump has it):
     /// the history gives them, the faces of the body a next state changed
     /// that it no longer has. They are listed in full without the tangent
-    /// chain, since Mitcad's chain also takes faces tangent to them that
+    /// chain, since MitCad's chain also takes faces tangent to them that
     /// stay (a slot's sides at its round end).
     fn replace_face(&mut self, d: &Map<String, Value>) -> Result<Vec<Candidate>, String> {
         let get = |k: &str| d.get(k);
@@ -4688,7 +4688,7 @@ use mitcad_model::features::thread::{thread_reference, thread_upwards};
 /// low end of the axis, read from the file: the file's helix starts at the
 /// seam of the cylinder's surface, at the end of the face its axis starts
 /// from, whatever the thread's offset, length and location. With the file's
-/// axis pointing up that end is where Mitcad's helix starts too, and the
+/// axis pointing up that end is where MitCad's helix starts too, and the
 /// angle is the seam's direction. It agrees with the angle found in later
 /// states on controlled variants (seams turned 0, 45 and 90 degrees,
 /// offsets 0, 1 and 2.5 mm) and on the census' 20 threads on a whole cylinder
@@ -4711,9 +4711,9 @@ fn parameter_mm(v: Option<&Value>) -> Option<f64> {
 }
 
 /// A thread size from the dump's ThreadInfo (and the thread feature's
-/// flags), checked against Mitcad's thread table: ISO metric (also the
+/// flags), checked against MitCad's thread table: ISO metric (also the
 /// `M` sizes of other metric types), Unified, and the parallel pipe
-/// threads (`G 1/4-19` → Mitcad's `G 1/4`). A class Mitcad does not list
+/// threads (`G 1/4-19` → MitCad's `G 1/4`). A class MitCad does not list
 /// for the face's side (`internal`, when known) is left out, with a note:
 /// it only labels a cosmetic thread.
 fn thread_spec(
@@ -4749,7 +4749,7 @@ fn thread_spec(
                 })
                 .map(|(size, _)| size.trim().to_owned());
             let pipe =
-                pipe.ok_or_else(|| format!("{designation} is not in Mitcad's thread table"))?;
+                pipe.ok_or_else(|| format!("{designation} is not in MitCad's thread table"))?;
             (ThreadStandard::Whitworth, pipe)
         }
         Some(t) if t.contains("Metric") && t.contains("Forming") => {
@@ -5073,7 +5073,7 @@ mod taper_and_offset_tests {
         assert!((minor - 18.3209).abs() < 2e-4, "{d}");
         let (major, pitch) = (d["major"].as_f64().unwrap(), d["pitch"].as_f64().unwrap());
         assert!(((major - pitch) - 0.8 * 25.4 / 14.0).abs() < 1e-6, "{d}");
-        // The thread type maps to Mitcad's NPT standard, the empty class left out.
+        // The thread type maps to MitCad's NPT standard, the empty class left out.
         let (spec, note) = thread_spec(info.as_object(), None, Some(true)).unwrap();
         assert_eq!(
             spec,

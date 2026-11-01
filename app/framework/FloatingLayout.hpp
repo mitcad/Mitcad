@@ -2,23 +2,22 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <utility>
 #include <vector>
 
 #include <QList>
+#include <QMargins>
 #include <QPointer>
 #include <QRect>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
 
-class QLabel;
-class QTimer;
-class QVariantAnimation;
-
 namespace mitcad {
 
 class GlassCard;
+class MessageBand;
 class OcctViewer;
 
 // The central widget of the Floating chrome: the header (title bar and
@@ -33,6 +32,18 @@ class OcctViewer;
 // share of the view and the card below it, and scrolls inside when it is
 // longer (the content's own scroll area).
 //
+// The upper left cards (Projects, Configuration, Browser; mitcad#1020) are
+// one column: stacked in the order they were added, they share the height
+// from below the rows to above the card below them (the timeline). A card
+// whose content is shorter than its share keeps its content's height and
+// gives the rest to the others; only when the contents of all of them are
+// longer than the column do they scroll. The boundary between two open
+// neighbours is dragged (a resize cursor over the gap between them): the
+// height moves from one to the other, each keeping its header and a row,
+// and the heights then are the shares the cards get (remembered under
+// setSplitKey's settings key); a double-click on the boundary returns to
+// the even split. A collapsed card gives its height to the others.
+//
 // Cards take mouse events only inside their own rounded rectangle (their
 // shadows are mouse-transparent), so picking, orbiting and sketch clicks
 // work everywhere else in the view. When a card moves, resizes, shows or
@@ -46,9 +57,9 @@ class OcctViewer;
 // places to screen coordinates, keeps them there when the window moves,
 // resizes or changes its state, and shows them only while the main window is.
 //
-// The status pill is a transient capsule bottom centre, above the
-// timeline: showStatus() shows a message that fades out after a few
-// seconds.
+// The message band (mitcad#1042, setMessageBand) sits right above the
+// timeline, as wide as it: the window's messages, in full or as the stub of
+// the latest one (MessageBand); the other cards stay above its row.
 class FloatingLayout : public QWidget {
   Q_OBJECT
 
@@ -57,8 +68,11 @@ public:
   // corner under the orientation cube, the bottom spanning the width, or
   // a panel on the right edge from the top rows down to the bottom card
   // (the chat, mitcad#947), with the upper right cards and the
-  // orientation cube left of it.
-  enum class Anchor { TopLeft, TopRight, Bottom, Right };
+  // orientation cube left of it; or bottom centre (the navigation bar,
+  // mitcad#1086): just above the bottom card, at its content's size, in the
+  // middle of the free width between the side cards (and the sketch's
+  // badge) of its row, the status pill above it.
+  enum class Anchor { TopLeft, TopRight, Bottom, Right, BottomCenter };
 
   struct Sizing {
     int width = 0; // 0: the width of the view less the margins
@@ -73,7 +87,12 @@ public:
 
   static constexpr int kMargin = 12;
   static constexpr int kGap = 8;
-  static constexpr int kPillPadding = 16; // the status pill's side margins
+  // The message band's margins around its content, and the stub's opacity.
+  static constexpr QMargins kBandMargins = QMargins(16, 6, 8, 6);
+  static constexpr qreal kStubOpacity = 0.8;
+  // What a dragged boundary leaves of a left card's content at least (a
+  // row; mitcad#1020).
+  static constexpr int kSplitMinimumContent = 24;
 
   // `header` is placed above the view (null: none).
   FloatingLayout(OcctViewer* viewer, QWidget* header, QWidget* parent = nullptr);
@@ -106,8 +125,13 @@ public:
   // `content` is no card's content or the card was not placed yet.
   int maximumContentHeight(const QWidget* content) const;
 
-  // Shows a message in the status pill; it fades out after `milliseconds`.
-  void showStatus(const QString& text, bool error, int milliseconds);
+  // The message band (mitcad#1042): `band` becomes the content of a card
+  // right above the timeline, shown while it has a message (in full or as
+  // its stub). Logged `Message band placed: full|stub x,y wxh, row <h>,
+  // timeline x,y wxh` when its place changes; in "Floating cards: …" its
+  // card (`messageBandCard`) and the row it keeps (`messageBandRow`), which
+  // the other cards end above.
+  void setMessageBand(MessageBand* band);
 
   // The content's size hints decide the cards' sizes: its layout requests
   // place the cards again.
@@ -129,6 +153,14 @@ public:
   // mitcad#529), placed at once: at most two thirds of the view less the
   // margins. A card added with a width wider than the view gets the view's.
   void setCardWidth(GlassCard* card, int width);
+
+  // The settings key under which the user's split of the left column is
+  // kept (mitcad#1020: "floating/leftSplit", a list of "<card>=<height>");
+  // read at once ("Floating split restored: configurationDock 90,
+  // browserDock 520"), written when a drag of a boundary ends ("Floating
+  // split remembered: …") and removed by a double-click on one ("Floating
+  // split: automatic").
+  void setSplitKey(const QString& key);
 
   OcctViewer* viewer() const { return m_viewer; }
 
@@ -166,9 +198,18 @@ private:
   // middle of the gap between the first two cards of the lowest row that
   // has one (the group cards).
   void logCards();
+  // The left column's boundaries (mitcad#1020): a drag from the boundary
+  // `index` (between m_splitPairs[index]) at the global y, moved, ended;
+  // a double-click on one.
+  void startSplit(int index, int globalY);
+  void moveSplit(int globalY);
+  void endSplit();
+  void resetSplit();
+  QWidget* splitHandle(int index);
+  static QString splitText(const std::vector<std::pair<QString, int>>& split);
   void adopt(GlassCard* card);
-  void elidePill(int room = 0);
-  GlassCard* ensurePill();
+  // The band's card shown, hidden or dimmed as its content asks.
+  void updateBand();
 
   OcctViewer* m_viewer;
   QWidget* m_header;
@@ -181,11 +222,28 @@ private:
   QString m_loggedGap; // "Floating view between the cards at x,y"
   QPointer<QWidget> m_hostWindow; // watched for moves and state changes
 
-  GlassCard* m_pill = nullptr;
-  QLabel* m_pillLabel = nullptr;
-  QString m_pillText;
-  QTimer* m_pillTimer = nullptr;
-  QVariantAnimation* m_pillFade = nullptr;
+  // The left column's split (mitcad#1020): the user's heights of the cards
+  // by object name, in their order (none: the even split), the settings
+  // key that keeps them, the boundaries' handles and the cards each one
+  // is between, and a drag in progress (the heights it started from).
+  struct SplitDrag {
+    QString above;
+    QString below;
+    int startY = 0;
+    std::vector<std::pair<QString, int>> heights;
+    bool moved = false;
+  };
+  std::vector<std::pair<QString, int>> m_split;
+  QString m_splitKey;
+  std::vector<QPointer<QWidget>> m_splitHandles;
+  std::vector<std::pair<QString, QString>> m_splitPairs;
+  std::optional<SplitDrag> m_drag;
+  QString m_loggedSplits;
+
+  GlassCard* m_band = nullptr; // the message band's card (mitcad#1042)
+  MessageBand* m_bandContent = nullptr;
+  QRect m_bandRow; // the row it keeps, from the last layout
+  QString m_loggedBand;
 };
 
 } // namespace mitcad

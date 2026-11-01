@@ -103,8 +103,9 @@ public:
   virtual bool runCommands(const QJsonArray& commands, const QString& label) = 0;
   // Shows the model as it is at the marker.
   virtual void refreshScene() = 0;
-  // An input became active (none: an empty filter): shows what it can pick
-  // that is hidden otherwise, such as the origin planes and axes.
+  // An input became active (none: an empty filter): what it picks, for the
+  // pick places the view logs. The origin's planes and axes stay as the
+  // Origin folder's light bulb shows them (mitcad#1030).
   virtual void inputActivated(SelectFilter filter) = 0;
   // Construction planes, axes and points hidden in the view (not their
   // visibility in the design) while an input takes none of them
@@ -194,6 +195,11 @@ public:
   // occurrence of its feature's component, where the view shows it; empty
   // for the origin's planes, axes and point, which the view draws unplaced.
   virtual QString datumOccurrence(const QString& /*datum*/) const { return QString(); }
+  // Where the view places a datum a Construct command makes (mitcad#1029):
+  // the placement of the occurrence the view shows its component at, the
+  // edited datum's (`datum`) or, for a new one (empty), the active
+  // component's, as it shows the finished datum; the identity in the root.
+  virtual gp_Trsf datumPlacement(const QString& /*datum*/) const { return gp_Trsf(); }
   // The selection filter context the running command's selections pick
   // through besides their inputs' own tests (mitcad#217: Project in sketch
   // mode; framework/SelectionScope.hpp), null when there is none. Shift
@@ -302,6 +308,10 @@ public:
   // Print's panel, a note row's button): CommandDef::modelChanged, then the
   // panel shows the inputs again (choices and notes asked anew).
   void refreshInputs();
+  // The preview computed again with the inputs as they are, as after a
+  // change (mitcad#1097: an Annotate panel's annotation follows the view's
+  // direction, which its placement depends on).
+  void previewAgain();
   // A light bulb of the browser while the panel is open (mitcad#295;
   // CommandSessionVisibility.cpp): runs the visibility commands as one undo
   // step `label` outside the command's undo range. An applied sketch
@@ -392,6 +402,9 @@ private:
     std::vector<BodyDisplay> bodies;
     TopoDS_Shape tool;
     std::shared_ptr<geometry::Shape> toolShape; // the tool drawn, as `tool` (mitcad#635)
+    // A construction feature's datum where the view draws it, in the
+    // design (mitcad#1029); empty for other features.
+    QJsonObject datum;
     // The bodies shown now that the preview removes, where they are shown
     // (removedShownBodies): a consumed tool's occurrences (mitcad#561).
     std::vector<BodyDisplay> removed;
@@ -637,6 +650,7 @@ private:
   QJsonObject m_shownReport; // the report of the preview shown (toggles)
   QString m_loggedPreviewBodies; // the bodies the last preview logged (mitcad#266)
   QString m_loggedPreviewTool;   // where it drew its tool, as logged (mitcad#636)
+  QString m_loggedPreviewDatum = QStringLiteral("none"); // where it drew its datum, as logged (mitcad#1029)
   QString m_loggedExtendedTool;  // the box of the extended tool it drew, as logged (mitcad#712)
   // A part placed by its first pick is moved out from under the panels
   // floating over the view once its preview is drawn (mitcad#656).

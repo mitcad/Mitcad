@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! `.solidcraft` designs with their history (mitcad#450), read by
 //! `mitcad-solidcraft` (upgraded to one format first) and built again as
-//! Mitcad features through the model's commands, on the [`Kernel`] trait.
+//! MitCad features through the model's commands, on the [`Kernel`] trait.
 //!
 //! The file stores definitions only (no bodies, apart from imported STEP
-//! text and meshes), so every feature is evaluated by Mitcad; there is no
-//! stored body to fall back to. A feature that Mitcad has no counterpart
-//! for, or whose Mitcad feature fails, is named in the report and holds its
+//! text and meshes), so every feature is evaluated by MitCad; there is no
+//! stored body to fall back to. A feature that MitCad has no counterpart
+//! for, or whose MitCad feature fails, is named in the report and holds its
 //! place on the timeline as a suppressed placeholder with a note; the
 //! timeline goes on after it.
 //!
@@ -20,7 +20,7 @@
 //!   on the plane the file names ([`planes`]), in the file's sketch frame.
 //! - Features ([`features`]): references to faces and edges are points on
 //!   them in the file; they are found on the rebuilt bodies at those
-//!   points ([`refs`]) and named by Mitcad's topological names, which
+//!   points ([`refs`]) and named by MitCad's topological names, which
 //!   follow later edits. Bodies are named as the file names them.
 //! - Joints ([`assembly`]), sheet metal ([`sheet`]).
 
@@ -145,7 +145,7 @@ pub fn import_solidcraft_file<K: Kernel>(
 /// What a feature of the file became.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Made {
-    /// The Mitcad features, the last being the one others refer to.
+    /// The MitCad features, the last being the one others refer to.
     pub features: Vec<FeatureUid>,
 }
 
@@ -167,7 +167,7 @@ pub(crate) struct Importer<'d, 'f, K: Kernel> {
     pub planes: HashMap<u64, planes::Frame>,
     pub components: HashMap<u64, ComponentUid>,
     pub occurrences: HashMap<u64, OccurrenceUid>,
-    /// The file's body names and the Mitcad bodies they are.
+    /// The file's body names and the MitCad bodies they are.
     pub bodies: BTreeMap<String, BodyUid>,
     /// SolidCraft's counter of `Body<n>` names.
     pub body_counter: usize,
@@ -210,7 +210,7 @@ impl Mapped {
     }
 }
 
-/// Why a feature did not come in: no counterpart in Mitcad (`unmapped`),
+/// Why a feature did not come in: no counterpart in MitCad (`unmapped`),
 /// or it failed.
 pub(crate) enum NotMapped {
     Unmapped(String),
@@ -320,7 +320,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 entry.notes.push(note.clone());
                 let text = match outcome {
                     Outcome::Unmapped => format!(
-                        "{} ({}) has no Mitcad counterpart: {note}",
+                        "{} ({}) has no MitCad counterpart: {note}",
                         f.name,
                         f.kind_title()
                     ),
@@ -355,7 +355,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
     }
 
-    /// The Mitcad component of the file's component id.
+    /// The MitCad component of the file's component id.
     pub fn component_of(&self, id: u64) -> ComponentUid {
         self.components
             .get(&id)
@@ -405,7 +405,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         Ok(uid)
     }
 
-    /// The file's names for the bodies a Mitcad feature made, and the
+    /// The file's names for the bodies a MitCad feature made, and the
     /// names of bodies it removed taken out of the map.
     fn track_bodies(&mut self, before: &[(BodyUid, Option<u128>)], feature: FeatureUid) {
         let now: Vec<BodyUid> = self.doc.bodies().iter().map(|b| b.uid).collect();
@@ -778,7 +778,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
     }
 }
 
-/// A SolidCraft transform as Mitcad's (`m[j][i]` is row i, column j).
+/// A SolidCraft transform as MitCad's (`m[j][i]` is row i, column j).
 pub(crate) fn transform(m: &mitcad_solidcraft::document::Mat) -> Transform {
     Transform {
         linear: std::array::from_fn(|i| std::array::from_fn(|j| m[j][i])),

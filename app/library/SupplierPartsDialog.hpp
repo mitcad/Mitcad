@@ -2,9 +2,9 @@
 #pragma once
 
 // The suppliers' articles of a library part's row behind a button
-// (mitcad#979; app/COMMANDS.md, "Options of library parts";
+// (mitcad#979; app/COMMANDS.md, "Options of library components";
 // docs/libraries.md, "Standards and suppliers of rows"): Insert from
-// Library, Library Parts and Edit Options… show **Supplier Articles
+// Library, Library Components and Edit Options… show **Supplier Articles
 // (n)…** (Alt+A) under the size choosers while the chosen row has articles,
 // in place of one long line of part numbers. It opens a table with one
 // line per article and the columns its articles fill: Supplier (a link to

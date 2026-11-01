@@ -160,7 +160,7 @@ pub(crate) fn positions(
             }
             let d = distance
                 .filter(|d| *d > 0.0)
-                .ok_or("the centre distance must be greater than zero")?;
+                .ok_or("the center distance must be greater than zero")?;
             if free <= TOL {
                 return Ok((vec![0.0], None));
             }

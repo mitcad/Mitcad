@@ -210,7 +210,7 @@ pub fn library_folder(library: &str, project: Option<&Path>) -> Result<PathBuf, 
             .map(|p| mitcad_model::print_library::project_library(p).join(TEMPLATES_DIR))
             .ok_or_else(|| "the design is in no project".to_owned()),
         other => Err(format!(
-            "templates are saved to the 'user' or the 'project' library, not '{other}'"
+            "templates are saved to the 'user' or the 'project' library, not “{other}”"
         )),
     }
 }

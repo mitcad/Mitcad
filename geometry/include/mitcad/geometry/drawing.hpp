@@ -52,7 +52,9 @@ struct DrawingViewSpec {
   // The exact algorithm first; false: the polygonal one only.
   bool exact = true;
   // With `exact`: the quick path where the exact algorithm is slow, on
-  // shapes with free-form faces (mitcad#962): the polygonal algorithm on a
+  // shapes with free-form faces (mitcad#962) or with many edges on curves
+  // other than lines and conics against many faces (mitcad#1033: their
+  // faces times those edges past a limit): the polygonal algorithm on a
   // triangulation within a 2000th of the shapes' size, its lines joined
   // and drawn as lines and arcs where they follow them within that
   // deviation, as polylines elsewhere (DrawnView::polygonal).
@@ -84,6 +86,10 @@ struct DrawnCurve {
   std::vector<double> knots;
   std::vector<Point2> poles;
   std::vector<double> weights;
+  // The shape whose edge it is: its index among those project_view was
+  // given (mitcad#1112: a thread's convention replaces only its own
+  // body's lines); -1 when not known.
+  int source = -1;
 };
 
 // The faces a section view's plane cuts, each as its closed loops

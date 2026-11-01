@@ -953,10 +953,10 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 == Some(true);
             let mut converted = Vec::new();
             for path in paths {
-                converted.push(self.path_of(Some(path), "centre line or rail")?);
+                converted.push(self.path_of(Some(path), "center line or rail")?);
             }
             if centerline {
-                def["centerline"] = converted.into_iter().next().ok_or("no centre line")?;
+                def["centerline"] = converted.into_iter().next().ok_or("no center line")?;
             } else {
                 def["rails"] = json!(converted);
             }

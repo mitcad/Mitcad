@@ -21,6 +21,7 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QHeaderView>
+#include <QIcon>
 #include <QImage>
 #include <QJsonDocument>
 #include <QKeyEvent>
@@ -43,8 +44,10 @@
 #include <QScrollArea>
 #include <QSettings>
 #include <QShortcut>
+#include <QStyleHints>
 #include <QTimer>
 #include <QToolBar>
+#include <QToolButton>
 #include <QToolTip>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
@@ -66,6 +69,7 @@
 #include "GlassCard.hpp"
 #include "TestSync.hpp"
 #include "Dialogs.hpp"
+#include "Icons.hpp"
 #include "ComputeProgress.hpp"
 #include "Theme.hpp"
 #include "TreeItemDelegate.hpp"
@@ -223,6 +227,7 @@ const StepSpec kSpecs[] = {
     {"expect-native-enabled", 2, 2, kIdle},
     {"expect-native-visible", 2, 2, kIdle},
     {"expect-native-present", 2, 2, kIdle},
+    {"expect-native-attached", 3, 3, kIdle},
     {"expect-native-style", 2, 2, kIdle},
     {"expect-native-columns", 1, 2, kIdle},
     {"native-dialog-size", 2, 2, kInputOfTarget},
@@ -268,6 +273,7 @@ const StepSpec kSpecs[] = {
     {"test-dialog-controls", 1, 1, kInputOfTarget},
     {"expect-macos-tool-buttons", 0, 0, kIdle},
     {"expect-command-search", 2, 3, kIdle},
+    {"expect-command-icon", 2, 3, kIdle},
     {"click-parameter", 2, 2, kInputOfTarget},
     {"expect-parameter-cell", 4, 4, kIdle},
     {"mark", 0, 0, kPlain},
@@ -323,9 +329,16 @@ const StepSpec kSpecs[] = {
     {"native-header-resize", 3, 3, kInputOfTarget},
     {"expect-native-header-resize-retained", 2, 2, kIdle},
     {"native-dialog-resize", 2, 2, kInputOfTarget},
+    // The tooltip of a native control (the timeline's cells, mitcad#1076).
+    {"expect-native-tooltip", 2, 2, kIdle},
     // A 3D mouse's axes and buttons (mitcad#951).
     {"space-mouse", 6, 7, kInputOfMain},
     {"space-mouse-button", 1, 1, kInputOfMain},
+    // The AppKit left column (mitcad#1020, TestDriverWindowFit.cpp).
+    {"native-column-split", 2, 2, kInputOfMain},
+    {"expect-native-card-height", 2, 3, kIdle},
+    // The colour scheme switched at a step (mitcad#1104).
+    {"color-scheme", 1, 1, kPlain},
 };
 
 const StepSpec* findSpec(const QString& name) {
@@ -1823,9 +1836,37 @@ void TestDriver::run(const Step& step) {
         return false;
       }
       const QJsonObject state = window->query({{QStringLiteral("query"), QStringLiteral("timeline")}}).toObject();
-      return mac::test::historyLayout(state, timeline ? timeline->filteredFeatures() : QSet<QString>(),
-                                      selected, checkSelection, m_waitDetail);
+      const QSet<QString> filtered = timeline ? timeline->filteredFeatures() : QSet<QString>();
+      // The features of the folded timeline groups (mitcad#1077), as the
+      // shared timeline folds them.
+      QHash<QString, QString> folded;
+      const QJsonArray features = state.value(QStringLiteral("features")).toArray();
+      for (const TimelineWidget::ShownGroup& group : timeline ? timeline->shownGroups() : QVector<TimelineWidget::ShownGroup>()) {
+        if (!group.collapsed) continue;
+        bool inside = false;
+        for (const QJsonValue& feature : features) {
+          const QString uid = feature.toObject().value(QStringLiteral("uid")).toString();
+          inside = inside || uid == group.first;
+          if (inside && !filtered.contains(uid)) folded.insert(uid, group.name);
+          if (uid == group.last) break;
+        }
+      }
+      return mac::test::historyLayout(state, filtered, selected, checkSelection, m_waitDetail, folded);
     }, 6, QStringLiteral("native history does not match the real model timeline"));
+  } else if (name == QLatin1String("expect-native-tooltip")) {
+    if (!mac::test::active()) { fail(line, QStringLiteral("expect-native-tooltip requires the native macOS UI")); return; }
+    QRegularExpression expected;
+    if (!regex(a.at(1), expected)) return;
+    const QString identifier = a.at(0);
+    whenReady([this, identifier, expected] {
+      QString text;
+      if (!mac::test::toolTipOf(identifier, text)) {
+        m_waitDetail = QStringLiteral("no native control '%1'").arg(identifier);
+        return false;
+      }
+      m_waitDetail = text;
+      return expected.match(text).hasMatch();
+    }, 6, QStringLiteral("the native tooltip of '%1' does not match").arg(identifier));
   } else if (name == QLatin1String("test-body-highlights")) {
     const QString style = a.at(0);
     if (style != QLatin1String("none") && style != QLatin1String("default") &&
@@ -1855,7 +1896,7 @@ void TestDriver::run(const Step& step) {
           item.occurrence = QString::fromStdString(body.occurrence);
           const TopoDS_Shape shape = window->itemShape(item);
           if (shape.IsNull()) { fail(line, QStringLiteral("a displayed body has no highlight shape")); return; }
-          HighlightDisplay highlight{item, shape, QColor(0x1f, 0x7a, 0xff)};
+          HighlightDisplay highlight{item, shape, viewColor(ColorRole::Select, false)};
           highlight.opaqueWholeBody = style == QLatin1String("opaque");
           highlight.wholeBodyBoundaries = style != QLatin1String("no-boundaries");
           highlights.push_back(std::move(highlight));
@@ -2517,8 +2558,16 @@ void TestDriver::run(const Step& step) {
       QRegularExpression re;
       if (!regex(a.at(1), re)) return;
       const QString id = a.at(0);
-      whenReady([id, re] { return mac::test::textMatches(id, re); }, 6,
-                QStringLiteral("native text '%1' did not match '%2'").arg(id, a.at(1)));
+      // The text found goes into the failure's detail.
+      whenReady([this, id, re] {
+        QString text;
+        if (!mac::test::textOf(id, text)) {
+          m_waitDetail = QStringLiteral("no native control or cell '%1'").arg(id);
+          return false;
+        }
+        m_waitDetail = QStringLiteral("its text is '%1'").arg(text);
+        return re.match(text).hasMatch();
+      }, 6, QStringLiteral("native text '%1' did not match '%2'").arg(id, a.at(1)));
     } else {
       const QString value = a.at(1).toLower();
       if (value != QStringLiteral("true") && value != QStringLiteral("false")) {
@@ -2534,6 +2583,20 @@ void TestDriver::run(const Step& step) {
       }, 6, QStringLiteral("native control '%1' was not %2=%3")
                 .arg(id, presence ? QStringLiteral("present") : visibility ? QStringLiteral("visible") : QStringLiteral("enabled"), value));
     }
+  } else if (name == QLatin1String("expect-native-attached")) {
+    // A search popover at the control that opened it (mitcad#1021).
+    if (!mac::test::active()) {
+      fail(line, QStringLiteral("'%1' requires the native macOS UI").arg(name));
+      return;
+    }
+    if (a.at(2) != QLatin1String("above") && a.at(2) != QLatin1String("below")) {
+      fail(line, QStringLiteral("expect-native-attached <identifier> <anchor identifier> above|below")); return;
+    }
+    const QString id = a.at(0);
+    const QString anchor = a.at(1);
+    const bool above = a.at(2) == QLatin1String("above");
+    whenReady([this, id, anchor, above] { return mac::test::attached(id, anchor, above, m_waitDetail); }, 6,
+              QStringLiteral("native '%1' is not directly %2 '%3'").arg(id, a.at(2), anchor));
   } else if (name == QLatin1String("expect-native-style") || name == QLatin1String("expect-native-columns") ||
              name == QLatin1String("native-dialog-size")) {
     // Native table semantics and sizing (mitcad#814).
@@ -3597,12 +3660,17 @@ void TestDriver::run(const Step& step) {
   } else if (name == QLatin1String("test-status-message")) {
     // Exercise the ordinary status path without manufacturing a model
     // failure just to obtain an error's longer lifetime (mitcad#996).
+    // Any level (mitcad#1040): hint, progress, info, success, warning, error.
     auto* window = qobject_cast<MainWindow*>(mainWindow);
-    if (window == nullptr || (a.at(0) != QLatin1String("hint") && a.at(0) != QLatin1String("error"))) {
-      fail(line, QStringLiteral("test-status-message requires hint|error and the main window")); return;
+    const QStringList levels = {QStringLiteral("hint"), QStringLiteral("progress"), QStringLiteral("info"),
+                                QStringLiteral("success"), QStringLiteral("warning"), QStringLiteral("error")};
+    if (window == nullptr || !levels.contains(a.at(0))) {
+      fail(line, QStringLiteral("test-status-message requires %1 and the main window")
+                     .arg(levels.join(QLatin1Char('|'))));
+      return;
     }
-    if (a.at(0) == QLatin1String("error")) window->showError(a.at(1));
-    else window->showHint(a.at(1));
+    const NoticeLevel level = static_cast<NoticeLevel>(levels.indexOf(a.at(0)));
+    window->showStatus(a.at(1), level);
   } else if (name == QLatin1String("command")) {
     QAction* action = mainWindow->findChild<QAction*>(QStringLiteral("command_") + a.at(0));
     if (action == nullptr) {
@@ -3690,12 +3758,16 @@ void TestDriver::run(const Step& step) {
               mainWindow);
   } else if (name == QLatin1String("popup")) {
     const QString entry = a.at(0);
+    // "Sub/Item" opens the submenu Sub and chooses Item in it (Material ▸
+    // More…, mitcad#1046); a whole entry with a slash still matches first.
+    const auto rest = std::make_shared<QString>();
     whenReady(
-        [this, entry] {
+        [this, entry, rest] {
           const QMenu* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
           if (menu == nullptr) {
             return false;
           }
+          rest->clear();
           for (QAction* action : menu->actions()) {
             if (plainText(action->text()).compare(plainText(entry), Qt::CaseInsensitive) == 0 &&
                 action->isEnabled()) {
@@ -3703,13 +3775,39 @@ void TestDriver::run(const Step& step) {
               return true;
             }
           }
+          const int slash = entry.indexOf(QLatin1Char('/'));
+          if (slash > 0) {
+            const QString head = entry.left(slash);
+            for (QAction* action : menu->actions()) {
+              if (action->menu() != nullptr && action->isEnabled() &&
+                  plainText(action->text()).section(QLatin1Char('\t'), 0, 0).compare(plainText(head),
+                                                                                  Qt::CaseInsensitive) == 0) {
+                m_found = action;
+                *rest = entry.mid(slash + 1);
+                return true;
+              }
+            }
+          }
           return false;
         },
         6, QStringLiteral("no entry '%1' in an open menu").arg(entry),
-        [this] {
+        [this, rest, line] {
           QMenu* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
           QAction* action = qobject_cast<QAction*>(m_found.data());
           if (menu == nullptr || action == nullptr) {
+            return;
+          }
+          if (!rest->isEmpty()) {
+            // The submenu current, which opens it (else Right does, as the
+            // keyboard opens one), then the rest in it.
+            menu->setActiveAction(action);
+            if (QApplication::activePopupWidget() == menu) {
+              KeyPress right;
+              right.key = Qt::Key_Right;
+              sendKey(right);
+            }
+            const QString next = *rest;
+            queue([this, line, next] { run(Step{line, {}, QStringLiteral("popup"), {next}}); });
             return;
           }
           // As the keyboard does: the entry current, then Return.
@@ -4118,6 +4216,47 @@ void TestDriver::run(const Step& step) {
       fail(line, QStringLiteral("search current %1, enabled %2, disabled %3, Command glyphs %4")
                      .arg(current).arg(enabled).arg(disabled).arg(shortcuts));
     }
+  } else if (name == QLatin1String("expect-command-icon")) {
+    // The command's icon as the ribbon, the menus and the command search
+    // show it (they all take the command's action's icon), compared with an
+    // icon of app/icons by its rendering; with a second command, the two
+    // look different (mitcad#1096).
+    const auto rendered = [](const QIcon& icon) {
+      return icon.pixmap(QSize(24, 24), 1.0).toImage().convertToFormat(QImage::Format_ARGB32);
+    };
+    const auto* action = m_main ? m_main->findChild<QAction*>(QStringLiteral("command_") + a.at(0)) : nullptr;
+    const QIcon expected = themeIcon(a.at(1));
+    if (action == nullptr || expected.isNull()) {
+      fail(line, QStringLiteral("expect-command-icon needs the command '%1' and the icon '%2'").arg(a.at(0), a.at(1)));
+      return;
+    }
+    const QImage want = rendered(expected);
+    if (rendered(action->icon()) != want) {
+      fail(line, QStringLiteral("the command %1 does not show the icon %2").arg(a.at(0), a.at(1)));
+      return;
+    }
+    int buttons = 0;
+    for (const QToolButton* button : m_main->findChildren<QToolButton*>()) {
+      if (button->defaultAction() != action) {
+        continue;
+      }
+      ++buttons;
+      if (rendered(button->icon()) != want) {
+        fail(line, QStringLiteral("a button of %1 (%2) does not show the icon %3")
+                       .arg(a.at(0), button->objectName(), a.at(1)));
+        return;
+      }
+    }
+    if (a.size() == 3) {
+      const auto* other = m_main->findChild<QAction*>(QStringLiteral("command_") + a.at(2));
+      if (other == nullptr || rendered(other->icon()) == want) {
+        fail(line, QStringLiteral("the command %1 shows the same icon as %2").arg(a.at(2), a.at(0)));
+        return;
+      }
+    }
+    qDebug().noquote() << QStringLiteral("TestDriver: command %1 shows the icon %2 (%3 buttons)")
+                              .arg(a.at(0), a.at(1))
+                              .arg(buttons);
   } else if (name == QLatin1String("click-parameter") || name == QLatin1String("expect-parameter-cell")) {
     QWidget* window = targetWindow();
     auto* table = window ? window->findChild<QTreeWidget*>(QStringLiteral("parametersTable")) : nullptr;
@@ -4321,6 +4460,17 @@ void TestDriver::run(const Step& step) {
     clock->start();
     whenReady([clock, milliseconds] { return clock->elapsed() >= milliseconds; }, milliseconds / 1000.0 + 5,
               QStringLiteral("sleep"));
+  } else if (name == QLatin1String("color-scheme")) {
+    // As MITCAD_TEST_COLOR_SCHEME at start (main.cpp), at this step
+    // (mitcad#1104): after rows were styled, say.
+    const QString scheme = a.at(0);
+    if (scheme != QLatin1String("light") && scheme != QLatin1String("dark")) {
+      fail(line, QStringLiteral("color-scheme light|dark, not '%1'").arg(scheme));
+      return;
+    }
+    qDebug().noquote() << QStringLiteral("Asking the platform for the %1 colour scheme").arg(scheme);
+    QGuiApplication::styleHints()->setColorScheme(scheme == QLatin1String("dark") ? Qt::ColorScheme::Dark
+                                                                                  : Qt::ColorScheme::Light);
   } else if (name == QLatin1String("expect-file")) {
     double limit = 6;
     if (!seconds(1, 6, limit)) {

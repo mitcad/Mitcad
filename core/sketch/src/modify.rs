@@ -43,7 +43,7 @@ impl std::str::FromStr for Item {
             return Ok(Self::Text(EntityUid(n)));
         }
         Err(format!(
-            "'{text}' is not a point, curve, text, constraint or dimension (p3, c4, t5, k6)"
+            "“{text}” is not a point, curve, text, constraint or dimension (p3, c4, t5, k6)"
         ))
     }
 }

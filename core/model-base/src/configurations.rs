@@ -29,7 +29,8 @@ use crate::parameters::{ParameterError, Parameters};
 mod rules;
 pub use rules::{
     CLOSED_TABLE, Cascade, ConfigurationMove, ConfigureOutcome, ConfigureReport, Domain,
-    DomainValue, EmptyIntersection, OptionReport, OptionValue, RuleViolation, RulesReport, cascade,
+    DomainValue, EmptyIntersection, OptionReport, OptionValue, RuleProblem, RuleViolation,
+    RulesReport, cascade,
 };
 
 // Tables in configurations: option values from a column, `in_table`, rows
@@ -40,6 +41,11 @@ pub use from_tables::{
     column_reference, columns_of, current_option_value, list_column, list_values,
     same_option_value, tables_of, values_column,
 };
+
+// Filling a closed table's rows from a table's columns or a file
+// (mitcad#1044, decision 12).
+mod fill;
+pub use fill::{NewParameter, RowFields, RowSource};
 
 /// A design's configuration table; empty when it has none.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

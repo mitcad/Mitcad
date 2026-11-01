@@ -350,7 +350,7 @@ QJsonObject MainWindow::mcpExport(const QJsonObject& arguments) {
     refuse(tr("Finish the sketch before exporting: editing it rolls the later features back."));
   }
   if (m_closePending || QApplication::activeModalWidget() != nullptr) {
-    refuse(tr("The document is closing or waiting for a dialog."));
+    refuse(tr("The design is closing or waiting for a dialog."));
   }
   QString reason;
   const QString path = mcp::agentOutputPath(arguments.value(QStringLiteral("path")).toString(), false, reason);

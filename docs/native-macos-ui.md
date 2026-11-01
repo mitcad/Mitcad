@@ -23,9 +23,12 @@ missing interactions and historical descriptions of absent panels are not
 requirements. Validate visible content and ordinary input against the default
 frontend, beyond merely opening each native window.
 
-Qt remains the normal macOS build and release default. Explicit native test
-builds do not change that policy. The interaction sections below describe
-implementation and validation progress, not an assertion of complete parity.
+Qt remains the default macOS frontend. macOS builds and releases carry
+both frontends; the AppKit one is an opt-in preference (see
+[Releases and the preference](#releases-and-the-preference)). Making AppKit
+the default needs a maintainer decision of its own. The interaction
+sections below describe implementation and validation progress, not an
+assertion of complete parity.
 
 ## Coverage
 
@@ -70,22 +73,67 @@ audit too) fails on that line unless the coverage list marks the class
 ## Building the experimental frontend
 
 ```bash
-cmake --preset dev -DMITCAD_MACOS_NATIVE_UI=ON
+cmake --preset dev
 cmake --build --preset dev
 ctest --preset dev --output-on-failure
 ```
 
-Run these commands in the isolated macOS VM. The deployment target stays
-14.4; newer AppKit APIs need availability guards. In a native-enabled build
-the frontend is selected by default. `--ui=native` selects it explicitly;
-`--ui=qt` and `--chrome=docked|floating` select the retained Qt frontend.
+Run these commands in the isolated macOS VM. The macOS presets
+(`macos-debug`, which the VM's `dev` preset inherits, and `macos-release`)
+set `MITCAD_MACOS_NATIVE_UI=ON`; the option itself stays OFF by default, and
+`-DMITCAD_MACOS_NATIVE_UI=OFF` builds the Qt frontend alone. The deployment
+target stays 14.4; newer AppKit APIs need availability guards.
+
+## Releases and the preference
+
+Owner decision of 1.11.2026 (mitcad#1056): macOS releases are built with
+`MITCAD_MACOS_NATIVE_UI=ON` and ship both frontends. Every build starts in
+Qt unless something chooses AppKit:
+
+- **Preference:** Settings › General › **Native macOS interface
+  (experimental)**, off by default (the setting
+  `appearance/nativeMacInterface`), with the note *Takes effect when MitCad
+  starts again.* It exists only in builds with the AppKit frontend. A
+  change is saved at once and applies at the next start; the running
+  window keeps its frontend. Settings is the shared Qt dialog, which the
+  AppKit frontend presents through its bridge, so the checkbox is there in
+  both frontends.
+- **Command line:** `--ui=native` or `--ui=qt` overrides the preference for
+  one run. `--chrome=docked|floating` chooses a Qt layout, so without
+  `--ui` it starts Qt; `--ui=native` with `--chrome` is an error.
+- **Log:** the start-up names the effective frontend and what chose it:
+  `Frontend: qt (default)`, `Frontend: native (preference)`,
+  `Frontend: qt (--ui)`, `Frontend: native (--ui)` or
+  `Frontend: qt (--chrome)` (a native preference overridden by `--chrome`).
+  Use it to verify which frontend a run had.
+
+Tests: every UI test passes `--ui=native` or `--ui=qt` explicitly, so the
+default does not decide what a test covers. `app.ui-macos-native-frontend`
+checks the default, the preference across a restart, `--ui` and `--chrome`.
+In a native-enabled build `cmake/MacUiTests.cmake` labels the tests of the
+AppKit frontend: `app.ui-macos-native-smoke` on the smoke subset
+(`app.ui-macos-native`: a command with OK, the Browser and the timeline;
+`app.ui-macos-native-frontend`: start by the preference with a design
+open, quit) and `app.ui-macos-native-full` on every other one. The
+release's macOS ctest leaves the full native suite out
+(`-LE app.ui-macos-native-full`) and so runs the whole Qt suite and the
+smoke subset; merge checks and native work run everything. A new native
+test named `app.ui-macos-native-*` gets the full label without more work;
+one with another name goes into `mitcad_native_other_tests` there.
 
 ## Interaction
 
 - The native shell follows the default Qt layout: Undo/Redo and the
-  Solid/Build workspace selector on the left, the document title in the
-  centre, and Project, AI Assistant and Search Commands on the right.
-  Sketch adds and selects the same temporary workspace tab. The native
+  Solid/Build/Make workspace selector on the left, the document title in the
+  centre, and Project, AI Assistant with its Chat button (mitcad#1075) and
+  Command Search on the right.
+  Sketch adds and selects the same temporary workspace tab. The Make
+  workspace (mitcad#1049) is read from the shared ribbon as Solid and
+  Build are (`MainWindow::refreshNativeActions` lists `MAKE`): its
+  Materials, Annotate, 3D Print and Laser groups, their pinned buttons
+  and menus. The selected body's Make card and the Browser's Make markers
+  are Qt's selection card and rows; the native inspector and outline do
+  not show them yet (a Mac follow-up). The native
   menu bar keeps File, Edit, View, Tools, Window and Help in the shared
   order; CAD groups belong to the ribbon rather than additional menu-bar
   headings. Settings and About retain their standard application-menu roles.
@@ -105,7 +153,7 @@ the frontend is selected by default. `--ui=native` selects it explicitly;
   Settings, view controls and project utilities keep their intended menu-bar
   locations; search-only settings pages stay available in command search.
 - The OCCT viewport spans the full document window width below the ribbon.
-  The model browser floats over its left edge and the inspector floats on
+  The Browser floats over its left edge and the inspector floats on
   the right, leaving the canvas width unchanged when either card is hidden.
   The cards use [NSGlassEffectView](https://developer.apple.com/documentation/appkit/nsglasseffectview)
   on macOS 26 and newer, with NSVisualEffectView on earlier supported systems.
@@ -121,9 +169,24 @@ the frontend is selected by default. `--ui=native` selects it explicitly;
   coordinates. A gesture starting on a floating card stays outside the
   canvas; a gesture starting on the canvas keeps its target until it ends.
   The existing viewer supplies zoom sensitivity and navigation settings.
-- The model browser shows selections, names and visibility. Its context
+- The Browser shows selections, names and visibility. Its context
   menu uses the shared browser command semantics. The outline and its
-  scroll view stay transparent over the rounded native card.
+  scroll view stay transparent over the rounded native card. A tracking
+  area on the outline reports the row under the pointer, and none when the
+  pointer leaves the rows or the card collapses or hides (mitcad#1072,
+  `treeHovered`), to the shared panel's hover (`BrowserPanel::hoverNode`):
+  a body's, a component's or an occurrence's row highlights its bodies in
+  the view (mitcad#1022, `DocumentHost::previewBodies`), a joint's row
+  previews its joint (mitcad#523), with the same log lines and without
+  meshing as in Qt (`app.ui-macos-native`,
+  `app.ui-macos-native-browser-rows`).
+  Row names keep the shared rows' colours with AppKit's (mitcad#1079,
+  `NativeMacTreeItem::tone`, also the row's accessibility value): a failed
+  row red, a warned one the warning's colour, a suppressed, rolled-back or
+  hidden one, or one under a hidden parent, grey. A light bulb that
+  follows a Show When condition has the fx mark and says what a click
+  does, a folder's of such rows names the bodies it leaves as they are
+  (`eyeTip`, `eyeBound`, mitcad#863).
   Browser rows use the shared CAD artwork and initial expansion state,
   with visibility before the icon and component activation after the name.
   Its header retains Find in Design. Projects is an AppKit presentation of
@@ -132,10 +195,13 @@ the frontend is selected by default. `--ui=native` selects it explicitly;
   the same commands, item model, selection and edits.
   Projects uses a bounded native outline below its toolbar. Its height follows
   actual AppKit row geometry, including source-list insets, and long lists
-  scroll within that viewport. Browser is placed below the resulting card.
+  scroll within that viewport. The Configuration card and Browser follow
+  below it in the shared left column (mitcad#1020, "The Configuration card
+  and the left column").
   The Projects disclosure arrow collapses only the content and leaves its
   header available to reopen it. View > Projects independently remembers
-  whether the whole panel is shown across application restarts.
+  whether the whole panel is shown across application restarts; before
+  the user's first choice it starts hidden (mitcad#1020), as in Qt.
   Failure and warning counts appear in a native row below the Browser title,
   with the shared messages as tooltips and shared issue navigation on click.
   Their retained Qt presenters stay hidden so they cannot paint under the card.
@@ -193,10 +259,37 @@ row, opening its sketch or feature editor; Return in a row's text editor
 finishes renaming.
 Command+F opens native timeline search, sharing the query, component/status
 filters, result navigation and selection restoration with the Qt timeline.
+The timeline's magnifier, Command+F and Search Timeline all open it as a
+popover rising from that magnifier, with its field at the bottom next to the
+timeline, as the Qt field sits in the timeline bar, and Filters…, Previous,
+Next, the match count and the matches above it. Command search hangs from
+the Command Search toolbar item when opened there, and from the top centre
+of the window when opened by its shortcut or a menu (mitcad#1021).
 The wheel over the native timeline scrolls towards older or newer features,
 using its larger axis for diagonal motion. Precise trackpad deltas retain
 their point values; the strip consumes scrolling at both ends so it cannot
 zoom the canvas.
+Hovering a native timeline cell previews its feature as the Qt timeline's
+hover does (mitcad#1076): the strip reports the cell to the shared
+`TimelineWidget::hoverFeature`, which sets the same hover state, so the view
+draws the feature through the solids and a Fillet's or Chamfer's picked
+edges; leaving the cell, a press, a marker drag, hiding the timeline and a
+rebuild end it. A cell's tooltip is the shared timeline's
+(`TimelineWidget::featureToolTip`, from the feature details provider:
+kind, main dimensions, component and state), asked for only when AppKit
+shows it, since the details read the model; AppKit's own tooltip delay
+applies, not the Qt strip's 350 ms.
+Timeline groups (mitcad#1077) come from `TimelineWidget::shownGroups`, the
+Qt strip's own groups and folded state, with a group the marker is inside
+of shown open; the native strip keeps no state of its own. An open group
+has its band over its cells, and a click on the band folds it into one
+folder cell, in the worst state of its features; a double-click on that
+cell opens it again, and a right click on the band or the cell opens the
+shared group menu (Collapse or Expand Group, Rename Group, Ungroup).
+Hovering a folded cell previews all its features, and its tooltip names
+the group and its size. The native strip logs `Timeline group <name> at
+x,y` as the Qt strip does, in the window's points;
+`app.ui-macos-native-timeline` checks hover, tooltips and groups.
 Command search result rows keep each command's shared CAD icon, at the shared
 search's 18 points, beside its name and shortcut: the same artwork as the
 ribbon and menus in the palette's light or dark rendering, dimmed with the
@@ -208,9 +301,59 @@ Text editors keep their normal editing keys; document shortcuts do not
 intercept input in an attached modal sheet. In Save with Description,
 Command+Return saves and plain Return inserts a newline.
 
-### Part catalogue and Part Picker
+### Drawing tabs and pinned commands
 
-Insert from Library, Community Library and the Part Picker present the
+While a drawing is open (mitcad#1073, after mitcad#1008), the workspace
+selector shows its Drawing tab alone, Cut Sheet for a cut sheet: the
+retained ribbon's `Ribbon::setDrawingMode` changes its tabs and
+`refreshNativeActions` passes the DRAWING and CUT SHEET groups (Close
+Drawing first, Export last) to `setRibbon`. Close Drawing brings Solid,
+Build and Make back with the tab the drawing was opened from selected.
+The drawing uses the ribbon's tools (`DrawingWorkspace::setRibbonTools`),
+so its own bar keeps only the drawing's name, the sheet tabs, **+**,
+Sheet… and Add Revision…. `NativeMacWindow::setDrawingOpen` is the
+counterpart of the Floating layout's `showOnlyCards`: the Browser stays,
+Projects, the inspector, the timeline and the orientation cube's arrows
+are hidden, and when the drawing closes each card is shown or hidden as it
+was asked to be meanwhile. The log reads `Native workspaces: Drawing (shown
+Drawing)` and `Native cards: Browser only (a drawing is open)`.
+
+A pinned command (mitcad#1074, after mitcad#1001 and mitcad#1084) is a
+button in its own group, after the group's own buttons, read from the
+retained ribbon's group row (`Ribbon::addPinnedButtons`, a button's
+`mitcadPinId`; one remade by a pin change is skipped once it has left
+the row's layout) and marked `NativeMacRibbonButton::pinned`
+(`native.ribbon.pinned.<id>`); it folds with its group's buttons, and its
+right-click menu has Unpin from Toolbar and Change Keyboard Shortcut….
+An NSMenu row has no ⋮ button and no right-click, so each group menu (and
+a split button's submenu) ends, after a separator, with two submenus
+listing its commands as its rows (a subgroup's in a submenu of its own):
+Pin to Toolbar, a pinned command checked and unpinned when chosen,
+disabled for a command that already is a button of its group
+(`NativeMacAction::pinnable`), and Change Keyboard Shortcut, which opens
+Keyboard Shortcuts at the command. Both act once AppKit's menu has
+closed (in the default run loop mode), so Keyboard Shortcuts and the
+remade ribbon never start inside the menu's tracking loop. They call the
+shared pins (`Ribbon::pin`, `Ribbon::unpin`) and
+`MainWindow::editShortcuts`, so the log lines and the saved
+`toolbarPins/<TAB>` setting are those of the Qt ribbon. The tests' menu
+comparison with the retained Qt menus leaves these entries out (their
+tag). The Qt view's navigation bar (mitcad#1086) is not made in the
+AppKit frontend, so a drawing has nothing more to hide.
+
+`app.ui-macos-native-familiar` pins Sweep from the Create menu, starts it
+from its button in the Create group, unpins it from that button's menu,
+opens Keyboard
+Shortcuts at Sweep, then opens a drawing from the Build tab: the Drawing
+tab alone with its groups, the timeline and inspector hidden and the
+Browser shown, the menus compared with the retained ones, and Close
+Drawing back on Build with the cards. `app.ui-macos-native-cut-sheet-parity`
+checks the Cut Sheet tab, then runs Add Components… and the exports from
+the AppKit ribbon's button and Export menu.
+
+### Part catalogue and Component Picker
+
+Insert from Library, Community Library and the Component Picker present the
 shared part catalogue (`PartGrid`) with a dedicated adapter
 (`platform/macos/NativeCollection.mm`, mitcad#813) rather than generic
 rows. The groups are a source list of readable width with the shared
@@ -238,7 +381,7 @@ panes keep its sizes and stretch factors, a draggable divider and each
 pane's minimum, so the catalogue and the part details share the dialog as
 in Qt.
 
-The modeless Part Picker opens through the shared `showDialog` in a
+The modeless Component Picker opens through the shared `showDialog` in a
 floating AppKit utility panel (`nativeUtilityWindow`, mitcad#819). It does
 not take the keyboard from the document: a click on a tile chooses the part
 while keys still reach the running command; search and editable option
@@ -249,7 +392,7 @@ command takes the same panel over; reopening brings it forward without
 activation. Close, Escape in the panel, Command+W and its close button hide
 the presenter and return the keyboard to the document. The panel keeps its
 frame under `partPicker/nativeFrame`; the hidden Qt presenter never appears
-on screen. The BUILD commands' Part tile (`InputDef::choiceTile` with
+on screen. The BUILD commands' Component tile (`InputDef::choiceTile` with
 `onButton`) is a native tile with the chosen part's picture and name that
 opens the picker, as in the shared command panel.
 
@@ -260,7 +403,7 @@ a readable group list, group selection, folding and stars, the library
 search, a tile's star and Favourites, the hover card, three tile sizes
 through the shared slider, usable bounds at normal and narrow sizes, Return
 on the grid and a double click inserting parts. `app.ui-macos-native-part-picker`
-builds two pictured slot profiles and starts BUILD Profile: its Part tile
+builds two pictured slot profiles and starts BUILD Profile: its Component tile
 opens the panel with pictures and groups and no Qt window; a click chooses
 the 30 profile while the document keeps the keyboard; pinning survives the
 command's Escape and the next Profile; Close and Command+W return the
@@ -270,24 +413,58 @@ are AppKit windows, not a harness's Qt window.
 
 ### Converted layouts and dialog buttons
 
-The shared Appearance and Materials assignment panel and Configurations'
-fourth Bindings tab (mitcad#864) use the ordinary popup, model-table and
-button bindings. A library double-click reaches the presenter's original
-assignment action; the selected value rows and the next active row follow
-its shared selection model. Small QLabel swatches and warning icons keep
+The Appearance and Materials windows no longer assign (mitcad#1059): the
+Material and Appearance tools do, in the command form (mitcad#1066). Their
+fx (`InputDef::fxToggle` with `besidePrevious`) is a compact push button
+with the `fx` artwork at the end of the tile's line, pressed while the
+value varies with an option, as the Qt panel's; the rows are captioned by
+their value (`labelFor`) and their drop-downs keep each option's swatch
+(`choiceImage` at `choiceImageSize`) and the headings, bold and disabled.
+The picker button opens the tools' picker as an AppKit popover under the
+tile (`showNativePicker`, `platform/macos/NativePicker.mm`): the shared
+`LibraryPicker` stays the presenter, shown off the screen, and the popover
+binds its search field and list. Typing goes to the presenter's search,
+which filters; Up and Down move its current entry over the shown ones;
+Return or a click on an entry chooses it; Escape or a click outside closes
+it. The entries keep their swatches and headings, so the choosing, the
+filtering and the log lines are the Qt picker's.
+Send to Slicer's Printer and Process choices use the same popover
+(mitcad#1122): the short label on the closed button, the full name as its
+tooltip, vendor or printer headings, source tags at the right, the current
+choice checked, and New printer… or New process… below a separator. The
+shared command session receives the choice, preserving its undo step.
+`app.ui-macos-native-print-picker` checks search, Return, Down, Escape,
+pointer selection, new-profile creation and undo on synthetic profiles.
+The Materials window's
+appearances are one list with Add…, Remove and Make Default beside it
+(mitcad#1083), all ordinary Qt controls: the bridge presents the list as
+a native table with each row's swatch and name and the default's
+**Default**, its row context menu, and the buttons as AppKit buttons
+(rows `material.appearance.<id>`). Add… opens the same AppKit popover over
+the shared `AppearancePopover` (mitcad#1068), under Add….
+Configurations' fourth Bindings tab (mitcad#864) uses the
+ordinary popup, model-table and button bindings. Small QLabel swatches and warning icons keep
 their device-independent image height, including after an image changes.
 `app.ui-macos-bindings-parity` and `app.ui-macos-native-bindings-parity`
-exercise option choice without a write, double-click fills and row advance,
-back to None, Mixed targets with multiple selected rows, the Bindings tab's
-filters, warnings, editor/selection actions and remove/undo. They retain
-the saved model and both content and own-window captures in each theme.
-One additional light-mode run starts without options, opens Add Option
-through the assignment panel's actual action entry, makes a numeric option
-and fills its Other row through New. It then picks a visible OCCT face and
-binds that face independently; saved face keys must match the exact face
-selected by the viewport input. Texture-source input has separate file and
-appearance coverage; this assignment test does not repeat a texture-source
-fill or accept its readiness from the New case.
+exercise the tools: the Appearance tool's fx with Varies With and a row per
+value, nothing written until OK, the Material tool's picker opened and
+closed and its fx table, the binding shown again and the fx off keeping
+the value shown, three bodies given one table, the Appearance tool's
+picker choosing by its search, and the Bindings tab's filters, warnings,
+the Material tool started on a binding, selection and remove/undo. They
+retain the saved model and both content and own-window captures in each
+theme. One additional light-mode run starts without options (the fx offers
+None and its note), adds a numeric option with one value in
+Configurations, then picks a visible OCCT face and binds that face with
+the Appearance tool (one row, the option's only value); saved face keys
+must match the exact face
+selected by the viewport input. `app.ui-macos-appearance-edit-keys` (and
+its native variant) assigns the appearance it edited with the Appearance
+tool's picker, and `app.ui-macos-render-metal` with its native variant
+assigns Glass - Clear through the tool and its picker.
+`app.ui-macos-native-material-color-parity` checks the Materials window's
+list of appearances and Add…'s popover, then Add… by the popover's search,
+Make Default and Remove on the added row.
 
 Dialogs, Settings and other secondary windows convert their shared Qt
 layouts into one constraint-based AppKit container
@@ -357,7 +534,7 @@ forms, a spanning row over stretched grid columns, hiding and showing,
 unambiguous layout, and the role order with its gaps, Return, Escape, a
 helper action and later role changes. Then, in light and dark appearance, it
 opens Parameters, New Project, Settings > Navigation, Insert from Library,
-Render Image and Library Parts at the normal and a narrow document size and
+Render Image and Library Components at the normal and a narrow document size and
 at each dialog's narrowest size. In Settings every section button must show
 its template icon and complete name within its bounds, and real clicks
 switch to Display and back to Navigation. It asserts the visible, unclipped
@@ -465,6 +642,27 @@ summary values remain labels. `app.ui-macos-native-print-history` checks
 these controls with real pointer input in both appearances, alongside the
 long timeline's wheel behavior, undo and unchanged model/viewport checks.
 
+The bridge does not run item delegates, so what a delegate paints reaches
+the native cells as data (mitcad#1078, mitcad#1080). A table that sets
+`NativeRowHeaderProperty` (Purge Volumes) shows its vertical header as a
+leading column of row labels with their icons; other tables leave their
+row numbers out. Column headers show their icons before their titles;
+a model column added after the native table was built, such as Purge
+Volumes' slots once it opens, adds its native column. Purge Volumes' cells
+are data without a painting delegate: the display role is the volume with
+its unit ("140 mm³"), and a typed text, from either frontend, commits
+through the dialog's one parse, so a text that is no volume is refused in
+both. A read-only print colour in Property Sets shows its swatch beside its
+name. Views name the columns whose delegates draw more than text:
+`NativeDecimalColumnsProperty` puts Parameters' Expression and Value
+numbers on one decimal axis per column in tabular digits, the text itself
+unchanged, and `NativeSelectedIconTintProperty` gives a selected row's
+icon the selection's text colour (Keyboard Shortcuts' commands, the
+Projects status marks). `app.ui-macos-native-print-history` checks the
+swatch, Purge Volumes' row labels and their swatches, the cells' unit, a
+typed 120 committed and "abc" refused; the decimal axes and the tinted
+marks are visual checks in its and the Tables test's captures.
+
 `app.ui-macos-native-tables` exercises these in light and dark appearance
 with the `--demo` block: an invalid `30 deg` length committed with Return
 and `45 deg` with Tab both keep 20 mm and the 48,000 mm³ body, keep
@@ -489,8 +687,8 @@ for a larger one. Releasing the edge saves the width: Projects in the
 shared `projects/cardWidth`, so that the Floating Qt card opens as wide,
 Browser in `browser/cardWidth` and the inspector in `inspector/cardWidth`.
 The Qt Browser and command cards keep their fixed widths. The handles are
-accessibility splitters named Projects width, Browser width and Inspector
-width. Each layout gives the name column of the Projects and Browser
+accessibility splitters named Projects width, Browser width and Command
+panel width. Each layout gives the name column of the Projects and Browser
 outlines the width the card leaves after the other columns (Projects'
 compact marks keep theirs), also for an outline made inside a card that
 opens at a remembered width.
@@ -514,12 +712,73 @@ scroll area is marked `nativeWindowBody`, so the AppKit conversion lays it
 out inline in the window's own scrolling body rather than as a nested
 scroll view.
 
-The Browser card also hosts the shared Configuration bar when the design
-has options or rows. Its row presets, list choices, value fields, range
-sliders, driven values and refusal notices use the same presenter as Qt.
-The options scroll within the card while leaving Browser rows reachable.
-A range slider commits on release, so a drag changes the model in one
+The Configuration card (below) hosts the shared Configuration bar when the
+design has options or rows. Its row presets, list choices, value fields,
+range sliders, driven values and refusal notices use the same presenter as
+Qt. A range slider commits on release, so a drag changes the model in one
 undo step; ordinary Navigation sliders retain their continuous updates.
+
+### The Configuration card and the left column (mitcad#1020)
+
+The shared Qt frontend moved the Configuration bar out of the Browser into
+a left panel of its own (`browser/MainWindowConfigurationPanel.cpp`):
+Projects, Configuration and Browser from the top, the Configuration panel
+shown while the bar is present (`ConfigurationBar::isPresent`,
+`presenceChanged`), collapsible with its collapsed state in
+`configuration/panelCollapsed`, its row combo captioned Row under the
+panel's own Configuration header (`ConfigurationBar::setHeaderTitled`).
+The left panels share the column's whole free height, from below the
+toolbar to above the history bar, without fixed caps: a panel whose
+content is shorter than its share gives the rest to the others, and they
+scroll only when all of them are longer; the boundary between two open
+panels is dragged (a resize cursor; at least the header and a row each),
+the heights kept per layout, and a double-click on it returns to the
+automatic split; a collapsed panel gives its height to the others. The
+Floating layout implements this in `FloatingLayout` (`shareColumn`,
+`floating/leftSplit`). The Projects panel starts hidden until the user
+shows it (`projectsPanelShownAtStart`, shared with this frontend).
+
+The AppKit frontend does the same (`NativeMacWindow.mm`,
+`NativeColumnSplit.mm`, `MainWindowNative.cpp`):
+
+- The Configuration card (`native.configurationCard`) sits between
+  Projects and Browser, with its Configuration header and a disclosure
+  (`native.configuration.disclosure`) that folds the content under the
+  header, remembered in the shared `configuration/panelCollapsed`; it is
+  hidden while the design has no options and rows
+  (`setConfigurationView(nullptr)`). The bar's scroll view keeps its
+  identifier `native.configuration`; the row combo is captioned Row
+  (`ConfigurationBar::setHeaderTitled`). The card is as wide as Browser,
+  and at least 230 points (Projects' least), the width its one-row options
+  need, within the free canvas.
+- The form has one row per option, its caption, field and slider side by
+  side as in the Qt bar, the row combo beside its caption: the bar no
+  longer opts in to the grid's wrapping (`nativeResponsiveLayout`), which
+  put each option on three lines (about 80 points an option).
+- The column: no fixed caps (the former `(floor - top) * 0.4` for
+  Projects and `canvasHeight * 0.55` for Browser, which the owner lifted
+  for mitcad#1020). Projects, Configuration and Browser share the free
+  height by the Floating layout's rule (`shareColumn`,
+  `framework/ColumnShare.hpp`); Projects shows whole rows and gives what
+  that leaves to the next card. The gap between two open neighbours is an
+  accessibility splitter (`native.columnSplit.<above>.<below>`, named like
+  "Configuration and Browser height") with the row resize cursor: a drag
+  moves height between the two, each keeping its header and a row; the
+  heights then weigh the shares, kept in `native/leftSplit`
+  ("configuration=80", ...; logged `Native split remembered:` and
+  `Native split restored:`); a double-click returns to the automatic split
+  (`Native split: automatic`). A collapsed card keeps its header and gives
+  its height to the others.
+
+`app.ui-macos-native-left-column` checks on a synthetic design with three
+range options and 40 bodies: the card with the Row row and the three
+options under 190 points, its controls whole and in view
+(`expect-native-configuration-layout`), Browser reaching the bottom of the
+free column (`expect-native-card-height native.sidebar bottom`), the
+boundary dragged with AppKit mouse events (`native-column-split`) and its
+split after a relaunch, the double-click, and the disclosure remembered
+across a relaunch, in both appearances. `app.ui-macos-native-configuration-parity`
+keeps its configuration checks with the card moved.
 
 `app.ui-macos-native-card-widths` drags each edge with AppKit mouse events,
 checking pointer routing and the resize cursor, with a project and a body
@@ -576,18 +835,18 @@ name on up to two lines, the entire tile one pointer target with hover,
 pressed and checked highlights.
 
 A command form follows the shared panel's form: the command's CAD artwork
-and name, then Change Parameters, in its title row; captions beside their
+and name, then Edit Parameters, in its title row; captions beside their
 controls in an `NSGridView` whose caption column wraps a caption longer
 than 110 points; headings, lists, cut scopes and notes without a label
 across both columns. Hidden inputs hide their grid rows, so no row's
 layout depends on views that AppKit detaches. Selections show their
 colour swatch and a compact clear control, Flip the shared flip artwork
-as a toggle, a choice's `onButton` its small icon (3D Print's Edit), note
+as a toggle, a choice's `onButton` its small icon (Send to Slicer's Edit), note
 rows their icon buttons, text buttons and links, a value field's mark
 (`markFor`, mitcad#980: a Hole field that no longer follows the screw
 size) an icon button beside the field with the shared mark's icon,
 tooltip and action (Reset to size), and `labelFor`, `enabled` and
-`autoText` follow the state. OK and Cancel (3D Print's Send)
+`autoText` follow the state. OK and Cancel (Send to Slicer's Send)
 are a footer that the window keeps under the inputs, which scroll above
 it, as the shared panel's page does.
 
@@ -630,9 +889,142 @@ card, without scrolling and as hit-test targets, then starts Hole,
 Extrude and Create Sketch through those tiles. For Extrude it checks
 captions beside their controls in aligned columns, compact clear and flip
 controls, the CAD artwork, and OK, Cancel, Local bodies, Flip, both `fx`
-buttons and Change Parameters in view, then creates, inserts, names and
+buttons and Edit Parameters in view, then creates, inserts, names and
 edits a parameter through the `fx` menu and the shared dialogs. For 3D
 Print it checks Send and Cancel whole under the scrolling inputs.
+
+### The Chat card (mitcad#1075)
+
+View › Chat (`view.chat`, last in the View menu as in Qt), ⌘⇧L and the
+toolbar's Chat button beside the agent indicator (`native.chatButton`, the
+command's CAD artwork, on while the card shows) show and hide the Chat
+card `native.chatCard`, as the Floating `chatCard`: on the right edge from
+below the toolbar's rows to above the timeline, 340 points wide in a wide
+window (a third of the canvas in a narrow one, at least 280 points). The
+inspector, its width handle and the orientation cube's arrows move left of
+it; the left cards' widths and the free canvas between the side cards are
+measured in the canvas left of it. The card's title is Chat; its content is
+the shared `agent::ChatPanel` on the same `ChatController`, converted by
+the presenter bridge in the Qt panel's order: the agent or the agent
+choice, New Conversation and the panel's menu, the model, the
+conversation with its tool-call group rows, approval cards and notices,
+the state line, the privacy notice, the setup's action, and the message
+field with Selection, View and Send (Stop while the agent works). The
+controls keep the Qt panel's object names (`chatInput`, `chatSend`,
+`chatAllowOnce`, ...) as identifiers. The conversation takes the height the
+other rows leave.
+
+The panel's Qt widget stays hidden: `ChatPanel::setPresented` stands for
+its show and hide (the agent looked for when it first shows, a missing one
+looked for again while it shows), and `ChatPanel::contentChanged` refreshes
+the bridge's view on the next turn when rows, streamed answers or the
+state change; a new row rebuilds the view and the message field keeps the
+keyboard. The message field is a `NativeTextEditorCommands` editor: Return
+sends, Shift+Return starts a new line and Escape stops a working agent in
+the AppKit text view too. The card's host (`NativeChatCard.mm`) keeps the
+conversation's end in sight while it showed its end, as the Qt panel's
+`keepAtEnd`, also across the bridge's rebuilds; scrolled back, it stays
+until the next rebuild. An agent's Markdown answer is shown as its plain
+text; its links are not yet clickable in the card. Showing the card gives
+the message field the keyboard when the agent is ready; hiding it while
+the field has the keyboard returns it to the canvas.
+
+`app.ui-macos-native-chat` (`tools/ui-macos-native-chat-test.sh`) installs
+the chat's scripted test agent as a signed-in Claude Code, as the Qt chat
+test does, and checks that View › Chat shows the 340-point card, a message
+typed in the native field and sent with Return passes the privacy notice
+and adds two boxes as one step that one ⌘Z with the canvas focused takes
+back, an approval card's Allow once saves the design, and the toolbar
+button, ⌘⇧L and View › Chat hide and show the card again. Its screenshots
+(light, the approval card, dark) are left in the test's output folder.
+
+### The quick-access group (mitcad#1113)
+
+The toolbar's workspace item shows the quick-access group after the
+segmented control, as the Floating title row shows it after the tabs
+(mitcad#1090, `QuickAccessGroup`): in the same item, so that a toolbar
+configuration AppKit saved before shows it too. `refreshNativeActions`
+hands `setQuickAccess` the commands of the setting `quickAccess/commands`
+by the Qt group's rules (`QuickAccessGroup::availableIds`, the File, Edit,
+View and Tools menus' order), each button's tooltip from `quickAccessTooltip`
+with `MainWindow::unavailableReason` while the native command is disabled,
+and the menus' commands for its menu. A button (`native.quickAccess.<id>`)
+is the command's CAD artwork and state and runs it as the menus do; after
+them a separator and the ⋮ (`native.quickAccessMenu`, DotsButton's three
+dots) open the group's menu: while folded the commands themselves, then
+File, Edit, View and Tools with their commands as checks, and Reset to
+Default. A check or the reset changes the shared setting through
+`QuickAccessSettings` once the menu has closed. The group folds into its ⋮
+by `TitleBar::updateQuickFold`'s rule: when the document's name, from the
+unfolded group's right to the project, agent and search items, 16 points
+off each, would have less room than its width (at most the title's 220
+points).
+
+`app.ui-macos-native-quick-access` (`tools/ui-macos-native-quick-access-test.sh`)
+opens a saved plate and checks the default buttons, Save disabled with
+"no unsaved changes" in its tooltip and enabled once the origin's light
+bulb changed the display state, View › Look At checked in the ⋮ menu
+adding a button before Preferences, Reset to Default, and the group folded
+in a narrow window and unfolded in a wide one.
+
+### The navigation bar (mitcad#1099)
+
+The Qt bar of mitcad#1086 has an AppKit counterpart: the capsule card
+`navigationBar` at the bottom centre of the view, just above the message
+band's row (mitcad#1098) as in the Floating layout, with Look At, Fit, Visual Style, Layout Grid and Snap
+to Grid in the Qt bar's order and CAD artwork (`navigationBar_<command>`,
+the Qt buttons' names). `MainWindow::createNativeNavigationBar` gives the
+commands; their checks, enabled states and tooltips (the registry's name
+and shortcut) come from the native action snapshot, and a click runs the
+command as its View menu item does, so a toggle in the bar, the View menu,
+a shortcut or the Sketch Palette is one action. Changes made outside the
+native window (the palette's Snap to grid) refresh the snapshot. Visual
+Style pops up the View menu's style commands with the current one checked,
+its tooltip naming the current style. Preferences › Display › Show the
+navigation bar (`view/navigationBar`) shows and hides it; an open drawing
+hides it with the other cards. The bar's place, tooltips, the buttons' and
+View menu items' checks and the pop-up's entries are logged (`Native
+navigation bar …`). `app.ui-macos-native-navigation-bar`
+(`tools/ui-macos-native-test.sh navigation-bar`) checks the five buttons
+and Fit's shortcut, Snap to Grid in step with View › Grid and Snaps both
+ways, Wireframe from the pop-up, Look At in a sketch on XZ after Isometric
+View, and the palette's Snap to grid.
+
+### The message band (mitcad#1098)
+
+The window's messages show in the card `native.messageBand` right above
+the timeline, as the Floating message band (mitcad#1042,
+[ui-conventions.md](ui-conventions.md#the-message-band)): as wide as the
+timeline and at least as high, room for two lines of text, and the other
+cards (the left column, the inspector, the Chat card) end above its row.
+The band draws the window's shared `MessageLog` (`NativeMessageBand.mm`),
+whose `MessageCenter` keeps the times for both frontends, so the levels,
+lifetimes, stub and history are the Qt band's: the level's SF Symbol, the
+text with its level's word (*Failed:*, *Warning:*) in the level's color on
+the window background,
+wrapped to two lines and then truncated (the whole text in the tooltip),
+and × (`native.messageBand.close`); a hint, progress, information or a
+success for 6 s, a warning for 10 s, an error until × or the next
+command. Then the dimmed one-line stub of the latest message
+(`native.messageBand.stub`) stays in the band's row, centred and as wide
+as its text; a click opens the session's history in a popover above it,
+newest first, each row with its time, the level's symbol and the text.
+A row about a feature selects it (as the Qt history's row, without its
+message said again); Esc or a click elsewhere closes the popover, whose
+rows lie on an opaque window background in the levels' text colors. The
+band logs `Native message band: full|stub <level> <text>` and its place
+(`Native message band placed: full|stub x,y wxh, row <h>, timeline x,y
+wxh`); the history
+logs the Qt history's lines (`Message history: <n> entries`, its rows,
+`Message history: selected <uid>`, `Message history: closed`).
+
+`app.ui-macos-native-issues` checks that a failed feature's error stays
+past a hint's 6 s until × closes it into the stub, a hint fades after
+6 s into its stub, the stub opens the history with the hint as its first
+row and the error's row selects the failed feature, a warning shows as a
+warning, and editing a feature (the next command) closes an error into
+the stub. Its screenshots of the band (an error, a warning, the stub and
+the history, light and dark) are left in the test's output folder.
 
 ## Qt cards on macOS
 
@@ -645,7 +1037,7 @@ and 2. It checks the actual frame, dock containment, a complete tree row
 and unclipped toolbar; it does not change the display configuration.
 
 Every Qt tool button owned by the main window uses the shared
-`MacToolButtonStyle`, in Floating and Docked chrome, including controls
+`MacToolButtonStyle`, in Floating and Docked layout, including controls
 created later and buttons in owned menus and dialogs. Its resting surface
 is transparent; hover and press use quiet rounded fills, checked controls
 use the palette's accent, and keyboard focus keeps an accent ring. Native
@@ -678,7 +1070,7 @@ palette. Project lock marks use the themed icon set; selected status marks
 use the palette's highlighted-text colour to remain visible over the accent.
 The Qt Mac ribbon uses
 26-pixel icons in 36-pixel buttons, with separate group captions and menu
-chevrons; the title bar keeps the compact Undo/Redo and Solid/Build controls.
+chevrons; the title bar keeps the compact Undo/Redo and Solid/Build/Make controls.
 Card titles keep their system-font metrics inside a 30-pixel header with
 20-pixel collapse controls.
 The Floating Projects toolbar has a transparent background, so its native
@@ -687,7 +1079,7 @@ buttons sit on the same glass material as the rows in both appearances.
 `app.ui-macos-projects-cards` checks both requested slots and actual native
 window bounds, plus toolbar/button containment, with zero, one and 24 local
 synthetic projects. It covers project expansion, window resizes, card
-folding and visibility, in Floating and Docked chrome at Qt scales 1 and 2.
+folding and visibility, in Floating and Docked layout at Qt scales 1 and 2.
 Scale overrides exercise Qt's high-density layout and artwork; they do not
 establish physical Retina-display acceptance. Screenshots of each state
 support the visual pass over the toolbar, rows, card titles and ribbon.
@@ -698,7 +1090,7 @@ change of selection reuses those controls, including their style and
 accessible command names. `app.ui-macos-selection-create` covers a body
 and a planar face, starts Rectangular Pattern and Extrude through their
 actual buttons, and checks that the selection reaches each command. It
-runs in Floating and Docked chrome, light and dark appearance, at device
+runs in Floating and Docked layout, light and dark appearance, at device
 pixel ratios 1 and 2, with captures for visual review. Qt scale overrides
 exercise dense layout and artwork without changing the physical display.
 
@@ -726,7 +1118,7 @@ Finish Sketch appears in the ribbon and the Sketch Palette while a sketch
 is open; the Qt title row keeps its normal search control as its final
 item. `app.ui-macos-sketch-finish-layout` checks the title layout and mask,
 then finishes through the ribbon button, the palette button, the collapsed
-ribbon group's menu and the standard shortcut. Floating and Docked chrome,
+ribbon group's menu and the standard shortcut. Floating and Docked layout,
 light and dark appearance, and wide and narrow windows are covered. The
 AppKit toolbar's default items already omit Finish Sketch; its native
 ribbon retains the Finish Sketch group when other groups collapse.
@@ -911,7 +1303,9 @@ Native outline selection drives worker measurements, canvas Return and
 Browser Escape close the inspector, and Physical Properties presents a
 native report dialog. Command search checks its rows' shared CAD icons
 (Libraries and Sphere selected, Extrude dimmed before it can run) and
-Command+W dismissal without closing the document. The native sketch
+Command+W dismissal without closing the document; command search opened
+from its toolbar item lies directly under it, timeline search opened from
+the magnifier directly above it. The native sketch
 workflow checks Browser Return activation for sketches and features, row
 renaming and command isolation.
 The toolbar regression upgrades an older saved layout, checks live status
@@ -1124,11 +1518,12 @@ Windows and Linux tests were not run on this machine, per user request.
 
 ### Physical Mac checklist (mitcad#558)
 
-Qt remains the primary/default macOS build and release frontend; AppKit is
-an optional, separately configured test build. The physical acceptance
+Qt remains the default macOS frontend; since mitcad#1056 the AppKit one
+ships beside it as an opt-in preference. The physical acceptance
 matrix below records the 2026-10-23 physical run separately from historical
-VM results. The normal Qt build has `MITCAD_MACOS_NATIVE_UI=OFF`; the
-optional AppKit build enables it in a separate build directory.
+VM results. At the time of that run the normal Qt build had
+`MITCAD_MACOS_NATIVE_UI=OFF`, and the optional AppKit build enabled it in a
+separate build directory.
 
 The available configuration for the 2026-10-23 run is an Apple M1 Max
 (32 GPU cores), 32 GiB memory, macOS 27.0.1 (26A434), with the built-in
@@ -1270,7 +1665,7 @@ The pointer regression selects a block's exposed word when its centre is
 covered by a child field. The in-process driver's optional normalized click
 point retains the same AppKit hit test and coverage checks as centre clicks.
 
-The native Part Picker also presents an open configuration table's option
+The native Component Picker also presents an open configuration table's option
 choosers below its pictured catalogue. Its list choices, number fields,
 allowed ranges, cascade notices and changes to the command's current part
 use `OptionChooser`, shared with Qt and Insert from Library. The production
@@ -1295,7 +1690,7 @@ widens past that minimum to its own cell's size for the whole text; it
 does not narrow again while values change. A finished edit takes the
 presenter's reformatted text even when the value did not change.
 `expect-native-bounds <identifier> text [label regex]` takes the cell's
-size for the field's whole current text as the minimum; the Part Picker
+size for the field's whole current text as the minimum; the Component Picker
 regression checks Offset's unit after its Tab commit and in the reopened
 picker (mitcad#975). A line edit's field is the same single scrolling
 line: a longer text scrolls with the caret, as in Qt, instead of wrapping
@@ -1359,7 +1754,7 @@ to their owning field. Visibility is relative to the shared root and the
 actual native view, so a hidden Qt host does not exclude its live AppKit
 control. The route retains native forward/reverse key-view links and normal
 field-editor commit; dedicated adapters keep their own key handling. The
-Part Picker regression requires Grade to Offset, back to Grade and then
+Component Picker regression requires Grade to Offset, back to Grade and then
 Offset again through real keys before committing its numeric edit.
 An ordinary native text field's `insertTab:` and `insertBacktab:` delegate
 commands use that same route, including the numeric field editor; responder
@@ -1485,5 +1880,7 @@ and WindowServer target. It never invokes `mouseEntered` directly. The
 Qt path checks pinned card data and actual widget clicks; it does not
 claim physical Qt hover from the driver's synthetic mouse events.
 Saved model and undo assertions preserve the complete document while
-opening and cancelling editors. This describes the test scope, not a
+opening and cancelling editors: an appearance's or a face's Edit… starts
+the Appearance tool on its target (mitcad#1059, mitcad#1066), cancelled;
+Shown's opens its condition dialog. This describes the test scope, not a
 completed runtime or manual accessibility acceptance.

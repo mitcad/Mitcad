@@ -28,9 +28,9 @@
 # Tools/ui-windows-measure-test.ps1 does the same in the Windows VM.
 # The picks' preference (mitcad#869), on a block extruded to both sides of
 # its shown sketch, from the top: the two corners where the sketch's points
-# lie give the body's vertices and Keep as Dimension is enabled; with
-# Sketch Curves and Points the two sketch points, and Keep as Dimension
-# greyed out with the reason.
+# lie give the body's vertices; with Sketch Curves and Points the two
+# sketch points. The panel has no Keep as Dimension or Annotate: keeping
+# is the Make tab's (mitcad#1049).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-measure-test.sh [screenshot.png]
@@ -66,30 +66,29 @@ EOF
 logged_y() { grep -F "$1 at " "$UI_LOG" | tail -1 | sed -n 's/.* at [0-9]*,\([0-9]*\).*/\1/p'; }
 
 # expect_layout: the panel in the order of the task (mitcad#1010), top to
-# bottom the picks, the result, the actions, the history and Close; at
-# most the default 300 wide; no control's text clipped; every result row
-# on one line.
+# bottom the picks, the result, the history and Close (no actions row:
+# keeping is the Make tab's, mitcad#1049); at most the default 300 wide;
+# no control's text clipped; every result row on one line.
 expect_layout() {
   ui_sync
-  local pick result keep history close width
+  local pick result history close width
   pick=$(logged_y "Panel Measure input b")
   result=$(logged_y "Panel Measure result Distance")
-  keep=$(logged_y "Measure Keep as Dimension")
   history=$(logged_y "Measure history")
   close=$(logged_y "Panel Measure Close")
-  [ -n "$pick" ] && [ -n "$result" ] && [ -n "$keep" ] && [ -n "$history" ] && [ -n "$close" ] ||
-    ui_fail "a place is not logged: picks $pick, result $result, actions $keep, history $history, Close $close"
-  [ "$pick" -lt "$result" ] && [ "$result" -lt "$keep" ] && [ "$keep" -lt "$history" ] ||
-    ui_fail "not in the task's order: picks $pick, result $result, actions $keep, history $history"
+  [ -n "$pick" ] && [ -n "$result" ] && [ -n "$history" ] && [ -n "$close" ] ||
+    ui_fail "a place is not logged: picks $pick, result $result, history $history, Close $close"
+  [ "$pick" -lt "$result" ] && [ "$result" -lt "$history" ] ||
+    ui_fail "not in the task's order: picks $pick, result $result, history $history"
   # Close at the bottom, under the page that scrolls (mitcad#655): below
   # the panel's view when it is logged, else below the history.
   local bottom=$history view
   view=$(grep "^Panel Measure view y " "$UI_LOG" | tail -1 | sed -n 's/^Panel Measure view y -\{0,1\}[0-9]* to \(-\{0,1\}[0-9]*\),.*/\1/p')
   [ -n "$view" ] && bottom=$view
   [ "$close" -gt "$bottom" ] || ui_fail "Close is not at the bottom: Close $close, the panel's view or the history ending at $bottom"
-  echo "ok   top to bottom: picks $pick, result $result, actions $keep, history $history, Close $close (under $bottom)"
-  [ "$(logged_y "Measure Annotate")" = "$keep" ] || ui_fail "Annotate is not on Keep as Dimension's row"
-  echo "ok   Keep as Dimension and Annotate on one row"
+  echo "ok   top to bottom: picks $pick, result $result, history $history, Close $close (under $bottom)"
+  grep -qE "Measure (Keep as Dimension|Annotate) at" "$UI_LOG" && ui_fail "the panel still has Keep as Dimension or Annotate"
+  echo "ok   no Keep as Dimension or Annotate: Measure measures"
   width=$(grep -o "Panel Measure width [0-9]* of" "$UI_LOG" | tail -1 | sed 's/[^0-9]//g')
   [ -n "$width" ] && [ "$width" -le 300 ] || ui_fail "the panel is '$width' wide, not within the default 300"
   grep -F "Measure controls" "$UI_LOG" | tail -1 | grep -qF "Measure controls: none clipped" ||
@@ -175,7 +174,7 @@ ui_expect_new "Measure history: 3 rows" "three rows"
 ui_expect_new "Measure history row 3: Edge of Body1" "the rims' row first"
 ui_expect_new "Edge of Body2: Radius 5 mm, Diameter 10 mm, Radius 5 mm, Diameter 10 mm, Distance 40 mm, Angle 0" \
   "with their values"
-ui_expect_new ", Axis distance 50 mm, Centre distance 50 mm" "and their axes' and centres' distances"
+ui_expect_new ", Axis distance 50 mm, Center distance 50 mm" "and their axes' and centres' distances"
 ui_expect_new "Measure history row 2: Face of Body1" "the round face against the top"
 ui_expect_new "Face of Body3: Radius 5 mm, Diameter 10 mm, Distance" "with its distance"
 ui_expect_new ", Angle 90" "and its angle"
@@ -195,7 +194,7 @@ ui_expect_new "Measure history row 1 at" "its rows laid out"
 ui_mark
 ui_step "right-click the first row"        ui_click_logged "Measure history row 1" 3
 ui_expect_new "Measure history row 1 menu" "its context menu"
-ui_expect_new "Context menu: Show | Keep as Dimension | Copy" "Show, Keep as Dimension and Copy"
+ui_expect_new "Context menu: Show | Copy" "Show and Copy"
 ui_step "Copy"                             ui_menu_choose "Copy"
 ui_expect_new "Measure history copied row 1: 1 | Face of Body1" "the row copied as tab-separated text"
 ui_mark
@@ -279,8 +278,7 @@ echo "--- A shown sketch in the body's middle plane (mitcad#869)"
 # A block 120 x 70 extruded 15 to each side of its sketch, which is shown:
 # seen from the top, the sketch's corner points lie on the block's top
 # corners and its lines on the top edges. Faces, Edges and Vertices takes
-# the body's vertex there; Sketch Curves and Points the sketch's points,
-# which Keep as Dimension cannot keep: its tooltip says why.
+# the body's vertex there; Sketch Curves and Points the sketch's points.
 cat > "$WORK/middle.json" << EOF
 [
   {"cmd": "sketch.create"},
@@ -331,11 +329,8 @@ ui_expect_new "Measure Selection 1: 1 vertex" "the body's vertex, not the sketch
 ui_step "pick the other top corner"        xdotool mousemove $((X + c2x * UI_SCALE)) $((Y + c2y * UI_SCALE)) click 1
 ui_expect_new "Measure Selection 2: 1 vertex" "the other body vertex"
 ui_expect_new "distance 120" "the corners 120 apart"
-ui_expect_new "Measure Keep as Dimension enabled" "Keep as Dimension enabled for the body's corners"
 ui_sync
 tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Measure Selection [12]: 1 sketch point" && ui_fail "a sketch point was picked"
-tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -E "Measure Keep as Dimension (enabled|disabled)" | tail -1 |
-  grep -q "Measure Keep as Dimension enabled" || ui_fail "Keep as Dimension is not enabled with both corners picked"
 ui_step "close (Enter)"                    ui_key Return
 ui_expect_new "Closed Measure" "measure closed"
 ui_mark
@@ -348,8 +343,6 @@ ui_expect_new "Measure Selection 1: 1 sketch point" "the sketch point"
 ui_step "pick its corner p6"               ui_click_logged "Sketch entity F1/p6"
 ui_expect_new "Measure Selection 2: 1 sketch point" "the other sketch point"
 ui_expect_new "distance 120" "the points 120 apart"
-ui_expect_new "Measure Keep as Dimension disabled: Sketch geometry cannot be kept as an annotation" \
-  "Keep as Dimension greyed out, its tooltip gives the reason"
 ui_expect_new "Panel Measure result Selection 1: sketch point: Position = (" "the sketch points' groups"
 ui_step "close (Enter)"                    ui_key Return
 ui_expect_new "Closed Measure" "measure closed"

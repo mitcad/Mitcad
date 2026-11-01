@@ -26,7 +26,7 @@ else()
 endif()
 
 project(Mitcad
-  VERSION 0.39.0
+  VERSION 0.40.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 
@@ -286,6 +286,10 @@ if(BUILD_TESTING)
   endif()
   # Every tooltip of the app is one short line (tools/tooltip-check).
   add_subdirectory(tools/tooltip-check)
+  # The user-facing texts keep the UI conventions (tools/ui-strings-check).
+  add_subdirectory(tools/ui-strings-check)
+  # The colors the user sees come from the role table (tools/ui-colors-check).
+  add_subdirectory(tools/ui-colors-check)
   # Every widget of the app that paints itself names its AppKit
   # presentation (tools/native-coverage).
   add_subdirectory(tools/native-coverage)

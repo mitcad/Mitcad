@@ -113,7 +113,7 @@ fn read_model(model: Node<'_, '_>) -> Result<Model, Error> {
         "inch" => 25.4,
         "foot" => 304.8,
         "meter" => 1000.0,
-        other => return Err(error(format!("unknown unit '{other}'"))),
+        other => return Err(error(format!("unknown unit “{other}”"))),
     };
     if let Some(required) = model
         .attribute("requiredextensions")

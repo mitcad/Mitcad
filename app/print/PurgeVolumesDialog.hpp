@@ -27,7 +27,11 @@ class DocumentHost;
 // tinted ground, its tooltip the computed volume. Reset gives the selected
 // edited cells their computed volumes again. Each edit and each Reset is
 // one model command and undo step (`set_purge_volumes`); the window
-// follows the model.
+// follows the model. The cells are data, without a painting delegate
+// (mitcad#1078): the AppKit frontend shows the same texts, the rows'
+// labels as a leading column; a typed text commits through cellEdited in
+// both. Their NativeControlIdentifierRole is `purgeVolumes.<row>.<column>`,
+// a row label's `purgeVolumes.from.<row>`.
 //
 // Logs `Purge volumes opened: <materials>`, each pair as `Purge volume
 // <from> → <to> = <n> mm³` with `(set by hand)` when edited, `Purge

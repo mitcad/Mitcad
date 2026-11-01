@@ -487,7 +487,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     .ok()
                     .flatten()
                     .ok_or("the body has no box")?;
-                notes.push("the side that stays is the side of the body's centre".to_owned());
+                notes.push("the side that stays is the side of the body's center".to_owned());
                 std::array::from_fn(|k| (bbox.min[k] + bbox.max[k]) / 2.0)
             }
         };

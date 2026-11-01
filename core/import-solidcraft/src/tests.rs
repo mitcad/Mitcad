@@ -78,7 +78,7 @@ fn a_part_comes_in_with_its_parameters_and_sketches() {
     assert_eq!((s1.curves, s1.constraints, s1.dimensions), (4, 5, 2));
     assert_eq!((s1.constraints_mapped, s1.dimensions_mapped), (5, 2));
     assert!(s1.dropped.is_empty(), "{:?}", s1.dropped);
-    // The sketch's dimensions are Mitcad's, with the file's parameters.
+    // The sketch's dimensions are MitCad's, with the file's parameters.
     let sketch = doc.features().find(|f| f.name == "Sketch1").unwrap();
     let FeatureDef::Sketch(def) = &sketch.def else {
         panic!("Sketch1 is not a sketch")
@@ -143,7 +143,7 @@ fn an_old_format_comes_in_upgraded() {
             .any(|f| f.def.type_name() == "construction_plane")
     );
 }
-/// Features without a Mitcad counterpart (here options Mitcad has not) are
+/// Features without a MitCad counterpart (here options MitCad has not) are
 /// named in the report and hold their place as suppressed placeholders;
 /// the timeline goes on.
 #[test]
@@ -180,7 +180,7 @@ fn unmapped_features_are_placeholders() {
     assert!(
         doc.import_note(placeholder.uid)
             .unwrap()
-            .contains("no Mitcad counterpart")
+            .contains("no MitCad counterpart")
     );
     // Every input is a parameter, the unmapped ones' too.
     assert!(
@@ -204,7 +204,7 @@ fn the_check_compares_with_expected_values() {
     assert_eq!(check.failures.len(), 2, "{:?}", check.failures);
 }
 
-/// Expressions keep their meaning in Mitcad's language.
+/// Expressions keep their meaning in MitCad's language.
 #[test]
 fn expressions_are_translated() {
     let v = json!({"format": "solidcraft/27", "name": "E",
@@ -223,14 +223,14 @@ fn expressions_are_translated() {
     .unwrap();
     let p = doc.parameters();
     assert_eq!(p.value(p.find("a").unwrap()), Some(2.5));
-    // `E` is Mitcad's constant: the parameter is `E_`.
+    // `E` is MitCad's constant: the parameter is `E_`.
     assert_eq!(p.value(p.find("E_").unwrap()), Some(5.0));
     assert_eq!(p.value(p.find("n").unwrap()), Some(3.0));
     let e = report.parameters.iter().find(|r| r.name == "E").unwrap();
     assert_eq!(e.renamed.as_deref(), Some("E_"));
 }
 
-/// Embosses come in as Mitcad's (mitcad#458): a deboss sinks, one without
+/// Embosses come in as MitCad's (mitcad#458): a deboss sinks, one without
 /// a face starts from the sketch plane on its targets, one on a wall names
 /// the face the import finds.
 #[test]
@@ -262,7 +262,7 @@ fn embosses_come_in() {
     }
 }
 
-/// Bounding solids come in as Mitcad's `bounding_solid` features
+/// Bounding solids come in as MitCad's `bounding_solid` features
 /// (mitcad#460): the bodies the file names (none: every body), the margin
 /// its input's parameter (`gap`, or 0 when the file has none), and the
 /// box named as SolidCraft names it (the stored name, else `Bounding`).
@@ -332,7 +332,7 @@ fn boundary_fills_come_in() {
     assert!(!fill("CoreFill").remove_tools);
 }
 
-/// Convert Mesh (mitcad#462): a mesh import's body converted by Mitcad's
+/// Convert Mesh (mitcad#462): a mesh import's body converted by MitCad's
 /// `mesh_convert`, its tolerance the input's parameter (`d1 = tol`); a
 /// conversion of a body that is no mesh body fails and is a placeholder.
 #[test]
@@ -381,7 +381,7 @@ fn a_mesh_conversion_comes_in_as_convert_mesh() {
     assert_eq!(outcome(&report, "ConvertMesh1"), Outcome::Failed);
 }
 
-/// Patch, Stitch and Thicken come in as Mitcad's (mitcad#456): a patch of
+/// Patch, Stitch and Thicken come in as MitCad's (mitcad#456): a patch of
 /// sketch regions makes a surface body of the file's name, a thicken new
 /// bodies (the surface stays), a stitch keeps the first body's name; a
 /// crown is noted as left out.
@@ -447,7 +447,7 @@ fn surface_features_come_in() {
 }
 
 /// A sweep's end scale and second rail and a pattern along a chain of
-/// curves come in as Mitcad's options (mitcad#464); a spline fillet
+/// curves come in as MitCad's options (mitcad#464); a spline fillet
 /// radius is no placeholder any more (its edge is found by its pick, which
 /// the mock kernel does not place; OCCT's run is `cli.import_solidcraft`).
 #[test]

@@ -30,6 +30,7 @@
 #include "../framework/ModelShapes.hpp"
 #include "../framework/Numbers.hpp"
 #include "../framework/ParameterField.hpp"
+#include "../framework/Theme.hpp"
 #include "../framework/TestSync.hpp"
 #include "SketchOverlay.hpp"
 #include "SketchPreferences.hpp"
@@ -46,14 +47,19 @@ constexpr double kCurvePixels = 6.0;
 
 // The fields float over the view, whose background does not follow the
 // palette: their own light background needs its own dark text.
-const QString kFieldStyle = QStringLiteral(
-    "QLineEdit { background: rgba(255, 255, 255, 240); color: #202428; border: 1px solid #7aa6dc;"
-    " border-radius: 3px; padding: 1px 4px; selection-background-color: #7aa6dc;"
-    " selection-color: #101418; }");
-const QString kInvalidFieldStyle = QStringLiteral(
-    "QLineEdit { background: rgba(255, 240, 240, 240); color: #202428; border: 1px solid #c02020;"
-    " border-radius: 3px; padding: 1px 4px; selection-background-color: #7aa6dc;"
-    " selection-color: #101418; }");
+// The text and the frame from the role table (mitcad#1041); a value that is
+// not valid has the error's frame and fill.
+QString fieldStyle(bool invalid) {
+  const auto light = [](ColorRole role) { return themeColor(role, false).name(); };
+  return QStringLiteral("QLineEdit { background: %1; color: %2; border: 1px solid %3;"
+                        " border-radius: 3px; padding: 1px 4px; selection-background-color: %4;"
+                        " selection-color: %2; }")
+      .arg(invalid ? light(ColorRole::ErrorFill) : QStringLiteral("rgba(255, 255, 255, 240)"),
+           light(ColorRole::Text), invalid ? light(ColorRole::ErrorBorder) : light(ColorRole::Hover),
+           light(ColorRole::HoverFill));
+}
+const QString kFieldStyle = fieldStyle(false);
+const QString kInvalidFieldStyle = fieldStyle(true);
 
 // A dimension's value or a constraint's glyph of sketch `uid` as a
 // selection item ("fix:<entity>" for a fixed entity's lock).
@@ -343,6 +349,14 @@ void SketchOp::constrain(const QString& point, const Snap& snap) {
     }
     coincident(snap.curve);
     break;
+  case Snap::Kind::Quadrant: {
+    // At a circle's, arc's or ellipse's quadrant (mitcad#1024): on the
+    // curve, and level or plumb with its centre as the snap said.
+    for (const QJsonObject& held : quadrantHold(model(), point, snap)) {
+      addAuto(held, QStringLiteral("quadrant"));
+    }
+    break;
+  }
   case Snap::Kind::Intersection:
     coincident(snap.curve);
     coincident(snap.curve2);
@@ -370,6 +384,37 @@ void SketchOp::addConstraint(const QJsonObject& constraint) {
   QJsonObject cmd = command(QStringLiteral("sketch.add_constraint"));
   cmd.insert(QStringLiteral("constraint"), constraint);
   attempt(cmd);
+}
+
+bool SketchOp::addAuto(const QJsonObject& constraint, const QString& why) {
+  const QString text = constraintText(constraint);
+  if (m_autoTried.contains(text)) {
+    return false;
+  }
+  m_autoTried.insert(text);
+  QJsonObject cmd = command(QStringLiteral("sketch.add_constraint"));
+  cmd.insert(QStringLiteral("constraint"), constraint);
+  cmd.insert(QStringLiteral("auto"), true);
+  const QString kept = m_error;
+  const bool done = run(cmd);
+  const QString source = why.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(why);
+  if (done) {
+    // For UI tests.
+    qDebug().noquote() << QStringLiteral("Constraint added automatically: %1%2").arg(text, source);
+  } else {
+    // Not a hint: the drawing goes on as drawn; the model's reason for
+    // the log (redundant, conflict, moves p3 by …).
+    qDebug().noquote() << QStringLiteral("Auto constraint skipped: %1%2: %3")
+                              .arg(text, source, autoConstraintReason(m_error));
+  }
+  m_error = kept;
+  return done;
+}
+
+void SketchOp::addTangents(const QString& curve) {
+  for (const QJsonObject& tangent : tangentCandidates(model(), curve)) {
+    addAuto(tangent);
+  }
 }
 
 void SketchOp::addDimension(const QJsonObject& dimension, const QString& value) {
@@ -889,6 +934,8 @@ void SketchController::stopTool() {
   if (!m_tool) {
     return;
   }
+  // For UI tests (mitcad#1085: a right-click with nothing in progress).
+  qDebug().noquote() << QStringLiteral("Sketch tool ended: %1").arg(m_tool->name());
   // A tool may end itself from one of its own handlers: delete it later.
   SketchTool* retired = m_tool.release();
   QTimer::singleShot(0, this, [retired] { delete retired; });
@@ -2145,19 +2192,26 @@ void SketchController::hint(const QString& message) {
     m_host.showHint(message);
     return;
   }
-  // The prompt that follows a notice keeps it in front, once.
-  m_host.showHint(QStringLiteral("%1 %2").arg(m_notice, message));
+  // The prompt that follows a notice keeps it in front, once, at the
+  // notice's level (mitcad#1051).
+  m_host.showStatus(QStringLiteral("%1 %2").arg(m_notice, message), m_noticeLevel);
   m_notice.clear();
+  m_noticeLevel = NoticeLevel::Hint;
 }
 
-void SketchController::notice(const QString& message) {
+void SketchController::notice(const QString& message, NoticeLevel level) {
   m_notice = message.endsWith(QLatin1Char('.')) ? message : message + QLatin1Char('.');
+  m_noticeLevel = level;
   qDebug().noquote() << QStringLiteral("Sketch notice: %1").arg(m_notice);
-  m_host.showHint(m_notice);
+  if (level != NoticeLevel::Hint) {
+    qDebug().noquote() << QStringLiteral("Sketch notice level: %1").arg(noticeLevelName(level));
+  }
+  m_host.showStatus(m_notice, level);
 }
 
 void SketchController::error(const QString& message) {
   m_notice.clear();
+  m_noticeLevel = NoticeLevel::Hint;
   m_host.showError(message);
 }
 
@@ -2796,7 +2850,8 @@ void SketchController::setFields(const QVector<FieldSpec>& fields) {
     edit->setPlaceholderText(spec.label);
     auto* label = new QLabel(spec.label, &m_viewer);
     label->setObjectName(QStringLiteral("sketchFieldLabel_") + spec.id);
-    label->setStyleSheet(QStringLiteral("QLabel { color: #202830; background: #f5f7fa; padding: 2px 4px; }"));
+    label->setStyleSheet(QStringLiteral("QLabel { color: %1; background: %2; padding: 2px 4px; }")
+                             .arg(themeColor(ColorRole::Text, false).name(), themeColor(ColorRole::Surface, false).name()));
     label->setAttribute(Qt::WA_TransparentForMouseEvents);
     label->adjustSize();
     field.label = label;

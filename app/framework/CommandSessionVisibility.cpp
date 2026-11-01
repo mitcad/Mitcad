@@ -102,7 +102,7 @@ bool CommandSession::runOutsideRange(const QJsonArray& commands, const QString& 
     if (!undone.succeeded()) {
       m_asyncPending = false;
       if (!undone.error.isEmpty() && m_presenter) {
-        m_presenter->setMessage(undone.error, true);
+        m_presenter->setMessage(undone.error, NoticeLevel::Error);
       }
       schedulePreview();
       if (m_cancelRequested) { finishAsyncCancel(); }

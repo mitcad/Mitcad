@@ -146,18 +146,18 @@ RenderEnvironmentDialog::RenderEnvironmentDialog(DocumentHost& host, OcctViewer&
   QFormLayout* background = group(tr("Background"));
   background->addRow(tr("Show"), addChoice(QStringLiteral("background.mode"),
                                            {{QStringLiteral("view"), tr("View Background")},
-                                            {QStringLiteral("color"), tr("Colour")},
+                                            {QStringLiteral("color"), tr("Color")},
                                             {QStringLiteral("environment"), tr("Environment")}}));
   auto* colorRow = new QHBoxLayout;
   m_colorButton = new QToolButton;
-  m_colorButton->setToolTip(tr("Choose a colour"));
+  m_colorButton->setToolTip(tr("Choose a color"));
   m_color = new QLineEdit;
   m_color->setToolTip(tr("sRGB as #rrggbb"));
   m_color->setMaximumWidth(110);
   colorRow->addWidget(m_colorButton);
   colorRow->addWidget(m_color);
   colorRow->addStretch(1);
-  background->addRow(tr("Colour"), colorRow);
+  background->addRow(tr("Color"), colorRow);
   connect(m_colorButton, &QToolButton::clicked, this, &RenderEnvironmentDialog::pickColor);
   connect(m_color, &QLineEdit::editingFinished, this, [this] {
     if (m_building) {
@@ -165,7 +165,7 @@ RenderEnvironmentDialog::RenderEnvironmentDialog(DocumentHost& host, OcctViewer&
     }
     const QColor color(m_color->text().trimmed());
     if (!color.isValid()) {
-      m_message->setText(tr("'%1' is no colour: write it as #rrggbb.").arg(m_color->text()));
+      m_message->setText(tr("“%1” is no color: write it as #rrggbb.").arg(m_color->text()));
       refresh();
       return;
     }
@@ -394,7 +394,7 @@ void RenderEnvironmentDialog::change(const QString& key, const QJsonValue& value
 
 void RenderEnvironmentDialog::pickColor() {
   const QColor color =
-      dialogColor(colorOf(value(QStringLiteral("background.color"))), this, tr("Background Colour"));
+      dialogColor(colorOf(value(QStringLiteral("background.color"))), this, tr("Background Color"));
   if (color.isValid()) {
     change(QStringLiteral("background.color"), colorJson(color));
   }
@@ -645,14 +645,14 @@ QWidget* RenderEnvironmentDialog::buildLights() {
             tr("Where the light shines (x, y, z; its length does not matter)"));
   auto* colorRow = new QHBoxLayout;
   m_lightColorButton = new QToolButton;
-  m_lightColorButton->setToolTip(tr("Choose the light's colour"));
+  m_lightColorButton->setToolTip(tr("Choose the light's color"));
   m_lightColor = new QLineEdit;
   m_lightColor->setToolTip(tr("sRGB as #rrggbb"));
   m_lightColor->setMaximumWidth(110);
   colorRow->addWidget(m_lightColorButton);
   colorRow->addWidget(m_lightColor);
   colorRow->addStretch(1);
-  form->addRow(tr("Colour"), colorRow);
+  form->addRow(tr("Color"), colorRow);
   connect(m_lightColorButton, &QToolButton::clicked, this, &RenderEnvironmentDialog::pickLightColor);
   connect(m_lightColor, &QLineEdit::editingFinished, this, [this] {
     if (m_building) {
@@ -660,7 +660,7 @@ QWidget* RenderEnvironmentDialog::buildLights() {
     }
     const QColor color(m_lightColor->text().trimmed());
     if (!color.isValid()) {
-      m_message->setText(tr("'%1' is no colour: write it as #rrggbb.").arg(m_lightColor->text()));
+      m_message->setText(tr("“%1” is no color: write it as #rrggbb.").arg(m_lightColor->text()));
       refreshLights();
       return;
     }
@@ -876,7 +876,7 @@ void RenderEnvironmentDialog::changeLight(const QJsonObject& fields, const QStri
 
 void RenderEnvironmentDialog::pickLightColor() {
   const QColor color =
-      dialogColor(colorOf(chosenLight().value(QStringLiteral("color"))), this, tr("Light Colour"));
+      dialogColor(colorOf(chosenLight().value(QStringLiteral("color"))), this, tr("Light Color"));
   if (color.isValid()) {
     changeLight({{QStringLiteral("color"), colorJson(color)}}, QStringLiteral("color = %1").arg(color.name()));
   }

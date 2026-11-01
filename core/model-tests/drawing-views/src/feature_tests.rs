@@ -416,7 +416,7 @@ fn lines_arcs_and_texts_are_drawn_on_the_sheet_and_in_views() {
         (
             json!({"cmd": "add_drawing_annotation", "drawing": "D1", "type": "arc", "sheet": 0,
                    "points": [[0, 0], [1, 0]]}),
-            "centre, start and end",
+            "center, start and end",
         ),
         (
             json!({"cmd": "add_drawing_annotation", "drawing": "D1", "type": "line", "view": 1,
@@ -481,7 +481,7 @@ fn a_centre_pattern_marks_every_hole_of_a_pattern_in_one_step() {
     let id = added["annotation"].as_u64().unwrap();
     assert_eq!(
         undo_label(&doc),
-        format!("Add centre pattern {id} to Drawing1")
+        format!("Add center pattern {id} to Drawing1")
     );
     let entry = annotation(&doc, id);
     assert_eq!(entry["broken"], false, "{entry}");

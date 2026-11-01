@@ -530,7 +530,7 @@ fn nearest(entity: &Value, view: &View, projected: &[Curve2]) -> String {
                 offer(
                     d,
                     format!(
-                        "centre off by {:.2e}, radius {:.4} against {:.4}",
+                        "center off by {:.2e}, radius {:.4} against {:.4}",
                         dist(center, x),
                         radius,
                         r

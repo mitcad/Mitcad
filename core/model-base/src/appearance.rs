@@ -28,6 +28,8 @@ use std::sync::{Arc, LazyLock, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::material_class::MaterialClass;
+
 /// An sRGB colour (the encoded values a colour picker shows), each
 /// component in [0, 1].
 pub type Color = [f64; 3];
@@ -68,6 +70,13 @@ pub struct Appearance {
     /// only the base colour.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub texture: Option<Texture>,
+    /// Its class (mitcad#1102): what it is a look of, by which the pickers
+    /// offer a material's class first. Set by the user, or on a filament's
+    /// colour (FDM Plastic); none: a library's by its id
+    /// ([`library_class`]), else Other ([`Appearance::material_class`]).
+    /// Written only when set: older versions refuse the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class: Option<MaterialClass>,
 }
 
 /// An image for an appearance's base colour (PNG or JPEG), and the other
@@ -209,7 +218,7 @@ impl TextureSource {
     fn check(&self) -> Result<(), String> {
         if !valid_id(&self.id) {
             return Err(format!(
-                "texture: source: '{}' is no source id: use letters, digits, '_' and '-'",
+                "texture: source: {} is no source id: use letters, digits, '_' and '-'",
                 self.id
             ));
         }
@@ -241,7 +250,7 @@ impl TextureSource {
             && !(url.starts_with("https://") || url.starts_with("http://"))
         {
             return Err(format!(
-                "texture: source: the url must be an http or https address, got '{url}'"
+                "texture: source: the url must be an http or https address, got “{url}”"
             ));
         }
         Ok(())
@@ -546,6 +555,7 @@ impl Default for Appearance {
             emission_color: [1.0, 1.0, 1.0],
             opacity: 1.0,
             texture: None,
+            class: None,
         }
     }
 }
@@ -555,6 +565,14 @@ impl Appearance {
     /// colour.
     pub fn display_color(&self) -> Color {
         self.base_color
+    }
+
+    /// Its class (mitcad#1102): its own, else a library appearance's by
+    /// its id, else Other.
+    pub fn material_class(&self) -> MaterialClass {
+        self.class
+            .or_else(|| library_class(&self.id))
+            .unwrap_or(MaterialClass::Other)
     }
 
     /// Why the parameters cannot be kept, if they cannot (the id is checked
@@ -569,7 +587,7 @@ impl Appearance {
         ] {
             if !color.iter().all(|c| (0.0..=1.0).contains(c)) {
                 return Err(format!(
-                    "{field}: colour components must be between 0 and 1, got {color:?}"
+                    "{field}: color components must be between 0 and 1, got {color:?}"
                 ));
             }
         }
@@ -627,6 +645,10 @@ pub struct AppearanceChange {
     /// A texture, or null for none.
     #[serde(default, deserialize_with = "present")]
     pub texture: Option<Option<Texture>>,
+    /// Its class (mitcad#1102), or null for none (Other); `other` is
+    /// kept as none.
+    #[serde(default, deserialize_with = "present")]
+    pub class: Option<Option<MaterialClass>>,
 }
 
 /// A field that is there, also as null (`Some(None)`).
@@ -661,6 +683,9 @@ impl AppearanceChange {
         set(&mut appearance.emission_color, &self.emission_color);
         set(&mut appearance.opacity, &self.opacity);
         set(&mut appearance.texture, &self.texture);
+        if let Some(class) = self.class {
+            appearance.class = class.filter(|c| *c != MaterialClass::Other);
+        }
     }
 }
 
@@ -684,6 +709,8 @@ struct Entry {
     transmission: f64,
     coat: f64,
     emission: f64,
+    /// Its class (mitcad#1102), never written: the id gives it.
+    class: MaterialClass,
 }
 
 const fn dielectric(id: &'static str, name: &'static str, rgb: u32, roughness: f64) -> Entry {
@@ -697,12 +724,14 @@ const fn dielectric(id: &'static str, name: &'static str, rgb: u32, roughness: f
         transmission: 0.0,
         coat: 0.0,
         emission: 0.0,
+        class: MaterialClass::Other,
     }
 }
 
 const fn metal(id: &'static str, name: &'static str, rgb: u32, roughness: f64) -> Entry {
     Entry {
         metalness: 1.0,
+        class: MaterialClass::Metal,
         ..dielectric(id, name, rgb, roughness)
     }
 }
@@ -721,6 +750,23 @@ const fn clear(id: &'static str, name: &'static str, rgb: u32, roughness: f64) -
     }
 }
 
+/// A General Plastic's look (mitcad#1102).
+const fn plastic(entry: Entry) -> Entry {
+    Entry {
+        class: MaterialClass::Plastic,
+        ..entry
+    }
+}
+
+/// A resin print's look (mitcad#1102): a smooth, slightly glossy
+/// photopolymer.
+const fn resin(entry: Entry) -> Entry {
+    Entry {
+        class: MaterialClass::Resin,
+        ..entry
+    }
+}
+
 /// The library in the order the application lists it. The first sixteen
 /// were colours only before mitcad#46 and keep their colours.
 const ENTRIES: &[Entry] = &[
@@ -735,8 +781,18 @@ const ENTRIES: &[Entry] = &[
     paint("paint_yellow", "Paint - Yellow", 0xe8c420),
     paint("paint_black", "Paint - Black", 0x2a2c30),
     paint("paint_white", "Paint - White", 0xf0f0ec),
-    dielectric("plastic_black", "Plastic - Black", 0x34363a, 0.4),
-    dielectric("plastic_orange", "Plastic - Orange", 0xe87a1e, 0.35),
+    plastic(dielectric(
+        "plastic_black",
+        "Plastic - Black",
+        0x34363a,
+        0.4,
+    )),
+    plastic(dielectric(
+        "plastic_orange",
+        "Plastic - Orange",
+        0xe87a1e,
+        0.35,
+    )),
     Entry {
         specular: 0.5,
         ..dielectric("rubber", "Rubber", 0x222224, 0.85)
@@ -749,10 +805,15 @@ const ENTRIES: &[Entry] = &[
     metal("chrome", "Chrome", 0xc4c7ca, 0.05),
     metal("gold_polished", "Gold - Polished", 0xf5d27a, 0.12),
     metal("steel_polished", "Steel - Polished", 0xb8bcc2, 0.12),
-    dielectric("plastic_red", "Plastic - Red", 0xc8201e, 0.3),
-    dielectric("plastic_white", "Plastic - White", 0xeeeeea, 0.35),
-    dielectric("plastic_blue", "Plastic - Blue", 0x1f4fb0, 0.3),
-    clear("plastic_clear", "Plastic - Clear", 0xf4f6f8, 0.1),
+    plastic(dielectric("plastic_red", "Plastic - Red", 0xc8201e, 0.3)),
+    plastic(dielectric(
+        "plastic_white",
+        "Plastic - White",
+        0xeeeeea,
+        0.35,
+    )),
+    plastic(dielectric("plastic_blue", "Plastic - Blue", 0x1f4fb0, 0.3)),
+    plastic(clear("plastic_clear", "Plastic - Clear", 0xf4f6f8, 0.1)),
     clear("glass_clear", "Glass - Clear", 0xf6fafa, 0.0),
     clear("glass_frosted", "Glass - Frosted", 0xf0f4f4, 0.45),
     Entry {
@@ -767,6 +828,10 @@ const ENTRIES: &[Entry] = &[
         emission: 5.0,
         ..dielectric("emissive_white", "Emissive - White", 0xffffff, 0.5)
     },
+    // Resin prints (mitcad#1102).
+    resin(dielectric("resin_grey", "Resin - Grey", 0x8c8f93, 0.3)),
+    resin(dielectric("resin_white", "Resin - White", 0xf2f2ee, 0.3)),
+    resin(clear("resin_clear", "Resin - Clear", 0xf2f6f6, 0.08)),
 ];
 
 fn srgb(rgb: u32) -> Color {
@@ -800,6 +865,13 @@ pub fn library_appearance(id: &str) -> Option<&'static Appearance> {
     library().iter().find(|a| a.id == id)
 }
 
+/// A library appearance's class by its id (mitcad#1102): Steel, Aluminum,
+/// Brass, Copper, Iron, Chrome and Gold are Metal, the Plastic ones General
+/// Plastic, the Resin ones Resin, the others Other. Never stored.
+pub fn library_class(id: &str) -> Option<MaterialClass> {
+    ENTRIES.iter().find(|e| e.id == id).map(|e| e.class)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -828,6 +900,69 @@ mod tests {
         );
         assert_eq!(library_appearance("chrome").unwrap().metalness, 1.0);
         assert_eq!(library_appearance("glass").unwrap().transmission, 1.0);
+    }
+
+    /// mitcad#1102: a built-in's class comes from its id and is not
+    /// written; one of the user's round-trips; `other` is none.
+    #[test]
+    fn library_classes_come_from_the_ids_and_own_ones_round_trip() {
+        let class = |id: &str| library_appearance(id).unwrap().material_class();
+        for id in [
+            "steel_satin",
+            "aluminum_anodized",
+            "brass_polished",
+            "copper",
+            "cast_iron",
+            "chrome",
+            "gold_polished",
+            "steel_polished",
+        ] {
+            assert_eq!(class(id), MaterialClass::Metal, "{id}");
+        }
+        for id in [
+            "plastic_black",
+            "plastic_orange",
+            "plastic_red",
+            "plastic_white",
+            "plastic_blue",
+            "plastic_clear",
+        ] {
+            assert_eq!(class(id), MaterialClass::Plastic, "{id}");
+        }
+        for id in ["paint_red", "rubber", "glass", "wood_oak", "emissive_white"] {
+            assert_eq!(class(id), MaterialClass::Other, "{id}");
+        }
+        for id in ["resin_grey", "resin_white", "resin_clear"] {
+            assert_eq!(class(id), MaterialClass::Resin, "{id}");
+        }
+        for appearance in library() {
+            assert_eq!(appearance.class, None, "{}", appearance.id);
+            let text = serde_json::to_value(appearance).unwrap();
+            assert!(text.get("class").is_none(), "{text}");
+        }
+        // One of the user's: none is Other and not written; a class set
+        // round-trips; `other` sets none.
+        let mut own = Appearance {
+            id: "my_red".to_owned(),
+            name: "My Red".to_owned(),
+            ..Appearance::default()
+        };
+        assert_eq!(own.material_class(), MaterialClass::Other);
+        let change: AppearanceChange =
+            serde_json::from_value(serde_json::json!({"class": "fdm_plastic"})).unwrap();
+        change.apply_to(&mut own);
+        let text = serde_json::to_value(&own).unwrap();
+        assert_eq!(text["class"], "fdm_plastic");
+        let back: Appearance = serde_json::from_value(text).unwrap();
+        assert_eq!(back, own);
+        assert_eq!(back.material_class(), MaterialClass::FdmPlastic);
+        let change: AppearanceChange =
+            serde_json::from_value(serde_json::json!({"class": "other"})).unwrap();
+        change.apply_to(&mut own);
+        assert_eq!(own.class, None);
+        assert!(serde_json::to_value(&own).unwrap().get("class").is_none());
+        let wood = serde_json::from_value::<AppearanceChange>(serde_json::json!({"class": "wood"}));
+        assert!(wood.is_err());
     }
 
     #[test]

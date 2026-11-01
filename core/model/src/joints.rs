@@ -420,7 +420,7 @@ pub fn origin_frame(r: &mut impl Resolver, geometry: &GeomRef) -> Result<Transfo
                 S::Torus { center, axis, .. } => Ok(frame_along(center, axis)),
                 S::Sphere { center, .. } => Ok(identity_at(center)),
                 S::Other { kind } => Err(format!(
-                    "face {face} ({kind}) has no plane, axis or centre for a joint"
+                    "face {face} ({kind}) has no plane, axis or center for a joint"
                 )),
             }
         }
@@ -689,7 +689,13 @@ pub fn referenced_occurrences(def: &FeatureDef) -> Vec<OccurrenceUid> {
         FeatureDef::SplitBody(s) => s.tool_links.values().collect(),
         FeatureDef::Extrude(x) => x.object_links.values().collect(),
         FeatureDef::Revolve(r) => r.object_links.values().collect(),
-        FeatureDef::ConstructionPlane(p) => p.links.values().collect(),
+        FeatureDef::ConstructionPlane(p) => {
+            p.links.values().chain(p.datum_links.values()).collect()
+        }
+        FeatureDef::ConstructionAxis(a) => a.links.values().chain(a.datum_links.values()).collect(),
+        FeatureDef::ConstructionPoint(p) => {
+            p.links.values().chain(p.datum_links.values()).collect()
+        }
         FeatureDef::Derive(d) => d.links.values().collect(),
         FeatureDef::BodyTransfer(t) => vec![&t.link],
         // A pulley's or gear's seat on another component's shaft (mitcad#578).

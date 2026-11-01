@@ -1,35 +1,126 @@
 # SPDX-License-Identifier: MIT
 # Synthetic geometry uses real warning/error states from the shared model.
+# One level per surface (mitcad#1040): an error and a warning keep their
+# levels on the status line, the message band, the selection card, the
+# Browser row and the command panel's box. The message band above the
+# timeline (mitcad#1098): an error stays until it is closed or the next
+# command starts, a hint fades and leaves the stub, the stub opens the
+# history and a feature's message selects the feature.
 expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
-expect-ever 'Feature warnings: Fillet1:'
+expect-ever 'Feature warnings: Tilted: .*; Turned: '
 expect-ever 'Failed features: Missing edge:'
 sleep 800
 native-resize 1280 820
 native-appearance light
 expect-native-text native.browser.failures '^1 failed$'
-expect-native-text native.browser.warnings '^1 warning'
+# The plane and the move at 90 radians; Fillet1, built 0.1 % smaller, is
+# information (mitcad#1106).
+expect-native-text native.browser.warnings '^2 warnings'
 expect-native-layout
 expect-native-history
 screenshot '${MITCAD_TEST_WORK}/issues-light.png'
 mark
 native-click native.browser.failures
 expect-log 'Revealed Missing edge'
+expect-log 'Status error: Missing edge:'
+expect-log 'Native message band: full error Missing edge:'
+expect-log 'Selection card level Missing edge: error'
 expect-native-history F4
 expect-native-layout
 mark
-native-click native.browser.warnings
-expect-log 'Revealed Fillet1'
-expect-native-history F3
+native-click native.history.F5
+expect-log 'Selection card level Tilted: warning'
+expect-native-history F5
 expect-native-layout
+# The error stays longer than a hint (6 s) until its x closes it into
+# the stub.
+expect-native-text native.messageBand.text '^Failed: Missing edge:'
+expect-native-visible native.messageBand true
+expect-ever 'Native message band placed: full -?[0-9]+,-?[0-9]+ [1-9][0-9]*x[1-9][0-9]*, row '
+screenshot '${MITCAD_TEST_WORK}/band-error-light.png'
+sleep 7000
+expect-native-visible native.messageBand.close true
+expect-native-text native.messageBand.text '^Failed: Missing edge:'
+mark
+native-click native.messageBand.close
+expect-log 'Message band stub: .*[(]closed[)]$'
+expect-native-visible native.messageBand.stub true
+# A hint fades after 6 s and leaves its stub.
+mark
+test-status-message hint 'A hint fades'
+expect-log 'Native message band: full hint A hint fades'
+sleep 3000
+expect-native-text native.messageBand.text '^A hint fades$'
+wait-log 'Message band stub: hint A hint fades [(]faded[)]' 12
+expect-log 'Native message band: stub hint A hint fades'
+expect-native-text native.messageBand.stub '^A hint fades$'
+screenshot '${MITCAD_TEST_WORK}/band-stub-light.png'
+# The stub opens the history, newest first; the error's row selects its
+# feature and closes the history.
+mark
+native-click native.messageBand.stub
+expect-log 'Message history: [0-9]+ entries'
+expect-log 'Message history row 1: hint A hint fades'
+expect-native-text native.messageHistory.row1 'A hint fades$'
+expect-native-text native.messageHistory.F4 'Failed: Missing edge:'
+expect-native-attached native.messageHistory native.messageBand.stub above
+screenshot-screen '${MITCAD_TEST_WORK}/band-history-light.png'
+mark
+native-click native.messageHistory.F4
+expect-log 'Message history: selected F4'
+expect-log 'Message history: closed'
+expect-native-history F4
+# A warning on the status line stays a warning in the message band.
+mark
+test-status-message warning 'A warning stays a warning'
+expect-log 'Status warning: A warning stays a warning'
+expect-log 'Native message band: full warning A warning stays a warning'
+expect-native-text native.messageBand.text '^Warning: A warning stays a warning$'
+screenshot '${MITCAD_TEST_WORK}/issues-status-warning.png'
+# The next command (an edit) closes an error into the stub.
+mark
+test-status-message error 'An error until the next command'
+expect-log 'Native message band: full error An error until the next command'
+# The warned plane's Browser row has the warning level.
+expect-ever 'Browser level .*/Tilted: warning'
+# The command panel shows the warning in its box, with its word.
+mark
+native-activate native.history.F5
+expect-log 'Editing F5 with Plane at Angle'
+expect-log 'Message band stub: .*[(]next command[)]$'
+wait-log 'Panel Plane at Angle message box: warning: ' 30
+screenshot '${MITCAD_TEST_WORK}/issues-warning-panel.png'
+native-key-now Escape
+sleep 250
 native-resize 900 640
-expect-native-history F3
+expect-native-history F5
 expect-native-layout
 screenshot '${MITCAD_TEST_WORK}/issues-compact.png'
 native-appearance dark
 sleep 250
-expect-native-history F3
+expect-native-history F5
 expect-native-layout
 screenshot '${MITCAD_TEST_WORK}/issues-dark.png'
+# The message band in the dark: an error, a warning, the stub, the history.
+mark
+test-status-message error 'An error in the dark'
+expect-log 'Native message band: full error An error in the dark'
+expect-native-visible native.messageBand true
+screenshot '${MITCAD_TEST_WORK}/band-error-dark.png'
+native-click native.messageBand.close
+test-status-message warning 'A warning in the dark'
+expect-log 'Native message band: full warning A warning in the dark'
+screenshot '${MITCAD_TEST_WORK}/band-warning-dark.png'
+native-click native.messageBand.close
+expect-log 'Native message band: stub warning A warning in the dark'
+screenshot '${MITCAD_TEST_WORK}/band-stub-dark.png'
+mark
+native-click native.messageBand.stub
+expect-log 'Message history: [0-9]+ entries'
+expect-native-attached native.messageHistory native.messageBand.stub above
+screenshot-screen '${MITCAD_TEST_WORK}/band-history-dark.png'
+native-click native.messageBand.stub
+expect-log 'Message history: closed'
 native-resize 1280 820
 native-appearance light
 expect-native-layout

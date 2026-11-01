@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# The Qt frontend, by default or for a run (--chrome) (mitcad#1056,
+# tools/ui-macos-native-frontend-test.sh): it starts with the design open,
+# and the script's end quits it.
+expect-ever '^Frontend: qt \((default|--chrome)\)$'
+expect-never '^Native UI: AppKit shell'
+wait-idle
+expect-model-bodies 1 48000

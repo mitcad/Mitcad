@@ -439,8 +439,7 @@ pub(super) fn export_to(
     name: &str,
     dialect: &str,
 ) -> (Value, Vec<u8>) {
-    let dir = std::env::temp_dir().join(format!("mitcad-print-export-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("print-export");
     let path = dir.join(name).to_str().unwrap().to_owned();
     let result = command(
         doc,
@@ -669,8 +668,7 @@ fn overhangs_slowed_for_cooling_at_95_percent_read_and_write_back() {
 
     // Imported into a design whose root uses the first material: the
     // export writes 95% again.
-    let dir = std::env::temp_dir().join(format!("mitcad-print-import-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("print-import");
     let path = dir.join("mount.3mf").to_str().unwrap().to_owned();
     std::fs::write(&path, &data).unwrap();
     let mut doc = Document::new(MockKernel::default());
@@ -739,8 +737,7 @@ fn a_filament_override_of_some_slots_writes_nil_for_the_others() {
     assert_eq!(lengths, [None, None, Some(&json!(0.4))]);
 
     // A body of each material, each in a component of its own.
-    let dir = std::env::temp_dir().join(format!("mitcad-print-override-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("print-override");
     let path = dir.join("override.3mf").to_str().unwrap().to_owned();
     std::fs::write(&path, &data).unwrap();
     let mut doc = Document::new(MockKernel::default());
@@ -817,8 +814,7 @@ fn a_filament_override_of_some_slots_writes_nil_for_the_others() {
 /// of each of `materials` (indices of the materials read), each in a
 /// component of its own.
 pub(super) fn design_of(file: &str, data: &[u8], materials: &[usize]) -> Document<MockKernel> {
-    let dir = std::env::temp_dir().join(format!("mitcad-print-slots-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("print-slots");
     let path = dir.join(file).to_str().unwrap().to_owned();
     std::fs::write(&path, data).unwrap();
     let mut doc = Document::new(MockKernel::default());
@@ -1070,5 +1066,186 @@ fn prusaslicer_lists_of_choices_are_comma_separated() {
     assert_eq!(
         logic,
         [&json!("uniform_cooling"), &json!("consistent_surface")]
+    );
+}
+
+/// mitcad#1062: a material that names the slicer's filament preset it is
+/// based on (`filament_settings_id`, kept per slicer, as the Materials
+/// window's Filament tab sets it with `edit_material`) is written under
+/// that preset's name and with it as the preset its filament inherits
+/// from (`inherits_group`), so that the slicer builds on its own preset; a
+/// material that names none keeps its own name and inherits from nothing.
+/// The Bambu Studio family takes a member's name for the others;
+/// PrusaSlicer has its own, and its project config keeps the parents as
+/// `inherits_cummulative` (the process, each filament, the printer;
+/// mitcad#1065).
+#[test]
+fn a_material_s_slicer_preset_is_written_and_inherited() {
+    let mut doc = design();
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "create_material", "id": "shop-petg-hf", "name": "Shop PETG HF",
+             "based_on": "pla", "filament": {"filament_type": "PETG"}},
+            {"cmd": "set_component_material", "component": "Arm", "material": "shop-petg-hf"},
+        ]),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "edit_material", "id": "shop-petg-hf",
+               "filament": {"filament_settings_id": {"bambu_studio": "Generic PETG HF @BBL X1C",
+                                                     "prusaslicer": "Prusament PETG"}}}),
+    );
+    let project_settings = |data: &[u8]| -> Map<String, Value> {
+        let package = mitcad_3mf::read_package(data).unwrap();
+        serde_json::from_slice(package.file("Metadata/project_settings.config").unwrap()).unwrap()
+    };
+    // Bambu Studio: the root's PLA first (no preset: its own name), then
+    // the arm's material under its preset; the process names no preset,
+    // the printer its own.
+    let (_, data) = export_to(&mut doc, "preset-bambu.3mf", "bambu_studio");
+    let settings = project_settings(&data);
+    assert_eq!(
+        settings["filament_settings_id"],
+        json!(["PLA Plastic", "Generic PETG HF @BBL X1C"])
+    );
+    assert_eq!(
+        settings["inherits_group"],
+        json!(["", "", "Generic PETG HF @BBL X1C", "Bench 0.4 nozzle"])
+    );
+    // OrcaSlicer takes Bambu Studio's name.
+    let (_, data) = export_to(&mut doc, "preset-orca.3mf", "orcaslicer");
+    let settings = project_settings(&data);
+    assert_eq!(
+        settings["filament_settings_id"][1],
+        "Generic PETG HF @BBL X1C"
+    );
+    assert_eq!(settings["inherits_group"][2], "Generic PETG HF @BBL X1C");
+    // PrusaSlicer its own.
+    let (_, data) = export_to(&mut doc, "preset-prusa.3mf", "prusaslicer");
+    let package = mitcad_3mf::read_package(&data).unwrap();
+    let config = std::str::from_utf8(package.file("Metadata/Slic3r_PE.config").unwrap())
+        .unwrap()
+        .to_owned();
+    assert!(
+        config.contains("; filament_settings_id = \"PLA Plastic\";\"Prusament PETG\"\n"),
+        "{config}"
+    );
+    // The arm's filament inherits from its preset, the root's PLA from
+    // nothing; the process names no preset, the printer its PrusaSlicer one.
+    assert!(
+        config.contains("; inherits_cummulative = ;;\"Prusament PETG\";\"Bench MK\"\n"),
+        "{config}"
+    );
+
+    // Without a preset again (the field emptied): its own name, inheriting
+    // from nothing.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_material", "id": "shop-petg-hf",
+               "filament": {"filament_settings_id": null}}),
+    );
+    let (_, data) = export_to(&mut doc, "no-preset.3mf", "bambu_studio");
+    let settings = project_settings(&data);
+    assert_eq!(
+        settings["filament_settings_id"],
+        json!(["PLA Plastic", "Shop PETG HF"])
+    );
+    assert_eq!(
+        settings["inherits_group"],
+        json!(["", "", "", "Bench 0.4 nozzle"])
+    );
+    let (_, data) = export_to(&mut doc, "no-preset-prusa.3mf", "prusaslicer");
+    let package = mitcad_3mf::read_package(&data).unwrap();
+    let config = std::str::from_utf8(package.file("Metadata/Slic3r_PE.config").unwrap())
+        .unwrap()
+        .to_owned();
+    assert!(
+        config.contains("; inherits_cummulative = ;;;\"Bench MK\"\n"),
+        "{config}"
+    );
+}
+
+#[test]
+fn a_project_s_slots_of_one_preset_in_two_colours_stay_two_materials() {
+    // Four slots as a slicer's project keeps them: one preset in white and
+    // in black, and presets whose names differ only in the type word. A
+    // read filament keeps its colour only as its appearance (mitcad#1053),
+    // so the filament merge (mitcad#1054) compares that: else the two
+    // PETG slots became one material and the TPU slid into the third slot.
+    let settings = json!({
+        "printer_settings_id": "Bench Mini 0.4 nozzle",
+        "printable_area": ["0x0", "180x0", "180x180", "0x180"],
+        "nozzle_diameter": ["0.4"],
+        "print_settings_id": "Standard",
+        "layer_height": "0.2",
+        "filament_settings_id": ["Generic PETG @Bench Mini", "Generic PLA @Bench Mini",
+                                 "Generic PETG @Bench Mini", "Generic TPU @Bench Mini"],
+        "filament_type": ["PETG", "PLA", "PETG", "TPU"],
+        "filament_colour": ["#FFFFFF", "#FFFFFF", "#000000", "#FFFFFF"],
+        "nozzle_temperature": ["255", "220", "255", "240"],
+        "filament_density": ["1.27", "1.24", "1.27", "1.24"],
+    });
+    let data = project(
+        "BambuStudio-02.00.00.00",
+        vec![(
+            "Metadata/project_settings.config",
+            settings.to_string().into_bytes(),
+        )],
+        Vec::new(),
+    );
+    let dir = mitcad_model::testing::unique_temp_dir("print-colour-slots");
+    let path = dir.join("slots.3mf").to_str().unwrap().to_owned();
+    std::fs::write(&path, &data).unwrap();
+    let mut doc = Document::new(MockKernel::default());
+    let result = command(
+        &mut doc,
+        json!({"cmd": "import_print_profile", "path": path, "into": "design"}),
+    );
+    let names: Vec<&str> = result["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "Generic PETG @Bench Mini",
+            "Generic PLA @Bench Mini",
+            // Two materials of a design never share a name: the second
+            // slot of the same preset takes the design's next free name.
+            "Generic PETG @Bench Mini (1)",
+            "Generic TPU @Bench Mini"
+        ],
+        "{result}"
+    );
+    let id = |i: usize| result["materials"][i]["id"].as_str().unwrap().to_owned();
+    let black = doc.material(&id(2)).unwrap();
+    assert_eq!(black.filament["filament_type"], "PETG");
+    assert_eq!(black.filament["temperature"], 255.0);
+    assert_eq!(black.density, 1.27);
+    assert!(black.variants.is_empty());
+    let tpu = doc.material(&id(3)).unwrap();
+    assert_eq!(tpu.filament["filament_type"], "TPU");
+    assert_eq!(tpu.filament["temperature"], 240.0);
+
+    // A slot each, written back in the project's order and colours.
+    let mut doc = design_of("slots.3mf", &data, &[0, 1, 2, 3]);
+    let (_, back) = export_to(&mut doc, "slots-back.3mf", "bambu_studio");
+    let package = mitcad_3mf::read_package(&back).unwrap();
+    let written: Map<String, Value> =
+        serde_json::from_slice(package.file("Metadata/project_settings.config").unwrap()).unwrap();
+    assert_eq!(
+        written["filament_type"],
+        json!(["PETG", "PLA", "PETG", "TPU"])
+    );
+    assert_eq!(
+        written["filament_settings_id"],
+        settings["filament_settings_id"]
+    );
+    assert_eq!(
+        written["filament_colour"],
+        json!(["#FFFFFF", "#FFFFFF", "#000000", "#FFFFFF"])
     );
 }

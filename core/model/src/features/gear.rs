@@ -1330,7 +1330,7 @@ impl FeatureInfo for GearDef {
         if let Some(at) = &self.at {
             let name = self.kind.name();
             if self.kind == GearKind::Rack {
-                return Err("a rack keeps its plane and centre: it is not placed by at".to_owned());
+                return Err("a rack keeps its plane and center: it is not placed by at".to_owned());
             }
             if self.pair {
                 return Err(
@@ -1339,7 +1339,7 @@ impl FeatureInfo for GearDef {
             }
             if self.plane.is_some() || !is_origin(&self.center) || self.seat.is_some() {
                 return Err(format!(
-                    "a {name} placed by at takes no plane, centre or seat of its own"
+                    "a {name} placed by at takes no plane, center or seat of its own"
                 ));
             }
             if self.bore_clearance.is_some() && self.bore.is_some() {
@@ -1386,7 +1386,7 @@ impl FeatureInfo for GearDef {
             }
             if self.plane.is_some() || !is_origin(&self.center) {
                 return Err(format!(
-                    "a {name} on a shaft takes its plane and centre from the shaft"
+                    "a {name} on a shaft takes its plane and center from the shaft"
                 ));
             }
             if self.mesh_with.is_some() {

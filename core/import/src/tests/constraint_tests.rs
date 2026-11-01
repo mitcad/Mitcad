@@ -545,7 +545,7 @@ fn an_own_circle_through_a_free_linked_arc_s_end_keeps_the_file_s_radius() {
     let (cx, cy) = (c[0].as_f64().unwrap() / 10.0, c[1].as_f64().unwrap() / 10.0);
     assert!(
         (cx - center[0]).abs() < 1e-9 && (cy - center[1]).abs() < 1e-9,
-        "centre {cx}, {cy}: {s}"
+        "center {cx}, {cy}: {s}"
     );
 }
 

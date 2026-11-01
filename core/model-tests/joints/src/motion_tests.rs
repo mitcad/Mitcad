@@ -227,14 +227,14 @@ fn a_study_plays_through_the_commands_and_keeps_its_keys() {
         &mut rig.doc,
         json!({"cmd": "add_motion_study", "name": "Study1"}),
     );
-    assert!(error.contains("a motion study 'Study1' exists"), "{error}");
+    assert!(error.contains("a motion study Study1 exists"), "{error}");
     let error = refused(&mut rig.doc, json!({"cmd": "add_motion_study", "steps": 0}));
     assert!(error.contains("the steps must be 1"), "{error}");
     let error = refused(
         &mut rig.doc,
         json!({"cmd": "play_study", "study": "Nope", "step": 1}),
     );
-    assert!(error.contains("there is no motion study 'Nope'"), "{error}");
+    assert!(error.contains("there is no motion study Nope"), "{error}");
 
     // Renamed, then its joint deleted: the key goes with it.
     rig.run(json!({"cmd": "edit_motion_study", "name": "Study1", "new_name": "Open", "steps": 60}));

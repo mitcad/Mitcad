@@ -100,7 +100,7 @@ pub fn check_folder(dir: &Path, manifest: &Manifest, cache: Option<&LibraryCache
     let mut out = manifest.problems();
     if !dir.join("LICENSE").is_file() && !dir.join("LICENSE.md").is_file() {
         out.warnings
-            .push("there is no LICENSE file with the licence's text or a note of it".to_owned());
+            .push("there is no LICENSE file with the license's text or a note of it".to_owned());
     }
     for c in &manifest.components {
         if valid_path(&c.path) {
@@ -265,7 +265,7 @@ pub(super) fn init_command(command: &Value) -> Result<Value, VcsError> {
     let id = text(command, "id")?.trim().to_owned();
     if !valid_id(&id) {
         return Err(invalid(format!(
-            "'{id}' is no library id (2 to 64 of a-z, 0-9 and -)"
+            "{id} is no library id (2 to 64 of a-z, 0-9 and -)"
         )));
     }
     let name = text(command, "name")?.trim().to_owned();
@@ -300,7 +300,7 @@ pub(super) fn init_command(command: &Value) -> Result<Value, VcsError> {
     {
         let note = format!(
             "The designs in this library are licensed under {license}.\n\
-             The licence's text: https://spdx.org/licenses/{license}.html\n"
+             The license's text: https://spdx.org/licenses/{license}.html\n"
         );
         write(&dir.join("LICENSE"), note.as_bytes())?;
         written.push("LICENSE".to_owned());
@@ -332,7 +332,7 @@ pub(super) fn add_command(command: &Value) -> Result<Value, VcsError> {
     let id = text(command, "id")?.trim().to_owned();
     if !valid_id(&id) {
         return Err(invalid(format!(
-            "'{id}' is no component id (2 to 64 of a-z, 0-9 and -)"
+            "{id} is no component id (2 to 64 of a-z, 0-9 and -)"
         )));
     }
     let design = text(command, "text")?;
@@ -380,7 +380,7 @@ pub(super) fn add_command(command: &Value) -> Result<Value, VcsError> {
         .unwrap_or_else(|| format!("{folder_name}/{id}.mitcad"));
     if !valid_path(&path) || !crate::is_design_file(&path) {
         return Err(invalid(format!(
-            "'{path}' is no path of a design in the library"
+            "{path} is no path of a design in the library"
         )));
     }
     let mut preview = String::new();

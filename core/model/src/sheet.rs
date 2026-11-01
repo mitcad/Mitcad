@@ -2,6 +2,7 @@
 //! Immutable material domains paired with the current named body shape.
 
 use crate::ids::{BodyUid, ComponentUid, FeatureUid};
+use crate::notice::{Notice, NoticeLevel};
 use crate::profile::{SegmentGeometry, SketchFrame};
 use crate::transform::Transform;
 use serde::{Deserialize, Serialize};
@@ -137,6 +138,24 @@ impl SheetState {
         }
     }
 
+    /// Its diagnostics as notices (mitcad#1040), each about the feature
+    /// that made it: what invalidated the sheet (its flat state is gone:
+    /// an error) and what blocks it (a warning).
+    pub fn notices(&self) -> Vec<Notice> {
+        let notice = |level, d: &SheetDiagnostic| {
+            Notice::new(level, d.message.as_str()).with_target(d.feature)
+        };
+        self.invalidated
+            .iter()
+            .map(|d| notice(NoticeLevel::Error, d))
+            .chain(
+                self.blockers
+                    .iter()
+                    .map(|d| notice(NoticeLevel::Warning, d)),
+            )
+            .collect()
+    }
+
     pub(crate) fn transformed(&self, transform: &Transform) -> Self {
         let mut next = self.clone();
         for panel in &mut next.panels {
@@ -212,7 +231,7 @@ fn version(state: &SheetState) -> u128 {
 }
 
 const ORDINARY_MODELLING: &str =
-    "ordinary modelling replaced this body without a sheet-domain adapter";
+    "ordinary modeling replaced this body without a sheet-domain adapter";
 
 pub(crate) fn publish(
     states: &mut SheetStates,
@@ -303,6 +322,8 @@ pub(crate) fn state_query<S>(
                 .map(|d| &d.message)
                 .collect::<Vec<_>>()
         );
+        // The diagnostics with their levels (mitcad#1040).
+        value["notices"] = crate::notice::to_json(&state.value.notices());
         value
     };
     body.map_or_else(

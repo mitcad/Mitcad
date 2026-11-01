@@ -16,7 +16,12 @@
 #include <BRepBuilderAPI_NurbsConvert.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRep_Builder.hxx>
+#include <TopLoc_Location.hxx>
+#include <TopoDS_Compound.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
 
 #include "check.hpp"
 #include "mitcad/geometry/drawing.hpp"
@@ -469,6 +474,91 @@ void test_quick_path() {
   CHECK(!project_view({block, exact_post}, spec).polygonal);
 }
 
+// A view's lines all seen, to compare them whether seen or hidden.
+DrawnView all_seen(DrawnView drawn) {
+  for (DrawnCurve& c : drawn.curves) {
+    c.visible = true;
+  }
+  return drawn;
+}
+
+// A drawn curve moved by dx along the view's x.
+void shift(DrawnCurve& c, double dx) {
+  for (Point2& p : c.points) {
+    p[0] += dx;
+  }
+  for (Point2& p : c.poles) {
+    p[0] += dx;
+  }
+  c.center[0] += dx;
+}
+
+// A post of radius 5 standing on (x, y) from z 0 to 30 with a cross hole
+// of radius 2 along X at z 15: analytic faces only, the hole's two edges
+// on the post B-splines.
+TopoDS_Shape cross_drilled_post(double x, double y) {
+  const TopoDS_Shape drill =
+      BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(x - 10.0, y, 15.0), gp_Dir(1.0, 0.0, 0.0)), 2.0, 20.0).Shape();
+  return BRepAlgoAPI_Cut(cylinder(x, y, 0.0, 30.0, 5.0), drill).Shape();
+}
+
+// The quick path for many edges on B-splines (mitcad#1033): one body of
+// analytic faces whose edges where the holes meet the posts are B-splines,
+// many of them against many faces, is projected on the quick path, within
+// its tolerance of the exact lines; a few such edges keep the exact path.
+void test_quick_path_for_curved_edges() {
+  BRep_Builder builder;
+  TopoDS_Compound posts;
+  builder.MakeCompound(posts);
+  // 100 posts 20 mm apart (one post moved: the same faces at each place).
+  const TopoDS_Shape post = cross_drilled_post(0.0, 0.0);
+  constexpr int kSide = 10;
+  for (int i = 0; i < kSide; ++i) {
+    for (int j = 0; j < kSide; ++j) {
+      gp_Trsf move;
+      move.SetTranslation(gp_Vec(20.0 * i, 20.0 * j, 0.0));
+      builder.Add(posts, post.Moved(TopLoc_Location(move)));
+    }
+  }
+  const ShapePtr many = std::make_shared<Shape>(posts);
+  const ShapePtr few = std::make_shared<Shape>(post);
+  DrawingViewSpec top = view(gp_Dir(0, 0, 1), gp_Dir(1, 0, 0), false);
+  top.quick = true;
+  CHECK(!project_view({few}, top).polygonal);
+  const DrawnView quick_top = project_view({many}, top);
+  CHECK(quick_top.polygonal);
+  CHECK(has_arc_near(quick_top, 0.0, 0.0, 5.0));
+  CHECK(has_arc_near(quick_top, 180.0, 180.0, 5.0));
+  // From the front with hidden lines, where the exact algorithm takes
+  // minutes on them (each column's posts behind each other: 297 s in a
+  // debug build, the quick path 0.2 s): the quick view's lines, seen and
+  // hidden, within the quick path's tolerance of one post's exact lines
+  // repeated along the row, both ways. That tolerance: 1.5 times a 2000th
+  // of the 270 mm the posts span, with a margin; a twentieth of a
+  // millimetre at the 1:5 such a view has on a sheet.
+  DrawingViewSpec front = view(gp_Dir(0, -1, 0), gp_Dir(1, 0, 0), true);
+  front.quick = true;
+  const DrawnView quick = all_seen(project_view({many}, front));
+  CHECK(quick.curves.size() > 0);
+  const DrawnView one = project_view({few}, front);
+  CHECK(!one.polygonal);
+  DrawnView row;
+  for (int i = 0; i < kSide; ++i) {
+    for (DrawnCurve c : one.curves) {
+      shift(c, 20.0 * i);
+      c.visible = true;
+      row.curves.push_back(std::move(c));
+    }
+  }
+  constexpr double kTolerance = 0.25;
+  const double there = deviation(quick, row, true);
+  const double back = deviation(row, quick, true);
+  if (!(there <= kTolerance && back <= kTolerance)) {
+    std::fprintf(stderr, "posts: the quick view %.4f mm from the exact lines, they %.4f mm from it\n", there, back);
+    ++test::failures;
+  }
+}
+
 } // namespace
 
 int main() {
@@ -477,6 +567,7 @@ int main() {
   test::guarded("round holes", test_round_holes);
   test::guarded("lines and arcs from segments", test_fit_segments);
   test::guarded("the quick path", test_quick_path);
+  test::guarded("the quick path for curved edges", test_quick_path_for_curved_edges);
   if (test::failures == 0) {
     std::puts("test_drawing: all checks passed");
   }

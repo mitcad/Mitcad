@@ -105,10 +105,10 @@ slicer_ran() {
 send() {
   rm -f "$ARGS"
   ui_mark
-  ui_command "3D Print"
-  ui_expect_new "Panel 3D Print input format at " "the panel"
+  ui_command "Send to Slicer"
+  ui_expect_new "Panel Send to Slicer input format at " "the panel"
   if [ $# -gt 0 ]; then
-    ui_step "format"                     ui_choose "Panel 3D Print input format" "$1"
+    ui_step "format"                     ui_choose "Panel Send to Slicer input format" "$1"
   fi
   ui_key Return
 }
@@ -137,8 +137,8 @@ echo "ok   the files are there"
 echo "--- 3MF: one object with three parts"
 ui_step "3D print, 3MF (Format, Enter)"  send 1
 ui_expect_new "3D Print panel: 3 visible: Plate, Cube, Pin; format stl" "the panel"
-ui_expect_new "3D Print: Format = 3MF" "3MF chosen"
-ui_expect_new "3D Print: Format = 3MF" "3MF chosen"
+ui_expect_new "Send to Slicer: Format = 3MF" "3MF chosen"
+ui_expect_new "Send to Slicer: Format = 3MF" "3MF chosen"
 ui_expect_new "3D Print: 3 bodies as 3mf (high) to $FOLDER: Plate " "a 3MF file"
 slicer_ran
 [ "$(cat "$ARGS")" = "$FOLDER/parts.3mf" ] || ui_fail "the slicer's arguments: $(cat "$ARGS")"
@@ -193,10 +193,10 @@ ui_expect_new "3D Print: 1 bodies as 3mf (high) to $FOLDER: Cube " "the cube alo
 slicer_ran
 rm -f "$ARGS"
 ui_mark
-ui_step "3D print (search)"              ui_command "3D Print"
-ui_expect_new "Command 3D Print started" "the panel"
+ui_step "3D print (search)"              ui_command "Send to Slicer"
+ui_expect_new "Command Send to Slicer started" "the panel"
 ui_step "cancel (Esc)"                   ui_key Escape
-ui_expect_new "Command 3D Print cancelled" "cancelled"
+ui_expect_new "Command Send to Slicer cancelled" "cancelled"
 sleep 1
 [ -f "$ARGS" ] && ui_fail "the slicer was started after Cancel"
 tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "3D Print: .* bodies as" && ui_fail "files were written after Cancel"
@@ -237,9 +237,12 @@ slicer_ran
 [ "$(cat "$ARGS")" = "$(printf '%s\n' "$ASSEMBLY/Pin (Pin_1).stl" "$ASSEMBLY/Pin (Pin_2).stl")" ] ||
   ui_fail "the slicer's arguments: $(cat "$ARGS")"
 echo "ok   the slicer got both files"
+# Each placement turned as its occurrence places it (Pin:1 a quarter about
+# z: 10 x 20; Pin:2 as designed: 20 x 10), then centered on the 256 mm
+# plate and on the bed by Center on Plate and Drop to Bed (mitcad#1109).
 python3 - "$ASSEMBLY" << 'EOF' || ui_fail "the STL files' places"
 import struct, sys
-for name, low, high in [("Pin (Pin_1)", (90, 0, 0), (100, 20, 5)), ("Pin (Pin_2)", (0, 50, 0), (20, 60, 5))]:
+for name, low, high in [("Pin (Pin_1)", (123, 118, 0), (133, 138, 5)), ("Pin (Pin_2)", (118, 123, 0), (138, 133, 5))]:
     data = open(f"{sys.argv[1]}/{name}.stl", "rb").read()
     count = struct.unpack_from("<I", data, 80)[0]
     assert len(data) == 84 + 50 * count, name
@@ -248,7 +251,7 @@ for name, low, high in [("Pin (Pin_1)", (90, 0, 0), (100, 20, 5)), ("Pin (Pin_2)
     print(f"     {name}: {count} triangles in {box}")
     assert all(abs(box[k][0] - low[k]) < 1e-4 and abs(box[k][1] - high[k]) < 1e-4 for k in range(3)), name
 EOF
-echo "ok   each file has the pin where the view shows that occurrence"
+echo "ok   each file has the pin as that occurrence turns it, centered on the plate"
 
 echo "--- One occurrence selected, 3MF: one object of it (mitcad#856)"
 ui_step "fit (F6)"                       ui_key F6
@@ -270,7 +273,8 @@ assert len(items) == 1, f"{len(items)} build items"
 objects = {o.get("id"): o for o in model.findall("m:resources/m:object", ns)}
 components = objects[items[0].get("objectid")].findall("m:components/m:component", ns)
 assert len(components) == 1, f"{len(components)} placements of the pin"
-# Where Pin:2 shows the pin: (0, 50, 0) to (20, 60, 5); 3MF maps row
+# As Pin:2 shows the pin, 20 x 10 x 5, centered on the 256 mm plate and on
+# the bed (mitcad#1109): (118, 123, 0) to (138, 133, 5); 3MF maps row
 # vectors, p' = p * M with the move last.
 m = [float(v) for v in (components[0].get("transform") or "1 0 0 0 1 0 0 0 1 0 0 0").split()]
 points = []
@@ -279,10 +283,10 @@ for v in objects[components[0].get("objectid")].findall("m:mesh/m:vertices/m:ver
     points.append([p[0] * m[c] + p[1] * m[3 + c] + p[2] * m[6 + c] + m[9 + c] for c in range(3)])
 box = [(min(p[k] for p in points), max(p[k] for p in points)) for k in range(3)]
 print(f"     one object of one placement in {box}")
-low, high = (0, 50, 0), (20, 60, 5)
+low, high = (118, 123, 0), (138, 133, 5)
 assert all(abs(box[k][0] - low[k]) < 1e-4 and abs(box[k][1] - high[k]) < 1e-4 for k in range(3)), box
 EOF
-echo "ok   the 3MF file holds one object: the pin where Pin:2 shows it"
+echo "ok   the 3MF file holds one object: the pin as Pin:2 shows it, centered on the plate"
 
 echo "--- A mesh body in a moved and turned occurrence (mitcad#20)"
 # The pin and its STL copy (a mesh body), each in a component of its own,
@@ -325,9 +329,10 @@ for name in ["Pin", "Mesh"]:
     points = [struct.unpack_from("<3f", data, 84 + 50 * i + 12 + 12 * v) for i in range(count) for v in range(3)]
     box = [(min(p[k] for p in points), max(p[k] for p in points)) for k in range(3)]
     print(f"     {name}: {count} triangles in {box}")
-    assert all(abs(box[k][0] - (90, 0, 0)[k]) < 1e-4 and abs(box[k][1] - (100, 20, 5)[k]) < 1e-4 for k in range(3)), name
+    # Turned as the occurrence shows it, centered on the plate (mitcad#1109).
+    assert all(abs(box[k][0] - (123, 118, 0)[k]) < 1e-4 and abs(box[k][1] - (133, 138, 5)[k]) < 1e-4 for k in range(3)), name
 EOF
-echo "ok   the mesh's file has it where the view shows it"
+echo "ok   the mesh's file has it as the view turns it, as the solid's"
 
 echo "--- Bodies picked in the panel (mitcad#234)"
 # The plate (F1) and the cube (F2) as above, and a surface body: an open
@@ -361,19 +366,19 @@ ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Body F6.b0 at " "the bodies placed in the view"
 rm -f "$ARGS"
 ui_mark
-ui_step "3D print (search)"              ui_command "3D Print"
+ui_step "3D print (search)"              ui_command "Send to Slicer"
 ui_expect_new "3D Print: left out Surface (a surface body)" "the surface body left out"
 ui_expect_new "3D Print panel: 2 visible: Plate, Cube; format stl" "the panel: the plate and the cube, STL remembered"
-ui_expect_new "3D Print Bodies: 2 bodies [body F1.b0; body F2.b0]" "both solids in Bodies"
+ui_expect_new "Send to Slicer Bodies: 2 bodies [body F1.b0; body F2.b0]" "both solids in Bodies"
 ui_expect_new "View body highlights: F1.b0, F2.b0" "both highlighted"
 ui_mark
 ui_step "click the cube"                 ui_click_logged "Body F2.b0"
-ui_expect_new "3D Print Bodies: 1 body [body F1.b0]" "the click took the cube out"
+ui_expect_new "Send to Slicer Bodies: 1 body [body F1.b0]" "the click took the cube out"
 ui_expect_new "View body highlights: F1.b0" "and its highlight"
 ui_mark
 ui_step "click the surface"              ui_click_logged "Body F6.b0"
 sleep 0.5
-tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qE "3D Print Bodies:|View body highlights:" &&
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qE "Send to Slicer Bodies:|View body highlights:" &&
   ui_fail "the click on the surface body changed Bodies"
 echo "ok   the surface body cannot be picked"
 ui_mark
@@ -419,27 +424,27 @@ pair_send() {
   ui_mark
   ui_step "select Pair:1"                ui_click_logged "Browser Root/Pair:1"
   ui_expect_new "Selected: 1 component" "Pair:1 selected"
-  ui_step "3D print (search)"            ui_command "3D Print"
-  ui_expect_new "Panel 3D Print input format at " "the panel"
+  ui_step "3D print (search)"            ui_command "Send to Slicer"
+  ui_expect_new "Panel Send to Slicer input format at " "the panel"
   if [ $# -gt 0 ]; then
-    ui_step "format"                     ui_choose "Panel 3D Print input format" "$1"
+    ui_step "format"                     ui_choose "Panel Send to Slicer input format" "$1"
   fi
   ui_step "send (Enter)"                 ui_key Return
   ui_expect_new "3D Print bed face to choose for the file: 2 faces: Tall F1:top in Pair:1; Low F2:side0 in Pair:1" \
     "Send asks which of the two print bed faces"
   # The question beside the Bed face row and in the status bar, naming the
   # piece and the count (the review's finding 2).
-  ui_expect_new "Panel 3D Print note bed_question: $QUESTION" "the panel's row asks, saying nothing was sent"
-  ui_expect_new "Panel 3D Print asks: $QUESTION" "the status bar asks the same"
-  ui_expect_new "3D Print marks: face F1.b0/F1:top in O1, face F2.b0/F2:side0 in O1" \
+  ui_expect_new "Panel Send to Slicer note bed_question: $QUESTION" "the panel's row asks, saying nothing was sent"
+  ui_expect_new "Panel Send to Slicer asks: $QUESTION" "the status bar asks the same"
+  ui_expect_new "Send to Slicer marks: face F1.b0/F1:top in O1, face F2.b0/F2:side0 in O1" \
     "both faces highlighted in the bed face's green"
   # The green faces stand out: Bodies' picks are not drawn meanwhile (4).
-  ui_expect_new "3D Print picks not drawn beside the marks: Bodies" "the bodies' highlight left out beside the marks"
+  ui_expect_new "Send to Slicer picks not drawn beside the marks: Bodies" "the bodies' highlight left out beside the marks"
   # Send as assembled beside the Bed face field, on its line (5).
-  ui_expect_new "Panel 3D Print action bed_assembled.0 at " "Send as assembled shown"
+  ui_expect_new "Panel Send to Slicer action bed_assembled.0 at " "Send as assembled shown"
   local field button
-  read -r _ field <<< "$(ui_logged_at "Panel 3D Print input bed_face")"
-  read -r _ button <<< "$(ui_logged_at "Panel 3D Print action bed_assembled.0")"
+  read -r _ field <<< "$(ui_logged_at "Panel Send to Slicer input bed_face")"
+  read -r _ button <<< "$(ui_logged_at "Panel Send to Slicer action bed_assembled.0")"
   [ $((field - button)) -le 12 ] && [ $((button - field)) -le 12 ] ||
     ui_fail "Send as assembled is not beside the Bed face field (y $button, field $field)"
   echo "ok   Send as assembled beside the Bed face field"
@@ -455,7 +460,7 @@ expect_hidden() {
   local i
   for i in $(seq 1 45); do
     tail -n +$((UI_MARK + 1)) "$UI_LOG" |
-      grep -qE "^Panel 3D Print input $1 at -?[0-9]+,-?[0-9]+ \(hidden\)$" && { echo "ok   $2"; return; }
+      grep -qE "^Panel Send to Slicer input $1 at -?[0-9]+,-?[0-9]+ \(hidden\)$" && { echo "ok   $2"; return; }
     ui_poll_pause "$i"
   done
   ui_fail "$2: the row $1 is not logged hidden since the mark"
@@ -504,7 +509,7 @@ ui_step "3D print, 3MF"                  pair_send 1
 # Send (Enter) while asking is refused: the Bed face is needed (3).
 ui_mark
 ui_step "Enter while asking"             ui_key Return
-ui_expect_new "3D Print: OK refused" "Send waits for the bed face"
+ui_expect_new "Send to Slicer: OK refused" "Send waits for the bed face"
 sleep 0.3
 [ -f "$ARGS" ] && ui_fail "Enter sent the piece while asking"
 echo "ok   nothing sent"
@@ -525,7 +530,7 @@ ui_step "click Tall's top"               ui_click_pick "face F1.b0/F1:top at"
 ui_expect_new "3D Print bed face of the file: Tall F1:top in Pair:1" "the click chose Tall's top"
 ui_expect_new "3D Print bed: Tall on F1:top, plate 128.000,128.000, transform " "the piece turned onto it"
 ui_expect_new "3D Print: 2 bodies as 3mf (high) to $PAIR: " "then the 3MF file was written"
-ui_expect_new "Done 3D Print" "and the panel closed"
+ui_expect_new "Done Send to Slicer" "and the panel closed"
 # The last line names the face chosen (6).
 ui_expect_new "3D Print last line: Sent 2 bodies to " "the last line"
 tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep "3D Print last line: " | tail -1 |
@@ -542,20 +547,20 @@ ui_step "Escape (clear the selection)"   ui_key Escape
 ui_step "3D print, 3MF"                  pair_send
 ui_mark
 ui_step "Tab"                            ui_key Tab
-ui_expect_new "3D Print: Tab steps Bed face: " "Tab picks a face"
-ui_expect_new "3D Print Bed face listed: Tall: print bed face" "Tall's top first"
-ui_expect_new "3D Print marks: face F2.b0/F2:side0 in O1" "the other face stays green"
+ui_expect_new "Send to Slicer: Tab steps Bed Face: " "Tab picks a face"
+ui_expect_new "Send to Slicer Bed Face listed: Tall: print bed face" "Tall's top first"
+ui_expect_new "Send to Slicer marks: face F2.b0/F2:side0 in O1" "the other face stays green"
 ui_mark
 ui_step "Tab"                            ui_key Tab
-ui_expect_new "3D Print Bed face listed: Low: print bed face" "then Low's side"
-ui_expect_new "3D Print marks: face F1.b0/F1:top in O1" "Tall's top green again"
+ui_expect_new "Send to Slicer Bed Face listed: Low: print bed face" "then Low's side"
+ui_expect_new "Send to Slicer marks: face F1.b0/F1:top in O1" "Tall's top green again"
 ui_mark
 ui_step "Tab"                            ui_key Tab
-ui_expect_new "3D Print Bed face listed: Tall: print bed face" "then Tall's top again"
+ui_expect_new "Send to Slicer Bed Face listed: Tall: print bed face" "then Tall's top again"
 ui_mark
 ui_step "Enter: Tall's top"              ui_key Return
 ui_expect_new "3D Print bed face of the file: Tall F1:top in Pair:1" "Enter chose the face Tab picked"
-ui_expect_new "Done 3D Print" "and sent it"
+ui_expect_new "Done Send to Slicer" "and sent it"
 slicer_ran
 pair_file 0
 echo "ok   the 3MF file has the piece on Tall's top"
@@ -567,16 +572,16 @@ ui_step "3D print, 3MF"                  pair_send
 ui_mark
 ui_step "Esc: the question ends"         ui_key Escape
 ui_expect_new "3D Print bed face of the file: not asked any more (Esc)" "Esc ends the question"
-ui_expect_new "3D Print marks: none" "the marks gone"
+ui_expect_new "Send to Slicer marks: none" "the marks gone"
 expect_hidden bed_face "the Bed face row hidden"
 expect_hidden bed_question "the question gone"
 sleep 0.3
 [ -f "$ARGS" ] && ui_fail "Esc sent the piece"
-tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qE "^(Done|Command) 3D Print" && ui_fail "Esc closed the panel"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qE "^(Done|Command) Send to Slicer" && ui_fail "Esc closed the panel"
 echo "ok   nothing sent, the panel open"
 ui_mark
 ui_step "Esc again: cancel"              ui_key Escape
-ui_expect_new "Command 3D Print cancelled" "the next Esc cancels"
+ui_expect_new "Command Send to Slicer cancelled" "the next Esc cancels"
 [ -f "$ARGS" ] && ui_fail "the cancel sent the piece"
 echo "ok   nothing sent"
 
@@ -584,30 +589,39 @@ echo "ok   nothing sent"
 ui_step "Escape (clear the selection)"   ui_key Escape
 ui_step "3D print, 3MF"                  pair_send
 ui_mark
-ui_step "Send as assembled"              ui_click_logged "Panel 3D Print action bed_assembled.0"
+ui_step "Send as assembled"              ui_click_logged "Panel Send to Slicer action bed_assembled.0"
 ui_expect_new "3D Print bed face of the file: kept as assembled" "Send as assembled keeps the piece as assembled"
 ui_expect_new "3D Print bed: kept as assembled: F1.b0, F2.b0" "the bed: as assembled"
-ui_expect_new "Done 3D Print" "and sends it"
+ui_expect_new "Done Send to Slicer" "and sends it"
 slicer_ran
 pair_file 10
 echo "ok   the 3MF file has the piece as assembled"
 
 # What is sent changes while asking (8): the format STL ends the question,
-# its rows hidden, the marks gone and Bodies drawn again.
+# its rows hidden, and Bodies drawn again. Each STL file lies on its
+# body's own print bed face, which the marks now show beside Bodies'
+# picks (mitcad#1109).
 ui_step "Escape (clear the selection)"   ui_key Escape
 ui_step "3D print, 3MF"                  pair_send
 ui_mark
-ui_step "format STL"                     ui_choose "Panel 3D Print input format" -1
-ui_expect_new "3D Print marks: none" "the marks gone"
-ui_expect_new "3D Print picks not drawn beside the marks: none" "Bodies drawn again"
+ui_step "format STL"                     ui_choose "Panel Send to Slicer input format" -1
+ui_expect_new "3D Print bed face: 2 faces; Tall F1:top in Pair:1; Low F2:side0 in Pair:1" \
+  "each STL file on its body's print bed face"
+ui_expect_new "Send to Slicer picks not drawn beside the marks: none" "Bodies drawn again"
+# The faces in use are the two the question showed: the marks stay, and
+# their line is logged again only when a refresh between clears them.
+marks=$(grep -F "Send to Slicer marks: " "$UI_LOG" | tail -1)
+[ "$marks" = "Send to Slicer marks: face F1.b0/F1:top in O1, face F2.b0/F2:side0 in O1" ] ||
+  ui_fail "the faces in use are not highlighted: '$marks'"
+echo "ok   the faces in use highlighted"
 expect_hidden bed_face "the Bed face row hidden"
 expect_hidden bed_question "the question gone"
-tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "^Panel 3D Print error: " && ui_fail "the panel shows an error"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "^Panel Send to Slicer error: " && ui_fail "the panel shows an error"
 [ -f "$ARGS" ] && ui_fail "the format change sent the piece"
 echo "ok   nothing sent, nothing asked"
 ui_mark
 ui_step "cancel (Esc)"                   ui_key Escape
-ui_expect_new "Command 3D Print cancelled" "Esc cancels the panel"
+ui_expect_new "Command Send to Slicer cancelled" "Esc cancels the panel"
 [ -f "$ARGS" ] && ui_fail "the cancel sent the piece"
 echo "ok   nothing sent"
 

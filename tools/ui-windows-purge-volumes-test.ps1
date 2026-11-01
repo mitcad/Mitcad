@@ -112,7 +112,7 @@ function Close-AndSave {
   Ui-FocusMain
   Ui-Mark
   Ui-Step 'cancel the panel (Esc)'       { Ui-Key 'Escape' }
-  Ui-ExpectNew 'Command 3D Print cancelled' 'the panel closed'
+  Ui-ExpectNew 'Command Send to Slicer cancelled' 'the panel closed'
   Ui-Mark
   Ui-Step 'save (Ctrl+S)'                { Ui-Key 'ctrl+s' }
   Ui-ExpectNew 'Saved ' 'saved'
@@ -123,13 +123,13 @@ Ui-StartApp 'purge-volumes' @('--open', $design)
 Write-Host '--- 1. 3D Print: the Purge volumes row and its table, computed'
 Ui-Mark
 Ui-Step '3D Print (F8)'                  { Ui-Key 'F8' }
-Ui-ExpectNew 'Panel 3D Print input format at ' 'the panel laid out'
+Ui-ExpectNew 'Panel Send to Slicer input format at ' 'the panel laid out'
 Ui-ExpectNew '; format 3mf, ' 'the panel starts with 3MF'
-Ui-ExpectNew 'Panel 3D Print note purge: Computed [Edit]' 'the row says the volumes are computed'
-Ui-ExpectNew 'Panel 3D Print action purge.0 at ' 'its pencil has its place'
-Ui-PanelReveal 'Panel 3D Print input purge'
+Ui-ExpectNew 'Panel Send to Slicer note purge: Computed [Edit]' 'the row says the volumes are computed'
+Ui-ExpectNew 'Panel Send to Slicer action purge.0 at ' 'its pencil has its place'
+Ui-PanelReveal 'Panel Send to Slicer input purge'
 Ui-Mark
-Ui-Step 'the pencil'                     { Ui-ClickLogged 'Panel 3D Print action purge.0' }
+Ui-Step 'the pencil'                     { Ui-ClickLogged 'Panel Send to Slicer action purge.0' }
 Ui-ExpectNew 'Purge volumes opened: White PLA, Black PETG' 'the table of the two filaments, in the order of use'
 Ui-ExpectNew "${whiteToBlack}140${mm3}" 'white to black: 70 out of white, 70 into black'
 Ui-ExpectNew "${blackToWhite}420${mm3}" 'black to white: 210 and 210, dark to light takes more'
@@ -146,7 +146,7 @@ Ui-Step 'White PLA to Black PETG'        { Click-InPurge 'Purge volumes cell 0.1
 Ui-Step 'type 300, Enter'                { Ui-Type '300'; Ui-Key 'Return' }
 Ui-ExpectNew "Purge volume set: White PLA${to}Black PETG = 300${mm3}" 'Enter set it'
 Ui-ExpectNew "${whiteToBlack}300${mm3} (set by hand)" 'the cell is marked as set by hand'
-Ui-ExpectNew 'Panel 3D Print note purge: 1 set by hand [Edit]' 'the row counts it'
+Ui-ExpectNew 'Panel Send to Slicer note purge: 1 set by hand [Edit]' 'the row counts it'
 $other = Ui-LogLines | Select-Object -Skip $script:UiMark | Where-Object { $_.Contains($blackToWhite) } |
   Select-Object -Last 1
 if ("$other".Contains('set by hand')) { Ui-Fail "the other pair changed: $other" }
@@ -159,11 +159,11 @@ Write-Host 'ok   the design keeps the pair'
 Write-Host '--- 3. Reset: computed again'
 Ui-Mark
 Ui-Step '3D Print (F8)'                  { Ui-Key 'F8' }
-Ui-ExpectNew 'Panel 3D Print note purge: 1 set by hand [Edit]' 'the row shows the pair set by hand'
-Ui-ExpectNew 'Panel 3D Print action purge.0 at ' 'its pencil has its place'
-Ui-PanelReveal 'Panel 3D Print input purge'
+Ui-ExpectNew 'Panel Send to Slicer note purge: 1 set by hand [Edit]' 'the row shows the pair set by hand'
+Ui-ExpectNew 'Panel Send to Slicer action purge.0 at ' 'its pencil has its place'
+Ui-PanelReveal 'Panel Send to Slicer input purge'
 Ui-Mark
-Ui-Step 'the pencil'                     { Ui-ClickLogged 'Panel 3D Print action purge.0' }
+Ui-Step 'the pencil'                     { Ui-ClickLogged 'Panel Send to Slicer action purge.0' }
 Ui-ExpectNew 'Purge volumes opened: White PLA, Black PETG' 'the table opened again'
 Ui-ExpectNew "${whiteToBlack}300${mm3} (set by hand)" 'the pair is still set by hand'
 # A window shown anew logs its places again.
@@ -175,7 +175,7 @@ Ui-Step 'White PLA to Black PETG'        { Click-InPurge 'Purge volumes cell 0.1
 Ui-Step 'Reset'                          { Click-InPurge 'Purge volumes reset' }
 Ui-ExpectNew 'Purge volumes reset: 1' "Reset took the pair's own volume away"
 Ui-ExpectNew "${whiteToBlack}140${mm3}" 'the computed volume again'
-Ui-ExpectNew 'Panel 3D Print note purge: Computed [Edit]' 'the row says computed again'
+Ui-ExpectNew 'Panel Send to Slicer note purge: Computed [Edit]' 'the row says computed again'
 foreach ($pair in @($whiteToBlack, $blackToWhite)) {
   $last = Ui-LogLines | Select-Object -Skip $script:UiMark | Where-Object { $_.Contains($pair) } | Select-Object -Last 1
   if ("$last".Contains('set by hand')) { Ui-Fail "a pair is still set by hand: $last" }

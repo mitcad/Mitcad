@@ -72,9 +72,9 @@ int statusOf(const QString& value) {
   name.remove(QLatin1Char('-')).remove(QLatin1Char('_'));
   static const std::pair<const char*, int> names[] = {
       {"failed", TimelineQuery::Failed},         {"error", TimelineQuery::Failed},
-      {"warning", TimelineQuery::Warning},       {"note", TimelineQuery::Warning},
-      {"suppressed", TimelineQuery::Suppressed}, {"rolledback", TimelineQuery::RolledBack},
-      {"rollback", TimelineQuery::RolledBack},
+      {"warning", TimelineQuery::Warning},       {"info", TimelineQuery::Info},
+      {"note", TimelineQuery::Info},             {"suppressed", TimelineQuery::Suppressed},
+      {"rolledback", TimelineQuery::RolledBack}, {"rollback", TimelineQuery::RolledBack},
   };
   for (const auto& [full, status] : names) {
     if (!name.isEmpty() && QString::fromLatin1(full).startsWith(name)) {
@@ -130,7 +130,7 @@ bool TimelineQuery::matches(const TimelineSearchItem& item) const {
   }
   if (statuses != 0) {
     const int has = (item.failed ? Failed : 0) | (item.warned ? Warning : 0) | (item.suppressed ? Suppressed : 0) |
-                    (item.rolledBack ? RolledBack : 0);
+                    (item.rolledBack ? RolledBack : 0) | (item.noted ? Info : 0);
     if ((has & statuses) == 0) {
       return false;
     }
@@ -148,6 +148,8 @@ QString timelineStatusToken(TimelineQuery::Status status) {
     return QStringLiteral("is:suppressed");
   case TimelineQuery::RolledBack:
     return QStringLiteral("is:rolled-back");
+  case TimelineQuery::Info:
+    return QStringLiteral("is:info");
   }
   return QString();
 }

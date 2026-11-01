@@ -156,7 +156,8 @@ ui_step "fit (F6)"                         ui_key F6
 echo "--- Section Analysis on YZ, through the tube's axis"
 ui_mark
 ui_step "section analysis (search)"        ui_command "Section Analysis"
-ui_step "pick YZ"                          ui_click_logged "Datum yz"
+# YZ from the browser: the hidden origin stays hidden (mitcad#1030).
+ui_pick_origin_row YZ
 ui_expect_new "Section Analysis Faces/Plane: 1 plane [plane yz]" "YZ picked"
 ui_expect_new " face(s) at" "the tube and the ring cut" 20
 ui_step "OK (Enter)"                       ui_key Return

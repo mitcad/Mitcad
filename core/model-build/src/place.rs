@@ -1383,24 +1383,24 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
         };
         if let Some(mitre) = &mitre {
             let Some(target) = &target else {
-                return Err(refuse("a mitre needs a profile's side or end to meet"));
+                return Err(refuse("a miter needs a profile's side or end to meet"));
             };
             if tilt.abs() > 1e-12 {
                 return Err(refuse(
-                    "a tilted part's foot is cut by its tilt: it takes no mitre",
+                    "a tilted part's foot is cut by its tilt: it takes no miter",
                 ));
             }
             if source.meta.length.is_none() {
                 return Err(refuse(format!(
-                    "{label} is not cut to length: it has no mitres"
+                    "{label} is not cut to length: it has no miters"
                 )));
             }
             let Spot::Joint(joint) = &spot else {
-                return Err(refuse("a mitre needs a profile's side or end to meet"));
+                return Err(refuse("a miter needs a profile's side or end to meet"));
             };
             let own_end_b = joint.own == "end_b";
             if joint.own != "end_a" && joint.own != "end_b" {
-                return Err(refuse("a mitre is cut at the end that meets the profile"));
+                return Err(refuse("a miter is cut at the end that meets the profile"));
             }
             // The new part's lean and the target's, in their coordinates.
             let to_new = |v: V3| inverse(&placement).apply_vector(v);
@@ -1408,7 +1408,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                 let value = mitre
                     .angle
                     .clone()
-                    .ok_or_else(|| refuse(format!("the {what} mitre needs its angle")))?;
+                    .ok_or_else(|| refuse(format!("the {what} miter needs its angle")))?;
                 let radians = value_in(self, &value, Unit::DEG)?;
                 Ok((value, radians))
             };
@@ -1416,7 +1416,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                 "side" => {
                     if mitre.cut != MitreCut::New {
                         return Err(refuse(
-                            "on a side only the new part's end is mitred (cut \"new\")",
+                            "on a side only the new part's end is mitered (cut \"new\")",
                         ));
                     }
                     let (value, _) = angle("new")?;
@@ -1447,7 +1447,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                             let half = angle_between(u, v) / 2.0;
                             if half < 1e-9 {
                                 warnings.push(
-                                    "the parts are on one axis: a shared mitre cuts nothing"
+                                    "the parts are on one axis: a shared miter cuts nothing"
                                         .to_owned(),
                                 );
                                 (None, None)
@@ -1473,7 +1473,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                     if let Some(value) = target_angle {
                         if !target.info.is_cut_to_length() {
                             return Err(refuse(format!(
-                                "{} is not cut to length: it has no mitres",
+                                "{} is not cut to length: it has no miters",
                                 target.info.name
                             )));
                         }
@@ -1487,7 +1487,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                         ));
                     }
                 }
-                _ => return Err(refuse("a mitre needs a profile's side or end to meet")),
+                _ => return Err(refuse("a miter needs a profile's side or end to meet")),
             }
         }
         // Closing a frame (mitcad#485): a part on an end whose far end meets
@@ -1887,7 +1887,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                     Some(m) => {
                         if corner && m.cut == MitreCut::Shared && offset.abs() > 1e-9 {
                             return Err(refuse(
-                                "a shared mitre needs offset 0: the outer corners meet only there",
+                                "a shared miter needs offset 0: the outer corners meet only there",
                             ));
                         }
                         Some(m.clone())
@@ -3165,6 +3165,7 @@ pub(crate) fn make_part(
         frame: None,
         framing: None,
         member: None,
+        rule: None,
     };
     state.assembly.component_mut(made).expect("made").build = Some(record);
     Ok(Placed {

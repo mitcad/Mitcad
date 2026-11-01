@@ -6,6 +6,7 @@
 #include "NativeControls.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 #include <memory>
 #include <vector>
@@ -21,8 +22,12 @@
 #include <QtLogging>
 
 #include "../../framework/CommandSession.hpp"
+#include "../../browser/LibraryPicker.hpp"
 #include "../../framework/CutTargetsPanel.hpp"
 #include "../../framework/Icons.hpp"
+#include "../../framework/NoticeLevel.hpp"
+#include "../../framework/Theme.hpp"
+#include "NativeColors.hpp"
 #include "../../framework/TestSync.hpp"
 
 namespace mitcad {
@@ -48,6 +53,13 @@ NSString* nativeString(const QString& value) {
   return [[NSString alloc] initWithBytes:utf8.constData()
                                 length:static_cast<NSUInteger>(utf8.size())
                               encoding:NSUTF8StringEncoding];
+}
+
+// The fill of an error's or a warning's highlight box (mitcad#1040): the
+// shared table's light and dark values (NoticeLevel), following the
+// appearance.
+NSColor* noticeFillColor(NoticeLevel level) {
+  return mac::roleColor(level == NoticeLevel::Error ? ColorRole::ErrorFill : ColorRole::WarningFill);
 }
 
 QString qtString(NSString* value) {
@@ -101,6 +113,43 @@ NSImage* tileImage(const QImage& picture) {
   NSImage* image = [[NSImage alloc] initWithData:[NSData dataWithBytes:data.constData()
                                                               length:static_cast<NSUInteger>(data.size())]];
   const QSize fitted = picture.size().scaled(48, 48, Qt::KeepAspectRatio);
+  image.size = NSMakeSize(fitted.width(), fitted.height());
+  return image;
+}
+
+// The fx toggle's artwork (InputDef::fxToggle, mitcad#1066): "fx" in bold
+// italic, a template image the button tints for its state and appearance.
+NSImage* fxImage(const QString& description) {
+  NSFont* bold = [NSFont boldSystemFontOfSize:[NSFont systemFontSize]];
+  NSFont* italic = [NSFontManager.sharedFontManager convertFont:bold toHaveTrait:NSItalicFontMask];
+  NSAttributedString* text = [[NSAttributedString alloc]
+      initWithString:@"fx"
+          attributes:@{NSFontAttributeName : italic, NSForegroundColorAttributeName : NSColor.blackColor}];
+  const NSSize size = text.size;
+  NSImage* image = [NSImage imageWithSize:NSMakeSize(std::ceil(size.width) + 2, std::ceil(size.height))
+                                  flipped:NO
+                           drawingHandler:^BOOL(NSRect rect) {
+                             (void)rect;
+                             [text drawAtPoint:NSMakePoint(1, 0)];
+                             return YES;
+                           }];
+  [image setTemplate:YES]; // `template` is a C++ keyword
+  image.accessibilityDescription = nativeString(description);
+  return image;
+}
+
+// An option's picture in a drop-down (InputDef::choiceImage) at `points`
+// logical points (InputDef::choiceImageSize: a material's swatch,
+// mitcad#1066).
+NSImage* optionImage(const QImage& picture, int points) {
+  if (picture.isNull() || points <= 0) { return nil; }
+  QByteArray data;
+  QBuffer buffer(&data);
+  buffer.open(QIODevice::WriteOnly);
+  picture.save(&buffer, "PNG");
+  NSImage* image = [[NSImage alloc] initWithData:[NSData dataWithBytes:data.constData()
+                                                              length:static_cast<NSUInteger>(data.size())]];
+  const QSize fitted = picture.size().scaled(points, points, Qt::KeepAspectRatio);
   image.size = NSMakeSize(fitted.width(), fitted.height());
   return image;
 }
@@ -224,15 +273,13 @@ QString displaySelection(const InputDef& input, int count) {
   return QObject::tr("%1 selected").arg(count);
 }
 
-const QColor kSelectionColors[] = {QColor(0x1f, 0x7a, 0xff), QColor(0xff, 0x8c, 0x00),
-                                    QColor(0x2c, 0xa0, 0x2c), QColor(0x9b, 0x30, 0xff)};
-
 QColor selectionColor(int index) {
-  return kSelectionColors[static_cast<std::size_t>(index) % std::size(kSelectionColors)];
+  return commandInputColor(index); // the Qt panel's (mitcad#1041)
 }
 
 bool sameNote(const InputNote& a, const InputNote& b) {
-  return a.text == b.text && a.actions == b.actions && a.icons == b.icons && a.oneLine == b.oneLine;
+  return a.text == b.text && a.actions == b.actions && a.icons == b.icons && a.oneLine == b.oneLine &&
+         a.notice == b.notice && a.noticeLevel == b.noticeLevel;
 }
 
 } // namespace
@@ -342,6 +389,7 @@ public:
     // AppKit's target and delegates are non-owning. Clear the controller's
     // back pointer before any retained view can send another event.
     m_target->form = nullptr;
+    if (m_picker != nullptr) { m_picker->close(); }
     for (const Row& row : m_rows) {
       row.edit.delegate = nil;
     }
@@ -407,6 +455,8 @@ public:
         const QString text = input.labelFor(scope);
         if (qtString(row.caption.stringValue) != text) {
           row.caption.stringValue = nativeString(text);
+          // As the shared panel logs it (the tools' rows, mitcad#1066).
+          qDebug().noquote() << QStringLiteral("Panel %1 label %2: %3").arg(m_def.name, row.key, text);
         }
       }
       switch (input.type) {
@@ -527,9 +577,47 @@ public:
     }
   }
 
-  void setMessage(const QString& text, bool error) override {
-    m_message.stringValue = nativeString(text);
-    m_message.textColor = error ? NSColor.systemRedColor : NSColor.secondaryLabelColor;
+  void setMessage(const QString& text, NoticeLevel level) override {
+    // As the Qt panel shows it (mitcad#1040): an error or a warning in a
+    // highlight box the panel's width, in the level's fill, with its symbol
+    // and word, kept until the next message replaces it; hints, progress
+    // and information as plain secondary text.
+    m_messageText = text;
+    m_messageLevel = level;
+    const bool boxed = isProblem(level) && !text.isEmpty();
+    m_message.wantsLayer = YES;
+    m_message.layer.cornerRadius = boxed ? 6 : 0;
+    m_message.drawsBackground = boxed;
+    m_message.backgroundColor = boxed ? noticeFillColor(level) : NSColor.clearColor;
+    m_message.accessibilityValue = nativeString(noticeLevelName(level));
+    if (boxed) {
+      NSColor* tint = mac::noticeTint(level); // the system's red or yellow (mitcad#1041)
+      NSMutableAttributedString* shown = [[NSMutableAttributedString alloc] init];
+      NSImage* image = [NSImage imageWithSystemSymbolName:nativeString(noticeSymbolName(level))
+                                 accessibilityDescription:nativeString(noticeLevelWord(level))];
+      if (image != nil) {
+        NSTextAttachment* attachment = [[NSTextAttachment alloc] init];
+        attachment.image = [image imageWithSymbolConfiguration:[NSImageSymbolConfiguration
+                                                                   configurationWithPaletteColors:@[ tint ]]];
+        [shown appendAttributedString:[NSAttributedString attributedStringWithAttachment:attachment]];
+        [shown appendAttributedString:[[NSAttributedString alloc] initWithString:@" "]];
+      }
+      NSFont* font = m_message.font != nil ? m_message.font : [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+      NSFont* bold = [NSFontManager.sharedFontManager convertFont:font toHaveTrait:NSBoldFontMask];
+      [shown appendAttributedString:[[NSAttributedString alloc]
+                                        initWithString:nativeString(noticeLevelWord(level) + QStringLiteral(": "))
+                                            attributes:@{NSFontAttributeName : bold, NSForegroundColorAttributeName : tint}]];
+      [shown appendAttributedString:[[NSAttributedString alloc]
+                                        initWithString:nativeString(text)
+                                            attributes:@{NSFontAttributeName : font, NSForegroundColorAttributeName : NSColor.labelColor}]];
+      m_message.attributedStringValue = shown;
+      // As the Qt panel logs it, for UI tests.
+      qDebug().noquote() << QStringLiteral("Panel %1 message box: %2: %3")
+                                .arg(m_def.name, noticeLevelName(level), text);
+    } else {
+      m_message.stringValue = nativeString(text);
+      m_message.textColor = NSColor.secondaryLabelColor;
+    }
     m_message.hidden = text.isEmpty();
     requestLayout();
   }
@@ -556,7 +644,8 @@ public:
         notes.insert(it.key(), QJsonObject{{QStringLiteral("hint"), it.value().second}});
       }
     }
-    return {{QStringLiteral("message"), m_message.hidden ? QString() : qtString(m_message.stringValue)},
+    return {{QStringLiteral("message"), m_message.hidden ? QString() : m_messageText},
+            {QStringLiteral("message_level"), noticeLevelName(m_messageLevel)},
             {QStringLiteral("result"), m_result.hidden ? QString() : qtString(m_result.stringValue)},
             {QStringLiteral("ok_enabled"), static_cast<bool>(m_ok.enabled)},
             {QStringLiteral("notes"), notes}};
@@ -623,6 +712,7 @@ public:
     for (const Row& row : m_rows) {
       NSView* control = row.edit != nil ? static_cast<NSView*>(row.edit)
                           : row.select != nil ? static_cast<NSView*>(row.select)
+                          : row.picker != nil ? static_cast<NSView*>(row.picker)
                           : row.popup != nil ? static_cast<NSView*>(row.popup)
                           : row.check != nil ? static_cast<NSView*>(row.check)
                           : row.tile != nil ? static_cast<NSView*>(row.tile)
@@ -703,6 +793,8 @@ public:
       const QString value = parts.value(2);
       auto call = actions().choiceChanged;
       if (call) { call(key, value); }
+    } else if (kind == QStringLiteral("picker")) {
+      openPicker(key);
     } else if (kind == QStringLiteral("choice")) {
       NSPopUpButton* popup = static_cast<NSPopUpButton*>(sender);
       const QString value = qtString(static_cast<NSString*>(popup.selectedItem.representedObject));
@@ -817,6 +909,8 @@ private:
     NSTextField* __strong note = nil;
     NSTextField* __strong edit = nil;
     NSPopUpButton* __strong popup = nil;
+    NSButton* __strong picker = nil;
+    QString pickerShown;
     NSButton* __strong button = nil; // beside a choice (InputDef::onButton)
     NSMutableArray<NSButton*>* __strong choiceButtons = nil;
     NSButton* __strong check = nil;
@@ -1161,18 +1255,32 @@ private:
         field = controls;
         break;
       }
-      row.popup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-      row.popup.identifier = nativeString(QStringLiteral("choice|") + key);
-      row.popup.accessibilityIdentifier = nativeString(QStringLiteral("input_") + key);
-      row.popup.accessibilityLabel = nativeString(input.label);
-      row.popup.toolTip = nativeString(input.tooltip);
-      row.popup.target = m_target;
-      row.popup.action = @selector(performAction:);
-      // A long option is elided, never wider than the card (mitcad#655).
-      [row.popup setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
-                                          forOrientation:NSLayoutConstraintOrientationHorizontal];
-      [row.popup setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
-      [controls addArrangedSubview:row.popup];
+      if (input.choicePicker) {
+        row.picker = button(QString(), QStringLiteral("picker|") + key);
+        row.picker.image = symbolImage(@"chevron.down", input.label);
+        row.picker.imagePosition = NSImageTrailing;
+        row.picker.alignment = NSTextAlignmentLeft;
+        row.picker.lineBreakMode = NSLineBreakByTruncatingMiddle;
+        row.picker.accessibilityIdentifier = nativeString(QStringLiteral("input_") + key);
+        row.picker.accessibilityLabel = nativeString(input.label);
+        [row.picker setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                            forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [row.picker setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [controls addArrangedSubview:row.picker];
+      } else {
+        row.popup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+        row.popup.identifier = nativeString(QStringLiteral("choice|") + key);
+        row.popup.accessibilityIdentifier = nativeString(QStringLiteral("input_") + key);
+        row.popup.accessibilityLabel = nativeString(input.label);
+        row.popup.toolTip = nativeString(input.tooltip);
+        row.popup.target = m_target;
+        row.popup.action = @selector(performAction:);
+        // A long option is elided, never wider than the card (mitcad#655).
+        [row.popup setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                            forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [row.popup setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [controls addArrangedSubview:row.popup];
+      }
       if (input.onButton) {
         // The button beside the drop-down (3D Print's Edit, mitcad#655): its
         // small icon, its text the accessible name.
@@ -1193,6 +1301,12 @@ private:
     }
     case InputDef::Type::Check:
     case InputDef::Type::Flip: {
+      if (input.fxToggle && input.besidePrevious && placeBesidePrevious(row, list, index)) {
+        // On the previous input's line, as the shared panel's fx button
+        // (the Material and Appearance tools' picker, mitcad#1066).
+        m_rows.push_back(std::move(row));
+        return;
+      }
       NSStackView* controls = line();
       controls.distribution = NSStackViewDistributionFill;
       row.check = button(QString(), QStringLiteral("check|") + key);
@@ -1318,7 +1432,10 @@ private:
     } else {
       // A disclosure carries its label itself; a note in the field column
       // (InputDef::fieldColumn) has none.
-      if (!input.disclosure && !input.label.isEmpty()) {
+      // A label that follows the state (InputDef::labelFor: the tools' rows
+      // named by their option's value, mitcad#1066) has a caption too.
+      if (!input.disclosure &&
+          (!input.label.isEmpty() || (input.labelFor && input.type != InputDef::Type::Note))) {
         row.caption = captionLabel(input.label, input.tooltip);
         row.caption.accessibilityIdentifier = nativeString(QStringLiteral("caption_") + key);
       }
@@ -1332,6 +1449,26 @@ private:
   }
 
   void refreshChoices(Row& row, const CommandState& scope) {
+    if (row.picker != nil) {
+      const QString value = scope.choice(row.input->id);
+      QString full;
+      for (const auto& option : row.input->choicesIn(scope)) {
+        if (option.first == value) { full = option.second; break; }
+      }
+      if (full.isEmpty()) { full = value; }
+      QString text = full;
+      for (const ChoicePickerRow& option : row.input->choicePicker(scope)) {
+        if (option.value == value && !option.shortLabel.isEmpty()) { text = option.shortLabel; break; }
+      }
+      row.picker.title = nativeString(text);
+      row.picker.toolTip = nativeString(full);
+      row.picker.accessibilityValue = nativeString(text);
+      if (row.pickerShown != text) {
+        row.pickerShown = text;
+        qDebug().noquote() << QStringLiteral("Panel %1 input %2 shows: %3").arg(m_def.name, row.key, text);
+      }
+      return;
+    }
     if (row.tile != nil) {
       refreshTile(row, scope);
       return;
@@ -1360,6 +1497,12 @@ private:
     if (!same) {
       [row.popup removeAllItems];
       QStringList labels;
+      int pictures = 0;
+      // Headings among the options stay disabled: only such a drop-down
+      // leaves its items' enabled state to them.
+      row.popup.autoenablesItems = std::none_of(options.cbegin(), options.cend(), [](const auto& option) {
+        return option.first.startsWith(choiceHeadingPrefix());
+      });
       for (const auto& option : options) {
         if (isChoiceSeparator(option.first)) {
           // A line between the options (mitcad#828), not choosable.
@@ -1372,11 +1515,31 @@ private:
         NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:nativeString(option.second)
                                                    action:nil keyEquivalent:@""];
         item.representedObject = nativeString(option.first);
+        if (option.first.startsWith(choiceHeadingPrefix())) {
+          // A heading of the options after it (mitcad#655): small, bold, not
+          // a choice, as the shared drop-down's.
+          item.enabled = NO;
+          item.attributedTitle = [[NSAttributedString alloc]
+              initWithString:nativeString(option.second)
+                  attributes:@{NSFontAttributeName : [NSFont boldSystemFontOfSize:[NSFont smallSystemFontSize]],
+                               NSForegroundColorAttributeName : NSColor.secondaryLabelColor}];
+        } else if (row.input->choiceImage) {
+          // The option's picture beside it (a material's or an appearance's
+          // swatch, mitcad#1066).
+          item.image = optionImage(row.input->choiceImage(option.first), row.input->choiceImageSize);
+          pictures += item.image != nil ? 1 : 0;
+        }
         [row.popup.menu addItem:item];
         labels.append(option.second);
       }
       qDebug().noquote() << QStringLiteral("Panel %1 options %2: %3")
                                 .arg(m_def.name, row.key, labels.join(QStringLiteral(" | ")));
+      if (row.input->choiceImage) {
+        qDebug().noquote() << QStringLiteral("Panel %1 option pictures %2: %3 of %4")
+                                  .arg(m_def.name, row.key)
+                                  .arg(pictures)
+                                  .arg(options.size());
+      }
     }
     NSInteger selected = 0;
     for (int index = 0; index < options.size(); ++index) {
@@ -1388,6 +1551,40 @@ private:
     if (!options.isEmpty()) {
       [row.popup selectItemAtIndex:selected];
     }
+  }
+
+  void openPicker(const QString& key) {
+    Row* row = findRow(key);
+    if (row == nullptr || row->picker == nil || (m_picker != nullptr && m_picker->isVisible())) { return; }
+    const CommandState scope = row->list.isEmpty() ? m_state : m_state.row(row->list, row->index);
+    const QString current = scope.choice(row->input->id);
+    QHash<QString, ChoicePickerRow> details;
+    for (const ChoicePickerRow& option : row->input->choicePicker(scope)) { details.insert(option.value, option); }
+    QVector<PickerEntry> entries;
+    bool separator = false;
+    for (const auto& option : row->input->choicesIn(scope)) {
+      if (isChoiceSeparator(option.first)) { separator = true; continue; }
+      if (option.first.startsWith(choiceHeadingPrefix())) { continue; }
+      const ChoicePickerRow detail = details.value(option.first);
+      PickerEntry entry;
+      entry.value = option.first;
+      entry.name = detail.shortLabel.isEmpty() ? option.second : detail.shortLabel;
+      entry.section = detail.heading;
+      entry.tooltip = option.second;
+      entry.tag = detail.tag;
+      entry.search = QStringList{option.second, detail.heading, detail.search}.join(QLatin1Char(' '));
+      entry.checked = option.first == current;
+      entry.lineBefore = separator;
+      separator = false;
+      entries.append(entry);
+    }
+    const auto changed = actions().choiceChanged;
+    const QPointer<CommandSession> session = m_session;
+    m_picker = LibraryPicker::open(m_sectionHost.get(), QObject::tr("%1 Picker").arg(row->input->label),
+                                  QStringLiteral("%1 picker").arg(row->input->label), entries, current, QPoint(),
+                                  [session, changed, key](const QString& value) {
+                                    if (session != nullptr && changed) { changed(key, value); }
+                                  }, QStringLiteral("input_") + key);
   }
 
   // The chosen option's picture, name and detail on its tile (TileButton).
@@ -1413,7 +1610,10 @@ private:
     }
     row.tile.attributedTitle = title;
     row.tile.accessibilityValue = nativeString(tile.title);
-    qDebug().noquote() << QStringLiteral("Panel %1 tile %2: %3").arg(m_def.name, row.key, tile.title);
+    // As the shared panel logs it, its detail in parentheses (mitcad#1066).
+    qDebug().noquote() << QStringLiteral("Panel %1 tile %2: %3%4")
+                              .arg(m_def.name, row.key, tile.title,
+                                   tile.detail.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(tile.detail));
   }
 
   void refreshOrder(Row& row, const Selection& items) {
@@ -1522,6 +1722,20 @@ private:
     if (!note.text.isEmpty() || icons) {
       addFullWidth(row.noteContent, textLine);
     }
+    if (!note.notice.isEmpty()) {
+      // The notice under the text's line (mitcad#1062), as the Qt note row
+      // shows it: an error or a warning with its word in the level's fill,
+      // another level as secondary text.
+      const bool boxed = isProblem(note.noticeLevel);
+      NSTextField* notice = label(noticeLevelText(note.noticeLevel, note.notice), !boxed);
+      notice.accessibilityIdentifier = nativeString(QStringLiteral("note_notice_") + row.key);
+      notice.accessibilityValue = nativeString(noticeLevelName(note.noticeLevel));
+      if (boxed) {
+        notice.drawsBackground = YES;
+        notice.backgroundColor = noticeFillColor(note.noticeLevel);
+      }
+      addFullWidth(row.noteContent, notice);
+    }
     if (buttons.arrangedSubviews.count > 0) {
       [row.noteContent addArrangedSubview:buttons];
     }
@@ -1531,6 +1745,45 @@ private:
   }
 
   // Shows or hides an input's grid rows and views together.
+  // An fx toggle beside the input before it (InputDef::fxToggle with
+  // besidePrevious, mitcad#1059, mitcad#1066): a small "fx" button at the
+  // end of that input's line, pressed while its value varies with an
+  // option, as the shared panel's. False when the input before it has no
+  // line in the same form (it is then a row of its own).
+  bool placeBesidePrevious(Row& row, const QString& list, int index) {
+    if (m_rows.empty()) {
+      return false;
+    }
+    NSView* previous = m_rows.back().box;
+    if (m_rows.back().list != list || m_rows.back().index != index ||
+        ![previous isKindOfClass:[NSStackView class]] ||
+        static_cast<NSStackView*>(previous).orientation != NSUserInterfaceLayoutOrientationHorizontal) {
+      return false;
+    }
+    const InputDef& input = *row.input;
+    row.check = button(QString(), QStringLiteral("check|") + row.key);
+    [row.check setButtonType:NSButtonTypePushOnPushOff];
+    row.check.bezelStyle = NSBezelStyleSmallSquare;
+    // A compact control as the form's other toggles: the fx as an image,
+    // no title (expect-native-command-layout).
+    row.check.title = @"";
+    row.check.image = fxImage(input.label);
+    row.check.imagePosition = NSImageOnly;
+    row.check.toolTip = nativeString(input.tooltip.isEmpty() ? input.label : input.tooltip);
+    row.check.accessibilityIdentifier = nativeString(QStringLiteral("input_") + row.key);
+    row.check.accessibilityLabel = nativeString(input.label);
+    row.check.translatesAutoresizingMaskIntoConstraints = NO;
+    [row.check.widthAnchor constraintGreaterThanOrEqualToConstant:32].active = YES;
+    [row.check.heightAnchor constraintGreaterThanOrEqualToConstant:28].active = YES;
+    [row.check setContentHuggingPriority:NSLayoutPriorityRequired
+                          forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [row.check setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [static_cast<NSStackView*>(previous) addArrangedSubview:row.check];
+    row.box = row.check;
+    return true;
+  }
+
   void setRowShown(Row& row, bool shown) {
     setHidden(row.box, !shown);
     setHidden(row.caption, !shown);
@@ -1579,6 +1832,7 @@ private:
   const CommandDef m_def;
   CommandState m_state;
   QPointer<QWidget> m_expressionHost; // the fx tools' window (nativeExpressionHost)
+  QPointer<LibraryPicker> m_picker;
   MitcadCommandFormTarget* __strong m_target;
   NSStackView* __strong m_root;
   NSStackView* __strong m_header;
@@ -1587,6 +1841,9 @@ private:
   NSGridView* __strong m_grid = nil;
   NSTextField* __strong m_result;
   NSTextField* __strong m_message;
+  // The message as given and its level (mitcad#1040).
+  QString m_messageText;
+  NoticeLevel m_messageLevel = NoticeLevel::Hint;
   NSStackView* __strong m_footer;
   NSButton* __strong m_ok;
   std::vector<Row> m_rows;

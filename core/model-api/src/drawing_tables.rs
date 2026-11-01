@@ -485,7 +485,7 @@ impl<K: Kernel> DrawingTablesOps<K> for Document<K> {
                 title: settings
                     .title
                     .clone()
-                    .unwrap_or_else(|| "PARTS LIST".to_owned()),
+                    .unwrap_or_else(|| "BILL OF MATERIALS".to_owned()),
                 header: columns.iter().map(|c| header(c.as_str())).collect(),
                 rows: rows.into_iter().map(|(_, cells)| cells).collect(),
                 tags: Vec::new(),

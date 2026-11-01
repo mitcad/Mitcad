@@ -66,7 +66,7 @@ impl<K: Kernel> FormulaHelpOps<K> for Document<K> {
         let unit = if let Some(name) = &query.parameter {
             let id = params
                 .find(name)
-                .ok_or_else(|| ApiError(format!("unknown parameter '{name}'")))?;
+                .ok_or_else(|| ApiError(format!("unknown parameter {name}")))?;
             params.get(id).expect("found parameter").unit()
         } else if query.kind == ValueKind::Text {
             Unit::TEXT

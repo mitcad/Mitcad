@@ -29,6 +29,21 @@ use crate::transform::Transform;
 /// Marks a parameter in the JSON form of a copied definition.
 const PARAM: char = '\u{1}';
 
+struct CopiedParameters {
+    ids: HashMap<ParamId, ParamId>,
+    names: HashMap<String, String>,
+    tables: HashMap<String, String>,
+}
+
+impl CopiedParameters {
+    fn expression(&self, text: &str) -> String {
+        let Ok(expr) = crate::expr::Expr::parse(text) else {
+            return text.to_owned();
+        };
+        super::tables::rename_tables_in(&rename_references(text, &expr, &self.names), &self.tables)
+    }
+}
+
 /// Appearance definitions are shared within a document. Copies from
 /// elsewhere keep image paths tied to the source, never the target file.
 pub(crate) enum CopySource<'a> {
@@ -65,7 +80,7 @@ impl CopySource<'_> {
                 if path.is_relative() {
                     let directory = directory.ok_or_else(|| {
                         invalid(format!(
-                            "cannot copy relative texture '{image_path}': save the source design \
+                            "cannot copy relative texture {image_path}: save the source design \
                              first, or use an absolute path or an embedded image"
                         ))
                     })?;
@@ -253,7 +268,7 @@ impl DocState {
             // Rule dependencies can be outside the copied component subtree.
             // Their independent copies precede consumers in this component.
             let component = components.get(&f.component).copied().unwrap_or(into);
-            let mut def = copy_def(&f.def, &params, &uids)?;
+            let mut def = copy_def(&f.def, &params.ids, &uids)?;
             let references = CopyReferences {
                 source: a,
                 destination: &self.assembly,
@@ -339,6 +354,13 @@ impl DocState {
             self.features.insert(self.marker, Arc::new(entry));
             self.marker += 1;
         }
+        for (uid, expression) in &source.bindings.suppressed_when {
+            if let Some(copied) = uids.get(uid) {
+                self.bindings
+                    .suppressed_when
+                    .insert(*copied, params.expression(expression));
+            }
+        }
         // Import only appearances used by copied bodies/faces. Existing
         // target definitions stay unchanged even when ids or names collide.
         let appearances = if same_document {
@@ -369,6 +391,16 @@ impl DocState {
             if let Some(id) = source.component_materials.get(c) {
                 let id = materials.get(id).cloned().unwrap_or_else(|| id.clone());
                 self.component_materials.insert(components[c], id);
+                // Its appearance (mitcad#1055), when the target has it.
+                if let Some(look) = source.component_appearances.get(c) {
+                    let look = appearances
+                        .get(look)
+                        .cloned()
+                        .unwrap_or_else(|| look.clone());
+                    if self.look(&look).is_some() {
+                        self.component_appearances.insert(components[c], look);
+                    }
+                }
             }
         }
         // Body attributes follow the bodies, face appearances their faces.
@@ -398,6 +430,26 @@ impl DocState {
                     .map(|(face, appearance)| {
                         let mapped = appearances.get(&appearance).cloned().unwrap_or(appearance);
                         (remap_reference(&face, &text), mapped)
+                    })
+                    .collect();
+                for expression in [
+                    &mut attributes.appearance_expr,
+                    &mut attributes.material_expr,
+                    &mut attributes.visible_when,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    *expression = params.expression(expression);
+                }
+                attributes.face_appearance_exprs = attributes
+                    .face_appearance_exprs
+                    .into_iter()
+                    .map(|(face, expression)| {
+                        (
+                            remap_reference(&face, &text),
+                            params.expression(&expression),
+                        )
                     })
                     .collect();
                 attributes.print_bed_face = attributes
@@ -509,8 +561,30 @@ impl DocState {
         features: &[&FeatureEntry],
         uids: &HashMap<FeatureUid, FeatureUid>,
         same_document: bool,
-    ) -> Result<HashMap<ParamId, ParamId>, ModelError> {
+    ) -> Result<CopiedParameters, ModelError> {
         let table = source.parameters.table();
+        let binding_exprs: Vec<_> = source
+            .body_attributes
+            .iter()
+            .filter(|(body, _)| uids.contains_key(&body.feature))
+            .flat_map(|(_, attributes)| {
+                attributes
+                    .appearance_expr
+                    .iter()
+                    .chain(&attributes.material_expr)
+                    .chain(&attributes.visible_when)
+                    .chain(attributes.face_appearance_exprs.values())
+            })
+            .chain(
+                source
+                    .bindings
+                    .suppressed_when
+                    .iter()
+                    .filter(|(uid, _)| uids.contains_key(uid))
+                    .map(|(_, expression)| expression),
+            )
+            .filter_map(|text| crate::expr::Expr::parse(text).ok())
+            .collect();
         let mut independent: BTreeSet<ParamId> = features
             .iter()
             .filter(|f| matches!(f.def, FeatureDef::SheetRules(_)))
@@ -526,7 +600,16 @@ impl DocState {
                 }
             }
         }
-        let mut needed: BTreeSet<ParamId> = features.iter().flat_map(|f| f.def.params()).collect();
+        let mut needed: BTreeSet<ParamId> = features
+            .iter()
+            .flat_map(|f| f.def.params())
+            .chain(
+                binding_exprs
+                    .iter()
+                    .flat_map(|expr| expr.references())
+                    .filter_map(|name| source.parameters.find(name)),
+            )
+            .collect();
         let mut todo: Vec<ParamId> = needed.iter().copied().collect();
         while let Some(id) = todo.pop() {
             if let Some(p) = table.get(id) {
@@ -546,6 +629,11 @@ impl DocState {
                 .iter()
                 .filter_map(|id| table.get(*id))
                 .flat_map(|p| p.table_references())
+                .chain(
+                    binding_exprs
+                        .iter()
+                        .flat_map(|expr| expr.table_references()),
+                )
                 .map(|(t, _)| t)
                 .collect();
             self.bring_tables(source, used)?
@@ -587,8 +675,13 @@ impl DocState {
             for text in [&mut limits.min, &mut limits.max, &mut limits.step]
                 .into_iter()
                 .flatten()
+                .chain(limits.values.iter_mut().flatten())
             {
-                if let Ok(expr) = crate::expr::Expr::parse(text) {
+                if let Some((table, column)) = crate::configurations::column_reference(text) {
+                    if let Some(new) = tables.get(table) {
+                        *text = format!("{new}.{column}");
+                    }
+                } else if let Ok(expr) = crate::expr::Expr::parse(text) {
                     *text = super::tables::rename_tables_in(
                         &rename_references(text, &expr, &names),
                         &tables,
@@ -611,7 +704,11 @@ impl DocState {
             names.insert(p.name().to_owned(), name);
             map.insert(id, new);
         }
-        Ok(map)
+        Ok(CopiedParameters {
+            ids: map,
+            names,
+            tables,
+        })
     }
 }
 
@@ -619,6 +716,7 @@ fn set_flags(target: &mut Occurrence, source: &Occurrence) {
     target.transform = source.transform;
     target.grounded = source.grounded;
     target.visible = source.visible;
+    target.transparent = source.transparent;
 }
 
 /// `d12` and the like: dimension names, which copies number afresh.
@@ -709,6 +807,28 @@ impl CopyReferences<'_> {
             },
             internal,
         ))
+    }
+
+    /// A construction feature's links to datums and sketches of other
+    /// components (mitcad#1035, mitcad#1039): as its body links, keyed by
+    /// the datum's or sketch's feature.
+    fn datum_links(
+        &self,
+        copy: &mut BTreeMap<FeatureUid, OccurrenceLink>,
+        original: &BTreeMap<FeatureUid, OccurrenceLink>,
+        component: ComponentUid,
+    ) -> Result<(), ModelError> {
+        copy.clear();
+        for (datum, link) in original {
+            let (link, internal) = self.link(link, component)?;
+            let mapped = if internal {
+                self.uids.get(datum).copied().unwrap_or(*datum)
+            } else {
+                *datum
+            };
+            copy.insert(mapped, link);
+        }
+        Ok(())
     }
 
     /// A seat's link to another component's shaft (mitcad#578): the copy
@@ -942,6 +1062,27 @@ impl CopyReferences<'_> {
                     let mapped = if internal { self.body(*body) } else { *body };
                     copy.links.insert(mapped, link);
                 }
+                self.datum_links(&mut copy.datum_links, &original.datum_links, component)?;
+            }
+            // Axes' and points' faces, edges and vertices on other
+            // components' bodies (mitcad#1029): as a plane's.
+            (FeatureDef::ConstructionAxis(copy), FeatureDef::ConstructionAxis(original)) => {
+                copy.links.clear();
+                for (body, link) in &original.links {
+                    let (link, internal) = self.link(link, component)?;
+                    let mapped = if internal { self.body(*body) } else { *body };
+                    copy.links.insert(mapped, link);
+                }
+                self.datum_links(&mut copy.datum_links, &original.datum_links, component)?;
+            }
+            (FeatureDef::ConstructionPoint(copy), FeatureDef::ConstructionPoint(original)) => {
+                copy.links.clear();
+                for (body, link) in &original.links {
+                    let (link, internal) = self.link(link, component)?;
+                    let mapped = if internal { self.body(*body) } else { *body };
+                    copy.links.insert(mapped, link);
+                }
+                self.datum_links(&mut copy.datum_links, &original.datum_links, component)?;
             }
             // A derive's bodies of other components (mitcad#324): as a
             // combine's tools.

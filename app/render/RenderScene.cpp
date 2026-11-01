@@ -50,7 +50,7 @@ void appendBytes(std::vector<char>& buffer, const void* data, std::size_t bytes)
 }
 
 void appendUint32(std::vector<char>& out, std::uint32_t value) {
-  // glb is little-endian, as every platform Mitcad builds for.
+  // glb is little-endian, as every platform MitCad builds for.
   appendBytes(out, &value, sizeof value);
 }
 
@@ -130,7 +130,7 @@ bool writeGlb(const std::vector<const MeshData*>& meshList, const QJsonObject& e
   }
   QJsonObject root{
       {QStringLiteral("asset"),
-       QJsonObject{{QStringLiteral("version"), QStringLiteral("2.0")}, {QStringLiteral("generator"), QStringLiteral("Mitcad")}}},
+       QJsonObject{{QStringLiteral("version"), QStringLiteral("2.0")}, {QStringLiteral("generator"), QStringLiteral("MitCad")}}},
       {QStringLiteral("scene"), 0},
       {QStringLiteral("scenes"), QJsonArray{QJsonObject{{QStringLiteral("nodes"), sceneNodes}}}},
       {QStringLiteral("nodes"), nodes},

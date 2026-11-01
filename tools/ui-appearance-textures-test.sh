@@ -10,8 +10,8 @@
 #     of the design with its base colour, normal and roughness maps
 #     embedded and its source recorded; a second Use of the same material
 #     shares the images the design has already.
-#   - Assign gives the body the appearance; the saved design keeps each
-#     image once.
+#   - The Appearance tool gives the body the appearance (mitcad#1059); the
+#     saved design keeps each image once.
 #   - With the texture folder and the cache moved away, the design opens
 #     again with its texture and maps embedded.
 #
@@ -109,16 +109,21 @@ ui_expect_new "Appearance custom1 texture: embedded, maps normal roughness, sour
   "the dialog shows its maps and source"
 [ -n "$SHOT" ] && ui_capture "$SHOT"
 
-echo "--- Assign, a second Use, save"
-ui_mark
-ui_step "Assign to Body1"               ui_click_logged "Appearances assign"
-ui_expect_new "Assigned appearance custom1 to F1.b0" "assigned"
+echo "--- A second Use, the Appearance tool, save"
 ui_mark
 ui_step "Use again"                     ui_click_logged "Appearances use"
 ui_expect_new "Texture used: folder red_bricks 2k as custom2 (3 maps; 0 images embedded, 3 shared)" \
   "a second Use shares the design's images"
 ui_step "Close"                         ui_click_logged "Appearances close"
 ui_focus_main
+ui_mark
+ui_step "right-click Body1"             ui_click_logged "Browser Root/Bodies/Body1" 3
+ui_step "choose Appearance..."          ui_menu_choose "Appearance..."
+ui_expect_new "Appearance tool for F1.b0" "the Appearance tool for the box"
+ui_step "the picker: Red bricks"        ui_picker_choose "Panel Appearance input value" "Appearance picker" "Red bricks"
+ui_mark
+ui_step "OK (Enter)"                    ui_key Return
+ui_expect_new "Appearance custom1 for 1 body(ies)" "assigned"
 ui_mark
 ui_key ctrl+s
 ui_expect_new "Saved $FILE" "saved"
@@ -176,9 +181,14 @@ mv "$WORK/cache" "$WORK/cache-moved"
 ui_start_app --open "$FILE"
 UI_MARK=0 # a new log
 ui_expect_new "Opened $FILE" "the design opened again"
-ui_step "select Body1 in the browser"   ui_click_logged "Browser Root/Bodies/Body1"
 ui_step "Edit Appearances (search)"     ui_command "Edit Appearances"
-ui_expect_new "Appearances for bodies: F1.b0 (custom1)" "the body keeps the appearance"
+ui_expect_new "Appearances item steel_satin at" "the library is listed"
+ui_focus_dialog '^Appearances$'
+ui_mark
+ui_step "the list"                      ui_click_logged "Appearances item steel_satin"
+ui_step "the design's last (End)"       ui_key End
+ui_step "Red bricks (Up)"               ui_key Up
+ui_expect_new "Appearance selected: custom1" "the body's appearance selected"
 ui_expect_new "Appearance custom1 texture: embedded, maps normal roughness, source folder red_bricks 2k" \
   "with its maps embedded"
 if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Appearance custom1 texture missing"; then

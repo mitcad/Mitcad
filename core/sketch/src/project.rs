@@ -1787,10 +1787,16 @@ fn pair(old: &[Entity], old_at: &dyn Fn(EntityUid) -> Option<P2>, fresh: &[Entit
 }
 
 /// Solves a definition whose linked projections [`follow_links`] moved
-/// (`followed`) as if they were dragged there from where `def` has them:
-/// in steps, each starting from the last one's solution, so that geometry
-/// constrained to them keeps its side, as with a dimension change (the
-/// solver's continuation). One solve when they moved little or a step
+/// (`followed`) as if they were dragged there from where `def` has them.
+/// Every orientation choice of the solve (the side of a point-line,
+/// line-line or tangent distance, of an offset, of a tangency, an angle's
+/// quadrant) is the one of `def`, the sketch as stored
+/// ([`SketchDef::solve_oriented`]), whatever the size of the move: a point
+/// dimensioned 0.5 mm from a projected line that moved 0.5 mm toward it
+/// lay on the moved line at the solve's start, and its side came out by
+/// chance (mitcad#1047). A large move is solved in steps besides, each
+/// starting from the last one's solution, as a dimension change is (the
+/// solver's continuation); one solve when they moved little or a step
 /// does not solve.
 pub fn solve_followed(
     def: &SketchDef,
@@ -1804,7 +1810,7 @@ pub fn solve_followed(
     {
         return Ok(solved);
     }
-    followed.solve_with(value, name)
+    followed.solve_oriented(value, name, &def.entities)
 }
 
 /// The steps of [`solve_followed`]: one for each tenth of the sketch's
@@ -1859,7 +1865,8 @@ fn solve_in_steps(
                 entity.kind = between(&old.kind, &new.kind, t);
             }
         }
-        let solved = current.solve_with(value, name).ok()?;
+        // The sides stay those of the stored sketch (mitcad#1047).
+        let solved = current.solve_oriented(value, name, &def.entities).ok()?;
         if k == steps {
             return Some(solved);
         }

@@ -299,6 +299,8 @@ pub struct Output<S> {
     pub result: Result<(), String>,
     /// What an evaluation that succeeded built with caveats (P9).
     pub warnings: Vec<String>,
+    /// What is worth knowing of how it was built (mitcad#1106).
+    pub infos: Vec<String>,
     /// A pattern's elements by number, suppressed ones too (P9).
     pub elements: Vec<Transform>,
     pub pattern_anchor: Option<crate::features::point_pattern::PatternAnchor>,
@@ -351,6 +353,14 @@ impl<S> FeatureResult<S> {
             Some(output) if self.status.is_ok() => {
                 self.applied_warnings.as_deref().unwrap_or(&output.warnings)
             }
+            _ => &[],
+        }
+    }
+
+    /// The infos of a feature that succeeded (mitcad#1106); none otherwise.
+    pub fn infos(&self) -> &[String] {
+        match &self.output {
+            Some(output) if self.status.is_ok() => &output.infos,
             _ => &[],
         }
     }
@@ -2103,6 +2113,7 @@ fn evaluate<K: Kernel>(
     let (split_pieces, changed_pieces) = ctx.finish_pieces();
     let reads = std::mem::take(&mut ctx.reads);
     let warnings = std::mem::take(&mut ctx.warnings);
+    let infos = std::mem::take(&mut ctx.infos);
     // Angles of more than one turn where one is the most (mitcad#714).
     let turns = turn_warnings(entry, params);
     let elements = std::mem::take(&mut ctx.elements);
@@ -2122,6 +2133,7 @@ fn evaluate<K: Kernel>(
             persisted: Flag::new(false),
             result: Ok(()),
             warnings: with_turns(warnings, &turns),
+            infos,
             elements,
             pattern_anchor: ctx.pattern_anchor,
             sweep_place: ctx.sweep_place,
@@ -2171,6 +2183,7 @@ fn evaluate<K: Kernel>(
             persisted: Flag::new(false),
             result: Err(failed_with_turns(message, &turns)),
             warnings: Vec::new(),
+            infos: Vec::new(),
             elements: Vec::new(),
             pattern_anchor: None,
             // Known also when the sweep failed (mitcad#795): the panel
@@ -2204,12 +2217,17 @@ fn evaluate<K: Kernel>(
 /// turns by 5156.6°. A value that is a short number in radians but not in
 /// degrees came as such a number and says how to write degrees:
 /// `Move3 angle: 90 is read as radians (5156.6°); write "90 deg" for
-/// degrees`; any other says it is more than one turn.
+/// degrees`; any other says it is more than one turn. Only a number typed
+/// into the slot can be such a slip (mitcad#1092, [`typed_number`]): an
+/// angle computed from parameters or functions, such as construction
+/// planes stepping round an axis (`d660 + step`), may well pass a turn and
+/// never warns.
 fn turn_warnings(entry: &FeatureEntry, params: &Parameters) -> Vec<String> {
     let feature = entry.def.type_name();
     let mut found = Vec::new();
     let _ = entry.def.map_params(&mut |slot, id: &ParamId| {
         if mitcad_model_base::internal::parameters::one_turn_slot(feature, slot)
+            && typed_number(params, *id, entry.uid)
             && let Some(value) = params.value(*id)
             && value.abs() > std::f64::consts::TAU * (1.0 + 1e-9)
         {
@@ -2218,6 +2236,19 @@ fn turn_warnings(entry: &FeatureEntry, params: &Parameters) -> Vec<String> {
         Ok::<_, ()>(())
     });
     found
+}
+
+/// Whether a slot's value is a number typed into it (mitcad#1092): the
+/// slot's own parameter (owned by the feature `owner`) whose expression is
+/// one number with or without a sign and a unit (`90`, `-7`, `450 deg`;
+/// `Expr::is_plain_number`). A slot that names a parameter (`d1`) uses
+/// that parameter itself, whatever its expression, and an expression with
+/// a name, a function or an operator (`d1 + 30 deg`) is computed.
+fn typed_number(params: &Parameters, id: ParamId, owner: FeatureUid) -> bool {
+    params.owner(id) == Some(owner)
+        && params
+            .get(id)
+            .is_some_and(|param| param.expr().is_plain_number())
 }
 
 fn turn_warning(feature: &str, slot: &str, radians: f64) -> String {

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Native Part Picker (mitcad#819) through BUILD Profile's real Part tile:
+# Native Component Picker (mitcad#819) through BUILD Profile's real Part tile:
 # the shared picker in an AppKit utility panel, never a Qt window, with its
 # pictured grid; a click chooses while the keyboard stays with the command.
 expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
@@ -15,13 +15,30 @@ expect-log 'Command Profile started'
 expect-native-visible input_part true
 native-pointer-click input_part
 expect-log 'Part picker opened: 2 parts for build.profile'
-expect-native-tiles qt-hidden partPicker '^Part Picker'
-expect-native-tiles focus '^Part Picker'
+expect-native-tiles qt-hidden partPicker '^Component Picker'
+expect-native-tiles focus '^Component Picker'
 expect-native-tiles count partPickerGrid 2
 expect-native-tiles pictures partPickerGrid 2
 expect-native-tiles captions partPickerGrid
 expect-native-tiles groups partPickerGroups 3
 screenshot '${MITCAD_TEST_WORK}/picker-${MITCAD_TEST_COLOR_SCHEME}.png'
+
+# VoiceOver's focus stays on the tile moved to (mitcad#1025): the second
+# tile's options replace the first's below the grid, and the rebuilt panel
+# keeps the focused accessibility element on a live tile, both ways.
+mark
+native-tiles key partPickerGrid Right
+expect-log 'Part picker options of test-profiles/p30-test'
+expect-log 'Native presenter structure rebuild: Component Picker'
+expect-native-tiles current partPickerGrid 'Profile 30 test'
+expect-native-tiles ax-focus '^Profile 30 test'
+mark
+native-tiles key partPickerGrid Left
+expect-log 'Part picker options of test-profiles/p20-test'
+expect-log 'Native presenter structure rebuild: Component Picker'
+expect-native-tiles ax-focus '^Profile 20 test'
+focus-main
+expect-native-tiles focus '^Component Picker'
 
 # A click on a tile chooses the part in the running command; the command's
 # tile shows it and the keyboard stays with the document.
@@ -29,7 +46,7 @@ native-tiles click partPickerGrid 'Profile 30 test'
 expect-log 'Part picker chose test-profiles/p30-test'
 expect-log 'Panel Profile tile part: Profile 30 test'
 expect-native-tiles current partPickerGrid 'Profile 30 test'
-expect-native-tiles focus '^Part Picker'
+expect-native-tiles focus '^Component Picker'
 
 # The production modeless picker retains the options below its catalogue.
 # Changing the grade narrows the offset and updates the already chosen part.
@@ -78,7 +95,7 @@ expect-log 'Part picker pinned on'
 # change that ownership: select the document before cancelling its command.
 focus-main
 expect-native-tiles document
-expect-native-tiles focus '^Part Picker'
+expect-native-tiles focus '^Component Picker'
 native-key-event Escape
 expect-log '^Native document Escape: viewport -> shared cancellation$'
 expect-log 'Command Profile cancelled'
@@ -92,17 +109,17 @@ command build.profile
 expect-log 'Command Profile started'
 expect-log "BUILD profile starts with test-profiles/p20-test.*: the picker's first part"
 expect-log 'Part picker opened: 2 parts for build.profile'
-expect-native-tiles focus '^Part Picker'
+expect-native-tiles focus '^Component Picker'
 expect-native-tiles current partPickerGrid 'Profile 20 test'
 native-tiles press partPickerPin
 expect-log 'Part picker pinned off'
 
 # Close: the panel goes and the keyboard returns to the document.
-focus-dialog '^Part Picker'
+focus-dialog '^Component Picker'
 button '^Close$'
-expect-native-dialog-gone '^Part Picker'
+expect-native-dialog-gone '^Component Picker'
 expect-native-tiles document
-expect-native-tiles qt-hidden partPicker '^Part Picker'
+expect-native-tiles qt-hidden partPicker '^Component Picker'
 
 # Escape while a field actually owns the panel closes the picker, leaving
 # the document's active command alone.
@@ -128,7 +145,7 @@ expect-native-control-focus partPickerSearch
 expect-native-text partOption1 '^[0-9]+[.,]0000 mm$'
 expect-native-bounds partOption1 text '^Offset:$'
 native-key-event Escape
-expect-native-dialog-gone '^Part Picker'
+expect-native-dialog-gone '^Component Picker'
 expect-native-tiles document
 expect-no-log 'Command Profile cancelled'
 
@@ -137,11 +154,11 @@ expect-no-log 'Command Profile cancelled'
 mark
 native-click input_part
 expect-log 'Part picker opened: 2 parts for build.profile'
-expect-native-tiles focus '^Part Picker'
+expect-native-tiles focus '^Component Picker'
 native-type partPickerSearch 30
 expect-native-tiles count partPickerGrid 1
 key ctrl+w
-expect-native-dialog-gone '^Part Picker'
+expect-native-dialog-gone '^Component Picker'
 expect-native-tiles document
 # Keep the natural recovered document responder: it may be the command's
 # live value editor. Escape must still cancel without forcing canvas focus.
@@ -149,7 +166,9 @@ native-key-event Escape
 expect-log 'Command Profile cancelled'
 wait-idle
 expect-native-tiles document
-expect-native-tiles qt-hidden partPicker '^Part Picker'
+expect-native-tiles qt-hidden partPicker '^Component Picker'
+# The cancelled command's controls leave no dead focus (mitcad#1026).
+expect-native-tiles ax-focus '3D view'
 
 # The canvas has its own Escape forwarding path. Exercise it separately
 # while retaining the natural-close recovery scenario above.
@@ -162,4 +181,4 @@ native-key-event Escape
 expect-log '^Native document Escape: viewport -> shared cancellation$'
 expect-log 'Command Profile cancelled'
 wait-idle
-expect-native-tiles qt-hidden partPicker '^Part Picker'
+expect-native-tiles qt-hidden partPicker '^Component Picker'

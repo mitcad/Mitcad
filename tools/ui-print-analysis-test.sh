@@ -120,7 +120,7 @@ ui_expect_new "Inspect Print Analysis: Body1 overhang 600.0 mm^2" "with its sett
 ui_mark
 ui_step "the Bed face input"               ui_click_logged "Panel Print Analysis input bed_face"
 ui_step "pick the bar's top"               ui_click_pick "/F4:end($R)"
-ui_expect_new "Print Analysis Bed face: 1 face" "the bar's top as the bed face"
+ui_expect_new "Print Analysis Bed Face: 1 face" "the bar's top as the bed face"
 ui_expect_new "Inspect Print Analysis: Body1 overhang 0.0 mm^2 (0.0 %)" "nothing overhangs upside down" 20
 ui_mark
 ui_step "minimum wall 0.4"                 ui_type_in "Panel Print Analysis input minimum" "0.4"

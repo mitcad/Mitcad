@@ -1,0 +1,98 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets and chamfers: the first end of a contact on a closed edge of a
+periodic face snapped onto the edge's vertex at this end (mitcad#1117).
+
+The case: a blind hole's rim bevelled or rounded as deep as the hole (a
+plate with a hole of radius 5, 2 deep, a chamfer or fillet of 2 on its
+rim). The blend takes the hole's wall away: its contact on the wall runs
+along the wall's bottom edge, a whole circle closed at the seam's vertex.
+ChFi3d_KParticular accepts the plane and the cylinder and
+ChFiKPart_ComputeData computes the blend; SplitKPart hatches the contact,
+a line on the cylinder lying on the face's boundary, a little inside the
+face (HatchOnBoundary, 0014 and 0140): one domain from the seam to the
+seam, once round. Both its ends lie beside the seam's vertex and are
+snapped onto it (SnapToVertex). The vertex's parameters on the wall are
+those of one of the seam's two sides; projected onto the line they give
+the parameter of whichever end lies on that side. 0149 takes the vertex a
+period on where its projection lands on the other end of the line, but
+compares with that end's parameter, which is the hatched one only at the
+end snapped second. At the end snapped first it is still the data's own
+(none yet), so where the vertex lay on the second end's side, the first
+end got the second end's parameter, the second end kept its own, and the
+piece of no length was dropped: SplitKPart returned success with no piece,
+and the walk that followed failed (StartsolFailure). A boss's wall consumed
+the same way (0149's case) built where the vertex's parameters lay on the
+first end's side.
+
+- SnapToVertex: on a line hatched on the boundary (HatchOnBoundary and
+  HatchOffConcaveEdges, whose ends FillSD snaps with their wider
+  tolerance), the vertex's copies a period apart on a periodic face are
+  tried at either end, not only where the projection lands on the other
+  end's parameter. As in 0149, a copy is taken only where it projects
+  nearer this end's hatched parameter at no greater distance from the
+  line. A snap moves an end by its tolerance at most: where the vertex's
+  projection is already the nearest to the end, as on every line that is
+  not closed round a periodic face, nothing changes. Ends snapped within a
+  vertex's own tolerance (lines hatched in the face) are as before.
+
+The blind hole's rim now builds at its size: the wall gone, the bevel or
+rounding meeting the hole's floor at its edge, the volume the exact
+shape's.
+
+Upstream: new.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
+@@ -966,7 +966,8 @@
+ // purpose  : The end of a tangency line on the boundary of face F (see
+ //            HatchOnBoundary) found on arc E within Tol of a vertex of E is
+ //            at that vertex: on the line at the vertex, on E at its
+-//            parameter.
++//            parameter. OnBoundary: the line was hatched on the boundary
++//            (HatchOnBoundary, HatchOffConcaveEdges).
+ //=======================================================================
+ 
+ static void SnapToVertex(TopOpeBRepDS_DataStructure&   DStr,
+@@ -974,7 +975,8 @@
+                          const bool                    isFirst,
+                          const int                     ons,
+                          const double                  pitol,
+-                         const double                  Tol)
++                         const double                  Tol,
++                         const bool                    OnBoundary = false)
+ {
+   ChFiDS_CommonPoint& Pons = CD->ChangeVertex(isFirst, ons);
+   if (!Pons.IsOnArc() || Pons.IsVertex())
+@@ -1007,8 +1009,19 @@
+       const double aOther = CD->Interference(ons).Parameter(!isFirst);
+       const double aCur   = CD->Interference(ons).Parameter(isFirst);
+       const occ::handle<Geom_Surface> aSF = BRep_Tool::Surface(F);
+-      if (std::abs(aPar - aOther) <= Precision::PConfusion() && std::abs(aCur - aOther) > Precision::PConfusion()
+-          && (aSF->IsUPeriodic() || aSF->IsVPeriodic()))
++      // That is seen only at the end snapped second: at the first, the
++      // other end's parameter is still the data's own. On a line hatched on
++      // the boundary the copy nearest this end is looked for at either end.
++      // (A blind hole's wall consumed by its rim's blend, the contact along
++      // the wall's bottom edge: the seam's vertex projected from the first
++      // end onto the line's other end, both ends got one parameter, and
++      // the piece of no length was dropped, so that SplitKPart gave no
++      // piece.) A copy is taken only where it projects nearer this end at
++      // no greater distance: a snap moves an end by Tol at most, never by
++      // a period.
++      const bool aFarEnd = std::abs(aPar - aOther) <= Precision::PConfusion()
++                           && std::abs(aCur - aOther) > Precision::PConfusion();
++      if ((aFarEnd || OnBoundary) && (aSF->IsUPeriodic() || aSF->IsVPeriodic()))
+       {
+         const gp_Pnt2d aUV = BRep_Tool::Parameters(V, F);
+         for (int k = 0; k < 4; k++)
+@@ -1223,7 +1236,7 @@
+   {
+     // (A tangency line on the boundary of its face, hatched a little
+     // inside.)
+-    SnapToVertex(DStr, CD, isFirst, ons, pitol, snapTol);
++    SnapToVertex(DStr, CD, isFirst, ons, pitol, snapTol, true);
+   }
+   else if (pPH != nullptr && Pons.IsOnArc() && !Pons.IsVertex())
+   {

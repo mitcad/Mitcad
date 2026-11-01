@@ -251,7 +251,7 @@ fn pieces_no_longer_made_warn_instead_of_taking_others() {
         s.b.doc.warnings(s.join),
         [
             "body F2.b0 is now another piece of what Extrude2 split it into (volume 40000 → \
-          8000 mm³, centre moved 0 mm)"
+          8000 mm³, center moved 0 mm)"
         ]
     );
     assert!(s.b.doc.warnings(s.cut).is_empty());
@@ -290,7 +290,7 @@ fn pieces_no_longer_made_warn_instead_of_taking_others() {
         s.b.doc.warnings(s.join),
         [
             "body F2.b0 is now another piece of what Extrude2 split it into (volume 8000 → \
-          40000 mm³, centre moved 0 mm)"
+          40000 mm³, center moved 0 mm)"
         ]
     );
 

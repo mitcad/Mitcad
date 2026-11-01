@@ -18,22 +18,23 @@
 //!   whole combination is exact ([`Configurations::in_table_violation`]).
 //! - **Rows generated from a table** ([`Configurations::generate_rows`]):
 //!   one row per key of a column, named by the key, setting one option to
-//!   it. A row of the same name is updated, not duplicated.
+//!   it. A row of the same name is updated, not duplicated. The table's
+//!   other columns can become the closed table's parameter columns
+//!   (mitcad#1044, `fill.rs`).
 //!
 //! The tables are read only through [`TableColumns`], the one place here
 //! that knows how a design keeps them.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::expr::{
-    ColumnError, DEFAULT_DECIMALS, Expr, Lookup, ParamKind, TableCell as ExprCell, Unit, Value,
-    format_number, format_value, is_valid_name, text_literal, value_to_expression,
+    ColumnError, DEFAULT_DECIMALS, Expr, Lookup, TableCell as ExprCell, Unit, Value, format_number,
+    format_value, is_valid_name, replace_table_references, text_literal, value_to_expression,
 };
 use crate::parameters::Parameters;
 
-use super::{
-    ConfigurationMove, ConfigurationRow, Configurations, DomainValue, OptionValue, RuleAction,
-};
+use super::fill::{NewParameter, RowSource};
+use super::{ConfigurationMove, Configurations, DomainValue, OptionValue, RuleAction};
 
 // The tables' side (mitcad#803).
 
@@ -158,14 +159,39 @@ pub fn rename_column_in(text: &mut String, table: &str, old: &str, new: &str) {
     }
 }
 
+/// Rewrites parsed table references in a rule expression. Conditions are
+/// wrapped like `parse_condition`, so a top-level single `=` is accepted.
+fn rename_expression_table(
+    text: &mut String,
+    table: &str,
+    column: Option<&str>,
+    new: &str,
+    condition: bool,
+) {
+    if !condition && column_reference(text).is_some() {
+        match column {
+            None => rename_table_in(text, table, new),
+            Some(old) => rename_column_in(text, table, old, new),
+        }
+    } else if condition {
+        let wrapped = format!("({text})");
+        if let Ok(expr) = Expr::parse(&wrapped) {
+            let renamed = replace_table_references(&wrapped, &expr, table, column, new);
+            *text = renamed[1..renamed.len() - 1].to_owned();
+        }
+    } else if let Ok(expr) = Expr::parse(text) {
+        *text = replace_table_references(text, &expr, table, column, new);
+    }
+}
+
 // Values of options.
 
 /// A key of a column: the row name it gives ([`Configurations::generate_rows`])
 /// and the option value it is.
 #[derive(Debug, Clone, PartialEq)]
-struct Key {
-    name: String,
-    value: DomainValue,
+pub(super) struct Key {
+    pub(super) name: String,
+    pub(super) value: DomainValue,
 }
 
 /// Whether two numbers are equal as `==` compares them (relative 1e-9).
@@ -212,32 +238,33 @@ fn option_unit(parameters: &Parameters, option: &str) -> Result<(Unit, bool), St
     Ok((p.unit(), driven))
 }
 
-/// The cells of a column as values of an option in `unit`, one per row
-/// (None: an empty cell). A text option takes a text column; a number
-/// option a number column of its dimension, or a unitless one, whose
+/// The cells of a column as values of an option (or, `who` says, of a
+/// closed table's parameter: `option Size`, `parameter d`) in `unit`, one
+/// per row (None: an empty cell). A text option takes a text column; a
+/// number option a number column of its dimension, or a unitless one, whose
 /// numbers are read in the option's unit (`16` in a length option in
 /// millimetres is 16 mm).
-fn column_keys(
+pub(super) fn column_keys(
     tables: &dyn TableColumns,
     table: &str,
     column: &str,
-    option: &str,
+    who: &str,
     unit: Unit,
 ) -> Result<Vec<Option<Key>>, String> {
     let cells = tables.table_column(table, column)?;
     let col = cells.unit;
     if unit.is_text() != col.is_text() {
         return Err(if col.is_text() {
-            format!("{table}.{column} is a text column, and option {option} is a number")
+            format!("{table}.{column} is a text column, and {who} is a number")
         } else {
-            format!("{table}.{column} is a number column, and option {option} is a text")
+            format!("{table}.{column} is a number column, and {who} is a text")
         });
     }
     let promoted =
         !unit.is_text() && col.dims().is_dimensionless() && !unit.dims().is_dimensionless();
     if !unit.is_text() && !promoted && col.dims() != unit.dims() {
         return Err(format!(
-            "{table}.{column} is in {}, which option {option} in {unit} cannot take",
+            "{table}.{column} is in {}, which {who} in {unit} cannot take",
             if col.is_unitless() {
                 "no unit".to_owned()
             } else {
@@ -312,10 +339,16 @@ pub fn column_domain(
     option: &str,
 ) -> Result<Vec<DomainValue>, String> {
     let (unit, _) = option_unit(parameters, option)?;
-    Ok(distinct(column_keys(tables, table, column, option, unit)?)
-        .into_iter()
-        .map(|k| k.value)
-        .collect())
+    Ok(distinct(column_keys(
+        tables,
+        table,
+        column,
+        &format!("option {option}"),
+        unit,
+    )?)
+    .into_iter()
+    .map(|k| k.value)
+    .collect())
 }
 
 /// The column a parameter's `values` limit names, if it names one.
@@ -368,30 +401,31 @@ impl Configurations {
             .filter_map(RuleAction::as_in_table)
     }
 
-    /// Keeps column references in step with a table rename: the `in_table`
-    /// actions. (The options' `values` are limits of their parameters and
-    /// follow with the parameters.)
+    /// Keeps rule expressions and `in_table` actions in step with a table
+    /// rename. The options' `values` follow with their parameter limits.
     pub fn rename_table(&mut self, old: &str, new: &str) {
         for rule in &mut self.rules {
+            if let Some(when) = rule.when.as_mut() {
+                rename_expression_table(when, old, None, new, true);
+            }
             for action in rule.then.iter_mut().chain(&mut rule.otherwise) {
                 if action.in_table.as_deref() == Some(old) {
                     action.in_table = Some(new.to_owned());
                 }
-                for list in [&mut action.values, &mut action.exclude]
-                    .into_iter()
-                    .flatten()
-                {
-                    for text in list.iter_mut() {
-                        rename_table_in(text, old, new);
-                    }
+                for (what, text) in action.expressions_mut() {
+                    rename_expression_table(text, old, None, new, what == "require");
                 }
             }
         }
     }
 
-    /// Keeps column references in step with a column rename of `table`.
+    /// Keeps rule expressions and column mappings in step with a column
+    /// rename of `table`.
     pub fn rename_table_column(&mut self, table: &str, old: &str, new: &str) {
         for rule in &mut self.rules {
+            if let Some(when) = rule.when.as_mut() {
+                rename_expression_table(when, table, Some(old), new, true);
+            }
             for action in rule.then.iter_mut().chain(&mut rule.otherwise) {
                 if action.in_table.as_deref() == Some(table)
                     && let Some(columns) = action.columns.as_mut()
@@ -402,13 +436,8 @@ impl Configurations {
                         }
                     }
                 }
-                for list in [&mut action.values, &mut action.exclude]
-                    .into_iter()
-                    .flatten()
-                {
-                    for text in list.iter_mut() {
-                        rename_column_in(text, table, old, new);
-                    }
+                for (what, text) in action.expressions_mut() {
+                    rename_expression_table(text, table, Some(old), new, what == "require");
                 }
             }
         }
@@ -443,7 +472,7 @@ impl Configurations {
                 tables,
                 action.table,
                 &action.columns[option],
-                option,
+                &format!("option {option}"),
                 unit,
             )?);
         }
@@ -559,7 +588,13 @@ impl Configurations {
             }
             match option_unit(parameters, option) {
                 Ok((unit, _)) => {
-                    if let Err(e) = column_keys(tables, action.table, column, option, unit) {
+                    if let Err(e) = column_keys(
+                        tables,
+                        action.table,
+                        column,
+                        &format!("option {option}"),
+                        unit,
+                    ) {
                         out.push(format!("in_table {}: {e}", action.table));
                     }
                 }
@@ -726,13 +761,17 @@ impl Configurations {
 
 // Rows generated from a table.
 
-/// What [`Configurations::generate_rows`] did, by row name.
+/// What [`Configurations::generate_rows`] (and the rows CSV,
+/// [`Configurations::fill_rows`]) did, by row name.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GeneratedRows {
     /// Every row of the column's keys, in the table's order.
     pub rows: Vec<String>,
     pub added: Vec<String>,
     pub updated: Vec<String>,
+    /// The parameters the design lacks that the rows set (mitcad#1044):
+    /// the caller adds them with the table.
+    pub created: Vec<NewParameter>,
 }
 
 impl Configurations {
@@ -741,9 +780,16 @@ impl Configurations {
     /// `option` to it. A row of the same name is updated, not duplicated:
     /// it keeps its other values, designation, part number and supplier
     /// URL. The option becomes an option of the table when it is not one
-    /// yet. Refused when the option is no user parameter, is one of a
-    /// closed table's other parameters, or cannot take the column's
-    /// values, and when the column has none.
+    /// yet (a closed table's parameter column moves to the options with its
+    /// rows' values, mitcad#1044). Refused when the option is no user
+    /// parameter or cannot take the column's values, and when the column
+    /// has none.
+    ///
+    /// `columns` (mitcad#1044, decision 12) are other columns of the table
+    /// that become the closed table's parameter columns: each row sets the
+    /// parameter of the column's name to the cell of its key's first row.
+    /// A parameter the design lacks is made with the column's unit
+    /// ([`GeneratedRows::created`]); the table becomes closed.
     pub fn generate_rows(
         &mut self,
         parameters: &Parameters,
@@ -751,59 +797,24 @@ impl Configurations {
         table: &str,
         column: &str,
         option: &str,
+        columns: &[String],
     ) -> Result<GeneratedRows, String> {
-        let p = parameters
-            .find(option)
-            .and_then(|id| parameters.get(id))
-            .ok_or_else(|| format!("parameter {option} does not exist"))?;
-        if p.kind() != ParamKind::User {
-            return Err(format!(
-                "{option} is not a user parameter (it is a {} parameter)",
-                p.kind()
-            ));
-        }
-        if self.parameters.iter().any(|name| name == option) {
-            return Err(format!(
-                "{option} is a parameter the rows of the table set, not an option"
-            ));
-        }
-        let keys = distinct(column_keys(tables, table, column, option, p.unit())?);
-        if keys.is_empty() {
-            return Err(format!("{table}.{column} has no values"));
-        }
-        if !self.is_option(option) {
-            self.options.push(option.to_owned());
-        }
-        let mut out = GeneratedRows::default();
-        let mut seen = BTreeSet::new();
-        for key in keys {
-            if !seen.insert(key.name.clone()) {
-                continue;
-            }
-            out.rows.push(key.name.clone());
-            match self.rows.iter_mut().find(|row| row.name == key.name) {
-                Some(row) => {
-                    let unchanged = row
-                        .values
-                        .get(option)
-                        .is_some_and(|e| *e == key.value.expression);
-                    if !unchanged {
-                        row.values
-                            .insert(option.to_owned(), key.value.expression.clone());
-                        out.updated.push(key.name);
-                    }
-                }
-                None => {
-                    self.rows.push(ConfigurationRow {
-                        name: key.name.clone(),
-                        values: BTreeMap::from([(option.to_owned(), key.value.expression)]),
-                        ..Default::default()
-                    });
-                    out.added.push(key.name);
-                }
-            }
-        }
-        Ok(out)
+        let source = RowSource {
+            tables,
+            table,
+            key: column,
+            option,
+            columns: columns
+                .iter()
+                .filter(|c| c.as_str() != column)
+                .map(|c| (c.clone(), c.clone()))
+                .collect(),
+            per_line: false,
+            fields: Vec::new(),
+            expressions: Vec::new(),
+            create_key: false,
+        };
+        self.fill_rows(parameters, &source)
     }
 }
 
@@ -1079,7 +1090,7 @@ mod tests {
         let tables = screws();
         let mut configurations = Configurations::default();
         let first = configurations
-            .generate_rows(&p, &tables, "Screws", "Size", "Size")
+            .generate_rows(&p, &tables, "Screws", "Size", "Size", &[])
             .unwrap();
         assert_eq!(first.rows, ["M3", "M4", "M5"]);
         assert_eq!(first.added, ["M3", "M4", "M5"]);
@@ -1092,7 +1103,7 @@ mod tests {
             .values
             .insert("Size".to_owned(), "'M4x'".to_owned());
         let second = configurations
-            .generate_rows(&p, &tables, "Screws", "Size", "Size")
+            .generate_rows(&p, &tables, "Screws", "Size", "Size", &[])
             .unwrap();
         assert!(second.added.is_empty());
         assert_eq!(second.updated, ["M4"]);
@@ -1105,7 +1116,7 @@ mod tests {
         );
         // Number keys name their rows without the unit.
         let dias = configurations
-            .generate_rows(&p, &tables, "Screws", "d", "Dia")
+            .generate_rows(&p, &tables, "Screws", "d", "Dia", &[])
             .unwrap();
         assert_eq!(dias.rows, ["3", "4", "4.5", "5"]);
         assert_eq!(configurations.row("4.5").unwrap().values["Dia"], "4.5 mm");
@@ -1113,17 +1124,17 @@ mod tests {
         // Refusals.
         assert!(
             configurations
-                .generate_rows(&p, &tables, "Screws", "Size", "Dia")
+                .generate_rows(&p, &tables, "Screws", "Size", "Dia", &[])
                 .is_err()
         );
         assert!(
             configurations
-                .generate_rows(&p, &tables, "Screws", "Size", "Nope")
+                .generate_rows(&p, &tables, "Screws", "Size", "Nope", &[])
                 .is_err()
         );
         let empty = MockTables::default().with("E", "k", Unit::TEXT, vec![None]);
         let e = configurations
-            .generate_rows(&p, &empty, "E", "k", "Size")
+            .generate_rows(&p, &empty, "E", "k", "Size", &[])
             .unwrap_err();
         assert_eq!(e, "E.k has no values");
     }

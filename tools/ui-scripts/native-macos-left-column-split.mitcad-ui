@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# The AppKit left column (tools/ui-macos-native-left-column-test.sh): the
+# Configuration card, the shared column and a dragged boundary.
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+wait-idle
+native-resize 1280 820
+native-appearance light
+native-expand native.modelTree
+expect-native-visible native.configurationCard true
+expect-native-visible configurationField_SizeX true
+expect-native-visible configurationSlider_HeightUnits true
+# One row per option: the Row row and three range options, under the
+# header, in less than 190 points (three lines per option took about 300).
+expect-native-card-height native.configurationCard 60 190
+expect-native-configuration-layout
+# The Browser's rows are longer than the column: it reaches the bottom of
+# the free column, above the timeline, before it scrolls.
+expect-native-card-height native.sidebar bottom
+expect-native-layout
+screenshot '${MITCAD_TEST_WORK}/left-column.png'
+# The boundary between Configuration and Browser, dragged with the
+# pointer: Configuration 80 points high, Browser the rest.
+mark
+native-column-split native.columnSplit.configuration.browser 80
+expect-log '^Native split remembered: configuration 80, browser [0-9]+$'
+expect-native-card-height native.configurationCard 80
+expect-native-card-height native.sidebar bottom
+screenshot '${MITCAD_TEST_WORK}/left-column-split.png'

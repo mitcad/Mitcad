@@ -33,8 +33,14 @@ namespace {
 
 // Amber, apart from the blue and red of an exact preview's tool: what is
 // drawn is not computed yet.
-const Quantity_Color kProvisionalColor(0.95, 0.62, 0.12, Quantity_TOC_RGB);
-const Quantity_Color kProvisionalEdgeColor(0.80, 0.42, 0.02, Quantity_TOC_RGB);
+const Quantity_Color kProvisionalColor = [] {
+  const QColor color = viewColor(ColorRole::Provisional, false);
+  return Quantity_Color(color.redF(), color.greenF(), color.blueF(), Quantity_TOC_sRGB);
+}();
+const Quantity_Color kProvisionalEdgeColor = [] {
+  const QColor color = viewColor(ColorRole::ProvisionalEdge, false);
+  return Quantity_Color(color.redF(), color.greenF(), color.blueF(), Quantity_TOC_sRGB);
+}();
 constexpr float kProvisionalTransparency = 0.55f;
 
 class ProvisionalMesh : public AIS_InteractiveObject {

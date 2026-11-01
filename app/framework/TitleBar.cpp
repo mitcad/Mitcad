@@ -12,12 +12,15 @@
 #include <QPainter>
 #include <QRegion>
 #include <QTabBar>
+#include <QTimer>
 #include <QToolButton>
 #include <QWindow>
 #include <QtGlobal>
 
 #include "GlassCard.hpp"
+#include "QuickAccessGroup.hpp"
 #include "Ribbon.hpp"
+#include "TestSync.hpp"
 #include "Theme.hpp"
 #include "platform/MacChrome.hpp"
 
@@ -133,6 +136,37 @@ TitleBar::TitleBar(Ribbon* ribbon, QAction* undo, QAction* redo, QAction* search
   m_search->setObjectName(QStringLiteral("titleSearch"));
   row->addWidget(m_search);
   updateInset();
+  m_foldTimer = new QTimer(this);
+  m_foldTimer->setSingleShot(true);
+  m_foldTimer->setInterval(0);
+  connect(m_foldTimer, &QTimer::timeout, this, &TitleBar::updateQuickFold);
+  TestSync::watch(m_foldTimer);
+}
+
+void TitleBar::setQuickAccess(QuickAccessGroup* group) {
+  auto* row = qobject_cast<QHBoxLayout*>(layout());
+  if (row == nullptr || group == nullptr) {
+    return;
+  }
+  m_quickAccess = group;
+  group->setParent(this);
+  group->setObjectName(QStringLiteral("titleQuickAccess"));
+  row->insertWidget(row->indexOf(m_tabs) + 1, group);
+  group->setCardMaterial(m_floatingRow);
+  group->show();
+  connect(group, &QuickAccessGroup::contentsChanged, this, [this] {
+    scheduleQuickFold();
+    updateRowMask();
+    update();
+  });
+  if (m_floatingRow) {
+    group->installEventFilter(this);
+    updateRowMask();
+  }
+  // The tabs change with the mode (SKETCH, DRAWING): the room for the name too.
+  m_tabs->installEventFilter(this);
+  scheduleQuickFold();
+  update();
 }
 
 void TitleBar::setIndicator(QWidget* indicator) {
@@ -198,15 +232,18 @@ void TitleBar::setFloatingRow(bool floating) {
   layout()->setContentsMargins(floating ? 0 : 12, 0, floating ? 0 : 12, 0);
   m_inset->setVisible(!floating);
   m_history->setCardMaterial(floating);
+  if (m_quickAccess != nullptr) {
+    m_quickAccess->setCardMaterial(floating);
+  }
   for (QWidget* part :
        std::initializer_list<QWidget*>{m_history, m_tabs, m_search, m_indicator.data(), m_agentIndicator.data(),
-                                       m_chatButton.data()}) {
+                                       m_chatButton.data(), static_cast<QWidget*>(m_quickAccess.data())}) {
     if (part == nullptr) {
       continue;
     }
     if (floating) {
       part->installEventFilter(this);
-    } else {
+    } else if (part != m_tabs || m_quickAccess == nullptr) {
       part->removeEventFilter(this);
     }
   }
@@ -230,6 +267,7 @@ std::vector<std::pair<QString, QRect>> TitleBar::rowParts() const {
   };
   add("titleHistory", m_history);
   add("titleTabs", m_tabs);
+  add("titleQuickAccess", m_quickAccess.data());
   add("titleIndicator", m_indicator.data());
   add("titleAgent", m_agentIndicator.data());
   add("titleChat", m_chatButton.data());
@@ -271,6 +309,47 @@ void TitleBar::updateRowMask() {
 void TitleBar::resizeEvent(QResizeEvent* event) {
   QWidget::resizeEvent(event);
   updateRowMask();
+  scheduleQuickFold();
+}
+
+void TitleBar::scheduleQuickFold() {
+  if (m_quickAccess != nullptr) {
+    m_foldTimer->start();
+  }
+}
+
+const QWidget* TitleBar::rightPart() const {
+  const QWidget* right = m_search;
+  for (const QWidget* part : {m_chatButton.data(), m_agentIndicator.data(), m_indicator.data()}) {
+    if (part != nullptr && !part->isHidden()) {
+      right = part;
+    }
+  }
+  return right;
+}
+
+int TitleBar::titleWidth() const {
+  QFont titleFont = font();
+  titleFont.setWeight(QFont::DemiBold);
+  QFont subFont = font();
+  subFont.setPointSizeF(subFont.pointSizeF() * 0.85);
+  const QString subtitle = window()->isWindowModified() ? tr("Edited") : QString();
+  const int text = qMax(QFontMetrics(titleFont).horizontalAdvance(documentTitle()),
+                        QFontMetrics(subFont).horizontalAdvance(subtitle));
+  return text + 2 * (m_floatingRow ? kTitlePadX : 0);
+}
+
+void TitleBar::updateQuickFold() {
+  if (m_quickAccess == nullptr) {
+    return;
+  }
+  // The room the name has with the group unfolded: from the group's right
+  // (the tabs' right, the row's spacing and its whole width) to the
+  // indicators or the search field, 16 px off each, as titleText leaves.
+  const int spacing = qMax(0, layout()->spacing());
+  const int freeLeft = m_tabs->geometry().right() + spacing + m_quickAccess->unfoldedWidth() + 16;
+  const int freeRight = rightPart()->geometry().left() - 16;
+  m_quickAccess->setFolded(freeRight - freeLeft < titleWidth());
 }
 
 bool TitleBar::underNativeTitleBar() const {
@@ -335,6 +414,7 @@ bool TitleBar::eventFilter(QObject* watched, QEvent* event) {
     case QEvent::WindowStateChange:
       updateInset();
       updateRowMask(); // the title's box follows the name
+      scheduleQuickFold();
       update();
       break;
     case QEvent::WinIdChange:
@@ -345,17 +425,22 @@ bool TitleBar::eventFilter(QObject* watched, QEvent* event) {
     default:
       break;
     }
-  } else if (m_floatingRow) {
-    // A control of the row moved, resized, came or went: the mask follows.
-    switch (event->type()) {
-    case QEvent::Move:
-    case QEvent::Resize:
-    case QEvent::Show:
-    case QEvent::Hide:
-      updateRowMask();
-      break;
-    default:
-      break;
+  } else {
+    if (watched == m_tabs && event->type() == QEvent::Resize) {
+      scheduleQuickFold();
+    }
+    if (m_floatingRow) {
+      // A control of the row moved, resized, came or went: the mask follows.
+      switch (event->type()) {
+      case QEvent::Move:
+      case QEvent::Resize:
+      case QEvent::Show:
+      case QEvent::Hide:
+        updateRowMask();
+        break;
+      default:
+        break;
+      }
     }
   }
   return QWidget::eventFilter(watched, event);
@@ -373,17 +458,11 @@ QString TitleBar::documentTitle() const {
 
 TitleBar::TitleText TitleBar::titleText() const {
   TitleText text;
-  // Between the tabs and the search field; the middle of the window when the
-  // text fits there.
-  const int freeLeft = m_tabs->geometry().right() + 16;
-  // The leftmost of the indicators and the search field.
-  const QWidget* right = m_search;
-  for (const QWidget* part : {m_chatButton.data(), m_agentIndicator.data(), m_indicator.data()}) {
-    if (part != nullptr && !part->isHidden()) {
-      right = part;
-    }
-  }
-  const int freeRight = right->geometry().left() - 16;
+  // Between the tabs (or the quick-access group after them) and the search
+  // field; the middle of the window when the text fits there.
+  const QWidget* leftPart = m_quickAccess != nullptr && !m_quickAccess->isHidden() ? m_quickAccess.data() : m_tabs;
+  const int freeLeft = leftPart->geometry().right() + 16;
+  const int freeRight = rightPart()->geometry().left() - 16;
   if (freeRight - freeLeft < 60) {
     return text;
   }
@@ -423,8 +502,8 @@ void TitleBar::paintEvent(QPaintEvent*) {
     painter.setPen(QPen(cardBorderColor(pal), hairline));
     painter.setBrush(cardFillColor(pal));
     for (const auto& [name, rect] : rowParts()) {
-      if (name == QLatin1String("titleHistory")) {
-        continue;
+      if (name == QLatin1String("titleHistory") || name == QLatin1String("titleQuickAccess")) {
+        continue; // capsules of their own
       }
       const QRectF box = QRectF(rect).adjusted(hairline / 2, hairline / 2, -hairline / 2, -hairline / 2);
       const qreal radius = name == QLatin1String("titleBox") ? qreal(GlassCard::kBoxRadius) : box.height() / 2;

@@ -1,0 +1,9 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Filling a closed table (mitcad#1044): a 10 x 10 mm extrusion k high (k = 2 mm), no configurations yet."},
+  {"cmd": "add_parameter", "name": "k", "unit": "mm", "expression": "2 mm"},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 10, "height": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": "k"}, "operation": "new_body"}}
+]

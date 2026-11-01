@@ -337,7 +337,7 @@ QString printAnalysisText(const PrintAnswers& answers, const BodyNames& name) {
     parts << lines.join(QStringLiteral("<br>"));
   }
   if (parts.isEmpty()) {
-    return QObject::tr("Nothing to check: turn on Overhangs, Thin walls or Estimate.");
+    return QObject::tr("Nothing to check: turn on Overhangs, Thin Walls or Estimate.");
   }
   return parts.join(QStringLiteral("<br><br>"));
 }

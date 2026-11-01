@@ -68,16 +68,22 @@ public:
   // The kinds listed: printer and process (the default), or one of them.
   void setKinds(const QStringList& kinds);
   // The library the panel works in: `user` or `project` (My Library);
-  // empty: the design (the default).
-  void setLibrary(const QString& library);
+  // empty: the design (the default). Its items are read at once, or with
+  // `read` false shown empty until refresh (My Library reads them off the
+  // UI thread, mitcad#1018).
+  void setLibrary(const QString& library, bool read = true);
   // Shows the item `key` ("<place>/<id>") of `kind` (printer or process);
   // an empty key selects nothing (3D Print's Slicer default).
   void showItem(const QString& kind, const QString& key);
   // Shows the items and the selected one as the model has them now.
   void refresh();
-  // A button of the window at the end of the row under the list (My
-  // Library…, Close), its place logged as "<logName> <name> at x,y".
+  // A button of the window at the end of the row under the list (Close),
+  // its place logged as "<logName> <name> at x,y".
   void addButton(QPushButton* button, const QString& name);
+  // A button of the window that is no result of it, after the list's
+  // actions (New, Duplicate, Delete) with a gap (Edit Library…,
+  // mitcad#1019), logged as addButton's.
+  void addListButton(QPushButton* button, const QString& name);
 
 signals:
   // A command of the panel changed the model (My Library: a library).
@@ -157,7 +163,8 @@ private:
 // can choose, the panel above on the open design. Edit Printers and
 // Processes (MAKE, next to 3D Print) and Edit… of 3D Print's and Property
 // Sets' Printer and Process rows open it; a non-modal window that follows
-// the model, with My Library… (mitcad#704) and Close on the right. At the
+// the model, with Edit Library… (My Library, mitcad#704) after the list's
+// actions and Close on the right (mitcad#1019). At the
 // top Import from Slicer… (mitcad#829, SlicerImportBar: 3D Print's import
 // into the design), its line and Details… before it; the items read show
 // selected in the list.
@@ -170,7 +177,7 @@ public:
 
   void showItem(const QString& kind, const QString& key);
   void refresh();
-  // My Library… (mitcad#704).
+  // Edit Library…: My Library (mitcad#704).
   std::function<void()> openMyLibrary;
 
 private:

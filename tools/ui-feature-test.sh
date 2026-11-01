@@ -60,7 +60,9 @@ ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
 ui_step "revolve (search)"               ui_command "Revolve"
 ui_expect_log "Revolve Profiles: 1 profile" "the profile was taken"
 ui_expect_log "Panel Revolve input axis at" "panel generated"
-ui_expect_log "Datum y at" "origin axes shown for the axis input"
+# The axis input shows the origin's axes only as the Origin folder's light
+# bulb does (mitcad#1030).
+ui_show_origin
 ui_expect_log "Sketch entity F1/c4 at" "sketch lines can be picked"
 
 # The middle of the profile: between the middles of its bottom and top lines.

@@ -272,9 +272,9 @@ impl<K: Kernel> Document<K> {
             .collect();
         match named.as_slice() {
             [one] => Ok(one),
-            [] => Err(invalid(format!("there is no drawing '{text}'"))),
+            [] => Err(invalid(format!("there is no drawing “{text}”"))),
             _ => Err(invalid(format!(
-                "several drawings are named '{text}': give its id (D1, ...)"
+                "several drawings are named “{text}”: give its id (D1, ...)"
             ))),
         }
     }
@@ -437,7 +437,7 @@ impl<K: Kernel> Document<K> {
         });
         if taken {
             return Err(invalid(format!(
-                "{} already has a drawing '{}'",
+                "{} already has a drawing {}",
                 self.state.assembly.name(drawing.component),
                 drawing.name
             )));

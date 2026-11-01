@@ -1,0 +1,143 @@
+# SPDX-License-Identifier: MIT
+# A filament's colour is its appearance (mitcad#1055), through the real Qt
+# controls; shared by tools/ui-filament-appearance-test.sh (Linux, Xvfb),
+# tools/ui-windows-filament-appearance-test.ps1 and
+# tools/ui-macos-filament-appearance-test.sh. The design is
+# filament-appearance.json: two boxes of the default material and PLA
+# Basic, which offers Bright Green (its default), Plastic - Black and
+# Translucent Blue. Pictures go to ${MITCAD_TEST_WORK}.
+#   1. Material ▸ PLA Basic ▸ Plastic - Black on Body1 and ▸ Translucent
+#      Blue on Body2 assign the material and the appearance, one undo step
+#      each; Body1's menu checks Plastic - Black; the root's Material ▸ PLA
+#      Basic ▸ Translucent Blue sets its default material and appearance.
+#   2. The Materials window (mitcad#1083): a new FDM plastic with a long
+#      name shows in full in the list at the window's default size; PLA
+#      Basic's Class shows FDM Plastic, fixed by its print settings
+#      (mitcad#1102); General's list of its appearances, the default marked
+#      in its row; Add… opens the appearance library's popover, the FDM
+#      Plastic and then the General Plastic appearances first, Orange typed and
+#      Return adds Plastic - Orange; a row selected and Make Default;
+#      Remove; Make Default on Bright Green again.
+wait-idle
+window-resize 1280 860
+focus-main
+capture-undo-depth start
+mark
+
+# 1. Material ▸ material ▸ appearance. The Browser logs its rows' places
+# when the window opens, before the mark: any time, not since it.
+expect-ever '^Browser Root/Bodies/Body1 at '
+expect-ever '^Browser Root/Bodies/Body2 at '
+expect-ever '^Browser Root at '
+context-menu-logged '^Browser Root/Bodies/Body1 at ' 'Material/PLA Basic/Plastic - Black'
+expect-log '^Context menu Material: Steel \| PLA Basic \| More…$'
+expect-log '^Context menu Material PLA Basic: Bright Green \| Plastic - Black \| Translucent Blue$'
+expect-log '^Material assigned from menu: PLA Basic, Plastic - Black to 1 bodies$'
+expect-undo-depth ${start} 1
+wait-idle
+mark
+context-menu-logged '^Browser Root/Bodies/Body2 at ' 'Material/PLA Basic/Translucent Blue'
+expect-log '^Material assigned from menu: PLA Basic, Translucent Blue to 1 bodies$'
+expect-undo-depth ${start} 2
+wait-idle
+mark
+context-menu-logged '^Browser Root/Bodies/Body1 at ' 'Material/PLA Basic/Plastic - Black'
+expect-log '^Context menu Material checked: PLA Basic$'
+expect-log '^Context menu Material PLA Basic checked: Plastic - Black$'
+expect-undo-depth ${start} 2
+wait-idle
+mark
+context-menu-logged '^Browser Root at ' 'Material/PLA Basic/Translucent Blue'
+expect-log '^Material assigned from menu: PLA Basic, Translucent Blue to component Root$'
+expect-undo-depth ${start} 3
+wait-idle
+
+# 2. The Materials window at its default size. A plastic with a long name:
+# the list widens to show it in full ("none cut", mitcad#1083).
+mark
+command solid.materials
+focus-dialog '^Materials$'
+expect-log '^Materials list: [0-9]+ names, none cut$'
+wait-idle
+mark
+button '^New'
+expect-log '^Materials new menu: Metal \| General Plastic \| FDM Plastic \| Resin \| Other$'
+popup 'FDM Plastic'
+expect-log '^Material created: .+ in design$'
+expect-undo-depth ${start} 4
+wait-idle
+mark
+focus-widget materialName
+key ctrl+a
+type 'Generic PLA @Printer A1 mini - high temp'
+key Return
+expect-log '^Material .+ \(design\) name = Generic PLA @Printer A1 mini - high temp$'
+expect-log '^Materials list: [0-9]+ names, none cut$'
+expect-undo-depth ${start} 5
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/materials-list-${MITCAD_TEST_COLOR_SCHEME}.png'
+
+# The list of PLA Basic's appearances: each row its swatch and name, the
+# default marked in its row.
+mark
+focus-widget materialsList
+key Home
+type 'PLA Basic'
+expect-log '^Material selected: PLA Basic \(design\)'
+# Print settings make it an FDM plastic: its Class shows so, disabled
+# (mitcad#1102).
+expect-log '^Materials class: FDM Plastic, fixed by its print settings$'
+expect-log '^Materials appearances: Bright Green \(default\) \| Plastic - Black \| Translucent Blue$'
+expect-log '^Materials appearance row Plastic - Black at '
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/materials-appearances-${MITCAD_TEST_COLOR_SCHEME}.png'
+mark
+button '^Add$' materialAppearanceAdd
+expect-log '^Materials add appearance picker opened: [0-9]+ appearances$'
+# The material's class first, then General Plastic, then the design's
+# others and the library's (mitcad#1102): Bright Green is an FDM plastic's
+# look, Translucent Blue the design's other.
+expect-log '^Materials add appearance picker sections: FDM Plastic 1 \| General Plastic 6 \| This design 1 \| Library [0-9]+$'
+focus-widget appearancePickerSearch
+type 'Orange'
+expect-log '^Materials add appearance picker search: Orange, 1 shown$'
+screenshot-dialog '${MITCAD_TEST_WORK}/appearance-picker-${MITCAD_TEST_COLOR_SCHEME}.png'
+key Return
+expect-log '^Materials add appearance picker chosen: Plastic - Orange \(plastic_orange\)$'
+expect-log '^Material PLA Basic \(design\) appearances = bright_green, plastic_black, translucent_blue, plastic_orange$'
+expect-log '^Materials appearances: Bright Green \(default\) \| Plastic - Black \| Translucent Blue \| Plastic - Orange$'
+expect-undo-depth ${start} 6
+focus-dialog '^Materials$'
+wait-idle
+mark
+# Logged when Add… grew the list, before this mark.
+expect-ever '^Materials appearance row Plastic - Black at '
+dialog-click-logged '^Materials appearance row Plastic - Black at '
+expect-log '^Materials appearance selected: Plastic - Black$'
+button '^Make Default$' materialAppearanceDefault
+expect-log '^Material PLA Basic \(design\) appearance = plastic_black$'
+expect-log '^Materials appearances: Plastic - Black \(default\) \| Bright Green \| Translucent Blue \| Plastic - Orange$'
+expect-undo-depth ${start} 7
+wait-idle
+mark
+# Logged when Make Default reordered the rows, before this mark.
+expect-ever '^Materials appearance row Plastic - Orange at '
+dialog-click-logged '^Materials appearance row Plastic - Orange at '
+expect-log '^Materials appearance selected: Plastic - Orange$'
+button '^Remove$' materialAppearanceRemove
+expect-log '^Material PLA Basic \(design\) appearances = plastic_black, bright_green, translucent_blue$'
+expect-log '^Materials appearances: Plastic - Black \(default\) \| Bright Green \| Translucent Blue$'
+expect-undo-depth ${start} 8
+wait-idle
+mark
+expect-ever '^Materials appearance row Bright Green at '
+dialog-click-logged '^Materials appearance row Bright Green at '
+expect-log '^Materials appearance selected: Bright Green$'
+button '^Make Default$' materialAppearanceDefault
+expect-log '^Material PLA Basic \(design\) appearance = bright_green$'
+expect-log '^Materials appearances: Bright Green \(default\) \| Plastic - Black \| Translucent Blue$'
+expect-undo-depth ${start} 9
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/materials-appearances-after-${MITCAD_TEST_COLOR_SCHEME}.png'
+button '^Close$'
+focus-main

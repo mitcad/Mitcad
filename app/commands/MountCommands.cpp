@@ -318,13 +318,13 @@ Inspection inspectPlacement(const MountPart& part, const CommandState& state, co
 
 bool place(MountPart& part, DocumentHost& host, CommandState& state, const CommandContext& context) {
   if (part.library.isEmpty()) {
-    host.showStatus(noPart(), true);
+    host.showStatus(noPart(), NoticeLevel::Error);
     return false;
   }
   QString problem;
   const std::optional<QJsonObject> at = atOf(state, context, problem);
   if (!problem.isEmpty()) {
-    host.showStatus(problem, true);
+    host.showStatus(problem, NoticeLevel::Error);
     return false;
   }
   QJsonObject command = fieldsOf(part, state, at);
@@ -358,7 +358,7 @@ bool place(MountPart& part, DocumentHost& host, CommandState& state, const Comma
                                   str(plan, "frame"), whereText(plan), str(plan, "joint"))
                              .arg(str(result, "joint_name"), origin.join(QStringLiteral(", ")),
                                   bodies.join(QStringLiteral(", ")));
-    host.showStatus(QObject::tr("Placed %1 on %2.").arg(component, whereText(plan)), false);
+    host.showStatus(QObject::tr("Placed %1 on %2.").arg(component, whereText(plan)), NoticeLevel::Information);
   } else {
     qInfo().noquote() << QStringLiteral("Inserted component %1 (%2) from %3 %4, licence %5, dropped in; bodies %6; "
                                         "mount frames %7")
@@ -366,7 +366,7 @@ bool place(MountPart& part, DocumentHost& host, CommandState& state, const Comma
                                   part.license.isEmpty() ? QStringLiteral("none") : part.license,
                                   bodies.join(QStringLiteral(", ")), frames.join(QStringLiteral(", ")));
     host.showStatus(QObject::tr("Inserted %1; join it with Joint, its mount frames are joint origins.").arg(component),
-                    false);
+                    NoticeLevel::Information);
   }
   // The next one starts from a new click.
   state.setItems(kAt, {});

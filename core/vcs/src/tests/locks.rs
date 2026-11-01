@@ -565,7 +565,7 @@ fn a_killed_requesters_request_goes_stale_and_is_removed() {
         p.a.command_text(&json!({"cmd": "lock_status", "session": SA}).to_string())
             .unwrap();
     assert!(
-        text.contains("(stale: its Mitcad no longer refreshes it)"),
+        text.contains("(stale: its MitCad no longer refreshes it)"),
         "{text}"
     );
     // The holder's poll removes it (anyone's would).
@@ -989,7 +989,7 @@ fn a_remote_that_refuses_lock_refs() {
     );
     assert_eq!(
         probe["message"],
-        "This remote does not accept Mitcad's lock references"
+        "This remote does not accept MitCad's lock references"
     );
     let taken = run(
         &p.a,
@@ -1000,7 +1000,7 @@ fn a_remote_that_refuses_lock_refs() {
         taken["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("does not accept Mitcad's lock references"),
+            .contains("does not accept MitCad's lock references"),
         "{taken}"
     );
 }

@@ -148,7 +148,7 @@ pub(super) fn check(state: &DocState) -> Result<(), FileError> {
 /// (`invalid component id 'C…'`, mitcad#929).
 fn refused(place: &str, what: &str, id: impl Display, largest: impl Display) -> FileError {
     FileError::Invalid(format!(
-        "{place}: invalid {what} '{id}' (at most {largest}: the top {ID_RESERVE} numbers \
+        "{place}: invalid {what} {id} (at most {largest}: the top {ID_RESERVE} numbers \
          are kept for the ids a session hands out)"
     ))
 }

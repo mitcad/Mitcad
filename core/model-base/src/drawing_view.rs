@@ -37,7 +37,8 @@ pub struct ViewSpec {
     /// Exact edges first; false: a triangulation's only.
     pub exact: bool,
     /// With `exact`: the quick path where the exact edges are slow, on
-    /// bodies with free-form faces (mitcad#962): a fine triangulation's
+    /// bodies with free-form faces (mitcad#962) or with many B-spline
+    /// edges against many faces (mitcad#1033): a fine triangulation's
     /// edges, drawn as lines and arcs where they follow them (the
     /// projection is then `polygonal`). Drawings' views take it; cut sheets
     /// do not, as they write the curves as they are.
@@ -68,6 +69,11 @@ pub enum ViewEdgeKind {
     Smooth,
     /// A silhouette of a curved face.
     Outline,
+    /// A thread's root line drawn by convention (ISO 6410, mitcad#1112):
+    /// continuous narrow. Never from the kernel: the drawing adds it in
+    /// place of a thread's crests and helices
+    /// (`mitcad_model_drawing::convention`).
+    ThreadRoot,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -107,6 +113,12 @@ pub struct ViewEdge {
     pub visible: bool,
     pub kind: ViewEdgeKind,
     pub curve: ViewCurve,
+    /// The shape whose edge it is: its index among those
+    /// [`crate::Kernel::project_view`] was given (mitcad#1112: a thread's
+    /// convention replaces only its own body's lines). None for a line the
+    /// drawing adds, or when not known. The kernel records the shape, not
+    /// the face: its hidden-line removal makes new edges.
+    pub source: Option<usize>,
 }
 
 /// A face a section's plane cuts: its closed loops (the last point not

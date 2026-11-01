@@ -1,0 +1,8 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- MitCad icon: 24 x 24, dark outline, blue solids, orange actions. -->
+<!-- Snap to Grid (mitcad#1086): a point drawn to a grid intersection. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2b3a4a" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
+  <path d="M8 3 V21 M16 3 V21 M3 8 H21 M3 16 H21" stroke="#7aa6dc"/>
+  <path d="M5.5 5.5 L13.6 13.6 M13.6 9.6 V13.6 H9.6" stroke-width="1.6"/>
+  <circle cx="16" cy="16" r="2.4" fill="#e07b1a" stroke="none"/>
+</svg>

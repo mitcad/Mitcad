@@ -1728,7 +1728,7 @@ impl FeatureInfo for PrintableBearingDef {
         if let Some(at) = &self.at {
             if self.plane.is_some() || !is_origin(&self.center) || self.seat.is_some() {
                 return Err(
-                    "a bearing placed by at takes no plane, centre or seat of its own".to_owned(),
+                    "a bearing placed by at takes no plane, center or seat of its own".to_owned(),
                 );
             }
             if self.groove.is_some() || self.offset.is_some() {
@@ -1743,7 +1743,7 @@ impl FeatureInfo for PrintableBearingDef {
         if let Some(seat) = &self.seat {
             if self.plane.is_some() || !is_origin(&self.center) {
                 return Err(
-                    "a bearing on a shaft or in a hole takes its plane and centre from it"
+                    "a bearing on a shaft or in a hole takes its plane and center from it"
                         .to_owned(),
                 );
             }
@@ -1783,7 +1783,7 @@ impl FeatureInfo for PrintableBearingDef {
                     return Err("the raceway is cut into a face of a body".to_owned());
                 }
                 if !is_origin(&self.center) || self.angle.is_some() {
-                    return Err("a bearing cut into a face takes no centre and no angle".to_owned());
+                    return Err("a bearing cut into a face takes no center and no angle".to_owned());
                 }
                 groove.check(ctx, Want::Face)
             }

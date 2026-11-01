@@ -24,7 +24,7 @@ namespace mitcad {
 
 bool CommandSession::runParameter(const QJsonObject& command, QString& refusal) {
   refusal.clear();
-  return runOutsideRange(QJsonArray{command}, tr("Change Parameters"), true, &refusal);
+  return runOutsideRange(QJsonArray{command}, tr("Edit Parameters"), true, &refusal);
 }
 
 void CommandSession::parametersChanged(const QJsonObject& command, bool done, bool sketchPreviewTakenBack) {

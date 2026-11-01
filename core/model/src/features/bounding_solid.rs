@@ -56,7 +56,7 @@ fn grown(bounds: &BoundingBox, margin: f64) -> Result<([f64; 3], [f64; 3]), Stri
         Ok((min, size))
     } else {
         Err(format!(
-            "a margin of {margin} leaves no box around the bodies (they are {} x {} x {})",
+            "a margin of {margin} leaves no box around the bodies (they are {} × {} × {})",
             bounds.max[0] - bounds.min[0],
             bounds.max[1] - bounds.min[1],
             bounds.max[2] - bounds.min[2]

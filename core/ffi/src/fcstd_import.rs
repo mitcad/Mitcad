@@ -120,6 +120,8 @@ impl Document {
             "items": report.items.len(),
             "bodies": report.bodies.len(),
             "counts": counts,
+            // What the outcomes left out and the warnings (mitcad#1040).
+            "notices": mitcad_model::notice::to_json(&report.notices()),
             "report": serde_json::to_value(&report).expect("the report serializes"),
         }))
     }

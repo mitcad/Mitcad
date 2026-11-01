@@ -12,7 +12,7 @@
 //! untrusted: only lines of known key types for the host asked about are
 //! read, keys must be base64 of a key blob of their type, and fingerprints
 //! are computed here. A key that differs from what a service publishes
-//! cannot be trusted from Mitcad.
+//! cannot be trusted from MitCad.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -124,7 +124,7 @@ pub struct HostKey {
 pub enum Published {
     /// Every key is one the service publishes.
     Verified,
-    /// A key is not: it cannot be trusted from Mitcad.
+    /// A key is not: it cannot be trusted from MitCad.
     Mismatch,
 }
 
@@ -264,7 +264,7 @@ fn check_host(host: &str) -> Result<String, VcsError> {
         Ok(bare.to_ascii_lowercase())
     } else {
         Err(VcsError::Command(format!(
-            "'{host}' is not a server's host name or address"
+            "“{host}” is not a server's host name or address"
         )))
     }
 }
@@ -510,7 +510,7 @@ fn find_keyscan(context: &Context) -> Result<PathBuf, VcsError> {
             Err(failure(
                 ErrorClass::Other,
                 format!(
-                    "the ssh-keyscan set for Mitcad (MITCAD_SSH_KEYSCAN) is not there: {}",
+                    "the ssh-keyscan set for MitCad (MITCAD_SSH_KEYSCAN) is not there: {}",
                     program.display()
                 ),
             ))
@@ -796,7 +796,7 @@ pub fn host_keys(
 /// Appends the host key `kind` `key` of `host` at `port` to
 /// `~/.ssh/known_hosts` (made, readable by the user only, when missing),
 /// only when a new scan still gives it and it is one its service publishes
-/// (a mismatch is never trusted from Mitcad). `written` false: it was
+/// (a mismatch is never trusted from MitCad). `written` false: it was
 /// there.
 pub fn trust_host_key(
     host: &str,
@@ -811,9 +811,7 @@ pub fn trust_host_key(
         .contains(&kind)
         .then(|| key_blob(kind, key.trim()))
         .flatten()
-        .ok_or_else(|| {
-            VcsError::Command(format!("'{kind}' with that key is not an SSH host key"))
-        })?;
+        .ok_or_else(|| VcsError::Command(format!("{kind} with that key is not an SSH host key")))?;
     let key = base64(&blob, true);
     let scan = host_keys(&host, port, context, log)?;
     let name = host_field(&host, port);
@@ -832,7 +830,7 @@ pub fn trust_host_key(
         return Err(failure(
             ErrorClass::HostKeyUnknown,
             format!(
-                "the key {name} sent ({}) is not one {service} publishes, so Mitcad does not \
+                "the key {name} sent ({}) is not one {service} publishes, so MitCad does not \
                  trust it: the network may be redirected. Check the connection (another \
                  network, no proxy) and compare with {service}'s published fingerprints",
                 found.fingerprint
@@ -869,7 +867,7 @@ pub fn trust_host_keys(
         return Err(failure(
             ErrorClass::HostKeyUnknown,
             format!(
-                "a key {} sent is not one {service} publishes, so Mitcad does not trust it: the \
+                "a key {} sent is not one {service} publishes, so MitCad does not trust it: the \
                  network may be redirected. Check the connection (another network, no proxy)",
                 host_field(&scan.host, port)
             ),
@@ -918,7 +916,7 @@ pub fn trust_shown_host_keys(
             .then(|| key_blob(kind, key.trim()))
             .flatten()
             .ok_or_else(|| {
-                VcsError::Command(format!("'{kind}' with that key is not an SSH host key"))
+                VcsError::Command(format!("{kind} with that key is not an SSH host key"))
             })?;
         wanted.push((kind.as_str(), base64(&blob, true)));
     }
@@ -942,7 +940,7 @@ pub fn trust_shown_host_keys(
             return Err(failure(
                 ErrorClass::HostKeyUnknown,
                 format!(
-                    "the key {name} sent ({}) is not one {service} publishes, so Mitcad does \
+                    "the key {name} sent ({}) is not one {service} publishes, so MitCad does \
                      not trust it: the network may be redirected. Check the connection \
                      (another network, no proxy) and compare with {service}'s published \
                      fingerprints",

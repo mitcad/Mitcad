@@ -10,10 +10,11 @@
 #     with a job count the memory allows (cargo_jobs below), and after it
 #     the profile's folder in CARGO_TARGET_DIR is swept of what the build
 #     did not name (sweep below; MITCAD_CARGO_SWEEP=0 turns that off).
-#   cmake -DLIST=<file> -P cargo-tests.cmake -- run <package> [<argument>...]
+#   cmake -DLIST=<file> [-DTEST_NAME=<ctest>] -P cargo-tests.cmake -- run <package> [<argument>...]
 #     Runs the package's test binaries in the package's folder, as cargo
 #     test does, with libtest's arguments (a filter, --skip <filter>); on
-#     Windows with a temporary folder of the run's own (see below).
+#     Windows with a temporary folder of the run's own (see below), named
+#     after TEST_NAME, the package and the arguments.
 #   cmake -DLIST=<file> -P cargo-tests.cmake -- parts <package> <filter>...
 #     Checks the parts a package's tests run in: those of each filter, and
 #     the rest (--skip of every filter). Together they must list each test
@@ -503,12 +504,16 @@ elseif(mode STREQUAL "run")
   # folders there, also those of a git repository a test has just made
   # (refs, objects), and git then no longer sees the repository. Not in the
   # build tree: a build folder in a git checkout would put the tests'
-  # folders in that repository. Each run (package and filter in this build)
-  # has its own folder, as parts of a package run at the same time.
+  # folders in that repository. Each run (ctest, package and filter in this
+  # build) has its own folder, as parts of a package run at the same time.
+  # The ctest's name counts too (mitcad#1017): core.model.assembly and
+  # core.model.assembly.workers run the same binary with the same arguments
+  # (only their environment differs), and with one folder for both the run
+  # that started or ended removed the folder under the other's tests.
   set(temporary)
   if(CMAKE_HOST_WIN32 AND DEFINED ENV{LOCALAPPDATA})
     file(TO_CMAKE_PATH "$ENV{LOCALAPPDATA}" local)
-    string(SHA1 run_id "${LIST};${package};${args}")
+    string(SHA1 run_id "${LIST};${TEST_NAME};${package};${args}")
     string(SUBSTRING "${run_id}" 0 8 run_id)
     set(temporary "${local}/mitcad-tests/${run_id}")
     file(REMOVE_RECURSE "${temporary}")

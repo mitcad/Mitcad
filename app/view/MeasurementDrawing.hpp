@@ -76,6 +76,9 @@ struct MeasurementDisplay {
   QString kind;
   QColor color;       // invalid for Auto
   bool autoColor = false; // the model's "auto" (mitcad#894): the background tone's annotation colour
+  // A panel's preview of the annotation its Add makes (mitcad#1097): drawn
+  // dimmed, never picked.
+  bool preview = false;
   QString group;
   QString label; // on one line: "Ø20 H7 (+0.021/0)"; "Distance1 = 40 mm" without the model's label
   // A length's two ends; a radius from the centre to the rim, a diameter
@@ -195,6 +198,7 @@ struct MeasurementShape {
   QString name;
   QColor color;
   bool autoColor = false; // drawn in measurementAutoColor of the halo
+  bool preview = false;   // a preview (mitcad#1097): painted dimmed
   // The height of its text's capitals on the picture: the model's height
   // in its plane, between the text floor and ceiling (times the scale;
   // mitcad#902); a screen-facing label's the floor. Arrowheads, gaps and

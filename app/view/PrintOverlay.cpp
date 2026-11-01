@@ -111,6 +111,13 @@ public:
 
   bool AcceptDisplayMode(const int mode) const override { return mode == 0; }
 
+  // The categories' colours for another background (mitcad#1041); the
+  // caller has the presentation computed again.
+  void setColors(const QColor& overhang, const QColor& thin) {
+    m_overhangColor = overhang;
+    m_thinColor = thin;
+  }
+
 protected:
   void Compute(const occ::handle<PrsMgr_PresentationManager>&, const occ::handle<Prs3d_Presentation>& presentation,
                const int mode) override {
@@ -298,6 +305,31 @@ void PrintOverlayLabels::setOverlay(const PrintOverlay& overlay) {
   m_markerColor = overlay.thinColor;
   m_shown = !overlay.isEmpty();
   paintCards();
+}
+
+void PrintOverlayLabels::setColors(const QColor& overhang, const QColor& thin) {
+  // The legend's two categories: the thin walls' entry has the marker's
+  // colour, the other is the overhangs'.
+  for (auto& entry : m_entries) {
+    entry.first = entry.first == m_markerColor ? thin : overhang;
+  }
+  m_markerColor = thin;
+  if (m_shown) {
+    paintCards();
+    m_changed();
+  }
+}
+
+void OcctViewer::recolorPrintOverlay() {
+  const QColor overhang = viewColor(ColorRole::PrintOverhang, m_backgroundDark);
+  const QColor thin = viewColor(ColorRole::PrintThin, m_backgroundDark);
+  if (auto* triangles = dynamic_cast<PrintTriangles*>(m_printTriangles.get())) {
+    triangles->setColors(overhang, thin);
+    m_context->Redisplay(m_printTriangles, false);
+  }
+  if (m_printLabels != nullptr) {
+    m_printLabels->setColors(overhang, thin);
+  }
 }
 
 void PrintOverlayLabels::follow() {

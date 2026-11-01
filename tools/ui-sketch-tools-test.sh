@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework app/MainWindow.cpp app/commands/SketchCommands.cpp app/sketch tools/cli
+# check-all sources: app/tests/palette_create_tools.cpp
+# check-all sources: app/OcctViewer.cpp app/OcctViewer.hpp
 # check-all sources: core/sketch core/model-api/src/sketch.rs
-# What the sketch tools make and keep (mitcad#352, #353, #354, #355, #356),
-# through the real UI, on a design mitcad-cli makes: Sketch1 (F1) empty, and
-# Sketch2 (F2) on XY with a line c1 from (0, 40) to (40, 40), the points p4 at
-# (-20, -20) and p5 at (20, -20), a line from (-50, 40) to (-20, 40), and a
-# line from (50, -30) to (70, -30). The design is saved after the drawing
-# and its file read with jq.
+# What the sketch tools make and keep (mitcad#352, #353, #354, #355, #356,
+# #1024), through the real UI, on a design mitcad-cli makes: Sketch1 (F1)
+# empty, Sketch2 (F2) on XY with a line c1 from (0, 40) to (40, 40), the
+# points p4 at (-20, -20) and p5 at (20, -20), a line from (-50, 40) to
+# (-20, 40), and a line from (50, -30) to (70, -30); and Sketch3 (F3) with a
+# circle of radius 20 about the origin and the points (-30, 50), (-40, -40),
+# (40, -40) and (-40, 30). The design is saved after the drawing and its
+# file read with jq.
 #   1. The Point tool on the origin of Sketch1 makes one fixed point and no
 #      constraint; a second click adds nothing (mitcad#355).
 #   2. In Sketch2: a 3-Point Arc whose start snapped to the midpoint of c1
@@ -26,6 +30,28 @@
 #   6. A Line's clicks where its value fields are (the focused length field
 #      placed for the start, then the angle field beside the corner) end the
 #      lines there; no field covers the pointer (mitcad#671).
+#   7. Constraints the drawn lines already satisfy, added only when safe
+#      (mitcad#1024), in Sketch3: a line from (-30, 50) to the circle's top
+#      quadrant is held there (coincident with the circle) and plumb with
+#      its centre (vertical_points); a line between the level points
+#      (-40, -40) and (40, -40) is horizontal; a line from (-40, 30)
+#      clicked near where it touches the circle, (-17.4, -9.9), ends there
+#      on the circle and is tangent to it; a rectangle drawn afterwards adds
+#      no over-constraint warning or refused constraint.
+#   8. The Sketch Palette's Create section (mitcad#1027): the palette opened
+#      for Sketch1 before any tool started shows the defaults; the
+#      Constraints take two rows of seven, Create two rows, and no button
+#      is clipped; the Ellipse, started twice in Sketch2, is in the section
+#      when Sketch3 opens; in a new sketch (Sketch4) the Center Rectangle,
+#      started three times, does not move the buttons during the sketch and
+#      is there when Sketch4 opens again; its Create button starts the tool
+#      and shows checked.
+#   9. A right-click while a sketch tool runs is its Esc (mitcad#1085): in
+#      a new sketch (Sketch5) two Line segments, a right-button drag in the
+#      view that does not end the chain, a right-click that ends the chain
+#      and keeps the tool, a second one that ends the tool, both without a
+#      menu; with no tool the right-click opens the context menu. Saved,
+#      Sketch5 has the two lines.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sketch-tools-test.sh
@@ -45,7 +71,13 @@ cat > "$WORK/model.json" << 'EOF'
   {"cmd": "sketch.add_point", "sketch": "F2", "at": [-20, -20]},
   {"cmd": "sketch.add_point", "sketch": "F2", "at": [20, -20]},
   {"cmd": "sketch.add_line", "sketch": "F2", "start": [-50, 40], "end": [-20, 40]},
-  {"cmd": "sketch.add_line", "sketch": "F2", "start": [50, -30], "end": [70, -30]}
+  {"cmd": "sketch.add_line", "sketch": "F2", "start": [50, -30], "end": [70, -30]},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.circle", "sketch": "F3", "mode": "center", "center": [0, 0], "radius": 20},
+  {"cmd": "sketch.add_point", "sketch": "F3", "at": [-30, 50]},
+  {"cmd": "sketch.add_point", "sketch": "F3", "at": [-40, -40]},
+  {"cmd": "sketch.add_point", "sketch": "F3", "at": [40, -40]},
+  {"cmd": "sketch.add_point", "sketch": "F3", "at": [-40, 30]}
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
@@ -113,6 +145,13 @@ expect_line_end() {
     exit !(dx * dx + dy * dy <= 36 || (g > 0 && dx <= g / 2 + 0.5 && dy <= g / 2 + 0.5)) }' ||
     ui_fail "$3: the line ends at ($ex, $ey), expected near ($1, $2) (grid ${step:-unknown} mm)"
   echo "ok   $3"
+}
+
+# expect_new_re regex description: a line logged since the mark matches the
+# extended regular expression (after a ui_expect_new that waited for it).
+expect_new_re() {
+  tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qE -- "$1" || ui_fail "$2: no line since the mark matches '$1'"
+  echo "ok   $2"
 }
 
 # no_browser: no field opened its parameter browser since the mark.
@@ -313,6 +352,161 @@ ui_step "end the tool (Esc)"             ui_key Escape
 ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
 ui_expect_new "Sketch finished" "Sketch2 finished"
 
+echo "--- 7. Constraints the drawn lines satisfy, added when safe (mitcad#1024)"
+ui_mark
+ui_step "edit Sketch3 (double-click)"    ui_double_click_logged "Timeline Sketch3"
+ui_expect_new "Editing sketch F3 (Sketch3)" "Sketch3 is edited"
+ui_step "zoom out"                       zoom_to_show -50 -50 60 60
+ui_step "line tool (L)"                  ui_key l
+ui_expect_new "Sketch tool Line" "the line tool is active"
+ui_mark
+ui_step "from the point (-30, 50)"       ui_sketch_click -30 50
+ui_step "to the circle's top quadrant"   ui_sketch_click 0 20.3
+ui_expect_new "from (-30, 50) to (0, 20)" "the line ends at the top quadrant"
+ui_expect_new "(quadrant)" "the quadrant adds its constraints"
+expect_new_re "Constraint added automatically: coincident p[0-9]+ on c[0-9]+ \(quadrant\)" \
+  "the quadrant holds the end on the circle"
+expect_new_re "Constraint added automatically: vertical_points p[0-9]+ p[0-9]+ \(quadrant\)" \
+  "and plumb with its centre"
+ui_step "end the chain (Esc)"            ui_key Escape
+ui_mark
+ui_step "from the point (-40, -40)"      ui_sketch_click -40 -40
+ui_step "to the level point (40, -40)"   ui_sketch_click 40 -40
+ui_expect_new "from (-40, -40) to (40, -40) (horizontal)" "the line between level points"
+expect_new_re "Constraint added automatically: horizontal c[0-9]+" "is horizontal"
+ui_step "end the chain (Esc)"            ui_key Escape
+ui_mark
+ui_step "from the point (-40, 30)"       ui_sketch_click -40 30
+ui_step "near where it touches the circle" ui_sketch_click -17.4 -9.9
+ui_expect_new "from (-40, 30) to (-17.39818" "the end goes to the touching point"
+expect_new_re "from \(-40, 30\) to \(-17\.39818[0-9]*, -9\.86424[0-9]*\) \(tangent\)" \
+  "where the line touches the circle (-17.39818, -9.86424)"
+ui_expect_new "Constraint added automatically: tangent c" "the line is tangent to the circle"
+ui_step "end the chain (Esc)"            ui_key Escape
+ui_step "end the tool (Esc)"             ui_key Escape
+ui_mark
+ui_step "rectangle tool (R)"             ui_key r
+ui_step "first corner"                   ui_sketch_click 25 -10
+ui_step "opposite corner"                ui_sketch_click 45 -30
+ui_expect_new "Added rectangle" "a rectangle afterwards"
+ui_sync
+if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -E "not added|over-constrain"; then
+  ui_fail "the rectangle after the automatic constraints met a refused constraint or an over-constrained sketch"
+fi
+echo "ok   no refused constraint, no over-constrained sketch"
+ui_step "end the tool (Esc)"             ui_key Escape
+ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
+ui_expect_new "Sketch finished" "Sketch3 finished"
+
+echo "--- 8. The Sketch Palette's Create section, the constraints on two rows (mitcad#1027)"
+# create_line n: the n-th "Palette create tools" line of the log (one each
+# time the palette opened for a sketch).
+create_line() { grep "^Palette create tools: " "$UI_LOG" | sed -n "$1p"; }
+# create_has line tool: the line names the tool (ids without "sketch.").
+create_has() { grep -qE "(: |, )$2(,| \()" <<< "$1"; }
+DEFAULTS="line, rectangle, circle, arc, polygon, slot, spline, point, mirror, dimension, fillet, trim, extend, offset"
+# Sketch1 opened (step 1) before any tool started: the defaults, in the
+# ribbon's order (Create, then Modify).
+[ "$(create_line 1)" = "Palette create tools: $DEFAULTS (defaults)" ] ||
+  ui_fail "the first palette's Create section is '$(create_line 1)', expected the defaults ($DEFAULTS)"
+echo "ok   the palette opened before any tool started shows the defaults"
+# The Ellipse (not a default) started twice in Sketch2 (steps 2 and 3): in
+# the section when Sketch3 opened (step 7).
+SKETCH3=$(create_line 3)
+create_has "$SKETCH3" ellipse && [[ $SKETCH3 == *" (counts)" ]] ||
+  ui_fail "Sketch3's Create section '$SKETCH3' lacks the Ellipse started twice in Sketch2"
+echo "ok   the Ellipse started in Sketch2 is in the section when Sketch3 opens"
+ui_mark
+ui_step "create sketch on XY"            ui_create_sketch xy
+ui_expect_new "Palette create tools: " "the palette chose its Create tools as it opened"
+ui_expect_new "Palette Constraints: 13 buttons in 2 rows of 7" "the constraints on two rows of seven"
+ui_expect_new "Palette Create: 14 buttons in 2 rows of 7" "the Create section's two rows of seven"
+ui_expect_new "Palette buttons clipped: none" "no button is clipped: the palette keeps its width"
+SKETCH4=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep "^Palette create tools: " | tail -1)
+create_has "$SKETCH4" rectangle_center && ui_fail "the Center Rectangle is in the section before it started"
+ui_step "zoom out"                       zoom_to_show -50 -65 60 60
+ui_mark
+for at in -30 0 30; do
+  ui_step "center rectangle (search)"    ui_command "Center Rectangle"
+  ui_expect_new "Sketch tool Center Rectangle" "the Center Rectangle tool is active"
+  ui_step "centre ($at, -55)"            ui_sketch_click "$at" -55
+  ui_step "corner"                       ui_sketch_click $((at + 4)) -51
+  ui_expect_new "Added rectangle" "a centre rectangle at ($at, -55)"
+  ui_step "end the tool (Esc)"           ui_key Escape
+done
+ui_sync
+if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "^Palette create tools: "; then
+  ui_fail "the Create section was chosen again during the sketch"
+fi
+echo "ok   the Create buttons stay as they are during the sketch"
+ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
+ui_expect_new "Sketch finished" "Sketch4 finished"
+ui_mark
+ui_step "edit Sketch4 (double-click)"    ui_double_click_logged "Timeline Sketch4"
+ui_expect_new "Editing sketch" "Sketch4 is edited again"
+ui_expect_new "Palette create tools: " "the Create tools chosen again"
+AGAIN=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep "^Palette create tools: " | tail -1)
+create_has "$AGAIN" rectangle_center && [[ $AGAIN == *" (counts)" ]] ||
+  ui_fail "the Center Rectangle started three times is not in '$AGAIN'"
+echo "ok   the Center Rectangle started three times is in the section when the sketch opens again"
+ui_expect_new "Palette paletteCreate_sketch.rectangle_center at" "its Create button is placed"
+ui_mark
+ui_step "the Center Rectangle's Create button" ui_click_logged "Palette paletteCreate_sketch.rectangle_center"
+ui_expect_new "Sketch tool Center Rectangle" "the Create button starts its tool"
+ui_expect_new "Palette create checked: rectangle_center" "its button shows checked while the tool is on"
+ui_step "end the tool (Esc)"             ui_key Escape
+ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
+ui_expect_new "Sketch finished" "Sketch4 finished again"
+
+echo "--- 9. A right-click ends the line chain, a second one the tool (mitcad#1085)"
+# no_new_line text description: no line logged since the mark has the text.
+no_new_line() {
+  ui_sync
+  if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF -- "$1"; then
+    ui_fail "$2: '$1' was logged"
+  fi
+  echo "ok   $2"
+}
+ui_mark
+ui_step "create sketch on XY"            ui_create_sketch xy
+ui_step "zoom out"                       zoom_to_show -50 -65 60 60
+ui_step "line tool (L)"                  ui_key l
+ui_expect_new "Sketch tool Line" "the line tool is active"
+ui_mark
+ui_step "start a chain"                  ui_sketch_click -30 20
+ui_step "the first segment's end"        ui_sketch_click -10 20
+ui_step "the second segment's end"       ui_sketch_click -10 45
+ui_expect_new "Added line c" "a line is added"
+ui_sync
+[ "$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -c "Added line c")" = 2 ] ||
+  ui_fail "the chain did not add two lines"
+echo "ok   two segments drawn"
+# A right-button drag is the view's (it moves the view where the
+# navigation binds the right button), not a click: the chain goes on.
+ui_mark
+ui_step "right-button drag in the view"  ui_view_drag 3 30 70 45 70
+no_new_line "Line chain ended" "the right drag did not end the chain"
+no_new_line "Sketch right-click" "the right drag is not a right-click"
+ui_mark
+ui_step "right-click in the view"        ui_view_click 45 60 3
+ui_expect_new "Sketch right-click: Esc of the tool" "the right-click is the tool's Esc"
+ui_expect_new "Line chain ended" "the right-click ended the chain"
+no_new_line "Sketch tool ended" "the Line tool stays on"
+no_new_line "Context menu: " "no menu opened"
+ui_mark
+ui_step "right-click again"              ui_view_click 60 60 3
+ui_expect_new "Sketch tool ended: Line" "the second right-click left the tool"
+no_new_line "Context menu: " "no menu opened"
+# With no tool on the right-click menu is as before.
+ui_mark
+ui_step "right-click with no tool"       ui_view_click 50 80 3
+ui_expect_new "Context menu: " "with no tool the context menu opens"
+no_new_line "Sketch right-click" "it is not a tool's Esc"
+ui_step "Escape (close the menu)"        ui_key Escape
+ui_mark
+ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
+ui_expect_new "Sketch finished" "Sketch5 finished"
+
 echo "--- The saved design"
 ui_mark
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
@@ -345,5 +539,27 @@ expect_file '[.features[1].dimensions[] | select(.type == "minor_radius") | .ell
 # w = 40 and h = 25: a dimension each, and the refused h = 30 changed nothing.
 expect_file '[.parameters[] | select(.name == "w")] | length' 1 "the parameter w exists once"
 expect_file '[.features[1].dimensions[] | select(.type == "length") | .value] | sort' '["h","w"]' "one dimension each named w and h, none doubled"
+# Sketch3 (mitcad#1024): the circle holds the two line ends that reached
+# it, the quadrant's end is plumb with its centre, the line between the
+# level points is horizontal, and one line is tangent to the circle.
+expect_file '.features[2] as $s | ($s.entities[] | select(.type == "circle")) as $c
+  | [$s.constraints[] | select(.type == "coincident" and .entity == $c.id)] | length' 2 \
+  "two line ends are held on the circle"
+expect_file '.features[2] as $s | ($s.entities[] | select(.type == "circle")) as $c
+  | [$s.constraints[] | select(.type == "vertical_points" and (.a == $c.center or .b == $c.center))] | length' 1 \
+  "the quadrant's end is plumb with the circle's centre"
+expect_file '.features[2] as $s | [$s.entities[] | select(.type == "point" and .at[1] == -40) | .id] as $p
+  | [$s.entities[] | select(.type == "line" and ([.start, .end] | inside($p))) | .id] as $l
+  | [$s.constraints[] | select(.type == "horizontal" and ([.line] | inside($l)))] | length' 1 \
+  "the line between the level points is horizontal"
+expect_file '.features[2] as $s | ($s.entities[] | select(.type == "circle")) as $c
+  | [$s.constraints[] | select(.type == "tangent" and (.a == $c.id or .b == $c.id))] | length' 1 \
+  "one line is tangent to the circle"
+# Sketch5 (mitcad#1085): the two segments drawn before the right-clicks,
+# nothing more. The fixed line the model makes for a sketch axis that a
+# point snaps onto (mitcad#500, "axis" set) is not one of them; the chain
+# keeps off the axes, so none is made.
+expect_file '[.features[-1].entities[] | select(.type == "line" and .axis == null)] | length' 2 \
+  "Sketch5 has the two lines drawn before the right-clicks"
 
 ui_finish "UI sketch tools test"

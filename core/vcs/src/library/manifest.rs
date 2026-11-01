@@ -33,36 +33,36 @@ pub const ACCEPTED_LICENSES: [(&str, &str); 10] = [
     ),
     (
         "CC-BY-SA-4.0",
-        "Credit the authors; designs you share that contain it may need the same licence.",
+        "Credit the authors; designs you share that contain it may need the same license.",
     ),
     (
         "MIT",
-        "Keep the copyright and licence notice when you share it.",
+        "Keep the copyright and license notice when you share it.",
     ),
     (
         "Apache-2.0",
-        "Keep the copyright, licence and notice files when you share it.",
+        "Keep the copyright, license and notice files when you share it.",
     ),
     (
         "BSD-2-Clause",
-        "Keep the copyright and licence notice when you share it.",
+        "Keep the copyright and license notice when you share it.",
     ),
     (
         "BSD-3-Clause",
-        "Keep the copyright and licence notice when you share it.",
+        "Keep the copyright and license notice when you share it.",
     ),
     (
         "CERN-OHL-P-2.0",
-        "A permissive hardware licence: keep the notices.",
+        "A permissive hardware license: keep the notices.",
     ),
     (
         "CERN-OHL-W-2.0",
-        "A weakly reciprocal hardware licence: changes to it are shared under the same licence.",
+        "A weakly reciprocal hardware license: changes to it are shared under the same license.",
     ),
     (
         "CERN-OHL-S-2.0",
-        "A strongly reciprocal hardware licence: designs you share that contain it may need the \
-         same licence.",
+        "A strongly reciprocal hardware license: designs you share that contain it may need the \
+         same license.",
     ),
 ];
 
@@ -614,19 +614,19 @@ impl Manifest {
         let mut out = Problems::default();
         if self.format != LIBRARY_FORMAT {
             out.error(format!(
-                "the format is '{}', not '{LIBRARY_FORMAT}'",
+                "the format is {}, not {LIBRARY_FORMAT}",
                 self.format
             ));
         }
         if self.version != 1 {
             out.error(format!(
-                "version {} of the library format is not one this Mitcad reads (1)",
+                "version {} of the library format is not one this MitCad reads (1)",
                 self.version
             ));
         }
         if !valid_id(&self.id) {
             out.error(format!(
-                "'{}' is no library id (2 to 64 of a-z, 0-9 and -)",
+                "{} is no library id (2 to 64 of a-z, 0-9 and -)",
                 self.id
             ));
         }
@@ -637,19 +637,19 @@ impl Manifest {
             None | Some("") => {
                 if self.components.iter().any(|c| c.license.is_none()) {
                     out.warn(
-                        "the library names no licence; components without one are not shown \
+                        "the library names no license; components without one are not shown \
                          unless asked for",
                     );
                 }
             }
             Some(license) if license_note(license).is_none() => out.warn(format!(
-                "the licence {license} is not one a community index accepts"
+                "the license {license} is not one a community index accepts"
             )),
             Some(_) => {}
         }
         if self.units != "mm" {
             out.warn(format!(
-                "the library's units are '{}'; Mitcad's libraries are in mm",
+                "the library's units are {}; MitCad's libraries are in mm",
                 self.units
             ));
         }
@@ -664,13 +664,13 @@ impl Manifest {
                 c.id.clone()
             };
             if !valid_id(&c.id) {
-                out.error(format!("{label}: '{}' is no component id", c.id));
+                out.error(format!("{label}: {} is no component id", c.id));
             } else if !ids.insert(c.id.as_str()) {
                 out.error(format!("{label}: the id is used twice"));
             }
             if !valid_path(&c.path) || !crate::is_design_file(&c.path) {
                 out.error(format!(
-                    "{label}: '{}' is no path of a design in the library (relative, with /, \
+                    "{label}: {} is no path of a design in the library (relative, with /, \
                      ending in .mitcad)",
                     c.path
                 ));
@@ -692,14 +692,14 @@ impl Manifest {
             }
             if !c.preview.is_empty() && (!valid_path(&c.preview) || !c.preview.ends_with(".png")) {
                 out.error(format!(
-                    "{label}: '{}' is no path of a PNG image in the library",
+                    "{label}: {} is no path of a PNG image in the library",
                     c.preview
                 ));
             }
             for (row, path) in &c.row_previews {
                 if !valid_path(path) || !path.ends_with(".png") {
                     out.error(format!(
-                        "{label}: the preview of row {row}, '{path}', is no path of a PNG image in \
+                        "{label}: the preview of row {row}, {path}, is no path of a PNG image in \
                          the library"
                     ));
                 }
@@ -708,12 +708,12 @@ impl Manifest {
                 && license_note(license).is_none()
             {
                 out.warn(format!(
-                    "{label}: the licence {license} is not one a community index accepts"
+                    "{label}: the license {license} is not one a community index accepts"
                 ));
             }
             if !c.supplier_url.is_empty() && !c.supplier_url.starts_with("https://") {
                 out.error(format!(
-                    "{label}: the supplier_url '{}' is no https:// address",
+                    "{label}: the supplier_url {} is no https:// address",
                     c.supplier_url
                 ));
             }
@@ -743,7 +743,7 @@ impl Manifest {
                     || !item.path.ends_with(".json")
                 {
                     out.error(format!(
-                        "{field}[{i}]: '{}' is no path of a .json file in {folder}",
+                        "{field}[{i}]: {} is no path of a .json file in {folder}",
                         item.path
                     ));
                 }
@@ -764,7 +764,7 @@ impl Manifest {
         for (i, supplier) in self.suppliers.iter().enumerate() {
             if !valid_id(&supplier.id) {
                 out.error(format!(
-                    "suppliers[{i}]: '{}' is no supplier id (2 to 64 of a-z, 0-9 and -)",
+                    "suppliers[{i}]: {} is no supplier id (2 to 64 of a-z, 0-9 and -)",
                     supplier.id
                 ));
             } else if !ids.insert(supplier.id.as_str()) {
@@ -778,14 +778,14 @@ impl Manifest {
             }
             if !supplier.url.is_empty() && !supplier.url.starts_with("https://") {
                 out.error(format!(
-                    "suppliers[{i}]: the url '{}' is no https:// address",
+                    "suppliers[{i}]: the url {} is no https:// address",
                     supplier.url
                 ));
             }
         }
         for id in &self.replaces {
             if !valid_id(id) {
-                out.error(format!("replaces: '{id}' is no library id"));
+                out.error(format!("replaces: {id} is no library id"));
             } else if id == &self.id {
                 out.error(format!("replaces: {id} is the library's own id"));
             }
@@ -809,7 +809,7 @@ impl Manifest {
                 let at = format!("{label}: the row {row}'s supplier_parts[{i}]");
                 if !self.suppliers.iter().any(|s| s.id == part.supplier) {
                     out.error(format!(
-                        "{at}: the supplier '{}' is not one of the library's suppliers",
+                        "{at}: the supplier {} is not one of the library's suppliers",
                         part.supplier
                     ));
                 }
@@ -818,7 +818,7 @@ impl Manifest {
                 }
                 if !part.checked.is_empty() && !valid_date(&part.checked) {
                     out.error(format!(
-                        "{at}: checked '{}' is no date (YYYY-MM-DD)",
+                        "{at}: checked {} is no date (YYYY-MM-DD)",
                         part.checked
                     ));
                 } else if part.checked.is_empty() {
@@ -888,11 +888,11 @@ impl IndexEntry {
         let mut out = Problems::default();
         if self.format != ENTRY_FORMAT || self.version != 1 {
             out.error(format!(
-                "not an index entry of a format this Mitcad reads ({ENTRY_FORMAT}, version 1)"
+                "not an index entry of a format this MitCad reads ({ENTRY_FORMAT}, version 1)"
             ));
         }
         if !valid_id(&self.id) {
-            out.error(format!("'{}' is no library id", self.id));
+            out.error(format!("{} is no library id", self.id));
         }
         if self.url.trim().is_empty() {
             out.error("the entry has no URL");
@@ -900,16 +900,16 @@ impl IndexEntry {
             out.error(e.message);
         }
         match self.license.as_deref() {
-            None => out.warn("the entry names no licence"),
+            None => out.warn("the entry names no license"),
             Some(license) if license_note(license).is_none() => out.warn(format!(
-                "the licence {license} is not one the index accepts"
+                "the license {license} is not one the index accepts"
             )),
             Some(_) => {}
         }
         for reviewed in &self.reviewed {
             if reviewed.rev.len() != 40 || !reviewed.rev.bytes().all(|b| b.is_ascii_hexdigit()) {
                 out.error(format!(
-                    "reviewed version '{}' is no commit id (40 hex digits)",
+                    "reviewed version {} is no commit id (40 hex digits)",
                     reviewed.rev
                 ));
             }

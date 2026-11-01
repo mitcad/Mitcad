@@ -204,6 +204,7 @@ pub fn inside_circle(projection: &ViewProjection, center: P2, radius: f64) -> Vi
             visible: edge.visible,
             kind: edge.kind,
             curve,
+            source: edge.source,
         };
         match &edge.curve {
             ViewCurve::Line(a, b) => {
@@ -456,6 +457,7 @@ pub fn without_bands(projection: &ViewProjection, breaks: &[Band]) -> ViewProjec
             visible: edge.visible,
             kind: edge.kind,
             curve,
+            source: edge.source,
         };
         let points = match &edge.curve {
             ViewCurve::Line(a, b) => {
@@ -522,6 +524,7 @@ mod tests {
             visible: true,
             kind: ViewEdgeKind::Sharp,
             curve: ViewCurve::Line(a, b),
+            source: None,
         }
     }
 
@@ -564,6 +567,7 @@ mod tests {
                         start: 0.0,
                         end: TAU,
                     },
+                    source: None,
                 },
             ],
             cuts: vec![vec![vec![
@@ -612,6 +616,7 @@ mod tests {
                         start: 0.0,
                         end: TAU,
                     },
+                    source: None,
                 },
             ],
             cuts: vec![vec![vec![

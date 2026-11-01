@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
+#include "../framework/Theme.hpp"
 #include "Print3d.hpp"
 
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <utility>
 
 #include <QComboBox>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -345,6 +347,38 @@ void PrintSettings::save() const {
   settings.setValue(QStringLiteral("angle"), angle);
 }
 
+namespace {
+
+// The settings' group of a design's Center on Plate and Drop to Bed
+// (mitcad#1109): "print/placement/<the SHA-1 of its file's path>", the
+// path being no key QSettings takes as it is; "unsaved" without a file.
+QString placementGroup(const QString& design) {
+  const QString key =
+      design.isEmpty()
+          ? QStringLiteral("unsaved")
+          : QString::fromLatin1(
+                QCryptographicHash::hash(QDir::cleanPath(design).toUtf8(), QCryptographicHash::Sha1).toHex());
+  return QStringLiteral("%1/placement/%2").arg(kGroup, key);
+}
+
+} // namespace
+
+PrintPlacement PrintPlacement::load(const QString& design) {
+  QSettings settings;
+  settings.beginGroup(placementGroup(design));
+  PrintPlacement placement;
+  placement.center = settings.value(QStringLiteral("center"), placement.center).toBool();
+  placement.drop = settings.value(QStringLiteral("drop"), placement.drop).toBool();
+  return placement;
+}
+
+void PrintPlacement::save(const QString& design) const {
+  QSettings settings;
+  settings.beginGroup(placementGroup(design));
+  settings.setValue(QStringLiteral("center"), center);
+  settings.setValue(QStringLiteral("drop"), drop);
+}
+
 QString safeFileName(const QString& name) {
   QString safe;
   for (const QChar c : name.trimmed()) {
@@ -433,27 +467,35 @@ QString printBedLog(const QJsonObject& bed) {
   const QJsonArray plate = bed.value(QStringLiteral("plate")).toArray();
   const QString centre = QStringLiteral("%1,%2").arg(bedNumber(plate.at(0).toDouble()),
                                                      bedNumber(plate.at(1).toDouble()));
+  QStringList rows;
+  for (const QJsonValue& row : bed.value(QStringLiteral("transform")).toArray()) {
+    QStringList numbers;
+    for (const QJsonValue& number : row.toArray()) {
+      numbers << bedNumber(number.toDouble());
+    }
+    rows << numbers.join(QLatin1Char(' '));
+  }
+  // A face the automatic orientation chose (mitcad#1109).
+  const QString automatic = bed.value(QStringLiteral("auto")).toBool() ? QStringLiteral(" (automatic)") : QString();
   QString line;
   if (bed.value(QStringLiteral("body")).isString()) {
-    QStringList rows;
-    for (const QJsonValue& row : bed.value(QStringLiteral("transform")).toArray()) {
-      QStringList numbers;
-      for (const QJsonValue& number : row.toArray()) {
-        numbers << bedNumber(number.toDouble());
-      }
-      rows << numbers.join(QLatin1Char(' '));
-    }
-    line = QStringLiteral("%1 on %2, plate %3, transform %4")
+    line = QStringLiteral("%1 on %2%3, plate %4, transform %5")
                .arg(bed.value(QStringLiteral("name")).toString(), bed.value(QStringLiteral("face")).toString(),
-                    centre, rows.join(QStringLiteral(" | ")));
-  } else if (!bed.value(QStringLiteral("kept")).toArray().isEmpty()) {
-    QStringList kept;
-    for (const QJsonValue& uid : bed.value(QStringLiteral("kept")).toArray()) {
-      kept << uid.toString();
-    }
-    line = QStringLiteral("kept as assembled: %1").arg(kept.join(QStringLiteral(", ")));
+                    automatic, centre, rows.join(QStringLiteral(" | ")));
   } else {
-    line = QStringLiteral("as in the design");
+    if (!bed.value(QStringLiteral("kept")).toArray().isEmpty()) {
+      QStringList kept;
+      for (const QJsonValue& uid : bed.value(QStringLiteral("kept")).toArray()) {
+        kept << uid.toString();
+      }
+      line = QStringLiteral("kept as assembled: %1").arg(kept.join(QStringLiteral(", ")));
+    } else {
+      line = QStringLiteral("as in the design");
+    }
+    // Centred and dropped all the same (mitcad#1109).
+    if (!rows.isEmpty()) {
+      line += QStringLiteral(", plate %1, transform %2").arg(centre, rows.join(QStringLiteral(" | ")));
+    }
   }
   // The file's other objects, each on the bed by itself (mitcad#856): with
   // no object of the rest only they.
@@ -461,8 +503,11 @@ QString printBedLog(const QJsonObject& bed) {
   for (const QJsonValue& value : bed.value(QStringLiteral("objects")).toArray()) {
     const QJsonObject object = value.toObject();
     const QString objectName = object.value(QStringLiteral("name")).toString();
+    const QString objectAutomatic =
+        object.value(QStringLiteral("auto")).toBool() ? QStringLiteral(" (automatic)") : QString();
     objects << (object.value(QStringLiteral("face")).isString()
-                    ? QStringLiteral("%1 on %2").arg(objectName, object.value(QStringLiteral("face")).toString())
+                    ? QStringLiteral("%1 on %2%3")
+                          .arg(objectName, object.value(QStringLiteral("face")).toString(), objectAutomatic)
                     : QStringLiteral("%1 kept as assembled").arg(objectName));
   }
   if (!objects.isEmpty()) {
@@ -479,7 +524,7 @@ QString printBedLog(const QJsonObject& bed) {
   return line;
 }
 
-QColor printBedColor() { return QColor(0x2e, 0xb8, 0x72); }
+QColor printBedColor() { return viewColor(ColorRole::PrintBed, false); }
 
 QString PrintBedFace::describe() const {
   return occurrenceName.isEmpty() ? QStringLiteral("%1 %2").arg(name, face)

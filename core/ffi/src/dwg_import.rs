@@ -28,6 +28,8 @@ use serde_json::{Value, json};
 use mitcad_dwg::DwgFile;
 use mitcad_dwg::scene::{Affine, ItemKind, Plan, Scene};
 use mitcad_dwg::solid;
+use mitcad_import::outcomes::EntityOutcome;
+use mitcad_model::notice::Notice;
 use mitcad_model::{BaseInput, ComponentUid, ImportBody, Kernel, Transform};
 use mitcad_model_api::ApiError;
 
@@ -463,8 +465,8 @@ impl Document {
                 }
             }
             for (layer, bodies) in by_layer {
-                // Feature names are unique in the document: a component's
-                // features carry its name.
+                // A name of its own for each layer's feature (feature names
+                // may repeat, mitcad#1107): a component's carry its name.
                 let base = if i == 0 {
                     format!("Layer {layer}")
                 } else {
@@ -552,11 +554,6 @@ impl Document {
             ),
         ];
         // The 3D entities left out (2D entities are left out by design).
-        let three_d = |t: &str| {
-            matches!(t, "3DSOLID" | "BODY" | "REGION" | "3DFACE" | "MESH")
-                || t.ends_with("SURFACE")
-                || t.ends_with("mesh)")
-        };
         let missed: usize = scene
             .account
             .left_out
@@ -688,7 +685,7 @@ impl Document {
             .iter()
             .map(|(d, n)| json!({"diameter": *d as f64 / 100.0, "faces": n}))
             .collect();
-        let report = json!({
+        let mut report = json!({
             "checks": checks,
             "pass": pass,
             "cylinder_diameters": diameter_list,
@@ -719,6 +716,9 @@ impl Document {
             "warnings": warnings,
             "seconds": {"read": read_seconds, "build": build_seconds},
         });
+        // The levels of its entities' outcomes and of its warnings
+        // (mitcad#1051).
+        report["notices"] = mitcad_model::notice::to_json(&notices(&report));
         if let Some(path) = &options.report_path {
             let text = serde_json::to_string_pretty(&report).expect("the report serializes");
             std::fs::write(path, format!("{text}\n"))
@@ -764,9 +764,56 @@ impl Document {
             "file": report["file"],
             "bodies": report["bodies"],
             "components": report["components"].as_array().map_or(0, Vec::len),
+            // Its outcomes' and warnings' levels (mitcad#1051).
+            "notices": report["notices"],
             "report": report,
         }))
     }
+}
+
+/// Whether an entity type is 3D content, which the import takes (2D
+/// entities are left out by design).
+fn three_d(entity: &str) -> bool {
+    matches!(entity, "3DSOLID" | "BODY" | "REGION" | "3DFACE" | "MESH")
+        || entity.ends_with("SURFACE")
+        || entity.ends_with("mesh)")
+}
+
+/// The import's notices from its report (mitcad#1051): its entities'
+/// outcomes ([`EntityOutcome`]) at their levels, with their counts, the
+/// worst first, then its warnings.
+fn notices(report: &Value) -> Vec<Notice> {
+    let n = |v: &Value| usize::try_from(v.as_u64().unwrap_or(0)).unwrap_or(usize::MAX);
+    let mut counts: BTreeMap<EntityOutcome, usize> = BTreeMap::new();
+    let taken = report["taken"].as_object();
+    counts.insert(
+        EntityOutcome::Taken,
+        taken.map_or(0, |t| t.values().map(n).sum()),
+    );
+    for left in report["left_out"].as_array().into_iter().flatten() {
+        let outcome = if three_d(left["type"].as_str().unwrap_or_default()) {
+            EntityOutcome::LeftOut
+        } else {
+            EntityOutcome::Drawing
+        };
+        *counts.entry(outcome).or_default() += n(&left["count"]);
+    }
+    counts.insert(
+        EntityOutcome::NotValid,
+        n(&report["bodies"]).saturating_sub(n(&report["valid"])),
+    );
+    counts.insert(
+        EntityOutcome::NotBuilt,
+        report["not_built"].as_array().map_or(0, Vec::len),
+    );
+    let warnings: Vec<String> = report["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    EntityOutcome::notices(counts, &warnings)
 }
 
 fn entity_name(kind: &ItemKind) -> &str {

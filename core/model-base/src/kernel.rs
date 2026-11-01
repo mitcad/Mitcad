@@ -499,7 +499,7 @@ pub trait Kernel: Send {
         _body: &Self::Shape,
         _spec: &ThreadSpec<'_>,
     ) -> Result<Self::Shape, KernelError> {
-        Err(KernelError::Unsupported("modelled threads"))
+        Err(KernelError::Unsupported("modeled threads"))
     }
 
     /// The middle of a planar face (all pieces of a split one) on its
@@ -635,9 +635,9 @@ pub trait Kernel: Send {
 
     // Model warnings (P9).
 
-    /// What the geometry gave up to build a shape (a fillet made 0.1 %
-    /// smaller than asked); the feature shows them as warnings, yellow in
-    /// the timeline. None for most shapes.
+    /// What the geometry gave up to build a shape (a fillet built as
+    /// rings); the feature shows them as warnings, yellow in the timeline.
+    /// None for most shapes.
     fn notes(&self, _shape: &Self::Shape) -> Vec<String> {
         Vec::new()
     }
@@ -1785,6 +1785,26 @@ pub trait Kernel: Send {
     ) -> Result<Self::Shape, KernelError> {
         Err(KernelError::Unsupported("dogbones"))
     }
+
+    // Topology counts for Physical Properties (mitcad#1095).
+
+    /// How many distinct faces, edges and vertices the shape has (an edge
+    /// two faces share counts once, a seam edge once). A mesh body's faces
+    /// have no surfaces: callers leave its counts out.
+    fn topology_counts(&self, _shape: &Self::Shape) -> Result<TopologyCounts, KernelError> {
+        Err(KernelError::Unsupported("topology counts"))
+    }
+
+    // Model information (mitcad#1106).
+
+    /// What is worth knowing of how the geometry built a shape but needs
+    /// no action (a fillet made 0.1 % smaller than asked, as its exact size
+    /// takes a face away that the geometry kernel cannot); the feature
+    /// shows them as information, in its details, not as warnings. None
+    /// for most shapes.
+    fn infos(&self, _shape: &Self::Shape) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of
@@ -2863,4 +2883,14 @@ pub struct DogboneSpec<'a, S> {
     pub diameter: f64,
     pub extra: f64,
     pub kind: DogboneKind,
+}
+
+// Topology counts (mitcad#1095).
+
+/// What [`Kernel::topology_counts`] gives.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TopologyCounts {
+    pub faces: usize,
+    pub edges: usize,
+    pub vertices: usize,
 }

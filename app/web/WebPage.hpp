@@ -24,7 +24,7 @@
 // "name", "eye", "target", "up", "orthographic", "height"; model units),
 // "home" ("eye", "target", "up": the named view Home, else the design
 // seen from the front, right and above), "created" (UTC, ISO 8601),
-// "generator" ("Mitcad <version>")}.
+// "generator" ("MitCad <version>")}.
 
 #include <QByteArray>
 #include <QJsonObject>

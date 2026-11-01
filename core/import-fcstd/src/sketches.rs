@@ -6,18 +6,18 @@
 //!   App::Part (the root's at the document's top), its frame the stored
 //!   placement in that component's coordinates (through the placements of
 //!   containers without components of their own).
-//! - Plane: a sketch attached to an origin plane lies on Mitcad's origin
+//! - Plane: a sketch attached to an origin plane lies on MitCad's origin
 //!   plane there; one attached to a face of a body the import made, on that
 //!   face (`<feature>:import(j)`, checked to be the sketch's plane); one
 //!   attached to a face of a binder of a sketch on the plane of the
 //!   binder's sketch, with its `plane_link` (mitcad#963); else on
 //!   the origin plane parallel to it, else on a fixed construction plane
 //!   made for it (hidden). The definition's `frame` keeps the exact
-//!   placement (FreeCAD's origin planes have other frames than Mitcad's,
+//!   placement (FreeCAD's origin planes have other frames than MitCad's,
 //!   and attachment offsets move sketches).
 //! - External geometry: an element of a body the import made (the body's
 //!   object, or the tip of its Body; any of a result's bodies) is
-//!   projected linked to the body's element by its Mitcad name, checked
+//!   projected linked to the body's element by its MitCad name, checked
 //!   against the element of the stored shape; an edge, vertex or face of an
 //!   earlier sketch, or of a binder of one (its `Support`), is projected
 //!   linked to that sketch's curves or point (`{"sketch": …, "curve": …}`,
@@ -564,12 +564,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
             }
         }
         // Side offsets an expression drives move the sketch within its
-        // plane: Mitcad's sketch frame keeps its place as numbers.
+        // plane: MitCad's sketch frame keeps its place as numbers.
         for axis in ["x", "y"] {
             self.kept_value(
                 object,
                 &format!("AttachmentOffset.Base.{axis}"),
-                "a side offset moves the sketch within its plane, whose place Mitcad's sketch frame keeps as numbers",
+                "a side offset moves the sketch within its plane, whose place MitCad's sketch frame keeps as numbers",
             );
         }
         if let Some(tilt) = self.tilt_quantity(object) {
@@ -1131,7 +1131,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
     }
 
     /// An element of an object as the element of a body of the import in
-    /// the component: the body and the element's Mitcad name, when the
+    /// the component: the body and the element's MitCad name, when the
     /// body has it ([`Importer::element_name`]).
     fn linked_element(
         &mut self,
@@ -2240,7 +2240,7 @@ fn placement_dir(p: &Placement, v: [f64; 3]) -> [f64; 3] {
     std::array::from_fn(|r| m[r][0] * v[0] + m[r][1] * v[1] + m[r][2] * v[2])
 }
 
-/// Mitcad's origin plane in a frame's plane (`coplanar`), or parallel to
+/// MitCad's origin plane in a frame's plane (`coplanar`), or parallel to
 /// it.
 fn origin_plane(frame: &SketchFrame, coplanar: bool) -> Option<(SketchPlane, &'static str)> {
     let n = frame.normal();

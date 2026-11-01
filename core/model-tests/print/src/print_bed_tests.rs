@@ -116,9 +116,7 @@ fn near(a: f64, b: f64) -> bool {
 
 /// A folder of the test's own for the files it writes.
 fn folder(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("mitcad-print-bed-{}-{name}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    mitcad_model::testing::unique_temp_dir(&format!("print-bed-{name}"))
 }
 
 /// Exports the bodies to a 3MF file on the print bed: the result and the
@@ -128,13 +126,31 @@ fn export_3mf(
     dir: &Path,
     bodies: Value,
 ) -> (Value, mitcad_3mf::Model) {
+    export_3mf_with(doc, dir, bodies, json!({}))
+}
+
+/// As [`export_3mf`], with more of the export's fields.
+fn export_3mf_with(
+    doc: &mut Document<MockKernel>,
+    dir: &Path,
+    bodies: Value,
+    more: Value,
+) -> (Value, mitcad_3mf::Model) {
     let path = dir.join("print.3mf").to_str().unwrap().to_owned();
-    let result = command(
-        doc,
-        json!({"cmd": "export", "path": path, "bodies": bodies, "on_bed": true}),
-    );
+    let mut export = json!({"cmd": "export", "path": path, "bodies": bodies, "on_bed": true});
+    for (key, value) in more.as_object().unwrap() {
+        export[key] = value.clone();
+    }
+    let result = command(doc, export);
     let model = mitcad_3mf::read(&std::fs::read(&path).unwrap()).unwrap();
     (result, model)
+}
+
+/// The export's fields that write the bodies where the design has them,
+/// as before mitcad#1109: neither centred nor dropped, and no automatic
+/// orientation.
+fn as_designed() -> Value {
+    json!({"center": false, "drop": false, "auto_orient": false})
 }
 
 /// The box of a 3MF part's mesh at all its placements.
@@ -147,6 +163,18 @@ fn placed_box(part: &mitcad_3mf::Part) -> ([f64; 3], [f64; 3]) {
             min = std::array::from_fn(|i| min[i].min(p[i]));
             max = std::array::from_fn(|i| max[i].max(p[i]));
         }
+    }
+    (min, max)
+}
+
+/// The box of several 3MF parts' meshes at all their placements.
+fn parts_box(parts: &[mitcad_3mf::Part]) -> ([f64; 3], [f64; 3]) {
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for part in parts {
+        let (lo, hi) = placed_box(part);
+        min = std::array::from_fn(|i| min[i].min(lo[i]));
+        max = std::array::from_fn(|i| max[i].max(hi[i]));
     }
     (min, max)
 }
@@ -299,7 +327,7 @@ fn a_box_on_its_top_is_turned_over_and_centred_on_the_plate() {
     let (result, model) = export_3mf(&mut doc, &dir, json!(["F2.b0"]));
     assert_eq!(result["bed"]["plate"], json!([125.0, 105.0]));
     assert_on_plate(placed_box(&model.parts[0]), [125.0, 105.0]);
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -324,7 +352,7 @@ fn a_box_on_a_tilted_face_lies_on_it() {
     assert!(near(down[0], 0.0) && near(down[1], 0.0), "{down:?}");
     assert!(near(down[2], -1.0), "{down:?}");
     assert_on_plate(placed_box(&model.parts[0]), [128.0, 128.0]);
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -344,7 +372,7 @@ fn a_body_in_a_turned_component_lies_on_its_face_where_it_is_placed() {
     let down = turned(&result, [0.0, -1.0, 0.0]);
     assert!(near(down[2], -1.0), "{down:?}");
     assert_on_plate(placed_box(&model.parts[0]), [128.0, 128.0]);
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 /// The block and a second body under it, 10 high (F3.b0, Body2).
@@ -364,7 +392,7 @@ fn several_bed_faces_keep_the_bodies_as_assembled() {
     let dir = folder("several");
     set_bed(&mut doc, "F2.b0", json!(top()));
     set_bed(&mut doc, "F3.b0", json!(format!("F3:start({R})")));
-    let (result, model) = export_3mf(&mut doc, &dir, json!(["F2.b0", "F3.b0"]));
+    let (result, model) = export_3mf_with(&mut doc, &dir, json!(["F2.b0", "F3.b0"]), as_designed());
     let bed = &result["bed"];
     assert_eq!(bed["kept"], json!(["F2.b0", "F3.b0"]));
     assert_eq!(bed["body"], Value::Null);
@@ -372,6 +400,14 @@ fn several_bed_faces_keep_the_bodies_as_assembled() {
     for part in &model.parts {
         assert_eq!(part.placements, [IDENTITY]);
     }
+    // Centred and dropped by default all the same (mitcad#1109): moved
+    // alike, not turned.
+    let (result, model) = export_3mf(&mut doc, &dir, json!(["F2.b0", "F3.b0"]));
+    assert_eq!(result["bed"]["kept"], json!(["F2.b0", "F3.b0"]));
+    assert_eq!(result["bed"]["body"], Value::Null);
+    assert_eq!(model.parts[0].placements, model.parts[1].placements);
+    assert_eq!(model.parts[0].placements[0].linear, IDENTITY.linear);
+    assert_on_plate(parts_box(&model.parts), [128.0, 128.0]);
 
     // One bed face among them: both turn onto it as one piece.
     set_bed(&mut doc, "F3.b0", Value::Null);
@@ -380,7 +416,7 @@ fn several_bed_faces_keep_the_bodies_as_assembled() {
     assert_eq!(result["bed"]["kept"], json!([]));
     assert_eq!(model.parts[0].placements, model.parts[1].placements);
     assert_ne!(model.parts[0].placements[0], IDENTITY);
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -398,7 +434,7 @@ fn a_bed_face_that_is_gone_or_not_planar_is_reported() {
         },
     );
     assert_eq!(bed_face(&doc)["error"], NOT_PLANAR);
-    let (result, model) = export_3mf(&mut doc, &dir, json!(["F2.b0"]));
+    let (result, model) = export_3mf_with(&mut doc, &dir, json!(["F2.b0"]), as_designed());
     let bed = &result["bed"];
     assert_eq!(bed["transform"], Value::Null);
     assert_eq!(
@@ -410,6 +446,16 @@ fn a_bed_face_that_is_gone_or_not_planar_is_reported() {
         json!(["Body1: the print bed face is not planar; printed as in the design"])
     );
     assert_eq!(model.parts[0].placements, [IDENTITY]);
+    // By default the automatic orientation lays it down instead
+    // (mitcad#1109): the problem still reported, the body not printed as
+    // in the design.
+    let (result, model) = export_3mf(&mut doc, &dir, json!(["F2.b0"]));
+    assert_eq!(result["bed"]["auto"], true, "{}", result["bed"]);
+    assert_eq!(
+        result["warnings"],
+        json!(["Body1: the print bed face is not planar"])
+    );
+    assert_on_plate(placed_box(&model.parts[0]), [128.0, 128.0]);
 
     // Gone: a name the body has no face of, as an edit leaves it.
     let saved = doc.to_json().replace(&top(), "F2:end(r{c9})");
@@ -419,12 +465,12 @@ fn a_bed_face_that_is_gone_or_not_planar_is_reported() {
         bed_face(&gone),
         json!({"face": "F2:end(r{c9})", "faces": [], "error": GONE})
     );
-    let (result, _) = export_3mf(&mut gone, &dir, json!(["F2.b0"]));
+    let (result, _) = export_3mf_with(&mut gone, &dir, json!(["F2.b0"]), as_designed());
     assert_eq!(
         result["warnings"],
         json!(["Body1: the print bed face is gone; printed as in the design"])
     );
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -455,7 +501,7 @@ fn an_stl_file_lies_on_the_bed_too() {
     }
     assert_on_plate((min, max), [128.0, 128.0]);
     assert!(near(max[2], 20.0), "{max:?}");
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -474,12 +520,13 @@ fn only_3mf_and_stl_files_go_on_the_bed() {
         json!({"cmd": "export", "path": three, "on_bed": true, "coordinates": "component"}),
     );
     assert!(error.contains("design's coordinates"), "{error}");
-    // Without a bed face the bodies stay where the design has them.
-    let (result, model) = export_3mf(&mut doc, &dir, json!(["F2.b0"]));
+    // Without a bed face, neither oriented nor settled, the bodies stay
+    // where the design has them.
+    let (result, model) = export_3mf_with(&mut doc, &dir, json!(["F2.b0"]), as_designed());
     assert_eq!(result["bed"]["body"], Value::Null);
     assert_eq!(result["bed"]["kept"], json!([]));
     assert_eq!(model.parts[0].placements, [IDENTITY]);
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -515,7 +562,7 @@ fn a_bed_face_follows_a_sketch_edit_that_renames_it() {
     let (result, _) = export_3mf(&mut doc, &dir, json!(["F2.b0"]));
     let down = turned(&result, [0.0, -1.0, 0.0]);
     assert!(near(down[2], -1.0), "{down:?}");
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -540,7 +587,7 @@ fn a_component_placed_twice_lies_on_its_face_in_both_places() {
         assert!(near(placement.linear[2][2], -1.0), "{placement:?}");
     }
     assert_on_plate(placed_box(&model.parts[0]), [128.0, 128.0]);
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -556,7 +603,7 @@ fn a_component_placed_twice_turned_differently_keeps_its_placement() {
                              "rotation": {"axis": [1, 0, 0], "angle": FRAC_PI_2}}}),
     );
     set_bed(&mut doc, "F2.b0", json!(top()));
-    let (result, model) = export_3mf(&mut doc, &dir, json!(["F2.b0"]));
+    let (result, model) = export_3mf_with(&mut doc, &dir, json!(["F2.b0"]), as_designed());
     // The top faces +Z in one place and -Y in the other: no one turn lays
     // it on the bed in both, so the body stays as it is assembled (mitcad#737).
     let bed = &result["bed"];
@@ -590,7 +637,7 @@ fn a_component_placed_twice_turned_differently_keeps_its_placement() {
     assert!(near(copy.linear[2][1], 1.0), "{copy:?}");
     assert!(near(copy.linear[1][2], -1.0), "{copy:?}");
     assert!(near(copy.linear[2][2], 0.0), "{copy:?}");
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -649,13 +696,14 @@ fn a_surface_body_has_no_print_bed_face() {
     let path = dir.join("print.3mf").to_str().unwrap().to_owned();
     let result = command(
         &mut loaded,
-        json!({"cmd": "export", "path": path, "on_bed": true}),
+        json!({"cmd": "export", "path": path, "on_bed": true,
+               "center": false, "drop": false, "auto_orient": false}),
     );
     assert_eq!(result["skipped"][0]["body"], json!(surface));
     assert_eq!(result["bed"]["body"], Value::Null);
     assert_eq!(result["bed"]["transform"], Value::Null);
     assert_eq!(result["bed"]["problems"], json!([]));
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 
     // Cleared as any body's face (the context menu's Clear only).
     command(
@@ -771,7 +819,7 @@ fn a_chosen_occurrence_of_a_body_placed_turned_differently_lies_on_its_face() {
         json!({"occurrences": {"F2.b0": ["Nuts:1/Nut:2"]}}),
     );
     assert_eq!(by_name["bed"], result["bed"]);
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -821,7 +869,7 @@ fn every_occurrence_chosen_is_an_object_of_its_own_on_its_face() {
     );
     assert_eq!(listed["bed"]["on_faces"], 3);
     assert_eq!(listed["bed"]["objects"].as_array().unwrap().len(), 3);
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -830,9 +878,11 @@ fn a_component_sent_whole_keeps_its_assembly() {
     let dir = folder("nuts-whole");
     // Nuts:1 sent whole: one object, the nuts as assembled (their tops
     // turned differently: none on the bed).
+    // Neither centred nor dropped (mitcad#1109), so that the placements
+    // are the design's.
     for more in [
-        json!({"occurrences": {"F2.b0": []}, "whole": ["Nuts:1"]}),
-        json!({}),
+        json!({"occurrences": {"F2.b0": []}, "whole": ["Nuts:1"], "center": false, "drop": false}),
+        json!({"center": false, "drop": false}),
     ] {
         let (result, model) = export_nuts(&mut doc, &dir, more.clone());
         let bed = &result["bed"];
@@ -845,7 +895,7 @@ fn a_component_sent_whole_keeps_its_assembly() {
         assert_eq!(placements.len(), 3, "{more}");
         assert!(placements.contains(&IDENTITY), "{more}: {placements:?}");
     }
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -868,13 +918,13 @@ fn the_occurrences_to_write_are_checked() {
         &mut doc,
         json!({"cmd": "export", "path": three, "occurrences": {"F2.b0": ["O9"]}}),
     );
-    assert!(error.contains("there is no occurrence 'O9'"), "{error}");
+    assert!(error.contains("there is no occurrence O9"), "{error}");
     let error = refused(
         &mut doc,
         json!({"cmd": "export", "path": three, "on_bed": true, "whole": [""]}),
     );
     assert!(error.contains("not the design"), "{error}");
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 /// Body2's side as its print bed face: facing -Y at y = 0, as the mock
@@ -1002,7 +1052,7 @@ fn a_piece_kept_for_several_bed_faces_lists_them_to_choose_from() {
     );
     assert_eq!(result["bed"]["body"], "F2.b0");
     assert_eq!(result["bed"]["choices"], json!([]));
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -1049,7 +1099,7 @@ fn a_bed_face_chosen_puts_the_piece_on_it() {
         assert!(near(moved(&result, [10.0, 10.0, 20.0])[2], 0.0), "{whole}");
         assert_together(&model);
     }
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
@@ -1106,5 +1156,172 @@ fn a_bed_face_chosen_is_checked() {
         json!({"cmd": "export", "path": path, "plan": true}),
     );
     assert!(error.contains("(on_bed)"), "{error}");
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
+}
+
+/// A block of `width` x `depth` on XY, `height` high (F2.b0, Body1).
+fn sized_block(width: f64, depth: f64, height: f64) -> Document<MockKernel> {
+    let mut doc = Document::new(MockKernel::default());
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": width, "height": depth},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": R}],
+              "extent": {"type": "distance", "distance": height}, "operation": "new_body"}},
+        ]),
+    );
+    doc
+}
+
+#[test]
+fn a_body_without_a_bed_face_far_from_the_origin_is_dropped_and_centred() {
+    // A 30 x 20 x 10 block, already on its largest face, in a component
+    // moved to (300, 400, 50) (mitcad#1109).
+    let mut doc = sized_block(30.0, 20.0, 10.0);
+    let dir = folder("far");
+    let body: BodyUid = "F2.b0".parse().unwrap();
+    doc.components_from_bodies(&[body]).unwrap();
+    command(
+        &mut doc,
+        json!({"cmd": "set_occurrence_transform", "occurrence": "O1", "transform":
+               {"translation": [300, 400, 50]}}),
+    );
+    let (result, model) = export_3mf(&mut doc, &dir, json!(["F2.b0"]));
+    let bed = &result["bed"];
+    // The automatic orientation keeps it on its bottom (−Z down), which is
+    // not stored.
+    assert_eq!(bed["auto"], true, "{bed}");
+    assert_eq!(bed["body"], "F2.b0");
+    assert_eq!(bed["face"], bottom());
+    assert_eq!(bed["occurrence"], "O1");
+    assert_eq!(bed["center"], true);
+    assert_eq!(bed["drop"], true);
+    assert_eq!(bed["on_faces"], 0, "no print bed face of the body");
+    assert_eq!(bed_face(&doc), Value::Null, "nothing stored");
+    let (min, max) = placed_box(&model.parts[0]);
+    assert_on_plate((min, max), [128.0, 128.0]);
+    assert!(near(max[2], 10.0), "{max:?}");
+    assert!(
+        near(max[0] - min[0], 30.0) && near(max[1] - min[1], 20.0),
+        "{min:?} {max:?}"
+    );
+
+    // Center on Plate and Drop to Bed off: as the design has it.
+    let (result, model) = export_3mf_with(
+        &mut doc,
+        &dir,
+        json!(["F2.b0"]),
+        json!({"center": false, "drop": false}),
+    );
+    assert_eq!(result["bed"]["center"], false);
+    assert_eq!(result["bed"]["drop"], false);
+    let (min, max) = placed_box(&model.parts[0]);
+    for (found, wanted) in min.iter().zip([300.0, 400.0, 50.0]) {
+        assert!(near(*found, wanted), "{min:?}");
+    }
+    for (found, wanted) in max.iter().zip([330.0, 420.0, 60.0]) {
+        assert!(near(*found, wanted), "{max:?}");
+    }
+    // Drop to Bed alone: on the bed where the design has it in X and Y.
+    let (_, model) = export_3mf_with(&mut doc, &dir, json!(["F2.b0"]), json!({"center": false}));
+    let (min, _) = placed_box(&model.parts[0]);
+    assert!(
+        near(min[0], 300.0) && near(min[1], 400.0) && near(min[2], 0.0),
+        "{min:?}"
+    );
+
+    // An STL file the same.
+    let path = dir.join("far.stl").to_str().unwrap().to_owned();
+    command(
+        &mut doc,
+        json!({"cmd": "export", "path": path, "bodies": ["F2.b0"], "ascii": true, "on_bed": true}),
+    );
+    let triangles = mitcad_model::exchange::read_stl(&std::fs::read(&path).unwrap());
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for p in triangles.iter().flatten() {
+        min = std::array::from_fn(|i| min[i].min(p[i]));
+        max = std::array::from_fn(|i| max[i].max(p[i]));
+    }
+    assert_on_plate((min, max), [128.0, 128.0]);
+
+    // Only on the print bed.
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "export", "path": path, "center": false}),
+    );
+    assert!(error.contains("(on_bed)"), "{error}");
+    mitcad_model::testing::remove_temp(&dir);
+}
+
+#[test]
+fn the_automatic_orientation_lays_a_block_on_its_largest_face() {
+    // 20 x 10 x 40, standing: its largest faces are the 20 x 40 sides
+    // facing -Y and +Y (mitcad#1109).
+    let mut doc = sized_block(20.0, 10.0, 40.0);
+    let dir = folder("largest");
+    let (result, model) = export_3mf(&mut doc, &dir, json!(["F2.b0"]));
+    let bed = &result["bed"];
+    assert_eq!(bed["auto"], true, "{bed}");
+    assert!(
+        bed["face"].as_str().unwrap().starts_with("F2:side("),
+        "{bed}"
+    );
+    let (min, max) = placed_box(&model.parts[0]);
+    assert_on_plate((min, max), [128.0, 128.0]);
+    // Lying: 10 high, its 20 x 40 face on the bed.
+    assert!(near(max[2], 10.0), "{min:?} {max:?}");
+    let mut spans = [max[0] - min[0], max[1] - min[1]];
+    spans.sort_by(f64::total_cmp);
+    assert!(near(spans[0], 20.0) && near(spans[1], 40.0), "{spans:?}");
+    // The plan says the same, and nothing is written.
+    let path = dir.join("plan.3mf").to_str().unwrap().to_owned();
+    let plan = command(
+        &mut doc,
+        json!({"cmd": "export", "path": path, "bodies": ["F2.b0"], "on_bed": true, "plan": true}),
+    );
+    assert_eq!(plan["bed"]["face"], bed["face"]);
+    assert_eq!(plan["bed"]["auto"], true);
+    assert!(!Path::new(&path).exists());
+    // Without the automatic orientation: as the design has it, standing,
+    // but dropped and centred.
+    let (result, model) = export_3mf_with(
+        &mut doc,
+        &dir,
+        json!(["F2.b0"]),
+        json!({"auto_orient": false}),
+    );
+    assert_eq!(result["bed"]["body"], Value::Null);
+    assert_eq!(result["bed"]["auto"], false);
+    let (min, max) = placed_box(&model.parts[0]);
+    assert_on_plate((min, max), [128.0, 128.0]);
+    assert!(near(max[2], 40.0), "{max:?}");
+    mitcad_model::testing::remove_temp(&dir);
+}
+
+#[test]
+fn a_bodys_own_bed_face_wins_over_the_automatic_one() {
+    // The standing 20 x 10 x 40 block would lie on a side; its top is its
+    // print bed face (mitcad#1109).
+    let mut doc = sized_block(20.0, 10.0, 40.0);
+    let dir = folder("own");
+    set_bed(&mut doc, "F2.b0", json!(top()));
+    let (result, model) = export_3mf(&mut doc, &dir, json!(["F2.b0"]));
+    let bed = &result["bed"];
+    assert_eq!(bed["face"], top(), "{bed}");
+    assert_eq!(bed["auto"], false);
+    assert_eq!(bed["on_faces"], 1);
+    assert_eq!(bed["occurrence"], "");
+    let down = turned(&result, [0.0, 0.0, 1.0]);
+    assert!(near(down[2], -1.0), "{down:?}");
+    let (min, max) = placed_box(&model.parts[0]);
+    assert_on_plate((min, max), [128.0, 128.0]);
+    assert!(near(max[2], 40.0), "standing on its top: {max:?}");
+    // Cleared: the automatic orientation again.
+    set_bed(&mut doc, "F2.b0", Value::Null);
+    let (result, _) = export_3mf(&mut doc, &dir, json!(["F2.b0"]));
+    assert_eq!(result["bed"]["auto"], true);
+    assert_ne!(result["bed"]["face"], top());
+    mitcad_model::testing::remove_temp(&dir);
 }

@@ -113,7 +113,9 @@ corrosion_add_cxxbridge(mitcad_bridge CRATE mitcad_ffi_bridges_sources FILES
   # A Fillet's or Chamfer's picked edges as polylines (mitcad#957).
   kernel/input_edges.rs
   # Dogbones: the relief cylinders at a body's inside corners (mitcad#1011).
-  kernel/dogbone.rs)
+  kernel/dogbone.rs
+  # Topology counts for Physical Properties (mitcad#1095).
+  kernel/topology.rs)
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/boolean.cpp
   cpp/bridge/boolean.hpp
@@ -279,6 +281,10 @@ target_sources(mitcad_bridge PRIVATE
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/dogbone.cpp
   cpp/bridge/dogbone.hpp)
+# Topology counts for Physical Properties (mitcad#1095).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/topology.cpp
+  cpp/bridge/topology.hpp)
 target_include_directories(mitcad_bridge PUBLIC cpp)
 # What corrosion_add_cxxbridge links for a CRATE that Corrosion imported
 # (mitcad#792): the bridge with the Rust library, both ways.
@@ -404,8 +410,10 @@ if(BUILD_TESTING)
       set(profile release)
     endif()
     set_property(GLOBAL APPEND PROPERTY MITCAD_CARGO_TESTS_${profile} ${package})
+    # TEST_NAME gives each ctest a temporary folder of its own on Windows
+    # (cargo-tests.cmake, mitcad#1017).
     set(run "${CMAKE_COMMAND}" "-DLIST=${CMAKE_CURRENT_BINARY_DIR}/cargo-test/tests-${profile}.tsv"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/cargo-tests.cmake" --)
+            "-DTEST_NAME=${name}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cargo-tests.cmake" --)
     if(NOT arg_PARTS)
       add_test(NAME ${name} COMMAND ${run} run ${package})
       set(tests ${name})
@@ -467,11 +475,15 @@ if(BUILD_TESTING)
   # The model's tests of designs with several components again with
   # recompute workers (mitcad#842): MITCAD_RECOMPUTE_WORKERS makes every
   # document's recomputes evaluate independent components' features
-  # ahead, and the tests must pass as with one thread.
+  # ahead, and the tests must pass as with one thread. TEST_NAME keeps its
+  # temporary folder on Windows apart from that of core.model.<area>, which
+  # runs the same binary with the same arguments at the same time
+  # (mitcad#1017).
   foreach(area assembly links joints)
     set(workers_test core.model.${area}.workers)
     add_test(NAME ${workers_test}
              COMMAND "${CMAKE_COMMAND}" "-DLIST=${CMAKE_CURRENT_BINARY_DIR}/cargo-test/tests-debug.tsv"
+                     "-DTEST_NAME=${workers_test}"
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/cargo-tests.cmake" -- run mitcad-model-tests-${area})
     set_tests_properties(${workers_test} PROPERTIES FIXTURES_REQUIRED cargo_tests_debug
                          ENVIRONMENT "MITCAD_RECOMPUTE_WORKERS=4")
@@ -487,6 +499,7 @@ if(BUILD_TESTING)
   # exported in the same dialect and read back; skipped without the corpus.
   add_test(NAME 3mf.corpus
     COMMAND "${CMAKE_COMMAND}" "-DLIST=${CMAKE_CURRENT_BINARY_DIR}/cargo-test/tests-debug.tsv"
+            "-DTEST_NAME=3mf.corpus"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cargo-tests.cmake" -- run mitcad-model-tests-print print_files_corpus:: --ignored
             --nocapture)
   set_tests_properties(3mf.corpus PROPERTIES FIXTURES_REQUIRED cargo_tests_debug

@@ -13,6 +13,10 @@
 #      post loses 12.2 6.2 20.1 = 1520.364 mm3 of mortise; both bodies
 #      changed by MortiseTenon1 in the timeline.
 #   2. MortiseTenon1 edited to 25 long: both bodies built again.
+#   3. MortiseTenon1 edited to Count 3 (mitcad#1063), Width 8, Start
+#      Offset 4 and End Offset 24: three tenons, each with its mortise,
+#      previewed and made: 3 8 6 25 = 3600 mm3 of tenons, 3 8.2 6.2 15.1 =
+#      2303.052 mm3 of mortises.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-mortise-tenon-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -84,6 +88,25 @@ Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
 Ui-ExpectNew 'Edited F3' 'the joint edited' 30
 Ui-ExpectVolume 'Body Body1 \(F1\.b0\): volume 122160\.000 -> ([0-9.]+) mm3' 121800 'the shorter tenon'
 Ui-ExpectVolume 'Body Body2 \(F2\.b0\): volume 17679\.636 -> ([0-9.]+) mm3' 18057.836 'the shallower mortise'
+if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
+
+Write-Host "--- 3. Count 3: three tenons along the rail's end, each with its mortise"
+Ui-Mark
+Ui-Step 'edit MortiseTenon1 (double-click)' { Ui-DoubleClickLogged 'Timeline MortiseTenon1' }
+Ui-ExpectNew 'Editing F3 with Mortise and Tenon' 'the joint opens for editing again' 30
+Ui-Mark
+Ui-Step 'count 3'                        { Ui-TypeIn 'Panel Mortise and Tenon input count' '3' }
+Ui-ExpectNew 'Preview Mortise and Tenon: ok' 'three tenons previewed' 30
+Ui-Mark
+Ui-Step 'width 8'                        { Ui-TypeIn 'Panel Mortise and Tenon input width' '8' }
+Ui-Step 'start offset 4'                 { Ui-TypeIn 'Panel Mortise and Tenon input start_offset' '4' }
+Ui-Step 'end offset 24'                  { Ui-TypeIn 'Panel Mortise and Tenon input end_offset' '24' }
+Ui-ExpectNew 'Preview Mortise and Tenon: ok' 'the spaced tenons previewed' 30
+Ui-Mark
+Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
+Ui-ExpectNew 'Edited F3' 'the joint edited to three tenons' 30
+Ui-ExpectVolume 'Body Body1 \(F1\.b0\): volume 121800\.000 -> ([0-9.]+) mm3' 123600 'three tenons on the rail'
+Ui-ExpectVolume 'Body Body2 \(F2\.b0\): volume 18057\.836 -> ([0-9.]+) mm3' 16896.948 'three mortises in the post'
 if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
 
 Ui-Finish 'UI Windows mortise and tenon test'

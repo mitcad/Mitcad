@@ -385,7 +385,7 @@ fn polygon(
         .iter()
         .map(|&p| id(p).ok_or("a corner that was not read"))
         .collect::<Result<_, _>>()?;
-    list.push(id(center).ok_or("its centre was not read")?);
+    list.push(id(center).ok_or("its center was not read")?);
     Ok(json!({"type": "PolygonConstraint", "refs": {"entities": list}}))
 }
 
@@ -473,7 +473,7 @@ fn circular(
         .and_then(|&r| parameter(r))
         .ok_or("its angle was not read")?;
     let (originals, copies) = originals_and_copies(members, id)?;
-    let center = id(center).ok_or("its centre was not read")?;
+    let center = id(center).ok_or("its center was not read")?;
     let mut all = originals;
     all.extend(copies.iter().cloned());
     all.push(center.clone());

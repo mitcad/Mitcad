@@ -28,6 +28,13 @@
 
 $ErrorActionPreference = 'Stop'
 
+# The UI tests' .ps1 files stay pure ASCII: Windows PowerShell 5.1 reads a
+# file without a byte order mark as ANSI, so a UTF-8 "x" sign in a script
+# arrived mangled and never matched the app's log line (mitcad#1071).
+# Expected texts with the multiplication sign use $Times in a double-quoted
+# string ("wall 3600 ${Times} 2400 mm").
+$Times = [string][char]0x00D7
+
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -132,6 +139,30 @@ public static class UiInput {
     public static void Detach() {
         if (attachedTo != 0) AttachThreadInput(attachedFrom, attachedTo, false);
         attachedFrom = attachedTo = 0;
+    }
+
+    [DllImport("user32.dll")] static extern IntPtr GetActiveWindow();
+    [DllImport("user32.dll")] static extern IntPtr SetActiveWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern IntPtr SetFocus(IntPtr hwnd);
+
+    // The window made the active and focused one of the app's input queue
+    // (Ui-Activate), through this thread attached to the queue for the
+    // calls, which work only there. Whether it is active then.
+    public static bool Activate(IntPtr hwnd) {
+        Detach();
+        uint self = GetCurrentThreadId(), target = ThreadOf(hwnd);
+        if (!AttachThreadInput(self, target, true)) {
+            Note = "attaching thread " + self + " to the app's thread " + target + " failed (error " +
+                   Marshal.GetLastWin32Error() + "); ";
+            return false;
+        }
+        try {
+            SetActiveWindow(hwnd);
+            SetFocus(hwnd);
+            return GetActiveWindow() == hwnd;
+        } finally {
+            AttachThreadInput(self, target, false);
+        }
     }
 
     static byte[] Modified(bool ctrl, bool shift, bool alt) {
@@ -435,6 +466,10 @@ function Ui-StartApp([string]$Name, [string[]]$Arguments = @(), [switch]$Recover
   # No question whether to activate a picked face's component (mitcad#960),
   # as in the Linux tests; a test of the question sets it to 1 first.
   if (-not $env:MITCAD_ASK_ACTIVATE_COMPONENT) { $env:MITCAD_ASK_ACTIVATE_COMPONENT = '0' }
+  # Command panels start from their defaults, not from the values given on
+  # an earlier OK (mitcad#1028), as in the Linux tests; a test of the
+  # remembered values sets it to 1 first.
+  if (-not $env:MITCAD_REMEMBER_PANEL_VALUES) { $env:MITCAD_REMEMBER_PANEL_VALUES = '0' }
   $env:MITCAD_AUTOSAVE_DIR = $script:UiAutosave
   # Crash reports of the test's own (mitcad#62): none offered from the user's.
   $env:MITCAD_CRASH_DIR = Join-Path $script:UiOut 'crashes'
@@ -929,7 +964,7 @@ function Ui-ClickWith([string]$Modifiers, [int]$X, [int]$Y) {
 }
 
 # Ui-WheelLogged "text" steps: wheel steps over a logged place, such as a
-# panel's drop-down ("Panel 3D Print input format"), whose list cannot open
+# panel's drop-down ("Panel Send to Slicer input format"), whose list cannot open
 # in session 0: -1 (a step towards the user) chooses the next entry.
 function Ui-WheelLogged([string]$Text, [int]$Steps) {
   Ui-PanelReveal $Text
@@ -981,6 +1016,43 @@ function Ui-CreateSketch([string]$Key, [string]$Plane = 'xy') {
   Ui-SyncOr 500
   Ui-ClickLogged "Datum $Plane"
   Ui-ExpectNew "Sketch started on $Plane" "sketch started on $Plane" | Out-Null
+}
+
+# Ui-ShowOrigin: the Origin folder's light bulb on, unless it is already
+# (mitcad#1030), as ui_show_origin does. A command's input shows the
+# origin's point, axes and planes in the view only as the light bulb does
+# (Create Sketch's plane pick shows the planes whatever it says), so a test
+# that clicks them there ('Datum xy', 'Datum z') switches it on first.
+# Works during a command too (mitcad#295); the caller's mark is kept.
+function Ui-ShowOrigin {
+  $state = Ui-LastMatch '(Design origin (?:hidden|shown) in the view; .*)$'
+  if ("$state".EndsWith('light bulb on')) { return }
+  $mark = $script:UiMark
+  Ui-Mark
+  Ui-Step 'show the origin (light bulb)' { Ui-ClickLogged 'Browser eye Root/Origin' }
+  Ui-ExpectNew 'Visibility Root/Origin: shown' 'the origin shown by its light bulb'
+  Ui-ExpectNew 'Datum xy at' 'the origin in the view'
+  $script:UiMark = $mark
+}
+
+# Ui-PickOriginRow 'XY': a click on the origin's row (O, X, Y, Z, XY, XZ or
+# YZ) in the browser's Origin folder, which a command's active input takes
+# as it takes a click in the view, also while the origin is hidden
+# (mitcad#1030), as ui_pick_origin_row does; the folder is opened first
+# when its rows are folded. The view stays as it is (no light bulb
+# switched). The caller's mark is kept.
+function Ui-PickOriginRow([string]$Name) {
+  $row = "Browser Root/Origin/$Name"
+  $last = Ui-LogLines | Where-Object { $_.StartsWith("$row at ") -or $_.StartsWith("$row out of sight") } |
+    Select-Object -Last 1
+  if (-not "$last".StartsWith("$row at ")) {
+    $mark = $script:UiMark
+    Ui-Mark
+    Ui-Step 'open the Origin folder'         { Ui-ClickLogged 'Browser arrow Root/Origin' }
+    Ui-ExpectNew "$row at " "the origin's rows in the browser"
+    $script:UiMark = $mark
+  }
+  Ui-Step "pick $Name in the browser"        { Ui-ClickLogged $row }
 }
 
 # Ui-SketchAt x y: the window point of a sketch point (mm), from the logged
@@ -1055,6 +1127,20 @@ function Ui-FocusMain {
   Ui-SyncOr 300
 }
 
+# Ui-Activate: makes the main window the app's active window again. Qt
+# takes a window shortcut only while its window is the active one, and
+# posted input never activates a window. In session 0 a ShowWindow from the
+# test (a maximize and a restore) left the app inactive with no foreground
+# window, and F7 was logged but started nothing (mitcad#1016:
+# "Shortcut check F7 ...: active window none", MITCAD_LOG_SHORTCUTS).
+function Ui-Activate {
+  [UiInput]::Note = ''
+  $active = [UiInput]::Activate($script:UiWindow)
+  if ([UiInput]::Note) { Write-Host "note: activating the window: $([UiInput]::Note)" }
+  Ui-SyncOr 300
+  if (-not $active) { Ui-Fail 'the main window could not be made the active window' }
+}
+
 # Ui-WaitGone window ms: waits until the window is gone, up to ms.
 function Ui-WaitGone([IntPtr]$Window, [int]$Milliseconds) {
   $clock = [Diagnostics.Stopwatch]::StartNew()
@@ -1090,6 +1176,7 @@ function Ui-ExpectVolume([string]$Pattern, [double]$Expected, [string]$Descripti
 # on the XY plane at the origin: a click on the plane while Place On takes
 # picks, then both distances 0 in the panel.
 function Ui-PlaceOnXy([string]$Command) {
+  Ui-ShowOrigin
   Ui-Mark
   Ui-Step 'Place On: the XY plane' { Ui-ClickLogged 'Datum xy' }
   Ui-ExpectNew "Place ${Command}: face plane xy, " 'placed on the XY plane' 30

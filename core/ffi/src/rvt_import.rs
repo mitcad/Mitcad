@@ -153,6 +153,18 @@ impl Document {
                     .into(),
             );
         }
+        // The import's notices (mitcad#1051): its elements' outcomes and its
+        // warnings, then the file's warnings; the worst first.
+        let mut notices = import
+            .as_ref()
+            .map(mitcad_import_rvt::Report::notices)
+            .unwrap_or_default();
+        notices.extend(
+            warnings
+                .iter()
+                .map(|w| mitcad_model::notice::Notice::warning(w.as_str())),
+        );
+        notices.sort_by_key(|n| std::cmp::Reverse(n.level));
         if let Some(import) = &import {
             warnings.extend(import.warnings.iter().cloned());
         }
@@ -190,6 +202,7 @@ impl Document {
             "materials": model.materials.len(),
             "import": import,
             "warnings": warnings,
+            "notices": mitcad_model::notice::to_json(&notices),
             "seconds": started.elapsed().as_secs_f64(),
         });
         if let Some(path) = &options.report_path {
@@ -242,6 +255,8 @@ impl Document {
             "file": report["file"],
             "design": report["family"].as_str().map_or_else(|| report["file"].clone(), |f| json!(f)),
             "bodies": report["bodies"],
+            // Its outcomes' and warnings' levels (mitcad#1051).
+            "notices": report["notices"],
             "report": report,
         }))
     }

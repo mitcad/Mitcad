@@ -318,8 +318,10 @@ QJsonObject MainWindow::mcpUiState() {
       // While Create Sketch waits for a plane, what the view's banner says
       // (mitcad#474), with the status line beside it when it says more.
       {QStringLiteral("hint"), m_mode == Mode::PickPlane ? pickPlaneText() : m_statusLabel->text()},
-      // An error is shown red (setErrorStyleSheet), a hint plain.
-      {QStringLiteral("hint_is_error"), m_mode != Mode::PickPlane && !m_statusLabel->styleSheet().isEmpty()},
+      // An error is shown red, a hint plain; the line's level (mitcad#1040).
+      {QStringLiteral("hint_is_error"), m_mode != Mode::PickPlane && m_statusLevel == NoticeLevel::Error},
+      {QStringLiteral("hint_level"),
+       m_mode == Mode::PickPlane ? QStringLiteral("hint") : noticeLevelName(m_statusLevel)},
       {QStringLiteral("agents"), m_mcpAgents},
       {QStringLiteral("agent_clients"), QJsonArray::fromStringList(m_mcpAgentNames)},
       {QStringLiteral("editable"), mcpBlockedReason(true).isEmpty()}};
@@ -450,7 +452,7 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
     // Offscreen at that size, so the picture does not take the window's
     // shape (mitcad#689); the model must not be computing meanwhile.
     if (modelBusy()) {
-      refuseWith(tr("busy: the model is computing; retry in 1000 ms"),
+      refuseWith(tr("busy: the design is computing; retry in 1000 ms"),
                  {{QStringLiteral("busy"), true}, {QStringLiteral("retry_after_ms"), 1000}});
     }
     image = m_viewer->snapshot(*offscreen, false, true);
@@ -991,7 +993,7 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
     } else if (m_mode == Mode::Sketch && finish == QStringLiteral("ok")) {
       result.insert(QStringLiteral("command"), QStringLiteral("sketch.finish"));
       if (!finishSketch()) {
-        refuse(tr("The sketch stays open: computing the features after it was cancelled."));
+        refuse(tr("The sketch stays open: computing the features after it was canceled."));
       }
     } else if (m_mode == Mode::Sketch && finish == QStringLiteral("cancel")) {
       // Every change made since it was opened taken back, then left.
@@ -1005,7 +1007,7 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
         }
       }
       if (m_mode == Mode::Sketch && !finishSketch()) {
-        refuse(tr("The sketch stays open: computing the features after it was cancelled."));
+        refuse(tr("The sketch stays open: computing the features after it was canceled."));
       }
       qInfo().noquote() << QStringLiteral("MCP: an agent cancelled the sketch %1").arg(name);
     } else {

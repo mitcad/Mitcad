@@ -114,6 +114,10 @@ bool MainWindow::readOnlyModelCommand(const QString& name) {
       // A Flat Pattern's drawing (mitcad#210), a drawing's file
       // (mitcad#707; one kept is only read).
       QStringLiteral("export_flat_pattern_dxf"), QStringLiteral("export_drawing"),
+      // The Center of Mass marker (mitcad#1094): display state, as the
+      // origin's.
+      QStringLiteral("add_center_of_mass"), QStringLiteral("set_center_of_mass_visible"),
+      QStringLiteral("delete_center_of_mass"),
   };
   return allowed.contains(name);
 }

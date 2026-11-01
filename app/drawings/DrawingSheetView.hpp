@@ -4,7 +4,8 @@
 // A drawing's sheet (mitcad#707): paints what the model's `drawing` query
 // gives (core/model-api/src/commands.md, "Drawings in the design": groups
 // of lines, arcs, polylines, fills, shading and texts in millimetres of
-// paper, the views' boxes, the annotations' boxes) on a sheet of paper,
+// paper drawn with the widths of its `pens`, the views' boxes, the
+// annotations' boxes) on a sheet of paper,
 // zoomed and panned with the wheel and the middle button, and turns the
 // user's clicks into what the active tool waits for (DrawingTools.hpp).
 // Nothing of the model is computed here: points go to the model in sheet
@@ -260,6 +261,9 @@ private:
   QVector<SheetView> m_views;
   QVector<SheetAnnotation> m_annotations;
   QJsonArray m_groups;
+  // The pens' widths and dashes by name, as the model's writers draw them
+  // (the query's `pens`).
+  QJsonObject m_pens;
   double m_width = 297.0; // mm
   double m_height = 210.0;
   // Pixels per millimetre and where the sheet's lower left corner is.

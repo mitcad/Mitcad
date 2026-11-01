@@ -26,6 +26,7 @@ namespace {
 
 const char* kAdvancedSetting = "print/advancedSettings";
 const char* kGeneralTab = "general"; // the tab of a window's own fields
+const char* kEndTab = "variants";    // the tab of a window's page after the print tabs
 
 } // namespace
 
@@ -113,38 +114,57 @@ void SettingsForm::setKeys(const PrintKeyTable& table, const QString& set, const
         if (table.categoryOf(*key) != category.id || table.groupOf(*key) != group.id) {
           continue;
         }
-        Row row;
-        row.key = *key;
-        row.category = category.id;
-        row.group = group.id;
-        row.line = new QWidget;
-        auto* box = new QHBoxLayout(row.line);
-        box->setContentsMargins(12, 0, 0, 0);
-        auto* label = new QLabel(key->name);
-        label->setMinimumWidth(200);
-        label->setMaximumWidth(260);
-        // [unit | %] only where the design's slicer takes a percentage
-        // (mitcad#655).
-        row.field = new SettingField(*key, nullptr, key->kind != PrintKey::Kind::NumberOrPercent || key->takesPercent(dialect));
-        if (QWidget* editor = row.field->placeWidget())
-          editor->setObjectName(QStringLiteral("printSetting_") + key->key);
-        row.field->setDialect(dialect); // its range (mitcad#746)
-        row.field->setReadOnly(m_readOnly);
-        connect(row.field, &SettingField::committed, this, &SettingsForm::valueChanged);
-        connect(row.field, &SettingField::refused, this, &SettingsForm::refused);
-        box->addWidget(label);
-        box->addWidget(row.field, 1);
-        if (shown.rows.empty()) {
-          shown.heading = new QLabel;
-          QFont bold = shown.heading->font();
-          bold.setBold(true);
-          shown.heading->setFont(bold);
-          shown.heading->setContentsMargins(0, 6, 0, 2);
-          m_rowsLayout->addWidget(shown.heading);
+        // A key kept per slicer that the form edits: a row per slicer
+        // (mitcad#1062); any other key one row.
+        QStringList slicers{QString()};
+        if (key->perDialect && m_slicerKeys.contains(key->key) && !key->dialects.isEmpty()) {
+          slicers = key->dialects;
         }
-        m_rowsLayout->addWidget(row.line);
-        shown.rows.push_back(static_cast<int>(m_rows.size()));
-        m_rows.push_back(std::move(row));
+        for (const QString& slicer : std::as_const(slicers)) {
+          Row row;
+          row.key = *key;
+          row.slicer = slicer;
+          row.title = slicer.isEmpty() ? key->name : slicerTitle(slicer);
+          row.category = category.id;
+          row.group = group.id;
+          row.line = new QWidget;
+          auto* box = new QHBoxLayout(row.line);
+          box->setContentsMargins(12, 0, 0, 0);
+          auto* label = new QLabel(row.title);
+          label->setMinimumWidth(200);
+          label->setMaximumWidth(260);
+          // [unit | %] only where the design's slicer takes a percentage
+          // (mitcad#655).
+          row.field = new SettingField(
+              *key, nullptr, key->kind != PrintKey::Kind::NumberOrPercent || key->takesPercent(dialect), slicer);
+          if (QWidget* editor = row.field->placeWidget()) {
+            // printSetting_<key>, or the variants form's own (mitcad#1054).
+            editor->setObjectName(m_fieldPrefix + key->key +
+                                  (slicer.isEmpty() ? QString() : QStringLiteral(".") + slicer));
+          }
+          if (!slicer.isEmpty()) {
+            row.field->setChoicesSource([this, name = key->key, slicer] {
+              return slicerChoices ? slicerChoices(name, slicer) : QStringList();
+            });
+          }
+          row.field->setDialect(dialect); // its range (mitcad#746)
+          row.field->setReadOnly(m_readOnly);
+          connect(row.field, &SettingField::committed, this, &SettingsForm::valueChanged);
+          connect(row.field, &SettingField::refused, this, &SettingsForm::refused);
+          box->addWidget(label);
+          box->addWidget(row.field, 1);
+          if (shown.rows.empty()) {
+            shown.heading = new QLabel;
+            QFont bold = shown.heading->font();
+            bold.setBold(true);
+            shown.heading->setFont(bold);
+            shown.heading->setContentsMargins(0, 6, 0, 2);
+            m_rowsLayout->addWidget(shown.heading);
+          }
+          m_rowsLayout->addWidget(row.line);
+          shown.rows.push_back(static_cast<int>(m_rows.size()));
+          m_rows.push_back(std::move(row));
+        }
       }
       if (!shown.rows.empty()) {
         m_groups.push_back(std::move(shown));
@@ -161,7 +181,9 @@ void SettingsForm::setKeys(const PrintKeyTable& table, const QString& set, const
 }
 
 QString SettingsForm::tabTitle(const QString& id) const {
-  const QString title = id == QLatin1String(kGeneralTab) ? m_generalTitle : m_tabTitles.value(id);
+  const QString title = id == QLatin1String(kGeneralTab) ? m_generalTitle
+                        : id == QLatin1String(kEndTab)   ? m_endTitle
+                                                         : m_tabTitles.value(id);
   // A dot, not a count that reads as one of filaments (mitcad#655).
   return m_hintCounts.value(id) > 0 ? QStringLiteral("%1 •").arg(title) : title;
 }
@@ -193,6 +215,14 @@ void SettingsForm::syncTabs(const QStringList& wanted) {
   }
 }
 
+void SettingsForm::setSlicerKeys(const QStringList& keys) {
+  if (keys == m_slicerKeys) {
+    return;
+  }
+  m_slicerKeys = keys;
+  m_set.clear(); // the next setKeys builds the rows again
+}
+
 void SettingsForm::setHiddenKeys(const QStringList& keys) {
   m_hidden = QSet<QString>(keys.begin(), keys.end());
   applyFilter();
@@ -222,20 +252,25 @@ void SettingsForm::setReadOnly(bool readOnly) {
 
 bool SettingsForm::rowShown(const Row& row, bool searching, const QString& search, const QString& category) const {
   // A value per slicer (a printer preset's name) is the slicers' own, never
-  // edited: not shown (mitcad#655).
-  if (m_hidden.contains(row.key.key) || row.key.perDialect) {
+  // edited: not shown (mitcad#655), unless the form edits it a slicer's row
+  // each (mitcad#1062).
+  if (m_hidden.contains(row.key.key) || (row.key.perDialect && row.slicer.isEmpty())) {
     return false;
   }
   if (row.key.key == m_forced) {
     return row.category == category || searching;
   }
   if (searching) {
-    // By the plain names only (mitcad#655).
-    return row.key.name.contains(search, Qt::CaseInsensitive);
+    // By the plain names only (mitcad#655): a slicer's row by the key's
+    // name or the slicer's.
+    return row.key.name.contains(search, Qt::CaseInsensitive) ||
+           (!row.slicer.isEmpty() && row.title.contains(search, Qt::CaseInsensitive));
   }
   // Nothing that changes the print is hidden: an advanced key the item
-  // sets is shown.
-  return row.category == category && (m_advanced->isChecked() || !row.key.advanced || row.field->isSet());
+  // sets is shown. The slicers' presets a material builds on are always
+  // offered (mitcad#1062: 3D Print points at them).
+  return row.category == category &&
+         (m_advanced->isChecked() || !row.key.advanced || !row.slicer.isEmpty() || row.field->isSet());
 }
 
 void SettingsForm::applyFilter() {
@@ -268,6 +303,10 @@ void SettingsForm::applyFilter() {
       wanted << id;
     }
   }
+  // The window's page after the print tabs (mitcad#1054): with them.
+  if (m_end != nullptr && m_printShown) {
+    wanted << QString::fromLatin1(kEndTab);
+  }
   syncTabs(wanted);
   // One tab is no choice (mitcad#655: a printer's one category, a metal's
   // General alone): no bar, nor while searching. Search stays on every
@@ -278,12 +317,16 @@ void SettingsForm::applyFilter() {
   const QString category = m_currentTab;
   const bool general =
       m_general != nullptr && (searching ? generalHit : (!m_printShown || category == QLatin1String(kGeneralTab)));
+  const bool end = m_end != nullptr && m_printShown && !searching && category == QLatin1String(kEndTab);
   m_search->setVisible(m_printShown || m_general != nullptr);
-  m_advanced->setVisible(m_printShown);
+  m_advanced->setVisible(m_printShown && !end);
   if (m_general != nullptr) {
     m_general->setVisible(general);
   }
-  m_scroll->setVisible(searching ? m_printShown : !general);
+  if (m_end != nullptr) {
+    m_end->setVisible(end);
+  }
+  m_scroll->setVisible(searching ? m_printShown : (!general && !end));
   for (Group& group : m_groups) {
     bool any = false;
     for (int index : group.rows) {
@@ -306,6 +349,22 @@ void SettingsForm::setGeneralPage(QWidget* page, const QString& title) {
   box->insertWidget(box->indexOf(m_scroll), page, 1);
   m_currentTab = QString::fromLatin1(kGeneralTab);
   applyFilter();
+}
+
+void SettingsForm::setEndPage(QWidget* page, const QString& title) {
+  m_end = page;
+  m_endTitle = title;
+  // Between the tabs and the settings, shown for its tab.
+  auto* box = static_cast<QVBoxLayout*>(layout());
+  box->insertWidget(box->indexOf(m_scroll), page, 1);
+  page->hide();
+  applyFilter();
+}
+
+void SettingsForm::setNamePrefix(const QString& prefix) {
+  m_fieldPrefix = prefix.isEmpty() ? QStringLiteral("printSetting_") : prefix + QStringLiteral("Setting_");
+  m_search->setObjectName(prefix.isEmpty() ? QStringLiteral("settingsSearch") : prefix + QStringLiteral("SettingsSearch"));
+  m_tabs->setObjectName(prefix.isEmpty() ? QStringLiteral("settingsTabs") : prefix + QStringLiteral("SettingsTabs"));
 }
 
 void SettingsForm::setGeneralNames(const QStringList& names) {
@@ -422,13 +481,14 @@ QStringList SettingsForm::places(const QString& prefix,
     if (!row.line->isVisibleTo(m_page)) {
       continue;
     }
+    const QString name = row.slicer.isEmpty() ? row.key.key : QStringLiteral("%1.%2").arg(row.key.key, row.slicer);
     QWidget* field = row.field->placeWidget();
     if (inSight(field)) {
-      lines << QStringLiteral("%1 field %2 at %3").arg(prefix, row.key.key, at(field, field->rect().center()));
+      lines << QStringLiteral("%1 field %2 at %3").arg(prefix, name, at(field, field->rect().center()));
     }
     QWidget* clear = row.field->clearWidget();
     if (inSight(clear)) {
-      lines << QStringLiteral("%1 clear %2 at %3").arg(prefix, row.key.key, at(clear, clear->rect().center()));
+      lines << QStringLiteral("%1 clear %2 at %3").arg(prefix, name, at(clear, clear->rect().center()));
     }
   }
   return lines;
@@ -437,8 +497,14 @@ QStringList SettingsForm::places(const QString& prefix,
 QStringList SettingsForm::rows() const {
   QStringList lines;
   for (const Row& row : m_rows) {
-    if (row.field->isSet()) {
+    if (!row.field->isSet()) {
+      continue;
+    }
+    if (row.slicer.isEmpty()) {
       lines << QStringLiteral("%1 = %2").arg(row.key.key, printValueText(row.key, row.field->value()));
+    } else {
+      lines << QStringLiteral("%1.%2 = %3")
+                   .arg(row.key.key, row.slicer, slicerPresetOf(row.field->value(), row.slicer));
     }
   }
   return lines;

@@ -20,7 +20,6 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSplitter>
-#include <QStyle>
 #include <QTextBlock>
 #include <QTextCursor>
 #include <QTextDocument>
@@ -149,6 +148,11 @@ RulesPage::RulesPage(RulesSource source, QWidget* parent) : QWidget(parent), m_s
   m_status->setObjectName(QStringLiteral("rulesStatus"));
   m_status->setWordWrap(true);
   m_status->hide();
+  // Its level's badge (mitcad#1051), beside the text.
+  m_statusIcon = new QLabel;
+  m_statusIcon->setObjectName(QStringLiteral("rulesStatusIcon"));
+  m_statusIcon->setAlignment(Qt::AlignTop);
+  m_statusIcon->hide();
   // The rule as text (mitcad#965): always in sight under the blocks, and
   // edited as they are. A line per part, so a long one scrolls rather than
   // wraps (a problem's line and column are the lines as typed).
@@ -195,7 +199,10 @@ RulesPage::RulesPage(RulesSource source, QWidget* parent) : QWidget(parent), m_s
   auto* rightLayout = new QVBoxLayout(right);
   rightLayout->setContentsMargins(0, 0, 0, 0);
   rightLayout->addWidget(editor, 1);
-  rightLayout->addWidget(m_status);
+  auto* statusRow = new QHBoxLayout;
+  statusRow->addWidget(m_statusIcon);
+  statusRow->addWidget(m_status, 1);
+  rightLayout->addLayout(statusRow);
   auto* textRow = new QHBoxLayout;
   textRow->addWidget(labelled(new QLabel(QStringLiteral("&Text")), m_text));
   textRow->addStretch(1);
@@ -301,6 +308,8 @@ void RulesPage::refresh() {
   }
   m_table = answer.value(QStringLiteral("configurations")).toObject();
   m_problems = strings(answer.value(QStringLiteral("problems")));
+  m_ruleProblems = answer.value(QStringLiteral("rule_problems")).toArray();
+  m_problemRules = m_table.value(QStringLiteral("rules")).toArray();
   const QStringList options = strings(m_table.value(QStringLiteral("options")));
   m_infos = m_source.configure ? optionInfos(m_source.configure()) : std::vector<OptionInfo>();
   QStringList numbers;
@@ -364,6 +373,7 @@ void RulesPage::refresh() {
     m_rules.push_back(ruleFromJson(rule.toObject()));
   }
   m_refusal.clear();
+  m_refusalProblems = QJsonArray();
   m_current = -1;
   for (std::size_t i = 0; i < m_rules.size(); ++i) {
     if (m_rules[i].name == current) {
@@ -391,9 +401,29 @@ QString RulesPage::problemOf(int index) const {
     }
     return QStringLiteral("Not saved yet: fill its dashed places");
   }
-  if (!m_drafts.empty() && !m_refusal.isEmpty() && (m_refusal.contains(rule.name) || index == m_current)) {
+  const QString errors = errorsOf(index);
+  if (!errors.isEmpty()) {
+    return errors;
+  }
+  // Else its values outside their options' domains (mitcad#1064).
+  return savedProblems(index, NoticeLevel::Warning).join(QStringLiteral("; "));
+}
+
+bool RulesPage::refused(int index) const {
+  if (index < 0 || index >= static_cast<int>(m_rules.size()) || m_drafts.empty() || m_refusal.isEmpty()) {
+    return false;
+  }
+  return m_refusal.contains(m_rules[static_cast<std::size_t>(index)].name) || index == m_current;
+}
+
+QString RulesPage::errorsOf(int index) const {
+  if (index < 0 || index >= static_cast<int>(m_rules.size())) {
+    return {};
+  }
+  if (refused(index)) {
     return QStringLiteral("Not saved: %1").arg(m_refusal);
   }
+  const Rule& rule = m_rules[static_cast<std::size_t>(index)];
   QStringList problems;
   for (const QString& problem : m_problems) {
     if (problem.contains(rule.name)) {
@@ -401,6 +431,75 @@ QString RulesPage::problemOf(int index) const {
     }
   }
   return problems.join(QStringLiteral("; "));
+}
+
+QStringList RulesPage::savedProblems(int index, NoticeLevel level) const {
+  QStringList found;
+  if (index < 0 || index >= static_cast<int>(m_rules.size())) {
+    return found;
+  }
+  // The design's problems are of its rules as saved: of this rule only while
+  // it is the same.
+  if (index >= m_problemRules.size() ||
+      m_problemRules.at(index).toObject() != ruleToJson(m_rules[static_cast<std::size_t>(index)])) {
+    return found;
+  }
+  for (const QJsonValue& value : m_ruleProblems) {
+    const QJsonObject problem = value.toObject();
+    if (problem.value(QStringLiteral("index")).toInt(-1) == index &&
+        noticeLevelFromModel(problem.value(QStringLiteral("level")).toString(), NoticeLevel::Error) == level) {
+      found << problem.value(QStringLiteral("message")).toString();
+    }
+  }
+  return found;
+}
+
+std::vector<BlockMark> RulesPage::blockMarks(int index) const {
+  std::vector<BlockMark> marks;
+  if (index < 0 || index >= static_cast<int>(m_rules.size())) {
+    return marks;
+  }
+  const Rule& rule = m_rules[static_cast<std::size_t>(index)];
+  if (!isComplete(rule)) {
+    for (const BlockPath& path : emptyPlaces(rule)) {
+      marks.push_back({path, NoticeLevel::Warning, QStringLiteral("Not saved yet: fill this place.")});
+    }
+    return marks;
+  }
+  // Where the design refused it: the problem of the refusal; else its
+  // problems as saved.
+  const bool refusal = refused(index);
+  const bool asSaved = index < m_problemRules.size() && m_problemRules.at(index).toObject() == ruleToJson(rule);
+  if (!refusal && !asSaved) {
+    return marks;
+  }
+  for (const QJsonValue& value : refusal ? m_refusalProblems : m_ruleProblems) {
+    const QJsonObject problem = value.toObject();
+    const QString message = problem.value(QStringLiteral("message")).toString();
+    const NoticeLevel level =
+        noticeLevelFromModel(problem.value(QStringLiteral("level")).toString(), NoticeLevel::Error);
+    if (problem.value(QStringLiteral("index")).toInt(-1) != index ||
+        (refusal && (level != NoticeLevel::Error || !m_refusal.contains(message)))) {
+      continue;
+    }
+    if (const std::optional<BlockPath> path = blockOfPlace(rule, problem.value(QStringLiteral("place")).toString())) {
+      marks.push_back({*path, level, message});
+    }
+  }
+  return marks;
+}
+
+NoticeLevel RulesPage::problemLevel(int index) const {
+  if (index < 0 || index >= static_cast<int>(m_rules.size())) {
+    return NoticeLevel::Hint;
+  }
+  // As problemOf() finds it: what the design refused is an error, the rest
+  // (not saved yet, what Check Rules found, values outside their domains)
+  // warnings.
+  if (isComplete(m_rules[static_cast<std::size_t>(index)]) && refused(index)) {
+    return NoticeLevel::Error;
+  }
+  return problemOf(index).isEmpty() ? NoticeLevel::Hint : NoticeLevel::Warning;
 }
 
 void RulesPage::fillList() {
@@ -415,16 +514,19 @@ void RulesPage::fillList() {
     item->setCheckState(0, rule.enabled ? Qt::Checked : Qt::Unchecked);
     const QString comment = rule.extra.value(QStringLiteral("comment")).toString();
     const QString problem = problemOf(static_cast<int>(i));
+    const NoticeLevel level = problemLevel(static_cast<int>(i));
     if (!problem.isEmpty()) {
-      item->setIcon(1, style()->standardIcon(QStyle::SP_MessageBoxWarning));
-      item->setToolTip(0, problem);
-      item->setToolTip(1, problem);
+      // The problem's level (mitcad#1051): its badge and its word.
+      item->setIcon(1, noticeIcon(level));
+      item->setToolTip(0, noticeLevelText(level, problem));
+      item->setToolTip(1, noticeLevelText(level, problem));
     } else if (!comment.isEmpty()) {
       item->setToolTip(0, comment);
     }
     rows << QStringLiteral("Rules row %1: %2, %3")
                 .arg(rule.name, rule.enabled ? QStringLiteral("enabled") : QStringLiteral("disabled"),
-                     problem.isEmpty() ? QStringLiteral("ok") : problem);
+                     problem.isEmpty() ? QStringLiteral("ok")
+                                       : QStringLiteral("%1: %2").arg(noticeLevelName(level), problem));
   }
   if (m_current >= 0 && m_current < m_list->topLevelItemCount()) {
     m_list->setCurrentItem(m_list->topLevelItem(m_current));
@@ -463,6 +565,7 @@ void RulesPage::showCurrent() {
   m_duplicate->setEnabled(m_current >= 0);
   m_delete->setEnabled(m_current >= 0);
   updateText();
+  updateStatus(); // its blocks' marks, now that the canvas shows it
 }
 
 void RulesPage::updateStatus() {
@@ -480,17 +583,62 @@ void RulesPage::updateStatus() {
   } else if (!m_drafts.empty() && !m_refusal.isEmpty()) {
     text = QStringLiteral("Not saved: %1").arg(m_refusal);
   }
-  m_status->setText(text);
-  m_status->setVisible(!text.isEmpty());
-  if (!m_textProblem.isEmpty() || (!m_drafts.empty() && !m_refusal.isEmpty())) {
-    setErrorStyleSheet(m_status);
-  } else {
-    setWarningStyleSheet(m_status);
+  // A text that did not read and a change refused are errors, rules not
+  // saved yet a warning (mitcad#1051).
+  const NoticeLevel level = text.isEmpty() ? NoticeLevel::Hint
+                            : !m_textProblem.isEmpty() || (!m_drafts.empty() && !m_refusal.isEmpty())
+                                ? NoticeLevel::Error
+                                : NoticeLevel::Warning;
+  showStatusLine(text, level);
+  // The shown rule's problem on its blocks too (mitcad#1041): refused an
+  // error, not complete yet a warning; and the blocks that are wrong, each
+  // at its problem's level (mitcad#1064), while the canvas shows the rule
+  // as it is here (it shows an edit at once, before the page has it).
+  NoticeLevel shown = NoticeLevel::Hint;
+  std::vector<BlockMark> marks;
+  if (m_current >= 0 && m_current < static_cast<int>(m_rules.size())) {
+    const Rule& rule = m_rules[static_cast<std::size_t>(m_current)];
+    const bool complete = isComplete(rule);
+    if (!m_textProblem.isEmpty() || (complete && !errorsOf(m_current).isEmpty())) {
+      shown = NoticeLevel::Error;
+    } else if (!complete || !problemOf(m_current).isEmpty()) {
+      shown = NoticeLevel::Warning;
+    }
+    if (m_canvas->hasRule() && ruleToJson(m_canvas->rule()) == ruleToJson(rule)) {
+      marks = blockMarks(m_current);
+    }
   }
+  m_canvas->setValidation(shown, std::move(marks));
   if (text != m_loggedStatus) {
     m_loggedStatus = text;
     qDebug().noquote() << QStringLiteral("Rules status: %1").arg(text.isEmpty() ? QStringLiteral("none") : text);
+    if (!text.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Rules status level: %1").arg(noticeLevelName(level));
+    }
   }
+}
+
+void RulesPage::showStatusLine(const QString& text, NoticeLevel level) {
+  m_statusLevel = level;
+  m_status->setText(text);
+  m_status->setVisible(!text.isEmpty());
+  if (level == NoticeLevel::Error) {
+    setErrorStyleSheet(m_status);
+  } else if (level == NoticeLevel::Warning) {
+    setWarningStyleSheet(m_status);
+  } else {
+    setErrorStyleSheet(m_status, QString());
+  }
+  const QIcon icon = noticeIcon(level);
+  if (text.isEmpty() || icon.isNull()) {
+    m_statusIcon->clear();
+    m_statusIcon->hide();
+    return;
+  }
+  const int side = m_status->fontMetrics().height();
+  m_statusIcon->setPixmap(icon.pixmap(QSize(side, side), devicePixelRatioF()));
+  m_statusIcon->setToolTip(noticeLevelWord(level));
+  m_statusIcon->show();
 }
 
 void RulesPage::updateText() {
@@ -741,9 +889,9 @@ void RulesPage::listEdited(int index) {
     if (!refused.isEmpty()) {
       qDebug().noquote() << QStringLiteral("Rules rename refused: %1").arg(refused);
       fillList();
-      m_status->setText(refused);
-      setErrorStyleSheet(m_status);
-      m_status->show();
+      // A refused change: an error (mitcad#1051).
+      showStatusLine(refused, NoticeLevel::Error);
+      qDebug().noquote() << QStringLiteral("Rules status level: %1").arg(noticeLevelName(NoticeLevel::Error));
       return;
     }
   }
@@ -776,15 +924,22 @@ void RulesPage::commit(std::vector<Rule> rules, const QString& what) {
     if (m_source.setRules(array, &error)) {
       m_drafts.clear();
       m_refusal.clear();
+      m_refusalProblems = QJsonArray();
       qDebug().noquote() << QStringLiteral("Rules saved: %1").arg(what);
       refresh();
       emit saved();
       return;
     }
     m_refusal = error.isEmpty() ? QStringLiteral("the design refused the rules") : error;
+    // Which block it refused (mitcad#1064): the rules' problems with their
+    // places, as the design checks them.
+    m_refusalProblems = m_source.tryRules
+                            ? m_source.tryRules(array).value(QStringLiteral("rule_problems")).toArray()
+                            : QJsonArray();
     qDebug().noquote() << QStringLiteral("Rules refused: %1: %2").arg(what, m_refusal);
   } else {
     m_refusal.clear();
+    m_refusalProblems = QJsonArray();
     qDebug().noquote() << QStringLiteral("Rules not saved yet: %1").arg(what);
   }
   m_drafts.push_back(std::move(previous));
@@ -797,6 +952,7 @@ bool RulesPage::undo() {
     m_rules = std::move(m_drafts.back());
     m_drafts.pop_back();
     m_refusal.clear();
+    m_refusalProblems = QJsonArray();
     qDebug().noquote() << QStringLiteral("Rules undo: the last change not saved");
     if (m_current >= static_cast<int>(m_rules.size())) {
       m_current = static_cast<int>(m_rules.size()) - 1;

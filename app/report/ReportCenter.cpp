@@ -531,7 +531,8 @@ void ReportCenter::offerNext() {
 bool ReportCenter::showOffer(const Offer& offer) {
   QMessageBox box(&m_window);
   box.setObjectName(QStringLiteral("errorReportOffer"));
-  box.setIcon(QMessageBox::Warning);
+  // A crash or an internal error: an error (mitcad#1040), the Critical icon.
+  box.setIcon(QMessageBox::Critical);
   box.setWindowTitle(tr("Error Report"));
   box.setText(offer.message);
   box.setInformativeText(tr("You can send a report to MitCad's developers. You will see everything it contains, "

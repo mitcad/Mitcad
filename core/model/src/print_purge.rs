@@ -200,17 +200,19 @@ impl Matrix {
                     .iter()
                     .enumerate()
                     .map(|(j, (to, to_values))| {
-                        if i == j || from == to {
+                        if i == j {
                             return Cell {
                                 computed: 0.0,
                                 volume: 0.0,
                                 edited: false,
                             };
                         }
+                        // Two colours of one material (mitcad#1055): their
+                        // colours' volume, never one set by hand.
                         let computed = computed(*from_values, *to_values, multiplier);
                         let set = overrides
                             .iter()
-                            .find(|o| o.from == *from && o.to == *to)
+                            .find(|o| from != to && o.from == *from && o.to == *to)
                             .map(|o| o.volume);
                         Cell {
                             computed,

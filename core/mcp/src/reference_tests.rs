@@ -133,7 +133,7 @@ fn the_reference_tool_is_read_only_and_described_in_both_servers() {
         assert!(schema.contains("{\"cmd\": \"add_feature\", \"def\": {...}}"));
         assert!(
             schema
-                .contains("JSON numbers are millimetres and radians; write \"90 deg\" for degrees")
+                .contains("JSON numbers are millimeters and radians; write \"90 deg\" for degrees")
         );
     }
     for profile in [Profile::Headless, Profile::Live] {
@@ -144,7 +144,7 @@ fn the_reference_tool_is_read_only_and_described_in_both_servers() {
         assert!(instructions.contains("model_reference"));
         assert!(
             instructions
-                .contains("JSON numbers are millimetres and radians; write \"90 deg\" for degrees")
+                .contains("JSON numbers are millimeters and radians; write \"90 deg\" for degrees")
         );
     }
 }
@@ -220,7 +220,7 @@ fn a_query_or_a_command_by_its_reference_row() {
     let (answer, is_error) = lookup(&mut session, json!({"query": "body_bbox"}));
     assert!(is_error);
     let error = answer["error"].as_str().unwrap();
-    assert!(error.contains("unknown query 'body_bbox'"));
+    assert!(error.contains("unknown query body_bbox"));
     assert!(error.contains("bodies, faces, timeline"));
 }
 
@@ -257,7 +257,7 @@ fn a_feature_type_by_its_section_with_an_example() {
     let (answer, is_error) = lookup(&mut session, json!({"feature": "construction_plan"}));
     assert!(is_error);
     let error = answer["error"].as_str().unwrap();
-    assert!(error.contains("unknown feature type 'construction_plan'"));
+    assert!(error.contains("unknown feature type construction_plan"));
     assert!(error.contains("extrude, construction_plane, split_body"));
     assert!(error.contains("{\"feature\": \"<name>\"}"));
 }
@@ -350,19 +350,18 @@ fn one_kind_of_lookup_at_a_time() {
 fn unknown_names_list_the_permitted_ones_and_a_missing_name_shows_the_form() {
     let error = unknown_query("bbox", &names());
     assert!(
-        error
-            .starts_with("unknown query 'bbox'; the queries MCP permits: bodies, faces, timeline.")
+        error.starts_with("unknown query bbox; the queries MCP permits: bodies, faces, timeline.")
     );
     assert!(error.contains("model_reference {\"query\": \"<name>\"}"));
     let error = unknown_command("list", &names());
-    assert!(error.starts_with("unknown command 'list'; the commands MCP permits: add_feature, edit_feature, sketch.add_line, undo."));
+    assert!(error.starts_with("unknown command list; the commands MCP permits: add_feature, edit_feature, sketch.add_line, undo."));
     assert!(unknown_query("bbox", &Vocabulary::default()).contains("model_reference"));
     // `{"command": "list"}` inside model_command's command.
     let error = missing_name(&json!({"command": "list"}), "cmd");
     assert!(error.contains("{\"cmd\": \"add_feature\", \"def\": {...}}"));
-    assert!(error.contains("no 'cmd' (its fields: command)"));
+    assert!(error.contains("no cmd (its fields: command)"));
     let error = missing_name(&json!({"cmd": ""}), "cmd");
-    assert!(error.contains("its 'cmd' is not a nonempty string"));
+    assert!(error.contains("its cmd is not a nonempty string"));
     let error = missing_name(&json!({}), "query");
     assert!(error.contains("{\"query\": \"bodies\", \"properties\": true}"));
     assert!(error.contains("this one is empty"));
@@ -508,7 +507,7 @@ fn the_live_server_answers_the_reference_and_explains_its_refusals() {
         value["error"]
             .as_str()
             .unwrap()
-            .contains("missing field `plane`; the fields of the feature type 'construction_plane'")
+            .contains("missing field `plane`; the fields of the feature type construction_plane")
     );
 }
 
@@ -539,7 +538,7 @@ fn errors_repeat_only_the_start_of_a_clients_long_names() {
         fields.insert(format!("{i}{}", "f".repeat(10_000)), json!(1));
     }
     let error = missing_name(&Value::Object(fields), "cmd");
-    assert!(error.contains("this one has no 'cmd'"), "{error}");
+    assert!(error.contains("this one has no cmd"), "{error}");
     assert!(error.contains(", and 980 more)"), "{error}");
     assert!(error.len() < 8 * 1024, "{}", error.len());
 }

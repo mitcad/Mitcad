@@ -17,6 +17,10 @@ namespace mitcad {
 // folders (app/tests/library_paths.cpp).
 inline QString storedApplicationName() { return QStringLiteral("Mitcad"); }
 
+// The program's name as people read it (docs/naming.md): what --version
+// prints before the version (app/main.cpp).
+inline QString programName() { return QStringLiteral("MitCad"); }
+
 // The application's general settings (Preferences, General), kept in the
 // user's settings (autosave/enabled, autosave/minutes). Minutes, like every
 // unit the application chooses, are metric; there is no unit to pick.
@@ -36,6 +40,16 @@ struct GeneralSettings {
   static constexpr double kMinImportTolerance = 0.001;
   static constexpr double kMaxImportTolerance = 1.0;
   double importTolerance = 0.01;
+
+  // The length unit new designs start in (mitcad#1036; the setting
+  // units/newDesigns): New, New Design and the untitled design at the start
+  // take it; opened and imported files keep their own, and a change of it
+  // changes no open design. Millimetres by default (metric defaults, P11);
+  // one of newDesignUnitChoices().
+  QString newDesignUnits = QStringLiteral("mm");
+  // The units to choose from, millimetres first: mm, cm, m, in, ft (the
+  // choices of Change Active Units).
+  static QStringList newDesignUnitChoices();
 
   static GeneralSettings load();
   void save() const;

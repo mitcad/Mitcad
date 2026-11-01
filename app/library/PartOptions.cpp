@@ -714,7 +714,7 @@ QString supplierColumnName(SupplierColumn column) {
   case SupplierColumn::Supplier:
     return QStringLiteral("Supplier");
   case SupplierColumn::PartNumber:
-    return QStringLiteral("Part number");
+    return QStringLiteral("Supplier Part Number");
   case SupplierColumn::Material:
     return QStringLiteral("Material");
   case SupplierColumn::Finish:
@@ -722,7 +722,7 @@ QString supplierColumnName(SupplierColumn column) {
   case SupplierColumn::Checked:
     return QStringLiteral("Checked");
   case SupplierColumn::ProductPage:
-    return QStringLiteral("Product page");
+    return QStringLiteral("Product Page");
   }
   return QString();
 }

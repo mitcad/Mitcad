@@ -401,22 +401,22 @@ impl fmt::Display for TableError {
             Self::UnknownId(id) => write!(f, "no parameter with id {}", id.0),
             Self::InvalidName(name) => write!(
                 f,
-                "'{name}' is not a valid parameter name: use letters, digits and '_', starting with a letter"
+                "{name} is not a valid parameter name: use letters, digits and '_', starting with a letter"
             ),
             Self::ReservedName(name) => write!(
                 f,
-                "'{name}' is a unit, function or constant and cannot name a parameter"
+                "{name} is a unit, function or constant and cannot name a parameter"
             ),
-            Self::DuplicateName(name) => write!(f, "parameter '{name}' already exists"),
-            Self::Parse { parameter, error } => write!(f, "parameter '{parameter}': {error}"),
-            Self::Eval { parameter, error } => write!(f, "parameter '{parameter}': {error}"),
+            Self::DuplicateName(name) => write!(f, "parameter {name} already exists"),
+            Self::Parse { parameter, error } => write!(f, "parameter {parameter}: {error}"),
+            Self::Eval { parameter, error } => write!(f, "parameter {parameter}: {error}"),
             Self::Cycle { path } => write!(f, "circular reference: {}", path.join(" -> ")),
             Self::InUse { name, used_by } => {
-                write!(f, "parameter '{name}' is used by {}", used_by.join(", "))
+                write!(f, "parameter {name} is used by {}", used_by.join(", "))
             }
             Self::IdOrder(id) => write!(f, "parameter ids must increase, found {}", id.0),
-            Self::Limit { parameter, error } => write!(f, "parameter '{parameter}': {error}"),
-            Self::TableName(name) => write!(f, "'{name}' is the name of a table"),
+            Self::Limit { parameter, error } => write!(f, "parameter {parameter}: {error}"),
+            Self::TableName(name) => write!(f, "{name} is the name of a table"),
         }
     }
 }

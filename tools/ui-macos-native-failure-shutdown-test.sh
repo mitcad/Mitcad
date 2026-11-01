@@ -30,7 +30,7 @@ import sys
 text = Path(sys.argv[1]).read_text()
 failures = re.findall(r'^TestDriver: FAIL.*$', text, re.M)
 assert failures == ['TestDriver: FAIL line 5: expected 2 bodies with total volume 48000 mm3 (1 bodies, total volume 48000 mm3)'], failures
-assert not re.search(r'^TestDriver: done|^Mitcad crashed:', text, re.M)
+assert not re.search(r'^TestDriver: done|^MitCad crashed:', text, re.M)
 assert not any(Path(sys.argv[2]).iterdir()), 'unexpected retained crash report'
 PY
   [ "$?" = 0 ] || exit 1

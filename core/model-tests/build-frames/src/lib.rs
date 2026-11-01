@@ -19,3 +19,5 @@ mod tilt_tests;
 mod two_points_tests;
 // A BUILD part's options (mitcad#801).
 mod options_tests;
+// Corner connectors of a frame and their nuts (mitcad#1115).
+mod connector_corner_tests;

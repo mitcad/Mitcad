@@ -385,6 +385,12 @@ QMessageBox::StandardButton sheetInformation(QWidget* parent, const QString& tit
   return show(QMessageBox::Information, parent, title, text, buttons, defaultButton);
 }
 
+QMessageBox::StandardButton sheetCritical(QWidget* parent, const QString& title, const QString& text,
+                                          QMessageBox::StandardButtons buttons,
+                                          QMessageBox::StandardButton defaultButton) {
+  return show(QMessageBox::Critical, parent, title, text, buttons, defaultButton);
+}
+
 QMessageBox::StandardButton sheetQuestion(QWidget* parent, const QString& title, const QString& text,
                                           QMessageBox::StandardButtons buttons,
                                           QMessageBox::StandardButton defaultButton) {

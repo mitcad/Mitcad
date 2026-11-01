@@ -370,7 +370,7 @@ fn expressions_and_units_round_trip() {
     };
     assert_invalid(
         edit(json!({"name": "wall", "expression": "zz * 2", "unit": "mm"})),
-        &["parameters[3]: parameter 'wall': unknown parameter 'zz' at byte 0"],
+        &["parameters[3]: parameter wall: unknown parameter zz at byte 0"],
     );
     assert_invalid(
         edit(json!({"name": "wall", "expression": "d3", "unit": "mm"})),
@@ -382,10 +382,10 @@ fn expressions_and_units_round_trip() {
     );
     assert_invalid(
         edit(json!({"name": "mm", "expression": "2", "unit": "mm"})),
-        &["parameters[3]: 'mm' is a unit, function or constant"],
+        &["parameters[3]: mm is a unit, function or constant"],
     );
     let error = rejected(&edited(&json, |v| v["units"]["length"] = json!("deg")));
-    assert_invalid(error, &["units: 'deg' is not a length unit"]);
+    assert_invalid(error, &["units: “deg” is not a length unit"]);
 }
 
 #[test]
@@ -456,7 +456,7 @@ fn general_sketch_round_trips() {
         json!({"cmd": "sketch.add_line", "start": [80, 0], "end": [90, 40], "construction": true}),
         json!({"cmd": "sketch.arc", "mode": "center", "center": [100, 0], "start": [110, 0],
                "end": [100, 10]}),
-        json!({"cmd": "sketch.add_text", "text": "Mitcad", "at": [0, -10], "height": 5,
+        json!({"cmd": "sketch.add_text", "text": "MitCad", "at": [0, -10], "height": 5,
                "angle": 0.5, "font": "Arial", "bold": true}),
     ] {
         run(&mut doc, s(command));
@@ -535,7 +535,7 @@ fn values_of_older_files_become_expressions() {
     let mut doc = load(&json).unwrap();
     assert_eq!(
         doc.load_warnings(),
-        ["parameter 'm' is renamed to 'm_1': 'm' is a unit, function or constant in expressions"]
+        ["parameter m is renamed to m_1: m is a unit, function or constant in expressions"]
     );
     let params = doc.parameters();
     let m = params.get(params.find("m_1").unwrap()).unwrap();
@@ -546,7 +546,7 @@ fn values_of_older_files_become_expressions() {
     assert!(
         doc.report(false)
             .unwrap()
-            .starts_with("Warning: parameter 'm'")
+            .starts_with("Warning: parameter m")
     );
     assert!(doc.recompute().error.is_none());
     assert_eq!(histories(&doc)[0].2, "fillet(prism(F2:0..20),2)");
@@ -612,7 +612,7 @@ fn malformed_files_are_rejected() {
         panic!("version 4 must be a version error");
     };
     assert!(
-        message.contains("version 4, newer than this Mitcad can read (version 3)"),
+        message.contains("version 4, newer than this MitCad can read (version 3)"),
         "{message}"
     );
     for v in [json!(0), json!("2"), json!(2.5), json!(-1), Value::Null] {
@@ -648,7 +648,7 @@ fn schema_errors_say_where() {
         ),
         (
             |v| v["features"][1]["uid"] = json!("2"),
-            "features[1] (Extrude1): invalid feature id '2'",
+            "features[1] (Extrude1): invalid feature id 2",
         ),
         (
             |v| {
@@ -658,7 +658,7 @@ fn schema_errors_say_where() {
         ),
         (
             |v| v["features"][2]["edges"][0] = json!("E{F2:side(c1)}"),
-            "features[2] (Fillet1): invalid name 'E{F2:side(c1)}'",
+            "features[2] (Fillet1): invalid name E{F2:side(c1)}",
         ),
         (
             |v| v["features"][2]["suppressed"] = json!("yes"),
@@ -685,11 +685,11 @@ fn references_and_names_are_checked() {
     let cases: [(Edit, &str); 13] = [
         (
             |v| v["features"][2]["radius"] = json!("d99"),
-            "features[2] (Fillet1): radius: parameter 'd99' does not exist",
+            "features[2] (Fillet1): radius: parameter d99 does not exist",
         ),
         (
             |v| v["features"][0]["dimensions"][1]["value"] = json!("h"),
-            "features[0] (Sketch1): dimensions[k6].length: parameter 'h' does not exist",
+            "features[0] (Sketch1): dimensions[k6].length: parameter h does not exist",
         ),
         (
             |v| v["features"][0]["entities"][0]["end"] = json!("p9"),
@@ -720,12 +720,12 @@ fn references_and_names_are_checked() {
             "features[1] (Extrude1): uid F1 is used more than once",
         ),
         (
-            |v| v["features"][1]["name"] = json!("Sketch1"),
-            "features[1]: feature name 'Sketch1' is used more than once",
+            |v| v["features"][1]["name"] = json!(" "),
+            "features[1]: the name is empty",
         ),
         (
             |v| v["parameters"][1]["name"] = json!("d1"),
-            "parameters[1]: parameter 'd1' already exists",
+            "parameters[1]: parameter d1 already exists",
         ),
         (
             |v| v["parameters"][1]["owner"] = json!("F9"),
@@ -901,31 +901,31 @@ fn version_1_errors_keep_their_messages() {
     let cases: Vec<Case> = vec![
         (
             Box::new(|v| v["features"][0]["shapes"][0]["height"] = json!("h")),
-            "features[0] (Sketch1): shapes[0]: parameter 'h' does not exist",
+            "features[0] (Sketch1): shapes[0]: parameter h does not exist",
         ),
         (
             Box::new(|v| v["features"][5]["radius"] = json!("r1")),
-            "features[5] (Fillet1): parameter 'r1' does not exist",
+            "features[5] (Fillet1): parameter r1 does not exist",
         ),
         (
             Box::new(|v| v["features"][1]["sketch"] = json!("Sketch9")),
-            "features[1] (Extrude1): feature 'Sketch9' does not exist",
+            "features[1] (Extrude1): feature Sketch9 does not exist",
         ),
         (
             Box::new(|v| v["features"][1]["sketch"] = json!("Sketch2")),
-            "features[1] (Extrude1): feature 'Sketch2' does not come before this feature",
+            "features[1] (Extrude1): feature Sketch2 does not come before this feature",
         ),
         (
             Box::new(|v| v["features"][3]["sketch"] = json!("Extrude1")),
-            "features[3] (Extrude2): 'Extrude1' is not a sketch",
+            "features[3] (Extrude2): Extrude1 is not a sketch",
         ),
         (
             Box::new(|v| v["features"][4]["body"] = json!("Extrude2")),
-            "features[4] (Extrude3): 'Extrude2' is not a new_body extrude",
+            "features[4] (Extrude3): Extrude2 is not a new_body extrude",
         ),
         (
             Box::new(|v| v["features"][5]["body"] = json!("Sketch1")),
-            "features[5] (Fillet1): 'Sketch1' is not a new_body extrude",
+            "features[5] (Fillet1): Sketch1 is not a new_body extrude",
         ),
         (
             Box::new(|v| v["features"][1]["body"] = json!("Extrude1")),
@@ -986,7 +986,7 @@ fn version_1_errors_keep_their_messages() {
         ),
         (
             Box::new(|v| v["features"][2]["name"] = json!("Sketch1")),
-            "features[2]: feature name 'Sketch1' is used more than once",
+            "features[2]: feature name Sketch1 is used more than once",
         ),
     ];
     for (edit, expected) in cases {
@@ -1072,7 +1072,7 @@ fn a_length_user_parameter_in_a_count_loads_with_a_warning() {
         let mut doc = load(&old_pattern_design(unit, Some(expression))).unwrap();
         let warnings = doc.load_warnings().join("\n");
         assert!(
-            warnings.contains("RectangularPattern1 direction1.quantity: parameter 'n' is a length")
+            warnings.contains("RectangularPattern1 direction1.quantity: parameter n is a length")
                 && warnings.contains("the slot reads it as 3"),
             "{unit}: {warnings}"
         );
@@ -1114,8 +1114,8 @@ fn an_old_quantity_expression_keeps_the_number_it_gave() {
     assert_eq!(d4.expression(), "30");
     let warnings = doc.load_warnings().join("\n");
     assert!(
-        warnings.contains("parameter 'd4' is now unitless with the number it gave, 30")
-            && warnings.contains("'n'"),
+        warnings.contains("parameter d4 is now unitless with the number it gave, 30")
+            && warnings.contains("“n”"),
         "{warnings}"
     );
     doc.recompute();
@@ -1135,9 +1135,7 @@ fn parameters_named_like_functions_in_another_case_are_renamed() {
     let mut doc = load(&json).unwrap();
     assert_eq!(
         doc.load_warnings(),
-        [
-            "parameter 'Max' is renamed to 'Max_1': 'Max' is a unit, function or constant in expressions"
-        ]
+        ["parameter Max is renamed to Max_1: Max is a unit, function or constant in expressions"]
     );
     let params = doc.parameters();
     assert!(params.find("Max").is_none());
@@ -1156,23 +1154,23 @@ fn id_numbers_at_the_type_maximum_are_refused() {
     let error = rejected(&edited(EXAMPLE, |v| {
         v["components"] = json!([{"uid": "C4294967295", "name": "Part"}]);
     }));
-    assert_message(error, &["invalid component id 'C4294967295'"]);
+    assert_message(error, &["invalid component id C4294967295"]);
     let error = rejected(&edited(EXAMPLE, |v| {
         v["components"] = json!([{"uid": "C1", "name": "Part"}]);
         v["occurrences"] =
             json!([{"uid": "O4294967295", "component": "C1", "parent": "C0", "number": 1}]);
     }));
-    assert_message(error, &["invalid occurrence id 'O4294967295'"]);
+    assert_message(error, &["invalid occurrence id O4294967295"]);
     let error = rejected(&edited(EXAMPLE, |v| {
         v["features"][2]["uid"] = json!("F18446744073709551615");
         v["parameters"][3]["owner"] = json!("F18446744073709551615");
     }));
-    assert_message(error, &["invalid feature id 'F18446744073709551615'"]);
+    assert_message(error, &["invalid feature id F18446744073709551615"]);
     // One below is in the reserve of mitcad#944.
     let error = rejected(&edited(EXAMPLE, |v| {
         v["components"] = json!([{"uid": "C4294967294", "name": "Part"}]);
     }));
-    assert_invalid(error, &["invalid component id 'C4294967294'"]);
+    assert_invalid(error, &["invalid component id C4294967294"]);
 }
 
 /// EXAMPLE whose largest ids are `top`: a component and its occurrence,
@@ -1251,7 +1249,7 @@ fn ids_in_the_reserve_are_refused_as_the_file_is_read() {
     let cases: Vec<(Edit, &str)> = vec![
         (
             Box::new(|v| v["components"] = json!([{"uid": "C4293918720", "name": "Part"}])),
-            "components[0]: invalid component id 'C4293918720' (at most C4293918719",
+            "components[0]: invalid component id C4293918720 (at most C4293918719",
         ),
         (
             Box::new(|v| {
@@ -1259,7 +1257,7 @@ fn ids_in_the_reserve_are_refused_as_the_file_is_read() {
                 v["occurrences"] = json!([{"uid": "O4293918720", "component": "C1",
                                            "parent": "C0", "number": 1}]);
             }),
-            "occurrences[0]: invalid occurrence id 'O4293918720' (at most O4293918719",
+            "occurrences[0]: invalid occurrence id O4293918720 (at most O4293918719",
         ),
         (
             Box::new(|v| {
@@ -1267,14 +1265,14 @@ fn ids_in_the_reserve_are_refused_as_the_file_is_read() {
                 v["occurrences"] = json!([{"uid": "O1", "component": "C1",
                                            "parent": "C0", "number": 4_293_918_720_u32}]);
             }),
-            "occurrences[0]: invalid occurrence number '4293918720' (at most 4293918719",
+            "occurrences[0]: invalid occurrence number 4293918720 (at most 4293918719",
         ),
         (
             Box::new(|v| {
                 v["features"][2]["uid"] = json!("F18446744073708503040");
                 v["parameters"][3]["owner"] = json!("F18446744073708503040");
             }),
-            "features[2] (Fillet1): invalid feature id 'F18446744073708503040' \
+            "features[2] (Fillet1): invalid feature id F18446744073708503040 \
              (at most F18446744073708503039",
         ),
         (
@@ -1284,11 +1282,11 @@ fn ids_in_the_reserve_are_refused_as_the_file_is_read() {
                 sketch["entities"][2]["end"] = json!("p4293918720");
                 sketch["entities"][3]["start"] = json!("p4293918720");
             }),
-            "features[0] (Sketch1): invalid sketch entity id 'p4293918720'",
+            "features[0] (Sketch1): invalid sketch entity id p4293918720",
         ),
         (
             Box::new(|v| v["features"][0]["dimensions"][1]["id"] = json!("k4293918720")),
-            "features[0] (Sketch1): invalid constraint id 'k4293918720'",
+            "features[0] (Sketch1): invalid constraint id k4293918720",
         ),
     ];
     for (edit, message) in cases {
@@ -1306,6 +1304,6 @@ fn ids_in_the_reserve_are_refused_as_the_file_is_read() {
     }]);
     assert_invalid(
         rejected(&file.to_string()),
-        &["library_sources[0]: invalid library source id 'S4293918720' (at most S4293918719"],
+        &["library_sources[0]: invalid library source id S4293918720 (at most S4293918719"],
     );
 }

@@ -191,6 +191,8 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("build_frame", Remote),
     // Fasteners swapped in place (mitcad#497): the new one from a library.
     ("build_swap_fasteners", Remote),
+    // Connectors placed by the first rule placed again (mitcad#1115).
+    ("build_upgrade", Model),
     // Motion studies and contact sets (mitcad#454).
     ("add_motion_study", Model),
     ("edit_motion_study", Model),
@@ -318,6 +320,25 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("sketch.scale", Model),
     // The height of the annotations' texts (mitcad#894).
     ("set_annotation_text_height", Model),
+    // A configuration table's rows as CSV (mitcad#1044): the CSV is the
+    // command's text, the application reads the file.
+    ("import_configuration_rows_csv", Model),
+    // A body's outline seen along a face, written as DXF (mitcad#1049).
+    ("export_face_dxf", FileIo),
+    // One filament's separate materials merged (mitcad#1054); in a library
+    // its files, see `command_class_with`.
+    ("merge_materials", Model),
+    // Save Component as Design writes a design file (mitcad#1057).
+    ("save_component_as_design", FileIo),
+    // Bodies and occurrences drawn see-through (mitcad#1093).
+    ("set_body_transparent", Model),
+    ("set_occurrence_transparent", Model),
+    // The Center of Mass marker under Origin (mitcad#1094).
+    ("add_center_of_mass", Model),
+    ("set_center_of_mass_visible", Model),
+    ("delete_center_of_mass", Model),
+    // The design's summary (mitcad#1088).
+    ("set_design_summary", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -491,6 +512,17 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("hole_sizes", Model),
     // A Fillet's or Chamfer's picked edges kept with its result (mitcad#957).
     ("feature_inputs", Model),
+    // A configuration table's rows as CSV (mitcad#1044).
+    ("configuration_rows_csv", Model),
+    ("configuration_rows_csv_preview", Model),
+    // The bodies whose material or print settings differ (mitcad#1049).
+    ("make_differences", Model),
+    // What Save Component as Design would freeze (mitcad#1057).
+    ("save_component_as_design", Model),
+    // The design's center of mass as placed (mitcad#1094).
+    ("center_of_mass", Model),
+    // The design's summary and statistics (mitcad#1088).
+    ("design_properties", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {
@@ -633,6 +665,7 @@ pub fn command_class_with(request: &serde_json::Value) -> Option<ApiClass> {
         "create_material"
             | "edit_material"
             | "delete_material"
+            | "merge_materials"
             | "set_component_material"
             | "set_body_material"
             | "create_print_profile"

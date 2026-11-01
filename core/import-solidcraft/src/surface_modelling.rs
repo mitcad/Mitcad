@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Surface modelling (SolidCraft's `FeatureKind::Surface*`, `Unstitch` and
-//! `ReverseNormal`, `crates/doc/src/eval_surface.rs`) as Mitcad's surface
+//! `ReverseNormal`, `crates/doc/src/eval_surface.rs`) as MitCad's surface
 //! features (mitcad#455).
 //!
 //! - A surface extrude, revolve or sweep is the solid feature with
@@ -14,13 +14,13 @@
 //!   left out with a note; sections on a body's edges are not mapped.
 //! - An offset surface is `offset_surface` of the faces at the picks (all
 //!   of the body without picks), its chain kept; the fitting tolerance is
-//!   not needed (Mitcad offsets exactly). A ruled surface is
+//!   not needed (MitCad offsets exactly). A ruled surface is
 //!   `ruled_surface`, an extend `extend_surface`: their picked edges are
 //!   the named edges at the picks, or, on a surface body's open boundary
 //!   (free edges, which have no names), the opening the picks lie on with
 //!   the faces the picked edges bound. An extend up to a plane, a face or
 //!   the bounds is not mapped.
-//! - A trim, untrim, unstitch or reverse normal is Mitcad's own; a mutual
+//! - A trim, untrim, unstitch or reverse normal is MitCad's own; a mutual
 //!   trim, a trim by every curve of a sketch and an untrim of some of a
 //!   face's holes are not mapped.
 //! - A blend surface is `blend_surface` of the two picked chains, each
@@ -80,7 +80,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
     }
 
-    /// The `curves` of a surface sweep: the sketch's curves as Mitcad's.
+    /// The `curves` of a surface sweep: the sketch's curves as MitCad's.
     fn sheet_curves(&self, sketch: u64, curves: &[String]) -> Result<Option<Value>, NotMapped> {
         if curves.is_empty() {
             return Ok(None);
@@ -483,7 +483,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             Some(points) if points.is_empty() => false,
             Some(_) => {
                 return Err(NotMapped::Unmapped(
-                    "an untrim of some of a face's holes (Mitcad takes all of them away)"
+                    "an untrim of some of a face's holes (MitCad takes all of them away)"
                         .to_owned(),
                 ));
             }
@@ -538,7 +538,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         Ok(Mapped::parametric())
     }
 
-    /// A chain of edges picked on a body as a Mitcad chain (`body`,
+    /// A chain of edges picked on a body as a MitCad chain (`body`,
     /// `edges`, `openings`).
     fn chain_value(
         &self,
@@ -580,7 +580,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             if b.bulge[i] != 0.0 {
                 if b.bulge[i] < -0.9 {
                     return Err(NotMapped::Unmapped(format!(
-                        "a blend bulge of {} (Mitcad's go down to -0.9)",
+                        "a blend bulge of {} (MitCad's go down to -0.9)",
                         b.bulge[i]
                     )));
                 }
@@ -730,7 +730,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             }
             _ => {
                 return Err(NotMapped::Unmapped(
-                    "a match of several faces (Mitcad rebuilds one)".to_owned(),
+                    "a match of several faces (MitCad rebuilds one)".to_owned(),
                 ));
             }
         }
@@ -749,7 +749,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let s: k::SurfaceFair = f.typed()?;
         if !(s.strength > 0.0 && s.strength <= 1.0) || s.iterations == 0 || s.iterations > 1000 {
             return Err(NotMapped::Unmapped(format!(
-                "a fairing of strength {} in {} iterations (Mitcad takes more than 0 to 1, in 1 to \
+                "a fairing of strength {} in {} iterations (MitCad takes more than 0 to 1, in 1 to \
                  1000)",
                 s.strength, s.iterations
             )));
@@ -781,14 +781,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
     }
 }
 
-/// A continuity of the file (`g0` to `g3`) as Mitcad's.
+/// A continuity of the file (`g0` to `g3`) as MitCad's.
 fn order(g: &str) -> Result<&'static str, NotMapped> {
     match g.to_ascii_lowercase().as_str() {
         "g0" => Ok("g0"),
         "g1" => Ok("g1"),
         "g2" => Ok("g2"),
         other => Err(NotMapped::Unmapped(format!(
-            "{other} continuity (Mitcad's go up to G2)"
+            "{other} continuity (MitCad's go up to G2)"
         ))),
     }
 }

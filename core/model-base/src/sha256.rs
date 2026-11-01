@@ -162,7 +162,7 @@ impl FromStr for Sha256 {
 
     /// 64 lowercase hexadecimal digits, as they are written.
     fn from_str(text: &str) -> Result<Self, String> {
-        let bad = || format!("'{text}' is not a SHA-256 (64 lowercase hexadecimal digits)");
+        let bad = || format!("“{text}” is not a SHA-256 (64 lowercase hexadecimal digits)");
         if text.len() != 64 {
             return Err(bad());
         }

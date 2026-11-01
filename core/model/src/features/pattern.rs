@@ -1524,7 +1524,7 @@ pub(super) fn scale_elements<K: Kernel>(
 ) -> Result<(Vec<Transform>, Option<Scaling>), String> {
     if !spec.scales() {
         if spec.groups.is_some() || spec.copies.is_some() || spec.center.is_some() {
-            return Err("scale groups, copies and centre need a scale".to_owned());
+            return Err("scale groups, copies and center need a scale".to_owned());
         }
         return Ok((all, None));
     }
@@ -3575,7 +3575,7 @@ pub(super) fn check_options(
     }
     if let Some(center) = spec.center {
         if !spec.scales() {
-            return Err("a scale centre needs a scale".to_owned());
+            return Err("a scale center needs a scale".to_owned());
         }
         center.check(ctx, Want::Point)?;
     }

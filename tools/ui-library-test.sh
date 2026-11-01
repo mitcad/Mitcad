@@ -17,7 +17,7 @@
 #      several articles, the columns they fill, Copy as TSV, Copy Part
 #      Number, Open Link), the older version v1.0.0, linked: its volume;
 #      a nut copied.
-#   4. Library Parts: the screw still at v1.0.0 with a newer version
+#   4. Library Components: the screw still at v1.0.0 with a newer version
 #      fetched, its articles' table (mitcad#979); v1.1.0 chosen, Show Changes names the wider head, Update:
 #      the new volume; then another size (M6x20): renamed, its volume; the
 #      parts list with the designations and licences.
@@ -29,13 +29,13 @@
 #      searches again and keeps the selected part.
 #   7. The part picker's grid in Insert from Library (mitcad#418): In this
 #      design lists the screw, a group (Screws), a search inside it, a star
-#      (the nut first in All parts), Favourites, a part inserted from
+#      (the nut first in All components), Favorites, a part inserted from
 #      there, and In this design after the placement.
 #   8. The groups as a tree (mitcad#527): two more libraries, one's Wood
 #      (a parent by id) and the other's Wood/Sheets one group listing both
 #      libraries' parts, a screw in two groups (Slot profile/Screws and
 #      General fasteners/Screws, beside the ISO screw) and once in
-#      Favourites, Wood folded and still folded when the browser opens
+#      Favorites, Wood folded and still folded when the browser opens
 #      again, then unfolded. Each group with its count; Supplier Würth
 #      on: the counts under it, Wood and Slot profile (no part of
 #      Würth's) hidden, shown again with All suppliers (mitcad#1015).
@@ -43,7 +43,7 @@
 #      head cap screw narrows its lengths (M6x8 offered, the non-standard
 #      M6x6 not), and the part inserted is named DIN 912 M6x8. The fields
 #      of Version, Standard, Supplier, Size and Length start at one x (one
-#      label column, mitcad#1007; Library Parts' too, in part 4).
+#      label column, mitcad#1007; Library Components' too, in part 4).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-library-test.sh
@@ -220,7 +220,7 @@ ui_expect_new "Supplier parts of M5x16: " "the table of M5x16's articles"
 ARTICLES=$(grep "^Supplier parts of M5x16: " "$UI_LOG" | tail -1)
 COUNT=$(sed -n 's/^Supplier parts of M5x16: \([0-9]*\) articles, .*$/\1/p' <<< "$ARTICLES")
 [ "${COUNT:-0}" -ge 2 ] || ui_fail "M5x16 has not several articles: '$ARTICLES'"
-[[ $ARTICLES == *", columns Supplier, Part number, Material, Finish, Checked" ]] ||
+[[ $ARTICLES == *", columns Supplier, Supplier Part Number, Material, Finish, Checked" ]] ||
   ui_fail "not the columns the articles fill: '$ARTICLES'"
 echo "ok   $ARTICLES"
 ui_step "Copy as TSV (Alt+T)"              ui_key alt+t
@@ -247,10 +247,10 @@ ui_step "a copy (Alt+P), Insert (Alt+I)"   eval 'ui_key alt+p; ui_sync; ui_key a
 ui_focus_main
 ui_expect_new "Inserted component ISO 4032 M5 (copy) from mitcad-parts v1.1.0 (" "the nut copied"
 
-echo "--- 4. Library Parts"
+echo "--- 4. Library Components"
 ui_mark
-ui_step "Library Parts (command search)"   ui_command "Library Parts"
-ui_focus_dialog '^Library Parts$'
+ui_step "Library Components (command search)"   ui_command "Library Components"
+ui_focus_dialog '^Library Components$'
 ui_expect_new "Library part ISO 4762 M5x16: mitcad-parts v1.0.0 (" "the screw's recorded version"
 ui_expect_new "size M5x16, a newer version is fetched" "a newer version is there, not taken"
 ui_expect_new "Library part ISO 4032 M5: mitcad-parts v1.1.0 (" "the nut"
@@ -259,10 +259,10 @@ ui_expect_new "a copy: does not follow the library" "the copy does not follow"
 ui_mark
 ui_step "Supplier Articles (Alt+A)"        ui_key alt+a
 ui_focus_dialog '^Supplier Articles - '
-ui_expect_new "Supplier parts of M5x16: $COUNT articles, columns Supplier, Part number, Material, Finish, Checked" \
-  "the screw's articles in Library Parts"
+ui_expect_new "Supplier parts of M5x16: $COUNT articles, columns Supplier, Supplier Part Number, Material, Finish, Checked" \
+  "the screw's articles in Library Components"
 ui_step "close (Escape)"                   ui_key Escape
-ui_focus_dialog '^Library Parts$'
+ui_focus_dialog '^Library Components$'
 ui_step "v1.1.0 (Alt+V, Up)"               eval 'ui_key alt+v; ui_sync; ui_key Up'
 ui_expect_new "size M5x16, to update" "the change waits"
 ui_step "Show Changes (Alt+S)"             ui_key alt+s
@@ -273,11 +273,11 @@ ui_focus_main
 ui_expect_new "Updated library parts: ISO 4762 M5x16: version v1.0.0 (" "updated"
 ui_expect_volume "Body ISO 4762 M5x16 ([^)]*): volume 560.146 -> \([0-9.]*\) mm3" 573.55034687 "the screw at v1.1.0"
 ui_mark
-ui_step "Library Parts again"              ui_command "Library Parts"
-ui_focus_dialog '^Library Parts$'
-ui_expect_new "Library fields at x: Version " "Library Parts logs where its fields start"
+ui_step "Library Components again"              ui_command "Library Components"
+ui_focus_dialog '^Library Components$'
+ui_expect_new "Library fields at x: Version " "Library Components logs where its fields start"
 check_field_edges "Version, Standard, Supplier, Size, Length" \
-  "Library Parts: Version, the filters and the size's fields line up (mitcad#1007)"
+  "Library Components: Version, the filters and the size's fields line up (mitcad#1007)"
 ui_step "size M6 x 20"                     eval 'ui_key alt+v; ui_sync; ui_key Tab; xdotool type --delay 80 "M6";
   ui_sync; ui_key Tab; xdotool type --delay 80 "20"'
 ui_expect_new "Library size M6x20" "the size chosen"
@@ -286,8 +286,8 @@ ui_focus_main
 ui_expect_new "Updated library parts: ISO 4762 M5x16: size M5x16 -> M6x20" "another size"
 ui_expect_volume "ISO 4762 M6x20 ([^)]*): volume [0-9.]* -> \([0-9.]*\) mm3" 966.3332369294 "the M6x20 screw"
 ui_mark
-ui_step "Library Parts: the parts list"    ui_command "Library Parts"
-ui_focus_dialog '^Library Parts$'
+ui_step "Library Components: the parts list"    ui_command "Library Components"
+ui_focus_dialog '^Library Components$'
 ui_expect_new "Parts list row: 1 x ISO 4762 M6x20 (mitcad-parts v1.1.0 (" "the parts list's screw"
 ui_expect_new "Parts list row: 1 x ISO 4032 M5 (mitcad-parts v1.1.0 (" "the parts list's nut"
 ui_step "close (Escape)"                   ui_key Escape
@@ -369,8 +369,8 @@ ui_expect_new "Library search '4032': 1 components" "the search"
 ui_expect_new "Part picker group General fasteners/Screws: 0 parts, first -" "the nut is not a screw"
 ui_step "clear the search"                 eval 'ui_key ctrl+a; ui_key BackSpace'
 ui_mark
-ui_step "All parts (Alt+O, A)"             eval 'ui_key alt+o; ui_sync; ui_type_ahead "A"'
-ui_expect_new "Part picker group All parts: " "every part"
+ui_step "All components (Alt+O, A)"             eval 'ui_key alt+o; ui_sync; ui_type_ahead "A"'
+ui_expect_new "Part picker group All components: " "every part"
 ui_step "search hexagon nut"               eval 'ui_key alt+s; ui_sync; xdotool type --delay 40 "hexagon nut"'
 ui_expect_new "Library browser selected mitcad-parts/iso4032: version " "the nut chosen in the grid"
 ui_mark
@@ -383,8 +383,8 @@ ui_step "clear the search"                 eval 'ui_key ctrl+a; ui_key BackSpace
 ui_expect_new "Library search '': " "every part again"
 ui_expect_new "first mitcad-parts/iso4032" "the starred nut first"
 ui_mark
-ui_step "Favourites (Alt+O, F)"            eval 'ui_key alt+o; ui_sync; ui_type_ahead "F"'
-ui_expect_new "Part picker group Favourites: 1 parts, first mitcad-parts/iso4032" "Favourites has the nut"
+ui_step "Favorites (Alt+O, F)"            eval 'ui_key alt+o; ui_sync; ui_type_ahead "F"'
+ui_expect_new "Part picker group Favorites: 1 parts, first mitcad-parts/iso4032" "Favorites has the nut"
 ui_step "Insert (Alt+I)"                   ui_key alt+i
 ui_focus_main
 ui_expect_new "Part picker chose mitcad-parts/iso4032" "chosen in the picker"
@@ -477,10 +477,10 @@ ui_mark
 ui_step "Supplier Würth (Alt+R, W)"        eval 'ui_key alt+r; ui_sync; ui_type_ahead "W"'
 ui_expect_new "Part picker supplier wurth" "the Supplier filter on Würth"
 ui_expect_new "Part picker groups: " "the groups with their counts under the filter"
-ui_expect_new "Library browser empty: No parts in Wood with this search and these filters." \
+ui_expect_new "Library browser empty: No components in Wood with this search and these filters." \
   "the empty Wood: no parts with these filters, not 'nothing fetched'"
 GROUPS_FILTERED=$(grep "^Part picker groups: " "$UI_LOG" | tail -1 | sed 's/^Part picker groups: //')
-for group in "Favourites (1)" "Wood (0)" "General fasteners (2)" "General fasteners/Screws (1)" \
+for group in "Favorites (1)" "Wood (0)" "General fasteners (2)" "General fasteners/Screws (1)" \
              "General fasteners/Nuts (1)"; do
   [[ ", $GROUPS_FILTERED, " == *", $group, "* ]] || ui_fail "no group $group under Würth in '$GROUPS_FILTERED'"
 done
@@ -513,12 +513,12 @@ ui_step "star it (Ctrl+D)"                 ui_key ctrl+d
 ui_expect_new "Part picker star slot-screw on" "the slot screw starred"
 ui_step "clear the search"                 eval 'ui_key ctrl+a; ui_key BackSpace'
 ui_mark
-ui_step "Favourites (Alt+O, F)"            eval 'ui_key alt+o; ui_sync; ui_type_ahead "F"'
-ui_expect_new "Part picker group Favourites: 2 parts" "the nut and the slot screw"
+ui_step "Favorites (Alt+O, F)"            eval 'ui_key alt+o; ui_sync; ui_type_ahead "F"'
+ui_expect_new "Part picker group Favorites: 2 parts" "the nut and the slot screw"
 TILES=$(grep "^Part picker tiles: " "$UI_LOG" | tail -1)
 [ "$(grep -o 'test-wood/slot-screw' <<< "$TILES" | wc -l)" -eq 1 ] ||
-  ui_fail "the slot screw is not in Favourites once: '$TILES'"
-echo "ok   a part in two groups is one tile in Favourites"
+  ui_fail "the slot screw is not in Favorites once: '$TILES'"
+echo "ok   a part in two groups is one tile in Favorites"
 ui_mark
 ui_step "fold Wood (Alt+O, W, Left)"       eval 'ui_key alt+o; ui_sync; ui_type_ahead "W"; ui_sync; ui_key Left'
 ui_expect_new "Part picker group Wood folded" "Wood folded"
@@ -544,7 +544,7 @@ echo "--- 9. The Standard filter (mitcad#949)"
 ui_mark
 ui_step "Insert from Library (command search)" ui_command "Insert from Library"
 ui_focus_dialog '^Insert from Library$'
-ui_step "All parts (Alt+O, A)"             eval 'ui_key alt+o; ui_sync; ui_type_ahead "A"'
+ui_step "All components (Alt+O, A)"             eval 'ui_key alt+o; ui_sync; ui_type_ahead "A"'
 ui_mark
 ui_step "search 4762"                      eval 'ui_key alt+s; ui_sync; xdotool type --delay 40 "4762"'
 ui_expect_new "Library browser selected mitcad-parts/iso4762: version v1.1.0 (" "the socket head cap screw"

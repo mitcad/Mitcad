@@ -183,7 +183,7 @@ fn an_axis_or_the_origin_asked_twice_is_one_entity() {
             &mut d,
             json!({"cmd": "sketch.axis", "sketch": "F1", "axis": "z"})
         )
-        .contains("unknown axis 'z'")
+        .contains("unknown axis “z”")
     );
 }
 

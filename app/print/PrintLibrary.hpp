@@ -38,8 +38,9 @@ struct LibraryItem {
   QString inDesign; // the design's copy's id; empty without one
   bool changed = false; // its library item was changed elsewhere (another design)
   bool chosen = false; // the design's printer or process
-  QString group;       // materials: metals, plastics (the filaments too), other
-  QString materialClass; // materials: metal, plastic, other (mitcad#655)
+  QString group;       // materials: metals, plastics, fdm_plastics (the filaments), resins, other
+  QString materialClass; // materials: metal, plastic, fdm_plastic, resin, other (mitcad#655, mitcad#1102)
+  bool classFixed = false; // materials: print settings make it an FDM plastic (mitcad#1102)
   QColor displayColor; // materials; invalid without one
   QJsonObject row;     // as the query gave it
 
@@ -66,11 +67,13 @@ const LibraryItem* findDesignCopy(const QVector<LibraryItem>& items, const QStri
 // A library as the UI names it where one is chosen or named (Save to's
 // menu, Delete's question): My library, Project; Built-in, This design.
 QString placeName(const QString& place);
-// A material group's title (Metals, Plastics, Other), a class's (Metal,
-// Plastic, Other) and the classes in their order (mitcad#655).
+// A material group's title (Metals, General Plastics, FDM Plastics, Resins,
+// Other), a class's (Metal, General Plastic, FDM Plastic, Resin, Other) and
+// the classes and the groups in their order (mitcad#655, mitcad#1102).
 QString materialGroupTitle(const QString& group);
 QString materialClassTitle(const QString& materialClass);
 const QStringList& materialClasses();
+const QStringList& materialGroups();
 
 // Names the item in a command: `field` (`id`, `material`, `value`) and,
 // for an item of a library, `library` and the project.

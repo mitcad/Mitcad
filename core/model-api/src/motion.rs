@@ -420,9 +420,11 @@ impl<K: Kernel> MotionLocal<K> for Document<K> {
     }
 
     fn study_joint(&self, text: &str) -> Result<FeatureUid, ApiError> {
+        let is_joint =
+            |def: &FeatureDef| matches!(def, FeatureDef::Joint(_) | FeatureDef::AsBuiltJoint(_));
+        // The joint of a name it shares with other features (mitcad#1107).
         let found = self
-            .features()
-            .find(|f| f.uid.to_string() == text.trim() || f.name == text.trim())
+            .feature_by_text(text, Some(&is_joint))?
             .ok_or_else(|| ApiError(format!("no joint {text}")))?;
         match found.def {
             FeatureDef::Joint(_) | FeatureDef::AsBuiltJoint(_) => Ok(found.uid),

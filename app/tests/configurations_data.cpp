@@ -5,7 +5,8 @@
 // query, the moves' notice, the values typed into the choosers and the
 // Rows sheet, and the options a refusal names; rows generated from a
 // table and an option's values from a column (mitcad#849); a closed
-// table's parameter columns added and removed (mitcad#999).
+// table's parameter columns added and removed (mitcad#999); Add Option on a
+// closed table, the rows CSV's commands and a pasted block (mitcad#1044).
 #include "browser/ConfigurationsData.hpp"
 
 #include <cstdio>
@@ -320,6 +321,146 @@ void parameterColumnTests() {
   CHECK(withoutColumn(screws, QStringLiteral("Size")).toJson() == screws.toJson());
 }
 
+// Filling a closed table (mitcad#1044): Add Option's candidates and its
+// rows' values, the commands of generated rows with columns and of the
+// rows CSV, and a spreadsheet's block copied and pasted into the Rows
+// sheet.
+void closedTableFillTests() {
+  using namespace mitcad::configurations;
+  const Table screws = readTable(parse(R"({"configurations": {
+      "options": ["Size"], "closed": true, "parameters": ["d", "k"], "default": "M3",
+      "rows": [{"name": "M3", "values": {"Size": "'M3'", "d": "3 mm", "k": "1.86 mm"}},
+               {"name": "M4", "values": {"Size": "'M4'", "d": "4 mm"}}]}})"));
+  const QStringList users{QStringLiteral("Size"), QStringLiteral("d"), QStringLiteral("k"), QStringLiteral("Color")};
+
+  // Add Option offers every user parameter that is no option, the
+  // parameter columns too.
+  CHECK(optionCandidates(screws, users) ==
+        QStringList({QStringLiteral("d"), QStringLiteral("k"), QStringLiteral("Color")}));
+  // A new option: every row takes the parameter's current value, so the
+  // closed table with rows takes it.
+  const Table colored = withOption(screws, QStringLiteral("Color"), QStringLiteral("'Black'"));
+  CHECK(colored.options == QStringList({QStringLiteral("Size"), QStringLiteral("Color")}));
+  CHECK(colored.parameters == QStringList({QStringLiteral("d"), QStringLiteral("k")}));
+  for (const Row& row : colored.rows) {
+    CHECK(row.value(QStringLiteral("Color")) == QStringLiteral("'Black'"));
+  }
+  const QJsonObject coloredJson = setTableCommand(colored).value(QStringLiteral("configurations")).toObject();
+  for (const QJsonValue& row : coloredJson.value(QStringLiteral("rows")).toArray()) {
+    CHECK(row.toObject().value(QStringLiteral("values")).toObject().value(QStringLiteral("Color")).toString() ==
+          QStringLiteral("'Black'"));
+  }
+  // A parameter column moves to the options with its rows' values; a row
+  // without one takes the current value.
+  const Table byK = withOption(screws, QStringLiteral("k"), QStringLiteral("2 mm"));
+  CHECK(byK.options == QStringList({QStringLiteral("Size"), QStringLiteral("k")}));
+  CHECK(byK.parameters == QStringList{QStringLiteral("d")});
+  CHECK(byK.row(QStringLiteral("M3")) != nullptr &&
+        byK.row(QStringLiteral("M3"))->value(QStringLiteral("k")) == QStringLiteral("1.86 mm"));
+  CHECK(byK.row(QStringLiteral("M4")) != nullptr &&
+        byK.row(QStringLiteral("M4"))->value(QStringLiteral("k")) == QStringLiteral("2 mm"));
+  // An option already: unchanged.
+  CHECK(withOption(screws, QStringLiteral("Size"), QStringLiteral("'M5'")).toJson() == screws.toJson());
+  // The current value as a constant: the expression of a constant, else
+  // the value as shown.
+  CHECK(currentConstant(parse(R"({"expression": "8.5 mm", "unit": "mm", "text": "8.5 mm",
+                                  "dependencies": []})")) == QStringLiteral("8.5 mm"));
+  CHECK(currentConstant(parse(R"({"expression": "d * 2", "unit": "mm", "text": "6 mm",
+                                  "dependencies": ["d"]})")) == QStringLiteral("6 mm"));
+  CHECK(currentConstant(parse(R"json({"expression": "XLOOKUP(Size; Screws.Size; Screws.Head)", "unit": "Text",
+                                  "text": "Pan", "dependencies": ["Size"],
+                                  "table_dependencies": ["Screws.Head"]})json")) == QStringLiteral("'Pan'"));
+
+  // Generate Rows from Table… with the other columns.
+  const QJsonObject generate = generateRowsCommand(QStringLiteral("Screws"), QStringLiteral("size"),
+                                                   QStringLiteral("size"),
+                                                   QStringList({QStringLiteral("d"), QStringLiteral("k")}));
+  CHECK(generate.value(QStringLiteral("cmd")).toString() == QStringLiteral("generate_configuration_rows"));
+  CHECK(generate.value(QStringLiteral("columns")).toArray().size() == 2);
+  CHECK(!generateRowsCommand(QStringLiteral("Screws"), QStringLiteral("size"), QStringLiteral("size"), QStringList())
+             .contains(QStringLiteral("columns")));
+  const GeneratedRows generated = readGeneratedRows(
+      parse(R"({"rows": ["M3"], "added": ["M3"], "updated": [], "created": ["k"], "moves": []})"));
+  CHECK(generated.created == QStringList{QStringLiteral("k")});
+  CHECK(generated.describe(QStringLiteral("Screws")) == QStringLiteral("1 row from Screws: added M3; made k"));
+  // The rows CSV.
+  CHECK(rowsCsvQuery().value(QStringLiteral("query")).toString() == QStringLiteral("configuration_rows_csv"));
+  CHECK(rowsCsvPreviewQuery(QStringLiteral("a\r\n")).value(QStringLiteral("query")).toString() ==
+        QStringLiteral("configuration_rows_csv_preview"));
+  const QJsonObject importCommand = importRowsCsvCommand(QStringLiteral("a\r\n"));
+  CHECK(importCommand.value(QStringLiteral("cmd")).toString() == QStringLiteral("import_configuration_rows_csv"));
+  CHECK(importCommand.value(QStringLiteral("csv")).toString() == QStringLiteral("a\r\n"));
+
+  // A spreadsheet's block: rows by line, cells by tab, the line break at
+  // the end left out; quoted cells keep their tabs, line breaks and quotes.
+  const QVector<QStringList> block = readBlock(QStringLiteral("M5\t5\t3,1\r\nM6\t6\t\r\n"));
+  CHECK(block.size() == 2);
+  CHECK(block.value(0) == QStringList({QStringLiteral("M5"), QStringLiteral("5"), QStringLiteral("3,1")}));
+  CHECK(block.value(1) == QStringList({QStringLiteral("M6"), QStringLiteral("6"), QString()}));
+  const QVector<QStringList> quoted = readBlock(QStringLiteral("\"a\tb\"\t\"say \"\"hi\"\"\"\n\"two\nlines\"\tz"));
+  CHECK(quoted.size() == 2);
+  CHECK(quoted.value(0) == QStringList({QStringLiteral("a\tb"), QStringLiteral("say \"hi\"")}));
+  CHECK(quoted.value(1) == QStringList({QStringLiteral("two\nlines"), QStringLiteral("z")}));
+  CHECK(readBlock(writeBlock(quoted)) == quoted);
+  CHECK(writeBlock(block) == QStringLiteral("M5\t5\t3,1\nM6\t6\t\n"));
+  CHECK(readBlock(QString()).isEmpty());
+
+  // Pasted at M4's Size: M4 takes the first line, a row is added for the
+  // second (a copy of the fresh row, named as Add Row names it); a bare
+  // number gets the unit, a decimal comma is a point, an empty cell takes
+  // the value out.
+  QVector<SheetColumn> columns;
+  const auto column = [&columns](SheetColumn::Kind kind, const char* parameter, bool text, const char* unit) {
+    SheetColumn added;
+    added.kind = kind;
+    added.parameter = QString::fromLatin1(parameter);
+    added.text = text;
+    added.unit = QString::fromLatin1(unit);
+    columns.append(added);
+  };
+  column(SheetColumn::Kind::Name, "", false, "");
+  column(SheetColumn::Kind::Option, "Size", true, "");
+  column(SheetColumn::Kind::Parameter, "d", false, "mm");
+  column(SheetColumn::Kind::Parameter, "k", false, "mm");
+  column(SheetColumn::Kind::Designation, "", false, "");
+  column(SheetColumn::Kind::PartNumber, "", false, "");
+  column(SheetColumn::Kind::SupplierUrl, "", false, "");
+  Row fresh;
+  fresh.setValue(QStringLiteral("Size"), QStringLiteral("'M4'"));
+  fresh.setValue(QStringLiteral("d"), QStringLiteral("4 mm"));
+  const Paste paste = pasteBlock(screws, columns, 1, 1, block, fresh);
+  CHECK(paste.added == QStringList{QStringLiteral("Row1")});
+  CHECK(paste.beyond == 0);
+  CHECK(paste.cells.size() == 6);
+  CHECK(paste.cells.value(0) == qMakePair(QStringLiteral("M4"), 1));
+  CHECK(paste.cells.value(5) == qMakePair(QStringLiteral("Row1"), 3));
+  const Row* m4 = paste.table.row(QStringLiteral("M4"));
+  CHECK(m4 != nullptr && m4->value(QStringLiteral("Size")) == QStringLiteral("'M5'"));
+  CHECK(m4 != nullptr && m4->value(QStringLiteral("d")) == QStringLiteral("5 mm"));
+  CHECK(m4 != nullptr && m4->value(QStringLiteral("k")) == QStringLiteral("3.1 mm"));
+  const Row* added = paste.table.row(QStringLiteral("Row1"));
+  CHECK(added != nullptr && added->value(QStringLiteral("Size")) == QStringLiteral("'M6'"));
+  CHECK(added != nullptr && added->value(QStringLiteral("d")) == QStringLiteral("6 mm"));
+  CHECK(added != nullptr && added->value(QStringLiteral("k")).isEmpty());
+  CHECK(paste.table.rows.size() == 3);
+  // A name pasted renames its row (the default follows); cells beyond the
+  // last column are counted and left out.
+  const Paste named = pasteBlock(screws, columns, 0, 0, readBlock(QStringLiteral("Small\tM2.5\n")), fresh);
+  CHECK(named.table.rows.first().name == QStringLiteral("Small"));
+  CHECK(named.table.defaultRow == QStringLiteral("Small"));
+  CHECK(named.cells.value(0) == qMakePair(QStringLiteral("Small"), 0));
+  const Paste wide = pasteBlock(screws, columns, 0, 5, readBlock(QStringLiteral("PN-3\thttps://example.com/m3\tx\n")),
+                                fresh);
+  CHECK(wide.beyond == 1);
+  CHECK(wide.table.rows.first().partNumber == QStringLiteral("PN-3"));
+  CHECK(wide.table.rows.first().supplierUrl == QStringLiteral("https://example.com/m3"));
+  // Delete empties the cells; a name stays.
+  const Table cleared = clearCells(screws, columns, QVector<QPair<int, int>>({qMakePair(0, 0), qMakePair(0, 2)}));
+  CHECK(cleared.rows.first().name == QStringLiteral("M3"));
+  CHECK(cleared.rows.first().value(QStringLiteral("d")).isEmpty());
+  CHECK(cleared.rows.first().value(QStringLiteral("k")) == QStringLiteral("1.86 mm"));
+}
+
 } // namespace
 
 int configurationsDataTests() {
@@ -329,6 +470,7 @@ int configurationsDataTests() {
   rowValueTests();
   tableColumnTests();
   parameterColumnTests();
+  closedTableFillTests();
   if (failures == 0) {
     std::printf("configurations data tests passed\n");
   }

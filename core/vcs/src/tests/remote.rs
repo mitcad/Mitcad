@@ -1071,7 +1071,7 @@ fn credentials_never_reach_what_is_shown() {
         .unwrap_err()
         .to_string();
     assert!(
-        error.starts_with("The remote origin is not used: 'http://***@127.0.0.1:1/x.git'"),
+        error.starts_with("The remote origin is not used: “http://***@127.0.0.1:1/x.git”"),
         "{error}"
     );
     assert!(error.contains("holds credentials"), "{error}");

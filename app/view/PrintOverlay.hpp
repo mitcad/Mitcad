@@ -40,6 +40,8 @@ public:
 
   // Shows what the overlay has of it; an empty overlay hides it.
   void setOverlay(const PrintOverlay& overlay);
+  // The categories' colours for another background (mitcad#1041).
+  void setColors(const QColor& overhang, const QColor& thin);
 
 private:
   // Paints the cards again when what they show, the screen's pixel ratio

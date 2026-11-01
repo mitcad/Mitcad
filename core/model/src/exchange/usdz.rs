@@ -407,7 +407,7 @@ impl<K: Kernel> Document<K> {
             root,
             materials: made,
             images,
-            documentation: format!("Mitcad {}", env!("CARGO_PKG_VERSION")),
+            documentation: format!("MitCad {}", env!("CARGO_PKG_VERSION")),
         };
         let data = mitcad_usdz::write(&scene).map_err(|e| invalid(e.to_string()))?;
         std::fs::write(path, data).map_err(|e| invalid(format!("cannot write {path}: {e}")))?;

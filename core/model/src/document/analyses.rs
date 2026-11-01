@@ -266,7 +266,7 @@ pub fn print_material(material: &str) -> Result<&'static analysis::Material, Str
                 .iter()
                 .find(|m| m.name.eq_ignore_ascii_case(material))
         })
-        .ok_or_else(|| format!("there is no material '{material}'"))
+        .ok_or_else(|| format!("there is no material {material}"))
 }
 
 /// The bodies shown cut at a plane: the half-space on the side the
@@ -614,7 +614,7 @@ impl<K: Kernel> Document<K> {
             }
         };
         if self.analysis_index(&name).is_ok() {
-            return Err(invalid(format!("an analysis '{name}' exists")));
+            return Err(invalid(format!("an analysis {name} exists")));
         }
         let analysis = Analysis {
             name: name.clone(),
@@ -697,7 +697,7 @@ impl<K: Kernel> Document<K> {
             return Ok(());
         }
         if self.analysis_index(new_name).is_ok() {
-            return Err(invalid(format!("an analysis '{new_name}' exists")));
+            return Err(invalid(format!("an analysis {new_name} exists")));
         }
         let label = format!("Rename {name}");
         let new_name = new_name.to_owned();
@@ -721,7 +721,7 @@ impl<K: Kernel> Document<K> {
             .analyses
             .iter()
             .position(|a| a.name == name)
-            .ok_or_else(|| invalid(format!("there is no analysis '{name}'")))
+            .ok_or_else(|| invalid(format!("there is no analysis {name}")))
     }
 }
 

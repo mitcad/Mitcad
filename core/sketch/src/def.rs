@@ -125,7 +125,7 @@ impl<'de> Deserialize<'de> for SketchPlane {
                 "yz" => Ok(Self::Yz),
                 other => other.parse().map(Self::Construction).map_err(|_| {
                     D::Error::custom(format!(
-                        "unknown plane '{other}', expected \"xy\", \"xz\", \"yz\", a \
+                        "unknown plane “{other}”, expected \"xy\", \"xz\", \"yz\", a \
                          construction plane like \"F5\" or {{\"face\": ...}}"
                     ))
                 }),
@@ -181,7 +181,20 @@ impl FrameDef {
     /// the sketch's coordinates (its component's, through the occurrence
     /// the sketch is shown in). None when that is the plane's own frame
     /// (the XY plane, a top face) or no direction is found.
-    pub fn upright(plane: &SketchFrame, z: [f64; 3], y: [f64; 3]) -> Option<FrameDef> {
+    ///
+    /// `facing` is for a plane without an outside of its own, whose normal
+    /// says nothing about the side to look from (the XZ origin plane,
+    /// mitcad#1060): the side the sketch is seen from, in the same
+    /// coordinates. When the plane's normal points away from it, the own
+    /// frame's normal is the reversed one, and x = y × that normal, so the
+    /// sketch is still not mirrored: on the XZ plane, seen from the
+    /// design's -Y (the view cube's FRONT), x = +X, y = +Z, normal -Y.
+    pub fn upright(
+        plane: &SketchFrame,
+        z: [f64; 3],
+        y: [f64; 3],
+        facing: Option<[f64; 3]>,
+    ) -> Option<FrameDef> {
         let n = plane.normal();
         // The part of a direction in the plane; none when it is (within a
         // micro-radian) along the normal.
@@ -190,7 +203,11 @@ impl FrameDef {
             unit_above(std::array::from_fn(|i| v[i] - along * n[i]), 1e-6)
         };
         let up = in_plane(z).or_else(|| in_plane(y))?;
-        let x = cross(up, n);
+        let seen_from = match facing {
+            Some(side) if dot(n, side) < -1e-9 => n.map(|c| -c),
+            _ => n,
+        };
+        let x = cross(up, seen_from);
         let local = |v: [f64; 3]| [dot(v, plane.x_axis), dot(v, plane.y_axis), 0.0];
         let frame = FrameDef {
             origin: [0.0; 3],
@@ -690,6 +707,36 @@ impl SketchDef {
         name: &dyn Fn(ParamId) -> String,
         goals: &[Goal],
     ) -> Result<Solved, SolveError> {
+        self.solve_from(value, name, goals, None)
+    }
+
+    /// [`SketchDef::solve_with`] from this definition's positions, with
+    /// every orientation choice of the solve taken where `oriented` has the
+    /// geometry: the side of each point-line, line-line and tangent
+    /// distance (an offset's distances among them), of each tangency, an
+    /// angle's quadrant. `oriented` is the definition as stored when its
+    /// linked projections moved to their sources' new places before the
+    /// solve (mitcad#1047): a point dimensioned 0.5 mm from a projected
+    /// line that moved 0.5 mm toward it lay on the moved line, and its side
+    /// came out by chance; geometry tied to a projection keeps the side it
+    /// has in the stored sketch, whatever the size of the move. Its entities
+    /// are matched by id; one this definition lacks is not used.
+    pub fn solve_oriented(
+        &self,
+        value: &mut dyn FnMut(ParamId) -> Result<f64, String>,
+        name: &dyn Fn(ParamId) -> String,
+        oriented: &[Entity],
+    ) -> Result<Solved, SolveError> {
+        self.solve_from(value, name, &[], Some(oriented))
+    }
+
+    fn solve_from(
+        &self,
+        value: &mut dyn FnMut(ParamId) -> Result<f64, String>,
+        name: &dyn Fn(ParamId) -> String,
+        goals: &[Goal],
+        oriented: Option<&[Entity]>,
+    ) -> Result<Solved, SolveError> {
         let inputs = self
             .dimension_inputs(value, name)
             .map_err(SolveError::new)?;
@@ -706,19 +753,28 @@ impl SketchDef {
         let index = EntityIndex::new(&self.entities);
         let skip = derived_entities(&self.offsets, &index);
         self.check_derived(&skip).map_err(SolveError::new)?;
-        let extra = Extra {
-            bindings: &bindings,
-            skip: &skip,
-        };
         // Offsets made by constraints start where their sources' offsets
         // are now (mitcad#641: a source moved farther than the distance
-        // before the solve flipped them).
-        let seeded = self.offsets.iter().any(|o| !o.derived).then(|| {
+        // before the solve flipped them); in the geometry the orientation
+        // comes from too, as they are there.
+        let seeds = self.offsets.iter().any(|o| !o.derived);
+        let seeded = seeds.then(|| {
             let mut entities = self.entities.clone();
             offset::seed(&self.offsets, &mut entities, value);
             entities
         });
         let entities = seeded.as_deref().unwrap_or(&self.entities);
+        let seeded_oriented = oriented.filter(|_| seeds).map(|o| {
+            let mut entities = o.to_vec();
+            offset::seed(&self.offsets, &mut entities, value);
+            entities
+        });
+        let oriented = seeded_oriented.as_deref().or(oriented);
+        let extra = Extra {
+            bindings: &bindings,
+            skip: &skip,
+            oriented,
+        };
         let run = |extra: &Extra<'_>| {
             if goals.is_empty() {
                 solve_extra(entities, &self.constraints, &inputs, extra)
@@ -739,6 +795,7 @@ impl SketchDef {
                 let plain = Extra {
                     bindings: &bindings[..patterns],
                     skip: &skip,
+                    oriented,
                 };
                 return Err(run(&plain).err().unwrap_or(error));
             }
@@ -762,6 +819,7 @@ impl SketchDef {
             let plain = Extra {
                 bindings: &[],
                 skip: &skip,
+                oriented: None,
             };
             solved.status.unmet_inactive =
                 crate::solve::unmet(&at, &self.constraints, &left_out, &plain)
@@ -910,10 +968,9 @@ fn check_range(range: ValueRange, v: f64) -> Result<(), String> {
             ValueRange::Positive => format!("must be greater than zero, got {v}"),
             ValueRange::NotNegative => format!("must not be negative, got {v}"),
             ValueRange::Signed => format!("must be a finite number, got {v}"),
-            ValueRange::Angle => format!(
-                "must be between 0 and 180 degrees, got {} deg",
-                v.to_degrees()
-            ),
+            ValueRange::Angle => {
+                format!("must be between 0 and 180 degrees, got {}°", v.to_degrees())
+            }
         })
     }
 }
@@ -1100,7 +1157,7 @@ impl<P> SketchDef<P> {
                 && e.construction
             {
                 return Err(format!(
-                    "{what}: a centre line is not construction geometry"
+                    "{what}: a center line is not construction geometry"
                 ));
             }
         }
@@ -1327,7 +1384,7 @@ mod upright_tests {
     /// The upright frame of a plane in the design (its axes, x and y), and
     /// whether it is stored (differs from the plane's own).
     fn upright(plane: &SketchFrame) -> ([f64; 3], [f64; 3], bool) {
-        match FrameDef::upright(plane, Z, Y) {
+        match FrameDef::upright(plane, Z, Y, None) {
             Some(own) => {
                 own.check().unwrap();
                 let placed = own.apply(plane);
@@ -1376,9 +1433,52 @@ mod upright_tests {
         // The design's axes in other coordinates (a sketch of a component
         // shown through a turned occurrence): there they are the given ones.
         let plane = face(Z);
-        let own = FrameDef::upright(&plane, [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]).unwrap();
+        let own = FrameDef::upright(&plane, [0.0, -1.0, 0.0], [0.0, 0.0, 1.0], None).unwrap();
         let placed = own.apply(&plane);
         assert!(near(placed.y_axis, [0.0, -1.0, 0.0]), "{:?}", placed.y_axis);
         assert!(near(placed.x_axis, [-1.0, 0.0, 0.0]), "{:?}", placed.x_axis);
+    }
+
+    /// mitcad#1060: a plane seen from a given side. The XZ origin plane
+    /// (normal +Y) seen from -Y: x = +X, y = +Z, the normal reversed to -Y,
+    /// the frame right-handed (not mirrored). A plane whose normal already
+    /// points to that side, or lies across it, keeps its normal.
+    #[test]
+    fn a_plane_seen_from_a_side_turns_its_normal_there() {
+        let minus_y = [0.0, -1.0, 0.0];
+        let xz = crate::datum::OriginDatum::Xz.datum();
+        let crate::datum::Datum::Plane(xz) = xz else {
+            panic!("XZ is a plane")
+        };
+        let plane = xz.frame();
+        let own = FrameDef::upright(&plane, Z, Y, Some(minus_y)).unwrap();
+        own.check().unwrap();
+        let placed = own.apply(&plane);
+        assert!(near(placed.origin, [0.0; 3]), "{:?}", placed.origin);
+        assert!(near(placed.x_axis, X), "x {:?}", placed.x_axis);
+        assert!(near(placed.y_axis, Z), "y {:?}", placed.y_axis);
+        assert!(
+            near(placed.normal(), minus_y),
+            "normal {:?}",
+            placed.normal()
+        );
+        // Without a side: the plane's normal as before (x = -X).
+        let kept = FrameDef::upright(&plane, Z, Y, None).unwrap().apply(&plane);
+        assert!(near(kept.x_axis, [-1.0, 0.0, 0.0]), "x {:?}", kept.x_axis);
+        assert!(near(kept.normal(), Y), "normal {:?}", kept.normal());
+        // A face already facing -Y, and one facing +X, are not turned.
+        let face = |normal: [f64; 3]| DatumPlane::on_plane([5.0, 7.0, 3.0], normal).frame();
+        for normal in [minus_y, X] {
+            let plane = face(normal);
+            let placed = match FrameDef::upright(&plane, Z, Y, Some(minus_y)) {
+                Some(own) => own.apply(&plane),
+                None => plane,
+            };
+            assert!(
+                near(placed.normal(), normal),
+                "{normal:?}: {:?}",
+                placed.normal()
+            );
+        }
     }
 }

@@ -553,7 +553,7 @@ const QString kFlankClearance = QStringLiteral("flank_clearance");
 
 QVector<InputDef> clearanceInputs(const std::function<bool(const CommandState&)>& shown) {
   return {
-      valueInput(kRadialClearance, QObject::tr("Radial clearance"), ValueKind::Length, QStringLiteral("0 mm"))
+      valueInput(kRadialClearance, QObject::tr("Radial Clearance"), ValueKind::Length, QStringLiteral("0 mm"))
           .withHeading(QObject::tr("Extra clearance"))
           .withTooltip(QObject::tr("Extra clearance per side, along the radius, not on the diameter"))
           .withVisible(shown),
@@ -753,7 +753,7 @@ CommandDef holeCommand(const CommandContext& context) {
   def.inputs += {
       selectionInput(QStringLiteral("points"), QObject::tr("Sketch Points"),
                      SelectKind::SketchPoint | SelectKind::SketchCurve, 1, 0)
-          .withTooltip(QObject::tr("Sketch points, or circles and arcs (their centres)"))
+          .withTooltip(QObject::tr("Sketch points, or circles and arcs (their centers)"))
           .withAccepts([](const SelectionItem& item) {
             return item.kind == SelectKind::SketchPoint || isCircular(item) ||
                    item.geometry == QStringLiteral("ellipse");
@@ -1186,7 +1186,7 @@ CommandDef threadCommand(const CommandContext& context) {
   def.id = QStringLiteral("solid.thread");
   def.name = QObject::tr("Thread");
   def.icon = QStringLiteral("thread");
-  def.tooltip = QObject::tr("Threads on cylindrical faces: cosmetic, or modelled into the geometry");
+  def.tooltip = QObject::tr("Threads on cylindrical faces: cosmetic, or modeled into the geometry");
   def.group = QStringLiteral("CREATE");
   def.section = QStringLiteral("faces");
   def.keywords = {QStringLiteral("tap"), QStringLiteral("screw"), QStringLiteral("bolt")};

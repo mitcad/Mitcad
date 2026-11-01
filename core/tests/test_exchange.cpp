@@ -334,7 +334,7 @@ void test_ipt_import(const fs::path& dir) {
   auto document = mitcad::new_document();
   const std::string text(document->import_ipt(ipt.string(), R"({"text": true})"));
   CHECK(contains(text, "Imported 2 bodies of part.ipt (2 solids, 2 valid; 0 not built)"));
-  CHECK(contains(text, "part number: MITCAD-TEST-1; material: Aluminum (Mitcad's aluminum); units: in"));
+  CHECK(contains(text, "part number: MITCAD-TEST-1; material: Aluminum (MitCad's aluminum); units: in"));
   CHECK(contains(text, "F1 Body1 (F1.b0): valid solid, volume 1000.000 mm3, area 600.000 mm2, 6 faces from "
                        "PmBRepSegment#1/1"));
   CHECK(contains(text, "F2 Body2 (F2.b0): valid solid, volume 6283.185 mm3"));

@@ -110,7 +110,7 @@ impl FromStr for PropertyOwner {
             return Ok(Self::Occurrence(uid));
         }
         Err(format!(
-            "'{text}' is no component (C2), occurrence (O3) or body (F7.b0)"
+            "“{text}” is no component (C2), occurrence (O3) or body (F7.b0)"
         ))
     }
 }
@@ -372,12 +372,12 @@ impl DisplayUnit {
                 .iter()
                 .find(|(symbol, _)| *symbol == text)
                 .map(|&(symbol, kg)| Self::Mass(symbol, kg))
-                .ok_or_else(|| format!("'{text}' is not a unit of mass (kg, g, mg, t, lb, oz)"));
+                .ok_or_else(|| format!("“{text}” is not a unit of mass (kg, g, mg, t, lb, oz)"));
         }
-        let unit = Unit::parse(text).map_err(|e| format!("unit '{text}': {e}"))?;
+        let unit = Unit::parse(text).map_err(|e| format!("unit “{text}”: {e}"))?;
         // `Text` is a text parameter's unit (mitcad#664), no unit of measure.
         if unit.is_text() || unit.dims() != dims_of(base) {
-            return Err(format!("'{text}' is not a unit of {}", base.as_str()));
+            return Err(format!("“{text}” is not a unit of {}", base.as_str()));
         }
         Ok(Self::Geometric(unit))
     }
@@ -418,7 +418,7 @@ fn dims_of(base: BaseType) -> crate::expr::Dims {
 /// `text` as a date `YYYY-MM-DD`, or why it is not one.
 fn check_date(text: &str) -> Result<String, String> {
     let text = text.trim();
-    let error = || format!("'{text}' is not a date (YYYY-MM-DD)");
+    let error = || format!("“{text}” is not a date (YYYY-MM-DD)");
     let parts: Vec<&str> = text.split('-').collect();
     let [year, month, day] = parts.as_slice() else {
         return Err(error());
@@ -527,9 +527,9 @@ pub fn parse_value(
                 return Ok(PropertyValue::Number(u.to_canonical(number)));
             }
             let quantity = crate::expr::evaluate(&text, &(), &context, expected)
-                .map_err(|e| format!("'{t}' is not a value of type {}: {e}", b.as_str()))?;
+                .map_err(|e| format!("“{t}” is not a value of type {}: {e}", b.as_str()))?;
             if quantity.dims != dims_of(b) {
-                return Err(format!("'{t}' is not a value of type {}", b.as_str()));
+                return Err(format!("“{t}” is not a value of type {}", b.as_str()));
             }
             Ok(PropertyValue::Number(quantity.value))
         }
@@ -589,12 +589,12 @@ impl PropertyType {
         }
         if name != self.name {
             return Err(format!(
-                "the type name '{}' starts or ends with spaces",
+                "the type name {} starts or ends with spaces",
                 self.name
             ));
         }
         if BaseType::parse(name).is_some() {
-            return Err(format!("'{name}' is a standard type"));
+            return Err(format!("{name} is a standard type"));
         }
         if let Some(unit) = &self.unit
             && self.base.is_quantity()
@@ -739,7 +739,7 @@ impl PropertyStore {
     pub fn base_of(&self, ty: &str) -> Result<BaseType, String> {
         BaseType::parse(ty)
             .or_else(|| self.own_type(ty).map(|t| t.base))
-            .ok_or_else(|| format!("there is no property type '{ty}'"))
+            .ok_or_else(|| format!("there is no property type {ty}"))
     }
 
     /// An owner's sets (none when it has no properties).
@@ -873,7 +873,7 @@ impl PropertyStore {
                 .map_err(|e| format!("property_types[{i}]: {e}"))?;
             if store.own_type(&ty.name).is_some() {
                 return Err(format!(
-                    "property_types[{i}]: the type '{}' is defined twice",
+                    "property_types[{i}]: the type {} is defined twice",
                     ty.name
                 ));
             }
@@ -891,14 +891,14 @@ impl PropertyStore {
                 let at = format!("properties[{i}] ({}) sets[{j}]", entry.owner);
                 check_set_name(&group.name).map_err(|e| format!("{at}: {e}"))?;
                 if sets.iter().any(|g| same_name(&g.name, &group.name)) {
-                    return Err(format!("{at}: the set '{}' is listed twice", group.name));
+                    return Err(format!("{at}: the set {} is listed twice", group.name));
                 }
                 let mut properties: Vec<Property> = Vec::with_capacity(group.properties.len());
                 for mut property in std::mem::take(&mut group.properties) {
                     let key = property.key.clone();
                     check_key(&key).map_err(|e| format!("{at}: {e}"))?;
                     if properties.iter().any(|p| same_name(&p.key, &key)) {
-                        return Err(format!("{at}: the key '{key}' is listed twice"));
+                        return Err(format!("{at}: the key {key} is listed twice"));
                     }
                     let error = |e: String| format!("{at} ({key}): {e}");
                     let base = store.base_of(&property.ty).map_err(error)?;
@@ -934,7 +934,7 @@ pub fn check_set_name(name: &str) -> Result<(), String> {
     }
     if same_name(name, COMPUTED_SET) {
         return Err(format!(
-            "the set '{COMPUTED_SET}' holds computed values, which are not stored"
+            "the set {COMPUTED_SET} holds computed values, which are not stored"
         ));
     }
     Ok(())
@@ -947,7 +947,7 @@ pub fn check_key(key: &str) -> Result<(), String> {
     }
     if key.contains('/') {
         return Err(format!(
-            "the key '{key}' has a '/', which separates a set from a key in searches"
+            "the key {key} has a '/', which separates a set from a key in searches"
         ));
     }
     Ok(())
@@ -1005,7 +1005,7 @@ impl PropertyFilter {
                 let (op, compare) = OPERATORS
                     .iter()
                     .find(|(op, _)| rest.starts_with(op))
-                    .ok_or_else(|| format!("'{text}': '{}' is no comparison", &rest[..1]))?;
+                    .ok_or_else(|| format!("“{text}”: “{}” is no comparison", &rest[..1]))?;
                 (&text[..at], *compare, rest[op.len()..].trim())
             }
         };
@@ -1014,10 +1014,10 @@ impl PropertyFilter {
             None => (None, name.trim()),
         };
         if key.is_empty() {
-            return Err(format!("'{text}' names no property (Key = value)"));
+            return Err(format!("“{text}” names no property (Key = value)"));
         }
         if compare != Compare::Exists && value.is_empty() {
-            return Err(format!("'{text}' has no value after its comparison"));
+            return Err(format!("“{text}” has no value after its comparison"));
         }
         Ok(Self {
             set: set.filter(|s| !s.is_empty()),

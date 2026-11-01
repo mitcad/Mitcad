@@ -19,6 +19,7 @@
 #include <TopoDS_Shape.hxx>
 
 class QJsonObject;
+#include "framework/NoticeLevel.hpp"
 #include "render/RenderClient.hpp"
 #include "render/RenderImage.hpp"
 
@@ -93,7 +94,9 @@ private:
   // The worker's "environment" command for the settings.
   QJsonObject environmentCommand() const;
   void sendEnvironment();
-  void showMessage(const QString& text);
+  // A message over the view at its level (mitcad#1051): the level's badge
+  // and colour, shown for the level's time.
+  void showMessage(const QString& text, NoticeLevel level);
 
   OcctViewer& m_viewer;
   std::function<void(QObject*, std::function<void()>)> m_whenIdle;

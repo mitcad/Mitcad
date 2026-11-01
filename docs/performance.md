@@ -432,8 +432,9 @@ finds the new view in the cache.
 `MITCAD_DRAWING_TRACE=1` prints `drawing-trace:` lines on standard error:
 
 - `view eye=(…) exact=1 hidden=0 smooth=0 section=0 total=… ms prepare=…
-  parts=27 faces=… (planes=… analytic=… freeform=…) edges=… count=… load=…
-  update=… hide=… extract=… convert=… lines=… result=exact`: one per
+  parts=27 faces=… (planes=… analytic=… freeform=…) edges=… (conics=…
+  curves=…) work=… count=… load=… update=… hide=… extract=… convert=…
+  lines=… result=exact`: one per
   projection, from the kernel. `prepare` clips the parts of a section;
   `count` is the trace's own counting; `load`, `update` and `hide` are the
   exact algorithm's `Add`, `Update` and `Hide`; `extract` makes its
@@ -451,6 +452,15 @@ finds the new view in the cache.
   title=… compose=… rest=…`: the `drawing` query's sheet.
 - `add view to Drawing1 total=… ms define=… project=… place=… store=…`:
   `add_drawing_view`.
+
+Without the variable, the application's log has one line per view whose
+projection a drawing command or the redrawn sheet asked for (mitcad#1033):
+`Drawing projection of view 1: 1 bodies, 2252.7 ms, projected exactly`
+when the kernel projected it with the exact algorithm, `…, projected
+from a triangulation` when on the quick path (or in the polygonal style),
+`…, 0.0 ms, from the cache` when the projection cache had it (the `projections` of the answers, `commands.md`). A user's
+debug log then says whether a slow step was a projection, of how many
+bodies, or something else.
 
 Two values do more work, only to measure: `MITCAD_DRAWING_TRACE=compare`
 also times the algorithm the view did not use on the same parts (`compare
@@ -473,7 +483,9 @@ faces is the cost.
 
 **The quick path** (`ViewSpec::quick`, `DrawingViewSpec::quick`): a
 drawing's views of bodies with free-form faces (anything but planes,
-cylinders, cones, spheres and tori) are projected by the polygonal
+cylinders, cones, spheres and tori), or with many edges on curves other
+than lines and conics against many faces (mitcad#1033, below), are
+projected by the polygonal
 algorithm on a triangulation within a 2000th of the view's size (the
 diagonal of the bodies' box; at least the view's deflection, 0.01 mm),
 its faces meshed in parallel. The algorithm's segments are joined end
@@ -485,8 +497,36 @@ lines), polylines elsewhere, broken at corners sharper than 0.6 rad.
 A circle's chords end on the edge itself, so its arc has the edge's
 centre and radius to the numerics. The view is `polygonal`. Cut sheets
 keep the exact edges (they write the curves as they are, mitcad#853),
-and bodies without free-form faces too. `test_drawing`'s "the quick
+and bodies below both limits too. `test_drawing`'s "the quick
 path" checks the quick view of curved bodies with B-spline faces
 against the exact view of the same shapes within 0.1 mm, both ways, its
 circles as arcs. The trace says `result=quick`; with `compare` it times
 the exact algorithm too.
+
+**Edges on B-splines** (mitcad#1033): a body of analytic faces only can
+still be slow for the exact algorithm. Its hiding tests every edge
+against the faces, and an edge on a B-spline, such as where a cone or a
+cylinder meets a cylinder (a body read from STEP has hundreds), costs
+it about a hundred times one on a line or a circle. So a view takes the
+quick path also when the parts' faces times their edges on other curves
+than lines and conics (those weighing 1/256 each) pass 50 000: the
+trace's `work=` after its counts, which now split the edges into
+`conics` and `curves`. Measured in a debug build on synthetic designs
+(the reproduction of mitcad#1033: an assembly of 29 bodies, the one left
+shown a shaft of 963 analytic faces with 320 countersunk radial holes,
+one B-spline edge each):
+
+| view, isometric, no hidden lines | before | after |
+|---|---|---|
+| the whole design (a free-form coil among the bodies: quick) | 2.0 s | 2.0 s |
+| the design with all bodies but the shaft hidden (exact; `work=335649`) | 8.8 s, `Hide` 8.3 s | 1.6 s (quick) |
+| the shaft chosen as the view's bodies | 8.8 s | 1.6 s |
+| a plate of 1 508 analytic faces, 3 013 edges all lines and circles (`work=17748`) | 2.4 s exact (quick 5.4 s) | 2.4 s exact |
+
+The work grows as the edges times the faces: the shaft with a quarter
+of the holes took a sixteenth of the time (0.5 s). A front view with
+hidden lines is the worst case: in `test_drawing`'s "the quick path for
+curved edges", 100 cross-drilled posts in a 10 by 10 grid (400 faces,
+300 B-spline edges, each column's posts behind each other) took the
+exact algorithm 297 s, the quick path 0.2 s. A move or a redraw of the
+sheet takes the view from the cache either way.

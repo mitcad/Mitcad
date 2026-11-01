@@ -25,7 +25,9 @@
 //!
 //! **Export** ([`export`]) writes each part's effective settings: the
 //! values all parts share as the project's, the others per part, a
-//! filament slot per distinct material in the order of first use. The
+//! filament slot per distinct material and appearance (mitcad#1055: two
+//! colours of one material are two slots of the same values) in the order
+//! of first use, its `filament_colour` the appearance's. The
 //! Bambu family gets `project_settings.config` with the application
 //! metadata its loader needs (see the key map's module documentation) and
 //! `model_settings.config` with each part's filament and overrides;
@@ -55,6 +57,8 @@ mod prusa;
 pub(crate) mod source;
 // The installed Bambu-family slicers' own presets (mitcad#830).
 pub mod installed;
+// A filament's presets as one material with variants (mitcad#1054).
+pub mod filaments;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -79,6 +83,27 @@ pub struct Imported {
     /// The project's purge volumes (mitcad#705): from a filament to another
     /// (indices of `materials`), in mm³ as the slicer purges them.
     pub purge: Vec<(usize, usize, f64)>,
+}
+
+impl Imported {
+    /// Merges the materials of one filament's presets into one with
+    /// variants (mitcad#1054, [`filaments`]), with `keep` only those of the
+    /// printers chosen; the purge table follows its materials.
+    pub fn merge_filaments(&mut self, keep: Option<&[filaments::PrinterChoice]>) {
+        let materials = std::mem::take(&mut self.materials);
+        let (merged, into) = filaments::merge_filaments(materials, keep);
+        self.materials = merged;
+        let mut purge: Vec<(usize, usize, f64)> = Vec::new();
+        for (from, to, volume) in std::mem::take(&mut self.purge) {
+            if let (Some(Some(a)), Some(Some(b))) = (into.get(from), into.get(to))
+                && a != b
+                && !purge.iter().any(|(x, y, _)| x == a && y == b)
+            {
+                purge.push((*a, *b, volume));
+            }
+        }
+        self.purge = purge;
+    }
 }
 
 /// The slicers' keys of the purge table (mitcad#705): read into the
@@ -107,10 +132,15 @@ pub struct ImportReport {
     pub left_out: Vec<String>,
     /// Values that could not be read.
     pub problems: Vec<String>,
+    /// Each filament read, in the order of [`Imported::materials`]: the
+    /// preset, the chain it inherits from and the colour its appearance
+    /// has (mitcad#1053).
+    pub filaments: Vec<FilamentNote>,
 }
 
 impl ImportReport {
     pub fn to_json(&self) -> Value {
+        let log: Vec<String> = self.filaments.iter().map(FilamentNote::line).collect();
         json!({
             "mapped": self.mapped.len(),
             "mapped_keys": self.mapped,
@@ -118,7 +148,32 @@ impl ImportReport {
             "kept_keys": self.kept,
             "left_out": self.left_out,
             "problems": self.problems,
+            "log": log,
         })
+    }
+}
+
+/// A filament an import read (mitcad#1053): its preset's name, the presets
+/// it inherits from (the nearest first) and a base not found, and the
+/// colour found for it (`#RRGGBB`; None: the neutral appearance).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FilamentNote {
+    pub preset: String,
+    pub inherits: Vec<String>,
+    pub missing: Option<String>,
+    pub colour: Option<String>,
+}
+
+impl FilamentNote {
+    /// The log line: `Slicer import: <preset> inherits <chain>, colour
+    /// <hex|none>`.
+    pub fn line(&self) -> String {
+        format!(
+            "Slicer import: {} inherits {}, colour {}",
+            self.preset,
+            installed::chain_text(&self.inherits, self.missing.as_deref()),
+            self.colour.as_deref().unwrap_or("none")
+        )
     }
 }
 
@@ -288,10 +343,17 @@ pub(crate) fn read_flat(
         for (i, kept) in filament_kept.into_iter().enumerate() {
             let values = source::read_layer(dialect, PrintSet::Filament, source, i, &mut problems);
             let taken: Vec<String> = out.materials.iter().map(|(m, _)| m.id.clone()).collect();
-            out.materials
-                .push(material_from_filament(dialect, values, kept, i, &|id| {
+            let (material, appearance, colour) =
+                material_from_filament(dialect, values, kept, i, &|id| {
                     taken.iter().any(|t| t == id)
-                }));
+                });
+            // The chain is the caller's to fill in (a preset's).
+            out.report.filaments.push(FilamentNote {
+                preset: material.name.clone(),
+                colour,
+                ..FilamentNote::default()
+            });
+            out.materials.push((material, Some(appearance)));
         }
     }
     out.report.problems.extend(problems);
@@ -317,14 +379,21 @@ pub(crate) fn xml_escape(text: &str) -> String {
 /// A filament's values read from a slicer as a material: named after its
 /// preset (or its type), its density the filament's (else the built-in of
 /// its type's), its colour as a plastic appearance, the rest as its
-/// filament values and the slicer's own keys.
+/// filament values and the slicer's own keys. Every filament gets an
+/// appearance (mitcad#1053): its `filament_colour`, else the Bambu
+/// family's `default_filament_colour` (a preset of that family keeps no
+/// `filament_colour`: the slicer takes it from the project), else the
+/// neutral plastic ([`neutral_appearance`]). The material's colour is its
+/// appearance's from then on: the material keeps no `filament_colour` of
+/// its own, and the export writes the appearance's. Also the colour found
+/// (`#RRGGBB`), if any.
 pub(crate) fn material_from_filament(
     dialect: Dialect,
     mut values: BTreeMap<String, Value>,
     slicer: BTreeMap<String, String>,
     index: usize,
     taken: &dyn Fn(&str) -> bool,
-) -> (Material, Option<Appearance>) {
+) -> (Material, Appearance, Option<String>) {
     let preset = values
         .get("filament_settings_id")
         .and_then(|v| dialect_value(v, dialect))
@@ -363,30 +432,59 @@ pub(crate) fn material_from_filament(
         })
         .unwrap_or(1.24);
     let id = free_id(&slug(&name), taken);
-    let appearance = values
+    let colour = values
         .get("filament_colour")
         .and_then(Value::as_str)
-        .and_then(hex_rgb)
-        .map(|color| plastic_appearance(&id, &name, color));
-    // The filament's values a material keeps.
+        .and_then(print_keys::color)
+        .or_else(|| {
+            slicer
+                .get("default_filament_colour")
+                .map(String::as_str)
+                .and_then(first_colour)
+        })
+        // `#RRGGBB`: an appearance has no alpha.
+        .map(|hex| hex.chars().take(7).collect::<String>());
+    let appearance = match colour.as_deref().and_then(hex_rgb) {
+        Some(color) => plastic_appearance(&id, &name, color),
+        None => neutral_appearance(&id, &name),
+    };
+    // The filament's values a material keeps; its colour is its
+    // appearance's.
     values.retain(|key, value| material::check_filament_value(key, value).is_ok());
+    values.remove("filament_colour");
     let material = Material {
         id,
         name,
         density,
-        appearance: appearance.as_ref().map(|a| a.id.clone()),
+        appearance: Some(appearance.id.clone()),
         filament: values,
         slicer: if slicer.is_empty() {
             BTreeMap::new()
         } else {
             BTreeMap::from([(dialect.id().to_owned(), slicer)])
         },
+        variants: Vec::new(),
+        appearances: Vec::new(),
         based_on,
         class: None,
         version: None,
         origin: None,
     };
-    (material, appearance)
+    (material, appearance, colour)
+}
+
+/// The first colour of a kept text: `#RRGGBB`, a JSON list of them
+/// (`["#RRGGBB"]`) or a `;` list; None when it names none (`""`).
+fn first_colour(text: &str) -> Option<String> {
+    match source::kept_value(text) {
+        Value::Array(items) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .find_map(print_keys::color),
+        _ => print_keys::split_list(text)
+            .iter()
+            .find_map(|t| print_keys::color(t.trim().trim_matches('"'))),
+    }
 }
 
 /// `#RRGGBB` (or `#RRGGBBAA`) as sRGB components in [0, 1].
@@ -404,10 +502,24 @@ pub(crate) fn plastic_appearance(material: &str, name: &str, color: [f64; 3]) ->
         .cloned()
         .unwrap_or_default();
     look.id = format!("{}_colour", material.replace(['-', '/'], "_"));
-    look.name = format!("{name} colour");
+    look.name = format!("{name} color");
     look.base_color = color;
     look.texture = None;
+    // A filament's colour: an FDM plastic's look (mitcad#1102).
+    look.class = Some(crate::material::MaterialClass::FdmPlastic);
     look
+}
+
+/// The colour of a filament whose slicer files give it none (mitcad#1053):
+/// a neutral light grey, `#BFBFBF`.
+pub const NEUTRAL_FILAMENT_COLOR: [f64; 3] = [191.0 / 255.0; 3];
+
+/// The appearance of an imported material whose filament has no colour
+/// anywhere (mitcad#1053): the library's white plastic in the neutral grey
+/// ([`NEUTRAL_FILAMENT_COLOR`]), named for the material (`<name> color`,
+/// its id the material's, as [`plastic_appearance`]'s).
+pub(crate) fn neutral_appearance(material: &str, name: &str) -> Appearance {
+    plastic_appearance(material, name, NEUTRAL_FILAMENT_COLOR)
 }
 
 /// A profile from values read: named after its preset (`printer_settings_id`
@@ -455,6 +567,10 @@ pub struct ExportOutput {
     pub part_metadata: Vec<Vec<(String, String)>>,
     /// The filament slot of each part (0 the first).
     pub slots: Vec<usize>,
+    /// Each part's own values written (mitcad#1052): its material's
+    /// filament values the slicer has keys for and the printer and process
+    /// values it does not share with the other parts.
+    pub own_values: Vec<usize>,
     pub warnings: Vec<String>,
 }
 
@@ -494,21 +610,27 @@ pub(crate) struct Shared<'a> {
 
 impl<'a> Shared<'a> {
     fn new(dialect: Dialect, parts: &'a [ExportPart<'a>], purge: &[PurgeOverride]) -> Self {
-        let mut materials: Vec<&str> = Vec::new();
+        // A slot per material and appearance (mitcad#1055): two colours of
+        // one material are two filaments of the same values.
+        let mut filaments: Vec<(&str, Option<&str>)> = Vec::new();
         let mut slot_parts = Vec::new();
         let slots = parts
             .iter()
             .enumerate()
-            .map(
-                |(i, p)| match materials.iter().position(|m| *m == p.settings.material) {
+            .map(|(i, p)| {
+                let filament = (
+                    p.settings.material.as_str(),
+                    p.settings.appearance.as_deref(),
+                );
+                match filaments.iter().position(|f| *f == filament) {
                     Some(slot) => slot,
                     None => {
-                        materials.push(&p.settings.material);
+                        filaments.push(filament);
                         slot_parts.push(i);
-                        materials.len() - 1
+                        filaments.len() - 1
                     }
-                },
-            )
+                }
+            })
             .collect();
         let mut values = BTreeMap::new();
         if let Some(first) = parts.first() {
@@ -641,15 +763,26 @@ pub fn export(
         Dialect::PrusaSlicer => prusa::export(&shared),
         Dialect::Cura => cura::export(&shared),
     };
-    let materials = shared.slot_parts.len();
+    let filaments = shared.slot_parts.len();
     if let Some(slots) = shared.printer_slots()
-        && materials as i64 > slots
+        && filaments as i64 > slots
     {
         out.warnings.push(format!(
-            "the parts are of {materials} materials, and the printer has {slots} filament slots"
+            "the parts print with {filaments} filaments (materials and appearances), and the \
+             printer has {slots} filament slots"
         ));
     }
     out.slots = shared.slots.clone();
+    out.own_values = (0..parts.len())
+        .map(|i| {
+            let filament = shared.filament(shared.slots[i]);
+            let written = filament
+                .keys()
+                .filter(|k| print_keys::key(k).is_some_and(|d| d.dialect(dialect).is_some()))
+                .count();
+            written + shared.overrides[i].len()
+        })
+        .collect();
     out
 }
 
@@ -666,6 +799,142 @@ pub(crate) fn fill_overrides(def: &KeyDef, entries: &mut [Option<String>]) -> Ve
         }
     }
     set
+}
+
+/// A slot's filament values, by Mitcad key, with where each comes from.
+pub(crate) type FilamentValues = BTreeMap<String, (Value, crate::document::PrintFrom)>;
+
+/// The filament keys an export fills itself when a slot's material does
+/// not set them (the type `PLA`, the colour white, the material's name as
+/// the preset's), never from another slot.
+const OWN_FALLBACKS: [&str; 3] = ["filament_type", "filament_colour", "filament_settings_id"];
+
+/// MitCad's generic filaments (the base library's `materials/*.json`,
+/// tools/libraries/print-library, MitCad's own starting points): by
+/// filament type, the values a slot of that type takes where its material
+/// sets none of its own and another slot does (mitcad#1052).
+const GENERIC_FILAMENTS: [(&str, [f64; 6]); 6] = [
+    ("PLA", [1.75, 210.0, 215.0, 60.0, 60.0, 100.0]),
+    ("PETG", [1.75, 240.0, 240.0, 75.0, 75.0, 50.0]),
+    ("ABS", [1.75, 250.0, 250.0, 100.0, 100.0, 20.0]),
+    ("ASA", [1.75, 255.0, 255.0, 100.0, 100.0, 20.0]),
+    ("TPU", [1.75, 225.0, 225.0, 40.0, 40.0, 100.0]),
+    ("PA", [1.75, 265.0, 265.0, 90.0, 90.0, 0.0]),
+];
+
+/// The keys of [`GENERIC_FILAMENTS`]' values, in their order.
+const GENERIC_KEYS: [&str; 6] = [
+    "filament_diameter",
+    "temperature",
+    "first_layer_temperature",
+    "bed_temperature",
+    "first_layer_bed_temperature",
+    "max_fan_speed",
+];
+
+/// The filament type a slot is written with: its material's, else PLA.
+fn slot_type(filament: &FilamentValues) -> String {
+    filament
+        .get("filament_type")
+        .and_then(|(v, _)| v.as_str())
+        .unwrap_or("PLA")
+        .to_owned()
+}
+
+/// MitCad's generic filament of a type, when it has one, and its name.
+fn generic_filament(filament_type: &str) -> Option<(String, FilamentValues)> {
+    let (name, values) = GENERIC_FILAMENTS
+        .iter()
+        .find(|(t, _)| t.eq_ignore_ascii_case(filament_type))?;
+    let from = || crate::document::PrintFrom::Material(format!("generic {name}"));
+    let mut out: FilamentValues = GENERIC_KEYS
+        .iter()
+        .zip(values)
+        .map(|(key, value)| ((*key).to_owned(), (json!(value), from())))
+        .collect();
+    out.insert("filament_type".to_owned(), (json!(name), from()));
+    Some((format!("generic {name}"), out))
+}
+
+/// The slots that took a value they did not set (mitcad#1052): by slot and
+/// the filament the values came from, the keys' plain names.
+pub(crate) type Filled = BTreeMap<(usize, String), Vec<&'static str>>;
+
+/// A filament key's value per slot, as `own` reads it from a slot's
+/// filament values (mitcad#1052). Where some slots set the key and others
+/// do not, each of the others takes the value of MitCad's generic filament
+/// of its type, else that of the first slot that sets it: the slicer's
+/// lists are an entry per filament, so a key left out for one slot would
+/// lose every slot's value (a PETG HF part's nozzle temperature beside a
+/// part of the default material). A key no slot sets stays the slicer's;
+/// the keys the export fills itself ([`OWN_FALLBACKS`]), a preset's name
+/// kept per slicer and a filament's override of the printer's extruder
+/// settings (`nil`, [`fill_overrides`]) are not filled here. `filled` gets
+/// each filled slot's key.
+pub(crate) fn slot_values(
+    shared: &Shared<'_>,
+    def: &'static KeyDef,
+    own: impl Fn(&FilamentValues) -> Option<Value>,
+    filled: &mut Filled,
+) -> Vec<Option<Value>> {
+    let slots = shared.slot_parts.len().max(1);
+    let mut values: Vec<Option<Value>> = (0..slots).map(|s| own(shared.filament(s))).collect();
+    if def.per_dialect || def.overrides_printer() || OWN_FALLBACKS.contains(&def.key) {
+        return values;
+    }
+    let Some(first) = values.iter().position(Option::is_some) else {
+        return values;
+    };
+    let first_value = values[first].clone();
+    let first_name = shared.parts[shared.slot_parts[first]]
+        .settings
+        .material_name
+        .clone();
+    for (slot, value) in values.iter_mut().enumerate() {
+        if value.is_some() {
+            continue;
+        }
+        let generic = generic_filament(&slot_type(shared.filament(slot)))
+            .and_then(|(name, values)| own(&values).map(|v| (name, v)));
+        let (source, taken) = match generic {
+            Some(found) => found,
+            None => (
+                first_name.clone(),
+                first_value.clone().unwrap_or(Value::Null),
+            ),
+        };
+        *value = Some(taken);
+        filled.entry((slot, source)).or_default().push(def.name);
+    }
+    values
+}
+
+/// The warnings of the filled slots (mitcad#1052): "Steel (filament 2) sets
+/// no nozzle temperature, bed temperature: written as generic PLA's".
+pub(crate) fn filled_warnings(shared: &Shared<'_>, filled: &Filled) -> Vec<String> {
+    filled
+        .iter()
+        .map(|((slot, source), names)| {
+            let material = &shared.parts[shared.slot_parts[*slot]]
+                .settings
+                .material_name;
+            let names: Vec<String> = names.iter().map(|n| lower_first(n)).collect();
+            format!(
+                "{material} (filament {}) sets no {}: written as {source}'s",
+                slot + 1,
+                names.join(", ")
+            )
+        })
+        .collect()
+}
+
+/// A plain name inside a sentence: its first letter small.
+fn lower_first(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) => c.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 /// The keys of the map in a set that a values map has, in the table's

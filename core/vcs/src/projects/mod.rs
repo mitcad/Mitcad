@@ -445,7 +445,7 @@ pub fn run(
         }
         other => {
             return Err(VcsError::Command(format!(
-                "unknown projects command '{other}'"
+                "unknown projects command “{other}”"
             )));
         }
     };
@@ -600,9 +600,9 @@ pub fn describe(name: &str, answer: &Value) -> String {
                 let _ = writeln!(out, "The repository is empty: a project can be made there");
             } else {
                 let project = if answer["has_project"].as_bool() == Some(true) {
-                    "a Mitcad project"
+                    "a MitCad project"
                 } else {
-                    "no Mitcad project"
+                    "no MitCad project"
                 };
                 let _ = writeln!(
                     out,

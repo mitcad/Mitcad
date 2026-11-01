@@ -207,6 +207,8 @@ const Part kParts[] = {
     {"face_extrude", test::face_extrude_tests},
     // A planar face of a body revolved as a profile (mitcad#539).
     {"face_revolve", test::face_revolve_tests},
+    // Fillets and chamfers that take a face away exactly (mitcad#1106).
+    {"dressup_takes_face", test::dressup_takes_face_tests},
 };
 
 bool is_part(const std::string& name) {

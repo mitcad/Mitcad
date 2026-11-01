@@ -102,7 +102,7 @@ CommandDef primitive(const CommandContext& context, Primitive kind) {
     };
     break;
   case Primitive::Sphere:
-    def.tooltip = QObject::tr("A sphere centred where it is placed");
+    def.tooltip = QObject::tr("A sphere centered where it is placed");
     def.inputs += {
         valueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, QStringLiteral("30 mm"))
             .withManipulator(handle(place, Along::X, 0.5)),

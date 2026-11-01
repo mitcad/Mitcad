@@ -176,7 +176,7 @@ MITCAD_TEST_CRASH=model-worker timeout 120 "$UI_APP" --no-recovery --demo > "$UI
 STATUS=$?
 [ "$STATUS" = 139 ] || { cat "$UI_LOG"; ui_fail "the app ended with $STATUS, not SIGSEGV (139)"; }
 echo "ok   the app crashed (SIGSEGV)"
-ui_expect_log "Mitcad crashed: SIGSEGV; crash report: $CRASHES/crash-" "the crash report written"
+ui_expect_log "MitCad crashed: SIGSEGV; crash report: $CRASHES/crash-" "the crash report written"
 REPORT=$(ls "$CRASHES"/*.crash)
 grep -q '^process: app$' "$REPORT" || ui_fail "the report's process"
 grep -q 'mitcad5crash8crashNow' "$REPORT" || ui_fail "the crashing function is not in the report's stack"
@@ -213,7 +213,7 @@ printf 'not a design' > "$WORK/part.f3d"
 : > "$UI_LOG"
 MITCAD_TEST_CRASH=import-worker ui_start_app --open "$WORK/part.f3d"
 ui_focus_dialog '^Import$'
-ui_expect_log "Mitcad crashed: SIGSEGV; crash report: $CRASHES/" "the import failed with the worker's crash"
+ui_expect_log "MitCad crashed: SIGSEGV; crash report: $CRASHES/" "the import failed with the worker's crash"
 ui_step "the import's error (Enter)"       ui_key Return
 ui_focus_dialog '^Error Report$'
 ui_expect_log "Error report offered (worker-crash): The import process quit unexpectedly (SIGSEGV)." \
@@ -252,7 +252,7 @@ MITCAD_TEST_CRASH=app-exception timeout 120 "$UI_APP" --no-recovery --demo > "$U
 STATUS=$?
 [ "$STATUS" = 134 ] || { cat "$UI_LOG"; ui_fail "the app ended with $STATUS, not SIGABRT (134)"; }
 ui_expect_log "Throwing for a test (MITCAD_TEST_CRASH=app-exception)" "thrown out of a slot"
-ui_expect_log "Mitcad crashed: SIGABRT; crash report: $CRASHES/crash-" "the crash report written"
+ui_expect_log "MitCad crashed: SIGABRT; crash report: $CRASHES/crash-" "the crash report written"
 REPORT=$(grep -o "crash report: $CRASHES/crash-[0-9-]*\.crash" "$UI_LOG" | tail -1 | sed 's/^crash report: //')
 grep -qxF 'message: uncaught exception std::range_error: thrown for a test (MITCAD_TEST_CRASH=app-exception)' \
   "$REPORT" || { cat "$REPORT"; ui_fail "the report's message does not name the exception's type and message"; }

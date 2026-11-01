@@ -1294,7 +1294,7 @@ fn virtual_bend<K: Kernel>(
     moving_ref: &BoundaryRef,
 ) -> Result<(), String> {
     if stationary_ref.panel == moving_ref.panel {
-        return Err("sheet Bend needs two distinct labelled panel domains".into());
+        return Err("sheet Bend needs two distinct labeled panel domains".into());
     }
     let stationary_old = chart(state, stationary_ref.panel)?.clone();
     let moving_old = chart(state, moving_ref.panel)?.clone();

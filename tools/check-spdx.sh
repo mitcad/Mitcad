@@ -5,6 +5,7 @@
 # identifier in its first lines (licence policy in docs/development.md).
 # Formats without comments (JSON) and documents are exempt.
 # Third-party code under third_party/ keeps its own headers.
+# Also checks that PowerShell scripts (*.ps1) are pure ASCII.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -27,6 +28,16 @@ while IFS= read -r file; do
     echo "missing SPDX-License-Identifier: $file"
     missing=1
   fi
+  # PowerShell scripts stay pure ASCII: Windows PowerShell 5.1 reads a file
+  # without a byte order mark as ANSI, so a UTF-8 character in an expected
+  # text never matches (mitcad#1071; tools/ui-windows-lib.ps1's $Times).
+  case "$file" in
+    *.ps1)
+      if LC_ALL=C grep -q $'[\x80-\xff]' "$file"; then
+        echo "non-ASCII bytes in a PowerShell script: $file"
+        missing=1
+      fi ;;
+  esac
 done < <(list_files)
 
 exit "$missing"

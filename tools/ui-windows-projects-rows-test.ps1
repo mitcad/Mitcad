@@ -23,7 +23,9 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin -StepPause 0
+# The Projects panel shown at the start, as for a user who turned it on
+# (mitcad#1020: hidden until then).
+Ui-Init $App $Out $QtBin @{ 'projects/panel' = 'true' } -StepPause 0
 
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1

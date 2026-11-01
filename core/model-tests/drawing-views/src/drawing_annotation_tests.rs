@@ -310,6 +310,11 @@ fn dimensions_on_views_take_tolerances_and_follow_the_model() {
             .contains("does not show the body F2.b0"),
         "{broken}"
     );
+    // A broken annotation is a warning about it (mitcad#1040).
+    assert_eq!(broken["level"], "warning", "{broken}");
+    assert_eq!(broken["notices"][0]["level"], "warning", "{broken}");
+    assert_eq!(broken["notices"][0]["message"], broken["error"], "{broken}");
+    assert_eq!(broken["notices"][0]["target"], "1", "{broken}");
     assert!(broken["box"].is_array());
     let warnings = sheet(&doc)["warnings"].clone();
     assert!(
@@ -520,7 +525,8 @@ fn notes_symbols_and_series_are_drawn() {
     assert_eq!(loaded.to_json(), saved);
 
     // The export draws them.
-    let svg = std::env::temp_dir().join(format!("mitcad-annotated-{}.svg", std::process::id()));
+    let dir = mitcad_model::testing::unique_temp_dir("annotated");
+    let svg = dir.join("annotated.svg");
     let written = command(
         &mut doc,
         json!({"cmd": "export_drawing", "drawing": "D1", "path": svg.to_string_lossy()}),
@@ -531,7 +537,7 @@ fn notes_symbols_and_series_are_drawn() {
     );
     let text = std::fs::read_to_string(&svg).unwrap();
     assert!(text.contains("DEBURR") && text.contains("Ra 1.6"), "{text}");
-    let _ = std::fs::remove_file(&svg);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

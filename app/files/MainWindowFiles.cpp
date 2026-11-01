@@ -3,7 +3,8 @@
 // mitcad#145, projects/MainWindowProjectsPanel.cpp), Open (designs, and any
 // file Import takes, as a new document), Open from Project (mitcad#530,
 // MainWindowProjects.cpp), Open Recent, Open Read-Only, Close,
-// Save, Save As, Save with Description (P12d), Version History (P12e), the
+// Save, Save As, Save with Description (P12d), Version History (P12e),
+// Design Properties (mitcad#1088, browser/DesignPropertiesDialog.cpp), the
 // Project submenu (mitcad#89, MainWindowProjects.cpp), Import, Export,
 // Recover Designs (P8c, MainWindowAutosave.cpp); the INSERT group's Insert
 // Mesh and Insert DXF, and Insert Component in the ASSEMBLE group; files
@@ -33,14 +34,17 @@
 #include <QUrl>
 #include <QtLogging>
 
+#include "../browser/BrowserController.hpp"
 #include "../browser/DocumentSnapshot.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/IdleCall.hpp"
 #include "../framework/Json.hpp"
 #include "../framework/WaitCursor.hpp"
+#include "../report/ReportCenter.hpp"
 #include "../web/WebPage.hpp"
 #include "Autosave.hpp"
+#include "FileCommands.hpp"
 #include "FileDialogs.hpp"
 #include "FileFormats.hpp"
 #include "F3dImport.hpp"
@@ -99,16 +103,45 @@ QString menuEntries(const QMenu* menu, const QMenu* collapsed) {
   return entries.join(QStringLiteral(" | "));
 }
 
-// The hint after an import_file; the bodies it left out (empty ones) go to
-// the log.
-QString importedHint(const QString& name, const QJsonObject& result) {
-  const QJsonArray warnings = result.value(QStringLiteral("warnings")).toArray();
-  for (const QJsonValue warning : warnings) {
-    qWarning().noquote() << QStringLiteral("Import of %1: %2").arg(name, warning.toString());
+// A finished import's or export's status (mitcad#1040, docs/ui-conventions.md
+// "Messages and severity"): every one reports its warnings the same way, a
+// status line warning with their count and the first, the details in the
+// log (and its report, where it has one); without warnings, information.
+void showDone(DocumentHost& host, const QString& done, const QStringList& warnings, const QString& what) {
+  for (const QString& warning : warnings) {
+    qWarning().noquote() << QStringLiteral("%1: %2").arg(what, warning);
   }
-  return warnings.isEmpty()
-             ? QObject::tr("Imported %1.").arg(name)
-             : QObject::tr("Imported %1; %2 empty body(ies) left out.").arg(name).arg(warnings.size());
+  if (warnings.isEmpty()) {
+    host.showStatus(done, NoticeLevel::Information);
+    return;
+  }
+  host.showStatus(QObject::tr("%1 %n warning(s): %2", nullptr, static_cast<int>(warnings.size()))
+                      .arg(done, warnings.first()),
+                  NoticeLevel::Warning);
+}
+
+// A result's warnings: its warning notices, or its `warnings` (mitcad#1040).
+QStringList resultWarnings(const QJsonObject& result) {
+  QStringList warnings;
+  for (const QJsonValue& value : result.value(QStringLiteral("notices")).toArray()) {
+    const QJsonObject notice = value.toObject();
+    if (notice.value(QStringLiteral("level")).toString() != QStringLiteral("info")) {
+      warnings << notice.value(QStringLiteral("message")).toString();
+    }
+  }
+  if (warnings.isEmpty()) {
+    for (const QJsonValue& value : result.value(QStringLiteral("warnings")).toArray()) {
+      warnings << value.toString();
+    }
+  }
+  return warnings;
+}
+
+// The status after an import_file (mitcad#1040: its warnings, whatever they
+// are, as warnings with their count; the details in the log).
+void showImported(DocumentHost& host, const QString& name, const QJsonObject& result) {
+  showDone(host, QObject::tr("Imported %1.").arg(name), resultWarnings(result),
+           QStringLiteral("Import of %1").arg(name));
 }
 
 } // namespace
@@ -117,6 +150,21 @@ QString importedHint(const QString& name, const QJsonObject& result) {
 // Commands and the File menu
 
 void MainWindow::registerFileCommands() {
+  // The File menu's document commands (mitcad#1090): Open, Close, Save,
+  // Save As and Exit.
+  FileCommandRuns runs;
+  runs.open = [this] { openDocument(); };
+  runs.close = [this] { closeDocument(); };
+  runs.save = [this] { save(); };
+  runs.saveAs = [this] { saveAs(); };
+  runs.exit = [this] { close(); };
+  // A change since it was saved (the title's mark, which updateWindowTitle
+  // keeps; it refreshes Save's state too), an untitled design, or a
+  // read-only window, whose Save offers a copy or a new version.
+  runs.saveEnabled = [this] { return isWindowModified() || m_filePath.isEmpty() || windowReadOnly(); };
+  for (const CommandDef& fileCommand : fileDocumentCommands(runs)) {
+    m_registry->add(fileCommand);
+  }
   const auto def = [](const char* id, const QString& name, const char* icon, const QString& tooltip,
                       std::function<void()> run) {
     CommandDef d;
@@ -199,7 +247,7 @@ void MainWindow::registerFileCommands() {
   m_registry->add(drawingDef);
   // A drawing kept in the design (mitcad#707, drawings/MainWindowDrawings.cpp):
   // in the root's Drawings folder, opened at once.
-  CommandDef createDrawingDef = def("file.create_drawing", tr("Create Drawing"), "drawing",
+  CommandDef createDrawingDef = def("file.create_drawing", tr("Create Drawing…"), "drawing",
                                     tr("Adds a drawing of the design and opens its sheet"),
                                     [this] { createDrawing(QStringLiteral("C0")); });
   createDrawingDef.tab.clear(); // the File menu
@@ -207,10 +255,10 @@ void MainWindow::registerFileCommands() {
                                QStringLiteral("2d"), QStringLiteral("views")};
   m_registry->add(createDrawingDef);
   registerDrawingCommands();
-  // 3D Print (mitcad#13, mitcad#234, MainWindowPrint.cpp): a panel in the
-  // MAKE group, next to Render Image.
+  // Send to Slicer (mitcad#13, mitcad#234, MainWindowPrint.cpp; once 3D
+  // Print): a panel in the Make tab's 3D Print group (mitcad#1049).
   m_registry->add(print3dCommand());
-  // Printers and Processes (mitcad#655): next to 3D Print.
+  // Printers and Processes (mitcad#655): next to Send to Slicer.
   m_registry->add(printersCommand());
   CommandDef recover = def("file.recover", tr("Recover Designs…"), "recover",
                            tr("Restores changes that were not saved when MitCad last ended without closing"),
@@ -220,20 +268,35 @@ void MainWindow::registerFileCommands() {
   recover.keywords = {QStringLiteral("autosave"), QStringLiteral("crash"), QStringLiteral("restore"),
                       QStringLiteral("unsaved"), QStringLiteral("backup")};
   m_registry->add(recover);
+  // The design's summary (the root's property set Summary) and statistics
+  // (mitcad#1088, browser/DesignPropertiesDialog.cpp): in the File menu and
+  // the command search; a quick-access group may show it by its id.
+  CommandDef designProperties =
+      def("file.design_properties", tr("Design Properties…"), "properties",
+          tr("Edits the design's summary and shows when and by whom it was saved"),
+          [this] { m_controller->openDesignProperties(); });
+  designProperties.tab.clear(); // the File menu
+  designProperties.keywords = {QStringLiteral("summary"),    QStringLiteral("title"),
+                               QStringLiteral("author"),     QStringLiteral("subject"),
+                               QStringLiteral("keywords"),   QStringLiteral("comments"),
+                               QStringLiteral("metadata"),   QStringLiteral("statistics"),
+                               QStringLiteral("created"),    QStringLiteral("last saved"),
+                               QStringLiteral("title block"), QStringLiteral("file properties"),
+                               QStringLiteral("document properties")};
+  designProperties.enabled = [this] { return m_controller != nullptr; };
+  m_registry->add(designProperties);
 }
 
 void MainWindow::createFileMenu() {
   // mitcad#175: the document commands, saving and versions, the Project
-  // submenu, import and export, recovery, Exit. 3D Print and Insert
-  // Component are on the ribbon (MAKE, ASSEMBLE), Render Image too (MAKE)
-  // and in View > Visual Style.
+  // submenu, import and export, recovery, Exit. Send to Slicer and Insert
+  // Component are on the ribbon (the Make tab, ASSEMBLE), Render Image too
+  // (RENDER) and in View > Visual Style.
   QMenu* file = menuBar()->addMenu(tr("&File"));
   file->setObjectName(QStringLiteral("fileMenu"));
-  auto add = [this, file](const QString& text, const QKeySequence& shortcut, auto slot) {
-    QAction* action = file->addAction(text, this, slot);
-    action->setShortcut(shortcut);
-    return action;
-  };
+  // Every entry but Open Recent is a registry command (Open, Close, Save,
+  // Save As and Exit since mitcad#1090, files/FileCommands.cpp): its id,
+  // key, tooltip and search, and the quick-access group can show it.
   const auto command = [this](QMenu* menu, const char* id, const QString& text) {
     QAction* action = m_registry->action(QString::fromLatin1(id));
     action->setText(text);
@@ -243,7 +306,7 @@ void MainWindow::createFileMenu() {
   // project, named in the Projects panel (mitcad#145), else an untitled
   // one.
   command(file, "file.new_design", tr("&New Design…"));
-  add(tr("&Open…"), QKeySequence::Open, &MainWindow::openDocument);
+  command(file, "file.open", tr("&Open…"));
   // A design of a project, its folders browsed or its name searched
   // (mitcad#530).
   command(file, "file.open_from_project", tr("Open &from Project…"));
@@ -251,11 +314,10 @@ void MainWindow::createFileMenu() {
   connect(m_recentMenu, &QMenu::aboutToShow, this, &MainWindow::updateRecentMenu);
   updateRecentMenu();
   command(file, "file.open_read_only", tr("Open Rea&d-Only…"));
-  add(tr("&Close"), QKeySequence(Qt::CTRL | Qt::Key_W), &MainWindow::closeDocument)->setObjectName(QStringLiteral("command_file.close"));
+  command(file, "file.close", tr("&Close"));
   file->addSeparator();
-  add(tr("&Save"), QKeySequence::Save, &MainWindow::save);
-  // QKeySequence::SaveAs has no key on Windows.
-  add(tr("Save &As…"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S), &MainWindow::saveAs);
+  command(file, "file.save", tr("&Save"));
+  command(file, "file.save_as", tr("Save &As…"));
   // Save As into a project, a new one too (mitcad#503; File > Project >
   // Move to a Project before).
   command(file, "file.save_to_project", tr("Save to Pro&ject…"));
@@ -263,6 +325,8 @@ void MainWindow::createFileMenu() {
   // one with a description written; Version History (P12e) lists them.
   command(file, "file.save_version", tr("Save &with Description…"));
   command(file, "file.version_history", tr("Version &History…"));
+  // The design's summary and statistics (mitcad#1088).
+  command(file, "file.design_properties", tr("Design Proper&ties…"));
   file->addSeparator();
   // Local and Cloud projects (P12d, P12 remote, mitcad#89): made or opened;
   // the current one's versions shared; its settings.
@@ -293,7 +357,8 @@ void MainWindow::createFileMenu() {
   file->addSeparator();
 #endif
   // QuitRole: "Quit MitCad" (Cmd+Q) in the application menu on macOS.
-  add(tr("E&xit"), QKeySequence::Quit, &MainWindow::close)->setMenuRole(QAction::QuitRole);
+  command(file, "file.exit", tr("E&xit"));
+  m_registry->action(QStringLiteral("file.exit"))->setMenuRole(QAction::QuitRole);
   // For the UI tests: the entries as the menu opens.
   connect(file, &QMenu::aboutToShow, this, [this, file] {
     qDebug().noquote() << QStringLiteral("File menu: %1").arg(menuEntries(file, m_recentMenu));
@@ -485,7 +550,7 @@ bool MainWindow::startImportedDocument(const QString& path, QString& error) {
     qInfo().noquote() << QStringLiteral("Imported %1 as %2: %3 body(ies)")
                              .arg(name, result.value(QStringLiteral("name")).toString())
                              .arg(result.value(QStringLiteral("bodies")).toArray().size());
-    showHint(importedHint(name, result));
+    showImported(*this, name, result);
   }
   return true;
 }
@@ -508,7 +573,7 @@ void MainWindow::closeDocument() {
     return;
   }
   qInfo() << "Document closed";
-  showHint(tr("Create a sketch to start modelling. S searches for commands."));
+  showHint(tr("Create a sketch to start modeling. S searches for commands."));
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
@@ -629,7 +694,7 @@ bool MainWindow::importCad(const QString& path, double unitMillimetres, QString*
   qInfo().noquote() << QStringLiteral("Imported %1 as %2: %3 body(ies)")
                            .arg(QFileInfo(path).fileName(), result.value(QStringLiteral("name")).toString())
                            .arg(bodies.size());
-  showHint(importedHint(QFileInfo(path).fileName(), result));
+  showImported(*this, QFileInfo(path).fileName(), result);
   m_viewer->fitAll();
   return true;
 }
@@ -902,13 +967,18 @@ void MainWindow::startF3dImport(const QString& path, const QJsonObject& rerun, b
             m_import.clear();
             if (!ok) {
               if (error.isEmpty()) {
-                showHint(tr("Import of %1 cancelled.").arg(name));
+                showHint(tr("Import of %1 canceled.").arg(name));
                 return;
               }
               const QString message = tr("Could not import %1:\n%2").arg(QDir::toNativeSeparators(path), error);
               qWarning().noquote() << QStringLiteral("Import of %1 failed: %2").arg(name, error);
-              showError(message);
-              sheetWarning(this, tr("Import"), message);
+              // An error, shown once: its dialog (mitcad#1040); the status
+              // line keeps it in one line for the log.
+              qDebug().noquote() << QStringLiteral("Status error: %1").arg(message.simplified());
+              if (m_reports != nullptr) {
+                m_reports->errorShown(message); // a crash in the kernel (mitcad#62)
+              }
+              sheetCritical(this, tr("Import"), message);
               return;
             }
             // The process computed the design; this one reads it, with
@@ -922,7 +992,7 @@ void MainWindow::startF3dImport(const QString& path, const QJsonObject& rerun, b
             if (!installDocument(name, QString(), read, reason, handedOver)) {
               if (reason.isEmpty()) {
                 qInfo().noquote() << QStringLiteral("Opening the imported %1 cancelled").arg(name);
-                showHint(tr("Import of %1 cancelled.").arg(name));
+                showHint(tr("Import of %1 canceled.").arg(name));
               } else {
                 sheetWarning(this, tr("Import"), tr("Could not read the imported design:\n%1").arg(reason));
               }
@@ -999,9 +1069,14 @@ void MainWindow::startF3dImport(const QString& path, const QJsonObject& rerun, b
               qInfo().noquote() << QStringLiteral("Imported %1: documents referred to: %2")
                                        .arg(name, statuses.join(QStringLiteral(", ")));
             }
-            showHint(stop.isEmpty()
-                         ? tr("Imported %1.").arg(name)
-                         : tr("Imported %1; stopped early, the rest came in as the file's bodies.").arg(name));
+            // Its warnings as every import's (mitcad#1040): the outcomes
+            // that left something out, with their count; the details in
+            // the report.
+            QStringList warned = resultWarnings(result);
+            if (!stop.isEmpty()) {
+              warned.prepend(tr("stopped early, the rest came in as the file's bodies"));
+            }
+            showDone(*this, tr("Imported %1.").arg(name), warned, QStringLiteral("Import of %1").arg(name));
             showImportReport(this, name, result, bodies);
             // Items whose results deviate from the file's (mitcad#379):
             // asked once the report is closed, with the design in view.
@@ -1112,20 +1187,20 @@ void MainWindow::exportFile() {
     }
     if (!page.ok) {
       qWarning().noquote() << QStringLiteral("Export of %1 failed: %2").arg(choice->path, page.error);
-      sheetWarning(this, tr("Export"), tr("Could not export:\n%1").arg(page.error));
+      sheetCritical(this, tr("Export"), tr("Could not export:\n%1").arg(page.error));
       return;
-    }
-    for (const QString& warning : std::as_const(page.warnings)) {
-      qWarning().noquote() << QStringLiteral("Export: %1").arg(warning);
     }
     qInfo().noquote() << QStringLiteral("Exported %1: html, %2 body(ies), %3 bytes")
                              .arg(choice->path)
                              .arg(page.bodies)
                              .arg(page.bytes);
-    showHint(tr("Exported %1 (%2 body(ies), %3).")
+    // Its warnings as every export's (mitcad#1040).
+    showDone(*this,
+             tr("Exported %1 (%2 body(ies), %3).")
                  .arg(QDir::toNativeSeparators(choice->path))
                  .arg(page.bodies)
-                 .arg(QLocale().formattedDataSize(page.bytes)));
+                 .arg(QLocale().formattedDataSize(page.bytes)),
+             page.warnings, QStringLiteral("Export"));
     return;
   }
   QJsonObject command;
@@ -1166,7 +1241,7 @@ void MainWindow::exportFile() {
   }
   QJsonObject result;
   if (!runCommand(command, &result)) {
-    sheetWarning(this, tr("Export"), tr("Could not export:\n%1").arg(m_lastError));
+    sheetCritical(this, tr("Export"), tr("Could not export:\n%1").arg(m_lastError));
     return;
   }
   QString what = choice->format == QStringLiteral("dxf")
@@ -1181,18 +1256,17 @@ void MainWindow::exportFile() {
   if (choice->format == QStringLiteral("usdz")) {
     // The materials, and textures written in their base colour.
     what += tr(", %1 material(s)").arg(result.value(QStringLiteral("materials")).toArray().size());
-    for (const QJsonValue warning : result.value(QStringLiteral("warnings")).toArray()) {
-      qWarning().noquote() << QStringLiteral("Export: %1").arg(warning.toString());
-    }
   }
   qInfo().noquote() << QStringLiteral("Exported %1: %2, %3").arg(choice->path, choice->format, what);
-  showHint(tr("Exported %1 (%2).").arg(QDir::toNativeSeparators(choice->path), what));
+  // Its warnings as every export's (mitcad#1040).
+  showDone(*this, tr("Exported %1 (%2).").arg(QDir::toNativeSeparators(choice->path), what), resultWarnings(result),
+           QStringLiteral("Export"));
 }
 
 void MainWindow::exportSketch(const QString& sketch) {
   const QString name = featureName(sketch);
   const QString suggested = QDir(dialogFolder(DialogGroup::Export)).filePath(name + QStringLiteral(".dxf"));
-  const QString path = dialogSaveFileName(this, tr("Save As DXF"), suggested, tr("DXF drawings (*.dxf)"));
+  const QString path = dialogSaveFileName(this, tr("Export DXF"), suggested, tr("DXF drawings (*.dxf)"));
   if (path.isEmpty()) {
     return;
   }
@@ -1200,7 +1274,7 @@ void MainWindow::exportSketch(const QString& sketch) {
   QJsonObject result;
   if (!runCommand(cmd("export_sketch", {{QStringLiteral("sketch"), sketch}, {QStringLiteral("path"), path}}),
                   &result)) {
-    sheetWarning(this, tr("Save As DXF"), tr("Could not export:\n%1").arg(m_lastError));
+    sheetCritical(this, tr("Export DXF"), tr("Could not export:\n%1").arg(m_lastError));
     return;
   }
   qInfo().noquote() << QStringLiteral("Exported %1: dxf, %2 entities")

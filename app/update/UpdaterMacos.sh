@@ -74,7 +74,7 @@ trap 'fail "the macOS update was interrupted"' HUP INT TERM
 echo "Update: waiting for process $old_pid to quit"
 count=0
 while kill -0 "$old_pid" 2>/dev/null; do
-  [ "$count" -lt 300 ] || fail 'Mitcad did not quit within five minutes'
+  [ "$count" -lt 300 ] || fail 'MitCad did not quit within five minutes'
   /bin/sleep 1
   count=$((count + 1))
 done

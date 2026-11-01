@@ -75,6 +75,11 @@ export MITCAD_SKETCH_FIRST_DIMENSION_SCALE=0
 # nothing (mitcad#960): the tests' picks stay as they were. A test of the
 # question sets it to 1 after sourcing this file.
 export MITCAD_ASK_ACTIVATE_COMPONENT=0
+# Command panels start from their defaults, not from the values given on
+# an earlier OK (mitcad#1028): a step's fillet never changes where a later
+# step's Fillet starts. A test of the remembered values sets it to 1 before
+# ui_start_app.
+export MITCAD_REMEMBER_PANEL_VALUES=0
 # No browser either: an address the app would open (a report's issue form,
 # mitcad#61) is logged instead ("Open URL (test, not opened): <url>").
 export MITCAD_TEST_LOG_URLS=1
@@ -558,7 +563,7 @@ ui_panel_reveal() {
   local panel
   # Also a row of an inspection's result ("Panel <command> result <name>",
   # mitcad#1010) and the places of the Measure panel's own section
-  # ("Measure Keep as Dimension"), logged with the panel's; not its
+  # ("Measure history"), logged with the panel's; not its
   # buttons, which stay in view under the page.
   if [[ $1 =~ ^Panel\ (.+)\ input\ [^\ ]+$ ]] || [[ $1 =~ ^Panel\ (.+)\ result\  ]]; then
     panel=${BASH_REMATCH[1]}
@@ -651,6 +656,40 @@ ui_create_sketch() {
     sleep 0.2
   done
   ui_fail "no sketch started on $plane"
+}
+
+# ui_show_origin: the Origin folder's light bulb on, unless it is already
+# (mitcad#1030). A command's input shows the origin's point, axes and
+# planes in the view only as the light bulb does (Create Sketch's plane
+# pick shows the planes whatever it says), so a test that clicks them
+# there ("Datum xy", "Datum z") switches it on first. Works during a
+# command too (mitcad#295); the caller's mark is kept.
+ui_show_origin() {
+  local mark=${UI_MARK:-0}
+  if ! grep -o "Design origin .*" "$UI_LOG" | tail -1 | grep -q "light bulb on$"; then
+    ui_mark
+    ui_step "show the origin (light bulb)" ui_click_logged "Browser eye Root/Origin"
+    ui_expect_new "Visibility Root/Origin: shown" "the origin shown by its light bulb"
+    ui_expect_new "Datum xy at" "the origin in the view"
+  fi
+  UI_MARK=$mark
+}
+
+# ui_pick_origin_row XY: a click on the origin's row (O, X, Y, Z, XY, XZ or
+# YZ) in the browser's Origin folder, which a command's active input takes
+# as it takes a click in the view, also while the origin is hidden
+# (mitcad#1030); the folder is opened first when its rows are folded. The
+# view stays as it is (no light bulb switched). The caller's mark is kept.
+ui_pick_origin_row() {
+  local row="Browser Root/Origin/$1" last mark=${UI_MARK:-0}
+  last=$(grep -F -e "$row at " -e "$row out of sight" "$UI_LOG" | tail -1)
+  if [[ $last != *" at "* ]]; then
+    ui_mark
+    ui_step "open the Origin folder"       ui_click_logged "Browser arrow Root/Origin"
+    ui_expect_new "$row at " "the origin's rows in the browser"
+  fi
+  UI_MARK=$mark
+  ui_step "pick $1 in the browser"         ui_click_logged "$row"
 }
 
 # The sketch view's placement, logged as "Sketch view x0,y0 x1,y1 x2,y2":
@@ -961,6 +1000,52 @@ ui_choose() {
   ui_key Return
 }
 
+# ui_choose_text "Panel <command> input <id>" "text": opens a panel's
+# drop-down and chooses the entry whose label starts with the text by the
+# list's type-ahead, then Enter.
+ui_choose_text() {
+  ui_click_logged "$1"
+  ui_sync
+  ui_type_ahead "$2"
+  ui_sync
+  ui_key Return
+}
+
+# ui_picker_choose "Panel <command> input <id>" "Material picker" "name": a
+# click on the picker button of the Material or Appearance tool
+# (mitcad#1059) opens its picker (a window titled "Material Picker"); the
+# name typed in its search, Enter chooses the first entry that contains
+# it, which must be that name; the main window has the keyboard again.
+ui_picker_choose() {
+  local from line title
+  from=$(wc -l < "$UI_LOG")
+  ui_click_logged "$1"
+  for _ in $(seq 1 40); do
+    tail -n +$((from + 1)) "$UI_LOG" | grep -qF "$2 opened: " && break
+    sleep 0.2
+  done
+  tail -n +$((from + 1)) "$UI_LOG" | grep -qF "$2 opened: " || ui_fail "the $2 did not open"
+  title="${2% picker} Picker"
+  ui_focus_dialog "^$title\$"
+  xdotool type --delay 40 -- "$3"
+  for _ in $(seq 1 40); do
+    line=$(tail -n +$((from + 1)) "$UI_LOG" | grep -F "$2 search: $3, first " | tail -1)
+    [ -n "$line" ] && break
+    sleep 0.2
+  done
+  [ "$line" = "$2 search: $3, first $3" ] || ui_fail "the $2 finds '${line##*first }' first for '$3'"
+  ui_key Return
+  for _ in $(seq 1 40); do
+    if tail -n +$((from + 1)) "$UI_LOG" | grep -qxF "$2 chose: $3"; then
+      ui_focus_main
+      echo "ok   $3 chosen in the $2"
+      return
+    fi
+    sleep 0.2
+  done
+  ui_fail "the $2 did not choose $3"
+}
+
 # ui_expect_volume "sed pattern with one \( \) group" expected description
 # [tolerance]: the last logged number the pattern captures equals the
 # expected volume (relative tolerance, default 1e-6).
@@ -1022,6 +1107,7 @@ ui_finish() {
 # Pulley, Gear, Bearing) on the XY plane at the origin: a click on the
 # plane while Place On takes picks, then both distances 0 in the panel.
 ui_place_on_xy() {
+  ui_show_origin
   ui_mark
   ui_step "Place On: the XY plane"         ui_click_logged "Datum xy"
   ui_expect_new "Place $1: face plane xy, " "placed on the XY plane" 30
@@ -1030,4 +1116,45 @@ ui_place_on_xy() {
   ui_expect_new "$1 Distance 1: 0 = 0 mm" "Distance 1 typed" 30
   ui_expect_new "$1 Distance 2: 0 = 0 mm" "Distance 2 typed" 30
   ui_expect_new "Preview $1: ok" "previewed at the origin" 30
+}
+
+# ui_save_state enabled|disabled description: Save's state as the
+# quick-access group logged it last ("Quick access file.save enabled",
+# "Quick access file.save disabled: no unsaved changes"; mitcad#1090: Save
+# is disabled while an unchanged design has nothing to save), waited for.
+ui_save_state() {
+  local last=""
+  for _ in $(seq 1 30); do
+    last=$(grep -F "Quick access file.save " "$UI_LOG" | grep -v -e " at " -e " out of sight" | tail -1)
+    case "$1:$last" in
+      enabled:*" enabled")
+        echo "ok   $2"
+        return
+        ;;
+      disabled:*" disabled: "*)
+        echo "ok   $2 (${last#*disabled: })"
+        return
+        ;;
+    esac
+    sleep 0.2
+  done
+  ui_fail "$2: Save is not $1 (last: '$last')"
+}
+
+# ui_save_if_changed file: Ctrl+S and "Saved <file>" while Save is enabled;
+# while the design has nothing to save (Save disabled, mitcad#1090: an
+# undo back to the saved state, a step that changed nothing) the file
+# already holds it, and nothing is pressed. For tests that save to read the
+# file; ui_save_state checks Save's state itself.
+ui_save_if_changed() {
+  local last
+  ui_sync
+  last=$(grep -F "Quick access file.save " "$UI_LOG" | grep -v -e " at " -e " out of sight" | tail -1)
+  if [[ $last == *" disabled: "* ]]; then
+    echo "ok   nothing to save: $1 holds the design"
+    return
+  fi
+  ui_mark
+  ui_key ctrl+s
+  ui_expect_new "Saved $1" "saved"
 }

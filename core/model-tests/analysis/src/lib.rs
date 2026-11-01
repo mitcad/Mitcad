@@ -13,3 +13,7 @@ mod image_reference_tests;
 mod measure_tests;
 mod measurement_tests;
 mod plane_geometry_tests;
+// Material and process notes (mitcad#1049).
+mod body_note_tests;
+// Physical Properties' boxes, counts and component scopes (mitcad#1095).
+mod physical_properties_tests;

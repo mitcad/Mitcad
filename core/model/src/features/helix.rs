@@ -5,7 +5,7 @@
 //! section of the tool in a plane through the axis is the profile turned
 //! there; the coil's sections are fixed shapes at right angles to its
 //! helix instead. A growth also moves the profiles out as they turn, by
-//! Mitcad's construction or FreeCAD's ([`HelixConstruction`], mitcad#83).
+//! MitCad's construction or FreeCAD's ([`HelixConstruction`], mitcad#83).
 
 use serde::{Deserialize, Serialize};
 
@@ -51,9 +51,9 @@ pub struct HelixDef<P = ParamId> {
         skip_serializing_if = "Option::is_none"
     )]
     pub growth: Option<P>,
-    /// How a growth is built (mitcad#83): Mitcad's own construction unless
+    /// How a growth is built (mitcad#83): MitCad's own construction unless
     /// FreeCAD's ([`HelixConstruction`]). A command without it means
-    /// Mitcad's; a stored growing helix always has it, except in files
+    /// MitCad's; a stored growing helix always has it, except in files
     /// written before it existed, which mean FreeCAD's
     /// ([`HelixDef::settle_construction`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -127,7 +127,7 @@ fn end_angle(value: f64, what: &str) -> Result<f64, String> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HelixConstruction {
-    /// Mitcad's: the screw motion with the profiles moved out along the
+    /// MitCad's: the screw motion with the profiles moved out along the
     /// direction from the axis towards them, in proportion to the turn.
     Mitcad,
     /// FreeCAD's construction of its conical and growing helices, for the
@@ -171,7 +171,7 @@ impl<P> HelixDef<P> {
         })
     }
 
-    /// Gives a growing helix without a construction `construction`: Mitcad's
+    /// Gives a growing helix without a construction `construction`: MitCad's
     /// for a command, FreeCAD's for a file written before mitcad#83 (its
     /// growing helices came from the FreeCAD import, built that way).
     pub(crate) fn settle_construction(&mut self, construction: HelixConstruction) {
@@ -233,7 +233,7 @@ impl FeatureInfo for HelixDef {
         if self.construction == Some(HelixConstruction::Freecad)
             && (self.start.is_some() || self.end.is_some())
         {
-            return Err("a helix with flat ends is built by Mitcad's construction".to_owned());
+            return Err("a helix with flat ends is built by MitCad's construction".to_owned());
         }
         if !(0.0..1.0 / 3.0).contains(&self.piece_shift) {
             return Err(format!(
@@ -382,7 +382,10 @@ fn worth_retrying<K: Kernel>(
     participants: &[(BodyUid, K::Shape)],
     tool: &K::Shape,
 ) -> bool {
-    if KernelError::is_out_of_memory(failure) || failure.contains("cancelled") {
+    if KernelError::is_out_of_memory(failure)
+        || failure.contains("cancelled")
+        || failure.contains("canceled")
+    {
         return false;
     }
     let Ok(Some(tool)) = ctx.kernel.bounding_box(tool) else {

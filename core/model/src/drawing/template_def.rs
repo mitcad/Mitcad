@@ -133,7 +133,7 @@ impl Revision {
 impl SheetTemplate {
     /// Why it cannot be used, if it cannot.
     pub fn check(&self) -> Result<(), String> {
-        let at = format!("template '{}'", self.id);
+        let at = format!("template {}", self.id);
         if let Some(format) = &self.format
             && format != TEMPLATE_FORMAT
         {
@@ -175,12 +175,12 @@ impl SheetTemplate {
         for field in &block.fields {
             let finite = field.at.iter().chain(&field.size).all(|v| v.is_finite());
             if !finite || field.size[0] <= 0.0 || field.size[1] <= 0.0 {
-                return Err(format!("{at}: the field '{}' has no cell", field.text));
+                return Err(format!("{at}: the field {} has no cell", field.text));
             }
             if let Some(h) = field.height
                 && !(h.is_finite() && h > 0.0)
             {
-                return Err(format!("{at}: the field '{}' has no height", field.text));
+                return Err(format!("{at}: the field {} has no height", field.text));
             }
         }
         if let Some(table) = &self.revision_table
@@ -201,12 +201,12 @@ impl SheetTemplate {
     /// its margins leave a frame, and its title block with the revision
     /// table's room fits in the frame.
     pub fn fits(&self, width: f64, height: f64) -> Result<(), String> {
-        let at = format!("template '{}'", self.id);
+        let at = format!("template {}", self.id);
         let (min, max) = self.frame(width, height);
         let (w, h) = (max[0] - min[0], max[1] - min[1]);
         if !(w > 0.0 && h > 0.0) {
             return Err(format!(
-                "{at}: its margins leave no frame on a {width} x {height} mm sheet"
+                "{at}: its margins leave no frame on a {width} × {height} mm sheet"
             ));
         }
         let block = &self.title_block;

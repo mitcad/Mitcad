@@ -284,14 +284,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   }
 
   if (!arguments.wait.empty()) {
-    note(L"Waiting for Mitcad (process " + arguments.wait + L") to end");
+    note(L"Waiting for MitCad (process " + arguments.wait + L") to end");
     const HANDLE process =
         OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(std::wcstoul(arguments.wait.c_str(), nullptr, 10)));
     if (process != nullptr) {
       const DWORD waited = WaitForSingleObject(process, 120000);
       CloseHandle(process);
       if (waited != WAIT_OBJECT_0) {
-        note(L"Mitcad did not end within two minutes, so the update was not installed");
+        note(L"MitCad did not end within two minutes, so the update was not installed");
         return 1;
       }
     }

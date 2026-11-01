@@ -57,8 +57,10 @@ bool runSlicerImport(PrintItemsHost& host, const QString& path, const QString& i
 
 // The installed Bambu-family slicers with their user presets
 // (`slicer_presets`), each preset with the item of its name `into` has;
-// empty when there are none or the query failed.
-QJsonArray installedSlicers(PrintItemsHost& host, const QString& into);
+// empty when there are none or the query failed. `merge` (when given)
+// gets the target's separate materials of one filament (mitcad#1054, the
+// query's `merge`).
+QJsonArray installedSlicers(PrintItemsHost& host, const QString& into, QJsonArray* merge = nullptr);
 
 // The row of a print window (My Library, Printers and Processes): the last
 // import's line, Details… beside it once an import has a report, and
@@ -95,6 +97,10 @@ private:
   QString into() const;
   // Looks for installed slicers again: the button's text follows.
   void findSlicers();
+  // The same off the UI thread (an opening, mitcad#1018); logs
+  // "<log> slicers: read <n> ms, <n> found".
+  void findSlicersAhead();
+  void showSlicers(const QJsonArray& slicers);
   void importClicked();
   void importFile();
   // Opens the presets of the slicer `index` of m_slicers and imports
@@ -114,6 +120,8 @@ private:
   QPushButton* m_import = nullptr;
   PrintImportSummary m_summary;
   QJsonArray m_slicers; // installedSlicers when last looked
+  QJsonArray m_merge;   // ... and the target's separate materials of one filament (mitcad#1054)
+  int m_finds = 0;      // looks so far: only the latest one's answer is shown
   QString m_loggedPlaces;
 };
 

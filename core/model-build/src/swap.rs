@@ -207,7 +207,13 @@ impl<K: Kernel> SwapBuild<K> for Document<K> {
                 let (seat, override_frame, _) = self.wood_seat(&used)?;
                 (Some(seat), override_frame)
             } else {
-                (own.clone(), None)
+                // A connector's screw keeps its seat on the connector's wall
+                // (mitcad#1115): its own frame's override stays.
+                let kept = match self.feature(joint).map(|e| &e.def) {
+                    Some(FeatureDef::Joint(j)) => j.a.frame_override,
+                    _ => None,
+                };
+                (own.clone(), kept)
             };
             let shown = designation(&source.def, config.as_deref(), &BTreeMap::new());
             swaps.push(Swap {

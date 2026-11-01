@@ -5,11 +5,11 @@
 # ui-*-test.sh, so no check picks it up). It builds the chapter's example,
 # the shelf, step by step and saves one small picture per step, each cut
 # out of the screen and checked to be under 200 kB:
-#   <dir>/shelf-1-parameters.png  the Parameters window (Change Parameters)
+#   <dir>/shelf-1-parameters.png  the Parameters window (Edit Parameters)
 #                                 with the user parameters Color and Length
 #   <dir>/shelf-2-options.png     the Configurations window's Options tab
 #                                 after Add Option… for Color and Length
-#   <dir>/shelf-3-bar.png         the browser's Configuration bar after
+#   <dir>/shelf-3-bar.png         the Configuration panel after
 #                                 Length 1200 typed in its field
 #   <dir>/shelf-4-rows.png        the Rows tab with the row Standard (White,
 #                                 1200 mm), made with Add Row, renamed and set
@@ -29,7 +29,7 @@
 # picture.
 #
 # What to look for: each window whole and nothing else of the screen; the
-# bar's pictures show the whole width of the browser's top with the
+# bar's pictures show the whole width of the Configuration panel with the
 # Configuration bar, and in the last one the notice "Length 1200 mm →
 # 1000 mm: Black is short" under the choosers.
 #
@@ -124,18 +124,19 @@ window_shot() {
   shot "$2" "$wx" "$wy" "$ww" "$wh"
 }
 
-# bar_shot name below: the top of the browser with the Configuration bar,
-# the browser's width across, from above the row box to <below> pixels
-# under the last chooser (room for the notice).
+# bar_shot name below: the Configuration panel (mitcad#1020: a card of its
+# own above the browser's), its width across, from above its header to
+# <below> pixels under the last chooser (room for the notice).
 bar_shot() {
-  local left top bottom width card
+  local left top bottom width card cardTop=""
   local -a anchor row last
-  # The Floating layout logs the browser's card ("browserDock x,y wxh"):
-  # the picture takes the card's whole width.
-  card=$(grep "^Floating cards:" "$UI_LOG" | tail -1 | grep -o "browserDock [0-9]*,[0-9]* [0-9]*x" | tr ',x' '  ')
+  # The Floating layout logs the panel's card ("configurationDock x,y
+  # wxh"): the picture takes the card's whole width and its header.
+  card=$(grep "^Floating cards:" "$UI_LOG" | tail -1 | grep -o "configurationDock [0-9]*,[0-9]* [0-9]*x" | tr ',x' '  ')
   if [ -n "$card" ]; then
-    read -r _ left _ width <<< "$card"
+    read -r _ left cardTop width <<< "$card"
     left=$((X + (left - 2) * UI_SCALE))
+    cardTop=$((Y + (cardTop - 2) * UI_SCALE))
   else
     if grep -q "^Browser arrow Root at " "$UI_LOG"; then
       # The disclosure arrow sits in the indentation at the tree's left.
@@ -156,6 +157,7 @@ bar_shot() {
     read -r -a last <<< "$(ui_logged_at "Configuration bar Length")"
   fi
   top=$((row[1] - 22 * UI_SCALE))
+  [ -n "$cardTop" ] && top=$cardTop
   [ "$top" -lt 0 ] && top=0
   bottom=$((last[1] + $2 * UI_SCALE))
   shot "$1" "$left" "$top" $(((width + 4) * UI_SCALE)) $((bottom - top))
@@ -203,7 +205,7 @@ grep -q "Recompute failed\|Failed features: [^n]" "$UI_LOG" && ui_fail "a featur
 
 echo "--- 1. The user parameters"
 ui_mark
-ui_step "Change Parameters (search)"     ui_command "Change Parameters"
+ui_step "Edit Parameters (search)"     ui_command "Edit Parameters"
 ui_expect_new "Parameters dialog opened" "the Parameters window opened"
 ui_focus_dialog '^Parameters$'
 window_shot '^Parameters$' shelf-1-parameters

@@ -6,18 +6,18 @@
 # library's socket head cap screws (M5 and M6, their rows tagged with
 # their standards and suppliers' articles) with the generator, fetches the
 # library, opens Insert from Library on the screw, inserts it and opens
-# Library Parts, and saves pictures on the light and the dark theme (Qt's
+# Library Components, and saves pictures on the light and the dark theme (Qt's
 # GTK platform theme, MITCAD_TEST_COLOR_SCHEME):
 #   <dir>/library-fields-<theme>.png            the whole screen, the browser
 #   <dir>/library-fields-<theme>-browser.png    the browser's window alone
-#   <dir>/library-fields-<theme>-parts.png      Library Parts' window alone
+#   <dir>/library-fields-<theme>-parts.png      Library Components' window alone
 # The app's log as <dir>/look-<theme>.log, with the "Library fields at x:"
 # lines (the last dumps stay as <dir>/screen.xwd and <dir>/dialog.xwd).
 #
 # What to look for: in the browser's side panel the fields of Version,
 # Standard, Supplier, Size and Length start at one x (their labels one
 # column), and so do Version, the filters and Size and Length under the
-# parts table in Library Parts; the text readable on both themes.
+# parts table in Library Components; the text readable on both themes.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-library-fields-look.sh <dir>
@@ -87,11 +87,11 @@ for theme in light dark; do
   ui_focus_main
   ui_expect_new "Inserted component " "the screw inserted"
   ui_mark
-  ui_step "Library Parts (command search)"   ui_command "Library Parts"
-  ui_focus_dialog '^Library Parts$'
-  ui_expect_new "Library fields at x: Version " "Library Parts' fields logged"
+  ui_step "Library Components (command search)"   ui_command "Library Components"
+  ui_focus_dialog '^Library Components$'
+  ui_expect_new "Library fields at x: Version " "Library Components' fields logged"
   grep "^Library fields at x: " "$UI_LOG" | tail -1
-  shot '^Library Parts$' "$theme-parts"
+  shot '^Library Components$' "$theme-parts"
   ui_step "close (Escape)"                   ui_key Escape
   ui_focus_main
   cp -f "$UI_LOG" "$DIR/look-$theme.log"

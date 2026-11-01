@@ -391,7 +391,7 @@ pub fn seen_curve(
                     Ok(Seen::Point(mid(project(*start), project(*end))))
                 }
                 CurveGeometry::Other { kind, .. } => {
-                    Err(format!("a {kind} edge has no centre to pick"))
+                    Err(format!("a {kind} edge has no center to pick"))
                 }
             };
         }
@@ -739,7 +739,7 @@ pub fn lay_out(
             Seen::Axis { a, b, .. } => centerline(&mut g, frame.at(a), frame.at(b), 0.0, 0.0),
             _ => {
                 return Err(
-                    "a centre mark is of a circle seen end on, or of a round face seen from \
+                    "a center mark is of a circle seen end on, or of a round face seen from \
                      the side"
                         .to_owned(),
                 );
@@ -1313,7 +1313,7 @@ fn centerline_of(g: &mut Group, seen: &[Seen], frame: &Frame<'_>) -> Result<(), 
             Ok(())
         }
         [one] => Err(format!(
-            "a centreline of one pick is a round face's axis, not a {}",
+            "a centerline of one pick is a round face's axis, not a {}",
             match one {
                 Seen::Point(_) => "point",
                 Seen::Line(..) => "straight edge",
@@ -1325,7 +1325,7 @@ fn centerline_of(g: &mut Group, seen: &[Seen], frame: &Frame<'_>) -> Result<(), 
             let d = unit2(sub2(*b1, *a1));
             let d2 = unit2(sub2(*b2, *a2));
             if vec2::cross(d, d2).abs() > 1e-6 {
-                return Err("a centreline between edges needs parallel edges".to_owned());
+                return Err("a centerline between edges needs parallel edges".to_owned());
             }
             let o = mid(mid(*a1, *b1), mid(*a2, *b2));
             let ts: Vec<f64> = [a1, b1, a2, b2]
@@ -1346,12 +1346,12 @@ fn centerline_of(g: &mut Group, seen: &[Seen], frame: &Frame<'_>) -> Result<(), 
         [p, q] => {
             let (a, b) = (frame.at(p.point()), frame.at(q.point()));
             if len2(sub2(b, a)) < 1e-9 {
-                return Err("the picks share their centre".to_owned());
+                return Err("the picks share their center".to_owned());
             }
             centerline(g, a, b, rim(p), rim(q));
             Ok(())
         }
-        _ => Err("a centreline takes one or two picks".to_owned()),
+        _ => Err("a centerline takes one or two picks".to_owned()),
     }
 }
 
@@ -1392,7 +1392,7 @@ fn center_pattern(g: &mut Group, seen: &[Seen], frame: &Frame<'_>) -> Result<(),
         .iter()
         .map(|s| mark_of(s, frame))
         .collect::<Option<_>>()
-        .ok_or_else(|| "a centre pattern is of circles seen end on".to_owned())?;
+        .ok_or_else(|| "a center pattern is of circles seen end on".to_owned())?;
     let pen = |r: f64| if r >= 4.0 { Pen::Chain } else { Pen::Thin };
     // The two farthest apart, and a third off their line.
     let (mut i, mut j, mut far) = (0, 0, 0.0);

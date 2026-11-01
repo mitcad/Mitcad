@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use mitcad_model::notice::{self, Notice, NoticeLevel};
 use serde::Serialize;
 
 pub use crate::components::ComponentReport;
@@ -40,6 +41,16 @@ impl Outcome {
             Self::Partial => "partial",
             Self::Fallback => "fallback",
             Self::Skipped => "skipped",
+        }
+    }
+
+    /// The outcome's level (mitcad#1040): an item that came in as asked is
+    /// information; one that came in partly, as a fallback or not at all
+    /// is a warning.
+    pub fn level(self) -> NoticeLevel {
+        match self {
+            Self::Parametric => NoticeLevel::Info,
+            Self::Partial | Self::Fallback | Self::Skipped => NoticeLevel::Warning,
         }
     }
 }
@@ -513,6 +524,20 @@ impl DesignReport {
         counts
     }
 
+    /// The import's notices (mitcad#1040): what its items' outcomes left
+    /// out, the worst first, then its warnings.
+    pub fn notices(&self) -> Vec<Notice> {
+        let items = |n| notice::count(n, "item", "items");
+        let mut notices = notice::outcome_notices(self.counts(), Outcome::level, |o, n| match o {
+            Outcome::Parametric => format!("{} imported", items(n)),
+            Outcome::Partial => format!("{} imported partly", items(n)),
+            Outcome::Fallback => format!("{} replaced by the file's bodies", items(n)),
+            Outcome::Skipped => format!("{} skipped", items(n)),
+        });
+        notices.extend(self.warnings.iter().map(|w| Notice::warning(w.as_str())));
+        notices
+    }
+
     /// (type, outcome) → count, for coverage tables.
     pub fn coverage(&self) -> BTreeMap<(String, Outcome), usize> {
         let mut counts = BTreeMap::new();
@@ -564,7 +589,7 @@ impl DesignReport {
             let n = |p| inputs.get(&p).copied().unwrap_or(0);
             let _ = writeln!(
                 out,
-                "  modelling inputs: {} read, {} inferred, {} unknown",
+                "  modeling inputs: {} read, {} inferred, {} unknown",
                 n(InputProvenance::Read),
                 n(InputProvenance::Inferred),
                 n(InputProvenance::Unknown)
@@ -728,7 +753,7 @@ impl DesignReport {
         if s.rolled_back_as_features + s.rolled_back_as_placeholders > 0 {
             let _ = writeln!(
                 out,
-                "  rolled back in the file: {} modelling items as features after the marker, {} \
+                "  rolled back in the file: {} modeling items as features after the marker, {} \
                  as placeholders",
                 s.rolled_back_as_features, s.rolled_back_as_placeholders
             );
@@ -744,7 +769,7 @@ impl DesignReport {
             };
             let _ = writeln!(
                 out,
-                "  suppressed in the file: {} modelling items as suppressed features, {} as \
+                "  suppressed in the file: {} modeling items as suppressed features, {} as \
                  placeholders{indirect}",
                 s.suppressed_as_features, s.suppressed_as_placeholders
             );
@@ -833,5 +858,21 @@ fn truncate(text: &str, width: usize) -> String {
         let mut t: String = text.chars().take(width - 1).collect();
         t.push('~');
         t
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::*;
+
+    #[test]
+    fn outcomes_map_onto_the_levels() {
+        // (mitcad#1040) Partial and fallback items and skipped ones are
+        // warnings; the import's notices from them are tested on a real
+        // import in the import's `timeline_note_tests`.
+        assert_eq!(Outcome::Parametric.level(), NoticeLevel::Info);
+        assert_eq!(Outcome::Partial.level(), NoticeLevel::Warning);
+        assert_eq!(Outcome::Fallback.level(), NoticeLevel::Warning);
+        assert_eq!(Outcome::Skipped.level(), NoticeLevel::Warning);
     }
 }

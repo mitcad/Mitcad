@@ -14,6 +14,9 @@
 #      it; undo makes it inactive again.
 #   4. Delete removes it; the saved design has no constraint and no
 #      dimension.
+#   5. Sketch2 (F2): two horizontal lines and a parallel between them that
+#      their horizontals imply. Edited, the Sketch Palette shows the
+#      redundant constraint as a warning (mitcad#1051).
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-sketch-inactive-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -44,7 +47,19 @@ Set-Content -Encoding ascii $script @'
    "reason": "not met in the imported file"},
   {"cmd": "sketch.drag", "sketch": "F1", "entity": "p3", "to": [30, 20]},
   {"cmd": "sketch.add_dimension", "sketch": "F1", "value": 20,
-   "dimension": {"type": "vertical_distance", "a": "p1", "b": "p3"}}
+   "dimension": {"type": "vertical_distance", "a": "p1", "b": "p3"}},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy",
+    "entities": [
+      {"id": "p1", "type": "point", "at": [0, -30]},
+      {"id": "p2", "type": "point", "at": [30, -30]},
+      {"id": "c3", "type": "line", "start": "p1", "end": "p2"},
+      {"id": "p4", "type": "point", "at": [0, -40]},
+      {"id": "p5", "type": "point", "at": [30, -40]},
+      {"id": "c6", "type": "line", "start": "p4", "end": "p5"}],
+    "constraints": [
+      {"id": "k7", "type": "horizontal", "line": "c3"},
+      {"id": "k8", "type": "horizontal", "line": "c6"},
+      {"id": "k9", "type": "parallel", "a": "c3", "b": "c6"}]}}
 ]
 '@
 $made = & $cli run $script --save $design
@@ -123,5 +138,15 @@ Set-Content -Encoding ascii $check @'
 $checked = & $cli run $check --open $design
 if ($LASTEXITCODE -ne 0) { Ui-Fail "the saved sketch: $($checked -join ' / ')" }
 Write-Host 'ok   no constraint and no dimension saved'
+
+Write-Host '--- Redundant constraints: a warning (mitcad#1051)'
+Ui-Mark
+Ui-Step 'edit Sketch2 (double-click)'    { Ui-DoubleClickLogged 'Timeline Sketch2' }
+Ui-ExpectNew 'Editing sketch F2 (Sketch2)' 'Sketch2 edited' 30
+Ui-ExpectNew 'Sketch Palette solve: warning: Redundant constraints (they follow from the others): k' `
+  'the Sketch Palette shows the redundant constraint as a warning'
+Ui-Mark
+Ui-Step 'finish sketch (Ctrl+Enter)'     { Ui-Key 'ctrl+Return' }
+Ui-ExpectNew 'Sketch finished' 'Sketch2 finished'
 
 Ui-Finish 'Windows UI sketch inactive constraint test'

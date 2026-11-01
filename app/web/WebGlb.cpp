@@ -506,7 +506,7 @@ int GlbWriter::mesh(const render::MeshData& data, int bodyMaterial,
 }
 
 void appendUint32(QByteArray& out, std::uint32_t value) {
-  // glb is little-endian, as every platform Mitcad builds for.
+  // glb is little-endian, as every platform MitCad builds for.
   char bytes[4];
   std::memcpy(bytes, &value, sizeof value);
   out.append(bytes, 4);
@@ -519,7 +519,7 @@ QByteArray GlbWriter::finish() {
   }
   QJsonObject root{
       {QStringLiteral("asset"),
-       QJsonObject{{QStringLiteral("version"), QStringLiteral("2.0")}, {QStringLiteral("generator"), QStringLiteral("Mitcad")}}},
+       QJsonObject{{QStringLiteral("version"), QStringLiteral("2.0")}, {QStringLiteral("generator"), QStringLiteral("MitCad")}}},
       {QStringLiteral("scene"), 0},
       {QStringLiteral("scenes"), QJsonArray{scene}}};
   // glTF's arrays have at least one item when they are there.

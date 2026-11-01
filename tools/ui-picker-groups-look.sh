@@ -18,8 +18,8 @@
 # The app's log as <dir>/look-<theme>.log, with the "Part picker groups:"
 # lines (the last dump stays as <dir>/dialog.xwd).
 #
-# What to look for: each group row ends with its count (Favourites with
-# none greyed); under Würth only All parts and General fasteners with its
+# What to look for: each group row ends with its count (Favorites with
+# none greyed); under Würth only All components and General fasteners with its
 # Screws and Nuts are left besides the chosen Wood, which is greyed with
 # (0) (also while selected) and readable on both themes; the details
 # panel says that Wood has no parts with these filters.
@@ -108,7 +108,7 @@ for theme in light dark; do
   ui_step "Supplier Würth (Alt+R, W)"        eval 'ui_key alt+r; ui_sync; ui_type_ahead "W"'
   ui_expect_new "Part picker supplier wurth" "the Supplier filter on Würth"
   ui_expect_new "Part picker groups: " "the groups under the filter"
-  ui_expect_new "Library browser empty: No parts in Wood with this search and these filters." \
+  ui_expect_new "Library browser empty: No components in Wood with this search and these filters." \
     "the details say why Wood is empty"
   grep "^Part picker groups: " "$UI_LOG" | tail -1
   shot "$theme-filtered"

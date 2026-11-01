@@ -111,7 +111,7 @@ const Choices& sizeChoices(const CommandContext& context, const std::shared_ptr<
     for (const QJsonValue& value : sizes) {
       const QJsonObject size = value.toObject();
       const QString designation = size.value(QStringLiteral("designation")).toString();
-      cache->append({designation, QStringLiteral("%1 (%2 x %3 x %4)")
+      cache->append({designation, QStringLiteral("%1 (%2 × %3 × %4)")
                                       .arg(designation, number(size.value(QStringLiteral("bore")).toDouble()),
                                            number(size.value(QStringLiteral("outside_diameter")).toDouble()),
                                            number(size.value(QStringLiteral("width")).toDouble()))});
@@ -348,7 +348,7 @@ CommandDef bearingCommand(const CommandContext& context) {
     }
     for (const QJsonValue& value : values.value(QStringLiteral("purchased")).toArray()) {
       const QJsonObject item = value.toObject();
-      parts << QObject::tr("buy %1 x %2")
+      parts << QObject::tr("buy %1 × %2")
                    .arg(item.value(QStringLiteral("quantity")).toInt())
                    .arg(item.value(QStringLiteral("designation")).toString());
     }

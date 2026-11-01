@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser/AppearanceDialog app/platform/MacDialogs.hpp app/platform/macos/NativeDialogs tools/ui-scripts/appearance-edit-keys-script.py
+# check-all sources: app/browser/AppearanceDialog app/browser/LibraryPicker app/commands/MaterialCommands app/platform/MacDialogs.hpp app/platform/macos/NativeDialogs app/platform/NativePicker app/platform/macos/NativePicker tools/ui-scripts/appearance-edit-keys-script.py
 # Return/Enter commit appearance fields without closing the editor (#977),
-# in Qt and AppKit, light/dark. Actual keys and pointer/button actions,
-# validation, exact undo steps and independently saved model values.
+# in Qt and AppKit, light/dark; the new appearance assigned with the
+# Appearance tool and its picker (mitcad#1066). Actual keys and
+# pointer/button actions, validation, exact undo steps and independently
+# saved model values.
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/ui-macos-lib.sh"
@@ -49,4 +51,4 @@ assert document["bodies"][0]["appearance"] == "custom1", document["bodies"]
 PY
   [ "$?" = 0 ] || exit 1
 done
-echo "PASS: $frontend appearance commits, retention, validation, Close/Escape and saved values; $UI_OUT"
+echo "PASS: $frontend appearance commits, retention, validation, Close/Escape, the Appearance tool's picker and saved values; $UI_OUT"

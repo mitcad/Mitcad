@@ -362,7 +362,7 @@ impl FeatureInfo for LoftDef {
                 || !self.rails.is_empty()
             {
                 return Err(
-                    "a loft of curve sections has no end conditions, centre line or rails"
+                    "a loft of curve sections has no end conditions, center line or rails"
                         .to_owned(),
                 );
             }
@@ -423,10 +423,10 @@ impl FeatureInfo for LoftDef {
             }
         }
         if self.centerline.is_some() && !self.rails.is_empty() {
-            return Err("a loft has a centre line or rails, not both".to_owned());
+            return Err("a loft has a center line or rails, not both".to_owned());
         }
         if self.closed && (self.centerline.is_some() || !self.rails.is_empty()) {
-            return Err("a closed loft has no centre line or rails".to_owned());
+            return Err("a closed loft has no center line or rails".to_owned());
         }
         if self.closed && imposed {
             return Err("a closed loft has no end conditions".to_owned());
@@ -444,7 +444,7 @@ impl FeatureInfo for LoftDef {
         if let Some(frame) = &self.frame {
             if self.centerline.is_none() {
                 return Err(
-                    "a loft's frame turns its sections along a centre line: it needs one"
+                    "a loft's frame turns its sections along a center line: it needs one"
                         .to_owned(),
                 );
             }
@@ -464,12 +464,12 @@ impl FeatureInfo for LoftDef {
         if self.orientation == SweepOrientation::Parallel {
             if self.centerline.is_none() {
                 return Err(
-                    "a parallel loft moves its sections along a centre line: it needs one"
+                    "a parallel loft moves its sections along a center line: it needs one"
                         .to_owned(),
                 );
             }
             if self.frame.is_some() {
-                return Err("a parallel loft along a centre line takes no frame".to_owned());
+                return Err("a parallel loft along a center line takes no frame".to_owned());
             }
         }
         Ok(())
@@ -555,7 +555,7 @@ impl<K: Kernel> Evaluate<K> for LoftDef {
             });
         }
         let centerline: Option<Vec<PathCurve>> = match &self.centerline {
-            Some(path) => Some(path.resolve(ctx).map_err(|e| format!("centre line: {e}"))?),
+            Some(path) => Some(path.resolve(ctx).map_err(|e| format!("center line: {e}"))?),
             None => None,
         };
         let mut rails: Vec<Vec<PathCurve>> = Vec::new();

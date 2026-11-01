@@ -977,7 +977,7 @@ fn wall_layout(w: &WallGeo, span: &WallSpan) -> Result<Layout, ModelError> {
     }
     if w.spacing <= ts + EPS {
         return Err(refuse(format!(
-            "the centre distance of {} mm is not more than a stud's {} mm",
+            "the center distance of {} mm is not more than a stud's {} mm",
             round(w.spacing),
             round(ts)
         )));
@@ -1634,7 +1634,7 @@ fn floor_layout(f: &FloorGeo) -> Result<Layout, ModelError> {
     let wj = f.joist.depth();
     if f.spacing <= tj + EPS {
         return Err(refuse(format!(
-            "the centre distance of {} mm is not more than a joist's {} mm",
+            "the center distance of {} mm is not more than a joist's {} mm",
             round(f.spacing),
             round(tj)
         )));
@@ -2013,7 +2013,7 @@ fn roof_layout(r: &RoofGeo) -> Result<Layout, ModelError> {
     // The rafters' places along the walls.
     if r.spacing <= tr + EPS {
         return Err(refuse(format!(
-            "the centre distance of {} mm is not more than a rafter's {} mm",
+            "the center distance of {} mm is not more than a rafter's {} mm",
             round(r.spacing),
             round(tr)
         )));
@@ -2270,7 +2270,7 @@ impl<K: Kernel> FramesBuild<K> for Document<K> {
         // Named first, so that a refusal names it (mitcad#536).
         match &def.name {
             Some(name) if world.iter().any(|k| k.def.name.as_deref() == Some(name)) => {
-                return Err(refuse(format!("a frame is already named '{name}'")));
+                return Err(refuse(format!("a frame is already named {name}")));
             }
             Some(_) => {}
             None => def.name = Some(self.free_frame_name(kind, &world)),
@@ -3342,7 +3342,7 @@ impl<K: Kernel> FramesCrateOps<K> for Document<K> {
                 )
             } else {
                 format!(
-                    "{name} would end {} mm from {}'s centre line, not beyond its side",
+                    "{name} would end {} mm from {}'s center line, not beyond its side",
                     round(length),
                     x.name
                 )

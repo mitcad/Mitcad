@@ -12,8 +12,9 @@
 # distance; no rows, no rules.
 #   1. Configurations…, Options: Size selected, Edit Domain…, Table Column
 #      (Alt+T; Screws.Size is offered), OK: Size's values are the column.
-#   2. Rows: Generate Rows from Table… offers Screws.Size for Size; OK
-#      makes the rows M3, M4 and M5 (one undo step).
+#   2. Rows: Generate Rows from Table… offers Screws.Size for Size and the
+#      other columns dk and Length checked (mitcad#1044); both unchecked,
+#      OK makes the rows M3, M4 and M5 of the key only (one undo step).
 #   3. Rules: Add › Empty rule (Add offers a table's template too), named
 #      "Made sizes"; the palette's combination in table put in its then
 #      from the keyboard; its table typed (Screws): the options' columns
@@ -97,7 +98,13 @@ ui_mark
 ui_step "Generate Rows from Table…"      ui_click_logged "Configurations generate rows"
 ui_expect_new "Generate Rows dialog opened: Screws.Size for Size" \
   "the column Size's values come from, and Size, are offered"
+ui_expect_new "Generate Rows columns: dk, Length; checked: dk, Length" \
+  "the table's other columns are offered as parameter columns, all checked (mitcad#1044)"
 ui_focus_dialog '^Generate Rows from Table$'
+# The key only: the lookups do the rest (HeadDia), and the rule below
+# narrows Length.
+ui_step "dk and Length off (Alt+C, Space, Tab, Space)" ui_key alt+c space Tab space
+ui_expect_new "Generate Rows columns: dk, Length; checked: none" "no other column"
 ui_step "Generate (Enter)"               ui_key Return
 ui_expect_new "Configurations generated rows from Screws.Size for Size: 3 rows from Screws: added M3, M4, M5" \
   "a row per size"

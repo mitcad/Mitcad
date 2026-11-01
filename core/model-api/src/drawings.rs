@@ -481,6 +481,87 @@ thread_local! {
     /// The kernel's projections made on this thread and their
     /// milliseconds, for the trace's line per sheet.
     static PROJECTIONS: std::cell::Cell<(u64, f64)> = const { std::cell::Cell::new((0, 0.0)) };
+    /// The views' projections a drawing command or the `drawing` query
+    /// asked for on this thread ([`noting`], mitcad#1033); none while
+    /// nothing collects them.
+    static NOTES: std::cell::RefCell<Option<Vec<ProjectionNote>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A view's projection as a drawing command or the `drawing` query asked
+/// for it (mitcad#1033): the view, how many bodies it shows, whether the
+/// kernel projected them (its milliseconds) or the projection came from
+/// the cache, and whether it was made from a triangulation (the quick
+/// path or the polygonal style) instead of the exact edges. The
+/// application writes one line of each to its log.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ProjectionNote {
+    pub(super) view: u32,
+    pub(super) bodies: usize,
+    pub(super) ms: f64,
+    pub(super) cached: bool,
+    pub(super) polygonal: bool,
+}
+
+impl ProjectionNote {
+    fn json(&self) -> Value {
+        json!({
+            "view": self.view,
+            "bodies": self.bodies,
+            "ms": (self.ms * 10.0).round() / 10.0,
+            "cached": self.cached,
+            "polygonal": self.polygonal,
+        })
+    }
+}
+
+/// Notes a view's projection while [`noting`] collects them: one per
+/// view, projected when any of its projections ran the kernel (their
+/// milliseconds added up), else from the cache.
+fn note_projection(note: ProjectionNote) {
+    NOTES.with(|notes| {
+        let mut notes = notes.borrow_mut();
+        let Some(notes) = notes.as_mut() else {
+            return;
+        };
+        match notes.iter_mut().find(|n| n.view == note.view) {
+            Some(n) => {
+                n.bodies = note.bodies;
+                n.polygonal = note.polygonal;
+                if !note.cached {
+                    if n.cached {
+                        n.ms = 0.0;
+                    }
+                    n.cached = false;
+                    n.ms += note.ms;
+                }
+            }
+            None => notes.push(note),
+        }
+    });
+}
+
+/// Runs `work` and gives the views' projections it asked for
+/// ([`ProjectionNote`]); a collection that was running goes on after it.
+pub(super) fn noting<T>(work: impl FnOnce() -> T) -> (T, Vec<ProjectionNote>) {
+    let outer = NOTES.with(|notes| notes.borrow_mut().replace(Vec::new()));
+    let out = work();
+    let notes = NOTES.with(|notes| std::mem::replace(&mut *notes.borrow_mut(), outer));
+    (out, notes.unwrap_or_default())
+}
+
+/// An answer with the views' projections its work asked for
+/// (`projections`, mitcad#1033), when there are any.
+pub(super) fn with_projections(mut answer: Value, notes: &[ProjectionNote]) -> Value {
+    if !notes.is_empty()
+        && let Some(object) = answer.as_object_mut()
+    {
+        object.insert(
+            "projections".to_owned(),
+            Value::Array(notes.iter().map(ProjectionNote::json).collect()),
+        );
+    }
+    answer
 }
 
 /// The phases of one step for the trace, printed when it ends.
@@ -852,7 +933,7 @@ fn set_fields(
     if let Some(units) = units {
         let units = units.trim();
         if !units.is_empty() && Units::by_symbol(units).is_none() {
-            return Err(ApiError(format!("unknown length unit '{units}'")));
+            return Err(ApiError(format!("unknown length unit “{units}”")));
         }
         sheet.units = (!units.is_empty()).then(|| units.to_owned());
     }
@@ -882,7 +963,12 @@ fn shading_inside_circle(shading: &[(Vec<P2>, f64)], center: P2, radius: f64) ->
 /// extension trait (mitcad#777): the api can then live in a crate above
 /// the model.
 pub(super) trait DrawingsOps<K: Kernel> {
+    /// A drawing command, its answer with the views' projections it asked
+    /// for (`projections`, mitcad#1033).
     fn run_drawing_command(&mut self, command: DrawingCommand) -> Result<Value, ApiError>;
+
+    /// A drawing command alone.
+    fn drawing_command_now(&mut self, command: DrawingCommand) -> Result<Value, ApiError>;
 
     /// The bodies a subject shows in a drawing's component: the shown
     /// bodies of the component or of an occurrence below it, or chosen
@@ -928,6 +1014,11 @@ pub(super) trait DrawingsOps<K: Kernel> {
 
 impl<K: Kernel> DrawingsOps<K> for Document<K> {
     fn run_drawing_command(&mut self, command: DrawingCommand) -> Result<Value, ApiError> {
+        let (answer, notes) = noting(|| self.drawing_command_now(command));
+        answer.map(|answer| with_projections(answer, &notes))
+    }
+
+    fn drawing_command_now(&mut self, command: DrawingCommand) -> Result<Value, ApiError> {
         match command {
             DrawingCommand::AddDrawing(c) => self.add_drawing_command(*c),
             DrawingCommand::EditDrawing(c) => {
@@ -1271,6 +1362,8 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             view_shown: BTreeMap::new(),
         };
         let mut ids: Vec<String> = Vec::new();
+        // Threads drawn by ISO 6410 (mitcad#1112).
+        let threads = super::drawing::drawing_threads(self);
         for view in &sheet.views {
             let mut work = || -> Result<Worked, String> {
                 if let Some(parent) = view.kind.parent()
@@ -1294,7 +1387,37 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                     };
                     own.push(i);
                 }
-                let mut projection = self.projected(&shown, &spec)?;
+                // Noted for the log (mitcad#1033): the kernel's projection
+                // and its milliseconds, or the cache's.
+                let asked = std::time::Instant::now();
+                let (made, made_ms) = PROJECTIONS.with(std::cell::Cell::get);
+                let projection = self.projected(&shown, &spec);
+                let (now, now_ms) = PROJECTIONS.with(std::cell::Cell::get);
+                if !shown.is_empty() {
+                    let cached = now == made;
+                    note_projection(ProjectionNote {
+                        view: view.id,
+                        bodies: shown.len(),
+                        ms: if cached {
+                            asked.elapsed().as_secs_f64() * 1e3
+                        } else {
+                            now_ms - made_ms
+                        },
+                        cached,
+                        polygonal: projection.as_ref().is_ok_and(|p| p.polygonal),
+                    });
+                }
+                let mut projection = projection?;
+                // The threads of its bodies by convention, before a
+                // detail's circle or a break cuts the lines.
+                let placed = super::drawing::placed_threads(&threads, &shown);
+                if !placed.is_empty() {
+                    projection = Arc::new(mitcad_model_drawing::convention::with_threads(
+                        &projection,
+                        &spec,
+                        &placed,
+                    ));
+                }
                 let mut shading = if style.shaded {
                     Some(self.shaded(&shown, &spec)?)
                 } else {
@@ -1420,7 +1543,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
         let sheet = &drawing.sheets[si];
         let units = match &sheet.units {
             Some(symbol) => Units::by_symbol(symbol)
-                .ok_or_else(|| ApiError(format!("unknown length unit '{symbol}'")))?,
+                .ok_or_else(|| ApiError(format!("unknown length unit “{symbol}”")))?,
             None => Units::of(self.parameters().context().default_length_unit),
         };
         let mut evaluated = self.evaluate_views(drawing, si);
@@ -1482,7 +1605,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
         // each view tags those of the bodies it shows.
         let mut holes: Vec<HoleInput> = Vec::new();
         if sheet.annotations.dimensions || sheet.annotations.hole_table {
-            let threads = super::drawing::threads_of(&self.threads_json());
+            let threads = super::drawing::drawing_threads(self);
             // The holes of each body shown (indices into `holes`).
             let mut of_body: Vec<Vec<usize>> = Vec::new();
             for s in &evaluated.shown {
@@ -1655,7 +1778,9 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                 drawing.name, query.sheet
             )));
         }
-        let drawn = self.draw_sheet(drawing, query.sheet, query.title.as_deref())?;
+        let (drawn, notes) =
+            noting(|| self.draw_sheet(drawing, query.sheet, query.title.as_deref()));
+        let drawn = drawn?;
         let sheets: Vec<Value> = drawing
             .sheets
             .iter()
@@ -1710,12 +1835,13 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                     value["title_fields"] = json!(drawn.title_fields);
                     if query.geometry {
                         value["groups"] = groups_json(&drawn.composed.sheet);
+                        value["pens"] = pens_json();
                     }
                 }
                 value
             })
             .collect();
-        Ok(json!({
+        let answer = json!({
             "drawing": drawing.uid,
             "name": drawing.name,
             "component": drawing.component,
@@ -1732,7 +1858,9 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             // (mitcad#729): null for the engine's decimals, 3.5 mm.
             "decimals": drawing.defaults.decimals,
             "text_height": drawing.defaults.text_height,
-        }))
+        });
+        // The drawn sheet's views' projections, for the log (mitcad#1033).
+        Ok(with_projections(answer, &notes))
     }
 }
 
@@ -1970,7 +2098,7 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
                 let parent = parent_of(c.parent)?;
                 let map = view_map(sheet, parent);
                 let center = c.center.ok_or_else(|| {
-                    ApiError("a detail view needs its circle's centre on the parent".to_owned())
+                    ApiError("a detail view needs its circle's center on the parent".to_owned())
                 })?;
                 let radius = c.radius.unwrap_or(10.0);
                 if !(radius.is_finite() && radius > 0.0) {
@@ -2577,14 +2705,23 @@ fn view_json(sheet: &DrawingSheet, view: &DrawingView) -> Value {
 }
 
 fn pen_name(pen: Pen) -> &'static str {
-    match pen {
-        Pen::Thick => "thick",
-        Pen::Thin => "thin",
-        Pen::Hidden => "hidden",
-        Pen::Hatch => "hatch",
-        Pen::Chain => "chain",
-        Pen::Frame => "frame",
-    }
+    pen.name()
+}
+
+/// The pens' widths and dashes (sheet millimetres) by their names, as the
+/// writers draw them (mitcad#1112): the application draws the sheet with
+/// these instead of a copy of its own.
+pub(super) fn pens_json() -> Value {
+    let pens: serde_json::Map<String, Value> = Pen::ALL
+        .iter()
+        .map(|p| {
+            (
+                p.name().to_owned(),
+                json!({"width": p.width(), "dashes": p.dashes()}),
+            )
+        })
+        .collect();
+    Value::Object(pens)
 }
 
 /// A sheet's groups for the application to draw: each item with its pen,

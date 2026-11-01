@@ -16,6 +16,9 @@ public:
   ~LiveServer() override;
   bool start(QString* error);
 
+protected:
+  bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
   struct State;
   std::unique_ptr<State> m_state;

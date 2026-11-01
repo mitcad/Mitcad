@@ -99,8 +99,8 @@ fn decimal_commas() {
 fn decimal_comma_arguments_get_a_suggestion() {
     assert_eq!(
         parse_err("max(1,5)").to_string(),
-        "'max' takes at least 2 arguments, found 1; separate them with ';' or a space \
-         after the comma: 'max(1; 5)' at byte 0"
+        "max takes at least 2 arguments, found 1; separate them with ';' or a space \
+         after the comma: “max(1; 5)” at byte 0"
     );
     let suggestion = |text: &str| match parse_err(text).kind {
         ParseErrorKind::WrongArgumentCount { suggestion, .. } => suggestion,
@@ -271,6 +271,37 @@ fn references() {
 }
 
 #[test]
+fn plain_numbers_are_numbers_as_typed() {
+    for text in [
+        "90",
+        "7.5",
+        "-90",
+        "+90",
+        "450 deg",
+        "1.5 rad",
+        "-7.5 deg",
+        "(-7.5) deg",
+        "(90)",
+    ] {
+        assert!(parse(text).is_plain_number(), "{text}");
+    }
+    for text in [
+        "d1",
+        "-d1",
+        "d1 + 30 deg",
+        "360 deg + 90 deg",
+        "2 * 90",
+        "--90",
+        "PI",
+        "abs(-90)",
+        "(d1) deg",
+        "'90'",
+    ] {
+        assert!(!parse(text).is_plain_number(), "{text}");
+    }
+}
+
+#[test]
 fn lookup_implementations() {
     let e = parse("x * 2");
     let mut hash = HashMap::new();
@@ -411,17 +442,14 @@ fn parse_errors_have_byte_positions() {
 
 #[test]
 fn error_messages() {
-    assert_eq!(
-        parse_err("5 xyz").to_string(),
-        "unknown unit 'xyz' at byte 2"
-    );
+    assert_eq!(parse_err("5 xyz").to_string(), "unknown unit xyz at byte 2");
     assert_eq!(
         parse_err("2 ** 3").to_string(),
         "use '^' for powers, not '**' at byte 2"
     );
     assert_eq!(
         eval_err("1 mm + 2 deg").to_string(),
-        "cannot apply '+' to length and angle at byte 0"
+        "cannot apply “+” to length and angle at byte 0"
     );
     assert_eq!(
         eval_as("d * d", &[("d", len(1.0))], Unit::MM)
@@ -1122,7 +1150,7 @@ fn table_reports_unknown_names() {
     );
     assert_eq!(
         error.to_string(),
-        "parameter 'x': unknown parameter 'depth' at byte 8"
+        "parameter x: unknown parameter depth at byte 8"
     );
     assert!(t.find("x").is_none());
     let error = ParameterTable::build(ctx(), [spec("a", "b", Unit::MM)]).unwrap_err();
@@ -1284,7 +1312,7 @@ fn table_keeps_decimal_points() {
     assert_eq!(t.get(w).unwrap().expression(), "1.5");
     // Errors refer to the text as written.
     let error = t.set_expression(w, "max(1,5)").unwrap_err();
-    assert!(error.to_string().contains("'max(1; 5)'"), "{error}");
+    assert!(error.to_string().contains("“max(1; 5)”"), "{error}");
     assert_eq!(t.value(h), 1.5 * 1.5 + 2.5);
     // A rename rewrites the stored text, with its points.
     t.rename(w, "width").unwrap();
@@ -1702,7 +1730,7 @@ fn rounding_to_digits_and_steps() {
     );
     assert_eq!(
         parse_err("round(1; 2; 3)").to_string(),
-        "'round' takes 1 to 2 arguments, found 3 at byte 0"
+        "round takes 1 to 2 arguments, found 3 at byte 0"
     );
     assert!(matches!(
         parse_err("mround(1)").kind,
@@ -2933,16 +2961,13 @@ fn lookup_type_errors() {
     let text = "XLOOKUP('M5'; Bolts.Size; Bolts.dk)";
     let e = look_err(text);
     assert!(matches!(e, EvalError::UnknownTable { .. }), "{e}");
-    assert_eq!(e.to_string(), "unknown table 'Bolts' at byte 14");
+    assert_eq!(e.to_string(), "unknown table Bolts at byte 14");
     let span = e.span().unwrap();
     assert_eq!(&text[span.start..span.end], "Bolts");
     let text = "XLOOKUP('M5'; Screws.Size; Screws.dx)";
     let e = look_err(text);
     assert!(matches!(e, EvalError::UnknownColumn { .. }), "{e}");
-    assert_eq!(
-        e.to_string(),
-        "table 'Screws' has no column 'dx' at byte 34"
-    );
+    assert_eq!(e.to_string(), "table Screws has no column dx at byte 34");
     let span = e.span().unwrap();
     assert_eq!(&text[span.start..span.end], "dx");
     // A lookup without tables (the trait's default) knows none.
@@ -3027,7 +3052,7 @@ fn columns_outside_lookups_are_refused() {
     }
     assert_eq!(
         parse_err("INDEX(2; 1)").to_string(),
-        "argument 1 of 'index' must be a column such as Table.Column at byte 6"
+        "argument 1 of index must be a column such as Table.Column at byte 6"
     );
     // The dot only between names, with no spaces.
     for text in ["Screws .dk", "Screws. dk", "Screws.", ".dk"] {

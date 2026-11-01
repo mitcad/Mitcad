@@ -92,11 +92,11 @@ ui_expect_log "Body F2.b0 at" "the boxes are in the view"
 
 echo "--- 1. 3D Print: the Purge volumes row and its table, computed"
 ui_mark
-ui_command "3D Print"
-ui_expect_new "Panel 3D Print note purge: Computed [Edit]" "the row says the volumes are computed"
-ui_expect_new "Panel 3D Print action purge.0 at" "its pencil has its place"
+ui_command "Send to Slicer"
+ui_expect_new "Panel Send to Slicer note purge: Computed [Edit]" "the row says the volumes are computed"
+ui_expect_new "Panel Send to Slicer action purge.0 at" "its pencil has its place"
 ui_mark
-ui_step "the pencil"                       ui_click_logged "Panel 3D Print action purge.0"
+ui_step "the pencil"                       ui_click_logged "Panel Send to Slicer action purge.0"
 ui_expect_new "Purge volumes opened: White PLA, Black PETG" "the table of the two filaments, in the order of use"
 ui_expect_new "Purge volume White PLA → Black PETG = 140 mm³" "white to black: 70 out of white, 70 into black"
 ui_expect_new "Purge volume Black PETG → White PLA = 420 mm³" "black to white: 210 and 210, dark to light takes more"
@@ -111,7 +111,7 @@ xdotool type --delay 40 "300"
 ui_key Return
 ui_expect_new "Purge volume set: White PLA → Black PETG = 300 mm³" "Enter set it"
 ui_expect_new "Purge volume White PLA → Black PETG = 300 mm³ (set by hand)" "the cell is marked as set by hand"
-ui_expect_new "Panel 3D Print note purge: 1 set by hand [Edit]" "the row counts it"
+ui_expect_new "Panel Send to Slicer note purge: 1 set by hand [Edit]" "the row counts it"
 summary=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Purge volume Black PETG → White PLA = " | tail -1)
 case $summary in
   *"set by hand"*) ui_fail "the other pair changed: $summary" ;;
@@ -125,12 +125,12 @@ ui_step "White PLA → Black PETG"           ui_click_logged "Purge volumes cell
 ui_step "Reset"                            ui_click_logged "Purge volumes reset"
 ui_expect_new "Purge volumes reset: 1" "Reset took the pair's own volume away"
 ui_expect_new "Purge volume White PLA → Black PETG = 140 mm³" "the computed volume again"
-ui_expect_new "Panel 3D Print note purge: Computed [Edit]" "the row says computed again"
+ui_expect_new "Panel Send to Slicer note purge: Computed [Edit]" "the row says computed again"
 
 echo "--- 4. The material editor's Filament tab: the purge fields"
 ui_focus_main
 ui_mark
-ui_step "the Materials row's pencil"       ui_click_logged "Panel 3D Print action materials.0"
+ui_step "the Materials row's pencil"       ui_click_logged "Panel Send to Slicer action materials.0"
 ui_expect_new "Materials opened" "Materials opened for the bodies printed"
 ui_expect_new "Materials item White PLA at" "White PLA is listed"
 ui_focus_dialog '^Materials$'

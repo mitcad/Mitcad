@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cassert>
 #include <mach/kern_return.h>
+#include <unistd.h>
 
 namespace mitcad::render {
 MacFrameSurfaces::~MacFrameSurfaces() {
@@ -26,13 +27,22 @@ bool MacFrameSurfaces::create(std::uint32_t width, std::uint32_t height, std::st
   // A 64-byte-aligned row with no padding: FrameSink writes packed pixels
   // for the current frame, which can be narrower than this allocation.
   // RGhA is the system's RGBA half-float pixel format.
+  const auto systemPage = sysconf(_SC_PAGESIZE);
+  if (systemPage <= 0) { error = "could not determine the IOSurface allocation page size"; return false; }
+  const auto page = static_cast<std::size_t>(systemPage);
+  const auto bytes = planeBytes(width, height);
+  // Reserve the tail padding in IOSurface itself: Metal's bytes-no-copy
+  // buffer requires whole pages, even for a frame smaller than one page.
+  // The row stride and packed pixel extent stay unchanged.
+  const auto allocation = bytes + (bytes % page == 0 ? 0 : page - bytes % page);
   const std::int64_t values[] = {
-      width, height, kBytesPerPixel, static_cast<std::int64_t>(width * kBytesPerPixel), 0x52476841};
+      width, height, kBytesPerPixel, static_cast<std::int64_t>(width * kBytesPerPixel), 0x52476841,
+      static_cast<std::int64_t>(allocation)};
   const void* keys[] = {kIOSurfaceWidth, kIOSurfaceHeight, kIOSurfaceBytesPerElement,
-                        kIOSurfaceBytesPerRow, kIOSurfacePixelFormat};
-  CFNumberRef numbers[5]{};
-  const void* propertyValues[5];
-  for (int i = 0; i < 5; ++i) {
+                        kIOSurfaceBytesPerRow, kIOSurfacePixelFormat, kIOSurfaceAllocSize};
+  CFNumberRef numbers[6]{};
+  const void* propertyValues[6];
+  for (int i = 0; i < 6; ++i) {
     numbers[i] = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt64Type, &values[i]);
     if (numbers[i] == nullptr) {
       for (int previous = 0; previous < i; ++previous) { CFRelease(numbers[previous]); }
@@ -42,7 +52,7 @@ bool MacFrameSurfaces::create(std::uint32_t width, std::uint32_t height, std::st
     propertyValues[i] = numbers[i];
   }
   const auto properties = CFDictionaryCreate(kCFAllocatorDefault, keys, propertyValues,
-                                            5, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+                                            6, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
   if (properties != nullptr) {
     for (auto& surface : m_surfaces) { surface = IOSurfaceCreate(properties); }
     CFRelease(properties);
@@ -52,8 +62,10 @@ bool MacFrameSurfaces::create(std::uint32_t width, std::uint32_t height, std::st
   }
   for (IOSurfaceRef surface : m_surfaces) {
     if (surface == nullptr || IOSurfaceGetBytesPerRow(surface) != width * kBytesPerPixel ||
-        IOSurfaceGetAllocSize(surface) < planeBytes(width, height)) {
-      error = "IOSurface allocation does not match the packed half-float frame";
+        IOSurfaceGetAllocSize(surface) < allocation || IOSurfaceGetAllocSize(surface) % page != 0 ||
+        !IOSurfaceGetBaseAddress(surface) ||
+        reinterpret_cast<std::uintptr_t>(IOSurfaceGetBaseAddress(surface)) % page != 0) {
+      error = "IOSurface allocation does not match the page-aligned packed half-float frame";
       return false;
     }
   }

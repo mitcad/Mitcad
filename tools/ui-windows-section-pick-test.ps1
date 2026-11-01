@@ -124,8 +124,8 @@ Ui-Step 'isometric view (Shift+F3)'         { Ui-Key 'shift+F3' }
 Ui-Step 'fit (F6)'                          { Ui-Key 'F6' }
 Ui-Mark
 Ui-Step 'section analysis (Shift+F4)'       { Ui-Key 'shift+F4' }
-Ui-ExpectNew 'Datum yz at' 'the origin planes shown'
-Ui-Step 'pick YZ'                           { Ui-ClickLogged 'Datum yz' }
+# YZ from the browser: the hidden origin stays hidden (mitcad#1030).
+Ui-PickOriginRow 'YZ'
 Ui-ExpectNew 'Section analysis at' 'the bodies shown cut'
 Ui-Mark
 Ui-Step '15 along X'                        { Ui-TypeIn 'Panel Section Analysis input offset' '15' }
@@ -145,7 +145,7 @@ Ui-WaitIdle
 Write-Host '--- A feature preview at the section (mitcad#943)'
 # Chamfer on the top front edge of the cut Body1: the preview's body is
 # clipped at x = 15 on the section worker's thread, and its caps follow it:
-# 199.5 mm² with the 1 mm bevel across the cut, 200 without.
+# 199.5 mm^2 with the 1 mm bevel across the cut, 200 without.
 Ui-Mark
 Ui-Step 'chamfer (Shift+F5)'                { Ui-Key 'shift+F5' }
 Ui-ExpectNew 'Pick places:' 'Chamfer logs where its picks are'
@@ -195,8 +195,8 @@ Ui-Step 'isometric view (Shift+F3)'         { Ui-Key 'shift+F3' }
 Ui-Step 'fit (F6)'                          { Ui-Key 'F6' }
 Ui-Mark
 Ui-Step 'section analysis (Shift+F4)'       { Ui-Key 'shift+F4' }
-Ui-ExpectNew 'Datum yz at' 'the origin planes shown'
-Ui-Step 'pick YZ'                           { Ui-ClickLogged 'Datum yz' }
+# YZ from the browser: the hidden origin stays hidden (mitcad#1030).
+Ui-PickOriginRow 'YZ'
 Ui-ExpectNew 'Computing section view started' 'the clips at x = 0 run'
 Ui-TypeIn 'Panel Section Analysis input offset' '15'
 Ui-Sync

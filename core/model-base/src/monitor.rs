@@ -72,7 +72,7 @@ pub struct Cancelled;
 
 impl Cancelled {
     /// The message of a command rejected because it was cancelled.
-    pub const MESSAGE: &'static str = "the computation was cancelled";
+    pub const MESSAGE: &'static str = "the computation was canceled";
 }
 
 impl fmt::Display for Cancelled {

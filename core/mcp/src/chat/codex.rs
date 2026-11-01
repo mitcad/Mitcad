@@ -240,7 +240,7 @@ impl CodexStream {
             "start" => self.start(request),
             "message" => self.message(request),
             "interrupt" => Ok(self.interrupt()),
-            other => Err(format!("unknown Codex control '{}'", crate::echoed(other))),
+            other => Err(format!("unknown Codex control “{}”", crate::echoed(other))),
         }
     }
 

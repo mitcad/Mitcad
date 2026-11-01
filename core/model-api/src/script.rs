@@ -37,6 +37,7 @@ use serde_json::Value;
 use super::prelude::*;
 use super::{ApiError, read_json};
 use mitcad_model::Document;
+use mitcad_model::features::FeatureDef;
 use mitcad_model::ids::OccurrenceUid;
 use mitcad_model::internal::document::{noted_message, noted_status};
 use mitcad_model::kernel::Kernel;
@@ -261,7 +262,7 @@ impl<K: Kernel> ScriptLocal<K> for Document<K> {
                 let mass = kernel.mass_properties(body.shape).map_err(error)?;
                 if (0..3).any(|i| (mass.center[i] - center[i]).abs() > tolerance) {
                     return fail(format!(
-                        "{wanted} to have its centre at {center:?}, got {:?}",
+                        "{wanted} to have its center at {center:?}, got {:?}",
                         mass.center
                     ));
                 }
@@ -332,10 +333,9 @@ impl<K: Kernel> ScriptLocal<K> for Document<K> {
             }
         }
         if let Some(wanted) = &expect.feature {
-            let Some(entry) = self
-                .features()
-                .find(|f| &f.name == wanted || &f.uid.to_string() == wanted)
-            else {
+            // A name several features share is refused with their uids
+            // (mitcad#1107).
+            let Some(entry) = self.feature_by_text(wanted, None)? else {
                 return fail(format!("a feature {wanted}"));
             };
             let status = self.status(entry.uid);
@@ -350,7 +350,7 @@ impl<K: Kernel> ScriptLocal<K> for Document<K> {
                 && !message.contains(part.as_str())
             {
                 return fail(format!(
-                    "the error of {wanted} to contain '{part}', got '{message}'"
+                    "the error of {wanted} to contain “{part}”, got “{message}”"
                 ));
             }
         }
@@ -440,10 +440,10 @@ impl<K: Kernel> ScriptLocal<K> for Document<K> {
 
     fn check_sketch(&self, wanted: &str, expect: &Expectation) -> Result<(), ApiError> {
         let fail = |message: String| Err(ApiError(format!("expected {message}")));
-        let Some(entry) = self
-            .features()
-            .find(|f| f.name == wanted || f.uid.to_string() == wanted)
-        else {
+        // The sketch of a name it shares with other features (its extrude,
+        // mitcad#1107).
+        let is_sketch = |def: &FeatureDef| matches!(def, FeatureDef::Sketch(_));
+        let Some(entry) = self.feature_by_text(wanted, Some(&is_sketch))? else {
             return fail(format!("a sketch {wanted}"));
         };
         if let Some(regions) = &expect.regions {

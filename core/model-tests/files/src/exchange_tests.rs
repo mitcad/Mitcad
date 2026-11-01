@@ -402,6 +402,10 @@ fn import_file_leaves_out_empty_bodies_with_a_warning() {
         json!({"uid": "F1", "name": "Base1", "bodies": [
             {"uid": "F1.b0", "name": "Support", "kind": "solid"}],
             "warnings": ["body 1 (Screw) is empty: left out", "body 2 is empty: left out"],
+            // The warnings as notices too (mitcad#1040).
+            "notices": [
+                {"level": "warning", "message": "body 1 (Screw) is empty: left out"},
+                {"level": "warning", "message": "body 2 is empty: left out"}],
             "recomputed": 1, "error": null})
     );
     assert_eq!(histories(&doc).len(), 1);
@@ -439,8 +443,8 @@ fn export_writes_bodies_with_names_and_imported_colours() {
         .add_base_feature(BaseInput::new(vec![part, body(Some("Scan"), "mesh", 1)]))
         .unwrap();
     // STL is the model's (mitcad#17), the other formats the kernel's.
-    let stl = std::env::temp_dir().join(format!("mitcad-export-{}.stl", std::process::id()));
-    let stl = stl.to_str().unwrap().to_owned();
+    let dir = mitcad_model::testing::unique_temp_dir("export");
+    let stl = dir.join("export.stl").to_str().unwrap().to_owned();
     let all = command(&mut b.doc, json!({"cmd": "export", "path": stl})).unwrap();
     assert_eq!(
         all,
@@ -448,7 +452,7 @@ fn export_writes_bodies_with_names_and_imported_colours() {
                "recomputed": 0, "error": null})
     );
     assert_eq!(read_stl(&std::fs::read(&stl).unwrap()).len(), 36);
-    std::fs::remove_file(&stl).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
     let some = command(
         &mut b.doc,
         json!({"cmd": "export", "path": "part.STP", "bodies": ["Part", "F2.b0"],
@@ -492,7 +496,7 @@ fn export_writes_bodies_with_names_and_imported_colours() {
         ),
         (
             json!({"cmd": "export", "path": "a.step", "bodies": ["Nope"]}),
-            "named 'Nope'",
+            "named Nope",
         ),
         (
             json!({"cmd": "export", "path": "a.step", "bodies": ["F2.b0", "F2.b0"]}),
@@ -536,8 +540,8 @@ fn sketches_export_to_dxf() {
     b.doc
         .add_circle(b.sketch, [30.0, 20.0], &num(10.0))
         .unwrap();
-    let path = std::env::temp_dir().join(format!("mitcad-f7-{}.dxf", std::process::id()));
-    let path = path.to_str().unwrap().to_owned();
+    let dir = mitcad_model::testing::unique_temp_dir("f7");
+    let path = dir.join("sketch.dxf").to_str().unwrap().to_owned();
     let result = command(
         &mut b.doc,
         json!({"cmd": "export_sketch", "sketch": "Sketch1", "path": path}),
@@ -545,7 +549,7 @@ fn sketches_export_to_dxf() {
     .unwrap();
     assert_eq!(result["entities"], 5);
     let drawing = mitcad_dxf::read_file(&path).unwrap();
-    std::fs::remove_file(&path).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
     assert_eq!(drawing.units, mitcad_dxf::Units::Millimeters);
     let p = mitcad_dxf::Point2::new;
     assert_eq!(
@@ -685,8 +689,7 @@ fn export_3mf_writes_one_object_with_a_part_per_body() {
         .doc
         .copy_occurrence(first, Some(Transform::translation([100.0, 0.0, 0.0])))
         .unwrap();
-    let dir = std::env::temp_dir().join(format!("mitcad-3mf-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("3mf");
     let path = dir.join("design.3mf").to_str().unwrap().to_owned();
 
     // All bodies: the sheet is left out, the mesh body goes as it is.
@@ -758,7 +761,7 @@ fn export_3mf_writes_one_object_with_a_part_per_body() {
             .name,
         "Part"
     );
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 
     for (bad, expected) in [
         (
@@ -771,7 +774,7 @@ fn export_3mf_writes_one_object_with_a_part_per_body() {
         ),
         (
             json!({"cmd": "export", "path": path, "colors": {"Nope": [1, 0, 0]}}),
-            "named 'Nope'",
+            "named Nope",
         ),
         (
             json!({"cmd": "export", "path": dir.join("missing/a.3mf").to_str().unwrap(), "bodies": ["Part"]}),
@@ -822,8 +825,7 @@ fn stl_export_places_bodies_where_the_design_shows_them() {
         json!({"cmd": "copy_occurrence", "occurrence": "O1", "transform": {"translation": [0, 0, 50]}}),
     )
     .unwrap();
-    let dir = std::env::temp_dir().join(format!("mitcad-stl-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("stl");
     let file = |name: &str| dir.join(name).to_str().unwrap().to_owned();
     let triangles = |path: &str| read_stl(&std::fs::read(path).unwrap());
     let own = {
@@ -982,7 +984,7 @@ fn stl_export_places_bodies_where_the_design_shows_them() {
         own,
         "component coordinates",
     );
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 
     for (bad, expected) in [
         (
@@ -995,7 +997,7 @@ fn stl_export_places_bodies_where_the_design_shows_them() {
         ),
         (
             json!({"cmd": "export", "path": "a.stl", "occurrence": "O7"}),
-            "there is no occurrence 'O7'",
+            "there is no occurrence O7",
         ),
         (
             json!({"cmd": "export", "path": "a.stl", "bodies": ["Part"], "occurrence": "O1"}),
@@ -1216,8 +1218,7 @@ fn export_usdz_keeps_components_and_appearances() {
     b.doc
         .set_face_appearance(b.body, std::slice::from_ref(&top), Some("label"))
         .unwrap();
-    let dir = std::env::temp_dir().join(format!("mitcad-usdz-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("usdz");
     let path = dir.join("design.usdz").to_str().unwrap().to_owned();
     let read = |path: &str| mitcad_usdz::read_package(&std::fs::read(path).unwrap()).unwrap();
 
@@ -1441,12 +1442,12 @@ fn export_usdz_keeps_components_and_appearances() {
     assert_eq!(result["warnings"], json!([]));
     let names: Vec<String> = read(&path).files.iter().map(|f| f.name.clone()).collect();
     assert!(names.contains(&"textures/wood.png".to_owned()), "{names:?}");
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 
     for (bad, expected) in [
         (
             json!({"cmd": "export", "path": "a.usdz", "bodies": ["Nope"]}),
-            "named 'Nope'",
+            "named Nope",
         ),
         (
             json!({"cmd": "export", "path": dir.join("missing/a.usdz").to_str().unwrap(), "bodies": ["Part"]}),

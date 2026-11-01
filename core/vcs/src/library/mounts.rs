@@ -149,14 +149,14 @@ fn entry_of(
     };
     if !valid_frame_name(name) {
         out.error(format!(
-            "{label}: mount frame '{name}' is no frame name (letters, digits, _ - + .)"
+            "{label}: mount frame “{name}” is no frame name (letters, digits, _ - + .)"
         ));
         return None;
     }
     let kind_text = entry.get("kind").and_then(Value::as_str).unwrap_or("face");
     let Some(kind) = kind_of(kind_text) else {
         out.error(format!(
-            "{label}: mount frame {name}: kind '{kind_text}' is none of {}",
+            "{label}: mount frame {name}: kind {kind_text} is none of {}",
             list(&MOUNT_KINDS)
         ));
         return None;
@@ -170,7 +170,7 @@ fn entry_of(
         .find(|j| j.as_str() == joint_text);
     let Some(joint) = joint else {
         out.error(format!(
-            "{label}: mount frame {name}: joint '{joint_text}' is no joint kind"
+            "{label}: mount frame {name}: joint {joint_text} is no joint kind"
         ));
         return None;
     };
@@ -247,13 +247,13 @@ fn same(a: &MountSpec, b: &MountSpec) -> bool {
 fn describe(spec: &MountSpec) -> String {
     let mut text = format!("{} ({})", spec.kind.as_str(), spec.joint.as_str());
     if let Some(cells) = spec.cells {
-        text.push_str(&format!(", {} x {} cells", cells[0], cells[1]));
+        text.push_str(&format!(", {} × {} cells", cells[0], cells[1]));
     }
     if let Some(footprint) = spec.footprint {
-        text.push_str(&format!(", {} x {} footprint", footprint[0], footprint[1]));
+        text.push_str(&format!(", {} × {} footprint", footprint[0], footprint[1]));
     }
     if let Some(pitch) = spec.pitch {
-        text.push_str(&format!(", pitch {} x {} mm", pitch[0], pitch[1]));
+        text.push_str(&format!(", pitch {} × {} mm", pitch[0], pitch[1]));
     }
     text
 }

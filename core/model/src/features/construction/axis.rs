@@ -6,6 +6,7 @@
 //! points: from the first to the second; an edge: along the edge's curve;
 //! perpendicular or normal to a face at a point: the outward normal.
 
+use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
@@ -16,7 +17,9 @@ use crate::features::mapping::map_params;
 use crate::features::{
     CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References, is_false,
 };
+use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::Kernel;
+use crate::links::OccurrenceLink;
 use crate::parameters::ParamId;
 use mitcad_vec3::unit;
 
@@ -28,6 +31,17 @@ pub struct ConstructionAxisDef<P = ParamId> {
     /// axis points the other way (K68).
     #[serde(default, skip_serializing_if = "is_false")]
     pub flip: bool,
+    /// Bodies of other components that the definition's faces, edges and
+    /// vertices are on (mitcad#1029, as a construction plane's `links`):
+    /// each is read in its component and moved into the axis's coordinates
+    /// by the placements at its point of the timeline.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub links: BTreeMap<BodyUid, OccurrenceLink>,
+    /// Construction planes, axes and points (mitcad#1035) and sketches
+    /// (mitcad#1039) of other components that the definition names, as a
+    /// construction plane's `datum_links`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub datum_links: BTreeMap<FeatureUid, OccurrenceLink>,
     /// Axes have no values; the definition is generic like the others.
     #[serde(skip)]
     pub values: PhantomData<P>,
@@ -63,6 +77,8 @@ impl<P> ConstructionAxisDef<P> {
         Self {
             definition,
             flip: false,
+            links: BTreeMap::new(),
+            datum_links: BTreeMap::new(),
             values: PhantomData,
         }
     }
@@ -71,6 +87,8 @@ impl<P> ConstructionAxisDef<P> {
         ConstructionAxisDef {
             definition: clone,
             flip: copy,
+            links: clone,
+            datum_links: clone,
             values: phantom,
         }
     }
@@ -118,6 +136,8 @@ impl FeatureInfo for ConstructionAxisDef {
 impl<K: Kernel> Evaluate<K> for ConstructionAxisDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         use AxisDefinition as D;
+        ctx.geom_links.clone_from(&self.links);
+        ctx.datum_links.clone_from(&self.datum_links);
         let axis = match &self.definition {
             D::CircularFace { face } => match ctx.surface(face)? {
                 SurfaceGeometry::Cylinder { origin, axis, .. }

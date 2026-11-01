@@ -320,7 +320,7 @@ fn import_rows(state: &mut DocState, table: &CsvTable) -> CsvImport {
             Some(text) => match Unit::parse(text) {
                 Ok(unit) => Some(unit),
                 Err(e) => {
-                    outcomes[index] = Some(refuse(format!("unit '{text}': {e}")));
+                    outcomes[index] = Some(refuse(format!("unit “{text}”: {e}")));
                     continue;
                 }
             },
@@ -489,7 +489,7 @@ fn value_expression(state: &DocState, row: &CsvRow, unit: Unit) -> Option<Result
             .table()
             .evaluate(text, unit)
             .map(|q| value_to_expression(q.value, unit))
-            .map_err(|e| format!("the value '{text}': {e}")),
+            .map_err(|e| format!("the value “{text}”: {e}")),
     )
 }
 
@@ -583,7 +583,7 @@ fn change_existing(
             kept.push("its comment".to_owned());
         }
         if row.favorite.is_some_and(|f| f != favorite_before) {
-            kept.push("its favourite".to_owned());
+            kept.push("its favorite".to_owned());
         }
         if !kept.is_empty() {
             outcome.notes.push(format!(
@@ -678,7 +678,7 @@ fn add_new(
         None => expression_dims(&state.parameters, &p.expression)
             .ok()
             .and_then(|dims| unit_for(dims, &state.parameters.context()))
-            .ok_or_else(|| format!("'{}' has no unit; give one", p.expression))?,
+            .ok_or_else(|| format!("“{}” has no unit; give one", p.expression))?,
     };
     if matches!(row.kind.as_deref(), Some("model" | "reference")) {
         outcome

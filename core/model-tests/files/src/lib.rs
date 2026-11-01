@@ -14,3 +14,5 @@ mod import_notes_tests;
 mod limits_tests;
 mod reorient_tests;
 mod tables_tests;
+// The design's summary and statistics (mitcad#1088).
+mod design_properties_tests;

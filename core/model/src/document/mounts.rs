@@ -916,7 +916,7 @@ impl<K: Kernel> Document<K> {
             let own = if odd { [own[1], own[0]] } else { own };
             if (own[0] - pitch[0]).abs() > 1e-6 || (own[1] - pitch[1]).abs() > 1e-6 {
                 return Err(invalid(format!(
-                    "{} stands on a grid of {} x {} mm; {}'s grid is {} x {} mm",
+                    "{} stands on a grid of {} × {} mm; {}'s grid is {} × {} mm",
                     aim.label,
                     number(own[0]),
                     number(own[1]),
@@ -928,7 +928,7 @@ impl<K: Kernel> Document<K> {
         }
         if footprint[0] > cells[0] || footprint[1] > cells[1] {
             return Err(invalid(format!(
-                "{} takes {} x {} cells, more than {}'s grid of {} x {} cells",
+                "{} takes {} × {} cells, more than {}'s grid of {} × {} cells",
                 aim.label, footprint[0], footprint[1], aim.target_name, cells[0], cells[1]
             )));
         }

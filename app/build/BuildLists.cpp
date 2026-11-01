@@ -252,21 +252,21 @@ QString csvOf(const QVector<ListTable>& tables) {
 QVector<ListTable> cutListTables(const QJsonObject& answer) {
   // Timber (mitcad#478): its columns only when the design has timber.
   const bool timber = answer.value(QStringLiteral("timber")).toBool();
-  ListTable rows{QObject::tr("Cut list"),
-                 {QObject::tr("Quantity"), QObject::tr("Part"), QObject::tr("Length (mm)"), QObject::tr("End A"),
-                  QObject::tr("End B"), QObject::tr("Machining"), QObject::tr("Own features"), QObject::tr("Supplier"),
-                  QObject::tr("Part number"), QObject::tr("Mass each (kg)")},
+  ListTable rows{QObject::tr("Cut List"),
+                 {QObject::tr("Quantity"), QObject::tr("Component"), QObject::tr("Length (mm)"), QObject::tr("End A"),
+                  QObject::tr("End B"), QObject::tr("Machining"), QObject::tr("Own Features"), QObject::tr("Supplier"),
+                  QObject::tr("Part Number"), QObject::tr("Mass Each (kg)")},
                  {}};
   if (timber) {
     rows.columns << QObject::tr("Material") << QObject::tr("Grade") << QObject::tr("Finish")
-                 << QObject::tr("Nominal (mm)") << QObject::tr("Actual (mm)") << QObject::tr("Running metres (m)")
+                 << QObject::tr("Nominal (mm)") << QObject::tr("Actual (mm)") << QObject::tr("Running Meters (m)")
                  << QObject::tr("Volume (m³)");
   }
   // Profiled boards (mitcad#477): their columns only when the design has
   // them.
   const bool profiled = timber && answer.value(QStringLiteral("profiled")).toBool();
   if (profiled) {
-    rows.columns << QObject::tr("Profile") << QObject::tr("Cover width (mm)") << QObject::tr("Area covered (m²)");
+    rows.columns << QObject::tr("Profile") << QObject::tr("Cover Width (mm)") << QObject::tr("Area Covered (m²)");
   }
   // The timber frames' members by frame (mitcad#522): the last column, only
   // when the design has frames.
@@ -311,13 +311,13 @@ QVector<ListTable> cutListTables(const QJsonObject& answer) {
     rows.rows.append(total);
   }
   ListTable stock{QObject::tr("Stock"),
-                  {QObject::tr("Part"), QObject::tr("Stock length (mm)"),
-                   QObject::tr("Pieces (mm, in cutting order; | between stock pieces)"), QObject::tr("Stock pieces"),
-                   QObject::tr("Offcut (mm)"), QObject::tr("Too long for the stock (mm)")},
+                  {QObject::tr("Component"), QObject::tr("Stock Length (mm)"),
+                   QObject::tr("Pieces (mm, in cutting order; | between stock pieces)"), QObject::tr("Stock Pieces"),
+                   QObject::tr("Offcut (mm)"), QObject::tr("Too Long for the Stock (mm)")},
                   {}};
   if (timber) {
     // Stock per size, each piece's stock length (mitcad#478).
-    stock.columns << QObject::tr("Size") << QObject::tr("Stock lengths (mm)");
+    stock.columns << QObject::tr("Size") << QObject::tr("Stock Lengths (mm)");
   }
   for (const QJsonValue& value : answer.value(QStringLiteral("stock")).toArray()) {
     // {source, designation, stock_length, pieces, bars, needed, offcut, too_long}
@@ -363,8 +363,9 @@ QVector<ListTable> cutListTables(const QJsonObject& answer) {
     }
     stock.rows.append(cells);
   }
-  ListTable other{QObject::tr("Other parts"),
-                  {QObject::tr("Quantity"), QObject::tr("Part"), QObject::tr("Supplier"), QObject::tr("Part number")},
+  ListTable other{QObject::tr("Other Components"),
+                  {QObject::tr("Quantity"), QObject::tr("Component"), QObject::tr("Supplier"),
+                   QObject::tr("Part Number")},
                   {}};
   for (const QJsonValue& value : answer.value(QStringLiteral("other")).toArray()) {
     const QJsonObject row = value.toObject();
@@ -386,10 +387,11 @@ QStringList propertyKeys(const QString& typed) {
 }
 
 QVector<ListTable> partsListTables(const QJsonObject& answer, const QJsonObject& cut, const QStringList& keys) {
-  ListTable parts{QObject::tr("Parts list"),
-                  {QObject::tr("Quantity"), QObject::tr("Part"), QObject::tr("Supplier"), QObject::tr("Part number"),
-                   QObject::tr("Supplier part numbers"), QObject::tr("Library"), QObject::tr("Version"),
-                   QObject::tr("Licence")},
+  ListTable parts{QObject::tr("Bill of Materials"),
+                  {QObject::tr("Quantity"), QObject::tr("Component"), QObject::tr("Supplier"),
+                   QObject::tr("Part Number"),
+                   QObject::tr("Supplier Part Numbers"), QObject::tr("Library"), QObject::tr("Version"),
+                   QObject::tr("License")},
                   {}};
   // Timber (mitcad#478): the material and grade of the cut list's timber
   // rows, by the components they list; the columns only with timber.
@@ -442,7 +444,7 @@ bool writeListPdf(const QString& path, const QString& title, const QString& subt
   writer.setPageMargins(QMarginsF(12, 12, 12, 12), QPageLayout::Millimeter);
   writer.setResolution(300);
   writer.setTitle(title);
-  writer.setCreator(QStringLiteral("Mitcad"));
+  writer.setCreator(QStringLiteral("MitCad"));
   QPainter painter;
   if (!painter.begin(&writer)) {
     error = QObject::tr("%1 cannot be written").arg(QDir::toNativeSeparators(path));
@@ -529,7 +531,7 @@ bool writeListPdf(const QString& path, const QString& title, const QString& subt
 
 BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& design, Page page, QWidget* parent)
     : QDialog(parent), m_model(model), m_design(design) {
-  setWindowTitle(page == Page::CutList ? tr("Cut List") : tr("Parts List"));
+  setWindowTitle(page == Page::CutList ? tr("Cut List") : tr("Bill of Materials"));
   resize(980, 600);
   auto* layout = new QVBoxLayout(this);
   m_tabs = new QTabWidget;
@@ -549,7 +551,7 @@ BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& d
   options->addRow(tr("&Kerf:"), m_kerf);
   cut->addLayout(options);
   const QStringList names{QStringLiteral("cutListRows"), QStringLiteral("cutListStock"), QStringLiteral("cutListOther")};
-  const QStringList headings{tr("Cut parts"), tr("Stock"), tr("Other parts")};
+  const QStringList headings{tr("Cut components"), tr("Stock"), tr("Other components")};
   for (int i = 0; i < names.size(); ++i) {
     cut->addWidget(new QLabel(QStringLiteral("<b>%1</b>").arg(headings[i])));
     QTableWidget* table = newTable(names[i]);
@@ -565,12 +567,12 @@ BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& d
   m_columns = new QLineEdit(lastPropertyColumns());
   m_columns->setObjectName(QStringLiteral("buildPartsColumns"));
   m_columns->setPlaceholderText(tr("Property keys, separated by commas: Mark, Pset_WallCommon/FireRating, Mass"));
-  m_columns->setToolTip(tr("A column per key with each part's value: its own, its library's or computed"));
+  m_columns->setToolTip(tr("A column per key with each component's value: its own, its library's or computed"));
   columns->addRow(tr("Property co&lumns:"), m_columns);
   parts->addLayout(columns);
   m_partsTable = newTable(QStringLiteral("buildPartsList"));
   parts->addWidget(m_partsTable, 1);
-  m_tabs->addTab(partsPage, tr("Parts List"));
+  m_tabs->addTab(partsPage, tr("Bill of Materials"));
   m_tabs->setCurrentIndex(page == Page::CutList ? 0 : 1);
 
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
@@ -723,7 +725,7 @@ void BuildListsDialog::copyCsv() {
 
 void BuildListsDialog::savePdf() {
   const bool cutList = m_tabs->currentIndex() == 0;
-  const QString what = cutList ? tr("cut list") : tr("parts list");
+  const QString what = cutList ? tr("cut list") : tr("bill of materials");
   const QString name = m_design.isEmpty() ? tr("Untitled") : m_design;
   // The Export group's folder (mitcad#498), else the design's, else Documents.
   const auto* host = dynamic_cast<const DocumentHost*>(parentWidget());
@@ -733,13 +735,14 @@ void BuildListsDialog::savePdf() {
   }
   const QString suggested = QDir(dialogStartFolder(DialogGroup::Export, folder))
                                 .filePath(QStringLiteral("%1 %2.pdf").arg(QFileInfo(name).completeBaseName(), what));
-  const QString path = dialogSaveFileName(this, cutList ? tr("Save Cut List as PDF") : tr("Save Parts List as PDF"),
-                                          suggested, tr("PDF documents (*.pdf)"));
+  const QString path =
+      dialogSaveFileName(this, cutList ? tr("Save Cut List as PDF") : tr("Save Bill of Materials as PDF"), suggested,
+                         tr("PDF documents (*.pdf)"));
   if (path.isEmpty()) {
     return;
   }
   rememberDialogFolder(DialogGroup::Export, path);
-  const QString title = cutList ? tr("Cut list") : tr("Parts list");
+  const QString title = cutList ? tr("Cut List") : tr("Bill of Materials");
   const QString subtitle = tr("%1, %2").arg(name, QDate::currentDate().toString(Qt::ISODate));
   QString error;
   if (!writeListPdf(path, title, subtitle, shownTables(), error)) {

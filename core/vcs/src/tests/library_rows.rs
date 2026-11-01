@@ -131,13 +131,13 @@ fn rows_standards_and_suppliers_are_read_and_checked() {
     let errors = manifest.problems().errors.join("\n");
     assert!(
         errors.contains(
-            "iso4762: the row M6x8's supplier_parts[0]: the supplier 'nobody' is not one of the \
+            "iso4762: the row M6x8's supplier_parts[0]: the supplier nobody is not one of the \
              library's suppliers"
         ),
         "{errors}"
     );
     assert!(
-        errors.contains("supplier_parts[1]: checked '30.10.2026' is no date (YYYY-MM-DD)"),
+        errors.contains("supplier_parts[1]: checked 30.10.2026 is no date (YYYY-MM-DD)"),
         "{errors}"
     );
     assert!(
@@ -145,7 +145,7 @@ fn rows_standards_and_suppliers_are_read_and_checked() {
         "{errors}"
     );
     assert!(
-        errors.contains("suppliers[1]: the url 'http://bolts.example.org' is no https:// address"),
+        errors.contains("suppliers[1]: the url http://bolts.example.org is no https:// address"),
         "{errors}"
     );
     assert!(valid_date("2026-10-30") && !valid_date("2026-13-01") && !valid_date("26-10-30"));
@@ -185,7 +185,7 @@ fn library_check_refuses_an_unknown_supplier() {
     assert_eq!(answer["ok"], false, "{answer}");
     let errors = answer["errors"].to_string();
     assert!(
-        errors.contains("the supplier 'wurth' is not one of the library's suppliers"),
+        errors.contains("the supplier wurth is not one of the library's suppliers"),
         "{errors}"
     );
     assert!(

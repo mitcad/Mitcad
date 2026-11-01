@@ -389,9 +389,14 @@ public:
     m_scroll.borderType = NSNoBorder;
     m_scroll.drawsBackground = NO;
     m_scroll.translatesAutoresizingMaskIntoConstraints = NO;
-    // At least one whole tile of the largest size, as the Qt view's minimum.
-    [m_scroll.widthAnchor constraintGreaterThanOrEqualToConstant:std::max(160, view->minimumWidth())].active = YES;
-    [m_scroll.heightAnchor constraintGreaterThanOrEqualToConstant:std::max(160, std::min(view->minimumHeight(), 400))]
+    // At least one whole tile of the largest size, as the Qt view's minimum;
+    // no more than a fixed Qt view's size (a material's swatches, mitcad#1068).
+    [m_scroll.widthAnchor constraintGreaterThanOrEqualToConstant:std::min(view->maximumWidth(),
+                                                                          std::max(160, view->minimumWidth()))]
+        .active = YES;
+    [m_scroll.heightAnchor
+        constraintGreaterThanOrEqualToConstant:std::min(view->maximumHeight(),
+                                                        std::max(160, std::min(view->minimumHeight(), 400)))]
         .active = YES;
     for (QTimer* timer : {&m_reloadTimer, &m_selectionTimer, &m_sizeTimer, &m_hoverTimer}) {
       timer->setSingleShot(true);
@@ -544,6 +549,12 @@ public:
       return;
     }
     model->setData(kept, !kept.data(m_starRole).toBool(), m_starRole);
+  }
+
+  // VoiceOver's press on a tile: a click (mitcad#1025).
+  void pressed(NSInteger tile) {
+    hideHover();
+    choose(tile, 1);
   }
 
   // AppKit changed the selection itself (keys the grid did not take).
@@ -779,9 +790,12 @@ private:
     view->key = ns(key);
     view.accessibilityIdentifier = ns(m_view->objectName() + QStringLiteral(".tile.") + key);
     view->star.accessibilityIdentifier = ns(m_view->objectName() + QStringLiteral(".star.") + key);
-    view->star.toolTip = ns(QObject::tr("Star or turn the star off: favourites come first"));
+    view->star.toolTip = ns(QObject::tr("Star or turn the star off: favorites come first"));
     const QString details = index.data(Qt::ToolTipRole).toString();
-    view.accessibilityLabel = ns(QStringList{name, subtitle}.join(QLatin1Char(' ')).trimmed());
+    // A tile without a caption (a material's swatch, mitcad#1068) is named
+    // by its accessible text.
+    const QString spoken = name.isEmpty() ? index.data(Qt::AccessibleTextRole).toString() : name;
+    view.accessibilityLabel = ns(QStringList{spoken, subtitle}.join(QLatin1Char(' ')).trimmed());
     view.accessibilityHelp = ns(details);
     // Details show in the hover card; a grid without them keeps a tooltip.
     view.toolTip = details.isEmpty() ? ns(name) : nil;
@@ -839,6 +853,16 @@ private:
       const NSRect frame = frameOf(tile);
       if (!NSIsEmptyRect(frame)) {
         [m_collection scrollRectToVisible:NSInsetRect(frame, 0, -8)];
+      }
+    }
+    // The keyboard's tile is VoiceOver's focus too (mitcad#1025).
+    if (tile != m_spokenTile) {
+      m_spokenTile = tile;
+      if (tile >= 0 && m_collection.window != nil && m_collection.window.firstResponder == m_collection) {
+        NSCollectionViewItem* shown = [m_collection itemAtIndexPath:[NSIndexPath indexPathForItem:tile inSection:0]];
+        if (shown.view != nil) {
+          NSAccessibilityPostNotification(shown.view, NSAccessibilityFocusedUIElementChangedNotification);
+        }
       }
     }
   }
@@ -1035,6 +1059,7 @@ private:
   int m_badgeRole = -1;
   int m_disabledRole = -1;
   NSInteger m_hoverTile = -1;
+  NSInteger m_spokenTile = -1;
   MitcadNativeTileTarget* m_target = nil;
   NSCollectionViewFlowLayout* m_layout = nil;
   MitcadNativeTileCollection* m_collection = nil;
@@ -1940,6 +1965,18 @@ void saveNativeUtilityFrame(NSWindow* window, QWidget* presenter) {
   [super viewDidChangeEffectiveAppearance];
   self.needsDisplay = YES;
 }
+// VoiceOver reads the chosen tile as selected and presses a tile as a
+// click chooses it (mitcad#1025).
+- (BOOL)isAccessibilitySelected {
+  return chosen;
+}
+- (BOOL)accessibilityPerformPress {
+  if (owner == nullptr || tile < 0) {
+    return NO;
+  }
+  owner->pressed(tile);
+  return YES;
+}
 @end
 
 @implementation MitcadNativeTileItem
@@ -1960,6 +1997,17 @@ void saveNativeUtilityFrame(NSWindow* window, QWidget* presenter) {
 @implementation MitcadNativeTileCollection
 - (BOOL)acceptsFirstResponder {
   return YES;
+}
+// The keyboard's tile is the focused element, as a list's selected row,
+// so that VoiceOver stays on a live tile (mitcad#1025).
+- (id)accessibilityFocusedUIElement {
+  NSIndexPath* path = self.selectionIndexPaths.anyObject;
+  NSCollectionViewItem* shown = path != nil ? [self itemAtIndexPath:path] : nil;
+  NSView* view = shown.view;
+  if (view != nil && view.window == self.window && !view.isHiddenOrHasHiddenAncestor) {
+    return view;
+  }
+  return [super accessibilityFocusedUIElement];
 }
 - (BOOL)acceptsFirstMouse:(NSEvent*)event {
   (void)event;

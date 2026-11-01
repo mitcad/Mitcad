@@ -86,6 +86,8 @@ pub mod exception_probe;
 pub mod input_edges;
 // Dogbones: the relief cylinders at a body's inside corners (mitcad#1011).
 pub mod dogbone;
+// Topology counts for Physical Properties (mitcad#1095).
+pub mod topology;
 
 use std::sync::Arc;
 
@@ -2573,6 +2575,26 @@ impl Kernel for OcctKernel {
             along_side: spec.kind == mitcad_model::kernel::DogboneKind::AlongSide,
         };
         dogbone::ffi::dogbone_tool(occt(spec.body)?, &dogbone).map_err(failed)
+    }
+
+    // Topology counts for Physical Properties (mitcad#1095; topology.rs).
+
+    fn topology_counts(
+        &self,
+        shape: &Self::Shape,
+    ) -> Result<mitcad_model::kernel::TopologyCounts, KernelError> {
+        let counts = topology::ffi::topology_counts(occt(shape)?);
+        Ok(mitcad_model::kernel::TopologyCounts {
+            faces: counts.faces,
+            edges: counts.edges,
+            vertices: counts.vertices,
+        })
+    }
+
+    // Model information (mitcad#1106).
+
+    fn infos(&self, shape: &Self::Shape) -> Vec<String> {
+        occt(shape).map_or_else(|_| Vec::new(), dressup::ffi::shape_infos)
     }
 }
 

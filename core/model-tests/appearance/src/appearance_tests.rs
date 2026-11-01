@@ -236,11 +236,11 @@ fn what_cannot_be_an_appearance_is_refused() {
         ),
         (
             json!({"cmd": "create_appearance", "id": "chrome"}),
-            "an appearance 'chrome' exists",
+            "an appearance chrome exists",
         ),
         (
             json!({"cmd": "create_appearance", "name": "Chrome"}),
-            "an appearance is named 'Chrome'",
+            "an appearance is named Chrome",
         ),
         (
             json!({"cmd": "create_appearance", "id": "my red"}),
@@ -248,7 +248,7 @@ fn what_cannot_be_an_appearance_is_refused() {
         ),
         (
             json!({"cmd": "create_appearance", "based_on": "unobtainium"}),
-            "there is no appearance 'unobtainium'",
+            "there is no appearance unobtainium",
         ),
         (
             json!({"cmd": "create_appearance", "roughness": 1.5}),
@@ -272,7 +272,7 @@ fn what_cannot_be_an_appearance_is_refused() {
         ),
         (
             json!({"cmd": "edit_appearance", "id": "custom9", "roughness": 0.5}),
-            "there is no appearance 'custom9'",
+            "there is no appearance custom9",
         ),
         (
             json!({"cmd": "edit_appearance", "roughness": 0.5}),
@@ -298,7 +298,7 @@ fn what_cannot_be_an_appearance_is_refused() {
         &mut doc,
         json!({"cmd": "create_appearance", "name": "Appearance1"}),
     );
-    assert!(error.contains("named 'Appearance1'"), "{error}");
+    assert!(error.contains("named Appearance1"), "{error}");
     assert_eq!(custom(&doc), ["custom1"]);
 }
 
@@ -390,11 +390,11 @@ fn appearances_are_saved_and_read_back() {
     for (broken, expected) in [
         (
             json!([{"id": "chrome", "name": "Mine"}]),
-            "appearances[0]: 'chrome' is a library appearance's id",
+            "appearances[0]: chrome is a library appearance's id",
         ),
         (
             json!([{"id": "a", "name": "A"}, {"id": "a", "name": "B"}]),
-            "appearances[1]: appearance 'a' is listed more than once",
+            "appearances[1]: appearance a is listed more than once",
         ),
         (
             json!([{"id": "a", "name": "A", "roughness": 2.0}]),
@@ -508,7 +508,7 @@ fn faces_get_appearances_of_their_own_as_undo_steps() {
             json!(["F2:side(c9[c1,c2])"]),
             "Body1 has no face F2:side(c9[c1,c2])",
         ),
-        (json!(["nonsense"]), "'nonsense' is no face name"),
+        (json!(["nonsense"]), "nonsense is no face name"),
         (json!([]), "no faces are given"),
     ] {
         let error = refused(
@@ -705,4 +705,60 @@ fn texture_images_are_embedded_kept_and_saved() {
                "texture": {"path": "c.png", "data": "not base64!"}}),
     );
     assert!(error.contains("no base64"), "{error}");
+}
+
+/// An appearance's class as the `appearances` query lists it.
+fn class(doc: &Document<MockKernel>, id: &str) -> Value {
+    appearance(doc, id).unwrap()["class"].clone()
+}
+
+/// mitcad#1102: an appearance's class. The library's come from their ids
+/// and are never written; one of the design's is written only when set,
+/// round-trips, and is Other without one.
+#[test]
+fn an_appearance_class_is_kept_only_when_set() {
+    let mut doc = block();
+    assert_eq!(class(&doc, "steel_satin"), "metal");
+    assert_eq!(class(&doc, "plastic_red"), "plastic");
+    assert_eq!(class(&doc, "resin_clear"), "resin");
+    assert_eq!(class(&doc, "paint_red"), "other");
+    command(
+        &mut doc,
+        json!({"cmd": "create_appearance", "id": "spool_green", "name": "Spool Green",
+               "base_color": [0.0, 0.8, 0.2], "class": "fdm_plastic"}),
+    );
+    // A copy of a library plastic stores no class: Other until set.
+    command(
+        &mut doc,
+        json!({"cmd": "create_appearance", "id": "red_copy", "name": "Red Copy",
+               "based_on": "plastic_red"}),
+    );
+    assert_eq!(class(&doc, "spool_green"), "fdm_plastic");
+    assert_eq!(class(&doc, "red_copy"), "other");
+    let saved = doc.to_json();
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(file["appearances"][0]["class"], "fdm_plastic");
+    assert!(file["appearances"][1].get("class").is_none(), "{file}");
+    let loaded = Document::from_json(&saved, MockKernel::default()).unwrap();
+    assert_eq!(loaded.to_json(), saved);
+    assert_eq!(class(&loaded, "spool_green"), "fdm_plastic");
+    // Set in the Appearances window: an undo step; Other takes it away.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_appearance", "id": "red_copy", "class": "plastic"}),
+    );
+    assert_eq!(class(&doc, "red_copy"), "plastic");
+    assert_eq!(undo_label(&doc), "Edit Appearance Red Copy");
+    command(
+        &mut doc,
+        json!({"cmd": "edit_appearance", "id": "red_copy", "class": "other"}),
+    );
+    let file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    assert!(file["appearances"][1].get("class").is_none(), "{file}");
+    // An unknown class is refused.
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "edit_appearance", "id": "red_copy", "class": "wood"}),
+    );
+    assert!(error.contains("wood"), "{error}");
 }

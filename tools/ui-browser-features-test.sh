@@ -119,7 +119,7 @@ echo "ok   no feedback, the loft's rows deselected"
 echo "--- The context menu"
 ui_mark
 ui_step "right-click Extrude1's row"     ui_click_logged "Browser Root/Sketches/Sketch1/Extrude1" 3
-ui_expect_new "Context menu: Edit Feature | Rename | Suppress Features | Suppress When... | Delete | Move to Component... | Create Group | Roll History Marker Here | Find in Timeline" \
+ui_expect_new "Context menu: Edit Feature | Rename | Suppress Features | Suppress When... | Delete | Move to Component... | Create Group | Roll Timeline Marker Here | Find in Timeline" \
   "the timeline's menu, finding it in the timeline"
 ui_step "choose Suppress Features"       ui_menu_choose "Suppress Features"
 ui_expect_new "Suppressed Extrude1" "suppressed from the browser"

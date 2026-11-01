@@ -435,7 +435,7 @@ fn seats_refuse_what_is_not_a_round_shaft() {
         pulley(json!({"seat": {"shaft": side}, "plane": "xy"})),
     );
     assert!(
-        message.contains("takes its plane and centre from the shaft"),
+        message.contains("takes its plane and center from the shaft"),
         "{message}"
     );
     let message = rejected(

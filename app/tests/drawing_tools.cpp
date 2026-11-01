@@ -58,7 +58,7 @@ int drawingToolsTests() {
                               QStringLiteral("Text"), QStringLiteral("Note"),
                               QStringLiteral("Datum Label"), QStringLiteral("Feature Control Frame"),
                               QStringLiteral("Surface Finish"), QStringLiteral("Hole Table"),
-                              QStringLiteral("Parts List"), QStringLiteral("Balloon")}));
+                              QStringLiteral("Bill of Materials"), QStringLiteral("Balloon")}));
   // The annotations' and the tables' tools pick on views (the model says
   // what) or take a view, and show their icons only; the views' tools
   // their names too.
@@ -427,7 +427,7 @@ int drawingToolsTests() {
   command = annotationEdit(QStringLiteral("D1"), 4, QStringLiteral("tags"), QStringLiteral("numbers"));
   CHECK(command.value(QStringLiteral("table")).toObject().value(QStringLiteral("tags")).toString() ==
         QStringLiteral("numbers"));
-  CHECK(annotationName(QStringLiteral("parts_list")) == QStringLiteral("Parts List"));
+  CHECK(annotationName(QStringLiteral("parts_list")) == QStringLiteral("Bill of Materials"));
   CHECK(annotationName(QStringLiteral("balloon")) == QStringLiteral("Balloon"));
   // Drawn outside the model (mitcad#729): a line in the view under its
   // first click, or on the sheet; an arc of three points; a text in a
@@ -523,5 +523,27 @@ int drawingToolsTests() {
   CHECK(templateIndex(choices, QStringLiteral("din")) == -1);
   CHECK(defaultTemplate(QStringLiteral("ANSI_B")) == QStringLiteral("ansi"));
   CHECK(defaultTemplate(QStringLiteral("A4")) == QStringLiteral("iso"));
+  // The views' projections an answer lists, one log line each (mitcad#1033).
+  QJsonArray notes;
+  notes.append(QJsonObject{{QStringLiteral("view"), 1},
+                           {QStringLiteral("bodies"), 1},
+                           {QStringLiteral("ms"), 2252.66},
+                           {QStringLiteral("cached"), false}});
+  notes.append(QJsonObject{{QStringLiteral("view"), 2},
+                           {QStringLiteral("bodies"), 29},
+                           {QStringLiteral("ms"), 0.0},
+                           {QStringLiteral("cached"), true}});
+  notes.append(QJsonObject{{QStringLiteral("view"), 3},
+                           {QStringLiteral("bodies"), 1},
+                           {QStringLiteral("ms"), 1640.94},
+                           {QStringLiteral("cached"), false},
+                           {QStringLiteral("polygonal"), true}});
+  const QStringList lines = projectionLines(notes);
+  CHECK(lines.size() == 3);
+  CHECK(lines.value(0) == QStringLiteral("Drawing projection of view 1: 1 bodies, 2252.7 ms, projected exactly"));
+  CHECK(lines.value(1) == QStringLiteral("Drawing projection of view 2: 29 bodies, 0.0 ms, from the cache"));
+  CHECK(lines.value(2) ==
+        QStringLiteral("Drawing projection of view 3: 1 bodies, 1640.9 ms, projected from a triangulation"));
+  CHECK(projectionLines(QJsonArray()).isEmpty());
   return failures;
 }

@@ -22,7 +22,7 @@ use super::{
     ExportOutput, Imported, Layers, Shared, defs_in, dialect_texts, hex_rgb, plastic_appearance,
     read_flat,
 };
-use crate::print_keys::{Dialect, PrintSet};
+use crate::print_keys::{self, Dialect, PrintSet};
 
 const DIALECT: Dialect = Dialect::Cura;
 
@@ -214,19 +214,29 @@ pub(super) fn read_project(package: &mitcad_3mf::Package) -> Result<Imported, St
         &mut out,
     );
     // The materials' colours and densities from their own files.
-    for ((material, appearance), file) in out.materials.iter_mut().zip(&materials) {
+    // (Each material has a note of its own, in the same order.)
+    for (((material, appearance), note), file) in out
+        .materials
+        .iter_mut()
+        .zip(out.report.filaments.iter_mut())
+        .zip(&materials)
+    {
         let Some(file) = file else {
             continue;
         };
         if let Some(density) = file.density.filter(|d| *d > 0.0) {
             material.density = density;
         }
-        if let Some(color) = file.color.as_deref().and_then(hex_rgb)
-            && appearance.is_none()
+        // The material file's colour in place of the neutral appearance
+        // of a filament the stacks gave no colour (mitcad#1053).
+        if let Some(hex) = file.color.as_deref().and_then(print_keys::color)
+            && let Some(color) = hex_rgb(&hex)
+            && note.colour.is_none()
         {
             let look = plastic_appearance(&material.id, &material.name, color);
             material.appearance = Some(look.id.clone());
             *appearance = Some(look);
+            note.colour = Some(hex.chars().take(7).collect());
         }
     }
     if formulas > 0 {
@@ -249,7 +259,7 @@ pub(super) fn read_project(package: &mitcad_3mf::Package) -> Result<Imported, St
         .count();
     if per_model > 0 {
         out.report.left_out.push(format!(
-            "the per-model settings of {per_model} objects (they do not target Mitcad's bodies)"
+            "the per-model settings of {per_model} objects (they do not target MitCad's bodies)"
         ));
     }
     Ok(out)

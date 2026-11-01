@@ -164,6 +164,14 @@ class NativeMenuPopup;
   // The row's stable NativeControlIdentifierRole (its first column's), which
   // finds the row again after the model rebuilt it (mitcad#814).
   QString rowIdentifier;
+  // What the shared delegates paint (mitcad#1080), nil when none: a
+  // selected row's icon in the selection's text colour beside the plain one
+  // (NativeSelectedIconTintProperty), and a number on its column's decimal
+  // axis (NativeDecimalColumnsProperty) with the colour it is shown in.
+  NSImage* plainImage;
+  NSImage* selectedImage;
+  NSAttributedString* aligned;
+  NSColor* alignedColor;
 }
 - (void)checked:(id)sender;
 // Ends this cell's text edit: commits it or discards it, keeping the table
@@ -360,6 +368,12 @@ QString labelText(const QLabel* caption) {
     QTextDocument document;
     document.setHtml(text);
     text = document.toPlainText();
+  } else if (caption->textFormat() == Qt::MarkdownText) {
+    // An agent's answer in the Chat card (mitcad#1075): its text without
+    // the Markdown marks.
+    QTextDocument document;
+    document.setMarkdown(text);
+    text = document.toPlainText();
   }
   return caption->buddy() != nullptr ? title(text) : text;
 }
@@ -394,6 +408,22 @@ NSImage* paneImage(const QIcon& icon, const QString& name) {
   result.size = NSMakeSize(points, points);
   [result setTemplate:YES];
   result.accessibilityDescription = name.toNSString();
+  return result;
+}
+// A monochrome mark in a selected row's text colour, as the shared
+// delegates tint it (NativeSelectedIconTintProperty, mitcad#1080): its own
+// shape in the colour of the appearance it is drawn in.
+NSImage* selectedIcon(NSImage* mark) {
+  if (mark == nil) {
+    return nil;
+  }
+  NSImage* result = [NSImage imageWithSize:mark.size flipped:NO drawingHandler:^BOOL(NSRect rect) {
+    [mark drawInRect:rect];
+    [NSColor.alternateSelectedControlTextColor setFill];
+    NSRectFillUsingOperation(rect, NSCompositingOperationSourceIn);
+    return YES;
+  }];
+  result.accessibilityDescription = mark.accessibilityDescription;
   return result;
 }
 NSStackView* stack(bool horizontal = false) {
@@ -1699,6 +1729,8 @@ public:
     // shared tree's explicit first-column span is that same contract.
     const bool spanning = modelSpansRow(table, node);
     if (column == nil && !spanning) return nil;
+    // A table's vertical header, as its leading column (mitcad#1078).
+    if (column != nil && mac::isNativeRowHeader(column)) return mac::nativeRowHeaderCell(view, node->index.row());
     const int col = column != nil ? qt(column.identifier).toInt() : 0;
     const QModelIndex index = QModelIndex(node->index).siblingAtColumn(col);
     if (QWidget* widget = view->indexWidget(index)) {
@@ -1794,6 +1826,10 @@ public:
         preview.image = image(icon);
         preview.imageScaling = NSImageScaleProportionallyUpOrDown;
         preview.translatesAutoresizingMaskIntoConstraints = NO;
+        if (view->property(NativeSelectedIconTintProperty).toList().contains(QVariant(col))) {
+          cell->plainImage = preview.image;
+          cell->selectedImage = selectedIcon(preview.image);
+        }
         cell.imageView = preview;
         [cell addSubview:preview];
         const CGFloat side = std::max<CGFloat>(18, std::min<CGFloat>(80, table.rowHeight - 4));
@@ -1832,6 +1868,12 @@ public:
       field.font = style.font;
       cell->tone = style.text;
       cell->fill = style.fill;
+      // Numbers on their column's decimal axis, in tabular digits (mitcad#1080).
+      const auto& decimals = m_bindings[static_cast<std::size_t>(id)].decimals;
+      if (const auto decimal = decimals.find(col); !spanning && decimal != decimals.end()) {
+        cell->aligned = mac::nativeDecimalText(plain(index.data().toString()), decimal->second, field.font, nil,
+                                               field.lineBreakMode);
+      }
       [cell applyTone];
       if (spanning && field.toolTip.length == 0) {
         field.toolTip = field.stringValue; // a section row's whole name
@@ -2013,7 +2055,7 @@ public:
     if (view == nullptr || view->selectionModel() == nullptr) { return; }
     const NSInteger currentRow = table.clickedRow >= 0 && [table.selectedRowIndexes containsIndex:static_cast<NSUInteger>(table.clickedRow)]
                                      ? table.clickedRow : table.selectedRow;
-    const QModelIndex clicked = modelIndex(table, currentRow, std::max<NSInteger>(0, table.clickedColumn));
+    const QModelIndex clicked = modelIndex(table, currentRow, modelColumn(table, table.clickedColumn));
     QPointer<QAbstractItemView> presenter(view);
     const QPersistentModelIndex current = clicked.isValid() ? clicked : modelIndex(table, table.selectedRow, 0);
     // Selection handlers may use currentItem() to identify the selected
@@ -2041,6 +2083,12 @@ public:
     if (current.isValid()) {
       QMetaObject::invokeMethod(view, "clicked", Qt::DirectConnection, Q_ARG(QModelIndex, QModelIndex(current)));
     }
+  }
+  // The shared model's column of a native one, by its identifier; a row
+  // header's (mitcad#1078) or none is the row's first.
+  static int modelColumn(NSTableView* table, NSInteger column) {
+    if (column < 0 || column >= table.numberOfColumns) return 0;
+    return std::max(0, qt(table.tableColumns[static_cast<NSUInteger>(column)].identifier).toInt());
   }
   QModelIndex modelIndex(NSTableView* table, NSInteger row, NSInteger col) {
     const QModelIndex index = liveIndex(table, nodeAt(table, row));
@@ -2071,7 +2119,7 @@ public:
     if (id < 0 || static_cast<std::size_t>(id) >= m_bindings.size()) { return; }
     auto* view = qobject_cast<QAbstractItemView*>(m_bindings[static_cast<std::size_t>(id)].widget);
     const QModelIndex index = modelIndex(table, table.clickedRow >= 0 ? table.clickedRow : table.selectedRow,
-                                        std::max<NSInteger>(0, table.clickedColumn));
+                                        modelColumn(table, table.clickedColumn));
     if (view != nullptr && index.isValid()) {
       if (index.data(NativeEditableRole).isValid() && index.data(NativeEditableRole).toBool()) {
         const NSInteger row = table.clickedRow >= 0 ? table.clickedRow : table.selectedRow;
@@ -2094,7 +2142,7 @@ public:
     if (id < 0 || static_cast<std::size_t>(id) >= m_bindings.size()) { return; }
     auto* view = qobject_cast<QAbstractItemView*>(m_bindings[static_cast<std::size_t>(id)].widget);
     const NSInteger row = [table rowAtPoint:point];
-    const QModelIndex index = modelIndex(table, row, std::max<NSInteger>(0, [table columnAtPoint:point]));
+    const QModelIndex index = modelIndex(table, row, modelColumn(table, [table columnAtPoint:point]));
     if (view != nullptr && index.isValid()) {
       QPointer<QAbstractItemView> presenter(view);
       view->selectionModel()->setCurrentIndex(index, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
@@ -2277,6 +2325,9 @@ private:
     mac::NativeColumnState sections; // the shared header last applied to the columns
     int textTone = 0;                // a label's applied semantic tone (nativeTextToneKind)
     bool scrollMoved = true;         // the shared view's vertical scroll moved (followSharedScroll)
+    // The decimal axes of its NativeDecimalColumnsProperty columns, measured
+    // when its rows change (mitcad#1080).
+    std::map<int, mac::NativeDecimalColumn> decimals;
   };
   void scheduleRefresh() {
     if (m_source != nullptr && !m_refreshTimer.isActive()) { m_refreshTimer.start(0); }
@@ -2478,7 +2529,8 @@ private:
       NSStackView* rows = stack();
       for (int row = 0; row < grid->rowCount(); ++row) {
         NSStackView* line = stack(true);
-        if (m_source->objectName() == QStringLiteral("sketchPalette") && grid->columnCount() == 6) {
+        // The palette's Create and Constraints grids: seven to a row (mitcad#1027).
+        if (m_source->objectName() == QStringLiteral("sketchPalette") && grid->columnCount() == 7) {
           line.distribution = NSStackViewDistributionFillEqually;
         }
         for (int col = 0; col < grid->columnCount(); ++col) {
@@ -2696,7 +2748,8 @@ private:
       }
       updateButtonPresentation(view, button);
       updateColorField(view, button);
-      if (widget->objectName().startsWith(QStringLiteral("palette_"))) {
+      if (widget->objectName().startsWith(QStringLiteral("palette_")) ||
+          widget->objectName().startsWith(QStringLiteral("paletteCreate_"))) {
         [view.widthAnchor constraintGreaterThanOrEqualToConstant:34].active = YES;
         [view.heightAnchor constraintGreaterThanOrEqualToConstant:30].active = YES;
       }
@@ -3081,6 +3134,8 @@ private:
                                         ? NSTableViewFirstColumnOnlyAutoresizingStyle
                                         : NSTableViewUniformColumnAutoresizingStyle;
     const int count = view->model() == nullptr ? 1 : std::max(1, view->model()->columnCount(view->rootIndex()));
+    // A table's vertical header leads, as its row labels (mitcad#1078).
+    if (mac::nativeRowHeaderShown(view)) { [table addTableColumn:mac::createNativeRowHeader()]; }
     for (int i = 0; i < count; ++i) {
       NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:ns(QString::number(i))];
       column.title = ns(view->model() == nullptr ? QString() : view->model()->headerData(i, Qt::Horizontal).toString());
@@ -3185,6 +3240,40 @@ private:
     }
     return box;
   }
+  // A table whose columns or vertical header changed after its native view
+  // was built, such as Purge Volumes' slots set once it opened
+  // (mitcad#1078), gets its native columns again: one per model column, and
+  // the vertical header as the leading one. True when it changed them.
+  static bool syncModelColumns(NSTableView* table, QAbstractItemView* view) {
+    if (view->model() == nullptr || qobject_cast<QTableView*>(view) == nullptr) { return false; }
+    const int count = std::max(1, view->model()->columnCount(view->rootIndex()));
+    const bool rowHeader = mac::nativeRowHeaderShown(view);
+    NSTableColumn* header = nil;
+    int existing = 0;
+    for (NSTableColumn* column in table.tableColumns) {
+      if (mac::isNativeRowHeader(column)) { header = column; }
+      else { ++existing; }
+    }
+    if (existing == count && (header != nil) == rowHeader) { return false; }
+    if (header != nil && !rowHeader) { [table removeTableColumn:header]; }
+    for (NSTableColumn* column in [table.tableColumns copy]) {
+      if (!mac::isNativeRowHeader(column) && qt(column.identifier).toInt() >= count) {
+        [table removeTableColumn:column];
+      }
+    }
+    for (int i = existing; i < count; ++i) {
+      NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:ns(QString::number(i))];
+      column.title = ns(view->model()->headerData(i, Qt::Horizontal).toString());
+      column.width = 130;
+      column.minWidth = 70;
+      [table addTableColumn:column];
+    }
+    if (header == nil && rowHeader) {
+      [table addTableColumn:mac::createNativeRowHeader()];
+      [table moveColumn:table.numberOfColumns - 1 toColumn:0];
+    }
+    return true;
+  }
   NSMutableArray<MitcadNativeModelNode*>* modelNodes(QAbstractItemView* view, const QModelIndex& parent) {
     auto* nodes = [NSMutableArray<MitcadNativeModelNode*> new];
     for (int row = 0; row < view->model()->rowCount(parent); ++row) {
@@ -3219,6 +3308,12 @@ private:
     if (binding.rootIndex != view->rootIndex()) {
       binding.rootIndex = view->rootIndex();
       binding.dirty = true;
+    }
+    // New model columns or a vertical header shown or hidden (mitcad#1078);
+    // not under an open cell editor.
+    if (binding.dirty && mac::editedCellField(binding.table) == nil && syncModelColumns(binding.table, view)) {
+      binding.sections = mac::NativeColumnState();
+      ++g_widgetPropertyWrites;
     }
     // The shared header's sizes, stretch and hidden sections (mitcad#814).
     if (!view->property("nativeSourceList").toBool() &&
@@ -3266,6 +3361,8 @@ private:
       }
       binding.presentation = modelPresentation(view);
       binding.nodes = modelNodes(view, view->rootIndex());
+      binding.decimals = mac::nativeDecimalColumns(view);
+      mac::fitNativeRowHeader(binding.table, view);
       binding.dirty = false;
       [binding.table reloadData];
       ++g_widgetPropertyWrites;
@@ -3406,6 +3503,14 @@ private:
     if ([responder isKindOfClass:MitcadNativeTextView.class] && [(NSView*)responder isDescendantOf:m_root]) {
       if (auto* text = qobject_cast<QPlainTextEdit*>(textPresenter((NSTextView*)responder))) m_textFocusRequested = text;
     }
+    // Any other focused control (a tile grid, a list, a button) is replaced
+    // too: its successor of the same identifier takes the keyboard and
+    // VoiceOver's focus, rather than the window and a removed element
+    // (mitcad#1025: choosing a picker tile replaces its options below).
+    NSView* focusedView = ![responder isKindOfClass:NSTextView.class] && [responder isKindOfClass:NSView.class] &&
+            [(NSView*)responder isDescendantOf:m_root] ? (NSView*)responder : nil;
+    NSString* focusedIdentifier = focusedView.accessibilityIdentifier;
+    Class focusedClass = focusedView.class;
     detachBindings();
     for (MitcadNativeModelCell* cell in m_cells) { cell->owner = nullptr; }
     m_cellViews.clear();
@@ -3450,6 +3555,23 @@ private:
           const NSUInteger start = std::min(selection.location, current.string.length);
           ((NSTextView*)current).selectedRange = NSMakeRange(start, std::min(selection.length, current.string.length - start));
         }
+      }
+    }
+    if (focusedIdentifier.length > 0 && m_root.window == window) {
+      std::vector<NSView*> matches;
+      const auto find = [&](auto&& self, NSView* view) -> void {
+        if ([view isMemberOfClass:focusedClass] && [view.accessibilityIdentifier isEqualToString:focusedIdentifier] &&
+            !view.isHiddenOrHasHiddenAncestor) matches.push_back(view);
+        for (NSView* child in view.subviews) self(self, child);
+      };
+      find(find, m_root);
+      NSView* restored = matches.size() == 1 ? matches.front() : nil;
+      if (restored != nil && [window makeFirstResponder:restored]) {
+        // Laid out first: a grid makes its tiles, the focused one among them.
+        [m_root layoutSubtreeIfNeeded];
+        id element = restored.accessibilityFocusedUIElement;
+        NSAccessibilityPostNotification(element != nil ? element : restored,
+                                        NSAccessibilityFocusedUIElementChangedNotification);
       }
     }
   }
@@ -4703,6 +4825,8 @@ QAction* execNativeMenu(QMenu* menu, const QPoint& point) {
     [field abortEditing];
     discarding = NO;
     if (index.isValid()) { field.stringValue = mitcad::ns(mitcad::plain(index.data().toString())); }
+    alignedColor = nil; // back on its decimal axis (applyTone)
+    [self applyTone];
   }
   // Committing ends the field editor through controlTextDidEndEditing. In a
   // dialog the focus returns to the table, as the shared view's editor
@@ -4721,6 +4845,19 @@ QAction* execNativeMenu(QMenu* menu, const QPoint& point) {
   const BOOL emphasized = self.backgroundStyle == NSBackgroundStyleEmphasized;
   NSColor* color = (tone == nil || emphasized) ? NSColor.labelColor : tone;
   if (self.textField != nil && ![self.textField.textColor isEqual:color]) { self.textField.textColor = color; }
+  // A number on its decimal axis keeps its attributes in that colour; an
+  // edit has its own text until it ends (mitcad#1080).
+  if (aligned != nil && self.textField != nil && self.textField.currentEditor == nil && ![alignedColor isEqual:color]) {
+    NSMutableAttributedString* text = [aligned mutableCopy];
+    [text addAttribute:NSForegroundColorAttributeName value:color range:NSMakeRange(0, text.length)];
+    self.textField.attributedStringValue = text;
+    alignedColor = color;
+  }
+  // A selected row's monochrome mark in the selection's text colour.
+  if (selectedImage != nil && self.imageView != nil) {
+    NSImage* shown = emphasized ? selectedImage : plainImage;
+    if (self.imageView.image != shown) { self.imageView.image = shown; }
+  }
   if (fill != nil) { self.needsDisplay = YES; }
 }
 - (void)setBackgroundStyle:(NSBackgroundStyle)style {

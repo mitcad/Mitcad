@@ -645,8 +645,7 @@ fn tables_are_written_to_pdf_and_dxf() {
         json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 2, "type": "parts_list",
                "at": [250, 200]}),
     );
-    let dir = std::env::temp_dir().join(format!("mitcad-table-exports-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("table-exports");
     for name in ["tables.pdf", "tables.dxf"] {
         let path = dir.join(name);
         command(
@@ -655,7 +654,7 @@ fn tables_are_written_to_pdf_and_dxf() {
         );
         let bytes = std::fs::read(&path).unwrap();
         let text = String::from_utf8_lossy(&bytes);
-        for expected in ["PARTS LIST", "TAG", "A1", "A2", "THRU"] {
+        for expected in ["BILL OF MATERIALS", "TAG", "A1", "A2", "THRU"] {
             assert!(text.contains(expected), "{name}: {expected}");
         }
     }

@@ -37,7 +37,7 @@ use mitcad_vec3::Vec3 as V3;
 /// loop, and a face to a chart's surface (mm).
 const RECOGNITION: f64 = 1.0e-6;
 
-const NOT_DERIVED: &str = "ordinary modelling replaced this body and the sheet-domain adapter \
+const NOT_DERIVED: &str = "ordinary modeling replaced this body and the sheet-domain adapter \
                            could not re-derive its material";
 
 /// Re-derives the sheet of every valid sheet body the feature replaced

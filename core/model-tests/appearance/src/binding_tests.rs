@@ -213,7 +213,7 @@ fn the_material_follows_an_expression_and_brings_its_appearance() {
     assert!(b.get("material").is_none(), "{b}");
     assert_eq!(
         b["warnings"],
-        json!(["material: there is no material 'Wood'; the body has its component's material"])
+        json!(["material: there is no material Wood; the body has its component's material"])
     );
 }
 
@@ -404,7 +404,7 @@ fn an_unknown_appearance_name_gives_a_warning_and_the_default_look() {
     assert!(b.get("appearance").is_none(), "{b}");
     assert_eq!(
         b["warnings"],
-        json!(["appearance: there is no appearance 'Gloss Purple'; the body has the default look"])
+        json!(["appearance: there is no appearance Gloss Purple; the body has the default look"])
     );
     // A name that exists clears the warning.
     set_text(&mut doc, "Look", "Wood - Oak");

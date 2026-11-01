@@ -2,6 +2,10 @@
 #include "platform/NativeMacWindow.hpp"
 #include "NativeKeys.hpp"
 #include "NativeCardWidths.hpp"
+#include "NativeChatCard.hpp"
+#include "NativeColumnSplit.hpp"
+#include "NativeColors.hpp"
+#include "NativeMessageBand.hpp"
 #include "NativeProjects.hpp"
 #include "framework/Icons.hpp"
 #include "framework/Theme.hpp"
@@ -45,54 +49,6 @@ struct NativeMacWindowState;
 - (BOOL)dispatchConfirmation;
 - (BOOL)dispatchCancellation;
 - (BOOL)dispatchKeyboardEvent:(NSEvent*)event;
-@end
-
-// A status message has the shared pill's lifetime. Weak views and guarded
-// completions also cover a window closing or a replacement during its fade.
-@interface MITCADStatusLifetime : NSObject
-@property(nonatomic, weak) NSView* card;
-@property(nonatomic, strong) NSTimer* timer;
-@property(nonatomic) NSUInteger generation;
-- (void)clear;
-- (void)showForMilliseconds:(NSInteger)milliseconds;
-@end
-
-@implementation MITCADStatusLifetime
-- (void)cancelPendingFade {
-  ++self.generation;
-  [self.timer invalidate];
-  self.timer = nil;
-  [self.card.layer removeAllAnimations];
-  self.card.alphaValue = 1;
-}
-- (void)clear {
-  [self cancelPendingFade];
-  self.card.hidden = YES;
-}
-- (void)showForMilliseconds:(NSInteger)milliseconds {
-  [self cancelPendingFade];
-  self.card.hidden = NO;
-  const NSUInteger generation = self.generation;
-  __weak MITCADStatusLifetime* weakSelf = self;
-  self.timer = [NSTimer timerWithTimeInterval:std::max<NSInteger>(0, milliseconds) / 1000.0 repeats:NO
-      block:^(NSTimer* timer) {
-    (void)timer;
-    MITCADStatusLifetime* current = weakSelf;
-    if (current == nil || current.generation != generation) return;
-    current.timer = nil;
-    [NSAnimationContext runAnimationGroup:^(NSAnimationContext* context) {
-      context.duration = 0.4;
-      current.card.animator.alphaValue = 0;
-    } completionHandler:^{
-      MITCADStatusLifetime* finished = weakSelf;
-      if (finished == nil || finished.generation != generation) return;
-      finished.card.hidden = YES;
-      finished.card.alphaValue = 1;
-    }];
-  }];
-  [NSRunLoop.mainRunLoop addTimer:self.timer forMode:NSRunLoopCommonModes];
-}
-- (void)dealloc { [_timer invalidate]; }
 @end
 
 @interface MITCADViewportHost : NSView {
@@ -142,9 +98,29 @@ struct NativeMacWindowState;
 }
 @end
 
+// A navigation bar button (mitcad#1099): checked (Layout Grid, Snap to
+// Grid on) tinted and outlined in the accent colour, as the Qt bar's.
+@interface MITCADNavigationButton : MITCADCommandButton
+@end
+
+@implementation MITCADNavigationButton
+- (void)drawRect:(NSRect)dirty {
+  if (self.state == NSControlStateValueOn) {
+    NSBezierPath* outline = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 0.5, 0.5)
+                                                            xRadius:6 yRadius:6];
+    [[NSColor.controlAccentColor colorWithAlphaComponent:0.2] setFill];
+    [outline fill];
+    [NSColor.controlAccentColor setStroke];
+    [outline stroke];
+  }
+  [super drawRect:dirty];
+}
+@end
+
 @interface MITCADModelOutlineView : NSOutlineView {
 @public
   mitcad::mac::NativeMacWindowState* state;
+  NSTrackingArea* __strong hoverArea; // the row under the pointer (mitcad#1072)
 }
 @end
 
@@ -164,6 +140,7 @@ struct NativeMacWindowState;
   mitcad::mac::NativeMacWindowState* state;
   NSPoint pressPoint;
   BOOL pressed;
+  NSTrackingArea* hoverTracking; // the timeline's hover (mitcad#1076)
 }
 @property(nonatomic, copy) NSString* featureKey;
 @property(nonatomic, copy) NSString* statusKey;
@@ -179,6 +156,20 @@ struct NativeMacWindowState;
 - (BOOL)beginHistoryMarkerDrag;
 - (void)dragHistoryMarkerToIndex:(NSInteger)index;
 - (void)endHistoryMarkerDrag;
+@end
+
+// A timeline group (mitcad#1077): the band over an open group's cells, or
+// the one folder cell of a folded group, as the shared timeline shows it.
+@interface MITCADHistoryGroupView : NSView {
+@public
+  mitcad::mac::NativeMacWindowState* state;
+  BOOL pressed;
+  NSTrackingArea* hoverTracking;
+}
+@property(nonatomic, copy) NSString* groupName;
+@property(nonatomic, copy) NSString* firstKey; // the feature whose cell it folds into
+@property(nonatomic) BOOL collapsed;
+@property(nonatomic, strong) NSImageView* folder;
 @end
 
 @interface MITCADInspectorDocumentView : NSView
@@ -240,6 +231,24 @@ struct NativeMacWindowState;
 - (void)closeDocument:(id)sender;
 - (void)quitApplication:(id)sender;
 - (void)menuTrackingChanged:(NSNotification*)notification;
+// A group menu's Pin to Toolbar and Change Keyboard Shortcut entries, a
+// pinned button's menu (mitcad#1074): representedObject is the tab, the
+// command and the menu's place.
+- (void)pinCommand:(id)sender;
+- (void)changeShortcut:(id)sender;
+- (void)collapseConfiguration:(id)sender;
+// Their callback, once the menu has closed: the tab, the command and
+// whether to pin, or the command alone for its shortcut.
+- (void)applyRowCommand:(NSArray*)command;
+// The quick-access group's ⋮ and its menu's checks and Reset to Default
+// (mitcad#1113); applied once the menu has closed: the command and whether
+// it is checked, or nothing for the reset.
+- (void)openQuickAccessMenu:(id)sender;
+- (void)chooseQuickAccess:(id)sender;
+- (void)resetQuickAccess:(id)sender;
+- (void)applyQuickAccess:(NSArray*)choice;
+// The navigation bar's Visual Style button (mitcad#1099): its pop-up.
+- (void)openNavigationStyles:(id)sender;
 @end
 
 // The agent indicator's button (mitcad#710): a click connects an agent or
@@ -259,16 +268,44 @@ namespace {
 NSString* ns(const QString& text) { return text.toNSString(); }
 QString qt(NSString* text) { return QString::fromNSString(text != nil ? text : @""); }
 
+// A workspace's tab as the Qt ribbon names it: "CUT SHEET" -> "Cut Sheet".
+QString workspaceCaption(const QString& workspace) {
+  QStringList words = workspace.toLower().split(QLatin1Char(' '));
+  for (QString& word : words) {
+    if (!word.isEmpty()) word[0] = word[0].toUpper();
+  }
+  return words.join(QLatin1Char(' '));
+}
+
 constexpr CGFloat ribbonButtonHeight = 36;
 constexpr CGFloat ribbonGroupGap = 8;
 constexpr CGFloat ribbonInset = 12;
+// The entries a group menu adds after the shared menu's (Pin to Toolbar,
+// Change Keyboard Shortcut), so that tests compare only the shared ones.
+constexpr NSInteger rowCommandsTag = 1001;
 constexpr CGFloat historyInset = timeline::padding;
 constexpr CGFloat historySlot = timeline::cell + timeline::gap;
 constexpr CGFloat historyRunSlot = 11;
 constexpr CGFloat historyStripHeight = timeline::height;
 
-NSColor* nativeColor(const QColor& color) {
-  return [NSColor colorWithSRGBRed:color.redF() green:color.greenF() blue:color.blueF() alpha:color.alphaF()];
+// A light bulb that follows a Show When condition (mitcad#1079): the bulb
+// with the fx mark in its lower right corner, as the Qt row's badge.
+NSImage* conditionBulb(NSImage* bulb) {
+  NSImage* image = [NSImage imageWithSize:bulb.size flipped:NO drawingHandler:^BOOL(NSRect rect) {
+    [bulb drawInRect:rect];
+    NSAttributedString* mark = [[NSAttributedString alloc] initWithString:@"fx" attributes:@{
+      NSFontAttributeName: [NSFont systemFontOfSize:7 weight:NSFontWeightBold],
+      NSForegroundColorAttributeName: NSColor.controlAccentColor
+    }];
+    const NSSize size = mark.size;
+    const NSRect badge = NSMakeRect(NSMaxX(rect) - size.width - 2, NSMinY(rect), size.width + 2, size.height);
+    [NSColor.controlBackgroundColor setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:badge xRadius:2 yRadius:2] fill];
+    [mark drawAtPoint:NSMakePoint(NSMinX(badge) + 1, NSMinY(badge))];
+    return YES;
+  }];
+  image.accessibilityDescription = nil;
+  return image;
 }
 
 NSImage* symbol(const QString& name, NSString* description = nil) {
@@ -484,6 +521,13 @@ struct NativeMacWindowState {
   QStringList workspaces;
   int workspaceIndex = 0;
   NSSegmentedControl* __strong workspaceTabs = nil;
+  // The quick-access group after the tabs (mitcad#1113): its presentation,
+  // its row of buttons, what was logged of each and whether it is folded.
+  NativeMacQuickAccess quickAccess;
+  NSStackView* __strong quickGroup = nil;
+  QHash<QString, QString> quickLogged;
+  bool quickFolded = false;
+  bool quickFoldScheduled = false;
   NSTextField* __strong documentTitle = nil;
   MITCADFloatingCard* __strong projectsCard = nil;
   NSView* __strong projectsHost = nil;
@@ -494,7 +538,6 @@ struct NativeMacWindowState {
   NSScrollView* __strong configurationScroll = nil;
   NSView* __strong configurationContent = nil;
   MITCADInspectorContentView* __strong configurationDocument = nil;
-  NSLayoutConstraint* __strong configurationHeight = nil;
   NSArray<NSButton*>* __strong browserIssueButtons = nil;
   NSLayoutConstraint* __strong browserTreeTop = nil;
   bool updatingSelection = false;
@@ -526,8 +569,11 @@ struct NativeMacWindowState {
   MITCADFloatingCard* __strong sidebarCard = nil;
   MITCADFloatingCard* __strong inspectorCard = nil;
   MITCADFloatingCard* __strong historyCard = nil;
-  MITCADFloatingCard* __strong statusCard = nil;
-  MITCADStatusLifetime* __strong statusLifetime = nil;
+  // The message band above the timeline (mitcad#1098): its card and its
+  // content, which draws the shared MessageLog.
+  MITCADFloatingCard* __strong messageCard = nil;
+  MITCADMessageBand* __strong messageBand = nil;
+  QString loggedMessageBand; // its place, as last logged
   // The orientation cube's arrows (setCubeArrows), by their ids.
   QList<NativeMacCubeArrow> cubeArrowPresentation;
   NSMutableDictionary<NSString*, MITCADFloatingCard*>* __strong cubeArrows = nil;
@@ -550,6 +596,7 @@ struct NativeMacWindowState {
   MITCADHistoryMarkerButton* __strong historyMarkerButton = nil;
   NSArray<NSButton*>* __strong historySteps = nil;
   NSButton* __strong historyFilterButton = nil;
+  NSButton* __strong historySearchButton = nil; // timeline search opens above it (mitcad#1021)
   NSMutableArray<NSImageView*>* __strong historyRunMarks = nil;
   NSBox* __strong historyDropLine = nil;
   NSView* __strong inspectorHost = nil;
@@ -558,18 +605,68 @@ struct NativeMacWindowState {
   MITCADInspectorDocumentView* __strong inspectorDocument = nil;
   NSView* __strong inspectorFooter = nil;        // under the scrolling inspector (mitcad#815)
   NSView* __strong inspectorFooterContent = nil; // a command form's OK and Cancel
-  NSTextField* __strong status = nil;
   NSPopover* __strong searchPopover = nil;
   NSSearchField* __strong searchField = nil;
   NSTableView* __strong searchTable = nil;
   NSStackView* __strong timelineSearchControls = nil;
   NSTextField* __strong timelineSearchCount = nil;
+  NSArray<NSLayoutConstraint*>* __strong commandSearchLayout = nil;
+  NSArray<NSLayoutConstraint*>* __strong timelineSearchLayout = nil;
   NSMenu* __strong mainMenu = nil;
   NSMenu* __strong previousMenu = nil;
   NSMenu* __strong previousServicesMenu = nil;
   NSMenu* __strong previousWindowsMenu = nil;
   id<NSApplicationDelegate> __strong previousAppDelegate = nil;
   NSHashTable<MITCADBindingBadge*>* __strong bindingBadges = [NSHashTable weakObjectsHashTable];
+  // The Chat card (mitcad#1075): the shared panel's native view in its host
+  // (NativeChatCard.hpp), on the right edge with the inspector left of it.
+  MITCADFloatingCard* __strong chatCard = nil;
+  NSView* __strong chatHost = nil;
+  NSView* __strong chatContent = nil;
+  // The timeline's hover (mitcad#1076): the feature reported as hovered.
+  // Its groups (mitcad#1077), from the items, with their views.
+  QString historyHover;
+  struct HistoryGroup {
+    QString name;
+    int first = 0;
+    int last = 0;
+    bool collapsed = false;
+  };
+  QList<HistoryGroup> historyGroups;
+  NSMutableDictionary<NSString*, MITCADHistoryGroupView*>* __strong historyGroupViews = [NSMutableDictionary dictionary];
+  QString loggedHistoryGroups;
+  // While a drawing is open (setDrawingOpen, mitcad#1073): the cards it
+  // hides and the shown state each was asked for meanwhile.
+  bool drawingOpen = false;
+  NSMapTable<NSView*, NSNumber*>* __strong suppressedCards = [NSMapTable strongToStrongObjectsMapTable];
+  // The Browser row under the pointer, as last reported (mitcad#1072).
+  QString hoveredTreeRow;
+  // The Configuration card between Projects and Browser and the left
+  // column's split (mitcad#1020).
+  MITCADFloatingCard* __strong configurationCard = nil;
+  NSButton* __strong configurationDisclosure = nil;
+  NSLayoutConstraint* __strong configurationScrollBottom = nil;
+  bool configurationCollapsed = false;
+  NativeColumnSplit columnSplit;      // the user's heights; empty: automatic
+  NativeColumnSplit splitDragStart;   // the open cards' heights at the press
+  std::vector<std::pair<QString, QString>> splitPairs; // each handle's cards
+  std::pair<QString, QString> splitDragPair; // the cards of the handle pressed
+  bool splitDragging = false;
+  bool splitMoved = false;
+  std::vector<NativeColumnCard> columnCards; // as last laid out
+  NSMutableArray<NSView*>* __strong columnSplitHandles = nil;
+  // layoutOverlays runs in the canvas's own layout pass (MITCADCanvasRoot),
+  // where the inspector is not laid out again; a follow-up is queued.
+  bool inCanvasLayout = false;
+  bool overlayLayoutQueued = false;
+  // The navigation bar (mitcad#1099): its card at the bottom centre of the
+  // view, its buttons in order, and what it last logged.
+  NativeMacNavigationBar navigationBar;
+  MITCADFloatingCard* __strong navigationCard = nil;
+  NSMutableArray<MITCADNavigationButton*>* __strong navigationButtons = nil;
+  QString loggedNavigationPlace;
+  QString loggedNavigationTips;
+  QString loggedNavigationStates;
 
   explicit NativeMacWindowState(QWidget* widget, NativeMacWindowCallbacks calls)
       : viewport(widget), callbacks(std::move(calls)) {
@@ -594,7 +691,8 @@ struct NativeMacWindowState {
   ~NativeMacWindowState() {
     finishHistoryMarkerDrag();
     closing = true;
-    [statusLifetime clear];
+    messageBand->closed = nullptr;
+    messageBand->featureChosen = nullptr;
     for (MITCADBindingBadge* badge in bindingBadges.allObjects) {
       badge->state = nullptr;
       [badge->hoverTimer invalidate];
@@ -611,8 +709,16 @@ struct NativeMacWindowState {
     tree->state = nullptr;
     history->state = nullptr;
     historyMarkerButton->state = nullptr;
-    for (MITCADHistoryFeatureButton* button in historyButtons.allValues) button->state = nullptr;
+    for (MITCADHistoryFeatureButton* button in historyButtons.allValues) {
+      button->state = nullptr;
+      [button removeAllToolTips];
+    }
+    for (MITCADHistoryGroupView* view in historyGroupViews.allValues) {
+      view->state = nullptr;
+      [view removeAllToolTips];
+    }
     for (NSView* handle in cardWidthHandles) detachCardWidthHandle(handle);
+    for (NSView* handle in columnSplitHandles) detachColumnSplitHandle(handle);
     [searchPopover close];
     window.delegate = nil;
     window.toolbar.delegate = nil;
@@ -822,12 +928,22 @@ struct NativeMacWindowState {
     CGFloat markerX = x;
     for (int index = 0; index < historyItems.size(); ++index) {
       const bool hidden = historyItems[index].filtered;
+      const HistoryGroup* folded = historyFoldedGroup(index);
       MITCADHistoryFeatureButton* button = historyButtons[ns(historyItems[index].id)];
-      button.hidden = hidden;
+      button.hidden = hidden || folded;
       historyBoundaries.append(x);
       if (index == historyMarker) {
         markerX = x;
         x += timeline::marker + timeline::gap;
+      }
+      if (folded) {
+        // A folded group's cells take one cell's room, its folder cell
+        // (mitcad#1077).
+        if (index == folded->first) {
+          historyGroupViews[ns(folded->name)].frame = NSMakeRect(x, timeline::top, timeline::cell, timeline::cell);
+          x += historySlot;
+        }
+        continue;
       }
       if (!hidden) {
         button.frame = NSMakeRect(x, timeline::top, timeline::cell, timeline::cell);
@@ -851,7 +967,7 @@ struct NativeMacWindowState {
       while (index + count < historyItems.size() && historyItems[index + count].filtered && index + count != historyMarker) ++count;
       mark.hidden = NO;
       mark.frame = NSMakeRect(x + 1, 10, historyRunSlot - 2, 14);
-      mark.toolTip = ns(QStringLiteral("%1 feature(s) hidden by the timeline filter").arg(count));
+      mark.toolTip = ns(QObject::tr("%1 feature(s) hidden by the timeline filter").arg(count));
       mark.accessibilityLabel = mark.toolTip;
       mark.accessibilityIdentifier = ns(QStringLiteral("native.history.filteredRun.%1").arg(index));
       ++run;
@@ -865,6 +981,7 @@ struct NativeMacWindowState {
     historyMarkerButton.frame = NSMakeRect(markerX, 0, timeline::marker, historyStripHeight);
     historyDropLine.frame = NSMakeRect(historyBoundaries[std::clamp(historyDropBoundary, 0, int(historyItems.size()))] - 1, 3, 2, historyStripHeight - 4);
     historyDropLine.hidden = historyDropBoundary < 0;
+    layoutHistoryGroups();
   }
 
   void updateHistoryAppearance() {
@@ -886,7 +1003,7 @@ struct NativeMacWindowState {
     for (int index = 0; index < historyItems.size(); ++index) {
       const auto& item = historyItems[index];
       MITCADHistoryFeatureButton* button = historyButtons[ns(item.id)];
-      button.enabled = item.enabled && !item.filtered && !blocked;
+      button.enabled = item.enabled && !historyCellHidden(index) && !blocked;
       button.state = selectedHistory.contains(item.id) ? NSControlStateValueOn : NSControlStateValueOff;
       button.wantsLayer = YES;
       button.layer.cornerRadius = 5;
@@ -894,30 +1011,37 @@ struct NativeMacWindowState {
       const bool warned = item.status == QStringLiteral("warning");
       const bool selected = selectedHistory.contains(item.id);
       const bool found = timelineMatches.contains(item.id);
-      NSColor* issue = failed ? nativeColor(errorColor(QApplication::palette()))
-                             : nativeColor(warningColor(QApplication::palette()));
+      // The status rings and tints follow the appearance (mitcad#1041: no
+      // static copy of the palette's colour).
+      NSColor* issue = failed ? roleColor(ColorRole::ErrorBorder)
+                             : roleColor(ColorRole::WarningBorder);
       button.layer.backgroundColor = (failed || warned ? [issue colorWithAlphaComponent:0.22]
                                                       : selected ? [NSColor.controlAccentColor colorWithAlphaComponent:0.18]
                                                                  : NSColor.clearColor).CGColor;
-      button.layer.borderWidth = selected || found ? 2 : failed || warned || item.noted ? 1.2 : 0;
+      // An import note is information (mitcad#1040): its badge, no ring in
+      // a warning's colour.
+      button.layer.borderWidth = selected || found ? 2 : failed || warned ? 1.2 : 0;
       button.layer.borderColor = (selected ? NSColor.controlAccentColor
-                                          : found ? NSColor.systemOrangeColor : issue).CGColor;
-      button.alphaValue = item.suppressed || index >= historyMarker ? 0.42 : 1.0;
+                                          : found ? roleColor(ColorRole::SearchMatch) : issue).CGColor;
+      button.alphaValue = item.suppressed || index >= historyMarker ? kStateDimOpacity : 1.0;
       QStringList description = {item.title};
       if (item.suppressed) description.append(QStringLiteral("Suppressed"));
       else if (index >= historyMarker) description.append(QStringLiteral("Rolled back"));
-      if (item.status == QStringLiteral("error")) description.append(QStringLiteral("Error"));
-      else if (item.status == QStringLiteral("warning")) description.append(QStringLiteral("Warning"));
+      // The level's word (mitcad#1040).
+      if (item.status == QStringLiteral("error")) description.append(noticeLevelWord(NoticeLevel::Error));
+      else if (item.status == QStringLiteral("warning")) description.append(noticeLevelWord(NoticeLevel::Warning));
+      else if (item.noted) description.append(QStringLiteral("Import note"));
       button.accessibilityLabel = ns(description.join(QStringLiteral(", ")));
     }
+    updateHistoryGroupAppearance();
     // An accepted drag remains active during recomputes, so its final target
     // and shared undo merge cannot be lost when a snapshot refreshes.
     historyMarkerButton.enabled = historyMarkerDragging || (canChange && !historyItems.isEmpty());
     const int hiddenAfter = int(std::count_if(historyItems.cbegin() + historyMarker, historyItems.cend(),
                                             [](const auto& item) { return item.filtered; }));
-    historyMarkerButton.toolTip = ns(QStringLiteral("History marker: %1 of %2\nDrag to roll back or forward%3")
+    historyMarkerButton.toolTip = ns(QObject::tr("Timeline marker: %1 of %2\nDrag to roll back or forward%3")
                                       .arg(historyMarker).arg(historyItems.size())
-                                      .arg(hiddenAfter > 0 ? QStringLiteral("\n%1 hidden feature(s) after the marker").arg(hiddenAfter) : QString()));
+                                      .arg(hiddenAfter > 0 ? QObject::tr("\n%1 hidden feature(s) after the marker").arg(hiddenAfter) : QString()));
     historyFilterButton.enabled = !blocked && !historyMarkerDragging;
     for (NSButton* button in historySteps) {
       const bool beginning = button.tag < 2;
@@ -929,7 +1053,9 @@ struct NativeMacWindowState {
 
   void setHistorySelected(const QStringList& keys, bool scroll = true) {
     QStringList valid;
-    for (const auto& item : historyItems) if (!item.filtered && keys.contains(item.id)) valid.append(item.id);
+    for (int index = 0; index < historyItems.size(); ++index) {
+      if (!historyCellHidden(index) && keys.contains(historyItems[index].id)) valid.append(historyItems[index].id);
+    }
     const bool changed = valid != selectedHistory;
     selectedHistory = valid;
     if (!selectedHistory.contains(historySelectionAnchor)) {
@@ -944,13 +1070,13 @@ struct NativeMacWindowState {
 
   void selectHistoryFeature(const QString& key, NSEventModifierFlags modifiers) {
     const int index = historyIndex(key);
-    if (index < 0 || nativeModalBlocked() || historyItems[index].filtered || !historyItems[index].enabled) return;
+    if (index < 0 || nativeModalBlocked() || historyCellHidden(index) || !historyItems[index].enabled) return;
     QStringList keys = selectedHistory;
     const int anchor = historyIndex(historySelectionAnchor);
     if ((modifiers & NSEventModifierFlagShift) && anchor >= 0) {
       if (!(modifiers & NSEventModifierFlagCommand)) keys.clear();
       for (int at = std::min(anchor, index); at <= std::max(anchor, index); ++at) {
-        if (!historyItems[at].filtered && historyItems[at].enabled && !keys.contains(historyItems[at].id)) keys.append(historyItems[at].id);
+        if (!historyCellHidden(at) && historyItems[at].enabled && !keys.contains(historyItems[at].id)) keys.append(historyItems[at].id);
       }
     } else if (modifiers & NSEventModifierFlagCommand) {
       if (keys.contains(key)) keys.removeAll(key);
@@ -967,7 +1093,7 @@ struct NativeMacWindowState {
 
   void activateHistoryFeature(const QString& key) {
     const int index = historyIndex(key);
-    if (index < 0 || historyItems[index].filtered || !historyItems[index].enabled || !historyCanChange()) return;
+    if (index < 0 || historyCellHidden(index) || !historyItems[index].enabled || !historyCanChange()) return;
     selectHistoryFeature(key, 0);
     if (callbacks.historyActivated) callbacks.historyActivated(key);
   }
@@ -978,7 +1104,7 @@ struct NativeMacWindowState {
     int target = direction == -2 ? 0 : direction == 2 ? int(historyItems.size()) - 1 : current + direction;
     const int step = direction < 0 && direction != -2 ? -1 : direction == 2 ? -1 : 1;
     while (target >= 0 && target < historyItems.size()) {
-      if (!historyItems[target].filtered) { selectHistoryFeature(historyItems[target].id, modifiers); return; }
+      if (!historyCellHidden(target)) { selectHistoryFeature(historyItems[target].id, modifiers); return; }
       target += step;
     }
   }
@@ -998,7 +1124,7 @@ struct NativeMacWindowState {
     int nearest = 0;
     CGFloat distance = std::abs(local.x - historyBoundaries.front());
     for (int index = 1; index < historyBoundaries.size(); ++index) {
-      if (!historyShownBoundary(index)) continue;
+      if (!historyShownBoundary(index) || historyInsideFolded(index)) continue;
       const CGFloat candidate = std::abs(local.x - historyBoundaries[index]);
       if (candidate < distance) { nearest = index; distance = candidate; }
     }
@@ -1010,6 +1136,7 @@ struct NativeMacWindowState {
         !callbacks.historyMarkerDragStarted || !callbacks.historyMarkerDragged || !callbacks.historyMarkerDragFinished) return false;
     historyMarkerDragging = true;
     historyDragPosition = historyMarker;
+    hoverHistoryCell(QString());
     callbacks.historyMarkerDragStarted();
     updateHistoryAppearance();
     return true;
@@ -1041,18 +1168,20 @@ struct NativeMacWindowState {
 
   void reorderHistoryFeature(const QString& key, int destination) {
     const int from = historyIndex(key);
-    if (!historyCanChange() || !callbacks.historyReordered || from < 0 || historyItems.isEmpty() || historyItems[from].filtered) return;
+    if (!historyCanChange() || !callbacks.historyReordered || from < 0 || historyItems.isEmpty() || historyCellHidden(from)) return;
     destination = std::clamp(destination, 0, int(historyItems.size()) - 1);
     if (destination != from) callbacks.historyReordered(key, destination);
   }
 
   void rebuildHistory(const QList<NativeMacHistoryItem>& items, int marker) {
+    // A rebuild ends the hover, as the shared timeline's does (mitcad#1076).
+    hoverHistoryCell(QString());
     if (items.size() != historyItems.size()) historyAppearanceValid = false;
     else for (int index = 0; index < items.size(); ++index) {
       const auto& a = items[index]; const auto& b = historyItems[index];
       if (a.id != b.id || a.title != b.title || a.status != b.status || a.noted != b.noted ||
           a.suppressed != b.suppressed || a.enabled != b.enabled || a.filtered != b.filtered ||
-          a.bindings != b.bindings) {
+          a.bindings != b.bindings || a.group != b.group || a.groupCollapsed != b.groupCollapsed) {
         historyAppearanceValid = false;
         break;
       }
@@ -1087,7 +1216,6 @@ struct NativeMacWindowState {
       if (item.icon.isNull()) artwork.symbol = item.symbol;
       NSImage* image = actionImage(artwork, 22);
       if (button.image != image) button.image = image;
-      if (qt(button.toolTip) != item.detail) button.toolTip = ns(item.detail);
       MITCADBindingBadge* bindingBadge = nil;
       for (NSView* child in button.subviews) {
         if ([child isKindOfClass:MITCADBindingBadge.class]) bindingBadge = (MITCADBindingBadge*)child;
@@ -1106,20 +1234,26 @@ struct NativeMacWindowState {
         bindingBadge.hidden = item.bindings <= 0;
         bindingBadge.representedObject = key;
         bindingBadge.title = ns(QStringLiteral("fx %1").arg(item.bindings));
-        bindingBadge.accessibilityLabel = ns(QStringLiteral("%1 follows %2 bindings").arg(item.title).arg(item.bindings));
+        bindingBadge.accessibilityLabel = ns(QObject::tr("%1 follows %2 bindings").arg(item.title).arg(item.bindings));
         bindingBadge.accessibilityIdentifier = ns(QStringLiteral("native.history.fx.") + item.id);
       }
-      // A native system badge communicates failure/warning without replacing
-      // or tinting the shared coloured CAD artwork.
-      if (qt(button.statusKey) != item.status) {
-        button.statusKey = ns(item.status);
+      // A native system badge communicates the level (mitcad#1040: failure,
+      // warning, an import note's information) without replacing or tinting
+      // the shared coloured CAD artwork; the levels' one symbol each.
+      const QString statusKey = item.noted ? item.status + QStringLiteral(":noted") : item.status;
+      if (qt(button.statusKey) != statusKey) {
+        button.statusKey = ns(statusKey);
         for (NSView* badge in button.subviews.copy) {
           if ([badge.identifier isEqualToString:@"historyStatusBadge"]) [badge removeFromSuperview];
         }
-        if (item.status == QStringLiteral("error") || item.status == QStringLiteral("warning")) {
+        const NoticeLevel level = item.status == QStringLiteral("error")     ? NoticeLevel::Error
+                                  : item.status == QStringLiteral("warning") ? NoticeLevel::Warning
+                                  : item.noted                               ? NoticeLevel::Information
+                                                                             : NoticeLevel::Hint;
+        if (level != NoticeLevel::Hint) {
           NSImageView* badge = [[NSImageView alloc] initWithFrame:NSMakeRect(17, 0, 11, 11)];
-          badge.image = symbol(item.status == QStringLiteral("error") ? QStringLiteral("xmark.circle.fill") : QStringLiteral("exclamationmark.triangle.fill"));
-          badge.contentTintColor = item.status == QStringLiteral("error") ? NSColor.systemRedColor : NSColor.systemOrangeColor;
+          badge.image = symbol(noticeSymbolName(level));
+          badge.contentTintColor = noticeTint(level);
           badge.identifier = @"historyStatusBadge";
           badge.accessibilityElement = NO;
           [button addSubview:badge];
@@ -1130,10 +1264,154 @@ struct NativeMacWindowState {
       if ([present containsObject:key]) continue;
       MITCADHistoryFeatureButton* button = historyButtons[key];
       button->state = nullptr;
+      [button removeAllToolTips];
       [button removeFromSuperview];
       [historyButtons removeObjectForKey:key];
     }
+    rebuildHistoryGroups();
     setHistorySelected(selectedHistory, false);
+  }
+
+  // The timeline's hover (mitcad#1076): the feature of the cell under the
+  // pointer (a folded group's first feature), or none. Not while the
+  // marker is dragged or a sheet is up.
+  void hoverHistoryCell(const QString& key) {
+    if (!key.isEmpty() && (closing || historyMarkerDragging || nativeModalBlocked() || historyIndex(key) < 0)) return;
+    if (key == historyHover) return;
+    historyHover = key;
+    if (callbacks.historyHovered) callbacks.historyHovered(key);
+  }
+
+  // A cell's tooltip, asked for when AppKit shows it: the shared
+  // timeline's (mitcad#1076), else the item's detail.
+  QString historyToolTip(const QString& key) const {
+    const int index = historyIndex(key);
+    if (index < 0) return QString();
+    const QString shared = callbacks.historyToolTip ? callbacks.historyToolTip(key) : QString();
+    return shared.isEmpty() ? historyItems[index].detail : shared;
+  }
+
+  // The timeline groups (mitcad#1077). The folded group a feature's cell
+  // is in, or nullptr; a folded group's cells are not shown, its folder
+  // cell stands for them.
+  const HistoryGroup* historyFoldedGroup(int index) const {
+    if (index < 0 || index >= historyItems.size() || historyItems[index].filtered || !historyItems[index].groupCollapsed) {
+      return nullptr;
+    }
+    for (const HistoryGroup& group : historyGroups) {
+      if (group.collapsed && index >= group.first && index <= group.last) return &group;
+    }
+    return nullptr;
+  }
+  bool historyCellHidden(int index) const { return historyItems[index].filtered || historyFoldedGroup(index); }
+  // A boundary between two cells of a folded group: no drop or marker goes there.
+  bool historyInsideFolded(int boundary) const {
+    return std::any_of(historyGroups.cbegin(), historyGroups.cend(), [boundary](const HistoryGroup& group) {
+      return group.collapsed && boundary > group.first && boundary <= group.last;
+    });
+  }
+
+  void rebuildHistoryGroups() {
+    historyGroups.clear();
+    for (int index = 0; index < historyItems.size(); ++index) {
+      const NativeMacHistoryItem& item = historyItems[index];
+      if (item.group.isEmpty()) continue;
+      auto group = std::find_if(historyGroups.begin(), historyGroups.end(),
+                                [&item](const HistoryGroup& known) { return known.name == item.group; });
+      if (group == historyGroups.end()) historyGroups.append(HistoryGroup{item.group, index, index, item.groupCollapsed});
+      else group->last = index;
+    }
+    NSMutableSet<NSString*>* present = [NSMutableSet set];
+    for (const HistoryGroup& group : historyGroups) {
+      NSString* name = ns(group.name);
+      [present addObject:name];
+      MITCADHistoryGroupView* view = historyGroupViews[name];
+      if (!view) {
+        view = [[MITCADHistoryGroupView alloc] initWithFrame:NSZeroRect];
+        view->state = this;
+        view.groupName = name;
+        constexpr CGFloat inset = (timeline::cell - timeline::icon) / 2.0;
+        view.folder = [[NSImageView alloc] initWithFrame:NSMakeRect(inset, inset, timeline::icon, timeline::icon)];
+        view.folder.imageScaling = NSImageScaleProportionallyDown;
+        view.folder.accessibilityElement = NO;
+        view.folder.hidden = YES; // shown while the group is folded
+        [view addSubview:view.folder];
+        view.accessibilityIdentifier = ns(QStringLiteral("native.history.group.") + group.name);
+        [history addSubview:view positioned:NSWindowBelow relativeTo:historyMarkerButton];
+        historyGroupViews[name] = view;
+      }
+      NativeMacAction artwork;
+      artwork.label = group.name;
+      artwork.icon = themeIcon(QStringLiteral("folder"));
+      NSImage* image = actionImage(artwork, timeline::icon);
+      if (view.folder.image != image) view.folder.image = image;
+      view.firstKey = ns(historyItems[group.first].id);
+      view.collapsed = group.collapsed;
+    }
+    for (NSString* name in historyGroupViews.allKeys) {
+      if ([present containsObject:name]) continue;
+      MITCADHistoryGroupView* view = historyGroupViews[name];
+      view->state = nullptr;
+      [view removeAllToolTips];
+      [view removeFromSuperview];
+      [historyGroupViews removeObjectForKey:name];
+    }
+  }
+
+  // An open group's band over its cells; a folded group's cell is placed
+  // with the cells (layoutHistory). Logged as the shared timeline logs
+  // them, in the window's points from its top left, when they change.
+  void layoutHistoryGroups() {
+    QStringList lines;
+    for (const HistoryGroup& group : historyGroups) {
+      MITCADHistoryGroupView* view = historyGroupViews[ns(group.name)];
+      if (!group.collapsed) {
+        MITCADHistoryFeatureButton* first = historyButtons[ns(historyItems[group.first].id)];
+        MITCADHistoryFeatureButton* last = historyButtons[ns(historyItems[group.last].id)];
+        view.frame = NSMakeRect(NSMinX(first.frame), 0, std::max(CGFloat(1), NSMaxX(last.frame) - NSMinX(first.frame)),
+                                timeline::top);
+      }
+      if (historyCard.hidden || !view.window) continue;
+      const NSPoint at = [view convertPoint:NSMakePoint(NSMidX(view.bounds), NSMidY(view.bounds)) toView:nil];
+      lines << QStringLiteral("Timeline group %1 at %2,%3")
+                   .arg(group.name)
+                   .arg(std::lround(at.x))
+                   .arg(std::lround(NSHeight(window.contentView.frame) - at.y));
+    }
+    const QString logged = lines.join(QLatin1Char('\n'));
+    if (logged != loggedHistoryGroups) {
+      loggedHistoryGroups = logged;
+      for (const QString& line : std::as_const(lines)) qDebug().noquote() << line;
+    }
+  }
+
+  // A folded group's cell (mitcad#1077): the folder artwork in the worst
+  // state of its features, dimmed when none of them is built, as the
+  // shared timeline paints it.
+  void updateHistoryGroupAppearance() {
+    for (const HistoryGroup& group : historyGroups) {
+      MITCADHistoryGroupView* view = historyGroupViews[ns(group.name)];
+      bool failed = false;
+      bool warned = false;
+      bool off = true;
+      for (int index = group.first; index <= group.last; ++index) {
+        const NativeMacHistoryItem& item = historyItems[index];
+        failed = failed || item.status == QStringLiteral("error");
+        warned = warned || item.status == QStringLiteral("warning");
+        off = off && (item.suppressed || index >= historyMarker);
+      }
+      const bool marked = group.collapsed && (failed || warned);
+      NSColor* issue = failed ? roleColor(ColorRole::ErrorBorder) : roleColor(ColorRole::WarningBorder);
+      view.wantsLayer = YES;
+      view.layer.cornerRadius = 5;
+      view.layer.backgroundColor = (marked ? [issue colorWithAlphaComponent:0.22] : NSColor.clearColor).CGColor;
+      view.layer.borderWidth = marked ? 1.2 : 0;
+      view.layer.borderColor = issue.CGColor;
+      view.folder.alphaValue = off ? kStateDimOpacity : 1.0;
+      const int size = group.last - group.first + 1;
+      view.accessibilityLabel = ns(group.collapsed ? QObject::tr("%1, folded group of %2 features").arg(group.name).arg(size)
+                                                   : QObject::tr("%1, group of %2 features").arg(group.name).arg(size));
+    }
   }
 
   void buildWindow() {
@@ -1144,7 +1422,7 @@ struct NativeMacWindowState {
     ((MITCADDocumentWindow*)window)->state = this;
     window.releasedWhenClosed = NO;
     window.delegate = delegate;
-    window.title = @"Untitled";
+    window.title = ns(QObject::tr("Untitled"));
     window.identifier = @"native.documentWindow";
     // The document and frame have their own recovery. An older system UI
     // snapshot must not overwrite the current frame autosave at launch.
@@ -1162,7 +1440,11 @@ struct NativeMacWindowState {
     window.contentView = canvasRoot;
     viewportHost = [[MITCADViewportHost alloc] initWithFrame:canvasRoot.bounds];
     viewportHost->state = this;
-    viewportHost.accessibilityLabel = @"3D canvas";
+    // A labelled element of its own: the canvas's focus reads as the 3D
+    // view, not the bare window (mitcad#1026).
+    viewportHost.accessibilityElement = YES;
+    viewportHost.accessibilityRole = NSAccessibilityGroupRole;
+    viewportHost.accessibilityLabel = ns(QObject::tr("3D view"));
     viewportHost.accessibilityIdentifier = @"native.viewportHost";
     [canvasRoot addSubview:viewportHost];
 
@@ -1181,14 +1463,14 @@ struct NativeMacWindowState {
     projectsCard = floatingCard(@"native.projectsCard");
     projectsCard.hidden = YES;
     [canvasRoot addSubview:projectsCard];
-    NSTextField* projectsTitle = label(@"Projects", [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]);
+    NSTextField* projectsTitle = label(ns(QObject::tr("Projects")), [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]);
     [projectsCard.body addSubview:projectsTitle];
     NSButton* projectsClose = [NSButton buttonWithImage:symbol(QStringLiteral("chevron.down"))
                                                 target:delegate action:@selector(collapseProjects:)];
     projectsClose.bordered = NO;
     projectsClose.translatesAutoresizingMaskIntoConstraints = NO;
     projectsClose.accessibilityIdentifier = @"native.projects.disclosure";
-    projectsClose.accessibilityLabel = @"Collapse Projects";
+    projectsClose.accessibilityLabel = ns(QObject::tr("Collapse Projects"));
     [projectsCard.body addSubview:projectsClose];
     projectsHost = [[NSView alloc] initWithFrame:NSZeroRect];
     projectsHost.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1209,15 +1491,16 @@ struct NativeMacWindowState {
       [projectsHost.trailingAnchor constraintEqualToAnchor:projectsCard.body.trailingAnchor constant:-6],
       [projectsHost.topAnchor constraintEqualToAnchor:projectsCard.body.topAnchor constant:30]
     ]];
+    buildConfigurationCard();
     sidebarCard = floatingCard(@"native.sidebar");
     [canvasRoot addSubview:sidebarCard];
-    NSTextField* browserTitle = label(@"Browser", [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]);
+    NSTextField* browserTitle = label(ns(QObject::tr("Browser")), [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]);
     [sidebarCard.body addSubview:browserTitle];
-    NSButton* browserClose = [NSButton buttonWithImage:symbol(QStringLiteral("chevron.down"), @"Collapse Browser")
+    NSButton* browserClose = [NSButton buttonWithImage:symbol(QStringLiteral("chevron.down"), ns(QObject::tr("Collapse Browser")))
                                              target:delegate action:@selector(collapseBrowser:)];
     browserClose.bordered = NO;
     browserClose.translatesAutoresizingMaskIntoConstraints = NO;
-    browserClose.accessibilityLabel = @"Collapse Browser";
+    browserClose.accessibilityLabel = ns(QObject::tr("Collapse Browser"));
     [sidebarCard.body addSubview:browserClose];
     [NSLayoutConstraint activateConstraints:@[
       [browserTitle.leadingAnchor constraintEqualToAnchor:browserClose.trailingAnchor constant:6],
@@ -1236,7 +1519,7 @@ struct NativeMacWindowState {
     find.target = delegate;
     find.action = @selector(performAction:);
     find.accessibilityIdentifier = @"native.browser.find";
-    find.toolTip = @"Find in Design";
+    find.toolTip = ns(QObject::tr("Find in Design: components and bodies by name"));
     [sidebarCard.body addSubview:find];
     [NSLayoutConstraint activateConstraints:@[
       [find.trailingAnchor constraintEqualToAnchor:sidebarCard.body.trailingAnchor constant:-8],
@@ -1254,9 +1537,11 @@ struct NativeMacWindowState {
       button.tag = index;
       button.bezelStyle = NSBezelStyleRounded;
       button.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
-      button.image = symbol(index == 0 ? QStringLiteral("xmark.octagon.fill") : QStringLiteral("exclamationmark.triangle.fill"));
+      // The levels' one symbol each (mitcad#1040).
+      const NoticeLevel level = index == 0 ? NoticeLevel::Error : NoticeLevel::Warning;
+      button.image = symbol(noticeSymbolName(level));
       button.imagePosition = NSImageLeft;
-      button.contentTintColor = index == 0 ? NSColor.systemRedColor : NSColor.systemOrangeColor;
+      button.contentTintColor = noticeTint(level);
       button.accessibilityIdentifier = index == 0 ? @"native.browser.failures" : @"native.browser.warnings";
       button.lineBreakMode = NSLineBreakByTruncatingTail;
       [button.widthAnchor constraintLessThanOrEqualToConstant:116].active = YES;
@@ -1270,23 +1555,6 @@ struct NativeMacWindowState {
       [browserIssues.leadingAnchor constraintEqualToAnchor:sidebarCard.body.leadingAnchor constant:10],
       [browserIssues.topAnchor constraintEqualToAnchor:sidebarCard.body.topAnchor constant:32],
       [browserIssues.trailingAnchor constraintLessThanOrEqualToAnchor:sidebarCard.body.trailingAnchor constant:-10]
-    ]];
-    configurationScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
-    configurationScroll.translatesAutoresizingMaskIntoConstraints = NO;
-    configurationScroll.drawsBackground = NO;
-    configurationScroll.hasVerticalScroller = YES;
-    configurationScroll.hasHorizontalScroller = NO;
-    configurationScroll.automaticallyAdjustsContentInsets = NO;
-    configurationScroll.autohidesScrollers = YES;
-    configurationScroll.hidden = YES;
-    configurationScroll.accessibilityIdentifier = @"native.configuration";
-    [sidebarCard.body addSubview:configurationScroll];
-    configurationHeight = [configurationScroll.heightAnchor constraintEqualToConstant:0];
-    [NSLayoutConstraint activateConstraints:@[
-      [configurationScroll.leadingAnchor constraintEqualToAnchor:sidebarCard.body.leadingAnchor constant:6],
-      [configurationScroll.trailingAnchor constraintEqualToAnchor:sidebarCard.body.trailingAnchor constant:-6],
-      [configurationScroll.topAnchor constraintEqualToAnchor:sidebarCard.body.topAnchor constant:38],
-      configurationHeight
     ]];
     tree = [[MITCADModelOutlineView alloc] initWithFrame:NSZeroRect];
     tree->state = this;
@@ -1306,16 +1574,16 @@ struct NativeMacWindowState {
     tree.target = delegate;
     tree.doubleAction = @selector(activateTree:);
     tree.autosaveExpandedItems = NO; // The shared Browser owns expansion state.
-    tree.accessibilityLabel = @"Model";
+    tree.accessibilityLabel = ns(QObject::tr("Browser"));
     tree.accessibilityIdentifier = @"native.modelTree";
-    tree.menu = [[NSMenu alloc] initWithTitle:@"Model"];
-    NSMenuItem* edit = [[NSMenuItem alloc] initWithTitle:@"Edit" action:@selector(activateTree:) keyEquivalent:@""];
+    tree.menu = [[NSMenu alloc] initWithTitle:ns(QObject::tr("Browser"))];
+    NSMenuItem* edit = [[NSMenuItem alloc] initWithTitle:ns(QObject::tr("Edit")) action:@selector(activateTree:) keyEquivalent:@""];
     edit.target = delegate;
     [tree.menu addItem:edit];
-    NSMenuItem* rename = [[NSMenuItem alloc] initWithTitle:@"Rename…" action:@selector(renameTree:) keyEquivalent:@""];
+    NSMenuItem* rename = [[NSMenuItem alloc] initWithTitle:ns(QObject::tr("Rename")) action:@selector(renameTree:) keyEquivalent:@""];
     rename.target = delegate;
     [tree.menu addItem:rename];
-    NSMenuItem* visibility = [[NSMenuItem alloc] initWithTitle:@"Show / Hide" action:@selector(toggleTreeVisibility:) keyEquivalent:@""];
+    NSMenuItem* visibility = [[NSMenuItem alloc] initWithTitle:ns(QObject::tr("Show / Hide")) action:@selector(toggleTreeVisibility:) keyEquivalent:@""];
     visibility.target = delegate;
     [tree.menu addItem:visibility];
     NSScrollView* treeScroll = scroll(tree);
@@ -1332,16 +1600,19 @@ struct NativeMacWindowState {
     treeRoots = [NSMutableArray array];
     treeNodes = [NSMutableDictionary dictionary];
 
-    status = label(@"");
-    status.textColor = NSColor.secondaryLabelColor;
-    status.lineBreakMode = NSLineBreakByTruncatingTail;
-    status.accessibilityIdentifier = @"native.status";
-    statusCard = floatingCard(@"native.statusCard");
-    statusLifetime = [MITCADStatusLifetime new];
-    statusLifetime.card = statusCard;
-    statusCard.hidden = YES;
-    fill(status, statusCard.body, 8);
-    [canvasRoot addSubview:statusCard];
+    // The message band (mitcad#1098): placed above the timeline by
+    // layoutOverlays once there is a message.
+    messageCard = floatingCard(@"native.messageBand");
+    messageCard.hidden = YES;
+    messageBand = [[MITCADMessageBand alloc] initWithFrame:NSZeroRect];
+    messageBand->closed = [this] {
+      if (callbacks.messageClosed) callbacks.messageClosed();
+    };
+    messageBand->featureChosen = [this](const QString& uid) {
+      if (callbacks.messageFeatureChosen) callbacks.messageFeatureChosen(uid);
+    };
+    fill(messageBand, messageCard.body);
+    [canvasRoot addSubview:messageCard];
     cubeArrows = [NSMutableDictionary dictionary];
 
     historyCard = floatingCard(@"native.historyCard");
@@ -1351,7 +1622,7 @@ struct NativeMacWindowState {
     history = [[MITCADHistoryStrip alloc] initWithFrame:NSMakeRect(0, 0, 28, historyStripHeight)];
     history->state = this;
     [history registerForDraggedTypes:@[@"com.mitcad.feature-history"]];
-    history.accessibilityLabel = @"Feature history";
+    history.accessibilityLabel = ns(QObject::tr("Timeline"));
     history.accessibilityIdentifier = @"native.historyStrip";
     historyButtons = [NSMutableDictionary dictionary];
     historyRunMarks = [NSMutableArray array];
@@ -1371,12 +1642,12 @@ struct NativeMacWindowState {
     historyMarkerButton->state = this;
     historyMarkerButton.title = @"";
     historyMarkerButton.bordered = NO;
-    historyMarkerButton.accessibilityLabel = @"History marker";
+    historyMarkerButton.accessibilityLabel = ns(QObject::tr("Timeline marker"));
     historyMarkerButton.accessibilityIdentifier = @"native.historyMarker";
     NSBox* markerHandle = [[NSBox alloc] initWithFrame:NSMakeRect(2, 0, 10, 10)];
     markerHandle.boxType = NSBoxCustom;
     markerHandle.borderWidth = 0;
-    markerHandle.fillColor = [NSColor colorWithSRGBRed:224.0/255 green:123.0/255 blue:26.0/255 alpha:1];
+    markerHandle.fillColor = roleColor(ColorRole::Handle);
     markerHandle.accessibilityElement = NO;
     [historyMarkerButton addSubview:markerHandle];
     NSBox* markerLine = [[NSBox alloc] initWithFrame:NSMakeRect(6, 9, 2, historyStripHeight - 10)];
@@ -1424,7 +1695,7 @@ struct NativeMacWindowState {
     [historyFilterButton setButtonType:NSButtonTypePushOnPushOff];
     historyFilterButton.translatesAutoresizingMaskIntoConstraints = NO;
     historyFilterButton.accessibilityIdentifier = @"native.history.filter";
-    historyFilterButton.accessibilityLabel = @"Timeline Filter";
+    historyFilterButton.accessibilityLabel = ns(QObject::tr("Timeline Filter"));
     [historyFilterButton.widthAnchor constraintEqualToConstant:24].active = YES;
     [historyFilterButton.heightAnchor constraintEqualToConstant:28].active = YES;
     [playback addArrangedSubview:historyFilterButton];
@@ -1433,10 +1704,11 @@ struct NativeMacWindowState {
     searchHistory.bordered = NO;
     searchHistory.translatesAutoresizingMaskIntoConstraints = NO;
     searchHistory.accessibilityIdentifier = @"native.history.search";
-    searchHistory.toolTip = @"Search Timeline";
+    searchHistory.toolTip = ns(QObject::tr("Search Timeline"));
     [searchHistory.widthAnchor constraintEqualToConstant:24].active = YES;
     [searchHistory.heightAnchor constraintEqualToConstant:28].active = YES;
     [playback addArrangedSubview:searchHistory];
+    historySearchButton = searchHistory;
     [historyView addSubview:playback];
     [NSLayoutConstraint activateConstraints:@[
       [playback.leadingAnchor constraintEqualToAnchor:historyView.leadingAnchor constant:18],
@@ -1447,11 +1719,17 @@ struct NativeMacWindowState {
       [historyScroll.bottomAnchor constraintEqualToAnchor:historyView.bottomAnchor constant:-4]
     ]];
     updateHistoryAppearance();
+    // The Chat card (mitcad#1075) before the inspector: made whenever the
+    // inspector is, which layoutOverlays waits for.
+    chatCard = floatingCard(@"native.chatCard");
+    chatCard.hidden = YES;
+    [canvasRoot addSubview:chatCard];
+    chatHost = buildChatCard(chatCard.body);
     inspectorCard = floatingCard(@"native.inspectorCard");
     inspectorCard.hidden = YES;
     [canvasRoot addSubview:inspectorCard];
     inspectorHost = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 280, 700)];
-    inspectorHost.accessibilityLabel = @"Inspector";
+    inspectorHost.accessibilityLabel = ns(QObject::tr("Command Panel"));
     inspectorHost.accessibilityIdentifier = @"native.inspector";
     inspectorScroll = scroll(nil);
     buildInspectorFooter();
@@ -1489,15 +1767,77 @@ struct NativeMacWindowState {
   // content's own fittingSize does not (mitcad#815).
   CGFloat inspectorContentHeight() {
     if (!inspectorContent) return 180;
-    // Wrapping labels take their width in the first pass, their height in
-    // the second.
-    [inspectorHost layoutSubtreeIfNeeded];
-    [inspectorHost layoutSubtreeIfNeeded];
+    if (inCanvasLayout) {
+      // Inside the window's own layout pass, nested passes of the inspector
+      // can keep marking the window for another constraints pass until
+      // AppKit throws (Send to Slicer with Purge volumes, mitcad#1078): its
+      // frames as last laid out now, measured afresh on the next turn.
+      queueOverlayLayout();
+    } else {
+      // Wrapping labels take their width in the first pass, their height in
+      // the second.
+      [inspectorHost layoutSubtreeIfNeeded];
+      [inspectorHost layoutSubtreeIfNeeded];
+    }
     const CGFloat content = inspectorDocument ? NSHeight(inspectorDocument.frame) : inspectorContent.fittingSize.height;
     // Use the space actually reserved by the footer's layout, including
     // the button frames outside their alignment rectangles (mitcad#993).
     const CGFloat footer = NSHeight(inspectorFooter.frame);
     return std::ceil(content + footer);
+  }
+
+  // layoutOverlays once more on the next run-loop turn, outside any layout
+  // pass; several requests make one.
+  void queueOverlayLayout() {
+    if (overlayLayoutQueued || closing) return;
+    overlayLayoutQueued = true;
+    __weak MITCADNativeWindowDelegate* owner = delegate;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      MITCADNativeWindowDelegate* alive = owner;
+      if (alive == nil || alive->state == nullptr) return;
+      alive->state->overlayLayoutQueued = false;
+      if (!alive->state->closing) alive->state->layoutOverlays();
+    });
+  }
+
+  // The message band (mitcad#1098) as the Floating layout places it: right
+  // above the timeline (`timeline`, its card or the room it would take), as
+  // wide as it and at least as high, room for two lines of text; the stub
+  // keeps that row, one line high and as wide as its text, centred and
+  // dimmed. Returns the floor of the cards above it. Logs `Native message
+  // band placed: full|stub x,y wxh, row <h>, timeline x,y wxh` (the canvas's
+  // points, y down) when it changes.
+  CGFloat placeMessageBand(CGFloat floor, NSRect timeline, CGFloat gap) {
+    messageCard.hidden = ![messageBand hasMessage];
+    if (messageCard.hidden) return floor;
+    const CGFloat row = std::max(NSHeight(timeline), [messageBand fullHeight]);
+    const bool stubbed = [messageBand isStub];
+    if (stubbed) {
+      const NSSize stub = [messageBand stubSize];
+      const CGFloat wide = std::min(NSWidth(timeline), stub.width);
+      messageCard.frame = NSMakeRect(NSMinX(timeline) + (NSWidth(timeline) - wide) / 2, floor - stub.height, wide,
+                                     stub.height);
+      messageCard.alphaValue = 0.8;
+    } else {
+      messageCard.frame = NSMakeRect(NSMinX(timeline), floor - row, NSWidth(timeline), row);
+      messageCard.alphaValue = 1;
+    }
+    const auto rect = [](NSRect r) {
+      return QStringLiteral("%1,%2 %3x%4")
+          .arg(std::lround(NSMinX(r)))
+          .arg(std::lround(NSMinY(r)))
+          .arg(std::lround(NSWidth(r)))
+          .arg(std::lround(NSHeight(r)));
+    };
+    const QString placed = QStringLiteral("Native message band placed: %1 %2, row %3, timeline %4")
+                               .arg(stubbed ? QStringLiteral("stub") : QStringLiteral("full"), rect(messageCard.frame))
+                               .arg(std::lround(row))
+                               .arg(rect(timeline));
+    if (placed != loggedMessageBand) {
+      loggedMessageBand = placed;
+      qDebug().noquote() << placed;
+    }
+    return floor - row - gap;
   }
 
   void layoutOverlays() {
@@ -1508,79 +1848,35 @@ struct NativeMacWindowState {
     constexpr CGFloat gap = 8;
     const CGFloat width = canvasRoot.bounds.size.width;
     const CGFloat height = canvasRoot.bounds.size.height;
+    // The Chat card on the right edge (mitcad#1075); the other cards share
+    // the canvas left of it.
+    const CGFloat chatWidth = chatCard.hidden ? 0 : chatCardPlacedWidth(width - margin * 2);
+    const CGFloat chatRoom = chatSpace();
     // The side cards' widths as dragged, within the canvas (mitcad#818).
-    const NativeCardPlacement cards = cardWidths.place(width, !projectsCard.hidden, !sidebarCard.hidden,
+    const NativeCardPlacement cards = cardWidths.place(width - chatRoom, !projectsCard.hidden, !sidebarCard.hidden,
                                                        !inspectorCard.hidden);
     ribbon.frame = NSMakeRect(0, 0, width, ribbonHeight);
     layoutRibbon(width);
     viewportHost.frame = NSMakeRect(0, ribbonHeight, width, std::max(CGFloat(1), height - ribbonHeight));
-    const CGFloat canvasHeight = viewportHost.bounds.size.height;
     constexpr CGFloat historyHeight = timeline::cardHeight;
     historyCard.frame = NSMakeRect(margin, height - margin - historyHeight,
                                    std::max(CGFloat(1), width - margin * 2), historyHeight);
     [historyCard layoutSubtreeIfNeeded];
     layoutHistory();
-    const CGFloat floor = historyCard.hidden ? height - margin : historyCard.frame.origin.y - gap;
-    CGFloat top = ribbonHeight + margin;
-    if (!projectsCard.hidden) {
-      // Measure AppKit rows, not the hidden Qt tree's font and size hints.
-      // Snap the viewport to whole rows before placing Browser below it.
-      NSOutlineView* outline = outlineIn(projectsContent);
-      const NSInteger count = outline.numberOfRows;
-      const NSRect first = count > 0 ? [outline rectOfRow:0] : NSZeroRect;
-      const CGFloat rowHeight = count > 1 ? [outline rectOfRow:1].origin.y - first.origin.y
-                                         : outline ? outline.rowHeight : 24;
-      // Source-list style adds its own leading inset before the first row.
-      const CGFloat chromeHeight = 38 + 24 + 2 + std::max(CGFloat(0), first.origin.y);
-      const CGFloat budget = std::max(chromeHeight + rowHeight, (floor - top) * 0.4);
-      const int capacity = std::max(1, int(std::floor((budget - chromeHeight) / rowHeight)));
-      const int rows = std::min(capacity, std::max(2, int(outline.numberOfRows)));
-      const CGFloat projectHeight = projectsCollapsed ? 30 : chromeHeight + rows * rowHeight;
-      const bool resized = projectsCard.frame.size.height != projectHeight;
-      projectsCard.frame = NSMakeRect(margin, top, cards.projects, projectHeight);
-      [projectsCard layoutSubtreeIfNeeded];
-      fitCardOutline(projectsCard, outline); // its names take the card's width (mitcad#818)
-      if (resized && !projectsCollapsed && outline.selectedRow >= 0)
-        [outline scrollRowToVisible:outline.selectedRow];
-      top += projectHeight + gap;
+    const CGFloat floor = placeMessageBand(historyCard.hidden ? height - margin : historyCard.frame.origin.y - gap,
+                                           historyCard.hidden ? NSMakeRect(margin, 0, std::max(CGFloat(1), width - margin * 2), 0)
+                                                              : historyCard.frame, gap);
+    // The Configuration card is as wide as Browser, at least as wide as
+    // its one-row options need (Projects' least), within the free canvas.
+    CGFloat configurationWidth = std::max(cards.browser, NativeCardWidths::minimum(NativeCard::Projects));
+    if (!inspectorCard.hidden) {
+      configurationWidth = std::max(cards.browser, std::min(configurationWidth, width - 2 * margin -
+                                                            NativeCardWidths::freeCanvas - cards.inspector));
     }
-    const CGFloat headerHeight = browserIssues.hidden ? 38 : 66;
-    const CGFloat browserAvailable = std::max(CGFloat(100), floor - top);
-    CGFloat browserLimit = std::max(CGFloat(100), std::min(canvasHeight * 0.55, browserAvailable));
-    // Establish the card's actual width before measuring its document.
-    // A manual frame on an unconstrained stack only clips its fitting width.
-    sidebarCard.frame = NSMakeRect(margin, top, cards.browser, sidebarCard.frame.size.height);
-    CGFloat browserRowSpace = tree.rowHeight;
-    if (configurationContent != nil) {
-      // The first pass gives labels their bounded width, the second their
-      // wrapped height, as for the inspector's shared form content.
-      [sidebarCard layoutSubtreeIfNeeded];
-      [sidebarCard layoutSubtreeIfNeeded];
-      // Source-list styles can leave an inset before their first row. The
-      // rowHeight alone omits that inset, intercell spacing and scroll-view
-      // borders, leaving only the top of Root visible below a notice.
-      if (tree.numberOfRows > 0) {
-        const NSRect row = [tree rectOfRow:0];
-        const CGFloat inset = std::max(CGFloat(0), NSMinY(row) - NSMinY(tree.visibleRect));
-        const CGFloat chrome = std::max(CGFloat(0), NSHeight(browserScroll.bounds) - NSHeight(browserScroll.contentView.bounds));
-        browserRowSpace = std::ceil(NSHeight(row) + tree.intercellSpacing.height + inset + chrome);
-      }
-      const CGFloat content = std::ceil(configurationDocument.frame.size.height);
-      // Grow within the real available area before scrolling the options.
-      // Their viewport always leaves one complete Browser row below it.
-      browserLimit = std::min(browserAvailable, std::max(browserLimit, headerHeight + content + browserRowSpace + 8));
-      const CGFloat available = std::max(CGFloat(0), browserLimit - headerHeight - browserRowSpace - 8);
-      configurationHeight.constant = std::min(available, content);
-    }
-    const CGFloat treeSpace = std::max(tree.numberOfRows * tree.rowHeight + 4, browserRowSpace);
-    const CGFloat leftHeight = std::min(std::max(CGFloat(100), treeSpace + headerHeight + 8 +
-                                               configurationHeight.constant), browserLimit);
-    sidebarCard.frame = NSMakeRect(margin, top, cards.browser, browserCollapsed ? (browserIssues.hidden ? 30 : 60) : leftHeight);
-    browserTreeTop.constant = headerHeight + configurationHeight.constant;
-    fitCardOutline(sidebarCard, tree);
+    layoutLeftColumn(ribbonHeight + margin, floor, margin, gap, cards, configurationWidth);
     CGFloat rightTop = ribbonHeight + 190;
     CGFloat available = std::max(CGFloat(1), floor - rightTop);
-    inspectorCard.frame = NSMakeRect(width - margin - cards.inspector, rightTop, cards.inspector, available);
+    inspectorCard.frame = NSMakeRect(width - margin - chatRoom - cards.inspector, rightTop, cards.inspector, available);
     const CGFloat formHeight = inspectorContentHeight();
     // Like the shared floating layout, a long form first grows above the
     // orientation cube before it needs a scrollbar.
@@ -1588,22 +1884,34 @@ struct NativeMacWindowState {
       rightTop = ribbonHeight + margin;
       available = std::max(CGFloat(1), floor - rightTop);
     }
-    inspectorCard.frame = NSMakeRect(width - margin - cards.inspector, rightTop, cards.inspector,
+    inspectorCard.frame = NSMakeRect(width - margin - chatRoom - cards.inspector, rightTop, cards.inspector,
                                      std::min(available, std::max(CGFloat(160), formHeight + 4)));
-    const CGFloat statusWidth = std::min(std::max(CGFloat(120), status.intrinsicContentSize.width + 24),
-                                         std::max(CGFloat(120), width - 2 * (std::max({cards.projects, cards.browser, cards.inspector}) + margin + gap)));
-    statusCard.frame = NSMakeRect((width - statusWidth) / 2, floor - 34, statusWidth, 34);
+    // From below the toolbar's rows to above the timeline, as the Floating
+    // chatCard.
+    const CGFloat chatTop = ribbonHeight + margin;
+    chatCard.frame = NSMakeRect(width - margin - chatWidth, chatTop, chatWidth, std::max(CGFloat(1), floor - chatTop));
+    // The navigation bar centred just above the message band's row
+    // (mitcad#1099, mitcad#1098), as the Floating layout places it.
+    placeNavigationBar(width - chatRoom, floor, gap);
     if (callbacks.viewportOverlays) {
       std::vector<QRect> covered;
-      for (NSView* card in @[projectsCard, sidebarCard, inspectorCard, historyCard]) {
+      for (NSView* card in @[projectsCard, configurationCard, sidebarCard, inspectorCard, historyCard, chatCard, messageCard]) {
         if (card.hidden) continue;
         const NSRect rect = card.frame;
         covered.emplace_back(int(std::lround(rect.origin.x)), int(std::lround(rect.origin.y - ribbonHeight)),
                              int(std::lround(rect.size.width)), int(std::lround(rect.size.height)));
       }
+      if (navigationCard != nil && !navigationCard.hidden) {
+        const NSRect rect = navigationCard.frame;
+        covered.emplace_back(int(std::lround(rect.origin.x)), int(std::lround(rect.origin.y - ribbonHeight)),
+                             int(std::lround(rect.size.width)), int(std::lround(rect.size.height)));
+      }
       const int bottom = historyCard.hidden ? 0 : int(std::lround(height - floor));
+      // The cube and its arrows left of the inspector when it reaches the
+      // top, and left of the Chat card.
       const int cubeRight = !inspectorCard.hidden && rightTop < ribbonHeight + 190
-                              ? int(std::lround(cards.inspector + margin + gap)) : 0;
+                              ? int(std::lround(cards.inspector + margin + gap + chatRoom))
+                              : chatCard.hidden ? 0 : int(std::lround(chatRoom + margin));
       callbacks.viewportOverlays(QMargins(0, 0, cubeRight, bottom), covered);
     }
     syncViewport();
@@ -1645,7 +1953,7 @@ struct NativeMacWindowState {
         child.toolTip = ns(arrow.toolTip);
         child.accessibilityLabel = ns(arrow.toolTip);
       }
-      card.hidden = NO;
+      card.hidden = drawingOpen; // the view is under the drawing's sheet
       shown.append(arrow.id);
     }
     bool gone = false;
@@ -1665,6 +1973,36 @@ struct NativeMacWindowState {
     }
   }
 
+  // The cards over the canvas while a drawing is open (mitcad#1073): the
+  // Browser only, from which another drawing opens; the cube's arrows go
+  // with the 3D view under the sheet.
+  void setDrawingOpen(bool open) {
+    if (open == drawingOpen) return;
+    drawingOpen = open;
+    if (open) {
+      NSMutableArray<NSView*>* cards = [NSMutableArray arrayWithObjects:projectsCard, inspectorCard, historyCard, nil];
+      // The Chat card too (mitcad#1075), as the Qt layout's showOnlyCards.
+      if (chatCard != nil) [cards addObject:chatCard];
+      // And the Configuration card (mitcad#1020), as the Qt layout's.
+      if (configurationCard != nil) [cards addObject:configurationCard];
+      // And the navigation bar (mitcad#1099).
+      if (navigationCard != nil) [cards addObject:navigationCard];
+      for (NSView* card in cards) {
+        const bool shown = !card.hidden;
+        setCardVisible(card, false);
+        [suppressedCards setObject:@(shown) forKey:card];
+      }
+    } else {
+      NSMapTable<NSView*, NSNumber*>* wanted = suppressedCards;
+      suppressedCards = [NSMapTable strongToStrongObjectsMapTable];
+      for (NSView* card in wanted) setCardVisible(card, [wanted objectForKey:card].boolValue);
+    }
+    for (const NativeMacCubeArrow& arrow : cubeArrowPresentation) cubeArrows[ns(arrow.id)].hidden = open;
+    layoutOverlays();
+    qInfo().noquote() << (open ? QStringLiteral("Native cards: Browser only (a drawing is open)")
+                               : QStringLiteral("Native cards: all (the drawing closed)"));
+  }
+
   // At the Qt arrows' places in the viewport, inset to the circle drawn.
   void placeCubeArrows() {
     const NSPoint origin = viewportHost.frame.origin;
@@ -1675,9 +2013,171 @@ struct NativeMacWindowState {
     }
   }
 
+  // The navigation bar (mitcad#1099): the Qt bar's capsule card, its
+  // buttons 18-point artwork in 28-point cells, 2 points apart, 10 points
+  // from the card's ends.
+  static constexpr CGFloat navigationButton = 28;
+  static constexpr CGFloat navigationSpacing = 2;
+  static constexpr CGFloat navigationEnd = 10;
+  static constexpr CGFloat navigationHeight = navigationButton + 6;
+
+  void setNavigationBar(const NativeMacNavigationBar& bar) {
+    const bool rebuild = navigationCard == nil || bar.commands != navigationBar.commands ||
+                         bar.style.id != navigationBar.style.id;
+    navigationBar = bar;
+    if (navigationCard == nil) {
+      navigationCard = floatingCard(@"navigationBar", navigationHeight / 2);
+      navigationCard.hidden = YES;
+      navigationCard.accessibilityLabel = ns(QObject::tr("Navigation bar"));
+      // Over the canvas with the other cards, under the timeline's search.
+      [canvasRoot addSubview:navigationCard positioned:NSWindowBelow relativeTo:historyCard];
+      navigationButtons = [NSMutableArray array];
+    }
+    if (rebuild) {
+      for (NSView* button in navigationButtons) [button removeFromSuperview];
+      [navigationButtons removeAllObjects];
+      for (const QString& id : bar.commands) {
+        MITCADNavigationButton* button = [[MITCADNavigationButton alloc] initWithFrame:NSZeroRect];
+        button.bordered = NO;
+        button.imagePosition = NSImageOnly;
+        button.imageScaling = NSImageScaleProportionallyDown;
+        button.refusesFirstResponder = YES;
+        button.representedObject = ns(id);
+        button.target = delegate;
+        button.action = id == bar.style.id ? @selector(openNavigationStyles:) : @selector(performAction:);
+        // The Qt bar's button names, so that tests address either frontend's.
+        button.accessibilityIdentifier = ns(QStringLiteral("navigationBar_") + id);
+        [navigationCard.body addSubview:button];
+        [navigationButtons addObject:button];
+      }
+    }
+    updateNavigationBar();
+    // While a drawing is open, shown once it closes (setCardVisible).
+    setCardVisible(navigationCard, bar.shown && !bar.commands.isEmpty());
+    layoutOverlays();
+  }
+
+  // The main menu's item of a command, as the View menu shows it.
+  static NSMenuItem* menuItemOf(NSMenu* menu, NSString* command) {
+    for (NSMenuItem* item in menu.itemArray) {
+      if (item.submenu) {
+        if (NSMenuItem* found = menuItemOf(item.submenu, command)) return found;
+      } else if (item.action == @selector(performAction:) && [item.representedObject isEqual:command]) {
+        return item;
+      }
+    }
+    return nil;
+  }
+
+  // The buttons' artwork, checks, enabled states and tooltips from the
+  // action snapshot (setActions).
+  void updateNavigationBar() {
+    if (navigationCard == nil) return;
+    QString current;
+    for (const QString& id : navigationBar.styles) {
+      if (const NativeMacAction* style = action(id); style && style->checked) current = style->label;
+    }
+    QStringList tips;
+    QStringList states;
+    for (MITCADNavigationButton* button in navigationButtons) {
+      const QString id = qt(button.representedObject);
+      const bool styleButton = id == navigationBar.style.id;
+      const NativeMacAction* item = styleButton ? &navigationBar.style : action(id);
+      if (item == nullptr) {
+        button.enabled = NO;
+        continue;
+      }
+      NSImage* image = actionImage(*item, 18);
+      if (button.image != image) button.image = image;
+      const QString tip = styleButton ? (current.isEmpty() ? item->label : QStringLiteral("%1: %2").arg(item->label, current))
+                          : item->tooltip.isEmpty() ? item->label : item->tooltip;
+      if (qt(button.toolTip) != tip) button.toolTip = ns(tip);
+      if (qt(button.accessibilityLabel) != item->label) button.accessibilityLabel = ns(item->label);
+      const bool enabled = styleButton || item->enabled;
+      if (bool(button.enabled) != enabled) button.enabled = enabled;
+      const NSControlStateValue value = !styleButton && item->checked ? NSControlStateValueOn : NSControlStateValueOff;
+      if (button.state != value) {
+        button.state = value;
+        button.needsDisplay = YES;
+      }
+      tips.append(tip);
+      if (!styleButton) {
+        NSMenuItem* menuItem = menuItemOf(mainMenu, button.representedObject);
+        states.append(QStringLiteral("%1 %2 (View menu %3)")
+                          .arg(item->label, value == NSControlStateValueOn ? QStringLiteral("on") : QStringLiteral("off"),
+                               menuItem == nil ? QStringLiteral("none")
+                               : menuItem.state == NSControlStateValueOn ? QStringLiteral("on") : QStringLiteral("off")));
+      }
+    }
+    states.append(QStringLiteral("Visual Style %1").arg(current.isEmpty() ? QStringLiteral("none") : current));
+    const QString tipLine = QStringLiteral("Native navigation bar tooltips: %1").arg(tips.join(QStringLiteral(" | ")));
+    if (tipLine != loggedNavigationTips) {
+      loggedNavigationTips = tipLine;
+      qInfo().noquote() << tipLine;
+    }
+    const QString stateLine = QStringLiteral("Native navigation bar states: %1").arg(states.join(QStringLiteral(", ")));
+    if (stateLine != loggedNavigationStates) {
+      loggedNavigationStates = stateLine;
+      qInfo().noquote() << stateLine;
+    }
+  }
+
+  // Places the bar centred in `width`, its bottom `gap` above `floor`;
+  // returns how far the status pill moves up over it (0: no bar shown).
+  CGFloat placeNavigationBar(CGFloat width, CGFloat floor, CGFloat gap) {
+    if (navigationCard == nil) return 0;
+    const CGFloat count = CGFloat(navigationButtons.count);
+    const CGFloat barWidth = 2 * navigationEnd + count * navigationButton + std::max(CGFloat(0), count - 1) * navigationSpacing;
+    navigationCard.frame = NSMakeRect(std::round((width - barWidth) / 2), floor - navigationHeight, barWidth, navigationHeight);
+    CGFloat x = navigationEnd;
+    for (MITCADNavigationButton* button in navigationButtons) {
+      button.frame = NSMakeRect(x, (navigationHeight - navigationButton) / 2, navigationButton, navigationButton);
+      x += navigationButton + navigationSpacing;
+    }
+    const NSRect frame = navigationCard.frame;
+    const QString place = navigationCard.hidden
+        ? QStringLiteral("Native navigation bar hidden")
+        : QStringLiteral("Native navigation bar shown at %1,%2 %3x%4")
+              .arg(std::lround(frame.origin.x)).arg(std::lround(frame.origin.y))
+              .arg(std::lround(frame.size.width)).arg(std::lround(frame.size.height));
+    if (place != loggedNavigationPlace) {
+      loggedNavigationPlace = place;
+      qInfo().noquote() << place;
+    }
+    return navigationCard.hidden ? 0 : navigationHeight + gap;
+  }
+
+  // The Visual Style button's pop-up: the View menu's style commands, the
+  // current one checked, chosen as their View menu items are.
+  void popUpNavigationStyles(NSView* button) {
+    NSMenu* menu = [[NSMenu alloc] initWithTitle:ns(navigationBar.style.label)];
+    NSMenuItem* checked = nil;
+    QStringList entries;
+    for (const QString& id : navigationBar.styles) {
+      if (id.isEmpty()) {
+        [menu addItem:NSMenuItem.separatorItem];
+        continue;
+      }
+      const NativeMacAction* style = action(id);
+      if (style == nullptr) continue;
+      NSMenuItem* item = menuAction(*style);
+      [menu addItem:item];
+      if (style->checked) checked = item;
+      entries.append(style->label);
+    }
+    qInfo().noquote() << QStringLiteral("Native navigation bar styles: %1").arg(entries.join(QStringLiteral(" | ")));
+    [menu popUpMenuPositioningItem:checked atLocation:NSMakePoint(0, NSHeight(button.bounds)) inView:button];
+  }
+
   void setCardVisible(NSView* card, bool shown) {
+    // A card an open drawing hides is shown as asked once it closes.
+    if ([suppressedCards objectForKey:card] != nil) {
+      [suppressedCards setObject:@(shown) forKey:card];
+      shown = false;
+    }
     if (card.hidden == !shown) return;
     if (card == historyCard && !shown) finishHistoryMarkerDrag();
+    if (card == historyCard && !shown) hoverHistoryCell(QString());
     if (!shown) {
       NSResponder* responder = window.firstResponder;
       NSView* editingView = [responder isKindOfClass:NSView.class] ? (NSView*)responder : nil;
@@ -1691,7 +2191,283 @@ struct NativeMacWindowState {
       }
     }
     card.hidden = !shown;
+    if (card == sidebarCard && !shown) hoverTree(nil);
     layoutOverlays();
+  }
+
+  // The Browser row under the pointer (mitcad#1072): nil when it is over
+  // none, the outline or the card left. Reported when it changes.
+  void hoverTree(NSString* key) {
+    const QString row = key != nil ? qt(key) : QString();
+    if (row == hoveredTreeRow) return;
+    hoveredTreeRow = row;
+    if (!closing && callbacks.treeHovered) callbacks.treeHovered(row);
+  }
+
+  // The Configuration card (mitcad#1020): the shared Configuration bar
+  // between Projects and Browser, shown while the design has options or
+  // rows (setConfigurationView), its content folded under its header by
+  // the disclosure (configuration/panelCollapsed, shared with Qt).
+  void buildConfigurationCard() {
+    configurationCard = floatingCard(@"native.configurationCard");
+    configurationCard.hidden = YES;
+    [canvasRoot addSubview:configurationCard];
+    NSTextField* title = label(ns(QObject::tr("Configuration")), [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]);
+    [configurationCard.body addSubview:title];
+    configurationDisclosure = [NSButton buttonWithImage:symbol(QStringLiteral("chevron.down"))
+                                                 target:delegate action:@selector(collapseConfiguration:)];
+    configurationDisclosure.bordered = NO;
+    configurationDisclosure.translatesAutoresizingMaskIntoConstraints = NO;
+    configurationDisclosure.accessibilityIdentifier = @"native.configuration.disclosure";
+    configurationDisclosure.accessibilityLabel = ns(QObject::tr("Collapse Configuration"));
+    [configurationCard.body addSubview:configurationDisclosure];
+    configurationScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    configurationScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    configurationScroll.drawsBackground = NO;
+    configurationScroll.hasVerticalScroller = YES;
+    configurationScroll.hasHorizontalScroller = NO;
+    configurationScroll.automaticallyAdjustsContentInsets = NO;
+    configurationScroll.autohidesScrollers = YES;
+    configurationScroll.hidden = YES;
+    configurationScroll.accessibilityIdentifier = @"native.configuration";
+    [configurationCard.body addSubview:configurationScroll];
+    // Folded or hidden content must not make the header-high card grow.
+    configurationScrollBottom = [configurationScroll.bottomAnchor constraintEqualToAnchor:configurationCard.body.bottomAnchor
+                                                                                constant:-8];
+    [NSLayoutConstraint activateConstraints:@[
+      [configurationDisclosure.leadingAnchor constraintEqualToAnchor:configurationCard.body.leadingAnchor constant:8],
+      [configurationDisclosure.topAnchor constraintEqualToAnchor:configurationCard.body.topAnchor constant:5],
+      [configurationDisclosure.widthAnchor constraintEqualToConstant:18],
+      [configurationDisclosure.heightAnchor constraintEqualToConstant:20],
+      [title.leadingAnchor constraintEqualToAnchor:configurationDisclosure.trailingAnchor constant:6],
+      [title.centerYAnchor constraintEqualToAnchor:configurationDisclosure.centerYAnchor],
+      [configurationScroll.leadingAnchor constraintEqualToAnchor:configurationCard.body.leadingAnchor constant:6],
+      [configurationScroll.trailingAnchor constraintEqualToAnchor:configurationCard.body.trailingAnchor constant:-6],
+      [configurationScroll.topAnchor constraintEqualToAnchor:configurationCard.body.topAnchor constant:30]
+    ]];
+  }
+
+  // The Configuration card's content folded under its header or shown.
+  void showConfigurationCollapsed(bool collapsed) {
+    configurationCollapsed = collapsed;
+    configurationScroll.hidden = collapsed || configurationContent == nil;
+    configurationScrollBottom.active = !configurationScroll.hidden;
+    configurationDisclosure.image = symbol(collapsed ? QStringLiteral("chevron.right") : QStringLiteral("chevron.down"));
+    configurationDisclosure.accessibilityLabel =
+        collapsed ? ns(QObject::tr("Expand Configuration")) : ns(QObject::tr("Collapse Configuration"));
+  }
+
+  // A left card by its name in the column ("projects", "configuration",
+  // "browser").
+  NSView* columnCard(const QString& name) const {
+    if (name == QLatin1String("projects")) return projectsCard;
+    if (name == QLatin1String("configuration")) return configurationCard;
+    return sidebarCard;
+  }
+
+  // The left column (mitcad#1020): Projects, Configuration and Browser
+  // share its free height from `top` to `bottom` without fixed caps, as the
+  // Floating layout's left cards do (shareNativeColumn): a card whose
+  // content is shorter than its share keeps its content's height and the
+  // others share the rest, by the user's split when there is one; a
+  // collapsed card keeps its header. A handle in each gap between two open
+  // neighbours drags the split.
+  void layoutLeftColumn(CGFloat top, CGFloat bottom, CGFloat margin, CGFloat gap, const NativeCardPlacement& cards,
+                        CGFloat configurationWidth) {
+    std::vector<NativeColumnCard> column;
+    std::vector<std::pair<NSView*, CGFloat>> placed; // each card and its width
+    // Projects: its AppKit rows measured, not the hidden Qt tree's hints.
+    NSOutlineView* projectsOutline = nil;
+    CGFloat projectsChrome = 0;
+    CGFloat projectsRow = 24;
+    if (!projectsCard.hidden) {
+      projectsOutline = outlineIn(projectsContent);
+      const NSInteger count = projectsOutline.numberOfRows;
+      const NSRect first = count > 0 ? [projectsOutline rectOfRow:0] : NSZeroRect;
+      projectsRow = count > 1 ? [projectsOutline rectOfRow:1].origin.y - first.origin.y
+                              : projectsOutline ? projectsOutline.rowHeight : 24;
+      projectsRow = std::max(CGFloat(1), projectsRow);
+      // Source-list style adds its own leading inset before the first row.
+      projectsChrome = 38 + 24 + 2 + std::max(CGFloat(0), first.origin.y);
+      NativeColumnCard card;
+      card.name = QStringLiteral("projects");
+      card.collapsed = projectsCollapsed;
+      card.want = projectsCollapsed ? 30 : projectsChrome + CGFloat(std::max<NSInteger>(2, count)) * projectsRow;
+      card.least = projectsCollapsed ? 30 : projectsChrome + projectsRow;
+      column.push_back(card);
+      placed.emplace_back(projectsCard, cards.projects);
+    }
+    if (!configurationCard.hidden) {
+      CGFloat content = 0;
+      if (!configurationCollapsed) {
+        // Its width first. The first pass gives labels their bounded
+        // width, the second their wrapped height, as for the inspector's
+        // shared form content.
+        configurationCard.frame = NSMakeRect(margin, top, configurationWidth,
+                                             std::max(CGFloat(60), configurationCard.frame.size.height));
+        [configurationCard layoutSubtreeIfNeeded];
+        [configurationCard layoutSubtreeIfNeeded];
+        content = std::ceil(configurationDocument.frame.size.height);
+      }
+      NativeColumnCard card;
+      card.name = QStringLiteral("configuration");
+      card.collapsed = configurationCollapsed;
+      card.want = configurationCollapsed ? 30 : 30 + content + 8;
+      card.least = configurationCollapsed ? 30 : 30 + std::min(content, CGFloat(32)) + 8;
+      column.push_back(card);
+      placed.emplace_back(configurationCard, configurationWidth);
+    }
+    const CGFloat headerHeight = browserIssues.hidden ? 38 : 66;
+    if (!sidebarCard.hidden) {
+      // Its width before measuring its rows.
+      sidebarCard.frame = NSMakeRect(margin, top, cards.browser, sidebarCard.frame.size.height);
+      // Source-list styles can leave an inset before their first row. The
+      // rowHeight alone omits that inset, intercell spacing and scroll-view
+      // borders, leaving only the top of Root visible.
+      CGFloat rowSpace = tree.rowHeight;
+      CGFloat rows = 0;
+      if (tree.numberOfRows > 0) {
+        const NSRect row = [tree rectOfRow:0];
+        const CGFloat inset = std::max(CGFloat(0), NSMinY(row) - NSMinY(tree.visibleRect));
+        const CGFloat chrome = std::max(CGFloat(0), NSHeight(browserScroll.bounds) - NSHeight(browserScroll.contentView.bounds));
+        rowSpace = std::ceil(NSHeight(row) + tree.intercellSpacing.height + inset + chrome);
+        rows = std::ceil(NSMaxY([tree rectOfRow:tree.numberOfRows - 1]) + chrome);
+      }
+      const CGFloat collapsed = browserIssues.hidden ? 30 : 60;
+      NativeColumnCard card;
+      card.name = QStringLiteral("browser");
+      card.collapsed = browserCollapsed;
+      card.want = browserCollapsed ? collapsed : std::max(CGFloat(100), std::max(rows + 4, rowSpace) + headerHeight + 8);
+      card.least = browserCollapsed ? collapsed : headerHeight + rowSpace + 8;
+      column.push_back(card);
+      placed.emplace_back(sidebarCard, cards.browser);
+    }
+    const CGFloat gaps = gap * CGFloat(std::max<std::size_t>(1, column.size()) - 1);
+    std::vector<CGFloat> heights = shareNativeColumn(column, std::max(CGFloat(0), bottom - top - gaps), columnSplit);
+    // Projects shows whole rows; what that leaves goes to the next open
+    // card that wants more.
+    if (!projectsCard.hidden && !projectsCollapsed && !heights.empty()) {
+      const int fit = std::max(1, int(std::floor((heights[0] - projectsChrome) / projectsRow)));
+      const CGFloat snapped = projectsChrome + fit * projectsRow;
+      if (snapped < heights[0]) {
+        for (std::size_t i = 1; i < column.size(); ++i) {
+          if (!column[i].collapsed && heights[i] < column[i].want) {
+            heights[i] += heights[0] - snapped;
+            break;
+          }
+        }
+        heights[0] = snapped;
+      }
+    }
+    CGFloat y = top;
+    for (std::size_t i = 0; i < placed.size(); ++i) {
+      NSView* card = placed[i].first;
+      const bool resized = card.frame.size.height != heights[i];
+      card.frame = NSMakeRect(margin, y, placed[i].second, heights[i]);
+      if (card == projectsCard) {
+        [projectsCard layoutSubtreeIfNeeded];
+        fitCardOutline(projectsCard, projectsOutline); // its names take the card's width (mitcad#818)
+        if (resized && !projectsCollapsed && projectsOutline.selectedRow >= 0)
+          [projectsOutline scrollRowToVisible:projectsOutline.selectedRow];
+      }
+      y += heights[i] + gap;
+    }
+    browserTreeTop.constant = headerHeight;
+    fitCardOutline(sidebarCard, tree);
+    columnCards = column;
+    placeColumnSplitHandles(placed, margin);
+  }
+
+  // The handles in the gaps between open neighbours of the left column,
+  // named by their cards: native.columnSplit.<above>.<below>.
+  void placeColumnSplitHandles(const std::vector<std::pair<NSView*, CGFloat>>& placed, CGFloat margin) {
+    const auto title = [](const QString& name) {
+      return name == QLatin1String("projects")        ? QObject::tr("Projects")
+             : name == QLatin1String("configuration") ? QObject::tr("Configuration")
+                                                      : QObject::tr("Browser");
+    };
+    if (columnSplitHandles == nil) columnSplitHandles = [NSMutableArray array];
+    splitPairs.clear();
+    NSUInteger used = 0;
+    for (std::size_t i = 0; i + 1 < placed.size(); ++i) {
+      if (columnCards[i].collapsed || columnCards[i + 1].collapsed) continue;
+      if (used == columnSplitHandles.count) {
+        const std::size_t index = used;
+        NSView* handle = makeColumnSplitHandle([this, index](NativeSplitPhase phase, CGFloat down) {
+          dragColumnSplit(index, phase, down);
+        });
+        // Over the canvas in the gap; the cards beside it keep theirs.
+        [canvasRoot addSubview:handle positioned:NSWindowAbove relativeTo:viewportHost];
+        [columnSplitHandles addObject:handle];
+      }
+      NSView* handle = columnSplitHandles[used++];
+      const NSRect above = placed[i].first.frame;
+      const NSRect below = placed[i + 1].first.frame;
+      handle.frame = NSMakeRect(margin, NSMaxY(above), std::max(NSWidth(above), NSWidth(below)),
+                                std::max(CGFloat(1), NSMinY(below) - NSMaxY(above)));
+      handle.hidden = NO;
+      handle.accessibilityIdentifier =
+          ns(QStringLiteral("native.columnSplit.%1.%2").arg(columnCards[i].name, columnCards[i + 1].name));
+      handle.accessibilityLabel =
+          ns(QObject::tr("%1 and %2 height").arg(title(columnCards[i].name), title(columnCards[i + 1].name)));
+      splitPairs.emplace_back(columnCards[i].name, columnCards[i + 1].name);
+    }
+    for (NSUInteger i = used; i < columnSplitHandles.count; ++i) columnSplitHandles[i].hidden = YES;
+  }
+
+  // A boundary of the left column pressed, dragged `down` points, released
+  // or double-clicked (mitcad#1020): the drag moves height between its two
+  // cards, each keeping its header and a row; the others keep theirs.
+  void dragColumnSplit(std::size_t index, NativeSplitPhase phase, CGFloat down) {
+    if (phase == NativeSplitPhase::Reset) {
+      splitDragging = false;
+      columnSplit.clear();
+      layoutOverlays();
+      if (callbacks.columnSplitChosen) callbacks.columnSplitChosen(columnSplit);
+      return;
+    }
+    if (phase == NativeSplitPhase::Began) {
+      splitDragging = false;
+      splitMoved = false;
+      splitDragStart.clear();
+      if (index >= splitPairs.size()) return;
+      splitDragPair = splitPairs[index];
+      splitDragging = true;
+      for (const NativeColumnCard& card : columnCards) {
+        if (!card.collapsed)
+          splitDragStart.emplace_back(card.name, int(std::lround(columnCard(card.name).frame.size.height)));
+      }
+      return;
+    }
+    if (!splitDragging) return;
+    const auto find = [this](const QString& name) {
+      return std::find_if(splitDragStart.begin(), splitDragStart.end(),
+                          [&name](const std::pair<QString, int>& kept) { return kept.first == name; });
+    };
+    const auto above = find(splitDragPair.first);
+    const auto below = find(splitDragPair.second);
+    if (above == splitDragStart.end() || below == splitDragStart.end()) return;
+    const auto least = [this](const QString& name, int height) {
+      for (const NativeColumnCard& card : columnCards) {
+        if (card.name == name) return std::min(height, int(std::ceil(card.least)));
+      }
+      return height;
+    };
+    const int total = above->second + below->second;
+    const int lowest = least(above->first, above->second);
+    const int highest = std::max(lowest, total - least(below->first, below->second));
+    const int upper = std::clamp(above->second + int(std::lround(down)), lowest, highest);
+    splitMoved = splitMoved || std::lround(down) != 0;
+    columnSplit = splitDragStart;
+    for (auto& [name, height] : columnSplit) {
+      if (name == splitDragPair.first) height = upper;
+      else if (name == splitDragPair.second) height = total - upper;
+    }
+    layoutOverlays();
+    if (phase == NativeSplitPhase::Ended) {
+      splitDragging = false;
+      if (splitMoved && callbacks.columnSplitChosen) callbacks.columnSplitChosen(columnSplit);
+    }
   }
 
   // Width handles along the side cards' inner edges (mitcad#818): a drag
@@ -1707,7 +2483,7 @@ struct NativeMacWindowState {
   }
 
   void dragCardWidth(NativeCard card, CGFloat width, bool finished) {
-    const CGFloat chosen = cardWidths.drag(card, width, canvasRoot.bounds.size.width, !projectsCard.hidden,
+    const CGFloat chosen = cardWidths.drag(card, width, canvasRoot.bounds.size.width - chatSpace(), !projectsCard.hidden,
                                            !sidebarCard.hidden, !inspectorCard.hidden);
     layoutOverlays();
     if (finished && callbacks.cardWidthChosen) callbacks.cardWidthChosen(nativeCardName(card), int(std::lround(chosen)));
@@ -1718,6 +2494,8 @@ struct NativeMacWindowState {
       error = QStringLiteral("The native Mac canvas requires a standalone QWidget.");
     } else {
       viewport->setAttribute(Qt::WA_NativeWindow);
+      // VoiceOver names the canvas as its host (mitcad#1026).
+      if (viewport->accessibleName().isEmpty()) viewport->setAccessibleName(QObject::tr("3D view"));
       (void)viewport->winId();
       foreignWindow.reset(QWindow::fromWinId(WId((__bridge void*)viewportHost)));
       if (!foreignWindow || !viewport->windowHandle()) {
@@ -1957,7 +2735,7 @@ struct NativeMacWindowState {
   void applyAgentStatus(NSButton* button) const {
     button.title = ns(agentText);
     button.toolTip = ns(agentTooltip);
-    button.accessibilityLabel = ns(QStringLiteral("AI assistant: %1").arg(agentText));
+    button.accessibilityLabel = ns(QObject::tr("AI assistant: %1").arg(agentText));
     button.image = symbol(agentConnected   ? QStringLiteral("circle.fill")
                           : agentAvailable ? QStringLiteral("circle")
                                            : QStringLiteral("circle.slash"));
@@ -2009,6 +2787,71 @@ struct NativeMacWindowState {
     return nullptr;
   }
 
+  // A row's Pin to Toolbar or Change Keyboard Shortcut… for a command: its
+  // tab, id and the menu's place ("SOLID/CREATE") for the log.
+  NSMenuItem* rowCommand(const NativeMacAction& command, const QString& tab, const QString& place, bool pin,
+                         const QString& title) {
+    NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:ns(title)
+                                                  action:pin ? @selector(pinCommand:) : @selector(changeShortcut:)
+                                           keyEquivalent:@""];
+    item.target = delegate;
+    item.representedObject = @[ns(tab), ns(command.id), ns(place)];
+    return item;
+  }
+
+  // The commands of a group menu's entries, for its Pin to Toolbar (checked
+  // where pinned, disabled for a command that is a button of its group
+  // already: mitcad#1084) or Change Keyboard Shortcut submenu; a
+  // subgroup's in a submenu of its own, rows that are not commands (the
+  // selection filters) left out, as Qt's rows without the ⋮ button.
+  NSMenu* rowCommandsMenu(const QList<NativeMacMenuItem>& entries, const QString& tab, const QString& place, bool pin) {
+    NSMenu* menu = [[NSMenu alloc] initWithTitle:@""];
+    for (const auto& entry : entries) {
+      if (entry.separator) continue;
+      if (entry.submenu) {
+        NSMenu* children = rowCommandsMenu(entry.children, tab, place + QLatin1Char('/') + entry.title, pin);
+        if (children.numberOfItems == 0) continue;
+        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:ns(entry.title) action:nil keyEquivalent:@""];
+        item.submenu = children;
+        [menu addItem:item];
+        continue;
+      }
+      const NativeMacAction* command = action(entry.action);
+      if (!command || command->group.isEmpty()) continue;
+      NSMenuItem* item = rowCommand(*command, tab, place, pin, command->label);
+      if (pin) {
+        const bool pinned = command->pinnedToToolbar;
+        item.state = pinned ? NSControlStateValueOn : NSControlStateValueOff;
+        item.toolTip = pinned ? ns(QObject::tr("Unpin from Toolbar")) : ns(QObject::tr("Pin to Toolbar"));
+      }
+      item.image = actionImage(*command);
+      if (@available(macOS 27.0, *)) item.preferredImageVisibility = NSMenuItemImageVisibilityVisible;
+      [menu addItem:item];
+    }
+    return menu;
+  }
+
+  // Qt's group menu rows each have a ⋮ button with Pin to Toolbar (Unpin
+  // from Toolbar) and Change Keyboard Shortcut… (mitcad#1001). An NSMenu
+  // row has no button or right-click of its own, so a group menu ends with
+  // the two as submenus listing its commands (mitcad#1074).
+  void addRowCommands(NSMenu* menu, const QList<NativeMacMenuItem>& entries, const QString& tab, const QString& place) {
+    NSMenu* pins = rowCommandsMenu(entries, tab, place, true);
+    if (pins.numberOfItems == 0) return;
+    NSMenuItem* separator = NSMenuItem.separatorItem;
+    separator.tag = rowCommandsTag;
+    [menu addItem:separator];
+    NSMenuItem* pin = [[NSMenuItem alloc] initWithTitle:ns(QObject::tr("Pin to Toolbar")) action:nil keyEquivalent:@""];
+    pin.tag = rowCommandsTag;
+    pin.submenu = pins;
+    [menu addItem:pin];
+    NSMenuItem* shortcut = [[NSMenuItem alloc] initWithTitle:ns(QObject::tr("Change Keyboard Shortcut"))
+                                                      action:nil keyEquivalent:@""];
+    shortcut.tag = rowCommandsTag;
+    shortcut.submenu = rowCommandsMenu(entries, tab, place, false);
+    [menu addItem:shortcut];
+  }
+
   CGFloat buttonRowWidth(const NativeMacRibbonGroup& group, int count) const {
     CGFloat width = 0;
     for (int i = 0; i < count; ++i) width += group.buttons[i].width;
@@ -2048,6 +2891,8 @@ struct NativeMacWindowState {
       caption.accessibilityIdentifier = ns(QStringLiteral("native.ribbon.group.") + group.name.toLower());
       NSMenu* menu = presentationMenu(group.menu);
       [menu insertItem:[[NSMenuItem alloc] initWithTitle:ns(group.title) action:nil keyEquivalent:@""] atIndex:0];
+      const QString place = group.workspace + QLatin1Char('/') + group.name;
+      addRowCommands(menu, group.menu, group.workspace, place);
       caption.menu = menu;
       [ribbonGroups addSubview:caption];
       ribbonMenus[ns(group.name)] = caption;
@@ -2071,11 +2916,30 @@ struct NativeMacWindowState {
         [ribbonGroups addSubview:button];
         ribbonButtons[ns(item->id)] = button;
         ribbonGroupButtons[group.name].append(item->id);
+        if (shown.pinned) {
+          // A command the user pinned in its group (Qt's ribbonPinned_<id>,
+          // mitcad#1084) and its right-click: Unpin from Toolbar, Change
+          // Keyboard Shortcut….
+          button.accessibilityIdentifier = ns(QStringLiteral("native.ribbon.pinned.") + item->id);
+          NSMenu* context = [[NSMenu alloc] initWithTitle:@""];
+          [context addItem:rowCommand(*item, group.workspace, place, true, QObject::tr("Unpin from Toolbar"))];
+          [context addItem:rowCommand(*item, group.workspace, place, false, QObject::tr("Change Keyboard Shortcut…"))];
+          button.menu = context;
+          continue;
+        }
           if (!shown.menuOnly && !shown.menu.isEmpty()) {
           NSPopUpButton* arrow = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:YES];
           arrow.bordered = NO;
           NSMenu* submenu = presentationMenu(shown.menu);
           [submenu insertItem:[[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""] atIndex:0];
+          // The subgroup's place, as its submenu in the group menu has it.
+          QString subgroup = item->label;
+          for (const auto& entry : group.menu) {
+            for (const auto& child : entry.children) {
+              if (entry.submenu && child.action == item->id) subgroup = entry.title;
+            }
+          }
+          addRowCommands(submenu, shown.menu, group.workspace, place + QLatin1Char('/') + subgroup);
           arrow.menu = submenu;
           arrow.accessibilityIdentifier = ns(QStringLiteral("native.ribbon.arrow.") + item->id);
           arrow.accessibilityLabel = ns(item->label + QStringLiteral(" options"));
@@ -2118,7 +2982,7 @@ struct NativeMacWindowState {
       for (int j = 0; j < group->buttons.size(); ++j) {
         const auto& shown = group->buttons[j];
         MITCADCommandButton* button = ribbonButtons[ns(shown.action)];
-        NSPopUpButton* arrow = ribbonSplits[ns(shown.action)];
+        NSPopUpButton* arrow = shown.pinned ? nil : ribbonSplits[ns(shown.action)];
         button.hidden = j >= counts[i];
         if (arrow) arrow.hidden = button.hidden;
         const CGFloat arrowWidth = arrow ? 14 : 0;
@@ -2133,16 +2997,18 @@ struct NativeMacWindowState {
 
   void updateToolbar(bool structureChanged = false) {
     for (const auto& command : actions) {
-      MITCADCommandButton* button = ribbonButtons[ns(command.id)];
-      if (!button) continue;
-      if (button.enabled != command.enabled) button.enabled = command.enabled;
-      const NSControlStateValue state = command.checked ? NSControlStateValueOn : NSControlStateValueOff;
-      if (button.state != state) button.state = state;
-      NSImage* image = actionImage(command, 26);
-      if (button.image != image) button.image = image;
-      if (qt(button.accessibilityLabel) != command.label) button.accessibilityLabel = ns(command.label);
-      const QString tooltip = command.tooltip.isEmpty() ? command.label : command.tooltip;
-      if (qt(button.toolTip) != tooltip) button.toolTip = ns(tooltip);
+      const auto update = [this, &command](MITCADCommandButton* button) {
+        if (!button) return;
+        if (button.enabled != command.enabled) button.enabled = command.enabled;
+        const NSControlStateValue state = command.checked ? NSControlStateValueOn : NSControlStateValueOff;
+        if (button.state != state) button.state = state;
+        NSImage* image = actionImage(command, 26);
+        if (button.image != image) button.image = image;
+        if (qt(button.accessibilityLabel) != command.label) button.accessibilityLabel = ns(command.label);
+        const QString tooltip = command.tooltip.isEmpty() ? command.label : command.tooltip;
+        if (qt(button.toolTip) != tooltip) button.toolTip = ns(tooltip);
+      };
+      update(ribbonButtons[ns(command.id)]);
     }
     // Menu validation reads the latest command snapshot. Replacing popup
     // menus while a user is tracking one would interrupt that interaction.
@@ -2235,6 +3101,16 @@ struct NativeMacWindowState {
 
   void installInspector(NSView* content, NSView* footer = nil) {
     if (inspectorContent == content && inspectorFooterContent == footer) return;
+    // A removed control must not keep the keyboard or VoiceOver's focus
+    // (mitcad#1026): AppKit would leave the window itself first responder
+    // and VoiceOver on a dead element. The canvas takes it, as when a card
+    // with the focus hides, and VoiceOver is told. So it does when the
+    // window itself still has it from an earlier removal: no live element.
+    const bool removed = inspectorContent != nil && inspectorContent != content;
+    const bool refocus = (removed && (focusIsIn(inspectorContent) || window.firstResponder == window)) ||
+                         (inspectorFooterContent != footer && focusIsIn(inspectorFooterContent));
+    NSView* canvas = refocus && viewport ? (__bridge NSView*)reinterpret_cast<void*>(viewport->winId()) : nil;
+    if (canvas != nil && canvas.window == window) [window makeFirstResponder:canvas];
     [inspectorFooterContent removeFromSuperview];
     inspectorFooterContent = footer;
     if (footer) fill(footer, inspectorFooter);
@@ -2263,6 +3139,23 @@ struct NativeMacWindowState {
       [inspectorScroll reflectScrolledClipView:inspectorScroll.contentView];
     }
     layoutOverlays();
+    if (refocus) {
+      NSResponder* focused = window.firstResponder;
+      id element = [focused isKindOfClass:NSView.class] ? ((NSView*)focused).accessibilityFocusedUIElement : nil;
+      NSAccessibilityPostNotification(element != nil ? element : window, NSAccessibilityFocusedUIElementChangedNotification);
+    }
+  }
+
+  // The keyboard is in `view`: its first responder, or the control whose
+  // field editor that is.
+  bool focusIsIn(NSView* view) const {
+    if (view == nil) return false;
+    NSResponder* responder = window.firstResponder;
+    if ([responder isKindOfClass:NSTextView.class] && ((NSTextView*)responder).fieldEditor) {
+      id control = ((NSTextView*)responder).delegate;
+      if ([control isKindOfClass:NSView.class]) responder = (NSView*)control;
+    }
+    return [responder isKindOfClass:NSView.class] && [(NSView*)responder isDescendantOf:view];
   }
 
   void buildSearch() {
@@ -2278,7 +3171,7 @@ struct NativeMacWindowState {
     searchPopover.contentViewController = controller;
     searchField = [[NSSearchField alloc] initWithFrame:NSZeroRect];
     searchField.translatesAutoresizingMaskIntoConstraints = NO;
-    searchField.placeholderString = @"Search commands";
+    searchField.placeholderString = ns(QObject::tr("Search commands"));
     searchField.delegate = delegate;
     searchField.target = delegate;
     searchField.action = @selector(searchChanged:);
@@ -2297,13 +3190,13 @@ struct NativeMacWindowState {
     searchTable.target = delegate;
     searchTable.doubleAction = @selector(chooseSearch:);
     searchTable.action = @selector(chooseSearch:);
-    searchTable.accessibilityLabel = @"Commands";
+    searchTable.accessibilityLabel = ns(QObject::tr("Commands"));
     NSScrollView* results = scroll(searchTable);
     [view addSubview:results];
     timelineSearchCount = label(@"");
-    NSButton* filters = [NSButton buttonWithTitle:@"Filters…" target:delegate action:@selector(openTimelineSearchFilter:)];
-    NSButton* previous = [NSButton buttonWithTitle:@"Previous" target:delegate action:@selector(stepTimelineSearch:)];
-    NSButton* next = [NSButton buttonWithTitle:@"Next" target:delegate action:@selector(stepTimelineSearch:)];
+    NSButton* filters = [NSButton buttonWithTitle:ns(QObject::tr("Filters…")) target:delegate action:@selector(openTimelineSearchFilter:)];
+    NSButton* previous = [NSButton buttonWithTitle:ns(QObject::tr("Previous")) target:delegate action:@selector(stepTimelineSearch:)];
+    NSButton* next = [NSButton buttonWithTitle:ns(QObject::tr("Next")) target:delegate action:@selector(stepTimelineSearch:)];
     previous.tag = -1;
     next.tag = 1;
     timelineSearchControls = [NSStackView stackViewWithViews:@[filters, previous, next, timelineSearchCount]];
@@ -2315,15 +3208,38 @@ struct NativeMacWindowState {
     [NSLayoutConstraint activateConstraints:@[
       [searchField.leadingAnchor constraintEqualToAnchor:view.leadingAnchor constant:12],
       [searchField.trailingAnchor constraintEqualToAnchor:view.trailingAnchor constant:-12],
-      [searchField.topAnchor constraintEqualToAnchor:view.topAnchor constant:12],
-      [results.topAnchor constraintEqualToAnchor:searchField.bottomAnchor constant:8],
       [results.leadingAnchor constraintEqualToAnchor:view.leadingAnchor constant:6],
       [results.trailingAnchor constraintEqualToAnchor:view.trailingAnchor constant:-6],
-      [results.bottomAnchor constraintEqualToAnchor:view.bottomAnchor constant:-42],
       [timelineSearchControls.leadingAnchor constraintEqualToAnchor:view.leadingAnchor constant:12],
-      [timelineSearchControls.trailingAnchor constraintEqualToAnchor:view.trailingAnchor constant:-12],
-      [timelineSearchControls.bottomAnchor constraintEqualToAnchor:view.bottomAnchor constant:-8]
+      [timelineSearchControls.trailingAnchor constraintEqualToAnchor:view.trailingAnchor constant:-12]
     ]];
+    // Command search hangs below its control with the field on top. Timeline
+    // search rises from the timeline's magnifier, so its field is at the
+    // bottom next to the timeline, with the step controls and results above
+    // it, as the default frontend's field sits in the timeline bar (mitcad#1021).
+    commandSearchLayout = @[
+      [searchField.topAnchor constraintEqualToAnchor:view.topAnchor constant:12],
+      [results.topAnchor constraintEqualToAnchor:searchField.bottomAnchor constant:8],
+      [results.bottomAnchor constraintEqualToAnchor:view.bottomAnchor constant:-42],
+      [timelineSearchControls.bottomAnchor constraintEqualToAnchor:view.bottomAnchor constant:-8]
+    ];
+    timelineSearchLayout = @[
+      [results.topAnchor constraintEqualToAnchor:view.topAnchor constant:6],
+      [results.bottomAnchor constraintEqualToAnchor:timelineSearchControls.topAnchor constant:-8],
+      [timelineSearchControls.bottomAnchor constraintEqualToAnchor:searchField.topAnchor constant:-8],
+      [searchField.bottomAnchor constraintEqualToAnchor:view.bottomAnchor constant:-12]
+    ];
+    [NSLayoutConstraint activateConstraints:commandSearchLayout];
+  }
+
+  // The visible control a search was opened from, or nil for a shortcut, a
+  // menu item or an image-only toolbar item, which have no view of their own.
+  static NSView* searchAnchor(id sender) {
+    NSView* view = nil;
+    if ([sender isKindOfClass:NSView.class]) view = (NSView*)sender;
+    else if ([sender isKindOfClass:NSToolbarItem.class]) view = ((NSToolbarItem*)sender).view;
+    if (view.window == nil || !view.window.visible || [view isHiddenOrHasHiddenAncestor]) return nil;
+    return view;
   }
 
   void updateMenuState(NSMenu* menu) {
@@ -2377,6 +3293,8 @@ struct NativeMacWindowState {
         if ([item isKindOfClass:NSMenuToolbarItem.class]) updateMenuState(((NSMenuToolbarItem*)item).menu);
       }
     }
+    // The navigation bar's checks after the View menu's (mitcad#1099).
+    updateNavigationBar();
     if (historyMarkerDragging && nativeModalBlocked()) finishHistoryMarkerDrag();
     updateHistoryAppearance();
     if (searchPopover.shown) fillSearch();
@@ -2407,24 +3325,39 @@ struct NativeMacWindowState {
     }
   }
 
-  void openSearch(bool timeline = false) {
+  // Timeline search opens above the timeline's magnifier, also from Command+F
+  // and the menu; command search under the control that opened it, such as
+  // the Search Commands toolbar item, and at the top centre of the window
+  // from a shortcut or a menu (mitcad#1021).
+  void openSearch(bool timeline = false, id sender = nil) {
     if (nativeModalBlocked()) return;
     buildSearch();
     if (searchPopover.shown && timelineSearch && !timeline && callbacks.timelineSearchClosed) callbacks.timelineSearchClosed();
     const bool reopening = searchPopover.shown && timelineSearch == timeline;
     timelineSearch = timeline;
     timelineSearchControls.hidden = !timeline;
-    searchField.placeholderString = timeline ? @"Search timeline: name, type, in:component, is:status" : @"Search commands";
+    searchField.placeholderString = timeline ? ns(QObject::tr("Search timeline: name, type, in:component, is:status")) : ns(QObject::tr("Search commands"));
     searchField.accessibilityIdentifier = timeline ? @"native.timelineSearch" : @"native.commandSearch";
     searchField.identifier = searchField.accessibilityIdentifier;
-    searchTable.accessibilityLabel = timeline ? @"Timeline search results" : @"Commands";
+    searchTable.accessibilityLabel = timeline ? ns(QObject::tr("Timeline search results")) : ns(QObject::tr("Commands"));
     if (timeline && callbacks.timelineSearchOpened) callbacks.timelineSearchOpened();
     if (timeline) setCardVisible(historyCard, true);
     if (!reopening) searchField.stringValue = @"";
+    [NSLayoutConstraint deactivateConstraints:timeline ? commandSearchLayout : timelineSearchLayout];
+    [NSLayoutConstraint activateConstraints:timeline ? timelineSearchLayout : commandSearchLayout];
     fillSearch();
-    [searchPopover showRelativeToRect:NSMakeRect(window.contentView.bounds.size.width / 2 - 1,
-                                               1, 2, 2)
-                              ofView:window.contentView preferredEdge:NSRectEdgeMaxY];
+    if (timeline) [window.contentView layoutSubtreeIfNeeded];
+    // Popover edges follow the anchor's coordinates: in a flipped view the
+    // minimum Y edge is the top one. Timeline search opens above its anchor,
+    // command search below.
+    NSView* anchor = searchAnchor(timeline ? (id)historySearchButton : sender);
+    if (anchor != nil) {
+      [searchPopover showRelativeToRect:anchor.bounds ofView:anchor
+                          preferredEdge:timeline == bool(anchor.flipped) ? NSRectEdgeMinY : NSRectEdgeMaxY];
+    } else {
+      [searchPopover showRelativeToRect:NSMakeRect(window.contentView.bounds.size.width / 2 - 1, 1, 2, 2)
+                                ofView:window.contentView preferredEdge:NSRectEdgeMaxY];
+    }
     searchField.window.identifier = timeline ? @"native.timelineSearchWindow" : @"native.commandSearchWindow";
     [searchField.window makeKeyWindow];
     [searchField.window makeFirstResponder:searchField];
@@ -2432,11 +3365,250 @@ struct NativeMacWindowState {
     if (!searchPopover.shown || searchField.window == nil)
       qWarning() << "Native command search could not attach to its document window";
   }
+
+  // The width the Chat card and its gap take from the right of the canvas
+  // (mitcad#1075); none while it is hidden.
+  CGFloat chatSpace() const {
+    constexpr CGFloat margin = 12;
+    constexpr CGFloat gap = 8;
+    return chatCard.hidden ? 0 : chatCardPlacedWidth(canvasRoot.bounds.size.width - margin * 2) + gap;
+  }
+
+  // The toolbar's Chat button: the command's CAD artwork, its tooltip, on
+  // while the card shows.
+  void applyChatButton(NSButton* button) {
+    const NativeMacAction* chat = action(QStringLiteral("view.chat"));
+    NSImage* artwork = chat != nullptr && !chat->icon.isNull() ? actionImage(*chat, 18) : nil;
+    button.image = artwork != nil ? artwork : symbol(QStringLiteral("bubble.left.and.bubble.right"), ns(QObject::tr("Chat")));
+    const QString tip = chat != nullptr && !chat->tooltip.isEmpty() ? chat->tooltip : QObject::tr("Chat");
+    if (qt(button.toolTip) != tip) button.toolTip = ns(tip);
+    button.accessibilityLabel = ns(QObject::tr("Chat"));
+    const NSControlStateValue value = chatCard != nil && !chatCard.hidden ? NSControlStateValueOn : NSControlStateValueOff;
+    if (button.state != value) button.state = value;
+  }
+
+  void applyChatButtons() {
+    for (NSToolbarItem* item in window.toolbar.items) {
+      if (![item.itemIdentifier isEqualToString:agentID]) continue;
+      for (NSView* child in item.view.subviews) {
+        if ([child.accessibilityIdentifier isEqualToString:@"native.chatButton"]) applyChatButton((NSButton*)child);
+      }
+    }
+  }
+
+  // The quick-access group (mitcad#1113), as the Qt QuickAccessGroup: a
+  // button per shown command, a hairline and the ⋮ (DotsButton's three
+  // dots), in the workspace item after its tabs.
+  static constexpr CGFloat quickButtonWidth = 28;
+  static constexpr CGFloat quickSpacing = 2;
+  static constexpr CGFloat quickDotsWidth = 20;
+
+  NSImage* quickDotsImage() const {
+    NSImage* image = [NSImage imageWithSize:NSMakeSize(12, 18) flipped:NO drawingHandler:^BOOL(NSRect rect) {
+      [NSColor.blackColor setFill];
+      for (int dot = -1; dot <= 1; ++dot) {
+        [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(NSMidX(rect) - 1.4, NSMidY(rect) + dot * 4.5 - 1.4, 2.8, 2.8)] fill];
+      }
+      return YES;
+    }];
+    [image setTemplate:YES]; // (template is a C++ keyword)
+    image.accessibilityDescription = ns(QObject::tr("Choose the commands of this group"));
+    return image;
+  }
+
+  NSStackView* makeQuickGroup() {
+    NSStackView* group = [NSStackView stackViewWithViews:@[]];
+    group.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    group.alignment = NSLayoutAttributeCenterY;
+    group.spacing = quickSpacing;
+    group.accessibilityIdentifier = @"native.quickAccess";
+    return group;
+  }
+
+  // The group's buttons made again for the shown commands.
+  void rebuildQuickGroup() {
+    if (!quickGroup) return;
+    for (NSView* view in [quickGroup.arrangedSubviews copy]) {
+      [quickGroup removeArrangedSubview:view];
+      [view removeFromSuperview];
+    }
+    for (const QString& id : std::as_const(quickAccess.shown)) {
+      MITCADCommandButton* button = [[MITCADCommandButton alloc] initWithFrame:NSZeroRect];
+      button.representedObject = ns(id);
+      button.target = delegate;
+      button.action = @selector(performAction:);
+      button.bezelStyle = NSBezelStyleRecessed;
+      button.showsBorderOnlyWhileMouseInside = YES;
+      button.imagePosition = NSImageOnly;
+      button.translatesAutoresizingMaskIntoConstraints = NO;
+      button.accessibilityIdentifier = ns(QStringLiteral("native.quickAccess.") + id);
+      [button.widthAnchor constraintEqualToConstant:quickButtonWidth].active = YES;
+      [button.heightAnchor constraintEqualToConstant:26].active = YES;
+      [quickGroup addArrangedSubview:button];
+    }
+    NSBox* hairline = [[NSBox alloc] initWithFrame:NSMakeRect(0, 0, 1, 16)];
+    hairline.boxType = NSBoxSeparator;
+    hairline.translatesAutoresizingMaskIntoConstraints = NO;
+    hairline.accessibilityIdentifier = @"native.quickAccessHairline";
+    [hairline.widthAnchor constraintEqualToConstant:1].active = YES;
+    [hairline.heightAnchor constraintEqualToConstant:16].active = YES;
+    [quickGroup addArrangedSubview:hairline];
+    NSButton* dots = [NSButton buttonWithImage:quickDotsImage() target:delegate action:@selector(openQuickAccessMenu:)];
+    dots.bezelStyle = NSBezelStyleRecessed;
+    dots.showsBorderOnlyWhileMouseInside = YES;
+    dots.translatesAutoresizingMaskIntoConstraints = NO;
+    dots.toolTip = ns(QObject::tr("Choose the commands of this group"));
+    dots.accessibilityIdentifier = @"native.quickAccessMenu";
+    [dots.widthAnchor constraintEqualToConstant:quickDotsWidth].active = YES;
+    [dots.heightAnchor constraintEqualToConstant:26].active = YES;
+    [quickGroup addArrangedSubview:dots];
+    applyQuickFolded();
+  }
+
+  // Each button's artwork and state from the latest actions, its tooltip;
+  // a change logged with the tooltip.
+  void applyQuickState() {
+    if (!quickGroup) return;
+    for (NSView* view in quickGroup.arrangedSubviews) {
+      if (![view isKindOfClass:MITCADCommandButton.class]) continue;
+      MITCADCommandButton* button = (MITCADCommandButton*)view;
+      const QString id = qt(button.representedObject);
+      const NativeMacAction* command = action(id);
+      const int index = int(quickAccess.shown.indexOf(id));
+      const bool enabled = command != nullptr && command->enabled;
+      if (button.enabled != enabled) button.enabled = enabled;
+      NSImage* image = command != nullptr ? actionImage(*command, 18) : nil;
+      if (button.image != image) button.image = image;
+      const QString tooltip = quickAccess.tooltips.value(index);
+      if (qt(button.toolTip) != tooltip) button.toolTip = ns(tooltip);
+      button.accessibilityLabel = ns(command != nullptr ? command->label : id);
+      const QString logged = QStringLiteral("%1: %2").arg(enabled ? QStringLiteral("enabled") : QStringLiteral("disabled"), tooltip);
+      if (quickLogged.value(id) != logged) {
+        quickLogged.insert(id, logged);
+        qDebug().noquote() << QStringLiteral("Native quick access %1 %2").arg(id, logged);
+      }
+    }
+  }
+
+  void applyQuickFolded() {
+    if (!quickGroup) return;
+    for (NSView* view in quickGroup.arrangedSubviews) {
+      if (![view.accessibilityIdentifier isEqualToString:@"native.quickAccessMenu"]) {
+        view.hidden = quickFolded || ([view isKindOfClass:NSBox.class] && quickAccess.shown.isEmpty());
+      }
+    }
+  }
+
+  // The group's width with every button shown.
+  CGFloat quickUnfoldedWidth() const {
+    const CGFloat buttons = quickAccess.shown.isEmpty() ? 0 : CGFloat(quickAccess.shown.size()) * (quickButtonWidth + quickSpacing) + 1 + quickSpacing;
+    return buttons + quickDotsWidth;
+  }
+
+  void scheduleQuickFold() {
+    // On the next run-loop turn, outside any layout pass, as
+    // queueOverlayLayout.
+    if (quickFoldScheduled || closing) return;
+    quickFoldScheduled = true;
+    __weak MITCADNativeWindowDelegate* owner = delegate;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      MITCADNativeWindowDelegate* alive = owner;
+      if (alive == nil || alive->state == nullptr) return;
+      alive->state->quickFoldScheduled = false;
+      alive->state->updateQuickFold();
+    });
+  }
+
+  // As TitleBar::updateQuickFold: folded when the document's name, from
+  // the unfolded group's right to the project, agent and search items, 16
+  // points off each, would have less room than it needs.
+  void updateQuickFold() {
+    if (closing || !quickGroup || !workspaceTabs || !documentTitle || quickGroup.window == nil) return;
+    [window.contentView.superview layoutSubtreeIfNeeded];
+    const CGFloat tabsRight = NSMaxX([workspaceTabs convertRect:workspaceTabs.bounds toView:nil]);
+    CGFloat right = window.frame.size.width;
+    for (NSToolbarItem* item in window.toolbar.items) {
+      NSView* view = item.view;
+      if (view.window == nil || view.hiddenOrHasHiddenAncestor) continue;
+      if ([item.itemIdentifier isEqualToString:projectID] || [item.itemIdentifier isEqualToString:agentID] ||
+          [item.itemIdentifier isEqualToString:searchID]) {
+        right = std::min(right, NSMinX([view convertRect:view.bounds toView:nil]));
+      }
+    }
+    const CGFloat freeLeft = tabsRight + 8 + quickUnfoldedWidth() + 16;
+    const CGFloat freeRight = right - 16;
+    const CGFloat title = std::min<CGFloat>(220, std::ceil(documentTitle.attributedStringValue.size.width));
+    const bool folded = freeRight - freeLeft < title;
+    if (folded == quickFolded) return;
+    quickFolded = folded;
+    applyQuickFolded();
+    qDebug().noquote() << (folded ? QStringLiteral("Native quick access folded") : QStringLiteral("Native quick access unfolded"));
+  }
+
+  // The group's menu: while folded its commands first, then the File,
+  // Edit, View and Tools menus' commands as checks, Reset to Default.
+  NSMenu* quickChecks(const QList<NativeMacMenuItem>& entries) {
+    NSMenu* menu = [[NSMenu alloc] initWithTitle:@""];
+    for (const auto& entry : entries) {
+      NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:ns(entry.title) action:nil keyEquivalent:@""];
+      if (entry.submenu) {
+        item.submenu = quickChecks(entry.children);
+      } else {
+        item.action = @selector(chooseQuickAccess:);
+        item.target = delegate;
+        item.representedObject = ns(entry.action);
+        item.state = quickAccess.chosen.contains(entry.action) ? NSControlStateValueOn : NSControlStateValueOff;
+      }
+      [menu addItem:item];
+    }
+    return menu;
+  }
+
+  NSMenu* quickMenu() {
+    NSMenu* menu = [[NSMenu alloc] initWithTitle:@""];
+    QStringList top;
+    if (quickFolded && !quickAccess.shown.isEmpty()) {
+      for (const QString& id : std::as_const(quickAccess.shown)) {
+        if (const NativeMacAction* command = action(id)) {
+          [menu addItem:menuAction(*command, true)];
+          top.append(command->label);
+        }
+      }
+      [menu addItem:NSMenuItem.separatorItem];
+    }
+    for (const auto& entry : std::as_const(quickAccess.menus)) {
+      NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:ns(entry.title) action:nil keyEquivalent:@""];
+      item.submenu = quickChecks(entry.children);
+      [menu addItem:item];
+      top.append(entry.title);
+    }
+    [menu addItem:NSMenuItem.separatorItem];
+    NSMenuItem* reset = [[NSMenuItem alloc] initWithTitle:ns(QObject::tr("Reset to Default"))
+                                                   action:@selector(resetQuickAccess:) keyEquivalent:@""];
+    reset.target = delegate;
+    [menu addItem:reset];
+    top.append(qt(reset.title));
+    qDebug().noquote() << QStringLiteral("Native quick access menu: %1").arg(top.join(QStringLiteral(" | ")));
+    return menu;
+  }
+
+  void setQuickAccess(const NativeMacQuickAccess& group) {
+    const bool rebuild = group.shown != quickAccess.shown || (quickGroup && quickGroup.arrangedSubviews.count == 0);
+    quickAccess = group;
+    if (rebuild) {
+      qDebug().noquote() << QStringLiteral("Native quick access: %1")
+                                .arg(group.shown.isEmpty() ? QStringLiteral("none") : group.shown.join(QStringLiteral(", ")));
+      quickLogged.clear();
+      rebuildQuickGroup();
+    }
+    applyQuickState();
+    scheduleQuickFold();
+  }
 };
 
 NativeMacWindow::NativeMacWindow(QWidget* viewport, NativeMacWindowCallbacks callbacks)
     : m_state(std::make_unique<NativeMacWindowState>(viewport, std::move(callbacks))) {
-  setInspectorText(QStringLiteral("Inspector"), QStringLiteral("Select an object to inspect it, or start a command."));
+  setInspectorText(QStringLiteral("Command Panel"), QStringLiteral("Select an object to inspect it, or start a command."));
 }
 NativeMacWindow::~NativeMacWindow() = default;
 bool NativeMacWindow::isEmbedded() const { return m_state->error.isEmpty() && bool(m_state->foreignWindow); }
@@ -2474,6 +3646,14 @@ void NativeMacWindow::setActions(const QList<NativeMacAction>& actions) { m_stat
 void NativeMacWindow::setRibbon(const QList<NativeMacRibbonGroup>& groups, const QStringList& workspaces, int selected) {
   const bool changed = m_state->ribbonPresentation != groups || m_state->workspaces != workspaces ||
                        m_state->workspaceIndex != selected;
+  if ((m_state->workspaces != workspaces || m_state->workspaceIndex != selected) && !m_state->workspaces.isEmpty()) {
+    // The selector's tabs and the one shown, for UI tests: a drawing's
+    // alone while it is open (mitcad#1073), the model's back when it closes.
+    QStringList captions;
+    for (const QString& workspace : workspaces) captions.append(workspaceCaption(workspace));
+    qInfo().noquote() << QStringLiteral("Native workspaces: %1 (shown %2)")
+                             .arg(captions.join(QStringLiteral(", ")), workspaceCaption(workspaces.value(selected)));
+  }
   m_state->ribbonPresentation = groups;
   m_state->workspaces = workspaces;
   m_state->workspaceIndex = selected;
@@ -2481,7 +3661,7 @@ void NativeMacWindow::setRibbon(const QList<NativeMacRibbonGroup>& groups, const
   if (tabs) {
     if (tabs.segmentCount != workspaces.size()) tabs.segmentCount = workspaces.size();
     for (int i = 0; i < workspaces.size(); ++i) {
-      QString caption = workspaces[i].toLower(); caption[0] = caption[0].toUpper();
+      const QString caption = workspaceCaption(workspaces[i]);
       if (qt([tabs labelForSegment:i]) != caption) [tabs setLabel:ns(caption) forSegment:i];
     }
     if (tabs.selectedSegment != selected) tabs.selectedSegment = selected;
@@ -2536,12 +3716,7 @@ void NativeMacWindow::setBrowserIssues(const QString& failures, const QString& f
   }
   if (m_state->browserIssues.hidden == !shown) return;
   m_state->browserIssues.hidden = !shown;
-  m_state->browserTreeTop.constant = (shown ? 66 : 38) + m_state->configurationHeight.constant;
-  for (NSLayoutConstraint* constraint in m_state->sidebarCard.body.constraints) {
-    if (constraint.firstItem == m_state->configurationScroll && constraint.firstAttribute == NSLayoutAttributeTop) {
-      constraint.constant = shown ? 66 : 38;
-    }
-  }
+  m_state->browserTreeTop.constant = shown ? 66 : 38;
   m_state->layoutOverlays();
 }
 
@@ -2567,8 +3742,9 @@ void NativeMacWindow::setConfigurationView(void* view) {
       ]];
     }
   }
-  m_state->configurationScroll.hidden = content == nil;
-  if (content == nil) m_state->configurationHeight.constant = 0;
+  // Its own card between Projects and Browser (mitcad#1020).
+  m_state->showConfigurationCollapsed(m_state->configurationCollapsed);
+  m_state->setCardVisible(m_state->configurationCard, content != nil);
   m_state->layoutOverlays();
 }
 
@@ -2587,13 +3763,14 @@ void NativeMacWindow::setDocument(const QString& title, const QString& path, boo
   m_state->documentTitle.stringValue = m_state->window.title;
   m_state->window.representedURL = path.isEmpty() ? nil : [NSURL fileURLWithPath:ns(path)];
   m_state->window.documentEdited = edited;
+  m_state->scheduleQuickFold();
 }
 void NativeMacWindow::setHistorySelection(const QStringList& keys) {
   m_state->setHistorySelected(keys);
 }
 void NativeMacWindow::setHistoryFilter(const QString& label, bool active) {
   m_state->historyFilterButton.state = active ? NSControlStateValueOn : NSControlStateValueOff;
-  m_state->historyFilterButton.toolTip = ns(QStringLiteral("Timeline Filter: %1").arg(label));
+  m_state->historyFilterButton.toolTip = ns(QObject::tr("Timeline Filter: %1").arg(label));
 }
 void NativeMacWindow::setProjectStatus(const QString& text, const QString& tooltip) {
   m_state->projectText = text;
@@ -2605,7 +3782,7 @@ void NativeMacWindow::setProjectStatus(const QString& text, const QString& toolt
     NSButton* button = (NSButton*)item.view;
     button.title = ns(text);
     button.toolTip = ns(tooltip);
-    button.accessibilityLabel = ns(QStringLiteral("Project: %1").arg(text));
+    button.accessibilityLabel = ns(QObject::tr("Project: %1").arg(text));
   }
 }
 void NativeMacWindow::setAgentStatus(const QString& text, const QString& tooltip, bool connected, bool available) {
@@ -2621,12 +3798,8 @@ void NativeMacWindow::setAgentStatus(const QString& text, const QString& tooltip
   }
 }
 void NativeMacWindow::setSketchMode(bool sketching) { m_state->sketching = sketching; }
-void NativeMacWindow::setStatus(const QString& message, bool error, int milliseconds) {
-  m_state->status.stringValue = ns(message);
-  m_state->status.textColor = error ? NSColor.systemRedColor : NSColor.secondaryLabelColor;
-  m_state->status.toolTip = ns(message);
-  if (message.isEmpty()) [m_state->statusLifetime clear];
-  else [m_state->statusLifetime showForMilliseconds:milliseconds];
+void NativeMacWindow::setMessages(const MessageLog* log) {
+  [m_state->messageBand showLog:log];
   m_state->layoutOverlays();
 }
 void NativeMacWindow::setInspectorText(const QString& title, const QString& text) {
@@ -2691,9 +3864,51 @@ void NativeMacWindow::setCardWidth(const QString& card, int width) {
   m_state->layoutOverlays();
 }
 
+void NativeMacWindow::setColumnSplit(const std::vector<std::pair<QString, int>>& split) {
+  m_state->columnSplit = split;
+  m_state->layoutOverlays();
+}
+
+void NativeMacWindow::setConfigurationCollapsed(bool collapsed) {
+  m_state->showConfigurationCollapsed(collapsed);
+  m_state->layoutOverlays();
+}
+
+void NativeMacWindow::setQuickAccess(const NativeMacQuickAccess& group) { m_state->setQuickAccess(group); }
+
 void NativeMacWindow::setCubeArrows(const QList<NativeMacCubeArrow>& arrows) {
   m_state->setCubeArrows(arrows);
 }
+
+void NativeMacWindow::setChatView(void* view) {
+  NSView* content = (__bridge NSView*)view;
+  m_state->chatContent = content;
+  setChatCardContent(m_state->chatHost, content);
+}
+
+void NativeMacWindow::showChat(bool shown) {
+  auto& state = *m_state;
+  if (state.chatCard.hidden != !shown) {
+    state.setCardVisible(state.chatCard, shown);
+    if (shown) {
+      [state.chatCard layoutSubtreeIfNeeded];
+      setChatCardContent(state.chatHost, state.chatContent);
+      const NSSize size = state.chatCard.frame.size;
+      qInfo().noquote() << QStringLiteral("Native chat card shown: %1 x %2")
+                               .arg(std::lround(size.width)).arg(std::lround(size.height));
+    } else {
+      qInfo().noquote() << QStringLiteral("Native chat card hidden");
+    }
+  }
+  if (shown && !focusChatCard(state.chatHost)) {
+    qInfo().noquote() << QStringLiteral("Native chat card: no message field to focus");
+  }
+  state.applyChatButtons();
+}
+
+bool NativeMacWindow::chatShown() const { return !m_state->chatCard.hidden; }
+void NativeMacWindow::setDrawingOpen(bool open) { m_state->setDrawingOpen(open); }
+void NativeMacWindow::setNavigationBar(const NativeMacNavigationBar& bar) { m_state->setNavigationBar(bar); }
 
 bool nativeWindowRefreshContract(void* nativeWindow, QString& error) {
   MITCADDocumentWindow* window = (__bridge MITCADDocumentWindow*)nativeWindow;
@@ -2972,7 +4187,13 @@ using namespace mitcad::mac;
 - (BOOL)isFlipped { return YES; }
 - (void)layout {
   [super layout];
-  if (state) state->layoutOverlays();
+  if (state) {
+    // In the window's layout pass: no nested inspector passes (mitcad#1078).
+    const bool nested = state->inCanvasLayout;
+    state->inCanvasLayout = true;
+    state->layoutOverlays();
+    state->inCanvasLayout = nested;
+  }
 }
 - (void)setFrameSize:(NSSize)size {
   [super setFrameSize:size];
@@ -2988,6 +4209,42 @@ using namespace mitcad::mac;
 - (void)cancelOperation:(id)sender {
   if (self.editedRow < 0 && [(MITCADDocumentWindow*)self.window dispatchCancellation]) return;
   [self.nextResponder tryToPerform:_cmd with:sender];
+}
+// The row under the pointer (mitcad#1072): the moves over the visible
+// rows report its key, leaving the outline none.
+- (void)updateTrackingAreas {
+  [super updateTrackingAreas];
+  if (hoverArea == nil) {
+    hoverArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                             options:NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited |
+                                                     NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect
+                                               owner:self userInfo:nil];
+    [self addTrackingArea:hoverArea];
+  }
+}
+- (void)hoverAt:(NSEvent*)event {
+  if (!state) return;
+  const NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+  if (!NSPointInRect(point, self.visibleRect)) {
+    state->hoverTree(nil);
+    return;
+  }
+  const NSInteger row = [self rowAtPoint:point];
+  MITCADTreeNode* node = row >= 0 ? [self itemAtRow:row] : nil;
+  state->hoverTree(node.key);
+}
+- (void)mouseMoved:(NSEvent*)event {
+  [super mouseMoved:event];
+  [self hoverAt:event];
+}
+- (void)mouseEntered:(NSEvent*)event {
+  [super mouseEntered:event];
+  [self hoverAt:event];
+}
+- (void)mouseExited:(NSEvent*)event {
+  [super mouseExited:event];
+  // The table's own areas exit too; only a pointer out of the rows counts.
+  [self hoverAt:event];
 }
 - (NSMenu*)menuForEvent:(NSEvent*)event {
   if (!state || !state->callbacks.treeContextMenu) return [super menuForEvent:event];
@@ -3095,8 +4352,45 @@ using namespace mitcad::mac;
 - (void)reorderHistoryFeatureToIndex:(NSInteger)index {
   if (state) state->reorderHistoryFeature(qt(self.featureKey), int(index));
 }
+// The timeline's hover (mitcad#1076): the pointer over the cell previews
+// its feature; leaving, a press or a drag ends it.
+- (void)updateTrackingAreas {
+  [super updateTrackingAreas];
+  if (hoverTracking) [self removeTrackingArea:hoverTracking];
+  hoverTracking = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+      options:NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingActiveInActiveApp | NSTrackingInVisibleRect
+        owner:self userInfo:nil];
+  [self addTrackingArea:hoverTracking];
+}
+- (void)mouseEntered:(NSEvent*)event {
+  (void)event;
+  if (state && !pressed) state->hoverHistoryCell(qt(self.featureKey));
+}
+- (void)mouseMoved:(NSEvent*)event {
+  // After a rebuild ended the hover, the next move over the cell starts it again.
+  (void)event;
+  if (state && !pressed) state->hoverHistoryCell(qt(self.featureKey));
+}
+- (void)mouseExited:(NSEvent*)event {
+  (void)event;
+  if (state && state->historyHover == qt(self.featureKey)) state->hoverHistoryCell(QString());
+}
+// The cell's tooltip is the shared timeline's, made when AppKit shows it
+// (mitcad#1076): the feature details read the model.
+- (void)setFrameSize:(NSSize)size {
+  const BOOL changed = !NSEqualSizes(size, self.frame.size);
+  [super setFrameSize:size];
+  if (!changed) return;
+  [self removeAllToolTips];
+  if (!NSIsEmptyRect(self.bounds)) [self addToolTipRect:self.bounds owner:(id)self userData:nullptr];
+}
+- (NSString*)view:(NSView*)view stringForToolTip:(NSToolTipTag)tag point:(NSPoint)point userData:(void*)data {
+  (void)view; (void)tag; (void)point; (void)data;
+  return state ? ns(state->historyToolTip(qt(self.featureKey))) : @"";
+}
 - (void)mouseDown:(NSEvent*)event {
   if (!state || !self.enabled || state->nativeModalBlocked()) return;
+  state->hoverHistoryCell(QString());
   [self.window makeFirstResponder:self];
   if (event.clickCount > 1) { [self activateHistoryFeature]; return; }
   pressed = YES;
@@ -3220,6 +4514,97 @@ using namespace mitcad::mac;
 }
 @end
 
+@implementation MITCADHistoryGroupView
+- (BOOL)isFlipped { return YES; }
+- (BOOL)isOpaque { return NO; }
+- (NSView*)hitTest:(NSPoint)point {
+  return NSPointInRect([self convertPoint:point fromView:self.superview], self.bounds) ? self : nil;
+}
+- (void)setCollapsed:(BOOL)collapsed {
+  if (_collapsed == collapsed) return;
+  _collapsed = collapsed;
+  self.folder.hidden = !collapsed;
+  [self refreshToolTip];
+  [self setNeedsDisplay:YES];
+}
+- (void)setFrameSize:(NSSize)size {
+  const BOOL changed = !NSEqualSizes(size, self.frame.size);
+  [super setFrameSize:size];
+  if (changed) [self refreshToolTip];
+}
+// A folded group's cell: the shared timeline's tooltip for the group.
+// The band has none, as in the shared timeline.
+- (void)refreshToolTip {
+  [self removeAllToolTips];
+  if (_collapsed && !NSIsEmptyRect(self.bounds)) [self addToolTipRect:self.bounds owner:(id)self userData:nullptr];
+}
+- (NSString*)view:(NSView*)view stringForToolTip:(NSToolTipTag)tag point:(NSPoint)point userData:(void*)data {
+  (void)view; (void)tag; (void)point; (void)data;
+  return state && _collapsed ? ns(state->historyToolTip(qt(self.firstKey))) : @"";
+}
+- (void)drawRect:(NSRect)dirty {
+  (void)dirty;
+  if (_collapsed) return; // the folder cell: its artwork and layer
+  // The band over an open group's cells, as the shared timeline draws it.
+  [roleColor(mitcad::ColorRole::GroupBand) setFill];
+  const NSRect band = NSMakeRect(1, 1, std::max<CGFloat>(0, NSWidth(self.bounds) - 2), mitcad::timeline::top - 2);
+  [[NSBezierPath bezierPathWithRoundedRect:band xRadius:1.5 yRadius:1.5] fill];
+}
+// Hovering a folded group's cell previews its features (mitcad#1076).
+- (void)updateTrackingAreas {
+  [super updateTrackingAreas];
+  if (hoverTracking) [self removeTrackingArea:hoverTracking];
+  hoverTracking = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+      options:NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingActiveInActiveApp | NSTrackingInVisibleRect
+        owner:self userInfo:nil];
+  [self addTrackingArea:hoverTracking];
+}
+- (void)mouseEntered:(NSEvent*)event {
+  (void)event;
+  if (state && _collapsed && !pressed) state->hoverHistoryCell(qt(self.firstKey));
+}
+- (void)mouseMoved:(NSEvent*)event {
+  (void)event;
+  if (state && _collapsed && !pressed) state->hoverHistoryCell(qt(self.firstKey));
+}
+- (void)mouseExited:(NSEvent*)event {
+  (void)event;
+  if (state && _collapsed && state->historyHover == qt(self.firstKey)) state->hoverHistoryCell(QString());
+}
+// A click on an open group's band folds it (on release over it); a
+// double-click on a folded group's cell opens it again (mitcad#1077).
+- (void)mouseDown:(NSEvent*)event {
+  if (!state || state->nativeModalBlocked()) return;
+  state->hoverHistoryCell(QString());
+  pressed = YES;
+  if (_collapsed && event.clickCount > 1) {
+    pressed = NO;
+    if (state->callbacks.historyGroupCollapsed) state->callbacks.historyGroupCollapsed(qt(self.groupName), false);
+  }
+}
+- (void)mouseUp:(NSEvent*)event {
+  const BOOL click = pressed;
+  pressed = NO;
+  if (!click || _collapsed || !state || !state->callbacks.historyGroupCollapsed ||
+      !NSPointInRect([self convertPoint:event.locationInWindow fromView:nil], self.bounds)) return;
+  state->callbacks.historyGroupCollapsed(qt(self.groupName), true);
+}
+// A right click on the band or the folded cell: the shared group menu.
+- (NSMenu*)menuForEvent:(NSEvent*)event {
+  if (!state || state->nativeModalBlocked() || !state->callbacks.historyGroupMenu) return nil;
+  state->hoverHistoryCell(QString());
+  state->callbacks.historyGroupMenu(qt(self.groupName), screenPoint(event));
+  return nil;
+}
+- (BOOL)isAccessibilityElement { return YES; }
+- (NSAccessibilityRole)accessibilityRole { return NSAccessibilityButtonRole; }
+- (BOOL)accessibilityPerformPress {
+  if (!state || state->nativeModalBlocked() || !state->callbacks.historyGroupCollapsed) return NO;
+  state->callbacks.historyGroupCollapsed(qt(self.groupName), !_collapsed);
+  return YES;
+}
+@end
+
 @implementation MITCADNativeWindowDelegate
 - (BOOL)respondsToSelector:(SEL)selector {
   return [super respondsToSelector:selector] ||
@@ -3309,6 +4694,7 @@ using namespace mitcad::mac;
 - (void)windowDidResize:(NSNotification*)notification {
   (void)notification;
   if (state) state->layoutOverlays();
+  if (state) state->scheduleQuickFold();
 }
 - (void)windowDidEnterFullScreen:(NSNotification*)notification {
   (void)notification;
@@ -3337,6 +4723,37 @@ using namespace mitcad::mac;
 - (void)changeWorkspace:(id)sender {
   if (state && state->callbacks.workspaceChanged) state->callbacks.workspaceChanged(int(((NSSegmentedControl*)sender).selectedSegment));
 }
+- (void)pinCommand:(id)sender {
+  NSArray* row = [sender representedObject];
+  if (!state || state->nativeModalBlocked() || !state->callbacks.pinCommand || ![row isKindOfClass:NSArray.class] ||
+      row.count != 3) return;
+  const QString id = qt(row[1]);
+  // Unpin where the command is pinned, as Qt's row menu offers.
+  const auto* command = state->action(id);
+  if (!command) return;
+  const bool pin = !command->pinnedToToolbar;
+  qDebug().noquote() << QStringLiteral("Native toolbar menu %1 %2: %3")
+                            .arg(qt(row[2]), id, pin ? QStringLiteral("Pin to Toolbar") : QStringLiteral("Unpin from Toolbar"));
+  [self performSelector:@selector(applyRowCommand:) withObject:@[row[0], row[1], @(pin)] afterDelay:0];
+}
+- (void)changeShortcut:(id)sender {
+  NSArray* row = [sender representedObject];
+  if (!state || state->nativeModalBlocked() || !state->callbacks.commandShortcut || ![row isKindOfClass:NSArray.class] ||
+      row.count != 3) return;
+  qDebug().noquote() << QStringLiteral("Native toolbar menu %1 %2: Change Keyboard Shortcut…").arg(qt(row[2]), qt(row[1]));
+  [self performSelector:@selector(applyRowCommand:) withObject:@[row[1]] afterDelay:0];
+}
+- (void)applyRowCommand:(NSArray*)command {
+  // Run in the default run loop mode, after AppKit's menu tracking ends:
+  // the ribbon remade by a pin, or the modal Keyboard Shortcuts, must not
+  // start inside the menu's loop (a Qt timer fires in it too).
+  if (!state) return;
+  if (command.count == 3 && state->callbacks.pinCommand) {
+    state->callbacks.pinCommand(qt(command[0]), qt(command[1]), [command[2] boolValue]);
+  } else if (command.count == 1 && state->callbacks.commandShortcut) {
+    state->callbacks.commandShortcut(qt(command[0]));
+  }
+}
 - (BOOL)validateToolbarItem:(NSToolbarItem*)item {
   if (!state || state->nativeModalBlocked()) return NO;
   QString key = qt(item.itemIdentifier);
@@ -3360,13 +4777,23 @@ using namespace mitcad::mac;
   state->projectsHost.hidden = state->projectsCollapsed;
   NSButton* button = (NSButton*)sender;
   button.image = symbol(state->projectsCollapsed ? QStringLiteral("chevron.right") : QStringLiteral("chevron.down"));
-  button.accessibilityLabel = state->projectsCollapsed ? @"Expand Projects" : @"Collapse Projects";
+  button.accessibilityLabel = state->projectsCollapsed ? ns(QObject::tr("Expand Projects")) : ns(QObject::tr("Collapse Projects"));
   state->layoutOverlays();
+}
+// The Configuration card's disclosure (mitcad#1020), remembered as the
+// shared Floating card's.
+- (void)collapseConfiguration:(id)sender {
+  (void)sender;
+  if (!state || state->nativeModalBlocked() || ![state->window makeFirstResponder:nil]) return;
+  state->showConfigurationCollapsed(!state->configurationCollapsed);
+  state->layoutOverlays();
+  if (state->callbacks.configurationCollapsed) state->callbacks.configurationCollapsed(state->configurationCollapsed);
 }
 - (void)collapseBrowser:(id)sender {
   if (!state) return;
   state->browserCollapsed = !state->browserCollapsed;
   state->browserScroll.hidden = state->browserCollapsed;
+  if (state->browserCollapsed) state->hoverTree(nil);
   ((NSButton*)sender).image = symbol(state->browserCollapsed ? QStringLiteral("chevron.right") : QStringLiteral("chevron.down"));
   state->layoutOverlays();
 }
@@ -3374,6 +4801,10 @@ using namespace mitcad::mac;
   if (!state || state->nativeModalBlocked() || !state->callbacks.cubeArrow ||
       ![sender isKindOfClass:MITCADCommandButton.class]) return;
   state->callbacks.cubeArrow(qt(((MITCADCommandButton*)sender).representedObject));
+}
+- (void)openNavigationStyles:(id)sender {
+  if (!state || state->nativeModalBlocked() || ![sender isKindOfClass:NSView.class]) return;
+  state->popUpNavigationStyles((NSView*)sender);
 }
 - (void)performAction:(id)sender {
   if (!state) return;
@@ -3417,13 +4848,13 @@ using namespace mitcad::mac;
   // state. A control that rejects validation keeps its editor and focus.
   if ([NSApp.keyWindow.firstResponder isKindOfClass:NSTextView.class] &&
       ![NSApp.keyWindow makeFirstResponder:nil]) return;
-  if (key == QStringLiteral("tools.search")) state->openSearch();
+  if (key == QStringLiteral("tools.search")) state->openSearch(false, sender);
   else state->invoke(key);
 }
 - (void)toggleSidebar:(id)sender { (void)sender; if (state) state->setCardVisible(state->sidebarCard, state->sidebarCard.hidden); }
 - (void)toggleInspector:(id)sender { (void)sender; if (state) state->setCardVisible(state->inspectorCard, state->inspectorCard.hidden); }
 - (void)toggleHistory:(id)sender { (void)sender; if (state) state->setCardVisible(state->historyCard, state->historyCard.hidden); }
-- (void)openSearch:(id)sender { (void)sender; if (state) state->openSearch(); }
+- (void)openSearch:(id)sender { if (state) state->openSearch(false, sender); }
 - (void)closeDocument:(id)sender {
   if (!state) return;
   NSWindow* window = NSApp.keyWindow != nil ? NSApp.keyWindow : state->window;
@@ -3470,9 +4901,20 @@ using namespace mitcad::mac;
         !(item.keyEquivalentModifierMask & (NSEventModifierFlagCommand | NSEventModifierFlagControl));
     return action->enabled && !(textEditor && plainShortcut);
   }
-  if (item.action == @selector(toggleSidebar:)) item.title = state->sidebarCard.hidden ? @"Show Sidebar" : @"Hide Sidebar";
-  if (item.action == @selector(toggleInspector:)) item.title = state->inspectorCard.hidden ? @"Show Inspector" : @"Hide Inspector";
-  if (item.action == @selector(toggleHistory:)) item.title = state->historyCard.hidden ? @"Show History" : @"Hide History";
+  if (item.action == @selector(pinCommand:) || item.action == @selector(changeShortcut:)) {
+    const bool handled = item.action == @selector(pinCommand:) ? bool(state->callbacks.pinCommand)
+                                                               : bool(state->callbacks.commandShortcut);
+    if (!handled || state->nativeModalBlocked()) return NO;
+    if (item.action == @selector(changeShortcut:)) return YES;
+    // Pin to Toolbar is disabled for a command that is a button of its
+    // group already (mitcad#1084); Unpin always works.
+    NSArray* row = item.representedObject;
+    const auto* command = [row isKindOfClass:NSArray.class] && row.count == 3 ? state->action(qt(row[1])) : nullptr;
+    return command && (command->pinnedToToolbar || command->pinnable);
+  }
+  if (item.action == @selector(toggleSidebar:)) item.title = state->sidebarCard.hidden ? ns(QObject::tr("Show Sidebar")) : ns(QObject::tr("Hide Sidebar"));
+  if (item.action == @selector(toggleInspector:)) item.title = state->inspectorCard.hidden ? ns(QObject::tr("Show Command Panel")) : ns(QObject::tr("Hide Command Panel"));
+  if (item.action == @selector(toggleHistory:)) item.title = state->historyCard.hidden ? ns(QObject::tr("Show Timeline")) : ns(QObject::tr("Hide Timeline"));
   if (item.action == @selector(activateTree:) || item.action == @selector(renameTree:) || item.action == @selector(toggleTreeVisibility:)) {
     MITCADTreeNode* node = state->contextNode();
     const auto* modelItem = node ? state->treeItem(node.key) : nullptr;
@@ -3480,7 +4922,7 @@ using namespace mitcad::mac;
     if (item.action == @selector(renameTree:)) return modelItem->editable && bool(state->callbacks.rename);
     if (item.action == @selector(toggleTreeVisibility:)) {
       const bool visible = modelItem->hasVisibility ? modelItem->checked : modelItem->visible;
-      item.title = visible ? @"Hide" : @"Show";
+      item.title = visible ? ns(QObject::tr("Hide")) : ns(QObject::tr("Show"));
       return modelItem->canToggleVisibility &&
              (bool(state->callbacks.visibilityChanged) || bool(state->callbacks.treeVisibility));
     }
@@ -3517,19 +4959,28 @@ using namespace mitcad::mac;
   SEL selector = nil;
   if ([identifier isEqualToString:workspaceID]) {
     NSToolbarItem* item = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
-    item.label = @"Workspace";
-    NSSegmentedControl* tabs = [NSSegmentedControl segmentedControlWithLabels:@[@"Solid", @"Build"]
+    item.label = ns(QObject::tr("Workspace"));
+    NSSegmentedControl* tabs = [NSSegmentedControl segmentedControlWithLabels:@[ns(QObject::tr("Solid")), ns(QObject::tr("Build"))]
                             trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(changeWorkspace:)];
     tabs.segmentStyle = NSSegmentStyleRounded;
     tabs.selectedSegment = state->workspaceIndex;
     tabs.accessibilityIdentifier = @"native.workspaces";
     if (inserted) state->workspaceTabs = tabs;
     item.view = tabs;
+    if (inserted) {
+      // The quick-access group after the tabs, in their item (mitcad#1113).
+      state->quickGroup = state->makeQuickGroup();
+      NSStackView* row = [NSStackView stackViewWithViews:@[tabs, state->quickGroup]];
+      row.spacing = 8;
+      item.view = row;
+      state->rebuildQuickGroup();
+      state->applyQuickState();
+    }
     return item;
   }
   if ([identifier isEqualToString:documentTitleID]) {
     NSToolbarItem* item = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
-    item.label = @"Document";
+    item.label = ns(QObject::tr("Document"));
     NSTextField* title = label(state->window.title, [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]);
     title.alignment = NSTextAlignmentCenter;
     title.lineBreakMode = NSLineBreakByTruncatingMiddle;
@@ -3541,8 +4992,8 @@ using namespace mitcad::mac;
   }
   if ([identifier isEqualToString:searchID]) {
     NSToolbarItem* item = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
-    item.label = @"Search commands";
-    NSButton* button = [NSButton buttonWithTitle:@"Search commands" target:self action:@selector(openSearch:)];
+    item.label = ns(QObject::tr("Command Search"));
+    NSButton* button = [NSButton buttonWithTitle:ns(QObject::tr("Command Search")) target:self action:@selector(openSearch:)];
     button.image = symbol(QStringLiteral("magnifyingglass"));
     button.imagePosition = NSImageLeft;
     button.alignment = NSTextAlignmentLeft;
@@ -3557,8 +5008,8 @@ using namespace mitcad::mac;
   }
   if ([identifier isEqualToString:projectID]) {
     NSToolbarItem* item = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
-    item.label = @"Project";
-    item.paletteLabel = @"Project Status";
+    item.label = ns(QObject::tr("Project"));
+    item.paletteLabel = ns(QObject::tr("Project Status"));
     NSButton* button = [NSButton buttonWithTitle:ns(state->projectText) target:self action:@selector(openProjectMenu:)];
     button.translatesAutoresizingMaskIntoConstraints = NO;
     button.bezelStyle = NSBezelStyleRounded;
@@ -3568,7 +5019,7 @@ using namespace mitcad::mac;
     button.lineBreakMode = NSLineBreakByTruncatingTail;
     button.toolTip = ns(state->projectTooltip);
     button.accessibilityIdentifier = @"native.projectIndicator";
-    button.accessibilityLabel = ns(QStringLiteral("Project: %1").arg(state->projectText));
+    button.accessibilityLabel = ns(QObject::tr("Project: %1").arg(state->projectText));
     [button setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     [button.widthAnchor constraintLessThanOrEqualToConstant:190].active = YES;
     [button.heightAnchor constraintEqualToConstant:26].active = YES;
@@ -3577,8 +5028,8 @@ using namespace mitcad::mac;
   }
   if ([identifier isEqualToString:agentID]) {
     NSToolbarItem* item = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
-    item.label = @"AI Assistants";
-    item.paletteLabel = @"AI Assistant Status";
+    item.label = ns(QObject::tr("AI Assistants"));
+    item.paletteLabel = ns(QObject::tr("AI Assistant Status"));
     MITCADAgentButton* button = [[MITCADAgentButton alloc] initWithFrame:NSZeroRect];
     button.target = self;
     button.action = @selector(clickAgentIndicator:);
@@ -3595,23 +5046,38 @@ using namespace mitcad::mac;
     NSButton* arrow = [NSButton buttonWithImage:symbol(QStringLiteral("chevron.down")) target:self action:@selector(openAgentMenu:)];
     arrow.bezelStyle = NSBezelStyleRounded;
     arrow.accessibilityIdentifier = @"native.agentMenu";
-    arrow.accessibilityLabel = @"AI assistants menu";
+    arrow.accessibilityLabel = ns(QObject::tr("AI assistants menu"));
     [arrow.widthAnchor constraintEqualToConstant:24].active = YES;
     [arrow.heightAnchor constraintEqualToConstant:26].active = YES;
-    NSStackView* row = [NSStackView stackViewWithViews:@[button, arrow]];
+    // Chat beside the indicator (mitcad#1075), as the Qt title row's
+    // titleChat: View › Chat.
+    MITCADCommandButton* chat = [[MITCADCommandButton alloc] initWithFrame:NSZeroRect];
+    chat.representedObject = @"view.chat";
+    chat.target = self;
+    chat.action = @selector(performAction:);
+    chat.bezelStyle = NSBezelStyleRounded;
+    [chat setButtonType:NSButtonTypePushOnPushOff];
+    chat.imagePosition = NSImageOnly;
+    chat.translatesAutoresizingMaskIntoConstraints = NO;
+    chat.accessibilityIdentifier = @"native.chatButton";
+    state->applyChatButton(chat);
+    [chat.widthAnchor constraintEqualToConstant:30].active = YES;
+    [chat.heightAnchor constraintEqualToConstant:26].active = YES;
+    NSStackView* row = [NSStackView stackViewWithViews:@[button, arrow, chat]];
     row.spacing = 0;
+    [row setCustomSpacing:6 afterView:arrow];
     item.view = row;
     return item;
   }
-  if ([identifier isEqualToString:sidebarID]) { title = @"Sidebar"; image = @"sidebar.left"; selector = @selector(toggleSidebar:); }
-  else if ([identifier isEqualToString:inspectorID]) { title = @"Inspector"; image = @"sidebar.right"; selector = @selector(toggleInspector:); }
-  else if ([identifier isEqualToString:historyID]) { title = @"History"; image = @"clock.arrow.circlepath"; selector = @selector(toggleHistory:); }
-  else if ([identifier isEqualToString:searchID]) { title = @"Search Commands"; image = @"magnifyingglass"; selector = @selector(openSearch:); }
+  if ([identifier isEqualToString:sidebarID]) { title = ns(QObject::tr("Sidebar")); image = @"sidebar.left"; selector = @selector(toggleSidebar:); }
+  else if ([identifier isEqualToString:inspectorID]) { title = ns(QObject::tr("Command Panel")); image = @"sidebar.right"; selector = @selector(toggleInspector:); }
+  else if ([identifier isEqualToString:historyID]) { title = ns(QObject::tr("Timeline")); image = @"clock.arrow.circlepath"; selector = @selector(toggleHistory:); }
+  else if ([identifier isEqualToString:searchID]) { title = ns(QObject::tr("Command Search")); image = @"magnifyingglass"; selector = @selector(openSearch:); }
   else if ([identifier isEqualToString:createID] || [identifier isEqualToString:modifyID] || [identifier isEqualToString:constraintsID]) {
     NSMenuToolbarItem* item = [[NSMenuToolbarItem alloc] initWithItemIdentifier:identifier];
     const bool modify = [identifier isEqualToString:modifyID];
     const bool constrain = [identifier isEqualToString:constraintsID];
-    item.label = constrain ? @"Constrain" : (modify ? @"Modify" : @"Create");
+    item.label = constrain ? ns(QObject::tr("Constraints")) : (modify ? ns(QObject::tr("Modify")) : ns(QObject::tr("Create")));
     item.paletteLabel = item.label;
     item.image = symbol(qt(constrain ? @"link" : (modify ? @"wrench.and.screwdriver" : @"plus")), item.label);
     item.menu = state->groupMenu(constrain ? QStringLiteral("CONSTRAINTS") : (modify ? QStringLiteral("MODIFY") : QStringLiteral("CREATE")));
@@ -3714,7 +5180,13 @@ using namespace mitcad::mac;
   cell.textField.identifier = node.key;
   cell.textField.editable = item->editable && bool(state->callbacks.rename);
   cell.textField.selectable = cell.textField.editable;
-  cell.textField.textColor = item->enabled ? NSColor.labelColor : NSColor.tertiaryLabelColor;
+  // The shared row's colour (mitcad#1079): a failed row red, a warned
+  // one the warning's, a suppressed, rolled-back or hidden one grey.
+  NSColor* tone = item->tone == QLatin1String("failed")    ? roleColor(mitcad::ColorRole::ErrorText)
+                  : item->tone == QLatin1String("warning") ? roleColor(mitcad::ColorRole::WarningText)
+                  : item->tone == QLatin1String("dimmed")  ? roleColor(mitcad::ColorRole::TextHidden)
+                                                           : nil;
+  cell.textField.textColor = !item->enabled ? NSColor.tertiaryLabelColor : tone != nil ? tone : NSColor.labelColor;
   NativeMacAction artwork;
   artwork.icon = item->icon;
   artwork.label = item->title;
@@ -3731,29 +5203,42 @@ using namespace mitcad::mac;
       button.hidden = !showsVisibility;
       button.enabled = item->enabled && item->canToggleVisibility;
       drawing.icon = mitcad::themeIcon(visible ? QStringLiteral("eye") : QStringLiteral("eye-off"));
-      button.toolTip = visible ? @"Hide" : @"Show";
+      button.toolTip = visible ? ns(QObject::tr("Hide")) : ns(QObject::tr("Show"));
       button.accessibilityIdentifier = ns(QStringLiteral("native.model.eye.") + item->id);
     } else if (button.tag == 3) {
       button.hidden = item->bindings <= 0;
       button.enabled = item->enabled;
       button.title = ns(QStringLiteral("fx %1").arg(item->bindings));
       button.accessibilityIdentifier = ns(QStringLiteral("native.model.fx.") + item->id);
-      button.accessibilityLabel = ns(QStringLiteral("%1 follows %2 bindings").arg(item->title).arg(item->bindings));
-      button.toolTip = @"Follows expressions: point here to see what";
+      button.accessibilityLabel = ns(QObject::tr("%1 follows %2 bindings").arg(item->title).arg(item->bindings));
+      button.toolTip = ns(QObject::tr("Follows expressions: point here to see what"));
       continue;
     } else {
       button.hidden = !item->hasActivation;
       button.enabled = item->enabled;
       drawing.icon = mitcad::themeIcon(item->active ? QStringLiteral("radio-on") : QStringLiteral("radio-off"));
-      button.toolTip = @"Activate Component";
+      button.toolTip = ns(QObject::tr("Activate Component"));
       button.accessibilityIdentifier = ns(QStringLiteral("native.model.activate.") + item->id);
     }
     button.image = state->actionImage(drawing, 16);
     button.accessibilityLabel = [NSString stringWithFormat:@"%@ %@", button.toolTip, ns(item->title)];
+    if (button.tag == 1) {
+      // A bulb that follows a condition says what a click does, and its
+      // own condition has the fx mark (mitcad#863, mitcad#1079).
+      if (item->eyeBound) button.image = conditionBulb(button.image);
+      button.accessibilityValue = item->eyeBound ? ns(QObject::tr("follows a condition")) : nil;
+      if (!item->eyeTip.isEmpty()) {
+        button.accessibilityLabel = [NSString stringWithFormat:@"%@ %@", visible ? ns(QObject::tr("Hide")) : ns(QObject::tr("Show")),
+                                                               ns(item->title)];
+        button.toolTip = ns(item->eyeTip);
+      }
+      button.accessibilityHelp = item->eyeTip.isEmpty() ? nil : ns(item->eyeTip);
+    }
   }
   cell.alphaValue = showsVisibility && !visible ? 0.5 : 1.0;
   cell.toolTip = ns(item->detail);
   cell.accessibilityLabel = ns(item->title);
+  cell.accessibilityValue = item->tone.isEmpty() ? nil : ns(item->tone); // mitcad#1079
   cell.accessibilityIdentifier = ns(QStringLiteral("native.model.") + item->id);
   return cell;
 }
@@ -3893,6 +5378,30 @@ using namespace mitcad::mac;
 - (void)openAgentMenu:(id)sender {
   if (!state || state->nativeModalBlocked() || !state->callbacks.agentMenu) return;
   state->callbacks.agentMenu(menuPoint((NSView*)sender));
+}
+- (void)openQuickAccessMenu:(id)sender {
+  if (!state || state->nativeModalBlocked() || ![sender isKindOfClass:NSView.class]) return;
+  NSView* view = (NSView*)sender;
+  [state->quickMenu() popUpMenuPositioningItem:nil atLocation:NSMakePoint(0, view.bounds.size.height + 4) inView:view];
+}
+- (void)chooseQuickAccess:(id)sender {
+  if (!state || !state->callbacks.quickAccessChosen || ![sender isKindOfClass:NSMenuItem.class]) return;
+  NSMenuItem* item = sender;
+  const bool on = item.state != NSControlStateValueOn;
+  [self performSelector:@selector(applyQuickAccess:) withObject:@[item.representedObject, @(on)] afterDelay:0];
+}
+- (void)resetQuickAccess:(id)sender {
+  (void)sender;
+  if (!state || !state->callbacks.quickAccessReset) return;
+  [self performSelector:@selector(applyQuickAccess:) withObject:@[] afterDelay:0];
+}
+- (void)applyQuickAccess:(NSArray*)choice {
+  if (!state || state->closing) return;
+  if (choice.count == 2 && state->callbacks.quickAccessChosen) {
+    state->callbacks.quickAccessChosen(qt(choice[0]), [choice[1] boolValue]);
+  } else if (choice.count == 0 && state->callbacks.quickAccessReset) {
+    state->callbacks.quickAccessReset();
+  }
 }
 - (void)chooseSearch:(id)sender {
   (void)sender;

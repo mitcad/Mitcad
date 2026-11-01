@@ -284,7 +284,7 @@ function Picker-Click([string]$Text) {
     else { Start-Sleep -Milliseconds 50 }
   }
   if (-not $place) { Ui-Fail "no place of the part picker logged for '$Text'" }
-  $picker = Ui-Windows '^Part Picker'
+  $picker = Ui-Windows '^Component Picker'
   if ($picker.Count -eq 0) { Ui-Fail 'no part picker window' }
   $b = $script:UiButtons[1]
   Ui-Apart $picker[0] $place[0] $place[1]
@@ -296,14 +296,14 @@ function Picker-Click([string]$Text) {
 }
 # Picker-Type TEXT: typed into the part picker's window (its focused field).
 function Picker-Type([string]$Text) {
-  $picker = Ui-Windows '^Part Picker'
+  $picker = Ui-Windows '^Component Picker'
   if ($picker.Count -eq 0) { Ui-Fail 'no part picker window' }
   [UiInput]::Type($picker[0], $Text, 40)
 }
 # Picker-Keys @(VK, ...) COUNT: each virtual key COUNT times, to the part
 # picker's window (End, BackSpace in its search field).
 function Picker-Keys([int[]]$Keys, [int]$Count) {
-  $picker = Ui-Windows '^Part Picker'
+  $picker = Ui-Windows '^Component Picker'
   if ($picker.Count -eq 0) { Ui-Fail 'no part picker window' }
   foreach ($vk in $Keys) {
     for ($i = 0; $i -lt $Count; $i++) {
@@ -602,7 +602,7 @@ function Wall-From([string]$Name, [int[]]$At, [string]$Length, [string]$Text, [i
     'the end next, else Length square to the wall'
   Ui-Mark
   Ui-Step "$Length mm long"              { Ui-TypeIn 'Panel Wall input frame_length' $Length }
-  Expect-Inspect 'Wall' @("frame wall $Name, wall $Length x 2400 mm", "; $Name`: $Text", "; corner $Corner") `
+  Expect-Inspect 'Wall' @("frame wall $Name, wall $Length ${Times} 2400 mm", "; $Name`: $Text", "; corner $Corner") `
     "$Name previewed: $Text, corner $Corner"
   $line = Ui-NewLines |
     Where-Object { $_.StartsWith('Inspect Wall: ') -and $_.Contains("; $Name`: $Text") } | Select-Object -Last 1
@@ -632,15 +632,15 @@ function First-Wall([string]$Design, [string]$Corner) {
   Ui-Mark
   Ui-Step 'Wall (F7)'                    { Ui-Key 'F7' }
   Ui-ExpectNew 'Command Wall started' 'Wall started'
-  Expect-Inspect 'Wall' @('frame wall Wall 1, wall 3600 x 2400 mm', 'fasteners yes', '; corner butt') `
+  Expect-Inspect 'Wall' @("frame wall Wall 1, wall 3600 ${Times} 2400 mm", 'fasteners yes', '; corner butt') `
     'a wall from the origin along +X, Corner Butt the first time'
   Ui-Mark
   Ui-Step 'no fasteners'                 { Ui-ClickLogged 'Panel Wall input frame_fasteners' }
-  Expect-Inspect 'Wall' @('frame wall Wall 1, wall 3600 x 2400 mm', 'fasteners no') 'without fasteners'
+  Expect-Inspect 'Wall' @("frame wall Wall 1, wall 3600 ${Times} 2400 mm", 'fasteners no') 'without fasteners'
   if ($Corner -eq 'lapped') {
     Ui-Mark
     Ui-Step 'Corner: Lapped plates'      { Ui-ClickLogged 'Panel Wall input frame_corner=lapped' }
-    Expect-Inspect 'Wall' @('frame wall Wall 1, wall 3600 x 2400 mm', '; corner lapped') 'Corner Lapped plates'
+    Expect-Inspect 'Wall' @("frame wall Wall 1, wall 3600 ${Times} 2400 mm", '; corner lapped') 'Corner Lapped plates'
   }
   Ui-Mark
   Ui-Step 'Place (Enter)'                { Ui-Key 'Return' }

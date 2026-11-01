@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/commands app/framework/ManipulatorOverlay.cpp app/framework/CommandSession.cpp
+# check-all sources: app/commands app/framework/ManipulatorOverlay.cpp app/framework/CommandSession.cpp app/framework/RememberedValues.cpp
 # check-all sources: tools/cli
 # Chamfer's distance arrows in the view (mitcad#534), through the real UI
 # on the demo block (60 x 40 x 20, Body1, F2.b0):
@@ -15,6 +15,9 @@
 #     2 dragged. Distance and Angle: no arrow for the angle.
 #   - A component turned and moved: the arrow on its edge as the view
 #     shows it, and its drag bevels the edge.
+#   - Remembered sizes (mitcad#1028, MITCAD_REMEMBER_PANEL_VALUES=1 for
+#     these steps only): Two Distances with 3 mm and 2 mm typed, OK;
+#     Chamfer again starts with Distance 3 mm and Distance 2 2 mm.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-chamfer-handle-test.sh
@@ -336,4 +339,47 @@ ui_expect_new "Added chamfer (Equal Distance) on 1 edge(s)" "chamfer added"
 # The top right edge is 40 mm long.
 volume_now "$(bevelled 20 "$d4")" "bevelled at the dragged distance"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+ui_stop_app
+
+echo "=== Chamfer's remembered sizes (mitcad#1028)"
+# The test library starts panels from their defaults; here they remember.
+# No chamfer was made with them on before, so the first one starts at 1 mm.
+export MITCAD_REMEMBER_PANEL_VALUES=1
+ui_start_app --demo
+ui_step "fit (F6)"                         ui_key F6
+ui_mark
+ui_step "chamfer (search)"                 ui_command "Chamfer"
+ui_expect_new "Chamfer Distance: 1 mm = 1 mm" "nothing remembered yet: the default 1 mm"
+grep -q "Panel Chamfer distance: remembered" "$UI_LOG" && ui_fail "a distance remembered before any OK"
+ui_mark
+ui_step "pick the top front edge"          ui_click_pick "edge F2.b0/$TOP_FRONT"
+ui_expect_new "Chamfer Edges: 1 edge" "the edge picked"
+ui_step "Two Distances"                    ui_choose "Panel Chamfer input sets.0.type" 1
+ui_expect_new "Panel Chamfer input sets.0.distance2 at" "Distance 2 shown"
+ui_step "distance 3"                       ui_type_in "Panel Chamfer input sets.0.distance" "3"
+ui_expect_new "Chamfer Distance: 3 = 3 mm" "3 mm typed"
+ui_step "distance 2 2"                     ui_type_in "Panel Chamfer input sets.0.distance2" "2"
+ui_expect_new "Chamfer Distance 2: 2 = 2 mm" "2 mm typed"
+ui_expect_new "Preview Chamfer: ok" "previewed"
+ui_wait_idle
+ui_mark
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Added chamfer (Two Distances) on 1 edge(s)" "chamfer added"
+volume_now "$(bevelled 30 3 2)" "bevelled 3 mm on one face, 2 mm on the other"
+ui_wait_idle
+
+echo "--- Chamfer again starts with 3 mm and Distance 2 with 2 mm"
+ui_mark
+ui_step "chamfer (search)"                 ui_command "Chamfer"
+ui_expect_new "Panel Chamfer distance: remembered 3 mm" "the distance of the last OK remembered"
+ui_expect_new "Panel Chamfer distance2: remembered 2 mm" "Distance 2 of the last OK remembered"
+ui_expect_new "Chamfer Distance: 3 mm = 3 mm" "the panel's Distance is 3 mm"
+grep -q "Panel Chamfer angle: remembered" "$UI_LOG" && ui_fail "an angle remembered that no OK gave"
+echo "ok   no angle remembered"
+ui_focus_main
+ui_mark
+ui_step "cancel (Esc)"                     ui_key Escape
+ui_expect_new "Command Chamfer cancelled" "the chamfer cancelled"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+export MITCAD_REMEMBER_PANEL_VALUES=0
 ui_finish "UI chamfer handle test"

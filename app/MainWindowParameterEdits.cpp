@@ -63,7 +63,7 @@ bool hasValueInput(const Inputs& inputs) {
 void MainWindow::registerParameterEditCommands() {
   CommandDef def;
   def.id = QStringLiteral("sketch.parameters");
-  def.name = tr("Change Parameters");
+  def.name = tr("Edit Parameters…");
   def.icon = QStringLiteral("parameters");
   def.kind = CommandDef::Kind::Action;
   def.mode = CommandDef::Mode::Sketch;

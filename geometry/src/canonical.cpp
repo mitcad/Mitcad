@@ -422,9 +422,7 @@ ShapePtr canonical_dressup(const Shape& input, const Shape& result, double exact
       return nullptr;
     }
     out->set_unified(result.unified());
-    for (const std::string& note : result.notes()) {
-      out->add_note(note);
-    }
+    out->copy_notes(result);
     return out;
   } catch (const Standard_Failure&) {
     return nullptr;

@@ -2,7 +2,7 @@
 #pragma once
 
 // Edit Options… of an inserted component (mitcad#810; app/COMMANDS.md,
-// "Options of library parts"): the options of a library part, a linked
+// "Options of library components"): the options of a library part, a linked
 // design or a BUILD part, which belong to the component and so to all of
 // its occurrences (docs/configurations.md, "Inserted components").
 //

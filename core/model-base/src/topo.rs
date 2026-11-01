@@ -496,7 +496,7 @@ impl fmt::Display for TopoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "invalid name '{}': expected {} at position {}",
+            "invalid name {}: expected {} at position {}",
             self.text, self.expected, self.position
         )
     }
@@ -936,7 +936,7 @@ mod tests {
                 .parse::<FaceName>()
                 .unwrap_err()
                 .to_string(),
-            "invalid name 'F3:side(c1[c2])': expected ',' at position 13"
+            "invalid name F3:side(c1[c2]): expected ',' at position 13"
         );
         let error = serde_json::from_str::<EdgeName>("\"E{F3:a}\"").unwrap_err();
         assert!(error.to_string().contains("expected '|'"), "{error}");

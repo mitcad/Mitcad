@@ -220,7 +220,7 @@ ActivateAnswer askToActivate(QWidget* parent, const ActivateQuestion& question, 
       box.addButton(QObject::tr("&Activate %1").arg(literal(question.picked)), QMessageBox::AcceptRole);
   QPushButton* keep = box.addButton(QObject::tr("&Keep in %1").arg(literal(question.active)), QMessageBox::RejectRole);
   auto* again = new QCheckBox(QObject::tr("&Don't ask again"), &box);
-  again->setToolTip(QObject::tr("Preferences > General asks again"));
+  again->setToolTip(QObject::tr("The General page of Tools › Preferences asks again"));
   box.setCheckBox(again);
   box.setDefaultButton(activate);
   box.setEscapeButton(keep);

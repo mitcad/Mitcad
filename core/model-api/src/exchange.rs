@@ -11,8 +11,9 @@ use super::ApiError;
 use mitcad_model::Document;
 use mitcad_model::exchange::{
     BedChoice, Coordinates, ExportFormat, ExportOptions, ExportPlacement, Imported, LengthUnit,
-    OnBed, ReadOptions, Refinement, StepSchema,
+    OnBed, ReadOptions, Refinement, Settle, StepSchema,
 };
+use mitcad_model::features::FeatureDef;
 use mitcad_model::ids::{BodyUid, FeatureUid};
 use mitcad_model::kernel::Kernel;
 use mitcad_model::transform::Transform;
@@ -87,6 +88,19 @@ pub(super) struct ExportCommand {
     /// each piece's `choices`; nothing is written.
     #[serde(default)]
     plan: bool,
+    /// On the print bed (mitcad#1109): each piece's box centred over the
+    /// plate (default true).
+    #[serde(default)]
+    center: Option<bool>,
+    /// On the print bed (mitcad#1109): each piece's lowest point on the bed
+    /// (default true).
+    #[serde(default)]
+    drop: Option<bool>,
+    /// On the print bed (mitcad#1109): a piece without a usable print bed
+    /// face turned onto the face the automatic orientation finds (default
+    /// true).
+    #[serde(default)]
+    auto_orient: Option<bool>,
 }
 
 /// A print bed face chosen (mitcad#857): a body (uid or name) and the
@@ -181,7 +195,7 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
                 }
                 Some(mitcad_model::print_keys::Dialect::from_id(id).ok_or_else(|| {
                     ApiError(format!(
-                        "'{id}' is no slicer: bambu_studio, orcaslicer, qidi_studio, prusaslicer or cura"
+                        "{id} is no slicer: bambu_studio, orcaslicer, qidi_studio, prusaslicer or cura"
                     ))
                 })?)
             }
@@ -213,14 +227,14 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             Some(path) => Some(
                 self.assembly()
                     .find_path(path)
-                    .ok_or_else(|| ApiError(format!("there is no occurrence '{path}'")))?,
+                    .ok_or_else(|| ApiError(format!("there is no occurrence {path}")))?,
             ),
             None => None,
         };
         let find = |path: &str| {
             self.assembly()
                 .find_path(path)
-                .ok_or_else(|| ApiError(format!("there is no occurrence '{path}'")))
+                .ok_or_else(|| ApiError(format!("there is no occurrence {path}")))
         };
         let mut occurrences = BTreeMap::new();
         for (body, paths) in &command.occurrences {
@@ -247,6 +261,15 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             let uid = self.body_by_uid_or_name(&choice.body)?;
             bed_faces.push((uid, find(choice.occurrence.as_str())?));
         }
+        // The automatic orientation and the settling (mitcad#1109): on the
+        // print bed only, each true unless given false.
+        let rules = [command.center, command.drop, command.auto_orient];
+        if !command.on_bed && rules.iter().any(Option::is_some) {
+            return Err(ApiError(
+                "center, drop and auto_orient are for the bodies put on the print bed (on_bed)"
+                    .to_owned(),
+            ));
+        }
         let placement = ExportPlacement {
             coordinates: command.coordinates,
             within,
@@ -255,6 +278,11 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             whole,
             bed_faces,
             plan_only: command.plan,
+            auto_orient: command.auto_orient.unwrap_or(true),
+            settle: Settle {
+                center: command.center.unwrap_or(true),
+                drop: command.drop.unwrap_or(true),
+            },
         };
         let exported = self.export_bodies(&command.path, &bodies, &options, &colors, &placement)?;
         let mut result =
@@ -275,8 +303,10 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
                 .iter()
                 .map(|(uid, why)| json!({"body": uid, "name": self.body_name(*uid), "reason": why}))
                 .collect();
-            // The slicer's settings (mitcad#640): each body's filament slot
-            // and what the slicer does not take as the design has it.
+            // The slicer's settings (mitcad#640): each part's filament slot
+            // (a body split by its placements' settings is several parts,
+            // mitcad#1061) and what the slicer does not take as the design
+            // has it.
             if let Some(dialect) = dialect {
                 result["dialect"] = json!(dialect.id());
                 result["filaments"] = json!(
@@ -287,6 +317,17 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
                         .collect::<Vec<_>>()
                 );
                 result["warnings"] = json!(exported.warnings);
+                // Each part's body, name, material and own values written
+                // (mitcad#1052, mitcad#1061).
+                result["printed"] = exported
+                    .parts
+                    .iter()
+                    .zip(&exported.printed)
+                    .map(|((uid, name), (material, own))| {
+                        json!({"body": uid, "name": name,
+                               "material": material, "own_values": own})
+                    })
+                    .collect();
             }
         }
         if format == ExportFormat::Usdz {
@@ -324,7 +365,7 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             Some("r12") => mitcad_dxf::DxfVersion::R12,
             Some(other) => {
                 return Err(ApiError(format!(
-                    "unknown DXF version '{other}' (expected r2000 or r12)"
+                    "unknown DXF version “{other}” (expected r2000 or r12)"
                 )));
             }
         };
@@ -332,13 +373,16 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             version,
             ..mitcad_dxf::WriteOptions::default()
         };
-        let sketch = match command.sketch.parse::<FeatureUid>() {
-            Ok(uid) => uid,
-            Err(_) => self
-                .features()
-                .find(|f| f.name == command.sketch)
-                .map(|f| f.uid)
-                .ok_or_else(|| ApiError(format!("no feature is named '{}'", command.sketch)))?,
+        // The sketch of a name it shares with other features (its extrude,
+        // mitcad#1107); an unknown uid is reported by the export.
+        let is_sketch = |def: &FeatureDef| matches!(def, FeatureDef::Sketch(_));
+        let sketch = match self.feature_by_text(&command.sketch, Some(&is_sketch))? {
+            Some(entry) => entry.uid,
+            None => command
+                .sketch
+                .trim()
+                .parse::<FeatureUid>()
+                .map_err(|_| ApiError(format!("no feature is named {}", command.sketch)))?,
         };
         let entities = self.export_sketch_dxf(sketch, &command.path, &options)?;
         Ok(json!({"path": command.path, "entities": entities}))
@@ -352,7 +396,7 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             .into_iter()
             .find(|b| b.name == body)
             .map(|b| b.uid)
-            .ok_or_else(|| ApiError(format!("no body at the timeline marker is named '{body}'")))
+            .ok_or_else(|| ApiError(format!("no body at the timeline marker is named {body}")))
     }
 
     fn export_flat_pattern_command(
@@ -375,7 +419,7 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             Some("r12") => mitcad_dxf::DxfVersion::R12,
             Some(other) => {
                 return Err(ApiError(format!(
-                    "unknown DXF version '{other}' (expected r2000 or r12)"
+                    "unknown DXF version “{other}” (expected r2000 or r12)"
                 )));
             }
         };
@@ -460,21 +504,35 @@ impl<K: Kernel> ExchangeLocal<K> for Document<K> {
                 })
                 .collect()
         };
+        // The occurrence of the placement whose face lies on the bed
+        // (mitcad#1109): by uids, as `bed_face` takes it, and by names;
+        // null without a face.
+        let occurrence_of = |path: &Option<Vec<mitcad_model::ids::OccurrenceUid>>| {
+            path.as_ref().map(|path| {
+                let uids: Vec<String> = path.iter().map(ToString::to_string).collect();
+                (uids.join("/"), self.assembly().path_name(path))
+            })
+        };
         // The file's other objects, each on the bed by itself (mitcad#856).
         let objects: Vec<Value> = on_bed
             .objects
             .iter()
             .map(|object| {
+                let at = occurrence_of(&object.occurrence);
                 json!({
                     "name": object.name,
                     "body": object.face.as_ref().map(|(uid, _)| *uid),
                     "face": object.face.as_ref().map(|(_, face)| face),
+                    "auto": object.auto,
+                    "occurrence": at.as_ref().map(|(uids, _)| uids),
+                    "occurrence_name": at.as_ref().map(|(_, name)| name),
                     "transform": rows_of(object.transform),
                     "kept": object.kept,
                     "choices": choices_of(&object.choices),
                 })
             })
             .collect();
+        let at = occurrence_of(&on_bed.occurrence);
         let problems: Vec<Value> = on_bed
             .problems
             .iter()
@@ -484,7 +542,12 @@ impl<K: Kernel> ExchangeLocal<K> for Document<K> {
             "body": on_bed.face.as_ref().map(|(uid, _)| *uid),
             "name": on_bed.face.as_ref().map(|(uid, _)| self.body_name(*uid)),
             "face": on_bed.face.as_ref().map(|(_, face)| face),
+            "auto": on_bed.auto,
+            "occurrence": at.as_ref().map(|(uids, _)| uids),
+            "occurrence_name": at.as_ref().map(|(_, name)| name),
             "transform": rows,
+            "center": on_bed.settle.center,
+            "drop": on_bed.settle.drop,
             "plate": on_bed.plate,
             "kept": on_bed.kept,
             "problems": problems,

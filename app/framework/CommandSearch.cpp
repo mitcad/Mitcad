@@ -67,13 +67,13 @@ int score(const CommandDef& def, const QString& text) {
 CommandSearch::CommandSearch(CommandRegistry& registry, QWidget* parent)
     : QFrame(parent, Qt::Popup), m_registry(registry) {
   setObjectName(QStringLiteral("commandSearch"));
-  setAccessibleName(tr("Search Commands"));
+  setAccessibleName(tr("Command Search"));
   setFrameShape(QFrame::StyledPanel);
   auto* layout = new QVBoxLayout(this);
   layout->setContentsMargins(6, 6, 6, 6);
   m_edit = new QLineEdit;
   m_edit->setObjectName(QStringLiteral("commandSearchInput"));
-  m_edit->setAccessibleName(tr("Search commands"));
+  m_edit->setAccessibleName(tr("Command Search"));
   m_edit->setPlaceholderText(tr("Search commands"));
   m_edit->setClearButtonEnabled(true);
   m_edit->installEventFilter(this);

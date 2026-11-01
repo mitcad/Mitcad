@@ -450,7 +450,7 @@ impl ProjectRepo {
             Some("idle") => Some(LockState::Idle),
             Some(other) => {
                 return Err(invalid(format!(
-                    "\"state\" is active or idle, not '{other}'"
+                    "\"state\" is active or idle, not “{other}”"
                 )));
             }
         };
@@ -775,7 +775,7 @@ impl ProjectRepo {
             &request.to_json(),
             &person,
             &person,
-            "Mitcad edit lock request",
+            "MitCad edit lock request",
             now,
         )?;
         let name = LockRefName::Request(id.clone(), me.session.clone());
@@ -859,7 +859,7 @@ impl ProjectRepo {
             "keep" => AnswerKind::Keep,
             other => {
                 return Err(invalid(format!(
-                    "\"answer\" is declined or keep, not '{other}'"
+                    "\"answer\" is declined or keep, not “{other}”"
                 )));
             }
         };
@@ -909,13 +909,13 @@ impl ProjectRepo {
         let person = me
             .person
             .clone()
-            .unwrap_or_else(|| Person::new("Mitcad", "probe@mitcad.invalid"));
+            .unwrap_or_else(|| Person::new("MitCad", "probe@mitcad.invalid"));
         let commit = self.write_ref_commit(
             "probe.json",
             b"{\"format\": \"mitcad-lock-probe\", \"version\": 1}\n",
             &person,
             &person,
-            "Mitcad lock probe",
+            "MitCad lock probe",
             now_utc(),
         )?;
         let create = Update {
@@ -981,7 +981,7 @@ impl ProjectRepo {
         let message = if accepted {
             None
         } else {
-            Some("This remote does not accept Mitcad's lock references".to_owned())
+            Some("This remote does not accept MitCad's lock references".to_owned())
         };
         Ok(json!({
             "remote": remote.name,
@@ -1121,7 +1121,7 @@ fn describe_lock(out: &mut String, lock: &Value) {
     let _ = writeln!(out, "{line}");
     let _ = writeln!(
         out,
-        "  session {}, Mitcad {}",
+        "  session {}, MitCad {}",
         lock["session"].as_str().unwrap_or(""),
         lock["application_version"].as_str().unwrap_or("")
     );
@@ -1154,7 +1154,7 @@ fn describe_request(out: &mut String, request: &Value) {
         line.push_str(" (seen)");
     }
     if request["stale"].is_string() {
-        line.push_str(" (stale: its Mitcad no longer refreshes it)");
+        line.push_str(" (stale: its MitCad no longer refreshes it)");
     }
     let _ = writeln!(out, "{line}");
 }
@@ -1294,11 +1294,11 @@ pub(crate) fn describe(name: &str, answer: &Value) -> Option<String> {
         }
         "lock_probe" => {
             let _ = if answer["accepted"].as_bool() == Some(true) {
-                writeln!(out, "The remote accepts Mitcad's lock references")
+                writeln!(out, "The remote accepts MitCad's lock references")
             } else {
                 writeln!(
                     out,
-                    "This remote does not accept Mitcad's lock references: {}",
+                    "This remote does not accept MitCad's lock references: {}",
                     answer["reason"].as_str().unwrap_or("")
                 )
             };

@@ -18,6 +18,7 @@
 
 class QAction;
 class QEvent;
+class QHBoxLayout;
 class QMenu;
 class QMouseEvent;
 class QPaintEvent;
@@ -30,16 +31,17 @@ namespace mitcad {
 
 class CommandRegistry;
 
-// The toolbar: workspace tabs (SOLID, BUILD, and SKETCH while sketching;
-// DRAWING alone while a drawing is open, mitcad#1008),
+// The toolbar: workspace tabs (SOLID, BUILD, MAKE (mitcad#1049), and SKETCH
+// while sketching; DRAWING alone while a drawing is open, mitcad#1008),
 // each with groups (CREATE, MODIFY, ...) of command buttons; the group's
 // name opens a menu of all its commands, a subgroup's (CommandDef::subgroup)
 // as a submenu whose pinned command is a split button (mitcad#222), with
 // separators between its sections (CommandDef::section, mitcad#579).
 // Each command row of those menus has a ⋮ button (also its right-click and
-// the Menu key) with Pin to Toolbar and Change Keyboard Shortcut…; the
-// commands pinned on a tab are the PINNED group at its end (mitcad#1001,
-// ToolbarPins: the user's preference), dragged there to reorder.
+// the Menu key) with Pin to Toolbar and Change Keyboard Shortcut…; a
+// pinned command is a button in its own group, after the group's own
+// buttons (mitcad#1001, mitcad#1084; ToolbarPins: the user's preference),
+// dragged among the group's pinned buttons to reorder.
 //
 // Presentation::Mac is the Floating chrome's: the tabs are a segmented control
 // that the title bar hosts (tabBar()), the groups are rounded capsules and the
@@ -63,10 +65,10 @@ public:
   // Shows the SKETCH tab and switches to it, or hides it.
   void setSketchMode(bool sketching);
   // While a drawing is open (mitcad#1008): its DRAWING tab alone (CUT
-  // SHEET for a cut sheet, mitcad#853), SOLID and BUILD hidden, so that the
-  // toolbar is one row; closed, they come back with the tab the drawing
-  // was opened from shown. Logs "Ribbon tabs: DRAWING (shown DRAWING)",
-  // "Ribbon tabs: SOLID, BUILD (shown BUILD)".
+  // SHEET for a cut sheet, mitcad#853), SOLID, BUILD and MAKE hidden, so
+  // that the toolbar is one row; closed, they come back with the tab the
+  // drawing was opened from shown. Logs "Ribbon tabs: DRAWING (shown
+  // DRAWING)", "Ribbon tabs: SOLID, BUILD, MAKE (shown BUILD)".
   void setDrawingMode(bool open, bool cutSheet = false);
   // The shown page's button of a command (its own, or one that runs it:
   // a pinned command's, a group's extra), or a group's caption by
@@ -80,13 +82,21 @@ public:
   void logLayoutIfChanged() const;
 
   static const QStringList& groups(const QString& tab);
+  // The internal name of the tab shown ("SOLID", "MAKE"), empty before
+  // the tabs are built (mitcad#1049).
+  QString currentTab() const;
   // The same full/collapsed group geometry for other native presentations.
   std::pair<int, int> groupWidths(const QString& tab, const QString& group) const;
 
-  // The commands pinned to the toolbar (mitcad#1001), per tab: the PINNED
-  // group at the end of the tab, in the pins' order. Each change is saved
-  // (ToolbarPins) and logged: "Pinned to toolbar: Sweep (Solid)",
-  // "Unpinned: Sweep (Solid)", "Pinned order (Solid): Loft, Sweep".
+  // The commands pinned to the toolbar (mitcad#1001): each a button in its
+  // own group (the command's tab and group), after the group's own
+  // buttons, in the pins' order (mitcad#1084). `tab` is the tab shown; the
+  // pin goes to the command's own tab, the one its group is on. Each
+  // change is saved (ToolbarPins) and logged: "Pinned to toolbar: Sweep
+  // (Solid)", "Unpinned: Sweep (Solid)", "Pinned order SOLID/CREATE: Loft,
+  // Sweep", with the group's buttons as "Ribbon group SOLID/CREATE pinned:
+  // solid.loft, solid.sweep" ("... pinned: none" without them). movePin's
+  // `index` is the place among the group's pinned buttons.
   const ToolbarPins& pins() const { return m_pins; }
   void pin(const QString& tab, const QString& id);
   void unpin(const QString& tab, const QString& id);
@@ -96,6 +106,10 @@ public:
   // The workspace tabs. In the Mac presentation the bar is not part of the
   // ribbon's layout: whoever hosts it (the title bar) places it.
   QTabBar* tabBar() const { return m_tabs; }
+  // The Classic presentation (Docked): a widget in the tabs' row, right after
+  // the tabs (the quick-access group, mitcad#1090), so that the groups below
+  // keep the toolbar's width. Not for the Mac presentation.
+  void addTabRowWidget(QWidget* widget);
 
   // The Floating layout's group cards (mitcad#425, floatingTopCards(): Windows
   // and Linux): the ribbon floats over the 3D view, each group a card of its
@@ -124,6 +138,8 @@ signals:
   void shortcutRequested(const QString& id);
   // A tab's pinned commands changed (pinned, unpinned or reordered).
   void pinsChanged(const QString& tab);
+  // Another tab is shown: its internal name ("MAKE", mitcad#1049).
+  void tabChanged(const QString& tab);
 
 protected:
   // The SKETCH tab's colour follows the palette.
@@ -151,7 +167,19 @@ private:
     int fullWidth = 0;
     int collapsedWidth = 0;
     bool collapsible = false;   // it has pinned commands to hide
-    bool pinnedGroup = false;   // the PINNED group (mitcad#1001)
+    QString tab;                // "SOLID"
+    QString group;              // "CREATE"
+    int ownButtons = 0;         // its buttons before the user's pins
+    // The user's pinned buttons in the row, left to right, and their
+    // widths; the row's width without them, the group's width at least
+    // and the room around the row (mitcad#1111: they fold before the
+    // group collapses, the last one first).
+    QList<QPointer<QToolButton>> pinButtons;
+    QList<int> pinWidths;
+    int ownRowWidth = 0;
+    int minWidth = 0;
+    int rowMargins = 0;
+    QStringList folded;         // the pinned commands logged as folded
   };
   struct Extras {
     QList<QAction*> menu;
@@ -159,12 +187,25 @@ private:
   };
 
   QWidget* createPage(const QString& tab);
+  // Whether a group has commands or extras to show (mitcad#1049: a group
+  // without them is left out).
+  bool hasEntries(const QString& tab, const QString& group) const;
   QWidget* createGroup(const QString& tab, const QString& group, GroupInfo* info);
-  // The PINNED group of a tab's pinned commands (mitcad#1001).
-  QWidget* createPinnedGroup(const QString& tab, GroupInfo* info);
   // The common rest of a group: its caption with the menu, the sizes.
   QWidget* finishGroup(QWidget* widget, QWidget* row, QToolButton* menuButton, QMenu* menu, int pinnedCount,
                        const QString& tab, const QString& group, GroupInfo* info);
+  // A group's widths and its row's visibility for its `buttonCount`
+  // buttons (its own and the user's pins); collapsedWidth is set.
+  void sizeGroup(GroupInfo* info, int buttonCount);
+  // The buttons of the commands the user pinned in a group (mitcad#1084),
+  // added at the end of its `row`, shown at once with `show`; their count.
+  int addPinnedButtons(const QString& tab, const QString& group, QWidget* row, bool show);
+  // A group's pinned buttons made again from the pins, its widths fitted
+  // and logged ("Ribbon group SOLID/CREATE pinned: solid.sweep").
+  void updatePinnedButtons(const QString& tab, const QString& group);
+  // Whether a command is a button of its own on the tab (a pinned command
+  // of its group, CommandDef::pinned, or a split button's default).
+  bool hasOwnButton(const QString& tab, const QString& id) const;
   // A group's menu or submenu, its command rows with their ⋮ menus; `path`
   // is "SOLID/CREATE" or "SOLID/CREATE/Pattern".
   QMenu* createGroupMenu(const QString& tab, const QString& path, QWidget* parent);
@@ -175,28 +216,36 @@ private:
   // From the keyboard its first entry is chosen.
   QMenu* showRowMenu(QWidget* over, const QString& tab, const QString& place, const QString& id,
                      const QPoint& global, bool keyboard);
-  // The tab's PINNED group made again from the pins (gone without pins);
-  // `changed`: after a change, so the groups are fitted and logged again
-  // (not while the ribbon is built).
-  void updatePinnedGroup(const QString& tab, bool changed);
-  // A pinned command's button pressed, dragged and dropped in its group.
+  // A pinned command's button pressed, dragged and dropped among its
+  // group's pinned buttons.
   bool dragPinned(QToolButton* button, QEvent* event);
   // The tab that shows a page (SOLID 0, SKETCH 1, BUILD 2, DRAWING 3, CUT
-  // SHEET 4), or -1.
+  // SHEET 4, MAKE 5), or -1.
   int tabOfPage(int page) const;
-  // SOLID and BUILD as the first tabs (built, a drawing closed).
+  // SOLID, BUILD and MAKE as the first tabs (built, a drawing closed).
   void addModelTabs();
   // The places logLayout logs: the tabs, the group menus, the split buttons.
   QStringList layoutLines() const;
   // When groups do not fit, collapse pinned rows from the right. Complete
   // captions still open the same menus; Classic can scroll those captions.
+  // Before a group collapses, the commands the user pinned in it fold, the
+  // last one first (mitcad#1111): they leave its row and stay in its
+  // menu, and the group collapses only when its own buttons do not fit
+  // either. Logged when a group's folded pins change: "Ribbon pinned
+  // folded SOLID/CREATE: solid.sweep" ("... folded SOLID/CREATE: none").
   void fitGroups();
+  // fitGroups for one page's groups: `fixed` is the width of what is not
+  // a collapsible group, `available` the room.
+  void fitPage(QList<GroupInfo>& infos, int fixed, int available);
+  // A group's width with its first `pins` pinned buttons shown.
+  static int groupWidth(const GroupInfo& info, int pins);
   // setGroupCards: the mask of the shown page's group cards.
   void updateGroupMask();
 
   CommandRegistry& m_registry;
   Presentation m_presentation;
   QTabBar* m_tabs = nullptr;
+  QHBoxLayout* m_tabRow = nullptr; // Classic: the tabs and addTabRowWidget's
   QStackedWidget* m_pages = nullptr;
   QWidget* m_sketchPage = nullptr;
   int m_pageBeforeSketch = 0; // the page Finish Sketch goes back to
@@ -211,8 +260,6 @@ private:
   bool m_groupCards = false; // setGroupCards
   ToolbarPins m_pins;         // mitcad#1001
   QHash<QString, QWidget*> m_pageOfTab;        // the row of groups, by tab
-  QHash<QString, QWidget*> m_pinnedGroups;     // the PINNED group, by tab
-  QHash<QString, QWidget*> m_pinnedSeparators; // Classic: the line before it
   QPointer<QToolButton> m_pinDrag;             // the pinned button pressed
   QPoint m_pinDragStart;                       // where (global)
   bool m_pinDragging = false;                  // moved far enough to drag

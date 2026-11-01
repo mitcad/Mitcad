@@ -74,12 +74,12 @@ row_menu() {
   ui_expect_new "Context menu: " "the menu of $1 opened"
 }
 
-# save_dialog: Save As Mesh… chosen, its dialog given the keyboard.
+# save_dialog: Save as Mesh… chosen, its dialog given the keyboard.
 save_dialog() {
   ui_mark
-  ui_step "choose Save As Mesh..."         ui_menu_choose "Save As Mesh…"
+  ui_step "choose Save as Mesh..."         ui_menu_choose "Save as Mesh…"
   ui_expect_new "Save As Mesh dialog opened: " "the dialog opened"
-  ui_focus_dialog '^Save As Mesh$'
+  ui_focus_dialog '^Save as Mesh$'
 }
 
 # accept_file TITLE: the file dialog's proposed name (or folder) taken.
@@ -96,7 +96,7 @@ ui_expect_log "Browser Root/Bodies/Plate at" "the browser lists Plate"
 
 echo "--- 1. A body on its print bed face, as 3MF"
 row_menu "Browser Root/Bodies/Plate"
-last_entry "Save As Mesh…"
+last_entry "Save as Mesh…"
 save_dialog
 ui_expect_new "Save As Mesh dialog opened: bodies Plate; print bed face available" "Plate with its bed face offered"
 ui_mark
@@ -115,7 +115,7 @@ ui_step "Escape (clear the selection)"     ui_key Escape
 echo "--- 2. A component as text STL in inches"
 ui_expect_log "Browser Root/Lid:1 at" "the browser lists Lid:1"
 row_menu "Browser Root/Lid:1"
-last_entry "Save As Mesh…"
+last_entry "Save as Mesh…"
 save_dialog
 ui_expect_new "Save As Mesh dialog opened: bodies Lid; print bed face unavailable (No body has a print bed face)" \
   "the component's body, no print bed face"
@@ -134,7 +134,7 @@ ui_step "Escape (clear the selection)"     ui_key Escape
 
 echo "--- 3. The whole design, OBJ, a file per body, a longest edge"
 row_menu "Browser Root"
-last_entry "Save As Mesh…"
+last_entry "Save as Mesh…"
 save_dialog
 ui_expect_new "Save As Mesh dialog opened: bodies Plate, Lid; left out Skin" "both solids, the surface body left out"
 ui_mark
@@ -160,7 +160,7 @@ ui_step "Escape (clear the selection)"     ui_key Escape
 echo "--- 4. A surface body: disabled with the reason"
 row_menu "Browser Root/Bodies/Skin"
 ui_expect_new "Save As Mesh disabled: Surface and empty bodies are not saved as meshes" "disabled, the reason given"
-last_entry "Save As Mesh…"
+last_entry "Save as Mesh…"
 ui_step "Escape (close the menu)"          ui_key Escape
 ui_step "Escape (clear the selection)"     ui_key Escape
 
@@ -175,7 +175,7 @@ ui_mark
 ui_step "right-click Plate's top"          xdotool mousemove $at click 3
 ui_expect_new "Selected: 1 face [face F1:top of F1.b0" "the top selected"
 ui_expect_new "Context menu: " "the context menu opened"
-has "Save As Mesh…"
+has "Save as Mesh…"
 save_dialog
 ui_expect_new "Save As Mesh dialog opened: bodies Plate; print bed face available" "the face stands for its body"
 ui_mark

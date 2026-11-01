@@ -145,7 +145,7 @@ impl fmt::Display for CsvError {
             }
             Self::MissingColumn(column) => write!(
                 f,
-                "not a parameter CSV: the header has no '{column}' column (Mitcad's table: {}; \
+                "not a parameter CSV: the header has no {column} column (Mitcad's table: {}; \
                  the .f3d application's parameter table: {})",
                 HEADER.join(","),
                 PARAMETER_TABLE_HEADER.join(",")

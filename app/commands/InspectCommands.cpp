@@ -80,7 +80,7 @@ QString xyz(const QJsonValue& value) {
 // diameter, twice the radius before either is rounded for display.
 void describeCircle(double radius, const QString& centre, QStringList& lines, QStringList& log) {
   const double diameter = 2.0 * radius;
-  lines << QObject::tr("Radius: %1 mm, centre %2").arg(n(radius), centre);
+  lines << QObject::tr("Radius: %1 mm, center %2").arg(n(radius), centre);
   lines << QObject::tr("Diameter: %1 mm").arg(n(diameter));
   log << QStringLiteral("radius %1").arg(n(radius)) << QStringLiteral("diameter %1").arg(n(diameter));
 }
@@ -158,7 +158,7 @@ std::vector<Inspection::Value> measuredValues(const QJsonObject& item) {
     values.push_back(valueRow(QObject::tr("Axis through"), xyz(axis.value(QStringLiteral("origin")))));
     values.push_back(valueRow(QObject::tr("Axis direction"), xyz(axis.value(QStringLiteral("direction")))));
   } else if (round) {
-    values.push_back(valueRow(QObject::tr("Centre"), xyz(circle.value(QStringLiteral("center")))));
+    values.push_back(valueRow(QObject::tr("Center"), xyz(circle.value(QStringLiteral("center")))));
   }
   return values;
 }
@@ -398,7 +398,7 @@ QStringList recordValues(const QJsonObject& answer) {
   const std::pair<const char*, QString> distances[] = {
       {"offset", QObject::tr("Offset")},
       {"axis_distance", QObject::tr("Axis distance")},
-      {"center_distance", QObject::tr("Centre distance")}};
+      {"center_distance", QObject::tr("Center distance")}};
   for (const auto& [key, label] : distances) {
     if (between.value(QLatin1String(key)).isDouble()) {
       values << millimetres(label, between.value(QLatin1String(key)).toDouble());
@@ -497,7 +497,7 @@ std::vector<Inspection::Value> shapeValues(const TopoDS_Shape& shape) {
   BRepGProp::LinearProperties(shape, props);
   values.push_back(valueRow(QObject::tr("Length"), QStringLiteral("%1 mm").arg(n(props.Mass()))));
   if (!centre.isEmpty()) {
-    values.push_back(valueRow(QObject::tr("Centre"), centre));
+    values.push_back(valueRow(QObject::tr("Center"), centre));
   }
   return values;
 }
@@ -621,9 +621,6 @@ CommandDef measureCommand() {
       selectionInput(QStringLiteral("sketch_a"), QObject::tr("Selection 1"), sketchKinds, 1, 1).withVisible(sketches),
       selectionInput(QStringLiteral("sketch_b"), QObject::tr("Selection 2"), sketchKinds, 0, 1).withVisible(sketches),
   };
-  for (InputDef& input : def.inputs) {
-    input.showsOrigin = false;
-  }
   // The filter's choices on a line of their own under its label, whole at
   // the panel's default width (mitcad#1010).
   def.inputs.front().fieldBelow = true;
@@ -730,9 +727,9 @@ CommandDef measureCommand() {
       }
       if (between.value(QStringLiteral("center_distance")).isDouble()) {
         const QString centres = n(between.value(QStringLiteral("center_distance")).toDouble());
-        lines << QObject::tr("<b>Centre distance: %1 mm</b>").arg(centres);
+        lines << QObject::tr("<b>Center distance: %1 mm</b>").arg(centres);
         log << QStringLiteral("center distance %1").arg(centres);
-        result.values.push_back(valueRow(QObject::tr("Centre distance"), QStringLiteral("%1 mm").arg(centres)));
+        result.values.push_back(valueRow(QObject::tr("Center distance"), QStringLiteral("%1 mm").arg(centres)));
       }
       parts << lines.join(QStringLiteral("<br>"));
     }
@@ -1129,7 +1126,7 @@ Built printDefinition(const CommandState& state) {
   if (s.overhang) {
     const double angle = qRadiansToDegrees(valueOf("angle"));
     if (!(angle >= 0.0 && angle <= 90.0)) {
-      return Built::failure(QObject::tr("Angle: between 0 and 90 deg."), QStringLiteral("angle"));
+      return Built::failure(QObject::tr("Angle: between 0° and 90°."), QStringLiteral("angle"));
     }
     s.angle = angle;
   }
@@ -1262,7 +1259,10 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
   def.name = QObject::tr("Print Analysis");
   def.icon = QStringLiteral("print-analysis");
   def.tooltip = QObject::tr("Overhangs, thin walls and an estimate of weight, filament and cost");
-  def.group = QStringLiteral("INSPECT");
+  // The Make tab's 3D Print group (mitcad#1049).
+  def.tab = QStringLiteral("MAKE");
+  def.group = QStringLiteral("3D PRINT");
+  def.pinned = true;
   def.keywords = {QStringLiteral("3d print"), QStringLiteral("overhang"), QStringLiteral("thin wall"),
                   QStringLiteral("filament"), QStringLiteral("weight"), QStringLiteral("support"),
                   QStringLiteral("print estimate")};
@@ -1278,7 +1278,7 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
       selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies"), SelectKind::Body, 1, 0)
           .withAccepts([&model](const SelectionItem& item) { return printable(model.bodyShape(item.owner)); })
           .withTooltip(QObject::tr("The bodies to check: a click on a body adds or removes it")),
-      selectionInput(QStringLiteral("bed_face"), QObject::tr("Bed face"), SelectKind::Face, 0, 1)
+      selectionInput(QStringLiteral("bed_face"), QObject::tr("Bed Face"), SelectKind::Face, 0, 1)
           .withAccepts(isPlanar)
           .withTooltip(QObject::tr("The planar face that lies on the bed; none: -Z is down")),
       checkInput(QStringLiteral("overhang"), QObject::tr("Overhangs"), true)
@@ -1286,7 +1286,7 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
       valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("45 deg"))
           .withVisible(overhang)
           .withTooltip(QObject::tr("The steepest overhang the printer makes without support, from the vertical")),
-      checkInput(QStringLiteral("thin_wall"), QObject::tr("Thin walls"), true)
+      checkInput(QStringLiteral("thin_wall"), QObject::tr("Thin Walls"), true)
           .withTooltip(QObject::tr("Walls thinner than the printer can make")),
       valueInput(QStringLiteral("minimum"), QObject::tr("Minimum wall"), ValueKind::Length, QStringLiteral("0.8 mm"))
           .withVisible(thin)
@@ -1300,7 +1300,7 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
       valueInput(QStringLiteral("walls"), QObject::tr("Walls"), ValueKind::Unitless, QStringLiteral("2"))
           .withVisible(estimate)
           .withTooltip(QObject::tr("The perimeters around each layer")),
-      valueInput(QStringLiteral("layer_height"), QObject::tr("Layer height"), ValueKind::Length,
+      valueInput(QStringLiteral("layer_height"), QObject::tr("Layer Height"), ValueKind::Length,
                  QStringLiteral("0.2 mm"))
           .withVisible(estimate),
       valueInput(QStringLiteral("top_bottom_layers"), QObject::tr("Top/bottom layers"), ValueKind::Unitless,
@@ -1316,9 +1316,6 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
           .withVisible(estimate)
           .withTooltip(QObject::tr("The filament's price per kilogram; empty: no cost")),
   };
-  for (InputDef& input : def.inputs) {
-    input.showsOrigin = false;
-  }
   // What the selection stands for (a face, edge or vertex its body, an
   // occurrence the bodies shown in it), else every shown body; each body
   // once, sheets and empty bodies left out (as 3D Print starts).
@@ -1400,6 +1397,37 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
 // ---------------------------------------------------------------------------
 // Physical Properties
 
+// A body's or the total's box and counts (mitcad#1095), where the model
+// gives them: "10 × 20 × 20 mm" along the design's axes and "6 / 12 / 8".
+QString boxSizeText(const QJsonObject& value) {
+  const QJsonArray size = value.value(QStringLiteral("bbox")).toObject().value(QStringLiteral("size")).toArray();
+  if (size.size() != 3) {
+    return QString();
+  }
+  return QStringLiteral("%1 × %2 × %3 mm").arg(n(size[0].toDouble()), n(size[1].toDouble()), n(size[2].toDouble()));
+}
+
+QString topologyText(const QJsonObject& value) {
+  if (!value.contains(QStringLiteral("faces"))) {
+    return QString();
+  }
+  return QStringLiteral("%1 / %2 / %3")
+      .arg(value.value(QStringLiteral("faces")).toInt())
+      .arg(value.value(QStringLiteral("edges")).toInt())
+      .arg(value.value(QStringLiteral("vertices")).toInt());
+}
+
+// The window's title: the components the properties are of, when a
+// component was selected (mitcad#1095).
+QString propertiesTitle(const QJsonObject& answer) {
+  QStringList names;
+  for (const QJsonValue& value : answer.value(QStringLiteral("components")).toArray()) {
+    names << value.toObject().value(QStringLiteral("name")).toString();
+  }
+  return names.isEmpty() ? QObject::tr("Properties")
+                         : QObject::tr("Properties: %1").arg(names.join(QStringLiteral(", ")));
+}
+
 Inspection propertiesInspection(const QJsonObject& answer) {
   // Keep the report's semantics across both frontends: a section heading
   // or a label/value row. Flattening an HTML table loses its columns and
@@ -1416,7 +1444,11 @@ Inspection propertiesInspection(const QJsonObject& answer) {
   int index = 0;
   for (const QJsonValue& value : answer.value(QStringLiteral("bodies")).toArray()) {
     const QJsonObject body = value.toObject();
-    const QString name = body.value(QStringLiteral("name")).toString();
+    // A body of a component has a group per occurrence, its center and
+    // box where that occurrence places it (mitcad#1110): "Body1 in Arm:2".
+    const QString bodyName = body.value(QStringLiteral("name")).toString();
+    const QString occurrence = body.value(QStringLiteral("occurrence")).toString();
+    const QString name = occurrence.isEmpty() ? bodyName : QObject::tr("%1 in %2").arg(bodyName, occurrence);
     const QString prefix = QStringLiteral("propertiesBody%1_").arg(index++);
     heading(prefix + QStringLiteral("heading"), name);
     row(prefix + QStringLiteral("material"), QObject::tr("Material"),
@@ -1437,6 +1469,14 @@ Inspection propertiesInspection(const QJsonObject& answer) {
           QStringLiteral("%1, %2, %3 kg mm²")
               .arg(n(moments[0].toDouble()), n(moments[1].toDouble()), n(moments[2].toDouble())));
     }
+    const QString bodyBox = boxSizeText(body);
+    if (!bodyBox.isEmpty()) {
+      row(prefix + QStringLiteral("bbox"), QObject::tr("Bounding Box"), bodyBox);
+    }
+    const QString topology = topologyText(body);
+    if (!topology.isEmpty()) {
+      row(prefix + QStringLiteral("topology"), QObject::tr("Faces / Edges / Vertices"), topology);
+    }
     log << QStringLiteral("%1 volume %2 mass %3 center %4")
                .arg(name, n(body.value(QStringLiteral("volume")).toDouble()),
                     n(body.value(QStringLiteral("mass")).toDouble(), 6),
@@ -1448,10 +1488,21 @@ Inspection propertiesInspection(const QJsonObject& answer) {
       QStringLiteral("%1 kg").arg(n(total.value(QStringLiteral("mass")).toDouble(), 6)));
   row(QStringLiteral("propertiesTotal_volume"), QObject::tr("Volume"),
       QStringLiteral("%1 mm³").arg(n(total.value(QStringLiteral("volume")).toDouble())));
+  row(QStringLiteral("propertiesTotal_area"), QObject::tr("Area"),
+      QStringLiteral("%1 mm²").arg(n(total.value(QStringLiteral("area")).toDouble())));
   row(QStringLiteral("propertiesTotal_center"), QObject::tr("Center of Mass"),
       xyz(total.value(QStringLiteral("center_of_mass"))) + QStringLiteral(" mm"));
+  const QString totalBox = boxSizeText(total);
+  if (!totalBox.isEmpty()) {
+    row(QStringLiteral("propertiesTotal_bbox"), QObject::tr("Bounding Box"), totalBox);
+  }
+  const QString totalTopology = topologyText(total);
+  if (!totalTopology.isEmpty()) {
+    row(QStringLiteral("propertiesTotal_topology"), QObject::tr("Faces / Edges / Vertices"), totalTopology);
+  }
   Inspection result;
   result.report.insert(QStringLiteral("property_rows"), rows);
+  result.report.insert(QStringLiteral("title"), propertiesTitle(answer));
   result.log = log.join(QStringLiteral("; "));
   return result;
 }
@@ -1460,7 +1511,8 @@ void presentProperties(const Inspection& result, QWidget* window) {
   qDebug().noquote() << QStringLiteral("Physical properties: %1").arg(result.log);
   QDialog dialog(window);
   dialog.setObjectName(QStringLiteral("physicalPropertiesDialog"));
-  dialog.setWindowTitle(QObject::tr("Properties"));
+  const QString title = result.report.value(QStringLiteral("title")).toString(QObject::tr("Properties"));
+  dialog.setWindowTitle(title);
   auto* layout = new QVBoxLayout(&dialog);
   auto* report = new QWidget;
   report->setObjectName(QStringLiteral("physicalPropertiesReport"));
@@ -1469,18 +1521,34 @@ void presentProperties(const Inspection& result, QWidget* window) {
   form->setHorizontalSpacing(12);
   form->setVerticalSpacing(4);
   form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+  // What the window shows of the boxes and counts, for the log (UI tests,
+  // mitcad#1095): "Body1: Bounding Box 10 x 20 x 20 mm, ...; Total: ...".
+  QStringList shownGroups;
+  QStringList shownRows;
+  QString shownHeading;
+  const auto closeGroup = [&shownGroups, &shownRows, &shownHeading]() {
+    if (!shownRows.isEmpty()) {
+      shownGroups << QStringLiteral("%1: %2").arg(shownHeading, shownRows.join(QStringLiteral(", ")));
+    }
+    shownRows.clear();
+  };
   for (const QJsonValue& entry : result.report.value(QStringLiteral("property_rows")).toArray()) {
     const QJsonObject row = entry.toObject();
     const QString key = row.value(QStringLiteral("key")).toString();
     if (row.contains(QStringLiteral("heading"))) {
-      auto* heading = new QLabel(QStringLiteral("<b>%1</b>")
-                                     .arg(row.value(QStringLiteral("heading")).toString().toHtmlEscaped()));
+      closeGroup();
+      shownHeading = row.value(QStringLiteral("heading")).toString();
+      auto* heading = new QLabel(QStringLiteral("<b>%1</b>").arg(shownHeading.toHtmlEscaped()));
       heading->setObjectName(key);
       heading->setTextFormat(Qt::RichText);
       form->addRow(heading);
       continue;
     }
     const QString caption = row.value(QStringLiteral("label")).toString();
+    if (key.endsWith(QStringLiteral("_bbox")) || key.endsWith(QStringLiteral("_topology"))) {
+      shownRows << QStringLiteral("%1 %2").arg(
+                       caption, row.value(QStringLiteral("value")).toString().replace(QChar(0x00D7), QLatin1Char('x')));
+    }
     auto* value = new QLabel(row.value(QStringLiteral("value")).toString());
     value->setObjectName(key);
     value->setTextFormat(Qt::PlainText);
@@ -1494,6 +1562,9 @@ void presentProperties(const Inspection& result, QWidget* window) {
     label->setBuddy(value);
     form->addRow(label, value);
   }
+  closeGroup();
+  qDebug().noquote() << QStringLiteral("Physical properties window \"%1\": %2")
+                            .arg(title, shownGroups.join(QStringLiteral("; ")));
   auto* scroll = new QScrollArea;
   scroll->setObjectName(QStringLiteral("physicalPropertiesScroll"));
   scroll->setWidget(report);
@@ -1519,6 +1590,27 @@ void showProperties(const CommandContext& context, QWidget* window, const Select
   }
   if (!uids.isEmpty()) {
     request.insert(QStringLiteral("bodies"), uids);
+  }
+  // A selected component counts its own bodies, sub-components' included,
+  // as the occurrence it was picked through places them (mitcad#1095).
+  QJsonArray components;
+  for (const SelectionItem& item : selection) {
+    if (item.kind != SelectKind::Component || (item.owner.isEmpty() && item.occurrence.isEmpty())) {
+      continue;
+    }
+    QJsonObject component;
+    if (!item.owner.isEmpty()) {
+      component.insert(QStringLiteral("component"), item.owner);
+    }
+    if (!item.occurrence.isEmpty()) {
+      component.insert(QStringLiteral("occurrence"), item.occurrence);
+    }
+    if (!components.contains(component)) {
+      components.append(component);
+    }
+  }
+  if (!components.isEmpty()) {
+    request.insert(QStringLiteral("components"), components);
   }
   auto* host = dynamic_cast<CommandHost*>(const_cast<CommandContext*>(&context));
   if (host && host->asynchronousCommands()) {
@@ -1554,7 +1646,7 @@ void registerInspectCommands(CommandRegistry& registry, const CommandContext& co
   properties.id = QStringLiteral("inspect.properties");
   properties.name = QObject::tr("Physical Properties");
   properties.icon = QStringLiteral("properties");
-  properties.tooltip = QObject::tr("Mass, volume, area and centre of mass of the selected bodies (all when none)");
+  properties.tooltip = QObject::tr("Mass, volume, size and counts of the selected bodies or components");
   properties.group = QStringLiteral("INSPECT");
   properties.kind = CommandDef::Kind::Action;
   properties.keywords = {QStringLiteral("mass"), QStringLiteral("weight"), QStringLiteral("center of mass"),

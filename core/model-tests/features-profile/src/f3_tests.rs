@@ -630,7 +630,7 @@ fn lofts_check_sections_conditions_and_rails() {
                 json!({"centerline": {"sketch": "F3", "curves": ["c1"]},
                        "rails": [{"sketch": "F3", "curves": ["c7"]}]}),
             ),
-            "a centre line or rails, not both",
+            "a center line or rails, not both",
         ),
         (
             loft(
@@ -975,7 +975,7 @@ fn helices_turn_their_profiles_about_an_axis() {
     };
     assert_eq!(feature_def(&b.doc)["flip"], true);
     // A growth widens it (mitcad#59): passed with the direction's flip, by
-    // Mitcad's construction, which a command without one means and the
+    // MitCad's construction, which a command without one means and the
     // stored definition then names (mitcad#83).
     b.doc
         .edit_feature(uid, &def(helix(json!({"flip": true, "growth": 1.5}))))
@@ -1073,7 +1073,7 @@ fn helices_turn_their_profiles_about_an_axis() {
     )
     .unwrap_err()
     .to_string();
-    assert!(message.contains("Mitcad's construction"), "{message}");
+    assert!(message.contains("MitCad's construction"), "{message}");
 }
 
 #[test]
@@ -1382,7 +1382,7 @@ fn a_loft_along_its_centre_line_follows_a_frame() {
     plain.as_object_mut().unwrap().remove("centerline");
     match b.doc.edit_feature(uid, &def(plain)) {
         Err(e) => assert!(e.to_string().contains("needs one"), "{e}"),
-        Ok(_) => panic!("a frame without a centre line was accepted"),
+        Ok(_) => panic!("a frame without a center line was accepted"),
     }
 }
 
@@ -1413,7 +1413,7 @@ fn a_parallel_loft_moves_its_sections_along_the_centre_line() {
     plain.as_object_mut().unwrap().remove("centerline");
     match b.doc.edit_feature(uid, &def(plain)) {
         Err(e) => assert!(e.to_string().contains("needs one"), "{e}"),
-        Ok(_) => panic!("a parallel loft without a centre line was accepted"),
+        Ok(_) => panic!("a parallel loft without a center line was accepted"),
     }
     match b
         .doc

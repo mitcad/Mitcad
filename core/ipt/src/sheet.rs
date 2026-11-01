@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Sheet-metal features (mitcad#211) as the dump IR's sheet items
 //! (`core/import/SCHEMA.md`, *Sheet metal*), which the import replays as
-//! Mitcad's native sheet features (`sheet_rules`, `sheet_face`, ...).
+//! MitCad's native sheet features (`sheet_rules`, `sheet_face`, ...).
 //!
 //! A sheet-metal feature of the browser is a group record (a face
 //! `904bc1c4…`, a flange `08dcddc3…`) whose label shows the features it is
@@ -139,7 +139,7 @@ fn rules(cx: &Context, style: &Style, thickness: Value) -> Value {
          are not decoded"
             .to_owned(),
         "corner_relief.type: the style's relief shapes are not decoded".to_owned(),
-        "corner_relief.depth: the file has none (Mitcad does not use it)".to_owned(),
+        "corner_relief.depth: the file has none (MitCad does not use it)".to_owned(),
     ];
     let mut need = |name: &str, what: &str| {
         named(cx, name).unwrap_or_else(|| {

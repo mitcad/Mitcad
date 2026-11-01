@@ -241,7 +241,7 @@ impl<P> SketchPattern<P> {
                 }
                 match index.get(*center) {
                     Some(e) if e.is_point() => {}
-                    _ => return Err(format!("{what}: the centre p{} is not a point", center.0)),
+                    _ => return Err(format!("{what}: the center p{} is not a point", center.0)),
                 }
             }
             PatternKind::Rectangular {
@@ -564,7 +564,7 @@ pub fn check_value(slot: &str, v: f64) -> Result<(), String> {
             Ok(())
         } else {
             Err(format!(
-                "must be between -360 and 360 degrees and not zero, got {} deg",
+                "must be between -360 and 360 degrees and not zero, got {}°",
                 v.to_degrees()
             ))
         }
@@ -662,7 +662,7 @@ impl SketchEdit<'_> {
             self.def.entity_mut(center).expect("made").fixed = true;
         }
         if entities.iter().any(|r| r.uid() == center) {
-            return Err("the centre of a pattern cannot be patterned".to_owned());
+            return Err("the center of a pattern cannot be patterned".to_owned());
         }
         let id = self.constraint_id();
         let angle = self.pattern_value(&format!("patterns[{id}].angle"), angle, None)?;
@@ -799,7 +799,7 @@ impl SketchEdit<'_> {
                 symmetric,
             } => {
                 if change.angle.is_some() || change.center.is_some() {
-                    return Err(format!("{id} is a rectangular pattern: no angle or centre"));
+                    return Err(format!("{id} is a rectangular pattern: no angle or center"));
                 }
                 let spacing = match &change.spacing {
                     Some([a, b]) => [

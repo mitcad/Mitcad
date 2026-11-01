@@ -404,7 +404,7 @@ fn refused(reason: &str) -> VcsError {
     failure(
         ErrorClass::Unsupported,
         format!(
-            "This remote does not accept Mitcad's lock references ({}): edit locks cannot \
+            "This remote does not accept MitCad's lock references ({}): edit locks cannot \
              be used with it",
             reason.trim()
         ),
@@ -1229,7 +1229,7 @@ impl ProjectRepo {
                     &request.to_json(),
                     &request.requester,
                     me.person.as_ref().unwrap_or(&request.requester),
-                    "Mitcad edit lock request",
+                    "MitCad edit lock request",
                     request.refreshed_at.unwrap_or_else(now_utc),
                 )?),
                 None => None,

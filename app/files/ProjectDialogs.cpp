@@ -786,7 +786,7 @@ void NewProjectDialog::finished(RemoteTask* task, bool asCloud) {
   qInfo().noquote() << QStringLiteral("New Project failed (%1): %2").arg(cls, errorMessageOf(answer));
   updateState();
   if (cls == QLatin1String("cancelled")) {
-    m_problem->setText(tr("Cancelled: the folder is as it was."));
+    m_problem->setText(tr("Canceled: the folder is as it was."));
   } else {
     m_problem->setText(errorMessageOf(answer).isEmpty() ? tr("The project could not be made.")
                                                         : errorMessageOf(answer));
@@ -1116,7 +1116,7 @@ void OpenFromCloudDialog::finished(RemoteTask* task, const QString& action) {
   }
   m_progress->hide();
   qInfo().noquote() << QStringLiteral("Open from Cloud failed (%1): %2").arg(cls, errorMessageOf(answer));
-  m_problem->setText(cls == QLatin1String("cancelled") ? tr("Cancelled: nothing was opened.")
+  m_problem->setText(cls == QLatin1String("cancelled") ? tr("Canceled: nothing was opened.")
                                                        : errorMessageOf(answer));
   setErrorStyleSheet(m_problem);
   m_check->check(QString());

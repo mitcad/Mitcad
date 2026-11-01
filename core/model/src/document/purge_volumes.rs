@@ -6,7 +6,9 @@
 //! The slots are as the export makes them: the bodies in their order (the
 //! design's bodies when none are given; sheet and empty bodies are not
 //! printed), a slot per distinct material in the order of first use, each
-//! body's material and settings in the occurrence that shows it first.
+//! body's material and settings in each occurrence that shows it (all of
+//! them when none does): a body whose placements print otherwise brings
+//! each of their materials (mitcad#1061).
 //! `set_purge_volumes` is an undo step that recomputes nothing; the design
 //! file keeps the pairs (`purge_volumes`).
 
@@ -89,7 +91,7 @@ impl<K: Kernel> Document<K> {
         for change in changes {
             for id in [&change.from, &change.to] {
                 if self.material(id).is_none() {
-                    return Err(invalid(format!("unknown material '{id}'")));
+                    return Err(invalid(format!("unknown material {id}")));
                 }
             }
             let pair = PurgeOverride {
@@ -146,12 +148,19 @@ impl<K: Kernel> Document<K> {
             bodies.to_vec()
         };
         let instances = self.instances();
-        let path_of = |body: BodyUid| -> Option<Vec<OccurrenceUid>> {
+        // A body's placements printed: the shown ones, all of them when
+        // none is shown; each prints with its own settings, so a body
+        // whose placements print otherwise may bring several materials
+        // (mitcad#1061).
+        let paths_of = |body: BodyUid| -> Vec<Option<Vec<OccurrenceUid>>> {
             let mine: Vec<_> = instances.iter().filter(|i| i.body == body).collect();
-            mine.iter()
-                .find(|i| i.visible)
-                .or_else(|| mine.first())
-                .map(|i| i.path.clone())
+            let any_shown = mine.iter().any(|i| i.visible);
+            let paths: Vec<Option<Vec<OccurrenceUid>>> = mine
+                .iter()
+                .filter(|i| i.visible || !any_shown)
+                .map(|i| Some(i.path.clone()))
+                .collect();
+            if paths.is_empty() { vec![None] } else { paths }
         };
         let mut slots = PurgeSlots {
             settings: Vec::new(),
@@ -169,16 +178,22 @@ impl<K: Kernel> Document<K> {
             if !printed {
                 continue;
             }
-            let settings = self.effective_print(&PrintTarget::Body(uid, path_of(uid)));
-            match slots
-                .settings
-                .iter()
-                .position(|s| s.material == settings.material)
-            {
-                Some(slot) => slots.bodies[slot].push(uid),
-                None => {
-                    slots.settings.push(settings);
-                    slots.bodies.push(vec![uid]);
+            // A slot per material and appearance (mitcad#1055), each
+            // placement of the body read on its own (mitcad#1061).
+            for path in paths_of(uid) {
+                let settings = self.effective_print(&PrintTarget::Body(uid, path));
+                match slots.settings.iter().position(|s| {
+                    s.material == settings.material && s.appearance == settings.appearance
+                }) {
+                    Some(slot) => {
+                        if !slots.bodies[slot].contains(&uid) {
+                            slots.bodies[slot].push(uid);
+                        }
+                    }
+                    None => {
+                        slots.settings.push(settings);
+                        slots.bodies.push(vec![uid]);
+                    }
                 }
             }
         }
@@ -186,7 +201,7 @@ impl<K: Kernel> Document<K> {
     }
 
     /// The `purge_volumes` query: the slots of the bodies printed (each its
-    /// `material`, `name`, `color`, `purge_into` and `purge_out` and its
+    /// `material`, `appearance` (mitcad#1055), `name`, `color`, `purge_into` and `purge_out` and its
     /// `bodies`), the `multiplier`, and `volumes[from][to]`: each pair's
     /// `computed` volume, the `volume` used and whether it is `edited`
     /// (set by hand).
@@ -206,9 +221,27 @@ impl<K: Kernel> Document<K> {
                     .and_then(|(v, _)| v.as_str())
                     .and_then(crate::print_files::hex_rgb)
                     .map(hex_color);
+                // A material in two colours (mitcad#1055): each slot named
+                // with its appearance.
+                let twice = slots
+                    .settings
+                    .iter()
+                    .filter(|s| s.material == settings.material)
+                    .count()
+                    > 1;
+                let look = settings
+                    .appearance
+                    .as_deref()
+                    .and_then(|a| self.appearance(a))
+                    .map(|a| a.name.clone());
+                let name = match look {
+                    Some(look) if twice => format!("{} ({look})", settings.material_name),
+                    _ => settings.material_name.clone(),
+                };
                 json!({
                     "material": settings.material,
-                    "name": settings.material_name,
+                    "appearance": settings.appearance,
+                    "name": name,
                     "color": color,
                     "purge_into": values.into,
                     "purge_out": values.out,
@@ -242,7 +275,7 @@ pub fn purge_defaults_json(color: Option<&str>) -> Result<Value, ModelError> {
     let rgb = match color {
         Some(text) => Some(
             crate::print_files::hex_rgb(text)
-                .ok_or_else(|| invalid(format!("'{text}' is no colour #RRGGBB")))?,
+                .ok_or_else(|| invalid(format!("“{text}” is no color #RRGGBB")))?,
         ),
         None => None,
     };

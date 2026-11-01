@@ -1173,7 +1173,7 @@ fn references_must_be_of_the_right_kind_and_earlier() {
         assert!(error.contains(expected), "{error}");
     }
     for (reference, expected) in [
-        (json!("XY"), "invalid reference 'XY'"),
+        (json!("XY"), "invalid reference “XY”"),
         (
             json!({"body": "F2.b0"}),
             "body F2.b0 is not a plane or a planar face",
@@ -1184,7 +1184,7 @@ fn references_must_be_of_the_right_kind_and_earlier() {
         ),
         (
             json!({"body": "F2.b0", "face": "F2:a", "edge": "y"}),
-            "invalid name 'y'",
+            "invalid name y",
         ),
         (json!(3), "invalid reference 3"),
     ] {
@@ -1409,7 +1409,7 @@ fn body_attributes_are_commands_with_undo_and_saved() {
     for (command_json, expected) in [
         (
             json!({"cmd": "set_body_material", "uid": "F2.b0", "material": "cheese"}),
-            "unknown material 'cheese' (known: steel,",
+            "unknown material cheese (known: steel,",
         ),
         (
             json!({"cmd": "set_body_visible", "uid": "F2.b1", "visible": false}),
@@ -1429,7 +1429,7 @@ fn body_attributes_are_commands_with_undo_and_saved() {
         .unwrap()
         .to_string();
     assert!(
-        error.contains("bodies[0]: unknown material 'cheese'"),
+        error.contains("bodies[0]: unknown material cheese"),
         "{error}"
     );
 }
@@ -1493,7 +1493,7 @@ fn physical_properties_use_materials_and_densities() {
         text.contains("    mass 0.376800 kg, volume 48000.000 mm3"),
         "{text}"
     );
-    assert!(text.ends_with("Total: mass 0.376800 kg, volume 48000.000 mm3, centre of mass [30.000, 20.000, 10.000]\n"), "{text}");
+    assert!(text.ends_with("Total: mass 0.376800 kg, volume 48000.000 mm3, center of mass [30.000, 20.000, 10.000]\n"), "{text}");
 }
 
 #[test]
@@ -1735,4 +1735,349 @@ fn a_plane_between_faces_of_components_is_made_where_the_design_places_them() {
         (moved["origin"][2].as_f64().unwrap() - 17.5).abs() < 1e-9,
         "{moved}"
     );
+}
+
+#[test]
+fn datums_in_the_active_component_take_geometry_of_a_turned_occurrence_by_links() {
+    // Motor (O1): the block (60 x 40 x 20, F2.b0) turned 90 degrees about Z
+    // and moved by (100, 0, 0). Frame (O2), active: turned 90 degrees about
+    // X and moved by (0, 50, 0). A plane, an axis and a point of Frame on
+    // Motor's geometry, linked from O1 to O2, lie where the design places
+    // Motor, in Frame's coordinates, and follow when Motor:1 moves
+    // (mitcad#1029). Frame's coordinates of a design point q: Rx90⁻¹(q -
+    // (0, 50, 0)), (x, y, z) -> (x, z, -y).
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let motor_at = |offset: [f64; 3]| {
+        Transform::translation(offset)
+            .after(&Transform::rotation([0.0; 3], [0.0, 0.0, 1.0], quarter).unwrap())
+    };
+    let frame_at = Transform::translation([0.0, 50.0, 0.0])
+        .after(&Transform::rotation([0.0; 3], [1.0, 0.0, 0.0], quarter).unwrap());
+    let mut doc = Document::new(GeoKernel::default());
+    let (_, motor) = doc
+        .create_component(Some("Motor"), motor_at([100.0, 0.0, 0.0]), true)
+        .unwrap();
+    command(
+        &mut doc,
+        json!([{"cmd": "sketch.create"},
+               {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40},
+               {"cmd": "add_feature", "def": {"type": "extrude",
+                "profiles": [{"sketch": "F1", "region": REGION}],
+                "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}}]),
+    );
+    doc.activate_component(mitcad_model::ids::ComponentUid::ROOT)
+        .unwrap();
+    let (frame, placed) = doc.create_component(Some("Frame"), frame_at, true).unwrap();
+    let links = json!({"F2.b0": {"source": motor.to_string(), "target": placed.to_string()}});
+    let add = |doc: &mut Document<GeoKernel>, kind: &str, definition: Value| {
+        let added = command(
+            doc,
+            json!({"cmd": "add_feature", "def": {"type": kind, "definition": definition,
+                   "links": links}}),
+        );
+        let uid = added["uid"].as_str().unwrap().to_owned();
+        let feature = query(doc, json!({"query": "feature", "uid": uid}));
+        assert_eq!(feature["status"], "ok", "{kind}: {feature}");
+        assert_eq!(feature["component"], json!(frame.to_string()), "{feature}");
+        assert_eq!(feature["def"]["links"], links, "the link is kept");
+        uid
+    };
+    // 10 mm above the top face: z = 30 in the design, y = 30 in Frame (the
+    // test kernel gives a face's plane at its point nearest to the origin of
+    // the coordinates it is read in: Frame's (0, 30, 0)).
+    let plane_uid = add(
+        &mut doc,
+        "construction_plane",
+        json!({"type": "offset", "plane": face(&top()), "distance": 10}),
+    );
+    // The vertical edge at Motor's (60, 40): (60, 60) in the design.
+    let axis_uid = add(
+        &mut doc,
+        "construction_axis",
+        json!({"type": "edge", "edge": edge(&side(RIGHT), &side(BACK))}),
+    );
+    // The corner at Motor's origin: (100, 0, 0) in the design.
+    let point_uid = add(
+        &mut doc,
+        "construction_point",
+        json!({"type": "point", "point": vertex([&side(LEFT), &side(FRONT), &bottom()])}),
+    );
+    let datum =
+        |doc: &Document<GeoKernel>, uid: &str| query(doc, json!({"query": "datum", "uid": uid}));
+    let plane = datum(&doc, &plane_uid);
+    assert_near(&plane["origin"], [0.0, 30.0, 0.0]);
+    assert_near(&plane["normal"], [0.0, 1.0, 0.0]);
+    let axis = datum(&doc, &axis_uid);
+    assert_near(&axis["origin"], [60.0, 0.0, -10.0]);
+    assert_near(&axis["direction"], [0.0, 1.0, 0.0]);
+    let point = datum(&doc, &point_uid);
+    assert_near(&point["point"], [100.0, 0.0, 50.0]);
+    // Without its link an axis does not reach Motor's edge.
+    let (_, plain) = add_construction(
+        &mut doc,
+        "construction_axis",
+        &json!({"type": "edge", "edge": edge(&side(RIGHT), &side(BACK))}),
+    );
+    assert_ne!(plain["status"], "ok", "{plain}");
+    // Motor:1 15 mm up: all three follow, 15 mm along Frame's y.
+    doc.set_occurrence_transform(motor, motor_at([100.0, 0.0, 15.0]), false)
+        .unwrap();
+    let plane = datum(&doc, &plane_uid);
+    assert_near(&plane["origin"], [0.0, 45.0, 0.0]);
+    assert_near(&plane["normal"], [0.0, 1.0, 0.0]);
+    let axis = datum(&doc, &axis_uid);
+    assert_near(&axis["origin"], [60.0, 15.0, -10.0]);
+    assert_near(&axis["direction"], [0.0, 1.0, 0.0]);
+    let point = datum(&doc, &point_uid);
+    assert_near(&point["point"], [100.0, 15.0, 50.0]);
+}
+
+#[test]
+fn datums_in_the_active_component_take_datums_of_a_turned_occurrence_by_links() {
+    // Motor (O1) turned 90 degrees about Z and moved by (100, 0, 0), with a
+    // plane 20 mm above its xy, an axis along its y through (10, 0, 0) and
+    // a point at (10, 20, 30). Frame (O2), active: turned 90 degrees about
+    // X and moved by (0, 50, 0). A plane, an axis and a point of Frame on
+    // Motor's datums, linked from O1 to O2 (`datum_links`), lie where the
+    // design places Motor's datums, in Frame's coordinates, and follow when
+    // Motor:1 moves (mitcad#1035). Frame's coordinates of a design point q:
+    // (x, y, z) of q - (0, 50, 0) -> (x, z, -y).
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let motor_at = |offset: [f64; 3]| {
+        Transform::translation(offset)
+            .after(&Transform::rotation([0.0; 3], [0.0, 0.0, 1.0], quarter).unwrap())
+    };
+    let frame_at = Transform::translation([0.0, 50.0, 0.0])
+        .after(&Transform::rotation([0.0; 3], [1.0, 0.0, 0.0], quarter).unwrap());
+    let mut doc = Document::new(GeoKernel::default());
+    let (_, motor) = doc
+        .create_component(Some("Motor"), motor_at([100.0, 0.0, 0.0]), true)
+        .unwrap();
+    let motor_plane = construct(
+        &mut doc,
+        "construction_plane",
+        json!({"type": "offset", "plane": "xy", "distance": 20}),
+    );
+    let motor_axis = construct(
+        &mut doc,
+        "construction_axis",
+        json!({"type": "fixed", "origin": [10, 0, 0], "direction": [0, 1, 0]}),
+    );
+    let motor_point = construct(
+        &mut doc,
+        "construction_point",
+        json!({"type": "fixed", "point": [10, 20, 30]}),
+    );
+    doc.activate_component(mitcad_model::ids::ComponentUid::ROOT)
+        .unwrap();
+    let (frame, placed) = doc.create_component(Some("Frame"), frame_at, true).unwrap();
+    let link = json!({"source": motor.to_string(), "target": placed.to_string()});
+    let add = |doc: &mut Document<GeoKernel>, kind: &str, definition: Value, datum: &str| {
+        let datum_links = json!({datum: link});
+        let added = command(
+            doc,
+            json!({"cmd": "add_feature", "def": {"type": kind, "definition": definition,
+                   "datum_links": datum_links}}),
+        );
+        let uid = added["uid"].as_str().unwrap().to_owned();
+        let feature = query(doc, json!({"query": "feature", "uid": uid}));
+        assert_eq!(feature["status"], "ok", "{kind}: {feature}");
+        assert_eq!(feature["component"], json!(frame.to_string()), "{feature}");
+        assert_eq!(
+            feature["def"]["datum_links"], datum_links,
+            "the link is kept"
+        );
+        uid
+    };
+    // 10 mm above Motor's plane: z = 30 in the design, y = 30 in Frame.
+    let plane_uid = add(
+        &mut doc,
+        "construction_plane",
+        json!({"type": "offset", "plane": motor_plane, "distance": 10}),
+        &motor_plane,
+    );
+    // Motor's axis: through (100, 10, 0) along -x in the design.
+    let axis_uid = add(
+        &mut doc,
+        "construction_axis",
+        json!({"type": "edge", "edge": motor_axis}),
+        &motor_axis,
+    );
+    // Motor's point: (80, 10, 30) in the design.
+    let point_uid = add(
+        &mut doc,
+        "construction_point",
+        json!({"type": "point", "point": motor_point}),
+        &motor_point,
+    );
+    let datum =
+        |doc: &Document<GeoKernel>, uid: &str| query(doc, json!({"query": "datum", "uid": uid}));
+    let plane = datum(&doc, &plane_uid);
+    assert_near(&plane["origin"], [100.0, 30.0, 50.0]);
+    assert_near(&plane["normal"], [0.0, 1.0, 0.0]);
+    let axis = datum(&doc, &axis_uid);
+    assert_near(&axis["origin"], [100.0, 0.0, 40.0]);
+    assert_near(&axis["direction"], [-1.0, 0.0, 0.0]);
+    let point = datum(&doc, &point_uid);
+    assert_near(&point["point"], [80.0, 30.0, 40.0]);
+    // Without its link Motor's plane, made in Motor's coordinates, is
+    // refused (F6).
+    let unlinked = command_error(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "construction_plane",
+               "definition": {"type": "offset", "plane": motor_plane, "distance": 10}}}),
+    );
+    assert!(
+        unlinked.contains("a feature of Frame cannot use it"),
+        "{unlinked}"
+    );
+    // A link from an occurrence of another component than the datum's is
+    // refused too.
+    let own = json!({"source": placed.to_string(), "target": placed.to_string()});
+    let wrong = json!({motor_plane.clone(): own});
+    let refused = command_error(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "construction_plane",
+               "definition": {"type": "offset", "plane": motor_plane, "distance": 10},
+               "datum_links": wrong}}),
+    );
+    assert!(refused.contains("where the link"), "{refused}");
+    // Motor:1 15 mm up: all three follow, 15 mm along Frame's y.
+    doc.set_occurrence_transform(motor, motor_at([100.0, 0.0, 15.0]), false)
+        .unwrap();
+    let plane = datum(&doc, &plane_uid);
+    assert_near(&plane["origin"], [100.0, 45.0, 50.0]);
+    assert_near(&plane["normal"], [0.0, 1.0, 0.0]);
+    let axis = datum(&doc, &axis_uid);
+    assert_near(&axis["origin"], [100.0, 15.0, 40.0]);
+    assert_near(&axis["direction"], [-1.0, 0.0, 0.0]);
+    let point = datum(&doc, &point_uid);
+    assert_near(&point["point"], [80.0, 45.0, 40.0]);
+}
+
+#[test]
+fn datums_in_the_active_component_take_sketches_of_a_turned_occurrence_by_links() {
+    // Motor (O1) turned 90 degrees about Z and moved by (100, 0, 0), with a
+    // sketch on its xy: a line from (0, 0) to (60, 0) and a point at
+    // (10, 20). Frame (O2), active: turned 90 degrees about X and moved by
+    // (0, 50, 0). An axis along the line, a point at the sketch point and a
+    // plane halfway along the line, made in Frame and linked to the sketch
+    // from O1 to O2 (`datum_links` keyed by the sketch), lie where the
+    // design places Motor's sketch, in Frame's coordinates, and follow when
+    // Motor:1 moves (mitcad#1039). Motor's (x, y, z) is (100 - y, x, z) in
+    // the design; Frame's coordinates of a design point q: (x, y, z) of
+    // q - (0, 50, 0) -> (x, z, -y).
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let motor_at = |offset: [f64; 3]| {
+        Transform::translation(offset)
+            .after(&Transform::rotation([0.0; 3], [0.0, 0.0, 1.0], quarter).unwrap())
+    };
+    let frame_at = Transform::translation([0.0, 50.0, 0.0])
+        .after(&Transform::rotation([0.0; 3], [1.0, 0.0, 0.0], quarter).unwrap());
+    let mut doc = Document::new(GeoKernel::default());
+    let (_, motor) = doc
+        .create_component(Some("Motor"), motor_at([100.0, 0.0, 0.0]), true)
+        .unwrap();
+    let created = command(&mut doc, json!({"cmd": "sketch.create"}));
+    let sketch = created["uid"].as_str().unwrap().to_owned();
+    let line = command(
+        &mut doc,
+        json!({"cmd": "sketch.add_line", "sketch": sketch, "start": [0, 0], "end": [60, 0]}),
+    );
+    let line = line["made"][0].as_str().unwrap().to_owned();
+    let point = command(
+        &mut doc,
+        json!({"cmd": "sketch.add_point", "sketch": sketch, "at": [10, 20]}),
+    );
+    let point = point["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|e| e.starts_with('p'))
+        .unwrap_or_else(|| panic!("no point in {point}"))
+        .to_owned();
+    doc.activate_component(mitcad_model::ids::ComponentUid::ROOT)
+        .unwrap();
+    let (frame, placed) = doc.create_component(Some("Frame"), frame_at, true).unwrap();
+    let datum_links =
+        json!({sketch.clone(): {"source": motor.to_string(), "target": placed.to_string()}});
+    let add = |doc: &mut Document<GeoKernel>, kind: &str, definition: Value| {
+        let added = command(
+            doc,
+            json!({"cmd": "add_feature", "def": {"type": kind, "definition": definition,
+                   "datum_links": datum_links}}),
+        );
+        let uid = added["uid"].as_str().unwrap().to_owned();
+        let feature = query(doc, json!({"query": "feature", "uid": uid}));
+        assert_eq!(feature["status"], "ok", "{kind}: {feature}");
+        assert_eq!(feature["component"], json!(frame.to_string()), "{feature}");
+        assert_eq!(
+            feature["def"]["datum_links"], datum_links,
+            "the link is kept"
+        );
+        uid
+    };
+    let on_line = json!({"sketch": sketch, "curve": line});
+    // The line: (100, 0, 0) to (100, 60, 0) in the design.
+    let axis_uid = add(
+        &mut doc,
+        "construction_axis",
+        json!({"type": "edge", "edge": on_line}),
+    );
+    // The point: (80, 10, 0) in the design.
+    let point_uid = add(
+        &mut doc,
+        "construction_point",
+        json!({"type": "point", "point": {"sketch": sketch, "point": point}}),
+    );
+    // Halfway along the line: (100, 30, 0) in the design, across +y.
+    let plane_uid = add(
+        &mut doc,
+        "construction_plane",
+        json!({"type": "along_path", "path": on_line, "distance": 0.5}),
+    );
+    let datum =
+        |doc: &Document<GeoKernel>, uid: &str| query(doc, json!({"query": "datum", "uid": uid}));
+    let axis = datum(&doc, &axis_uid);
+    assert_near(&axis["origin"], [100.0, 0.0, 50.0]);
+    assert_near(&axis["direction"], [0.0, 0.0, -1.0]);
+    let at = datum(&doc, &point_uid);
+    assert_near(&at["point"], [80.0, 0.0, 40.0]);
+    let plane = datum(&doc, &plane_uid);
+    assert_near(&plane["origin"], [100.0, 0.0, 20.0]);
+    assert_near(&plane["normal"], [0.0, 0.0, -1.0]);
+    // Without its link Motor's sketch, made in Motor's coordinates, is
+    // refused (F6).
+    let unlinked = command_error(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "construction_axis",
+               "definition": {"type": "edge", "edge": on_line}}}),
+    );
+    assert!(
+        unlinked.contains("a feature of Frame cannot use it"),
+        "{unlinked}"
+    );
+    // A link from an occurrence of another component than the sketch's is
+    // refused too.
+    let wrong =
+        json!({sketch.clone(): {"source": placed.to_string(), "target": placed.to_string()}});
+    let refused = command_error(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "construction_axis",
+               "definition": {"type": "edge", "edge": on_line},
+               "datum_links": wrong}}),
+    );
+    assert!(refused.contains("where the link"), "{refused}");
+    // Motor:1 15 mm up: all three follow, 15 mm along Frame's y.
+    doc.set_occurrence_transform(motor, motor_at([100.0, 0.0, 15.0]), false)
+        .unwrap();
+    let axis = datum(&doc, &axis_uid);
+    assert_near(&axis["origin"], [100.0, 15.0, 50.0]);
+    assert_near(&axis["direction"], [0.0, 0.0, -1.0]);
+    let at = datum(&doc, &point_uid);
+    assert_near(&at["point"], [80.0, 15.0, 40.0]);
+    let plane = datum(&doc, &plane_uid);
+    assert_near(&plane["origin"], [100.0, 15.0, 20.0]);
+    assert_near(&plane["normal"], [0.0, 0.0, -1.0]);
 }

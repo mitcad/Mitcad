@@ -96,6 +96,17 @@ struct PrintSettings {
   void save() const;
 };
 
+// Send to Slicer's Center on Plate and Drop to Bed (mitcad#1109), kept per
+// design (by its file; designs not saved yet share one pair): both on
+// until changed.
+struct PrintPlacement {
+  bool center = true;
+  bool drop = true;
+
+  static PrintPlacement load(const QString& design);
+  void save(const QString& design) const;
+};
+
 // A name a file can take on every system: characters that are not allowed
 // (or are path separators) become "_", and so does a name Windows reserves
 // (CON, NUL, COM1, ...); never empty.
@@ -124,9 +135,11 @@ QVector<PrintPiece> printPieces(const QStringList& bodies, const QStringList& na
                                 const Selection& chosen = {});
 
 // How an export put the bodies on the print bed (mitcad#731), for the log:
-// the body and face on the bed, the plate's centre and the transform after
-// the design's placements (rows "a b c t", three decimals); the bodies kept
-// as assembled; or as in the design; then the 3MF file's other objects,
+// the body and face on the bed ("(automatic)" after a face the automatic
+// orientation chose, mitcad#1109), the plate's centre and the transform
+// after the design's placements (rows "a b c t", three decimals); the
+// bodies kept as assembled; or as in the design; then the 3MF file's other
+// objects,
 // each on its face or kept as assembled ("objects Nut (Nuts:1/Nut:2) on
 // F2:top, ...", mitcad#856); then each bed face that cannot be used. `bed`
 // is the `export` result's `bed`.

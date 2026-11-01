@@ -91,7 +91,7 @@ Ui-Step 'Wall (F7)'                      { Ui-Key 'F7' }
 Ui-ExpectNew 'Command Wall started' 'Wall started'
 Ui-Mark
 Ui-Step 'no fasteners'                   { Ui-ClickLogged 'Panel Wall input frame_fasteners' }
-Expect-Inspect 'Wall' @('frame wall Wall 1, wall 3600 x 2400 mm', 'fasteners no') 'a wall from the origin, no fasteners'
+Expect-Inspect 'Wall' @("frame wall Wall 1, wall 3600 ${Times} 2400 mm", 'fasteners no') 'a wall from the origin, no fasteners'
 Ui-Mark
 Ui-Step 'Openings (its tile)'            { Ui-ClickLogged 'Panel Wall input frame_openings_window' }
 Ui-ExpectNew 'Openings window opened for build.wall: 0 row(s), non-load-bearing' 'the Openings window, a partition by default'
@@ -99,7 +99,7 @@ Ui-ExpectNew 'Openings place add_window at ' 'its buttons'' places'
 Ui-Mark
 Ui-Step 'Add window'                     { Openings-Click 'add_window' }
 Ui-ExpectNew 'Openings rows: 600 900x1200 900' 'a window written into Wall'
-Expect-Inspect 'Wall' @('frame wall Wall 1, wall 3600 x 2400 mm, 13 member(s)', '1 flat header', '2 king stud',
+Expect-Inspect 'Wall' @("frame wall Wall 1, wall 3600 ${Times} 2400 mm, 13 member(s)", '1 flat header', '2 king stud',
   '; openings 1, non-load-bearing, opening 1 marked') 'a partition''s window: one flat header, no trimmers, marked'
 Ui-Sync
 Start-Sleep -Milliseconds 1500
@@ -184,22 +184,35 @@ Ui-Step 'Wall (F7)'                      { Ui-Key 'F7' }
 Ui-ExpectNew 'Command Wall started' 'Wall started'
 # Solid-Face TEXT DESCRIPTION: a click on each face of the solid wall
 # (F2.b0) a click on Start picks, Start picked again before each, until the
-# preview's inspection has TEXT.
-function Solid-Face([string]$Text, [string]$Description) {
-  Start-Picks
-  Ui-Sync
+# preview's inspection has TEXT. Each face is clicked where the newest
+# "Pick places:" puts it: F6 fits the preview too, so the view moves with
+# the last click's preview (a wall from a side face reaches past the slab),
+# and a place logged in another view picks another face (mitcad#1058).
+function Solid-Places {
   $lines = @(Ui-LogLines)
   $start = 0
   for ($i = $lines.Count - 1; $i -ge 0; $i--) { if ($lines[$i].Contains('Pick places:')) { $start = $i; break } }
-  $places = @($lines[$start..($lines.Count - 1)] | ForEach-Object {
-      if ($_ -match '^Pick face F2\.b0/\S* at (\d+),(\d+)$') { , @([int]$Matches[1], [int]$Matches[2]) } })
-  if ($places.Count -lt 1) { Ui-Fail 'no face of the solid wall to click' }
+  $places = [ordered]@{}
+  foreach ($line in $lines[$start..($lines.Count - 1)]) {
+    if ($line -match '^Pick face (F2\.b0/\S*) at (\d+),(\d+)$') {
+      $places[$Matches[1]] = @([int]$Matches[2], [int]$Matches[3])
+    }
+  }
+  return $places
+}
+function Solid-Face([string]$Text, [string]$Description) {
+  Start-Picks
+  Ui-Sync
+  $faces = @((Solid-Places).Keys)
+  if ($faces.Count -lt 1) { Ui-Fail 'no face of the solid wall to click' }
   $first = $true
-  foreach ($at in $places) {
+  foreach ($face in $faces) {
     if (-not $first) { Start-Picks; Ui-Sync }
     $first = $false
+    $at = (Solid-Places)[$face]
+    if (-not $at) { Write-Host "     $face not in sight in this view"; continue }
     Ui-Mark
-    Ui-Step 'a face of the solid wall'   { Ui-Click $at[0] $at[1] }
+    Ui-Step "a face of the solid wall ($face)" { Ui-Click $at[0] $at[1] }
     # The click's preview: once it is inspected, what the app computes for
     # it is waited for and the last inspection decides; a face that gives
     # none in 1.5 s gives nothing (once 3 s for every face that did not
@@ -270,8 +283,8 @@ Ui-Step 'Wall (F7)'                      { Ui-Key 'F7' }
 Ui-ExpectNew 'Command Wall started' 'Wall started'
 # The faces of the room's body clicked in turn until one runs across the
 # room (a long wall's inner face; the others run 10000 mm or meet nothing).
-Solid-Face 'frame wall Wall 1, wall 7819 x 2400 mm' 'a wall from a long wall''s inner face, across the room'
-Expect-Inspect 'Wall' @('frame wall Wall 1, wall 7819 x 2400 mm', '3 bottom plate', '3 top plate', '; length auto',
+Solid-Face "frame wall Wall 1, wall 7819 ${Times} 2400 mm" 'a wall from a long wall''s inner face, across the room'
+Expect-Inspect 'Wall' @("frame wall Wall 1, wall 7819 ${Times} 2400 mm", '3 bottom plate', '3 top plate', '; length auto',
   '; Length Auto: the run met a face of ', ', the wall 7819 mm',
   '; spliced top plate 3600 7200, bottom plate 3600 7200') `
   'previewed across the room, the run''s end named, each plate three pieces over the studs at 3600 and 7200'
@@ -280,7 +293,7 @@ Expect-Inspect 'Wall' @(', to a face of ', ', 7819 mm', ', base on ') 'the junct
 # still names the wall, its length and what the run met.
 Ui-Mark
 Ui-Step '7000 mm high'                   { Ui-TypeIn 'Panel Wall input frame_height' '7000' }
-Ui-ExpectNew 'Frame preview refused: frame wall Wall 1, wall 7819 x 7000 mm, 0 member(s)' `
+Ui-ExpectNew "Frame preview refused: frame wall Wall 1, wall 7819 ${Times} 7000 mm, 0 member(s)" `
   'the refused preview names the wall and the length worked out'
 $line = Ui-NewLines | Where-Object { $_.StartsWith('Frame preview refused: ') } |
   Select-Object -Last 1
@@ -289,7 +302,7 @@ if (-not "$line".Contains("longer than the part's longest")) { Ui-Fail "the refu
 Write-Host 'ok   refused, with what the run met and why'
 Ui-Mark
 Ui-Step '2400 mm high again'             { Ui-TypeIn 'Panel Wall input frame_height' '2400' }
-Expect-Inspect 'Wall' @('frame wall Wall 1, wall 7819 x 2400 mm', '; spliced top plate 3600 7200, bottom plate 3600 7200') `
+Expect-Inspect 'Wall' @("frame wall Wall 1, wall 7819 ${Times} 2400 mm", '; spliced top plate 3600 7200, bottom plate 3600 7200') `
   '2400 mm high again: previewed'
 Ui-Mark
 Ui-Step 'Place (Enter)'                  { Ui-Key 'Return' }

@@ -403,7 +403,7 @@ expect-log 'Pick edge F2\.b0/E\{F2:side0\|F2:top\} at' 10
 mark
 click-pick 'edge F2\.b0/E\{F2:side0\|F2:top\} at'
 expect-log 'Gear Pair candidates: ' 30
-expect-log 'centre distance 60 mm' 10
+expect-log 'center distance 60 mm' 10
 expect-log 'Panel Gear Pair options candidate: 2 mm, 20:40' 30
 expect-log 'Panel Gear Pair input candidate=0 at ' 10
 mark

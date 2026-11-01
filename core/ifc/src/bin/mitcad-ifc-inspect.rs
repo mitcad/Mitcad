@@ -23,7 +23,7 @@ const USAGE: &str = "usage: mitcad-ifc-inspect <command> <file> ...
                                 placement, representation
   entity <file> <id> [depth]    an instance and those it refers to (to
                                 depth, 2 by default)
-  units <file>                  the units as millimetres and radians
+  units <file>                  the units as millimeters and radians
   items <file> <id> [--json]    the decoded body items of product <id>";
 
 fn open(path: &str) -> Result<IfcFile, String> {

@@ -80,6 +80,10 @@ void ConfigurationBar::refresh() {
   if (isHidden() == shown) {
     setVisible(shown);
   }
+  if (m_present != shown) {
+    m_present = shown;
+    emit presenceChanged(shown);
+  }
   if (!shown) {
     if (m_loggedState != QStringLiteral("none")) {
       m_loggedState = QStringLiteral("none");
@@ -110,6 +114,13 @@ void ConfigurationBar::refresh() {
   }
   showValues();
   TestSync::singleShot(0, this, [this] { logLayout(); });
+}
+
+void ConfigurationBar::setHeaderTitled(bool titled) {
+  m_title->setText(titled ? tr("Row") : tr("Configuration"));
+  QFont font = m_title->font();
+  font.setBold(!titled);
+  m_title->setFont(font);
 }
 
 void ConfigurationBar::rebuild() {
@@ -345,13 +356,13 @@ void ConfigurationBar::run(const QJsonObject& command, const QString& what) {
         if (const std::optional<cfg::Refusal> refused = cfg::readRefusal(result.value(QStringLiteral("refused")))) {
           const QString text = tr("%1 is refused: %2").arg(what, refused->describe());
           showNotice(text, true);
-          m_host.showStatus(text, true);
+          m_host.showStatus(text, NoticeLevel::Error);
           qDebug().noquote() << QStringLiteral("Configuration refused: %1").arg(refused->describe());
         } else {
           const QString notice = cfg::movesNotice(cfg::readMoves(result.value(QStringLiteral("moves"))));
           showNotice(notice, false);
           if (!notice.isEmpty()) {
-            m_host.showStatus(notice, false);
+            m_host.showStatus(notice, NoticeLevel::Information);
             qDebug().noquote() << QStringLiteral("Configuration moves: %1").arg(notice);
           }
         }
@@ -374,7 +385,9 @@ void ConfigurationBar::showNotice(const QString& text, bool error) {
   if (error) {
     setErrorStyleSheet(m_notice);
   } else {
-    setWarningStyleSheet(m_notice);
+    // A cascade's moves are information, not a warning (mitcad#1040):
+    // the plain text colour.
+    setErrorStyleSheet(m_notice, QString());
   }
   m_notice->setVisible(!text.isEmpty());
 }

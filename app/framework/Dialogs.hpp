@@ -62,6 +62,12 @@ QMessageBox::StandardButton sheetWarning(QWidget* parent, const QString& title, 
 QMessageBox::StandardButton sheetInformation(QWidget* parent, const QString& title, const QString& text,
                                              QMessageBox::StandardButtons buttons = QMessageBox::Ok,
                                              QMessageBox::StandardButton defaultButton = QMessageBox::NoButton);
+// An error's dialog (mitcad#1040, docs/ui-conventions.md "Messages and
+// severity"): what was asked did not happen (a file not read or not
+// written, an internal error); the Critical icon.
+QMessageBox::StandardButton sheetCritical(QWidget* parent, const QString& title, const QString& text,
+                                          QMessageBox::StandardButtons buttons = QMessageBox::Ok,
+                                          QMessageBox::StandardButton defaultButton = QMessageBox::NoButton);
 QMessageBox::StandardButton sheetQuestion(QWidget* parent, const QString& title, const QString& text,
                                           QMessageBox::StandardButtons buttons = QMessageBox::StandardButtons(
                                               QMessageBox::Yes | QMessageBox::No),

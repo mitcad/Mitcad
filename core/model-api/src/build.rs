@@ -72,6 +72,8 @@ named_enum! {
         "build_frame" => BuildFrame(Box<mitcad_model_build::FrameInput>),
         // Fasteners swapped in place (mitcad#497).
         "build_swap_fasteners" => BuildSwapFasteners(Box<mitcad_model_build::SwapInput>),
+        // Connectors placed by the first rule placed again (mitcad#1115).
+        "build_upgrade" => BuildUpgrade {},
     }
 }
 
@@ -278,6 +280,10 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                     })).collect::<Vec<_>>(),
                     "warnings": swapped.warnings,
                 })
+            }
+            BuildCommand::BuildUpgrade {} => {
+                let placed = self.build_upgrade()?;
+                json!({"upgraded": placed, "count": placed.len()})
             }
         })
     }

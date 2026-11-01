@@ -310,7 +310,7 @@ impl Scene {
         if units_assumed {
             account
                 .warnings
-                .push("the drawing names no length unit: millimetres assumed".into());
+                .push("the drawing names no length unit: millimeters assumed".into());
         }
         // Extents never computed are stored empty (minimum 1e20, maximum
         // -1e20).
@@ -537,7 +537,7 @@ impl Scene {
                 }
                 _ => {
                     let why = if DRAWN.contains(&name) {
-                        "a 2D entity (drawn, not modelled)"
+                        "a 2D entity (drawn, not modeled)"
                     } else if name.starts_with("POLYLINE") {
                         "a 2D or 3D polyline (a wire)"
                     } else if o.type_name.ends_with("SURFACE") {

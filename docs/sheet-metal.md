@@ -686,7 +686,7 @@ Decisions made while implementing the command UI and the DXF export:
   rules in the design the Face preselects the newest; reusing rules is the
   explicit choice of one of them. Inline rules get round reliefs of 1 x 2 mm;
   the Sheet Rules command and its edit expose all fields.
-- **Editing rules from the browser.** A sheet body's row lists its rules
+- **Editing rules from the browser.** A sheet metal body's row lists its rules
   (`SheetRules1 (2 mm, R 3 mm, K 0.3)`) and its Flat Pattern; double-click or
   Edit Sheet Rules opens the rules feature's edit, which every sheet using
   them follows (no silent fork). The values are the `sheet_bodies` query's.
@@ -706,7 +706,7 @@ Decisions made while implementing the command UI and the DXF export:
   the document's unit is inches, else millimetres.
 - **Tests.** Model: `sheet/flat_dxf_tests.rs` (seam joining, hole circles,
   layers, inches, round trips through `mitcad-dxf`), `sheet/pick_tests.rs`,
-  `sheet_ui_tests.rs` (inline rules and Undo, picks, sheet bodies, the display
+  `sheet_ui_tests.rs` (inline rules and Undo, picks, sheet metal bodies, the display
   choice, export refusals). CLI with OCCT: `sheet_flat_dxf` (the contract L
   with a hole: contours, bend line, back view in inches with tangents, then K,
   thickness and radius edits changing the drawing; reopened), `export_flat`
@@ -810,7 +810,7 @@ Decisions made while closing the import gaps of mitcad#211:
   joined faces that #211 took for double bends are such joins (their
   plate's side was not read).
 - **The sheet-domain adapter** (`sheet/rederive.rs`). An ordinary feature on
-  a valid sheet body (also an import's base feature) is followed by a
+  a valid sheet metal body (also an import's base feature) is followed by a
   re-derivation: per plane of planar charts, the result's faces on the front
   surface give the new outline (exact edge curves mapped into the chart);
   the lost material is removed with the Cut's trim (seams, lineage, pieces);
@@ -913,7 +913,7 @@ Decisions made while closing the import gaps of mitcad#211:
   direction reversed, the material coordinates kept). A moving body with
   bends is refused then (their inside sides would change).
 - **Copies of faces that make bodies.** A pattern or mirror whose objects
-  are faces that made new sheet bodies copies each body as a new sheet body
+  are faces that made new sheet metal bodies copies each body as a new sheet metal body
   of the pattern: the panels' frames moved by the element's transform (a
   reflection reverses the frame's handedness, so the material direction
   keeps its image by reversing the parity), the domains renamed as the
@@ -1220,7 +1220,7 @@ diagnostics so native and retained UI use the same result.
 
 ## Flat Pattern, UI and DXF
 
-Store one optional `FlatPatternDef` per selected sheet body in the document's
+Store one optional `FlatPatternDef` per selected sheet metal body in the document's
 derived-item collection, following the persisted analysis/settings pattern.
 It is evaluated against that body's current timeline result, including edits
 after item creation. It does not capture the body at a new timeline feature
@@ -1288,7 +1288,7 @@ some are temporarily open in the modelling timeline. Round-trip tests through
 | Save / reopen | Recreate the same names, rules, configurations, contours and ownership; missing cache data is recomputable. |
 | Copy / import | Remap every semantic reference; never bind an external source ID to an unrelated equal local ID. |
 
-Track failures for the affected sheet bodies separately from the last valid
+Track failures for the affected sheet metal bodies separately from the last valid
 shape retained by recompute. A failure unrelated to a sheet does not block its
 flat item. For a feature with automatic participants, determine affected sheet
 inputs conservatively before geometry evaluation; failure cannot erase the

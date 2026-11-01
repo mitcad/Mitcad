@@ -578,7 +578,7 @@ fn a_corner_s_offset_moves_its_end_and_takes_no_mitre() {
     refused["at"] = fields;
     refused["at"]["offset"] = json!(10);
     let error = command(&mut doc, refused).unwrap_err();
-    assert!(error.contains("a shared mitre needs offset 0"), "{error}");
+    assert!(error.contains("a shared miter needs offset 0"), "{error}");
 }
 
 #[test]

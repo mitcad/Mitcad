@@ -12,7 +12,14 @@
 #include <utility>
 
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepTools.hxx>
+#include <BRepTopAdaptor_FClass2d.hxx>
+#include <Bnd_Box.hxx>
+#include <Precision.hxx>
+#include <gp_Pnt2d.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_CurveOnClosedSurface.hxx>
 #include <BRep_CurveOnSurface.hxx>
@@ -126,6 +133,37 @@ gp_Pnt parameter_middle(const TopoDS_Face& face) {
   return BRepAdaptor_Surface(face, false).Value(0.5 * (u1 + u2), 0.5 * (v1 + v2));
 }
 
+// Up to `count` points inside the face, spread over it: the middles of the
+// cells of a coarse grid over its parameters that lie inside it, of a fine
+// one for a narrow face.
+std::vector<gp_Pnt> points_inside(const TopoDS_Face& face, std::size_t count) {
+  double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+  BRepTools::UVBounds(face, u0, u1, v0, v1);
+  BRepTopAdaptor_FClass2d classifier(face, Precision::PConfusion());
+  std::vector<gp_Pnt2d> inside;
+  for (const int cells : {5, 24}) {
+    for (int a = 0; a < cells; ++a) {
+      for (int b = 0; b < cells; ++b) {
+        const gp_Pnt2d uv(u0 + (u1 - u0) * (a + 0.5) / cells, v0 + (v1 - v0) * (b + 0.5) / cells);
+        if (classifier.Perform(uv) == TopAbs_IN) {
+          inside.push_back(uv);
+        }
+      }
+    }
+    if (!inside.empty()) {
+      break;
+    }
+  }
+  std::vector<gp_Pnt> points;
+  const BRepAdaptor_Surface surface(face);
+  const std::size_t wanted = std::min(inside.size(), count);
+  for (std::size_t k = 0; k < wanted; ++k) {
+    const gp_Pnt2d& uv = inside[k * inside.size() / wanted];
+    points.push_back(surface.Value(uv.X(), uv.Y()));
+  }
+  return points;
+}
+
 // Whether faces a and b lie on one surface: the same plane facing the same
 // way, or surfaces of one kind each through the middle of the other face
 // (within the faces' tolerances, at least 1e-6 mm). `why` says why not.
@@ -224,9 +262,7 @@ ShapePtr working_copy(const Shape& shape) {
     }
   }
   auto result = std::make_shared<Shape>(copy.shape(), faces);
-  for (const std::string& note : shape.notes()) {
-    result->add_note(note);
-  }
+  result->copy_notes(shape);
   return result;
 }
 
@@ -441,6 +477,60 @@ void FaceNamer::carry_by_surface(const Shape& input, const char* operation) {
                    f - 1, lost.size(), report.c_str());
     }
   }
+}
+
+void FaceNamer::carry_by_containment(const Shape& input, double tolerance) {
+  for (int f = 1; f <= m_faces.Extent(); ++f) {
+    NameList& names = m_names[static_cast<std::size_t>(f - 1)];
+    if (!names.empty()) {
+      continue;
+    }
+    try {
+      OCC_CATCH_SIGNALS
+      const TopoDS_Face& face = TopoDS::Face(m_faces(f));
+      const std::vector<gp_Pnt> points = points_inside(face, 3);
+      if (points.empty()) {
+        continue;
+      }
+      int best = -1;
+      double nearest = 0.0;
+      for (int i = 0; i < input.face_count(); ++i) {
+        if (input.face_names(i).empty()) {
+          continue;
+        }
+        const double within =
+            std::max({tolerance, BRep_Tool::Tolerance(face), BRep_Tool::Tolerance(input.face(i))});
+        Bnd_Box box;
+        BRepBndLib::Add(input.face(i), box);
+        box.Enlarge(within);
+        if (std::any_of(points.begin(), points.end(), [&box](const gp_Pnt& p) { return box.IsOut(p); })) {
+          continue;
+        }
+        double farthest = 0.0;
+        for (const gp_Pnt& p : points) {
+          BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(p).Vertex(), input.face(i));
+          farthest = std::max(farthest, distance.IsDone() ? distance.Value() : 2.0 * within);
+          if (farthest > within) {
+            break;
+          }
+        }
+        if (farthest <= within && (best < 0 || farthest < nearest)) {
+          best = i;
+          nearest = farthest;
+        }
+      }
+      if (best >= 0) {
+        names.insert(names.end(), input.face_names(best).begin(), input.face_names(best).end());
+      }
+    } catch (const Standard_Failure&) {
+    }
+  }
+}
+
+bool FaceNamer::holds(const std::string& name) const {
+  return std::any_of(m_names.begin(), m_names.end(), [&name](const NameList& names) {
+    return std::find(names.begin(), names.end(), name) != names.end();
+  });
 }
 
 bool FaceNamer::named(const TopoDS_Shape& face) const {

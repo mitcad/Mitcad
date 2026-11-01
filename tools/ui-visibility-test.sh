@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser app/framework app/MainWindow.cpp app/MainWindowVisibility.cpp tools/cli
+# check-all sources: app/browser app/framework app/MainWindow.cpp app/MainWindowVisibility.cpp tools/cli app/OcctViewer.cpp
 # The browser's light bulbs in every mode (mitcad#295) and Create Sketch's
 # origin planes (mitcad#844) through the real UI. A design without
 # components: Body1 (20 x 20 x 10) inside Body2 (60 x 60 x 30), and Sketch3
@@ -8,6 +8,10 @@
 #   - Create Sketch shows the origin planes; no face of Body1 can be picked.
 #     Body2 hidden by its light bulb while the plane is asked for: the pick
 #     goes on, Body1's top face can be picked and the sketch starts on it.
+#   - Transparent (mitcad#1093) on Body2 from its Browser row: the row shows
+#     the half-open eye, and a click where Body1 lies inside Body2 selects
+#     a face of Body1; the menu has Transparent checked; one undo step
+#     makes Body2 opaque, and the click takes Body2 again.
 #   - Extrude of the square, Body1 hidden meanwhile: the preview is drawn
 #     again without Body1, not computed again; Cancel keeps Body1 hidden
 #     (the change is the last undo step).
@@ -18,6 +22,11 @@
 #     left behind).
 #   - A Flat Pattern's or an analysis's light bulb and the other browser
 #     actions still wait for the command: Rename says so.
+#   - The Origin folder's light bulb off: Offset Plane's plane input and
+#     Extrude's Start Object leave the origin hidden (mitcad#1030), and XY
+#     picked from the browser's Origin folder goes to the input. With the
+#     light bulb on, the origin stays shown during and after Offset Plane,
+#     and XY is picked in the view.
 # The same design with a component (Part, its body across the origin) and
 # the root active:
 #   - Create Sketch shows the origin planes too, the Origin folder's light
@@ -148,6 +157,34 @@ ui_step "show Body2"                     ui_click_logged "Browser eye Root/Bodie
 ui_expect_new "Visibility Root/Bodies/Body2: shown" "Body2 shown again"
 expect_none "(during" "no command runs"
 
+echo "--- Transparent (mitcad#1093): Body2 from its Browser row; a click goes through it to Body1"
+ui_mark
+ui_step "right-click Body2's row"        ui_click_logged "Browser Root/Bodies/Body2" 3
+ui_expect_new "Context menu: " "the row's menu"
+ui_step "Transparent"                    ui_menu_choose "Transparent"
+ui_expect_new "Transparent: Body2" "Body2 made transparent"
+ui_expect_new "Browser eye Root/Bodies/Body2: transparent" "its row shows the half-open eye"
+ui_expect_new "View transparent: 1 body" "the view draws Body2 see-through"
+ui_step "Escape (clear the selection)"   ui_key Escape
+ui_mark
+ui_step "click where Body1 lies inside Body2" ui_click_logged "Body F2.b0"
+ui_expect_new "Selected: 1 face [face F2:" "the click goes through Body2 to Body1 behind it"
+ui_step "Escape (clear the selection)"   ui_key Escape
+ui_mark
+ui_step "right-click Body2's row"        ui_click_logged "Browser Root/Bodies/Body2" 3
+ui_expect_new "Context menu checked: Transparent" "Transparent is checked on its row"
+ui_step "Escape (close the menu)"        ui_key Escape
+ui_step "Escape (clear the selection)"   ui_key Escape
+ui_mark
+ui_step "undo (Ctrl+Z)"                  ui_key ctrl+z
+ui_expect_new "Undo: Make Body2 Transparent" "one undo step makes Body2 opaque again"
+ui_expect_new "Browser eye Root/Bodies/Body2: opaque" "its eye is open again"
+ui_expect_new "View transparent: none" "the view draws Body2 as before"
+ui_mark
+ui_step "click there again"              ui_click_logged "Body F2.b0"
+ui_expect_new "Selected: 1 face [face F4:" "opaque, Body2 takes the click"
+ui_step "Escape (clear the selection)"   ui_key Escape
+
 echo "--- Extrude, Body1 hidden meanwhile, Cancel"
 extrude_square
 hide_body1 Extrude
@@ -193,6 +230,44 @@ ui_mark
 ui_step "undo (Ctrl+Z)"                  ui_key ctrl+z
 ui_expect_new "Undo: Hide Body1" "the light bulb is the last undo step, no marker move left"
 ui_expect_new "Bodies shown: F2.b0, F4.b0" "Body1 shown by the undo"
+
+echo "--- Offset Plane and Extrude: a hidden origin stays hidden, picked from the browser (mitcad#1030)"
+ui_mark
+ui_step "offset plane (search)"          ui_command "Offset Plane"
+ui_expect_new "Command Offset Plane started" "Offset Plane started"
+expect_none "$ORIGIN_SHOWN" "the hidden origin stays hidden for the plane input"
+expect_none "Datum xy at" "no origin plane in the view"
+ui_pick_origin_row XY
+ui_expect_new "Offset Plane Plane: 1 plane [plane xy]" "XY picked from the browser while the origin is hidden"
+expect_none "$ORIGIN_SHOWN" "the origin still hidden after the pick"
+ui_mark
+ui_step "cancel (Esc)"                   ui_key Escape
+ui_expect_new "Command Offset Plane cancelled" "Offset Plane cancelled"
+extrude_square
+ui_step "Start: Object"                  ui_choose "Panel Extrude input start" 2
+ui_expect_new "Extrude: Start = Object" "the start is an object"
+expect_none "$ORIGIN_SHOWN" "the hidden origin stays hidden for Start Object"
+expect_none "Datum xy at" "no origin plane in the view"
+ui_pick_origin_row XY
+ui_expect_new "Extrude Start Object: 1 plane [plane xy]" "XY picked from the browser as the start"
+expect_none "$ORIGIN_SHOWN" "the origin still hidden after the pick"
+ui_mark
+ui_step "cancel (Esc)"                   ui_key Escape
+ui_expect_new "Command Extrude cancelled" "Extrude cancelled"
+
+echo "--- Offset Plane: a shown origin stays shown, picked in the view (mitcad#1030)"
+ui_mark
+ui_step "show the origin"                ui_click_logged "Browser eye Root/Origin"
+ui_expect_new "Visibility Root/Origin: shown" "the Origin folder's light bulb on"
+ui_expect_new "Design origin shown in the view; the Origin folder's light bulb on" "the origin shown"
+ui_mark
+ui_step "offset plane (search)"          ui_command "Offset Plane"
+ui_expect_new "Command Offset Plane started" "Offset Plane started"
+ui_step "pick XY in the view"            ui_click_logged "Datum xy"
+ui_expect_new "Offset Plane Plane: 1 plane [plane xy]" "XY picked in the view"
+ui_step "cancel (Esc)"                   ui_key Escape
+ui_expect_new "Command Offset Plane cancelled" "Offset Plane cancelled"
+expect_none "Design origin hidden in the view" "the shown origin stayed shown during and after the command"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_stop_app
 

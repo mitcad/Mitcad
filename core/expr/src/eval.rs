@@ -367,26 +367,26 @@ impl EvalError {
 impl fmt::Display for EvalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnknownReference { name, .. } => write!(f, "unknown parameter '{name}'")?,
+            Self::UnknownReference { name, .. } => write!(f, "unknown parameter {name}")?,
             Self::DimensionMismatch {
                 operation,
                 left,
                 right,
                 ..
-            } => write!(f, "cannot apply '{operation}' to {left} and {right}")?,
+            } => write!(f, "cannot apply “{operation}” to {left} and {right}")?,
             Self::NotDimensionless {
                 operation, found, ..
-            } => write!(f, "'{operation}' needs a unitless value, found {found}")?,
+            } => write!(f, "“{operation}” needs a unitless value, found {found}")?,
             Self::NotAngle {
                 function, found, ..
-            } => write!(f, "'{function}' needs an angle, found {found}")?,
+            } => write!(f, "{function} needs an angle, found {found}")?,
             Self::InvalidExponent { exponent, .. } => write!(
                 f,
                 "a value with units can only be raised to a simple fraction, not {exponent}"
             )?,
             Self::DimensionOverflow { .. } => f.write_str("unit exponent out of range")?,
             Self::DivisionByZero { .. } => f.write_str("division by zero")?,
-            Self::Domain { operation, .. } => write!(f, "argument out of range for '{operation}'")?,
+            Self::Domain { operation, .. } => write!(f, "argument out of range for “{operation}”")?,
             Self::NotFinite { .. } => f.write_str("result is not a finite number")?,
             Self::WrongDimension { expected, found } => {
                 write!(f, "expected {expected}, found {found}")?;
@@ -394,16 +394,13 @@ impl fmt::Display for EvalError {
             Self::NotUnitless { hint, .. } => f.write_str(hint)?,
             Self::LocalShadowsParameter { name, .. } => write!(
                 f,
-                "'{name}' is a parameter: give the value in 'let' another name"
+                "{name} is a parameter: give the value in 'let' another name"
             )?,
             Self::NoMatch { function, .. } => {
                 if *function == "ifs" {
                     f.write_str("no condition of 'ifs' is true")?;
                 } else {
-                    write!(
-                        f,
-                        "no value of '{function}' matches and there is no default"
-                    )?;
+                    write!(f, "no value of {function} matches and there is no default")?;
                 }
             }
             Self::NotNumber { .. } => f.write_str("text where a number is expected")?,
@@ -411,11 +408,11 @@ impl fmt::Display for EvalError {
                 f.write_str("a number where text is expected: make text of it with text(…) or &")?
             }
             Self::MixedValues { operation, .. } => {
-                write!(f, "'{operation}' cannot mix text and numbers")?;
+                write!(f, "“{operation}” cannot mix text and numbers")?;
             }
             Self::InvalidFormat { format, .. } => write!(
                 f,
-                "'{format}' is not a number format such as \"0.00\" or \"0.0 in\""
+                "“{format}” is not a number format such as \"0.00\" or \"0.0 in\""
             )?,
             Self::TextTooLong { .. } => {
                 write!(f, "the text is longer than {MAX_TEXT_BYTES} bytes")?;
@@ -425,15 +422,15 @@ impl fmt::Display for EvalError {
                 "{table}.{column} is a column: look a value up with XLOOKUP or INDEX"
             )?,
             Self::NotColumn { function, .. } => {
-                write!(f, "'{function}' needs a column such as Table.Column here")?;
+                write!(f, "{function} needs a column such as Table.Column here")?;
             }
-            Self::UnknownTable { name, .. } => write!(f, "unknown table '{name}'")?,
+            Self::UnknownTable { name, .. } => write!(f, "unknown table {name}")?,
             Self::UnknownColumn { table, column, .. } => {
-                write!(f, "table '{table}' has no column '{column}'")?;
+                write!(f, "table {table} has no column {column}")?;
             }
             Self::DifferentTables { function, .. } => write!(
                 f,
-                "'{function}' needs its keys and results from columns of one table"
+                "{function} needs its keys and results from columns of one table"
             )?,
             Self::NotFound {
                 column, key, mode, ..
@@ -468,20 +465,17 @@ impl fmt::Display for EvalError {
                 };
                 write!(
                     f,
-                    "'{function}' takes the mode {modes}, not {}",
+                    "{function} takes the mode {modes}, not {}",
                     format_number(*mode, DEFAULT_DECIMALS)
                 )?;
             }
             Self::LookupUnsupported { what, .. } => write!(f, "{what} is not supported")?,
             Self::ApproximateText { function, .. } => write!(
                 f,
-                "'{function}' finds the next smaller or larger value only for a number key"
+                "{function} finds the next smaller or larger value only for a number key"
             )?,
             Self::NoValues { function, .. } => {
-                write!(
-                    f,
-                    "'{function}' has no values: the column's cells are empty"
-                )?;
+                write!(f, "{function} has no values: the column's cells are empty")?;
             }
         }
         if let Some(span) = self.span() {

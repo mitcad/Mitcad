@@ -20,6 +20,8 @@ RIGHT='F2:side(c2[c1,c3])'
 ui_start_display
 ui_start_app --demo
 ui_step "fit (F6)"                         ui_key F6
+# The commands show the origin only as its light bulb does (mitcad#1030).
+ui_show_origin
 
 echo "--- Plane at Angle: about X, 30 degrees from XY"
 ui_step "plane at angle (search)"          ui_command "Plane at Angle"
@@ -94,8 +96,9 @@ ui_step "type 25"                          ui_type_in "Panel Offset Plane input 
 ui_expect_log "Preview Offset Plane: ok" "previewed"
 ui_step "OK (Enter)"                       ui_key Return
 ui_expect_log "Edited F8" "Plane2 edited"
-# Measure picks the origin's planes once its light bulb shows them.
-ui_step "show the origin"                  ui_click_logged "Browser eye Root/Origin"
+# Measure picks the origin's planes as its light bulb shows them (on
+# since the start).
+ui_show_origin
 ui_step "measure (I)"                      ui_key i
 ui_expect_log "Command Measure started" "measure started"
 ui_step "pick Plane2"                      ui_click_logged "Datum F8"

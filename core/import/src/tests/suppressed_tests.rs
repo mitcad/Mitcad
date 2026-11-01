@@ -70,7 +70,7 @@ fn a_suppressed_item_comes_in_as_a_suppressed_feature_that_builds_when_unsuppres
         extrude(4, 0, "JoinFeatureOperation", "d2"),
     ];
     let mut doc = Document::new(TestKernel::default());
-    let dir = std::env::temp_dir().join(format!("mitcad-learn-suppressed-{}", std::process::id()));
+    let dir = mitcad_model::testing::unique_temp_path("learn-suppressed");
     let options = Options {
         learn: Some(crate::learn::LearnOptions {
             dir: dir.clone(),
@@ -139,7 +139,7 @@ fn a_suppressed_item_comes_in_as_a_suppressed_feature_that_builds_when_unsuppres
         "{text}"
     );
     assert!(
-        text.contains("suppressed in the file: 1 modelling items as suppressed features, 1 as"),
+        text.contains("suppressed in the file: 1 modeling items as suppressed features, 1 as"),
         "{text}"
     );
     // The bodies are the file's: the join after it is the last item.
@@ -158,12 +158,13 @@ fn a_suppressed_item_comes_in_as_a_suppressed_feature_that_builds_when_unsuppres
         "{block}: {text}"
     );
     // Unsuppressed, it builds: the block 30 mm high, its note still there
-    // (not checked) as a warning.
+    // (not checked) as information (mitcad#1040).
     doc.set_suppressed(uid, false).unwrap();
     let entry = timeline_item(&doc, "Extrude2");
-    assert_eq!(entry["status"], "warning", "{entry}");
+    assert_eq!(entry["status"], "ok", "{entry}");
+    assert_eq!(entry["level"], "info", "{entry}");
     assert_eq!(
-        entry["error"], "Suppressed in the file; not checked against the file's history",
+        entry["import"], "Suppressed in the file; not checked against the file's history",
         "{entry}"
     );
     let unsuppressed = volume(&doc);
@@ -219,7 +220,7 @@ fn items_suppressed_in_a_row_are_built_on_each_other_and_suppressed_together() {
     let sketch = timeline_item(&doc, "Sketch3");
     assert_eq!(sketch["status"], "suppressed", "{sketch}");
     assert!(
-        sketch["error"]
+        sketch["import"]
             .as_str()
             .is_some_and(|e| e.ends_with("; suppressed in the file")),
         "{sketch}"
@@ -244,7 +245,7 @@ fn items_suppressed_in_a_row_are_built_on_each_other_and_suppressed_together() {
         let uid: FeatureUid = report.items[i].features[0].parse().unwrap();
         doc.set_suppressed(uid, false).unwrap();
     }
-    assert_eq!(timeline_item(&doc, "Extrude3")["status"], "warning");
+    assert_eq!(timeline_item(&doc, "Extrude3")["level"], "info");
     let unsuppressed = volume(&doc);
     assert!(
         (unsuppressed
@@ -340,7 +341,7 @@ fn items_after_the_file_marker_come_in_as_features_after_the_marker() {
         }
     );
     assert!(
-        text.contains("rolled back in the file: 1 modelling items as features after the marker"),
+        text.contains("rolled back in the file: 1 modeling items as features after the marker"),
         "{text}"
     );
     // The marker is before the join: the sketch and the block.

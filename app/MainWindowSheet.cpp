@@ -87,7 +87,7 @@ void MainWindow::registerSheetActions() {
   show.keywords = {QStringLiteral("sheet metal"), QStringLiteral("folded"), QStringLiteral("flat")};
   m_registry->add(show);
 
-  CommandDef exporting = action("sheet.export_dxf", tr("Export Flat Pattern"), "export-dxf", [this] {
+  CommandDef exporting = action("sheet.export_dxf", tr("Export Flat Pattern…"), "export-dxf", [this] {
     QJsonObject sheet = sheetBody(true);
     if (sheet.isEmpty()) {
       sheet = sheetBody(false);
@@ -98,6 +98,10 @@ void MainWindow::registerSheetActions() {
     }
     exportFlatPattern(sheet.value(QStringLiteral("body")).toString());
   });
+  // The Make tab's Laser group (mitcad#1049).
+  exporting.tab = QStringLiteral("MAKE");
+  exporting.group = QStringLiteral("LASER");
+  exporting.pinned = true;
   exporting.tooltip = tr("Writes the selected sheet's Flat Pattern to a DXF file");
   exporting.keywords = {QStringLiteral("sheet metal"), QStringLiteral("dxf"), QStringLiteral("laser"),
                         QStringLiteral("drawing")};

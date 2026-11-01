@@ -27,6 +27,7 @@
 
 #include "../browser/DocumentHost.hpp"
 #include "../framework/CommandRegistry.hpp"
+#include "../framework/Theme.hpp"
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
 #include "Commands.hpp"
@@ -287,7 +288,7 @@ void findCandidates(CommandState& state, const CommandContext& context, const QS
     if (!warnings.isEmpty()) {
       qDebug().noquote() << QStringLiteral("%1 warning: %2").arg(command, warnings.join(QStringLiteral("; ")));
     }
-    qDebug().noquote() << QStringLiteral("%1 candidates: %2, centre distance %3")
+    qDebug().noquote() << QStringLiteral("%1 candidates: %2, center distance %3")
                               .arg(command)
                               .arg(answer.value(QStringLiteral("candidates")).toArray().size())
                               .arg(lengthText(answer.value(QStringLiteral("center_distance")).toDouble(), context));
@@ -417,7 +418,7 @@ CommandDef gearPairCommand(const CommandContext& context, DocumentHost& host) {
   def.section = QStringLiteral("machine");
   def.subgroup = QStringLiteral("Machine Elements");
   def.keywords = {QStringLiteral("gear"), QStringLiteral("mesh"), QStringLiteral("ratio"), QStringLiteral("transmission"),
-                  QStringLiteral("centre distance")};
+                  QStringLiteral("centre distance"), QStringLiteral("center distance")};
   def.sketchCommand = true;
   def.previewAsNew = true; // both parts drawn as a preview, framed (mitcad#656)
   const auto find = [](CommandState& state, const CommandContext& model) {
@@ -453,14 +454,14 @@ CommandDef gearPairCommand(const CommandContext& context, DocumentHost& host) {
       textInput(QStringLiteral("ratio"), QObject::tr("Ratio"), QStringLiteral("1 : 2")).withOnChange(find),
       choiceInput(kCandidate, QObject::tr("Gears"), {}, QString())
           .withChoiceColumns(
-              {QObject::tr("Module"), QObject::tr("Teeth"), QObject::tr("Ratio"), QObject::tr("Centre distance")},
+              {QObject::tr("Module"), QObject::tr("Teeth"), QObject::tr("Ratio"), QObject::tr("Center distance")},
               // The distance itself in its heading (mitcad#656).
               [&context](const CommandState& state) {
                 const QJsonValue distance = state.object(kCandidates).value(QStringLiteral("center_distance"));
                 return QStringList{QObject::tr("Module"), QObject::tr("Teeth"), QObject::tr("Ratio"),
                                    distance.isDouble()
-                                       ? QObject::tr("Centre distance %1").arg(shortLength(distance.toDouble(), context))
-                                       : QObject::tr("Centre distance")};
+                                       ? QObject::tr("Center distance %1").arg(shortLength(distance.toDouble(), context))
+                                       : QObject::tr("Center distance")};
               })
           .withChoices([&context](const CommandState& state) {
             Choices rows;
@@ -654,7 +655,8 @@ CommandDef beltDriveCommand(const CommandContext& context) {
               verdict[0] = verdict[0].toUpper();
               const bool fits = belt.value(QStringLiteral("fit")).toString() == QStringLiteral("ok");
               shown << QStringLiteral("<b style=\"color:%1\">%2</b>")
-                           .arg(fits ? QStringLiteral("#1a7f37") : QStringLiteral("#b35900"), verdict.toHtmlEscaped());
+                           .arg(themeColor(fits ? ColorRole::SuccessText : ColorRole::WarningText).name(),
+                                verdict.toHtmlEscaped());
             }
             if (belt.value(QStringLiteral("width")).isDouble()) {
               shown << QObject::tr("%1 wide").arg(shortLength(belt.value(QStringLiteral("width")).toDouble(), model))

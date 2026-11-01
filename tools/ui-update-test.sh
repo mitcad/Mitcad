@@ -64,9 +64,9 @@ done
 [ -x "$RELEASE_TOOL" ] || ui_fail "no release tool at $RELEASE_TOOL (UI_RELEASE_TOOL)"
 
 ui_start_display
-VERSION=$("$REAL_APP" --version | sed -n 's/^Mitcad //p')
+VERSION=$("$REAL_APP" --version | sed -n 's/^MitCad //p')
 [ -n "$VERSION" ] || ui_fail "the build's version is unknown"
-echo "ok   the build is Mitcad $VERSION; the app takes itself for 0.0.0"
+echo "ok   the build is MitCad $VERSION; the app takes itself for 0.0.0"
 
 # A certificate for 127.0.0.1 and release keys, made for this run.
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 2 -subj /CN=localhost \
@@ -153,7 +153,7 @@ if [ "$HOOKS" = OFF ]; then
   fresh_settings
   # Its check would go to GitHub: checks off, the source is logged anyway.
   MITCAD_NO_UPDATE_CHECK=1 ui_start_app
-  ui_expect_log "Updates: Mitcad $VERSION for linux-x64, " "its own version, not MITCAD_TEST_VERSION"
+  ui_expect_log "Updates: MitCad $VERSION for linux-x64, " "its own version, not MITCAD_TEST_VERSION"
   ui_expect_log "Update source: manifest at https://github.com/mitcad/Mitcad/releases/latest/download/update-manifest.json, releases at https://api.github.com/repos/mitcad/Mitcad/releases?per_page=20, " \
     "GitHub's addresses, not MITCAD_UPDATE_URL nor MITCAD_UPDATE_RELEASES_URL"
   ui_expect_log "Update source: this build ignores MITCAD_UPDATE_URL, MITCAD_UPDATE_RELEASES_URL, MITCAD_UPDATE_TEST_KEY, MITCAD_UPDATE_TEST_CA, MITCAD_TEST_VERSION (MITCAD_UPDATE_TEST_HOOKS off)" \
@@ -204,7 +204,7 @@ fi
 echo "--- 2. A development build announces the release"
 fresh_settings
 ui_start_app
-ui_expect_log "Updates: Mitcad 0.0.0 for linux-x64, announce only: not an AppImage" "a development build announces only"
+ui_expect_log "Updates: MitCad 0.0.0 for linux-x64, announce only: not an AppImage" "a development build announces only"
 ui_expect_log "Update source: manifest at $BASE/redirect/stable/update-manifest.json, releases at $BASE/releases.json, " \
   "the test build takes the test's addresses"
 ui_expect_log " built-in release key(s) and the test key" "and the test's key"
@@ -213,16 +213,16 @@ ui_expect_log "Update source: this test build reads MITCAD_UPDATE_URL, MITCAD_UP
 ui_expect_log "Update request redirected to https://127.0.0.1" "the HTTPS redirect is followed"
 ui_expect_log "Update notice (offer): MitCad $VERSION is available (this is 0.0.0). Download it from its release page. MitCad checks for updates once a day; Tools › Preferences turns that off. [Release Notes, Skip This Version, Later]" \
   "the notice: no Install, the release page, where checks are turned off"
-grep -qxF "GET /redirect/stable/update-manifest.json ua=Mitcad/0.0.0 (linux-x64; stable) lang=* cookie=-" \
+grep -qxF "GET /redirect/stable/update-manifest.json ua=MitCad/0.0.0 (linux-x64; stable) lang=* cookie=-" \
   "$WORK/requests.log" || ui_fail "the request said more: $(cat "$WORK/requests.log")"
-grep -qxF "GET /stable/update-manifest.json ua=Mitcad/0.0.0 (linux-x64; stable) lang=* cookie=-" \
+grep -qxF "GET /stable/update-manifest.json ua=MitCad/0.0.0 (linux-x64; stable) lang=* cookie=-" \
   "$WORK/requests.log" || ui_fail "the redirect was not followed: $(cat "$WORK/requests.log")"
 [ "$(requests)" = 2 ] || ui_fail "more requests than the manifest: $(cat "$WORK/requests.log")"
 echo "ok   only the version, the platform and the channel are sent"
 [ -n "$(setting lastCheck)" ] || ui_fail "the check's time is not kept"
 ui_mark
 ui_step "skip this version (Alt+K)"      ui_key alt+k
-ui_expect_new "Update: skipping Mitcad $VERSION" "skipped"
+ui_expect_new "Update: skipping MitCad $VERSION" "skipped"
 [ "$(setting skipped)" = "$VERSION" ] || ui_fail "the skipped version is not kept"
 echo "ok   the skipped version is kept"
 ui_stop_app
@@ -241,12 +241,12 @@ cp "$WWW/stable/update-manifest.json" "$WORK/good-manifest.json"
 sed -i 's/"date": "2026-10-06"/"date": "2026-10-07"/' "$WWW/stable/update-manifest.json"
 ui_mark
 ui_step "check for updates (search)"     ui_command "Check for Updates"
-ui_expect_new "Update notice (error): The update check failed: The update manifest was refused: the update manifest's signature does not match Mitcad's release key. [Close]" \
+ui_expect_new "Update notice (error): The update check failed: The update manifest was refused: the update manifest's signature does not match MitCad's release key. [Close]" \
   "a tampered manifest is refused"
 release stable "$VERSION" "$OTHER_SEED" linux-x64 "$WORK/new/Mitcad.AppImage"
 ui_mark
 ui_step "check for updates (search)"     ui_command "Check for Updates"
-ui_expect_new "the update manifest's signature does not match Mitcad's release key. [Close]" \
+ui_expect_new "the update manifest's signature does not match MitCad's release key. [Close]" \
   "a manifest signed with another key is refused"
 release stable 0.0.0 "$SEED"
 ui_mark
@@ -268,9 +268,9 @@ MITCAD_RELEASE_KEY=$SEED "$RELEASE_TOOL" manifest --version "$VERSION" --date 20
   ui_fail "mitcad-release could not sign the expired manifest"
 fresh_settings
 MITCAD_UPDATE_URL=$BASE/expired/update-manifest.json ui_start_app
-ui_expect_log "Update manifest: Mitcad $VERSION of 2020-01-06 (current, expired on 2020-02-01), no download for this platform" \
+ui_expect_log "Update manifest: MitCad $VERSION of 2020-01-06 (current, expired on 2020-02-01), no download for this platform" \
   "the automatic check reads the expired manifest"
-ui_expect_log "Update check: the manifest of Mitcad $VERSION expired on 2020-02-01" "and offers nothing"
+ui_expect_log "Update check: the manifest of MitCad $VERSION expired on 2020-02-01" "and offers nothing"
 sleep 1
 grep -qF "Update notice (offer)" "$UI_LOG" && ui_fail "an automatic check offered the release of an expired manifest"
 echo "ok   no notice"
@@ -310,7 +310,7 @@ ui_mark
 ui_step "check for updates (search)"     ui_command "Check for Updates"
 ui_expect_new "Update notice (offer): MitCad $BETA is available (this is 0.0.0). It is a pre-release. Download it from its release page. [Release Notes, Skip This Version, Later]" \
   "the newest release of the list, a beta"
-grep -qxF "GET /releases.json ua=Mitcad/0.0.0 (linux-x64; prerelease) lang=* cookie=-" "$WORK/requests.log" ||
+grep -qxF "GET /releases.json ua=MitCad/0.0.0 (linux-x64; prerelease) lang=* cookie=-" "$WORK/requests.log" ||
   ui_fail "the list of releases was not asked for: $(cat "$WORK/requests.log")"
 echo "ok   the list of releases, then the beta's manifest"
 # A list whose error message carries markup: shown as text (mitcad#938).
@@ -347,7 +347,7 @@ fresh_settings
 export UI_GDB=0
 MITCAD_UPDATE_URL=$BASE/appimage/update-manifest.json UI_APP=$APPS/Mitcad.AppImage \
   ui_start_app --open "$WORK/block.mitcad" --set d3=35
-ui_expect_log "Updates: Mitcad 0.0.0 for linux-x64, the AppImage $APPS/Mitcad.AppImage" "a per-user AppImage can update itself"
+ui_expect_log "Updates: MitCad 0.0.0 for linux-x64, the AppImage $APPS/Mitcad.AppImage" "a per-user AppImage can update itself"
 ui_expect_log "Update notice (offer): MitCad $VERSION is available (this is 0.0.0). MitCad checks for updates once a day; Tools › Preferences turns that off. [Release Notes, Install, Skip This Version, Later]" \
   "the notice offers Install"
 ui_mark
@@ -403,7 +403,7 @@ ui_stop_app
 echo "--- 6. An AppImage the user cannot replace only announces"
 chmod 555 "$APPS"
 UI_APP=$APPS/Mitcad.AppImage ui_start_app
-ui_expect_log "Updates: Mitcad 0.0.0 for linux-x64, announce only: the user cannot write to the AppImage $APPS/Mitcad.AppImage or its folder" \
+ui_expect_log "Updates: MitCad 0.0.0 for linux-x64, announce only: the user cannot write to the AppImage $APPS/Mitcad.AppImage or its folder" \
   "a read-only AppImage announces only"
 ui_mark
 ui_step "check for updates (search)"     ui_command "Check for Updates"

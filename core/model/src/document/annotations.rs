@@ -359,7 +359,7 @@ pub fn datum_letter(text: &str) -> Result<String, String> {
         Ok(letter.to_owned())
     } else {
         Err(format!(
-            "a datum is one or two capital letters but I, O and Q, got '{letter}'"
+            "a datum is one or two capital letters but I, O and Q, got “{letter}”"
         ))
     }
 }
@@ -386,7 +386,8 @@ fn is_false(value: &bool) -> bool {
 /// leader note's text on one pick; a datum label (ISO 5459) or a
 /// feature control frame (ISO 1101) on one pick (mitcad#702, phase 2); a
 /// hole callout on a hole's round face or edge, its text from the feature
-/// that made the hole (mitcad#902).
+/// that made the hole (mitcad#902); a material note or a process note on a
+/// body, its text the body's material or its print settings (mitcad#1049).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MeasureKind {
@@ -401,6 +402,12 @@ pub enum MeasureKind {
     Datum,
     Frame,
     HoleCallout,
+    /// A note of the body's material, written from the design (mitcad#1049).
+    Material,
+    /// A note of the body's print settings: its printer and process
+    /// profiles and the values set on the body, its occurrences or its
+    /// components (mitcad#1049).
+    ProcessNote,
 }
 
 impl MeasureKind {
@@ -429,6 +436,8 @@ impl MeasureKind {
             Self::Datum => "datum",
             Self::Frame => "frame",
             Self::HoleCallout => "hole_callout",
+            Self::Material => "material",
+            Self::ProcessNote => "process_note",
         }
     }
 
@@ -446,6 +455,8 @@ impl MeasureKind {
             Self::Datum => "Datum",
             Self::Frame => "Frame",
             Self::HoleCallout => "HoleCallout",
+            Self::Material => "Material",
+            Self::ProcessNote => "ProcessNote",
         }
     }
 
@@ -460,6 +471,8 @@ impl MeasureKind {
                 | Self::Datum
                 | Self::Frame
                 | Self::HoleCallout
+                | Self::Material
+                | Self::ProcessNote
         )
     }
 
@@ -474,13 +487,24 @@ impl MeasureKind {
     }
 
     /// Whether it is drawn on a leader to its pick (a note, a datum label,
-    /// a feature control frame, a hole callout) rather than measured: no
-    /// value of its own.
+    /// a feature control frame, a hole callout, a material or process
+    /// note) rather than measured: no value of its own.
     pub fn is_leader(self) -> bool {
         matches!(
             self,
-            Self::Note | Self::Datum | Self::Frame | Self::HoleCallout
+            Self::Note
+                | Self::Datum
+                | Self::Frame
+                | Self::HoleCallout
+                | Self::Material
+                | Self::ProcessNote
         )
+    }
+
+    /// Whether its text is written from the body it points at, as the
+    /// design has it now (mitcad#1049): a material note, a process note.
+    pub fn is_body_note(self) -> bool {
+        matches!(self, Self::Material | Self::ProcessNote)
     }
 
     /// Whether a feature control frame can stand under it (`on`): a
@@ -721,7 +745,7 @@ pub fn normalized_color(text: &str) -> Result<String, String> {
     if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
         Ok(format!("#{}", hex.to_ascii_lowercase()))
     } else {
-        Err(format!("a colour is \"#rrggbb\" or \"auto\", got '{text}'"))
+        Err(format!("a color is \"#rrggbb\" or \"auto\", got “{text}”"))
     }
 }
 
@@ -752,6 +776,14 @@ pub fn automatic_text_height(size: Option<f64>) -> f64 {
         .copied()
         .find(|h| *h <= size / 50.0 + 1e-9)
         .unwrap_or(TEXT_HEIGHTS[0])
+}
+
+/// A material or process note in words, as refusals name it.
+pub fn body_note_words(kind: MeasureKind) -> &'static str {
+    match kind {
+        MeasureKind::ProcessNote => "process note",
+        _ => "material note",
+    }
 }
 
 /// A group's name trimmed, none when empty.
@@ -842,7 +874,7 @@ impl Annotation {
         }
         let color = normalized_color(&self.color)?;
         if color != self.color {
-            return Err(format!("the colour is written \"{color}\""));
+            return Err(format!("the color is written \"{color}\""));
         }
         if let Some(group) = &self.group
             && normalized_group(Some(group.as_str())).as_deref() != Some(group.as_str())
@@ -850,6 +882,9 @@ impl Annotation {
             return Err("a group has a name without spaces around it".to_owned());
         }
         self.a.check()?;
+        if self.kind.is_body_note() && self.a.body.is_none() {
+            return Err(format!("a {} points at a body", body_note_words(self.kind)));
+        }
         match (&self.b, self.kind.single()) {
             (Some(b), false) => b.check()?,
             (None, true) => {}
@@ -892,6 +927,8 @@ impl Annotation {
                 | MeasureKind::Datum
                 | MeasureKind::Frame
                 | MeasureKind::HoleCallout
+                | MeasureKind::Material
+                | MeasureKind::ProcessNote
                 | MeasureKind::Radius
                 | MeasureKind::Diameter => {
                     return Err(format!(
@@ -956,8 +993,9 @@ impl Annotation {
                         return Err("a datum's letter is written without spaces".to_owned());
                     }
                 }
-                // Its text comes from the hole's feature (mitcad#902).
-                MeasureKind::HoleCallout => {}
+                // Its text comes from the hole's feature (mitcad#902), a
+                // material or process note's from its body (mitcad#1049).
+                MeasureKind::HoleCallout | MeasureKind::Material | MeasureKind::ProcessNote => {}
                 _ => {
                     self.frame
                         .as_ref()
@@ -1070,7 +1108,24 @@ impl<K: Kernel> Document<K> {
     /// colour [`AUTO_COLOR`]; the group is trimmed. Returns its
     /// name. Its picks are not checked against the model here: the API
     /// measures them first.
-    pub fn add_annotation(&mut self, mut annotation: Annotation) -> Result<String, ModelError> {
+    pub fn add_annotation(&mut self, annotation: Annotation) -> Result<String, ModelError> {
+        let annotation = self.annotation_to_add(annotation)?;
+        let name = annotation.name.clone();
+        let label = format!("Add {name}");
+        self.apply_with(|state| {
+            state.annotations.push(annotation);
+            // A frame under no dimension stands on its leader.
+            settle_frames(&mut state.annotations);
+            Ok((label, (), false))
+        })?;
+        Ok(name)
+    }
+
+    /// The annotation as [`Document::add_annotation`] would add it — its
+    /// name, colour, group and frame as they would be stored — or why it
+    /// would be refused, without adding it (mitcad#1097: the preview of
+    /// `add_annotation`, which then cannot differ from what is added).
+    pub fn annotation_to_add(&self, mut annotation: Annotation) -> Result<Annotation, ModelError> {
         annotation.name = annotation.name.trim().to_owned();
         if annotation.name.is_empty() {
             // A datum by its letter (`DatumA`) where that name is free.
@@ -1097,10 +1152,7 @@ impl<K: Kernel> Document<K> {
             )));
         }
         if self.annotation_index(&annotation.name).is_ok() {
-            return Err(invalid(format!(
-                "an annotation '{}' exists",
-                annotation.name
-            )));
+            return Err(invalid(format!("an annotation {} exists", annotation.name)));
         }
         annotation.color = if annotation.color.trim().is_empty() {
             AUTO_COLOR.to_owned()
@@ -1110,15 +1162,14 @@ impl<K: Kernel> Document<K> {
         annotation.group = normalized_group(annotation.group.as_deref());
         annotation.normalize_frame();
         annotation.check().map_err(invalid)?;
-        let name = annotation.name.clone();
-        let label = format!("Add {name}");
-        self.apply_with(|state| {
-            state.annotations.push(annotation);
-            // A frame under no dimension stands on its leader.
-            settle_frames(&mut state.annotations);
-            Ok((label, (), false))
-        })?;
-        Ok(name)
+        // A frame under no dimension stands on its leader, as
+        // `settle_frames` leaves it once added.
+        if let Some(on) = annotation.on.clone()
+            && !self.annotation(&on).is_ok_and(|a| a.kind.takes_frame())
+        {
+            annotation.on = None;
+        }
+        Ok(annotation)
     }
 
     /// Adds a measurement, shown; an undo step `Add Distance1` that
@@ -1151,7 +1202,7 @@ impl<K: Kernel> Document<K> {
         for name in names {
             let i = self.annotation_index(name)?;
             if indices.contains(&i) {
-                return Err(invalid(format!("'{name}' is named twice")));
+                return Err(invalid(format!("{name} is named twice")));
             }
             indices.push(i);
         }
@@ -1184,10 +1235,7 @@ impl<K: Kernel> Document<K> {
         // before the frames referring to the old one would follow it.
         for (i, annotation) in changed.iter().enumerate() {
             if changed[..i].iter().any(|a| a.name == annotation.name) {
-                return Err(invalid(format!(
-                    "an annotation '{}' exists",
-                    annotation.name
-                )));
+                return Err(invalid(format!("an annotation {} exists", annotation.name)));
             }
             if let Some(letter) = &annotation.letter
                 && changed[..i]
@@ -1308,7 +1356,7 @@ impl<K: Kernel> Document<K> {
             return Ok(());
         }
         if self.annotation_index(new_name).is_ok() {
-            return Err(invalid(format!("an annotation '{new_name}' exists")));
+            return Err(invalid(format!("an annotation {new_name} exists")));
         }
         self.edit_annotations(&[name.to_owned()], Some(format!("Rename {name}")), |a| {
             new_name.clone_into(&mut a.name);
@@ -1322,7 +1370,7 @@ impl<K: Kernel> Document<K> {
     pub fn set_measurement_color(&mut self, name: &str, color: &str) -> Result<(), ModelError> {
         self.annotation_index(name)?;
         let color = normalized_color(color).map_err(invalid)?;
-        self.edit_annotations(&[name.to_owned()], Some(format!("Colour of {name}")), |a| {
+        self.edit_annotations(&[name.to_owned()], Some(format!("Color of {name}")), |a| {
             a.color.clone_from(&color);
             Ok(())
         })
@@ -1389,7 +1437,7 @@ impl<K: Kernel> Document<K> {
             .annotations
             .iter()
             .position(|m| m.name == name)
-            .ok_or_else(|| invalid(format!("there is no annotation '{name}'")))
+            .ok_or_else(|| invalid(format!("there is no annotation {name}")))
     }
 }
 
@@ -1491,6 +1539,38 @@ mod tests {
         assert_eq!(MeasureKind::Diameter.default_prefix(), "Ø");
         assert_eq!(MeasureKind::Radius.default_prefix(), "R");
         assert!(!MeasureKind::Angle.is_length() && MeasureKind::Offset.is_length());
+        // mitcad#1049: a material note and a process note are leaders on
+        // one body, their text written from it.
+        for kind in [MeasureKind::Material, MeasureKind::ProcessNote] {
+            let json = serde_json::to_value(kind).unwrap();
+            assert_eq!(json, serde_json::json!(kind.key()));
+            assert_eq!(serde_json::from_value::<MeasureKind>(json).unwrap(), kind);
+            assert!(kind.single() && kind.is_leader() && kind.is_body_note());
+            assert!(!kind.is_note() && !kind.takes_frame() && !kind.is_length());
+        }
+        assert_eq!(MeasureKind::Material.key(), "material");
+        assert_eq!(MeasureKind::ProcessNote.key(), "process_note");
+        assert_eq!(MeasureKind::ProcessNote.name_stem(), "ProcessNote");
+        assert!(!MeasureKind::Note.is_body_note() && !MeasureKind::HoleCallout.is_body_note());
+    }
+
+    #[test]
+    fn a_material_or_process_note_points_at_a_body_and_has_no_text() {
+        for kind in [MeasureKind::Material, MeasureKind::ProcessNote] {
+            let mut note = Annotation::new("Material1", kind, AUTO_COLOR, body());
+            note.check().unwrap();
+            note.text = Some("PLA".to_owned());
+            assert!(note.check().unwrap_err().contains("no text of its own"));
+            note.text = None;
+            note.line_offset = Some(2.0);
+            assert!(note.check().unwrap_err().contains("no dimension line"));
+            note.line_offset = None;
+            note.a = MeasurePick {
+                datum: Some("xy".to_owned()),
+                ..MeasurePick::default()
+            };
+            assert!(note.check().unwrap_err().contains("points at a body"));
+        }
     }
 
     fn body() -> MeasurePick {

@@ -218,7 +218,7 @@ fn a_turned_tenon_runs_its_width_across_the_longest_edge() {
     let wide = add(&mut doc, joint(json!({"turned": true}))).unwrap();
     assert_eq!(
         error(&doc, wide),
-        "the tenon (40 x 8 mm) is larger than the end face (20 x 60 mm)"
+        "the tenon (40 × 8 mm) is larger than the end face (20 × 60 mm)"
     );
     let mut doc = boards();
     let turned = add(
@@ -235,7 +235,7 @@ fn a_tenon_larger_than_the_face_or_off_it_is_refused() {
     let large = add(&mut doc, joint(json!({"width": 70}))).unwrap();
     assert_eq!(
         error(&doc, large),
-        "the tenon (70 x 8 mm) is larger than the end face (60 x 20 mm)"
+        "the tenon (70 × 8 mm) is larger than the end face (60 × 20 mm)"
     );
     let off = add(&mut doc, joint(json!({"offset_width": 15}))).unwrap();
     assert_eq!(
@@ -334,4 +334,301 @@ fn editing_a_size_recomputes_both_bodies() {
     assert!(history(&doc, "F2.b0").starts_with("cut(box(F2"));
     let bounds = doc.body_shape(body("F1.b0")).unwrap().bounds.unwrap();
     assert!((bounds.max[0] - 30.0).abs() < 1e-9, "{bounds:?}");
+}
+
+// Several tenons along the face (mitcad#1063).
+
+/// The board kernel of `boards`: box faces on their bounds and the rail's
+/// end face's edges.
+fn board_kernel() -> MockKernel {
+    let kernel = MockKernel::default();
+    kernel.box_faces.set(true);
+    *kernel.curves.borrow_mut() = vec![
+        line([0.0, 0.0, 0.0], [0.0, 20.0, 0.0]),
+        line([0.0, 20.0, 0.0], [0.0, 20.0, 60.0]),
+        line([0.0, 20.0, 60.0], [0.0, 0.0, 60.0]),
+        line([0.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
+    ];
+    kernel
+}
+
+/// The middle and the size (along z, across y) on the rail's end of the
+/// rectangle of curves `c<first>` … `c<first + 3>` that MortiseTenon1 (F3)
+/// extruded: from the planes of its sides `c<first>` (starting at the
+/// corner at -width / 2, -thickness / 2) and `c<first + 2>` (at the
+/// opposite corner), which the kernel keeps with `measures_selections`.
+fn rectangle_at(doc: &Document<MockKernel>, first: usize) -> ([f64; 3], [f64; 2]) {
+    let side = |i: usize| {
+        let (a, b, c) = (first + i, first + (i + 3) % 4, first + (i + 1) % 4);
+        let name = format!("F3:side(c{a}[c{b},c{c}])");
+        doc.kernel()
+            .side_planes
+            .borrow()
+            .get(&name)
+            .unwrap_or_else(|| panic!("no plane of {name}"))
+            .origin
+    };
+    let (low, high) = (side(0), side(2));
+    (
+        std::array::from_fn(|i| (low[i] + high[i]) / 2.0),
+        [high[2] - low[2], low[1] - high[1]],
+    )
+}
+
+fn assert_near(got: &[f64], expected: &[f64], what: &str) {
+    assert!(
+        got.iter().zip(expected).all(|(g, e)| (g - e).abs() < 1e-6),
+        "{what}: {got:?} against {expected:?}"
+    );
+}
+
+/// The mortise_tenon definitions in a saved design.
+fn saved_joints(value: &Value, found: &mut Vec<Value>) {
+    match value {
+        Value::Object(object) => {
+            if object.get("type") == Some(&json!("mortise_tenon")) {
+                found.push(value.clone());
+            }
+            for v in object.values() {
+                saved_joints(v, found);
+            }
+        }
+        Value::Array(array) => {
+            for v in array {
+                saved_joints(v, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn three_tenons_along_the_end_face_each_with_its_mortise() {
+    let mut doc = boards();
+    doc.kernel().measures_selections.set(true);
+    let uid = add(
+        &mut doc,
+        joint(json!({"width": 10, "count": 3, "start_offset": 5, "end_offset": 5})),
+    )
+    .unwrap();
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    // One extrusion of the three mortises, one of the three tenons.
+    assert_extrusions(&doc, &[(0.0, 25.1), (-0.5, 25.5)]);
+    // Along the rail's height (z) from 5 to 55: middles at z = 10, 30 and
+    // 50, in the middle of the 20 mm across (y = 10). Tenon k has the
+    // curves c(1 + 20 k) on, its mortise c(11 + 20 k) on.
+    for (k, z) in [10.0, 30.0, 50.0].into_iter().enumerate() {
+        let (middle, size) = rectangle_at(&doc, 1 + 20 * k);
+        assert_near(&middle, &[0.0, 10.0, z], &format!("tenon {k}"));
+        assert_near(&size, &[10.0, 8.0], &format!("tenon {k}"));
+        let (middle, size) = rectangle_at(&doc, 11 + 20 * k);
+        assert_near(&middle, &[0.0, 10.0, z], &format!("mortise {k}"));
+        assert_near(&size, &[10.2, 8.2], &format!("mortise {k}"));
+        let n = 20 * k;
+        let tenon = format!("F3:side(c{}[c{},c{}])", n + 1, n + 4, n + 2);
+        assert!(has_face(&doc, "F1.b0", &tenon), "{tenon}");
+        let mortise = format!("F3:side(c{}[c{},c{}])", n + 11, n + 14, n + 12);
+        assert!(has_face(&doc, "F2.b0", &mortise), "{mortise}");
+    }
+    // The tool a preview of the same joint shows: the three mortises.
+    let mut preview = boards();
+    preview
+        .preview_add(
+            &def(joint(
+                json!({"width": 10, "count": 3, "start_offset": 5, "end_offset": 5}),
+            )),
+            None,
+        )
+        .unwrap();
+    let tool = preview.preview_tool().expect("the mortises");
+    assert_eq!(tool.parts.len(), 3, "{}", tool.history);
+    for (part, z) in tool.parts.iter().zip([10.0, 30.0, 50.0]) {
+        let b = part.bounds.unwrap();
+        let middle: [f64; 3] = std::array::from_fn(|i| (b.min[i] + b.max[i]) / 2.0);
+        assert_near(&middle, &[12.55, 10.0, z], "a mortise's box");
+    }
+    // Both bodies changed under their ids by the one feature.
+    assert!(history(&doc, "F1.b0").starts_with("join(box(F1"));
+    assert!(history(&doc, "F2.b0").starts_with("cut(box(F2"));
+    // The count is a unitless parameter of the feature: at 1 the tenon is
+    // centred again and the start and end offsets are not used.
+    let parameters = query(&doc, json!({"query": "parameters"}));
+    let count = parameters
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["comment"] == "MortiseTenon1 count")
+        .expect("the count's parameter")["name"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    doc.kernel().specs.borrow_mut().clear();
+    command(
+        &mut doc,
+        json!({"cmd": "set_parameter", "name": count, "value": 1}),
+    );
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    assert_extrusions(&doc, &[(0.0, 25.1), (-0.5, 25.5)]);
+    let (middle, size) = rectangle_at(&doc, 1);
+    assert_near(&middle, &[0.0, 10.0, 30.0], "one tenon");
+    assert_near(&size, &[10.0, 8.0], "one tenon");
+}
+
+#[test]
+fn several_through_tenons_reach_the_far_face_of_the_post() {
+    let mut doc = boards();
+    let mut through = joint(json!({"width": 12, "count": 2, "start_offset": 10,
+                                   "end_offset": 10, "through": true}));
+    through.as_object_mut().unwrap().remove("length");
+    let uid = add(&mut doc, through).unwrap();
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    // Both 40 through the post: one extrusion each for the mortises and
+    // the tenons.
+    assert_extrusions(&doc, &[(0.0, 41.1), (-0.5, 40.5)]);
+    for face in ["F3:side(c1[c4,c2])", "F3:side(c21[c24,c22])"] {
+        assert!(has_face(&doc, "F1.b0", face), "{face}");
+    }
+    for face in ["F3:side(c11[c14,c12])", "F3:side(c31[c34,c32])"] {
+        assert!(has_face(&doc, "F2.b0", face), "{face}");
+    }
+}
+
+#[test]
+fn a_count_of_one_keeps_the_single_tenon() {
+    // The same joint without a count, with a count of 1, and with a count
+    // of 1 and start and end offsets (not used): the same extrusions,
+    // bodies, faces and places.
+    let single = |more: Value| {
+        let mut doc = boards();
+        doc.kernel().measures_selections.set(true);
+        let uid = add(&mut doc, joint(more)).unwrap();
+        assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+        let shapes: Vec<_> = ["F1.b0", "F2.b0"]
+            .into_iter()
+            .map(|b| {
+                let shape = doc.body_shape(body(b)).unwrap();
+                (shape.history.clone(), shape.faces.clone(), shape.bounds)
+            })
+            .collect();
+        (
+            doc.kernel().specs.borrow().clone(),
+            shapes,
+            rectangle_at(&doc, 1),
+            rectangle_at(&doc, 11),
+        )
+    };
+    let today = single(json!({"offset_width": 5}));
+    assert_eq!(single(json!({"offset_width": 5, "count": 1})), today);
+    assert_eq!(
+        single(json!({"offset_width": 5, "count": 1, "start_offset": 3, "end_offset": 4})),
+        today
+    );
+    assert_near(&today.2.0, &[0.0, 10.0, 35.0], "the tenon offset 5");
+}
+
+#[test]
+fn a_design_saved_with_one_tenon_opens_and_recomputes_unchanged() {
+    let mut doc = boards();
+    let uid = add(&mut doc, joint(json!({"offset_thickness": 2}))).unwrap();
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    let saved = doc.to_json();
+    // The saved definition has none of the new fields, and the feature no
+    // count parameter: as designs saved before them.
+    let mut joints = Vec::new();
+    saved_joints(&serde_json::from_str(&saved).unwrap(), &mut joints);
+    assert!(!joints.is_empty(), "{saved}");
+    for stored in &joints {
+        for key in ["count", "start_offset", "end_offset"] {
+            assert!(stored.get(key).is_none(), "{key} in {stored}");
+        }
+    }
+    let parameters = query(&doc, json!({"query": "parameters"}));
+    assert!(
+        parameters
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["comment"] != "MortiseTenon1 count"),
+        "{parameters}"
+    );
+    let mut loaded = Document::from_json(&saved, board_kernel()).unwrap();
+    loaded.recompute();
+    assert_eq!(status(&loaded, uid), FeatureStatus::Ok);
+    assert_eq!(
+        loaded.feature(uid).unwrap().def,
+        doc.feature(uid).unwrap().def
+    );
+    // The bodies' histories name the extrusions' offsets.
+    for b in ["F1.b0", "F2.b0"] {
+        let (a, c) = (
+            doc.body_shape(body(b)).unwrap(),
+            loaded.body_shape(body(b)).unwrap(),
+        );
+        assert_eq!(
+            (&a.history, &a.faces, a.bounds),
+            (&c.history, &c.faces, c.bounds),
+            "{b}"
+        );
+    }
+}
+
+#[test]
+fn tenons_that_overlap_or_leave_the_face_are_refused() {
+    let mut doc = boards();
+    let several = |more: Value| {
+        let mut all = json!({"count": 3, "start_offset": 5, "end_offset": 5});
+        for (key, value) in more.as_object().unwrap() {
+            all[key] = value.clone();
+        }
+        joint(all)
+    };
+    let overlap = add(&mut doc, several(json!({"width": 20}))).unwrap();
+    assert_eq!(
+        error(&doc, overlap),
+        "the 3 tenons overlap: 20 mm along the face each, their middles 15 mm apart"
+    );
+    // Apart by less than twice the clearance: the mortises would overlap.
+    let mortises = add(
+        &mut doc,
+        several(json!({"width": 19.9, "start_offset": 0, "end_offset": 0})),
+    )
+    .unwrap();
+    assert_eq!(
+        error(&doc, mortises),
+        "the mortises of the 3 tenons overlap: 20.1 mm along the face each with the \
+         clearance, their middles 20.05 mm apart"
+    );
+    let room = add(
+        &mut doc,
+        several(json!({"width": 10, "start_offset": 30, "end_offset": 25})),
+    )
+    .unwrap();
+    assert_eq!(
+        error(&doc, room),
+        "the start and end offsets (30 and 25 mm) leave less than a tenon's 10 mm of the \
+         end face (60 mm)"
+    );
+    // Refused when added: a count that is not whole or not above 0, and a
+    // negative offset.
+    let refused = |doc: &mut Document<MockKernel>, more: Value| -> String {
+        add(doc, several(more)).unwrap_err().to_string()
+    };
+    let half = refused(&mut doc, json!({"width": 10, "count": 2.5}));
+    assert!(
+        half.contains(
+            "the count of tenons must be a whole number from 1 to 100, got 2.5: use floor(…) \
+             or round(…) for a whole number"
+        ),
+        "{half}"
+    );
+    let none = refused(&mut doc, json!({"width": 10, "count": 0}));
+    assert!(
+        none.contains("the count of tenons must be a whole number from 1 to 100, got 0"),
+        "{none}"
+    );
+    let negative = refused(&mut doc, json!({"width": 10, "start_offset": -1}));
+    assert!(
+        negative.contains("the start offset must not be negative, got -1"),
+        "{negative}"
+    );
 }

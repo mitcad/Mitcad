@@ -329,7 +329,7 @@ QJsonObject pageData(const CommandContext& context, const PageOptions& options, 
       {QStringLiteral("home"), home},
       {QStringLiteral("created"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
       {QStringLiteral("generator"),
-       version.isEmpty() ? QStringLiteral("Mitcad") : QStringLiteral("Mitcad %1").arg(version)}};
+       version.isEmpty() ? QStringLiteral("MitCad") : QStringLiteral("MitCad %1").arg(version)}};
 }
 
 // A design loaded without a window, for the page (writePageOfFile): what

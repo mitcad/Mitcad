@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser app/framework/ChromeStyle.cpp app/framework/ChromeStyle.hpp app/framework/WindowStyle.cpp app/framework/WindowStyle.hpp app/framework/Theme.cpp
+# check-all sources: app/browser app/framework/ChromeStyle.cpp app/framework/ChromeStyle.hpp app/framework/WindowStyle.cpp app/framework/WindowStyle.hpp app/framework/Theme.cpp app/framework/TestDriver.cpp
 # The timeline in a light and a dark theme (mitcad#14): the history marker
 # and the playback buttons' glyphs follow the palette, also when the theme
 # changes while Mitcad runs; so does the Docked window's style (mitcad#251),
@@ -11,6 +11,12 @@
 #      (MITCAD_TEST_COLOR_SCHEME=dark, framework/Diagnostics.hpp): the
 #      marker turns light (#c8d0da) at once, the glyphs too; the window's
 #      style turns dark, the handle #5aa2ff.
+#   3. A hidden body's row follows a switch of the theme (mitcad#1104): the
+#      demo in the Floating layout, Body1 hidden by its light bulb, its name
+#      in the light theme's TextHidden (#4c525c); the test driver switches
+#      to the dark scheme (color-scheme dark) after the row was styled: its
+#      name in the dark theme's (#b4b8be), and the light one's again
+#      after a switch back ("Browser row colours: ...").
 # Qt's GTK platform theme gives the palettes (QT_QPA_PLATFORMTHEME=gtk3):
 # the generic one has no dark scheme.
 #
@@ -97,5 +103,35 @@ more "the marker's bar is light" "$MARKER_light" 20
 more "the button's glyph is light" "$BUTTON_light" 5
 ui_step "hover over the timeline"        xdotool mousemove $(ui_logged_at "Timeline marker")
 ui_crashed && ui_fail "crashed"
+ui_stop_app
+
+echo "--- A hidden body's row when the theme switches (mitcad#1104)"
+cat > "$WORK/hidden-row.mitcad-ui" << 'EOF'
+# Body1 hidden by its light bulb in the light theme; the scheme switched to
+# dark and back after its row was styled.
+expect-ever 'Browser eye Root/Bodies/Body1 at' 30
+expect-ever 'Browser row colours: light, ' 30
+mark
+click-logged 'Browser eye Root/Bodies/Body1 at'
+expect-log 'Browser row colours: light, hidden #4c525c: [^;]*Root/Bodies/Body1' 10
+mark
+color-scheme dark
+expect-log 'Browser row colours: dark, hidden #b4b8be: [^;]*Root/Bodies/Body1' 10
+mark
+color-scheme light
+expect-log 'Browser row colours: light, hidden #4c525c: [^;]*Root/Bodies/Body1' 10
+EOF
+MITCAD_TEST_INPUT="$WORK/hidden-row.mitcad-ui" ui_start_app --chrome=floating --demo
+for _ in $(seq 1 300); do
+  kill -0 "$UI_RUNNER" 2> /dev/null || break
+  sleep 0.2
+done
+kill -0 "$UI_RUNNER" 2> /dev/null && ui_fail "the hidden row's script timed out"
+wait "$UI_RUNNER" ||
+  ui_fail "the hidden row's script failed: $(grep -E 'TestDriver|Browser row colours' "$UI_LOG" | tail -6)"
+ui_expect_log "TestDriver: done" "the hidden row's script ran"
+grep -q "Browser row colours: dark, hidden #b4b8be: [^;]*Root/Bodies/Body1" "$UI_LOG" ||
+  ui_fail "the hidden row did not take the dark theme's colour"
+echo "ok   the hidden row's name in the dark theme's TextHidden after the switch"
 
 ui_finish "UI theme test"

@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser
+# check-all sources: app/browser app/framework/NoticeLevel.cpp app/framework/CommandPanel.cpp app/MainWindow.cpp core/model/src/document/import_notes.rs
 # The timeline (U3) through the real UI, with the volumes the model reports:
 #   - A failed feature: its cell red with its badge, hovered and selected
 #     too (mitcad#961), its tooltip, the status bar's summary that goes to
 #     it, and Delete without dependents.
 #   - Suppress and unsuppress; the history marker dragged back (one undo
-#     step), the playback buttons, Roll History Marker Here.
+#     step), the playback buttons, Roll Timeline Marker Here.
 #   - Reorder by dragging: a plane goes first; a fillet cannot go before
 #     its body, and nothing changes.
 #   - Rename in place, edit by double-click, a click selecting the
 #     feature's body, Find in Browser, Delete with its dependents (the
 #     dialog: Cancel, then Delete All), undo.
-#   - A warning (P9): a rib's full round built 0.1 % smaller is yellow, its
-#     tooltip and its panel's preview say why.
+#   - A warning (P9): a plane at 90 radians is yellow, its level the same
+#     on every surface (mitcad#1040: the Browser row, the status line, the
+#     selection card, the panel's warning box), and its tooltip and its
+#     panel's preview say why; a rib's full round built 0.1 % smaller is
+#     information, not yellow (mitcad#1106).
 #   - The mouse wheel over a timeline longer than the window scrolls it
 #     sideways and stops at both ends (mitcad#826).
 #   - Timeline groups (P9): a Shift+click run grouped, folded into one
@@ -119,6 +122,9 @@ ui_expect_log "Timeline cell Fillet2: failed, hovered, status ring, outer ring, 
 ui_mark
 ui_step "click the failures summary"     ui_click_logged "Failures button"
 ui_expect_new "Revealed Fillet2" "the summary went to Fillet2"
+# Its level on the status line and the selection card (mitcad#1040).
+ui_expect_new "Status error: Fillet2: " "the status line says it as an error"
+ui_expect_new "Selection card level Fillet2: error" "the selection card's line is an error"
 ui_expect_new "Timeline cell Fillet2: failed, selected, " "selected: still red"
 tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep "Timeline cell Fillet2: failed, selected, " | tail -1 |
   grep -q "status ring, outer ring, badge" || ui_fail "selected Fillet2 lost its status ring or badge"
@@ -162,7 +168,7 @@ ui_step "move to the end"                ui_click_logged "Timeline button end"
 ui_expect_new "Marker at 4 of 4" "at the end"
 ui_mark
 ui_step "right-click Extrude1"           ui_click_logged "Timeline Extrude1" 3
-ui_step "Roll History Marker Here"       ui_menu_choose "Roll History Marker Here"
+ui_step "Roll Timeline Marker Here"       ui_menu_choose "Roll Timeline Marker Here"
 ui_expect_new "Marker at 2 of 4" "rolled to Extrude1"
 ui_step "move to the end"                ui_click_logged "Timeline button end"
 
@@ -271,11 +277,14 @@ ui_expect_new "Undo: Rename Group1 to Body" "the rename is an undo step"
 ui_stop_app
 
 echo "--- A warning (P9)"
-# A rib 2 mm wide with a full round on all four top edges: OCCT cannot take
-# the top face away at the rib's ends, so the fillet is built 0.1 % smaller
-# and succeeds with a warning (tools/cli/tests/p9_warnings.json). 60
-# planes after it make the timeline longer than the window, for the wheel
-# (mitcad#826).
+# A plane at 90 radians (Tilted, an angle typed as a number of more than
+# one turn, mitcad#714) succeeds with a warning: its presentation on every
+# surface (mitcad#1040). The rib turned by 90 radians (Turned) warns too,
+# so that the Warnings badge has a menu of two. A rib 2 mm wide with a full round on all four top
+# edges: OCCT cannot take the top face away at the rib's ends, so the
+# fillet is built 0.1 % smaller (tools/cli/tests/p9_warnings.json), which
+# is information, not a warning (mitcad#1106). 60 planes after them make
+# the timeline longer than the window, for the wheel (mitcad#826).
 {
   cat << 'EOF'
 [
@@ -288,7 +297,11 @@ echo "--- A warning (P9)"
     "edges": ["E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}",
               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c2[c1,c3])}",
               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c3[c2,c4])}",
-              "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c4[c3,c1])}"], "radius": 1}}
+              "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c4[c3,c1])}"], "radius": 1}},
+  {"cmd": "add_feature", "name": "Tilted", "def": {"type": "construction_plane",
+    "definition": {"type": "angle", "line": "z", "angle": 90, "plane": "xz"}}},
+  {"cmd": "add_feature", "name": "Turned", "def": {"type": "move", "bodies": ["F2.b0"],
+    "transform": {"type": "rotate", "axis": "z", "angle": 90}}}
 EOF
   for i in $(seq 1 60); do
     printf ',\n  {"cmd": "add_feature", "def": {"type": "construction_plane",'
@@ -297,18 +310,55 @@ EOF
   printf '\n]\n'
 } > "$WORK/rib.json"
 "$CLI" run "$WORK/rib.json" --save "$WORK/rib.mitcad" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
+TURN='Tilted angle: 90 is read as radians (5156.6°); write "90 deg" for degrees'
 ui_start_app --open "$WORK/rib.mitcad"
 ui_step "fit (F6)"                       ui_key F6
-ui_expect_log "Feature warnings: Fillet1: the fillet is built 0.1 % smaller" "Fillet1 succeeded with a warning"
-ui_expect_log "Timeline cell Fillet1: warning, status ring, badge" "its cell is yellow with the badge (mitcad#961)"
+ui_expect_log "Feature warnings: Tilted: $TURN; Turned: Turned angle: 90 is read as radians" \
+  "Tilted and Turned succeeded with a warning, the only ones"
+ui_expect_log "Timeline cell Tilted: warning, status ring, badge" "its cell is yellow with the badge (mitcad#961)"
 grep -q "Failed features: Fillet1" "$UI_LOG" && ui_fail "Fillet1 failed"
-ui_expect_log "Timeline Fillet1 at" "the timeline is logged"
+grep -q "Feature warnings: .*Fillet1" "$UI_LOG" && ui_fail "Fillet1 has a warning"
+ui_expect_log "Timeline cell Fillet1: info, badge" \
+  "Fillet1, built 0.1 % smaller, is information: its badge, not yellow (mitcad#1106)"
+ui_expect_log "Timeline Tilted at" "the timeline is logged"
+ui_step "hover over Tilted"              xdotool mousemove $(ui_logged_at "Timeline Tilted")
+# (The tooltip's log keeps its HTML escapes: up to the quotes.)
+ui_expect_log "Timeline tooltip: Tilted: Warning: ${TURN%%\"*}" \
+  "its tooltip has the warning, with its word (mitcad#1040)"
 ui_step "hover over Fillet1"             xdotool mousemove $(ui_logged_at "Timeline Fillet1")
-ui_expect_log "Timeline tooltip: Fillet1: the fillet is built 0.1 % smaller" "its tooltip has the warning"
+ui_expect_log "Timeline tooltip: Fillet1: the fillet is built 0.1 % smaller" \
+  "Fillet1's tooltip tells it, without the warning's word (mitcad#1106)"
+grep -q "Timeline tooltip: Fillet1: Warning" "$UI_LOG" && ui_fail "Fillet1's tooltip is a warning"
+# One level per surface (mitcad#1040): the warning stays a warning in the
+# Browser, the selection card, the status line and the command panel's box.
+ui_expect_log "/Tilted: warning" "the warned plane's Browser row has the warning level"
+ui_mark
+ui_step "click the warnings badge"       ui_click_logged "Warnings button"
+ui_expect_new "Context menu: Tilted: $TURN | Turned: Turned angle: 90 is read as radians" \
+  "the badge lists the plane and the move"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Context menu: " | tail -1 | grep -qF "Fillet1" &&
+  ui_fail "the warnings badge lists Fillet1"
+ui_step "choose Tilted"                  ui_menu_choose "Tilted: $TURN"
+ui_expect_new "Revealed Tilted" "revealed"
+ui_expect_new "Status warning: Tilted: $TURN" "the status line says it as a warning, not red"
+ui_expect_new "Selection card level Tilted: warning" "the selection card's line is a warning"
+ui_step "Esc"                            ui_key Escape
+ui_mark
+ui_step "double-click Tilted"            ui_double_click_logged "Timeline Tilted"
+ui_expect_new "Editing F4 with Plane at Angle" "editing Tilted"
+ui_expect_new "Preview Plane at Angle: ok, warning: $TURN" "the panel tells" 30
+ui_expect_new "Panel Plane at Angle message box: warning: $TURN" \
+  "in the panel's warning box (mitcad#1040)"
+[ -n "$SHOT" ] && ui_capture "${SHOT%.png}-warning-panel.png"
+ui_step "cancel (Esc)"                   ui_key Escape
+ui_wait_idle
 ui_mark
 ui_step "double-click Fillet1"           ui_double_click_logged "Timeline Fillet1"
 ui_expect_new "Editing F3 with Fillet" "editing Fillet1"
-ui_expect_new "Preview Fillet: ok, warning: the fillet is built 0.1 % smaller" "the panel tells" 30
+ui_expect_new "Preview Fillet: ok, info: the fillet is built 0.1 % smaller" \
+  "its preview tells the info, no warning (mitcad#1106)" 30
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Panel Fillet message box: warning" &&
+  ui_fail "Fillet1's panel has a warning box"
 ui_step "cancel (Esc)"                   ui_key Escape
 
 echo "--- A fillet's picked edges where they were (mitcad#957)"
@@ -322,9 +372,11 @@ ui_step "Esc"                            ui_key Escape
 expect_last "Feature inputs highlighted: " "none" "and go with the selection"
 
 echo "--- The wheel scrolls the timeline (mitcad#826)"
-# wheel_strip up|down notches: turns the wheel over the strip, where Plane1
-# was before it scrolled; prints the value and the maximum of the last
-# "Timeline wheel: scrolled to V of M" since the mark.
+# wheel_strip up|down notches: turns the wheel over the strip, where Plane2
+# was before it scrolled (the first of the 60 planes: Tilted, mitcad#1040,
+# is the design's first plane, so there is no Plane1); prints the value and
+# the maximum of the last "Timeline wheel: scrolled to V of M" since the
+# mark.
 wheel_strip() {
   xdotool mousemove "$wheel_x" "$wheel_y" click --repeat "$2" --delay 20 "$([ "$1" = up ] && echo 4 || echo 5)"
   ui_sync > /dev/null
@@ -332,7 +384,7 @@ wheel_strip() {
     sed -n 's/.* to \([0-9]*\) of \([0-9]*\)$/\1 \2/p'
 }
 ui_wait_idle
-read -r wheel_x wheel_y <<< "$(ui_logged_at "Timeline Plane1")"
+read -r wheel_x wheel_y <<< "$(ui_logged_at "Timeline Plane2")"
 ui_mark
 read -r value maximum <<< "$(wheel_strip down 3)"
 [ -n "$maximum" ] && [ "$maximum" -gt 0 ] ||
@@ -395,7 +447,7 @@ expect_last "Selected: " "nothing" "a click in the view clears it"
 expect_last "Feature faces highlighted: " "none" "and the highlight"
 ui_mark
 ui_step "right-click Fillet1"            ui_click_logged "Timeline Fillet1" 3
-ui_step "Roll History Marker Here"       ui_menu_choose "Roll History Marker Here"
+ui_step "Roll Timeline Marker Here"       ui_menu_choose "Roll Timeline Marker Here"
 ui_expect_new "Marker at 3 of 4" "the marker before Chamfer1"
 ui_mark
 ui_step "click Extrude1"                 ui_click_logged "Timeline Extrude1"

@@ -2,7 +2,8 @@
 //! A small library of synthetic BUILD parts for the model tests: square
 //! slot profiles of three systems (made as the profile layout says: a
 //! section on XY extruded by `L`, `mount:` frames at its ends and slots),
-//! a profile with closed sides, a cap, a bracket with its nut and screw,
+//! a profile with closed sides, a cap, a bracket with its nut and screw
+//! and an angle of plates with them,
 //! panels sized by parameters or fixed, a rail with its carriage and a
 //! slider for a slot. A resolver in memory serves them at two versions.
 
@@ -189,6 +190,50 @@ fn block_design(size: [f64; 3], corner: [f64; 2], frames: &[Frame<'_>]) -> Strin
     for (name, origin, z, x) in frames {
         fixed_frame(&mut doc, name, *origin, *z, *x);
     }
+    doc.recompute();
+    doc.to_json()
+}
+
+/// An angle bracket of two plates 4 mm thick and 20 wide, each a body of
+/// its own, so that the mock kernel's boxes keep its walls (mitcad#1115):
+/// arm a on z = 0 from x = 0 to 40, arm b on x = 0 from z = 0 to 40; its
+/// frames as `bracket30`'s.
+fn angle_design() -> String {
+    let mut doc = Document::new(MockKernel::default());
+    for (size, height) in [([40.0, 20.0], 4.0), ([4.0, 20.0], 40.0)] {
+        let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+        let region = doc
+            .add_rectangle(
+                sketch,
+                [0.0, -10.0],
+                &ValueInput::Number(size[0]),
+                &ValueInput::Number(size[1]),
+            )
+            .unwrap()
+            .region;
+        doc.add_feature(
+            &def(
+                json!({"type": "extrude", "profiles": [{"sketch": sketch, "region": region}],
+                        "extent": {"type": "distance", "distance": height}, "operation": "new_body"}),
+            ),
+            None,
+        )
+        .unwrap();
+    }
+    fixed_frame(
+        &mut doc,
+        "mount_a",
+        [20.0, 0.0, 0.0],
+        [0.0, 0.0, -1.0],
+        [1.0, 0.0, 0.0],
+    );
+    fixed_frame(
+        &mut doc,
+        "mount_b",
+        [0.0, 0.0, 20.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+    );
     doc.recompute();
     doc.to_json()
 }
@@ -389,6 +434,31 @@ impl TestLibrary {
                 build: None,
                 part_number: String::new(),
                 name: "Screw M6x12".to_owned(),
+                designation: String::new(),
+            },
+        );
+        // An angle bracket of 4 mm plates with bracket30's frames, nut and
+        // screw (mitcad#1115: the screw's head on its wall).
+        add(
+            "angle30",
+            V1,
+            Part {
+                text: angle_design(),
+                build: Some(json!({
+                    "role": "connector",
+                    "systems": [{"type": "B", "slot": 8}],
+                    "frames": [{"name": "mount_a", "kind": "face"}, {"name": "mount_b", "kind": "face"}],
+                    "connector": {
+                        "junctions": ["L", "T"],
+                        "space": "inner_corner",
+                        "mates": [{"frame": "mount_a", "to": "slot"}, {"frame": "mount_b", "to": "slot"}],
+                        "fasteners": [{"frame": "mount_a",
+                                       "nut": {"library": LIBRARY, "component": "tnut8"},
+                                       "screw": {"library": "test-fasteners", "component": "screw6"}}]
+                    }
+                })),
+                part_number: "AN30".to_owned(),
+                name: "Angle 30 B8".to_owned(),
                 designation: String::new(),
             },
         );

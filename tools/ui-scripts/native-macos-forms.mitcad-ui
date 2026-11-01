@@ -24,36 +24,10 @@ expect-native-command-layout
 native-click commandCancel
 expect-log '^Command Appearance cancelled$'
 
-# The shared status lifetime: real Cancel, Done, a replacement during the
-# actual 400ms fade, explicit clear, and the longer error delay (mitcad#996).
-expect-native-text native.status '^Command cancelled[.]$'
-expect-native-visible native.statusCard true
-sleep 6500
-expect-native-visible native.statusCard false
-screenshot-screen '${MITCAD_TEST_WORK}/status-hidden-${MITCAD_FORMS_APPEARANCE}.png'
-test-status-message hint 'Done.'
-expect-native-text native.status '^Done[.]$'
-expect-native-style native.statusCard opaque
-expect-native-style native.statusCard fading
-test-status-message hint 'Replacement status'
-expect-native-text native.status '^Replacement status$'
-expect-native-style native.statusCard opaque
-sleep 500
-expect-native-visible native.statusCard true
-expect-native-style native.statusCard opaque
-screenshot-screen '${MITCAD_TEST_WORK}/status-replacement-${MITCAD_FORMS_APPEARANCE}.png'
-sleep 6000
-expect-native-visible native.statusCard false
-test-status-message error 'Status lifetime test error'
-expect-native-text native.status '^Status lifetime test error$'
-sleep 6500
-expect-native-visible native.statusCard true
-sleep 4000
-expect-native-visible native.statusCard false
-test-status-message hint 'Clear this status'
-expect-native-visible native.statusCard true
-test-status-message hint ''
-expect-native-visible native.statusCard false
+# Cancel's hint in the message band (mitcad#1098; the band's lifetimes,
+# stub and history: native-macos-issues).
+expect-native-text native.messageBand.text '^Command canceled[.]$'
+expect-native-visible native.messageBand true
 
 
 # The face's selection card: Extrude, Create Sketch and Hole, whole labels
@@ -80,7 +54,7 @@ native-click commandCancel
 expect-log '^Command Hole cancelled$'
 
 # Extrude: captions beside their controls, compact clear and flip, the
-# shared artwork and Change Parameters in its title row, Local bodies,
+# shared artwork and Edit Parameters in its title row, Local bodies,
 # fx and OK/Cancel in view without scrolling.
 mark
 click-visible-face
@@ -162,7 +136,7 @@ expect-log '^Command Extrude cancelled$'
 # 3D Print: Send and Cancel stay whole and reachable under its inputs.
 mark
 command make.print3d
-expect-log '^Command 3D Print started$'
+expect-log '^Command Send to Slicer started$'
 wait-idle 30
 expect-native-text commandOk '^Send$'
 expect-native-command-layout
@@ -174,7 +148,7 @@ expect-native-layout
 screenshot '${MITCAD_TEST_WORK}/print-narrow-${MITCAD_FORMS_APPEARANCE}.png'
 native-resize 1280 820
 native-click commandCancel
-expect-log '^Command 3D Print cancelled$'
+expect-log '^Command Send to Slicer cancelled$'
 
 # Hole (mitcad#980): a Clearance hole's Countersink Diameter follows the
 # screw size; typed, it is kept when the size changes and marked beside

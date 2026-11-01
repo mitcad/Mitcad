@@ -31,8 +31,10 @@ namespace {
 
 enum Column { kItem, kProperty, kFollows, kNow };
 constexpr int kEntryRole = Qt::UserRole; // the entry's index
-const QColor kWarningFill(0xff, 0xf1, 0xc8);
-const QColor kWarningText(0x4f, 0x3b, 0x14);
+// A binding with a problem: the warning fill under the text of the same
+// appearance (mitcad#1041).
+QColor warningFill() { return themeColor(ColorRole::WarningFill); }
+QColor warningInk() { return themeColor(ColorRole::Text); }
 
 } // namespace
 
@@ -212,10 +214,10 @@ void ConfigurationBindingsPage::fill() {
       item->setData(kEntryRole, i);
       item->setToolTip(problems.isEmpty() ? texts[column] : texts[column] + QStringLiteral("\n⚠ ") + problems);
       if (!problems.isEmpty()) {
-        item->setBackground(kWarningFill);
-        // This fixed pale fill needs its paired ink in both appearances;
-        // the dark theme's ordinary text would be nearly white on yellow.
-        item->setForeground(kWarningText);
+        item->setBackground(warningFill());
+        // The fill and its ink of one appearance: dark text on the light
+        // fill, light text on the dark one.
+        item->setForeground(warningInk());
       }
       m_table->setItem(row, column, item);
     }

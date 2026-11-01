@@ -35,7 +35,7 @@ QString columnHeading(SupplierColumn column) {
   case SupplierColumn::Supplier:
     return SupplierPartsDialog::tr("Supplier");
   case SupplierColumn::PartNumber:
-    return SupplierPartsDialog::tr("Part number");
+    return SupplierPartsDialog::tr("Supplier Part Number");
   case SupplierColumn::Material:
     return SupplierPartsDialog::tr("Material");
   case SupplierColumn::Finish:
@@ -43,7 +43,7 @@ QString columnHeading(SupplierColumn column) {
   case SupplierColumn::Checked:
     return SupplierPartsDialog::tr("Checked");
   case SupplierColumn::ProductPage:
-    return SupplierPartsDialog::tr("Product page");
+    return SupplierPartsDialog::tr("Product Page");
   }
   return supplierColumnName(column);
 }

@@ -187,8 +187,7 @@ fn sheet_bodies_list_rules_and_flat_patterns_with_the_display_choice() {
 #[test]
 fn the_flat_pattern_exports_to_dxf_with_explicit_layers_and_units() {
     let (mut doc, body) = face_with_rules();
-    let dir = std::env::temp_dir().join(format!("mitcad-flat-dxf-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("flat-dxf");
     let path = dir.join("flat.dxf").to_string_lossy().into_owned();
     // Without a Flat Pattern item the export uses a new item's settings.
     let name = doc.body_name(body);

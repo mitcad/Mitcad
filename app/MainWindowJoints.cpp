@@ -371,7 +371,7 @@ void MainWindow::occurrenceDragFinished(const gp_Pnt& target, bool cancelled) {
                                    values.isEmpty() ? QString() : QStringLiteral(": ") + values.join(QStringLiteral(", ")));
     const QJsonObject contact = result.value(QStringLiteral("contact")).toObject();
     if (!contact.isEmpty()) {
-      showStatus(tr("Stopped at contact: %1").arg(contactText(contact)), false);
+      showStatus(tr("Stopped at contact: %1").arg(contactText(contact)), NoticeLevel::Information);
       qDebug().noquote() << QStringLiteral("Dragged %1 to where it touches: %2").arg(state.name, contactText(contact));
     }
   });
@@ -399,7 +399,7 @@ void MainWindow::animateSelectedJoint() {
     }
   }
   if (uid.isEmpty()) {
-    showStatus(tr("No joint has a free motion to animate."), true);
+    showStatus(tr("No joint has a free motion to animate."), NoticeLevel::Error);
     return;
   }
   animateJoint(uid);
@@ -427,7 +427,7 @@ void MainWindow::animateJoint(const QString& uid) {
                         .value(QStringLiteral("def"))
                         .toObject();
   } catch (const std::exception& e) {
-    showStatus(errorText(e), true);
+    showStatus(errorText(e), NoticeLevel::Error);
     return;
   }
   const QString& motion = animation.motion;
@@ -510,7 +510,7 @@ void MainWindow::animationFrame() {
                           .value(m_animation->motion)
                           .toDouble();
     const QString text = contactText(contact);
-    showStatus(tr("%1 stopped at contact: %2").arg(m_animation->name, text), false);
+    showStatus(tr("%1 stopped at contact: %2").arg(m_animation->name, text), NoticeLevel::Information);
     const QString name = m_animation->name;
     const QString motion = m_animation->motion;
     m_animation.reset();

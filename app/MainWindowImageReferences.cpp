@@ -400,11 +400,11 @@ void MainWindow::calibrateImageReference(const QString& name) {
   if (!name.isEmpty()) {
     const std::optional<ImageReferenceShown> image = imageReferenceOf(m_snapshot.imageReference(name));
     if (!image) {
-      showStatus(tr("%1 cannot be calibrated: its plane is not there.").arg(name), true);
+      showStatus(tr("%1 cannot be calibrated: its plane is not there.").arg(name), NoticeLevel::Error);
       return;
     }
     if (!image->visible) {
-      showStatus(tr("Show %1 first.").arg(name), true);
+      showStatus(tr("Show %1 first.").arg(name), NoticeLevel::Error);
       return;
     }
     images.push_back(*image);
@@ -413,7 +413,7 @@ void MainWindow::calibrateImageReference(const QString& name) {
     if (images.empty()) {
       showStatus(m_snapshot.imageReferences.isEmpty() ? tr("Insert an image reference first.")
                                                       : tr("Show an image reference first."),
-                 true);
+                 NoticeLevel::Error);
       return;
     }
   }

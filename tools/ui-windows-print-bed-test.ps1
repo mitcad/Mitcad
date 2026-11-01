@@ -2,6 +2,7 @@
 # check-all sources: app/MainWindowContextMenu.cpp app/MainWindow.cpp app/files/MainWindowPrint.cpp
 # check-all sources: app/commands/InspectCommands.cpp app/browser core/model/src/document/print_bed.rs
 # check-all sources: core/model/src/exchange core/3mf tools/cli
+# check-all sources: app/files/Print3d.cpp app/framework/CommandSession.cpp
 # Input-driven Windows UI test of a body's print bed face (mitcad#731) in
 # the build VM (tools/ui-windows-lib.ps1 says how the input is posted), as
 # tools/ui-print-bed-test.sh does on Linux, on a 40 x 20 x 10 box (Plate,
@@ -18,13 +19,20 @@
 #   4. 3D Print (a shortcut of the test's) to a 3MF file turns the box over
 #      onto its top and centres it on the 256 mm plate.
 #   5. Print Analysis (a shortcut) starts with the top as its bed face.
-#   6. A design whose stored face is gone: 3D Print reports it. A side's
-#      menu offers Clear Print Bed Face (beside Set); cleared, 3D Print
-#      warns no more.
+#   6. A design whose stored face is gone: 3D Print reports it and lays
+#      the box on its bottom by the automatic orientation (mitcad#1109).
+#      A side's menu offers Clear Print Bed Face (beside Set); cleared, 3D
+#      Print warns no more.
 #   7. A box made a surface body (its bottom unstitched) that keeps its
 #      print bed face (mitcad#737): the menus of its top and of a side
 #      offer Clear Print Bed Face only, show no bed face, and Clear clears
 #      it.
+#   8. Send to Slicer's Bed Face (mitcad#1109) on a box without a print
+#      bed face: choosing the body fills it with the automatic
+#      orientation's face (its bottom), highlighted while the panel is
+#      open; picking the top in Bed Face stores it as the body's print bed
+#      face (one undo step), the highlight follows, and Send turns the box
+#      onto it.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-print-bed-test.ps1 [-App build\dev\mitcad.exe] [-Cli build\dev\tools\cli\mitcad-cli.exe] [-Out dir] [-QtBin dir]
 param(
@@ -166,7 +174,7 @@ function Send {
   Remove-Item -Force $slicerArgs -ErrorAction SilentlyContinue
   Ui-Mark
   Ui-Step '3D Print (F8)'                { Ui-Key 'F8' }
-  Ui-ExpectNew 'Panel 3D Print input format at ' 'the panel laid out'
+  Ui-ExpectNew 'Panel Send to Slicer input format at ' 'the panel laid out'
   Ui-Step 'send (Enter)'                 { Ui-Key 'Return' }
 }
 
@@ -234,8 +242,11 @@ Ui-StartApp 'print-bed-gone' @('--open', $gone)
 Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
 Ui-ExpectLog 'Bodies shown: F1.b0' 'the box shown'
 Send
-Ui-ExpectNew '3D Print bed: as in the design; Plate: the print bed face is gone' 'written as the design has it, the face reported' 30
-Ui-ExpectNew 'Plate: the print bed face is gone; printed as in the design' 'the status line says so'
+Ui-ExpectNew ('3D Print bed: Plate on F1:bottom (automatic), plate 128.000,128.000, transform 1.000 0.000 0.000 108.000 | ' +
+  '0.000 1.000 0.000 118.000 | 0.000 0.000 1.000 0.000; Plate: the print bed face is gone') `
+  'laid on its bottom by the automatic orientation, centred, the face reported' 30
+Ui-ExpectNew '3D Print last line: ' 'the status line'
+Expect-NoNew 'printed as in the design' 'the status line does not say it is printed as in the design'
 Slicer-Ran
 
 Write-Host '--- 6b. The gone face cleared from another face''s menu'
@@ -248,7 +259,7 @@ Menu-Choose 'Clear Print Bed Face'
 Ui-ExpectNew 'Print bed face of Plate: none' 'the gone face cleared'
 Ui-Step 'clear the selection (Esc)'      { Ui-Key 'Escape' }
 Send
-Ui-ExpectNew '3D Print bed: as in the design' 'written as the design has it' 30
+Ui-ExpectNew '3D Print bed: Plate on F1:bottom (automatic), plate 128.000,128.000' 'laid on its bottom by the automatic orientation' 30
 Slicer-Ran
 Expect-NoNew 'the print bed face is gone' '3D Print warns no more'
 Ui-StopApp
@@ -270,5 +281,49 @@ Expect-NoNew 'Print bed face shown:' 'no print bed face shown on a surface body'
 Ui-Mark
 Menu-Choose 'Clear Print Bed Face'
 Ui-ExpectNew 'Print bed face of Plate: none' 'the surface body''s face cleared'
+Ui-StopApp
+
+Write-Host '--- 8. Send to Slicer''s Bed Face (mitcad#1109)'
+$fresh = Join-Path $work 'fresh.mitcad'
+$made = & $Cli run $modelScript --save $fresh
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $fresh)) { Ui-Fail "mitcad-cli fresh: $($made -join ' / ')" }
+# The body's print bed face in a design file, empty without one.
+function Stored-BedFace([string]$Path) {
+  $body = (Get-Content -Raw $Path | ConvertFrom-Json).bodies | Where-Object { $_.uid -eq 'F1.b0' }
+  return "$($body.print_bed_face)"
+}
+Ui-StartApp 'print-bed-face-row' @('--open', $fresh)
+Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
+Ui-ExpectLog 'Bodies shown: F1.b0' 'the box shown'
+Pick-Places
+Remove-Item -Force $slicerArgs -ErrorAction SilentlyContinue
+Ui-Mark
+Ui-Step '3D Print (F8)'                  { Ui-Key 'F8' }
+Ui-ExpectNew 'Panel Send to Slicer input format at ' 'the panel laid out'
+Ui-ExpectNew '3D Print bed face: Plate: automatic; Plate F1:bottom (automatic)' `
+  'choosing the body fills Bed Face with the automatic orientation''s face'
+Ui-Step 'the Bed Face row'               { Ui-ClickLogged 'Panel Send to Slicer input print_bed' }
+Ui-ExpectNew 'Send to Slicer marks: face F1.b0/F1:bottom' 'the bottom highlighted while the panel is open'
+Expect-NoNew 'picks not drawn beside the marks: Bodies' 'the body''s own highlight kept beside it'
+if (Stored-BedFace $fresh) { Ui-Fail "the automatic face was stored: $(Stored-BedFace $fresh)" }
+Write-Host 'ok   the automatic face is not stored'
+Ui-Mark
+Ui-Step 'pick the top in Bed Face'       { Ui-ClickPick 'face F1.b0/F1:top at' }
+Ui-ExpectNew '3D Print bed face set: Plate F1:top' 'the top made the body''s print bed face'
+Ui-ExpectNew '3D Print bed face: Plate: print bed face; Plate F1:top' 'Bed Face shows it'
+Ui-ExpectNew 'Send to Slicer marks: face F1.b0/F1:top' 'the highlight follows'
+Ui-Mark
+Ui-Step 'send (Enter)'                   { Ui-Key 'Return' }
+Ui-ExpectNew ('3D Print bed: Plate on F1:top, plate 128.000,128.000, transform 1.000 0.000 0.000 108.000 | ' +
+  '0.000 -1.000 0.000 138.000 | 0.000 0.000 -1.000 10.000') 'sent turned over onto the top' 30
+Slicer-Ran
+Ui-Mark
+Ui-Step 'save (Ctrl+S)'                  { Ui-Key 'ctrl+s' }
+Ui-ExpectNew 'Saved ' 'saved'
+if ((Stored-BedFace $fresh) -ne 'F1:top') { Ui-Fail "the file's print bed face: $(Stored-BedFace $fresh)" }
+Write-Host 'ok   the top stored as the body''s print bed face'
+Ui-Mark
+Ui-Step 'undo (Ctrl+Z)'                  { Ui-Key 'ctrl+z' }
+Ui-ExpectNew 'Undo: Set Print Bed Face of Plate' 'one undo step'
 
 Ui-Finish 'UI Windows print bed test'

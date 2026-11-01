@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-<!-- Mitcad icon: 24 x 24, dark outline, blue solids, orange actions. A straight joint in plan: the new wall in line with the one it starts from, its end against that one's end face. -->
+<!-- MitCad icon: 24 x 24, dark outline, blue solids, orange actions. A straight joint in plan: the new wall in line with the one it starts from, its end against that one's end face. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2b3a4a" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
   <rect x="1.5" y="9.5" width="10.5" height="5" fill="#9cc0ec"/>
   <rect x="12" y="9.5" width="10.5" height="5" fill="#c9ddf6"/>

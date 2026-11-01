@@ -53,7 +53,7 @@ void ComputeProgress::showProgress(const QString& stage, const JobProgress& prog
     m_feature->setText(QString());
   }
   const qint64 seconds = elapsedMs / 1000;
-  m_time->setText(m_cancelling ? tr("Cancelling… (%1 s)").arg(seconds) : tr("%1 s elapsed").arg(seconds));
+  m_time->setText(m_cancelling ? tr("Canceling… (%1 s)").arg(seconds) : tr("%1 s elapsed").arg(seconds));
 }
 
 void ComputeProgress::reject() { requestCancel(); }
@@ -69,7 +69,7 @@ void ComputeProgress::requestCancel() {
   }
   m_cancelling = true;
   m_cancel->setEnabled(false);
-  m_time->setText(tr("Cancelling…"));
+  m_time->setText(tr("Canceling…"));
   emit cancelRequested();
 }
 

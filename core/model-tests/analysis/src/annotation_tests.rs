@@ -7,7 +7,8 @@
 //! several edited and deleted as one undo step, and leader notes; lengths
 //! placed outside the body and stacked, the old default colours read as
 //! Auto and the texts' height (mitcad#894); hole callouts written from
-//! their holes' features, a frame under one (mitcad#902).
+//! their holes' features, a frame under one (mitcad#902); previews of
+//! `add_annotation` (mitcad#1097).
 
 use serde_json::{Value, json};
 
@@ -442,6 +443,13 @@ fn a_dimension_is_drawn_in_its_plane_relative_to_its_picks() {
         .unwrap_or_else(|| panic!("{broken}"));
     assert!(error.starts_with("the plane: "), "{error}");
     assert!(broken.get("drawing").is_none());
+    // A broken annotation is a warning about it (mitcad#1040).
+    assert_eq!(broken["level"], "warning", "{broken}");
+    assert_eq!(
+        broken["notices"],
+        json!([{"level": "warning", "message": error, "target": "Offset1"}]),
+        "{broken}"
+    );
 }
 
 #[test]
@@ -665,7 +673,7 @@ fn several_are_edited_and_deleted_as_one_step() {
         &mut doc,
         json!({"cmd": "edit_annotation", "name": "Offset1", "new_name": "Angle1"}),
     );
-    assert!(error.contains("an annotation 'Angle1' exists"), "{error}");
+    assert!(error.contains("an annotation Angle1 exists"), "{error}");
     let error = refused(
         &mut doc,
         json!({"cmd": "edit_annotation", "names": ["Offset1", "Offset1"], "visible": true}),
@@ -1249,7 +1257,7 @@ fn a_file_with_a_datum_letter_twice_is_refused() {
     assert!(
         error
             .to_string()
-            .contains("annotations[1]: datum A is lettered on 'DatumA' and on 'DatumB'"),
+            .contains("annotations[1]: datum A is lettered on DatumA and on DatumB"),
         "{error}"
     );
 }
@@ -1748,4 +1756,102 @@ fn a_hole_callout_takes_a_frame_and_breaks_with_its_hole() {
     assert!(broken["error"].is_string(), "{broken}");
     assert!(broken.get("drawing").is_none(), "{broken}");
     assert!(annotation(&doc, "Position")["error"].is_string());
+}
+
+/// The `document` query: the undo and redo steps among the rest.
+fn document(doc: &Document<MockKernel>) -> Value {
+    serde_json::from_str(&doc.query(r#"{"query": "document"}"#).unwrap()).unwrap()
+}
+
+/// Two answers alike, their numbers within the baseline tolerance (1e-6
+/// mm).
+fn alike(actual: &Value, expected: &Value, path: &str) {
+    match (actual, expected) {
+        (Value::Number(a), Value::Number(e)) => {
+            let (a, e) = (a.as_f64().unwrap(), e.as_f64().unwrap());
+            assert!((a - e).abs() < 1e-6, "{path}: {a} instead of {e}");
+        }
+        (Value::Array(a), Value::Array(e)) => {
+            assert_eq!(a.len(), e.len(), "{path}: {actual} instead of {expected}");
+            for (i, (a, e)) in a.iter().zip(e).enumerate() {
+                alike(a, e, &format!("{path}[{i}]"));
+            }
+        }
+        (Value::Object(a), Value::Object(e)) => {
+            let mut keys: Vec<&String> = a.keys().chain(e.keys()).collect();
+            keys.sort();
+            keys.dedup();
+            for key in keys {
+                alike(
+                    &actual[key.as_str()],
+                    &expected[key.as_str()],
+                    &format!("{path}.{key}"),
+                );
+            }
+        }
+        _ => assert_eq!(actual, expected, "{path}"),
+    }
+}
+
+#[test]
+fn a_preview_is_what_add_annotation_adds_and_changes_nothing() {
+    let mut doc = block();
+    let view = json!({"direction": [-1, -1, -1], "up": [0, 0, 1], "pixel": 0.5});
+    // Annotations there before: the one previewed is laid out after them
+    // (stacked outside a parallel line, its text clear of a note's).
+    command(
+        &mut doc,
+        json!({"cmd": "add_annotation", "a": top(), "b": bottom(), "view": view}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "add_annotation", "kind": "datum", "a": bottom(), "view": view}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "add_annotation", "a": top(), "text": "Deburr", "at": [15, 15, 20],
+               "view": view}),
+    );
+    for new in [
+        json!({"cmd": "add_annotation", "a": top(), "text": "Break edges\n0.5 x 45°",
+               "at": [5, 6, 20], "view": view}),
+        json!({"cmd": "add_annotation", "a": top(), "b": bottom(), "view": view}),
+        json!({"cmd": "add_annotation", "kind": "datum", "a": side(), "view": view}),
+        json!({"cmd": "add_annotation", "a": side(), "view": view,
+               "frame": {"characteristic": "flatness", "value": 0.02}}),
+        json!({"cmd": "add_annotation", "a": top(), "on": "Offset1",
+               "frame": {"characteristic": "parallelism", "value": 0.03, "datums": ["A"]}}),
+    ] {
+        let annotations_before = annotations(&doc);
+        let document_before = document(&doc);
+        let mut asked = new.clone();
+        asked["preview"] = json!(true);
+        let preview = command(&mut doc, asked);
+        assert_eq!(preview["preview"], true, "{preview}");
+        assert!(preview.get("error").is_none(), "{preview}");
+        // Nothing stored, no undo step.
+        assert_eq!(annotations(&doc), annotations_before, "{new}");
+        assert_eq!(document(&doc), document_before, "{new}");
+        // Added with the same inputs: the same annotation where the preview
+        // showed it.
+        let added = command(&mut doc, new.clone());
+        assert_eq!(preview["name"], added["name"], "{new}");
+        assert_eq!(preview["kind"], added["kind"], "{new}");
+        let kept = annotation(&doc, added["name"].as_str().unwrap());
+        assert!(kept.get("drawing").is_some(), "{kept}");
+        let mut shown = preview.clone();
+        shown.as_object_mut().unwrap().remove("preview");
+        alike(&shown, &kept, added["name"].as_str().unwrap());
+        command(&mut doc, json!({"cmd": "undo"}));
+        assert_eq!(annotations(&doc), annotations_before, "{new}");
+    }
+    // What add_annotation refuses, the preview refuses with the same reason.
+    for new in [
+        json!({"cmd": "add_annotation", "a": {"body": "F2.b0"}, "text": "Steel"}),
+        json!({"cmd": "add_annotation", "a": side(), "letter": "A"}),
+    ] {
+        let mut asked = new.clone();
+        asked["preview"] = json!(true);
+        assert_eq!(refused(&mut doc, asked), refused(&mut doc, new));
+    }
 }

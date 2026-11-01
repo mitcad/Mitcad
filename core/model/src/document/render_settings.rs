@@ -42,7 +42,7 @@ impl<K: Kernel> Document<K> {
         let render = &self.state.render;
         if render.lights.len() >= MAX_LIGHTS {
             return Err(invalid(format!(
-                "a document keeps at most {MAX_LIGHTS} lights"
+                "a design keeps at most {MAX_LIGHTS} lights"
             )));
         }
         let free = (1..)
@@ -61,7 +61,7 @@ impl<K: Kernel> Document<K> {
             ..Light::default()
         };
         if render.light(&light.id).is_some() {
-            return Err(invalid(format!("a light '{}' exists", light.id)));
+            return Err(invalid(format!("a light {} exists", light.id)));
         }
         let kind: LightKind = match fields.get("type") {
             Some(kind) => {
@@ -122,7 +122,7 @@ impl<K: Kernel> Document<K> {
             .lights
             .iter()
             .position(|light| light.id == id)
-            .ok_or_else(|| invalid(format!("there is no light '{id}'")))
+            .ok_or_else(|| invalid(format!("there is no light {id}")))
     }
 
     fn replace_render_settings(

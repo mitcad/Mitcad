@@ -21,23 +21,26 @@
 
 AgentIndicator replaced MITCADAgentButton: the toolbar's agent button
 AutoselectPanel native renderWidget: a QGroupBox; its painting only drops the frame under a section title
+BrowserPanel native MITCADModelOutlineView: the Browser's rows, selection, light bulbs and menus, and the row under the pointer, whose bodies or joint the view highlights (mitcad#1072, treeHovered)
 CapsuleButton native renderWidget: the Sketch Palette's QToolButton, as an AppKit button
 CapsuleFrame replaced setRibbon: the capsule behind the Qt ribbon's groups and title row controls
 CardShadow replaced MITCADFloatingCard: the Floating cards' shadow
 ColorFieldButton native NativeColorField: the print settings' colour swatch (NativeColorFieldProperty)
 CommandSearch replaced showCommandSearch: the toolbar's command search
 Divider replaced MITCADNativeWindowDelegate: between the Qt title row's controls; the AppKit toolbar
+DotsButton replaced quickDotsImage: the quick-access group's ⋮ (mitcad#1113), a button with the same three dots after the group's commands in the toolbar's workspace item; its menu as the Qt group's
 DrawingSheetView shared the drawing sheet, in the drawing workspace over the 3D view
-DrawingWorkspace pending the ribbon's DRAWING and CUT SHEET tabs (mitcad#1008): the AppKit ribbon (setRibbon) gets SOLID, BUILD and SKETCH only, so in the AppKit frontend the drawing keeps its own two-row bar with Close Drawing, the tools' groups and Export, and the toolbar keeps Solid and Build while a drawing is open
+DrawingWorkspace shared the drawing's bar (its name, sheet tabs, +, Sheet… and Add Revision…) and panel over the 3D view; its tools are the AppKit ribbon's DRAWING and CUT SHEET tabs (setRibbon, setDrawingOpen: mitcad#1073)
 GlassButton native setCubeArrows: the orientation cube's turn arrows, round AppKit buttons over the canvas at the hidden Qt arrows' places
 GlassCard replaced MITCADFloatingCard: the Floating chrome's cards
 GroupCaption replaced setRibbon: the AppKit ribbon's group captions
-GroupMenu pending the ⋮ button of a group menu's command rows (Pin to Toolbar, Change Keyboard Shortcut…, mitcad#1001): the AppKit ribbon's group menus (setRibbon) list the commands without it, and its ribbon has no Pinned group
+GroupMenu replaced addRowCommands: the AppKit ribbon's group menus end with Pin to Toolbar and Change Keyboard Shortcut submenus of their commands, in place of the rows' ⋮ button; a pinned button in its group has the row menu as its right-click (mitcad#1074, mitcad#1084)
 GroupSeparator replaced setRibbon: the AppKit ribbon's separators
+Hairline replaced rebuildQuickGroup: the line between the quick-access group's commands and its ⋮ (mitcad#1113), an AppKit separator box
 LinkButton replaced createNativeCommandForm: a note's link in the Qt Command panel
 ManipulatorOverlay shared the command's handles over the 3D view
 MeasurementOverlay shared the measurements over the 3D view
-MiddleElideComboBox replaced createNativeCommandForm: a choice with icons in the Qt Command panel
+MiddleElideComboBox replaced createNativeCommandForm: a choice with icons in the Qt Command panel; searchable choices use NativePicker with short labels, groups, source tags and current checks
 ModeBanner shared the mode's banner over the 3D view
 NavigationGuide native createNativeNavigationGuide: the Navigation settings' mouse pictures
 NoteText replaced createNativeCommandForm: a note's text in the Qt Command panel
@@ -57,7 +60,7 @@ SectionTitle replaced renderWidget: the Docked Command panel's section titles; t
 SegmentedTabBar replaced setRibbon: the AppKit ribbon's workspace tabs
 SelectionCreatePanel native renderWidget: a QGroupBox; its painting only drops the frame under a section title
 SketchOverlay shared the sketch over the 3D view
-TimelineStrip replaced MITCADHistoryStrip: the history card
+TimelineStrip replaced MITCADHistoryStrip: the history card, with its hover preview and tooltips (mitcad#1076) and its groups' bands and folded cells (MITCADHistoryGroupView, mitcad#1077)
 TitleBar replaced MITCADNativeWindowDelegate: the Qt title row; the AppKit toolbar
 TitleButton replaced MITCADNativeWindowDelegate: the Qt title row's buttons and a Docked panel's float and close buttons; the AppKit toolbar and cards
 TreeRenameEdit replaced renameTree: inline renaming in the Qt trees; AppKit outlines edit their own cells

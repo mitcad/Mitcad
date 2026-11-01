@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// The part picker (mitcad#418; app/COMMANDS.md, "Part picker"): the
+// The part picker (mitcad#418; app/COMMANDS.md, "Component picker"): the
 // library's parts as a grid of pictures, each tile with the part's
 // preview (`library_preview`, read as tiles come into sight), its name
 // and main sizes, a star for the user's favourites and, for the parts the
@@ -18,7 +18,7 @@
 // - PartGrid: the groups, filters and grid as a widget; Insert from
 //   Library's dialog (LibraryBrowser) has one in place of its list.
 // - PartPicker: a floating, non-modal window with a PartGrid that the
-//   part-choosing commands open (BUILD's Profile, Panel, Linear Part and
+//   part-choosing commands open (BUILD's Profile, Panel, Linear Component and
 //   Connector): a click on a tile chooses the part in the running command;
 //   the window closes with the command unless it is pinned, and a pinned
 //   one follows the next command that chooses parts. Its place, size and

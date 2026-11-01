@@ -10,6 +10,7 @@ namespace mitcad {
 namespace {
 
 const QString kLayoutKey = QStringLiteral("appearance/layout");
+const QString kNativeUiKey = QStringLiteral("appearance/nativeMacInterface");
 
 ChromeStyle g_style = defaultChromeStyle();
 bool g_glass = true;
@@ -47,6 +48,10 @@ void setLayoutPreference(ChromeStyle style) { QSettings().setValue(kLayoutKey, c
 bool layoutChoosable() { return g_layoutChoosable; }
 
 void setLayoutChoosable(bool choosable) { g_layoutChoosable = choosable; }
+
+bool nativeUiPreference() { return QSettings().value(kNativeUiKey, false).toBool(); }
+
+void setNativeUiPreference(bool native) { QSettings().setValue(kNativeUiKey, native); }
 
 bool glassRequested() { return g_glass; }
 

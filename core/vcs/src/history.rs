@@ -214,7 +214,7 @@ impl ProjectRepo {
 
     pub(crate) fn resolve_id(&self, rev: &str) -> Result<ObjectId, VcsError> {
         let rev = rev.trim();
-        let not_found = || VcsError::NotFound(format!("there is no version '{rev}'"));
+        let not_found = || VcsError::NotFound(format!("there is no version {rev}"));
         let head = self
             .head_commit()?
             .ok_or_else(|| VcsError::NotFound("the project has no versions yet".to_owned()))?;
@@ -262,7 +262,7 @@ impl ProjectRepo {
             if id.to_string().starts_with(&hex) {
                 if found.is_some_and(|f| f != id) {
                     return Err(VcsError::NotFound(format!(
-                        "'{rev}' names more than one version; give more digits"
+                        "{rev} names more than one version; give more digits"
                     )));
                 }
                 found = Some(id);

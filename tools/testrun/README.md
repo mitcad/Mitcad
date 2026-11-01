@@ -249,8 +249,16 @@ same lock, and only a test with RUN_SERIAL set runs alone (as with ctest
 `cargo_build` on Linux and Windows and have RUN_SERIAL on macOS
 (`core/CMakeLists.txt`); the Windows UI tests that use the system
 clipboard, which all tests of one ssh logon share, hold the lock
-`system_clipboard` (mitcad#870). RUN_SERIAL: the timed `cli.perf_*`, the
-macOS Aqua UI tests and the macOS render-surface tests. `--dry-run` shows
+`system_clipboard` (mitcad#870). macOS Aqua UI and render-surface tests
+share `macos_desktop`, so they exclude each other while independent model,
+geometry and offscreen unit tests may run beside them. The shell UI
+harness also holds a per-user file lock across separate runs and checkouts.
+RUN_SERIAL remains for the timed `cli.perf_*`, the macOS Cargo builds and
+Metal scene acceptance, and the Metal surface tests whose parallel
+execution has not been validated. A macOS Cargo build needs this isolation because
+its memory profile records the largest child process rather than the
+whole compiler process tree, and no hard memory limit is available.
+`--dry-run` shows
 each test's RUN_SERIAL and RESOURCE_LOCK. A test still running two minutes after its ctest TIMEOUT
 (1500 s by default) is stopped and counted as a timeout.
 
@@ -471,4 +479,5 @@ decide which tests run at all; this only orders them).
   ([above](#ui-entries-at-once)), applied where a machine gives the bound
   (`--ui-max` or `MITCAD_UI_JOBS`); check-all's own Linux UI step can take
   `--ui-cap` and hand its runs over with `--record-ui`. macOS's Aqua UI
-  tests are RUN_SERIAL, so they stay one at a time.
+  tests hold `macos_desktop`, so they stay one at a time while non-UI
+  tests can use the remaining resources.

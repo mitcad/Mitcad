@@ -387,8 +387,7 @@ fn cut_scope_disk_cache_restores_owner_overrides_and_preview_metadata() {
         .add_feature(&cut_definition(&f.cut), None)
         .unwrap()
         .uid;
-    let dir = std::env::temp_dir().join(format!("mitcad-cut-scope-store-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = mitcad_model::testing::unique_temp_path("cut-scope-store");
     f.doc
         .set_result_store(Some(ResultStore::new(&dir, "cut-scope-test")));
     let persisted = f.doc.persist_results(Duration::ZERO);
@@ -407,7 +406,7 @@ fn cut_scope_disk_cache_restores_owner_overrides_and_preview_metadata() {
     );
     let report = opened.preview_edit(uid, &cut_definition(&f.cut)).unwrap();
     assert_eq!(report.cut_targets.unwrap().selected_components, 2);
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]

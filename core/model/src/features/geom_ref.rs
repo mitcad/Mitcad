@@ -52,8 +52,8 @@ use super::construction::datum_kind;
 use super::sketch::SketchOutput;
 use super::{CheckContext, EvalContext, References};
 use crate::datum::{
-    CurveGeometry, Datum, DatumAxis, DatumKind, DatumPlane, OriginDatum, PathParameter, PathPoint,
-    SurfaceGeometry, SurfacePoint, Vec3,
+    CurveGeometry, Datum, DatumAxis, DatumKind, DatumPlane, DatumPoint, OriginDatum, PathParameter,
+    PathPoint, SurfaceGeometry, SurfacePoint, Vec3,
 };
 use crate::ids::{BodyUid, EntityUid, FeatureUid};
 use crate::kernel::Kernel;
@@ -570,7 +570,7 @@ pub(crate) fn valid_mount_name(name: &str) -> bool {
 pub(crate) fn parse_mount(text: &str) -> Result<(FeatureUid, String), String> {
     let bad = || {
         format!(
-            "invalid mount frame '{text}': expected a derived part's frame like \"F7:mount(end_a)\""
+            "invalid mount frame “{text}”: expected a derived part's frame like \"F7:mount(end_a)\""
         )
     };
     let (feature, rest) = text.trim().split_once(':').ok_or_else(bad)?;
@@ -738,12 +738,12 @@ impl GeomRef {
                 return match &entry.def {
                     super::FeatureDef::DerivedPart(_) if valid_mount_name(name) => Ok(()),
                     super::FeatureDef::DerivedPart(_) => {
-                        Err(format!("'{name}' is no name of a mount frame"))
+                        Err(format!("{name} is no name of a mount frame"))
                     }
                     // A pulley's frame on its axis (mitcad#562).
                     super::FeatureDef::Pulley(_) if name == super::pulley::MOUNT => Ok(()),
                     super::FeatureDef::Pulley(_) => Err(format!(
-                        "a pulley has one mount frame, '{}'",
+                        "a pulley has one mount frame, {}",
                         super::pulley::MOUNT
                     )),
                     // A printable bearing's bore axis and faces (mitcad#577).
@@ -1682,7 +1682,13 @@ impl<K: Kernel> Resolver for EvalContext<'_, K> {
     }
 
     fn datum(&mut self, uid: FeatureUid) -> Result<Datum, String> {
-        EvalContext::datum(self, uid)
+        let datum = EvalContext::datum(self, uid)?;
+        // A datum of another component by its link (mitcad#1035): made in
+        // that component's coordinates, moved into the feature's.
+        Ok(match self.datum_placement(uid)? {
+            Some(transform) => placed_datum(datum, &transform),
+            None => datum,
+        })
     }
 
     fn shape(&mut self, body: BodyUid) -> Result<K::Shape, String> {
@@ -1699,7 +1705,17 @@ impl<K: Kernel> Resolver for EvalContext<'_, K> {
     }
 
     fn sketch(&mut self, uid: FeatureUid) -> Result<Arc<SketchOutput>, String> {
-        EvalContext::sketch(self, uid)
+        let output = EvalContext::sketch(self, uid)?;
+        // A sketch of another component by its link (mitcad#1039): its
+        // frame moved into the feature's coordinates. Its curves and points
+        // are in the sketch's own plane coordinates, so they follow.
+        let Some(transform) = self.datum_placement(uid)? else {
+            return Ok(output);
+        };
+        let mut placed = SketchOutput::clone(&output);
+        placed.frame = transform.apply_frame(&output.frame);
+        placed.base = transform.apply_frame(&output.base);
+        Ok(Arc::new(placed))
     }
 
     fn renamed(&mut self, what: &str, stored: &str, found: &str, maker: FeatureUid) {
@@ -1708,6 +1724,46 @@ impl<K: Kernel> Resolver for EvalContext<'_, K> {
 
     fn mount(&mut self, feature: FeatureUid, name: &str) -> Result<Transform, String> {
         EvalContext::mount(self, feature, name)
+    }
+}
+
+impl<K: Kernel> EvalContext<'_, K> {
+    /// The placement of a construction datum or a sketch of another
+    /// component by the feature's `datum_links` (mitcad#1035, mitcad#1039):
+    /// from that component's coordinates into the feature's. None without
+    /// a link; an error when the link's source shows another component than
+    /// the datum's or sketch's.
+    fn datum_placement(&mut self, uid: FeatureUid) -> Result<Option<Transform>, String> {
+        let Some(link) = self.datum_links.get(&uid).cloned() else {
+            return Ok(None);
+        };
+        let name = self.feature_name(uid);
+        let (component, transform) = self.linked(&link).map_err(|e| format!("{name}: {e}"))?;
+        match self.env.feature(uid).map(|f| f.component) {
+            Some(own) if own != component => Err(format!(
+                "{name} is in component {own}, not in {component} where its link leads"
+            )),
+            _ => Ok(Some(transform)),
+        }
+    }
+}
+
+/// A datum moved by a rigid motion (a placement from a linked component's
+/// coordinates into the feature's).
+fn placed_datum(datum: Datum, t: &Transform) -> Datum {
+    match datum {
+        Datum::Plane(p) => Datum::Plane(DatumPlane {
+            origin: t.apply_point(p.origin),
+            x_axis: t.apply_vector(p.x_axis),
+            y_axis: t.apply_vector(p.y_axis),
+        }),
+        Datum::Axis(a) => Datum::Axis(DatumAxis {
+            origin: t.apply_point(a.origin),
+            direction: t.apply_vector(a.direction),
+        }),
+        Datum::Point(p) => Datum::Point(DatumPoint {
+            point: t.apply_point(p.point),
+        }),
     }
 }
 
@@ -2009,7 +2065,7 @@ impl Fields {
 fn origin_datum(id: &str, kind: DatumKind) -> Result<OriginDatum, String> {
     OriginDatum::parse(id)
         .filter(|o| o.kind() == kind)
-        .ok_or_else(|| format!("unknown origin {kind} '{id}'"))
+        .ok_or_else(|| format!("unknown origin {kind} “{id}”"))
 }
 
 impl GeomRef {
@@ -2022,7 +2078,7 @@ impl GeomRef {
                 } else if let Ok(uid) = text.parse::<FeatureUid>() {
                     Ok(Self::Datum(uid))
                 } else {
-                    Err(format!("invalid reference '{text}': expected {EXPECTED}"))
+                    Err(format!("invalid reference “{text}”: expected {EXPECTED}"))
                 }
             }
             Value::Object(map) => {
@@ -2179,7 +2235,7 @@ impl GeomRef {
                     Self::FixedPoint(f.need("point", "a fixed point")?)
                 }
             }
-            other => return Err(format!("unknown reference type '{other}'")),
+            other => return Err(format!("unknown reference type “{other}”")),
         };
         f.done(reference)
     }
@@ -2200,7 +2256,7 @@ impl PathRef {
         let path = match tag.as_deref() {
             Some("sketch_curve") => Self::sketch_curve(&mut f)?,
             Some("line") => Self::line(&mut f)?,
-            Some(other) => return Err(format!("unknown path type '{other}'")),
+            Some(other) => return Err(format!("unknown path type “{other}”")),
             None if f.has("edges") => Self::Edges {
                 body: f.need("body", "a path of edges")?,
                 edges: f.need("edges", "a path of edges")?,
@@ -2336,11 +2392,11 @@ mod tests {
     #[test]
     fn malformed_references_are_explained() {
         for (value, expected) in [
-            (json!("XY"), "invalid reference 'XY'"),
+            (json!("XY"), "invalid reference “XY”"),
             (json!(3), "invalid reference 3"),
             (
                 json!({"body": "F2.b0", "face": "F2:a", "edge": "y"}),
-                "invalid name 'y'",
+                "invalid name y",
             ),
             (
                 json!({"body": "F2.b0", "face": "F2:a", "edge": "E{F2:a|F2:b}"}),
@@ -2357,9 +2413,9 @@ mod tests {
             ),
             (
                 json!({"type": "origin", "plane": "x"}),
-                "unknown origin plane 'x'",
+                "unknown origin plane “x”",
             ),
-            (json!({"type": "warp"}), "unknown reference type 'warp'"),
+            (json!({"type": "warp"}), "unknown reference type “warp”"),
         ] {
             let error = serde_json::from_value::<GeomRef>(value).unwrap_err();
             assert!(error.to_string().contains(expected), "{error}");

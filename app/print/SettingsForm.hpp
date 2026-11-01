@@ -61,6 +61,15 @@ public:
   QString set() const { return m_set; }
   // Keys never shown (the material's density stands for filament_density).
   void setHiddenKeys(const QStringList& keys);
+  // Keys kept per slicer that the form edits, a row per slicer that has
+  // the key, named by the slicer, its field that slicer's (SettingField's
+  // `slicer`; mitcad#1062: a material's filament preset); shown with
+  // Advanced off too, found by the key's name or the slicer's. Other keys
+  // kept per slicer (a printer's preset) are never shown. Before setKeys.
+  void setSlicerKeys(const QStringList& keys);
+  // The names a slicer's row offers for a key when its list opens (the
+  // installed slicer's presets); none: a typed name only.
+  std::function<QStringList(const QString& key, const QString& slicer)> slicerChoices;
   // The item's values by key. Its slicer-specific keys are not shown
   // (mitcad#655: an import's Details… lists them).
   void setValues(const QJsonObject& values);
@@ -73,6 +82,16 @@ public:
   void setGeneralNames(const QStringList& names);
   // Shows the general page's tab (its fields take the keyboard).
   void showGeneral();
+  // A page of the window's own after the print settings' tabs, its tab
+  // `title` (mitcad#1054: a material's Variants), shown with the print
+  // settings (setPrintShown) and not while searching.
+  void setEndPage(QWidget* page, const QString& title);
+  // The object names of the search, the tabs and the fields start with
+  // `prefix` ("variant": variantSettingsSearch, variantSettingsTabs,
+  // variantSetting_<key>; mitcad#1054) for a second form in a window;
+  // before setKeys. Empty: settingsSearch, settingsTabs,
+  // printSetting_<key>.
+  void setNamePrefix(const QString& prefix);
   // Whether the print settings are shown at all (mitcad#655: a material
   // that cannot have them, a metal, shows the general page alone).
   void setPrintShown(bool shown);
@@ -96,10 +115,12 @@ public:
   // keyboard.
   void focusKey(const QString& key);
   // The places of what is in sight, as "<prefix> field <key> at x,y"
-  // (`clear <key>` for ↺, `tab <category>`, `search`, `advanced`); `at`
+  // (`<key>.<slicer>` for a slicer's row, `clear <key>` for ↺, `tab
+  // <category>`, `search`, `advanced`); `at`
   // maps a point of a widget into the logged coordinates.
   QStringList places(const QString& prefix, const std::function<QString(QWidget*, const QPoint&)>& at) const;
-  // The values set, in the form's order: "<key> = <text>".
+  // The values set, in the form's order: "<key> = <text>" (a slicer's row
+  // "<key>.<slicer> = <name>").
   QStringList rows() const;
   // Whether a key's row is shown now, and the tabs shown (category ids):
   // for the unit tests, as the filter leaves them.
@@ -116,6 +137,8 @@ signals:
 private:
   struct Row {
     PrintKey key;
+    QString slicer; // a slicer's row of a key kept per slicer (setSlicerKeys)
+    QString title;  // the row's name: the key's, or the slicer's
     QString category;
     QString group;
     QWidget* line = nullptr;
@@ -149,9 +172,13 @@ private:
   std::vector<Group> m_groups;
   QStringList m_categories; // the tabs' categories, in order
   QSet<QString> m_hidden;
+  QStringList m_slicerKeys; // setSlicerKeys'
   QString m_forced; // a key focusKey shows whatever the filter says
   QWidget* m_general = nullptr; // the window's own page, if any
   QString m_generalTitle;
+  QWidget* m_end = nullptr; // the window's page after the print tabs, if any
+  QString m_endTitle;
+  QString m_fieldPrefix = QStringLiteral("printSetting_");
   QStringList m_generalNames;
   QHash<QString, QString> m_tabTitles; // the print tabs' titles by category
   QHash<QString, int> m_hintCounts;     // setHints' marked tabs by id

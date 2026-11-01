@@ -96,6 +96,13 @@ std::vector<FaceMaterial> faceMaterialsOf(const std::vector<SceneFaces>& faces) 
   return materials;
 }
 
+void seeThrough(BodyData& body) {
+  body.material.opacity *= kTransparentOpacity;
+  for (FaceMaterial& face : body.faces) {
+    face.material.opacity *= kTransparentOpacity;
+  }
+}
+
 QStringList missingTextures(const std::vector<const Appearance*>& appearances) {
   QStringList missing;
   const auto add = [&missing](const QString& line) {
@@ -108,7 +115,7 @@ QStringList missingTextures(const std::vector<const Appearance*>& appearances) {
       continue;
     }
     if (a->texture.file.isEmpty()) {
-      add(QObject::tr("%1: %2, its base colour is shown").arg(a->name, a->texture.missing));
+      add(QObject::tr("%1: %2, its base color is shown").arg(a->name, a->texture.missing));
     }
     // The other maps of the set (mitcad#314): each left out alone.
     for (std::size_t i = 0; i < a->texture.maps.size(); ++i) {
@@ -140,6 +147,9 @@ SceneUpdate sceneOf(const std::vector<SceneBody>& bodies) {
     }
     entry.material = materialOf(body.appearance);
     entry.faces = faceMaterialsOf(body.faces);
+    if (body.transparent) {
+      seeThrough(entry);
+    }
     // Bodies with the same triangles share their mesh.
     const bool held = std::any_of(scene.meshes.begin(), scene.meshes.end(),
                                   [&entry](const auto& known) { return known.first == entry.mesh; });

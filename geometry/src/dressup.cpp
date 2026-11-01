@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
@@ -69,6 +70,7 @@
 #include "face_select.hpp"
 #include "history.hpp"
 #include "mitcad/geometry/boolean.hpp"
+#include "mitred_dressup.hpp"
 #include "ring_dressup.hpp"
 #include "util.hpp"
 
@@ -97,12 +99,134 @@ constexpr double kTight[6] = {1.0e-3, 1.0e-7, 1.0e-9, 1.0e-6, 1.0e-8, 1.0e-5};
 // about 172 degrees (they fold back on each other).
 constexpr double kKnife = 3.0;
 
+// Twice a face's area over the length of its boundary: a strip's width.
+double face_width(const TopoDS_Face& face) {
+  GProp_GProps area;
+  BRepGProp::SurfaceProperties(face, area);
+  double boundary = 0.0;
+  for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More(); ex.Next()) {
+    if (!BRep_Tool::Degenerated(TopoDS::Edge(ex.Current()))) {
+      GProp_GProps length;
+      BRepGProp::LinearProperties(ex.Current(), length);
+      boundary += length.Mass();
+    }
+  }
+  return boundary > 0.0 ? 2.0 * area.Mass() / boundary : 0.0;
+}
+
+// A dressup built with its sizes scaled by kShrink (`smaller`, of the body
+// `input`, its largest size `size`) without the strips it left where the
+// faces it takes away at its exact size were (mitcad#1106): the faces of
+// the input that are narrower than 2e-3 of the size in it and were not
+// in the input, beside a face the dressup made, removed by OCCT's
+// defeaturing, which extends the faces round each strip to meet. The
+// dressup's faces then meet the faces beyond the strips at one edge, as at
+// the exact size, and take the strips' names, as a face the dressup takes
+// away gives its names to the dressup's face there (name_consumed_faces).
+// Null where it leaves no strip, or the defeaturing fails or gives no
+// valid solid of nearly the same volume.
+ShapePtr without_strips(const Shape& smaller, const Shape& input, double size) {
+  const double narrow = 2.0e-3 * size;
+  const detail::EdgeFaces edge_faces(smaller);
+  // The dressup's faces: those whose names the input has not.
+  const auto made = [&](int f) {
+    const NameList& names = smaller.face_names(f);
+    return !names.empty() && input.find_faces(names.front()).empty();
+  };
+  NCollection_List<TopoDS_Shape> strips;
+  std::vector<int> strip_faces;
+  for (int f = 0; f < smaller.face_count(); ++f) {
+    const NameList& names = smaller.face_names(f);
+    if (names.empty() || made(f) || !(face_width(smaller.face(f)) < narrow)) {
+      continue;
+    }
+    bool was_wide = false;
+    for (const int g : input.find_faces(names.front())) {
+      was_wide = was_wide || face_width(input.face(g)) >= 2.0 * narrow;
+    }
+    bool beside = false;
+    for (int e = 0; e < smaller.edge_count() && !beside; ++e) {
+      const std::vector<int> faces = edge_faces.at(e);
+      if (faces.size() == 2 && (faces[0] == f || faces[1] == f)) {
+        beside = made(faces[0] == f ? faces[1] : faces[0]);
+      }
+    }
+    if (was_wide && beside) {
+      strips.Append(smaller.face(f));
+      strip_faces.push_back(f);
+    }
+  }
+  if (strips.IsEmpty()) {
+    return nullptr;
+  }
+  try {
+    OCC_CATCH_SIGNALS
+    BRepAlgoAPI_Defeaturing defeaturing;
+    defeaturing.SetShape(smaller.occt());
+    defeaturing.AddFacesToRemove(strips);
+    defeaturing.SetRunParallel(false);
+    defeaturing.SetToFillHistory(true);
+    defeaturing.Build();
+    if (!defeaturing.IsDone() || defeaturing.HasWarnings()) {
+      return nullptr;
+    }
+    const TopoDS_Shape whole = defeaturing.Shape();
+    int solids = 0;
+    for (TopExp_Explorer ex(whole, TopAbs_SOLID); ex.More(); ex.Next()) {
+      ++solids;
+    }
+    const double before = detail::volume_of(smaller.occt());
+    if (solids != 1 || !BRepCheck_Analyzer(whole, true, true).IsValid() ||
+        std::abs(detail::volume_of(whole) - before) > 1.0e-4 * std::abs(before)) {
+      return nullptr;
+    }
+    const occ::handle<BRepTools_History> history = defeaturing.History();
+    detail::FaceNamer namer(whole);
+    namer.carry(*history, smaller);
+    // Each strip's names to the images of the dressup's faces beside it.
+    for (const int f : strip_faces) {
+      for (int e = 0; e < smaller.edge_count(); ++e) {
+        const std::vector<int> faces = edge_faces.at(e);
+        if (faces.size() != 2 || (faces[0] != f && faces[1] != f)) {
+          continue;
+        }
+        const int other = faces[0] == f ? faces[1] : faces[0];
+        if (!made(other)) {
+          continue;
+        }
+        const TopoDS_Shape& face = smaller.face(other);
+        if (history->IsRemoved(face)) {
+          continue;
+        }
+        NCollection_List<TopoDS_Shape> images = history->Modified(face);
+        if (images.IsEmpty()) {
+          images.Append(face);
+        }
+        for (const TopoDS_Shape& image : images) {
+          if (namer.contains(image)) {
+            namer.add(image, smaller.face_names(f), -1);
+          }
+        }
+      }
+    }
+    namer.finish();
+    namer.set_valid(true);
+    ShapePtr out = namer.shape();
+    out->copy_notes(smaller);
+    return out;
+  } catch (const Standard_Failure&) {
+    return nullptr;
+  }
+}
+
 // Runs `attempt` with the sizes as given (scale 1), then, when it fails
-// (not for invalid arguments), with the sizes scaled by kShrink, noting so
-// on the result (the model warns about it); throws the first error when
-// both fail. `what`: "fillet" or "chamfer".
+// (not for invalid arguments), with the sizes scaled by kShrink, without
+// the strips that leaves (without_strips; `input` the body it dresses,
+// `size` its largest size) and with an info saying it is that much smaller
+// (mitcad#1106: 0.1 % is no reason for a warning); throws the first error
+// when both fail. `what`: "fillet" or "chamfer".
 template <class Attempt>
-ShapePtr with_shrink_retry(const char* what, Attempt&& attempt) {
+ShapePtr with_shrink_retry(const char* what, const Shape& input, double size, Attempt&& attempt) {
   std::exception_ptr first;
   try {
     OCC_CATCH_SIGNALS
@@ -117,10 +241,15 @@ ShapePtr with_shrink_retry(const char* what, Attempt&& attempt) {
   try {
     OCC_CATCH_SIGNALS
     ShapePtr smaller = attempt(kShrink);
-    smaller->add_note(std::string("the ") + what +
+    if (ShapePtr whole = without_strips(*smaller, input, size)) {
+      smaller = whole;
+    }
+    smaller->add_info(std::string("the ") + what +
                       " is built 0.1 % smaller than asked: at its exact size it takes a face away, "
                       "which the geometry kernel cannot build");
     return smaller;
+  } catch (const Cancelled&) {
+    throw;
   } catch (...) {
   }
   std::rethrow_exception(first);
@@ -318,6 +447,10 @@ ShapePtr healed(const Shape& result, const Shape& body) {
     detail::FaceNamer namer(fixed);
     namer.carry(*fix.Context()->History(), named);
     namer.carry_by_surface(named, "healed dressup");
+    // Faces the healing rebuilt that neither its history nor their surfaces
+    // name (a rounding's face at a pocket's corner, mitcad#1118): the names
+    // of the face of the result they lie in.
+    namer.carry_by_containment(named, 1.0e-6);
     namer.finish();
     namer.set_valid(true); // checked above
     return namer.shape();
@@ -576,6 +709,58 @@ void name_consumed_faces(BRepFilletAPI_LocalOperation& maker, const Shape& body,
   }
 }
 
+// Faces of the result still without a name after the history and the
+// body's surfaces named the others: faces of the dressup that OCCT's
+// history gives no contour edge (a rounding of an edge at a pocket's
+// corners, its stripe's ends rebuilt where its ball rolled on the far edge
+// of a face it takes away, mitcad#1118). Each is named after the named
+// contour edge nearest it, as the faces generated from that edge are, where
+// no face holds that edge's dressup name yet (a face the history gave the
+// name keeps it whole).
+void name_after_nearest_edge(BRepFilletAPI_LocalOperation& maker, const std::string& feature, const char* role,
+                             const Shape& body, detail::FaceNamer& namer) {
+  ShapeMap faces;
+  TopExp::MapShapes(maker.Shape(), TopAbs_FACE, faces);
+  std::set<std::string> held;
+  for (int ic = 1; ic <= maker.NbContours(); ++ic) {
+    for (int ie = 1; ie <= maker.NbEdges(ic); ++ie) {
+      if (const auto name = body.name_of_edge(maker.Edge(ic, ie))) {
+        const std::string dressup = face_name(feature, role, *name);
+        if (namer.holds(dressup)) {
+          held.insert(dressup);
+        }
+      }
+    }
+  }
+  for (int f = 1; f <= faces.Extent(); ++f) {
+    if (namer.named(faces(f))) {
+      continue;
+    }
+    std::optional<std::string> nearest;
+    double distance = 0.0;
+    for (int ic = 1; ic <= maker.NbContours(); ++ic) {
+      for (int ie = 1; ie <= maker.NbEdges(ic); ++ie) {
+        const auto name = body.name_of_edge(maker.Edge(ic, ie));
+        if (!name) {
+          continue;
+        }
+        try {
+          OCC_CATCH_SIGNALS
+          BRepExtrema_DistShapeShape between(faces(f), maker.Edge(ic, ie));
+          if (between.IsDone() && (!nearest || between.Value() < distance)) {
+            nearest = *name;
+            distance = between.Value();
+          }
+        } catch (const Standard_Failure&) {
+        }
+      }
+    }
+    if (nearest && held.count(face_name(feature, role, *nearest)) == 0) {
+      namer.add(faces(f), face_name(feature, role, *nearest));
+    }
+  }
+}
+
 // Names the result of a fillet or chamfer: the faces generated from every
 // edge of the contours (the tangent chains included) and their vertices.
 ShapePtr name_result(BRepFilletAPI_LocalOperation& maker, const std::string& feature,
@@ -607,6 +792,7 @@ ShapePtr name_result(BRepFilletAPI_LocalOperation& maker, const std::string& fea
   }
   name_consumed_faces(maker, body, namer);
   namer.carry_by_surface(body, role);
+  name_after_nearest_edge(maker, feature, role, body, namer);
   namer.finish();
   // Vertex tolerances OCCT inflated far beyond what the vertices' edges need
   // (detail::inflated_vertices, mitcad#235) are cut down to it: a result
@@ -687,9 +873,7 @@ ShapePtr join_at_turn_stops(const ShapePtr& rounded,
     namer.set_valid(*valid);
   }
   ShapePtr joined = namer.shape();
-  for (const std::string& note : rounded->notes()) {
-    joined->add_note(note);
-  }
+  joined->copy_notes(*rounded);
   return joined;
 }
 
@@ -1019,6 +1203,29 @@ double largest_distance(const ChamferSpec& spec) {
     return spec.distance * std::max(1.0, std::tan(spec.angle));
   }
   return spec.distance;
+}
+
+// The largest size of the sets: a radius, a chord, a distance.
+double largest_size(const std::vector<FilletSet>& sets) {
+  double size = 0.0;
+  for (const FilletSet& set : sets) {
+    size = std::max({size, set.radius, set.radius2, set.chord});
+    for (const auto& point : set.mid) {
+      size = std::max(size, point.second);
+    }
+    for (const double radius : set.radii) {
+      size = std::max(size, radius);
+    }
+  }
+  return size;
+}
+
+double largest_size(const std::vector<ChamferSet>& sets) {
+  double size = 0.0;
+  for (const ChamferSet& set : sets) {
+    size = std::max(size, largest_distance(set.spec));
+  }
+  return size;
 }
 
 // Why OCCT's fillet did not build the corner at its first faulty vertex
@@ -1743,6 +1950,60 @@ ShapePtr ring_fillet(const std::string& feature, const Shape& body, const std::v
   return result;
 }
 
+// The fillet's roundings as mitred sweeps (mitred_dressup.hpp): roundings
+// of constant radius that take a face away, round a loop of edges; null
+// when they are not such roundings or cannot be built so.
+ShapePtr mitred_roundings(const std::string& feature, const Shape& body, const std::vector<FilletSet>& sets,
+                          const std::vector<int>& owner) {
+  std::vector<detail::MitredEdge> edges;
+  for (int edge = 0; edge < body.edge_count(); ++edge) {
+    const int s = owner[static_cast<std::size_t>(edge)];
+    if (s < 0) {
+      continue;
+    }
+    const FilletSet& set = sets[static_cast<std::size_t>(s)];
+    if (set.curvature || set.size != FilletSize::Constant) {
+      return nullptr;
+    }
+    edges.push_back({edge, set.radius});
+  }
+  return detail::mitred_fillet(feature, body, edges);
+}
+
+// Runs `dressup` (OCCT's fillet at its exact size); where the geometry
+// kernel fails (not for invalid arguments), the roundings are built as
+// mitred sweeps if they are roundings that take a face away round a loop of
+// edges, whose corners OCCT cannot join (mitcad#1118), else the kernel's
+// error stands.
+template <class Dressup>
+ShapePtr or_mitred(const std::string& feature, const Shape& body, const std::vector<FilletSet>& sets,
+                   const std::vector<int>& owner, Dressup&& dressup) {
+  std::exception_ptr first;
+  try {
+    OCC_CATCH_SIGNALS
+    return dressup();
+  } catch (const std::invalid_argument&) {
+    throw;
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    first = std::current_exception();
+  }
+  ShapePtr mitred;
+  try {
+    OCC_CATCH_SIGNALS
+    mitred = mitred_roundings(feature, *detail::working_copy(body), sets, owner);
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    mitred = nullptr;
+  }
+  if (mitred) {
+    return mitred;
+  }
+  std::rethrow_exception(first);
+}
+
 // The chamfer as rings about whole circles; null when it cannot be built so.
 ShapePtr ring_chamfer(const std::string& feature, const Shape& body, const std::vector<ChamferSet>& sets,
                       const std::vector<int>& owner) {
@@ -2410,9 +2671,7 @@ ShapePtr with_piece_names(const ShapePtr& result, const MergedEdges& merged, con
     faces.push_back({result->face(f), names});
   }
   ShapePtr named = std::make_shared<Shape>(result->occt(), faces);
-  for (const std::string& note : result->notes()) {
-    named->add_note(note);
-  }
+  named->copy_notes(*result);
   return named;
 }
 
@@ -2697,15 +2956,22 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
     const auto build = [&](const Shape& target, const std::vector<int>& own_edges) {
       const auto rings = [&](const Shape& body) { return ring_fillet(feature, body, sets, own_edges); };
       return or_rings("fillet", target, [&] {
-        return with_shrink_retry("fillet", [&](double scale) {
-          return dress(target, sets, own_edges, scale, feature, "fillet", true,
-                       [&](const Shape& body, const std::vector<int>& own, double size_scale, bool tight) {
-                         if (any_blended) {
-                           return round_and_blend(feature, body, sets, own, blended, rolling_ball_corners,
-                                                  size_scale, tight);
-                         }
-                         return round_edges(feature, body, sets, own, rolling_ball_corners, size_scale, tight);
-                       });
+        return with_shrink_retry("fillet", target, largest_size(sets), [&](double scale) {
+          const auto rounded = [&] {
+            return dress(target, sets, own_edges, scale, feature, "fillet", true,
+                         [&](const Shape& body, const std::vector<int>& own, double size_scale, bool tight) {
+                           if (any_blended) {
+                             return round_and_blend(feature, body, sets, own, blended, rolling_ball_corners,
+                                                    size_scale, tight);
+                           }
+                           return round_edges(feature, body, sets, own, rolling_ball_corners, size_scale, tight);
+                         });
+          };
+          // At the exact size, before the 0.1 % smaller retry; not for
+          // setback corners.
+          return scale == 1.0 && !any_blended && rolling_ball_corners
+                     ? or_mitred(feature, target, sets, own_edges, rounded)
+                     : rounded();
         });
       }, rings);
     };
@@ -2778,7 +3044,7 @@ ShapePtr chamfer(const std::string& feature, const Shape& input, const std::vect
   return canonical(input, with_own_chains("chamfer", input, sets, owner, [&](const std::vector<int>& selected) {
     const auto rings = [&](const Shape& body) { return ring_chamfer(feature, body, sets, selected); };
     return or_rings("chamfer", input, [&] {
-      return with_shrink_retry("chamfer", [&](double scale) {
+      return with_shrink_retry("chamfer", input, largest_size(sets), [&](double scale) {
         return dress(input, sets, selected, scale, feature, "chamfer", false,
                      [&](const Shape& body, const std::vector<int>& own, double size_scale, bool) {
                        return bevel(feature, body, sets, own, corner, size_scale);

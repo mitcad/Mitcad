@@ -583,11 +583,11 @@ chmod +x "$REFUSE/hooks/pre-receive"
 RA=$WORK/ada/refuse
 clone "$REFUSE" "$RA" "Ada Tester" ada@example.invalid
 start ada $SCALE "$RA/part.mitcad"
-ui_expect_new "Edit locks: part.mitcad: This remote does not accept Mitcad's lock references" "no lock with it" 20
+ui_expect_new "Edit locks: part.mitcad: This remote does not accept MitCad's lock references" "no lock with it" 20
 ui_expect_new "Edit lock state: none, part.mitcad" "editable without a lock"
 ui_mark
 ui_step "project settings (search)"     ui_command "Project Settings"
-ui_expect_new "Project Settings: edit locks: This remote does not accept Mitcad's lock references" \
+ui_expect_new "Project Settings: edit locks: This remote does not accept MitCad's lock references" \
   "Project Settings says so" 20
 ui_focus_dialog '^Project Settings - refuse$'
 ui_step "close (Esc)"                   ui_key Escape

@@ -1,22 +1,25 @@
 // SPDX-License-Identifier: MIT
 // Measurement objects (mitcad#649), now annotations (mitcad#702;
-// app/COMMANDS.md "Measurement objects" and "Annotations"): Keep as
-// Dimension in the Measure panel and in a history row's menu adds the
-// picks as a dimension of the design (the model's add_annotation, whose
-// default kind and name the model chooses, in the plane and with the
-// places the view suggests), the Annotate menu's Note…, Datum Label…,
-// Frame… and Hole Callout a leader note, a datum label, a feature control
-// frame or a hole callout on the one pick shown; all outside the panel's undo
-// range, as a light bulb's change is (CommandSession::runVisibility). The
+// app/COMMANDS.md "Measurement objects" and "Annotations"): the picks of a
+// panel as add_annotation takes them, for the Make tab's Annotate group
+// (mitcad#1049, MainWindowMake.cpp: Dimension, whose default kind and name
+// the model chooses, in the plane and with the places the view suggests;
+// Note, Datum Label, Feature Control Frame, Hole Callout, Material and
+// Process Note on one pick), each outside the panel's undo range, as a
+// light bulb's change is; before Add, each panel's preview of what it adds,
+// placed by the model as Add will place it (add_annotation with "preview",
+// mitcad#1097) and drawn dimmed (OcctViewer::setMeasurementPreview). The
 // shown ones are drawn in their planes in the view after every refresh
 // (OcctViewer::setMeasurements) and listed in the Annotations window
 // (MainWindowAnnotations.cpp).
 #include "MainWindow.hpp"
 
 #include <cmath>
+#include <exception>
 #include <initializer_list>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -26,6 +29,7 @@
 
 #include "framework/Command.hpp"
 #include "framework/CommandSession.hpp"
+#include "framework/Json.hpp"
 #include "view/AnnotationDialogs.hpp"
 #include "view/AnnotationsWindow.hpp"
 #include "view/MeasurementDrawing.hpp"
@@ -74,6 +78,26 @@ const SelectionItem* firstOf(const QHash<QString, Selection>& inputs, std::initi
 }
 
 QJsonArray vectorOf(const gp_Dir& d) { return QJsonArray{d.X() + 0.0, d.Y() + 0.0, d.Z() + 0.0}; }
+
+// Whether two views of annotationView look along the same direction with
+// the same up (a pan or a zoom places an annotation no differently).
+bool sameDirection(const QJsonObject& a, const QJsonObject& b) {
+  for (const char* key : {"direction", "up"}) {
+    const QJsonArray u = a.value(QLatin1String(key)).toArray();
+    const QJsonArray v = b.value(QLatin1String(key)).toArray();
+    if (u.size() != 3 || v.size() != 3) {
+      return false;
+    }
+    double along = 0.0;
+    for (int i = 0; i < 3; ++i) {
+      along += u.at(i).toDouble() * v.at(i).toDouble();
+    }
+    if (along < 1.0 - 1e-12) {
+      return false;
+    }
+  }
+  return true;
+}
 
 } // namespace
 
@@ -147,105 +171,105 @@ QJsonObject MainWindow::annotationView() const {
   return view;
 }
 
-void MainWindow::keepMeasurement(const QHash<QString, Selection>& inputs, const QString& what) {
-  if (!m_session || m_session->def().id != QStringLiteral("inspect.measure")) {
-    return;
+QJsonObject MainWindow::annotationCommand(const CommandState& state, const QString& kind, const QJsonObject& extra,
+                                          QString* why) {
+  QHash<QString, Selection> inputs;
+  inputs.insert(QStringLiteral("a"), state.items(QStringLiteral("a")));
+  if (!state.items(QStringLiteral("b")).isEmpty()) {
+    inputs.insert(QStringLiteral("b"), state.items(QStringLiteral("b")));
   }
-  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("add_annotation")},
-                      {QStringLiteral("view"), annotationView()}};
-  QString why;
-  if (!measurementPicks(inputs, command, why)) {
-    showHint(why);
-    qDebug().noquote() << QStringLiteral("Measurement not kept (%1): %2").arg(what, why);
-    return;
-  }
-  // Listed once the model has it (followMeasurements); a light bulb's way
-  // outside the panel's undo range, so that closing the panel keeps it.
-  m_measurementKept = true;
-  if (!m_session->runVisibility(QJsonArray{command}, tr("Keep Measurement"))) {
-    m_measurementKept = false;
-    qDebug().noquote() << QStringLiteral("Measurement not kept (%1): %2").arg(what, lastError());
-  }
-}
-
-void MainWindow::keepMeasurementRow(int number) {
-  const MeasureHistory::Row* row = m_measureHistory.row(number);
-  if (row == nullptr) {
-    return;
-  }
-  // A copy: keeping refreshes the rows.
-  const QHash<QString, Selection> inputs = row->inputs;
-  keepMeasurement(inputs, QStringLiteral("row %1").arg(number));
-}
-
-void MainWindow::keepNote(const QHash<QString, Selection>& inputs) { keepLeader(inputs, QStringLiteral("note")); }
-
-void MainWindow::keepLeader(const QHash<QString, Selection>& inputs, const QString& kind) {
-  if (!m_session || m_session->def().id != QStringLiteral("inspect.measure")) {
-    return;
-  }
-  QJsonObject pick;
-  QJsonValue at;
-  if (!notePick(inputs, pick, at)) {
-    showHint(tr("Pick one face, edge or vertex of a body or a datum, or click a body where the leader points."));
-    return;
-  }
-  // A datum label or a frame marks a feature, not a point (the model
-  // refuses that too); a hole callout a hole.
-  if (kind != QLatin1String("note") && !markablePick(inputs)) {
-    showHint(kind == QLatin1String("hole_callout")
-                 ? tr("A hole callout points at a hole: pick its round face or edge.")
-                 : tr("A datum label or a feature control frame marks a face, an edge, an axis or a plane, not a "
-                      "point."));
-    return;
-  }
-  const SelectionItem* item = firstOf(inputs, {"a", "body_a", "sketch_a"});
-  const QString what = item != nullptr ? item->describe() : QString();
-  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("add_annotation")},
-                      {QStringLiteral("kind"), kind},
-                      {QStringLiteral("a"), pick},
-                      {QStringLiteral("view"), annotationView()}};
-  QString label;
-  if (kind == QLatin1String("datum")) {
-    // A datum label: the model's next free letter offered (ISO 5459); kept,
-    // the model chooses it again (no letter sent).
-    const QString suggested =
-        query({{QStringLiteral("query"), QStringLiteral("next_datum_letter")}}).toObject().value(QStringLiteral("letter")).toString();
-    const std::optional<QString> letter = askDatumLetter(this, suggested, what);
-    if (!letter) {
-      return;
+  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("add_annotation")}};
+  if (kind == QLatin1String("dimension")) {
+    // The kind the model chooses for the picks, as Keep chose it.
+    QString reason;
+    if (!measurementPicks(inputs, command, reason)) {
+      if (why != nullptr) {
+        *why = reason;
+      }
+      return QJsonObject();
     }
-    if (*letter != suggested) {
-      command.insert(QStringLiteral("letter"), *letter);
-    }
-    label = tr("Add Datum Label");
-  } else if (kind == QLatin1String("frame")) {
-    const std::optional<QJsonObject> frame =
-        askFeatureControlFrame(this, geometricCharacteristics(), QJsonObject(), datumLetters(), what);
-    if (!frame) {
-      return;
-    }
-    command.insert(QStringLiteral("frame"), *frame);
-    label = tr("Add Feature Control Frame");
-  } else if (kind == QLatin1String("hole_callout")) {
-    // Its text is the hole's (mitcad#902): no dialog; the model refuses a
-    // pick that is no hole, with the reason.
-    label = tr("Add Hole Callout");
   } else {
-    const std::optional<QString> text = askNoteText(this, what);
-    if (!text) {
-      return;
+    QJsonObject pick;
+    QJsonValue at;
+    if (!notePick(inputs, pick, at)) {
+      if (why != nullptr) {
+        *why = tr("Pick one face, edge or vertex of a body or a datum, or click a body where the leader points.");
+      }
+      return QJsonObject();
     }
-    command.insert(QStringLiteral("text"), *text);
-    label = tr("Add Note");
+    command.insert(QStringLiteral("kind"), kind);
+    command.insert(QStringLiteral("a"), pick);
+    if (!at.isNull()) {
+      command.insert(QStringLiteral("at"), at);
+    }
   }
-  if (!at.isNull()) {
-    command.insert(QStringLiteral("at"), at);
+  for (auto it = extra.begin(); it != extra.end(); ++it) {
+    command.insert(it.key(), it.value());
   }
-  m_measurementKept = true;
-  if (!m_session->runVisibility(QJsonArray{command}, label)) {
-    m_measurementKept = false;
-    qDebug().noquote() << QStringLiteral("Leader %1 not added: %2").arg(kind, lastError());
+  return command;
+}
+
+QString MainWindow::previewAnnotation(const QJsonObject& asked) {
+  m_annotationPreview = asked;
+  const auto logged = [this](const QString& line) {
+    if (line != m_loggedAnnotationPreview) {
+      m_loggedAnnotationPreview = line;
+      qDebug().noquote() << line;
+    }
+  };
+  if (asked.isEmpty()) {
+    m_annotationPreviewView = QJsonObject();
+    m_viewer->setMeasurementPreview({});
+    logged(QStringLiteral("Annotation preview: none"));
+    return QString();
+  }
+  // Placed by the model as Add will place it: in the view as it is, with
+  // nothing stored (commands.md, "Annotations": a preview).
+  const QJsonObject view = annotationView();
+  QJsonObject request = asked;
+  request.insert(QStringLiteral("view"), view);
+  request.insert(QStringLiteral("preview"), true);
+  m_annotationPreviewView = view;
+  QJsonObject answer;
+  try {
+    answer = command(request);
+  } catch (const std::exception& error) {
+    const QString why = errorText(error);
+    m_viewer->setMeasurementPreview({});
+    logged(QStringLiteral("Annotation preview: none: %1").arg(why));
+    return why;
+  }
+  // The annotation as the annotations query will list it, without the
+  // command's own status fields.
+  for (const char* key : {"recomputed", "restored", "restored_packed", "failed_features", "notices"}) {
+    answer.remove(QLatin1String(key));
+  }
+  if (answer.value(QStringLiteral("error")).isNull()) {
+    answer.remove(QStringLiteral("error"));
+  }
+  const QString unit = m_snapshot.lengthUnit;
+  const double millimetres = lengthUnitMillimetres(unit);
+  const std::vector<MeasurementDisplay> shown =
+      measurementDisplays(QJsonArray{answer}, [unit, millimetres](const QString& kind, double value) {
+        return measurementValueText(kind, value, unit, millimetres);
+      });
+  m_viewer->setMeasurementPreview(shown);
+  const QString name = answer.value(QStringLiteral("name")).toString();
+  if (shown.empty()) {
+    logged(QStringLiteral("Annotation preview: none drawn: %1").arg(name));
+  } else {
+    logged(QStringLiteral("Annotation preview: %1 %2").arg(name, answer.value(QStringLiteral("kind")).toString()));
+  }
+  return QString();
+}
+
+void MainWindow::followAnnotationPreviewView() {
+  if (m_annotationPreview.isEmpty() || !m_session || modelBusy()) {
+    return;
+  }
+  if (!sameDirection(annotationView(), m_annotationPreviewView)) {
+    // Computed again through the panel, which shows why if it is refused.
+    m_session->previewAgain();
   }
 }
 

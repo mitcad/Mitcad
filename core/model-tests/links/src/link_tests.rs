@@ -634,8 +634,7 @@ fn paste_new_remaps_subassembly_links_before_validation() {
 #[test]
 fn inserting_a_design_maps_links_under_its_new_root_occurrence() {
     let fixture = linked_assembly();
-    let dir = std::env::temp_dir().join(format!("mitcad-linked-copy-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("linked-copy");
     std::fs::write(dir.join("linked.mitcad"), fixture.doc.to_json()).unwrap();
     let mut doc = Document::new(MockKernel::default());
     *doc.kernel().curves.borrow_mut() = fixture.doc.kernel().curves.borrow().clone();
@@ -657,7 +656,7 @@ fn inserting_a_design_maps_links_under_its_new_root_occurrence() {
         .unwrap();
     copied_links(&doc, fixture.tool, &[container_occurrence, occurrence]);
     linked_copy_round_trip(&doc);
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]

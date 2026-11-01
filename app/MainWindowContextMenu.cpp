@@ -33,12 +33,16 @@ namespace mitcad {
 namespace {
 
 // The submenus, in the menu's order; Inspect's commands (Measure) are
-// entries of the menu itself.
-enum class Kind { Solid, Build, Construct, Inspect };
+// entries of the menu itself. The Make tab's (mitcad#1049: Send to Slicer,
+// Print Analysis, the annotations) a submenu of their own.
+enum class Kind { Solid, Build, Construct, Inspect, Make };
 
 Kind kindOf(const CommandDef& def) {
   if (def.tab == QStringLiteral("BUILD")) {
     return Kind::Build;
+  }
+  if (def.tab == QStringLiteral("MAKE")) {
+    return Kind::Make;
   }
   if (def.group == QStringLiteral("CONSTRUCT")) {
     return Kind::Construct;
@@ -170,7 +174,7 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries) {
 
   // The feature commands whose first selection input takes everything
   // selected, by kind, in the registry's (the ribbon's) order.
-  QVector<QPair<const CommandDef*, bool>> fitting[4];
+  QVector<QPair<const CommandDef*, bool>> fitting[5];
   // Those the menu offers at its top level (mitcad#735: Move/Copy).
   QVector<const CommandDef*> atTop;
   for (const auto& def : m_registry->commands()) {
@@ -219,6 +223,7 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries) {
   addKind(Kind::Solid, tr("Solid"), QStringLiteral("Solid"));
   addKind(Kind::Build, tr("Build"), QStringLiteral("Build"));
   addKind(Kind::Construct, tr("Construct"), QStringLiteral("Construct"));
+  addKind(Kind::Make, tr("Make"), QStringLiteral("Make"));
   menu.addSeparator();
 
   if (selection.size() == 1 && isSketchPlane(first)) {
@@ -242,18 +247,24 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries) {
       startCommand(QStringLiteral("sketch.redefine_plane"),
                    {SelectionItem{SelectKind::Sketch, sketch, QString(), QString()}}, nullptr);
     });
-    addCall(QStringLiteral("export"), tr("Save As DXF"), [this, sketch] { exportSketch(sketch); });
+    addCall(QStringLiteral("export"), tr("Export DXF…"), [this, sketch] { exportSketch(sketch); });
+  }
+  // A planar face's outline for cutting (mitcad#1049): the Make tab's
+  // Export Face as DXF…, here too.
+  if (selection.size() == 1 && first.kind == SelectKind::Face && first.geometry == QStringLiteral("plane")) {
+    add(m_registry->action(QStringLiteral("make.export_face_dxf")));
   }
   for (const QPair<const CommandDef*, bool>& command : fitting[static_cast<int>(Kind::Inspect)]) {
     add(m_registry->action(command.first->id));
   }
-  // Appearances of the bodies selected or picked on (mitcad#46).
+  // Appearances of the bodies selected or picked on (mitcad#46): Appearance…
+  // starts the Appearance tool with them (mitcad#1059).
   if (const Selection targets = appearanceTargets(); !targets.isEmpty()) {
     // The bodies' material (mitcad#640): a face stands for its body.
     QStringList bodies;
     // An fx mark on an entry while a target follows an expression
     // (mitcad#861): a face's own appearance, a body's appearance or
-    // material. The windows' assignment panel shows and edits it.
+    // material. The tools' fx shows and edits it (mitcad#1059).
     bool appearanceBound = false;
     bool materialBound = false;
     for (const SelectionItem& target : targets) {
@@ -280,8 +291,13 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries) {
     };
     addBound(QStringLiteral("appearance"), tr("Appearance…"), [this, targets] { m_controller->openAppearances(targets); },
              appearanceBound);
-    addBound(QStringLiteral("material"), tr("Material…"), [this, bodies] { m_controller->openMaterial(bodies); },
-             materialBound);
+    // Material ▸ (mitcad#1046): the design's materials, the library ones
+    // assigned last, More… (the Material tool, mitcad#1059).
+    menu.addMenu(m_controller->materialMenu(&menu, bodies, QString(), materialBound));
+    entries << tr("Material");
+    if (materialBound) {
+      bound << tr("Material");
+    }
     if (!bound.isEmpty()) {
       qDebug().noquote() << QStringLiteral("Context menu fx: %1").arg(bound.join(QStringLiteral(" | ")));
     }
@@ -291,10 +307,10 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries) {
       addCall(QStringLiteral("eye"), tr("Show When…"), [this, body] { m_controller->showBodyWhen(body); });
     }
   } else if (selection.size() == 1 && first.kind == SelectKind::Component) {
-    // A component's default material (mitcad#640).
-    const QString component = first.owner;
-    addCall(QStringLiteral("material"), tr("Material…"),
-            [this, component] { m_controller->openMaterial({}, component); });
+    // A component's default material (mitcad#640), in Material ▸
+    // (mitcad#1046).
+    menu.addMenu(m_controller->materialMenu(&menu, {}, first.owner));
+    entries << tr("Material");
   }
   // The properties of the first item's body, occurrence and component
   // (mitcad#496).
@@ -410,6 +426,21 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries) {
     addSubmenu(hide);
     hide.log(QStringLiteral("Hide"));
   }
+  // Transparent (mitcad#1093): the bodies of the faces, edges, vertices and
+  // bodies selected and the components selected, checked while all of
+  // them are transparent.
+  if (BrowserController::offersTransparent(selection)) {
+    const bool all = m_controller->allTransparent(selection);
+    QAction* action = new QAction(tr("Transparent"), &menu);
+    action->setCheckable(true);
+    action->setChecked(all);
+    connect(action, &QAction::triggered, &menu,
+            [this, selection, all] { m_controller->setTransparent(selection, !all); });
+    add(action);
+    if (all) {
+      qDebug().noquote() << "Context menu checked: Transparent";
+    }
+  }
   // A feature selected as its faces (mitcad#28) has no row of its own.
   if (selection.size() == 1 && first.kind != SelectKind::Feature && (onBody(first) || !feature.isEmpty())) {
     addCall(QStringLiteral("browser"), tr("Find in Browser"), [this, first] { m_controller->findInBrowser(first); });
@@ -420,7 +451,7 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries) {
   if (std::all_of(selection.begin(), selection.end(),
                   [](const SelectionItem& item) { return onBody(item) || item.kind == SelectKind::Component; })) {
     const QString meshBlocked = saveAsMeshBlocked(selection);
-    QAction* meshAction = new QAction(themeIcon(QStringLiteral("export")), tr("Save As Mesh…"), &menu);
+    QAction* meshAction = new QAction(themeIcon(QStringLiteral("export")), tr("Save as Mesh…"), &menu);
     connect(meshAction, &QAction::triggered, &menu, [this, selection] { saveAsMesh(selection); });
     if (!meshBlocked.isEmpty()) {
       meshAction->setEnabled(false);
@@ -441,7 +472,7 @@ void MainWindow::deleteBuildParts(const QStringList& components, bool sets) {
   }
   if (!canChangeModel()) {
     const QString readOnly = readOnlyReason();
-    showStatus(readOnly.isEmpty() ? changeBlockedReason() : readOnly, true);
+    showStatus(readOnly.isEmpty() ? changeBlockedReason() : readOnly, NoticeLevel::Error);
     return;
   }
   QJsonArray commands;

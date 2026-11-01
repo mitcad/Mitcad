@@ -43,6 +43,8 @@ pub mod internal;
 // ISO 286 fit codes of tolerances (mitcad#702).
 pub mod iso286;
 pub mod kernel;
+// Material classes of materials and appearances (mitcad#655, mitcad#1102).
+pub mod material_class;
 // Progress and cancellation of recomputes (P7).
 pub mod monitor;
 // Occurrence paths and links to other components' geometry (mitcad#780).
@@ -80,3 +82,7 @@ pub mod reader_guard;
 pub use kernel::{Kernel, KernelError};
 // Design files' content hashes (P12a).
 pub use sha256::Sha256;
+// Notices and their severity levels: error, warning, information
+// (mitcad#1040).
+pub mod notice;
+pub use notice::{Notice, NoticeLevel};

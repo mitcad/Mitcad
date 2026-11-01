@@ -111,7 +111,7 @@ std::string environment(const char* name) {
 void prepareHeader(const char* version) {
   char digits[32];
   g_header[0] = '\0';
-  append(g_header, sizeof g_header, "Mitcad crash report 1\nprocess: ");
+  append(g_header, sizeof g_header, "MitCad crash report 1\nprocess: ");
   append(g_header, sizeof g_header, g_process);
   append(g_header, sizeof g_header, "\nversion: ");
   append(g_header, sizeof g_header, version);
@@ -613,7 +613,7 @@ void writeReport(int signal, const void* address) {
   char at[40] = "0x";
   append(at, sizeof at, number(reinterpret_cast<unsigned long long>(address), digits, 16));
   if (file == kNoFile) {
-    put(file, "Mitcad crashed; no crash report written:\n");
+    put(file, "MitCad crashed; no crash report written:\n");
   }
   put(file, g_header);
   putLine(file, "time", number(static_cast<unsigned long long>(std::time(nullptr)), digits));
@@ -631,7 +631,7 @@ void writeReport(int signal, const void* address) {
   if (file != kNoFile) {
     ::close(file);
     ::rename(part, path);
-    put(kNoFile, "Mitcad crashed: ");
+    put(kNoFile, "MitCad crashed: ");
     put(kNoFile, signalName(signal));
     put(kNoFile, "; crash report: ");
     put(kNoFile, path);

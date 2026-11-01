@@ -551,6 +551,148 @@ fn views_follow_the_model_and_are_projected_once() {
     assert!(child["error"].is_string(), "{child}");
 }
 
+/// The views' projections an answer lists (`projections`, mitcad#1033):
+/// each view with its bodies and whether it came from the cache.
+fn projections(answer: &Value) -> Vec<(u64, u64, bool)> {
+    answer["projections"]
+        .as_array()
+        .map(|notes| {
+            notes
+                .iter()
+                .map(|n| {
+                    assert!(n["ms"].as_f64().is_some_and(|ms| ms >= 0.0), "{n}");
+                    (
+                        n["view"].as_u64().unwrap(),
+                        n["bodies"].as_u64().unwrap(),
+                        n["cached"].as_bool().unwrap(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_design_view_projects_only_its_shown_bodies_and_a_move_reuses_them() {
+    // mitcad#1033: all bodies but one hidden, a view of the design.
+    let mut doc = blocks();
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_visible", "uid": "F4.b0", "visible": false}),
+    );
+    command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"}));
+    let sent = |doc: &Document<MockKernel>| doc.kernel().projected.borrow().clone();
+    let added = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front",
+               "at": [100, 120], "scale": "1:1"}),
+    );
+    // The kernel got the shown body alone, once.
+    let calls = sent(&doc);
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0].len(), 1, "{calls:?}");
+    assert!(
+        calls[0][0].contains("F2") && !calls[0][0].contains("F4"),
+        "{calls:?}"
+    );
+    assert_eq!(projections(&added), [(1, 1, false)], "{added}");
+    // The sheet drawn after it takes the view from the cache.
+    assert_eq!(projections(&drawing(&doc, "D1")), [(1, 1, true)]);
+    // Moved: nothing projected again, the sheet from the cache.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1, "move": [10, 5]}),
+    );
+    assert_eq!(projections(&drawing(&doc, "D1")), [(1, 1, true)]);
+    assert_eq!(sent(&doc).len(), 1, "a move projects nothing");
+    // A view of that body alone is the same projection: from the cache.
+    let body = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front",
+               "at": [250, 120], "scale": "1:1",
+               "subject": {"type": "bodies", "bodies": [{"body": "F2.b0"}]}}),
+    );
+    assert_eq!(sent(&doc).len(), 1, "the body's view is the design view's");
+    assert_eq!(projections(&body), [(1, 1, true), (2, 1, true)], "{body}");
+    // Shown again, the design view projects both bodies.
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_visible", "uid": "F4.b0", "visible": true}),
+    );
+    assert_eq!(
+        projections(&drawing(&doc, "D1")),
+        [(1, 2, false), (2, 1, true)]
+    );
+    let calls = sent(&doc);
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[1].len(), 2, "{calls:?}");
+}
+
+/// Whether each view's projection an answer lists was made from a
+/// triangulation (`polygonal`, mitcad#1033).
+fn polygonal(answer: &Value) -> Vec<bool> {
+    answer["projections"]
+        .as_array()
+        .map(|notes| {
+            notes
+                .iter()
+                .map(|n| n["polygonal"].as_bool().unwrap())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_projection_says_whether_it_came_from_a_triangulation() {
+    // mitcad#1033: the one body left shown takes the kernel's quick path
+    // (a triangulation); the answers say so, for the kernel's projection
+    // and the cache's, and its own view is the same projection.
+    let mut doc = blocks();
+    doc.kernel().projects_polygonal.set(true);
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_visible", "uid": "F4.b0", "visible": false}),
+    );
+    command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"}));
+    let added = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front",
+               "at": [100, 120], "scale": "1:1"}),
+    );
+    assert_eq!(projections(&added), [(1, 1, false)], "{added}");
+    assert_eq!(polygonal(&added), [true], "{added}");
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1, "move": [10, 5]}),
+    );
+    let sheet = drawing(&doc, "D1");
+    assert_eq!(projections(&sheet), [(1, 1, true)], "{sheet}");
+    assert_eq!(polygonal(&sheet), [true], "{sheet}");
+    let body = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front",
+               "at": [250, 120], "scale": "1:1",
+               "subject": {"type": "bodies", "bodies": [{"body": "F2.b0"}]}}),
+    );
+    assert_eq!(projections(&body), [(1, 1, true), (2, 1, true)], "{body}");
+    assert_eq!(doc.kernel().projected.borrow().len(), 1, "projected once");
+    // An exact projection says so.
+    doc.kernel().projects_polygonal.set(false);
+    let edited = command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1, "direction": "top"}),
+    );
+    let top = drawing(&doc, "D1");
+    let made: Vec<Value> = [&edited, &top]
+        .iter()
+        .flat_map(|a| a["projections"].as_array().cloned().unwrap_or_default())
+        .filter(|n| n["view"] == 1 && n["cached"] == false)
+        .collect();
+    assert_eq!(made.len(), 1, "{edited} {top}");
+    assert_eq!(made[0]["polygonal"], false, "{made:?}");
+    assert_eq!(polygonal(&top), [false, true], "{top}");
+}
+
 #[test]
 fn breaks_take_bands_out_of_a_view() {
     let mut doc = drawn();
@@ -694,7 +836,7 @@ fn drawings_refuse_what_they_cannot_be() {
         ),
         (
             json!({"cmd": "add_drawing_view", "drawing": "D9", "type": "base"}),
-            "there is no drawing 'D9'",
+            "there is no drawing “D9”",
         ),
         (
             json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 2, "direction": "top"}),
@@ -714,7 +856,7 @@ fn drawings_refuse_what_they_cannot_be() {
         ),
         (
             json!({"cmd": "add_drawing", "name": "Drawing1"}),
-            "already has a drawing 'Drawing1'",
+            "already has a drawing Drawing1",
         ),
     ] {
         let error = refused(&mut doc, cmd);
@@ -790,8 +932,7 @@ fn a_components_drawings_travel_with_it() {
     assert_eq!(doc.drawings().len(), 2);
 
     // Inserted into another design as a copy, the drawing comes along.
-    let dir = std::env::temp_dir().join(format!("mitcad-kept-drawings-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("kept-drawings");
     let path = dir.join("bracket.mitcad");
     std::fs::write(&path, doc.to_json()).unwrap();
     let mut other = Document::new(MockKernel::default());
@@ -828,8 +969,7 @@ fn a_kept_drawing_is_exported_as_it_is() {
         json!({"cmd": "add_drawing_view", "drawing": "D1", "sheet": 1, "type": "base",
                "direction": "top", "at": [150, 120]}),
     );
-    let dir = std::env::temp_dir().join(format!("mitcad-kept-export-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("kept-export");
     let svg = dir.join("kept.svg").to_string_lossy().into_owned();
     let result = command(
         &mut doc,
@@ -899,8 +1039,7 @@ fn export_drawing_lays_out_a_drawing_the_design_can_keep() {
     let [tlo, thi] = sheet_box(&top);
     assert!(near(flo[0], tlo[0]) && near(fhi[0], thi[0]) && tlo[1] > fhi[1]);
     // The same drawing as export_drawing writes without keeping one.
-    let dir = std::env::temp_dir().join(format!("mitcad-export-kept-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("export-kept");
     let a = dir.join("a.svg").to_string_lossy().into_owned();
     let b = dir.join("b.svg").to_string_lossy().into_owned();
     command(
@@ -964,8 +1103,7 @@ fn export_drawing_numbers_the_drawings_it_lays_out() {
         json!({"cmd": "add_drawing_annotation", "drawing": "D1", "type": "text", "at": [20, 20],
                "text": "BY HAND"}),
     );
-    let dir = std::env::temp_dir().join(format!("mitcad-export-again-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("export-again");
     let svg = dir.join("again.svg").to_string_lossy().into_owned();
     command(
         &mut doc,
@@ -1425,10 +1563,10 @@ fn a_drawings_ids_leave_the_top_numbers_free() {
     // One past the largest is refused as the file is read.
     let above = top + 1;
     for (field, message) in [
-        ("uid", "invalid drawing id 'D4293918720'"),
-        ("exported", "invalid export count '4293918720'"),
-        ("view", "invalid view id '4293918720'"),
-        ("note", "invalid annotation id '4293918720'"),
+        ("uid", "invalid drawing id D4293918720"),
+        ("exported", "invalid export count 4293918720"),
+        ("view", "invalid view id 4293918720"),
+        ("note", "invalid annotation id 4293918720"),
     ] {
         let mut bad = file.clone();
         let kept = &mut bad["drawings"][0];
@@ -1442,5 +1580,34 @@ fn a_drawings_ids_leave_the_top_numbers_free() {
             panic!("{field} {above} was read");
         };
         assert!(error.to_string().contains(message), "{error}");
+    }
+}
+
+#[test]
+fn the_sheet_comes_with_the_writers_pen_widths() {
+    // mitcad#1112: one table of widths for the writers and the sheet on
+    // the screen, ISO 128's 0.35 series.
+    let doc = drawn();
+    let sheet = &drawing(&doc, "D1")["sheets"][0];
+    let pens = &sheet["pens"];
+    let width = |pen: &str| pens[pen]["width"].as_f64().unwrap_or(f64::NAN);
+    assert!(near(width("thick"), 0.35), "{pens}");
+    assert!(near(width("thin"), 0.18), "{pens}");
+    assert!(near(width("hidden"), 0.18), "{pens}");
+    assert!(near(width("hatch"), 0.13), "{pens}");
+    assert!(near(width("chain"), 0.18), "{pens}");
+    assert!(near(width("frame"), 0.5), "{pens}");
+    assert_eq!(pens["hidden"]["dashes"], json!([3.0, 1.0]), "{pens}");
+    assert_eq!(pens["thick"]["dashes"], json!([]), "{pens}");
+    // Every pen the groups draw with is in the table.
+    for item in sheet["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|g| g["items"].as_array().unwrap().clone())
+    {
+        if let Some(pen) = item["pen"].as_str() {
+            assert!(pens[pen]["width"].is_number(), "{pen}: {pens}");
+        }
     }
 }

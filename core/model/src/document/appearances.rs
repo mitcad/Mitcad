@@ -29,8 +29,9 @@ impl<K: Kernel> Document<K> {
 
     /// The `appearances` query: the library's appearances, then the
     /// document's, each with its parameters, `library` (true for the
-    /// built-in ones), its `display_color`, the bodies that use it and the
-    /// faces (`{"body", "face"}`). An embedded texture image (of the base
+    /// built-in ones), its `display_color`, its `class` (its own, a
+    /// library's by its id, else `other`; mitcad#1102), the bodies that use
+    /// it and the faces (`{"body", "face"}`). An embedded texture image (of the base
     /// colour or another map, mitcad#313) is listed as `"embedded": true`
     /// with its `image_sha256` instead of its data (the `appearance_image`
     /// query gives it).
@@ -53,6 +54,8 @@ impl<K: Kernel> Document<K> {
                     }
                     value["library"] = json!(library);
                     value["display_color"] = json!(a.display_color());
+                    // Its class, its own or worked out (mitcad#1102).
+                    value["class"] = json!(a.material_class().id());
                     value["bodies"] = json!(self.bodies_with_appearance(&a.id));
                     value["faces"] = json!(
                         self.faces_with_appearance(&a.id)
@@ -73,11 +76,11 @@ impl<K: Kernel> Document<K> {
     pub fn appearance_image_json(&self, id: &str, map: Option<&str>) -> Result<Value, ModelError> {
         let a = self
             .appearance(id)
-            .ok_or_else(|| invalid(format!("there is no appearance '{id}'")))?;
+            .ok_or_else(|| invalid(format!("there is no appearance {id}")))?;
         let map = map.unwrap_or(appearance::BASE_COLOR);
         if map != appearance::BASE_COLOR && !appearance::MAPS.contains(&map) {
             return Err(invalid(format!(
-                "'{map}' is no map: base_color, normal, roughness, metalness or occlusion"
+                "“{map}” is no map: base_color, normal, roughness, metalness or occlusion"
             )));
         }
         let data = a
@@ -132,7 +135,7 @@ impl<K: Kernel> Document<K> {
             Some(id) => self
                 .appearance(id)
                 .cloned()
-                .ok_or_else(|| invalid(format!("there is no appearance '{id}'")))?,
+                .ok_or_else(|| invalid(format!("there is no appearance {id}")))?,
             None => Appearance::default(),
         };
         let based_on = new.texture.clone();
@@ -151,12 +154,12 @@ impl<K: Kernel> Document<K> {
         self.keep_embedded(&mut new, based_on.as_ref())?;
         if !appearance::valid_id(&new.id) {
             return Err(invalid(format!(
-                "'{}' is no appearance id: use letters, digits, '_' and '-'",
+                "{} is no appearance id: use letters, digits, '_' and '-'",
                 new.id
             )));
         }
         if self.appearance(&new.id).is_some() {
-            return Err(invalid(format!("an appearance '{}' exists", new.id)));
+            return Err(invalid(format!("an appearance {} exists", new.id)));
         }
         self.check_appearance(&new, None)?;
         let label = format!("Create Appearance {}", new.name);
@@ -215,6 +218,12 @@ impl<K: Kernel> Document<K> {
                 attributes.face_appearances.retain(|_, a| a != id);
             }
             state.body_attributes.retain(|_, a| !a.is_default());
+            // The materials' lists and the components' choices of it
+            // (mitcad#1055).
+            for material in &mut state.materials {
+                material.appearances.retain(|a| a != id);
+            }
+            state.component_appearances.retain(|_, a| a != id);
             Ok((label, (), false))
         })?;
         Ok(DeletedAppearance { bodies, faces })
@@ -230,7 +239,7 @@ impl<K: Kernel> Document<K> {
         appearance.check().map_err(invalid)?;
         if self.appearance_name_taken(&appearance.name, own) {
             return Err(invalid(format!(
-                "an appearance is named '{}'",
+                "an appearance is named {}",
                 appearance.name
             )));
         }
@@ -250,7 +259,7 @@ impl<K: Kernel> Document<K> {
     fn custom_appearance_index(&self, id: &str) -> Result<usize, ModelError> {
         if appearance::library_appearance(id).is_some() {
             return Err(invalid(format!(
-                "'{id}' is a library appearance, which cannot change: \
+                "{id} is a library appearance, which cannot change: \
                  create_appearance with based_on copies it"
             )));
         }
@@ -258,7 +267,7 @@ impl<K: Kernel> Document<K> {
             .appearances
             .iter()
             .position(|a| a.id == id)
-            .ok_or_else(|| invalid(format!("there is no appearance '{id}'")))
+            .ok_or_else(|| invalid(format!("there is no appearance {id}")))
     }
 }
 

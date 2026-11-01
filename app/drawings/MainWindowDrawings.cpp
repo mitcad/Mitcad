@@ -35,6 +35,9 @@
 #include "DrawingTemplates.hpp"
 #include "DrawingTools.hpp"
 #include "DrawingWorkspace.hpp"
+#ifdef MITCAD_MACOS_NATIVE_UI
+#include "../platform/NativeMacWindow.hpp"
+#endif
 
 namespace mitcad {
 namespace {
@@ -68,7 +71,7 @@ std::optional<QJsonObject> askNewDrawing(QWidget* parent, const QList<drawings::
   QComboBox* kind = combo({{QStringLiteral("drawing"), QObject::tr("Drawing")},
                            {QStringLiteral("cut_sheet"), QObject::tr("Cut Sheet")}});
   kind->setObjectName(QStringLiteral("drawingKind"));
-  kind->setToolTip(QObject::tr("A drawing of views, or a cut sheet of flat parts at 1:1 for cutting"));
+  kind->setToolTip(QObject::tr("A drawing of views, or a cut sheet of flat components at 1:1 for cutting"));
   form->addRow(QObject::tr("&Kind"), kind);
   auto* templateBox = new QComboBox;
   templateBox->setObjectName(QStringLiteral("drawingTemplate"));
@@ -202,14 +205,20 @@ drawings::DrawingWorkspace* MainWindow::drawingWorkspace() {
           action->setChecked(tool.id == active);
         }
       }
+#ifdef MITCAD_MACOS_NATIVE_UI
+      // The AppKit ribbon's buttons and menus too (mitcad#1073).
+      if (m_nativeWindow) {
+        refreshNativeActions();
+      }
+#endif
     });
     if (m_cutLabelsAction != nullptr) {
       m_drawingWorkspace->setCutLabels(m_cutLabelsAction->isChecked());
     }
-    // The tools are the ribbon's (mitcad#1008), except in the AppKit
-    // frontend, whose ribbon has no DRAWING tab yet (native-coverage.txt):
-    // there the drawing keeps its own bar.
-    if (!m_nativeUi && m_ribbon != nullptr) {
+    // The tools are the ribbon's (mitcad#1008), the AppKit frontend's too
+    // (mitcad#1073): its ribbon shows the retained ribbon's DRAWING tab
+    // (MainWindow::refreshNativeActions).
+    if (m_ribbon != nullptr) {
       m_drawingWorkspace->setRibbonTools([this](const QString& name) { return m_ribbon->placeOf(name); });
       connect(m_ribbon, &Ribbon::placesLogged, m_drawingWorkspace, &drawings::DrawingWorkspace::logPlaces);
     }
@@ -229,15 +238,24 @@ void MainWindow::updateDrawingChrome() {
   if (open && m_statusIsHint && !m_statusLabel->text().isEmpty()) {
     showHint(QString());
   }
-  if (m_nativeUi || m_ribbon == nullptr) {
-    return; // the AppKit frontend: the drawing's own bar
+  if (m_ribbon == nullptr) {
+    return;
   }
+  // The AppKit frontend reads its tabs from this ribbon (mitcad#1073).
   m_ribbon->setDrawingMode(open, open && m_drawingWorkspace->isCutSheet());
   // The sheet takes the whole view: of the cards over it only the browser
   // stays, from which another drawing is opened (mitcad#1008).
   if (m_floating != nullptr) {
     m_floating->showOnlyCards(open ? QStringList{QStringLiteral("browserDock")} : QStringList());
   }
+#ifdef MITCAD_MACOS_NATIVE_UI
+  if (m_nativeWindow) {
+    m_nativeWindow->setDrawingOpen(open);
+  }
+#endif
+  // The navigation bar of the 3D view (mitcad#1086): in the Docked
+  // layout's status bar too, not while the sheet takes the view.
+  updateNavigationBar();
 }
 
 void MainWindow::addDrawingRibbonExtras() {
@@ -247,7 +265,7 @@ void MainWindow::addDrawingRibbonExtras() {
   QAction* closeAction = m_registry->action(QStringLiteral("drawing.close"));
   QAction* dxfAction = m_registry->action(QStringLiteral("drawing.export_dxf"));
   QAction* svgAction = m_registry->action(QStringLiteral("drawing.export_svg"));
-  m_cutLabelsAction = new QAction(tr("Part Names on the LABEL Layer"), this);
+  m_cutLabelsAction = new QAction(tr("Component Names on the LABEL Layer"), this);
   m_cutLabelsAction->setCheckable(true);
   connect(m_cutLabelsAction, &QAction::toggled, this, [this](bool on) {
     if (m_drawingWorkspace != nullptr) {
@@ -305,13 +323,13 @@ void MainWindow::registerDrawingCommands() {
   };
   const QString drawingTab = QStringLiteral("DRAWING");
   add(QStringLiteral("drawing.close"), tr("Close Drawing"), QStringLiteral("view-arrow-left"),
-      tr("Shows the 3D model again"), drawingTab, QStringLiteral("CLOSE DRAWING"), true, QString(),
+      tr("Shows the 3D view again"), drawingTab, QStringLiteral("CLOSE DRAWING"), true, QString(),
       [this] { leaveDrawing(); });
   for (const drawings::DrawingToolDef& tool : drawings::drawingTools()) {
     const QString id = tool.id;
-    // The drawing's Parts List is told apart from the Build tab's in the
+    // The drawing's Bill of Materials is told apart from the Build tab's in the
     // command search (mitcad#718).
-    const QString name = id == QStringLiteral("drawing.parts_list") ? tr("Parts List (Drawing)") : tool.name;
+    const QString name = id == QStringLiteral("drawing.parts_list") ? tr("Bill of Materials (Drawing)") : tool.name;
     add(id, name, tool.icon, tool.tooltip, drawingTab, drawings::toolGroupId(drawings::toolGroup(tool)), true,
         QStringLiteral("drawing"), [this, id] {
           if (drawingOpen()) {
@@ -339,8 +357,8 @@ void MainWindow::registerDrawingCommands() {
         });
   }
   // A cut sheet's Add Parts… (mitcad#853), on its CUT SHEET tab.
-  add(QStringLiteral("drawing.add_parts"), tr("Add Parts…"), QStringLiteral("add"),
-      tr("Adds bodies as flat parts, each seen along its largest planar face"), QStringLiteral("CUT SHEET"),
+  add(QStringLiteral("drawing.add_parts"), tr("Add Components…"), QStringLiteral("add"),
+      tr("Adds bodies as flat components, each seen along its largest planar face"), QStringLiteral("CUT SHEET"),
       QStringLiteral("PARTS"), true, QStringLiteral("cut"), [this] {
         if (drawingOpen()) {
           m_drawingWorkspace->addParts();
@@ -359,13 +377,13 @@ void MainWindow::registerDrawingCommands() {
 
 void MainWindow::openDrawing(const QString& uid) {
   if (m_mode != Mode::Idle) {
-    showStatus(changeBlockedReason(), true);
+    showStatus(changeBlockedReason(), NoticeLevel::Error);
     return;
   }
   m_drawingDesign = designId();
   if (!drawingWorkspace()->open(uid)) {
     m_drawingDesign.clear();
-    showStatus(tr("There is no drawing %1.").arg(uid), true);
+    showStatus(tr("There is no drawing %1.").arg(uid), NoticeLevel::Error);
   }
   updateDrawingChrome();
   updateActions();
@@ -373,7 +391,7 @@ void MainWindow::openDrawing(const QString& uid) {
 
 void MainWindow::createDrawing(const QString& component) {
   if (!canChangeModel()) {
-    showStatus(changeBlockedReason(), true);
+    showStatus(changeBlockedReason(), NoticeLevel::Error);
     return;
   }
   const std::optional<QJsonObject> sheet = askNewDrawing(this, drawings::availableTemplates(*this));

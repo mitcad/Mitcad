@@ -19,6 +19,7 @@
 // platform.
 #include <cstdio>
 #include <functional>
+#include <optional>
 #include <vector>
 
 #include <QAction>
@@ -501,10 +502,17 @@ struct Design {
   QJsonObject options = configureAnswer();
   std::vector<QJsonArray> saves;
   bool refuse = false;
+  // The answer's `problems` and `rule_problems` (mitcad#1064).
+  QJsonArray problems;
+  QJsonArray ruleProblems;
 
   RulesSource source() {
     RulesSource source;
-    source.configurations = [this] { return QJsonObject{{QStringLiteral("configurations"), table}}; };
+    source.configurations = [this] {
+      return QJsonObject{{QStringLiteral("configurations"), table},
+                         {QStringLiteral("problems"), problems},
+                         {QStringLiteral("rule_problems"), ruleProblems}};
+    };
     source.configure = [this] { return options; };
     source.setRules = [this](const QJsonArray& rules, QString* error) {
       if (refuse) {
@@ -514,6 +522,17 @@ struct Design {
       table.insert(QStringLiteral("rules"), rules);
       saves.push_back(rules);
       return true;
+    };
+    // What the design says of the rules it refuses: the first rule's last
+    // action.
+    source.tryRules = [](const QJsonArray& rules) {
+      const QJsonArray then = rules.first().toObject().value(QStringLiteral("then")).toArray();
+      return QJsonObject{
+          {QStringLiteral("rule_problems"),
+           QJsonArray{QJsonObject{{QStringLiteral("index"), 0},
+                                  {QStringLiteral("place"), QStringLiteral("then.%1").arg(then.size() - 1)},
+                                  {QStringLiteral("level"), QStringLiteral("error")},
+                                  {QStringLiteral("message"), QStringLiteral("the rule Black is short: no")}}}}};
     };
     source.checkRules = [] {
       return json(R"json({"never_allowed": [{"option": "Length", "text": "2500 mm"}],
@@ -563,9 +582,15 @@ void pageTests() {
   CHECK(page.hasUnsaved() && design.saves.size() == 1);
   CHECK(page.problemOf(0) == QStringLiteral("Not saved yet: fill its dashed places"));
   CHECK(page.statusLine()->text() == QStringLiteral("Rule 1 is not saved yet: fill its dashed places."));
+  // Not saved yet: warnings (mitcad#1051).
+  CHECK(page.problemLevel(0) == mitcad::NoticeLevel::Warning);
+  CHECK(page.statusLevel() == mitcad::NoticeLevel::Warning);
+  // The place it waits for is marked (mitcad#1064).
+  CHECK(canvas->validationText() == QStringLiteral("warning at when socket"));
   CHECK(canvas->focusPiece(QStringLiteral("when socket")));
   CHECK(canvas->insertAtFocus(QStringLiteral("compare")));
   CHECK(canvas->focusName() == QStringLiteral("when.0 socket")); // its first empty socket
+  CHECK(canvas->validationText() == QStringLiteral("warning at when.0 socket, when.1 socket"));
   CHECK(canvas->insertAtFocus(QStringLiteral("option")));
   type(canvas, QStringLiteral("Color")); // its editor opened at once
   CHECK(canvas->focusPiece(QStringLiteral("when.1 socket")));
@@ -606,8 +631,16 @@ void pageTests() {
   CHECK(canvas->insertAtFocus(QStringLiteral("forbid")));
   type(canvas, QStringLiteral("not black"));
   CHECK(page.hasUnsaved() && page.problemOf(0).contains(QStringLiteral("no")));
+  // Refused: an error (mitcad#1051), on the block the design names
+  // (mitcad#1064).
+  CHECK(page.problemLevel(0) == mitcad::NoticeLevel::Error);
+  CHECK(page.statusLevel() == mitcad::NoticeLevel::Error);
+  CHECK(canvas->validationText() == QStringLiteral("error at then.1 block"));
+  CHECK(page.blockMarks(0).size() == 1 && page.blockMarks(0)[0].level == mitcad::NoticeLevel::Error &&
+        page.blockMarks(0)[0].message == QStringLiteral("the rule Black is short: no"));
   // The forbid and its message were one edit: one Ctrl+Z.
   CHECK(page.undo() && !page.hasUnsaved());
+  CHECK(canvas->validationText() == QStringLiteral("none"));
   design.refuse = false;
 
   // The rule as text (mitcad#965): shown as it is, edited, read and saved
@@ -627,6 +660,7 @@ void pageTests() {
   CHECK(page.textProblem() == QStringLiteral("Line 2, column 17: 800 needs a unit: Length is in mm (800 mm)"));
   CHECK(!text->extraSelections().isEmpty());
   CHECK(page.statusLine()->text().startsWith(QStringLiteral("Not saved: Line 2, column 17")));
+  CHECK(page.statusLevel() == mitcad::NoticeLevel::Error);
   page.restoreText();
   CHECK(text->toPlainText() == QStringLiteral("when Color == 'White'\nthen Length max 800 mm"));
   CHECK(page.textProblem().isEmpty() && text->extraSelections().isEmpty() && page.statusLine()->text().isEmpty());
@@ -747,6 +781,84 @@ void tableTests() {
                             "then": [{"in_table": "Elsewhere", "columns": {"Color": "Color", "Length": "Length"}}]})json")});
 }
 
+// Where a rule is wrong (mitcad#1064): the model's places as blocks, what a
+// rule that is not complete waits for, and a saved rule's problems on its
+// blocks.
+void placeTests() {
+  Rule rule = ruleFromJson(json(R"json({"name": "R", "when": "Color == 'Black'",
+      "then": [{"option": "Length", "min": "300 mm", "max": "1000 mm"},
+               {"option": "Color", "values": ["'Black'", "'Green'"]}],
+      "else": [{"require": "Length > 0 mm"}]})json"));
+  CHECK(rule.then.size() == 3);
+  const auto at = [&rule](const char* where) {
+    const std::optional<BlockPath> path = blockOfPlace(rule, QLatin1String(where));
+    return path ? path->id() : QStringLiteral("none");
+  };
+  CHECK(at("when") == QStringLiteral("when"));
+  CHECK(at("then.0") == QStringLiteral("then.0"));
+  CHECK(at("then.0.option") == QStringLiteral("then.0"));
+  CHECK(at("then.0.max") == QStringLiteral("then.1.0"));
+  CHECK(at("then.1.values.1") == QStringLiteral("then.2.1"));
+  CHECK(at("else.0.require") == QStringLiteral("else.0.0"));
+  CHECK(at("then.2") == QStringLiteral("none"));
+  CHECK(at("") == QStringLiteral("none"));
+  // A new action before them: the JSON's actions move, and the places with
+  // them.
+  CHECK(place(rule, Target{BlockPath{1, {0}}, true}, newBlock(QStringLiteral("forbid"))));
+  CHECK(at("then.1.min") == QStringLiteral("then.1.0"));
+  CHECK(at("then.2.values.1") == QStringLiteral("then.3.1"));
+  CHECK(emptyPlaces(rule).empty());
+
+  // What a rule that is not complete waits for, in the canvas's order.
+  Rule waiting;
+  waiting.name = QStringLiteral("W");
+  CHECK(applyRuleEntry(waiting, QStringLiteral("when")));
+  CHECK(emptyPlaces(waiting).size() == 1 && emptyPlaces(waiting)[0].id() == QStringLiteral("when"));
+  CHECK(place(waiting, Target{BlockPath{0, {}}, false}, newBlock(QStringLiteral("compare"))));
+  CHECK(place(waiting, Target{BlockPath{1, {0}}, true}, newBlock(QStringLiteral("max"))));
+  CHECK(applyRuleEntry(waiting, QStringLiteral("else")));
+  QStringList ids;
+  for (const BlockPath& path : emptyPlaces(waiting)) {
+    ids << path.id();
+  }
+  CHECK(ids == QStringList({QStringLiteral("when.0"), QStringLiteral("when.1"), QStringLiteral("then.0"),
+                            QStringLiteral("then.0.0"), QStringLiteral("else.0")}));
+
+  // A saved rule with a value outside its option's domain: a warning on the
+  // value, in the list and on the canvas.
+  Design design;
+  design.table = json(R"json({"options": ["Color", "Length"], "rows": [], "rules": [
+      {"name": "Colors", "then": [{"option": "Color", "values": ["'Black'", "'Green'"]}]}]})json");
+  const QString green = QStringLiteral("the rule Colors: values: Green is not one of the values of Color");
+  design.ruleProblems = QJsonArray{QJsonObject{{QStringLiteral("index"), 0},
+                                               {QStringLiteral("rule"), QStringLiteral("Colors")},
+                                               {QStringLiteral("place"), QStringLiteral("then.0.values.1")},
+                                               {QStringLiteral("level"), QStringLiteral("warning")},
+                                               {QStringLiteral("message"), green}}};
+  RulesPage page(design.source());
+  CHECK(page.problemOf(0) == green);
+  CHECK(page.problemLevel(0) == mitcad::NoticeLevel::Warning);
+  CHECK(page.canvas()->validationText() == QStringLiteral("warning at then.0.1 block"));
+  const std::vector<BlockMark> marks = page.blockMarks(0);
+  CHECK(marks.size() == 1 && marks[0].path.id() == QStringLiteral("then.0.1") && marks[0].message == green);
+
+  // An error the design found in it: the frame's level, the value marked.
+  Design wrong;
+  wrong.table = design.table;
+  const QString nope = QStringLiteral("the rule Colors: values: Nope: unknown name");
+  wrong.problems = QJsonArray{nope};
+  wrong.ruleProblems = QJsonArray{QJsonObject{{QStringLiteral("index"), 0},
+                                              {QStringLiteral("rule"), QStringLiteral("Colors")},
+                                              {QStringLiteral("place"), QStringLiteral("then.0.values.0")},
+                                              {QStringLiteral("level"), QStringLiteral("error")},
+                                              {QStringLiteral("message"), nope}},
+                                  design.ruleProblems.first()};
+  RulesPage refused(wrong.source());
+  CHECK(refused.problemOf(0) == nope);
+  CHECK(refused.canvas()->validationText() ==
+        QStringLiteral("error at then.0.0 block, then.0.1 block (warning)"));
+}
+
 } // namespace
 
 int ruleBlocksTests() {
@@ -758,5 +870,6 @@ int ruleBlocksTests() {
   pageTests();
   pageTemplateTests();
   tableTests();
+  placeTests();
   return failures;
 }

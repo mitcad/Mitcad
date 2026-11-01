@@ -86,7 +86,7 @@ Ui-ExpectNew 'Pick edge F2.b0/E{F2:side0|F2:top} at' "the second shaft's top edg
 Ui-Mark
 Ui-Step 'the second shaft'               { Ui-ClickPick 'edge F2.b0/E{F2:side0|F2:top} at' }
 Ui-ExpectNew 'Gear Pair candidates: ' "the model's candidates" 30
-Ui-ExpectNew 'centre distance 60 mm' 'the axes 60 mm apart'
+Ui-ExpectNew 'center distance 60 mm' 'the axes 60 mm apart'
 Ui-ExpectNew 'Panel Gear Pair options candidate: 2 mm, 20:40' 'no correction and the fewest teeth first' 30
 Ui-Mark
 # One step towards the far side: New Body after New Component.
@@ -167,7 +167,7 @@ Ui-ExpectNew 'Pick edge F2.b0/E{F2:side0|F2:top} at' "the root's shaft top edge 
 Ui-Mark
 Ui-Step "the root's shaft second"        { Ui-ClickPick 'edge F2.b0/E{F2:side0|F2:top} at' }
 Ui-ExpectNew 'Gear Pair candidates: ' "the model's candidates" 30
-Ui-ExpectNew 'centre distance 60 mm' 'the axes 60 mm apart, where the occurrence puts the shaft'
+Ui-ExpectNew 'center distance 60 mm' 'the axes 60 mm apart, where the occurrence puts the shaft'
 Ui-Mark
 Ui-Step 'operation: New Body'            { Ui-WheelLogged 'Panel Gear Pair input operation' -1 }
 Ui-ExpectNew 'Gear Pair: Operation = New Body' 'as new bodies'

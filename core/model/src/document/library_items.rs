@@ -30,7 +30,9 @@ use crate::appearance::{Appearance, library_appearance};
 use crate::ids::ComponentUid;
 use crate::kernel::Kernel;
 use crate::material::{self, Material, MaterialChange, material_class};
-use crate::print_library::{ItemData, ItemKind, Libraries, LibraryItem, LibraryKind};
+use crate::print_library::{
+    ItemData, ItemKind, Libraries, LibraryItem, LibraryKind, carried, material_item,
+};
 use crate::print_profile::{
     PROFILE_KEY, PrintProfile, ProfileChange, ProfileKind, copy_name, free_id, new_item_name, slug,
 };
@@ -39,15 +41,15 @@ use crate::properties::{PropertyOwner, PropertyValue, same_name};
 /// A library a command names: `base`, `user` or `project`.
 pub fn library_kind(text: &str) -> Result<LibraryKind, ModelError> {
     LibraryKind::parse(text)
-        .ok_or_else(|| invalid(format!("'{text}' is no library: base, user or project")))
+        .ok_or_else(|| invalid(format!("“{text}” is no library: base, user or project")))
 }
 
 /// A library a command writes in: the user's or the project's; the base
-/// library is Mitcad's and read-only.
+/// library is MitCad's and read-only.
 pub fn writable_library(text: &str) -> Result<LibraryKind, ModelError> {
     match library_kind(text)? {
         LibraryKind::Base => Err(invalid(
-            "the base library is Mitcad's and read-only: duplicate its item into the user's or the project's library",
+            "the base library is MitCad's and read-only: duplicate its item into the user's or the project's library",
         )),
         library => Ok(library),
     }
@@ -62,7 +64,7 @@ pub(crate) fn library_item<'a>(
 ) -> Result<&'a LibraryItem, ModelError> {
     libraries.find(Some(library), kind, id).ok_or_else(|| {
         invalid(format!(
-            "the {} library has no {} '{id}'",
+            "the {} library has no {} {id}",
             library.id(),
             kind.id()
         ))
@@ -76,7 +78,7 @@ pub(crate) fn library_folder(
 ) -> Result<PathBuf, ModelError> {
     if library == LibraryKind::Base {
         return Err(invalid(
-            "the base library is Mitcad's parts library: save to the user's or the project's",
+            "the base library is MitCad's component library: save to the user's or the project's",
         ));
     }
     libraries
@@ -200,25 +202,29 @@ pub(super) fn free_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
         .expect("a free name")
 }
 
-/// The appearance a library material carries for its appearance id: a
-/// library appearance needs none, the one the item carries stays, a
-/// design's appearance goes with it. None when there is no such
-/// appearance.
-fn carried_appearance(
-    appearance: Option<&str>,
-    carried: Option<&Appearance>,
+/// The appearances a library material carries for its list (mitcad#1067),
+/// in the list's order: a library appearance needs none, one the item
+/// carries stays, a design's appearance goes with it. None when its
+/// default is no such appearance; another of its list that is none is
+/// carried by none.
+fn item_appearances(
+    material: &Material,
+    carried: &[Appearance],
     design: &[Appearance],
-) -> Option<Option<Appearance>> {
-    let Some(id) = appearance else {
-        return Some(None);
-    };
-    if library_appearance(id).is_some() {
-        return Some(None);
+) -> Option<Vec<Appearance>> {
+    let mut list = Vec::new();
+    for id in material.appearance_list() {
+        if library_appearance(&id).is_some() {
+            continue;
+        }
+        let found = carried.iter().chain(design).find(|a| a.id == id).cloned();
+        match found {
+            Some(look) => list.push(look),
+            None if material.appearance.as_deref() == Some(id.as_str()) => return None,
+            None => {}
+        }
     }
-    if let Some(carried) = carried.filter(|a| a.id == id) {
-        return Some(Some(carried.clone()));
-    }
-    design.iter().find(|a| a.id == id).cloned().map(Some)
+    Some(list)
 }
 
 impl DocState {
@@ -361,10 +367,7 @@ impl<K: Kernel> Document<K> {
                     continue;
                 }
                 rows.push(self.item_row(
-                    &ItemData::Material {
-                        material: m.clone(),
-                        appearance: None,
-                    },
+                    &material_item(m.clone()),
                     None,
                     Some(m.id.clone()),
                     false,
@@ -400,15 +403,7 @@ impl<K: Kernel> Document<K> {
                 .state
                 .materials
                 .iter()
-                .map(|m| {
-                    (
-                        ItemData::Material {
-                            material: m.clone(),
-                            appearance: None,
-                        },
-                        m.origin.as_ref(),
-                    )
-                })
+                .map(|m| (material_item(m.clone()), m.origin.as_ref()))
                 .collect(),
             _ => self
                 .state
@@ -467,10 +462,7 @@ impl<K: Kernel> Document<K> {
                 .cloned()
                 .map(|mut material| {
                     material.id = id;
-                    ItemData::Material {
-                        material,
-                        appearance: None,
-                    }
+                    material_item(material)
                 }),
             ItemData::Profile(_) => self.state.print_profile(copy).cloned().map(|mut profile| {
                 profile.id = id;
@@ -494,7 +486,7 @@ impl<K: Kernel> Document<K> {
         match &item.data {
             ItemData::Material {
                 material,
-                appearance,
+                appearances,
             } => {
                 let Some(mine) = self.state.materials.iter().find(|m| m.id == copy) else {
                     return false;
@@ -506,12 +498,29 @@ impl<K: Kernel> Document<K> {
                 same.id = material.id.clone();
                 same.origin = material.origin.clone();
                 same.version = material.version;
-                if same.appearance != material.appearance
-                    && self.same_look(same.appearance.as_deref(), appearance.as_ref())
-                {
-                    same.appearance = material.appearance.clone();
+                // A carried appearance the design has under another id
+                // (it had one of its id already) is the same (mitcad#1067).
+                for look in appearances {
+                    if same.offers(&look.id) {
+                        continue;
+                    }
+                    let Some(here) = same
+                        .appearance_list()
+                        .into_iter()
+                        .find(|id| self.same_look(Some(id.as_str()), Some(look)))
+                    else {
+                        continue;
+                    };
+                    same.rename_appearance(&here, &look.id);
                 }
-                same != *material
+                // Of its list, the appearances a copy cannot have (neither
+                // carried nor the library's nor the design's) do not count.
+                let mut theirs = material.clone();
+                theirs.appearances.retain(|id| {
+                    carried(appearances, Some(id.as_str())).is_some()
+                        || self.state.look(id).is_some()
+                });
+                same != theirs
             }
             ItemData::Profile(profile) => {
                 let Some(mine) = self.state.print_profile(copy) else {
@@ -619,21 +628,42 @@ impl<K: Kernel> Document<K> {
         match data {
             ItemData::Material {
                 material,
-                appearance,
+                appearances,
             } => {
                 let class = material_class(material);
                 row["group"] = json!(class.group());
                 row["class"] = json!(class.id());
-                let color = appearance.as_ref().map(|a| a.display_color()).or_else(|| {
-                    material
-                        .appearance
-                        .as_deref()
-                        .and_then(|a| self.appearance(a))
-                        .map(|a| a.display_color())
-                });
+                // Print settings make it an FDM plastic (mitcad#1102).
+                row["class_fixed"] = json!(material.has_print_settings());
+                let color = carried(appearances, material.appearance.as_deref())
+                    .map(|a| a.display_color())
+                    .or_else(|| {
+                        material
+                            .appearance
+                            .as_deref()
+                            .and_then(|a| self.appearance(a))
+                            .map(|a| a.display_color())
+                    });
                 if let Some(color) = color {
                     row["display_color"] = json!(color);
                 }
+                // Every appearance it offers, its default first
+                // (mitcad#1055), and the names and colours of those its
+                // library item carries, which the design may not have yet
+                // (mitcad#1067).
+                row["appearances"] = json!(material.appearance_list());
+                row["carried_appearances"] = json!(
+                    appearances
+                        .iter()
+                        .map(|a| json!({
+                            "id": a.id,
+                            "name": a.name,
+                            "base_color": a.base_color,
+                            "display_color": a.display_color(),
+                            "library": false,
+                        }))
+                        .collect::<Vec<_>>()
+                );
                 let used = in_design.as_deref();
                 row["bodies"] =
                     json!(used.map_or_else(Vec::new, |id| self.bodies_with_material(id)));
@@ -652,6 +682,25 @@ impl<K: Kernel> Document<K> {
                 row["chosen_by"] = json!(chosen_by);
                 if row["chosen"] == json!(true) {
                     row["overrides"] = json!(self.print_overrides(profile.kind));
+                }
+                // The printer and nozzle a material's variant names for it
+                // (mitcad#1054).
+                if profile.kind == ProfileKind::Printer {
+                    row["variant_printer"] = json!(profile.variant_printer());
+                    row["nozzle"] = json!(profile.nozzle());
+                }
+                // The parts of its name the 3D Print panel's picker shows
+                // (mitcad#1108): a printer's name without its nozzle and the
+                // nozzle its name says, a process's name before its `@` and
+                // the printer after it.
+                if profile.kind == ProfileKind::Printer {
+                    let (bare, nozzle) = material::split_nozzle(&profile.name);
+                    row["bare_name"] = json!(bare);
+                    row["name_nozzle"] = json!(nozzle);
+                } else {
+                    let (bare, printer) = material::split_filament_name(&profile.name);
+                    row["bare_name"] = json!(bare);
+                    row["for_printer"] = json!(printer);
                 }
             }
         }
@@ -679,8 +728,8 @@ impl<K: Kernel> Document<K> {
                 let base = self
                     .material(id)
                     .cloned()
-                    .ok_or_else(|| invalid(format!("there is no material '{id}'")))?;
-                (base, None)
+                    .ok_or_else(|| invalid(format!("there is no material {id}")))?;
+                (base, Vec::new())
             }
             Some(crate::print_library::BasedOn::Library(item)) => {
                 let found = library_item(
@@ -692,8 +741,8 @@ impl<K: Kernel> Document<K> {
                 match &found.data {
                     ItemData::Material {
                         material,
-                        appearance,
-                    } => (material.clone(), appearance.clone()),
+                        appearances,
+                    } => (material.clone(), appearances.clone()),
                     ItemData::Profile(_) => unreachable!("a material's folder"),
                 }
             }
@@ -705,12 +754,14 @@ impl<K: Kernel> Document<K> {
                     appearance: None,
                     filament: Default::default(),
                     slicer: Default::default(),
+                    variants: Vec::new(),
+                    appearances: Vec::new(),
                     based_on: None,
                     class: None,
                     version: None,
                     origin: None,
                 },
-                None,
+                Vec::new(),
             ),
         };
         let names: Vec<String> = libraries
@@ -731,17 +782,17 @@ impl<K: Kernel> Document<K> {
         };
         new.based_on = change.based_on.as_ref().map(|b| b.id().to_owned());
         new.origin = None;
-        // The class is stored, so that print settings set later never move
-        // the material (mitcad#655): the one chosen, else the source's of a
-        // copy, else the one its fields give (a filament: plastic).
+        // The class is stored (mitcad#655): the one chosen, else the source's
+        // of a copy, else the one its fields give. Print settings make it an
+        // FDM plastic whatever it stores (mitcad#1102).
         let source_class = change.based_on.as_ref().map(|_| material_class(&new));
         change.apply_to(&mut new);
-        new.class = Some(
-            change
-                .class
-                .or(source_class)
-                .unwrap_or_else(|| material_class(&new)),
-        );
+        let class = change
+            .class
+            .or(source_class)
+            .unwrap_or_else(|| material_class(&new));
+        // A filament keeps `plastic`, which older versions read (mitcad#1102).
+        new.class = Some(material::stored_class(&new, class));
         new.id = match change.id.as_deref().map(str::trim) {
             Some(id) => id.to_owned(),
             None => free_id(&slug(&new.name), |id| {
@@ -757,30 +808,26 @@ impl<K: Kernel> Document<K> {
             .is_some()
         {
             return Err(invalid(format!(
-                "the {} library has a material '{}'",
+                "the {} library has a material {}",
                 library.id(),
                 new.id
             )));
         }
         new.version = Some(1);
-        let appearance = carried_appearance(
-            new.appearance.as_deref(),
-            carried.as_ref(),
-            &self.state.appearances,
-        )
-        .ok_or_else(|| {
-            invalid(format!(
-                "material {}: there is no appearance '{}'",
-                new.id,
-                new.appearance.as_deref().unwrap_or_default()
-            ))
-        })?;
+        let appearances =
+            item_appearances(&new, &carried, &self.state.appearances).ok_or_else(|| {
+                invalid(format!(
+                    "material {}: there is no appearance {}",
+                    new.id,
+                    new.appearance.as_deref().unwrap_or_default()
+                ))
+            })?;
         new.check().map_err(invalid)?;
         let id = new.id.clone();
         let label = format!("Create Material {}", new.name);
         let data = ItemData::Material {
             material: new,
-            appearance,
+            appearances,
         };
         let file = FileWrite::item(&folder, &data);
         let path = file.path().to_path_buf();
@@ -800,6 +847,22 @@ impl<K: Kernel> Document<K> {
         id: &str,
         change: &MaterialChange,
     ) -> Result<(PathBuf, u32), ModelError> {
+        self.edit_library_material_carrying(libraries, library, id, change, None)
+    }
+
+    /// [`Document::edit_library_material`] whose file carries `given`, the
+    /// appearance the change names, in place of the one it carried
+    /// (mitcad#1053: an imported filament's appearance overriding an item).
+    /// The design's copies of the item take the change too, so when it has
+    /// any, `given` must be the design's appearance of that id.
+    pub(crate) fn edit_library_material_carrying(
+        &mut self,
+        libraries: &Libraries,
+        library: LibraryKind,
+        id: &str,
+        change: &MaterialChange,
+        given: Option<&Appearance>,
+    ) -> Result<(PathBuf, u32), ModelError> {
         if change.based_on.is_some() {
             return Err(invalid("based_on is only for create_material"));
         }
@@ -813,7 +876,7 @@ impl<K: Kernel> Document<K> {
         let item = library_item(libraries, library, ItemKind::Material, id)?;
         let ItemData::Material {
             material: original,
-            appearance: carried,
+            appearances: carried,
         } = &item.data
         else {
             unreachable!("a material's folder")
@@ -822,24 +885,31 @@ impl<K: Kernel> Document<K> {
         let mut edited = original.clone();
         change.apply_to(&mut edited);
         let path = folder.join(&item.path);
+        let given = given.filter(|g| edited.appearance.as_deref() == Some(g.id.as_str()));
+        // What the file carries (mitcad#1067), `given` in the place of its
+        // appearance of that id (mitcad#1053).
+        let mut carrying: Vec<Appearance> = carried
+            .iter()
+            .filter(|a| given.is_none_or(|g| g.id != a.id))
+            .cloned()
+            .collect();
+        if let Some(g) = given {
+            carrying.insert(0, g.clone());
+        }
         // The library has these values already (a newer version made in
         // another design): its file stays, and only the design's copies
         // that differ take the change (mitcad#758).
-        let unchanged = edited == *original;
+        let unchanged = edited == *original && given.is_none_or(|g| carried.iter().any(|a| a == g));
         let version = if unchanged { old } else { old + 1 };
         edited.version = Some(version);
         edited.origin = None;
-        let appearance = carried_appearance(
-            edited.appearance.as_deref(),
-            carried.as_ref(),
-            &self.state.appearances,
-        )
-        .ok_or_else(|| {
-            invalid(format!(
-                "material {id}: there is no appearance '{}'",
-                edited.appearance.as_deref().unwrap_or_default()
-            ))
-        })?;
+        let appearances = item_appearances(&edited, &carrying, &self.state.appearances)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "material {id}: there is no appearance {}",
+                    edited.appearance.as_deref().unwrap_or_default()
+                ))
+            })?;
         edited.check().map_err(invalid)?;
         // The design's copies: checked before the file is written.
         let mut copies = Vec::new();
@@ -878,12 +948,16 @@ impl<K: Kernel> Document<K> {
         } else {
             let data = ItemData::Material {
                 material: edited,
-                appearance,
+                appearances,
             };
             vec![FileWrite::new(path.clone(), Some(data.text().into_bytes()))]
         };
+        let make_default = change.appearance.is_none();
         self.with_files(label, files, move |state| {
-            for (i, copy) in copies {
+            for (i, mut copy) in copies {
+                // A filament colour set: an appearance of the copy's list
+                // (mitcad#1055).
+                state.adopt_filament_colour(&mut copy, make_default);
                 state.materials[i] = copy;
             }
             Ok(())
@@ -955,11 +1029,11 @@ impl<K: Kernel> Document<K> {
         match kinds.as_slice() {
             [kind] => Ok(*kind),
             [] => Err(invalid(format!(
-                "the {} library has no profile '{id}'",
+                "the {} library has no profile {id}",
                 library.id()
             ))),
             _ => Err(invalid(format!(
-                "the {} library has a printer and a process '{id}': give the kind",
+                "the {} library has a printer and a process {id}: give the kind",
                 library.id()
             ))),
         }
@@ -987,7 +1061,7 @@ impl<K: Kernel> Document<K> {
             Some(crate::print_library::BasedOn::Design(id)) => self
                 .print_profile(id)
                 .cloned()
-                .ok_or_else(|| invalid(format!("there is no profile '{id}'")))?,
+                .ok_or_else(|| invalid(format!("there is no profile {id}")))?,
             Some(crate::print_library::BasedOn::Library(item)) => {
                 let item_library = library_kind(&item.library)?;
                 let kind =
@@ -1065,7 +1139,7 @@ impl<K: Kernel> Document<K> {
         };
         if libraries.find(Some(library), item_kind, &new.id).is_some() {
             return Err(invalid(format!(
-                "the {} library has a {} '{}'",
+                "the {} library has a {} {}",
                 library.id(),
                 kind.id(),
                 new.id

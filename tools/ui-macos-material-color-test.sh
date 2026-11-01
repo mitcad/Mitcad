@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/print/SettingField app/print/MaterialsDialog app/platform/NativeDialogs app/platform/macos/NativeDialogs app/platform/macos/NativeColorField app/framework/TestDriver app/platform/NativeTestInput
-# Actual Materials colour fields: explicit colour, inherited appearance and
-# Slicer default; native pixels/placeholder, pointer open and Cancel, same
-# model and undo depth, both appearances. Qt keeps its custom field painting.
+# check-all sources: app/print/AppearancePicker app/print/SettingField app/print/MaterialsDialog app/platform/NativeDialogs app/platform/macos/NativeDialogs app/platform/macos/NativeColorField app/platform/NativePicker app/platform/macos/NativePicker app/framework/TestDriver app/platform/NativeTestInput
+# The Materials window's colours (mitcad#1055: a filament's colour is its
+# appearance): a colour a command gave a material became its appearance, a
+# chosen appearance stays, none leaves it none, as the list of the
+# material's appearances shows them (the default marked in its row,
+# mitcad#1083); Add…'s popover of the appearance library opened and closed
+# without a change; light and dark pictures of the window and the popover.
+# The AppKit frontend shows the list as a native table and the popover as
+# the tools' picker popover under Add… (mitcad#1068); there Add… also
+# chooses Paint - Red in it, then Make Default and Remove.
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/ui-macos-lib.sh"
@@ -35,10 +41,10 @@ for scheme in light dark; do
     MITCAD_TEST_COLOR_SCHEME=$scheme MITCAD_TEST_INPUT=$UI_OUT/colors.mitcad-ui \
       ui_run_app "$scheme" --ui=native --no-recovery --no-mcp --open "$MITCAD_TEST_WORK/colors.mitcad"
   fi
-  ui_expect_log 'TestDriver: done' "$frontend/$scheme: explicit, inherited and unset colour workflows completed"
+  ui_expect_log 'TestDriver: done' "$frontend/$scheme: explicit, inherited and unset appearances shown, the picker closed"
   for problem in 'TestDriver: FAIL' 'Unable to simultaneously satisfy constraints' 'Native Mac canvas:' 'OCCT view event failed:'; do
     ui_expect_no_log "$problem" "$frontend/$scheme: no $problem"
   done
   [ "$UI_FAILURES" = 0 ] || { ui_log_tail; exit 1; }
 done
-echo "PASS: $frontend Materials colour fields and cancelled colour selection in light/dark; $UI_OUT"
+echo "PASS: $frontend Materials appearances and the appearance picker in light/dark; $UI_OUT"

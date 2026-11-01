@@ -60,7 +60,7 @@ QStringList sketchConstraintCommands();
 void registerSheetMetalCommands(CommandRegistry& registry, const CommandContext& context);
 
 // The BUILD tab (mitcad#375, BuildCommands.cpp): PROFILE (Profile, Panel,
-// Linear Part), TIMBER (Timber, Wall, Floor / Roof; mitcad#520), CONNECT
+// Linear Component), TIMBER (Timber, Wall, Floor / Roof; mitcad#520), CONNECT
 // (Connector, Fasteners, Swap Fastener), MODIFY (Length, Ends, Flip, Rotate
 // 90 deg, Spacing Set, Timber Frame), OUTPUT (Cut List, Parts List). `host` runs their model
 // commands; the lists' dialogs open over `window` with the design's name.

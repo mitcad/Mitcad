@@ -477,10 +477,10 @@ def run(app, cli, out, ui):
             second = Gui(app, env, out, "second", second_script, ui)
             guis.append(second)
             wait_for(lambda: len(public_instances(cli, env)) == 2, "second GUI discovery", second)
-            ambiguous = subprocess.run([cli, "mcp", "--connect"], env=env, input=b"",
+            automatic = subprocess.run([cli, "mcp", "--connect"], env=env, input=b"",
                                        capture_output=True, timeout=TIMEOUT)
-            check(ambiguous.returncode != 0 and not ambiguous.stdout and b"--instance" in ambiguous.stderr,
-                  "CLI silently chose an ambiguous GUI instance")
+            check(automatic.returncode == 0 and not automatic.stdout and b"the window active last" in automatic.stderr,
+                  "CLI did not choose and name the window active last")
             selected = Bridge(cli, env, out, "selected", endpoint["instance"])
             bridges.append(selected)
             selected.initialize()

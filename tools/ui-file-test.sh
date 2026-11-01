@@ -98,7 +98,7 @@ project_menu="New Project | Open Project | Open from Cloud | - | Sync | Check fo
 project_menu="$project_menu | - | Project Settings | - | Web Viewer | Update Web Viewer"
 file_menu="New Design | Open | Open from Project | Open Recent > | Open Read-Only | Close | - | Save | Save As"
 file_menu="$file_menu | Save to Project | Save with Description"
-file_menu="$file_menu | Version History | - | Project > [$project_menu] | - | Import | Export | Create Drawing | Export Drawing | - | Recover Designs"
+file_menu="$file_menu | Version History | Design Properties | - | Project > [$project_menu] | - | Import | Export | Create Drawing | Export Drawing | - | Recover Designs"
 file_menu="$file_menu | - | Exit"
 ui_mark
 ui_step "file menu (Alt+F)"              ui_key alt+f
@@ -254,6 +254,14 @@ ui_expect_log "Opened $FILE" "opened a part with a join and a cut"
 ui_expect_log "Recomputed 6 feature(s)" "join, cut and fillet recomputed"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 expect_title "boss.mitcad - MitCad"
+# Save is disabled while the design is unchanged (mitcad#1090): a change of
+# the fillet's radius gives it something to save.
+ui_save_state disabled "the opened design has nothing to save"
+ui_stop_app
+ui_start_app --open "$FILE" --set d9=2.5
+ui_expect_log "Opened $FILE" "opened with a change of d9"
+expect_title "boss.mitcad* - MitCad"
+ui_save_state enabled "the changed design has something to save"
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
 ui_expect_log "Saved $FILE" "saved again"
 expect_file 'doc["version"]' "2" "saved as version 2"

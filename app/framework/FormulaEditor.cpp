@@ -179,7 +179,7 @@ FormulaEditor::FormulaEditor(ParameterSource source, ParameterFieldOptions optio
   limits->addRow(m_strict);
   if (!m_canLimit) {
     auto* hint = new QLabel(limitProblem.isEmpty()
-        ? tr("Limits belong to a saved parameter. Create one or select one in Change Parameters.") : limitProblem);
+        ? tr("Limits belong to a saved parameter. Create one or select one in Edit Parameters.") : limitProblem);
     hint->setWordWrap(true);
     limits->addRow(hint);
   }
@@ -308,7 +308,7 @@ void FormulaEditor::updateHelp() {
       mark.cursor.setPosition(int(QString::fromUtf8(bytes.left(error.value(QStringLiteral("start")).toInt())).size()));
       mark.cursor.setPosition(int(QString::fromUtf8(bytes.left(error.value(QStringLiteral("end")).toInt())).size()),QTextCursor::KeepAnchor);
       mark.format.setUnderlineStyle(QTextCharFormat::WaveUnderline);
-      mark.format.setUnderlineColor(QColor(0xd0,0x36,0x36));
+      mark.format.setUnderlineColor(themeColor(ColorRole::ErrorBorder, m_expression->palette()));
       markings << mark;
     }
     m_expression->setExtraSelections(markings);

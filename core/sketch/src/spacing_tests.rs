@@ -126,7 +126,7 @@ fn anchors_are_points_centres_and_line_midpoints_only() {
         anchor_points(&index, c(5)),
         Some(AnchorPoints::Point(EntityUid(6)))
     );
-    assert_eq!(anchor_points(&index, c(7)), None, "no centre of an ellipse");
+    assert_eq!(anchor_points(&index, c(7)), None, "no center of an ellipse");
     assert_eq!(anchor_points(&index, c(1)), None, "p1 is no curve");
     let what = "k3";
     let mode = SpacingMode::Horizontal;

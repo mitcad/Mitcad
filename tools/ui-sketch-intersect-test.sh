@@ -17,6 +17,15 @@
 #     Sketch2 edited, Project's selection filter has the row for other
 #     sketches' curves and points, a click takes Sketch1's line, and OK
 #     logs it by name.
+#   - Intersect of another sketch's curve (mitcad#1031): in the same design,
+#     Sketch1 also has a circle round (30, 0) of radius 5 and Sketch3 lies
+#     on XZ. Sketch3 edited; Intersect's selection filter has the row for
+#     other sketches' curves and points, Sketch1 picked in the browser goes
+#     in whole (in the view the circle is seen edge on, and Sketch1 is
+#     hidden once Sketch2 projects it), and OK gives two fixed points where
+#     its circle crosses XZ, at x = 25 and 35 (its line and other circle
+#     do not cross it). The saved design has them as one linked section of
+#     the circle.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sketch-intersect-test.sh
@@ -120,8 +129,9 @@ grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_stop_app
 
 echo "--- Project: a curve of an earlier sketch (mitcad#904)"
-# Sketch1 (F1) on XY: a line c3 from (-20, 10) to (20, 10) and a circle c5
-# round (0, -10); Sketch2 (F2) on XY after it, empty.
+# Sketch1 (F1) on XY: a line c3 from (-20, 10) to (20, 10), a circle c5
+# round (0, -10) and a circle c7 round (30, 0) of radius 5, which crosses
+# XZ; Sketch2 (F2) on XY after it and Sketch3 (F3) on XZ, empty.
 cat > "$WORK/sketches.json" << 'JSON'
 [
   {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
@@ -129,8 +139,11 @@ cat > "$WORK/sketches.json" << 'JSON'
     {"id": "p2", "type": "point", "at": [20, 10]},
     {"id": "c3", "type": "line", "start": "p1", "end": "p2"},
     {"id": "p4", "type": "point", "at": [0, -10]},
-    {"id": "c5", "type": "circle", "center": "p4", "radius": 8}]}},
-  {"cmd": "sketch.create", "plane": "xy"}
+    {"id": "c5", "type": "circle", "center": "p4", "radius": 8},
+    {"id": "p6", "type": "point", "at": [30, 0]},
+    {"id": "c7", "type": "circle", "center": "p6", "radius": 5}]}},
+  {"cmd": "sketch.create", "plane": "xy"},
+  {"cmd": "sketch.create", "plane": "xz"}
 ]
 JSON
 "$CLI" run "$WORK/sketches.json" --save "$SKETCHES" > "$WORK/cli2.log" 2>&1 ||
@@ -159,5 +172,58 @@ ui_mark
 ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
 ui_expect_new "Sketch finished" "Sketch2 finished"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+echo "--- Intersect: where another sketch's circle crosses the plane (mitcad#1031)"
+# Sketch3 (F3) on XZ: x along X, y along -Z. The circle c7 crosses it at
+# (25, 0, 0) and (35, 0, 0), seen edge on as a line from x = 25 to 35.
+ui_mark
+ui_step "edit Sketch3 (double-click)"    ui_double_click_logged "Timeline Sketch3"
+ui_expect_new "Editing sketch F3 (Sketch3)" "Sketch3 edited"
+ui_step "fit (F6)"                       ui_key F6
+ui_sync
+ui_mark
+ui_step "intersect (search)"             ui_command "Intersect"
+ui_expect_new "Command search chose sketch.intersect" "Intersect started"
+ui_expect_new "other-sketch-geometry=cross" "Intersect's filter has the row for other sketches' geometry"
+ui_expect_log "Browser Root/Sketches/Sketch1 at" "Sketch1 in the browser"
+ui_step "pick Sketch1 in the browser"    ui_click_logged "Browser Root/Sketches/Sketch1"
+ui_expect_new "Intersect Geometry: 1 sketch" "Sketch1 went to Intersect"
+ui_expect_new "Preview Intersect: ok" "the crossings previewed"
+ui_wait_idle
+ui_focus_main
+ui_mark
+ui_step "OK (Enter)"                     ui_key Return
+ui_expect_new "Intersected 1 item(s): sketch F1" "the log names the intersected sketch"
+# The fit before Intersect saw nothing of Sketch3: the points come in view.
+ui_step "fit (F6)"                       ui_key F6
+ui_sync
+for x in 25 35; do
+  ui_mark
+  ui_step "drag the crossing at x = $x"  ui_sketch_drag "$x" 0 $((x + 3)) -6
+  ui_sync
+  tail -n +$((UI_MARK + 1)) "$UI_LOG" |
+    grep -qE "Drag of p[0-9]+ did not move it|Dragged p[0-9]+ to \($x\.000, 0\.000\)" ||
+    ui_fail "no fixed point where the circle crosses XZ at x = $x"
+  echo "ok   a fixed point where the circle crosses XZ at x = $x"
+done
+ui_mark
+ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
+ui_expect_new "Sketch finished" "Sketch3 finished"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+ui_mark
+ui_step "save (Ctrl+S)"                  ui_key ctrl+s
+ui_expect_new "Saved $SKETCHES" "saved"
+# Two points only, one linked section of the circle, no warning.
+cat > "$WORK/check.json" << 'JSON'
+[
+  {"expect": {"query": {"query": "sketch", "uid": "F3"}, "result": {
+    "entities": [{"type": "point"}, {"type": "point"}],
+    "projections": [{"section": true, "source": {"sketch": "F1", "curve": "c7"}}],
+    "warnings": []}}}
+]
+JSON
+"$CLI" run "$WORK/check.json" --open "$SKETCHES" > "$WORK/check.log" 2>&1 ||
+  { cat "$WORK/check.log"; ui_fail "the saved crossings"; }
+echo "ok   two linked points where the circle crosses XZ"
 
 ui_finish "UI sketch intersect test"

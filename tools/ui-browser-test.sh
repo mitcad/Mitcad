@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser app/framework/HybridAssembly.cpp app/view/FirstBodiesFit.hpp
+# check-all sources: app/browser app/framework/HybridAssembly.cpp app/view/FirstBodiesFit.hpp app/MainWindowBrowserHover.cpp
 # check-all sources: core/model/src/document/components.rs core/model-api/src/components.rs
 # The browser (U3) through the real UI, on a part with a component placed
 # 40 mm along X:
@@ -19,6 +19,10 @@
 #   - Selecting a row selects in the view; a face of the placed body is
 #     picked in the view with its occurrence, and Find in Browser selects
 #     its body's row.
+#   - The pointer over a body's and a component's row highlights their
+#     bodies in the view, off the rows the highlight goes; nothing is
+#     meshed, the selection and the view stay (mitcad#1022; the large
+#     assembly's timing: tools/ui-browser-hover-test.sh).
 #   - The context menu: Isolate, Copy and Paste (a new occurrence, placed
 #     with Move/Copy: OK keeps it there, Cancel takes it back), Paste
 #     New (a new component), Ground, Delete, New Component, Create Sketch on
@@ -237,6 +241,31 @@ ui_expect_new "Browser selected: Root/Bracket:1/Bodies/Bracket" "Find in Browser
 ui_mark
 ui_step "click the component's plane"    ui_click_logged "Browser Root/Bracket:1/Construction/Plane2"
 ui_expect_new "Selected: 1 plane [plane F5 in O1]" "a datum of the placed component, with its occurrence"
+
+echo "--- The pointer over a row highlights its bodies in the view (mitcad#1022)"
+# A body's row highlights the body, a component's row the bodies of its
+# occurrence; nothing is meshed, and the selection, the visibility and the
+# camera stay as they are. Off the rows, the highlight goes.
+ui_sync
+selected_before=$(grep "^Browser selected: " "$UI_LOG" | tail -1)
+places_before=$(body_places)
+ui_mark
+ui_step "point at the Plate row"         xdotool mousemove $(ui_logged_at "Browser Root/Bodies/Plate")
+ui_expect_new "Browser hover highlight: Root/Bodies/Plate (1 bodies), " "the body's row highlights it"
+ui_step "point at the Bracket:1 row"     xdotool mousemove $(ui_logged_at "Browser Root/Bracket:1")
+ui_expect_new "Browser hover highlight: Root/Bracket:1 (1 bodies), " "the component's row highlights its body"
+ui_step "point at the view"              xdotool mousemove $(ui_view_at 3 50)
+ui_expect_new "Browser hover highlight: none (0 bodies), " "the highlight goes with the pointer"
+ui_sync
+hovers=$(tail -n +$((UI_MARK + 1)) "$UI_LOG")
+grep -E "^Browser hover highlight: .*, [1-9][0-9]* faces meshed$" <<< "$hovers" &&
+  ui_fail "a hover meshed faces"
+grep -qE "^(Selected: |Browser selected: |View body highlights: |Visibility )" <<< "$hovers" &&
+  ui_fail "the hover changed the selection or the visibility"
+[ "$(grep "^Browser selected: " "$UI_LOG" | tail -1)" = "$selected_before" ] ||
+  ui_fail "the selection changed with the hover"
+[ "$(body_places)" = "$places_before" ] || ui_fail "the view moved with the hover"
+echo "ok   nothing meshed; the selection ($selected_before), the visibility and the view unchanged"
 
 echo "--- Isolate"
 ui_mark

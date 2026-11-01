@@ -131,8 +131,7 @@ fn import_and_export_default_to_millimetres() {
 
     // A DXF drawing that names no unit is in millimetres; its own unit
     // (here inches) is kept.
-    let dir = std::env::temp_dir().join(format!("mitcad-metric-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("metric");
     let drawing = |units: i32| {
         format!(
             "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n{units}\n0\nENDSEC\n\
@@ -247,4 +246,51 @@ fn materials_are_in_grams_per_cubic_centimetre() {
     let steel = material(DEFAULT_MATERIAL).unwrap();
     assert_eq!(steel.density, 7.85);
     assert_eq!(material("aluminum").map(|m| m.density), Some(2.70));
+}
+
+#[test]
+fn a_new_design_can_start_in_other_units() {
+    // mitcad#1036: the application's default units for new designs. A new
+    // design is in millimetres; one made in inches starts in them, with no
+    // undo step and not modified, as an initial state, not a change.
+    let metric = Document::new_design(MockKernel::default());
+    assert_eq!(
+        query(&metric, json!({"query": "document"}))["units"]["length"],
+        "mm"
+    );
+    let mut doc = Document::new_design_in(MockKernel::default(), ExprLength::Inch);
+    assert_eq!(
+        query(&doc, json!({"query": "document"}))["units"]["length"],
+        "in"
+    );
+    assert_eq!(doc.undo_label(), None);
+    assert_eq!(doc.undo_depth(), 0);
+    assert!(!doc.is_modified());
+    // The same arrangement as any new design: Component1 active.
+    let mut file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    let mut metric_file: Value = serde_json::from_str(&metric.to_json()).unwrap();
+    assert_eq!(file["units"]["length"], "in");
+    file.as_object_mut().unwrap().remove("units");
+    metric_file.as_object_mut().unwrap().remove("units");
+    assert_eq!(file, metric_file);
+    // Bare numbers are inches: a new extrude's distance of 1 is 25.4 mm.
+    let length = query(&doc, json!({"query": "evaluate", "expression": "1"}));
+    assert_eq!(length["value"], 25.4);
+    assert_eq!(length["text"], "1 in");
+    // The file opens in inches; the first change is the first undo step.
+    let opened = Document::from_json(&doc.to_json(), MockKernel::default()).unwrap();
+    assert_eq!(
+        query(&opened, json!({"query": "document"}))["units"]["length"],
+        "in"
+    );
+    command(&mut doc, json!({"cmd": "set_units", "length": "mm"}));
+    assert_eq!(doc.undo_label(), Some("Change Units to mm"));
+    assert!(doc.is_modified());
+    // The unit's names as set_units reads them.
+    assert_eq!(
+        mitcad_model::file::parse_length_unit("ft"),
+        Ok(ExprLength::Foot)
+    );
+    assert!(mitcad_model::file::parse_length_unit("deg").is_err());
+    assert!(mitcad_model::file::parse_length_unit("furlong").is_err());
 }

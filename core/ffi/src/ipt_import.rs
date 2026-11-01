@@ -23,6 +23,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use mitcad_import::outcomes::BodyOutcome;
 use mitcad_model::exchange::ReadOptions;
 use mitcad_model::{BaseInput, BodyUid, ImportBody, Kernel};
 use mitcad_model_api::ApiError;
@@ -167,7 +168,7 @@ fn relative(a: f64, b: f64) -> f64 {
     }
 }
 
-/// The Mitcad material whose id or name the file's material is (case
+/// The MitCad material whose id or name the file's material is (case
 /// does not matter).
 pub(crate) fn mitcad_material(name: &str) -> Option<&'static str> {
     let wanted = name.trim().to_lowercase();
@@ -395,6 +396,9 @@ impl Document {
                     .collect::<Vec<_>>()
             );
         }
+        // The levels of the bodies' outcomes and of the warnings
+        // (mitcad#1051).
+        let notices = BodyOutcome::notices(body_counts(&found, skipped.len()), &warnings);
         let mut report = json!({
             "file": file,
             "format": "ipt",
@@ -410,6 +414,7 @@ impl Document {
             "imported": found,
             "skipped": skipped,
             "warnings": warnings,
+            "notices": mitcad_model::notice::to_json(&notices),
             "seconds": {"read": read_seconds, "build": built_seconds},
         });
         if let Some(step) = &options.reference {
@@ -571,9 +576,7 @@ impl Document {
                 match receiver.recv_timeout(MEMORY_POLL) {
                     Ok(Handover((document, result))) => {
                         let mut value = result?;
-                        if let Some(w) = value["warnings"].as_array_mut() {
-                            w.extend(notes.iter().map(|n| json!(n)));
-                        }
+                        add_notes(&mut value, &notes);
                         *self = document;
                         return Ok(value);
                     }
@@ -676,9 +679,7 @@ impl Document {
                 &attempt,
             )
         })?;
-        if let Some(w) = value["warnings"].as_array_mut() {
-            w.extend(notes.iter().map(|n| json!(n)));
-        }
+        add_notes(&mut value, &notes);
         Ok(value)
     }
 
@@ -826,6 +827,14 @@ impl Document {
             .into_iter()
             .map(|(o, n)| (o.as_str(), n))
             .collect();
+        // The levels of the items' and the bodies' outcomes and of the
+        // warnings (mitcad#1051): the replay's, then the part's.
+        let mut notices = report.notices();
+        notices.extend(BodyOutcome::notices(
+            body_counts(&found, skipped.len()),
+            &warnings,
+        ));
+        notices.sort_by_key(|n| std::cmp::Reverse(n.level));
         let mut value = json!({
             "file": file,
             "format": "ipt",
@@ -843,6 +852,7 @@ impl Document {
             "imported": found,
             "skipped": skipped,
             "warnings": warnings,
+            "notices": mitcad_model::notice::to_json(&notices),
             "parameters": design.parameters,
             "expressions": design.expressions,
             "features": design.features(),
@@ -1090,8 +1100,40 @@ impl Document {
             "file": report["file"],
             "design": report["part_number"],
             "bodies": bodies,
+            // Its outcomes' and warnings' levels (mitcad#1051).
+            "notices": report["notices"],
             "report": report,
         }))
+    }
+}
+
+/// The part's bodies by their outcome (mitcad#1051): those built (`found`,
+/// the report's `imported`), of them the solids that are not valid, and
+/// `not_built`.
+fn body_counts(found: &[Value], not_built: usize) -> [(BodyOutcome, usize); 3] {
+    let not_valid = found
+        .iter()
+        .filter(|b| b["solid"] == true && b["valid"] == false)
+        .count();
+    [
+        (BodyOutcome::Imported, found.len() - not_valid),
+        (BodyOutcome::NotValid, not_valid),
+        (BodyOutcome::NotBuilt, not_built),
+    ]
+}
+
+/// The watchdog's notes added to a report's warnings, and to its notices
+/// as warnings (mitcad#1051).
+fn add_notes(value: &mut Value, notes: &[String]) {
+    if let Some(w) = value["warnings"].as_array_mut() {
+        w.extend(notes.iter().map(|n| json!(n)));
+    }
+    if let Some(n) = value["notices"].as_array_mut() {
+        n.extend(
+            notes
+                .iter()
+                .map(|note| mitcad_model::notice::Notice::warning(note.as_str()).to_json()),
+        );
     }
 }
 
@@ -1150,9 +1192,9 @@ fn summary(report: &Value) -> String {
         field("part_number").unwrap_or_else(|| "-".into()),
         field("material").unwrap_or_else(|| "-".into()),
         match report["mitcad_material"].as_str() {
-            Some(id) => format!(" (Mitcad's {id})"),
+            Some(id) => format!(" (MitCad's {id})"),
             None if report["material"].is_string() =>
-                " (not in Mitcad's library: bodies keep the default)".into(),
+                " (not in MitCad's library: bodies keep the default)".into(),
             None => String::new(),
         },
         field("units").unwrap_or_else(|| "mm".into()),

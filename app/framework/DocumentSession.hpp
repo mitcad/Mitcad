@@ -25,6 +25,13 @@ namespace mitcad {
 
 class CommandSession;
 
+// A new, empty design (the bridge's new_design_document_in) in the default
+// units for new designs (Preferences > General, GeneralSettings, mitcad#1036):
+// the untitled design at the start, and New and Close
+// (MainWindow::installEmptyDocument). Its unit is its initial state: no undo
+// step, not modified.
+rust::Box<Document> newDesignDocument();
+
 // One document and its computation, independent of the window toolkit.
 // Both the Qt presentation and the AppKit presentation use this owner;
 // neither keeps a second document or model worker behind its controls.

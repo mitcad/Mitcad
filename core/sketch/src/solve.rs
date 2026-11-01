@@ -178,12 +178,20 @@ pub enum Goal {
 }
 
 /// What a solve takes besides the stored constraints: the bindings of
-/// pattern copies, and the entities it leaves out (curves of derived
-/// offsets, computed after it).
+/// pattern copies, the entities it leaves out (curves of derived offsets,
+/// computed after it), and where its orientation choices come from.
 #[derive(Debug, Clone, Copy)]
 pub struct Extra<'a> {
     pub bindings: &'a [Binding],
     pub skip: &'a BTreeSet<EntityUid>,
+    /// The positions the solver takes its orientation choices from (the
+    /// side of a point-line, line-line or tangent distance, of a tangency,
+    /// the quadrant of an angle) instead of the positions the solve starts
+    /// from: the sketch as stored, when linked projections have moved to
+    /// their sources' new places before the solve (mitcad#1047). Each
+    /// point (by id) and each circle's radius and ellipse's minor radius is
+    /// taken from here where it has one of the same kind.
+    pub oriented: Option<&'a [Entity]>,
 }
 
 static NOTHING: BTreeSet<EntityUid> = BTreeSet::new();
@@ -193,7 +201,17 @@ impl Default for Extra<'_> {
         Self {
             bindings: &[],
             skip: &NOTHING,
+            oriented: None,
         }
+    }
+}
+
+/// Where the solver system is built: each entity of `entities` as
+/// `oriented` has it (same id and kind), else as it is (mitcad#1047).
+fn placed<'a>(oriented: &BTreeMap<EntityUid, &'a EntityKind>, e: &'a Entity) -> &'a EntityKind {
+    match oriented.get(&e.id) {
+        Some(&kind) if kind.type_name() == e.kind.type_name() => kind,
+        _ => &e.kind,
     }
 }
 
@@ -234,11 +252,25 @@ impl Built {
             .iter()
             .filter(|e| !extra.skip.contains(&e.id))
             .collect();
+        // Built where `oriented` has the geometry, so that the constraints
+        // take their orientation choices there, and moved to `entities`'
+        // positions once they are in (mitcad#1047).
+        let oriented: BTreeMap<EntityUid, &EntityKind> = extra
+            .oriented
+            .map(|o| o.iter().map(|e| (e.id, &e.kind)).collect())
+            .unwrap_or_default();
         for e in &entities {
-            if let EntityKind::Point { at } = e.kind {
+            if let EntityKind::Point { at } = placed(&oriented, e) {
                 points.insert(e.id, system.add_point(at[0], at[1]));
             }
         }
+        // A circle's radius or an ellipse's minor radius where it is built.
+        let size = |e: &Entity, own: f64| match placed(&oriented, e) {
+            EntityKind::Circle { radius, .. } => *radius,
+            EntityKind::Ellipse { minor_radius, .. }
+            | EntityKind::EllipticalArc { minor_radius, .. } => *minor_radius,
+            _ => own,
+        };
         let p = |uid: EntityUid| {
             points
                 .get(&uid)
@@ -253,9 +285,9 @@ impl Built {
                 EntityKind::Line { start, end, .. } => {
                     system.add_line(p(*start)?, p(*end)?).map_err(what)?
                 }
-                EntityKind::Circle { center, radius, .. } => {
-                    system.add_circle(p(*center)?, *radius).map_err(what)?
-                }
+                EntityKind::Circle { center, radius, .. } => system
+                    .add_circle(p(*center)?, size(e, *radius))
+                    .map_err(what)?,
                 EntityKind::Arc { center, start, end } => system
                     .add_arc(p(*center)?, p(*start)?, p(*end)?)
                     .map_err(what)?,
@@ -264,7 +296,7 @@ impl Built {
                     major,
                     minor_radius,
                 } => system
-                    .add_ellipse(p(*center)?, p(*major)?, *minor_radius)
+                    .add_ellipse(p(*center)?, p(*major)?, size(e, *minor_radius))
                     .map_err(what)?,
                 EntityKind::EllipticalArc {
                     center,
@@ -276,7 +308,7 @@ impl Built {
                     .add_elliptical_arc(
                         p(*center)?,
                         p(*major)?,
-                        *minor_radius,
+                        size(e, *minor_radius),
                         p(*start)?,
                         p(*end)?,
                     )
@@ -401,7 +433,42 @@ impl Built {
                 .map_err(|e| format!("{}: {e}", b.owner))?;
             built.add(s, SolverItem::Constraint(b.owner))?;
         }
+        if !oriented.is_empty() {
+            built.start_at(&entities)?;
+        }
         Ok(built)
+    }
+
+    /// Moves the system's points, circle radii and ellipse minor radii to
+    /// where `entities` have them: the solve starts there, while the
+    /// orientation choices the constraints took where the system was built
+    /// stay (mitcad#1047).
+    fn start_at(&mut self, entities: &[&Entity]) -> Result<(), String> {
+        for e in entities {
+            let what = |error: mitcad_solver::Error| format!("{}: {error}", e.as_ref());
+            match &e.kind {
+                EntityKind::Point { at } => {
+                    if let Some(&id) = self.points.get(&e.id) {
+                        self.system.set_point(id, *at).map_err(what)?;
+                    }
+                }
+                EntityKind::Circle { radius, .. } => {
+                    if let Some(&id) = self.curves.get(&e.id) {
+                        self.system.set_radius(id, *radius).map_err(what)?;
+                    }
+                }
+                EntityKind::Ellipse { minor_radius, .. }
+                | EntityKind::EllipticalArc { minor_radius, .. } => {
+                    if let Some(&id) = self.curves.get(&e.id) {
+                        self.system
+                            .set_minor_radius(id, *minor_radius)
+                            .map_err(what)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     fn binding(&self, kind: &BindingKind) -> Result<S, String> {

@@ -33,6 +33,7 @@
 #include <gp_Vec.hxx>
 
 #include "../framework/CommandRegistry.hpp"
+#include "../framework/Theme.hpp"
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
 #include "Commands.hpp"
@@ -239,7 +240,7 @@ BeltCheck beltRows(const CommandState& state, const CommandContext& model, const
       check.lines << verdict;
     }
   } else {
-    check.lines << QObject::tr("No catalogue belt fits");
+    check.lines << QObject::tr("No catalog belt fits");
   }
   const QString warning = answer.value(QStringLiteral("warning")).toString();
   if (!warning.isEmpty()) {
@@ -253,7 +254,8 @@ BeltCheck beltRows(const CommandState& state, const CommandContext& model, const
       const bool fits = nearest.value(QStringLiteral("fit")).toString(answer.value(QStringLiteral("fit")).toString()) ==
                         QStringLiteral("ok");
       shown.prepend(QStringLiteral("<b style=\"color:%1\">%2</b>")
-                        .arg(fits ? QStringLiteral("#1a7f37") : QStringLiteral("#b35900"), verdict.toHtmlEscaped()));
+                        .arg(themeColor(fits ? ColorRole::SuccessText : ColorRole::WarningText).name(),
+                             verdict.toHtmlEscaped()));
     } else {
       shown << line.toHtmlEscaped();
     }

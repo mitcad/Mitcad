@@ -89,7 +89,7 @@ fn cancelled_command_checkpoint_restore_is_atomic_and_can_be_retried() {
     let restore = serde_json::json!({"cmd": "restore_command", "token": token}).to_string();
     assert_eq!(
         b.doc.command(&restore).unwrap_err().0,
-        "the computation was cancelled"
+        "the computation was canceled"
     );
     assert_eq!(snapshot(&b.doc), edited);
 
@@ -202,7 +202,7 @@ fn a_cancelled_command_changes_nothing_and_keeps_what_was_evaluated() {
     monitor.cancel_after(1);
     let error = b.doc.set_parameter("d3", 35.0).unwrap_err();
     assert_eq!(error, ModelError::Cancelled);
-    assert_eq!(error.to_string(), "the computation was cancelled");
+    assert_eq!(error.to_string(), "the computation was canceled");
     assert_eq!(snapshot(&b.doc), before);
     assert_eq!(value(&b.doc, "d3"), 20.0);
 
@@ -224,9 +224,9 @@ fn a_cancelled_command_changes_nothing_and_keeps_what_was_evaluated() {
         .doc
         .command(r#"{"cmd": "set_parameter", "name": "d3", "value": 40}"#)
         .unwrap_err();
-    assert_eq!(error.0, "the computation was cancelled");
+    assert_eq!(error.0, "the computation was canceled");
     let error = b.doc.command(r#"{"cmd": "recompute"}"#).unwrap_err();
-    assert_eq!(error.0, "the computation was cancelled");
+    assert_eq!(error.0, "the computation was canceled");
     // The wrapper without a result keeps the last results.
     assert_eq!(b.doc.recompute(), b.doc.stats());
     assert_eq!(snapshot(&b.doc), before);
@@ -295,7 +295,7 @@ fn cancelled_undo_and_redo_keep_their_steps() {
     assert_eq!(b.doc.try_undo(), Err(ModelError::Cancelled));
     assert_eq!(b.doc.undo(), None);
     let error = b.doc.command(r#"{"cmd": "undo"}"#).unwrap_err();
-    assert_eq!(error.0, "the computation was cancelled");
+    assert_eq!(error.0, "the computation was canceled");
     assert_eq!(snapshot(&b.doc), before);
     assert_eq!(value(&b.doc, "d3"), 35.0);
 
@@ -341,7 +341,7 @@ fn a_cancelled_preview_leaves_none() {
         "type": "extrude", "profiles": [{"sketch": b.sketch, "region": b.region}],
         "extent": {"type": "distance", "distance": 30}, "operation": "new_body"}});
     let error = b.doc.preview(&json.to_string()).unwrap_err();
-    assert_eq!(error.0, "the computation was cancelled");
+    assert_eq!(error.0, "the computation was canceled");
     assert_eq!(snapshot(&b.doc), before);
 
     // The command itself computes again.
@@ -363,7 +363,7 @@ fn a_cancelled_command_array_keeps_the_commands_before() {
                 {"cmd": "set_parameter", "name": "d1", "value": 80}]"#,
         )
         .unwrap_err();
-    assert_eq!(error.0, "commands[1]: the computation was cancelled");
+    assert_eq!(error.0, "commands[1]: the computation was canceled");
     assert_eq!(value(&b.doc, "d3"), 35.0);
     assert_eq!(value(&b.doc, "d1"), 60.0);
     assert_eq!(b.doc.undo_label(), Some("Change d3"));
@@ -371,8 +371,7 @@ fn a_cancelled_command_array_keeps_the_commands_before() {
 
 #[test]
 fn a_cancelled_link_update_opens_nothing() {
-    let dir = std::env::temp_dir().join(format!("mitcad-p7-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("p7");
     let mut part = block();
     let path = dir.join("part.mitcad");
     std::fs::write(&path, part.doc.to_json()).unwrap();

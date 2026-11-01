@@ -214,7 +214,7 @@ void MainWindow::writeWebViewer(bool turnOn) {
     qInfo().noquote() << QStringLiteral("Web viewer: %1")
                              .arg(failure.isEmpty() ? QStringLiteral("cancelled") : failure);
     if (failure.isEmpty()) {
-      showHint(tr("%1 cancelled: nothing recorded.").arg(title));
+      showHint(tr("%1 canceled: nothing recorded.").arg(title));
     } else {
       sheetWarning(this, title, tr("Could not write the web viewer of %1:\n%2").arg(name, failure));
     }

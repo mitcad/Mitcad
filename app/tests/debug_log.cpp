@@ -218,8 +218,8 @@ void fileTests() {
 
   // The header and the lines from before.
   QStringList lines = linesOf(first);
-  CHECK(lines.value(0) == QStringLiteral("Mitcad debug log"));
-  for (const char* start : {"^Version: Mitcad", "^Build: (release|debug), ", "^System: ",
+  CHECK(lines.value(0) == QStringLiteral("MitCad debug log"));
+  for (const char* start : {"^Version: MitCad", "^Build: (release|debug), ", "^System: ",
                             "^Command line: ", "^Started: .*, file 1$"}) {
     if (!hasLine(lines, QString::fromLatin1(start))) {
       std::fprintf(stderr, "debug_log.cpp: no header line %s\n", start);
@@ -273,7 +273,7 @@ void fileTests() {
   for (const mitcad::DebugLogFile& file : files) {
     total += file.size;
     const QStringList content = linesOf(file.path);
-    CHECK(content.value(0) == QStringLiteral("Mitcad debug log"));
+    CHECK(content.value(0) == QStringLiteral("MitCad debug log"));
     if (file.path != current) {
       CHECK(file.size >= limits.fileBytes);
       continued = continued || hasLine(content, QStringLiteral("^--- Continued in mitcad-.*\\.log$"));
@@ -335,7 +335,7 @@ void fileTests() {
   CHECK(linesOf(warned).isEmpty());
   qWarning().noquote() << "an early warning";
   lines = linesOf(warned);
-  CHECK(lines.value(0) == QStringLiteral("Mitcad debug log"));
+  CHECK(lines.value(0) == QStringLiteral("MitCad debug log"));
   CHECK(hasLine(lines, QStringLiteral("^Graphics: not known yet \\(.*\\) +$")));
   CHECK(hasLine(lines, linePattern(QStringLiteral("debug"), QStringLiteral("a quiet line while the header waits"))));
   CHECK(hasLine(lines, linePattern(QStringLiteral("warning"), QStringLiteral("an early warning"))));
@@ -343,7 +343,7 @@ void fileTests() {
   log.setFact(QStringLiteral("Graphics"), QStringLiteral("Late GPU, OpenGL 3.3"));
   log.flush();
   lines = linesOf(warned);
-  CHECK(lines.value(0) == QStringLiteral("Mitcad debug log"));
+  CHECK(lines.value(0) == QStringLiteral("MitCad debug log"));
   CHECK(hasLine(lines, QStringLiteral("^Graphics: Late GPU, OpenGL 3\\.3 +$")));
   CHECK(!hasLine(lines, QStringLiteral("not known yet")));
   CHECK(hasLine(lines, linePattern(QStringLiteral("debug"), QStringLiteral("a line after the early warning"))));
@@ -357,7 +357,7 @@ void fileTests() {
   CHECK(linesOf(timedOut).isEmpty());
   waitMs(800);
   lines = linesOf(timedOut);
-  CHECK(lines.value(0) == QStringLiteral("Mitcad debug log"));
+  CHECK(lines.value(0) == QStringLiteral("MitCad debug log"));
   CHECK(hasLine(lines, QStringLiteral("^Graphics: not known yet")));
   log.stop();
   // Stopped while it waits: the file is written, its end too.
@@ -368,7 +368,7 @@ void fileTests() {
   log.stop();
   CHECK(!log.running());
   lines = linesOf(stopped);
-  CHECK(lines.value(0) == QStringLiteral("Mitcad debug log"));
+  CHECK(lines.value(0) == QStringLiteral("MitCad debug log"));
   CHECK(hasLine(lines, linePattern(QStringLiteral("info"),
                                    QStringLiteral("Debug log off: %1").arg(QDir::toNativeSeparators(stopped)))));
   // The graphics known (as when Preferences switches it on): at once.
@@ -405,7 +405,7 @@ void fileTests() {
   // The lines kept from before are over 4000 bytes: the start's own line
   // already continued in run-2.log.
   lines = linesOf(asked);
-  CHECK(lines.value(0) == QStringLiteral("Mitcad debug log"));
+  CHECK(lines.value(0) == QStringLiteral("MitCad debug log"));
   CHECK(hasLine(lines, QStringLiteral("^Switches: debug log \\(--debug-log\\)")));
   CHECK(lines.contains(QStringLiteral("--- Continued in run-2.log")));
   CHECK(QFileInfo(log.currentFile()) == QFileInfo(directory.filePath(QStringLiteral("asked/run-2.log"))));

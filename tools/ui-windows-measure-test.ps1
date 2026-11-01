@@ -11,8 +11,8 @@
 #   3. A round face against the block's top: square, no axis distance.
 #   4. Two top rims: the axes' and the centres' distance.
 # The panel's layout (mitcad#1010), Docked and Floating, at the default
-# width: top to bottom the picks, the result, Keep as Dimension and
-# Annotate on one row, the history, Close; no control's text clipped,
+# width: top to bottom the picks, the result, the history, Close (no Keep
+# as Dimension or Annotate: the Make tab's, mitcad#1049); no control's text clipped,
 # every result row on one line; a value copied from its context menu;
 # Close and Esc close it. The history (mitcad#648) folded until its header
 # is clicked; a row copied from its context menu, Copy All and Clear from
@@ -72,19 +72,17 @@ function Menu-Choose([string]$Entry) {
   }
 }
 # Expect-Layout: the panel in the order of the task (mitcad#1010), top to
-# bottom the picks, the result, the actions, the history and Close; at
-# most the default 300 wide; no control's text clipped; every result row
-# on one line.
+# bottom the picks, the result, the history and Close (no actions row:
+# keeping is the Make tab's, mitcad#1049); at most the default 300 wide;
+# no control's text clipped; every result row on one line.
 function Expect-Layout {
   Ui-Sync
   $pick = (Ui-LoggedAt 'Panel Measure input b')[1]
   $result = (Ui-LoggedAt 'Panel Measure result Distance')[1]
-  $keep = (Ui-LoggedAt 'Measure Keep as Dimension')[1]
-  $annotate = (Ui-LoggedAt 'Measure Annotate')[1]
   $history = (Ui-LoggedAt 'Measure history')[1]
   $close = (Ui-LoggedAt 'Panel Measure Close')[1]
-  if (-not ($pick -lt $result -and $result -lt $keep -and $keep -lt $history)) {
-    Ui-Fail "not in the task's order: picks $pick, result $result, actions $keep, history $history"
+  if (-not ($pick -lt $result -and $result -lt $history)) {
+    Ui-Fail "not in the task's order: picks $pick, result $result, history $history"
   }
   # Close at the bottom, under the page that scrolls (mitcad#655): below
   # the panel's view when the panel scrolls in session 0's low window,
@@ -94,9 +92,9 @@ function Expect-Layout {
   if ($close -le $bottom) {
     Ui-Fail "Close is not at the bottom: Close $close, the panel's view or the history ending at $bottom"
   }
-  Write-Host "ok   top to bottom: picks $pick, result $result, actions $keep, history $history, Close $close (under $bottom)"
-  if ($annotate -ne $keep) { Ui-Fail "Annotate ($annotate) is not on Keep as Dimension's row ($keep)" }
-  Write-Host 'ok   Keep as Dimension and Annotate on one row'
+  Write-Host "ok   top to bottom: picks $pick, result $result, history $history, Close $close (under $bottom)"
+  if (Ui-LastLineWith 'Measure Keep as Dimension at') { Ui-Fail 'the panel still has Keep as Dimension' }
+  Write-Host 'ok   no Keep as Dimension: Measure measures'
   $width = [int](Ui-LastMatch '^Panel Measure width (\d+) of')
   if ($width -le 0 -or $width -gt 300) { Ui-Fail "the panel is $width wide, not within the default 300" }
   $controls = Ui-LastLineWith 'Measure controls'
@@ -172,7 +170,7 @@ Ui-Mark
 Ui-Step 'measure (I)'                      { Ui-Key 'i' }
 Ui-ExpectNew 'Measure history: 3 rows' 'three rows'
 Ui-ExpectNew 'Measure history row 3: Edge of Body1' 'the rims'' row first'
-Ui-ExpectNew ', Axis distance 50 mm, Centre distance 50 mm' 'with their axes'' and centres'' distances'
+Ui-ExpectNew ', Axis distance 50 mm, Center distance 50 mm' 'with their axes'' and centres'' distances'
 Ui-ExpectNew 'Measure history row 2: Face of Body1' 'the round face against the top'
 Ui-ExpectNew 'Face of Body3: Radius 5 mm, Diameter 10 mm, Distance' 'with its distance'
 Ui-ExpectNew 'Measure history row 1: Face of Body1' 'the parallel faces last'
@@ -188,7 +186,7 @@ Ui-ExpectNew 'Measure history row 1 at' 'its rows laid out'
 Ui-Mark
 Ui-Step 'right-click the first row'        { Ui-ClickLogged 'Measure history row 1' 3 }
 Ui-ExpectNew 'Measure history row 1 menu' 'its context menu'
-Ui-ExpectNew 'Context menu: Show | Keep as Dimension | Copy' 'Show, Keep as Dimension and Copy'
+Ui-ExpectNew 'Context menu: Show | Copy' 'Show and Copy'
 Menu-Choose 'Copy'
 Ui-ExpectNew 'Measure history copied row 1: 1 | Face of Body1' 'the row copied as tab-separated text'
 Ui-Mark

@@ -4,13 +4,13 @@ native-appearance '${MITCAD_TEST_COLOR_SCHEME}'
 native-resize 900 680
 native-action view.fit
 expect-viewport
-expect-model-bodies 1 1000
+expect-model-bodies 2 2000
 capture-undo-depth baseline
 # capture-view-image settles the camera before reading its framebuffer.
 capture-view-image '${MITCAD_TEST_WORK}/before-history-${MITCAD_TEST_COLOR_SCHEME}.png'
 expect-native-history-wheel
 expect-view-image '${MITCAD_TEST_WORK}/before-history-${MITCAD_TEST_COLOR_SCHEME}.png' same
-expect-model-bodies 1 1000
+expect-model-bodies 2 2000
 expect-undo-depth ${baseline} 0
 
 # The native Value column retains the real profile chooser and separate
@@ -59,9 +59,65 @@ native-pointer-button '^Close$'
 focus-dialog '^Property Sets$'
 expect-native-spanned-heading propertySetsTable '^Print settings$'
 expect-native-spanned-heading propertySetsTable '^Filament › Basic information$'
+# A colour set by hand is a read-only swatch without a name (mitcad#1080):
+# the native cell shows the swatch, not an empty text.
+expect-native-style 'native.properties.F1.b0.Print Filament.filament_colour.value' image
 screenshot '${MITCAD_TEST_WORK}/native-print-properties-${MITCAD_TEST_COLOR_SCHEME}.png'
 native-pointer-button '^Close$'
 focus-main
-expect-model-bodies 1 1000
+expect-model-bodies 2 2000
 expect-undo-depth ${baseline} 1
+
+# Purge Volumes (mitcad#1078) from Send to Slicer's Purge volumes row: its
+# rows are labelled with their filaments and swatches (the vertical header
+# as the native table's leading column), its cells show their unit, a typed
+# volume commits as in the Qt test, and a text that is no volume is refused.
+# Nothing selected: Send to Slicer prints both boxes, so both filaments.
+key Escape
+expect-selection 0 0
+mark
+command make.print3d
+expect-log '^Command Send to Slicer started$'
+native-click 'native.action.note|purge|0'
+expect-log '^Purge volumes opened: White PLA, Black PETG$'
+expect-log '^Purge volume White PLA → Black PETG = 140 mm³$'
+focus-dialog '^Purge Volumes$'
+expect-native-text purgeVolumes.from.0 '^From White PLA$'
+expect-native-text purgeVolumes.from.1 '^From Black PETG$'
+expect-native-style purgeVolumes.from.0 image
+expect-native-text purgeVolumes.0.1 '^140 mm³$'
+expect-native-text purgeVolumes.1.0 '^420 mm³$'
+screenshot-dialog '${MITCAD_TEST_WORK}/native-purge-volumes-${MITCAD_TEST_COLOR_SCHEME}.png'
+mark
+native-click purgeVolumes.0.1
+expect-native-style purgeVolumes.0.1 editing
+key Ctrl+a
+type 120
+key Return
+expect-log '^Purge volume set: White PLA → Black PETG = 120 mm³$' 30
+expect-log '^Purge volume White PLA → Black PETG = 120 mm³ \(set by hand\)$'
+wait-idle
+focus-dialog '^Purge Volumes$'
+expect-native-text purgeVolumes.0.1 '^120 mm³$'
+expect-native-style purgeVolumes.0.1 bold,not-editing
+mark
+native-click purgeVolumes.1.0
+expect-native-style purgeVolumes.1.0 editing
+key Ctrl+a
+type abc
+key Return
+expect-log '^Purge volumes refused: Black PETG → White PLA = abc$' 30
+wait-idle
+focus-dialog '^Purge Volumes$'
+expect-native-text purgeVolumesMessage '^abc is not a volume in mm³\.$'
+expect-native-text purgeVolumes.1.0 '^420 mm³$'
+expect-no-log '^Purge volume set: Black PETG'
+screenshot-dialog '${MITCAD_TEST_WORK}/native-purge-volumes-refused-${MITCAD_TEST_COLOR_SCHEME}.png'
+native-pointer-button '^Close$'
+focus-main
+native-key-event Escape
+expect-log '^Command Send to Slicer cancelled$'
+wait-idle
+focus-main
+expect-model-bodies 2 2000
 expect-never 'The document was read while a job computes it|OCCT view event failed|Native Mac canvas:'

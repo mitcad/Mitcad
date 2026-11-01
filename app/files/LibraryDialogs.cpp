@@ -144,7 +144,7 @@ LibrariesDialog::LibrariesDialog(QWidget* parent) : QDialog(parent) {
   setWindowTitle(tr("Libraries"));
   resize(820, 420);
   auto* layout = new QVBoxLayout(this);
-  auto* intro = new QLabel(tr("Component libraries and community indexes are git repositories. The parts a design "
+  auto* intro = new QLabel(tr("Component libraries and community indexes are git repositories. The components a design "
                               "uses keep the version chosen for them; fetching only brings newer versions to "
                               "choose from. Libraries are fetched when you ask. A source with Auto-update on is "
                               "also fetched in the background when MitCad starts."));
@@ -153,7 +153,7 @@ LibrariesDialog::LibrariesDialog(QWidget* parent) : QDialog(parent) {
   m_table = new QTableWidget(0, 6);
   m_table->setObjectName(QStringLiteral("librarySources"));
   m_table->setHorizontalHeaderLabels(
-      {tr("On"), tr("Auto-update"), tr("Source"), tr("Library"), tr("Versions"), tr("Licence")});
+      {tr("On"), tr("Auto-update"), tr("Source"), tr("Library"), tr("Versions"), tr("License")});
   m_table->horizontalHeaderItem(kAutoColumn)->setToolTip(autoUpdateTip());
   m_table->horizontalHeader()->setSectionResizeMode(kSourceColumn, QHeaderView::Stretch);
   m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -377,13 +377,13 @@ LibraryBrowser::LibraryBrowser(bool community, QWidget* parent) : QDialog(parent
   m_license = new QComboBox;
   m_license->setObjectName(QStringLiteral("libraryLicense"));
   const QStringList accepted = acceptedLicenses();
-  m_license->addItem(tr("Accepted licences"), accepted);
+  m_license->addItem(tr("Accepted licenses"), accepted);
   for (const QString& id : accepted) {
     m_license->addItem(id, QStringList{id});
   }
-  m_license->addItem(tr("Any licence"), QVariant());
-  m_license->setToolTip(tr("The licences a part may have to be shown"));
-  m_unlicensed = new QCheckBox(tr("Show items &without a licence"));
+  m_license->addItem(tr("Any license"), QVariant());
+  m_license->setToolTip(tr("The licenses a component may have to be shown"));
+  m_unlicensed = new QCheckBox(tr("Show items &without a license"));
   m_grid->addFilter(m_license);
   m_grid->addFilter(m_unlicensed);
   auto* split = new QSplitter;
@@ -401,7 +401,7 @@ LibraryBrowser::LibraryBrowser(bool community, QWidget* parent) : QDialog(parent
   auto* form = new QFormLayout;
   m_version = new QComboBox;
   m_version->setObjectName(QStringLiteral("libraryVersion"));
-  m_version->setToolTip(tr("The part keeps this version; it changes only with Library Parts › Update"));
+  m_version->setToolTip(tr("The component keeps this version; it changes only with Library Components › Update"));
   form->addRow(tr("&Version:"), m_version);
   side->addLayout(form);
   m_size = new SizeChooser;
@@ -606,7 +606,7 @@ void LibraryBrowser::select() {
       return;
     }
     m_details->setText(tr("<p>Nothing found. Fetch newer versions with <b>Update</b> or add sources in "
-                          "<b>Libraries…</b>; items without an accepted licence are hidden unless asked for.</p>"));
+                          "<b>Libraries…</b>; items without an accepted license are hidden unless asked for.</p>"));
     qInfo().noquote() << QStringLiteral("Library browser empty: nothing found");
     return;
   }
@@ -626,7 +626,7 @@ void LibraryBrowser::select() {
     for (const QJsonValue& m : item.value(QStringLiteral("maintainers")).toArray()) {
       maintainers << escaped(m.toString());
     }
-    m_details->setText(tr("<h3>%1</h3><p>%2</p><p><b>Library</b> in %3<br>%4</p><p><b>Licence:</b> %5 %6</p>"
+    m_details->setText(tr("<h3>%1</h3><p>%2</p><p><b>Library</b> in %3<br>%4</p><p><b>License:</b> %5 %6</p>"
                           "<p><b>Maintainers:</b> %7</p><p><b>Components:</b> %8</p><p><b>Reviewed versions:</b> %9</p>")
                            .arg(escaped(str(item, "name")), escaped(str(item, "description")),
                                 escaped(str(item, "index")), escaped(str(item, "url")),
@@ -684,7 +684,7 @@ void LibraryBrowser::showVersion() {
       tr("%1 from %2 by %3, %4")
           .arg(str(component, "name"), str(manifest, "name"),
                authors.isEmpty() ? tr("unknown authors") : authors.join(QStringLiteral(", ")),
-               license.isEmpty() ? tr("no licence") : license);
+               license.isEmpty() ? tr("no license") : license);
   if (!str(m_shown, "url").isEmpty()) {
     attribution += QStringLiteral(", ") + str(m_shown, "url");
   }
@@ -710,7 +710,7 @@ void LibraryBrowser::showVersion() {
   if (!metadata.isEmpty()) {
     details << QStringLiteral("<p>%1</p>").arg(metadata.join(QStringLiteral("<br>")));
   }
-  QString licence = tr("<b>Licence:</b> %1").arg(license.isEmpty() ? tr("none") : escaped(license));
+  QString licence = tr("<b>License:</b> %1").arg(license.isEmpty() ? tr("none") : escaped(license));
   const QString note = licenseNote(license);
   if (!note.isEmpty()) {
     licence += QStringLiteral("<br>") + escaped(note);
@@ -911,7 +911,7 @@ void LibraryBrowser::insert() {
 
 LibraryPartsDialog::LibraryPartsDialog(const QJsonArray& parts, const QJsonArray& list, QWidget* parent)
     : QDialog(parent) {
-  setWindowTitle(tr("Library Parts"));
+  setWindowTitle(tr("Library Components"));
   resize(900, 560);
   auto* layout = new QVBoxLayout(this);
   auto* tabs = new QTabWidget;
@@ -919,13 +919,13 @@ LibraryPartsDialog::LibraryPartsDialog(const QJsonArray& parts, const QJsonArray
 
   auto* partsPage = new QWidget;
   auto* page = new QVBoxLayout(partsPage);
-  auto* intro = new QLabel(tr("Each part keeps the library version chosen for it, also when the library has moved on. "
+  auto* intro = new QLabel(tr("Each component keeps the library version chosen for it, also when the library has moved on. "
                               "Choose another version or size and Update; nothing changes on its own."));
   intro->setWordWrap(true);
   page->addWidget(intro);
   m_table = new QTableWidget(0, 6);
   m_table->setObjectName(QStringLiteral("libraryParts"));
-  m_table->setHorizontalHeaderLabels({tr("Part"), tr("Library"), tr("Version"), tr("Size"), tr("Licence"), tr("Status")});
+  m_table->setHorizontalHeaderLabels({tr("Component"), tr("Library"), tr("Version"), tr("Size"), tr("License"), tr("Status")});
   m_table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
   m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
   m_table->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -956,7 +956,7 @@ LibraryPartsDialog::LibraryPartsDialog(const QJsonArray& parts, const QJsonArray
   page->addWidget(m_changes);
   auto* row = new QDialogButtonBox;
   auto* check = new QPushButton(tr("Check for &Newer Versions"));
-  check->setToolTip(tr("Fetches the libraries these parts come from; nothing changes until you update"));
+  check->setToolTip(tr("Fetches the libraries these components come from; nothing changes until you update"));
   m_get = new QPushButton(tr("&Get Missing Libraries"));
   auto* show = new QPushButton(tr("&Show Changes"));
   m_update = new QPushButton(tr("&Update"));
@@ -966,19 +966,19 @@ LibraryPartsDialog::LibraryPartsDialog(const QJsonArray& parts, const QJsonArray
   row->addButton(m_update, QDialogButtonBox::AcceptRole);
   mac::styleDialogButtons(row, m_update);
   page->addWidget(row);
-  tabs->addTab(partsPage, tr("Library Parts"));
+  tabs->addTab(partsPage, tr("Library Components"));
 
   auto* listPage = new QWidget;
   auto* listLayout = new QVBoxLayout(listPage);
   auto* bom = new QTableWidget(0, 6);
   bom->setObjectName(QStringLiteral("partsList"));
   bom->setHorizontalHeaderLabels(
-      {tr("Qty"), tr("Part"), tr("Library"), tr("Version"), tr("Licence"), tr("Supplier part numbers")});
+      {tr("Qty"), tr("Component"), tr("Library"), tr("Version"), tr("License"), tr("Supplier Part Numbers")});
   bom->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
   bom->setEditTriggers(QAbstractItemView::NoEditTriggers);
   mac::styleListTable(bom);
   bom->setRowCount(int(list.size()));
-  QStringList csv{QStringLiteral("Quantity,Part,Library,Version,Licence,Supplier part numbers")};
+  QStringList csv{QStringLiteral("Quantity,Component,Library,Version,License,Supplier Part Numbers")};
   for (int i = 0; i < list.size(); ++i) {
     const QJsonObject r = list[i].toObject();
     // The suppliers' articles of the part's row (mitcad#949).
@@ -1014,7 +1014,7 @@ LibraryPartsDialog::LibraryPartsDialog(const QJsonArray& parts, const QJsonArray
     QApplication::clipboard()->setText(csv.join(QLatin1Char('\n')) + QLatin1Char('\n'));
     qInfo().noquote() << QStringLiteral("Parts list copied as CSV: %1 rows").arg(csv.size() - 1);
   });
-  tabs->addTab(listPage, tr("Parts List"));
+  tabs->addTab(listPage, tr("Bill of Materials"));
 
   auto* close = new QDialogButtonBox(QDialogButtonBox::Close);
   mac::styleDialogButtons(close);
@@ -1090,7 +1090,7 @@ void LibraryPartsDialog::load(int index) {
   if (!linked) {
     status = tr("a copy: does not follow the library");
   } else if (missing) {
-    status = tr("library not on this computer (the part keeps its saved bodies)");
+    status = tr("library not on this computer (the component keeps its saved bodies)");
   } else if (changed) {
     status = tr("to update");
   } else {
@@ -1292,7 +1292,7 @@ void LibraryPartsDialog::getMissing() {
     const QJsonObject library = part.part.value(QStringLiteral("library")).toObject();
     if (!errorOf(part.shown).isEmpty() && !urls.contains(str(library, "url"))) {
       urls << str(library, "url");
-      shown << QStringLiteral("%1 (%2, licence %3)").arg(str(library, "library"), str(library, "url"),
+      shown << QStringLiteral("%1 (%2, license %3)").arg(str(library, "library"), str(library, "url"),
                                                           str(library, "license"));
     }
   }

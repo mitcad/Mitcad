@@ -55,6 +55,7 @@ pub use move_features::{MoveConflict, MoveGroup, MovePlan, MovedGroup, PlannedGr
 pub use move_features::{MoveDestination, MovedDestination};
 // What the importers say about the features they made (mitcad#170).
 mod import_notes;
+pub use import_notes::{feature_level, feature_notices};
 pub use import_notes::{status_message as noted_message, status_text as noted_status};
 // Origin groups of the final unused sketch (mitcad#193).
 mod autoselect;
@@ -178,6 +179,22 @@ mod tables;
 // A table exported to and imported from CSV (mitcad#804).
 mod tables_csv;
 pub use tables_csv::{TableCsvChange, TableCsvFailure, TableCsvImport};
+// A configuration table's rows as CSV (mitcad#1044).
+mod configuration_rows_csv;
+pub use configuration_rows_csv::{RowsCsvColumn, RowsCsvImport, RowsCsvRole};
+// One filament's separate materials merged into one with variants per
+// printer and nozzle (mitcad#1054).
+mod material_variants;
+// Save Component as Design: a component written as a design of its own,
+// optionally replaced by a link to it (mitcad#1057).
+mod save_component;
+pub use save_component::{CutKind, CutReference, SaveComponentOptions, SavedComponent};
+// The design's summary, the root's property set Summary (mitcad#1088).
+mod design_summary;
+pub use design_summary::{SUMMARY_KEYS, SUMMARY_SET};
+// Features may share a name; lookups by name refuse a shared one with the
+// uids (mitcad#1107).
+mod feature_names;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -309,6 +326,10 @@ pub struct DocState {
     pub materials: Vec<crate::material::Material>,
     /// Default materials of components (C0: the root's), by component.
     pub component_materials: BTreeMap<ComponentUid, String>,
+    /// The appearance of a component's default material that its bodies
+    /// without one of their own get (mitcad#1055), by component; none:
+    /// the material's default.
+    pub component_appearances: BTreeMap<ComponentUid, String>,
     /// The design's printer and process profiles (mitcad#640, part 3), in
     /// the order they were made.
     pub print_profiles: Vec<crate::print_profile::PrintProfile>,
@@ -366,6 +387,7 @@ impl Default for DocState {
             properties: Default::default(),
             materials: Vec::new(),
             component_materials: BTreeMap::new(),
+            component_appearances: BTreeMap::new(),
             print_profiles: Vec::new(),
             annotations: Vec::new(),
             annotation_text_height: None,
@@ -461,16 +483,12 @@ impl DocState {
             .expect("an unused name exists")
     }
 
-    fn check_feature_name(&self, name: &str, uid: Option<FeatureUid>) -> Result<(), ModelError> {
+    /// A feature's name may be any but an empty one: features may share a
+    /// name (a sketch and its extrude, mitcad#1107); lookups by name refuse
+    /// a shared one ([`DocState::feature_by_text`]).
+    fn check_feature_name(&self, name: &str) -> Result<(), ModelError> {
         if name.trim().is_empty() {
             return Err(invalid("the feature name is empty"));
-        }
-        if self
-            .features
-            .iter()
-            .any(|f| f.name == name && Some(f.uid) != uid)
-        {
-            return Err(invalid(format!("a feature is already named '{name}'")));
         }
         Ok(())
     }
@@ -686,7 +704,7 @@ impl DocState {
                         let through = if id == r {
                             String::new()
                         } else {
-                            format!(" (through parameter '{}')", self.parameters.name(id))
+                            format!(" (through parameter {})", self.parameters.name(id))
                         };
                         let user = if position == at {
                             format!("{sketch} itself")
@@ -694,7 +712,7 @@ impl DocState {
                             format!("{}, before {sketch} in the timeline,", entry.name)
                         };
                         return Err(invalid(format!(
-                            "'{}' is what the driven dimension {dimension} of {sketch} measures: \
+                            "{} is what the driven dimension {dimension} of {sketch} measures: \
                              {user} cannot use it{through}; only features after {sketch} can",
                             self.parameters.name(r)
                         )));
@@ -822,7 +840,7 @@ impl DocState {
         let uid = self.new_uid();
         let name = match name {
             Some(name) => {
-                self.check_feature_name(name, None)?;
+                self.check_feature_name(name)?;
                 name.to_owned()
             }
             None => self.default_name(def.base_name()),
@@ -1009,8 +1027,13 @@ pub(crate) fn check_components(
     // A sketch's plane and projections may be geometry of the component a
     // link names (mitcad#100); a path that leads nowhere now is left to
     // recompute, which reports it.
-    let linked = match &entry.def {
+    // A construction feature's datum references, by its `datum_links`
+    // (mitcad#1035): the same.
+    let linked: Vec<(FeatureUid, &crate::links::OccurrenceLink)> = match &entry.def {
         FeatureDef::Sketch(sketch) => sketch.linked_references(),
+        FeatureDef::ConstructionPlane(p) => p.datum_links.iter().map(|(u, l)| (*u, l)).collect(),
+        FeatureDef::ConstructionAxis(a) => a.datum_links.iter().map(|(u, l)| (*u, l)).collect(),
+        FeatureDef::ConstructionPoint(p) => p.datum_links.iter().map(|(u, l)| (*u, l)).collect(),
         _ => Vec::new(),
     };
     for uid in entry.def.info().references().features {
@@ -1072,14 +1095,15 @@ pub struct TimelineItem<'a> {
     pub status: Option<&'a FeatureStatus>,
     /// What a feature that succeeded built with caveats (P9).
     pub warnings: &'a [String],
+    /// What is worth knowing of how it was built (mitcad#1106).
+    pub infos: &'a [String],
     /// What the importer that made it said (mitcad#170).
     pub import_note: Option<&'a str>,
 }
 
 impl TimelineItem<'_> {
-    /// `ok`, `warning` (succeeded with warnings or with an import note),
-    /// `error`, `suppressed`, `rolled_back`, or `pending` before the first
-    /// recompute.
+    /// `ok`, `warning` (succeeded with warnings), `error`, `suppressed`,
+    /// `rolled_back`, or `pending` before the first recompute.
     pub fn status_text(&self) -> &'static str {
         import_notes::status_text(self.status, self.warnings, self.import_note)
     }
@@ -1087,6 +1111,29 @@ impl TimelineItem<'_> {
     /// The error of a failed feature, or its import note and warnings.
     pub fn message(&self) -> Option<String> {
         import_notes::status_message(self.status, self.warnings, self.import_note)
+    }
+
+    /// The error of a failed feature; None for any other (mitcad#1040: the
+    /// queries' `error` carries only a failure).
+    pub fn error(&self) -> Option<&str> {
+        self.status.and_then(FeatureStatus::error)
+    }
+
+    /// Its notices: its error, its warnings, its infos, its import note
+    /// ([`feature_notices`]).
+    pub fn notices(&self) -> Vec<crate::notice::Notice> {
+        import_notes::feature_notices(
+            self.status,
+            self.warnings,
+            self.infos,
+            self.import_note,
+            self.entry.uid,
+        )
+    }
+
+    /// Its level: error, warning or information ([`feature_level`]).
+    pub fn level(&self) -> Option<crate::notice::NoticeLevel> {
+        import_notes::feature_level(self.status, self.warnings, self.infos, self.import_note)
     }
 }
 
@@ -1166,6 +1213,8 @@ pub struct PreviewReport {
     pub status: FeatureStatus,
     /// What the feature built with caveats (P9).
     pub warnings: Vec<String>,
+    /// What is worth knowing of how it was built (mitcad#1106).
+    pub infos: Vec<String>,
     /// A pattern's elements by number, suppressed ones too (P9).
     pub elements: Vec<crate::transform::Transform>,
     pub anchor: Option<crate::features::point_pattern::PatternAnchor>,
@@ -1293,6 +1342,10 @@ pub struct Document<K: Kernel> {
     /// that made the revision kept with them (mitcad#799,
     /// [`Document::configuration_moves`]). Runtime context only.
     configuration_moves: (u64, Vec<crate::configurations::ConfigurationMove>),
+    /// The design's statistics (mitcad#1088): beside the state, not in it,
+    /// so that undo leaves them; a stamped save changes them through a
+    /// shared reference ([`Document::save_file_stamped`]).
+    statistics: RwLock<crate::file::KeptStatistics>,
 }
 
 /// A `sketch` query's answer with what it was made from (mitcad#679): the
@@ -1353,6 +1406,7 @@ impl<K: Kernel> Document<K> {
             build_host_override: None,
             sketch_answers: Default::default(),
             configuration_moves: (0, Vec::new()),
+            statistics: RwLock::new(crate::file::KeptStatistics::new_design()),
         }
     }
 
@@ -1371,6 +1425,23 @@ impl<K: Kernel> Document<K> {
     pub(crate) fn with_warnings(mut self, warnings: Vec<String>) -> Self {
         self.warnings = warnings;
         self
+    }
+
+    /// The statistics a design file gave (mitcad#1088).
+    pub(crate) fn with_statistics(self, statistics: crate::file::KeptStatistics) -> Self {
+        self.set_kept_statistics(statistics);
+        self
+    }
+
+    pub(crate) fn kept_statistics(&self) -> crate::file::KeptStatistics {
+        self.statistics
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn set_kept_statistics(&self, statistics: crate::file::KeptStatistics) {
+        *self.statistics.write().unwrap_or_else(|e| e.into_inner()) = statistics;
     }
 
     pub(crate) fn source_directory(&self) -> Option<PathBuf> {
@@ -1643,6 +1714,7 @@ impl<K: Kernel> Document<K> {
             build_host_override: None,
             sketch_answers: Default::default(),
             configuration_moves: (0, Vec::new()),
+            statistics: RwLock::new(self.kept_statistics()),
         })
     }
 
@@ -1795,9 +1867,15 @@ impl<K: Kernel> Document<K> {
     }
 
     /// The warnings of a feature that succeeded in the last recompute (P9:
-    /// a fillet built 0.1 % smaller than asked).
+    /// a fillet built as rings).
     pub fn warnings(&self, uid: FeatureUid) -> &[String] {
         self.feature_result(uid).map_or(&[], |r| r.warnings())
+    }
+
+    /// The infos of a feature that succeeded in the last recompute
+    /// (mitcad#1106: a fillet built 0.1 % smaller than asked).
+    pub fn infos(&self, uid: FeatureUid) -> &[String] {
+        self.feature_result(uid).map_or(&[], |r| r.infos())
     }
 
     pub fn timeline(&self) -> Vec<TimelineItem<'_>> {
@@ -1806,6 +1884,7 @@ impl<K: Kernel> Document<K> {
                 entry,
                 status: self.status(entry.uid),
                 warnings: self.warnings(entry.uid),
+                infos: self.infos(entry.uid),
                 import_note: self.import_note(entry.uid),
             })
             .collect()
@@ -2202,7 +2281,12 @@ impl<K: Kernel> Document<K> {
         let moves = if next.parameters != self.state.parameters
             || next.configurations != self.state.configurations
         {
-            configurations::enforce(&self.state, &mut next)?
+            let unenforced = next.parameters.clone();
+            let moves = configurations::enforce(&self.state, &mut next)?;
+            // A closed table's row set its parameter columns, also without
+            // a move (a table filled with the options on a row, mitcad#1044).
+            recompute |= next.parameters != unenforced;
+            moves
         } else {
             Vec::new()
         };
@@ -2486,7 +2570,7 @@ impl<K: Kernel> Document<K> {
     pub fn rename_feature(&mut self, uid: FeatureUid, name: &str) -> Result<(), ModelError> {
         self.apply(|state| {
             let position = state.require(uid)?;
-            state.check_feature_name(name, Some(uid))?;
+            state.check_feature_name(name)?;
             let entry = Arc::make_mut(&mut state.features[position]);
             let label = format!("Rename {} to {name}", entry.name);
             entry.name = name.to_owned();
@@ -2504,7 +2588,7 @@ impl<K: Kernel> Document<K> {
                 return Err(invalid("the body name is empty"));
             }
             if names.iter().any(|(other, n)| n == name && *other != uid) {
-                return Err(invalid(format!("a body is already named '{name}'")));
+                return Err(invalid(format!("a body is already named {name}")));
             }
             state.body_names.insert(uid, name.to_owned());
             Ok((format!("Rename Body to {name}"), ()))
@@ -2568,7 +2652,7 @@ impl<K: Kernel> Document<K> {
                 None => {
                     let dims = expression_dims(&state.parameters, expression)?;
                     unit_for(dims, &state.parameters.context())
-                        .ok_or_else(|| invalid(format!("'{expression}' has no unit; give one")))?
+                        .ok_or_else(|| invalid(format!("“{expression}” has no unit; give one")))?
                 }
             };
             let spec = ParamSpec::user(name, expression, unit)
@@ -3935,6 +4019,10 @@ impl<K: Kernel> Document<K> {
             warnings: result
                 .result(uid)
                 .map(|r| r.warnings().to_vec())
+                .unwrap_or_default(),
+            infos: result
+                .result(uid)
+                .map(|r| r.infos().to_vec())
                 .unwrap_or_default(),
             elements: result
                 .result(uid)

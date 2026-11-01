@@ -25,7 +25,7 @@ screenshot-dialog '${MITCAD_TEST_WORK}/insert-${MITCAD_TEST_COLOR_SCHEME}.png'
 # A group lists its parts; folding and a group's star go to the shared tree.
 native-tiles group partPickerGroups Nuts
 expect-native-tiles count libraryResults 1
-native-tiles group partPickerGroups 'All parts'
+native-tiles group partPickerGroups 'All components'
 expect-native-tiles count libraryResults 2
 native-tiles fold partPickerGroups 'General fasteners' closed
 expect-log 'Part picker group .* folded'
@@ -35,7 +35,7 @@ native-tiles group-star partPickerGroups Screws
 expect-log 'Part picker group star .* on'
 native-tiles group-star partPickerGroups Screws
 expect-log 'Part picker group star .* off'
-native-tiles group partPickerGroups 'All parts'
+native-tiles group partPickerGroups 'All components'
 
 # The search is the library's (library_search); clearing it lists both.
 native-type librarySearch 4032
@@ -44,13 +44,13 @@ expect-native-tiles count libraryResults 1
 native-type librarySearch ''
 expect-native-tiles count libraryResults 2
 
-# A tile's star: Favourites lists it; turned off again.
+# A tile's star: Favorites lists it; turned off again.
 native-tiles star libraryResults iso4032
 expect-log 'Part picker star iso4032 on'
 expect-native-tiles star libraryResults iso4032 on
-native-tiles group partPickerGroups Favourites
+native-tiles group partPickerGroups Favorites
 expect-native-tiles count libraryResults 1
-native-tiles group partPickerGroups 'All parts'
+native-tiles group partPickerGroups 'All components'
 native-tiles star libraryResults iso4032
 expect-log 'Part picker star iso4032 off'
 expect-native-tiles star libraryResults iso4032 off
@@ -81,7 +81,7 @@ native-tiles resize 1180 680
 # The keyboard: a click gives the grid the keyboard, Right moves to the
 # nut and Return inserts it (the grid's Return, before the default button).
 native-tiles group partPickerGroups Screws
-native-tiles group partPickerGroups 'All parts'
+native-tiles group partPickerGroups 'All components'
 native-tiles click libraryResults iso4762
 expect-native-tiles current libraryResults iso4762
 key Right
@@ -105,7 +105,7 @@ expect-native-tiles current libraryResults iso4762
 mark
 button '^Supplier Articles \('
 focus-dialog '^Supplier Articles - '
-expect-log 'Supplier parts of M5x16: [0-9]+ articles, columns Supplier, Part number, Material, Finish, Checked'
+expect-log 'Supplier parts of M5x16: [0-9]+ articles, columns Supplier, Supplier Part Number, Material, Finish, Checked'
 screenshot-dialog '${MITCAD_TEST_WORK}/supplier-articles-${MITCAD_TEST_COLOR_SCHEME}.png'
 button '^Copy as TSV$'
 expect-log 'Supplier articles copied: [0-9]+ rows'

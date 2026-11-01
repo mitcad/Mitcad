@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/render app/browser/AppearanceDialog.cpp app/framework/Appearances.cpp
+# check-all sources: app/render app/commands/MaterialCommands.cpp app/browser/LibraryPicker.cpp app/framework/Appearances.cpp
 # Glass given to an imported body in the rendered view (mitcad#319,
 # docs/rendering.md): an STL cube whose triangles are wound inwards (the
 # file's own triangulation, as an imported body keeps it), imported into a
 # design by mitcad-cli, without the ground:
 #   - The rendered view turns the cube's triangles round to face outwards
 #     ("Render mesh ...: 12 of 12 triangles turned").
-#   - Edit Appearances assigns Glass - Clear while the view renders: the
+#   - The Appearance tool assigns Glass - Clear while the view renders: the
 #     body's material is swapped live (logged with its mesh reused), and
 #     the cube renders as glass at once: not black, as bright as the same
 #     design renders when it is opened again with the glass.
@@ -99,18 +99,13 @@ echo "ok   the cube rendered, brightness $opaque"
 
 echo "--- Glass - Clear assigned while rendering"
 ui_step "select the cube's row"          ui_click_logged "$ROW"
-ui_step "Edit Appearances (search)"      ui_command "Edit Appearances"
-ui_expect_log "Appearances for bodies: $BODY" "the dialog is for the cube"
-ui_focus_dialog '^Appearances$'
-ui_expect_log "Appearances item " "the library is listed"
-first=$(grep -oE "^Appearances item [a-z0-9_]+ at" "$UI_LOG" | head -1 | sed 's/ at$//')
-ui_step "click an item of the list"      ui_click_logged "$first"
 ui_mark
-ui_step "type Glass - Clear (list search)" xdotool type --delay 60 "Glass - Clear"
-ui_expect_new "Appearance selected: glass_clear" "Glass - Clear selected"
+ui_step "Appearance (search)"            ui_command "Appearance"
+ui_expect_new "Appearance Bodies: 1 body [body $BODY]" "the tool is for the cube"
+ui_step "the picker: Glass - Clear"      ui_picker_choose "Panel Appearance input value" "Appearance picker" "Glass - Clear"
 ui_mark
-ui_step "Assign to the cube"             ui_click_logged "Appearances assign"
-ui_expect_new "Assigned appearance glass_clear to $BODY" "assigned"
+ui_step "OK (Enter)"                     ui_key Return
+ui_expect_new "Appearance glass_clear for 1 body(ies)" "assigned"
 ui_expect_new "Render material swap $BODY: default (transmission 0, opacity 1) -> glass_clear (transmission 1" \
   "the live material swap is logged"
 ui_expect_new "; mesh reused (the worker holds it)" "with the cube's mesh reused"
@@ -118,8 +113,6 @@ ui_expect_new "changed $BODY;" "the worker changed the cube's material"
 applied=$(grep -n "changed $BODY;" "$UI_LOG" | tail -1 | cut -d: -f1)
 read -r live livePixels <<< "$(brightness_after "$applied" "the glass rendered")"
 echo "     live glass: brightness $live over $livePixels pixels"
-ui_step "Close"                          ui_click_logged "Appearances close"
-ui_focus_main
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
 ui_expect_log "Saved $FILE" "saved with the glass"
 

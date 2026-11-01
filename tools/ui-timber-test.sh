@@ -33,7 +33,7 @@ ui_start_app --no-native-dialogs
 
 echo "--- 1. A wall to place members on; Timber's modes"
 start_wall
-expect_inspect Wall "frame wall Wall 1, wall 3600 x 2400 mm, 9 member(s)" "the wall from the origin along +X"
+expect_inspect Wall "frame wall Wall 1, wall 3600 × 2400 mm, 9 member(s)" "the wall from the origin along +X"
 ui_mark
 ui_step "Place (Enter)"                    ui_key Return
 ui_expect_new "Placed frame Wall 1 (wall, lead C" "the wall frame placed" 60

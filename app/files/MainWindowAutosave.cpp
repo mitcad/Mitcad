@@ -157,7 +157,7 @@ bool MainWindow::restoreRecovered(RecoverableSession& session) {
   if (error.isEmpty() && !installDocument(name, path, read, error) && error.isEmpty()) {
     // Cancelled: the window's document stays, the session for later.
     qInfo().noquote() << QStringLiteral("Recovering %1 cancelled").arg(name);
-    showHint(tr("Recovering %1 cancelled; it can be recovered later.").arg(name));
+    showHint(tr("Recovering %1 canceled; it can be recovered later.").arg(name));
     return false;
   }
   if (!error.isEmpty()) {

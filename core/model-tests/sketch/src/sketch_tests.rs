@@ -654,7 +654,7 @@ fn dimensions_take_expressions_and_flags_change() {
         &mut d,
         json!({"cmd": "sketch.set_centerline", "sketch": "F1", "lines": ["c1"]}),
     );
-    assert_eq!(areas(&d, "F1").len(), 1, "centre lines bound profiles");
+    assert_eq!(areas(&d, "F1").len(), 1, "center lines bound profiles");
     let error = rejected(
         &mut d,
         json!({"cmd": "sketch.rectangle", "sketch": "F1", "mode": "diagonal"}),
@@ -1980,9 +1980,10 @@ fn an_offset_of_a_projection_keeps_its_side_when_the_source_moves_far() {
 /// `sketch.create` with `upright` (mitcad#692, Create Sketch): the design's
 /// +Z is the new sketch's y on the XZ and YZ planes and on faces facing
 /// ±X and ±Y, the design's +Y on XY and on faces facing ±Z; the normal is
-/// the plane's. The own frame is stored only where it differs from the
-/// plane's, and the command stays one undo step. Without `upright` the
-/// plane's frame as before.
+/// the plane's, except on the XZ origin plane, which is seen from the
+/// front (-Y, mitcad#1060). The own frame is stored only where it differs
+/// from the plane's, and the command stays one undo step. Without
+/// `upright` the plane's frame as before.
 #[test]
 fn upright_sketches_put_the_design_z_up() {
     const RECT: &str = "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}";
@@ -2028,7 +2029,7 @@ fn upright_sketches_put_the_design_z_up() {
     // (where, plane, the sketch's x, its y, its normal, an own frame stored)
     let cases = [
         ("XY", json!("xy"), x, y, z, false),
-        ("XZ", json!("xz"), minus(x), z, y, true),
+        ("XZ", json!("xz"), x, z, minus(y), true),
         ("YZ", json!("yz"), y, z, x, true),
         ("the top", on(&top), x, y, z, false),
         ("the bottom", on(&bottom), minus(x), y, minus(z), true),

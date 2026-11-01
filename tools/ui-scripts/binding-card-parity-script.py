@@ -75,6 +75,25 @@ def edit_body(property_name, key, title, target_log=None):
         "expect-undo-depth ${beforeCards} 0")
 
 
+def edit_body_tool(property_name, key, target, follows=True):
+    # An appearance binding's Edit… starts the Appearance tool on its
+    # target with the binding shown (mitcad#1059); Cancel changes nothing.
+    body_card()
+    add("mark")
+    if native:
+        add("native-pointer-click " + shlex.quote("bindingsCardEdit_" + key))
+    else:
+        add("dialog-click-logged " + shlex.quote("^Bindings card Edit " + re.escape(property_name) + " at "))
+    add(expected(f"Bindings card Edit {property_name} of Body1"), expected(f"Appearance tool for {target}"))
+    if follows:
+        add("expect-log '^Appearance tool: the targets follow '")
+    add("focus-main")
+    capture("tool-" + re.sub(r"[^a-z]+", "-", property_name.lower()).strip("-"))
+    add("native-click commandCancel" if native else "key Escape",
+        "expect-log '^Command Appearance cancelled'", "focus-main", "expect-model-bodies 4 26000",
+        "expect-undo-depth ${beforeCards} 0")
+
+
 if native:
     add("expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'",
         "native-appearance '${MITCAD_TEST_COLOR_SCHEME}'", "native-expand native.modelTree",
@@ -98,11 +117,10 @@ if native:
     add("mark", "native-system-pointer native.history.search", "sleep 450",
         expected("Bindings card closed"), "expect-native-visible bindingsCardTitle false")
 else:
-    # The fixture opens folded. A folder-name click clears model selection,
-    # leaving Right with no current row. Use its real disclosure arrow and
-    # require a newly logged visible badge after the expansion.
-    add("mark", "click-logged '^Browser arrow Root/Bodies at '",
-        "expect-log '^Browser fx badge Root/Bodies/Body1 at '")
+    # The root's Bodies opens expanded, Body1's badge in sight (its arrow
+    # would fold it away); later steps fold it to bring Board:1 in sight.
+    add("expect-ever '^Browser arrow Root/Bodies at '",
+        "expect-ever '^Browser fx badge Root/Bodies/Body1 at '")
 
 body_card()
 capture("body")
@@ -114,9 +132,8 @@ if native:
         "expect-native-visible bindingsCardTitle false", "focus-main",
         "expect-model-bodies 4 26000", "expect-undo-depth ${beforeCards} 0")
 
-edit_body("Appearance", "body:F2.b0:appearance", "Appearances", "^Appearances for bodies: F2\\.b0(?: |$)")
-edit_body("Face 1 (side)", "body:F2.b0:face:F2:side(c1[c4,c2])", "Appearances",
-          "^Appearances for faces: F2\\.b0 F2:side\\(c1\\[c4,c2\\]\\)")
+edit_body_tool("Appearance", "body:F2.b0:appearance", "F2.b0")
+edit_body_tool("Face 1 (side)", "body:F2.b0:face:F2:side(c1[c4,c2])", "F2.b0 F2:side(c1[c4,c2])", follows=False)
 edit_body("Shown", "body:F2.b0:shown", "Show Body1 When")
 
 add("mark")

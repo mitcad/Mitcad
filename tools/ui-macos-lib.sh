@@ -172,6 +172,9 @@ ui_init() {
   # No question whether to activate a picked face's component (mitcad#960),
   # as in ui-test-lib.sh.
   export MITCAD_ASK_ACTIVATE_COMPONENT=0
+  # Panels start from their defaults, not remembered values (mitcad#1028),
+  # as in ui-test-lib.sh.
+  export MITCAD_REMEMBER_PANEL_VALUES=0
   # Git's configuration of our own (empty), as in ui-test-lib.sh.
   : > "$UI_ROOT/gitconfig"
   export GIT_CONFIG_GLOBAL=$UI_ROOT/gitconfig

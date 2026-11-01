@@ -407,7 +407,7 @@ bool stageUpdate(const Installation& installation, const QString& file, const QS
     routineAdded = true;
   }
   staged() = update;
-  qInfo().noquote() << QStringLiteral("Update staged: %1 -> %2, %3 when Mitcad has quit").arg(from, to, update.program);
+  qInfo().noquote() << QStringLiteral("Update staged: %1 -> %2, %3 when MitCad has quit").arg(from, to, update.program);
   return true;
 }
 

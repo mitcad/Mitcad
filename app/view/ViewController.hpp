@@ -7,6 +7,7 @@
 #include <QColor>
 #include <QHash>
 #include <QJsonObject>
+#include <QList>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -55,6 +56,9 @@ struct ViewSettings {
   // The orientation cube's projection (mitcad#774, `view/cubeProjection`
   // by its id): as the view's by default (owner 27.10.2026).
   CubeProjection cubeProjection = CubeProjection::FollowView;
+  // The navigation bar at the bottom of the view (mitcad#1086,
+  // `view/navigationBar`): shown by default.
+  bool navigationBar = true;
 
   static ViewSettings load();
   void save() const;
@@ -93,7 +97,14 @@ public:
   // Preferences' Layout changed and Restart Now was chosen (mitcad#419):
   // Mitcad starts again, its window closed as when it quits.
   std::function<void()> restartRequested;
+  // Preferences' Show the navigation bar changed (mitcad#1086): the bar
+  // shows or hides at once.
+  std::function<void(bool shown)> navigationBarChanged;
   void setSnapToGrid(bool on);
+  // The View menu's Visual Style actions in menu order (after createMenus),
+  // Rendered after a null entry (a separator) when there is a render worker:
+  // the navigation bar's drop-down (mitcad#1086).
+  QList<QAction*> visualStyleActions() const;
 
   // A standard view: front, back, left, right, top, bottom, iso.
   void showStandardView(const QString& view);

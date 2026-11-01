@@ -305,7 +305,7 @@ struct Session : std::enable_shared_from_this<Session> {
     lastReceived.store(nowSeconds());
     const char* op = xpc_dictionary_get_string(message, "op");
     if (!op) { close(); return; }
-    os_log(OS_LOG_DEFAULT, "Mitcad renderer peer=%d received %{public}s", xpc_connection_get_pid(connection), op);
+    os_log(OS_LOG_DEFAULT, "MitCad renderer peer=%d received %{public}s", xpc_connection_get_pid(connection), op);
     if (std::strcmp(op, "activity") == 0) {
       bool accepted = false;
       {
@@ -384,7 +384,7 @@ struct Session : std::enable_shared_from_this<Session> {
               {QStringLiteral("message"), QString::fromStdString(error)}});
         }
         self->activeCommand.store(0);
-        os_log(OS_LOG_DEFAULT, "Mitcad renderer peer=%d completed %{public}s accepted=%d",
+        os_log(OS_LOG_DEFAULT, "MitCad renderer peer=%d completed %{public}s accepted=%d",
                xpc_connection_get_pid(self->connection), op, ok);
         self->pending.fetch_sub(length + 1024);
         if (bulk) self->bulkPending.store(false);

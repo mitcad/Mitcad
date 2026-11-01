@@ -156,7 +156,9 @@
 //   menu <Top>/<Item>[/...] trigger an entry of the main window's menu bar
 //                           ('&' and "..." in the names are ignored)
 //   popup <entry>           choose an entry of the open popup menu (a
-//                           context menu), by its text
+//                           context menu), by its text; "Sub/Item" opens
+//                           the submenu Sub and chooses Item in it (also
+//                           for context-menu-logged's entry)
 //   button <regex> [objectName] click a visible button whose text (without
 //                           '&') matches; optional Qt objectName selects an
 //                           exact control in the target window
@@ -298,6 +300,10 @@
 //   expect-native-enabled <id> true|false assert native control state (6 s)
 //   expect-native-visible <id> true|false assert native document view state
 //   expect-native-present <id> true|false assert document view membership, including hidden views
+//   expect-native-attached <id> <anchor-id> above|below the visible control
+//                           <id> of a popover lies directly above or below
+//                           the document control <anchor-id> and across its
+//                           centre, in screen coordinates (6 s)
 //   expect-native-style <id> <state,...> what a native table cell or label
 //                           shows: error (red text, and a red fill in a
 //                           cell), warning, normal, bold, regular, editable,
@@ -332,7 +338,12 @@
 //   expect-native-history [uid...] compare horizontal native history icons,
 //                           marker geometry and rollback appearance with the
 //                           actual model; optional IDs check native and shared
-//                           selection (a single '-' checks empty selection)
+//                           selection (a single '-' checks empty selection);
+//                           a folded timeline group's features are hidden,
+//                           its folder cell in their place (mitcad#1077)
+//   expect-native-tooltip <id> <regex> the tooltip AppKit shows for a native
+//                           control, also one its owner supplies when shown
+//                           (the timeline's cells, mitcad#1076) (6 s)
 //   native-history-drag begin|to <index>|end send actual marker mouse events;
 //                           separate steps let the real model settle during
 //                           a single drag before its undo steps are merged
@@ -382,6 +393,10 @@
 //                           check real search rows, enabled selection and native
 //                           shortcut text; * any selected, - none; optional flag
 //                           requires disabled rows or the macOS Command glyph
+//   expect-command-icon <id> <icon> [<other-id>] the command's action and
+//                           its ribbon buttons render as app/icons/<icon>.svg
+//                           (menus and the command search take the action's
+//                           icon); with <other-id>, that command's icon differs
 //   click-parameter <name> <column> click the real visible Qt table cell (0..5)
 //   expect-parameter-cell <name> <column> <regex> visible|hidden|refused|absent
 //                           check its actual text, filter visibility and error
@@ -424,6 +439,10 @@
 // The system:
 //   wait-idle [seconds]            no job computes (60 s)
 //   sleep <ms>
+//   color-scheme light|dark   ask the platform for that colour scheme, as
+//                           when the desktop's setting changes while Mitcad
+//                           runs (MITCAD_TEST_COLOR_SCHEME at a step of the
+//                           script's, mitcad#1104; Diagnostics.hpp)
 //   expect-file <path> [seconds]   the file or folder exists
 //   expect-files <dir> <glob> <count> [seconds]   <count> files in <dir>
 //                           match the glob (hidden ones included)

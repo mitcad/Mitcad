@@ -6,9 +6,10 @@
 //! was left out, and a placeholder (`placeholder`, suppressed) stands where
 //! the file had an item that was suppressed or failed there.
 //!
-//! A feature with a note has the `warning` status while it builds (a
-//! suppressed placeholder stays `suppressed`); the note comes first in its
-//! message, before the warnings of its evaluation. A command that changes
+//! A note is information (mitcad#1040): a feature with only a note keeps
+//! the `ok` status and has the `info` level (a suppressed placeholder stays
+//! `suppressed`); the note comes first in its message, before the warnings
+//! of its evaluation, and is its last notice ([`feature_notices`]). A command that changes
 //! the feature's definition or one of its dimensions clears the note when
 //! the feature then builds (does not fail); undo brings it back with the
 //! state.
@@ -23,6 +24,7 @@ use super::{Added, DocState, Document, ModelError, invalid};
 use crate::features::{FeatureDef, FeatureEntry, PlaceholderDef, ValueInput};
 use crate::ids::{ComponentUid, FeatureUid};
 use crate::kernel::Kernel;
+use crate::notice::{Notice, NoticeLevel};
 use crate::recompute::{FeatureStatus, Recomputed};
 
 impl DocState {
@@ -147,9 +149,9 @@ impl<K: Kernel> Document<K> {
 
     /// Adds a suppressed placeholder at the marker for an item an import
     /// did not bring in because it was suppressed or failed in the file:
-    /// named `name` when that name is free (else `Placeholder<n>`), in
-    /// `component` (the active one when None), with `note` (the file's
-    /// state) as its import note.
+    /// named `name` (features may share a name, mitcad#1107; else
+    /// `Placeholder<n>`), in `component` (the active one when None), with
+    /// `note` (the file's state) as its import note.
     pub fn add_import_placeholder(
         &mut self,
         name: Option<&str>,
@@ -164,9 +166,7 @@ impl<K: Kernel> Document<K> {
             return Err(invalid("a placeholder needs a note"));
         }
         self.apply(|state| {
-            let name = name
-                .map(str::trim)
-                .filter(|n| !n.is_empty() && state.check_feature_name(n, None).is_ok());
+            let name = name.map(str::trim).filter(|n| !n.is_empty());
             let def: FeatureDef<ValueInput> =
                 FeatureDef::Placeholder(PlaceholderDef::new(item_type));
             let added = state.add_feature_in(&def, name, component)?;
@@ -179,15 +179,66 @@ impl<K: Kernel> Document<K> {
 }
 
 /// A feature's status as the queries give it: `warning` for one that
-/// succeeded with warnings or with an import note.
+/// succeeded with warnings. An import note alone is information
+/// (mitcad#1040): the feature stays `ok`, its `level` is `info`.
 pub fn status_text(
     status: Option<&FeatureStatus>,
     warnings: &[String],
-    note: Option<&str>,
+    _note: Option<&str>,
 ) -> &'static str {
+    super::status_text(status, warnings)
+}
+
+/// A feature's notices (mitcad#1040), the one place that decides its
+/// level: the error of a failed feature, a warning per warning of its
+/// evaluation, its evaluation's infos (mitcad#1106: a fillet built 0.1 %
+/// smaller than asked) and the importer's note as information, in that
+/// order. States (suppressed, rolled back, pending) are not severities: a
+/// suppressed placeholder has only its note.
+pub fn feature_notices(
+    status: Option<&FeatureStatus>,
+    warnings: &[String],
+    infos: &[String],
+    note: Option<&str>,
+    uid: FeatureUid,
+) -> Vec<Notice> {
+    let mut notices = Vec::new();
+    if let Some(error) = status.and_then(FeatureStatus::error) {
+        notices.push(Notice::error(error).with_target(uid));
+    }
+    if !matches!(status, Some(FeatureStatus::Failed(_))) {
+        notices.extend(
+            warnings
+                .iter()
+                .map(|w| Notice::warning(w.as_str()).with_target(uid)),
+        );
+        notices.extend(
+            infos
+                .iter()
+                .map(|i| Notice::info(i.as_str()).with_target(uid)),
+        );
+    }
+    if let Some(note) = note {
+        notices.push(Notice::info(note).with_target(uid));
+    }
+    notices
+}
+
+/// A feature's level (mitcad#1040): `error` when it failed, `warning` when
+/// it built with warnings, `info` when it has only infos (mitcad#1106) or
+/// an import note; None for a feature with nothing to say.
+pub fn feature_level(
+    status: Option<&FeatureStatus>,
+    warnings: &[String],
+    infos: &[String],
+    note: Option<&str>,
+) -> Option<NoticeLevel> {
     match status {
-        Some(FeatureStatus::Ok) if note.is_some() => "warning",
-        _ => super::status_text(status, warnings),
+        Some(FeatureStatus::Failed(_)) => Some(NoticeLevel::Error),
+        Some(FeatureStatus::Ok) if !warnings.is_empty() => Some(NoticeLevel::Warning),
+        Some(FeatureStatus::Ok) if !infos.is_empty() => Some(NoticeLevel::Info),
+        _ if note.is_some() => Some(NoticeLevel::Info),
+        _ => None,
     }
 }
 
@@ -202,5 +253,102 @@ pub fn status_message(
         (Some(note), Some(warnings)) => Some(format!("{note}; {warnings}")),
         (Some(note), None) => Some(note.to_owned()),
         (None, message) => message,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const F: FeatureUid = FeatureUid(4);
+
+    #[test]
+    fn a_feature_s_level_is_its_worst_notice() {
+        let failed = FeatureStatus::Failed("no result".to_owned());
+        let warned = ["lost 2 of 5 edges".to_owned()];
+        let note = Some("Stands in for Fillet3");
+        // Failed: an error, also with warnings or a note.
+        assert_eq!(
+            feature_level(Some(&failed), &warned, &[], note),
+            Some(NoticeLevel::Error)
+        );
+        assert_eq!(
+            feature_notices(Some(&failed), &warned, &[], note, F),
+            vec![
+                Notice::error("no result").with_target("F4"),
+                Notice::info("Stands in for Fillet3").with_target("F4"),
+            ]
+        );
+        // Built with warnings: a warning; a note stays information.
+        let ok = FeatureStatus::Ok;
+        assert_eq!(
+            feature_level(Some(&ok), &warned, &[], note),
+            Some(NoticeLevel::Warning)
+        );
+        assert_eq!(
+            feature_notices(Some(&ok), &warned, &[], None, F),
+            vec![Notice::warning("lost 2 of 5 edges").with_target("F4")]
+        );
+        assert_eq!(status_text(Some(&ok), &warned, None), "warning");
+        // Only a note: information, and the status stays ok.
+        assert_eq!(
+            feature_level(Some(&ok), &[], &[], note),
+            Some(NoticeLevel::Info)
+        );
+        assert_eq!(status_text(Some(&ok), &[], note), "ok");
+        // Nothing to say.
+        assert_eq!(feature_level(Some(&ok), &[], &[], None), None);
+        assert!(feature_notices(Some(&ok), &[], &[], None, F).is_empty());
+        // States are not severities: a suppressed placeholder has only its
+        // note, a rolled back or pending feature nothing.
+        assert_eq!(
+            feature_level(Some(&FeatureStatus::Suppressed), &[], &[], note),
+            Some(NoticeLevel::Info)
+        );
+        assert_eq!(
+            status_text(Some(&FeatureStatus::Suppressed), &[], note),
+            "suppressed"
+        );
+        assert_eq!(
+            feature_level(Some(&FeatureStatus::RolledBack), &[], &[], None),
+            None
+        );
+        assert_eq!(feature_level(None, &[], &[], None), None);
+    }
+
+    #[test]
+    fn infos_are_information() {
+        // A feature that built with infos only (mitcad#1106): information,
+        // its status stays ok; with warnings too, a warning.
+        let ok = FeatureStatus::Ok;
+        let infos = ["built 0.1 % smaller".to_owned()];
+        let warned = ["built as rings".to_owned()];
+        assert_eq!(
+            feature_level(Some(&ok), &[], &infos, None),
+            Some(NoticeLevel::Info)
+        );
+        assert_eq!(status_text(Some(&ok), &[], None), "ok");
+        assert_eq!(
+            feature_notices(Some(&ok), &[], &infos, None, F),
+            vec![Notice::info("built 0.1 % smaller").with_target("F4")]
+        );
+        assert_eq!(
+            feature_level(Some(&ok), &warned, &infos, None),
+            Some(NoticeLevel::Warning)
+        );
+        assert_eq!(
+            feature_notices(Some(&ok), &warned, &infos, Some("note"), F),
+            vec![
+                Notice::warning("built as rings").with_target("F4"),
+                Notice::info("built 0.1 % smaller").with_target("F4"),
+                Notice::info("note").with_target("F4"),
+            ]
+        );
+        // A failed feature has no infos to tell.
+        let failed = FeatureStatus::Failed("no result".to_owned());
+        assert_eq!(
+            feature_notices(Some(&failed), &[], &infos, None, F),
+            vec![Notice::error("no result").with_target("F4")]
+        );
     }
 }

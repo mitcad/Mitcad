@@ -6,14 +6,19 @@
 //! commands, saving a sheet's template to the user's or the project's
 //! library and the `drawing_templates` query.
 //!
-//! A field's names: `title` (the sheet's own title, else the component's or
-//! the design's name), `name` (that name), `drawing` (the drawing's name),
+//! A field's names: `title` (the sheet's own title, else the component's
+//! property `Title`, which for the root is the design's summary's
+//! `Summary/Title` (mitcad#1088), else the component's or the design's
+//! name), `name` (that name), `drawing` (the drawing's name),
 //! `number` (the sheet's drawing number, else the part number),
-//! `part_number`, `description`, `material` (the component's property, else
+//! `part_number`, `description` (the property `Description`, else
+//! `Summary/Comments`, the component's, else the design's),
+//! `material` (the component's property, else
 //! the materials of the bodies the drawing shows), `mass` (the stored
 //! property `Mass`, else worked out from the bodies the drawing's
 //! component shows, in the design's mass unit),
-//! `author` (the sheet's, else the property `Author`), `date` (the sheet's,
+//! `author` (the sheet's, else the property `Author`, else the design's
+//! `Summary/Author`), `date` (the sheet's,
 //! else today's), `scale`, `sheet` (`1/2`), `sheet_number`, `sheets`,
 //! `size`, `units`, `projection`, `revision` (the latest one's letter, `-`
 //! before the first); any other name is a property of the drawing's
@@ -26,9 +31,10 @@ use serde_json::{Value, json};
 
 use super::ApiError;
 use super::prelude::*;
-use mitcad_model::Document;
+use mitcad_model::ids::ComponentUid;
 use mitcad_model::internal::fingerprint::Fingerprint;
 use mitcad_model::kernel::Kernel;
+use mitcad_model::{Document, SUMMARY_SET};
 use mitcad_model_drawing::compose::TitleInfo;
 use mitcad_model_drawing::def::{Drawing, Subject};
 use mitcad_model_drawing::template::{self, Filled, Revision, SheetTemplate, next_revision_letter};
@@ -94,7 +100,7 @@ pub(super) fn template_choice(value: &Value) -> Result<Option<SheetTemplate>, Ap
             .map(Some)
             .ok_or_else(|| {
                 ApiError(format!(
-                    "there is no built-in template '{id}': iso or ansi (a user's or a \
+                    "there is no built-in template {id}: iso or ansi (a user's or a \
                      project's is given as its data, as drawing_templates lists it)"
                 ))
             }),
@@ -420,10 +426,19 @@ impl<K: Kernel> DrawingTemplatesLocal<K> for Document<K> {
             self.component_property_of(component, None, key)
                 .filter(|v| !v.trim().is_empty())
         };
+        // The design's summary (mitcad#1088): the root's set Summary.
+        let summary = |key: &str| {
+            self.component_stored_property(ComponentUid::ROOT, &format!("{SUMMARY_SET}/{key}"))
+                .filter(|v| !v.trim().is_empty())
+        };
         match key {
+            // A component's own Title (the root's: the summary's), else
+            // its name: the design's summary names the design, not each
+            // of its components.
             "title" => block
                 .title
                 .clone()
+                .or_else(|| property("Title"))
                 .unwrap_or_else(|| self.drawing_title(c.drawing, c.title)),
             "name" => self.drawing_title(c.drawing, c.title),
             "drawing" => c.drawing.name.clone(),
@@ -433,11 +448,15 @@ impl<K: Kernel> DrawingTemplatesLocal<K> for Document<K> {
                 .or_else(|| property("Part number"))
                 .unwrap_or_default(),
             "part_number" => property("Part number").unwrap_or_default(),
-            "description" => property("Description").unwrap_or_default(),
+            "description" => property("Description")
+                .or_else(|| property(&format!("{SUMMARY_SET}/Comments")))
+                .or_else(|| summary("Comments"))
+                .unwrap_or_default(),
             "author" => block
                 .author
                 .clone()
                 .or_else(|| property("Author"))
+                .or_else(|| summary("Author"))
                 .unwrap_or_default(),
             "date" => block.date.clone().unwrap_or_else(today),
             "scale" => scale_text(c.scale),

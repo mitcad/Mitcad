@@ -272,7 +272,7 @@ ui_expect_new "Layout restart: now" "Restart Now"
 ui_expect_new "Restart: closing the window" "the window closes first"
 ui_focus_dialog '^MitCad$'
 ui_step "cancel (Escape)"                 ui_key Escape
-ui_expect_new "Restart cancelled: Mitcad stayed open" "cancelled as quitting would be"
+ui_expect_new "Restart cancelled: MitCad stayed open" "cancelled as quitting would be"
 ui_crashed && ui_fail "Mitcad ended although the close was cancelled"
 grep -q '^Restart (test, not started)' "$UI_LOG" && ui_fail "a restart after the cancel"
 echo "ok   Mitcad still runs, nothing restarted"

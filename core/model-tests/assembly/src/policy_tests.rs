@@ -223,7 +223,7 @@ fn the_assembly_preset_refuses_sketches_and_features_with_the_reason() {
                "definition": {"type": "offset", "plane": "xy", "distance": 4}}}),
     );
     assert!(
-        error.contains("Root does not allow modelling features"),
+        error.contains("Root does not allow modeling features"),
         "{error}"
     );
     assert_eq!(doc.undo_depth(), depth);

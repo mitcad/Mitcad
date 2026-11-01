@@ -111,6 +111,15 @@ public:
   // without a name the input's faces it was compared with and why none was
   // taken (`operation` heads the lines).
   void carry_by_surface(const Shape& input, const char* operation);
+  // Gives each face of the result that has no name the names of the
+  // input's face it lies in: a few points inside it all within `tolerance`
+  // (or the faces' own tolerances, where larger) of that face, the nearest
+  // where several are. For an operation that rebuilds faces in place and
+  // whose history misses some (shape healing of a dressup's result,
+  // mitcad#1118); call after the other naming, before finish().
+  void carry_by_containment(const Shape& input, double tolerance);
+  // True when a face of the result has the name.
+  bool holds(const std::string& name) const;
   // True when the face of the result has a name.
   bool named(const TopoDS_Shape& face) const;
   // True when the face is a face of the result.

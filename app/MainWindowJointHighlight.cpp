@@ -35,16 +35,19 @@
 
 #include "commands/CommandSupport.hpp"
 #include "framework/JointHighlight.hpp"
+#include "framework/Theme.hpp"
 
 namespace mitcad {
 
 namespace {
 
-const QColor kJointSideA(0xf2, 0x8c, 0x28);
-const QColor kJointSideB(0x2a, 0xb5, 0x7d);
-const QColor kJointMotionOrigin(0xd9, 0xb3, 0x00);
-const QColor kTriadX(0xe5, 0x39, 0x35);
-const QColor kTriadY(0x43, 0xa0, 0x47);
+// The joint's sides and frames from the role table (mitcad#1041): the X and Y
+// axes as the view cube's; the motion origin off the warning's yellow.
+const QColor kJointSideA = viewColor(ColorRole::JointA, false);
+const QColor kJointSideB = viewColor(ColorRole::JointB, false);
+const QColor kJointMotionOrigin = viewColor(ColorRole::JointOrigin, false);
+const QColor kTriadX = viewColor(ColorRole::AxisX, false);
+const QColor kTriadY = viewColor(ColorRole::AxisY, false);
 
 QColor sideColor(const JointSide& side) {
   if (side.key.startsWith(QLatin1Char('a'))) {

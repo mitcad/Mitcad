@@ -259,6 +259,7 @@ ui_expect_new "Panel Move/Copy choices: move_type=components" "moving the compon
 ui_wait_idle
 ui_step "Rotate"                         ui_choose "Panel Move/Copy input type" 2
 ui_expect_new "Move/Copy: Move Type = Rotate" "Rotate"
+ui_show_origin
 ui_step "pick the Z axis"                ui_click_logged "Datum z"
 ui_expect_new "Move/Copy Axis: 1 axis [axis z]" "about the Z axis"
 ui_wait_idle

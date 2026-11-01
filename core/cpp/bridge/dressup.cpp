@@ -123,4 +123,12 @@ rust::Vec<rust::String> shape_notes(const geometry::Shape& shape) {
   return notes;
 }
 
+rust::Vec<rust::String> shape_infos(const geometry::Shape& shape) {
+  rust::Vec<rust::String> infos;
+  for (const std::string& info : shape.infos()) {
+    infos.push_back(rust::String(info));
+  }
+  return infos;
+}
+
 } // namespace mitcad::bridge

@@ -95,7 +95,7 @@ void ModeBanner::paintEvent(QPaintEvent* /*event*/) {
   const QRectF card = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
   QColor background = palette().color(QPalette::Window);
   background.setAlpha(235);
-  const QColor accent(0x2f, 0x9b, 0xff); // the plane pick's hover colour
+  const QColor accent = viewColor(ColorRole::Hover, false); // the plane pick's hover colour
   QPainterPath path;
   path.addRoundedRect(card, card.height() / 2.0, card.height() / 2.0);
   painter.fillPath(path, background);

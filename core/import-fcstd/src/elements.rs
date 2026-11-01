@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
 //! References of the history: a FreeCAD object's element (`Face6`,
 //! `Edge12`, `Vertex3`: an index into its stored shape's faces, edges or
-//! vertices in OCCT's order) as the Mitcad name of the same element, and
+//! vertices in OCCT's order) as the MitCad name of the same element, and
 //! FreeCAD's planes and axes (origin features, datums, sketch axes and
-//! lines, faces and edges) as Mitcad's plane and axis references.
+//! lines, faces and edges) as MitCad's plane and axis references.
 //!
 //! An element is taken from the object's stored shape (in its component's
 //! coordinates, [`Kernel::indexed_element`]) and found by its geometry (the
 //! same curves, either way along, whole circles and the seams of a face of
-//! revolution wherever they start; [`SAME_GEOMETRY`]) in the Mitcad body
+//! revolution wherever they start; [`SAME_GEOMETRY`]) in the MitCad body
 //! that holds the object's result: first in that body's shape right after
-//! the object (Mitcad's names carry through the later features, as
+//! the object (MitCad's names carry through the later features, as
 //! FreeCAD's references do), the name then checked in the body now; else
-//! in the body now. An edge FreeCAD merged (`Refine`) is every Mitcad edge
+//! in the body now. An edge FreeCAD merged (`Refine`) is every MitCad edge
 //! along it, named by the two faces it lies between where all the edges
 //! between them are pieces of it ([`by_face_pairs`], mitcad#793), so that
 //! a sketch edit upstream still finds it. FreeCAD's face colours find
@@ -96,7 +96,7 @@ fn find_same<K: Kernel>(
 }
 
 impl<K: Kernel> Importer<'_, '_, K> {
-    /// The Mitcad body holding an object's result: the replay's, else the
+    /// The MitCad body holding an object's result: the replay's, else the
     /// body the import made of it (its own, or its Body's when it is the
     /// Body's tip).
     pub(super) fn body_of_object(&self, object: &str) -> Option<BodyUid> {
@@ -123,7 +123,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         (tip.object == object).then(|| owner(b)).flatten()
     }
 
-    /// Every Mitcad body holding an object's result: [`Self::body_of_object`]'s
+    /// Every MitCad body holding an object's result: [`Self::body_of_object`]'s
     /// first, then the others of a result of several solids (a pad FreeCAD
     /// keeps as one shape of two solids, mitcad#541, mitcad#952).
     fn bodies_of_object(&self, object: &str) -> Vec<BodyUid> {
@@ -138,7 +138,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         out
     }
 
-    /// The Mitcad names of an element (`Edge12`) of an object, in the body
+    /// The MitCad names of an element (`Edge12`) of an object, in the body
     /// holding its result now (the one that has it, for a result of several
     /// bodies): one name, or the pieces of an edge FreeCAD merged.
     pub(super) fn element_names(
@@ -188,7 +188,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     }
                 }
             }
-            // An edge FreeCAD merged: Mitcad's pieces along it.
+            // An edge FreeCAD merged: MitCad's pieces along it.
             if kind == ElementKind::Edge && stored.len() == 1 {
                 let pieces: Vec<String> = elements(kernel, &now, ElementKind::Edge)
                     .into_iter()
@@ -207,7 +207,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         Err(format!("{object}.{element} was not found in the body"))
     }
 
-    /// The Mitcad faces of a planned body that are faces of its object's
+    /// The MitCad faces of a planned body that are faces of its object's
     /// stored shape, by FreeCAD's face index (mitcad#793: the faces FreeCAD
     /// colours): the face of the same geometry, at the same index (a base
     /// feature of the stored shape keeps its order), else anywhere in the
@@ -359,7 +359,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             let normal = [m[0][2], m[1][2], m[2][2]];
             let x = [m[0][0], m[1][0], m[2][0]];
             if t == "App::Plane" {
-                // Mitcad's origin plane when it is that plane.
+                // MitCad's origin plane when it is that plane.
                 for (name, n) in [
                     ("xy", [0.0, 0.0, 1.0]),
                     ("xz", [0.0, 1.0, 0.0]),
@@ -390,7 +390,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             return Ok(json!({"body": body.to_string(), "face": face}));
         }
         Err(format!(
-            "{} ({t}) {sub} is not a plane Mitcad takes",
+            "{} ({t}) {sub} is not a plane MitCad takes",
             link.object
         ))
     }
@@ -473,7 +473,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             }
         }
         Err(format!(
-            "{} ({t}) {sub} is not an axis Mitcad takes",
+            "{} ({t}) {sub} is not an axis MitCad takes",
             link.object
         ))
     }
@@ -552,7 +552,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
 }
 
 /// The pieces of an edge FreeCAD merged by the faces they lie between
-/// (mitcad#793), as Mitcad's own fillets name edges: where every edge of
+/// (mitcad#793), as MitCad's own fillets name edges: where every edge of
 /// the body between two faces is a piece, the name of the two faces
 /// without a number (`E{a|b}`: every edge between them), which a changed
 /// sketch still finds however many pieces it then makes; other pieces as
@@ -756,7 +756,7 @@ fn on_curve(c: &Curve3, p: [f64; 3]) -> bool {
 
 /// Whether two whole circles or ellipses are the same curve, wherever
 /// their seams are and either way round (mitcad#835: FreeCAD's hole
-/// starts its circles on the sketch's x axis, Mitcad's revolved hole
+/// starts its circles on the sketch's x axis, MitCad's revolved hole
 /// elsewhere): the same centre, plane, radii and, for an ellipse, major
 /// axis. None when either is not a whole conic.
 fn same_whole_conic(x: &Curve3, y: &Curve3) -> Option<bool> {

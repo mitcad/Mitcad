@@ -15,15 +15,15 @@ key Return
 expect-dialog-gone '^Libraries$'
 focus-main
 show-dialog-style-fixture parts
-focus-dialog '^Library Parts$'
+focus-dialog '^Library Components$'
 show-dialog-style-fixture bom
 test-dialog-controls bom
 screenshot-dialog '${MITCAD_STYLE_SHOTS}/bom-${MITCAD_TEST_COLOR_SCHEME}.png'
 key Return
-expect-dialog-gone '^Library Parts$'
+expect-dialog-gone '^Library Components$'
 focus-main
 show-dialog-style-fixture picker
-focus-dialog '^Part Picker'
+focus-dialog '^Component Picker'
 button '.*' partPickerPin
 expect-widget-property partPickerPin checked true
 button '.*' partPickerPin
@@ -33,7 +33,7 @@ expect-widget-property partPickerStar checked true
 button '.*' partPickerStar
 expect-widget-property partPickerStar checked false
 key Return
-expect-dialog-gone '^Part Picker'
+expect-dialog-gone '^Component Picker'
 focus-main
 show-dialog-style-fixture project-settings
 focus-dialog '^Project Settings'

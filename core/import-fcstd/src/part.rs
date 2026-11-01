@@ -1473,7 +1473,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             several if several.iter().any(open) => {
                 return Err(
                     "a Part sweep through several sections of open wires or wires in no plane is \
-                     not translated: Mitcad's loft of curve sections takes no centre line"
+                     not translated: Mitcad's loft of curve sections takes no center line"
                         .to_owned(),
                 );
             }

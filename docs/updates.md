@@ -186,8 +186,8 @@ switches:
 A check is one HTTPS request for the manifest. On the pre-release
 channel, a check is two requests: first GitHub's list of releases, then
 the manifest. An installation adds the download. The requests carry the
-User-Agent `Mitcad/<version> (<platform>; <channel>)`, for example
-`Mitcad/0.2.0 (windows-x64; stable)`. The requests carry nothing that
+User-Agent `MitCad/<version> (<platform>; <channel>)`, for example
+`MitCad/0.2.0 (windows-x64; stable)`. The requests carry nothing that
 identifies you or the machine:
 
 - No cookies. MitCad keeps none and sends none.
@@ -332,7 +332,7 @@ past it:
   days after its `expires` (`CLOCK_TOLERANCE_DAYS`), by the computer's
   clock in UTC.
 - **Automatic checks** offer nothing from an expired manifest: the same
-  as no newer release (`Update check: the manifest of Mitcad <version>
+  as no newer release (`Update check: the manifest of MitCad <version>
   expired on <date>` in the log). A downgrade stays impossible as
   before.
 - **Check for Updates** announces the release of an expired manifest

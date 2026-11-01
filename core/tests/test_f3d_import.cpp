@@ -348,7 +348,7 @@ void test_out_of_memory(const fs::path& dir) {
     }
     CHECK(error.empty());
     CHECK(contains(report, "the import ran low on memory before its first item ("));
-    CHECK(contains(report, "(the import's memory limit)): definitions were cut short or not tried and 1 modelling "
+    CHECK(contains(report, "(the import's memory limit)): definitions were cut short or not tried and 1 modeling "
                            "items took the file's bodies; the final bodies were compared by volume only"));
     CHECK(contains(std::string(limited->query(R"({"query": "document"})")), "\"bodies\":2"));
   }

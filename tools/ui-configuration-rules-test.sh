@@ -119,6 +119,7 @@ ui_step "Enter"                          ui_key Return
 ui_expect_new "Rule text not read: Line 2, column 13: maximum is no action" \
   "the wrong line is marked with its place and the reason"
 ui_expect_new "Rules status: Not saved: Line 2, column 13" "the status line says it"
+ui_expect_new "Rules status level: error" "as an error, with its badge (mitcad#1051)"
 expect_none "Rules saved:" "nothing is saved"
 ui_step "Esc"                            ui_key Escape
 ui_expect_new "Rule text restored" "Esc restores the rule's text"

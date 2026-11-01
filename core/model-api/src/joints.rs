@@ -6,10 +6,11 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::ApiError;
 use super::dispatch::named_enum;
 use super::prelude::*;
+use super::{ApiError, add_feature_notices};
 use mitcad_model::Document;
+use mitcad_model::FeatureStatus;
 use mitcad_model::assembly::matrix_rows;
 use mitcad_model::constraints::RowReference;
 use mitcad_model::datum::Vec3;
@@ -19,7 +20,7 @@ use mitcad_model::features::{
     MotionLinkDef, OccurrencePath, RigidGroupDef, ValueInput,
 };
 use mitcad_model::ids::{ComponentUid, FeatureUid, OccurrenceUid};
-use mitcad_model::internal::document::{status_message, status_text};
+use mitcad_model::internal::document::status_text;
 use mitcad_model::internal::joints::{frame_parts, limit_values, path_component};
 use mitcad_model::joints::{DofUnit, Dragged, JointKind, JointResult, Motion, SlideAxis};
 use mitcad_model::kernel::Kernel;
@@ -592,16 +593,19 @@ impl<K: Kernel> JointsCrateOps<K> for Document<K> {
                 };
                 let active = self.rigid_groups().iter().any(|(uid, _, _)| *uid == f.uid);
                 let status = self.status(f.uid);
-                json!({
+                let warnings = self.warnings(f.uid);
+                let mut value = json!({
                     "uid": f.uid,
                     "name": f.name,
                     "component": f.component,
                     "occurrences": g.occurrences,
                     "names": g.occurrences.iter().map(|o| a.occurrence_name(*o)).collect::<Vec<_>>(),
                     "active": active,
-                    "status": status_text(status, self.warnings(f.uid)),
-                    "error": status_message(status, self.warnings(f.uid)),
-                })
+                    "status": status_text(status, warnings),
+                    "error": status.and_then(FeatureStatus::error),
+                });
+                add_feature_notices(&mut value, status, warnings, None, f.uid);
+                value
             })
             .collect();
         let dof: Vec<Value> = components
@@ -843,8 +847,9 @@ impl<K: Kernel> JointsLocal<K> for Document<K> {
             "b": side(&link.b),
             "reverse": link.reverse,
             "status": status_text(status, warnings),
-            "error": status_message(status, warnings),
+            "error": status.and_then(FeatureStatus::error),
         });
+        add_feature_notices(&mut value, status, warnings, None, uid);
         match self.link_result(uid) {
             Some(r) => {
                 value["state"] = json!(r.state.as_str());
@@ -873,9 +878,11 @@ impl<K: Kernel> JointsLocal<K> for Document<K> {
     }
 
     fn joint_ref(&self, text: &str) -> Result<FeatureUid, ApiError> {
+        let is_joint =
+            |def: &FeatureDef| matches!(def, FeatureDef::Joint(_) | FeatureDef::AsBuiltJoint(_));
+        // The joint of a name it shares with other features (mitcad#1107).
         let found = self
-            .features()
-            .find(|f| f.uid.to_string() == text.trim() || f.name == text.trim())
+            .feature_by_text(text, Some(&is_joint))?
             .ok_or_else(|| ApiError(format!("no joint {text}")))?;
         match found.def {
             FeatureDef::Joint(_) | FeatureDef::AsBuiltJoint(_) => Ok(found.uid),
@@ -967,8 +974,9 @@ impl<K: Kernel> JointsLocal<K> for Document<K> {
             "b": b_side,
             "motions": motions_json(&kind.motions(slide)),
             "status": status_text(status, warnings),
-            "error": status_message(status, warnings),
+            "error": status.and_then(FeatureStatus::error),
         });
+        add_feature_notices(&mut value, status, warnings, None, uid);
         if let Some(origin) = origin_side {
             value["origin"] = origin;
         }
@@ -1101,8 +1109,9 @@ impl<K: Kernel> JointsLocal<K> for Document<K> {
             "component": entry.component,
             "rows": rows,
             "status": status_text(status, warnings),
-            "error": status_message(status, warnings),
+            "error": status.and_then(FeatureStatus::error),
         });
+        add_feature_notices(&mut value, status, warnings, None, uid);
         match result {
             Some(r) => {
                 value["state"] = json!(r.state.as_str());

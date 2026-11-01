@@ -82,7 +82,7 @@ QNetworkReply* UpdateClient::get(const QUrl& url, const QByteArray& accept) {
   const QString channel =
       m_channel == UpdateSettings::Channel::Prerelease ? QStringLiteral("prerelease") : QStringLiteral("stable");
   request.setHeader(QNetworkRequest::UserAgentHeader,
-                    QStringLiteral("Mitcad/%1 (%2; %3)")
+                    QStringLiteral("MitCad/%1 (%2; %3)")
                         .arg(m_source.currentVersion,
                              m_source.platform.isEmpty() ? QStringLiteral("unknown") : m_source.platform, channel));
   // Qt would send the user's languages.
@@ -159,7 +159,7 @@ void UpdateClient::download(const UpdateOffer& offer, const QString& path) {
   cancel();
   m_file.setFileName(path);
   if (!m_file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-    fail(tr("Cannot write %1: %2").arg(path, m_file.errorString()));
+    fail(tr("Could not write %1: %2").arg(path, m_file.errorString()));
     return;
   }
   m_expected = offer.size;
@@ -179,7 +179,7 @@ void UpdateClient::download(const UpdateOffer& offer, const QString& path) {
       return;
     }
     if (m_file.write(data) != data.size()) {
-      reply->setProperty(kWhy, tr("Cannot write %1: %2").arg(m_file.fileName(), m_file.errorString()));
+      reply->setProperty(kWhy, tr("Could not write %1: %2").arg(m_file.fileName(), m_file.errorString()));
       reply->abort();
     }
   });
@@ -277,7 +277,7 @@ void UpdateClient::readManifest(const QByteArray& data) {
     fail(tr("The update manifest was refused: %1.").arg(errorText(e)));
     return;
   }
-  qInfo().noquote() << QStringLiteral("Update manifest: Mitcad %1 of %2 (%3)%4")
+  qInfo().noquote() << QStringLiteral("Update manifest: MitCad %1 of %2 (%3)%4")
                            .arg(offer.version, offer.date,
                                 offer.expired ? QStringLiteral("%1, expired on %2").arg(offer.status, offer.expires)
                                               : offer.status,

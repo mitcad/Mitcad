@@ -34,7 +34,7 @@ Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
 Ui-Mark
 Ui-Step 'Wall (F7)'                      { Ui-Key 'F7' }
 Ui-ExpectNew 'Command Wall started' 'Wall started'
-Expect-Inspect 'Wall' @('frame wall Wall 1', 'fastener 2 x Wood screw head test at each junction, sized from the members') `
+Expect-Inspect 'Wall' @('frame wall Wall 1', "fastener 2 ${Times} Wood screw head test at each junction, sized from the members") `
   ('the first time (fresh settings): two of the first countersunk wood screw, sized from the members, not the ' +
    'pan-head connector screw whose name comes first (mitcad#516)')
 # The frame: three 5.0x90 screws with heads at each junction.
@@ -44,7 +44,7 @@ Ui-Step 'Size 5.0x90'                    { Wheel-Choice 'Wall' 'fastener_size' 2
 Ui-Step 'three at each junction'         { Ui-TypeIn 'Panel Wall input fastener_count' '3' }
 Ui-Step '1800 mm long'                   { Ui-TypeIn 'Panel Wall input frame_length' '1800' }
 Ui-Step '600 mm high'                    { Ui-TypeIn 'Panel Wall input frame_height' '600' }
-Expect-Inspect 'Wall' @('frame wall Wall 1, wall 1800 x 600 mm', 'fastener 3 x Wood screw head test 5.0x90 at each junction') `
+Expect-Inspect 'Wall' @("frame wall Wall 1, wall 1800 ${Times} 600 mm", "fastener 3 ${Times} Wood screw head test 5.0x90 at each junction") `
   'a chosen fastener and size, three at each junction'
 Ui-Mark
 Ui-Step 'Place (Enter)'                  { Ui-Key 'Return' }
@@ -80,7 +80,7 @@ Ui-Step 'the top plate''s top'           { Ui-Click $top[2] $top[3] }
 Expect-Inspect 'Timber' @('place side', '; set of ', '; fasteners no') 'a set on the plate, no fasteners by default'
 Ui-Mark
 Ui-Step 'Fasteners on'                   { Ui-ClickLogged 'Panel Timber input set_fasteners' }
-Expect-Inspect 'Timber' @('place side', '; set of ', '; fasteners 3 x Wood screw head test 5.0x90 at each junction') `
+Expect-Inspect 'Timber' @('place side', '; set of ', "; fasteners 3 ${Times} Wood screw head test 5.0x90 at each junction") `
   'a set on the plate, fastened with the fastener chosen last'
 Ui-Mark
 Ui-Step 'Place (Enter)'                  { Ui-Key 'Return' }
@@ -135,7 +135,7 @@ Ui-ExpectNew 'BUILD swap fastener starts with 2 fastener(s), test-timber|wood-sc
 Choose-Fastener 'Swap Fastener' 'part' 'test-timber/ring-nail-test'
 Ui-Mark
 Ui-Step 'Size 3.1x90'                    { Wheel-Choice 'Swap Fastener' 'fastener_size' 2 }
-Expect-Inspect 'Swap Fastener' @('swap 2 fastener(s) (wood, 2 x Wood screw head test 5.0x90)', 'for Ring nail test 3.1x90') `
+Expect-Inspect 'Swap Fastener' @("swap 2 fastener(s) (wood, 2 ${Times} Wood screw head test 5.0x90)", 'for Ring nail test 3.1x90') `
   'two screws to become 3.1x90 ring nails'
 Ui-Mark
 Ui-Step 'Swap (Enter)'                   { Ui-Key 'Return' }

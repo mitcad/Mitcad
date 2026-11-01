@@ -45,7 +45,7 @@ impl SketchEdit<'_> {
             ));
         }
         if !center.iter().all(|v| v.is_finite()) {
-            return Err(format!("the centre must be finite, got {center:?}"));
+            return Err(format!("the center must be finite, got {center:?}"));
         }
         if self.has_projected_geometry() {
             return Err(

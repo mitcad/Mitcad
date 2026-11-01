@@ -267,9 +267,19 @@ public:
   void set_unified(bool unified) { m_unified = unified; }
 
   // What the operation that made the shape gave up to build it (a fillet
-  // made 0.1 % smaller than asked); the model shows them as warnings.
+  // built as rings); the model shows them as warnings.
   const std::vector<std::string>& notes() const { return m_notes; }
   void add_note(std::string note) { m_notes.push_back(std::move(note)); }
+  // What is worth knowing of how it was built but needs no action (a
+  // fillet made 0.1 % smaller than asked, mitcad#1106); the model shows
+  // them as information, in the feature's details.
+  const std::vector<std::string>& infos() const { return m_infos; }
+  void add_info(std::string info) { m_infos.push_back(std::move(info)); }
+  // The other shape's notes and infos added to this one's.
+  void copy_notes(const Shape& other) {
+    m_notes.insert(m_notes.end(), other.m_notes.begin(), other.m_notes.end());
+    m_infos.insert(m_infos.end(), other.m_infos.begin(), other.m_infos.end());
+  }
 
 private:
   void map_faces(const std::vector<NamedFace>& faces);
@@ -321,6 +331,7 @@ private:
   std::vector<int> matching_faces(const std::string& reference) const;
   bool m_unified = false;
   std::vector<std::string> m_notes;
+  std::vector<std::string> m_infos;
   // Registered with the input check when made.
   bool m_checked = false;
 };

@@ -278,7 +278,7 @@ pub trait LinkResolver: Send + Sync {
     /// Resolvers without external images need only `library_source`.
     fn library_texture(&self, request: &LibraryRequest, path: &str) -> Result<Vec<u8>, String> {
         Err(format!(
-            "the library resolver cannot read texture '{path}' of {}",
+            "the library resolver cannot read texture {path} of {}",
             request.component
         ))
     }

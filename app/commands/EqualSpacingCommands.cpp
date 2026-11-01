@@ -204,7 +204,7 @@ QVector<InputDef> spacingInputs(SketchController& c, int minimum, bool dimension
                 suggestSpacing(c, s, context);
               },
               false)
-          .withTooltip(QObject::tr("Points, circles and arcs (their centres) and lines (their midpoints): three or "
+          .withTooltip(QObject::tr("Points, circles and arcs (their centers) and lines (their midpoints): three or "
                                    "more, in order")),
       choiceInput(QStringLiteral("mode"), QObject::tr("Measure"), modeChoices(), kHorizontal)
           .withOnChange([&c](CommandState& s, const CommandContext& context) { suggestSpacing(c, s, context); })

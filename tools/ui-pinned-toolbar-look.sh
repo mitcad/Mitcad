@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# The Pinned group on the Solid tab (mitcad#1001): a one-off visual check,
-# not a recurring test (its name is not ui-*-test.sh, so no check picks it
-# up). Sweep, Loft and Shell are pinned on the Solid tab in the settings
-# (toolbarPins/SOLID, as Pin to Toolbar leaves them), and the screen is
-# saved with the Pinned group at the end of the tab, on the light and the
-# dark theme (Qt's GTK platform theme, MITCAD_TEST_COLOR_SCHEME), in the
-# Floating layout (the default) and the Docked one:
+# Pinned commands in their own groups on the Solid tab (mitcad#1001,
+# mitcad#1084): a one-off visual check, not a recurring test (its name is
+# not ui-*-test.sh, so no check picks it up). Sweep, Loft and Draft are
+# pinned on the Solid tab in the settings (toolbarPins/SOLID, as Pin to
+# Toolbar leaves them, also as an earlier version left them), and the
+# screen is saved with Sweep and Loft after the Create group's own buttons
+# and Draft after the Modify group's, on the light and the dark theme (Qt's
+# GTK platform theme, MITCAD_TEST_COLOR_SCHEME), in the Floating layout
+# (the default) and the Docked one:
 #   <dir>/pinned-floating-light.png  <dir>/pinned-floating-dark.png
 #   <dir>/pinned-docked-light.png    <dir>/pinned-docked-dark.png
 #                                    in a 1600 x 960 window, where every
 #                                    group shows its buttons
 #   <dir>/pinned-<layout>-<theme>-1280.png  the same at the tests' 1280 x
 #                                    800, where the groups may fold to their
-#                                    names (the Pinned group before Create
-#                                    and Modify)
+#                                    names (the pinned buttons with their
+#                                    group's own)
 #   <dir>/pinned-menu-<layout>-light.png  the Create menu open, the ⋮ of
 #                                    Sweep's row (disabled in the empty
 #                                    design) under the pointer
@@ -37,19 +39,19 @@ trap 'ui_cleanup' EXIT
 # pinned: the settings with the three pins, before each start.
 pinned() {
   mkdir -p "$XDG_CONFIG_HOME/Mitcad"
-  printf '[toolbarPins]\nSOLID=solid.sweep,solid.loft,solid.shell\n' > "$XDG_CONFIG_HOME/Mitcad/Mitcad.conf"
+  printf '[toolbarPins]\nSOLID=solid.sweep,solid.loft,solid.draft\n' > "$XDG_CONFIG_HOME/Mitcad/Mitcad.conf"
 }
 
-# picture layout theme: a start in the layout and theme, the Solid tab's
-# Pinned group checked in the log, the screen saved.
+# picture layout theme: a start in the layout and theme, the pinned
+# buttons in their groups checked in the log, the screen saved.
 picture() {
   local layout=$1 theme=$2 name=pinned-$1-$2
   pinned
   export MITCAD_TEST_COLOR_SCHEME=$theme
   ui_start_app --chrome="$layout"
-  ui_expect_log "Ribbon group SOLID/PINNED: solid.sweep, solid.loft, solid.shell" "$layout, $theme: the Pinned group"
-  # At the tests' 1280 x 800 the groups may fold to their names, the Pinned
-  # group before Create and Modify.
+  ui_expect_log "Ribbon pinned SOLID/CREATE/solid.loft at " "$layout, $theme: Loft in the Create group"
+  # At the tests' 1280 x 800 the groups may fold to their names, the pinned
+  # buttons with their group's own.
   xdotool mousemove 5000 5000
   ui_sync
   sleep 1
@@ -59,7 +61,7 @@ picture() {
   ui_mark
   ui_step "a wide window"                  xdotool windowsize "$UI_WINDOW" 1600 960
   ui_sync
-  ui_expect_new "Ribbon pinned SOLID/solid.shell at " "$layout, $theme: the Pinned group's buttons in a wide window"
+  ui_expect_new "Ribbon pinned SOLID/MODIFY/solid.draft at " "$layout, $theme: Draft in the Modify group in a wide window"
   eval "$(xdotool getwindowgeometry --shell "$UI_WINDOW")"
   # The mouse off the window (no hover, no tooltip).
   xdotool mousemove 5000 5000
@@ -88,4 +90,4 @@ for layout in floating docked; do
     picture "$layout" "$theme"
   done
 done
-ui_finish "Pinned group pictures in $DIR"
+ui_finish "Pinned commands pictures in $DIR"

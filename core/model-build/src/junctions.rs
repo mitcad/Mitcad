@@ -279,7 +279,9 @@ pub struct Junction {
     pub space: [f64; 3],
     /// Connectors already there.
     pub connectors: Vec<ComponentUid>,
-    /// b's axis from the junction into b (design coordinates).
+    /// b's axis from the junction into b (design coordinates): at a corner
+    /// on b's side towards b's farther end, the frame's inside
+    /// (mitcad#1115).
     pub b_axis: V3,
 }
 
@@ -508,7 +510,14 @@ fn meet(p: &Placed, q: &Placed) -> Option<Junction> {
             "T"
         };
         let angle = angle_between(scale(z_axis(&pe), -1.0), q.axis());
-        let into_q = q.axis();
+        // Into q at a corner: towards its farther end, where the frame's
+        // inner corner is; q's own axis would point out of the frame at a
+        // corner near its end B (mitcad#1115).
+        let into_q = if kind == "L" && point[2] > q.length - point[2] {
+            scale(q.axis(), -1.0)
+        } else {
+            q.axis()
+        };
         let mut j = junction(
             kind,
             p.side(e.to_owned(), pe),

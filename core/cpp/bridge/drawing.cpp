@@ -64,6 +64,8 @@ DrawingProjection project_view(const ShapeList& shapes, const DrawingView& view)
     for (const double weight : c.weights) {
       curve.weights.push_back(weight);
     }
+    // The shape it is an edge of (mitcad#1112).
+    curve.source = static_cast<std::int32_t>(c.source);
     out.curves.push_back(std::move(curve));
   }
   for (std::size_t face = 0; face < drawn.cuts.size(); ++face) {

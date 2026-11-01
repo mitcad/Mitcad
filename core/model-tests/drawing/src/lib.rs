@@ -14,3 +14,5 @@ mod table_tests;
 mod template_tests;
 // Cut sheets (mitcad#853).
 mod cut_sheet_tests;
+// Export Face as DXF (mitcad#1049).
+mod face_dxf_tests;

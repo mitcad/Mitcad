@@ -9,6 +9,7 @@
 #include <QString>
 
 #include "../framework/Command.hpp"
+#include "../framework/NoticeLevel.hpp"
 #include "../framework/ParameterEdits.hpp"
 #include "../framework/Selection.hpp"
 
@@ -81,8 +82,14 @@ public:
   // opened or a new one started (mitcad#452: BUILD's part placed last does
   // not carry over to the next design); empty when the host has none.
   virtual QString designId() const { return {}; }
-  // Shows a message in the status bar (red for an error).
-  virtual void showStatus(const QString& message, bool error) = 0;
+  // Shows a message in the status line at its level (mitcad#1040): its icon,
+  // word and colour role, and how long the Floating pill keeps it.
+  virtual void showStatus(const QString& message, NoticeLevel level) = 0;
+  // The same for a message about a feature (its uid; mitcad#1042): the
+  // message history's row of it selects the feature.
+  virtual void showFeatureStatus(const QString& message, NoticeLevel level, const QString& /*feature*/) {
+    showStatus(message, level);
+  }
 
   // Edits a feature as its timeline double-click does (a sketch in sketch
   // mode, other features in their command's panel).
@@ -125,6 +132,13 @@ public:
   // previews the joint's highlight lightly, its component placed by
   // `occurrence`; an empty uid when the pointer left the joint rows.
   virtual void previewJoint(const QString& /*uid*/, const QString& /*occurrence*/) {}
+  // The pointer over a body's, a component's or an occurrence's row in the
+  // browser (mitcad#1022): the view highlights the body `body` placed by
+  // `occurrence`, or with an empty `body` every body of the occurrence and
+  // of those in it, over the scene (hidden parts too); `row` is the row's
+  // path from the root, empty when the pointer left those rows. The
+  // selection, visibility and camera stay as they are.
+  virtual void previewBodies(const QString& /*row*/, const QString& /*body*/, const QString& /*occurrence*/) {}
   // Motion studies and contact sets (mitcad#454): a study in the Motion
   // Study panel (a new one when `name` is empty), a contact set in its
   // command's panel.
@@ -154,6 +168,9 @@ public:
   // body among them), empty when it can.
   virtual void saveAsMesh(const Selection& /*items*/) {}
   virtual QString saveAsMeshBlocked(const Selection& /*items*/) const { return {}; }
+  // Save Component as Design (mitcad#1057): a component (uid, its name)
+  // written as a design file the user chooses.
+  virtual void saveComponentAsDesign(const QString& /*component*/, const QString& /*name*/) {}
 
   // Drawings kept in the design (mitcad#707): a drawing (`D1`) opened in
   // its own view over the 3D view; a new one in a component's Drawings

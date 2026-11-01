@@ -93,7 +93,7 @@ void answerTests() {
                  "text": "the rule No red XL: Red is not made in XL"}})"));
   CHECK(refused.refused == QStringLiteral("the rule No red XL: Red is not made in XL"));
   const OptionsAnswer failed =
-      optionsAnswer(parse(R"({"error": {"message": "unknown library command 'library_configure'"}})"));
+      optionsAnswer(parse(R"({"error": {"message": "unknown library command “library_configure”"}})"));
   CHECK(!failed.ok() && failed.error.contains(QStringLiteral("library_configure")));
 }
 
@@ -360,7 +360,8 @@ void supplierArticleTests() {
                                           SupplierColumn::Material, SupplierColumn::Finish,
                                           SupplierColumn::Checked}));
   CHECK(supplierArticlesLog(QStringLiteral("M5x16"), all, columns) ==
-        QStringLiteral("Supplier parts of M5x16: 4 articles, columns Supplier, Part number, Material, Finish, Checked"));
+        QStringLiteral("Supplier parts of M5x16: 4 articles, columns Supplier, Supplier Part Number, Material, Finish, "
+                       "Checked"));
   // Only part numbers: the other columns left out.
   const QList<SupplierArticle> bare =
       supplierArticles(parse(R"({"p": [{"supplier": "acme", "part_number": "A 1"}]})")
@@ -382,17 +383,17 @@ void supplierArticleTests() {
   CHECK(supplierCellLink(paged[0], SupplierColumn::Supplier) == QStringLiteral("https://www.wurth.example"));
   CHECK(supplierCellLink(paged[0], SupplierColumn::ProductPage) == QStringLiteral("https://shop.example/m5x16"));
   CHECK(supplierCellLink(paged[0], SupplierColumn::PartNumber).isEmpty());
-  CHECK(supplierColumnName(SupplierColumn::ProductPage) == QStringLiteral("Product page"));
+  CHECK(supplierColumnName(SupplierColumn::ProductPage) == QStringLiteral("Product Page"));
   // The copy: the headings, a line per article, tabs between the cells;
   // a tab or line break in a cell becomes a space.
   CHECK(supplierArticlesTsv(all.mid(0, 2), columns) ==
-        QStringLiteral("Supplier\tPart number\tMaterial\tFinish\tChecked\n"
+        QStringLiteral("Supplier\tSupplier Part Number\tMaterial\tFinish\tChecked\n"
                        "Würth\t0084 5 16\t8.8\tzinc-plated\t2026-10-30\n"
                        "Etra\tE-516\tA2\t\t2026-10-29\n"));
   SupplierArticle odd;
   odd.supplierName = QStringLiteral("Odd");
   odd.partNumber = QStringLiteral("X\t1\n2");
-  CHECK(supplierArticlesTsv({odd}, {SupplierColumn::PartNumber}) == QStringLiteral("Part number\nX 1 2\n"));
+  CHECK(supplierArticlesTsv({odd}, {SupplierColumn::PartNumber}) == QStringLiteral("Supplier Part Number\nX 1 2\n"));
   // No articles: no columns.
   CHECK(supplierArticles(QJsonArray(), suppliers, QString()).isEmpty());
   CHECK(supplierColumns({}).isEmpty());

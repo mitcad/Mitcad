@@ -45,6 +45,7 @@
 #include "../framework/Icons.hpp"
 #include "../framework/Numbers.hpp"
 #include "../framework/PlaceWatcher.hpp"
+#include "../framework/Theme.hpp"
 #include "../view/AnnotationDialogs.hpp"
 #include "DrawingSheetView.hpp"
 
@@ -56,6 +57,15 @@ constexpr int kPanelWidth = 230;
 
 QString compact(const QJsonObject& object) {
   return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+}
+
+// The views' projections a drawing command or the `drawing` query asked
+// for, one line each in the log (mitcad#1033): how many bodies, how long,
+// and whether the kernel projected them or the cache had them.
+void logProjections(const QJsonObject& answer) {
+  for (const QString& line : projectionLines(answer.value(QStringLiteral("projections")).toArray())) {
+    qDebug().noquote() << line;
+  }
 }
 
 // The sheet sizes the model has, in its names, and their labels.
@@ -218,7 +228,7 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
     b->setFocusPolicy(Qt::NoFocus);
     return b;
   };
-  m_close = button(QStringLiteral("view-arrow-left"), tr("Close Drawing"), tr("Shows the 3D model again"));
+  m_close = button(QStringLiteral("view-arrow-left"), tr("Close Drawing"), tr("Shows the 3D view again"));
   connect(m_close, &QToolButton::clicked, this, [this] { closeDrawing(); });
   bar->addWidget(m_close);
   m_titleLabel = new QLabel;
@@ -329,17 +339,17 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
   toolRow->addStretch(1);
   // A cut sheet's row (mitcad#853): Add Parts… and its export as DXF or
   // SVG, with the parts' names on the layer LABEL or not.
-  m_addParts = button(QStringLiteral("add"), tr("Add Parts…"),
-                      tr("Adds bodies as flat parts, each seen along its largest planar face"));
+  m_addParts = button(QStringLiteral("add"), tr("Add Components…"),
+                      tr("Adds bodies as flat components, each seen along its largest planar face"));
   connect(m_addParts, &QToolButton::clicked, this, [this] { addParts(); });
   cutRow->addWidget(m_addParts);
-  m_cutExport = button(QStringLiteral("export"), tr("Export…"), tr("The parts' outlines at 1:1 as DXF or SVG"));
+  m_cutExport = button(QStringLiteral("export"), tr("Export…"), tr("The components' outlines at 1:1 as DXF or SVG"));
   m_cutExport->setPopupMode(QToolButton::InstantPopup);
   auto* cutFormats = new QMenu(m_cutExport);
   cutFormats->addAction(tr("DXF…"), this, [this] { exportDrawing(QStringLiteral("dxf")); });
   cutFormats->addAction(tr("SVG…"), this, [this] { exportDrawing(QStringLiteral("svg")); });
   cutFormats->addSeparator();
-  m_cutLabelsAction = cutFormats->addAction(tr("Part Names on the LABEL Layer"));
+  m_cutLabelsAction = cutFormats->addAction(tr("Component Names on the LABEL Layer"));
   m_cutLabelsAction->setCheckable(true);
   connect(m_cutLabelsAction, &QAction::toggled, this, [this](bool on) { setCutLabels(on); });
   m_cutExport->setMenu(cutFormats);
@@ -504,6 +514,7 @@ void DrawingWorkspace::refresh() {
     closeDrawing();
     return;
   }
+  logProjections(answer);
   showSheet(answer);
 }
 
@@ -608,7 +619,7 @@ void DrawingWorkspace::startTool(const QString& id) {
     return;
   }
   if (m_cutSheet) {
-    setStatus(tr("A cut sheet holds parts: Add Parts… adds them."), true);
+    setStatus(tr("A cut sheet holds components: Add Components… adds them."), true);
     return;
   }
   setTool(m_tool == tool ? nullptr : tool);
@@ -636,7 +647,7 @@ void DrawingWorkspace::setTool(const DrawingToolDef* tool) {
 
 void DrawingWorkspace::showHint() {
   if (m_tool == nullptr && m_cutSheet) {
-    m_sheetView->setHint(tr("Add Parts… adds bodies; drag a part to move it, its menu turns it"));
+    m_sheetView->setHint(tr("Add Components… adds bodies; drag a component to move it, its menu turns it"));
     return;
   }
   m_sheetView->setHint(m_tool != nullptr ? m_tool->hint : QString());
@@ -750,7 +761,7 @@ void DrawingWorkspace::fillPanel() {
       }
       QString number;
       if (!text.isEmpty() && !parsePlainNumber(text, &number)) {
-        setStatus(tr("A text height is a size in millimetres, not %1.").arg(text), true);
+        setStatus(tr("A text height is a size in millimeters, not %1.").arg(text), true);
         textHeight->setText(shownHeight);
         return;
       }
@@ -880,7 +891,7 @@ void DrawingWorkspace::fillViewPanel(int id) {
   if (!view->error.isEmpty()) {
     auto* why = new QLabel(view->error);
     why->setWordWrap(true);
-    why->setStyleSheet(QStringLiteral("color: #c92a2a;"));
+    setErrorStyleSheet(why); // the view is missing (mitcad#1041)
     m_form->addRow(why);
   }
   if (type == QStringLiteral("base")) {
@@ -967,7 +978,7 @@ void DrawingWorkspace::fillViewPanel(int id) {
       QString number;
       const std::optional<double> value = parsePlainNumber(text, &number);
       if (!value || !(*value > 0.0)) {
-        setStatus(tr("A detail's radius is a size in millimetres, not %1.").arg(text), true);
+        setStatus(tr("A detail's radius is a size in millimeters, not %1.").arg(text), true);
         radius->setText(shown);
         return;
       }
@@ -980,7 +991,7 @@ void DrawingWorkspace::fillViewPanel(int id) {
     for (int axis = 0; axis < 2; ++axis) {
       const QString shownAt = QString::number(center.at(axis).toDouble(), 'g', 6);
       auto* field = new QLineEdit(shownAt);
-      field->setToolTip(tr("The circle's centre on the sheet, mm from its lower left corner"));
+      field->setToolTip(tr("The circle's center on the sheet, mm from its lower left corner"));
       const double other = center.at(1 - axis).toDouble();
       connect(field, &QLineEdit::editingFinished, this, [this, edit, field, shownAt, axis, other] {
         const QString text = field->text().trimmed();
@@ -990,7 +1001,7 @@ void DrawingWorkspace::fillViewPanel(int id) {
         QString number;
         const std::optional<double> value = parsePlainNumber(text, &number);
         if (!value) {
-          setStatus(tr("A detail's centre is a place in millimetres, not %1.").arg(text), true);
+          setStatus(tr("A detail's center is a place in millimeters, not %1.").arg(text), true);
           field->setText(shownAt);
           return;
         }
@@ -1432,7 +1443,7 @@ void DrawingWorkspace::fillAnnotationPanel(int id) {
   if (shown->broken) {
     auto* why = new QLabel(shown->error);
     why->setWordWrap(true);
-    why->setStyleSheet(QStringLiteral("color: #c92a2a;"));
+    setWarningStyleSheet(why); // a broken annotation is a warning (mitcad#852 S1)
     m_form->addRow(why);
   } else if (!shown->label.isEmpty()) {
     auto* value = new QLabel(shown->label);
@@ -1580,7 +1591,7 @@ void DrawingWorkspace::fillAnnotationPanel(int id) {
       }
       QString number;
       if (!text.isEmpty() && !parsePlainNumber(text, &number)) {
-        setStatus(tr("A text height is a size in millimetres, not %1.").arg(text), true);
+        setStatus(tr("A text height is a size in millimeters, not %1.").arg(text), true);
         height->setText(shownHeight);
         return;
       }
@@ -1683,7 +1694,7 @@ void DrawingWorkspace::fillTablePanel(int id, const QJsonObject& json) {
     QList<QPair<QString, QString>> origins = {{QStringLiteral("corner"), tr("Lower Left Corner")},
                                               {QStringLiteral("model"), tr("Component Origin")}};
     if (hasPick) {
-      origins.append({QStringLiteral("pick"), tr("A Point of the Model")});
+      origins.append({QStringLiteral("pick"), tr("A Point of the Design")});
     }
     QComboBox* origin = comboOf(origins, hasPick ? QStringLiteral("pick")
                                                  : table.value(QStringLiteral("origin")).toString(QStringLiteral("corner")));
@@ -1710,7 +1721,7 @@ void DrawingWorkspace::fillTablePanel(int id, const QJsonObject& json) {
     m_form->addRow(tr("Tags"), tags);
   } else {
     QComboBox* levels =
-        comboOf({{QStringLiteral("top"), tr("First Level")}, {QStringLiteral("parts"), tr("Parts Only")}},
+        comboOf({{QStringLiteral("top"), tr("First Level")}, {QStringLiteral("parts"), tr("Components Only")}},
                 table.value(QStringLiteral("levels")).toString(QStringLiteral("top")));
     levels->setObjectName(QStringLiteral("drawingTableLevels"));
     connect(levels, &QComboBox::currentIndexChanged, this,
@@ -1720,7 +1731,7 @@ void DrawingWorkspace::fillTablePanel(int id, const QJsonObject& json) {
   const QString title = table.value(QStringLiteral("title")).toString();
   auto* heading = new QLineEdit(title);
   heading->setObjectName(QStringLiteral("drawingTableTitle"));
-  heading->setPlaceholderText(holes ? tr("HOLES") : tr("PARTS LIST"));
+  heading->setPlaceholderText(holes ? tr("HOLES") : tr("BILL OF MATERIALS"));
   connect(heading, &QLineEdit::editingFinished, this, [field, heading, title] {
     if (heading->text() != title) {
       field(QStringLiteral("title"), heading->text());
@@ -1931,9 +1942,9 @@ void DrawingWorkspace::contextMenu(QPointF at, const QPoint& global) {
           later([this, viewId] { editPart(viewId, {{QStringLiteral("turn"), -90.0}}); }));
       add(tr("Add Copy"), later([this, viewId] { addCopy(viewId); }));
       menu.addSeparator();
-      add(tr("Delete Part"), later([this, viewId] { deleteView(viewId); }));
+      add(tr("Delete Component"), later([this, viewId] { deleteView(viewId); }));
     } else {
-      add(tr("Add Parts…"), later([this] { addParts(); }));
+      add(tr("Add Components…"), later([this] { addParts(); }));
       add(tr("Material…"), later([this] { editCutSheet(); }));
     }
     qDebug().noquote() << QStringLiteral("Context menu: %1").arg(entries.join(QStringLiteral(" | ")));
@@ -2022,6 +2033,7 @@ bool DrawingWorkspace::run(const QJsonObject& command, QJsonObject* result) {
   }
   qDebug().noquote() << QStringLiteral("Drawing command: %1").arg(compact(command));
   // The main window refreshes the scene after it, and so the sheet.
+  // (Its views' projections are logged as it answers: MainWindow::runCommand.)
   if (!m_host.runModelCommand(command, result)) {
     if (!m_host.lastCancelled()) {
       qDebug().noquote() << QStringLiteral("Drawing command refused: %1").arg(m_host.lastError());
@@ -2090,9 +2102,9 @@ void DrawingWorkspace::editSheet() {
   // a length unit of its own.
   const QString sheetUnits = sheet.value(QStringLiteral("units")).toString();
   QComboBox* units = comboOf({{QString(), tr("The Design's")},
-                              {QStringLiteral("mm"), tr("Millimetres (mm)")},
-                              {QStringLiteral("cm"), tr("Centimetres (cm)")},
-                              {QStringLiteral("m"), tr("Metres (m)")},
+                              {QStringLiteral("mm"), tr("Millimeters (mm)")},
+                              {QStringLiteral("cm"), tr("Centimeters (cm)")},
+                              {QStringLiteral("m"), tr("Meters (m)")},
                               {QStringLiteral("in"), tr("Inches (in)")},
                               {QStringLiteral("ft"), tr("Feet (ft)")},
                               {QStringLiteral("um"), tr("Micrometres (um)")},
@@ -2371,7 +2383,7 @@ bool DrawingWorkspace::exportTo(const QString& path) {
     }
     const int parts = result.value(QStringLiteral("parts")).toInt();
     qInfo().noquote() << QStringLiteral("Exported %1: cut sheet %2, %3 parts").arg(path, m_name).arg(parts);
-    setStatus(tr("Exported %1 (%2 part(s)).").arg(QDir::toNativeSeparators(path)).arg(parts), false);
+    setStatus(tr("Exported %1 (%2 component(s)).").arg(QDir::toNativeSeparators(path)).arg(parts), false);
     return true;
   }
   QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("export_drawing")},
@@ -2395,7 +2407,7 @@ bool DrawingWorkspace::exportTo(const QString& path) {
 
 void DrawingWorkspace::setStatus(const QString& text, bool error) {
   if (!text.isEmpty()) {
-    m_host.showStatus(text, error);
+    m_host.showStatus(text, error ? NoticeLevel::Error : NoticeLevel::Information);
   }
 }
 
@@ -2741,12 +2753,12 @@ void DrawingWorkspace::addParts() {
   const bool root = component.isEmpty() || component == QStringLiteral("C0");
   const QJsonArray selected = m_host.selectedModelBodies();
   QDialog dialog(this);
-  dialog.setWindowTitle(tr("Add Parts"));
+  dialog.setWindowTitle(tr("Add Components"));
   auto* form = new QFormLayout(&dialog);
   auto* list = new QListWidget;
   list->setObjectName(QStringLiteral("cutSheetBodies"));
   list->setSelectionMode(QAbstractItemView::ExtendedSelection);
-  list->setToolTip(tr("The bodies to add as parts; Ctrl+click chooses several"));
+  list->setToolTip(tr("The bodies to add as components, one or several"));
   for (const QJsonValue& value : bodies) {
     const QJsonObject body = value.toObject();
     const QString owner = body.value(QStringLiteral("component")).toString();
@@ -2764,7 +2776,7 @@ void DrawingWorkspace::addParts() {
   auto* count = new QSpinBox;
   count->setObjectName(QStringLiteral("cutSheetCount"));
   count->setRange(1, 1000);
-  count->setToolTip(tr("How many parts of each body"));
+  count->setToolTip(tr("How many components of each body"));
   form->addRow(tr("&Count"), count);
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
   connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
@@ -2782,7 +2794,7 @@ void DrawingWorkspace::addParts() {
     }
   }
   if (chosen.isEmpty()) {
-    setStatus(tr("Choose the bodies to add as parts."), true);
+    setStatus(tr("Choose the bodies to add as components."), true);
     return;
   }
   run({{QStringLiteral("cmd"), QStringLiteral("add_cut_sheet_parts")},
@@ -2835,14 +2847,14 @@ void DrawingWorkspace::fillCutSheetPanel() {
   const QJsonObject sheet = m_answer.value(QStringLiteral("sheets")).toArray().at(0).toObject();
   m_form->addRow(tr("Material"), new QLabel(sheet.value(QStringLiteral("size")).toString()));
   m_form->addRow(tr("Scale"), new QLabel(QStringLiteral("1:1")));
-  m_form->addRow(tr("Parts"), new QLabel(QString::number(sheet.value(QStringLiteral("views")).toArray().size())));
+  m_form->addRow(tr("Components"), new QLabel(QString::number(sheet.value(QStringLiteral("views")).toArray().size())));
   for (const QJsonValue& warning : sheet.value(QStringLiteral("warnings")).toArray()) {
     auto* said = new QLabel(warning.toString());
     said->setWordWrap(true);
-    said->setStyleSheet(QStringLiteral("color: #c92a2a;"));
+    setWarningStyleSheet(said);
     m_form->addRow(said);
   }
-  auto* add = new QPushButton(tr("Add Parts…"));
+  auto* add = new QPushButton(tr("Add Components…"));
   add->setObjectName(QStringLiteral("cutSheetAddParts"));
   connect(add, &QPushButton::clicked, this, [this] { QTimer::singleShot(0, this, [this] { addParts(); }); });
   m_form->addRow(QString(), add);
@@ -2860,11 +2872,11 @@ void DrawingWorkspace::fillPartPanel(int id) {
     return;
   }
   const QJsonObject json = view->json;
-  m_panelTitle->setText(tr("Part %1").arg(id));
+  m_panelTitle->setText(tr("Component %1").arg(id));
   if (!view->error.isEmpty()) {
     auto* why = new QLabel(view->error);
     why->setWordWrap(true);
-    why->setStyleSheet(QStringLiteral("color: #c92a2a;"));
+    setErrorStyleSheet(why);
     m_form->addRow(why);
   }
   m_form->addRow(tr("Body"), new QLabel(view->label));
@@ -2878,7 +2890,7 @@ void DrawingWorkspace::fillPartPanel(int id) {
   const bool own = json.value(QStringLiteral("own_face")).toBool();
   QComboBox* face = comboOf(faces, own ? json.value(QStringLiteral("face")).toString() : QString());
   face->setObjectName(QStringLiteral("cutPartFace"));
-  face->setToolTip(tr("The planar face the part is seen along"));
+  face->setToolTip(tr("The planar face the component is seen along"));
   connect(face, &QComboBox::currentIndexChanged, this, [this, id, face] {
     const QString chosen = face->currentData().toString();
     editPart(id, {{QStringLiteral("face"), chosen.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(chosen)}});
@@ -2887,7 +2899,7 @@ void DrawingWorkspace::fillPartPanel(int id) {
   const QString shownTurn = QString::number(json.value(QStringLiteral("rotation")).toDouble(), 'g', 6);
   auto* rotation = new QLineEdit(shownTurn);
   rotation->setObjectName(QStringLiteral("cutPartRotation"));
-  rotation->setToolTip(tr("How far the part is turned on the sheet, degrees counter-clockwise"));
+  rotation->setToolTip(tr("How far the component is turned on the sheet, degrees counter-clockwise"));
   connect(rotation, &QLineEdit::editingFinished, this, [this, id, rotation, shownTurn] {
     const QString text = rotation->text().trimmed();
     if (text == shownTurn) {
@@ -2923,7 +2935,7 @@ void DrawingWorkspace::fillPartPanel(int id) {
   m_form->addRow(turns);
   auto* copy = new QPushButton(tr("Add Copy"));
   copy->setObjectName(QStringLiteral("cutPartAddCopy"));
-  copy->setToolTip(tr("Adds another part of the same body and face"));
+  copy->setToolTip(tr("Adds another component of the same body and face"));
   connect(copy, &QPushButton::clicked, this, [this, id] { addCopy(id); });
   m_form->addRow(QString(), copy);
   // What is wrong with where it is.
@@ -2936,12 +2948,12 @@ void DrawingWorkspace::fillPartPanel(int id) {
     others << QString::number(other.toInt());
   }
   if (!others.isEmpty()) {
-    wrong << tr("It overlaps part %1.").arg(others.join(QStringLiteral(", ")));
+    wrong << tr("It overlaps component %1.").arg(others.join(QStringLiteral(", ")));
   }
   if (!wrong.isEmpty()) {
     auto* said = new QLabel(wrong.join(QLatin1Char(' ')));
     said->setWordWrap(true);
-    said->setStyleSheet(QStringLiteral("color: #c92a2a;"));
+    setWarningStyleSheet(said); // it is placed, but wrongly
     m_form->addRow(said);
   }
 }

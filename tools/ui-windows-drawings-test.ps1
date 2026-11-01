@@ -13,8 +13,10 @@
 #      the 3D view: the whole of it, with the ribbon's DRAWING tab alone
 #      (Solid and Build hidden, mitcad#1008).
 #   2. Base View at a click (the front at 2:1), a projected view right of
-#      it, a section across it and a detail of its corner, each placed by
-#      a click; a break; the detail deleted (Delete) and back (Ctrl+Z); a
+#      it (each view's projection logged, the kernel's or the cache's,
+#      mitcad#1033), a section across it and a detail of its corner,
+#      each placed by a click; a break; the detail deleted (Delete) and
+#      back (Ctrl+Z); a
 #      second sheet (+); a dimension of the block's height picked on its
 #      edges and placed by a click (phase 2).
 #   3. Close Drawing (Solid and Build back, Solid shown); Extrude1 made 35
@@ -100,6 +102,22 @@ function Settled([string]$Text) {
   Ui-Fail "the place of '$Text' did not settle"
 }
 
+# Projection-Logged view bodies how: since the mark, the log's line of the
+# view's projection (mitcad#1033) with its bodies and milliseconds, "how"
+# being "projected exactly" or "projected from a triangulation" (the
+# kernel's) or "from the cache", as the Linux test's projection_logged.
+function Projection-Logged([int]$View, [int]$Bodies, [string]$How) {
+  $pattern = "^Drawing projection of view ${View}: $Bodies bodies, [0-9]+\.[0-9] ms, $How$"
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  do {
+    foreach ($line in @(Ui-NewLines)) {
+      if ($line -cmatch $pattern) { Write-Host "ok   view ${View}'s projection logged: $Bodies bodies, $How"; return }
+    }
+    Start-Sleep -Milliseconds 50
+  } while ($clock.ElapsedMilliseconds -lt 6000)
+  Ui-Fail "no line of view ${View}'s projection ($Bodies bodies, $How) in the log"
+}
+
 # Drawing-Tool "name" "group": the drawing tool started from the ribbon's
 # DRAWING tab (mitcad#1008), by its button when the tab shows it, else by
 # its row in its group's menu. In session 0's 1024x768 desktop the ribbon
@@ -130,7 +148,7 @@ function Drawing-Tool([string]$Name, [string]$Group) {
   $menu = "$(Ui-LastLineWith "Ribbon menu ${path}: ")"
   $entries = $menu.Substring($menu.IndexOf("Ribbon menu ${path}: ") + "Ribbon menu ${path}: ".Length)
   # Its rows as the keys go through them (no separators); the drawing's Parts
-  # List is "Parts List (Drawing)" there (mitcad#718).
+  # List is "Bill of Materials (Drawing)" there (mitcad#718).
   $rows = @($entries -split ' \| ' | Where-Object { $_ -ne '-' })
   $row = -1
   for ($i = 0; $i -lt $rows.Count; $i++) {
@@ -182,11 +200,18 @@ Ui-Mark
 Ui-Step 'click the sheet at 120, 120'     { Sheet-Click 120 120 }
 Ui-ExpectNew '"type":"base"' 'the base view asked for'
 Ui-ExpectNew 'Drawing view 1 at' 'the front view drawn'
+# Its projection logged (mitcad#1033): the kernel's, then the sheet drawn
+# from the cache.
+Projection-Logged 1 1 'projected exactly'
+Projection-Logged 1 1 'from the cache'
 Ui-ExpectNew 'Drawing tool: Projected View' 'projected views follow'
 Ui-Mark
 Ui-Step 'click right of it'               { Sheet-Click 215 120 }
 Ui-ExpectNew '"type":"projected"' 'a projected view asked for'
 Ui-ExpectNew 'Drawing view 2 at' 'the right view drawn'
+# The new view projected, the front view's taken from the cache.
+Projection-Logged 2 1 'projected exactly'
+Projection-Logged 1 1 'from the cache'
 Ui-Mark
 Ui-Step 'end the tool (Esc)'              { Ui-Key 'Escape' }
 Ui-ExpectNew 'Drawing tool: selection' 'back to the selection'
@@ -252,7 +277,7 @@ $before = View-Y 1
 Ui-Mark
 Ui-Step 'Close Drawing'                   { Ui-ClickLogged 'Drawing Close Drawing' }
 Ui-ExpectNew 'Drawing closed' 'the 3D view again'
-Ui-ExpectNew 'Ribbon tabs: SOLID, BUILD (shown SOLID)' "the model's tabs back, the one it was opened from shown"
+Ui-ExpectNew 'Ribbon tabs: SOLID, BUILD, MAKE (shown SOLID)' "the model's tabs back, the one it was opened from shown"
 Ui-Mark
 Ui-Step 'edit Extrude1 (double-click)'    { Ui-DoubleClickLogged 'Timeline Extrude1' }
 Ui-ExpectNew ' with Extrude' 'editing Extrude1'
@@ -279,7 +304,7 @@ Write-Host '--- 4. Saved and opened again'
 Ui-Mark
 Ui-Step 'back to the model'               { Ui-ClickLogged 'Drawing Close Drawing' }
 Ui-ExpectNew 'Drawing closed' 'closed'
-Ui-ExpectNew 'Ribbon tabs: SOLID, BUILD (shown BUILD)' 'back on the Build tab it was opened from'
+Ui-ExpectNew 'Ribbon tabs: SOLID, BUILD, MAKE (shown BUILD)' 'back on the Build tab it was opened from'
 Ui-Step 'save (Ctrl+S)'                   { Ui-Key 'ctrl+s' }
 Ui-ExpectNew 'Saved ' 'saved'
 if (-not (Select-String -Path $design -Pattern '"drawings"' -Quiet)) { Ui-Fail 'the design file has no drawings' }
@@ -365,8 +390,8 @@ Ui-Mark
 Ui-Step 'end the tool (Esc)'              { Ui-Key 'Escape' }
 Ui-ExpectNew 'Drawing tool: selection' 'back to the selection'
 Ui-Mark
-Drawing-Tool 'Parts List' 'Tables'
-Ui-ExpectNew 'Drawing tool: Parts List' 'the parts list tool is on'
+Drawing-Tool 'Bill of Materials' 'Tables'
+Ui-ExpectNew 'Drawing tool: Bill of Materials' 'the parts list tool is on'
 # Its balloons off (on by default, mitcad#725): the balloon by hand below.
 Ui-ExpectNew 'Drawing panel drawingOption_balloons at' 'its Balloons option'
 Settled 'Drawing panel drawingOption_balloons'

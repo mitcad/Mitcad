@@ -12,14 +12,24 @@
 #     metric first, Unified sizes only when chosen.
 #   - A new user parameter is in mm, the grid's fixed spacing in mm, and
 #     Physical Properties weighs steel (7.85 g/cm3) in kg.
+#   - Default units for new designs (mitcad#1036): mm by default; set to in
+#     in Preferences > General, the open design stays in mm, New makes a
+#     design in inches (Units: in in the browser, not modified) whose
+#     rectangle typed 2 x 1 is 2 x 1 in and extrude distance 1 is an inch;
+#     the untitled design at a new start is in inches, an opened design in
+#     mm keeps mm; set back to mm, New is in mm again.
+#     tools/ui-windows-default-units-test.ps1 does the same on Windows.
 # The model's defaults: core/model-tests/api/src/metric_defaults_tests.rs.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-units-test.sh
 # check-all sources: core/dxf
+# check-all sources: app/framework/AppSettings.cpp app/framework/DocumentSession.cpp
+# check-all sources: app/view/ViewController.cpp tools/cli
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
+CLI=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}
 WORK=$(mktemp -d /tmp/mitcad-ui-units.XXXXXX)
 trap 'ui_cleanup; rm -rf "$WORK"' EXIT
 UNITS="mm (mm | cm | m | in | ft)"
@@ -112,7 +122,7 @@ ui_step "cancel (Esc)"                     ui_key Escape
 
 echo "--- Parameters, grid, physical properties"
 ui_mark
-ui_step "Change Parameters (search)"       ui_command "Change Parameters"
+ui_step "Edit Parameters (search)"       ui_command "Edit Parameters"
 ui_expect_new "Parameters add at" "the dialog opened"
 ui_focus_dialog '^Parameters$'
 ui_step "User Parameter (+)"               ui_click_logged "Parameters add"
@@ -137,4 +147,89 @@ ui_step "close the dialog (Esc)"           ui_key Escape
 ui_focus_main
 
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+echo "--- Default units for new designs (mitcad#1036)"
+# The preference is this script's own: ui-test-lib.sh gives every script a
+# settings folder of its own (XDG_CONFIG_HOME), and the steps below set it
+# back to mm.
+SETTINGS=$XDG_CONFIG_HOME/Mitcad/Mitcad.conf
+# A design in millimetres to open while new designs are in inches.
+printf '[{"cmd": "sketch.create"}]\n' > "$WORK/metric.json"
+"$CLI" run "$WORK/metric.json" --save "$WORK/metric.mitcad" > "$WORK/cli-metric.log" 2>&1 ||
+  { cat "$WORK/cli-metric.log"; ui_fail "mitcad-cli (a design in millimetres)"; }
+
+# expect_units unit description: the browser's Design Settings opened, its
+# Units row logged since the mark with the unit.
+expect_units() {
+  ui_step "select Design Settings"         ui_click_logged "Browser Root/Design Settings"
+  ui_step "expand it (Right)"              ui_key Right
+  ui_expect_new "Browser Root/Design Settings/Units: $1 at" "$2"
+}
+
+# new_design_units unit keys...: Preferences > General > Default units for
+# new designs (Alt+U) moved with the keys, OK; the choice saved.
+new_design_units() {
+  local unit=$1
+  shift
+  ui_mark
+  ui_step "Preferences: General (search)"  ui_command "Preferences: General"
+  ui_focus_dialog '^Preferences$'
+  ui_step "Default units for new designs (Alt+U)" ui_key alt+u
+  ui_step "choose $unit ($*)"              ui_key "$@"
+  ui_step "OK (Enter)"                     ui_key Return
+  ui_focus_main
+  ui_expect_new "Preferences: default units for new designs $unit" "new designs are to be in $unit"
+  grep -q "^newDesigns=$unit\$" "$SETTINGS" || ui_fail "units/newDesigns is not $unit in the settings"
+  echo "ok   the setting is $unit"
+}
+
+ui_stop_app
+ui_start_app
+ui_mark
+expect_units mm "the untitled design starts in millimetres by default"
+new_design_units in Down Down Down
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Design Settings/Units: in" &&
+  ui_fail "the preference changed the open design's units"
+echo "ok   the open design stays in millimetres"
+ui_mark
+ui_step "New (Ctrl+N)"                     ui_key ctrl+n
+ui_expect_new "New design in in" "New makes a design in inches"
+ui_expect_new "Opened the new design with Component1 active" "the new design is open"
+[ "$(xdotool getwindowname "$UI_WINDOW")" = "Untitled - MitCad" ] ||
+  ui_fail "the new design is modified: '$(xdotool getwindowname "$UI_WINDOW")'"
+echo "ok   the new design is not modified"
+expect_units in "the browser shows Units: in"
+ui_step "create sketch on XY"              ui_create_sketch xy
+ui_step "rectangle tool (R)"               ui_key r
+ui_step "first corner at the origin"       ui_sketch_click 0 0
+ui_step "width 2 (Tab) height 1"           eval 'xdotool type --delay 40 2; ui_key Tab; xdotool type --delay 40 1'
+ui_step "confirm (Enter)"                  ui_key Return
+ui_expect_log "Added rectangle 50.8 x 25.4 mm at (0, 0)" "2 x 1 typed are 2 x 1 in"
+ui_step "end the tool (Esc)"               ui_key Escape
+ui_step "finish sketch (Ctrl+Enter)"       ui_key ctrl+Return
+ui_expect_log "Sketch finished" "sketch finished"
+ui_mark
+ui_step "extrude (E)"                      ui_key e
+ui_expect_new "Panel Extrude input taper at" "its panel"
+ui_step "distance 1"                       ui_type_in "Panel Extrude input distance" "1"
+ui_expect_new "Extrude Distance: 1 = 1 in" "the extrude's distance is in inches"
+ui_step "to the taper field"               ui_click_logged "Panel Extrude input taper"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_volume "New body Body1 (F2.b0): volume \([0-9.]*\) mm3" 32774.128 "2 x 1 x 1 in (50.8 x 25.4 x 25.4 mm)"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+ui_stop_app
+ui_start_app
+ui_mark
+expect_units in "the untitled design at the start is in inches"
+ui_stop_app
+ui_start_app --open "$WORK/metric.mitcad"
+ui_mark
+expect_units mm "an opened design keeps its millimetres"
+new_design_units mm Up Up Up
+ui_mark
+ui_step "New (Ctrl+N)"                     ui_key ctrl+n
+ui_expect_new "New design in mm" "New makes a design in millimetres again"
+expect_units mm "the browser shows Units: mm"
+
 ui_finish "UI units test"

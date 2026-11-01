@@ -2,7 +2,7 @@
 #pragma once
 
 // The choosers of a configurable component (mitcad#810; docs/configurations.md,
-// "Part pickers and BUILD"; app/COMMANDS.md, "Options of library parts"):
+// "Part pickers and BUILD"; app/COMMANDS.md, "Options of library components"):
 // Insert from Library's size, the BUILD part picker's options and Edit
 // Options… of an inserted component.
 //
@@ -128,7 +128,7 @@ public:
   // "Color = Black, Length = 800 mm (no row)"; a closed table's row.
   QString summary() const;
   // A form beside the chooser (above it: the Version row of Insert from
-  // Library and Library Parts) whose label column lines up with the
+  // Library and Library Components) whose label column lines up with the
   // filters' and the choosers' (mitcad#1007); its rows come first in the
   // "fields at x" line.
   void alignLabelsWith(QFormLayout* form);

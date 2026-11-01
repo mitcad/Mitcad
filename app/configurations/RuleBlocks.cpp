@@ -599,6 +599,138 @@ QJsonArray actionsToJson(const std::vector<Block>& actions) {
   return out;
 }
 
+// The index of the JSON action object each action goes into, as
+// actionsToJson writes them (the actions of one object are written as one).
+std::vector<int> actionObjects(const std::vector<Block>& actions) {
+  std::vector<int> out;
+  int index = -1;
+  int pendingGroup = -1;
+  QString pendingOption;
+  QSet<QString> keys;
+  bool started = false;
+  for (const Block& action : actions) {
+    if (!isOptionAction(action.kind)) {
+      started = false;
+      out.push_back(++index);
+      continue;
+    }
+    const QString key = QLatin1String(actionKey(action.kind));
+    if (started && action.group >= 0 && action.group == pendingGroup && pendingOption == action.text &&
+        !keys.contains(key)) {
+      keys.insert(key);
+      out.push_back(index);
+      continue;
+    }
+    pendingGroup = action.group;
+    pendingOption = action.text;
+    keys = QSet<QString>{key};
+    started = true;
+    out.push_back(++index);
+  }
+  return out;
+}
+
+// The block kind of a part of an action in a place ("values", "max");
+// Empty for any other part (the option) or none.
+BlockKind partKind(const QString& part) {
+  for (const BlockKind kind :
+       {BlockKind::AllowOnly, BlockKind::Exclude, BlockKind::Min, BlockKind::Max, BlockKind::Step}) {
+    if (part == QLatin1String(actionKey(kind))) {
+      return kind;
+    }
+  }
+  return part == QLatin1String("require") ? BlockKind::Require : BlockKind::Empty;
+}
+
+// What a block waits for, below `path` (emptyPlaces).
+void collectEmpty(const Block& block, const BlockPath& path, std::vector<BlockPath>& out) {
+  const auto at = [&path](int index) {
+    BlockPath inner = path;
+    inner.indices.push_back(index);
+    return inner;
+  };
+  const auto children = [&] {
+    for (std::size_t i = 0; i < block.children.size(); ++i) {
+      collectEmpty(block.children[i], at(static_cast<int>(i)), out);
+    }
+  };
+  const std::size_t count = block.children.size();
+  switch (block.kind) {
+  case BlockKind::Empty:
+    out.push_back(path);
+    return;
+  case BlockKind::Name:
+  case BlockKind::Number:
+  case BlockKind::Column:
+  case BlockKind::Formula:
+    if (block.text.trimmed().isEmpty()) {
+      out.push_back(path);
+    }
+    return;
+  case BlockKind::Text:
+  case BlockKind::Forbid:
+  case BlockKind::OtherAction:
+    return;
+  case BlockKind::Compare:
+    if (count != 2) {
+      out.push_back(path);
+      return;
+    }
+    children();
+    return;
+  case BlockKind::And:
+  case BlockKind::Or:
+    if (count == 0) {
+      out.push_back(at(0)); // the place at the list's end
+    }
+    children();
+    return;
+  case BlockKind::Not:
+  case BlockKind::Require:
+    if (count != 1) {
+      out.push_back(path);
+      return;
+    }
+    children();
+    return;
+  case BlockKind::OneOf:
+    if (count == 0) {
+      out.push_back(path);
+      return;
+    }
+    children();
+    if (count == 1) {
+      out.push_back(at(1)); // a value it may be
+    }
+    return;
+  case BlockKind::AllowOnly:
+  case BlockKind::Exclude:
+    if (block.text.isEmpty()) {
+      out.push_back(path);
+    }
+    if (count == 0) {
+      out.push_back(at(0));
+    }
+    children();
+    return;
+  case BlockKind::Min:
+  case BlockKind::Max:
+  case BlockKind::Step:
+    if (block.text.isEmpty() || count != 1) {
+      out.push_back(path);
+    }
+    if (count == 1) {
+      children();
+    }
+    return;
+  case BlockKind::InTable:
+    if (block.text.isEmpty()) {
+      out.push_back(path);
+    }
+    return;
+  }
+}
+
 QString sectionName(int section) {
   switch (section) {
   case 0:
@@ -1041,6 +1173,67 @@ Block* blockAt(Rule& rule, const BlockPath& path) {
 
 const Block* blockAt(const Rule& rule, const BlockPath& path) {
   return blockAt(const_cast<Rule&>(rule), path);
+}
+
+std::optional<BlockPath> blockOfPlace(const Rule& rule, const QString& place) {
+  const QStringList parts = place.split(QLatin1Char('.'));
+  if (parts.front() == QLatin1String("when")) {
+    return rule.hasWhen ? std::optional<BlockPath>(BlockPath{0, {}}) : std::nullopt;
+  }
+  const int section = parts.front() == QLatin1String("then")   ? 1
+                      : parts.front() == QLatin1String("else") ? 2
+                                                               : 0;
+  bool ok = false;
+  const int object = parts.value(1).toInt(&ok);
+  if (section == 0 || !ok || (section == 2 && !rule.hasElse)) {
+    return std::nullopt;
+  }
+  const std::vector<Block>& actions = section == 1 ? rule.then : rule.otherwise;
+  const std::vector<int> objects = actionObjects(actions);
+  const BlockKind wanted = partKind(parts.value(2));
+  for (std::size_t i = 0; i < actions.size(); ++i) {
+    if (objects[i] != object || (wanted != BlockKind::Empty && actions[i].kind != wanted)) {
+      continue;
+    }
+    BlockPath path{section, {static_cast<int>(i)}};
+    const Block& action = actions[i];
+    if (wanted == BlockKind::AllowOnly || wanted == BlockKind::Exclude) {
+      // The value by its index in the JSON's list, which leaves out the
+      // empty places.
+      const int value = parts.value(3).toInt(&ok);
+      int seen = 0;
+      for (std::size_t k = 0; ok && k < action.children.size(); ++k) {
+        if (action.children[k].kind == BlockKind::Empty) {
+          continue;
+        }
+        if (seen++ == value) {
+          path.indices.push_back(static_cast<int>(k));
+          break;
+        }
+      }
+    } else if (wanted != BlockKind::Empty && action.children.size() == 1) {
+      path.indices.push_back(0);
+    }
+    return path;
+  }
+  return std::nullopt;
+}
+
+std::vector<BlockPath> emptyPlaces(const Rule& rule) {
+  std::vector<BlockPath> out;
+  if (rule.hasWhen) {
+    collectEmpty(rule.when, BlockPath{0, {}}, out);
+  }
+  for (std::size_t i = 0; i < rule.then.size(); ++i) {
+    collectEmpty(rule.then[i], BlockPath{1, {static_cast<int>(i)}}, out);
+  }
+  if (rule.hasElse && rule.otherwise.empty()) {
+    out.push_back(BlockPath{2, {0}}); // its slot
+  }
+  for (std::size_t i = 0; i < rule.otherwise.size(); ++i) {
+    collectEmpty(rule.otherwise[i], BlockPath{2, {static_cast<int>(i)}}, out);
+  }
+  return out;
 }
 
 std::vector<Block>* listOf(Rule& rule, const BlockPath& path) {
@@ -1964,7 +2157,7 @@ TemplatePlan planTemplate(const QString& id, const std::vector<OptionInfo>& opti
     }
   } else if (id == QLatin1String("table")) {
     if (table.isEmpty()) {
-      plan.why = QStringLiteral("The design has no tables (Change Parameters, Tables)");
+      plan.why = QStringLiteral("The design has no tables (Edit Parameters, Tables)");
       return plan;
     }
     const QJsonObject columns = inTableColumns(tableColumns, optionNames(options), QJsonObject());

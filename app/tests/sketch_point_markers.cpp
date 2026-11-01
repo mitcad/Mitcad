@@ -7,6 +7,7 @@
 // highlighted curve's point markers over the highlight (painted into an
 // image: a fit point's fill shows where the 4 px highlight runs under it).
 #include "sketch/PointMarkers.hpp"
+#include "framework/Theme.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -35,9 +36,9 @@ void check(bool condition, const char* expression, int line) {
 
 using namespace mitcad::sketch;
 
-// The selection's and the hover's colours (SketchOverlay.cpp).
-const QColor kSelection(0x1f, 0x7a, 0xff);
-const QColor kHover(0x5a, 0xa8, 0xff);
+// The selection's and the hover's colours: the role table's (mitcad#1041).
+const QColor kSelection = mitcad::viewColor(mitcad::ColorRole::Select, false);
+const QColor kHover = mitcad::viewColor(mitcad::ColorRole::Hover, false);
 const QColor kLightBackground(0xff, 0xff, 0xff);
 const QColor kDarkBackground(0x28, 0x2b, 0x31);
 

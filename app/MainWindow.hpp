@@ -49,6 +49,7 @@ class QLabel;
 class QMenu;
 class QResizeEvent;
 class QStackedWidget;
+class QToolButton;
 
 namespace mitcad {
 
@@ -67,14 +68,19 @@ class FloatingLayout;
 class GlassCard;
 class LockController;
 class MeasureHistoryView;
+class MessageBand;
+class MessageCenter;
+class MessageHistory;
 class ProjectIndicator;
 class ProjectsPanel;
 class RemoteController;
 class LiveController;
 class ModeBanner;
+class NavigationBar;
 class Ribbon;
 class SelectionFilterPanel;
 class SelectionCreatePanel;
+class MakeBodyCard;
 class TitleBar;
 class UpdateController;
 class ReportCenter;
@@ -260,6 +266,7 @@ public:
   QString editedSketch() const override; // mitcad#869
   QString bodyOccurrence(const QString& body) const override;
   QString datumOccurrence(const QString& datum) const override;
+  gp_Trsf datumPlacement(const QString& datum) const override; // mitcad#1029
   const SelectionScope* commandScope() const override; // mitcad#217
   // Parameter names picked from the view (mitcad#250;
   // MainWindowParameterPicks.cpp).
@@ -292,7 +299,9 @@ public:
   QString readOnlyReason() const override;
   // The live MCP document id, new with every design (mitcad#452).
   QString designId() const override { return m_mcpDocumentId; }
-  void showStatus(const QString& message, bool error) override;
+  void showStatus(const QString& message, NoticeLevel level) override;
+  // A message about a feature (mitcad#1042): its history row selects it.
+  void showFeatureStatus(const QString& message, NoticeLevel level, const QString& feature) override;
   void editFeature(const QString& uid) override;
   void startCommand(const QString& id, const Selection& preselection,
                     std::function<void(bool committed)> finished) override;
@@ -307,6 +316,7 @@ public:
   void editAnalysis(const QString& name) override;
   void animateJoint(const QString& uid) override;
   void previewJoint(const QString& uid, const QString& occurrence) override;
+  void previewBodies(const QString& row, const QString& body, const QString& occurrence) override;
   // Motion studies and contact sets (mitcad#454; MainWindowMotion.cpp).
   void openMotionStudy(const QString& name) override;
   void editContactSet(const QString& name) override;
@@ -320,6 +330,8 @@ public:
   // Save As Mesh (mitcad#734; files/MainWindowSaveAsMesh.cpp).
   void saveAsMesh(const Selection& items) override;
   QString saveAsMeshBlocked(const Selection& items) const override;
+  // Save Component as Design (mitcad#1057; files/MainWindowSaveComponent.cpp).
+  void saveComponentAsDesign(const QString& component, const QString& name) override;
   // Drawings kept in the design (mitcad#707; drawings/MainWindowDrawings.cpp):
   // one opened over the 3D view, a new one in a component's Drawings folder
   // (the root's: "C0") opened at once.
@@ -384,6 +396,9 @@ private:
   quint64 m_nativeJobGeneration = 0;
   bool m_nativeClosingCommand = false;
   QString m_nativeFocusInput;
+  // The navigation bar in the AppKit window (mitcad#1099,
+  // MainWindowNavigationBar.cpp).
+  void createNativeNavigationBar();
 #endif
   using Mode = DocumentSession::Mode;
   QString mcpBlockedReason(bool editing) const;
@@ -435,11 +450,18 @@ private:
   void createFloatingPanels();
   int commandContentHeight() const;
   void updateCommandCard();
-  // Shows the status label's text in the pill (Floating chrome).
-  void updateStatusPill(bool error);
+  // The message history (mitcad#1042) above `anchor` (the window's
+  // coordinates), opened by `opener`; closed again when it is open.
+  void toggleMessageHistory(const QRect& anchor, QWidget* opener);
   bool isAvailable(const CommandDef& def) const;
+  // Why isAvailable says no, for a disabled button's tooltip (the
+  // quick-access group, mitcad#1090); empty when it is available.
+  QString unavailableReason(const CommandDef& def) const;
   void updateActions();
   void trigger(const QString& id) override;
+  // The sketch tool on (SketchController::toolChanged) shows checked on the
+  // ribbon and the palette: its command's action (mitcad#1027).
+  void markSketchTool(const QString& toolName);
   // `analysis`: an analysis to edit instead (an entry of the `analyses`
   // query, mitcad#41).
   void startFeatureCommand(const CommandDef& def, const QString& editUid = QString(),
@@ -917,11 +939,22 @@ private:
   // The panel (none in the AppKit frontend), in a dock above the browser's
   // (Docked) or in a card above the browser's (Floating).
   void createProjectsPanel();
-  void dockProjectsPanel(QDockWidget* browserDock);
+  // `below`: the dock under the Projects dock in the left column (the
+  // browser's; the Configuration dock goes between them, mitcad#1020).
+  void dockProjectsPanel(QDockWidget* below);
   void addProjectsCard();
+  // The Configuration panel (mitcad#1020, browser/MainWindowConfigurationPanel.cpp):
+  // the Configuration bar in a left panel of its own between Projects and
+  // the browser, shown while the design has options or rows: a card
+  // (Floating; its collapsed state remembered) or a dock above the
+  // browser's, below the Projects dock (Docked; made after it), returned
+  // for createPanels to hide until the design has options.
+  void addConfigurationCard();
+  QDockWidget* dockConfigurationPanel(QDockWidget* browserDock);
   bool projectsPanelShown() const;
   // Whether the panel shows at the start (mitcad#151): as the user last
-  // chose, else shown when any project is configured.
+  // chose, else hidden (mitcad#1020: File > Open from Project does its
+  // job; before, it showed when any project was configured).
   bool projectsPanelShownAtStart() const;
   // `remember`: the user's choice, kept for the next start.
   void setProjectsPanelShown(bool shown, bool remember);
@@ -1132,6 +1165,27 @@ private:
   // Whether a command is one of an open drawing's (the DRAWING and CUT
   // SHEET tabs'): it does not lead back to the 3D view.
   static bool isDrawingCommand(const CommandDef& def);
+  // The navigation bar at the bottom of the view (mitcad#1086,
+  // MainWindowNavigationBar.cpp): a capsule card at the bottom centre in
+  // the Floating layout, in the status bar in the Docked layout; the
+  // AppKit frontend has its own (createNativeNavigationBar, mitcad#1099).
+  // Shown unless Preferences hides it, and in the Docked layout not while a
+  // drawing takes the view (the Floating layout hides it with the other
+  // cards then).
+  void createNavigationBar();
+  void updateNavigationBar();
+  NavigationBar* m_navigationBar = nullptr;
+  GlassCard* m_navigationCard = nullptr;
+  // "Pick places:" of the active input's faces, edges, vertices and
+  // profiles (MITCAD_LOG_PICKS, for UI tests): logged when the input takes
+  // the picks and again once the cards over the view moved
+  // (OcctViewer::coveredChanged), as the command's card laid out after its
+  // input started may cover a place logged before (mitcad#1086).
+  // `again`: a place list after the cards moved, left out when no item can
+  // be tried now.
+  void logPickPlaces(SelectFilter filter, bool again = false);
+  SelectFilter m_pickPlacesFilter;
+  bool m_pickPlacesQueued = false;
   QAction* m_cutLabelsAction = nullptr;
   // Esc (cancel) while a drawing is open and the keyboard is with no other
   // control: the drawing's Esc; false when it is not the drawing's.
@@ -1145,8 +1199,8 @@ private:
   // slicer; OK writes the files and starts the slicer (sendToSlicer: false
   // when the files could not be written).
   CommandDef print3dCommand();
-  // Edit Printers and Processes… (mitcad#655): the MAKE group's command next
-  // to 3D Print that opens Printers and Processes.
+  // Edit Printers and Processes… (mitcad#655): the Make tab's 3D PRINT
+  // group's command after Send to Slicer that opens Printers and Processes.
   CommandDef printersCommand();
   // `whole`: the occurrences selected as components when the panel
   // started (paths of uids), each sent whole as one 3MF object (mitcad#856).
@@ -1186,12 +1240,10 @@ private:
   // What Save As Mesh writes for the items (mitcad#734,
   // files/MainWindowSaveAsMesh.cpp).
   MeshPlan saveAsMeshPlan(const Selection& items) const;
-  // The bodies Edit Appearances assigns to: those the selection stands for
-  // (bodies, and the bodies of faces, edges and vertices), each once.
+  // The bodies and faces the context menu's Appearance… gives the
+  // Appearance tool (mitcad#1059): those the selection stands for (bodies,
+  // faces, and the bodies of edges and vertices), each once.
   Selection appearanceTargets() const;
-  // Opens the Materials window (mitcad#655) for the bodies of the selection:
-  // Edit Materials (the old Physical Material's id too).
-  void openMaterialsForSelection();
   void closeDocument();
   void addRecentFile(const QString& path);
   void updateRecentMenu();
@@ -1264,6 +1316,8 @@ private:
   // The Projects panel (mitcad#145) and its dock or card.
   ProjectsPanel* m_projectsPanel = nullptr;
   QWidget* m_projectsContainer = nullptr;
+  // The Configuration panel's card or dock (mitcad#1020).
+  QWidget* m_configurationContainer = nullptr;
   // Open Read-Only is opening a design: the lock controller takes no edit
   // lock on it, and the window is read-only.
   bool m_openingReadOnly = false;
@@ -1317,6 +1371,10 @@ private:
   // The palette's page of the command pages: the palette, or in the docked
   // layout a scroll area around it (mitcad#412).
   QWidget* m_palettePage = nullptr;
+  // The sketch tool shown checked (mitcad#1027): the command whose run is
+  // starting one, and the one checked.
+  QString m_startingSketchTool;
+  QString m_checkedSketchTool;
 
   QAction* m_confirmAction = nullptr;
   QAction* m_cancelAction = nullptr;
@@ -1355,10 +1413,23 @@ private:
   Selection m_autoselectPreview; // hover only; never part of the actual selection
   SelectionCreatePanel* m_selectionCreate = nullptr; // the card's Create row (mitcad#619)
   QString m_loggedSelectionCreate = QStringLiteral("none"); // its log line last logged (UI tests)
+  QString m_loggedCardLevel; // the selection card's level last logged (mitcad#1040, UI tests)
+  MakeBodyCard* m_makeCard = nullptr; // the selected body on the Make tab (mitcad#1049)
+  QString m_loggedMakeCard = QStringLiteral("none"); // its log line last logged (UI tests)
   QLabel* m_statusLabel = nullptr;
+  // The status line message's level and its icon beside it (mitcad#1040).
+  NoticeLevel m_statusLevel = NoticeLevel::Hint;
+  QLabel* m_statusIcon = nullptr;
   // What the status shows is a hint (showHint), not a warning or an error:
   // an open drawing clears it (mitcad#1008, updateDrawingChrome).
   bool m_statusIsHint = true;
+  // The window's messages, the Floating message band, the history and the
+  // Docked status bar's button that opens it (mitcad#1042).
+  MessageCenter* m_messages = nullptr;
+  MessageBand* m_messageBand = nullptr;
+  MessageHistory* m_messageHistory = nullptr;
+  QToolButton* m_messageHistoryButton = nullptr;
+  QString m_loggedHistoryButton;
   QLabel* m_rendererLabel = nullptr;
   FloatingLayout* m_floating = nullptr; // the central widget in Floating chrome
   GlassCard* m_commandCard = nullptr;
@@ -1383,13 +1454,16 @@ private:
   // The joint row under the pointer (a Feature item; invalid: none) and
   // the joint highlight's log lines last logged (mitcad#523).
   SelectionItem m_jointHover;
+  // The browser row whose bodies the view highlights (mitcad#1022,
+  // previewBodies; its path, empty: none).
+  QString m_browserHoverRow;
   QString m_loggedJointHighlight = QStringLiteral("none");
   QString m_loggedJointCard;
   // A body's print bed face shown while a face's context menu is open
   // (mitcad#731; invalid: none).
   SelectionItem m_printBedShown;
   mutable QString m_loggedMoveFaceCard; // the Move Face card's line last logged (mitcad#531)
-  bool m_originVisible = false; // an input takes construction geometry
+  bool m_originVisible = false; // Create Sketch asks for a plane (mitcad#844, mitcad#1030)
   bool m_constructionHidden = false; // an input hides it (mitcad#394)
   std::vector<SketchEntityDisplay> m_sketchDisplay;
   QString m_loggedSketches; // the sketches whose curves are shown (UI tests)
@@ -1457,6 +1531,49 @@ private:
   // selection stands for (else the only one, or the first with a Flat
   // Pattern when `flat`), and the bodies shown flat.
   void registerSheetActions();
+  // The Make tab (mitcad#1049, MainWindowMake.cpp): the Annotate group's
+  // panels (registered before the View commands, so that the Annotations
+  // window comes last in the group), the Material tool's entry (the
+  // Material tool, mitcad#1059) and Export Face as DXF…; an Annotate panel's annotation added from its picks (`kind`
+  // "dimension" or a leader's, `extra` the command's own fields), one undo
+  // step outside the panel's range.
+  void registerAnnotateCommands();
+  void registerMakeCommands();
+  bool addAnnotationFrom(const CommandState& state, const QString& kind, const QJsonObject& extra);
+  // An Annotate panel's add_annotation (MainWindowMeasurements.cpp,
+  // mitcad#1097): its picks with `kind` (or the model's for "dimension")
+  // and `extra`, without the view; empty, with why in `why`, when the
+  // picks give none. Its preview and its Add run the same command.
+  static QJsonObject annotationCommand(const CommandState& state, const QString& kind, const QJsonObject& extra,
+                                       QString* why = nullptr);
+  // An Annotate panel's preview (CommandDef::acceptPreview): the
+  // annotation `asked` would add, placed by the model in the view as it
+  // is (add_annotation with "preview": true) and drawn dimmed; none for an
+  // empty command. Why the model draws none, empty when it is shown. Logs
+  // "Annotation preview: <name> <kind>" or "Annotation preview: none[:
+  // why]". It follows the view's direction while the panel is open.
+  QString previewAnnotation(const QJsonObject& asked);
+  // The camera rested: a preview placed in another direction is computed
+  // again through its panel.
+  void followAnnotationPreviewView();
+  QJsonObject m_annotationPreview;     // the command previewed, without the view
+  QJsonObject m_annotationPreviewView;  // the view's direction and up it was placed in
+  QString m_loggedAnnotationPreview;    // "Annotation preview: …" as last logged
+  void assignMaterial();
+  void exportFaceDxf();
+  // The selected body's card on the Make tab: made with the idle page,
+  // shown and filled by updateMakeCard (logged "Make card: <summary>" or
+  // "Make card: none"); its edits set the material, the process or a print
+  // value on the body, one undo step each.
+  MakeBodyCard* createMakeCard();
+  void updateMakeCard();
+  void setMakeCardMaterial(const QString& id);
+  void setMakeCardProperty(const QString& set, const QString& key, const QJsonValue& value, const QString& plain,
+                           const QString& shown);
+  void setMakeCardValue(const QString& set, const QString& key, const QString& typed);
+  // The Browser's markers on the Make tab: the bodies whose material or
+  // print settings differ from their component's; none on another tab.
+  void updateMakeMarkers();
   QJsonObject sheetBody(bool flat) const;
   void toggleFlatPattern(const QString& body);
 
@@ -1519,6 +1636,13 @@ private:
   agent::ChatController* m_chat = nullptr;
   agent::ChatPanel* m_chatPanel = nullptr;
   QPointer<QWidget> m_chatContainer;
+  // The AppKit frontend's Chat card (mitcad#1075): the hidden panel
+  // presented through the bridge, shown and hidden with View › Chat.
+  bool m_nativeChatShown = false;
+#ifdef MITCAD_MACOS_NATIVE_UI
+  void createNativeChat();
+  std::unique_ptr<NativeWidgetView> m_nativeChatForm;
+#endif
   void createDebugLog();
   void debugLogChanged(bool running);
   void openLogFolder();
@@ -1578,22 +1702,18 @@ private:
   MeasureHistory m_measureHistory;
   QPointer<QWidget> m_measureHistoryView;
 
-  // Annotations (mitcad#649, mitcad#702; MainWindowMeasurements.cpp): Keep
-  // in the Measure panel (the measurement it shows) and on a row of its
-  // history adds its picks as an annotation in the plane the view suggests
-  // (add_annotation, a change outside the panel's undo range,
-  // CommandSession::runVisibility); the shown ones are drawn in the view
+  // Annotations (mitcad#649, mitcad#702; MainWindowMeasurements.cpp): the
+  // Make tab's Annotate panels (mitcad#1049) add their picks as an
+  // annotation in the plane the view suggests (add_annotation, a change
+  // outside the panel's undo range); the shown ones are drawn in the view
   // after each refresh, and one kept is logged once the model lists it
   // ("Annotation kept: <name>").
   void followMeasurements();
   // The picks of a measurement's inputs ("a" and "b", "body_a" and
   // "body_b", or "sketch_a" and "sketch_b") as add_measurement takes them;
-  // false (with the reason in `why`, also Keep's tooltip then) when there
-  // are none or they are the application's own (sketch curves and points).
+  // false (with the reason in `why`) when there are none or they are the
+  // application's own (sketch curves and points).
   static bool measurementPicks(const QHash<QString, Selection>& inputs, QJsonObject& command, QString& why);
-  void keepMeasurement(const QHash<QString, Selection>& inputs, const QString& what);
-  void keepMeasurementRow(int number);
-  QHash<QString, Selection> m_measureShown; // the picks of the measurement the panel shows
   QStringList m_measurementNames;           // the measurements' names at the last refresh
   bool m_measurementKept = false;           // a Keep waits for its measurement to be listed
   QString m_loggedMeasurements;             // "Annotations: …" as last logged
@@ -1608,15 +1728,13 @@ private:
   void editAnnotationNamed(const QString& name);
   void annotationMenu(const QString& name, const QPoint& global);
   void annotationMoved(const QString& name, bool line, double alongX, double alongY);
-  void keepNote(const QHash<QString, Selection>& inputs);
   // The view as add_annotation's `view` takes it: the direction it looks
   // along, its up and a pixel's size (mm) at its centre.
   QJsonObject annotationView() const;
-  // The picks the Measure panel shows: one of the model's, which a note
-  // can point at.
+  // A panel's one pick: one of the model's, which a note can point at.
   static bool notePick(const QHash<QString, Selection>& inputs, QJsonObject& pick, QJsonValue& at);
-  // Whether the one pick shown is a feature a datum label or a frame can
-  // mark: not a vertex or a datum point.
+  // Whether the one pick is a feature a datum label or a frame can mark:
+  // not a vertex or a datum point.
   static bool markablePick(const QHash<QString, Selection>& inputs);
   QPointer<QDialog> m_annotationsWindow;
   // A pick as add_annotation and edit_annotation take it (the measure
@@ -1625,10 +1743,9 @@ private:
   static QJsonValue measurementPick(const SelectionItem& item);
 
   // Datums and feature control frames (mitcad#702 phase 2;
-  // MainWindowMeasurements.cpp, MainWindowAnnotations.cpp): Datum… and Frame… in the Measure panel put
-  // one on a leader to the one pick shown (`kind` "datum" or "frame"); Add
+  // MainWindowAnnotations.cpp): the Make tab's Datum Label and Feature
+  // Control Frame put one on a leader to their pick (mitcad#1049); Add
   // Frame… in the Annotations window one under a dimension.
-  void keepLeader(const QHash<QString, Selection>& inputs, const QString& kind);
   void addFrameUnder(const QString& dimension);
   QStringList datumLetters() const;              // the design's datum labels' letters
   QJsonArray geometricCharacteristics() const;    // the model's geometric_characteristics
@@ -1694,6 +1811,13 @@ private:
   void finishImageCalibration(const QString& name, const ImagePoint& first, const ImagePoint& second);
   QHash<QString, QImage> m_imageReferenceImages; // by digest
   ImageCalibration* m_imageCalibration = nullptr;
+
+  // The Center of Mass marker (mitcad#1094; MainWindowCenterOfMass.cpp):
+  // Center of Mass in the Inspect group, and after a refresh the marker
+  // drawn where the snapshot's `center_of_mass` answer puts it.
+  void registerCenterOfMassCommand();
+  void followCenterOfMass();
+  QString m_loggedCenterOfMass;
 };
 
 } // namespace mitcad

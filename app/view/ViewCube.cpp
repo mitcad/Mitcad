@@ -52,12 +52,14 @@
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
+#include "../framework/Theme.hpp"
+
 namespace mitcad {
 
 namespace {
 
 // The view's accent (OcctViewer::setHoverColor).
-const QColor kAccent(0x2f, 0x9b, 0xff);
+const QColor kAccent = viewColor(ColorRole::Hover, false); // the hover's, as in the view
 // The cube's size the proportions below are for (AIS_ViewCube's default).
 constexpr double kBaseSize = 70.0;
 // The faces' textures: about four texels to a pixel of a face at 2x.
@@ -565,9 +567,11 @@ occ::handle<AIS_ViewCube> makeViewCube() {
   occ::handle<AIS_ViewCube> cube = new GlassViewCube();
   // The axes in colour, X red, Y green, Z blue, their letters likewise.
   occ::handle<Prs3d_DatumAspect> datum = new Prs3d_DatumAspect();
-  const std::array<std::pair<Prs3d_DatumParts, QColor>, 3> axes{{{Prs3d_DatumParts_XAxis, QColor(0xe8, 0x4f, 0x4f)},
-                                                                 {Prs3d_DatumParts_YAxis, QColor(0x4c, 0xb0, 0x5e)},
-                                                                 {Prs3d_DatumParts_ZAxis, QColor(0x3f, 0x8c, 0xff)}}};
+  // The axes' roles, the joint triad's too (mitcad#1041).
+  const std::array<std::pair<Prs3d_DatumParts, QColor>, 3> axes{
+      {{Prs3d_DatumParts_XAxis, viewColor(ColorRole::AxisX, false)},
+       {Prs3d_DatumParts_YAxis, viewColor(ColorRole::AxisY, false)},
+       {Prs3d_DatumParts_ZAxis, viewColor(ColorRole::AxisZ, false)}}};
   for (const auto& [part, color] : axes) {
     datum->ShadingAspect(part)->SetColor(occtColor(color));
     const occ::handle<Prs3d_TextAspect>& text = datum->TextAspect(part);

@@ -1372,7 +1372,7 @@ fn taper_pipe_threads_taper_even_when_cosmetic() {
         )
         .unwrap_err()
         .to_string();
-    assert!(error.contains("cannot be modelled straight"), "{error}");
+    assert!(error.contains("cannot be modeled straight"), "{error}");
     // ISO 7-1 names its side, and is cosmetic only.
     let rc = json!({"standard": "iso_taper", "designation": "Rc 1/8"});
     doc.edit_feature(
@@ -1401,7 +1401,7 @@ fn taper_pipe_threads_taper_even_when_cosmetic() {
         )
         .unwrap_err()
         .to_string();
-    assert!(error.contains("cannot be modelled"), "{error}");
+    assert!(error.contains("cannot be modeled"), "{error}");
 }
 
 /// The design file of `doc` opened again (a design written before
@@ -1677,7 +1677,7 @@ fn cosmetic_threads_are_data_and_modelled_ones_geometry() {
     assert!(error.contains("must grow from the minor"), "{error}");
     let cosmetic = thread_def("F2:side(c1)", json!({"angle": 0.5}));
     let error = doc.edit_feature(uid, &cosmetic).unwrap_err().to_string();
-    assert!(error.contains("only a modelled thread"), "{error}");
+    assert!(error.contains("only a modeled thread"), "{error}");
     doc.edit_feature(uid, &modeled).unwrap();
 
     // Not a cylinder; an internal class on an external face.
@@ -1820,7 +1820,7 @@ fn modelled_threads_take_extra_clearance() {
     );
     let cosmetic = thread_def("F2:side(c1)", json!({"radial_clearance": 0.2}));
     let error = doc.edit_feature(uid, &cosmetic).unwrap_err().to_string();
-    assert!(error.contains("only a modelled thread"), "{error}");
+    assert!(error.contains("only a modeled thread"), "{error}");
     let too_much = thread_def(
         "F2:side(c1)",
         json!({"modeled": true, "flank_clearance": 0.1}),
@@ -1899,7 +1899,7 @@ fn tapped_holes_take_extra_clearance() {
         )
         .unwrap_err()
         .to_string();
-    assert!(error.contains("only a modelled thread"), "{error}");
+    assert!(error.contains("only a modeled thread"), "{error}");
     b.doc
         .edit_feature(
             uid,

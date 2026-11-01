@@ -152,7 +152,7 @@ fn profiles_are_made_edited_and_deleted() {
         ),
         (
             json!({"cmd": "create_print_profile", "kind": "process", "name": "Fine"}),
-            "a process profile is named 'Fine'",
+            "a process profile is named Fine",
         ),
         (
             json!({"cmd": "create_print_profile", "name": "No kind"}),
@@ -164,7 +164,7 @@ fn profiles_are_made_edited_and_deleted() {
         ),
         (
             json!({"cmd": "delete_print_profile", "id": "nothing"}),
-            "there is no profile 'nothing'",
+            "there is no profile nothing",
         ),
     ] {
         let error = refused(&mut doc, bad);
@@ -275,7 +275,7 @@ fn print_sets_keep_the_key_map_s_keys_and_types() {
         (
             json!({"cmd": "set_property", "owner": "C0", "set": "Print Process",
                    "key": "profile", "value": "bench-printer"}),
-            "there is no process profile 'bench-printer'",
+            "there is no process profile bench-printer",
         ),
         (
             json!({"cmd": "set_property", "owner": "C0", "set": "Print Printer",
@@ -543,7 +543,7 @@ fn profiles_survive_the_design_file_and_are_compared() {
         (
             json!([{"id": "a", "name": "A", "kind": "printer"},
                    {"id": "a", "name": "B", "kind": "process"}]),
-            "print_profiles[1]: profile 'a' is listed more than once",
+            "print_profiles[1]: profile a is listed more than once",
         ),
         (
             json!([{"id": "a", "name": "A", "kind": "process", "values": {"bed_shape": 1}}]),

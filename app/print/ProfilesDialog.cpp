@@ -50,7 +50,7 @@ QString text(const QJsonObject& object, const char* field) {
 
 ProfilesDialog::ProfilesDialog(DocumentHost& host, QWidget* parent) : QDialog(parent), m_designHost(host) {
   setWindowTitle(tr("Printers and Processes"));
-  setWindowIcon(themeIcon(QStringLiteral("print-3d")));
+  setWindowIcon(themeIcon(QStringLiteral("print-settings"))); // its command's (mitcad#1096)
   resize(960, 620);
   auto* layout = new QVBoxLayout(this);
   // Import from Slicer… into the design (mitcad#829), where My Library has
@@ -75,14 +75,16 @@ ProfilesDialog::ProfilesDialog(DocumentHost& host, QWidget* parent) : QDialog(pa
     const QString id = made.first().toObject().value(QStringLiteral("id")).toString();
     m_panel->showItem(process ? QStringLiteral("process") : QStringLiteral("printer"), QStringLiteral("design/") + id);
   });
-  // The user's library without a design (mitcad#704), then Close.
-  auto* myLibrary = new QPushButton(tr("My Library…"));
+  // The user's library without a design (mitcad#704): no result of this
+  // window, so after the list's actions (mitcad#1019); Close at the end.
+  auto* editLibrary = new QPushButton(tr("Edit &Library…"));
+  editLibrary->setToolTip(tr("Your own materials, printers and processes, kept apart from the design"));
   auto* close = new QPushButton(tr("Close"));
-  m_panel->addButton(myLibrary, QStringLiteral("my_library"));
+  m_panel->addListButton(editLibrary, QStringLiteral("edit_library"));
   m_panel->addButton(close, QStringLiteral("close"));
   mac::styleDialog(this);
-  connect(myLibrary, &QPushButton::clicked, this, [this] {
-    qDebug().noquote() << QStringLiteral("Profiles: My Library…");
+  connect(editLibrary, &QPushButton::clicked, this, [this] {
+    qDebug().noquote() << QStringLiteral("Profiles: Edit Library…");
     if (openMyLibrary) {
       openMyLibrary();
     }
@@ -133,7 +135,7 @@ ProfilesPanel::ProfilesPanel(PrintItemsHost& host, const QString& logName, QWidg
   m_name->setObjectName(QStringLiteral("printProfileName"));
   m_emptyState = new QLabel(tr("No printer or process selected"));
   m_emptyState->setAlignment(Qt::AlignCenter);
-  m_emptyState->setStyleSheet(QStringLiteral("color: gray;"));
+  setRoleStyleSheet(m_emptyState, ColorRole::TextSecondary);
   m_emptyState->hide();
   editorBox->addWidget(m_emptyState, 1);
   m_form = new SettingsForm;
@@ -216,7 +218,7 @@ void ProfilesPanel::setKinds(const QStringList& kinds) {
                                                                           : tr("No printer or process selected"));
 }
 
-void ProfilesPanel::setLibrary(const QString& library) {
+void ProfilesPanel::setLibrary(const QString& library, bool read) {
   if (library == m_libraryPlace) {
     return;
   }
@@ -225,7 +227,13 @@ void ProfilesPanel::setLibrary(const QString& library) {
   m_currentDesignId.clear();
   m_loggedRows.clear();
   m_loggedValues.clear();
-  refresh();
+  if (read) {
+    refresh();
+  } else {
+    m_items.clear();
+    rebuildList();
+    showCurrent();
+  }
 }
 
 QString ProfilesPanel::itemsProject() const {
@@ -236,6 +244,14 @@ QString ProfilesPanel::itemsProject() const {
 void ProfilesPanel::addButton(QPushButton* button, const QString& name) {
   mac::auxiliaryButton(button);
   m_buttons->addWidget(button);
+  m_windowButtons.append({name, button});
+}
+
+void ProfilesPanel::addListButton(QPushButton* button, const QString& name) {
+  mac::auxiliaryButton(button);
+  const int at = m_buttons->indexOf(m_delete) + 1;
+  m_buttons->insertSpacing(at, 16);
+  m_buttons->insertWidget(at + 1, button);
   m_windowButtons.append({name, button});
 }
 
@@ -424,7 +440,8 @@ void ProfilesPanel::showCurrent() {
     m_saved->hide();
     m_usedState->hide();
     m_saveTo->hide();
-    m_form->setKeys(m_keys, m_currentKind.isEmpty() ? QStringLiteral("process") : m_currentKind, m_dialect);
+    // The fields are made for the first item shown (mitcad#1018: not
+    // while the window opens with none selected).
     m_form->setValues({});
     return;
   }
@@ -798,7 +815,7 @@ void ProfilesPanel::logPlaces() {
                                                {QStringLiteral("duplicate"), m_duplicate},
                                                {QStringLiteral("delete"), m_delete},
                                                {QStringLiteral("use"), m_use}};
-  // The window's buttons (My Library…, Close).
+  // The window's buttons (Edit Library…, Close).
   for (const auto& [name, button] : std::as_const(m_windowButtons)) {
     widgets.append(std::pair<QString, QWidget*>(name, button));
   }

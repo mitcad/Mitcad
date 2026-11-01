@@ -18,6 +18,7 @@
 #include <QFocusEvent>
 #include <QFont>
 #include <QFormLayout>
+#include <QHash>
 #include <QFrame>
 #include <QHeaderView>
 #include <QHBoxLayout>
@@ -31,6 +32,8 @@
 #include <QStylePainter>
 #include <QListWidget>
 #include <QPixmap>
+#include <QPoint>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSignalBlocker>
@@ -53,17 +56,16 @@
 #include "TestSync.hpp"
 #include "Theme.hpp"
 
+#include "../browser/LibraryPicker.hpp"
 #include "../platform/MacDialogs.hpp"
 
 namespace mitcad {
 namespace {
 
-// Colours of the selection inputs in order, unless an input sets its own.
-const QColor kInputColors[] = {QColor(0x1f, 0x7a, 0xff), QColor(0xff, 0x8c, 0x00),
-                               QColor(0x2c, 0xa0, 0x2c), QColor(0x9b, 0x30, 0xff)};
-
+// Colours of the selection inputs in order, unless an input sets its own
+// (the role table's, shared with the AppKit panel).
 QColor paletteColor(int index) {
-  return kInputColors[static_cast<std::size_t>(index) % std::size(kInputColors)];
+  return commandInputColor(index);
 }
 
 QString countText(const InputDef& input, int count) {
@@ -184,6 +186,9 @@ public:
     setMinimumContentsLength(8);
   }
 
+  // What the closed field shows of the chosen option.
+  virtual QString shownText() const { return currentText(); }
+
 protected:
   void paintEvent(QPaintEvent*) override {
     QStylePainter painter(this);
@@ -192,10 +197,109 @@ protected:
     painter.drawComplexControl(QStyle::CC_ComboBox, option);
     const QRect field = style()->subControlRect(QStyle::CC_ComboBox, &option, QStyle::SC_ComboBoxEditField, this);
     const int icon = option.currentIcon.isNull() ? 0 : option.iconSize.width() + 4;
-    option.currentText = fontMetrics().elidedText(option.currentText, Qt::ElideMiddle, std::max(0, field.width() - icon));
+    option.currentText = fontMetrics().elidedText(shownText(), Qt::ElideMiddle, std::max(0, field.width() - icon));
     painter.drawControl(QStyle::CE_ComboBoxLabel, option);
   }
 };
+
+// A drop-down that opens a searchable picker instead of its list
+// (InputDef::choicePicker, mitcad#1108: Send to Slicer's Printer and
+// Process): the options in their order under the rows' headings, by their
+// short labels with their tags, the chosen one checked, a line where the
+// options have a separator; a window titled "<label> Picker" (LibraryPicker,
+// logged "<label> picker …") under the field, as wide as its names need.
+// Its choice is the drop-down's, as if chosen in its list. The closed
+// field shows the chosen row's short label.
+class PickerComboBox : public MiddleElideComboBox {
+public:
+  explicit PickerComboBox(const QString& label) : m_label(label) {}
+
+  void setRows(const QVector<ChoicePickerRow>& rows) {
+    m_rows.clear();
+    for (const ChoicePickerRow& row : rows) {
+      m_rows.insert(row.value, row);
+    }
+    update();
+  }
+
+  QString shownText() const override {
+    const QString shortLabel = m_rows.value(currentData().toString()).shortLabel;
+    return shortLabel.isEmpty() ? currentText() : shortLabel;
+  }
+
+  // "Panel <command> input <key> shows: <short label>" when it changes, for
+  // UI tests.
+  void logShown(const QString& command, const QString& key) {
+    const QString line = QStringLiteral("Panel %1 input %2 shows: %3").arg(command, key, shownText());
+    if (line != m_logged) {
+      m_logged = line;
+      qDebug().noquote() << line;
+    }
+  }
+
+  void showPopup() override {
+    if (m_picker != nullptr && m_picker->isVisible()) {
+      return; // open already
+    }
+    const QString chosenValue = currentData().toString();
+    QVector<PickerEntry> entries;
+    bool lineAbove = false;
+    for (int i = 0; i < count(); ++i) {
+      const QString value = itemData(i).toString();
+      if (isChoiceSeparator(value)) {
+        lineAbove = true;
+        continue;
+      }
+      if (value.startsWith(choiceHeadingPrefix())) {
+        continue; // the rows carry the headings
+      }
+      const auto found = m_rows.constFind(value);
+      const bool known = found != m_rows.constEnd();
+      PickerEntry entry;
+      entry.value = value;
+      entry.name = known && !found->shortLabel.isEmpty() ? found->shortLabel : itemText(i);
+      entry.section = known ? found->heading : QString();
+      entry.tooltip = itemText(i);
+      entry.tag = known ? found->tag : QString();
+      entry.search = known ? QStringList{itemText(i), found->heading, found->search}.join(QLatin1Char(' ')) : itemText(i);
+      entry.checked = value == chosenValue;
+      entry.lineBefore = lineAbove;
+      lineAbove = false;
+      entries.append(entry);
+    }
+    QPointer<PickerComboBox> self(this);
+    m_picker = LibraryPicker::open(this, QObject::tr("%1 Picker").arg(m_label),
+                                   QStringLiteral("%1 picker").arg(m_label), entries, chosenValue,
+                                   mapToGlobal(QPoint(0, height())),
+                                   [self](const QString& value) {
+                                     if (self != nullptr) {
+                                       self->choose(value);
+                                     }
+                                   },
+                                   objectName(), width());
+  }
+
+private:
+  void choose(const QString& value) {
+    const int at = findData(value);
+    if (at < 0) {
+      return;
+    }
+    setCurrentIndex(at);
+    emit activated(at);
+  }
+
+  QString m_label;
+  QHash<QString, ChoicePickerRow> m_rows;
+  QPointer<LibraryPicker> m_picker;
+  QString m_logged;
+};
+
+// What a drop-down's closed field shows of its chosen option.
+QString shownChoiceText(const QComboBox* combo) {
+  const auto* elided = dynamic_cast<const MiddleElideComboBox*>(combo);
+  return elided != nullptr ? elided->shownText() : combo->currentText();
+}
 
 // A choice shown as a tile (InputDef::choiceTile, mitcad#427): the chosen
 // option's picture, its name and a smaller line under it. A click, or Enter
@@ -411,7 +515,10 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
   auto* icon = new QLabel;
   icon->setPixmap(themeIcon(def.icon).pixmap(QSize(24, 24), devicePixelRatioF()));
   auto* title = new QLabel(QStringLiteral("<b>%1</b>%2").arg(
-      def.name.toHtmlEscaped(), editing ? tr(" <span style='color:gray'>(edit)</span>") : QString()));
+      def.name.toHtmlEscaped(),
+      editing ? QStringLiteral(" <span style='color:%1'>%2</span>")
+                    .arg(themeColor(ColorRole::TextSecondary).name(), tr("(edit)"))
+              : QString()));
   header->addWidget(icon);
   header->addWidget(title, 1);
   layout->addLayout(header);
@@ -459,6 +566,11 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
             box->addWidget(first, 1);
           }
           column->insertWidget(0, line);
+        }
+        if (input.fxToggle) {
+          // An fx button as small as its text (mitcad#1059).
+          static_cast<QHBoxLayout*>(line->layout())->addWidget(cell->field, 0);
+          continue;
         }
         // Wide enough to type in beside its fx button (mitcad#656).
         cell->field->setMinimumWidth(100);
@@ -814,13 +926,21 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       field = line;
       break;
     }
-    row.combo = input.choiceIcon ? new MiddleElideComboBox : new QComboBox;
+    if (input.choicePicker) {
+      // Opened, a searchable picker (mitcad#1108).
+      row.combo = new PickerComboBox(input.label);
+    } else if (input.choiceIcon) {
+      row.combo = new MiddleElideComboBox;
+    } else {
+      row.combo = new QComboBox;
+    }
     // No keyboard focus: choosing leaves it in the value field, where the
     // typed value goes.
     row.combo->setFocusPolicy(Qt::NoFocus);
     row.combo->setToolTip(input.tooltip);
     if (input.choiceImage) {
-      row.combo->setIconSize(QSize(48, 48)); // the options' pictures
+      // The options' pictures (a material's swatch smaller, mitcad#1059).
+      row.combo->setIconSize(QSize(input.choiceImageSize, input.choiceImageSize));
     }
     // Options that follow other inputs are filled by refreshRow.
     if (!input.choicesFor) {
@@ -872,6 +992,27 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       connect(more, &QToolButton::clicked, this, [this, key](bool on) { emit checkChanged(key, on); });
       row.check = more;
       field = more;
+      break;
+    }
+    if (input.fxToggle) {
+      // A small "fx" button (mitcad#1059): the value beside it varies with
+      // an option while it is pressed.
+      auto* fx = new QToolButton;
+      fx->setCheckable(true);
+      fx->setAutoRaise(true);
+      fx->setFocusPolicy(Qt::NoFocus);
+      fx->setToolButtonStyle(Qt::ToolButtonTextOnly);
+      fx->setText(QStringLiteral("fx"));
+      QFont font = fx->font();
+      font.setBold(true);
+      font.setItalic(true);
+      fx->setFont(font);
+      fx->setToolTip(input.tooltip.isEmpty() ? input.label : input.tooltip);
+      fx->setAccessibleName(input.label);
+      fx->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+      connect(fx, &QToolButton::clicked, this, [this, key](bool on) { emit checkChanged(key, on); });
+      row.check = fx;
+      field = fx;
       break;
     }
     auto* check = new QCheckBox;
@@ -1024,8 +1165,9 @@ void CommandPanel::rebuildList(Row& list, const CommandState& state) {
     frameLayout->setSpacing(1);
     auto* header = new QHBoxLayout;
     header->setSpacing(3);
-    auto* name = new QLabel(QStringLiteral("<span style='color:gray'>%1</span>")
-                                .arg(input.rowLabel.arg(i + 1).toHtmlEscaped()));
+    auto* name = new QLabel(QStringLiteral("<span style='color:%1'>%2</span>")
+                                .arg(themeColor(ColorRole::TextSecondary).name(),
+                                     input.rowLabel.arg(i + 1).toHtmlEscaped()));
     header->addWidget(name, table ? 0 : 1);
     QToolButton* remove = smallButton(QStringLiteral("✕"), tr("Remove this row"));
     remove->setObjectName(QStringLiteral("remove_%1.%2").arg(list.key).arg(i));
@@ -1438,6 +1580,14 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
       }
     }
     row.combo->setCurrentIndex(qMax(0, row.combo->findData(scope.choice(id))));
+    if (auto* picker = dynamic_cast<PickerComboBox*>(row.combo); picker != nullptr && input.choicePicker) {
+      // The picker's rows now (mitcad#1108); the closed field shows the
+      // chosen one's short label, its whole label the tooltip.
+      picker->setRows(input.choicePicker(scope));
+      const QString shortText = picker->shownText();
+      picker->setToolTip(shortText != picker->currentText() ? picker->currentText() : input.tooltip);
+      picker->logShown(m_def.name, row.key);
+    }
     break;
   }
   case InputDef::Type::Check:
@@ -1451,12 +1601,19 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
     break;
   }
   case InputDef::Type::Note:
-    if (row.noteRow->setNote(note.text, note.actions, note.icons, note.oneLine) && !note.isEmpty()) {
-      qDebug().noquote() << QStringLiteral("Panel %1 note %2: %3%4")
+    if (row.noteRow->setNote(note.text, note.actions, note.icons, note.oneLine, note.notice, note.noticeLevel) &&
+        !note.isEmpty()) {
+      // A notice after the text and actions as "(<level>: <notice>)"
+      // (mitcad#1062).
+      qDebug().noquote() << QStringLiteral("Panel %1 note %2: %3%4%5")
                                 .arg(m_def.name, row.key, note.text,
                                      note.actions.isEmpty()
                                          ? QString()
-                                         : QStringLiteral(" [%1]").arg(note.actions.join(QStringLiteral("] ["))));
+                                         : QStringLiteral(" [%1]").arg(note.actions.join(QStringLiteral("] ["))),
+                                     note.notice.isEmpty()
+                                         ? QString()
+                                         : QStringLiteral(" (%1: %2)")
+                                               .arg(noticeLevelName(note.noticeLevel), note.notice));
       if (!m_shownRows.isEmpty()) {
         scheduleLogLayout(); // its buttons moved or came
       }
@@ -1514,7 +1671,11 @@ void CommandPanel::updateNote(Row& row) {
       scheduleLogFit();
     }
   }
-  setErrorStyleSheet(row.note, error ? QStringLiteral("color: %1;") : QStringLiteral("color: gray;"));
+  if (error) {
+    setErrorStyleSheet(row.note);
+  } else {
+    setRoleStyleSheet(row.note, ColorRole::TextSecondary);
+  }
   if (row.note->isHidden() != text.isEmpty()) {
     // The rows below move.
     row.note->setVisible(!text.isEmpty());
@@ -1533,17 +1694,48 @@ void CommandPanel::updateNote(Row& row) {
   }
 }
 
-void CommandPanel::setMessage(const QString& message, bool error) {
-  setErrorStyleSheet(m_message, error ? QStringLiteral("QTextEdit { color: %1; background: transparent; }")
-                                      : QStringLiteral("QTextEdit { color: gray; background: transparent; }"));
-  if (message == m_message->message()) {
+void CommandPanel::setMessage(const QString& message, NoticeLevel level) {
+  // One presentation per level (mitcad#1040, docs/ui-conventions.md
+  // "Messages and severity"): an error or a warning in a highlight box the
+  // panel's width, in the level's fill, with its icon and word, kept until
+  // the next message (a fixed value, another selection) replaces it; a
+  // hint, progress and information as plain grey text.
+  const bool boxed = isProblem(level) && !message.isEmpty();
+  if (boxed) {
+    const QString format = QStringLiteral("QTextEdit { color: %1; background: %2; border-radius: 6px; "
+                                          "padding: 5px 6px; }")
+                               .arg(QStringLiteral("%1"), noticeFill(level, palette()).name());
+    if (level == NoticeLevel::Error) {
+      setErrorStyleSheet(m_message, format);
+    } else {
+      setWarningStyleSheet(m_message, format);
+    }
+  } else {
+    setRoleStyleSheet(m_message, ColorRole::TextSecondary,
+                      QStringLiteral("QTextEdit { color: %1; background: transparent; }"));
+  }
+  if (message == m_messageText && level == m_messageLevel) {
     return;
   }
-  m_message->setMessage(message);
-  // What the panel says in red, for UI tests (mitcad#531: the model's
-  // refusal of a preview shown on the panel).
-  if (error && !message.isEmpty()) {
+  m_messageText = message;
+  m_messageLevel = level;
+  if (boxed) {
+    // The icon, then the level's word and the message, lines kept.
+    QString text = message.toHtmlEscaped();
+    text.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+    m_message->setMessage(QStringLiteral("%1&nbsp;<b>%2:</b> %3").arg(noticeIconHtml(level), noticeLevelWord(level), text));
+  } else {
+    m_message->setMessage(message);
+  }
+  m_message->setProperty("noticeLevel", noticeLevelName(level));
+  // What the panel says in its box, for UI tests (mitcad#531: the model's
+  // refusal of a preview shown on the panel; mitcad#1040: its level).
+  if (level == NoticeLevel::Error && !message.isEmpty()) {
     qDebug().noquote() << QStringLiteral("Panel %1 error: %2").arg(m_def.name, message);
+  }
+  if (boxed) {
+    qDebug().noquote() << QStringLiteral("Panel %1 message box: %2: %3")
+                              .arg(m_def.name, noticeLevelName(level), message);
   }
   scheduleLogFit();
 }
@@ -1872,7 +2064,7 @@ QStringList CommandPanel::layoutLines() const {
       option.initFrom(row->combo);
       option.editable = row->combo->isEditable();
       option.frame = row->combo->hasFrame();
-      option.currentText = row->combo->currentText();
+      option.currentText = shownChoiceText(row->combo); // a picker's short label (mitcad#1108)
       option.currentIcon = row->combo->itemIcon(row->combo->currentIndex());
       option.iconSize = row->combo->iconSize();
       const int room =

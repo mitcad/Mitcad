@@ -23,6 +23,8 @@
 #include <QPixmap>
 #include <QtLogging>
 
+#include "../framework/Theme.hpp"
+
 namespace mitcad {
 namespace {
 
@@ -34,6 +36,8 @@ constexpr double kLineWidth = 1.0;    // lines: ISO 128's thin line
 constexpr double kSelectedWidth = 1.5; // a selected or hovered one's lines, at most
 constexpr double kArrowLeast = 5.0;   // an arrowhead's least length
 constexpr double kCentreLeast = 4.0;  // half a circle's centre mark, at least
+// A panel's preview of the annotation it adds (mitcad#1097): dimmed.
+constexpr double kPreviewOpacity = 0.45;
 // In text heights (the capital height on the picture, mitcad#894).
 constexpr double kCapShare = 0.7;     // a font's capital height against its pixel size, if it does not say
 constexpr double kArrowShare = 1.0;   // an arrowhead's length (and a datum triangle's height)
@@ -808,7 +812,9 @@ void layoutPlanar(const MeasurementDisplay& m, const MeasurementProjection& proj
   // is written as a note's line.
   const bool ledDiameter = m.kind == QLatin1String("diameter") &&
                            (m.align == QLatin1String("start") || m.align == QLatin1String("end"));
-  shape.note = m.kind == QLatin1String("note") || m.kind == QLatin1String("hole_callout") || ledDiameter;
+  // A material or process note (mitcad#1049) is written as a note is.
+  shape.note = m.kind == QLatin1String("note") || m.kind == QLatin1String("hole_callout") ||
+               m.kind == QLatin1String("material") || m.kind == QLatin1String("process_note") || ledDiameter;
   shape.leader = shape.note || m.kind == QLatin1String("datum") || m.kind == QLatin1String("frame");
   shape.datumTerminator = m.datumTerminator;
   shape.dotTerminator = m.dotTerminator && !m.datumTerminator;
@@ -1321,9 +1327,9 @@ QLineF measurementSnapped(const QLineF& line, double width) {
 
 double measurementLineWidth(double scale) { return std::max(1.0, std::round(kLineWidth * scale)); }
 
-QColor measurementSelectionColor() { return QColor(0x1f, 0x7a, 0xff); }
+QColor measurementSelectionColor() { return viewColor(ColorRole::Select, false); }
 
-QColor measurementHoverColor() { return QColor(0x2f, 0x9b, 0xff); }
+QColor measurementHoverColor() { return viewColor(ColorRole::Hover, false); }
 
 QColor measurementPictureTone(const QImage& image) {
   if (image.isNull() || image.width() < 1 || image.height() < 1) {
@@ -1455,7 +1461,8 @@ std::vector<MeasurementDisplay> measurementDisplays(const QJsonArray& measuremen
     // A leader (a note, datum label, feature control frame, hole callout)
     // has no value.
     const bool leader = kindOf == QLatin1String("note") || kindOf == QLatin1String("datum") ||
-                        kindOf == QLatin1String("frame") || kindOf == QLatin1String("hole_callout");
+                        kindOf == QLatin1String("frame") || kindOf == QLatin1String("hole_callout") ||
+                        kindOf == QLatin1String("material") || kindOf == QLatin1String("process_note");
     if (!m.value(QStringLiteral("visible")).toBool(true) || m.contains(QStringLiteral("error")) ||
         (!m.value(QStringLiteral("value")).isDouble() && !(leader && !drawing.isEmpty()))) {
       continue;
@@ -1583,6 +1590,7 @@ MeasurementShape layoutMeasurement(const MeasurementDisplay& measurement, const 
   shape.name = measurement.name;
   shape.color = measurement.color;
   shape.autoColor = measurement.autoColor;
+  shape.preview = measurement.preview;
   shape.label = measurement.label;
   // A screen-facing label's text the floor; one in its plane takes the
   // model's height.
@@ -1631,7 +1639,7 @@ void paintMeasurements(QPainter& painter, const std::vector<MeasurementShape>& s
     if (!shape.valid || !(shape.opacity > 0.0)) {
       continue;
     }
-    painter.setOpacity(shape.opacity);
+    painter.setOpacity(shape.preview ? shape.opacity * kPreviewOpacity : shape.opacity);
     // A selected or hovered one: the same thin drawing in the selection's
     // or the hover's colour (mitcad#902: no band, no box).
     QColor ink = shape.autoColor || !shape.color.isValid() ? measurementAutoColor(halo) : shape.color;

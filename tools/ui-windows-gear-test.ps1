@@ -79,7 +79,7 @@ Ui-ExpectNew 'Pick face F1.b0/F1:' 'a face of Gear1 can be picked'
 $face = Ui-LastMatch 'Pick face F1\.b0/(F1:[a-z_]+\(\d+\)) at'
 Ui-Mark
 Ui-Step "click $face"                    { Ui-ClickPick "face F1.b0/$face at" }
-Ui-ExpectNew 'Panel Gear note: Pitch line 62.8319 mm, centre distance 20 mm' 'the rack''s pitch line and centre distance shown' 30
+Ui-ExpectNew 'Panel Gear note: Pitch line 62.8319 mm, center distance 20 mm' 'the rack''s pitch line and centre distance shown' 30
 Ui-Mark
 Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
 Ui-ExpectNew 'Added gear (Rack), 10 teeth, module 2' 'the rack added' 30

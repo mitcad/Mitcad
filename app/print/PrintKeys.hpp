@@ -38,6 +38,7 @@ struct PrintKey {
   QString group;
   bool advanced = false;
   QStringList dialectKeys; // the slicers' own keys of it (`dialects`)
+  QStringList dialects;    // the slicers that have it, by id (`dialects`' `dialect`), in the model's order
   // A number-or-percentage key: the slicers that take its percentage
   // (`dialects`' `percent`, mitcad#655); the editors offer [mm | %] for
   // the design's slicer only (takesPercent).
@@ -104,6 +105,16 @@ private:
 QString titleOfId(const QString& id);
 // A slicer by its id as the UI names it: "bambu_studio" is "Bambu Studio".
 QString slicerTitle(const QString& id);
+// Whether a slicer is of the Bambu Studio family (Bambu Studio, OrcaSlicer,
+// QIDI Studio), whose preset names stand in for each other.
+bool bambuFamily(const QString& dialect);
+// The name a value kept per slicer (`{"bambu_studio": "Generic PLA"}`, a
+// filament's `filament_settings_id`, mitcad#1062) gives one slicer, as the
+// model's export reads it (`print_profile::dialect_value`): the slicer's
+// own entry, else for a Bambu-family slicer the first family member's
+// (Bambu Studio, OrcaSlicer, QIDI Studio), whose id goes to `from`; a
+// plain text for every slicer. Empty when it gives none.
+QString slicerPresetOf(const QJsonValue& value, const QString& dialect, QString* from = nullptr);
 // A number as a field shows it: no trailing zeros, at most 6 decimals.
 QString printNumberText(double value);
 // An outline's size: "256 × 256 mm"; empty when it has no points.

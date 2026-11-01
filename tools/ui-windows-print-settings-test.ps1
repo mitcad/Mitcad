@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/print app/framework/NoteRow.cpp app/framework/CommandPanel.cpp app/browser/BrowserController.cpp
-# check-all sources: app/files/MainWindowPrint.cpp core/print-keys core/model/src/print_files tools/cli
+# check-all sources: app/browser/LibraryPicker.cpp app/files/MainWindowPrint.cpp core/print-keys core/model/src/print_files tools/cli
 # Input-driven Windows UI test of 3D Print's Import from slicer... and its
 # Details... (mitcad#654, mitcad#655) in the build VM
 # (tools/ui-windows-lib.ps1 says how the input is posted), as the last part
@@ -19,6 +19,11 @@
 #   2. Details... beside the line: the whole report, the printer and the
 #      process by name, the materials, what was left out; closed with
 #      Escape; Escape cancels the panel and the import stays.
+#   3. The Printer picker (mitcad#1108; tools/ui-print-picker-test.sh on
+#      Linux): two printers named Acme Lab X1 Carbon 0.4 nozzle, the
+#      design's and My library's, under their vendor; "X1" typed, Enter
+#      chooses the first X1 row, shown without the vendor: the design's
+#      printer is set.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-print-settings-test.ps1 [-App build\dev\mitcad.exe] [-Cli build\dev\tools\cli\mitcad-cli.exe] [-Out dir] [-QtBin dir]
 param(
@@ -88,7 +93,11 @@ Set-Content -Encoding ascii $savedScript @'
 [
   {"cmd": "create_print_profile", "kind": "process", "name": "Shop Fine", "values": {"layer_height": 0.12},
    "choose": true},
-  {"cmd": "save_to_print_library", "library": "user", "kind": "process", "id": "shop-fine"}
+  {"cmd": "save_to_print_library", "library": "user", "kind": "process", "id": "shop-fine"},
+  {"cmd": "create_print_profile", "kind": "printer", "name": "Acme Lab X1 Carbon 0.4 nozzle",
+   "values": {"nozzle_diameter": 0.4}},
+  {"cmd": "create_print_profile", "library": "user", "kind": "printer", "name": "Acme Lab X1 Carbon 0.4 nozzle",
+   "values": {"nozzle_diameter": 0.4}}
 ]
 '@
 $savedDesign = Join-Path $work 'box-saved.mitcad'
@@ -121,20 +130,20 @@ Ui-ExpectNew '3D Print process Shop Fine: decline_print_library_update' 'kept, o
 Ui-FocusMain
 Ui-Mark
 Ui-Step 'cancel the panel (Esc)'         { Ui-Key 'Escape' }
-Ui-ExpectNew 'Command 3D Print cancelled' 'the panel closed'
+Ui-ExpectNew 'Command Send to Slicer cancelled' 'the panel closed'
 
 Write-Host '--- 1. Import from slicer... in 3D Print: the line under the button'
 Ui-Mark
 Ui-Step '3D Print (F8)'                  { Ui-Key 'F8' }
 Ui-ExpectNew '3D Print printer: Slicer default' 'the panel opened, the design has no printer'
-Ui-ExpectNew 'Panel 3D Print input format at ' 'the panel laid out'
+Ui-ExpectNew 'Panel Send to Slicer input format at ' 'the panel laid out'
 Ui-ExpectNew '; format 3mf, ' 'the panel starts with 3MF'
-Ui-ExpectNew 'Panel 3D Print action import.0 at ' 'Import from slicer... under the Process row'
+Ui-ExpectNew 'Panel Send to Slicer action import.0 at ' 'Import from slicer... under the Process row'
 $asked = Ui-LogLines | Select-Object -Skip $script:UiMark | Where-Object { $_.Contains('changed elsewhere') }
 if ($asked) { Ui-Fail "asked again: $($asked -join ' / ')" }
 Write-Host 'ok   not asked again'
 Ui-Mark
-Ui-Step 'Import from slicer...'            { Ui-ClickLogged 'Panel 3D Print action import.0' }
+Ui-Step 'Import from slicer...'            { Ui-ClickLogged 'Panel Send to Slicer action import.0' }
 Ui-FocusDialog '^Import from Slicer$'
 Ui-Step 'type the path'                  { Ui-Key 'ctrl+a'; Ui-Type $project; Start-Sleep -Milliseconds 300; Ui-Key 'Return' }
 Ui-FocusMain
@@ -150,11 +159,11 @@ $imported = Ui-LogLines | Select-Object -Skip $script:UiMark |
   Where-Object { $_.Contains('Imported print settings from mount.3mf') } | Select-Object -Last 1
 if ("$imported".Contains('not read')) { Ui-Fail "the import log names values not read: $imported" }
 Ui-ExpectNew '3D Print printer: design/bench-mini-0-4-nozzle' 'the Printer row shows the imported printer'
-Ui-ExpectNew 'Panel 3D Print action import.1 at ' 'Details... beside the line'
+Ui-ExpectNew 'Panel Send to Slicer action import.1 at ' 'Details... beside the line'
 
 Write-Host '--- 2. Details...: the whole report'
 Ui-Mark
-Ui-Step 'Details...'                       { Ui-ClickLogged 'Panel 3D Print action import.1' }
+Ui-Step 'Details...'                       { Ui-ClickLogged 'Panel Send to Slicer action import.1' }
 Ui-ExpectNew 'Import details opened: ' 'the whole report opened'
 Ui-ExpectNew 'Import details: Imported mount.3mf (Bambu Studio) into this design.' 'its first line'
 Ui-ExpectNew 'Import details: Printer: Bench Mini 0.4 nozzle' 'the printer by name'
@@ -166,6 +175,34 @@ Ui-ExpectNew 'Import details closed' 'the report closed'
 Ui-FocusMain
 Ui-Mark
 Ui-Step 'cancel the panel (Esc)'         { Ui-Key 'Escape' }
-Ui-ExpectNew 'Command 3D Print cancelled' 'the panel closed; the import stays'
+Ui-ExpectNew 'Command Send to Slicer cancelled' 'the panel closed; the import stays'
+
+Write-Host '--- 3. The Printer picker: "X1" typed, Enter chooses the first X1 row (mitcad#1108)'
+Ui-Mark
+Ui-Step '3D Print (F8)'                  { Ui-Key 'F8' }
+Ui-ExpectNew 'Panel Send to Slicer input printer at ' 'the Printer row'
+Ui-Mark
+Ui-Step 'open Printer'                   { Ui-ClickLogged 'Panel Send to Slicer input printer' }
+Ui-ExpectNew 'Printer picker opened: ' 'the picker opened'
+# (The built-in printers of the base library, where the VM has it, come
+# with their vendors' headings too.)
+Ui-ExpectNew 'Printer picker sections: Acme Lab 2 |' 'the two Acme Lab printers under their vendor'
+Ui-FocusDialog '^Printer Picker$'
+Ui-Mark
+Ui-Step 'type X1'                        { Ui-Type 'X1' }
+Ui-ExpectNew 'Printer picker search: X1, first X1 Carbon' 'the first X1 row is current'
+$found = Ui-LogLines | Select-Object -Skip $script:UiMark |
+  Where-Object { $_.Contains('Printer picker search: X1, first ') } | Select-Object -Last 1
+if (-not "$found".Contains('0.4 mm nozzle')) { Ui-Fail "the row is not the model and the nozzle: $found" }
+Write-Host 'ok   the row shows the model and the nozzle without the vendor'
+Ui-Mark
+Ui-Step 'choose (Enter)'                 { Ui-Key 'Return' }
+Ui-ExpectNew 'Printer picker chose: X1 Carbon' 'Enter chose the first X1 row'
+Ui-FocusMain
+Ui-ExpectNew '3D Print printer: design/acme-lab-x1-carbon-0-4-nozzle' 'the design''s printer is set'
+Ui-ExpectNew 'Panel Send to Slicer input printer shows: X1 Carbon' 'the field shows the model and the nozzle'
+Ui-Mark
+Ui-Step 'cancel the panel (Esc)'         { Ui-Key 'Escape' }
+Ui-ExpectNew 'Command Send to Slicer cancelled' 'the panel closed; the choice stays'
 
 Ui-Finish 'UI Windows print settings test'

@@ -211,7 +211,7 @@ pub fn read(bytes: &[u8]) -> Result<DwgFile, DwgError> {
         Ok(c) => c,
         Err(e) => {
             warnings.push(format!(
-                "the classes could not be read ({e}): objects of class types are not recognised"
+                "the classes could not be read ({e}): objects of class types are not recognized"
             ));
             Vec::new()
         }

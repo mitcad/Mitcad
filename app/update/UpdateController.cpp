@@ -75,7 +75,7 @@ void UpdateController::startUp() {
     UpdateSettings settings = UpdateSettings::load();
     settings.skippedVersion = m_offer.version;
     settings.save();
-    qInfo().noquote() << "Update: skipping Mitcad" << m_offer.version;
+    qInfo().noquote() << "Update: skipping MitCad" << m_offer.version;
     hideNotice();
   });
   connect(m_notice, &UpdateNotice::laterClicked, this, [] { qInfo() << "Update: later"; });
@@ -100,7 +100,7 @@ void UpdateController::startUp() {
     }
   });
   connect(m_client, &UpdateClient::downloaded, this, &UpdateController::onDownloaded);
-  qInfo().noquote() << QStringLiteral("Updates: Mitcad %1 for %2, %3")
+  qInfo().noquote() << QStringLiteral("Updates: MitCad %1 for %2, %3")
                            .arg(source.currentVersion,
                                 source.platform.isEmpty() ? QStringLiteral("an unknown platform") : source.platform,
                                 m_installation.describe());
@@ -118,7 +118,7 @@ void UpdateController::startUp() {
       m_notice->showMessage(finished->detail.isEmpty()
                                 ? tr("The update to MitCad %1 was not installed.").arg(finished->to)
                                 : tr("The update to MitCad %1 was not installed: %2").arg(finished->to, finished->detail),
-                            true);
+                            NoticeLevel::Error);
     }
     showNotice();
   }
@@ -173,7 +173,7 @@ void UpdateController::check(bool manual) {
   if (m_client->source().builtInKeys.trimmed().isEmpty()) {
     qInfo() << "Update check skipped: this build has no release key";
     if (manual) {
-      m_notice->showMessage(tr("This build of MitCad has no release key, so it cannot verify updates."), true);
+      m_notice->showMessage(tr("This build of MitCad has no release key, so it cannot verify updates."), NoticeLevel::Error);
       showNotice();
     }
     return;
@@ -200,7 +200,7 @@ void UpdateController::onChecked(const UpdateOffer& offer) {
     // automatic check offers nothing; asked, it is announced with why,
     // without Install, so that a computer whose clock is wrong is not cut
     // off from news of the release.
-    qInfo().noquote() << QStringLiteral("Update check: the manifest of Mitcad %1 expired on %2")
+    qInfo().noquote() << QStringLiteral("Update check: the manifest of MitCad %1 expired on %2")
                              .arg(offer.version, offer.expires);
     if (m_manual) {
       this->offer(offer);
@@ -210,9 +210,10 @@ void UpdateController::onChecked(const UpdateOffer& offer) {
     return;
   }
   if (offer.status == QStringLiteral("current")) {
-    qInfo().noquote() << QStringLiteral("Update check: Mitcad %1 is up to date").arg(current);
+    qInfo().noquote() << QStringLiteral("Update check: MitCad %1 is up to date").arg(current);
     if (m_manual) {
-      m_notice->showMessage(tr("MitCad %1 is up to date.").arg(current));
+      // The answer to Check for Updates: a success (mitcad#1040).
+      m_notice->showMessage(tr("MitCad %1 is up to date.").arg(current), NoticeLevel::Success);
       showNotice();
     } else {
       hideNotice();
@@ -220,7 +221,7 @@ void UpdateController::onChecked(const UpdateOffer& offer) {
     return;
   }
   if (offer.status == QStringLiteral("skipped") && !m_manual) {
-    qInfo().noquote() << QStringLiteral("Update check: Mitcad %1 is skipped").arg(offer.version);
+    qInfo().noquote() << QStringLiteral("Update check: MitCad %1 is skipped").arg(offer.version);
     return;
   }
   this->offer(offer);
@@ -263,10 +264,10 @@ void UpdateController::onFailed(const QString& message) {
   const State state = m_state;
   m_state = State::Idle;
   if (state == State::Downloading) {
-    m_notice->showMessage(tr("MitCad %1 was not installed: %2").arg(m_offer.version, message), true);
+    m_notice->showMessage(tr("MitCad %1 was not installed: %2").arg(m_offer.version, message), NoticeLevel::Error);
     showNotice();
   } else if (m_manual) {
-    m_notice->showMessage(tr("The update check failed: %1").arg(message), true);
+    m_notice->showMessage(tr("The update check failed: %1").arg(message), NoticeLevel::Error);
     showNotice();
   } else {
     hideNotice(); // an automatic check says nothing
@@ -296,7 +297,7 @@ void UpdateController::onDownloaded(const QString& path) {
     qWarning().noquote() << QStringLiteral("Update rejected: %1 (deleted %2)").arg(errorText(e), path);
     m_notice->showMessage(tr("MitCad %1 was not installed: %2. The download was deleted.")
                               .arg(m_offer.version, errorText(e)),
-                          true);
+                          NoticeLevel::Error);
     showNotice();
     return;
   }
@@ -311,7 +312,7 @@ void UpdateController::finish(const QString& path) {
   if (!stageUpdate(m_installation, path, m_offer.sha256, current, m_offer.version, error)) {
     QFile::remove(path);
     m_state = State::Idle;
-    m_notice->showMessage(tr("MitCad %1 was not installed: %2").arg(m_offer.version, error), true);
+    m_notice->showMessage(tr("MitCad %1 was not installed: %2").arg(m_offer.version, error), NoticeLevel::Error);
     showNotice();
     return;
   }

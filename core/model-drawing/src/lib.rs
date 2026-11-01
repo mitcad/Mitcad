@@ -25,6 +25,9 @@ pub mod annotate;
 pub mod bspline;
 pub mod clip;
 pub mod compose;
+// Details smaller than the pen as sharp corners, threads by ISO 6410
+// (mitcad#1112).
+pub mod convention;
 // Cut sheets: flat parts' outlines at 1:1 as DXF and SVG (mitcad#853).
 pub mod cut_sheet;
 pub mod dwg;
@@ -97,6 +100,10 @@ pub struct ProjectionCache {
     /// Cut sheets' parts worked out (mitcad#853), by body, shape version,
     /// placement and the face chosen.
     part_views: Entries<cut_sheet::PartView>,
+    /// The `threads` query's answer with the recompute it was asked after
+    /// (mitcad#1112: every view draws its threads by convention, and
+    /// measuring a modelled thread's face is slow, mitcad#878).
+    threads: std::sync::Mutex<Option<(u64, std::sync::Arc<serde_json::Value>)>>,
 }
 
 /// What one body shows on a section, a detail or a broken view, from its
@@ -221,6 +228,20 @@ impl ProjectionCache {
 
     pub fn keep_part_view(&self, key: u128, value: std::sync::Arc<cut_sheet::PartView>) {
         keep(&self.part_views, key, value, CACHED_BODY_VIEWS);
+    }
+
+    /// The `threads` query's answer kept after the recompute `recompute`.
+    pub fn threads(&self, recompute: u64) -> Option<std::sync::Arc<serde_json::Value>> {
+        let kept = self.threads.lock().ok()?;
+        kept.as_ref()
+            .filter(|(r, _)| *r == recompute)
+            .map(|(_, v)| std::sync::Arc::clone(v))
+    }
+
+    pub fn keep_threads(&self, recompute: u64, value: std::sync::Arc<serde_json::Value>) {
+        if let Ok(mut kept) = self.threads.lock() {
+            *kept = Some((recompute, value));
+        }
     }
 
     /// How many views' projections it keeps.

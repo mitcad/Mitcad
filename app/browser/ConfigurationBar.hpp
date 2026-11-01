@@ -19,9 +19,13 @@ namespace mitcad {
 
 class DocumentHost;
 
-// The Configuration bar at the top of the browser (mitcad#807;
-// docs/configurations.md, "Active configuration"): the options of the
-// design's configuration chosen without opening the Configurations window.
+// The Configuration bar (mitcad#807; docs/configurations.md, "Active
+// configuration"): the options of the design's configuration chosen without
+// opening the Configurations window. Since mitcad#1020 it is the content of
+// a left panel of its own (MainWindow::addConfigurationCard,
+// dockConfigurationPanel: Projects, Configuration, Browser from the top),
+// shown while the bar is present (presenceChanged); the AppKit frontend
+// presents the same widget (MainWindow::refreshNativeWindow).
 // A row preset combo, then a chooser per option in choice order: a combo
 // for a list, a field and a slider for a range (a field alone when a bound
 // is missing or the option is free), the value alone for a driven option.
@@ -47,6 +51,18 @@ public:
   // Reads the model's options again (after any change of the design).
   void refresh();
   void logLayout();
+  // Whether the design has options or rows: the bar shows them, and the
+  // panel that holds it is shown (presenceChanged).
+  bool isPresent() const { return m_present; }
+  // In a panel whose header already reads "Configuration" (mitcad#1020:
+  // the Floating card, the Docked dock): the row combo's caption is "Row"
+  // instead of the bar's own bold title.
+  void setHeaderTitled(bool titled);
+
+signals:
+  // The design gained or lost its options and rows: the bar's panel is
+  // shown or hidden with it.
+  void presenceChanged(bool present);
 
 private:
   struct Chooser {
@@ -81,6 +97,7 @@ private:
   QString m_structure; // what the widgets were built for
   QString m_loggedState;
   QString m_logged;
+  bool m_present = false;
 };
 
 } // namespace mitcad

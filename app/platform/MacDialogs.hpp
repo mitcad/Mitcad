@@ -28,6 +28,7 @@
 #include <QApplication>
 #include <QEvent>
 #include <QFontDatabase>
+#include <QImage>
 #include <QLayout>
 #include <QPainter>
 #include <QStyle>
@@ -154,17 +155,48 @@ public:
   }
 
   void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
-    QStyledItemDelegate::paint(painter, option, index);
     QStyleOptionViewItem cell(option);
     initStyleOption(&cell, index);
-    if (!cell.features.testFlag(QStyleOptionViewItem::HasCheckIndicator)) { return; }
-    if (cell.checkState != Qt::Unchecked) { return; }
-    // QMacStyle omits the unchecked item indicator, including its generic
-    // CE_CheckBox drawing on a view. Retain native checked/mixed painting
-    // and give Off the same hit rectangle with a palette-derived outline.
     const QWidget* widget = cell.widget;
     QStyle* style = widget != nullptr ? widget->style() : QApplication::style();
+    if (!cell.features.testFlag(QStyleOptionViewItem::HasCheckIndicator)) {
+      style->drawControl(QStyle::CE_ItemViewItem, &cell, painter, widget);
+      return;
+    }
+    // QMacStyle paints the native item indicator at the paint device's
+    // origin, whatever the indicator's rectangle, the painter's translation
+    // or clip: in a list only a checkbox in the first column of the first
+    // row showed, and Auto-update in Libraries was blank (mitcad#973). The
+    // cell is painted without it, its text and icon kept beside the
+    // indicator's room, and the indicator is painted here.
     const QRect rect = style->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &cell, widget);
+    QStyleOptionViewItem body(cell);
+    body.features &= ~QStyleOptionViewItem::HasCheckIndicator;
+    const QRect withRoom = style->subElementRect(QStyle::SE_ItemViewItemText, &cell, widget);
+    const QRect without = style->subElementRect(QStyle::SE_ItemViewItemText, &body, widget);
+    body.rect.adjust(withRoom.left() - without.left(), 0, withRoom.right() - without.right(), 0);
+    style->drawPrimitive(QStyle::PE_PanelItemViewItem, &cell, painter, widget);
+    style->drawControl(QStyle::CE_ItemViewItem, &body, painter, widget);
+    if (cell.checkState != Qt::Unchecked) {
+      // The native checked/mixed indicator at the origin of an image of its
+      // own, placed at the indicator's rectangle.
+      QStyleOptionViewItem check(cell);
+      check.rect = QRect(QPoint(0, 0), rect.size());
+      check.state &= ~QStyle::State_HasFocus;
+      check.state |= cell.checkState == Qt::Checked ? QStyle::State_On : QStyle::State_NoChange;
+      const qreal ratio = painter->device() != nullptr ? painter->device()->devicePixelRatioF() : 1.0;
+      QImage image(rect.size() * ratio, QImage::Format_ARGB32_Premultiplied);
+      image.setDevicePixelRatio(ratio);
+      image.fill(Qt::transparent);
+      QPainter indicator(&image);
+      style->drawPrimitive(QStyle::PE_IndicatorItemViewItemCheck, &check, &indicator, widget);
+      indicator.end();
+      painter->drawImage(rect.topLeft(), image);
+      return;
+    }
+    // QMacStyle omits the unchecked item indicator, including its generic
+    // CE_CheckBox drawing on a view (or paints it at the origin): Off gets
+    // the same hit rectangle with a palette-derived outline.
     const bool selected = cell.state.testFlag(QStyle::State_Selected);
     QColor border = cell.palette.color(selected ? QPalette::HighlightedText : QPalette::Text);
     border.setAlphaF(cell.state.testFlag(QStyle::State_Enabled) ? 0.65 : 0.30);

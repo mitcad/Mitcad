@@ -222,7 +222,7 @@ QByteArray indexHtml(const QString& projectName, const std::vector<DesignCard>& 
   QString html;
   html += QStringLiteral("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
                          "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-                         "<meta name=\"generator\" content=\"Mitcad\">\n");
+                         "<meta name=\"generator\" content=\"MitCad\">\n");
   html += QStringLiteral("<title>%1</title>\n<style>\n").arg(escaped(projectName));
   html += QString::fromUtf8(kStyle);
   html += QStringLiteral("</style>\n</head>\n<body>\n<header>\n<h1>%1</h1>\n").arg(escaped(projectName));

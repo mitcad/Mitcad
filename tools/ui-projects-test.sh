@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/projects app/files app/framework/AppSettings.cpp app/framework/FloatingLayout.cpp
+# check-all sources: app/projects app/files app/framework/AppSettings.cpp app/framework/FloatingLayout.cpp app/framework/QuickAccessGroup.cpp
 # check-all sources: core/vcs core/ffi/src/vcs.rs core/ffi/src/remote.rs core/ffi/src/projects.rs tools/cli
 # The Projects panel (mitcad#145) through the real UI, with a bare
 # repository in a folder standing in for the cloud (no network), checked
@@ -242,6 +242,12 @@ ui_expect_new "Projects panel: the open design follows: $SHOP/parts/cog.mitcad -
 expect_git "$SHOP" "log -1 --format=%s" "Move parts/cog.mitcad to cog.mitcad" "a version of its own"
 ui_expect_new "Projects row Shop/cog.mitcad at " "the panel shows it in the project's top" 20
 ui_focus_main
+# A change first: an unchanged design has nothing to save (mitcad#1090).
+ui_step "new component (search)"         ui_command "New Component"
+ui_step "OK (Enter)"                     ui_key Return
+ui_expect_new "New component " "a change to save"
+ui_save_state enabled "the moved design has a change to save"
+ui_mark
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
 ui_expect_new "Saved $SHOP/cog.mitcad" "Save writes the new path" 20
 expect_clean "$SHOP" "git status is clean"

@@ -288,8 +288,8 @@ fn an_image_is_inserted_calibrated_and_changed_as_undo_steps() {
 #[test]
 fn an_image_follows_its_face_and_reads_its_file() {
     let mut doc = block();
-    let name = format!("mitcad-image-{}.bmp", std::process::id());
-    let path = std::env::temp_dir().join(name);
+    let dir = mitcad_model::testing::unique_temp_dir("image");
+    let path = dir.join("mitcad-image-face.bmp");
     std::fs::write(&path, bmp(200, 100)).unwrap();
     let info = query(&doc, json!({"query": "image_info", "path": path}));
     assert_eq!(info["format"], "bmp");
@@ -302,7 +302,7 @@ fn an_image_follows_its_face_and_reads_its_file() {
         json!({"cmd": "insert_image_reference", "path": path, "plane": top,
                "at": [10, 10, 20], "scale": 0.1, "opacity": 1}),
     );
-    std::fs::remove_file(&path).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
     let image = &images(&doc)[0];
     let file_name = image["file_name"].as_str().unwrap();
     assert!(file_name.starts_with("mitcad-image-"), "{file_name}");
@@ -354,7 +354,7 @@ fn images_refuse_what_they_cannot_keep() {
     assert!(error.contains("depth"), "{error}");
     command(&mut doc, insert(json!({"name": "Plan"})));
     let error = refused(&mut doc, insert(json!({"name": "Plan"})));
-    assert_eq!(error, "an image reference 'Plan' exists");
+    assert_eq!(error, "an image reference Plan exists");
     let error = refused(
         &mut doc,
         json!({"cmd": "calibrate_image_reference", "name": "Plan",
@@ -371,7 +371,7 @@ fn images_refuse_what_they_cannot_keep() {
         &mut doc,
         json!({"cmd": "edit_image_reference", "name": "Gone", "opacity": 0.2}),
     );
-    assert_eq!(error, "there is no image reference 'Gone'");
+    assert_eq!(error, "there is no image reference Gone");
 }
 
 #[test]
@@ -415,7 +415,7 @@ fn images_are_saved_with_their_bytes_and_read_back() {
         panic!("a wrong size was read");
     };
     assert!(
-        error.to_string().contains("not the 201 x 100 bmp"),
+        error.to_string().contains("not the 201 × 100 bmp"),
         "{error}"
     );
     let twice = saved.replace("\"Image2\"", "\"Image1\"");
@@ -467,16 +467,16 @@ fn heif_images_are_inserted_upright_saved_and_read_back() {
         panic!("a wrong size was read");
     };
     assert!(
-        error.to_string().contains("not the 4032 x 4032 heif"),
+        error.to_string().contains("not the 4032 × 4032 heif"),
         "{error}"
     );
 
     // A file's header for the panel: no pixel size stated, 96 to the inch.
-    let name = format!("mitcad-image-{}.heic", std::process::id());
-    let path = std::env::temp_dir().join(name);
+    let dir = mitcad_model::testing::unique_temp_dir("image");
+    let path = dir.join("mitcad-image-header.heic");
     std::fs::write(&path, heif(64, 32, false, 8)).unwrap();
     let info = query(&doc, json!({"query": "image_info", "path": path}));
-    std::fs::remove_file(&path).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
     assert_eq!(info["format"], "heif");
     assert_eq!(info["pixels"], json!([64, 32]));
     assert_eq!(info["stated"], false);

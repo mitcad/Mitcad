@@ -8,13 +8,13 @@
 //! bring the work tree up to the remote's versions. Objects, trees, commits
 //! and the counts of versions ahead and behind are read with gix from the
 //! local references, without the network. Signing in is git's: SSH keys and
-//! the SSH agent, or a credential helper for HTTPS. Mitcad never asks for,
+//! the SSH agent, or a credential helper for HTTPS. MitCad never asks for,
 //! keeps or passes passwords or tokens, and refuses URLs that hold them
 //! ([`check_url`]); what git prints is shown and logged with credentials
 //! hidden ([`redact`]).
 //!
 //! - [`ProjectRepo::remote_check`]: whether a remote can be reached, is
-//!   empty, holds a Mitcad project and shares the project's history.
+//!   empty, holds a MitCad project and shares the project's history.
 //! - [`ProjectRepo::remote_set`] and [`ProjectRepo::remote_remove`]: the
 //!   remote (`origin`), the branch's upstream, and `.gitattributes` with
 //!   `merge=binary` for design files recorded as a version.
@@ -310,7 +310,7 @@ pub struct RemoteCheck {
     pub default_branch: Option<String>,
     /// That branch's commit.
     pub head: Option<String>,
-    /// Whether that commit has a Mitcad project at its root; None when
+    /// Whether that commit has a MitCad project at its root; None when
     /// empty.
     pub has_project: Option<bool>,
     /// Whether it shares a version with the project's history; None when
@@ -427,7 +427,7 @@ pub(crate) fn check_name(name: &str) -> Result<(), VcsError> {
         Ok(())
     } else {
         Err(VcsError::Command(format!(
-            "'{name}' is not a remote's name (letters, digits, '.', '_' and '-')"
+            "{name} is not a remote's name (letters, digits, '.', '_' and '-')"
         )))
     }
 }
@@ -810,7 +810,7 @@ impl ProjectRepo {
     }
 
     /// What the remote at `url` holds: reachable, empty, its default branch,
-    /// whether that is a Mitcad project sharing this project's history. A
+    /// whether that is a MitCad project sharing this project's history. A
     /// branch whose commit the project lacks is fetched without a reference
     /// (its objects stay until git's gc, which `git gc --auto` runs when
     /// they add up), so that its history can be read.
@@ -978,14 +978,14 @@ impl ProjectRepo {
             && gix::refs::FullName::try_from(format!("refs/heads/{remote_branch}")).is_ok();
         if !valid {
             return Err(VcsError::Command(format!(
-                "'{remote_branch}' is not a branch's name"
+                "“{remote_branch}” is not a branch's name"
             )));
         }
         let repo = self.fresh()?;
         let Some(url) = remote_url(&repo, name) else {
             return Err(failure(
                 ErrorClass::NoRemote,
-                format!("the project's repository has no remote '{name}'"),
+                format!("the project's repository has no remote {name}"),
             ));
         };
         let before = self.upstream_of(&repo, &current);
@@ -1402,7 +1402,7 @@ pub fn clone_project(
         return Err(failure(
             ErrorClass::NotAProject,
             format!(
-                "{} holds no Mitcad project ({PROJECT_MARKER} at its root)",
+                "{} holds no MitCad project ({PROJECT_MARKER} at its root)",
                 cloned.url
             ),
         ));

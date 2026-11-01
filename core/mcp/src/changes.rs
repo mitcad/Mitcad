@@ -46,7 +46,7 @@ impl TimelineMode {
             "full" => Ok(Self::Full),
             "none" => Ok(Self::None),
             other => Err(format!(
-                "timeline must be changed, full or none, not '{other}'"
+                "timeline must be changed, full or none, not “{other}”"
             )),
         }
     }

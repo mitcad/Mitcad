@@ -22,7 +22,7 @@ fn absolute_executable(path: &str) -> bool {
                 && matches!(bytes[2], b'/' | b'\\')))
 }
 
-/// Adds only the local Mitcad entry, preserving other settings and comments.
+/// Adds only the local MitCad entry, preserving other settings and comments.
 /// The caller owns path discovery, policy checks, explicit conflict consent,
 /// backup creation, concurrent-edit detection and atomic file replacement.
 pub fn plan_codex_config(current: &str, bridge: &str, replace_existing: bool) -> Value {
@@ -35,7 +35,7 @@ pub fn plan_codex_config(current: &str, bridge: &str, replace_existing: bool) ->
     if !absolute_executable(bridge) {
         return failure(
             "invalid",
-            "The installed Mitcad bridge needs an absolute executable path.",
+            "The installed MitCad bridge needs an absolute executable path.",
         );
     }
     let Ok(mut document) = current.parse::<DocumentMut>() else {
@@ -57,13 +57,13 @@ pub fn plan_codex_config(current: &str, bridge: &str, replace_existing: bool) ->
                 {
                     return failure(
                         "invalid",
-                        "The existing Mitcad enabled setting must be true or false.",
+                        "The existing MitCad enabled setting must be true or false.",
                     );
                 }
                 if entry.get("enabled").and_then(Item::as_bool) == Some(false) {
                     return failure(
                         "conflict",
-                        "Mitcad is disabled in the assistant settings. Enable it there before setup.",
+                        "MitCad is disabled in the assistant settings. Enable it there before setup.",
                     );
                 }
                 let expected_args =
@@ -89,7 +89,7 @@ pub fn plan_codex_config(current: &str, bridge: &str, replace_existing: bool) ->
             if !replace_existing {
                 return failure(
                     "conflict",
-                    "The existing Mitcad entry uses different settings. Confirm replacement to continue.",
+                    "The existing MitCad entry uses different settings. Confirm replacement to continue.",
                 );
             }
         }
@@ -138,11 +138,11 @@ pub fn plan_codex_config(current: &str, bridge: &str, replace_existing: bool) ->
 }
 
 /// Check a supported client's configuration write before reporting setup success.
-/// Differences inside its new Mitcad entry are allowed; unrelated text is not.
+/// Differences inside its new MitCad entry are allowed; unrelated text is not.
 pub fn verify_codex_config(before: &str, after: &str, bridge: &str) -> Value {
     let target = plan_codex_config(after, bridge, false);
     if target["status"] != "unchanged" {
-        return json!({"valid": false, "error": "The assistant did not retain the expected local Mitcad configuration."});
+        return json!({"valid": false, "error": "The assistant did not retain the expected local MitCad configuration."});
     }
     let unrelated = |source: &str| -> Option<String> {
         if source.len() > MAX_CONFIG_BYTES {

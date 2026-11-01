@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! A FreeCAD sketch's geometry and constraints as the entities,
-//! constraints and dimensions of a Mitcad sketch definition (`commands.md`,
+//! constraints and dimensions of a MitCad sketch definition (`commands.md`,
 //! *sketch*); the plane, the external geometry and the checks are
 //! [`super::sketches`]'.
 //!
 //! - Points: FreeCAD's curves own their end and centre points, which
-//!   Coincident constraints join; Mitcad's curves share point entities. The
+//!   Coincident constraints join; MitCad's curves share point entities. The
 //!   points (geometry, position) that coincide are merged (union-find) into
-//!   one Mitcad point each, and the Coincident constraints are left out.
+//!   one MitCad point each, and the Coincident constraints are left out.
 //!   Ends joined by end-to-end tangency or perpendicularity merge too. A
 //!   merge that would join two points of one line, arc or ellipse is left
 //!   out instead.
@@ -19,13 +19,13 @@
 //!   and blocked geometry keep their flags.
 //! - Internal geometry: a B-spline's control point circles are its control
 //!   points (constraints on their centres go to them; their radii and
-//!   weights are not dimensions in Mitcad), its end knots its ends; an
+//!   weights are not dimensions in MitCad), its end knots its ends; an
 //!   ellipse's axis lines stay construction lines held on the ellipse
 //!   (an end at the major point, the centre at their middles, the minor
 //!   one at right angles with its end on the ellipse), so that their
 //!   constraints still apply. Foci, interior knots and the parts of
 //!   hyperbolas and parabolas are left out.
-//! - Constraints and dimensions by type; what Mitcad cannot express is
+//! - Constraints and dimensions by type; what MitCad cannot express is
 //!   left out and listed (the sketch is then partial). Values: FreeCAD's
 //!   signed horizontal and vertical distances become distances between the
 //!   points in the order that makes them positive, angles the angle between
@@ -42,7 +42,7 @@ use serde_json::{Value, json};
 
 use super::report::DimensionSource;
 
-/// A Mitcad curve's kind, for what the constraints accept.
+/// A MitCad curve's kind, for what the constraints accept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Kind {
     Line,
@@ -58,7 +58,7 @@ impl Kind {
         matches!(self, Kind::Circle | Kind::Arc)
     }
 
-    /// The kinds Mitcad's tangency joins freely (splines only at a shared
+    /// The kinds MitCad's tangency joins freely (splines only at a shared
     /// end or along their inside; ellipses not at all).
     fn simple(self) -> bool {
         matches!(self, Kind::Line | Kind::Circle | Kind::Arc)
@@ -94,7 +94,7 @@ pub(super) struct Translated {
     /// `sources` lists the driving ones: their parameters, where the
     /// document has them, become the dimensions' references (mitcad#250).
     pub references: Vec<DimensionSource>,
-    /// The Mitcad curve of each FreeCAD geometry made (by geometry index),
+    /// The MitCad curve of each FreeCAD geometry made (by geometry index),
     /// and the point of each point geometry: what the history's features
     /// refer to (revolve axes, holes, paths).
     pub curves: Vec<(i32, u32)>,
@@ -104,7 +104,7 @@ pub(super) struct Translated {
 }
 
 /// A point of a FreeCAD geometry: at a position, a B-spline's pole, an
-/// ellipse's major point (Mitcad's), the root point.
+/// ellipse's major point (MitCad's), the root point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Vertex {
     At(i32, PointPos),
@@ -339,7 +339,7 @@ impl Translator<'_> {
                             spline: parent,
                             index: i,
                         },
-                        _ => Role::Dropped("a control point of a B-spline Mitcad clamps"),
+                        _ => Role::Dropped("a control point of a B-spline MitCad clamps"),
                     }
                 }
                 (internal::BSPLINE_KNOT_POINT, Curve::BSpline(b)) => {
@@ -363,7 +363,7 @@ impl Translator<'_> {
         let sketch = self.sketch;
         for (g, geometry) in sketch.geometry.iter().enumerate() {
             if self.roles[g] == Role::Normal && matches!(geometry.curve, Curve::Other { .. }) {
-                self.roles[g] = Role::Dropped("a kind of curve Mitcad has not");
+                self.roles[g] = Role::Dropped("a kind of curve MitCad has not");
             }
             let Role::Dropped(why) = self.roles[g] else {
                 continue;
@@ -608,7 +608,7 @@ impl Translator<'_> {
         self.out.entities.push(e);
     }
 
-    /// A Mitcad point for each class of vertices: an external point when
+    /// A MitCad point for each class of vertices: an external point when
     /// the class has one, else a new one.
     fn points(&mut self) {
         for k in 0..self.keys.len() {
@@ -661,7 +661,7 @@ impl Translator<'_> {
         }
     }
 
-    /// The Mitcad point of a vertex.
+    /// The MitCad point of a vertex.
     fn point_of(&mut self, v: Vertex) -> Option<u32> {
         if v == Vertex::Root && !self.index.contains_key(&v) {
             return Some(self.root_point());
@@ -1207,7 +1207,7 @@ impl Translator<'_> {
                     self.push(json!({"type": "equal", "a": c(a), "b": c(b)}));
                 }
                 (Found::Missing(why), _) | (_, Found::Missing(why)) => return Err(why),
-                _ => return Err("equal sizes of these curves are not in Mitcad".to_owned()),
+                _ => return Err("equal sizes of these curves are not in MitCad".to_owned()),
             },
             T::PointOnObject => {
                 let q = self.point(first)?;
@@ -1255,9 +1255,9 @@ impl Translator<'_> {
                 }
             }
             T::Block => {}
-            T::SnellsLaw => return Err("Mitcad has no refraction constraint".to_owned()),
+            T::SnellsLaw => return Err("MitCad has no refraction constraint".to_owned()),
             T::Group | T::Text | T::Other(_) => {
-                return Err("a kind of constraint Mitcad has not".to_owned());
+                return Err("a kind of constraint MitCad has not".to_owned());
             }
         }
         Ok(())
@@ -1293,7 +1293,7 @@ impl Translator<'_> {
             || (ka == Kind::Spline && kb != Kind::Ellipse && kb != Kind::EllipticalArc)
             || (kb == Kind::Spline && ka != Kind::Ellipse && ka != Kind::EllipticalArc);
         if !allowed {
-            return Err("Mitcad's tangency does not take ellipses".to_owned());
+            return Err("MitCad's tangency does not take ellipses".to_owned());
         }
         self.push(json!({"type": "tangent", "a": c(ia), "b": c(ib)}));
         Ok(())
@@ -1317,10 +1317,10 @@ impl Translator<'_> {
                 } else {
                     (ib, (ga, ia))
                 };
-                let center = self.center_of(g, round).ok_or("the circle has no centre")?;
+                let center = self.center_of(g, round).ok_or("the circle has no center")?;
                 self.on_curve(center, line)?;
             }
-            _ => return Err("Mitcad's right angles are between lines".to_owned()),
+            _ => return Err("MitCad's right angles are between lines".to_owned()),
         }
         Ok(())
     }
@@ -1382,9 +1382,9 @@ impl Translator<'_> {
         gap_side(con.value, reach - r, r - reach, reach.max(r))?;
         let center = self
             .center_of(geo, round)
-            .ok_or("the circle has no centre")?;
+            .ok_or("the circle has no center")?;
         if center == q || reach <= 1e-9 {
-            return Err("a point at the circle's centre".to_owned());
+            return Err("a point at the circle's center".to_owned());
         }
         let helper = self.helper_circle(center, reach);
         self.on_curve(q, helper)?;
@@ -1398,7 +1398,7 @@ impl Translator<'_> {
     }
 
     /// A line's distance from a circle or an arc (FreeCAD 1.0): the gap
-    /// from the curve to a line outside it is Mitcad's tangent distance;
+    /// from the curve to a line outside it is MitCad's tangent distance;
     /// to a line across it, a construction circle about the same centre
     /// touching the line, its radius `value` less than the curve's.
     fn line_round_distance(
@@ -1433,9 +1433,9 @@ impl Translator<'_> {
         }
         let center = self
             .center_of(geo, round)
-            .ok_or("the circle has no centre")?;
+            .ok_or("the circle has no center")?;
         if h <= 1e-9 {
-            return Err("a line through the circle's centre".to_owned());
+            return Err("a line through the circle's center".to_owned());
         }
         let helper = self.helper_circle(center, h);
         self.tangent((helper, Kind::Circle), (line, Kind::Line))?;
@@ -1490,7 +1490,7 @@ impl Translator<'_> {
         };
         let center = self
             .center_of(around.0, around.1)
-            .ok_or("the circle has no centre")?;
+            .ok_or("the circle has no center")?;
         let helper = self.helper_circle(center, radius);
         self.tangent((helper, Kind::Circle), (to.1, Kind::Circle))?;
         self.dimension(
@@ -1627,7 +1627,7 @@ impl Translator<'_> {
         if a == b {
             return Err("between a line and itself".to_owned());
         }
-        // FreeCAD measures from the given ends along the lines; Mitcad
+        // FreeCAD measures from the given ends along the lines; MitCad
         // between their directions.
         let sign = |r: GeoRef| if r.pos == PointPos::End { -1.0 } else { 1.0 };
         let flip = if third.is_undef() {

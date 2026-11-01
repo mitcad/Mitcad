@@ -4,7 +4,7 @@
 # Native dialog sizing contract and macOS button order (mitcad#812, #817),
 # in light and dark appearance: synthetic presenters, then Parameters, New
 # Project, Settings > Navigation (with its section icons, mitcad#971),
-# Insert from Library, Render Image and Library Parts at normal and narrow
+# Insert from Library, Render Image and Library Components at normal and narrow
 # sizes, with real pointer and key input.
 # Usage: tools/ui-macos-native-dialog-layout-test.sh <app> [out directory]
 # Requires MITCAD_MACOS_NATIVE_UI=ON and a logged-in macOS window server.

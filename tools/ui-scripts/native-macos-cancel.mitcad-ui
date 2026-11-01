@@ -7,6 +7,13 @@ expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
 expect-ever 'View area'
 sleep 800
 
+# The view shows the origin only as its light bulb does (mitcad#1030): on
+# for the click on its XY plane below.
+mark
+native-expand native.modelTree
+native-click native.model.eye.origin
+expect-log 'Visibility Root/Origin: shown'
+
 # Establish a persisted box whose volume can expose stale command state.
 mark
 native-action solid.box

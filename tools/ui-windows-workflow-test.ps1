@@ -13,8 +13,9 @@
 #      brings it back, and the new session takes over its files.
 #   6. Save As (Ctrl+Shift+S) through Qt's file dialog, which removes the
 #      autosaved files; New (Ctrl+N); Open (Ctrl+O) the file again: the
-#      body recomputed with the saved volume (Physical Properties), so the
-#      recovered design was the filleted one.
+#      body recomputed with the saved volume (Physical Properties, which
+#      also shows its Bounding Box and face, edge and vertex counts,
+#      mitcad#1095), so the recovered design was the filleted one.
 #   7. Export a STEP file through the Export dialog, and a web page (mitcad#423:
 #      one .html file with the design's data, its size in the log); New;
 #      Import the STEP file: a base feature of the same volume; undo (Ctrl+Z).
@@ -230,10 +231,16 @@ Ui-ExpectNew "Opened $workLogged/block.mitcad" 'opened through the dialog'
 Ui-ExpectNew 'Bodies shown: F2.b0' 'the body recomputed and shown'
 Ui-Mark
 Ui-Step 'physical properties (F8)'       { Ui-Key 'F8' }
-Ui-ExpectNew 'Physical properties: Body1 volume' 'the properties dialog opened'
-$reopened = [double]::Parse((Ui-LastMatch 'Physical properties: Body1 volume ([0-9.]+)'), $invariant)
+Ui-ExpectNew 'Physical properties: Body1 in Component1:1 volume' 'the properties dialog opened'
+$reopened = [double]::Parse((Ui-LastMatch 'Physical properties: Body1 in Component1:1 volume ([0-9.]+)'), $invariant)
 if ([Math]::Abs($reopened - $filleted) -gt 1e-3) { Ui-Fail "reopened volume $reopened, saved $filleted" }
 Write-Host "ok   the reopened body has the saved volume: $reopened mm3"
+# The window's Bounding Box along the design's axes and the counts
+# (mitcad#1095): the fillet keeps the block's 40 x 25 x 20 mm.
+Ui-ExpectNew 'Physical properties window "Properties": Body1 in Component1:1: Bounding Box 40 x 25 x 20 mm, Faces / Edges / Vertices ' 'the window shows the bounding box'
+$counts = Ui-LastMatch 'Physical properties window "Properties": Body1 in Component1:1: [^;]*Faces / Edges / Vertices ([0-9]+ / [0-9]+ / [0-9]+);'
+if (-not $counts -or ($counts -split ' / ' | Where-Object { [int]$_ -le 0 })) { Ui-Fail "the window's face, edge and vertex counts: '$counts'" }
+Write-Host "ok   the window shows the faces, edges and vertices: $counts"
 Ui-Step 'close the dialog (Esc)'         { Ui-FocusDialog '^Properties$'; Ui-Key 'Escape'; Ui-FocusMain }
 
 Write-Host '--- Export and import STEP'
@@ -382,9 +389,9 @@ Remove-Item -Force $slicerArgs
 Ui-Mark
 Ui-Step '3D print (Shift+F9)'            { Ui-Key 'shift+F9' }
 Ui-ExpectNew '3D Print panel: 1 visible: Body1; format stl' 'the panel, STL remembered'
-Ui-ExpectNew 'Panel 3D Print input format at ' 'the panel laid out'
-Ui-Step 'format 3MF (wheel)'             { Ui-WheelLogged 'Panel 3D Print input format' -1 }
-Ui-ExpectNew '3D Print: Format = 3MF' 'the format 3MF chosen'
+Ui-ExpectNew 'Panel Send to Slicer input format at ' 'the panel laid out'
+Ui-Step 'format 3MF (wheel)'             { Ui-WheelLogged 'Panel Send to Slicer input format' -1 }
+Ui-ExpectNew 'Send to Slicer: Format = 3MF' 'the format 3MF chosen'
 Ui-Step 'send (Enter)'                   { Ui-Key 'Return' }
 Ui-ExpectNew '3D Print: 1 bodies as 3mf (high) to ' 'the body written as 3MF'
 $threeMf = Join-Path $printFolder 'block.3mf'
@@ -519,7 +526,8 @@ Ui-Mark
 Ui-Step 'helix (Shift+F7)'               { Ui-Key 'shift+F7' }
 Ui-ExpectNew 'Command Helix started' 'Helix started'
 Ui-ExpectNew 'Helix Profiles: 1 profile [profile r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]} of F6]' 'the square taken'
-Ui-ExpectNew 'Datum z at' 'the axis input takes the origin axes'
+# The origin's axes in the view as its light bulb shows them (mitcad#1030).
+Ui-ShowOrigin
 Ui-Step 'pick the Z axis'                { Ui-ClickLogged 'Datum z' }
 Ui-ExpectNew 'Helix Axis: 1 axis [axis z]' 'Z picked'
 Ui-Step 'pitch 5'                        { Ui-TypeIn 'Panel Helix input pitch' '5' }
@@ -772,18 +780,18 @@ Ui-Mark
 Ui-Step '3D print (Shift+F9)'            { Ui-Key 'shift+F9' }
 Ui-ExpectNew '3D Print: left out Surface (a surface body)' 'the surface body left out'
 Ui-ExpectNew '3D Print panel: 2 visible: Plate, Cube; format 3mf' 'the panel: the plate and the cube, 3MF remembered'
-Ui-ExpectNew '3D Print Bodies: 2 bodies [body F1.b0; body F2.b0]' 'both solids in Bodies'
+Ui-ExpectNew 'Send to Slicer Bodies: 2 bodies [body F1.b0; body F2.b0]' 'both solids in Bodies'
 Ui-ExpectNew 'View body highlights: F1.b0, F2.b0' 'both highlighted'
 Ui-Mark
 Ui-Step 'click the cube'                 { Ui-ClickLogged 'Body F2.b0' }
-Ui-ExpectNew '3D Print Bodies: 1 body [body F1.b0]' 'the click took the cube out'
+Ui-ExpectNew 'Send to Slicer Bodies: 1 body [body F1.b0]' 'the click took the cube out'
 Ui-ExpectNew 'View body highlights: F1.b0' 'and its highlight'
 Ui-Mark
 Ui-Step 'click the surface'              { Ui-ClickLogged 'Body F6.b0' }
 Start-Sleep -Milliseconds 500
 $since = @(Ui-LogLines)
 $since = $since[$script:UiMark..($since.Count - 1)]
-if ($since | Where-Object { $_.Contains('3D Print Bodies:') -or $_.Contains('View body highlights:') }) {
+if ($since | Where-Object { $_.Contains('Send to Slicer Bodies:') -or $_.Contains('View body highlights:') }) {
   Ui-Fail "the click on the surface body changed Bodies: $($since -join ' / ')"
 }
 Write-Host 'ok   the surface body cannot be picked'

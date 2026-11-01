@@ -31,10 +31,10 @@ fn init_names_the_bridge_and_the_model() {
     let failed = feed(
         &mut stream,
         json!({"type": "system", "subtype": "init", "mcp_servers": [{"name": "mitcad", "status": "failed"}],
-               "mcp_server_errors": [{"name": "mitcad", "error": "No running Mitcad instance"}]}),
+               "mcp_server_errors": [{"name": "mitcad", "error": "No running MitCad instance"}]}),
     );
     assert_eq!(failed[0]["bridge"], "failed");
-    assert_eq!(failed[0]["bridge_error"], "No running Mitcad instance");
+    assert_eq!(failed[0]["bridge_error"], "No running MitCad instance");
     let by_name = feed(
         &mut stream,
         json!({"type": "system", "subtype": "init", "mcp_servers": [{"name": "mitcad", "status": "failed"}],

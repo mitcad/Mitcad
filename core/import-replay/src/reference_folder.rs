@@ -535,9 +535,7 @@ mod tests {
 
     /// The test assembly and its reference folder in a new folder.
     fn write_files(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("mitcad-references-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = mitcad_model::testing::unique_temp_path(&format!("references-{name}"));
         for (path, data) in t::files() {
             let p = dir.join(path);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -597,9 +595,7 @@ mod tests {
 
     #[test]
     fn package_documents_are_found_by_its_description_never_the_root() {
-        let dir =
-            std::env::temp_dir().join(format!("mitcad-references-package-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = mitcad_model::testing::unique_temp_dir("references-package");
         let path = dir.join("Package.f3z");
         let labels: Vec<String> = t::PACKAGE_ENTRIES
             .iter()

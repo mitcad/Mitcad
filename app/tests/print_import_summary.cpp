@@ -37,7 +37,7 @@ QJsonObject item(const QString& kind, const QString& id, const QString& name) {
 }
 
 const QString kProblem = QStringLiteral(
-    "overhang_threshold_participating_cooling: Bambu Studio: '95%' is no known value of "
+    "overhang_threshold_participating_cooling: Bambu Studio: “95%” is no known value of "
     "overhang_threshold_participating_cooling");
 
 QJsonObject report(int problems) {
@@ -141,12 +141,12 @@ int printImportSummaryTests() {
   QJsonObject withKeys = design;
   QJsonObject namedReport = report(2);
   QJsonArray namedProblems = namedReport.value(QStringLiteral("problems")).toArray();
-  namedProblems.append(QStringLiteral("mystery_key: Bambu Studio: 'x' is no number"));
+  namedProblems.append(QStringLiteral("mystery_key: Bambu Studio: “x” is no number"));
   namedReport.insert(QStringLiteral("problems"), namedProblems);
   withKeys.insert(QStringLiteral("report"), namedReport);
   const auto plain = printImportSummary(QStringLiteral("mount.3mf"), QStringLiteral("design"), withKeys, &keys);
   CHECK(plain.problems.size() == 1);
-  CHECK(plain.problems.value(0) == QStringLiteral("Overhang cooling threshold: Bambu Studio: '95%' is no known "
+  CHECK(plain.problems.value(0) == QStringLiteral("Overhang cooling threshold: Bambu Studio: “95%” is no known "
                                                   "value of Overhang cooling threshold (2 times)"));
   CHECK(!plain.details.contains(QStringLiteral("overhang_threshold")));
   CHECK(!plain.details.contains(QStringLiteral("mystery_key")));
@@ -202,9 +202,9 @@ int printImportSummaryTests() {
   // Distinct problems in the order first seen, a count only when repeated;
   // a percent sign in a problem stays as it is.
   const QStringList distinct = distinctProblems(
-      {QStringLiteral("a: '15%2' is no number"), QStringLiteral("b"), QStringLiteral("a: '15%2' is no number"),
-       QStringLiteral("c"), QStringLiteral("b"), QStringLiteral("a: '15%2' is no number")});
-  CHECK(distinct == QStringList({QStringLiteral("a: '15%2' is no number (3 times)"),
+      {QStringLiteral("a: “15%2” is no number"), QStringLiteral("b"), QStringLiteral("a: “15%2” is no number"),
+       QStringLiteral("c"), QStringLiteral("b"), QStringLiteral("a: “15%2” is no number")});
+  CHECK(distinct == QStringList({QStringLiteral("a: “15%2” is no number (3 times)"),
                                  QStringLiteral("b (2 times)"), QStringLiteral("c")}));
   CHECK(distinctProblems({}).isEmpty());
   return failures;

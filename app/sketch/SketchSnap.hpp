@@ -97,4 +97,45 @@ QString axesAt(const SketchModel& model, const Snap& snap);
 std::optional<QJsonObject> axisHold(const QString& point, const Snap& snap,
                                     const std::function<QString(const QString&)>& entity);
 
+// --- What a drawing tool adds automatically (mitcad#1024). The tools add
+// these through SketchOp::addAuto, which the model accepts only when the
+// geometry already satisfies them, the others do not imply them and the
+// solve moves nothing (`sketch.add_constraint` with `auto`).
+
+// "horizontal" or "vertical" when the line from `a` to `b` lies exactly
+// along that axis (within 1e-9 mm), else empty.
+QString axisAlignment(const V2& a, const V2& b);
+
+// The constraints that keep `point` at the quadrant of a circle, arc or
+// ellipse where `snap` put it: coincident with the curve, and level with
+// its centre point (`horizontal_points`) at the left and right quadrants
+// or plumb with it (`vertical_points`) at the top and bottom ones, as the
+// snap said (an ellipse turned off the axes: the coincident only). Empty
+// for any other snap.
+std::vector<QJsonObject> quadrantHold(const SketchModel& model, const QString& point, const Snap& snap);
+
+// Where a line from `from` touches a circle or arc of the sketch, the
+// nearest such point within `tolerance` mm of `cursor`: an
+// OnCurve snap onto that curve at the touching point, for the line tool's
+// tangent inference. None when no touching point is that near; a circle
+// `from` lies on or inside has none. `skip`: curves left out.
+std::optional<Snap> tangentTouch(const SketchModel& model, const V2& from, const V2& cursor, double tolerance,
+                                 const QSet<QString>& skip = QSet<QString>());
+
+// The tangents the line or arc `curve` already satisfies at its ends:
+// where an end lies on a circle or arc of the sketch (or on a line, for an
+// arc) and the two run the same way there (`{"type": "tangent", "a":
+// other, "b": curve}`). Curves already tangent to it, the sketch's axes
+// and the curve's own centre are left out.
+std::vector<QJsonObject> tangentCandidates(const SketchModel& model, const QString& curve);
+
+// A constraint for the log: its type and entities ("tangent c3 c5",
+// "coincident p7 on c2").
+QString constraintText(const QJsonObject& constraint);
+
+// Why the model refused an automatic constraint, from its message: what
+// follows "auto constraint k7: " (`redundant`, `conflict: …`, `moves p3
+// by 1.2e-02 mm`), else the whole message.
+QString autoConstraintReason(const QString& error);
+
 } // namespace mitcad::sketch

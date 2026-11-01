@@ -474,7 +474,7 @@ impl<K: Kernel> Importer<'_, K> {
         }
         let name = if style.name.trim().is_empty() {
             format!(
-                "IFC colour {:.0} {:.0} {:.0}",
+                "IFC color {:.0} {:.0} {:.0}",
                 style.color[0] * 255.0,
                 style.color[1] * 255.0,
                 style.color[2] * 255.0
@@ -1039,7 +1039,7 @@ impl<K: Kernel> Importer<'_, K> {
                 None if line.occurrences.is_empty() => {
                     let (component, _) = self.component_of(p.id);
                     let note = format!(
-                        "{} {} '{}' ({}) not imported from the IFC file: {}",
+                        "{} {} {} ({}) not imported from the IFC file: {}",
                         p.kind,
                         p.global_id,
                         p.name,

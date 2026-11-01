@@ -94,7 +94,7 @@ const char* const kUsage = R"(usage:
                         [--accept-deviations all|none|<index>,...]
                         [--own-start-time-scale <factor>]
       Imports an .f3d or .f3z design with its timeline: parameters,
-      sketches and features replayed as Mitcad features, checked against
+      sketches and features replayed as MitCad features, checked against
       the file's ASM history; an item that cannot be replayed becomes a
       base feature with the file's bodies after it. Prints the import report
       (per item: parametric, partial, fallback or skipped, and the final
@@ -174,7 +174,7 @@ const char* const kUsage = R"(usage:
       bodies, those that are not translated as the bodies of their history
       state (as import-f3d does); --bodies-only imports the bodies stored in
       the file as base features, one per body. The part's length unit and,
-      when Mitcad's library has it, its material apply. Prints the import
+      when MitCad's library has it, its material apply. Prints the import
       report (the features with their outcomes; each body: solid or sheet,
       validity, volume, area; the part number, material and units; the
       parameters and expressions) and the document report; --report writes
@@ -248,7 +248,7 @@ const char* const kUsage = R"(usage:
       Imports a SolidCraft design (any file format version, plain JSON or
       its container) with its history: parameters, sketches with their
       constraints and dimensions, features, components, occurrences and
-      joints, editable; features without a Mitcad counterpart are named in
+      joints, editable; features without a MitCad counterpart are named in
       the report and hold their place as suppressed placeholders. Prints
       the import report (per feature: parametric, partial, unmapped or
       failed, with the reason; the sketches' constraint counts; the
@@ -340,7 +340,7 @@ const char* const kUsage = R"(usage:
 )"
                           // MSVC takes at most 16 KiB in one literal (C2026).
                           R"(  mitcad-cli project init <folder> [--author "Name <email>"] [--no-history]
-      Makes a folder a Mitcad project: writes .mitcad/project.json and the
+      Makes a folder a MitCad project: writes .mitcad/project.json and the
       recommended .gitattributes and .gitignore lines, makes the folder a
       git repository (unless it is the root of one) and records these files
       as the first version, by --author or by git's configured author
@@ -389,7 +389,7 @@ const char* const kUsage = R"(usage:
       password or token: git signs in with SSH keys (and the SSH agent) or a
       credential helper (Git Credential Manager).
   mitcad-cli remote check <folder> <url> [--json]
-      What a remote holds: reachable, empty, a Mitcad project, a history in
+      What a remote holds: reachable, empty, a MitCad project, a history in
       common with the project.
   mitcad-cli remote show <folder> [--json]
       The git program, the project's remote and branch, the versions to push

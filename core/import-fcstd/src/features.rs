@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! PartDesign features as Mitcad definitions (the plan's feature table,
+//! PartDesign features as MitCad definitions (the plan's feature table,
 //! `commands.md` *FreeCAD import*): each feature's candidates, tried in
 //! turn and checked against FreeCAD's stored shape ([`super::history`]).
 //!
@@ -27,14 +27,16 @@
 //!   set of every edge of the body (`all_edges`, taken when the feature is
 //!   computed, mitcad#793); a chamfer's first distance on either face is
 //!   tried.
-//! - Hole → `hole` at the profile sketch's circles' centres: depth or
+//! - Hole → `hole` at the profile sketch's circles' centres (of a profile
+//!   of a feature's circular edges, the circles of the sketch they came
+//!   from, mitcad#1087): depth or
 //!   through all, flat or angled point, counterbore, countersink,
 //!   counterdrill, tapered; an ISO metric, Unified, Whitworth or NPT thread
 //!   is a `thread` on the walls (the hole has FreeCAD's diameter), a
-//!   modelled one (ISO metric or Unified) cut as Mitcad cuts threads.
+//!   modelled one (ISO metric or Unified) cut as MitCad cuts threads.
 //! - Mirrored, LinearPattern, PolarPattern → `mirror`,
 //!   `rectangular_pattern`, `circular_pattern` of the original features'
-//!   Mitcad features (or of the Body's bodies, `TransformMode` whole
+//!   MitCad features (or of the Body's bodies, `TransformMode` whole
 //!   shape, mitcad#1004: the copies joined to the bodies they touch, of a
 //!   Body of several bodies to any of them, `combine_any`, mitcad#1006);
 //!   MultiTransform → those of
@@ -71,11 +73,11 @@ use std::borrow::Cow;
 use mitcad_freecad::sketch::{self as fc, Curve};
 use mitcad_freecad::{LinkRef, Object, Value as FcValue};
 use mitcad_model::sketch::geometry::Curve2;
-use mitcad_model::{BodyUid, ComponentUid, Kernel, SketchFrame};
+use mitcad_model::{BodyUid, ComponentUid, Curve3, ElementKind, Kernel, SketchFrame};
 use serde_json::{Value, json};
 
 use super::Importer;
-use super::elements::sub_name;
+use super::elements::{SAME_GEOMETRY, element_index, sub_name};
 use super::history::{Candidate, SketchMade, Target};
 use super::params::{Kind, Q};
 use super::profiles::Swept;
@@ -585,7 +587,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 }
                 // A negative length of two sides (mitcad#955): FreeCAD's
                 // side then ends on the other side's side, the solid between
-                // the two ends (Mitcad's signed sides; a side through all or
+                // the two ends (MitCad's signed sides; a side through all or
                 // up to an object cut off there). That reading first, then
                 // each side its own way.
                 if negative_side && def["extent"]["type"] == "two_sides" {
@@ -700,7 +702,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
     /// moved by the offset) and mirrors that side across the profile's
     /// plane. Up to a planar face parallel to the profile that is two
     /// sides: up to the face, and as far the other way (a distance, which
-    /// does not follow the face). Mitcad's extrusions have no mirrored
+    /// does not follow the face). MitCad's extrusions have no mirrored
     /// side, so other objects are not translated.
     fn symmetric_up_to(
         &mut self,
@@ -974,7 +976,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
         let found = match self.plane_ref(link, target.place.component) {
             Ok(found) => found,
-            // A planar face Mitcad's body does not have as one face (FreeCAD
+            // A planar face MitCad's body does not have as one face (FreeCAD
             // split or merged it otherwise, mitcad#955): its plane, as
             // FreeCAD takes the face's surface without its limits where the
             // profile reaches past them. Fixed: it does not follow the body.
@@ -1105,7 +1107,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         if groove && kind != "Angle" {
             extents.extend(by_angle);
         }
-        // Up to an object Mitcad turns the positive way about the axis:
+        // Up to an object MitCad turns the positive way about the axis:
         // FreeCAD's axis (`Base`, `Axis`) both ways too.
         let mut axes = vec![axis];
         if kind.starts_with("UpTo")
@@ -1148,7 +1150,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
     /// edit upstream adds are rounded too. An edge FreeCAD merged is named
     /// by the faces along it where it can ([`super::elements`]).
     ///
-    /// FreeCAD's Body may be several solids, each a Mitcad body here
+    /// FreeCAD's Body may be several solids, each a MitCad body here
     /// (mitcad#997): the edges and faces are grouped by the body they are
     /// on, in the order the link names them, one dress-up per body (with
     /// `UseAllEdges`, one per body of the Body).
@@ -1263,6 +1265,133 @@ impl<K: Kernel> Importer<'_, '_, K> {
 
     // Hole.
 
+    /// A hole's profile of circular edges of a body (`Pad.Edge44`: FreeCAD
+    /// 1.x drills at a feature's circles, mitcad#1087): the imported
+    /// sketch whose circles or arcs those edges are (the same centre,
+    /// radius and plane, to [`SAME_GEOMETRY`]), the object's own profile
+    /// sketch first, and those curves as the hole's points, so that the
+    /// hole follows the sketch. All the edges must be in one sketch.
+    fn hole_edge_points(
+        &mut self,
+        link: &LinkRef,
+        component: ComponentUid,
+    ) -> Result<(SketchMade, Vec<String>), String> {
+        if link.subs.is_empty() {
+            return Err(format!(
+                "a hole's profile of the whole {} (not a sketch) is not translated",
+                link.object
+            ));
+        }
+        // Each edge's circle: its centre, axis and radius.
+        let mut circles: Vec<([f64; 3], [f64; 3], f64)> = Vec::new();
+        for sub in &link.subs {
+            let name = sub_name(sub);
+            let index = element_index(name, "Edge").ok_or_else(|| {
+                format!(
+                    "a hole's profile of {}.{name} (not an edge) is not translated",
+                    link.object
+                )
+            })?;
+            let curves = self
+                .stored_element(&link.object, ElementKind::Edge, index, component)
+                .ok_or_else(|| format!("{}.{name}: not in its stored shape", link.object))?;
+            match curves.as_slice() {
+                [
+                    Curve3::Conic {
+                        center,
+                        normal,
+                        major,
+                        minor,
+                        ..
+                    },
+                ] if (major - minor).abs() <= SAME_GEOMETRY * major.max(1.0)
+                    && let Some(axis) = unit(*normal) =>
+                {
+                    circles.push((*center, axis, *major));
+                }
+                _ => {
+                    return Err(format!(
+                        "a hole's profile of {}.{name} (not a circle or arc) is not translated",
+                        link.object
+                    ));
+                }
+            }
+        }
+        // The sketches to look in: the object's profile sketch first, then
+        // the component's other imported sketches by name.
+        let own = self.sources[0]
+            .object(&link.object)
+            .and_then(|o| o.link("Profile"))
+            .map(|l| l.object.clone());
+        let mut names: Vec<String> = self
+            .replay
+            .sketches
+            .iter()
+            .filter(|(_, s)| s.component == component)
+            .map(|(n, _)| n.clone())
+            .collect();
+        names.sort();
+        if let Some(own) = own
+            && let Some(i) = names.iter().position(|n| *n == own)
+        {
+            let first = names.remove(i);
+            names.insert(0, first);
+        }
+        for name in names {
+            let sketch = self.replay.sketches[&name].clone();
+            let Some(output) = self.doc.sketch_output(sketch.uid) else {
+                continue;
+            };
+            let normal = sketch.frame.normal();
+            // The sketch's own curves in FreeCAD's order, then its
+            // projected external ones.
+            let mut own: Vec<(&i32, &u32)> = sketch.curves.iter().collect();
+            own.sort();
+            let mut ids: Vec<u32> = own.into_iter().map(|(_, id)| *id).collect();
+            let mut external: Vec<(&usize, &u32)> = sketch.externals.iter().collect();
+            external.sort();
+            ids.extend(external.into_iter().map(|(_, id)| *id));
+            let mut found = Vec::new();
+            for (center, axis, radius) in &circles {
+                if norm(cross(*axis, normal)) > SAME_GEOMETRY {
+                    break;
+                }
+                let tolerance = SAME_GEOMETRY * (1.0 + norm(*center) + radius);
+                let hit = ids.iter().find(|id| {
+                    match output.solved.curves.get(&mitcad_model::EntityUid(**id)) {
+                        Some(
+                            Curve2::Circle {
+                                center: c,
+                                radius: r,
+                                ..
+                            }
+                            | Curve2::Arc {
+                                center: c,
+                                radius: r,
+                                ..
+                            },
+                        ) => {
+                            (r - radius).abs() <= tolerance
+                                && norm(sub(sketch.frame.point(*c), *center)) <= tolerance
+                        }
+                        _ => false,
+                    }
+                });
+                match hit {
+                    Some(id) => found.push(format!("c{id}")),
+                    None => break,
+                }
+            }
+            if found.len() == circles.len() {
+                return Ok((sketch, found));
+            }
+        }
+        Err(format!(
+            "{}'s edges of the hole's profile are not circles of one imported sketch",
+            link.object
+        ))
+    }
+
     fn hole_candidates(&mut self, o: &Object, target: &Target) -> Result<Vec<Candidate>, String> {
         let component = target.place.component;
         let link = o.link("Profile").ok_or("no profile")?.clone();
@@ -1271,62 +1400,24 @@ impl<K: Kernel> Importer<'_, '_, K> {
             .cloned()
             .ok_or("no sketch")?;
         // A binder of a whole sketch (mitcad#955): that sketch's circles
-        // and points, projected.
-        let (sketch, fc_sketch) = if super::sketches::is_binder(&profile_object.type_name) {
+        // and points, projected. Circular edges of a body (FreeCAD 1.x's
+        // hole at a feature's circles, mitcad#1087): the circles of the
+        // sketch they came from.
+        let (sketch, points) = if super::sketches::is_binder(&profile_object.type_name) {
             let sketch = self.binder_sketch(&link.object, component)?;
             let bound = self
                 .sketches_of(&profile_object)
                 .and_then(|s| s.into_iter().next())
                 .ok_or("the binder binds no sketch")?;
-            (sketch, fc::Sketch::of(&bound))
+            let points = hole_points(&sketch, &fc::Sketch::of(&bound));
+            (sketch, points)
+        } else if super::is_sketch(&profile_object.type_name) {
+            let sketch = self.sketch_of(&link, component)?;
+            let points = hole_points(&sketch, &fc::Sketch::of(&profile_object));
+            (sketch, points)
         } else {
-            (
-                self.sketch_of(&link, component)?,
-                fc::Sketch::of(&profile_object),
-            )
+            self.hole_edge_points(&link, component)?
         };
-        // The circles' (and arcs') centres; else the points.
-        let mut points: Vec<String> = fc_sketch
-            .geometry
-            .iter()
-            .enumerate()
-            .filter(|(_, g)| {
-                !g.construction && matches!(g.curve, Curve::Circle { .. } | Curve::Arc { .. })
-            })
-            .filter_map(|(i, _)| sketch.curves.get(&(i as i32)).map(|id| format!("c{id}")))
-            .collect();
-        // 1.1's defining external geometry is part of the sketch's shape,
-        // whose circles and arcs FreeCAD drills at too (mitcad#955).
-        for (k, g) in fc_sketch.external.iter().enumerate() {
-            let Some(g) = g else { continue };
-            if g.defining
-                && matches!(g.curve, Curve::Circle { .. } | Curve::Arc { .. })
-                && let Some(id) = sketch.externals.get(&k)
-            {
-                let curve = format!("c{id}");
-                if !points.contains(&curve) {
-                    points.push(curve);
-                }
-            }
-        }
-        if points.is_empty() {
-            // The sketch's points in FreeCAD's order, construction ones left
-            // out as FreeCAD's sketch shape leaves them out. Coincident
-            // points are one Mitcad point (the sketch merges them): FreeCAD
-            // drills there once, and the same position twice would make the
-            // hole's tools overlap (mitcad#835).
-            for (i, g) in fc_sketch.geometry.iter().enumerate() {
-                if g.construction || !matches!(g.curve, Curve::Point { .. }) {
-                    continue;
-                }
-                if let Some(id) = sketch.points.get(&(i as i32)) {
-                    let point = format!("p{id}");
-                    if !points.contains(&point) {
-                        points.push(point);
-                    }
-                }
-            }
-        }
         if points.is_empty() {
             return Err("the profile sketch has no circles or points".to_owned());
         }
@@ -1394,8 +1485,8 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
         let mut notes = Vec::new();
         // A thread: a thread feature on the walls (the hole keeps FreeCAD's
-        // diameter, which is not Mitcad's minor diameter). A modelled one
-        // cuts Mitcad's basic profile from that bore, which the check
+        // diameter, which is not MitCad's minor diameter). A modelled one
+        // cuts MitCad's basic profile from that bore, which the check
         // compares with FreeCAD's thread.
         let mut thread = None;
         let modeled = o.bool("ModelThread") == Some(true);
@@ -1410,12 +1501,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
         if o.bool("Threaded") == Some(true) {
             match self.hole_thread(o, modeled) {
                 Ok(t) => thread = Some(t),
-                Err(why) if modeled => return Err(format!("its modelled thread: {why}")),
+                Err(why) if modeled => return Err(format!("its modeled thread: {why}")),
                 Err(why) => notes.push(format!("its cosmetic thread is left out: {why}")),
             }
         }
         // A modelled thread as FreeCAD makes it: its groove cut along a
-        // helix (tried before Mitcad's thread on the walls), about each
+        // helix (tried before MitCad's thread on the walls), about each
         // centre the hole drills that reaches the body: the solved
         // positions of its circles, of 1.1's defining external circles and
         // arcs, or of its points (mitcad#964: the groove took the sketch's
@@ -1589,12 +1680,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
     }
 
-    /// A hole's thread as a Mitcad thread definition (ISO metric, a Unified
-    /// UNC, UNF or UNEF, a Whitworth BSW, BSF or pipe (BSP, Mitcad's `G`),
-    /// an NPT or a tyre valve (ISOTyre) size Mitcad's table has): its size
+    /// A hole's thread as a MitCad thread definition (ISO metric, a Unified
+    /// UNC, UNF or UNEF, a Whitworth BSW, BSF or pipe (BSP, MitCad's `G`),
+    /// an NPT or a tyre valve (ISOTyre) size MitCad's table has): its size
     /// from the version's list
     /// for its thread type, its class and hand. The whole wall is threaded
-    /// (a thread depth of the hole's). `modeled`: one Mitcad can cut.
+    /// (a thread depth of the hole's). `modeled`: one MitCad can cut.
     fn hole_thread(&self, o: &Object, modeled: bool) -> Result<Value, String> {
         use mitcad_model::features::thread_table::{self, ThreadStandard};
         let kind = self.enum_text(o, "ThreadType").ok_or("no thread type")?;
@@ -1606,7 +1697,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             "ISOTyre" => ThreadStandard::TyreValve,
             _ => {
                 return Err(format!(
-                    "a {kind} thread (Mitcad has ISO metric, Unified, Whitworth, NPT and tyre \
+                    "a {kind} thread (MitCad has ISO metric, Unified, Whitworth, NPT and tire \
                      valve ones)"
                 ));
             }
@@ -1629,7 +1720,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
         // An inch size: its designation in the series (`1/4-20 UNC`,
         // `1/4-20 BSW`, `1/4-18 NPT`); a pipe thread's `G 1/4`.
-        let missing = || format!("{size} {kind} is not in Mitcad's thread table");
+        let missing = || format!("{size} {kind} is not in MitCad's thread table");
         let designation = match (standard, kind.as_str()) {
             (ThreadStandard::IsoMetric, _) => size,
             (ThreadStandard::TyreValve, _) => {
@@ -1662,7 +1753,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         if standard != ThreadStandard::IsoMetric {
             thread["standard"] = json!(standard);
         }
-        // A class Mitcad lists for internal threads (FreeCAD may keep the
+        // A class MitCad lists for internal threads (FreeCAD may keep the
         // index of a list it had before the thread type was set).
         if let Some(class) = listed("ThreadClass")
             .filter(|c| thread_table::check_class(standard, c, Some(true)).is_ok())
@@ -1694,7 +1785,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let standard = match kind.as_str() {
             "ISOMetricProfile" | "ISOMetricFineProfile" => ThreadStandard::IsoMetric,
             "UNC" | "UNF" | "UNEF" => ThreadStandard::Unified,
-            other => return Err(format!("a modelled {other} thread")),
+            other => return Err(format!("a modeled {other} thread")),
         };
         if o.bool("Tapered") == Some(true) {
             return Err("a tapered hole".to_owned());
@@ -1820,7 +1911,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
 
     // Transformations.
 
-    /// What a transformation copies: its originals' Mitcad features, or the
+    /// What a transformation copies: its originals' MitCad features, or the
     /// whole body.
     fn transformed(&self, o: &Object, target: &Target) -> Result<Value, String> {
         let whole = matches!(
@@ -1880,7 +1971,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
     }
 
     /// MultiTransform: its transformations in turn, every copy of one
-    /// transformed by the next (FreeCAD's product of them), as Mitcad
+    /// transformed by the next (FreeCAD's product of them), as MitCad
     /// features of the originals: one transformation as itself, two linear
     /// patterns as a rectangular pattern of two directions, two mirrors as
     /// both mirrors and the half turn about their planes' intersection;
@@ -2592,7 +2683,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 .collect();
             per_body(defs)
         };
-        // Mitcad pulls along the neutral plane's normal: a pull direction
+        // MitCad pulls along the neutral plane's normal: a pull direction
         // along it, either way, is the same draft (the check tells).
         let pulled = |c: Candidate| {
             if o.link("PullDirection")
@@ -2906,7 +2997,17 @@ impl<K: Kernel> Importer<'_, '_, K> {
             .cloned()
             .ok_or_else(|| format!("no {}", link.object))?;
         if !super::is_sketch(&object.type_name) {
-            return Err("a spine of edges of a body is not translated yet".to_owned());
+            // Edges of an object with a body here (FreeCAD 1.x's pipe along
+            // edges of its Body's earlier result, mitcad#1087): the body's
+            // edges by name.
+            if link.subs.is_empty() || self.body_of_object(&link.object).is_none() {
+                return Err(format!(
+                    "a spine of {} (not a sketch nor edges of a body here) is not translated yet",
+                    link.object
+                ));
+            }
+            let names: Vec<String> = link.subs.iter().map(|s| sub_name(s).to_owned()).collect();
+            return self.body_edge_path(&link.object, &names, component);
         }
         let made = self.sketch_of(link, component)?;
         let curves: Vec<String> = if link.subs.is_empty() {
@@ -2947,7 +3048,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let component = target.place.component;
         let additive = o.type_name.contains("Additive");
         // FreeCAD widens a conical or growing helix keeping the profile
-        // (nearly) in planes through the axis: Mitcad's helix with a
+        // (nearly) in planes through the axis: MitCad's helix with a
         // growth per turn and FreeCAD's construction (mitcad#83).
         let growing = self
             .enum_text(o, "Mode")
@@ -3157,7 +3258,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             ));
         }
         Err(
-            "a coordinate system: Mitcad has none (features that use it take fixed geometry)"
+            "a coordinate system: MitCad has none (features that use it take fixed geometry)"
                 .to_owned(),
         )
     }
@@ -3192,7 +3293,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             return None;
         }
         let plane = self.plane_ref(link, place.component).ok()?;
-        // Mitcad's plane: its point and normal.
+        // MitCad's plane: its point and normal.
         let (base, n) = match &plane {
             Value::String(s) => match s.as_str() {
                 "xy" => ([0.0; 3], [0.0, 0.0, 1.0]),
@@ -3213,7 +3314,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             return None;
         }
         let distance = dot(sub(origin, base), n);
-        // An offset an expression drives: that expression, along Mitcad's
+        // An offset an expression drives: that expression, along MitCad's
         // normal.
         let sign = if dot(normal, n) < 0.0 { -1.0 } else { 1.0 };
         let distance = match self.offset_quantity(o) {
@@ -3354,9 +3455,8 @@ impl ThreadGroove {
             defs.push((helix, " (thread)"));
         }
         defs.push((hole, ""));
-        Candidate::several(defs).note(
-            "its modelled thread as FreeCAD cuts it: the groove's section swept along a helix",
-        )
+        Candidate::several(defs)
+            .note("its modeled thread as FreeCAD cuts it: the groove's section swept along a helix")
     }
 }
 
@@ -3401,4 +3501,52 @@ fn line_span(p: [f64; 3], n: [f64; 3], b: &mitcad_model::BoundingBox) -> Option<
 /// cuts nothing.
 fn misses_box(p: [f64; 3], n: [f64; 3], b: &mitcad_model::BoundingBox) -> bool {
     line_span(p, n, b).is_none()
+}
+
+/// Where a hole of a profile sketch drills (`c<id>` of a circle or arc,
+/// `p<id>` of a point): the centres of the sketch's circles and arcs (with
+/// 1.1's defining external ones); without any, its points.
+fn hole_points(sketch: &SketchMade, fc_sketch: &fc::Sketch) -> Vec<String> {
+    let mut points: Vec<String> = fc_sketch
+        .geometry
+        .iter()
+        .enumerate()
+        .filter(|(_, g)| {
+            !g.construction && matches!(g.curve, Curve::Circle { .. } | Curve::Arc { .. })
+        })
+        .filter_map(|(i, _)| sketch.curves.get(&(i as i32)).map(|id| format!("c{id}")))
+        .collect();
+    // 1.1's defining external geometry is part of the sketch's shape,
+    // whose circles and arcs FreeCAD drills at too (mitcad#955).
+    for (k, g) in fc_sketch.external.iter().enumerate() {
+        let Some(g) = g else { continue };
+        if g.defining
+            && matches!(g.curve, Curve::Circle { .. } | Curve::Arc { .. })
+            && let Some(id) = sketch.externals.get(&k)
+        {
+            let curve = format!("c{id}");
+            if !points.contains(&curve) {
+                points.push(curve);
+            }
+        }
+    }
+    if points.is_empty() {
+        // The sketch's points in FreeCAD's order, construction ones left
+        // out as FreeCAD's sketch shape leaves them out. Coincident
+        // points are one MitCad point (the sketch merges them): FreeCAD
+        // drills there once, and the same position twice would make the
+        // hole's tools overlap (mitcad#835).
+        for (i, g) in fc_sketch.geometry.iter().enumerate() {
+            if g.construction || !matches!(g.curve, Curve::Point { .. }) {
+                continue;
+            }
+            if let Some(id) = sketch.points.get(&(i as i32)) {
+                let point = format!("p{id}");
+                if !points.contains(&point) {
+                    points.push(point);
+                }
+            }
+        }
+    }
+    points
 }

@@ -144,9 +144,9 @@ pub(super) fn look(file: &FcstdFile, o: &Object) -> Look {
 fn appearance_name(shade: &Shade) -> String {
     let ([r, g, b], opacity) = shade.key();
     if opacity < 100 {
-        format!("FreeCAD colour {r} {g} {b}, {opacity} % opaque")
+        format!("FreeCAD color {r} {g} {b}, {opacity} % opaque")
     } else {
-        format!("FreeCAD colour {r} {g} {b}")
+        format!("FreeCAD color {r} {g} {b}")
     }
 }
 
@@ -233,7 +233,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             for ((body, id), faces) in groups {
                 match self.doc.set_face_appearance(body, &faces, Some(&id)) {
                     Ok(()) => self.looks.entry(body).or_default().1 += faces.len(),
-                    Err(e) => self.warn(format!("{label}: the colours of its faces: {e}")),
+                    Err(e) => self.warn(format!("{label}: the colors of its faces: {e}")),
                 }
             }
             if lost > 0 {
@@ -242,7 +242,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
         if !missed.is_empty() {
             self.warn(format!(
-                "faces whose colour was not carried over (not found in Mitcad's body, \
+                "faces whose color was not carried over (not found in Mitcad's body, \
                  e.g. a face FreeCAD merged from several): {}",
                 missed.join(", ")
             ));
@@ -259,10 +259,10 @@ mod tests {
         let red = Shade::new(Color([1.0, 0.0, 0.0, 0.0]), 0.0);
         let glass = Shade::new(Color([1.0, 0.0, 0.0, 0.0]), 0.25);
         assert_ne!(red.key(), glass.key());
-        assert_eq!(appearance_name(&red), "FreeCAD colour 255 0 0");
+        assert_eq!(appearance_name(&red), "FreeCAD color 255 0 0");
         assert_eq!(
             appearance_name(&glass),
-            "FreeCAD colour 255 0 0, 75 % opaque"
+            "FreeCAD color 255 0 0, 75 % opaque"
         );
         let grey = Shade::new(Color::from_packed(0xCCCC_CC00), 0.0);
         assert!(grey.is_default());

@@ -202,7 +202,7 @@ impl GitCli {
             RemoteError::new(
                 ErrorClass::GitMissing,
                 format!(
-                    "{} is not a git program: it answered '{}' to --version",
+                    "{} is not a git program: it answered “{}” to --version",
                     self.program.display(),
                     output.stdout.trim()
                 ),

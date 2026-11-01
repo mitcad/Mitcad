@@ -705,7 +705,7 @@ fn rejected_commands_change_nothing() {
                 json!({"type": "extrude", "profiles": [{"sketch": sketch, "region": region}],
                        "extent": {"type": "distance", "distance": "d99"}, "operation": "cut"}),
             ),
-            "extent.distance: parameter 'd99' does not exist",
+            "extent.distance: parameter d99 does not exist",
         ),
         (
             def(json!({"type": "fillet", "body": body, "edges": [], "radius": 1.0})),
@@ -745,11 +745,12 @@ fn rejected_commands_change_nothing() {
             .to_string();
         assert!(error.contains(expected), "'{expected}' not in '{error}'");
     }
+    // An empty name (a name in use is allowed, mitcad#1107).
     assert!(
         b.doc
             .add_feature(
                 &extrude(sketch, &[&region], 1.0, "new_body", &[]),
-                Some("Sketch1")
+                Some(" ")
             )
             .is_err()
     );
@@ -769,7 +770,7 @@ fn rejected_commands_change_nothing() {
     assert!(b.doc.add_parameter("d1", 1.0, "").is_err());
     assert_eq!(
         b.doc.delete_parameter("d1").unwrap_err().to_string(),
-        "parameter 'd1' is used by Sketch1"
+        "parameter d1 is used by Sketch1"
     );
 
     assert_eq!(b.doc.features().count(), features);
@@ -787,7 +788,12 @@ fn parameters_and_features_can_be_renamed() {
     assert_eq!(b.history(b.body), "prism(F2:0..25)");
     b.doc.rename_feature(b.extrude, "Base").unwrap();
     assert_eq!(b.doc.feature(b.extrude).unwrap().name, "Base");
-    assert!(b.doc.rename_feature(b.extrude, "Sketch1").is_err());
+    // Features may share a name (mitcad#1107): an extrude takes its
+    // sketch's; an empty name is refused.
+    b.doc.rename_feature(b.extrude, "Sketch1").unwrap();
+    assert_eq!(b.doc.feature(b.extrude).unwrap().name, "Sketch1");
+    assert_eq!(b.doc.feature(b.sketch).unwrap().name, "Sketch1");
+    assert!(b.doc.rename_feature(b.extrude, "").is_err());
     b.doc.delete_parameter("wall").unwrap();
     assert!(b.doc.parameters().find("wall").is_none());
     // Default names count per type and skip used ones.
@@ -836,7 +842,7 @@ fn expressions_drive_features_and_recompute_only_on_value_changes() {
         .unwrap();
     assert_eq!(
         b.doc.delete_parameter("wall").unwrap_err().to_string(),
-        "parameter 'wall' is used by rim"
+        "parameter wall is used by rim"
     );
     assert_eq!(
         b.doc
@@ -882,7 +888,7 @@ fn expressions_drive_features_and_recompute_only_on_value_changes() {
     );
     assert_eq!(
         b.doc.add_feature(&tilted, None).unwrap_err().to_string(),
-        "extent.distance: parameter 'tilt' is an angle, not a length"
+        "extent.distance: parameter tilt is an angle, not a length"
     );
 }
 
@@ -912,7 +918,7 @@ fn commands_take_expressions_for_values() {
             .edit_feature(added.uid, &bad)
             .unwrap_err()
             .to_string()
-            .starts_with("radius: parameter 'd4': ")
+            .starts_with("radius: parameter d4: ")
     );
     // Deleting the fillet deletes its parameter; d3 stays (the extrude).
     b.doc.delete_feature(added.uid, false).unwrap();

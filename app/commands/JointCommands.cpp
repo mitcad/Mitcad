@@ -253,13 +253,10 @@ bool givesFrame(const SelectionItem& item) {
   }
 }
 
-// An input of an origin. The origin's planes and axes stay hidden (they
-// would cover the components); a shown origin and construction geometry
-// still count.
+// An input of an origin: construction geometry counts, the origin's as its
+// light bulb shows it or from the browser (mitcad#1030).
 InputDef originInput(const QString& id, const QString& label, const QString& tip, int min = 1) {
-  InputDef input = selectionInput(id, label, kOriginKinds, min, 1).withTooltip(tip).withAccepts(givesFrame);
-  input.showsOrigin = false;
-  return input;
+  return selectionInput(id, label, kOriginKinds, min, 1).withTooltip(tip).withAccepts(givesFrame);
 }
 
 QJsonObject originOf(const SelectionItem& item, const QString& path) {
@@ -1414,7 +1411,7 @@ QString constraintLine(const QJsonObject& set, const QJsonObject& joints) {
 CommandDef constraintCommand(const CommandContext& context) {
   CommandDef def;
   def.id = QStringLiteral("assemble.constraint");
-  def.name = QObject::tr("Constraint");
+  def.name = QObject::tr("Assembly Constraint");
   def.icon = QStringLiteral("constraint");
   def.tooltip = QObject::tr("Holds components against each other: align, angle, center, tangent, insert");
   def.group = QStringLiteral("ASSEMBLE");
@@ -1452,7 +1449,7 @@ CommandDef constraintCommand(const CommandContext& context) {
                  return choices;
                }),
            selectionInput(QStringLiteral("b2"), QObject::tr("Second Face"), SelectKind::Face, 0, 1)
-               .withTooltip(QObject::tr("Geometry 1 is centred between geometry 2 and this face"))
+               .withTooltip(QObject::tr("Geometry 1 is centered between geometry 2 and this face"))
                .withVisible(typeIn(context, {QStringLiteral("center")})),
            valueInput(QStringLiteral("offset"), QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm"))
                .withTooltip(QObject::tr("Along geometry 2's normal or axis"))
@@ -1789,7 +1786,6 @@ QVector<InputDef> sizeInputs(const QString& id, const QString& label, const QStr
                        .withTooltip(QObject::tr("A round face, circular edge or circle whose radius it is"))
                        .withAccepts(isRound)
                        .withVisible(shown);
-  round.showsOrigin = false;
   return {valueInput(id, label, ValueKind::Length, defaultText)
               .withTooltip(tip)
               .withVisible([shown, id](const CommandState& state) {
@@ -1870,11 +1866,9 @@ CommandDef motionLinkCommand(const CommandContext& context) {
                                     SelectKind::Face | SelectKind::SketchCurve, 0, 1)
                          .withTooltip(QObject::tr("A flat face of the cam, or a curve of the sketch profile it is cut from"))
                          .withVisible(cam);
-  profile.showsOrigin = false;
   InputDef tip = selectionInput(QStringLiteral("tip"), QObject::tr("Follower Tip"), kOriginKinds, 0, 1)
-                     .withTooltip(QObject::tr("The knife's point or the roller's centre on the follower"))
+                     .withTooltip(QObject::tr("The knife's point or the roller's center on the follower"))
                      .withVisible(cam);
-  tip.showsOrigin = false;
   def.inputs = {
       choiceInput(QStringLiteral("coupling"), QObject::tr("Type"), kCouplings, QStringLiteral("gear"))
           .withTooltip(QObject::tr("How the follower follows the driver")),

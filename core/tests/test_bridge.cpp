@@ -480,9 +480,9 @@ void test_report() {
 void test_design_file_errors() {
   CHECK(throws_with([] { mitcad::load_document("{"); }, "not valid JSON"));
   CHECK(throws_with([] { mitcad::load_document(R"({"format": "step"})"); },
-                    "not a Mitcad design file"));
+                    "not a MitCad design file"));
   CHECK(throws_with([] { mitcad::load_document(R"({"format": "mitcad", "version": 4})"); },
-                    "newer than this Mitcad"));
+                    "newer than this MitCad"));
 
   const auto edited = [](const std::string& from, const std::string& to) {
     std::string json(kDesignFile);
@@ -490,12 +490,12 @@ void test_design_file_errors() {
     return json;
   };
   CHECK(throws_with([&] { mitcad::load_document(edited(R"("d9" })", R"("r1" })")); },
-                    "features[5] (Fillet1): parameter 'r1' does not exist"));
+                    "features[5] (Fillet1): parameter r1 does not exist"));
   // A body is its new body extrude, not the join into it.
   const std::string cutIntoJoin =
       edited(R"("cut", "body": "Extrude1")", R"("cut", "body": "Extrude2")");
   CHECK(throws_with([&] { mitcad::load_document(cutIntoJoin); },
-                    "features[4] (Extrude3): 'Extrude2' is not a new_body extrude"));
+                    "features[4] (Extrude3): Extrude2 is not a new_body extrude"));
 }
 
 // Construction geometry and analysis shapes for display (F5).
@@ -814,8 +814,8 @@ void test_prepared_section_analysis() {
   stopping.join();
   CHECK(stopped && (*stopped)->count() == 3);
   if (stopped && (*stopped)->count() == 3) {
-    CHECK(!(*stopped)->shape(0) && contains(std::string((*stopped)->error(0)), "cancelled"));
-    CHECK(!(*stopped)->shape(2) && contains(std::string((*stopped)->error(2)), "cancelled"));
+    CHECK(!(*stopped)->shape(0) && contains(std::string((*stopped)->error(0)), "cancel"));
+    CHECK(!(*stopped)->shape(2) && contains(std::string((*stopped)->error(2)), "cancel"));
   }
 }
 
@@ -907,7 +907,7 @@ void test_job_cancelled_from_another_thread() {
   CHECK(std::string(progress.feature) == "Extrude1" && !progress.cancelled);
   control->cancel();
   worker.join();
-  CHECK(error == "the computation was cancelled");
+  CHECK(error == "the computation was canceled");
   CHECK(control->is_cancelled() && control->progress().cancelled);
   CHECK(control->progress().evaluated == 1);
   document->detach_job();
@@ -957,7 +957,7 @@ void test_kernel_operation_cancelled_inside() {
   const double after =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - requested).count();
   std::printf("test_bridge: the modelled thread stopped %.0f ms after the cancel\n", after);
-  CHECK(error == "the computation was cancelled");
+  CHECK(error == "the computation was canceled");
   CHECK(after < 1000);
   document->detach_job();
   CHECK(near(body_volume(*document), rod)); // still cosmetic

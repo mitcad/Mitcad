@@ -13,9 +13,10 @@
 #   - The card follows its rows (mitcad#425; 30 sketches more, Sketches
 #     folded at the start, no Projects card): folding Bodies shrinks it,
 #     opening it grows it, and the rows do not scroll while it ends above
-#     the timeline; opening Sketches grows it down to the timeline's top
-#     less the gap, the rows scroll, and the scroll bar is at the card's
-#     left, left of the rows.
+#     the timeline; opening Sketches grows it down to the top of the
+#     message band's row above the timeline (mitcad#1042; the timeline's
+#     top without a message) less the gap, the rows scroll, and the
+#     scroll bar is at the card's left, left of the rows.
 #   - Back to Card at once: the place beside the rows is gone, and a click
 #     there is the card's again (the plate is not picked).
 # The Windows counterpart is tools/ui-windows-browser-rows-test.ps1.
@@ -91,6 +92,16 @@ set_background() {
 card_rect() {
   grep '^Floating cards: ' "$UI_LOG" | tail -1 | tr ';' '\n' | sed 's/^ *//' | grep "^$1 " |
     sed -n 's/^[^ ]* \(-\{0,1\}[0-9]*\),\(-\{0,1\}[0-9]*\) \([0-9]*\)x\([0-9]*\)$/\1 \2 \3 \4/p'
+}
+
+# column_floor: where the left column ends, plus the gap: the top of the
+# message band's row (mitcad#1042), or of the timeline while no message
+# was shown.
+column_floor() {
+  local top
+  read -r _ top _ _ <<< "$(card_rect messageBandRow)"
+  [ -n "$top" ] || read -r _ top _ _ <<< "$(card_rect timelineDock)"
+  echo "$top"
 }
 
 # browser_height_becomes lt|gt height description: waits until the
@@ -175,7 +186,7 @@ ui_step "open Bodies"                    arrow "Root/Bodies"
 ui_expect_new "Browser Root/Bodies/Body1 at" "Body1 in sight again"
 browser_height_becomes gt "$H1" "the card grows as a row opens"
 read -r _ BTOP _ BH <<< "$(card_rect browserDock)"
-read -r _ TTOP _ _ <<< "$(card_rect timelineDock)"
+TTOP=$(column_floor)
 [ $((BTOP + BH)) -lt $((TTOP - 8)) ] || ui_fail "the card reaches the timeline ($BTOP + $BH, timeline at $TTOP)"
 [ "$(scroll_range)" = 0 ] || ui_fail "the rows scroll ($(scroll_range)) before the card reaches the timeline"
 ui_place_valid "Browser scroll bar" && ui_fail "a scroll bar before the card reaches the timeline"
@@ -185,6 +196,7 @@ ui_step "open Sketches"                  arrow "Root/Sketches"
 ui_expect_new "Browser Root/Sketches/Sketch1 at" "the sketches in sight"
 for _ in $(seq 1 25); do
   read -r _ BTOP _ BH <<< "$(card_rect browserDock)"
+  TTOP=$(column_floor)
   [ $((BTOP + BH)) = $((TTOP - 8)) ] && break
   sleep 0.2
 done

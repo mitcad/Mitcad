@@ -6,12 +6,14 @@
 #   - a PartDesign Body whose sketch is padded (replayed), then a feature
 #     suppressed in FreeCAD, then a helix Mitcad cannot build (its stored
 #     shape comes in as a base feature, the fallback);
-#   - the fallback's base feature is yellow, its tooltip says which item it
+#   - the fallback's base feature has an import note, information
+#     (mitcad#1040: the information badge), its tooltip says which item it
 #     stands in for and why, as the import report does; the suppressed
 #     feature is a suppressed placeholder at its place, its tooltip the
 #     file's state;
-#   - the failures badge stays hidden (nothing failed), the yellow warnings
-#     badge lists both, and its menu goes to them;
+#   - the failures badge stays hidden (nothing failed), so does the warnings
+#     badge (notes are no warnings); the import's own warnings (the fallback,
+#     the skipped item) are a status line warning with their count;
 #   - saved and opened again, the timeline says the same.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh); Qt's own file dialogs
@@ -94,11 +96,16 @@ EOF
 (cd "$WORK/fc" && cmake -E tar cf "$WORK/status.FCStd" --format=zip Document.xml Pad.brp Helix.brp) ||
   ui_fail "cannot pack the FreeCAD document"
 
-# expect_warnings_badge: the badge lists the placeholder and the fallback.
-expect_warnings() {
-  ui_expect_log "Warnings badge: Gear: Suppressed in FreeCAD; not replayed: " "the placeholder in the warnings badge"
-  ui_expect_log "; Helix: Stands in for Helix (not replayed: " "the fallback in the warnings badge"
-  ui_expect_log "Feature warnings: Helix: Stands in for Helix (not replayed: " "the fallback is yellow"
+# expect_notes: the placeholder's and the fallback's notes are information
+# (mitcad#1040): their cells have the information badge, the warnings
+# badge stays hidden (it would be logged).
+expect_notes() {
+  ui_expect_log "Timeline cell Gear: info, " "the placeholder's note is information"
+  ui_expect_log "Timeline cell Helix: info, badge" "the fallback's note is information, not yellow"
+  if grep "Warnings badge: " "$UI_LOG" | grep -qv "Warnings badge: none"; then
+    ui_fail "an import note counted as a warning: $(grep "Warnings badge: " "$UI_LOG" | tail -1)"
+  fi
+  echo "ok   no warnings badge for import notes"
   # (Logged when it changes: never, while nothing fails.)
   if grep "Failed features: " "$UI_LOG" | grep -qv "Failed features: none"; then
     ui_fail "a failed feature: $(grep "Failed features: " "$UI_LOG" | tail -1)"
@@ -115,7 +122,10 @@ ui_step "close the report (Enter)"         ui_key Return
 ui_focus_main
 ui_step "fit (F6)"                         ui_key F6
 ui_expect_log "Timeline Helix at" "the timeline is logged"
-expect_warnings
+# The import's warnings as every import's (mitcad#1040): a status line
+# warning with their count, the details in the report.
+ui_expect_log "Status warning: Imported status.FCStd. " "the import's warnings on the status line"
+expect_notes
 
 echo "--- Tooltips"
 ui_mark
@@ -125,16 +135,6 @@ ui_mark
 ui_step "hover over Gear"                  xdotool mousemove $(ui_logged_at "Timeline Gear")
 ui_expect_new "Timeline tooltip: Gear: Suppressed: Suppressed in FreeCAD; not replayed: " \
   "the placeholder's tooltip has the file's state"
-
-echo "--- The warnings badge"
-ui_mark
-ui_step "click the warnings badge"         ui_click_logged "Warnings button"
-ui_expect_new "Context menu: Gear: Suppressed in FreeCAD" "its menu lists the placeholder"
-ui_expect_new "| Helix: Stands in for Helix" "and the fallback"
-line=$(grep "Context menu: " "$UI_LOG" | tail -1 | sed 's/.*Context menu: //')
-helix=${line#*| }
-ui_step "choose Helix"                     ui_menu_choose "$helix"
-ui_expect_new "Revealed Helix" "the menu went to Helix"
 
 echo "--- Saved and opened again"
 ui_mark
@@ -147,6 +147,6 @@ echo "ok   the notes are in the design file"
 ui_stop_app
 ui_start_app --open "$WORK/status.mitcad" --no-native-dialogs
 ui_expect_log "Opened $WORK/status.mitcad" "opened again"
-expect_warnings
+expect_notes
 
 ui_finish "UI import status test"

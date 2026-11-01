@@ -341,12 +341,12 @@ if ! output=$(cd "$WORK" && plain "$COPY" --version 2>&1); then
   export APPIMAGE_EXTRACT_AND_RUN=1
   output=$(cd "$WORK" && plain "$COPY" --version 2>&1) || ui_fail "--version failed: $output"
 fi
-VERSION=$(echo "$output" | sed -n 's/^Mitcad //p')
+VERSION=$(echo "$output" | sed -n 's/^MitCad //p')
 [ -n "$VERSION" ] || ui_fail "no version: $output"
 if [ -n "$BUILT" ]; then
-  [ "$("$BUILT" --version | sed -n 's/^Mitcad //p')" = "$VERSION" ] || ui_fail "the AppImage is not the build's version"
+  [ "$("$BUILT" --version | sed -n 's/^MitCad //p')" = "$VERSION" ] || ui_fail "the AppImage is not the build's version"
 fi
-echo "ok   --version: Mitcad $VERSION"
+echo "ok   --version: MitCad $VERSION"
 
 (cd "$WORK" && plain "$COPY" --demo --screenshot "$WORK/demo.png" > "$WORK/plain.log" 2>&1) &
 starter=$!
@@ -455,7 +455,7 @@ if [ "$HOOKS" = OFF ]; then
   # A release's AppImage (mitcad#921): its check would go to GitHub, so
   # checks off; its source is logged anyway.
   MITCAD_NO_UPDATE_CHECK=1 UI_GDB=0 UI_APP=$COPY ui_start_app
-  ui_expect_log "Updates: Mitcad $VERSION for linux-x64, the AppImage $COPY" "its own version, not MITCAD_TEST_VERSION"
+  ui_expect_log "Updates: MitCad $VERSION for linux-x64, the AppImage $COPY" "its own version, not MITCAD_TEST_VERSION"
   ui_expect_log "Update source: manifest at https://github.com/mitcad/Mitcad/releases/latest/download/update-manifest.json, releases at https://api.github.com/repos/mitcad/Mitcad/releases?per_page=20, " \
     "GitHub's addresses, not MITCAD_UPDATE_URL"
   ui_expect_log "Update source: this build ignores MITCAD_UPDATE_URL, MITCAD_UPDATE_TEST_KEY, MITCAD_UPDATE_TEST_CA, MITCAD_TEST_VERSION (MITCAD_UPDATE_TEST_HOOKS off)" \
@@ -471,7 +471,7 @@ if [ "$HOOKS" = OFF ]; then
 fi
 inode=$(stat -c %i "$COPY")
 UI_GDB=0 UI_APP=$COPY ui_start_app
-ui_expect_log "Updates: Mitcad 0.0.0 for linux-x64, the AppImage $COPY" "the AppImage can update itself"
+ui_expect_log "Updates: MitCad 0.0.0 for linux-x64, the AppImage $COPY" "the AppImage can update itself"
 ui_expect_log "Update source: this test build reads MITCAD_UPDATE_URL, MITCAD_UPDATE_TEST_KEY, MITCAD_UPDATE_TEST_CA, MITCAD_TEST_VERSION (MITCAD_UPDATE_TEST_HOOKS)" \
   "a test build reads the update tests' variables"
 ui_expect_log "Update notice (offer): MitCad $VERSION is available (this is 0.0.0). MitCad checks for updates once a day; Tools › Preferences turns that off. [Release Notes, Install, Skip This Version, Later]" \

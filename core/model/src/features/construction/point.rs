@@ -4,6 +4,8 @@
 //! pass each other without meeting are an error (what imported designs
 //! expect there is experiment K69).
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::{GeomRef, PathRef, Want, along_slot, distinct, finite};
@@ -13,7 +15,9 @@ use crate::datum::{
 use crate::features::{
     CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References, is_false,
 };
+use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::Kernel;
+use crate::links::OccurrenceLink;
 use crate::parameters::ParamId;
 use mitcad_model_base::internal::datum::{ANGULAR, LINEAR};
 use mitcad_vec3::{add, norm, scale, sub};
@@ -23,6 +27,17 @@ use mitcad_vec3::{cross, dot};
 #[serde(deny_unknown_fields)]
 pub struct ConstructionPointDef<P = ParamId> {
     pub definition: PointDefinition<P>,
+    /// Bodies of other components that the definition's faces, edges and
+    /// vertices are on (mitcad#1029, as a construction plane's `links`):
+    /// each is read in its component and moved into the point's
+    /// coordinates by the placements at its point of the timeline.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub links: BTreeMap<BodyUid, OccurrenceLink>,
+    /// Construction planes, axes and points (mitcad#1035) and sketches
+    /// (mitcad#1039) of other components that the definition names, as a
+    /// construction plane's `datum_links`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub datum_links: BTreeMap<FeatureUid, OccurrenceLink>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -61,7 +76,11 @@ impl<P> ConstructionPointDef<P> {
     pub const BASE_NAME: &'static str = "Point";
 
     pub fn new(definition: PointDefinition<P>) -> Self {
-        Self { definition }
+        Self {
+            definition,
+            links: BTreeMap::new(),
+            datum_links: BTreeMap::new(),
+        }
     }
 
     // Written by hand: the definition maps by its kind (`definition.distance`,
@@ -107,7 +126,11 @@ impl<P> ConstructionPointDef<P> {
             },
             D::Fixed { point } => D::Fixed { point: *point },
         };
-        Ok(ConstructionPointDef::new(definition))
+        Ok(ConstructionPointDef {
+            definition,
+            links: self.links.clone(),
+            datum_links: self.datum_links.clone(),
+        })
     }
 
     fn inputs(&self) -> Vec<(&GeomRef, Want)> {
@@ -164,6 +187,8 @@ impl FeatureInfo for ConstructionPointDef {
 impl<K: Kernel> Evaluate<K> for ConstructionPointDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         use PointDefinition as D;
+        ctx.geom_links.clone_from(&self.links);
+        ctx.datum_links.clone_from(&self.datum_links);
         let point = match &self.definition {
             D::Point { point } => ctx.point(point)?,
             D::TwoEdges { line1, line2 } => meet(&ctx.axis(line1)?, &ctx.axis(line2)?)?,

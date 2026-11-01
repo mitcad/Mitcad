@@ -698,8 +698,7 @@ fn copy_feature_definitions_rename_their_references() {
 
 #[test]
 fn external_components_link_or_copy_other_files() {
-    let dir = std::env::temp_dir().join(format!("mitcad-f6-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("f6");
     let mut part = Document::new(MockKernel::default());
     small_block(&mut part);
     let path = dir.join("part.mitcad");
@@ -792,8 +791,7 @@ fn set_link_path(json: &str, component: &str, path: &str) -> String {
 fn only_links_in_the_design_project_are_followed() {
     // mitcad#929: the design file does not choose which files outside its
     // project the application reads as the design opens.
-    let dir = std::env::temp_dir().join(format!("mitcad-929-links-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = mitcad_model::testing::unique_temp_path("929-links");
     let project = dir.join("project");
     mitcad_model::Project::init(&project).unwrap();
     std::fs::create_dir_all(project.join("parts")).unwrap();
@@ -894,8 +892,7 @@ fn only_links_in_the_design_project_are_followed() {
 #[test]
 fn a_design_in_no_project_follows_links_in_its_folder() {
     // mitcad#929: without a project the design's folder is the limit.
-    let dir = std::env::temp_dir().join(format!("mitcad-929-folder-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = mitcad_model::testing::unique_temp_path("929-folder");
     let designs = dir.join("designs");
     std::fs::create_dir_all(designs.join("sub")).unwrap();
     let mut part = Document::new(MockKernel::default());

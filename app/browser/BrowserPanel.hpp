@@ -73,6 +73,9 @@ struct BrowserNode {
     // (uid: the name).
     ImageReferences,
     ImageReference,
+    // The Center of Mass marker (mitcad#1094): a row of the root's under
+    // Origin while the design has the marker; its light bulb shows it.
+    CenterOfMass,
   };
 
   Type type = Type::None;
@@ -85,6 +88,9 @@ struct BrowserNode {
   QString path;       // the names from the root, "Root/Bodies/Body1"
   bool visible = true; // its light bulb
   bool hasEye = false;
+  // A body or an occurrence drawn see-through (mitcad#1093): its own state,
+  // the half-open eye while it is shown.
+  bool transparent = false;
   // A body: a mesh body (mitcad#399); its item's geometry is "mesh".
   bool mesh = false;
 
@@ -127,9 +133,21 @@ public:
     bool hasActivation = false;
     bool active = false;
     int bindings = 0; // Same fx count as the shared row's delegate.
+    // The name's colour here (mitcad#1079): "failed" (red), "warning",
+    // "dimmed" (grey: suppressed, rolled back or hidden) or none.
+    QString tone;
+    // A light bulb that follows a Show When condition, or a folder's that
+    // holds such rows (mitcad#863): its tooltip in place of Hide / Show;
+    // `eyeBound`: the row's own condition, the bulb's fx mark.
+    QString eyeTip;
+    bool eyeBound = false;
   };
   QVector<PresentationRow> presentationRows() const;
   void setPresentationExpanded(const QString& key, bool expanded);
+  // The row under the pointer in another presentation (mitcad#1072: the
+  // AppKit outline), an invalid node when it is over none: the same
+  // jointHovered and bodiesHovered as the pointer over these rows.
+  void hoverNode(const mitcad::BrowserNode& node);
 
   // Rebuilds the rows, keeping what was expanded, selected and scrolled to.
   void rebuild(const DocumentSnapshot& snapshot, bool originShown);
@@ -205,10 +223,18 @@ public:
   // (the tree moves right of it); in rowsRegion. Logged with the rows
   // ("Browser scroll bar at x,y", either bar).
   void setScrollBarOnLeft(bool left);
-  // A bar above the rows (mitcad#807: the Configuration bar), which the
-  // panel takes: its height counts in contentHeight while it is shown, and
-  // with the Rows background it is in rowsRegion on a box of its own.
+  // A bar above the rows, which the panel takes: its height counts in
+  // contentHeight while it is shown, and with the Rows background it is in
+  // rowsRegion on a box of its own. (The Configuration bar of mitcad#807
+  // was one; it is a panel of its own since mitcad#1020.)
   void setTopBar(QWidget* bar);
+  // The Make tab's markers (mitcad#1049): a small dot after the name of the
+  // rows of these bodies (by uid, every occurrence's row), whose tooltip is
+  // the text given (what of the body's material and print settings differs
+  // from its component's). Kept over rebuilds; none to take them away.
+  // Logged when they change: "Browser Make markers: Root/Bodies/Body1:
+  // Own print settings: Walls", "Browser Make markers: none".
+  void setMakeMarkers(const QHash<QString, QString>& markers);
 
 signals:
   // With the Rows background, rowsRegion changed (the rows scrolled, opened,
@@ -235,6 +261,10 @@ signals:
   // row (mitcad#523), placed by `occurrence`; an empty uid when it left
   // the joint rows.
   void jointHovered(const QString& uid, const QString& occurrence);
+  // The pointer came over a body's, a component's or an occurrence's row
+  // (mitcad#1022), or left them (an invalid node: another row, or out of
+  // the rows). The root's row stands for no bodies of its own here.
+  void bodiesHovered(const mitcad::BrowserNode& node);
   // The fx badge of a bound row (mitcad#862): the pointer rests on it
   // (`pinned` false) or it was clicked; `anchor` is the badge in global
   // coordinates. The controller shows the row's bindings card.
@@ -242,6 +272,9 @@ signals:
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
+  // The theme changed (mitcad#1104): the rows painted again in its colours
+  // and their name colours logged (logRowColours).
+  void changeEvent(QEvent* event) override;
 
 private:
   friend class BrowserTree;
@@ -280,8 +313,22 @@ private:
   // A constraint set's rows under its row (mitcad#148).
   void addConstraintRows(const DocumentSnapshot& snapshot, const DocumentSnapshot::Feature& feature,
                          QTreeWidgetItem* parent, bool shown);
+  // A failed feature's or a warned one's row (mitcad#1040): its level's
+  // badge on its icon, its name in the level's colour and the level's word
+  // in its tooltip; logged ("Browser level <path>: warning") when it
+  // changes. False for a feature with neither.
+  bool markLevel(QTreeWidgetItem* row, const DocumentSnapshot::Feature& feature);
   BrowserNode nodeOf(const QTreeWidgetItem* item) const;
   QString keyOf(const BrowserNode& node) const;
+  // The markers of setMakeMarkers on the rows there are (mitcad#1049).
+  void applyMakeMarkers();
+  QHash<QString, QString> m_makeMarkers; // by body uid
+  QString m_loggedMakeMarkers;           // the markers' log line, as last logged
+  // Logs the rows whose names have a colour role, by role, with the colour
+  // it gives on the rows' palette now (mitcad#1104), when it changed:
+  // "Browser row colours: dark, hidden #b4b8be: Root/Bodies/Body1, Root/Origin".
+  void logRowColours();
+  QString m_loggedRowColours; // its line, as last logged
   bool revealKeys(const QSet<QString>& keys);
   void selectionChanged();
   void itemEdited(QTreeWidgetItem* item, int column);
@@ -290,6 +337,9 @@ private:
   BrowserTree* m_tree = nullptr;
   QHash<QTreeWidgetItem*, BrowserNode> m_nodes;
   QHash<QString, bool> m_expanded; // by row key
+  QHash<QString, QString> m_loggedLevels; // the rows' levels last logged, by path (mitcad#1040)
+  // The rows whose transparent eye was logged last, by path (mitcad#1093).
+  QSet<QString> m_loggedTransparent;
   QSet<QString> m_shownSelection;  // what showSelection last selected (items and features)
   QSet<QString> m_foldedSelection; // the selection Collapse All left; showSelection does not reveal it again
   bool m_building = false;
@@ -310,8 +360,12 @@ private:
   std::function<int()> m_availableHeight; // setAvailableHeight
   // The joint row under the pointer (mitcad#523): jointHovered when it
   // changes ("uid@occurrence", empty: none).
-  void hoverJoint(const QTreeWidgetItem* item);
+  void hoverJoint(const BrowserNode& node);
   QString m_hoveredJoint;
+  // The body, component or occurrence row under the pointer (mitcad#1022):
+  // bodiesHovered when it changes (its key, empty: none).
+  void hoverBodies(const BrowserNode& node);
+  QString m_hoveredBodies;
   QWidget* m_topBar = nullptr; // setTopBar (mitcad#807)
   // The pointer resting on a row's fx badge (mitcad#862): after a moment
   // bindingsRequested (not pinned). The row's key, empty: on no badge.

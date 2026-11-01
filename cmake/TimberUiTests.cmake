@@ -8,7 +8,7 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGE
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-timber-seating-test.py"
               "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-timber-seating")
     set_tests_properties(app.ui-macos-timber-seating PROPERTIES
-      TIMEOUT 600 SKIP_RETURN_CODE 77 RUN_SERIAL TRUE
+      TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop
       ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   endif()
 endif()

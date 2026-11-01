@@ -46,7 +46,7 @@ void MainWindow::showConnectAssistant() {
     dialog = new mcp::ConnectAssistantDialog({
         [this] { return m_agentIndicator->agents(); },
         [this](const QStringList& ids) { if (m_mcpDisconnect) m_mcpDisconnect(ids); },
-        projectsDirectory()}, owner);
+        projectsDirectory(), [this] { return m_agentIndicator->previousClients(); }}, owner);
   } else if (dialog->parentWidget() != owner) {
     moveDialogTo(dialog, owner);
   }

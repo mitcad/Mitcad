@@ -587,7 +587,7 @@ fn a_round_face_ends_at_its_own_edges_and_a_half_hole_is_marked() {
     let (x, y) = (place[0] + 20.0, place[1] + 15.0);
     assert!(
         !upright_marks(&doc, x, y - 1.0, y + 1.0).is_empty(),
-        "no centre mark on the half hole in the top view: {marks:?}"
+        "no center mark on the half hole in the top view: {marks:?}"
     );
     // With a circle of its radius on its axis elsewhere: the face still
     // reaches from z 0 to 20, not 50.
@@ -603,7 +603,7 @@ fn a_round_face_ends_at_its_own_edges_and_a_half_hole_is_marked() {
     );
     // The front view's centreline, drawn from its middle out.
     let centreline = upright_marks(&doc, 85.0, 100.0, 140.0);
-    assert!(!centreline.is_empty(), "no centreline in the front view");
+    assert!(!centreline.is_empty(), "no centerline in the front view");
     assert!(
         centreline.iter().all(|y| *y <= 133.0 && *y >= 107.0),
         "{centreline:?}"

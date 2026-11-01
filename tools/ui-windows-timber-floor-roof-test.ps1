@@ -38,7 +38,7 @@ Ui-ExpectNew 'Panel Floor / Roof input frame_kind=roof at' 'the Kind''s Roof but
 $wallInputs = @(Ui-NewLines |
   Where-Object { $_ -match '^Panel Floor / Roof input (frame_height|frame_corner|frame_top) at \d+,\d+$' })
 if ($wallInputs.Count -gt 0) { Ui-Fail "Floor / Roof shows a wall's inputs: $($wallInputs -join ' / ')" }
-Expect-Inspect 'Floor / Roof' @('frame floor Floor 1, floor 4000 x 3000 mm', '4 rim joist') `
+Expect-Inspect 'Floor / Roof' @("frame floor Floor 1, floor 4000 ${Times} 3000 mm", '4 rim joist') `
   'a floor from the origin: rim joists all round, joists between them'
 Ui-Mark
 Ui-Step 'Place (Enter)'                  { Ui-Key 'Return' }
@@ -111,7 +111,7 @@ Expect-Inspect 'Floor / Roof' @('frame roof Roof 1, gable roof', 'rafter', 'ridg
 Choose-Fastener 'Floor / Roof' 'fastener' 'test-timber/ring-nail-test'
 Ui-Mark
 Ui-Step 'two at each junction'           { Ui-TypeIn 'Panel Floor / Roof input fastener_count' '2' }
-Expect-Inspect 'Floor / Roof' @('frame roof Roof 1, gable roof', 'fastener 2 x Ring nail test') `
+Expect-Inspect 'Floor / Roof' @('frame roof Roof 1, gable roof', "fastener 2 ${Times} Ring nail test") `
   'two ring nails at each junction'
 Ui-Mark
 Ui-Step 'Place (Enter)'                  { Ui-Key 'Return' }

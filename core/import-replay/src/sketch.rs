@@ -430,7 +430,7 @@ fn curve(
                 .ok_or("no minor radius")?;
             let c_at = center_at
                 .or_else(|| point_at.get(&center).copied())
-                .ok_or("no centre")?;
+                .ok_or("no center")?;
             let major_at = [
                 c_at[0] + mm(major_dir[0] * major_radius),
                 c_at[1] + mm(major_dir[1] * major_radius),

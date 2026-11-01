@@ -77,51 +77,29 @@ constexpr int kHeight = timeline::height;
 constexpr int kDragPixels = 6;
 constexpr int kRunMark = 8; // stands for a run of features the filter hides (mitcad#98)
 
-const QColor kErrorFill(0xf8, 0xc6, 0xc6);
-const QColor kErrorBorder(0xd0, 0x20, 0x20);
-const QColor kWarningFill(0xff, 0xec, 0xb0);
-const QColor kWarningBorder(0xa8, 0x7d, 0x00); // at least 3:1 on the light strip (mitcad#961)
-const QColor kWarningTint(0xf2, 0xb2, 0x00);   // the Floating light theme's warning fill, tinted
-const QColor kHoverFill(0xe9, 0xf1, 0xfc);
-const QColor kMarkerColor(0x2b, 0x3a, 0x4a);
-// The same on a dark palette (fills that the light ones would glare among);
-// the error fill plainly red beside the strip's background (mitcad#961).
-const QColor kErrorFillDark(0x86, 0x2c, 0x34);
-const QColor kWarningFillDark(0x6e, 0x5a, 0x1a);
-// The status rings brighter on a dark palette, plain beside the fills and the
-// selection's ring (mitcad#961).
-const QColor kErrorBorderDark(0xff, 0x5a, 0x5a);
-const QColor kWarningBorderDark(0xf2, 0xc2, 0x30);
-const QColor kHoverFillDark(0x34, 0x3c, 0x48);
-const QColor kMarkerColorDark(0xc8, 0xd0, 0xda); // on a dark theme's background (mitcad#14)
-const QColor kMarkerHandle(0xe0, 0x7b, 0x1a);
-const QColor kAllowed(0x20, 0xa0, 0x40);
-const QColor kRefused(0xd0, 0x20, 0x20);
-const QColor kGroupBand(0x7d, 0x8c, 0x9e); // over an open group's features (P9)
-const QColor kFoundBorder(0xff, 0x7a, 0x00); // a match of the search (mitcad#179), light or dark
-
-// The colours of the strip's cells and marker. Docked: the fixed ones above
-// (light or dark), with the selection and the marker's handle in the window's
-// one accent colour (mitcad#251). Floating: derived from the palette and the
-// Theme's colours, so that they sit on the card's material and follow the
-// accent colour; the handle stays orange.
+// The colours of the strip's cells and marker, from the role table
+// (mitcad#1041). Docked: the roles' fills and rings (light or dark), with
+// the selection and the marker's handle in the window's one accent colour
+// (mitcad#251). Floating: the status rings and tints over the card's
+// material, following the accent colour; the handle stays the handles'
+// orange. The status rings at least 3:1 on the strip (mitcad#961).
 struct StripColors {
   QColor errorFill, errorBorder, warningFill, warningBorder, selectedFill, selectedBorder, hoverFill, marker;
-  QColor found = kFoundBorder;
-  QColor handle = kMarkerHandle;
+  QColor found;
+  QColor handle = themeColor(ColorRole::Handle, false);
 };
 
 StripColors stripColors(const QPalette& palette) {
   const bool dark = isDarkPalette(palette);
+  const auto role = [&palette](ColorRole r) { return themeColor(r, palette); };
   if (chromeStyle() != ChromeStyle::Floating) {
-    const QColor accent = actionColor(palette);
+    const QColor accent = accentColor(palette); // the system's on macOS (mitcad#852 C3)
     QColor selected = accent;
     selected.setAlphaF(dark ? 0.30f : 0.18f);
-    return {dark ? kErrorFillDark : kErrorFill,     dark ? kErrorBorderDark : kErrorBorder,
-            dark ? kWarningFillDark : kWarningFill, dark ? kWarningBorderDark : kWarningBorder,
-            selected,                               accent,
-            dark ? kHoverFillDark : kHoverFill,     dark ? kMarkerColorDark : kMarkerColor,
-            kFoundBorder,                           accent};
+    return {role(ColorRole::ErrorFill),   role(ColorRole::ErrorBorder), role(ColorRole::WarningFill),
+            role(ColorRole::WarningBorder), selected,                   accent,
+            role(ColorRole::HoverFill),   role(ColorRole::TimelineMarker), role(ColorRole::SearchMatch),
+            accent};
   }
   const auto tint = [](QColor color, qreal alpha) {
     color.setAlphaF(static_cast<float>(alpha));
@@ -130,14 +108,16 @@ StripColors stripColors(const QPalette& palette) {
   const QColor text = palette.color(QPalette::WindowText);
   const QColor accent = accentColor(palette);
   // The status fills stronger on a dark card, where a faint tint vanishes;
-  // on a light one the warning amber as Docked, not the text's brown
-  // (mitcad#961).
-  return {tint(errorColor(palette), dark ? 0.40 : 0.24),  errorColor(palette),
-          dark ? tint(warningColor(palette), 0.36) : tint(kWarningTint, 0.30),
-          dark ? warningColor(palette) : kWarningBorder,
-          tint(accent, 0.24),                              accent,
-          tint(text, 0.09),                                text,
-          kFoundBorder};
+  // on a light one the warning's yellow, not the text's brown (mitcad#961).
+  return {tint(role(ColorRole::ErrorBorder), dark ? 0.40 : 0.24),
+          role(ColorRole::ErrorBorder),
+          tint(dark ? role(ColorRole::WarningText) : themeColor(ColorRole::WarningBadge, false), dark ? 0.36 : 0.30),
+          role(ColorRole::WarningBorder),
+          tint(accent, 0.24),
+          accent,
+          tint(text, 0.09),
+          text,
+          role(ColorRole::SearchMatch)};
 }
 
 // The cells' colours (FeatureStatus.hpp): the pointer's ring on a failed or
@@ -159,7 +139,7 @@ bool darkPalette(const QPalette& palette) {
 }
 
 // The history marker's bar and the outline of its handle.
-QColor markerColor(const QPalette& palette) { return darkPalette(palette) ? kMarkerColorDark : kMarkerColor; }
+QColor markerColor(const QPalette& palette) { return themeColor(ColorRole::TimelineMarker, darkPalette(palette)); }
 
 // The line across a suppressed feature: between the text and the window
 // (#606060 on a light theme's window, as before).
@@ -416,6 +396,69 @@ public:
     }
     return -1;
   }
+  // The features a hover over cell `index` previews (-1: none): the
+  // feature, or a folded group's members; only those built before the
+  // marker.
+  QStringList hoverFeaturesAt(int index) const {
+    QStringList features;
+    if (index < 0 || index >= count()) {
+      return features;
+    }
+    const int last = isHead(index) ? m_groups[m_items[index].group].last : index;
+    for (int i = index; i <= last; ++i) {
+      const auto& feature = m_items[i].feature;
+      if (i < m_marker && feature.succeeded() && !feature.suppressed) features << feature.uid;
+    }
+    return features;
+  }
+  // A cell's tooltip (rich text): the feature's details, then its state;
+  // a folded group's name and size. Logged when it changes; another
+  // presentation of the timeline shows the same (mitcad#1076).
+  QString cellToolTip(int i) {
+    const DocumentSnapshot::Feature& feature = m_items[i].feature;
+    const QString title = QStringLiteral("<b>%1</b>").arg(feature.name.toHtmlEscaped());
+    // The feature's details (its kind, component and sizes), then its
+    // state; the log names the feature and its state only.
+    const QString details = m_owner.m_featureDetails ? m_owner.m_featureDetails(feature.uid) : title;
+    QString state;
+    if (isHead(i)) {
+      const Group& group = m_groups[m_items[i].group];
+      state = tr("<b>%1</b><br>%n feature(s); double-click to open", nullptr, group.last - group.first + 1)
+                  .arg(group.name.toHtmlEscaped());
+    } else if (feature.status == QStringLiteral("error") || feature.status == QStringLiteral("warning")) {
+      // The level's word with the message (mitcad#1040).
+      state = QStringLiteral("<br>%1").arg(
+          noticeLevelText(featureStateLevel(featureState(feature.status)), feature.error).toHtmlEscaped());
+    } else if (!feature.suppressed && i < m_marker && feature.noted()) {
+      // An import note or infos: information (mitcad#1040, mitcad#1106).
+      state = QStringLiteral("<br>%1").arg(feature.error.toHtmlEscaped());
+    } else if (feature.suppressed) {
+      // A placeholder says why the import skipped its item (mitcad#170).
+      state = feature.error.isEmpty() ? tr("<br>Suppressed")
+                                      : tr("<br>Suppressed: %1").arg(feature.error.toHtmlEscaped());
+    } else if (i >= m_marker) {
+      state = tr("<br>Rolled back");
+      if (!feature.error.isEmpty()) {
+        state += QStringLiteral("<br>%1").arg(feature.error.toHtmlEscaped());
+      }
+    }
+    if (!isHead(i) && (!feature.succeeded() || feature.suppressed || i >= m_marker)) {
+      state += tr("<br>No geometry to show");
+    }
+    // The condition it is suppressed under (mitcad#809).
+    if (!isHead(i) && !feature.suppressedWhen.isEmpty()) {
+      state += tr("<br>Suppressed when %1").arg(feature.suppressedWhen.toHtmlEscaped());
+    }
+    const QString tip = isHead(i) ? state : details + state;
+    if (tip != m_loggedTip) {
+      m_loggedTip = tip;
+      QString plain = isHead(i) ? state : title + state;
+      plain.replace(QStringLiteral("<br>"), QStringLiteral(": "));
+      plain.remove(QStringLiteral("<b>")).remove(QStringLiteral("</b>"));
+      qDebug().noquote() << QStringLiteral("Timeline tooltip: %1").arg(plain);
+    }
+    return tip;
+  }
   // The band over an open group's cells.
   QRect bandRect(const Group& group) const {
     const int left = cell(group.first).left();
@@ -530,7 +573,7 @@ protected:
     for (const Group& group : std::as_const(m_groups)) {
       if (!group.collapsed) {
         painter.setPen(Qt::NoPen);
-        painter.setBrush(kGroupBand);
+        painter.setBrush(themeColor(ColorRole::GroupBand, false));
         painter.drawRoundedRect(QRectF(bandRect(group)).adjusted(1, 0.5, -1, 0), 1.5, 1.5);
       }
     }
@@ -552,8 +595,9 @@ protected:
       for (int k = i; k <= last; ++k) {
         const DocumentSnapshot::Feature& member = m_items[k].feature;
         state.state = std::max(state.state, featureState(member.status));
-        // An import note on a feature that is not built (mitcad#170).
-        state.noted = state.noted || !member.importNote.isEmpty();
+        // An import note on a feature that is not built (mitcad#170), or
+        // infos of one that is (mitcad#1106).
+        state.noted = state.noted || member.noted();
         off = off && (member.suppressed || k >= m_marker);
         // A match of the search (mitcad#179).
         state.found = state.found || m_found.contains(member.uid);
@@ -573,7 +617,7 @@ protected:
         painter.setBrush(colour);
         painter.drawRoundedRect(QRectF(rect.left() + 4, kBandTop, kItem - 8, kBand - 0.5), 1.5, 1.5);
       }
-      painter.setOpacity(off ? 0.3 : 1.0);
+      painter.setOpacity(off ? kStateDimOpacity : 1.0);
       QIcon icon = themeIcon(head ? QStringLiteral("folder") : featureIcon(feature.type));
       // Suppressed when a condition holds (mitcad#809): an fx badge.
       if (!head && !feature.suppressedWhen.isEmpty()) {
@@ -589,7 +633,7 @@ protected:
       // The status badge over everything, whatever the cell's state
       // (mitcad#961): a folded group's when one of its features failed.
       if (look.badge) {
-        timeline::paintStatusBadge(painter, QRectF(cell(i)), state.state, cells.halo);
+        timeline::paintCellBadge(painter, QRectF(cell(i)), look.badgeLevel, cells.halo);
       }
     }
     // The painted state of the cells with a status, for UI tests: logged
@@ -621,7 +665,7 @@ protected:
     if (m_dragItem && m_dropIndex >= 0 && m_dropIndex != m_press) {
       const int gap = m_dropIndex >= m_press ? m_dropIndex + 1 : m_dropIndex;
       const double at = boundary(gap);
-      painter.setPen(QPen(m_dropAllowed ? kAllowed : kRefused, 3.0));
+      painter.setPen(QPen(themeColor(m_dropAllowed ? ColorRole::DropAllowed : ColorRole::DropRefused, palette()), 3.0));
       painter.drawLine(QPointF(at, 1), QPointF(at, height() - 1));
     }
   }
@@ -691,6 +735,9 @@ protected:
         } else {
           QToolTip::hideText();
         }
+        // Not by the line's colour alone (mitcad#1041): a refused drop has
+        // the "no" cursor and the reason.
+        setCursor(m_dropAllowed ? Qt::ClosedHandCursor : Qt::ForbiddenCursor);
         update();
       }
       return;
@@ -863,7 +910,7 @@ protected:
       // (mitcad#98): how many of them are after it.
       const int hiddenAfter = filteredAfter(m_marker);
       if (i < 0 && filteredCount() > 0 && markerRect().adjusted(-3, 0, 3, 0).contains(help->pos())) {
-        const QString tip = tr("History marker: %n feature(s) of components not shown are rolled back", nullptr,
+        const QString tip = tr("Timeline marker: %n feature(s) of components not shown are rolled back", nullptr,
                                hiddenAfter);
         QToolTip::showText(help->globalPos(), tip, this, markerRect());
         if (tip != m_loggedTip) {
@@ -876,44 +923,7 @@ protected:
         QToolTip::hideText();
         return true;
       }
-      const DocumentSnapshot::Feature& feature = m_items[i].feature;
-      const QString title = QStringLiteral("<b>%1</b>").arg(feature.name.toHtmlEscaped());
-      // The feature's details (its kind, component and sizes), then its
-      // state; the log names the feature and its state only.
-      const QString details = m_owner.m_featureDetails ? m_owner.m_featureDetails(feature.uid) : title;
-      QString state;
-      if (isHead(i)) {
-        const Group& group = m_groups[m_items[i].group];
-        state = tr("<b>%1</b><br>%n feature(s); double-click to open", nullptr, group.last - group.first + 1)
-                    .arg(group.name.toHtmlEscaped());
-      } else if (feature.status == QStringLiteral("error") || feature.status == QStringLiteral("warning")) {
-        state = QStringLiteral("<br>%1").arg(feature.error.toHtmlEscaped());
-      } else if (feature.suppressed) {
-        // A placeholder says why the import skipped its item (mitcad#170).
-        state = feature.error.isEmpty() ? tr("<br>Suppressed")
-                                        : tr("<br>Suppressed: %1").arg(feature.error.toHtmlEscaped());
-      } else if (i >= m_marker) {
-        state = tr("<br>Rolled back");
-        if (!feature.error.isEmpty()) {
-          state += QStringLiteral("<br>%1").arg(feature.error.toHtmlEscaped());
-        }
-      }
-      if (!isHead(i) && (!feature.succeeded() || feature.suppressed || i >= m_marker)) {
-        state += tr("<br>No geometry to show");
-      }
-      // The condition it is suppressed under (mitcad#809).
-      if (!isHead(i) && !feature.suppressedWhen.isEmpty()) {
-        state += tr("<br>Suppressed when %1").arg(feature.suppressedWhen.toHtmlEscaped());
-      }
-      const QString tip = isHead(i) ? state : details + state;
-      QToolTip::showText(help->globalPos(), tip, this, cell(i));
-      if (tip != m_loggedTip) {
-        m_loggedTip = tip;
-        QString plain = isHead(i) ? state : title + state;
-        plain.replace(QStringLiteral("<br>"), QStringLiteral(": "));
-        plain.remove(QStringLiteral("<b>")).remove(QStringLiteral("</b>"));
-        qDebug().noquote() << QStringLiteral("Timeline tooltip: %1").arg(plain);
-      }
+      QToolTip::showText(help->globalPos(), cellToolTip(i), this, cell(i));
       return true;
     }
     return QWidget::event(event);
@@ -923,13 +933,8 @@ private:
   void setHover(int index) {
     m_hover = index;
     m_hoverTimer.stop();
-    QStringList features;
+    const QStringList features = hoverFeaturesAt(index);
     if (index >= 0) {
-      const int last = isHead(index) ? m_groups[m_items[index].group].last : index;
-      for (int i = index; i <= last; ++i) {
-        const auto& feature = m_items[i].feature;
-        if (i < m_marker && feature.succeeded() && !feature.suppressed) features << feature.uid;
-      }
       m_hoverTimer.start();
     }
     if (features != m_owner.m_hoveredFeatures) {
@@ -1147,6 +1152,17 @@ void TimelineWidget::applyPalette() {
   m_searchButton->setIcon(themeIcon(QStringLiteral("search")));
   m_searchPrevious->setIcon(playbackIcon(*style(), QStyle::SP_ArrowLeft, palette()));
   m_searchNext->setIcon(playbackIcon(*style(), QStyle::SP_ArrowRight, palette()));
+  // The search list's failed matches in the new theme's error colour
+  // (mitcad#1104: an item keeps the colour it was given).
+  if (m_searchList != nullptr) {
+    for (int i = 0; i < m_searchList->topLevelItemCount(); ++i) {
+      QTreeWidgetItem* row = m_searchList->topLevelItem(i);
+      const DocumentSnapshot::Feature* feature = m_snapshot.feature(row->data(0, Qt::UserRole).toString());
+      if (feature != nullptr && feature->status == QStringLiteral("error")) {
+        row->setForeground(0, errorColor(palette()));
+      }
+    }
+  }
   m_strip->update();
   const QString colours = QStringLiteral("Timeline colours: %1, marker %2, buttons %3, window %4, handle %5")
                               .arg(darkPalette(palette()) ? QStringLiteral("dark") : QStringLiteral("light"),
@@ -1373,12 +1389,35 @@ void TimelineWidget::setGroupCollapsed(const QString& name, bool collapsed) {
   qDebug().noquote() << QStringLiteral("Timeline group %1 %2").arg(name, collapsed ? QStringLiteral("collapsed")
                                                                                    : QStringLiteral("expanded"));
   rebuild(DocumentSnapshot(m_snapshot));
+  emit groupCollapsedChanged(name, collapsed);
 }
 
 void TimelineWidget::groupRenamed(const QString& name, const QString& newName) {
   if (m_collapsed.remove(name)) {
     m_collapsed.insert(newName);
   }
+}
+
+QVector<TimelineWidget::ShownGroup> TimelineWidget::shownGroups() const {
+  QVector<ShownGroup> groups;
+  for (const TimelineStrip::Group& group : m_strip->groups()) {
+    groups.append(ShownGroup{group.name, m_strip->item(group.first)->feature.uid,
+                             m_strip->item(group.last)->feature.uid, group.collapsed});
+  }
+  return groups;
+}
+
+void TimelineWidget::hoverFeature(const QString& uid) {
+  const QStringList features = m_strip->hoverFeaturesAt(uid.isEmpty() ? -1 : m_strip->indexOf(uid));
+  if (features != m_hoveredFeatures) {
+    m_hoveredFeatures = features;
+    emit featuresHovered(features);
+  }
+}
+
+QString TimelineWidget::featureToolTip(const QString& uid) {
+  const int i = m_strip->indexOf(uid);
+  return i < 0 ? QString() : m_strip->cellToolTip(i);
 }
 
 QStringList TimelineWidget::selectedFeatures() const { return m_strip->selectedRun(); }
@@ -1624,8 +1663,10 @@ void TimelineWidget::updateMatches() {
     item.type = feature.type;
     item.component = m_snapshot.componentName(feature.component);
     item.failed = feature.status == QStringLiteral("error");
-    // As the warnings badge counts them (mitcad#170).
-    item.warned = !item.failed && (feature.status == QStringLiteral("warning") || !feature.importNote.isEmpty());
+    // As the warnings badge counts them; an import note is information
+    // (mitcad#1040).
+    item.warned = !item.failed && feature.status == QStringLiteral("warning");
+    item.noted = feature.noted();
     item.suppressed = feature.suppressed;
     item.rolledBack = i >= m_strip->marker();
     if (query.matches(item)) {
@@ -1734,7 +1775,7 @@ void TimelineWidget::fillSearchList() {
     row->setData(0, Qt::UserRole, uid);
     QString state;
     if (feature->status == QStringLiteral("error") || feature->status == QStringLiteral("warning")) {
-      state = feature->error;
+      state = noticeLevelText(featureStateLevel(featureState(feature->status)), feature->error);
     } else if (feature->suppressed) {
       state = feature->error.isEmpty() ? tr("Suppressed") : tr("Suppressed: %1").arg(feature->error);
     } else if (feature->index >= m_snapshot.marker) {
@@ -1875,7 +1916,9 @@ void TimelineWidget::showSearchMenu(const QPoint& globalPosition) {
     entries << label;
   };
   add(tr("Failed"), timelineStatusToken(TimelineQuery::Failed));
-  add(tr("Warnings and Import Notes"), timelineStatusToken(TimelineQuery::Warning));
+  add(tr("Warnings"), timelineStatusToken(TimelineQuery::Warning));
+  // Import notes are information (mitcad#1040).
+  add(tr("Import Notes"), timelineStatusToken(TimelineQuery::Info));
   add(tr("Suppressed"), timelineStatusToken(TimelineQuery::Suppressed));
   add(tr("Rolled Back"), timelineStatusToken(TimelineQuery::RolledBack));
   menu.addSeparator();

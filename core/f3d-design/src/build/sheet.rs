@@ -120,7 +120,7 @@ impl Builder<'_> {
         let mut inferred = vec![
             "bend_relief.type, corner_relief.type: the rule's relief shapes are not decoded"
                 .to_owned(),
-            "corner_relief.depth: the rule has none (Mitcad does not use it)".to_owned(),
+            "corner_relief.depth: the rule has none (MitCad does not use it)".to_owned(),
         ];
         // An expression of the rule in the thickness parameter's name.
         let expr = |k: usize, what: &str, inferred: &mut Vec<String>| -> Value {

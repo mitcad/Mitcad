@@ -65,7 +65,7 @@ impl Stream {
         match agent {
             "claude" => Ok(Stream::Claude(ClaudeStream::default())),
             "codex" => Ok(Stream::Codex(Box::default())),
-            other => Err(format!("unknown chat agent '{}'", crate::echoed(other))),
+            other => Err(format!("unknown chat agent “{}”", crate::echoed(other))),
         }
     }
 
@@ -193,7 +193,7 @@ pub fn request(request: &Value) -> Result<Value, String> {
                 .map_or(history::DEFAULT_LIMIT, |limit| limit as usize),
         )),
         "tool_groups" => Ok(groups::groups(request)),
-        other => Err(format!("unknown chat op '{}'", crate::echoed(other))),
+        other => Err(format!("unknown chat op “{}”", crate::echoed(other))),
     }
 }
 

@@ -12,12 +12,12 @@
 #   3. A source that is no library added: Update fetches the other, says so
 #      in one warning, searches again and keeps the selected block.
 #   4. The part picker's grid (mitcad#418): the group Blocks, a search
-#      inside it, a star, Favourites, the block inserted from there and In
+#      inside it, a star, Favorites, the block inserted from there and In
 #      this design with it.
 #   5. The groups as a tree (mitcad#527): two more libraries, one's Wood (a
 #      parent by id) and the other's Wood/Sheets one group listing both
 #      libraries' parts, a screw in two groups (Slot profile/Screws and
-#      General fasteners/Screws) and once in Favourites, Wood folded and
+#      General fasteners/Screws) and once in Favorites, Wood folded and
 #      still folded when the browser opens again, then unfolded; each
 #      group with its count (mitcad#1015).
 #   6. The grid's Supplier filter on Acme (mitcad#1015): the groups'
@@ -157,7 +157,7 @@ Ui-FocusDialog '^Insert from Library$'
 Ui-Step 'close (Escape)'                 { Ui-Key 'Escape' }
 Ui-FocusMain
 
-Write-Host '--- 4. The part picker: a group, a search, a star, Favourites, In this design (mitcad#418)'
+Write-Host '--- 4. The part picker: a group, a search, a star, Favorites, In this design (mitcad#418)'
 Ui-Mark
 Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
 Ui-FocusDialog '^Insert from Library$'
@@ -180,8 +180,8 @@ Ui-ExpectNew 'Part picker star block on' 'the block starred'
 Ui-ExpectNew 'Part picker tiles kept: ' 'a star changes only the star: the tiles stay (mitcad#517)'
 Ui-ExpectNew '; current test-blocks/block' 'the selection stays on the starred block'
 Ui-Mark
-Ui-Step 'Favourites (Alt+O, F)'          { Ui-Key 'alt+o'; Type-Ahead 'F' }
-Ui-ExpectNew 'Part picker group Favourites: 1 parts, first test-blocks/block' 'Favourites has the block'
+Ui-Step 'Favorites (Alt+O, F)'          { Ui-Key 'alt+o'; Type-Ahead 'F' }
+Ui-ExpectNew 'Part picker group Favorites: 1 parts, first test-blocks/block' 'Favorites has the block'
 Ui-Step 'Insert (Alt+I)'                 { Ui-Key 'alt+i' }
 Ui-FocusMain
 Ui-ExpectNew 'Part picker chose test-blocks/block' 'chosen in the picker'
@@ -190,7 +190,7 @@ Ui-Mark
 Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
 Ui-FocusDialog '^Insert from Library$'
 Ui-ExpectNew 'Part picker in this design: 1 parts: test-blocks/block x1' 'the block in this design'
-Ui-ExpectNew 'Part picker group All parts: 1 parts, first test-blocks/block' 'All parts again'
+Ui-ExpectNew 'Part picker group All components: 1 parts, first test-blocks/block' 'All components again'
 Ui-Step 'close (Escape)'                 { Ui-Key 'Escape' }
 Ui-FocusMain
 
@@ -273,13 +273,13 @@ Ui-Mark
 Ui-Step 'star it (Ctrl+D)'               { Ui-Key 'ctrl+d' }
 Ui-ExpectNew 'Part picker star slot-screw on' 'the slot screw starred'
 Ui-Mark
-Ui-Step 'Favourites (Alt+O, F)'          { Ui-Key 'alt+o'; Type-Ahead 'F' }
-Ui-ExpectNew 'Part picker group Favourites: 2 parts' 'the block and the slot screw'
+Ui-Step 'Favorites (Alt+O, F)'          { Ui-Key 'alt+o'; Type-Ahead 'F' }
+Ui-ExpectNew 'Part picker group Favorites: 2 parts' 'the block and the slot screw'
 $tiles = Ui-LastMatch '^Part picker tiles: (.*)$'
 if (([regex]::Matches("$tiles", 'test-wood/slot-screw')).Count -ne 1) {
-  Ui-Fail "the slot screw is not in Favourites once: '$tiles'"
+  Ui-Fail "the slot screw is not in Favorites once: '$tiles'"
 }
-Write-Host 'ok   a part in two groups is one tile in Favourites'
+Write-Host 'ok   a part in two groups is one tile in Favorites'
 Ui-Mark
 Ui-Step 'fold Wood (Alt+O, W, Left)'     { Ui-Key 'alt+o'; Type-Ahead 'W'; Ui-Key 'Left' }
 Ui-ExpectNew 'Part picker group Wood folded' 'Wood folded'
@@ -367,10 +367,10 @@ Ui-ExpectNew 'source(s): 1 failed' 'only the broken source fails' 30
 Ui-FocusDialog '^Fetch Libraries$'
 Ui-Step 'close the warning (Return)'     { Ui-Key 'Return' }
 Ui-FocusDialog '^Insert from Library$'
-Ui-Step 'All parts (Alt+O, A)'           { Ui-Key 'alt+o'; Type-Ahead 'A' }
+Ui-Step 'All components (Alt+O, A)'           { Ui-Key 'alt+o'; Type-Ahead 'A' }
 # The Supplier filter (mitcad#1015): the groups' counts under it; the
 # groups with none of Acme's parts (Wood, Slot profile, Blocks and
-# Favourites) hidden, General fasteners with the screw kept.
+# Favorites) hidden, General fasteners with the screw kept.
 Ui-Mark
 Ui-Step 'Supplier Acme (Alt+R, Ac)'      { Ui-Key 'alt+r'; Type-Ahead 'Ac' }
 Ui-ExpectNew 'Part picker supplier acme' 'the Supplier filter on Acme'
@@ -379,7 +379,7 @@ $groupsFiltered = Ui-LastMatch '^Part picker groups: (.*)$'
 foreach ($group in @('General fasteners (1)', 'General fasteners/Screws (1)')) {
   if (", $groupsFiltered, " -notlike "*, $group, *") { Ui-Fail "no group $group under Acme in '$groupsFiltered'" }
 }
-foreach ($group in @('Wood', 'Slot profile', 'Blocks', 'Favourites')) {
+foreach ($group in @('Wood', 'Slot profile', 'Blocks', 'Favorites')) {
   if (", $groupsFiltered" -like "*, $group*") { Ui-Fail "the empty $group is shown under Acme: '$groupsFiltered'" }
 }
 Write-Host "ok   the groups under Acme: $groupsFiltered"
@@ -429,7 +429,7 @@ Ui-ExpectNew 'Library browser row M6x8: designation DIN 912 M6x8; supplier part 
 Ui-Mark
 Ui-Step 'Supplier Articles (Alt+A)'      { Ui-Key 'alt+a' }
 Ui-FocusDialog '^Supplier Articles - DIN 912 M6x8$'
-Ui-ExpectNew 'Supplier parts of M6x8: 2 articles, columns Supplier, Part number, Material, Finish, Checked' `
+Ui-ExpectNew 'Supplier parts of M6x8: 2 articles, columns Supplier, Supplier Part Number, Material, Finish, Checked' `
   'the table of the two articles and the columns they fill'
 Ui-Step 'Copy as TSV (Alt+T)'            { Ui-Key 'alt+t' }
 Ui-ExpectNew 'Supplier articles copied: 2 rows' 'both articles copied'

@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/browser/ParametersDialog.cpp app/browser/TablesPage.cpp app/framework/FormulaEditor.cpp
 # check-all sources: app/framework/ParameterField.cpp app/framework/ParameterSuggest.cpp core/model/src/tables.rs
-# Input-driven Windows UI test of tables in Change Parameters (mitcad#667,
+# Input-driven Windows UI test of tables in Edit Parameters (mitcad#667,
 # docs/table-lookups.md) in the build VM (tools/ui-windows-lib.ps1 says how
 # the input is posted), on the demo block (60 x 40 x 20 mm: d1, d2, d3), as
 # tools/ui-tables-test.sh does on Linux, by the keyboard (the clicks of the
 # helpers go to the main window, and the dialog is a window of its own):
-#   1. Change Parameters (a shortcut of the test's), the Tables tab
+#   1. Edit Parameters (a shortcut of the test's), the Tables tab
 #      (Alt+T), New (Alt+N): the table Screws, a Key column of texts and a
 #      Value column in mm with one empty row.
 #   2. Cells typed: M4 7, Add Row (Alt+W), M5; abc in Value is refused and
@@ -57,7 +57,7 @@ Ui-StartApp 'tables' @('--demo')
 
 Write-Host '--- 1. A new table'
 Ui-Mark
-Ui-Step 'Change Parameters (F7)'          { Ui-Key 'F7' }
+Ui-Step 'Edit Parameters (F7)'          { Ui-Key 'F7' }
 Ui-ExpectNew 'Parameters dialog opened' 'the dialog opened'
 Ui-FocusDialog '^Parameters$'
 Ui-Mark

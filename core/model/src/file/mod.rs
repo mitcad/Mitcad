@@ -13,7 +13,7 @@
 //! Loading checks the format, the version, the schema, every reference and
 //! the values, with the same checks as the commands, so a file can only
 //! describe a timeline the commands could build. Errors say where, e.g.
-//! `features[5] (Fillet1): radius: parameter 'd99' does not exist`.
+//! `features[5] (Fillet1): radius: parameter d99 does not exist`.
 //!
 //! ```json
 //! {
@@ -142,9 +142,12 @@
 //! [`crate::properties`]. Computed values are never written.
 //!
 //! Materials of the design (mitcad#640), when there are any: `materials`
-//! (`id`, `name`, `density`, `appearance`, `filament`, `based_on`,
-//! `version`, `origin`) and the components' default materials
-//! `component_materials` (`[{"component", "material"}]`), see
+//! (`id`, `name`, `density`, `appearance`, `appearances` (mitcad#1055),
+//! `filament`, `based_on`, `class` (mitcad#655: `metal`, `plastic`,
+//! `other`; `fdm_plastic` and `resin` since mitcad#1102, written only
+//! when chosen for a material without print settings, which older versions
+//! refuse), `version`, `origin`) and the components' default materials
+//! `component_materials` (`[{"component", "material", "appearance"?}]`), see
 //! [`crate::material`]; a body's `material` names a built-in material or
 //! one of these.
 //!
@@ -191,6 +194,8 @@
 //! `emission_color`, `opacity`, and a `texture` {`path`, `size`,
 //! `rotation`, `projection`, `data`, and the maps `normal`, `roughness`,
 //! `metalness`, `occlusion` {`path`, `data`} and `source`, mitcad#313};
+//! and its `class` (mitcad#1102), written only when set, which older
+//! versions refuse;
 //! parameters left out are the default's), see [`crate::appearance`].
 //! Embedded images are in their texture's `data` (base64) unless a map's
 //! image is embedded or one image is embedded twice: then the file has
@@ -227,6 +232,13 @@
 //! not versioned: it is kept apart in `.mitcad/local/display/<path in the
 //! project>.json` (`{"format": "mitcad-local", "version": 1, "display":
 //! {...}}`), which opening reads.
+//!
+//! The design's statistics (mitcad#1088), once a stamped save (the
+//! application's Save, [`Document::save_file_stamped`]) wrote them:
+//! `statistics` (`created`, `last_saved`, `last_saved_by`,
+//! `last_saved_with`; see `file/statistics.rs`). They are kept beside the
+//! definition, not in it: undo leaves them, and a design comparison does
+//! not see them.
 
 mod project;
 // A project's settings, shared and of this computer (mitcad#89).
@@ -235,6 +247,11 @@ mod v1;
 mod v2;
 // The top id numbers a design file leaves free (mitcad#944).
 mod id_reserve;
+// The design's statistics: created, last saved, by whom, with which
+// MitCad (mitcad#1088).
+mod statistics;
+pub(crate) use self::statistics::KeptStatistics;
+pub use self::statistics::{DesignStatistics, SaveStamp, utc_text};
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -290,7 +307,7 @@ impl fmt::Display for DesignError {
             Self::File(error) => error.fmt(f),
             Self::NotInProject(path) => write!(
                 f,
-                "{path} is not in a Mitcad project (a folder with {PROJECT_MARKER} \
+                "{path} is not in a MitCad project (a folder with {PROJECT_MARKER} \
                  in it or above it)"
             ),
         }
@@ -310,7 +327,7 @@ impl From<FileError> for DesignError {
 pub enum FileError {
     /// The text is not valid JSON.
     Syntax(String),
-    /// Valid JSON without the Mitcad format marker.
+    /// Valid JSON without the MitCad format marker.
     NotADesign,
     /// Missing, malformed or unsupported file version.
     Version(String),
@@ -326,7 +343,7 @@ impl fmt::Display for FileError {
             Self::Syntax(message) => write!(f, "not valid JSON: {message}"),
             Self::NotADesign => write!(
                 f,
-                "not a Mitcad design file (\"format\": \"{FORMAT}\" is missing)"
+                "not a MitCad design file (\"format\": \"{FORMAT}\" is missing)"
             ),
             Self::Version(message) => f.write_str(message),
             Self::Schema(message) | Self::Invalid(message) => {
@@ -344,7 +361,7 @@ impl<K: Kernel> Document<K> {
     /// base feature's data is missing (a reference that was not resolved),
     /// which keeps its reference and makes the file version 3.
     pub fn to_json(&self) -> String {
-        v2::save(self.state())
+        v2::save_with(self.state(), &self.design_statistics())
     }
 
     /// The design file of this document as a project versions it (version
@@ -355,6 +372,7 @@ impl<K: Kernel> Document<K> {
     /// display state it is the same as [`Document::to_json`].
     pub fn to_project_json(&self, store: &dyn BlobStore) -> std::io::Result<String> {
         let state = self.state();
+        let statistics = self.design_statistics();
         if state.display.is_default()
             && !state
                 .features
@@ -362,7 +380,7 @@ impl<K: Kernel> Document<K> {
                 .any(|f| matches!(f.def, FeatureDef::Base(_)))
             && state.library_sources.is_empty()
         {
-            return Ok(v2::save(state));
+            return Ok(v2::save_with(state, &statistics));
         }
         let mut written = HashSet::new();
         let mut referring = state.clone();
@@ -389,7 +407,7 @@ impl<K: Kernel> Document<K> {
                 ..(**entry).clone()
             });
         }
-        Ok(v2::save(&referring))
+        Ok(v2::save_with(&referring, &statistics))
     }
 
     /// Writes the design file to `path`, whole or not at all (a temporary
@@ -402,24 +420,7 @@ impl<K: Kernel> Document<K> {
     pub fn save_file(&self, path: &Path, format: FileFormat) -> Result<String, DesignError> {
         let absolute = std::path::absolute(path)
             .map_err(|e| DesignError::Io(format!("cannot resolve {}: {e}", path.display())))?;
-        let project = match format {
-            FileFormat::Single => None,
-            FileFormat::Auto => Project::find(path),
-            FileFormat::Project => Some(
-                Project::find(path)
-                    .ok_or_else(|| DesignError::NotInProject(path.display().to_string()))?,
-            ),
-        };
-        let json = match &project {
-            Some(project) => self.to_project_json(&project.store()).map_err(|e| {
-                DesignError::Io(format!(
-                    "cannot write the B-rep data of {} to {}: {e}",
-                    path.display(),
-                    project.store().dir().display()
-                ))
-            })?,
-            None => self.to_json(),
-        };
+        let (json, project) = self.file_text(path, format)?;
         write_atomically(path, json.as_bytes())
             .map_err(|e| DesignError::Io(format!("cannot write {}: {e}", path.display())))?;
         if let Some(local) = project.and_then(|p| p.local_state_path(path)) {
@@ -439,6 +440,67 @@ impl<K: Kernel> Document<K> {
         Ok(json)
     }
 
+    /// The text [`Document::save_file`] writes to `path` in `format`, and
+    /// the project the file is in when it goes there (the B-rep data not
+    /// yet in the project's store is written to it).
+    fn file_text(
+        &self,
+        path: &Path,
+        format: FileFormat,
+    ) -> Result<(String, Option<Project>), DesignError> {
+        let project = match format {
+            FileFormat::Single => None,
+            FileFormat::Auto => Project::find(path),
+            FileFormat::Project => Some(
+                Project::find(path)
+                    .ok_or_else(|| DesignError::NotInProject(path.display().to_string()))?,
+            ),
+        };
+        let json = match &project {
+            Some(project) => self.to_project_json(&project.store()).map_err(|e| {
+                DesignError::Io(format!(
+                    "cannot write the B-rep data of {} to {}: {e}",
+                    path.display(),
+                    project.store().dir().display()
+                ))
+            })?,
+            None => self.to_json(),
+        };
+        Ok((json, project))
+    }
+
+    /// [`Document::save_file`] as the application's Save does it
+    /// (mitcad#1088): the design's statistics stamped with `stamp` (the
+    /// time, the user, MitCad's version; `created` too for a new design)
+    /// when the file changes. A save that would write what the file
+    /// already holds (nothing changed, or only the display state of a
+    /// design in a project) leaves the statistics and the file's bytes as
+    /// they were, so that it records no new version. A save that fails
+    /// keeps the statistics before it.
+    pub fn save_file_stamped(
+        &self,
+        path: &Path,
+        format: FileFormat,
+        stamp: &SaveStamp,
+    ) -> Result<String, DesignError> {
+        let before = self.kept_statistics();
+        let (unstamped, _) = self.file_text(path, format)?;
+        let unchanged = std::fs::read(path).is_ok_and(|bytes| bytes == unstamped.as_bytes());
+        if !unchanged {
+            self.set_kept_statistics(before.stamped(stamp));
+        }
+        self.save_file(path, format).inspect_err(|_| {
+            self.set_kept_statistics(before);
+        })
+    }
+
+    /// The design's statistics as its file has them, or as the last
+    /// stamped save wrote them (mitcad#1088): `created` unknown for a
+    /// design whose file was saved before MitCad kept them.
+    pub fn design_statistics(&self) -> DesignStatistics {
+        self.kept_statistics().file
+    }
+
     /// Reads a design file of any version from `path`, its B-rep data
     /// from the store of the project it is in. Nothing is evaluated yet.
     pub fn load_design(path: &Path, kernel: K) -> Result<Self, DesignError> {
@@ -452,8 +514,14 @@ impl<K: Kernel> Document<K> {
     pub fn from_json_at(json: &str, path: &Path, kernel: K) -> Result<Self, FileError> {
         let absolute = std::path::absolute(path)
             .map_err(|e| FileError::Invalid(format!("cannot resolve {}: {e}", path.display())))?;
-        let (state, warnings) = load_state_at(json, path)?;
-        let document = Document::from_state(kernel, state).with_warnings(warnings);
+        let (state, warnings, statistics) = load_parts_at(json, path)?;
+        // A file without statistics was saved before MitCad kept them
+        // (mitcad#1088): its creation is not known. An empty design's file
+        // (a project's New Design writes one) is created when first saved.
+        let new = state.features.is_empty();
+        let document = Document::from_state(kernel, state)
+            .with_warnings(warnings)
+            .with_statistics(KeptStatistics::read(statistics, new));
         if let Some(directory) = absolute.parent() {
             document.set_source_directory(directory);
         }
@@ -463,9 +531,11 @@ impl<K: Kernel> Document<K> {
     /// Reads a design file, its B-rep data from `store` (e.g. an older
     /// version's, P12b).
     pub fn from_json_in(json: &str, store: &dyn BlobStore, kernel: K) -> Result<Self, FileError> {
-        let (mut state, mut warnings) = load_state(json)?;
+        let (mut state, mut warnings, statistics) = load_parts(json)?;
         resolve(&mut state, store, &mut warnings);
-        Ok(Document::from_state(kernel, state).with_warnings(warnings))
+        Ok(Document::from_state(kernel, state)
+            .with_warnings(warnings)
+            .with_statistics(KeptStatistics::read(statistics, false)))
     }
 
     /// The design file of this document with the timeline marker at
@@ -474,12 +544,13 @@ impl<K: Kernel> Document<K> {
     /// edit restores (P8). The document does not change.
     pub fn to_json_with_marker(&self, marker: usize) -> String {
         let state = self.state();
+        let statistics = self.design_statistics();
         if marker == state.marker {
-            return v2::save(state);
+            return v2::save_with(state, &statistics);
         }
         let mut moved = state.clone();
         moved.marker = marker.min(moved.features.len());
-        v2::save(&moved)
+        v2::save_with(&moved, &statistics)
     }
 
     /// Reads a design file of version 1, 2 or 3. Nothing is evaluated yet;
@@ -489,9 +560,14 @@ impl<K: Kernel> Document<K> {
     /// B-rep references of a version 3 file stay unresolved (their base
     /// features fail); [`Document::load_design`] and
     /// [`Document::from_json_at`] find the project's store.
+    ///
+    /// Text without statistics (an import's design, recovered work) is a
+    /// new design's: its first stamped save sets `created` (mitcad#1088).
     pub fn from_json(json: &str, kernel: K) -> Result<Self, FileError> {
-        let (state, warnings) = load_state(json)?;
-        Ok(Document::from_state(kernel, state).with_warnings(warnings))
+        let (state, warnings, statistics) = load_parts(json)?;
+        Ok(Document::from_state(kernel, state)
+            .with_warnings(warnings)
+            .with_statistics(KeptStatistics::read(statistics, true)))
     }
 }
 
@@ -499,14 +575,36 @@ impl<K: Kernel> Document<K> {
 /// loading changed. B-rep references stay unresolved.
 #[doc(hidden)]
 pub fn load_state(json: &str) -> Result<(DocState, Vec<String>), FileError> {
+    load_parts(json).map(|(state, warnings, _)| (state, warnings))
+}
+
+/// What a design file gives: its definition state, what loading changed
+/// and its statistics, if it has any (mitcad#1088).
+type Loaded = (DocState, Vec<String>, Option<DesignStatistics>);
+
+/// [`load_state`] with the file's statistics.
+fn load_parts(json: &str) -> Result<Loaded, FileError> {
     // Some Windows editors start UTF-8 text with a byte order mark.
     let json = json.strip_prefix('\u{feff}').unwrap_or(json);
-    let value: serde_json::Value =
+    let mut value: serde_json::Value =
         serde_json::from_str(json).map_err(|e| FileError::Syntax(e.to_string()))?;
     // The B-rep data inside the file decodes within one budget, so that
     // many bodies cannot ask for many times one body's limit (mitcad#928).
     let _budget = crate::features::base::FileBudget::start();
-    let (mut state, warnings) = match check_header(&value)? {
+    let version = check_header(&value)?;
+    // The statistics are no part of the definition (mitcad#1088): taken
+    // out before the definition is read.
+    let statistics = match value
+        .as_object_mut()
+        .and_then(|top| top.remove("statistics"))
+    {
+        None => None,
+        Some(statistics) => Some(
+            serde_json::from_value::<DesignStatistics>(statistics)
+                .map_err(|e| FileError::Schema(format!("statistics: {e}")))?,
+        ),
+    };
+    let (mut state, warnings) = match version {
         1 => v1::load(json),
         _ => v2::load(value),
     }?;
@@ -518,14 +616,19 @@ pub fn load_state(json: &str) -> Result<(DocState, Vec<String>), FileError> {
     state
         .settle_references()
         .map_err(|e| FileError::Invalid(e.to_string()))?;
-    Ok((state, warnings))
+    Ok((state, warnings, statistics))
 }
 
 /// The definition state of the design file at `path` (its text read by
 /// the caller), its B-rep references resolved from the store of the
 /// project the path is in; inserted components read other files with it.
 pub(crate) fn load_state_at(json: &str, path: &Path) -> Result<(DocState, Vec<String>), FileError> {
-    let (mut state, mut warnings) = load_state(json)?;
+    load_parts_at(json, path).map(|(state, warnings, _)| (state, warnings))
+}
+
+/// [`load_state_at`] with the file's statistics.
+fn load_parts_at(json: &str, path: &Path) -> Result<Loaded, FileError> {
+    let (mut state, mut warnings, statistics) = load_parts(json)?;
     match Project::find(path) {
         Some(project) => {
             if has_references(&state) {
@@ -536,13 +639,13 @@ pub(crate) fn load_state_at(json: &str, path: &Path) -> Result<(DocState, Vec<St
             }
         }
         None if has_references(&state) => warnings.push(format!(
-            "{} is not in a Mitcad project (a folder with {PROJECT_MARKER} in it or above \
+            "{} is not in a MitCad project (a folder with {PROJECT_MARKER} in it or above \
              it), so the B-rep data it refers to is not found",
             path.display()
         )),
         None => {}
     }
-    Ok((state, warnings))
+    Ok((state, warnings, statistics))
 }
 
 /// The definition state of a design file whose B-rep data is in `store`
@@ -680,6 +783,23 @@ pub fn empty_design() -> String {
     v2::save(&DocState::new_design())
 }
 
+/// The design file of a new, empty design in the length unit `length`
+/// (what `Document::new_design_in(.., length).to_json()` writes,
+/// mitcad#1036): the projects' `new_design` with `units`.
+pub fn empty_design_in(length: crate::expr::LengthUnit) -> String {
+    v2::save(&DocState::new_design_in(length))
+}
+
+/// A length unit by its name, as `set_units` reads it (`mm`, `cm`, `m`,
+/// `in`, `ft`, …): the new designs' units (mitcad#1036).
+pub fn parse_length_unit(text: &str) -> Result<crate::expr::LengthUnit, String> {
+    let unit = crate::expr::Unit::parse(text).map_err(|e| format!("unit “{text}”: {e}"))?;
+    match (unit.length(), unit.angle()) {
+        (Some((length, 1)), None) => Ok(length),
+        _ => Err(format!("“{text}” is not a length unit")),
+    }
+}
+
 /// Gives the base features' B-rep references their data from `store`.
 /// Data the store lacks, or a file that does not hold the data it is named
 /// after, leaves the reference (its base feature fails) and adds a warning.
@@ -758,7 +878,7 @@ pub(crate) fn legacy_name(name: &str, taken: &HashSet<String>) -> Option<String>
 }
 
 /// Checks the format marker and the version before the schema, so a file
-/// from another program or a newer Mitcad gets a clear message.
+/// from another program or a newer MitCad gets a clear message.
 fn check_header(value: &serde_json::Value) -> Result<u64, FileError> {
     if value.get("format").and_then(serde_json::Value::as_str) != Some(FORMAT) {
         return Err(FileError::NotADesign);
@@ -769,8 +889,8 @@ fn check_header(value: &serde_json::Value) -> Result<u64, FileError> {
         }
         Some(version) if version.as_u64().is_some_and(|v| v > VERSION) => {
             Err(FileError::Version(format!(
-                "the file is version {version}, newer than this Mitcad can read \
-                 (version {VERSION}); update Mitcad to open it"
+                "the file is version {version}, newer than this MitCad can read \
+                 (version {VERSION}); update MitCad to open it"
             )))
         }
         Some(version) => Err(FileError::Version(format!(

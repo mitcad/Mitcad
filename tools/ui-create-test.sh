@@ -221,6 +221,7 @@ ui_step "take the circle away"             ui_click_pick "profile F5/"
 ui_step "pick the 10 x 20 rectangle"       ui_click_pick "profile F4/"
 ui_expect_log "Revolve Profiles: 1 profile [profile $RECT of F4]" "rectangle picked"
 ui_step "the axis input"                   ui_click_logged "Panel Revolve input axis"
+ui_show_origin
 ui_step "pick the Y axis"                  ui_click_logged "Datum y"
 ui_expect_log "Revolve Axis: 1 axis [axis y]" "Y axis picked"
 ui_step "Angle"                            ui_choose "Panel Revolve input type" 1
@@ -603,7 +604,8 @@ primitive() {
   ui_step "$1 (search)"                    ui_command "$1"
   ui_expect_log "Command $1 started" "$1 started"
   case $4 in
-    xy|xz|yz) ui_step "click $4"           ui_click_logged "Datum $4"
+    xy|xz|yz) ui_show_origin # in the view as its light bulb shows it (mitcad#1030)
+              ui_step "click $4"           ui_click_logged "Datum $4"
               ui_expect_log "$1 Place On: 1 plane [plane $4]" "$4 picked" ;;
     *)        ui_step "click the face"     ui_click_pick "$4"
               ui_expect_log "$1 Place On: 1 face" "face picked" ;;

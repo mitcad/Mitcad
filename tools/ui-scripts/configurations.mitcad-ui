@@ -2,7 +2,7 @@
 # Configurations (mitcad#807) on Windows and macOS (and wherever the test
 # driver runs), on configurations.json: Color and Length as options, the row
 # Short and the rule Black is short. The Configurations window opens with
-# its options and rows, a choice in the browser's Configuration bar
+# its options and rows, a choice in the Configuration bar (its own panel)
 # changes the body, and a parameter column added in the Rows tab
 # (mitcad#999) drives the body when its row is applied.
 expect-ever 'View area'

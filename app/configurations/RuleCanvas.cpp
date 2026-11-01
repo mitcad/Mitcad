@@ -17,6 +17,7 @@
 #include <QGraphicsItem>
 #include <QGraphicsScene>
 #include <QGraphicsSimpleTextItem>
+#include <QIcon>
 #include <QTreeWidgetItemIterator>
 #include <QJsonDocument>
 #include <QKeyEvent>
@@ -26,10 +27,12 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QTimer>
 
+#include "../framework/NoticeLevel.hpp"
 #include "../framework/Theme.hpp"
 #include "../framework/Dialogs.hpp"
 
@@ -56,27 +59,47 @@ bool isLeaf(BlockKind kind) {
          kind == BlockKind::Column || kind == BlockKind::Formula;
 }
 
+// The blocks' category roles (mitcad#1041, docs/configurations.md): hues no
+// status uses, each at least 4.5:1 under the white text, the same on both
+// themes. A block's state never changes its fill: validation is an outline
+// and a badge on the rule's frame.
 QColor fillFor(BlockKind kind) {
   switch (kind) {
   case BlockKind::Name:
-    return {0x2b, 0x86, 0x7e};
+    return themeColor(ColorRole::RuleName, false);
   case BlockKind::Number:
   case BlockKind::Text:
   case BlockKind::Column:
-    return {0x3a, 0x8c, 0x4f};
+    return themeColor(ColorRole::RuleLiteral, false);
   case BlockKind::Formula:
-    return {0x69, 0x70, 0x7a};
+    return themeColor(ColorRole::RuleFormula, false);
   default:
     break;
   }
   if (isAction(kind)) {
-    return {0xc0, 0x72, 0x1e};
+    return themeColor(ColorRole::RuleAction, false);
   }
-  return {0x3d, 0x6b, 0xc2}; // logic
+  return themeColor(ColorRole::RuleLogic, false);
 }
 
-QColor frameColor() {
-  return {0x7b, 0x55, 0xbd};
+QColor frameColor() { return themeColor(ColorRole::RuleFrame, false); }
+
+// A palette entry's category colour: the rule group's the frame's.
+QColor entryColor(const QString& paletteId) {
+  return isRuleEntry(paletteId) ? frameColor() : fillFor(newBlock(paletteId).kind);
+}
+
+// A category's swatch for the palette, its legend (mitcad#1041).
+QIcon swatch(const QColor& color) {
+  QPixmap pixmap(24, 24);
+  pixmap.fill(Qt::transparent);
+  QPainter painter(&pixmap);
+  painter.setRenderHint(QPainter::Antialiasing);
+  painter.setPen(QPen(color.darker(135), 1.5));
+  painter.setBrush(color);
+  painter.drawRoundedRect(QRectF(3.0, 5.0, 18.0, 14.0), 3.0, 3.0);
+  painter.end();
+  return QIcon(pixmap);
 }
 
 // Lays a rule out as pieces: the frame first, then what is in it, each
@@ -387,6 +410,31 @@ public:
     }
   }
 
+  // The rule's problem, drawn on its frame (mitcad#1041).
+  void setValidation(NoticeLevel level) {
+    if (m_piece.role == Piece::Role::Frame && level != m_validation) {
+      m_validation = level;
+      update();
+    }
+  }
+
+  // The block's own problem (mitcad#1064): an outline in its level's
+  // colour, never a fill, and the problem as its tooltip.
+  void setMark(NoticeLevel level, const QString& message) {
+    if (m_piece.role == Piece::Role::Frame) {
+      return;
+    }
+    const NoticeLevel shown = isProblem(level) ? level : NoticeLevel::Hint;
+    if (shown != m_mark) {
+      m_mark = shown;
+      update();
+    }
+    if (toolTip() != message) {
+      setToolTip(message);
+      update(); // native adapters refresh their tooltips on the scene's change
+    }
+  }
+
   QRectF boundingRect() const override { return m_piece.rect.adjusted(-8.0, -6.0, 6.0, 8.0); }
 
   void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override {
@@ -394,7 +442,7 @@ public:
     painter->setFont(m_font);
     const QRectF r = m_piece.rect;
     const QColor accent = actionColor(m_palette);
-    const QColor light(Qt::white);
+    const QColor light = themeColor(ColorRole::RuleText, false);
     switch (m_piece.role) {
     case Piece::Role::Frame: {
       QPainterPath path;
@@ -405,6 +453,17 @@ public:
         path = path.subtracted(cut);
       }
       painter->fillPath(path, frameColor());
+      // The rule's problem on the blocks (mitcad#1041): an outline in the
+      // level's colour and its badge, never a fill.
+      if (isProblem(m_validation)) {
+        const ColorRole ring =
+            m_validation == NoticeLevel::Error ? ColorRole::ErrorBorder : ColorRole::WarningBorder;
+        painter->setPen(QPen(themeColor(ring, m_palette), 2.0));
+        painter->setBrush(Qt::NoBrush);
+        painter->drawRoundedRect(r.adjusted(-1.0, -1.0, 1.0, 1.0), 9.0, 9.0);
+        const QRectF badge(r.right() - 18.0, r.top() + 5.0, 12.0, 12.0);
+        paintNoticeBadge(*painter, badge, m_validation, frameColor());
+      }
       break;
     }
     case Piece::Role::Label: {
@@ -461,12 +520,20 @@ public:
       break;
     }
     }
+    if (isProblem(m_mark)) {
+      // On the block's edge, inside the focus's and a drop target's
+      // outline, so that both show.
+      const ColorRole ring = m_mark == NoticeLevel::Error ? ColorRole::ErrorBorder : ColorRole::WarningBorder;
+      painter->setPen(QPen(themeColor(ring, m_palette), 2.0));
+      painter->setBrush(Qt::NoBrush);
+      painter->drawRoundedRect(r.adjusted(-1.0, -1.0, 1.0, 1.0), 5.0, 5.0);
+    }
     if (m_highlighted && m_piece.role != Piece::Role::Frame) {
-      QColor fill = accent;
-      fill.setAlpha(70);
+      // A drop target: a 2 px outline with an offset, never a fill, so that
+      // it cannot be read as a Logic block (mitcad#1041).
       painter->setPen(QPen(accent, 2.0));
-      painter->setBrush(fill);
-      painter->drawRoundedRect(r.adjusted(-2.0, -2.0, 2.0, 2.0), 5.0, 5.0);
+      painter->setBrush(Qt::NoBrush);
+      painter->drawRoundedRect(r.adjusted(-3.0, -3.0, 3.0, 3.0), 6.0, 6.0);
     } else if (m_highlighted) {
       painter->setPen(QPen(accent, 3.0));
       painter->setBrush(Qt::NoBrush);
@@ -507,6 +574,8 @@ private:
   QFont m_font;
   bool m_focused = false;
   bool m_highlighted = false;
+  NoticeLevel m_validation = NoticeLevel::Hint;
+  NoticeLevel m_mark = NoticeLevel::Hint;
 };
 
 QString roleName(Piece::Role role) {
@@ -583,6 +652,7 @@ RulePalette::RulePalette(QWidget* parent) : QTreeWidget(parent) {
     }
     auto* item = new QTreeWidgetItem(group, QStringList{entry.label});
     item->setData(0, kIdRole, entry.id);
+    item->setIcon(0, swatch(entryColor(entry.id)));
     // What the block does, with an example (mitcad#967); how to drag it
     // is the palette's own tooltip.
     item->setToolTip(0, entry.tip);
@@ -748,6 +818,9 @@ void RuleCanvas::setRule(const Rule& rule) {
     m_pending.clear(); // another rule: the new block's edit is given up
     closeEditor();
   }
+  if (!m_hasRule || ruleToJson(rule) != ruleToJson(m_rule)) {
+    m_marks.clear(); // they were another rule's: the page marks this one
+  }
   m_rule = rule;
   m_hasRule = true;
   rebuild();
@@ -766,6 +839,7 @@ void RuleCanvas::clearRule() {
   m_rule = Rule();
   m_hasRule = false;
   m_focusName.clear();
+  m_marks.clear();
   rebuild();
 }
 
@@ -816,6 +890,7 @@ void RuleCanvas::rebuild() {
     m_focus = -1;
     m_scene->setSceneRect(QRectF(0.0, 0.0, std::max(300.0, hint->boundingRect().width() + 24.0), 60.0));
     logPlaces();
+    logValidation();
     return;
   }
   const QFontMetricsF metrics(font());
@@ -830,12 +905,77 @@ void RuleCanvas::rebuild() {
   m_focus = m_focusName.isEmpty() ? -1 : pieceIndex(m_focusName);
   updateItems();
   logPlaces();
+  logValidation(); // the marks' places as laid out now
 }
 
 void RuleCanvas::updateItems() {
-  for (std::size_t i = 0; i < m_items.size(); ++i) {
-    static_cast<PieceItem*>(m_items[i])->setState(static_cast<int>(i) == m_focus, static_cast<int>(i) == m_highlight);
+  // Each piece's own mark: the worst of the marks on it, their problems
+  // its tooltip.
+  std::vector<NoticeLevel> marks(m_items.size(), NoticeLevel::Hint);
+  std::vector<QStringList> messages(m_items.size());
+  for (const BlockMark& mark : m_marks) {
+    const int index = findPath(mark.path);
+    if (index < 0 || index >= static_cast<int>(m_items.size()) || !isProblem(mark.level)) {
+      continue;
+    }
+    const auto at = static_cast<std::size_t>(index);
+    if (static_cast<int>(mark.level) > static_cast<int>(marks[at])) {
+      marks[at] = mark.level;
+    }
+    if (!mark.message.isEmpty() && !messages[at].contains(mark.message)) {
+      messages[at] << mark.message;
+    }
   }
+  for (std::size_t i = 0; i < m_items.size(); ++i) {
+    auto* item = static_cast<PieceItem*>(m_items[i]);
+    item->setState(static_cast<int>(i) == m_focus, static_cast<int>(i) == m_highlight);
+    item->setValidation(m_validation);
+    item->setMark(marks[i], messages[i].join(QLatin1Char('\n')));
+  }
+}
+
+void RuleCanvas::setValidation(NoticeLevel level, std::vector<BlockMark> marks) {
+  const NoticeLevel shown = isProblem(level) ? level : NoticeLevel::Hint;
+  m_validation = shown;
+  m_marks = std::move(marks);
+  updateItems();
+  logValidation();
+}
+
+QString RuleCanvas::pieceProblem(std::size_t index) const {
+  return index < m_items.size() ? m_items[index]->toolTip() : QString();
+}
+
+QString RuleCanvas::validationText() const {
+  QString text = isProblem(m_validation) ? noticeLevelName(m_validation) : QStringLiteral("none");
+  QStringList places;
+  for (const BlockMark& mark : m_marks) {
+    const int index = findPath(mark.path);
+    if (index < 0 || !isProblem(mark.level)) {
+      continue;
+    }
+    QString place = m_pieces[static_cast<std::size_t>(index)].name();
+    if (mark.level != m_validation) {
+      place += QStringLiteral(" (%1)").arg(noticeLevelName(mark.level));
+    }
+    if (!places.contains(place)) {
+      places << place;
+    }
+  }
+  if (!places.isEmpty()) {
+    text += QStringLiteral(" at %1").arg(places.join(QStringLiteral(", ")));
+  }
+  return text;
+}
+
+void RuleCanvas::logValidation() {
+  // For UI tests: the level drawn on the rule's frame and the blocks marked.
+  const QString text = validationText();
+  if (text == m_loggedValidation) {
+    return;
+  }
+  m_loggedValidation = text;
+  qDebug().noquote() << QStringLiteral("Rule canvas validation: %1").arg(text);
 }
 
 int RuleCanvas::pieceIndex(const QString& name) const {
@@ -1171,6 +1311,7 @@ void RuleCanvas::endDrag() {
 void RuleCanvas::apply(Rule changed, const QString& what, const std::optional<BlockPath>& focus, bool editNew) {
   m_rule = std::move(changed);
   m_pending.clear(); // an edit that ends a new block's own edit includes it
+  m_marks.clear();   // the blocks marked were the rule's before the edit
   rebuild();
   qDebug().noquote() << QStringLiteral("Rule edited %1: %2").arg(m_rule.name, what);
   // A new block that needs its value opens its editor at once (a name, a

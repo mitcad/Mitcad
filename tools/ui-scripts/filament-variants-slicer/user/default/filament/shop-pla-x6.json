@@ -1,0 +1,3 @@
+{"name": "Shop PLA @Bench X 0.6 nozzle", "from": "User", "filament_type": ["PLA"], "filament_density": ["1.24"],
+ "filament_max_volumetric_speed": ["21"], "nozzle_temperature": ["230"],
+ "compatible_printers": ["Bench X 0.6 nozzle"]}

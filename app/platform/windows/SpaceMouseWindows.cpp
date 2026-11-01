@@ -6,7 +6,14 @@
 // RIDEV_DEVNOTIFY for the devices that come and go; its window procedure
 // reads them as Qt's event loop dispatches them. Input counts only while
 // Mitcad is the foreground application (RIM_INPUT). The reports' parsing
-// and their axes are SpaceMouseDevice.hpp's.
+// and their axes are SpaceMouseDevice.hpp's (SpaceMouseHidReader: where a
+// device sends its rotation, mitcad#1034).
+//
+// The debug log (mitcad#1034): at a device's first report, its name with
+// its vendor and product ids, the size of its reports (dwSizeHid), its
+// longest input report and where its report descriptor puts the rotation;
+// the report ids it sends as each new one comes; while it moves, its raw
+// reports, at most ten lines a second (SpaceMouseRawLog).
 
 #include "../SpaceMouseDevice.hpp"
 
@@ -17,6 +24,7 @@
 #include <vector>
 
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QStringList>
 
 #ifndef NOMINMAX
@@ -24,12 +32,14 @@
 #endif
 #include <windows.h>
 #include <hidsdi.h>
+#include <hidpi.h>
 
 namespace mitcad {
 namespace {
 
 constexpr USHORT kGenericDesktop = 0x01;
 constexpr USHORT kMultiAxisController = 0x08;
+constexpr USAGE kUsageRx = 0x33;
 constexpr wchar_t kWindowClass[] = L"MitcadSpaceMouse";
 
 bool isSpaceMouse(HANDLE device) {
@@ -79,6 +89,48 @@ QString deviceName(HANDLE device) {
   return ids.isEmpty() ? product : QStringLiteral("%1 (%2)").arg(product, ids);
 }
 
+// Where the device's report descriptor puts the rotation (the usage Rx of
+// the generic desktop page): in report 1 with the translation or in a
+// report of its own; `inputLength` the longest input report in bytes (the
+// report id included), 0 when the descriptor cannot be read.
+SpaceMouseRotationReport rotationReportOf(HANDLE device, USHORT& inputLength) {
+  inputLength = 0;
+  UINT size = 0;
+  if (GetRawInputDeviceInfoW(device, RIDI_PREPARSEDDATA, nullptr, &size) != 0 || size == 0) {
+    return SpaceMouseRotationReport::Unknown;
+  }
+  std::vector<std::uint64_t> preparsedData((static_cast<std::size_t>(size) + 7) / 8, 0);
+  if (GetRawInputDeviceInfoW(device, RIDI_PREPARSEDDATA, preparsedData.data(), &size) == static_cast<UINT>(-1)) {
+    return SpaceMouseRotationReport::Unknown;
+  }
+  const auto preparsed = reinterpret_cast<PHIDP_PREPARSED_DATA>(preparsedData.data());
+  HIDP_CAPS caps{};
+  if (HidP_GetCaps(preparsed, &caps) != HIDP_STATUS_SUCCESS) {
+    return SpaceMouseRotationReport::Unknown;
+  }
+  inputLength = caps.InputReportByteLength;
+  USHORT count = caps.NumberInputValueCaps;
+  if (count == 0) {
+    return SpaceMouseRotationReport::Unknown;
+  }
+  std::vector<HIDP_VALUE_CAPS> values(count);
+  if (HidP_GetValueCaps(HidP_Input, values.data(), &count, preparsed) != HIDP_STATUS_SUCCESS) {
+    return SpaceMouseRotationReport::Unknown;
+  }
+  for (USHORT index = 0; index < count && index < values.size(); ++index) {
+    const HIDP_VALUE_CAPS& value = values[index];
+    if (value.UsagePage != kGenericDesktop) {
+      continue;
+    }
+    const USAGE first = value.IsRange ? value.Range.UsageMin : value.NotRange.Usage;
+    const USAGE last = value.IsRange ? value.Range.UsageMax : value.NotRange.Usage;
+    if (first <= kUsageRx && kUsageRx <= last) {
+      return value.ReportID == 1 ? SpaceMouseRotationReport::WithTranslation : SpaceMouseRotationReport::OwnReport;
+    }
+  }
+  return SpaceMouseRotationReport::Unknown;
+}
+
 class RawInputBackend final : public SpaceMouseBackend {
 public:
   ~RawInputBackend() override {
@@ -95,6 +147,7 @@ public:
   QString name() const override { return QStringLiteral("Raw Input"); }
 
   bool start(QString& device) override {
+    m_clock.start();
     const HINSTANCE instance = GetModuleHandleW(nullptr);
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
@@ -145,10 +198,11 @@ public:
 
 private:
   struct State {
-    std::array<int, 3> t{};
-    std::array<int, 3> r{};
+    SpaceMouseHidReader reader;
+    SpaceMouseRawLog rawLog;
     std::uint32_t pressed = 0;
     bool moving = false;
+    bool described = false;
   };
 
   static LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -188,19 +242,21 @@ private:
       return;
     }
     const bool foreground = GET_RAWINPUT_CODE_WPARAM(code) == RIM_INPUT;
-    State& state = m_states[raw->header.hDevice];
+    const HANDLE source = raw->header.hDevice;
+    State& state = m_states[source];
+    if (!state.described) {
+      describe(source, state, reportSize);
+    }
+    const std::size_t idsBefore = state.reader.reportIds().size();
     bool moved = false;
     for (std::size_t index = 0; index < reportCount; ++index) {
+      const std::uint8_t* data = reports + index * reportSize;
+      state.rawLog.add(data, reportSize);
       SpaceMouseHidReport report;
-      if (!parseSpaceMouseHidReport(reports + index * reportSize, reportSize, report)) {
+      if (!state.reader.read(data, reportSize, report)) {
         continue;
       }
-      if (report.translation) {
-        state.t = report.t;
-        moved = true;
-      }
-      if (report.rotation) {
-        state.r = report.r;
+      if (report.translation || report.rotation) {
         moved = true;
       }
       if (report.buttons) {
@@ -211,11 +267,26 @@ private:
         }
       }
     }
-    if (!moved || !motion) {
+    if (state.reader.reportIds().size() != idsBefore) {
+      qDebug().noquote() << QStringLiteral("3D mouse: %1 sends report ids %2, its rotation %3")
+                                .arg(label(source), state.reader.reportIdsText(),
+                                     QString::fromLatin1(spaceMouseRotationReportText(state.reader.rotationReport())));
+    }
+    if (!moved) {
+      return;
+    }
+    const SpaceMouseAxes axes = state.reader.axes();
+    // The raw reports while the cap moves, thinned, and the last ones when
+    // it comes to rest.
+    const QString line = state.rawLog.take(m_clock.elapsed(), state.reader.translation(), state.reader.rotation(),
+                                           state.moving && axes == SpaceMouseAxes{});
+    if (!line.isEmpty()) {
+      qDebug().noquote() << line;
+    }
+    if (!motion) {
       return;
     }
     if (foreground) {
-      const SpaceMouseAxes axes = spaceMouseFromHid(state.t, state.r);
       state.moving = axes != SpaceMouseAxes{};
       motion(axes);
     } else if (state.moving) {
@@ -223,6 +294,27 @@ private:
       state.moving = false;
       motion(SpaceMouseAxes{});
     }
+  }
+
+  // The device's name in the log: its product and ids.
+  QString label(HANDLE device) const {
+    const auto found = m_devices.find(device);
+    return found != m_devices.end() ? found->second : deviceName(device);
+  }
+
+  // A device's first report: how it reports, once in the debug log, and
+  // where its descriptor puts the rotation for its reader.
+  void describe(HANDLE device, State& state, std::size_t reportSize) {
+    state.described = true;
+    USHORT inputLength = 0;
+    const SpaceMouseRotationReport where = rotationReportOf(device, inputLength);
+    state.reader.setRotationReport(where);
+    qDebug().noquote() << QStringLiteral("3D mouse: %1: reports of %2 bytes (dwSizeHid), the longest input report "
+                                         "%3 bytes, the rotation %4 by its report descriptor")
+                              .arg(label(device))
+                              .arg(static_cast<qulonglong>(reportSize))
+                              .arg(static_cast<uint>(inputLength))
+                              .arg(QString::fromLatin1(spaceMouseRotationReportText(where)));
   }
 
   void deviceChanged(WPARAM change, HANDLE device) {
@@ -254,6 +346,7 @@ private:
   std::map<HANDLE, QString> m_devices;
   std::map<HANDLE, State> m_states;
   std::vector<std::uint64_t> m_buffer;
+  QElapsedTimer m_clock; // the raw reports' log interval
 };
 
 } // namespace

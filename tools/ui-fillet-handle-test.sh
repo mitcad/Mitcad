@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/commands/ChamferHandles.cpp app/commands/ChamferHandles.hpp app/commands/FilletCommands.cpp
-# check-all sources: app/framework/ManipulatorOverlay.cpp app/framework/CommandSession.cpp
+# check-all sources: app/framework/ManipulatorOverlay.cpp app/framework/CommandSession.cpp app/framework/RememberedValues.cpp
 # check-all sources: tools/cli
 # Fillet's and Chamfer's size arrows on an inside (concave) corner
 # (mitcad#571), through the real UI, on an L bracket: a 60 x 40 x 5 mm
@@ -24,6 +24,10 @@
 #     along the floor, with Flip up the wall; no handle for the angle.
 #   - An outside (convex) edge keeps its arrow into the material: Fillet
 #     on the wall's top front edge, pulled, rounds it off.
+#   - Remembered Radius (mitcad#1028, MITCAD_REMEMBER_PANEL_VALUES=1 for
+#     these steps only): a fillet with 3 mm typed, OK; Fillet again starts
+#     with 3 mm; 5 mm typed and cancelled, and Fillet1 edited to 4 mm,
+#     change nothing: a new start of the app still starts with 3 mm.
 # Where an arrow points is checked against the camera: the side of the
 # edge's line on the screen that the expected direction is on.
 #
@@ -127,15 +131,42 @@ pointing() {
 # the way the view shows (dx, dy, dz), the arrow's way, so that its value
 # changes by about `mm` millimetres (negative: pushed back), its knob
 # `factor` mm out per mm of the value.
+# The cursor first goes 6 pixels square to the arrow's way and comes back
+# onto it on the way to the end: the value follows the cursor along the
+# arrow's line only, and a pull of fewer pixels than the overlay's 3-pixel
+# drag threshold (the convex edge's arrow seen nearly end-on, in a view
+# that the bottom cards make smaller) would otherwise be a click, passed
+# on to the view (mitcad#1042, mitcad#1086).
 drag_by() {
-  local ux uy ul ppm step
+  local ux uy ul ppm step side
   read -r ux uy ul <<< "$(screen "$5" "$6" "$7")"
   ppm=$(pixels_per_mm)
   step=$(awk -v ux="$ux" -v uy="$uy" -v l="$ul" -v p="$ppm" -v m="$3" -v f="$4" '
     function near(v) { return v < 0 ? int(v - 0.5) : int(v + 0.5) }
     BEGIN { d = m * f * l * p; printf "%d %d", near(ux * d), near(uy * d) }')
-  # shellcheck disable=SC2086 # two numbers
-  ui_drag_from "Manipulator $1 $2" $step
+  side=$(awk -v ux="$ux" -v uy="$uy" '
+    function near(v) { return v < 0 ? int(v - 0.5) : int(v + 0.5) }
+    BEGIN { printf "%d %d", near(-uy * 6), near(ux * 6) }')
+  # shellcheck disable=SC2086 # two numbers each
+  drag_sideways "Manipulator $1 $2" $step $side
+}
+
+# drag_sideways "<text>" dx dy sx sy: as ui_drag_from, by (dx, dy) from the
+# place logged as "<text> at x,y", the first move to (sx, sy) beside it
+# and the rest straight on to the end.
+drag_sideways() {
+  local fx fy i
+  read -r fx fy <<< "$(ui_logged_at "$1")"
+  ui_apart "$fx" "$fy"
+  xdotool mousemove "$fx" "$fy" mousedown 1
+  sleep 0.08
+  xdotool mousemove $((fx + $4)) $((fy + $5))
+  for i in 1 2 3 4 5 6 7 8; do
+    sleep 0.08
+    xdotool mousemove $((fx + $4 * (8 - i) / 8 + $2 * i / 8)) $((fy + $5 * (8 - i) / 8 + $3 * i / 8))
+  done
+  ui_sync
+  xdotool mouseup 1
 }
 
 # dragged command key: where the newest drag of the input's handle ended.
@@ -470,4 +501,63 @@ ui_step "OK (Enter)"                       ui_key Return
 ui_expect_new "Added fillet on 1 edge(s)" "fillet added"
 volume_now "$(rounded_off "$c1")" "the wall's edge rounded off at the dragged radius" 1e-5
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+ui_stop_app
+
+echo "=== Fillet's remembered Radius (mitcad#1028)"
+# The test library starts panels from their defaults; here they remember.
+# No fillet was made with them on before, so the first one starts at 2 mm.
+export MITCAD_REMEMBER_PANEL_VALUES=1
+ui_start_app --open "$WORK/bracket.mitcad"
+home_view
+ui_mark
+ui_step "fillet (F)"                       ui_key f
+ui_expect_new "Fillet Radius: 2 mm = 2 mm" "nothing remembered yet: the default 2 mm"
+grep -q "Panel Fillet radius: remembered" "$UI_LOG" && ui_fail "a radius remembered before any OK"
+pick_inside Fillet
+ui_step "radius 3"                         ui_type_in "Panel Fillet input sets.0.radius" "3"
+ui_expect_new "Fillet Radius: 3 = 3 mm" "3 mm typed"
+ui_expect_new "Preview Fillet: ok" "previewed"
+ui_wait_idle
+ui_mark
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Added fillet on 1 edge(s)" "fillet added"
+volume_now "$(filled 3)" "the corner filled at 3 mm" 1e-5
+ui_wait_idle
+
+echo "--- Fillet again starts with 3 mm"
+ui_mark
+ui_step "fillet (F)"                       ui_key f
+ui_expect_new "Panel Fillet radius: remembered 3 mm" "the radius of the last OK remembered"
+ui_expect_new "Fillet Radius: 3 mm = 3 mm" "the panel's Radius is 3 mm"
+ui_step "radius 5"                         ui_type_in "Panel Fillet input sets.0.radius" "5"
+ui_focus_main
+ui_mark
+ui_step "cancel (Esc)"                     ui_key Escape
+ui_expect_new "Command Fillet cancelled" "the fillet cancelled"
+ui_wait_idle
+
+echo "--- An edit keeps nothing either"
+ui_double_click_expect "Timeline Fillet1" " with Fillet" "editing Fillet1"
+ui_expect_new "Fillet Radius: 3 mm" "the fillet's own radius in the panel"
+ui_step "radius 4"                         ui_type_in "Panel Fillet input sets.0.radius" "4"
+ui_expect_new "Preview Fillet: ok" "previewed"
+ui_wait_idle
+ui_mark
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Edited F" "Fillet1 edited"
+volume_now "$(filled 4)" "the corner filled at 4 mm" 1e-5
+ui_wait_idle
+ui_stop_app
+
+echo "--- A new start of the app: Fillet still starts with 3 mm"
+grep -q 'solid.fillet.radius=3 mm' "$UI_CONFIG/Mitcad/Mitcad.conf" ||
+  ui_fail "the settings do not keep the radius (commands/solid.fillet/radius)"
+echo "ok   the settings keep commands/solid.fillet/radius=3 mm"
+ui_start_app --open "$WORK/bracket.mitcad"
+ui_mark
+ui_step "fillet (F)"                       ui_key f
+ui_expect_new "Panel Fillet radius: remembered 3 mm" "neither Cancel nor the edit changed it"
+ui_expect_new "Fillet Radius: 3 mm = 3 mm" "the panel's Radius is 3 mm"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+export MITCAD_REMEMBER_PANEL_VALUES=0
 ui_finish "UI fillet and chamfer handle test (inside corner)"

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "ConfigurationsData.hpp"
 
+#include <algorithm>
+#include <utility>
+
 #include <QRegularExpression>
 #include <QSet>
 
@@ -418,6 +421,9 @@ QString GeneratedRows::describe(const QString& table) const {
   if (parts.isEmpty()) {
     parts << QStringLiteral("all up to date");
   }
+  if (!created.isEmpty()) {
+    parts << QStringLiteral("made %1").arg(created.join(QStringLiteral(", ")));
+  }
   return QStringLiteral("%1 from %2: %3").arg(count, table, parts.join(QStringLiteral("; ")));
 }
 
@@ -433,6 +439,7 @@ GeneratedRows readGeneratedRows(const QJsonObject& answer) {
   generated.rows = strings(answer.value(QStringLiteral("rows")));
   generated.added = strings(answer.value(QStringLiteral("added")));
   generated.updated = strings(answer.value(QStringLiteral("updated")));
+  generated.created = strings(answer.value(QStringLiteral("created")));
   generated.moves = readMoves(answer.value(QStringLiteral("moves")));
   return generated;
 }
@@ -506,6 +513,218 @@ Table withoutColumn(const Table& table, const QString& parameter) {
   out.parameters.removeAll(parameter);
   for (Row& row : out.rows) {
     row.setValue(parameter, QString());
+  }
+  return out;
+}
+
+QStringList optionCandidates(const Table& table, const QStringList& userParameters) {
+  QStringList out;
+  for (const QString& name : userParameters) {
+    if (!table.options.contains(name)) {
+      out << name;
+    }
+  }
+  return out;
+}
+
+QString currentConstant(const QJsonObject& parameter) {
+  const QString expression = text(parameter, "expression").trimmed();
+  const bool alone = parameter.value(QStringLiteral("dependencies")).toArray().isEmpty() &&
+                     parameter.value(QStringLiteral("table_dependencies")).toArray().isEmpty();
+  if (alone && !expression.isEmpty()) {
+    return expression;
+  }
+  const bool isText = text(parameter, "unit").trimmed().compare(QStringLiteral("Text"), Qt::CaseInsensitive) == 0;
+  return rowExpression(isText, QString(), text(parameter, "text"));
+}
+
+Table withOption(const Table& table, const QString& parameter, const QString& expression) {
+  if (parameter.isEmpty() || table.options.contains(parameter)) {
+    return table;
+  }
+  Table out = table;
+  out.parameters.removeAll(parameter); // a parameter column keeps its rows' values
+  out.options.append(parameter);
+  for (Row& row : out.rows) {
+    if (row.value(parameter).trimmed().isEmpty()) {
+      row.setValue(parameter, expression);
+    }
+  }
+  return out;
+}
+
+QJsonObject generateRowsCommand(const QString& table, const QString& column, const QString& option,
+                                const QStringList& columns) {
+  QJsonObject command = generateRowsCommand(table, column, option);
+  if (!columns.isEmpty()) {
+    command.insert(QStringLiteral("columns"), QJsonArray::fromStringList(columns));
+  }
+  return command;
+}
+
+QJsonObject rowsCsvQuery() { return {{QStringLiteral("query"), QStringLiteral("configuration_rows_csv")}}; }
+
+QJsonObject rowsCsvPreviewQuery(const QString& csv) {
+  return {{QStringLiteral("query"), QStringLiteral("configuration_rows_csv_preview")}, {QStringLiteral("csv"), csv}};
+}
+
+QJsonObject importRowsCsvCommand(const QString& csv) {
+  return {{QStringLiteral("cmd"), QStringLiteral("import_configuration_rows_csv")}, {QStringLiteral("csv"), csv}};
+}
+
+QVector<QStringList> readBlock(const QString& text) {
+  QVector<QStringList> block;
+  QStringList row;
+  QString cell;
+  bool quoted = false; // inside a quoted cell
+  bool start = true;   // at the start of a cell
+  const qsizetype size = text.size();
+  for (qsizetype i = 0; i < size; ++i) {
+    const QChar c = text.at(i);
+    if (quoted) {
+      if (c == QLatin1Char('"')) {
+        if (i + 1 < size && text.at(i + 1) == QLatin1Char('"')) {
+          cell += QLatin1Char('"');
+          ++i;
+        } else {
+          quoted = false;
+        }
+      } else {
+        cell += c;
+      }
+      continue;
+    }
+    if (start && c == QLatin1Char('"')) {
+      quoted = true;
+      start = false;
+      continue;
+    }
+    start = false;
+    if (c == QLatin1Char('\t')) {
+      row << cell;
+      cell.clear();
+      start = true;
+    } else if (c == QLatin1Char('\r') || c == QLatin1Char('\n')) {
+      if (c == QLatin1Char('\r') && i + 1 < size && text.at(i + 1) == QLatin1Char('\n')) {
+        ++i;
+      }
+      row << cell;
+      block.append(row);
+      row.clear();
+      cell.clear();
+      start = true;
+    } else {
+      cell += c;
+    }
+  }
+  if (!start || !cell.isEmpty() || !row.isEmpty()) {
+    row << cell;
+    block.append(row);
+  }
+  return block;
+}
+
+QString writeBlock(const QVector<QStringList>& block) {
+  QStringList lines;
+  for (const QStringList& row : block) {
+    QStringList cells;
+    for (const QString& cell : row) {
+      if (cell.contains(QLatin1Char('\t')) || cell.contains(QLatin1Char('\n')) || cell.contains(QLatin1Char('\r')) ||
+          cell.startsWith(QLatin1Char('"'))) {
+        QString escaped = cell;
+        escaped.replace(QStringLiteral("\""), QStringLiteral("\"\""));
+        cells << QStringLiteral("\"%1\"").arg(escaped);
+      } else {
+        cells << cell;
+      }
+    }
+    lines << cells.join(QLatin1Char('\t'));
+  }
+  return lines.isEmpty() ? QString() : lines.join(QLatin1Char('\n')) + QLatin1Char('\n');
+}
+
+namespace {
+
+// A cell typed into a row (pasted, or emptied by Delete: `typed` empty).
+void setCell(Table& table, Row& row, const SheetColumn& column, const QString& typed) {
+  switch (column.kind) {
+  case SheetColumn::Kind::Name:
+    if (!typed.isEmpty() && typed != row.name) {
+      if (table.defaultRow == row.name) {
+        table.defaultRow = typed;
+      }
+      row.name = typed;
+    }
+    break;
+  case SheetColumn::Kind::Option:
+  case SheetColumn::Kind::Parameter:
+    row.setValue(column.parameter, rowExpression(column.text, column.unit, typed));
+    break;
+  case SheetColumn::Kind::Designation:
+    row.designation = typed;
+    break;
+  case SheetColumn::Kind::PartNumber:
+    row.partNumber = typed;
+    break;
+  case SheetColumn::Kind::SupplierUrl:
+    row.supplierUrl = typed;
+    break;
+  }
+}
+
+} // namespace
+
+Paste pasteBlock(const Table& table, const QVector<SheetColumn>& columns, int row, int column,
+                 const QVector<QStringList>& block, const Row& fresh) {
+  Paste out;
+  out.table = table;
+  const qsizetype top = std::max(0, row);
+  const qsizetype left = std::max(0, column);
+  QVector<QPair<qsizetype, int>> pasted;
+  for (qsizetype i = 0; i < block.size(); ++i) {
+    const qsizetype r = top + i;
+    while (out.table.rows.size() <= r) {
+      Row added = fresh;
+      added.name = out.table.nextRowName();
+      out.added << added.name;
+      out.table.rows.append(added);
+    }
+    const QStringList& cells = block.at(i);
+    for (qsizetype j = 0; j < cells.size(); ++j) {
+      const qsizetype c = left + j;
+      if (c >= columns.size()) {
+        ++out.beyond;
+        continue;
+      }
+      const QString before = out.table.rows.at(r).name;
+      setCell(out.table, out.table.rows[r], columns.at(c), cells.at(j).trimmed());
+      const QString after = out.table.rows.at(r).name;
+      if (after != before) {
+        for (QString& name : out.added) {
+          if (name == before) {
+            name = after;
+          }
+        }
+      }
+      pasted.append(qMakePair(r, static_cast<int>(c)));
+    }
+  }
+  for (const auto& cell : std::as_const(pasted)) {
+    out.cells.append(qMakePair(out.table.rows.at(cell.first).name, cell.second));
+  }
+  return out;
+}
+
+Table clearCells(const Table& table, const QVector<SheetColumn>& columns, const QVector<QPair<int, int>>& cells) {
+  Table out = table;
+  for (const auto& cell : cells) {
+    if (cell.first < 0 || cell.first >= out.rows.size() || cell.second < 0 || cell.second >= columns.size()) {
+      continue;
+    }
+    const SheetColumn& column = columns.at(cell.second);
+    if (column.kind != SheetColumn::Kind::Name) {
+      setCell(out, out.rows[cell.first], column, QString());
+    }
   }
   return out;
 }

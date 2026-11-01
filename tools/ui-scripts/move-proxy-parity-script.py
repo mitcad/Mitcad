@@ -86,8 +86,16 @@ else:
         add("expect-log 'Panel Move/Copy choices: move_type=components'")
         if case == "rotate-ring":
             choice("Rotate")
-            add("expect-log 'Move/Copy: Move Type = Rotate'", "click-logged '^Datum z at '",
-                "expect-log 'Move/Copy Axis: 1 axis'")
+            add("expect-log 'Move/Copy: Move Type = Rotate'")
+            # Z from the browser's Origin folder: a command shows the hidden
+            # origin no more (mitcad#1030), and its row picks it as a click
+            # in the view would, without an undo step of a light bulb.
+            if native:
+                add("native-expand native.modelTree", "native-select native.model.origin:z")
+            else:
+                add("mark", "click-logged '^Browser arrow Root/Origin at '", "wait-idle 60",
+                    "expect-log '^Browser Root/Origin/Z at '", "click-logged '^Browser Root/Origin/Z at '")
+            add("expect-log 'Move/Copy Axis: 1 axis'")
             key, dx, dy = "angle", 70, 40
         else:
             choice("Point to Position")

@@ -18,7 +18,7 @@
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-move-test.sh [screenshot.png]
-# check-all sources: tools/cli
+# check-all sources: tools/cli app/files/FileCommands.cpp
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
@@ -38,10 +38,9 @@ expect_file() {
   echo "ok   $3"
 }
 
+# (Nothing to save when a step changed nothing: the file holds the design.)
 save() {
-  ui_mark
-  ui_key ctrl+s
-  ui_expect_new "Saved $FILE" "saved"
+  ui_save_if_changed "$FILE"
 }
 
 # The block's place in the window, from the last "Body <uid>[ in <path>] at
@@ -138,7 +137,7 @@ echo "--- Move to Component... on a component: to the root (mitcad#219)"
 ui_mark
 ui_step "right-click Part:1"             ui_click_logged "Browser Root/Assembly:1/Part:1" 3
 ui_step "choose Move to Component..."    ui_menu_choose "Move to Component..."
-ui_focus_dialog '^Move Component$'
+ui_focus_dialog '^Move to Component$'
 ui_expect_new "Move Component parents of Part:1: Root | Root/Assembly:1 (unavailable)" \
   "the parents with their full paths, the current one unavailable"
 ui_step "parents (Alt+P, Home)"          ui_key alt+p Home
@@ -172,7 +171,7 @@ echo "--- Move to Component... into another component"
 ui_mark
 ui_step "right-click Part:1"             ui_click_logged "Browser Root/Assembly:1/Part:1" 3
 ui_step "choose Move to Component..."    ui_menu_choose "Move to Component..."
-ui_focus_dialog '^Move Component$'
+ui_focus_dialog '^Move to Component$'
 ui_step "parents (Alt+P, Home)"          ui_key alt+p Home
 ui_step "Holder:1 (Down x3)"             ui_key Down Down Down
 ui_expect_new "Move Component parent: Root/Holder:1, ok" "Holder:1 can be its parent"
@@ -192,7 +191,7 @@ echo "--- A component cannot go into one placed in it; Cancel changes nothing"
 ui_mark
 ui_step "right-click Holder:1"           ui_click_logged "Browser Root/Holder:1" 3
 ui_step "choose Move to Component..."    ui_menu_choose "Move to Component..."
-ui_focus_dialog '^Move Component$'
+ui_focus_dialog '^Move to Component$'
 ui_step "parents (Alt+P, Home)"          ui_key alt+p Home
 ui_step "Holder:1/Part:1 (Down x3)"      ui_key Down Down Down
 ui_expect_new "Move Component parent: Root/Holder:1/Part:1, unavailable: Holder:1 cannot go into Part, which is placed in it" \
@@ -211,7 +210,7 @@ SLIDER=$(place F7.b0)
 ui_mark
 ui_step "right-click Slider:1"           ui_click_logged "Browser Root/Frame:1/Slider:1" 3
 ui_step "choose Move to Component..."    ui_menu_choose "Move to Component..."
-ui_focus_dialog '^Move Component$'
+ui_focus_dialog '^Move to Component$'
 ui_step "parents (Alt+P, Home)"          ui_key alt+p Home
 ui_expect_new "Move Component features: Joint1 -> Root" "the preview names the joint that moves along"
 ui_expect_new "Move Component parent: Root, ok" "the root can be its parent"

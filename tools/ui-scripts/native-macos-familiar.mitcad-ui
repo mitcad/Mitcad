@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/platform app/framework/Ribbon.cpp app/projects app/MainWindowNative.cpp
+# check-all sources: app/platform app/framework/Ribbon.cpp app/projects app/MainWindowNative.cpp app/drawings/MainWindowDrawings.cpp
 # Exercise real AppKit controls against the retained Qt ribbon's actual
 # menus, including subgroup order, section boundaries and workspace changes.
 expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
@@ -40,6 +40,13 @@ focus-main
 menu 'View/Projects'
 expect-native-visible native.projectsCard false
 
+# The view shows the origin only as its light bulb does (mitcad#1030): on
+# for the click on its XY plane below.
+mark
+native-expand native.modelTree
+native-click native.model.eye.origin
+expect-log 'Visibility Root/Origin: shown'
+
 # The native command form still validates and commits through the model.
 mark
 native-action solid.box
@@ -69,3 +76,88 @@ screenshot '${MITCAD_TEST_WORK}/familiar-dark.png'
 native-appearance light
 sleep 250
 expect-native-layout
+
+# Pin to Toolbar (mitcad#1074, the Qt ribbon's mitcad#1001): Sweep, which
+# needs a profile, pinned from the Create menu's Pin to Toolbar submenu
+# (NSMenu rows have no ⋮ button) is a button in the Create group after
+# its own (mitcad#1084, no Pinned group), starts it, and its right-click
+# unpins it; the shared pins' log lines and setting.
+mark
+native-action sketch.create
+expect-log 'Create Sketch: select a plane'
+click-logged 'Datum xy'
+expect-log 'Sketch started on '
+native-click native.ribbon.sketch.rectangle
+sketch-click 0 0
+native-type sketchField_width '20 mm'
+native-type sketchField_height '10 mm'
+key Return
+expect-log 'Added rectangle 20 x 10 mm' 30
+native-click native.ribbon.sketch.finish
+expect-log 'Sketch finished' 30
+mark
+native-popup native.ribbon.group.create 'Pin to Toolbar/Sweep'
+expect-log 'Native toolbar menu SOLID/CREATE solid\.sweep: Pin to Toolbar'
+expect-log 'Pinned to toolbar: Sweep \(Solid\)'
+expect-log 'Ribbon group SOLID/CREATE pinned: solid\.sweep$'
+expect-native-visible native.ribbon.pinned.solid.sweep true
+expect-native-present native.ribbon.group.pinned false
+expect-setting toolbarPins/SOLID solid.sweep
+expect-native-layout
+screenshot '${MITCAD_TEST_WORK}/familiar-pinned.png'
+mark
+native-click native.ribbon.pinned.solid.sweep
+expect-log 'Command Sweep started'
+native-click commandCancel
+expect-log 'Command Sweep cancelled'
+mark
+native-context-menu native.ribbon.pinned.solid.sweep 'Unpin from Toolbar'
+expect-log 'Native toolbar menu SOLID/CREATE solid\.sweep: Unpin from Toolbar'
+expect-log 'Unpinned: Sweep \(Solid\)'
+expect-log 'Ribbon group SOLID/CREATE pinned: none'
+expect-native-present native.ribbon.pinned.solid.sweep false
+mark
+native-popup native.ribbon.group.create 'Change Keyboard Shortcut/Sweep'
+expect-log 'Native toolbar menu SOLID/CREATE solid\.sweep: Change Keyboard Shortcut…'
+expect-log 'Keyboard Shortcuts opened'
+expect-log 'Keyboard Shortcuts at Sweep'
+focus-dialog '^Keyboard Shortcuts$'
+key Escape
+expect-native-dialog-gone '^Keyboard Shortcuts$'
+focus-main
+
+# A drawing's tabs (mitcad#1073, the Qt ribbon's mitcad#1008): opened from
+# the Build tab, its Drawing tab alone with its groups, of the cards only
+# the Browser; Close Drawing back on Build with the cards.
+native-choice native.workspaces Build
+expect-native-visible native.ribbon.group.timber true
+mark
+command file.create_drawing
+focus-dialog '^Create Drawing$'
+expect-log 'Create Drawing dialog opened'
+native-pointer-button '^OK$'
+focus-main
+expect-log 'Drawing created: D1 '
+expect-log 'Ribbon tabs: DRAWING \(shown DRAWING\)'
+expect-log 'Native workspaces: Drawing \(shown Drawing\)'
+expect-log 'Native cards: Browser only \(a drawing is open\)'
+expect-native-visible native.ribbon.drawing.close true
+expect-native-visible native.ribbon.group.dimensions true
+expect-native-visible native.ribbon.group.export true
+expect-native-present native.ribbon.group.timber false
+expect-native-present native.ribbon.group.construct false
+expect-native-visible native.sidebar true
+expect-native-visible native.historyCard false
+expect-native-visible native.inspectorCard false
+expect-native-layout
+screenshot '${MITCAD_TEST_WORK}/familiar-drawing.png'
+mark
+native-click native.ribbon.drawing.close
+expect-log 'Drawing closed'
+expect-log 'Ribbon tabs: SOLID, BUILD, MAKE \(shown BUILD\)'
+expect-log 'Native workspaces: Solid, Build, Make \(shown Build\)'
+expect-log 'Native cards: all \(the drawing closed\)'
+expect-native-visible native.ribbon.group.timber true
+expect-native-visible native.historyCard true
+expect-native-layout
+native-choice native.workspaces Solid

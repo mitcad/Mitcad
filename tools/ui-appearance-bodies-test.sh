@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser app/framework/Appearances.cpp app/framework/Appearances.hpp app/MainWindow.cpp tools/cli app/MainWindowContextMenu.cpp
-# Edit Appearances: Assign to N bodies (mitcad#346) through the real UI, on
-# three boxes side by side (F1.b0, F2.b0, F3.b0):
-#   - With bodies only selected there is no Assign to N bodies button.
-#   - With two faces of Body1 and a face of Body2 selected, the dialog shows
-#     Assign to 2 bodies; using it gives both bodies the appearance as their
-#     body appearance in one undo step, the selected faces get no face
-#     appearance of their own, and Body3 keeps the default look.
-#   - Undo takes both bodies' appearance back at once.
+# check-all sources: app/browser app/framework/Appearances.cpp app/framework/Appearances.hpp app/MainWindow.cpp tools/cli app/MainWindowContextMenu.cpp app/commands/MaterialCommands.cpp
+# Appearance… of selected bodies and faces (mitcad#346; the Appearance tool
+# since mitcad#1059) through the real UI, on three boxes side by side
+# (F1.b0, F2.b0, F3.b0):
+#   - Body1's row: Appearance… starts the Appearance tool with Body1 in its
+#     Bodies; no window opens.
+#   - Two faces of Body1 and a face of Body2 selected: Appearance… starts
+#     the tool with the three faces in its Faces; Red Copy chosen in the
+#     picker and OK give the three faces it in one undo step, the bodies
+#     keep the default look, Body3 untouched.
+#   - Undo takes the faces' appearances back at once.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-appearance-bodies-test.sh
@@ -59,19 +61,17 @@ ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Body F1.b0 at" "the first box is in the view"
 ui_expect_log "Body F3.b0 at" "and the third"
 
-echo "--- Bodies selected: no Assign to N bodies"
+echo "--- A body's row: the Appearance tool for it"
 ui_mark
 ui_step "right-click Body1's row"        ui_click_logged "Browser Root/Bodies/Body1" 3
 ui_step "choose Appearance..."           ui_menu_choose "Appearance..."
-ui_expect_new "Appearances for bodies: F1.b0" "the dialog opened for the body"
-ui_focus_dialog '^Appearances$'
-ui_sync
-if grep -qF "Appearances assign_bodies" "$UI_LOG"; then
-  ui_fail "Assign to N bodies is shown for a body"
+ui_expect_new "Appearance tool for F1.b0" "the Appearance tool for the body"
+ui_expect_new "Appearance Bodies: 1 body [body F1.b0]" "Body1 in its Bodies"
+if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Appearances dialog opened"; then
+  ui_fail "Appearance… opened the Appearances window"
 fi
-echo "ok   there is no Assign to N bodies button for a body"
-ui_step "Close"                          ui_click_logged "Appearances close"
-ui_focus_main
+echo "ok   no window opened"
+ui_step "Cancel (Escape)"                ui_key Escape
 ui_step "Escape (clear the selection)"   ui_key Escape
 
 echo "--- Faces of two bodies selected"
@@ -88,25 +88,20 @@ ui_expect_new "Selected: 3 faces" "three faces selected"
 ui_mark
 ui_step "right-click Body2's selected face"    xdotool mousemove "$cx" $((cy - 20)) click 3
 ui_step "choose Appearance..."           ui_menu_choose "Appearance..."
-ui_expect_new "Appearances for faces:" "the dialog opened for the faces"
-ui_focus_dialog '^Appearances$'
-ui_expect_new "Appearances assign_bodies label: Assign to 2 bodies" "the dialog offers Assign to 2 bodies"
-# The design's own appearances are last in the list.
-ui_step "the list"                       ui_click_logged "Appearances item plastic_white"
-ui_step "Red Copy (End)"                 ui_key End
-ui_expect_new "Appearance selected: red_copy" "Red Copy is selected"
+ui_expect_new "Appearance tool for " "the Appearance tool for the faces"
+ui_expect_new "Appearance Faces: 3 faces" "the three faces in its Faces"
+ui_step "the picker: Red Copy"           ui_picker_choose "Panel Appearance input value" "Appearance picker" "Red Copy"
 ui_mark
-ui_step "Assign to 2 bodies"             ui_click_logged "Appearances assign_bodies"
-ui_expect_new "Appearance Red Copy assigned to 2 bodies (from faces)" "both bodies got it"
-ui_step "Close"                          ui_click_logged "Appearances close"
-ui_focus_main
+ui_step "OK (Enter)"                     ui_key Return
+ui_expect_new "Appearance red_copy for 0 body(ies), 3 face(s)" "the three faces got it"
 save
-expect_file '[.bodies[] | .appearance]' '["red_copy","red_copy",null]' "Body1 and Body2 have it as their body appearance"
-expect_file '[.bodies[] | has("face_appearances")]' '[false,false,false]' "no face appearance of its own"
+expect_file '[.bodies[] | .appearance]' '[null,null,null]' "the bodies keep the default look"
+expect_file '[.bodies[] | has("face_appearances")]' '[true,true,false]' \
+  "Body1's two faces and Body2's face have it as their own"
 ui_mark
 ui_step "undo"                           ui_key ctrl+z
 ui_expect_new "Undo: Appearance" "one undo step"
 save
-expect_file '[.bodies[] | .appearance]' '[null,null,null]' "both bodies are back to the default look"
+expect_file '[.bodies[] | has("face_appearances")]' '[false,false,false]' "no face appearance of its own again"
 
-ui_finish "UI Edit Appearances, Assign to bodies"
+ui_finish "UI Appearance of bodies and faces"

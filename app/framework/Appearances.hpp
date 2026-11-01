@@ -83,6 +83,10 @@ struct Appearance {
   QString id;
   QString name;
   bool library = true;
+  // What it is a look of (mitcad#1102): metal, plastic (General Plastic),
+  // fdm_plastic, resin or other; the pickers offer a material's class
+  // first.
+  QString materialClass;
   QColor baseColor = QColor::fromRgbF(0.8f, 0.8f, 0.8f);
   double metalness = 0.0;
   double roughness = 0.5;

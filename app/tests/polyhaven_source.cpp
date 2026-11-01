@@ -540,7 +540,7 @@ void fetcherTests(const QString& root) {
   allowed = true;
   reply = ask(network, QStringLiteral("http://api.example.test/assets"));
   CHECK(reply.error == TextureReply::Error::Refused && reply.detail.contains(QStringLiteral("HTTPS")));
-  CHECK(NetworkTextureFetcher::userAgent().startsWith(QLatin1String("Mitcad/")));
+  CHECK(NetworkTextureFetcher::userAgent().startsWith(QLatin1String("MitCad/")));
 
   // The UI tests' answers: files under <folder>/<host>/<path>.
   QDir().mkpath(root + QStringLiteral("/api.example.test/files"));

@@ -567,8 +567,7 @@ impl CutScope {
                         });
                 let reason = if readonly {
                     Some(
-                        "Linked component is read-only; edit the source document instead."
-                            .to_owned(),
+                        "Linked component is read-only; edit the source design instead.".to_owned(),
                     )
                 } else if paths.len() != 1 {
                     Some("Shared component definition has multiple occurrences; occurrence-specific cuts are not supported.".to_owned())
@@ -703,7 +702,10 @@ impl CutScope {
                     Err(error) => {
                         boolean_failed = true;
                         let detail = error.to_string();
-                        if KernelError::is_out_of_memory(&detail) || detail.contains("cancelled") {
+                        if KernelError::is_out_of_memory(&detail)
+                            || detail.contains("cancelled")
+                            || detail.contains("canceled")
+                        {
                             return Err(detail);
                         }
                         let message = format!("{}: {error}", candidate.row.path_name);

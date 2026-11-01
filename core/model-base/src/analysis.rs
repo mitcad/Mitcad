@@ -286,6 +286,13 @@ pub const MATERIALS: &[Material] = &[
         name: "Water",
         density: 1.0,
     },
+    // A standard photopolymer resin of resin printers, cured (mitcad#1102):
+    // the middle of the 1.1-1.2 g/cm³ standard resins' data sheets give.
+    Material {
+        id: "resin_standard",
+        name: "Resin - Standard",
+        density: 1.15,
+    },
 ];
 
 pub fn material(id: &str) -> Option<&'static Material> {

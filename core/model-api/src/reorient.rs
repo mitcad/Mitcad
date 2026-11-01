@@ -42,7 +42,7 @@ pub(crate) fn requested_turn(
         (Some(axis), Some(degrees), None) => {
             let parsed = TurnAxis::parse(axis).ok_or_else(|| {
                 ApiError(format!(
-                    "reorient_design: unknown axis '{axis}' (x, y or z)"
+                    "reorient_design: unknown axis “{axis}” (x, y or z)"
                 ))
             })?;
             let quarters = match degrees.rem_euclid(360) {
@@ -68,7 +68,7 @@ pub(crate) fn requested_turn(
             let origin = OriginDatum::parse(plane);
             let turn = origin.and_then(Turn::plane_onto_xy).ok_or_else(|| {
                 ApiError(format!(
-                    "reorient_design: unknown origin plane '{plane}' (xy, xz or yz)"
+                    "reorient_design: unknown origin plane “{plane}” (xy, xz or yz)"
                 ))
             })?;
             let name = origin.map_or("", OriginDatum::display_name);

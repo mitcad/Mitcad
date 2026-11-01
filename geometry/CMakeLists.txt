@@ -264,6 +264,11 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/dogbone.cpp
   include/mitcad/geometry/dogbone.hpp)
+# Roundings that take a face away, round a loop of edges, mitred where
+# they meet (mitcad#1118).
+target_sources(mitcad_geometry PRIVATE
+  src/mitred_dressup.cpp
+  src/mitred_dressup.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -362,6 +367,8 @@ if(BUILD_TESTING)
   target_sources(test_geometry PRIVATE tests/test_face_extrude.cpp)
   # A planar face of a body revolved as a profile (mitcad#539).
   target_sources(test_geometry PRIVATE tests/test_face_revolve.cpp)
+  # Fillets and chamfers that take a face away exactly (mitcad#1106).
+  target_sources(test_geometry PRIVATE tests/test_dressup_takes_face.cpp)
   target_link_libraries(test_geometry PRIVATE mitcad_geometry_analysis)
   target_link_libraries(test_geometry PRIVATE mitcad_geometry mitcad_warnings)
   # The suite in parts, a ctest each (geometry.suite.<part>, label
@@ -424,7 +431,8 @@ if(BUILD_TESTING)
     fillet_pierced
     move_faces
     face_extrude
-    face_revolve)
+    face_revolve
+    dressup_takes_face)
   foreach(part IN LISTS geometry_suite_parts)
     add_test(NAME geometry.suite.${part} COMMAND test_geometry --part ${part})
     set_tests_properties(geometry.suite.${part} PROPERTIES LABELS geometry_suite)

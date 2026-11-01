@@ -200,7 +200,7 @@ fn everything_goes_into_one_component_where_it_was() {
 
     // Nothing is left to move.
     let error = rejected(&mut b.doc, json!({"cmd": "move_to_component"}));
-    assert!(error.contains("no modelled features"), "{error}");
+    assert!(error.contains("no modeled features"), "{error}");
 }
 
 #[test]
@@ -906,7 +906,7 @@ fn an_unsupported_rebase_and_a_feature_created_destination_are_atomic_refusals()
         &mut b.doc,
         json!({"cmd": "move_to_component", "features": [b.sketch],
         "destination": {"kind": "existing", "component": component, "occurrence": occurrence}}),
-        "created by a modelling feature",
+        "created by a modeling feature",
     );
 }
 
@@ -1088,8 +1088,7 @@ fn timeline_positioned_destinations_are_refused_even_at_the_original_placement()
 
 #[test]
 fn readonly_destinations_and_cancelled_creation_leave_no_component_or_undo_step() {
-    let dir = std::env::temp_dir().join(format!("mitcad-move-destination-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("move-destination");
     let part = block();
     std::fs::write(dir.join("part.mitcad"), part.doc.to_json()).unwrap();
     let mut b = block();
@@ -1124,11 +1123,11 @@ fn readonly_destinations_and_cancelled_creation_leave_no_component_or_undo_step(
         &mut b.doc,
         json!({"cmd": "move_to_component", "features": [b.sketch],
         "destination": {"kind": "new", "parent": "C0", "parent_occurrence": "", "name": "Cancelled"}}),
-        "computation was cancelled",
+        "computation was canceled",
     );
     same_placement(&placed(&b.doc), &before);
     b.doc.set_monitor(None);
-    std::fs::remove_dir_all(dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 /// The cut scope every extrusion made in the UI stores (mitcad#859): its

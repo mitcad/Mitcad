@@ -100,16 +100,18 @@ RenderMode::RenderMode(OcctViewer& viewer, std::function<void(QObject*, std::fun
   connect(m_client, &render::RenderClient::failed, this, &RenderMode::workerFailed);
   connect(m_client, &render::RenderClient::sceneApplied, this, &RenderMode::sceneApplied);
   connect(m_client, &render::RenderClient::frameAvailable, this, &RenderMode::showFrame, Qt::QueuedConnection);
-  // The CPU took over from the render device (mitcad#50).
+  // The CPU took over from the render device (mitcad#50): it renders, not as
+  // asked, a warning (mitcad#1051).
   connect(m_client, &render::RenderClient::deviceFallback, this, [this](const QString& text) {
     if (m_enabled) {
-      showMessage(text + QLatin1Char('.'));
+      showMessage(text + QLatin1Char('.'), NoticeLevel::Warning);
     }
   });
-  // The worker's complaints (an environment image it cannot read).
+  // The worker's complaints (an environment image it cannot read, the
+  // studio lights instead): warnings.
   connect(m_client, &render::RenderClient::message, this, [this](const QString& text) {
     if (m_enabled) {
-      showMessage(tr("Rendering: %1.").arg(text));
+      showMessage(tr("Rendering: %1.").arg(text), NoticeLevel::Warning);
     }
   });
   connect(m_client, &render::RenderClient::finished, this, [this](std::uint64_t view, int samples, double seconds) {
@@ -267,9 +269,10 @@ void RenderMode::workerFailed(const QString& reason) {
   // old allocation as well when a crashed worker will publish no more frames.
   m_frame = render::Frame();
   if (m_client->incompatible()) {
-    showMessage(tr("The renderer cannot be used: %1.").arg(reason));
+    showMessage(tr("The renderer cannot be used: %1.").arg(reason), NoticeLevel::Error);
   } else {
-    showMessage(tr("The renderer stopped: %1. View › Visual Style › Rendered starts it again.").arg(reason));
+    showMessage(tr("The renderer stopped: %1. View › Visual Style › Rendered starts it again.").arg(reason),
+                NoticeLevel::Error);
   }
   emit stopped();
 }
@@ -373,6 +376,10 @@ void RenderMode::sendScene() {
                      .arg(look.appearance.id.isEmpty() ? QStringLiteral("default") : look.appearance.id);
     }
     entry.faces = render::faceMaterialsOf(faces);
+    // A transparent body (mitcad#1093): its looks with less opacity.
+    if (body.transparent) {
+      render::seeThrough(entry);
+    }
     qDebug().noquote() << QStringLiteral("Render body %1: appearance %2%3")
                               .arg(QString::fromStdString(id),
                                    body.appearance.id.isEmpty() ? QStringLiteral("default") : body.appearance.id,
@@ -404,7 +411,7 @@ void RenderMode::sendScene() {
     m_missingTextures = missingText;
     if (!missing.isEmpty()) {
       qInfo().noquote() << QStringLiteral("Render textures not drawn: %1").arg(missingText);
-      showMessage(tr("Rendering: a texture image is not drawn (%1).").arg(missingText));
+      showMessage(tr("Rendering: a texture image is not drawn (%1).").arg(missingText), NoticeLevel::Warning);
     }
   }
   update.released = forgetMeshes();
@@ -674,16 +681,28 @@ bool RenderMode::displayFrame() {
   return true;
 }
 
-void RenderMode::showMessage(const QString& text) {
+void RenderMode::showMessage(const QString& text, NoticeLevel level) {
   qWarning().noquote() << QStringLiteral("View message: %1").arg(text);
+  // Its level as every surface logs it (mitcad#1051).
+  qDebug().noquote() << QStringLiteral("View message level: %1").arg(noticeLevelName(level));
   if (!m_message) {
     m_message = new QLabel(&m_viewer);
     m_message->setObjectName(QStringLiteral("renderMessage"));
     m_message->setWordWrap(true);
-    m_message->setStyleSheet(QStringLiteral(
-        "QLabel { background: rgba(40, 40, 40, 210); color: white; border-radius: 6px; padding: 8px 12px; }"));
+    m_message->setTextFormat(Qt::RichText);
   }
-  m_message->setText(text);
+  // One presentation per level (docs/ui-conventions.md "Messages and
+  // severity"): the level's badge before the text and its colour around
+  // it, over the view's dark card.
+  const QColor accent = noticeColor(level, m_viewer.palette());
+  m_message->setStyleSheet(QStringLiteral("QLabel { background: rgba(40, 40, 40, 210); color: white; "
+                                          "border: 1px solid %1; border-radius: 6px; padding: 8px 12px; }")
+                               .arg(isProblem(level) ? accent.name() : QStringLiteral("transparent")));
+  m_message->setProperty("noticeLevel", noticeLevelName(level));
+  const QString badge = noticeIconHtml(level);
+  const QString escaped = text.toHtmlEscaped();
+  m_message->setText(badge.isEmpty() ? escaped : QStringLiteral("%1&nbsp;%2").arg(badge, escaped));
+  m_messageTimer->setInterval(noticeTimeout(level));
   const int width = std::min(520, m_viewer.width() - 40);
   m_message->setFixedWidth(width);
   m_message->adjustSize();

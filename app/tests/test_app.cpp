@@ -280,9 +280,14 @@ void shortcutBindingTests() {
     CHECK((ok.keys == QList<QKeySequence>{QKeySequence(Qt::Key_Return), QKeySequence(Qt::Key_Enter)}));
     CHECK(rowOf("browser.rename").contexts == unsigned(ModelShortcutContext));
     // Ctrl+F, F2 and Delete work while the Browser or the timeline has the
-    // keyboard focus; OK and Save everywhere.
+    // keyboard focus; OK and Select All everywhere.
     CHECK(timeline.browserFocus && rowOf("browser.rename").browserFocus && rowOf("browser.delete").browserFocus);
-    CHECK(!ok.browserFocus && !rowOf("file.save").browserFocus);
+    CHECK(!ok.browserFocus && !rowOf("edit.select_all").browserFocus && !rowOf("edit.select_all").keys.isEmpty());
+    // Open, Close, Save, Save As and Exit are registry commands with keys
+    // the user can change (mitcad#1090): no reserved rows.
+    for (const char* id : {"file.open", "file.close", "file.save", "file.save_as", "file.quit", "file.exit"}) {
+      CHECK(rowOf(id).keys.isEmpty());
+    }
 #ifdef Q_OS_MACOS
     CHECK(rowOf("browser.delete").keys.size() == 2);
 #else
@@ -416,14 +421,14 @@ void shortcutContextTests() {
     conflicts = registry.shortcutConflicts(proposal);
     CHECK(conflicts.size() == 1);
     CHECK(!conflicts.isEmpty() && conflicts.front().contexts == ModelShortcutContext &&
-          conflicts.front().description().contains(QStringLiteral(" in the model. ")));
+          conflicts.front().description().contains(QStringLiteral(" in the 3D view. ")));
     // Contexts in a sentence, and their names.
     CHECK(shortcutContextPhrase(ModelShortcutContext | SketchShortcutContext) ==
-          QStringLiteral("in the model and in a sketch"));
+          QStringLiteral("in the 3D view and in a sketch"));
     CHECK(shortcutContextPhrase(AllShortcutContexts) ==
-          QStringLiteral("in the model, in a sketch and while a command panel is open"));
+          QStringLiteral("in the 3D view, in a sketch and while a command panel is open"));
     CHECK(shortcutContextName(CommandShortcutContext) == QStringLiteral("Command Panel"));
-    CHECK(shortcutContextName(ModelShortcutContext | SketchShortcutContext) == QStringLiteral("Model, Sketch"));
+    CHECK(shortcutContextName(ModelShortcutContext | SketchShortcutContext) == QStringLiteral("3D View, Sketch"));
     // ...unless Command Search moves there too.
     proposal[search].insert(ModelShortcutContext, QKeySequence(Qt::CTRL | Qt::Key_K));
     CHECK(registry.shortcutConflicts(proposal).isEmpty());
@@ -1652,7 +1657,7 @@ void reportMaskTests() {
 void reportCrashTests() {
   using namespace mitcad::report;
   const QByteArray file =
-      "Mitcad crash report 1\nprocess: import-worker\nversion: 0.1.0\nplatform: Linux 6.8.0 x86_64\npid: 4242\n"
+      "MitCad crash report 1\nprocess: import-worker\nversion: 0.1.0\nplatform: Linux 6.8.0 x86_64\npid: 4242\n"
       "parent: 4000\ntime: 1760000000\nsignal: SIGSEGV\naddress: 0x0\nmessage: \nstack:\n"
       "/opt/mitcad/bin/mitcad(_ZN6mitcad5crash6detail8onSignalEiP9siginfo_tPv+0x3c) [0x5555555a1000]\n"
       "/lib/x86_64-linux-gnu/libc.so.6(+0x45330) [0x7ffff7845330]\n"
@@ -1668,6 +1673,14 @@ void reportCrashTests() {
   CHECK(report.stack.size() == 5);
   CHECK(report.actions == QStringList({QStringLiteral("command help.send_feedback"), QStringLiteral("model add_feature")}));
   CHECK(!parseCrashReport("something else\nsignal: SIGSEGV\n").valid);
+  // A report an earlier release wrote, with the old spelling in its header
+  // (mitcad#1043), is read the same.
+  QByteArray older = file;
+  older.replace("MitCad crash report 1", "Mitcad crash report 1");
+  const CrashReport earlier = parseCrashReport(older);
+  CHECK(earlier.valid);
+  CHECK(earlier.process == QStringLiteral("import-worker") && earlier.signal == QStringLiteral("SIGSEGV"));
+  CHECK(earlier.stack == report.stack && earlier.actions == report.actions);
 
   const Frame frame = parseFrame(report.stack[2]);
   CHECK(frame.module == QStringLiteral("mitcad"));
@@ -1725,7 +1738,7 @@ void reportCrashTests() {
   CHECK(isKernelCrashMessage(QStringLiteral("fillet: ACCESS VIOLATION at address 0x00000000 during 'READ' operation")));
   CHECK(!isKernelCrashMessage(QStringLiteral("fillet: BRep_API: command not done")));
   // A worker's crash has a report of its own.
-  CHECK(!isKernelCrashMessage(QStringLiteral("Mitcad crashed: SIGSEGV; crash report: /tmp/x.crash")));
+  CHECK(!isKernelCrashMessage(QStringLiteral("MitCad crashed: SIGSEGV; crash report: /tmp/x.crash")));
   CHECK(errorKey(QStringLiteral("recompute"), QStringLiteral("fillet: SIGSEGV")) !=
         errorKey(QStringLiteral("recompute"), QStringLiteral("chamfer: SIGSEGV")));
 }
@@ -2009,7 +2022,9 @@ void timelineSearchTests() {
   CHECK(!TimelineQuery::parse(QStringLiteral("is:failed")).matches(fillet));
   CHECK(TimelineQuery::parse(QStringLiteral("is:f")).statuses == TimelineQuery::Failed);
   CHECK(TimelineQuery::parse(QStringLiteral("status:error")).statuses == TimelineQuery::Failed);
-  CHECK(TimelineQuery::parse(QStringLiteral("is:note")).statuses == TimelineQuery::Warning);
+  CHECK(TimelineQuery::parse(QStringLiteral("is:note")).statuses == TimelineQuery::Info);
+  CHECK(TimelineQuery::parse(QStringLiteral("is:info")).statuses == TimelineQuery::Info);
+  CHECK(!TimelineQuery::parse(QStringLiteral("is:info")).matches(plane));
   CHECK(TimelineQuery::parse(QStringLiteral("is:rolled-back")).statuses == TimelineQuery::RolledBack);
   CHECK(TimelineQuery::parse(QStringLiteral("is:rolled_back")).statuses == TimelineQuery::RolledBack);
   CHECK(TimelineQuery::parse(QStringLiteral("is:sup")).statuses == TimelineQuery::Suppressed);
@@ -2594,6 +2609,16 @@ int holeSizesTests();
 int nativeStructureTests();
 int partStarTests();
 int toolbarPinsTests();
+int paletteCreateToolsTests();
+int rememberedValuesTests();
+int materialMenuTests();
+int materialToolTests();
+int noticeLevelTests();
+int colorRoleTests();
+int messageLogTests();
+int profilePickerRowsTests();
+int centerOfMassTests();
+int quickAccessTests();
 
 int main(int argc, char* argv[]) {
   QApplication app(argc, argv);
@@ -2708,6 +2733,16 @@ int main(int argc, char* argv[]) {
     failures += nativeStructureTests();
     failures += partStarTests();
     failures += toolbarPinsTests();
+    failures += paletteCreateToolsTests();
+    failures += rememberedValuesTests();
+    failures += materialMenuTests();
+    failures += materialToolTests();
+    failures += noticeLevelTests();
+    failures += colorRoleTests();
+    failures += messageLogTests();
+    failures += profilePickerRowsTests();
+    failures += centerOfMassTests();
+    failures += quickAccessTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

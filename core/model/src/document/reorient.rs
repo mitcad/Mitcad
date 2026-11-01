@@ -63,7 +63,7 @@ impl Deviation {
         }
         let mut parts = Vec::new();
         if let Some(c) = self.center {
-            parts.push(format!("its centre is {c:.3} mm"));
+            parts.push(format!("its center is {c:.3} mm"));
         }
         if let Some(c) = self.corners {
             parts.push(format!("its box up to {c:.3} mm"));

@@ -31,7 +31,8 @@ and [docs/development.md](docs/development.md) before larger changes.
   on a hidden Xvfb display (`tools/ui-*-test.sh`), Windows UI tests are
   the ctests `app.ui-windows*`, macOS ones `app.ui-macos*` in the macOS
   VM.
-- Before a commit or a merge to main: a scoped check on the machine's
+- Before a commit or a merge into dev, features or main (the branches:
+  [docs/development.md](docs/development.md#branches)): a scoped check on the machine's
   own platform only, never on another platform's environment: on a Linux
   machine `tools/check-all.sh` in its default, scoped mode
   ([the check script](docs/development.md#the-check-script)), on a

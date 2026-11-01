@@ -70,8 +70,7 @@ fn a_budget_drops_the_results_used_longest_ago() {
 
 #[test]
 fn dropped_results_come_back_from_the_store() {
-    let dir = std::env::temp_dir().join(format!("mitcad-cache-test-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = mitcad_model::testing::unique_temp_path("cache-test");
     let (mut doc, extrude, boss) = joined();
     doc.set_result_store(Some(ResultStore::new(&dir, "test")));
     doc.persist_results(Duration::ZERO);

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! The design's copies of library items (mitcad#640, part 4,
-//! [`crate::print_library`]): a material (with its appearance) or a
-//! printer or process profile copied into the design with its origin, a
-//! newer version in its library offered and taken on request, and a
-//! design's item saved into the user's or the project's library.
+//! [`crate::print_library`]): a material (with its list of appearances,
+//! mitcad#1067) or a printer or process profile copied into the design
+//! with its origin, a newer version in its library offered and taken on
+//! request, and a design's item saved into the user's or the project's
+//! library.
 
 use std::path::{Path, PathBuf};
 
@@ -13,7 +14,9 @@ use super::{DocState, Document, ModelError, invalid, library_items::FileWrite};
 use crate::appearance::{Appearance, library_appearance};
 use crate::kernel::Kernel;
 use crate::material::{Material, MaterialOrigin, built_in_material};
-use crate::print_library::{ItemData, ItemKind, Libraries, LibraryItem, LibraryKind, item_path};
+use crate::print_library::{
+    ItemData, ItemKind, Libraries, LibraryItem, LibraryKind, carried, item_path,
+};
 use crate::print_profile::free_id;
 
 /// A design's copy whose library has a newer version.
@@ -37,6 +40,19 @@ fn from_item(origin: Option<&MaterialOrigin>, library: &str, id: &str) -> bool {
 }
 
 impl DocState {
+    /// The appearances a material's library item carries (mitcad#1067):
+    /// those of its list that are the design's (not the library's), in
+    /// the list's order, the default's first.
+    pub(crate) fn carried_appearances(&self, material: &Material) -> Vec<Appearance> {
+        material
+            .appearance_list()
+            .into_iter()
+            .filter(|id| library_appearance(id).is_none())
+            .filter_map(|id| self.appearances.iter().find(|a| a.id == id))
+            .cloned()
+            .collect()
+    }
+
     /// Adds an appearance a library material carries: one of the library's
     /// appearances is used as it is, one the design has as it is too;
     /// another of the same id gets a free id. The id it has here.
@@ -68,18 +84,26 @@ impl DocState {
     }
 
     /// Puts a material from elsewhere (a library, an import) into the
-    /// design with the appearance it carries: in the place of the design's
-    /// of the same id when `replace` (or when that one is the same), else
-    /// under a free id and a free name. The id it has here.
+    /// design with the appearances of its list it carries (mitcad#1067):
+    /// in the place of the design's of the same id when `replace` (or when
+    /// that one is the same), else under a free id and a free name. The id
+    /// it has here.
     pub(crate) fn put_material(
         &mut self,
         mut material: Material,
-        appearance: Option<&Appearance>,
+        appearances: &[Appearance],
         replace: bool,
     ) -> String {
-        if let Some(appearance) = appearance {
-            material.appearance = Some(self.add_item_appearance(appearance));
+        // Each carried appearance under the id it has here (another of its
+        // id in the design gives it a free one), its place in the list kept.
+        for appearance in appearances {
+            let here = self.add_item_appearance(appearance);
+            material.rename_appearance(&appearance.id, &here);
         }
+        // The appearances it offers here, and its own filament colour as one
+        // of them (mitcad#1055).
+        self.known_appearances_only(&mut material);
+        self.adopt_filament_colour(&mut material, false);
         if let Some(i) = self.materials.iter().position(|m| m.id == material.id) {
             if replace || self.materials[i] == material {
                 let id = material.id.clone();
@@ -170,19 +194,20 @@ impl<K: Kernel> Document<K> {
         out
     }
 
-    /// Why a library material cannot come into the design: it names an
-    /// appearance that is neither the library's nor carried with it nor
-    /// the design's.
+    /// Why a library material cannot come into the design: its default
+    /// appearance is neither the library's nor carried with it nor the
+    /// design's. (Another of its list that is none of these is left out.)
     fn check_item_appearance(&self, data: &ItemData) -> Result<(), ModelError> {
         if let ItemData::Material {
             material,
-            appearance: None,
+            appearances,
         } = data
             && let Some(id) = material.appearance.as_deref()
+            && carried(appearances, Some(id)).is_none()
             && self.appearance(id).is_none()
         {
             return Err(invalid(format!(
-                "the material {} names the appearance '{id}', which neither it nor the design has",
+                "the material {} names the appearance {id}, which neither it nor the design has",
                 material.id
             )));
         }
@@ -208,14 +233,14 @@ impl<K: Kernel> Document<K> {
             let id = match data {
                 ItemData::Material {
                     mut material,
-                    appearance,
+                    appearances,
                 } => {
                     let replace = state.materials.iter().any(|m| {
                         m.id == material.id
                             && from_item(m.origin.as_ref(), &origin.library, &origin.id)
                     });
                     material.origin = Some(origin);
-                    state.put_material(material, appearance.as_ref(), replace)
+                    state.put_material(material, &appearances, replace)
                 }
                 ItemData::Profile(mut profile) => {
                     let existing = state.print_profiles.iter().position(|p| {
@@ -257,12 +282,12 @@ impl<K: Kernel> Document<K> {
                 .filter(|p| ItemKind::of_profile(p.kind) == kind)
                 .map(|p| p.origin.clone()),
         }
-        .ok_or_else(|| invalid(format!("the design has no {} '{id}'", kind.id())))?;
+        .ok_or_else(|| invalid(format!("the design has no {} {id}", kind.id())))?;
         let origin = origin
-            .ok_or_else(|| invalid(format!("the {} '{id}' came from no library", kind.id())))?;
+            .ok_or_else(|| invalid(format!("the {} {id} came from no library", kind.id())))?;
         let library = LibraryKind::parse(&origin.library).ok_or_else(|| {
             invalid(format!(
-                "the {} '{id}' came from {}, not a library",
+                "the {} {id} came from {}, not a library",
                 kind.id(),
                 origin.library
             ))
@@ -271,7 +296,7 @@ impl<K: Kernel> Document<K> {
             .find(Some(library), kind, &origin.id)
             .ok_or_else(|| {
                 invalid(format!(
-                    "the {} library has no {} '{}'",
+                    "the {} library has no {} {}",
                     library.id(),
                     kind.id(),
                     origin.id
@@ -305,11 +330,11 @@ impl<K: Kernel> Document<K> {
             match data {
                 ItemData::Material {
                     mut material,
-                    appearance,
+                    appearances,
                 } => {
                     material.id = id;
                     material.origin = Some(new_origin);
-                    state.put_material(material, appearance.as_ref(), true);
+                    state.put_material(material, &appearances, true);
                 }
                 ItemData::Profile(mut profile) => {
                     profile.id = id.clone();
@@ -375,7 +400,7 @@ impl<K: Kernel> Document<K> {
     ) -> Result<(PathBuf, u32), ModelError> {
         if library == LibraryKind::Base {
             return Err(invalid(
-                "the base library is Mitcad's parts library: save to the user's or the project's",
+                "the base library is MitCad's component library: save to the user's or the project's",
             ));
         }
         let folder = libraries
@@ -421,19 +446,16 @@ impl<K: Kernel> Document<K> {
                     .find(|m| m.id == id)
                     .cloned()
                     .or_else(|| built_in_material(id).cloned())
-                    .ok_or_else(|| invalid(format!("there is no material '{id}'")))?;
+                    .ok_or_else(|| invalid(format!("there is no material {id}")))?;
                 material.id = library_id.clone();
                 material.origin = None;
                 material.version = Some(version);
-                let appearance = material
-                    .appearance
-                    .as_deref()
-                    .filter(|a| library_appearance(a).is_none())
-                    .and_then(|a| self.state.appearances.iter().find(|x| x.id == a))
-                    .cloned();
+                // Every appearance of its list that is the design's, the
+                // default's first (mitcad#1067).
+                let appearances = self.state.carried_appearances(&material);
                 ItemData::Material {
                     material,
-                    appearance,
+                    appearances,
                 }
             }
             _ => {
@@ -441,7 +463,7 @@ impl<K: Kernel> Document<K> {
                     .print_profile(id)
                     .filter(|p| ItemKind::of_profile(p.kind) == kind)
                     .cloned()
-                    .ok_or_else(|| invalid(format!("there is no {} profile '{id}'", kind.id())))?;
+                    .ok_or_else(|| invalid(format!("there is no {} profile {id}", kind.id())))?;
                 profile.id = library_id.clone();
                 profile.origin = None;
                 profile.version = Some(version);
@@ -550,12 +572,13 @@ impl<K: Kernel> Document<K> {
                 let fields = match &item.data {
                     ItemData::Material {
                         material,
-                        appearance,
+                        appearances,
                     } => {
                         let mut value =
                             serde_json::to_value(material).expect("materials serialize");
-                        if let Some(color) =
-                            appearance.as_ref().map(|a| a.display_color()).or_else(|| {
+                        if let Some(color) = carried(appearances, material.appearance.as_deref())
+                            .map(|a| a.display_color())
+                            .or_else(|| {
                                 material
                                     .appearance
                                     .as_deref()

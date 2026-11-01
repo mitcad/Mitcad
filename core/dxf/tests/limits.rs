@@ -155,7 +155,7 @@ fn an_insert_of_10000_by_10000_cells_reads_in_bounded_memory() {
     assert_eq!(
         warned(
             &drawing,
-            "array of 10000 x 10000 cells: only the first 100000 cells (10 rows of 10000) are read"
+            "array of 10000 × 10000 cells: only the first 100000 cells (10 rows of 10000) are read"
         ),
         1,
         "{:?}",
@@ -179,7 +179,7 @@ fn an_array_of_a_missing_block_is_one_warning() {
     assert!(peak < 200 << 20, "{peak} bytes");
     assert!(elapsed < Duration::from_secs(1), "{elapsed:?}");
     assert!(drawing.entities.is_empty());
-    assert_eq!(warned(&drawing, "array of 10000 x 10000 cells"), 1);
+    assert_eq!(warned(&drawing, "array of 10000 × 10000 cells"), 1);
     assert_eq!(
         warned(&drawing, "block NOPE is missing"),
         1,
@@ -263,7 +263,7 @@ fn a_wide_array_keeps_its_first_rows() {
     assert_eq!(
         warned(
             &drawing,
-            "array of 300 x 1000 cells: only the first 99900 cells (333 rows of 300) are read"
+            "array of 300 × 1000 cells: only the first 99900 cells (333 rows of 300) are read"
         ),
         1,
         "{:?}",

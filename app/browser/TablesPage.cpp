@@ -145,8 +145,8 @@ protected:
   }
 };
 
-const QColor kRefusedText(0xb0, 0x00, 0x20);
-const QColor kRefusedFill(0xfb, 0xe3, 0xe3);
+QColor refusedText() { return themeColor(ColorRole::ErrorText); }
+QColor refusedFill() { return themeColor(ColorRole::ErrorFill); }
 
 bool isText(const QString& unit) { return unit == QStringLiteral("Text"); }
 
@@ -517,8 +517,8 @@ private:
           item = new QTableWidgetItem;
           m_rows->setItem(r, c, item);
         }
-        item->setForeground(kRefusedText);
-        item->setBackground(kRefusedFill);
+        item->setForeground(refusedText());
+        item->setBackground(refusedFill());
         item->setToolTip(reason);
       }
     }
@@ -883,8 +883,8 @@ void TablesPage::showTable() {
       if (refused != m_refused.cend()) {
         // What the model refused stays in the cell with the reason.
         item->setText(refused.value().first);
-        item->setForeground(kRefusedText);
-        item->setBackground(kRefusedFill);
+        item->setForeground(refusedText());
+        item->setBackground(refusedFill());
         item->setToolTip(refused.value().second);
         item->setData(NativeRefusedRole, true);
         refusedCells << QStringLiteral("row %1 %2: %3 (%4)")
@@ -974,7 +974,7 @@ bool TablesPage::run(const QJsonObject& command, QJsonObject* result, QString* p
   const bool done =
       m_host.parameterScope().isEmpty() ? m_host.runModelCommand(command, result) : m_host.runParameterCommand(command);
   if (!done) {
-    *problem = m_host.lastCancelled() ? tr("the change was cancelled") : m_host.lastError();
+    *problem = m_host.lastCancelled() ? tr("the change was canceled") : m_host.lastError();
   }
   return done;
 }
@@ -1001,7 +1001,7 @@ void TablesPage::submitTable(const QJsonArray& columns, const QJsonArray& rows, 
       m_message->clear();
       qDebug().noquote() << QStringLiteral("Table %1 %2: %3").arg(name, what, typed);
       if (!done.isEmpty()) {
-        m_host.showStatus(done, false);
+        m_host.showStatus(done, NoticeLevel::Information);
         qDebug().noquote() << QStringLiteral("Table %1: %2").arg(name, done);
       }
       if (result.contains(QStringLiteral("changed"))) {
@@ -1014,7 +1014,7 @@ void TablesPage::submitTable(const QJsonArray& columns, const QJsonArray& rows, 
       const QString moves =
           configurations::movesNotice(configurations::readMoves(result.value(QStringLiteral("moves"))));
       if (!moves.isEmpty()) {
-        m_host.showStatus(moves, false);
+        m_host.showStatus(moves, NoticeLevel::Information);
         qDebug().noquote() << QStringLiteral("Configuration moves: %1").arg(moves);
       }
     } else {
@@ -1465,7 +1465,7 @@ void TablesPage::importCsv() {
     const QString moves =
         configurations::movesNotice(configurations::readMoves(result.value(QStringLiteral("moves"))));
     const QString imported = tr("Imported the table %1 from %2: %3.").arg(name, file, summary);
-    m_host.showStatus(moves.isEmpty() ? imported : QStringLiteral("%1 %2").arg(imported, moves), false);
+    m_host.showStatus(moves.isEmpty() ? imported : QStringLiteral("%1 %2").arg(imported, moves), NoticeLevel::Information);
     qDebug().noquote() << QStringLiteral("Imported table %1 from %2: %3").arg(name, file, summary);
     if (!moves.isEmpty()) {
       qDebug().noquote() << QStringLiteral("Configuration moves: %1").arg(moves);
@@ -1511,7 +1511,7 @@ void TablesPage::exportCsv() {
   output.close();
   m_message->clear();
   const int count = answer.value(QStringLiteral("rows")).toInt();
-  m_host.showStatus(tr("Exported the table %1 to %2.").arg(name, QDir::toNativeSeparators(path)), false);
+  m_host.showStatus(tr("Exported the table %1 to %2.").arg(name, QDir::toNativeSeparators(path)), NoticeLevel::Information);
   qDebug().noquote() << QStringLiteral("Exported table %1 to %2: %3 row(s)").arg(name, path).arg(count);
 }
 

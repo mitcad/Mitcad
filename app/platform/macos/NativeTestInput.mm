@@ -57,6 +57,7 @@
 #include "NativeNavigationGuide.hpp"
 #include "NativeColorField.hpp"
 #include "NativeTableCells.hpp"
+#include "NativeColors.hpp"
 #include "browser/DocumentSnapshot.hpp"
 #include "browser/TimelinePresentation.hpp"
 #include "framework/CachePreferences.hpp"
@@ -70,6 +71,12 @@
 @protocol MITCADNativeHistoryFeatureTest <NSObject>
 - (void)selectHistoryFeature;
 - (void)activateHistoryFeature;
+@end
+
+// A view that supplies its tooltip when AppKit shows it, asked as AppKit
+// asks it (the timeline's cells, mitcad#1076).
+@protocol MITCADNativeToolTipOwnerTest <NSObject>
+- (NSString*)view:(NSView*)view stringForToolTip:(NSToolTipTag)tag point:(NSPoint)point userData:(void*)data;
 @end
 
 // Read-only diagnostic of the actual NSSlider mouseDown stack, maintained
@@ -248,6 +255,9 @@ bool sameCommandMenu(NSMenu* native, QMenu* retained, bool caption, const QStrin
   NSMutableArray<NSMenuItem*>* actual = [NSMutableArray array];
   for (NSUInteger index = caption ? 1 : 0; index < native.itemArray.count; ++index) {
     NSMenuItem* item = native.itemArray[index];
+    // The rows' Pin to Toolbar and Change Keyboard Shortcut submenus after
+    // the shared entries (NativeMacWindow.mm, rowCommandsTag; mitcad#1074).
+    if (item.tag == 1001) continue;
     [actual addObject:item];
   }
   if (actual.count != NSUInteger(expected.size())) {
@@ -718,7 +728,9 @@ bool textOf(const QString& identifier, QString& value) {
     value = qt(identifier == QStringLiteral("native.file.name") ? panel.nameFieldStringValue : panel.directoryURL.path);
     return true;
   }
-  NSView* view = findControl(identifier);
+  // An identifier, else a positional cell locator <table>/<row>/<column>
+  // (a bridged table or outline, as expect-native-style takes it).
+  NSView* view = tableCell(identifier);
   if ([view isKindOfClass:NSScrollView.class] &&
       [((NSScrollView*)view).documentView isKindOfClass:NSTextView.class]) view = ((NSScrollView*)view).documentView;
   // A model cell's identifier is on its cell view; read its shown text.
@@ -778,6 +790,38 @@ bool present(const QString& identifier, bool expected) {
   if (!window) return false;
   NSView* root = window.contentView.superview != nil ? window.contentView.superview : window.contentView;
   return (identifiedView(root, identifier) != nil) == expected;
+}
+
+bool attached(const QString& identifier, const QString& anchor, bool above, QString& detail) {
+  // Read only, as visible(): toolbar item views first, since AppKit can
+  // host them outside the titlebar hierarchy, then the document window.
+  NSWindow* window = documentWindow();
+  NSView* anchorView = nil;
+  for (NSToolbarItem* item in window.toolbar.items) {
+    if (NSView* found = identifiedView(item.view, anchor)) { anchorView = found; break; }
+  }
+  if (anchorView == nil && window != nil)
+    anchorView = identifiedView(window.contentView.superview != nil ? window.contentView.superview : window.contentView, anchor);
+  if (!viewVisible(anchorView)) { detail = QStringLiteral("no visible native control '%1'").arg(anchor); return false; }
+  NSView* view = nil;
+  for (NSWindow* secondary in nativeWindows()) {
+    if (secondary == window) continue;
+    NSView* content = secondary.contentView;
+    NSView* found = identifiedView(content.superview != nil ? content.superview : content, identifier);
+    if (viewVisible(found)) { view = found; break; }
+  }
+  if (view == nil) { detail = QStringLiteral("no visible native control '%1' in a separate window").arg(identifier); return false; }
+  const auto onScreen = [](NSView* v) { return [v.window convertRectToScreen:[v convertRect:v.bounds toView:nil]]; };
+  const NSRect at = onScreen(anchorView);
+  const NSRect rect = onScreen(view);
+  // The gap holds the popover's arrow and its content margin; the control
+  // spans the anchor's horizontal centre, give or take the arrow's inset
+  // from the popover's corner.
+  const CGFloat gap = above ? NSMinY(rect) - NSMaxY(at) : NSMinY(at) - NSMaxY(rect);
+  const bool across = NSMidX(at) >= NSMinX(rect) - 16 && NSMidX(at) <= NSMaxX(rect) + 16;
+  detail = QStringLiteral("'%1' at %2, '%3' at %4 (screen), gap %5")
+               .arg(identifier, qt(NSStringFromRect(rect)), anchor, qt(NSStringFromRect(at))).arg(gap);
+  return gap >= 0 && gap <= 60 && across;
 }
 
 bool resizeDocument(int width, int height, QString& error) {
@@ -1146,7 +1190,7 @@ bool setAppearance(const QString& name, QString& error) {
 }
 
 bool historyLayout(const QJsonObject& timeline, const QSet<QString>& filtered, const QStringList& selected,
-                   bool checkSelection, QString& error) {
+                   bool checkSelection, QString& error, const QHash<QString, QString>& folded) {
   NSView* content = documentWindow().contentView;
   [content layoutSubtreeIfNeeded];
   NSView* card = identifiedView(content, QStringLiteral("native.historyCard"));
@@ -1229,6 +1273,34 @@ bool historyLayout(const QJsonObject& timeline, const QSet<QString>& filtered, c
       ++runs;
       continue;
     }
+    // A folded timeline group (mitcad#1077): its features' cells hidden,
+    // one folder cell in the row for them.
+    if (folded.contains(uid)) {
+      const QString group = folded.value(uid);
+      if (!button.hidden || button.enabled || button.state == NSControlStateValueOn) {
+        error = QStringLiteral("feature '%1' of the folded group '%2' remains visible, enabled or selected").arg(uid, group);
+        return false;
+      }
+      const QString previous = index > 0 ? features[index - 1].toObject().value(QStringLiteral("uid")).toString()
+                                         : QString();
+      if (index > 0 && folded.value(previous) == group) continue;
+      NSView* cell = identifiedView(strip, QStringLiteral("native.history.group.") + group);
+      const NSRect frame = [cell convertRect:cell.bounds toView:strip];
+      if (!viewVisible(cell) || std::abs(frame.size.width - timeline::cell) > 1 ||
+          std::abs(frame.size.height - timeline::cell) > 1 || !NSContainsRect(strip.bounds, frame) ||
+          (!cells.empty() && NSMaxX(cells.back().frame) >= NSMinX(frame))) {
+        error = QStringLiteral("the folded group '%1' has no folder cell in the horizontal row").arg(group);
+        return false;
+      }
+      NSView* hit = [content hitTest:[cell convertPoint:NSMakePoint(NSMidX(cell.bounds), NSMidY(cell.bounds))
+                                                 toView:content.superview]];
+      if (hit != cell) {
+        error = QStringLiteral("the folded group '%1' cannot receive pointer input above the canvas").arg(group);
+        return false;
+      }
+      cells.push_back({index, frame, false});
+      continue;
+    }
     if (button.hidden) {
       error = QStringLiteral("unfiltered history feature '%1' is hidden").arg(uid);
       return false;
@@ -1286,6 +1358,19 @@ bool historyLayout(const QJsonObject& timeline, const QSet<QString>& filtered, c
         .arg(actualSelected.join(QLatin1Char(',')), selected.join(QLatin1Char(',')));
     return false;
   }
+  return true;
+}
+
+bool toolTipOf(const QString& identifier, QString& text) {
+  NSView* view = findControl(identifier);
+  if (!view) return false;
+  if ([view respondsToSelector:@selector(view:stringForToolTip:point:userData:)]) {
+    text = qt([(id<MITCADNativeToolTipOwnerTest>)view view:view stringForToolTip:0
+                                                      point:NSMakePoint(NSMidX(view.bounds), NSMidY(view.bounds))
+                                                   userData:nullptr]);
+    return true;
+  }
+  text = qt(view.toolTip);
   return true;
 }
 
@@ -1514,6 +1599,35 @@ bool hover(const QString& identifier, bool enter, QString& error) {
     // forwarding the event to the hidden Qt presenter.
     if (enter) { [view mouseEntered:event]; }
     else { [view mouseExited:event]; }
+    return true;
+  }
+  // A row of an outline that follows the pointer over its rows (the
+  // Browser, mitcad#1072): the pointer moves to the row's centre, or leaves
+  // the outline beside its visible rows.
+  for (NSView* owner = view.superview; owner != nil; owner = owner.superview) {
+    if ([owner isKindOfClass:NSTableView.class]) { [owner updateTrackingAreas]; }
+    NSTrackingArea* moves = nil;
+    for (NSTrackingArea* area in owner.trackingAreas) {
+      if ((area.options & NSTrackingMouseMoved) != 0 && area.owner == owner) { moves = area; break; }
+    }
+    if (moves == nil) { continue; }
+    NSEvent* event = nil;
+    const NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    if (enter) {
+      [view scrollRectToVisible:view.bounds];
+      const NSPoint location = [view convertPoint:NSMakePoint(NSMidX(view.bounds), NSMidY(view.bounds)) toView:nil];
+      event = [NSEvent mouseEventWithType:NSEventTypeMouseMoved location:location modifierFlags:0 timestamp:now
+                             windowNumber:view.window.windowNumber context:nil eventNumber:0 clickCount:0 pressure:0];
+      [owner mouseMoved:event];
+    } else {
+      const NSRect shown = owner.visibleRect;
+      const NSPoint outside = NSMakePoint(NSMaxX(shown) + 20, NSMidY(shown));
+      const NSPoint location = [owner convertPoint:outside toView:nil];
+      event = [NSEvent enterExitEventWithType:NSEventTypeMouseExited location:location modifierFlags:0 timestamp:now
+                                 windowNumber:view.window.windowNumber context:nil eventNumber:0 trackingNumber:0
+                                     userData:nullptr];
+      [owner mouseExited:event];
+    }
     return true;
   }
   error = QStringLiteral("native control '%1' has no hover tracking area").arg(identifier);
@@ -2415,6 +2529,10 @@ bool trackContextMenu(const QString& choice, const std::function<void()>& open, 
               }
             }
             menu = next;
+            // Opening a submenu sends its delegate menuNeedsUpdate:, which
+            // fills one made when shown (Material ▸, mitcad#1046); NSMenu's
+            // update only validates the items it already has.
+            if ([menu.delegate respondsToSelector:@selector(menuNeedsUpdate:)]) [menu.delegate menuNeedsUpdate:menu];
           }
           if (menu != nil) {
             selected = leaf(menu, path.last(), available);
@@ -3035,7 +3153,7 @@ bool screenshot(const QString& path, QOpenGLWidget* viewport) {
       covered += QRect(origin.x() + qFloor(rect.origin.x * scaleX), origin.y() + qFloor(rect.origin.y * scaleY),
                        qCeil(rect.size.width * scaleX), qCeil(rect.size.height * scaleY));
     };
-    for (NSString* identifier in @[@"native.projectsCard", @"native.sidebar", @"native.inspectorCard", @"native.historyCard", @"native.ribbon", @"native.statusCard"]) {
+    for (NSString* identifier in @[@"native.projectsCard", @"native.sidebar", @"native.inspectorCard", @"native.historyCard", @"native.ribbon", @"native.messageBand", @"navigationBar"]) {
       cover(identifiedView(content, qt(identifier)));
     }
     // The orientation cube's arrows, beside the viewport host.
@@ -3297,6 +3415,37 @@ bool paneIcons(NSView* view, const QString& chosen, QString& detail) {
 bool nativeStyle(const QString& identifier, const QStringList& states, QString& detail) {
   NSView* view = tableCell(identifier);
   if (states.value(0) == QLatin1String("pane-icons")) return paneIcons(view, states.value(1), detail);
+  // A Browser row's name as the shared row colours it (mitcad#1079):
+  // row-failed, row-warning, row-dimmed or row-plain.
+  if (states.size() == 1 && states.front().startsWith(QLatin1String("row-"))) {
+    NSTableCellView* cell = [view isKindOfClass:NSTableCellView.class] ? (NSTableCellView*)view : nil;
+    const QString tone = states.front().mid(4);
+    const id value = cell.accessibilityValue;
+    const QString shown = [value isKindOfClass:NSString.class] ? qt((NSString*)value) : QString();
+    NSColor* color = cell.textField.textColor;
+    const bool plain = color == nil || [color isEqual:NSColor.labelColor];
+    detail = QStringLiteral("row '%1': tone '%2', text colour %3")
+                 .arg(identifier, shown, color != nil ? qt(color.description) : QStringLiteral("none"));
+    if (cell == nil) return false;
+    return tone == QLatin1String("plain") ? shown.isEmpty() && plain : shown == tone && !plain;
+  }
+  // A light bulb that follows a condition (mitcad#1079): its fx mark and
+  // its tooltip, which the test log shows ("Native bulb <id>: fx, <tip>").
+  if (states == QStringList{QStringLiteral("fx-bulb")} || states == QStringList{QStringLiteral("bulb")}) {
+    NSButton* button = [view isKindOfClass:NSButton.class] ? (NSButton*)view : nil;
+    const id value = button.accessibilityValue;
+    const bool bound = [value isKindOfClass:NSString.class] && ((NSString*)value).length > 0;
+    const QString tip = qt(button.toolTip);
+    detail = QStringLiteral("bulb '%1': fx %2, tip '%3'").arg(identifier).arg(bound).arg(tip);
+    const bool conditioned = button != nil && viewVisible(button) && !tip.isEmpty() &&
+                             tip != QObject::tr("Hide") && tip != QObject::tr("Show");
+    const bool ready = conditioned && bound == (states.front() == QLatin1String("fx-bulb"));
+    if (ready) {
+      qInfo().noquote() << QStringLiteral("Native bulb %1: %2, %3")
+                               .arg(identifier, bound ? QStringLiteral("fx") : QStringLiteral("plain"), tip);
+    }
+    return ready;
+  }
   if (states == QStringList{QStringLiteral("fading")} || states == QStringList{QStringLiteral("opaque")}) {
     const bool shown = viewVisible(view);
     CALayer* presented = view.layer.presentationLayer;
@@ -3330,6 +3479,25 @@ bool nativeStyle(const QString& identifier, const QStringList& states, QString& 
         .arg(viewVisible(button)).arg(fits);
     return displayed && viewVisible(button) && fits;
   }
+  if (states == QStringList{QStringLiteral("image")}) {
+    // The picture a table cell shows beside its text (mitcad#1078,
+    // mitcad#1080): a model cell's or a row label's icon, or an image view
+    // of a cell's embedded controls, such as a colour's swatch.
+    NSView* cellRoot = view;
+    while (cellRoot.superview != nil && ![cellRoot.superview isKindOfClass:NSTableRowView.class]) {
+      cellRoot = cellRoot.superview;
+    }
+    if (cellRoot.superview == nil) cellRoot = view;
+    NSImageView* picture = (NSImageView*)findView(cellRoot, [](NSView* candidate) {
+      return [candidate isKindOfClass:NSImageView.class] && ((NSImageView*)candidate).image != nil &&
+             ((NSImageView*)candidate).image.size.width > 0;
+    });
+    detail = QStringLiteral("cell %1: image %2, %3x%4, visible %5")
+        .arg(cellRoot != nil ? qt(NSStringFromClass(cellRoot.class)) : QStringLiteral("none"))
+        .arg(picture != nil).arg(picture != nil ? picture.image.size.width : 0)
+        .arg(picture != nil ? picture.image.size.height : 0).arg(viewVisible(picture));
+    return viewVisible(picture);
+  }
   if (states.value(0) == QLatin1String("result-icon")) return searchResultIcon(view, states, detail);
   if (states.contains(QStringLiteral("current-row"))) {
     NSTableView* table = mac::owningTable(view);
@@ -3343,7 +3511,8 @@ bool nativeStyle(const QString& identifier, const QStringList& states, QString& 
     }
     NSColor* titleColor = check.attributedTitle.length > 0
         ? [check.attributedTitle attribute:NSForegroundColorAttributeName atIndex:0 effectiveRange:nullptr] : nil;
-    const bool warning = titleColor != nil && sameColor(titleColor, NSColor.systemOrangeColor, check.effectiveAppearance);
+    const bool warning = titleColor != nil &&
+        sameColor(titleColor, roleColor(ColorRole::WarningText), check.effectiveAppearance);
     const bool framed = cursor != nil && cursor.currentFocus && cursor.paintedCurrentFocus && !cursor.selected &&
         !NSIsEmptyRect(cursor.visibleRect) && cursor.window != nil;
     detail = QStringLiteral("current-row frame %1, painted %2, selected %3, checkbox state %4, warning %5, row %6")
@@ -3364,7 +3533,8 @@ bool nativeStyle(const QString& identifier, const QStringList& states, QString& 
   NSAppearance* appearance = field.effectiveAppearance;
   const DisplayedFontWeight weight = displayedFontWeight(field);
   const bool redText = sameColor(field.textColor, NSColor.systemRedColor, appearance);
-  const bool orangeText = sameColor(field.textColor, NSColor.systemOrangeColor, appearance);
+  // The warning's text: the role table's yellow (mitcad#1041).
+  const bool orangeText = sameColor(field.textColor, roleColor(ColorRole::WarningText), appearance);
   bool redFill = false;
   const CGFloat fill = cell ? cellFill(cell, &redFill) : 0;
   NSTableView* table = nil;
@@ -3476,6 +3646,8 @@ bool nativeColumns(const QString& identifier, const QString& mode, QString& deta
   bool atMinimum = true;
   for (NSTableColumn* column in table.tableColumns) {
     const int section = qt(column.identifier).toInt();
+    // A vertical header's leading column (mitcad#1078) takes its room too.
+    if (section < 0 && !column.hidden) total += column.width + table.intercellSpacing.width;
     if (section < 0 || section >= header->count()) continue;
     if (bool(column.hidden) != header->isSectionHidden(section)) {
       detail = QStringLiteral("column %1 hidden %2, the shared section %3").arg(section).arg(bool(column.hidden))
@@ -3660,6 +3832,87 @@ bool cardWidth(const QString& identifier, int minimum, int maximum, QString& det
     }
   }
   return true;
+}
+
+// The left column (mitcad#1020): the handle native.columnSplit.<above>.<below>
+// in the gap under the card named <above>.
+bool dragColumnSplit(const QString& identifier, int height, QString& error) {
+  NSWindow* window = documentWindow();
+  NSView* content = window.contentView;
+  [content layoutSubtreeIfNeeded];
+  NSView* handle = content != nil ? identifiedView(content, identifier) : nil;
+  const QStringList parts = identifier.split(QLatin1Char('.'));
+  const QString above = parts.value(2);
+  const QString cardName = above == QLatin1String("projects")        ? QStringLiteral("native.projectsCard")
+                           : above == QLatin1String("configuration") ? QStringLiteral("native.configurationCard")
+                                                                     : QStringLiteral("native.sidebar");
+  NSView* card = content != nil ? identifiedView(content, cardName) : nil;
+  if (!viewVisible(handle) || !viewVisible(card)) {
+    error = QStringLiteral("no visible left column boundary '%1' under a card").arg(identifier);
+    return false;
+  }
+  // The pointer reaches the handle above the canvas, and the handle shows
+  // the resize cursor.
+  const NSPoint start = [handle convertPoint:NSMakePoint(NSMidX(handle.bounds), NSMidY(handle.bounds)) toView:nil];
+  NSView* hit = [content hitTest:[content.superview convertPoint:start fromView:nil]];
+  if (hit != handle) {
+    error = QStringLiteral("the left column boundary '%1' does not receive the pointer").arg(identifier);
+    return false;
+  }
+  [handle updateTrackingAreas];
+  bool cursor = false;
+  for (NSTrackingArea* area in handle.trackingAreas) {
+    cursor = cursor || (area.owner == handle && (area.options & NSTrackingCursorUpdate) != 0);
+  }
+  if (!cursor || ![handle respondsToSelector:@selector(cursorUpdate:)]) {
+    error = QStringLiteral("the left column boundary '%1' has no resize cursor").arg(identifier);
+    return false;
+  }
+  [window makeKeyAndOrderFront:nil];
+  if (height < 0) {
+    // A double-click: the automatic split.
+    NSEvent* press = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown location:start modifierFlags:0
+                                       timestamp:NSProcessInfo.processInfo.systemUptime
+                                    windowNumber:window.windowNumber context:nil eventNumber:0 clickCount:2
+                                        pressure:1];
+    [handle mouseDown:press];
+    [handle mouseUp:pointerEvent(NSEventTypeLeftMouseUp, start, window)];
+    return true;
+  }
+  // Window coordinates grow upwards: a taller card above is a drag down.
+  const CGFloat down = CGFloat(height) - card.frame.size.height;
+  const NSPoint end = NSMakePoint(start.x, start.y - down);
+  [handle mouseDown:pointerEvent(NSEventTypeLeftMouseDown, start, window)];
+  [handle mouseDragged:pointerEvent(NSEventTypeLeftMouseDragged, NSMakePoint(start.x, (start.y + end.y) / 2), window)];
+  [handle mouseDragged:pointerEvent(NSEventTypeLeftMouseDragged, end, window)];
+  [handle mouseUp:pointerEvent(NSEventTypeLeftMouseUp, end, window)];
+  return true;
+}
+
+bool cardHeight(const QString& identifier, int minimum, int maximum, QString& detail) {
+  NSWindow* window = documentWindow();
+  NSView* content = window.contentView;
+  [content layoutSubtreeIfNeeded];
+  NSView* card = content != nil ? identifiedView(content, identifier) : nil;
+  if (!viewVisible(card)) {
+    detail = QStringLiteral("no visible native card '%1'").arg(identifier);
+    return false;
+  }
+  const NSRect rect = [card convertRect:card.bounds toView:content];
+  detail = QStringLiteral("native card '%1' is %2 points high").arg(identifier).arg(double(rect.size.height));
+  if (minimum >= 0) return rect.size.height >= minimum - 1 && rect.size.height <= maximum + 1;
+  // The bottom of the free column: 8 points (the cards' gap) above the
+  // timeline, or 12 (their margin) above the document's bottom.
+  NSView* history = identifiedView(content, QStringLiteral("native.historyCard"));
+  const bool flipped = content.flipped;
+  CGFloat bottom = flipped ? NSMaxY(content.bounds) - 12 : NSMinY(content.bounds) + 12;
+  if (viewVisible(history)) {
+    const NSRect timeline = [history convertRect:history.bounds toView:content];
+    bottom = flipped ? NSMinY(timeline) - 8 : NSMaxY(timeline) + 8;
+  }
+  const CGFloat edge = flipped ? NSMaxY(rect) : NSMinY(rect);
+  detail += QStringLiteral(", its bottom at %1, the free column's at %2").arg(double(edge)).arg(double(bottom));
+  return std::abs(edge - bottom) <= 1;
 }
 
 bool nameFits(const QRegularExpression& expression, bool expected, QString& detail) {
@@ -4411,6 +4664,31 @@ bool tileAction(const QStringList& args, QString& error) {
     [(NSButton*)star performClick:nil];
     return true;
   }
+  if (action == QStringLiteral("key")) {
+    // An arrow key of the grid with the keyboard in its panel, as a
+    // keyboard or VoiceOver user has it (mitcad#1025); delivered to the
+    // grid itself, not through the window server.
+    MitcadNativeTileCollection* keyed = tileGrid(args.value(1));
+    const bool right = args.value(2) == QStringLiteral("Right");
+    if (keyed == nil || keyed.window == nil || (!right && args.value(2) != QStringLiteral("Left"))) {
+      error = QStringLiteral("native-tiles key needs a shown grid and Left or Right, not '%1' '%2'")
+                  .arg(args.value(1), args.value(2));
+      return false;
+    }
+    [keyed.window makeKeyAndOrderFront:nil];
+    if (![keyed.window makeFirstResponder:keyed]) {
+      error = QStringLiteral("native grid '%1' did not take the keyboard").arg(args.value(1));
+      return false;
+    }
+    NSString* characters = [NSString stringWithFormat:@"%C", unichar(right ? NSRightArrowFunctionKey : NSLeftArrowFunctionKey)];
+    NSEvent* event = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint
+                                 modifierFlags:NSEventModifierFlagFunction | NSEventModifierFlagNumericPad
+                                     timestamp:NSProcessInfo.processInfo.systemUptime
+                                  windowNumber:keyed.window.windowNumber context:nil characters:characters
+                   charactersIgnoringModifiers:characters isARepeat:NO keyCode:right ? 124 : 123];
+    [keyed keyDown:event];
+    return true;
+  }
   MitcadNativeTileCollection* grid = tileGrid(args.value(1));
   const NSInteger tile = grid != nil ? findTile(grid, args.value(2)) : -1;
   MitcadNativeTileView* view = tile >= 0 ? tileView(grid, tile) : nil;
@@ -4456,6 +4734,24 @@ bool tileAction(const QStringList& args, QString& error) {
 
 bool tileCheck(const QStringList& args, QString& detail) {
   const QString check = args.value(0);
+  if (check == QStringLiteral("ax-focus")) {
+    // The application's focused accessibility element, which VoiceOver's
+    // keyboard focus reads (mitcad#1025, mitcad#1026): live in the key
+    // window, with bounds and a label matching the pattern.
+    id element = NSApp.accessibilityFocusedUIElement;
+    NSView* view = [element isKindOfClass:NSView.class] ? (NSView*)element : nil;
+    const NSRect frame = [element respondsToSelector:@selector(accessibilityFrame)] ? [element accessibilityFrame] : NSZeroRect;
+    NSString* label = [element respondsToSelector:@selector(accessibilityLabel)] ? [element accessibilityLabel] : nil;
+    if (label.length == 0 && [element respondsToSelector:@selector(accessibilityTitle)]) label = [element accessibilityTitle];
+    NSString* role = [element respondsToSelector:@selector(accessibilityRole)] ? [element accessibilityRole] : nil;
+    const bool live = element != nil && (view == nil || (view.window != nil && view.window == NSApp.keyWindow &&
+                                                         !view.isHiddenOrHasHiddenAncestor));
+    const QRegularExpression wanted(args.value(1));
+    detail = QStringLiteral("focused %1 role %2 label '%3' frame %4 live=%5 key=%6")
+                 .arg(qt(NSStringFromClass([element class])), qt(role), qt(label), qt(NSStringFromRect(frame)))
+                 .arg(live).arg(qt(NSApp.keyWindow.title));
+    return live && NSWidth(frame) > 0 && NSHeight(frame) > 0 && label.length > 0 && wanted.match(qt(label)).hasMatch();
+  }
   if (check == QStringLiteral("hover")) {
     bool shown = false;
     for (NSWindow* window in NSApp.windows) {

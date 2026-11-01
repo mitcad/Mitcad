@@ -343,7 +343,7 @@ FolderTextureSource::FolderTextureSource(QStringList folders, QObject* parent)
 
 QString FolderTextureSource::emptyHint() const {
   if (m_folders.isEmpty()) {
-    return tr("No texture folders yet: add folders of texture images in Preferences, Textures.");
+    return tr("No texture folders yet: add folders of texture images on the Textures page of Tools › Preferences.");
   }
   return tr("No materials in the texture folders. A material is a set of PNG or JPEG images named by their "
             "maps, such as oak_diff.png, oak_nor_gl.png, oak_rough.png.");
@@ -446,7 +446,7 @@ void FolderTextureSource::fetch(const TextureAsset& asset, const QString& resolu
     } else {
       files.maps = folderMaterialFiles(m_materials.at(found.value()), resolution);
       if (files.maps.isEmpty()) {
-        error = tr("The material has no base colour image in %1.")
+        error = tr("The material has no base color image in %1.")
                     .arg(resolution.isEmpty() ? tr("its own size") : resolution);
       }
       for (auto it = files.maps.cbegin(); error.isEmpty() && it != files.maps.cend(); ++it) {

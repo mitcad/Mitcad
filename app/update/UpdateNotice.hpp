@@ -9,6 +9,8 @@
 #include <QString>
 #include <QWidget>
 
+#include "framework/NoticeLevel.hpp"
+
 class QLabel;
 class QProgressBar;
 class QPushButton;
@@ -27,8 +29,10 @@ public:
   void showOffer(const QString& html, bool installable);
   // A download or check under way; total 0: no percentage. Plain text.
   void showProgress(const QString& plain, qint64 received, qint64 total);
-  // Plain text, shown as it is: an error may carry a server's text.
-  void showMessage(const QString& plain, bool error = false);
+  // Plain text, shown as it is: an error may carry a server's text. Its
+  // level gives its icon (mitcad#1040): an error's, a success's check (up
+  // to date after Check for Updates), the update icon for information.
+  void showMessage(const QString& plain, NoticeLevel level = NoticeLevel::Information);
   // The notice's text as shown, without markup.
   QString text() const;
 
@@ -44,6 +48,7 @@ signals:
 private:
   void present(const QString& state, const QString& html);
 
+  QLabel* m_icon = nullptr; // the update icon, or the message's level's (mitcad#1040)
   QLabel* m_text = nullptr;
   QProgressBar* m_progress = nullptr;
   QPushButton* m_notes = nullptr;

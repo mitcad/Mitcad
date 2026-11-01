@@ -391,7 +391,7 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-print-fits" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-print-fits PROPERTIES TIMEOUT 360)
     # Configurations (mitcad#807): the window opens and a choice in the
-    # browser's Configuration bar changes the body (the test driver's
+    # Configuration bar changes the body (the test driver's
     # script, shared with the macOS test).
     add_test(NAME app.ui-windows-configurations
       COMMAND powershell -NoProfile -ExecutionPolicy Bypass
@@ -399,6 +399,15 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
               -Out "${CMAKE_BINARY_DIR}/ui-windows-configurations" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-configurations PROPERTIES TIMEOUT 360)
+    # Help > User Guide (mitcad#1032), Docked and Floating: the menu entry
+    # and the command each would open the guide (the test driver's script,
+    # shared with the Linux test).
+    add_test(NAME app.ui-windows-user-guide
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-user-guide-test.ps1"
+              -App "$<TARGET_FILE:mitcad>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-user-guide" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-user-guide PROPERTIES TIMEOUT 300)
     # The file dialogs' folders per group (mitcad#498): Import, Export and
     # Open each start in their own last folder, also after a restart.
     add_test(NAME app.ui-windows-dialog-folders
@@ -607,6 +616,28 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-my-library" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-my-library PROPERTIES TIMEOUT 300)
 
+    # One filament, its variants per printer and nozzle (mitcad#1054): 3D
+    # Print's Materials row, Import Presets grouped by filament, the
+    # Materials window's Variants tab (the driver script shared with the
+    # Linux and macOS tests).
+    add_test(NAME app.ui-windows-filament-variants
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-filament-variants-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-filament-variants" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-filament-variants PROPERTIES TIMEOUT 360)
+
+    # A filament's colour is its appearance (mitcad#1055): Material ▸
+    # material ▸ appearance, the Materials window's appearances and the
+    # appearance picker (the driver script shared with the Linux and macOS
+    # tests).
+    add_test(NAME app.ui-windows-filament-appearance
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-filament-appearance-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-filament-appearance" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-filament-appearance PROPERTIES TIMEOUT 360)
+
     # Measurement objects (mitcad#649): kept from the Measure panel and its
     # history (annotations since mitcad#702), listed in the browser's
     # Annotations folder, a 4 x transparent snapshot, saved and opened
@@ -778,6 +809,151 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-mortise-tenon"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-mortise-tenon PROPERTIES TIMEOUT 300)
+    # Constraints the drawn lines already satisfy, added when safe
+    # (mitcad#1024): a quadrant's coincident and centre alignment, a
+    # horizontal between level points, a tangent where a line touches a
+    # circle, and a rectangle afterwards with nothing refused.
+    add_test(NAME app.ui-windows-sketch-auto-constraints
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-auto-constraints-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-auto-constraints" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-auto-constraints PROPERTIES TIMEOUT 300)
+    # The Sketch Palette's Create section (mitcad#1027): the defaults, the
+    # constraints on two rows, nothing clipped, a tool started three times
+    # there when the sketch opens again, its button starting it checked.
+    add_test(NAME app.ui-windows-sketch-palette-create
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-palette-create-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-palette-create" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-palette-create PROPERTIES TIMEOUT 300)
+    # Remembered values (mitcad#1028): a fillet and a chamfer with 3 mm,
+    # OK; Fillet and Chamfer again start with 3 mm, also after a new start;
+    # Cancel changes nothing.
+    add_test(NAME app.ui-windows-remembered-values
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-remembered-values-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-remembered-values"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-remembered-values PROPERTIES TIMEOUT 300)
+    # A construction plane of the active component on a face of another
+    # component's turned occurrence (mitcad#1029): kept in the active one,
+    # linked, its preview where the finished plane is shown.
+    add_test(NAME app.ui-windows-construct-occurrence
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-construct-occurrence-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-construct-occurrence"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-construct-occurrence PROPERTIES TIMEOUT 300)
+    # Default units for new designs (mitcad#1036): set to in, New is in
+    # inches (Units: in, a typed extrude distance of 1 is an inch), the
+    # untitled design at a new start too, an opened mm design keeps mm;
+    # back to mm, New is in mm.
+    add_test(NAME app.ui-windows-default-units
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-default-units-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-default-units"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-default-units PROPERTIES TIMEOUT 300)
+    # The Configuration panel and the left column (mitcad#1020): the
+    # Configuration card above the browser's, the browser's card down to the
+    # timeline, the boundary dragged and remembered after a restart, a
+    # double-click for the automatic split, the card collapsed.
+    add_test(NAME app.ui-windows-configuration-panel
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-configuration-panel-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-configuration-panel"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-configuration-panel PROPERTIES TIMEOUT 300)
+    # A material's filament preset per slicer (mitcad#1062): 3D Print's
+    # Materials row warns of a material that names no preset of the slicer,
+    # Bambu Studio's typed on Materials' Filament tab, the 3MF sent names
+    # the filament by it and inherits from it.
+    add_test(NAME app.ui-windows-filament-preset
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-filament-preset-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-filament-preset" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-filament-preset PROPERTIES TIMEOUT 300)
+    # Filling a closed table (mitcad#1044): the Rows tab's Import CSV…
+    # through its preview, Add Option… on the closed table with rows, and a
+    # size on the Configuration bar that sets a parameter column (the test
+    # driver's script).
+    add_test(NAME app.ui-windows-configuration-rows
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-configuration-rows-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-configuration-rows" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-configuration-rows PROPERTIES TIMEOUT 360)
+    # The Make tab (mitcad#1049): its groups and menus, the moved commands
+    # from it, the Annotate group's kinds, the body card and the Browser's
+    # markers; Floating too.
+    add_test(NAME app.ui-windows-make-tab
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-make-tab-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-make-tab"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-make-tab PROPERTIES TIMEOUT 300)
+    # Save Component As Design (mitcad#1057): the entry on the rows of the
+    # design's own components only (not the root's, not a linked one's),
+    # the dialog listing a projection of another component as frozen, the
+    # file written under the component's name, and Replace with a link.
+    add_test(NAME app.ui-windows-save-component
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-save-component-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-save-component" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-save-component PROPERTIES TIMEOUT 300)
+    # The Material and Appearance tools (mitcad#1059): a library material
+    # chosen in the picker for two bodies, OK and Ctrl+Z; a component's
+    # default material; the fx bound to an option; the Appearance tool's
+    # picker on a body and on a face; the windows without Assign.
+    add_test(NAME app.ui-windows-material-tool
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-material-tool-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-material-tool"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-material-tool PROPERTIES TIMEOUT 300)
+    # The navigation bar at the bottom of the view (mitcad#1086), in the
+    # Floating and the Docked layout: shown; Snap to Grid and Layout Grid
+    # in step with the View menu's; Fit; Look At in a sketch looks at its
+    # plane; the palette's Snap to grid; Preferences hides and shows it.
+    add_test(NAME app.ui-windows-view-nav-bar
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-view-nav-bar-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-view-nav-bar"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-view-nav-bar PROPERTIES TIMEOUT 300)
+    # The message band and the message history (mitcad#1042): an error in
+    # the band above the timeline stays until it is closed or the next
+    # command starts, a hint fades to the stub, the history's row of a
+    # feature selects it; the Docked status bar's history button.
+    add_test(NAME app.ui-windows-message-band
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-message-band-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-message-band"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-message-band PROPERTIES TIMEOUT 300)
+    # The Center of Mass marker (mitcad#1094): drawn at the properties
+    # query's total, moved with a component, hidden by its row's light bulb,
+    # kept hidden in the saved design, deleted from the row's menu.
+    add_test(NAME app.ui-windows-center-of-mass
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-center-of-mass-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-center-of-mass" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-center-of-mass PROPERTIES TIMEOUT 300)
+    # The quick-access group (mitcad#1090): the default commands in the
+    # Docked toolbar and the Floating title row, Save disabled for an
+    # unchanged saved design and enabled after an edit, View > Look At
+    # added from the group's menu, read back, Reset to Default.
+    add_test(NAME app.ui-windows-quick-access
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-quick-access-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-quick-access" -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-quick-access PROPERTIES TIMEOUT 300)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

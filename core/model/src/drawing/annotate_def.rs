@@ -226,7 +226,7 @@ impl ViewPick {
         match (&self.edge, &self.face, self.point) {
             (Some(_), None, _) => Ok(()),
             (None, Some(_), None | Some(PickPoint::Center)) => Ok(()),
-            (None, Some(_), Some(_)) => Err("a face's point is its centre".to_owned()),
+            (None, Some(_), Some(_)) => Err("a face's point is its center".to_owned()),
             _ => Err("a pick is a body's edge or face".to_owned()),
         }
     }

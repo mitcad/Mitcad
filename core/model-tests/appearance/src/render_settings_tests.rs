@@ -373,7 +373,7 @@ fn wrong_lights_are_refused_and_change_nothing() {
         ),
         (
             json!({"cmd": "add_render_light", "id": "light1"}),
-            "a light 'light1' exists",
+            "a light light1 exists",
         ),
         (
             json!({"cmd": "add_render_light", "id": "a b"}),
@@ -386,7 +386,7 @@ fn wrong_lights_are_refused_and_change_nothing() {
         ),
         (
             json!({"cmd": "add_render_light", "color": [2, 0, 0]}),
-            "colour components",
+            "color components",
         ),
         (
             json!({"cmd": "add_render_light", "position": [1e9, 0, 0]}),
@@ -420,7 +420,7 @@ fn wrong_lights_are_refused_and_change_nothing() {
         ),
         (
             json!({"cmd": "edit_render_light", "id": "light9", "power": 1}),
-            "no light 'light9'",
+            "no light light9",
         ),
         (
             json!({"cmd": "edit_render_light", "power": 1}),
@@ -432,7 +432,7 @@ fn wrong_lights_are_refused_and_change_nothing() {
         ),
         (
             json!({"cmd": "delete_render_light", "id": "light9"}),
-            "no light 'light9'",
+            "no light light9",
         ),
         (
             json!({"cmd": "set_render_settings", "lights": []}),
@@ -492,7 +492,7 @@ fn lights_are_saved_read_back_and_compared() {
         ),
         (
             json!({"lights": [{"id": "a", "name": "A"}, {"id": "a", "name": "B"}]}),
-            "two lights 'a'",
+            "two lights a",
         ),
         (
             json!({"lights": [{"id": "a", "name": "A", "glow": 1}]}),

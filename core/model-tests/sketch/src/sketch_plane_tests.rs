@@ -362,11 +362,12 @@ fn an_upright_sketch_on_a_new_plane_is_one_step() {
         &mut doc,
         json!({"cmd": "sketch.redefine_plane", "sketch": "F1", "plane": "xz", "upright": true}),
     );
-    // As Create Sketch's: the design's +Z up, x = -X.
+    // As Create Sketch's: the design's +Z up, seen from the front
+    // (mitcad#1060): x = +X, the normal -Y.
     assert_frame(
         frame(&doc, "F1"),
         [0.0; 3],
-        [-1.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0],
     );
     assert!(sketch_def(&doc, "F1").get("frame").is_some());
@@ -382,11 +383,12 @@ fn an_upright_sketch_on_a_new_plane_is_one_step() {
         &mut doc,
         json!({"cmd": "sketch.redefine_plane", "sketch": "F1", "plane": "xz", "offset": 4}),
     );
-    // 4 along the upright frame's normal, x × y = (-1, 0, 0) × (0, 0, 1).
+    // 4 along the upright frame's normal, x × y = (1, 0, 0) × (0, 0, 1),
+    // that is -Y: towards the front.
     assert_frame(
         frame(&doc, "F1"),
-        [0.0, 4.0, 0.0],
-        [-1.0, 0.0, 0.0],
+        [0.0, -4.0, 0.0],
+        [1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0],
     );
 }

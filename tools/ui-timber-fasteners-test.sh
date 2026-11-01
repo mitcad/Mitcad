@@ -159,7 +159,7 @@ choose_in_picker() {
     ui_expect_new "$4" "the picker's design parts: $4"
   fi
   ui_expect_new "Part picker tile $3 at " "$3's tile in the picker"
-  ui_focus_dialog "^Part Picker - "
+  ui_focus_dialog "^Component Picker - "
   ui_mark
   ui_step "$3 in the picker"               ui_click_logged "Part picker tile $3"
   ui_expect_new "Part picker chose $3" "$3 chosen in the picker"
@@ -184,7 +184,7 @@ ui_step "Wall (command search)"            ui_command "Wall"
 ui_expect_new "Command Wall started" "Wall started"
 ui_expect_new "BUILD parts wood: " "the library's wood fasteners"
 expect_inspect Wall "frame wall Wall 1" "fasteners yes" \
-  "fastener 2 x Wood screw test at each junction, sized from the members" \
+  "fastener 2 × Wood screw test at each junction, sized from the members" \
   "the first time (fresh settings): two of the countersunk wood screw the library marks as the default, not the pan-head connector screw (mitcad#516)"
 ui_expect_log "Panel Wall input fastener_size at" "Size under Fasteners"
 ui_expect_log "Panel Wall input fastener_count at" "Count under Fasteners"
@@ -194,8 +194,8 @@ ui_step "Size 5.0x90"                      ui_choose "Panel Wall input fastener_
 ui_step "three at each junction"           ui_type_in "Panel Wall input fastener_count" "3"
 ui_step "1200 mm long"                     ui_type_in "Panel Wall input frame_length" "1200 mm"
 ui_step "600 mm high"                      ui_type_in "Panel Wall input frame_height" "600 mm"
-expect_inspect Wall "frame wall Wall 1, wall 1200 x 600 mm" \
-  "fastener 3 x Wood screw test 5.0x90 at each junction" "the wall with three 5.0x90 screws at each junction"
+expect_inspect Wall "frame wall Wall 1, wall 1200 × 600 mm" \
+  "fastener 3 × Wood screw test 5.0x90 at each junction" "the wall with three 5.0x90 screws at each junction"
 ui_mark
 ui_step "Place (Enter)"                    ui_key Return
 ui_expect_new "Placed frame Wall 1 (wall, lead C" "the wall frame placed" 60
@@ -214,7 +214,7 @@ SCREWS=$(fastener_bodies)
 ui_step "close Wall (Escape)"              ui_key Escape
 ui_mark
 ui_step "Wall again (command search)"      ui_command "Wall"
-ui_expect_new "BUILD wall adds to Component1; fasteners on; 3 x Wood screw test 5.0x90 at each junction" \
+ui_expect_new "BUILD wall adds to Component1; fasteners on; 3 × Wood screw test 5.0x90 at each junction" \
   "the next start remembers the fastener, its size and count"
 ui_step "close Wall (Escape)"              ui_key Escape
 
@@ -239,7 +239,7 @@ ui_step "Build > Swap Fastener"            ui_menu_choose "Build" "Swap Fastener
 ui_expect_new "Command Swap Fastener started" "Swap Fastener started"
 ui_expect_new "BUILD swap fastener starts with 2 fastener(s), test-timber|wood-screw-test" \
   "with the two screws selected, their own part"
-expect_inspect "Swap Fastener" "swap 2 fastener(s) (wood, 2 x Wood screw test 5.0x90)" \
+expect_inspect "Swap Fastener" "swap 2 fastener(s) (wood, 2 × Wood screw test 5.0x90)" \
   "the two 5.0x90 screws to swap"
 # The use count is per size (mitcad#518): the screws are all 5.0x90, the
 # wood screw's other size 5.0x70 is not listed in the design's parts.
@@ -298,7 +298,7 @@ expect_inspect Timber "place side" "; set of " "; fasteners no" "a set on the me
 ui_mark
 ui_step "Fasteners on"                     ui_click_logged "Panel Timber input set_fasteners"
 expect_inspect Timber "place side" "; set of " \
-  "; fasteners 2 x Wood screw test at each junction, sized from the members" "a set on the member, fastened"
+  "; fasteners 2 × Wood screw test at each junction, sized from the members" "a set on the member, fastened"
 ui_mark
 ui_step "Place (Enter)"                    ui_key Return
 ui_expect_new "Placed Timber 48x98 test as " "the set placed" 60

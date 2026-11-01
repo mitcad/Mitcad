@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/browser app/build app/MainWindow.cpp app/MainWindowContextMenu.cpp tools/cli core/model-base/src/properties.rs core/model/src/document/properties.rs core/model-api/src/properties.rs
+# check-all sources: app/files/MainWindowFiles.cpp core/model/src/document/design_summary.rs core/model/src/file core/model-api/src/design_properties.rs
 # Property Sets (mitcad#496) through the real UI, on a design with a
 # component Wall placed twice (Wall:1, Wall:2) holding the body Panel, and
 # an own type FireRating (EI30 / EI60 / EI90):
+#   - File › Design Properties… (mitcad#1088) sets Title and Author: one
+#     command; Property Sets (nothing selected) shows them on the root as
+#     its set Summary; the file, written by mitcad-cli without statistics,
+#     shows them unknown, and Save writes them, Created still unknown.
 #   - The browser's menu of Wall:1 opens Property Sets with the occurrence's
 #     and the component's levels: Wall:1 overrides the component's Mark,
 #     and shows its FireRating as inherited.
@@ -14,7 +19,7 @@
 #     listed, read-only, and never saved.
 #   - Find in Design searches by property: FireRating = EI60 finds both
 #     occurrences, Mark = W-13 only Wall:1.
-#   - The Parts List takes Mark and FireRating as columns.
+#   - The Bill of Materials takes Mark and FireRating as columns.
 #   - The design file keeps the edited values and no computed one.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -83,6 +88,27 @@ ui_start_app --open "$FILE" --no-native-dialogs
 ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Browser Root/Wall:1 at" "the browser lists Wall:1"
 
+echo "--- Design Properties: the summary on the root (mitcad#1088)"
+ui_mark
+ui_step "Design Properties (search)"     ui_command "Design Properties"
+ui_expect_new "Design Properties opened: Created unknown, Last saved unknown, Last saved by unknown, Last saved with unknown" \
+  "a file saved without statistics: nothing known of them"
+ui_focus_dialog '^Design Properties$'
+ui_step "Title"                          ui_type_field "Design Properties" "Wall study"
+ui_step "to Author (Tab, Tab)"           ui_key Tab Tab
+ui_step "Author"                         ui_type_field "Design Properties" "A. Maker"
+ui_step "OK (Enter)"                     ui_key Return
+ui_expect_new "Design Properties set: Title, Author" "one command with the two fields"
+ui_focus_main
+ui_mark
+ui_step "Property Sets (search)"         ui_command "Property Sets"
+ui_expect_new "Property Sets opened for C0" "the design's (the root's), nothing selected"
+ui_expect_new "Property sets row: component Summary/Title = Wall study (user)" "the Title on the root"
+ui_expect_new "Property sets row: component Summary/Author = A. Maker (user)" "the Author on the root"
+ui_focus_dialog '^Property Sets$'
+ui_step "close"                          ui_click_logged "Property sets close"
+ui_focus_main
+
 echo "--- The occurrence's and the component's levels"
 ui_mark
 ui_step "right-click Wall:1"             ui_click_logged "Browser Root/Wall:1" 3
@@ -149,17 +175,17 @@ ui_expect_new "Find in Design found: 2 bodies, 0 components" "the body in both p
 ui_focus_dialog '^Find in Design$'
 ui_key Escape
 
-echo "--- The Parts List's property columns"
+echo "--- The Bill of Materials' property columns"
 ui_focus_main
 ui_mark
-ui_step "Parts List (command search)"    ui_command "Parts List"
-ui_focus_dialog '^Parts List$'
+ui_step "Bill of Materials (command search)"    ui_command "Bill of Materials"
+ui_focus_dialog '^Bill of Materials$'
 ui_expect_new "Parts list columns at" "the columns field is logged"
 ui_type_in "Parts list columns" "Mark, FireRating"
 ui_key Return
 ui_expect_new "Build parts list columns: Mark, FireRating" "two property columns"
 ui_expect_new "Build parts list row: Wall: W-20 | EI60" "the component's values in them"
-ui_focus_dialog '^Parts List$'
+ui_focus_dialog '^Bill of Materials$'
 ui_key Escape
 
 echo "--- The design file: the edited values, no computed one"
@@ -173,5 +199,11 @@ expect_file '[.properties[] | select(.owner == "F2.b0") | .sets[0].properties[0]
   '[["R-2","ifc","R-1"]]' "the body's Reference with its source's value"
 expect_file '[.properties[].sets[].name] | index("Computed")' 'null' "no computed set in the file"
 expect_file '.property_types[0].values' '["EI30","EI60","EI90"]' "the own type saved"
+expect_file '[.properties[] | select(.owner == "C0") | .sets[] | select(.name == "Summary") | .properties[] | [.key, .value]]' \
+  '[["Title","Wall study"],["Author","A. Maker"]]' "Design Properties' summary saved on the root"
+# The file mitcad-cli wrote had no statistics: Save writes the last save,
+# its creation stays unknown (mitcad#1088).
+expect_file '.statistics | [has("created"), has("last_saved"), (.last_saved_with | startswith("MitCad "))]' \
+  '[false,true,true]' "the statistics written, created unknown"
 
 ui_finish "UI property sets test"

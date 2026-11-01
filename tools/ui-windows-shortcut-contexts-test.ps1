@@ -7,12 +7,12 @@
 #   1. Keyboard Shortcuts (F9 in the test's settings), by its keys: Command
 #      Search's row expanded, its Sketch row given F3, Fit Point Spline (a
 #      sketch command) given S; OK saves them, the app logs Command Search's
-#      keys per context (S in Model and Command Panel, F3 in Sketch) and no
+#      keys per context (S in 3D View and Command Panel, F3 in Sketch) and no
 #      conflict;
 #   2. F3 for the spline too: OK names the conflict and its context and
 #      selects the spline's row; the window stays open; filtered to Sketch,
 #      Command Search is one row of its Sketch key, and F5 there leaves its
-#      Model and Command Panel keys alone; with one context filtered the
+#      3D View and Command Panel keys alone; with one context filtered the
 #      Context column is hidden and the selected row is kept over the filter
 #      changes (mitcad#730); the reserved Ctrl+F is a read-only row under
 #      Search Timeline; the window cancels;
@@ -67,7 +67,7 @@ Ui-Step 'S'                               { Ui-Key 's' }
 Ui-ExpectNew 'Keyboard Shortcuts key: Fit Point Spline | Sketch = S' 'S for the spline'
 Ui-Step 'OK (Enter in the search)'        { Ui-Key 'shift+Tab', 'shift+Tab', 'Return' }
 Ui-ExpectNew 'Keyboard Shortcuts saved' 'OK passed'
-Ui-ExpectNew 'Shortcut keys of tools.search by context: Model S, Sketch F3, Command Panel S' `
+Ui-ExpectNew 'Shortcut keys of tools.search by context: 3D View S, Sketch F3, Command Panel S' `
   "Command Search's keys per context"
 if ((Ui-LogLines) | Where-Object { $_.Contains('Conflicting saved shortcuts') }) { Ui-Fail 'the saved shortcuts conflict' }
 Write-Host 'ok   no shortcut in conflict'
@@ -96,14 +96,14 @@ Ui-FocusDialog '^Keyboard Shortcuts$'
 Write-Host '--- Keyboard Shortcuts filtered to Sketch: a key there changes that context alone'
 Ui-Mark
 Ui-Step 'to the context list (Shift+Tab)' { Ui-Key 'shift+Tab' }
-Ui-Step 'Model (Down)'                    { Ui-Key 'Down' }
-Ui-ExpectNew 'Keyboard Shortcuts context filter: Model' 'the Model context filtered on the way'
+Ui-Step '3D View (Down)'                    { Ui-Key 'Down' }
+Ui-ExpectNew 'Keyboard Shortcuts context filter: 3D View' 'the 3D View context filtered on the way'
 # The Sketch filter's own lines from here on.
 Ui-Mark
 Ui-Step 'Sketch (Down)'                   { Ui-Key 'Down' }
 Ui-ExpectNew 'Keyboard Shortcuts context filter: Sketch' 'the Sketch context filtered'
 # mitcad#730: no Context column repeating Sketch; the spline's row, not
-# shown in Model on the way, selected again.
+# shown in 3D View on the way, selected again.
 Ui-ExpectNew 'Keyboard Shortcuts columns: Command, Shortcut' 'the Context column hidden'
 Ui-ExpectNew 'Keyboard Shortcuts selection kept: Fit Point Spline | Sketch' "the spline's row still selected"
 Ui-Step 'back to the search (Shift+Tab)'  { Ui-Key 'shift+Tab' }
@@ -113,8 +113,8 @@ Ui-ExpectNew 'Keyboard Shortcuts row: Command Search | Sketch | F3' 'one row: it
 Ui-Step 'record its key (Enter)'          { Ui-Key 'Return' }
 Ui-Step 'F5'                              { Ui-Key 'F5' }
 Ui-ExpectNew 'Keyboard Shortcuts key: Command Search | Sketch = F5' 'F5 in Sketch'
-Ui-ExpectNew 'Keyboard Shortcuts keys of Command Search: Model S, Sketch F5, Command Panel S' `
-  'Model and Command Panel keep S'
+Ui-ExpectNew 'Keyboard Shortcuts keys of Command Search: 3D View S, Sketch F5, Command Panel S' `
+  '3D View and Command Panel keep S'
 Write-Host '--- Keyboard Shortcuts: all contexts again, the selection kept (mitcad#730)'
 Ui-Mark
 Ui-Step 'to the context list (Shift+Tab)' { Ui-Key 'shift+Tab' }
@@ -122,11 +122,11 @@ Ui-Step 'All Contexts (Home)'             { Ui-Key 'Home' }
 Ui-ExpectNew 'Keyboard Shortcuts context filter: All Contexts' 'all contexts shown'
 Ui-ExpectNew 'Keyboard Shortcuts columns: Command, Context, Shortcut' 'the Context column back'
 Ui-ExpectNew 'Keyboard Shortcuts selection kept: Command Search | Sketch' "Command Search's Sketch row selected"
-# The row the user chose stays the one kept: Model on the way selects the
-# Model row, and All Contexts again the Sketch row.
+# The row the user chose stays the one kept: 3D View on the way selects the
+# 3D View row, and All Contexts again the Sketch row.
 Ui-Mark
-Ui-Step 'Model (Down)'                    { Ui-Key 'Down' }
-Ui-ExpectNew 'Keyboard Shortcuts selection kept: Command Search | Model' 'its Model row in Model'
+Ui-Step '3D View (Down)'                    { Ui-Key 'Down' }
+Ui-ExpectNew 'Keyboard Shortcuts selection kept: Command Search | 3D View' 'its 3D View row in 3D View'
 Ui-Mark
 Ui-Step 'All Contexts (Up)'               { Ui-Key 'Up' }
 Ui-ExpectNew 'Keyboard Shortcuts context filter: All Contexts' 'all contexts again'

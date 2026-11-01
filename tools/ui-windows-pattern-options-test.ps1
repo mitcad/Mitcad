@@ -14,9 +14,13 @@
 #      Sketch, Extrude, Revolve, Hole), no split buttons for the submenus.
 #      Pin to Toolbar (mitcad#1001), as tools/ui-sketch-create-menu-test.sh
 #      does with the mouse on Linux: Sweep's row of the menu, the Menu key,
-#      Pin to Toolbar; the Pinned group at the end of the SOLID tab shows
-#      Sweep and its button starts Sweep; Unpin from Toolbar from the
-#      button's right-click, the group gone.
+#      Pin to Toolbar; Sweep is pinned in the CREATE group, no separate
+#      Pinned group (mitcad#1084); in session 0's 1028 px window the group
+#      with Sweep's button no longer fits (mitcad#1103), so Sweep's button
+#      folds and the group's own buttons (Create Sketch, Extrude, Revolve,
+#      Hole) stay in place (mitcad#1111); Sweep starts from the group's
+#      menu; Unpin from Toolbar from the same row's menu, the row as it was
+#      (the pinned button's place and clicks are the Linux test's).
 #   1. Rectangular Pattern starts with the defaults (spacing, one
 #      direction). Distance Type Extent relabels the length rows Extent;
 #      direction 1 along X Symmetric hides its Flip, 3 over 40 mm (20 mm
@@ -80,6 +84,8 @@ function Expect-Hidden([string]$Text, [string]$Description) {
 # the datums log their places again whenever the camera rests, also after
 # a zoom.
 function Show-Axes([string]$Description) {
+  # The axis input shows the origin only as its light bulb does (mitcad#1030).
+  Ui-ShowOrigin
   $cube = Ui-LoggedAt 'Body F2.b0'
   for ($i = 0; $i -le 24; $i++) {
     $inside = $true
@@ -142,6 +148,28 @@ Ui-Step 'close the menu (Esc)'           { Ui-Key 'Escape' }
 Ui-Sync
 
 Write-Host '--- 0b. Pin to Toolbar (mitcad#1001)'
+# Expect-CreateRow "description": CREATE's own buttons where they were
+# logged before Sweep was pinned ($createRow), none of them gone from a
+# layout logged since the mark, and no pinned button in sight
+# (mitcad#1111).
+$createOwn = @('sketch.create', 'solid.extrude', 'solid.revolve', 'solid.hole')
+$createRow = @{}
+foreach ($id in $createOwn) { $createRow[$id] = "$(Ui-LoggedAt "Ribbon button $id")" }
+function Expect-CreateRow([string]$Description) {
+  $new = @(Ui-NewLines)
+  if ($new | Where-Object { $_.Contains('Ribbon pinned SOLID/') }) {
+    Ui-Fail "${Description}: a pinned button in sight: '$($new | Where-Object { $_.Contains('Ribbon pinned SOLID/') } | Select-Object -Last 1)'"
+  }
+  $relaid = [bool]($new | Where-Object { $_.Contains('Ribbon SOLID/CREATE at ') })
+  foreach ($id in $createOwn) {
+    if ($relaid -and -not ($new | Where-Object { $_.Contains("Ribbon button $id at ") })) {
+      Ui-Fail "${Description}: the places logged again without CREATE's $id"
+    }
+    $at = "$(Ui-LoggedAt "Ribbon button $id")"
+    if ($at -ne $createRow[$id]) { Ui-Fail "${Description}: $id at $at, before at $($createRow[$id])" }
+  }
+  Write-Host "ok   $Description"
+}
 # The menu takes the keys in session 0: Sweep is its fourth row (the
 # separator is skipped); the Menu key opens the row's menu with Pin to
 # Toolbar chosen.
@@ -152,22 +180,51 @@ Ui-Step 'Sweep''s row, the Menu key'      { Ui-Key 'Down', 'Down', 'Down', 'Down
 Ui-ExpectNew 'Toolbar menu SOLID/CREATE solid.sweep: Pin to Toolbar | ' 'Sweep''s row menu by the Menu key'
 Ui-Step 'Pin to Toolbar (Enter)'         { Ui-Key 'Return' }
 Ui-ExpectNew 'Pinned to toolbar: Sweep (Solid)' 'Sweep pinned'
-Ui-ExpectNew 'Ribbon group SOLID/PINNED: solid.sweep' 'the Pinned group with Sweep'
+Ui-ExpectNew 'Ribbon group SOLID/CREATE pinned: solid.sweep' 'Sweep in the CREATE group (mitcad#1084)'
 Ui-Sync
-Ui-ExpectNew 'Ribbon SOLID/PINNED at ' 'the Pinned group''s caption'
-Ui-ExpectNew 'Ribbon pinned SOLID/solid.sweep at ' 'Sweep''s button in the Pinned group'
+# Session 0's screen is 1024 px wide and the window cannot grow past it
+# (the Linux test widens its window to 1600 px for the pinned button): with
+# Sweep's button the CREATE group no longer fits beside the other groups'
+# names (mitcad#1103), so Sweep's button folds, not the group: Create
+# Sketch, Extrude, Revolve and Hole stay where they were (mitcad#1111).
+# The pinned button's place, its click and its right-click are the Linux
+# test's.
+Ui-ExpectNew 'Ribbon pinned folded SOLID/CREATE: solid.sweep' 'Sweep''s button folded in the 1028 px window (mitcad#1111)'
+Start-Sleep -Milliseconds 300
+Ui-Sync
+Expect-CreateRow 'CREATE''s own buttons in place, Sweep''s button folded'
+if (Ui-LogLines | Where-Object { $_.Contains('/PINNED') }) { Ui-Fail 'a separate Pinned group' }
+Write-Host 'ok   no Pinned group'
+# The folded Sweep from the group's menu, which lists it as before: its
+# row by the keys, Enter starts it.
+Ui-Step 'close the menu (Esc)'           { Ui-Key 'Escape' }
 Ui-Mark
-Ui-Step 'click the pinned Sweep'         { Ui-ClickLogged 'Ribbon pinned SOLID/solid.sweep' }
-Ui-ExpectNew 'Command Sweep started' 'the pinned button starts Sweep'
+Ui-Step 'the CREATE menu'                { Ui-ClickLogged 'Ribbon SOLID/CREATE' }
+Ui-ExpectNew 'Ribbon menu SOLID/CREATE: ' 'the CREATE menu opened with Sweep folded'
+if (-not "$(Ui-LastMatch 'Ribbon menu SOLID/CREATE: (.*)$')".Contains(' | Revolve | Sweep | Loft | ')) {
+  Ui-Fail 'the folded Sweep not in the CREATE menu'
+}
+Write-Host 'ok   the folded Sweep in the CREATE menu'
+Ui-Step 'Sweep''s row (Enter)'            { Ui-Key 'Down', 'Down', 'Down', 'Down', 'Return' }
+Ui-ExpectNew 'Command Sweep started' 'the folded Sweep starts from the CREATE menu'
+Ui-Mark
 Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
 Ui-ExpectNew 'Command Sweep cancelled' 'Sweep cancelled'
-# The button's right-click menu opens with nothing chosen.
+# Unpinned from the same row of the group's menu: its menu by the Menu key
+# opens with Unpin from Toolbar chosen; the row as it was before the pin.
 Ui-Mark
-Ui-Step 'right-click the pinned Sweep'   { Ui-ClickLogged 'Ribbon pinned SOLID/solid.sweep' 3 }
-Ui-ExpectNew 'Toolbar menu SOLID/PINNED solid.sweep: Unpin from Toolbar | ' 'the pinned button''s menu'
-Ui-Step 'Unpin from Toolbar'             { Ui-Key 'Down', 'Return' }
+Ui-Step 'the CREATE menu'                { Ui-ClickLogged 'Ribbon SOLID/CREATE' }
+Ui-ExpectNew 'Ribbon menu SOLID/CREATE: ' 'the CREATE menu opened'
+Ui-Step 'Sweep''s row, the Menu key'      { Ui-Key 'Down', 'Down', 'Down', 'Down', 'Menu' }
+Ui-ExpectNew 'Toolbar menu SOLID/CREATE solid.sweep: Unpin from Toolbar | ' 'Sweep''s row menu: Unpin from Toolbar'
+Ui-Step 'Unpin from Toolbar (Enter)'     { Ui-Key 'Return' }
 Ui-ExpectNew 'Unpinned: Sweep (Solid)' 'Sweep unpinned'
-Ui-ExpectNew 'Ribbon group SOLID/PINNED gone' 'the Pinned group is gone'
+Ui-ExpectNew 'Ribbon group SOLID/CREATE pinned: none' 'the CREATE group without pins'
+Ui-ExpectNew 'Ribbon pinned folded SOLID/CREATE: none' 'no folded pins left'
+Start-Sleep -Milliseconds 300
+Ui-Sync
+Expect-CreateRow 'unpinned: CREATE''s row as before the pin, no pinned button left'
+Ui-Step 'close the menu (Esc)'           { Ui-Key 'Escape' }
 Ui-Sync
 
 Write-Host '--- 1. A rectangular pattern: symmetric along X, by extent'

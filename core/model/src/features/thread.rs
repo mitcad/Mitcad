@@ -536,7 +536,7 @@ fn check_chamfer_angle(angle: f64) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "the thread's chamfer angle must be between 0 and 90 degrees to the axis, got {} deg",
+            "the thread's chamfer angle must be between 0 and 90 degrees to the axis, got {}°",
             angle.to_degrees()
         ))
     }
@@ -547,7 +547,7 @@ fn check_chamfer_angle(angle: f64) -> Result<(), String> {
 pub(crate) fn check_modeled(standard: ThreadStandard, taper: bool) -> Result<(), String> {
     if standard == ThreadStandard::Npt && !taper {
         return Err(
-            "an NPT thread cannot be modelled straight: Mitcad cuts it tapered (`taper`); make \
+            "an NPT thread cannot be modeled straight: Mitcad cuts it tapered (`taper`); make \
              it cosmetic or tapered"
                 .to_owned(),
         );
@@ -748,9 +748,9 @@ impl FeatureInfo for ThreadDef {
         if self.modeled {
             check_modeled(self.thread.standard, self.taper)?;
         } else if self.angle.is_some() || (self.diameters.is_some() && !self.taper) {
-            return Err("only a modelled thread has diameters and an angle".to_owned());
+            return Err("only a modeled thread has diameters and an angle".to_owned());
         } else if self.radial_clearance.is_some() || self.flank_clearance.is_some() {
-            return Err("only a modelled thread has extra clearance".to_owned());
+            return Err("only a modeled thread has extra clearance".to_owned());
         }
         if self.chamfer.is_none()
             && (self.chamfer_angle.is_some() || self.chamfer_diameter.is_some())

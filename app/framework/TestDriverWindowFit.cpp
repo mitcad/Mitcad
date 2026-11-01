@@ -2,7 +2,9 @@
 // Test steps for card widths and windows within the screen (mitcad#818):
 // expect-dialog-fits for a Qt dialog, and the native macOS steps
 // native-card-width, expect-native-card-width, expect-native-name-fits,
-// native-screen-limit and expect-native-window-fits (TestDriver.hpp).
+// native-screen-limit and expect-native-window-fits (TestDriver.hpp); the
+// left column's native-column-split and expect-native-card-height
+// (mitcad#1020).
 #include "TestDriver.hpp"
 
 #include <algorithm>
@@ -154,7 +156,8 @@ bool TestDriver::runWindowFitStep(const QString& name, const QStringList& a, int
   }
   if (name == QLatin1String("native-card-width") || name == QLatin1String("expect-native-card-width") ||
       name == QLatin1String("expect-native-name-fits") || name == QLatin1String("native-screen-limit") ||
-      name == QLatin1String("expect-native-window-fits")) {
+      name == QLatin1String("expect-native-window-fits") || name == QLatin1String("native-column-split") ||
+      name == QLatin1String("expect-native-card-height")) {
     if (!mac::test::active()) {
       fail(line, QStringLiteral("'%1' requires the native macOS UI").arg(name));
       return true;
@@ -162,7 +165,44 @@ bool TestDriver::runWindowFitStep(const QString& name, const QStringList& a, int
   } else {
     return false;
   }
-  if (name == QLatin1String("native-card-width")) {
+  if (name == QLatin1String("native-column-split")) {
+    // native-column-split <handle> <height of the card above>|reset
+    int height = -1;
+    if (a.at(1) != QLatin1String("reset") && (!toInt(a.at(1), height) || height < 1 || height > 10000)) {
+      fail(line, QStringLiteral("native-column-split <handle> <height 1..10000>|reset"));
+      return true;
+    }
+    const QString handle = a.at(0);
+    queue([this, handle, height, line] {
+      QString error;
+      if (!mac::test::dragColumnSplit(handle, height, error)) {
+        fail(line, error);
+      }
+    });
+    m_notBefore = std::max(m_notBefore, m_clock.elapsed() + 300);
+  } else if (name == QLatin1String("expect-native-card-height")) {
+    // expect-native-card-height <card> <minimum> [maximum] | <card> bottom
+    int minimum = -1;
+    int maximum = 0;
+    if (a.at(1) != QLatin1String("bottom") &&
+        (!toInt(a.at(1), minimum) || minimum < 0 || (a.size() > 2 && !toInt(a.at(2), maximum)))) {
+      fail(line, QStringLiteral("expect-native-card-height <card> <minimum> [maximum] | <card> bottom"));
+      return true;
+    }
+    if (a.size() < 3) {
+      maximum = minimum;
+    }
+    const QString card = a.at(0);
+    whenReady([this, card, minimum, maximum] {
+      QString detail;
+      const bool ok = mac::test::cardHeight(card, minimum, maximum, detail);
+      m_waitDetail = detail;
+      if (ok) {
+        qInfo().noquote() << QStringLiteral("TestDriver: %1").arg(detail);
+      }
+      return ok;
+    }, 6, QStringLiteral("native card '%1' is not %2").arg(card, a.mid(1).join(QLatin1Char(' '))));
+  } else if (name == QLatin1String("native-card-width")) {
     int width = 0;
     if (!toInt(a.at(1), width) || width < 1 || width > 10000) {
       fail(line, QStringLiteral("native-card-width <card> <width 1..10000>"));

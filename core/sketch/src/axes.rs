@@ -34,7 +34,7 @@ impl AxisPick {
             "origin" => Ok(Self::Origin),
             "x" => Ok(Self::Axis(SketchAxis::X)),
             "y" => Ok(Self::Axis(SketchAxis::Y)),
-            other => Err(format!("unknown axis '{other}' (x, y or origin)")),
+            other => Err(format!("unknown axis “{other}” (x, y or origin)")),
         }
     }
 }

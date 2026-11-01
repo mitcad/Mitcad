@@ -23,7 +23,7 @@
 #     gap; Redo both.
 #   - Extrude1: `2 * depth`, Create User Parameter, 6: depth is put in, the
 #     distance is 2 * depth (12 mm), OK (30 x 12 x 12 mm).
-#   - Change Parameters lists depth and gap; d3's editor offers depth.
+#   - Edit Parameters lists depth and gap; d3's editor offers depth.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-parameter-create-test.sh [screenshot.png]
@@ -201,7 +201,7 @@ ui_expect_volume "Body Body1 (F2.b0): volume [0-9.]* -> \([0-9.]*\) mm3" 4320 "3
 echo "--- The new parameters in the table and in its suggestions"
 ui_focus_main
 ui_mark
-ui_step "Change Parameters (search)"     ui_command "Change Parameters"
+ui_step "Edit Parameters (search)"     ui_command "Edit Parameters"
 ui_expect_new "Parameters dialog opened" "the dialog opened"
 ui_expect_new "depth = 6 mm (6 mm)" "depth listed"
 ui_expect_new "gap = 12 mm (12 mm)" "gap listed"

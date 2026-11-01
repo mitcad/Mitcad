@@ -166,7 +166,7 @@ impl FeatureInfo for BaseDef {
                 && !color.iter().all(|c| (0.0..=1.0).contains(c))
             {
                 return Err(format!(
-                    "bodies[{i}]: colour components must be between 0 and 1, got {color:?}"
+                    "bodies[{i}]: color components must be between 0 and 1, got {color:?}"
                 ));
             }
             if body.mesh && self.operation != Operation::NewBody {
@@ -953,7 +953,7 @@ impl<'de> Deserialize<'de> for Brep {
         let file = Owned::deserialize(deserializer)?;
         if file.format != "occt" {
             return Err(D::Error::custom(format!(
-                "unknown B-rep format '{}' (expected \"occt\")",
+                "unknown B-rep format “{}” (expected \"occt\")",
                 file.format
             )));
         }
@@ -969,7 +969,7 @@ impl<'de> Deserialize<'de> for Brep {
                 // In a project's store (version 3).
                 if file.compression != "zlib" {
                     return Err(D::Error::custom(format!(
-                        "B-rep data in a project's store is zlib-compressed, not '{}'",
+                        "B-rep data in a project's store is zlib-compressed, not “{}”",
                         file.compression
                     )));
                 }
@@ -1010,7 +1010,7 @@ impl<'de> Deserialize<'de> for Brep {
             "none" => (decoded, None),
             other => {
                 return Err(D::Error::custom(format!(
-                    "unknown B-rep compression '{other}' (expected \"zlib\" or \"none\")"
+                    "unknown B-rep compression “{other}” (expected \"zlib\" or \"none\")"
                 )));
             }
         };
@@ -1147,7 +1147,7 @@ mod tests {
         };
         assert!(
             error(json!({"format": "occt", "compression": "none", "size": 1, "sha256": sha}))
-                .contains("zlib-compressed, not 'none'")
+                .contains("zlib-compressed, not “none”")
         );
         assert!(
             error(json!({"format": "occt", "compression": "zlib", "size": 1, "sha256": "abc"}))
@@ -1174,7 +1174,7 @@ mod tests {
             v[field] = value;
             serde_json::from_value::<Brep>(v).unwrap_err().to_string()
         };
-        assert!(with("format", json!("step")).contains("unknown B-rep format 'step'"));
+        assert!(with("format", json!("step")).contains("unknown B-rep format “step”"));
         assert!(with("compression", json!("lzma")).contains("unknown B-rep compression"));
         assert!(with("size", json!(4)).contains("does not decompress"));
         assert!(with("size", json!(400)).contains("has 9 bytes, expected 400"));

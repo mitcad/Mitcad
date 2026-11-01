@@ -131,6 +131,54 @@ fn an_empty_design_is_a_new_documents_file() {
 }
 
 #[test]
+fn a_new_design_takes_the_units_given() {
+    // mitcad#1036: the application's default units for new designs.
+    assert_eq!(
+        mitcad_model::file::empty_design_in(mitcad_model::expr::LengthUnit::Inch),
+        Document::new_design_in(MockKernel::default(), mitcad_model::expr::LengthUnit::Inch)
+            .to_json()
+    );
+    let scratch = Scratch::new("folders-units");
+    let repo = empty_project(&scratch);
+    done(
+        &repo,
+        json!({"cmd": "new_design", "path": "inch.mitcad", "units": "in"}),
+    );
+    let text = fs::read_to_string(repo.root().join("inch.mitcad")).unwrap();
+    let file: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(file["units"]["length"], "in", "{text}");
+    let opened = Document::from_json(&text, MockKernel::default()).unwrap();
+    assert_eq!(
+        opened.parameters().context().default_length_unit,
+        mitcad_model::expr::LengthUnit::Inch
+    );
+    // Without `units` (and with null) millimetres, as before.
+    done(
+        &repo,
+        json!({"cmd": "new_design", "path": "metric.mitcad", "units": null}),
+    );
+    let text = fs::read_to_string(repo.root().join("metric.mitcad")).unwrap();
+    assert_eq!(text, mitcad_model::file::empty_design());
+    // Not a length unit, not a name, or with a design's own text: refused,
+    // nothing written.
+    for command in [
+        json!({"cmd": "new_design", "path": "a.mitcad", "units": "deg", "author": AUTHOR}),
+        json!({"cmd": "new_design", "path": "b.mitcad", "units": "furlong", "author": AUTHOR}),
+        json!({"cmd": "new_design", "path": "c.mitcad", "units": 25.4, "author": AUTHOR}),
+        json!({"cmd": "new_design", "path": "d.mitcad", "units": "in", "author": AUTHOR,
+               "text": mitcad_model::file::empty_design()}),
+    ] {
+        assert!(repo.command(&command.to_string()).is_err(), "{command}");
+    }
+    for name in ["a", "b", "c", "d"] {
+        assert!(
+            !repo.root().join(format!("{name}.mitcad")).exists(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn nested_folders_and_new_designs_are_versions() {
     let scratch = Scratch::new("folders-nested");
     let repo = empty_project(&scratch);

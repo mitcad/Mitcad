@@ -201,7 +201,7 @@ QString partDetails(const PickerPart& shown, int uses, bool rich) {
                               ? shown.library
                               : QStringLiteral("%1 (%2)").arg(shown.libraryName, shown.library);
   text += line(PartGrid::tr("Library:"), QStringList{library, shown.version}.join(QLatin1Char(' ')).trimmed());
-  text += line(PartGrid::tr("Licence:"), shown.license.isEmpty() ? PartGrid::tr("none") : shown.license);
+  text += line(PartGrid::tr("License:"), shown.license.isEmpty() ? PartGrid::tr("none") : shown.license);
   if (uses > 0) {
     text += line(PartGrid::tr("In this design:"), QString(QChar(0x00D7)) + QString::number(uses));
   }
@@ -660,7 +660,7 @@ QVariant PartGridModel::data(const QModelIndex& index, int role) const {
     return shown->key;
   case kSizesRole:
     if (shown->libraryEntry) {
-      return shown->license.isEmpty() ? tr("Library, no licence") : tr("Library, %1").arg(shown->license);
+      return shown->license.isEmpty() ? tr("Library, no license") : tr("Library, %1").arg(shown->license);
     }
     return shown->sizes.isEmpty() ? shown->system : shown->sizes;
   case kCountRole:
@@ -784,7 +784,8 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
   m_groups->setIconSize(QSize(16, 16));
   m_groups->setMinimumWidth(160);
   m_groups->setMaximumWidth(240);
-  m_groups->setToolTip(tr("A group lists its subgroups' parts; its star stars them all and puts them first (Ctrl+Shift+D)"));
+  m_groups->setToolTip(tr("A group lists its subgroups' components; its star stars them all and puts them first (%1)")
+                           .arg(QKeySequence(QStringLiteral("Ctrl+Shift+D")).toString(QKeySequence::NativeText)));
   mac::styleListTree(m_groups);
   m_groups->setItemDelegate(new GroupDelegate(m_groups));
 #ifdef Q_OS_MACOS
@@ -823,7 +824,7 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
   auto* second = new QHBoxLayout;
   m_system = new QComboBox;
   m_system->setObjectName(QStringLiteral("partPickerSystem"));
-  m_system->setToolTip(tr("The slot system the parts are made for"));
+  m_system->setToolTip(tr("The slot system the components are made for"));
   m_systemLabel = new QLabel(tr("S&ystem:"));
   m_systemLabel->setBuddy(m_system);
   second->addWidget(m_systemLabel);
@@ -831,7 +832,7 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
   // The supplier (mitcad#949): kept in the settings.
   m_supplier = new QComboBox;
   m_supplier->setObjectName(QStringLiteral("partPickerSupplier"));
-  m_supplier->setToolTip(tr("Only the parts this supplier sells in some size"));
+  m_supplier->setToolTip(tr("Only the components this supplier sells in some size"));
   m_supplierLabel = new QLabel(tr("Supplie&r:"));
   m_supplierLabel->setBuddy(m_supplier);
   m_wantedSupplier = savedSupplierFilter();
@@ -846,7 +847,8 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
   m_star->setIcon(starIcon(true, palette().color(QPalette::PlaceholderText)));
   m_star->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
   m_star->setAutoRaise(true);
-  m_star->setToolTip(tr("Star the chosen part or turn its star off (Ctrl+D): favourites come first"));
+  m_star->setToolTip(tr("Star the chosen component or turn its star off (%1): favorites come first")
+                         .arg(QKeySequence(QStringLiteral("Ctrl+D")).toString(QKeySequence::NativeText)));
 #ifdef Q_OS_MACOS
   m_star->setCheckable(true);
 #endif
@@ -1051,7 +1053,7 @@ void PartGrid::setOtherParts(const QList<PickerPart>& parts) {
     return inShownGroup(part);
   };
   if (m_group != kAll && m_group != kFavourites && std::none_of(parts.begin(), parts.end(), inShown)) {
-    qInfo().noquote() << QStringLiteral("Part picker group %1 has none of the parts: All parts")
+    qInfo().noquote() << QStringLiteral("Part picker group %1 has none of the parts: All components")
                              .arg(groupName(m_group));
     m_group = kAll;
   }
@@ -1107,7 +1109,7 @@ bool PartGrid::reveal(const QString& key) {
     return !key.isEmpty();
   }
   if (m_group != kAll) {
-    qInfo().noquote() << QStringLiteral("Part picker group %1 has not the part chosen: All parts").arg(groupName(m_group));
+    qInfo().noquote() << QStringLiteral("Part picker group %1 has not the part chosen: All components").arg(groupName(m_group));
     m_group = kAll;
     fillGroups();
     refill(false);
@@ -1197,8 +1199,8 @@ QString PartGrid::emptyReason() const {
   if (m_model->rowCount() > 0 || m_parts.isEmpty()) {
     return QString();
   }
-  return filtering() ? tr("No parts in %1 with this search and these filters.").arg(groupName(m_group))
-                     : tr("No parts in %1.").arg(groupName(m_group));
+  return filtering() ? tr("No components in %1 with this search and these filters.").arg(groupName(m_group))
+                     : tr("No components in %1.").arg(groupName(m_group));
 }
 
 void PartGrid::toggleStar() {
@@ -1261,13 +1263,13 @@ bool PartGrid::groupStarred(const QString& group) const {
 
 QString PartGrid::groupName(const QString& group) const {
   if (group == kFavourites) {
-    return tr("Favourites");
+    return tr("Favorites");
   }
   if (group == kInDesign) {
     return tr("In this design");
   }
   if (group == kAll) {
-    return tr("All parts");
+    return tr("All components");
   }
   if (group == kLibraries) {
     return tr("Libraries to get");
@@ -1951,7 +1953,7 @@ PartPicker* PartPicker::of(QWidget* window) {
 
 PartPicker::PartPicker(QWidget* parent) : QDialog(parent) {
   setObjectName(QStringLiteral("partPicker"));
-  setWindowTitle(tr("Part Picker"));
+  setWindowTitle(tr("Component Picker"));
   setModal(false);
   // The view keeps the keyboard: the picker is there to be clicked.
   setAttribute(Qt::WA_ShowWithoutActivating);
@@ -1975,7 +1977,7 @@ PartPicker::PartPicker(QWidget* parent) : QDialog(parent) {
   m_pin->setObjectName(QStringLiteral("partPickerPin"));
   m_pin->setText(tr("&Pin"));
   m_pin->setCheckable(true);
-  m_pin->setToolTip(tr("Keep the picker open when the command ends; it follows the next command that chooses parts"));
+  m_pin->setToolTip(tr("Keep the picker open when the command ends; it follows the next command that chooses components"));
   mac::styleIconToggle(m_pin, QStringLiteral("pin"), QStringLiteral("pin.fill"));
   auto* close = new QPushButton(tr("Close"));
   auto* footer = new QHBoxLayout;
@@ -2073,7 +2075,7 @@ void PartPicker::ask(const PickerRequest& request) {
   const bool following = isVisible() && isPinned() && request.command != m_request.command;
   const bool another = request.command != m_request.command || request.input != m_request.input;
   m_request = request;
-  setWindowTitle(request.title.isEmpty() ? tr("Part Picker") : tr("Part Picker - %1").arg(request.title));
+  setWindowTitle(request.title.isEmpty() ? tr("Component Picker") : tr("Component Picker - %1").arg(request.title));
   if (m_designStale) {
     readDesign();
   }

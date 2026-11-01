@@ -35,12 +35,17 @@
 #     normal and x axis as commands.md "An upright sketch frame" gives
 #     them, and the view shows the sketch's y axis up and its x axis to
 #     the right, level (so a Horizontal line is horizontal on the screen).
+#     The view cube's side each is seen from (mitcad#1060): XZ from FRONT
+#     (normal -Y, x = +X), YZ from RIGHT, the -Y face from FRONT; XZ and
+#     YZ also after Isometric View and the Sketch Palette's Look At.
 #   - A sketch on a block's top face, edited from the front view (the face
 #     edge-on, the view's middle far in front of it in depth): the face's
 #     middle in the middle of the free area (mitcad#772).
 #   - After New Design, sketches on XY, XZ and YZ show their origin in the
 #     middle of the free area between the cards, in the Floating and the
-#     Docked layout (mitcad#738: the turn kept the fit's shift).
+#     Docked layout (mitcad#738: the turn kept the fit's shift), and are
+#     seen from the view cube's TOP, FRONT and RIGHT, on entering and
+#     after Isometric View and the Sketch Palette's Look At (mitcad#1060).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sketch-view-test.sh [screenshot.png]
@@ -434,17 +439,41 @@ expect_upright() {
   ui_fail "$1: the view does not show the sketch's y up and its x to the right: '$view'"
 }
 
+# expect_side where SIDE "along": since the mark the view turned to the
+# sketch plane from that side of the view cube, looking along that
+# direction (mitcad#1060).
+expect_side() {
+  ui_expect_new "Sketch plane seen from $2 (along $3)" "$1: seen from $2"
+}
+
+# look_at_again where SIDE "along": Isometric View turns the view away
+# from the sketch, then the Sketch Palette's Look At turns it back to the
+# same side.
+look_at_again() {
+  ui_mark
+  ui_step "isometric view (search)"      ui_command "Isometric View"
+  ui_expect_new "Camera direction" "$1: the view turned away" 8
+  ui_expect_log "Palette Look At at" "$1: the palette's Look At is laid out"
+  ui_mark
+  ui_step "Look At (palette)"            ui_click_logged "Palette Look At"
+  expect_side "$1 after Look At" "$2" "$3"
+}
+
 ui_stop_app
 ui_start_app --open "$WORK/upright.mitcad"
 ui_step "fit (F6)"                       ui_key F6
 ui_mark
 ui_step "create sketch on XZ"            ui_create_sketch xz
-expect_upright "XZ" "0.000000, 1.000000, 0.000000" "-1.000000, 0.000000, 0.000000"
+expect_upright "XZ" "0.000000, -1.000000, 0.000000" "1.000000, 0.000000, 0.000000"
+expect_side "XZ" FRONT "0 1 0"
+look_at_again "XZ" FRONT "0 1 0"
 ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
 ui_expect_log "Sketch finished" "the XZ sketch finished"
 ui_mark
 ui_step "create sketch on YZ"            ui_create_sketch yz
 expect_upright "YZ" "1.000000, 0.000000, 0.000000" "0.000000, 1.000000, 0.000000"
+expect_side "YZ" RIGHT "-1 0 0"
+look_at_again "YZ" RIGHT "-1 0 0"
 ui_mark
 ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
 ui_expect_new "Sketch finished" "the YZ sketch finished"
@@ -457,6 +486,7 @@ ui_expect_new "Pick face F1.b0/F1:side0 at" "the block's -Y face can be picked"
 ui_step "pick the -Y face"               ui_click_pick "face F1.b0/F1:side0"
 ui_expect_new 'Sketch started on {"body":"F1.b0","face":"F1:side0"}' "a sketch on the -Y face"
 expect_upright "the -Y face" "0.000000, -1.000000, 0.000000" "1.000000, 0.000000, 0.000000"
+expect_side "the -Y face" FRONT "0 1 0"
 ui_mark
 ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
 ui_expect_new "Sketch finished" "the face's sketch finished"
@@ -584,9 +614,10 @@ sketch_on_origin() {
 # centred_round layout [app arguments]: New Design (its fit centres the
 # design in the free area, which moves the camera's centre off the origin
 # once the cards are laid out), then sketches on XY, XZ and YZ in turn;
-# each shows its origin in the middle of the free area.
+# each shows its origin in the middle of the free area and is seen from
+# the view cube's TOP, FRONT and RIGHT, also after Look At (mitcad#1060).
 centred_round() {
-  local layout=$1 plane
+  local layout=$1 plane side along
   shift
   ui_stop_app
   ui_start_app "$@"
@@ -600,6 +631,13 @@ centred_round() {
     ui_mark
     ui_step "$layout: create sketch on ${plane^^}" sketch_on_origin "$plane"
     expect_centred "$layout, ${plane^^}"
+    case $plane in
+      xy) side=TOP along="0 0 -1" ;;
+      xz) side=FRONT along="0 1 0" ;;
+      yz) side=RIGHT along="-1 0 0" ;;
+    esac
+    expect_side "$layout, ${plane^^}" "$side" "$along"
+    look_at_again "$layout, ${plane^^}" "$side" "$along"
     ui_mark
     ui_step "$layout: finish sketch (Ctrl+Enter)" ui_key ctrl+Return
     ui_expect_new "Sketch finished" "$layout: the ${plane^^} sketch finished"

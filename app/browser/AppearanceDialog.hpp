@@ -29,7 +29,6 @@ class QToolButton;
 
 namespace mitcad {
 
-class AssignmentPanel;
 class DocumentHost;
 class TextureBrowser;
 
@@ -40,25 +39,16 @@ class TextureBrowser;
 // image file for the base colour, or the image embedded in the design,
 // with its size, rotation and projection). The library's are read-only;
 // New makes a copy of the selected one in the document, whose parameters
-// can then be edited. Each change is a model command and an undo step;
-// Assign gives the bodies and faces the dialog was opened for the selected
-// appearance. The faces of those bodies with appearances of their own are
-// listed, and Clear gives the selected ones their body's again.
-// With faces selected, Assign to N bodies gives the bodies that own them (and
-// the selected bodies) the appearance as their body appearance (mitcad#346).
+// can then be edited. Each change is a model command and an undo step.
+// The window assigns nothing: the Appearance tool does (mitcad#1059), also
+// to faces and to clear a face's own.
 //
 // Texture sources (mitcad#315): a selector above the list chooses between
 // the appearances (the library and the design's) and the texture sources
 // (app/materials/TextureSource.hpp), with a search field and a category
 // filter for both. A source's assets show as a grid of thumbnails; Use
 // fetches the chosen one's maps and makes them a new appearance of the
-// design with the images embedded, which is then selected for Assign.
-//
-// The assignment panel (mitcad#861, AssignmentPanel.hpp) at the bottom
-// shows what the targets have and whether it varies with an option. With
-// None, Assign and a double-click in the list set the selected appearance
-// as before; with an option, they fill the panel's selected rows, and so
-// do New and a texture's Use.
+// design with the images embedded, which is then selected.
 class AppearanceDialog : public QDialog {
   Q_OBJECT
 
@@ -66,14 +56,8 @@ public:
   AppearanceDialog(DocumentHost& host, QWidget* parent = nullptr);
   ~AppearanceDialog() override;
 
-  // The bodies and faces Assign gives the selected appearance (bodies and
-  // faces of the selection); none disables it. Their own appearance is
-  // selected when they share one.
-  void setTargets(const Selection& targets);
   // Shows the appearances as the model has them now.
   void refresh();
-  // Add Option… of Varies with: the Configurations window.
-  std::function<void()> openConfigurations;
 
 private:
   struct NumberField {
@@ -98,15 +82,6 @@ private:
   void pickColor(const ColorField& field);
   void newAppearance();
   void deleteAppearance();
-  void assign();
-  // Assign's text and state: the targets' (None) or the panel's rows.
-  void updateAssign();
-  // Grows the window by the assignment panel's height when it shows or gets
-  // taller.
-  void growForPanel();
-  // Gives the bodies of the selected faces (and the selected bodies) the
-  // appearance as their own (mitcad#346).
-  void assignToBodies();
   // The texture (mitcad#53): a new image file (typed or chosen), a change
   // of the current one's fields, embedding it or not, removing it.
   void setTexturePath(const QString& path);
@@ -115,10 +90,6 @@ private:
   void embedTexture(bool embed);
   void sendTexture(const QJsonValue& texture, const QString& what);
   void showTexture(const Appearance* a, bool editable);
-  // The faces of the targets' bodies with appearances of their own.
-  void showFaces();
-  void clearFaces();
-  QStringList targetBodies() const;
   void logLayout();
   // Texture sources (mitcad#315).
   void loadSources();
@@ -137,10 +108,10 @@ private:
   DocumentHost& m_host;
   QVector<Appearance> m_appearances;
   QString m_current;
-  Selection m_targets;
   QListWidget* m_list = nullptr;
   QLabel* m_preview = nullptr;
   QLineEdit* m_name = nullptr;
+  QComboBox* m_class = nullptr; // what it is a look of (mitcad#1102)
   QVector<NumberField> m_numbers;
   QVector<ColorField> m_colors;
   QLabel* m_info = nullptr;
@@ -153,21 +124,11 @@ private:
   QComboBox* m_textureProjection = nullptr;
   QCheckBox* m_textureEmbed = nullptr;
   QLabel* m_textureInfo = nullptr;
-  QListWidget* m_faces = nullptr;
-  QPushButton* m_clearFaces = nullptr;
   QLabel* m_message = nullptr;
   QPushButton* m_new = nullptr;
   QPushButton* m_delete = nullptr;
-  QPushButton* m_assign = nullptr;
-  QPushButton* m_assignBodies = nullptr;
   QPushButton* m_close = nullptr;
-  AssignmentPanel* m_panel = nullptr; // mitcad#861
   QWidget* m_bodyView = nullptr;       // the scrolling body's viewport
-  // Assign as the targets name it (None): its text and tooltip.
-  QString m_assignText;
-  QString m_assignTip;
-  bool m_hasFaces = false;
-  int m_panelHeight = 0; // the panel's tallest height the window grew by
   bool m_building = false;
   bool m_fitted = false; // sized to the screen at its first show (mitcad#818)
   QString m_logged; // the logged places

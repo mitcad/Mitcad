@@ -230,7 +230,7 @@ pub(crate) fn settle_parameter(
     } else {
         Err(format!(
             "parameter: a bound length measures a parameter of its own; give its first value \
-             as a number, not '{}'",
+             as a number, not “{}”",
             params.name(id)
         ))
     }

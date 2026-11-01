@@ -10,8 +10,10 @@
 #include <QStringList>
 #include <QWidget>
 
+#include "../framework/NoticeLevel.hpp"
 #include "../framework/ParameterField.hpp"
 #include "RuleBlocks.hpp"
+#include "RuleCanvas.hpp"
 
 class QLabel;
 class QMenu;
@@ -21,9 +23,6 @@ class QTreeWidget;
 
 namespace mitcad::rules {
 
-class RuleCanvas;
-class RulePalette;
-
 // What the Rules page asks of the design (the app talks to the model only
 // through JSON commands and queries, core/model-api/src/commands.md
 // "Configurations: options, rows and rules"). The Configurations window
@@ -31,8 +30,13 @@ class RulePalette;
 // unit tests give one of their own.
 struct RulesSource {
   // The `configurations` query's answer: the table (with its `options` and
-  // `rules`) and `problems`.
+  // `rules`), `problems` and `rule_problems` (each with its rule and its
+  // place, mitcad#1064).
   std::function<QJsonObject()> configurations;
+  // The `configurations` query with `rules` (rules the design refused):
+  // its `rule_problems` say which blocks are wrong (mitcad#1064); nothing
+  // changes. May be left out.
+  std::function<QJsonObject(const QJsonArray& rules)> tryRules;
   // The `configure` query's answer, for which options are numbers; may be
   // left out.
   std::function<QJsonObject()> configure;
@@ -108,6 +112,10 @@ public:
   QLabel* leadLine() const { return m_lead; }
   QLabel* closedNote() const { return m_closedNote; }
   QLabel* statusLine() const { return m_status; }
+  // The status line's level (mitcad#1051): an error for a change the
+  // design refused or a text that did not read, a warning for rules not
+  // saved yet; Hint while it is empty.
+  NoticeLevel statusLevel() const { return m_statusLevel; }
   // Why the text did not read ("Line 2, column 17: …"); empty when it did.
   QString textProblem() const { return m_textProblem; }
   const std::vector<Rule>& rules() const { return m_rules; }
@@ -115,6 +123,14 @@ public:
   // A rule's mark in the list: why it is not saved or what is wrong with
   // it; empty when nothing is.
   QString problemOf(int index) const;
+  // Its level (mitcad#1051): an error when the design refused it, a
+  // warning for one not saved yet or one that Check Rules found wrong.
+  NoticeLevel problemLevel(int index) const;
+  // The blocks of a rule that are wrong (mitcad#1064): the places a rule
+  // that is not complete waits for (warnings); else where the design
+  // refused it, or what is wrong with it as saved, at each problem's
+  // level (a value outside its option's domain a warning).
+  std::vector<BlockMark> blockMarks(int index) const;
   void logPlaces();
 
 signals:
@@ -128,10 +144,21 @@ protected:
 
 private:
   void commit(std::vector<Rule> rules, const QString& what);
+  // Whether the design's refusal of the last change is about the rule.
+  bool refused(int index) const;
+  // What is wrong with a complete rule: the refusal, or the design's
+  // problems that name it; empty when nothing is.
+  QString errorsOf(int index) const;
+  // The design's `rule_problems` of the rule as it is saved, at a level
+  // (an error or a warning).
+  QStringList savedProblems(int index, NoticeLevel level) const;
   void fillList();
   void showCurrent();
   void updateText();
   void updateStatus();
+  // The status line at a level: its text in the level's colour with its
+  // badge beside it; hidden when empty.
+  void showStatusLine(const QString& text, NoticeLevel level);
   void listEdited(int index);
   void updateAddMenu();
   void markText(const TextProblem& problem);
@@ -152,6 +179,11 @@ private:
   // The rules before each change not saved yet: the first is as saved.
   std::vector<std::vector<Rule>> m_drafts;
   QString m_refusal; // why the model refused the last change
+  // Where (mitcad#1064): the `rule_problems` of the rules refused, and of
+  // the design's rules (`m_problemRules`) as last read.
+  QJsonArray m_refusalProblems;
+  QJsonArray m_ruleProblems;
+  QJsonArray m_problemRules;
   QJsonArray m_shownRules; // the model's rules as last read
   QStringList m_shownProblems;
   int m_current = -1;
@@ -168,6 +200,8 @@ private:
   RulePalette* m_palette = nullptr;
   RuleCanvas* m_canvas = nullptr;
   QLabel* m_status = nullptr;
+  QLabel* m_statusIcon = nullptr;
+  NoticeLevel m_statusLevel = NoticeLevel::Hint;
   QPlainTextEdit* m_text = nullptr;
   QPlainTextEdit* m_report = nullptr;
   // The text: typed since it was last written from the rule; being

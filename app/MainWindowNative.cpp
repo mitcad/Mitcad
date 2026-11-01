@@ -5,6 +5,7 @@
 #include <functional>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include <QAbstractItemView>
 #include <QAction>
@@ -15,6 +16,7 @@
 #include <QEvent>
 #include <QFileInfo>
 #include <QLabel>
+#include <QLayout>
 #include <QMenu>
 #include <QMenuBar>
 #include <QModelIndex>
@@ -22,9 +24,11 @@
 #include <QPalette>
 #include <QSet>
 #include <QSettings>
+#include <QStringList>
 #include <QStackedWidget>
 #include <QTimer>
 #include <QTabBar>
+#include <QTextDocument>
 #include <QToolBar>
 #include <QToolButton>
 #include <QtLogging>
@@ -40,6 +44,9 @@
 #include "framework/ComputeProgress.hpp"
 #include "framework/Dialogs.hpp"
 #include "framework/Icons.hpp"
+#include "framework/MessageBand.hpp"
+#include "framework/QuickAccess.hpp"
+#include "framework/QuickAccessGroup.hpp"
 #include "framework/Ribbon.hpp"
 #include "mcp/AgentIndicator.hpp"
 #include "platform/NativeDialogs.hpp"
@@ -146,6 +153,51 @@ void restoreNativeCardWidths(NativeMacWindow& window) {
   if (projects > 0 || browser > 0 || inspector > 0) {
     qInfo().noquote() << QStringLiteral("Native card widths: projects %1, browser %2, inspector %3 (remembered)")
                              .arg(projects).arg(browser).arg(inspector);
+  }
+}
+
+// The left column's split (mitcad#1020): the open cards' heights by name,
+// kept as the Floating layout keeps its own ("<card>=<height>"), under the
+// AppKit frontend's key.
+const QString kNativeSplitKey = QStringLiteral("native/leftSplit");
+// The Configuration card's disclosure, shared with the Floating card.
+const QString kConfigurationCollapsedKey = QStringLiteral("configuration/panelCollapsed");
+
+QString nativeSplitText(const std::vector<std::pair<QString, int>>& split) {
+  QStringList parts;
+  for (const auto& [name, height] : split) parts << QStringLiteral("%1 %2").arg(name).arg(height);
+  return parts.join(QStringLiteral(", "));
+}
+
+void rememberNativeSplit(const std::vector<std::pair<QString, int>>& split) {
+  QSettings settings;
+  if (split.empty()) {
+    settings.remove(kNativeSplitKey);
+    qInfo().noquote() << QStringLiteral("Native split: automatic");
+    return;
+  }
+  QStringList kept;
+  for (const auto& [name, height] : split) kept << QStringLiteral("%1=%2").arg(name).arg(height);
+  settings.setValue(kNativeSplitKey, kept);
+  qInfo().noquote() << QStringLiteral("Native split remembered: %1").arg(nativeSplitText(split));
+}
+
+void restoreNativeColumn(NativeMacWindow& window) {
+  const QSettings settings;
+  std::vector<std::pair<QString, int>> split;
+  for (const QString& entry : settings.value(kNativeSplitKey).toStringList()) {
+    const qsizetype at = entry.lastIndexOf(QLatin1Char('='));
+    bool ok = false;
+    const int height = at > 0 ? entry.mid(at + 1).toInt(&ok) : 0;
+    if (ok && height > 0) split.emplace_back(entry.left(at), height);
+  }
+  if (!split.empty()) {
+    window.setColumnSplit(split);
+    qInfo().noquote() << QStringLiteral("Native split restored: %1").arg(nativeSplitText(split));
+  }
+  if (settings.value(kConfigurationCollapsedKey, false).toBool()) {
+    window.setConfigurationCollapsed(true);
+    qInfo().noquote() << QStringLiteral("Configuration panel: collapsed (remembered)");
   }
 }
 
@@ -341,11 +393,93 @@ void MainWindow::createNativeWindow() {
   callbacks.cardWidthChosen = rememberNativeCardWidth;
   // The focused Projects outline's keys are the shared panel's (mitcad#816).
   callbacks.projectsKey = [this](int key) { return m_projectsPanel != nullptr && m_projectsPanel->treeKey(key); };
+  // The timeline's hover and tooltip (mitcad#1076): the shared timeline's
+  // preview of the hovered cell, its tooltip as plain text for AppKit.
+  callbacks.historyHovered = [this](const QString& uid) {
+    QTimer::singleShot(0, this, [this, uid] { m_controller->timeline()->hoverFeature(uid); });
+  };
+  callbacks.historyToolTip = [this](const QString& uid) {
+    QTextDocument text;
+    text.setHtml(m_controller->timeline()->featureToolTip(uid));
+    return text.toPlainText();
+  };
+  // Timeline groups (mitcad#1077): folded and opened in the shared
+  // timeline, whose group menu is the Qt timeline's.
+  callbacks.historyGroupCollapsed = [this](const QString& name, bool collapsed) {
+    m_controller->timeline()->setGroupCollapsed(name, collapsed);
+  };
+  callbacks.historyGroupMenu = [this](const QString& name, const QPoint& point) {
+    emit m_controller->timeline()->groupMenuRequested(name, point);
+  };
+  // A group menu's Pin to Toolbar and Change Keyboard Shortcut, a pinned
+  // button's menu (mitcad#1074): the shared pins (the retained ribbon's
+  // pinned buttons in their groups, mitcad#1084, read back below) and
+  // Keyboard Shortcuts at the command, once AppKit's menu has closed.
+  callbacks.pinCommand = [this](const QString& tab, const QString& id, bool pin) {
+    QTimer::singleShot(0, this, [this, tab, id, pin] {
+      if (pin) {
+        m_ribbon->pin(tab, id);
+      } else {
+        m_ribbon->unpin(tab, id);
+      }
+      refreshNativeActions();
+    });
+  };
+  callbacks.commandShortcut = [this](const QString& id) {
+    QTimer::singleShot(0, this, [this, id] { editShortcuts(id); });
+  };
+  // The row under the pointer highlights its bodies or its joint in the
+  // view, through the shared panel's hover as the Qt rows (mitcad#1072).
+  callbacks.treeHovered = [this](const QString& key) {
+    m_controller->browser()->hoverNode(m_nativeNodes.value(key));
+  };
+  // The left column's split and the Configuration card's disclosure
+  // (mitcad#1020), remembered as the Floating layout's.
+  callbacks.columnSplitChosen = rememberNativeSplit;
+  callbacks.configurationCollapsed = [](bool collapsed) {
+    QSettings settings;
+    if (settings.value(kConfigurationCollapsedKey, false).toBool() != collapsed) {
+      settings.setValue(kConfigurationCollapsedKey, collapsed);
+      qInfo().noquote() << QStringLiteral("Configuration panel: %1, remembered")
+                               .arg(collapsed ? QStringLiteral("collapsed") : QStringLiteral("expanded"));
+    }
+  };
+  // The quick-access group's menu (mitcad#1113): the shared setting, as
+  // the Qt group keeps it (QuickAccessSettings), then the group again.
+  callbacks.quickAccessChosen = [this](const QString& id, bool on) {
+    QuickAccessSettings chosen = QuickAccessSettings::load();
+    if (chosen.setChosen(id, on)) {
+      chosen.save();
+      qDebug().noquote() << QStringLiteral("Quick access %1 %2")
+                                .arg(on ? QStringLiteral("added") : QStringLiteral("removed"), id);
+    }
+    refreshNativeActions();
+  };
+  callbacks.quickAccessReset = [this] {
+    QuickAccessSettings::reset();
+    qDebug().noquote() << QStringLiteral("Quick access reset to the default");
+    refreshNativeActions();
+  };
+  // The message band above the timeline (mitcad#1098): the shared
+  // messages' × and their history's rows, as the Qt band's.
+  callbacks.messageClosed = [this] { m_messages->close(); };
+  callbacks.messageFeatureChosen = [this](const QString& uid) {
+    emit m_messageHistory->featureChosen(uid);
+    QTimer::singleShot(0, this, [this] { refreshNativeWindow(); });
+  };
   m_nativeWindow = std::make_unique<NativeMacWindow>(this, std::move(callbacks));
   if (!m_nativeWindow->isEmbedded()) {
     throw std::runtime_error(m_nativeWindow->embeddingError().toStdString());
   }
+  m_nativeWindow->setMessages(&m_messages->log());
+  connect(m_messages, &MessageCenter::changed, this, [this] {
+    if (m_nativeWindow) m_nativeWindow->setMessages(&m_messages->log());
+  });
   restoreNativeCardWidths(*m_nativeWindow);
+  restoreNativeColumn(*m_nativeWindow);
+  // The Configuration card's header reads Configuration, the row combo's
+  // caption Row (mitcad#1020).
+  if (ConfigurationBar* configuration = m_controller->configurationBar()) configuration->setHeaderTitled(true);
   // The orientation cube's arrows are AppKit buttons at the hidden Qt
   // arrows' places.
   const auto showCubeArrows = [this] {
@@ -420,6 +554,11 @@ void MainWindow::createNativeWindow() {
     refreshNativeWindow(); // A busy document refreshes from busyChanged after it becomes idle.
   });
   connect(m_controller->timeline(), &TimelineWidget::filterChanged, this, [this] {
+    m_nativeSnapshotKey.clear();
+    refreshNativeWindow();
+  }, Qt::QueuedConnection);
+  // A group folded or opened (mitcad#1077) changes no snapshot.
+  connect(m_controller->timeline(), &TimelineWidget::groupCollapsedChanged, this, [this] {
     m_nativeSnapshotKey.clear();
     refreshNativeWindow();
   }, Qt::QueuedConnection);
@@ -528,6 +667,10 @@ void MainWindow::createNativeWindow() {
       delete m_nativeProgress.data();
     }
   });
+  // The Chat card (mitcad#1075, agent/MainWindowChat.cpp).
+  createNativeChat();
+  // The navigation bar at the bottom of the view (mitcad#1099).
+  createNativeNavigationBar();
   refreshNativeWindow();
   qInfo() << "Native UI: AppKit shell with embedded OCCT viewport";
 }
@@ -567,7 +710,13 @@ void MainWindow::refreshNativeActions() {
     commandOrder.insert(def->id, order++);
   }
   m_nativeActions.clear();
-  const auto append = [this, &actions, &assigned, &commandOrder](QAction* action, const QString& menu) {
+  // The commands that are a button of their group (Qt's ribbon_<id>, also a
+  // split button's default): nothing to pin (mitcad#1084).
+  QSet<QString> ownButtons;
+  for (const QToolButton* button : m_ribbon->findChildren<QToolButton*>()) {
+    if (button->objectName().startsWith(QStringLiteral("ribbon_"))) ownButtons.insert(button->objectName().mid(7));
+  }
+  const auto append = [this, &actions, &assigned, &commandOrder, &ownButtons](QAction* action, const QString& menu) {
     if (action->isSeparator()) {
       mac::NativeMacAction separator;
       separator.menu = menu;
@@ -622,6 +771,10 @@ void MainWindow::refreshNativeActions() {
       item.toolbarPinned = def->pinned;
       item.toolbarOrder = commandOrder.value(def->id);
       item.section = def->section;
+      // Pin to Toolbar as the Qt row menu offers it (mitcad#1084): pinned
+      // in its own group, or pinnable unless a button of its group already.
+      item.pinnedToToolbar = m_ribbon->pins().isPinned(def->tab, def->id);
+      item.pinnable = !item.pinnedToToolbar && !ownButtons.contains(def->id);
       if (!item.workspace.isEmpty()) {
         item.symbol.clear(); // Keep the familiar CAD command drawing.
       }
@@ -687,7 +840,12 @@ void MainWindow::refreshNativeActions() {
   QTabBar* tabs = m_ribbon->tabBar();
   for (int tab = 0; tab < tabs->count(); ++tab) workspaces.append(tabs->tabText(tab).toUpper());
   // Keep the hidden sketch page available before its tab is added.
-  for (const QString& workspace : {QStringLiteral("SOLID"), QStringLiteral("BUILD"), QStringLiteral("SKETCH")}) {
+  // MAKE (mitcad#1049) as SOLID and BUILD: the native toolbar reads its groups here.
+  // DRAWING and CUT SHEET (mitcad#1008, mitcad#1073): the tab a drawing
+  // shows alone while it is open (Ribbon::setDrawingMode).
+  for (const QString& workspace :
+       {QStringLiteral("SOLID"), QStringLiteral("BUILD"), QStringLiteral("MAKE"), QStringLiteral("SKETCH"),
+        QStringLiteral("DRAWING"), QStringLiteral("CUT SHEET")}) {
     for (const QString& name : Ribbon::groups(workspace)) {
       auto* caption = m_ribbon->findChild<QToolButton*>(QStringLiteral("ribbonMenu_") + workspace + QLatin1Char('/') + name);
       if (!caption || !caption->menu()) continue;
@@ -701,7 +859,14 @@ void MainWindow::refreshNativeActions() {
       group.menu = menuItems(menuItems, caption->menu());
       for (QToolButton* button : caption->parentWidget()->findChildren<QToolButton*>()) {
         if (!button->defaultAction() || button->parentWidget()->parentWidget() != caption->parentWidget()) continue;
+        // A command the user pinned in the group, after its own buttons
+        // (Ribbon::addPinnedButtons, mitcad#1084); one remade by a pin
+        // change is out of the row's layout until it is deleted.
+        const bool pinnedButton = button->property("mitcadPinId").isValid();
+        const QLayout* row = button->parentWidget()->layout();
+        if (pinnedButton && row != nullptr && row->indexOf(button) < 0) continue;
         mac::NativeMacRibbonButton item;
+        item.pinned = pinnedButton;
         item.action = actionId(button->defaultAction());
         item.width = button->sizeHint().width();
         item.iconSize = button->iconSize().width();
@@ -717,6 +882,60 @@ void MainWindow::refreshNativeActions() {
   }
   m_nativeWindow->setActions(actions);
   m_nativeWindow->setRibbon(groups, workspaces, tabs->currentIndex());
+
+  // The quick-access group (mitcad#1113) from the File, Edit, View and
+  // Tools menus by the Qt group's rules (QuickAccessGroup): its commands,
+  // their tooltips with the native state's reason, and its menu's checks
+  // as the Qt group's mirrorMenu offers them.
+  QList<QMenu*> quickMenus;
+  for (const char* name : {"fileMenu", "editMenu", "viewMenu", "toolsMenu"}) {
+    if (auto* menu = menuBar()->findChild<QMenu*>(QLatin1String(name), Qt::FindDirectChildrenOnly)) {
+      quickMenus.append(menu);
+    }
+  }
+  mac::NativeMacQuickAccess quick;
+  quick.chosen = QuickAccessSettings::load().chosen;
+  quick.shown = quickAccessShown(quick.chosen, QuickAccessGroup::availableIds(*m_registry, quickMenus));
+  const auto reason = [this](const QString& id) {
+    const CommandDef* def = m_registry->find(id);
+    return def != nullptr ? unavailableReason(*def) : QString();
+  };
+  for (const QString& id : std::as_const(quick.shown)) {
+    bool enabled = false;
+    for (const auto& item : std::as_const(actions)) {
+      if (item.id == id) {
+        enabled = item.enabled;
+        break;
+      }
+    }
+    quick.tooltips.append(QuickAccessGroup::tooltipOf(*m_registry, id, enabled, reason));
+  }
+  const auto mirror = [this](const auto& self, const QMenu* menu) -> QList<mac::NativeMacMenuItem> {
+    QList<mac::NativeMacMenuItem> entries;
+    for (const QAction* entry : menu->actions()) {
+      if (entry->isSeparator() || !entry->isVisible()) continue;
+      mac::NativeMacMenuItem item;
+      item.title = quickAccessLabel(entry->text());
+      if (const QMenu* submenu = entry->menu()) {
+        item.submenu = true;
+        item.children = self(self, submenu);
+        if (!item.children.isEmpty()) entries.append(item);
+        continue;
+      }
+      const QString name = entry->objectName();
+      item.action = name.startsWith(QStringLiteral("command_")) ? name.mid(8) : QString();
+      if (!item.action.isEmpty() && m_registry->find(item.action) != nullptr) entries.append(item);
+    }
+    return entries;
+  };
+  for (const QMenu* menu : std::as_const(quickMenus)) {
+    mac::NativeMacMenuItem top;
+    top.title = quickAccessLabel(menu->title());
+    top.submenu = true;
+    top.children = mirror(mirror, menu);
+    if (!top.children.isEmpty()) quick.menus.append(top);
+  }
+  m_nativeWindow->setQuickAccess(quick);
 }
 
 void MainWindow::refreshNativeWindow() {
@@ -729,11 +948,8 @@ void MainWindow::refreshNativeWindow() {
                                   warned->isHidden() ? QString() : warned->text(), warned->toolTip());
   ConfigurationBar* configuration = m_controller->configurationBar();
   if (configuration != nullptr && !configuration->isHidden()) {
-    // The bounded browser can be narrower than the shared grid's reading
-    // hint. Only this card opts in to placing its row cells on extra lines.
-    if (!configuration->property("nativeResponsiveLayout").toBool()) {
-      configuration->setProperty("nativeResponsiveLayout", true);
-    }
+    // Its own card between Projects and Browser (mitcad#1020); each option
+    // is one row, its caption, field and slider side by side, as in Qt.
     if (!m_nativeConfigurationForm) m_nativeConfigurationForm = createNativeWidgetView(configuration);
     else m_nativeConfigurationForm->refresh();
     m_nativeWindow->setConfigurationView(m_nativeConfigurationForm ? m_nativeConfigurationForm->nativeView() : nullptr);
@@ -777,6 +993,9 @@ void MainWindow::refreshNativeWindow() {
       item.visible = row.node.visible;
       item.checked = row.node.visible;
       item.bindings = row.bindings;
+      item.tone = row.tone; // mitcad#1079
+      item.eyeTip = row.eyeTip;
+      item.eyeBound = row.eyeBound;
       rows.append(item);
       m_nativeNodes.insert(row.key, row.node);
     }
@@ -799,11 +1018,25 @@ void MainWindow::refreshNativeWindow() {
       item.symbol = feature.isSketch() ? QStringLiteral("pencil.and.outline") : QStringLiteral("cube");
       item.icon = themeIcon(featureIcon(feature.type));
       item.status = feature.status;
-      item.noted = !feature.importNote.isEmpty();
+      item.noted = feature.noted();
       item.suppressed = feature.suppressed;
       item.filtered = filtered.contains(feature.uid);
       item.bindings = feature.suppressedWhen.isEmpty() ? 0 : 1;
       history.append(item);
+    }
+    // Their timeline groups as the shared timeline shows them (mitcad#1077).
+    for (const TimelineWidget::ShownGroup& group : m_controller->timeline()->shownGroups()) {
+      const auto at = [&history](const QString& uid) {
+        return std::find_if(history.begin(), history.end(), [&uid](const auto& item) { return item.id == uid; });
+      };
+      const auto first = at(group.first);
+      const auto last = at(group.last);
+      if (first == history.end() || last == history.end() || last < first) continue;
+      for (auto item = first; item <= last; ++item) {
+        if (item->filtered) continue;
+        item->group = group.name;
+        item->groupCollapsed = group.collapsed;
+      }
     }
     m_nativeWindow->setHistory(history, m_snapshot.marker);
     m_nativeSnapshotKey = m_snapshot.key;
@@ -890,7 +1123,7 @@ bool MainWindow::modelCommandAsync(const QJsonObject& request, QObject* context,
       notePlacement(result.answer);
       m_locks->activity();
     } else if (result.cancelled) {
-      showHint(tr("Computation cancelled."));
+      showHint(tr("Computation canceled."));
       qInfo().noquote() << QStringLiteral("Command %1 cancelled").arg(name);
     }
     completion({result.answer, result.error, result.cancelled});

@@ -161,12 +161,23 @@ private:
 };
 
 // The parts' faces (planes, other analytic surfaces and free-form ones:
-// B-splines, sweeps, offsets) and edges, for the trace.
-std::string shape_counts(const std::vector<TopoDS_Shape>& parts) {
-  int planes = 0;
-  int analytic = 0;
-  int freeform = 0;
-  int edges = 0;
+// B-splines, sweeps, offsets) and edges (on lines and conics, or on other
+// curves: B-splines, Bézier curves, offsets), for the trace and the
+// choice of the quick path.
+struct PartCounts {
+  std::size_t parts = 0;
+  long planes = 0;
+  long analytic = 0;
+  long freeform = 0;
+  long conic_edges = 0;
+  long curve_edges = 0;
+
+  long faces() const { return planes + analytic + freeform; }
+};
+
+PartCounts count_parts(const std::vector<TopoDS_Shape>& parts) {
+  PartCounts c;
+  c.parts = parts.size();
   for (const TopoDS_Shape& part : parts) {
     NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
     TopExp::MapShapes(part, TopAbs_FACE, faces);
@@ -174,27 +185,51 @@ std::string shape_counts(const std::vector<TopoDS_Shape>& parts) {
       const BRepAdaptor_Surface surface(TopoDS::Face(faces(i)), false);
       switch (surface.GetType()) {
       case GeomAbs_Plane:
-        ++planes;
+        ++c.planes;
         break;
       case GeomAbs_Cylinder:
       case GeomAbs_Cone:
       case GeomAbs_Sphere:
       case GeomAbs_Torus:
-        ++analytic;
+        ++c.analytic;
         break;
       default:
-        ++freeform;
+        ++c.freeform;
         break;
       }
     }
-    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edge_map;
-    TopExp::MapShapes(part, TopAbs_EDGE, edge_map);
-    edges += edge_map.Extent();
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+    TopExp::MapShapes(part, TopAbs_EDGE, edges);
+    for (int i = 1; i <= edges.Extent(); ++i) {
+      const TopoDS_Edge& edge = TopoDS::Edge(edges(i));
+      if (BRep_Tool::Degenerated(edge)) {
+        continue;
+      }
+      switch (BRepAdaptor_Curve(edge).GetType()) {
+      case GeomAbs_Line:
+      case GeomAbs_Circle:
+      case GeomAbs_Ellipse:
+      case GeomAbs_Hyperbola:
+      case GeomAbs_Parabola:
+        ++c.conic_edges;
+        break;
+      default:
+        ++c.curve_edges;
+        break;
+      }
+    }
   }
-  return "parts=" + std::to_string(parts.size()) + " faces=" + std::to_string(planes + analytic + freeform) +
-         " (planes=" + std::to_string(planes) + " analytic=" + std::to_string(analytic) +
-         " freeform=" + std::to_string(freeform) + ") edges=" + std::to_string(edges);
+  return c;
 }
+
+std::string describe(const PartCounts& c) {
+  return "parts=" + std::to_string(c.parts) + " faces=" + std::to_string(c.faces()) +
+         " (planes=" + std::to_string(c.planes) + " analytic=" + std::to_string(c.analytic) +
+         " freeform=" + std::to_string(c.freeform) + ") edges=" + std::to_string(c.conic_edges + c.curve_edges) +
+         " (conics=" + std::to_string(c.conic_edges) + " curves=" + std::to_string(c.curve_edges) + ")";
+}
+
+std::string shape_counts(const std::vector<TopoDS_Shape>& parts) { return describe(count_parts(parts)); }
 
 // The view's 2D coordinates of a model point.
 struct ViewFrame {
@@ -729,65 +764,102 @@ double quick_deflection(const std::vector<TopoDS_Shape>& parts, double deflectio
   return std::max(deflection, size * 5e-4);
 }
 
-// Whether a face is free-form: not a plane, a cylinder, a cone, a sphere or
-// a torus. The exact algorithm is slow on such faces (mitcad#962: a modelled
-// thread's took seconds alone).
-bool has_free_form_faces(const std::vector<TopoDS_Shape>& parts) {
-  for (const TopoDS_Shape& part : parts) {
-    for (TopExp_Explorer it(part, TopAbs_FACE); it.More(); it.Next()) {
-      const BRepAdaptor_Surface surface(TopoDS::Face(it.Current()), false);
-      switch (surface.GetType()) {
-      case GeomAbs_Plane:
-      case GeomAbs_Cylinder:
-      case GeomAbs_Cone:
-      case GeomAbs_Sphere:
-      case GeomAbs_Torus:
-        break;
-      default:
-        return true;
-      }
-    }
-  }
-  return false;
+// Whether the exact algorithm is slow on the parts, so that a view takes
+// the quick path:
+// - on free-form faces: not planes, cylinders, cones, spheres or tori
+//   (mitcad#962: a modelled thread's took seconds alone);
+// - on many edges that are not lines or conics against many faces
+//   (mitcad#1033): its hiding tests every edge against the faces, and an
+//   edge on a B-spline (where two cylinders or a cone and a cylinder meet,
+//   as a body read from STEP has hundreds) costs it about a hundred times
+//   one on a line or a circle. Its work grows as the edges times the faces:
+//   a shaft of 963 analytic faces with 320 radial holes (as many B-spline
+//   edges) took 8.3 s to hide in a debug build where the quick path took
+//   1.7 s, 4 times the holes 16 times the time; a plate of 1508 analytic
+//   faces whose 3013 edges are all lines and circles 1.6 s, where the
+//   quick path was the slower one (5.4 s). The limit lets the exact
+//   algorithm work about a second in a debug build, a fraction of that in
+//   a release one.
+constexpr double kExactWorkLimit = 50000.0;
+// What an edge on a line or a conic weighs against one on another curve.
+constexpr double kConicEdgeWeight = 1.0 / 256.0;
+
+double exact_work(const PartCounts& c) {
+  return static_cast<double>(c.faces()) *
+         (static_cast<double>(c.curve_edges) + kConicEdgeWeight * static_cast<double>(c.conic_edges));
 }
+
+bool exact_is_slow(const PartCounts& c) { return c.freeform > 0 || exact_work(c) > kExactWorkLimit; }
 
 // The algorithm's lines (its compounds, made when they are asked for:
 // "extract" in the trace), then each as a drawn curve ("convert"): fitted
-// (add_polygonal) when `tolerance` is given.
+// (add_polygonal) when `tolerance` is given. With several shapes loaded,
+// each shape's lines are asked for on their own, so that every drawn curve
+// knows its shape (`sources`: each loaded shape's index among those the
+// view was given; mitcad#1112); the algorithm keeps each shape's edges
+// together, so this costs no more than asking for all at once.
 template <class Output>
-void collect(Output& out, const DrawingViewSpec& spec, DrawnView& view, ViewTrace& trace, double tolerance = 0.0) {
+void collect(Output& out, const std::vector<TopoDS_Shape>& loaded, const std::vector<std::size_t>& sources,
+             const DrawingViewSpec& spec, DrawnView& view, ViewTrace& trace, double tolerance = 0.0) {
   struct Lines {
     TopoDS_Shape compound;
     bool visible;
     DrawnKind kind;
+    int source;
   };
   std::vector<Lines> lines;
-  lines.push_back({out.VCompound(), true, DrawnKind::Sharp});
-  lines.push_back({out.OutLineVCompound(), true, DrawnKind::Outline});
-  if (spec.smooth) {
-    lines.push_back({out.Rg1LineVCompound(), true, DrawnKind::Smooth});
-  }
-  if (spec.hidden) {
-    lines.push_back({out.HCompound(), false, DrawnKind::Sharp});
-    lines.push_back({out.OutLineHCompound(), false, DrawnKind::Outline});
+  const bool apart = loaded.size() > 1;
+  const std::size_t count = apart ? loaded.size() : 1;
+  for (std::size_t i = 0; i < count; ++i) {
+    const int source = i < sources.size() ? static_cast<int>(sources[i]) : -1;
+    if (apart) {
+      const TopoDS_Shape& shape = loaded[i];
+      lines.push_back({out.VCompound(shape), true, DrawnKind::Sharp, source});
+      lines.push_back({out.OutLineVCompound(shape), true, DrawnKind::Outline, source});
+      if (spec.smooth) {
+        lines.push_back({out.Rg1LineVCompound(shape), true, DrawnKind::Smooth, source});
+      }
+      if (spec.hidden) {
+        lines.push_back({out.HCompound(shape), false, DrawnKind::Sharp, source});
+        lines.push_back({out.OutLineHCompound(shape), false, DrawnKind::Outline, source});
+        if (spec.smooth) {
+          lines.push_back({out.Rg1LineHCompound(shape), false, DrawnKind::Smooth, source});
+        }
+      }
+      continue;
+    }
+    lines.push_back({out.VCompound(), true, DrawnKind::Sharp, source});
+    lines.push_back({out.OutLineVCompound(), true, DrawnKind::Outline, source});
     if (spec.smooth) {
-      lines.push_back({out.Rg1LineHCompound(), false, DrawnKind::Smooth});
+      lines.push_back({out.Rg1LineVCompound(), true, DrawnKind::Smooth, source});
+    }
+    if (spec.hidden) {
+      lines.push_back({out.HCompound(), false, DrawnKind::Sharp, source});
+      lines.push_back({out.OutLineHCompound(), false, DrawnKind::Outline, source});
+      if (spec.smooth) {
+        lines.push_back({out.Rg1LineHCompound(), false, DrawnKind::Smooth, source});
+      }
     }
   }
   trace.mark("extract");
   for (const Lines& l : lines) {
+    const std::size_t before = view.curves.size();
     if (tolerance > 0.0) {
       add_polygonal(l.compound, l.visible, l.kind, spec.deflection, tolerance, view);
     } else {
       add_compound(l.compound, l.visible, l.kind, spec.deflection, view);
+    }
+    for (std::size_t c = before; c < view.curves.size(); ++c) {
+      view.curves[c].source = l.source;
     }
   }
   trace.mark("convert");
   trace.note("lines=" + std::to_string(view.curves.size()));
 }
 
-void project_exact(const std::vector<TopoDS_Shape>& parts, const HLRAlgo_Projector& projector,
-                   const DrawingViewSpec& spec, DrawnView& view, ViewTrace& trace) {
+void project_exact(const std::vector<TopoDS_Shape>& parts, const std::vector<std::size_t>& sources,
+                   const HLRAlgo_Projector& projector, const DrawingViewSpec& spec, DrawnView& view,
+                   ViewTrace& trace) {
   occ::handle<HLRBRep_Algo> algo = new HLRBRep_Algo();
   for (const TopoDS_Shape& part : parts) {
     algo->Add(part);
@@ -799,7 +871,7 @@ void project_exact(const std::vector<TopoDS_Shape>& parts, const HLRAlgo_Project
   algo->Hide();
   trace.mark("hide");
   HLRBRep_HLRToShape out(algo);
-  collect(out, spec, view, trace);
+  collect(out, parts, sources, spec, view, trace);
 }
 
 // The polygonal algorithm works on triangles: of copies of the shapes, so
@@ -807,10 +879,13 @@ void project_exact(const std::vector<TopoDS_Shape>& parts, const HLRAlgo_Project
 // at most quick_deflection from the surfaces (their faces meshed in
 // parallel), and its lines are fitted within one and a half times that
 // (mitcad#962).
-void project_polygonal(const std::vector<TopoDS_Shape>& parts, const HLRAlgo_Projector& projector,
-                       const DrawingViewSpec& spec, DrawnView& view, ViewTrace& trace) {
+void project_polygonal(const std::vector<TopoDS_Shape>& parts, const std::vector<std::size_t>& sources,
+                       const HLRAlgo_Projector& projector, const DrawingViewSpec& spec, DrawnView& view,
+                       ViewTrace& trace) {
   const double deflection = quick_deflection(parts, spec.deflection);
   occ::handle<HLRBRep_PolyAlgo> algo = new HLRBRep_PolyAlgo();
+  // The copies as loaded: each shape's lines are asked for by its copy.
+  std::vector<TopoDS_Shape> loaded;
   for (const TopoDS_Shape& part : parts) {
     const bool mesh = detail::has_mesh_faces(part);
     TopoDS_Shape copy = BRepBuilderAPI_Copy(part, true, mesh).Shape();
@@ -818,6 +893,7 @@ void project_polygonal(const std::vector<TopoDS_Shape>& parts, const HLRAlgo_Pro
       BRepMesh_IncrementalMesh mesher(copy, deflection, false, 0.2, true);
     }
     algo->Load(copy);
+    loaded.push_back(copy);
   }
   trace.mark("mesh");
   algo->Projector(projector);
@@ -825,20 +901,20 @@ void project_polygonal(const std::vector<TopoDS_Shape>& parts, const HLRAlgo_Pro
   trace.mark("update");
   HLRBRep_PolyHLRToShape out;
   out.Update(algo);
-  collect(out, spec, view, trace, 1.5 * deflection);
+  collect(out, loaded, sources, spec, view, trace, 1.5 * deflection);
 }
 
 // MITCAD_DRAWING_TRACE=compare: the time of the algorithm the view did not
 // use, on the same parts; its lines are thrown away.
-void trace_other(bool exact_used, const std::vector<TopoDS_Shape>& parts, const HLRAlgo_Projector& projector,
-                 const DrawingViewSpec& spec) {
+void trace_other(bool exact_used, const std::vector<TopoDS_Shape>& parts, const std::vector<std::size_t>& indices,
+                 const HLRAlgo_Projector& projector, const DrawingViewSpec& spec) {
   ViewTrace trace(exact_used ? "compare polygonal" : "compare exact");
   DrawnView scratch;
   try {
     if (exact_used) {
-      project_polygonal(parts, projector, spec, scratch, trace);
+      project_polygonal(parts, indices, projector, spec, scratch, trace);
     } else {
-      project_exact(parts, projector, spec, scratch, trace);
+      project_exact(parts, indices, projector, spec, scratch, trace);
     }
   } catch (const Standard_Failure&) {
     trace.note("failed");
@@ -853,12 +929,13 @@ void trace_parts(const std::vector<TopoDS_Shape>& parts, const std::vector<std::
                  const HLRAlgo_Projector& projector, const DrawingViewSpec& spec) {
   for (std::size_t i = 0; i < parts.size(); ++i) {
     const std::vector<TopoDS_Shape> one{parts[i]};
+    const std::vector<std::size_t> its{indices[i]};
     ViewTrace trace("part " + std::to_string(indices[i]));
     trace.note(shape_counts(one));
     trace.mark("count");
     DrawnView scratch;
     try {
-      project_exact(one, projector, spec, scratch, trace);
+      project_exact(one, its, projector, spec, scratch, trace);
     } catch (const Standard_Failure&) {
       trace.note("failed");
     } catch (const std::exception&) {
@@ -1125,7 +1202,7 @@ DrawnView project_view(const std::vector<ShapePtr>& shapes, const DrawingViewSpe
     }
     DrawnView view;
     std::vector<TopoDS_Shape> parts;
-    std::vector<std::size_t> indices; // of the parts among the shapes, for the trace
+    std::vector<std::size_t> indices; // of the parts among the shapes: the curves' sources
     bool meshes = false;
     for (std::size_t i = 0; i < shapes.size(); ++i) {
       const ShapePtr& shape = shapes[i];
@@ -1153,20 +1230,30 @@ DrawnView project_view(const std::vector<ShapePtr>& shapes, const DrawingViewSpe
     if (parts.empty()) {
       return view;
     }
-    if (trace.on()) {
+    // The quick path where the exact algorithm is slow (mitcad#962,
+    // mitcad#1033).
+    bool quick = false;
+    if (spec.exact && spec.quick && !meshes) {
+      const PartCounts counts = count_parts(parts);
+      if (trace.on()) {
+        char work[48];
+        std::snprintf(work, sizeof work, " work=%.0f", exact_work(counts));
+        trace.note(describe(counts) + work);
+        trace.mark("count");
+      }
+      quick = exact_is_slow(counts);
+    } else if (trace.on()) {
       trace.note(shape_counts(parts));
       trace.mark("count");
     }
-    // The quick path where the exact algorithm is slow (mitcad#962).
-    const bool quick = spec.exact && spec.quick && !meshes && has_free_form_faces(parts);
     if (spec.exact && !meshes && !quick) {
       DrawnView exact = view;
       try {
-        project_exact(parts, projector, spec, exact, trace);
+        project_exact(parts, indices, projector, spec, exact, trace);
         trace.note("result=exact");
         trace.finish();
         if (mode.compare) {
-          trace_other(true, parts, projector, spec);
+          trace_other(true, parts, indices, projector, spec);
         }
         if (mode.parts) {
           trace_parts(parts, indices, projector, spec);
@@ -1178,12 +1265,12 @@ DrawnView project_view(const std::vector<ShapePtr>& shapes, const DrawingViewSpe
         trace.note("exact-failed");
       }
     }
-    project_polygonal(parts, projector, spec, view, trace);
+    project_polygonal(parts, indices, projector, spec, view, trace);
     view.polygonal = true;
     trace.note(quick ? "result=quick" : "result=polygonal");
     trace.finish();
     if (mode.compare && !meshes) {
-      trace_other(false, parts, projector, spec);
+      trace_other(false, parts, indices, projector, spec);
     }
     if (mode.parts && !meshes) {
       trace_parts(parts, indices, projector, spec);

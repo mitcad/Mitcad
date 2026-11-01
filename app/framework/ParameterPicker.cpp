@@ -19,17 +19,23 @@
 
 #include "../OcctViewer.hpp"
 #include "CommandSession.hpp"
+#include "Theme.hpp"
 
 namespace mitcad {
 namespace {
 
-// A sketch's dimensions in the colour of picking; the one under the
-// pointer brighter.
-const QColor kDimensionColor(0x2a, 0x6e, 0xd8);
-const QColor kHoverColor(0x1f, 0x7a, 0xff);
-const QColor kBoxColor(0xff, 0xff, 0xff, 235);
-const QColor kTextColor(0x1a, 0x2a, 0x40);
-const QColor kDrivenTextColor(0x60, 0x66, 0x70);
+// A sketch's dimensions in the selection's blue, the colour of picking; the
+// one under the pointer in the hover's, as in the 3D view (mitcad#1041). Their
+// texts in light boxes: the light background's values.
+const QColor kDimensionColor = viewColor(ColorRole::Select, false);
+const QColor kHoverColor = viewColor(ColorRole::Hover, false);
+const QColor kBoxColor = [] {
+  QColor box = viewColor(ColorRole::Surface, false);
+  box.setAlpha(235);
+  return box;
+}();
+const QColor kTextColor = viewColor(ColorRole::SketchDimension, false);
+const QColor kDrivenTextColor = viewColor(ColorRole::SketchDriven, false);
 constexpr double kPadding = 4.0;
 
 double screenDistance(const QPointF& a, const QPointF& b) { return std::hypot(a.x() - b.x(), a.y() - b.y()); }

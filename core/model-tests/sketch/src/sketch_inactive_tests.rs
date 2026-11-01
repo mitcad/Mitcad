@@ -132,8 +132,18 @@ fn the_solve_leaves_an_inactive_constraint_out_and_activation_is_checked() {
     assert!(x.abs() < 1e-9, "vertical: {x}");
     let k = entry(&s, "constraints", &horizontal).unwrap();
     assert_eq!(k["active"], false, "{k}");
-    // The geometry does not meet it now.
+    // The geometry does not meet it now: information, not a problem
+    // (mitcad#1040).
     assert_eq!(s["unmet_inactive"], json!([horizontal]), "{s}");
+    assert!(
+        s["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["level"] == "info"
+                && n["message"].as_str().unwrap().contains(horizontal.as_str())),
+        "{s}"
+    );
 
     // Activating it would contradict the vertical one: refused, nothing
     // changes.

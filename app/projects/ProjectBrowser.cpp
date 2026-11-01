@@ -624,7 +624,7 @@ void BrowserDialog::search() {
   for (const BrowserEntry& entry : found) {
     keys << entry.key();
   }
-  m_status->setText(found.isEmpty() ? tr("No design's name holds \"%1\".").arg(text) : QString());
+  m_status->setText(found.isEmpty() ? tr("No design's name holds “%1”.").arg(text) : QString());
   m_status->setVisible(found.isEmpty());
   const QString where = here ? keyOfPlace({m_place.root, QString()}) : QStringLiteral("all projects");
   qInfo().noquote() << QStringLiteral("Project browser search \"%1\" in %2: %3 found%4")

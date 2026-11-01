@@ -133,7 +133,7 @@ void ViewController::refreshBuildVolume() {
       logged = QStringLiteral("Build volume: the design's printer has no bed");
     }
   }
-  m_viewer.setBuildVolume(frame, outside, warningColor(m_window->palette()));
+  m_viewer.setBuildVolume(frame, outside);
   if (logged != m_loggedBuildVolume) {
     m_loggedBuildVolume = logged;
     qDebug().noquote() << logged;

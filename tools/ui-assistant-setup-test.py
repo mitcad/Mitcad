@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/mcp app/framework/TestDriver app/MainWindowMcp core/mcp core/ffi tools/cli
 """Drive the real setup dialog using private homes and a compiled client stub."""
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,10 @@ def main():
     app, cli, stub, output = sys.argv[1:5]
     out = Path(output).resolve()
     out.mkdir(parents=True, exist_ok=True)
+    spec = importlib.util.spec_from_file_location("mcp_windows", Path(__file__).with_name("ui-mcp-window-test.py"))
+    windows = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(windows)
+    windows.run(app, cli, out / "windows", sys.argv[5] if len(sys.argv) > 5 else None)
     for mode in ("file", "cli", "cli-fail", "cli-corrupt", "cli-concurrent"):
         for chrome in ("floating", "docked"):
             name = mode + "-" + chrome
@@ -60,6 +65,14 @@ def main():
                     "expect-assistant-setup missing-claude",
                     # Found in the isolated home's .local/bin, outside PATH (mitcad#956).
                     "expect-assistant-setup local-bin", "expect-assistant-setup claude"]
+                reconnect = mode == "file" and chrome == "floating"
+                if reconnect:
+                    script.extend(["expect-assistant-setup reconnect-start",
+                        "expect-assistant-setup reconnect-disconnect",
+                        "button '^Close$'", "expect-dialog-gone '^Connect AI Assistant$'", "focus-main",
+                        "click-logged 'Agent indicator at'", "focus-dialog '^Connect AI Assistant$'",
+                        "expect-assistant-setup reconnect-line", "expect-assistant-setup reconnect-again",
+                        "expect-assistant-setup reconnect-eof"])
                 if sys.platform == "win32":
                     # A Microsoft Store Claude Desktop without a .mcpb handler (mitcad#763).
                     script.append("expect-assistant-setup packaged-claude")
@@ -74,7 +87,10 @@ def main():
                 env["MITCAD_TEST_INPUT"] = str(source)
                 log_path = out / (name + ".log")
                 with log_path.open("wb") as log:
-                    result = subprocess.run([app, "--ui=qt", "--chrome=" + chrome, "--no-recovery", "--no-mcp"],
+                    arguments = [app, "--ui=qt", "--chrome=" + chrome, "--no-recovery"]
+                    if not reconnect:
+                        arguments.append("--no-mcp")
+                    result = subprocess.run(arguments,
                         env=env, stdout=log, stderr=subprocess.STDOUT, timeout=120)
                 text = log_path.read_text(encoding="utf-8", errors="replace")
                 if result.returncode or "TestDriver: done" not in text or any(line.startswith("TestDriver: FAIL") for line in text.splitlines()):

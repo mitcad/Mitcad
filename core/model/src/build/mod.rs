@@ -151,6 +151,13 @@ pub struct BuildRecord {
     /// The member's place in its frame (`stud.3`, `plate.top.0`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member: Option<String>,
+    // Corner connectors (mitcad#1115).
+    /// The rule a slot connector or its fastener was placed by: 2 since
+    /// mitcad#1115 (inside the frame at every corner, a nut into the slot,
+    /// a screw's head on the connector's wall); without it, the first rule,
+    /// which `build_upgrade` replaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<u32>,
 }
 
 /// What a placement's offset along a profile is measured from
@@ -192,7 +199,7 @@ pub fn value_in<K: Kernel>(
             let params = doc.parameters();
             crate::expr::evaluate(expression, params.table(), &params.context(), unit)
                 .map(|q| q.value)
-                .map_err(|e| ModelError::Invalid(format!("'{text}': {e}")))
+                .map_err(|e| ModelError::Invalid(format!("“{text}”: {e}")))
         }
     }
 }

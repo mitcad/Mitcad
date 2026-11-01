@@ -49,7 +49,7 @@ QPixmap bindingSwatch(const QColor& color, int side);
 // Logged for UI tests: `Bindings card shown for Body2 (hover|pinned)`,
 // `Bindings card Body2 follows; now: Color = Black`, `Bindings card line
 // Appearance: Color: Black → Paint - Black ●, …`, `Bindings card
-// warning Appearance: no appearance "x"`, `Bindings card Edit <property>
+// warning Appearance: no appearance “x”`, `Bindings card Edit <property>
 // at x,y`, `Bindings card all bindings at x,y` (in the main window's
 // coordinates), `Bindings card Edit Appearance of Body2`, `Bindings card
 // all bindings`, `Bindings card closed`.

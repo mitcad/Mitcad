@@ -153,6 +153,11 @@ bool SketchModel::load(const QJsonObject& sketch) {
   texts.clear();
   conflicts.clear();
   unmetInactive.clear();
+  notices = sketch.value(QStringLiteral("notices")).toArray();
+  redundant.clear();
+  for (const QJsonValue& id : sketch.value(QStringLiteral("redundant")).toArray()) {
+    redundant << id.toString();
+  }
   for (const QJsonValue& id : sketch.value(QStringLiteral("unmet_inactive")).toArray()) {
     unmetInactive << id.toString();
   }

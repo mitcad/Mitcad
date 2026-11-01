@@ -178,6 +178,9 @@ Appearance appearanceOf(const QJsonObject& value) {
   a.id = value.value(QStringLiteral("id")).toString();
   a.name = value.value(QStringLiteral("name")).toString();
   a.library = value.value(QStringLiteral("library")).toBool(true);
+  // Its class (mitcad#1102): its own, else the library's by its id, else
+  // other; empty from a model before classes.
+  a.materialClass = value.value(QStringLiteral("class")).toString();
   a.baseColor = colorOf(value.value(QStringLiteral("base_color")));
   const auto number = [&value](const char* key, double fallback) {
     return value.value(QLatin1String(key)).toDouble(fallback);

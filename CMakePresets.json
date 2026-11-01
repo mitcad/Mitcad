@@ -36,12 +36,13 @@
       "name": "macos",
       "hidden": true,
       "inherits": "base",
-      "description": "Apple Silicon. OCCT is LGPL, so vcpkg builds it as dylibs; triplets/arm64-osx-dynamic.cmake pins the deployment target.",
+      "description": "Apple Silicon. OCCT is LGPL, so vcpkg builds it as dylibs; triplets/arm64-osx-dynamic.cmake pins the deployment target. Both frontends: Qt by default, the AppKit one opt-in (mitcad#1056).",
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "arm64-osx-dynamic",
         "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
         "CMAKE_OSX_ARCHITECTURES": "arm64",
-        "CMAKE_OSX_DEPLOYMENT_TARGET": "14.4"
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "14.4",
+        "MITCAD_MACOS_NATIVE_UI": { "type": "BOOL", "value": "ON" }
       },
       "environment": { "MACOSX_DEPLOYMENT_TARGET": "14.4" },
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" }

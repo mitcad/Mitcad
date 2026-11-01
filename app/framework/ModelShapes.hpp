@@ -9,6 +9,7 @@
 
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QString>
 
 #include <TopoDS_Shape.hxx>
 #include <gp_Ax3.hxx>
@@ -33,6 +34,13 @@ bool isIdentity(const QJsonArray& rows);
 // A datum of the `datums` query: a plane as a square of `size`, an axis as a
 // line of `size` through its origin, a point as a vertex.
 TopoDS_Shape datumShape(const QJsonObject& datum, double size);
+// A datum of the model's queries (in its component's coordinates) moved by
+// a placement: where an occurrence of its component shows it (mitcad#1029).
+QJsonObject placedDatum(const QJsonObject& datum, const gp_Trsf& placement);
+// A datum's geometry for logs and UI tests, to 6 significant digits:
+// "origin (x, y, z), normal (x, y, z)" of a plane, "origin (…), direction
+// (…)" of an axis, "point (x, y, z)" of a point.
+QString datumText(const QJsonObject& datum);
 
 // The frame of a `sketch` query's answer (x, y and normal in model space);
 // false when the sketch did not evaluate.

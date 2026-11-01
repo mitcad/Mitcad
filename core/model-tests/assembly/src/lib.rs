@@ -14,3 +14,7 @@ mod policy_tests;
 mod reparent_tests;
 // Features of independent components evaluated in parallel (mitcad#842).
 mod parallel_recompute_tests;
+// Save Component as Design (mitcad#1057).
+mod save_component_tests;
+// Transparent bodies and occurrences (mitcad#1093).
+mod transparency_tests;

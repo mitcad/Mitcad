@@ -14,6 +14,7 @@ use mitcad_model::features::sketch::{FrameDef, SketchDef, SketchOutput};
 use mitcad_model::features::{FeatureDef, OccurrencePath, SketchPlane, ValueInput};
 use mitcad_model::ids::{BodyUid, EntityUid, FeatureUid};
 use mitcad_model::kernel::Kernel;
+use mitcad_model::notice::{self, Notice};
 use mitcad_model::sketch::cleanup::Removal;
 use mitcad_model::sketch::edit::{EditReport, PointInput, SketchEdit};
 use mitcad_model::sketch::geometry::Curve2;
@@ -290,6 +291,11 @@ named_enum! {
         "sketch.add_constraint" => AddConstraint {
             sketch: FeatureUid,
             constraint: ConstraintKind,
+            /// Only when safe, as a drawing tool adds the constraints its
+            /// geometry already satisfies (mitcad#1024): refused when the
+            /// others imply it, it conflicts, or the solve moves anything.
+            #[serde(default)]
+            auto: bool,
         },
         "sketch.add_dimension" => AddDimension {
             sketch: FeatureUid,
@@ -770,7 +776,7 @@ fn dxf_unit(unit: Option<&str>) -> Result<mitcad_dxf::Units, ApiError> {
         "ft" => Units::Feet,
         other => {
             return Err(ApiError(format!(
-                "unknown drawing unit '{other}' (mm, cm, m, in, ft)"
+                "unknown drawing unit “{other}” (mm, cm, m, in, ft)"
             )));
         }
     })
@@ -905,7 +911,7 @@ fn mirror_axis(edit: &mut SketchEdit<'_>, axis: &str) -> Result<EntityUid, Strin
         "x" => Ok(edit.axis(SketchAxis::X)),
         "y" => Ok(edit.axis(SketchAxis::Y)),
         _ => EntityUid::parse_curve(axis)
-            .map_err(|_| format!("invalid mirror line '{axis}' (expected c<number>, x or y)")),
+            .map_err(|_| format!("invalid mirror line “{axis}” (expected c<number>, x or y)")),
     }
 }
 
@@ -1635,8 +1641,46 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
                 .collect();
             result["unmet_inactive"] = json!(unmet);
         }
+        // The solve's notices (mitcad#1040): a sketch that did not solve
+        // (conflicting, not converged) an error, redundant constraints a
+        // warning, unmet inactive ones information; its warnings are added
+        // as warnings with the query's other results.
+        let notices = solve_notices(result["error"].as_str(), &status);
+        if !notices.is_empty() {
+            result["notices"] = notice::to_json(&notices);
+        }
         Ok(result)
     }
+}
+
+/// A sketch solve's notices (mitcad#1040, `docs/ui-conventions.md`): the
+/// solve's error (conflicting constraints, a solve that did not converge),
+/// redundant constraints as a warning, and the inactive constraints the
+/// geometry does not meet as information.
+pub(crate) fn solve_notices(error: Option<&str>, status: &SketchStatus) -> Vec<Notice> {
+    let mut notices = Vec::new();
+    if let Some(error) = error {
+        notices.push(Notice::error(error));
+    }
+    if !status.redundant.is_empty() {
+        let items: Vec<String> = status.redundant.iter().map(item).collect();
+        notices.push(Notice::warning(format!(
+            "Redundant constraints (they follow from the others): {}",
+            items.join(", ")
+        )));
+    }
+    if !status.unmet_inactive.is_empty() {
+        let items: Vec<String> = status
+            .unmet_inactive
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        notices.push(Notice::info(format!(
+            "Inactive constraints the geometry does not meet: {}",
+            items.join(", ")
+        )));
+    }
+    notices
 }
 
 /// The document's methods used only in this module, as an
@@ -1890,7 +1934,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                         },
                         other => {
                             return Err(format!(
-                                "unknown rectangle mode '{other}' (two_point, three_point, center)"
+                                "unknown rectangle mode “{other}” (two_point, three_point, center)"
                             ));
                         }
                     };
@@ -1950,7 +1994,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                         },
                         other => {
                             return Err(format!(
-                                "unknown circle mode '{other}' (center, two_point, three_point, \
+                                "unknown circle mode “{other}” (center, two_point, three_point, \
                                  two_tangent, three_tangent)"
                             ));
                         }
@@ -1996,7 +2040,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                         },
                         other => {
                             return Err(format!(
-                                "unknown arc mode '{other}' (three_point, center, tangent)"
+                                "unknown arc mode “{other}” (three_point, center, tangent)"
                             ));
                         }
                     };
@@ -2041,7 +2085,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                         },
                         other => {
                             return Err(format!(
-                                "unknown slot mode '{other}' (center_to_center, center_point, arc)"
+                                "unknown slot mode “{other}” (center_to_center, center_point, arc)"
                             ));
                         }
                     };
@@ -2173,7 +2217,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                 } => {
                     let uid = mitcad_model::internal::ids::parse_number(&id, "t")
                         .map(EntityUid)
-                        .ok_or_else(|| format!("'{id}' is not a text like \"t5\""))?;
+                        .ok_or_else(|| format!("{id} is not a text like \"t5\""))?;
                     let t = edit
                         .def
                         .texts
@@ -2263,6 +2307,15 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     // (mitcad#664).
                     edit.set_text_value(uid, value.as_ref())?;
                     made_ref.push(id);
+                }
+                C::AddConstraint {
+                    constraint,
+                    auto: true,
+                    ..
+                } => {
+                    // Added automatically by a drawing tool, only when
+                    // safe (mitcad#1024): nothing else changes.
+                    edit.add_constraint_if_safe(constraint)?;
                 }
                 C::AddConstraint { constraint, .. } => {
                     let before = edit.solved().ok().map(|s| s.status);
@@ -2649,7 +2702,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                 } => {
                     let uid = mitcad_model::internal::ids::parse_number(&id, "t")
                         .map(EntityUid)
-                        .ok_or_else(|| format!("'{id}' is not a code like \"t5\""))?;
+                        .ok_or_else(|| format!("{id} is not a code like \"t5\""))?;
                     let t = edit
                         .def
                         .texts
@@ -3076,8 +3129,12 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
         .map(|path| mitcad_model::assembly::inverse(&self.path_transform(&path)))
         .unwrap_or(mitcad_model::transform::Transform::IDENTITY);
         let axis = |v: [f64; 3]| to_component.apply_vector(v);
-        let Some(own) = FrameDef::upright(&plane, axis([0.0, 0.0, 1.0]), axis([0.0, 1.0, 0.0]))
-        else {
+        let Some(own) = FrameDef::upright(
+            &plane,
+            axis([0.0, 0.0, 1.0]),
+            axis([0.0, 1.0, 0.0]),
+            seen_from(&def.plane, axis),
+        ) else {
             return Ok(());
         };
         def.frame = Some(Box::new(own));
@@ -3085,6 +3142,19 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
         self.merge_undo(depth, &format!("Add {name}"));
         Ok(())
     }
+}
+
+/// The side an upright sketch on `plane` is seen from
+/// ([`FrameDef::upright`]'s `facing`), `axis` taking a direction of the
+/// design into the sketch's coordinates: the XZ origin plane, which has no
+/// outside, from the design's -Y, the view cube's FRONT (mitcad#1060); every
+/// other plane from its normal's side (XY from TOP, YZ from RIGHT, a face
+/// from outside it).
+pub(crate) fn seen_from(
+    plane: &SketchPlane,
+    axis: impl Fn([f64; 3]) -> [f64; 3],
+) -> Option<[f64; 3]> {
+    matches!(plane, SketchPlane::Xz).then(|| axis([0.0, -1.0, 0.0]))
 }
 
 /// The entities a linked projection's warning is about (mitcad#264): all
@@ -3157,4 +3227,33 @@ fn degenerate_ids(status: &SketchStatus) -> Value {
             .map(|id| Ref::Curve(*id).to_string())
             .collect::<Vec<_>>()
     )
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::*;
+
+    #[test]
+    fn a_solve_s_states_have_their_levels() {
+        // (mitcad#1040) Did not solve: an error; redundant constraints: a
+        // warning; unmet inactive ones: information.
+        let status = SketchStatus {
+            redundant: vec![SolverItem::Constraint(ConstraintUid(3))],
+            unmet_inactive: vec![ConstraintUid(5)],
+            ..SketchStatus::default()
+        };
+        let notices = solve_notices(Some("the sketch cannot be solved"), &status);
+        let levels: Vec<_> = notices.iter().map(|n| n.level).collect();
+        assert_eq!(
+            levels,
+            [
+                notice::NoticeLevel::Error,
+                notice::NoticeLevel::Warning,
+                notice::NoticeLevel::Info
+            ]
+        );
+        assert!(notices[1].message.ends_with(": k3"), "{notices:?}");
+        assert!(notices[2].message.ends_with(": k5"), "{notices:?}");
+        assert!(solve_notices(None, &SketchStatus::default()).is_empty());
+    }
 }

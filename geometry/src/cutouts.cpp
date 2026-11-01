@@ -767,9 +767,7 @@ ShapePtr cut_out_again(const ShapePtr& rounded, const Cutouts& cutouts, const Sh
     }
     namer.finish();
     ShapePtr named = namer.shape();
-    for (const std::string& note : rounded->notes()) {
-      named->add_note(note);
-    }
+    named->copy_notes(*rounded);
     return named;
   });
 }

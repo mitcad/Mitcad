@@ -399,6 +399,8 @@ ProjectsPanel::ProjectsPanel(Host host, QWidget* parent) : QWidget(parent), m_ho
   m_tree->header()->setStretchLastSection(false);
   m_tree->header()->setSectionResizeMode(kName, QHeaderView::Stretch);
   m_tree->header()->setSectionResizeMode(kState, QHeaderView::ResizeToContents);
+  // The status marks follow a selected row's text natively too (mitcad#1080).
+  m_tree->setProperty(NativeSelectedIconTintProperty, QVariantList{kState});
   m_tree->setSelectionMode(QAbstractItemView::SingleSelection);
   m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -493,7 +495,7 @@ ProjectsPanel::ProjectsPanel(Host host, QWidget* parent) : QWidget(parent), m_ho
       emit syncRequested(selectedRoot());
     }
   });
-  m_settings = action("settings", tr("Project Settings"), tr("The selected project's settings"), [this] {
+  m_settings = action("settings", tr("Project Settings…"), tr("The selected project's settings"), [this] {
     // The project of the selected row: the project itself, a folder or a
     // design in it (mitcad#153).
     QTreeWidgetItem* item = m_tree->currentItem();
@@ -1028,7 +1030,16 @@ void ProjectsPanel::logLayout() {
       continue;
     }
     const QPoint point = GlassCard::mapToHost(button, button->rect().center());
-    lines << QStringLiteral("Projects button %1 at %2,%3").arg(action->text()).arg(point.x()).arg(point.y());
+    // By the command's name, without the ellipsis of one that opens a
+    // window ("Project Settings…" is logged "Project Settings"): the UI
+    // tests click it by that name whichever way the label is written.
+    QString name = action->text();
+    if (name.endsWith(QChar(0x2026))) {
+      name.chop(1);
+    } else if (name.endsWith(QStringLiteral("..."))) {
+      name.chop(3);
+    }
+    lines << QStringLiteral("Projects button %1 at %2,%3").arg(name).arg(point.x()).arg(point.y());
   }
   // The width and where its edge is dragged (mitcad#529): the card's grip,
   // or the window's separator right of the dock.
@@ -1409,7 +1420,7 @@ void ProjectsPanel::editingClosed(bool accepted) {
   }
   if (bad) {
     qInfo().noquote() << QStringLiteral("Projects panel: %1 refused: the name \"%2\"").arg(what, name);
-    emit statusMessage(tr("\"%1\" cannot be a name: it may not be empty, start or end with a dot, or hold "
+    emit statusMessage(tr("“%1” cannot be a name: it may not be empty, start or end with a dot, or hold "
                           "/ \\ < > : \" | ? *.")
                            .arg(name),
                        true);

@@ -1026,7 +1026,7 @@ impl<'a> Reader<'a> {
             "GArc" => {
                 let center = self
                     .vec3(o, "m_center")
-                    .ok_or("an arc without its centre")?;
+                    .ok_or("an arc without its center")?;
                 let radius = self.f64(o, "m_radius").ok_or("an arc without its radius")?;
                 let x_axis = self
                     .vec3(o, "m_xVec")
@@ -1055,7 +1055,7 @@ impl<'a> Reader<'a> {
                     self.f64(o, "m_xLen"),
                     self.f64(o, "m_yLen"),
                 ) else {
-                    return Err("an ellipse without its centre, axes or radii".into());
+                    return Err("an ellipse without its center, axes or radii".into());
                 };
                 let t = self.floats(o, "m_endParams");
                 if t.len() != 2 || t[1] <= t[0] {

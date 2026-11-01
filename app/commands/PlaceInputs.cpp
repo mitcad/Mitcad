@@ -28,6 +28,7 @@
 #include <QtLogging>
 
 #include "../framework/ModelShapes.hpp"
+#include "../framework/Theme.hpp"
 #include "PlaceGeometry.hpp"
 
 namespace mitcad::cmd {
@@ -73,8 +74,8 @@ const QString kNoAlignSide = QStringLiteral("at_no_align_side");
 // it (mitcad#761).
 const QString kNoAlign = QStringLiteral("at_no_align");
 // The references' colours whatever comes before them (mitcad#656).
-const QColor kReference1Color(0x2c, 0xa0, 0x2c);
-const QColor kReference2Color(0x9b, 0x30, 0xff);
+const QColor kReference1Color = commandInputColor(2);
+const QColor kReference2Color = commandInputColor(3);
 const QString kTurnsPanel = QStringLiteral("at_turns");
 // An earlier definition's own placement fields (`plane` and `center`,
 // `belt_with`, `mesh_with` with its angle) and the `at` the inputs made of
@@ -1177,7 +1178,7 @@ QVector<InputDef> placeInputs(const PlacePanel& panel) {
       return sides && sides->implicit ? std::make_pair(QObject::tr("Reference 2"), kReference2Color)
                                       : std::make_pair(QObject::tr("Reference 1"), kReference1Color);
     };
-    align.color = QColor(0xd6, 0x33, 0x84);
+    align.color = commandInputColor(1); // apart from the references' and the inactive pink (mitcad#1041)
     inputs += {
         valueInput(kAngle, QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("0") + QChar(0x00B0))
             .withManipulator([panel, zeroShown](const CommandState& state, const CommandContext& context) -> std::optional<Manipulator> {

@@ -47,7 +47,7 @@ impl<'de> Deserialize<'de> for OccurrencePath {
             .map(Self)
             .map_err(|_| {
                 serde::de::Error::custom(format!(
-                    "invalid occurrence path '{text}': occurrence ids like \"O1/O4\""
+                    "invalid occurrence path “{text}”: occurrence ids like \"O1/O4\""
                 ))
             })
     }

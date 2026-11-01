@@ -211,7 +211,8 @@ struct PreferencePage {
 };
 
 const PreferencePage kPreferencePages[] = {
-    {"general", QT_TRANSLATE_NOOP("View", "General"), "autosave recovery activate component ask picked face"},
+    {"general", QT_TRANSLATE_NOOP("View", "General"),
+     "autosave recovery activate component ask picked face units inch new design"},
     {"navigation", QT_TRANSLATE_NOOP("View", "Navigation"), "mouse orbit pan zoom scheme"},
     {"display", QT_TRANSLATE_NOOP("View", "Display"),
      "camera perspective orthographic orientation view cube projection follow background environment render device gpu cuda ghost inactive components pick priority layout docked floating browser background rows card"},
@@ -363,6 +364,7 @@ ViewSettings ViewSettings::load() {
   loadNavigationDetails(store, s.navigation);
   s.ghostInactive = flag("ghostInactive", s.ghostInactive);
   s.activePickPriority = flag("activePickPriority", s.activePickPriority);
+  s.navigationBar = flag("navigationBar", s.navigationBar); // mitcad#1086
   const QString cube = store.value(kGroup + QStringLiteral("cubeProjection")).toString();
   for (const CubeProjection projection :
        {CubeProjection::FollowView, CubeProjection::Orthographic, CubeProjection::Perspective}) {
@@ -394,6 +396,7 @@ void ViewSettings::save() const {
   store.setValue(kGroup + QStringLiteral("ghostInactive"), ghostInactive);
   store.setValue(kGroup + QStringLiteral("activePickPriority"), activePickPriority);
   store.setValue(kGroup + QStringLiteral("cubeProjection"), cubeProjectionId(cubeProjection));
+  store.setValue(kGroup + QStringLiteral("navigationBar"), navigationBar); // mitcad#1086
 }
 
 void ViewSettings::colors(QColor& upper, QColor& lower, bool& gradient) const {
@@ -473,7 +476,7 @@ ViewController::ViewController(OcctViewer& viewer, CommandRegistry& registry, Do
 void ViewController::registerCommands() {
   const auto add = [this](const char* id, const QString& name, const char* icon, std::function<void()> run,
                           const QStringList& keywords = {}, const QString& tooltip = QString(),
-                          const char* ribbonGroup = nullptr) {
+                          const char* ribbonGroup = nullptr, const char* ribbonTab = "SOLID") {
     CommandDef def;
     def.id = QString::fromLatin1(id);
     def.name = name;
@@ -482,8 +485,8 @@ void ViewController::registerCommands() {
     def.mode = CommandDef::Mode::Any;
     def.tab.clear(); // the View menu, the command search and shortcuts
     if (ribbonGroup != nullptr) {
-      // Also a button of the SOLID tab's group.
-      def.tab = QStringLiteral("SOLID");
+      // Also a button of the tab's group (SOLID unless given).
+      def.tab = QString::fromLatin1(ribbonTab);
       def.group = QString::fromLatin1(ribbonGroup);
       def.pinned = true;
     }
@@ -529,13 +532,13 @@ void ViewController::registerCommands() {
         {QStringLiteral("render"), QStringLiteral("lighting"), QStringLiteral("light"), QStringLiteral("studio"),
          QStringLiteral("hdr"), QStringLiteral("exposure"), QStringLiteral("ground"), QStringLiteral("shadow")},
         tr("The rendered view's light, background, ground and exposure, kept in the design"));
-    // The final render to an image file (mitcad#48): a button of the
-    // ribbon's MAKE group next to 3D Print (mitcad#175), and View > Visual
+    // The final render to an image file (mitcad#48): the Solid tab's
+    // RENDER group (mitcad#175; MAKE until mitcad#1070), and View > Visual
     // Style.
     add("file.render_image", tr("Render Image…"), "render-image", [this] { showRenderImage(); },
         {QStringLiteral("render"), QStringLiteral("image"), QStringLiteral("picture"), QStringLiteral("png"),
          QStringLiteral("jpeg"), QStringLiteral("exr"), QStringLiteral("photo"), QStringLiteral("cycles")},
-        tr("Renders the view or a named view to an image file at a chosen size and quality"), "MAKE");
+        tr("Renders the view or a named view to an image file at a chosen size and quality"), "RENDER");
   }
   add("view.component_colors", tr("Component Colors"), "visual-style", [this] {
     m_settings.componentColors = !m_settings.componentColors;
@@ -555,7 +558,7 @@ void ViewController::registerCommands() {
       tr("Shows the design printer's bed and height; bodies that do not fit are marked"));
   add("view.grid", tr("Layout Grid"), "grid", [this] { setGridShown(!m_settings.gridShown); },
       {QStringLiteral("grid")}, tr("Shows the grid on the ground or sketch plane"));
-  add("view.snap_grid", tr("Snap to Grid"), "grid", [this] { setSnapToGrid(!m_settings.snapToGrid); },
+  add("view.snap_grid", tr("Snap to Grid"), "snap-grid", [this] { setSnapToGrid(!m_settings.snapToGrid); },
       {QStringLiteral("grid"), QStringLiteral("snap")}, tr("Sketch points that snap to nothing else snap to the grid"));
   add("view.grid_settings", tr("Grid Settings…"), "grid", [this] { showGridSettings(); },
       {QStringLiteral("grid"), QStringLiteral("spacing")});
@@ -575,7 +578,7 @@ void ViewController::registerCommands() {
   add("view.annotations", tr("Annotations…"), "measure", [this] { m_host.openAnnotations(); },
       {QStringLiteral("annotation"), QStringLiteral("dimension"), QStringLiteral("measurement"),
        QStringLiteral("tolerance"), QStringLiteral("note"), QStringLiteral("leader"), QStringLiteral("fit")},
-      tr("Lists, filters and edits the dimensions and notes kept in the design"));
+      tr("Lists, filters and edits the dimensions and notes kept in the design"), "ANNOTATE", "MAKE");
   add("view.named_view", tr("New Named View"), "named-view", [this] { saveNamedView(QString(), false); },
       {QStringLiteral("save view"), QStringLiteral("camera")}, tr("Saves the current view in the design"));
   add("view.set_home", tr("Set Current View as Home"), "home",
@@ -696,6 +699,19 @@ void ViewController::createMenus(QMenu* view, QMenu* tools, QMenu* help) {
   tools->addAction(preferences);
   help->addAction(action(QStringLiteral("help.shortcuts")));
   apply();
+}
+
+QList<QAction*> ViewController::visualStyleActions() const {
+  QList<QAction*> styles;
+  for (const StyleEntry& entry : kStyles) {
+    if (QAction* style = m_checks.value(QString::fromLatin1(entry.id))) {
+      styles << style;
+    }
+  }
+  if (QAction* rendered = m_checks.value(QStringLiteral("view.rendered"))) {
+    styles << nullptr << rendered;
+  }
+  return styles;
 }
 
 void ViewController::apply() {
@@ -1110,6 +1126,14 @@ void ViewController::showPreferences(const QString& page) {
   importTolerance->setValue(general->importTolerance);
   importTolerance->setToolTip(tr("How far replayed geometry of an imported design may be from the file's"));
   generalForm->addRow(tr("Import tolerance:"), importTolerance);
+  // The unit new designs start in (mitcad#1036): New and the untitled design
+  // at the start; opened and imported files keep their own units.
+  auto* newDesignUnits = new QComboBox;
+  newDesignUnits->setObjectName(QStringLiteral("newDesignUnits"));
+  newDesignUnits->addItems(GeneralSettings::newDesignUnitChoices());
+  newDesignUnits->setCurrentText(general->newDesignUnits);
+  newDesignUnits->setToolTip(tr("The length unit new designs start in; opened files keep their own"));
+  generalForm->addRow(tr("Default &units for new designs:"), newDesignUnits);
   // Create Sketch and the Construct commands on another component's face
   // ask whether to activate it (mitcad#960); the question's Don't ask
   // again turns this off. Saved when the dialog is accepted, at once in
@@ -1133,6 +1157,33 @@ void ViewController::showPreferences(const QString& page) {
   } else {
     connect(dialog.get(), &QDialog::accepted, askActivate, applyAskActivate);
   }
+#ifdef MITCAD_MACOS_NATIVE_UI
+  // The native macOS interface (mitcad#1056): Qt is the default; the AppKit
+  // frontend is an opt-in for the next starts (--ui overrides it for a
+  // run). Saved as it is changed in the Settings window.
+  auto* nativeInterface = new QCheckBox(tr("&Native macOS interface (experimental)"));
+  nativeInterface->setObjectName(QStringLiteral("nativeMacInterface"));
+  nativeInterface->setChecked(nativeUiPreference());
+  nativeInterface->setToolTip(tr("Start MitCad with an interface built from the windows and controls of macOS"));
+  control(generalForm, nativeInterface);
+  auto* nativeInterfaceNote = new QLabel(tr("Takes effect when MitCad starts again."));
+  nativeInterfaceNote->setObjectName(QStringLiteral("nativeMacInterfaceNote"));
+  nativeInterfaceNote->setEnabled(false); // the quiet colour of a hint
+  control(generalForm, nativeInterfaceNote);
+  const auto applyNativeInterface = [nativeInterface] {
+    const bool on = nativeInterface->isChecked();
+    if (on == nativeUiPreference()) {
+      return;
+    }
+    setNativeUiPreference(on);
+    qDebug().noquote() << QStringLiteral("Preferences: native macOS interface %1 (at the next start)").arg(onOff(on));
+  };
+  if (window != nullptr) {
+    connect(nativeInterface, &QCheckBox::toggled, host, applyNativeInterface);
+  } else {
+    connect(dialog.get(), &QDialog::accepted, nativeInterface, applyNativeInterface);
+  }
+#endif
   groups.insert(QStringLiteral("general"), generalBox);
   // Automatic updates (mitcad#9).
   auto* updatesBox = new UpdatePreferencesBox;
@@ -1320,8 +1371,8 @@ void ViewController::showPreferences(const QString& page) {
     });
     return button;
   };
-  auto* topButton = colorButton(top, tr("Top Colour"));
-  auto* bottomButton = colorButton(bottom, tr("Bottom Colour"));
+  auto* topButton = colorButton(top, tr("Top Color"));
+  auto* bottomButton = colorButton(bottom, tr("Bottom Color"));
   if (window != nullptr) {
     connect(this, &ViewController::displaySettingsChanged, host,
             [this, camera, background, top, bottom, topButton, bottomButton] {
@@ -1471,18 +1522,40 @@ void ViewController::showPreferences(const QString& page) {
     qDebug().noquote()
         << QStringLiteral("Preferences: active component first in picks %1").arg(onOff(m_settings.activePickPriority));
   };
+  // The navigation bar at the bottom of the view (mitcad#1086): shown by
+  // default; hidden here.
+  auto* navigationBar = new QCheckBox(tr("Show the na&vigation bar"));
+  navigationBar->setObjectName(QStringLiteral("navigationBar"));
+  navigationBar->setChecked(m_settings.navigationBar);
+  navigationBar->setToolTip(tr("Look At, Fit, Visual Style, Layout Grid and Snap to Grid at the bottom of the view"));
+  control(display, navigationBar);
+  const auto applyNavigationBar = [this, navigationBar] {
+    if (navigationBar->isChecked() == m_settings.navigationBar) {
+      return;
+    }
+    m_settings.navigationBar = navigationBar->isChecked();
+    m_settings.save();
+    qDebug().noquote() << QStringLiteral("Preferences: navigation bar %1")
+                              .arg(m_settings.navigationBar ? QStringLiteral("shown") : QStringLiteral("hidden"));
+    if (navigationBarChanged) {
+      navigationBarChanged(m_settings.navigationBar);
+    }
+  };
   if (window != nullptr) {
     connect(ghostInactive, &QCheckBox::toggled, host, applyGhostInactive);
     connect(activePickPriority, &QCheckBox::toggled, host, applyActivePickPriority);
+    connect(navigationBar, &QCheckBox::toggled, host, applyNavigationBar);
   } else {
     connect(dialog.get(), &QDialog::accepted, ghostInactive, applyGhostInactive);
     connect(dialog.get(), &QDialog::accepted, activePickPriority, applyActivePickPriority);
+    connect(dialog.get(), &QDialog::accepted, navigationBar, applyNavigationBar);
   }
   groups.insert(QStringLiteral("display"), displayBox);
 
   *commit = [this, general, top, bottom, navigation, camera, cubeProjection, background,
-             autosave, minutes, importTolerance, cacheBox, updatesBox, slicerBox, remoteBox, renderDevice, debugLog,
-             debugLogApplied, texturesBox, agentsBox, chatBox, fontsBox, layoutChoice, layoutApplied] {
+             autosave, minutes, importTolerance, newDesignUnits, cacheBox, updatesBox, slicerBox, remoteBox,
+             renderDevice, debugLog, debugLogApplied, texturesBox, agentsBox, chatBox, fontsBox, layoutChoice,
+             layoutApplied] {
     // Font folders for sketch text (mitcad#473).
     const QStringList fontFolders = fontsBox->chosen();
     if (fontFolders != sketch::savedFontFolders()) {
@@ -1548,7 +1621,12 @@ void ViewController::showPreferences(const QString& page) {
     chosen.autosave = autosave->isChecked();
     chosen.autosaveMinutes = minutes->value();
     chosen.importTolerance = importTolerance->value();
+    chosen.newDesignUnits = newDesignUnits->currentText();
     chosen.save();
+    // No open design changes: the next new one takes it (mitcad#1036).
+    if (chosen.newDesignUnits != general->newDesignUnits) {
+      qDebug().noquote() << QStringLiteral("Preferences: default units for new designs %1").arg(chosen.newDesignUnits);
+    }
     const VersionSettings author = remoteBox->chosenAuthor();
     author.save();
     qDebug().noquote() << QStringLiteral("Preferences: versions by git's user, else %1")
@@ -1696,6 +1774,7 @@ void ViewController::showPreferences(const QString& page) {
     }
     connect(minutes, &QSpinBox::valueChanged, host, changed);
     connect(importTolerance, &QDoubleSpinBox::valueChanged, host, changed);
+    connect(newDesignUnits, &QComboBox::currentIndexChanged, host, changed);
     connect(cacheBox, &CachePreferencesBox::changed, host, changed);
     connect(texturesBox, &TexturePreferencesBox::changed, host, changed);
     connect(agentsBox, &mcp::AgentPreferencesBox::changed, host, changed);

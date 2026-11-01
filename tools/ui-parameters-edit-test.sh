@@ -3,7 +3,7 @@
 # check-all sources: app/MainWindowParameterEdits.cpp app/MainWindow.cpp app/framework/CommandSessionParameters.cpp
 # check-all sources: app/framework/CommandSessionVisibility.cpp app/framework/ParameterEdits.cpp
 # check-all sources: app/framework/CommandPanelHeader.cpp app/framework/CommandSearch.cpp app/browser tools/cli
-# Change Parameters while a sketch or a feature is being created or edited
+# Edit Parameters while a sketch or a feature is being created or edited
 # (mitcad#564), through the real UI:
 #   - A design (mitcad-cli): Sketch1 (F1), a 60 x 40 rectangle whose width
 #     is the named dimension `width`, extruded by Extrude1 (F2) the user
@@ -13,7 +13,7 @@
 #     refused and the sketch keeps 50 mm; Undo and Redo in the sketch take
 #     the change back and again; Finish Sketch makes it part of the edit's
 #     one undo step (Body1 50 x 40 x 20).
-#   - Editing Extrude1: the panel's Change Parameters button opens the
+#   - Editing Extrude1: the panel's Edit Parameters button opens the
 #     table beside the panel; Extrude1's own d3 is left to the panel;
 #     depth = 30 mm evaluates the panel's `depth` again and previews; the
 #     panel then takes `depth + 5 mm`; OK: the parameter change and the
@@ -94,12 +94,12 @@ ui_start_app --open "$FILE"
 ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Timeline Sketch1 at" "the timeline is logged"
 
-echo "--- Editing Sketch1: SKETCH > MODIFY > Change Parameters"
+echo "--- Editing Sketch1: SKETCH > MODIFY > Edit Parameters"
 ui_mark
 ui_step "edit Sketch1 (double-click)"    ui_double_click_logged "Timeline Sketch1"
 ui_expect_new "Editing sketch F1 (Sketch1)" "Sketch1 is edited" 30
 ui_mark
-ui_step "Change Parameters (search)"     ui_command "Change Parameters"
+ui_step "Edit Parameters (search)"     ui_command "Edit Parameters"
 ui_expect_new "Command search chose sketch.parameters" "the search runs the SKETCH entry"
 ui_expect_new "Parameters dialog opened" "the table opened"
 ui_expect_new "Parameters during sketch Sketch1" "beside the sketch"
@@ -146,9 +146,9 @@ ui_mark
 ui_step "edit Extrude1 (double-click)"   ui_double_click_logged "Timeline Extrude1"
 ui_expect_new "Editing F2 with Extrude" "Extrude1 opens for editing" 30
 ui_expect_new "Extrude Distance: depth = 20 mm" "its distance is depth"
-ui_expect_new "Panel Extrude parameters at" "the panel's Change Parameters button is logged"
+ui_expect_new "Panel Extrude parameters at" "the panel's Edit Parameters button is logged"
 ui_mark
-ui_step "Change Parameters (the panel)"  ui_click_logged "Panel Extrude parameters"
+ui_step "Edit Parameters (the panel)"  ui_click_logged "Panel Extrude parameters"
 ui_expect_new "Parameters dialog opened" "the table opened beside the panel"
 ui_expect_new "Parameters during command Extrude editing Extrude1" "during the edit"
 ui_sync
@@ -193,9 +193,9 @@ ui_mark
 ui_step "edit Extrude1 (double-click)"   ui_double_click_logged "Timeline Extrude1"
 ui_expect_new "Editing F2 with Extrude" "Extrude1 opens for editing" 30
 ui_expect_new "Extrude Distance: depth + 5 mm = 35 mm" "its distance as edited"
-ui_expect_new "Panel Extrude parameters at" "the panel's Change Parameters button is logged"
+ui_expect_new "Panel Extrude parameters at" "the panel's Edit Parameters button is logged"
 ui_mark
-ui_step "Change Parameters (the panel)"  ui_click_logged "Panel Extrude parameters"
+ui_step "Edit Parameters (the panel)"  ui_click_logged "Panel Extrude parameters"
 ui_expect_new "Parameters during command Extrude editing Extrude1" "the table beside the edit"
 ui_sync
 ui_mark
@@ -221,12 +221,12 @@ ui_mark
 ui_step "extrude (E)"                    ui_key e
 ui_expect_new "Command Extrude started" "Extrude started"
 ui_expect_new "Extrude Profiles: 1 profile [profile $RECT of F3]" "it takes Sketch2's square"
-ui_expect_new "Panel Extrude parameters at" "the panel's Change Parameters button is logged"
+ui_expect_new "Panel Extrude parameters at" "the panel's Edit Parameters button is logged"
 ui_mark
 ui_step "distance depth"                 ui_type_in "Panel Extrude input distance" "depth"
 ui_expect_new "Extrude Distance: depth = 10 mm" "the distance is depth"
 ui_mark
-ui_step "Change Parameters (the panel)"  ui_click_logged "Panel Extrude parameters"
+ui_step "Edit Parameters (the panel)"  ui_click_logged "Panel Extrude parameters"
 ui_expect_new "Parameters during command Extrude" "the table beside the new feature"
 ui_sync
 ui_mark

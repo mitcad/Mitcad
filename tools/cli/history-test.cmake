@@ -64,7 +64,7 @@ if(NOT out MATCHES "\"branch\":\"main\"" OR NOT out MATCHES "\"commit\":\"[0-9a-
   message(FATAL_ERROR "project init made no first version: ${out}")
 endif()
 cli(fail history "${SOURCE}")
-if(NOT out MATCHES "is not in a Mitcad project")
+if(NOT out MATCHES "is not in a MitCad project")
   message(FATAL_ERROR "history of a file outside projects: ${out}")
 endif()
 
@@ -133,7 +133,7 @@ if(NOT out STREQUAL source_report)
   message(FATAL_ERROR "HEAD~2 opens differently:\n${out}")
 endif()
 cli(fail version show "${part}" 0000000)
-if(NOT out MATCHES "there is no version '0000000'")
+if(NOT out MATCHES "there is no version 0000000")
   message(FATAL_ERROR "a version that is not there: ${out}")
 endif()
 

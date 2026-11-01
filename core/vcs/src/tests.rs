@@ -244,7 +244,7 @@ fn only_projects_at_a_repository_root_have_history() {
     };
     // Not a project.
     fs::create_dir_all(scratch.join("plain")).unwrap();
-    assert!(error(&scratch.join("plain/a.mitcad")).contains("is not in a Mitcad project"));
+    assert!(error(&scratch.join("plain/a.mitcad")).contains("is not in a MitCad project"));
     // A project without a repository.
     Project::init(&scratch.join("loose")).unwrap();
     assert!(error(&scratch.join("loose/a.mitcad")).contains("has no version history"));
@@ -258,14 +258,14 @@ fn only_projects_at_a_repository_root_have_history() {
     );
     // A repository without the marker at its root.
     gix::init(scratch.join("code")).unwrap();
-    assert!(error(&scratch.join("code/a.mitcad")).contains("is not in a Mitcad project"));
+    assert!(error(&scratch.join("code/a.mitcad")).contains("is not in a MitCad project"));
 }
 
 #[test]
 fn a_version_has_the_saved_paths_and_their_brep_files() {
     let scratch = Scratch::new("commit");
     let (repo, mut doc, part) = project(&scratch);
-    fs::write(repo.root().join("notes.txt"), "not saved by Mitcad\n").unwrap();
+    fs::write(repo.root().join("notes.txt"), "not saved by MitCad\n").unwrap();
     let outcome = repo
         .commit(std::slice::from_ref(&part), "First version", &author())
         .unwrap();

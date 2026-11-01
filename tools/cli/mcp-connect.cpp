@@ -266,13 +266,30 @@ int mcpConnect(const std::string& instance, const std::string& chatSession) {
       return connectionError(error);
     }
     if (endpoints.isEmpty()) {
-      return connectionError(QStringLiteral("No running Mitcad instance; open the desktop application first"));
+      return connectionError(QStringLiteral("No running MitCad instance; open the desktop application first"));
     }
-    if (endpoints.size() != 1) {
-      return connectionError(QStringLiteral("Several Mitcad instances are running; use --list-instances and --instance ID"));
+    const auto chosen = std::max_element(endpoints.cbegin(), endpoints.cend(),
+        [](const mcp::Endpoint& a, const mcp::Endpoint& b) { return a.activatedAt < b.activatedAt; });
+    if (endpoints.size() > 1 && chosen->activatedAt == 0) {
+      return connectionError(QStringLiteral("Several MitCad instances are running; use --list-instances and --instance ID"));
     }
-    if (!authenticate(socket, endpoints.front(), kConnectTimeoutMs, chat)) {
-      return connectionError(QStringLiteral("Mitcad refused authentication; rediscover its running instances"));
+    if (!authenticate(socket, *chosen, kConnectTimeoutMs, chat)) {
+      return connectionError(QStringLiteral("MitCad refused authentication; rediscover its running instances"));
+    }
+    if (endpoints.size() > 1) {
+      const auto label = [](const mcp::Endpoint& endpoint) {
+        QString title = endpoint.title;
+        for (qsizetype index = 0; index < title.size(); ++index) {
+          if (!title.at(index).isPrint()) title[index] = QChar(' ');
+        }
+        return QStringLiteral("%1 (%2)").arg(endpoint.instance, title);
+      };
+      QStringList others;
+      for (const mcp::Endpoint& endpoint : endpoints) {
+        if (endpoint.instance != chosen->instance) others << label(endpoint);
+      }
+      std::cerr << "mitcad-cli mcp: connected to " << label(*chosen).toStdString()
+                << ", the window active last; others: " << others.join(QStringLiteral(", ")).toStdString() << '\n';
     }
   } else {
     // Only the named record is probed (mitcad#437), and the connection that
@@ -284,7 +301,7 @@ int mcpConnect(const std::string& instance, const std::string& chatSession) {
     const auto named = std::find_if(records.cbegin(), records.cend(),
                                     [&](const mcp::Endpoint& record) { return record.instance == requested; });
     if (named == records.cend() || !authenticate(socket, *named, kConnectTimeoutMs, chat)) {
-      return connectionError(QStringLiteral("No running Mitcad instance '%1'").arg(requested));
+      return connectionError(QStringLiteral("No running MitCad instance '%1'").arg(requested));
     }
   }
 
@@ -316,7 +333,7 @@ int mcpConnect(const std::string& instance, const std::string& chatSession) {
         response.remove(0, newline + 1);
         const QJsonDocument message = QJsonDocument::fromJson(line);
         if (!message.isObject() || message.object().value(QStringLiteral("jsonrpc")) != QStringLiteral("2.0")) {
-          fail(QStringLiteral("Mitcad sent an invalid MCP message"));
+          fail(QStringLiteral("MitCad sent an invalid MCP message"));
           return;
         }
         const QJsonObject envelope = message.object();
@@ -337,7 +354,7 @@ int mcpConnect(const std::string& instance, const std::string& chatSession) {
     }
   });
   QObject::connect(&socket, &QTcpSocket::disconnected, &app, [&] {
-    fail(QStringLiteral("The Mitcad instance disconnected"));
+    fail(QStringLiteral("The MitCad instance disconnected"));
   });
   QTimer pump;
   QObject::connect(&pump, &QTimer::timeout, &app, [&] {
@@ -355,7 +372,7 @@ int mcpConnect(const std::string& instance, const std::string& chatSession) {
         ++pending;
       }
       if (socket.write(frame) != frame.size()) {
-        fail(QStringLiteral("Could not send an MCP message to Mitcad"));
+        fail(QStringLiteral("Could not send an MCP message to MitCad"));
         return;
       }
     }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/files
+# check-all sources: app/files app/framework/QuickAccessGroup.cpp
 # Autosave (P8) through the real UI, every 2 s (MITCAD_TEST_AUTOSAVE_SECONDS):
 #   1. A changed document is written to the recovery folder in the user's
 #      data ($XDG_DATA_HOME/Mitcad/Mitcad/autosave): the project file and
@@ -331,9 +331,13 @@ expect_title "block.mitcad - MitCad"
 [ "$(file_d3 "$FILE")" = "[20.0]" ] || ui_fail "the file has d3 $(file_d3 "$FILE")"
 echo "ok   the file has the recovered change"
 expect_files "$FOLDER" "only this session's lock is left" "$third.lock"
+# Saved, the design has nothing to save (mitcad#1090): Ctrl+S neither
+# writes nor asks.
+ui_save_state disabled "saved: Save has nothing to do"
 ui_mark
 ui_step "save again (Ctrl+S)"            ui_key ctrl+s
-ui_expect_new "Saved $FILE" "saved again"
+ui_sync
+no_new_since "Saved $FILE" "nothing written again"
 no_new_since "Save conflict" "without asking again"
 
 echo "--- A lock without files goes; a damaged session; an untitled one"

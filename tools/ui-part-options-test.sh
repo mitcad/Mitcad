@@ -13,7 +13,7 @@
 #      row: 800 x 200 x 20.
 #   2. Edit Options… of the inserted board: Length bound to the design's
 #      parameter Shelf_L (700 mm): the board follows (700 x 200 x 20);
-#      Shelf_L set to 900 mm in Change Parameters: it follows again.
+#      Shelf_L set to 900 mm in Edit Parameters: it follows again.
 #   3. A closed table (a spacer, its rows Short and Long): chosen by its
 #      rows as before, Long inserted: 20 x 20 x 30.
 #
@@ -168,7 +168,7 @@ ui_expect_new "Edit Options of $NAME: Color = 'Black', Length = Shelf_L" "one co
 expect_volume_new "Body [^(]* ([^)]*): volume [0-9.]* -> \([0-9.]*\) mm3" 2800000 "the board follows Shelf_L, 700 mm"
 
 ui_mark
-ui_step "Change Parameters"                ui_command "Change Parameters"
+ui_step "Edit Parameters"                ui_command "Edit Parameters"
 ui_focus_dialog '^Parameters$'
 ui_expect_log "Parameters Shelf_L expression at" "Shelf_L's cell is logged"
 ui_mark

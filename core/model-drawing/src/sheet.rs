@@ -13,8 +13,8 @@ use super::P2;
 pub enum Pen {
     /// Visible edges: continuous wide.
     Thick,
-    /// Dimension, extension and leader lines, tangent edges, the title
-    /// block's cells: continuous narrow.
+    /// Dimension, extension and leader lines, tangent edges, a thread's
+    /// roots, the title block's cells: continuous narrow.
     Thin,
     /// Hidden edges: dashed narrow.
     Hidden,
@@ -27,14 +27,39 @@ pub enum Pen {
 }
 
 impl Pen {
-    /// The line width, mm.
+    /// Every pen, in the order of the table the drawing query gives.
+    pub const ALL: [Pen; 6] = [
+        Self::Thick,
+        Self::Thin,
+        Self::Hidden,
+        Self::Hatch,
+        Self::Chain,
+        Self::Frame,
+    ];
+
+    /// The line width, mm: ISO 128's 0.35 series (mitcad#1112), wide
+    /// lines twice as wide as narrow ones. The one table of widths: the
+    /// PDF and SVG writers take them from here and the application's sheet
+    /// from the drawing query (`pens`).
     pub fn width(self) -> f64 {
         match self {
-            Self::Thick => 0.5,
-            Self::Thin | Self::Chain => 0.25,
-            Self::Hidden => 0.35,
-            Self::Hatch => 0.18,
-            Self::Frame => 0.7,
+            Self::Thick => 0.35,
+            // ISO 128 draws hidden outlines with the narrow line.
+            Self::Thin | Self::Chain | Self::Hidden => 0.18,
+            Self::Hatch => 0.13,
+            Self::Frame => 0.5,
+        }
+    }
+
+    /// Its name in the drawing query's items.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Thick => "thick",
+            Self::Thin => "thin",
+            Self::Hidden => "hidden",
+            Self::Hatch => "hatch",
+            Self::Chain => "chain",
+            Self::Frame => "frame",
         }
     }
 

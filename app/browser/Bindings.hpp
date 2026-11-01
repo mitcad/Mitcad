@@ -18,9 +18,9 @@ namespace mitcad {
 // appearance, a feature's suppression and the visibility of a body or an
 // occurrence follow an expression of parameters. The context menus open the
 // dialogs below for the conditions; an appearance or a material varies with
-// an option in the assignment panel of the Appearances and Materials windows
-// (mitcad#861, AssignmentPanel.hpp). The browser and the timeline mark a
-// bound item with an fx badge, the expression in its tooltip.
+// an option by the fx of the Material and Appearance tools (mitcad#861,
+// mitcad#1059). The browser and the timeline mark a bound item with an fx
+// badge, the expression in its tooltip.
 
 // An icon with a small "fx" in its lower right corner: the item follows an
 // expression.

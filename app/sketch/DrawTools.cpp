@@ -279,7 +279,7 @@ public:
       m_end = m_start;
       m_c.setFields(fields());
       m_c.hint(QObject::tr("Line: click the end point, or type the length (Tab: angle). "
-                           "Drag from the end for a tangent arc."));
+                           "Drag from the end for a tangent arc; a right-click ends the chain."));
       return;
     }
     if (m_state != State::Chain) {
@@ -374,6 +374,9 @@ private:
     QString type;
     QString other;
     V2 at;
+    // A tangent to a circle or arc the end touches (mitcad#1024): the snap
+    // that holds the end on it.
+    std::optional<Snap> hold;
   };
 
   static QVector<FieldSpec> fields() {
@@ -448,7 +451,7 @@ private:
       const double offset = dist(projected, p) / px;
       if (offset <= bestOffset) {
         bestOffset = offset - 1e-9; // the first of equal options wins
-        best = Inference{o.type, o.other, projected};
+        best = Inference{o.type, o.other, projected, std::nullopt};
       }
     }
     return best;
@@ -467,9 +470,24 @@ private:
     const auto length = m_c.fieldValue(QStringLiteral("length"));
     const auto angle = m_c.fieldValue(QStringLiteral("angle"));
     const bool free = m_snap.kind == Snap::Kind::None || m_snap.kind == Snap::Kind::Grid;
+    // Touching a circle or arc of the sketch (mitcad#1024): the end goes to
+    // the touching point when the cursor is that near, as an inferred
+    // direction moves it, and the line takes a tangent there.
+    std::optional<Snap> touch;
+    const bool ontoCurve = m_snap.kind == Snap::Kind::OnCurve && m_snap.axis.isEmpty();
+    if (!angle && !length && !m_plan && (free || ontoCurve)) {
+      QSet<QString> skip;
+      if (!m_previous.isEmpty()) {
+        skip.insert(m_previous);
+      }
+      touch = tangentTouch(m_c.model(), m_start, end, 6.0 * m_c.pixel(), skip);
+    }
     if (angle) {
       const V2 dir = typedDirection(*angle, end);
       end = m_start + dir * (length ? *length : std::max(0.0, dot(end - m_start, dir)));
+    } else if (touch) {
+      m_inference = Inference{QStringLiteral("tangent"), touch->curve, touch->at, touch};
+      end = touch->at;
     } else {
       if (free || length) {
         if (const auto inference = infer(end)) {
@@ -502,7 +520,8 @@ private:
     if (dist(m_start, m_end) <= 1e-9) {
       return;
     }
-    const Snap endSnap = at(snap, m_end);
+    // An end moved onto the circle or arc it touches is held there.
+    const Snap endSnap = m_inference && m_inference->hold ? *m_inference->hold : at(snap, m_end);
     SketchOp op(m_c);
     QJsonObject cmd = op.command(QStringLiteral("sketch.add_line"));
     const QJsonValue startInput = m_startPoint.isEmpty() ? op.pointInput(m_startSnap) : QJsonValue(m_startPoint);
@@ -522,21 +541,23 @@ private:
     const QString line = made(result).value(0);
     QString startPoint;
     QString endPoint;
+    V2 drawnStart = m_start;
+    V2 drawnEnd = m_end;
     if (const CurveData* c = op.model().curve(line)) {
       startPoint = c->start;
       endPoint = c->end;
+      drawnStart = c->curve.a;
+      drawnEnd = c->curve.b;
     }
     QString inferred;
     const auto angle = m_c.fieldValue(QStringLiteral("angle"));
     if (m_inference) {
       inferred = m_inference->type;
-    } else if (angle && m_previous.isEmpty()) {
-      const double a = normalizeAngle(*angle);
-      for (int quarter = 0; quarter <= 4; ++quarter) {
-        if (std::abs(a - quarter * kPi / 2.0) < 1e-9) {
-          inferred = quarter % 2 == 0 ? QStringLiteral("horizontal") : QStringLiteral("vertical");
-        }
-      }
+    } else if (!angle || m_previous.isEmpty()) {
+      // Exactly level or plumb as drawn, a typed angle of the first line
+      // included (mitcad#1024); a typed angle to the previous line is its
+      // angle dimension's.
+      inferred = axisAlignment(drawnStart, drawnEnd);
     }
     // A line along an axis both its ends lie on (mitcad#948): the end held
     // on the axis and a horizontal or vertical constraint would say the
@@ -556,16 +577,6 @@ private:
     if (!shares(endSnap) && !endOnAxis) {
       op.constrain(endPoint, endSnap);
     }
-    if (onAxis && !endOnAxis) {
-      qDebug().noquote() << QStringLiteral("Line %1 lies on the sketch %2 axis: no %3 constraint")
-                                .arg(line, along, inferred);
-    } else if (inferred == QStringLiteral("horizontal") || inferred == QStringLiteral("vertical")) {
-      op.addConstraint({{QStringLiteral("type"), inferred}, {QStringLiteral("line"), line}});
-    } else if (!inferred.isEmpty()) {
-      op.addConstraint({{QStringLiteral("type"), inferred},
-                        {QStringLiteral("a"), m_inference->other},
-                        {QStringLiteral("b"), line}});
-    }
     if (m_c.typed(QStringLiteral("length"))) {
       op.addDimension({{QStringLiteral("type"), QStringLiteral("length")}, {QStringLiteral("line"), line}},
                       m_c.fieldExpression(QStringLiteral("length")));
@@ -580,6 +591,25 @@ private:
       takenBack(m_c, op, name());
       return;
     }
+    // The inferred direction after the typed dimensions and the palette's
+    // Auto constraints, which the user chose (mitcad#1024): one they make
+    // redundant (a line the palette's perpendicular makes plumb) is
+    // skipped, not the user's.
+    if (onAxis && !endOnAxis) {
+      qDebug().noquote() << QStringLiteral("Line %1 lies on the sketch %2 axis: no %3 constraint")
+                                .arg(line, along, inferred);
+    } else if (inferred == QStringLiteral("horizontal") || inferred == QStringLiteral("vertical")) {
+      // Only when safe: a direction the line has only nearly (an end
+      // snapped a pixel off level) is not forced on it.
+      op.addAuto({{QStringLiteral("type"), inferred}, {QStringLiteral("line"), line}});
+    } else if (!inferred.isEmpty() && m_inference) {
+      op.addAuto({{QStringLiteral("type"), inferred},
+                  {QStringLiteral("a"), m_inference->other},
+                  {QStringLiteral("b"), line}});
+    }
+    // Tangent where an end lies on a circle or arc and the line runs
+    // along it there.
+    op.addTangents(line);
     op.commit();
     m_c.recordAutoEntity(line);
     const V2 from = m_start;
@@ -644,6 +674,7 @@ private:
     if (!shares(snap)) {
       op.constrain(chainEnd, snap);
     }
+    op.addTangents(arc);
     op.commit();
     if (const auto p = m_c.model().pointAt(chainEnd)) {
       m_start = *p;
@@ -659,10 +690,15 @@ private:
     m_startAxes = axesAt(m_c.model(), snap);
     m_end = m_start;
     m_c.setFields(fields());
-    m_c.hint(QObject::tr("Line: click the end point; double-click or Esc ends the chain."));
+    m_c.hint(QObject::tr("Line: click the end point; double-click, Esc or a right-click ends the chain."));
   }
 
   void endChain() {
+    if (m_state != State::First) {
+      // The chain's end by any of its ways: a double-click, a click on its
+      // last point, Enter, Esc or a right-click (mitcad#1085).
+      qDebug() << "Line chain ended";
+    }
     m_state = State::First;
     m_previous.clear();
     m_startPoint.clear();
@@ -842,7 +878,7 @@ protected:
   QString prompt(int clicked) const override {
     if (m_rounded) {
       if (m_mode == QStringLiteral("center")) {
-        return clicked == 0 ? QObject::tr("Center Rounded Rectangle: click the centre.")
+        return clicked == 0 ? QObject::tr("Center Rounded Rectangle: click the center.")
                             : QObject::tr("Center Rounded Rectangle: click a corner, or type the width "
                                           "(Tab: height, corner radius).");
       }
@@ -851,7 +887,7 @@ protected:
                                         "(Tab: height, corner radius).");
     }
     if (m_mode == QStringLiteral("center")) {
-      return clicked == 0 ? QObject::tr("Center Rectangle: click the centre.")
+      return clicked == 0 ? QObject::tr("Center Rectangle: click the center.")
                           : QObject::tr("Center Rectangle: click a corner, or type the width (Tab: height).");
     }
     if (m_mode == QStringLiteral("three_point")) {
@@ -1094,6 +1130,11 @@ protected:
     if (m_c.typed(QStringLiteral("height")) && !heightDimension.isEmpty()) {
       op.addDimension(heightDimension, m_c.fieldExpression(QStringLiteral("height")));
     }
+    // Sides that touch a circle or arc where a corner lies on it
+    // (mitcad#1024).
+    for (const QString& side : lines) {
+      op.addTangents(side);
+    }
     op.commit();
     if (m_rounded) {
       // The next rounded rectangle starts with this radius.
@@ -1268,7 +1309,7 @@ protected:
                             : QObject::tr("%1: click near where the circle goes, or type its diameter.").arg(name());
     }
     if (m_mode == QStringLiteral("center")) {
-      return clicked == 0 ? QObject::tr("Circle: click the centre.")
+      return clicked == 0 ? QObject::tr("Circle: click the center.")
                           : QObject::tr("Circle: click a point on the circle, or type the diameter.");
     }
     if (m_mode == QStringLiteral("two_point")) {
@@ -1599,7 +1640,7 @@ protected:
 
   QString prompt(int clicked) const override {
     if (m_mode == QStringLiteral("center")) {
-      return clicked == 0   ? QObject::tr("Center Point Arc: click the centre.")
+      return clicked == 0   ? QObject::tr("Center Point Arc: click the center.")
              : clicked == 1 ? QObject::tr("Center Point Arc: click the start, or type the radius.")
                             : QObject::tr("Center Point Arc: click the end, or type the angle.");
     }
@@ -1760,6 +1801,9 @@ protected:
       takenBack(m_c, op, name());
       return;
     }
+    // Tangent where an end lies on a circle, an arc or a line and the arc
+    // runs along it there (mitcad#1024).
+    op.addTangents(arc);
     op.commit();
     m_c.recordAutoEntity(arc);
     if (const CurveData* c = m_c.model().curve(arc)) {
@@ -1819,7 +1863,7 @@ protected:
              : clicked == 1 ? QObject::tr("Edge Polygon: click the end of the edge (Tab: sides).")
                             : QObject::tr("Edge Polygon: click the side the polygon is on.");
     }
-    return clicked == 0 ? QObject::tr("%1: click the centre.").arg(name())
+    return clicked == 0 ? QObject::tr("%1: click the center.").arg(name())
                         : QObject::tr("%1: click the size, or type the radius (Tab: sides).").arg(name());
   }
 
@@ -2044,8 +2088,8 @@ protected:
       return QObject::tr("%1: click the width, or type it.").arg(name());
     }
     if (m_mode == QStringLiteral("center_point")) {
-      return clicked == 0 ? QObject::tr("Center Point Slot: click the centre.")
-                          : QObject::tr("Center Point Slot: click the centre of an end.");
+      return clicked == 0 ? QObject::tr("Center Point Slot: click the center.")
+                          : QObject::tr("Center Point Slot: click the center of an end.");
     }
     if (m_mode == QStringLiteral("three_point_arc")) {
       return clicked == 0   ? QObject::tr("Three Point Arc Slot: click the start.")
@@ -2053,7 +2097,7 @@ protected:
                             : QObject::tr("Three Point Arc Slot: click a point on the arc.");
     }
     if (m_mode == QStringLiteral("center_point_arc")) {
-      return clicked == 0   ? QObject::tr("Center Point Arc Slot: click the centre.")
+      return clicked == 0   ? QObject::tr("Center Point Arc Slot: click the center.")
              : clicked == 1 ? QObject::tr("Center Point Arc Slot: click the start.")
                             : QObject::tr("Center Point Arc Slot: click the end.");
     }
@@ -2186,6 +2230,22 @@ protected:
       holdPoint(op, result, click(0), snapOf(0), false);
       holdPoint(op, result, click(1), snapOf(1), false);
     }
+    // A straight slot drawn exactly level or plumb keeps its direction
+    // (mitcad#1024): on its construction centre line.
+    if (!arcSlot()) {
+      const SketchModel& now = op.model();
+      for (const QString& id : entities(result)) {
+        const CurveData* c = now.curve(id);
+        if (c == nullptr || !c->isLine() || !c->construction) {
+          continue;
+        }
+        const QString along = axisAlignment(c->curve.a, c->curve.b);
+        if (!along.isEmpty()) {
+          op.addAuto({{QStringLiteral("type"), along}, {QStringLiteral("line"), id}});
+        }
+        break;
+      }
+    }
     op.commit();
     qDebug().noquote() << QStringLiteral("Added slot, width %1 mm [%2]")
                               .arg(w)
@@ -2254,7 +2314,7 @@ protected:
   int clicks() const override { return 3; }
 
   QString prompt(int clicked) const override {
-    return clicked == 0   ? QObject::tr("Ellipse: click the centre.")
+    return clicked == 0   ? QObject::tr("Ellipse: click the center.")
            : clicked == 1 ? QObject::tr("Ellipse: click the end of the major axis.")
                           : QObject::tr("Ellipse: click a point on the ellipse, or type the minor radius.");
   }

@@ -17,12 +17,16 @@
 
 #include "../OcctViewer.hpp"
 #include "Diagnostics.hpp"
+#include "Theme.hpp"
 
 namespace mitcad {
 namespace {
 
-const QColor kHandleColor(0xe0, 0x7b, 0x1a);
-const QColor kActiveColor(0x1f, 0x7a, 0xff);
+// The handles' orange and the selection's blue for the one dragged or
+// hovered; the ink of the boxes over the view (mitcad#1041).
+const QColor kHandleColor = viewColor(ColorRole::Handle, false);
+const QColor kActiveColor = viewColor(ColorRole::Select, false);
+const QColor kInk = viewColor(ColorRole::ViewInk, false);
 constexpr double kArrowPixels = 34.0;
 constexpr double kRingPixels = 70.0;
 constexpr double kGrabPixels = 9.0;
@@ -642,7 +646,7 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
     const QColor color = active ? kActiveColor : kHandleColor;
     if (m_handles[i].manipulator.kind == Manipulator::Kind::Marker) {
       const QPointF at = drawn.handle;
-      painter.setPen(QPen(QColor(0x2b, 0x3a, 0x4a), 2.0));
+      painter.setPen(QPen(kInk, 2.0));
       painter.setBrush(QColor(0xff, 0xd1, 0x80));
       painter.drawEllipse(at, 7.0, 7.0);
       painter.drawLine(at + QPointF(-11, 0), at + QPointF(11, 0));
@@ -652,12 +656,12 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
       painter.setPen(Qt::NoPen);
       painter.setBrush(QColor(0xff, 0xf7, 0xe8, 235));
       painter.drawRoundedRect(box, 3, 3);
-      painter.setPen(QColor(0x2b, 0x3a, 0x4a));
+      painter.setPen(kInk);
       painter.drawText(box, Qt::AlignCenter, m_handles[i].label);
     } else if (m_handles[i].manipulator.kind == Manipulator::Kind::Toggle) {
       // A pattern's instance (P9): filled while it is made, hollow when
       // suppressed.
-      painter.setPen(QPen(active ? kActiveColor : QColor(0x2b, 0x3a, 0x4a), 1.5));
+      painter.setPen(QPen(active ? kActiveColor : kInk, 1.5));
       painter.setBrush(m_handles[i].manipulator.on ? color : QColor(Qt::white));
       painter.drawEllipse(drawn.handle, 6.0, 6.0);
     } else if (m_handles[i].manipulator.kind == Manipulator::Kind::Arrow) {
@@ -718,7 +722,7 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
       painter.setPen(QPen(color, 1.0));
       painter.setBrush(QColor(0xff, 0xff, 0xff, 235));
       painter.drawRoundedRect(m_boxes[i], 4, 4);
-      painter.setPen(QColor(0x2b, 0x3a, 0x4a));
+      painter.setPen(kInk);
       painter.drawText(m_boxes[i], Qt::AlignCenter, m_handles[i].text);
     }
     if (static_cast<int>(i) == m_drag && m_visualValue && snapped.valid) {
@@ -737,7 +741,9 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
     const QRectF text = painter.fontMetrics().boundingRect(m_hint).adjusted(-14, -7, 14, 7);
     const QRectF box(QPointF((width() - text.width()) / 2.0, 16.0), text.size());
     painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(0x2b, 0x3a, 0x4a, 215));
+    QColor pill = kInk;
+    pill.setAlpha(215);
+    painter.setBrush(pill);
     painter.drawRoundedRect(box, box.height() / 2.0, box.height() / 2.0);
     painter.setPen(Qt::white);
     painter.drawText(box, Qt::AlignCenter, m_hint);

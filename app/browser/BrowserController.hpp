@@ -20,7 +20,9 @@
 #include "../print/PurgeVolumesDialog.hpp"
 #include "PropertySetsDialog.hpp"
 
+class QAction;
 class QEvent;
+class QMenu;
 class QToolButton;
 class QWidget;
 
@@ -87,11 +89,13 @@ public:
   // (Options, Rows, Rules); the window follows the model.
   void openConfigurations();
   ConfigurationsDialog* configurationsDialog() const;
-  // The Configuration bar at the top of the browser (mitcad#807).
+  // The Configuration bar (mitcad#807), the content of the Configuration
+  // panel above the browser (mitcad#1020).
   ConfigurationBar* configurationBar() const { return m_configurationBar; }
-  // Edit Appearances (mitcad#46); Assign gives the targets (bodies, and
-  // faces: mitcad#53) the selected appearance, or fills the rows of the
-  // option it varies with (the assignment panel, mitcad#861).
+  // Appearance… of the context menus: the Appearance tool (mitcad#1059)
+  // started with the targets (bodies, and faces: mitcad#53); none: the
+  // Appearances window (Edit Appearances, mitcad#46), which only manages
+  // the appearances.
   void openAppearances(const Selection& targets);
   // Design Policy (mitcad#220) of a component (C0 the root): its seven
   // settings, presets and violations; OK sets it as one undo step.
@@ -103,13 +107,28 @@ public:
   // Property Sets (mitcad#496) of a body, an occurrence and its component
   // (the window follows the model; another target replaces the shown one).
   void openPropertySets(const PropertyTarget& target);
-  // Materials (mitcad#655; Material... and Edit Materials): Assign gives
-  // the bodies (uids) the selected material, or with `component` (a uid)
-  // makes it that component's default; neither: no Assign. The window
-  // follows the model; the bodies' material can vary with an option there
-  // (the assignment panel, mitcad#861).
-  // `keepOpen`: Assign leaves the window open (3D Print's Assign materials…).
-  void openMaterial(const QStringList& bodies, const QString& component = QString(), bool keepOpen = false);
+  // Material ▸ More… and the other Material… entries: the Material tool
+  // (mitcad#1059) started with the bodies (uids) or the component (a uid)
+  // whose default material it sets; neither: the Materials window (Edit
+  // Materials, mitcad#655), which only manages the materials.
+  void openMaterial(const QStringList& bodies, const QString& component = QString());
+  // The Materials window on the material the bodies (uids) are made of,
+  // when they share one, or on the default material of `component` (a
+  // uid): 3D Print's Materials pencil (mitcad#655) and the Material row of
+  // Property Sets (mitcad#761), which edit it; the window assigns nothing
+  // (mitcad#1059: the Material tool does). Logged `Materials opened for
+  // bodies F1.b0` (`for component C1`).
+  void openMaterialsOf(const QStringList& bodies, const QString& component = QString());
+  // Material ▸ of the view's and the Browser's context menus (mitcad#1046,
+  // BrowserMaterialMenu.cpp): a submenu of `owner` for the bodies (uids)
+  // or a component's default material (`component`, a uid). When it opens:
+  // the design's materials with their swatches, the one every target has
+  // checked, then the library materials assigned last (MaterialMenuChoices),
+  // then More… (openMaterial: the Material tool). A pick assigns, one undo
+  // step, logged "Material assigned from menu: PLA Plastic to 2 bodies".
+  // `bound`: a target's material follows an expression, the fx mark.
+  QMenu* materialMenu(QWidget* owner, const QStringList& bodies, const QString& component = QString(),
+                      bool bound = false);
   // Printers and Processes (mitcad#655; Edit Printers and Processes, Edit…
   // of 3D Print's and Property Sets' Printer and Process rows): the item
   // `key` ("<place>/<id>") of `kind` (printer or process) selected, none
@@ -132,6 +151,10 @@ public:
   // Reorient Design (mitcad#502): the whole design turned by quarter turns,
   // previewed while its dialog is open; OK keeps it as one undo step.
   void openReorient();
+  // File › Design Properties… (mitcad#1088): the design's summary (the
+  // root's property set Summary) and statistics; OK sets the summary's
+  // edited fields as one undo step (`set_design_summary`).
+  void openDesignProperties();
   // Find in Browser for an item picked in the view (a face finds its body).
   void findInBrowser(const SelectionItem& item);
   // The view's context menu Hide submenu (mitcad#347): the bodies (uids) and
@@ -143,6 +166,17 @@ public:
   // bulbs, one undo step.
   void hideBodies(const Selection& items);
   void hideOccurrences(const Selection& items);
+  // Transparent (mitcad#1093), in the view's and the browser's context
+  // menus: the bodies of the faces, edges, vertices and bodies of the items
+  // and the occurrences of their components (not the root), each once.
+  // offersTransparent: the items have such a target; allTransparent: every
+  // target is transparent now (the entry is checked); setTransparent makes
+  // them all transparent or opaque, one undo step (one command as its own),
+  // in any mode as the light bulbs, and logs "Transparent: Body2, Part:1"
+  // or "Opaque: ...".
+  static bool offersTransparent(const Selection& items);
+  bool allTransparent(const Selection& items) const;
+  void setTransparent(const Selection& items, bool transparent);
   // The view's context menu Delete submenu (mitcad#494), each one undo
   // step: Delete Body takes the bodies out (a remove_body feature in each
   // body's component), Delete Component deletes the occurrences, and a
@@ -160,11 +194,16 @@ public:
   // Bindings (mitcad#809; Bindings.hpp): Suppress When… of a feature and
   // Show When… of a body or an occurrence (its path, "O1/O4"). Each sets
   // the expression the dialog gives (one undo step), or removes it. An
-  // appearance or a material varies with an option in the assignment panel
-  // of Appearance… and Material… (mitcad#861, AssignmentPanel.hpp).
+  // appearance or a material varies with an option by the fx of the
+  // Appearance and Material tools (mitcad#861, mitcad#1059).
   void suppressWhen(const QString& feature);
   void showBodyWhen(const QString& body);
   void showOccurrenceWhen(const QString& path);
+  // A message history's row about a feature clicked (mitcad#1042): the
+  // feature selected on the timeline and in the Browser, as the failures
+  // summary reveals it, without saying its error again. False when the
+  // design has no such feature (any more).
+  bool selectFeature(const QString& uid) { return reveal(uid, false); }
 
 protected:
   // Logs where the magnifier button is, for UI tests.
@@ -275,9 +314,16 @@ private:
   void moveHistory(const QString& uid);
   void paste(bool asNew);
   void changeUnits();
-  void reveal(const QString& uid);
+  // `say`: its error or warning on the status line too.
+  bool reveal(const QString& uid, bool say = true);
   void updateFailures();
   bool canChange(bool visibilityOnly = false);
+  // Material ▸ (mitcad#1046): its entries when it opens, and a pick.
+  void fillMaterialMenu(QMenu* submenu, QAction* more, const QStringList& bodies, const QString& component);
+  // `appearance`: one of the material's appearances (Material ▸ PLA ▸
+  // Black, mitcad#1055); empty: as the Materials window's Assign.
+  void assignMaterialFromMenu(const LibraryItem& item, const QStringList& bodies, const QString& component,
+                              const QString& appearance = QString());
   const DocumentSnapshot::Occurrence* occurrence(const QString& path) const;
   int undoDepth() const;
 

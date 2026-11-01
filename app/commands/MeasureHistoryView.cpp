@@ -16,7 +16,6 @@
 #include <QMenu>
 #include <QPalette>
 #include <QPointer>
-#include <QPushButton>
 #include <QRect>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -88,45 +87,9 @@ MeasureHistoryView::MeasureHistoryView(const MeasureHistory& history, QWidget* p
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(6);
 
-  // The actions on one row: Keep as Dimension (mitcad#649), the
-  // measurement shown kept in the design; Annotate ▾, its menu.
-  auto* actions = new QHBoxLayout;
-  actions->setSpacing(6);
-  m_keep = new QPushButton(tr("Keep as Dimension"), this);
-  m_keep->setObjectName(QStringLiteral("measureKeep"));
-  m_keepTip = tr("Keep this measurement in the design as a dimension, drawn in the view");
-  m_keep->setToolTip(m_keepTip);
-  m_keep->setEnabled(false);
-  m_annotate = new QPushButton(tr("Annotate ▾"), this);
-  m_annotate->setObjectName(QStringLiteral("measureAnnotate"));
-  m_annotate->setToolTip(tr("A note, a datum label, a frame or a hole callout on the pick, or the Annotations window"));
-  for (QPushButton* button : {m_keep, m_annotate}) {
-    button->setFocusPolicy(Qt::NoFocus);
-    button->setAutoDefault(false);
-    actions->addWidget(button);
-  }
-  actions->addStretch();
-  layout->addLayout(actions);
-  // Annotate's menu: a leader on the one pick shown (mitcad#702: Note…;
-  // phase 2: Datum Label…, Frame…; mitcad#902: Hole Callout), then the
-  // Annotations window. Their letters choose them from the keyboard.
-  m_annotateMenu = new QMenu(this);
-  m_annotateMenu->setToolTipsVisible(true);
-  m_note = m_annotateMenu->addAction(tr("&Note…"));
-  m_note->setToolTip(tr("A note with an arrow to the face, edge or vertex picked"));
-  m_datum = m_annotateMenu->addAction(tr("&Datum Label…"));
-  m_datum->setToolTip(tr("A datum label on the face, edge or datum picked"));
-  m_frame = m_annotateMenu->addAction(tr("&Frame…"));
-  m_frame->setToolTip(tr("A feature control frame with an arrow to the face or edge picked"));
-  // Its text from the hole's feature, no dialog.
-  m_callout = m_annotateMenu->addAction(tr("Hole &Callout"));
-  m_callout->setToolTip(tr("A hole callout on the hole picked (its round face or edge), written from the hole"));
-  for (QAction* action : {m_note, m_datum, m_frame, m_callout}) {
-    action->setEnabled(false);
-  }
-  m_annotateMenu->addSeparator();
-  m_annotations = m_annotateMenu->addAction(tr("&Annotations…"));
-  m_annotations->setToolTip(tr("The dimensions, notes, datum labels and frames kept in the design"));
+  // Measure measures (mitcad#1049): what kept a measurement as an
+  // annotation (Keep as Dimension, Annotate ▾) is the Make tab's Annotate
+  // group now.
 
   // The history, folded: its header unfolds it, ⋯ has Copy All and Clear.
   auto* header = new QHBoxLayout;
@@ -167,26 +130,6 @@ MeasureHistoryView::MeasureHistoryView(const MeasureHistory& history, QWidget* p
   m_list->setVisible(false);
   layout->addWidget(m_list);
 
-  connect(m_keep, &QPushButton::clicked, this, [this] {
-    qDebug().noquote() << QStringLiteral("Measure Keep as Dimension clicked");
-    if (m_actions.keep) {
-      m_actions.keep();
-    }
-  });
-  connect(m_annotate, &QPushButton::clicked, this, [this] { annotateMenu(); });
-  const auto chosen = [this](QAction* action, const char* name, std::function<void()> Actions::*call) {
-    connect(action, &QAction::triggered, this, [this, name, call] {
-      qDebug().noquote() << QStringLiteral("Measure %1 clicked").arg(QString::fromLatin1(name));
-      if (m_actions.*call) {
-        (m_actions.*call)();
-      }
-    });
-  };
-  chosen(m_note, "Note", &Actions::note);
-  chosen(m_datum, "Datum Label", &Actions::datum);
-  chosen(m_frame, "Frame", &Actions::frame);
-  chosen(m_callout, "Hole Callout", &Actions::callout);
-  chosen(m_annotations, "Annotations", &Actions::annotations);
   connect(m_toggle, &QToolButton::clicked, this, [this](bool open) {
     qDebug().noquote() << (open ? QStringLiteral("Measure history opened") : QStringLiteral("Measure history closed"));
     setOpen(open);
@@ -220,7 +163,6 @@ MeasureHistoryView::MeasureHistoryView(const MeasureHistory& history, QWidget* p
   connect(m_list->verticalScrollBar(), &QScrollBar::valueChanged, this,
           [this] { TestSync::singleShot(0, this, [this] { logPlaces(); }); });
   refresh();
-  logAnnotateEntries();
 }
 
 void MeasureHistoryView::refresh() {
@@ -260,52 +202,6 @@ void MeasureHistoryView::setOpen(bool open) {
   TestSync::singleShot(0, this, [this] { logPlaces(); });
 }
 
-void MeasureHistoryView::setKeepable(bool keepable, const QString& why) {
-  // A greyed-out Keep as Dimension says why (mitcad#869).
-  const QString reason = keepable ? QString() : why;
-  const QString tip = reason.isEmpty() ? m_keepTip : reason;
-  if (m_keep->isEnabled() == keepable && m_keep->toolTip() == tip) {
-    return;
-  }
-  m_keep->setEnabled(keepable);
-  m_keep->setToolTip(tip);
-  qDebug().noquote() << QStringLiteral("Measure Keep as Dimension %1%2")
-                            .arg(keepable ? QStringLiteral("enabled") : QStringLiteral("disabled"),
-                                 reason.isEmpty() ? QString() : QStringLiteral(": ") + reason);
-  TestSync::singleShot(0, this, [this] { logPlaces(); });
-}
-
-void MeasureHistoryView::setNoteable(bool noteable, bool feature) {
-  const bool featured = noteable && feature;
-  m_note->setEnabled(noteable);
-  m_datum->setEnabled(featured);
-  m_frame->setEnabled(featured);
-  m_callout->setEnabled(featured);
-  logAnnotateEntries();
-}
-
-void MeasureHistoryView::logAnnotateEntries() {
-  QStringList entries;
-  for (const QAction* action : m_annotateMenu->actions()) {
-    if (!action->isSeparator() && action->isEnabled()) {
-      entries << QString(action->text()).remove(QLatin1Char('&'));
-    }
-  }
-  const QString line = entries.join(QStringLiteral(", "));
-  if (line == m_entries) {
-    return;
-  }
-  m_entries = line;
-  qDebug().noquote() << QStringLiteral("Measure Annotate entries: %1").arg(line);
-}
-
-void MeasureHistoryView::annotateMenu() {
-  qDebug().noquote() << QStringLiteral("Measure Annotate clicked");
-  logEntries(*m_annotateMenu);
-  // Under the button; the entry chosen calls its action (connected above).
-  execMenu(m_annotateMenu, m_annotate->mapToGlobal(QPoint(0, m_annotate->height())));
-}
-
 void MeasureHistoryView::historyMenu() {
   qDebug().noquote() << QStringLiteral("Measure history menu clicked");
   // No parent, and this guarded: the panel may close while the menu's own
@@ -340,8 +236,7 @@ void MeasureHistoryView::rowMenu(QListWidgetItem* item, const QPoint& global) {
   const QPointer<MeasureHistoryView> self(this);
   QMenu menu;
   QAction* show = menu.addAction(tr("Show"));
-  QAction* keep = menu.addAction(tr("Keep as Dimension"));
-  keep->setEnabled(row != nullptr && !row->gone);
+  show->setEnabled(row != nullptr);
   QAction* copy = menu.addAction(tr("Copy"));
   logEntries(menu);
   QAction* chosen = execMenu(&menu, global);
@@ -356,11 +251,6 @@ void MeasureHistoryView::rowMenu(QListWidgetItem* item, const QPoint& global) {
     }
     if (m_actions.show) {
       m_actions.show(number);
-    }
-  } else if (chosen == keep) {
-    qDebug().noquote() << QStringLiteral("Measure history Keep as Dimension clicked: row %1").arg(number);
-    if (m_actions.keepRow) {
-      m_actions.keepRow(number);
     }
   } else if (chosen == copy) {
     copyRow(number);
@@ -390,8 +280,6 @@ QStringList MeasureHistoryView::places() const {
   const auto disabled = [](const QWidget* widget) {
     return widget->isEnabled() ? QString() : QStringLiteral(" (disabled)");
   };
-  lines << QStringLiteral("Measure Keep as Dimension at %1%2").arg(at(m_keep, m_keep->rect().center()), disabled(m_keep));
-  lines << QStringLiteral("Measure Annotate at %1").arg(at(m_annotate, m_annotate->rect().center()));
   lines << QStringLiteral("Measure history at %1 (%2)")
                .arg(at(m_toggle, m_toggle->rect().center()), m_open ? QStringLiteral("open") : QStringLiteral("folded"));
   lines << QStringLiteral("Measure history menu at %1%2").arg(at(m_more, m_more->rect().center()), disabled(m_more));
@@ -413,7 +301,7 @@ QStringList MeasureHistoryView::places() const {
   // Each control's text whole at the panel's width (mitcad#1010).
   QStringList clipped;
   const std::pair<const char*, const QWidget*> controls[] = {
-      {"Keep as Dimension", m_keep}, {"Annotate", m_annotate}, {"History", m_toggle}, {"History menu", m_more}};
+      {"History", m_toggle}, {"History menu", m_more}};
   for (const auto& [name, control] : controls) {
     const int needed = control->sizeHint().width();
     if (control->width() < needed) {

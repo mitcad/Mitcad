@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# The Qt frontend by default (mitcad#1056, tools/ui-macos-native-frontend-test.sh):
+# Settings › General's native macOS interface is off; turning it on saves
+# the preference for the next start, and this run stays Qt.
+expect-ever '^Frontend: qt \(default\)$'
+wait-idle
+expect-model-bodies 1 48000
+focus-main
+key ctrl+,
+focus-dialog '^Settings$'
+command tools.preferences.general
+focus-dialog '^Settings$'
+expect-widget-property nativeMacInterface checked false
+expect-widget-property nativeMacInterfaceNote text 'Takes effect when MitCad starts again.'
+mark
+focus-widget nativeMacInterface
+key Space
+expect-log '^Preferences: native macOS interface on \(at the next start\)$'
+expect-widget-property nativeMacInterface checked true
+expect-setting appearance/nativeMacInterface true
+key ctrl+w
+expect-dialog-gone '^Settings$'
+expect-model-bodies 1 48000

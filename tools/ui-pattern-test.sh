@@ -53,6 +53,8 @@ ui_expect_log "Rectangular Pattern: Pattern Type = Features" "pattern of feature
 ui_step "pick Extrude2 in the timeline"    ui_click_logged "Timeline Extrude2"
 ui_expect_log "Rectangular Pattern Objects: 1 feature [feature F4]" "the cut picked"
 ui_step "the direction input"              ui_click_logged "Panel Rectangular Pattern input direction1"
+# The origin's axes in the view as its light bulb shows them (mitcad#1030).
+ui_show_origin
 ui_step "pick the X axis"                  ui_click_logged "Datum x"
 ui_step "quantity 2"                       ui_type_in "Panel Rectangular Pattern input quantity1" "2"
 ui_step "distance 10"                      ui_type_in "Panel Rectangular Pattern input distance1" "10"

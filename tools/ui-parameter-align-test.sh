@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/browser tools/cli
-# Numbers on a shared decimal axis in Change Parameters (mitcad#566) through
+# Numbers on a shared decimal axis in Edit Parameters (mitcad#566) through
 # the real UI, on a synthetic design of user parameters made with
 # mitcad-cli: 3 mm, 33 mm, 11.5 mm, 0.125 mm, -2.75 mm, 0.5 in and 30 deg,
 # and a formula (p1 * 2):
@@ -93,7 +93,7 @@ shot() {
 ui_start_display
 ui_start_app --open "$FILE" --no-native-dialogs
 ui_mark
-ui_step "Change Parameters (search)"     ui_command "Change Parameters"
+ui_step "Edit Parameters (search)"     ui_command "Edit Parameters"
 ui_expect_new "Parameters OK at" "the dialog opened and its cells are logged"
 ui_expect_new "Parameters: p1 = 3 mm (3 mm); p2 = 33 mm (33 mm); p3 = 11.5 mm (11.5 mm); p4 = 0.125 mm (0.125 mm); p5 = -2.75 mm (-2.75 mm); p6 = 0.5 in (0.5 in); p7 = 30 deg (30 deg); p8 = p1 * 2 (6 mm)" \
   "the parameters as the model has them"
@@ -155,7 +155,7 @@ echo "--- Opened again"
 ui_step "close the parameters (Esc)"     ui_key Escape
 ui_focus_main
 ui_mark
-ui_step "Change Parameters (search)"     ui_command "Change Parameters"
+ui_step "Edit Parameters (search)"     ui_command "Edit Parameters"
 ui_expect_new "Parameters dialog opened" "the dialog opened again"
 expect_axis value decimal 8 "Value: one decimal separator position"
 ui_step "close the parameters (Esc)"     ui_key Escape

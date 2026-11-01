@@ -34,16 +34,14 @@
 #   06-process-search.png       the search 'jerk'
 #   07-printer-editor.png       Edit of the Printer row: Printers and
 #                               Processes on the printer
-#   08-materials.png            Edit Materials with nothing selected, Mount
-#                               PLA selected (the window keeps the material
-#                               Material... of Body2 chose), its 3D printing
-#                               section open
-#   09-materials-assign.png     Edit Materials with Body2 and Body3 selected
-#                               (Material... of two bodies): Assign to 2
-#                               bodies
+#   08-materials.png            Edit Materials, Mount PLA selected in its
+#                               list, its 3D printing section open
+#   09-material-tool.png        The Material tool with Body2 and Body3
+#                               picked (mitcad#1059): the panel's picker
+#                               button and what the bodies are made of
 #   10-property-sets-print.png  Property Sets of Body1 scrolled to its end:
 #                               Print settings (effective)
-#   11-changed-elsewhere.png    Edit Materials with Body1 selected: Shop
+#   11-changed-elsewhere.png    Edit Materials, Shop PETG selected: Shop
 #                               PETG, asked about once: "Shop PETG was
 #                               changed in another design."
 #   12-3dprint-docked.png       3D Print (3MF) in the Docked chrome
@@ -101,7 +99,7 @@ if (-not (Test-Path (Join-Path (Split-Path $App) 'opengl32.dll'))) {
 
 $shots = @('01-3dprint-panel.png', '02-import-details.png', '03-process-quality.png', '04-process-strength.png',
            '05-process-advanced.png', '06-process-search.png', '07-printer-editor.png', '08-materials.png',
-           '09-materials-assign.png', '10-property-sets-print.png', '11-changed-elsewhere.png', '12-3dprint-docked.png',
+           '09-material-tool.png', '10-property-sets-print.png', '11-changed-elsewhere.png', '12-3dprint-docked.png',
            '13-printers-processes.png')
 foreach ($shot in $shots) { Remove-Item -Force (Join-Path $Out $shot) -ErrorAction SilentlyContinue }
 $saved = New-Object System.Collections.Generic.List[string]
@@ -345,9 +343,9 @@ $panel = @'
 mark
 command make.print3d
 expect-log '3D Print panel: .*format 3mf' 10
-expect-log 'Panel 3D Print action import\.0 at' 10
+expect-log 'Panel Send to Slicer action import\.0 at' 10
 mark
-click-logged 'Panel 3D Print action import\.0'
+click-logged 'Panel Send to Slicer action import\.0'
 focus-dialog '^Import from Slicer$' 20
 focus-widget fileNameEdit
 key ctrl+a
@@ -355,12 +353,12 @@ type '${MITCAD_SHOTS_PROJECT}'
 button '^Open$'
 focus-main
 expect-log '3D Print import: plate.3mf imported' 60
-expect-log 'Panel 3D Print action import.1 at' 10
+expect-log 'Panel Send to Slicer action import.1 at' 10
 wait-idle
 sleep 1500
 screenshot '${MITCAD_SHOTS_DIR}\01-3dprint-panel.png'
 mark
-click-logged 'Panel 3D Print action import.1'
+click-logged 'Panel Send to Slicer action import.1'
 expect-log 'Import details opened: ' 10
 focus-dialog '^Import Details$'
 sleep 1000
@@ -374,8 +372,8 @@ Invoke-Shots 'panel' 'floating' @('01-3dprint-panel.png', '02-import-details.png
 $openProcess = @'
 mark
 command make.print3d
-expect-log 'Panel 3D Print button_process at' 10
-click-logged 'Panel 3D Print button_process'
+expect-log 'Panel Send to Slicer button_process at' 10
+click-logged 'Panel Send to Slicer button_process'
 expect-log 'Printers and processes opened' 10
 expect-log 'Profile selected: process Shop Fine 0\.12' 10
 focus-dialog '^Printers and Processes$'
@@ -420,8 +418,8 @@ Invoke-Shots 'process-strength' 'floating' @('04-process-strength.png', '05-proc
 $printer = @'
 mark
 command make.print3d
-expect-log 'Panel 3D Print button_printer at' 10
-click-logged 'Panel 3D Print button_printer'
+expect-log 'Panel Send to Slicer button_printer at' 10
+click-logged 'Panel Send to Slicer button_printer'
 expect-log 'Printers and processes opened' 10
 expect-log 'Profile selected: printer Bench X 0\.4 nozzle' 10
 focus-dialog '^Printers and Processes$'
@@ -431,31 +429,19 @@ screenshot-dialog '${MITCAD_SHOTS_DIR}\07-printer-editor.png'
 '@
 Invoke-Shots 'printer' 'floating' @('07-printer-editor.png') @($start, $printer)
 
-# 08: Edit Materials with nothing selected shows the material the window
-# showed last: Material... of Body2 (Mount PLA) first, closed, Esc clears
-# the selection, Edit Materials again.
+# 08: Edit Materials, Mount PLA chosen in its list (the window assigns
+# nothing since mitcad#1059), the print settings' first tab.
 $materials = @'
-mark
-click-logged 'Browser Root/Bodies/Body2 at'
-expect-log 'Selected: 1 bod' 10
-mark
-command solid.materials
-expect-log 'Materials opened for bodies F2\.b0' 10
-expect-log 'Material selected: Mount PLA \(design\)' 10
-focus-dialog '^Materials$'
-button '^Close$'
-expect-dialog-gone '^Materials$'
-focus-main
-mark
-key Escape
-expect-log 'Selected: nothing' 10
 mark
 command solid.materials
 expect-log '^Materials opened$' 10
-expect-log 'Materials for no targets' 10
+expect-log 'Materials item Mount PLA at' 10
+focus-dialog '^Materials$'
+mark
+dialog-click-logged 'Materials item Mount PLA at'
+expect-log 'Material selected: Mount PLA \(design\)' 10
 expect-log 'Material Mount PLA value ' 10
 expect-log 'Materials settings tab filament at' 10
-focus-dialog '^Materials$'
 mark
 focus-widget settingsTabs
 key Right
@@ -465,9 +451,9 @@ screenshot-dialog '${MITCAD_SHOTS_DIR}\08-materials.png'
 '@
 Invoke-Shots 'materials' 'floating' @('08-materials.png') @($start, $materials)
 
-# 09: Body2 and Body3 (Ctrl+click) selected, Edit Materials: Material...
-# of the two bodies, their Mount PLA chosen, Assign to 2 bodies.
-$assign = @'
+# 09: Body2 and Body3 (Ctrl+click) selected, the Material tool for them
+# (mitcad#1059): the picker button and what they are made of.
+$tool = @'
 mark
 click-logged 'Browser Root/Bodies/Body2 at'
 expect-log 'Selected: 1 bod' 10
@@ -475,15 +461,14 @@ mark
 click-logged 'Browser Root/Bodies/Body3 at' left ctrl
 expect-log 'Selected: 2 bod' 10
 mark
-command solid.materials
-expect-log 'Materials opened for bodies F[23]\.b0, F[23]\.b0' 10
-expect-log 'Materials assign label: Assign to 2 bodies' 10
-expect-log 'Materials assign at' 10
-focus-dialog '^Materials$'
+command solid.material
+expect-log 'Panel Material bodies note: ' 10
+expect-log 'Panel Material input material at' 10
 sleep 1000
-screenshot-dialog '${MITCAD_SHOTS_DIR}\09-materials-assign.png'
+screenshot-screen '${MITCAD_SHOTS_DIR}\09-material-tool.png'
+key Escape
 '@
-Invoke-Shots 'materials-assign' 'floating' @('09-materials-assign.png') @($start, $assign)
+Invoke-Shots 'material-tool' 'floating' @('09-material-tool.png') @($start, $tool)
 
 # 10: Property Sets of Body1, made taller and taken to its last row (End),
 # where the print settings are; a print row's cell in sight proves it.
@@ -505,15 +490,15 @@ screenshot-dialog '${MITCAD_SHOTS_DIR}\10-property-sets-print.png'
 '@
 Invoke-Shots 'property-sets' 'floating' @('10-property-sets-print.png') @($start, $propertySets)
 
-# 11: Body1 selected, Edit Materials: Shop PETG, which another design
-# changed in My library, asked about once.
+# 11: Edit Materials, Shop PETG (Body1's) chosen in its list: another design
+# changed it in My library, asked about once.
 $changed = @'
 mark
-click-logged 'Browser Root/Bodies/Body1 at'
-expect-log 'Selected: 1 bod' 10
-mark
 command solid.materials
-expect-log 'Materials opened for bodies F1\.b0' 10
+expect-log '^Materials opened$' 10
+expect-log 'Materials item Shop PETG at' 10
+focus-dialog '^Materials$'
+dialog-click-logged 'Materials item Shop PETG at'
 expect-log 'Material selected: Shop PETG \(user\)' 10
 expect-log 'Materials changed elsewhere: Shop PETG' 10
 focus-dialog '^Changed in Another Design$'
@@ -527,8 +512,8 @@ $docked = @'
 mark
 command make.print3d
 expect-log '3D Print panel: .*format 3mf' 10
-expect-log 'Panel 3D Print action import\.0 at' 10
-expect-log 'Panel 3D Print button_process at' 10
+expect-log 'Panel Send to Slicer action import\.0 at' 10
+expect-log 'Panel Send to Slicer button_process at' 10
 wait-idle
 sleep 1500
 screenshot '${MITCAD_SHOTS_DIR}\12-3dprint-docked.png'

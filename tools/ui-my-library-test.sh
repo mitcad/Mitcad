@@ -16,7 +16,8 @@
 #   2. The Printers tab: Bench X; Duplicate makes Bench X (copy) in My library,
 #      renamed Bench Y; Delete removes it.
 #   3. The design did not change: no modified mark in the title, its file
-#      as it was; Edit Printers and Processes' My Library… opens the
+#      as it was; Edit Printers and Processes' Edit Library… (after
+#      Delete, left of Close, mitcad#1019) opens the
 #      window again.
 #   4. A fake Bambu Studio data folder (mitcad#830): Import from Slicer ▾
 #      offers its presets; the new process is ticked, the printer named as
@@ -29,6 +30,16 @@
 #      Import names the count ("Import 1 Preset"); the filter "bench"
 #      hides Fine, and Import still brings the ticked Fine in as Fine 2,
 #      named in the line and selected.
+#   5. The first opening on a library of slicer imports (mitcad#1018): a
+#      slicer's data folder made here like an installed one's (a vendor's
+#      1800 system presets, the user's 41 on them), its presets imported
+#      into a fresh My library; the app again, Edit Materials…, Edit
+#      Library… of the Materials window (after Delete, left of Close; its
+#      mnemonic Alt+L, mitcad#1019): My Library opens, logs its
+#      opening's parts ("My Library timing: ...") and fills its panels
+#      when the items were read off the UI thread ("My Library loaded:
+#      ..."), the slicer's presets looked for as well ("My Library
+#      slicers: ..."). The times are printed, none asserted.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-my-library-test.sh
@@ -57,6 +68,120 @@ expect_item() {
 # the text, through the expression.
 logged_after() {
   tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F -- "$1" | tail -1 | sed "$2"
+}
+
+# make_slicer_folder data: a slicer's data folder like an installed
+# one's (mitcad#1018), synthetic: the system presets of a vendor Acme
+# (30 printer models of 4 nozzles each, 16 processes and 40 filaments
+# per model, on common bases with a full set of values), its app config
+# with Acme M1 0.4 enabled, and the user's own presets on Acme M1: 30
+# filaments, 3 printers, 8 processes, each with a few values of its own.
+# Writes $WORK/slicer-import.json, which imports the user's presets into
+# My library.
+make_slicer_folder() {
+  local data=$1 sys=$1/system/Acme user=$1/user/default
+  local filament_keys=(filament_diameter filament_density filament_cost filament_shrink temperature_vitrification
+    filament_flow_ratio pressure_advance nozzle_temperature nozzle_temperature_initial_layer
+    nozzle_temperature_range_low nozzle_temperature_range_high cool_plate_temp eng_plate_temp hot_plate_temp
+    textured_plate_temp filament_max_volumetric_speed fan_min_speed fan_max_speed fan_cooling_layer_time
+    close_fan_the_first_x_layers full_fan_speed_layer slow_down_layer_time slow_down_min_speed overhang_fan_speed
+    additional_cooling_fan_speed during_print_exhaust_fan_speed complete_print_exhaust_fan_speed
+    filament_retraction_length filament_z_hop filament_retraction_speed filament_deretraction_speed
+    filament_retraction_minimum_travel filament_wipe_distance filament_flush_temp filament_flush_volumetric_speed
+    filament_minimal_purge_on_wipe_tower filament_prime_volume filament_change_length counter_coef_1 counter_coef_2
+    counter_coef_3 hole_coef_1 hole_coef_2 hole_coef_3 counter_limit_min counter_limit_max hole_limit_min
+    hole_limit_max diameter_limit)
+  local process_keys=(initial_layer_print_height line_width initial_layer_line_width outer_wall_line_width
+    inner_wall_line_width top_surface_line_width sparse_infill_line_width internal_solid_infill_line_width
+    support_line_width seam_gap wipe_speed xy_contour_compensation xy_hole_compensation elefant_foot_compensation
+    resolution slice_closing_radius ironing_speed ironing_flow ironing_spacing ironing_inset print_flow_ratio
+    initial_layer_flow_ratio bridge_flow max_travel_detour_distance wall_loops top_shell_layers top_shell_thickness
+    bottom_shell_layers bottom_shell_thickness sparse_infill_density infill_direction skin_infill_depth
+    infill_lock_depth bridge_speed gap_infill_speed initial_layer_speed outer_wall_speed inner_wall_speed
+    sparse_infill_speed internal_solid_infill_speed top_surface_speed travel_speed default_acceleration
+    initial_layer_acceleration outer_wall_acceleration inner_wall_acceleration top_surface_acceleration
+    travel_acceleration brim_width brim_object_gap raft_layers support_threshold_angle support_top_z_distance
+    support_bottom_z_distance support_base_pattern_spacing support_interface_spacing tree_support_branch_angle
+    tree_support_branch_distance prime_tower_width prime_volume)
+  local values="" key k n t h q i name names="" presets=""
+  mkdir -p "$sys/machine" "$sys/process" "$sys/filament/base" "$user/filament" "$user/machine" "$user/process"
+  printf '{"name": "Acme", "version": "01.00.00.00"}\n' > "$data/system/Acme.json"
+  # The common bases: every value the presets inherit.
+  values=""
+  for key in "${filament_keys[@]}"; do values+="\"$key\": [\"1\"], "; done
+  printf '{"type": "filament", "name": "fdm_filament_common", "from": "system", "instantiation": "false", %s"filament_type": ["PLA"]}\n' \
+    "$values" > "$sys/filament/base/fdm_filament_common.json"
+  values=""
+  for key in "${process_keys[@]}"; do values+="\"$key\": \"1\", "; done
+  printf '{"type": "process", "name": "fdm_process_common", "from": "system", "instantiation": "false", %s"layer_height": "0.2"}\n' \
+    "$values" > "$sys/process/fdm_process_common.json"
+  printf '{"type": "machine", "name": "fdm_machine_common", "from": "system", "instantiation": "false", "printer_variant": "0.4", "printable_area": ["0x0", "180x0", "180x180", "0x180"], "printable_height": "180", "nozzle_diameter": ["0.4"], "machine_start_gcode": "%s"}\n' \
+    "$(printf 'G1 X%s Y%s F3000\\n' $(seq 1 200))" > "$sys/machine/fdm_machine_common.json"
+  for t in $(seq 1 40); do
+    printf '{"type": "filament", "name": "Acme F%s @base", "from": "system", "instantiation": "false", "inherits": "fdm_filament_common", "nozzle_temperature": ["%s"], "filament_density": ["1.2%s"]}\n' \
+      "$t" $((200 + t)) "$t" > "$sys/filament/base/Acme F$t @base.json"
+  done
+  for k in $(seq 1 30); do
+    printf '{"type": "machine_model", "name": "Acme M%s", "nozzle_diameter": "0.2;0.4;0.6;0.8", "default_materials": "Acme F1 @Acme M%s"}\n' \
+      "$k" "$k" > "$sys/machine/Acme M$k.json"
+    for n in 0.2 0.4 0.6 0.8; do
+      printf '{"type": "machine", "name": "Acme M%s %s nozzle", "from": "system", "instantiation": "true", "inherits": "fdm_machine_common", "printer_model": "Acme M%s", "printer_variant": "%s", "nozzle_diameter": ["%s"]}\n' \
+        "$k" "$n" "$k" "$n" "$n" > "$sys/machine/Acme M$k $n nozzle.json"
+    done
+    for h in 08 12 16 20 24 28 32 36; do
+      for q in 1 2; do
+        printf '{"type": "process", "name": "0.%smm Q%s @Acme M%s", "from": "system", "instantiation": "true", "inherits": "fdm_process_common", "layer_height": "0.%s", "compatible_printers": ["Acme M%s 0.4 nozzle"]}\n' \
+          "$h" "$q" "$k" "$h" "$k" > "$sys/process/0.${h}mm Q$q @Acme M$k.json"
+      done
+    done
+    for t in $(seq 1 40); do
+      printf '{"type": "filament", "name": "Acme F%s @Acme M%s", "from": "system", "instantiation": "true", "inherits": "Acme F%s @base", "filament_max_volumetric_speed": ["%s"], "compatible_printers": ["Acme M%s 0.4 nozzle"]}\n' \
+        "$t" "$k" "$t" $((10 + t % 12)) "$k" > "$sys/filament/Acme F$t @Acme M$k.json"
+    done
+  done
+  for t in $(seq 1 20); do names+="\"Acme F$t @Acme M1\", "; done
+  printf '{"models": [{"vendor": "Acme", "model": "Acme M1", "nozzle_diameter": "0.4"}], "filaments": [%s"Acme F21 @Acme M1"], "presets": {"machine": "Acme M1 0.4 nozzle"}}\n# MD5 checksum 0123456789ABCDEF\n' \
+    "$names" > "$data/BambuStudio.conf"
+  # The user's own presets, each beside its .info.
+  for i in $(seq 1 30); do
+    name="My F$i"
+    printf '{"name": "%s", "from": "User", "inherits": "Acme F%s @Acme M1", "nozzle_temperature": ["%s"], "filament_flow_ratio": ["0.9%s"], "filament_cost": ["2%s"]}\n' \
+      "$name" "$i" $((205 + i)) "$((i % 10))" "$i" > "$user/filament/$name.json"
+    printf 'sync_info = \nuser_id = \nsetting_id = \nbase_id = GFSA%s\nupdated_time = 0\n' "$i" > "$user/filament/$name.info"
+    presets+="{\"path\": \"$user/filament/$name.json\", \"same_name\": \"copy\"}, "
+  done
+  for i in 1 2 3; do
+    name="My M1 $i"
+    printf '{"name": "%s", "from": "User", "inherits": "Acme M1 0.4 nozzle", "printable_height": "1%s0"}\n' \
+      "$name" "$((7 + i))" > "$user/machine/$name.json"
+    presets+="{\"path\": \"$user/machine/$name.json\", \"same_name\": \"copy\"}, "
+  done
+  for i in $(seq 1 8); do
+    name="My 0.20mm Q$i"
+    printf '{"name": "%s", "from": "User", "inherits": "0.20mm Q%s @Acme M1", "wall_loops": "%s", "sparse_infill_density": "%s%%"}\n' \
+      "$name" "$(((i - 1) % 2 + 1))" $((2 + i % 3)) $((10 + 5 * i)) > "$user/process/$name.json"
+    presets+="{\"path\": \"$user/process/$name.json\", \"same_name\": \"copy\"}, "
+  done
+  printf '[{"cmd": "import_slicer_presets", "dialect": "bambu_studio", "folder": "%s", "into": "user", "presets": [%s]}]\n' \
+    "$data" "${presets%, }" > "$WORK/slicer-import.json"
+}
+
+# logged_place text: "x y" of the last "<text> at x,y" logged.
+logged_place() {
+  grep -F -- "$1 at " "$UI_LOG" | tail -1 | sed 's/^.* at \([-0-9]*\),\([-0-9]*\)$/\1 \2/'
+}
+
+# expect_list_button log: Edit Library… of the window logged as `log`
+# (mitcad#1019) is in the row under the list after Delete, left of Close:
+# no result button.
+expect_list_button() {
+  local lx ly dx dy cx cy
+  read -r lx ly <<< "$(logged_place "$1 edit_library")"
+  read -r dx dy <<< "$(logged_place "$1 delete")"
+  read -r cx cy <<< "$(logged_place "$1 close")"
+  [ "$ly" = "$dy" ] && [ "$ly" = "$cy" ] && [ "$lx" -gt "$dx" ] && [ "$lx" -lt "$cx" ] ||
+    ui_fail "$1: Edit Library at $lx,$ly is not after Delete ($dx,$dy) and before Close ($cx,$cy)"
+  echo "ok   $1: Edit Library… after Delete, left of Close"
 }
 
 # The design: one box. My library: a printer.
@@ -88,7 +213,7 @@ echo "--- 1. My Library: a built-in material duplicated, renamed, its density ch
 ui_mark
 ui_command "My Library"
 ui_expect_new "My Library opened" "the window opened"
-ui_expect_new "My Library materials row: plastics/pla PLA Plastic (mitcad)" "PLA is listed, built in"
+ui_expect_new "My Library materials row: fdm_plastics/pla PLA Plastic (mitcad)" "PLA is listed, built in"
 ui_expect_new "My Library tab printers at" "the tabs have their places"
 ui_expect_new "My Library import at" "Import from Slicer… has its place"
 ui_expect_new "My Library materials item PLA Plastic at" "its row has its place"
@@ -105,7 +230,7 @@ place=$(logged_after "Material duplicated: PLA Plastic as " 's/.* as .* in \(.*\
 echo "ok   in My library, not in the design"
 MATERIAL=$LIB/materials/$id.json
 expect_item "$MATERIAL" '.material.name' '"PLA Plastic (copy)"' "its file, named after PLA"
-ui_expect_new "My Library materials row: plastics/$id PLA Plastic (copy) (user)" "the list shows it"
+ui_expect_new "My Library materials row: fdm_plastics/$id PLA Plastic (copy) (user)" "the list shows it"
 ui_sync
 ui_mark
 xdotool type --delay 40 "Bench PLA"
@@ -179,11 +304,13 @@ echo "ok   the design is unchanged ($title)"
 ui_mark
 ui_command "Edit Printers and Processes"
 ui_expect_new "Printers and processes opened" "Printers and Processes opened"
-ui_expect_new "Profiles my_library at" "My Library… beside Close"
+ui_expect_new "Profiles edit_library at" "Edit Library… has its place"
+ui_expect_new "Profiles close at" "Close has its place"
+expect_list_button Profiles
 ui_focus_dialog '^Printers and Processes$'
 ui_mark
-ui_step "My Library…"                      ui_click_logged "Profiles my_library"
-ui_expect_new "Profiles: My Library…" "the link"
+ui_step "Edit Library…"                    ui_click_logged "Profiles edit_library"
+ui_expect_new "Profiles: Edit Library…" "the link"
 ui_expect_new "My Library opened" "My Library opened again"
 
 echo "--- 4. Presets of an installed slicer (mitcad#830): a fake Bambu Studio folder"
@@ -270,6 +397,46 @@ expect_item "$LIB/print/processes/fine-2.json" '.profile.name' '"Fine 2"' "Fine 
 [ "$(sha256sum "$LIB/print/printers/bench-x.json" | cut -c1-64)" = "$BENCH_SUM" ] ||
   ui_fail "the unticked Bench X's file changed"
 echo "ok   Fine and Bench X as they were"
+ui_focus_dialog '^My Library$'
+ui_step "close (Esc)"                      ui_key Escape
+ui_expect_new "My Library closed" "closed"
+
+echo "--- 5. The first opening on a library of slicer imports (mitcad#1018), from the Materials window"
+# A slicer's data folder like an installed one's: a vendor of system
+# presets (30 printer models, 120 printers, 480 processes, 1200
+# filaments on 41 bases), one model enabled in its app config, and the
+# user's own presets on them: 30 filaments, 3 printers, 8 processes,
+# imported into a fresh My library. Made here, synthetic.
+SLICER=$XDG_CONFIG_HOME/BambuStudio
+make_slicer_folder "$SLICER"
+export MITCAD_PRINT_LIBRARY_DIR=$WORK/slicer-library
+"$CLI" run "$WORK/slicer-import.json" --save "$WORK/slicer.mitcad" > "$WORK/cli-slicer.log" 2>&1 ||
+  { cat "$WORK/cli-slicer.log"; ui_fail "mitcad-cli (the slicer's presets into My library)"; }
+count=$(find "$MITCAD_PRINT_LIBRARY_DIR" -name '*.json' | wc -l)
+[ "$count" -ge 41 ] || ui_fail "My library has $count items, not the 41 imported"
+echo "ok   $count items imported into My library"
+ui_stop_app
+ui_start_app --open "$FILE" --no-native-dialogs
+ui_mark
+ui_command "Edit Materials"
+ui_expect_new "Materials opened" "the Materials window opened"
+ui_expect_new "Materials timing: " "the Materials window logs its opening's time"
+ui_expect_new "Materials edit_library at" "Edit Library… has its place"
+ui_expect_new "Materials close at" "Close has its place"
+expect_list_button Materials
+ui_focus_dialog '^Materials$'
+ui_mark
+ui_step "Edit Library… (Alt+L)"            ui_key alt+l
+ui_expect_new "Materials: Edit Library…" "the button, by its mnemonic"
+ui_expect_new "My Library opened" "My Library opened"
+ui_expect_new "My Library timing: " "its first opening logs each part's time"
+ui_expect_new "My Library materials: " "the materials listed"
+ui_expect_new "My Library loaded: " "the panels filled when the items were read"
+ui_expect_new "My Library slicers: " "the slicer's presets looked for"
+# The times as logged, for the record; none is asserted.
+for line in "Materials timing: " "My Library timing: " "My Library loaded: " "My Library slicers: "; do
+  echo "     $(grep -F -- "$line" "$UI_LOG" | tail -1 | sed "s/^.*\($line\)/\1/")"
+done
 ui_focus_dialog '^My Library$'
 ui_step "close (Esc)"                      ui_key Escape
 ui_expect_new "My Library closed" "closed"

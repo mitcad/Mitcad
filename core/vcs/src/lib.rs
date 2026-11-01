@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
-//! Local version history of Mitcad projects (P12b): a project (a folder
+//! Local version history of MitCad projects (P12b): a project (a folder
 //! with `.mitcad/project.json`, `mitcad_model::Project`) whose folder is
-//! the root of a git repository records its versions as commits. Mitcad
+//! the root of a git repository records its versions as commits. MitCad
 //! commits only to such a repository, so a user's own repository does not
-//! get Mitcad's commits unexpectedly.
+//! get MitCad's commits unexpectedly.
 //!
 //! The git library is gitoxide (`gix`, MIT OR Apache-2.0), used only in this
 //! crate; its types stay out of the public API so that another back end
 //! (the system's git for pushing, later) can take its place. What gix lacks
 //! (checkout, gc, hooks) P12 does not need: a commit is made straight from a
-//! tree, older versions are read from their trees, and Mitcad writes the
+//! tree, older versions are read from their trees, and MitCad writes the
 //! files itself.
 //!
 //! - **Commit** ([`ProjectRepo::commit`]): the saved paths only, like `git
@@ -23,7 +23,7 @@
 //!   and `git status` stays clean. Nothing changed: no commit. HEAD
 //!   detached or a merge or rebase in progress: no commit, with the reason.
 //! - **Author** ([`ProjectRepo::identity`]): git's configuration
-//!   (`user.name`, `user.email`, `GIT_AUTHOR_*`), else Mitcad's.
+//!   (`user.name`, `user.email`, `GIT_AUTHOR_*`), else MitCad's.
 //! - **History** ([`ProjectRepo::history`]): the commits on HEAD's
 //!   first-parent chain that changed a file, following recorded moves and
 //!   renames of the same content.
@@ -77,7 +77,7 @@ pub use commit::CommitOutcome;
 pub use history::{Change, ChangeKind, FileStatus, Version};
 pub use store::GitTreeStore;
 
-/// The version of Mitcad that records versions (a commit trailer).
+/// The version of MitCad that records versions (a commit trailer).
 const MITCAD_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Who made a version: a commit's author and committer.
@@ -122,7 +122,7 @@ impl fmt::Display for Identity {
 pub enum VcsError {
     /// The path is not in a project with version history.
     NotVersioned(String),
-    /// Neither git's configuration nor Mitcad's settings give an author.
+    /// Neither git's configuration nor MitCad's settings give an author.
     NoIdentity,
     InvalidIdentity(String),
     /// A path outside the project, or in its `.git`.
@@ -146,11 +146,11 @@ impl fmt::Display for VcsError {
         match self {
             Self::NoIdentity => f.write_str(
                 "no author for the version: set user.name and user.email in git's \
-                 configuration, or the name and email in Mitcad's settings",
+                 configuration, or the name and email in MitCad's settings",
             ),
             Self::InvalidIdentity(text) => write!(
                 f,
-                "'{text}' is not an author: a name and an email address are needed, as \
+                "“{text}” is not an author: a name and an email address are needed, as \
                  'Name <email>'"
             ),
             Self::NotVersioned(message)
@@ -297,7 +297,7 @@ impl ProjectRepo {
             .or_else(|| Project::find(path))
             .ok_or_else(|| {
                 VcsError::NotVersioned(format!(
-                    "{} is not in a Mitcad project (a folder with {PROJECT_MARKER})",
+                    "{} is not in a MitCad project (a folder with {PROJECT_MARKER})",
                     path.display()
                 ))
             })?;
@@ -316,7 +316,7 @@ impl ProjectRepo {
             Some(workdir) => {
                 return Err(VcsError::NotVersioned(format!(
                     "the project {} is inside the git repository {}, whose root is not the \
-                     project's folder; Mitcad records versions only in a repository of its own",
+                     project's folder; MitCad records versions only in a repository of its own",
                     root.display(),
                     workdir.display()
                 )));
@@ -411,7 +411,7 @@ impl ProjectRepo {
     /// The author of new versions: the repository's own `user.name` and
     /// `user.email` as they are now (mitcad#89, [`ProjectRepo::set_identity`]),
     /// else git's configuration (`user.name` and `user.email`, or
-    /// `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL`), else `fallback` (Mitcad's
+    /// `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL`), else `fallback` (MitCad's
     /// settings).
     pub fn identity(&self, fallback: Option<&Identity>) -> Result<Identity, VcsError> {
         if let Some(identity) = self.own_identity() {

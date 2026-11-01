@@ -47,9 +47,10 @@ namespace {
 
 // "Mitcad shape", then the format version. A new version is a new
 // kernel_build_id, so stored results of an older one are not read.
-// Format 2 (mitcad#841) keeps the edges' and vertices' names and faces.
+// Format 2 (mitcad#841) keeps the edges' and vertices' names and faces,
+// format 3 (mitcad#1106) the infos after the notes.
 constexpr char kMagic[4] = {'M', 'C', 'S', 'H'};
-constexpr std::uint32_t kFormat = 2;
+constexpr std::uint32_t kFormat = 3;
 
 class Writer {
 public:
@@ -246,6 +247,10 @@ std::string serialize_shape(const Shape& shape) {
   for (const std::string& note : shape.notes()) {
     out.text(note);
   }
+  out.u32(static_cast<std::uint32_t>(shape.infos().size()));
+  for (const std::string& info : shape.infos()) {
+    out.text(info);
+  }
   write_values(out, shape.measured());
   write_values(out, shape.bounds());
   return out.take();
@@ -334,6 +339,10 @@ ShapePtr deserialize_shape(std::string_view data) {
   const std::uint32_t notes = in.u32();
   for (std::uint32_t i = 0; i < notes; ++i) {
     shape->add_note(in.text());
+  }
+  const std::uint32_t infos = in.u32();
+  for (std::uint32_t i = 0; i < infos; ++i) {
+    shape->add_info(in.text());
   }
   if (const auto measured = read_values<5>(in)) {
     shape->set_measured(*measured);

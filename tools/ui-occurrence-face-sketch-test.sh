@@ -26,7 +26,8 @@
 #     the root's cross on the origin's XZ plane around the origin shown, the
 #     view shows only the cross: seen from the front, a fit of it has no depth, which put an
 #     orthographic camera's eye on its centre. Orbited, Create Sketch on the
-#     origin's XZ plane looks against its normal, along (0, -1, 0).
+#     origin's XZ plane gives the upright frame seen from the front, normal
+#     (0, -1, 0) (mitcad#1060), and looks against it, along (0, 1, 0).
 # The Windows test is tools/ui-windows-occurrence-face-sketch-test.ps1.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -249,10 +250,10 @@ ui_mark
 ui_step "create sketch on XZ"            ui_create_sketch xz
 ui_expect_new "Sketch view along" "origin plane: the view's direction logged"
 line=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Sketch frame in the design" | tail -1)
-within "$(sed -n 's/.* normal (\([^)]*\)).*/\1/p' <<< "$line")" "0 1 0" 1e-6 "origin plane: the XZ plane's normal"
+within "$(sed -n 's/.* normal (\([^)]*\)).*/\1/p' <<< "$line")" "0 -1 0" 1e-6 "origin plane: the XZ sketch's normal towards the front"
 along=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Sketch view along" | tail -1 |
   sed -n 's/.*along (\([^)]*\)).*/\1/p')
-within "$along" "0 -1 0" 1e-6 "origin plane: Look At against the plane's normal"
+within "$along" "0 1 0" 1e-6 "origin plane: Look At against the sketch's normal, from the front"
 ui_mark
 ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
 ui_expect_new "Sketch finished" "origin plane: sketch finished"

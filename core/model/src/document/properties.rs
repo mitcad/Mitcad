@@ -421,7 +421,7 @@ impl<K: Kernel> Document<K> {
     ) -> Result<PropertyType, ModelError> {
         let ty = self.property_type_of(name, base, values, unit, default, description)?;
         if self.state.properties.own_type(&ty.name).is_some() {
-            return Err(invalid(format!("a property type '{}' exists", ty.name)));
+            return Err(invalid(format!("a property type {} exists", ty.name)));
         }
         let label = format!("Define {}", ty.name);
         let made = ty.clone();
@@ -445,7 +445,7 @@ impl<K: Kernel> Document<K> {
         let old = store
             .own_type(name)
             .cloned()
-            .ok_or_else(|| invalid(format!("there is no own property type '{name}'")))?;
+            .ok_or_else(|| invalid(format!("there is no own property type {name}")))?;
         let uses = store.uses_of(&old.name);
         let base = change.base.unwrap_or(old.base);
         if base != old.base && !uses.is_empty() {
@@ -481,7 +481,7 @@ impl<K: Kernel> Document<K> {
             description,
         )?;
         if !same_name(&ty.name, &old.name) && store.own_type(&ty.name).is_some() {
-            return Err(invalid(format!("a property type '{}' exists", ty.name)));
+            return Err(invalid(format!("a property type {} exists", ty.name)));
         }
         for (owner, set, key) in &uses {
             let property = store.get(*owner, set, key).expect("listed by uses_of");
@@ -521,7 +521,7 @@ impl<K: Kernel> Document<K> {
         let ty = store
             .own_type(name)
             .cloned()
-            .ok_or_else(|| invalid(format!("there is no own property type '{name}'")))?;
+            .ok_or_else(|| invalid(format!("there is no own property type {name}")))?;
         let count = store.uses_of(&ty.name).len();
         let label = format!("Remove {}", ty.name);
         self.apply_with(|state| {

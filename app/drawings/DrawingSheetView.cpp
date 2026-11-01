@@ -27,9 +27,12 @@ namespace {
 // selection's blue.
 const QColor kBackground(0xd9, 0xdc, 0xe0);
 const QColor kDarkBackground(0x2c, 0x2f, 0x34);
-const QColor kSelected(0x1c, 0x7e, 0xd6);
-const QColor kHovered(0x8c, 0xc1, 0xf0);
-const QColor kBroken(0xc9, 0x2a, 0x2a);
+// Selection and hover as in the 3D view (mitcad#1041: one role each).
+const QColor kSelected = themeColor(ColorRole::Select, false);
+const QColor kHovered = themeColor(ColorRole::Hover, false);
+// A broken annotation is a warning (mitcad#1040): the warning colour on the
+// sheet's paper, with the warning sign.
+const QColor kBroken = themeColor(ColorRole::WarningText, false);
 // Helvetica's cap height per em (core/model-drawing/src/sheet.rs).
 constexpr double kCapHeight = 0.718;
 constexpr double kPi = 3.14159265358979323846;
@@ -47,25 +50,19 @@ QPolygonF polygonOf(const QJsonValue& value) {
   return out;
 }
 
-// A pen's width (mm) and dashes (mm) after ISO 128, as the model's writers
-// give them.
-QPen penOf(const QString& name) {
-  double width = 0.25;
+// A pen by its name from the table of widths (mm) and dashes (mm) the
+// model's `drawing` query gives with the groups (`pens`, mitcad#1112: the
+// writers' own table, ISO 128's 0.35 series); a narrow continuous line
+// for a pen it does not list.
+QPen penOf(const QJsonObject& pens, const QString& name) {
+  const QJsonObject entry = pens.value(name).toObject();
+  const double width = entry.value(QStringLiteral("width")).toDouble(0.18);
   QVector<qreal> dashes;
-  if (name == QStringLiteral("thick")) {
-    width = 0.5;
-  } else if (name == QStringLiteral("hidden")) {
-    width = 0.35;
-    dashes = {3.0, 1.0};
-  } else if (name == QStringLiteral("hatch")) {
-    width = 0.18;
-  } else if (name == QStringLiteral("chain")) {
-    dashes = {12.0, 1.5, 0.5, 1.5};
-  } else if (name == QStringLiteral("frame")) {
-    width = 0.7;
+  for (const QJsonValue& d : entry.value(QStringLiteral("dashes")).toArray()) {
+    dashes.append(d.toDouble());
   }
   QPen pen(Qt::black, width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-  if (!dashes.isEmpty()) {
+  if (!dashes.isEmpty() && width > 0.0) {
     // In pen widths.
     for (qreal& d : dashes) {
       d /= width;
@@ -167,6 +164,7 @@ void DrawingSheetView::setSheet(const QJsonObject& sheet) {
     m_annotations.append(entry);
   }
   m_groups = sheet.value(QStringLiteral("groups")).toArray();
+  m_pens = sheet.value(QStringLiteral("pens")).toObject();
   // Each annotation's lines and texts, from its group (`A<id>`).
   QVector<int> hasText;
   for (const QJsonValue& groupValue : std::as_const(m_groups)) {
@@ -884,7 +882,7 @@ void DrawingSheetView::paintAnnotations(QPainter& painter) const {
     return QRectF(toWidget(box.bottomLeft()), toWidget(box.topRight())).normalized();
   };
   painter.save();
-  // Annotations whose picks are gone: a red box beside their view, with
+  // Annotations whose picks are gone: a warning's box beside their view, with
   // their id and why.
   for (const SheetAnnotation& a : m_annotations) {
     if (!a.broken || a.box.isNull()) {
@@ -916,8 +914,11 @@ void DrawingSheetView::paintAnnotations(QPainter& painter) const {
     painter.drawRect(widgetBox(a.box.adjusted(-1.0, -1.0, 1.0, 1.0).translated(offset)));
   }
   // What a click would pick under the pointer, light (mitcad#725), and
-  // what an annotation tool picked so far, in orange.
-  QPen mark(QColor(0xe0, 0x7b, 0x1a, 120), 2.0);
+  // what an annotation tool picked so far, in the handles' orange
+  // (mitcad#1041: what is under the pointer in the hover's blue).
+  QColor hoverMark = themeColor(ColorRole::Hover, false);
+  hoverMark.setAlpha(160);
+  QPen mark(hoverMark, 2.0);
   mark.setCosmetic(true);
   painter.setPen(mark);
   painter.setBrush(Qt::NoBrush);
@@ -928,7 +929,7 @@ void DrawingSheetView::paintAnnotations(QPainter& painter) const {
   }
   for (qsizetype i = 0; i < marks.size(); ++i) {
     if (i == hovered) {
-      mark.setColor(QColor(0xe0, 0x7b, 0x1a));
+      mark.setColor(themeColor(ColorRole::Handle, false));
       mark.setWidthF(2.5);
       painter.setPen(mark);
     }
@@ -967,7 +968,7 @@ void DrawingSheetView::paintItems(QPainter& painter) const {
   painter.translate(m_origin);
   painter.scale(m_zoom, -m_zoom);
   const auto withPen = [&](const QString& name) {
-    QPen pen = penOf(name);
+    QPen pen = penOf(m_pens, name);
     // At least a pixel wide on the screen.
     if (pen.widthF() * m_zoom < 1.0) {
       pen.setWidthF(1.0 / m_zoom);

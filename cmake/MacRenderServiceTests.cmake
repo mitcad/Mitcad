@@ -48,6 +48,6 @@ add_custom_command(TARGET test_mac_render_service POST_BUILD
   COMMAND /usr/bin/codesign --force --sign - "${mitcad_render_test_app}" VERBATIM)
 
 add_test(NAME app.render_service_macos COMMAND test_mac_render_service --device cpu)
-set_tests_properties(app.render_service_macos PROPERTIES TIMEOUT 150 RUN_SERIAL TRUE)
+set_tests_properties(app.render_service_macos PROPERTIES TIMEOUT 150)
 # Physical-GPU acceptance invokes the same signed executable with --device metal;
 # it must use Metal successfully and never silently substitute the CPU.

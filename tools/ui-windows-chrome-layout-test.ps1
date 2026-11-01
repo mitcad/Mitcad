@@ -296,7 +296,7 @@ Ui-ExpectNew 'Restart: closing the window' 'the window closes first'
 Ui-FocusDialog '^MitCad$' -Except $before
 Ui-Step 'cancel (Escape)'                  { Ui-Key 'Escape' }
 Ui-FocusMain
-Ui-ExpectNew 'Restart cancelled: Mitcad stayed open' 'cancelled as quitting would be'
+Ui-ExpectNew 'Restart cancelled: MitCad stayed open' 'cancelled as quitting would be'
 if (Has-Line 'Restart (test, not started)') { Ui-Fail 'a restart after the cancel' }
 Write-Host 'ok   Mitcad still runs, nothing restarted'
 

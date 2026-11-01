@@ -34,6 +34,12 @@
 #      on XY, Sketch2 on XY after it. Project in Sketch2: its selection
 #      filter has the row for other sketches' curves and points, a click
 #      takes Sketch1's line, and OK logs it by name.
+#   9. The same design (mitcad#1031): Sketch1 also has a circle round
+#      (30, 0) of radius 5, and Sketch3 lies on XZ. Intersect in Sketch3: its
+#      selection filter has the row for other sketches' curves and points,
+#      Sketch1 picked in the browser goes in whole, and OK gives two fixed
+#      points where its circle crosses XZ (x = 25 and 35); the saved design
+#      has them as one linked section of the circle.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-projections-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -374,8 +380,9 @@ Ui-Step 'finish sketch (Ctrl+Enter)'     { Ui-Key 'ctrl+Return' }
 Ui-ExpectNew 'Sketch finished' 'Sketch2 finished'
 if ((Ui-LogLines) -match 'Recompute failed') { Ui-Fail 'a recompute failed' }
 Write-Host '--- Project: a curve of an earlier sketch (mitcad#904)'
-# Sketch1 (F1) on XY: a line c3 from (-20, 10) to (20, 10) and a circle c5
-# round (0, -10); Sketch2 (F2) on XY after it, empty.
+# Sketch1 (F1) on XY: a line c3 from (-20, 10) to (20, 10), a circle c5
+# round (0, -10) and a circle c7 round (30, 0) of radius 5, which crosses
+# XZ; Sketch2 (F2) on XY after it and Sketch3 (F3) on XZ, empty.
 $script = Join-Path $work 'sketches.json'
 $design = Join-Path $work 'sketches.mitcad'
 Set-Content -Encoding ascii $script @'
@@ -385,8 +392,11 @@ Set-Content -Encoding ascii $script @'
     {"id": "p2", "type": "point", "at": [20, 10]},
     {"id": "c3", "type": "line", "start": "p1", "end": "p2"},
     {"id": "p4", "type": "point", "at": [0, -10]},
-    {"id": "c5", "type": "circle", "center": "p4", "radius": 8}]}},
-  {"cmd": "sketch.create", "plane": "xy"}
+    {"id": "c5", "type": "circle", "center": "p4", "radius": 8},
+    {"id": "p6", "type": "point", "at": [30, 0]},
+    {"id": "c7", "type": "circle", "center": "p6", "radius": 5}]}},
+  {"cmd": "sketch.create", "plane": "xy"},
+  {"cmd": "sketch.create", "plane": "xz"}
 ]
 '@
 $made = & $cli run $script --save $design
@@ -417,4 +427,63 @@ Ui-Mark
 Ui-Step 'finish sketch (Ctrl+Enter)'     { Ui-Key 'ctrl+Return' }
 Ui-ExpectNew 'Sketch finished' 'Sketch2 finished'
 if ((Ui-LogLines) -match 'Recompute failed') { Ui-Fail 'a recompute failed' }
+
+Write-Host '--- Intersect: where another sketch''s circle crosses the plane (mitcad#1031)'
+# Sketch3 (F3) on XZ: x along X, y along -Z. The circle c7 crosses it at
+# (25, 0, 0) and (35, 0, 0), seen edge on as a line from x = 25 to 35.
+Ui-Mark
+Ui-Step 'edit Sketch3 (double-click)'    { Ui-DoubleClickLogged 'Timeline Sketch3' }
+Ui-ExpectNew 'Editing sketch F3 (Sketch3)' 'Sketch3 edited' 30
+Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
+Ui-Sync
+Ui-Mark
+Ui-Step 'intersect (Shift+F7)'           { Ui-Key 'shift+F7' }
+Ui-ExpectNew 'other-sketch-geometry=cross' 'Intersect''s filter has the row for other sketches'' geometry'
+# In the view the circle is seen edge on, and Sketch1 is hidden once
+# Sketch2 projects it: Sketch1 is picked whole in the browser (its line and
+# other circle do not cross XZ).
+Ui-ExpectLog 'Browser Root/Sketches/Sketch1 at' 'Sketch1 in the browser'
+Ui-Step 'pick Sketch1 in the browser'    { Ui-ClickLogged 'Browser Root/Sketches/Sketch1' }
+Ui-ExpectNew 'Intersect Geometry: 1 sketch' 'Sketch1 went to Intersect'
+Ui-ExpectNew 'Preview Intersect: ok' 'the crossings previewed' 30
+Ui-WaitIdle
+Ui-FocusMain
+Ui-Mark
+Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
+Ui-ExpectNew 'Intersected 1 item(s): sketch F1' 'the log names the intersected sketch'
+# The fit before Intersect saw nothing of Sketch3: the points come in view.
+Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
+Ui-Sync
+foreach ($x in @(25, 35)) {
+  Ui-Mark
+  $from = Ui-SketchAt $x 0
+  $to = Ui-SketchAt ($x + 3) -6
+  Ui-Step "drag the crossing at x = $x"  { Ui-Drag $from[0] $from[1] $to[0] $to[1] }
+  Ui-Sync
+  $since = @(Ui-LogLines | Select-Object -Skip $script:UiMark)
+  if (-not ($since -match "Drag of p[0-9]+ did not move it|Dragged p[0-9]+ to \($x\.000, 0\.000\)")) {
+    Ui-Fail "no fixed point where the circle crosses XZ at x = $x"
+  }
+  Write-Host "ok   a fixed point where the circle crosses XZ at x = $x"
+}
+Ui-Mark
+Ui-Step 'finish sketch (Ctrl+Enter)'     { Ui-Key 'ctrl+Return' }
+Ui-ExpectNew 'Sketch finished' 'Sketch3 finished'
+if ((Ui-LogLines) -match 'Recompute failed') { Ui-Fail 'a recompute failed' }
+Ui-Mark
+Ui-Step 'save (Ctrl+S)'                  { Ui-Key 'ctrl+s' }
+Ui-ExpectNew 'Saved ' 'saved'
+# Two points only, one linked section of the circle, no warning.
+$check = Join-Path $work 'check-intersect.json'
+Set-Content -Encoding ascii $check @'
+[
+  {"expect": {"query": {"query": "sketch", "uid": "F3"}, "result": {
+    "entities": [{"type": "point"}, {"type": "point"}],
+    "projections": [{"section": true, "source": {"sketch": "F1", "curve": "c7"}}],
+    "warnings": []}}}
+]
+'@
+$checked = & $cli run $check --open $design
+if ($LASTEXITCODE -ne 0) { Ui-Fail "the saved crossings: $($checked -join ' / ')" }
+Write-Host 'ok   two linked points where the circle crosses XZ'
 Ui-Finish 'UI Windows projections test'

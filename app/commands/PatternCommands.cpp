@@ -403,7 +403,7 @@ CommandDef circularPatternCommand(const CommandContext& context) {
       // The angle centred on the originals (mitcad#545); a full turn is the
       // same either way.
       checkInput(QStringLiteral("symmetric"), QObject::tr("Symmetric"), false)
-          .withTooltip(QObject::tr("Copies on both sides of the original, the angle centred on it")),
+          .withTooltip(QObject::tr("Copies on both sides of the original, the angle centered on it")),
       suppressedInput(),
   };
   def.enabled = [&context] { return hasBodies(context); };

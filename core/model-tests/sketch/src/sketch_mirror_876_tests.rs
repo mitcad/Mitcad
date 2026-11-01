@@ -369,6 +369,6 @@ fn circles_mirrored_about_the_sketch_axes() {
             &mut d,
             json!({"cmd": "sketch.mirror", "sketch": "F1", "entities": [c], "axis": "z"}),
         )
-        .contains("invalid mirror line 'z'"),
+        .contains("invalid mirror line “z”"),
     );
 }

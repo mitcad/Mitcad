@@ -32,7 +32,9 @@ pub use stl::read as read_stl;
 
 // The bodies on the print bed by their print bed faces (mitcad#731).
 mod bed;
-pub use bed::{BedChoice, BedObject, DEFAULT_PLATE, OnBed};
+pub use bed::{BedChoice, BedObject, DEFAULT_PLATE, OnBed, Settle};
+// The automatic orientation on the print bed (mitcad#1109).
+pub mod orient;
 
 // Meshes with a longest edge (mitcad#734, `MeshTolerance::max_edge`).
 mod edges;
@@ -81,8 +83,17 @@ pub struct ExportPlacement {
     pub bed_faces: Vec<(BodyUid, Vec<OccurrenceUid>)>,
     /// On the print bed (mitcad#857): only how the bodies would lie, with
     /// the faces each piece kept as assembled could lie on; no file is
-    /// written and nothing meshed (the transforms are the turns alone).
+    /// written and nothing meshed but the faces the automatic orientation
+    /// looks at (mitcad#1109; the transforms are the turns alone).
     pub plan_only: bool,
+    /// On the print bed (mitcad#1109): a piece without a usable print bed
+    /// face is turned onto the face the automatic orientation finds
+    /// (`orient.rs`).
+    pub auto_orient: bool,
+    /// On the print bed (mitcad#1109): each piece's box centred over the
+    /// plate and its lowest point on the bed, also without a bed face and
+    /// kept as assembled (both by default).
+    pub settle: Settle,
 }
 
 /// What [`Document::export_bodies`] wrote.
@@ -103,8 +114,18 @@ pub struct Exported {
     /// slicer does not take as the design has it (mitcad#640).
     pub warnings: Vec<String>,
     /// 3MF with a slicer's settings (mitcad#640): the filament slot of each
-    /// written body (0 the first).
+    /// written part (0 the first), in `parts` order.
     pub slots: Vec<usize>,
+    /// 3MF with a slicer's settings (mitcad#1052): each written part's
+    /// material (its id) and the number of its own values written, in
+    /// `parts` order.
+    pub printed: Vec<(String, usize)>,
+    /// 3MF: the parts written, each its body and name (mitcad#1061). A
+    /// body is one part, named after it; with a slicer's settings, a body
+    /// whose written placements print otherwise is one part per group of
+    /// placements that print alike, named after the body and the group's
+    /// occurrences (`Body2 (Box:2)`).
+    pub parts: Vec<(BodyUid, String)>,
     /// 3MF and STL on the print bed (mitcad#731): how the bodies were put
     /// there.
     pub on_bed: Option<OnBed>,
@@ -174,6 +195,22 @@ fn invalid(message: impl Into<String>) -> ModelError {
 
 fn kernel_error(e: crate::kernel::KernelError) -> ModelError {
     invalid(e.to_string())
+}
+
+/// Whether two placements of a body print alike (mitcad#1052): the same
+/// material, values and slicers' own keys, wherever each comes from.
+fn same_print(a: &crate::document::EffectivePrint, b: &crate::document::EffectivePrint) -> bool {
+    fn plain<V, F>(map: &BTreeMap<String, (V, F)>) -> impl Iterator<Item = (&String, &V)> {
+        map.iter().map(|(k, (v, _))| (k, v))
+    }
+    a.material == b.material
+        && plain(&a.values).eq(plain(&b.values))
+        && plain(&a.filament).eq(plain(&b.filament))
+        && a.slicer.len() == b.slicer.len()
+        && a.slicer
+            .iter()
+            .zip(&b.slicer)
+            .all(|((da, ka), (db, kb))| da == db && plain(ka).eq(plain(kb)))
 }
 
 /// The unit of a 3MF file's model.
@@ -603,10 +640,16 @@ impl<K: Kernel> Document<K> {
             }
         }
         // On the print bed (mitcad#731): the bodies' bed faces, and the turn
-        // that takes the one face down; for 3MF, each object's (below).
+        // that takes the one face down (or the automatic orientation's,
+        // mitcad#1109); for 3MF, each object's (below).
+        let rules = bed::BedRules {
+            chosen: &placement.bed_faces,
+            auto_orient: placement.auto_orient,
+            settle: placement.settle,
+        };
         let mut on_bed = if placement.on_bed && format != ExportFormat::ThreeMf {
             let uids: Vec<BodyUid> = chosen.iter().map(|b| b.uid).collect();
-            Some(self.bed_plan(&uids, &placements, &paths, &placement.bed_faces)?)
+            Some(self.bed_plan(&uids, &placements, &paths, &rules)?)
         } else {
             None
         };
@@ -620,18 +663,6 @@ impl<K: Kernel> Document<K> {
             return Ok(exported);
         }
         if format == ExportFormat::ThreeMf {
-            // The occurrence path a body's print settings are of: its first
-            // shown placement's (mitcad#640).
-            let path_of = |body: BodyUid| -> Option<Vec<OccurrenceUid>> {
-                let mine: Vec<&InstanceView> = instances
-                    .iter()
-                    .filter(|i| i.body == body && inside(i))
-                    .collect();
-                mine.iter()
-                    .find(|i| i.visible)
-                    .or_else(|| mine.first())
-                    .map(|i| i.path.clone())
-            };
             // On the print bed as objects (mitcad#856), a face chosen
             // turning the one it is in (mitcad#857).
             let mut pieces = if placement.on_bed {
@@ -642,7 +673,7 @@ impl<K: Kernel> Document<K> {
                     &paths,
                     &placement.occurrences,
                     &placement.whole,
-                    &placement.bed_faces,
+                    &rules,
                 )?)
             } else {
                 None
@@ -653,7 +684,8 @@ impl<K: Kernel> Document<K> {
                     bodies: chosen.iter().map(|b| b.uid).collect(),
                     ..Exported::default()
                 };
-                self.report_bed(&mut exported, pieces.map(|p| self.merged_bed(p)));
+                let merged = pieces.map(|p| self.merged_bed(p, placement.settle));
+                self.report_bed(&mut exported, merged);
                 return Ok(exported);
             }
             let mut exported = self.export_3mf(
@@ -667,13 +699,13 @@ impl<K: Kernel> Document<K> {
                 options.dialect.map(|d| {
                     (
                         d,
-                        &path_of as &dyn Fn(BodyUid) -> Option<Vec<OccurrenceUid>>,
+                        &paths as &dyn Fn(BodyUid) -> Vec<Option<Vec<OccurrenceUid>>>,
                     )
                 }),
                 pieces.as_mut(),
             )?;
             if let Some(pieces) = pieces {
-                on_bed = Some(self.merged_bed(pieces));
+                on_bed = Some(self.merged_bed(pieces, placement.settle));
             }
             self.report_bed(&mut exported, on_bed);
             return Ok(exported);
@@ -820,11 +852,16 @@ impl<K: Kernel> Document<K> {
             }
         }
         // On the print bed (mitcad#731): a turn keeps the triangles facing
-        // out.
+        // out; settled without one too (mitcad#1109).
         if let Some(on_bed) = on_bed
-            && let Some(turn) = on_bed.transform
+            && let Some(turn) = bed::turn_to_settle(on_bed.transform, on_bed.settle)
         {
-            let moved = bed::settled(&turn, all.vertices.iter().copied(), on_bed.plate);
+            let moved = bed::settled(
+                &turn,
+                all.vertices.iter().copied(),
+                on_bed.plate,
+                on_bed.settle,
+            );
             for vertex in &mut all.vertices {
                 *vertex = moved.apply_point(*vertex);
             }
@@ -877,9 +914,10 @@ impl<K: Kernel> Document<K> {
         }
         let mut placed = placed.to_vec();
         // On the print bed (mitcad#731): every placement moved alike, as
-        // the bodies are one piece.
+        // the bodies are one piece; settled without a turn too
+        // (mitcad#1109).
         if let Some(on_bed) = on_bed
-            && let Some(turn) = on_bed.transform
+            && let Some(turn) = bed::turn_to_settle(on_bed.transform, on_bed.settle)
         {
             let mut points = Vec::new();
             for ((mesh, _), placements) in meshes.iter().zip(&placed) {
@@ -894,7 +932,7 @@ impl<K: Kernel> Document<K> {
                     );
                 }
             }
-            let moved = bed::settled(&turn, points.into_iter(), on_bed.plate);
+            let moved = bed::settled(&turn, points.into_iter(), on_bed.plate, on_bed.settle);
             for placements in &mut placed {
                 if placements.is_empty() {
                     placements.push(BodyPlacement {
@@ -933,9 +971,12 @@ impl<K: Kernel> Document<K> {
     /// component, all of them when none is visible), named after the body,
     /// in its colour. Sheet and empty bodies are an error when chosen, and
     /// left out when all bodies are written (`all`). With `print` (a
-    /// slicer, and the occurrence path whose settings a body prints with),
-    /// each body's effective print settings go with it in the slicer's
-    /// dialect (mitcad#640, `crate::print_files`). On the print bed, each
+    /// slicer, and the occurrence paths of a body's placements, in
+    /// `placements` order), each body's effective print settings go with
+    /// it in the slicer's dialect (mitcad#640, `crate::print_files`); a
+    /// body whose placements print otherwise is one part per group of
+    /// placements that print alike, each with its group's settings
+    /// (mitcad#1061). On the print bed, each
     /// of the `pieces`' placements turns with its piece's turn onto its
     /// print bed face, the lowest point on the bed and the middle over the
     /// plate's centre (mitcad#731), the pieces turned set side by side
@@ -956,16 +997,21 @@ impl<K: Kernel> Document<K> {
         placements: impl Fn(BodyUid) -> Vec<Transform>,
         print: Option<(
             crate::print_keys::Dialect,
-            &dyn Fn(BodyUid) -> Option<Vec<OccurrenceUid>>,
+            &dyn Fn(BodyUid) -> Vec<Option<Vec<OccurrenceUid>>>,
         )>,
         pieces: Option<&mut Vec<bed::Piece>>,
     ) -> Result<Exported, ModelError> {
         let mut exported = Exported::default();
         let mut parts = Vec::with_capacity(chosen.len());
-        // The part of each body written (sheet and empty bodies have none).
-        let mut part_of: Vec<Option<usize>> = Vec::with_capacity(chosen.len());
+        // With a slicer's settings, each part's effective ones (mitcad#640,
+        // mitcad#1061), in `parts` order.
+        let mut settings: Vec<crate::document::EffectivePrint> = Vec::new();
+        // Where each body's placements went: per placement, its part and
+        // its index in that part's placements (sheet and empty bodies have
+        // none).
+        let mut part_of: Vec<Vec<(usize, usize)>> = Vec::with_capacity(chosen.len());
         for body in chosen {
-            part_of.push(None);
+            part_of.push(Vec::new());
             let kind = self.kernel().body_kind(body.shape).map_err(kernel_error)?;
             if matches!(kind, BodyKind::Sheet | BodyKind::Empty) {
                 let why = format!("a {} body", kind.as_str());
@@ -979,14 +1025,14 @@ impl<K: Kernel> Document<K> {
                 continue;
             }
             let mesh = self.export_mesh(body, tolerance)?;
-            let placements = placements(body.uid)
+            let placed: Vec<mitcad_3mf::Placement> = placements(body.uid)
                 .iter()
                 .map(|t| mitcad_3mf::Placement {
                     linear: t.linear,
                     translation: t.translation,
                 })
                 .collect();
-            let mesh = mitcad_3mf::Mesh {
+            let mut mesh = mitcad_3mf::Mesh {
                 vertices: mesh.vertices,
                 triangles: mesh.triangles,
             };
@@ -995,16 +1041,94 @@ impl<K: Kernel> Document<K> {
                 triangles: mesh.triangles.len(),
                 volume: mesh.volume(),
             });
-            if let Some(last) = part_of.last_mut() {
-                *last = Some(parts.len());
+            // The placements grouped by the settings they print with
+            // (mitcad#1061): a material or a value of an occurrence or of a
+            // component up a placement's path makes it print otherwise than
+            // another, so each group is a part of its own, with its own
+            // filament slot and values; without a slicer's settings, all of
+            // them are one part.
+            let paths = print
+                .as_ref()
+                .map(|(_, paths_of)| paths_of(body.uid))
+                .unwrap_or_default();
+            let mut groups: Vec<(Option<crate::document::EffectivePrint>, Vec<usize>)> = Vec::new();
+            for (k, _) in placed.iter().enumerate() {
+                let effective = print.as_ref().map(|_| {
+                    self.effective_print(&crate::document::PrintTarget::Body(
+                        body.uid,
+                        paths.get(k).cloned().flatten(),
+                    ))
+                });
+                let alike = groups
+                    .iter_mut()
+                    .find(|(group, _)| match (group, &effective) {
+                        (Some(a), Some(b)) => same_print(a, b),
+                        _ => true,
+                    });
+                match alike {
+                    Some((_, members)) => members.push(k),
+                    None => groups.push((effective, vec![k])),
+                }
             }
-            parts.push(mitcad_3mf::Part {
-                name: body.name.clone(),
-                color: color(body.uid),
-                mesh,
-                placements,
-                metadata: Vec::new(),
-            });
+            if groups.is_empty() {
+                groups.push((
+                    print.as_ref().map(|_| {
+                        self.effective_print(&crate::document::PrintTarget::Body(
+                            body.uid,
+                            paths.first().cloned().flatten(),
+                        ))
+                    }),
+                    Vec::new(),
+                ));
+            }
+            let split = groups.len() > 1;
+            let count = groups.len();
+            let mut here = vec![(0, 0); placed.len()];
+            for (g, (effective, members)) in groups.into_iter().enumerate() {
+                let name = if split {
+                    // The group's occurrences, the first three named.
+                    let names: Vec<String> = members
+                        .iter()
+                        .filter_map(|&k| paths.get(k).cloned().flatten())
+                        .map(|path| self.assembly().path_name(&path))
+                        .filter(|name| !name.is_empty())
+                        .collect();
+                    match names.len() {
+                        0 => body.name.clone(),
+                        1..=3 => format!("{} ({})", body.name, names.join(", ")),
+                        n => format!(
+                            "{} ({} and {} more)",
+                            body.name,
+                            names[..3].join(", "),
+                            n - 3
+                        ),
+                    }
+                } else {
+                    body.name.clone()
+                };
+                for (i, &k) in members.iter().enumerate() {
+                    here[k] = (parts.len(), i);
+                }
+                if let Some(effective) = effective {
+                    settings.push(effective);
+                }
+                exported.parts.push((body.uid, name.clone()));
+                parts.push(mitcad_3mf::Part {
+                    name,
+                    color: color(body.uid),
+                    // The last group takes the mesh, the others a copy.
+                    mesh: if g + 1 == count {
+                        std::mem::take(&mut mesh)
+                    } else {
+                        mesh.clone()
+                    },
+                    placements: members.iter().map(|&k| placed[k]).collect(),
+                    metadata: Vec::new(),
+                });
+            }
+            if let Some(last) = part_of.last_mut() {
+                *last = here;
+            }
         }
         if parts.is_empty() {
             return Err(invalid("there are no solid or mesh bodies to export"));
@@ -1027,7 +1151,7 @@ impl<K: Kernel> Document<K> {
                     piece
                         .members
                         .iter()
-                        .filter_map(|&(b, k)| part_of.get(b).copied().flatten().map(|p| (p, k)))
+                        .filter_map(|&(b, k)| part_of.get(b).and_then(|p| p.get(k)).copied())
                         .collect()
                 })
                 .collect();
@@ -1048,12 +1172,14 @@ impl<K: Kernel> Document<K> {
                 .iter()
                 .zip(&placed)
                 .map(|(piece, members)| {
-                    piece.plan.transform.map(|turn| {
-                        bed::settled(&turn, points(members).into_iter(), piece.plan.plate)
+                    let settle = piece.plan.settle;
+                    bed::turn_to_settle(piece.plan.transform, settle).map(|turn| {
+                        bed::settled(&turn, points(members).into_iter(), piece.plan.plate, settle)
                     })
                 })
                 .collect();
-            // Side by side along X, the row centred on the plate.
+            // Side by side along X, the row centred on the plate (only when
+            // the pieces are centred, mitcad#1109).
             let turned: Vec<usize> = moved
                 .iter()
                 .zip(&placed)
@@ -1061,7 +1187,8 @@ impl<K: Kernel> Document<K> {
                 .filter(|(_, (t, members))| t.is_some() && !members.is_empty())
                 .map(|(i, _)| i)
                 .collect();
-            if turned.len() > 1 {
+            let centred = pieces.iter().all(|piece| piece.plan.settle.center);
+            if turned.len() > 1 && centred {
                 let spans: Vec<(f64, f64)> = turned
                     .iter()
                     .map(|&i| {
@@ -1128,18 +1255,12 @@ impl<K: Kernel> Document<K> {
             parts,
             objects,
             unit: three_mf(unit),
-            application: format!("Mitcad {}", env!("CARGO_PKG_VERSION")),
+            application: format!("MitCad {}", env!("CARGO_PKG_VERSION")),
             ..mitcad_3mf::Model::default()
         };
-        // The slicer's settings (mitcad#640): each body's effective ones.
-        if let Some((dialect, path_of)) = print {
-            let settings: Vec<crate::document::EffectivePrint> = exported
-                .bodies
-                .iter()
-                .map(|uid| {
-                    self.effective_print(&crate::document::PrintTarget::Body(*uid, path_of(*uid)))
-                })
-                .collect();
+        // The slicer's settings (mitcad#640): each part's effective ones
+        // (mitcad#1061: of its group of placements).
+        if let Some((dialect, _)) = print {
             let parts: Vec<crate::print_files::ExportPart<'_>> = model
                 .parts
                 .iter()
@@ -1183,6 +1304,11 @@ impl<K: Kernel> Document<K> {
                 part.metadata = metadata;
             }
             exported.slots = written.slots;
+            exported.printed = settings
+                .iter()
+                .map(|s| s.material.clone())
+                .zip(written.own_values)
+                .collect();
             exported.warnings.extend(written.warnings);
         }
         let data = mitcad_3mf::write(&model).map_err(|e| invalid(e.to_string()))?;

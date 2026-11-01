@@ -398,6 +398,9 @@ struct VariantHead {
     /// The evaluation's error; None when it succeeded.
     error: Option<String>,
     warnings: Vec<String>,
+    /// Its infos (mitcad#1106).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    infos: Vec<String>,
     /// A pattern's elements: linear part (row-major) and translation.
     elements: Vec<([[f64; 3]; 3], [f64; 3])>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -879,6 +882,7 @@ impl ResultStore {
                     .collect(),
                 error: output.result.clone().err(),
                 warnings: output.warnings.clone(),
+                infos: output.infos.clone(),
                 pattern_anchor: output.pattern_anchor.clone(),
                 sweep_place: output.sweep_place,
                 move_basis: output.move_basis,
@@ -1189,6 +1193,7 @@ fn restore<K: Kernel>(
         persisted: Flag::new(true),
         result: head.error.clone().map_or(Ok(()), Err),
         warnings: head.warnings.clone(),
+        infos: head.infos.clone(),
         pattern_anchor: head.pattern_anchor.clone(),
         sweep_place: head.sweep_place,
         move_basis: head.move_basis,

@@ -243,7 +243,7 @@ pub fn lookup(designation: &str) -> Option<&'static BearingSize> {
 pub fn size_of(designation: &str) -> Result<&'static BearingSize, String> {
     lookup(designation).ok_or_else(|| {
         format!(
-            "'{designation}' is not a standard bearing size (60, 62, 63, 68, 69 and 160 series, MR, R and F sizes)"
+            "{designation} is not a standard bearing size (60, 62, 63, 68, 69 and 160 series, MR, R and F sizes)"
         )
     })
 }

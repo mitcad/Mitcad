@@ -11,6 +11,7 @@
 #include <QStringList>
 #include <QTreeWidget>
 
+#include "../framework/NoticeLevel.hpp"
 #include "../framework/ParameterSuggest.hpp"
 #include "RuleBlocks.hpp"
 
@@ -47,6 +48,14 @@ struct Piece {
   // "when socket", "then.0 block", "then.0 option", "then.1 slot", "when label".
   QString name() const;
   Target target() const { return {path, insert}; }
+};
+
+// A block that is wrong (mitcad#1064): its place in the rule, the level of
+// its problem and the problem in words (its tooltip).
+struct BlockMark {
+  BlockPath path;
+  NoticeLevel level = NoticeLevel::Warning;
+  QString message;
 };
 
 class RuleCanvas;
@@ -118,6 +127,18 @@ public:
   // What the canvas says while it shows no rule (mitcad#967): the empty
   // state when the design has no rules.
   void setHint(const QString& hint);
+  // The rule's problem drawn on its frame (mitcad#1041): an error's or a
+  // warning's outline and badge; none for the other levels. The blocks that
+  // are wrong (mitcad#1064) get an outline in their level's colour and the
+  // problem as their tooltip; a mark whose block is not there marks the
+  // block it would be in. Logs "Rule canvas validation: <text>"
+  // (validationText) when it changes.
+  void setValidation(NoticeLevel level, std::vector<BlockMark> marks = {});
+  // "none", "warning", or the level with the marked places: "error at
+  // then.1 block", "warning at when.0 socket, when.1 socket", a mark of
+  // another level than the frame's with it in parentheses ("error at
+  // then.0.1 block, else.0.0 block (warning)").
+  QString validationText() const;
   void setParameters(const QStringList& parameters);
   // The design's tables and their columns (mitcad#849): a "combination in
   // table" block's table is chosen among them (completed as it is typed;
@@ -147,6 +168,9 @@ public:
   bool deleteFocused();
   // The pieces as laid out, for tests; the centre of one in the viewport.
   const std::vector<Piece>& pieces() const { return m_pieces; }
+  // The problem a marked piece shows as its tooltip (mitcad#1064), empty
+  // when it has none: native adapters give it to their hit targets.
+  QString pieceProblem(std::size_t index) const;
   std::optional<QPoint> pieceCenter(const QString& name) const;
   // The same deepest-piece hit test as mouse input: native drag adapters
   // may delete a block on a palette drop only when the press began on one.
@@ -214,6 +238,7 @@ private:
 
   int findPath(const BlockPath& path) const;
   void updateItems();
+  void logValidation();
 
   QGraphicsScene* m_scene = nullptr;
   std::vector<QGraphicsItem*> m_items; // one per piece
@@ -223,6 +248,9 @@ private:
   int m_focus = -1;
   QString m_focusName;
   int m_highlight = -1;
+  NoticeLevel m_validation = NoticeLevel::Hint;
+  std::vector<BlockMark> m_marks;
+  QString m_loggedValidation = QStringLiteral("none");
   QStringList m_options;
   QStringList m_numberOptions;
   std::vector<OptionInfo> m_infos;

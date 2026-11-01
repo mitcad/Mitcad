@@ -254,7 +254,7 @@ QStringList floorOpeningProblems(const std::vector<OpeningRow>& rows, double len
       problem = QObject::tr("its offsets are from the floor's corner: not negative");
     } else if ((known(length) && row.offset + row.width > length + kEps) ||
                (known(width) && row.across + row.height > width + kEps)) {
-      problem = known(length) && known(width) ? QObject::tr("outside the floor (%1 x %2 mm)").arg(mm(length), mm(width))
+      problem = known(length) && known(width) ? QObject::tr("outside the floor (%1 × %2 mm)").arg(mm(length), mm(width))
                                               : QObject::tr("outside the floor");
     }
     problems << problem;

@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use mitcad_model::notice::{self, Notice, NoticeLevel};
 use serde::Serialize;
 
 /// What an object became.
@@ -22,9 +23,9 @@ pub enum ObjectOutcome {
     /// Part of another object's result (a feature in a Body, an operand
     /// of a boolean, an element of a link array), or a folder.
     Included,
-    /// A Mitcad feature with everything FreeCAD's object says (a sketch).
+    /// A MitCad feature with everything FreeCAD's object says (a sketch).
     Parametric,
-    /// A Mitcad feature with what could be carried over; the report says
+    /// A MitCad feature with what could be carried over; the report says
     /// what was not.
     Partial,
     /// A feature of the history that could not be replayed or did not give
@@ -47,6 +48,19 @@ impl ObjectOutcome {
             Self::Partial => "partial",
             Self::Fallback => "fallback",
             Self::Skipped => "skipped",
+        }
+    }
+
+    /// The outcome's level (mitcad#1040): an object that came in as a
+    /// body, a component, occurrences, a feature or part of another is
+    /// information; one that came in partly, as a fallback or not at all
+    /// is a warning.
+    pub fn level(self) -> NoticeLevel {
+        match self {
+            Self::Body | Self::Component | Self::Occurrence | Self::Included | Self::Parametric => {
+                NoticeLevel::Info
+            }
+            Self::Partial | Self::Fallback | Self::Skipped => NoticeLevel::Warning,
         }
     }
 }
@@ -79,7 +93,7 @@ impl FallbackGroup {
     /// The words of the readable report.
     pub fn describe(self) -> &'static str {
         match self {
-            Self::Missing => "missing in Mitcad",
+            Self::Missing => "missing in MitCad",
             Self::NoCounterpart => "no parametric counterpart",
             Self::Other => "other",
         }
@@ -87,7 +101,7 @@ impl FallbackGroup {
 }
 
 /// A replayed feature's result against the shape FreeCAD stored for it
-/// (in the component's coordinates): the Mitcad bodies of its Body (or of
+/// (in the component's coordinates): the MitCad bodies of its Body (or of
 /// a Part workbench object) together, and FreeCAD's.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct FeatureCheck {
@@ -106,7 +120,7 @@ pub struct FeatureCheck {
 }
 
 /// A feature of the history (a PartDesign feature, a Part workbench
-/// object, a datum): what it became on Mitcad's timeline.
+/// object, a datum): what it became on MitCad's timeline.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct FeatureReport {
     pub object: String,
@@ -118,15 +132,15 @@ pub struct FeatureReport {
     pub body: Option<String>,
     /// `parametric`, `partial`, `fallback` or `skipped`.
     pub outcome: ObjectOutcome,
-    /// A fallback's group: `missing` (in Mitcad), `no_counterpart`,
+    /// A fallback's group: `missing` (in MitCad), `no_counterpart`,
     /// `other`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fallback_group: Option<FallbackGroup>,
-    /// The Mitcad features made of it (a definition, or the fallback's
+    /// The MitCad features made of it (a definition, or the fallback's
     /// base feature).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<String>,
-    /// The Mitcad feature type.
+    /// The MitCad feature type.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub mitcad: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -141,16 +155,16 @@ pub struct FeatureReport {
 pub struct DimensionSource {
     /// The constraint's index in the FreeCAD sketch.
     pub index: usize,
-    /// The Mitcad dimension (`k7`).
+    /// The MitCad dimension (`k7`).
     pub dimension: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expression: Option<String>,
-    /// FreeCAD's value (millimetres, radians) and Mitcad's.
+    /// FreeCAD's value (millimetres, radians) and MitCad's.
     pub value: f64,
     pub mitcad: f64,
-    /// The dimension's Mitcad value when it is a parameter (the
+    /// The dimension's MitCad value when it is a parameter (the
     /// constraint's name) or an expression of parameters.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameter: Option<String>,
@@ -162,11 +176,11 @@ pub struct DimensionSource {
 pub enum ExpressionOutcome {
     /// A parameter's expression.
     Parameter,
-    /// The expression of a value of a Mitcad feature or sketch.
+    /// The expression of a value of a MitCad feature or sketch.
     Expression,
     /// FreeCAD's value: no expression, or one that does not translate.
     Value,
-    /// Translated, but Mitcad's value differs from FreeCAD's: FreeCAD's
+    /// Translated, but MitCad's value differs from FreeCAD's: FreeCAD's
     /// value is kept.
     Mismatched,
     /// Bound to a property the import does not carry over.
@@ -189,7 +203,7 @@ impl ExpressionOutcome {
     }
 }
 
-/// A Mitcad parameter made of a FreeCAD quantity: a spreadsheet's cell, a
+/// A MitCad parameter made of a FreeCAD quantity: a spreadsheet's cell, a
 /// property (a VarSet's, or one that expressions refer to), a sketch's
 /// constraint.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -211,7 +225,7 @@ pub struct ParameterReport {
     /// FreeCAD's expression (a cell's formula without its `=`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub freecad: Option<String>,
-    /// Mitcad's expression and its value (millimetres, radians or a plain
+    /// MitCad's expression and its value (millimetres, radians or a plain
     /// number) after the import.
     pub expression: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -234,7 +248,7 @@ pub struct ExpressionReport {
     pub path: String,
     /// FreeCAD's expression.
     pub expression: String,
-    /// Mitcad's expression, or the parameter it became.
+    /// MitCad's expression, or the parameter it became.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mitcad: Option<String>,
     pub outcome: ExpressionOutcome,
@@ -262,7 +276,7 @@ pub struct SketchReport {
     pub label: String,
     /// `parametric`, `partial` or `skipped`.
     pub outcome: ObjectOutcome,
-    /// The Mitcad sketch.
+    /// The MitCad sketch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub feature: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -272,7 +286,7 @@ pub struct SketchReport {
     /// FreeCAD's geometry and constraints.
     pub geometry: usize,
     pub constraints: usize,
-    /// The Mitcad sketch's entities, constraints and dimensions.
+    /// The MitCad sketch's entities, constraints and dimensions.
     pub entities: usize,
     pub mitcad_constraints: usize,
     pub dimensions: usize,
@@ -311,10 +325,10 @@ pub struct ObjectReport {
     pub outcome: ObjectOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// The Mitcad bodies made of it.
+    /// The MitCad bodies made of it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub bodies: Vec<String>,
-    /// The Mitcad component made of it or that its body went into, when
+    /// The MitCad component made of it or that its body went into, when
     /// not the root.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub component: Option<String>,
@@ -374,12 +388,12 @@ pub struct PlacedReport {
     /// (by area).
     pub center: [f64; 3],
     pub visible: bool,
-    /// Bodies the history's replay made are among them (Mitcad rebuilt
+    /// Bodies the history's replay made are among them (MitCad rebuilt
     /// them, so they agree with FreeCAD's shapes to the replay's
     /// tolerance, not to the digits of the stored shape).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub replayed: bool,
-    /// A replayed body's place: Mitcad's measures of the shape FreeCAD
+    /// A replayed body's place: MitCad's measures of the shape FreeCAD
     /// stored for the object there, in world coordinates (FreeCAD's own
     /// measures of some shapes, B-spline surfaces among them, are less
     /// exact).
@@ -387,7 +401,7 @@ pub struct PlacedReport {
     pub stored: Option<StoredMeasures>,
     /// A place of shapes the import brought in as FreeCAD stored them: their
     /// measures with the kernel's plain fixed-point integration, as FreeCAD
-    /// measures (`Kernel::fixed_point_properties`; Mitcad integrates faces
+    /// measures (`Kernel::fixed_point_properties`; MitCad integrates faces
     /// bounded by B-splines of many spans more exactly, mitcad#139).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fixed: Option<StoredMeasures>,
@@ -476,7 +490,24 @@ impl FcstdReport {
         counts
     }
 
-    /// The fallback features of the history by group: missing in Mitcad,
+    /// The import's notices (mitcad#1040): what its objects' outcomes left
+    /// out, the worst first, then its warnings.
+    pub fn notices(&self) -> Vec<Notice> {
+        let objects = |n| notice::count(n, "object", "objects");
+        let mut notices =
+            notice::outcome_notices(self.counts(), ObjectOutcome::level, |o, n| match o {
+                ObjectOutcome::Partial => format!("{} imported partly", objects(n)),
+                ObjectOutcome::Fallback => {
+                    format!("{} replaced by the file's stored shapes", objects(n))
+                }
+                ObjectOutcome::Skipped => format!("{} skipped", objects(n)),
+                _ => format!("{} imported", objects(n)),
+            });
+        notices.extend(self.warnings.iter().map(|w| Notice::warning(w.as_str())));
+        notices
+    }
+
+    /// The fallback features of the history by group: missing in MitCad,
     /// without a parametric counterpart, other.
     pub fn fallback_groups(&self) -> [usize; 3] {
         let mut groups = [0; 3];
@@ -549,7 +580,7 @@ impl FcstdReport {
             let [missing, none, other] = self.fallback_groups();
             let _ = writeln!(
                 out,
-                "  fallbacks by group: {missing} missing in Mitcad, {none} without a parametric counterpart, {other} other"
+                "  fallbacks by group: {missing} missing in MitCad, {none} without a parametric counterpart, {other} other"
             );
         }
         let types: Vec<String> = self
@@ -595,7 +626,7 @@ impl FcstdReport {
                     .as_deref()
                     .map_or(String::new(), |a| format!(", appearance {a}")),
                 if body.face_appearances > 0 {
-                    format!(", {} faces of their own colour", body.face_appearances)
+                    format!(", {} faces of their own color", body.face_appearances)
                 } else {
                     String::new()
                 },
@@ -735,5 +766,37 @@ fn truncate(text: &str, width: usize) -> String {
         let mut t: String = text.chars().take(width - 1).collect();
         t.push('~');
         t
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::*;
+
+    #[test]
+    fn outcomes_map_onto_the_levels() {
+        // (mitcad#1040) What came in is information; what came in partly,
+        // as a fallback or not at all is a warning.
+        for outcome in [
+            ObjectOutcome::Body,
+            ObjectOutcome::Component,
+            ObjectOutcome::Occurrence,
+            ObjectOutcome::Included,
+            ObjectOutcome::Parametric,
+        ] {
+            assert_eq!(outcome.level(), NoticeLevel::Info, "{}", outcome.as_str());
+        }
+        for outcome in [
+            ObjectOutcome::Partial,
+            ObjectOutcome::Fallback,
+            ObjectOutcome::Skipped,
+        ] {
+            assert_eq!(
+                outcome.level(),
+                NoticeLevel::Warning,
+                "{}",
+                outcome.as_str()
+            );
+        }
     }
 }

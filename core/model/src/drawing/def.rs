@@ -57,7 +57,7 @@ impl FromStr for DrawingUid {
             .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
             .and_then(|n| n.parse().ok())
             .map(Self)
-            .ok_or_else(|| format!("'{text}' is no drawing id like \"D1\""))
+            .ok_or_else(|| format!("“{text}” is no drawing id like \"D1\""))
     }
 }
 
@@ -1279,7 +1279,7 @@ impl DrawingSheet {
         if let Some(units) = &self.units
             && super::Units::by_symbol(units).is_none()
         {
-            return Err(format!("unknown length unit '{units}'"));
+            return Err(format!("unknown length unit “{units}”"));
         }
         if let Some(template) = &self.template {
             template.check()?;

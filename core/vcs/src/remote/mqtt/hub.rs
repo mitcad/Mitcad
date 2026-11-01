@@ -154,7 +154,7 @@ impl Target {
         let prefix = optional(command, "prefix")?.unwrap_or(DEFAULT_PREFIX);
         if !valid_prefix(prefix) {
             return Err(LiveError::invalid(format!(
-                "'{prefix}' is not a topic prefix (letters, digits, -, _ and /)"
+                "“{prefix}” is not a topic prefix (letters, digits, -, _ and /)"
             )));
         }
         let session = optional(command, "session")?
@@ -163,7 +163,7 @@ impl Target {
                     Ok(session.to_owned())
                 } else {
                     Err(LiveError::invalid(format!(
-                        "'{session}' is not a session (a UUID in lowercase)"
+                        "“{session}” is not a session (a UUID in lowercase)"
                     )))
                 }
             })
@@ -262,7 +262,7 @@ fn project_field(command: &Value) -> Result<&str, LiveError> {
         Ok(project)
     } else {
         Err(invalid(format!(
-            "'{project}' is not a project id (its first commit in hexadecimal)"
+            "{project} is not a project id (its first commit in hexadecimal)"
         )))
     }
 }
@@ -362,7 +362,7 @@ impl LiveHub {
                 self.events.close();
                 Ok(answer)
             }
-            other => Err(invalid(format!("unknown live command '{other}'"))),
+            other => Err(invalid(format!("unknown live command “{other}”"))),
         }
     }
 
@@ -498,7 +498,7 @@ impl LiveHub {
         let id = text(command, "connection")?;
         let session = text(command, "session")?;
         if !check::is_session(session) {
-            return Err(invalid(format!("'{session}' is not a session (a UUID)")));
+            return Err(invalid(format!("“{session}” is not a session (a UUID)")));
         }
         let mut state = self.lock();
         let entry = find(&mut state, id)?;
@@ -604,7 +604,7 @@ fn find<'a>(state: &'a mut HubState, id: &str) -> Result<&'a mut Entry, LiveErro
         .connections
         .iter_mut()
         .find(|e| e.id == id)
-        .ok_or_else(|| invalid(format!("no live connection '{id}'")))
+        .ok_or_else(|| invalid(format!("no live connection {id}")))
 }
 
 /// The owner of a lock as the application gives it (`lock.json`'s owner:
@@ -653,7 +653,7 @@ pub(super) fn outgoing(
             Ok(path.to_owned())
         } else {
             Err(invalid(format!(
-                "'{path}' is not a path relative to the project ('/' between folders)"
+                "{path} is not a path relative to the project ('/' between folders)"
             )))
         }
     };
@@ -722,7 +722,7 @@ pub(super) fn outgoing(
                 Some("declined") => Some(Answer::Declined),
                 Some(other) => {
                     return Err(invalid(format!(
-                        "'{other}' is not an answer (released, keep or declined)"
+                        "“{other}” is not an answer (released, keep or declined)"
                     )));
                 }
             };
@@ -771,7 +771,7 @@ pub(super) fn outgoing(
                 "read-only" => OpenMode::ReadOnly,
                 other => {
                     return Err(invalid(format!(
-                        "'{other}' is not a mode (editing or read-only)"
+                        "“{other}” is not a mode (editing or read-only)"
                     )));
                 }
             };
@@ -804,7 +804,7 @@ pub(super) fn outgoing(
         }
         other => {
             return Err(invalid(format!(
-                "unknown live message '{other}' (lock, request, receipt, answer, withdrawn, \
+                "unknown live message “{other}” (lock, request, receipt, answer, withdrawn, \
                  version, open, closed)"
             )));
         }

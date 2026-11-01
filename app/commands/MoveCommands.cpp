@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Scale, Combine, Move/Copy, Align and Appearance
-// (commands.md, "move, align, scale", "combine", "Visibility and
-// display"). Move/Copy's free move has
-// handles: arrows along X, Y and Z and rings about them, at the middle of
-// what moves.
+// Scale, Combine, Move/Copy and Align (commands.md, "move, align, scale",
+// "combine"; Appearance is MaterialCommands.cpp's, mitcad#1059). Move/Copy's
+// free move has handles: arrows along X, Y and Z and rings about them, at
+// the middle of what moves.
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -1244,72 +1243,6 @@ CommandDef combineCommand(const CommandContext& context) {
     return QStringLiteral("Added combine (%1) of %2 tool(s)")
         .arg(state.choice(QStringLiteral("operation")))
         .arg(state.items(QStringLiteral("tools")).size());
-  };
-  return def;
-}
-
-// ---------------------------------------------------------------------------
-// Appearance (materials are Edit Materials', the main window's: mitcad#655)
-
-CommandDef appearanceCommand(const CommandContext& context) {
-  CommandDef def;
-  def.id = QStringLiteral("solid.appearance");
-  def.name = QObject::tr("Appearance");
-  def.icon = QStringLiteral("appearance");
-  def.tooltip = QObject::tr("How bodies look");
-  def.group = QStringLiteral("MODIFY");
-  def.keywords = QStringList{QStringLiteral("colour"), QStringLiteral("color"), QStringLiteral("paint")};
-  def.modelCommand = true;
-  InputDef value = choiceInput(QStringLiteral("value"), QObject::tr("Appearance"), {}, QStringLiteral("steel_satin"));
-  // The library's appearances and the document's own (mitcad#46).
-  value.withChoices([&context](const CommandState&) {
-    Choices choices{{QString(), QObject::tr("Default")}};
-    for (const Appearance& appearance : appearancesOf(context.queryArray(QStringLiteral("appearances")))) {
-      choices.append({appearance.id, appearance.name});
-    }
-    return choices;
-  });
-  // Appearances also go to single faces (mitcad#53), overriding their
-  // body's; Default takes a face's own away.
-  def.inputs = {selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies"), SelectKind::Body, 0, 0),
-                selectionInput(QStringLiteral("faces"), QObject::tr("Faces"), SelectKind::Face, 0, 0), value};
-  def.enabled = [&context] { return hasBodies(context); };
-  def.build = [name = def.name](const CommandState& state, const CommandContext&) {
-    Built result;
-    const QString value = state.choice(QStringLiteral("value"));
-    const QJsonValue id = value.isEmpty() ? QJsonValue() : QJsonValue(value);
-    QJsonArray commands;
-    QStringList owners;
-    QHash<QString, QJsonArray> faces;
-    for (const SelectionItem& item : state.items(QStringLiteral("faces"))) {
-      if (!owners.contains(item.owner)) {
-        owners << item.owner;
-      }
-      faces[item.owner].append(item.name);
-    }
-    if (owners.isEmpty() && state.items(QStringLiteral("bodies")).isEmpty()) {
-      return Built::failure(QObject::tr("Select bodies or faces"), QStringLiteral("bodies"));
-    }
-    for (const SelectionItem& item : state.items(QStringLiteral("bodies"))) {
-      commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("set_body_appearance")},
-                                  {QStringLiteral("uid"), item.owner},
-                                  {QStringLiteral("appearance"), id}});
-    }
-    for (const QString& owner : std::as_const(owners)) {
-      commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("set_face_appearance")},
-                                  {QStringLiteral("uid"), owner},
-                                  {QStringLiteral("faces"), faces.value(owner)},
-                                  {QStringLiteral("appearance"), id}});
-    }
-    result.def = {{QStringLiteral("commands"), commands}, {QStringLiteral("label"), name}};
-    return result;
-  };
-  def.describe = [](const CommandState& state, const CommandContext&) {
-    const auto faces = state.items(QStringLiteral("faces")).size();
-    return QStringLiteral("Appearance %1 for %2 body(ies)%3")
-        .arg(state.choice(QStringLiteral("value")))
-        .arg(state.items(QStringLiteral("bodies")).size())
-        .arg(faces > 0 ? QStringLiteral(", %1 face(s)").arg(faces) : QString());
   };
   return def;
 }

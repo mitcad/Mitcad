@@ -66,7 +66,7 @@ Ui-ExpectNew 'View hint Wall: Click where the wall ends, or press Enter: Length 
   'the end next, else Length square to the wall'
 Ui-Mark
 Ui-Step '3000 mm long'                   { Ui-TypeIn 'Panel Wall input frame_length' '3000' }
-Expect-Inspect 'Wall' @('frame wall Wall 2, wall 3000 x 2400 mm', "; Wall 2: from Wall 1's side, flush with end A (butt)",
+Expect-Inspect 'Wall' @("frame wall Wall 2, wall 3000 ${Times} 2400 mm", "; Wall 2: from Wall 1's side, flush with end A (butt)",
   '; corner butt', '; length typed') 'Wall 2 previewed flush with end A, the length typed'
 Ui-Mark
 Ui-Step 'Offset 600'                     { Ui-TypeIn 'Panel Wall input frame_offset' '600' }
@@ -147,7 +147,7 @@ Ui-Step "the start on Wall 2's side"     { Ui-Click $side[0] $side[1] }
 Ui-ExpectNew 'BUILD frame start click: From ' 'the click fills From and Offset'
 Ui-ExpectNew "View hint Wall: Click where the wall ends, or press Enter: to Wall 3's side" `
   'the end next, else to the wall the run meets'
-Expect-Inspect 'Wall' @('frame wall Wall 4, wall 3453 x 2400 mm', "; Wall 4: from Wall 2's side, ",
+Expect-Inspect 'Wall' @("frame wall Wall 4, wall 3453 ${Times} 2400 mm", "; Wall 4: from Wall 2's side, ",
   ", to Wall 3's side (butt), 3404 mm", '; length auto') 'Wall 4 previewed between Wall 2 and Wall 3, no End clicked'
 $line = Ui-NewLines |
   Where-Object { $_.StartsWith('Inspect Wall: ') -and $_.Contains("to Wall 3's side") } | Select-Object -Last 1
@@ -170,10 +170,10 @@ Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
 Ui-Mark
 Ui-Step 'Wall (F7)'                      { Ui-Key 'F7' }
 Ui-ExpectNew 'Command Wall started' 'Wall started'
-Expect-Inspect 'Wall' @('frame wall Wall 1, wall 3600 x 2400 mm', 'fasteners yes') 'a wall from the origin along +X'
+Expect-Inspect 'Wall' @("frame wall Wall 1, wall 3600 ${Times} 2400 mm", 'fasteners yes') 'a wall from the origin along +X'
 Ui-Mark
 Ui-Step 'no fasteners'                   { Ui-ClickLogged 'Panel Wall input frame_fasteners' }
-Expect-Inspect 'Wall' @('frame wall Wall 1, wall 3600 x 2400 mm', 'fasteners no') 'without fasteners'
+Expect-Inspect 'Wall' @("frame wall Wall 1, wall 3600 ${Times} 2400 mm", 'fasteners no') 'without fasteners'
 Ui-Mark
 Ui-Step 'Place (Enter)'                  { Ui-Key 'Return' }
 Ui-ExpectNew 'Placed frame Wall 1 (wall, lead ' 'the wall placed' 60

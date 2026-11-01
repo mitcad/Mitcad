@@ -167,7 +167,7 @@ fn the_first_dimension_scales_a_rectangle_drawn_10_by_5_to_100_by_50() {
     near2(
         at(&s, c["center"].as_str().unwrap()),
         [200.0, 0.0],
-        "circle centre",
+        "circle center",
     );
     let text = &s["texts"][0];
     near(text["height"].as_f64().unwrap(), 20.0, "text height");
@@ -363,7 +363,7 @@ fn sketch_scale_scales_the_sketch_with_its_dimension_values() {
     near2(
         at(&s, bottom["start"].as_str().unwrap()),
         [-15.0, 0.0],
-        "corner, about the centre",
+        "corner, about the center",
     );
     let measured: Vec<f64> = s["dimensions"]
         .as_array()

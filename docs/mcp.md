@@ -66,6 +66,11 @@ The state line names the next step, and its button does it:
   use MitCad** or **Restart ChatGPT or start a new Codex session to use
   MitCad**. This means the settings exist, not that the assistant is
   running. Repeating a setup changes nothing and makes no new backup.
+  After an assistant disconnects in this run of MitCad, its line explains
+  how to reconnect: **Reconnect MitCad in Claude Code (/mcp › mitcad ›
+  Reconnect) or start a new session**, or **Restart ChatGPT or Codex, or
+  start a new session**. The assistant indicator opens this dialog on the
+  last chosen assistant even with no connection.
 - **✓ Connected: *assistant*** with **Disconnect**: shown only after the
   MCP initialization handshake completes, and only for the chosen
   assistant's clients, recognised by the names they give themselves
@@ -76,7 +81,9 @@ The state line names the next step, and its button does it:
   authentication identities. **Disconnect** ends the chosen assistant's
   connections only (**Disconnect *assistant*** while others stay connected,
   an **Other** client by its own name) and keeps the design and its
-  unsaved edits.
+  unsaved edits and the assistant's setup. The old bridge connection ends;
+  reconnect in the assistant as the state line explains. A client that
+  closes its connection gets the same reconnect advice.
 - A failure: one short line in the error colour saying what to do, with
   **Try again**. The details (a client's error output, for instance) are
   in the line's tooltip.
@@ -148,11 +155,14 @@ are listed, and can be removed, in **Preferences › AI Assistants**.
   that need it are quoted (PowerShell on Windows, a POSIX shell
   elsewhere). The copies are a fallback, not a prerequisite.
 - **Codex settings file** with **Change…** (ChatGPT / Codex only).
-- With several MitCad windows open, **Copy Command for This Window**. The
-  bridge refuses to choose between several live MitCad windows: keep only
-  the intended window open, or start the bridge with this command (it adds
-  `--instance` for this window; `--list-instances` lists them). A saved
-  setup never records a temporary instance id.
+- With several MitCad windows open, the bridge connects to the window
+  active last and names its design on stderr. The connection stays with
+  that window for the whole assistant session, even when another window
+  becomes active. **Copy Command for This Window** adds `--instance` to
+  choose this window explicitly; `--list-instances` lists the live windows.
+  A saved setup never records a temporary instance id. The dialog names a
+  connected assistant **in this window** or **in** the other design; the
+  assistant indicator belongs only to the connected window.
 
 A WSL, remote or cloud client is not automatically on the native application's
 host. Browser and mobile conversations cannot launch this stdio bridge;
@@ -250,9 +260,15 @@ On macOS, the installed bundle includes the CLI:
 
 `--list-instances` prints `{"instances":[...]}`. The list gives the
 `instance`, `pid`, `host` and `port` of each live instance. It never
-prints authentication tokens. If several instances are open, `--connect`
-refuses to select one. Then pass `--connect --instance ID` with an ID
-from the list.
+prints authentication tokens. With several instances open, `--connect`
+selects the window active last. Each instance records its latest activation
+as UTC milliseconds beside its private discovery record, along with its
+design title and connected client names, without a token. The bridge names
+its choice and the other designs on stderr; MCP stdout stays JSON-RPC only.
+A connected bridge keeps its chosen window until the session ends.
+If none of the live instances has an activation time (for example, older
+applications), the bridge asks for `--instance` as before. For scripts,
+`--connect --instance ID` always selects exactly that ID from the list.
 
 An instance is live only when the token of its record authenticates on
 its port. A port that another program reuses is not sufficient. If the
@@ -476,7 +492,8 @@ with that one body. The native `result` of `add_feature` and
 rotation, revolve, draft, taper or chamfer angle of more than one turn:
 a JSON number there is radians, and `"angle": 90` warns
 `Move1 angle: 90 is read as radians (5156.6°); write "90 deg" for
-degrees` (mitcad#714, commands.md "Values"). `"timeline": "full"` gives the whole `timeline` and
+degrees` (mitcad#714, commands.md "Values"); an angle computed from
+parameters (`"d1 + 30 deg"`) never warns (mitcad#1092). `"timeline": "full"` gives the whole `timeline` and
 `bodies` instead, as before; `"timeline": "none"` only `state`.
 
 **A sketch that is open for edit** takes its own commands through the
@@ -813,11 +830,13 @@ work as there, each refused entry undoing the ones before it.
 
 The export formats are `step`, `iges`, `brep`, `stl`, `obj`, `3mf`,
 `usdz` and `dxf`. DXF must have a `sketch` name or UID and excludes
-`bodies`. The other formats accept `bodies` and exclude `sketch`. An
-export must have a new output path. OBJ can also write the adjacent
-`.mtl` file. That file must also be a new path in the workspace. Per-body
-SVG and DXF drawings write numbered files such as `part-2.svg`; every
-output is checked before the first file is written.
+`bodies`; a name several features share gives its only sketch, else it
+is refused with their UIDs (feature names are not unique). The other
+formats accept `bodies` and exclude `sketch`. An export must have a new
+output path. OBJ can also write the adjacent `.mtl` file. That file must
+also be a new path in the workspace. Per-body SVG and DXF drawings write
+numbered files such as `part-2.svg`; every output is checked before the
+first file is written.
 
 STEP, IGES and BRep keep exact geometry. STL, OBJ, 3MF and USDZ
 tessellate it. USDZ includes the appearances. Headless USDZ export
@@ -1025,14 +1044,14 @@ command validation fails, the document stays unchanged.
 
 Errors give the choices (mitcad#714), in both servers:
 
-- An unknown query says `unknown query 'bbox'` and lists the queries the
+- An unknown query says `unknown query bbox` and lists the queries the
   server permits; an unknown command lists the permitted commands. A
   query or command that exists but that MCP refuses by its class keeps
-  its own error (`query 'dxf_info' is not available through MCP`).
+  its own error (`query dxf_info is not available through MCP`).
 - A command or query object without its name shows the form:
   `{"command": "list"}` as `command` gives `a command is {"cmd":
   "<name>", ...its fields}, for example {"cmd": "add_feature", "def":
-  {...}}; this one has no 'cmd' (its fields: command)`. A definition
+  {...}}; this one has no cmd (its fields: command)`. A definition
   without `type` asks for it the same way.
 - The model names only the first missing field of a definition. When a
   refused `model_command` misses a field, the result also has

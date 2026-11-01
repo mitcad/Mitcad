@@ -18,6 +18,7 @@
 #include <QSettings>
 #include <QString>
 #include <QStringList>
+#include <QToolButton>
 #include <QWidget>
 
 #include "print/PrintKeys.hpp"
@@ -345,5 +346,74 @@ int printSettingsFormTests() {
     marked = marked || label->text() == QStringLiteral("4 on Body1, 3 on Arm");
   }
   CHECK(marked);
+
+  // A key kept per slicer that the form edits (mitcad#1062: a material's
+  // filament preset): a row per slicer, shown with Advanced off, each
+  // field its slicer's entry; unset, a Bambu-family slicer shows the name
+  // the export takes from another member; ↺ takes out its slicer's entry
+  // only. Without setSlicerKeys such a key is not shown.
+  const QJsonObject named{{QStringLiteral("bambu_studio"), QStringLiteral("Generic PETG HF")},
+                          {QStringLiteral("prusaslicer"), QStringLiteral("Prusament PETG")}};
+  CHECK(slicerPresetOf(named, QStringLiteral("bambu_studio")) == QStringLiteral("Generic PETG HF"));
+  QString from;
+  CHECK(slicerPresetOf(named, QStringLiteral("qidi_studio"), &from) == QStringLiteral("Generic PETG HF"));
+  CHECK(from == QStringLiteral("bambu_studio"));
+  CHECK(slicerPresetOf(named, QStringLiteral("cura")).isEmpty());
+  CHECK(slicerPresetOf(QJsonObject{{QStringLiteral("prusaslicer"), QStringLiteral("Prusament PETG")}},
+                       QStringLiteral("orcaslicer"))
+            .isEmpty());
+  CHECK(slicerPresetOf(QJsonValue(QStringLiteral("Any")), QStringLiteral("cura")) == QStringLiteral("Any"));
+  QJsonObject preset = key("filament_settings_id", "Filament preset", "text", "", "quality", "seam", true);
+  preset.insert(QStringLiteral("per_dialect"), true);
+  QJsonArray presetDialects;
+  for (const QString& id : {QStringLiteral("bambu_studio"), QStringLiteral("orcaslicer"), QStringLiteral("prusaslicer")}) {
+    presetDialects.append(QJsonObject{{QStringLiteral("dialect"), id},
+                                      {QStringLiteral("key"), QStringLiteral("filament_settings_id")},
+                                      {QStringLiteral("list"), true}});
+  }
+  preset.insert(QStringLiteral("dialects"), presetDialects);
+  QJsonArray presetKeys;
+  presetKeys.append(preset);
+  const PrintKeyTable presetTable(QJsonObject{{QStringLiteral("keys"), presetKeys}});
+  CHECK(presetTable.find(QStringLiteral("filament_settings_id")) != nullptr &&
+        presetTable.find(QStringLiteral("filament_settings_id"))->dialects.size() == 3);
+  SettingsForm presets;
+  presets.setSlicerKeys({QStringLiteral("filament_settings_id")});
+  presets.setKeys(presetTable, QStringLiteral("process"));
+  presets.setValues(QJsonObject{{QStringLiteral("filament_settings_id"), named}});
+  CHECK(presets.keyShown(QStringLiteral("filament_settings_id")));
+  CHECK(presets.rows() == QStringList({QStringLiteral("filament_settings_id.bambu_studio = Generic PETG HF"),
+                                       QStringLiteral("filament_settings_id.prusaslicer = Prusament PETG")}));
+  SettingField* orca = nullptr;
+  SettingField* bambu = nullptr;
+  for (SettingField* presetField : presets.findChildren<SettingField*>()) {
+    if (presetField->slicer() == QStringLiteral("orcaslicer")) {
+      orca = presetField;
+    } else if (presetField->slicer() == QStringLiteral("bambu_studio")) {
+      bambu = presetField;
+    }
+  }
+  CHECK(orca != nullptr && bambu != nullptr);
+  if (orca != nullptr && bambu != nullptr) {
+    const QLineEdit* orcaLine = orca->findChild<QLineEdit*>();
+    CHECK(orcaLine != nullptr && orcaLine->text().isEmpty() &&
+          orcaLine->placeholderText() == QStringLiteral("Generic PETG HF (as Bambu Studio)"));
+    const QLineEdit* bambuLine = bambu->findChild<QLineEdit*>();
+    CHECK(bambuLine != nullptr && bambuLine->text() == QStringLiteral("Generic PETG HF"));
+    QJsonValue presetCommitted(QStringLiteral("nothing"));
+    QObject::connect(bambu, &SettingField::committed,
+                     [&presetCommitted](const QString&, const QJsonValue& value) { presetCommitted = value; });
+    auto* reset = bambu->findChild<QToolButton*>();
+    CHECK(reset != nullptr);
+    if (reset != nullptr) {
+      reset->click();
+    }
+    CHECK(presetCommitted ==
+          QJsonValue(QJsonObject{{QStringLiteral("prusaslicer"), QStringLiteral("Prusament PETG")}}));
+  }
+  SettingsForm withoutSlicers;
+  withoutSlicers.setKeys(presetTable, QStringLiteral("process"));
+  withoutSlicers.setValues(QJsonObject{{QStringLiteral("filament_settings_id"), named}});
+  CHECK(!withoutSlicers.keyShown(QStringLiteral("filament_settings_id")));
   return failures;
 }

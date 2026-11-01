@@ -5,6 +5,7 @@
 #include <cmath>
 #include <initializer_list>
 #include <optional>
+#include <utility>
 
 #include <QBrush>
 #include <QColor>
@@ -65,6 +66,25 @@ protected:
     } else {
       event->ignore();
     }
+  }
+};
+
+// One slicer's preset field (mitcad#1062): an editable drop-down whose
+// list is asked for each time it opens (the installed slicer's presets),
+// the typed text kept.
+class PresetComboBox : public WheelSafeComboBox {
+public:
+  std::function<QStringList()> names;
+
+  void showPopup() override {
+    if (names) {
+      const QString typed = currentText();
+      const QSignalBlocker block(this);
+      clear();
+      addItems(names());
+      setEditText(typed);
+    }
+    QComboBox::showPopup();
   }
 };
 
@@ -341,10 +361,11 @@ private:
 
 } // namespace
 
-SettingField::SettingField(const PrintKey& key, QWidget* parent, bool takesPercent)
-    : QWidget(parent), m_key(key), m_takesPercent(takesPercent) {
-  // A value per slicer is never typed: the slicers' presets name it.
-  m_readOnly = key.perDialect;
+SettingField::SettingField(const PrintKey& key, QWidget* parent, bool takesPercent, const QString& slicer)
+    : QWidget(parent), m_key(key), m_slicer(key.perDialect ? slicer : QString()), m_takesPercent(takesPercent) {
+  // A value per slicer is never typed as a whole: the slicers' presets
+  // name it, one slicer's field each (mitcad#1062).
+  m_readOnly = key.perDialect && m_slicer.isEmpty();
   build();
   showValue();
   updateState();
@@ -411,7 +432,27 @@ void SettingField::build() {
     });
     return m_combo;
   };
-  if (m_key.perDialect) {
+  if (!m_slicer.isEmpty()) {
+    // One slicer's preset (mitcad#1062): a name typed or chosen from the
+    // installed slicer's presets; Enter, leaving the field or a choice
+    // commits it.
+    auto* combo = new PresetComboBox;
+    combo->names = [this] { return m_choices ? m_choices() : QStringList(); };
+    combo->setEditable(true);
+    combo->setInsertPolicy(QComboBox::NoInsert);
+    m_combo = combo;
+    m_line = combo->lineEdit();
+    m_line->installEventFilter(this);
+    connect(m_line, &QLineEdit::textEdited, this, [this] { m_dirty = true; });
+    connect(m_line, &QLineEdit::editingFinished, this, [this] {
+      if (m_dirty) {
+        commitTyped();
+      }
+    });
+    connect(m_combo, &QComboBox::activated, this,
+            [this](int index) { commitPreset(m_combo->itemText(index).trimmed()); });
+    editor->addWidget(m_combo, 1);
+  } else if (m_key.perDialect) {
     m_text = new QLabel;
     m_text->setTextInteractionFlags(Qt::TextSelectableByMouse);
     editor->addWidget(m_text, 1);
@@ -469,7 +510,7 @@ void SettingField::build() {
       // unset, the grey word for what is used instead (ColorFieldButton); a
       // click opens the colour picker. No code to type.
       m_swatch = new ColorFieldButton(m_key.name);
-      m_swatch->setToolTip(tr("Choose a colour"));
+      m_swatch->setToolTip(tr("Choose a color"));
       connect(m_swatch, &QPushButton::clicked, this, &SettingField::pickColor);
       editor->addWidget(m_swatch, 1);
       break;
@@ -503,18 +544,24 @@ void SettingField::build() {
   m_clear->setToolTip(tr("Reset"));
   m_clear->setFocusPolicy(Qt::NoFocus);
   m_clear->setFixedWidth(24);
-  connect(m_clear, &QToolButton::clicked, this, [this] { commit(QJsonValue()); });
+  connect(m_clear, &QToolButton::clicked, this, [this] {
+    if (m_slicer.isEmpty()) {
+      commit(QJsonValue());
+    } else {
+      commitPreset(QString()); // this slicer's entry only (mitcad#1062)
+    }
+  });
   box->addWidget(m_editor);
   box->addWidget(m_clear);
   // The own values bodies, occurrences or components set of the key, as
   // a grey hint like Newer: (mitcad#655): "4 on Body1, 3 on Arm".
   m_overrideMark = new QLabel;
-  m_overrideMark->setStyleSheet(QStringLiteral("color: gray;"));
+  setRoleStyleSheet(m_overrideMark, ColorRole::TextSecondary);
   m_overrideMark->hide();
   box->addWidget(m_overrideMark);
   // What Update would make the value (mitcad#655), small and grey.
   m_hint = new QLabel;
-  m_hint->setStyleSheet(QStringLiteral("color: gray;"));
+  setRoleStyleSheet(m_hint, ColorRole::TextSecondary);
   m_hint->hide();
   box->addWidget(m_hint);
   box->addStretch(1);
@@ -531,7 +578,8 @@ void SettingField::setValue(const QJsonValue& value) {
   }
   setError(QString());
   m_value = value;
-  m_set = !(value.isNull() || value.isUndefined());
+  // One slicer's field is set when that slicer has its own entry.
+  m_set = m_slicer.isEmpty() ? !(value.isNull() || value.isUndefined()) : !ownPreset().isEmpty();
   showValue();
   updateState();
 }
@@ -539,7 +587,7 @@ void SettingField::setValue(const QJsonValue& value) {
 void SettingField::setPlaceholderValue(const QJsonValue& value, const QString& words) {
   m_placeholder = value;
   m_placeholderText = words;
-  if (m_line != nullptr) {
+  if (m_line != nullptr && m_slicer.isEmpty()) {
     // As the field would show the value: a number without its unit, which
     // is beside the field (or in its unit box).
     QString text;
@@ -578,7 +626,7 @@ void SettingField::showUnit() {
 }
 
 void SettingField::setReadOnly(bool readOnly) {
-  m_readOnly = readOnly || m_key.perDialect;
+  m_readOnly = readOnly || (m_key.perDialect && m_slicer.isEmpty());
   updateState();
 }
 
@@ -590,6 +638,16 @@ void SettingField::setClearable(bool clearable) {
 void SettingField::showValue() {
   const QJsonValue value = m_value;
   const bool none = !m_set;
+  if (!m_slicer.isEmpty()) {
+    // Its own entry; unset, what the export uses then: another Bambu-family
+    // slicer's preset, else none (the material's own name, no preset).
+    QString from;
+    const QString used = slicerPresetOf(value, m_slicer, &from);
+    const QSignalBlocker block(m_combo);
+    m_line->setText(none ? QString() : used);
+    m_line->setPlaceholderText(none && !used.isEmpty() ? tr("%1 (as %2)").arg(used, slicerTitle(from)) : tr("None"));
+    return;
+  }
   if (m_key.perDialect) {
     QStringList lines;
     const QJsonObject slicers = value.toObject();
@@ -655,7 +713,7 @@ void SettingField::showValue() {
 
 void SettingField::updateState() {
   // Read only: the field disabled, so it looks read only (mitcad#655).
-  m_editor->setEnabled(!m_readOnly || m_key.perDialect);
+  m_editor->setEnabled(!m_readOnly || (m_key.perDialect && m_slicer.isEmpty()));
   if (m_line != nullptr) {
     m_line->setReadOnly(m_readOnly);
   }
@@ -720,6 +778,10 @@ QString SettingField::typedText() const {
 }
 
 void SettingField::commitTyped() {
+  if (!m_slicer.isEmpty()) {
+    commitPreset(m_line->text().trimmed());
+    return;
+  }
   QString error;
   const QJsonValue typed = printValueOf(m_key, typedText(), &error, m_dialect);
   if (!error.isEmpty()) {
@@ -746,6 +808,33 @@ void SettingField::commitTyped() {
 void SettingField::commit(const QJsonValue& value) {
   m_dirty = false;
   emit committed(m_key.key, value);
+}
+
+QString SettingField::ownPreset() const { return m_value.toObject().value(m_slicer).toString().trimmed(); }
+
+void SettingField::commitPreset(const QString& name) {
+  m_dirty = false;
+  if (name == ownPreset()) {
+    return; // also Enter's second signal (the list's activated)
+  }
+  // The other slicers' entries stay; a plain text (an older form) is the
+  // name of every slicer, so it is kept for the others.
+  QJsonObject slicers = m_value.toObject();
+  if (m_value.isString()) {
+    for (const QString& dialect : std::as_const(m_key.dialects)) {
+      slicers.insert(dialect, m_value.toString());
+    }
+  }
+  if (name.isEmpty()) {
+    slicers.remove(m_slicer);
+  } else {
+    slicers.insert(m_slicer, name);
+  }
+  // Shown at once, so that a second signal of the same edit commits
+  // nothing; the model's answer shows it again.
+  m_value = slicers.isEmpty() ? QJsonValue() : QJsonValue(slicers);
+  m_set = !name.isEmpty();
+  emit committed(m_key.key, m_value);
 }
 
 void SettingField::editOutline() {

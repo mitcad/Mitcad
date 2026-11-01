@@ -320,7 +320,7 @@ fn a_joint_origins_mount_is_checked_and_kept_in_the_file() {
         ),
         (
             json!({"name": "a b", "kind": "face"}),
-            "'a b' is no mount frame name",
+            "“a b” is no mount frame name",
         ),
     ] {
         let error = refused(

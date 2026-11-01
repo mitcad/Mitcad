@@ -156,6 +156,10 @@ mod ffi {
         /// A new, empty design: Root and an empty component Component1,
         /// active, both with the general defaults (mitcad#220, mitcad#421).
         fn new_design_document() -> Box<Document>;
+        /// A new, empty design as new_design_document, in the length unit
+        /// named (`mm`, `cm`, `m`, `in`, `ft`, as set_units reads it;
+        /// mitcad#1036): no undo step, not modified.
+        fn new_design_document_in(unit: &str) -> Result<Box<Document>>;
         /// A 60 x 40 x 20 mm block (Sketch1, Extrude1), used by tests.
         fn new_demo_document() -> Box<Document>;
         /// Reads a design file (.mitcad JSON, version 1, 2 or 3; the
@@ -451,6 +455,10 @@ mod ffi {
         /// (version 3; the path must be in a project). Returns the text
         /// written.
         fn save_design(self: &Document, path: &str, format: &str) -> Result<String>;
+        /// `save_design` as the application's Save does it (mitcad#1088):
+        /// the design's statistics stamped (now, the operating system's
+        /// user, this MitCad) when the file changes.
+        fn save_design_stamped(self: &Document, path: &str, format: &str) -> Result<String>;
         /// What opening the file changed or could not find (missing B-rep
         /// data, renamed parameters).
         fn load_warnings(self: &Document) -> Vec<String>;
@@ -688,6 +696,15 @@ fn new_design_document() -> Box<Document> {
     Box::new(Document(mitcad_model::Document::new_design(OcctKernel)))
 }
 
+/// A new, empty design in the length unit named (the application's default
+/// units for new designs, mitcad#1036).
+fn new_design_document_in(unit: &str) -> Result<Box<Document>, String> {
+    let length = mitcad_model::file::parse_length_unit(unit)?;
+    Ok(Box::new(Document(mitcad_model::Document::new_design_in(
+        OcctKernel, length,
+    ))))
+}
+
 fn new_demo_document() -> Box<Document> {
     let mut document = new_document();
     let region = "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}";
@@ -730,6 +747,17 @@ fn init_project(dir: &str) -> Result<String, ApiError> {
     .to_string())
 }
 
+/// A design file format by its name in `save_design`.
+fn design_format(format: &str) -> Result<mitcad_model::FileFormat, ApiError> {
+    use mitcad_model::FileFormat;
+    match format {
+        "auto" => Ok(FileFormat::Auto),
+        "single" => Ok(FileFormat::Single),
+        "project" => Ok(FileFormat::Project),
+        other => Err(ApiError(format!("unknown design file format “{other}”"))),
+    }
+}
+
 fn find_project(path: &str) -> String {
     mitcad_model::Project::find(std::path::Path::new(path))
         .map(|project| project.root().to_string_lossy().into_owned())
@@ -750,15 +778,18 @@ impl Document {
     }
 
     fn save_design(&self, path: &str, format: &str) -> Result<String, ApiError> {
-        use mitcad_model::FileFormat;
-        let format = match format {
-            "auto" => FileFormat::Auto,
-            "single" => FileFormat::Single,
-            "project" => FileFormat::Project,
-            other => return Err(ApiError(format!("unknown design file format '{other}'"))),
-        };
         self.0
-            .save_file(std::path::Path::new(path), format)
+            .save_file(std::path::Path::new(path), design_format(format)?)
+            .map_err(|e| ApiError(e.to_string()))
+    }
+
+    fn save_design_stamped(&self, path: &str, format: &str) -> Result<String, ApiError> {
+        self.0
+            .save_file_stamped(
+                std::path::Path::new(path),
+                design_format(format)?,
+                &mitcad_model::SaveStamp::now(),
+            )
             .map_err(|e| ApiError(e.to_string()))
     }
 
@@ -816,7 +847,7 @@ impl Document {
         &mut self,
         command: serde_json::Value,
     ) -> Result<serde_json::Value, ApiError> {
-        match command.get("cmd").and_then(|c| c.as_str()) {
+        let mut result = match command.get("cmd").and_then(|c| c.as_str()) {
             Some("import_fcstd") => self.import_fcstd_command(command),
             Some("import_ipt") => self.import_ipt_command(command),
             Some("import_iam") => self.import_iam_command(command),
@@ -825,7 +856,11 @@ impl Document {
             Some("import_solidcraft") => self.import_solidcraft_command(command),
             Some("import_dwg") => self.import_dwg_command(command),
             _ => self.import_f3d_command(command),
-        }
+        }?;
+        // Every import's warnings as notices too (mitcad#1040), beside
+        // those of its outcomes.
+        mitcad_model::notice::add_notices(&mut result);
+        Ok(result)
     }
 
     fn query(&self, json: &str) -> Result<String, ApiError> {

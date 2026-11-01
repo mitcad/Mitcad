@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "ChatPanel.hpp"
 
+#include <functional>
 #include <utility>
 
 #include <QAbstractButton>
@@ -31,8 +32,10 @@
 #include <QtLogging>
 
 #include "../framework/Icons.hpp"
+#include "../framework/NoticeLevel.hpp"
 #include "../framework/Theme.hpp"
 #include "../mcp/ConnectAssistantDialog.hpp"
+#include "../platform/NativeDialogs.hpp"
 #include "../report/ReportCenter.hpp"
 #include "ChatController.hpp"
 #include "ChatLogic.hpp"
@@ -85,17 +88,28 @@ QToolButton* rowHead(const QString& objectName) {
   return head;
 }
 
-// The rows of a group's calls that show.
-int shownRows(const QWidget* calls) {
+// The rows of a group's calls that show in `panel` (hidden itself while
+// the AppKit Chat card presents it).
+int shownRows(const QWidget* calls, const QWidget* panel) {
   int shown = 0;
   const QList<QWidget*> rows = calls->findChildren<QWidget*>(QStringLiteral("chatTool"), Qt::FindDirectChildrenOnly);
   for (const QWidget* row : rows) {
-    if (row->isVisible()) {
+    if (row->isVisibleTo(panel)) {
       ++shown;
     }
   }
   return shown;
 }
+
+// The message field. The AppKit frontend's text view gives it its keys
+// first (NativeTextEditorCommands), so Enter sends and Esc stops there too.
+class ChatInput : public QPlainTextEdit, public NativeTextEditorCommands {
+public:
+  std::function<bool(const QKeyEvent*)> keyCommand;
+  bool nativeTextKey(QKeyEvent* event) override { return keyCommand && keyCommand(event); }
+  QListWidget* nativeTextCompletions() const override { return nullptr; }
+  void nativeTextComplete(int) override {}
+};
 
 } // namespace
 
@@ -129,7 +143,7 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
   m_model->setMinimumWidth(1);
   m_new = new QToolButton;
   m_new->setObjectName(QStringLiteral("chatNew"));
-  m_new->setText(tr("New conversation"));
+  m_new->setText(tr("New Conversation"));
   m_new->setIcon(themeIcon(QStringLiteral("add")));
   m_new->setToolButtonStyle(Qt::ToolButtonIconOnly);
   m_new->setToolTip(tr("New conversation"));
@@ -251,7 +265,9 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
   auto* inputColumn = new QVBoxLayout(m_inputRow);
   inputColumn->setContentsMargins(0, 0, 0, 0);
   inputColumn->setSpacing(4);
-  m_input = new QPlainTextEdit;
+  auto* input = new ChatInput;
+  input->keyCommand = [this](const QKeyEvent* key) { return inputKey(key); };
+  m_input = input;
   m_input->setObjectName(QStringLiteral("chatInput"));
   m_input->setPlaceholderText(tr("Describe a change to the design"));
   m_input->setTabChangesFocus(true);
@@ -326,13 +342,26 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
 }
 
 void ChatPanel::focusInput() {
-  if (m_inputRow->isVisible()) {
+  if (m_inputRow->isVisibleTo(this)) {
     m_input->setFocus(Qt::OtherFocusReason);
   }
 }
 
-void ChatPanel::showEvent(QShowEvent* event) {
-  QWidget::showEvent(event);
+void ChatPanel::setPresented(bool presented) {
+  if (m_presented == presented) {
+    return;
+  }
+  m_presented = presented;
+  if (presented) {
+    opened();
+  } else if (!isVisible()) {
+    m_poll->stop();
+  }
+}
+
+bool ChatPanel::presented() const { return isVisible() || m_presented; }
+
+void ChatPanel::opened() {
   if (!m_checked) {
     // Opened: the agent looked for (its program, version, sign-in).
     m_checked = true;
@@ -341,32 +370,43 @@ void ChatPanel::showEvent(QShowEvent* event) {
   updateState();
 }
 
+void ChatPanel::showEvent(QShowEvent* event) {
+  QWidget::showEvent(event);
+  opened();
+}
+
 void ChatPanel::hideEvent(QHideEvent* event) {
   QWidget::hideEvent(event);
-  m_poll->stop();
+  if (!m_presented) {
+    m_poll->stop();
+  }
 }
 
 bool ChatPanel::eventFilter(QObject* watched, QEvent* event) {
-  if (watched == m_input && event->type() == QEvent::KeyPress) {
-    const auto* key = static_cast<QKeyEvent*>(event);
-    if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) && !(key->modifiers() & Qt::ShiftModifier)) {
-      submit();
-      return true;
-    }
-    if (key->key() == Qt::Key_Escape) {
-      if (m_chat.activity() == ChatController::Activity::Working ||
-          m_chat.activity() == ChatController::Activity::Starting) {
-        m_chat.stop();
-        return true;
-      }
-    }
+  if (watched == m_input && event->type() == QEvent::KeyPress && inputKey(static_cast<QKeyEvent*>(event))) {
+    return true;
   }
   return QWidget::eventFilter(watched, event);
 }
 
+bool ChatPanel::inputKey(const QKeyEvent* key) {
+  if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) && !(key->modifiers() & Qt::ShiftModifier)) {
+    submit();
+    return true;
+  }
+  if (key->key() == Qt::Key_Escape) {
+    if (m_chat.activity() == ChatController::Activity::Working ||
+        m_chat.activity() == ChatController::Activity::Starting) {
+      m_chat.stop();
+      return true;
+    }
+  }
+  return false;
+}
+
 void ChatPanel::submit() {
   const QString text = m_input->toPlainText().trimmed();
-  if (text.isEmpty() || !m_inputRow->isVisible() || m_notice->isVisible()) {
+  if (text.isEmpty() || !m_inputRow->isVisibleTo(this) || m_notice->isVisibleTo(this)) {
     return;
   }
   m_input->clear();
@@ -439,9 +479,10 @@ QWidget* ChatPanel::makeRow(const QJsonObject& entry) {
     details->hide();
     rowColumn->addWidget(head);
     rowColumn->addWidget(details);
-    connect(head, &QToolButton::toggled, row, [head, details](bool open) {
+    connect(head, &QToolButton::toggled, row, [this, head, details](bool open) {
       head->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
       details->setVisible(open);
+      emit contentChanged();
     });
     return row;
   }
@@ -576,7 +617,18 @@ void ChatPanel::fillRow(QWidget* row, const QJsonObject& entry) {
     return;
   }
   auto* label = static_cast<QLabel*>(row);
-  label->setText(entry.value(QStringLiteral("text")).toString());
+  const QString text = entry.value(QStringLiteral("text")).toString();
+  // A notice at its level (mitcad#1040): an error or a warning with its
+  // icon, word and colour, not dimmed; information as before.
+  const NoticeLevel level = noticeLevelFromModel(entry.value(QStringLiteral("level")).toString());
+  if (role(entry) == QStringLiteral("notice") && isProblem(level)) {
+    label->setTextFormat(Qt::RichText);
+    label->setEnabled(true);
+    label->setText(noticeHtml(level, text, label->palette()));
+    label->setProperty("noticeLevel", noticeLevelName(level));
+    return;
+  }
+  label->setText(text);
 }
 
 void ChatPanel::addRow(int index, const QJsonObject& group) {
@@ -608,6 +660,7 @@ void ChatPanel::addRow(int index, const QJsonObject& group) {
     qInfo().noquote() << QStringLiteral("Chat panel: approval card '%1'").arg(cardText(entry));
   }
   keepAtEnd(role(entry) == QStringLiteral("user") || role(entry) == QStringLiteral("card"));
+  emit contentChanged();
 }
 
 void ChatPanel::updateRow(int index) {
@@ -620,6 +673,7 @@ void ChatPanel::updateRow(int index) {
     applyGroup(toolGroupOf(m_chat.entries(), index));
   }
   keepAtEnd(false);
+  emit contentChanged();
 }
 
 ChatPanel::ToolGroup& ChatPanel::toolGroup(int first) {
@@ -647,15 +701,18 @@ ChatPanel::ToolGroup& ChatPanel::toolGroup(int first) {
   m_listLayout->insertWidget(m_listLayout->count() - 1, group.widget);
   QToolButton* head = group.head;
   QWidget* calls = group.calls;
-  connect(head, &QToolButton::toggled, group.widget, [head, calls](bool open) {
+  connect(head, &QToolButton::toggled, group.widget, [this, head, calls](bool open) {
     head->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
     calls->setVisible(open);
     const QString counts = head->property("toolCounts").toString();
     if (open) {
-      qInfo().noquote() << QStringLiteral("Chat tool group opened: %1, %2 rows shown").arg(counts).arg(shownRows(calls));
+      qInfo().noquote() << QStringLiteral("Chat tool group opened: %1, %2 rows shown")
+                               .arg(counts)
+                               .arg(shownRows(calls, this));
     } else {
       qInfo().noquote() << QStringLiteral("Chat tool group closed: %1").arg(counts);
     }
+    emit contentChanged();
   });
   return m_groups.insert(first, group).value();
 }
@@ -793,7 +850,7 @@ void ChatPanel::updateState() {
   if (!unavailable.isEmpty()) {
     key = QStringLiteral("unavailable");
     text = unavailable;
-  } else if (m_notice->isVisible()) {
+  } else if (m_notice->isVisibleTo(this)) {
     key = QStringLiteral("notice");
     text = tr("Read this once before the first message.");
   } else if (readiness == ChatAgent::Readiness::Ready || activity != ChatController::Activity::Idle) {
@@ -862,7 +919,7 @@ void ChatPanel::updateState() {
   m_secondary->setVisible(secondary);
   const bool ready = unavailable.isEmpty() && (readiness == ChatAgent::Readiness::Ready ||
                                                 activity != ChatController::Activity::Idle);
-  m_inputRow->setVisible(ready && !m_notice->isVisible());
+  m_inputRow->setVisible(ready && !m_notice->isVisibleTo(this));
   const bool working = activity == ChatController::Activity::Working ||
                        activity == ChatController::Activity::Starting ||
                        activity == ChatController::Activity::Stopping;
@@ -874,7 +931,7 @@ void ChatPanel::updateState() {
   m_modelChoice->setEnabled(activity == ChatController::Activity::Idle);
   // A missing agent is looked for while the panel shows: installed, it is
   // used without a restart.
-  if (readiness == ChatAgent::Readiness::Missing && isVisible()) {
+  if (readiness == ChatAgent::Readiness::Missing && presented()) {
     if (!m_poll->isActive()) {
       m_poll->start();
     }
@@ -886,6 +943,7 @@ void ChatPanel::updateState() {
     m_loggedState = key;
     qInfo().noquote() << QStringLiteral("Chat panel: %1").arg(key);
   }
+  emit contentChanged();
 }
 
 } // namespace mitcad::agent

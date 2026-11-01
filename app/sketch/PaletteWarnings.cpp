@@ -13,6 +13,7 @@
 #include <QtLogging>
 
 #include "../framework/GlassCard.hpp"
+#include "../framework/NoticeLevel.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 
@@ -80,7 +81,8 @@ void PaletteWarnings::setWarnings(const QStringList& warnings, const std::vector
     if (linked) {
       // A link: underlined, a pointing hand; a click selects the curves
       // and points the warning is about.
-      label->setText(QStringLiteral("<span style='color:%1; text-decoration: underline;'>%2</span>")
+      label->setText(noticeIconHtml(NoticeLevel::Warning) +
+                     QStringLiteral("&nbsp;<span style='color:%1; text-decoration: underline;'>%2</span>")
                          .arg(color, warnings[i].toHtmlEscaped()));
       label->setCursor(Qt::PointingHandCursor);
       label->setToolTip(tr("Click to select the curves this is about"));
@@ -91,7 +93,9 @@ void PaletteWarnings::setWarnings(const QStringList& warnings, const std::vector
       };
       anyLinked = true;
     } else {
-      label->setText(QStringLiteral("<span style='color:%1'>%2</span>").arg(color, warnings[i].toHtmlEscaped()));
+      // The warning's icon as well as its colour (mitcad#1040).
+      label->setText(noticeIconHtml(NoticeLevel::Warning) +
+                     QStringLiteral("&nbsp;<span style='color:%1'>%2</span>").arg(color, warnings[i].toHtmlEscaped()));
     }
     m_layout->addWidget(label);
     m_labels.push_back(label);

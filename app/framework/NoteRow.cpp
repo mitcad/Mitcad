@@ -18,6 +18,7 @@
 
 #include "Command.hpp"
 #include "Icons.hpp"
+#include "Theme.hpp"
 
 namespace mitcad {
 namespace {
@@ -137,6 +138,14 @@ NoteRow::NoteRow(QWidget* parent) : QWidget(parent) {
   m_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
   m_textRow->addWidget(m_label, 1);
   column->addLayout(m_textRow);
+  // A notice under the text's line (mitcad#1062), hidden without one.
+  m_noticeLabel = new QLabel;
+  m_noticeLabel->setObjectName(QStringLiteral("note_notice"));
+  m_noticeLabel->setWordWrap(true);
+  m_noticeLabel->setTextFormat(Qt::RichText);
+  m_noticeLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  m_noticeLabel->hide();
+  column->addWidget(m_noticeLabel);
   // The text buttons in a row of their own, hidden without any: no gap
   // under a note that has none (mitcad#655).
   m_buttonsWidget = new QWidget;
@@ -154,9 +163,38 @@ NoteRow::NoteRow(QWidget* parent) : QWidget(parent) {
   column->addLayout(m_links);
 }
 
-bool NoteRow::setNote(const QString& text, const QStringList& actions, const QStringList& icons, bool oneLine) {
-  if (text == m_text && actions == m_actions && icons == m_icons && oneLine == m_oneLine) {
+bool NoteRow::setNote(const QString& text, const QStringList& actions, const QStringList& icons, bool oneLine,
+                      const QString& notice, NoticeLevel level) {
+  if (text == m_text && actions == m_actions && icons == m_icons && oneLine == m_oneLine && notice == m_notice &&
+      level == m_noticeLevel) {
     return false;
+  }
+  if (notice != m_notice || level != m_noticeLevel) {
+    m_notice = notice;
+    m_noticeLevel = level;
+    // As the panel's message (docs/ui-conventions.md): an error or a
+    // warning in the level's box with its icon and word; else plain grey.
+    if (isProblem(level)) {
+      const QString format = QStringLiteral("QLabel { color: %1; background: %2; border-radius: 6px; "
+                                            "padding: 4px 6px; }")
+                                 .arg(QStringLiteral("%1"), noticeFill(level, palette()).name());
+      if (level == NoticeLevel::Error) {
+        setErrorStyleSheet(m_noticeLabel, format);
+      } else {
+        setWarningStyleSheet(m_noticeLabel, format);
+      }
+      QString shown = notice.toHtmlEscaped();
+      shown.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+      m_noticeLabel->setText(
+          QStringLiteral("%1&nbsp;<b>%2:</b> %3").arg(noticeIconHtml(level), noticeLevelWord(level), shown));
+    } else {
+      setRoleStyleSheet(m_noticeLabel, ColorRole::TextSecondary,
+                        QStringLiteral("QLabel { color: %1; background: transparent; }"));
+      m_noticeLabel->setText(notice.toHtmlEscaped());
+    }
+    m_noticeLabel->setProperty("noticeLevel", noticeLevelName(level));
+    m_noticeLabel->setAccessibleName(noticeLevelText(level, notice));
+    m_noticeLabel->setVisible(!notice.isEmpty());
   }
   m_text = text;
   if (oneLine != m_oneLine) {

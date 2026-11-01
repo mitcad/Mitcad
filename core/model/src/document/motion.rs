@@ -187,7 +187,7 @@ impl<K: Kernel> Document<K> {
             .motion_studies
             .iter()
             .position(|s| s.name == name)
-            .ok_or_else(|| invalid(format!("there is no motion study '{name}'")))
+            .ok_or_else(|| invalid(format!("there is no motion study {name}")))
     }
 
     fn contact_index(&self, name: &str) -> Result<usize, ModelError> {
@@ -195,7 +195,7 @@ impl<K: Kernel> Document<K> {
             .contact_sets
             .iter()
             .position(|s| s.name == name)
-            .ok_or_else(|| invalid(format!("there is no contact set '{name}'")))
+            .ok_or_else(|| invalid(format!("there is no contact set {name}")))
     }
 
     /// The study by name.
@@ -270,7 +270,7 @@ impl<K: Kernel> Document<K> {
         }
         study.name = study.name.trim().to_owned();
         if self.study_index(&study.name).is_ok() {
-            return Err(invalid(format!("a motion study '{}' exists", study.name)));
+            return Err(invalid(format!("a motion study {} exists", study.name)));
         }
         self.check_study(&study)?;
         let name = study.name.clone();
@@ -298,7 +298,7 @@ impl<K: Kernel> Document<K> {
                 return Err(invalid("the motion study needs a name"));
             }
             if self.study_index(new_name).is_ok() {
-                return Err(invalid(format!("a motion study '{new_name}' exists")));
+                return Err(invalid(format!("a motion study {new_name} exists")));
             }
             study.name = new_name.to_owned();
         }
@@ -412,7 +412,7 @@ impl<K: Kernel> Document<K> {
         }
         set.name = set.name.trim().to_owned();
         if self.contact_index(&set.name).is_ok() {
-            return Err(invalid(format!("a contact set '{}' exists", set.name)));
+            return Err(invalid(format!("a contact set {} exists", set.name)));
         }
         self.check_contact_set(&set)?;
         let name = set.name.clone();
@@ -440,7 +440,7 @@ impl<K: Kernel> Document<K> {
                 return Err(invalid("the contact set needs a name"));
             }
             if self.contact_index(new_name).is_ok() {
-                return Err(invalid(format!("a contact set '{new_name}' exists")));
+                return Err(invalid(format!("a contact set {new_name} exists")));
             }
             set.name = new_name.to_owned();
         }

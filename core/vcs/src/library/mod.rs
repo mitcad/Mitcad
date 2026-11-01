@@ -186,7 +186,7 @@ impl LibraryRepo {
     pub fn resolve(&self, rev: &str) -> Result<ObjectId, VcsError> {
         let rev = rev.trim();
         check_revision(rev)?;
-        let missing = || not_found(format!("the library has no version '{rev}'"));
+        let missing = || not_found(format!("the library has no version {rev}"));
         if rev.is_empty() || rev.eq_ignore_ascii_case("HEAD") {
             return self.head()?.ok_or_else(missing);
         }
@@ -225,7 +225,7 @@ impl LibraryRepo {
                 if id.to_string().starts_with(&hex) {
                     if found.is_some_and(|f| f != id) {
                         return Err(not_found(format!(
-                            "'{rev}' names more than one version of the library"
+                            "{rev} names more than one version of the library"
                         )));
                     }
                     found = Some(id);
@@ -291,7 +291,7 @@ impl LibraryRepo {
     pub fn read(&self, commit: ObjectId, path: &str) -> Result<Option<Vec<u8>>, VcsError> {
         if !manifest::valid_path(path) {
             return Err(VcsError::InvalidPath(format!(
-                "'{path}' is not a path inside the library"
+                "{path} is not a path inside the library"
             )));
         }
         let tree = self.repo.find_commit(commit)?.tree()?;
@@ -325,7 +325,7 @@ impl LibraryRepo {
     pub fn manifest(&self, commit: ObjectId) -> Result<Manifest, VcsError> {
         let data = self.read(commit, LIBRARY_MANIFEST)?.ok_or_else(|| {
             not_found(format!(
-                "version {} has no {LIBRARY_MANIFEST}: it is not a Mitcad library",
+                "version {} has no {LIBRARY_MANIFEST}: it is not a MitCad library",
                 commit.to_hex_with_len(7)
             ))
         })?;
@@ -344,7 +344,7 @@ impl LibraryRepo {
         let index: IndexManifest = read_json(&data, INDEX_MANIFEST).map_err(VcsError::File)?;
         if index.format != INDEX_FORMAT || index.version != 1 {
             return Err(VcsError::File(format!(
-                "{INDEX_MANIFEST} is not of a format this Mitcad reads ({INDEX_FORMAT}, version 1)"
+                "{INDEX_MANIFEST} is not of a format this MitCad reads ({INDEX_FORMAT}, version 1)"
             )));
         }
         let mut entries = Vec::new();
@@ -417,7 +417,7 @@ impl LibraryRepo {
         }
         let item = manifest.component(component).ok_or_else(|| {
             not_found(format!(
-                "{} {} has no component '{component}'",
+                "{} {} has no component {component}",
                 manifest.id,
                 commit.to_hex_with_len(7)
             ))
@@ -734,7 +734,7 @@ impl LibraryCache {
                 return Err(RemoteError::new(
                     ErrorClass::NotAProject,
                     format!(
-                        "{shown} is not a Mitcad library or index ({LIBRARY_MANIFEST} or \
+                        "{shown} is not a MitCad library or index ({LIBRARY_MANIFEST} or \
                          {INDEX_MANIFEST} at its root)"
                     ),
                 )
@@ -1026,7 +1026,7 @@ fn check_revision(rev: &str) -> Result<(), VcsError> {
     let name = format!("refs/tags/{rev}");
     gix::validate::reference::name(name.as_bytes().as_bstr()).map_err(|_| {
         VcsError::InvalidPath(format!(
-            "'{rev}' is not a library version (a commit id, tag or branch name)"
+            "{rev} is not a library version (a commit id, tag or branch name)"
         ))
     })?;
     Ok(())
@@ -1128,7 +1128,7 @@ impl LinkResolver for LibraryResolver {
         }
         let item = manifest.component(&request.component).ok_or_else(|| {
             format!(
-                "{} {} has no component '{}'",
+                "{} {} has no component {}",
                 manifest.id,
                 commit.to_hex_with_len(7),
                 request.component
@@ -1138,15 +1138,15 @@ impl LinkResolver for LibraryResolver {
         let bytes = repo
             .read(commit, &relative)
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("texture '{relative}' is not in the library"))?;
+            .ok_or_else(|| format!("texture {relative} is not in the library"))?;
         if bytes.len() > MAX_EMBEDDED_IMAGE {
             return Err(format!(
-                "texture '{relative}' is larger than the {} MB a design file embeds",
+                "texture {relative} is larger than the {} MB a design file embeds",
                 MAX_EMBEDDED_IMAGE >> 20
             ));
         }
         if image_format(&bytes).is_none() {
-            return Err(format!("texture '{relative}' is no PNG or JPEG file"));
+            return Err(format!("texture {relative} is no PNG or JPEG file"));
         }
         Ok(bytes)
     }
@@ -1155,7 +1155,7 @@ impl LinkResolver for LibraryResolver {
 /// A texture's path in the commit tree. Parent directories may reach
 /// shared images elsewhere in the library, but never leave its root.
 fn texture_path(design: &str, texture: &str) -> Result<String, String> {
-    let invalid = || format!("texture '{texture}' is not a path inside the library");
+    let invalid = || format!("texture {texture} is not a path inside the library");
     if texture.is_empty()
         || texture.starts_with('/')
         || texture.contains('\\')

@@ -120,6 +120,19 @@ mod hole_callouts;
 // A Fillet's or Chamfer's picked edges kept with its result, drawn where
 // they were (mitcad#957).
 mod feature_inputs;
+// A configuration table's rows as CSV (mitcad#1044).
+mod configuration_rows_csv;
+// Material and process notes on the model, their text from the body
+// (mitcad#1049).
+mod body_notes;
+// Physical Properties' boxes along the design's axes, counts and component
+// scopes (mitcad#1095).
+mod physical_extent;
+// The Center of Mass marker: the design's center of mass as placed
+// (mitcad#1094).
+mod center_of_mass;
+// The design's summary and statistics (mitcad#1088).
+mod design_properties;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -203,6 +216,14 @@ pub mod prelude {
     pub(crate) use super::cut_sheets::CutSheetsOps;
     // Hole callouts on the model (mitcad#902).
     pub(crate) use super::hole_callouts::HoleCalloutsOps;
+    // A configuration table's rows as CSV (mitcad#1044).
+    pub(crate) use super::configuration_rows_csv::ConfigurationRowsCsvOps;
+    // Material and process notes on the model (mitcad#1049).
+    pub(crate) use super::body_notes::BodyNotesOps;
+    // The Center of Mass marker (mitcad#1094).
+    pub(crate) use super::center_of_mass::CenterOfMassOps;
+    // The design's summary and statistics (mitcad#1088).
+    pub(crate) use super::design_properties::DesignPropertiesOps;
 }
 
 use std::fmt;
@@ -215,10 +236,11 @@ use self::prelude::*;
 use mitcad_model::expr::{DEFAULT_DECIMALS, Unit, value_to_expression};
 use mitcad_model::features::{FeatureDef, ValueInput};
 use mitcad_model::ids::{BodyUid, FeatureUid};
-use mitcad_model::internal::document::{noted_message, noted_status};
+use mitcad_model::internal::document::{feature_level, feature_notices, noted_status};
 use mitcad_model::kernel::Kernel;
+use mitcad_model::notice::{self, NoticeLevel};
 use mitcad_model::profile::{ProfileRegion, SketchFrame};
-use mitcad_model::{AnalysisDef, Document, ModelError, NamedView, PreviewReport};
+use mitcad_model::{AnalysisDef, Document, FeatureStatus, ModelError, NamedView, PreviewReport};
 
 /// A rejected command or query; the document is unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -389,6 +411,11 @@ named_enum! {
             /// unless it was set by hand (mitcad#640).
             #[serde(default)]
             appearance: Option<String>,
+            /// One of the material's appearances for the body (mitcad#1055:
+            /// Material ▸ PLA ▸ Black), in the place of `appearance`; one the
+            /// design's material does not offer yet joins its list.
+            #[serde(default)]
+            appearance_id: Option<String>,
             /// `base`, `user` or `project`: the material is that library's
             /// item, copied in (or the design's copy reused) in the same
             /// undo step (mitcad#655).
@@ -469,6 +496,18 @@ named_enum! {
         "set_isolation" => SetIsolation {
             #[serde(default)]
             items: Vec<mitcad_model::Isolated>,
+        },
+        // The Center of Mass marker under Origin (mitcad#1094,
+        // `document/display.rs`).
+        "add_center_of_mass" => AddCenterOfMass,
+        "set_center_of_mass_visible" => SetCenterOfMassVisible {
+            visible: bool,
+        },
+        "delete_center_of_mass" => DeleteCenterOfMass,
+        // A body drawn see-through (mitcad#1093).
+        "set_body_transparent" => SetBodyTransparent {
+            uid: BodyUid,
+            transparent: bool,
         },
         // Timeline groups (P9).
         "group_features" => GroupFeatures {
@@ -591,7 +630,7 @@ fn expression_of(
 }
 
 fn parse_unit(text: &str) -> Result<Unit, ApiError> {
-    Unit::parse(text).map_err(|e| ApiError(format!("unit '{text}': {e}")))
+    Unit::parse(text).map_err(|e| ApiError(format!("unit “{text}”: {e}")))
 }
 
 /// A command that a preview can evaluate.
@@ -735,7 +774,12 @@ named_enum! {
         // where an origin snaps).
         "joint_frame" => JointFrame(joints::JointFrameQuery),
         // Configuration tables and library parts (mitcad#64).
-        "configurations" => Configurations,
+        "configurations" => Configurations {
+            /// Rules to check in place of the table's (mitcad#1064): the
+            /// answer is the table's with them; nothing changes.
+            #[serde(default)]
+            rules: Option<Vec<mitcad_model::ConfigurationRule>>,
+        },
         "library_parts" => LibraryParts,
         "parts_list" => PartsList {
             /// Columns of property values: `Key` or `Set/Key` (mitcad#496).
@@ -931,6 +975,23 @@ named_enum! {
         // A Fillet's or Chamfer's picked edges kept with its result
         // (mitcad#957, `feature_inputs.rs`).
         "feature_inputs" => FeatureInputs(feature_inputs::FeatureInputsQuery),
+        // A configuration table's rows as CSV (mitcad#1044,
+        // `configuration_rows_csv.rs`).
+        "configuration_rows_csv" => ConfigurationRowsCsv,
+        "configuration_rows_csv_preview" =>
+            ConfigurationRowsCsvPreview(configuration_rows_csv::RowsCsvPreviewQuery),
+        // The bodies whose material or print settings differ from their
+        // component's (mitcad#1049, `body_notes.rs`).
+        "make_differences" => MakeDifferences,
+        // What Save Component as Design would freeze or leave out
+        // (mitcad#1057, `components.rs`).
+        "save_component_as_design" => SaveComponentAsDesign(components::SaveComponentQuery),
+        // The design's center of mass as placed, for the Center of Mass
+        // marker (mitcad#1094, `center_of_mass.rs`).
+        "center_of_mass" => CenterOfMass,
+        // The design's summary and statistics (mitcad#1088,
+        // `design_properties.rs`).
+        "design_properties" => DesignProperties,
     }
 }
 
@@ -980,7 +1041,7 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
 
     fn query(&self, json: &str) -> Result<String, ApiError> {
         let query: Query = parse(read_json(json)?, "query")?;
-        let result = match query {
+        let mut result = match query {
             Query::Document => {
                 let context = self.parameters().context();
                 let mut value = json!({
@@ -1000,6 +1061,10 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                     "revision": self.revision(),
                     "modified": self.is_modified(),
                 });
+                // The Center of Mass marker (mitcad#1094), while there is one.
+                if let Some(marker) = self.display().center_of_mass {
+                    value["display"]["center_of_mass"] = json!({"visible": marker.visible});
+                }
                 // A hybrid assembly allowed without asking (mitcad#171).
                 if self.hybrid_assembly() {
                     value["hybrid_assembly"] = json!(true);
@@ -1110,13 +1175,25 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                     .expect("names never fail");
                 let status = self.status(uid);
                 let warnings = self.warnings(uid);
+                let infos = self.infos(uid);
                 let note = self.import_note(uid);
+                // Its notices and level (mitcad#1040); `error` only for a
+                // failure, `warnings` for one release beside the notices.
+                let notices = feature_notices(status, warnings, infos, note, uid);
                 let mut value = json!({"uid": uid, "name": entry.name, "type": entry.def.type_name(),
                        "suppressed": entry.suppressed,
                        "status": status.map(|s| noted_status(Some(s), warnings, note)),
-                       "error": noted_message(status, warnings, note), "def": def});
+                       "error": status.and_then(FeatureStatus::error),
+                       "level": feature_level(status, warnings, infos, note).map(NoticeLevel::as_str),
+                       "def": def});
+                if !notices.is_empty() {
+                    value["notices"] = notice::to_json(&notices);
+                }
                 if !warnings.is_empty() {
                     value["warnings"] = json!(warnings);
+                }
+                if !infos.is_empty() {
+                    value["infos"] = json!(infos);
                 }
                 // What the importer said about it (mitcad#170).
                 if let Some(note) = note {
@@ -1223,7 +1300,7 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::JointDrag(query) => self.joint_drag_json(&query)?,
             Query::JointFrame(query) => self.joint_frame_json(&query)?,
             // Configuration tables and library parts (mitcad#64).
-            Query::Configurations => self.configurations_json(),
+            Query::Configurations { rules } => self.configurations_json(rules),
             Query::LibraryParts => self.library_parts_json(),
             Query::PartsList { properties } => self.parts_list_with(&properties),
             // Assembly constraints (mitcad#148).
@@ -1374,7 +1451,21 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             // A Fillet's or Chamfer's picked edges kept with its result
             // (mitcad#957).
             Query::FeatureInputs(query) => feature_inputs::feature_inputs_json(self, &query)?,
+            // A configuration table's rows as CSV (mitcad#1044).
+            Query::ConfigurationRowsCsv => self.configuration_rows_csv_json(),
+            Query::ConfigurationRowsCsvPreview(query) => {
+                self.configuration_rows_csv_preview_json(&query)?
+            }
+            // The Make tab's Browser markers (mitcad#1049).
+            Query::MakeDifferences => self.make_differences_json(),
+            Query::SaveComponentAsDesign(query) => self.save_component_json(&query)?,
+            // The Center of Mass marker (mitcad#1094).
+            Query::CenterOfMass => self.center_of_mass_json()?,
+            // The design's summary and statistics (mitcad#1088).
+            Query::DesignProperties => self.design_properties_json(),
         };
+        // A result with `warnings` lists them as `notices` too (mitcad#1040).
+        notice::add_notices(&mut result);
         Ok(result.to_string())
     }
 }
@@ -1504,6 +1595,9 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
         if !failed.is_empty() {
             result["failed_features"] = json!(failed);
         }
+        // Its notices (mitcad#1040): a result's `warnings` are warnings;
+        // the key stays beside them for one release (`commands.md`).
+        notice::add_notices(&mut result);
         Ok(result)
     }
 
@@ -1692,7 +1786,7 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                         .find(&name)
                         .and_then(|id| self.parameters().get(id))
                         .map(|p| p.limits().clone())
-                        .ok_or_else(|| ApiError(format!("unknown parameter '{name}'")))?;
+                        .ok_or_else(|| ApiError(format!("unknown parameter {name}")))?;
                     let limits = limits.apply_to(current)?;
                     let expression = match (value, expression) {
                         (None, None) => None,
@@ -1717,7 +1811,7 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                             .find(&name)
                             .and_then(|id| self.parameters().get(id))
                             .map(|p| p.expression().to_owned())
-                            .ok_or_else(|| ApiError(format!("unknown parameter '{name}'")))?;
+                            .ok_or_else(|| ApiError(format!("unknown parameter {name}")))?;
                         self.set_parameter_expression(&name, &expression, unit)?
                     } else {
                         match expression_of(value, expression)? {
@@ -1767,7 +1861,7 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 let unit = parse_unit(&length)?;
                 let length = match (unit.length(), unit.angle()) {
                     (Some((length, 1)), None) => length,
-                    _ => return Err(ApiError(format!("'{length}' is not a length unit"))),
+                    _ => return Err(ApiError(format!("“{length}” is not a length unit"))),
                 };
                 let changed = self.set_units(length)?;
                 json!({"changed": changed})
@@ -1809,11 +1903,13 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 uid,
                 material,
                 appearance,
+                appearance_id,
                 library,
                 project,
             } => {
                 if material.is_some()
                     || appearance.is_some()
+                    || appearance_id.is_some()
                     || library.is_some()
                     || project.is_some()
                 {
@@ -1831,13 +1927,21 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 uid,
                 material,
                 appearance,
+                appearance_id,
                 library,
                 project,
             } => {
+                if appearance.is_some() && appearance_id.is_some() {
+                    return Err(ApiError(
+                        "`appearance` (replace or keep) and `appearance_id` are given both"
+                            .to_owned(),
+                    ));
+                }
                 let choice = match appearance.as_deref() {
                     Some(text) => mitcad_model::AppearanceChoice::parse(text)?,
                     None => mitcad_model::AppearanceChoice::Auto,
                 };
+                let look = appearance_id.as_deref();
                 match (library.as_deref(), material) {
                     (Some(library), Some(material)) => {
                         let library = mitcad_model::internal::document::library_kind(library)?;
@@ -1850,7 +1954,7 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                                 mitcad_model::print_library::ItemKind::Material,
                                 &material,
                             )?;
-                            doc.set_body_material_with(uid, Some(id.as_str()), choice)
+                            doc.set_body_material_look(uid, Some(id.as_str()), choice, look)
                         })?;
                     }
                     (Some(_), None) => {
@@ -1859,7 +1963,7 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                         ));
                     }
                     (None, material) => {
-                        self.set_body_material_with(uid, material.as_deref(), choice)?
+                        self.set_body_material_look(uid, material.as_deref(), choice, look)?
                     }
                 }
                 json!({})
@@ -1872,7 +1976,12 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 match (appearance, expression) {
                     (Some(_), Some(_)) => return Err(both("appearance")),
                     (_, Some(expression)) => self.bind_body_appearance(uid, &expression)?,
-                    (appearance, None) => self.set_body_appearance(uid, appearance.as_deref())?,
+                    // The Appearance command (mitcad#1055): an appearance
+                    // outside the list of the design's material the body
+                    // is made of joins that list.
+                    (appearance, None) => {
+                        self.set_body_appearance_listed(uid, appearance.as_deref())?
+                    }
                 }
                 json!({})
             }
@@ -1947,6 +2056,23 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
             }
             Command::SetIsolation { items } => {
                 self.set_isolation(items)?;
+                json!({})
+            }
+            // The Center of Mass marker (mitcad#1094).
+            Command::AddCenterOfMass => {
+                self.add_center_of_mass()?;
+                json!({})
+            }
+            Command::SetCenterOfMassVisible { visible } => {
+                self.set_center_of_mass_visible(visible)?;
+                json!({})
+            }
+            Command::DeleteCenterOfMass => {
+                self.delete_center_of_mass()?;
+                json!({})
+            }
+            Command::SetBodyTransparent { uid, transparent } => {
+                self.set_body_transparent(uid, transparent)?;
                 json!({})
             }
             // Timeline groups (P9).
@@ -2140,21 +2266,27 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
             .timeline()
             .into_iter()
             .map(|item| {
-                // A feature that succeeded with warnings is `warning`, its
-                // warnings in `error` (P9: yellow in the timeline).
+                // A feature that succeeded with warnings is `warning` (P9:
+                // yellow in the timeline). Its notices and their worst
+                // level (mitcad#1040): `error` carries only a failure.
+                let notices = item.notices();
                 let mut value = json!({
                     "uid": item.entry.uid,
                     "name": item.entry.name,
                     "type": item.entry.def.type_name(),
                     "suppressed": item.entry.suppressed,
                     "status": item.status_text(),
-                    "error": item.message(),
+                    "error": item.error(),
+                    "level": item.level().map(NoticeLevel::as_str),
                 });
+                if !notices.is_empty() {
+                    value["notices"] = notice::to_json(&notices);
+                }
                 if !item.entry.component.is_root() {
                     value["component"] = json!(item.entry.component);
                 }
-                // What the importer said about it (mitcad#170): also in
-                // `error`, first.
+                // What the importer said about it (mitcad#170): also its
+                // last notice, as information.
                 if let Some(note) = item.import_note {
                     value["import"] = json!(note);
                 }
@@ -2396,6 +2528,11 @@ fn preview_json(report: &PreviewReport) -> Value {
         "removed": report.removed,
         "tool": report.tool,
     });
+    // What is worth knowing of how it was built (mitcad#1106: a fillet
+    // built 0.1 % smaller than asked), information beside the warnings.
+    if !report.infos.is_empty() {
+        value["infos"] = json!(report.infos);
+    }
     // A pattern's elements (P9): rows of each element's transform.
     if let Some(anchor) = &report.anchor {
         value["anchor"] = json!(anchor);
@@ -2471,6 +2608,23 @@ fn preview_json(report: &PreviewReport) -> Value {
         value["tool_instances"] = json!(instances);
     }
     value
+}
+
+/// Gives a feature's JSON its `level` and `notices` (mitcad#1040), as the
+/// `timeline` and `feature` queries give them: its error, its warnings and
+/// its import note, and the worst of their levels (null when it has none).
+pub(crate) fn add_feature_notices(
+    value: &mut Value,
+    status: Option<&FeatureStatus>,
+    warnings: &[String],
+    note: Option<&str>,
+    uid: FeatureUid,
+) {
+    value["level"] = json!(feature_level(status, warnings, &[], note).map(NoticeLevel::as_str));
+    let notices = feature_notices(status, warnings, &[], note, uid);
+    if !notices.is_empty() {
+        value["notices"] = notice::to_json(&notices);
+    }
 }
 
 /// The feature a command edits by name (mitcad#401): `edit_feature`,

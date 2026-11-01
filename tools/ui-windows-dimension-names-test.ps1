@@ -97,7 +97,7 @@ Ui-Mark
 Ui-Step 'double-click the width'         { Ui-DoubleClickLogged 'Dimension k5 text' }
 Ui-ExpectNew 'with width = 50' 'the editor shows width ='
 Ui-Step 'type d2 = 30, Enter'            { Ui-Key 'ctrl+a'; Ui-Type 'd2 = 30'; Start-Sleep -Milliseconds 200; Ui-Key 'Return' }
-Ui-ExpectNew "parameter 'd2' already exists" 'the taken name refused with a message'
+Ui-ExpectNew "parameter d2 already exists" 'the taken name refused with a message'
 Ui-ExpectNew 'Sketch value editor kept open with d2 = 30' 'the editor stays open'
 Start-Sleep -Milliseconds 500
 if ((Ui-LogLines | Select-Object -Skip $script:UiMark) | Where-Object { $_.Contains('Dimension k5 = d2') }) {

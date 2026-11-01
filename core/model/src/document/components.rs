@@ -53,6 +53,8 @@ pub struct InstanceView {
     pub transform: Transform,
     /// The body and every occurrence on the path are shown.
     pub visible: bool,
+    /// The body or an occurrence on the path is transparent (mitcad#1093).
+    pub transparent: bool,
 }
 
 /// Options of [`Document::insert_component`].
@@ -173,7 +175,7 @@ impl DocState {
         let taken = (!uid.is_root() && a.root_name == name)
             || a.components.iter().any(|c| c.name == name && c.uid != uid);
         if taken {
-            return Err(invalid(format!("a component is already named '{name}'")));
+            return Err(invalid(format!("a component is already named {name}")));
         }
         Ok(())
     }
@@ -269,17 +271,26 @@ impl<K: Kernel> Document<K> {
         let names = super::display_names(&self.state, &self.result);
         a.instances(&placement, &bodies)
             .into_iter()
-            .map(|i| InstanceView {
-                path_name: a.path_name(&i.path),
-                name: names
-                    .get(&i.body)
-                    .cloned()
-                    .unwrap_or_else(|| i.body.to_string()),
-                visible: i.visible && self.body_attributes(i.body).visible,
-                path: i.path,
-                component: i.component,
-                body: i.body,
-                transform: i.transform,
+            .map(|i| {
+                let attributes = self.state.body_attributes.get(&i.body);
+                InstanceView {
+                    path_name: a.path_name(&i.path),
+                    name: names
+                        .get(&i.body)
+                        .cloned()
+                        .unwrap_or_else(|| i.body.to_string()),
+                    visible: i.visible && attributes.is_none_or(|b| b.visible),
+                    // A component's transparency applies to its contents,
+                    // its sub-components included (mitcad#1093).
+                    transparent: attributes.is_some_and(|b| b.transparent)
+                        || i.path
+                            .iter()
+                            .any(|o| a.occurrence(*o).is_some_and(|o| o.transparent)),
+                    path: i.path,
+                    component: i.component,
+                    body: i.body,
+                    transform: i.transform,
+                }
             })
             .collect()
     }
@@ -745,6 +756,33 @@ impl<K: Kernel> Document<K> {
         })
     }
 
+    /// Makes an occurrence, with what it contains, transparent or opaque
+    /// again (mitcad#1093): one undo step (`Make Bracket:1 Transparent`)
+    /// that recomputes nothing, none when nothing changes.
+    pub fn set_occurrence_transparent(
+        &mut self,
+        uid: OccurrenceUid,
+        transparent: bool,
+    ) -> Result<(), ModelError> {
+        let occurrence = self.state.require_occurrence(uid)?;
+        if occurrence.transparent == transparent {
+            return Ok(());
+        }
+        self.apply_with(|state| {
+            let name = state.assembly.occurrence_name(uid);
+            state
+                .assembly
+                .occurrence_mut(uid)
+                .expect("exists")
+                .transparent = transparent;
+            Ok((
+                super::bodies::transparency_label(&name, transparent),
+                (),
+                false,
+            ))
+        })
+    }
+
     /// Places an occurrence in its parent's coordinates. Without `capture`
     /// it is the occurrence's own placement, which only works while no
     /// timeline feature before the marker places it; with `capture` a
@@ -939,6 +977,7 @@ impl<K: Kernel> Document<K> {
                         let o = state.assembly.occurrence_mut(copy).expect("placed");
                         o.grounded = child.grounded;
                         o.visible = child.visible;
+                        o.transparent = child.transparent;
                     }
                     let occurrence = state.assembly.place(made, parent, transform);
                     (made, occurrence)
@@ -1078,7 +1117,7 @@ impl<K: Kernel> Document<K> {
         let occurrence = self.state.require_occurrence(uid)?;
         if occurrence.pattern.is_some() {
             return Err(invalid(
-                "edit or delete the Pattern at Points feature to remove its instances",
+                "edit or delete the Pattern at Points feature to remove its copies",
             ));
         }
         self.state.editable(occurrence.parent)?;

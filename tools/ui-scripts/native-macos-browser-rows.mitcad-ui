@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT
+# The AppKit Browser's rows (tools/ui-macos-native-browser-rows-test.sh).
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+wait-idle
+native-resize 1280 820
+native-appearance light
+native-expand native.modelTree
+expect-selection 0 0
+
+# The row under the pointer (mitcad#1072): a body's and an occurrence's
+# rows highlight their bodies, the joint's row previews the joint, and off
+# the rows both go; nothing is selected.
+mark
+native-hover native.model.body:F2.b0@O1 enter
+expect-log '^Browser hover highlight: .*Plate:1.* \(1 bodies\), '
+native-hover native.model.component@O1 enter
+expect-log '^Browser hover highlight: .*Plate:1 \(1 bodies\), '
+mark
+native-hover native.model.joint:F5@ enter
+expect-log '^Joint hover preview: Joint1$'
+expect-log '^Browser hover highlight: none \(0 bodies\), '
+mark
+native-hover native.model.joint:F5@ leave
+expect-log '^Joint hover preview: none$'
+expect-selection 0 0
+
+# The rows' colours as the Qt rows' (mitcad#1079): the cut that misses
+# every body is red, the suppressed Spare and the body its condition
+# hides are grey, Extrude3 is plain; the conditioned body's light bulb has
+# the fx mark and says what a click does, the Bodies folder's the plain
+# bulb with the bodies it leaves as they are.
+expect-native-style 'native.model.feature:F10<F9@' row-failed
+expect-native-style 'native.model.feature:F8<F6@' row-dimmed
+expect-native-style 'native.model.body:F11.b0@' row-dimmed
+expect-native-style 'native.model.feature:F7<F6@' row-plain
+mark
+expect-native-style native.model.eye.body:F11.b0@ fx-bulb
+expect-log '^Native bulb native\.model\.eye\.body:F11\.b0@: fx, Shown when Holes == .Yes.\. Hidden now'
+expect-native-style native.model.eye.bodies@ bulb
+expect-log '^Native bulb native\.model\.eye\.bodies@: plain, .*Body'
+native-appearance dark
+expect-native-style 'native.model.feature:F10<F9@' row-failed
+expect-native-style 'native.model.feature:F8<F6@' row-dimmed
+screenshot '${MITCAD_TEST_WORK}/browser-rows-dark.png'
+native-appearance light
+screenshot '${MITCAD_TEST_WORK}/browser-rows.png'

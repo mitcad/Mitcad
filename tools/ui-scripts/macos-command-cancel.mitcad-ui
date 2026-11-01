@@ -140,6 +140,7 @@ qt-type-now input_height '15 mm'
 wait-log 'Computing preview started' 30
 expect-model-busy true
 menu-now 'File/Exit'
+wait-log 'Close while computing: cancelling' 30
 focus-dialog '^MitCad$|^Save changes'
 button '^Cancel$'
 hold-model-preview false

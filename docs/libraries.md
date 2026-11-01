@@ -86,9 +86,9 @@ Three fields tell who sells the component:
 A configuration row can have its own `part_number` and `supplier_url`.
 The row's values come first. For example, a sheet sold in widths has a
 number and a page for each width. MitCad shows these fields where you
-select and list the component: Insert from Library, Library Parts, the parts
+select and list the component: Insert from Library, Library Components, the parts
 list and the Build tab's cut list. `build` makes the component a part of
-the Build tab ([Build parts](#build-parts)).
+the Build tab ([Build components](#build-components)).
 
 `row_previews` gives single configuration rows a picture of their own:
 `{"<row name>": "previews/<id>-<row>.png"}`. For example, each timber
@@ -159,8 +159,8 @@ without `standards` takes the component's `standard`, as before. The
 part records the standard it is named by and its row's articles
 (commands.md, [Standards and suppliers of library rows](../core/model-api/src/commands.md#standards-and-suppliers-of-library-rows)).
 
-**Filters.** Insert from Library, Library Parts, Edit Options and the
-Build tab's part picker show a Standard and a Supplier filter above the
+**Filters.** Insert from Library, Library Components, Edit Options and the
+Build tab's component picker show a Standard and a Supplier filter above the
 size choosers when the rows name standards or articles. They narrow the
 sizes to the rows that match. The part grid's Supplier filter hides the
 components that the supplier sells in no size
@@ -174,7 +174,7 @@ number, Material, Finish, Checked and Product page (the row's or the
 component's `supplier_url`). A column that no article fills is hidden,
 so the table shows what the library gives and nothing more. When the
 Supplier filter names a supplier, its articles come first; the others
-follow. The parts lists keep one text per part in their column
+follow. The bills of materials keep one text per part in their column
 Supplier part numbers (`Würth 0084 6 10 (8.8 zinc-plated); …`).
 
 **Checks.** `library check` refuses an article of a supplier that
@@ -186,7 +186,7 @@ ignores `rows` and `suppliers`, and reads the library as before.
 ### Groups
 
 The categories make the tree of groups. Insert from Library and the
-Build tab's part picker show this tree:
+Build tab's component picker show this tree:
 
 ```json
 "categories": [
@@ -272,7 +272,7 @@ that the design's features use. A closed table allows only its rows'
 combinations, each unique. An open table (`"closed": false`, the
 default) sets options only and allows every combination its rules
 allow; its rows are named presets. When MitCad applies a row, it changes
-parameter expressions only, as Change Parameters does. Rules, the
+parameter expressions only, as Edit Parameters does. Rules, the
 cascade and the `configure` command are in
 [commands.md](../core/model-api/src/commands.md#configurations-options-rows-and-rules)
 and [configurations.md](configurations.md).
@@ -294,7 +294,7 @@ the `mount` of a `joint_origin`
 ([commands.md](../core/model-api/src/commands.md#mount-frames)). The
 mark gives the frame's name, what it mounts on and how the component can
 move after you put it. A joint origin named `mount:<name>`, as Build's
-components name theirs ([Build parts](#build-parts)), is a face frame of
+components name theirs ([Build components](#build-components)), is a face frame of
 that name. It is fixed.
 
 | `kind` | The frame | Placed on | `joint` (how it moves) |
@@ -308,7 +308,7 @@ that name. It is fixed.
 **Publishing writes them.** `library_add` (Publish to Library,
 `mitcad-cli library add`) writes the design's mount frames into the
 component's `mounts`. It does not write them when the command gives
-them. It does not write them for a Build part, whose frames are
+them. It does not write them for a Build component, whose frames are
 `build.frames`. The design stays what counts. The block tells the
 application before it reads the design:
 
@@ -358,7 +358,7 @@ its middle, with `footprint` its size in cells and `pitch` [42, 42].
 The tests use synthetic parts of those sizes. Ready-made Gridfinity
 models are third-party files. They stay out of MitCad's repositories.
 
-### Build parts
+### Build components
 
 A component with a `build` block is placed by the Build tab.
 It is a slot profile, a connector, a nut, a panel or a linear part. The
@@ -600,7 +600,7 @@ form:
 
 ### Timber components
 
-Timber construction uses Build parts of its own:
+Timber construction uses Build components of its own:
 
 - Members: sawn, planed and dimensioned timber
 - Wood screws and nails
@@ -651,7 +651,7 @@ the design. It checks the rows' fields as the component's.
 `moisture` is in %.
 
 **A member** (`role: "profile"`, `kind: "timber"`) has the layout of a
-profile ([Build parts](#build-parts)):
+profile ([Build components](#build-components)):
 
 - The section lies on XY, centred at the origin. Its width W goes along
   X. Its thickness T goes along Y. The extrusion by `L` goes along +Z.
@@ -829,7 +829,7 @@ members' `sections`. An outer connector is offered when its `junctions`
 hold the junction's kind and its `fit` holds member a's section (with a
 tolerance of 1 mm) or its smaller dimension. The `fit` can come from the
 component or from one of its rows. A connector that does not fit is greyed,
-with the reason (`it fits 48 x 148, the member is 48 x 123`).
+with the reason (`it fits 48 × 148, the member is 48 × 123`).
 `mitcad-cli library search` and `library candidates` take `--kind` and
 `--mount`.
 
@@ -841,7 +841,7 @@ branch's tip as "latest, unreleased".
 
 A design records, for each component, the commit of the version that you
 selected. When you open the design, MitCad reads that commit, also after
-the library has moved on. Only Library Parts › Update changes it. Keep
+the library has moved on. Only Library Components › Update changes it. Keep
 old tags. Designs refer to their commits.
 
 ## A community index
@@ -896,7 +896,7 @@ is not legal advice.
 | CERN-OHL-P-2.0, -W-2.0, -S-2.0 | Permissive, weakly and strongly reciprocal hardware licences |
 
 MitCad records the licence, the library, its URL and the version with
-each component in the design, also for a copied component. Library Parts › Components
+each component in the design, also for a copied component. Library Components › Components
 List shows them.
 
 ## Making and publishing a library
@@ -925,7 +925,7 @@ mitcad-cli remote add my-parts https://example.org/you/my-parts.git
 mitcad-cli library index-entry my-parts --url https://example.org/you/my-parts.git
 ```
 
-## MitCad's parts library
+## MitCad's component library
 
 `mitcad-parts` ("MitCad components", MIT) is the one library of the components
 that MitCad offers. It is kept in a repository of its own
@@ -1069,14 +1069,14 @@ both kinds of component come from.
 **The fastener library before it.** Up to 1.0.0, the repository was the
 fastener library `mitcad-fasteners`
 (`https://github.com/mitcad/fasteners.git`). That address redirects to
-the components repository. At 2.0.0, the repository became the parts library,
+the components repository. At 2.0.0, the repository became the component library,
 with the new id.
 
 Designs made with `mitcad-fasteners` continue to work. MitCad reads a
 component at the commit that its design recorded. It reads it from any clone
 that has that commit, with the recorded id in its manifest there. Thus
 a clone of the components repository reads them under their old id and
-address. Library Parts › Update moves such a component to the components
+address. Library Components › Update moves such a component to the components
 library's versions.
 
 Three generators make the library with `mitcad-cli`:
@@ -1096,7 +1096,7 @@ tools/libraries/library_previews.py   the fasteners' studio and finishes (both g
 ```
 
 - `make-parts-library.py` makes the library: first the fasteners, then
-  the Build parts into the same manifest (`--merge`), then one
+  the Build components into the same manifest (`--merge`), then one
   `LICENSE`, `README.md` and `SOURCES.md`. Then it checks the folder.
   `--out` is a clone of the components repository, so that its versions
   stay. `--commit` records the result on top of them and tags it. The
@@ -1104,8 +1104,8 @@ tools/libraries/library_previews.py   the fasteners' studio and finishes (both g
 - `make-fastener-library.py` builds the fasteners from the standards'
   dimension tables. Each fastener has its finish as its appearance and
   a rendered preview ([Previews](#previews)).
-- `make-profile-library.py` makes the Build parts
-  ([The Build parts](#the-build-parts)).
+- `make-profile-library.py` makes the Build components
+  ([The Build components](#the-build-components)).
 - Each of these two makes a library `mitcad-parts` of its own components on
   its own. Their tests do this. With `--merge`, each keeps the other's
   components in the manifest at `--out`.
@@ -1115,7 +1115,7 @@ tools/libraries/library_previews.py   the fasteners' studio and finishes (both g
 This section tells how the library's pictures are made.
 
 **Fasteners.** The fasteners are the ISO screws, nuts and washers, and
-the Build parts whose `build.role` is `fastener` or whose category is
+the Build components whose `build.role` is `fastener` or whose category is
 one of nuts, screws, washers, bolts, nails or fasteners (such as
 `nuts`, `screws` and `wood-fasteners`). The generators render them
 with `mitcad-cli render` ([rendering.md](rendering.md#final-render))
@@ -1217,8 +1217,8 @@ that component's picture and warns, with the component's name.
 
 **Other parts.** A section component's picture is its section seen from end
 B, drawn from its curves. The generator renders a `board`'s rows from
-their ends (`row_previews`, [The Build parts](#the-build-parts)). It
-renders the other Build parts from the iso view with the design's own
+their ends (`row_previews`, [The Build components](#the-build-components)). It
+renders the other Build components from the iso view with the design's own
 render settings. Fasteners have no `row_previews`. Their rows differ
 in size only.
 
@@ -1240,7 +1240,7 @@ It prints `preview <id>: rendered|kept|drawn (<finish>)` for every
 fastener. It ends with the library check. `--commit` records and tags
 the result. To publish a version is the maintainers' step.
 
-### The Build parts
+### The Build components
 
 `make-profile-library.py` makes them from the group files.
 
@@ -1250,7 +1250,7 @@ of them. Only the designs made from them go into the library.
 A group file is a JSON array of components. The generator also reads
 `{"categories": [{"id", "name"}], "parts": [...], "left_out": [...]}`.
 `categories` names the categories for the manifest, under their main
-group ([MitCad's parts library](#mitcads-parts-library)). A name with
+group ([MitCad's component library](#mitcads-component-library)). A name with
 a slash is kept as it is. `left_out` lists
 the supplier's files that the group makes no part of, each
 `{"source", "reason"}`. Examples: an assembly, a copy of another component's
@@ -1730,14 +1730,19 @@ print/processes/standard-0-20.json    a process profile
 ```
 
 - An item is one `material` (with an `appearance` object beside it when
-  its appearance is not one of MitCad's library appearances) or one
-  `profile`. The fields are those of the design's materials and profiles
+  its default appearance is not one of MitCad's library appearances, and
+  an `appearances` list of the others of its list that are not, in the
+  list's order, mitcad#1067) or one `profile`. The fields are those of the design's materials and profiles
   ([commands.md](../core/model-api/src/commands.md#print-profiles)):
   values of the print settings' key map by MitCad's keys.
-- A material's `class` (`metal`, `plastic`, `other`) is the group it is
-  listed in; a file without one is grouped as MitCad works it out (a
-  metal by its id or the built-in it is based on, a plastic by its
-  filament settings).
+- A material's `class` (`metal`, `plastic` (General Plastic),
+  `fdm_plastic`, `resin`, `other`, mitcad#1102) is the group it is listed
+  in; a material with print settings is an FDM plastic whatever it
+  stores (a filament keeps `plastic`, which older versions read); a file
+  without one is grouped as MitCad works it out (a metal or a resin by
+  its id or the built-in it is based on). An item with a material of
+  class `fdm_plastic` or `resin`, or an appearance with a `class`, does
+  not open in versions from before mitcad#1102.
 - The file is named after the item's id in its kind's folder; a vendor's
   item `<vendor>/<product>` is in the vendor's folder.
 - `version` (an integer) counts up with each change of the item. A
@@ -1760,7 +1765,7 @@ wins.
 |---|---|---|
 | project | `print-library/` in the project's folder | versioned with the project |
 | user | `print-library` in the platform's data folder under `Mitcad/Mitcad`, beside `libraries` (`MITCAD_PRINT_LIBRARY_DIR` replaces it) | the user's own |
-| base | MitCad's parts library, its newest version fetched | read only |
+| base | MitCad's component library, its newest version fetched | read only |
 
 The user's and the project's library are managed in the application
 without a design: Tools › My Library… ([user guide](user-guide.md#my-library),
@@ -1783,7 +1788,7 @@ and path:
 ```
 
 The check of a manifest refuses paths outside their folders and an id
-listed twice. MitCad's parts library takes its items from
+listed twice. MitCad's component library takes its items from
 `tools/libraries/print-library/` (with their `SOURCES.md`):
 `make-parts-library.py` copies them and lists them in the manifest.
 
@@ -1803,7 +1808,7 @@ Auto-update (the check box in Libraries). These commands ask for it:
 
 - Libraries › Fetch
 - Update in the library browser
-- Library Parts › Check for Newer Versions
+- Library Components › Check for Newer Versions
 - Get Library
 
 A source with Auto-update is fetched in the background when MitCad
@@ -1825,5 +1830,5 @@ the clone has the versions it had before, and the next fetch (also an
 Auto-update at start-up) tries again.
 
 A design whose library is not on the computer keeps the bodies saved
-with it, and says so. Library Parts › Get Missing Libraries shows their
+with it, and says so. Library Components › Get Missing Libraries shows their
 addresses and then fetches them.

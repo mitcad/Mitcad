@@ -60,12 +60,13 @@ def capture(surface):
 # Both action entries create a design profile and its choice in one step.
 # The application panel has no preview: its independently committed
 # profile changes persist after Cancel, in both frontends.
-add("command make.print3d", "expect-log '^Command 3D Print started$'", "wait-idle",
+add("command make.print3d", "expect-log '^Command Send to Slicer started$'", "wait-idle",
     "capture-undo-depth profilesBaseline")
 for depth, (kind, label) in enumerate([("process", "Process"), ("printer", "Printer")], start=1):
     add("mark")
     if native:
-        add(f"native-choice input_{kind} 'New {kind}…'")
+        add(f"native-pointer-click input_{kind}", f"focus-dialog '^{label} Picker$'",
+            f"type 'New {kind}'", "key Return")
     else:
         # Resolve the wrapper's actual NoFocus combo and click its displayed
         # popup item; Return sent to the main window would export 3D Print.
@@ -82,7 +83,7 @@ for depth, (kind, label) in enumerate([("process", "Process"), ("printer", "Prin
             "expect-native-text printSetting_seam_position '^Slicer default$'")
     press("Close")
     add("focus-main")
-add("key Escape", "expect-log '^Command 3D Print cancelled$'", "wait-idle",
+add("key Escape", "expect-log '^Command Send to Slicer cancelled$'", "wait-idle",
     "expect-undo-depth ${baseline} 2", "expect-model-bodies 1 4000", "mark",
     "command make.printers", "focus-dialog '^Printers and Processes$'",
     "expect-log 'Profiles row: process/process1 Process 1 \\(design\\), the design.s'",

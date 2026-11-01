@@ -4,7 +4,11 @@
 // flat view), the camera's move, the Navigation modes and Lock horizon
 // (mitcad#978), the settings, and the controller driven
 // by a backend of the test's own: its events move the camera, its buttons
-// run their commands, and no device logs "3D mouse: none".
+// run their commands, and no device logs "3D mouse: none"; a motion's
+// pacing and timing from given frame times (mitcad#1023); a device's split
+// reports in padded slots, the raw reports' log, and each rotation axis
+// alone with no zoom, the same through HID and spacenavd (mitcad#1034).
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -27,6 +31,7 @@
 #include "view/SpaceMouseCamera.hpp"
 #include "view/SpaceMouseController.hpp"
 #include "view/SpaceMouseNavigation.hpp"
+#include "view/SpaceMouseTiming.hpp"
 
 namespace {
 int failures = 0;
@@ -101,10 +106,13 @@ void reportTests() {
   CHECK(!parseSpaceMouseHidReport(nullptr, 0, report));
 
   // HID: X right, Y toward the user, Z down. Right, lifted (Z < 0) and
-  // pulled (Y > 0) are +x, +y, +z of the view's frame.
+  // pulled (Y > 0) are +x, +y, +z of the view's frame. Its rotations turn
+  // clockwise seen from their axis' tip (mitcad#1034): Ry about Y (toward
+  // the user) is a roll clockwise as the user sees it, -rz; Rz about Z
+  // (down) negative turns clockwise seen from above, -ry.
   const SpaceMouseAxes hid = spaceMouseFromHid({350, 175, -350}, {0, 350, -175});
   CHECK(nearly(hid[0], 1.0) && nearly(hid[1], 1.0) && nearly(hid[2], 0.5));
-  CHECK(nearly(hid[3], 0.0) && nearly(hid[4], 0.5) && nearly(hid[5], 1.0));
+  CHECK(nearly(hid[3], 0.0) && nearly(hid[4], -0.5) && nearly(hid[5], -1.0));
 
   // spacenavd: a motion, a press and a release; its z points into the
   // screen.
@@ -709,15 +717,285 @@ void controllerTests() {
   CHECK(rateCalls > 0);
 }
 
+// A motion's pacing and its timing from given frame times (mitcad#1023):
+// frames begun at uneven times move the view by even steps that still add
+// up to the time passed, a stall is not made up, and the log line's timing.
+void timingTests() {
+  using namespace mitcad;
+  {
+    // The first frame takes one of 60 Hz; a steady rate steps by its own
+    // interval (the speed follows real time at any frame rate).
+    SpaceMouseFramePacer pacer;
+    CHECK(nearly(pacer.step(-1.0), kSpaceMouseFirstStep));
+    for (const double interval : {0.02, 0.05}) {
+      pacer.reset();
+      double stepped = 0.0;
+      for (int frame = 0; frame < 30; ++frame) {
+        const double step = pacer.step(interval);
+        CHECK(nearly(step, interval, 1e-12));
+        stepped += step;
+      }
+      CHECK(nearly(stepped, 30 * interval, 1e-9));
+    }
+  }
+  {
+    // Frames begun in bursts (two at once, then a long wait: 5, 5, 40 ms,
+    // a 60 Hz display on average): each frame's own time would step 1:8;
+    // the paced steps stay within a few milliseconds of the mean, and they
+    // add up to the time passed.
+    SpaceMouseFramePacer pacer;
+    const double pattern[] = {0.005, 0.005, 0.040};
+    double passed = 0.0;
+    double stepped = 0.0;
+    double smallest = 1.0;
+    double largest = 0.0;
+    for (int frame = 0; frame < 300; ++frame) {
+      const double interval = pattern[frame % 3];
+      const double step = pacer.step(interval);
+      passed += interval;
+      stepped += step;
+      if (frame >= static_cast<int>(SpaceMouseFramePacer::kWindow)) {
+        smallest = std::min(smallest, step);
+        largest = std::max(largest, step);
+      }
+    }
+    CHECK(smallest > 0.012 && largest < 0.019);
+    CHECK(largest / smallest < 1.4);
+    CHECK(std::abs(stepped - passed) < 0.15);
+  }
+  {
+    // A stall of half a second among 16 ms frames counts at most 100 ms,
+    // spread over the frames that follow: no jump, nothing more made up.
+    SpaceMouseFramePacer pacer;
+    double stepped = 0.0;
+    for (int frame = 0; frame < 20; ++frame) {
+      stepped += pacer.step(0.016);
+    }
+    const double stall = pacer.step(0.5);
+    CHECK(stall < 0.03);
+    stepped += stall;
+    for (int frame = 0; frame < 20; ++frame) {
+      const double step = pacer.step(0.016);
+      CHECK(step < 0.03);
+      stepped += step;
+    }
+    CHECK(nearly(stepped, 40 * 0.016 + kSpaceMouseLongestStep, 1e-9));
+  }
+  {
+    // The timing summary: five frames, 99 ms from the first to the last,
+    // the longest 50 ms with a grid rebuild in it, two rebuilds in all.
+    SpaceMouseTiming timing;
+    timing.frame(-1.0, false);
+    timing.frame(0.016, false);
+    timing.frame(0.017, false);
+    timing.frame(0.050, true);
+    timing.frame(0.016, false);
+    timing.gridRebuilds = 2;
+    CHECK(timing.frames == 5);
+    CHECK(nearly(timing.seconds, 0.099, 1e-12));
+    CHECK(nearly(timing.longest, 0.050, 1e-12) && timing.longestRebuiltGrid);
+    CHECK(nearly(timing.framesPerSecond(), 4.0 / 0.099, 1e-9));
+    CHECK(timing.text() ==
+          QStringLiteral("0.10 s, 40.4 fps, longest frame 50.0 ms with a grid rebuild, 2 grid rebuild(s)"));
+    // A longer frame without a rebuild takes its place.
+    timing.frame(0.080, false);
+    CHECK(nearly(timing.longest, 0.080, 1e-12) && !timing.longestRebuiltGrid);
+    // A single frame: no time, no rate.
+    SpaceMouseTiming single;
+    single.frame(-1.0, true);
+    CHECK(single.frames == 1 && single.framesPerSecond() == 0.0);
+    CHECK(single.text() == QStringLiteral("0.00 s, 0.0 fps, longest frame 0.0 ms, 0 grid rebuild(s)"));
+  }
+}
+
+// mitcad#1034: a device that sends its translation (report 1) and its
+// rotation (report 2) apart, each in a 13-byte slot as Raw Input gives
+// them when the device declares a 13-byte report (dwSizeHid), keeps a
+// steady rotation; a device that sends both in one 13-byte report 1 still
+// gives both.
+void splitReportTests() {
+  using namespace mitcad;
+  using Where = SpaceMouseRotationReport;
+  // Translation 350, 0, 0 with padding that is no rotation (not even zero);
+  // rotation Rz 100.
+  const std::uint8_t first[13] = {1, 0x5e, 0x01, 0, 0, 0, 0, 7, 7, 7, 7, 7, 7};
+  const std::uint8_t second[13] = {2, 0, 0, 0, 0, 0x64, 0, 0, 0, 0, 0, 0, 0};
+  const std::array<int, 3> pushed{{350, 0, 0}};
+  const std::array<int, 3> twisted{{0, 0, 100}};
+  SpaceMouseHidReport report;
+  // The parser told that the rotation has a report of its own reads none
+  // from report 1.
+  CHECK(parseSpaceMouseHidReport(first, sizeof(first), report, false));
+  CHECK(report.translation && !report.rotation && report.t == pushed);
+  // With the rotation's report known from the descriptor, and unknown (it
+  // is learnt from the first report 2): the reports alternate under a
+  // steady push and twist, and the rotation stays.
+  for (const Where known : {Where::Unknown, Where::OwnReport}) {
+    SpaceMouseHidReader reader;
+    reader.setRotationReport(known);
+    bool rotated = false;
+    for (int step = 0; step < 20; ++step) {
+      const bool even = step % 2 == 0;
+      CHECK(reader.read(even ? first : second, 13, report));
+      if (even && known == Where::OwnReport) {
+        CHECK(report.translation && !report.rotation);
+      }
+      rotated = rotated || !even;
+      if (rotated) {
+        CHECK(reader.translation() == pushed && reader.rotation() == twisted);
+        const SpaceMouseAxes axes = reader.axes();
+        CHECK(nearly(axes[0], 1.0) && nearly(axes[3], 0.0) && nearly(axes[4], 100.0 / kSpaceMouseFullScale) &&
+              nearly(axes[5], 0.0));
+      }
+    }
+    CHECK(reader.rotationReport() == Where::OwnReport);
+    CHECK(reader.reportIds() == (std::vector<int>{1, 2}));
+    CHECK(reader.reportIdsText() == QStringLiteral("1, 2"));
+  }
+  // The newer devices' one report 1 of 13 bytes, known from the
+  // descriptor or not: translation and rotation both, every time.
+  const std::uint8_t both[13] = {1, 0x5e, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0x64, 0};
+  for (const Where known : {Where::Unknown, Where::WithTranslation}) {
+    SpaceMouseHidReader reader;
+    reader.setRotationReport(known);
+    for (int step = 0; step < 5; ++step) {
+      CHECK(reader.read(both, sizeof(both), report));
+      CHECK(report.translation && report.rotation);
+      CHECK(reader.translation() == pushed && reader.rotation() == twisted);
+    }
+    CHECK(reader.rotationReport() == known);
+    CHECK(reader.reportIds() == (std::vector<int>{1}));
+  }
+  // A report it does not know: false, the axes as they were.
+  SpaceMouseHidReader reader;
+  CHECK(reader.read(both, sizeof(both), report));
+  const std::uint8_t unknown[7] = {9, 1, 2, 3, 4, 5, 6};
+  CHECK(!reader.read(unknown, sizeof(unknown), report));
+  CHECK(reader.translation() == pushed && reader.rotation() == twisted);
+  CHECK(reader.reportIdsText() == QStringLiteral("1, 9"));
+}
+
+// The debug log's raw reports (mitcad#1034): the last report of each id,
+// at most one line per 100 ms, and at once when the cap comes to rest.
+void rawLogTests() {
+  using namespace mitcad;
+  const std::uint8_t first[7] = {1, 0x5e, 0x01, 0, 0, 0, 0};
+  const std::uint8_t second[7] = {2, 0, 0, 0, 0, 0x64, 0};
+  const std::array<int, 3> t{{350, 0, 0}};
+  const std::array<int, 3> r{{0, 0, 100}};
+  SpaceMouseRawLog rawLog;
+  CHECK(rawLog.take(0, t, r).isEmpty()); // nothing came
+  rawLog.add(first, sizeof(first));
+  rawLog.add(second, sizeof(second));
+  rawLog.add(first, sizeof(first));
+  CHECK(rawLog.take(1000, t, r) ==
+        QStringLiteral("3D mouse report: id 1 [01 5e 01 00 00 00 00], id 2 [02 00 00 00 00 64 00]; 3 report(s); "
+                       "t 350 0 0, r 0 0 100"));
+  CHECK(rawLog.take(1200, t, r).isEmpty()); // nothing came since
+  rawLog.add(second, sizeof(second));
+  CHECK(rawLog.take(1050, t, r).isEmpty());  // too soon
+  CHECK(!rawLog.take(1050, t, r, true).isEmpty()); // at rest: at once
+  // A thousand reports in a second: ten lines.
+  int lines = 0;
+  for (int ms = 2000; ms < 3000; ++ms) {
+    rawLog.add(ms % 2 == 0 ? first : second, sizeof(first));
+    if (!rawLog.take(ms, t, r).isEmpty()) {
+      ++lines;
+    }
+  }
+  CHECK(lines == 10);
+}
+
+// The axes each way to the view (mitcad#1034): each rotation axis of the
+// device alone turns the view about one axis and never zooms or pans, read
+// from the device's split reports as the Windows backend reads them, in
+// every Navigation mode, with the camera's scale kept in orthographic and
+// perspective; and the HID backends (Windows, macOS) and spacenavd's
+// (Linux) give the same axes for the same motion.
+void rotationMappingTests() {
+  using namespace mitcad;
+  const SpaceMouseSettings defaults{};
+  const double frame = 1.0 / 60.0;
+  for (std::size_t axis = 0; axis < 3; ++axis) {
+    for (const int value : {350, -350, 120}) {
+      std::array<int, 3> rotation{};
+      rotation[axis] = value;
+      const SpaceMouseAxes axes = spaceMouseFromHid({0, 0, 0}, rotation);
+      CHECK(axes[0] == 0.0 && axes[1] == 0.0 && axes[2] == 0.0);
+      const SpaceMouseRates rates = spaceMouseRates(defaults, axes, false);
+      CHECK(rates.zoom == 0.0 && rates.panX == 0.0 && rates.panY == 0.0);
+      // Rx tilts (pitch), Ry rolls, Rz spins (yaw).
+      CHECK((rates.pitch != 0.0) == (axis == 0) && (rates.roll != 0.0) == (axis == 1) &&
+            (rates.yaw != 0.0) == (axis == 2));
+      // From split reports in 13-byte slots: the same rates at every report
+      // after the first rotation.
+      std::uint8_t first[13] = {1, 0, 0, 0, 0, 0, 0, 7, 7, 7, 7, 7, 7};
+      std::uint8_t second[13] = {2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+      const auto bits = static_cast<std::uint16_t>(static_cast<std::int16_t>(value));
+      second[1 + 2 * axis] = static_cast<std::uint8_t>(bits & 0xff);
+      second[2 + 2 * axis] = static_cast<std::uint8_t>(bits >> 8);
+      SpaceMouseHidReader reader;
+      SpaceMouseHidReport report;
+      CHECK(reader.read(second, sizeof(second), report));
+      for (int step = 0; step < 6; ++step) {
+        CHECK(reader.read(step % 2 == 0 ? first : second, sizeof(first), report));
+        const SpaceMouseRates fromReports = spaceMouseRates(defaults, reader.axes(), false);
+        CHECK(fromReports.zoom == 0.0 && fromReports.panX == 0.0 && fromReports.panY == 0.0);
+        CHECK(fromReports.pitch == rates.pitch && fromReports.yaw == rates.yaw && fromReports.roll == rates.roll);
+      }
+      // Through the camera, in each mode and projection: turned, never
+      // zoomed.
+      for (const SpaceMouseMode mode : {SpaceMouseMode::Object, SpaceMouseMode::Camera, SpaceMouseMode::Fly}) {
+        for (const bool perspective : {false, true}) {
+          occ::handle<Graphic3d_Camera> camera = new Graphic3d_Camera();
+          camera->SetProjectionType(perspective ? Graphic3d_Camera::Projection_Perspective
+                                                : Graphic3d_Camera::Projection_Orthographic);
+          camera->SetEyeAndCenter(gp_Pnt(0.0, -100.0, 0.0), gp_Pnt(0.0, 0.0, 0.0));
+          camera->SetUp(gp_Dir(0.0, 0.0, 1.0));
+          camera->SetScale(50.0);
+          const double scale = camera->Scale();
+          const gp_Dir direction = camera->Direction();
+          const gp_Dir up = camera->Up();
+          SpaceMouseStyle style;
+          style.mode = mode;
+          for (int step = 0; step < 30; ++step) {
+            CHECK(moveSpaceMouseCamera(*camera, gp_Pnt(5.0, 5.0, 5.0), rates, frame, style));
+          }
+          CHECK(nearly(camera->Scale(), scale, 1e-9 * scale));
+          CHECK(!camera->Direction().IsEqual(direction, 1e-6) || !camera->Up().IsEqual(up, 1e-6));
+        }
+      }
+    }
+  }
+  // The same motion through HID (Windows, macOS) and through spacenavd,
+  // which takes HID's values into its frame by swapping Y and Z and
+  // reversing both, translation and rotation alike.
+  const std::array<std::array<int, 6>, 4> motions{{{{350, 0, 0, 0, 0, 0}},
+                                                   {{0, 120, -200, 0, 0, 0}},
+                                                   {{0, 0, 0, 300, -150, 75}},
+                                                   {{10, -20, 30, -40, 50, -60}}}};
+  for (const std::array<int, 6>& h : motions) {
+    const SpaceMouseAxes fromHid = spaceMouseFromHid({h[0], h[1], h[2]}, {h[3], h[4], h[5]});
+    const SpaceMouseAxes fromSpnav = spaceMouseFromSpnav({h[0], -h[2], -h[1], h[3], -h[5], -h[4]});
+    for (std::size_t axis = 0; axis < 6; ++axis) {
+      CHECK(nearly(fromHid[axis], fromSpnav[axis]));
+    }
+  }
+}
+
 } // namespace
 
 int spaceMouseTests() {
   reportTests();
+  splitReportTests();
+  rawLogTests();
+  rotationMappingTests();
   mappingTests();
   moveTests();
   modeTests();
   cameraTests();
   settingsTests();
   controllerTests();
+  timingTests();
   return failures;
 }

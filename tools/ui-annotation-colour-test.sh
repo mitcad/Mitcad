@@ -10,13 +10,13 @@
 # stored in the old default orange #d9480f, which the model reads as Auto
 # (mitcad#894: the six rotating defaults were the program's choice).
 #   - Measure closed (the Annotations window from the command search):
-#     Offset1 made Dark Grey (two rows down from Auto: Auto, Black, Dark
+#     Offset1 made Dark Gray (two rows down from Auto: Auto, Black, Dark
 #     Grey and Custom… are all the menu offers, mitcad#902) and Offset2
 #     #5c940d through Custom… (the colour dialog); the model's annotations,
 #     the view and the window show the new colours at once; Offset2's own
 #     colour offered as it is by Colour…; Undo and Redo take Offset2's back
 #     and again.
-#   - Measure open (its panel's Annotate ▾ > Annotations…): Offset1 made Black and
+#   - Measure open (the Make tab's Annotations…, mitcad#1049): Offset1 made Black and
 #     Offset2 #862e9c through Custom…; shown at once; kept when the panel
 #     closes; Undo and Redo after it; saved, the design file has them.
 #   - The Annotations window's Text Height… (mitcad#894): Auto (2.5 mm for
@@ -109,7 +109,7 @@ edit_other() {
   ui_mark
   ui_focus_dialog '^Edit Annotation$'
   ui_step "Colour: Custom… (Alt+C, End)"   ui_key alt+c End
-  ui_focus_dialog '^Annotation Colour$'
+  ui_focus_dialog '^Annotation Color$'
   ui_step "HTML (Alt+H)"                   ui_key alt+h
   ui_step "$2"                             ui_type_text "$2"
   ui_step "OK (Enter)"                     ui_key Return
@@ -142,9 +142,9 @@ grep "^Annotations selected: " "$UI_LOG" | tail -1 | grep -qx "Annotations selec
 ui_mark
 ui_focus_dialog '^Annotations$'
 ui_step "Colour… (Alt+C)"                 ui_key alt+c
-ui_expect_new "Annotation Colour dialog opened: Offset2 #5c940d (Auto | Black | Dark Grey | #5c940d | Custom…)" \
-  "Auto, Black, Dark Grey, its own and Custom… offered"
-ui_focus_dialog '^Annotation Colour$'
+ui_expect_new "Annotation Colour dialog opened: Offset2 #5c940d (Auto | Black | Dark Gray | #5c940d | Custom…)" \
+  "Auto, Black, Dark Gray, its own and Custom… offered"
+ui_focus_dialog '^Annotation Color$'
 ui_step "cancel (Escape)"                 ui_key Escape
 ui_sync
 tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Annotation Colour dialog: " && ui_fail "the cancelled dialog chose a colour"
@@ -164,14 +164,14 @@ echo "--- Measure open"
 ui_mark
 ui_step "measure (I)"                      ui_key i
 ui_expect_new "Command Measure started" "measure started"
-ui_expect_new "Measure Annotate at" "the panel has Annotate"
-ui_step "Annotate"                         ui_click_logged "Measure Annotate"
-ui_expect_new "Context menu: Note… | Datum Label… | Frame… | Hole Callout | Annotations…" "Annotate's menu"
-ui_step "Annotations… (A)"                 ui_key a
-ui_expect_new "Annotations window opened: 2 annotation(s)" "the window opened from the panel"
+ui_expect_new "Measure history at" "the panel laid out"
+ui_step "the Make tab"                     ui_click_logged "Ribbon tab MAKE"
+ui_expect_new "Ribbon button view.annotations at" "the Annotate group's Annotations…"
+ui_step "Annotations…"                     ui_click_logged "Ribbon button view.annotations"
+ui_expect_new "Annotations window opened: 2 annotation(s)" "the window opened while Measure is open"
 # Its rows where they were laid out before (logged when they move).
 ui_sync
-# Dark Grey is the third row: Black one up from it.
+# Dark Gray is the third row: Black one up from it.
 edit_named Offset1 "Up" "#212529" 10 "Offset1 (in O1), Measure open"
 edit_other Offset2 "#862e9c" 15 "Offset2 (root), Measure open"
 ui_step "close the window (Escape)"        ui_key Escape

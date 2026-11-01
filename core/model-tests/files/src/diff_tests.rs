@@ -359,7 +359,7 @@ fn components_and_placements() {
     assert_eq!(
         texts(&diff.occurrences, |o| &o.text),
         [
-            "Bracket:1 (O1): placement moved by [0, 50, 0] mm and turned 90 deg",
+            "Bracket:1 (O1): placement moved by [0, 50, 0] mm and turned 90°",
             "Pin:1 (O2): added"
         ]
     );

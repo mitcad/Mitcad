@@ -9,7 +9,7 @@
 #      the progress dialog shows after 400 ms with the feature being
 #      computed, Esc cancels, and the document before stays.
 #   2. Open again, to the end: the design is shown.
-#   3. Change Parameters: a change computed with the progress dialog over
+#   3. Edit Parameters: a change computed with the progress dialog over
 #      the Parameters window, cancelled there (the parameter, the volume and
 #      the undo steps stay), then done; undo.
 #   4. Editing a feature: its preview computes without a progress dialog
@@ -110,7 +110,7 @@ open_through_dialog() {
   ui_type_path "Open" "$FILE"
 }
 
-# edit_cell "name column" text: double-click a cell of Change Parameters,
+# edit_cell "name column" text: double-click a cell of Edit Parameters,
 # replace its text, Enter.
 edit_cell() {
   ui_focus_dialog '^Parameters$'
@@ -240,9 +240,9 @@ ui_focus_main
 expect_title "boss.mitcad - MitCad"
 ui_step "fit (F6)"                       ui_key F6
 
-echo "--- Change Parameters: cancelled over the Parameters window, then done"
+echo "--- Edit Parameters: cancelled over the Parameters window, then done"
 ui_mark
-ui_step "Change Parameters (search)"     ui_command "Change Parameters"
+ui_step "Edit Parameters (search)"     ui_command "Edit Parameters"
 ui_expect_new "Parameters d1 expression at" "the Parameters window"
 ui_mark
 ui_step "d1 = 70"                        edit_cell "d1 expression" "70"
@@ -437,7 +437,7 @@ ui_expect_log "Result store: restored 4, evaluated 2; stored 0 " "the solid feat
 ui_expect_log "Bodies shown: F2.b0" "the design is shown"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a feature failed"
 ui_mark
-ui_step "Change Parameters (search)"     ui_command "Change Parameters"
+ui_step "Edit Parameters (search)"     ui_command "Edit Parameters"
 ui_expect_new "Parameters d1 expression at" "the Parameters window"
 ui_mark
 ui_step "d1 = 61"                        edit_cell "d1 expression" "61"

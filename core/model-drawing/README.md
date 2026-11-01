@@ -12,10 +12,11 @@ them out.
 |---|---|
 | `compose` | The layout of a sheet: views in their places, their marks, the automatic annotations, the frame and the title block |
 | `clip` | Detail views and breaks cut in the view's plane |
+| `convention` | Drawing conventions on the projected lines (mitcad#1112): fillets and chamfers smaller than the pen as sharp corners, tangent and short edges that would blot left out, threads drawn by ISO 6410 |
 | `annotate` | Annotations on views laid out from their picks |
 | `tables` | Hole tables and parts lists drawn from their rows |
 | `template` | Sheet templates drawn; the built-in ones (`templates/*.json`) and the user's and projects' libraries |
-| `sheet` | The sheet's groups, pens and texts that the writers write |
+| `sheet` | The sheet's groups, pens (the one table of ISO 128 line widths, also for the application's sheet) and texts that the writers write |
 | `pdf`, `svg`, `dxf`, `dwg` | The writers |
 | `cut_sheet` | Cut sheets (mitcad#853): a part's outline as the body's silhouette from its projection, parts placed, turned and checked for overlaps, the DXF and SVG of their outlines |
 | `bspline` | B-splines in a plane evaluated, cut, turned round and split into Bézier pieces, so cut sheets write the projection's curves as they are |

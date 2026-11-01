@@ -91,11 +91,11 @@ pub(super) trait DispatchOps<K: Kernel> {
     /// The families of commands besides the document's own (`Command`,
     /// which takes every other name, so that its error lists its commands
     /// for an unknown one). A new family is one row here.
-    fn command_families() -> [CommandFamily<K>; 22];
+    fn command_families() -> [CommandFamily<K>; 24];
 }
 
 impl<K: Kernel> DispatchOps<K> for Document<K> {
-    fn command_families() -> [CommandFamily<K>; 22] {
+    fn command_families() -> [CommandFamily<K>; 24] {
         [
             // Gears: the motion link of a mesh (mitcad#472, `gears.rs`),
             // run as the `add_motion_link` worked out from the gears. It has
@@ -281,6 +281,23 @@ impl<K: Kernel> DispatchOps<K> for Document<K> {
                 prefix: None,
                 run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
                     doc.run_cut_sheet_command(parse(value, "command")?)
+                },
+            },
+            // A configuration table's rows as CSV (mitcad#1044,
+            // `configuration_rows_csv.rs`).
+            CommandFamily {
+                names: super::configuration_rows_csv::RowsCsvCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    doc.run_rows_csv_command(parse(value, "command")?)
+                },
+            },
+            // The design's summary (mitcad#1088, `design_properties.rs`).
+            CommandFamily {
+                names: super::design_properties::DesignPropertiesCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    doc.run_design_properties_command(parse(value, "command")?)
                 },
             },
         ]

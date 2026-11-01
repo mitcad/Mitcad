@@ -191,13 +191,13 @@ pub fn look(a: &AssetDef, assets: &[AssetDef]) -> Look {
             if !connected(a, id).is_empty() {
                 tex = texture(assets, a, id);
                 notes.push(format!(
-                    "the colour is a texture image ({}), which the file does not hold: the \
-                     stored colour is used",
+                    "the color is a texture image ({}), which the file does not hold: the \
+                     stored color is used",
                     tex.as_ref().map_or("", |t| t.image.as_str())
                 ));
             }
         }
-        None => notes.push(format!("no base colour read for {schema}")),
+        None => notes.push(format!("no base color read for {schema}")),
     }
     let unit = |x: f64| x.clamp(0.0, 1.0);
     match schema.as_str() {

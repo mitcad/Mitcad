@@ -84,6 +84,26 @@ public:
   void setGroupCollapsed(const QString& name, bool collapsed);
   bool isGroupCollapsed(const QString& name) const { return m_collapsed.contains(name); }
   void groupRenamed(const QString& name, const QString& newName);
+  // The timeline groups as the strip shows them, for another presentation
+  // of the timeline (the AppKit one, mitcad#1077): each group's name, its
+  // first and last feature shown, and whether it is folded into one cell
+  // (a group the marker is inside of shows open). Read from the strip, so
+  // there is one folded state.
+  struct ShownGroup {
+    QString name;
+    QString first; // feature uids
+    QString last;
+    bool collapsed = false;
+  };
+  QVector<ShownGroup> shownGroups() const;
+  // Another presentation's pointer over a cell (mitcad#1076): the
+  // feature's uid, or a folded group's first feature for the group; empty
+  // when it left. Previews as the strip's own hover does (featuresHovered).
+  void hoverFeature(const QString& uid);
+  // The cell's tooltip (rich text) as the strip shows it: the feature's
+  // details (the feature details provider) and state, or a folded group's
+  // name and size; empty for an unknown feature.
+  QString featureToolTip(const QString& uid);
   // Renames a feature in place.
   void startRename(const QString& uid);
   // Closes an open rename editor without renaming; false when none is open.
@@ -128,6 +148,9 @@ signals:
   void reorderRequested(const QString& uid, int index);
   // A right click on a group's band or folded cell.
   void groupMenuRequested(const QString& name, const QPoint& globalPosition);
+  // A group was folded or opened (setGroupCollapsed), after the strip shows
+  // it so (mitcad#1077).
+  void groupCollapsedChanged(const QString& name, bool collapsed);
   // The fx badge of a feature suppressed by a condition (mitcad#862): the
   // pointer rests on it (`pinned` false) or it was clicked; `anchor` is
   // the badge in global coordinates.

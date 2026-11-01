@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/browser app/framework/DialogFolders.cpp app/framework/DialogFolders.hpp core/model/src/parameters_csv.rs core/model/src/document/parameters_csv.rs core/model-api/src/parameters_csv.rs
-# The parameters as CSV (mitcad#666) in Change Parameters, on the demo
+# The parameters as CSV (mitcad#666) in Edit Parameters, on the demo
 # block (60 x 40 x 20 mm: d1, d2, d3), with Qt's own file dialogs
 # (--no-native-dialogs):
 #   - Export...: Mitcad's table written to a file (header, d1's row).
@@ -56,7 +56,7 @@ expect_volume() {
 ui_start_display
 ui_start_app --demo --no-native-dialogs
 ui_mark
-ui_step "Change Parameters (search)"     ui_command "Change Parameters"
+ui_step "Edit Parameters (search)"     ui_command "Edit Parameters"
 ui_expect_new "Parameters dialog opened" "the dialog opened"
 ui_expect_new "Parameters: d1 = 60 mm (60 mm); d2 = 40 mm (40 mm); d3 = 20 mm (20 mm)" \
   "the model's parameters listed"

@@ -142,7 +142,7 @@ void CloudSection::build() {
   // The owner: a user or an organisation; on GitLab also a group with its
   // subgroups (group/sub), so the field takes slashes.
   m_owner = new QLineEdit;
-  m_owner->setPlaceholderText(tr("you or an organisation"));
+  m_owner->setPlaceholderText(tr("you or an organization"));
   m_repository = new QLineEdit;
   m_repository->setPlaceholderText(tr("repository"));
   m_ownerRow = new QWidget;
@@ -605,10 +605,10 @@ void CloudSection::showFixes(const QString& cls) {
       const QJsonObject key = projectsCommand({{QStringLiteral("cmd"), QStringLiteral("ssh_public_key")}});
       const bool hasKey = !key.value(QStringLiteral("text")).toString().isEmpty();
       text = hasKey ? tr("MitCad signs in with your SSH key: add its public key to your own user account on the "
-                         "service (also for an organisation's repository), then come back.")
+                         "service (also for an organization's repository), then come back.")
                     : tr("MitCad signs in with an SSH key, and this computer has none: make one (ssh-keygen -t "
                          "ed25519), add its public key to your own user account on the service (also for an "
-                         "organisation's repository), then come back.");
+                         "organization's repository), then come back.");
       m_copyKey->setVisible(hasKey);
       m_keysPage->show();
     } else {

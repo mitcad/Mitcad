@@ -122,7 +122,7 @@ fn tables_are_set_and_queried() {
         &mut doc,
         json!({"cmd": "set_table", "name": "Screws", "table": table}),
     );
-    assert!(error.contains("parameter 'd3'"), "{error}");
+    assert!(error.contains("parameter d3"), "{error}");
     assert_eq!(parameter(&doc, "d3")["value"], 9.0);
     // Unknown fields and cells of the wrong kind are refused.
     rejected(

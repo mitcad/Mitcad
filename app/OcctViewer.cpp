@@ -50,6 +50,7 @@
 #include <utility>
 
 #include <QGuiApplication>
+#include <QHelpEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QNativeGestureEvent>
@@ -87,6 +88,9 @@
 #include <Graphic3d_MarkerImage.hxx>
 #include <Graphic3d_MaterialAspect.hxx>
 #include <Prs3d_Presentation.hxx>
+#include <Prs3d_PresentationShadow.hxx>
+#include <PrsMgr_Presentation.hxx>
+#include <Graphic3d_StructureManager.hxx>
 #include <gp_Pnt2d.hxx>
 #include <Graphic3d_TextureParams.hxx>
 #include <Graphic3d_TransformPers.hxx>
@@ -126,21 +130,28 @@
 namespace mitcad {
 namespace {
 
-const Quantity_Color kBodyColor(0.70, 0.74, 0.80, Quantity_TOC_RGB);
-const Quantity_Color kEdgeColor(0.12, 0.13, 0.15, Quantity_TOC_RGB);
-const Quantity_Color kSketchColor(0.10, 0.35, 0.85, Quantity_TOC_RGB);
-const Quantity_Color kConstrainedColor(0.08, 0.09, 0.11, Quantity_TOC_RGB);
-const Quantity_Color kCenterlineColor(0.25, 0.30, 0.40, Quantity_TOC_RGB);
-// The two above on a dark background (mitcad#253).
-const Quantity_Color kConstrainedColorDark(0.88, 0.90, 0.94, Quantity_TOC_RGB);
-const Quantity_Color kCenterlineColorDark(0.60, 0.66, 0.76, Quantity_TOC_RGB);
+// The view's colours are roles of the role table (framework/Theme.hpp,
+// mitcad#1041), in OCCT's terms; those that differ by the background are
+// taken where they are drawn (viewRole with the background's tone).
+Quantity_Color viewRole(ColorRole role, bool darkBackground = false) {
+  const QColor color = viewColor(role, darkBackground);
+  return Quantity_Color(color.redF(), color.greenF(), color.blueF(), Quantity_TOC_sRGB);
+}
+
+const Quantity_Color kBodyColor = viewRole(ColorRole::Body);
+const Quantity_Color kEdgeColor = viewRole(ColorRole::Edge);
+const Quantity_Color kSketchColor = viewRole(ColorRole::SketchFree);
+// Fully constrained geometry and centre lines, light and dark (mitcad#253).
+const Quantity_Color kConstrainedColor = viewRole(ColorRole::SketchFixed, false);
+const Quantity_Color kCenterlineColor = viewRole(ColorRole::SketchCenterline, false);
+const Quantity_Color kConstrainedColorDark = viewRole(ColorRole::SketchFixed, true);
+const Quantity_Color kCenterlineColorDark = viewRole(ColorRole::SketchCenterline, true);
 // The halo under fully constrained geometry and centre lines (mitcad#302):
 // a wider line in the opposite tone, so that the line stands out over a
 // body's face as well as over the background. Near the background's own
-// tone, so that on the empty background the line looks as it did (sRGB:
-// the colours above are linear and show lighter).
-const Quantity_Color kSketchHaloDark(0.13, 0.14, 0.16, Quantity_TOC_sRGB);
-const Quantity_Color kSketchHaloLight(0.98, 0.98, 0.99, Quantity_TOC_sRGB);
+// tone, so that on the empty background the line looks as it did.
+const Quantity_Color kSketchHaloDark = viewRole(ColorRole::SketchHalo, true);
+const Quantity_Color kSketchHaloLight = viewRole(ColorRole::SketchHalo, false);
 constexpr double kSketchLineWidth = 2.0;
 constexpr double kSketchHaloWidth = 6.0;
 // A feature's input lines on a dark background (mitcad#957): the
@@ -148,22 +159,22 @@ constexpr double kSketchHaloWidth = 6.0;
 // (about 4.6:1 against the dark background, where the plain selection
 // blue has about 2.6:1). On a light background the lines keep the plain
 // selection colour without a halo.
-const QColor kInputLineColorDark(0x66, 0xb2, 0xff);
+const QColor kInputLineColorDark = viewColor(ColorRole::SelectLine, true);
 constexpr double kInputLineWidth = 3.5;
 constexpr double kInputLineHiddenWidth = 2.0;
-const Quantity_Color kReferenceColor(0.55, 0.20, 0.70, Quantity_TOC_RGB);
-const Quantity_Color kConstructionColor(0.85, 0.50, 0.10, Quantity_TOC_RGB);
-const Quantity_Color kProfileFill(0.55, 0.70, 0.95, Quantity_TOC_RGB);
-const Quantity_Color kPreviewColor(0.30, 0.55, 0.95, Quantity_TOC_RGB);
-const Quantity_Color kCutPreviewColor(0.90, 0.20, 0.15, Quantity_TOC_RGB);
+const Quantity_Color kReferenceColor = viewRole(ColorRole::SketchProjected);
+const Quantity_Color kConstructionColor = viewRole(ColorRole::SketchConstruction);
+const Quantity_Color kProfileFill = viewRole(ColorRole::ProfileFill);
+const Quantity_Color kPreviewColor = viewRole(ColorRole::PreviewAdd);
+const Quantity_Color kCutPreviewColor = viewRole(ColorRole::PreviewRemove);
 // A split's extended tool (mitcad#712): the orange of the panel's second
 // selection input, the splitting tool's.
-const Quantity_Color kExtendedToolColor(0xff / 255.0, 0x8c / 255.0, 0x00 / 255.0, Quantity_TOC_sRGB);
-const Quantity_Color kPlaneColor(0.95, 0.70, 0.35, Quantity_TOC_RGB);
-const Quantity_Color kAxisColor(0.85, 0.45, 0.10, Quantity_TOC_RGB);
-const Quantity_Color kHiddenEdgeColor(0.45, 0.48, 0.54, Quantity_TOC_RGB);
-// Section Analysis' caps: a colour bodies seldom have.
-const QColor kCapColor(0xf2, 0x9e, 0x1a);
+const Quantity_Color kExtendedToolColor = viewRole(ColorRole::ExtendedTool);
+const Quantity_Color kPlaneColor = viewRole(ColorRole::DatumPlane);
+const Quantity_Color kAxisColor = viewRole(ColorRole::DatumAxis);
+const Quantity_Color kHiddenEdgeColor = viewRole(ColorRole::HiddenEdge);
+// Section Analysis' caps of the root component: a colour bodies seldom have.
+const QColor kCapColor = viewColor(ColorRole::SectionCap, false);
 // How far the hatch lines lie off the caps, of the caps' size (see hatchOf).
 constexpr double kHatchLift = 5e-3;
 constexpr double kHatchWidth = 1.5;
@@ -184,9 +195,9 @@ constexpr float kSectionOffsetFactor = 4.0f;
 constexpr float kSectionCapOffsetUnits = 2.0f;
 constexpr float kSectionedBodyOffsetUnits = 6.0f;
 // Cosmetic threads' rings: darker than the body, lighter than its edges.
-const Quantity_Color kThreadColor(0.30, 0.33, 0.40, Quantity_TOC_RGB);
+const Quantity_Color kThreadColor = viewRole(ColorRole::Thread);
 // The build volume's lines (mitcad#640): a muted blue.
-const Quantity_Color kBuildVolumeColor(0.25, 0.45, 0.75, Quantity_TOC_RGB);
+const Quantity_Color kBuildVolumeColor = viewRole(ColorRole::BuildVolume);
 
 // A left press that moves further than this is a window selection.
 constexpr double kDragPixels = 4.0;
@@ -418,6 +429,9 @@ constexpr double kInactiveFade = 0.65;
 constexpr double kTemporaryFade = 0.3;
 constexpr double kInactivePlaneTransparency = 0.9;
 constexpr double kInactiveProfileTransparency = 0.85;
+// How see-through a transparent body's faces are (mitcad#1093): faint, a
+// little less than a command's ghost (0.8), as its edges carry its shape.
+constexpr double kTransparentBodyTransparency = 0.75;
 
 // A colour faded most of the way to `paper` (the background's middle):
 // pale, but still its own hue.
@@ -641,11 +655,14 @@ constexpr float kWholeTransparency = 0.55f;
 constexpr float kPickedPlaneTransparency = 0.8f;
 // The occurrences a selected joint joins (mitcad#523): a faint tint.
 constexpr float kLightTransparency = 0.82f;
+// A browser row's bodies where others hide them (mitcad#1022): fainter
+// than in sight, their boundaries opaque.
+constexpr float kBrowserHoverThroughTransparency = 0.75f;
 constexpr float kDatumPreviewTransparency = 0.2f;
 // A split's extended tool (mitcad#712): the bodies and the cut show through.
 constexpr float kExtendedToolTransparency = 0.6f;
 // OCCT's own selection highlight; the selections shown are setHighlights'.
-const Quantity_Color kSelectedColor(0x1f / 255.0, 0x7a / 255.0, 0xff / 255.0, Quantity_TOC_sRGB);
+const Quantity_Color kSelectedColor = viewRole(ColorRole::Select);
 // In the sketch points' layer (mitcad#897), a selected point's ball is
 // drawn after the plain markers, which keep the default priority, so that
 // it covers its point's marker at the same depth.
@@ -1020,6 +1037,33 @@ QString vectorText(const gp_XYZ& v) {
   return parts.join(QLatin1Char(' '));
 }
 
+// The side of the view cube the eye is on when the view looks along
+// `along` (mitcad#1060, for UI tests): FRONT when it looks along +Y (the
+// eye on the -Y side), BACK, LEFT, RIGHT, TOP or BOTTOM likewise, and an
+// oblique side when the direction is along no axis.
+QString cubeSideSeenFrom(const gp_Dir& along) {
+  const double axisLimit = 1.0 - 1e-6;
+  if (along.Y() >= axisLimit) {
+    return QStringLiteral("FRONT");
+  }
+  if (along.Y() <= -axisLimit) {
+    return QStringLiteral("BACK");
+  }
+  if (along.X() >= axisLimit) {
+    return QStringLiteral("LEFT");
+  }
+  if (along.X() <= -axisLimit) {
+    return QStringLiteral("RIGHT");
+  }
+  if (along.Z() <= -axisLimit) {
+    return QStringLiteral("TOP");
+  }
+  if (along.Z() >= axisLimit) {
+    return QStringLiteral("BOTTOM");
+  }
+  return QStringLiteral("an oblique side");
+}
+
 // A cube face, edge or corner by the directions it looks from ("front",
 // "front-top", "front-right-top"), for the log.
 QString cubeName(V3d_TypeOfOrientation orientation) {
@@ -1300,6 +1344,19 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   inputLinesInSight.SetImmediate(true);
   inputLinesInSight.SetClearDepth(false);
   m_viewer->InsertLayerBefore(m_inputLineSightLayer, inputLinesInSight, Graphic3d_ZLayerId_Topmost);
+  // The bodies of a browser row under the pointer (mitcad#1022), through
+  // everything: without depth, after the input lines, before the topmost
+  // layer. Immediate, as the top layer is, so that a hover redraws only
+  // the immediate layers over the frame kept. It writes no depth and holds
+  // nothing that can be picked: the picking groups before it stay as they
+  // are.
+  Graphic3d_ZLayerSettings browserHover;
+  browserHover.SetName("browser hover, through");
+  browserHover.SetImmediate(true);
+  browserHover.SetEnableDepthTest(false);
+  browserHover.SetEnableDepthWrite(false);
+  browserHover.SetClearDepth(false);
+  m_viewer->InsertLayerBefore(m_browserHoverLayer, browserHover, Graphic3d_ZLayerId_Topmost);
   // The rendered view (docs/rendering.md, "Overlays in depth"): the bodies
   // in a layer of their own, then the rendered image over the whole view
   // without depth (it covers their colour, their depth stays), then the
@@ -1335,12 +1392,28 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
     }
     // What is not the model's (the orientation cube) keeps its place.
     const auto info = m_pickInfo.find(dynamic_cast<const AIS_InteractiveObject*>(owner->Selectable().get()));
-    return info == m_pickInfo.end() || !outsideActive(info->second.item);
+    if (info == m_pickInfo.end()) {
+      return true;
+    }
+    // A transparent body stays behind what it lets through (mitcad#1093).
+    return !outsideActive(info->second.item) && !isTransparentPick(info->second.item);
   });
   // Construction planes behind the model while a placement input takes
-  // picks (mitcad#656, setPlanesBehind).
+  // picks (mitcad#656, setPlanesBehind); transparent bodies, their faces,
+  // edges and vertices and their highlights behind everything else
+  // (mitcad#1093): a click goes through them to what lies behind, and
+  // takes them where nothing else is under the cursor.
   mitcad::setPickLast(m_context, [this](const occ::handle<SelectMgr_EntityOwner>& owner) {
-    if (!m_planesBehind || owner.IsNull()) {
+    if (owner.IsNull()) {
+      return false;
+    }
+    if (!m_transparentBodies.empty()) {
+      const auto info = m_pickInfo.find(dynamic_cast<const AIS_InteractiveObject*>(owner->Selectable().get()));
+      if (info != m_pickInfo.end() && isTransparentPick(info->second.item)) {
+        return true;
+      }
+    }
+    if (!m_planesBehind) {
       return false;
     }
     const auto item = itemFor(owner);
@@ -1411,7 +1484,7 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   // Linked to OCCT's own hover style for the aspects it does not set.
   m_sketchPointHover = new Prs3d_Drawer();
   m_sketchPointHover->SetLink(m_context->HighlightStyle(Prs3d_TypeOfHighlight_Dynamic));
-  setHoverColor(QColor(0x2f, 0x9b, 0xff));
+  setHoverColor(viewColor(ColorRole::Hover, false));
   // OCCT's own selection is cleared as soon as it is made
   // (OnSelectionChanged); should it show, it looks as setHighlights' does.
   for (const Prs3d_TypeOfHighlight type :
@@ -1749,9 +1822,11 @@ void OcctViewer::setBodies(const std::vector<BodyDisplay>& bodies) {
     const bool inactive = isInactive(QString::fromStdString(body.occurrence));
     auto existing = m_bodies.find(key);
     if (existing != m_bodies.end() && existing->second.style == style && existing->second.inactive == inactive &&
+        existing->second.transparent == body.transparent &&
         existing->second.object->Shape().IsEqual(shape) &&
         sameTransformation(existing->second.placement.Transformation(), body.placement.Transformation()) &&
-        existing->second.component == body.component && existing->second.color == body.color &&
+        existing->second.component == body.component && existing->second.componentColor == body.componentColor &&
+        existing->second.color == body.color &&
         existing->second.sectioned == body.sectioned &&
         sameFaceColors(existing->second.faceLooks, body.faceLooks)) {
       BodyEntry entry = existing->second;
@@ -1771,7 +1846,9 @@ void OcctViewer::setBodies(const std::vector<BodyDisplay>& bodies) {
       continue;
     }
     if (existing != m_bodies.end() && existing->second.style == style && existing->second.inactive == inactive &&
+        existing->second.transparent == body.transparent &&
         existing->second.object->Shape().IsEqual(shape) && existing->second.component == body.component &&
+        existing->second.componentColor == body.componentColor &&
         existing->second.color == body.color && existing->second.sectioned == body.sectioned &&
         sameFaceColors(existing->second.faceLooks, body.faceLooks)) {
       // Only placed elsewhere (a component moved, a Move's drag, mitcad#838):
@@ -1801,11 +1878,13 @@ void OcctViewer::setBodies(const std::vector<BodyDisplay>& bodies) {
     BodyEntry entry;
     entry.uid = body.uid;
     entry.component = body.component;
+    entry.componentColor = body.componentColor;
     entry.occurrence = body.occurrence;
     entry.shape = body.shape;
     entry.style = style;
     entry.ghosted = ghosted;
     entry.inactive = inactive;
+    entry.transparent = body.transparent;
     entry.placement = body.placement;
     entry.color = body.color;
     entry.appearance = body.appearance;
@@ -1826,10 +1905,43 @@ void OcctViewer::setBodies(const std::vector<BodyDisplay>& bodies) {
     m_fitPending = true;
     m_framingNewDesign = false; // the bodies, not the origin
   }
+  // The transparent bodies for the pick order (mitcad#1093).
+  m_transparentBodies.clear();
+  for (const auto& [key, entry] : m_bodies) {
+    if (entry.transparent && entry.style == BodyDisplay::Style::Normal) {
+      m_transparentBodies.insert(key);
+    }
+  }
   logInactiveGhosts();
+  logTransparent();
   sceneChanged();
   if (changed) {
     emit bodiesChanged();
+  }
+}
+
+bool OcctViewer::isTransparentPick(const SelectionItem& item) const {
+  if (m_transparentBodies.empty()) {
+    return false;
+  }
+  if (item.kind != SelectKind::Body && item.kind != SelectKind::Face && item.kind != SelectKind::Edge &&
+      item.kind != SelectKind::Vertex) {
+    return false;
+  }
+  // Keyed as setBodies keys the bodies.
+  const std::string uid = item.owner.toStdString();
+  const std::string key = item.occurrence.isEmpty() ? uid : uid + "@" + item.occurrence.toStdString();
+  return m_transparentBodies.count(key) != 0;
+}
+
+void OcctViewer::logTransparent() {
+  const int count = static_cast<int>(m_transparentBodies.size());
+  const QString line = count == 0 ? QStringLiteral("none")
+                                  : QStringLiteral("%1 %2").arg(count).arg(count == 1 ? QStringLiteral("body")
+                                                                                      : QStringLiteral("bodies"));
+  if (line != m_loggedTransparent) {
+    m_loggedTransparent = line;
+    qDebug().noquote() << QStringLiteral("View transparent: %1").arg(line);
   }
 }
 
@@ -1842,12 +1954,14 @@ std::vector<BodyDisplay> OcctViewer::shownBodies() const {
     BodyDisplay body;
     body.uid = entry.uid;
     body.component = entry.component;
+    body.componentColor = entry.componentColor;
     body.shape = entry.shape;
     body.placement = entry.placement;
     body.occurrence = entry.occurrence;
     body.color = entry.color;
     body.appearance = entry.appearance;
     body.faceLooks = entry.faceLooks;
+    body.transparent = entry.transparent;
     body.sectioned = entry.sectioned;
     bodies.push_back(body);
   }
@@ -2188,25 +2302,28 @@ void OcctViewer::showBody(BodyEntry& entry) {
   QColor color = entry.color;
   const bool componentColors = m_componentColors && entry.style != BodyDisplay::Style::New;
   if (componentColors) {
-    // Stable across visibility changes and sessions; consecutive component
-    // ids get hues separated by the golden angle. Unknown ids use a stable hash.
-    const QString component = QString::fromStdString(entry.component);
-    bool numeric = false;
-    quint32 index = component.mid(1).toUInt(&numeric);
-    if (!numeric) {
-      index = 0;
-      for (const unsigned char ch : entry.component) {
-        index = index * 31u + ch;
-      }
-    }
-    color = QColor::fromHsv(int((quint64(index) * 137u + 30u) % 360u), 155, 220);
+    // The component palette (mitcad#1041): the colour of the component's
+    // band in the timeline and of its section caps, so that they agree; the
+    // root's bodies the root's section cap colour.
+    color = entry.componentColor >= 0 ? componentPaletteColor(entry.componentColor) : kCapColor;
   }
   // A normal body outside the active component (mitcad#420) looks like a
   // command's ghost, and stays pickable.
   const bool inactive = entry.inactive && entry.style == BodyDisplay::Style::Normal;
-  entry.object = makeBody(*entry.shape, inactive ? BodyDisplay::Style::Ghost : entry.style, color,
+  // A transparent one (mitcad#1093) in the shaded styles: a faint surface
+  // in its own colour with its edges, pickable; the wireframe styles draw
+  // it as they draw every body.
+  const bool seeThrough = entry.transparent && entry.style == BodyDisplay::Style::Normal && !inactive &&
+                          shadedFaces(m_visualStyle);
+  entry.object = makeBody(*entry.shape, inactive || seeThrough ? BodyDisplay::Style::Ghost : entry.style, color,
                          componentColors ? std::vector<BodyDisplay::FaceLook>{} : entry.faceLooks,
                          m_visualStyle, m_paper, entry.sectioned);
+  if (seeThrough) {
+    entry.object->SetTransparency(kTransparentBodyTransparency);
+    const occ::handle<Prs3d_Drawer>& drawer = entry.object->Attributes();
+    drawer->SetFaceBoundaryDraw(true);
+    drawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(kEdgeColor, Aspect_TOL_SOLID, 1.0));
+  }
   const bool placed = !entry.placement.IsIdentity();
   if (placed) {
     entry.object->SetLocalTransformation(entry.placement.Transformation());
@@ -2227,7 +2344,8 @@ void OcctViewer::showBody(BodyEntry& entry) {
   display(entry.object, wire ? AIS_WireFrame : AIS_Shaded, std::move(info), normal || tool);
   entry.hiddenEdges.Nullify();
   entry.visibleEdges.Nullify();
-  if (!normal || inactive || !drawsHiddenEdges(m_visualStyle)) {
+  // A transparent body's edges are its own face boundaries.
+  if (!normal || inactive || seeThrough || !drawsHiddenEdges(m_visualStyle)) {
     if (normal) {
       applyRenderedVisibility(entry);
     }
@@ -2752,6 +2870,7 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
       const bool whole =
           highlight.item.kind == SelectKind::Body || highlight.item.kind == SelectKind::Component;
       object->SetTransparency(whole && highlight.opaqueWholeBody ? 0.0f
+                              : highlight.hoverLook ? kHoverTransparency
                               : highlight.light ? kLightTransparency
                               : whole         ? kWholeTransparency
                               : highlight.item.kind == SelectKind::Plane ? kPickedPlaneTransparency
@@ -2799,6 +2918,24 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
       display(halo, AIS_WireFrame, std::move(haloInfo), false);
       m_context->SetZLayer(halo, m_sketchHaloLayer);
       m_highlights.push_back(halo);
+    }
+    if (highlight.hoverLook && mode == AIS_Shaded) {
+      // Through what hides it, as the Browser's hover (drawBrowserHover):
+      // the faces fainter in the layer without a depth test, their
+      // boundaries opaque, so that a part hidden inside shows its outline.
+      occ::handle<AIS_Shape> through = new AIS_Shape(highlight.shape);
+      through->SetColor(color);
+      through->SetMaterial(flatMaterial(0.0f));
+      through->SetTransparency(kBrowserHoverThroughTransparency);
+      const occ::handle<Prs3d_Drawer>& throughDrawer = through->Attributes();
+      throughDrawer->SetFaceBoundaryDraw(true);
+      throughDrawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(color, Aspect_TOL_SOLID, 2.0));
+      PickInfo throughInfo;
+      throughInfo.item = highlight.item;
+      throughInfo.highlight = true;
+      display(through, AIS_Shaded, std::move(throughInfo), false);
+      m_context->SetZLayer(through, m_browserHoverLayer);
+      m_highlights.push_back(through);
     }
     if (highlight.throughSolid) {
       // Topmost disables depth testing. A subdued dashed boundary locates
@@ -2893,7 +3030,8 @@ void OcctViewer::setPreview(const TopoDS_Shape& shape, PreviewStyle style) {
     }
     m_previewMode = style == PreviewStyle::Failed ? AIS_WireFrame : AIS_Shaded;
     if (style == PreviewStyle::Failed) {
-      setEdgeStyle(m_preview, kCutPreviewColor, 2.0, Aspect_TOL_DASH);
+      // The error's dashed outline, never the cut's fill (mitcad#1041).
+      setEdgeStyle(m_preview, viewRole(ColorRole::PreviewFailed, m_backgroundDark), 2.0, Aspect_TOL_DASH);
       m_context->Display(m_preview, AIS_WireFrame, -1, false);
     } else if (style == PreviewStyle::Datum) {
       // Stronger than the planes picked as its references, which are drawn
@@ -2928,7 +3066,9 @@ void OcctViewer::setPreview(const TopoDS_Shape& shape, PreviewStyle style) {
       drawer->ShadingAspect()->Aspect()->SetPolygonOffsets(Aspect_POM_Fill, -1.0f, -2.0f);
       m_context->Display(m_preview, AIS_Shaded, -1, false);
     } else {
-      m_preview->SetColor(style == PreviewStyle::Remove ? kCutPreviewColor : kPreviewColor);
+      m_preview->SetColor(style == PreviewStyle::Remove         ? kCutPreviewColor
+                          : style == PreviewStyle::Interference ? viewRole(ColorRole::Interference, m_backgroundDark)
+                                                                : kPreviewColor);
       m_preview->SetTransparency(0.5);
       // A Join/Cut tool shares faces with the previewed body (the walls of a
       // cut hole); pull it towards the viewer so it wins the depth test there.
@@ -3072,6 +3212,9 @@ void OcctViewer::setHoverColor(const QColor& color) {
     m_sketchPointHover->SetZLayer(m_sketchPointLayer);
   }
   m_hoverColor = color;
+  if (m_browserHover.shown) {
+    drawBrowserHover(); // in the new colour (mitcad#1022)
+  }
   sceneChanged();
 }
 
@@ -3102,6 +3245,103 @@ void OcctViewer::setHoverChain(const TopoDS_Shape& shape) {
     m_context->SetZLayer(m_hoverChain, Graphic3d_ZLayerId_Top);
   }
   sceneChanged();
+}
+
+int OcctViewer::setBrowserHover(const QString& body, const QString& occurrence, bool shown) {
+  m_browserHover.shown = shown;
+  m_browserHover.body = shown ? body.toStdString() : std::string();
+  m_browserHover.occurrence = shown ? occurrence.toStdString() : std::string();
+  return drawBrowserHover();
+}
+
+std::vector<occ::handle<Graphic3d_Structure>> OcctViewer::browserHoverPresentations(
+    std::vector<std::pair<const void*, const void*>>& sources) const {
+  std::vector<occ::handle<Graphic3d_Structure>> presentations;
+  sources.clear();
+  if (!m_browserHover.shown) {
+    return presentations;
+  }
+  const std::string& occurrence = m_browserHover.occurrence;
+  const std::string inside = occurrence + "/";
+  for (const auto& [key, entry] : m_bodies) {
+    // A body row: that body where its occurrence places it; a component's
+    // or an occurrence's row: all its bodies, those of the occurrences in
+    // it too.
+    const bool wanted = !m_browserHover.body.empty()
+                            ? entry.uid == m_browserHover.body && entry.occurrence == occurrence
+                            : entry.occurrence == occurrence || entry.occurrence.rfind(inside, 0) == 0;
+    if (!wanted || entry.object.IsNull()) {
+      continue;
+    }
+    // The presentation the view shows of it now (its display mode's): one
+    // not computed yet, or to be computed again, is left out, not computed
+    // here.
+    for (NCollection_Sequence<occ::handle<PrsMgr_Presentation>>::Iterator it(entry.object->Presentations());
+         it.More(); it.Next()) {
+      const occ::handle<PrsMgr_Presentation>& presentation = it.Value();
+      if (presentation.IsNull() || !presentation->IsDisplayed() || presentation->MustBeUpdated()) {
+        continue;
+      }
+      presentations.push_back(presentation);
+      sources.emplace_back(presentation.get(), presentation->Transformation().get());
+      break;
+    }
+  }
+  return presentations;
+}
+
+int OcctViewer::drawBrowserHover() {
+  for (const occ::handle<Graphic3d_Structure>& shadow : m_browserHoverShadows) {
+    shadow->Erase();
+  }
+  m_browserHoverShadows.clear();
+  const std::vector<occ::handle<Graphic3d_Structure>> presentations =
+      browserHoverPresentations(m_browserHoverSources);
+  if (!presentations.empty()) {
+    // The hover's look (setHighlightStyle): in sight as the view's hover
+    // draws a whole body; through the others fainter, its face boundaries
+    // and edges opaque, so that a part hidden inside shows its outline.
+    const Quantity_Color color = occtColor(m_hoverColor);
+    const std::array<Graphic3d_ZLayerId, 2> layers{{Graphic3d_ZLayerId_Top, m_browserHoverLayer}};
+    std::array<occ::handle<Prs3d_Drawer>, 2> looks{{new Prs3d_Drawer(), new Prs3d_Drawer()}};
+    for (const occ::handle<Prs3d_Drawer>& look : looks) {
+      // The line aspects setHighlightStyle widens are its own, copied from
+      // the hover's (a drawer without them has none: a null aspect).
+      look->SetLink(m_context->HighlightStyle(Prs3d_TypeOfHighlight_Dynamic));
+      look->SetOwnLineAspects();
+    }
+    setHighlightStyle(looks[0], color, kHoverTransparency);
+    setHighlightStyle(looks[1], color, kBrowserHoverThroughTransparency);
+    const occ::handle<Graphic3d_StructureManager> manager = m_viewer->StructureManager();
+    for (const occ::handle<Graphic3d_Structure>& presentation : presentations) {
+      for (std::size_t i = 0; i < layers.size(); ++i) {
+        // A shadow draws its presentation's own groups (triangles, lines)
+        // with its placement: nothing is computed for it.
+        occ::handle<Prs3d_PresentationShadow> shadow = new Prs3d_PresentationShadow(manager, presentation);
+        shadow->SetZLayer(layers[i]);
+        shadow->SetClipPlanes(presentation->ClipPlanes());
+        shadow->CStructure()->ViewAffinity = presentation->CStructure()->ViewAffinity;
+        shadow->CStructure()->IsForHighlight = 1;
+        shadow->Highlight(looks[i], false); // shown with its Display below
+        shadow->Display();
+        m_browserHoverShadows.push_back(shadow);
+      }
+    }
+  }
+  // Only the immediate layers changed: drawn over the frame kept.
+  requestFrame();
+  return static_cast<int>(presentations.size());
+}
+
+void OcctViewer::refreshBrowserHover() {
+  if (!m_browserHover.shown) {
+    return;
+  }
+  std::vector<std::pair<const void*, const void*>> sources;
+  browserHoverPresentations(sources);
+  if (sources != m_browserHoverSources) {
+    drawBrowserHover();
+  }
 }
 
 std::optional<SelectionItem>
@@ -3552,8 +3792,9 @@ bool OcctViewer::occluded(const gp_Pnt& point) const {
   const gp_Lin ray(point, toEye);
   for (const auto& [key, entry] : m_bodies) {
     // Bodies drawn see-through (previews, ghosts, inactive components'
-    // ghosts) hide nothing; hidden bodies are not shown at all.
-    if (entry.style != BodyDisplay::Style::Normal || entry.inactive || !entry.shape) {
+    // ghosts, transparent bodies, mitcad#1093) hide nothing; hidden bodies
+    // are not shown at all.
+    if (entry.style != BodyDisplay::Style::Normal || entry.inactive || entry.transparent || !entry.shape) {
       continue;
     }
     if (!entry.occluder) {
@@ -3863,6 +4104,12 @@ void OcctViewer::lookAtSketchPlane(bool saveCamera, const TopoDS_Shape& face) {
     const gp_Vec move = freeAreaShift(camera);
     camera->SetEyeAndCenter(camera->Eye().Translated(move), camera->Center().Translated(move));
   });
+  // For UI tests: the side of the view cube the sketch is seen from
+  // (mitcad#1060: a new sketch on XY from TOP, on YZ from RIGHT, on XZ
+  // from FRONT), on entering the sketch and on Look At.
+  const gp_Dir seenAlong = camera->Direction();
+  qDebug().noquote() << QStringLiteral("Sketch plane seen from %1 (along %2)")
+                            .arg(cubeSideSeenFrom(seenAlong), vectorText(seenAlong.XYZ()));
   // For UI tests: the sketch's origin and the free area's middle in the
   // window (the same place when the view centred on the origin).
   const QPointF offset(mapTo(window(), QPoint(0, 0)));
@@ -4134,7 +4381,14 @@ QRectF OcctViewer::freeArea() const {
   qreal top = m_topCardsBottom; // below the rows of cards at the top (mitcad#425)
   qreal bottom = whole.bottom();
   for (const QRect& card : m_covered) {
-    if (card.width() > 0.6 * width()) {
+    // A small card in the view's lower half that reaches neither side (the
+    // navigation bar at the bottom centre, mitcad#1086; the side cards
+    // start at the window's margin) is a strip along the bottom too, not
+    // one at a side.
+    const int sideReach = 2 * 12;
+    const bool acrossBottom =
+        card.left() > sideReach && card.right() < width() - sideReach && card.top() > height() / 2;
+    if (card.width() > 0.6 * width() || acrossBottom) {
       if (card.center().y() > height() / 2) {
         bottom = std::min<qreal>(bottom, card.top());
       } else {
@@ -4929,6 +5183,13 @@ void OcctViewer::setBackground(const QColor& top, const QColor& bottom, bool gra
                     [](const HighlightDisplay& shown) { return shown.inputLines; })) {
       setHighlights(m_shownHighlights);
     }
+    // What the view draws in a status or category colour follows its
+    // background, not the widgets' palette (mitcad#1041).
+    if (!m_buildOutside.IsNull()) {
+      setEdgeStyle(m_buildOutside, viewRole(ColorRole::WarningBorder, m_backgroundDark), 2.0, Aspect_TOL_DASH);
+      m_context->Redisplay(m_buildOutside, false);
+    }
+    recolorPrintOverlay();
     emit backgroundToneChanged();
   }
   if (paper != m_paper) {
@@ -5013,6 +5274,7 @@ void OcctViewer::updateGrid(bool force) {
   lines.centreY = std::round(middle.Y() / major) * major;
   lines.extent = std::ceil(3.0 * across / major) * major;
   m_grid->setLines(lines);
+  ++m_gridRebuilds; // a 3D mouse motion's log counts them (mitcad#1023)
   if (m_context->IsDisplayed(m_grid)) {
     m_context->Redisplay(m_grid, false);
   } else {
@@ -5125,7 +5387,7 @@ void OcctViewer::setThreads(const TopoDS_Shape& rings) {
   sceneChanged();
 }
 
-void OcctViewer::setBuildVolume(const TopoDS_Shape& frame, const TopoDS_Shape& outside, const QColor& warning) {
+void OcctViewer::setBuildVolume(const TopoDS_Shape& frame, const TopoDS_Shape& outside) {
   for (occ::handle<AIS_Shape>* shown : {&m_buildFrame, &m_buildOutside}) {
     if (!shown->IsNull()) {
       m_context->Remove(*shown, false);
@@ -5139,9 +5401,9 @@ void OcctViewer::setBuildVolume(const TopoDS_Shape& frame, const TopoDS_Shape& o
   }
   if (!outside.IsNull()) {
     m_buildOutside = new AIS_Shape(outside);
-    setEdgeStyle(m_buildOutside,
-                 Quantity_Color(warning.redF(), warning.greenF(), warning.blueF(), Quantity_TOC_sRGB), 2.0,
-                 Aspect_TOL_DASH);
+    // A warning (outside the volume): its colour for the view's
+    // background, not the widgets' palette (mitcad#1041).
+    setEdgeStyle(m_buildOutside, viewRole(ColorRole::WarningBorder, m_backgroundDark), 2.0, Aspect_TOL_DASH);
     m_context->Display(m_buildOutside, AIS_WireFrame, -1, false);
   }
   sceneChanged();
@@ -5330,6 +5592,7 @@ void OcctViewer::sceneChanged() {
     return; // still being constructed
   }
   m_view->Invalidate(); // a cached frame is no longer valid
+  refreshBrowserHover(); // a body of a browser row's drawn anew (mitcad#1022)
   requestFrame();
 }
 
@@ -5462,7 +5725,7 @@ Aspect_Drawable OcctViewer::occtDrawable() {
 #else
   if (!m_glxWindow) {
     m_glxWindow = std::make_unique<QWindow>();
-    m_glxWindow->setTitle(QStringLiteral("Mitcad OpenGL helper"));
+    m_glxWindow->setTitle(QStringLiteral("MitCad OpenGL helper"));
     m_glxWindow->setSurfaceType(QSurface::OpenGLSurface);
     m_glxWindow->setFormat(context()->format());
     m_glxWindow->create();
@@ -5811,6 +6074,13 @@ bool OcctViewer::event(QEvent* event) {
     // before the frame that detects it.
     m_hoveredPoint.reset();
     emit hoverMoved(SelectionItem());
+  }
+  // The Center of Mass marker's tooltip (mitcad#1094, view/CenterOfMassView.cpp).
+  if (event->type() == QEvent::ToolTip) {
+    const auto* help = static_cast<QHelpEvent*>(event);
+    if (centerOfMassToolTip(help->pos(), help->globalPos())) {
+      return true;
+    }
   }
   const bool handled = QOpenGLWidget::event(event);
   if (event->type() == QEvent::DevicePixelRatioChange) {

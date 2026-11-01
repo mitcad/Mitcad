@@ -317,6 +317,8 @@ CommandDef filletCommand(const CommandContext& context) {
                  valueInput(QStringLiteral("radius"), QObject::tr("Radius"), ValueKind::Length,
                             QStringLiteral("2 mm"))
                      .withTooltip(QObject::tr("The radius, or the first size of the other radius types"))
+                     // A new fillet starts with the radius of the last one (mitcad#1028).
+                     .withRemembered()
                      .withManipulator([](const CommandState& row,
                                          const CommandContext& model) -> std::optional<Manipulator> {
                        // A handle at the middle of the rounding of the set's
@@ -677,6 +679,8 @@ CommandDef chamferCommand(const CommandContext& context) {
                             QStringLiteral("1 mm"))
                      .withTooltip(QObject::tr("From the edge on each face, or on the reference face; "
                                               "its arrow drags it"))
+                     // A new chamfer starts with the sizes of the last one (mitcad#1028).
+                     .withRemembered()
                      .withManipulator([](const CommandState& row, const CommandContext& model) {
                        return chamferHandle(row, model, false);
                      }),
@@ -684,6 +688,7 @@ CommandDef chamferCommand(const CommandContext& context) {
                             QStringLiteral("1 mm"))
                      .withTooltip(QObject::tr("From the edge on the other face; its arrow along that "
                                               "face drags it"))
+                     .withRemembered()
                      .withVisible(typeIs("two_distances"))
                      .withManipulator([](const CommandState& row, const CommandContext& model) {
                        return chamferHandle(row, model, true);
@@ -691,6 +696,7 @@ CommandDef chamferCommand(const CommandContext& context) {
                  valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle,
                             QStringLiteral("45 deg"))
                      .withTooltip(QObject::tr("The bevel's angle from the reference face"))
+                     .withRemembered()
                      .withVisible(typeIs("distance_angle")),
                  selectionInput(QStringLiteral("reference"), QObject::tr("Reference Face"),
                                 SelectKind::Face, 0, 1)

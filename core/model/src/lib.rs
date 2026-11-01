@@ -310,6 +310,17 @@ pub mod tables_csv;
 pub use document::{TableCsvChange, TableCsvFailure, TableCsvImport};
 #[cfg(test)]
 mod tables_csv_tests;
+// A configuration table's rows as CSV (mitcad#1044).
+pub use document::{RowsCsvColumn, RowsCsvImport, RowsCsvRole};
 // Readers of files the user chose, a panic of theirs an error, not an
 // abort of the application (mitcad#922).
 pub use mitcad_model_base::reader_guard;
+// Notices and their severity levels (mitcad#1040): what a feature, a
+// command, an import, an annotation or a sketch tells the user.
+pub use mitcad_model_base::notice;
+pub use mitcad_model_base::notice::{Notice, NoticeLevel};
+// Save Component as Design (mitcad#1057).
+pub use document::{CutKind, CutReference, SaveComponentOptions, SavedComponent};
+// The design's summary and statistics (mitcad#1088).
+pub use document::{SUMMARY_KEYS, SUMMARY_SET};
+pub use file::{DesignStatistics, SaveStamp};

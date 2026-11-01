@@ -295,7 +295,17 @@ impl Rewrite<'_> {
                 }
             }
             FeatureDef::ConstructionPlane(p) => {
-                for link in p.links.values_mut() {
+                for link in p.links.values_mut().chain(p.datum_links.values_mut()) {
+                    changed |= self.link(link)?;
+                }
+            }
+            FeatureDef::ConstructionAxis(a) => {
+                for link in a.links.values_mut().chain(a.datum_links.values_mut()) {
+                    changed |= self.link(link)?;
+                }
+            }
+            FeatureDef::ConstructionPoint(p) => {
+                for link in p.links.values_mut().chain(p.datum_links.values_mut()) {
                     changed |= self.link(link)?;
                 }
             }

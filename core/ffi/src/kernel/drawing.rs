@@ -22,7 +22,8 @@ pub mod ffi {
     /// 0 a line (two points), 1 an arc (centre, radius, angles), 2 a
     /// polyline, 3 a B-spline (`degree`, `knots`, `poles` as x, y pairs,
     /// `weights`; its polyline in `points`, mitcad#853). `points` holds x,
-    /// y pairs.
+    /// y pairs. `source`: the index of the shape it is an edge of among
+    /// those projected, -1 when not known (mitcad#1112).
     struct DrawingCurve {
         visible: bool,
         kind: u8,
@@ -36,6 +37,7 @@ pub mod ffi {
         knots: Vec<f64>,
         poles: Vec<f64>,
         weights: Vec<f64>,
+        source: i32,
     }
 
     /// A closed loop of a cut face: x, y pairs.
@@ -137,6 +139,7 @@ pub fn projection(drawn: &ffi::DrawingProjection) -> ViewProjection {
                 }),
                 _ => ViewCurve::Polyline(pairs(&c.points)),
             },
+            source: usize::try_from(c.source).ok(),
         })
         .collect();
     let mut cuts: Vec<CutFace> = Vec::new();

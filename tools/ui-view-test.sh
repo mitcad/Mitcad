@@ -411,7 +411,8 @@ ui_expect_new "Visual style Shaded with Visible Edges Only" "the default style a
 
 echo "--- Section Analysis"
 ui_step "section analysis (search)"        ui_command "Section Analysis"
-ui_step "pick YZ"                          ui_click_logged "Datum yz"
+# YZ from the browser: the hidden origin stays hidden (mitcad#1030).
+ui_pick_origin_row YZ
 ui_expect_log "Section analysis at" "the bodies are shown cut"
 ui_mark
 ui_step "30 along X"                       ui_type_in "Panel Section Analysis input offset" "30"

@@ -64,7 +64,10 @@ CommandDef scaleCommand(const CommandContext& context);
 CommandDef combineCommand(const CommandContext& context);
 CommandDef moveCommand(const CommandContext& context);
 CommandDef alignCommand(const CommandContext& context);
+
+// MaterialCommands.cpp (mitcad#1059): the Material and Appearance tools.
 CommandDef appearanceCommand(const CommandContext& context);
+CommandDef materialCommand(const CommandContext& context);
 
 // JointCommands.cpp (mitcad#55)
 CommandDef jointCommand(const CommandContext& context);

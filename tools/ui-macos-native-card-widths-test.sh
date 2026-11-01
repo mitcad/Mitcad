@@ -63,6 +63,12 @@ cat > "$MITCAD_TEST_WORK/long-names.json" << 'EOF'
 EOF
 "$cli" run "$MITCAD_TEST_WORK/long-names.json" --save "$MITCAD_TEST_WORK/long-names.mitcad" \
   >> "$UI_OUT/setup.log" 2>&1
+# The Projects panel shown at the start, as for a user who turned it on
+# (mitcad#1020: hidden until then, also with projects configured). On
+# macOS the private settings are nocodo.fi/Mitcad.ini (the organization
+# domain, as tools/ui-macos-test.sh notes).
+mkdir -p "$MITCAD_SETTINGS_DIR/nocodo.fi"
+printf '\n[projects]\npanel=true\n' >> "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"
 
 # run_phase <script suffix> <description> <arguments>...
 run_phase() {

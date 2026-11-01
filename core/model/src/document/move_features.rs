@@ -304,7 +304,7 @@ impl<K: Kernel> Document<K> {
                     .ok_or(ModelError::NoSuchFeature(*feature))?;
                 if !usage.movable.contains(feature) {
                     return Err(invalid(format!(
-                        "{} is not a modelled feature of {}",
+                        "{} is not a modeled feature of {}",
                         entry.name,
                         self.state.assembly.name(source)
                     )));
@@ -323,7 +323,7 @@ impl<K: Kernel> Document<K> {
                 .collect();
             if features.is_empty() {
                 return Err(invalid(format!(
-                    "{} has no modelled features to move",
+                    "{} has no modeled features to move",
                     self.state.assembly.name(source)
                 )));
             }
@@ -1025,7 +1025,9 @@ fn follow_references(
             FeatureDef::SplitBody(s) => !s.tool_links.is_empty(),
             FeatureDef::Extrude(x) => !x.object_links.is_empty(),
             FeatureDef::Revolve(r) => !r.object_links.is_empty(),
-            FeatureDef::ConstructionPlane(p) => !p.links.is_empty(),
+            FeatureDef::ConstructionPlane(p) => !p.links.is_empty() || !p.datum_links.is_empty(),
+            FeatureDef::ConstructionAxis(a) => !a.links.is_empty() || !a.datum_links.is_empty(),
+            FeatureDef::ConstructionPoint(p) => !p.links.is_empty() || !p.datum_links.is_empty(),
             FeatureDef::Derive(d) => !d.links.is_empty(),
             FeatureDef::BodyTransfer(_) => true,
             // A seat on another component's shaft (mitcad#578).
@@ -1082,6 +1084,25 @@ fn follow_references(
             FeatureDef::ConstructionPlane(plane) => {
                 for (body, link) in &mut plane.links {
                     follow(link, &BTreeSet::from([body.feature]), own);
+                }
+                for (datum, link) in &mut plane.datum_links {
+                    follow(link, &BTreeSet::from([*datum]), own);
+                }
+            }
+            FeatureDef::ConstructionAxis(axis) => {
+                for (body, link) in &mut axis.links {
+                    follow(link, &BTreeSet::from([body.feature]), own);
+                }
+                for (datum, link) in &mut axis.datum_links {
+                    follow(link, &BTreeSet::from([*datum]), own);
+                }
+            }
+            FeatureDef::ConstructionPoint(point) => {
+                for (body, link) in &mut point.links {
+                    follow(link, &BTreeSet::from([body.feature]), own);
+                }
+                for (datum, link) in &mut point.datum_links {
+                    follow(link, &BTreeSet::from([*datum]), own);
                 }
             }
             FeatureDef::Derive(derive) => {

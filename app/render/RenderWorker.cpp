@@ -2067,7 +2067,7 @@ int main(int argc, char* argv[]) {
   QCoreApplication::setApplicationVersion(QStringLiteral(MITCAD_VERSION));
   QCommandLineParser parser;
   parser.setApplicationDescription(
-      QStringLiteral("Mitcad's render worker (protocol %1): Mitcad starts it for View > Rendered.")
+      QStringLiteral("MitCad's render worker (protocol %1): MitCad starts it for View > Rendered.")
           .arg(render::kProtocolVersion));
   parser.addHelpOption();
   parser.addVersionOption();
@@ -2219,7 +2219,7 @@ int main(int argc, char* argv[]) {
   bool channelOk = false;
   const int channelDescriptor = parser.value(channel).toInt(&channelOk);
   if (!channelOk || channelDescriptor < 0) {
-    emitError(QStringLiteral("no --frame-channel: mitcad-render runs as Mitcad's render worker"));
+    emitError(QStringLiteral("no --frame-channel: mitcad-render runs as MitCad's render worker"));
     return 2;
   }
   frames.setChannel(channelDescriptor);

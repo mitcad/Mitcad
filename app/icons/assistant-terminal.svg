@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-<!-- Mitcad icon: 24 x 24, dark outline, blue solids, orange actions. A command-line assistant (mitcad#706). -->
+<!-- MitCad icon: 24 x 24, dark outline, blue solids, orange actions. A command-line assistant (mitcad#706). -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2b3a4a" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
   <rect x="2.5" y="4" width="19" height="16" rx="1.5" fill="#eef2f7"/>
   <path d="M2.5 7.5 H21.5"/>

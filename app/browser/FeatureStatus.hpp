@@ -6,6 +6,8 @@
 #include <QRectF>
 #include <QString>
 
+#include "framework/NoticeLevel.hpp"
+
 class QPainter;
 
 namespace mitcad {
@@ -20,13 +22,19 @@ enum class FeatureState { Ok, Warning, Failed };
 // succeeded with warnings, anything else ok.
 FeatureState featureState(const QString& status);
 
+// The state's level (mitcad#1040): failed an error, a warning a warning;
+// an ok feature none (Hint).
+NoticeLevel featureStateLevel(FeatureState state);
+
 namespace timeline {
 
 // What a timeline cell shows. A folded group's cell has the worst state of
 // its features.
 struct CellState {
   FeatureState state = FeatureState::Ok;
-  bool noted = false;      // an import placeholder (mitcad#170): a yellow outline, no badge
+  // An import note (mitcad#170), information since mitcad#1040: the
+  // information badge, no status ring.
+  bool noted = false;
   bool selected = false;
   bool found = false;      // a match of the search (mitcad#179)
   bool hovered = false;
@@ -51,6 +59,8 @@ struct CellLook {
   QColor statusRing;
   QColor outerRing;
   bool badge = false;
+  // The badge's level: error, warning or information (mitcad#1040).
+  NoticeLevel badgeLevel = NoticeLevel::Hint;
 };
 
 CellLook cellLook(const CellState& state, const CellColors& colors);
@@ -70,6 +80,11 @@ QRectF statusBadgeRect(const QRectF& bounds);
 // Nothing for an ok one.
 void paintStatusBadge(QPainter& painter, const QRectF& bounds, FeatureState state, const QColor& halo);
 
+// The cell's badge of `level` (CellLook::badgeLevel) at the same place: the
+// state's badges above, or the information badge (a blue circle with a
+// white "i") of an import note (mitcad#1040).
+void paintCellBadge(QPainter& painter, const QRectF& bounds, NoticeLevel level, const QColor& halo);
+
 // For the log and the tests: "failed, selected, status ring, outer ring,
 // badge" (the state, then what was painted).
 QString describeCell(const CellState& state, const CellLook& look);
@@ -88,9 +103,10 @@ QString issueBadgeStyle(FeatureState state);
 // triangle in a halo of the button's text colour; empty for an ok feature.
 QIcon featureStateIcon(FeatureState state);
 
-// The selection card's line of a failed feature, `Failed: <error>` in the
-// error colour, or of one with a warning, `Warning: <message>` in the
-// warning colour (rich text); empty for any other.
+// The selection card's line of a failed feature, the error's icon and
+// `Failed: <error>` in the error colour, or of one with a warning, the
+// warning's icon and `Warning: <message>` in the warning colour (rich text,
+// mitcad#1040); empty for any other.
 QString featureStatusLine(const QString& status, const QString& message, const QColor& errorColor,
                           const QColor& warningColor);
 

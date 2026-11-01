@@ -48,10 +48,7 @@ fn value(json: &str) -> Value {
 
 /// A fresh folder in the temporary directory.
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("mitcad-p12a-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    crate::testing::unique_temp_dir(&format!("p12a-{name}"))
 }
 
 /// The files under `dir`, relative and sorted.
@@ -199,7 +196,7 @@ fn newer_versions_are_refused() {
         .expect("refused")
         .to_string();
     assert!(
-        error.contains("version 4, newer than this Mitcad can read (version 3)"),
+        error.contains("version 4, newer than this MitCad can read (version 3)"),
         "{error}"
     );
 }
@@ -220,7 +217,7 @@ fn saving_in_and_outside_a_project() {
         .save_file(&outside, FileFormat::Project)
         .unwrap_err()
         .to_string();
-    assert!(error.contains("is not in a Mitcad project"), "{error}");
+    assert!(error.contains("is not in a MitCad project"), "{error}");
 
     // In a project (a sub-folder of it): version 3 and the store.
     let root = dir.join("project");
@@ -267,7 +264,7 @@ fn saving_in_and_outside_a_project() {
     std::fs::copy(&path, &moved).unwrap();
     let lost = Document::load_design(&moved, MockKernel::default()).unwrap();
     assert!(
-        lost.load_warnings()[0].contains("is not in a Mitcad project"),
+        lost.load_warnings()[0].contains("is not in a MitCad project"),
         "{:?}",
         lost.load_warnings()
     );
@@ -330,7 +327,7 @@ fn init_keeps_what_is_there() {
 fn init_brings_older_attributes_up_to_date() {
     let dir = scratch("attributes");
     let older = "\
-# Mitcad project files are text with LF line ends on every platform.
+# MitCad project files are text with LF line ends on every platform.
 *.mitcad   text eol=lf
 *.png binary
 # B-rep data of base features: content-addressed, never changed.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Import notes on timeline items (the model's `document/import_notes.rs`):
-//! a note is a warning with its message, kept in the design file and
-//! answered in the timeline and by scripts.
+//! a note is information with its message (mitcad#1040), kept in the
+//! design file and answered in the timeline and by scripts.
 
 use serde_json::{Value, json};
 
@@ -26,16 +26,25 @@ fn item(doc: &Document<MockKernel>, name: &str) -> Value {
 }
 
 #[test]
-fn an_import_note_is_a_warning_with_its_message() {
+fn an_import_note_is_information_with_its_message() {
     let mut b = block();
     b.doc
         .set_import_notes(&[(b.extrude, STANDS_IN.to_owned())])
         .unwrap();
+    // Information (mitcad#1040): the feature stays ok, its level is info,
+    // the note its notice; `error` carries only a failure.
     let extrude = item(&b.doc, "Extrude1");
-    assert_eq!(extrude["status"], "warning");
-    assert_eq!(extrude["error"], STANDS_IN);
+    assert_eq!(extrude["status"], "ok");
+    assert_eq!(extrude["level"], "info");
+    assert_eq!(extrude["error"], Value::Null);
+    assert_eq!(
+        extrude["notices"],
+        json!([{"level": "info", "message": STANDS_IN, "target": b.extrude.to_string()}])
+    );
     assert_eq!(extrude["import"], STANDS_IN);
     assert_eq!(item(&b.doc, "Sketch1")["status"], "ok");
+    assert_eq!(item(&b.doc, "Sketch1")["level"], Value::Null);
+    assert!(item(&b.doc, "Sketch1").get("notices").is_none());
     assert!(item(&b.doc, "Sketch1").get("import").is_none());
     let feature: Value = serde_json::from_str(
         &b.doc
@@ -43,10 +52,12 @@ fn an_import_note_is_a_warning_with_its_message() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(feature["status"], "warning");
+    assert_eq!(feature["status"], "ok");
+    assert_eq!(feature["level"], "info");
+    assert_eq!(feature["notices"], extrude["notices"]);
     assert_eq!(feature["import"], STANDS_IN);
     // Scripts see it as the timeline does.
-    let script = json!([{"expect": {"feature": "Extrude1", "status": "warning",
+    let script = json!([{"expect": {"feature": "Extrude1", "status": "ok",
                                     "error_contains": "Stands in for Extrude5"}}]);
     b.doc.run_script(&script.to_string()).unwrap();
     // An undo step; an empty note removes it.
@@ -81,24 +92,42 @@ fn a_placeholder_is_suppressed_and_builds_nothing() {
     assert_eq!(placeholder["type"], "placeholder");
     assert_eq!(placeholder["suppressed"], true);
     assert_eq!(placeholder["status"], "suppressed");
-    assert_eq!(placeholder["error"], "Suppressed in the file");
+    // A state is not a severity: its note is information.
+    assert_eq!(placeholder["error"], Value::Null);
+    assert_eq!(placeholder["level"], "info");
+    assert_eq!(
+        placeholder["notices"][0]["message"],
+        "Suppressed in the file"
+    );
     assert_eq!(b.doc.bodies().len(), 1);
-    // Unsuppressed it still builds nothing, and says so.
+    // Unsuppressed it still builds nothing, and says so: a warning, then
+    // the note.
     b.doc.set_suppressed(added.uid, false).unwrap();
     let placeholder = item(&b.doc, "Extrude2");
     assert_eq!(placeholder["status"], "warning");
+    assert_eq!(placeholder["level"], "warning");
+    assert_eq!(placeholder["error"], Value::Null);
     assert_eq!(
-        placeholder["error"],
-        format!("Suppressed in the file; {BUILDS_NOTHING}")
+        placeholder["notices"],
+        json!([
+            {"level": "warning", "message": BUILDS_NOTHING, "target": added.uid.to_string()},
+            {"level": "info", "message": "Suppressed in the file",
+             "target": added.uid.to_string()}
+        ])
     );
     assert_eq!(b.doc.bodies().len(), 1);
-    // A name that is taken gives the default one (the second
-    // placeholder's).
+    // Features may share a name (mitcad#1107): the item's name is kept;
+    // without one it gets the default (the second placeholder's).
     let other = b
         .doc
         .add_import_placeholder(Some("Extrude1"), "", "Failed in the file", None)
         .unwrap();
-    assert_eq!(other.name, "Placeholder2");
+    assert_eq!(other.name, "Extrude1");
+    let unnamed = b
+        .doc
+        .add_import_placeholder(Some(" "), "", "Failed in the file", None)
+        .unwrap();
+    assert_eq!(unnamed.name, "Placeholder3");
 }
 
 #[test]
@@ -196,11 +225,12 @@ fn import_notes_survive_save_and_reopen() {
     assert!(saved["features"][0].get("import_note").is_none());
     let mut reopened = Document::from_json(&text, MockKernel::default()).unwrap();
     reopened.recompute();
-    assert_eq!(item(&reopened, "Extrude1")["status"], "warning");
-    assert_eq!(item(&reopened, "Extrude1")["error"], STANDS_IN);
+    assert_eq!(item(&reopened, "Extrude1")["status"], "ok");
+    assert_eq!(item(&reopened, "Extrude1")["level"], "info");
+    assert_eq!(item(&reopened, "Extrude1")["import"], STANDS_IN);
     assert_eq!(item(&reopened, "Fillet2")["status"], "suppressed");
     assert_eq!(
-        item(&reopened, "Fillet2")["error"],
+        item(&reopened, "Fillet2")["notices"][0]["message"],
         "Suppressed in the file"
     );
     assert_eq!(reopened.to_json(), text);
@@ -214,10 +244,13 @@ fn an_edit_that_builds_clears_the_note() {
         .unwrap();
     // Renaming is no edit of the definition.
     b.doc.rename_feature(b.extrude, "Pad").unwrap();
-    assert_eq!(item(&b.doc, "Pad")["status"], "warning");
+    assert_eq!(item(&b.doc, "Pad")["level"], "info");
     // A dimension that makes it fail keeps the note under the error.
     b.doc.set_parameter("d3", 0.0).unwrap();
     assert_eq!(item(&b.doc, "Pad")["status"], "error");
+    assert_eq!(item(&b.doc, "Pad")["level"], "error");
+    assert_eq!(item(&b.doc, "Pad")["notices"][0]["level"], "error");
+    assert_eq!(item(&b.doc, "Pad")["notices"][1]["level"], "info");
     assert_eq!(b.doc.import_note(b.extrude), Some(STANDS_IN));
     // One that builds clears it; undo brings it back.
     b.doc.set_parameter("d3", 25.0).unwrap();

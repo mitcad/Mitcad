@@ -8,14 +8,22 @@
 #include <QAbstractItemView>
 #include <QButtonGroup>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QColor>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QDropEvent>
+#include <QFile>
+#include <QFileInfo>
 #include <QFormLayout>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QKeyEvent>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPaintEvent>
@@ -32,6 +40,7 @@
 #include <QVBoxLayout>
 #include <QtLogging>
 
+#include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Icons.hpp"
 #include "../framework/PlaceWatcher.hpp"
@@ -45,9 +54,6 @@ namespace {
 
 namespace cfg = configurations;
 
-const QColor kRefusedText(0xb0, 0x00, 0x20);
-const QColor kRefusedFill(0xfb, 0xe3, 0xe3);
-const QColor kIssueFill(0xff, 0xf1, 0xc8);
 constexpr int kNameRole = Qt::UserRole; // an option's or a row's name
 
 bool isTextUnit(const QString& unit) {
@@ -108,33 +114,87 @@ private:
   std::function<void()> m_dropped;
 };
 
-// The Rows sheet; empty, it says how to add a row.
+// Delete (or Backspace) without a modifier: the selected cells emptied.
+bool isClearKey(const QKeyEvent* event) {
+  return (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) &&
+         !(event->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier));
+}
+
+// The Rows sheet; empty, it says how to add a row. Outside a cell's editor,
+// Copy (Ctrl+C) and Paste (Ctrl+V) work on blocks of cells as spreadsheets
+// copy them, and Delete empties the selected cells (mitcad#1044).
 class RowsSheet : public QTableWidget {
 public:
-  RowsSheet() { setProperty(NativeEmptyTextProperty, QString::fromUtf8(kNoRows)); }
+  RowsSheet(std::function<void()> copy, std::function<void()> paste, std::function<void()> clear)
+      : m_copy(std::move(copy)), m_paste(std::move(paste)), m_clear(std::move(clear)) {
+    setProperty(NativeEmptyTextProperty, QString::fromUtf8(kNoRows));
+  }
 
 protected:
+  bool event(QEvent* event) override {
+    // The sheet's own keys before any shortcut of the application.
+    if (event->type() == QEvent::ShortcutOverride && state() != QAbstractItemView::EditingState) {
+      const auto* key = static_cast<QKeyEvent*>(event);
+      if (key->matches(QKeySequence::Copy) || key->matches(QKeySequence::Paste) || isClearKey(key)) {
+        event->accept();
+        return true;
+      }
+    }
+    return QTableWidget::event(event);
+  }
+
+  void keyPressEvent(QKeyEvent* event) override {
+    if (state() != QAbstractItemView::EditingState) {
+      if (event->matches(QKeySequence::Copy)) {
+        m_copy();
+        event->accept();
+        return;
+      }
+      if (event->matches(QKeySequence::Paste)) {
+        m_paste();
+        event->accept();
+        return;
+      }
+      if (isClearKey(event)) {
+        m_clear();
+        event->accept();
+        return;
+      }
+    }
+    QTableWidget::keyPressEvent(event);
+  }
+
   void paintEvent(QPaintEvent* event) override {
     QTableWidget::paintEvent(event);
     if (rowCount() == 0) {
       paintPlaceholder(this);
     }
   }
+
+private:
+  std::function<void()> m_copy;
+  std::function<void()> m_paste;
+  std::function<void()> m_clear;
 };
 
 // Add Option: an existing user parameter that is no option yet, or a new
 // one (name, unit, value); the parameter and the option are one undo step.
+// Every row takes the parameter's current value (mitcad#1044), so that a
+// closed table with rows takes the option; a closed table's parameter
+// column moves to the options with its rows' values.
 class AddOptionDialog : public QDialog {
 public:
-  AddOptionDialog(DocumentHost& host, cfg::Table table, const QStringList& candidates, QWidget* parent)
-      : QDialog(parent), m_host(host), m_table(std::move(table)) {
+  AddOptionDialog(DocumentHost& host, cfg::Table table, const QStringList& candidates,
+                  QHash<QString, QJsonObject> parameters, QWidget* parent)
+      : QDialog(parent), m_host(host), m_table(std::move(table)), m_parameters(std::move(parameters)) {
     setObjectName(QStringLiteral("addOptionDialog"));
     setWindowTitle(tr("Add Option"));
     auto* form = new QFormLayout(this);
     m_parameter = new QComboBox;
     m_parameter->setObjectName(QStringLiteral("addOptionParameter"));
     for (const QString& name : candidates) {
-      m_parameter->addItem(name, name);
+      // A closed table's parameter column moves to the options.
+      m_parameter->addItem(m_table.parameters.contains(name) ? tr("%1 (a parameter column)").arg(name) : name, name);
     }
     m_parameter->addItem(tr("New Parameter"), QString());
     m_parameter->setToolTip(tr("A user parameter becomes the option; or a new parameter"));
@@ -152,6 +212,12 @@ public:
     form->addRow(tr("Name:"), m_name);
     form->addRow(tr("Unit:"), m_unit);
     form->addRow(tr("Value:"), m_value);
+    if (!m_table.rows.isEmpty()) {
+      auto* rows = new QLabel(tr("Every row takes the parameter's current value; change a row's value in the Rows tab."));
+      rows->setObjectName(QStringLiteral("addOptionRows"));
+      rows->setWordWrap(true);
+      form->addRow(rows);
+    }
     m_message = new QLabel;
     m_message->setWordWrap(true);
     setErrorStyleSheet(m_message);
@@ -181,12 +247,13 @@ private:
 
   void tryAccept() {
     QString name = m_parameter->currentData().toString();
+    QString expression; // each row's value of the new option
     QJsonArray commands;
     if (name.isEmpty()) {
       name = m_name->text().trimmed();
       const QString unit = m_unit->currentText().trimmed();
       const bool text = isTextUnit(unit);
-      QString expression = cfg::rowExpression(text, text ? QString() : unit, m_value->text());
+      expression = cfg::rowExpression(text, text ? QString() : unit, m_value->text());
       if (expression.isEmpty()) {
         expression = text ? QStringLiteral("''") : QStringLiteral("0");
       }
@@ -197,11 +264,17 @@ private:
         add.insert(QStringLiteral("unit"), unit);
       }
       commands.append(add);
+    } else {
+      expression = cfg::currentConstant(m_parameters.value(name));
     }
-    cfg::Table table = m_table;
-    table.options.append(name);
-    commands.append(cfg::setTableCommand(table));
+    const bool column = m_table.parameters.contains(name);
+    commands.append(cfg::setTableCommand(cfg::withOption(m_table, name, expression)));
     if (m_host.runModelCommands(commands, tr("Add Option %1").arg(name))) {
+      if (!m_table.rows.isEmpty()) {
+        qDebug().noquote() << (column ? QStringLiteral("Configurations option %1 moved from the parameter columns")
+                                            .arg(name)
+                                      : QStringLiteral("Configurations rows take %1 = %2").arg(name, expression));
+      }
       m_added = name;
       qDebug().noquote() << QStringLiteral("Configurations added option %1").arg(name);
       accept();
@@ -213,6 +286,7 @@ private:
 
   DocumentHost& m_host;
   cfg::Table m_table;
+  QHash<QString, QJsonObject> m_parameters;
   QComboBox* m_parameter = nullptr;
   QLineEdit* m_name = nullptr;
   QComboBox* m_unit = nullptr;
@@ -584,7 +658,8 @@ public:
     setObjectName(QStringLiteral("generateRowsDialog"));
     setWindowTitle(tr("Generate Rows from Table"));
     auto* form = new QFormLayout(this);
-    auto* about = new QLabel(tr("One row per value of the key column, named by it, that sets the option to it. "
+    auto* about = new QLabel(tr("One row per value of the key column, named by it, that sets the option to it; "
+                                "each checked column sets the parameter of its name in every row. "
                                 "Rows of the same name are updated."));
     about->setWordWrap(true);
     form->addRow(about);
@@ -616,6 +691,17 @@ public:
     form->addRow(tr("Table:"), m_tableChoice);
     form->addRow(tr("Key column:"), m_columnChoice);
     form->addRow(tr("Option:"), m_optionChoice);
+    // The table's other columns (mitcad#1044): each checked one becomes a
+    // parameter column of the closed table.
+    m_columnsLabel = new QLabel(tr("&Columns:"));
+    m_columnsBox = new QWidget;
+    m_columnsBox->setObjectName(QStringLiteral("generateRowsColumns"));
+    // Focusable for the label's Alt+C, its focus its first check's
+    // (fillChecks); a widget with a focus proxy is no stop of Tab.
+    m_columnsBox->setFocusPolicy(Qt::StrongFocus);
+    m_columnsLayout = new QVBoxLayout(m_columnsBox);
+    m_columnsLayout->setContentsMargins(0, 0, 0, 0);
+    form->addRow(m_columnsLabel, m_columnsBox);
     m_message = new QLabel;
     m_message->setWordWrap(true);
     setErrorStyleSheet(m_message);
@@ -631,11 +717,15 @@ public:
     m_tableChoice->setCurrentIndex(std::max(0, first));
     fillColumns();
     connect(m_tableChoice, &QComboBox::currentIndexChanged, this, [this] { fillColumns(); });
-    connect(m_columnChoice, &QComboBox::currentIndexChanged, this, [this] { chooseOption(); });
+    connect(m_columnChoice, &QComboBox::currentIndexChanged, this, [this] {
+      chooseOption();
+      fillChecks();
+    });
     qDebug().noquote() << QStringLiteral("Generate Rows dialog opened: %1 for %2")
                               .arg(cfg::columnReference(m_tableChoice->currentData().toString(),
                                                         m_columnChoice->currentData().toString()),
                                    m_optionChoice->currentData().toString());
+    logChecks();
     m_tableChoice->setFocus();
   }
 
@@ -672,6 +762,61 @@ private:
       m_columnChoice->setCurrentIndex(std::max(0, m_columnChoice->findData(keyColumn(*table))));
     }
     chooseOption();
+    fillChecks();
+  }
+
+  // A check per column of the table but the key, all checked.
+  void fillChecks() {
+    for (QCheckBox* check : std::as_const(m_checks)) {
+      m_columnsLayout->removeWidget(check);
+      check->hide();
+      check->deleteLater();
+    }
+    m_checks.clear();
+    const QString key = m_columnChoice->currentData().toString();
+    if (const SuggestedTable* table = tableNamed(m_tables, m_tableChoice->currentData().toString())) {
+      for (const SuggestedTable::Column& column : table->columns) {
+        if (column.name == key) {
+          continue;
+        }
+        auto* check = new QCheckBox(columnLabel(column));
+        check->setObjectName(QStringLiteral("generateRowsColumn_") + column.name);
+        check->setProperty("column", column.name);
+        check->setChecked(true);
+        check->setToolTip(tr("Every row sets the parameter %1 from this column").arg(column.name));
+        connect(check, &QCheckBox::toggled, this, [this] { logChecks(); });
+        m_columnsLayout->addWidget(check);
+        m_checks << check;
+      }
+    }
+    // Alt+C goes to the first check without toggling it: a label whose
+    // buddy is a button clicks it, so the buddy is the box, whose focus
+    // goes to its first check.
+    m_columnsBox->setFocusProxy(m_checks.isEmpty() ? nullptr : m_checks.first());
+    m_columnsLabel->setBuddy(m_checks.isEmpty() ? nullptr : m_columnsBox);
+    m_columnsLabel->setEnabled(!m_checks.isEmpty());
+    m_columnsBox->setVisible(!m_checks.isEmpty());
+  }
+
+  QStringList checkedColumns() const {
+    QStringList out;
+    for (const QCheckBox* check : m_checks) {
+      if (check->isChecked()) {
+        out << check->property("column").toString();
+      }
+    }
+    return out;
+  }
+
+  void logChecks() const {
+    QStringList all;
+    for (const QCheckBox* check : m_checks) {
+      all << check->property("column").toString();
+    }
+    const QStringList checked = checkedColumns();
+    qDebug().noquote() << QStringLiteral("Generate Rows columns: %1; checked: %2")
+                              .arg(all.isEmpty() ? QStringLiteral("none") : all.join(QStringLiteral(", ")),
+                                   checked.isEmpty() ? QStringLiteral("none") : checked.join(QStringLiteral(", ")));
   }
 
   void chooseOption() {
@@ -701,7 +846,7 @@ private:
       return;
     }
     QJsonObject result;
-    if (m_host.runModelCommand(cfg::generateRowsCommand(table, column, option), &result)) {
+    if (m_host.runModelCommand(cfg::generateRowsCommand(table, column, option, checkedColumns()), &result)) {
       m_rows = cfg::readGeneratedRows(result);
       m_tableName = table;
       m_reference = cfg::columnReference(table, column);
@@ -723,6 +868,10 @@ private:
   QComboBox* m_tableChoice = nullptr;
   QComboBox* m_columnChoice = nullptr;
   QComboBox* m_optionChoice = nullptr;
+  QLabel* m_columnsLabel = nullptr;
+  QWidget* m_columnsBox = nullptr;
+  QVBoxLayout* m_columnsLayout = nullptr;
+  QVector<QCheckBox*> m_checks;
   QLabel* m_message = nullptr;
   bool m_done = false;
   cfg::GeneratedRows m_rows;
@@ -731,13 +880,196 @@ private:
   QString m_option;
 };
 
-void markRefused(QTableWidgetItem* item, const QString& typed, const QString& reason) {
-  item->setText(typed);
-  item->setForeground(kRefusedText);
-  item->setBackground(kRefusedFill);
-  item->setToolTip(reason);
+// A cell marked at a level (mitcad#1051, docs/ui-conventions.md "Messages
+// and severity"): the level's colour, its highlight box's fill and its
+// badge, and why in the tooltip. A change the design refused is an error
+// (its word "Refused"), a row that breaks a rule a warning.
+void markLevel(QTableWidgetItem* item, NoticeLevel level, const QString& tooltip, const QPalette& palette) {
+  item->setForeground(noticeColor(level, palette));
+  item->setBackground(noticeFill(level, palette));
+  item->setIcon(noticeIcon(level));
+  item->setToolTip(tooltip);
 }
 
+void markLevel(QTreeWidgetItem* item, int column, NoticeLevel level, const QString& tooltip,
+               const QPalette& palette) {
+  item->setForeground(column, noticeColor(level, palette));
+  item->setBackground(column, noticeFill(level, palette));
+  item->setIcon(column, noticeIcon(level));
+  item->setToolTip(column, tooltip);
+}
+
+QString refusedText(const QString& reason) { return QObject::tr("Refused: %1").arg(reason); }
+
+void markRefused(QTableWidgetItem* item, const QString& typed, const QString& reason, const QPalette& palette) {
+  item->setText(typed);
+  markLevel(item, NoticeLevel::Error, refusedText(reason), palette);
+}
+
+
+// Import Rows (mitcad#1044): what importing a rows CSV would do, as
+// `configuration_rows_csv_preview` says: what each column of the file is
+// (the key option, an option, a parameter column, new or not, or a field
+// of the rows), the rows, refused cells in red, the rows added, updated
+// and kept, the parameters made, and what the table would have wrong,
+// which refuses the import. Import runs `import_configuration_rows_csv`;
+// Cancel changes nothing.
+class RowsImportDialog : public QDialog {
+public:
+  RowsImportDialog(DocumentHost& host, const QString& csv, QString file, QWidget* parent)
+      : QDialog(parent), m_file(std::move(file)) {
+    setObjectName(QStringLiteral("rowsImportPreview"));
+    setWindowTitle(tr("Import Rows"));
+    resize(760, 440);
+    auto* layout = new QVBoxLayout(this);
+    m_summary = new QLabel;
+    m_summary->setObjectName(QStringLiteral("rowsImportSummary"));
+    m_summary->setWordWrap(true);
+    m_summary->setTextFormat(Qt::PlainText);
+    layout->addWidget(m_summary);
+    m_cells = new QTableWidget;
+    m_cells->setObjectName(QStringLiteral("rowsImportRows"));
+    m_cells->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_cells->setSelectionMode(QAbstractItemView::NoSelection);
+    m_cells->setAlternatingRowColors(true);
+    layout->addWidget(m_cells, 1);
+    m_problem = new QLabel;
+    m_problem->setObjectName(QStringLiteral("rowsImportProblem"));
+    m_problem->setWordWrap(true);
+    m_problem->setTextFormat(Qt::PlainText);
+    setErrorStyleSheet(m_problem);
+    layout->addWidget(m_problem);
+    auto* buttons = new QDialogButtonBox;
+    m_import = new QPushButton(tr("Import"));
+    m_import->setObjectName(QStringLiteral("rowsImportAccept"));
+    auto* cancel = new QPushButton(tr("Cancel"));
+    cancel->setObjectName(QStringLiteral("rowsImportCancel"));
+    buttons->addButton(m_import, QDialogButtonBox::AcceptRole);
+    buttons->addButton(cancel, QDialogButtonBox::RejectRole);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    preview(host, csv);
+  }
+
+private:
+  static QString roleText(const QString& role, bool made) {
+    if (role == QStringLiteral("key")) {
+      return made ? tr("key option, a new parameter") : tr("key option");
+    }
+    if (role == QStringLiteral("option")) {
+      return tr("option");
+    }
+    if (role == QStringLiteral("parameter")) {
+      return made ? tr("parameter column, a new parameter") : tr("parameter column");
+    }
+    if (role == QStringLiteral("name")) {
+      return tr("row name");
+    }
+    if (role == QStringLiteral("part_number")) {
+      return tr("part number");
+    }
+    if (role == QStringLiteral("supplier_url")) {
+      return tr("supplier URL");
+    }
+    return role; // designation
+  }
+
+  void preview(DocumentHost& host, const QString& csv) {
+    QJsonObject answer;
+    QString problem;
+    try {
+      answer = host.model().queryObject(cfg::rowsCsvPreviewQuery(csv));
+    } catch (const std::exception& e) {
+      problem = QString::fromUtf8(e.what());
+    }
+    if (!problem.isEmpty()) {
+      m_summary->setText(tr("%1: %2").arg(m_file, problem));
+      m_problem->hide();
+      m_import->setEnabled(false);
+      qDebug().noquote() << QStringLiteral("Rows import preview of %1 refused: %2").arg(m_file, problem);
+      return;
+    }
+    const QString summary = answer.value(QStringLiteral("summary")).toString();
+    QString closes;
+    if (answer.value(QStringLiteral("closed")).toBool()) {
+      closes = tr(" The table is closed: only its rows' combinations are allowed.");
+    }
+    m_summary->setText(tr("%1: %2.%3").arg(m_file, summary, closes));
+    qDebug().noquote() << QStringLiteral("Rows import preview of %1: %2").arg(m_file, summary);
+
+    QStringList created;
+    for (const QJsonValue& name : answer.value(QStringLiteral("created")).toArray()) {
+      created << name.toString();
+    }
+    QStringList labels;
+    QStringList names; // the refused cells' columns
+    for (const QJsonValue& value : answer.value(QStringLiteral("columns")).toArray()) {
+      const QJsonObject column = value.toObject();
+      const QString renamed = column.value(QStringLiteral("renamed")).toString();
+      const QString name = renamed.isEmpty() ? column.value(QStringLiteral("name")).toString() : renamed;
+      const QString unit = column.value(QStringLiteral("unit")).toString();
+      const QString role = roleText(column.value(QStringLiteral("role")).toString(), created.contains(name));
+      labels << QStringLiteral("%1 [%2]\n(%3)").arg(name, unit, role);
+      names << name;
+      qDebug().noquote() << QStringLiteral("Rows import column %1 [%2]: %3").arg(name, unit, role);
+    }
+    const QJsonArray rows = answer.value(QStringLiteral("rows")).toArray();
+    m_cells->setColumnCount(static_cast<int>(labels.size()));
+    m_cells->setHorizontalHeaderLabels(labels);
+    m_cells->setRowCount(static_cast<int>(rows.size()));
+    for (int r = 0; r < static_cast<int>(rows.size()); ++r) {
+      const QJsonArray cells = rows.at(r).toArray();
+      for (int c = 0; c < static_cast<int>(cells.size()) && c < static_cast<int>(labels.size()); ++c) {
+        const QJsonValue cell = cells.at(c);
+        m_cells->setItem(r, c, new QTableWidgetItem(cell.isDouble() ? QString::number(cell.toDouble(), 'g', 12)
+                                                                    : cell.toString()));
+      }
+    }
+    qDebug().noquote() << QStringLiteral("Rows import rows: %1")
+                              .arg(QString::fromUtf8(QJsonDocument(rows).toJson(QJsonDocument::Compact)));
+    QStringList refusing;
+    for (const QJsonValue& value : answer.value(QStringLiteral("refused")).toArray()) {
+      const QJsonObject cell = value.toObject();
+      const int line = cell.value(QStringLiteral("line")).toInt();
+      const QString columnName = cell.value(QStringLiteral("column")).toString();
+      const QString reason = cell.value(QStringLiteral("reason")).toString();
+      refusing << tr("Line %1, %2: %3").arg(line).arg(columnName, reason);
+      qDebug().noquote() << QStringLiteral("Rows import refused line %1 %2: %3").arg(line).arg(columnName, reason);
+      const int r = line - 2; // the header is line 1
+      const int c = static_cast<int>(names.indexOf(columnName));
+      if (r >= 0 && r < m_cells->rowCount() && c >= 0) {
+        QTableWidgetItem* item = m_cells->item(r, c);
+        if (item == nullptr) {
+          item = new QTableWidgetItem;
+          m_cells->setItem(r, c, item);
+        }
+        item->setText(cell.value(QStringLiteral("text")).toString());
+        markLevel(item, NoticeLevel::Error, refusedText(reason), m_cells->palette());
+      }
+    }
+    const QString tableProblem = answer.value(QStringLiteral("problem")).toString();
+    if (!tableProblem.isEmpty()) {
+      refusing << tableProblem;
+      qDebug().noquote() << QStringLiteral("Rows import problem: %1").arg(tableProblem);
+    }
+    m_problem->setText(refusing.isEmpty() ? QString()
+                                          : refusing.join(QLatin1Char('\n')) + QLatin1Char('\n') +
+                                                tr("Correct the file or the table to import it."));
+    m_problem->setVisible(!refusing.isEmpty());
+    const bool unchanged = answer.value(QStringLiteral("unchanged")).toBool();
+    const bool importable = refusing.isEmpty() && !unchanged;
+    m_import->setEnabled(importable);
+    m_import->setDefault(importable);
+    m_import->setToolTip(unchanged ? tr("The rows are already as the file has them") : QString());
+  }
+
+  QString m_file;
+  QLabel* m_summary = nullptr;
+  QTableWidget* m_cells = nullptr;
+  QLabel* m_problem = nullptr;
+  QPushButton* m_import = nullptr;
+};
 } // namespace
 
 ConfigurationsDialog::ConfigurationsDialog(DocumentHost& host, QWidget* parent) : QDialog(parent), m_host(host) {
@@ -884,10 +1216,12 @@ QWidget* ConfigurationsDialog::makeRowsPage() {
   m_current->setObjectName(QStringLiteral("configurationsCurrentRow"));
   top->addWidget(m_current, 1);
   layout->addLayout(top);
-  m_rows = new RowsSheet;
+  m_rows = new RowsSheet([this] { copyCells(); }, [this] { later([this] { pasteCells(); }); },
+                         [this] { later([this] { clearCells(); }); });
   m_rows->setObjectName(QStringLiteral("configurationsRows"));
-  m_rows->setSelectionMode(QAbstractItemView::SingleSelection);
-  m_rows->setSelectionBehavior(QAbstractItemView::SelectRows);
+  // Ranges of cells, as a spreadsheet's (mitcad#1044): Copy, Paste, Delete.
+  m_rows->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  m_rows->setSelectionBehavior(QAbstractItemView::SelectItems);
   m_rows->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
   m_rows->setAlternatingRowColors(true);
   m_rows->verticalHeader()->hide();
@@ -921,6 +1255,20 @@ QWidget* ConfigurationsDialog::makeRowsPage() {
   m_apply->setAutoDefault(false);
   buttons->addWidget(m_apply);
   layout->addLayout(buttons);
+  // The rows as CSV (mitcad#1044): a row per size, a column per parameter.
+  auto* files = new QHBoxLayout;
+  m_importRows = new QPushButton(tr("&Import CSV…"));
+  m_importRows->setObjectName(QStringLiteral("configurationsImportRows"));
+  m_importRows->setToolTip(tr("Fill the rows from a CSV file, a row per line and a column per parameter"));
+  m_exportRows = new QPushButton(tr("E&xport CSV…"));
+  m_exportRows->setObjectName(QStringLiteral("configurationsExportRows"));
+  m_exportRows->setToolTip(tr("Write the rows to a CSV file"));
+  for (QPushButton* button : {m_importRows, m_exportRows}) {
+    button->setAutoDefault(false);
+    files->addWidget(button);
+  }
+  files->addStretch(1);
+  layout->addLayout(files);
 
   connect(m_closed, &QCheckBox::toggled, this, [this](bool on) {
     if (m_building) {
@@ -940,6 +1288,8 @@ QWidget* ConfigurationsDialog::makeRowsPage() {
   connect(m_apply, &QPushButton::clicked, this, [this] { later([this] { applyRow(); }); });
   connect(m_addColumn, &QPushButton::clicked, this, [this] { later([this] { addColumn(); }); });
   connect(m_removeColumn, &QPushButton::clicked, this, [this] { later([this] { removeColumn(); }); });
+  connect(m_importRows, &QPushButton::clicked, this, [this] { later([this] { importRows(); }); });
+  connect(m_exportRows, &QPushButton::clicked, this, [this] { later([this] { exportRows(); }); });
   connect(m_rows, &QTableWidget::itemChanged, this, &ConfigurationsDialog::rowEdited);
   connect(m_rows, &QTableWidget::itemSelectionChanged, this, [this] {
     const bool selected = !selectedRow().isEmpty();
@@ -990,6 +1340,10 @@ QString ConfigurationsDialog::selectedOption() const {
 }
 
 QString ConfigurationsDialog::selectedRow() const {
+  // The current cell's row; with ranges of cells selected, the first.
+  if (const QTableWidgetItem* current = m_rows->currentItem(); current != nullptr && current->isSelected()) {
+    return current->data(kNameRole).toString();
+  }
   const QList<QTableWidgetItem*> items = m_rows->selectedItems();
   return items.isEmpty() ? QString() : items.first()->data(kNameRole).toString();
 }
@@ -1072,9 +1426,10 @@ void ConfigurationsDialog::refresh() {
                                  ? tr("The table has no parameter columns")
                                  : tr("Take the current cell's parameter column out of the table; the parameter "
                                       "stays"));
+  m_exportRows->setEnabled(!m_table.rows.isEmpty());
   m_generateRows->setEnabled(!m_tables.empty());
   m_generateRows->setToolTip(m_tables.empty()
-                                 ? tr("The design has no tables (Change Parameters, Tables)")
+                                 ? tr("The design has no tables (Edit Parameters, Tables)")
                                  : tr("A row per value of a table's key column, setting an option to it"));
   if (!problems.isEmpty() && m_message->text().isEmpty()) {
     showMessage(problems.first(), true);
@@ -1119,6 +1474,7 @@ void ConfigurationsDialog::fillOptions() {
   m_options->clear();
   QStringList logged;
   QStringList usage;
+  QStringList marks; // the cells marked at a level (mitcad#1051)
   for (const QString& name : std::as_const(m_table.options)) {
     const QJsonObject parameter = m_parameters.value(name);
     const cfg::OptionReport* report = m_report.option(name);
@@ -1152,17 +1508,18 @@ void ConfigurationsDialog::fillOptions() {
       item->setToolTip(kOptionDefault, tr("Driven by its formula"));
     }
     if (parameter.isEmpty()) {
-      item->setForeground(kOptionName, kRefusedText);
-      item->setToolTip(kOptionName, tr("%1 is no user parameter of the design").arg(name));
+      // An option without its parameter: an error (mitcad#1051).
+      markLevel(item, kOptionName, NoticeLevel::Error, tr("%1 is no user parameter of the design").arg(name),
+                m_options->palette());
+      marks << QStringLiteral("%1/name %2").arg(name, noticeLevelName(NoticeLevel::Error));
     }
     for (const int column : {kOptionDefault, kOptionComment}) {
-      const auto refused = m_refused.constFind(
-          QStringLiteral("%1|%2").arg(name, m_options->headerItem()->text(column).toLower()));
+      const QString header = m_options->headerItem()->text(column).toLower();
+      const auto refused = m_refused.constFind(QStringLiteral("%1|%2").arg(name, header));
       if (refused != m_refused.cend()) {
         item->setText(column, refused.value().first);
-        item->setForeground(column, kRefusedText);
-        item->setBackground(column, kRefusedFill);
-        item->setToolTip(column, refused.value().second);
+        markLevel(item, column, NoticeLevel::Error, refusedText(refused.value().second), m_options->palette());
+        marks << QStringLiteral("%1/%2 %3").arg(name, header, noticeLevelName(NoticeLevel::Error));
       }
     }
     // The bindings that follow it (mitcad#862).
@@ -1191,6 +1548,12 @@ void ConfigurationsDialog::fillOptions() {
     }
   }
   m_options->viewport()->update(); // its placeholder
+  const QString marked = marks.join(QStringLiteral("; "));
+  if (marked != m_loggedOptionMarks) {
+    m_loggedOptionMarks = marked;
+    qDebug().noquote() << QStringLiteral("Configurations option marks: %1")
+                              .arg(marked.isEmpty() ? QStringLiteral("none") : marked);
+  }
   const QString used = usage.join(QLatin1Char('\n'));
   if (used != m_loggedUsage) {
     m_loggedUsage = used;
@@ -1251,6 +1614,7 @@ void ConfigurationsDialog::fillRows() {
   }
   m_rows->setHorizontalHeaderLabels(headers);
   QStringList logged;
+  QStringList marks; // the cells marked at a level (mitcad#1051)
   for (int r = 0; r < m_table.rows.size(); ++r) {
     const cfg::Row& row = m_table.rows.at(r);
     const auto issue = m_rowIssues.constFind(row.name);
@@ -1293,15 +1657,19 @@ void ConfigurationsDialog::fillRows() {
       }
       // A row that breaks a rule: the options the rule's text names, else
       // its name.
+      // A warning (mitcad#1051): the row is kept, the user should check it.
       if (issue != m_rowIssues.cend() &&
           ((column.kind == RowColumn::Option && named.contains(column.parameter)) ||
            (column.kind == RowColumn::Name && named.isEmpty()))) {
-        item->setBackground(kIssueFill);
-        item->setToolTip(tr("Breaks %1").arg(issue.value().describe()));
+        markLevel(item, NoticeLevel::Warning,
+                  noticeLevelText(NoticeLevel::Warning, tr("breaks %1").arg(issue.value().describe())),
+                  m_rows->palette());
+        marks << QStringLiteral("%1/%2 %3").arg(row.name, headers.at(c), noticeLevelName(NoticeLevel::Warning));
       }
       const auto refused = m_refused.constFind(QStringLiteral("%1|%2").arg(row.name, headers.at(c)));
       if (refused != m_refused.cend()) {
-        markRefused(item, refused.value().first, refused.value().second);
+        markRefused(item, refused.value().first, refused.value().second, m_rows->palette());
+        marks << QStringLiteral("%1/%2 %3").arg(row.name, headers.at(c), noticeLevelName(NoticeLevel::Error));
       }
       m_rows->setItem(r, c, item);
     }
@@ -1328,6 +1696,12 @@ void ConfigurationsDialog::fillRows() {
       qDebug().noquote() << QStringLiteral("Configurations empty Rows: %1").arg(QString::fromUtf8(kNoRows));
     }
   }
+  const QString marked = marks.join(QStringLiteral("; "));
+  if (marked != m_loggedRowMarks) {
+    m_loggedRowMarks = marked;
+    qDebug().noquote() << QStringLiteral("Configurations row marks: %1")
+                              .arg(marked.isEmpty() ? QStringLiteral("none") : marked);
+  }
   m_rows->viewport()->update(); // its placeholder
 }
 
@@ -1343,7 +1717,7 @@ bool ConfigurationsDialog::run(const QJsonObject& command, QJsonObject* result) 
   } else if (m_host.runModelCommand(command, result)) {
     return true;
   } else if (m_host.lastCancelled()) {
-    showMessage(tr("The change was cancelled."), false);
+    showMessage(tr("The change was canceled."), false);
     return false;
   } else {
     m_reason = m_host.lastError();
@@ -1376,17 +1750,14 @@ bool ConfigurationsDialog::submitTable(const cfg::Table& table, const QString& k
 }
 
 void ConfigurationsDialog::addOption() {
-  QStringList candidates;
-  for (const QString& name : std::as_const(m_userParameters)) {
-    if (!m_table.options.contains(name)) {
-      candidates << name;
-    }
-  }
+  // A closed table's parameter columns too: one moves to the options with
+  // its rows' values (mitcad#1044).
+  const QStringList candidates = cfg::optionCandidates(m_table, m_userParameters);
   if (!m_host.canChangeModel()) {
     showMessage(m_host.changeBlockedReason(), true);
     return;
   }
-  AddOptionDialog dialog(m_host, m_table, candidates, this);
+  AddOptionDialog dialog(m_host, m_table, candidates, m_parameters, this);
   qDebug().noquote() << QStringLiteral("Add Option dialog opened: %1")
                             .arg((candidates + QStringList{QStringLiteral("New Parameter")}).join(QStringLiteral(", ")));
   prepareModal(&dialog);
@@ -1584,21 +1955,26 @@ void ConfigurationsDialog::rowEdited(QTableWidgetItem* item) {
   });
 }
 
-void ConfigurationsDialog::addRow() {
-  cfg::Table table = m_table;
+cfg::Row ConfigurationsDialog::freshRow() const {
   cfg::Row row;
-  row.name = table.nextRowName();
   // The options' values as they are now, as constants; a closed table's
   // other parameters' expressions too.
-  for (const QString& option : std::as_const(table.options)) {
+  for (const QString& option : m_table.options) {
     const cfg::OptionReport* report = m_report.option(option);
     const QString expression = report != nullptr ? report->expression
                                                  : m_parameters.value(option).value(QStringLiteral("expression")).toString();
     row.setValue(option, expression);
   }
-  for (const QString& parameter : std::as_const(table.parameters)) {
+  for (const QString& parameter : m_table.parameters) {
     row.setValue(parameter, m_parameters.value(parameter).value(QStringLiteral("expression")).toString());
   }
+  return row;
+}
+
+void ConfigurationsDialog::addRow() {
+  cfg::Table table = m_table;
+  cfg::Row row = freshRow();
+  row.name = table.nextRowName();
   table.rows.append(row);
   m_selectRow = row.name;
   submitTable(table, QString(), row.name, QStringLiteral("added row"));
@@ -1606,7 +1982,7 @@ void ConfigurationsDialog::addRow() {
 
 void ConfigurationsDialog::generateRows() {
   if (m_tables.empty()) {
-    showMessage(tr("The design has no tables: add one in Change Parameters, Tables."), true);
+    showMessage(tr("The design has no tables: add one in Edit Parameters, Tables."), true);
     return;
   }
   if (!m_host.canChangeModel()) {
@@ -1623,7 +1999,7 @@ void ConfigurationsDialog::generateRows() {
     const QString done = tr("Generated %1.").arg(described);
     const QString text = notice.isEmpty() ? done : QStringLiteral("%1 %2").arg(done, notice);
     showMessage(text, false);
-    m_host.showStatus(text, false);
+    m_host.showStatus(text, NoticeLevel::Information);
     qDebug().noquote() << QStringLiteral("Configurations generated rows from %1 for %2: %3")
                               .arg(dialog.generatedReference(), dialog.generatedOption(), described);
     if (!notice.isEmpty()) {
@@ -1676,7 +2052,7 @@ void ConfigurationsDialog::applyRow() {
     const QString notice = cfg::movesNotice(cfg::readMoves(result.value(QStringLiteral("moves"))));
     const QString text = notice.isEmpty() ? tr("Applied %1.").arg(name) : tr("Applied %1. %2").arg(name, notice);
     showMessage(text, false);
-    m_host.showStatus(text, false);
+    m_host.showStatus(text, NoticeLevel::Information);
     qDebug().noquote() << QStringLiteral("Configurations applied %1%2")
                               .arg(name, notice.isEmpty() ? QString() : QStringLiteral("; moves: ") + notice);
     if (!notice.isEmpty()) {
@@ -1723,6 +2099,233 @@ void ConfigurationsDialog::removeColumn() {
 }
 
 // ---------------------------------------------------------------------------
+// Filling a closed table (mitcad#1044)
+
+QVector<cfg::SheetColumn> ConfigurationsDialog::sheetColumns() const {
+  QVector<cfg::SheetColumn> out;
+  for (const RowColumn& column : rowColumns()) {
+    cfg::SheetColumn sheet;
+    switch (column.kind) {
+    case RowColumn::Name:
+      sheet.kind = cfg::SheetColumn::Kind::Name;
+      break;
+    case RowColumn::Option:
+      sheet.kind = cfg::SheetColumn::Kind::Option;
+      break;
+    case RowColumn::Parameter:
+      sheet.kind = cfg::SheetColumn::Kind::Parameter;
+      break;
+    case RowColumn::Designation:
+      sheet.kind = cfg::SheetColumn::Kind::Designation;
+      break;
+    case RowColumn::PartNumber:
+      sheet.kind = cfg::SheetColumn::Kind::PartNumber;
+      break;
+    case RowColumn::SupplierUrl:
+      sheet.kind = cfg::SheetColumn::Kind::SupplierUrl;
+      break;
+    }
+    sheet.parameter = column.parameter;
+    if (!column.parameter.isEmpty()) {
+      sheet.text = isText(column.parameter);
+      sheet.unit = unitOf(column.parameter);
+    }
+    out.append(sheet);
+  }
+  return out;
+}
+
+void ConfigurationsDialog::copyCells() {
+  const QList<QTableWidgetSelectionRange> ranges = m_rows->selectedRanges();
+  if (ranges.isEmpty()) {
+    return;
+  }
+  // The block from the top left selected cell to the bottom right; a cell
+  // between them that is not selected is empty.
+  int top = ranges.first().topRow();
+  int bottom = ranges.first().bottomRow();
+  int left = ranges.first().leftColumn();
+  int right = ranges.first().rightColumn();
+  for (const QTableWidgetSelectionRange& range : ranges) {
+    top = std::min(top, range.topRow());
+    bottom = std::max(bottom, range.bottomRow());
+    left = std::min(left, range.leftColumn());
+    right = std::max(right, range.rightColumn());
+  }
+  QVector<QStringList> block;
+  for (int r = top; r <= bottom; ++r) {
+    QStringList cells;
+    for (int c = left; c <= right; ++c) {
+      const QTableWidgetItem* item = m_rows->item(r, c);
+      cells << (item != nullptr && item->isSelected() ? item->text() : QString());
+    }
+    block.append(cells);
+  }
+  QGuiApplication::clipboard()->setText(cfg::writeBlock(block));
+  qDebug().noquote() << QStringLiteral("Configurations copied %1 x %2 cells").arg(bottom - top + 1).arg(right - left + 1);
+}
+
+void ConfigurationsDialog::pasteCells() {
+  const QVector<QStringList> block = cfg::readBlock(QGuiApplication::clipboard()->text());
+  if (block.isEmpty()) {
+    showMessage(tr("The clipboard has no cells to paste."), true);
+    return;
+  }
+  const QVector<cfg::SheetColumn> columns = sheetColumns();
+  // At the current cell; below the last row without one.
+  const int row = m_rows->currentRow() < 0 ? static_cast<int>(m_table.rows.size()) : m_rows->currentRow();
+  const int column = std::max(0, m_rows->currentColumn());
+  const auto header = [this](int c) {
+    const QTableWidgetItem* item = m_rows->horizontalHeaderItem(c);
+    return item != nullptr ? item->text() : QString();
+  };
+  const QString at = QStringLiteral("%1 %2").arg(row < m_table.rows.size() ? m_table.rows.at(row).name
+                                                                             : QStringLiteral("a new row"),
+                                                 header(column));
+  const cfg::Paste paste = cfg::pasteBlock(m_table, columns, row, column, block, freshRow());
+  // What was typed into each pasted cell, in the paste's order.
+  QStringList typed;
+  qsizetype widest = 0;
+  for (const QStringList& cells : block) {
+    widest = std::max(widest, cells.size());
+    for (qsizetype j = 0; j < cells.size(); ++j) {
+      if (column + j < columns.size()) {
+        typed << cells.at(j).trimmed();
+      }
+    }
+  }
+  const QString extent = QStringLiteral("%1 x %2").arg(block.size()).arg(widest);
+  if (run(cfg::setTableCommand(paste.table))) {
+    for (const auto& cell : paste.cells) {
+      m_refused.remove(QStringLiteral("%1|%2").arg(cell.first, header(cell.second)));
+    }
+    QString notice = tr("Pasted %1 cells.").arg(extent);
+    if (!paste.added.isEmpty()) {
+      notice += QStringLiteral(" %1").arg(tr("Added %1.").arg(paste.added.join(QStringLiteral(", "))));
+    }
+    if (paste.beyond > 0) {
+      notice += QStringLiteral(" %1").arg(tr("%n cell(s) right of the last column left out.", nullptr, paste.beyond));
+    }
+    showMessage(notice, false);
+    qDebug().noquote() << QStringLiteral("Configurations pasted %1 cells at %2: added %3")
+                              .arg(extent, at,
+                                   paste.added.isEmpty() ? QStringLiteral("none")
+                                                         : paste.added.join(QStringLiteral(", ")));
+  } else if (!m_reason.isEmpty()) {
+    // Each pasted cell keeps what was pasted, in red with the reason.
+    for (qsizetype i = 0; i < paste.cells.size(); ++i) {
+      const auto& cell = paste.cells.at(i);
+      m_refused.insert(QStringLiteral("%1|%2").arg(cell.first, header(cell.second)), {typed.value(i), m_reason});
+    }
+    qDebug().noquote() << QStringLiteral("Configurations paste of %1 cells at %2 refused: %3").arg(extent, at, m_reason);
+  }
+  refresh();
+}
+
+void ConfigurationsDialog::clearCells() {
+  QVector<QPair<int, int>> cells;
+  const QList<QTableWidgetItem*> selected = m_rows->selectedItems();
+  for (const QTableWidgetItem* item : selected) {
+    cells.append(qMakePair(item->row(), item->column()));
+  }
+  const cfg::Table table = cfg::clearCells(m_table, sheetColumns(), cells);
+  if (cells.isEmpty() || table.toJson() == m_table.toJson()) {
+    return; // nothing selected, or names only
+  }
+  if (run(cfg::setTableCommand(table))) {
+    showMessage(QString(), false);
+    qDebug().noquote() << QStringLiteral("Configurations cleared %1 cells").arg(cells.size());
+  }
+  refresh();
+}
+
+void ConfigurationsDialog::importRows() {
+  if (const QString readOnly = m_host.readOnlyReason(); !readOnly.isEmpty()) {
+    showMessage(readOnly, true);
+    return;
+  }
+  if (!m_host.canChangeModel()) {
+    showMessage(m_host.changeBlockedReason(), true);
+    return;
+  }
+  const QString path = dialogOpenFileName(this, tr("Import Rows from CSV"),
+                                          dialogStartFolder(DialogGroup::Import, m_host.documentFolder()),
+                                          tr("CSV files (*.csv);;All files (*)"));
+  if (path.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Import of configuration rows cancelled");
+    return;
+  }
+  rememberDialogFolder(DialogGroup::Import, path);
+  const QString file = QFileInfo(path).fileName();
+  QFile input(path);
+  if (!input.open(QIODevice::ReadOnly)) {
+    const QString problem = tr("Could not read %1: %2").arg(QDir::toNativeSeparators(path), input.errorString());
+    showMessage(problem, true);
+    qDebug().noquote() << QStringLiteral("Import of configuration rows from %1 refused: %2").arg(file, problem);
+    return;
+  }
+  const QString csv = QString::fromUtf8(input.readAll());
+  input.close();
+  RowsImportDialog dialog(m_host, csv, file, this);
+  prepareModal(&dialog);
+  if (execDialog(&dialog) != QDialog::Accepted) {
+    qDebug().noquote() << QStringLiteral("Import of configuration rows from %1 cancelled").arg(file);
+    refresh();
+    return;
+  }
+  QJsonObject result;
+  if (run(cfg::importRowsCsvCommand(csv), &result)) {
+    const QString summary = result.value(QStringLiteral("summary")).toString();
+    const QString moves = cfg::movesNotice(cfg::readMoves(result.value(QStringLiteral("moves"))));
+    const QString imported = tr("Imported the rows from %1: %2.").arg(file, summary);
+    const QString text = moves.isEmpty() ? imported : QStringLiteral("%1 %2").arg(imported, moves);
+    showMessage(text, false);
+    m_host.showStatus(text, NoticeLevel::Information);
+    qDebug().noquote() << QStringLiteral("Configurations imported rows from %1: %2").arg(file, summary);
+    if (!moves.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Configuration moves: %1").arg(moves);
+    }
+  } else if (!m_reason.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Import of configuration rows from %1 refused: %2").arg(file, m_reason);
+  }
+  refresh();
+}
+
+void ConfigurationsDialog::exportRows() {
+  QJsonObject answer;
+  try {
+    answer = m_host.model().queryObject(cfg::rowsCsvQuery());
+  } catch (const std::exception& e) {
+    showMessage(QString::fromUtf8(e.what()), true);
+    return;
+  }
+  const QString folder = dialogStartFolder(DialogGroup::Export, m_host.documentFolder());
+  const QString file = QStringLiteral("Rows.csv");
+  const QString path = dialogSaveFileName(this, tr("Export Rows to CSV"),
+                                          folder.isEmpty() ? file : QDir(folder).filePath(file),
+                                          tr("CSV files (*.csv);;All files (*)"));
+  if (path.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Export of configuration rows cancelled");
+    return;
+  }
+  rememberDialogFolder(DialogGroup::Export, path);
+  const QByteArray bytes = answer.value(QStringLiteral("csv")).toString().toUtf8();
+  QFile output(path);
+  if (!output.open(QIODevice::WriteOnly | QIODevice::Truncate) || output.write(bytes) != bytes.size()) {
+    const QString problem = tr("Could not write %1: %2").arg(QDir::toNativeSeparators(path), output.errorString());
+    showMessage(problem, true);
+    qDebug().noquote() << QStringLiteral("Export of configuration rows refused: %1").arg(problem);
+    return;
+  }
+  output.close();
+  const int count = answer.value(QStringLiteral("rows")).toInt();
+  const QString text = tr("Exported %n row(s) to %1.", nullptr, count).arg(QDir::toNativeSeparators(path));
+  showMessage(text, false);
+  m_host.showStatus(text, NoticeLevel::Information);
+  qDebug().noquote() << QStringLiteral("Configurations exported rows to %1: %2 row(s)").arg(path).arg(count);
+}
+
+// ---------------------------------------------------------------------------
 // The log, for UI tests
 
 void ConfigurationsDialog::logLayout() {
@@ -1745,7 +2348,7 @@ void ConfigurationsDialog::logLayout() {
       {"move up", m_up},             {"move down", m_down},            {"closed", m_closed},
       {"add row", m_addRow},         {"delete row", m_deleteRow},      {"set as default", m_defaultRow},
       {"apply", m_apply},            {"generate rows", m_generateRows}, {"add column", m_addColumn},
-      {"remove column", m_removeColumn}};
+      {"remove column", m_removeColumn}, {"import csv", m_importRows},  {"export csv", m_exportRows}};
   for (const auto& [name, widget] : buttons) {
     if (widget->isVisible()) {
       place(QStringLiteral("Configurations %1").arg(QLatin1String(name)), widget, widget->rect().center());

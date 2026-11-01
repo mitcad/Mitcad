@@ -130,11 +130,11 @@ function Indicator-Line {
 Write-Host '--- --debug-log <file>: the header and the start-up'
 Ui-StartApp 'debug-log' @('--debug-log', $file)
 Ui-ExpectLog "Debug log on: $file (--debug-log)" 'the debug log started'
-File-Has '^Mitcad debug log$' 'the header, once the view knows its graphics'
+File-Has '^MitCad debug log$' 'the header, once the view knows its graphics'
 $first = @(File-Lines $file)[0]
-if ($first -ne 'Mitcad debug log') { Ui-Fail "the file does not begin with its header: '$first'" }
+if ($first -ne 'MitCad debug log') { Ui-Fail "the file does not begin with its header: '$first'" }
 Write-Host 'ok   the file begins with its header'
-File-Has '^Version: Mitcad \d' 'the version'
+File-Has '^Version: MitCad \d' 'the version'
 File-Has '^Build: (release|debug), ' 'the build'
 File-Has '^System: ' 'the system'
 Expect-Graphics $file 'the GPU and renderer in the header of a log started before the view'
@@ -215,7 +215,7 @@ if (-not $new -or (Split-Path $new) -ne $folder -or (Split-Path $new -Leaf) -not
   Ui-Fail "the new log is not mitcad-<date>-<time>-<pid>.log in ${folder}: '$new'"
 }
 Write-Host "ok   in the log folder: $new"
-if (@(File-Lines $new)[0] -ne 'Mitcad debug log') { Ui-Fail 'the new file does not begin with its header' }
+if (@(File-Lines $new)[0] -ne 'MitCad debug log') { Ui-Fail 'the new file does not begin with its header' }
 File-Has '^Switches: debug log \(Preferences\)' 'switched on in Preferences' $new
 Expect-Graphics $new 'the GPU and renderer in the header'
 File-Has '^--- The newest \d+ lines from before the debug log started:$' 'the lines kept from before' $new

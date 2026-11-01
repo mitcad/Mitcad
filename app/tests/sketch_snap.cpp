@@ -5,7 +5,10 @@
 // sketch's own geometry wins ties against them; those out of the plane
 // (mitcad#866) are read but never snapped to. The sketch's x and y axes
 // (mitcad#948) as curves to snap onto, and the coincident that holds a
-// point placed there on the axis's entity.
+// point placed there on the axis's entity. What a drawing tool adds
+// automatically (mitcad#1024): a quadrant's coincident and centre
+// alignment, the horizontal, vertical and tangent candidates, and the
+// reason a refused (redundant) candidate is skipped with.
 #include "sketch/SketchSnap.hpp"
 
 #include <algorithm>
@@ -416,6 +419,154 @@ void axisSnapTests() {
   CHECK(model.pointAxes(QStringLiteral("p7")).isEmpty());
 }
 
+// A point, a circle, a line and an arc of a test sketch.
+void addPoint(SketchModel& model, const char* id, const V2& at) {
+  PointData p;
+  p.id = QLatin1String(id);
+  p.at = at;
+  model.points.push_back(p);
+}
+
+void addCurve(SketchModel& model, const char* id, const char* type, const Curve2& curve, const char* start,
+              const char* end, const char* center) {
+  CurveData c;
+  c.id = QLatin1String(id);
+  c.type = QLatin1String(type);
+  c.curve = curve;
+  c.start = QLatin1String(start);
+  c.end = QLatin1String(end);
+  c.center = QLatin1String(center);
+  const QStringList points{c.start, c.end, c.center};
+  for (const QString& point : points) {
+    if (!point.isEmpty()) {
+      c.points << point;
+    }
+  }
+  model.curves.push_back(c);
+}
+
+bool isConstraint(const QJsonObject& c, const char* type, const char* first, const char* second) {
+  const bool coincident = c.value(QStringLiteral("type")).toString() == QStringLiteral("coincident");
+  const QString a = c.value(coincident ? QStringLiteral("point") : QStringLiteral("a")).toString();
+  const QString b = c.value(coincident ? QStringLiteral("entity") : QStringLiteral("b")).toString();
+  return c.value(QStringLiteral("type")).toString() == QLatin1String(type) && a == QLatin1String(first) &&
+         b == QLatin1String(second);
+}
+
+void autoConstraintTests() {
+  // A circle c2 of radius 10 about p1 at the origin.
+  SketchModel model;
+  addPoint(model, "p1", V2{});
+  addCurve(model, "c2", "circle", Curve2::circle(V2{}, 10.0), "", "", "p1");
+  SnapSettings settings;
+  settings.model = &model;
+  settings.toScreen = screenOf;
+  settings.grid = false;
+
+  // Its top quadrant, 3 pixels off: on the circle and plumb with its
+  // centre.
+  const Snap top = snapAt(settings, V2{0.3, 10.0});
+  CHECK(top.kind == Snap::Kind::Quadrant && top.curve == QStringLiteral("c2"));
+  CHECK(sameAt(top.at, V2{0.0, 10.0}));
+  auto hold = quadrantHold(model, QStringLiteral("p7"), top);
+  CHECK(hold.size() == 2);
+  if (hold.size() == 2) {
+    CHECK(isConstraint(hold[0], "coincident", "p7", "c2"));
+    CHECK(isConstraint(hold[1], "vertical_points", "p7", "p1"));
+    CHECK(constraintText(hold[0]) == QStringLiteral("coincident p7 on c2"));
+    CHECK(constraintText(hold[1]) == QStringLiteral("vertical_points p7 p1"));
+  }
+  // The left one: level with it.
+  const Snap left = snapAt(settings, V2{-10.0, 0.3});
+  CHECK(left.kind == Snap::Kind::Quadrant);
+  hold = quadrantHold(model, QStringLiteral("p7"), left);
+  CHECK(hold.size() == 2 && isConstraint(hold[1], "horizontal_points", "p7", "p1"));
+  // On the circle elsewhere, or no point: no quadrant's hold.
+  const Snap edge = snapAt(settings, polar(kPi / 4.0, 10.0));
+  CHECK(edge.kind == Snap::Kind::OnCurve);
+  CHECK(quadrantHold(model, QStringLiteral("p7"), edge).empty());
+  CHECK(quadrantHold(model, QString(), top).empty());
+
+  // Horizontal and vertical candidates: exactly level or plumb only.
+  CHECK(axisAlignment(V2{-20.0, 10.0}, V2{0.0, 10.0}) == QStringLiteral("horizontal"));
+  CHECK(axisAlignment(V2{5.0, -3.0}, V2{5.0, 30.0}) == QStringLiteral("vertical"));
+  CHECK(axisAlignment(V2{0.0, 0.0}, V2{10.0, 0.01}).isEmpty());
+  CHECK(axisAlignment(V2{1.0, 1.0}, V2{1.0, 1.0}).isEmpty());
+  const QJsonObject level{{QStringLiteral("type"), QStringLiteral("horizontal")},
+                          {QStringLiteral("line"), QStringLiteral("c5")}};
+  CHECK(constraintText(level) == QStringLiteral("horizontal c5"));
+
+  // The line tool's tangent inference: from (-20, 10) a line touches the
+  // circle at its top; the cursor 0.3 mm away finds it within 0.6 mm, not
+  // within 0.2 mm; from inside the circle nothing touches.
+  auto touch = tangentTouch(model, V2{-20.0, 10.0}, V2{0.3, 10.0}, 0.6);
+  CHECK(touch.has_value());
+  if (touch) {
+    CHECK(touch->kind == Snap::Kind::OnCurve && touch->curve == QStringLiteral("c2"));
+    CHECK(sameAt(touch->at, V2{0.0, 10.0}));
+  }
+  CHECK(!tangentTouch(model, V2{-20.0, 10.0}, V2{0.3, 10.0}, 0.2).has_value());
+  CHECK(!tangentTouch(model, V2{1.0, 1.0}, V2{0.3, 10.0}, 0.6).has_value());
+  CHECK(!tangentTouch(model, V2{-20.0, 10.0}, V2{0.3, 10.0}, 0.6, {QStringLiteral("c2")}).has_value());
+  // The other touching point, at (-8, -6): found where it is, the line to
+  // it square to the radius there.
+  const V2 from{-20.0, 10.0};
+  const double spread = std::acos(10.0 / norm(from));
+  const V2 low = polar(angleOf(from) + spread, 10.0);
+  touch = tangentTouch(model, from, low + V2{0.1, 0.0}, 0.6);
+  CHECK(touch.has_value() && sameAt(touch->at, low));
+  if (touch) {
+    CHECK(std::abs(dot(touch->at - from, touch->at)) <= 1e-9);
+  }
+
+  // Tangent candidates. A line c5 from (-20, 10) to the circle's top runs
+  // along it there: tangent to c2. A line c6 from (-20, 5) to the top
+  // does not.
+  addPoint(model, "p3", V2{-20.0, 10.0});
+  addPoint(model, "p4", V2{0.0, 10.0});
+  addCurve(model, "c5", "line", Curve2::line(V2{-20.0, 10.0}, V2{0.0, 10.0}), "p3", "p4", "");
+  auto candidates = tangentCandidates(model, QStringLiteral("c5"));
+  CHECK(candidates.size() == 1);
+  if (candidates.size() == 1) {
+    CHECK(isConstraint(candidates[0], "tangent", "c2", "c5"));
+    CHECK(constraintText(candidates[0]) == QStringLiteral("tangent c2 c5"));
+  }
+  addPoint(model, "p6", V2{-20.0, 5.0});
+  addCurve(model, "c6", "line", Curve2::line(V2{-20.0, 5.0}, V2{0.0, 10.0}), "p6", "p4", "");
+  CHECK(tangentCandidates(model, QStringLiteral("c6")).empty());
+  // An arc c8 about (0, 20) from the circle's top a quarter round: its
+  // start lies on the circle and on the line's end, running level like
+  // both: tangent to each.
+  addPoint(model, "p7", V2{0.0, 20.0});
+  addPoint(model, "p9", V2{10.0, 20.0});
+  addCurve(model, "c8", "arc", Curve2::arc(V2{0.0, 20.0}, 10.0, -kPi / 2.0, 0.0), "p4", "p9", "p7");
+  candidates = tangentCandidates(model, QStringLiteral("c8"));
+  CHECK(candidates.size() == 2);
+  if (candidates.size() == 2) {
+    CHECK(isConstraint(candidates[0], "tangent", "c2", "c8"));
+    CHECK(isConstraint(candidates[1], "tangent", "c5", "c8"));
+  }
+  // A tangent the sketch has already is no candidate: the line c5 is
+  // tangent to c2 already, and only the arc c8 starting at its end is left.
+  ConstraintData tangent;
+  tangent.id = QStringLiteral("k10");
+  tangent.type = QStringLiteral("tangent");
+  tangent.refs << QStringLiteral("c2") << QStringLiteral("c5");
+  model.constraints.push_back(tangent);
+  candidates = tangentCandidates(model, QStringLiteral("c5"));
+  CHECK(candidates.size() == 1 && isConstraint(candidates[0], "tangent", "c8", "c5"));
+  // Nor is a curve that is neither a line nor an arc.
+  CHECK(tangentCandidates(model, QStringLiteral("c2")).empty());
+
+  // A refused candidate is skipped with the model's reason: a redundant
+  // one, one that would move the geometry; any other message as it is.
+  CHECK(autoConstraintReason(QStringLiteral("Add Constraint to Sketch1: auto constraint k11: redundant")) ==
+        QStringLiteral("redundant"));
+  CHECK(autoConstraintReason(QStringLiteral("auto constraint k12: moves p4 by 1.000e-02 mm")) ==
+        QStringLiteral("moves p4 by 1.000e-02 mm"));
+  CHECK(autoConstraintReason(QStringLiteral("something else")) == QStringLiteral("something else"));
+}
+
 } // namespace
 
 int sketchSnapTests() {
@@ -423,5 +574,6 @@ int sketchSnapTests() {
   bodyTargetTests();
   outOfPlaneTests();
   axisSnapTests();
+  autoConstraintTests();
   return failures;
 }

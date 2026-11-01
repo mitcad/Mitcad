@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: MIT
+# The AppKit frontend's Chat card (mitcad#1075), run by
+# tools/ui-macos-native-chat-test.sh with the scripted test agent installed
+# and signed in as Claude Code: the shared panel through the bridge, as the
+# Qt chat test (tools/ui-chat-test.py) drives the Qt panel.
+wait-idle
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+native-resize 1280 820
+native-appearance light
+expect-model-bodies 0 0
+expect-native-visible native.chatCard false
+
+# View › Chat shows the card on the right edge; the agent is found ready.
+mark
+native-action view.chat
+wait-log 'Chat shown'
+wait-log 'Native chat card shown: [0-9]+ x [0-9]+'
+expect-native-visible native.chatCard true
+wait-log 'Chat panel: ready' 60
+expect-native-visible chatInput true
+expect-native-visible chatSend true
+
+# A message: the privacy notice once, then the agent's two calls merged into
+# one step, which one Command+Z takes back.
+capture-undo-depth start
+native-pointer-click chatInput
+type 'a 30 x 20 x 10 mm box'
+expect-widget-property chatInput plainText 'a 30 x 20 x 10 mm box'
+mark
+native-key-event Return
+wait-log 'Chat panel: notice'
+native-click chatContinue
+wait-log 'Chat: Claude Code started \(new session' 30
+wait-log 'Chat: the message.s 2 step\(s\) merged into .AI: a 30 x 20 x 10 mm box.' 120
+wait-log 'Chat: turn ended \(success\)' 60
+expect-model-bodies 2 7000
+expect-undo-depth ${start} 1
+screenshot '${MITCAD_TEST_SHOTS}/chat-light.png'
+focus-main
+native-key-event Ctrl+z
+expect-model-bodies 0 0
+expect-undo-depth ${start} 0
+
+# An approval card: Save As asks, Allow once saves.
+native-pointer-click chatInput
+type 'save the design'
+mark
+native-key-event Return
+wait-log 'Chat: approval asked for document_save ' 60
+wait-log 'Chat panel: approval card' 30
+expect-native-visible chatAllowOnce true
+screenshot '${MITCAD_TEST_SHOTS}/chat-approval.png'
+native-click chatAllowOnce
+wait-log 'MCP: an agent saved' 60
+wait-log 'Chat: turn ended \(success\)' 60
+expect-file '${MITCAD_TEST_CHAT_SAVE_PATH}'
+native-appearance dark
+sleep 300
+screenshot '${MITCAD_TEST_SHOTS}/chat-dark.png'
+native-appearance light
+
+# The toolbar's Chat button beside the agent indicator hides the card,
+# Command+Shift+L shows it again, View › Chat hides it.
+mark
+native-click native.chatButton
+wait-log 'Chat hidden'
+wait-log 'Native chat card hidden'
+expect-native-visible native.chatCard false
+mark
+native-key-event Ctrl+Shift+l
+wait-log 'Chat shown'
+expect-native-visible native.chatCard true
+mark
+native-action view.chat
+wait-log 'Chat hidden'
+expect-native-visible native.chatCard false

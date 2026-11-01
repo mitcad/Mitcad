@@ -111,7 +111,7 @@ expect("the versions with the geometry"
 cli(usage diff "${part}")
 cli(usage diff "${part}" HEAD HEAD~1 HEAD~2)
 cli(fail diff "${part}" 0000000)
-expect("a version that is not there" "there is no version '0000000'")
+expect("a version that is not there" "there is no version 0000000")
 cli(fail diff "${WORK}/first.mitcad" "${WORK}/missing.mitcad")
 expect("a file that is not there" "missing\\.mitcad")
 message(STATUS "comparison of versions: two versions, a version and the saved file, two files")

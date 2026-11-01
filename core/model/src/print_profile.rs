@@ -231,7 +231,7 @@ impl PrintProfile {
     pub fn check(&self) -> Result<(), String> {
         if !material::valid_id(&self.id) {
             return Err(format!(
-                "'{}' is no profile id: use letters, digits, '_', '-' and '/' between parts",
+                "{} is no profile id: use letters, digits, '_', '-' and '/' between parts",
                 self.id
             ));
         }
@@ -244,7 +244,7 @@ impl PrintProfile {
         }
         for dialect in self.slicer.keys().chain(self.raw.keys()) {
             if Dialect::from_id(dialect).is_none() {
-                return Err(format!("profile {}: '{dialect}' is no slicer id", self.id));
+                return Err(format!("profile {}: {dialect} is no slicer id", self.id));
             }
         }
         if !self.raw.is_empty() && self.kind != ProfileKind::Printer {
@@ -279,6 +279,63 @@ impl PrintProfile {
         }
         print_keys::Value::from_json(def, self.values.get(key)?).ok()
     }
+
+    /// A printer's nozzle diameter in mm (mitcad#1054), when it sets one.
+    pub fn nozzle(&self) -> Option<f64> {
+        match self.value("nozzle_diameter")? {
+            print_keys::Value::Number(n) if n > 0.0 && n.is_finite() => Some(n),
+            _ => None,
+        }
+    }
+
+    /// The texts of a key kept per slicer, every slicer's.
+    fn per_slicer_texts(&self, key: &str) -> Vec<String> {
+        match self.values.get(key) {
+            Some(Value::Object(values)) => values
+                .values()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(str::to_owned)
+                .collect(),
+            Some(Value::String(text)) if !text.trim().is_empty() => vec![text.trim().to_owned()],
+            _ => Vec::new(),
+        }
+    }
+
+    /// The printer a material's variant names for this printer profile
+    /// (mitcad#1054): its printer model, else its name without the nozzle
+    /// ("Bench X 0.4 nozzle" is Bench X).
+    pub fn variant_printer(&self) -> String {
+        self.per_slicer_texts("printer_model")
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| material::split_nozzle(&self.name).0)
+    }
+
+    /// The printer profile as a material's variants pick it (mitcad#1054):
+    /// every name it goes by (its printer model, its name and its slicers'
+    /// preset names, each also without the nozzle) and its nozzle.
+    pub fn printer_key(&self) -> material::PrinterKey {
+        let mut names = vec![self.variant_printer()];
+        for name in [self.name.clone()]
+            .into_iter()
+            .chain(self.per_slicer_texts("printer_model"))
+            .chain(self.per_slicer_texts("printer_settings_id"))
+        {
+            let bare = material::split_nozzle(&name).0;
+            for candidate in [name, bare] {
+                if !names.iter().any(|n| material::same_printer(n, &candidate)) {
+                    names.push(candidate);
+                }
+            }
+        }
+        // The nozzle its name says when it sets none.
+        let nozzle = self
+            .nozzle()
+            .or_else(|| material::split_nozzle(&self.name).1);
+        material::PrinterKey { names, nozzle }
+    }
 }
 
 /// Whether a value fits a key of a set: a key of the set, of its kind; a
@@ -286,7 +343,7 @@ impl PrintProfile {
 pub fn check_value(set: PrintSet, key: &str, value: &Value) -> Result<(), String> {
     let def = print_keys::key(key)
         .filter(|def| def.set == set)
-        .ok_or_else(|| format!("'{key}' is no key of the {} set", set.property_set()))?;
+        .ok_or_else(|| format!("{key} is no key of the {} set", set.property_set()))?;
     if def.per_dialect {
         let Value::Object(values) = value else {
             return Err(format!(
@@ -295,7 +352,7 @@ pub fn check_value(set: PrintSet, key: &str, value: &Value) -> Result<(), String
         };
         for (dialect, value) in values {
             if Dialect::from_id(dialect).is_none() {
-                return Err(format!("{key}: '{dialect}' is no slicer id"));
+                return Err(format!("{key}: {dialect} is no slicer id"));
             }
             print_keys::Value::from_json(def, value).map_err(|e| e.to_string())?;
         }

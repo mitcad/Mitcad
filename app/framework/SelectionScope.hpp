@@ -13,9 +13,10 @@
 // expansion); a window never goes beyond the filter.
 //
 // A scope is one context of rows: the sketch's (`SelectionScope::sketch`,
-// active while a sketch is edited) and Project's (`project`, while the
-// Project command runs in the sketch). Other sketches' curves and points
-// have a row only in Project's (mitcad#904). Body edges have two rows, visible and
+// active while a sketch is edited), Project's (`project`, while the
+// Project command runs in the sketch) and Intersect's (`intersect`).
+// Other sketches' curves and points have a row only in Project's and
+// Intersect's (mitcad#904, mitcad#1031). Body edges have two rows, visible and
 // occluded: which one governs an edge depends on whether the part of it the
 // click or the window hit is in sight (`EdgeSight`, from the view).
 
@@ -54,8 +55,9 @@ enum class FilterRow {
   Bodies,
   Components,
   ReferenceGeometry, // planes, axes and points (origin and construction)
-  // Other sketches' curves and points (mitcad#904): only Project's scope
-  // has the row; everywhere else they are never selectable.
+  // Other sketches' curves and points (mitcad#904): only Project's and
+  // Intersect's scopes have the row (mitcad#1031); everywhere else they
+  // are never selectable.
   OtherSketchGeometry,
 };
 constexpr int kFilterRowCount = 13;
@@ -95,6 +97,9 @@ public:
   // and vertices square, other sketches' curves and points cross
   // (mitcad#904).
   static SelectionScope project();
+  // Intersect's (mitcad#1031): as Project's without vertices, with bodies
+  // square (a body is cut whole), other sketches' curves and points cross.
+  static SelectionScope intersect();
 
   const QString& name() const { return m_name; }
   // The rows in the control's order.
@@ -138,7 +143,8 @@ using SketchRowOf = std::function<FilterRow(const SelectionItem&)>;
 // The row that governs an item; none when no row may let it be picked:
 // another sketch's profiles, dimensions and constraints, kinds the view
 // does not offer. Another sketch's curves and points give
-// OtherSketchGeometry, which only Project's scope has (mitcad#904). Body
+// OtherSketchGeometry, which only Project's and Intersect's scopes have
+// (mitcad#904, mitcad#1031). Body
 // edges give VisibleEdges (the scope decides with allowsEdge).
 std::optional<FilterRow> filterRowOf(const SelectionItem& item, const QString& activeSketch,
                                      const SketchRowOf& sketchRow);
@@ -148,7 +154,8 @@ bool scopeAccepts(const SelectionScope& scope, const SelectionItem& item, const 
                   const QString& activeSketch, const SketchRowOf& sketchRow);
 
 // The selection filter context a command's selections pick through in
-// sketch mode, by its id: Project's ("sketch.project"); none for others,
+// sketch mode, by its id: Project's ("sketch.project") and Intersect's
+// ("sketch.intersect"); none for others,
 // whose inputs' own filters decide.
 std::optional<SelectionScope> commandSelectionScope(const QString& commandId);
 

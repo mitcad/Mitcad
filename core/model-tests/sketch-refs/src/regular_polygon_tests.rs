@@ -233,7 +233,7 @@ fn a_fixed_centre_and_size_make_a_corner_drag_a_pure_rotation() {
             );
             let now = corners(&d, &lines);
             let (c, side_now) = regular(&now);
-            assert!(dist(c, center) < 1e-6, "{kind} {sides}: the centre moved");
+            assert!(dist(c, center) < 1e-6, "{kind} {sides}: the center moved");
             assert!(
                 (side_now - side).abs() < 1e-6,
                 "{kind} {sides}: the size changed"

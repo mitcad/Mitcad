@@ -20,7 +20,8 @@ QJsonObject CommandPanel::shownState() const {
       notes.insert(it.key(), QJsonObject{{QStringLiteral("hint"), it.value().second}});
     }
   }
-  return {{QStringLiteral("message"), m_message->message()},
+  return {{QStringLiteral("message"), m_messageText},
+          {QStringLiteral("message_level"), noticeLevelName(m_messageLevel)},
           {QStringLiteral("result"), QTextDocumentFragment::fromHtml(m_result->text()).toPlainText()},
           {QStringLiteral("ok_enabled"), m_ok->isEnabled()},
           {QStringLiteral("notes"), notes}};

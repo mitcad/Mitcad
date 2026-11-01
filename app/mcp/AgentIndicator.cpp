@@ -96,6 +96,9 @@ void AgentIndicator::setUnavailable(const QString& reason) {
 }
 
 void AgentIndicator::setAgents(const QList<ConnectedAgent>& agents) {
+  for (const ConnectedAgent& agent : agents) {
+    if (!m_previousClients.contains(agent.name)) m_previousClients << agent.name;
+  }
   if (agents != m_agents) {
     m_agents = agents;
     refresh();

@@ -3,6 +3,7 @@
 # check-all sources: app/MainWindowContextMenu.cpp app/MainWindow.cpp app/files/MainWindowPrint.cpp
 # check-all sources: app/commands/InspectCommands.cpp app/browser core/model/src/document/print_bed.rs
 # check-all sources: core/model/src/exchange core/3mf tools/cli
+# check-all sources: app/files/Print3d.cpp app/framework/CommandSession.cpp
 # A body's print bed face (mitcad#731) through the real UI, on a 40 x 20 x
 # 10 box (Plate, F1.b0) that mitcad-cli makes, with a fake slicer (a script
 # that writes the arguments it was started with, so no slicer runs):
@@ -18,12 +19,20 @@
 #      transform after the design's placement.
 #   5. Print Analysis starts with the top as its bed face.
 #   6. A design whose stored face is gone: 3D Print reports it in the
-#      status line and writes the box as the design has it. A side's menu
+#      status line and lays the box on its bottom by the automatic
+#      orientation (mitcad#1109), centred on the plate. A side's menu
 #      offers Clear Print Bed Face (beside Set); cleared, 3D Print warns
 #      no more.
 #   7. A box made a surface body (its bottom unstitched) that keeps its
 #      print bed face (mitcad#737): the menus of its top and of a side
 #      offer Clear Print Bed Face only, show no bed face, and Clear clears
+#      it.
+#   8. Send to Slicer's Bed Face (mitcad#1109) on a box without a print
+#      bed face: choosing the body fills it with the automatic
+#      orientation's face (its bottom), highlighted in the bed face's
+#      green while the panel is open, the body's own highlight kept;
+#      picking the top in Bed Face stores it as the body's print bed face
+#      (one undo step), the highlight follows, and Send turns the box onto
 #      it.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -39,6 +48,7 @@ trap 'ui_cleanup; rm -rf "$WORK"' EXIT
 FILE=$WORK/plate.mitcad
 GONE=$WORK/gone.mitcad
 SURFACE=$WORK/surface.mitcad
+FRESH=$WORK/fresh.mitcad
 # The app's temporary folder, where the files for the slicer go.
 export TMPDIR=$WORK/tmp
 mkdir -p "$TMPDIR"
@@ -148,8 +158,8 @@ slicer_ran() {
 send() {
   rm -f "$ARGS"
   ui_mark
-  ui_command "3D Print"
-  ui_expect_new "Panel 3D Print input format at " "the panel"
+  ui_command "Send to Slicer"
+  ui_expect_new "Panel Send to Slicer input format at " "the panel"
   ui_key Return
 }
 
@@ -213,9 +223,10 @@ ui_start_app --open "$GONE"
 ui_step "fit (F6)"                         ui_key F6
 ui_expect_log "Bodies shown: F1.b0" "the box shown"
 ui_step "3D print (Enter)"                 send
-ui_expect_new "3D Print bed: as in the design; Plate: the print bed face is gone" \
-  "written as the design has it, the face reported"
-ui_expect_new "Plate: the print bed face is gone; printed as in the design" "the status line says so"
+ui_expect_new "3D Print bed: Plate on F1:bottom (automatic), plate 128.000,128.000, transform 1.000 0.000 0.000 108.000 | 0.000 1.000 0.000 118.000 | 0.000 0.000 1.000 0.000; Plate: the print bed face is gone" \
+  "laid on its bottom by the automatic orientation, centred, the face reported"
+ui_expect_new "3D Print last line: " "the status line"
+no_new "printed as in the design" "the status line does not say it is printed as in the design"
 slicer_ran
 
 echo "--- 6b. The gone face cleared from another face's menu"
@@ -228,7 +239,8 @@ ui_step "Clear Print Bed Face"             ui_menu_choose "Clear Print Bed Face"
 ui_expect_new "Print bed face of Plate: none" "the gone face cleared"
 ui_step "Escape (clear the selection)"     ui_key Escape
 ui_step "3D print (Enter)"                 send
-ui_expect_new "3D Print bed: as in the design" "written as the design has it"
+ui_expect_new "3D Print bed: Plate on F1:bottom (automatic), plate 128.000,128.000" \
+  "laid on its bottom by the automatic orientation"
 slicer_ran
 no_new "the print bed face is gone" "3D Print warns no more"
 ui_stop_app
@@ -250,5 +262,40 @@ no_new "Print bed face shown:" "no print bed face shown on a surface body"
 ui_mark
 ui_step "Clear Print Bed Face"             ui_menu_choose "Clear Print Bed Face"
 ui_expect_new "Print bed face of Plate: none" "the surface body's face cleared"
+ui_stop_app
+
+echo "--- 8. Send to Slicer's Bed Face (mitcad#1109)"
+"$CLI" run "$WORK/model.json" --save "$FRESH" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli fresh"; }
+ui_start_app --open "$FRESH"
+ui_step "fit (F6)"                         ui_key F6
+ui_expect_log "Bodies shown: F1.b0" "the box shown"
+pick_places
+rm -f "$ARGS"
+ui_mark
+ui_command "Send to Slicer"
+ui_expect_new "Panel Send to Slicer input format at " "the panel"
+ui_expect_new "3D Print bed face: Plate: automatic; Plate F1:bottom (automatic)" \
+  "choosing the body fills Bed Face with the automatic orientation's face"
+ui_step "the Bed Face row"                 ui_click_logged "Panel Send to Slicer input print_bed"
+ui_expect_new "Send to Slicer marks: face F1.b0/F1:bottom" "the bottom highlighted while the panel is open"
+no_new "picks not drawn beside the marks: Bodies" "the body's own highlight kept beside it"
+expect_file "$FRESH" '.bodies[0].print_bed_face' 'null' "the automatic face is not stored"
+ui_mark
+ui_step "pick the top in Bed Face"         ui_click_pick "face F1.b0/F1:top at"
+ui_expect_new "3D Print bed face set: Plate F1:top" "the top made the body's print bed face"
+ui_expect_new "3D Print bed face: Plate: print bed face; Plate F1:top" "Bed Face shows it"
+ui_expect_new "Send to Slicer marks: face F1.b0/F1:top" "the highlight follows"
+ui_mark
+ui_step "send (Enter)"                     ui_key Return
+ui_expect_new "3D Print bed: Plate on F1:top, plate 128.000,128.000, transform 1.000 0.000 0.000 108.000 | 0.000 -1.000 0.000 138.000 | 0.000 0.000 -1.000 10.000" \
+  "sent turned over onto the top"
+slicer_ran
+ui_mark
+ui_step "save (Ctrl+S)"                    ui_key ctrl+s
+ui_expect_new "Saved $FRESH" "saved"
+expect_file "$FRESH" '.bodies[0].print_bed_face' '"F1:top"' "the top stored as the body's print bed face"
+ui_mark
+ui_step "undo (Ctrl+Z)"                    ui_key ctrl+z
+ui_expect_new "Undo: Set Print Bed Face of Plate" "one undo step"
 
 ui_finish "UI print bed"

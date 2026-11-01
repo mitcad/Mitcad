@@ -93,7 +93,7 @@ impl fmt::Display for IdError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "invalid {} id '{}' (expected {})",
+            "invalid {} id {} (expected {})",
             self.what, self.text, self.expected
         )
     }
@@ -320,11 +320,11 @@ mod tests {
         assert!(EntityUid::parse_curve("p3").is_err());
         assert_eq!(
             "F3.b".parse::<BodyUid>().unwrap_err().to_string(),
-            "invalid body id 'F3.b' (expected F<number>.b<number>)"
+            "invalid body id F3.b (expected F<number>.b<number>)"
         );
         let error = serde_json::from_str::<FeatureUid>("\"Sketch1\"").unwrap_err();
         assert!(
-            error.to_string().contains("invalid feature id 'Sketch1'"),
+            error.to_string().contains("invalid feature id Sketch1"),
             "{error}"
         );
     }

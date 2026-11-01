@@ -310,7 +310,7 @@ impl<K: Kernel> EvalContext<'_, K> {
                     body,
                     format!(
                         "body {body} is now another piece of what {name} split it into \
-                         (volume {} → {} mm³, centre moved {} mm)",
+                         (volume {} → {} mm³, center moved {} mm)",
                         amount(mark.volume),
                         amount(piece.volume),
                         amount(distance(mark.centre, piece.centre)),

@@ -25,7 +25,7 @@ pub(crate) fn tools() -> Vec<Value> {
         ),
         tool(
             "document_open",
-            "Open a Mitcad project within the configured workspace and return its document handle. The source file is not changed. A SolidCraft design (.solidcraft) is imported with its history into a new, unsaved document (save it with document_save and a path).",
+            "Open a MitCad project within the configured workspace and return its document handle. The source file is not changed. A SolidCraft design (.solidcraft) is imported with its history into a new, unsaved document (save it with document_save and a path).",
             json!({"path": path}),
             &["path"],
             false,
@@ -72,7 +72,7 @@ pub(crate) fn tools() -> Vec<Value> {
         ),
         tool(
             "document_save",
-            "Save a document as a Mitcad project inside the workspace. An existing file requires overwrite:true.",
+            "Save a document as a MitCad project inside the workspace. An existing file requires overwrite:true.",
             json!({
                 "document": document,
                 "path": path,
@@ -132,7 +132,7 @@ fn command_schema() -> Value {
         "items": {"type": "object"},
         "minItems": 1,
         "maxItems": 1000,
-        "description": "One JSON command object {\"cmd\": \"<name>\", ...its fields}, for example {\"cmd\": \"add_feature\", \"def\": {...}}, or an array of them run in order. JSON numbers are millimetres and radians; write \"90 deg\" for degrees. model_reference gives each command's fields."
+        "description": "One JSON command object {\"cmd\": \"<name>\", ...its fields}, for example {\"cmd\": \"add_feature\", \"def\": {...}}, or an array of them run in order. JSON numbers are millimeters and radians; write \"90 deg\" for degrees. model_reference gives each command's fields."
     })
 }
 
@@ -184,7 +184,7 @@ pub(crate) fn live_tools() -> Vec<Value> {
             }
             Some("model_command") => {
                 tool["description"] = json!(
-                    "Apply a JSON model command, or an array of them in order, to the open document through its normal undo workflow; the change is one undo step labelled (agent) in the undo text. While a sketch is open, sketch.* commands on it (and edit_feature of it, undo, redo) go through the sketch session as the user's would; other commands wait until it is finished. Look up the command, or the feature type of add_feature, with model_reference first. File, remote and internal commands are refused. An array stops at the first refused entry (the entries before it are undone, nothing of the array stays; the result names the entry) or at the first entry whose added or edited feature fails (applied; stopped_at names it); undo and redo run alone. isError is true only when a command is refused or a feature it added or edited fails; failed_features lists every failed feature in the timeline (edited, new). The result holds the document's state and what the command changed (changes: features added, changed, recomputed or failed, bodies added or changed, what was removed); timeline: full gives the whole timeline and bodies instead, none neither."
+                    "Apply a JSON model command, or an array of them in order, to the open document through its normal undo workflow; the change is one undo step labeled (agent) in the undo text. While a sketch is open, sketch.* commands on it (and edit_feature of it, undo, redo) go through the sketch session as the user's would; other commands wait until it is finished. Look up the command, or the feature type of add_feature, with model_reference first. File, remote and internal commands are refused. An array stops at the first refused entry (the entries before it are undone, nothing of the array stays; the result names the entry) or at the first entry whose added or edited feature fails (applied; stopped_at names it); undo and redo run alone. isError is true only when a command is refused or a feature it added or edited fails; failed_features lists every failed feature in the timeline (edited, new). The result holds the document's state and what the command changed (changes: features added, changed, recomputed or failed, bodies added or changed, what was removed); timeline: full gives the whole timeline and bodies instead, none neither."
                 );
             }
             // Into the folders for designs (mitcad#689), as
@@ -243,7 +243,7 @@ fn ui_tools() -> Vec<Value> {
         "additionalProperties": false
     });
     let folder_path = json!({"type": "string", "minLength": 1, "maxLength": PATH_CHARS, "description": "A .mitcad file in a folder the user allows agents to use (Preferences > AI Assistants, or the application's --mcp-folder); a relative path is relative to the first allowed folder; '..' is refused"});
-    let point = json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "x, y, z in millimetres"});
+    let point = json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "x, y, z in millimeters"});
     vec![
         tool(
             "document_save",
@@ -259,7 +259,7 @@ fn ui_tools() -> Vec<Value> {
         ),
         tool(
             "document_open",
-            "Open a Mitcad design (.mitcad) in the application's window in place of the open document, as File > Open does, from a folder the user allows agents to use (document_list lists them). The previous document handle becomes invalid; the result carries the new one. Refused while the open document has unsaved changes unless discard is true, while a sketch or command panel is open, and while a dialog would have to ask the user.",
+            "Open a MitCad design (.mitcad) in the application's window in place of the open document, as File > Open does, from a folder the user allows agents to use (document_list lists them). The previous document handle becomes invalid; the result carries the new one. Refused while the open document has unsaved changes unless discard is true, while a sketch or command panel is open, and while a dialog would have to ask the user.",
             json!({
                 "path": folder_path,
                 "discard": {"type": "boolean", "default": false, "description": "Explicitly discard the open document's unsaved changes (they and their recovery data are lost)"}
@@ -338,7 +338,7 @@ fn ui_tools() -> Vec<Value> {
                 "eye": point,
                 "target": point,
                 "up": point,
-                "height": {"type": "number", "minimum": 0.000001, "description": "Millimetres of the model the view shows at the target, top to bottom"},
+                "height": {"type": "number", "minimum": 0.000001, "description": "Millimeters of the model the view shows at the target, top to bottom"},
                 "fov": {"type": "number", "minimum": 1, "maximum": 170, "description": "Vertical field of view of the perspective camera, degrees"},
                 "projection": {"type": "string", "enum": ["orthographic", "perspective"]},
                 "box": {

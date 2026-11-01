@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Exercise shared assignment and Bindings widgets in Qt and AppKit."""
+"""The Material and Appearance tools' fx and pickers (mitcad#1059,
+mitcad#1066) and Configurations' Bindings tab in Qt and AppKit: the steps
+of tools/ui-bindings-test.sh and tools/ui-material-tool-test.sh through the
+macOS frontends."""
 import sys
 import json
 import re
@@ -10,27 +13,21 @@ frontend = "native" if native else "qt"
 lines = ["# SPDX-License-Identifier: MIT", "wait-idle", "window-resize 1280 820",
          "expect-model-bodies 3 48000", "key F6"]
 
+SWITCH_1 = "switch(Color; 'Black'; 'paint_black'; 'Red'; 'paint_red')"
+MATERIAL_SWITCH = "switch(Color; 'Black'; 'abs'; 'Red'; 'pla'; 'steel')"
+
 
 def add(*steps):
     lines.extend(steps)
 
 
+def log(pattern):
+    # An exact log line, quoted for the driver.
+    return "expect-log " + json.dumps("^" + re.escape(pattern) + "$", ensure_ascii=False)
+
+
 def press(label):
-    # Assignment actions can be below the editor's fold. The stable native
-    # control resolves that exact button before scrolling and hit-testing
-    # its actual pointer target; caption and enabled state remain required.
-    assignment_actions = {"Formula Editor…": "assignmentFormula", "Replace with a table": "assignmentReplace"}
-    if native and label in assignment_actions:
-        identifier = assignment_actions[label]
-        add(f"expect-native-text {identifier} '^{label}$'",
-            f"expect-native-enabled {identifier} true", f"native-pointer-click {identifier}")
-    elif label in assignment_actions:
-        identifier = assignment_actions[label]
-        add(f"expect-widget-property {identifier} text '{label}'",
-            f"expect-widget-property {identifier} enabled true",
-            f"focus-widget {identifier}", "key Space")
-    else:
-        add(f"native-pointer-button '^{label}$'" if native else f"button '^{label}$'")
+    add(f"native-pointer-button '^{label}$'" if native else f"button '^{label}$'")
 
 
 def shot(state):
@@ -58,153 +55,134 @@ def body_menu(number, entry):
     add("expect-log '^Context menu: '", "expect-no-log 'Follow Option'")
 
 
-def appearance(number, bound=False):
-    body_menu(number, "Appearance…\tfx" if bound else "Appearance…")
-    add("focus-dialog '^Appearances$'")
-
-
-def appearance_fill(identifier):
-    if native:
-        # The narrow form intentionally leaves a scrolling library. Use its
-        # real search before targeting a row, including after another fill.
-        name = {"paint_black": "Paint - Black", "paint_red": "Paint - Red",
-                "paint_white": "Paint - White"}[identifier]
-        add("native-pointer-click appearanceSearch", "native-key-event Ctrl+a",
-            f"type '{name}'",
-            f"expect-log '^Appearances filtered \"{name}\" .*: 1 shown$'",
-            f"expect-native-visible appearance.{identifier} true",
-            f"native-pointer-dblclick appearance.{identifier}")
-    else:
-        add(f"dialog-dblclick-logged 'Appearances item {identifier} at '")
-
-
-def material_fill(identifier, name):
-    add(f"native-pointer-dblclick material.mitcad/{identifier}" if native else
-        f"dialog-dblclick-logged 'Materials item {name} at '")
-
-
 def tab(name):
     add(f"native-choice configurationsTabs {name}" if native else
         f"dialog-click-logged 'Configurations tab {name}'",
         f"expect-log 'Configurations page {name}'")
 
 
+# The tools' command panels: the AppKit inspector's form or the Qt panel.
+def click_input(command, key):
+    # The control's place as the panel logs it; the AppKit form's control
+    # by its identifier input_<key>.
+    add(f"expect-ever '^Panel {command} input {key} at '", f"click-logged '^Panel {command} input {key} at '")
+
+
+def choose(command, key, text):
+    add(f"native-choice input_{key} '{text}'" if native else f"qt-choice input_{key} '{text}'",
+        "expect-log " + json.dumps(f"^{command}: .* = {re.escape(text)}$", ensure_ascii=False))
+
+
+def label(command, key, text):
+    add(log(f"Panel {command} label {key}: {text}"))
+
+
+def ok():
+    add("native-click commandOk" if native else "key Return")
+
+
+def cancel():
+    add("native-click commandCancel" if native else "key Escape")
+
+
+def fx(command, on):
+    add("mark")
+    click_input(command, "value_fx" if command == "Appearance" else "material_fx")
+    add(log(f"{command}: Varies with an option = {'on' if on else 'off'}"))
+
+
+def picker(command, key, name, text=None):
+    # The picker button opens the picker: the AppKit popover under the tile
+    # (its Qt presenter never on the screen) or the Qt window. A name typed
+    # in its search, Return chooses the first entry that contains it; Escape
+    # closes it choosing nothing.
+    title = f"{name} Picker"
+    picker_log = f"{name} picker"
+    add("mark")
+    click_input(command, key)
+    add(f"expect-log '^{picker_log} opened: [0-9]+ entries, current '")
+    if native:
+        add(f"expect-log '^Native picker libraryPicker at input_{key}: [0-9]+ rows$'",
+            f"expect-native-tiles qt-hidden libraryPicker '^{title}$'")
+    add(f"focus-dialog '^{title}$'")
+    if text is None:
+        add(f"screenshot-screen '${{MITCAD_TEST_WORK}}/{name.lower()}-picker-{frontend}-${{MITCAD_TEST_COLOR_SCHEME}}.png'",
+            "key Escape", log(f"{picker_log} closed"), "focus-main")
+        return
+    add(f"type '{text}'", log(f"{picker_log} search: {text}, first {text}"), "key Return",
+        log(f"{picker_log} chose: {text}"), "focus-main")
+
+
 if native:
     add("expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'",
         "native-appearance '${MITCAD_TEST_COLOR_SCHEME}'")
 
-# Varies with is a pending presentation choice until the actual library
-# double-click fills a row. Each fill is one command/undo step.
-appearance(1)
-add("expect-log 'Appearances panel: Assign to Body1; varies with None'",
-    "capture-undo-depth beforeAppearance")
+# Body1's Appearance… starts the Appearance tool; its fx on, Varies With
+# Color: a row per value, nothing written yet; Paint - Black for Black and
+# Paint - Red for Red; OK writes switch(Color; ...) in one undo step.
+body_menu(1, "Appearance…")
+add(log("Appearance tool for F1.b0"), "capture-undo-depth beforeAppearance")
 if native:
-    add("expect-native-text assignmentTitle '^Assign to Body1$'")
-shot("assignment-none")
-add("mark")
-choice("assignmentVaries", "Color")
-add("expect-log 'Appearances varies with Color: 2 rows, not written yet'",
-    "expect-no-log 'Appearances binding of'", "expect-undo-depth ${beforeAppearance} 0")
-if native:
-    add("expect-native-text assignment.value.0 '^Black \\(now\\)$'",
-        "expect-native-selection assignmentRows 1")
-    # The long appearance form scrolls above the populated assignment panel
-    # and footer, as in Qt. A small supported window must not clamp to the
-    # complete form's height or lose the table/Formula Editor actions.
-    add("native-dialog-resize 720 440",
-        "expect-log '^Native dialog size: requested 720x440, actual 720x440$'",
-        "expect-native-bounds appearanceBody 0",
-        "expect-native-bounds assignmentPanel 0",
-        "expect-native-bounds assignmentRows 0",
-        "expect-native-bounds assignmentFormula 80",
-        "expect-native-bounds appearanceAssign 40",
-        "expect-native-bounds appearanceClose 30",
-        "expect-native-bounds appearanceTextureEmbed 100",
-        "expect-native-bounds appearanceSearch 100",
-        "expect-native-form-layout appearanceBody assignmentTitle assignmentVaries assignmentRows assignmentFormula appearanceAssign appearanceClose")
-    shot("assignment-narrow")
-appearance_fill("paint_black")
-add("expect-log \"Appearances filled Black with 'paint_black'\"",
-    "expect-log 'Appearances assign label: Assign to row Red'",
-    "expect-undo-depth ${beforeAppearance} 1")
-appearance_fill("paint_red")
-add("expect-log \"Appearances filled Red with 'paint_red'\"",
-    "expect-log 'Appearances active row: none'", "expect-undo-depth ${beforeAppearance} 2")
-if native:
-    add("expect-native-selection assignmentRows 0", "expect-native-visible assignmentFx true",
-        "expect-native-text assignment.result.0 '^Paint - Black$'",
-        "expect-native-text assignment.result.1 '^Paint - Red$'")
+    # The fx button on the tile's line, as the shared panel's.
+    add("expect-native-visible input_value_fx true", "expect-native-visible input_value true")
+shot("tool-appearance")
+fx("Appearance", True)
+# Logged as the panel was filled, before the fx.
+add("expect-ever '^Panel Appearance options varies: None \\| Color'", "mark")
+choose("Appearance", "varies", "Color")
+add(log("Appearance tool varies with Color: 2 rows"))
+label("Appearance", "row0", "Black (now)")
+label("Appearance", "row1", "Red")
+add("expect-no-log 'Appearance switch\\('", "expect-undo-depth ${beforeAppearance} 0", "mark")
+choose("Appearance", "row0", "Paint - Black")
+choose("Appearance", "row1", "Paint - Red")
+add("expect-ever '^Panel Appearance option pictures row0: [1-9][0-9]* of '")
 shot("appearance-bound")
-press("Close")
+add("mark")
+ok()
+add(log(f"Appearance {SWITCH_1} for 1 body(ies)"), "expect-undo-depth ${beforeAppearance} 1")
 add("focus-main", "mark")
 choice("configurationChooser_Color", "Red")
 add("expect-log '^Configuration chosen: Color = Red'", "wait-idle", "expect-model-bodies 3 48000")
 
-# The same panel in Materials drives the shared material binding, using
-# actual library double-clicks, including automatic advance to the next row.
-body_menu(2, "Material…")
-add("focus-dialog '^Materials$'", "capture-undo-depth beforeMaterial", "mark")
-choice("assignmentVaries", "Color")
-add("expect-log 'Materials varies with Color: 2 rows, not written yet'",
-    "expect-undo-depth ${beforeMaterial} 0")
-material_fill("abs", "ABS Plastic")
-add("expect-log \"Materials filled Black with 'abs'\"",
-    "expect-log 'Materials assign label: Assign to row Red'",
-    "expect-undo-depth ${beforeMaterial} 1")
-material_fill("pla", "PLA Plastic")
-add("expect-log \"Materials filled Red with 'pla'\"",
-    "expect-log 'Materials active row: none'", "expect-undo-depth ${beforeMaterial} 2")
-shot("material-bound")
-press("Close")
-
-# Back to None keeps the currently displayed Red result. Undo restores the
-# complete binding rather than rewriting it from the current option value.
-appearance(1, bound=True)
-add("expect-log 'Appearances panel: Assign to Body1; varies with Color \\(bound\\)'",
-    "capture-undo-depth beforeNone", "mark")
-choice("assignmentVaries", "None", "Up Return")
-add("expect-log 'Appearances back to None: paint_red for Body1'",
-    "expect-undo-depth ${beforeNone} 1")
-shot("appearance-none-red")
-press("Close")
-add("focus-main", "command edit.undo", "wait-idle", "expect-undo-depth ${beforeNone} 0")
-
-# A custom formula stays custom until an explicit replacement. Opening
-# the real Formula Editor from this panel uses the same shared write path;
-# replacing its presentation with a table alone writes nothing.
-appearance(1, bound=True)
-add("capture-undo-depth beforeCustom")
-press("Formula Editor…")
-add("focus-dialog '^Formula Editor$'")
-custom_formula = "if(Holes == 'Yes'; 'paint_red'; 'paint_black')"
-add("native-pointer-click formulaText" if native else "focus-widget formulaText",
-    "key Ctrl+a", "type " + json.dumps(custom_formula))
-add("expect-native-text formulaText " + json.dumps('^' + re.escape(custom_formula) + '$') if native else
-    "expect-widget-property formulaText plainText " + json.dumps(custom_formula))
-if native:
-    # AppKit can defer smart substitutions until focus leaves the editor.
-    # The actual formula must retain its literal quotes at that point too.
-    add("native-pointer-click formulaFunctionSearch",
-        "expect-native-text formulaText " + json.dumps('^' + re.escape(custom_formula) + '$'))
-press("OK")
-add("expect-native-dialog-gone '^Formula Editor$'" if native else "expect-dialog-gone '^Formula Editor$'",
-    "focus-dialog '^Appearances$'",
-    "expect-log 'Appearances from the Formula Editor: if\\(Holes'",
-    "expect-undo-depth ${beforeCustom} 1")
-if native:
-    add("expect-native-text assignmentCustom '^Custom: if\\(Holes'",
-        "expect-native-visible assignmentReplace true")
-shot("assignment-custom")
+# Body2's Material ▸ More…: the Material tool binds the material to Color
+# the same way (ABS Plastic, PLA Plastic, Steel for any other value). Its
+# picker opens and Escape closes it, choosing nothing.
+body_menu(2, "Material/More…")
+add(log("Material tool for bodies F2.b0"), log("Panel Material bodies note: 1 body: Steel"),
+    "capture-undo-depth beforeMaterial")
+picker("Material", "material", "Material")
+add("expect-no-log '^Material picker chose: '")
+fx("Material", True)
 add("mark")
-press("Replace with a table")
-add("expect-log 'Appearances: the expression replaced with a table of Color \\(not written yet\\)'",
-    "expect-no-log 'Appearances binding of'", "expect-undo-depth ${beforeCustom} 1")
-press("Close")
-add("focus-main", "command edit.undo", "wait-idle", "expect-undo-depth ${beforeCustom} 0")
+choose("Material", "varies", "Color")
+add(log("Material tool varies with Color: 2 rows"))
+label("Material", "row1", "Red (now)")
+choose("Material", "row0", "ABS Plastic")
+choose("Material", "row1", "PLA Plastic")
+shot("material-bound")
+add("mark")
+ok()
+add(log(f"Material tool: varies with Color to 1 bodies: {MATERIAL_SWITCH}"),
+    "expect-undo-depth ${beforeMaterial} 1")
 
-# Existing bindings and a plain assignment produce the shared Mixed notice.
-# Shift-select both value rows; one real library double-click fills all
-# selected rows for all three targets, as a single undo step.
+# Body1's Appearance… again shows its binding (Red the value now); the fx
+# off and OK keep Paint - Red set by hand in one undo step; undo brings the
+# binding back.
+body_menu(1, "Appearance…\tfx")
+add(log(f"Appearance tool: the targets follow {SWITCH_1}"))
+label("Appearance", "row1", "Red (now)")
+add("expect-log '^Panel Appearance tile value: Paint - Red \\('", "capture-undo-depth beforeNone")
+fx("Appearance", False)
+shot("appearance-none-red")
+add("mark")
+ok()
+add(log("Appearance paint_red for 1 body(ies)"), "expect-undo-depth ${beforeNone} 1",
+    "focus-main", "command edit.undo", "wait-idle", "expect-undo-depth ${beforeNone} 0")
+
+# Body1, Body2 and Body3 selected: the tool shows Body1's table; a row
+# changed and OK write the table to all three in one undo step, and undo
+# restores each.
 add("focus-main", "key Escape")
 if native:
     add("native-select native.model.body:F1.b0@",
@@ -215,33 +193,32 @@ else:
     add("click-logged 'Browser Root/Bodies/Body1'",
         "click-logged 'Browser Root/Bodies/Body2' left ctrl",
         "click-logged 'Browser Root/Bodies/Body3' left ctrl")
-appearance(1, bound=True)
-add("expect-log 'Appearances panel: Assign to 3 Bodies'",
-    "expect-log 'Appearances mixed: Mixed:'",
-    "expect-log 'Filling a row gives all 3 bodies this table.'",
-    "capture-undo-depth beforeMixed")
-if native:
-    add("expect-native-text assignmentMixedText '^Mixed: .*Filling a row gives all 3 bodies this table[.]$'",
-        "native-pointer-click assignmentRows/0/0", "native-key-event Shift+Down",
-        "expect-native-selection assignmentRows 2")
-else:
-    # Logged pointer events reach the row viewport directly; establish its
-    # keyboard focus before extending that real click's selection.
-    add("dialog-click-logged 'Appearances value Black at '",
-        "focus-widget assignmentRows", "expect-widget-property assignmentRows focus true",
-        "key Shift+Down",
-        "expect-widget-property appearanceAssign text 'Assign to 2 Rows (3 bodies)'")
-shot("assignment-mixed")
+body_menu(1, "Appearance…\tfx")
+add(log(f"Appearance tool: the targets follow {SWITCH_1}"), "capture-undo-depth beforeMixed", "mark")
+choose("Appearance", "row0", "Paint - White")
+shot("three-bodies")
 add("mark")
-appearance_fill("paint_white")
-add("expect-log \"Appearances filled Black, Red with 'paint_white'\"",
-    "expect-log 'Appearances binding of Body1, Body2 and Body3:'",
-    "expect-undo-depth ${beforeMixed} 1")
-press("Close")
-add("focus-main", "command edit.undo", "wait-idle", "expect-undo-depth ${beforeMixed} 0", "key Escape")
+ok()
+add(log("Appearance switch(Color; 'Black'; 'paint_white'; 'Red'; 'paint_red') for 3 body(ies)"),
+    "expect-undo-depth ${beforeMixed} 1",
+    "focus-main", "command edit.undo", "wait-idle", "expect-undo-depth ${beforeMixed} 0", "key Escape")
+
+# The Appearance tool's picker: Paint - Blue chosen by its search shows on
+# the picker button; Cancel writes nothing.
+body_menu(2, "Appearance…")
+add(log("Appearance tool for F2.b0"), "capture-undo-depth beforePicker")
+picker("Appearance", "value", "Appearance", "Paint - Blue")
+add(log("Panel Appearance tile value: Paint - Blue (Library)"))
+if native:
+    add("expect-native-visible input_value true")
+shot("appearance-picked")
+add("mark")
+cancel()
+add("expect-log '^Command Appearance cancelled'", "expect-undo-depth ${beforePicker} 0", "focus-main")
 
 # Configurations' real fourth tab: actual populated rows, option/search
-# filters, selected warning, editor opening, remove/undo and selection.
+# filters, selected warning, the Material tool started on a binding,
+# remove/undo and selection.
 add("command solid.configurations", "focus-dialog '^Configurations$'")
 tab("Bindings")
 add("expect-log 'Configurations bindings status: 3 bindings, 1 warning'",
@@ -265,10 +242,10 @@ if native:
     add("native-pointer-dblclick configurationsBindings/0/0")
 else:
     add("dialog-dblclick-logged 'Configurations binding Body2 Material at '")
-add("expect-log 'Configurations binding edit: Body2 Material'", "focus-dialog '^Materials$'",
-    "expect-log 'Materials panel: Assign to Body2; varies with Color \\(bound\\)'")
-press("Close")
-add("focus-dialog '^Configurations$'", "mark")
+add("expect-log 'Configurations binding edit: Body2 Material'", log("Material tool for bodies F2.b0"),
+    log(f"Material tool: the targets follow {MATERIAL_SWITCH}"), "focus-main")
+cancel()
+add("expect-log '^Command Material cancelled'", "focus-dialog '^Configurations$'", "mark")
 press("Select in Browser")
 add("expect-log 'Configurations binding select: Body2 Material'", "focus-dialog '^Configurations$'", "mark")
 press("Remove Binding")

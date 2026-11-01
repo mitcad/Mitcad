@@ -15,7 +15,6 @@
 #include <QJsonValue>
 #include <QLabel>
 #include <QLineEdit>
-#include <QLocale>
 #include <QModelIndex>
 #include <QPainter>
 #include <QPalette>
@@ -39,6 +38,7 @@
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 #include "../platform/MacDialogs.hpp"
+#include "../platform/NativeDialogs.hpp"
 #include "PrintKeys.hpp"
 
 namespace mitcad {
@@ -63,17 +63,36 @@ bool parseVolume(QString text, double* volume) {
   return ok;
 }
 
-// The cells' volumes with their unit; the editor takes the number.
+// A cell's volume as data, for both frontends (mitcad#1078): the number
+// is its edit role, its text with the unit its display role ("140 mm³").
+// A text set (a typed one) that is a volume becomes the number, so an
+// unchanged one changes nothing; another text stays as it is, and the
+// window refuses it.
+class VolumeItem : public QTableWidgetItem {
+public:
+  QVariant data(int role) const override {
+    const QVariant value = QTableWidgetItem::data(role);
+    if (role == Qt::DisplayRole && value.typeId() == QMetaType::Double) {
+      return QStringLiteral("%1 mm³").arg(printNumberText(value.toDouble()));
+    }
+    return value;
+  }
+
+  void setData(int role, const QVariant& value) override {
+    double volume = 0.0;
+    if ((role == Qt::EditRole || role == Qt::DisplayRole) && value.typeId() == QMetaType::QString &&
+        parseVolume(value.toString(), &volume)) {
+      QTableWidgetItem::setData(role, volume);
+      return;
+    }
+    QTableWidgetItem::setData(role, value);
+  }
+};
+
+// The Qt editor of a cell: the number alone, in a frameless line.
 class VolumeDelegate : public QStyledItemDelegate {
 public:
   using QStyledItemDelegate::QStyledItemDelegate;
-
-  QString displayText(const QVariant& value, const QLocale& locale) const override {
-    if (value.typeId() != QMetaType::Double) {
-      return QStyledItemDelegate::displayText(value, locale);
-    }
-    return QStringLiteral("%1 mm³").arg(printNumberText(value.toDouble()));
-  }
 
   QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem&, const QModelIndex&) const override {
     auto* editor = new QLineEdit(parent);
@@ -88,10 +107,9 @@ public:
   }
 
   void setModelData(QWidget* editor, QAbstractItemModel* model, const QModelIndex& index) const override {
-    // A text that is no number is taken as it is: the window refuses it.
-    const QString text = static_cast<QLineEdit*>(editor)->text();
-    double volume = 0.0;
-    model->setData(index, parseVolume(text, &volume) ? QVariant(volume) : QVariant(text), Qt::EditRole);
+    // The text as typed, as the AppKit table commits it: the cell and the
+    // window take it from there.
+    model->setData(index, static_cast<QLineEdit*>(editor)->text(), Qt::EditRole);
   }
 };
 
@@ -115,6 +133,9 @@ PurgeVolumesDialog::PurgeVolumesDialog(DocumentHost& host, QWidget* parent) : QD
   setWindowIcon(themeIcon(QStringLiteral("print-3d")));
   auto* layout = new QVBoxLayout(this);
   m_grid = new QTableWidget;
+  m_grid->setObjectName(QStringLiteral("purgeVolumesTable"));
+  // The rows' "From …" labels in the AppKit table too (mitcad#1078).
+  m_grid->setProperty(NativeRowHeaderProperty, true);
   m_grid->setItemDelegate(new VolumeDelegate(m_grid));
   m_grid->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed |
                           QAbstractItemView::AnyKeyPressed);
@@ -124,6 +145,7 @@ PurgeVolumesDialog::PurgeVolumesDialog(DocumentHost& host, QWidget* parent) : QD
   m_grid->setCornerButtonEnabled(false);
   layout->addWidget(m_grid, 1);
   m_message = new QLabel;
+  m_message->setObjectName(QStringLiteral("purgeVolumesMessage"));
   m_message->setWordWrap(true);
   setErrorStyleSheet(m_message);
   m_message->hide();
@@ -198,12 +220,16 @@ void PurgeVolumesDialog::refresh() {
     for (int i = 0; i < n; ++i) {
       const QJsonObject slot = filaments.at(i).toObject();
       const QIcon icon = swatch(QColor(slot.value(QStringLiteral("color")).toString()));
-      m_grid->setVerticalHeaderItem(i, new QTableWidgetItem(icon, tr("From %1").arg(slotName(i))));
+      auto* from = new QTableWidgetItem(icon, tr("From %1").arg(slotName(i)));
+      // The rows' labels in the AppKit table's leading column (mitcad#1078).
+      from->setData(NativeControlIdentifierRole, QStringLiteral("purgeVolumes.from.%1").arg(i));
+      m_grid->setVerticalHeaderItem(i, from);
       m_grid->setHorizontalHeaderItem(i, new QTableWidgetItem(icon, tr("To %1").arg(slotName(i))));
       const QJsonArray row = volumes.at(i).toArray();
       for (int j = 0; j < n; ++j) {
-        auto* item = new QTableWidgetItem;
+        QTableWidgetItem* item = i == j ? new QTableWidgetItem : new VolumeItem;
         item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        item->setData(NativeControlIdentifierRole, QStringLiteral("purgeVolumes.%1.%2").arg(i).arg(j));
         if (i == j) {
           // Nothing from a filament to itself.
           item->setData(Qt::DisplayRole, QStringLiteral("—"));
@@ -218,7 +244,11 @@ void PurgeVolumesDialog::refresh() {
         const bool edited = cell.value(QStringLiteral("edited")).toBool();
         item->setData(Qt::EditRole, volume);
         item->setData(kEditedRole, edited);
-        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable);
+        // Two colours of one material (mitcad#1055): their colours' volume,
+        // which no one sets by hand (the design's volumes are by material).
+        const bool oneMaterial = slotMaterial(i) == slotMaterial(j);
+        item->setFlags(oneMaterial ? Qt::ItemIsEnabled | Qt::ItemIsSelectable
+                                   : Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable);
         if (edited) {
           QFont font = item->font();
           font.setBold(true);
@@ -274,19 +304,21 @@ void PurgeVolumesDialog::cellEdited(int row, int column) {
   if (item == nullptr) {
     return;
   }
-  const QVariant value = item->data(Qt::EditRole);
+  // The number, or the text typed when it is none (VolumeItem), from
+  // either frontend: one path for both.
+  const QString value = item->data(Qt::EditRole).toString();
   const QString from = slotMaterial(row);
   const QString to = slotMaterial(column);
   const QString pair = QStringLiteral("%1 → %2").arg(slotName(row), slotName(column));
   // The model command rebuilds the table: not while the cell commits.
   TestSync::singleShot(0, this, [this, value, from, to, pair] {
-    if (value.typeId() != QMetaType::Double) {
-      setMessage(tr("%1 is not a volume in mm³.").arg(value.toString()), true);
-      qDebug().noquote() << QStringLiteral("Purge volumes refused: %1 = %2").arg(pair, value.toString());
+    double volume = 0.0;
+    if (!parseVolume(value, &volume)) {
+      setMessage(tr("%1 is not a volume in mm³.").arg(value), true);
+      qDebug().noquote() << QStringLiteral("Purge volumes refused: %1 = %2").arg(pair, value);
       refresh();
       return;
     }
-    const double volume = value.toDouble();
     const QJsonArray volumes{
         QJsonObject{{QStringLiteral("from"), from}, {QStringLiteral("to"), to}, {QStringLiteral("volume"), volume}}};
     if (run(volumes)) {

@@ -81,6 +81,9 @@ pub struct Occurrence {
     pub grounded: bool,
     /// The browser's light bulb.
     pub visible: bool,
+    /// Drawn see-through with what it contains (mitcad#1093), independent
+    /// of `visible`.
+    pub transparent: bool,
     /// The number in its name, `Component1:2`.
     pub number: u32,
     /// Owned by a timeline Pattern at Points. Its placement only exists
@@ -288,6 +291,7 @@ impl Assembly {
             transform,
             grounded: false,
             visible: true,
+            transparent: false,
             number,
             pattern: None,
         });
@@ -440,10 +444,7 @@ impl Assembly {
                 return Err(format!("component {}: the name is empty", c.uid));
             }
             if !names.insert(c.name.as_str()) {
-                return Err(format!(
-                    "component name '{}' is used more than once",
-                    c.name
-                ));
+                return Err(format!("component name {} is used more than once", c.name));
             }
             if let Some(f) = c.created_by.filter(|f| !features.contains(f)) {
                 return Err(format!("{}: feature {f} does not exist", c.name));

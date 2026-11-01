@@ -45,11 +45,24 @@ def material():
         "expect-log 'Cut sheet material dialog opened'")
 
 
+def export_menu(entry):
+    # The CUT SHEET tab's Export group (mitcad#1008): its caption's menu,
+    # in AppKit the native ribbon's (mitcad#1073).
+    add(f"native-popup native.ribbon.group.export '{entry}'" if native else
+        "click-logged '^Drawing Export at '")
+    if not native:
+        add(f"popup '{entry}'")
+
+
 def export_open():
-    # The drawing workspace is a visible Qt editor in the embedded OCCT
-    # viewport in either shell. Its actual tool button opens its format menu.
-    add("click-logged '^Drawing Export at '", "popup 'DXF…'",
-        "focus-dialog '^Export Cut Sheet$'")
+    if native:
+        # The Export menu's DXF… item by its action: chosen inside the
+        # popup's tracking loop (native-popup), its file panel would run
+        # modally in that loop and the step would never return.
+        add("native-action drawing.export_dxf")
+    else:
+        export_menu("DXF…")
+    add("focus-dialog '^Export Cut Sheet$'")
 
 
 if native:
@@ -90,9 +103,21 @@ else:
 press("OK")
 add("focus-main", "expect-log 'Create Drawing dialog: cut sheet 600 x 300'",
     "expect-log 'Drawing created: D1 CutSheet1 in C0'", "expect-log 'Drawing sheet drawn: 0 views'",
-    "expect-undo-depth ${baseline} 1", "capture-undo-depth beforeParts", "mark",
-    "click-logged '^Drawing Add Parts at '", "focus-dialog '^Add Parts$'",
-    "expect-log 'Cut sheet Add Parts dialog opened: 2 bodies'")
+    "expect-log 'Ribbon tabs: CUT SHEET \\(shown CUT SHEET\\)'")
+if native:
+    # The CUT SHEET tab alone in the AppKit ribbon, of the cards only the
+    # Browser (mitcad#1073).
+    add("expect-log 'Native workspaces: Cut Sheet \\(shown Cut Sheet\\)'",
+        "expect-log 'Native cards: Browser only \\(a drawing is open\\)'",
+        "expect-native-visible native.ribbon.drawing.close true",
+        "expect-native-visible native.ribbon.drawing.add_parts true",
+        "expect-native-visible native.ribbon.group.export true",
+        "expect-native-present native.ribbon.group.dimensions false",
+        "expect-native-visible native.sidebar true",
+        "expect-native-visible native.historyCard false")
+add("expect-undo-depth ${baseline} 1", "capture-undo-depth beforeParts", "mark",
+    "native-click native.ribbon.drawing.add_parts" if native else "click-logged '^Drawing Add Parts at '",
+    "focus-dialog '^Add Components$'", "expect-log 'Cut sheet Add Parts dialog opened: 2 bodies'")
 if native:
     # addParts explicitly gives its list the initial keyboard focus. The
     # native dialog must honour that before any corrective pointer input.
@@ -151,7 +176,7 @@ add("click-logged '^Drawing view 1 at '", "expect-log 'Drawing view 1 selected'"
     "context-menu-logged '^Drawing view 1 at ' 'Add Copy'",
     "expect-log 'Drawing sheet drawn: 5 views'", "expect-undo-depth ${beforeCopy} 1",
     "capture-undo-depth beforeDelete", "mark",
-    "context-menu-logged '^Drawing view 5 at ' 'Delete Part'",
+    "context-menu-logged '^Drawing view 5 at ' 'Delete Component'",
     "expect-log 'Drawing sheet drawn: 4 views'", "expect-undo-depth ${beforeDelete} 1",
     "command edit.undo", "wait-idle", "expect-log 'Drawing sheet drawn: 5 views'",
     "expect-undo-depth ${beforeDelete} 0", "command edit.redo", "wait-idle",
@@ -159,9 +184,10 @@ add("click-logged '^Drawing view 1 at '", "expect-log 'Drawing view 1 selected'"
     "capture-undo-depth beforeExport", "mark")
 
 # Cancel and accept the real file chooser opened by the actual format
-# popup. The saved DXF and model are checked independently by the harness.
-add("click-logged '^Drawing Export at '", "popup 'Part Names on the LABEL Layer'",
-    "expect-log '^Cut sheet labels: on$'")
+# popup (AppKit: its Export menu's action). The saved DXF and model are
+# checked independently by the harness.
+export_menu("Component Names on the LABEL Layer")
+add("expect-log '^Cut sheet labels: on$'")
 export_open()
 if native:
     add("native-file-cancel", "expect-native-dialog-gone '^Export Cut Sheet$'")

@@ -128,6 +128,10 @@ key Escape
 mark
 command solid.box
 expect-log 'Command Box started'
+# The view shows the origin as its light bulb does (mitcad#1030).
+click-logged 'Browser eye Root/Origin'
+expect-log 'Visibility Root/Origin: shown'
+expect-log 'Datum xy at'
 click-logged 'Datum xy'
 focus-widget input_at_offset1
 key ctrl+a
@@ -159,20 +163,29 @@ expect-model-bodies 1 48000
 wait-log 'Render scene [0-9]+: 1 bodies' 30
 wait-log 'Render frame view [0-9]+ [0-9]+x[0-9]+ samples 16 ' 120
 
-# A real appearance assignment updates the material in the live scene.
-click-visible-face
-command solid.appearances
-focus-dialog '^Appearances$'
-focus-widget appearanceSearch
-type 'Glass - Clear'
-wait-log 'Appearances filtered "Glass - Clear" .*1 shown' 6
-focus-widget appearanceLibrary
-key Home Down
-expect-log 'Appearance selected: glass_clear'
+# A real appearance assignment updates the material in the live scene:
+# the Appearance tool on the body picked in the view, Glass - Clear chosen
+# in its picker (the AppKit frontend's popover), OK (mitcad#1059,
+# mitcad#1066).
+key Escape
 mark
-button '^Assign to 1 body$'
+command solid.appearance
+expect-log 'Command Appearance started'
+wait-log '^Pick places:' 30
+click-pick 'face '
+expect-log '^Panel Appearance input value at '
+click-logged '^Panel Appearance input value at '
+expect-log '^Appearance picker opened: '
+focus-dialog '^Appearance Picker$'
+type 'Glass - Clear'
+expect-log '^Appearance picker search: Glass - Clear, first Glass - Clear$'
+key Return
+expect-log '^Appearance picker chose: Glass - Clear$'
+focus-main
+mark
+button '^OK$'
+expect-log '^Appearance glass_clear for 1 body\(ies\)$'
 wait-log 'Render material swap .* -> glass_clear' 30
-button '^Close$'
 focus-main
 wait-log 'Render frame view [0-9]+ [0-9]+x[0-9]+ samples 16 ' 120
 screenshot-view '${MITCAD_METAL_SHOTS}/glass.png'
@@ -252,8 +265,6 @@ text = text.replace("focus-widget renderDevice\nkey Home Down Down",
                     "native-choice renderDevice " + shlex.quote(metal["name"] + " (METAL)"))
 text = text.replace("focus-widget renderDevice\nkey Home Down",
                     "native-choice renderDevice " + shlex.quote("CPU: " + cpu["name"]))
-text = text.replace('focus-widget appearanceSearch\ntype \'Glass - Clear\'\nwait-log \'Appearances filtered "Glass - Clear" .*1 shown\' 6\nfocus-widget appearanceLibrary\nkey Home Down',
-                    "native-type appearanceSearch 'Glass - Clear'\nnative-select appearance.glass_clear")
 for field, value in (("width", 320), ("height", 240), ("samples", 16), ("samples", 65536)):
     text = text.replace(f"focus-widget renderImage_{field}\nkey ctrl+a\ntype {value}",
                         f"native-type renderImage_{field} {value}")

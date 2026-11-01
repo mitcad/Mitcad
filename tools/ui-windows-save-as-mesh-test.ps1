@@ -40,7 +40,7 @@ New-Item -ItemType Directory -Force $meshes | Out-Null
 $workLogged = $work -replace '\\', '/'
 # The entry's text, its ellipsis one character (kept out of this file's
 # bytes: Windows PowerShell reads a file without a BOM as ANSI).
-$entry = 'Save As Mesh' + [char]0x2026
+$entry = 'Save as Mesh' + [char]0x2026
 
 $modelScript = Join-Path $work 'model.json'
 $design = Join-Path $work 'bench.mitcad'
@@ -92,12 +92,12 @@ function Row-Menu([string]$Row) {
   Ui-Step "right-click $Row"             { Ui-ClickLogged $Row 3 }
   Ui-ExpectNew 'Context menu: ' "the menu of $Row opened"
 }
-# Save-Dialog: Save As Mesh... chosen, its dialog given the keyboard.
+# Save-Dialog: Save as Mesh... chosen, its dialog given the keyboard.
 function Save-Dialog {
   Ui-Mark
   Menu-Choose $entry
   Ui-ExpectNew 'Save As Mesh dialog opened: ' 'the dialog opened'
-  Ui-FocusDialog '^Save As Mesh$'
+  Ui-FocusDialog '^Save as Mesh$'
 }
 # Accept-File "title regex": the file dialog's proposed name taken.
 function Accept-File([string]$Title) {

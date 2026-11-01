@@ -569,9 +569,9 @@ fn manifests_and_library_folders_are_checked() {
         .map(|e| e.as_str().unwrap())
         .collect();
     let has = |text: &str| errors.iter().any(|e| e.contains(text));
-    assert!(has("'Broken Library' is no library id"), "{errors:?}");
+    assert!(has("Broken Library is no library id"), "{errors:?}");
     assert!(has("the library has no name"), "{errors:?}");
-    assert!(has("a: '../outside.mitcad' is no path"), "{errors:?}");
+    assert!(has("a: ../outside.mitcad is no path"), "{errors:?}");
     assert!(has("b-part: the id is used twice"), "{errors:?}");
     assert!(
         has("b-part: parts/b.mitcad links other files"),
@@ -584,7 +584,7 @@ fn manifests_and_library_folders_are_checked() {
     );
     let warnings = answer["warnings"].to_string();
     assert!(
-        warnings.contains("the licence Proprietary is not one a community index accepts"),
+        warnings.contains("the license Proprietary is not one a community index accepts"),
         "{warnings}"
     );
     assert!(warnings.contains("no LICENSE file"), "{warnings}");

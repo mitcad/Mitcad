@@ -36,6 +36,14 @@ void setLayoutPreference(ChromeStyle style);
 bool layoutChoosable();
 void setLayoutChoosable(bool choosable);
 
+// The native macOS interface (mitcad#1056; Settings › General in macOS
+// builds with the AppKit frontend): the setting appearance/nativeMacInterface,
+// off unless chosen, so that MitCad starts in Qt. main() reads it before the
+// application object exists; --ui=native|qt (and --chrome, a Qt layout)
+// overrides it for one run, and a change applies at the next start.
+bool nativeUiPreference();
+void setNativeUiPreference(bool native);
+
 // Native Liquid Glass behind the Floating chrome's cards (macOS 26+): each
 // card is then a window of its own (GlassCard::setWindowed). On by default
 // where the system has it; --no-glass turns it off (the cards paint their

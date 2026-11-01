@@ -230,9 +230,9 @@ fn commands_build_a_part_and_queries_describe_it() {
     assert_eq!(
         query(&doc, json!({"query": "timeline"})),
         json!({"marker": 2, "features": [
-            {"uid": "F1", "name": "Sketch1", "type": "sketch", "suppressed": false, "status": "ok", "error": null,
+            {"uid": "F1", "name": "Sketch1", "type": "sketch", "suppressed": false, "status": "ok", "error": null, "level": null,
              "dof": 0, "visible": false, "visible_set": false},
-            {"uid": "F2", "name": "Extrude1", "type": "extrude", "suppressed": false, "status": "ok", "error": null,
+            {"uid": "F2", "name": "Extrude1", "type": "extrude", "suppressed": false, "status": "ok", "error": null, "level": null,
              "sketches": ["F1"]}
         ]})
     );
@@ -385,7 +385,7 @@ fn parameters_take_expressions_and_units() {
         .unwrap_err();
     assert_eq!(
         error.to_string(),
-        "parameter 'd3' cannot change to 'deg': Extrude1 uses it as a length"
+        "parameter d3 cannot change to deg: Extrude1 uses it as a length"
     );
     let error = doc
         .command(r#"{"cmd": "add_parameter", "name": "x", "value": 1, "expression": "2"}"#)
@@ -520,7 +520,7 @@ fn rejected_commands_and_queries_say_why() {
             &mut doc,
             r#"{"cmd": "set_parameter", "name": "x", "value": 1}"#
         ),
-        "unknown parameter 'x'"
+        "unknown parameter x"
     );
     // A batch stops at the first failure; earlier commands stay applied.
     let batch = r#"[{"cmd": "sketch.create"}, {"cmd": "set_marker", "position": 9}]"#;

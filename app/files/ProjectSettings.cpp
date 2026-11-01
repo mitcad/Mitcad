@@ -711,7 +711,7 @@ void ProjectSettingsDialog::shareFinished(RemoteTask* done, const QString& url, 
   const bool set = answer.value(QStringLiteral("set")).isObject() && !answer.value(QStringLiteral("undone")).toBool();
   if (!set) {
     qInfo().noquote() << QStringLiteral("Project Settings: share failed (%1): %2").arg(cls, errorMessageOf(answer));
-    m_problem->setText(cls == QLatin1String("cancelled") ? tr("Cancelled: nothing changed.")
+    m_problem->setText(cls == QLatin1String("cancelled") ? tr("Canceled: nothing changed.")
                                                          : errorMessageOf(answer));
     m_share->setEnabled(true);
     return;

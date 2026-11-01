@@ -323,7 +323,7 @@ impl<K: ImportKernel> Primitives<K> for Importer<'_, K> {
     fn sphere_def(&self, d: &PrimitiveDetail, at: &Placed) -> Result<Value, String> {
         let (_, diameter) = self.size(&d.diameter, "diameter")?;
         if !at.on_plane() {
-            return Err("a sphere whose centre is not in the plane".to_owned());
+            return Err("a sphere whose center is not in the plane".to_owned());
         }
         Ok(
             json!({"type": "sphere", "center": [at.origin[0], at.origin[1]],
@@ -335,7 +335,7 @@ impl<K: ImportKernel> Primitives<K> for Importer<'_, K> {
         let (_, diameter) = self.size(&d.major_diameter, "diameter")?;
         let (_, section) = self.size(&d.minor_diameter, "section diameter")?;
         if !at.on_plane() {
-            return Err("a torus whose centre is not in the plane".to_owned());
+            return Err("a torus whose center is not in the plane".to_owned());
         }
         Placed::along(at.z, 2).ok_or("a torus whose axis is not the plane's normal")?;
         let position = match d.torus_position.as_deref() {

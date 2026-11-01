@@ -31,8 +31,8 @@ GROUPS = (
     ("libraries", "Libraries", "production"),
     ("new-project", "New Project", "production"),
     ("parameters", "Parameters, invalid Return/Tab and correction", "production"),
-    ("parts-fixture", "Library Parts fixture", "fixture"),
-    ("picker-fixture", "Part Picker fixture and production BUILD options", "fixture+production"),
+    ("parts-fixture", "Library Components fixture", "fixture"),
+    ("picker-fixture", "Component Picker fixture and production BUILD options", "fixture+production"),
     ("project-settings", "Project Settings", "shared-entry-fixture"),
     ("projects", "Open a Project and selected Projects design + Return", "fixture+production"),
     ("publish", "Publish to Library", "production"),
@@ -44,14 +44,14 @@ GROUPS = (
     ("settings-navigation", "Settings Navigation", "production"),
     ("settings-textures", "Settings Textures", "production"),
     ("shortcuts", "Keyboard Shortcuts", "production"),
-    ("print", "3D Print", "production"),
+    ("print", "Send to Slicer", "production"),
     ("profiles", "Printers and Processes", "production"),
     ("materials", "Materials", "production"),
     ("properties", "Properties", "production"),
     ("export", "Export", "production"),
     ("find", "Find in Design", "production"),
     ("overview", "Keyboard and Mouse Overview", "production"),
-    ("parts-production", "Library Parts production entry", "production"),
+    ("parts-production", "Library Components production entry", "production"),
 )
 FAILURES = (
     "TestDriver: FAIL", "Unable to simultaneously satisfy constraints",
@@ -154,12 +154,12 @@ def parameter_states(s):
 
 def build_picker(s):
     # A fixture capture is kept separately from the production command path.
-    s.add("show-dialog-style-fixture picker", "focus-dialog '^Part Picker'")
+    s.add("show-dialog-style-fixture picker", "focus-dialog '^Component Picker'")
     s.capture("picker-fixture")
     s.add("button '^Close$'", "focus-main", "mark", "command build.profile",
           "expect-log 'Command Profile started'")
     s.add("native-pointer-click input_part" if s.native else "click-logged 'Panel Profile input part at '")
-    s.add("expect-log 'Part picker opened: 2 parts for build.profile'", "focus-dialog '^Part Picker'")
+    s.add("expect-log 'Part picker opened: 2 parts for build.profile'", "focus-dialog '^Component Picker'")
     s.capture("build-picker")
     if s.native:
         s.add("expect-native-tiles pictures partPickerGrid 2",
@@ -296,9 +296,9 @@ def make_scenario(group, frontend, theme, directory):
     elif group == "parameters":
         parameter_states(s)
     elif group == "parts-fixture":
-        s.add("show-dialog-style-fixture parts", "focus-dialog '^Library Parts$'")
+        s.add("show-dialog-style-fixture parts", "focus-dialog '^Library Components$'")
         s.capture("parts-fixture")
-        s.close("^Library Parts$")
+        s.close("^Library Components$")
     elif group == "picker-fixture":
         build_picker(s)
     elif group == "project-settings":
@@ -310,9 +310,9 @@ def make_scenario(group, frontend, theme, directory):
     elif group == "selection":
         selection(s)
     elif group == "print":
-        s.add("command make.print3d", "expect-log 'Command 3D Print started'")
+        s.add("command make.print3d", "expect-log 'Command Send to Slicer started'")
         s.capture(group, dialog=False)
-        s.add("key Escape", "expect-log 'Command 3D Print cancelled'")
+        s.add("key Escape", "expect-log 'Command Send to Slicer cancelled'")
     elif group == "parts-production":
         s.open("insert.library_component", "^Insert from Library$")
         if s.native:
@@ -325,9 +325,9 @@ def make_scenario(group, frontend, theme, directory):
                   "expect-ever '^Library browser selected mitcad-parts/iso4762:'",
                   "key Return")
         s.add("expect-log 'Inserted component .* from mitcad-parts'", "wait-idle", "focus-main")
-        s.open("tools.library_parts", "^Library Parts$")
+        s.open("tools.library_parts", "^Library Components$")
         s.capture(group)
-        s.close("^Library Parts$")
+        s.close("^Library Components$")
     else:
         raise ValueError(group)
     # Brackets prevent the command's own log echo matching whole-log checks.

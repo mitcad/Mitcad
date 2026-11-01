@@ -12,6 +12,7 @@ and helpers of the model that need nothing of its core.
 | `sweeps`, `surfaces`, `surface_modelling`, `boundary`, `analysis` | Specifications of sweeps, surfaces and boundary bodies, analyses |
 | `parameters`, `properties`, `configurations` | Parameters, typed properties, configuration tables |
 | `appearance`, `render_settings` | Appearances and render settings |
+| `material_class` | Material classes of materials and appearances (mitcad#1102) |
 | `monitor`, `fingerprint`, `sha256`, `base64`, `iso286` | Recompute progress, result fingerprints, hashes, Base64, ISO 286 fits |
 | `values`, `occurrence` | Command values (`ValueInput`, `resolve_value`) and the model's command error (`ModelError`); occurrence paths and links to other components' geometry (`OccurrencePath`, `OccurrenceLink`), moved down for the sketch crate (mitcad#780) |
 | `image_header` | The format, size and pixel size of PNG, JPEG, BMP and WebP files from their headers, and of HEIF files' HEVC still images as shown (`irot`, `clap`; mitcad#850) (image references, mitcad#782) |

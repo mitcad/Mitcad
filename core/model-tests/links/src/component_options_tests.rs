@@ -477,8 +477,7 @@ fn the_configure_query_of_a_component_tries_its_values() {
 
 #[test]
 fn a_linked_design_with_options_follows_the_design_and_its_file() {
-    let dir = std::env::temp_dir().join(format!("mitcad-component-options-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("component-options");
     std::fs::write(dir.join("board.mitcad"), board().to_json()).unwrap();
     let mut doc = shelf();
     let answer = command(
@@ -516,15 +515,14 @@ fn a_linked_design_with_options_follows_the_design_and_its_file() {
     )
     .unwrap_err();
     assert!(error.contains("insert it linked"), "{error}");
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }
 
 #[test]
 fn a_linked_design_with_options_outside_the_project_is_not_read() {
     // mitcad#929: a link out of the design's folder (in no project) is not
     // followed; the design saved with the project stays.
-    let dir = std::env::temp_dir().join(format!("mitcad-929-options-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("929-options");
     std::fs::write(dir.join("board.mitcad"), board().to_json()).unwrap();
     let mut doc = shelf();
     let answer = command(
@@ -554,5 +552,5 @@ fn a_linked_design_with_options_outside_the_project_is_not_read() {
     let refused = "board: the link outside the project is not followed (../../outside.mitcad); \
                    it keeps the design saved with the project";
     assert_eq!(messages, [refused]);
-    std::fs::remove_dir_all(&dir).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
 }

@@ -102,7 +102,7 @@ pub fn describe_parts(answer: &str) -> Result<String, VcsError> {
         let mut line = format!("{:>3}  {}", row["quantity"], s("designation"));
         if !row["library"].is_null() {
             let license = if s("license").is_empty() {
-                "no licence".to_owned()
+                "no license".to_owned()
             } else {
                 s("license")
             };

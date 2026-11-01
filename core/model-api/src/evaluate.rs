@@ -76,7 +76,7 @@ impl<K: Kernel> EvaluateOps<K> for Document<K> {
             Some(name) => {
                 let id = params
                     .find(name)
-                    .ok_or_else(|| ApiError(format!("unknown parameter '{name}'")))?;
+                    .ok_or_else(|| ApiError(format!("unknown parameter {name}")))?;
                 unit = params.get(id).expect("found").unit();
                 Some(id)
             }
@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(result["value"], json!(6.25));
         assert_eq!(result["expression"], json!("d1 * 1.5 + max(d1, 2)"));
         let error = evaluate(&doc, json!({"query": "evaluate", "expression": "max(1,5)"}));
-        assert!(error.unwrap_err().contains("'max(1; 5)'"));
+        assert!(error.unwrap_err().contains("“max(1; 5)”"));
     }
 
     #[test]

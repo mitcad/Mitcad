@@ -434,7 +434,7 @@ impl Parser<'_> {
             self.at += 1;
             Ok(())
         } else {
-            Err(self.error(&format!("'{}' expected", byte as char)))
+            Err(self.error(&format!("“{}” expected", byte as char)))
         }
     }
 
@@ -580,7 +580,7 @@ impl Parser<'_> {
         // `1.E-5` and `1.` are reals; Rust reads `1.E-5` as well.
         text.parse::<f64>()
             .map(Value::Real)
-            .map_err(|_| self.error(&format!("'{text}' is no number")))
+            .map_err(|_| self.error(&format!("“{text}” is no number")))
     }
 
     /// A string with its escapes decoded (ISO 10303-21, 6.4.3).

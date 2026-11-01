@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/browser
-# Change Parameters (U3) through the real UI on the demo block (60 x 40 x 20
+# Edit Parameters (U3) through the real UI on the demo block (60 x 40 x 20
 # mm: d1, d2, d3), with the volumes the model reports:
 #   - Add a user parameter (width = 30 mm).
 #   - Expressions in place: d1 = width + 5 mm, d2 = d1 * 2.
@@ -44,7 +44,7 @@ edit_cell() {
 ui_start_display
 ui_start_app --demo
 ui_mark
-ui_step "Change Parameters (search)"     ui_command "Change Parameters"
+ui_step "Edit Parameters (search)"     ui_command "Edit Parameters"
 ui_expect_new "Parameters dialog opened" "the dialog opened"
 ui_expect_new "Parameters: d1 = 60 mm (60 mm); d2 = 40 mm (40 mm); d3 = 20 mm (20 mm)" \
   "the model's parameters listed"

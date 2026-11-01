@@ -80,11 +80,107 @@
           "junctions": ["L", "T"],
           "space": "inner_corner",
           "mates": [{ "frame": "mount_a", "to": "slot" }, { "frame": "mount_b", "to": "slot" }],
+          "fasteners": [{ "frame": "mount_a",
+                          "nut": { "library": "example-profiles", "component": "tnut8" },
+                          "screw": { "library": "example-profiles", "component": "screw6" } }],
           "machining": [{ "on": "a", "frame": "end", "hole": { "diameter": "6.8 mm", "depth": "15 mm" } }]
         }
       },
       "supplier": "Example supplier",
       "part_number": "BR30"
+    },
+    {
+      "id": "S3",
+      "library": { "library": "example-profiles", "url": "https://example.org/example-profiles.git",
+                   "rev": "1111111111111111111111111111111111111111", "label": "v1.0.0",
+                   "component": "tnut8", "path": "nuts/tnut8.mitcad", "license": "MIT" },
+      "name": "T-nut B8",
+      "design": { "text": {
+        "format": "mitcad", "version": 2, "units": { "length": "mm", "angle": "deg" },
+        "parameters": [
+          { "name": "nl", "expression": "10 mm", "unit": "mm" },
+          { "name": "nw", "expression": "16 mm", "unit": "mm" },
+          { "name": "nh", "expression": "4 mm", "unit": "mm" }
+        ],
+        "features": [
+          { "uid": "F1", "name": "Block", "type": "box", "plane": "xy", "corner": [-5, -8],
+            "length": "nl", "width": "nw", "height": "nh", "operation": "new_body" },
+          { "uid": "F2", "name": "mount:slot", "type": "joint_origin",
+            "geometry": { "origin": [0, 0, 0], "normal": [0, 0, 1], "x_axis": [1, 0, 0] } }
+        ]
+      } },
+      "build": {
+        "role": "fastener",
+        "systems": [{ "type": "B", "slot": 8 }],
+        "frames": [{ "name": "slot", "kind": "slot" }]
+      },
+      "supplier": "Example supplier",
+      "part_number": "TN8"
+    },
+    {
+      "id": "S4",
+      "library": { "library": "example-profiles", "url": "https://example.org/example-profiles.git",
+                   "rev": "1111111111111111111111111111111111111111", "label": "v1.0.0",
+                   "component": "screw6", "path": "screws/screw6.mitcad", "license": "MIT" },
+      "name": "Screw M6x12",
+      "design": { "text": {
+        "format": "mitcad", "version": 2, "units": { "length": "mm", "angle": "deg" },
+        "parameters": [
+          { "name": "dk", "expression": "10 mm", "unit": "mm" },
+          { "name": "k", "expression": "6 mm", "unit": "mm" },
+          { "name": "d", "expression": "6 mm", "unit": "mm" },
+          { "name": "shank", "expression": "-12 mm", "unit": "mm" }
+        ],
+        "features": [
+          { "uid": "F1", "name": "Head", "type": "cylinder", "plane": "xy", "center": [0, 0],
+            "diameter": "dk", "height": "k", "operation": "new_body" },
+          { "uid": "F2", "name": "Shank", "type": "cylinder", "plane": "xy", "center": [0, 0],
+            "diameter": "d", "height": "shank", "operation": "join", "participants": ["F1.b0"] }
+        ]
+      } },
+      "supplier": "Example supplier",
+      "part_number": "M6x12"
+    },
+    {
+      "id": "S5",
+      "library": { "library": "example-profiles", "url": "https://example.org/example-profiles.git",
+                   "rev": "1111111111111111111111111111111111111111", "label": "v1.0.0",
+                   "component": "angle30", "path": "connectors/angle30.mitcad", "license": "MIT" },
+      "name": "Angle 30",
+      "design": { "text": {
+        "format": "mitcad", "version": 2, "units": { "length": "mm", "angle": "deg" },
+        "parameters": [
+          { "name": "arm", "expression": "40 mm", "unit": "mm" },
+          { "name": "wide", "expression": "20 mm", "unit": "mm" },
+          { "name": "t", "expression": "4 mm", "unit": "mm" }
+        ],
+        "features": [
+          { "uid": "F1", "name": "Arm a", "type": "box", "plane": "xy", "corner": [0, -10],
+            "length": "arm", "width": "wide", "height": "t", "operation": "new_body" },
+          { "uid": "F2", "name": "Arm b", "type": "box", "plane": "xy", "corner": [0, -10],
+            "length": "t", "width": "wide", "height": "arm", "operation": "join", "participants": ["F1.b0"] },
+          { "uid": "F3", "name": "mount:mount_a", "type": "joint_origin",
+            "geometry": { "origin": [20, 0, 0], "normal": [0, 0, -1], "x_axis": [1, 0, 0] } },
+          { "uid": "F4", "name": "mount:mount_b", "type": "joint_origin",
+            "geometry": { "origin": [0, 0, 20], "normal": [-1, 0, 0], "x_axis": [0, 0, 1] } }
+        ]
+      } },
+      "build": {
+        "role": "connector",
+        "systems": [{ "type": "B", "slot": 8 }],
+        "frames": [{ "name": "mount_a", "kind": "face" }, { "name": "mount_b", "kind": "face" }],
+        "connector": {
+          "junctions": ["L", "T"],
+          "space": "inner_corner",
+          "mates": [{ "frame": "mount_a", "to": "slot" }, { "frame": "mount_b", "to": "slot" }],
+          "fasteners": [{ "frame": "mount_a",
+                          "nut": { "library": "example-profiles", "component": "tnut8" },
+                          "screw": { "library": "example-profiles", "component": "screw6" } }],
+          "machining": [{ "on": "a", "frame": "end", "hole": { "diameter": "6.8 mm", "depth": "15 mm" } }]
+        }
+      },
+      "supplier": "Example supplier",
+      "part_number": "AN30"
     }
   ]
 }

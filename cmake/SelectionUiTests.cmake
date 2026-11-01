@@ -16,13 +16,13 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli)
   # is activated by the system in the VM's session 0 (ssh), so no other
   # process can deactivate one and hide its tooltip or focus, as with the
   # PowerShell UI tests, which already run side by side there. On macOS
-  # they run alone (RUN_SERIAL): one Aqua session, whose frontmost
-  # application, key window and menu bar every UI test there shares
-  # (tools/test-macos.sh runs one at a time).
+  # they share the macos_desktop resource lock: one Aqua session, whose
+  # frontmost application, key window and menu bar every UI test shares.
+  # Other tests may run beside them (tools/test-macos.sh).
   set(selection_ui_alone "")
   if(APPLE AND MITCAD_MACOS_UI_TESTS)
     set(selection_ui_platform macos)
-    set(selection_ui_alone RUN_SERIAL TRUE)
+    set(selection_ui_alone RESOURCE_LOCK macos_desktop)
   elseif(WIN32 AND MITCAD_MESA_DIR)
     set(selection_ui_platform windows)
   elseif(UNIX AND NOT APPLE)

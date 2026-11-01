@@ -94,20 +94,20 @@ impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             ParseErrorKind::Empty => f.write_str("empty expression")?,
-            ParseErrorKind::UnexpectedChar(c) => write!(f, "unexpected character '{c}'")?,
+            ParseErrorKind::UnexpectedChar(c) => write!(f, "unexpected character “{c}”")?,
             ParseErrorKind::InvalidNumber => f.write_str("number out of range")?,
             ParseErrorKind::PowerOperator => f.write_str("use '^' for powers, not '**'")?,
             ParseErrorKind::SingleEquals => f.write_str("use '==' to compare, not '='")?,
             ParseErrorKind::Unexpected { found, expected } => {
-                write!(f, "expected {expected}, found '{found}'")?;
+                write!(f, "expected {expected}, found “{found}”")?;
             }
             ParseErrorKind::UnexpectedEnd { expected } => {
                 write!(f, "expected {expected}, found the end of the expression")?;
             }
-            ParseErrorKind::UnknownFunction(name) => write!(f, "unknown function '{name}'")?,
-            ParseErrorKind::Unsupported(name) => write!(f, "'{name}' is not supported")?,
+            ParseErrorKind::UnknownFunction(name) => write!(f, "unknown function {name}")?,
+            ParseErrorKind::Unsupported(name) => write!(f, "{name} is not supported")?,
             ParseErrorKind::MissingArguments(name) => {
-                write!(f, "function '{name}' needs arguments in parentheses")?;
+                write!(f, "function {name} needs arguments in parentheses")?;
             }
             ParseErrorKind::WrongArgumentCount {
                 function,
@@ -115,23 +115,23 @@ impl fmt::Display for ParseError {
                 found,
                 suggestion,
             } => {
-                write!(f, "'{function}' takes {expected} arguments, found {found}")?;
+                write!(f, "{function} takes {expected} arguments, found {found}")?;
                 if let Some(call) = suggestion {
                     write!(
                         f,
-                        "; separate them with ';' or a space after the comma: '{call}'"
+                        "; separate them with ';' or a space after the comma: “{call}”"
                     )?;
                 }
             }
-            ParseErrorKind::UnknownUnit(name) => write!(f, "unknown unit '{name}'")?,
+            ParseErrorKind::UnknownUnit(name) => write!(f, "unknown unit {name}")?,
             ParseErrorKind::UnitWithoutValue(name) => {
-                write!(f, "unit '{name}' must follow a number or an expression")?;
+                write!(f, "unit {name} must follow a number or an expression")?;
             }
             ParseErrorKind::InvalidUnitPower => f.write_str("invalid unit power")?,
             ParseErrorKind::IncompatibleUnits(name) => {
                 write!(
                     f,
-                    "unit '{name}' cannot be combined with another unit of its kind"
+                    "unit {name} cannot be combined with another unit of its kind"
                 )?;
             }
             ParseErrorKind::TooComplex => f.write_str("expression is too complex")?,
@@ -147,14 +147,14 @@ impl fmt::Display for ParseError {
                 } else {
                     "conditions and values in pairs"
                 };
-                write!(f, "'{function}' takes {pairs}, found {found} arguments")?;
+                write!(f, "{function} takes {pairs}, found {found} arguments")?;
             }
             ParseErrorKind::ReservedLocalName(name) => write!(
                 f,
-                "'{name}' is a unit, function or constant and cannot name a value in 'let'"
+                "{name} is a unit, function or constant and cannot name a value in 'let'"
             )?,
             ParseErrorKind::DuplicateLocalName(name) => {
-                write!(f, "'{name}' is named twice in 'let'")?;
+                write!(f, "{name} is named twice in 'let'")?;
             }
             ParseErrorKind::ColumnOutsideLookup(column) => write!(
                 f,
@@ -162,7 +162,7 @@ impl fmt::Display for ParseError {
             )?,
             ParseErrorKind::ColumnExpected { function, argument } => write!(
                 f,
-                "argument {argument} of '{function}' must be a column such as Table.Column"
+                "argument {argument} of {function} must be a column such as Table.Column"
             )?,
         }
         write!(f, " at byte {}", self.span.start)

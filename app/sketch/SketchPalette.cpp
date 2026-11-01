@@ -9,6 +9,8 @@
 #include <QEvent>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHash>
+#include <QJsonObject>
 #include <QLabel>
 #include <QAbstractButton>
 #include <QPushButton>
@@ -21,14 +23,19 @@
 #include <QVBoxLayout>
 #include <QtLogging>
 
+#include <algorithm>
 #include <initializer_list>
+#include <utility>
 
 #include "../framework/ChromeStyle.hpp"
+#include "../framework/Command.hpp"
 #include "../framework/GlassCard.hpp"
+#include "../framework/NoticeLevel.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 #include "AutoConstraint.hpp"
+#include "PaletteCreateTools.hpp"
 #include "PaletteWarnings.hpp"
 #include "SketchController.hpp"
 
@@ -69,11 +76,11 @@ QString autoConstraintTip(const QString& type) {
     return QObject::tr("As long as the reference line, or the radius of the reference circle or arc");
   }
   if (type == QStringLiteral("horizontal_vertical")) {
-    return QObject::tr("The centre level with the reference's centre, or plumb with it, whichever it is "
+    return QObject::tr("The center level with the reference's center, or plumb with it, whichever it is "
                        "nearer to");
   }
   if (type == QStringLiteral("concentric")) {
-    return QObject::tr("The centre of the reference circle or arc");
+    return QObject::tr("The center of the reference circle or arc");
   }
   if (type == QStringLiteral("parallel")) {
     return QObject::tr("Parallel to the reference line");
@@ -98,7 +105,7 @@ QPoint indicatorCenter(const QAbstractButton* button, QStyle::SubElement element
 
 SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& registry,
                              const QStringList& constraints, QWidget* parent)
-    : QWidget(parent), m_c(controller) {
+    : QWidget(parent), m_c(controller), m_registry(registry) {
   setObjectName(QStringLiteral("sketchPalette"));
   auto* layout = new QVBoxLayout(this);
   if (chromeStyle() == ChromeStyle::Floating) {
@@ -109,6 +116,12 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   m_status->setWordWrap(true);
   layout->addWidget(m_title);
   layout->addWidget(m_status);
+  m_solve = new QLabel;
+  m_solve->setObjectName(QStringLiteral("paletteSolveNotices"));
+  m_solve->setWordWrap(true);
+  m_solve->setTextFormat(Qt::RichText);
+  m_solve->hide();
+  layout->addWidget(m_solve);
   // The warnings under the status; a click on one selects what it is about
   // (mitcad#264).
   m_warnings = new PaletteWarnings;
@@ -134,7 +147,7 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
     }
   });
 
-  const Section options = makeSection(tr("Options"));
+  const Section options = makeSection(tr("Settings"));
   auto* optionLayout = new QVBoxLayout(options.host);
   if (chromeStyle() == ChromeStyle::Floating) {
     optionLayout->setContentsMargins(0, 0, 0, 0);
@@ -185,6 +198,7 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   }
   lookAt->setToolTip(tr("Look straight at the sketch plane"));
   optionLayout->addWidget(lookAt);
+  m_lookAt = lookAt;
   layout->addWidget(options.box);
 
   connect(m_construction, &QCheckBox::toggled, &m_c, &SketchController::setConstruction);
@@ -199,28 +213,35 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   });
   connect(lookAt, &QAbstractButton::clicked, &m_c, &SketchController::lookAt);
 
+  // The user's most used sketch tools (mitcad#1027), above the
+  // constraints: two rows of seven, chosen as the palette opens
+  // (chooseCreateTools). The two sections' grids are alike, so that their
+  // columns line up and both fit the palette's width.
+  const auto buttonGrid = [](QWidget* host) {
+    auto* made = new QGridLayout(host);
+    if (chromeStyle() == ChromeStyle::Floating) {
+      made->setContentsMargins(0, 0, 0, 0);
+    }
+    made->setHorizontalSpacing(2);
+    made->setVerticalSpacing(2);
+    return made;
+  };
+  const Section createBox = makeSection(tr("Create"));
+  createBox.box->setObjectName(QStringLiteral("paletteCreate"));
+  m_createGrid = buttonGrid(createBox.host);
+  layout->addWidget(createBox.box);
+
   const Section constraintBox = makeSection(tr("Constraints"));
-  auto* grid = new QGridLayout(constraintBox.host);
-  if (chromeStyle() == ChromeStyle::Floating) {
-    grid->setContentsMargins(0, 0, 0, 0);
-  }
+  QGridLayout* grid = buttonGrid(constraintBox.host);
   int index = 0;
   for (const QString& id : constraints) {
-    QAction* action = registry.action(id);
-    if (action == nullptr) {
+    QToolButton* button = commandButton(id, QStringLiteral("palette_") + id);
+    if (button == nullptr) {
       continue;
     }
-    auto* button = new QToolButton;
-    button->setDefaultAction(action);
-    button->setIconSize(QSize(22, 22));
-    button->setAutoRaise(true);
-    button->setFocusPolicy(Qt::NoFocus);
-    if (chromeStyle() == ChromeStyle::Floating) {
-      setFlatCardButton(button);
-      button->setFixedSize(34, 34);
-    }
-    button->setObjectName(QStringLiteral("palette_") + id);
-    grid->addWidget(button, index / 6, index % 6);
+    // Seven to a row: the 13 constraints on two rows (mitcad#1027).
+    grid->addWidget(button, index / kPaletteCreateColumns, index % kPaletteCreateColumns);
+    m_constraintButtons.append(button);
     ++index;
   }
   layout->addWidget(constraintBox.box);
@@ -298,6 +319,7 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
     }
     button->setObjectName(QStringLiteral("paletteFinish"));
     layout->addWidget(button, 0, Qt::AlignRight);
+    m_finish = button;
   }
   layout->addStretch();
 
@@ -313,11 +335,188 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   refresh();
 }
 
+QWidget* SketchPalette::takeFinish() {
+  if (m_finish != nullptr) {
+    layout()->removeWidget(m_finish);
+  }
+  return m_finish;
+}
+
+QToolButton* SketchPalette::commandButton(const QString& id, const QString& name) const {
+  QAction* action = m_registry.action(id);
+  if (action == nullptr) {
+    return nullptr;
+  }
+  auto* button = new QToolButton;
+  // The action's icon, tooltip (with its shortcut, as the ribbon's) and
+  // enabled and checked states (the tool on, mitcad#1027).
+  button->setDefaultAction(action);
+  button->setIconSize(QSize(22, 22));
+  button->setAutoRaise(true);
+  button->setFocusPolicy(Qt::NoFocus);
+  if (chromeStyle() == ChromeStyle::Floating) {
+    setFlatCardButton(button);
+    button->setFixedSize(34, 34);
+    styleButton(button);
+  }
+  button->setObjectName(name);
+  return button;
+}
+
+void SketchPalette::styleButton(QToolButton* button) const {
+#ifdef Q_OS_MACOS
+  Q_UNUSED(button);
+#else
+  // The card's flat button (setFlatCardButton), checked as the ribbon's
+  // are: tinted and outlined in the accent colour (mitcad#1027: the tool
+  // on). Set again when the palette changes (changeEvent).
+  const QColor accent = accentColor(palette());
+  button->setStyleSheet(QStringLiteral(
+      "QToolButton { border: none; background: transparent; border-radius: 6px; padding: 2px; }"
+      "QToolButton:hover { background: rgba(128, 128, 128, 40); }"
+      "QToolButton:pressed { background: rgba(128, 128, 128, 80); }"
+      "QToolButton:checked { border: 1px solid %1; background: rgba(%2, %3, %4, 51); padding: 1px; }"
+      "QToolButton:disabled { background: transparent; }")
+                            .arg(accent.name())
+                            .arg(accent.red())
+                            .arg(accent.green())
+                            .arg(accent.blue()));
+#endif
+}
+
+bool SketchPalette::isCreateTool(const CommandDef& def) {
+  return def.tab == QStringLiteral("SKETCH") && def.mode == CommandDef::Mode::Sketch &&
+         def.kind != CommandDef::Kind::Action &&
+         (def.group == QStringLiteral("CREATE") || def.group == QStringLiteral("MODIFY"));
+}
+
+QStringList SketchPalette::createCandidates(const CommandRegistry& registry) {
+  static const QStringList groups = {QStringLiteral("CREATE"), QStringLiteral("MODIFY")};
+  QStringList ids;
+  for (const QString& group : groups) {
+    // As Ribbon::createGroup orders a group's menu: registration order, a
+    // subgroup's commands together where its first command is.
+    QList<std::pair<QString, QStringList>> entries; // subgroup, ids
+    for (const auto& def : registry.commands()) {
+      if (def->group != group || !isCreateTool(*def) || registry.action(def->id) == nullptr) {
+        continue;
+      }
+      const QString& subgroup = def->subgroup;
+      const auto same =
+          std::find_if(entries.begin(), entries.end(), [&subgroup](const std::pair<QString, QStringList>& entry) {
+            return !subgroup.isEmpty() && entry.first == subgroup;
+          });
+      if (same != entries.end()) {
+        same->second.append(def->id);
+      } else {
+        entries.append(std::make_pair(subgroup, QStringList{def->id}));
+      }
+    }
+    for (const std::pair<QString, QStringList>& entry : entries) {
+      ids += entry.second;
+    }
+  }
+  return ids;
+}
+
+void SketchPalette::chooseCreateTools(const QStringList& pinned) {
+  const PaletteCreateChoice choice =
+      choosePaletteCreateTools(createCandidates(m_registry), pinned, paletteToolCounts());
+  QStringList names;
+  for (const QString& id : choice.ids) {
+    names.append(paletteToolName(id));
+  }
+  // "Palette create tools: line, rectangle, … (defaults)", for UI tests.
+  qDebug().noquote() << QStringLiteral("Palette create tools: %1 (%2)")
+                            .arg(names.join(QStringLiteral(", ")),
+                                 choice.fromCounts ? QStringLiteral("counts") : QStringLiteral("defaults"));
+  if (choice.ids == m_createIds) {
+    return;
+  }
+  for (QToolButton* button : std::as_const(m_createButtons)) {
+    delete button; // out of the grid with it
+  }
+  m_createButtons.clear();
+  m_createIds = choice.ids;
+  int index = 0;
+  for (const QString& id : std::as_const(m_createIds)) {
+    QToolButton* button = commandButton(id, QStringLiteral("paletteCreate_") + id);
+    if (button == nullptr) {
+      continue;
+    }
+    // The tool on shows checked (its action's state, MainWindow).
+    const QString name = paletteToolName(id);
+    connect(button, &QToolButton::toggled, this, [name](bool on) {
+      if (on) {
+        qDebug().noquote() << QStringLiteral("Palette create checked: %1").arg(name);
+      }
+    });
+    m_createGrid->addWidget(button, index / kPaletteCreateColumns, index % kPaletteCreateColumns);
+    m_createButtons.append(button);
+    ++index;
+  }
+}
+
+void SketchPalette::logButtons() const {
+  // The widget the palette is shown in (a scroll area's viewport): a button
+  // beyond its width is clipped.
+  const QWidget* view = parentWidget();
+  if (view == nullptr) {
+    view = this;
+  }
+  QStringList clipped;
+  const auto section = [this, view, &clipped](const QString& title, const QList<QToolButton*>& buttons) {
+    QHash<int, int> perRow; // buttons by their top
+    for (const QToolButton* button : buttons) {
+      // Where to click it, or out of sight when the palette has scrolled
+      // it away.
+      const QRect shown = button->visibleRegion().boundingRect();
+      if (shown.isEmpty()) {
+        qDebug().noquote() << QStringLiteral("Palette %1 out of sight").arg(button->objectName());
+      } else {
+        const QPoint center = GlassCard::mapToHost(button, shown.center());
+        qDebug().noquote()
+            << QStringLiteral("Palette %1 at %2,%3").arg(button->objectName()).arg(center.x()).arg(center.y());
+      }
+      const QPoint corner = button->mapTo(view, QPoint(0, 0));
+      if (corner.x() < 0 || corner.x() + button->width() > view->width()) {
+        clipped.append(button->objectName());
+      }
+      const int top = button->mapTo(this, QPoint(0, 0)).y();
+      perRow[top] += 1;
+    }
+    int columns = 0;
+    for (const int count : perRow) {
+      columns = std::max(columns, count);
+    }
+    // "Palette Constraints: 13 buttons in 2 rows of 7", for UI tests.
+    qDebug().noquote() << QStringLiteral("Palette %1: %2 buttons in %3 rows of %4")
+                              .arg(title)
+                              .arg(buttons.size())
+                              .arg(perRow.size())
+                              .arg(columns);
+  };
+  section(QStringLiteral("Create"), m_createButtons);
+  section(QStringLiteral("Constraints"), m_constraintButtons);
+  qDebug().noquote() << QStringLiteral("Palette buttons clipped: %1 (palette %2 wide in %3)")
+                            .arg(clipped.isEmpty() ? QStringLiteral("none") : clipped.join(QStringLiteral(", ")))
+                            .arg(width())
+                            .arg(view->width());
+}
+
 void SketchPalette::changeEvent(QEvent* event) {
   QWidget::changeEvent(event);
   if ((event->type() == QEvent::PaletteChange || event->type() == QEvent::ApplicationPaletteChange) &&
       m_title != nullptr) {
     refreshTitle();
+    if (chromeStyle() == ChromeStyle::Floating) {
+      for (QToolButton* button : std::as_const(m_createButtons)) {
+        styleButton(button);
+      }
+      for (QToolButton* button : std::as_const(m_constraintButtons)) {
+        styleButton(button);
+      }
+    }
   }
 }
 
@@ -338,14 +537,47 @@ void SketchPalette::refresh() {
   const SketchModel& model = m_c.model();
   refreshTitle();
   QString status;
-  if (!model.conflicts.empty() || !model.error.isEmpty()) {
-    status = tr("<span style='color:%1'>Conflicting constraints</span>").arg(errorColor().name());
+  // The solve's states at their levels (mitcad#1040): conflicting
+  // constraints and a solve that did not converge are errors, with the
+  // error's icon.
+  if (!model.conflicts.empty()) {
+    status = QStringLiteral("%1&nbsp;<span style='color:%2'>%3</span>")
+                 .arg(noticeIconHtml(NoticeLevel::Error), errorColor(palette()).name(), tr("Conflicting constraints"));
+  } else if (!model.error.isEmpty()) {
+    status = QStringLiteral("%1&nbsp;<span style='color:%2'>%3</span>")
+                 .arg(noticeIconHtml(NoticeLevel::Error), errorColor(palette()).name(),
+                      tr("Did not solve: %1").arg(model.error).toHtmlEscaped());
   } else if (model.fullyConstrained()) {
     status = tr("Fully constrained");
   } else {
     status = tr("%n degree(s) of freedom", nullptr, model.dof);
   }
   m_status->setText(status);
+  // Redundant constraints a warning, unmet inactive ones information, as
+  // the model's notices say (mitcad#1040).
+  QStringList solve;
+  QStringList solveLog;
+  for (const QJsonValue& value : model.notices) {
+    const QJsonObject notice = value.toObject();
+    const NoticeLevel level = noticeLevelFromModel(notice.value(QStringLiteral("level")).toString());
+    if (level == NoticeLevel::Error) {
+      continue; // the status says it
+    }
+    const QString message = notice.value(QStringLiteral("message")).toString();
+    if (level == NoticeLevel::Warning && model.warnings.contains(message)) {
+      continue; // the warnings below list it
+    }
+    solve << noticeHtml(level, message, palette());
+    solveLog << QStringLiteral("%1: %2").arg(noticeLevelName(level), message);
+  }
+  m_solve->setText(solve.join(QStringLiteral("<br>")));
+  m_solve->setVisible(!solve.isEmpty());
+  const QString solveLine = solveLog.join(QStringLiteral("; "));
+  if (solveLine != m_loggedSolve) {
+    m_loggedSolve = solveLine;
+    qDebug().noquote() << QStringLiteral("Sketch Palette solve: %1")
+                              .arg(solveLine.isEmpty() ? QStringLiteral("none") : solveLine);
+  }
   // What the evaluation warns about (mitcad#232: projections that could
   // not follow their sources), as links to what they are about (mitcad#264).
   m_warnings->setWarnings(model.warnings, model.warningEntities);
@@ -470,16 +702,21 @@ void SketchPalette::logLayout() const {
   }
   const QPoint combo = GlassCard::mapToHost(m_dimensionText, m_dimensionText->rect().center());
   qDebug().noquote() << QStringLiteral("Palette %1 at %2,%3").arg(m_dimensionText->objectName()).arg(combo.x()).arg(combo.y());
-  if (const QWidget* finish = findChild<const QWidget*>(QStringLiteral("paletteFinish"))) {
+  if (const QWidget* finish = m_finish) {
     const QPoint center = GlassCard::mapToHost(finish, finish->rect().center());
     qDebug().noquote() << QStringLiteral("Palette Finish Sketch at %1,%2").arg(center.x()).arg(center.y());
+  }
+  // Look At, for UI tests that click it (mitcad#1060).
+  if (m_lookAt != nullptr && m_lookAt->isVisible()) {
+    const QPoint center = GlassCard::mapToHost(m_lookAt, m_lookAt->rect().center());
+    qDebug().noquote() << QStringLiteral("Palette Look At at %1,%2").arg(center.x()).arg(center.y());
   }
   // Each option row's place and size against its size hint, and the
   // palette's against its own: a row laid out below its hint overlaps the
   // next one (mitcad#470).
   for (const QWidget* row : std::initializer_list<const QWidget*>{
            m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_profiles, m_hideAbove, m_dimensionText,
-           findChild<const QWidget*>(QStringLiteral("paletteFinish"))}) {
+           m_finish}) {
     if (row == nullptr) {
       continue;
     }
@@ -500,6 +737,7 @@ void SketchPalette::logLayout() const {
                             .arg(sizeHint().height())
                             .arg(minimumSizeHint().width())
                             .arg(minimumSizeHint().height());
+  logButtons();
   m_warnings->logLayout();
   logCleanUp();
 }
@@ -528,7 +766,8 @@ void SketchPalette::logCleanUp() const {
 }
 
 QString SketchPalette::statusText() const {
-  return QTextDocumentFragment::fromHtml(m_status->text()).toPlainText();
+  // (Without the level's icon, mitcad#1040.)
+  return QTextDocumentFragment::fromHtml(m_status->text()).toPlainText().remove(QChar(0xFFFC)).trimmed();
 }
 
 } // namespace mitcad::sketch

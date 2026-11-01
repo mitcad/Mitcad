@@ -14,10 +14,12 @@ class QEvent;
 class QMouseEvent;
 class QPaintEvent;
 class QTabBar;
+class QTimer;
 
 namespace mitcad {
 
 class CapsuleFrame;
+class QuickAccessGroup;
 class Ribbon;
 
 // The top row of the Floating chrome, in the height of a macOS toolbar: room
@@ -41,6 +43,9 @@ public:
   void setAgentIndicator(QWidget* indicator);
   // The chat panel's button (mitcad#947), right of the agent indicator.
   void setChatButton(QWidget* button);
+  // The quick-access group (mitcad#1090), right of the tabs. It folds into
+  // its menu when the row is too narrow for it and the whole document name.
+  void setQuickAccess(QuickAccessGroup* group);
 
   // The height of the row.
   static int rowHeight();
@@ -57,9 +62,9 @@ public:
   void setFloatingRow(bool floating);
   bool isFloatingRow() const { return m_floatingRow; }
   // setFloatingRow: the controls shown and the title's box, named
-  // ("titleHistory", "titleTabs", "titleBox", "titleIndicator",
-  // "titleAgent", "titleChat", "titleSearch"), in the row's coordinates,
-  // left to right.
+  // ("titleHistory", "titleTabs", "titleQuickAccess", "titleBox",
+  // "titleIndicator", "titleAgent", "titleChat", "titleSearch"), in the
+  // row's coordinates, left to right.
   std::vector<std::pair<QString, QRect>> rowParts() const;
   // The box behind the document's name in the row's coordinates (empty
   // while there is no room for the name).
@@ -95,6 +100,14 @@ private:
   void updateInset();
   // setFloatingRow: the mask of the parts (rowParts).
   void updateRowMask();
+  // The quick-access group folded while the document's whole name would
+  // not fit beside it, unfolded again once it does (after the layout).
+  void scheduleQuickFold();
+  void updateQuickFold();
+  // The document's name and state at full length, with the box's padding.
+  int titleWidth() const;
+  // The leftmost of the indicators and the search field.
+  const QWidget* rightPart() const;
   QString documentTitle() const;
 
   QWidget* m_inset = nullptr;
@@ -104,6 +117,8 @@ private:
   QPointer<QWidget> m_indicator;
   QPointer<QWidget> m_agentIndicator;
   QPointer<QWidget> m_chatButton;
+  QPointer<QuickAccessGroup> m_quickAccess;
+  QTimer* m_foldTimer = nullptr;
   QPointer<QWidget> m_watched;
   bool m_floatingRow = false;
 };

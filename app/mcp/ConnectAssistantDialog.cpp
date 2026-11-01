@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "ConnectAssistantDialog.hpp"
 
+#include <algorithm>
 #include <exception>
 #include <memory>
 #include <string>
@@ -37,6 +38,7 @@
 #include <QShowEvent>
 #include <QStandardPaths>
 #include <QTextDocument>
+#include <QTcpSocket>
 #include <QTimer>
 #include <QTemporaryDir>
 #include <QToolButton>
@@ -843,10 +845,32 @@ void ConnectAssistantDialog::refreshConnection() {
   // is that assistant; the others are named quietly below. Each by the
   // assistant its label matches, else by its own label.
   QStringList mine, others;
+  if (m_host.previousClients) {
+    for (const QString& label : m_host.previousClients()) {
+      if (!m_previousClients.contains(label)) m_previousClients << label;
+    }
+  }
   for (const ConnectedAgent& agent : m_host.clients ? m_host.clients() : QList<ConnectedAgent>()) {
+    if (!m_previousClients.contains(agent.name)) m_previousClients << agent.name;
     QStringList& names = assistantLabelMatches(selected, agent.name) ? mine : others;
     const QString shown = assistantDisplayName(agent.name);
     if (!names.contains(shown)) names << shown;
+  }
+  const QList<Endpoint> endpoints = discover();
+  QStringList elsewhere;
+  for (const Endpoint& endpoint : endpoints) {
+    if (endpoint.pid == QCoreApplication::applicationPid()) continue;
+    if (!endpoint.agents.isEmpty()) verifyWindow(endpoint.instance, endpoint.port, endpoint.token);
+    if (m_verifiedWindows.value(endpoint.instance) != endpoint.token) continue;
+    QStringList names;
+    for (const QString& agent : endpoint.agents) {
+      if (assistantLabelMatches(selected, agent)) {
+        const QString shown = assistantDisplayName(agent);
+        if (!names.contains(shown)) names << shown;
+      }
+    }
+    if (!names.isEmpty()) elsewhere << tr("%1 — in %2").arg(names.join(QStringLiteral(", ")),
+        endpoint.title.isEmpty() ? tr("another design") : endpoint.title);
   }
   // Claude Desktop installed since its extension found no application.
   if (m_desktopNotFound && windows && bundleHandlerRegistered()) m_desktopNotFound = false;
@@ -888,8 +912,12 @@ void ConnectAssistantDialog::refreshConnection() {
     action = QStringLiteral("retry");
   } else if (!mine.isEmpty()) {
     state = QStringLiteral("connected");
-    text = tr("✓ Connected: %1").arg(mine.join(QStringLiteral(", ")));
+    text = endpoints.size() > 1 ? tr("✓ Connected: %1 — in this window").arg(mine.join(QStringLiteral(", ")))
+                              : tr("✓ Connected: %1").arg(mine.join(QStringLiteral(", ")));
     action = QStringLiteral("disconnect");
+  } else if (!elsewhere.isEmpty()) {
+    state = QStringLiteral("connected-elsewhere");
+    text = tr("✓ Connected: %1").arg(elsewhere.join(QStringLiteral("; ")));
   } else if (selected == AssistantClient::Other) {
     state = QStringLiteral("manual");
     text = m_copied ? tr("Copied. Paste it into your assistant's settings")
@@ -912,6 +940,14 @@ void ConnectAssistantDialog::refreshConnection() {
     text = selected == AssistantClient::ClaudeDesktop ? tr("Approve MitCad in Claude Desktop, then start a new chat")
         : selected == AssistantClient::ClaudeCode ? tr("Start a new Claude Code session to use MitCad")
         : tr("Restart ChatGPT or start a new Codex session to use MitCad");
+    const bool reconnect = std::any_of(m_previousClients.cbegin(), m_previousClients.cend(), [selected](const QString& label) {
+      return assistantLabelMatches(selected, label);
+    });
+    if (reconnect && selected == AssistantClient::ClaudeCode) {
+      text = tr("Reconnect MitCad in Claude Code (/mcp › mitcad › Reconnect) or start a new session");
+    } else if (reconnect && selected == AssistantClient::Codex) {
+      text = tr("Restart ChatGPT or Codex, or start a new session");
+    }
     if (selected == AssistantClient::ClaudeDesktop) action = QStringLiteral("reopen");
   } else {
     state = QStringLiteral("ready");
@@ -937,6 +973,7 @@ void ConnectAssistantDialog::refreshConnection() {
   }
   // An error is the state line itself; other results (a backup) show below it.
   m_result->setVisible(!m_result->text().isEmpty() && !failed);
+  if (!mine.isEmpty()) others.append(elsewhere);
   m_also->setText(tr("Also connected: %1").arg(others.join(QStringLiteral(", "))));
   m_also->setVisible(!others.isEmpty());
   m_setup->setProperty("assistantAction", action);
@@ -955,7 +992,8 @@ void ConnectAssistantDialog::refreshConnection() {
       : action == QStringLiteral("reveal") ? showFileText()
       : tr("Connect"));
   // The extension's file in the tooltip as well (also shown below the line).
-  m_setup->setToolTip(action == QStringLiteral("reveal") ? QDir::toNativeSeparators(m_bundleSaved) : QString());
+  m_setup->setToolTip(action == QStringLiteral("reveal") ? QDir::toNativeSeparators(m_bundleSaved)
+      : action == QStringLiteral("disconnect") ? tr("Ends the connection and keeps your assistant setup") : QString());
   // Check again goes with How to install (Claude Code, Codex).
   const bool checkAgain = state == QStringLiteral("not-installed") && selected != AssistantClient::ClaudeDesktop;
   m_checkAgain->setVisible(checkAgain);
@@ -1006,6 +1044,41 @@ void ConnectAssistantDialog::refit() {
   if (fittedHeight < height()) resize(width(), fittedHeight);
 }
 
+void ConnectAssistantDialog::verifyWindow(const QString& instance, quint16 port, const QString& token) {
+  const qint64 now = QDateTime::currentMSecsSinceEpoch();
+  if (m_windowChecking.contains(instance) || now - m_windowChecked.value(instance) < 1000) return;
+  m_windowChecking.insert(instance);
+  m_windowChecked.insert(instance, now);
+  auto* socket = new QTcpSocket(this);
+  socket->setReadBufferSize(1024);
+  const auto finished = [this, socket, instance, token](bool accepted) {
+    if (socket->property("windowProbeFinished").toBool()) return;
+    socket->setProperty("windowProbeFinished", true);
+    m_windowChecking.remove(instance);
+    const QString before = m_verifiedWindows.value(instance);
+    if (accepted) m_verifiedWindows.insert(instance, token);
+    else m_verifiedWindows.remove(instance);
+    socket->abort();
+    socket->deleteLater();
+    if (before != m_verifiedWindows.value(instance)) refreshConnection();
+  };
+  connect(socket, &QTcpSocket::connected, this, [socket, token] {
+    Endpoint endpoint;
+    endpoint.token = token;
+    socket->write(encodeAuth(endpoint));
+  });
+  connect(socket, &QTcpSocket::readyRead, this, [socket, finished] {
+    if (socket->canReadLine()) {
+      const auto answer = QJsonDocument::fromJson(socket->readLine(1024)).object();
+      finished(answer.value(QStringLiteral("authenticated")) == QJsonValue(true));
+    } else if (socket->bytesAvailable() >= 1024) finished(false);
+  });
+  connect(socket, &QTcpSocket::disconnected, this, [finished] { finished(false); });
+  connect(socket, &QTcpSocket::errorOccurred, this, [finished](QAbstractSocket::SocketError) { finished(false); });
+  QTimer::singleShot(800, socket, [finished] { finished(false); });
+  socket->connectToHost(QStringLiteral("127.0.0.1"), port);
+}
+
 void ConnectAssistantDialog::refreshWindows() {
   const QList<Endpoint> endpoints = discover();
   m_ownInstance.clear();
@@ -1022,6 +1095,7 @@ void ConnectAssistantDialog::primaryAction() {
     QDesktopServices::openUrl(QUrl(installPage(client())));
   } else if (action == QStringLiteral("disconnect")) {
     if (m_host.disconnect) m_host.disconnect(chosenClientIds());
+    clearMessage();
     refreshConnection();
   } else if (action == QStringLiteral("reveal")) {
     // An isolated test run records the file instead of opening a window.

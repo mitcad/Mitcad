@@ -166,10 +166,10 @@ ComponentAnswer askHybridAssembly(QWidget* parent, const HybridModel& model, con
   const bool fromBodies = request.kind == ComponentRequest::Kind::FromBodies;
   qDebug().noquote() << QStringLiteral("Hybrid assembly question: %1 has %2").arg(root, bodies);
   QMessageBox box(QMessageBox::Question, title(),
-                  fromBodies ? QObject::tr("%1 has modelled bodies (%2). Move the features that made the "
+                  fromBodies ? QObject::tr("%1 has modeled bodies (%2). Move the features that made the "
                                            "selected bodies into their new components?")
                                    .arg(root, bodies)
-                             : QObject::tr("%1 has modelled bodies (%2). Move their features into a "
+                             : QObject::tr("%1 has modeled bodies (%2). Move their features into a "
                                            "component before continuing?")
                                    .arg(root, bodies),
                   QMessageBox::Cancel, parent);
@@ -179,8 +179,8 @@ ComponentAnswer askHybridAssembly(QWidget* parent, const HybridModel& model, con
                         "reused on its own. As is, the components hold the bodies only, and the "
                         "features that made them stay in %1.")
                 .arg(root)
-          : QObject::tr("A component made where modelled bodies are makes a hybrid assembly. Moved, "
-                        "every modelled body of %1, with the features, sketches and parameters that "
+          : QObject::tr("A component made where modeled bodies are makes a hybrid assembly. Moved, "
+                        "every modeled body of %1, with the features, sketches and parameters that "
                         "made them, goes into one new component where it is now, and %1 holds "
                         "only components.")
                 .arg(root));

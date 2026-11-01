@@ -32,17 +32,65 @@
 //! [`BedChoice`]); a face chosen (`ExportPlacement::bed_faces`: a body and
 //! the occurrence of its placement) turns the piece it is in onto it,
 //! whatever the rule above says, as one bed face would.
+//!
+//! A piece without a usable bed face (none, or only faces that are gone)
+//! is turned onto the face the automatic orientation finds (mitcad#1109,
+//! `orient.rs`, [`BedRules::auto_orient`]), which looks at the piece as a
+//! whole; the face is not stored, so a body's own face always wins.
+//! Without a planar face the piece can lie on, it stays as the design has
+//! it (−Z down). Every piece, turned or not and kept as assembled or not,
+//! then has its lowest point dropped onto the bed (z = 0) and the middle
+//! of its box centred over the plate's centre, each when the rules ask
+//! for it ([`Settle`], both by default).
 
 use std::collections::BTreeMap;
 
 use crate::datum::Vec3;
 use crate::document::{Document, ModelError, PrintTarget};
+use crate::exchange::{FaceMeshes, Refinement, RefinementPreset};
 use crate::ids::{BodyUid, ComponentUid, OccurrenceUid};
 use crate::kernel::Kernel;
 use crate::print_keys;
+use crate::topo::FaceName;
 use crate::transform::Transform;
 
 use super::Exported;
+use super::orient;
+
+/// What happens to a piece on the bed after its turn (mitcad#1109): its
+/// box's middle over the plate's centre (`center`), its lowest point on
+/// the bed, z = 0 (`drop`). Both by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Settle {
+    pub center: bool,
+    pub drop: bool,
+}
+
+impl Default for Settle {
+    fn default() -> Self {
+        Self {
+            center: true,
+            drop: true,
+        }
+    }
+}
+
+impl Settle {
+    /// Whether it moves the piece at all.
+    pub fn any(self) -> bool {
+        self.center || self.drop
+    }
+}
+
+/// How the pieces go on the bed: the print bed faces chosen (mitcad#857),
+/// the automatic orientation of a piece without a usable face
+/// (mitcad#1109) and the settling after the turn.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct BedRules<'a> {
+    pub chosen: &'a [(BodyUid, Vec<OccurrenceUid>)],
+    pub auto_orient: bool,
+    pub settle: Settle,
+}
 
 /// The plate when the design's printer gives no bed shape, mm: the Bambu
 /// family's 256 x 256 mm, the slicer the export writes for by default.
@@ -75,6 +123,15 @@ pub struct OnBed {
     /// The bed faces the piece could be turned onto, one per placement,
     /// when several keep it as assembled (mitcad#857); empty otherwise.
     pub choices: Vec<BedChoice>,
+    /// Whether `face` is the automatic orientation's (mitcad#1109), not a
+    /// print bed face of the body.
+    pub auto: bool,
+    /// The occurrence path of the placement whose face lies on the bed
+    /// (empty for the design itself or a body not placed); None without a
+    /// face.
+    pub occurrence: Option<Vec<OccurrenceUid>>,
+    /// The settling after the turn (mitcad#1109).
+    pub settle: Settle,
 }
 
 /// An object of a 3MF file put on the bed by itself (mitcad#856): a
@@ -85,12 +142,15 @@ pub struct BedObject {
     /// "Nut (Nut:3)", or the occurrence's path name.
     pub name: String,
     /// As in [`OnBed`]: the body and face on the bed, what moved the
-    /// object after its placements, the bodies kept as assembled, and the
-    /// bed faces to choose from.
+    /// object after its placements, the bodies kept as assembled, the bed
+    /// faces to choose from, whether the face is the automatic
+    /// orientation's and the occurrence of its placement.
     pub face: Option<(BodyUid, String)>,
     pub transform: Option<Transform>,
     pub kept: Vec<BodyUid>,
     pub choices: Vec<BedChoice>,
+    pub auto: bool,
+    pub occurrence: Option<Vec<OccurrenceUid>>,
 }
 
 /// A print bed face a piece kept as assembled could lie on (mitcad#857):
@@ -149,12 +209,21 @@ pub(super) fn turn_down(down: Vec3) -> Transform {
     }
 }
 
+/// The turn a writer settles a piece with (`transform`, the plan's), or
+/// none when it neither turns nor settles: the plan's turn, else no turn
+/// when `settle` still moves the piece (mitcad#1109).
+pub(super) fn turn_to_settle(transform: Option<Transform>, settle: Settle) -> Option<Transform> {
+    transform.or_else(|| settle.any().then_some(Transform::IDENTITY))
+}
+
 /// `turn`, then the move that puts the lowest of the turned points on the
-/// bed (z = 0) and the middle of their box over `plate`.
+/// bed (z = 0) when `settle.drop` and the middle of their box over `plate`
+/// when `settle.center`.
 pub(super) fn settled(
     turn: &Transform,
     points: impl Iterator<Item = [f64; 3]>,
     plate: [f64; 2],
+    settle: Settle,
 ) -> Transform {
     let mut min = [f64::INFINITY; 3];
     let mut max = [f64::NEG_INFINITY; 3];
@@ -167,12 +236,32 @@ pub(super) fn settled(
         return *turn;
     }
     let shift = [
-        plate[0] - (min[0] + max[0]) / 2.0,
-        plate[1] - (min[1] + max[1]) / 2.0,
-        -min[2],
+        if settle.center {
+            plate[0] - (min[0] + max[0]) / 2.0
+        } else {
+            0.0
+        },
+        if settle.center {
+            plate[1] - (min[1] + max[1]) / 2.0
+        } else {
+            0.0
+        },
+        if settle.drop { -min[2] } else { 0.0 },
     ];
     Transform::translation(shift).after(turn)
 }
+
+/// The meshing of the bodies for the automatic orientation: coarse, as
+/// planar faces are exact at any refinement and the overhangs of curved
+/// ones need no more.
+fn orient_tolerance() -> crate::exchange::MeshTolerance {
+    Refinement::Preset(RefinementPreset::Low).tolerance()
+}
+
+/// The face the automatic orientation lays a piece on: the body, the
+/// face's name, its outward normal where the placement puts it, and the
+/// placement's path.
+type AutoFace = (BodyUid, String, Vec3, Option<Vec<OccurrenceUid>>);
 
 impl<K: Kernel> Document<K> {
     /// The centre of the design's printer's plate (the box of its bed
@@ -193,17 +282,20 @@ impl<K: Kernel> Document<K> {
     /// placement, None for a body not placed), and the face `chosen` among
     /// them (mitcad#857) or else the one body's face that every placement
     /// turns alike (its turn in `transform`, which the writer completes),
-    /// or why they stay as they are, with the faces to choose from. Two
-    /// faces chosen among them are refused.
+    /// or why they stay as they are, with the faces to choose from; with
+    /// no usable face, the automatic orientation's face when the rules
+    /// ask for it (mitcad#1109). Two faces chosen among them are refused.
     pub(super) fn bed_plan(
         &self,
         bodies: &[BodyUid],
         placements: &dyn Fn(BodyUid) -> Vec<Transform>,
         paths: &dyn Fn(BodyUid) -> Vec<Option<Vec<OccurrenceUid>>>,
-        chosen: &[(BodyUid, Vec<OccurrenceUid>)],
+        rules: &BedRules<'_>,
     ) -> Result<OnBed, ModelError> {
+        let chosen = rules.chosen;
         let mut plan = OnBed {
             plate: self.plate_centre(),
+            settle: rules.settle,
             ..OnBed::default()
         };
         // Each bed face where a placement puts it, by its outward normal,
@@ -265,7 +357,17 @@ impl<K: Kernel> Document<K> {
         };
         // One face, or one body's face where every placement turns it alike
         // (a component placed again, moved only): the piece turns onto it.
-        let Some((uid, face, normal, _)) = first else {
+        let Some((uid, face, normal, path)) = first else {
+            // None usable: the automatic orientation's face (mitcad#1109),
+            // else as the design has it.
+            if rules.auto_orient
+                && let Some((uid, face, normal, path)) = self.auto_face(bodies, placements, paths)
+            {
+                plan.face = Some((uid, face));
+                plan.transform = Some(turn_down(normal));
+                plan.auto = true;
+                plan.occurrence = Some(path.unwrap_or_default());
+            }
             return Ok(plan);
         };
         let alike =
@@ -274,6 +376,7 @@ impl<K: Kernel> Document<K> {
             plan.face = Some((*uid, face.clone()));
             plan.transform = Some(turn_down(*normal));
             plan.on_faces = down.iter().filter(|d| alike(d)).count();
+            plan.occurrence = Some(path.clone().unwrap_or_default());
         } else {
             for (uid, face, _, path) in &down {
                 if !plan.kept.contains(uid) {
@@ -289,6 +392,79 @@ impl<K: Kernel> Document<K> {
         Ok(plan)
     }
 
+    /// The face the automatic orientation (mitcad#1109, `orient.rs`) lays
+    /// the piece of `bodies` at `placements` on, looking at it as a whole:
+    /// the printed bodies' faces where each placement puts them, a named
+    /// planar face the candidate; None when no planar face supports the
+    /// piece (or the kernel cannot list or mesh the faces).
+    fn auto_face(
+        &self,
+        bodies: &[BodyUid],
+        placements: &dyn Fn(BodyUid) -> Vec<Transform>,
+        paths: &dyn Fn(BodyUid) -> Vec<Option<Vec<OccurrenceUid>>>,
+    ) -> Option<AutoFace> {
+        let tolerance = orient_tolerance();
+        let mut piece = FaceMeshes::default();
+        let mut planar: Vec<bool> = Vec::new();
+        // Of each face of the piece: the body, its name and the path.
+        let mut owners: Vec<(BodyUid, Option<String>, Option<Vec<OccurrenceUid>>)> = Vec::new();
+        for &uid in bodies {
+            if !self.printed_body(uid) {
+                continue;
+            }
+            let Some(shape) = self.body_shape(uid) else {
+                continue;
+            };
+            let (Ok(faces), Ok(mesh)) = (
+                self.kernel().faces(shape),
+                self.kernel().face_meshes(shape, &tolerance),
+            ) else {
+                continue;
+            };
+            // A face's first name that is a face name, for a planar face.
+            let listed = faces.len() == mesh.face_triangles.len();
+            let names: Vec<Option<String>> = mesh
+                .face_triangles
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    let face = faces.get(i).filter(|f| listed && f.surface == "plane")?;
+                    face.names
+                        .iter()
+                        .find(|n| n.parse::<FaceName>().is_ok())
+                        .cloned()
+                })
+                .collect();
+            let at = paths(uid);
+            for (k, placement) in placements(uid).into_iter().enumerate() {
+                let first = piece.vertices.len() as u32;
+                piece
+                    .vertices
+                    .extend(mesh.vertices.iter().map(|v| placement.apply_point(*v)));
+                piece.normals.extend(
+                    mesh.normals
+                        .iter()
+                        .map(|n| mitcad_vec3::unit(placement.apply_vector(*n)).unwrap_or(*n)),
+                );
+                // A mirroring placement would turn the triangles inside out.
+                let mirrored = placement.determinant() < 0.0;
+                piece.triangles.extend(mesh.triangles.iter().map(|t| {
+                    let [a, b, c] = t.map(|i| first + i);
+                    if mirrored { [a, c, b] } else { [a, b, c] }
+                }));
+                piece.face_triangles.extend(&mesh.face_triangles);
+                let path = at.get(k).cloned().flatten();
+                for name in &names {
+                    planar.push(name.is_some());
+                    owners.push((uid, name.clone(), path.clone()));
+                }
+            }
+        }
+        let best = orient::best_bed_face(&piece, &planar)?;
+        let (uid, name, path) = owners.get(best.face)?.clone();
+        Some((uid, name?, best.normal, path))
+    }
+
     /// The objects of a 3MF file on the print bed (mitcad#856), each with
     /// its plan ([`Document::bed_plan`] of its placements): the
     /// placements of `bodies` (`paths`, the occurrence paths of
@@ -297,7 +473,9 @@ impl<K: Kernel> Document<K> {
     /// placement `picked` (bodies listed with their occurrences) of a body
     /// with a usable bed face an object of its own when there are two or
     /// more; the rest the file's own object (first, when it has any). A
-    /// face `chosen` turns the piece it is in (mitcad#857).
+    /// face the rules choose turns the piece it is in (mitcad#857); a piece
+    /// without a usable face is oriented automatically when they ask for
+    /// it (mitcad#1109).
     #[allow(clippy::type_complexity)]
     pub(super) fn bed_pieces(
         &self,
@@ -306,7 +484,7 @@ impl<K: Kernel> Document<K> {
         paths: &dyn Fn(BodyUid) -> Vec<Option<Vec<OccurrenceUid>>>,
         picked: &BTreeMap<BodyUid, Vec<Vec<OccurrenceUid>>>,
         whole: &[Vec<OccurrenceUid>],
-        chosen: &[(BodyUid, Vec<OccurrenceUid>)],
+        rules: &BedRules<'_>,
     ) -> Result<Vec<Piece>, ModelError> {
         let mut rest = Vec::new();
         let mut wholes: Vec<Vec<(usize, usize)>> = vec![Vec::new(); whole.len()];
@@ -381,7 +559,7 @@ impl<K: Kernel> Document<K> {
                         .map(|(_, k)| all.get(*k).cloned().flatten())
                         .collect()
                 };
-                let plan = self.bed_plan(&mine, &of_piece, &paths_of_piece, chosen)?;
+                let plan = self.bed_plan(&mine, &of_piece, &paths_of_piece, rules)?;
                 Ok(Piece {
                     name,
                     members,
@@ -395,9 +573,10 @@ impl<K: Kernel> Document<K> {
     /// file's own object's plan (the one piece's when there is one) with
     /// the others as [`OnBed::objects`],
     /// every problem once and the placements on their faces counted.
-    pub(super) fn merged_bed(&self, pieces: Vec<Piece>) -> OnBed {
+    pub(super) fn merged_bed(&self, pieces: Vec<Piece>, settle: Settle) -> OnBed {
         let mut merged = OnBed {
             plate: self.plate_centre(),
+            settle,
             ..OnBed::default()
         };
         // One piece is the file's own object, whatever it holds.
@@ -416,6 +595,8 @@ impl<K: Kernel> Document<K> {
                     merged.transform = plan.transform;
                     merged.kept = plan.kept;
                     merged.choices = plan.choices;
+                    merged.auto = plan.auto;
+                    merged.occurrence = plan.occurrence;
                 }
                 Some(name) => merged.objects.push(BedObject {
                     name,
@@ -423,6 +604,8 @@ impl<K: Kernel> Document<K> {
                     transform: plan.transform,
                     kept: plan.kept,
                     choices: plan.choices,
+                    auto: plan.auto,
+                    occurrence: plan.occurrence,
                 }),
             }
         }

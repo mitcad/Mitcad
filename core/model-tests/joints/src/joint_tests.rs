@@ -654,7 +654,7 @@ fn limits_are_values_and_expressions() {
                "b": rig.plate_top(), "limits": {"rz": {"max": "travel"}}}),
     );
     assert!(
-        error.contains("travel' is a length, not an angle"),
+        error.contains("travel is a length, not an angle"),
         "{error}"
     );
     let error = rig.refuse(

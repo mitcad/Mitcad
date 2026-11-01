@@ -7,6 +7,7 @@
 
 #include <QJsonArray>
 #include <QSet>
+#include <QStringList>
 
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -177,6 +178,49 @@ bool isIdentity(const QJsonArray& rows) {
     }
   }
   return true;
+}
+
+QJsonObject placedDatum(const QJsonObject& datum, const gp_Trsf& placement) {
+  QJsonObject placed = datum;
+  const auto array = [](const gp_XYZ& xyz) {
+    QJsonArray out;
+    out.append(xyz.X());
+    out.append(xyz.Y());
+    out.append(xyz.Z());
+    return out;
+  };
+  for (const char* key : {"origin", "point"}) {
+    const QJsonValue value = datum.value(QLatin1String(key));
+    if (const auto p = pointFrom(value)) {
+      placed.insert(QLatin1String(key), array(p->Transformed(placement).XYZ()));
+    }
+  }
+  for (const char* key : {"normal", "x_axis", "y_axis", "direction"}) {
+    const QJsonValue value = datum.value(QLatin1String(key));
+    if (value.toArray().size() >= 3) {
+      placed.insert(QLatin1String(key), array(vectorOf(value).Transformed(placement).XYZ()));
+    }
+  }
+  return placed;
+}
+
+QString datumText(const QJsonObject& datum) {
+  const auto xyz = [&datum](const char* key) {
+    const QJsonArray v = datum.value(QLatin1String(key)).toArray();
+    QStringList parts;
+    for (const QJsonValue& c : v) {
+      parts << QString::number(std::abs(c.toDouble()) < 1e-9 ? 0.0 : c.toDouble(), 'g', 6);
+    }
+    return QStringLiteral("(%1)").arg(parts.join(QStringLiteral(", ")));
+  };
+  const QString kind = text(datum, "type");
+  if (kind == QStringLiteral("plane")) {
+    return QStringLiteral("origin %1, normal %2").arg(xyz("origin"), xyz("normal"));
+  }
+  if (kind == QStringLiteral("axis")) {
+    return QStringLiteral("origin %1, direction %2").arg(xyz("origin"), xyz("direction"));
+  }
+  return QStringLiteral("point %1").arg(xyz("point"));
 }
 
 TopoDS_Shape datumShape(const QJsonObject& datum, double size) {

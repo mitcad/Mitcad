@@ -38,7 +38,7 @@ pub use mitcad_model::build::*;
 // with the model, under the module name the planning code uses (mitcad#811).
 use mitcad_model::internal::build as geometry;
 
-pub use connect::{ConnectInput, PanelInput, RemoveResult};
+pub use connect::{CONNECT_RULE, ConnectInput, ConnectRule, PanelInput, RemoveResult};
 pub use cut_list::{
     BoardColumns, CutList, CutListOptions, CutRow, MachiningItem, StockEntry, TimberColumns,
     TimberTotals,

@@ -1,0 +1,132 @@
+# SPDX-License-Identifier: MIT
+# One filament, its variants per printer and nozzle (mitcad#1054), through
+# the real Qt controls; shared by tools/ui-filament-variants-test.sh (Linux,
+# Xvfb), tools/ui-windows-filament-variants-test.ps1 and
+# tools/ui-macos-filament-variants-test.sh. The design is
+# filament-variants.json: a box of Bench PLA (variants for Bench X and
+# Bench Y with 0.4 mm nozzles), printers Bench X 0.4 (the design's), Bench
+# X 0.6 and Bench Y 0.4, and Old PLA kept as two materials of an import
+# from before. The slicer's folder (MITCAD_TEST_SLICER_FOLDERS) is
+# filament-variants-slicer: Shop PLA's presets for Bench X 0.4, Bench X 0.6
+# and Bench Y 0.4.
+#   1. 3D Print's Materials row names the variant the printer picks, and
+#      another printer's when the printer changes (chosen in the Printer
+#      picker, mitcad#1108).
+#   2. Import Presets of Printers and Processes: Shop PLA is one row with
+#      its three presets under it, the printers and nozzles in use on top;
+#      Bench X 0.6 unticked unticks its variant; the merge of Old PLA's
+#      separate materials ticked; Import 2 Presets brings Shop PLA in as
+#      one material and merges Old PLA.
+#   3. The Materials window's Variants tab of Shop PLA: its two variants
+#      with the values that differ; Bench Y's temperature typed; Add
+#      Variant of Bench X 0.6; Remove Variant.
+wait-idle
+window-resize 1280 860
+focus-main
+mark
+
+# 1. 3D Print: the variant of the design's printer, then of another.
+command make.print3d
+expect-log '^Command Send to Slicer started$'
+expect-log 'Panel Send to Slicer note materials: Bench.PLA.for.Bench.X,.0\.4.mm.nozzle'
+# Printer opens its picker (mitcad#1108): the printer typed in its search,
+# Return chooses the first match.
+expect-log 'Panel Send to Slicer input printer at'
+mark
+click-logged 'Panel Send to Slicer input printer at'
+expect-log 'Printer picker opened: '
+focus-dialog '^Printer Picker$'
+type 'Bench Y'
+expect-log 'Printer picker search: Bench Y, first Y .* 0\.4 mm nozzle'
+key Return
+expect-log 'Printer picker chose: Y .* 0\.4 mm nozzle'
+expect-log 'Panel Send to Slicer note materials: Bench.PLA.for.Bench.Y,.0\.4.mm.nozzle'
+focus-main
+mark
+click-logged 'Panel Send to Slicer input printer at'
+expect-log 'Printer picker opened: '
+focus-dialog '^Printer Picker$'
+type 'Bench X 0.4'
+expect-log 'Printer picker search: Bench X 0\.4, first X .* 0\.4 mm nozzle'
+key Return
+expect-log 'Printer picker chose: X .* 0\.4 mm nozzle'
+expect-log 'Panel Send to Slicer note materials: Bench.PLA.for.Bench.X,.0\.4.mm.nozzle'
+focus-main
+key Escape
+expect-log '^Command Send to Slicer cancelled$'
+wait-idle
+
+# 2. Import Presets: one filament's presets as one material.
+mark
+command make.printers
+focus-dialog '^Printers and Processes$'
+button '^Import from Slicer'
+popup 'Presets of Bambu Studio…'
+focus-dialog '^Import Presets$'
+expect-log 'Slicer presets merge offered: 1: Old PLA \(Old PLA @Bench X, Old PLA @Bench Y\)'
+expect-log 'Slicer presets opened: Bambu Studio, 3 presets'
+expect-log 'Slicer presets printer: Bench X, 0\.4 mm nozzle, ticked'
+expect-log 'Slicer presets printer: Bench X, 0\.6 mm nozzle, ticked'
+expect-log 'Slicer presets printer: Bench Y, 0\.4 mm nozzle, ticked'
+expect-log 'Slicer presets row: material Shop PLA, 3 variants'
+expect-log 'Slicer presets row: variant Shop PLA › Bench X, 0\.6 mm nozzle, ticked'
+expect-log 'Slicer presets ticked: 3, Import 3 Presets'
+expect-log 'Slicer presets printer Bench X, 0\.6 mm nozzle at'
+expect-log 'Slicer presets merge at'
+mark
+dialog-click-logged 'Slicer presets printer Bench X, 0\.6 mm nozzle at'
+expect-log 'Slicer presets printer tick: Bench X, 0\.6 mm nozzle unticked'
+expect-log 'Slicer presets tick: Shop PLA › Bench X, 0\.6 mm nozzle unticked'
+expect-log 'Slicer presets ticked: 2, Import 2 Presets'
+mark
+dialog-click-logged 'Slicer presets merge at'
+expect-log 'Slicer presets merge: ticked'
+mark
+button '^Import 2 Presets$'
+expect-log 'Imported print settings from 2 presets: printers: ; processes: ; materials: Shop PLA;'
+expect-log 'Profiles merged: Old PLA \(old_x, old_y\)'
+focus-dialog '^Printers and Processes$'
+button '^Close$'
+focus-main
+wait-idle
+
+# 3. The Variants tab of Shop PLA.
+mark
+command solid.materials
+focus-dialog '^Materials$'
+expect-log 'Materials item Shop PLA at'
+expect-log 'Materials item Old PLA at'
+mark
+dialog-click-logged 'Materials item Shop PLA at'
+expect-log 'Material selected: Shop PLA \(design\)'
+expect-log 'Materials variants: 2'
+expect-log 'Materials variant row: Bench X, 0\.4 mm nozzle: Nozzle temperature 220'
+expect-log 'Materials variant row: Bench Y, 0\.4 mm nozzle: Nozzle temperature 205'
+expect-log 'Materials settings tab variants at'
+mark
+dialog-click-logged 'Materials settings tab variants at'
+expect-log 'Materials variant item Bench Y, 0\.4 mm nozzle at'
+mark
+dialog-click-logged 'Materials variant item Bench Y, 0\.4 mm nozzle at'
+expect-log 'Materials variant selected: Bench Y, 0\.4 mm nozzle'
+focus-widget variantSettingsSearch
+type 'nozzle temperature'
+focus-widget variantSetting_temperature
+mark
+key ctrl+a
+type 207
+key Return
+expect-log 'Material Shop PLA \(design\) variant Bench Y, 0\.4 mm nozzle temperature = 207'
+expect-log 'Materials variant row: Bench Y, 0\.4 mm nozzle: Nozzle temperature 207'
+mark
+button '^Add Variant'
+expect-log 'Materials variant add menu: .*Bench X 0\.6 nozzle'
+popup 'Bench X 0.6 nozzle'
+expect-log 'Material Shop PLA \(design\) variant Bench X, 0\.6 mm nozzle added'
+expect-log 'Materials variants: 3'
+mark
+button '^Remove Variant$'
+expect-log 'Material Shop PLA \(design\) variant Bench X, 0\.6 mm nozzle removed'
+expect-log 'Materials variants: 2'
+button '^Close$'
+focus-main

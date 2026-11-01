@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""No-options entry, numeric Other, New fill and an actual picked face."""
+"""The Appearance tool's fx without options, an option added in
+Configurations with one value, and an actual face picked in the view bound
+to it (mitcad#1059, mitcad#1066)."""
+import json
+import re
 import sys
 
 native = sys.argv[1] == "native"
@@ -11,6 +15,10 @@ lines = ["# SPDX-License-Identifier: MIT", "wait-idle", "window-resize 1280 820"
 
 def add(*steps):
     lines.extend(steps)
+
+
+def log(pattern):
+    return "expect-log " + json.dumps("^" + re.escape(pattern) + "$", ensure_ascii=False)
 
 
 def press(label):
@@ -27,17 +35,21 @@ def field(identifier, value):
         "key Ctrl+a", f"type '{value}'", "key Tab")
 
 
-def fill(identifier):
-    add(f"native-pointer-dblclick appearance.{identifier}" if native else
-        f"dialog-dblclick-logged 'Appearances item {identifier} at '")
+def click_input(command, key):
+    add(f"expect-ever '^Panel {command} input {key} at '", f"click-logged '^Panel {command} input {key} at '")
 
 
-def length(value):
-    add("focus-main", "mark",
-        "native-pointer-click configurationField_Length" if native else "focus-widget configurationField_Length",
-        "key Ctrl+a", f"type '{value} mm'", "key Return",
-        f"expect-log '^Configuration chosen: Length = {value}'", "wait-idle",
-        "expect-model-bodies 1 48000")
+def choose(command, key, text):
+    add(f"native-choice input_{key} '{text}'" if native else f"qt-choice input_{key} '{text}'",
+        "expect-log " + json.dumps(f"^{command}: .* = {re.escape(text)}$", ensure_ascii=False))
+
+
+def ok():
+    add("native-click commandOk" if native else "key Return")
+
+
+def cancel():
+    add("native-click commandCancel" if native else "key Escape")
 
 
 if native:
@@ -45,16 +57,21 @@ if native:
         "native-context-menu native.model.body:F1.b0@ 'Appearance…'")
 else:
     add("context-menu-logged '^Browser Root/Bodies/Body1 at ' 'Appearance…'")
-add("focus-dialog '^Appearances$'", "expect-log 'Appearances varies with: None \\| Add Option…'",
-    "capture-undo-depth beforeOption", "mark")
+add(log("Appearance tool for F1.b0"), "capture-undo-depth beforeOption", "mark")
 
-# Add Option is an action entry, not a retained choice: the shared combo
-# resets to None while it opens Configurations. Drive its real popup.
-if native:
-    add("native-pointer-choice assignmentVaries None Down Return")
-else:
-    add("qt-choice assignmentVaries 'Add Option…'")
-add("expect-log 'Appearances: Add Option…'", "focus-dialog '^Configurations$'")
+# Without options the fx offers None only; its note says how to add one.
+click_input("Appearance", "value_fx")
+# The options and the note are logged as the panel was filled, before the fx.
+add(log("Appearance: Varies with an option = on"),
+    "expect-ever '^Panel Appearance options varies: None$'",
+    "expect-ever " + json.dumps("^" + re.escape("Panel Appearance varies note: The design has no options yet; "
+                                                "Configurations… adds them.") + "$", ensure_ascii=False))
+shot("tool-no-options")
+cancel()
+add("expect-log '^Command Appearance cancelled'", "expect-undo-depth ${beforeOption} 0", "focus-main")
+
+# An option added in Configurations: Length with the value 20.
+add("command solid.configurations", "focus-dialog '^Configurations$'")
 if native:
     add("native-pointer-click configurationsAddOption")
 else:
@@ -62,60 +79,33 @@ else:
 add("focus-dialog '^Add Option$'")
 field("addOptionName", "Length")
 field("addOptionValue", "20")
-shot("assignment-add-option")
+shot("add-option")
 press("OK")
 add("expect-log 'Configurations added option Length'", "expect-undo-depth ${beforeOption} 1",
     "focus-dialog '^Configurations$'")
 press("Close")
-add("focus-dialog '^Appearances$'", "expect-log 'Appearances varies with: None \\| Length'", "mark")
-add("native-pointer-choice assignmentVaries Length Down Return" if native else
-    "qt-choice assignmentVaries Length")
-add("expect-log 'Appearances varies with Length: 2 rows, not written yet'",
-    "expect-log 'Appearances value Other: Steel - Satin'", "expect-no-log 'Appearances binding of'",
-    "expect-undo-depth ${beforeOption} 1")
-if native:
-    add("expect-native-text assignment.value.1 '^Other$'", "native-pointer-click assignment.value.1")
-else:
-    add("dialog-click-logged 'Appearances value Other at '")
-add("expect-log 'Appearances active row: Other'", "capture-undo-depth beforeNew")
-add("native-pointer-click appearance.paint_red" if native else
-    "dialog-click-logged 'Appearances item paint_red at '")
-if native:
-    add("native-pointer-click appearanceNew")
-else:
-    add("focus-widget appearanceNew", "key Space")
-add("expect-log '^Created appearance .* \\(Paint - Red Copy\\) from paint_red$'",
-    "expect-log '^Appearances filled Other with '",
-    "expect-log '^Appearances binding of Body1: switch\\(Length;'",
-    "expect-log 'Appearances active row: none'",
-    # Shared New makes a design copy, then the normal fill is its own step.
-    "expect-undo-depth ${beforeNew} 2")
-shot("assignment-new-other")
-press("Close")
-length(30)
+add("focus-main")
 
 # The viewport helper probes a currently visible OCCT face and clicks it
 # through the real input path. It also asserts the exact shared selection;
 # the saved model is checked against that logged topological face name.
-add("key Escape", "click-visible-face", "command solid.appearances", "focus-dialog '^Appearances$'",
-    "expect-log 'Appearances panel: Assign to Face; varies with None'", "capture-undo-depth beforeFace", "mark")
-add("native-pointer-choice assignmentVaries Length Down Return" if native else
-    "qt-choice assignmentVaries Length")
-add("expect-log 'Appearances varies with Length: 2 rows, not written yet'",
-    "expect-undo-depth ${beforeFace} 0")
-fill("paint_black")
-add("expect-log \"^Appearances filled .* with 'paint_black'$\"",
-    "expect-log 'Appearances assign label: Assign to row Other'", "expect-undo-depth ${beforeFace} 1")
-fill("paint_white")
-add("expect-log \"Appearances filled Other with 'paint_white'\"",
-    "expect-log 'Appearances active row: none'", "expect-undo-depth ${beforeFace} 2")
-if native:
-    add("expect-native-text assignmentTitle '^Assign to Face$'",
-        "expect-native-text assignment.result.0 '^Paint - Black$'",
-        "expect-native-text assignment.result.1 '^Paint - White$'")
-shot("assignment-face-bound")
-press("Close")
-length(40)
+# The Appearance tool takes the face; its fx varies with Length, the
+# option's list of values (a closed list: one row, 20 mm, the value now,
+# and no Other row).
+add("key Escape", "click-visible-face", "mark", "command solid.appearance",
+    "expect-log '^Command Appearance started'", "capture-undo-depth beforeFace", "mark")
+click_input("Appearance", "value_fx")
+add(log("Appearance: Varies with an option = on"), "mark")
+choose("Appearance", "varies", "Length")
+add(log("Appearance tool varies with Length: 1 rows"),
+    "expect-log '^Panel Appearance label row0: 20.* \\(now\\)$'",
+    "expect-undo-depth ${beforeFace} 0", "mark")
+choose("Appearance", "row0", "Paint - Black")
+shot("tool-face-bound")
+add("mark")
+ok()
+add("expect-log '^Appearance switch\\(Length; .* for 0 body\\(ies\\), 1 face\\(s\\)$'",
+    "expect-undo-depth ${beforeFace} 1", "focus-main", "wait-idle")
 add("key Ctrl+s", "expect-log 'Saved .*bindings-open[.]mitcad'",
     "expect-model-bodies 1 48000", "expect-never 'Native Mac canvas[:]|OCCT view event failed|Recompute failed'")
 print("\n".join(lines))

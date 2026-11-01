@@ -407,17 +407,17 @@ void addTableTools(QVector<DrawingToolDef>& tools) {
                         {{QStringLiteral("by_size"), tr("By Size")}, {QStringLiteral("numbers"), tr("Numbers")}},
                         QStringLiteral("by_size"))},
                 &holeTable, true, tr("Click where the table goes"), nullptr, nullptr, true});
-  tools.append({QStringLiteral("drawing.parts_list"), tr("Parts List"), QStringLiteral("drawing-parts-list"),
+  tools.append({QStringLiteral("drawing.parts_list"), tr("Bill of Materials"), QStringLiteral("drawing-parts-list"),
                 tr("Lists the components a view shows, numbered"), SheetPick::ViewThenPlace,
                 tr("Click the view whose components the list shows"),
                 {choice(QStringLiteral("levels"), tr("Rows"),
-                        {{QStringLiteral("top"), tr("First Level")}, {QStringLiteral("parts"), tr("Parts Only")}},
+                        {{QStringLiteral("top"), tr("First Level")}, {QStringLiteral("parts"), tr("Components Only")}},
                         QStringLiteral("top")),
                  ToolOption{QStringLiteral("balloons"), tr("Balloons"), ToolOption::Kind::Check, {},
                             QStringLiteral("true")}},
                 &partsList, true, tr("Click where the list goes"), nullptr, nullptr, true});
   tools.append({QStringLiteral("drawing.balloon"), tr("Balloon"), QStringLiteral("drawing-balloon"),
-                tr("Shows a component's number in the parts list"), SheetPick::Picks,
+                tr("Shows a component's number in the bill of materials"), SheetPick::Picks,
                 tr("Click an edge of the component on a view"), {}, &balloonOn, true,
                 tr("Click where the balloon goes"), &onePick, &balloonType, true});
 }
@@ -457,11 +457,11 @@ void addAnnotationTools(QVector<DrawingToolDef>& tools) {
                  choice(QStringLiteral("along"), tr("Direction"), axes, QStringLiteral("horizontal"))},
                 &baseline, false, QString(), &openPicks, &linearType, true});
   tools.append({QStringLiteral("drawing.center_mark"), tr("Center Mark"), QStringLiteral("drawing-center-mark"),
-                tr("Marks a circle's centre, or a round face's centreline"), SheetPick::Picks,
+                tr("Marks a circle's center, or a round face's centerline"), SheetPick::Picks,
                 tr("Click a circle, or a round face seen from the side"), {}, &centerMark, false, QString(),
                 &onePick, &centerMarkType, true});
   tools.append({QStringLiteral("drawing.centerline"), tr("Centerline"), QStringLiteral("centerline"),
-                tr("Draws a centreline through two circles or between two edges"), SheetPick::Picks,
+                tr("Draws a centerline through two circles or between two edges"), SheetPick::Picks,
                 tr("Click two circles, or two parallel edges"), {}, &centerline, false, QString(), &twoPicks,
                 &centerlineType, true});
   // Drawn outside the model, on the sheet or in a view (mitcad#729).
@@ -471,14 +471,14 @@ void addAnnotationTools(QVector<DrawingToolDef>& tools) {
                   value);
   };
   tools.append({QStringLiteral("drawing.line"), tr("Line"), QStringLiteral("line"),
-                tr("Draws a line on the sheet or in a view, outside the model"), SheetPick::Segment,
+                tr("Draws a line on the sheet or in a view, outside the design"), SheetPick::Segment,
                 tr("Click the line's two ends"),
                 {attach(QStringLiteral("view")),
                  choice(QStringLiteral("pen"), tr("Line"), penChoices(), QStringLiteral("thin"))},
                 &sketchLine, false, QString(), nullptr, nullptr, true});
   tools.append({QStringLiteral("drawing.arc"), tr("Arc"), QStringLiteral("arc-center"),
-                tr("Draws an arc on the sheet or in a view, outside the model"), SheetPick::ArcPoints,
-                tr("Click the arc's centre, its start, then its end (counter-clockwise)"),
+                tr("Draws an arc on the sheet or in a view, outside the design"), SheetPick::ArcPoints,
+                tr("Click the arc's center, its start, then its end (counter-clockwise)"),
                 {attach(QStringLiteral("view")),
                  choice(QStringLiteral("pen"), tr("Line"), penChoices(), QStringLiteral("thin"))},
                 &sketchArc, false, QString(), nullptr, nullptr, true});
@@ -986,7 +986,7 @@ QString annotationName(const QString& type) {
     return tr("Hole Table");
   }
   if (type == QStringLiteral("parts_list")) {
-    return tr("Parts List");
+    return tr("Bill of Materials");
   }
   if (type == QStringLiteral("balloon")) {
     return tr("Balloon");
@@ -1043,6 +1043,23 @@ QList<QPair<QString, QString>> penChoices() {
           {QStringLiteral("thick"), tr("Thick")},
           {QStringLiteral("hidden"), tr("Dashed")},
           {QStringLiteral("chain"), tr("Center Line")}};
+}
+
+QStringList projectionLines(const QJsonArray& projections) {
+  QStringList lines;
+  for (const QJsonValue& value : projections) {
+    const QJsonObject note = value.toObject();
+    const QString how = note.value(QStringLiteral("cached")).toBool() ? QStringLiteral("from the cache")
+                        : note.value(QStringLiteral("polygonal")).toBool()
+                            ? QStringLiteral("projected from a triangulation")
+                            : QStringLiteral("projected exactly");
+    lines << QStringLiteral("Drawing projection of view %1: %2 bodies, %3 ms, %4")
+                 .arg(note.value(QStringLiteral("view")).toInt())
+                 .arg(note.value(QStringLiteral("bodies")).toInt())
+                 .arg(note.value(QStringLiteral("ms")).toDouble(), 0, 'f', 1)
+                 .arg(how);
+  }
+  return lines;
 }
 
 } // namespace mitcad::drawings

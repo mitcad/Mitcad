@@ -190,7 +190,7 @@ pub fn unit(dc: &Definitions, record: usize) -> Result<Unit, String> {
                 1e-3 => DisplayUnit::Mm,
                 1e-2 => DisplayUnit::Cm,
                 1.0 => DisplayUnit::M,
-                m => return Err(format!("unit {record}: metres times {m}")),
+                m => return Err(format!("unit {record}: meters times {m}")),
             }),
             INCH => Unit::Display(DisplayUnit::In),
             FOOT => Unit::Display(DisplayUnit::Ft),

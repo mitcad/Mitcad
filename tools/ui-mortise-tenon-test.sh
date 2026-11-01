@@ -16,6 +16,11 @@
 #      the one feature in the timeline.
 #   2. MortiseTenon1 edited to 25 long: both bodies built again (12 6 25 =
 #      1800 mm3 of tenon, 12.2 6.2 15.1 = 1142.164 mm3 of mortise).
+#   3. MortiseTenon1 edited to Count 3 (mitcad#1063): the Start Offset and
+#      End Offset shown, Width 8, Start Offset 4 and End Offset 24 along
+#      the rail's height: three tenons in the middles z = 8, 20 and 32,
+#      each with its mortise in the post, previewed and made: 3 8 6 25 =
+#      3600 mm3 of tenons, 3 8.2 6.2 15.1 = 2303.052 mm3 of mortises.
 # The Windows counterpart is tools/ui-windows-mortise-tenon-test.ps1.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -76,6 +81,24 @@ ui_step "OK (Enter)"                       ui_key Return
 ui_expect_new "Edited F3" "the joint edited"
 ui_expect_volume "Body Body1 (F1.b0): volume 122160.000 -> \([0-9.]*\) mm3" 121800 "the shorter tenon"
 ui_expect_volume "Body Body2 (F2.b0): volume 17679.636 -> \([0-9.]*\) mm3" 18057.836 "the shallower mortise"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+echo "--- 3. Count 3: three tenons along the rail's end, each with its mortise"
+ui_mark
+ui_step "edit MortiseTenon1"               ui_double_click_logged "Timeline MortiseTenon1"
+ui_expect_new "Editing F3 with Mortise and Tenon" "the joint opens for editing again"
+ui_mark
+ui_step "count 3"                          ui_type_in "Panel Mortise and Tenon input count" "3"
+ui_expect_new "Preview Mortise and Tenon: ok" "three tenons previewed"
+ui_mark
+ui_step "width 8"                          ui_type_in "Panel Mortise and Tenon input width" "8"
+ui_step "start offset 4"                   ui_type_in "Panel Mortise and Tenon input start_offset" "4"
+ui_step "end offset 24"                    ui_type_in "Panel Mortise and Tenon input end_offset" "24"
+ui_expect_new "Preview Mortise and Tenon: ok" "the spaced tenons previewed"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Edited F3" "the joint edited to three tenons"
+ui_expect_volume "Body Body1 (F1.b0): volume 121800.000 -> \([0-9.]*\) mm3" 123600 "three tenons on the rail"
+ui_expect_volume "Body Body2 (F2.b0): volume 18057.836 -> \([0-9.]*\) mm3" 16896.948 "three mortises in the post"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 
 ui_finish "UI mortise and tenon test"

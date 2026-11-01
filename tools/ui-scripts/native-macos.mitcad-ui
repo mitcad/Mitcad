@@ -77,6 +77,13 @@ expect-native-style native.command.solid.extrude 'result-icon,disabled'
 key Ctrl+w
 expect-native-visible native.commandSearch false
 
+# The view shows the origin only as its light bulb does (mitcad#1030): on
+# for the click on its XY plane below.
+mark
+native-expand native.modelTree
+native-click native.model.eye.origin
+expect-log 'Visibility Root/Origin: shown'
+
 # Create a box through the native menu and form, including input validation.
 mark
 native-action solid.box
@@ -201,6 +208,21 @@ expect-native-visible native.timelineSearch false
 expect-native-visible native.modelTree true
 expect-native-history F1
 expect-model-bodies 1 10000
+
+# Each search opens at the control that opened it (mitcad#1021): command
+# search under the Search Commands toolbar item, timeline search above the
+# timeline's magnifier with its field next to the timeline.
+native-click native.commandSearchButton
+expect-native-visible native.commandSearch true
+expect-native-attached native.commandSearch native.commandSearchButton below
+key Ctrl+w
+expect-native-visible native.commandSearch false
+native-click native.history.search
+expect-native-visible native.timelineSearch true
+expect-native-attached native.timelineSearch native.history.search above
+key Ctrl+w
+expect-native-visible native.timelineSearch false
+expect-native-visible native.modelTree true
 native-select native.model.component@
 
 # Repeated native inputs keep their values when rows are renumbered, and
@@ -263,6 +285,18 @@ focus-dialog '^Properties$'
 expect-log 'Physical properties:.*volume 10000' 30
 button '^Close$'
 focus-main
+
+# The pointer over a body's or a component's Browser row highlights its
+# bodies in the view, as over the Qt rows (mitcad#1072); off the rows the
+# highlight goes.
+native-expand native.modelTree
+mark
+native-hover native.model.body:F1.b0@O1 enter
+expect-log '^Browser hover highlight: .+ \(1 bodies\), '
+native-hover native.model.component@O1 enter
+expect-log '^Browser hover highlight: .*Component1:1 \(1 bodies\), '
+native-hover native.model.component@O1 leave
+expect-log '^Browser hover highlight: none \(0 bodies\), '
 screenshot '${MITCAD_TEST_WORK}/native-macos.png'
 expect-file '${MITCAD_TEST_WORK}/native-macos.png'
 expect-never 'Native Mac canvas:|OCCT view event failed|TestDriver: FAIL|Secure coding is automatically enabled for restorable state'

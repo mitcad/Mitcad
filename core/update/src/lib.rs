@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Mitcad's automatic updates (mitcad#9, `docs/updates.md`): the release
+//! MitCad's automatic updates (mitcad#9, `docs/updates.md`): the release
 //! manifest signed with the release's Ed25519 key, which release a running
 //! version is offered, the checks of a downloaded file, and the signing for
 //! the release tool `mitcad-release`. The network is the application's (Qt
@@ -109,15 +109,15 @@ impl fmt::Display for UpdateError {
         match self {
             UpdateError::NoReleaseKey => write!(
                 f,
-                "this build of Mitcad has no release key, so it cannot verify updates"
+                "this build of MitCad has no release key, so it cannot verify updates"
             ),
             UpdateError::BadKey(why) => write!(f, "invalid key: {why}"),
             UpdateError::ManifestSignature => write!(
                 f,
-                "the update manifest's signature does not match Mitcad's release key"
+                "the update manifest's signature does not match MitCad's release key"
             ),
             UpdateError::Manifest(why) => write!(f, "{why}"),
-            UpdateError::Version(text) => write!(f, "'{text}' is not a version"),
+            UpdateError::Version(text) => write!(f, "“{text}” is not a version"),
             UpdateError::File(why) => write!(f, "the download is not the release's: {why}"),
             UpdateError::Io(why) => write!(f, "{why}"),
         }
@@ -180,9 +180,9 @@ impl TrustedKeys {
                 continue;
             }
             let bytes = from_hex::<32>(word)
-                .ok_or_else(|| UpdateError::BadKey(format!("'{word}' is not 64 hex digits")))?;
+                .ok_or_else(|| UpdateError::BadKey(format!("“{word}” is not 64 hex digits")))?;
             let key = VerifyingKey::from_bytes(&bytes)
-                .map_err(|_| UpdateError::BadKey(format!("'{word}' is not an Ed25519 key")))?;
+                .map_err(|_| UpdateError::BadKey(format!("“{word}” is not an Ed25519 key")))?;
             keys.push(key);
         }
         Ok(TrustedKeys(keys))
@@ -412,14 +412,14 @@ impl Manifest {
             |why: String| Err(UpdateError::Manifest(format!("the update manifest {why}")));
         if self.format != MANIFEST_FORMAT {
             return invalid(format!(
-                "has format {}, which this Mitcad does not read",
+                "has format {}, which this MitCad does not read",
                 self.format
             ));
         }
         parse_version(&self.version)?;
         if let Some(expires) = &self.expires {
             let Some(last) = parse_date(expires) else {
-                return invalid(format!("has an invalid expiry date '{expires}'"));
+                return invalid(format!("has an invalid expiry date “{expires}”"));
             };
             if parse_date(&self.date).is_some_and(|released| last < released) {
                 return invalid(format!(
@@ -437,7 +437,7 @@ impl Manifest {
                     .bytes()
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
             {
-                return invalid(format!("names an invalid platform '{platform}'"));
+                return invalid(format!("names an invalid platform “{platform}”"));
             }
             if !https(&asset.url) {
                 return invalid(format!("has no HTTPS address for {platform}"));
@@ -489,7 +489,7 @@ impl Manifest {
         let statement = file_statement(&self.version, platform, asset.size, &asset.sha256);
         if !keys.verifies(statement.as_bytes(), &asset.signature) {
             return Err(UpdateError::File(
-                "its signature does not match Mitcad's release key".into(),
+                "its signature does not match MitCad's release key".into(),
             ));
         }
         let (size, sha256) = digest_file(path)?;

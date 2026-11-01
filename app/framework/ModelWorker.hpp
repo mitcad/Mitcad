@@ -32,7 +32,7 @@ public:
 // and changed nothing. The model's own words for it.
 class ComputationCancelled : public std::runtime_error {
 public:
-  ComputationCancelled() : std::runtime_error("the computation was cancelled") {}
+  ComputationCancelled() : std::runtime_error("the computation was canceled") {}
 };
 
 // What a job has: the control its documents report their progress to and

@@ -2156,7 +2156,7 @@ void LockController::probe(QObject* context, std::function<void(bool accepted, c
     const bool accepted = answer.value(QStringLiteral("accepted")).toBool();
     const QString message = str(answer, "message");
     m_probes.insert(key, {accepted, message});
-    qInfo().noquote() << (accepted ? QStringLiteral("Edit locks probe: the remote accepts Mitcad's lock references")
+    qInfo().noquote() << (accepted ? QStringLiteral("Edit locks probe: the remote accepts MitCad's lock references")
                                    : QStringLiteral("Edit locks probe: %1 (%2)").arg(message, str(answer, "reason")));
     if (guard != nullptr) {
       done(accepted, message);

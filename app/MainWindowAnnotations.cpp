@@ -48,11 +48,12 @@ QString compactJson(const QJsonObject& object) {
   return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
 }
 
-// A note, a datum label, a feature control frame or a hole callout: on a
-// leader, without a value.
+// A note, a datum label, a feature control frame, a hole callout, a
+// material or process note (mitcad#1049): on a leader, without a value.
 bool isLeaderKind(const QString& kind) {
   return kind == QLatin1String("note") || kind == QLatin1String("datum") || kind == QLatin1String("frame") ||
-         kind == QLatin1String("hole_callout");
+         kind == QLatin1String("hole_callout") || kind == QLatin1String("material") ||
+         kind == QLatin1String("process_note");
 }
 
 // What a feature control frame can stand under: a dimension or a hole
@@ -504,10 +505,10 @@ QString MainWindow::annotationPickText() const {
     return QString();
   }
   if (m_annotationPick->field == QLatin1String("plane")) {
-    return tr("Edit %1: pick a planar face or a datum plane for its plane. Esc cancels.").arg(m_annotationPick->name);
+    return tr("Edit %1: pick a planar face or a construction plane for its plane. Esc cancels.").arg(m_annotationPick->name);
   }
   if (marksFeature(m_snapshot.measurements, m_annotationPick->name)) {
-    return tr("Edit %1: pick a face, edge, datum plane or datum axis again. Esc cancels.").arg(m_annotationPick->name);
+    return tr("Edit %1: pick a face, edge, construction plane or construction axis again. Esc cancels.").arg(m_annotationPick->name);
   }
   return tr("Edit %1: pick a face, edge, vertex or datum again. Esc cancels.").arg(m_annotationPick->name);
 }
@@ -579,7 +580,7 @@ bool MainWindow::cancelAnnotationPick() {
   const QString name = m_annotationPick->name;
   m_annotationPick.reset();
   updateIdleView();
-  showHint(tr("Pick cancelled."));
+  showHint(tr("Pick canceled."));
   qDebug().noquote() << QStringLiteral("Annotation pick cancelled: %1").arg(name);
   afterEventWhenIdle(*this, this, [this, name] { editAnnotationNamed(name); });
   return true;

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # AppKit workflow test, driven in process without Accessibility permission.
-# Usage: tools/ui-macos-native-test.sh <app> [out directory] [workflow|cancel|secondary|sketch|panels|toolbar|gestures|history|context-menus|replacement|autoselect|point-pattern]
+# Usage: tools/ui-macos-native-test.sh <app> [out directory] [workflow|cancel|secondary|sketch|panels|toolbar|gestures|history|context-menus|replacement|autoselect|point-pattern|navigation-bar]
 # Requires MITCAD_MACOS_NATIVE_UI=ON and a logged-in macOS window server.
 set -u
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -9,7 +9,7 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/ui-macos-lib.sh"
 
 if [ $# -lt 1 ] || [ $# -gt 3 ]; then
-  echo "usage: $0 <app> [out directory] [workflow|cancel|secondary|sketch|panels|toolbar|gestures|history|context-menus|replacement|autoselect|point-pattern]" >&2
+  echo "usage: $0 <app> [out directory] [workflow|cancel|secondary|sketch|panels|toolbar|gestures|history|context-menus|replacement|autoselect|point-pattern|navigation-bar]" >&2
   exit 2
 fi
 ui_init "$1" "${2:-ui-macos-native}"
@@ -57,6 +57,8 @@ case "$scenario" in
     plain_design=1
     ;;
   replacement) script=native-macos-replacement.mitcad-ui ;;
+  # The navigation bar at the bottom of the view (mitcad#1099).
+  navigation-bar) script=native-macos-navigation-bar.mitcad-ui ;;
   *) echo "unknown native scenario: $scenario" >&2; exit 2 ;;
 esac
 UI_TIMEOUT=${UI_NATIVE_TIMEOUT:-240}

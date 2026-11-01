@@ -124,10 +124,10 @@ impl Table {
         let name = &self.name;
         if !expr::is_valid_name(name) {
             return Err(if expr::is_reserved_name(name) {
-                format!("'{name}' is a unit, function or constant and cannot name a table")
+                format!("{name} is a unit, function or constant and cannot name a table")
             } else {
                 format!(
-                    "'{name}' is not a valid table name: use letters, digits and '_', starting \
+                    "{name} is not a valid table name: use letters, digits and '_', starting \
                      with a letter"
                 )
             });
@@ -147,7 +147,7 @@ impl Table {
         for (i, column) in self.columns.iter().enumerate() {
             if !is_column_name(&column.name) {
                 return Err(format!(
-                    "table {name}: '{}' is not a valid column name: use letters, digits and \
+                    "table {name}: {} is not a valid column name: use letters, digits and \
                      '_', starting with a letter",
                     column.name
                 ));
@@ -180,7 +180,7 @@ impl Table {
                     }
                     TableCell::Text(text) if !column.unit.is_text() => {
                         return Err(format!(
-                            "{}: the text '{text}' in a column of numbers ({})",
+                            "{}: the text “{text}” in a column of numbers ({})",
                             at(),
                             unit_name(column.unit)
                         ));
@@ -383,7 +383,7 @@ mod unit_text {
         deserializer: D,
     ) -> Result<Unit, D::Error> {
         let text = String::deserialize(deserializer)?;
-        Unit::parse(&text).map_err(|e| D::Error::custom(format!("unit '{text}': {e}")))
+        Unit::parse(&text).map_err(|e| D::Error::custom(format!("unit “{text}”: {e}")))
     }
 }
 
@@ -443,7 +443,7 @@ mod tests {
         };
         assert_eq!(
             check(&|t| t.rows[1][2] = TableCell::Text("7".to_owned())),
-            "table Screws row 2, column dk: the text '7' in a column of numbers (mm)"
+            "table Screws row 2, column dk: the text “7” in a column of numbers (mm)"
         );
         assert_eq!(
             check(&|t| t.rows[0][0] = TableCell::Number(3.0)),
@@ -474,7 +474,7 @@ mod tests {
         let error = serde_json::from_value::<Tables>(json!([{
             "name": "T", "columns": [{"name": "n", "unit": "furlong"}]}]))
         .unwrap_err();
-        assert!(error.to_string().contains("unit 'furlong'"), "{error}");
+        assert!(error.to_string().contains("unit “furlong”"), "{error}");
     }
 
     #[test]

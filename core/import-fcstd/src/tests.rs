@@ -554,7 +554,7 @@ fn reference_dumps_are_compared() {
     assert_eq!(r.checked, 3);
     report.placed[0].center = [0.0, 0.0, 1.0];
     let r = reference::check(&report, &dump);
-    assert!(!r.pass && r.differences[0].contains("centre"));
+    assert!(!r.pass && r.differences[0].contains("center"));
     assert!(!reference::check(&report, &json!({})).pass);
     // FreeCAD's own measures are no reference for an invalid shape, nor
     // when its mesh of the shape disagrees with them: a difference there is
@@ -2627,7 +2627,7 @@ fn part_extrusions_of_faces_and_into_faces_become_features() {
     let text = report.text();
     assert!(
         text.contains(
-            "fallbacks by group: 1 missing in Mitcad, 1 without a parametric counterpart, 0 other"
+            "fallbacks by group: 1 missing in MitCad, 1 without a parametric counterpart, 0 other"
         ),
         "{text}"
     );
@@ -4492,9 +4492,9 @@ fn body_and_face_colours_become_appearances() {
                 .unwrap_or_else(|| panic!("no appearance {name}: {:?}", doc.custom_appearances()))
         };
         let (red, green, blue) = (
-            id("FreeCAD colour 255 0 0"),
-            id("FreeCAD colour 0 255 0"),
-            id("FreeCAD colour 0 0 255"),
+            id("FreeCAD color 255 0 0"),
+            id("FreeCAD color 0 255 0"),
+            id("FreeCAD color 0 0 255"),
         );
         // One appearance per colour, none of FreeCAD's grey.
         assert_eq!(report.appearances, 3, "{:?}", doc.custom_appearances());
@@ -4502,7 +4502,7 @@ fn body_and_face_colours_become_appearances() {
         let red_look = doc.appearance(&red).unwrap();
         assert_eq!(red_look.base_color, [1.0, 0.0, 0.0]);
         assert!(
-            !report.warnings.iter().any(|w| w.contains("colour")),
+            !report.warnings.iter().any(|w| w.contains("color")),
             "{:?}",
             report.warnings
         );
@@ -4548,7 +4548,7 @@ fn body_and_face_colours_become_appearances() {
         assert_eq!(row.face_appearances, 1);
         let row = report.bodies.iter().find(|b| b.object == "Plain").unwrap();
         assert_eq!((row.color, row.appearance.as_deref()), (None, None));
-        assert!(report.text().contains("1 faces of their own colour"));
+        assert!(report.text().contains("1 faces of their own color"));
         // Still one undo step.
         assert_eq!(doc.undo_depth(), 1);
     }
@@ -7478,4 +7478,218 @@ fn a_whole_body_pattern_of_a_single_solid_body_joins_only_its_own_copies() {
     let def = &defs[0];
     assert_eq!(def["combine"], true, "{def}");
     assert!(def.get("combine_any").is_none(), "{def}");
+}
+
+#[test]
+fn a_pipe_along_edges_of_its_body_s_earlier_result_is_a_sweep_along_them() {
+    // (mitcad#1087) FreeCAD 1.x's AdditivePipe takes its spine as edges of
+    // the Body's earlier result (`Pad.Edge2`): a sweep along the body's
+    // edges by name, found in the body as it is before the pipe.
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Block",
+            format!(
+                "{}{}{}",
+                shape("Block.brp"),
+                links(
+                    "Group",
+                    "App::PropertyLinkList",
+                    &["Sketch", "Pad", "Ring", "Tube"]
+                ),
+                link("Tip", "Tube")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Sketch",
+            rectangle_sketch(0.0, 0.0, 40.0, 30.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Sketch", &[]),
+                float("Length", 10.0),
+                shape("Pad.brp")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Ring",
+            geometry(&[round([0.0, 0.0], 1.0)]),
+        ),
+        (
+            "PartDesign::AdditivePipe",
+            "Tube",
+            format!(
+                "{}{}{}{}{}",
+                link_sub("Profile", "Ring", &[]),
+                link_sub("Spine", "Pad", &["Edge2"]),
+                enumeration("Mode", 0),
+                link("BaseFeature", "Pad"),
+                shape("Tube.brp")
+            ),
+        ),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("Block.brp", b"10 block"),
+            ("Pad.brp", b"6 pad"),
+            ("Tube.brp", b"10 tube"),
+        ],
+    );
+    // Every edge of the mock shapes runs along this line, so FreeCAD's
+    // edge is found at its own index.
+    let kernel = MockKernel::default();
+    kernel.curves.borrow_mut().push(mitcad_model::Curve3::Line {
+        start: [0.0, 0.0, 0.0],
+        end: [0.0, 0.0, 30.0],
+    });
+    let (doc, report) = import_with(file, Vec::new(), kernel, false);
+    let tube = feature(&report, "Tube");
+    assert_eq!(tube.outcome, ObjectOutcome::Parametric, "{tube:?}");
+    let def = def_of(&doc, &tube.features[0]);
+    assert_eq!(def["type"], "sweep", "{def}");
+    let pad = feature(&report, "Pad");
+    // The path: the pad's body's edge, by its MitCad name.
+    let path = &def["path"];
+    assert!(path["sketch"].is_null(), "{def}");
+    let edges = path["edges"].as_array().unwrap_or_else(|| panic!("{def}"));
+    assert_eq!(edges.len(), 1, "{def}");
+    let name = edges[0].as_str().unwrap();
+    assert!(name.starts_with("E{"), "{def}");
+    assert!(name.contains(&pad.features[0]), "{def}");
+    assert_eq!(
+        path["body"].as_str().unwrap(),
+        format!("{}.b0", pad.features[0]),
+        "{def}"
+    );
+}
+
+#[test]
+fn a_hole_at_circular_edges_of_a_feature_drills_at_its_sketch_s_circles() {
+    // (mitcad#1087) FreeCAD 1.x's hole takes its profile as circular edges
+    // of a feature (`Pad.Edge2`, `Pad.Edge1`): the circles of the pad's
+    // sketch they came from, so the hole follows the sketch.
+    let corners = [[0.0, 0.0], [40.0, 0.0], [40.0, 30.0], [0.0, 30.0]];
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Plate",
+            format!(
+                "{}{}{}",
+                shape("Plate.brp"),
+                links("Group", "App::PropertyLinkList", &["Sketch", "Pad", "Hole"]),
+                link("Tip", "Hole")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Sketch",
+            geometry(&[
+                segment(corners[0], corners[1], false),
+                segment(corners[1], corners[2], false),
+                segment(corners[2], corners[3], false),
+                segment(corners[3], corners[0], false),
+                round([10.0, 15.0], 0.5),
+                round([30.0, 15.0], 0.5),
+            ]),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Sketch", &[]),
+                float("Length", 10.0),
+                shape("Pad.brp")
+            ),
+        ),
+        (
+            "PartDesign::Hole",
+            "Hole",
+            format!(
+                "{}{}{}{}{}{}{}{}",
+                link_sub("Profile", "Pad", &["Edge2", "Edge1"]),
+                link("BaseFeature", "Pad"),
+                float("Diameter", 6.6),
+                float("Depth", 5.0),
+                enumeration("DepthType", 0),
+                enumeration("DrillPoint", 1),
+                enumeration("HoleCutType", 0),
+                shape("Hole.brp")
+            ),
+        ),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("Plate.brp", b"10 plate"),
+            ("Pad.brp", b"6 pad"),
+            ("Hole.brp", b"10 hole"),
+        ],
+    );
+    // FreeCAD's Edge1 and Edge2 of the pad's stored shape: the circles
+    // about (30, 15) and (10, 15).
+    let (stored, _) = MockKernel::default()
+        .import_brep(FeatureUid(0), b"6 pad", 0)
+        .unwrap();
+    let circle = |x: f64| mitcad_model::Curve3::Conic {
+        center: [x, 15.0, 0.0],
+        normal: [0.0, 0.0, 1.0],
+        x_axis: [1.0, 0.0, 0.0],
+        major: 0.5,
+        minor: 0.5,
+        start: 0.0,
+        end: std::f64::consts::TAU,
+        closed: true,
+    };
+    let kernel = MockKernel::default();
+    for (k, x) in [(0, 30.0), (1, 10.0)] {
+        let (a, b) = &stored.edges[k];
+        let name = mitcad_model::EdgeName::new(a.clone(), b.clone()).to_string();
+        kernel.named_curves.borrow_mut().insert(name, circle(x));
+    }
+    let (doc, report) = import_with(file, Vec::new(), kernel, false);
+    let hole = feature(&report, "Hole");
+    assert_eq!(hole.outcome, ObjectOutcome::Parametric, "{hole:?}");
+    let def = def_of(&doc, &hole.features[0]);
+    assert_eq!(def["type"], "hole", "{def}");
+    let placement = &def["placement"];
+    assert_eq!(placement["type"], "sketch_points", "{def}");
+    let sketch = report
+        .sketches
+        .iter()
+        .find(|s| s.object == "Sketch")
+        .unwrap();
+    assert_eq!(
+        placement["sketch"].as_str(),
+        sketch.feature.as_deref(),
+        "{def}"
+    );
+    // The two circles, in the order of the edges: (10, 15), then (30, 15).
+    let sketch_json = sketch_def(&doc, &report, "Sketch");
+    let centre = |id: &serde_json::Value| -> [f64; 2] {
+        let id = id.as_str().unwrap_or_else(|| panic!("{def}"));
+        let entities = sketch_json["entities"].as_array().unwrap();
+        let entity = entities
+            .iter()
+            .find(|e| e["id"] == id)
+            .unwrap_or_else(|| panic!("no {id} in {sketch_json}"));
+        assert_eq!(entity["type"], "circle", "{entity}");
+        let at = entities
+            .iter()
+            .find(|e| e["id"] == entity["center"])
+            .unwrap_or_else(|| panic!("no centre of {entity}"));
+        [number(&doc, &at["at"][0]), number(&doc, &at["at"][1])]
+    };
+    let points = placement["points"].as_array().unwrap();
+    assert_eq!(points.len(), 2, "{def}");
+    assert_eq!(centre(&points[0]), [10.0, 15.0], "{def}");
+    assert_eq!(centre(&points[1]), [30.0, 15.0], "{def}");
 }

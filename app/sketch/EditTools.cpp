@@ -686,7 +686,10 @@ private:
     // "horizontal_distance signed" for a signed one (mitcad#409).
     const QString kind = d != nullptr && d->signedOffset ? type + QStringLiteral(" signed") : type;
     if (driven) {
-      m_c.hint(QObject::tr("The dimension would over-constrain the sketch: added as a driven dimension."));
+      // Not what was asked: a warning (mitcad#1051), kept in front of the
+      // next prompt, which reset() shows below.
+      m_c.notice(QObject::tr("The dimension would over-constrain the sketch: added as a driven dimension."),
+                 NoticeLevel::Warning);
       qDebug().noquote() << QStringLiteral("Added driven dimension %1 %2").arg(id, kind);
     } else {
       qDebug().noquote() << QStringLiteral("Added dimension %1 %2 %3 = %4")
@@ -1042,11 +1045,13 @@ bool applyEach(SketchController& c, const QString& type, const QVector<QStringLi
   }
   op.commit();
   if (added < static_cast<int>(sets.size())) {
-    c.hint(QObject::tr("%1: %2 of %3 added; the others were refused: %4")
-               .arg(constraintName(type))
-               .arg(added)
-               .arg(static_cast<int>(sets.size()))
-               .arg(reason));
+    // Some left out: a warning (mitcad#1051).
+    c.notice(QObject::tr("%1: %2 of %3 added; the others were refused: %4")
+                 .arg(constraintName(type))
+                 .arg(added)
+                 .arg(static_cast<int>(sets.size()))
+                 .arg(reason),
+             NoticeLevel::Warning);
   }
   return true;
 }

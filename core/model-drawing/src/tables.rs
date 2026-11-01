@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(settings.shown_columns(true), HOLE_COLUMNS);
         assert_eq!(settings.shown_columns(false), PARTS_DEFAULT);
         settings.columns = vec!["tag".to_owned(), "colour".to_owned()];
-        assert!(settings.check(true).unwrap_err().contains("not 'colour'"));
+        assert!(settings.check(true).unwrap_err().contains("not colour"));
         settings.check(false).unwrap();
         settings.sort = Some("colour".to_owned());
         settings.check(false).unwrap();

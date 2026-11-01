@@ -37,6 +37,12 @@
 // one); choosing another starts a new conversation in it. The model choice
 // offers the agent's default, the models it names (Codex's once it ran) and
 // any name typed in; it is kept per agent.
+//
+// The AppKit frontend shows the same panel in its Chat card through the
+// presenter bridge (mitcad#1075, MainWindowChat.cpp): its Qt widget stays
+// hidden, setPresented says when the card shows it, and contentChanged
+// tells the card to read its rows and state again. The message field's
+// keys (Enter, Esc) reach it from the AppKit text view too.
 
 #include <QHash>
 #include <QJsonObject>
@@ -48,6 +54,7 @@
 
 class QComboBox;
 class QFrame;
+class QKeyEvent;
 class QLabel;
 class QPlainTextEdit;
 class QPushButton;
@@ -68,12 +75,18 @@ public:
 
   // The message field gets the keyboard (the panel was opened).
   void focusInput();
+  // Shown or hidden by another frontend while this widget stays hidden (the
+  // AppKit Chat card): as the panel's own show and hide.
+  void setPresented(bool presented);
 
 signals:
   // Connect AI Assistant (Claude Desktop, which the chat does not use).
   void connectAssistantRequested();
   // Preferences › AI Assistants.
   void preferencesRequested();
+  // Its rows, their texts or its state changed: a frontend that presents
+  // the hidden panel elsewhere reads it again.
+  void contentChanged();
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -90,6 +103,12 @@ private:
     QString logged; // the counts last logged
   };
 
+  // Shown: the agent looked for once, the state brought up to date.
+  void opened();
+  // Shown by Qt or presented elsewhere.
+  bool presented() const;
+  // The message field's own keys: Enter sends, Esc stops; true when taken.
+  bool inputKey(const QKeyEvent* key);
   void rebuild();
   // `group`: the tool call's group when known (tool_groups), else asked.
   void addRow(int index, const QJsonObject& group = QJsonObject());
@@ -145,6 +164,7 @@ private:
   QString m_setupAction;
   QString m_loggedState;
   bool m_checked = false; // the agent was looked for since the panel opened
+  bool m_presented = false; // shown by another frontend (setPresented)
 };
 
 } // namespace mitcad::agent

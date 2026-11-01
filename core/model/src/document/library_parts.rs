@@ -416,7 +416,7 @@ impl<K: Kernel> Document<K> {
                 let name = self.state.assembly.name(*uid);
                 format!("Update {name} to {}", part_label(reference))
             }
-            _ => "Update Library Parts".to_owned(),
+            _ => "Update Library Components".to_owned(),
         };
         let lines: Vec<String> = planned.iter().map(|p| p.6.clone()).collect();
         self.apply(|state| {

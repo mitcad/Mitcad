@@ -46,16 +46,16 @@ pub enum ParameterError {
 impl fmt::Display for ParameterError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unknown(name) => write!(f, "unknown parameter '{name}'"),
+            Self::Unknown(name) => write!(f, "unknown parameter {name}"),
             Self::NotFinite { name, value } => {
-                write!(f, "parameter '{name}' must be a finite number, got {value}")
+                write!(f, "parameter {name} must be a finite number, got {value}")
             }
             Self::InUse { name, users } => {
-                write!(f, "parameter '{name}' is used by {}", users.join(", "))
+                write!(f, "parameter {name} is used by {}", users.join(", "))
             }
             Self::ReadOnly(name) => write!(
                 f,
-                "parameter '{name}' is the value a driven dimension measures: it cannot be set \
+                "parameter {name} is the value a driven dimension measures: it cannot be set \
                  (make the dimension driving to set it)"
             ),
             Self::Table(error) => error.fmt(f),
@@ -66,7 +66,7 @@ impl fmt::Display for ParameterError {
                 expected,
             } => write!(
                 f,
-                "parameter '{name}' cannot change to '{unit}': {user} uses it as {}",
+                "parameter {name} cannot change to {unit}: {user} uses it as {}",
                 describe(*expected)
             ),
         }
@@ -522,6 +522,8 @@ pub fn slot_unit(slot: &str) -> Unit {
         || slot == "element_count"
         // A thread's or a tapped hole's starts (mitcad#893).
         || matches!(slot, "starts" | "thread.starts")
+        // A mortise and tenon's tenons (mitcad#1063).
+        || slot == "count"
         // Every count, factor and fraction (mitcad#662): pattern quantities,
         // a pattern's or mirror's scale factors and their runs, a scale's
         // factors, a boss's ribs (construction paths' fractions are
@@ -669,6 +671,8 @@ pub fn slot_limits(feature_type: &str, slot: &str) -> Option<Bounds> {
             max: Some(0.8),
             step: None,
         }),
+        // A mortise and tenon's tenons (`mortise_tenon.rs`, `MAX_TENONS`).
+        ("mortise_tenon", "count") if slot == "count" => whole(1.0, Some(100.0)),
         _ => None,
     }
 }
@@ -806,6 +810,7 @@ mod tests {
             "extent.fraction",
             "teeth",
             "set_screws.count",
+            "count",
         ] {
             assert!(slot_unit(slot).is_unitless(), "{slot}");
         }

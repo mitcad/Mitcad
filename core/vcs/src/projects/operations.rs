@@ -27,7 +27,10 @@ use std::path::{Path, PathBuf};
 use gix::ObjectId;
 use mitcad_model::Project;
 use mitcad_model::file::settings::ProjectSettings;
-use mitcad_model::file::{brep_references, empty_design, rename_retrying, write_atomically};
+use mitcad_model::file::{
+    brep_references, empty_design, empty_design_in, parse_length_unit, rename_retrying,
+    write_atomically,
+};
 use serde_json::{Value, json};
 
 use super::inspect::{last_design, remember, remotes_of, valid_relative};
@@ -150,7 +153,7 @@ impl ProjectRepo {
         let invalid = |why: &str| refuse(ErrorClass::InvalidPath, format!("{given}: {why}"));
         let unholdable = |part: &str| {
             invalid(&format!(
-                "'{part}' is not a name every system can hold (no <>:\"|?*\\, no dot or \
+                "{part} is not a name every system can hold (no <>:\"|?*\\, no dot or \
                  space at the end, not a device name such as CON or NUL)"
             ))
         };
@@ -187,7 +190,7 @@ impl ProjectRepo {
             full.push(part);
             if fs::symlink_metadata(&full).is_ok_and(|m| m.file_type().is_symlink()) {
                 return Err(invalid(
-                    "a link is on the way; Mitcad does not follow links",
+                    "a link is on the way; MitCad does not follow links",
                 ));
             }
         }
@@ -429,13 +432,33 @@ impl ProjectRepo {
                 format!("{path} is there already"),
             ));
         }
+        // `units`: the empty design's length unit (mitcad#1036, the
+        // application's default units for new designs); not with `text`,
+        // which is a design with units of its own.
+        let units = match command.get("units") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(text)) => Some(
+                parse_length_unit(text)
+                    .map_err(|e| VcsError::Command(format!("\"units\": {e}")))?,
+            ),
+            Some(_) => {
+                return Err(VcsError::Command(
+                    "\"units\" is a length unit's name".to_owned(),
+                ));
+            }
+        };
         let design = match command.get("text").and_then(Value::as_str) {
+            Some(_) if units.is_some() => {
+                return Err(VcsError::Command(
+                    "\"units\" is for an empty design, not with \"text\"".to_owned(),
+                ));
+            }
             Some(design) => {
                 brep_references(design)
                     .map_err(|e| VcsError::Command(format!("\"text\" is not a design: {e}")))?;
                 design.to_owned()
             }
-            None => empty_design(),
+            None => units.map_or_else(empty_design, empty_design_in),
         };
         let author = self.ready(command)?;
         write_atomically(&full, design.as_bytes()).map_err(|e| io_error("write", &full, e))?;

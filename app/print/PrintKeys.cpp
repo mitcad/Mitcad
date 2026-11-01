@@ -205,6 +205,9 @@ PrintKeyTable::PrintKeyTable(const QJsonObject& answer) {
     for (const QJsonValue& dialect : object.value(QStringLiteral("dialects")).toArray()) {
       // A slicer that takes less than the key (mitcad#746).
       const QJsonObject entry = dialect.toObject();
+      if (!text(entry, "dialect").isEmpty()) {
+        key.dialects << text(entry, "dialect");
+      }
       if (entry.contains(QStringLiteral("min")) || entry.contains(QStringLiteral("max"))) {
         key.dialectRanges.insert(text(entry, "dialect"), rangeOf(entry));
       }
@@ -345,6 +348,40 @@ QString slicerTitle(const QString& id) {
                                              {QStringLiteral("prusaslicer"), QStringLiteral("PrusaSlicer")},
                                              {QStringLiteral("cura"), QStringLiteral("UltiMaker Cura")}};
   return names.value(id, titleOfId(id));
+}
+
+bool bambuFamily(const QString& dialect) {
+  return dialect == QLatin1String("bambu_studio") || dialect == QLatin1String("orcaslicer") ||
+         dialect == QLatin1String("qidi_studio");
+}
+
+QString slicerPresetOf(const QJsonValue& value, const QString& dialect, QString* from) {
+  if (from != nullptr) {
+    from->clear();
+  }
+  if (value.isString()) {
+    return value.toString().trimmed();
+  }
+  const QJsonObject slicers = value.toObject();
+  const QString own = slicers.value(dialect).toString().trimmed();
+  if (!own.isEmpty() || !bambuFamily(dialect)) {
+    if (from != nullptr && !own.isEmpty()) {
+      *from = dialect;
+    }
+    return own;
+  }
+  for (const QString& member :
+       {QStringLiteral("bambu_studio"), QStringLiteral("orcaslicer"), QStringLiteral("qidi_studio")}) {
+    if (!slicers.contains(member)) {
+      continue;
+    }
+    // The model takes the first member that has an entry, as it is.
+    if (from != nullptr) {
+      *from = member;
+    }
+    return slicers.value(member).toString().trimmed();
+  }
+  return QString();
 }
 
 QString printNumberText(double value) {
@@ -547,7 +584,7 @@ QJsonValue printValueOf(const PrintKey& key, const QString& typed, QString* erro
   case PrintKey::Kind::Color: {
     static const QRegularExpression hex(QStringLiteral("^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$"));
     if (!hex.match(text).hasMatch()) {
-      return fail(QObject::tr("Use a colour"));
+      return fail(QObject::tr("Use a color"));
     }
     return text.toUpper();
   }

@@ -31,6 +31,7 @@ use mitcad_model::transform::Transform;
 use mitcad_model_drawing::compose::{
     self, Composed, HoleInput, SketchDimension, ViewInput, shown_views,
 };
+use mitcad_model_drawing::convention::ThreadInput;
 use mitcad_model_drawing::def::{
     Annotations, Drawing, DrawingSheet, DrawingUid, DrawingView, StandardView, Subject,
     SubjectBody, TitleBlock, ViewDirection, ViewKind, ViewStyle,
@@ -159,6 +160,9 @@ pub(super) struct ThreadOf {
     internal: bool,
     modeled: bool,
     major: f64,
+    minor: f64,
+    /// A tapering taper pipe thread's taper on the diameter (mitcad#733).
+    taper: f64,
     start: Vec3,
     end: Vec3,
 }
@@ -188,11 +192,54 @@ pub(super) fn threads_of(threads: &Value) -> Vec<ThreadOf> {
                     .get("major_diameter")
                     .and_then(Value::as_f64)
                     .unwrap_or(0.0),
+                minor: t
+                    .get("minor_diameter")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0),
+                taper: t.get("taper").and_then(Value::as_f64).unwrap_or(0.0),
                 start: t.get("start").and_then(vec3)?,
                 end: t.get("end").and_then(vec3)?,
             })
         })
         .collect()
+}
+
+/// The `threads` query's threads, kept until the next recompute
+/// (mitcad#1112: every drawing view draws its threads).
+pub(super) fn drawing_threads<K: Kernel>(doc: &Document<K>) -> Vec<ThreadOf> {
+    let recompute = doc.recompute_count();
+    let cache = doc.drawing_cache();
+    let value = cache.threads(recompute).unwrap_or_else(|| {
+        let value = std::sync::Arc::new(doc.threads_json());
+        cache.keep_threads(recompute, std::sync::Arc::clone(&value));
+        value
+    });
+    threads_of(&value)
+}
+
+/// The threads of the bodies a view shows, placed in the drawing's
+/// coordinates, to draw by ISO 6410 (`convention::with_threads`), each
+/// with its body's index among those projected (the edges' `source`: the
+/// view's bodies are projected in this order).
+pub(super) fn placed_threads(threads: &[ThreadOf], shown: &[Shown]) -> Vec<ThreadInput> {
+    let mut out = Vec::new();
+    for (index, s) in shown.iter().enumerate() {
+        for t in threads.iter().filter(|t| t.body == s.body) {
+            if !(t.major > t.minor && t.minor > 0.0) {
+                continue;
+            }
+            out.push(ThreadInput {
+                start: s.transform.apply_point(t.start),
+                end: s.transform.apply_point(t.end),
+                major: t.major,
+                minor: t.minor,
+                internal: t.internal,
+                taper: t.taper,
+                source: Some(index),
+            });
+        }
+    }
+    out
 }
 
 /// Whether a hole lies on a thread's axis (both in the design's
@@ -327,7 +374,7 @@ impl<K: Kernel> DrawingOps<K> for Document<K> {
     ) -> Result<AutoDrawing, ApiError> {
         let units = match &options.units {
             Some(symbol) => Units::by_symbol(symbol)
-                .ok_or_else(|| ApiError(format!("unknown length unit '{symbol}'")))?,
+                .ok_or_else(|| ApiError(format!("unknown length unit “{symbol}”")))?,
             None => Units::of(self.parameters().context().default_length_unit),
         };
         if options.views.is_empty() && options.section.is_none() {
@@ -363,9 +410,9 @@ impl<K: Kernel> DrawingOps<K> for Document<K> {
                     .analyses()
                     .iter()
                     .find(|a| &a.name == analysis)
-                    .ok_or_else(|| ApiError(format!("there is no analysis '{analysis}'")))?;
+                    .ok_or_else(|| ApiError(format!("there is no analysis {analysis}")))?;
                 let mitcad_model::AnalysisDef::Section(def) = &found.def else {
-                    return Err(ApiError(format!("'{analysis}' is not a section analysis")));
+                    return Err(ApiError(format!("{analysis} is not a section analysis")));
                 };
                 let plane = self
                     .section_plane(def)
@@ -876,7 +923,7 @@ impl<K: Kernel> DrawingLocal<K> for Document<K> {
         let format = match (&command.format, &extension) {
             (Some(name), _) => Format::of(name).ok_or_else(|| {
                 ApiError(format!(
-                    "unknown drawing format '{name}' (expected pdf, svg, dxf or dwg)"
+                    "unknown drawing format {name} (expected pdf, svg, dxf or dwg)"
                 ))
             })?,
             (None, Some(ext)) => Format::of(ext).ok_or_else(|| {

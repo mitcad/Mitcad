@@ -56,7 +56,7 @@ fn boxes(bytes: &[u8]) -> Result<Vec<Child<'_>>, String> {
         let size = usize::try_from(size).map_err(|_| cut())?;
         if size < header {
             return Err(format!(
-                "the HEIF file's box '{}' is shorter than its header",
+                "the HEIF file's box “{}” is shorter than its header",
                 name(&kind)
             ));
         }
@@ -310,7 +310,7 @@ pub(super) fn read(bytes: &[u8]) -> Result<ImageHeader, String> {
         }
         kind => {
             return Err(format!(
-                "the HEIF image is coded as '{}'; MitCad reads HEIF images coded with HEVC",
+                "the HEIF image is coded as “{}”; MitCad reads HEIF images coded with HEVC",
                 name(kind)
             ));
         }
@@ -323,7 +323,7 @@ pub(super) fn read(bytes: &[u8]) -> Result<ImageHeader, String> {
     for part in &coded {
         if &part.kind != b"hvc1" {
             return Err(format!(
-                "the HEIF image's tiles are coded as '{}'; MitCad reads HEIF images coded with HEVC",
+                "the HEIF image's tiles are coded as “{}”; MitCad reads HEIF images coded with HEVC",
                 name(&part.kind)
             ));
         }
@@ -557,7 +557,7 @@ mod tests {
         let avif = heif_file(b"avif", &[(1, b"av01")], &[ispe(8, 8)], &[(1, &[1])], &[]);
         assert!(error(&avif).contains("AVIF"), "{}", error(&avif));
         let jpeg = heif_file(b"heic", &[(1, b"jpeg")], &[ispe(8, 8)], &[(1, &[1])], &[]);
-        assert!(error(&jpeg).contains("coded as 'jpeg'"), "{}", error(&jpeg));
+        assert!(error(&jpeg).contains("coded as “jpeg”"), "{}", error(&jpeg));
         let deep = hevc_file(64, 32, 0, 12);
         assert!(
             error(&deep).contains("12 bits per channel"),

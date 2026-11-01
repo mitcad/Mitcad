@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::ApiError;
 use super::dispatch::named_enum;
 use super::prelude::*;
-use mitcad_model::configurations::Configurations;
+use mitcad_model::configurations::{ConfigurationRule, Configurations};
 use mitcad_model::kernel::Kernel;
 use mitcad_model::{Document, LibraryChange, LibraryPart};
 use mitcad_model_build::prelude::*;
@@ -83,11 +83,14 @@ named_enum! {
             values: serde_json::Map<String, Value>,
         },
         /// One configuration row per key of a table column, setting an
-        /// option to it (mitcad#806).
+        /// option to it (mitcad#806); `columns`, other columns of the
+        /// table, become the closed table's parameter columns (mitcad#1044).
         "generate_configuration_rows" => GenerateConfigurationRows {
             table: String,
             column: String,
             option: String,
+            #[serde(default)]
+            columns: Vec<String>,
         },
     }
 }
@@ -99,8 +102,10 @@ pub(crate) trait LibrariesCrateOps<K: Kernel> {
     fn run_library_command(&mut self, command: LibraryCommand) -> Result<Value, ApiError>;
 
     /// The `configurations` query: the table, the values of each selector,
-    /// the row the parameters have now and what is wrong with the table.
-    fn configurations_json(&self) -> Value;
+    /// the row the parameters have now and what is wrong with the table,
+    /// the rules' problems with their places (mitcad#1064); with `rules`,
+    /// all of it for the table with those rules instead of its own.
+    fn configurations_json(&self, rules: Option<Vec<ConfigurationRule>>) -> Value;
 
     /// The `library_parts` query: the components that came from
     /// libraries.
@@ -149,12 +154,17 @@ impl<K: Kernel> LibrariesCrateOps<K> for Document<K> {
                 table,
                 column,
                 option,
+                columns,
             } => {
-                let generated = self.generate_configuration_rows(&table, &column, &option)?;
+                let generated =
+                    self.generate_configuration_rows(&table, &column, &option, &columns)?;
+                let created: Vec<&str> =
+                    generated.created.iter().map(|p| p.name.as_str()).collect();
                 json!({
                     "rows": generated.rows,
                     "added": generated.added,
                     "updated": generated.updated,
+                    "created": created,
                     "moves": super::configurations::moves_json(self.configuration_moves()),
                 })
             }
@@ -195,13 +205,38 @@ impl<K: Kernel> LibrariesCrateOps<K> for Document<K> {
         })
     }
 
-    fn configurations_json(&self) -> Value {
-        let table = self.configurations();
+    fn configurations_json(&self, rules: Option<Vec<ConfigurationRule>>) -> Value {
+        let tried;
+        let table = match rules {
+            Some(rules) => {
+                tried = Configurations {
+                    rules,
+                    ..self.configurations().clone()
+                };
+                &tried
+            }
+            None => self.configurations(),
+        };
+        let parameters = self.parameters();
+        let rule_problems: Vec<Value> = table
+            .placed_rule_problems(parameters)
+            .into_iter()
+            .map(|p| {
+                json!({
+                    "index": p.index,
+                    "rule": p.rule,
+                    "place": p.place,
+                    "level": if p.warning { "warning" } else { "error" },
+                    "message": p.message,
+                })
+            })
+            .collect();
         json!({
             "configurations": if table.is_empty() { Value::Null } else { json!(table) },
             "selector_values": table.selector_values(),
-            "current": table.current(self.parameters()).map(|row| row.name.clone()),
-            "problems": table.problems(self.parameters()),
+            "current": table.current(parameters).map(|row| row.name.clone()),
+            "problems": table.problems(parameters),
+            "rule_problems": rule_problems,
         })
     }
 

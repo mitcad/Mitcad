@@ -755,7 +755,7 @@ impl Reader {
         let (read_columns, read_rows) = array_cells(columns, rows);
         if (read_columns, read_rows) != (columns, rows) {
             self.warnings.push(format!(
-                "line {}: INSERT of {block} is an array of {columns} x {rows} cells: only the first {} cells ({read_rows} rows of {read_columns}) are read",
+                "line {}: INSERT of {block} is an array of {columns} × {rows} cells: only the first {} cells ({read_rows} rows of {read_columns}) are read",
                 record.line,
                 read_columns * read_rows
             ));

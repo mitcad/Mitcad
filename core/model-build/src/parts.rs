@@ -225,7 +225,7 @@ pub fn source_option_values<K: Kernel>(
                 let expression = mitcad_model::internal::values::split_named(text)
                     .map_or(text.as_str(), |(_, e)| e);
                 let parsed = Expr::parse(expression)
-                    .map_err(|e| ModelError::Invalid(format!("'{text}': {e}")))?;
+                    .map_err(|e| ModelError::Invalid(format!("“{text}”: {e}")))?;
                 if !parsed.is_constant() {
                     pinned.insert(name.clone());
                 }
@@ -235,10 +235,10 @@ pub fn source_option_values<K: Kernel>(
                     let expression = mitcad_model::internal::values::split_named(text)
                         .map_or(text.as_str(), |(_, e)| e);
                     let parsed = Expr::parse(expression)
-                        .map_err(|e| ModelError::Invalid(format!("'{text}': {e}")))?;
+                        .map_err(|e| ModelError::Invalid(format!("“{text}”: {e}")))?;
                     let text = parsed
                         .eval_text(params.table(), &params.context())
-                        .map_err(|e| ModelError::Invalid(format!("'{text}': {e}")))?;
+                        .map_err(|e| ModelError::Invalid(format!("“{text}”: {e}")))?;
                     PartValue::Text(text)
                 }
                 _ => PartValue::Number(mitcad_model::internal::build::value_in(doc, value, unit)?),
@@ -342,7 +342,7 @@ impl<K: Kernel> LibraryPartsBuild<K> for Document<K> {
                 };
                 format!("Update {} to {version}", new.label())
             }
-            _ => "Update Library Parts".to_owned(),
+            _ => "Update Library Components".to_owned(),
         };
         let lines: Vec<String> = planned.iter().map(|(_, l)| l.clone()).collect();
         self.apply(|state| {

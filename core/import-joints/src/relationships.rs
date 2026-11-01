@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! The file's assembly relationships as Mitcad's constraint sets
+//! The file's assembly relationships as MitCad's constraint sets
 //! (mitcad#155; what the decoder gives: SCHEMA.md §5.3
 //! `GeometricRelationship`, `TangentRelationship`).
 //!
@@ -38,7 +38,7 @@
 //!     middle on the plane midway between side two's);
 //!   - an angle: `angle`.
 //!
-//!   `flip` and the offset's sign are those of the references as Mitcad
+//!   `flip` and the offset's sign are those of the references as MitCad
 //!   resolves them where the file places the occurrences (the
 //!   `constraint_row` query's measures): a face's normal may point the
 //!   other way than the file's frame, and the file's sense `either` is
@@ -48,7 +48,7 @@
 //! - **Tangent relationships.** A `tangent` row between the planar,
 //!   cylindrical or spherical faces of the sides' components that the
 //!   file's points lie on (`flip` where the bodies touch inside), added as
-//!   a set is; else left out with the reason (Mitcad's tangent rows take
+//!   a set is; else left out with the reason (MitCad's tangent rows take
 //!   only those faces).
 
 use serde_json::{Map, Value, json};
@@ -529,7 +529,7 @@ impl<K: ImportKernel> Relationships<K> for Importer<'_, K> {
             }
             _ => {
                 return Err(format!(
-                    "{kind} of {} is no constraint row of Mitcad's",
+                    "{kind} of {} is no constraint row of MitCad's",
                     geometry
                         .iter()
                         .map(|g| g.as_str())
@@ -787,7 +787,7 @@ impl<K: ImportKernel> Relationships<K> for Importer<'_, K> {
             let (face, kind, surface) = self.face_at(end, point).ok_or_else(|| {
                 format!(
                     "side {label}'s face at the file's point is not planar, cylindrical or \
-                     spherical (Mitcad's tangent takes those)"
+                     spherical (MitCad's tangent takes those)"
                 )
             })?;
             let mut v = json!({"geometry": face});

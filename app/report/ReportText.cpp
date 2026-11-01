@@ -252,7 +252,10 @@ QString mask(const QString& text, const MaskContext& context) {
 CrashReport parseCrashReport(const QByteArray& text) {
   CrashReport report;
   const QStringList lines = QString::fromUtf8(text).split(QLatin1Char('\n'));
-  if (lines.isEmpty() || !lines.first().startsWith(QStringLiteral("Mitcad crash report"))) {
+  // "MitCad crash report", or "Mitcad crash report" as releases before
+  // mitcad#1043 wrote it: an earlier run's report is still read.
+  if (lines.isEmpty() || (!lines.first().startsWith(QStringLiteral("MitCad crash report")) &&
+                          !lines.first().startsWith(QStringLiteral("Mitcad crash report")))) {
     return report;
   }
   enum class Part { Header, Stack, Actions } part = Part::Header;

@@ -877,7 +877,7 @@ fn dragging_or_moving_a_derived_offset_moves_its_source() {
     let check = |d: &Document<MockKernel>, center: [f64; 2], what: &str| {
         let s = sketch(d);
         let got = ellipse_center(&s, "c1");
-        assert!(within(got, center, 1e-6), "{what}: centre {got:?}");
+        assert!(within(got, center, 1e-6), "{what}: center {got:?}");
         assert_eq!(s["offsets"][0]["value"]["value"], 2.0, "{what}");
         let (lo, hi) = distances(&curve(&s, &result), &curve(&s, "c1"));
         assert!(lo > 2.0 - 1e-4 && hi < 2.0 + 1e-4, "{what}: {lo} {hi}");

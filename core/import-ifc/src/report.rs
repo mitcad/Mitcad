@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use mitcad_model::notice::{self, Notice, NoticeLevel};
 use serde::Serialize;
 
 /// How a product came in.
@@ -50,6 +51,26 @@ impl Outcome {
             Outcome::Cut => "cut",
             Outcome::NotImported => "not_imported",
             Outcome::Failed => "failed",
+        }
+    }
+
+    /// The outcome's level (mitcad#1040): a product that came in (as
+    /// features, the file's bodies, meshes, occurrences, a component, axes
+    /// or a cut) is information; one that came in partly or was not
+    /// imported is a warning; one of which nothing could be built is an
+    /// error.
+    pub fn level(self) -> NoticeLevel {
+        match self {
+            Outcome::Parametric
+            | Outcome::Stored
+            | Outcome::Mesh
+            | Outcome::Mixed
+            | Outcome::Occurrence
+            | Outcome::Component
+            | Outcome::Axes
+            | Outcome::Cut => NoticeLevel::Info,
+            Outcome::Partial | Outcome::NotImported => NoticeLevel::Warning,
+            Outcome::Failed => NoticeLevel::Error,
         }
     }
 }
@@ -163,6 +184,24 @@ impl IfcReport {
         self.products.len()
     }
 
+    /// The import's notices (mitcad#1040): what its products' outcomes
+    /// left out or could not build, the worst first, then its warnings.
+    pub fn notices(&self) -> Vec<Notice> {
+        let mut counts: BTreeMap<Outcome, usize> = BTreeMap::new();
+        for product in &self.products {
+            *counts.entry(product.outcome).or_default() += 1;
+        }
+        let products = |n| notice::count(n, "product", "products");
+        let mut notices = notice::outcome_notices(counts, Outcome::level, |o, n| match o {
+            Outcome::Partial => format!("{} imported partly", products(n)),
+            Outcome::NotImported => format!("{} not imported", products(n)),
+            Outcome::Failed => format!("{} could not be built", products(n)),
+            _ => format!("{} imported", products(n)),
+        });
+        notices.extend(self.warnings.iter().map(|w| Notice::warning(w.as_str())));
+        notices
+    }
+
     /// The report as text.
     pub fn text(&self) -> String {
         let mut t = format!(
@@ -272,5 +311,31 @@ impl IfcReport {
             t += &format!("  low on memory: {m}\n");
         }
         t
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::*;
+
+    #[test]
+    fn outcomes_map_onto_the_levels() {
+        // (mitcad#1040) What came in is information, what was left out a
+        // warning, what could not be built an error.
+        for outcome in [
+            Outcome::Parametric,
+            Outcome::Stored,
+            Outcome::Mesh,
+            Outcome::Mixed,
+            Outcome::Occurrence,
+            Outcome::Component,
+            Outcome::Axes,
+            Outcome::Cut,
+        ] {
+            assert_eq!(outcome.level(), NoticeLevel::Info, "{}", outcome.name());
+        }
+        assert_eq!(Outcome::Partial.level(), NoticeLevel::Warning);
+        assert_eq!(Outcome::NotImported.level(), NoticeLevel::Warning);
+        assert_eq!(Outcome::Failed.level(), NoticeLevel::Error);
     }
 }

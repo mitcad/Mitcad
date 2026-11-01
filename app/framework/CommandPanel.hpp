@@ -60,7 +60,7 @@ public:
   void setValueHint(const QString& key, const QString& hint) override;
   void setPlaceholder(const QString& key, const QString& text) override;
   // The command's status line: an error, or a hint when `error` is false.
-  void setMessage(const QString& message, bool error) override;
+  void setMessage(const QString& message, NoticeLevel level) override;
   // An inspection's answer (Measure, Interference): its text, or its rows
   // of names and values where it has them (Measure, mitcad#1010:
   // ResultRows, right under the inputs).
@@ -186,6 +186,10 @@ private:
   const CommandDef& m_def;
   QFormLayout* m_form = nullptr;
   CommandMessage* m_message = nullptr;
+  // The message as given and its level (mitcad#1040): the box shows it
+  // with the level's icon and word.
+  QString m_messageText;
+  NoticeLevel m_messageLevel = NoticeLevel::Hint;
   QLabel* m_result = nullptr;
   // The answer as rows, when the inspection gives them (mitcad#1010); the
   // label above keeps its text, hidden then.

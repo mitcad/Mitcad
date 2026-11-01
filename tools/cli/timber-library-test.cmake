@@ -34,7 +34,9 @@ set(ENV{GIT_CONFIG_NOSYSTEM} 1)
 set(ENV{GIT_CONFIG_GLOBAL} "${WORK}/gitconfig")
 
 function(cli expect)
-  execute_process(COMMAND "${CLI}" ${ARGN} RESULT_VARIABLE status OUTPUT_VARIABLE out ERROR_VARIABLE err)
+  # UTF-8: the messages carry "×"; Windows would decode them in the console code page.
+  execute_process(COMMAND "${CLI}" ${ARGN} RESULT_VARIABLE status OUTPUT_VARIABLE out ERROR_VARIABLE err
+                  ENCODING UTF8)
   if(expect STREQUAL "ok" AND NOT status EQUAL 0)
     message(FATAL_ERROR "mitcad-cli ${ARGN} failed (${status}):\n${out}${err}")
   endif()
@@ -497,7 +499,7 @@ expect("not mitcad-parts/test-post-base" "the post base greyed at a junction")
 file(WRITE "${WORK}/joist-123.json"
      "{\"id\": \"J1\", \"kind\": \"T\", \"wood\": {\"sections\": {\"a\": [123, 48], \"b\": [148, 48]}}}")
 cli(ok library candidates --junction "${WORK}/joist-123.json")
-expect("not mitcad-parts/test-hanger  Test joist hanger 48x148: it fits 48 x 148, the member is 123 x 48"
+expect("not mitcad-parts/test-hanger  Test joist hanger 48x148: it fits 48 × 148, the member is 123 × 48"
        "the hanger greyed for a 48 x 123 joist")
 
 # 5. The production generator's real geometry seated in a frame (mitcad#512),

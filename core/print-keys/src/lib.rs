@@ -1021,7 +1021,7 @@ impl KeyDef {
             Kind::Percent => "a percentage".to_owned(),
             Kind::OrPercent(..) => "a number or a percentage".to_owned(),
             Kind::Text => "text".to_owned(),
-            Kind::Color => "a colour #RRGGBB".to_owned(),
+            Kind::Color => "a color #RRGGBB".to_owned(),
             Kind::Choice(_) => format!(
                 "one of {}",
                 self.kind.choice_values().collect::<Vec<_>>().join(", ")
@@ -1401,7 +1401,7 @@ pub fn write(
             let centred = (min[0] + max[0]).abs() < 1e-6 && (min[1] + max[1]).abs() < 1e-6;
             if !centred && (min[0].abs() > 1e-6 || min[1].abs() > 1e-6) {
                 return Err(error(format!(
-                    "{dialect} takes a bed from 0, 0 or centred on it, not {}",
+                    "{dialect} takes a bed from 0, 0 or centered on it, not {}",
                     points_text(points)
                 )));
             }
@@ -1487,7 +1487,7 @@ fn from_text(
             let x = linear(parse_number(text)?);
             if (x - x.round()).abs() > 1e-9 {
                 return Err(error(format!(
-                    "{dialect}: '{text}' of {} is no whole number",
+                    "{dialect}: “{text}” of {} is no whole number",
                     dk.key
                 )));
             }
@@ -1509,7 +1509,7 @@ fn from_text(
                 (Form::Same, Some(p)) => Value::Percent(p),
                 (_, Some(_)) => {
                     return Err(error(format!(
-                        "{dialect}: {} takes no percentage, got '{text}'",
+                        "{dialect}: {} takes no percentage, got “{text}”",
                         dk.key
                     )));
                 }
@@ -1519,7 +1519,7 @@ fn from_text(
         Kind::Text => Value::Text(text.to_owned()),
         Kind::Color => Value::Text(
             color(text)
-                .ok_or_else(|| error(format!("{dialect}: '{text}' of {} is no colour", dk.key)))?,
+                .ok_or_else(|| error(format!("{dialect}: “{text}” of {} is no color", dk.key)))?,
         ),
         Kind::Choice(_) => {
             if !def.kind.has_choice(text) {
@@ -1658,13 +1658,13 @@ fn no_basis(def: &KeyDef, of: &str) -> ConvError {
 
 fn unknown_choice(def: &KeyDef, dialect: Dialect, text: &str) -> ConvError {
     error(format!(
-        "{dialect}: '{text}' is no known value of {}",
+        "{dialect}: “{text}” is no known value of {}",
         def.dialect(dialect).map_or(def.key, |d| d.key)
     ))
 }
 
 fn missing_choice(def: &KeyDef, dialect: Dialect, name: &str) -> ConvError {
-    error(format!("{dialect} has no '{name}' for {}", def.key))
+    error(format!("{dialect} has no {name} for {}", def.key))
 }
 
 /// A number as written: up to nine decimals, no exponent, no `-0`.
@@ -1680,7 +1680,7 @@ pub fn parse_number(text: &str) -> Result<f64, ConvError> {
         .parse::<f64>()
         .ok()
         .filter(|x| x.is_finite())
-        .ok_or_else(|| error(format!("'{text}' is no number")))
+        .ok_or_else(|| error(format!("“{text}” is no number")))
 }
 
 /// The percentage of a `15%` text.
@@ -1693,7 +1693,7 @@ pub fn parse_bool(text: &str) -> Result<bool, ConvError> {
     match text.trim() {
         "1" | "true" | "True" | "TRUE" | "yes" => Ok(true),
         "0" | "false" | "False" | "FALSE" | "no" => Ok(false),
-        _ => Err(error(format!("'{text}' is no yes or no"))),
+        _ => Err(error(format!("“{text}” is no yes or no"))),
     }
 }
 
@@ -1711,7 +1711,7 @@ pub fn parse_points(text: &str) -> Result<Vec<[f64; 2]>, ConvError> {
             let (x, y) = point
                 .trim()
                 .split_once('x')
-                .ok_or_else(|| error(format!("'{point}' is no point XxY")))?;
+                .ok_or_else(|| error(format!("“{point}” is no point XxY")))?;
             Ok([parse_number(x)?, parse_number(y)?])
         })
         .collect()

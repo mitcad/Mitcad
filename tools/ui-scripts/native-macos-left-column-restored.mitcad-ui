@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# The AppKit left column after a relaunch
+# (tools/ui-macos-native-left-column-test.sh): the dragged split restored,
+# the automatic one by a double-click, the disclosure.
+expect-ever 'Native split restored: configuration 80, browser [0-9]+'
+wait-idle
+native-resize 1280 820
+native-appearance light
+native-expand native.modelTree
+expect-native-card-height native.configurationCard 80
+expect-native-card-height native.sidebar bottom
+# A double-click on the boundary: the automatic split, Configuration as
+# high as its options again.
+mark
+native-column-split native.columnSplit.configuration.browser reset
+expect-log '^Native split: automatic$'
+expect-native-card-height native.configurationCard 100 190
+expect-native-configuration-layout
+# Folded, Configuration keeps its header and Browser takes the rest.
+mark
+native-click native.configuration.disclosure
+expect-log '^Configuration panel: collapsed, remembered$'
+expect-native-card-height native.configurationCard 30
+expect-native-card-height native.sidebar bottom
+expect-native-visible native.columnSplit.configuration.browser false
+screenshot '${MITCAD_TEST_WORK}/left-column-collapsed.png'

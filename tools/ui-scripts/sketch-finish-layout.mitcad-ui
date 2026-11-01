@@ -5,7 +5,7 @@ window-resize 1440 1000
 mark
 dblclick-logged '^Timeline Sketch1 at '
 expect-log '^Editing sketch F1 \(Sketch1\)$'
-expect-ribbon-labels Solid Build Sketch
+expect-ribbon-labels Solid Build Make Sketch
 expect-sketch-finish-layout
 screenshot '${MITCAD_TEST_SHOTS}/wide-sketch.png'
 screenshot-screen '${MITCAD_TEST_SHOTS}/wide-sketch-native.png'

@@ -164,7 +164,7 @@ if [ "$hooks" = OFF ]; then
   fresh_settings
   # Its check would go to GitHub: checks off, the source is logged anyway.
   MITCAD_NO_UPDATE_CHECK=1 MITCAD_TEST_INPUT=$work/ignored.script run_app ignored --ui=qt --no-recovery
-  ui_expect_log "^Updates: Mitcad $version for macos-arm64, " 'its own version, not MITCAD_TEST_VERSION'
+  ui_expect_log "^Updates: MitCad $version for macos-arm64, " 'its own version, not MITCAD_TEST_VERSION'
   ui_expect_log '^Update source: manifest at https://github[.]com/mitcad/Mitcad/releases/latest/download/update-manifest[.]json, releases at https://api[.]github[.]com/repos/mitcad/Mitcad/releases[?]per_page=20, ' \
     "GitHub's addresses, not MITCAD_UPDATE_URL nor MITCAD_UPDATE_RELEASES_URL"
   ui_expect_log '^Update source: this build ignores MITCAD_UPDATE_URL, MITCAD_UPDATE_RELEASES_URL, MITCAD_UPDATE_TEST_KEY, MITCAD_UPDATE_TEST_CA, MITCAD_TEST_VERSION [(]MITCAD_UPDATE_TEST_HOOKS off[)]' \

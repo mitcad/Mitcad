@@ -160,7 +160,7 @@ mod tests {
         let error = doc
             .query(&json!({"query": "parameters_csv_preview", "csv": "a,b\n1,2\n"}).to_string())
             .unwrap_err();
-        assert!(error.0.contains("no 'name' column"), "{error}");
+        assert!(error.0.contains("no name column"), "{error}");
         let error = doc
             .command(&json!({"cmd": "import_parameters_csv", "csv": ""}).to_string())
             .unwrap_err();

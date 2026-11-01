@@ -73,7 +73,7 @@ pub fn command(
         "index_entry" => publish::index_entry_command(&command)?,
         "library_build_candidates" => build_candidates(cache, &command)?,
         "library_configure" => configure(cache, &command)?,
-        other => return Err(invalid(format!("unknown library command '{other}'"))),
+        other => return Err(invalid(format!("unknown library command “{other}”"))),
     };
     Ok(answer.to_string())
 }
@@ -358,7 +358,7 @@ fn configure(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
     let id = text(command, "component")?;
     let component = manifest
         .component(id)
-        .ok_or_else(|| VcsError::NotFound(format!("{} has no component '{id}'", manifest.id)))?;
+        .ok_or_else(|| VcsError::NotFound(format!("{} has no component {id}", manifest.id)))?;
     let state = component_state(&repo, commit, &component.path)
         .ok_or_else(|| invalid(format!("the design of {id} cannot be read")))?;
     let mut values = Vec::new();
@@ -902,7 +902,7 @@ fn preview(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
     let id = text(command, "component")?;
     let component = manifest
         .component(id)
-        .ok_or_else(|| VcsError::NotFound(format!("{} has no component '{id}'", manifest.id)))?;
+        .ok_or_else(|| VcsError::NotFound(format!("{} has no component {id}", manifest.id)))?;
     let path = optional(command, "config")
         .and_then(|row| component.row_previews.get(row))
         .unwrap_or(&component.preview);
@@ -1009,7 +1009,7 @@ fn diff(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
             lines.push(format!("design: {}", design.summary));
         }
         if old.license != new.license {
-            lines.push(format!("licence {} -> {}", old.license, new.license));
+            lines.push(format!("license {} -> {}", old.license, new.license));
         }
         if old.path != new.path {
             lines.push(format!("file {} -> {}", old.path, new.path));
@@ -1028,7 +1028,7 @@ fn diff(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
     let mut library = Vec::new();
     if from_manifest.license != to_manifest.license {
         library.push(format!(
-            "the library's licence {} -> {}",
+            "the library's license {} -> {}",
             from_manifest.license.as_deref().unwrap_or("none"),
             to_manifest.license.as_deref().unwrap_or("none")
         ));
@@ -1140,7 +1140,7 @@ pub fn describe(command: &str, answer: &str) -> Result<String, VcsError> {
                         s(&l["id"]),
                         s(&l["name"]),
                         l["components"],
-                        l["license"].as_str().unwrap_or("no licence"),
+                        l["license"].as_str().unwrap_or("no license"),
                         s(&l["url"]),
                         versions(&l["versions"])
                     );
@@ -1161,7 +1161,7 @@ pub fn describe(command: &str, answer: &str) -> Result<String, VcsError> {
                         "  {} {} ({}): {}",
                         s(&e["id"]),
                         s(&e["name"]),
-                        e["license"].as_str().unwrap_or("no licence"),
+                        e["license"].as_str().unwrap_or("no license"),
                         s(&e["url"])
                     );
                 }
@@ -1169,7 +1169,7 @@ pub fn describe(command: &str, answer: &str) -> Result<String, VcsError> {
                 let m = &answer["manifest"];
                 let _ = writeln!(
                     out,
-                    "{} ({}) at {} {}, licence {}",
+                    "{} ({}) at {} {}, license {}",
                     s(&m["name"]),
                     s(&m["id"]),
                     s(&answer["rev"]).chars().take(7).collect::<String>(),
@@ -1228,7 +1228,7 @@ pub fn describe(command: &str, answer: &str) -> Result<String, VcsError> {
                         format!(" ({})", s(&c["standard"]))
                     },
                     supplier(c),
-                    c["license"].as_str().unwrap_or("no licence"),
+                    c["license"].as_str().unwrap_or("no license"),
                     s(&c["version"])
                 );
             }
@@ -1248,7 +1248,7 @@ pub fn describe(command: &str, answer: &str) -> Result<String, VcsError> {
                     "library {}  {}  {}  {}{}",
                     s(&l["id"]),
                     s(&l["name"]),
-                    l["license"].as_str().unwrap_or("no licence"),
+                    l["license"].as_str().unwrap_or("no license"),
                     s(&l["url"]),
                     if l["fetched"] == true {
                         " (fetched)"
@@ -1262,7 +1262,7 @@ pub fn describe(command: &str, answer: &str) -> Result<String, VcsError> {
                 let _ = writeln!(out, "not listed: {}", s(&l["text"]));
             }
             if answer["hidden"].as_u64().unwrap_or(0) > 0 {
-                let _ = writeln!(out, "{} more without an accepted licence", answer["hidden"]);
+                let _ = writeln!(out, "{} more without an accepted license", answer["hidden"]);
             }
         }
         "library_diff" => {

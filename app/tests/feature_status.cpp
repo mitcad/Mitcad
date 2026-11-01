@@ -144,11 +144,17 @@ void lookTests() {
   state = cellState(FeatureState::Ok, false);
   state.hovered = true;
   CHECK(timeline::cellLook(state, c).fill == c.hoverFill);
-  // An import placeholder: a yellow outline, no badge.
+  // An import note is information (mitcad#1040): its badge, no ring in a
+  // warning's colour, no fill.
   state = cellState(FeatureState::Ok, false);
   state.noted = true;
   look = timeline::cellLook(state, c);
-  CHECK(look.statusRing == c.warningBorder && !look.badge && !look.fill.isValid());
+  CHECK(!look.statusRing.isValid() && look.badge && look.badgeLevel == NoticeLevel::Information &&
+        !look.fill.isValid());
+  CHECK(timeline::describeCell(state, look) == QStringLiteral("info, badge"));
+  // The failed and warned cells' badges have their levels.
+  CHECK(timeline::cellLook(cellState(FeatureState::Failed, false), c).badgeLevel == NoticeLevel::Error);
+  CHECK(timeline::cellLook(cellState(FeatureState::Warning, false), c).badgeLevel == NoticeLevel::Warning);
 }
 
 void paintTests() {
@@ -312,14 +318,23 @@ void iconTests() {
 void cardTests() {
   const QColor error(0xb0, 0x00, 0x20);
   const QColor warning(0x8a, 0x5a, 0x00);
-  CHECK(featureStatusLine(QStringLiteral("error"), QStringLiteral("the radius is too large"), error, warning) ==
-        QStringLiteral("<span style=\"color:#b00020\">Failed: the radius is too large</span>"));
-  CHECK(featureStatusLine(QStringLiteral("error"), QStringLiteral("a < b"), error, warning) ==
-        QStringLiteral("<span style=\"color:#b00020\">Failed: a &lt; b</span>"));
-  CHECK(featureStatusLine(QStringLiteral("error"), QString(), error, warning) ==
-        QStringLiteral("<span style=\"color:#b00020\">Failed</span>"));
-  CHECK(featureStatusLine(QStringLiteral("warning"), QStringLiteral("built 0.1 % smaller"), error, warning) ==
-        QStringLiteral("<span style=\"color:#8a5a00\">Warning: built 0.1 % smaller</span>"));
+  // The level's icon, then its word and the message in its colour
+  // (mitcad#1040).
+  const auto line = [&](const QString& status, const QString& message, const QString& expected) {
+    const QString text = featureStatusLine(status, message, error, warning);
+    CHECK(text.startsWith(QStringLiteral("<img src=\"data:image/png;base64,")));
+    CHECK(text.endsWith(QStringLiteral("&nbsp;") + expected));
+    // The error's and the warning's icons differ.
+    return text.left(text.indexOf(QStringLiteral("&nbsp;")));
+  };
+  const QString failedIcon = line(QStringLiteral("error"), QStringLiteral("the radius is too large"),
+                                  QStringLiteral("<span style=\"color:#b00020\">Failed: the radius is too large</span>"));
+  line(QStringLiteral("error"), QStringLiteral("a < b"),
+       QStringLiteral("<span style=\"color:#b00020\">Failed: a &lt; b</span>"));
+  line(QStringLiteral("error"), QString(), QStringLiteral("<span style=\"color:#b00020\">Failed</span>"));
+  const QString warnedIcon = line(QStringLiteral("warning"), QStringLiteral("built 0.1 % smaller"),
+                                  QStringLiteral("<span style=\"color:#8a5a00\">Warning: built 0.1 % smaller</span>"));
+  CHECK(failedIcon != warnedIcon);
   CHECK(featureStatusLine(QStringLiteral("ok"), QStringLiteral("ignored"), error, warning).isEmpty());
   CHECK(featureStatusLine(QStringLiteral("suppressed"), QStringLiteral("skipped"), error, warning).isEmpty());
 }

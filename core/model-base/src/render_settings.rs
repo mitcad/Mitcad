@@ -376,7 +376,7 @@ impl Light {
         let at = format!("lights.{}", self.id);
         if !crate::appearance::valid_id(&self.id) {
             return Err(format!(
-                "'{}' is no light id: use letters, digits, '_' and '-'",
+                "{} is no light id: use letters, digits, '_' and '-'",
                 self.id
             ));
         }
@@ -402,7 +402,7 @@ impl Light {
         }
         if !self.color.iter().all(|c| (0.0..=1.0).contains(c)) {
             return Err(format!(
-                "{at}.color: colour components must be between 0 and 1, got {:?}",
+                "{at}.color: color components must be between 0 and 1, got {:?}",
                 self.color
             ));
         }
@@ -524,7 +524,7 @@ impl RenderSettings {
             .all(|c| (0.0..=1.0).contains(c))
         {
             return Err(format!(
-                "background.color: colour components must be between 0 and 1, got {:?}",
+                "background.color: color components must be between 0 and 1, got {:?}",
                 self.background.color
             ));
         }
@@ -565,14 +565,14 @@ impl RenderSettings {
         }
         if self.lights.len() > MAX_LIGHTS {
             return Err(format!(
-                "a document keeps at most {MAX_LIGHTS} lights, got {}",
+                "a design keeps at most {MAX_LIGHTS} lights, got {}",
                 self.lights.len()
             ));
         }
         for (i, light) in self.lights.iter().enumerate() {
             light.check()?;
             if self.lights[..i].iter().any(|other| other.id == light.id) {
-                return Err(format!("there are two lights '{}'", light.id));
+                return Err(format!("there are two lights {}", light.id));
             }
         }
         Ok(())
@@ -799,7 +799,7 @@ mod tests {
             (json!({"background": {"mode": "sky"}}), "unknown variant"),
             (
                 json!({"background": {"color": [1.5, 0, 0]}}),
-                "colour components",
+                "color components",
             ),
             (
                 json!({"ground": {"shadows": "yes"}}),

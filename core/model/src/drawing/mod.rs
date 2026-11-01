@@ -267,7 +267,8 @@ pub struct DrawingOptions {
     #[serde(default)]
     pub per_body: bool,
     /// Exact edges (false: from a triangulation, quicker on large bodies).
-    /// Bodies with free-form faces are drawn from a fine triangulation
+    /// Bodies with free-form faces (or many B-spline edges against many
+    /// faces, mitcad#1033) are drawn from a fine triangulation
     /// either way, its edges as lines and arcs where they follow them
     /// (`ViewSpec::quick`, mitcad#962).
     #[serde(default = "yes")]

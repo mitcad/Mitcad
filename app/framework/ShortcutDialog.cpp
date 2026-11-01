@@ -31,6 +31,7 @@
 #include "Dialogs.hpp"
 
 #include "../platform/MacDialogs.hpp"
+#include "../platform/NativeDialogs.hpp"
 
 namespace mitcad {
 namespace {
@@ -56,7 +57,7 @@ bool sameEverywhere(const ContextShortcuts& keys) {
 
 QString keyText(const QKeySequence& key) { return key.toString(QKeySequence::NativeText); }
 
-// "All" for every context, else the names: "Model, Sketch" for a command
+// "All" for every context, else the names: "3D View, Sketch" for a command
 // of two (Extrude), "Sketch" for one.
 QString contextText(unsigned contexts) {
   return contexts == AllShortcutContexts ? ShortcutDialog::tr("All") : shortcutContextName(contexts);
@@ -139,6 +140,7 @@ ShortcutDialog::ShortcutDialog(CommandRegistry& registry, QWidget* parent)
   m_tree->setSelectionMode(QAbstractItemView::SingleSelection);
   m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_tree->setItemDelegateForColumn(kCommandColumn, new ShortcutIconDelegate(m_tree));
+  m_tree->setProperty(NativeSelectedIconTintProperty, QVariantList{kCommandColumn}); // its native cells (mitcad#1080)
   // The Context column as wide as the longest text it can show.
   const QFontMetrics metrics(m_tree->font());
   int contextWidth = metrics.horizontalAdvance(tr("Context"));

@@ -58,7 +58,7 @@ pub fn read(bytes: &[u8]) -> Result<ImageHeader, String> {
     }
     if header.width > MAX_SIDE || header.height > MAX_SIDE {
         return Err(format!(
-            "the {} image is {} x {} pixels, more than {MAX_SIDE} on a side",
+            "the {} image is {} × {} pixels, more than {MAX_SIDE} on a side",
             header.format, header.width, header.height
         ));
     }

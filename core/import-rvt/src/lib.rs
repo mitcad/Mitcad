@@ -50,6 +50,10 @@ pub mod geometry;
 pub mod plan;
 // Elements' properties (mitcad#496).
 pub mod properties;
+// The elements' outcomes and the import's notices (mitcad#1051).
+pub mod outcome;
+
+pub use outcome::Outcome;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -123,8 +127,8 @@ pub struct ElementLine {
     pub category: String,
     pub name: String,
     pub level: Option<String>,
-    /// `features`, `mesh` (the geometry the file keeps, or a saved mesh),
-    /// `reference body`, `box` or `not built`.
+    /// `features`, `parts`, `mesh` (the geometry the file keeps, or a saved
+    /// mesh), `reference body`, `box` or `not built` ([`Outcome`]'s words).
     pub outcome: String,
     pub features: usize,
     pub bodies: usize,
@@ -2980,6 +2984,27 @@ mod tests {
             "{window:?}"
         );
         assert_eq!(line(t::WALL_C).outcome, "box", "{:?}", line(t::WALL_C));
+        // mitcad#1051: the gable wall's box and the two missing openings
+        // are warnings of the import, the box among the elements that came
+        // in as boxes, and as a wall's fallback.
+        use mitcad_model::notice::{Notice, NoticeLevel};
+        let notices = report.notices();
+        assert!(
+            notices.contains(&Notice::warning("2 openings of the walls are missing")),
+            "{notices:?}"
+        );
+        assert!(
+            notices.iter().any(|n| n.level == NoticeLevel::Warning
+                && n.message.contains("came in as")
+                && n.message.contains("box")),
+            "{notices:?}"
+        );
+        assert!(
+            notices
+                .iter()
+                .any(|n| n.message.contains("of the kinds built as features")),
+            "{notices:?}"
+        );
         let door = line(t::DOOR);
         assert!(
             door.notes.contains(&format!(

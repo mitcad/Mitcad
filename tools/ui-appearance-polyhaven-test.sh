@@ -14,8 +14,8 @@
 #     resolutions with their download sizes.
 #   - Use downloads the 2k maps into the texture cache and makes them an
 #     appearance with the maps embedded, its size the texture's physical
-#     size, its source recorded with the licence and the page; Assign gives
-#     it to the body.
+#     size, its source recorded with the licence and the page; the
+#     Appearance tool gives it to the body (mitcad#1059).
 #   - With the fixtures and the cache moved away, the saved design opens
 #     again with the maps embedded.
 #
@@ -152,11 +152,16 @@ ui_expect_new "Texture used: polyhaven red_tiles_01 2k as custom1 (3 maps; 3 ima
 ui_expect_new "Appearance custom1 texture: embedded, maps normal roughness, source polyhaven red_tiles_01 2k" \
   "the dialog shows its maps and source"
 [ -n "$SHOT" ] && ui_capture "$SHOT"
-ui_mark
-ui_step "Assign to Body1"               ui_click_logged "Appearances assign"
-ui_expect_new "Assigned appearance custom1 to F1.b0" "assigned"
 ui_step "Close"                         ui_click_logged "Appearances close"
 ui_focus_main
+ui_mark
+ui_step "right-click Body1"             ui_click_logged "Browser Root/Bodies/Body1" 3
+ui_step "choose Appearance..."          ui_menu_choose "Appearance..."
+ui_expect_new "Appearance tool for F1.b0" "the Appearance tool for the box"
+ui_step "the picker: Red Tiles 01"      ui_picker_choose "Panel Appearance input value" "Appearance picker" "Red Tiles 01"
+ui_mark
+ui_step "OK (Enter)"                    ui_key Return
+ui_expect_new "Appearance custom1 for 1 body(ies)" "assigned"
 ui_mark
 ui_key ctrl+s
 ui_expect_new "Saved $FILE" "saved"
@@ -177,9 +182,13 @@ mv "$WORK/cache" "$WORK/cache-moved"
 ui_start_app --open "$FILE"
 UI_MARK=0 # a new log
 ui_expect_new "Opened $FILE" "the design opened again"
-ui_step "select Body1 in the browser"   ui_click_logged "Browser Root/Bodies/Body1"
 ui_step "Edit Appearances (search)"     ui_command "Edit Appearances"
-ui_expect_new "Appearances for bodies: F1.b0 (custom1)" "the body keeps the appearance"
+ui_expect_new "Appearances item steel_satin at" "the library is listed"
+ui_focus_dialog '^Appearances$'
+ui_mark
+ui_step "the list"                      ui_click_logged "Appearances item steel_satin"
+ui_step "the design's last (End)"       ui_key End
+ui_expect_new "Appearance selected: custom1" "the design's appearance selected"
 ui_expect_new "Appearance custom1 texture: embedded, maps normal roughness, source polyhaven red_tiles_01 2k" \
   "with its maps embedded"
 if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Appearance custom1 texture missing\|Texture request"; then

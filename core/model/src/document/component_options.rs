@@ -865,7 +865,7 @@ impl<K: Kernel> Document<K> {
         }
         let label = match planned.as_slice() {
             [(uid, ..)] => format!("Update {}", self.state.assembly.name(*uid)),
-            _ => "Update Library Parts".to_owned(),
+            _ => "Update Library Components".to_owned(),
         };
         self.apply(|state| {
             let mut lines = Vec::with_capacity(planned.len());

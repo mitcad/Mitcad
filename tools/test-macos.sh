@@ -17,8 +17,9 @@ done
 [ -n "$build" ] || { echo 'test-macos: --build DIR is required' >&2; exit 2; }
 runner=$build/core/mitcad-testrun
 [ -x "$runner" ] || { echo "test-macos: build $runner first" >&2; exit 2; }
-# Aqua GUI tests share one desktop: keep them serial while other tests may
-# overlap. Measure mode defaults to the existing serial Mac parallelism.
+# Aqua GUI tests hold macos_desktop: one GUI at a time, while independent
+# tests may overlap. The shell harness also locks across separate runs.
+# Measure mode defaults to one test at a time.
 # macOS rusage records CPU and the largest process's RSS, without a hard
 # per-test memory limit. Profiles live outside the disposable build tree.
 exec "$runner" "$mode" -j "$jobs" --memory-budget 85% --cpu-gate 0.9 \

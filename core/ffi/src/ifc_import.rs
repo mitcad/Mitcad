@@ -71,6 +71,8 @@ impl Document {
         });
         let mut value = serde_json::to_value(&report).expect("the report serializes");
         value["format"] = json!("ifc");
+        // What the outcomes left out and the warnings (mitcad#1040).
+        value["notices"] = mitcad_model::notice::to_json(&report.notices());
         value["text_report"] = json!(report.text());
         value["read_seconds"] = json!(read_seconds);
         value["instances"] = json!(file.entities.len());

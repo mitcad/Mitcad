@@ -92,7 +92,7 @@ impl BrokerAddress {
     /// Reads an address; the error says what is wrong with it.
     pub fn parse(text: &str) -> Result<Self, String> {
         let text = text.trim();
-        let bad = |why: &str| format!("'{text}' is not a broker address: {why}");
+        let bad = |why: &str| format!("“{text}” is not a broker address: {why}");
         let (tls, rest) = if let Some(rest) = strip_prefix_ignore_case(text, "mqtts://") {
             (true, rest)
         } else if let Some(rest) = strip_prefix_ignore_case(text, "mqtt://") {
@@ -501,7 +501,7 @@ fn live_here(value: &Value, strict: bool, problems: &mut Vec<String>) -> Result<
             }
         },
         Some(other) => Err(format!(
-            "live updates' mode is project, off or broker, not '{other}'"
+            "live updates' mode is project, off or broker, not “{other}”"
         )),
     }
 }

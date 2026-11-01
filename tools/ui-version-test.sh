@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/files app/projects
+# check-all sources: app/files app/projects app/framework/QuickAccessGroup.cpp
 # Saving versions (P12d) through the real UI, checked with the system's git:
 #   1. Save to Project of an untitled design: New Project (the folder
 #      typed, the author git's settings give), its name typed in the
 #      project picker (mitcad#174); the first version has the undo steps'
 #      names as its message, git's author and Mitcad's trailers, and git
-#      status is clean. Save without a change, and a change of the display
-#      state only (the Origin shown, kept apart in .mitcad/local), record
-#      no version.
+#      status is clean. Without a change Save is disabled (mitcad#1090)
+#      and Ctrl+S records no version; a change of the display state only
+#      (the Origin shown, kept apart in .mitcad/local) is saved without a
+#      version.
 #   2. Autosave writes the changed design to the recovery folder but
 #      records no version and leaves the file. Save with Description
 #      (Ctrl+Alt+S, mitcad#175) records one with the description typed.
@@ -19,7 +20,7 @@
 #      Version builds on it.
 #   4. Project Settings, the author: versions by the name and email there
 #      (the project's repository's) instead of git's.
-#   5. A file renamed outside Mitcad: opened, its display state follows,
+#   5. A file renamed outside MitCad: opened, its display state follows,
 #      and Save records the rename as a version of its own, then the change.
 #   6. Save to Project of a file outside projects (saved there through
 #      the project picker's Another Folder..., mitcad#176): its folder made
@@ -216,13 +217,18 @@ expect_clean "$PROJECT" "git status is clean"
 expect_git "$PROJECT" "config user.name" "Git Test" "the author in the project's repository"
 
 echo "--- No change, or only the display state: no version"
+# Save is disabled while nothing changed (mitcad#1090): Ctrl+S does nothing.
+ui_save_state disabled "nothing changed: Save has nothing to do"
 ui_mark
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
-ui_expect_new "Version unchanged: block.mitcad (v1)" "nothing changed: no version"
+ui_sync
+no_new_since "Version recorded" "nothing changed: no version"
 no_new_since "Version author dialog" "the author is not asked"
 ui_mark
 ui_step "show the origin"                ui_click_logged "Browser eye Root/Origin"
 ui_expect_new "Visibility Root/Origin: shown" "origin shown"
+# The display state is kept by Save (in .mitcad/local), so Save is enabled.
+ui_save_state enabled "the display state changed: Save has it to keep"
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
 ui_expect_new "Version unchanged: block.mitcad (v1)" "the display state is not versioned"
 [ -f "$PROJECT/.mitcad/local/display/block.mitcad.json" ] || ui_fail "no display state in .mitcad/local"
@@ -273,12 +279,12 @@ ui_expect_new "Version recorded: block.mitcad " "a version recorded"
 no_new_since "Version author dialog" "without asking for the author"
 expect_git "$PROJECT" "log -1 --format=%s" "Save block.mitcad: Change d3" "named after the change"
 
-echo "--- A change outside Mitcad: compare, then a version of it first"
+echo "--- A change outside MitCad: compare, then a version of it first"
 file_d3 "$FILE" 40 # another program
 ui_mark
 ui_step "undo the change of d3 (Ctrl+Z)" ui_key ctrl+z
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
-ui_expect_new "Save conflict: $FILE changed outside Mitcad (the file)" "Save notices the change"
+ui_expect_new "Save conflict: $FILE changed outside MitCad (the file)" "Save notices the change"
 ui_focus_dialog '^MitCad$'
 ui_step "compare (O)"                    ui_key o
 ui_expect_new "Save conflict: compare: Changes from the file in the folder to the open design:" "Compare"
@@ -305,7 +311,7 @@ elsewhere=$(sha256sum "$FILE")
 ui_mark
 ui_step "redo the change of d3 (Ctrl+Y)" ui_key ctrl+y
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
-ui_expect_new "Save conflict: $FILE changed outside Mitcad (a newer version)" "Save notices the newer version"
+ui_expect_new "Save conflict: $FILE changed outside MitCad (a newer version)" "Save notices the newer version"
 ui_focus_dialog '^MitCad$'
 ui_step "cancel (Esc)"                   ui_key Escape
 ui_focus_main
@@ -344,13 +350,14 @@ ui_expect_new "Version recorded: block.mitcad " "recorded"
 expect_git "$PROJECT" "log -1 --format=%an|%ae" "Settings Author|settings@example.invalid" "by the settings' author"
 ui_mark
 ui_step "show the origin"                ui_click_logged "Browser eye Root/Origin"
+ui_save_state enabled "the display state changed: Save has it to keep"
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
 ui_expect_new "Version unchanged: block.mitcad" "the display state kept, no version"
 [ -f "$PROJECT/.mitcad/local/display/block.mitcad.json" ] || ui_fail "no display state in .mitcad/local"
 ui_key ctrl+q # exit
 expect_exit "exited"
 
-echo "--- Renamed outside Mitcad"
+echo "--- Renamed outside MitCad"
 mv "$FILE" "$PROJECT/plate.mitcad"
 FILE=$PROJECT/plate.mitcad
 versions=$(commits "$PROJECT")
@@ -581,9 +588,11 @@ Save plate.mitcad: Change d3|Settings Author" "the restore on top of the saved c
   ui_fail "the restored file is not v8's"
 echo "ok   the file is v8's again"
 expect_clean "$PROJECT" "git status is clean"
+ui_save_state disabled "nothing to save: the restored design is unchanged"
 ui_mark
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
-ui_expect_new "Version unchanged: plate.mitcad (v12)" "nothing to save: the restored file is no change outside Mitcad"
+ui_sync
+no_new_since "Version recorded" "nothing to save: the restored file is no change outside MitCad"
 no_new_since "Save conflict" "Save does not ask"
 
 echo "--- Version History: Open an older version as a new design"
@@ -660,11 +669,11 @@ for failure in detached index-lock; do
     ui_mark
     if [ "$operation" = save ]; then
       ui_key ctrl+s
-      ui_expect_new "Save conflict: $FILE changed outside Mitcad" "external change found"
+      ui_expect_new "Save conflict: $FILE changed outside MitCad" "external change found"
       ui_focus_dialog '^MitCad$'
       ui_key n
       ui_focus_main
-      ui_expect_new "Could not preserve the external changes of plate.mitcad. Save cancelled. $why" \
+      ui_expect_new "Could not preserve the external changes of plate.mitcad. Save canceled. $why" \
         "Save refused failed preservation, saying why" 20
     else
       ui_key ctrl+shift+h
@@ -679,14 +688,14 @@ for failure in detached index-lock; do
       ui_key Return
       ui_focus_main
       if [ "$operation" = restore ]; then
-        ui_expect_new "Could not preserve the external changes of plate.mitcad. Restore cancelled. $why" \
+        ui_expect_new "Could not preserve the external changes of plate.mitcad. Restore canceled. $why" \
           "Restore refused failed preservation, saying why" 20
       else
         # The unsaved design is written to the file (its bytes before are
         # the latest version's), but no version holds it: the restore,
         # which would write over it, stops with an error saying why.
         ui_expect_new "$saved_why" "the changes saved, without a version" 20
-        ui_expect_new "Restore cancelled: your changes are saved in plate.mitcad, but not as a version. $why" \
+        ui_expect_new "Restore canceled: your changes are saved in plate.mitcad, but not as a version. $why" \
           "Save-and-Restore stops when saving a version fails, saying why" 20
         [ "$(file_d3 "$FILE")" = "[36.0]" ] || ui_fail "unsaved design was replaced by restore"
         echo "ok   the file keeps the design as saved"

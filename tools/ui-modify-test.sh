@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/commands app/framework/CommandSessionPicks.cpp app/framework/CommandSession.cpp
+# check-all sources: app/commands app/framework/CommandSessionPicks.cpp app/framework/CommandSession.cpp app/browser/LibraryPicker.cpp
 # The MODIFY group (U4) through the real UI, with the volumes the model
 # reports (analytic, or tools/cli/tests/f2_*.json, f4_*.json):
 #   - Fillet's Edges picked twice in a row, the radius typed without a
@@ -22,7 +22,9 @@
 #     rotation; Combine, Align (a vertex onto a vertex), Split Body (its
 #     plane drawn as the split extends it while Extend Splitting Tool is
 #     on, none while it is off, mitcad#712);
-#     Edit Materials, Physical Properties and Appearance.
+#     the Material tool, Physical Properties (with the selected body's
+#     Bounding Box and face, edge and vertex counts, mitcad#1095) and
+#     Appearance (its picker, mitcad#1059).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-modify-test.sh [screenshot.png]
@@ -349,6 +351,7 @@ echo "=== Draft"
 ui_start_app --demo
 ui_step "fit (F6)"                         ui_key F6
 ui_step "draft (search)"                   ui_command "Draft"
+ui_show_origin
 ui_step "pick XY"                          ui_click_logged "Datum xy"
 ui_expect_log "Draft Plane: 1 plane [plane xy]" "XY the fixed plane"
 ui_step "pick the front face"              ui_click_pick "face F2.b0/$FRONT"
@@ -365,6 +368,7 @@ echo "=== Replace Face, Press Pull, Delete, Split Face"
 ui_start_app --demo
 ui_step "fit (F6)"                         ui_key F6
 ui_step "offset plane (search)"            ui_command "Offset Plane"
+ui_show_origin
 ui_step "pick XY"                          ui_click_logged "Datum xy"
 ui_step "25 up"                            ui_type_in "Panel Offset Plane input distance" "25"
 ui_step "OK (Enter)"                       ui_key Return
@@ -482,6 +486,7 @@ ui_step "fit (F6)"                         ui_key F6
 ui_step "move (M)"                         ui_key m
 ui_step "pick the copy"                    ui_click_logged "Browser Root/Bodies/$COPY"
 ui_step "Rotate"                           ui_choose "Panel Move/Copy input type" 2
+ui_show_origin
 ui_step "pick the Z axis"                  ui_click_logged "Datum z"
 ui_expect_log "Move/Copy Axis: 1 axis [axis z]" "Z picked"
 ui_expect_log "Preview Move/Copy: ok" "previewed"
@@ -529,29 +534,32 @@ ui_step "OK (Enter)"                       ui_key Return
 ui_expect_volume "Body Body1 (F2.b0): volume 14000.000 -> \([0-9.]*\) mm3" 4000 "the piece below x = 10"
 ui_expect_volume "New body [A-Za-z0-9]* (F10.b0): volume \([0-9.]*\) mm3" 10000 "the piece above"
 
-# Edit Materials opens the Materials window for the selection (mitcad#655).
+# The Material tool gives the selection a material (mitcad#655, mitcad#1059).
 ui_step "pick Body1"                       ui_click_logged "Browser Root/Bodies/Body1"
 ui_mark
-ui_step "Edit Materials (search)"         ui_command "Edit Materials"
-ui_focus_dialog '^Materials$'
-ui_expect_new "Materials item Aluminum at" "Aluminum is listed"
-ui_step "choose Aluminum"                  ui_click_logged "Materials item Aluminum"
-ui_expect_new "Material selected: Aluminum (" "Aluminum is selected"
-ui_step "Assign"                           ui_click_logged "Materials assign"
-ui_focus_main
+ui_step "Material (search)"                ui_command "Material"
+ui_expect_new "Material Bodies: 1 body [body F2.b0]" "the Material tool takes the selected Body1"
+ui_step "the picker: Aluminum"             ui_picker_choose "Panel Material input material" "Material picker" "Aluminum"
+ui_step "OK (Enter)"                       ui_key Return
 ui_expect_new "Material aluminum set for 1 body(ies)" "aluminium"
+# A command takes the selection it starts with: Body1 picked again.
+ui_step "pick Body1 again"                 ui_click_logged "Browser Root/Bodies/Body1"
 ui_step "physical properties (search)"    ui_command "Physical Properties"
 ui_expect_log "Physical properties: Body1 volume 4000 mass 0.0108 center (5, 10, 10)" \
   "4000 mm3 of aluminium weighs 10.8 g"
+# The window's Bounding Box and counts of the selected body (mitcad#1095):
+# the piece of the joined cubes below x = 10 is a 10 x 20 x 20 block.
+ui_expect_log "Physical properties window \"Properties\": Body1: Bounding Box 10 x 20 x 20 mm, Faces / Edges / Vertices 6 / 12 / 8; Total: Bounding Box 10 x 20 x 20 mm, Faces / Edges / Vertices 6 / 12 / 8" \
+  "the window shows the box and 6 faces, 12 edges and 8 vertices"
 ui_focus_dialog "Properties"
 ui_step "close the dialog (Esc)"           ui_key Escape
 ui_focus_main
-# Body1 is still selected after Edit Materials' Assign (mitcad#655):
+# Body1 is still selected after Physical Properties (mitcad#655):
 # Appearance starts with it, and a click on its row would take it out.
 ui_mark
 ui_step "appearance (search)"              ui_command "Appearance"
 ui_expect_new "Appearance Bodies: 1 body [body F2.b0]" "Appearance takes the selected Body1"
-ui_step "Paint - Red"                    ui_choose "Panel Appearance input value" 5
+ui_step "the picker: Paint - Red"          ui_picker_choose "Panel Appearance input value" "Appearance picker" "Paint - Red"
 ui_step "OK (Enter)"                       ui_key Return
 ui_expect_log "Appearance paint_red for 1 body(ies)" "painted red"
 

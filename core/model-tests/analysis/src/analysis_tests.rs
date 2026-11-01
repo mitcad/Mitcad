@@ -196,7 +196,7 @@ fn analyses_refuse_what_they_cannot_keep() {
         &mut doc,
         json!({"cmd": "add_analysis", "def": section(json!("xy"), 0.0, false), "name": "Cut"}),
     );
-    assert_eq!(error, "an analysis 'Cut' exists");
+    assert_eq!(error, "an analysis Cut exists");
     command(
         &mut doc,
         json!({"cmd": "add_analysis", "def": section(json!("yz"), 0.0, false)}),
@@ -205,19 +205,19 @@ fn analyses_refuse_what_they_cannot_keep() {
         &mut doc,
         json!({"cmd": "rename_analysis", "name": "Section1", "new_name": "Cut"}),
     );
-    assert_eq!(error, "an analysis 'Cut' exists");
+    assert_eq!(error, "an analysis Cut exists");
     let error = refused(
         &mut doc,
         json!({"cmd": "rename_analysis", "name": "Section1", "new_name": " "}),
     );
     assert_eq!(error, "the analysis needs a name");
     let error = refused(&mut doc, json!({"cmd": "delete_analysis", "name": "Nope"}));
-    assert_eq!(error, "there is no analysis 'Nope'");
+    assert_eq!(error, "there is no analysis Nope");
     let error = refused(
         &mut doc,
         json!({"cmd": "set_analysis_visible", "name": "Nope", "visible": true}),
     );
-    assert_eq!(error, "there is no analysis 'Nope'");
+    assert_eq!(error, "there is no analysis Nope");
 }
 
 #[test]

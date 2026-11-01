@@ -290,7 +290,7 @@ function Test-Programs([string]$Install) {
   $proc = Start-Process -FilePath (Join-Path $bin 'mitcad.exe') -ArgumentList '--version' `
     -RedirectStandardOutput $versionOut -RedirectStandardError (Join-Path $Out 'version-err.txt') -Wait -PassThru
   $versionText = if (Test-Path $versionOut) { (Get-Content $versionOut -Raw) } else { '' }
-  if ($proc.ExitCode -eq 0 -and $versionText -match 'Mitcad') { Pass "mitcad.exe --version: $($versionText.Trim())" }
+  if ($proc.ExitCode -eq 0 -and $versionText -cmatch '^MitCad ') { Pass "mitcad.exe --version: $($versionText.Trim())" }
   else { Fail "mitcad.exe --version exit code $($proc.ExitCode), output '$versionText'" }
   # The render worker with the installation's libraries only (no OpenGL).
   $renderLog = Join-Path $Out 'render.log'
@@ -442,7 +442,7 @@ function Test-Update([string]$In, [string]$Install, [string]$Work, [switch]$Full
       Remove-Item -Recurse -Force $script:UiSettings -ErrorAction SilentlyContinue
       $env:MITCAD_UPDATE_URL = "$base/good/update-manifest.json"
       Ui-StartApp 'update-ignored'
-      Ui-ExpectLog "Updates: Mitcad $version for windows-x64, installed in " 'its own version, not MITCAD_TEST_VERSION'
+      Ui-ExpectLog "Updates: MitCad $version for windows-x64, installed in " 'its own version, not MITCAD_TEST_VERSION'
       Ui-ExpectLog ('Update source: manifest at https://github.com/mitcad/Mitcad/releases/latest/download/update-manifest.json, ' +
                     'releases at https://api.github.com/repos/mitcad/Mitcad/releases?per_page=20, ') `
         "GitHub's addresses, not MITCAD_UPDATE_URL"
@@ -487,7 +487,7 @@ function Test-Update([string]$In, [string]$Install, [string]$Work, [switch]$Full
       Remove-Item -Recurse -Force $script:UiSettings -ErrorAction SilentlyContinue
       $env:MITCAD_UPDATE_URL = "$base/tampered/update-manifest.json"
       Ui-StartApp 'update-tampered' -Updates
-      Ui-ExpectLog 'Updates: Mitcad 0.0.0 for windows-x64, installed in ' 'the installation can update itself'
+      Ui-ExpectLog 'Updates: MitCad 0.0.0 for windows-x64, installed in ' 'the installation can update itself'
       Ui-ExpectLog '[Release Notes, Install, Skip This Version, Later]' 'the start-up check offers Install' 30
       Ui-ExpectLog 'Update notice Install at ' 'the notice places Install'
       Ui-Step 'install (click)' { Ui-ClickLogged 'Update notice Install' }

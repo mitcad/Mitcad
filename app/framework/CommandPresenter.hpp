@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "Command.hpp"
+#include "NoticeLevel.hpp"
 
 namespace mitcad {
 
@@ -65,7 +66,10 @@ public:
   virtual void setValueHint(const QString& key, const QString& hint) = 0;
   // What an empty value field shows (InputDef::autoText, mitcad#656).
   virtual void setPlaceholder(const QString& /*key*/, const QString& /*text*/) {}
-  virtual void setMessage(const QString& message, bool error) = 0;
+  // The panel's message at its level (mitcad#1040): an error or a warning
+  // in its highlight box with the level's icon and word, kept until the
+  // next message replaces it; hints, progress and information plain.
+  virtual void setMessage(const QString& message, NoticeLevel level) = 0;
   virtual void setResult(const QString& text) = 0;
   // An inspection's answer as a whole: its rows of names and values where
   // it has them (Inspection::values and groups, mitcad#1010), else its

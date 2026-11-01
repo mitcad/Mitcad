@@ -8,6 +8,7 @@
 #include <optional>
 #include <vector>
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QPointF>
 #include <QString>
@@ -208,6 +209,11 @@ public:
   // The inactive constraints and dimensions the geometry does not meet
   // (mitcad#721): activating one of them moves it.
   QStringList unmetInactive;
+  // The solve's notices (mitcad#1040): did not solve an error, redundant
+  // constraints a warning, unmet inactive ones information; and its
+  // redundant constraints.
+  QJsonArray notices;
+  QStringList redundant;
 
   const PointData* point(const QString& id) const;
   const CurveData* curve(const QString& id) const;

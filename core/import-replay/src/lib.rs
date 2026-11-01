@@ -116,6 +116,8 @@ pub use refs::DEFAULT_GEOMETRIC_TOLERANCE;
 pub use mitcad_import_base::{Helper, Progress, Ticking, abandoned, current_progress, tick};
 // When the memory guard gives the allocator's free memory back (mitcad#885).
 pub use mitcad_import_base::FreeMemoryRelease;
+// The outcomes of the .ipt, .iam and .dwg imports (mitcad#1051).
+pub use mitcad_import_base::outcomes;
 pub use report::{
     BodyReport, ComponentReport, DesignReport, ImportReport, InputProvenance, ItemReport,
     JointReport, LightBulbReport, LowMemoryReport, Outcome, ReferenceReport, RetryQuestionReport,
@@ -2351,7 +2353,7 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
             .map(|r| r.name.clone());
         self.report.warnings.push(match &name {
             Some(name) => format!(
-                "the import was stopped at {name}: it and the modelling items after it took \
+                "the import was stopped at {name}: it and the modeling items after it took \
                  the file's bodies without being replayed, and the final bodies were compared by \
                  volume only"
             ),
@@ -2389,7 +2391,7 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
         };
         let mut warning = format!(
             "the import ran low on memory {place} ({memory}): definitions were cut short or not \
-             tried and {given_up} modelling items took the file's bodies"
+             tried and {given_up} modeling items took the file's bodies"
         );
         if self.memory_low() {
             warning.push_str("; the final bodies were compared by volume only");

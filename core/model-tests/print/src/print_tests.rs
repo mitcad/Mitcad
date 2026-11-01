@@ -449,12 +449,12 @@ fn a_cancelled_job_stops_the_overhangs_and_the_walls() {
         &doc,
         json!({"query": "print_overhangs", "bodies": ["F2.b0"], "angle": 50}),
     );
-    assert_eq!(error, "the computation was cancelled");
+    assert_eq!(error, "the computation was canceled");
     let error = query_error(
         &doc,
         json!({"query": "print_thickness", "bodies": ["F2.b0"], "minimum": 2}),
     );
-    assert_eq!(error, "the computation was cancelled");
+    assert_eq!(error, "the computation was canceled");
     doc.set_monitor(None);
     let answer = query(
         &doc,
@@ -536,7 +536,7 @@ fn the_estimate_of_the_block() {
 #[test]
 fn a_print_analysis_changes_no_body_and_no_print_file() {
     let mut doc = block();
-    let dir = std::env::temp_dir().join(format!("mitcad-print-analysis-{}", std::process::id()));
+    let dir = mitcad_model::testing::unique_temp_path("print-analysis");
     // The same file name in two folders: the 3MF model is named after the
     // file.
     let (before, after) = (dir.join("before"), dir.join("after"));

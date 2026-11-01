@@ -18,8 +18,14 @@ namespace {
 const QString kAutosave = QStringLiteral("autosave/enabled");
 const QString kAutosaveMinutes = QStringLiteral("autosave/minutes");
 const QString kImportTolerance = QStringLiteral("import/geometricTolerance");
+const QString kNewDesignUnits = QStringLiteral("units/newDesigns");
 
 } // namespace
+
+QStringList GeneralSettings::newDesignUnitChoices() {
+  return {QStringLiteral("mm"), QStringLiteral("cm"), QStringLiteral("m"), QStringLiteral("in"),
+          QStringLiteral("ft")};
+}
 
 GeneralSettings GeneralSettings::load() {
   const QSettings settings;
@@ -29,6 +35,11 @@ GeneralSettings GeneralSettings::load() {
                                        kMinAutosaveMinutes, kMaxAutosaveMinutes);
   general.importTolerance = std::clamp(settings.value(kImportTolerance, general.importTolerance).toDouble(),
                                        kMinImportTolerance, kMaxImportTolerance);
+  // A unit not among the choices (an edited settings file) is millimetres.
+  const QString units = settings.value(kNewDesignUnits, general.newDesignUnits).toString();
+  if (newDesignUnitChoices().contains(units)) {
+    general.newDesignUnits = units;
+  }
   return general;
 }
 
@@ -37,6 +48,7 @@ void GeneralSettings::save() const {
   settings.setValue(kAutosave, autosave);
   settings.setValue(kAutosaveMinutes, autosaveMinutes);
   settings.setValue(kImportTolerance, importTolerance);
+  settings.setValue(kNewDesignUnits, newDesignUnits);
 }
 
 bool VersionSettings::complete() const {

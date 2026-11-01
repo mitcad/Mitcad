@@ -5,6 +5,7 @@
 #include "MeasurementOverlay.hpp"
 
 #include <cmath>
+#include <initializer_list>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -53,10 +54,44 @@ void OcctViewer::setMeasurements(const std::vector<MeasurementDisplay>& measurem
   logAnnotationPlaces();
 }
 
+void OcctViewer::setMeasurementPreview(const std::vector<MeasurementDisplay>& preview) {
+  m_measurementPreview = preview;
+  for (MeasurementDisplay& m : m_measurementPreview) {
+    m.preview = true;
+  }
+  if (m_measurementOverlay == nullptr && !preview.empty()) {
+    m_measurementOverlay = new MeasurementOverlay(this);
+  }
+  if (m_measurementOverlay != nullptr) {
+    m_measurementOverlay->refresh();
+  }
+  QStringList drawn;
+  for (const MeasurementDisplay& m : m_measurementPreview) {
+    drawn << QStringLiteral("%1 = %2").arg(m.name, m.label);
+  }
+  const QString logged = QStringLiteral("Annotation preview drawn: %1")
+                             .arg(drawn.isEmpty() ? QStringLiteral("none") : drawn.join(QStringLiteral(" | ")));
+  if (logged != m_loggedMeasurementPreview) {
+    m_loggedMeasurementPreview = logged;
+    qDebug().noquote() << logged;
+  }
+  logAnnotationPlaces();
+}
+
 void OcctViewer::logAnnotationPlaces() {
   const MeasurementProjection project = [this](const gp_Pnt& p) -> std::optional<QPointF> { return toWidgetF(p); };
   QStringList places;
+  // The shown ones, then a panel's preview (mitcad#1097), named so.
+  std::vector<const MeasurementDisplay*> drawn;
   for (const MeasurementDisplay& m : m_measurements) {
+    drawn.push_back(&m);
+  }
+  for (const MeasurementDisplay& m : m_measurementPreview) {
+    drawn.push_back(&m);
+  }
+  for (const MeasurementDisplay* item : drawn) {
+    const MeasurementDisplay& m = *item;
+    const QString what = m.preview ? QStringLiteral("Annotation preview") : QStringLiteral("Annotation");
     const MeasurementShape shape = layoutMeasurement(m, project);
     if (!shape.valid) {
       continue;
@@ -77,13 +112,13 @@ void OcctViewer::logAnnotationPlaces() {
       }
     }
     const QPoint at = mapTo(window(), label.toPoint());
-    places << QStringLiteral("Annotation label %1 at %2,%3").arg(m.name).arg(at.x()).arg(at.y());
+    places << QStringLiteral("%1 label %2 at %3,%4").arg(what, m.name).arg(at.x()).arg(at.y());
     if (!shape.grips.empty() && !shape.grips.front().isEmpty()) {
       const QPolygonF& grip = shape.grips.front();
       // A quarter along it: its middle is under the text.
       const QPointF on = grip.size() == 2 ? grip[0] + (grip[1] - grip[0]) * 0.25 : grip[grip.size() / 4];
       const QPoint line = mapTo(window(), on.toPoint());
-      places << QStringLiteral("Annotation line %1 at %2,%3").arg(m.name).arg(line.x()).arg(line.y());
+      places << QStringLiteral("%1 line %2 at %3,%4").arg(what, m.name).arg(line.x()).arg(line.y());
     }
   }
   const QString placed = places.join(QLatin1Char('\n'));
@@ -161,7 +196,7 @@ void MeasurementOverlay::grabBackdrop() {
 }
 
 void MeasurementOverlay::refresh() {
-  if (m_viewer->measurements().empty()) {
+  if (m_viewer->measurements().empty() && m_viewer->measurementPreview().empty()) {
     hide();
     m_pressed.clear();
     m_dragging = false;
@@ -179,14 +214,16 @@ void MeasurementOverlay::refresh() {
 
 QString MeasurementOverlay::placesKey() const {
   QStringList places;
-  for (const MeasurementDisplay& m : m_viewer->measurements()) {
-    const gp_Pnt p = m.planar ? m.textAt
-                     : m.arc  ? m.corner
-                     : m.circle ? m.center
-                     : !m.points.empty() ? m.points.front()
-                                         : gp_Pnt();
-    const QPointF at = m_viewer->toWidgetF(p);
-    places << QStringLiteral("%1,%2").arg(std::lround(at.x())).arg(std::lround(at.y()));
+  for (const std::vector<MeasurementDisplay>* drawn : {&m_viewer->measurements(), &m_viewer->measurementPreview()}) {
+    for (const MeasurementDisplay& m : *drawn) {
+      const gp_Pnt p = m.planar ? m.textAt
+                       : m.arc  ? m.corner
+                       : m.circle ? m.center
+                       : !m.points.empty() ? m.points.front()
+                                           : gp_Pnt();
+      const QPointF at = m_viewer->toWidgetF(p);
+      places << QStringLiteral("%1,%2").arg(std::lround(at.x())).arg(std::lround(at.y()));
+    }
   }
   // A turn about the text's point turns the text too.
   const gp_Dir eye = m_viewer->viewDirection();
@@ -429,6 +466,10 @@ void MeasurementOverlay::paintEvent(QPaintEvent* /*event*/) {
       shape = draggedMeasurement(shape, m_part == 2, m_delta);
     }
     shapes.push_back(shape);
+  }
+  // A panel's preview over them, dimmed (mitcad#1097).
+  for (const MeasurementDisplay& m : m_viewer->measurementPreview()) {
+    shapes.push_back(layoutMeasurement(m, project));
   }
   QPainter painter(this);
   // What lies behind, while the camera is where it was taken.

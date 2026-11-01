@@ -70,6 +70,21 @@ inline constexpr char NativeColorFieldPlaceholderProperty[] = "nativeColorFieldP
 // outline shows the same text, in its rows' top left corner, then. Its
 // label is identified as the view's objectName plus ".empty".
 inline constexpr char NativeEmptyTextProperty[] = "nativeEmptyText";
+// What an item view's delegate paints in some columns, as data for the
+// native cells (mitcad#1080). Each is an optional QVariantList of logical
+// columns on a QAbstractItemView. NativeDecimalColumnsProperty: the
+// numbers with an optional unit sit on one decimal axis per column in
+// tabular digits, as DecimalAlignDelegate paints them.
+// NativeSelectedIconTintProperty: a selected row's icon takes the selected
+// text's colour, as the monochrome marks of ShortcutDialog and the Projects
+// status column.
+inline constexpr char NativeDecimalColumnsProperty[] = "nativeDecimalColumns";
+inline constexpr char NativeSelectedIconTintProperty[] = "nativeSelectedIconTint";
+// Optional bool on a QTableView whose vertical header's labels carry
+// information, such as Purge Volumes' "From PLA" rows (mitcad#1078): the
+// native table shows them, with their icons, as a leading column while the
+// header is not hidden. Other tables leave their row numbers out.
+inline constexpr char NativeRowHeaderProperty[] = "nativeRowHeader";
 
 // An optional multiline editor's own key commands and completion list.
 // AppKit keeps ordinary editing/IME; the shared editor gets first refusal

@@ -1,11 +1,18 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <functional>
 #include <memory>
 
+#include <QByteArray>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QString>
+#include <QVector>
+
+class QObject;
 
 namespace mitcad {
 
@@ -38,7 +45,25 @@ public:
   // Whether a design stands behind the model: its bodies, its choices,
   // Assign, Save to and Use in this design. False for My Library.
   virtual bool hasDesign() const { return true; }
+  // Answers read ahead (LibraryItemsHost::setAnswers) are read again from
+  // the files: before a look that must see what is there now (Import from
+  // Slicer's click).
+  virtual void readAgain() {}
 };
+
+// The answers of queries read ahead, by the query (its compact JSON).
+using QueryAnswers = QHash<QByteArray, QJsonValue>;
+
+// Reads `requests` off the UI thread (mitcad#1018): a model of its own, an
+// empty design, answers them on a worker thread from the files they read
+// (the libraries of materials and print profiles, an installed slicer's
+// presets), and `done` gets the answers and how long the reading took on
+// `context`'s (the UI) thread; nothing when `context` is gone by then. A
+// request the model refused has no answer (whoever asks it again gets the
+// refusal). The UI tests' sync waits meanwhile (TestSync::watch), as for
+// what a panel logs next.
+void readAhead(QObject* context, const QVector<QJsonObject>& requests,
+               std::function<void(const QueryAnswers& answers, qint64 milliseconds)> done);
 
 // The open design's model, through the main window (DocumentHost).
 class DesignItemsHost final : public PrintItemsHost {
@@ -78,9 +103,14 @@ public:
   QString changeBlockedReason() const override { return {}; }
   QString projectFolder() const override { return m_project; }
   bool hasDesign() const override { return false; }
+  void readAgain() override { setAnswers({}); }
 
   // The open design's project, whose library is the second place.
   void setProjectFolder(const QString& folder) { m_project = folder; }
+  // Answers read ahead (readAhead, mitcad#1018): the model's queries take
+  // them instead of reading the files again, until a command changes the
+  // libraries or readAgain.
+  void setAnswers(const QueryAnswers& answers);
 
 private:
   struct Model;

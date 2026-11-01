@@ -411,7 +411,7 @@ fn a_sphere_is_as_thick_as_its_diameter_through_its_centre() {
     let (at, to) = (found.at.unwrap(), found.to.unwrap());
     let middle: [f64; 3] = std::array::from_fn(|i| (at[i] + to[i]) / 2.0 - center[i]);
     let off = (middle[0] * middle[0] + middle[1] * middle[1] + middle[2] * middle[2]).sqrt();
-    assert!(off < 0.5, "the ray misses the centre by {off} mm");
+    assert!(off < 0.5, "the ray misses the center by {off} mm");
     assert!(found.thin.is_empty());
 }
 

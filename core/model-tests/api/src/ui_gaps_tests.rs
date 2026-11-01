@@ -31,9 +31,9 @@ fn timeline_item(doc: &Document<MockKernel>, name: &str) -> Value {
 }
 
 #[test]
-fn a_fillet_built_smaller_is_a_warning() {
+fn a_fillet_built_as_rings_is_a_warning() {
     let mut b = block();
-    const NOTE: &str = "the fillet is built 0.1 % smaller than asked";
+    const NOTE: &str = "the fillet is built as rings about its circles";
     b.doc
         .kernel()
         .notes
@@ -52,19 +52,27 @@ fn a_fillet_built_smaller_is_a_warning() {
     assert_eq!(preview["warnings"], json!([NOTE]));
     command(&mut b.doc, json!({"cmd": "add_feature", "def": fillet}));
 
-    // Yellow in the timeline: the status `warning`, the note as its message.
+    // Yellow in the timeline: the status `warning`, the note as its
+    // warning notice (mitcad#1040); `error` carries only a failure.
     let item = timeline_item(&b.doc, "Fillet1");
     assert_eq!(item["status"], "warning");
-    assert_eq!(item["error"], NOTE);
+    assert_eq!(item["level"], "warning");
+    assert_eq!(item["error"], Value::Null);
+    assert_eq!(
+        item["notices"],
+        json!([{"level": "warning", "message": NOTE, "target": "F3"}])
+    );
     let feature = query(&b.doc, json!({"query": "feature", "uid": "F3"}));
     assert_eq!(feature["status"], "warning");
+    assert_eq!(feature["level"], "warning");
+    assert_eq!(feature["notices"], item["notices"]);
     assert_eq!(feature["warnings"], json!([NOTE]));
     // The body is there: the feature succeeded.
     assert_eq!(b.doc.bodies().len(), 1);
     assert!(b.doc.stats().error.is_none());
     // Scripts can expect it.
     let script = json!([{"expect": {"feature": "Fillet1", "status": "warning",
-                                    "error_contains": "0.1 %"}}]);
+                                    "error_contains": "rings"}}]);
     b.doc.run_script(&script.to_string()).unwrap();
 
     // Other features are not affected; a chamfer without a note is ok.
@@ -76,6 +84,51 @@ fn a_fillet_built_smaller_is_a_warning() {
     let item = timeline_item(&b.doc, "Chamfer1");
     assert_eq!(item["status"], "ok");
     assert_eq!(item["error"], Value::Null);
+}
+
+#[test]
+fn a_fillet_built_smaller_is_information() {
+    // A fillet built 0.1 % smaller than asked, as its exact size takes a
+    // face away that the geometry kernel cannot build (mitcad#1106): no
+    // warning, information in the feature's details.
+    let mut b = block();
+    const INFO: &str = "the fillet is built 0.1 % smaller than asked";
+    b.doc
+        .kernel()
+        .infos
+        .borrow_mut()
+        .insert("fillet", INFO.to_owned());
+    let fillet = json!({"type": "fillet", "body": "F2.b0",
+                        "edges": [corner(b.extrude, 1, 0)], "radius": 2});
+    let preview: Value = serde_json::from_str(
+        &b.doc
+            .preview(&json!({"cmd": "add_feature", "def": fillet}).to_string())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["status"], "ok");
+    assert_eq!(preview["warnings"], json!([]));
+    assert_eq!(preview["infos"], json!([INFO]));
+    command(&mut b.doc, json!({"cmd": "add_feature", "def": fillet}));
+
+    // Not yellow in the timeline: the status stays `ok`, the level is
+    // `info`, the info its notice.
+    let item = timeline_item(&b.doc, "Fillet1");
+    assert_eq!(item["status"], "ok");
+    assert_eq!(item["level"], "info");
+    assert_eq!(item["error"], Value::Null);
+    assert_eq!(
+        item["notices"],
+        json!([{"level": "info", "message": INFO, "target": "F3"}])
+    );
+    let feature = query(&b.doc, json!({"query": "feature", "uid": "F3"}));
+    assert_eq!(feature["status"], "ok");
+    assert_eq!(feature["level"], "info");
+    assert_eq!(feature["notices"], item["notices"]);
+    assert_eq!(feature["warnings"], Value::Null);
+    assert_eq!(feature["infos"], json!([INFO]));
+    let script = json!([{"expect": {"feature": "Fillet1", "status": "ok"}}]);
+    b.doc.run_script(&script.to_string()).unwrap();
 }
 
 /// A 60 x 40 rectangle on layer Outline, a circle on the frozen layer
@@ -95,8 +148,7 @@ const LAYERED: &str = "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n\
 
 #[test]
 fn a_dxf_drawing_tells_its_layers_and_takes_some_of_them() {
-    let dir = std::env::temp_dir().join(format!("mitcad-dxf-layers-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("dxf-layers");
     let path = dir.join("plate.dxf");
     std::fs::write(&path, LAYERED).unwrap();
     let path = path.to_str().unwrap();
@@ -381,7 +433,14 @@ fn a_text_in_a_missing_font_is_a_warning() {
     );
     let item = timeline_item(&doc, "Sketch1");
     assert_eq!(item["status"], "warning", "{item}");
-    let message = item["error"].as_str().unwrap();
+    assert_eq!(item["level"], "warning", "{item}");
+    let messages: Vec<&str> = item["notices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["message"].as_str().unwrap())
+        .collect();
+    let message = messages.join("; ");
     assert!(
         message.contains("No Such Font is not installed; Mock Sans is used"),
         "{message}"

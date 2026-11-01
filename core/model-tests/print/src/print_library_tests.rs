@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use mitcad_model::Document;
 use mitcad_model::appearance::Appearance;
 use mitcad_model::library::{LibraryRequest, LibrarySource, LinkResolver};
-use mitcad_model::material::Material;
+use mitcad_model::material::{Material, MaterialClass};
 use mitcad_model::print_library::{
     ItemData, ItemKind, Libraries, LibraryKind, item_path, project_library,
 };
@@ -60,17 +60,19 @@ fn petg(version: u32) -> ItemData {
                 ("temperature".to_owned(), json!(240)),
             ]),
             slicer: BTreeMap::new(),
+            variants: Vec::new(),
+            appearances: Vec::new(),
             based_on: Some("petg".to_owned()),
             class: None,
             version: Some(version),
             origin: None,
         },
-        appearance: Some(Appearance {
+        appearances: vec![Appearance {
             id: "acme_teal".to_owned(),
             name: "Acme teal".to_owned(),
             base_color: [0.0, 0.5, 0.5],
             ..Appearance::default()
-        }),
+        }],
     }
 }
 
@@ -92,7 +94,7 @@ fn write_item(folder: &Path, item: &ItemData) {
 
 /// A design reading the base library, and a project folder.
 fn setup(name: &str) -> (Document<MockKernel>, PathBuf) {
-    let dir = std::env::temp_dir().join(format!("mitcad-{name}-{}", std::process::id()));
+    let dir = mitcad_model::testing::unique_temp_path(name);
     let project = dir.join("project");
     std::fs::create_dir_all(&project).unwrap();
     let base = vec![
@@ -271,7 +273,7 @@ fn a_design_s_items_are_saved_into_a_library() {
         .save_to_print_library(&libraries, LibraryKind::Base, ItemKind::Material, "pla")
         .unwrap_err()
         .to_string();
-    assert!(error.contains("parts library"), "{error}");
+    assert!(error.contains("component library"), "{error}");
 }
 
 /// The base library's items in this repository
@@ -354,14 +356,20 @@ fn library_items_list_each_item_once_where_it_lives() {
     assert_eq!(steel["read_only"], true);
     assert_eq!(steel["in_design"], "steel");
     assert_eq!(steel["group"], "metals");
-    assert_eq!(row(&materials, "mitcad", "pla")["group"], "plastics");
+    // The built-in PLA has a filament type: an FDM plastic (mitcad#1102).
+    assert_eq!(row(&materials, "mitcad", "pla")["group"], "fdm_plastics");
+    assert_eq!(row(&materials, "mitcad", "pla")["class_fixed"], true);
+    assert_eq!(
+        row(&materials, "mitcad", "resin_standard")["group"],
+        "resins"
+    );
     // The base library's item and the design's copy are one row.
     let petg = row(&materials, "mitcad", "acme/petg");
     assert_eq!(petg["library"], "base");
     assert_eq!(petg["in_design"], "acme/petg");
     assert_eq!(petg["changed"], false);
-    assert_eq!(petg["group"], "plastics");
-    assert_eq!(petg["class"], "plastic");
+    assert_eq!(petg["group"], "fdm_plastics");
+    assert_eq!(petg["class"], "fdm_plastic");
     assert!(petg["display_color"].is_array(), "{petg}");
     assert_eq!(
         materials.iter().filter(|r| r["id"] == "acme/petg").count(),
@@ -580,14 +588,15 @@ fn library_items_are_made_and_duplicated() {
         .unwrap();
     let ItemData::Material {
         material,
-        appearance,
+        appearances,
     } = &made.data
     else {
         unreachable!()
     };
     assert_eq!(material.name, "Acme PETG (copy)");
     assert_eq!(material.based_on.as_deref(), Some("acme/petg"));
-    assert_eq!(appearance.as_ref().unwrap().id, "acme_teal");
+    assert_eq!(appearances.len(), 1);
+    assert_eq!(appearances[0].id, "acme_teal");
     // A new empty one.
     let answer = command(
         &mut doc,
@@ -683,14 +692,38 @@ fn a_material_class_is_stored_kept_by_a_copy_and_groups_the_rows() {
     let create = json!({"cmd": "create_material", "name": "Resin", "class": "plastic"});
     let resin = created(&mut doc, create);
     assert_eq!(group_of(&doc, &project, &resin), "plastics");
-    // Without a class it is stored as worked out (no filament: other),
-    // and a print setting does not move it.
+    // Without a class it is stored as worked out (no filament: other);
+    // a print setting makes it an FDM plastic, the stored class kept
+    // (mitcad#1102).
     let plain = created(&mut doc, json!({"cmd": "create_material", "name": "Plain"}));
     let edit = json!({"cmd": "edit_material", "id": plain, "filament": {"temperature": 210}});
     command(&mut doc, edit);
-    assert_eq!(group_of(&doc, &project, &plain), "other");
+    assert_eq!(group_of(&doc, &project, &plain), "fdm_plastics");
     let materials = rows(&doc, "material", &project);
-    assert_eq!(row(&materials, "design", &plain)["class"], "other");
+    assert_eq!(row(&materials, "design", &plain)["class"], "fdm_plastic");
+    assert_eq!(row(&materials, "design", &plain)["class_fixed"], true);
+    let stored = |doc: &Document<MockKernel>, id: &str| {
+        let material = doc.custom_materials().iter().find(|m| m.id == id);
+        material.unwrap().class
+    };
+    assert_eq!(stored(&doc, &plain), Some(MaterialClass::Other));
+    // FDM Plastic and Resin chosen for materials without print settings
+    // are stored and group them.
+    let create = json!({"cmd": "create_material", "name": "Spool", "class": "fdm_plastic"});
+    let spool = created(&mut doc, create);
+    assert_eq!(group_of(&doc, &project, &spool), "fdm_plastics");
+    assert_eq!(stored(&doc, &spool), Some(MaterialClass::FdmPlastic));
+    let create = json!({"cmd": "create_material", "name": "Grey resin", "class": "resin"});
+    let grey = created(&mut doc, create);
+    assert_eq!(group_of(&doc, &project, &grey), "resins");
+    assert_eq!(stored(&doc, &grey), Some(MaterialClass::Resin));
+    // A filament made FDM Plastic keeps `plastic`, which older versions
+    // read.
+    let create = json!({"cmd": "create_material", "name": "Filament", "class": "fdm_plastic",
+                        "filament": {"filament_type": "PLA"}});
+    let filament = created(&mut doc, create);
+    assert_eq!(group_of(&doc, &project, &filament), "fdm_plastics");
+    assert_eq!(stored(&doc, &filament), Some(MaterialClass::Plastic));
     // A copy of a built-in metal keeps its class, stored on the copy.
     let create = json!({"cmd": "create_material", "based_on": "aluminum", "name": "Alu"});
     let copy = created(&mut doc, create);
@@ -700,7 +733,7 @@ fn a_material_class_is_stored_kept_by_a_copy_and_groups_the_rows() {
         .find(|m| m.id == copy)
         .unwrap()
         .class;
-    assert_eq!(stored, Some(mitcad_model::material::MaterialClass::Metal));
+    assert_eq!(stored, Some(MaterialClass::Metal));
     // The class changed in the editor: one undo step, the row follows.
     command(
         &mut doc,
@@ -991,4 +1024,52 @@ fn a_library_is_managed_on_an_empty_design() {
     // The design has none of them.
     assert!(doc.custom_materials().is_empty());
     assert!(doc.print_profiles().is_empty());
+}
+
+#[test]
+fn library_items_give_the_parts_of_a_profile_name_for_the_picker() {
+    // mitcad#1108: a printer's name without its nozzle and the nozzle it
+    // says; a process's name before its `@` and the printer after it.
+    let (mut doc, project) = setup("print-name-parts");
+    command(
+        &mut doc,
+        json!({"cmd": "create_print_profile", "kind": "printer",
+               "name": "Acme Lab X1 Carbon 0.4 nozzle"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "create_print_profile", "kind": "printer", "name": "Bench"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "create_print_profile", "kind": "process",
+               "name": "0.20mm Standard @Acme X1C"}),
+    );
+    let printers = rows(&doc, "printer", &project);
+    let x1 = printers
+        .iter()
+        .find(|r| r["name"] == "Acme Lab X1 Carbon 0.4 nozzle")
+        .unwrap();
+    assert_eq!(x1["bare_name"], "Acme Lab X1 Carbon");
+    assert_eq!(x1["name_nozzle"], json!(0.4));
+    let bench = printers.iter().find(|r| r["name"] == "Bench").unwrap();
+    assert_eq!(
+        (&bench["bare_name"], &bench["name_nozzle"]),
+        (&json!("Bench"), &Value::Null)
+    );
+    let processes = rows(&doc, "process", &project);
+    let standard = processes
+        .iter()
+        .find(|r| r["name"] == "0.20mm Standard @Acme X1C")
+        .unwrap();
+    assert_eq!(
+        (&standard["bare_name"], &standard["for_printer"]),
+        (&json!("0.20mm Standard"), &json!("Acme X1C"))
+    );
+    // The base library's Draft names no printer.
+    let draft_row = row(&processes, "mitcad", "draft");
+    assert_eq!(
+        (&draft_row["bare_name"], &draft_row["for_printer"]),
+        (&json!("Draft"), &Value::Null)
+    );
 }

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# The AppKit frontend, by Settings' native macOS interface or --ui=native
+# (mitcad#1056, tools/ui-macos-native-frontend-test.sh): it starts with the
+# design open, and the script's end quits it.
+expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
+expect-ever '^Frontend: native \((preference|--ui)\)$'
+wait-idle
+expect-model-bodies 1 48000

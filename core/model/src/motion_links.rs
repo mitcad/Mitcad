@@ -736,7 +736,7 @@ fn cam_table<R: Resolver, F: FnMut(ComponentUid) -> R>(
         }
         if tip.is_none() {
             return Err(bad(
-                "a swinging follower needs its tip (the knife's point or the roller's centre)",
+                "a swinging follower needs its tip (the knife's point or the roller's center)",
             ));
         }
         let pivot = xy(g);

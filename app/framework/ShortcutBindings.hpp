@@ -39,19 +39,19 @@ inline QList<unsigned> shortcutContextList(unsigned contexts) {
 inline QString shortcutContextName(unsigned contexts) {
   QStringList names;
   for (const unsigned context : shortcutContextList(contexts)) {
-    names.append(context == ModelShortcutContext    ? QObject::tr("Model")
+    names.append(context == ModelShortcutContext    ? QObject::tr("3D View")
                  : context == SketchShortcutContext ? QObject::tr("Sketch")
                                                     : QObject::tr("Command Panel"));
   }
   return names.join(QStringLiteral(", "));
 }
 
-// Where keys meet, for a sentence: "in the model", "in a sketch", "while a
+// Where keys meet, for a sentence: "in the 3D view", "in a sketch", "while a
 // command panel is open", the last joined by "and".
 inline QString shortcutContextPhrase(unsigned contexts) {
   QStringList parts;
   for (const unsigned context : shortcutContextList(contexts)) {
-    parts.append(context == ModelShortcutContext    ? QObject::tr("in the model")
+    parts.append(context == ModelShortcutContext    ? QObject::tr("in the 3D view")
                  : context == SketchShortcutContext ? QObject::tr("in a sketch")
                                                     : QObject::tr("while a command panel is open"));
   }
@@ -153,11 +153,9 @@ inline QList<ShortcutBinding> fixedShortcutBindings() {
                                unsigned contexts = AllShortcutContexts) {
     if (!key.isEmpty()) bindings.append({QString::fromLatin1(id), name, contexts, key, key, {}, true});
   };
-  add("file.open", QObject::tr("Open"), QKeySequence::Open);
-  add("file.close", QObject::tr("Close"), QKeySequence(Qt::CTRL | Qt::Key_W));
-  add("file.save", QObject::tr("Save"), QKeySequence::Save);
-  add("file.save_as", QObject::tr("Save As"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S));
-  add("file.quit", QObject::tr("Quit"), QKeySequence::Quit);
+  // Open, Close, Save, Save As and Exit are registry commands with keys of
+  // their own since mitcad#1090 (files/FileCommands.cpp), changed like any
+  // other command's.
   // A text field's Cut, Copy and Paste. In a sketch they are the sketch's
   // own commands (sketch.cut, sketch.copy, sketch.paste; mitcad#788), which
   // a focused text field still takes first: QLineEdit accepts the

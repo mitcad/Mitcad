@@ -33,7 +33,7 @@ use crate::datum::{Datum, DatumAxis, DatumPlane, PathParameter, SurfaceGeometry,
 use crate::features::{
     CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References, is_false,
 };
-use crate::ids::BodyUid;
+use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::Kernel;
 use crate::links::OccurrenceLink;
 use crate::parameters::ParamId;
@@ -56,6 +56,13 @@ pub struct ConstructionPlaneDef<P = ParamId> {
     /// faces of two components is made where the design places them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub links: BTreeMap<BodyUid, OccurrenceLink>,
+    /// Construction planes, axes and points (mitcad#1035) and sketches
+    /// (mitcad#1039) of other components that the definition names: each
+    /// datum, and each sketch's frame with its curves and points, made in
+    /// its component's coordinates, is moved into the plane's by the
+    /// placements, as `links` moves bodies.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub datum_links: BTreeMap<FeatureUid, OccurrenceLink>,
 }
 
 /// How the plane is defined; lengths in millimetres, angles in radians.
@@ -123,6 +130,7 @@ impl<P> ConstructionPlaneDef<P> {
             definition,
             flip: false,
             links: BTreeMap::new(),
+            datum_links: BTreeMap::new(),
         }
     }
 
@@ -204,6 +212,7 @@ impl<P> ConstructionPlaneDef<P> {
             definition,
             flip: self.flip,
             links: self.links.clone(),
+            datum_links: self.datum_links.clone(),
         })
     }
 
@@ -281,6 +290,7 @@ impl<K: Kernel> Evaluate<K> for ConstructionPlaneDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         use PlaneDefinition as D;
         ctx.geom_links.clone_from(&self.links);
+        ctx.datum_links.clone_from(&self.datum_links);
         let plane = match &self.definition {
             D::Offset { plane, distance } => {
                 let base = ctx.plane(plane)?;

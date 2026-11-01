@@ -322,7 +322,7 @@ wall_from() {
     "the end next, else Length square to the wall"
   ui_mark
   ui_step "$3 mm long"                     ui_type_in "Panel Wall input frame_length" "$3"
-  expect_inspect Wall "frame wall $1, wall $3 x 2400 mm" "; $1: $4" "; corner $5" "$1 previewed: $4, corner $5"
+  expect_inspect Wall "frame wall $1, wall $3 × 2400 mm" "; $1: $4" "; corner $5" "$1 previewed: $4, corner $5"
   ui_mark
   ui_step "Place (Enter)"                  ui_key Return
   ui_expect_new "Placed frame $1 (wall, lead C" "$1 placed" 60

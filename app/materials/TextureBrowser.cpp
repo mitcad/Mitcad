@@ -80,7 +80,7 @@ QVariant TextureAssetModel::data(const QModelIndex& index, int role) const {
     }
     lines << tr("Resolutions: %1").arg(resolutions.join(QStringLiteral(", ")));
     if (!a->license.isEmpty()) {
-      lines << tr("Licence: %1").arg(a->license);
+      lines << tr("License: %1").arg(a->license);
     }
     return lines.join(QLatin1Char('\n'));
   }

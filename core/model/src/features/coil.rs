@@ -219,7 +219,7 @@ impl FeatureInfo for CoilDef {
             (Some(plane), None) => plane.check(ctx, Want::Plane),
             (None, Some(at)) => {
                 if self.center != [0.0, 0.0] {
-                    return Err("a coil placed by at takes no centre".to_owned());
+                    return Err("a coil placed by at takes no center".to_owned());
                 }
                 at.check(ctx)
             }

@@ -227,6 +227,8 @@ vcpkg_from_github(
         1080-brepmesh-delabella-exact-signs-in-place.patch
         1081-brepmesh-face-checker-wire-boxes.patch
         1090-chfi3d-sharp-edge-limited-only-by-a-common-point-on-it.patch
+        1100-chfi3d-two-corner-common-points-at-a-vertex-of-the-pivot.patch
+        1110-chfi3d-first-end-snapped-onto-a-closed-edges-vertex-on-a-periodic-face.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

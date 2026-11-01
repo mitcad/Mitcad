@@ -462,6 +462,15 @@ fn ptr_index(file: &AsmFile, p: i64) -> Option<usize> {
 /// Upper bound for linked lists (faces of a shell, coedges of a loop).
 const MAX_LIST: usize = 1_000_000;
 
+/// The most entries a linked list of `file` can have (lumps of a body,
+/// shells of a lump, faces of a shell, loops of a face, coedges of a
+/// loop): each entry is a record of its own, so a list longer than the
+/// file has records runs in a cycle (mitcad#1081: a shell list that
+/// pointed back into itself grew a lump's shells without end).
+fn list_bound(file: &AsmFile) -> usize {
+    file.records.len().min(MAX_LIST)
+}
+
 /// Angles (rad) within this of each other are the same: the geometry
 /// kernel's angular precision.
 const ANGULAR: f64 = 1e-12;
@@ -1424,7 +1433,7 @@ impl<'a> Ctx<'a> {
         let mut guard = 0;
         while let Some(l) = lp {
             guard += 1;
-            if guard > MAX_LIST {
+            if guard > list_bound(self.file) {
                 return Err(GeomError("loop list does not end".into()));
             }
             self.expect_type(l, "loop")?;
@@ -1437,7 +1446,7 @@ impl<'a> Ctx<'a> {
             let mut n = 0;
             while let Some(cr) = ce {
                 n += 1;
-                if n > MAX_LIST {
+                if n > list_bound(self.file) {
                     return Err(GeomError("coedge list does not end".into()));
                 }
                 self.expect_type(cr, "coedge")?;
@@ -1531,7 +1540,7 @@ impl<'a> Ctx<'a> {
         let mut guard = 0;
         while let Some(fr) = f {
             guard += 1;
-            if guard > MAX_LIST {
+            if guard > list_bound(self.file) {
                 return Err(GeomError("face list does not end".into()));
             }
             match self.face(fr)? {
@@ -2051,7 +2060,7 @@ pub fn convert_body_prefix(
         let mut guard = 0;
         while let Some(l) = lp {
             guard += 1;
-            if guard > MAX_LIST {
+            if guard > list_bound(file) {
                 return Err(GeomError("lump list does not end".into()));
             }
             ctx.expect_type(l, "lump")?;
@@ -2060,7 +2069,12 @@ pub fn convert_body_prefix(
             let first_shell = lc.ptr()?;
             let mut lump = Lump::default();
             let mut sh = ptr_index(file, first_shell);
+            let mut shells = 0;
             while let Some(s) = sh {
+                shells += 1;
+                if shells > list_bound(file) {
+                    return Err(GeomError("shell list does not end".into()));
+                }
                 let (shell, skipped) = ctx.shell(s)?;
                 skipped_faces += skipped;
                 lump.shells.push(shell);
@@ -2997,5 +3011,50 @@ mod tests {
         );
         assert_eq!(samples(81.0).unwrap(), MAX_ARC_SWEEP_SAMPLES);
         assert!(samples(200.0).is_err());
+    }
+
+    #[test]
+    fn cyclic_shell_lists_are_refused() {
+        // mitcad#1081: a shell whose next pointer leads back to itself made
+        // the conversion add the same shell to its lump without end (a
+        // fuzzer's input ran out of time and memory). A list longer than
+        // the file has records is refused.
+        let mut w = crate::asm::writer::Writer::new(2, 2);
+        w.record("asmheader")
+            .ptr(-1)
+            .int(-1)
+            .str("231.6.3.65535")
+            .end();
+        // 1 body, 2 lump, 3 shell (next: itself; no faces).
+        w.record("body")
+            .ptr(-1)
+            .int(-1)
+            .ptr(-1)
+            .ptr(2)
+            .ptr(-1)
+            .ptr(-1)
+            .end();
+        w.record("lump").head().ptr(-1).ptr(3).ptr(1).end();
+        w.record("shell")
+            .head()
+            .ptr(3)
+            .ptr(-1)
+            .ptr(-1)
+            .ptr(-1)
+            .ptr(2)
+            .end();
+        let file = AsmFile::parse(&w.finish()).unwrap();
+        let bodies = convert_file(&file, &Options::default());
+        assert_eq!(bodies.len(), 1);
+        let body = &bodies[0];
+        assert!(
+            body.issues
+                .iter()
+                .any(|i| i.contains("shell list does not end")),
+            "{:?}",
+            body.issues
+        );
+        let shells: usize = body.body.lumps.iter().map(|l| l.shells.len()).sum();
+        assert!(shells <= file.records.len(), "{shells} shells");
     }
 }

@@ -27,13 +27,14 @@
 #      the separator (mitcad#828); undone again.
 #   3. Edit Materials: Duplicate of PLA makes the user's own copy in this
 #      design (Save to offered), its name and its nozzle temperature
-#      typed; Material… of Body1 assigns it.
+#      typed; the Material tool (Material ▸ More… of Body1) assigns it.
 #   4. Property Sets of a body: the effective print settings by category
 #      with their source, a summary; the pencil of Own settings opens
 #      Body1's own settings in the settings form, where Walls typed is the
 #      body's own (Source: Body1) and its ↺ clears it. On the design's
 #      Property Sets a right click on Process's ↺ runs nothing, and the
-#      next left click on Material opens Materials (mitcad#761). In a
+#      next left click on Material opens Materials on the material, to
+#      edit it (mitcad#761; assigning is the Material tool's, mitcad#1059). In a
 #      narrower window the pencils of Printer, Process, Material and Own
 #      settings lie inside the Value column, after the names as shown;
 #      Material's pencil opens Materials, Process's Printers and Processes
@@ -182,12 +183,12 @@ ui_expect_log "Body F2.b0 at" "the boxes are in the view"
 
 echo "--- 1. 3D Print: Import from slicer…, its line and Details…"
 ui_mark
-ui_command "3D Print"
+ui_command "Send to Slicer"
 ui_expect_new "3D Print printer: Slicer default" "the design has no printer yet"
-ui_expect_new "Panel 3D Print note process_overrides: Body2: Walls [Edit]" \
+ui_expect_new "Panel Send to Slicer note process_overrides: Body2: Walls [Edit]" \
   "Own settings names Body2's own walls with the process at Slicer default (mitcad#747)"
-ui_expect_new "Panel 3D Print action import.0 at" "Import from slicer… is shown with 3MF"
-ui_step "Import from slicer…"              ui_click_logged "Panel 3D Print action import.0"
+ui_expect_new "Panel Send to Slicer action import.0 at" "Import from slicer… is shown with 3MF"
+ui_step "Import from slicer…"              ui_click_logged "Panel Send to Slicer action import.0"
 ui_type_path "Import from Slicer" "$WORK/plate.3mf"
 ui_focus_main
 ui_expect_new "Imported print settings from plate.3mf: printers: Bench X 0.4 nozzle; processes: Standard" \
@@ -199,9 +200,9 @@ ui_expect_new "[Import from slicer…] [plate.3mf imported]" \
 ui_expect_new "[Assign…]" "the Materials row offers the new material to the bodies"
 ui_expect_new "3D Print printer: design/bench-x-0-4-nozzle" "the Printer row shows the imported printer"
 ui_expect_new "3D Print process: design/standard" "and the Process row the process"
-ui_expect_new "Panel 3D Print action import.1 at" "Details… has its place"
+ui_expect_new "Panel Send to Slicer action import.1 at" "Details… has its place"
 ui_mark
-ui_step "Details…"                         ui_click_logged "Panel 3D Print action import.1"
+ui_step "Details…"                         ui_click_logged "Panel Send to Slicer action import.1"
 ui_expect_new "Import details opened: " "the whole report opened"
 # The export names the family's application (BambuStudio-…) for every
 # member, so the import reads the file as Bambu Studio's project; a project
@@ -214,7 +215,7 @@ ui_expect_new "Import details closed" "the report closed"
 ui_focus_main
 ui_mark
 ui_step "Cancel the panel (Esc)"           ui_key Escape
-ui_expect_new "Command 3D Print cancelled" "the panel closed"
+ui_expect_new "Command Send to Slicer cancelled" "the panel closed"
 save
 expect_file '[.print_profiles[] | .id]' '["bench-x-0-4-nozzle","standard"]' "Cancel kept the import"
 ui_mark
@@ -225,9 +226,9 @@ ui_expect_new "Redo: Import Print Settings plate.3mf" "redone"
 
 echo "--- 2. Printers and Processes: Edit of the Process row"
 ui_mark
-ui_command "3D Print"
-ui_expect_new "Panel 3D Print button_process at" "Edit beside the Process row"
-ui_step "Edit"                             ui_click_logged "Panel 3D Print button_process"
+ui_command "Send to Slicer"
+ui_expect_new "Panel Send to Slicer button_process at" "Edit beside the Process row"
+ui_step "Edit"                             ui_click_logged "Panel Send to Slicer button_process"
 ui_expect_new "Printers and processes opened" "the window opened"
 ui_expect_new "Profile selected: process Standard (design)" "on the design's process"
 ui_expect_new "Profile Standard value fill_density = 15 %" "the infill density in its own unit"
@@ -287,7 +288,7 @@ ui_step "close"                            ui_click_logged "Profiles close"
 ui_focus_main
 ui_mark
 ui_step "close the panel (Esc)"            ui_key Escape
-ui_expect_new "Command 3D Print cancelled" "the panel closed"
+ui_expect_new "Command Send to Slicer cancelled" "the panel closed"
 ui_mark
 ui_step "undo"                             ui_key ctrl+z
 ui_expect_new "Undo: " "the choice is one undo step"
@@ -345,9 +346,21 @@ echo "--- 2e. 3D Print: New process… twice makes Process 1 and Process 2, the 
 # new_process n: New process…, the box's last entry (Down past every
 # profile and the separator), makes Process n, the design's at once, and
 # opens it in Printers and Processes, which is closed again.
+# open_process_picker: a click on Process opens its picker (mitcad#1108),
+# a window of its own that takes the keyboard.
+open_process_picker() {
+  ui_click_logged "Panel Send to Slicer input process"
+  for _ in $(seq 1 40); do
+    tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Process picker opened: " && break
+    sleep 0.2
+  done
+  ui_focus_dialog '^Process Picker$'
+}
 new_process() {
   ui_mark
-  ui_step "New process…"                   ui_choose "Panel 3D Print input process" 30
+  ui_step "Process"                        open_process_picker
+  xdotool key --delay 80 --repeat 30 Down
+  ui_step "New process…"                   ui_key Return
   ui_expect_new "3D Print process new: Process $1 (" "New process… made Process $1"
   ui_expect_new "Printers and processes opened" "and opened it"
   ui_focus_dialog '^Printers and Processes$'
@@ -355,14 +368,14 @@ new_process() {
   ui_focus_main
 }
 ui_mark
-ui_command "3D Print"
-ui_expect_new "Panel 3D Print input process at" "the Process row"
+ui_command "Send to Slicer"
+ui_expect_new "Panel Send to Slicer input process at" "the Process row"
 new_process 1
 new_process 2
 # The box: the profiles by name, then a separator line, then the action.
 listed=""
 for _ in $(seq 1 30); do
-  listed=$(grep -F "Panel 3D Print options process: " "$UI_LOG" | tail -1)
+  listed=$(grep -F "Panel Send to Slicer options process: " "$UI_LOG" | tail -1)
   case "$listed" in *"| Process 1 | Process 2 "*"| --- | New process…") break ;; esac
   sleep 0.2
 done
@@ -374,11 +387,11 @@ case "$listed" in *"New Process"*) ui_fail "a new profile named New Process: '${
 # The keyboard skips the separator: one up from New process… is the last
 # profile, chosen at once (no window opens, no separator chosen).
 ui_mark
-ui_click_logged "Panel 3D Print input process"
-ui_sync
+open_process_picker
 xdotool key --delay 80 --repeat 30 Down
 xdotool key --delay 80 Up
 ui_key Return
+ui_focus_main
 ui_expect_new "3D Print process: " "one up from New process… is chosen at once"
 ui_sync
 chosen=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "3D Print process: " | tail -1)
@@ -394,7 +407,7 @@ fi
 echo "ok   the separator is skipped: $chosen chosen"
 ui_mark
 ui_step "close the panel (Esc)"            ui_key Escape
-ui_expect_new "Command 3D Print cancelled" "the panel closed"
+ui_expect_new "Command Send to Slicer cancelled" "the panel closed"
 # Back to the design as it was: the choice and the two new processes.
 ui_step "undo the choice"                  ui_key ctrl+z
 ui_step "undo Process 2"                   ui_key ctrl+z
@@ -406,7 +419,7 @@ echo "--- 3. Materials: Duplicate of PLA in this design, its name and nozzle tem
 ui_mark
 ui_command "Edit Materials"
 ui_expect_new "Materials opened" "the window opened"
-ui_expect_new "Materials row: plastics/pla PLA Plastic (mitcad)" "PLA is Mitcad's own"
+ui_expect_new "Materials row: fdm_plastics/pla PLA Plastic (mitcad)" "PLA is Mitcad's own"
 ui_expect_new "Materials row: metals/steel Steel (mitcad)" "Steel is listed by its class, a metal"
 ui_expect_new "Materials item PLA Plastic at" "its row has its place"
 ui_focus_dialog '^Materials$'
@@ -442,17 +455,12 @@ ui_focus_main
 ui_mark
 ui_step "right-click Body1"                ui_click_logged "Browser Root/Bodies/Body1" 3
 ui_expect_new "Context menu: " "its menu opened"
-ui_step "choose Material..."               ui_menu_choose "Material..."
-ui_expect_new "Materials opened for bodies F1.b0" "the window opened for Body1"
-ui_expect_new "Materials assign label: Assign to Body1" "Assign names the body"
-ui_expect_new "Materials item Bench PLA at" "the new material is listed"
-ui_focus_dialog '^Materials$'
-ui_step "Bench PLA"                        ui_click_logged "Materials item Bench PLA"
-ui_expect_new "Material selected: Bench PLA (design)" "selected"
+ui_step "choose Material > More..."     ui_menu_choose "Material" "More..."
+ui_expect_new "Material tool for bodies F1.b0" "the Material tool for Body1 (mitcad#1059)"
+ui_step "the picker: Bench PLA"            ui_picker_choose "Panel Material input material" "Material picker" "Bench PLA"
 ui_mark
-ui_step "Assign"                           ui_click_logged "Materials assign"
+ui_step "OK (Enter)"                       ui_key Return
 ui_expect_new "set for 1 body(ies), appearance replace" "assigned, one undo step"
-ui_focus_main
 
 echo "--- 4. Property Sets: a body's print settings as a summary; Own settings opens its own values"
 ui_mark
@@ -654,7 +662,7 @@ ui_expect_new "Build volume: Bench X 0.4 nozzle 256 x 256 x 250 mm, outside: Bod
   "the printer's bed and height; the far box does not fit"
 rm -f "$ARGS"
 ui_mark
-ui_command "3D Print"
+ui_command "Send to Slicer"
 ui_expect_new "3D Print printer: Bench X 0.4 nozzle" "the panel shows the design's printer"
 ui_key Return
 ui_expect_new "3D Print: print settings for qidi_studio, filaments 1" "QIDI Studio's settings, one filament"
@@ -669,9 +677,9 @@ echo "ok   the slicer got the 3MF"
 echo "--- 6. A Bambu Studio project: nothing left unread (mitcad#654)"
 ui_focus_main
 ui_mark
-ui_command "3D Print"
-ui_expect_new "Panel 3D Print action import.0 at" "Import from slicer… is shown"
-ui_step "Import from slicer…"              ui_click_logged "Panel 3D Print action import.0"
+ui_command "Send to Slicer"
+ui_expect_new "Panel Send to Slicer action import.0 at" "Import from slicer… is shown"
+ui_step "Import from slicer…"              ui_click_logged "Panel Send to Slicer action import.0"
 ui_type_path "Import from Slicer" "$WORK/mount.3mf"
 ui_focus_main
 ui_expect_new "Imported print settings from mount.3mf: printers: Bench Mini 0.4 nozzle; processes: Extra Fine" \
@@ -684,7 +692,7 @@ case $summary in
 esac
 echo "ok   every setting was read, 95% too"
 ui_mark
-ui_step "Details…"                         ui_click_logged "Panel 3D Print action import.1"
+ui_step "Details…"                         ui_click_logged "Panel Send to Slicer action import.1"
 ui_expect_new "Import details: Imported mount.3mf (Bambu Studio) into this design." "its first line"
 ui_expect_new "Import details: Process: Extra Fine" "the process by name"
 ui_focus_dialog '^Import Details$'
@@ -705,8 +713,8 @@ deferred=0
 for attempt in 1 2 3; do
   ui_focus_main
   ui_mark
-  ui_step "3D Print search"                ui_key s
-  xdotool type --delay 40 "3D Print"
+  ui_step "Send to Slicer search"          ui_key s
+  xdotool type --delay 40 "Send to Slicer"
   ui_sync
   xdotool key --delay 1 Return Return
   ui_expect_new "3D Print last line: " "try $attempt: sent" 60

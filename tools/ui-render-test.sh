@@ -426,7 +426,7 @@ echo "     sketch pixels: shaded $blue_shaded, rendered $blue_rendered"
   ui_fail "the sketch behind the block is drawn over the render ($blue_rendered blue pixels, shaded $blue_shaded)"
 echo "ok   the sketch under the block is hidden in the rendered view, as in the shaded one"
 
-ui_step "Change Parameters" ui_command "Change Parameters"
+ui_step "Edit Parameters" ui_command "Edit Parameters"
 ui_expect_log "Parameters d6 expression at" "the parameters' cells are logged"
 ui_focus_dialog '^Parameters$'
 ui_mark

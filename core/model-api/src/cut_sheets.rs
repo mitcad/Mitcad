@@ -18,6 +18,10 @@
 //! each region of the projection asked of `Kernel::segments_crossings`).
 //! The result is kept in the document's drawing cache by the body's shape
 //! version, its placement and the face chosen.
+//!
+//! `export_face_dxf` (mitcad#1049, the Make tab's Export Face as DXF)
+//! writes one body's outline as a part would have it, seen along a planar
+//! face, without a cut sheet.
 
 use std::sync::Arc;
 
@@ -27,12 +31,12 @@ use serde_json::{Value, json};
 use super::ApiError;
 use super::annotations::present;
 use super::dispatch::named_enum;
-use super::drawings::{Shown, groups_json};
+use super::drawings::{Shown, groups_json, pens_json};
 use super::prelude::*;
 use mitcad_model::Document;
 use mitcad_model::datum::Vec3;
 use mitcad_model::features::OccurrencePath;
-use mitcad_model::ids::ComponentUid;
+use mitcad_model::ids::{BodyUid, ComponentUid};
 use mitcad_model::internal::fingerprint::Fingerprint;
 use mitcad_model::kernel::Kernel;
 use mitcad_model::topo::FaceName;
@@ -152,6 +156,21 @@ pub(super) struct ExportCutSheetCommand {
     labels: bool,
 }
 
+/// `export_face_dxf` (mitcad#1049): a body seen square on to one of its
+/// planar faces from outside (in the occurrence that places it, wherever
+/// it is shown when left out), its outline at 1:1 as a cut sheet's part
+/// has it, the lower left corner of its box at the origin, written as DXF
+/// for laser, waterjet or plasma cutting.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ExportFaceDxfCommand {
+    body: BodyUid,
+    face: FaceName,
+    #[serde(default)]
+    occurrence: Option<OccurrencePath>,
+    path: String,
+}
+
 named_enum! {
     #[derive(Debug, Deserialize)]
     #[serde(tag = "cmd", rename_all = "snake_case", deny_unknown_fields)]
@@ -165,6 +184,7 @@ named_enum! {
             parts: Vec<u32>,
         },
         "export_cut_sheet" => Export(Box<ExportCutSheetCommand>),
+        "export_face_dxf" => ExportFace(Box<ExportFaceDxfCommand>),
     }
 }
 
@@ -375,6 +395,10 @@ trait CutSheetsLocal<K: Kernel> {
 
     /// A cut sheet by its id or name, and its own part.
     fn find_cut_sheet(&self, text: &str) -> Result<(Drawing, CutSheet), ApiError>;
+
+    /// `export_face_dxf` (mitcad#1049): one body's outline seen along a
+    /// face, written as DXF.
+    fn export_face_dxf(&self, command: &ExportFaceDxfCommand) -> Result<Value, ApiError>;
 }
 
 impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
@@ -641,6 +665,48 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
         Ok(out)
     }
 
+    fn export_face_dxf(&self, command: &ExportFaceDxfCommand) -> Result<Value, ApiError> {
+        let part = CutPart {
+            id: 1,
+            body: command.body,
+            occurrence: command.occurrence.clone(),
+            face: Some(command.face.clone()),
+            place: [0.0, 0.0],
+            rotation: 0.0,
+        };
+        let view = self
+            .part_view(ComponentUid::ROOT, &part)
+            .map_err(ApiError)?;
+        let size = view
+            .outline
+            .bounds()
+            .map_or([0.0, 0.0], |(lo, hi)| [hi[0] - lo[0], hi[1] - lo[1]]);
+        let name = self.body_name(command.body);
+        let placed = PlacedPart {
+            id: 1,
+            name: name.clone(),
+            loops: cut_sheet::placed(&view.outline, [size[0] / 2.0, size[1] / 2.0], 0.0),
+        };
+        let path = &command.path;
+        let text = mitcad_dxf::write_string(
+            &cut_sheet::dxf(std::slice::from_ref(&placed), false),
+            &mitcad_dxf::WriteOptions::default(),
+        )
+        .map_err(|e| ApiError(format!("cannot write {path}: {e}")))?;
+        std::fs::write(path, text).map_err(|e| ApiError(format!("cannot write {path}: {e}")))?;
+        let outer = placed.loops.iter().filter(|l| l.outer).count();
+        Ok(json!({
+            "path": path,
+            "body": command.body,
+            "name": name,
+            "face": view.face,
+            "outer": outer,
+            "inner": placed.loops.len() - outer,
+            "width": size[0],
+            "height": size[1],
+        }))
+    }
+
     fn find_cut_sheet(&self, text: &str) -> Result<(Drawing, CutSheet), ApiError> {
         let drawing = self.find_drawing(text)?.clone();
         let cut = drawing
@@ -754,6 +820,7 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                 c.labels,
                 &|_: &str| Ok(()),
             ),
+            CutSheetCommand::ExportFace(c) => self.export_face_dxf(&c),
         }
     }
 
@@ -1000,6 +1067,7 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                 &drawing.name,
                 &placed,
             ));
+            sheet["pens"] = pens_json();
         }
         json!({
             "drawing": drawing.uid,

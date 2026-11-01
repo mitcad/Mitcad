@@ -4,8 +4,9 @@
 # "3D mouse: none"; a held spin of the cap turns the view, a held push to
 # the right pans it without turning it, a held pull zooms in, and the
 # first button runs Fit, all in the default Navigation mode, Object, its
-# log line naming it; Preferences > Navigation's 3D Mouse tab has the
-# Navigation mode and Lock horizon (mitcad#978). Run by
+# log line naming it and giving the motion's duration, frame rate, longest
+# frame and grid rebuilds (mitcad#1023); Preferences > Navigation's 3D
+# Mouse tab has the Navigation mode and Lock horizon (mitcad#978). Run by
 # ui-space-mouse-test.sh on Linux and ui-windows-space-mouse-test.ps1 in the
 # Windows VM, on the demo design.
 wait-idle
@@ -13,7 +14,7 @@ expect-ever '^3D mouse: (none|.+ connected \()'
 capture-view-orientation turned
 mark
 space-mouse 0 0 0 0 0.8 0 600
-wait-log '^3D mouse motion: [1-9][0-9]* frame\(s\), turned [0-9.]+ degrees, .*, object mode$'
+wait-log '^3D mouse motion: [1-9][0-9]* frame\(s\), [0-9]+\.[0-9]{2} s, [0-9]+\.[0-9] fps, longest frame [0-9]+\.[0-9] ms( with a grid rebuild)?, [0-9]+ grid rebuild\(s\), turned [0-9.]+ degrees, .*, object mode$'
 expect-view-orientation ${turned} changed
 capture-view-target panned
 capture-view-orientation steady

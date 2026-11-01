@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 
 use super::{DocState, Document, ModelError, invalid};
+use crate::expr::LengthUnit;
 use crate::features::FeatureDef;
 use crate::ids::{ComponentUid, FeatureUid};
 use crate::kernel::Kernel;
@@ -56,6 +57,21 @@ impl DocState {
             .assembly
             .place(component, ComponentUid::ROOT, Transform::IDENTITY);
         state.assembly.active = component;
+        state
+    }
+
+    /// A new, empty design ([`DocState::new_design`]) in the length unit
+    /// `length` (mitcad#1036: the application's default units for new
+    /// designs): bare numbers in its expressions are read in it, as after
+    /// `set_units`, but as its initial state, not a change.
+    pub(crate) fn new_design_in(length: LengthUnit) -> Self {
+        let mut state = Self::new_design();
+        let mut context = state.parameters.context();
+        context.default_length_unit = length;
+        state
+            .parameters
+            .set_context(context)
+            .expect("a new design has no parameters to read again");
         state
     }
 
@@ -156,7 +172,7 @@ fn attachment_reason(owner: &str, setting: Setting) -> String {
 fn creation_refusal(owner: &str, setting: Setting) -> String {
     let what = match setting {
         Setting::Sketches => "sketches",
-        Setting::Features => "modelling features",
+        Setting::Features => "modeling features",
         _ => "components in it",
     };
     format!(
@@ -169,6 +185,15 @@ impl<K: Kernel> Document<K> {
     /// A new, empty design ([`DocState::new_design`]); it is not modified.
     pub fn new_design(kernel: K) -> Self {
         let mut document = Self::from_state(kernel, DocState::new_design());
+        document.mark_saved();
+        document
+    }
+
+    /// A new, empty design in the length unit `length` (mitcad#1036,
+    /// [`DocState::new_design_in`]): no undo step, and it is not modified,
+    /// as [`Document::new_design`].
+    pub fn new_design_in(kernel: K, length: LengthUnit) -> Self {
+        let mut document = Self::from_state(kernel, DocState::new_design_in(length));
         document.mark_saved();
         document
     }

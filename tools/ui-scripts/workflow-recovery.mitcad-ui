@@ -61,8 +61,8 @@ expect-log 'Opened ${MITCAD_TEST_WORK:re}/block\.mitcad' 20
 expect-log 'Bodies shown: F2\.b0' 20
 mark
 command inspect.properties
-expect-log 'Physical properties: Body1 volume'
-capture reopened 'Physical properties: Body1 volume ([0-9.]+)'
+expect-log 'Physical properties: Body1 in Component1:1 volume'
+capture reopened 'Physical properties: Body1 in Component1:1 volume ([0-9.]+)'
 expect-near ${reopened} ${MITCAD_TEST_FILLETED} 0 0.001
 focus-dialog '^Properties$'
 key Escape

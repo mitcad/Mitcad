@@ -146,7 +146,7 @@ pub fn resolve_value_as(
                 // it until it is changed.
                 if !fits_slot(param.unit(), unit) && old != Some(&id) {
                     return Err(invalid(format!(
-                        "{slot}: parameter '{}' is {}, not {}",
+                        "{slot}: parameter {} is {}, not {}",
                         param.name(),
                         describe(param.unit()),
                         describe(unit)
@@ -156,7 +156,7 @@ pub fn resolve_value_as(
             }
             if is_valid_name(text.trim()) {
                 return Err(invalid(format!(
-                    "{slot}: parameter '{}' does not exist",
+                    "{slot}: parameter {} does not exist",
                     text.trim()
                 )));
             }
@@ -201,7 +201,7 @@ fn resolve_named(
 ) -> Result<(ParamId, Option<String>), ModelError> {
     let in_slot = |e: ParameterError| invalid(format!("{slot}: {e}"));
     if expression.is_empty() {
-        return Err(invalid(format!("{slot}: '{name} =' needs a value")));
+        return Err(invalid(format!("{slot}: “{name} =” needs a value")));
     }
     let target = old
         .copied()

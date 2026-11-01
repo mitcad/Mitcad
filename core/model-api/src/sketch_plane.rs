@@ -147,8 +147,12 @@ impl<K: Kernel> SketchPlaneLocal<K> for Document<K> {
         .map(|path| mitcad_model::assembly::inverse(&self.path_transform(&path)))
         .unwrap_or(Transform::IDENTITY);
         let axis = |v: [f64; 3]| to_component.apply_vector(v);
-        let Some(own) = FrameDef::upright(&plane, axis([0.0, 0.0, 1.0]), axis([0.0, 1.0, 0.0]))
-        else {
+        let Some(own) = FrameDef::upright(
+            &plane,
+            axis([0.0, 0.0, 1.0]),
+            axis([0.0, 1.0, 0.0]),
+            super::sketch::seen_from(&def.plane, axis),
+        ) else {
             return Ok(Vec::new());
         };
         let params = self.parameters();

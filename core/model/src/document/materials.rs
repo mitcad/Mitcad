@@ -23,7 +23,9 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
+use super::print_settings::hex_color;
 use super::{DocState, Document, ModelError, invalid};
+use crate::appearance::{Appearance, library_appearance};
 use crate::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use crate::kernel::Kernel;
 use crate::material::{self, DEFAULT_MATERIAL, Material, MaterialChange};
@@ -83,6 +85,59 @@ impl DocState {
             .iter()
             .find(|m| m.id == id)
             .or_else(|| material::built_in_material(id))
+    }
+
+    /// An appearance of the library or of the design by id.
+    pub(crate) fn look(&self, id: &str) -> Option<&Appearance> {
+        library_appearance(id).or_else(|| self.appearances.iter().find(|a| a.id == id))
+    }
+
+    /// A material's own filament colour (a design or library file from
+    /// before mitcad#1055, an import, a command that sets it) as an
+    /// appearance of its list: one of its list of that colour, else a new
+    /// plastic appearance of the design (`<name> color`). It is the default
+    /// when `make_default` (a command that sets the colour and names no
+    /// appearance: the colour is what the user wants printed) or when the
+    /// material has none; else it joins the list, so that a file from
+    /// before keeps the look it showed. The key goes: the colour is the
+    /// appearance's.
+    pub(crate) fn adopt_filament_colour(&mut self, material: &mut Material, make_default: bool) {
+        let Some(value) = material.filament.remove("filament_colour") else {
+            return;
+        };
+        let Some(color) = value.as_str().and_then(crate::print_files::hex_rgb) else {
+            return;
+        };
+        let hex = hex_color(color);
+        let found = material.appearance_list().into_iter().find(|id| {
+            self.look(id)
+                .is_some_and(|a| hex_color(a.display_color()) == hex)
+        });
+        let id = match found {
+            Some(id) => id,
+            None => {
+                let look =
+                    crate::print_files::plastic_appearance(&material.id, &material.name, color);
+                self.add_item_appearance(&look)
+            }
+        };
+        material.add_appearance(&id);
+        if make_default {
+            material.set_default_appearance(&id);
+        }
+    }
+
+    /// The appearances of a material's list that exist here, the others
+    /// left out (a library's item names an appearance of the design it
+    /// was saved from, mitcad#1055).
+    pub(crate) fn known_appearances_only(&self, material: &mut Material) {
+        let known: Vec<String> = material
+            .appearances
+            .iter()
+            .filter(|a| self.look(a).is_some())
+            .cloned()
+            .collect();
+        material.appearances = known;
     }
 
     /// Copies the document materials `needed` (by id) from another
@@ -256,7 +311,8 @@ impl<K: Kernel> Document<K> {
     }
 
     /// Whether a body's appearance was set by hand: it has one, and it is
-    /// not the appearance of the material it is made of.
+    /// none of the appearances the material it is made of offers
+    /// (mitcad#1055: its default or one of its list).
     pub fn appearance_set_by_hand(&self, uid: BodyUid) -> bool {
         let Some(own) = self
             .state
@@ -266,7 +322,39 @@ impl<K: Kernel> Document<K> {
         else {
             return false;
         };
-        self.body_material(uid, None).0.appearance.as_deref() != Some(own)
+        !self.body_material(uid, None).0.offers(own)
+    }
+
+    /// The appearance a body prints with (mitcad#1055), its filament's
+    /// colour: its own; else, when it is made of a component's default
+    /// material, that component's appearance; else its material's
+    /// default. `path` as `body_material`'s.
+    pub fn body_look(&self, uid: BodyUid, path: Option<&[OccurrenceUid]>) -> Option<&str> {
+        if let Some(own) = self
+            .state
+            .body_attributes
+            .get(&uid)
+            .and_then(|a| a.appearance.as_deref())
+        {
+            return Some(own);
+        }
+        let (material, source) = self.body_material(uid, path);
+        if let MaterialSource::Component(c) = source
+            && let Some(look) = self.state.component_appearances.get(&c)
+        {
+            return Some(look.as_str());
+        }
+        material.appearance.as_deref()
+    }
+
+    /// A component's default appearance (C0: the root's, mitcad#1055): the
+    /// one of its default material that its bodies without one of their
+    /// own get; none: the material's default.
+    pub fn component_appearance(&self, component: ComponentUid) -> Option<&str> {
+        self.state
+            .component_appearances
+            .get(&component)
+            .map(String::as_str)
     }
 
     /// Sets a body's material by id (None: its component's default), and
@@ -278,6 +366,20 @@ impl<K: Kernel> Document<K> {
         material: Option<&str>,
         choice: AppearanceChoice,
     ) -> Result<(), ModelError> {
+        self.set_body_material_look(uid, material, choice, None)
+    }
+
+    /// [`Document::set_body_material_with`] with one of the material's
+    /// appearances for the body (`look`, mitcad#1055: Material ▸ PLA ▸
+    /// Black), `choice` aside. An appearance the design's material does
+    /// not offer yet joins its list in the same undo step.
+    pub fn set_body_material_look(
+        &mut self,
+        uid: BodyUid,
+        material: Option<&str>,
+        choice: AppearanceChoice,
+        look: Option<&str>,
+    ) -> Result<(), ModelError> {
         if let Some(id) = material
             && self.material(id).is_none()
         {
@@ -288,7 +390,7 @@ impl<K: Kernel> Document<K> {
                 }
             }
             return Err(invalid(format!(
-                "unknown material '{id}' (known: {})",
+                "unknown material {id} (known: {})",
                 known.join(", ")
             )));
         }
@@ -296,6 +398,12 @@ impl<K: Kernel> Document<K> {
             return Err(invalid(format!(
                 "body {uid} does not exist at the timeline marker"
             )));
+        }
+        let look = look.map(str::trim).filter(|l| !l.is_empty());
+        if let Some(look) = look
+            && self.appearance(look).is_none()
+        {
+            return Err(invalid(format!("there is no appearance {look}")));
         }
         let replace = match choice {
             AppearanceChoice::Replace => true,
@@ -306,15 +414,30 @@ impl<K: Kernel> Document<K> {
         attributes.material = material.map(str::to_owned);
         // A material set by hand ends the body's binding (mitcad#800).
         attributes.material_expr = None;
-        if replace {
-            // The appearance of the material it is made of now: its own,
-            // else its components'.
-            attributes.appearance = match &attributes.material {
-                Some(id) => self.material(id).and_then(|m| m.appearance.clone()),
-                None => self.inherited_material(uid).appearance.clone(),
+        let made_of = match &attributes.material {
+            Some(id) => self.material(id),
+            None => Some(self.inherited_material(uid)),
+        };
+        if let Some(look) = look {
+            attributes.appearance = Some(look.to_owned());
+            attributes.appearance_expr = None;
+        } else if replace {
+            // The appearance of the material it is made of now (its own,
+            // else its components'): the body's when the material offers
+            // it (mitcad#1055), else the material's default.
+            let own = attributes.appearance.clone();
+            attributes.appearance = match (made_of, own) {
+                (Some(m), Some(own)) if m.offers(&own) => Some(own),
+                (Some(m), _) => m.appearance.clone(),
+                (None, _) => None,
             };
         }
-        if attributes == self.body_attributes(uid) {
+        // The design's material offers the appearance from now on.
+        let listed = match (look, &attributes.material) {
+            (Some(look), Some(id)) => self.listed_with(id, look),
+            _ => None,
+        };
+        if attributes == self.body_attributes(uid) && listed.is_none() {
             return Ok(());
         }
         let label = format!("Set Material of {}", self.body_name(uid));
@@ -324,7 +447,52 @@ impl<K: Kernel> Document<K> {
             } else {
                 state.body_attributes.insert(uid, attributes);
             }
+            if let Some((i, m)) = listed {
+                state.materials[i] = m;
+            }
             Ok((label, (), false))
+        })
+    }
+
+    /// The design's material `id` with `look` in its list, when it is the
+    /// design's own and does not offer it yet (mitcad#1055): its index
+    /// and the material with it. A built-in material cannot change.
+    fn listed_with(&self, id: &str, look: &str) -> Option<(usize, Material)> {
+        let i = self.state.materials.iter().position(|m| m.id == id)?;
+        let mut m = self.state.materials[i].clone();
+        if m.offers(look) {
+            return None;
+        }
+        m.add_appearance(look);
+        Some((i, m))
+    }
+
+    /// Sets a body's appearance as the Appearance command does
+    /// (mitcad#1055): as `set_body_appearance`, and an appearance outside
+    /// the list of the design's material the body is made of joins that
+    /// list, in the same undo step. A built-in material cannot change: its
+    /// list stays.
+    pub fn set_body_appearance_listed(
+        &mut self,
+        uid: BodyUid,
+        appearance: Option<&str>,
+    ) -> Result<(), ModelError> {
+        let made_of = self.body_material(uid, None).0.id.clone();
+        let listed = appearance
+            .map(str::trim)
+            .filter(|a| !a.is_empty() && self.appearance(a).is_some())
+            .and_then(|a| self.listed_with(&made_of, a));
+        let Some((i, m)) = listed else {
+            return self.set_body_appearance(uid, appearance);
+        };
+        // The body's step last: the undo step is named after it.
+        self.as_one_step(|doc| {
+            let label = format!("Edit Material {}", m.name);
+            doc.apply_with(|state| {
+                state.materials[i] = m;
+                Ok((label, (), false))
+            })?;
+            doc.set_body_appearance(uid, appearance)
         })
     }
 
@@ -340,7 +508,7 @@ impl<K: Kernel> Document<K> {
         let new = match material {
             Some(id) => Some(
                 self.material(id)
-                    .ok_or_else(|| invalid(format!("unknown material '{id}'")))?,
+                    .ok_or_else(|| invalid(format!("unknown material {id}")))?,
             ),
             None => None,
         };
@@ -354,10 +522,11 @@ impl<K: Kernel> Document<K> {
                     .get(uid)
                     .and_then(|a| a.appearance.as_deref());
                 let target = match new {
-                    Some(m) => m.appearance.as_deref(),
-                    None => self.inherited_material(*uid).appearance.as_deref(),
+                    Some(m) => m,
+                    None => self.inherited_material(*uid),
                 };
-                self.appearance_set_by_hand(*uid) && own != target
+                // One the new material offers stays (mitcad#1055).
+                self.appearance_set_by_hand(*uid) && !own.is_some_and(|own| target.offers(own))
             })
             .collect())
     }
@@ -383,15 +552,45 @@ impl<K: Kernel> Document<K> {
         component: ComponentUid,
         material: Option<&str>,
     ) -> Result<(), ModelError> {
+        self.set_component_material_look(component, material, None)
+    }
+
+    /// [`Document::set_component_material`] with one of the material's
+    /// appearances for its bodies without one of their own (`look`,
+    /// mitcad#1055; none: the material's default). An appearance the
+    /// design's material does not offer yet joins its list in the same
+    /// undo step.
+    pub fn set_component_material_look(
+        &mut self,
+        component: ComponentUid,
+        material: Option<&str>,
+        look: Option<&str>,
+    ) -> Result<(), ModelError> {
         if !component.is_root() && self.state.assembly.component(component).is_none() {
             return Err(invalid(format!("there is no component {component}")));
         }
         if let Some(id) = material
             && self.material(id).is_none()
         {
-            return Err(invalid(format!("unknown material '{id}'")));
+            return Err(invalid(format!("unknown material {id}")));
         }
-        if self.component_material(component) == material {
+        let look = look.map(str::trim).filter(|l| !l.is_empty());
+        if let Some(look) = look {
+            if material.is_none() {
+                return Err(invalid("an appearance is given without a material"));
+            }
+            if self.appearance(look).is_none() {
+                return Err(invalid(format!("there is no appearance {look}")));
+            }
+        }
+        let listed = match (material, look) {
+            (Some(id), Some(look)) => self.listed_with(id, look),
+            _ => None,
+        };
+        if self.component_material(component) == material
+            && self.component_appearance(component) == look
+            && listed.is_none()
+        {
             return Ok(());
         }
         let label = format!(
@@ -399,6 +598,7 @@ impl<K: Kernel> Document<K> {
             self.state.assembly.name(component)
         );
         let material = material.map(str::to_owned);
+        let look = look.map(str::to_owned);
         self.apply_with(|state| {
             match material {
                 Some(id) => {
@@ -407,6 +607,17 @@ impl<K: Kernel> Document<K> {
                 None => {
                     state.component_materials.remove(&component);
                 }
+            }
+            match look {
+                Some(look) => {
+                    state.component_appearances.insert(component, look);
+                }
+                None => {
+                    state.component_appearances.remove(&component);
+                }
+            }
+            if let Some((i, m)) = listed {
+                state.materials[i] = m;
             }
             Ok((label, (), false))
         })
@@ -431,6 +642,8 @@ impl<K: Kernel> Document<K> {
                     let mut value = serde_json::to_value(m).expect("materials serialize");
                     value["built_in"] = json!(built_in);
                     value["class"] = json!(material::material_class(m).id());
+                    // Print settings make it an FDM plastic (mitcad#1102).
+                    value["class_fixed"] = json!(m.has_print_settings());
                     if !built_in && material::built_in_material(&m.id).is_some() {
                         value["replaces_built_in"] = json!(true);
                     }
@@ -442,8 +655,23 @@ impl<K: Kernel> Document<K> {
                     {
                         value["display_color"] = json!(color);
                     }
+                    // Every appearance it offers, its default first
+                    // (mitcad#1055).
+                    value["appearances"] = json!(m.appearance_list());
                     value["bodies"] = json!(self.bodies_with_material(&m.id));
-                    value["components"] = json!(self.components_with_material(&m.id));
+                    let components = self.components_with_material(&m.id);
+                    // The appearances its components chose (mitcad#1055).
+                    let looks: serde_json::Map<String, Value> = components
+                        .iter()
+                        .filter_map(|c| {
+                            self.component_appearance(*c)
+                                .map(|a| (c.to_string(), json!(a)))
+                        })
+                        .collect();
+                    if !looks.is_empty() {
+                        value["component_appearances"] = Value::Object(looks);
+                    }
+                    value["components"] = json!(components);
                     value
                 })
                 .collect(),
@@ -464,6 +692,20 @@ impl<K: Kernel> Document<K> {
             MaterialSource::Default => value["source"] = json!("default"),
         }
         value["appearance_set_by_hand"] = json!(self.appearance_set_by_hand(uid));
+        // The variant the body's printer picks (mitcad#1054).
+        if !m.variants.is_empty() {
+            let effective =
+                self.effective_print(&super::PrintTarget::Body(uid, path.map(<[_]>::to_vec)));
+            value["variant"] = effective
+                .variant
+                .filter(|_| effective.material == m.id)
+                .and_then(|(i, how)| {
+                    m.variants
+                        .get(i)
+                        .map(|v| super::print_settings::variant_json(v, how))
+                })
+                .unwrap_or(Value::Null);
+        }
         value
     }
 
@@ -502,13 +744,14 @@ impl<K: Kernel> Document<K> {
                 let mut base = self
                     .material(id)
                     .cloned()
-                    .ok_or_else(|| invalid(format!("there is no material '{id}'")))?;
+                    .ok_or_else(|| invalid(format!("there is no material {id}")))?;
                 base.based_on = Some(id.to_owned());
                 base
             }
             Some(BasedOn::Library(item)) => {
                 // A library's item duplicated into the design: with the
-                // appearance it carries, in the same undo step.
+                // appearances it carries (mitcad#1067), in the same undo
+                // step.
                 let libraries = self.print_libraries(change.project.as_deref().map(Path::new));
                 let found = super::library_items::library_item(
                     &libraries,
@@ -518,7 +761,7 @@ impl<K: Kernel> Document<K> {
                 )?;
                 let ItemData::Material {
                     material,
-                    appearance,
+                    appearances,
                 } = found.data.clone()
                 else {
                     unreachable!("a material's folder")
@@ -526,12 +769,12 @@ impl<K: Kernel> Document<K> {
                 let mut base = material;
                 base.based_on = Some(item.id.clone());
                 return self.as_one_step(|doc| {
-                    if let Some(look) = appearance {
+                    for look in &appearances {
                         let label = format!("Add Appearance {}", look.name);
                         let id = doc.apply_with(|state| {
-                            Ok((label, state.add_item_appearance(&look), false))
+                            Ok((label, state.add_item_appearance(look), false))
                         })?;
-                        base.appearance = Some(id);
+                        base.rename_appearance(&look.id, &id);
                     }
                     doc.create_material_from(Some(base), change)
                 });
@@ -584,6 +827,8 @@ impl<K: Kernel> Document<K> {
                 appearance: None,
                 filament: BTreeMap::new(),
                 slicer: BTreeMap::new(),
+                variants: Vec::new(),
+                appearances: Vec::new(),
                 based_on: None,
                 class: None,
                 version: None,
@@ -601,23 +846,31 @@ impl<K: Kernel> Document<K> {
             Some(_) => copy_name(&new.name, taken),
             None => new_item_name("Material", free),
         };
+        // A library's item may name appearances of another design
+        // (mitcad#1055): those it offers here.
+        self.state.known_appearances_only(&mut new);
         change.apply_to(&mut new);
-        // The class is stored, so that print settings set later never move
-        // the material (mitcad#655): the one chosen, else the source's of a
-        // copy, else the one its fields give (a filament: plastic).
-        new.class = Some(
-            change
-                .class
-                .or(source_class)
-                .unwrap_or_else(|| material::material_class(&new)),
-        );
+        self.check_listed(change)?;
+        // The class is stored (mitcad#655): the one chosen, else the source's
+        // of a copy, else the one its fields give. Print settings make it an
+        // FDM plastic whatever it stores (mitcad#1102).
+        let class = change
+            .class
+            .or(source_class)
+            .unwrap_or_else(|| material::material_class(&new));
+        // A filament keeps `plastic`, which older versions read (mitcad#1102).
+        new.class = Some(material::stored_class(&new, class));
         if self.state.materials.iter().any(|m| m.id == new.id) {
-            return Err(invalid(format!("a material '{}' exists", new.id)));
+            return Err(invalid(format!("a material {} exists", new.id)));
         }
         self.check_material(&new, None)?;
         let label = format!("Create Material {}", new.name);
         let id = new.id.clone();
         self.apply_with(|state| {
+            // Its own filament colour: an appearance of its list
+            // (mitcad#1055).
+            // The default unless the command names an appearance.
+            state.adopt_filament_colour(&mut new, change.appearance.is_none());
             state.materials.push(new);
             Ok((label, (), false))
         })?;
@@ -638,12 +891,14 @@ impl<K: Kernel> Document<K> {
         let i = self.custom_material_index(id)?;
         let mut edited = self.state.materials[i].clone();
         change.apply_to(&mut edited);
+        self.check_listed(change)?;
         if edited == self.state.materials[i] {
             return Ok(());
         }
         self.check_material(&edited, Some(i))?;
         let label = format!("Edit Material {}", self.state.materials[i].name);
         self.apply_with(|state| {
+            state.adopt_filament_colour(&mut edited, change.appearance.is_none());
             state.materials[i] = edited;
             Ok((label, (), false))
         })
@@ -667,6 +922,15 @@ impl<K: Kernel> Document<K> {
                     }
                 }
                 state.body_attributes.retain(|_, a| !a.is_default());
+                let gone: Vec<ComponentUid> = state
+                    .component_materials
+                    .iter()
+                    .filter(|(_, m)| m.as_str() == id)
+                    .map(|(c, _)| *c)
+                    .collect();
+                for c in gone {
+                    state.component_appearances.remove(&c);
+                }
                 state.component_materials.retain(|_, m| m != id);
                 // Its purge volumes set by hand (mitcad#758).
                 state.drop_purge_overrides_of(id);
@@ -678,6 +942,16 @@ impl<K: Kernel> Document<K> {
 
     /// The fields are valid, the appearance exists and the name is not
     /// another material's (`own`: the index of the one being edited).
+    /// The appearances a change lists exist (mitcad#1055).
+    pub(super) fn check_listed(&self, change: &MaterialChange) -> Result<(), ModelError> {
+        for id in change.appearances.iter().flatten() {
+            if self.appearance(id.trim()).is_none() {
+                return Err(invalid(format!("there is no appearance {}", id.trim())));
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn check_material(
         &self,
         m: &Material,
@@ -688,17 +962,17 @@ impl<K: Kernel> Document<K> {
             && self.appearance(a).is_none()
         {
             return Err(invalid(format!(
-                "material {}: there is no appearance '{a}'",
+                "material {}: there is no appearance {a}",
                 m.id
             )));
         }
         if self.state.material_name_taken(&m.name, &m.id, own) {
-            return Err(invalid(format!("a material is named '{}'", m.name)));
+            return Err(invalid(format!("a material is named {}", m.name)));
         }
         Ok(())
     }
 
-    fn custom_material_index(&self, id: &str) -> Result<usize, ModelError> {
+    pub(super) fn custom_material_index(&self, id: &str) -> Result<usize, ModelError> {
         self.state
             .materials
             .iter()
@@ -706,11 +980,11 @@ impl<K: Kernel> Document<K> {
             .ok_or_else(|| {
                 invalid(if material::built_in_material(id).is_some() {
                     format!(
-                        "'{id}' is a built-in material, which cannot change: \
+                        "{id} is a built-in material, which cannot change: \
                          create_material with based_on copies it"
                     )
                 } else {
-                    format!("there is no material '{id}'")
+                    format!("there is no material {id}")
                 })
             })
     }

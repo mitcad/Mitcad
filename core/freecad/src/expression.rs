@@ -263,7 +263,7 @@ fn lex(text: &str) -> Result<Vec<Token>, ParseError> {
             let literal = &text[start..end_of(j)];
             let value: f64 = literal
                 .parse()
-                .or_else(|_| error(format!("'{literal}' is not a number"), start))?;
+                .or_else(|_| error(format!("“{literal}” is not a number"), start))?;
             out.push(Token {
                 tok: Tok::Number(value),
                 start,
@@ -355,7 +355,7 @@ fn lex(text: &str) -> Result<Vec<Token>, ParseError> {
             _ => None,
         };
         let Some((op, len)) = op else {
-            return error(format!("unexpected '{c}'"), start);
+            return error(format!("unexpected “{c}”"), start);
         };
         out.push(Token {
             tok: Tok::Op(op),
@@ -429,7 +429,7 @@ impl Parser {
         if self.eat(op) {
             Ok(())
         } else {
-            error(format!("'{op}' expected"), self.offset())
+            error(format!("“{op}” expected"), self.offset())
         }
     }
 
@@ -707,7 +707,7 @@ impl Parser {
                 }
                 self.path(&mut r, at)
             }
-            Tok::Op(op) => error(format!("unexpected '{op}'"), at),
+            Tok::Op(op) => error(format!("unexpected “{op}”"), at),
         }
     }
 

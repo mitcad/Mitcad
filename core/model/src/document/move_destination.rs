@@ -159,7 +159,7 @@ impl<K: Kernel> Document<K> {
                 .is_some_and(|c| c.created_by.is_some())
             {
                 return Err(invalid(
-                    "a destination created by a modelling feature is not supported; \
+                    "a destination created by a modeling feature is not supported; \
                      use an independently created component",
                 ));
             }
@@ -503,6 +503,25 @@ fn relocate_links(
             FeatureDef::ConstructionPlane(plane) => {
                 for (body, link) in &mut plane.links {
                     follow(link, &BTreeSet::from([body.feature]), own);
+                }
+                for (datum, link) in &mut plane.datum_links {
+                    follow(link, &BTreeSet::from([*datum]), own);
+                }
+            }
+            FeatureDef::ConstructionAxis(axis) => {
+                for (body, link) in &mut axis.links {
+                    follow(link, &BTreeSet::from([body.feature]), own);
+                }
+                for (datum, link) in &mut axis.datum_links {
+                    follow(link, &BTreeSet::from([*datum]), own);
+                }
+            }
+            FeatureDef::ConstructionPoint(point) => {
+                for (body, link) in &mut point.links {
+                    follow(link, &BTreeSet::from([body.feature]), own);
+                }
+                for (datum, link) in &mut point.datum_links {
+                    follow(link, &BTreeSet::from([*datum]), own);
                 }
             }
             FeatureDef::Derive(derive) => {

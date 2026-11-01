@@ -259,21 +259,18 @@ fn measurements_are_renamed_recoloured_hidden_changed_and_deleted() {
         &mut doc,
         json!({"cmd": "rename_measurement", "name": "Height", "new_name": "Angle1"}),
     );
-    assert!(error.contains("an annotation 'Angle1' exists"), "{error}");
+    assert!(error.contains("an annotation Angle1 exists"), "{error}");
     let error = refused(
         &mut doc,
         json!({"cmd": "rename_measurement", "name": "Offset1", "new_name": "X"}),
     );
-    assert!(
-        error.contains("there is no annotation 'Offset1'"),
-        "{error}"
-    );
+    assert!(error.contains("there is no annotation Offset1"), "{error}");
 
     command(
         &mut doc,
         json!({"cmd": "set_measurement_color", "name": "Height", "color": "#00AA00"}),
     );
-    assert_eq!(undo_label(&doc), "Colour of Height");
+    assert_eq!(undo_label(&doc), "Color of Height");
     assert_eq!(measurement(&doc, "Height")["color"], "#00aa00");
     let error = refused(
         &mut doc,

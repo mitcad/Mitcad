@@ -137,12 +137,12 @@ fn validate_command(request: &Value) -> Result<(), String> {
             // The client's texts, cut (mitcad#935): refusals are logged.
             let (kind, path) = (mitcad_mcp::echoed(kind), mitcad_mcp::echoed(&path));
             return Err(format!(
-                "command '{kind}' is not available through MCP: it would read the file '{path}'; use embedded image data, stored text outlines or an installed font instead"
+                "command {kind} is not available through MCP: it would read the file {path}; use embedded image data, stored text outlines or an installed font instead"
             ));
         }
         Some(class) => {
             return Err(format!(
-                "command '{}' is not available through MCP: it is a {} command; use document_save or model_export for output",
+                "command {} is not available through MCP: it is a {} command; use document_save or model_export for output",
                 mitcad_mcp::echoed(kind),
                 class.name()
             ));
@@ -157,7 +157,7 @@ fn validate_command(request: &Value) -> Result<(), String> {
         })?;
         if classes::feature_class_with(definition) != ApiClass::Model {
             return Err(format!(
-                "feature type '{}' is not available through MCP",
+                "feature type {} is not available through MCP",
                 mitcad_mcp::echoed(feature)
             ));
         }
@@ -171,7 +171,7 @@ impl Document {
         for feature in self.0.features() {
             if classes::feature_class_of(&feature.def) != ApiClass::Model {
                 return Err(crate::ApiError(format!(
-                    "feature type '{}' is not available through MCP: remove its font file metadata or use an installed font",
+                    "feature type {} is not available through MCP: remove its font file metadata or use an installed font",
                     feature.def.type_name()
                 )));
             }
@@ -209,7 +209,7 @@ fn validate_query(request: &Value) -> Result<(), String> {
         || (kind == "cache" && request["disk"].as_bool() == Some(true))
     {
         return Err(format!(
-            "query '{}' is not available through MCP",
+            "query {} is not available through MCP",
             mitcad_mcp::echoed(kind)
         ));
     }
@@ -249,13 +249,13 @@ impl CadBackend {
     fn document(&self, id: &str) -> Result<&OpenDocument, String> {
         self.documents
             .get(id)
-            .ok_or_else(|| format!("no open document '{id}'"))
+            .ok_or_else(|| format!("no open document {id}"))
     }
 
     fn document_mut(&mut self, id: &str) -> Result<&mut OpenDocument, String> {
         self.documents
             .get_mut(id)
-            .ok_or_else(|| format!("no open document '{id}'"))
+            .ok_or_else(|| format!("no open document {id}"))
     }
 
     /// Opens `document` under a new handle. `failed` is the opening
@@ -346,7 +346,7 @@ impl CadBackend {
         for feature in model.features() {
             if classes::feature_class_of(&feature.def) != ApiClass::Model {
                 return Err(format!(
-                    "feature type '{}' is not available through MCP",
+                    "feature type {} is not available through MCP",
                     feature.def.type_name()
                 ));
             }
@@ -504,7 +504,7 @@ impl Backend for CadBackend {
                     .map_err(|e| e.to_string())?;
                 success(json!({"document": id, "path": path, "result": parse_result(&result)?}))
             }
-            _ => Err(format!("unknown tool '{name}'")),
+            _ => Err(format!("unknown tool {name}")),
         }
     }
 }
@@ -672,7 +672,7 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
         format,
         "step" | "iges" | "brep" | "stl" | "obj" | "3mf" | "usdz" | "dxf" | "pdf" | "svg"
     ) {
-        return Err(format!("unknown export format '{format}'"));
+        return Err(format!("unknown export format “{format}”"));
     }
     // A cut sheet kept in the design (mitcad#853): DXF or SVG of its parts'
     // outlines, their names on the layer LABEL with labels.
@@ -684,7 +684,7 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
             .into_iter()
             .find(|k| arguments.get(*k).is_some())
         {
-            return Err(format!("cut_sheet does not take '{key}'"));
+            return Err(format!("cut_sheet does not take {key}"));
         }
         let cut_sheet = string(arguments, "cut_sheet")?;
         let labels = match arguments.get("labels") {
@@ -725,7 +725,7 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
             .into_iter()
             .find(|k| options.contains_key(*k))
         {
-            return Err(format!("drawing must not hold '{key}'"));
+            return Err(format!("drawing must not hold {key}"));
         }
     }
     // DXF: a sketch, or a sheet body's Flat Pattern (mitcad#210).
@@ -943,14 +943,14 @@ fn string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
         .get(field)
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| format!("'{field}' must be a nonempty string"))
+        .ok_or_else(|| format!("{field} must be a nonempty string"))
 }
 
 fn object<'a>(value: &'a Value, field: &str) -> Result<&'a Value, String> {
     value
         .get(field)
         .filter(|v| v.is_object())
-        .ok_or_else(|| format!("'{field}' must be an object"))
+        .ok_or_else(|| format!("{field} must be an object"))
 }
 
 fn boolean(value: &Value, field: &str, default: bool) -> Result<bool, String> {
@@ -958,7 +958,7 @@ fn boolean(value: &Value, field: &str, default: bool) -> Result<bool, String> {
         None => Ok(default),
         Some(value) => value
             .as_bool()
-            .ok_or_else(|| format!("'{field}' must be a boolean")),
+            .ok_or_else(|| format!("{field} must be a boolean")),
     }
 }
 

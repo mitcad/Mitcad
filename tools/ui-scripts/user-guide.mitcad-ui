@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Help › User Guide (mitcad#1032), from the menu bar and from the command
+# search: the guide's address on GitHub, at the release's tag or main. The
+# script of tools/ui-user-guide-test.sh and
+# tools/ui-windows-user-guide-test.ps1, each run Docked and Floating.
+# MITCAD_TEST_LOG_URLS=1 logs the address instead of opening the browser.
+expect-ever 'View area' 30
+mark
+menu 'Help/User Guide'
+expect-log 'Open URL \(test, not opened\): https://github\.com/mitcad/Mitcad/blob/(main|v[0-9]+\.[0-9]+\.[0-9]+)/docs/user-guide\.md$'
+mark
+command help.user_guide
+expect-log 'Open URL \(test, not opened\): https://github\.com/mitcad/Mitcad/blob/(main|v[0-9]+\.[0-9]+\.[0-9]+)/docs/user-guide\.md$'
+stay

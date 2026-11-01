@@ -28,6 +28,7 @@
 #include "../framework/Command.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Icons.hpp"
+#include "../framework/Theme.hpp"
 #include "PrintKeys.hpp"
 
 namespace mitcad {
@@ -108,6 +109,7 @@ QVector<LibraryItem> queryLibraryItems(const CommandContext& model, const QStrin
     item.chosen = row.value(QStringLiteral("chosen")).toBool();
     item.group = text(row, "group");
     item.materialClass = text(row, "class");
+  item.classFixed = row.value(QStringLiteral("class_fixed")).toBool();
     const QJsonValue color = row.value(QStringLiteral("display_color"));
     if (color.isArray()) {
       item.displayColor = colorOf(color);
@@ -175,7 +177,13 @@ QString materialGroupTitle(const QString& group) {
     return QObject::tr("Metals");
   }
   if (group == QStringLiteral("plastics")) {
-    return QObject::tr("Plastics");
+    return QObject::tr("General Plastics");
+  }
+  if (group == QStringLiteral("fdm_plastics")) {
+    return QObject::tr("FDM Plastics");
+  }
+  if (group == QStringLiteral("resins")) {
+    return QObject::tr("Resins");
   }
   return QObject::tr("Other");
 }
@@ -185,14 +193,28 @@ QString materialClassTitle(const QString& materialClass) {
     return QObject::tr("Metal");
   }
   if (materialClass == QStringLiteral("plastic")) {
-    return QObject::tr("Plastic");
+    return QObject::tr("General Plastic");
+  }
+  if (materialClass == QStringLiteral("fdm_plastic")) {
+    return QObject::tr("FDM Plastic");
+  }
+  if (materialClass == QStringLiteral("resin")) {
+    return QObject::tr("Resin");
   }
   return QObject::tr("Other");
 }
 
 const QStringList& materialClasses() {
-  static const QStringList classes{QStringLiteral("metal"), QStringLiteral("plastic"), QStringLiteral("other")};
+  // The model's order (MaterialClass::ALL, mitcad#1102).
+  static const QStringList classes{QStringLiteral("metal"), QStringLiteral("plastic"), QStringLiteral("fdm_plastic"),
+                                   QStringLiteral("resin"), QStringLiteral("other")};
   return classes;
+}
+
+const QStringList& materialGroups() {
+  static const QStringList groups{QStringLiteral("metals"), QStringLiteral("plastics"), QStringLiteral("fdm_plastics"),
+                                  QStringLiteral("resins"), QStringLiteral("other")};
+  return groups;
 }
 
 void nameItem(QJsonObject& command, const LibraryItem& item, const QString& project, const QString& field) {
@@ -253,7 +275,7 @@ QHBoxLayout* itemHeader(QLineEdit** name, QLabel** used, QLabel** saved, QWidget
   // form in both windows: the lists' mark in words, and where it is kept.
   const auto quiet = [](const QString& text) {
     auto* label = new QLabel(text);
-    label->setStyleSheet(QStringLiteral("color: gray;"));
+    setRoleStyleSheet(label, ColorRole::TextSecondary);
     label->hide();
     return label;
   };
@@ -267,7 +289,7 @@ QHBoxLayout* itemHeader(QLineEdit** name, QLabel** used, QLabel** saved, QWidget
   auto* lock = new QLabel;
   lock->setPixmap(themeIcon(QStringLiteral("lock")).pixmap(16, 16));
   auto* words = new QLabel(QObject::tr("Built-in"));
-  words->setStyleSheet(QStringLiteral("color: gray;"));
+  setRoleStyleSheet(words, ColorRole::TextSecondary);
   // The way on beside it (mitcad#655): the user's own copy.
   *duplicate = new QPushButton(QObject::tr("Duplicate"));
   builtInRow->addWidget(lock);
@@ -351,7 +373,8 @@ bool confirmDelete(QWidget* parent, const LibraryItem& item, const QString& logN
     }
   }
   qDebug().noquote() << QStringLiteral("%1 delete: %2").arg(logName, question);
-  QMessageBox box(QMessageBox::Question, QObject::tr("Delete"), question, QMessageBox::Cancel, parent);
+  // What cannot be undone asks in a Warning dialog (mitcad#1040).
+  QMessageBox box(QMessageBox::Warning, QObject::tr("Delete"), question, QMessageBox::Cancel, parent);
   QPushButton* confirm = box.addButton(QObject::tr("&Delete"), QMessageBox::DestructiveRole);
   box.setDefaultButton(QMessageBox::Cancel);
   prepareModal(&box);
@@ -482,15 +505,15 @@ QString plainModelError(const QString& error, const PrintKeyTable& keys, const Q
   if (is("the design is in no project")) {
     return QObject::tr("This design is in no project. Save it in a project first.");
   }
-  if (is("the base library is Mitcad's parts library: save to the user's or the project's")) {
+  if (is("the base library is MitCad's component library: save to the user's or the project's")) {
     return QObject::tr("Not changed: the item is built in.");
   }
-  if (is("the (?:printer|process|material) '.*' came from no library")) {
+  if (is("the (?:printer|process|material) .* came from no library")) {
     return name.isEmpty() ? QObject::tr("It is up to date.") : QObject::tr("%1 is up to date.").arg(name);
   }
-  if (is("the (?:user|project|base) library has no (?:material|printer|process|profile) '.*'") ||
-      is("there is no (?:material|profile|printer profile|process profile) '.*'") ||
-      is("the design has no (?:printer|process|material) '.*'")) {
+  if (is("the (?:user|project|base) library has no (?:material|printer|process|profile) .*") ||
+      is("there is no (?:material|profile|printer profile|process profile) .*") ||
+      is("the design has no (?:printer|process|material) .*")) {
     return QObject::tr("This item was removed meanwhile. Choose another one.");
   }
   // Else the plain names, without paths and with a capital letter, when

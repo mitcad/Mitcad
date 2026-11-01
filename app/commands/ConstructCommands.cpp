@@ -7,6 +7,7 @@
 #include "Commands.hpp"
 
 #include <cmath>
+#include <exception>
 #include <limits>
 
 #include <QDebug>
@@ -267,6 +268,141 @@ void tangentReference(const SelectionItem& item, CommandState& state, const Comm
                             .arg(best.owner, state.text(angle));
 }
 
+// Geometry of other components (mitcad#1029): the datum is made in its
+// component (an edited datum's own, else the active one), seen at that
+// component's first occurrence (where the view shows the finished datum),
+// or at the occurrence an edited datum's links were made at while it still
+// places the component. A face, edge or vertex picked in an occurrence of
+// another component is linked from there (the model's `links`, commands.md
+// "construction_plane, construction_axis, construction_point"), so that the
+// other component need not be activated.
+struct DatumHome {
+  QString component = QStringLiteral("C0");
+  QString occurrence; // empty: the root
+};
+
+// What an edited datum keeps for homeOf(): its component and its links'
+// target.
+const QString kHome = QStringLiteral("datum_home");
+
+DatumHome homeOf(const CommandState& state, const CommandContext& context) {
+  DatumHome home;
+  const QJsonObject kept = state.object(kHome);
+  if (kept.contains(QStringLiteral("component"))) {
+    home.component = str(kept, "component");
+  } else {
+    try {
+      home.component = componentsOf(context).value(QStringLiteral("active")).toString(QStringLiteral("C0"));
+    } catch (const std::exception&) {
+      // The root then.
+    }
+  }
+  if (home.component == QStringLiteral("C0")) {
+    return home;
+  }
+  const QString target = str(kept, "target");
+  if (!target.isEmpty() && occurrenceComponent(target, context) == home.component) {
+    home.occurrence = target;
+    return home;
+  }
+  bool found = false;
+  eachOccurrence(context, [&home, &found](const QJsonObject& node, const QString& at) {
+    if (!found && str(node, "component") == home.component) {
+      home.occurrence = at;
+      found = true;
+    }
+  });
+  return home;
+}
+
+// A face, edge or vertex picked in an occurrence of another component than
+// the datum's: its body's link into `links`, `{"source": <its occurrence>,
+// "target": <the datum's>}` with an empty path (the root) left out. False
+// when the body is linked from another occurrence already (one link per
+// body).
+bool addDatumLink(QJsonObject& links, const SelectionItem& item, const DatumHome& home,
+                  const CommandContext& context) {
+  if (item.kind != SelectKind::Face && item.kind != SelectKind::Edge && item.kind != SelectKind::Vertex) {
+    return true;
+  }
+  const QString component = occurrenceComponent(item.occurrence, context);
+  if (component.isEmpty() || component == home.component) {
+    return true;
+  }
+  QJsonObject link;
+  if (!item.occurrence.isEmpty()) {
+    link.insert(QStringLiteral("source"), item.occurrence);
+  }
+  if (!home.occurrence.isEmpty()) {
+    link.insert(QStringLiteral("target"), home.occurrence);
+  }
+  if (links.contains(item.owner) && links.value(item.owner).toObject() != link) {
+    return false;
+  }
+  links.insert(item.owner, link);
+  return true;
+}
+
+// Picks the model reads from a construction feature or a sketch (the item's
+// owner) rather than from a body.
+bool onDatumOrSketch(const SelectionItem& item) {
+  return item.kind == SelectKind::Plane || item.kind == SelectKind::Axis || item.kind == SelectKind::Point ||
+         item.kind == SelectKind::SketchCurve || item.kind == SelectKind::SketchPoint;
+}
+
+// A construction plane, axis or point (mitcad#1035), or a sketch curve or
+// point (mitcad#1039), of another component than the datum's: a link for
+// its feature (the datum's, or the sketch) into `datumLinks` (the model's
+// `datum_links`), from the occurrence the view shows it at, as
+// addDatumLink() links a body. Origin datums are every component's own and
+// need none.
+void addDatumRefLink(QJsonObject& datumLinks, const SelectionItem& item, const DatumHome& home,
+                     const CommandContext& context) {
+  if (!onDatumOrSketch(item)) {
+    return;
+  }
+  static const QStringList originDatums = {QStringLiteral("xy"), QStringLiteral("xz"), QStringLiteral("yz"),
+                                           QStringLiteral("x"),  QStringLiteral("y"),  QStringLiteral("z"),
+                                           QStringLiteral("origin")};
+  if (originDatums.contains(item.owner)) {
+    return;
+  }
+  QString component;
+  try {
+    component = context
+                    .queryObject({{QStringLiteral("query"), QStringLiteral("feature")},
+                                  {QStringLiteral("uid"), item.owner}})
+                    .value(QStringLiteral("component"))
+                    .toString(QStringLiteral("C0"));
+  } catch (const std::exception&) {
+    return; // not a feature the model knows: left to the model
+  }
+  if (component == home.component) {
+    return;
+  }
+  // The pick's occurrence while it places the datum's component, else the
+  // component's first one (where the view shows its datums).
+  QString source = item.occurrence;
+  if (occurrenceComponent(source, context) != component) {
+    source.clear();
+    bool found = component == QStringLiteral("C0");
+    eachOccurrence(context, [&component, &source, &found](const QJsonObject& node, const QString& at) {
+      if (!found && str(node, "component") == component) {
+        source = at;
+        found = true;
+      }
+    });
+  }
+  QJsonObject link;
+  if (!source.isEmpty()) {
+    link.insert(QStringLiteral("source"), source);
+  }
+  if (!home.occurrence.isEmpty()) {
+    link.insert(QStringLiteral("target"), home.occurrence);
+  }
+  datumLinks.insert(item.owner, link);
+}
+
 CommandDef construction(const Spec& spec) {
   CommandDef def;
   def.id = QString::fromLatin1(spec.id);
@@ -332,13 +468,24 @@ CommandDef construction(const Spec& spec) {
         return handle;
       });
     } else if (field.kind == Field::Line && type == QStringLiteral("angle")) {
-      // A sketch line's own sketch plane is the reference plane at first.
+      // A sketch line's own sketch plane is the reference plane at first,
+      // when the sketch is of the datum's component: another component's
+      // origin plane, or its face picked nowhere, is no pick of this one
+      // (mitcad#1039), so the user picks the reference plane then.
       input.withOnPick(
           [](const SelectionItem& item, CommandState& state, const CommandContext& context) {
             if (item.kind != SelectKind::SketchCurve || !state.items(QStringLiteral("plane")).isEmpty()) {
               return;
             }
             try {
+              const QString sketchComponent = context
+                                                  .queryObject({{QStringLiteral("query"), QStringLiteral("feature")},
+                                                                {QStringLiteral("uid"), item.owner}})
+                                                  .value(QStringLiteral("component"))
+                                                  .toString(QStringLiteral("C0"));
+              if (sketchComponent != homeOf(state, context).component) {
+                return;
+              }
               const QJsonValue sketchPlane =
                   context
                       .queryObject({{QStringLiteral("query"), QStringLiteral("sketch")},
@@ -377,11 +524,28 @@ CommandDef construction(const Spec& spec) {
 
   const std::vector<FieldSpec> fields = spec.fields;
   const QString featureType = def.featureType;
-  def.build = [fields, type, featureType](const CommandState& state, const CommandContext&) {
+  def.build = [fields, type, featureType](const CommandState& state, const CommandContext& context) {
     Built result;
     QJsonObject definition{{QStringLiteral("type"), type}};
+    // Picks of other components' geometry, linked from where they were
+    // picked (mitcad#1029), and of their construction geometry (mitcad#1035)
+    // and sketches (mitcad#1039).
+    const DatumHome home = homeOf(state, context);
+    QJsonObject links;
+    QJsonObject datumLinks;
     for (const FieldSpec& field : fields) {
       const QString key = QString::fromLatin1(field.key);
+      if (isSelection(field.kind)) {
+        for (const SelectionItem& item : state.items(key)) {
+          if (!addDatumLink(links, item, home, context)) {
+            return Built::failure(
+                QObject::tr("Pick the geometry of %1 in one occurrence of it.")
+                    .arg(componentName(occurrenceComponent(item.occurrence, context), context)),
+                key);
+          }
+          addDatumRefLink(datumLinks, item, home, context);
+        }
+      }
       switch (field.kind) {
       case Field::Distance:
       case Field::Angle:
@@ -412,6 +576,12 @@ CommandDef construction(const Spec& spec) {
     result.def = {{QStringLiteral("type"), featureType}, {QStringLiteral("definition"), definition}};
     if (state.checked(QStringLiteral("flip"))) {
       result.def.insert(QStringLiteral("flip"), true);
+    }
+    if (!links.isEmpty()) {
+      result.def.insert(QStringLiteral("links"), links);
+    }
+    if (!datumLinks.isEmpty()) {
+      result.def.insert(QStringLiteral("datum_links"), datumLinks);
     }
     return result;
   };
@@ -445,6 +615,42 @@ CommandDef construction(const Spec& spec) {
       }
     }
     state.setChecked(QStringLiteral("flip"), feature.value(QStringLiteral("flip")).toBool());
+    // Geometry of other components (mitcad#1029) where its links saw it,
+    // so that the picks show and are kept as they were made; the datum's
+    // component and the links' target kept for `build`.
+    const QJsonObject links = feature.value(QStringLiteral("links")).toObject();
+    const QJsonObject datumLinks = feature.value(QStringLiteral("datum_links")).toObject();
+    for (const FieldSpec& field : fields) {
+      if (!isSelection(field.kind)) {
+        continue;
+      }
+      for (SelectionItem& item : state.items(QString::fromLatin1(field.key))) {
+        const bool onBody =
+            item.kind == SelectKind::Face || item.kind == SelectKind::Edge || item.kind == SelectKind::Vertex;
+        if (onBody && links.contains(item.owner)) {
+          item.occurrence = str(links.value(item.owner).toObject(), "source");
+        } else if (onDatumOrSketch(item) && datumLinks.contains(item.owner)) {
+          item.occurrence = str(datumLinks.value(item.owner).toObject(), "source");
+        }
+      }
+    }
+    QJsonObject home;
+    try {
+      home.insert(QStringLiteral("component"),
+                  context
+                      .queryObject({{QStringLiteral("query"), QStringLiteral("feature")},
+                                    {QStringLiteral("uid"), feature.value(QStringLiteral("uid")).toString()}})
+                      .value(QStringLiteral("component"))
+                      .toString(QStringLiteral("C0")));
+    } catch (const std::exception&) {
+      // Not known: the active component, as for a new datum.
+    }
+    if (!links.isEmpty()) {
+      home.insert(QStringLiteral("target"), str(links.constBegin().value().toObject(), "target"));
+    } else if (!datumLinks.isEmpty()) {
+      home.insert(QStringLiteral("target"), str(datumLinks.constBegin().value().toObject(), "target"));
+    }
+    state.setObject(kHome, home);
   };
 
   def.canEdit = [fields, type](const QJsonObject& feature) {
@@ -478,22 +684,31 @@ CommandDef construction(const Spec& spec) {
       return QStringLiteral("Added %1").arg(featureType);
     }
     const QJsonObject datum = datums.last().toObject();
-    const auto xyz = [&datum](const char* key) {
-      const QJsonArray v = datum.value(QLatin1String(key)).toArray();
-      QStringList parts;
-      for (const QJsonValue& c : v) {
-        parts << QString::number(std::abs(c.toDouble()) < 1e-9 ? 0.0 : c.toDouble(), 'g', 6);
-      }
-      return QStringLiteral("(%1)").arg(parts.join(QStringLiteral(", ")));
-    };
     const QString kind = datum.value(QStringLiteral("type")).toString();
-    QString geometry;
-    if (kind == QStringLiteral("plane")) {
-      geometry = QStringLiteral("origin %1, normal %2").arg(xyz("origin"), xyz("normal"));
-    } else if (kind == QStringLiteral("axis")) {
-      geometry = QStringLiteral("origin %1, direction %2").arg(xyz("origin"), xyz("direction"));
-    } else {
-      geometry = QStringLiteral("point %1").arg(xyz("point"));
+    QString geometry = datumText(datum);
+    // A datum of a placed component also where the view shows it, at the
+    // component's first occurrence (mitcad#1029), for logs and UI tests.
+    try {
+      const QString component = context
+                                    .queryObject({{QStringLiteral("query"), QStringLiteral("feature")},
+                                                  {QStringLiteral("uid"), datum.value(QStringLiteral("uid"))}})
+                                    .value(QStringLiteral("component"))
+                                    .toString(QStringLiteral("C0"));
+      if (component != QStringLiteral("C0")) {
+        QJsonArray world;
+        bool found = false;
+        eachOccurrence(context, [&component, &world, &found](const QJsonObject& node, const QString&) {
+          if (!found && str(node, "component") == component) {
+            world = node.value(QStringLiteral("world")).toArray();
+            found = true;
+          }
+        });
+        if (found) {
+          geometry += QStringLiteral("; in the design: %1").arg(datumText(placedDatum(datum, trsfOf(world))));
+        }
+      }
+    } catch (const std::exception&) {
+      // Its own coordinates only.
     }
     return QStringLiteral("Added %1 %2: %3")
         .arg(kind, datum.value(QStringLiteral("name")).toString(), geometry);

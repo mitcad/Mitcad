@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/render app/framework/Appearances.cpp app/framework/Appearances.hpp
+# check-all sources: app/render app/framework/Appearances.cpp app/framework/Appearances.hpp app/commands/MaterialCommands.cpp
 # Appearances of faces and textures (mitcad#53, docs/rendering.md
 # "Materials"), through the real UI:
 #   - The Appearance panel gives the box's top face Paint - Red (its Faces
 #     input): the shaded view draws only that face red.
 #   - The rendered view sends the face's material and renders red where the shaded view is red, and
 #     nowhere else.
-#   - Edit Appearances lists the face, Clear gives it the body's grey
-#     again, and Undo brings the red back.
+#   - The Appearance tool with the face and Default gives it the body's
+#     grey again (mitcad#1059), and Undo brings the red back.
 #   - An appearance whose image is missing says so in Edit Appearances.
 #   - A checker image made by the test (black and white
-#     squares of 10 mm: the image's two cells per 20 mm repeat), assigned
-#     to the box in Edit Appearances and embedded there, renders from the
-#     top with squares of 10 mm (the period within 15 %) after its file
-#     is gone.
+#     squares of 10 mm: the image's two cells per 20 mm repeat), embedded
+#     in Edit Appearances and given to the box by the Appearance tool,
+#     renders from the top with squares of 10 mm (the period within 15 %)
+#     after its file is gone.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-render-faces-test.sh [directory for screenshots]
@@ -152,7 +152,7 @@ ui_mark
 ui_step "appearance (search)"            ui_command "Appearance"
 ui_step "the Faces input"                ui_click_logged "Panel Appearance input faces"
 ui_step "pick the top face"              ui_click_pick "face F1.b0/F1:top"
-ui_step "Paint - Red"                    ui_choose "Panel Appearance input value" 5
+ui_step "the picker: Paint - Red"        ui_picker_choose "Panel Appearance input value" "Appearance picker" "Paint - Red"
 ui_step "OK (Enter)"                     ui_key Return
 ui_expect_new "Appearance paint_red for 0 body(ies), 1 face(s)" "the top face is painted"
 ui_step "Escape (clear the selection)"   ui_key Escape
@@ -178,18 +178,16 @@ sys.exit(0 if ok else 1)' "$json" || ui_fail "the render is red only where the s
 echo "ok   red where the shaded view is red, grey elsewhere ($json)"
 ui_step "leave the rendered view"      ui_command "Rendered"
 
-echo "--- Edit Appearances: the face listed, cleared, and undone"
+echo "--- The Appearance tool: Default for the face, and undone"
 ui_mark
-ui_step "right-click Body1"              ui_click_logged "Browser Root/Bodies/Body1" 3
-ui_step "choose Appearance..."           ui_menu_choose "Appearance..."
-ui_expect_new "Appearances for bodies: F1.b0" "the dialog is for the box"
-ui_expect_new "Appearances face F1.b0 F1:top paint_red at" "the dialog lists the red face"
-ui_focus_dialog '^Appearances$'
-ui_step "select the face"                ui_click_logged "Appearances face F1.b0 F1:top paint_red"
-ui_step "Clear"                          ui_click_logged "Appearances clear_faces"
-ui_expect_new "Cleared face appearances of F1.b0 F1:top" "the face's appearance is cleared"
-ui_step "Close"                          ui_click_logged "Appearances close"
-ui_focus_main
+ui_step "appearance (search)"            ui_command "Appearance"
+ui_step "the Faces input"                ui_click_logged "Panel Appearance input faces"
+ui_step "pick the top face"              ui_click_pick "face F1.b0/F1:top"
+ui_expect_new "Panel Appearance tile value: Paint - Red (Library)" "the tool shows the face's own"
+ui_step "the picker: Default"            ui_picker_choose "Panel Appearance input value" "Appearance picker" "Default"
+ui_mark
+ui_step "OK (Enter)"                     ui_key Return
+ui_expect_new "Appearance  for 0 body(ies), 1 face(s)" "the face's appearance is cleared"
 ui_step "Escape (clear the selection)"   ui_key Escape
 ui_wait_idle
 shot cleared
@@ -203,13 +201,18 @@ shot undone
 json=$(red undone)
 expect_red "$json" 0.15 0.75 "undo makes it red again"
 ui_mark
-ui_step "right-click Body1"              ui_click_logged "Browser Root/Bodies/Body1" 3
-ui_step "choose Appearance..."           ui_menu_choose "Appearance..."
-ui_expect_new "Appearances face F1.b0 F1:top paint_red at" "the dialog lists the red face again"
-ui_focus_dialog '^Appearances$'
-ui_step "select the face again"          ui_click_logged "Appearances face F1.b0 F1:top paint_red"
-ui_step "Clear"                          ui_click_logged "Appearances clear_faces"
-ui_expect_new "Cleared face appearances of F1.b0 F1:top" "cleared again"
+ui_step "appearance (search)"            ui_command "Appearance"
+ui_step "the Faces input"                ui_click_logged "Panel Appearance input faces"
+ui_step "pick the top face"              ui_click_pick "face F1.b0/F1:top"
+ui_step "the picker: Default"            ui_picker_choose "Panel Appearance input value" "Appearance picker" "Default"
+ui_mark
+ui_step "OK (Enter)"                     ui_key Return
+ui_expect_new "Appearance  for 0 body(ies), 1 face(s)" "cleared again"
+ui_step "Escape (clear the selection)"   ui_key Escape
+ui_mark
+ui_step "Edit Appearances (search)"      ui_command "Edit Appearances"
+ui_expect_new "Appearances dialog opened" "the window opened"
+ui_expect_new "Appearances item steel_satin at" "the library is listed"
 
 echo "--- Textures"
 ui_focus_dialog '^Appearances$'
@@ -222,12 +225,18 @@ ui_expect_new "Appearance lost texture missing: the image $WORK/nowhere/lost.png
 ui_mark
 ui_step "the checker (Up)"             ui_key Up
 ui_expect_new "Appearance selected: checker" "the checker is selected"
-ui_step "Assign to Body1"              ui_click_logged "Appearances assign"
-ui_expect_new "Assigned appearance checker to F1.b0" "the box gets the checker"
 ui_step "embed the image"              ui_click_logged "Appearances field texture_embed"
 ui_expect_new "Appearance checker texture embedded" "the image is embedded"
 ui_step "Close"                        ui_click_logged "Appearances close"
 ui_focus_main
+ui_mark
+ui_step "right-click Body1"            ui_click_logged "Browser Root/Bodies/Body1" 3
+ui_step "choose Appearance..."         ui_menu_choose "Appearance..."
+ui_expect_new "Appearance tool for F1.b0" "the Appearance tool for the box"
+ui_step "the picker: Checker"          ui_picker_choose "Panel Appearance input value" "Appearance picker" "Checker"
+ui_mark
+ui_step "OK (Enter)"                   ui_key Return
+ui_expect_new "Appearance checker for 1 body(ies)" "the box gets the checker"
 rm "$WORK/checker.png"
 ui_step "Escape (clear the selection)" ui_key Escape
 ui_step "the view from the top"        ui_command "Top"

@@ -233,7 +233,7 @@ fn fixed_directions_never_drag_the_anchors_across() {
     let across = |v: [f64; 2]| -0.8 * v[0] + 0.6 * v[1];
     assert_near(across(pt(&s, l0)), across([8.0, -4.0]), "line start across");
     assert_near(across(pt(&s, l1)), across([12.0, 4.0]), "line end across");
-    assert_near(across(pt(&s, c)), across([26.0, 3.0]), "centre across");
+    assert_near(across(pt(&s, c)), across([26.0, 3.0]), "center across");
     assert_near(s.radius(arc).unwrap(), 5.0, "the arc keeps its radius");
 }
 
@@ -294,7 +294,7 @@ fn mixed_anchors_use_centres_and_line_midpoints_only() {
     solve_ok(&mut s);
     let (p0, p1) = ends(&s, line);
     assert_near((p0[0] + p1[0]) / 2.0, 15.0, "the line's midpoint");
-    assert_near(pt(&s, c)[0], 30.0, "the circle's centre");
+    assert_near(pt(&s, c)[0], 30.0, "the circle's center");
     // Sizes are their own: the line keeps its length, the circle its radius.
     assert_near(line_len(&s, line), 9.0, "line length");
     assert_near(s.radius(circle).unwrap(), 2.0, "radius");

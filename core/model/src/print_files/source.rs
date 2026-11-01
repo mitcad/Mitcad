@@ -247,6 +247,7 @@ pub(crate) const BOOKKEEPING: &[&str] = &[
     "user_id",
     "updated_time",
     "inherits_group",
+    "inherits_cummulative",
     "different_settings_to_system",
     "is_custom_defined",
 ];

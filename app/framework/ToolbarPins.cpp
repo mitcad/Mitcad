@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <utility>
+#include <vector>
 
 #include <QMetaType>
 #include <QSettings>
@@ -37,38 +38,78 @@ QString ToolbarPins::settingsKey(const QString& tab) { return kGroup + QLatin1Ch
 
 ToolbarPins ToolbarPins::load(const Resolve& resolve) {
   ToolbarPins pins;
+  pins.m_resolve = resolve;
   QStringList tabs;
   {
     QSettings settings;
     settings.beginGroup(kGroup);
     tabs = settings.childKeys();
   }
+  // The tabs whose settings are written again.
+  QStringList changed;
+  const auto change = [&changed](const QString& tab) {
+    if (!changed.contains(tab)) {
+      changed.append(tab);
+    }
+  };
+  // The commands kept under another tab than their own: (own tab, id),
+  // added at the end of their own tab's pins once all are read.
+  std::vector<std::pair<QString, QString>> moved;
   for (const QString& tab : std::as_const(tabs)) {
     const QStringList stored = idsOf(QSettings().value(settingsKey(tab)));
-    QStringList kept;
-    bool changed = false;
+    if (stored.isEmpty()) {
+      change(tab); // an empty value: the key goes
+    }
     for (const QString& id : stored) {
-      const QString command = resolve ? resolve(id) : id;
-      if (command.isEmpty()) {
+      const Command command = resolve ? resolve(id) : Command{id, tab, QString()};
+      if (command.id.isEmpty()) {
         qInfo().noquote() << QStringLiteral("Toolbar pins: dropped %1 from %2: no such command").arg(id, tab);
-        changed = true;
+        change(tab);
         continue;
       }
-      if (command != id || kept.contains(command)) {
-        changed = true;
+      if (command.id != id) {
+        change(tab);
       }
-      if (!kept.contains(command)) {
-        kept.append(command);
+      const QString own = command.tab.isEmpty() ? tab : command.tab;
+      if (own != tab) {
+        qInfo().noquote() << QStringLiteral("Toolbar pins: moved %1 from %2 to %3").arg(command.id, tab, own);
+        change(tab);
+        change(own);
+        moved.emplace_back(own, command.id);
+        continue;
       }
-    }
-    if (!kept.isEmpty()) {
-      pins.m_pins.insert(tab, kept);
-    }
-    if (changed || kept.isEmpty()) {
-      pins.save(tab);
+      QStringList& kept = pins.m_pins[tab];
+      if (kept.contains(command.id)) {
+        change(tab);
+        continue;
+      }
+      kept.append(command.id);
     }
   }
+  for (const auto& [own, id] : moved) {
+    QStringList& kept = pins.m_pins[own];
+    if (!kept.contains(id)) {
+      kept.append(id);
+    }
+  }
+  for (const QString& tab : std::as_const(changed)) {
+    pins.save(tab);
+  }
   return pins;
+}
+
+QStringList ToolbarPins::pins(const QString& tab, const QString& group) const {
+  QStringList ids;
+  if (!m_resolve) {
+    return ids;
+  }
+  for (const QString& id : m_pins.value(tab)) {
+    const Command command = m_resolve(id);
+    if (!command.id.isEmpty() && command.group == group && (command.tab.isEmpty() || command.tab == tab)) {
+      ids.append(id);
+    }
+  }
+  return ids;
 }
 
 bool ToolbarPins::isPinned(const QString& tab, const QString& id) const {
@@ -112,6 +153,28 @@ bool ToolbarPins::move(const QString& tab, const QString& id, int index) {
   found->move(from, to);
   save(tab);
   return true;
+}
+
+bool ToolbarPins::moveInGroup(const QString& tab, const QString& id, int index) {
+  if (!m_resolve) {
+    return false;
+  }
+  const Command command = m_resolve(id);
+  if (command.id.isEmpty()) {
+    return false;
+  }
+  // The group's other pins; the command goes before the one at `index`,
+  // or after the last of them.
+  QStringList others = pins(tab, command.group);
+  if (!others.removeOne(id) || others.isEmpty()) {
+    return false;
+  }
+  QStringList without = m_pins.value(tab);
+  without.removeOne(id);
+  const int at = std::clamp(index, 0, static_cast<int>(others.size()));
+  const int to = at < static_cast<int>(others.size()) ? static_cast<int>(without.indexOf(others.at(at)))
+                                                      : static_cast<int>(without.indexOf(others.last())) + 1;
+  return move(tab, id, to);
 }
 
 void ToolbarPins::save(const QString& tab) const {

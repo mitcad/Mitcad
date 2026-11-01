@@ -2,7 +2,7 @@
 // Sketch selection filters (mitcad#217): the three-state rows, the
 // sketch's and Project's defaults, Shift's wider clicks, windows, body
 // edges in sight and behind faces, and other sketches' geometry (only
-// Project's sources, mitcad#904).
+// Project's and Intersect's sources, mitcad#904, mitcad#1031).
 #include "framework/SelectionScope.hpp"
 
 #include <cstdio>
@@ -287,11 +287,42 @@ void projectTests() {
   CHECK(!takes(off, otherCurve, window()));
   CHECK(takes(off, otherCurve, click(true)));
   CHECK(filterRowFromId(QStringLiteral("other-sketch-geometry")) == FilterRow::OtherSketchGeometry);
-  // Project's scope is the one command that has one.
+  // Project's and Intersect's (below) are the commands that have one.
   CHECK(commandSelectionScope(QStringLiteral("sketch.project")).has_value());
   CHECK(commandSelectionScope(QStringLiteral("sketch.project"))->name() == QStringLiteral("project"));
   CHECK(!commandSelectionScope(QStringLiteral("sketch.offset")).has_value());
   CHECK(!commandSelectionScope(QStringLiteral("solid.fillet")).has_value());
+}
+
+void intersectTests() {
+  // Intersect's scope (mitcad#1031): its body sources as Project's without
+  // vertices, whole bodies by a click, and other sketches' curves and
+  // points, whose crossings with the plane it gives.
+  const SelectionScope scope = SelectionScope::intersect();
+  CHECK(commandSelectionScope(QStringLiteral("sketch.intersect")).has_value());
+  CHECK(commandSelectionScope(QStringLiteral("sketch.intersect"))->name() == QStringLiteral("intersect"));
+  CHECK(scope.describe() == QStringLiteral("visible-edges=cross, occluded-edges=empty, faces=square, bodies=square, "
+                                           "other-sketch-geometry=cross"));
+  CHECK(scope.kinds(false) == (SelectKind::Edge | SelectKind::Face | SelectKind::Body | SelectKind::SketchCurve |
+                               SelectKind::SketchPoint));
+  const SelectionItem edge = item(SelectKind::Edge, QStringLiteral("F1.b0"), QStringLiteral("e"));
+  CHECK(takes(scope, edge, edgePick(true, false, EdgeSight::Visible, nullptr)));
+  CHECK(!takes(scope, edge, edgePick(false, false, EdgeSight::Occluded, nullptr)));
+  CHECK(takes(scope, item(SelectKind::Face, QStringLiteral("F1.b0"), QStringLiteral("f")), click()));
+  CHECK(takes(scope, item(SelectKind::Body, QStringLiteral("F1.b0")), click()));
+  CHECK(!takes(scope, item(SelectKind::Vertex, QStringLiteral("F1.b0"), QStringLiteral("v")), click(true)));
+  // Another sketch's curve is taken by a click and a window...
+  const SelectionItem otherCurve = item(SelectKind::SketchCurve, QStringLiteral("F2"), QStringLiteral("c1"));
+  CHECK(filterRowOf(otherCurve, kSketch, sketchRow) == FilterRow::OtherSketchGeometry);
+  CHECK(takes(scope, otherCurve, click()));
+  CHECK(takes(scope, otherCurve, window()));
+  CHECK(takes(scope, item(SelectKind::SketchPoint, QStringLiteral("F2"), QStringLiteral("p3")), click()));
+  // ... the edited sketch's own geometry, and another sketch's profiles,
+  // dimensions and constraints, never.
+  CHECK(!takes(scope, item(SelectKind::SketchCurve, kSketch, QStringLiteral("c1")), click(true)));
+  for (const SelectKind kind : {SelectKind::Profile, SelectKind::SketchDimension, SelectKind::SketchConstraint}) {
+    CHECK(!takes(scope, item(kind, QStringLiteral("F2"), QStringLiteral("k1")), click(true)));
+  }
 }
 
 } // namespace
@@ -305,5 +336,6 @@ int selectionScopeTests() {
   independentRowTests();
   edgeSightTests();
   projectTests();
+  intersectTests();
   return failures;
 }

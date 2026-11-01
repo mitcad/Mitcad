@@ -137,6 +137,7 @@ ui_step "close (Enter)"                    ui_key Return
 
 echo "--- Section Analysis"
 ui_step "section analysis (search)"        ui_command "Section Analysis"
+ui_show_origin
 ui_step "pick YZ"                          ui_click_logged "Datum yz"
 ui_expect_log "Section Analysis Faces/Plane: 1 plane [plane yz]" "YZ picked"
 ui_expect_log "Section analysis at" "the bodies are shown cut"

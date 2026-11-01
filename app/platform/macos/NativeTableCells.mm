@@ -9,12 +9,18 @@
 #include <QAbstractItemModel>
 #include <QAbstractItemView>
 #include <QBrush>
+#include <QBuffer>
+#include <QByteArray>
 #include <QColor>
 #include <QFont>
 #include <QHash>
 #include <QHeaderView>
+#include <QIcon>
 #include <QModelIndex>
 #include <QPalette>
+#include <QPixmap>
+#include <QSize>
+#include <QSizeF>
 #include <QTextDocument>
 #include <QString>
 #include <QStringList>
@@ -26,7 +32,9 @@
 #include <QtLogging>
 
 #include "../NativeDialogs.hpp"
+#include "../../browser/DecimalAlign.hpp"
 #include "../../framework/Theme.hpp"
+#include "NativeColors.hpp"
 
 // Refits a header-driven table's stretching columns after the visible area
 // or a column changes. Owned by its table (an associated object).
@@ -131,7 +139,7 @@ QPalette shade(bool dark) {
   return palette;
 }
 
-QColor roleColor(const QVariant& value) {
+QColor itemColor(const QVariant& value) {
   if (value.typeId() == QMetaType::QBrush) {
     const QBrush brush = value.value<QBrush>();
     return brush.style() == Qt::NoBrush ? QColor() : brush.color();
@@ -145,16 +153,23 @@ NSColor* srgb(const QColor& color) {
   return [NSColor colorWithSRGBRed:rgb.redF() green:rgb.greenF() blue:rgb.blueF() alpha:rgb.alphaF()];
 }
 
-// The theme's error and warning colours, on a light or a dark palette, are
-// AppKit's dynamic red and orange; other colours stay what they are.
+// A colour of the role table, on a light or a dark palette, is that role in
+// AppKit (roleColor, mitcad#1041), which follows the appearance: the error
+// text the system's red, the warning text the table's yellow, a fill its
+// fill. The error's and warning's text colours used as a fill are a tenth of
+// them. Other colours stay what they are.
 NSColor* semanticColor(const QColor& color, const QPalette& palette, bool text) {
   if (!color.isValid()) { return nil; }
   for (const bool dark : {false, true}) {
-    if (color == errorColor(shade(dark))) {
-      return text ? NSColor.systemRedColor : [NSColor.systemRedColor colorWithAlphaComponent:kFillAlpha];
+    if (!text && (color == errorColor(shade(dark)) || color == warningColor(shade(dark)))) {
+      const ColorRole role = color == errorColor(shade(dark)) ? ColorRole::ErrorText : ColorRole::WarningText;
+      return [roleColor(role) colorWithAlphaComponent:kFillAlpha];
     }
-    if (color == warningColor(shade(dark))) {
-      return text ? NSColor.systemOrangeColor : [NSColor.systemOrangeColor colorWithAlphaComponent:kFillAlpha];
+  }
+  for (const ColorRole role : allColorRoles()) {
+    if (colorRoleUse(role) != ColorUse::View &&
+        (color == themeColor(role, false) || color == themeColor(role, true))) {
+      return roleColor(role);
     }
   }
   if (text) {
@@ -195,13 +210,13 @@ NativeCellStyle nativeCellStyle(const QModelIndex& index, const QAbstractItemVie
   style.font = cellFont(index, view);
   if (index.data(NativeRefusedRole).toBool()) {
     // As styleParameterCell: the error text on a tenth of the error colour.
-    style.text = NSColor.systemRedColor;
-    style.fill = [NSColor.systemRedColor colorWithAlphaComponent:kFillAlpha];
+    style.text = roleColor(ColorRole::ErrorText);
+    style.fill = [roleColor(ColorRole::ErrorText) colorWithAlphaComponent:kFillAlpha];
     return style;
   }
   const QPalette palette = view->palette();
-  style.text = semanticColor(roleColor(index.data(Qt::ForegroundRole)), palette, true);
-  style.fill = semanticColor(roleColor(index.data(Qt::BackgroundRole)), palette, false);
+  style.text = semanticColor(itemColor(index.data(Qt::ForegroundRole)), palette, true);
+  style.fill = semanticColor(itemColor(index.data(Qt::BackgroundRole)), palette, false);
   return style;
 }
 
@@ -225,7 +240,9 @@ int nativeTextToneKind(const QWidget* widget) {
 }
 
 NSColor* nativeTextTone(int kind) {
-  return kind == 1 ? NSColor.systemRedColor : kind == 2 ? NSColor.systemOrangeColor : NSColor.labelColor;
+  return kind == 1   ? roleColor(ColorRole::ErrorText)
+         : kind == 2 ? roleColor(ColorRole::WarningText)
+                     : NSColor.labelColor;
 }
 
 QHeaderView* nativeHeader(const QAbstractItemView* view) {
@@ -235,6 +252,33 @@ QHeaderView* nativeHeader(const QAbstractItemView* view) {
 }
 
 namespace {
+
+// A header's or an item's decoration as an icon: a QIcon or a QPixmap.
+QIcon headerIcon(const QVariant& value) {
+  if (value.typeId() == QMetaType::QIcon) return value.value<QIcon>();
+  if (value.typeId() == QMetaType::QPixmap) return QIcon(value.value<QPixmap>());
+  return {};
+}
+
+// A column header's title after its icon, as the shared header draws it
+// (Purge Volumes' material swatches, mitcad#1078), in the header's own font
+// and text colour.
+NSAttributedString* iconTitle(NSTableHeaderCell* cell, const QString& title, const QIcon& icon) {
+  NSFont* font = cell.font != nil ? cell.font : [NSFont systemFontOfSize:NSFont.systemFontSize];
+  NSColor* color = cell.textColor != nil ? cell.textColor : NSColor.headerTextColor;
+  NSDictionary* attributes = @{NSFontAttributeName: font, NSForegroundColorAttributeName: color};
+  NSMutableAttributedString* result = [NSMutableAttributedString new];
+  if (NSImage* picture = nativeIconImage(icon, std::min<CGFloat>(16, std::ceil(font.pointSize + 2)))) {
+    NSTextAttachment* attachment = [NSTextAttachment new];
+    attachment.image = picture;
+    attachment.bounds = NSMakeRect(0, std::round((font.capHeight - picture.size.height) / 2), picture.size.width,
+                                   picture.size.height);
+    [result appendAttributedString:[NSAttributedString attributedStringWithAttachment:attachment]];
+    [result appendAttributedString:[[NSAttributedString alloc] initWithString:@" " attributes:attributes]];
+  }
+  [result appendAttributedString:[[NSAttributedString alloc] initWithString:title.toNSString() attributes:attributes]];
+  return result;
+}
 
 CGFloat headerWidth(NSTableView* table, int section) {
   if (table.headerView == nil) return 0;
@@ -246,7 +290,9 @@ CGFloat headerWidth(NSTableView* table, int section) {
     const NSRect spacious = NSMakeRect(0, 0, size.width * 2 + 1, std::max(size.height, NSHeight(table.headerView.bounds)));
     const NSRect title = [cell titleRectForBounds:spacious];
     NSFont* font = cell.font != nil ? cell.font : [NSFont systemFontOfSize:NSFont.systemFontSize];
-    const CGFloat glyphs = [column.title sizeWithAttributes:@{NSFontAttributeName:font}].width;
+    // A header with an icon (mitcad#1078) draws its attributed title.
+    const CGFloat glyphs = std::max([column.title sizeWithAttributes:@{NSFontAttributeName:font}].width,
+                                    cell.attributedStringValue.size.width);
     const CGFloat preferred = std::max(size.width, glyphs + std::max<CGFloat>(0, NSWidth(spacious) - NSWidth(title)));
     // The outline column's header draws after its disclosure indentation.
     // On some AppKit versions headerRect/titleRect still report that area
@@ -315,6 +361,7 @@ bool applyNativeColumns(NSTableView* table, const QAbstractItemView* view, Nativ
     int section = -1;
     QString title;
     QString tip;
+    QIcon icon;
     bool hidden = false;
     bool stretch = false;
     QHeaderView::ResizeMode mode = QHeaderView::Interactive;
@@ -332,6 +379,7 @@ bool applyNativeColumns(NSTableView* table, const QAbstractItemView* view, Nativ
     s.section = section;
     s.title = view->model()->headerData(section, Qt::Horizontal).toString();
     s.tip = view->model()->headerData(section, Qt::Horizontal, Qt::ToolTipRole).toString();
+    s.icon = headerIcon(view->model()->headerData(section, Qt::Horizontal, Qt::DecorationRole));
     s.hidden = header->isSectionHidden(section);
     s.mode = header->sectionResizeMode(section);
     s.stretch = s.mode == QHeaderView::Stretch || (header->stretchLastSection() && section == last);
@@ -341,6 +389,7 @@ bool applyNativeColumns(NSTableView* table, const QAbstractItemView* view, Nativ
     const int smallest = header->minimumSectionSize();
     s.minimum = std::max(16, s.stretch || s.size <= 0 ? smallest : std::min(smallest, s.size));
     for (const std::size_t part : {static_cast<std::size_t>(section), qHash(s.title), qHash(s.tip),
+                                   static_cast<std::size_t>(s.icon.cacheKey()),
                                    static_cast<std::size_t>(s.hidden), static_cast<std::size_t>(s.stretch),
                                    static_cast<std::size_t>(s.mode), static_cast<std::size_t>(s.size),
                                    static_cast<std::size_t>(s.minimum)}) {
@@ -361,6 +410,7 @@ bool applyNativeColumns(NSTableView* table, const QAbstractItemView* view, Nativ
     if (s.section < 0) { continue; }
     NSTableColumn* column = columns[i];
     column.title = s.title.toNSString();
+    if (!s.icon.isNull()) { column.headerCell.attributedStringValue = iconTitle(column.headerCell, s.title, s.icon); }
     column.headerToolTip = s.tip.isEmpty() ? nil : s.tip.toNSString();
     column.hidden = s.hidden;
     // The autoresizing flag marks a stretching column for fitNativeColumns;
@@ -496,6 +546,194 @@ NSTextField* editedCellField(NSTableView* table) {
   if (![edited isKindOfClass:NSTextField.class]) { return nil; }
   NSTextField* field = (NSTextField*)edited;
   return [field isDescendantOf:table] ? field : nil;
+}
+
+namespace {
+
+// The row header column's identifier: no model column has a negative one,
+// so whatever reads a column's section from its identifier skips it.
+NSString* const kRowHeaderColumn = @"-1";
+// The row labels' icons, at most.
+constexpr CGFloat kRowHeaderIcon = 16;
+
+NSFont* rowHeaderFont() { return [NSFont systemFontOfSize:NSFont.systemFontSize]; }
+
+CGFloat textWidth(const QString& text, NSFont* font) {
+  return [text.toNSString() sizeWithAttributes:@{NSFontAttributeName: font}].width;
+}
+
+// The font with digits of one width, in its size and weight.
+NSFont* tabularFont(NSFont* font) {
+  NSFont* base = font != nil ? font : [NSFont systemFontOfSize:NSFont.systemFontSize];
+  NSDictionary* traits = [base.fontDescriptor objectForKey:NSFontTraitsAttribute];
+  NSNumber* weight = traits[NSFontWeightTrait];
+  return [NSFont monospacedDigitSystemFontOfSize:base.pointSize
+                                          weight:weight != nil ? weight.doubleValue : NSFontWeightRegular];
+}
+
+} // namespace
+
+NSImage* nativeIconImage(const QIcon& icon, CGFloat points) {
+  if (icon.isNull() || points <= 0) { return nil; }
+  const int side = static_cast<int>(std::lround(points));
+  const QPixmap pixmap = icon.pixmap(QSize(side, side), 2.0);
+  if (pixmap.isNull()) { return nil; }
+  QByteArray data;
+  QBuffer buffer(&data);
+  buffer.open(QIODevice::WriteOnly);
+  pixmap.save(&buffer, "PNG");
+  NSImage* result = [[NSImage alloc] initWithData:[NSData dataWithBytes:data.constData()
+                                                                 length:static_cast<NSUInteger>(data.size())]];
+  const QSizeF logical = pixmap.deviceIndependentSize();
+  if (result != nil && logical.width() > 0 && logical.height() > 0) {
+    // Its own size, or down to the height asked for in its proportions.
+    const CGFloat scale = std::min<CGFloat>(1, points / logical.height());
+    result.size = NSMakeSize(logical.width() * scale, logical.height() * scale);
+  }
+  return result;
+}
+
+bool nativeRowHeaderShown(const QAbstractItemView* view) {
+  const auto* table = qobject_cast<const QTableView*>(view);
+  // Opted in: other tables' row numbers carry nothing. A header never shown
+  // yet is not hidden: only one hidden on purpose is.
+  return table != nullptr && table->model() != nullptr && view->property(NativeRowHeaderProperty).toBool() &&
+         !view->property("nativeSourceList").toBool() && table->verticalHeader()->isVisibleTo(table);
+}
+
+bool isNativeRowHeader(NSTableColumn* column) { return [column.identifier isEqualToString:kRowHeaderColumn]; }
+
+NSTableColumn* createNativeRowHeader() {
+  NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:kRowHeaderColumn];
+  column.title = @"";
+  column.width = 60;
+  column.minWidth = 16;
+  column.resizingMask = NSTableColumnUserResizingMask;
+  column.editable = NO;
+  return column;
+}
+
+NSView* nativeRowHeaderCell(const QAbstractItemView* view, int row) {
+  NSTableCellView* cell = [NSTableCellView new];
+  QAbstractItemModel* model = view->model();
+  if (model == nullptr) { return cell; }
+  NSTextField* field = [NSTextField labelWithString:model->headerData(row, Qt::Vertical).toString().toNSString()];
+  field.font = rowHeaderFont();
+  field.lineBreakMode = NSLineBreakByTruncatingTail;
+  field.toolTip = model->headerData(row, Qt::Vertical, Qt::ToolTipRole).toString().toNSString();
+  field.translatesAutoresizingMaskIntoConstraints = NO;
+  [field setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+  cell.textField = field;
+  [cell addSubview:field];
+  CGFloat inset = 4;
+  if (NSImage* picture = nativeIconImage(headerIcon(model->headerData(row, Qt::Vertical, Qt::DecorationRole)),
+                                         kRowHeaderIcon)) {
+    NSImageView* image = [NSImageView imageViewWithImage:picture];
+    image.translatesAutoresizingMaskIntoConstraints = NO;
+    cell.imageView = image;
+    [cell addSubview:image];
+    [NSLayoutConstraint activateConstraints:@[
+      [image.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:inset],
+      [image.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
+      [image.widthAnchor constraintEqualToConstant:picture.size.width],
+      [image.heightAnchor constraintEqualToConstant:picture.size.height],
+    ]];
+    inset += picture.size.width + 5;
+  }
+  [NSLayoutConstraint activateConstraints:@[
+    [field.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:inset],
+    [field.trailingAnchor constraintLessThanOrEqualToAnchor:cell.trailingAnchor constant:-4],
+    [field.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
+  ]];
+  QString identifier = model->headerData(row, Qt::Vertical, NativeControlIdentifierRole).toString();
+  if (identifier.isEmpty() && !view->objectName().isEmpty()) {
+    identifier = view->objectName() + QStringLiteral(".row.") + QString::number(row);
+  }
+  cell.accessibilityIdentifier = identifier.toNSString();
+  return cell;
+}
+
+void fitNativeRowHeader(NSTableView* table, const QAbstractItemView* view) {
+  NSTableColumn* column = [table tableColumnWithIdentifier:kRowHeaderColumn];
+  QAbstractItemModel* model = view->model();
+  if (column == nil || model == nullptr) { return; }
+  const auto* grid = qobject_cast<const QTableView*>(view);
+  NSFont* font = rowHeaderFont();
+  CGFloat width = 24;
+  for (int row = 0; row < model->rowCount(view->rootIndex()); ++row) {
+    if (grid != nullptr && grid->isRowHidden(row)) { continue; }
+    // The label's insets and the cell's margins.
+    CGFloat needed = std::ceil(textWidth(model->headerData(row, Qt::Vertical).toString(), font)) + 12;
+    if (!headerIcon(model->headerData(row, Qt::Vertical, Qt::DecorationRole)).isNull()) {
+      needed += kRowHeaderIcon + 5;
+    }
+    width = std::max(width, needed);
+  }
+  if (std::abs(column.width - width) >= 0.5) { column.width = width; }
+}
+
+std::map<int, NativeDecimalColumn> nativeDecimalColumns(const QAbstractItemView* view) {
+  std::map<int, NativeDecimalColumn> result;
+  QAbstractItemModel* model = view->model();
+  const QVariantList columns = view->property(NativeDecimalColumnsProperty).toList();
+  if (model == nullptr || columns.isEmpty()) { return result; }
+  NSFont* font = tabularFont(nil);
+  const auto width = [font](const QString& text) { return static_cast<int>(std::ceil(textWidth(text, font))); };
+  const int gap = width(QStringLiteral(" "));
+  for (const QVariant& value : columns) {
+    const int column = value.toInt();
+    std::vector<NumberWidths> numbers;
+    // All rows, as the shared delegate measures them: hidden ones too, so
+    // that the axis stays when a filter changes.
+    const auto rows = [&](auto&& self, const QModelIndex& parent) -> void {
+      for (int row = 0; row < model->rowCount(parent); ++row) {
+        if (const std::optional<NumberParts> parts = splitNumber(model->index(row, column, parent).data().toString())) {
+          numbers.push_back(NumberWidths{width(parts->integer), width(parts->fraction), width(parts->unit)});
+        }
+        self(self, model->index(row, 0, parent));
+      }
+    };
+    rows(rows, view->rootIndex());
+    if (numbers.empty()) { continue; }
+    const DecimalColumn layout = layoutDecimalColumn(numbers, gap);
+    result[column] = NativeDecimalColumn{static_cast<CGFloat>(layout.axis), static_cast<CGFloat>(layout.unitStart)};
+  }
+  return result;
+}
+
+NSAttributedString* nativeDecimalText(const QString& text, const NativeDecimalColumn& column, NSFont* font,
+                                      NSColor* color, NSLineBreakMode mode) {
+  const std::optional<NumberParts> parts = splitNumber(text);
+  if (!parts) { return nil; }
+  qsizetype start = 0;
+  while (start < text.size() && text.at(start).isSpace()) { ++start; }
+  if (text.mid(start, parts->integer.size()) != parts->integer) { return nil; }
+  NSFont* digits = tabularFont(font);
+  // The integer part ends on the axis.
+  const QString integer = text.left(start + parts->integer.size());
+  const CGFloat indent = std::max<CGFloat>(0, column.axis - textWidth(integer, digits));
+  NSMutableParagraphStyle* paragraph = [NSMutableParagraphStyle new];
+  paragraph.firstLineHeadIndent = indent;
+  paragraph.headIndent = indent;
+  paragraph.lineBreakMode = mode;
+  NSMutableDictionary* attributes =
+      [@{NSFontAttributeName: digits, NSParagraphStyleAttributeName: paragraph} mutableCopy];
+  if (color != nil) { attributes[NSForegroundColorAttributeName] = color; }
+  NSMutableAttributedString* result = [[NSMutableAttributedString alloc] initWithString:text.toNSString()
+                                                                             attributes:attributes];
+  if (!parts->unit.isEmpty()) {
+    qsizetype end = text.size();
+    while (end > 0 && text.at(end - 1).isSpace()) { --end; }
+    const qsizetype unit = end - parts->unit.size();
+    if (unit > 0 && text.mid(unit, parts->unit.size()) == parts->unit) {
+      // What precedes the unit widens or narrows, so that the units of all
+      // rows start on one line.
+      const CGFloat kern = column.unitStart - indent - textWidth(text.left(unit), digits);
+      [result addAttribute:NSKernAttributeName value:@(kern) range:NSMakeRange(static_cast<NSUInteger>(unit - 1), 1)];
+    }
+  }
+  return result;
 }
 
 } // namespace mitcad::mac

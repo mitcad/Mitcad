@@ -246,11 +246,24 @@ void iconSourceTests() {
   // dark theme at least 3:1 against its surface, and unchanged where they
   // already are.
   const QColor surface(0x2a, 0x2b, 0x2f);
+  // An error's, a success's and a warning's are the role table's
+  // (mitcad#1041): the error's red, the success's green, the warning's
+  // yellow.
+  CHECK(iconStatusRole(QColor(0xe0, 0x30, 0x20)) == mitcad::ColorRole::ErrorBorder);
+  CHECK(iconStatusRole(QColor(0x3a, 0xa3, 0x5b)) == mitcad::ColorRole::DropAllowed);
+  CHECK(iconStatusRole(QColor(0xf0, 0xb4, 0x29)) == mitcad::ColorRole::WarningBadge);
+  CHECK(!iconStatusRole(QColor(0x8a, 0x3c, 0xc8)).has_value());
   for (const QRgb status : statusSources) {
     const QColor source = QColor::fromRgb(status);
-    CHECK(rgbOf(iconRoleColour(IconRole::Status, false, false, source)) == status);
     const QColor dark = iconRoleColour(IconRole::Status, true, false, source);
     CHECK(contrast(dark, surface) >= 3.0);
+    if (const auto role = iconStatusRole(source)) {
+      CHECK(rgbOf(iconRoleColour(IconRole::Status, false, false, source)) ==
+            rgbOf(mitcad::themeColor(*role, false)));
+      CHECK(rgbOf(dark) == rgbOf(mitcad::themeColor(*role, true)));
+      continue;
+    }
+    CHECK(rgbOf(iconRoleColour(IconRole::Status, false, false, source)) == status);
     if (contrast(source, surface) >= 3.0) {
       CHECK(rgbOf(dark) == status);
     } else {

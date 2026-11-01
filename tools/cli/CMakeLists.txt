@@ -123,8 +123,10 @@ if(BUILD_TESTING)
   # Derives: linked copies of other components' bodies (mitcad#324).
   add_test(NAME cli.f6_derive COMMAND mitcad-cli run "${scripts}/f6_derive.json")
   # The BUILD tab (mitcad#375): profiles placed on sides and ends, bound,
-  # mitred and connected, from the synthetic sources of build_parts.mitcad.
-  foreach(script build_frame build_connect)
+  # mitred and connected, from the synthetic sources of build_parts.mitcad;
+  # build_corners: a connector with its nut at each corner of a frame
+  # (mitcad#1115).
+  foreach(script build_frame build_connect build_corners)
     add_test(NAME cli.${script} COMMAND mitcad-cli run "${scripts}/${script}.json"
                                           --open "${scripts}/build_parts.mitcad")
   endforeach()
@@ -235,7 +237,7 @@ if(BUILD_TESTING)
   add_test(NAME cli.measure
     COMMAND mitcad-cli measure "${scripts}/holed_block.json" "Body1/${top}" "Body1/${bottom}")
   set_tests_properties(cli.measure PROPERTIES PASS_REGULAR_EXPRESSION
-    "area 1386\\.902.*Distance: 20\\.000000 mm.*Angle: 180\\.000000 deg")
+    "area 1386\\.902.*Distance: 20\\.000000 mm.*Angle: 180\\.000000°")
   set(step "${CMAKE_CURRENT_BINARY_DIR}/holed-block.step")
   add_test(NAME cli.compare_step_file COMMAND mitcad-geomtool make holed-block "${step}")
   set_tests_properties(cli.compare_step_file PROPERTIES FIXTURES_SETUP cli_step)
@@ -1398,6 +1400,18 @@ if(BUILD_TESTING)
   add_test(NAME cli.dogbone COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/dogbone.json")
   if(WIN32)
     set_property(TEST cli.dogbone APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Fillets and chamfers that take a face away (mitcad#1106): a tray whose
+# walls are as high and thick as the chamfer of their inner top edges, built
+# at its size without a note, then rounded where the chamfer meets the
+# outer wall.
+if(BUILD_TESTING)
+  add_test(NAME cli.dressup_takes_face COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/dressup_takes_face.json")
+  if(WIN32)
+    set_property(TEST cli.dressup_takes_face APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
 endif()

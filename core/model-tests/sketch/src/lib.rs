@@ -32,3 +32,11 @@ mod sketch_symmetry_865_tests;
 mod sketch_mirror_876_tests;
 // Offsets' tangent corners where their curves touch (mitcad#890).
 mod sketch_offset_tangent_corners_890_tests;
+// Constraints a drawing tool adds automatically, only when safe (mitcad#1024).
+mod sketch_auto_1024_tests;
+// Geometry tied to a linked projection keeps its side when the source moves
+// (mitcad#1047).
+mod sketch_projection_side_1047_tests;
+// A new sketch on the XZ origin plane is seen from the front; existing
+// sketches keep their frames (mitcad#1060).
+mod sketch_xz_front_1060_tests;

@@ -25,29 +25,50 @@
 namespace mitcad::sketch {
 namespace {
 
-const QColor kDimensionColor(0x2a, 0x30, 0x3a);
-const QColor kDrivenColor(0x70, 0x76, 0x80);
+// The sketch's roles of the role table (mitcad#1041), one value for the 3D
+// view and this overlay; selection and hover as everywhere.
+QColor sketchRole(ColorRole role, bool dark = false) { return viewColor(role, dark); }
+
+const QColor kDimensionColor = sketchRole(ColorRole::SketchDimension);
+const QColor kDrivenColor = sketchRole(ColorRole::SketchDriven);
 // The lines of the two above on a dark background (their values stay dark
 // in their light boxes).
-const QColor kDimensionColorDark(0xd8, 0xde, 0xe8);
-const QColor kDrivenColorDark(0xa0, 0xa8, 0xb4);
+const QColor kDimensionColorDark = sketchRole(ColorRole::SketchDimension, true);
+const QColor kDrivenColorDark = sketchRole(ColorRole::SketchDriven, true);
 // Inactive constraints and dimensions (mitcad#721): pink, apart from the
 // conflict red and the driven grey; the lines lighter on a dark background.
-const QColor kInactiveColor(0xd6, 0x3c, 0x8f);
-const QColor kInactiveColorDark(0xf2, 0x9c, 0xc8);
-const QColor kInactiveFill(0xfd, 0xe4, 0xf1, 0xe6);
-const QColor kSelectedColor(0x1f, 0x7a, 0xff);
-const QColor kHoverColor(0x5a, 0xa8, 0xff);
-const QColor kPreviewColor(0x26, 0x6e, 0xe8);
-const QColor kConstructionPreview(0xd9, 0x80, 0x1a);
-const QColor kRemoveColor(0xe0, 0x30, 0x20);
-const QColor kGuideColor(0x80, 0x88, 0x96);
-const QColor kSnapColor(0xe0, 0x7b, 0x1a);
-const QColor kPickColor(0x2c, 0xa0, 0x2c);
+const QColor kInactiveColor = sketchRole(ColorRole::SketchInactive);
+const QColor kInactiveColorDark = sketchRole(ColorRole::SketchInactive, true);
+const QColor kInactiveFill = sketchRole(ColorRole::SketchInactiveFill);
+const QColor kSelectedColor = sketchRole(ColorRole::Select);
+const QColor kHoverColor = sketchRole(ColorRole::Hover);
+const QColor kPreviewColor = sketchRole(ColorRole::SketchPreview);
+const QColor kConstructionPreview = sketchRole(ColorRole::SketchConstruction);
+const QColor kRemoveColor = sketchRole(ColorRole::SketchTrim);
+const QColor kGuideColor = sketchRole(ColorRole::SketchGuide);
+const QColor kSnapColor = sketchRole(ColorRole::Handle);
+const QColor kPickColor = sketchRole(ColorRole::SketchPicked);
 // The sketch's axes and origin (mitcad#254): the origin axes' colour, the
 // lines across the view half transparent, light enough on any background.
-const QColor kAxisColor(0xd9, 0x73, 0x1a);
-const QColor kAxisLineColor(0xd9, 0x73, 0x1a, 0x90);
+const QColor kAxisColor = sketchRole(ColorRole::SketchAxis);
+const QColor kAxisLineColor = [] {
+  QColor line = sketchRole(ColorRole::SketchAxis);
+  line.setAlpha(0x90);
+  return line;
+}();
+// The ink and the boxes of labels over the view, and the solve status's
+// words: free (blue), fully constrained (dark), conflicting (the error's).
+const QColor kInk = sketchRole(ColorRole::ViewInk);
+const QColor kStatusFree = sketchRole(ColorRole::SketchPreview);
+const QColor kStatusFixed = sketchRole(ColorRole::Text);
+const QColor kStatusConflict = themeColor(ColorRole::ErrorText, false);
+
+// A label's light box, `alpha` opaque.
+QColor labelBox(int alpha) {
+  QColor box = sketchRole(ColorRole::Surface);
+  box.setAlpha(alpha);
+  return box;
+}
 // A sketch origin this near the design's (mm) is the design's.
 constexpr double kOriginTolerance = 1e-6;
 
@@ -1031,13 +1052,13 @@ void SketchOverlay::paintGlyph(QPainter& painter, const Glyph& glyph, bool selec
                                bool hovered) const {
   const QRectF r = glyph.rect;
   // An inactive constraint's (mitcad#721): pink, its frame dashed.
-  painter.setPen(glyph.inactive ? QPen(kInactiveColor, 1.0, Qt::DashLine) : QPen(QColor(0x8a, 0x90, 0x9a), 1.0));
+  painter.setPen(glyph.inactive ? QPen(kInactiveColor, 1.0, Qt::DashLine) : QPen(kGuideColor, 1.0));
   painter.setBrush(selected           ? kSelectedColor
                    : hovered          ? kHoverColor.lighter(150)
                    : glyph.inactive   ? kInactiveFill
-                                      : QColor(255, 255, 255, 225));
+                                      : labelBox(225));
   painter.drawRoundedRect(r, 2.5, 2.5);
-  const QColor ink = selected ? QColor(Qt::white) : glyph.inactive ? kInactiveColor : QColor(0x30, 0x36, 0x40);
+  const QColor ink = selected ? QColor(Qt::white) : glyph.inactive ? kInactiveColor : kInk;
   painter.setPen(QPen(ink, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
   painter.setBrush(Qt::NoBrush);
   const QPointF c = r.center();
@@ -1138,7 +1159,7 @@ void SketchOverlay::paintDimension(QPainter& painter, const DimensionShape& plac
     painter.drawPolygon(arrowHead(tip, towards));
   }
   painter.setPen(QPen(color.lighter(driven ? 130 : 160), 1.0));
-  painter.setBrush(inactive ? kInactiveFill : QColor(255, 255, 255, 235));
+  painter.setBrush(inactive ? kInactiveFill : labelBox(235));
   painter.drawRoundedRect(rect, 3, 3);
   painter.setPen(color);
   painter.drawText(rect, Qt::AlignCenter, shape.text);
@@ -1322,7 +1343,7 @@ void SketchOverlay::paintChain(QPainter& painter, const QStringList& anchors, co
     painter.drawEllipse(at, 3.0, 3.0);
     const QString number = QString::number(i + 1);
     const QRectF rect = textRect(at + QPointF(-12.0, 14.0), number);
-    painter.setBrush(QColor(255, 255, 255, 230));
+    painter.setBrush(labelBox(230));
     painter.drawRoundedRect(rect, 3, 3);
     painter.drawText(rect, Qt::AlignCenter, number);
   }
@@ -1379,7 +1400,7 @@ void SketchOverlay::paintPreview(QPainter& painter, const ToolPreview& preview) 
   for (const auto& [at, text] : preview.labels) {
     const QRectF rect = textRect(m_c.toScreen(at), text);
     painter.setPen(QPen(kPreviewColor, 1.0));
-    painter.setBrush(QColor(255, 255, 255, 230));
+    painter.setBrush(labelBox(230));
     painter.drawRoundedRect(rect, 3, 3);
     painter.drawText(rect, Qt::AlignCenter, text);
   }
@@ -1505,7 +1526,7 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
     QFont font = painter.font();
     font.setPixelSize(std::max(1, static_cast<int>(std::lround(t.height * perMm))));
     painter.setFont(font);
-    painter.setPen(QColor(0x1a, 0x55, 0xc0));
+    painter.setPen(kStatusFree);
     painter.save();
     painter.translate(at);
     painter.rotate(std::atan2(along.y(), along.x()) * 180.0 / kPi);
@@ -1621,10 +1642,10 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
   QString status = model.fullyConstrained()
                        ? tr("%1: fully constrained").arg(model.name)
                        : tr("%1: %n degree(s) of freedom", nullptr, model.dof).arg(model.name);
-  QColor statusColor = model.fullyConstrained() ? QColor(0x20, 0x20, 0x24) : QColor(0x1a, 0x55, 0xc0);
+  QColor statusColor = model.fullyConstrained() ? kStatusFixed : kStatusFree;
   if (!model.error.isEmpty() || !model.conflicts.empty()) {
     status = tr("%1: conflicting constraints").arg(model.name);
-    statusColor = kRemoveColor;
+    statusColor = kStatusConflict; // an error (mitcad#1041), not the trim's red
   }
   const QFontMetricsF metrics(font());
   // Above what floats over the bottom of the view (the timeline card).
@@ -1640,7 +1661,7 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
   const QRectF badge(badgeLeft, height() - bottomInset - metrics.height() - 14.0,
                      metrics.horizontalAdvance(status) + 14.0, metrics.height() + 6.0);
   painter.setPen(QPen(statusColor.lighter(160), 1.0));
-  painter.setBrush(QColor(255, 255, 255, 220));
+  painter.setBrush(labelBox(220));
   painter.drawRoundedRect(badge, 4, 4);
   painter.setPen(statusColor);
   painter.drawText(badge, Qt::AlignCenter, status);
@@ -1656,10 +1677,10 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
         14.0;
     const QRectF place(bottomInset > 0 ? badge.left() : badge.right() - pointerWidth,
                        badge.top() - badge.height() - 4.0, pointerWidth, badge.height());
-    painter.setPen(QPen(QColor(0xb0, 0xb6, 0xc0), 1.0));
-    painter.setBrush(QColor(255, 255, 255, 220));
+    painter.setPen(QPen(kGuideColor, 1.0));
+    painter.setBrush(labelBox(220));
     painter.drawRoundedRect(place, 4, 4);
-    painter.setPen(QColor(0x20, 0x20, 0x24));
+    painter.setPen(kStatusFixed);
     painter.drawText(place, Qt::AlignCenter, pointer);
   }
 }
@@ -1739,8 +1760,8 @@ void SketchOverlay::paintAxes(QPainter& painter) const {
   // The sketch origin, which drawing snaps to: ringed in the axes' colour.
   painter.setPen(QPen(kAxisColor, 1.5));
   painter.drawEllipse(origin, 7.0, 7.0);
-  painter.setPen(QPen(QColor(0x50, 0x56, 0x60), 1.2));
-  painter.setBrush(QColor(0xff, 0xd8, 0x80));
+  painter.setPen(QPen(kInk, 1.2));
+  painter.setBrush(sketchRole(ColorRole::DatumPlane));
   painter.drawEllipse(origin, 3.5, 3.5);
   painter.setBrush(Qt::NoBrush);
 

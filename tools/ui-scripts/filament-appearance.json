@@ -1,0 +1,13 @@
+[
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [-35, -10],
+    "length": 30, "width": 20, "height": 20, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [5, -10],
+    "length": 30, "width": 20, "height": 20, "operation": "new_body"}},
+  {"cmd": "create_appearance", "id": "bright_green", "name": "Bright Green",
+   "base_color": [0.0, 0.8, 0.2], "class": "fdm_plastic"},
+  {"cmd": "create_appearance", "id": "translucent_blue", "name": "Translucent Blue",
+   "base_color": [0.2, 0.4, 1.0], "transmission": 0.6},
+  {"cmd": "create_material", "id": "pla_basic", "name": "PLA Basic", "density": 1.24,
+   "class": "plastic", "appearances": ["bright_green", "plastic_black", "translucent_blue"],
+   "filament": {"filament_type": "PLA", "temperature": 215}}
+]

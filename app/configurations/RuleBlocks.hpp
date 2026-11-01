@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include <QJsonObject>
@@ -171,6 +172,20 @@ bool move(Rule& rule, const BlockPath& from, const Target& to);
 // Marks the block at the path and the blocks it is in as changed: they
 // print canonically from now on.
 void touch(Rule& rule, const BlockPath& path);
+// Where a rule is wrong (mitcad#1064). The block a place of the model's
+// `rule_problems` names (commands.md, "Where a rule problem is"): `when`;
+// an action of the then's or else's JSON (`then.0`, `else.1`) as the first
+// of its blocks, or as the block of its part (`then.0.max`); a value of it
+// (`then.0.values.2`: the third value of its allow only; `then.0.min`,
+// `then.0.require`: the value or condition in it); `then.0.option` as the
+// action. Nothing when the rule has no such block.
+std::optional<BlockPath> blockOfPlace(const Rule& rule, const QString& place);
+// What a rule that is not complete waits for, in the canvas's order: its
+// empty sockets, the place of a list's first value, a block without a part
+// it needs (an action without its option, a compare without its sides), and
+// an empty else's slot. Empty for a complete rule (a rule without a name
+// waits for no block).
+std::vector<BlockPath> emptyPlaces(const Rule& rule);
 // Whether the children of a block are a list that grows at its end (and,
 // or, is one of, allow only, exclude).
 bool growsAtEnd(BlockKind kind);

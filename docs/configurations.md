@@ -18,7 +18,7 @@ A configurable design stands for a family of products. The user picks a
 value for each **option** (Color, Length, Size), **rules** remove the
 values and combinations that are not allowed, and named **rows** are
 presets of option values. The same choice is made in the design itself,
-when a library part or another design is inserted, and in BUILD.
+when a library component or another design is inserted, and in BUILD.
 
 ```text
 Options   Color  ∈ {'Black'; 'White'; 'Red'}
@@ -62,7 +62,7 @@ Owner, 2026-10-27:
 7. **The editing UI is its own Configurations window** with the tabs
    Options, Rows and Rules. The options of the active configuration can
    also be chosen without opening the window.
-8. **Inserted components from outside** (library parts, BUILD parts,
+8. **Inserted components from outside** (library components, BUILD parts,
    linked designs) have options of their own. A design's own components
    follow the design's options.
 9. **Tables and configurations meet** in three places. An option's
@@ -74,6 +74,15 @@ Owner, 2026-10-27:
 11. **A bound option of an inserted component that breaks the
     component's rule** gives the component an error status. The parent's
     change is not refused.
+
+Owner, 2026-10-31 (mitcad#1044, GitHub mitcad/Mitcad#88):
+
+12. **The classic design table and the lookups live side by side.** A
+    closed table's rows are filled whole, from a CSV file, from a table of
+    the design or from a spreadsheet's block, with a column per parameter
+    the row sets ([Filling a closed table](#filling-a-closed-table-decision-12)).
+    The lookups of decision 9 stay the other way; the user guide leads
+    with the classic way.
 
 ## Options
 
@@ -276,7 +285,7 @@ expression of the **parent** design's parameters:
   `L` uses today, is the same field.
 - Options belong to the inserted **component**, not to an occurrence.
   All occurrences of the component share the options. A second
-  configuration is a second component, which the part picker makes, as
+  configuration is a second component, which the component picker makes, as
   it does for a second row today.
 - The source's rules hold. The cascade moves constant values of the
   component's options and reports the moves. A value bound to the parent
@@ -284,9 +293,9 @@ expression of the **parent** design's parameters:
   status that names the rule, as a failed feature does, and the parent's
   change itself is not refused.
 - The source's bindings follow the component's values, as they do in
-  the source itself (mitcad#873). A row of a library part can thus
+  the source itself (mitcad#873). A row of a library component can thus
   suppress a feature that another row uses.
-- The parts list and the designation take the combination's row, or
+- The bill of materials and the designation take the combination's row, or
   else the pattern with option values (see Rows).
 
 ## Tables and configurations (decision 9)
@@ -298,14 +307,54 @@ expression of the **parent** design's parameters:
 - **Generate rows**: a command makes one row per value of a key column
   (`Screws.Size`). The rows are named by the key, and each row sets the
   option to that key. Existing rows of the same name are updated, not
-  duplicated, in one undo step.
+  duplicated, in one undo step. The table's other columns can become the
+  closed table's parameter columns too (decision 12, below).
 - Tables and configurations otherwise stay separate, as in
   table-lookups.md: a row sets the key, and lookups do the rest.
+
+## Filling a closed table (decision 12)
+
+A closed table with parameter columns (mitcad#999) is the classic design
+table: a row per size, a column per parameter the row sets. Its rows are
+filled whole, not only cell by cell (mitcad#1044):
+
+1. **Add Option…** gives each row of the table the parameter's current
+   value for the new option, as Add Column… does, so a closed table with
+   rows takes it. A parameter column chosen as the option moves to the
+   options with its rows' values. One undo step.
+2. **Generate rows with columns** (`generate_configuration_rows` with
+   `columns`): the table's other columns become parameter columns, each
+   row set from its key's first row; parameters the design lacks are made
+   with the column's unit, at the value of the row the options choose now;
+   the table becomes closed. Rows of the same name are updated, columns
+   too. A parameter column chosen as the option moves to the options. The
+   dialog lists the other columns with checks, all checked.
+3. **Rows as CSV**: the query `configuration_rows_csv`, the preview
+   `configuration_rows_csv_preview` and the command
+   `import_configuration_rows_csv`, with the tables CSV reader (units in
+   the header, decimal commas, inferred columns, free names, sizes). The
+   first column is the key option, the others parameter columns (an
+   option's values when the parameter is an option); `Name`,
+   `Designation`, `Part Number` and `Supplier URL` fill the rows' fields.
+   Rows of the same name are updated, others added, rows not in the file
+   kept. A parameter column's formula cell is kept as its expression.
+   Import CSV… and Export CSV… in the Rows tab, the import with a preview.
+4. **Copy and paste in the Rows sheet**: range selection, Ctrl+C as
+   tab-separated text, Ctrl+V of a spreadsheet's block at the current cell
+   (rows added as needed), Delete empties; one undo step per paste, refused
+   cells red with the reason.
+5. In a closed table, a row without a value of an option takes the
+   option's current value when the table is filled, so that every row
+   keeps a value of every option.
+
+The lookups (decision 9) remain the other way: the user guide's Closed
+tables leads with filling from a CSV or a table, and names the lookups
+after it.
 
 ## UI
 
 **Configurations window** (`solid.configurations`, Configurations… beside
-Change Parameters in SOLID > MODIFY and the Edit menu; its own window,
+Edit Parameters in SOLID > MODIFY and the Edit menu; its own window,
 decision 7):
 
 - **Options**: the options in choice order (drag to reorder), and **Add
@@ -315,8 +364,9 @@ decision 7):
   such.
 - **Rows**: a sheet with one row per preset and a column per option,
   plus Designation, Part Number and Supplier URL. It has the Closed
-  check, Generate Rows from Table…, and Apply. A cell or row that breaks
-  a rule is marked with the rule's name in the tooltip.
+  check, Generate Rows from Table…, Import CSV… and Export CSV…, Copy and
+  Paste of blocks of cells (decision 12), and Apply. A cell or row that
+  breaks a rule is marked with the rule's name in the tooltip.
 - **Rules**: the list of rules (name, enabled check, a problem mark),
   the block editor for the selected rule, and Check Rules with its
   report.
@@ -332,6 +382,36 @@ decision 7):
     combination in table.
 - Blocks snap together by shape, as in Blockly. A value block only fits
   a value socket, and an action block only fits a then or else slot.
+- **Block colors** (mitcad#1041, the color roles of
+  [the UI conventions](ui-conventions.md#4-colors)): a category hue per
+  group that no status uses, the same on the light and the dark theme,
+  each at least 4.5:1 under its white text. The palette shows each
+  entry's swatch, so it is the legend.
+
+  | Group | Blocks | Role | Fill |
+  |---|---|---|---|
+  | Rule | the frame: when, always, then, else | `RuleFrame` | #7b55bd purple |
+  | Values: name | an option or a parameter | `RuleName` | #23766f teal |
+  | Values: literals | a number, a text, a table column | `RuleLiteral` | #904a7c plum |
+  | Values: formula | a formula | `RuleFormula` | #69707a gray |
+  | Logic | compare, and, or, not, is one of | `RuleLogic` | #3d6bc2 blue |
+  | Actions | allow only, exclude, min, max, step, require, forbid, combination in table | `RuleAction` | #8b4f3a terracotta |
+
+  A block's state never changes its fill. A rule that was refused
+  (error) or is not complete yet (warning) gets a 2 px outline in the
+  level's color and the level's badge on its frame, and its message in
+  the status line under the canvas. The block that is wrong gets a 2 px
+  outline on its edge in its problem's level color and the problem as its
+  tooltip (mitcad#1064): each place a rule that is not complete waits for
+  (warnings), the block a refusal names (an error), and what the design
+  finds wrong with a saved rule: an error such as a value that does not
+  evaluate or an option that is not one of the table's, or a warning for
+  a value outside its option's domain (`Green` in an allow only of Color,
+  whose values are Black and White), which refuses nothing. The model
+  names the place in the `configurations` query's `rule_problems`
+  (commands.md, "Where a rule problem is"). The frame keeps the rule's
+  overall level. The focus and a drop target are a 2 px outline with an
+  offset in the accent color, never a fill.
 - A rule is stored as JSON with its conditions as expression text. The
   editor turns each expression into blocks. Any part that has no block
   is shown as a formula block, edited in the Formula Editor. Every rule
@@ -348,22 +428,35 @@ decision 7):
 
 **Active configuration**:
 
-- A **Configuration** bar in the browser has a chooser per option: a
-  combo for a list, and a field and a slider for a range. A combo
-  chooses a row preset.
+- A **Configuration** panel has a chooser per option: a combo for a
+  list, and a field and a slider for a range, on one row with the
+  option's name. A combo chooses a row preset. Since mitcad#1020 it is a
+  left panel of its own (it was the top of the browser): Projects,
+  Configuration and Browser from the top, shown while the design has
+  options or rows, collapsible (the state kept), and sharing the left
+  column's height with the others, the boundaries between them dragged
+  (Floating, Docked and the AppKit frontend's Configuration card, see
+  `docs/native-macos-ui.md`).
 - The choosers show only allowed values (from the `configure` query),
   and a notice lists the cascade's moves.
-- In Change Parameters, options carry an option mark, and the rules'
+- In Edit Parameters, options carry an option mark, and the rules'
   restrictions are marked as limits are. The Tables tab of mitcad#667 is
-  in Change Parameters, as the design note proposes.
+  in Edit Parameters, as the design note proposes.
 
 **Bindings**:
 
-- The Appearances and Materials windows (Appearance… and Material… of a
-  body's context menu) have Varies with in their assignment panel: a table
-  from option values to appearances or materials, filled from the
-  window's own list (mitcad#861; it replaced mitcad#809's Follow Option
-  dialog).
+- The Material and Appearance tools (Solid › Modify; Appearance… and
+  Material ▸ More… of a body's context menu) bind their value with the
+  **fx** beside the picker button: Varies With an option, then a row per
+  value of the option with its material or appearance, the picker's
+  value for the rows left As above (the switch()'s default). OK writes
+  switch(Option; value; result; …; default) to every picked body or face
+  in one undo step (`set_body_material`, `set_body_appearance` or
+  `set_face_appearance` with `expression`). A body that follows such a
+  switch() opens the tool with its rows shown, also one written by the
+  windows' assignment panel of mitcad#861, which the tools replaced
+  (mitcad#1059); the Materials and Appearances windows only manage the
+  libraries. A component's default material does not follow options.
 - A feature's context menu has Suppress When….
 - A body's or an occurrence's context menu has Show When….
 - Each one is an expression field with the Formula Editor.
@@ -393,7 +486,7 @@ BUILD operations.
 A repaired cut length is also the reported preview length, including an
 automatic ray suggestion. The plan keeps moved constants in the shared
 cascade's expression form, as component-option edits do, so the saved
-component and parts list agree with its geometry. A geometry-bound length
+component and bill of materials agree with its geometry. A geometry-bound length
 uses the committed feature's exact target calculation, including Face,
 Centre or Through and the added gap. Planning measures the target, then
 rebuilds once at that measured length with its value pinned; a binding
@@ -409,7 +502,8 @@ that pin and never repairs the geometric measurement as a free constant.
 | `apply_configuration` | A row. Its answer adds `moves`. |
 | `configure` (query) | `values` (partial, optional; else the current values). For each option it answers `value`, `allowed` (a list, or `min`/`max`/`step`), `restricted_by` (rule names), `driven`, and `row` (the matching row or null). It also answers `problems`. Nothing changes. |
 | `check_rules` (query) | The report of Check Rules. |
-| `generate_configuration_rows` | `table`, `column`, `option`. Undo step `Generate Rows from Screws`. |
+| `generate_configuration_rows` | `table`, `column`, `option`, and `columns` (decision 12). Undo step `Generate Rows from Screws`. |
+| `configuration_rows_csv`, `configuration_rows_csv_preview` (queries), `import_configuration_rows_csv` | The rows as CSV (decision 12). Undo step `Import Configuration Rows`. |
 | `set_body_appearance`, `set_body_material`, `set_face_appearance`, `suppress_feature`, `set_body_visible`, `set_occurrence_visible` | Each takes `expression` instead of the value. A value set by hand removes the expression. |
 | `set_parameter`, `add_parameter` | `values` as a new limit. |
 | `insert_component`, `derived_part` | `parameters` (expressions of the parent's parameters). |
@@ -468,14 +562,14 @@ In dependency order. The #667 tickets are those of table-lookups.md.
    queries, renames, and the dependency checks. Size l. Independent.
 4. **Model: options of inserted components.** Covers `parameters` on
    library and linked inserts, the same field as `derived_part`
-   overrides, the component's error status, and the parts list and
+   overrides, the component's error status, and the bill of materials and
    designation. Size l. Needs 1 and 2.
 5. **Expressions: `Table.Column`, XLOOKUP, MATCH, INDEX** (mitcad#667
    ticket 1). Size m.
 6. **Model: tables in the design and the file** (mitcad#667 ticket 2).
    Size m. Needs 5.
 7. **Tables as CSV** (mitcad#667 ticket 3). Size s. Needs 6.
-8. **UI: the Tables tab in Change Parameters** (mitcad#667 ticket 4).
+8. **UI: the Tables tab in Edit Parameters** (mitcad#667 ticket 4).
    Size m. Needs 6.
 9. **Model: tables in configurations.** Covers option values from a
    column, the `in_table` action, and generating rows. Size m. Needs 2

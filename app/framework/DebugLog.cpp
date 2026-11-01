@@ -477,8 +477,8 @@ void DebugLog::writeHeader(const QString& continuedFrom) {
   }
   const QString graphics = fact(QStringLiteral("Graphics"));
   const QString design = fact(QStringLiteral("Design"));
-  writeText(QStringLiteral("Mitcad debug log"));
-  writeText(QStringLiteral("Version: Mitcad %1").arg(QCoreApplication::applicationVersion()));
+  writeText(QStringLiteral("MitCad debug log"));
+  writeText(QStringLiteral("Version: MitCad %1").arg(QCoreApplication::applicationVersion()));
   writeText(QStringLiteral("Build: %1, %2, Qt %3 (running %4)")
                 .arg(kind, QSysInfo::buildAbi(), QString::fromLatin1(QT_VERSION_STR), QString::fromLatin1(qVersion())));
   writeText(QStringLiteral("System: %1 (%2 %3, %4)")

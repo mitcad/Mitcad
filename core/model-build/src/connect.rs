@@ -3,9 +3,10 @@
 //! (`build_panel`) and removing BUILD parts (`build_remove`).
 //!
 //! A connector is placed with its first mate's frame on profile `a` (the
-//! one whose end meets), at the distance from that end its second mate's
-//! frame lies at, so its other arm lies on profile `b`; its fasteners
-//! (nut, screw, washer) go on their frames, and the holes it needs are
+//! one whose end meets), on a's side that faces into the frame, at the
+//! distance from b's face its second mate's frame lies at, so its other
+//! arm lies on profile `b`; its fasteners (nut, screw, washer) go on their
+//! frames, a nut into the slot, and the holes it needs are
 //! cut into the profiles' derived components. A panel in a frame is sized
 //! to the room between the profiles around the picked inner face plus the
 //! slots' depth less the clearance (bound lengths keep it so), or keeps a
@@ -134,6 +135,23 @@ pub struct Hole {
     pub component: ComponentUid,
     pub def: serde_json::Value,
 }
+
+/// The rule a connector is placed by (mitcad#1115).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectRule {
+    /// Before mitcad#1115: on a's side facing b's own axis at every junction
+    /// on b's side, from a's end; a nut flipped, a screw's head on the
+    /// profile's face. A connector or fastener without `rule` in its record
+    /// was placed so.
+    First,
+    /// Inside the frame at every corner, seated on b's face; a nut into the
+    /// slot, a screw's head on the connector's wall.
+    Current,
+}
+
+/// The `rule` in the record of a connector or fastener placed by the
+/// current rule ([`ConnectRule::Current`]).
+pub const CONNECT_RULE: u32 = 2;
 
 /// A connector planned: the piece, its fasteners, its holes and where it
 /// goes in the BUILD host's coordinates.
@@ -315,11 +333,339 @@ pub(crate) fn evaluated<K: Kernel>(
     Ok((evaluated.mounts, bounds))
 }
 
+/// A part's frames by name and its bodies, in its own coordinates.
+type FramesAndBodies<S> = (BTreeMap<String, Transform>, Vec<S>);
+
+/// The new part's evaluated frames and bodies in its own coordinates.
+pub(crate) fn evaluated_bodies<K: Kernel>(
+    doc: &Document<K>,
+    source: &SourceUse,
+    values: &[(String, f64)],
+) -> Result<FramesAndBodies<K::Shape>, ModelError> {
+    let label = source.def.label();
+    let state = source_state(&source.def, source.config.as_deref(), values)
+        .map_err(|e| refuse(format!("{label}: {e}")))?;
+    let evaluated =
+        evaluate_source(doc.kernel(), &state).map_err(|e| refuse(format!("{label}: {e}")))?;
+    Ok((evaluated.mounts, evaluated.bodies))
+}
+
+/// What a piece of a connector's hardware is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hardware {
+    Nut,
+    Screw,
+    Washer,
+}
+
+/// A piece of hardware on one of a connector's frames, read: what it is,
+/// whether it is held by its `slot` frame (a nut), and its box in its own
+/// coordinates.
+struct Held {
+    kind: Hardware,
+    in_slot: bool,
+    bounds: Option<BoundingBox>,
+}
+
+/// A connector's fastener as `build_upgrade` reads it: its component, its
+/// joint and the joint's definition, and what it is.
+type HeldJoint = (ComponentUid, FeatureUid, JointDef<ValueInput>, Held);
+
+/// How each piece of hardware on a connector's frame `frame` (in the
+/// connector's coordinates) is held there (mitcad#1115): its joint's flip
+/// and its own frame's override, and whether the connector's wall was
+/// found. A nut's slot frame points into the profile, as the connector's
+/// frame does (docs/libraries.md, "The direction of a frame's z axis"):
+/// the two agree, not flipped, so that the nut lies in the slot. A screw's
+/// or a washer's origin is its head's underside (a washer's face), z out
+/// of the head: flipped, its shank into the profile, and moved back by
+/// the connector's wall behind the frame, so that it bears on the wall's
+/// outer face; a screw also by the washer under it.
+fn holds<K: Kernel>(
+    doc: &Document<K>,
+    bodies: &[K::Shape],
+    frame: &Transform,
+    held: &[Held],
+) -> (Vec<(bool, Option<FrameOverride>)>, bool) {
+    let loose: Vec<&Held> = held.iter().filter(|h| !h.in_slot).collect();
+    // Under the head: beside the hole, at nine tenths of the head's radius.
+    let radius = loose
+        .iter()
+        .filter_map(|h| h.bounds)
+        .map(|b| {
+            [b.min[0], b.max[0], b.min[1], b.max[1]]
+                .into_iter()
+                .fold(0.0_f64, |r, v| r.max(v.abs()))
+        })
+        .fold(0.0_f64, f64::max);
+    let reach = bounds_of(doc.kernel(), bodies).map_or(0.0, |b| norm(sub(b.max, b.min)));
+    let wall = if loose.is_empty() {
+        None
+    } else {
+        wall_behind(doc, bodies, frame, 0.9 * radius, reach)
+    };
+    let washer = loose
+        .iter()
+        .find(|h| h.kind == Hardware::Washer)
+        .and_then(|h| h.bounds)
+        .map_or(0.0, |b| b.max[2] - b.min[2]);
+    let out = held
+        .iter()
+        .map(|h| {
+            if h.in_slot {
+                return (false, None);
+            }
+            let back = wall.unwrap_or(0.0)
+                + if h.kind == Hardware::Screw {
+                    washer
+                } else {
+                    0.0
+                };
+            let shift = (back > 1e-9).then_some(FrameOverride {
+                shift: Some([0.0, 0.0, -back]),
+                ..FrameOverride::default()
+            });
+            (true, shift)
+        })
+        .collect();
+    (out, wall.is_some() || loose.is_empty())
+}
+
+/// How thick the connector's wall is behind its frame `frame` (in its
+/// coordinates), along the frame's -z, away from the profile (mitcad#1115):
+/// of segments from eight points `radius` around the frame's origin (beside
+/// a hole on its axis), each from half a millimetre in front of the
+/// frame's plane ([`Kernel::segment_crossings`]: the `.f3d` import's,
+/// mitcad#68), those that enter the material at the frame's plane, the
+/// nearest point where one leaves it. None when none enters there.
+fn wall_behind<K: Kernel>(
+    doc: &Document<K>,
+    bodies: &[K::Shape],
+    frame: &Transform,
+    radius: f64,
+    reach: f64,
+) -> Option<f64> {
+    const LEAD: f64 = 0.5;
+    let [origin, x, y, z] = parts(frame);
+    let back = scale(z, -1.0);
+    let span = LEAD + reach;
+    let mut wall: Option<f64> = None;
+    for k in 0..8 {
+        let turn = f64::from(k) * PI / 4.0;
+        let start = add(
+            origin,
+            add(scale(x, radius * turn.cos()), scale(y, radius * turn.sin())),
+        );
+        let from = sub(start, scale(back, LEAD));
+        let to = add(start, scale(back, reach));
+        for body in bodies {
+            let Ok(hits) = doc.kernel().segment_crossings(body, from, to) else {
+                continue;
+            };
+            // Distances from the frame's plane, along -z.
+            let along: Vec<(f64, bool)> = hits
+                .iter()
+                .map(|(t, enters)| (t * span - LEAD, *enters))
+                .collect();
+            if let [(enter, true), (leave, false), ..] = along.as_slice()
+                && enter.abs() <= 1e-3
+            {
+                wall = Some(wall.map_or(*leave, |w| w.min(*leave)));
+            }
+        }
+    }
+    wall
+}
+
+/// The own frame a fastener source is held by, and whether it is its
+/// `slot` frame (a nut).
+fn own_hold(used: &SourceUse, mounts: &BTreeMap<String, Transform>) -> (Option<String>, bool) {
+    let own = crate::place::own_frame(&used.meta, mounts, &["slot", "hole", "face"])
+        .or_else(|| mounts.keys().next().cloned());
+    let in_slot = own.as_deref().is_some_and(|name| {
+        used.meta
+            .frames
+            .iter()
+            .any(|f| f.name == name && f.kind == "slot")
+    });
+    (own, in_slot)
+}
+
+/// A connector's fasteners on its frames (`placement` the connector's, for
+/// the frames' places), held as [`holds`] says; what cannot be read goes
+/// into `warnings`.
+#[allow(clippy::type_complexity)]
+fn fastener_pieces<K: Kernel>(
+    doc: &Document<K>,
+    source: &SourceUse,
+    mounts: &BTreeMap<String, Transform>,
+    bodies: &[K::Shape],
+    placement: &Transform,
+    warnings: &mut Vec<String>,
+) -> Result<(Vec<Piece>, Vec<(String, Transform)>), ModelError> {
+    let label = source.def.label();
+    let connector = source.meta.connector.clone().unwrap_or_default();
+    let mut pieces = Vec::new();
+    let mut frames = Vec::new();
+    for fastener in &connector.fasteners {
+        let Some(frame) = mounts.get(&fastener.frame) else {
+            warnings.push(format!("{label} has no frame {}", fastener.frame));
+            continue;
+        };
+        frames.push((fastener.frame.clone(), placement.after(frame)));
+        // All of the frame's hardware read first: the washer's thickness
+        // and the head's size go into the seats.
+        let mut read = Vec::new();
+        for (kind, reference) in [
+            (Hardware::Nut, &fastener.nut),
+            (Hardware::Screw, &fastener.screw),
+            (Hardware::Washer, &fastener.washer),
+        ] {
+            let Some(reference) = reference else {
+                continue;
+            };
+            let part = request_of(reference, &source.def);
+            let used = match doc.fastener_source(&part) {
+                Ok(used) => used,
+                Err(e) => {
+                    warnings.push(format!("fastener {} is left out: {e}", reference.component));
+                    continue;
+                }
+            };
+            let (fmounts, fbounds) = evaluated(doc, &used, &[])?;
+            let (own, in_slot) = own_hold(&used, &fmounts);
+            read.push((
+                Held {
+                    kind,
+                    in_slot,
+                    bounds: fbounds,
+                },
+                used,
+                own,
+            ));
+        }
+        let held: Vec<Held> = read
+            .iter()
+            .map(|(h, _, _)| Held {
+                kind: h.kind,
+                in_slot: h.in_slot,
+                bounds: h.bounds,
+            })
+            .collect();
+        let (ways, found) = holds(doc, bodies, frame, &held);
+        if !found {
+            warnings.push(format!(
+                "{label}: no wall found behind {}; the screw's head is at the profile's face",
+                fastener.frame
+            ));
+        }
+        for ((_, used, own), (flip, own_override)) in read.into_iter().zip(ways) {
+            let flabel = used.def.label();
+            let designation =
+                crate::parts::designation(&used.def, used.config.as_deref(), &BTreeMap::new());
+            pieces.push(Piece {
+                name: if designation.is_empty() {
+                    flabel
+                } else {
+                    designation
+                },
+                source: used,
+                values: BTreeMap::new(),
+                kind: JointKind::Rigid,
+                slide: SlideAxis::Z,
+                own,
+                own_override,
+                // On the connector, once it exists (its occurrence and part
+                // fill in when it is made).
+                b: JointOrigin {
+                    occurrence: OccurrencePath::default(),
+                    geometry: GeomRef::Mount {
+                        feature: mitcad_model::ids::FeatureUid(0),
+                        name: fastener.frame.clone(),
+                    },
+                    frame_override: None,
+                },
+                flip,
+                angle: 0.0,
+                slide_value: None,
+                record: BuildRecord {
+                    role: BuildRole::Fastener,
+                    rule: Some(CONNECT_RULE),
+                    ..BuildRecord::default()
+                },
+            });
+        }
+    }
+    Ok((pieces, frames))
+}
+
+/// Whether two placements are the same within a nanometre.
+fn same_place(a: &Transform, b: &Transform) -> bool {
+    parts(a)
+        .iter()
+        .zip(parts(b).iter())
+        .all(|(p, q)| (0..3).all(|i| (p[i] - q[i]).abs() <= 1e-6))
+}
+
+/// A source the design holds, as BUILD uses it; one without `build` (a
+/// screw) as a fastener.
+fn held_source<K: Kernel>(
+    doc: &Document<K>,
+    id: crate::SourceId,
+    config: Option<String>,
+) -> Option<SourceUse> {
+    let part = PartInput {
+        source: Some(id),
+        config: config.clone(),
+        ..PartInput::default()
+    };
+    if let Ok(used) = doc.source_use(&part) {
+        return Some(used);
+    }
+    let def = doc.state().library_sources.get(id).cloned()?;
+    Some(SourceUse {
+        meta: BuildMeta {
+            role: BuildRole::Fastener,
+            ..BuildMeta::default()
+        },
+        def,
+        new: false,
+        config,
+    })
+}
+
+/// A joint's definition in command form.
+fn joint_input<K: Kernel>(doc: &Document<K>, joint: FeatureUid) -> Option<JointDef<ValueInput>> {
+    let entry = doc.feature(joint)?;
+    match crate::parts::as_input(&entry.def, doc.parameters()) {
+        FeatureDef::Joint(def) => Some(def),
+        _ => None,
+    }
+}
+
 /// The document's BUILD methods of this block, as an extension trait
 /// (mitcad#777): BUILD planning lives in a crate above the model.
 pub trait ConnectBuild<K: Kernel> {
     /// Plans a connector at a junction.
-    fn plan_connect(&self, input: &ConnectInput) -> Result<ConnectPlan, ModelError>;
+    fn plan_connect(&self, input: &ConnectInput) -> Result<ConnectPlan, ModelError> {
+        self.plan_connect_by(input, ConnectRule::Current)
+    }
+
+    /// Plans a connector at a junction by a placing rule (mitcad#1115):
+    /// the current one, or the first one, to tell a connector it placed.
+    fn plan_connect_by(
+        &self,
+        input: &ConnectInput,
+        rule: ConnectRule,
+    ) -> Result<ConnectPlan, ModelError>;
+
+    /// Places the connectors and their fasteners that the first placing
+    /// rule placed by the current one (mitcad#1115), in one undo step: a
+    /// connector only where it is still where that rule put it (one moved
+    /// since stays), a nut or a screw only while its joint is as that rule
+    /// made it. Returns the components placed again; nothing changes (no
+    /// recompute, no undo step) when there are none.
+    fn build_upgrade(&mut self) -> Result<Vec<ComponentUid>, ModelError>;
 
     /// Places a connector at a junction (`build_connect`).
     fn build_connect(&mut self, input: &ConnectInput) -> Result<Placed, ModelError>;
@@ -340,7 +686,11 @@ pub trait ConnectBuild<K: Kernel> {
 }
 
 impl<K: Kernel> ConnectBuild<K> for Document<K> {
-    fn plan_connect(&self, input: &ConnectInput) -> Result<ConnectPlan, ModelError> {
+    fn plan_connect_by(
+        &self,
+        input: &ConnectInput,
+        rule: ConnectRule,
+    ) -> Result<ConnectPlan, ModelError> {
         let junction = self
             .build_junctions(None)
             .into_iter()
@@ -397,7 +747,7 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
                 )));
             }
         }
-        let (mounts, _bounds) = evaluated(self, &source, &[])?;
+        let (mounts, bodies) = evaluated_bodies(self, &source, &[])?;
         // The mates: the first on a, the second (or one named for b) on b.
         let mate_a = connector
             .mates
@@ -425,7 +775,13 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
         // a's frame of the mate's kind facing the inner corner: the one
         // turned most towards b.
         let world_a = self.host_placement().after(&self.path_transform(&a_path));
-        let b_axis = junction.b_axis;
+        // The first rule took b's own axis on b's side, wherever along b
+        // the junction was (mitcad#1115).
+        let on_side = !matches!(junction.b.at.as_str(), "end_a" | "end_b");
+        let b_axis = match rule {
+            ConnectRule::First if on_side => world_of(self, &b).apply_vector([0.0, 0.0, 1.0]),
+            _ => junction.b_axis,
+        };
         let candidates: Vec<(&String, &Transform)> = a
             .mounts
             .iter()
@@ -454,16 +810,36 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
             },
             None => (0.0, false),
         };
+        // Where b's face towards a crosses a's slot, from a's end A: the
+        // connector's corner seats there (mitcad#1115). On b's side that is
+        // a's end itself; where two mitred ends meet, b's inner face lies
+        // a section further in. Only along a slot: its x runs along a.
+        let slot = world_a.after(&a_frame);
+        let along = x_axis(&slot);
+        let towards_b = if a_end_b { along } else { scale(along, -1.0) };
+        let seat = if rule == ConnectRule::Current && a.frame_kind(&a_frame_name) == "slot" {
+            face_along(self, &b, slot.translation, along, towards_b)
+        } else {
+            None
+        };
         let (value, tx) = match (a_end_b, a.length) {
-            (true, Some((id, l))) => (
-                ValueInput::Name(format!(
-                    "{} - {}",
-                    self.parameters().name(id),
-                    mitcad_model::internal::build::round(h)
-                )),
-                l - h,
-            ),
-            _ => (ValueInput::Number(h), h),
+            (true, Some((id, l))) => {
+                let back = seat.map_or(0.0, |s| snap(l - s));
+                let d = h + back;
+                (
+                    ValueInput::Name(format!(
+                        "{} - {}",
+                        self.parameters().name(id),
+                        mitcad_model::internal::build::round(d)
+                    )),
+                    l - d,
+                )
+            }
+            (true, None) => (ValueInput::Number(h), h),
+            (false, _) => {
+                let d = h + seat.map_or(0.0, snap);
+                (ValueInput::Number(d), d)
+            }
         };
         let angle = if turn { PI } else { 0.0 };
         let frame_b = self
@@ -497,76 +873,17 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
             record: BuildRecord {
                 role: BuildRole::Connector,
                 junction: Some(junction.id.clone()),
+                rule: Some(CONNECT_RULE),
                 ..BuildRecord::default()
             },
         };
         let mut warnings = Vec::new();
         // Its fasteners on their frames.
-        let mut fasteners = Vec::new();
-        let mut fastener_frames = Vec::new();
-        if input.fasteners {
-            for fastener in &connector.fasteners {
-                let Some(frame) = mounts.get(&fastener.frame) else {
-                    warnings.push(format!("{label} has no frame {}", fastener.frame));
-                    continue;
-                };
-                fastener_frames.push((fastener.frame.clone(), placement.after(frame)));
-                for reference in [&fastener.nut, &fastener.screw, &fastener.washer]
-                    .into_iter()
-                    .flatten()
-                {
-                    let part = request_of(reference, &source.def);
-                    let used = match self.fastener_source(&part) {
-                        Ok(used) => used,
-                        Err(e) => {
-                            warnings
-                                .push(format!("fastener {} is left out: {e}", reference.component));
-                            continue;
-                        }
-                    };
-                    let (fmounts, _) = evaluated(self, &used, &[])?;
-                    let own =
-                        crate::place::own_frame(&used.meta, &fmounts, &["slot", "hole", "face"])
-                            .or_else(|| fmounts.keys().next().cloned());
-                    let flabel = used.def.label();
-                    let designation = crate::parts::designation(
-                        &used.def,
-                        used.config.as_deref(),
-                        &BTreeMap::new(),
-                    );
-                    fasteners.push(Piece {
-                        name: if designation.is_empty() {
-                            flabel
-                        } else {
-                            designation
-                        },
-                        source: used,
-                        values: BTreeMap::new(),
-                        kind: JointKind::Rigid,
-                        slide: SlideAxis::Z,
-                        own,
-                        own_override: None,
-                        // On the connector, once it exists (its occurrence
-                        // and part fill in when it is made).
-                        b: JointOrigin {
-                            occurrence: OccurrencePath::default(),
-                            geometry: GeomRef::Mount {
-                                feature: mitcad_model::ids::FeatureUid(0),
-                                name: fastener.frame.clone(),
-                            },
-                            frame_override: None,
-                        },
-                        flip: true,
-                        angle: 0.0,
-                        slide_value: None,
-                        record: BuildRecord {
-                            role: BuildRole::Fastener,
-                            ..BuildRecord::default()
-                        },
-                    });
-                }
-            }
-        }
+        let (fasteners, fastener_frames) = if input.fasteners {
+            fastener_pieces(self, &source, &mounts, &bodies, &placement, &mut warnings)?
+        } else {
+            (Vec::new(), Vec::new())
+        };
         // The holes it needs.
         let mut holes = Vec::new();
         if input.machining {
@@ -694,6 +1011,199 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
                 },
             ))
         })
+    }
+
+    fn build_upgrade(&mut self) -> Result<Vec<ComponentUid>, ModelError> {
+        // A connector or a connector's fastener without a rule in its
+        // record was placed by the first rule.
+        let first: Vec<(ComponentUid, BuildRecord)> = self
+            .assembly()
+            .components
+            .iter()
+            .filter_map(|c| Some((c.uid, c.build.clone()?)))
+            .filter(|(_, r)| {
+                r.rule.is_none()
+                    && ((r.role == BuildRole::Connector && r.junction.is_some())
+                        || (r.role == BuildRole::Fastener && r.added_by.is_some()))
+            })
+            .collect();
+        if first.is_empty() {
+            return Ok(Vec::new());
+        }
+        let connectors: BTreeSet<ComponentUid> = first
+            .iter()
+            .filter_map(|(c, r)| match r.role {
+                BuildRole::Connector => Some(*c),
+                _ => r.added_by,
+            })
+            .collect();
+        // Where they are needs the geometry.
+        self.recompute();
+        let host = self.host_placement();
+        let mut edits: Vec<(FeatureUid, JointDef<ValueInput>)> = Vec::new();
+        let mut moved = Vec::new();
+        let mut marked = Vec::new();
+        for connector in connectors {
+            let Some(info) = self.part_info(connector) else {
+                continue;
+            };
+            let Some(id) = info.record.source else {
+                continue;
+            };
+            let config = info.def.as_ref().and_then(|d| d.config.clone());
+            let Some(source) = held_source(self, id, config.clone()) else {
+                continue;
+            };
+            // Slot connectors only: timber's are placed by their own rules.
+            if source.meta.role != BuildRole::Connector
+                || source.meta.wood.is_some()
+                || source.meta.connector.as_ref().is_some_and(|c| c.is_outer())
+            {
+                continue;
+            }
+            // The connector, while it is where the first rule put it.
+            if info.record.rule.is_none()
+                && let (Some(junction), Some(joint)) = (&info.record.junction, info.record.joint)
+            {
+                let input = ConnectInput {
+                    junction: junction.clone(),
+                    part: PartInput {
+                        source: Some(id),
+                        config: config.clone(),
+                        ..PartInput::default()
+                    },
+                    fasteners: false,
+                    machining: false,
+                    ..ConnectInput::default()
+                };
+                let at = world_of(self, &info);
+                if let (Ok(old), Ok(new)) = (
+                    self.plan_connect_by(&input, ConnectRule::First),
+                    self.plan_connect_by(&input, ConnectRule::Current),
+                ) && same_place(&at, &host.after(&old.placement))
+                {
+                    if !same_place(&at, &host.after(&new.placement))
+                        && let Some(mut def) = joint_input(self, joint)
+                    {
+                        let piece = &new.connector;
+                        def.b = piece.b.clone();
+                        def.flip = piece.flip;
+                        def.angle =
+                            (piece.angle.abs() > 1e-12).then_some(ValueInput::Number(piece.angle));
+                        if let Some((motion, value)) = &piece.slide_value {
+                            def.position.insert(*motion, value.clone());
+                        }
+                        edits.push((joint, def));
+                        moved.push(connector);
+                    }
+                    marked.push(connector);
+                }
+            }
+            // Its fasteners, while their joints are as the first rule made
+            // them (flipped, held by their own frames as they are).
+            let Ok((mounts, bodies)) = evaluated_bodies(self, &source, &[]) else {
+                continue;
+            };
+            let washer_of = |frame: &str| -> Option<String> {
+                let meta = source.meta.connector.as_ref()?;
+                let f = meta.fasteners.iter().find(|f| f.frame == frame)?;
+                Some(f.washer.as_ref()?.component.clone())
+            };
+            // Each frame's hardware: (component, joint, its definition,
+            // what it is).
+            let mut by_frame: BTreeMap<String, Vec<HeldJoint>> = BTreeMap::new();
+            for (c, r) in first.iter().filter(|(_, r)| r.added_by == Some(connector)) {
+                let (Some(joint), Some(fid)) = (r.joint, r.source) else {
+                    continue;
+                };
+                let Some(def) = joint_input(self, joint) else {
+                    continue;
+                };
+                if !def.flip || def.a.frame_override.is_some() {
+                    continue;
+                }
+                let GeomRef::Mount { name: frame, .. } = &def.b.geometry else {
+                    continue;
+                };
+                let fconfig = self
+                    .part_info(*c)
+                    .and_then(|i| i.def.and_then(|d| d.config));
+                let Some(used) = held_source(self, fid, fconfig) else {
+                    continue;
+                };
+                let Ok((_, fbounds)) = evaluated(self, &used, &[]) else {
+                    continue;
+                };
+                let in_slot = match &def.a.geometry {
+                    GeomRef::Mount { name, .. } => used
+                        .meta
+                        .frames
+                        .iter()
+                        .any(|f| f.name == *name && f.kind == "slot"),
+                    _ => false,
+                };
+                let kind = if in_slot {
+                    Hardware::Nut
+                } else if washer_of(frame).is_some_and(|w| w == used.def.library.component) {
+                    Hardware::Washer
+                } else {
+                    Hardware::Screw
+                };
+                by_frame.entry(frame.clone()).or_default().push((
+                    *c,
+                    joint,
+                    def.clone(),
+                    Held {
+                        kind,
+                        in_slot,
+                        bounds: fbounds,
+                    },
+                ));
+            }
+            for (frame, hardware) in by_frame {
+                let Some(at) = mounts.get(&frame) else {
+                    continue;
+                };
+                let held: Vec<Held> = hardware
+                    .iter()
+                    .map(|(_, _, _, h)| Held {
+                        kind: h.kind,
+                        in_slot: h.in_slot,
+                        bounds: h.bounds,
+                    })
+                    .collect();
+                let (ways, _) = holds(self, &bodies, at, &held);
+                for ((c, joint, mut def, _), (flip, own_override)) in hardware.into_iter().zip(ways)
+                {
+                    if def.flip != flip || def.a.frame_override != own_override {
+                        def.flip = flip;
+                        def.a.frame_override = own_override;
+                        edits.push((joint, def));
+                        moved.push(c);
+                    }
+                    marked.push(c);
+                }
+            }
+        }
+        if edits.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.apply(|state| {
+            for (joint, def) in &edits {
+                state.edit_feature(*joint, &FeatureDef::Joint(def.clone()))?;
+            }
+            for c in &marked {
+                if let Some(record) = state
+                    .assembly
+                    .component_mut(*c)
+                    .and_then(|c| c.build.as_mut())
+                {
+                    record.rule = Some(CONNECT_RULE);
+                }
+            }
+            Ok(("Place connectors by the current rule".to_owned(), ()))
+        })?;
+        Ok(moved)
     }
 
     fn plan_panel(&self, input: &PanelInput) -> Result<PanelPlan, ModelError> {
@@ -1246,6 +1756,35 @@ impl<K: Kernel> ConnectCrateOps<K> for Document<K> {
                 let (Some(library), Some(component)) = (&part.library, &part.component) else {
                     return Err(refuse("a fastener names its library and component"));
                 };
+                // A source the design holds already, at that version: no
+                // library is read (offline, or mitcad-cli without fetched
+                // libraries; mitcad#1115).
+                if let Some(rev) = &part.rev
+                    && let Some(id) = self.state().library_sources.find(library, component, rev)
+                {
+                    let held = PartInput {
+                        source: Some(id),
+                        ..part.clone()
+                    };
+                    if let Ok(source) = self.source_use(&held) {
+                        return Ok(source);
+                    }
+                    let def = self
+                        .state()
+                        .library_sources
+                        .get(id)
+                        .cloned()
+                        .expect("found");
+                    return Ok(SourceUse {
+                        meta: BuildMeta {
+                            role: BuildRole::Fastener,
+                            ..BuildMeta::default()
+                        },
+                        def,
+                        new: false,
+                        config: part.config.clone(),
+                    });
+                }
                 let resolver = self
                     .link_resolver()
                     .ok_or_else(|| refuse("no component libraries are set up here"))?;
@@ -1529,6 +2068,56 @@ impl<K: Kernel> SetMembersBuild<K> for Document<K> {
 pub(crate) fn world_of<K: Kernel>(doc: &Document<K>, part: &PartInfo) -> Transform {
     let path = doc.placed_in_host(part.component).unwrap_or_default();
     doc.host_placement().after(&doc.path_transform(&path))
+}
+
+/// How far along a line (from `origin` along the unit `along`) the side
+/// face of `b` that faces back along it lies (mitcad#1115): of b's sides
+/// (not its ends), the one whose outward normal points most against
+/// `towards`, the way from the line into b. The sides are those of its
+/// section, centred on its axis as the profile layout has it, else of its
+/// body's box (a cut end can widen the box of a body that is not exact).
+/// None when no side faces back or the line runs along that face.
+fn face_along<K: Kernel>(
+    doc: &Document<K>,
+    b: &PartInfo,
+    origin: V3,
+    along: V3,
+    towards: V3,
+) -> Option<f64> {
+    let bounds = match b.meta.section_size() {
+        Some([w, t]) => BoundingBox {
+            min: [-w / 2.0, -t / 2.0, 0.0],
+            max: [w / 2.0, t / 2.0, 0.0],
+        },
+        None => doc.part_bounds(b.component)?,
+    };
+    let world = world_of(doc, b);
+    let mut best: Option<(f64, V3, V3)> = None;
+    for k in [0, 1] {
+        for (sign, value) in [(1.0, bounds.max[k]), (-1.0, bounds.min[k])] {
+            let mut normal = [0.0; 3];
+            normal[k] = sign;
+            let mut point = [0.0; 3];
+            point[k] = value;
+            let n = world.apply_vector(normal);
+            let facing = -dot(n, towards);
+            if best.is_none_or(|(f, _, _)| facing > f) {
+                best = Some((facing, world.apply_point(point), n));
+            }
+        }
+    }
+    let (facing, point, n) = best?;
+    let across = dot(along, n);
+    if facing < 0.5 || across.abs() < 1e-6 {
+        return None;
+    }
+    Some(dot(sub(point, origin), n) / across)
+}
+
+/// A distance within a nanometre of zero is zero: a value or an expression
+/// of a connector's place stays as before where nothing changes it.
+fn snap(value: f64) -> f64 {
+    if value.abs() < 1e-6 { 0.0 } else { value }
 }
 
 /// The end frame of a profile nearest the junction.

@@ -300,6 +300,7 @@ ui_expect_volume "New body Body5 (F13.b0): volume \([0-9.]*\) mm3" 28000 "the fr
 
 echo "--- Coil: placed with a click on XY"
 ui_step "coil (search)"                    ui_command "Coil"
+ui_show_origin
 ui_step "click XY"                         ui_click_logged "Datum xy"
 ui_expect_log "Coil Place On: 1 plane [plane xy]" "XY picked"
 ui_expect_log "Place Coil: face plane xy, " "the centre where the click was, from the origin axes"
@@ -390,7 +391,8 @@ ui_expect_new "Command Helix started" "helix started"
 ui_expect_new "Panel Helix choices: type=revolutions_and_pitch, hand=right, operation=new_body" \
   "revolutions and pitch, right-handed, a new body"
 ui_expect_new "Helix Profiles: 1 profile [profile $RECT of F3]" "the newest profile taken"
-ui_expect_new "Datum z at" "the axis input takes the origin's axes"
+# The origin's axes in the view as its light bulb shows them (mitcad#1030).
+ui_show_origin
 ui_step "pick the Z axis"                  ui_click_logged "Datum z"
 ui_expect_new "Helix Axis: 1 axis [axis z]" "Z picked"
 ui_expect_new "Manipulator Helix pitch at" "the pitch has an arrow"

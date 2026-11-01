@@ -97,7 +97,7 @@ PolicyDialog::PolicyDialog(Query query, const QString& component, QWidget* paren
       {"sketches", tr("Contents"), tr("&Sketches"),
        tr("Sketches can be created in %1 or moved into it.").arg(m_name)},
       {"features", QString(), tr("F&eatures"),
-       tr("Modelling features (extrudes, fillets, construction geometry, imported bodies) can be created in %1 "
+       tr("Modeling features (extrudes, fillets, construction geometry, imported bodies) can be created in %1 "
           "or moved into it. Joints and other assembly features are not governed.")
            .arg(m_name)},
       {"components", QString(), tr("&Components"),
@@ -110,7 +110,7 @@ PolicyDialog::PolicyDialog(Query query, const QString& component, QWidget* paren
            .arg(m_name)},
       // A component's first sketch, its start in context (mitcad#293).
       {"first_sketch_attaches", QString(), tr("F&irst sketch may attach to other components"),
-       tr("Outgoing, first sketch only: the first sketch of %1 (no sketch or modelling feature of it before it) can "
+       tr("Outgoing, first sketch only: the first sketch of %1 (no sketch or modeling feature of it before it) can "
           "lie on faces and planes of other components, also when its sketches do not attach to others.")
            .arg(m_name)},
       {"first_sketch_attachments_from_others", QString(), tr("Allow first s&ketches of other components to attach"),
@@ -274,7 +274,7 @@ void PolicyDialog::showItems(int index) {
   qDebug().noquote() << QStringLiteral("Policy violations of %1 %2: %3")
                             .arg(m_name, row.key, names.join(QStringLiteral(", ")));
   sheetInformation(this, tr("Design Policy of %1").arg(m_name),
-                   tr("%1 breaks \"%2\":\n\n%3")
+                   tr("%1 breaks “%2”:\n\n%3")
                        .arg(lines.size() == 1 ? tr("This object") : tr("These objects"),
                             QString(row.box->text()).remove(QLatin1Char('&')), lines.join(QLatin1Char('\n'))));
 }

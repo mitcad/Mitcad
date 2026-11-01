@@ -196,7 +196,7 @@ cli(fail lock take "${b}/part.mitcad" --author "${other}")
 expect("^part.mitcad is being edited by Mitcad Test <test@example.invalid> \\(since [^\n]*\\)\n$"
        "lock take of a held lock")
 cli(ok lock status "${b}")
-expect("^part.mitcad: edited by Mitcad Test <test@example.invalid> since [^\n]*\n  session [0-9a-f-]+, Mitcad [^\n]*\n$"
+expect("^part.mitcad: edited by Mitcad Test <test@example.invalid> since [^\n]*\n  session [0-9a-f-]+, MitCad [^\n]*\n$"
        "lock status")
 cli(ok lock status "${b}/part.mitcad" --json)
 expect("\"owner\":{\"email\":\"test@example.invalid\",\"name\":\"Mitcad Test\"}" "lock status as JSON")
@@ -235,7 +235,7 @@ git("${a}" remote add second "${remote}")
 cli(ok remote show "${a}")
 expect("Remotes first \\(.*\\), second \\(.*\\): none is followed" "remote show with several remotes")
 cli(fail remote follow "${a}" nowhere)
-expect("has no remote 'nowhere'" "remote follow of a remote that is not there")
+expect("has no remote nowhere" "remote follow of a remote that is not there")
 cli(ok remote follow "${a}" second)
 expect("^Branch main follows second/main \\(" "remote follow")
 cli(ok remote show "${a}")
@@ -256,7 +256,7 @@ foreach(name readme files share)
 endforeach()
 # What a remote holds, without a project.
 cli(ok remote check "${WORK}/readme.git")
-expect("Branch main \\([0-9a-f]+\\): no Mitcad project\n1 version, latest [0-9-]+ by Git\nFiles: README.md\n"
+expect("Branch main \\([0-9a-f]+\\): no MitCad project\n1 version, latest [0-9-]+ by Git\nFiles: README.md\n"
        "remote check without a project")
 cli(ok remote check "${remote}" --json)
 expect("\"has_project\":true" "remote check of a project as JSON")
@@ -273,7 +273,7 @@ cli(ok project inspect "${WORK}/c")
 expect(": a Cloud project\nRemote origin: [^\n]*readme.git \\(branch main follows origin/main\\)\nDesigns: c.mitcad\nEdit locks: on \\(idle time 10 min, poll 10 s\\)\nLive updates: none\n"
        "project inspect of a Cloud project")
 cli(fail project create "${WORK}/d" --author "${author}" --url "${remote}")
-expect("holds a Mitcad project" "project create on a remote with a project")
+expect("holds a MitCad project" "project create on a remote with a project")
 # A shared setting is recorded as a version and sent with sync.
 cli(ok project settings "${WORK}/c" --set "{\"shared\": {\"edit_locks\": {\"enabled\": false}}}"
     --author "${author}")
@@ -285,7 +285,7 @@ expect("\"kind\":\"cloud\"" "project settings as JSON")
 expect("\"enabled\":false" "project settings as JSON")
 # Open from Cloud: a repository with files made a project.
 cli(fail clone "${WORK}/files.git" "${WORK}/d")
-expect("holds no Mitcad project" "clone of a repository without a project")
+expect("holds no MitCad project" "clone of a repository without a project")
 cli(ok clone "${WORK}/files.git" "${WORK}/d" --adopt --author "${author}")
 expect("^Opened [^\n]*d\nThe remote's files were taken in: the project is beside them\nRecorded version [0-9a-f]+\nPushed to the remote\n$"
        "clone --adopt")

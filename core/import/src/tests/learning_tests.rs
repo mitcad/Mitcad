@@ -28,7 +28,7 @@ fn the_learning_dump_keeps_what_the_history_chose() {
         states: vec![Vec::new(), shapes(&reference)],
         ..TestGeometry::default()
     };
-    let dir = std::env::temp_dir().join(format!("mitcad-learn-{}", std::process::id()));
+    let dir = mitcad_model::testing::unique_temp_path("learn");
     let options = Options {
         learn: Some(crate::learn::LearnOptions {
             dir: dir.clone(),
@@ -102,7 +102,7 @@ fn the_learning_dump_captures_the_dressup_matcher_result() {
             "_f3d": {"recipe": "edge", "found": "BREP.x.smbh before state 4"}
         }]}]}}),
     );
-    let dir = std::env::temp_dir().join(format!("mitcad-learn-edges-{}", std::process::id()));
+    let dir = mitcad_model::testing::unique_temp_path("learn-edges");
     let mut doc = Document::new(TestKernel {
         edge_points: true,
         ..TestKernel::default()
@@ -159,8 +159,7 @@ fn the_learning_dump_keeps_a_failed_dressup_without_history_or_candidates() {
                 "found": "a face of the edge is not in the history state"}
         }]}]}}),
     ];
-    let dir =
-        std::env::temp_dir().join(format!("mitcad-learn-failed-edges-{}", std::process::id()));
+    let dir = mitcad_model::testing::unique_temp_path("learn-failed-edges");
     let mut doc = Document::new(TestKernel {
         edge_points: true,
         ..TestKernel::default()

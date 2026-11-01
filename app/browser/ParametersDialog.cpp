@@ -52,8 +52,8 @@
 namespace mitcad {
 namespace {
 
-const QColor kRefusedText(0xb0, 0x00, 0x20);
-const QColor kRefusedFill(0xfb, 0xe3, 0xe3);
+QColor refusedText() { return themeColor(ColorRole::ErrorText); }
+QColor refusedFill() { return themeColor(ColorRole::ErrorFill); }
 constexpr int kNameRole = Qt::UserRole;     // the parameter's name (rows of parameters)
 constexpr int kKindRole = Qt::UserRole + 1; // user, model or reference
 // The open panel's own parameter (mitcad#564): its name and expression are
@@ -297,7 +297,7 @@ public:
       item->setToolTip(5, note.join(QLatin1Char('\n')));
       if (refused) {
         for (int column = 0; column < rows->columnCount(); ++column) {
-          item->setForeground(column, kRefusedText);
+          item->setForeground(column, refusedText());
         }
       }
       QString logged = QStringLiteral("Parameters import row %1").arg(name);
@@ -375,11 +375,11 @@ ParametersDialog::ParametersDialog(DocumentHost& host, QWidget* parent)
   m_delete->setObjectName(QStringLiteral("parametersDelete"));
   m_filter->setObjectName(QStringLiteral("parametersFilter"));
   // The parameters as CSV (mitcad#666).
-  m_import = new QPushButton(tr("Import..."));
+  m_import = new QPushButton(tr("Import…"));
   m_import->setObjectName(QStringLiteral("parametersImport"));
   m_import->setToolTip(tr("Import parameters from a CSV file"));
   m_import->setAutoDefault(false);
-  m_export = new QPushButton(tr("Export..."));
+  m_export = new QPushButton(tr("Export…"));
   m_export->setObjectName(QStringLiteral("parametersExport"));
   m_export->setToolTip(tr("Export the parameters to a CSV file"));
   m_export->setAutoDefault(false);
@@ -430,6 +430,9 @@ ParametersDialog::ParametersDialog(DocumentHost& host, QWidget* parent)
   m_align = new DecimalAlignDelegate(m_table, {kExpression, kValue});
   m_table->setItemDelegateForColumn(kExpression, m_align);
   m_table->setItemDelegateForColumn(kValue, m_align);
+  // The native cells line them up too (mitcad#1080).
+  m_table->setProperty(NativeDecimalColumnsProperty,
+                       QVariantList{static_cast<int>(kExpression), static_cast<int>(kValue)});
   layout->addWidget(m_table, 1);
 
   m_message = new QLabel;
@@ -612,8 +615,8 @@ QTreeWidgetItem* ParametersDialog::addRow(QTreeWidgetItem* parent, const QJsonOb
     if (refused != m_refused.cend()) {
       row->setText(column, refused.value().first);
       if (!mac::styleRefusedParameter(row, column)) {
-        row->setForeground(column, kRefusedText);
-        row->setBackground(column, kRefusedFill);
+        row->setForeground(column, refusedText());
+        row->setBackground(column, refusedFill());
       }
       row->setToolTip(column, refused.value().second);
     }
@@ -980,7 +983,7 @@ void ParametersDialog::submit(const QString& name, int column, const QString& te
       // Cancelled while it computed (P7): no refusal, and the cell shows
       // the parameter as it still is.
       m_refused.remove(refusedKey(name, column));
-      m_message->setText(tr("%1: the change was cancelled.").arg(name));
+      m_message->setText(tr("%1: the change was canceled.").arg(name));
       qDebug().noquote() << QStringLiteral("Parameter %1 %2: %3 cancelled").arg(name, what, text);
     } else {
       // The model's reason stays with the cell; the document is unchanged.
@@ -1048,7 +1051,7 @@ void ParametersDialog::exportParameters() {
   m_message->clear();
   const int count = table.value(QStringLiteral("parameters")).toInt();
   m_host.showStatus(tr("Exported %n parameter(s) to %1.", nullptr, count).arg(QDir::toNativeSeparators(path)),
-                    false);
+                    NoticeLevel::Information);
   qDebug().noquote() << QStringLiteral("Exported parameters to %1: %2 parameter(s)").arg(path).arg(count);
 }
 
@@ -1097,10 +1100,10 @@ void ParametersDialog::importParameters() {
                              &result)) {
     m_message->clear();
     const QString summary = result.value(QStringLiteral("summary")).toString();
-    m_host.showStatus(tr("Imported parameters from %1: %2.").arg(file, summary), false);
+    m_host.showStatus(tr("Imported parameters from %1: %2.").arg(file, summary), NoticeLevel::Information);
     qDebug().noquote() << QStringLiteral("Imported parameters from %1: %2").arg(file, summary);
   } else if (m_host.lastCancelled()) {
-    m_message->setText(tr("%1: the import was cancelled.").arg(file));
+    m_message->setText(tr("%1: the import was canceled.").arg(file));
     qDebug().noquote() << QStringLiteral("Import of parameters from %1 cancelled while computing").arg(file);
   } else {
     m_message->setText(QStringLiteral("%1: %2").arg(file, m_host.lastError()));

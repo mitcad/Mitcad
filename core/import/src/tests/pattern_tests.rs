@@ -960,7 +960,7 @@ fn check_pattern_reselects_decoded_profiles(learning: bool) {
         alike: true,
         ..TestKernel::default()
     });
-    let dir = std::env::temp_dir().join(format!("mitcad-learn-revised-{}", std::process::id()));
+    let dir = mitcad_model::testing::unique_temp_path("learn-revised");
     let options = Options {
         learn: learning.then(|| crate::learn::LearnOptions {
             dir: dir.clone(),

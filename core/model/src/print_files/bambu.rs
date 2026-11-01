@@ -15,8 +15,8 @@ use serde_json::{Map, Value, json};
 
 use super::source::{self, JsonSource, kept_value};
 use super::{
-    ExportOutput, Imported, Layers, Shared, defs_in, dialect_texts, fill_overrides, read_flat,
-    xml_escape,
+    ExportOutput, Filled, Imported, Layers, Shared, defs_in, dialect_texts, fill_overrides,
+    filled_warnings, read_flat, slot_values, xml_escape,
 };
 use crate::document::PrintFrom;
 use crate::print_keys::{self, Dialect, Kind, PrintSet};
@@ -184,7 +184,7 @@ pub(super) fn read_project(
             .count();
         if objects > 0 {
             out.report.left_out.push(format!(
-                "the per-object settings of {objects} objects (they do not target Mitcad's bodies)"
+                "the per-object settings of {objects} objects (they do not target MitCad's bodies)"
             ));
         }
         let plates = document
@@ -241,14 +241,19 @@ fn read_preset_into(
     {
         map.insert("filament_settings_id".to_owned(), json!([name]));
     }
-    if let Some(inherits) = map.get("inherits").and_then(Value::as_str)
-        && !inherits.is_empty()
-    {
+    let inherits = map
+        .get("inherits")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|base| !base.is_empty())
+        .map(str::to_owned);
+    if let Some(inherits) = &inherits {
         out.report.left_out.push(format!(
             "the values {} takes from its system preset {inherits} (only its own are in the file)",
             name.as_deref().unwrap_or("the preset")
         ));
     }
+    let notes = out.report.filaments.len();
     read_flat(
         dialect,
         &JsonSource(&*map),
@@ -257,6 +262,10 @@ fn read_preset_into(
         (name.clone(), name),
         out,
     );
+    // A base not filled in (mitcad#1053): the chain stops there.
+    for note in &mut out.report.filaments[notes..] {
+        note.missing.clone_from(&inherits);
+    }
     Ok(())
 }
 
@@ -537,24 +546,36 @@ pub(super) fn export(
             }
         }
     }
-    // A list per filament key, an entry per slot; a key that not every
-    // slot has is left to the slicer's presets, but the colour, the type
-    // and the preset's name are always written.
+    // A list per filament key, an entry per slot; a key that no slot has
+    // is left to the slicer's presets, one that some slots have is filled
+    // for the others (mitcad#1052, `slot_values`), and the colour, the
+    // type and the preset's name are always written.
     let slots = shared.slot_parts.len().max(1);
     let mut filament_keys: Vec<Vec<String>> = vec![Vec::new(); slots];
     // The keys written with an entry per slot.
     let mut per_slot_keys: BTreeSet<String> = BTreeSet::new();
+    let mut filled = Filled::new();
     for def in print_keys::keys_in(PrintSet::Filament) {
         let Some(dk) = def.dialect(dialect) else {
             continue;
         };
-        let mut entries: Vec<Option<String>> = (0..slots)
-            .map(|slot| {
-                let filament = shared.filament(slot);
-                let value = filament
+        let values = slot_values(
+            shared,
+            def,
+            |filament| {
+                filament
                     .get(def.key)
                     .map(|(v, _)| v.clone())
-                    .or_else(|| plate_fallback(def.key, filament))?;
+                    .or_else(|| plate_fallback(def.key, filament))
+            },
+            &mut filled,
+        );
+        let mut entries: Vec<Option<String>> = values
+            .into_iter()
+            .enumerate()
+            .map(|(slot, value)| {
+                let value = value?;
+                let filament = shared.filament(slot);
                 let context: BTreeMap<String, Value> = filament
                     .iter()
                     .map(|(k, (v, _))| (k.clone(), v.clone()))
@@ -762,6 +783,8 @@ pub(super) fn export(
         (MODEL_SETTINGS.to_owned(), model.into_bytes()),
     ];
     out.part_metadata = vec![Vec::new(); shared.parts.len()];
+    // The slots that took values they do not set (mitcad#1052).
+    warnings.extend(filled_warnings(shared, &filled));
     warnings.sort();
     warnings.dedup();
     out.warnings = warnings;

@@ -106,14 +106,14 @@ fn an_edit_that_would_make_a_parameter_fail_is_refused() {
     let mut table = screws();
     table.rows.pop();
     let error = b.doc.set_table(table).unwrap_err().to_string();
-    assert!(error.contains("parameter 'd3'"), "{error}");
+    assert!(error.contains("parameter d3"), "{error}");
     // Its head diameter empty.
     let error = b
         .doc
         .set_table(screws_with(2, 2, TableCell::Empty))
         .unwrap_err()
         .to_string();
-    assert!(error.contains("parameter 'd3'"), "{error}");
+    assert!(error.contains("parameter d3"), "{error}");
     // A column in use left out.
     let mut table = screws();
     table.columns.remove(2);
@@ -151,14 +151,14 @@ fn tables_and_parameters_share_one_namespace() {
     table.name = "Size".to_owned();
     assert_eq!(
         b.doc.set_table(table).unwrap_err().to_string(),
-        "'Size' is the name of a parameter"
+        "Size is the name of a parameter"
     );
     let error = b
         .doc
         .add_parameter_expression("Screws", "1 mm", None, "")
         .unwrap_err()
         .to_string();
-    assert_eq!(error, "'Screws' is the name of a table");
+    assert_eq!(error, "Screws is the name of a table");
     assert!(b.doc.rename_parameter("Size", "Screws").is_err());
     assert!(b.doc.rename_table("Screws", "d1").is_err());
     assert!(b.doc.rename_table("Screws", "mm").is_err());

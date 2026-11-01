@@ -164,7 +164,7 @@ fn a_definition_cut_short_for_lack_of_memory_falls_back_and_the_import_goes_on()
         .find(|w| w.contains("ran low on memory"))
         .expect("a warning");
     assert!(
-        warning.ends_with("cut short or not tried and 1 modelling items took the file's bodies"),
+        warning.ends_with("cut short or not tried and 1 modeling items took the file's bodies"),
         "{warning}"
     );
 }

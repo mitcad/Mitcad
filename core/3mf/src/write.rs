@@ -59,7 +59,7 @@ pub fn write(model: &Model) -> Result<Vec<u8>, Error> {
             || reserved.contains(&path.as_str())
         {
             return Err(Error(format!(
-                "'{path}' is no path of another file of the package"
+                "{path} is no path of another file of the package"
             )));
         }
     }

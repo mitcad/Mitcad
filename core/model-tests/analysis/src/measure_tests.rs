@@ -669,7 +669,7 @@ fn errors_name_the_occurrences_that_place_a_selection() {
     // A path that does not place it, one through the wrong parent and an
     // occurrence that does not exist: each names the paths that do.
     for (occurrence, wrong) in [
-        ("O1", "occurrence 'O1' does not place"),
+        ("O1", "occurrence O1 does not place"),
         ("O3", "Block:2 is placed in Assembly, not in"),
         ("O1/O9", "occurrence O9 does not exist"),
     ] {
@@ -754,7 +754,7 @@ fn occurrence_paths_are_taken_by_names() {
     );
     assert!(
         unknown.contains(&format!(
-            "there is no occurrence 'Block:9' in Assembly; its occurrences are {BLOCK_PATHS}"
+            "there is no occurrence Block:9 in Assembly; its occurrences are {BLOCK_PATHS}"
         )),
         "{unknown}"
     );
@@ -763,7 +763,7 @@ fn occurrence_paths_are_taken_by_names() {
         json!({"datum": "F5", "occurrence": "Frame:1/Block:1"}),
     );
     assert!(
-        top_level.contains("there is no occurrence 'Frame:1'"),
+        top_level.contains("there is no occurrence Frame:1"),
         "{top_level}"
     );
     assert!(top_level.contains("O1 (Assembly:1)"), "{top_level}");
@@ -774,7 +774,7 @@ fn occurrence_paths_are_taken_by_names() {
         json!({"datum": "F5", "occurrence": "Assembly:1/Block"}),
     );
     assert!(
-        ambiguous.contains(&format!("'Block' in Assembly is any of {BLOCK_PATHS}")),
+        ambiguous.contains(&format!("Block in Assembly is any of {BLOCK_PATHS}")),
         "{ambiguous}"
     );
 }
@@ -827,7 +827,7 @@ fn origin_datums_are_taken_by_name() {
     }
     // Neither a construction feature nor an origin datum.
     let wrong = refused_alone(&doc, json!({"datum": "top", "occurrence": "O1/O3"}));
-    assert!(wrong.contains("invalid datum 'top'"), "{wrong}");
+    assert!(wrong.contains("invalid datum top"), "{wrong}");
     assert!(wrong.contains("\"xy\""), "{wrong}");
 }
 

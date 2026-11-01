@@ -346,7 +346,7 @@ impl Source {
         }
         if o.property("ObjectToGround").is_some() || o.property("JointType").is_some() {
             return Role::Skipped(
-                "an assembly joint: Mitcad has none; the parts keep their placements".to_owned(),
+                "an assembly joint: MitCad has none; the parts keep their placements".to_owned(),
             );
         }
         if is_group(o) {
@@ -426,7 +426,7 @@ fn is_group(o: &Object) -> bool {
             && !is_component(&o.type_name)
 }
 
-/// A FreeCAD placement as a Mitcad transform.
+/// A FreeCAD placement as a MitCad transform.
 fn transform(p: &Placement) -> Transform {
     Transform {
         linear: p.matrix(),
@@ -1062,7 +1062,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             if factors.iter().any(|f| (f - 1.0).abs() > 1e-12) {
                 if !shows_body {
                     self.warn(format!(
-                        "{label}: a scaled link of a part is not imported (Mitcad's placements are rigid)"
+                        "{label}: a scaled link of a part is not imported (MitCad's placements are rigid)"
                     ));
                     continue;
                 }
@@ -1129,7 +1129,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 (
                     ObjectOutcome::Body,
                     Some(
-                        "a scaled link: a scaled copy of the body (Mitcad's placements are rigid)"
+                        "a scaled link: a scaled copy of the body (MitCad's placements are rigid)"
                             .to_owned(),
                     ),
                 ),
@@ -1229,8 +1229,8 @@ impl<K: Kernel> Importer<'_, '_, K> {
         for component in &order {
             let bodies = inputs.remove(component).unwrap_or_default();
             made.push(bodies.iter().map(|(i, _)| *i).collect());
-            // Feature names are unique: the component's name tells them
-            // apart.
+            // A name of its own for each (feature names may repeat,
+            // mitcad#1107): the component's name tells them apart.
             let base = match self.component_names.get(component) {
                 Some(c) => format!("FreeCAD bodies of {c}"),
                 None => "FreeCAD bodies".to_owned(),

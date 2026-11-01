@@ -173,6 +173,7 @@ class FakeInstance:
 
     def __init__(self, discovery, instance, pid, answer=True):
         self.instance = instance
+        self.pid = pid
         self.token = instance[0] * 64
         self.answer = answer
         self.accepted = 0
@@ -229,6 +230,12 @@ class FakeInstance:
             except Exception as error:
                 self.errors.append(error)
 
+    def activate(self, timestamp, title):
+        state = self.record.with_suffix(".window")
+        state.write_text(json.dumps({"pid": self.pid, "activated_at": timestamp,
+                                     "title": title, "agents": []}), encoding="utf-8")
+        make_private(state, False)
+
     def connections(self):
         with self.lock:
             return self.accepted
@@ -283,10 +290,53 @@ class McpTest(unittest.TestCase):
             unknown = subprocess.run([CLI, "mcp", "--connect", "--instance", "6" * 32], env=env,
                                      input=b"", capture_output=True, timeout=TIMEOUT)
             self.assertEqual(unknown.returncode, 1, unknown.stderr)
-            self.assertIn(b"No running Mitcad instance", unknown.stderr)
+            self.assertIn(b"No running MitCad instance", unknown.stderr)
             self.assertEqual((named.connections(), hung.connections()), (1, 0))
             self.assertTrue(hung.record.exists(), "A running process's record was removed")
         self.assertFalse(named.errors, named.errors)
+
+    def test_connect_selects_the_window_active_last(self):
+        discovery, env = self.private_discovery()
+        with FakeInstance(discovery, "a" * 32, os.getpid()) as older, \
+                FakeInstance(discovery, "b" * 32, os.getpid()) as newer:
+            older.activate(1000, "Earlier design")
+            newer.activate(2000, "Last design")
+            result = subprocess.run([CLI, "mcp", "--connect"], env=env, input=b"",
+                                    capture_output=True, timeout=TIMEOUT)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, b"")
+            self.assertEqual((older.connections(), newer.connections()), (1, 2))
+            self.assertIn(("connected to " + newer.instance + " (Last design), the window active last").encode(), result.stderr)
+            self.assertIn(("others: " + older.instance + " (Earlier design)").encode(), result.stderr)
+            self.assertNotIn(older.token.encode(), result.stderr)
+            self.assertNotIn(newer.token.encode(), result.stderr)
+            # Explicit selection still wins over the activation time.
+            selected = subprocess.run([CLI, "mcp", "--connect", "--instance", older.instance],
+                                      env=env, input=b"", capture_output=True, timeout=TIMEOUT)
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            self.assertEqual((older.connections(), newer.connections()), (2, 2))
+        self.assertFalse(older.errors + newer.errors, older.errors + newer.errors)
+
+    def test_connect_refuses_windows_without_activation_times(self):
+        discovery, env = self.private_discovery()
+        with FakeInstance(discovery, "a" * 32, os.getpid()) as first, \
+                FakeInstance(discovery, "b" * 32, os.getpid()) as second:
+            result = subprocess.run([CLI, "mcp", "--connect"], env=env, input=b"",
+                                    capture_output=True, timeout=TIMEOUT)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, b"")
+            self.assertIn(b"Several MitCad instances are running; use --list-instances and --instance ID", result.stderr)
+            self.assertEqual((first.connections(), second.connections()), (1, 1))
+            # A state for another process must not turn a refusal into a choice.
+            first.activate(3000, "Wrong process")
+            state = first.record.with_suffix(".window")
+            wrong = json.loads(state.read_text(encoding="utf-8"))
+            wrong["pid"] = dead_pid()
+            state.write_text(json.dumps(wrong), encoding="utf-8")
+            result = subprocess.run([CLI, "mcp", "--connect"], env=env, input=b"",
+                                    capture_output=True, timeout=TIMEOUT)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(b"Several MitCad instances", result.stderr)
 
     def test_records_are_probed_in_parallel(self):
         # mitcad#437: two running but unanswering instances cost one connect
@@ -829,15 +879,15 @@ class McpTest(unittest.TestCase):
             # An unknown query lists the queries; a refused one keeps its text.
             unknown = client.tool("model_query", {"document": document,
                                                   "query": {"query": "bbox"}}, error=True)
-            self.assertIn("unknown query 'bbox'", unknown["error"])
+            self.assertIn("unknown query bbox", unknown["error"])
             self.assertIn("bodies", unknown["error"])
             refused = client.tool("model_query", {"document": document,
                                                   "query": {"query": "dxf_info", "path": "x.dxf"}}, error=True)
-            self.assertIn("query 'dxf_info' is not available through MCP", refused["error"])
+            self.assertIn("query dxf_info is not available through MCP", refused["error"])
             # An unknown command lists the commands.
             unknown = client.tool("model_command", {"document": document,
                                                     "command": {"cmd": "list"}}, error=True)
-            self.assertIn("unknown command 'list'", unknown["error"])
+            self.assertIn("unknown command list", unknown["error"])
             self.assertIn("add_feature", unknown["error"])
             # A command without cmd shows the form.
             form = client.tool("model_command", {"document": document,

@@ -31,6 +31,7 @@ QVector<DocumentSnapshot::Occurrence> occurrencesOf(const QJsonArray& values) {
     occurrence.component = text(o, "component");
     occurrence.grounded = o.value(QStringLiteral("grounded")).toBool();
     occurrence.visible = o.value(QStringLiteral("visible")).toBool(true);
+    occurrence.transparent = o.value(QStringLiteral("transparent")).toBool();
     occurrence.world = o.value(QStringLiteral("world")).toArray();
     occurrence.children = occurrencesOf(o.value(QStringLiteral("children")).toArray());
     occurrence.name = text(o, "name");
@@ -147,6 +148,17 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
   snapshot.imageReferences = model.queryArray(QStringLiteral("image_references"));
   const QJsonObject display = document.value(QStringLiteral("display")).toObject();
   snapshot.originShown = display.value(QStringLiteral("origin")).toBool();
+  // The Center of Mass marker (mitcad#1094): its place follows every
+  // recompute, placement and material, so it is read with the rest.
+  const QJsonValue centerMarker = display.value(QStringLiteral("center_of_mass"));
+  if (centerMarker.isObject()) {
+    try {
+      snapshot.centerOfMass = model.queryObject({{QStringLiteral("query"), QStringLiteral("center_of_mass")}});
+    } catch (const std::exception& e) {
+      snapshot.centerOfMass = QJsonObject{{QStringLiteral("marker"), centerMarker},
+                                          {QStringLiteral("error"), QString::fromUtf8(e.what())}};
+    }
+  }
   for (const QJsonValue& value : display.value(QStringLiteral("isolated")).toArray()) {
     const QJsonObject isolated = value.toObject();
     SelectionItem item;
@@ -162,7 +174,8 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
   snapshot.key = QJsonDocument(QJsonArray{timeline, components, bodies, profiles, snapshot.lengthUnit,
                                           snapshot.namedViews, display, snapshot.analyses, snapshot.joints,
                                           snapshot.sheets, snapshot.motionStudies, snapshot.contactSets,
-                                          snapshot.measurements, snapshot.drawings, snapshot.imageReferences})
+                                          snapshot.measurements, snapshot.drawings, snapshot.imageReferences,
+                                          snapshot.centerOfMass})
                      .toJson(QJsonDocument::Compact);
   // The values Show When conditions use (mitcad#863): a parameter changed
   // without changing what is shown still changes the light bulbs' tooltips.
@@ -189,8 +202,22 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     feature.name = text(f, "name");
     feature.type = text(f, "type");
     feature.status = text(f, "status");
-    feature.error = text(f, "error");
     feature.importNote = text(f, "import");
+    // Its level and notices (mitcad#1040): the error of a failed feature,
+    // else its import note and its warnings, as one message.
+    feature.level = text(f, "level");
+    feature.error = text(f, "error");
+    const QJsonArray notices = f.value(QStringLiteral("notices")).toArray();
+    if (feature.error.isEmpty() && !notices.isEmpty()) {
+      QStringList notes;
+      QStringList others;
+      for (const QJsonValue& value : notices) {
+        const QJsonObject notice = value.toObject();
+        const QString message = notice.value(QStringLiteral("message")).toString();
+        (notice.value(QStringLiteral("level")).toString() == QStringLiteral("info") ? notes : others) << message;
+      }
+      feature.error = (notes + others).join(QStringLiteral("; "));
+    }
     feature.component = f.value(QStringLiteral("component")).toString(kRoot);
     feature.suppressed = f.value(QStringLiteral("suppressed")).toBool();
     feature.dof = f.value(QStringLiteral("dof")).toInt(-1);
@@ -231,6 +258,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     body.name = text(b, "name");
     body.component = b.value(QStringLiteral("component")).toString(kRoot);
     body.visible = b.value(QStringLiteral("visible")).toBool(true);
+    body.transparent = b.value(QStringLiteral("transparent")).toBool();
     body.mesh = b.value(QStringLiteral("mesh")).toBool();
     // The print bed face (mitcad#731).
     const QJsonObject bed = b.value(QStringLiteral("print_bed_face")).toObject();
@@ -352,10 +380,11 @@ QVector<const DocumentSnapshot::Feature*> DocumentSnapshot::failures() const {
 }
 
 QVector<const DocumentSnapshot::Feature*> DocumentSnapshot::warnings() const {
+  // Those built with warnings; an import note alone is information
+  // (mitcad#1040) and no longer counts.
   QVector<const Feature*> warned;
   for (const Feature& feature : features) {
-    if (feature.status != QStringLiteral("error") &&
-        (feature.status == QStringLiteral("warning") || !feature.importNote.isEmpty())) {
+    if (feature.status == QStringLiteral("warning")) {
       warned.append(&feature);
     }
   }

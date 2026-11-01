@@ -1960,7 +1960,7 @@ fn entity_text(dc: &mitcad_ipt::dc::Definitions, e: usize) -> String {
             .and_then(|(_, mut r)| r.references().ok());
         let at = c.and_then(|c| point(dc, c));
         return format!(
-            "circle centre {at:?} r {r:.6} full {full} ends {:?}",
+            "circle center {at:?} r {r:.6} full {full} ends {:?}",
             ends.unwrap_or_default()
         );
     }

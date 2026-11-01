@@ -292,8 +292,8 @@ fn build_parts_are_checked_with_their_designs() {
         "bracket-b8: build.connector.fasteners[0].nut: test-profiles/tnut-b8 has no configuration M8",
         "bracket-i5: a connector lists the slot systems it fits",
         "bracket-i5: build.connector.fasteners[0].nut: test-profiles has no component gone",
-        "tnut-b8: build.role 'washer' is none of",
-        "tnut-b8: nuts/tnut-b8.mitcad: row M5: the supplier_url 'http://example.org/m5' is no https:// address",
+        "tnut-b8: build.role washer is none of",
+        "tnut-b8: nuts/tnut-b8.mitcad: row M5: the supplier_url http://example.org/m5 is no https:// address",
         "carriage-15: build.linear.teeth is no count of teeth",
     ] {
         assert!(has(expected), "{expected}\n{errors:#?}");
@@ -679,12 +679,12 @@ fn timber_parts_are_checked_and_picked() {
         "timber-sawn: timber/timber-sawn.mitcad: build.rows names 22x75, which is no configuration row",
         "timber-sawn: row_previews names 22x75, which is no configuration row of timber/timber-sawn.mitcad",
         "timber-sawn: previews/none.png is not in the folder",
-        "timber-sawn: the preview of row 22x50, '../row.png', is no path of a PNG image in the library",
+        "timber-sawn: the preview of row 22x50, ../row.png, is no path of a PNG image in the library",
         "wood-screw: build.wood.kind \"bolt\" is neither screw nor nail",
-        "hanger-48x148: build.connector.fit.kind 'clip' is none of angle, hanger, post_base",
+        "hanger-48x148: build.connector.fit.kind clip is none of angle, hanger, post_base",
         "hanger-48x148: build.connector.fit.section is no pair of lengths above 0",
         "bracket-60: build.connector.fasteners[0].count is not the number of its frames (1)",
-        "plywood: build.panel.mount 'wall' is none of slot, surface, face",
+        "plywood: build.panel.mount wall is none of slot, surface, face",
     ] {
         assert!(has(expected), "{expected}\n{errors:#?}");
     }
@@ -817,7 +817,7 @@ fn timber_parts_are_checked_and_picked() {
     let answer = run(json!({"cmd": "library_build_candidates", "junction": joist([123.0, 48.0])}));
     assert_eq!(ids(&answer, "refused"), ["hanger-48x148"], "{answer}");
     assert_eq!(
-        answer["refused"][0]["reason"], "it fits 48 x 148, the member is 123 x 48",
+        answer["refused"][0]["reason"], "it fits 48 × 148, the member is 123 × 48",
         "{answer}"
     );
 }
