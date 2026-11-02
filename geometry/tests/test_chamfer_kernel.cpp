@@ -31,6 +31,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Iterator.hxx>
+#include <gp_Pnt.hxx>
 
 #include "check.hpp"
 #include "mitcad/geometry/dressup.hpp"
@@ -218,12 +219,85 @@ void test_chamfer_of_the_floor_width_through_mitcad() {
   }
 }
 
+
+// Whether a shape is closed solids: a solid, every face in one, every shell
+// of them closed.
+bool closed_solids(const TopoDS_Shape& shape) {
+  int solids = 0;
+  int in_solids = 0;
+  for (TopExp_Explorer solid(shape, TopAbs_SOLID); solid.More(); solid.Next()) {
+    ++solids;
+    for (TopExp_Explorer shell(solid.Current(), TopAbs_SHELL); shell.More(); shell.Next()) {
+      if (!BRep_Tool::IsClosed(shell.Current())) {
+        return false;
+      }
+    }
+    for (TopExp_Explorer face(solid.Current(), TopAbs_FACE); face.More(); face.Next()) {
+      ++in_solids;
+    }
+  }
+  int faces = 0;
+  for (TopExp_Explorer face(shape, TopAbs_FACE); face.More(); face.Next()) {
+    ++faces;
+  }
+  return solids > 0 && faces == in_solids;
+}
+
+// (mitcad#1182) A body's top rim bevelled 2 mm along its tangent chain:
+// OCCT's chamfer leaves a gap where a bevel cut by an arc meets one cut by
+// a chord between the same two vertices, and shape healing made that a
+// valid open shell, which the chamfer returned: the body became a surface
+// body without a word. A chamfer of a closed solid gives closed solids or
+// fails, never an open body. The body is the case `chamfer-open-shell` of
+// MITCAD_GEOMETRY_CASES (`body.brep`, a reported model's body before the
+// chamfer); no synthetic layout reproduced OCCT's gap. (The design no longer
+// makes this body: its sketch's region is found as saved, without the
+// sliver.)
+void test_chamfer_never_leaves_the_body_open() {
+  const std::string cases = geometry_cases();
+  if (cases.empty()) {
+    std::printf("test_chamfer_never_leaves_the_body_open: skipped (MITCAD_GEOMETRY_CASES is not set)\n");
+    return;
+  }
+  const ShapePtr body = case_body(cases + "/chamfer-open-shell/body.brep", "F1");
+  CHECK(body != nullptr);
+  if (body == nullptr) {
+    return;
+  }
+  CHECK(closed_solids(body->occt()));
+  // The rim's arc of radius 3.7 at a corner of the top face.
+  std::string edge;
+  for (int e = 0; e < body->edge_count() && edge.empty(); ++e) {
+    const BRepAdaptor_Curve curve(body->edge(e));
+    if (curve.GetType() == GeomAbs_Circle && std::abs(curve.Circle().Radius() - 3.7) < 1.0e-6 &&
+        curve.Circle().Location().Distance(gp_Pnt(-19.0, -7.870057685088811, 56.0)) < 1.0e-6) {
+      edge = body->edge_name(e);
+    }
+  }
+  CHECK(!edge.empty());
+  if (edge.empty()) {
+    return;
+  }
+  ChamferSet set;
+  set.edges = {edge};
+  set.spec.distance = 2.0;
+  // At its exact size the bevel takes a sliver face of the rim away: built
+  // 0.1 % smaller, it is closed.
+  const ShapePtr chamfered = chamfer("F2", *body, {set});
+  CHECK(closed_solids(chamfered->occt()));
+  CHECK(BRepCheck_Analyzer(chamfered->occt()).IsValid());
+  const double before = volume(*body);
+  const double after = volume(*chamfered);
+  CHECK(after < before && after > 0.95 * before);
+}
+
 } // namespace
 
 void chamfer_kernel_tests() {
   guarded("test_chamfer_pieces_meeting_at_a_vertex_of_the_edge_they_reach",
           test_chamfer_pieces_meeting_at_a_vertex_of_the_edge_they_reach);
   guarded("test_chamfer_of_the_floor_width_through_mitcad", test_chamfer_of_the_floor_width_through_mitcad);
+  guarded("test_chamfer_never_leaves_the_body_open", test_chamfer_never_leaves_the_body_open);
 }
 
 } // namespace test

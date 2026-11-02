@@ -55,6 +55,7 @@
 #include "platform/NativeForms.hpp"
 #include "platform/NativeMacWindow.hpp"
 #include "NativeNavigationGuide.hpp"
+#include "NativeMessageBand.hpp"
 #include "NativeColorField.hpp"
 #include "NativeTableCells.hpp"
 #include "NativeColors.hpp"
@@ -3921,14 +3922,28 @@ bool cardHeight(const QString& identifier, int minimum, int maximum, QString& de
   const NSRect rect = [card convertRect:card.bounds toView:content];
   detail = QStringLiteral("native card '%1' is %2 points high").arg(identifier).arg(double(rect.size.height));
   if (minimum >= 0) return rect.size.height >= minimum - 1 && rect.size.height <= maximum + 1;
-  // The bottom of the free column: 8 points (the cards' gap) above the
-  // timeline, or 12 (their margin) above the document's bottom.
+  // The free column ends above the timeline and the message band's
+  // reserved row (also while the band shows its smaller fading stub).
   NSView* history = identifiedView(content, QStringLiteral("native.historyCard"));
   const bool flipped = content.flipped;
   CGFloat bottom = flipped ? NSMaxY(content.bounds) - 12 : NSMinY(content.bounds) + 12;
+  CGFloat historyHeight = 0;
   if (viewVisible(history)) {
     const NSRect timeline = [history convertRect:history.bounds toView:content];
+    historyHeight = NSHeight(timeline);
     bottom = flipped ? NSMinY(timeline) - 8 : NSMaxY(timeline) + 8;
+  }
+  NSView* messageCard = identifiedView(content, QStringLiteral("native.messageBand"));
+  if (viewVisible(messageCard)) {
+    auto* band = (MITCADMessageBand*)findView(messageCard, [](NSView* view) {
+      return bool([view isKindOfClass:MITCADMessageBand.class]);
+    });
+    if (band == nil) {
+      detail += QStringLiteral(", visible message card has no message band");
+      return false;
+    }
+    const CGFloat reserved = std::max(historyHeight, [band fullHeight]) + 8;
+    bottom += flipped ? -reserved : reserved;
   }
   const CGFloat edge = flipped ? NSMaxY(rect) : NSMinY(rect);
   detail += QStringLiteral(", its bottom at %1, the free column's at %2").arg(double(edge)).arg(double(bottom));

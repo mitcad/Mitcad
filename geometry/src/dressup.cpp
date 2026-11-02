@@ -99,6 +99,39 @@ constexpr double kTight[6] = {1.0e-3, 1.0e-7, 1.0e-9, 1.0e-6, 1.0e-8, 1.0e-5};
 // about 172 degrees (they fold back on each other).
 constexpr double kKnife = 3.0;
 
+// Whether a shape is closed solids only: at least one solid, every face in
+// one, every shell of them closed (each edge between two faces).
+bool closed_solids(const TopoDS_Shape& shape) {
+  int solids = 0;
+  int faces_in_solids = 0;
+  for (TopExp_Explorer solid(shape, TopAbs_SOLID); solid.More(); solid.Next()) {
+    ++solids;
+    for (TopExp_Explorer shell(solid.Current(), TopAbs_SHELL); shell.More(); shell.Next()) {
+      if (!BRep_Tool::IsClosed(shell.Current())) {
+        return false;
+      }
+    }
+    for (TopExp_Explorer face(solid.Current(), TopAbs_FACE); face.More(); face.Next()) {
+      ++faces_in_solids;
+    }
+  }
+  int faces = 0;
+  for (TopExp_Explorer face(shape, TopAbs_FACE); face.More(); face.Next()) {
+    ++faces;
+  }
+  return solids > 0 && faces == faces_in_solids;
+}
+
+// A dressup of a closed solid must leave closed solids (mitcad#1182: a
+// chamfer's result that healing made a valid open shell turned the body
+// into a surface body without a word): throws when `result` is not.
+void require_closed(const TopoDS_Shape& input, const TopoDS_Shape& result, const char* role) {
+  if (closed_solids(input) && !closed_solids(result)) {
+    throw std::runtime_error(std::string("the ") + role +
+                             " would leave the body open: the geometry kernel's result is not a closed solid");
+  }
+}
+
 // Twice a face's area over the length of its boundary: a strip's width.
 double face_width(const TopoDS_Face& face) {
   GProp_GProps area;
@@ -440,6 +473,10 @@ ShapePtr healed(const Shape& result, const Shape& body) {
     detail::interruptible([&](const Message_ProgressRange& range) { fix.Perform(range); });
     const TopoDS_Shape fixed = fix.Shape();
     if (fixed.IsNull() || !BRepCheck_Analyzer(fixed, true, true).IsValid()) {
+      return nullptr;
+    }
+    // A valid open shell is no repair of a closed solid (mitcad#1182).
+    if (closed_solids(body.occt()) && !closed_solids(fixed)) {
       return nullptr;
     }
     const double before = detail::volume_of(body.occt());
@@ -811,6 +848,7 @@ ShapePtr name_result(BRepFilletAPI_LocalOperation& maker, const std::string& fea
                                "by a vertex tolerance");
     }
     tightened->set_checked_valid(true);
+    require_closed(body.occt(), tightened->occt(), role);
     return tightened;
   }
   // One check of a valid result: on a large body BRepCheck takes about as
@@ -829,8 +867,11 @@ ShapePtr name_result(BRepFilletAPI_LocalOperation& maker, const std::string& fea
         return repaired;
       }
     }
+    // (An open result says so.)
+    require_closed(body.occt(), namer.result(), role);
     detail::require_valid(namer.result(), role); // throws with the problem
   }
+  require_closed(body.occt(), namer.result(), role);
   return namer.shape();
 }
 
@@ -3039,6 +3080,10 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
       throw;
     }
   }));
+  // (Whichever way it was built.)
+  if (result) {
+    require_closed(given.occt(), result->occt(), "fillet");
+  }
   // (The joined pieces split again: the body keeps its thread a turn a face,
   // as later operations near it take far longer on faces of many turns.)
   if (!result || pieces.empty()) {
@@ -3082,7 +3127,8 @@ ShapePtr chamfer(const std::string& feature, const Shape& input, const std::vect
     }
   }
   const std::vector<int> owner = select_edges(input, sets);
-  return canonical(input, with_own_chains("chamfer", input, sets, owner, [&](const std::vector<int>& selected) {
+  const ShapePtr result =
+      canonical(input, with_own_chains("chamfer", input, sets, owner, [&](const std::vector<int>& selected) {
     const auto rings = [&](const Shape& body) { return ring_chamfer(feature, body, sets, selected); };
     return or_rings("chamfer", input, [&] {
       // A chamfer's distances are along its faces.
@@ -3095,6 +3141,9 @@ ShapePtr chamfer(const std::string& feature, const Shape& input, const std::vect
       });
     }, rings);
   }));
+  // (Whichever way it was built.)
+  require_closed(input.occt(), result->occt(), "chamfer");
+  return result;
 }
 
 ShapePtr chamfer(const std::string& feature, const Shape& body, const std::vector<std::string>& edges,

@@ -1410,7 +1410,9 @@ in the distro only:
   bodies cut from reported models, which are not committed, each in a
   folder of its own as B-rep files. `geometry/tests/test_boolean.cpp`
   reads `caliper-pad028/body.brep` and `pad.brep` (a join that loses
-  volume, mitcad#964); skipped with a message without the variable.
+  volume, mitcad#964), and `test_chamfer_kernel.cpp` reads
+  `chamfer-open-shell/body.brep` (a chamfer that healing made an open
+  shell, mitcad#1182); skipped with a message without the variable.
 
 ### SolidCraft designs
 

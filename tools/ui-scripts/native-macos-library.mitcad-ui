@@ -22,20 +22,21 @@ expect-native-tiles groups partPickerGroups 4
 expect-native-tiles layout libraryResults
 screenshot-dialog '${MITCAD_TEST_WORK}/insert-${MITCAD_TEST_COLOR_SCHEME}.png'
 
+# Match the complete visible captions, including the synthetic part counts.
 # A group lists its parts; folding and a group's star go to the shared tree.
-native-tiles group partPickerGroups Nuts
+native-tiles group partPickerGroups 'Nuts (1)'
 expect-native-tiles count libraryResults 1
-native-tiles group partPickerGroups 'All components'
+native-tiles group partPickerGroups 'All components (2)'
 expect-native-tiles count libraryResults 2
-native-tiles fold partPickerGroups 'General fasteners' closed
+native-tiles fold partPickerGroups 'General fasteners (2)' closed
 expect-log 'Part picker group .* folded'
-native-tiles fold partPickerGroups 'General fasteners' open
+native-tiles fold partPickerGroups 'General fasteners (2)' open
 expect-log 'Part picker group .* unfolded'
-native-tiles group-star partPickerGroups Screws
+native-tiles group-star partPickerGroups 'Screws (1)'
 expect-log 'Part picker group star .* on'
-native-tiles group-star partPickerGroups Screws
+native-tiles group-star partPickerGroups 'Screws (1)'
 expect-log 'Part picker group star .* off'
-native-tiles group partPickerGroups 'All components'
+native-tiles group partPickerGroups 'All components (2)'
 
 # The search is the library's (library_search); clearing it lists both.
 native-type librarySearch 4032
@@ -48,9 +49,9 @@ expect-native-tiles count libraryResults 2
 native-tiles star libraryResults iso4032
 expect-log 'Part picker star iso4032 on'
 expect-native-tiles star libraryResults iso4032 on
-native-tiles group partPickerGroups Favorites
+native-tiles group partPickerGroups 'Favorites (1)'
 expect-native-tiles count libraryResults 1
-native-tiles group partPickerGroups 'All components'
+native-tiles group partPickerGroups 'All components (2)'
 native-tiles star libraryResults iso4032
 expect-log 'Part picker star iso4032 off'
 expect-native-tiles star libraryResults iso4032 off
@@ -80,8 +81,8 @@ native-tiles resize 1180 680
 
 # The keyboard: a click gives the grid the keyboard, Right moves to the
 # nut and Return inserts it (the grid's Return, before the default button).
-native-tiles group partPickerGroups Screws
-native-tiles group partPickerGroups 'All components'
+native-tiles group partPickerGroups 'Screws (1)'
+native-tiles group partPickerGroups 'All components (2)'
 native-tiles click libraryResults iso4762
 expect-native-tiles current libraryResults iso4762
 key Right

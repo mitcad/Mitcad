@@ -821,38 +821,6 @@ void test_split_by_curves_tangent_at_a_vertex() {
   }
 }
 
-// The folder of geometry cases kept outside the repository
-// (MITCAD_GEOMETRY_CASES: bodies cut from reported models, which are not
-// committed here); empty when it is not set.
-std::string geometry_cases() {
-#ifdef _MSC_VER
-  char* value = nullptr;
-  std::size_t length = 0;
-  std::string out;
-  if (_dupenv_s(&value, &length, "MITCAD_GEOMETRY_CASES") == 0 && value != nullptr) {
-    out = value;
-    std::free(value);
-  }
-  return out;
-#else
-  const char* value = std::getenv("MITCAD_GEOMETRY_CASES");
-  return value != nullptr ? std::string(value) : std::string();
-#endif
-}
-
-// A body of a geometry case read from its B-rep file, its faces named as
-// imported by `feature`; null when the file cannot be read.
-ShapePtr case_body(const std::string& path, const std::string& feature) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in) {
-    return nullptr;
-  }
-  std::ostringstream data;
-  data << in.rdbuf();
-  const std::string bytes = data.str();
-  return import_body(read_brep_data(bytes.data(), bytes.size()), feature, 0);
-}
-
 void test_join_that_loses_volume_is_retried() {
   // (mitcad#964) A reported model's pad, flush with two walls of its body
   // that meet tangentially (the rim and a concave wall, merged faces of

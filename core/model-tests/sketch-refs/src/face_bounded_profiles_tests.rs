@@ -244,3 +244,62 @@ fn a_tangent_own_circle_survives_losing_its_face_edge_neighbor() {
     assert!(!profile.is_null(), "{profile}");
     assert_eq!(profile["region"], remaining["regions"][0]["key"]);
 }
+
+/// A ring of two sketch circles about the face's edge, referenced by the
+/// key its circles alone give it (a design saved before the face's edges
+/// bounded profiles): the extrude takes the whole ring, as saved, not the
+/// face-bounded piece most like it (mitcad#1182, an extra lobe on reopen).
+#[test]
+fn a_whole_sketch_region_across_the_face_edge_keeps_its_reference() {
+    let (mut doc, _, edge) = circle_face();
+    for diameter in [80, 40] {
+        command(
+            &mut doc,
+            json!({"cmd": "sketch.add_circle", "sketch": "F3", "center": [0, 0], "diameter": diameter}),
+        );
+    }
+    let value = sketch(&doc, "F3");
+    let outer = value["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "circle" && (e["radius"].as_f64().unwrap() - 40.0).abs() < 1e-9)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let whole = format!("r{{{outer}}}");
+    let keys: Vec<&str> = value["regions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["key"].as_str().unwrap())
+        .collect();
+    assert!(!keys.contains(&whole.as_str()), "{keys:?}");
+    assert!(
+        keys.iter()
+            .any(|k| k.starts_with(&format!("r{{{outer},")) && k.contains(&edge.to_string())),
+        "{keys:?}"
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "extrude",
+        "profiles": [{"sketch": "F3", "region": whole}],
+        "extent": {"type": "distance", "distance": 2}, "operation": "new_body"}}),
+    );
+    assert!(
+        matches!(
+            doc.status(FeatureUid(4)),
+            Some(mitcad_model::FeatureStatus::Ok)
+        ),
+        "{}",
+        query(&doc, json!({"query": "timeline"}))
+    );
+    let profile = query(
+        &doc,
+        json!({"query": "profile", "sketch": "F3", "region": whole}),
+    );
+    assert_eq!(profile["region"], whole.as_str(), "{profile}");
+    assert_eq!(profile["exact"], true, "{profile}");
+    assert_eq!(profile["regions"], json!([whole]), "{profile}");
+}

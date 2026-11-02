@@ -26,7 +26,8 @@
 #   7. A box made a surface body (its bottom unstitched) that keeps its
 #      print bed face (mitcad#737): the menus of its top and of a side
 #      offer Clear Print Bed Face only, show no bed face, and Clear clears
-#      it.
+#      it; then the top's menu offers neither, and the status line says
+#      why the surface body has no print bed face (mitcad#1182).
 #   8. Send to Slicer's Bed Face (mitcad#1109) on a box without a print
 #      bed face: choosing the body fills it with the automatic
 #      orientation's face (its bottom), highlighted in the bed face's
@@ -267,6 +268,15 @@ no_new "Print bed face shown:" "no print bed face shown on a surface body"
 ui_mark
 ui_step "Clear Print Bed Face"             ui_menu_choose "Clear Print Bed Face"
 ui_expect_new "Print bed face of Plate: none" "the surface body's face cleared"
+# Without one, a planar face of the surface body offers none and says why
+# (mitcad#1182).
+ui_step "Escape (clear the selection)"     ui_key Escape
+right_click F1:top
+lacks "Set as Print Bed Face"
+lacks "Clear Print Bed Face"
+ui_expect_new "Print bed face hint: Plate is a surface body, not a closed solid: it is not printed and has no print bed face" \
+  "the status line says why the surface body has no print bed face"
+ui_step "Escape (close the menu)"          ui_key Escape
 ui_stop_app
 
 echo "--- 8. Send to Slicer's Bed Face (mitcad#1109)"

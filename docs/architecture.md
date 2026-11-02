@@ -1471,6 +1471,11 @@ persists it with cached shape metadata. Ordinary edge/face selection
 grammars and existing `b{E{…}}` keys remain unchanged. Face edges in hole loops also
 belong to a face-bounded region's key, so removing the supporting face
 cannot accidentally select the sketch's whole former outer region.
+The other way round, a key without face edges that the face's edges now
+cut (saved before they bounded profiles, or a face that changed under the
+sketch) is found among the regions of the sketch's own curves alone
+(`SketchOutput::own`, computed on first use): it keeps its whole region,
+not the face-bounded piece most like it (mitcad#1182).
 Component/design copies remap the feature owners in bare profile region
 keys as well as nested face, boundary and source-segment references,
 rebuilding canonical edge and segment-neighbour order. Curve and glyph

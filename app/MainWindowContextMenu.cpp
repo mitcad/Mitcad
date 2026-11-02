@@ -361,6 +361,17 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries) {
       qDebug().noquote() << QStringLiteral("Print bed face shown: %1/%2").arg(uid, m_printBedShown.name);
     }
   }
+  // Why a planar face of a surface body offers no print bed face
+  // (mitcad#1182: a body a feature left open).
+  if (selection.size() == 1 && first.kind == SelectKind::Face && surfaces &&
+      first.geometry == QStringLiteral("plane") && m_snapshot.bodies.value(first.owner).printBedFace.isEmpty()) {
+    const QString hint =
+        tr("%1 is a surface body, not a closed solid: it is not printed and has no print bed face")
+            .arg(bodyName(first.owner));
+    showHint(hint);
+    // (Hints are not logged; this one is, for the UI tests.)
+    qInfo().noquote() << QStringLiteral("Print bed face hint: %1").arg(hint);
+  }
 
   // Delete: whole things, each shown when the selection has it, each one
   // undo step. A BUILD part goes as a member (with what it added), never

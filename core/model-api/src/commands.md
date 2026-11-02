@@ -1053,6 +1053,12 @@ their sketch (mitcad#199), the same in a preview and in the feature:
   face-bounded profiles are unavailable. History that merges distinct
   provenance references or splits one into ambiguous boundary pieces is
   diagnosed rather than numbered by geometry.
+  A reference whose key has no boundary curve and is not one of these
+  regions (a region of the sketch's own curves that the face's edges cut:
+  a design saved before they bounded profiles, or a face that changed
+  under the sketch) means the region the sketch's curves bound by
+  themselves: it is found exactly, without a warning, not as the
+  face-bounded piece most like it (mitcad#1182).
 - The selected area is the odd/even (XOR) composition of the selected
   regions: covered by an odd number of them, it is extruded. Regions of one
   sketch never overlap, so that is each selected region once: the outer

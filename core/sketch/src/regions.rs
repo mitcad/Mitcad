@@ -32,7 +32,7 @@ use crate::profile::{ProfileLoop, ProfileRegion, ProfileSegment, SegmentGeometry
 use crate::topo::{CurveId, RegionKey, SegmentKey};
 
 /// A curve that bounds profiles.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RegionCurve {
     pub uid: CurveId,
     pub curve: Curve2,

@@ -244,12 +244,17 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
             }
         }
         let boundary = face_boundary(self, &plane, &frame, ctx)?;
-        let (region_info, layout) = if boundary.is_empty() {
-            def.regions_and_layout_of(&solved, &texts)
+        let (region_info, layout, own) = if boundary.is_empty() {
+            let (region_info, layout) = def.regions_and_layout_of(&solved, &texts);
+            (region_info, layout, OwnRegions::default())
         } else {
-            let mut curves = def.region_curves_of(&solved, &texts);
+            let own = def.region_curves_of(&solved, &texts);
+            let mut curves = own.clone();
             curves.extend(boundary);
-            crate::sketch::regions::face_bounded_regions(&curves)
+            let (region_info, layout) = crate::sketch::regions::face_bounded_regions(&curves);
+            // The sketch's own regions too, for references to a region the
+            // face's edges cut (mitcad#1182).
+            (region_info, layout, OwnRegions::new(own))
         };
         Ok(FeatureOutput {
             sketch: Some(SketchOutput {
@@ -262,6 +267,7 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
                 texts: Arc::new(texts),
                 moved: Arc::new(moved),
                 follow: Arc::new(follow),
+                own: Arc::new(own),
             }),
             ..FeatureOutput::default()
         })

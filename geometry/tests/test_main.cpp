@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Geometry facade tests with real OCCT; see check.hpp.
 
+#include <cstdlib>
+#include <fstream>
 #include <iterator>
 #include <set>
+#include <sstream>
 
 #include "check.hpp"
+#include "mitcad/geometry/import.hpp"
 
 namespace test {
 
@@ -97,6 +101,33 @@ bool edge_names_unique(const mitcad::geometry::Shape& shape) {
     }
   }
   return true;
+}
+
+std::string geometry_cases() {
+#ifdef _MSC_VER
+  char* value = nullptr;
+  std::size_t length = 0;
+  std::string out;
+  if (_dupenv_s(&value, &length, "MITCAD_GEOMETRY_CASES") == 0 && value != nullptr) {
+    out = value;
+    std::free(value);
+  }
+  return out;
+#else
+  const char* value = std::getenv("MITCAD_GEOMETRY_CASES");
+  return value != nullptr ? std::string(value) : std::string();
+#endif
+}
+
+ShapePtr case_body(const std::string& path, const std::string& feature) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    return nullptr;
+  }
+  std::ostringstream data;
+  data << in.rdbuf();
+  const std::string bytes = data.str();
+  return mitcad::geometry::import_body(mitcad::geometry::read_brep_data(bytes.data(), bytes.size()), feature, 0);
 }
 
 } // namespace test

@@ -7,7 +7,7 @@
 //! output ([`SketchOutput`]).
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -436,6 +436,44 @@ pub struct SketchOutput {
     /// The linked projections that did not follow their sources all the
     /// way at this evaluation (mitcad#232).
     pub follow: Arc<Vec<crate::project::ProjectionFollow>>,
+    /// The regions of the sketch's own curves alone, for a sketch whose
+    /// supporting face's edges bound its profiles (mitcad#1182).
+    pub own: Arc<OwnRegions>,
+}
+
+/// The regions a face sketch's own curves bound without the supporting
+/// face's edges, found when a reference first needs them: a reference to
+/// such a region that the face's edges cut into pieces (a design saved
+/// before the face's edges bounded profiles, or a face that changed under
+/// the sketch) still means the whole region, not the piece most like it,
+/// whose extra lobe changed the bodies made from it (mitcad#1182). Empty
+/// for a sketch that is not on a face.
+#[derive(Debug, Default)]
+pub struct OwnRegions {
+    curves: Vec<RegionCurve>,
+    regions: OnceLock<Vec<Region>>,
+}
+
+impl OwnRegions {
+    pub fn new(curves: Vec<RegionCurve>) -> Self {
+        Self {
+            curves,
+            regions: OnceLock::new(),
+        }
+    }
+
+    /// The regions (computed on the first call).
+    pub fn regions(&self) -> &[Region] {
+        self.regions
+            .get_or_init(|| regions_and_layout(&self.curves).0)
+    }
+}
+
+/// Equal when the curves are: the regions follow from them.
+impl PartialEq for OwnRegions {
+    fn eq(&self, other: &Self) -> bool {
+        self.curves == other.curves
+    }
 }
 
 impl SketchOutput {
@@ -452,6 +490,17 @@ impl SketchOutput {
     /// shares a curve with it.
     pub fn found(&self, key: &RegionKey) -> Option<FoundRegions<'_>> {
         if let Some(region) = self.region_info.iter().find(|r| &r.profile.key == key) {
+            return Some(FoundRegions {
+                regions: vec![region],
+                exact: true,
+            });
+        }
+        // A region of the sketch's own curves alone that the supporting
+        // face's edges now cut: the whole region, as its curves bound it
+        // (mitcad#1182).
+        if !key.segments().any(|s| s.curve.is_face_edge())
+            && let Some(region) = self.own.regions().iter().find(|r| &r.profile.key == key)
+        {
             return Some(FoundRegions {
                 regions: vec![region],
                 exact: true,

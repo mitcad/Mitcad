@@ -139,6 +139,15 @@ int faces_named(const mitcad::geometry::Shape& shape, const std::string& name);
 // Every edge between two named faces has a name, and no two edges share one.
 bool edge_names_unique(const mitcad::geometry::Shape& shape);
 
+// The folder of geometry cases kept outside the repository
+// (MITCAD_GEOMETRY_CASES: bodies cut from reported models, which are not
+// committed here); empty when it is not set.
+std::string geometry_cases();
+
+// A body of a geometry case read from its B-rep file, its faces named as
+// imported by `feature`; null when the file cannot be read.
+ShapePtr case_body(const std::string& path, const std::string& feature);
+
 void naming_tests();
 void profile_tests();
 void extrude_tests();
